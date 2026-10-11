@@ -109,7 +109,6 @@ describe('PAPER execution route provenance', () => {
       selectPaperExecutionRoute({
         normalPaperExecution: false,
         rejectedEdgeCanaryEligible: true,
-        paperResearchExecutionEligible: true,
       }),
     ).toBe('REJECTED_EDGE_CANARY');
   });
@@ -119,7 +118,6 @@ describe('PAPER execution route provenance', () => {
       selectPaperExecutionRoute({
         normalPaperExecution: true,
         rejectedEdgeCanaryEligible: true,
-        paperResearchExecutionEligible: true,
       }),
     ).toBe('NORMAL_PAPER');
   });
@@ -129,7 +127,6 @@ describe('PAPER execution route provenance', () => {
       selectPaperExecutionRoute({
         normalPaperExecution: false,
         rejectedEdgeCanaryEligible: false,
-        paperResearchExecutionEligible: true,
       }),
     ).toBe('NONE');
   });

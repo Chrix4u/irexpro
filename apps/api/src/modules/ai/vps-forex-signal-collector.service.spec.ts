@@ -831,7 +831,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('keeps duplicate research-throughput samples shadow-only while the same pair-side sample is open', async () => {
+  it('logs fully qualified research-throughput as shadow-only and never submits a signal', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
@@ -945,10 +945,11 @@ describe('VpsForexSignalCollectorService', () => {
       latestSampleAt: new Date().toISOString(),
     });
     jest.spyOn(collector as any, 'loadPaperResearchEpisodeState').mockResolvedValue({
-      previousEpisodeKey: 'EURUSD|BUY|TREND_HEALTHY|TREND_CONTINUATION',
-      previousTradeStatus: 'OPEN',
+      previousEpisodeKey: null,
+      previousTradeStatus: null,
       previousClosedAt: null,
     });
+    const logSpy = jest.spyOn((collector as any).logger, 'log');
 
     try {
       const fetchMock = jest
@@ -956,7 +957,15 @@ describe('VpsForexSignalCollectorService', () => {
         .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
       await collector.collectOnce(fetchMock as unknown as typeof fetch);
       expect(receiveSignal).not.toHaveBeenCalled();
+      expect(
+        logSpy.mock.calls.some((call) =>
+          String(call[0]).includes(
+            'PAPER research-throughput EURUSD BUY shadow=ELIGIBLE executionAuthority=SHADOW_ONLY',
+          ),
+        ),
+      ).toBe(true);
     } finally {
+      logSpy.mockRestore();
       planBSpy.mockRestore();
       governanceSpy.mockRestore();
     }
