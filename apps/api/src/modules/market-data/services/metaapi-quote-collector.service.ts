@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { BrokerService } from '../../broker/broker.service';
 import { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.service';
+import { isFxWeeklySessionOpen } from '../utils/fx-weekly-session';
 import {
   METAAPI_PROVIDER_QUOTA_COOLDOWN_MS,
   isMetaApiQuotaError,
@@ -22,18 +23,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 35_000;
 const MIN_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_TIMEOUT_MS = 60_000;
 export function isMetaApiQuoteCollectionWindow(now: Date): boolean {
-  const day = now.getUTCDay();
-  const hour = now.getUTCHours();
-
-  // FX trades continuously through the weekday session. The previous
-  // Mon-Fri<21UTC guard accidentally disabled quote collection every weekday
-  // from 21:00-23:59 UTC and also missed the Sunday reopen. Keep the existing
-  // conservative 21:00 UTC weekend boundary while allowing the full 24/5
-  // session: Sunday >=21:00, Monday-Thursday all day, Friday <21:00.
-  if (day === 0) return hour >= 21;
-  if (day >= 1 && day <= 4) return true;
-  if (day === 5) return hour < 21;
-  return false;
+  return isFxWeeklySessionOpen(now);
 }
 
 @Injectable()
@@ -80,7 +70,7 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
         ' requestTimeout=' +
         this.requestTimeoutMs() +
         'ms ' +
-        'schedule=Sun>=21UTC/Mon-Thu24h/Fri<21UTC quotaCooldown=30m',
+        'schedule=Sun17NY-Fri17NY quotaCooldown=30m',
     );
 
     this.stopping = false;
