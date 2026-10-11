@@ -895,7 +895,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('logs fully qualified research-throughput as shadow-only and never submits a signal', async () => {
+  it('routes qualified research-throughput to tiny PAPER execution without qualification authority', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
@@ -1020,11 +1020,29 @@ describe('VpsForexSignalCollectorService', () => {
         .fn()
         .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
       await collector.collectOnce(fetchMock as unknown as typeof fetch);
-      expect(receiveSignal).not.toHaveBeenCalled();
+      expect(receiveSignal).toHaveBeenCalledTimes(1);
+      expect(receiveSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          suggestedVolume: 0.01,
+          modelVersion:
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v5-controlled-execution',
+          metadata: expect.objectContaining({
+            paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
+            paper_research_throughput: true,
+            paper_research_throughput_qualification_evidence: false,
+            paper_research_throughput_execution_authority: 'PAPER_ONLY_RESEARCH',
+            main_strategy_qualification_evidence: false,
+            production_eligible: false,
+            position_sizing_tier: 'RESEARCH',
+          }),
+        }),
+      );
       expect(
         logSpy.mock.calls.some((call) =>
           String(call[0]).includes(
-            'PAPER research-throughput EURUSD BUY shadow=ELIGIBLE executionAuthority=SHADOW_ONLY',
+            'PAPER research-throughput EURUSD BUY execution=ELIGIBLE executionAuthority=PAPER_ONLY_RESEARCH',
           ),
         ),
       ).toBe(true);
@@ -1176,6 +1194,7 @@ describe('VpsForexSignalCollectorService', () => {
           'paper-research-throughput-v2-episode-guarded',
           'paper-research-throughput-v3-episode-guarded',
           'paper-research-throughput-v4-pair-side-reliability',
+          'paper-research-throughput-v5-controlled-execution',
         ],
         expect.any(String),
       ],

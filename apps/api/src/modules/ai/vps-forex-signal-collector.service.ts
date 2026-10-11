@@ -46,12 +46,14 @@ import { buildEnsembleExpertRegistry } from './ensemble-expert-registry';
 import { scoreExtensionExhaustionShadow } from './extension-exhaustion-shadow';
 import { scoreTrendPersistenceShadow } from './trend-persistence-shadow';
 import {
+  PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS,
   PaperResearchPairSideReliabilityDecision,
   PaperResearchThroughputDecision,
   evaluatePaperResearchEpisodeGuard,
   evaluatePaperResearchPairSideReliability,
   evaluatePaperResearchThroughput,
+  paperResearchThroughputModelVersion,
   selectPaperExecutionRoute,
 } from './paper-research-throughput';
 import {
@@ -1338,18 +1340,19 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               }
             }
           }
-          const paperResearchShadowEligible =
+          const paperResearchExecutionEligible =
             paperResearchThroughput.eligible &&
             Boolean(paperResearchPairSideReliability?.eligible) &&
             Boolean(paperResearchEpisodeGuard?.eligible);
           const paperExecutionRoute = selectPaperExecutionRoute({
             normalPaperExecution,
             rejectedEdgeCanaryEligible: Boolean(rejectedEdgeCanary?.eligible),
+            paperResearchThroughputEligible: paperResearchExecutionEligible,
           });
-          if (paperResearchShadowEligible) {
+          if (paperResearchExecutionEligible) {
             this.logger.log(
               `PAPER research-throughput ${best.instrument} ${best.direction} ` +
-                `shadow=ELIGIBLE executionAuthority=SHADOW_ONLY ` +
+                `execution=ELIGIBLE executionAuthority=PAPER_ONLY_RESEARCH ` +
                 `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
                 `qualificationEvidence=false`,
             );
@@ -1478,14 +1481,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         const dynamicLotSizing =
           paperExecutionRoute === 'REJECTED_EDGE_CANARY'
             ? { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'BASE' as const }
-            : dynamicPaperLotUpperBound({
-                confidence: best.confidence,
-                metaProbability: planBEnsemble.metaProbability,
-                netExpectedR: ensembleGovernance.netExpectedR,
-                consensusPassed: planBEnsemble.consensusPassed,
-                consensusRequired: planBEnsemble.consensusRequired,
-                volatilityScore: best.volatilityScore,
-              });
+            : paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
+              ? { upperBound: PAPER_RESEARCH_THROUGHPUT_LOT_CAP, tier: 'RESEARCH' as const }
+              : dynamicPaperLotUpperBound({
+                  confidence: best.confidence,
+                  metaProbability: planBEnsemble.metaProbability,
+                  netExpectedR: ensembleGovernance.netExpectedR,
+                  consensusPassed: planBEnsemble.consensusPassed,
+                  consensusRequired: planBEnsemble.consensusRequired,
+                  volatilityScore: best.volatilityScore,
+                });
 
         const outcome = await this.aiSignalService.receiveSignal({
           signalId,
@@ -1511,7 +1516,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           modelVersion:
             paperExecutionRoute === 'REJECTED_EDGE_CANARY'
               ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
-              : `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`,
+              : paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
+                ? paperResearchThroughputModelVersion(ACTIVE_ENGINE_CODE)
+                : `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`,
           metadata: {
             signal_source: 'EXTERNAL_PROVIDER',
             external_provider_code: ACTIVE_ENGINE_CODE,
@@ -1526,7 +1533,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             rejected_edge_canary_reason: rejectedEdgeCanary?.reason ?? null,
             rejected_edge_canary_global_30m: rejectedEdgeCanaryEvidence?.global30m ?? null,
             rejected_edge_canary_pair_side_30m: rejectedEdgeCanaryEvidence?.pairSide30m ?? null,
-            paper_research_throughput: false,
+            paper_research_throughput: paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT',
             paper_research_throughput_artifact: paperResearchThroughput.artifact,
             paper_research_throughput_reason: paperResearchThroughput.reason,
             paper_research_throughput_qualification_evidence:
