@@ -1,15 +1,21 @@
 import {
   PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
   PLAN_B_ENSEMBLE_ARTIFACT,
+  PLAN_B_PRE_COMPACT_POLICY_VERSION,
   PLAN_B_ENSEMBLE_MODE,
   scorePlanBMultimodelShadow,
 } from './plan-b-multimodel-shadow';
 
 describe('Plan B multimodel prospective shadow', () => {
-  it('preserves throughput-shadow-only provenance under the route-reliability cohort', () => {
-    expect(PLAN_B_ACTIVE_MODEL_POLICY_VERSION).toBe(
+  it('preserves the verbose pre-compact route-reliability lineage', () => {
+    expect(PLAN_B_PRE_COMPACT_POLICY_VERSION).toBe(
       'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1-trend-route-reliability-v1-pair-side-route-reliability-v1',
     );
+  });
+
+  it('keeps the persisted active policy version within the decision-store varchar(160) contract', () => {
+    expect(PLAN_B_ACTIVE_MODEL_POLICY_VERSION).toBe('planb-v4-bi2-et2-nm2-hp3-dmw1-ts1-trr1-psrr1');
+    expect(PLAN_B_ACTIVE_MODEL_POLICY_VERSION.length).toBeLessThanOrEqual(160);
   });
 
   const base = {

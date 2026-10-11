@@ -4,11 +4,16 @@ export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v4';
 export const PLAN_B_PRE_THROUGHPUT_SHADOW_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1`;
 export const PLAN_B_PRE_ROUTE_RELIABILITY_POLICY_VERSION = `${PLAN_B_PRE_THROUGHPUT_SHADOW_POLICY_VERSION}-throughput-shadow-only-v1`;
 export const PLAN_B_PRE_PAIR_SIDE_RELIABILITY_POLICY_VERSION = `${PLAN_B_PRE_ROUTE_RELIABILITY_POLICY_VERSION}-trend-route-reliability-v1`;
-export const PLAN_B_ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_PRE_PAIR_SIDE_RELIABILITY_POLICY_VERSION}-pair-side-route-reliability-v1`;
+export const PLAN_B_PRE_COMPACT_POLICY_VERSION = `${PLAN_B_PRE_PAIR_SIDE_RELIABILITY_POLICY_VERSION}-pair-side-route-reliability-v1`;
+// Persisted decision-policy keys are bounded by trading.ensemble_shadow_decisions.model_version
+// (varchar(160)). Keep the full verbose lineage above for provenance/evidence queries,
+// while using a compact active identifier for durable persistence and cohort isolation.
+export const PLAN_B_ACTIVE_MODEL_POLICY_VERSION = 'planb-v4-bi2-et2-nm2-hp3-dmw1-ts1-trr1-psrr1';
 export const PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS = Object.freeze([
   PLAN_B_PRE_THROUGHPUT_SHADOW_POLICY_VERSION,
   PLAN_B_PRE_ROUTE_RELIABILITY_POLICY_VERSION,
   PLAN_B_PRE_PAIR_SIDE_RELIABILITY_POLICY_VERSION,
+  PLAN_B_PRE_COMPACT_POLICY_VERSION,
   PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
 ]);
 export const PLAN_B_ENSEMBLE_MODE = 'PROSPECTIVE_SHADOW_ONLY';
