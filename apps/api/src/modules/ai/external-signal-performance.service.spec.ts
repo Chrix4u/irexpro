@@ -301,6 +301,58 @@ describe('ExternalSignalPerformanceService', () => {
     expect(report.checks.evidence).toBe(false);
   });
 
+  it('counts automated profit-protection closes in qualification metrics and evidence count', async () => {
+    const start = new Date('2026-09-01T00:00:00.000Z');
+    const rows = [
+      {
+        signal_generated_at: start,
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        confidence_score: '0.70',
+        trade_id: 'trade-profit-protection',
+        trade_status: 'CLOSED',
+        fill_price: '1.0',
+        exit_price: '1.005',
+        realised_pnl: '5',
+        close_reason: 'PROFIT_PROTECTION',
+        closed_at: new Date(start.getTime() + 60_000),
+        allocated_capital: '100',
+        broker_connection_id: '11111111-1111-4111-8111-111111111111',
+        session_opening_balance: '10000',
+        session_started_at: start,
+      },
+    ];
+    const snapshots = [
+      {
+        connection_id: '11111111-1111-4111-8111-111111111111',
+        equity: '10000',
+        accepted_at: start,
+      },
+      {
+        connection_id: '11111111-1111-4111-8111-111111111111',
+        equity: '10005',
+        accepted_at: new Date(start.getTime() + 70_000),
+      },
+    ];
+    const dataSource = {
+      query: jest
+        .fn()
+        .mockImplementation((sql: string) =>
+          Promise.resolve(sql.includes('broker.broker_account_snapshots') ? snapshots : rows),
+        ),
+    } as unknown as DataSource;
+
+    const report = await new ExternalSignalPerformanceService(dataSource).getProviderPerformance(
+      'user-1',
+      'provider-a',
+    );
+
+    expect(report.observed.closedTrades).toBe(1);
+    expect(report.observed.interruptedClosedTrades).toBe(0);
+    expect(report.observed.totalNormalizedReturn).toBeCloseTo(0.0005, 10);
+    expect(report.checks.evidence).toBe(false);
+  });
+
   it('measures signal cadence from market-data bar time instead of scheduler processing jitter', async () => {
     const start = new Date('2026-09-01T00:00:00.000Z');
     const rows = [0, 1, 2].map((i) => ({

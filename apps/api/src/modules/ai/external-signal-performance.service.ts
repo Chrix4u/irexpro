@@ -526,7 +526,10 @@ export class ExternalSignalPerformanceService {
         (finite(row.session_opening_balance) ?? 0) > 0,
     );
     const closed = allEconomicallyClosed.filter(
-      (row) => row.close_reason === 'STOP_LOSS_HIT' || row.close_reason === 'TAKE_PROFIT_HIT',
+      (row) =>
+        row.close_reason === 'STOP_LOSS_HIT' ||
+        row.close_reason === 'TAKE_PROFIT_HIT' ||
+        row.close_reason === 'PROFIT_PROTECTION',
     );
     const interruptedClosedTrades = allEconomicallyClosed.length - closed.length;
     const sameBarProtectionAmbiguityCount = closed.reduce(
