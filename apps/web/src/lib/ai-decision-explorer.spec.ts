@@ -125,4 +125,22 @@ describe('isAiDecisionExplorerView Agent Council contract', () => {
       }),
     ).toBe(false);
   });
+  it('accepts automated PROFIT_PROTECTION trade history', () => {
+    expect(
+      isAiDecisionExplorerView({
+        generatedAt: '2026-09-21T02:00:01.000Z',
+        decisions: [{ ...baseDecision(), execution: { tradeId: 'trade-1', status: 'CLOSED', openedAt: '2026-09-21T01:00:00.000Z', closedAt: '2026-09-21T01:30:00.000Z', closeReason: 'PROFIT_PROTECTION' } }],
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts STRATEGY_CUTOVER trade history', () => {
+    expect(
+      isAiDecisionExplorerView({
+        generatedAt: '2026-09-21T02:00:01.000Z',
+        decisions: [{ ...baseDecision(), execution: { tradeId: 'trade-2', status: 'CLOSED', openedAt: '2026-09-21T01:00:00.000Z', closedAt: '2026-09-21T01:30:00.000Z', closeReason: 'STRATEGY_CUTOVER' } }],
+      }),
+    ).toBe(true);
+  });
+
 });
