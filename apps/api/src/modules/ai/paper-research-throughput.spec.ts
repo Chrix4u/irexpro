@@ -1,6 +1,7 @@
 import {
   PAPER_RESEARCH_THROUGHPUT_EPISODE_COOLDOWN_MINUTES,
   PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
+  PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY,
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES,
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS,
   evaluatePaperResearchEpisodeGuard,
@@ -19,20 +20,20 @@ describe('evaluatePaperResearchThroughput', () => {
     eventRisk: 'CLEAR',
     strategyRoute: 'TREND_CONTINUATION',
     driftState: 'NORMAL',
-    directionQuality: 0.62,
+    directionQuality: 0.32,
     tradeQuality: 0.58,
     exitQuality: 0.56,
     paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'ENSEMBLE_NOT_PROMOTABLE_ADMISSION'],
   };
 
-  it('keeps a positive-EV research candidate shadow-only without granting execution or qualification authority', () => {
+  it('marks a positive-EV research candidate PAPER-only without granting qualification authority', () => {
     expect(evaluatePaperResearchThroughput(base)).toEqual({
       eligible: true,
-      artifact: 'paper-research-throughput-v4-pair-side-reliability',
+      artifact: 'paper-research-throughput-v5-controlled-execution',
       route: 'PAPER_RESEARCH_THROUGHPUT',
       reason: 'RESEARCH_EVIDENCE_CANDIDATE',
       qualificationEvidence: false,
-      executionAuthority: 'SHADOW_ONLY',
+      executionAuthority: 'PAPER_ONLY_RESEARCH',
     });
   });
 
@@ -54,7 +55,7 @@ describe('evaluatePaperResearchThroughput', () => {
   });
 
   it('rejects weak direction, trade, or exit quality', () => {
-    expect(evaluatePaperResearchThroughput({ ...base, directionQuality: 0.5499 })).toMatchObject({
+    expect(evaluatePaperResearchThroughput({ ...base, directionQuality: 0.2499 })).toMatchObject({
       eligible: false,
       reason: 'DIRECTION_QUALITY_TOO_LOW',
     });
@@ -68,8 +69,9 @@ describe('evaluatePaperResearchThroughput', () => {
     });
   });
 
-  it('uses a tiny fixed PAPER lot cap for accelerated evidence collection', () => {
+  it('uses a tiny fixed PAPER lot cap and calibrated research-only direction floor', () => {
     expect(PAPER_RESEARCH_THROUGHPUT_LOT_CAP).toBe(0.01);
+    expect(PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY).toBe(0.25);
   });
 
   it('does not duplicate a candidate already eligible for normal PAPER execution', () => {
@@ -109,6 +111,7 @@ describe('PAPER execution route provenance', () => {
       selectPaperExecutionRoute({
         normalPaperExecution: false,
         rejectedEdgeCanaryEligible: true,
+        paperResearchThroughputEligible: true,
       }),
     ).toBe('REJECTED_EDGE_CANARY');
   });
@@ -118,15 +121,27 @@ describe('PAPER execution route provenance', () => {
       selectPaperExecutionRoute({
         normalPaperExecution: true,
         rejectedEdgeCanaryEligible: true,
+        paperResearchThroughputEligible: true,
       }),
     ).toBe('NORMAL_PAPER');
   });
 
-  it('keeps research-throughput shadow-only even when its evidence filters qualify', () => {
+  it('selects controlled PAPER research when normal and canary routes do not qualify', () => {
     expect(
       selectPaperExecutionRoute({
         normalPaperExecution: false,
         rejectedEdgeCanaryEligible: false,
+        paperResearchThroughputEligible: true,
+      }),
+    ).toBe('PAPER_RESEARCH_THROUGHPUT');
+  });
+
+  it('abstains when no PAPER route qualifies', () => {
+    expect(
+      selectPaperExecutionRoute({
+        normalPaperExecution: false,
+        rejectedEdgeCanaryEligible: false,
+        paperResearchThroughputEligible: false,
       }),
     ).toBe('NONE');
   });
@@ -141,7 +156,7 @@ describe('PAPER research-throughput provenance and pair-side reliability', () =>
 
   it('derives the emitted model version from the active research artifact', () => {
     expect(paperResearchThroughputModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v4-pair-side-reliability',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v5-controlled-execution',
     );
   });
 

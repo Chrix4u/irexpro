@@ -1,14 +1,15 @@
 export const PAPER_RESEARCH_THROUGHPUT_ARTIFACT =
-  'paper-research-throughput-v4-pair-side-reliability';
+  'paper-research-throughput-v5-controlled-execution';
 export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS = Object.freeze([
   'paper-research-throughput-v2-episode-guarded',
   'paper-research-throughput-v3-episode-guarded',
+  'paper-research-throughput-v4-pair-side-reliability',
   PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
 ]);
 export const PAPER_RESEARCH_THROUGHPUT_LOT_CAP = 0.01;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R = 0.08;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_CONFIDENCE = 0.64;
-export const PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY = 0.55;
+export const PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY = 0.25;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_TRADE_QUALITY = 0.48;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_EXIT_QUALITY = 0.48;
 
@@ -93,16 +94,20 @@ export function paperResearchThroughputModelVersion(engineCode: string): string 
   return `external-provider/${engineCode}/${PAPER_RESEARCH_THROUGHPUT_ARTIFACT}`;
 }
 
-export type PaperExecutionRoute = 'NORMAL_PAPER' | 'REJECTED_EDGE_CANARY' | 'NONE';
+export type PaperExecutionRoute =
+  | 'NORMAL_PAPER'
+  | 'REJECTED_EDGE_CANARY'
+  | 'PAPER_RESEARCH_THROUGHPUT'
+  | 'NONE';
 
 export function selectPaperExecutionRoute(input: {
   normalPaperExecution: boolean;
   rejectedEdgeCanaryEligible: boolean;
+  paperResearchThroughputEligible: boolean;
 }): PaperExecutionRoute {
   if (input.normalPaperExecution) return 'NORMAL_PAPER';
   if (input.rejectedEdgeCanaryEligible) return 'REJECTED_EDGE_CANARY';
-  // Research-throughput is evidence collection only. Shadow outcomes continue to be
-  // persisted, but this route must never create a PAPER order.
+  if (input.paperResearchThroughputEligible) return 'PAPER_RESEARCH_THROUGHPUT';
   return 'NONE';
 }
 
@@ -193,7 +198,7 @@ export interface PaperResearchThroughputDecision {
   route: 'PAPER_RESEARCH_THROUGHPUT';
   reason: string;
   qualificationEvidence: false;
-  executionAuthority: 'SHADOW_ONLY';
+  executionAuthority: 'PAPER_ONLY_RESEARCH';
 }
 
 export function evaluatePaperResearchThroughput(
@@ -248,6 +253,6 @@ export function evaluatePaperResearchThroughput(
     route: 'PAPER_RESEARCH_THROUGHPUT',
     reason,
     qualificationEvidence: false,
-    executionAuthority: 'SHADOW_ONLY',
+    executionAuthority: 'PAPER_ONLY_RESEARCH',
   };
 }
