@@ -110,6 +110,21 @@ const ACTIVE_MODEL_POLICY_VERSION = PLAN_B_ACTIVE_MODEL_POLICY_VERSION;
 const STOP_ATR_MULTIPLIER = 1.5;
 const TARGET_ATR_MULTIPLIER = 2.5;
 const PAPER_BASE_LOT_UPPER_BOUND = 0.1;
+const PAPER_RELIABILITY_STATUS_CACHE_TTL_MS = 30_000;
+
+export interface PaperTrendPairSideReliabilityStatus {
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  state: PaperTrendPairSideReliabilityDecision['state'];
+  episodes: number;
+  profitFactor: number | null;
+  sharpe: number | null;
+  maxDrawdown: number | null;
+  positiveWindowFraction: number | null;
+  fullSizeEligible: boolean;
+  researchFallbackRequested: boolean;
+  reason: PaperTrendPairSideReliabilityDecision['reason'];
+}
 
 export interface DynamicPaperLotSizingInput {
   confidence: number;
@@ -472,6 +487,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private providerCooldownReason: 'DAILY_CREDIT_LIMIT' | null = null;
   private lastMarketDataAuthority: 'NONE' | 'TWELVE_DATA' | 'METAAPI_BROKER_FALLBACK' = 'NONE';
   private readonly lastPublishedOpportunity = new Map<string, PublishedOpportunity>();
+  private readonly pairSideReliabilityStatusCache = new Map<
+    string,
+    { expiresAt: number; snapshot: PaperTrendPairSideReliabilityStatus[] }
+  >();
   private lastEnsembleDecision: {
     evaluatedAt: Date | null;
     instrument: string | null;
@@ -639,6 +658,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     );
     const ownsBinding = Boolean(configuredUserId && configuredUserId === requestingUserId);
     let activePaperSession = false;
+    let pairSideReliability: PaperTrendPairSideReliabilityStatus[] = [];
     let ensembleCampaign = await this.loadEnsembleCampaignStatus('', '');
     const brokerExpertConfigured =
       ownsBinding && this.brokerExpertEnabled() && Boolean(this.brokerExpertSourceConnectionId());
@@ -704,10 +724,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
     const configuredConnectionId = this.connectionId();
     if (ownsBinding && configuredConnectionId) {
-      ensembleCampaign = await this.loadEnsembleCampaignStatus(
-        requestingUserId,
-        configuredConnectionId,
-      );
+      [ensembleCampaign, pairSideReliability] = await Promise.all([
+        this.loadEnsembleCampaignStatus(requestingUserId, configuredConnectionId),
+        this.loadPaperTrendPairSideReliabilitySnapshot(requestingUserId, configuredConnectionId),
+      ]);
       const session = await this.executionService.getActiveSession(requestingUserId);
       activePaperSession = Boolean(
         session &&
@@ -795,6 +815,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       automaticLivePromotion: false,
       marketSchedule,
       ensembleCampaign,
+      pairSideReliability,
       highConvictionChallenger,
       postEntryShadow,
       expertRegistry,
@@ -2216,6 +2237,99 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       .flatMap((observations) => collapseEnsembleOutcomeEpisodes(observations))
       .sort((a, b) => new Date(a.resolvedAt).getTime() - new Date(b.resolvedAt).getTime());
     return summarizeEnsembleSleeveOutcomes(episodes);
+  }
+
+  private async loadPaperTrendPairSideReliabilitySnapshot(
+    userId: string,
+    connectionId: string,
+  ): Promise<PaperTrendPairSideReliabilityStatus[]> {
+    const cacheKey = [
+      userId,
+      connectionId,
+      ...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
+    ].join(':');
+    const cached = this.pairSideReliabilityStatusCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.snapshot;
+
+    const rows = this.dataSource
+      ? ((await this.dataSource.query(
+          `
+            SELECT instrument, direction, evaluated_at, components->'outcome' AS outcome
+            FROM trading.ensemble_shadow_decisions
+            WHERE user_id = $1
+              AND broker_connection_id = $2
+              AND engine_code = $3
+              AND model_version = ANY($4::text[])
+              AND instrument = ANY($5::text[])
+              AND direction IN ('BUY', 'SELL')
+              AND components->>'strategyRoute' = 'TREND_CONTINUATION'
+              AND COALESCE((components->>'paperAdmitted')::boolean, false) = true
+              AND COALESCE(
+                (components->'governance'->>'paperExecutionEligible')::boolean,
+                false
+              ) = true
+              AND components ? 'outcome'
+            ORDER BY instrument, direction, evaluated_at ASC
+          `,
+          [
+            userId,
+            connectionId,
+            ACTIVE_ENGINE_CODE,
+            [...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
+            SYMBOLS.map(([instrument]) => instrument),
+          ],
+        )) as Array<{
+          instrument: string;
+          direction: 'BUY' | 'SELL';
+          evaluated_at: string | Date;
+          outcome: EnsembleShadowOutcome | null;
+        }>)
+      : [];
+
+    const grouped = new Map<
+      string,
+      Array<{ evaluatedAt: string | Date; outcome: EnsembleShadowOutcome | null }>
+    >();
+    for (const row of rows) {
+      const instrument = row.instrument.trim().toUpperCase();
+      if (!SYMBOLS.some(([symbol]) => symbol === instrument)) continue;
+      if (row.direction !== 'BUY' && row.direction !== 'SELL') continue;
+      const key = `${instrument}:${row.direction}`;
+      const bucket = grouped.get(key) ?? [];
+      bucket.push({ evaluatedAt: row.evaluated_at, outcome: row.outcome });
+      grouped.set(key, bucket);
+    }
+
+    const snapshot = SYMBOLS.flatMap(([instrument]) =>
+      (['BUY', 'SELL'] as const).map((direction) => {
+        const episodes = collapseEnsembleOutcomeEpisodes(
+          grouped.get(`${instrument}:${direction}`) ?? [],
+        );
+        const evidence = summarizeEnsembleSleeveOutcomes(episodes);
+        const decision = evaluatePaperTrendPairSideReliability({
+          strategyRoute: 'TREND_CONTINUATION',
+          evidence,
+        });
+        return {
+          instrument,
+          direction,
+          state: decision.state,
+          episodes: decision.episodes,
+          profitFactor: decision.profitFactor,
+          sharpe: decision.sharpe,
+          maxDrawdown: decision.maxDrawdown,
+          positiveWindowFraction: decision.positiveWindowFraction,
+          fullSizeEligible: decision.fullSizeEligible,
+          researchFallbackRequested: decision.researchFallbackRequested,
+          reason: decision.reason,
+        };
+      }),
+    );
+    this.pairSideReliabilityStatusCache.set(cacheKey, {
+      expiresAt: Date.now() + PAPER_RELIABILITY_STATUS_CACHE_TTL_MS,
+      snapshot,
+    });
+    return snapshot;
   }
 
   private async loadPaperTrendPairSideReliabilityEvidence(

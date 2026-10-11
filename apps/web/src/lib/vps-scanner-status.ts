@@ -8,6 +8,34 @@ function isNullableRecord(value: unknown): boolean {
   return value === null || isRecord(value);
 }
 
+function isNullableFiniteNumber(value: unknown): boolean {
+  return (
+    value === null || (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+function isPairSideReliabilityRow(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.instrument === "string" &&
+    (value.direction === "BUY" || value.direction === "SELL") &&
+    (value.state === "NOT_APPLICABLE" ||
+      value.state === "COLLECTING" ||
+      value.state === "HEALTHY" ||
+      value.state === "RESEARCH_ONLY") &&
+    typeof value.episodes === "number" &&
+    Number.isInteger(value.episodes) &&
+    value.episodes >= 0 &&
+    isNullableFiniteNumber(value.profitFactor) &&
+    isNullableFiniteNumber(value.sharpe) &&
+    isNullableFiniteNumber(value.maxDrawdown) &&
+    isNullableFiniteNumber(value.positiveWindowFraction) &&
+    typeof value.fullSizeEligible === "boolean" &&
+    typeof value.researchFallbackRequested === "boolean" &&
+    typeof value.reason === "string"
+  );
+}
+
 /**
  * Minimal runtime shape required by the AI Trading cockpit.
  *
@@ -25,6 +53,7 @@ export function hasVpsScannerUiShape(value: unknown): boolean {
   const lastDecision = value.lastEnsembleDecision;
   const campaign = value.ensembleCampaign;
   const challenger = value.highConvictionChallenger;
+  const pairSideReliability = value.pairSideReliability;
   const registry = value.expertRegistry;
   const marketCache = value.marketCache;
 
@@ -56,6 +85,8 @@ export function hasVpsScannerUiShape(value: unknown): boolean {
     !isRecord(campaign.profitProtection) ||
     !Array.isArray(campaign.profitProtection.counterfactuals) ||
     !isRecord(challenger) ||
+    !Array.isArray(pairSideReliability) ||
+    !pairSideReliability.every(isPairSideReliabilityRow) ||
     !isNullableRecord(challenger.frozenConsensus) ||
     !isNullableRecord(challenger.historicalValidation) ||
     !isRecord(registry) ||
