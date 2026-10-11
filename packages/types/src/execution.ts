@@ -18,6 +18,7 @@ export type TradeExecutionDirection = 'BUY' | 'SELL';
 export type TradeExecutionCloseReason =
   | 'STOP_LOSS_HIT'
   | 'TAKE_PROFIT_HIT'
+  | 'PROFIT_PROTECTION'
   | 'MANUAL_CLOSE'
   | 'AI_CLOSE_SIGNAL'
   | 'KILL_SWITCH_FORCE_CLOSE'
