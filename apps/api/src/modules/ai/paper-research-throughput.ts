@@ -93,16 +93,11 @@ export function paperResearchThroughputModelVersion(engineCode: string): string 
   return `external-provider/${engineCode}/${PAPER_RESEARCH_THROUGHPUT_ARTIFACT}`;
 }
 
-export type PaperExecutionRoute =
-  | 'NORMAL_PAPER'
-  | 'REJECTED_EDGE_CANARY'
-  | 'PAPER_RESEARCH_THROUGHPUT'
-  | 'NONE';
+export type PaperExecutionRoute = 'NORMAL_PAPER' | 'REJECTED_EDGE_CANARY' | 'NONE';
 
 export function selectPaperExecutionRoute(input: {
   normalPaperExecution: boolean;
   rejectedEdgeCanaryEligible: boolean;
-  paperResearchExecutionEligible: boolean;
 }): PaperExecutionRoute {
   if (input.normalPaperExecution) return 'NORMAL_PAPER';
   if (input.rejectedEdgeCanaryEligible) return 'REJECTED_EDGE_CANARY';
