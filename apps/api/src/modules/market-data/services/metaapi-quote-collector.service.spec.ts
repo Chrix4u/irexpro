@@ -191,6 +191,14 @@ describe('MetaApiQuoteCollectorService', () => {
     expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-09T20:59:00Z'))).toBe(true);
     expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-09T21:00:00Z'))).toBe(false);
     expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-10T12:00:00Z'))).toBe(false);
+
+    // New York returns to EST in November, shifting the 5pm weekly FX
+    // boundary from 21:00 UTC to 22:00 UTC. Quote collection must follow
+    // that DST-aware boundary just like the scanner.
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-12-06T21:59:00Z'))).toBe(false);
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-12-06T22:00:00Z'))).toBe(true);
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-12-11T21:59:00Z'))).toBe(true);
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-12-11T22:00:00Z'))).toBe(false);
   });
 
   it('recognizes MetaApi quota and CPU-credit failures', () => {
