@@ -41,6 +41,7 @@ function isCloseReason(value: unknown): value is TradeExecutionCloseReason | nul
     value === 'TAKE_PROFIT_HIT' ||
     value === 'MANUAL_CLOSE' ||
     value === 'AI_CLOSE_SIGNAL' ||
+    value === 'PROFIT_PROTECTION' ||
     value === 'KILL_SWITCH_FORCE_CLOSE' ||
     value === 'BROKER_CLOSE' ||
     value === 'STRATEGY_CUTOVER' ||

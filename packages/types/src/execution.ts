@@ -20,6 +20,7 @@ export type TradeExecutionCloseReason =
   | 'TAKE_PROFIT_HIT'
   | 'MANUAL_CLOSE'
   | 'AI_CLOSE_SIGNAL'
+  | 'PROFIT_PROTECTION'
   | 'KILL_SWITCH_FORCE_CLOSE'
   | 'BROKER_CLOSE'
   | 'STRATEGY_CUTOVER'
