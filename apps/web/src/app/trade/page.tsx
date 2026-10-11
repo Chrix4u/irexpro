@@ -376,6 +376,19 @@ interface VpsForexScannerStatusView {
       };
     }>;
   };
+  pairSideReliability: Array<{
+    instrument: string;
+    direction: "BUY" | "SELL";
+    state: "NOT_APPLICABLE" | "COLLECTING" | "HEALTHY" | "RESEARCH_ONLY";
+    episodes: number;
+    profitFactor: number | null;
+    sharpe: number | null;
+    maxDrawdown: number | null;
+    positiveWindowFraction: number | null;
+    fullSizeEligible: boolean;
+    researchFallbackRequested: boolean;
+    reason: string;
+  }>;
   postEntryShadow: {
     artifact: string;
     enabled: boolean;
@@ -3230,6 +3243,33 @@ export default function AiTradingPage() {
                       </strong>
                     </div>
                   </div>
+
+                  <section className="mt-4" aria-label="PAPER pair-side reliability">
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--space-3)", flexWrap: "wrap", marginBottom: "var(--space-3)" }}>
+                      <div>
+                        <strong>Pair-side PAPER reliability</strong>
+                        <p className="text-sm muted mt-1" style={{ marginBottom: 0 }}>
+                          Independent trend-continuation episodes · maturity floor 8 per pair/side
+                        </p>
+                      </div>
+                      <Badge
+                        variant={vpsScannerStatus?.pairSideReliability.some((row) => row.state === "RESEARCH_ONLY") ? "warning" : "info"}
+                      >
+                        {vpsScannerStatus?.pairSideReliability.filter((row) => row.state === "HEALTHY").length ?? 0} HEALTHY · {vpsScannerStatus?.pairSideReliability.filter((row) => row.state === "RESEARCH_ONLY").length ?? 0} RESEARCH ONLY
+                      </Badge>
+                    </div>
+                    <div className="ai-provider-evidence__grid">
+                      {(vpsScannerStatus?.pairSideReliability ?? []).map((row) => (
+                        <div key={`${row.instrument}-${row.direction}`}>
+                          <span>{row.instrument} · {row.direction}</span>
+                          <strong>{row.state.replaceAll("_", " ")} · {row.episodes}/8</strong>
+                          <small className="muted">
+                            PF {providerMetric(row.profitFactor, 2)} · Sharpe {providerMetric(row.sharpe, 2)} · DD {providerPercent(row.maxDrawdown)} · {row.fullSizeEligible ? "FULL PAPER" : "RESEARCH ONLY"}
+                          </small>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
 
                   <div
                     className="ai-provider-evidence__gates"
