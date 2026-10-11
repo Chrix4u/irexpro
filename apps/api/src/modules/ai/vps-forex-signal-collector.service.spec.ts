@@ -245,6 +245,70 @@ describe('VpsForexSignalCollectorService', () => {
     expect(status.skippedUtcHours).toEqual([]);
   });
 
+  it('builds one read-only pair-side reliability snapshot for all 12 sleeves', async () => {
+    const outcome = (status: 'WIN' | 'LOSS', evaluatedAt: string, netR: number) => ({
+      evaluated_at: new Date(evaluatedAt),
+      instrument: 'USDJPY',
+      direction: 'BUY',
+      outcome: {
+        version: 'm5-first-hit-72bar-net-r-path-v3',
+        status,
+        resolvedAt: new Date(new Date(evaluatedAt).getTime() + 60_000).toISOString(),
+        barsObserved: 1,
+        exitPrice: 1,
+        grossR: netR,
+        netR,
+        reason: status === 'WIN' ? 'TAKE_PROFIT_HIT' : 'STOP_LOSS_HIT',
+        postEntryTelemetry: null,
+      },
+    });
+    const rows = Array.from({ length: 8 }, (_unused, index) =>
+      outcome('WIN', `2026-10-09T${String(10 + index).padStart(2, '0')}:00:00.000Z`, 1.2),
+    );
+    const dataSource = { query: jest.fn().mockResolvedValue(rows) };
+    const collector = new VpsForexSignalCollectorService(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      dataSource as any,
+    );
+
+    const snapshot = await (collector as any).loadPaperTrendPairSideReliabilitySnapshot(
+      'user-1',
+      'conn-1',
+    );
+
+    const cachedSnapshot = await (collector as any).loadPaperTrendPairSideReliabilitySnapshot(
+      'user-1',
+      'conn-1',
+    );
+
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
+    expect(cachedSnapshot).toBe(snapshot);
+    expect(snapshot).toHaveLength(12);
+    expect(
+      snapshot.find((row: any) => row.instrument === 'USDJPY' && row.direction === 'BUY'),
+    ).toMatchObject({
+      state: 'HEALTHY',
+      episodes: 8,
+      fullSizeEligible: true,
+      researchFallbackRequested: false,
+      reason: 'PAIR_SIDE_HEALTHY',
+    });
+    expect(
+      snapshot.find((row: any) => row.instrument === 'EURUSD' && row.direction === 'SELL'),
+    ).toMatchObject({
+      state: 'COLLECTING',
+      episodes: 0,
+      fullSizeEligible: true,
+      researchFallbackRequested: false,
+      reason: 'INSUFFICIENT_PAIR_SIDE_EVIDENCE',
+    });
+  });
+
   it('builds BUY and SELL counterfactuals from the same market snapshot', () => {
     const candidates = buildDirectionalCandidates('EURUSD', trendCandles());
     expect(candidates).toHaveLength(2);

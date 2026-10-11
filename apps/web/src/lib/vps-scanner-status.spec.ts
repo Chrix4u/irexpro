@@ -54,6 +54,21 @@ const VALID_STATUS = {
   postEntryShadow: {
     evidenceMinimums: {},
   },
+  pairSideReliability: [
+    {
+      instrument: "USDJPY",
+      direction: "BUY",
+      state: "COLLECTING",
+      episodes: 3,
+      profitFactor: 3.04,
+      sharpe: 0.81,
+      maxDrawdown: 0.0103,
+      positiveWindowFraction: 1,
+      fullSizeEligible: true,
+      researchFallbackRequested: false,
+      reason: "INSUFFICIENT_PAIR_SIDE_EVIDENCE",
+    },
+  ],
 };
 
 describe("VPS scanner UI status runtime guard", () => {
@@ -78,6 +93,15 @@ describe("VPS scanner UI status runtime guard", () => {
           ...VALID_STATUS.lastEnsembleDecision,
           governance: { paperPromotionEligible: false },
         },
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects malformed pair-side reliability evidence", () => {
+    expect(
+      hasVpsScannerUiShape({
+        ...VALID_STATUS,
+        pairSideReliability: [{ instrument: "USDJPY", direction: "BUY" }],
       }),
     ).toBe(false);
   });
