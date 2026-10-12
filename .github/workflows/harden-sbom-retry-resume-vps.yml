@@ -75,7 +75,7 @@ jobs:
           replacement += [
               '',
               '      - name: Back off before first SBOM retry',
-              f"        if: {expr(\"steps.sbom_primary.outcome == 'failure'\")}",
+              '        if: ' + expr("steps.sbom_primary.outcome == 'failure'"),
               '        shell: bash',
               '        run: sleep 10',
               '',
@@ -88,7 +88,7 @@ jobs:
           replacement += [
               '',
               '      - name: Back off before final SBOM retry',
-              f"        if: {expr(\"steps.sbom_primary.outcome == 'failure' && steps.sbom_retry_1.outcome == 'failure'\")}",
+              '        if: ' + expr("steps.sbom_primary.outcome == 'failure' && steps.sbom_retry_1.outcome == 'failure'"),
               '        shell: bash',
               '        run: sleep 20',
               '',
