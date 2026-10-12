@@ -1429,6 +1429,54 @@ describe('VpsForexSignalCollectorService', () => {
     expect((collector as any).lastEnsembleDecision.instrument).toBe('EURUSD');
   });
 
+  it('does not block API bootstrap while startup market priming is unresolved', async () => {
+    const live = new LivePaperMarketDataService();
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+    );
+    jest.spyOn(collector as any, 'marketSchedule').mockReturnValue({
+      paused: false,
+      reason: null,
+      nextEligibleScanAt: '2026-10-12T11:45:00.000Z',
+    });
+    let releasePrime!: () => void;
+    const primeGate = new Promise<void>((resolve) => {
+      releasePrime = resolve;
+    });
+    const primeSpy = jest.spyOn(collector as any, 'primeMarketData').mockReturnValue(primeGate);
+    const initPromise = collector.onModuleInit();
+
+    try {
+      const state = await Promise.race([
+        initPromise.then(() => 'RESOLVED' as const),
+        new Promise<'BLOCKED'>((resolve) => setTimeout(() => resolve('BLOCKED'), 75)),
+      ]);
+      expect(state).toBe('RESOLVED');
+      expect(primeSpy).toHaveBeenCalledWith('real-key-123456', 'conn-1');
+      expect(live.isLiveConnection('conn-1')).toBe(true);
+      expect(() => live.getQuote('EURUSD', 20 * 60_000, 'conn-1')).toThrow();
+      const collectSpy = jest.spyOn(collector, 'collectOnce').mockResolvedValue();
+      await collector.maybeCollect(new Date('2026-10-12T11:45:00.000Z'));
+      expect(collectSpy).not.toHaveBeenCalled();
+    } finally {
+      releasePrime();
+      await initPromise;
+      const startupPrime = (collector as any).startupPrimePromise as Promise<void> | null;
+      if (startupPrime) await startupPrime;
+      collector.onModuleDestroy();
+    }
+  });
+
   it('stops a legacy scheduler job for the exact active PAPER session on scanner startup', async () => {
     const live = new LivePaperMarketDataService();
     const aiEngine = aiEngineClientMock();
@@ -1464,6 +1512,8 @@ describe('VpsForexSignalCollectorService', () => {
       .mockResolvedValue({ ok: true, status: 200, json: async () => payload() } as Response);
 
     await collector.onModuleInit();
+    const startupPrime = (collector as any).startupPrimePromise as Promise<void> | null;
+    if (startupPrime) await startupPrime;
 
     expect(aiEngine.notifySessionStopped).toHaveBeenCalledWith({ tradingSessionId: 'session-1' });
     expect(live.isLiveConnection('conn-1')).toBe(true);

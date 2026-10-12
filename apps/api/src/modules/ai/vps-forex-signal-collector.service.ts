@@ -488,6 +488,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private readonly logger = new Logger(VpsForexSignalCollectorService.name);
   private timer: NodeJS.Timeout | null = null;
   private startupTimer: NodeJS.Timeout | null = null;
+  private startupPrimePromise: Promise<void> | null = null;
+  private destroyed = false;
   private running = false;
   private lastSlot: string | null = null;
   private nextCollectionAttemptAt = 0;
@@ -567,6 +569,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   ) {}
 
   async onModuleInit(): Promise<void> {
+    this.destroyed = false;
     if (!this.enabled()) {
       this.logger.log('VPS six-pair forex scanner disabled');
       return;
@@ -618,25 +621,19 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           `Multi-model market collection paused reason=${schedule.reason} next=${schedule.nextEligibleScanAt}`,
         );
       } else {
-        await this.primeMarketData(apiKey, connectionId);
-        const activeAfterPrime = await this.executionService.getActiveSession(userId);
-        if (
-          activeAfterPrime &&
-          activeAfterPrime.executionMode === ExecutionMode.PAPER_ONLY &&
-          activeAfterPrime.brokerConnectionId === connectionId
-        ) {
-          await this.heartbeatLivePaper(userId, connectionId);
-          this.logger.log(
-            'Multi-model startup live PAPER protection heartbeat completed for 6/6 pairs',
-          );
-        }
+        // Market providers can take minutes to fail when quota-limited or broker
+        // connectivity is degraded. Do not hold Nest bootstrap hostage to that
+        // external I/O. The connection was already claimed above, so every PAPER
+        // quote/risk path remains fail-closed until this prime actually succeeds.
+        const startupPrime = this.primeStartupMarketData(apiKey, userId, connectionId);
+        this.startupPrimePromise = startupPrime;
+        void startupPrime.finally(() => {
+          if (this.startupPrimePromise === startupPrime) this.startupPrimePromise = null;
+        });
       }
     } catch (error) {
-      // Keep live ownership registered so restored live positions fail closed
-      // rather than being valued against a mismatched simulator feed. The
-      // periodic scanner can recover on a later successful provider request.
       this.logger.error(
-        `VPS startup market prime/heartbeat failed; live PAPER remains fail-closed: ${(error as Error).message}`,
+        `VPS startup state restore failed; live PAPER remains fail-closed: ${(error as Error).message}`,
       );
     }
 
@@ -651,7 +648,38 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     this.startupTimer.unref?.();
   }
 
+  private async primeStartupMarketData(
+    apiKey: string,
+    userId: string,
+    connectionId: string,
+  ): Promise<void> {
+    try {
+      await this.primeMarketData(apiKey, connectionId);
+      if (this.destroyed) return;
+      const activeAfterPrime = await this.executionService.getActiveSession(userId);
+      if (this.destroyed) return;
+      if (
+        activeAfterPrime &&
+        activeAfterPrime.executionMode === ExecutionMode.PAPER_ONLY &&
+        activeAfterPrime.brokerConnectionId === connectionId
+      ) {
+        await this.heartbeatLivePaper(userId, connectionId);
+        this.logger.log(
+          'Multi-model startup live PAPER protection heartbeat completed for 6/6 pairs',
+        );
+      }
+    } catch (error) {
+      // Keep live ownership registered so restored live positions fail closed
+      // rather than being valued against a mismatched simulator feed. The
+      // periodic scanner can recover on a later successful provider request.
+      this.logger.error(
+        `VPS startup market prime/heartbeat failed; live PAPER remains fail-closed: ${(error as Error).message}`,
+      );
+    }
+  }
+
   onModuleDestroy(): void {
+    this.destroyed = true;
     if (this.timer) clearInterval(this.timer);
     if (this.startupTimer) clearTimeout(this.startupTimer);
     this.timer = null;
@@ -915,6 +943,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   }
 
   async maybeCollect(now = new Date()): Promise<void> {
+    if (this.destroyed || this.startupPrimePromise) return;
     if (this.providerCooldownUntil && this.providerCooldownUntil.getTime() <= now.getTime()) {
       this.providerCooldownUntil = null;
       this.providerCooldownReason = null;
@@ -3033,6 +3062,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     fetchImpl: typeof fetch = fetch,
   ): Promise<void> {
     const seriesByInstrument = await this.fetchSixPairSeries(apiKey, fetchImpl);
+    if (this.destroyed) return;
     for (const [instrument, candles] of seriesByInstrument.entries()) {
       this.livePaperMarket.updateClosedCandles(instrument, candles, connectionId);
     }
