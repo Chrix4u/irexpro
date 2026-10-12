@@ -32,11 +32,25 @@ describe('MetaTraderMarketDataReaderService', () => {
   const connectionB = createConnection(1.28, 1.2802);
   const historicalA = createAccount(1.17005);
   const historicalB = createAccount(1.28015);
+  const streamingConnectionA = {
+    subscribeToMarketData: jest.fn().mockResolvedValue(undefined),
+    terminalState: {
+      price: jest.fn().mockReturnValue({
+        bid: 1.171,
+        ask: 1.1711,
+        time: new Date('2026-08-30T20:00:16.000Z'),
+      }),
+    },
+  };
   const metaApiClient = {
     getOrCreateConnection: jest.fn(async (accountId: string) => {
       if (accountId === accountA) return connectionA;
       if (accountId === accountB) return connectionB;
       throw new Error('unknown account');
+    }),
+    getOrCreateStreamingConnection: jest.fn(async (accountId: string) => {
+      if (accountId === accountA) return streamingConnectionA;
+      throw new Error('unknown streaming account');
     }),
     removeConnection: jest.fn().mockResolvedValue(undefined),
     connectionPool: new Map([
@@ -47,6 +61,19 @@ describe('MetaTraderMarketDataReaderService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  it('prefers the synchronized streaming terminal quote and avoids the RPC quote call', async () => {
+    const reader = new MetaTraderMarketDataReaderService(metaApiClient as never);
+
+    const quote = await reader.getCurrentPrice(accountA, 'EURUSD');
+
+    expect(quote.bid).toBe('1.17100000');
+    expect(quote.ask).toBe('1.17110000');
+    expect(metaApiClient.getOrCreateStreamingConnection).toHaveBeenCalledWith(accountA);
+    expect(streamingConnectionA.subscribeToMarketData).toHaveBeenCalledWith('EURUSD');
+    expect(streamingConnectionA.terminalState.price).toHaveBeenCalledWith('EURUSD');
+    expect(connectionA.getSymbolPrice).not.toHaveBeenCalled();
   });
 
   it('routes concurrent quotes by explicit account reference', async () => {
