@@ -139,4 +139,15 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
     await client.query('DELETE FROM paper_states');
     expect((await state()).available).toBe(false);
   });
+
+  it('holds when a CLOSED aggregate contradicts a surviving provider position', async () => {
+    await addTrade(loss);
+    await client.query('UPDATE paper_states SET state=$1::jsonb', [JSON.stringify({
+      version: 1, positions: [{ positionId: loss }], closedTrades: [{
+        externalOrderId: loss, instrument: 'USDCAD', direction: 'SELL',
+        closeReason: 'SL', closedAt,
+      }],
+    })]);
+    expect((await state()).available).toBe(false);
+  });
 });
