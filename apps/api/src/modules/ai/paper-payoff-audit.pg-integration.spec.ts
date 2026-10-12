@@ -2,6 +2,8 @@ import { Client } from 'pg';
 import * as helpers from './paper-payoff-shadow-audit';
 import { PAPER_MARKET_SPECS } from '../broker/services/paper-market-spec';
 
+// Operational entry point intentionally exports CommonJS for deployment and tests.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { runPaperPayoffAudit } = require('../../../scripts/audit-paper-payoff-shadow.cjs');
 
 describe('PAPER payoff audit — real PostgreSQL', () => {
@@ -35,7 +37,8 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
         lot_size numeric, fill_price numeric, stop_loss numeric, take_profit numeric,
         exit_price numeric, realised_pnl numeric, commission numeric, swap numeric,
         trailing_stop_pips numeric, external_order_id text, external_position_id text,
-        status text, close_reason text, opened_at timestamptz, closed_at timestamptz);
+        status text, close_reason text, opened_at timestamptz, closed_at timestamptz,
+        account_currency text);
       CREATE TEMP TABLE audit_orders (id uuid, user_id uuid, broker_connection_id uuid,
         trade_id uuid, instrument text, direction text, status text, filled_quantity numeric,
         avg_fill_price numeric);
@@ -59,7 +62,7 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
       [trade, user, connection, JSON.stringify(metadata)]);
     await client.query(`INSERT INTO audit_trades VALUES
       ($1,$1,$2,$3,$4,'EURUSD','BUY',0.1,1.1,1.099,1.102,1.1002,2,0,0,NULL,
-        'provider-1',NULL,'CLOSED','PROFIT_PROTECTION','2026-10-12T01:05:00Z','2026-10-12T01:10:00Z')`,
+        'provider-1',NULL,'CLOSED','PROFIT_PROTECTION','2026-10-12T01:05:00Z','2026-10-12T01:10:00Z','USD')`,
       [trade, order, user, connection]);
     await client.query(`INSERT INTO audit_orders VALUES ($1,$2,$3,$4,'EURUSD','BUY','FILLED',0.1,1.1)`,
       [order, user, connection, trade]);
@@ -122,5 +125,29 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
     const report = await audit();
     expect(report.realised).toEqual([]);
     expect(report.exitShadows[0].cohort.executionRoute).toBe('SHADOW_UNLINKED');
+  });
+
+  it('preserves the immutable trade currency when the connection currency differs', async () => {
+    await client.query("UPDATE audit_trades SET account_currency='EUR'");
+    const report = await audit();
+    expect(report.realised[0].cohort.accountCurrency).toBe('EUR');
+    expect(report.realised[0].payoff.eligibleTrades).toBe(0);
+  });
+
+  it('refuses R for a single breakeven partial close with a remaining provider position', async () => {
+    await client.query('UPDATE audit_trades SET exit_price=fill_price, realised_pnl=0');
+    await client.query('UPDATE audit_states SET state=$1::jsonb', [JSON.stringify({
+      positions: [{ positionId: 'provider-1' }], closedTrades: [
+        { externalOrderId: 'provider-1', lotSize: '0.05' },
+      ],
+    })]);
+    const report = await audit();
+    expect(report.realised[0].payoff.eligibleTrades).toBe(0);
+  });
+
+  it('refuses R when neither provider order nor position identity is known', async () => {
+    await client.query('UPDATE audit_trades SET external_order_id=NULL, external_position_id=NULL');
+    const report = await audit();
+    expect(report.realised[0].payoff.eligibleTrades).toBe(0);
   });
 });

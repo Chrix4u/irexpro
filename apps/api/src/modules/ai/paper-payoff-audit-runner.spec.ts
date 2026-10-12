@@ -2,6 +2,8 @@ import { strict as assert } from 'node:assert';
 import * as helpers from './paper-payoff-shadow-audit';
 import { PAPER_MARKET_SPECS } from '../broker/services/paper-market-spec';
 
+// Operational entry point intentionally exports CommonJS for deployment and tests.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { runPaperPayoffAudit } = require('../../../scripts/audit-paper-payoff-shadow.cjs');
 const userId = '11111111-1111-1111-1111-111111111111';
 const connectionId = '22222222-2222-2222-2222-222222222222';
@@ -87,6 +89,17 @@ describe('read-only PAPER payoff audit runner', () => {
     await assert.rejects(() => audit(client), /PAPER_SCOPE_UNAVAILABLE/);
     assert.equal(client.calls.filter(c => /^\s*(SELECT|WITH)\b/i.test(c.sql)).length, 1);
     assert.equal(client.calls[client.calls.length - 1]?.sql, 'ROLLBACK');
+  });
+
+  it('does not attribute a same-bar fill to a shadow with different execution costs', async () => {
+    const shadow = { instrument: 'EURUSD', direction: 'BUY', evaluatedAt: snapshotAt,
+      marketBarTime: snapshotAt, entryPrice: 1.1, stopLoss: 1.099,
+      brokerSpreadPrice: 0.00001, policyVersion: 'p1', modelVersion: 'p1',
+      costModelVersion: 'c1', strategyRoute: 'TREND_CONTINUATION', outcome: null };
+    const link = { instrument: 'EURUSD', direction: 'BUY', marketBarTime: snapshotAt,
+      policyVersion: 'p1', costModelVersion: 'c2', executionRoute: 'NORMAL_PAPER', research: false };
+    const report = await audit(database({ shadows: [shadow], links: [link] }));
+    assert.equal(report.exitShadows[0].cohort.executionRoute, 'SHADOW_UNLINKED');
   });
 
   it('reads all outcomes in one read-only snapshot and binds owner and connection', async () => {
