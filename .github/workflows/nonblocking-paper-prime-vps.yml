@@ -1,0 +1,147 @@
+name: Nonblocking PAPER Prime VPS
+
+on:
+  push:
+    branches:
+      - ops/nonblocking-prime-sync-20261012
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irexpro-staging-worktree
+  cancel-in-progress: false
+
+jobs:
+  tdd-and-sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment:
+      name: staging
+    env:
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Configure pinned SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Red-green fix, verify, commit and push
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          repo='/home/lightworld/webapps/irexpro-staging'
+          wt='/home/lightworld/worktrees/irexpro-nonblocking-prime-20261012'
+          branch='fix/nonblocking-paper-market-prime-20261012'
+          base='08cd5fa307495af32ad4c1b89a2c9e532d924cda'
+
+          cd "$repo"
+          git fetch --quiet origin main "$branch" || git fetch --quiet origin main
+          if [ -d "$wt/.git" ] || [ -f "$wt/.git" ]; then
+            git worktree remove "$wt" || true
+          fi
+          rm -rf "$wt"
+          git worktree add -B "$branch" "$wt" "$base"
+          cd "$wt"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('apps/api/src/modules/ai/vps-forex-signal-collector.service.spec.ts')
+          s=p.read_text()
+          marker="""  it('stops a legacy scheduler job for the exact active PAPER session on scanner startup', async () => {\n"""
+          test="""  it('does not block API bootstrap while startup market priming is unresolved', async () => {\n    const live = new LivePaperMarketDataService();\n    const collector = new VpsForexSignalCollectorService(\n      config({\n        'vpsForexScanner.enabled': true,\n        'vpsForexScanner.apiKey': 'real-key-123456',\n        'vpsForexScanner.userId': 'user-1',\n        'vpsForexScanner.brokerConnectionId': 'conn-1',\n      }),\n      { receiveSignal: jest.fn() } as unknown as AiSignalService,\n      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,\n      {} as unknown as BrokerService,\n      live,\n      aiEngineClientMock(),\n    );\n    jest.spyOn(collector as any, 'marketSchedule').mockReturnValue({\n      paused: false,\n      reason: null,\n      nextEligibleScanAt: '2026-10-12T11:45:00.000Z',\n    });\n    let releasePrime!: () => void;\n    const primeGate = new Promise<void>((resolve) => {\n      releasePrime = resolve;\n    });\n    const primeSpy = jest.spyOn(collector as any, 'primeMarketData').mockReturnValue(primeGate);\n    const initPromise = collector.onModuleInit();\n\n    try {\n      const state = await Promise.race([\n        initPromise.then(() => 'RESOLVED' as const),\n        new Promise<'BLOCKED'>((resolve) => setTimeout(() => resolve('BLOCKED'), 75)),\n      ]);\n      expect(state).toBe('RESOLVED');\n      expect(primeSpy).toHaveBeenCalledWith('real-key-123456', 'conn-1');\n      expect(live.isLiveConnection('conn-1')).toBe(true);\n      expect(() => live.getQuote('EURUSD', 20 * 60_000, 'conn-1')).toThrow();\n    } finally {\n      releasePrime();\n      await initPromise;\n      const startupPrime = (collector as any).startupPrimePromise as Promise<void> | null;\n      if (startupPrime) await startupPrime;\n      collector.onModuleDestroy();\n    }\n  });\n\n"""
+          assert marker in s
+          p.write_text(s.replace(marker,test+marker,1))
+          PY
+          pnpm --filter @irexpro/api exec prettier --write src/modules/ai/vps-forex-signal-collector.service.spec.ts >/dev/null
+
+          set +e
+          NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter @irexpro/api exec jest --runInBand --forceExit \
+            src/modules/ai/vps-forex-signal-collector.service.spec.ts \
+            -t 'does not block API bootstrap while startup market priming is unresolved' \
+            >/tmp/irexpro-prime-red.log 2>&1
+          red_code=$?
+          set -e
+          cat /tmp/irexpro-prime-red.log
+          test "$red_code" -ne 0 || { echo 'RED PHASE FAILED: regression unexpectedly passed before implementation' >&2; exit 9; }
+          grep -q 'Expected: "RESOLVED"' /tmp/irexpro-prime-red.log || grep -q 'Expected: RESOLVED' /tmp/irexpro-prime-red.log
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('apps/api/src/modules/ai/vps-forex-signal-collector.service.ts')
+          s=p.read_text()
+          old="""  private timer: NodeJS.Timeout | null = null;\n  private startupTimer: NodeJS.Timeout | null = null;\n  private running = false;\n"""
+          new="""  private timer: NodeJS.Timeout | null = null;\n  private startupTimer: NodeJS.Timeout | null = null;\n  private startupPrimePromise: Promise<void> | null = null;\n  private running = false;\n"""
+          assert old in s
+          s=s.replace(old,new,1)
+          old_block="""    try {\n      await this.restorePublishedOpportunities(userId, connectionId);\n      const schedule = this.marketSchedule(new Date());\n      if (schedule.paused) {\n        this.logger.log(\n          `Multi-model market collection paused reason=${schedule.reason} next=${schedule.nextEligibleScanAt}`,\n        );\n      } else {\n        await this.primeMarketData(apiKey, connectionId);\n        const activeAfterPrime = await this.executionService.getActiveSession(userId);\n        if (\n          activeAfterPrime &&\n          activeAfterPrime.executionMode === ExecutionMode.PAPER_ONLY &&\n          activeAfterPrime.brokerConnectionId === connectionId\n        ) {\n          await this.heartbeatLivePaper(userId, connectionId);\n          this.logger.log(\n            'Multi-model startup live PAPER protection heartbeat completed for 6/6 pairs',\n          );\n        }\n      }\n    } catch (error) {\n      // Keep live ownership registered so restored live positions fail closed\n      // rather than being valued against a mismatched simulator feed. The\n      // periodic scanner can recover on a later successful provider request.\n      this.logger.error(\n        `VPS startup market prime/heartbeat failed; live PAPER remains fail-closed: ${(error as Error).message}`,\n      );\n    }\n\n    this.logger.log(\n"""
+          new_block="""    try {\n      await this.restorePublishedOpportunities(userId, connectionId);\n      const schedule = this.marketSchedule(new Date());\n      if (schedule.paused) {\n        this.logger.log(\n          `Multi-model market collection paused reason=${schedule.reason} next=${schedule.nextEligibleScanAt}`,\n        );\n      } else {\n        // Market providers can take minutes to fail when quota-limited or broker\n        // connectivity is degraded. Do not hold Nest bootstrap hostage to that\n        // external I/O. The connection was already claimed above, so every PAPER\n        // quote/risk path remains fail-closed until this prime actually succeeds.\n        const startupPrime = this.primeStartupMarketData(apiKey, userId, connectionId);\n        this.startupPrimePromise = startupPrime;\n        void startupPrime.finally(() => {\n          if (this.startupPrimePromise === startupPrime) this.startupPrimePromise = null;\n        });\n      }\n    } catch (error) {\n      this.logger.error(\n        `VPS startup state restore failed; live PAPER remains fail-closed: ${(error as Error).message}`,\n      );\n    }\n\n    this.logger.log(\n"""
+          assert old_block in s
+          s=s.replace(old_block,new_block,1)
+          marker="""  onModuleDestroy(): void {\n"""
+          helper="""  private async primeStartupMarketData(\n    apiKey: string,\n    userId: string,\n    connectionId: string,\n  ): Promise<void> {\n    try {\n      await this.primeMarketData(apiKey, connectionId);\n      const activeAfterPrime = await this.executionService.getActiveSession(userId);\n      if (\n        activeAfterPrime &&\n        activeAfterPrime.executionMode === ExecutionMode.PAPER_ONLY &&\n        activeAfterPrime.brokerConnectionId === connectionId\n      ) {\n        await this.heartbeatLivePaper(userId, connectionId);\n        this.logger.log('Multi-model startup live PAPER protection heartbeat completed for 6/6 pairs');\n      }\n    } catch (error) {\n      // Keep live ownership registered so restored live positions fail closed\n      // rather than being valued against a mismatched simulator feed. The\n      // periodic scanner can recover on a later successful provider request.\n      this.logger.error(\n        `VPS startup market prime/heartbeat failed; live PAPER remains fail-closed: ${(error as Error).message}`,\n      );\n    }\n  }\n\n"""
+          assert marker in s
+          s=s.replace(marker,helper+marker,1)
+          p.write_text(s)
+          PY
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('apps/api/src/modules/ai/vps-forex-signal-collector.service.spec.ts')
+          s=p.read_text()
+          old="""    await collector.onModuleInit();\n\n    expect(aiEngine.notifySessionStopped).toHaveBeenCalledWith({ tradingSessionId: 'session-1' });\n"""
+          new="""    await collector.onModuleInit();\n    const startupPrime = (collector as any).startupPrimePromise as Promise<void> | null;\n    if (startupPrime) await startupPrime;\n\n    expect(aiEngine.notifySessionStopped).toHaveBeenCalledWith({ tradingSessionId: 'session-1' });\n"""
+          assert old in s
+          p.write_text(s.replace(old,new,1))
+          PY
+
+          pnpm --filter @irexpro/api exec prettier --write \
+            src/modules/ai/vps-forex-signal-collector.service.ts \
+            src/modules/ai/vps-forex-signal-collector.service.spec.ts >/dev/null
+
+          echo '== GREEN targeted regression =='
+          NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter @irexpro/api exec jest --runInBand --forceExit \
+            src/modules/ai/vps-forex-signal-collector.service.spec.ts \
+            -t 'does not block API bootstrap while startup market priming is unresolved'
+
+          echo '== Full collector suite =='
+          NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter @irexpro/api exec jest --runInBand --forceExit \
+            src/modules/ai/vps-forex-signal-collector.service.spec.ts
+
+          echo '== Full API suite =='
+          NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter @irexpro/api exec jest --runInBand --forceExit
+          echo '== API build =='
+          pnpm --filter @irexpro/api build
+          echo '== Changed-file lint =='
+          pnpm --filter @irexpro/api exec eslint \
+            src/modules/ai/vps-forex-signal-collector.service.ts \
+            src/modules/ai/vps-forex-signal-collector.service.spec.ts
+          git diff --check
+
+          git add apps/api/src/modules/ai/vps-forex-signal-collector.service.ts \
+                  apps/api/src/modules/ai/vps-forex-signal-collector.service.spec.ts
+          git diff --cached --check
+          git config user.name 'iRexPro Verification Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'Make PAPER market priming non-blocking at API startup'
+          git push --force-with-lease origin "HEAD:refs/heads/$branch"
+          echo "SYNCED_SHA=$(git rev-parse HEAD)"
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
