@@ -454,7 +454,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'planb-v4-bi2-et2-nm2-hp3-dmw1-ts1-trr1-psrr1',
+      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
     ]);
     expect(restored).toBeDefined();
     expect(restored.direction).toBe(current!.direction);
@@ -497,7 +497,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'planb-v4-bi2-et2-nm2-hp3-dmw1-ts1-trr1-psrr1',
+      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
     ]);
   });
 
@@ -635,7 +635,7 @@ describe('VpsForexSignalCollectorService', () => {
       'irexpro-multimodel-ensemble-v1',
       'USDJPY',
       'BUY',
-      'planb-v4-bi2-et2-nm2-hp3-dmw1-ts1-trr1-psrr1',
+      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
     ]);
   });
 
@@ -689,6 +689,106 @@ describe('VpsForexSignalCollectorService', () => {
     expect((collector as any).lastEnsembleDecision.consensusRequired).toBeGreaterThan(0);
     expect(live.getOHLCV('EURUSD', 'M5', 70, 'conn-1')).toHaveLength(70);
   });
+
+  it.each([-1, 1])(
+    'sends raw market momentum to both model directions for a %s price impulse while preserving aligned telemetry',
+    async (impulseSign) => {
+      const live = new LivePaperMarketDataService();
+      const shadowQuery = jest.fn().mockResolvedValue([]);
+      const modelSpy = jest.spyOn(PlanBEnsembleModule, 'scorePlanBMultimodelShadow');
+      const governanceSpy = jest.spyOn(EnsembleGovernanceModule, 'evaluateEnsembleGovernance');
+      const collector = new VpsForexSignalCollectorService(
+        config({
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.apiKey': 'fixture-key-123456',
+          'vpsForexScanner.userId': 'user-1',
+          'vpsForexScanner.brokerConnectionId': 'conn-1',
+        }),
+        { receiveSignal: jest.fn() } as unknown as AiSignalService,
+        {
+          getActiveSession: jest.fn().mockResolvedValue({
+            id: 'session-1',
+            brokerConnectionId: 'conn-1',
+            executionMode: ExecutionMode.PAPER_ONLY,
+          }),
+        } as unknown as ExecutionService,
+        {
+          getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
+        } as unknown as BrokerService,
+        live,
+        aiEngineClientMock(),
+        { query: shadowQuery } as any,
+      );
+      const market = allTrendPayload();
+      const latest = market['EUR/USD'].values[359];
+      const previous = market['EUR/USD'].values[358];
+      const close = Number(previous.close) + impulseSign * 0.00012;
+      latest.close = close.toFixed(5);
+      latest.open = latest.close;
+      latest.high = (close + 0.00008).toFixed(5);
+      latest.low = (close - 0.00008).toFixed(5);
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => market,
+      });
+
+      try {
+        await collector.collectOnce(fetchMock as unknown as typeof fetch);
+        const candles = live.getOHLCV('EURUSD', 'M5', 360, 'conn-1');
+        const candidates = buildDirectionalCandidates('EURUSD', candles);
+        const expectedRawMomentum =
+          (Number(latest.close) - Number(previous.close)) / candidates[0]!.atr;
+        expect(Math.sign(expectedRawMomentum)).toBe(impulseSign);
+
+        for (const direction of ['BUY', 'SELL'] as const) {
+          const modelInput = modelSpy.mock.calls.find(
+            ([input]) => input.instrument === 'EURUSD' && input.direction === direction,
+          )?.[0];
+          const governanceInput = governanceSpy.mock.calls.find(
+            ([input]) => input.instrument === 'EURUSD' && input.direction === direction,
+          )?.[0];
+          expect(modelInput).toBeDefined();
+          expect(governanceInput).toBeDefined();
+          expect(modelInput!.shortHorizonMomentumAtr).toBeCloseTo(expectedRawMomentum, 10);
+          expect(governanceInput!.shortHorizonMomentumAtr).toBeCloseTo(expectedRawMomentum, 10);
+          if (direction === 'SELL') {
+            const reversalScore = PlanBEnsembleModule.scorePlanBMultimodelShadow({
+              ...modelInput!,
+              confidence: 0.66,
+              extensionAtr: 0.8,
+              volatilityScore: 0.1,
+              emaSeparation: 0.15,
+              mtfStrength: 0.05,
+              rsi14: 42,
+              scanTime: new Date('2026-10-12T14:05:00.000Z'),
+            });
+            expect(reversalScore.regime).toBe(
+              impulseSign === -1 ? 'REVERSAL_CONFIRMED' : 'TREND_WEAK',
+            );
+            expect(reversalScore.paperAdmitted).toBe(impulseSign === -1);
+          }
+          const ledgerCall = shadowQuery.mock.calls.find(
+            ([sql, params]) =>
+              String(sql).includes('INSERT INTO trading.ensemble_shadow_decisions') &&
+              params[6] === 'EURUSD' &&
+              params[7] === direction,
+          );
+          expect(ledgerCall).toBeDefined();
+          const components = JSON.parse(String(ledgerCall![1][23]));
+          const expectedAlignedMomentum = (direction === 'BUY' ? 1 : -1) * expectedRawMomentum;
+          expect(components.shortHorizonMomentumAtr).toBeCloseTo(expectedAlignedMomentum, 10);
+          expect(components.trendPersistenceShadow.shortHorizonMomentumAtr).toBeCloseTo(
+            expectedAlignedMomentum,
+            10,
+          );
+        }
+      } finally {
+        modelSpy.mockRestore();
+        governanceSpy.mockRestore();
+      }
+    },
+  );
 
   it('evaluates every qualifying pair in the same scan instead of only the top-ranked pair', async () => {
     const live = new LivePaperMarketDataService();
@@ -1107,6 +1207,7 @@ describe('VpsForexSignalCollectorService', () => {
       'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1-trend-route-reliability-v1',
       'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1-trend-route-reliability-v1-pair-side-route-reliability-v1',
       'planb-v4-bi2-et2-nm2-hp3-dmw1-ts1-trr1-psrr1',
+      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
     ]);
   });
   it('loads pair-side continuation reliability from independent episode-collapsed shadow evidence', async () => {
