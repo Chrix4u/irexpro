@@ -34,6 +34,15 @@ describe('trader execution runtime contract', () => {
     ).toBe(true);
   });
 
+  it('accepts PROFIT_PROTECTION history emitted by the execution API', () => {
+    expect(
+      isTradeExecutionView({
+        ...CLOSED_TRADE,
+        closeReason: 'PROFIT_PROTECTION',
+      }),
+    ).toBe(true);
+  });
+
   it('still rejects unknown close reasons', () => {
     expect(
       isTradeExecutionView({

@@ -125,4 +125,27 @@ describe('isAiDecisionExplorerView Agent Council contract', () => {
       }),
     ).toBe(false);
   });
+
+  it.each(['PROFIT_PROTECTION', 'STRATEGY_CUTOVER'])(
+    'accepts %s execution close reasons emitted by the API',
+    (closeReason) => {
+      expect(
+        isAiDecisionExplorerView({
+          generatedAt: '2026-09-21T02:00:01.000Z',
+          decisions: [
+            {
+              ...baseDecision(),
+              execution: {
+                tradeId: '22222222-2222-4222-8222-222222222222',
+                status: 'CLOSED',
+                openedAt: '2026-09-21T02:00:02.000Z',
+                closedAt: '2026-09-21T02:10:00.000Z',
+                closeReason,
+              },
+            },
+          ],
+        }),
+      ).toBe(true);
+    },
+  );
 });
