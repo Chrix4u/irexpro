@@ -1,0 +1,147 @@
+name: Nonblocking PAPER Prime Lifecycle Resume
+
+on:
+  push:
+    branches:
+      - ops/nonblocking-prime-lifecycle-resume-20261012
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irexpro-staging-worktree
+  cancel-in-progress: false
+
+jobs:
+  verify-and-sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment:
+      name: staging
+    env:
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Configure pinned SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Fix lifecycle race, verify all API tests, and push feature branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          repo='/home/lightworld/webapps/irexpro-staging'
+          wt='/home/lightworld/worktrees/irexpro-nonblocking-prime-20261012'
+          branch='fix/nonblocking-paper-market-prime-20261012'
+          base='08cd5fa307495af32ad4c1b89a2c9e532d924cda'
+          cd "$wt"
+          test "$(git branch --show-current)" = "$branch"
+          test "$(git rev-parse HEAD)" = "$base"
+          ln -sfn "$repo/node_modules" node_modules
+          ln -sfn "$repo/apps/api/node_modules" apps/api/node_modules
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('apps/api/src/modules/ai/vps-forex-signal-collector.service.ts')
+          s=p.read_text()
+          old="""  private startupPrimePromise: Promise<void> | null = null;\n  private running = false;\n"""
+          new="""  private startupPrimePromise: Promise<void> | null = null;\n  private destroyed = false;\n  private running = false;\n"""
+          assert old in s
+          s=s.replace(old,new,1)
+
+          # Re-arm lifecycle at module initialization.
+          marker="""  async onModuleInit(): Promise<void> {\n"""
+          assert marker in s
+          s=s.replace(marker, marker + "    this.destroyed = false;\n", 1)
+
+          # Destroy must invalidate every delayed/asynchronous startup continuation before timers are cleared.
+          old="""  onModuleDestroy(): void {\n    if (this.timer) clearInterval(this.timer);\n"""
+          new="""  onModuleDestroy(): void {\n    this.destroyed = true;\n    if (this.timer) clearInterval(this.timer);\n"""
+          assert old in s
+          s=s.replace(old,new,1)
+
+          # Normal scan loop must wait for the one startup provider batch to settle.
+          old="""  async maybeCollect(now = new Date()): Promise<void> {\n    if (this.providerCooldownUntil && this.providerCooldownUntil.getTime() <= now.getTime()) {\n"""
+          new="""  async maybeCollect(now = new Date()): Promise<void> {\n    if (this.destroyed || this.startupPrimePromise) return;\n    if (this.providerCooldownUntil && this.providerCooldownUntil.getTime() <= now.getTime()) {\n"""
+          assert old in s
+          s=s.replace(old,new,1)
+
+          # An in-flight provider request cannot be forcibly cancelled here, but no cache/evaluation side effects
+          # may occur after destruction. The check sits immediately after the awaited provider read and before
+          # the first mutation.
+          old="""    const seriesByInstrument = await this.fetchSixPairSeries(apiKey, fetchImpl);\n    for (const [instrument, candles] of seriesByInstrument.entries()) {\n"""
+          new="""    const seriesByInstrument = await this.fetchSixPairSeries(apiKey, fetchImpl);\n    if (this.destroyed) return;\n    for (const [instrument, candles] of seriesByInstrument.entries()) {\n"""
+          assert old in s
+          s=s.replace(old,new,1)
+
+          # Prevent post-prime heartbeat/session work after teardown as well.
+          old="""      await this.primeMarketData(apiKey, connectionId);\n      const activeAfterPrime = await this.executionService.getActiveSession(userId);\n      if (\n"""
+          new="""      await this.primeMarketData(apiKey, connectionId);\n      if (this.destroyed) return;\n      const activeAfterPrime = await this.executionService.getActiveSession(userId);\n      if (this.destroyed) return;\n      if (\n"""
+          assert old in s
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+
+          # Extend the new regression to prove the regular scan loop does not race the unresolved startup prime.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('apps/api/src/modules/ai/vps-forex-signal-collector.service.spec.ts')
+          s=p.read_text()
+          old="""      expect(primeSpy).toHaveBeenCalledWith('real-key-123456', 'conn-1');\n      expect(live.isLiveConnection('conn-1')).toBe(true);\n      expect(() => live.getQuote('EURUSD', 20 * 60_000, 'conn-1')).toThrow();\n"""
+          new="""      expect(primeSpy).toHaveBeenCalledWith('real-key-123456', 'conn-1');\n      expect(live.isLiveConnection('conn-1')).toBe(true);\n      expect(() => live.getQuote('EURUSD', 20 * 60_000, 'conn-1')).toThrow();\n      const collectSpy = jest.spyOn(collector, 'collectOnce').mockResolvedValue();\n      await collector.maybeCollect(new Date('2026-10-12T11:45:00.000Z'));\n      expect(collectSpy).not.toHaveBeenCalled();\n"""
+          assert old in s
+          p.write_text(s.replace(old,new,1))
+          PY
+
+          pnpm --filter @irexpro/api exec prettier --write \
+            src/modules/ai/vps-forex-signal-collector.service.ts \
+            src/modules/ai/vps-forex-signal-collector.service.spec.ts >/dev/null
+
+          echo '== Lifecycle-targeted tests =='
+          NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter @irexpro/api exec jest --runInBand --forceExit \
+            src/modules/ai/vps-forex-signal-collector.service.spec.ts \
+            -t 'does not block API bootstrap|cancels the pending initial scan'
+
+          echo '== Full collector suite =='
+          NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter @irexpro/api exec jest --runInBand --forceExit \
+            src/modules/ai/vps-forex-signal-collector.service.spec.ts
+
+          echo '== Full API suite =='
+          NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter @irexpro/api exec jest --runInBand --forceExit
+
+          echo '== API build =='
+          pnpm --filter @irexpro/api build
+
+          echo '== Changed-file lint =='
+          pnpm --filter @irexpro/api exec eslint \
+            src/modules/ai/vps-forex-signal-collector.service.ts \
+            src/modules/ai/vps-forex-signal-collector.service.spec.ts
+
+          git diff --check
+          git add apps/api/src/modules/ai/vps-forex-signal-collector.service.ts \
+                  apps/api/src/modules/ai/vps-forex-signal-collector.service.spec.ts
+          git diff --cached --check
+          git config user.name 'iRexPro Verification Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'Make PAPER startup priming non-blocking and lifecycle-safe'
+          git push --force-with-lease origin "HEAD:refs/heads/$branch"
+          echo "SYNCED_SHA=$(git rev-parse HEAD)"
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
