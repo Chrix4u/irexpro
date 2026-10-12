@@ -19,11 +19,17 @@ describe('MetaApiClientService', () => {
     deploy: jest.Mock;
     waitDeployed: jest.Mock;
     getRPCConnection: jest.Mock;
+    getStreamingConnection: jest.Mock;
   };
   let connection: {
     connect: jest.Mock;
     waitSynchronized: jest.Mock;
     isSynchronized: jest.Mock;
+    close: jest.Mock;
+  };
+  let streamingConnection: {
+    connect: jest.Mock;
+    waitSynchronized: jest.Mock;
     close: jest.Mock;
   };
 
@@ -35,11 +41,17 @@ describe('MetaApiClientService', () => {
       isSynchronized: jest.fn().mockReturnValue(true),
       close: jest.fn().mockResolvedValue(undefined),
     };
+    streamingConnection = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      waitSynchronized: jest.fn().mockResolvedValue(undefined),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
     account = {
       state: 'DEPLOYED',
       deploy: jest.fn().mockResolvedValue(undefined),
       waitDeployed: jest.fn().mockResolvedValue(undefined),
       getRPCConnection: jest.fn().mockReturnValue(connection),
+      getStreamingConnection: jest.fn().mockReturnValue(streamingConnection),
     };
 
     service = new MetaApiClientService({
@@ -69,6 +81,56 @@ describe('MetaApiClientService', () => {
     expect(account.getRPCConnection).toHaveBeenCalledTimes(1);
     expect(connection.connect).toHaveBeenCalledTimes(1);
     expect(connection.waitSynchronized).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one in-flight streaming connection creation across concurrent callers', async () => {
+    const [first, second, third] = await Promise.all([
+      service.getOrCreateStreamingConnection(accountId),
+      service.getOrCreateStreamingConnection(accountId),
+      service.getOrCreateStreamingConnection(accountId),
+    ]);
+
+    expect(first).toBe(streamingConnection);
+    expect(second).toBe(streamingConnection);
+    expect(third).toBe(streamingConnection);
+    expect(getAccount).toHaveBeenCalledTimes(1);
+    expect(account.getStreamingConnection).toHaveBeenCalledTimes(1);
+    expect(streamingConnection.connect).toHaveBeenCalledTimes(1);
+    expect(streamingConnection.waitSynchronized).toHaveBeenCalledTimes(1);
+    expect(service.hasStreamingConnection(accountId)).toBe(true);
+  });
+
+  it('reuses the pooled streaming connection on later calls', async () => {
+    const first = await service.getOrCreateStreamingConnection(accountId);
+    const second = await service.getOrCreateStreamingConnection(accountId);
+
+    expect(first).toBe(streamingConnection);
+    expect(second).toBe(streamingConnection);
+    expect(getAccount).toHaveBeenCalledTimes(1);
+    expect(account.getStreamingConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes a half-open streaming connection when synchronization fails', async () => {
+    streamingConnection.waitSynchronized.mockRejectedValueOnce(new Error('stream sync timeout'));
+
+    await expect(service.getOrCreateStreamingConnection(accountId)).rejects.toThrow(
+      'stream sync timeout',
+    );
+
+    expect(streamingConnection.close).toHaveBeenCalledTimes(1);
+    expect(service.hasStreamingConnection(accountId)).toBe(false);
+  });
+
+  it('removes only the expected streaming connection instance', async () => {
+    const pooled = await service.getOrCreateStreamingConnection(accountId);
+
+    await service.removeStreamingConnection(accountId, {});
+    expect(service.hasStreamingConnection(accountId)).toBe(true);
+    expect(streamingConnection.close).not.toHaveBeenCalled();
+
+    await service.removeStreamingConnection(accountId, pooled);
+    expect(service.hasStreamingConnection(accountId)).toBe(false);
+    expect(streamingConnection.close).toHaveBeenCalledTimes(1);
   });
 
   it('closes an unsynchronized pooled RPC connection before replacing it', async () => {
