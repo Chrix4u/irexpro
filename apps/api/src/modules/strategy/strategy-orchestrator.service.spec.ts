@@ -95,6 +95,7 @@ describe('StrategyOrchestratorService', () => {
   let allocationMock: {
     resolveOrAllocate: jest.Mock;
     releaseAllocationForIntent: jest.Mock;
+    getUserCapitalAllocationState: jest.Mock;
   };
   /** Round 7.1 (P1): the LIVE fresh-snapshot authority seam (Gate 4.8). */
   let snapshotMock: { resolveFreshSnapshotForNewExposure: jest.Mock };
@@ -227,6 +228,19 @@ describe('StrategyOrchestratorService', () => {
     allocationMock = {
       resolveOrAllocate: jest.fn().mockResolvedValue({ id: 'alloc-1', status: 'ACTIVE' }),
       releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined),
+      getUserCapitalAllocationState: jest.fn().mockResolvedValue({
+        brokerConnectionId: 'conn-1',
+        logicalAccountKey: 'paper-broker::demo::acct-1',
+        accountCurrency: 'USD',
+        brokerEquity: '10000',
+        hasAllocation: true,
+        allocatedCapital: '1000',
+        committedCapital: '0',
+        inFlightCommitments: '0',
+        pendingOrderCommitments: '0',
+        openPositionCommitments: '0',
+        availableCapital: '1000',
+      }),
     };
 
     module = await Test.createTestingModule({
@@ -729,6 +743,29 @@ describe('StrategyOrchestratorService', () => {
             execution_entry_type: 'MARKET',
             signal_suggested_entry_price: 1.0845,
           }),
+        }),
+      );
+    });
+
+    it('passes explicit PAPER allocation + scanner tier into authoritative sizing', async () => {
+      const result = await service.processSignal(
+        validCandidate({
+          metadata: {
+            external_provider_paper_only: true,
+            position_sizing_tier: 'VERY_STRONG',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(allocationMock.getUserCapitalAllocationState).toHaveBeenCalledWith('user-1', 'conn-1');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          paperAllocationSizing: {
+            executionMode: ExecutionMode.PAPER_ONLY,
+            allocatedCapital: '1000',
+            confidenceTier: 'VERY_STRONG',
+          },
         }),
       );
     });
