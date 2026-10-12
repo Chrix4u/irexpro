@@ -1,0 +1,111 @@
+name: Trade Pipeline Diagnostic VPS
+
+on:
+  push:
+    branches:
+      - ops/trade-pipeline-diagnostic-20261012
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irexpro-staging-worktree
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: staging
+    env:
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Configure pinned SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Collect sanitized trade-pipeline evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          app='/home/lightworld/webapps/irexpro-staging'
+          cd "$app"
+          echo "=== runtime ==="
+          echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "head=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+          echo "branch=$(git branch --show-current 2>/dev/null || true)"
+
+          echo "=== pm2 ==="
+          pm2 jlist | node - <<'NODE'
+          let s='';
+          process.stdin.on('data',d=>s+=d).on('end',()=>{
+            try {
+              const rows=JSON.parse(s);
+              for (const p of rows) {
+                const n=String(p.name||'');
+                if (/irex|api|ai/i.test(n)) {
+                  console.log(`${n}\tstatus=${p.pm2_env?.status||'unknown'}\trestarts=${p.pm2_env?.restart_time??'n/a'}\tuptime=${p.pm2_env?.pm_uptime??'n/a'}`);
+                }
+              }
+            } catch { console.log('pm2-json-unavailable'); }
+          });
+          NODE
+
+          echo "=== health ==="
+          for port in 3000 3001 4000 8080; do
+            code=$(curl -sS -o /tmp/irex-health-body -w '%{http_code}' --max-time 3 "http://127.0.0.1:${port}/health/live" || true)
+            if [ "$code" != "000" ]; then
+              echo "port=${port} health=${code}"
+            fi
+          done
+
+          raw=$(mktemp)
+          pm2 logs --lines 5000 --nostream > "$raw" 2>&1 || true
+          echo "=== pipeline marker counts (recent pm2 window) ==="
+          while IFS='|' read -r label regex; do
+            [ -n "$label" ] || continue
+            count=$(grep -Eic "$regex" "$raw" || true)
+            printf '%s=%s\n' "$label" "$count"
+          done <<'PATTERNS'
+          market_ready|market.*(primed|ready)|cache.*(primed|ready)|quotes?.*(ready|fresh)
+          market_blocked|market.*(unavailable|stale|missing)|quotes?.*(unavailable|stale|missing)|no new market
+          provider_quota|quota|429|rate.?limit
+          signal_activity|signal|candidate
+          confidence_gate|confidence|threshold
+          economics_gate|execution.?cost|spread|payoff|expectancy|cost.?gate
+          risk_reject|risk.*(reject|veto|deny)|rejected.*risk|veto
+          order_submit|order.*(submit|place|create)|submission
+          execution_fill|fill|executed|position.*opened|trade.*opened
+          generic_error|error|exception|failed
+          PATTERNS
+
+          echo "=== latest relevant sanitized lines ==="
+          grep -Ei 'market|quote|provider|quota|429|signal|candidate|confidence|threshold|execution.?cost|spread|payoff|expectancy|risk|reject|veto|order|submit|fill|executed|position|trade|error|exception|failed' "$raw" \
+            | tail -n 180 \
+            | sed -E \
+                -e 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<uuid>/g' \
+                -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g' \
+                -e 's/\b[0-9]{7,}\b/<long-number>/g' \
+                -e 's/(token|secret|password|authorization|api[_-]?key)[=: ]+[^ ]+/\1=<redacted>/Ig'
+          rm -f "$raw" /tmp/irex-health-body
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
