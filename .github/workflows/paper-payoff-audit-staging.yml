@@ -1,0 +1,305 @@
+name: PAPER Payoff Audit (Staging)
+
+on:
+  push:
+    branches:
+      - ops/paper-payoff-audit-20261012
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irexpro-staging-worktree
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Read-only PAPER payoff audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: staging
+    env:
+      EXPECTED_STAGING_SHA: 08cd5fa307495af32ad4c1b89a2c9e532d924cda
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+    steps:
+      - name: Configure pinned SSH identity and host keys
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run aggregate-only read-only audit on exact staging SHA
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $EXPECTED_STAGING_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          expected_sha="$1"
+          root='/home/lightworld/webapps/irexpro-staging'
+          cd "$root"
+          test "$(git rev-parse HEAD)" = "$expected_sha" || {
+            printf 'AUDIT HOLD: staging is not the expected verified SHA.\n' >&2
+            exit 4
+          }
+          test -f apps/api/.env
+          test -f apps/api/dist/modules/ai/paper-payoff-shadow-audit.js
+
+          cat > /tmp/irexpro-paper-payoff-audit.cjs <<'NODE'
+          const path = require('path');
+          const root = '/home/lightworld/webapps/irexpro-staging';
+          require(path.join(root, 'apps/api/node_modules/dotenv')).config({
+            path: path.join(root, 'apps/api/.env'),
+            quiet: true,
+          });
+          const { Client } = require(path.join(root, 'apps/api/node_modules/pg'));
+          const {
+            attachPaperExecutionRoutes,
+            summarizePaperExitShadows,
+          } = require(path.join(root, 'apps/api/dist/modules/ai/paper-payoff-shadow-audit.js'));
+
+          const n = (value) => value == null ? null : Number(value);
+          const paperSpread = {
+            EURUSD: 0.00010,
+            GBPUSD: 0.00012,
+            USDJPY: 0.010,
+            AUDUSD: 0.00010,
+            USDCAD: 0.00012,
+            USDCHF: 0.00012,
+          };
+          const connection = process.env.DATABASE_URL
+            ? { connectionString: process.env.DATABASE_URL }
+            : {
+                host: process.env.DB_HOST || 'localhost',
+                port: Number(process.env.DB_PORT || 5432),
+                database: process.env.DB_NAME,
+                user: process.env.DB_USER,
+                password: process.env.DB_PASSWORD,
+              };
+          if (process.env.DB_SSL === 'true') connection.ssl = { rejectUnauthorized: false };
+
+          const client = new Client(connection);
+          (async () => {
+            await client.connect();
+            try {
+              await client.query('BEGIN READ ONLY');
+              await client.query("SET LOCAL statement_timeout = '30000ms'");
+
+              const actual = await client.query(`
+                SELECT
+                  t.instrument,
+                  t.direction,
+                  COALESCE(ti.metadata->>'paper_execution_route', 'UNKNOWN_ROUTE') AS execution_route,
+                  COALESCE(ti.metadata->>'plan_b_ensemble_strategy_route', 'UNKNOWN_STRATEGY') AS strategy_route,
+                  COALESCE(ti.metadata->>'decision_policy_version', 'UNKNOWN_POLICY') AS policy_version,
+                  COALESCE(ti.metadata->>'execution_cost_model_version', 'UNKNOWN_COST_MODEL') AS cost_model_version,
+                  COALESCE(t.close_reason::text, 'UNKNOWN') AS close_reason,
+                  COUNT(*)::int AS trades,
+                  COUNT(*) FILTER (WHERE t.realised_pnl > 0)::int AS wins,
+                  COUNT(*) FILTER (WHERE t.realised_pnl < 0)::int AS losses,
+                  ROUND(COALESCE(SUM(t.realised_pnl), 0)::numeric, 4) AS realised_pnl,
+                  ROUND(COALESCE(SUM(GREATEST(t.realised_pnl, 0)), 0)::numeric, 4) AS gross_profit,
+                  ROUND(COALESCE(-SUM(LEAST(t.realised_pnl, 0)), 0)::numeric, 4) AS gross_loss,
+                  ROUND(AVG(t.max_favorable_pnl) FILTER (WHERE t.max_favorable_pnl IS NOT NULL)::numeric, 4) AS avg_max_favorable_pnl,
+                  ROUND(AVG(t.profit_giveback) FILTER (WHERE t.profit_giveback IS NOT NULL)::numeric, 4) AS avg_profit_giveback
+                FROM trading.trade_intents ti
+                INNER JOIN trading.trades t ON t.trade_intent_id = ti.id
+                WHERE ti.metadata->>'signal_source' = 'EXTERNAL_PROVIDER'
+                  AND ti.metadata->>'external_provider_code' = 'irexpro-multimodel-ensemble-v1'
+                  AND t.status::text = 'CLOSED'
+                  AND t.closed_at IS NOT NULL
+                  AND t.realised_pnl IS NOT NULL
+                  AND t.close_reason::text IN ('STOP_LOSS_HIT','TAKE_PROFIT_HIT','PROFIT_PROTECTION')
+                GROUP BY 1,2,3,4,5,6,7
+                ORDER BY 5,6,1,2,3,7
+              `);
+
+              const actualRows = actual.rows.map((r) => ({
+                instrument: r.instrument,
+                direction: r.direction,
+                executionRoute: r.execution_route,
+                strategyRoute: r.strategy_route,
+                policyVersion: r.policy_version,
+                costModelVersion: r.cost_model_version,
+                closeReason: r.close_reason,
+                trades: Number(r.trades),
+                wins: Number(r.wins),
+                losses: Number(r.losses),
+                realisedPnl: n(r.realised_pnl),
+                grossProfit: n(r.gross_profit),
+                grossLoss: n(r.gross_loss),
+                avgMaxFavorablePnl: n(r.avg_max_favorable_pnl),
+                avgProfitGiveback: n(r.avg_profit_giveback),
+              }));
+
+              const shadows = await client.query(`
+                SELECT
+                  instrument,
+                  direction,
+                  evaluated_at,
+                  market_bar_time,
+                  entry_price,
+                  model_version,
+                  engine_code,
+                  components->>'strategyRoute' AS strategy_route,
+                  components->>'stopLoss' AS stop_loss,
+                  components->'governance'->>'costModelVersion' AS cost_model_version,
+                  components->'governance'->'executionSpreadEvidence'->>'spreadPrice' AS broker_spread_price,
+                  components->'outcome' AS outcome
+                FROM trading.ensemble_shadow_decisions
+                WHERE engine_code = 'irexpro-multimodel-ensemble-v1'
+                ORDER BY evaluated_at ASC
+                LIMIT 20000
+              `);
+              const links = await client.query(`
+                SELECT
+                  instrument,
+                  direction,
+                  metadata->>'market_data_bar_time' AS market_bar_time,
+                  metadata->>'decision_policy_version' AS policy_version,
+                  metadata->>'paper_execution_route' AS execution_route,
+                  CASE
+                    WHEN lower(COALESCE(metadata->>'paper_research_throughput','false')) = 'true' THEN true
+                    WHEN metadata ? 'paper_research_throughput' THEN false
+                    ELSE NULL
+                  END AS research
+                FROM trading.trade_intents
+                WHERE metadata->>'signal_source' = 'EXTERNAL_PROVIDER'
+                  AND metadata->>'external_provider_code' = 'irexpro-multimodel-ensemble-v1'
+                  AND metadata->>'market_data_bar_time' IS NOT NULL
+              `);
+
+              const shadowRows = shadows.rows.map((r) => ({
+                instrument: r.instrument,
+                direction: r.direction,
+                evaluatedAt: r.evaluated_at,
+                marketBarTime: r.market_bar_time,
+                entryPrice: r.entry_price,
+                stopLoss: r.stop_loss,
+                brokerSpreadPrice: r.broker_spread_price,
+                paperSpreadPrice: paperSpread[String(r.instrument).toUpperCase()] ?? null,
+                policyVersion: r.model_version,
+                modelVersion: r.engine_code,
+                costModelVersion: r.cost_model_version,
+                strategyRoute: r.strategy_route,
+                executionRoute: 'SHADOW_UNLINKED',
+                outcome: r.outcome,
+              }));
+              const routeLinks = links.rows.map((r) => ({
+                instrument: r.instrument,
+                direction: r.direction,
+                marketBarTime: r.market_bar_time,
+                policyVersion: r.policy_version,
+                executionRoute: r.execution_route,
+                research: r.research,
+              }));
+              const linked = attachPaperExecutionRoutes(shadowRows, routeLinks);
+              const exitAudit = summarizePaperExitShadows(linked);
+
+              const actualRollup = {};
+              for (const r of actualRows) {
+                const key = [r.policyVersion, r.costModelVersion, r.strategyRoute, r.executionRoute].join('|');
+                const x = actualRollup[key] || {
+                  policyVersion: r.policyVersion,
+                  costModelVersion: r.costModelVersion,
+                  strategyRoute: r.strategyRoute,
+                  executionRoute: r.executionRoute,
+                  trades: 0, wins: 0, losses: 0,
+                  realisedPnl: 0, grossProfit: 0, grossLoss: 0,
+                  closeReasons: {},
+                };
+                x.trades += r.trades; x.wins += r.wins; x.losses += r.losses;
+                x.realisedPnl += r.realisedPnl || 0; x.grossProfit += r.grossProfit || 0; x.grossLoss += r.grossLoss || 0;
+                x.closeReasons[r.closeReason] = (x.closeReasons[r.closeReason] || 0) + r.trades;
+                actualRollup[key] = x;
+              }
+              for (const x of Object.values(actualRollup)) {
+                x.profitFactor = x.grossLoss > 0 ? x.grossProfit / x.grossLoss : null;
+                x.winRate = x.trades > 0 ? x.wins / x.trades : null;
+                x.realisedPnl = Number(x.realisedPnl.toFixed(4));
+                x.grossProfit = Number(x.grossProfit.toFixed(4));
+                x.grossLoss = Number(x.grossLoss.toFixed(4));
+              }
+
+              const policyRollup = {};
+              for (const cohort of exitAudit) {
+                for (const p of cohort.policies) {
+                  if (!p.matchedEpisodes) continue;
+                  const key = [cohort.cohort.policyVersion, cohort.cohort.costModelVersion, cohort.cohort.strategyRoute, cohort.cohort.executionRoute, p.code].join('|');
+                  const x = policyRollup[key] || {
+                    policyVersion: cohort.cohort.policyVersion,
+                    costModelVersion: cohort.cohort.costModelVersion,
+                    strategyRoute: cohort.cohort.strategyRoute,
+                    executionRoute: cohort.cohort.executionRoute,
+                    policy: p.code,
+                    matchedEpisodes: 0,
+                    activatedEpisodes: 0,
+                    exitedEarlyEpisodes: 0,
+                    baselineEffectiveR: 0,
+                    policyEffectiveR: 0,
+                  };
+                  x.matchedEpisodes += p.matchedEpisodes;
+                  x.activatedEpisodes += p.activatedEpisodes;
+                  x.exitedEarlyEpisodes += p.exitedEarlyEpisodes;
+                  x.baselineEffectiveR += p.baselineEffectiveCost.sumR || 0;
+                  x.policyEffectiveR += p.policyEffectiveCost.sumR || 0;
+                  policyRollup[key] = x;
+                }
+              }
+              for (const x of Object.values(policyRollup)) {
+                x.deltaR = Number((x.policyEffectiveR - x.baselineEffectiveR).toFixed(6));
+                x.meanDeltaR = x.matchedEpisodes ? Number((x.deltaR / x.matchedEpisodes).toFixed(6)) : null;
+                x.baselineEffectiveR = Number(x.baselineEffectiveR.toFixed(6));
+                x.policyEffectiveR = Number(x.policyEffectiveR.toFixed(6));
+              }
+
+              const output = {
+                generatedAt: new Date().toISOString(),
+                methodology: 'READ_ONLY_AGGREGATE_EXACT_AUDIT_LIBRARY_V1',
+                actual: Object.values(actualRollup).sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+                exitCounterfactuals: Object.values(policyRollup)
+                  .sort((a,b) => b.deltaR - a.deltaR || b.matchedEpisodes - a.matchedEpisodes),
+                coverage: {
+                  actualAggregateRows: actualRows.length,
+                  shadowRows: shadowRows.length,
+                  routeLinks: routeLinks.length,
+                  auditedShadowCohorts: exitAudit.length,
+                },
+              };
+              console.log('IREXPRO_PAYOFF_AUDIT_JSON=' + JSON.stringify(output));
+              await client.query('ROLLBACK');
+            } finally {
+              await client.end();
+            }
+          })().catch((error) => {
+            console.error('AUDIT_FAILED=' + String(error && error.message ? error.message : error));
+            process.exit(1);
+          });
+          NODE
+
+          node /tmp/irexpro-paper-payoff-audit.cjs
+          rm -f /tmp/irexpro-paper-payoff-audit.cjs
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
