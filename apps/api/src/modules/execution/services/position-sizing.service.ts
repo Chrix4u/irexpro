@@ -5,6 +5,10 @@ import { ExactDecimal } from '../../../common/utils/exact-decimal';
 import { RiskProfile } from '../../risk/entities/risk-profile.entity';
 import { BrokerService } from '../../broker/broker.service';
 import { RiskOrderGeometryService } from '../../risk/risk-order-geometry.service';
+import {
+  paperAllocationSizingPolicy,
+  type PaperAllocationConfidenceTier,
+} from './paper-allocation-sizing-policy';
 
 /**
  * Round 6 live-execution completion (§4) — typed failure codes for the
@@ -57,6 +61,9 @@ export interface PositionSizingInputs {
   equity: string;
   freeMargin: string;
   riskPercent: string;
+  requestedRiskPercent: string;
+  riskCapitalBase: string;
+  allocationAwarePaper: boolean;
   riskAmount: string;
   baseCurrency: string;
   quoteCurrency: string;
@@ -148,6 +155,11 @@ export class PositionSizingService {
     requestedEntryPrice: string | null;
     stopLoss: string | null;
     requestedLotUpperBound: string;
+    paperAllocationSizing?: {
+      executionMode: string;
+      allocatedCapital: string | null;
+      confidenceTier: PaperAllocationConfidenceTier;
+    };
   }): Promise<SizedPosition> {
     const { userId, brokerConnectionId, instrument } = params;
 
@@ -202,6 +214,35 @@ export class PositionSizingService {
         'RISK_BUDGET_UNPARSEABLE',
         `profile maxPositionSizeLot is not a provable positive decimal: ${profile.maxPositionSizeLot}`,
       );
+    }
+
+    let effectiveRiskPercent = riskPercent;
+    let requestedRiskPercent = riskPercent;
+    let riskCapitalBase = equity;
+    let allocationAwarePaper = false;
+    let removeAiLotCeiling = false;
+    let removeProfileLotCeiling = false;
+
+    if (params.paperAllocationSizing) {
+      const allocatedCapital = ExactDecimal.tryParse(
+        params.paperAllocationSizing.allocatedCapital ?? '',
+      );
+      const policy = paperAllocationSizingPolicy({
+        executionMode: params.paperAllocationSizing.executionMode,
+        allocatedCapital: allocatedCapital ? Number(allocatedCapital.toString()) : null,
+        brokerEquity: Number(equity.toString()),
+        confidenceTier: params.paperAllocationSizing.confidenceTier,
+      });
+
+      if (policy.enabled && allocatedCapital?.isPositive()) {
+        const requested = ExactDecimal.parse(String(policy.requestedRiskPercent));
+        allocationAwarePaper = true;
+        requestedRiskPercent = requested;
+        effectiveRiskPercent = ExactDecimal.min(requested, riskPercent);
+        riskCapitalBase = ExactDecimal.min(allocatedCapital, equity);
+        removeAiLotCeiling = policy.removeAiLotCeiling;
+        removeProfileLotCeiling = policy.removeProfileLotCeiling;
+      }
     }
 
     // ── 3. Geometry: entry reference + PROVEN contract size (§1a seam). ───
@@ -313,7 +354,7 @@ export class PositionSizingService {
     }
     const baseCurrency = normalizedInstrument.slice(0, 3);
     const quoteCurrency = normalizedInstrument.slice(3, 6);
-    const riskAmount = equity.mul(riskPercent).divByPowerOfTen(2); // account currency
+    const riskAmount = riskCapitalBase.mul(effectiveRiskPercent).divByPowerOfTen(2); // account currency
     let riskAmountInQuoteCurrency: ExactDecimal;
     let riskCurrencyConversion: 'ACCOUNT_IS_QUOTE' | 'ACCOUNT_IS_BASE_USING_ENTRY';
     if (quoteCurrency === accountCurrency) {
@@ -347,10 +388,13 @@ export class PositionSizingService {
         `AI requested lot upper bound is not a provable positive decimal: ${params.requestedLotUpperBound}`,
       );
     }
-    const lotsBeforeStep = ExactDecimal.min(
-      ExactDecimal.min(ExactDecimal.min(lotsByRiskBudget, profileMaxLots), maxLot),
-      requestedLotUpperBound,
-    );
+    let lotsBeforeStep = ExactDecimal.min(lotsByRiskBudget, maxLot);
+    if (!removeProfileLotCeiling) {
+      lotsBeforeStep = ExactDecimal.min(lotsBeforeStep, profileMaxLots);
+    }
+    if (!removeAiLotCeiling) {
+      lotsBeforeStep = ExactDecimal.min(lotsBeforeStep, requestedLotUpperBound);
+    }
 
     // Normalize DOWN to the instrument's volume step (conservative for risk).
     const steps = lotsBeforeStep.divDown(lotStep, 0); // integer step count
@@ -402,7 +446,10 @@ export class PositionSizingService {
       accountCurrency,
       equity: equity.toString(),
       freeMargin: freeMargin.toString(),
-      riskPercent: riskPercent.toString(),
+      riskPercent: effectiveRiskPercent.toString(),
+      requestedRiskPercent: requestedRiskPercent.toString(),
+      riskCapitalBase: riskCapitalBase.toString(),
+      allocationAwarePaper,
       riskAmount: riskAmount.toString(),
       baseCurrency,
       quoteCurrency,
@@ -427,7 +474,8 @@ export class PositionSizingService {
 
     this.logger.log(
       `Sized ${instrument} ${params.direction}: ${lots.toString()} lots ` +
-        `(risk ${riskAmount.toString()} ${accountCurrency}, requiredMargin ${allocatedCapital.toString()}, ` +
+        `(risk ${riskAmount.toString()} ${accountCurrency} from ${riskCapitalBase.toString()} capital, ` +
+        `requiredMargin ${allocatedCapital.toString()}, ` +
         `notional ${grossNotional.toString()})`,
     );
 
