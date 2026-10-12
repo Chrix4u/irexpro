@@ -1,0 +1,72 @@
+name: Staging API Liveness Diagnose
+
+on:
+  push:
+    branches:
+      - ops/staging-api-liveness-diagnose-20261012
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irexpro-staging-worktree
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: staging
+    env:
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Configure pinned SSH identity and host keys
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+      - name: Inspect API startup failure without mutating staging
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          root='/home/lightworld/webapps/irexpro-staging'
+          cd "$root"
+          printf 'STAGING_HEAD=%s\n' "$(git rev-parse HEAD)"
+          printf '%s\n' '--- PM2 status ---'
+          pm2 jlist | node -e '
+            let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+              const rows=JSON.parse(s).filter(x=>x.name==="irexpro-api-staging").map(x=>({
+                name:x.name,status:x.pm2_env?.status,pid:x.pid,restarts:x.pm2_env?.restart_time,
+                unstableRestarts:x.pm2_env?.unstable_restarts,exitCode:x.pm2_env?.exit_code,
+                createdAt:x.pm2_env?.created_at
+              })); console.log(JSON.stringify(rows));
+            });'
+          printf '%s\n' '--- local health ---'
+          curl --silent --show-error --max-time 5 -i http://127.0.0.1:3010/api/v1/health/live || true
+          printf '%s\n' '--- API error log tail ---'
+          pm2 logs irexpro-api-staging --err --lines 160 --nostream 2>&1 \
+            | sed -E 's/(password|token|secret|api[_-]?key)([=:][^[:space:]]+)/\1=REDACTED/Ig' \
+            | tail -160
+          printf '%s\n' '--- API output log tail (errors/warnings only) ---'
+          pm2 logs irexpro-api-staging --out --lines 240 --nostream 2>&1 \
+            | grep -Ei 'error|exception|fatal|failed|warn|cannot|refused|duplicate|invalid|syntax|query|migration|listen|eaddr|nest' \
+            | sed -E 's/(password|token|secret|api[_-]?key)([=:][^[:space:]]+)/\1=REDACTED/Ig' \
+            | tail -160 || true
+          REMOTE
+      - name: Remove ephemeral SSH material
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
