@@ -17,11 +17,12 @@ export interface MetaApiConnectionEntry {
 }
 
 /**
- * MetaApiClientService — Manages the MetaAPI SDK lifecycle and per-account connection pool.
+ * MetaApiClientService — Manages the MetaAPI SDK lifecycle and per-account connection pools.
  *
  * Architecture:
  * - One MetaApi SDK instance per platform (keyed by METAAPI_TOKEN)
- * - One RPC connection per MetaAPI accountId, pooled and reused
+ * - One RPC connection per MetaAPI accountId, pooled and reused for request/response operations
+ * - One streaming connection per MetaAPI accountId, pooled and reused for terminal-state market data
  * - Connections are created lazily on first use
  * - On module destroy, all connections are cleanly closed
  *
@@ -40,6 +41,8 @@ export class MetaApiClientService implements OnModuleDestroy {
     string,
     Promise<MetaApiConnectionEntry['connection']>
   >();
+  private readonly streamingConnectionPool = new Map<string, any>();
+  private readonly streamingConnectionCreationPool = new Map<string, Promise<any>>();
 
   /** Synchronisation timeout — 60s for initial sync, 10s for re-checks */
   private readonly SYNC_TIMEOUT_SECONDS = 60;
@@ -109,14 +112,7 @@ export class MetaApiClientService implements OnModuleDestroy {
     const creation = (async () => {
       this.logger.log(`Creating MetaAPI connection for account: ${metaApiAccountId}`);
 
-      const account = await this.metaApi!.metatraderAccountApi.getAccount(metaApiAccountId);
-
-      if (!['DEPLOYED', 'DEPLOYING'].includes(account.state)) {
-        this.logger.log(`Deploying MetaAPI account ${metaApiAccountId}...`);
-        await account.deploy();
-      }
-      await account.waitDeployed();
-
+      const account = await this.getDeployedAccount(metaApiAccountId);
       const connection = account.getRPCConnection();
       try {
         await connection.connect();
@@ -149,6 +145,58 @@ export class MetaApiClientService implements OnModuleDestroy {
     } finally {
       if (this.connectionCreationPool.get(metaApiAccountId) === creation) {
         this.connectionCreationPool.delete(metaApiAccountId);
+      }
+    }
+  }
+
+  /**
+   * Get or create a persistent MetaAPI streaming connection for market data.
+   *
+   * Streaming terminal state is maintained locally by the MetaAPI SDK, making
+   * quote reads non-blocking after synchronization. This is deliberately kept
+   * separate from the RPC pool used for execution and margin requests.
+   */
+  async getOrCreateStreamingConnection(metaApiAccountId: string): Promise<any> {
+    this.assertAvailable();
+
+    const existing = this.streamingConnectionPool.get(metaApiAccountId);
+    if (existing) {
+      return existing;
+    }
+
+    const inFlight = this.streamingConnectionCreationPool.get(metaApiAccountId);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const creation = (async () => {
+      this.logger.log(`Creating MetaAPI streaming connection for account: ${metaApiAccountId}`);
+      const account = await this.getDeployedAccount(metaApiAccountId);
+      const connection = account.getStreamingConnection();
+
+      try {
+        await connection.connect();
+        await connection.waitSynchronized();
+      } catch (err) {
+        await this.closeConnectionQuietly(
+          metaApiAccountId,
+          connection,
+          'failed streaming connection attempt',
+        );
+        throw err;
+      }
+
+      this.streamingConnectionPool.set(metaApiAccountId, connection);
+      this.logger.log(`MetaAPI streaming connection established for account: ${metaApiAccountId}`);
+      return connection;
+    })();
+
+    this.streamingConnectionCreationPool.set(metaApiAccountId, creation);
+    try {
+      return await creation;
+    } finally {
+      if (this.streamingConnectionCreationPool.get(metaApiAccountId) === creation) {
+        this.streamingConnectionCreationPool.delete(metaApiAccountId);
       }
     }
   }
@@ -240,6 +288,17 @@ export class MetaApiClientService implements OnModuleDestroy {
     }
   }
 
+  private async getDeployedAccount(metaApiAccountId: string): Promise<any> {
+    const account = await this.metaApi!.metatraderAccountApi.getAccount(metaApiAccountId);
+
+    if (!['DEPLOYED', 'DEPLOYING'].includes(account.state)) {
+      this.logger.log(`Deploying MetaAPI account ${metaApiAccountId}...`);
+      await account.deploy();
+    }
+    await account.waitDeployed();
+    return account;
+  }
+
   private async closeConnectionQuietly(
     metaApiAccountId: string,
     connection: any,
@@ -255,7 +314,7 @@ export class MetaApiClientService implements OnModuleDestroy {
   }
 
   /**
-   * Close and remove a connection from the pool.
+   * Close and remove an RPC connection from the pool.
    */
   async removeConnection(metaApiAccountId: string, expectedConnection?: any): Promise<void> {
     const entry = this.connectionPool.get(metaApiAccountId);
@@ -268,6 +327,22 @@ export class MetaApiClientService implements OnModuleDestroy {
   }
 
   /**
+   * Close and remove a streaming connection from the pool.
+   */
+  async removeStreamingConnection(
+    metaApiAccountId: string,
+    expectedConnection?: any,
+  ): Promise<void> {
+    const connection = this.streamingConnectionPool.get(metaApiAccountId);
+    if (!connection || (expectedConnection && connection !== expectedConnection)) {
+      return;
+    }
+    this.streamingConnectionPool.delete(metaApiAccountId);
+    await this.closeConnectionQuietly(metaApiAccountId, connection, 'streaming connection');
+    this.logger.log(`Removed MetaAPI streaming connection for account: ${metaApiAccountId}`);
+  }
+
+  /**
    * Get all active (pooled) MetaAPI account IDs.
    */
   getActiveAccountIds(): string[] {
@@ -275,15 +350,23 @@ export class MetaApiClientService implements OnModuleDestroy {
   }
 
   /**
-   * Check if a specific account has an active pooled connection.
+   * Check if a specific account has an active pooled RPC connection.
    */
   hasConnection(metaApiAccountId: string): boolean {
     return this.connectionPool.has(metaApiAccountId);
   }
 
+  hasStreamingConnection(metaApiAccountId: string): boolean {
+    return this.streamingConnectionPool.has(metaApiAccountId);
+  }
+
   async onModuleDestroy() {
-    this.logger.log(`Closing ${this.connectionPool.size} MetaAPI connection(s) on module destroy`);
-    const closePromises = Array.from(this.connectionPool.entries()).map(
+    this.logger.log(
+      `Closing ${this.connectionPool.size} MetaAPI RPC connection(s) and ` +
+        `${this.streamingConnectionPool.size} streaming connection(s) on module destroy`,
+    );
+
+    const rpcClosePromises = Array.from(this.connectionPool.entries()).map(
       async ([accountId, entry]) => {
         try {
           await entry.connection.close();
@@ -292,8 +375,21 @@ export class MetaApiClientService implements OnModuleDestroy {
         }
       },
     );
-    await Promise.allSettled(closePromises);
+    const streamingClosePromises = Array.from(this.streamingConnectionPool.entries()).map(
+      async ([accountId, connection]) => {
+        try {
+          await connection.close();
+        } catch (err) {
+          this.logger.warn(
+            `Error closing streaming connection ${accountId}: ${(err as Error).message}`,
+          );
+        }
+      },
+    );
+
+    await Promise.allSettled([...rpcClosePromises, ...streamingClosePromises]);
     this.connectionPool.clear();
+    this.streamingConnectionPool.clear();
   }
 
   private assertAvailable(): void {
