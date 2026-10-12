@@ -51,7 +51,7 @@ interface MetaApiQuote {
  */
 @Injectable()
 export class MetaTraderMarketDataReaderService {
-  private readonly streamingSubscriptions = new WeakMap<object, Map<string, Promise<void>>>();
+  private readonly marketDataSubscriptions = new WeakMap<object, Map<string, Promise<void>>>();
 
   constructor(private readonly metaApiClient: MetaApiClientService) {}
 
@@ -59,7 +59,7 @@ export class MetaTraderMarketDataReaderService {
     let streamingConnection: any;
     try {
       streamingConnection = await this.metaApiClient.getOrCreateStreamingConnection(accountId);
-      await this.ensureStreamingSubscription(streamingConnection, instrument);
+      await this.ensureMarketDataSubscription(streamingConnection, instrument);
 
       const streamingPrice = streamingConnection.terminalState?.price?.(instrument) as
         | MetaApiQuote
@@ -119,6 +119,7 @@ export class MetaTraderMarketDataReaderService {
       requireSynchronization: true,
     });
     try {
+      await this.ensureMarketDataSubscription(connection, instrument);
       const price = (await connection.getSymbolPrice(instrument)) as MetaApiQuote;
       if (!this.isValidQuote(price)) {
         throw new BrokerAdapterError(
@@ -133,12 +134,12 @@ export class MetaTraderMarketDataReaderService {
     }
   }
 
-  private async ensureStreamingSubscription(connection: any, instrument: string): Promise<void> {
+  private async ensureMarketDataSubscription(connection: any, instrument: string): Promise<void> {
     const connectionKey = connection as object;
-    let subscriptions = this.streamingSubscriptions.get(connectionKey);
+    let subscriptions = this.marketDataSubscriptions.get(connectionKey);
     if (!subscriptions) {
       subscriptions = new Map<string, Promise<void>>();
-      this.streamingSubscriptions.set(connectionKey, subscriptions);
+      this.marketDataSubscriptions.set(connectionKey, subscriptions);
     }
 
     const existing = subscriptions.get(instrument);
@@ -146,14 +147,15 @@ export class MetaTraderMarketDataReaderService {
       return existing;
     }
 
-    const subscription = Promise.resolve(connection.subscribeToMarketData(instrument)).catch(
-      (err) => {
+    const subscription = Promise.resolve()
+      .then(() => connection.subscribeToMarketData(instrument))
+      .then(() => undefined)
+      .catch((err) => {
         if (subscriptions?.get(instrument) === subscription) {
           subscriptions.delete(instrument);
         }
         throw err;
-      },
-    );
+      });
     subscriptions.set(instrument, subscription);
     return subscription;
   }
