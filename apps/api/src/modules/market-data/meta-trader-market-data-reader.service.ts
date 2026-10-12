@@ -30,6 +30,12 @@ interface MetaApiPoolView {
   connectionPool: Map<string, MetaApiPoolEntryView>;
 }
 
+interface MetaApiQuote {
+  bid?: number;
+  ask?: number;
+  time?: Date | string | number;
+}
+
 /**
  * Account-scoped MetaTrader market-data reader.
  *
@@ -37,39 +43,40 @@ interface MetaApiPoolView {
  * relies on mutable adapter.currentAccountId. Every request carries the
  * decrypted MetaAPI account reference through to the pooled connection lookup,
  * preventing concurrent users from racing onto another account's market feed.
+ *
+ * Current quotes prefer MetaAPI's persistent streaming terminal state. This
+ * avoids a blocking RPC round-trip on every scanner cycle while keeping the
+ * existing RPC quote path as a fail-closed fallback when streaming data is not
+ * yet available.
  */
 @Injectable()
 export class MetaTraderMarketDataReaderService {
+  private readonly streamingSubscriptions = new WeakMap<object, Map<string, Promise<void>>>();
+
   constructor(private readonly metaApiClient: MetaApiClientService) {}
 
   async getCurrentPrice(accountId: string, instrument: string): Promise<BrokerPrice> {
-    const connection = await this.metaApiClient.getOrCreateConnection(accountId, {
-      requireSynchronization: true,
-    });
+    let streamingConnection: any;
     try {
-      // RPC connections expose direct quote reads. subscribeToMarketData() is a
-      // streaming-connection API and is not available on MetaApi RPC connections.
-      const price = await connection.getSymbolPrice(instrument);
-      const bid = Number(price?.bid);
-      const ask = Number(price?.ask);
-      if (!Number.isFinite(bid) || !Number.isFinite(ask) || ask < bid) {
-        throw new BrokerAdapterError(
-          BrokerErrorCode.BROKER_SERVER_ERROR,
-          'Broker returned an invalid market quote',
-        );
-      }
+      streamingConnection = await this.metaApiClient.getOrCreateStreamingConnection(accountId);
+      await this.ensureStreamingSubscription(streamingConnection, instrument);
 
-      return {
-        instrument,
-        bid: this.toDecimalString(bid),
-        ask: this.toDecimalString(ask),
-        spread: this.toDecimalString(ask - bid),
-        timestamp: price.time instanceof Date ? price.time : new Date(price.time ?? Date.now()),
-      };
-    } catch (err) {
-      await this.metaApiClient.removeConnection(accountId, connection);
-      throw err;
+      const streamingPrice = streamingConnection.terminalState?.price?.(instrument) as
+        | MetaApiQuote
+        | undefined;
+      if (this.isValidQuote(streamingPrice)) {
+        return this.toBrokerPrice(instrument, streamingPrice);
+      }
+    } catch {
+      // If the streaming connection itself failed, evict it so the next scanner
+      // cycle can build a clean websocket session. The RPC fallback below still
+      // gets one opportunity to supply a valid quote for this cycle.
+      if (streamingConnection) {
+        await this.metaApiClient.removeStreamingConnection(accountId, streamingConnection);
+      }
     }
+
+    return this.getCurrentPriceViaRpc(accountId, instrument);
   }
 
   async getOHLCV(
@@ -105,6 +112,71 @@ export class MetaTraderMarketDataReaderService {
       close: this.toDecimalString(candle.close),
       volume: this.toDecimalString(candle.tickVolume ?? candle.volume ?? 0),
     }));
+  }
+
+  private async getCurrentPriceViaRpc(
+    accountId: string,
+    instrument: string,
+  ): Promise<BrokerPrice> {
+    const connection = await this.metaApiClient.getOrCreateConnection(accountId, {
+      requireSynchronization: true,
+    });
+    try {
+      const price = (await connection.getSymbolPrice(instrument)) as MetaApiQuote;
+      if (!this.isValidQuote(price)) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          'Broker returned an invalid market quote',
+        );
+      }
+      return this.toBrokerPrice(instrument, price);
+    } catch (err) {
+      await this.metaApiClient.removeConnection(accountId, connection);
+      throw err;
+    }
+  }
+
+  private async ensureStreamingSubscription(connection: any, instrument: string): Promise<void> {
+    const connectionKey = connection as object;
+    let subscriptions = this.streamingSubscriptions.get(connectionKey);
+    if (!subscriptions) {
+      subscriptions = new Map<string, Promise<void>>();
+      this.streamingSubscriptions.set(connectionKey, subscriptions);
+    }
+
+    const existing = subscriptions.get(instrument);
+    if (existing) {
+      return existing;
+    }
+
+    const subscription = Promise.resolve(connection.subscribeToMarketData(instrument)).catch(
+      (err) => {
+        if (subscriptions?.get(instrument) === subscription) {
+          subscriptions.delete(instrument);
+        }
+        throw err;
+      },
+    );
+    subscriptions.set(instrument, subscription);
+    return subscription;
+  }
+
+  private isValidQuote(price: MetaApiQuote | undefined): price is MetaApiQuote {
+    const bid = Number(price?.bid);
+    const ask = Number(price?.ask);
+    return Number.isFinite(bid) && Number.isFinite(ask) && ask >= bid;
+  }
+
+  private toBrokerPrice(instrument: string, price: MetaApiQuote): BrokerPrice {
+    const bid = Number(price.bid);
+    const ask = Number(price.ask);
+    return {
+      instrument,
+      bid: this.toDecimalString(bid),
+      ask: this.toDecimalString(ask),
+      spread: this.toDecimalString(ask - bid),
+      timestamp: price.time instanceof Date ? price.time : new Date(price.time ?? Date.now()),
+    };
   }
 
   private toDecimalString(value: number): string {
