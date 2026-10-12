@@ -862,9 +862,13 @@ export class RiskService {
     const requestedLots = this.parseOrderDecimal(trade.requestedLotSize, 'requestedLotSize');
     const maxLots = this.parseProfileDecimal(profile.maxPositionSizeLot, 'maxPositionSizeLot');
     let effectiveLotSize = trade.requestedLotSize;
+    const allocationAwarePaperSizing =
+      trade.executionMode === ExecutionMode.PAPER_ONLY && trade.allocationAwarePaperSizing === true;
 
-    if (requestedLots.gt(maxLots)) {
-      // Soft reduction: cap to max, don't reject outright
+    if (requestedLots.gt(maxLots) && !allocationAwarePaperSizing) {
+      // Soft reduction: cap to max, don't reject outright. Allocation-aware
+      // PAPER is the one exception: its lot was already derived from the
+      // explicit allocation + stop distance under the durable risk-% ceiling.
       effectiveLotSize = profile.maxPositionSizeLot;
       this.logger.log(
         `Signal ${trade.signalId}: lot size reduced from ${requestedLots.toString()} to ` +
@@ -884,6 +888,12 @@ export class RiskService {
           instrument: trade.instrument,
         },
       });
+    } else if (allocationAwarePaperSizing) {
+      appliedRules.push('POSITION_SIZE:ALLOCATION_AWARE_PAPER');
+      this.logger.log(
+        `Signal ${trade.signalId}: allocation-aware PAPER sizing retained ${requestedLots.toString()} lots; ` +
+          `legacy maxPositionSizeLot=${maxLots.toString()} is not an independent PAPER cap`,
+      );
     } else {
       appliedRules.push('POSITION_SIZE:OK');
     }
