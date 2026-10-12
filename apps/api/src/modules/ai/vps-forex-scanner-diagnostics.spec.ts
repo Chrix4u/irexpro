@@ -126,9 +126,7 @@ describe('VPS forex scanner diagnostics', () => {
     );
     expect(duplicate.recentObservedCycles).toHaveLength(12);
     expect(duplicate.recentObservedCycles[0]?.evaluatedAt).toBe('2026-10-12T18:13:02.000Z');
-    expect(duplicate.recentObservedCycles.at(-1)?.evaluatedAt).toBe(
-      '2026-10-12T18:02:02.000Z',
-    );
+    expect(duplicate.recentObservedCycles.at(-1)?.evaluatedAt).toBe('2026-10-12T18:02:02.000Z');
 
     const nonOwner = diagnostics.observe(
       {
