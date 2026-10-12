@@ -35,7 +35,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Inspect async market-prime recovery
+      - name: Inspect streaming market-prime recovery
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -45,17 +45,39 @@ jobs:
           set -Eeuo pipefail
           app='/home/lightworld/webapps/irexpro-staging'
           cd "$app"
+          printf 'diagnostic_utc=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           echo "head=$(git rev-parse HEAD)"
           echo "api_live_http=$(curl -sS -o /tmp/irex-live -w '%{http_code}' --max-time 5 http://127.0.0.1:3010/api/v1/health/live || true)"
 
-          echo '=== scanner/provider markers after restart ==='
+          api_uptime_ms="$(pm2 jlist 2>/dev/null | node -e '
+            let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+              try { const xs=JSON.parse(s); const p=xs.find(x=>x.name==="irexpro-api-staging");
+                if (p?.pm2_env?.pm_uptime) process.stdout.write(String(p.pm2_env.pm_uptime));
+              } catch {}
+            });
+          ' || true)"
+          if [[ "$api_uptime_ms" =~ ^[0-9]+$ ]]; then
+            API_UPTIME_MS="$api_uptime_ms" node -e 'console.log(`api_restart_utc=${new Date(Number(process.env.API_UPTIME_MS)).toISOString()}`)'
+          fi
+
+          echo '=== scanner/provider markers ==='
           raw=$(mktemp)
-          pm2 logs irexpro-api-staging --lines 1800 --nostream > "$raw" 2>&1 || true
-          for pat in 'live market cache primed' 'startup.*prime|prime.*market' 'Twelve Data|TWELVE_DATA' 'broker-native|MetaApi' 'No new market|market.*unavailable|market.*stale' 'Multi-model ensemble|execution=SHADOW_ONLY|paperAdmitted='; do
+          pm2 logs irexpro-api-staging --lines 2200 --nostream > "$raw" 2>&1 || true
+          for pat in \
+            'MetaAPI streaming connection established' \
+            'Creating MetaAPI streaming connection' \
+            'live market cache primed' \
+            'startup.*prime|prime.*market' \
+            'Twelve Data|TWELVE_DATA' \
+            'broker-native|MetaApi|MetaAPI' \
+            'No new market|market.*unavailable|market.*stale' \
+            'Multi-model ensemble|execution=SHADOW_ONLY|paperAdmitted='; do
             printf '%s=%s\n' "$pat" "$(grep -Eic "$pat" "$raw" || true)"
           done
-          grep -Ei 'live market cache primed|startup.*prime|prime.*market|Twelve Data|TWELVE_DATA|broker-native|MetaApi|No new market|market.*unavailable|market.*stale|Multi-model ensemble|execution=SHADOW_ONLY|paperAdmitted=' "$raw" \
-            | tail -n 120 \
+
+          echo '=== latest sanitized relevant lines ==='
+          grep -Ei 'MetaAPI streaming connection established|Creating MetaAPI streaming connection|live market cache primed|startup.*prime|prime.*market|Twelve Data|TWELVE_DATA|broker-native|MetaApi|MetaAPI|No new market|market.*unavailable|market.*stale|Multi-model ensemble|execution=SHADOW_ONLY|paperAdmitted=' "$raw" \
+            | tail -n 180 \
             | sed -E \
               -e 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<uuid>/g' \
               -e 's/\b[0-9]{7,}\b/<long-number>/g' \
