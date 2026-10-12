@@ -35,7 +35,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Aggregate recent ensemble economics
+      - name: Diagnose research eligibility and drift causes
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -47,58 +47,92 @@ jobs:
           api_id=$(node -e "const x=require('/tmp/irex-pm2.json');const p=x.find(v=>v.name==='irexpro-api-staging');if(!p)process.exit(2);process.stdout.write(String(p.pm_id));")
           pm2 env "$api_id" > /tmp/irex-api-env
           getv(){ sed -n "s/^$1: //p" /tmp/irex-api-env | head -1; }
-          export PGHOST="$(getv DB_HOST)"
-          export PGPORT="$(getv DB_PORT)"
-          export PGUSER="$(getv DB_USER)"
-          export PGPASSWORD="$(getv DB_PASSWORD)"
-          export PGDATABASE="$(getv DB_NAME)"
-          dbssl="$(getv DB_SSL)"
-          if printf '%s' "$dbssl" | grep -Eqi '^(1|true|require)$'; then export PGSSLMODE=require; else export PGSSLMODE=prefer; fi
-          test -n "$PGHOST" -a -n "$PGUSER" -a -n "$PGDATABASE"
+          export PGHOST="$(getv DB_HOST)" PGPORT="$(getv DB_PORT)" PGUSER="$(getv DB_USER)" PGPASSWORD="$(getv DB_PASSWORD)" PGDATABASE="$(getv DB_NAME)"
+          dbssl="$(getv DB_SSL)"; if printf '%s' "$dbssl" | grep -Eqi '^(1|true|require)$'; then export PGSSLMODE=require; else export PGSSLMODE=prefer; fi
 
-          echo '=== recent ensemble economics (120m, no identifiers) ==='
+          echo '=== research eligibility funnel (120m) ==='
           psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
             WITH d AS (
-              SELECT instrument, direction,
-                NULLIF(components->'governance'->>'grossExpectedR','')::double precision AS gross_r,
-                NULLIF(components->'governance'->>'estimatedExecutionCostR','')::double precision AS cost_r,
-                NULLIF(components->'governance'->>'netExpectedR','')::double precision AS net_r,
-                components->'governance'->>'driftState' AS drift,
-                COALESCE(NULLIF(components->'governance'->>'executionSpreadEvidenceValid','')::boolean,false) AS spread_valid,
-                COALESCE(NULLIF(components->>'paperAdmitted','')::boolean,false) AS paper_admitted
+              SELECT *,
+                (components->'governance'->>'netExpectedR')::double precision net_r,
+                components->'governance'->>'driftState' drift,
+                COALESCE((components->'governance'->>'executionSpreadEvidenceValid')::boolean,false) spread_ok,
+                components->'governance'->>'eventRisk' event_risk,
+                components->>'strategyRoute' route,
+                (components->>'directionQuality')::double precision direction_q,
+                (components->>'tradeQuality')::double precision trade_q,
+                (components->>'exitQuality')::double precision exit_q,
+                COALESCE((components->'paperPostLossEntryGuard'->>'eligible')::boolean,false) post_loss_ok
               FROM trading.ensemble_shadow_decisions
-              WHERE engine_code='irexpro-multimodel-ensemble-v1'
-                AND evaluated_at >= now() - interval '120 minutes'
+              WHERE engine_code='irexpro-multimodel-ensemble-v1' AND evaluated_at >= now()-interval '120 minutes'
             )
-            SELECT instrument, direction, count(*) AS n,
-              round(avg(gross_r)::numeric,4), round(avg(cost_r)::numeric,4), round(avg(net_r)::numeric,4),
-              round(max(net_r)::numeric,4),
-              count(*) FILTER (WHERE net_r >= 0.08),
+            SELECT
+              count(*),
+              count(*) FILTER (WHERE route='TREND_CONTINUATION'),
+              count(*) FILTER (WHERE confidence::double precision>=0.64),
+              count(*) FILTER (WHERE net_r>=0.08),
               count(*) FILTER (WHERE drift='NORMAL'),
-              count(*) FILTER (WHERE spread_valid),
-              count(*) FILTER (WHERE paper_admitted)
+              count(*) FILTER (WHERE spread_ok),
+              count(*) FILTER (WHERE event_risk='CLEAR'),
+              count(*) FILTER (WHERE direction_q>=0.25 AND trade_q>=0.48 AND exit_q>=0.48),
+              count(*) FILTER (WHERE net_r>=0.08 AND drift='NORMAL'),
+              count(*) FILTER (WHERE net_r>=0.08 AND drift='NORMAL' AND spread_ok),
+              count(*) FILTER (WHERE route='TREND_CONTINUATION' AND confidence::double precision>=0.64 AND net_r>=0.08 AND drift='NORMAL' AND spread_ok AND event_risk='CLEAR' AND direction_q>=0.25 AND trade_q>=0.48 AND exit_q>=0.48),
+              count(*) FILTER (WHERE route='TREND_CONTINUATION' AND confidence::double precision>=0.64 AND net_r>=0.08 AND drift='NORMAL' AND spread_ok AND event_risk='CLEAR' AND direction_q>=0.25 AND trade_q>=0.48 AND exit_q>=0.48 AND post_loss_ok)
+            FROM d;"
+
+          echo '=== qualifying intersections by pair/side ==='
+          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
+            WITH d AS (
+              SELECT instrument,direction,confidence::double precision confidence,
+                (components->'governance'->>'netExpectedR')::double precision net_r,
+                components->'governance'->>'driftState' drift,
+                COALESCE((components->'governance'->>'executionSpreadEvidenceValid')::boolean,false) spread_ok,
+                components->'governance'->>'eventRisk' event_risk,
+                components->>'strategyRoute' route,
+                (components->>'directionQuality')::double precision direction_q,
+                (components->>'tradeQuality')::double precision trade_q,
+                (components->>'exitQuality')::double precision exit_q
+              FROM trading.ensemble_shadow_decisions
+              WHERE engine_code='irexpro-multimodel-ensemble-v1' AND evaluated_at >= now()-interval '120 minutes'
+            )
+            SELECT instrument,direction,
+              count(*) FILTER (WHERE net_r>=0.08),
+              count(*) FILTER (WHERE net_r>=0.08 AND drift='NORMAL'),
+              count(*) FILTER (WHERE net_r>=0.08 AND drift='NORMAL' AND spread_ok),
+              count(*) FILTER (WHERE route='TREND_CONTINUATION' AND confidence>=0.64 AND net_r>=0.08 AND drift='NORMAL' AND spread_ok AND event_risk='CLEAR' AND direction_q>=0.25 AND trade_q>=0.48 AND exit_q>=0.48)
             FROM d GROUP BY instrument,direction ORDER BY instrument,direction;"
 
-          echo '=== PAPER blocker counts (120m) ==='
+          echo '=== admission reason counts ==='
           psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            SELECT blocker, count(*)
-            FROM trading.ensemble_shadow_decisions d
-            CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(d.components->'governance'->'paperExecutionBlockers','[]'::jsonb)) blocker
-            WHERE d.engine_code='irexpro-multimodel-ensemble-v1'
-              AND d.evaluated_at >= now() - interval '120 minutes'
-            GROUP BY blocker ORDER BY count(*) DESC, blocker;"
+            SELECT reason,count(*) FROM trading.ensemble_shadow_decisions d
+            CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(d.reasons,'[]'::jsonb)) reason
+            WHERE d.engine_code='irexpro-multimodel-ensemble-v1' AND d.evaluated_at>=now()-interval '120 minutes'
+            GROUP BY reason ORDER BY count(*) DESC,reason;"
 
-          echo '=== decision totals (120m) ==='
+          echo '=== positive-net OOD hard-bound violations (trend continuation only) ==='
           psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            SELECT count(*),
-              count(*) FILTER (WHERE COALESCE(NULLIF(components->>'paperAdmitted','')::boolean,false)),
-              count(*) FILTER (WHERE COALESCE(NULLIF(components->'governance'->>'paperExecutionEligible','')::boolean,false)),
-              count(*) FILTER (WHERE (components->'governance'->>'netExpectedR')::double precision >= 0.08),
-              count(*) FILTER (WHERE components->'governance'->>'driftState'='NORMAL'),
-              count(*) FILTER (WHERE COALESCE(NULLIF(components->'governance'->>'executionSpreadEvidenceValid','')::boolean,false))
-            FROM trading.ensemble_shadow_decisions
-            WHERE engine_code='irexpro-multimodel-ensemble-v1'
-              AND evaluated_at >= now() - interval '120 minutes';"
+            WITH d AS (
+              SELECT confidence::double precision confidence,
+                (components->>'extensionAtr')::double precision extension_atr,
+                (components->>'volatilityScore')::double precision volatility,
+                (components->>'emaSeparation')::double precision ema,
+                (components->>'mtfStrength')::double precision mtf,
+                (components->>'rsi14')::double precision rsi,
+                (components->'governance'->>'netExpectedR')::double precision net_r,
+                components->'governance'->>'driftState' drift,
+                components->>'strategyRoute' route
+              FROM trading.ensemble_shadow_decisions
+              WHERE engine_code='irexpro-multimodel-ensemble-v1' AND evaluated_at>=now()-interval '120 minutes'
+            ), p AS (SELECT * FROM d WHERE net_r>=0.08 AND drift='OUT_OF_DISTRIBUTION' AND route='TREND_CONTINUATION')
+            SELECT 'TOTAL',count(*) FROM p UNION ALL
+            SELECT 'CONFIDENCE_HARD',count(*) FROM p WHERE confidence<0.640079 OR confidence>0.751451 UNION ALL
+            SELECT 'EXTENSION_HARD',count(*) FROM p WHERE extension_atr<0.190896 OR extension_atr>1.499639 UNION ALL
+            SELECT 'VOLATILITY_HARD',count(*) FROM p WHERE volatility<0.048258 OR volatility>0.720472 UNION ALL
+            SELECT 'EMA_HARD',count(*) FROM p WHERE ema<0.050248 OR ema>0.84442 UNION ALL
+            SELECT 'MTF_HARD',count(*) FROM p WHERE mtf<0.004236 OR mtf>1.0 UNION ALL
+            SELECT 'RSI_HARD',count(*) FROM p WHERE rsi<32.222943 OR rsi>68.518704;"
+
           unset PGPASSWORD
           rm -f /tmp/irex-pm2.json /tmp/irex-api-env
           REMOTE
