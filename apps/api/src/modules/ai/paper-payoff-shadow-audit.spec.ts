@@ -283,6 +283,7 @@ describe('shadow execution route provenance', () => {
         direction: 'BUY',
         marketBarTime: '2026-10-12T00:00:00.000Z',
         policyVersion: 'p1',
+        costModelVersion: 'c1',
         executionRoute: 'PAPER_RESEARCH_THROUGHPUT',
         research: true,
       },
@@ -300,6 +301,7 @@ describe('shadow execution route provenance', () => {
       direction: 'BUY' as const,
       marketBarTime: '2026-10-12T00:00:00Z',
       policyVersion: 'p1',
+      costModelVersion: 'c1',
     };
     const linked = attachPaperExecutionRoutes(
       [shadow({ marketBarTime: common.marketBarTime })],
