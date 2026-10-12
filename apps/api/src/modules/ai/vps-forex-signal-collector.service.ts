@@ -481,6 +481,7 @@ export function buildCandidate(
 export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(VpsForexSignalCollectorService.name);
   private timer: NodeJS.Timeout | null = null;
+  private startupTimer: NodeJS.Timeout | null = null;
   private running = false;
   private lastSlot: string | null = null;
   private nextCollectionAttemptAt = 0;
@@ -640,12 +641,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     );
     this.timer = setInterval(() => void this.maybeCollect(), 15_000);
     this.timer.unref?.();
-    setTimeout(() => void this.maybeCollect(), 2_000).unref?.();
+    this.startupTimer = setTimeout(() => void this.maybeCollect(), 2_000);
+    this.startupTimer.unref?.();
   }
 
   onModuleDestroy(): void {
     if (this.timer) clearInterval(this.timer);
+    if (this.startupTimer) clearTimeout(this.startupTimer);
     this.timer = null;
+    this.startupTimer = null;
     const connectionId = this.connectionId();
     if (connectionId) this.livePaperMarket.unregisterLiveConnection(connectionId);
   }

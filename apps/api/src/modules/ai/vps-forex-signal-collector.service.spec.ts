@@ -1640,6 +1640,15 @@ describe('scheduled scan recovery', () => {
     await collector.maybeCollect();
     expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBe('2026-10-12T10:01:00.000Z');
   });
+  it('cancels the pending initial scan when the scanner is destroyed', async () => {
+    jest.spyOn(global, 'fetch').mockImplementation(async () => goodFeed());
+    const collector = scanner();
+    await collector.onModuleInit();
+    const primedAt = (await collector.getStatus('user-1')).lastEvaluatedAt;
+    collector.onModuleDestroy();
+    await jest.advanceTimersByTimeAsync(2_000);
+    expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBe(primedAt);
+  });
   it('keeps recovery paused during the weekend', async () => {
     jest.setSystemTime(new Date('2026-10-10T10:03:00.000Z'));
     jest.spyOn(global, 'fetch').mockImplementation(async () => goodFeed());
