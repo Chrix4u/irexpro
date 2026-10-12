@@ -13,6 +13,10 @@ export const PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY = 0.25;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_TRADE_QUALITY = 0.48;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_EXIT_QUALITY = 0.48;
 
+export const PAPER_PAIRED_REVERSAL_RESEARCH_ARTIFACT = 'paper-paired-reversal-research-v1';
+export const PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP = 0.01;
+export const PAPER_PAIRED_REVERSAL_RESEARCH_MIN_NET_EXPECTED_R = 0.08;
+
 export const PAPER_RESEARCH_THROUGHPUT_EPISODE_COOLDOWN_MINUTES = 30;
 
 export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES = 5;
@@ -98,16 +102,19 @@ export type PaperExecutionRoute =
   | 'NORMAL_PAPER'
   | 'REJECTED_EDGE_CANARY'
   | 'PAPER_RESEARCH_THROUGHPUT'
+  | 'PAIRED_REVERSAL_RESEARCH'
   | 'NONE';
 
 export function selectPaperExecutionRoute(input: {
   normalPaperExecution: boolean;
   rejectedEdgeCanaryEligible: boolean;
   paperResearchThroughputEligible: boolean;
+  pairedReversalResearchEligible?: boolean;
 }): PaperExecutionRoute {
   if (input.normalPaperExecution) return 'NORMAL_PAPER';
   if (input.rejectedEdgeCanaryEligible) return 'REJECTED_EDGE_CANARY';
   if (input.paperResearchThroughputEligible) return 'PAPER_RESEARCH_THROUGHPUT';
+  if (input.pairedReversalResearchEligible) return 'PAIRED_REVERSAL_RESEARCH';
   return 'NONE';
 }
 
@@ -254,5 +261,66 @@ export function evaluatePaperResearchThroughput(
     reason,
     qualificationEvidence: false,
     executionAuthority: 'PAPER_ONLY_RESEARCH',
+  };
+}
+
+export interface PaperPairedReversalResearchInput {
+  candidateDirection: 'BUY' | 'SELL';
+  preferredDirection: 'BUY' | 'SELL' | null;
+  reversalCandidate: boolean;
+  researchNetExpectedR: number;
+  executionSpreadEvidenceValid: boolean;
+  eventRisk: string;
+  driftState: string;
+}
+
+export interface PaperPairedReversalResearchDecision {
+  eligible: boolean;
+  route: 'PAIRED_REVERSAL_RESEARCH';
+  reason:
+    | 'PAIRED_REVERSAL_RESEARCH_CANDIDATE'
+    | 'PAIRED_REVERSAL_NOT_CONFIRMED'
+    | 'PAIRED_DIRECTION_NOT_SELECTED'
+    | 'SPREAD_EVIDENCE_INVALID'
+    | 'EVENT_RISK_NOT_CLEAR'
+    | 'DRIFT_OUT_OF_DISTRIBUTION'
+    | 'DRIFT_INVALID'
+    | 'NET_EXPECTED_R_INVALID'
+    | 'NET_EXPECTED_R_TOO_LOW';
+  qualificationEvidence: false;
+  executionAuthority: 'PAPER_ONLY_RESEARCH';
+  lotCap: typeof PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP;
+}
+
+export function evaluatePaperPairedReversalResearch(
+  input: PaperPairedReversalResearchInput,
+): PaperPairedReversalResearchDecision {
+  let reason: PaperPairedReversalResearchDecision['reason'] = 'PAIRED_REVERSAL_RESEARCH_CANDIDATE';
+
+  if (!input.reversalCandidate) {
+    reason = 'PAIRED_REVERSAL_NOT_CONFIRMED';
+  } else if (!input.preferredDirection || input.preferredDirection !== input.candidateDirection) {
+    reason = 'PAIRED_DIRECTION_NOT_SELECTED';
+  } else if (!input.executionSpreadEvidenceValid) {
+    reason = 'SPREAD_EVIDENCE_INVALID';
+  } else if (input.eventRisk !== 'CLEAR') {
+    reason = 'EVENT_RISK_NOT_CLEAR';
+  } else if (input.driftState === 'OUT_OF_DISTRIBUTION') {
+    reason = 'DRIFT_OUT_OF_DISTRIBUTION';
+  } else if (input.driftState !== 'NORMAL' && input.driftState !== 'STRESSED') {
+    reason = 'DRIFT_INVALID';
+  } else if (!Number.isFinite(input.researchNetExpectedR)) {
+    reason = 'NET_EXPECTED_R_INVALID';
+  } else if (input.researchNetExpectedR < PAPER_PAIRED_REVERSAL_RESEARCH_MIN_NET_EXPECTED_R) {
+    reason = 'NET_EXPECTED_R_TOO_LOW';
+  }
+
+  return {
+    eligible: reason === 'PAIRED_REVERSAL_RESEARCH_CANDIDATE',
+    route: 'PAIRED_REVERSAL_RESEARCH',
+    reason,
+    qualificationEvidence: false,
+    executionAuthority: 'PAPER_ONLY_RESEARCH',
+    lotCap: PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP,
   };
 }
