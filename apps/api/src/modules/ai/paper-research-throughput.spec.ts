@@ -4,9 +4,11 @@ import {
   PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY,
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES,
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS,
+  PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP,
   evaluatePaperResearchEpisodeGuard,
   evaluatePaperResearchPairSideReliability,
   evaluatePaperResearchThroughput,
+  evaluatePaperPairedReversalResearch,
   paperResearchThroughputModelVersion,
   selectPaperExecutionRoute,
 } from './paper-research-throughput';
@@ -112,6 +114,7 @@ describe('PAPER execution route provenance', () => {
         normalPaperExecution: false,
         rejectedEdgeCanaryEligible: true,
         paperResearchThroughputEligible: true,
+        pairedReversalResearchEligible: true,
       }),
     ).toBe('REJECTED_EDGE_CANARY');
   });
@@ -122,6 +125,7 @@ describe('PAPER execution route provenance', () => {
         normalPaperExecution: true,
         rejectedEdgeCanaryEligible: true,
         paperResearchThroughputEligible: true,
+        pairedReversalResearchEligible: true,
       }),
     ).toBe('NORMAL_PAPER');
   });
@@ -132,6 +136,7 @@ describe('PAPER execution route provenance', () => {
         normalPaperExecution: false,
         rejectedEdgeCanaryEligible: false,
         paperResearchThroughputEligible: true,
+        pairedReversalResearchEligible: true,
       }),
     ).toBe('PAPER_RESEARCH_THROUGHPUT');
   });
@@ -142,6 +147,7 @@ describe('PAPER execution route provenance', () => {
         normalPaperExecution: false,
         rejectedEdgeCanaryEligible: false,
         paperResearchThroughputEligible: false,
+        pairedReversalResearchEligible: false,
       }),
     ).toBe('NONE');
   });
@@ -287,5 +293,73 @@ describe('evaluatePaperResearchEpisodeGuard', () => {
         paperExecutionBlockers: [],
       }),
     ).toMatchObject({ eligible: false, reason: 'UNSAFE_BLOCKER' });
+  });
+});
+
+describe('paired reversal PAPER research', () => {
+  const base = {
+    candidateDirection: 'SELL' as const,
+    preferredDirection: 'SELL' as const,
+    reversalCandidate: true,
+    researchNetExpectedR: 0.18,
+    executionSpreadEvidenceValid: true,
+    eventRisk: 'CLEAR',
+    driftState: 'STRESSED',
+  };
+
+  it('allows a confirmed paired reversal into tiny PAPER-only research under stressed drift', () => {
+    expect(evaluatePaperPairedReversalResearch(base)).toEqual({
+      eligible: true,
+      route: 'PAIRED_REVERSAL_RESEARCH',
+      reason: 'PAIRED_REVERSAL_RESEARCH_CANDIDATE',
+      qualificationEvidence: false,
+      executionAuthority: 'PAPER_ONLY_RESEARCH',
+      lotCap: 0.01,
+    });
+    expect(PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP).toBe(0.01);
+  });
+
+  it('only allows the pairwise-selected side to enter reversal research', () => {
+    expect(
+      evaluatePaperPairedReversalResearch({ ...base, candidateDirection: 'BUY' }),
+    ).toMatchObject({ eligible: false, reason: 'PAIRED_DIRECTION_NOT_SELECTED' });
+  });
+
+  it('does not execute an unconfirmed opposite side', () => {
+    expect(
+      evaluatePaperPairedReversalResearch({ ...base, reversalCandidate: false }),
+    ).toMatchObject({ eligible: false, reason: 'PAIRED_REVERSAL_NOT_CONFIRMED' });
+  });
+
+  it('fails closed on missing spread evidence, event risk, and out-of-distribution drift', () => {
+    expect(
+      evaluatePaperPairedReversalResearch({ ...base, executionSpreadEvidenceValid: false }),
+    ).toMatchObject({ eligible: false, reason: 'SPREAD_EVIDENCE_INVALID' });
+    expect(
+      evaluatePaperPairedReversalResearch({ ...base, eventRisk: 'HIGH_IMPACT_BLOCK' }),
+    ).toMatchObject({ eligible: false, reason: 'EVENT_RISK_NOT_CLEAR' });
+    expect(
+      evaluatePaperPairedReversalResearch({ ...base, driftState: 'OUT_OF_DISTRIBUTION' }),
+    ).toMatchObject({ eligible: false, reason: 'DRIFT_OUT_OF_DISTRIBUTION' });
+  });
+
+  it('requires positive post-cost paired expectancy and accepts NORMAL as well as STRESSED drift', () => {
+    expect(
+      evaluatePaperPairedReversalResearch({ ...base, researchNetExpectedR: 0.0799 }),
+    ).toMatchObject({ eligible: false, reason: 'NET_EXPECTED_R_TOO_LOW' });
+    expect(evaluatePaperPairedReversalResearch({ ...base, driftState: 'NORMAL' })).toMatchObject({
+      eligible: true,
+    });
+  });
+
+  it('selects paired reversal research only after all existing PAPER routes decline', () => {
+    expect(
+      selectPaperExecutionRoute({
+        normalPaperExecution: false,
+        rejectedEdgeCanaryEligible: false,
+        paperResearchThroughputEligible: false,
+        pairedReversalResearchEligible: true,
+      }),
+    ).toBe('PAIRED_REVERSAL_RESEARCH');
   });
 });
