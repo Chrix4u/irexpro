@@ -6,6 +6,7 @@ import {
   buildCandidate,
   buildDirectionalCandidates,
   selectCounterfactualExecutionCandidate,
+  prioritizeCounterfactualExecutionRoutes,
   dynamicPaperLotUpperBound,
   isFreshOpportunity,
 } from './vps-forex-signal-collector.service';
@@ -15,6 +16,8 @@ import { BrokerService } from '../broker/broker.service';
 import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
 import * as PlanBEnsembleModule from './plan-b-multimodel-shadow';
 import * as EnsembleGovernanceModule from './ensemble-governance';
+import * as V8ShadowMetaModule from './v8-shadow-meta-scorer';
+import * as PairedDirectionReversalModule from './paired-direction-reversal';
 import { PAPER_POST_LOSS_STATE_QUERY } from './paper-post-loss-state-query';
 
 // Collection fixtures explicitly provide a healthy, empty PAPER history.
@@ -231,6 +234,25 @@ describe('multi-model PAPER execution gate', () => {
     expect(
       canExecuteMultiModelPaper({ paperAdmitted: true }, { paperExecutionEligible: false }),
     ).toBe(false);
+  });
+});
+
+describe('paired reversal route precedence', () => {
+  it('keeps existing execution routes authoritative over paired reversal research on the same pair', () => {
+    const existingRoute = {
+      candidate: { direction: 'BUY' },
+      paperExecutionRoute: 'NORMAL_PAPER',
+      netExpectedR: 0.12,
+    } as const;
+    const pairedResearch = {
+      candidate: { direction: 'SELL' },
+      paperExecutionRoute: 'PAIRED_REVERSAL_RESEARCH',
+      netExpectedR: 0.45,
+    } as const;
+
+    expect(prioritizeCounterfactualExecutionRoutes([existingRoute, pairedResearch])).toEqual([
+      existingRoute,
+    ]);
   });
 });
 
@@ -1266,6 +1288,193 @@ describe('VpsForexSignalCollectorService', () => {
       logSpy.mockRestore();
       planBSpy.mockRestore();
       governanceSpy.mockRestore();
+    }
+  });
+
+  it('routes only the paired opposite-side winner into tiny reversal research without qualification authority', async () => {
+    const live = new LivePaperMarketDataService();
+    const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
+    const shadowQuery = jest.fn().mockResolvedValue([]);
+    const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
+    const actualMeta = V8ShadowMetaModule.scorePlanBShadowMeta;
+    const actualPaired = PairedDirectionReversalModule.evaluatePairedDirectionReversal;
+
+    const metaSpy = jest
+      .spyOn(V8ShadowMetaModule, 'scorePlanBShadowMeta')
+      .mockImplementation((input) => {
+        const base = actualMeta(input);
+        if (input.instrument !== 'EURUSD') return base;
+        const probability = input.direction === 'BUY' ? 0.4 : 0.58;
+        return {
+          ...base,
+          probability,
+          expectedR: probability * (2.5 / 1.5) - (1 - probability),
+          admitted: input.direction === 'SELL',
+          reason: input.direction === 'SELL' ? 'ADMIT' : 'REJECT_EXPECTED_VALUE',
+        };
+      });
+    const planBSpy = jest
+      .spyOn(PlanBEnsembleModule, 'scorePlanBMultimodelShadow')
+      .mockImplementation((input, positions) => {
+        const base = actualPlanB(input, positions);
+        const target = input.instrument === 'EURUSD';
+        return {
+          ...base,
+          regime: target ? 'TREND_WEAK' : base.regime,
+          strategyRoute: 'TREND_CONTINUATION',
+          regimeAllowed: false,
+          paperAdmitted: false,
+          admitted: false,
+          consensusPassed: target ? 4 : 2,
+          consensusRequired: 6,
+          directionQuality: target ? 0.45 : 0.2,
+          tradeQuality: target ? 0.5 : 0.2,
+          exitQuality: target ? 0.5 : 0.2,
+          metaProbability: target ? (input.direction === 'BUY' ? 0.4 : 0.58) : 0.3,
+          expectedR: target ? -0.1 : -0.3,
+          ensembleScore: target ? 0.48 : 0.25,
+          reasons: ['META_EXPECTED_VALUE'],
+        };
+      });
+    const governanceSpy = jest
+      .spyOn(EnsembleGovernanceModule, 'evaluateEnsembleGovernance')
+      .mockImplementation((input) => {
+        const target = input.instrument === 'EURUSD';
+        return {
+          version: EnsembleGovernanceModule.ENSEMBLE_GOVERNANCE_VERSION,
+          costModelVersion: EnsembleGovernanceModule.ENSEMBLE_COST_MODEL_VERSION,
+          driftModelVersion: EnsembleGovernanceModule.ENSEMBLE_DRIFT_MODEL_VERSION,
+          grossExpectedR: -0.1,
+          estimatedExecutionCostR: 0.03,
+          executionCostSource: 'BROKER_OBSERVED_P90',
+          executionSpreadEvidenceValid: true,
+          executionSpreadEvidence: {
+            source: 'BROKER_OBSERVED_P90',
+            spreadPrice: 0.00001,
+            sampleCount: 30,
+            percentile: 0.9,
+            windowMinutes: 30,
+            latestSampleAt: new Date().toISOString(),
+          },
+          netExpectedR: -0.13,
+          paperNetExpectedRPassed: false,
+          netExpectedRPassed: false,
+          driftState: target ? 'STRESSED' : 'OUT_OF_DISTRIBUTION',
+          driftQuality: target ? 0.75 : 0.1,
+          paperDriftPassed: false,
+          driftPassed: false,
+          sleeveState: 'COLLECTING',
+          sleeveEvidence: null,
+          eventRisk: 'CLEAR',
+          paperExecutionEligible: false,
+          paperExecutionBlockers: [
+            'ENSEMBLE_NOT_PAPER_ADMITTED',
+            'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+            'PAPER_NET_EXPECTED_R',
+            target ? 'DRIFT_STRESSED' : 'DRIFT_OUT_OF_DISTRIBUTION',
+          ],
+          paperPromotionEligible: false,
+          blockers: ['ENSEMBLE_NOT_ADMITTED', 'NET_EXPECTED_R', 'SLEEVE_COLLECTING'],
+        };
+      });
+    const pairedSpy = jest
+      .spyOn(PairedDirectionReversalModule, 'evaluatePairedDirectionReversal')
+      .mockImplementation((input) => {
+        if (input.buyProbability === 0.4 && input.sellProbability === 0.58) {
+          return {
+            buyDirectionalProbability: 0.326,
+            sellDirectionalProbability: 0.674,
+            preferredDirection: 'SELL',
+            preferredAbsoluteProbability: 0.58,
+            directionalEdge: 0.348,
+            alignedMomentumAtr: 0.4,
+            researchNetExpectedR: 0.31,
+            reversalCandidate: true,
+            reason: 'PAIRED_REVERSAL_CANDIDATE',
+          };
+        }
+        return actualPaired(input);
+      });
+
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      {
+        getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
+        getOpenPositionsForConnection: jest.fn().mockResolvedValue({ positions: [] }),
+      } as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+      { query: shadowQuery } as any,
+      {
+        assess: jest.fn().mockResolvedValue({
+          state: 'CLEAR',
+          provider: 'TEST',
+          configured: true,
+          checkedAt: new Date().toISOString(),
+          instrument: 'EURUSD',
+          relevantCountries: [],
+          blockWindowMinutesBefore: 30,
+          blockWindowMinutesAfter: 30,
+          blockingEvents: [],
+          reason: null,
+          attribution: null,
+        }),
+      } as any,
+    );
+    jest.spyOn(collector as any, 'loadEnsembleSleeveEvidence').mockResolvedValue(null);
+    jest.spyOn(collector as any, 'loadExecutionSpreadEvidence').mockResolvedValue({
+      source: 'BROKER_OBSERVED_P90',
+      spreadPrice: 0.00001,
+      sampleCount: 30,
+      percentile: 0.9,
+      windowMinutes: 30,
+      latestSampleAt: new Date().toISOString(),
+    });
+
+    try {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
+      await collector.collectOnce(fetchMock as unknown as typeof fetch);
+
+      expect(receiveSignal).toHaveBeenCalledTimes(1);
+      expect(receiveSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instrument: 'EURUSD',
+          direction: 'SELL',
+          suggestedVolume: 0.01,
+          modelVersion:
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-paired-reversal-research-v1',
+          metadata: expect.objectContaining({
+            paper_execution_route: 'PAIRED_REVERSAL_RESEARCH',
+            paired_reversal_research: true,
+            paired_reversal_research_qualification_evidence: false,
+            paired_reversal_preferred_direction: 'SELL',
+            paired_reversal_research_net_expected_r: 0.31,
+            main_strategy_qualification_evidence: false,
+            production_eligible: false,
+            position_sizing_tier: 'RESEARCH',
+          }),
+        }),
+      );
+    } finally {
+      metaSpy.mockRestore();
+      planBSpy.mockRestore();
+      governanceSpy.mockRestore();
+      pairedSpy.mockRestore();
     }
   });
 
