@@ -31,9 +31,7 @@ export interface PaperAllocationSizingPolicyDecision {
  * fixed 0.01-lot quantity. The durable risk profile remains the final
  * percentage authority and may only reduce these requested percentages.
  */
-export function paperAllocationRiskTargetPercent(
-  tier: PaperAllocationConfidenceTier,
-): number {
+export function paperAllocationRiskTargetPercent(tier: PaperAllocationConfidenceTier): number {
   switch (tier) {
     case 'VERY_STRONG':
     case 'EXCEPTIONAL':
