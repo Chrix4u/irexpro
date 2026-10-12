@@ -82,7 +82,7 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
       [trade, order, user, connection],
     );
     await client.query(
-      `INSERT INTO audit_orders VALUES ($1,$2,$3,$4,'EURUSD','BUY','FILLED',0.1,1.1,'sig-'||$4::text)`,
+      `INSERT INTO audit_orders VALUES ($1,$2,$3,$4,'EURUSD','BUY','FILLED',0.1,1.1,'sig-'||$4::uuid::text)`,
       [order, user, connection, trade],
     );
     await client.query(`INSERT INTO audit_states VALUES ($1,$2::jsonb)`, [
@@ -160,7 +160,7 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
   it('labels filled partial closes as unproven full-size realised R', async () => {
     await client.query(
       `INSERT INTO audit_orders VALUES
-      ($1,$2,$3,$4,'EURUSD','SELL','FILLED',0.05,1.1002,'close-'||$4::text)`,
+      ($1,$2,$3,$4,'EURUSD','SELL','FILLED',0.05,1.1002,'close-'||$4::uuid::text)`,
       [other, user, connection, trade],
     );
     const report = await audit();
