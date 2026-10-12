@@ -26,7 +26,7 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
     await client.query(`
       CREATE TEMP TABLE paper_intents (
         id uuid, user_id uuid, broker_connection_id uuid, instrument text,
-        direction text, metadata jsonb, status text, signal_generated_at timestamptz
+        direction text, metadata jsonb, status text, signal_generated_at timestamptz, signal_id text
       );
       CREATE TEMP TABLE paper_trades (
         id uuid, trade_intent_id uuid, user_id uuid, broker_connection_id uuid,
@@ -52,7 +52,7 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
     ]);
     await client.query('INSERT INTO paper_states VALUES ($1, 1, $2::jsonb)', [
       connection,
-      JSON.stringify({ version: 1, positions: [], closedTrades: [] }),
+      JSON.stringify({ version: 1, positions: [], closedTrades: [], orderStates: [] }),
     ]);
   });
 
@@ -68,7 +68,7 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
     } = {},
   ) {
     await client.query(
-      `INSERT INTO paper_intents VALUES ($1,$2,$3,'USDCAD','SELL',$4::jsonb,$5,$6)`,
+      `INSERT INTO paper_intents VALUES ($1,$2,$3,'USDCAD','SELL',$4::jsonb,$5,$6,$1::text)`,
       [
         id,
         user,
@@ -126,6 +126,7 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
     await client.query(`UPDATE paper_states SET state = $1::jsonb`, [
       JSON.stringify({
         version: 1,
+        orderStates: [[loss, { clientOrderId: 'sig-' + loss }]],
         positions: [],
         closedTrades: [
           {
@@ -185,7 +186,8 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
     await client.query(`UPDATE paper_states SET state = $1::jsonb`, [
       JSON.stringify({
         version: 1,
-        positions: [{ positionId: loss }],
+        orderStates: [[loss, { clientOrderId: 'sig-' + loss }]],
+        positions: [{ positionId: loss, dedupeKey: 'sig-' + loss }],
         closedTrades: [
           {
             externalOrderId: loss,
@@ -216,7 +218,8 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
     await client.query('UPDATE paper_states SET state=$1::jsonb', [
       JSON.stringify({
         version: 1,
-        positions: [{ positionId: loss }],
+        orderStates: [[loss, { clientOrderId: 'sig-' + loss }]],
+        positions: [{ positionId: loss, dedupeKey: 'sig-' + loss }],
         closedTrades: [
           {
             externalOrderId: loss,
@@ -229,5 +232,50 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
       }),
     ]);
     expect((await state()).available).toBe(false);
+  });
+
+  it('does not mistake a reused PAPER ID after a campaign reset for an old CLOSED position', async () => {
+    await addTrade(loss);
+    await addTrade(later, { status: 'OPEN', generatedAt: '2026-10-12T07:05:00Z' });
+    await client.query(
+      'UPDATE paper_trades SET external_order_id=$1, external_position_id=$1 WHERE id=$2',
+      [loss, later],
+    );
+    await client.query('UPDATE paper_states SET state=$1::jsonb', [
+      JSON.stringify({
+        version: 1,
+        closedTrades: [],
+        orderStates: [[loss, { clientOrderId: 'sig-' + later }]],
+        positions: [{ positionId: loss, dedupeKey: 'sig-' + later }],
+      }),
+    ]);
+    expect((await state()).available).toBe(true);
+    expect((await state()).lastClosedTrade?.id).toBe(loss);
+  });
+
+  it('attaches a reused provider close to its current immutable signal identity', async () => {
+    await addTrade(later);
+    await addTrade(loss, { status: 'OPEN', generatedAt: '2026-10-12T07:05:00Z' });
+    await client.query(
+      'UPDATE paper_trades SET external_order_id=$1, external_position_id=$1 WHERE id=$2',
+      [later, loss],
+    );
+    await client.query('UPDATE paper_states SET state=$1::jsonb', [
+      JSON.stringify({
+        version: 1,
+        positions: [],
+        orderStates: [[later, { clientOrderId: 'sig-' + loss }]],
+        closedTrades: [
+          {
+            externalOrderId: later,
+            instrument: 'USDCAD',
+            direction: 'SELL',
+            closeReason: 'SL',
+            closedAt: '2026-10-12T07:10:00Z',
+          },
+        ],
+      }),
+    ]);
+    expect((await state()).lastClosedTrade?.id).toBe(loss);
   });
 });

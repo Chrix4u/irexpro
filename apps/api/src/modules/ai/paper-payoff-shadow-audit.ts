@@ -543,8 +543,8 @@ export function attachPaperExecutionRoutes(
         matchedRoutes.size === 0
           ? 'SHADOW_UNLINKED'
           : matchedRoutes.size === 1
-          ? [...matchedRoutes][0]!
-          : 'MULTIPLE_EXECUTION_ROUTES',
+            ? [...matchedRoutes][0]!
+            : 'MULTIPLE_EXECUTION_ROUTES',
     };
   });
 }

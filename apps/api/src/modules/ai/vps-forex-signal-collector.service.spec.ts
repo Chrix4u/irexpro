@@ -42,6 +42,7 @@ function createCollector(...args: ConstructorParameters<typeof VpsForexSignalCol
   return new VpsForexSignalCollectorService(...args);
 }
 
+
 describe('dynamic PAPER lot ceiling', () => {
   const base = {
     confidence: 0.68,
@@ -144,14 +145,14 @@ function payload() {
       instrument === 'USDJPY'
         ? 157
         : instrument === 'GBPUSD'
-        ? 1.34
-        : instrument === 'USDCAD'
-        ? 1.37
-        : instrument === 'USDCHF'
-        ? 0.8
-        : instrument === 'AUDUSD'
-        ? 0.66
-        : 1.1;
+          ? 1.34
+          : instrument === 'USDCAD'
+            ? 1.37
+            : instrument === 'USDCHF'
+              ? 0.8
+              : instrument === 'AUDUSD'
+                ? 0.66
+                : 1.1;
     const digits = instrument === 'USDJPY' ? 3 : 5;
     const rows = isEur ? trendCandles(base, digits) : flatCandles(base, digits);
     data[provider] = {
@@ -176,14 +177,14 @@ function allTrendPayload() {
       instrument === 'USDJPY'
         ? 157
         : instrument === 'GBPUSD'
-        ? 1.34
-        : instrument === 'USDCAD'
-        ? 1.37
-        : instrument === 'USDCHF'
-        ? 0.8
-        : instrument === 'AUDUSD'
-        ? 0.66
-        : 1.1;
+          ? 1.34
+          : instrument === 'USDCAD'
+            ? 1.37
+            : instrument === 'USDCHF'
+              ? 0.8
+              : instrument === 'AUDUSD'
+                ? 0.66
+                : 1.1;
     const digits = instrument === 'USDJPY' ? 3 : 5;
     const rows =
       instrument === 'USDJPY'
@@ -1593,14 +1594,14 @@ describe('VpsForexSignalCollectorService', () => {
         instrument === 'USDJPY'
           ? 157
           : instrument === 'GBPUSD'
-          ? 1.34
-          : instrument === 'USDCAD'
-          ? 1.37
-          : instrument === 'USDCHF'
-          ? 0.8
-          : instrument === 'AUDUSD'
-          ? 0.66
-          : 1.1;
+            ? 1.34
+            : instrument === 'USDCAD'
+              ? 1.37
+              : instrument === 'USDCHF'
+                ? 0.8
+                : instrument === 'AUDUSD'
+                  ? 0.66
+                  : 1.1;
       live.updateClosedCandles(
         instrument,
         trendCandles(base, instrument === 'USDJPY' ? 3 : 5),
@@ -1694,14 +1695,14 @@ describe('VpsForexSignalCollectorService', () => {
             instrument === 'USDJPY'
               ? 157
               : instrument === 'GBPUSD'
-              ? 1.34
-              : instrument === 'USDCAD'
-              ? 1.37
-              : instrument === 'USDCHF'
-              ? 0.8
-              : instrument === 'AUDUSD'
-              ? 0.66
-              : 1.1;
+                ? 1.34
+                : instrument === 'USDCAD'
+                  ? 1.37
+                  : instrument === 'USDCHF'
+                    ? 0.8
+                    : instrument === 'AUDUSD'
+                      ? 0.66
+                      : 1.1;
           const digits = instrument === 'USDJPY' ? 3 : 5;
           return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
         }),

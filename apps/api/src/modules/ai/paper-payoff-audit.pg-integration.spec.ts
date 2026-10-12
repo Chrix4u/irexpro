@@ -48,7 +48,7 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
         account_currency text);
       CREATE TEMP TABLE audit_orders (id uuid, user_id uuid, broker_connection_id uuid,
         trade_id uuid, instrument text, direction text, status text, filled_quantity numeric,
-        avg_fill_price numeric);
+        avg_fill_price numeric, client_order_id text);
       CREATE TEMP TABLE audit_states (connection_id uuid, state jsonb);
       CREATE TEMP TABLE audit_shadows (id uuid, user_id uuid, broker_connection_id uuid,
         instrument text, direction text, engine_code text, model_version text,
@@ -82,12 +82,12 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
       [trade, order, user, connection],
     );
     await client.query(
-      `INSERT INTO audit_orders VALUES ($1,$2,$3,$4,'EURUSD','BUY','FILLED',0.1,1.1)`,
+      `INSERT INTO audit_orders VALUES ($1,$2,$3,$4,'EURUSD','BUY','FILLED',0.1,1.1,'sig-'||$4::text)`,
       [order, user, connection, trade],
     );
     await client.query(`INSERT INTO audit_states VALUES ($1,$2::jsonb)`, [
       connection,
-      JSON.stringify({ closedTrades: [], positions: [] }),
+      JSON.stringify({ closedTrades: [], positions: [], orderStates: [] }),
     ]);
     await client.query(
       `INSERT INTO audit_shadows VALUES
@@ -160,7 +160,7 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
   it('labels filled partial closes as unproven full-size realised R', async () => {
     await client.query(
       `INSERT INTO audit_orders VALUES
-      ($1,$2,$3,$4,'EURUSD','SELL','FILLED',0.05,1.1002)`,
+      ($1,$2,$3,$4,'EURUSD','SELL','FILLED',0.05,1.1002,'close-'||$4::text)`,
       [other, user, connection, trade],
     );
     const report = await audit();
@@ -186,7 +186,8 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
     await client.query('UPDATE audit_trades SET exit_price=fill_price, realised_pnl=0');
     await client.query('UPDATE audit_states SET state=$1::jsonb', [
       JSON.stringify({
-        positions: [{ positionId: 'provider-1' }],
+        orderStates: [['provider-1', { clientOrderId: 'sig-' + trade }]],
+        positions: [{ positionId: 'provider-1', dedupeKey: 'sig-' + trade }],
         closedTrades: [{ externalOrderId: 'provider-1', lotSize: '0.05' }],
       }),
     ]);
@@ -198,5 +199,17 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
     await client.query('UPDATE audit_trades SET external_order_id=NULL, external_position_id=NULL');
     const report = await audit();
     expect(report.realised[0].payoff.eligibleTrades).toBe(0);
+  });
+
+  it('does not borrow a new campaign partial close for an older fill with a reused provider ID', async () => {
+    await client.query('UPDATE audit_states SET state=$1::jsonb', [
+      JSON.stringify({
+        orderStates: [['provider-1', { clientOrderId: 'sig-' + other }]],
+        positions: [{ positionId: 'provider-1', dedupeKey: 'sig-' + other }],
+        closedTrades: [{ externalOrderId: 'provider-1', lotSize: '0.05' }],
+      }),
+    ]);
+    const report = await audit();
+    expect(report.realised[0].payoff.eligibleTrades).toBe(1);
   });
 });
