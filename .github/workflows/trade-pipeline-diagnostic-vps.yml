@@ -35,7 +35,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Prospectively grid-test reversal trigger
+      - name: Verify post-deploy PAPER decision stream
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -43,113 +43,45 @@ jobs:
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -se' <<'REMOTE'
           set -Eeuo pipefail
+          app='/home/lightworld/webapps/irexpro-staging'
+          cd "$app"
+          echo '=== runtime ==='
+          echo "head=$(git rev-parse HEAD)"
+          code=$(curl -sS -o /tmp/irex-live -w '%{http_code}' --max-time 5 http://127.0.0.1:3010/api/v1/health/live || true)
+          echo "api_live_http=${code}"
+
           pm2 jlist > /tmp/irex-pm2.json
           api_id=$(node -e "const x=require('/tmp/irex-pm2.json');const p=x.find(v=>v.name==='irexpro-api-staging');if(!p)process.exit(2);process.stdout.write(String(p.pm_id));")
           pm2 env "$api_id" > /tmp/irex-api-env
           getv(){ sed -n "s/^$1: //p" /tmp/irex-api-env | head -1; }
           export PGHOST="$(getv DB_HOST)" PGPORT="$(getv DB_PORT)" PGUSER="$(getv DB_USER)" PGPASSWORD="$(getv DB_PASSWORD)" PGDATABASE="$(getv DB_NAME)"
           dbssl="$(getv DB_SSL)"; if printf '%s' "$dbssl" | grep -Eqi '^(1|true|require)$'; then export PGSSLMODE=require; else export PGSSLMODE=prefer; fi
-          policy='planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1'
 
-          echo '=== reversal trigger grid with chronological split ==='
+          echo '=== ensemble decisions since deploy ==='
           psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            WITH params AS (
-              SELECT conf,mom,gross FROM
-                unnest(ARRAY[0.60,0.62,0.64]::double precision[]) conf,
-                unnest(ARRAY[0.10,0.15,0.20,0.25,0.35,0.50]::double precision[]) mom,
-                unnest(ARRAY[0.08,0.12,0.18,0.24]::double precision[]) gross
-            ), rows AS (
-              SELECT instrument,direction,evaluated_at,
-                CASE WHEN components ? 'outcome' AND components->'outcome'->>'status'<>'AMBIGUOUS' AND components->'outcome'->>'netR' IS NOT NULL
-                  THEN (components->'outcome'->>'netR')::double precision END realized_r,
-                CASE WHEN components ? 'outcome' THEN (components->'outcome'->>'resolvedAt')::timestamptz END resolved_at,
-                confidence::double precision conf,
-                (components->>'extensionAtr')::double precision ext,
-                (components->>'volatilityScore')::double precision vol,
-                (components->>'emaSeparation')::double precision ema,
-                (components->>'mtfStrength')::double precision mtf,
-                (components->>'rsi14')::double precision rsi,
-                (components->>'shortHorizonMomentumAtr')::double precision mom,
-                (components->'governance'->>'grossExpectedR')::double precision gross_r,
-                (components->'governance'->>'netExpectedR')::double precision net_r,
-                COALESCE((components->'governance'->>'executionSpreadEvidenceValid')::boolean,false) spread_ok,
-                components->'governance'->>'eventRisk' event_risk,
-                regime
-              FROM trading.ensemble_shadow_decisions
-              WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}'
-            ), eligible AS (
-              SELECT p.conf pconf,p.mom pmom,p.gross pgross,r.*
-              FROM params p JOIN rows r ON true
-              WHERE r.regime='TREND_WEAK'
-                AND r.conf>=p.conf AND r.conf<=0.80
-                AND r.ext BETWEEN 0 AND 1.15
-                AND r.vol BETWEEN 0 AND 0.55
-                AND r.ema BETWEEN 0 AND 0.50
-                AND r.mtf BETWEEN 0 AND 1
-                AND r.rsi BETWEEN 20 AND 80
-                AND r.mom BETWEEN p.mom AND 1.50
-                AND r.gross_r>=p.gross
-                AND r.net_r>=0.08
-                AND r.spread_ok
-                AND r.event_risk='CLEAR'
-            ), resolved AS (
-              SELECT * FROM eligible WHERE realized_r IS NOT NULL
-            ), marked AS (
-              SELECT *,max(resolved_at) OVER (PARTITION BY pconf,pmom,pgross,instrument,direction ORDER BY evaluated_at ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prev_end
-              FROM resolved
-            ), episodes0 AS (
-              SELECT * FROM marked WHERE prev_end IS NULL OR evaluated_at>prev_end
-            ), episodes AS (
-              SELECT *,ntile(5) OVER (PARTITION BY pconf,pmom,pgross ORDER BY evaluated_at) bucket
-              FROM episodes0
-            ), perf AS (
-              SELECT pconf,pmom,pgross,count(*) episodes,
-                count(*) FILTER (WHERE realized_r>0) wins,count(*) FILTER (WHERE realized_r<0) losses,
-                sum(realized_r) total_r,
-                (sum(realized_r) FILTER (WHERE realized_r>0))/NULLIF(abs(sum(realized_r) FILTER (WHERE realized_r<0)),0) pf,
-                sum(realized_r) FILTER (WHERE bucket<=3) train_r,
-                sum(realized_r) FILTER (WHERE bucket>3) validation_r,
-                count(*) FILTER (WHERE bucket>3) validation_n
-              FROM episodes GROUP BY pconf,pmom,pgross
-            ), recent AS (
-              SELECT pconf,pmom,pgross,count(*) recent_candidates
-              FROM eligible WHERE evaluated_at>=now()-interval '120 minutes'
-              GROUP BY pconf,pmom,pgross
-            )
-            SELECT p.pconf,p.pmom,p.pgross,p.episodes,p.wins,p.losses,
-              round(p.total_r::numeric,4),round(p.pf::numeric,4),
-              round(p.train_r::numeric,4),round(p.validation_r::numeric,4),p.validation_n,
-              COALESCE(r.recent_candidates,0)
-            FROM perf p LEFT JOIN recent r USING(pconf,pmom,pgross)
-            WHERE p.episodes>=5
-              AND p.total_r>0
-              AND COALESCE(p.train_r,0)>0
-              AND COALESCE(p.validation_r,0)>0
-            ORDER BY COALESCE(r.recent_candidates,0) DESC,p.validation_r DESC,p.pf DESC,p.episodes DESC;"
+            SELECT count(*) decisions,
+              max(evaluated_at) latest_evaluated_at,
+              count(*) FILTER (WHERE COALESCE(NULLIF(components->>'paperAdmitted','')::boolean,false)) paper_admitted,
+              count(*) FILTER (WHERE COALESCE(NULLIF(components->'governance'->>'paperExecutionEligible','')::boolean,false)) governance_eligible,
+              count(*) FILTER (WHERE (components->'governance'->>'netExpectedR')::double precision>=0.08) net_pass,
+              count(*) FILTER (WHERE components->'governance'->>'driftState'='NORMAL') drift_normal,
+              count(*) FILTER (WHERE COALESCE(NULLIF(components->'governance'->>'executionSpreadEvidenceValid','')::boolean,false)) spread_valid
+            FROM trading.ensemble_shadow_decisions
+            WHERE engine_code='irexpro-multimodel-ensemble-v1'
+              AND evaluated_at >= '2026-10-12T13:28:43Z'::timestamptz;"
 
-          echo '=== broad reversal envelope recent candidates by momentum floor ==='
+          echo '=== recent route/regime since deploy ==='
           psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            WITH floors AS (SELECT unnest(ARRAY[0.10,0.15,0.20,0.25,0.35,0.50]::double precision[]) mom)
-            SELECT f.mom,count(*)
-            FROM floors f CROSS JOIN trading.ensemble_shadow_decisions d
-            WHERE d.engine_code='irexpro-multimodel-ensemble-v1' AND d.model_version='${policy}'
-              AND d.evaluated_at>=now()-interval '120 minutes'
-              AND d.regime='TREND_WEAK'
-              AND d.confidence::double precision BETWEEN 0.60 AND 0.80
-              AND (d.components->>'extensionAtr')::double precision BETWEEN 0 AND 1.15
-              AND (d.components->>'volatilityScore')::double precision BETWEEN 0 AND 0.55
-              AND (d.components->>'emaSeparation')::double precision BETWEEN 0 AND 0.50
-              AND (d.components->>'mtfStrength')::double precision BETWEEN 0 AND 1
-              AND (d.components->>'rsi14')::double precision BETWEEN 20 AND 80
-              AND (d.components->>'shortHorizonMomentumAtr')::double precision BETWEEN f.mom AND 1.50
-              AND (d.components->'governance'->>'grossExpectedR')::double precision>=0.08
-              AND (d.components->'governance'->>'netExpectedR')::double precision>=0.08
-              AND COALESCE((d.components->'governance'->>'executionSpreadEvidenceValid')::boolean,false)
-              AND d.components->'governance'->>'eventRisk'='CLEAR'
-            GROUP BY f.mom ORDER BY f.mom;"
+            SELECT components->>'strategyRoute',regime,count(*),
+              round(max((components->'governance'->>'netExpectedR')::numeric),4),
+              count(*) FILTER (WHERE components->'governance'->>'driftState'='NORMAL')
+            FROM trading.ensemble_shadow_decisions
+            WHERE engine_code='irexpro-multimodel-ensemble-v1'
+              AND evaluated_at >= '2026-10-12T13:28:43Z'::timestamptz
+            GROUP BY 1,2 ORDER BY 3 DESC;"
 
           unset PGPASSWORD
-          rm -f /tmp/irex-pm2.json /tmp/irex-api-env
+          rm -f /tmp/irex-live /tmp/irex-pm2.json /tmp/irex-api-env
           REMOTE
 
       - name: Remove ephemeral SSH material
