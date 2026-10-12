@@ -49,7 +49,8 @@ const TRADES_SQL = `
     t.account_currency AS "accountCurrency", t.commission, t.swap,
     t.trailing_stop_pips AS "trailingStopPips",
     o.filled_quantity AS "filledQuantity", o.avg_fill_price AS "filledEntryPrice",
-    CASE WHEN o.client_order_id IS NULL THEN 0
+    CASE WHEN (t.external_order_id IS NULL AND t.external_position_id IS NULL)
+        OR o.client_order_id IS NULL THEN 0
       ELSE (SELECT COUNT(*)::int FROM trading.trades duplicate
         JOIN trading.orders duplicate_order ON duplicate_order.id = duplicate.order_id
           AND duplicate_order.trade_id = duplicate.id
