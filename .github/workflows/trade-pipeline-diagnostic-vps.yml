@@ -35,7 +35,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Aggregate recent ensemble economics
+      - name: Discover database environment key names only
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -44,60 +44,12 @@ jobs:
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -se' <<'REMOTE'
           set -Eeuo pipefail
           pm2 jlist > /tmp/irex-pm2.json
-          api_id=$(node -e "const x=require('/tmp/irex-pm2.json');const p=x.find(v=>v.name==='irexpro-api-staging'); if(!p)process.exit(2); process.stdout.write(String(p.pm_id));")
+          api_id=$(node -e "const x=require('/tmp/irex-pm2.json');const p=x.find(v=>v.name==='irexpro-api-staging');if(!p)process.exit(2);process.stdout.write(String(p.pm_id));")
           pm2 env "$api_id" > /tmp/irex-api-env
-          dburl=$(sed -n 's/^DATABASE_URL: //p' /tmp/irex-api-env | head -1)
-          if [ -z "$dburl" ]; then
-            echo 'decision_ledger=DATABASE_URL_UNAVAILABLE'
-            rm -f /tmp/irex-pm2.json /tmp/irex-api-env
-            exit 0
-          fi
-          echo '=== recent ensemble economics (120m, no identifiers) ==='
-          psql "$dburl" -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            WITH d AS (
-              SELECT instrument, direction,
-                NULLIF(components->'governance'->>'grossExpectedR','')::double precision AS gross_r,
-                NULLIF(components->'governance'->>'estimatedExecutionCostR','')::double precision AS cost_r,
-                NULLIF(components->'governance'->>'netExpectedR','')::double precision AS net_r,
-                components->'governance'->>'driftState' AS drift,
-                components->'governance'->>'executionCostSource' AS cost_source,
-                COALESCE(NULLIF(components->'governance'->>'executionSpreadEvidenceValid','')::boolean,false) AS spread_valid,
-                COALESCE(NULLIF(components->>'paperAdmitted','')::boolean,false) AS paper_admitted
-              FROM trading.ensemble_shadow_decisions
-              WHERE engine_code='irexpro-multimodel-ensemble-v1'
-                AND evaluated_at >= now() - interval '120 minutes'
-            )
-            SELECT instrument, direction, count(*) AS n,
-              round(avg(gross_r)::numeric,4) AS avg_gross_r,
-              round(avg(cost_r)::numeric,4) AS avg_cost_r,
-              round(avg(net_r)::numeric,4) AS avg_net_r,
-              round(max(net_r)::numeric,4) AS best_net_r,
-              count(*) FILTER (WHERE net_r >= 0.08) AS net_pass,
-              count(*) FILTER (WHERE drift='NORMAL') AS drift_normal,
-              count(*) FILTER (WHERE spread_valid) AS spread_valid,
-              count(*) FILTER (WHERE paper_admitted) AS paper_admitted
-            FROM d
-            GROUP BY instrument,direction
-            ORDER BY instrument,direction;"
-          echo '=== PAPER blocker counts (120m) ==='
-          psql "$dburl" -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            SELECT blocker, count(*)
-            FROM trading.ensemble_shadow_decisions d
-            CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(d.components->'governance'->'paperExecutionBlockers','[]'::jsonb)) blocker
-            WHERE d.engine_code='irexpro-multimodel-ensemble-v1'
-              AND d.evaluated_at >= now() - interval '120 minutes'
-            GROUP BY blocker ORDER BY count(*) DESC, blocker;"
-          echo '=== decision totals (120m) ==='
-          psql "$dburl" -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            SELECT count(*) AS decisions,
-              count(*) FILTER (WHERE COALESCE(NULLIF(components->>'paperAdmitted','')::boolean,false)) AS paper_admitted,
-              count(*) FILTER (WHERE COALESCE(NULLIF(components->'governance'->>'paperExecutionEligible','')::boolean,false)) AS governance_eligible,
-              count(*) FILTER (WHERE (components->'governance'->>'netExpectedR')::double precision >= 0.08) AS net_pass,
-              count(*) FILTER (WHERE components->'governance'->>'driftState'='NORMAL') AS drift_normal,
-              count(*) FILTER (WHERE COALESCE(NULLIF(components->'governance'->>'executionSpreadEvidenceValid','')::boolean,false)) AS spread_valid
-            FROM trading.ensemble_shadow_decisions
-            WHERE engine_code='irexpro-multimodel-ensemble-v1'
-              AND evaluated_at >= now() - interval '120 minutes';"
+          echo '=== database-related env key names ==='
+          sed -n 's/^\([^:]*\):.*/\1/p' /tmp/irex-api-env | grep -Ei '(^|_)(DB|DATABASE|PG|POSTGRES)(_|$)' | sort -u || true
+          echo '=== candidate env files (names only) ==='
+          find /home/lightworld/webapps/irexpro-staging -maxdepth 3 -type f \( -name '.env' -o -name '.env.*' \) -printf '%p\n' 2>/dev/null | sed 's#^/home/lightworld/webapps/irexpro-staging/##' | head -20
           rm -f /tmp/irex-pm2.json /tmp/irex-api-env
           REMOTE
 
