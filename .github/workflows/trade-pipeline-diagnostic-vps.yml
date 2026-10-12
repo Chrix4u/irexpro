@@ -35,7 +35,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Evaluate specialist shadow evidence
+      - name: Grid-test extension specialist thresholds
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -51,49 +51,79 @@ jobs:
           dbssl="$(getv DB_SSL)"; if printf '%s' "$dbssl" | grep -Eqi '^(1|true|require)$'; then export PGSSLMODE=require; else export PGSSLMODE=prefer; fi
           policy='planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1'
 
-          for specialist in extensionExhaustionShadow trendPersistenceShadow; do
-            echo "=== ${specialist} states current policy ==="
-            psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-              SELECT COALESCE(components->'${specialist}'->>'reason','MISSING') reason,
-                count(*) decisions,
-                count(*) FILTER (WHERE COALESCE((components->'${specialist}'->>'candidate')::boolean,false)) candidates,
-                count(*) FILTER (WHERE components ? 'outcome') resolved_rows
+          echo '=== recent extension blocker reasons 120m ==='
+          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
+            SELECT COALESCE(components->'extensionExhaustionShadow'->>'reason','MISSING'),count(*)
+            FROM trading.ensemble_shadow_decisions
+            WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}'
+              AND evaluated_at>=now()-interval '120 minutes'
+            GROUP BY 1 ORDER BY 2 DESC;"
+
+          echo '=== extension threshold grid: resolved independent episodes + recent candidates ==='
+          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
+            WITH thresholds AS (
+              SELECT c,d,n FROM
+                unnest(ARRAY[0.60,0.62,0.64]::double precision[]) c,
+                unnest(ARRAY[0.20,0.25,0.30,0.35]::double precision[]) d,
+                unnest(ARRAY[0.08,0.12,0.16]::double precision[]) n
+            ), all_rows AS (
+              SELECT instrument,direction,evaluated_at,
+                (components->'outcome'->>'resolvedAt')::timestamptz resolved_at,
+                CASE WHEN components ? 'outcome' AND components->'outcome'->>'status'<>'AMBIGUOUS' AND components->'outcome'->>'netR' IS NOT NULL
+                     THEN (components->'outcome'->>'netR')::double precision END realized_r,
+                confidence::double precision confidence,
+                (components->'governance'->>'netExpectedR')::double precision net_r,
+                (components->>'directionQuality')::double precision direction_q,
+                components->'governance'->>'driftState' drift,
+                COALESCE((components->'governance'->>'executionSpreadEvidenceValid')::boolean,false) spread_ok,
+                components->'governance'->>'eventRisk' event_risk,
+                regime
               FROM trading.ensemble_shadow_decisions
               WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}'
-              GROUP BY reason ORDER BY decisions DESC;"
+            ), eligible AS (
+              SELECT t.c,t.d,t.n,r.*
+              FROM thresholds t JOIN all_rows r ON true
+              WHERE r.regime='TREND_EXTENDED' AND r.drift='NORMAL' AND r.spread_ok AND r.event_risk='CLEAR'
+                AND r.confidence>=t.c AND r.direction_q>=t.d AND r.net_r>=t.n
+            ), resolved AS (
+              SELECT * FROM eligible WHERE realized_r IS NOT NULL
+            ), marked AS (
+              SELECT *,max(resolved_at) OVER (PARTITION BY c,d,n,instrument,direction ORDER BY evaluated_at ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prev_end
+              FROM resolved
+            ), episodes AS (
+              SELECT * FROM marked WHERE prev_end IS NULL OR evaluated_at>prev_end
+            ), perf AS (
+              SELECT c,d,n,count(*) episodes,
+                count(*) FILTER (WHERE realized_r>0) wins,
+                count(*) FILTER (WHERE realized_r<0) losses,
+                sum(realized_r) total_r,
+                avg(realized_r) avg_r,
+                (sum(realized_r) FILTER (WHERE realized_r>0))/NULLIF(abs(sum(realized_r) FILTER (WHERE realized_r<0)),0) pf
+              FROM episodes GROUP BY c,d,n
+            ), recent AS (
+              SELECT c,d,n,count(*) recent_candidates
+              FROM eligible WHERE evaluated_at>=now()-interval '120 minutes'
+              GROUP BY c,d,n
+            )
+            SELECT p.c,p.d,p.n,p.episodes,p.wins,p.losses,round(p.total_r::numeric,4),round(p.avg_r::numeric,4),round(p.pf::numeric,4),COALESCE(r.recent_candidates,0)
+            FROM perf p LEFT JOIN recent r USING(c,d,n)
+            WHERE p.episodes>=4 AND p.total_r>0
+            ORDER BY COALESCE(r.recent_candidates,0) DESC,p.pf DESC,p.episodes DESC,p.c DESC,p.d DESC,p.n DESC;"
 
-            echo "=== ${specialist} candidate independent outcomes ==="
-            psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-              WITH base AS (
-                SELECT instrument,direction,evaluated_at,
-                  (components->'outcome'->>'resolvedAt')::timestamptz resolved_at,
-                  (components->'outcome'->>'netR')::double precision realized_r,
-                  (components->'governance'->>'netExpectedR')::double precision predicted_r,
-                  components->'governance'->>'driftState' drift,
-                  COALESCE((components->'governance'->>'executionSpreadEvidenceValid')::boolean,false) spread_ok,
-                  components->'governance'->>'eventRisk' event_risk
-                FROM trading.ensemble_shadow_decisions
-                WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}'
-                  AND COALESCE((components->'${specialist}'->>'candidate')::boolean,false)
-                  AND components ? 'outcome' AND components->'outcome'->>'status'<>'AMBIGUOUS' AND components->'outcome'->>'netR' IS NOT NULL
-              ), marked AS (
-                SELECT *,max(resolved_at) OVER (PARTITION BY instrument,direction ORDER BY evaluated_at ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prev_end FROM base
-              ), episodes AS (SELECT * FROM marked WHERE prev_end IS NULL OR evaluated_at>prev_end)
-              SELECT count(*) episodes,count(*) FILTER (WHERE realized_r>0) wins,count(*) FILTER (WHERE realized_r<0) losses,
-                round(sum(realized_r)::numeric,4) total_r,round(avg(realized_r)::numeric,4) avg_r,
-                round((sum(realized_r) FILTER (WHERE realized_r>0)/NULLIF(abs(sum(realized_r) FILTER (WHERE realized_r<0)),0))::numeric,4) pf,
-                round(avg(predicted_r)::numeric,4) avg_predicted_r,
-                count(*) FILTER (WHERE drift='NORMAL') normal_drift,
-                count(*) FILTER (WHERE spread_ok AND event_risk='CLEAR') clean_market
-              FROM episodes;"
-
-            echo "=== ${specialist} recent 120m candidate count ==="
-            psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-              SELECT count(*) FILTER (WHERE COALESCE((components->'${specialist}'->>'candidate')::boolean,false)),
-                count(*) FILTER (WHERE COALESCE((components->'${specialist}'->>'candidate')::boolean,false) AND components->'governance'->>'eventRisk'='CLEAR')
-              FROM trading.ensemble_shadow_decisions
-              WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}' AND evaluated_at>=now()-interval '120 minutes';"
-          done
+          echo '=== recent extension-eligible rows at broad safe grid c=.60 d=.20 n=.08 (pair/side only) ==='
+          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
+            SELECT instrument,direction,count(*),round(avg((components->'governance'->>'netExpectedR')::numeric),4),round(avg(confidence::numeric),4),round(avg((components->>'directionQuality')::numeric),4)
+            FROM trading.ensemble_shadow_decisions
+            WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}'
+              AND evaluated_at>=now()-interval '120 minutes'
+              AND regime='TREND_EXTENDED'
+              AND components->'governance'->>'driftState'='NORMAL'
+              AND COALESCE((components->'governance'->>'executionSpreadEvidenceValid')::boolean,false)
+              AND components->'governance'->>'eventRisk'='CLEAR'
+              AND confidence::double precision>=0.60
+              AND (components->>'directionQuality')::double precision>=0.20
+              AND (components->'governance'->>'netExpectedR')::double precision>=0.08
+            GROUP BY instrument,direction ORDER BY instrument,direction;"
 
           unset PGPASSWORD
           rm -f /tmp/irex-pm2.json /tmp/irex-api-env
