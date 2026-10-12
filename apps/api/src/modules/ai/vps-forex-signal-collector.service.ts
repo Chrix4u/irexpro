@@ -79,6 +79,11 @@ import {
   classifyHighConvictionOverlay,
   summarizeHighConvictionOverlayCohort,
 } from './high-conviction-overlay';
+import {
+  PaperPostLossEntryDecision,
+  PaperPostLossEntryState,
+  evaluatePaperPostLossEntryGuard,
+} from './paper-post-loss-entry-guard';
 
 const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
@@ -1037,6 +1042,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperExecutionRoute: ReturnType<typeof selectPaperExecutionRoute>;
           paperResearchEpisodeKey: string;
           paperResearchEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
+          paperPostLossEntryGuard: PaperPostLossEntryDecision;
         }> = [];
 
         for (const best of [...pairCandidates].sort((a, b) => b.score - a.score)) {
@@ -1141,7 +1147,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             best.instrument,
             evaluatedAt,
           );
-          const ensembleGovernance = evaluateEnsembleGovernance({
+          let ensembleGovernance = evaluateEnsembleGovernance({
             ensemble: planBEnsemble,
             instrument: best.instrument,
             direction: best.direction,
@@ -1160,6 +1166,32 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             evaluatedAt,
             executionSpreadEvidence,
           });
+          const paperPostLossEntryState = await this.loadPaperPostLossEntryState(
+            userId,
+            connectionId,
+            best.instrument,
+            best.direction,
+          );
+          const paperPostLossEntryGuard = evaluatePaperPostLossEntryGuard({
+            state: paperPostLossEntryState,
+            marketBarOpenedAt: best.barTime,
+            evaluatedAt,
+            alignedMomentumAtr: best.shortHorizonMomentumAtr,
+          });
+          if (paperSession && !paperPostLossEntryGuard.eligible) {
+            const blocker = `PAPER_POST_LOSS_${paperPostLossEntryGuard.reason}`;
+            ensembleGovernance = {
+              ...ensembleGovernance,
+              paperExecutionEligible: false,
+              paperExecutionBlockers: Array.from(
+                new Set([...ensembleGovernance.paperExecutionBlockers, blocker]),
+              ),
+            };
+            this.logger.log(
+              `PAPER post-loss guard ${best.instrument} ${best.direction} execution=BLOCKED ` +
+                `reason=${paperPostLossEntryGuard.reason} lastTrade=${paperPostLossEntryGuard.lastClosedTradeId ?? 'none'}`,
+            );
+          }
           const decision = {
             evaluatedAt,
             instrument: best.instrument,
@@ -1197,6 +1229,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             ensembleGovernance,
             macroEventAssessment,
             highConvictionOverlay,
+            paperPostLossEntryGuard,
           );
           const normalPaperExecutionCandidate = canExecuteMultiModelPaper(
             planBEnsemble,
@@ -1366,11 +1399,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperResearchThroughput.eligible &&
             Boolean(paperResearchPairSideReliability?.eligible) &&
             Boolean(paperResearchEpisodeGuard?.eligible);
-          const paperExecutionRoute = selectPaperExecutionRoute({
+          const selectedPaperExecutionRoute = selectPaperExecutionRoute({
             normalPaperExecution,
             rejectedEdgeCanaryEligible: Boolean(rejectedEdgeCanary?.eligible),
             paperResearchThroughputEligible: paperResearchExecutionEligible,
           });
+          const paperExecutionRoute = paperPostLossEntryGuard.eligible
+            ? selectedPaperExecutionRoute
+            : 'NONE';
           if (paperResearchExecutionEligible) {
             this.logger.log(
               `PAPER research-throughput ${best.instrument} ${best.direction} ` +
@@ -1427,6 +1463,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperExecutionRoute,
             paperResearchEpisodeKey,
             paperResearchEpisodeGuard,
+            paperPostLossEntryGuard,
           });
         }
 
@@ -1477,6 +1514,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperExecutionRoute,
           paperResearchEpisodeKey,
           paperResearchEpisodeGuard,
+          paperPostLossEntryGuard,
         } = chosen;
 
         this.lastPublishedOpportunity.set(best.instrument, {
@@ -1550,6 +1588,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             external_provider_paper_only: true,
             production_eligible: false,
             paper_execution_route: paperExecutionRoute,
+            paper_post_loss_entry_guard_artifact: paperPostLossEntryGuard.artifact,
+            paper_post_loss_entry_guard_reason: paperPostLossEntryGuard.reason,
+            paper_post_loss_entry_guard_last_trade_id: paperPostLossEntryGuard.lastClosedTradeId,
+            paper_post_loss_entry_guard_last_closed_at: paperPostLossEntryGuard.lastClosedAt,
             rejected_edge_canary: paperExecutionRoute === 'REJECTED_EDGE_CANARY',
             rejected_edge_canary_artifact: rejectedEdgeCanary?.artifact ?? null,
             rejected_edge_canary_reason: rejectedEdgeCanary?.reason ?? null,
@@ -2626,6 +2668,91 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     return summarizeEnsembleSleeveOutcomes(episodes);
   }
 
+  private async loadPaperPostLossEntryState(
+    userId: string,
+    connectionId: string,
+    instrument: string,
+    direction: 'BUY' | 'SELL',
+  ): Promise<PaperPostLossEntryState> {
+    // DataSource is optional only for isolated unit construction. Production PAPER
+    // always has the trading store; with no store there is no historical loss
+    // evidence to apply, so preserve legacy isolated-test behavior.
+    if (!this.dataSource) return { available: true, lastClosedTrade: null };
+    try {
+      const rows = (await this.dataSource.query(
+        `
+          WITH latest_closed AS (
+            SELECT t.id, t.close_reason, t.closed_at
+            FROM trading.trade_intents ti
+            INNER JOIN trading.trades t ON t.trade_intent_id = ti.id
+            WHERE ti.user_id = $1
+              AND ti.broker_connection_id = $2
+              AND ti.instrument = $3
+              AND ti.direction = $4
+              AND ti.metadata->>'signal_source' = 'EXTERNAL_PROVIDER'
+              AND ti.metadata->>'external_provider_code' = $5
+              AND t.status = 'CLOSED'
+              AND t.closed_at IS NOT NULL
+            ORDER BY t.closed_at DESC, t.id DESC
+            LIMIT 1
+          )
+          SELECT
+            true AS paper_post_loss_state_available,
+            lc.id AS trade_id,
+            lc.close_reason,
+            lc.closed_at,
+            CASE
+              WHEN lc.id IS NULL THEN false
+              WHEN lc.close_reason NOT IN ('STOP_LOSS_HIT', 'SL') THEN false
+              ELSE EXISTS (
+                SELECT 1
+                FROM trading.trade_intents ti2
+                INNER JOIN trading.trades t2 ON t2.trade_intent_id = ti2.id
+                WHERE ti2.user_id = $1
+                  AND ti2.broker_connection_id = $2
+                  AND ti2.instrument = $3
+                  AND ti2.direction = $4
+                  AND ti2.metadata->>'signal_source' = 'EXTERNAL_PROVIDER'
+                  AND ti2.metadata->>'external_provider_code' = $5
+                  AND ti2.signal_generated_at > lc.closed_at
+              )
+            END AS reconfirmed
+          FROM (SELECT 1) anchor
+          LEFT JOIN latest_closed lc ON true
+        `,
+        [userId, connectionId, instrument, direction, ACTIVE_ENGINE_CODE],
+      )) as Array<{
+        paper_post_loss_state_available: boolean;
+        trade_id: string | null;
+        close_reason: string | null;
+        closed_at: string | Date | null;
+        reconfirmed: boolean;
+      }>;
+      const row = rows[0];
+      // The anchored production query always returns one row. An empty array is
+      // therefore only possible from a lightweight test/data-source adapter and
+      // is equivalent to no known prior close; actual query errors still fail closed.
+      if (!row) return { available: true, lastClosedTrade: null };
+      if (!row.paper_post_loss_state_available) return { available: false, lastClosedTrade: null };
+      if (!row.trade_id) return { available: true, lastClosedTrade: null };
+      const closedAt = row.closed_at == null ? null : new Date(row.closed_at);
+      return {
+        available: true,
+        lastClosedTrade: {
+          id: row.trade_id,
+          closeReason: row.close_reason,
+          closedAt,
+          reconfirmed: Boolean(row.reconfirmed),
+        },
+      };
+    } catch (error) {
+      this.logger.warn(
+        `PAPER post-loss history unavailable ${instrument} ${direction}: ${(error as Error).message}`,
+      );
+      return { available: false, lastClosedTrade: null };
+    }
+  }
+
   private async persistEnsembleShadowDecision(
     userId: string,
     tradingSessionId: string | null,
@@ -2637,6 +2764,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     governance: EnsembleGovernanceDecision,
     macroEventAssessment: MacroEventRiskAssessment,
     highConvictionOverlay: HighConvictionOverlay,
+    paperPostLossEntryGuard: PaperPostLossEntryDecision,
   ): Promise<void> {
     if (!this.dataSource) return;
 
@@ -2750,6 +2878,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           stopLoss: candidate.stopLoss,
           takeProfit: candidate.takeProfit,
           governance,
+          paperPostLossEntryGuard,
           macroEventRisk: macroEventAssessment,
           highConvictionOverlay,
           extensionExhaustionShadow,

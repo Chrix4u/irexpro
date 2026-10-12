@@ -1,7 +1,8 @@
+import { PAPER_MARKET_SPECS } from '../broker/services/paper-market-spec';
 import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 
 export const ENSEMBLE_GOVERNANCE_VERSION = 'ensemble-governance-v3';
-export const ENSEMBLE_COST_MODEL_VERSION = 'paper-broker-p90-spread-plus-25pct-slippage-v2';
+export const ENSEMBLE_COST_MODEL_VERSION = 'paper-broker-p90-or-fill-spread-plus-25pct-slippage-v3';
 export const ENSEMBLE_DRIFT_MODEL_VERSION = 'triple-route-direction-aligned-momentum-v4';
 export const ENSEMBLE_NET_EXPECTED_R_FLOOR = 0.08;
 export const ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR = ENSEMBLE_NET_EXPECTED_R_FLOOR;
@@ -61,6 +62,10 @@ export interface EnsembleGovernanceDecision {
   executionCostSource: 'BROKER_OBSERVED_P90' | 'STATIC_DIAGNOSTIC_FALLBACK';
   executionSpreadEvidenceValid: boolean;
   executionSpreadEvidence: ExecutionSpreadEvidence | null;
+  /** Explicit PAPER cost-floor provenance; absent on legacy stored decisions. */
+  paperFillSpreadPrice?: number;
+  effectiveSpreadPrice?: number;
+  paperSpreadFloorApplied?: boolean;
   netExpectedR: number;
   paperNetExpectedRPassed: boolean;
   netExpectedRPassed: boolean;
@@ -76,15 +81,6 @@ export interface EnsembleGovernanceDecision {
   paperPromotionEligible: boolean;
   blockers: string[];
 }
-
-const SPREAD_PRICE: Record<string, number> = Object.freeze({
-  EURUSD: 0.0001,
-  GBPUSD: 0.00012,
-  USDJPY: 0.01,
-  AUDUSD: 0.0001,
-  USDCAD: 0.00012,
-  USDCHF: 0.00012,
-});
 
 // Frozen empirical envelope from the 4,599-event development corpus.
 // These values are governance diagnostics only; they never alter the original
@@ -276,9 +272,11 @@ function executionCostR(input: EnsembleGovernanceInput): {
   evidenceValid: boolean;
 } {
   const evidenceValid = executionSpreadEvidenceValid(input);
-  const spread = evidenceValid
-    ? input.executionSpreadEvidence!.spreadPrice
-    : (SPREAD_PRICE[input.instrument.trim().toUpperCase()] ?? 0);
+  const paperFillSpread = PAPER_MARKET_SPECS[input.instrument.trim().toUpperCase()]?.spread ?? 0;
+  const spread = Math.max(
+    paperFillSpread,
+    evidenceValid ? input.executionSpreadEvidence!.spreadPrice : 0,
+  );
   const stopDistance = Math.abs(input.entryPrice - input.stopLoss);
   if (
     !Number.isFinite(spread) ||
@@ -293,8 +291,9 @@ function executionCostR(input: EnsembleGovernanceInput): {
     };
   }
   // PAPER enters/exits across bid/ask. The authoritative execution estimate is
-  // the broker-observed rolling P90 spread plus a 25% slippage/quote buffer.
-  // Static spreads remain diagnostic-only and can never authorize execution.
+  // the larger of broker P90 and the actual PAPER quote spread, plus a 25%
+  // slippage/quote buffer. The fill floor never substitutes for fresh observed
+  // evidence: unavailable/stale broker evidence still blocks execution.
   return {
     costR: (1.25 * spread) / stopDistance,
     source: evidenceValid ? 'BROKER_OBSERVED_P90' : 'STATIC_DIAGNOSTIC_FALLBACK',
@@ -357,6 +356,15 @@ export function evaluateEnsembleGovernance(
     executionCostSource: executionCost.source,
     executionSpreadEvidenceValid: executionCost.evidenceValid,
     executionSpreadEvidence: input.executionSpreadEvidence ?? null,
+    paperFillSpreadPrice: PAPER_MARKET_SPECS[input.instrument.trim().toUpperCase()]?.spread ?? 0,
+    effectiveSpreadPrice: Math.max(
+      PAPER_MARKET_SPECS[input.instrument.trim().toUpperCase()]?.spread ?? 0,
+      executionCost.evidenceValid ? input.executionSpreadEvidence!.spreadPrice : 0,
+    ),
+    paperSpreadFloorApplied:
+      executionCost.evidenceValid &&
+      (PAPER_MARKET_SPECS[input.instrument.trim().toUpperCase()]?.spread ?? 0) >
+        input.executionSpreadEvidence!.spreadPrice,
     netExpectedR,
     paperNetExpectedRPassed,
     netExpectedRPassed,

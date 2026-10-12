@@ -1,3 +1,4 @@
+import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
 import { evaluateEnsembleGovernance } from './ensemble-governance';
 import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 
@@ -55,6 +56,82 @@ const base = {
 };
 
 describe('evaluateEnsembleGovernance', () => {
+  it.each(['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'])(
+    'budgets the executable PAPER quote spread for %s in both directions',
+    (instrument) => {
+      const live = new LivePaperMarketDataService();
+      const mid = instrument === 'USDJPY' ? 158 : 1.1;
+      live.updateClosedCandles(instrument, [
+        {
+          timestamp: new Date('2026-10-07T11:50:00Z'),
+          open: String(mid),
+          high: String(mid),
+          low: String(mid),
+          close: String(mid),
+        },
+        {
+          timestamp: new Date('2026-10-07T11:55:00Z'),
+          open: String(mid),
+          high: String(mid),
+          low: String(mid),
+          close: String(mid),
+        },
+      ]);
+      const quote = live.getQuote(instrument, Number.MAX_SAFE_INTEGER);
+      const executableSpread = Number(quote.ask) - Number(quote.bid);
+      const stopDistance = instrument === 'USDJPY' ? 0.051 : 0.00051;
+      for (const direction of ['BUY', 'SELL'] as const) {
+        const result = evaluateEnsembleGovernance({
+          ...base,
+          instrument,
+          direction,
+          entryPrice: mid,
+          stopLoss: mid + (direction === 'SELL' ? 1 : -1) * stopDistance,
+          takeProfit: mid + (direction === 'BUY' ? 1 : -1) * stopDistance * 2,
+          executionSpreadEvidence: {
+            ...base.executionSpreadEvidence,
+            spreadPrice: executableSpread / 12,
+          },
+        });
+        expect(result.estimatedExecutionCostR).toBeCloseTo(
+          (1.25 * executableSpread) / stopDistance,
+          8,
+        );
+        const wider = evaluateEnsembleGovernance({
+          ...base,
+          instrument,
+          entryPrice: mid,
+          stopLoss: mid - stopDistance,
+          executionSpreadEvidence: {
+            ...base.executionSpreadEvidence,
+            spreadPrice: executableSpread * 2,
+          },
+        });
+        expect(wider.estimatedExecutionCostR).toBeCloseTo(
+          (1.25 * executableSpread * 2) / stopDistance,
+          8,
+        );
+      }
+    },
+  );
+
+  it('rejects the observed USDCAD setup whose apparent edge disappears at the PAPER fill cost', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      instrument: 'USDCAD',
+      direction: 'SELL',
+      entryPrice: 1.42523,
+      stopLoss: 1.42574,
+      ensemble: { ...ensemble, expectedR: 0.12963357838064193 },
+      executionSpreadEvidence: { ...base.executionSpreadEvidence, spreadPrice: 0.00001 },
+      eventRisk: 'CLEAR',
+    });
+    expect(result.estimatedExecutionCostR).toBeCloseTo(0.29411764705882354, 8);
+    expect(result.netExpectedR).toBeLessThan(0);
+    expect(result.paperExecutionEligible).toBe(false);
+    expect(result.paperExecutionBlockers).toContain('PAPER_NET_EXPECTED_R');
+  });
+
   it('keeps shadow admission separate from PAPER promotion governance', () => {
     const result = evaluateEnsembleGovernance(base);
     expect(ensemble.admitted).toBe(true);
@@ -140,7 +217,7 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.netExpectedRPassed).toBe(true);
   });
 
-  it('uses fresh broker-observed P90 spread instead of the static diagnostic spread', () => {
+  it('floors tight observed spreads at the PAPER fill spread', () => {
     const result = evaluateEnsembleGovernance({
       ...base,
       ensemble: { ...ensemble, expectedR: 0.12 },
@@ -151,10 +228,10 @@ describe('evaluateEnsembleGovernance', () => {
       },
     });
     expect(result.executionCostSource).toBe('BROKER_OBSERVED_P90');
-    expect(result.estimatedExecutionCostR).toBeCloseTo(0.00625, 6);
-    expect(result.netExpectedR).toBeCloseTo(0.11375, 6);
-    expect(result.paperNetExpectedRPassed).toBe(true);
-    expect(result.paperExecutionEligible).toBe(true);
+    expect(result.estimatedExecutionCostR).toBeCloseTo(0.0625, 6);
+    expect(result.netExpectedR).toBeCloseTo(0.0575, 6);
+    expect(result.paperNetExpectedRPassed).toBe(false);
+    expect(result.paperExecutionEligible).toBe(false);
   });
 
   it('uses a dedicated fail-closed reversal envelope instead of the continuation drift envelope', () => {

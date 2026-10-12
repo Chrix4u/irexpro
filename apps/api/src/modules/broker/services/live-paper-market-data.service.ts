@@ -1,3 +1,7 @@
+import {
+  PAPER_MARKET_SPECS as SPECS,
+  PaperInstrumentSpec as InstrumentSpec,
+} from './paper-market-spec';
 import { Injectable } from '@nestjs/common';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 import type { OHLCV } from '../interfaces/broker-adapter.interface';
@@ -25,12 +29,6 @@ export interface LivePaperCandleInput {
   close: string;
 }
 
-interface InstrumentSpec {
-  digits: number;
-  spread: number;
-  description: string;
-}
-
 interface LivePaperMarketState {
   candles: Map<string, OHLCV[]>;
   candleQuotes: Map<string, LivePaperQuote>;
@@ -40,15 +38,6 @@ interface LivePaperMarketState {
 }
 
 const DEFAULT_MARKET_SCOPE = '__default__';
-
-const SPECS: Record<string, InstrumentSpec> = {
-  EURUSD: { digits: 5, spread: 0.0001, description: 'Euro vs US Dollar' },
-  GBPUSD: { digits: 5, spread: 0.00012, description: 'British Pound vs US Dollar' },
-  USDJPY: { digits: 3, spread: 0.01, description: 'US Dollar vs Japanese Yen' },
-  AUDUSD: { digits: 5, spread: 0.0001, description: 'Australian Dollar vs US Dollar' },
-  USDCAD: { digits: 5, spread: 0.00012, description: 'US Dollar vs Canadian Dollar' },
-  USDCHF: { digits: 5, spread: 0.00012, description: 'US Dollar vs Swiss Franc' },
-};
 
 /**
  * In-memory market cache used only by the PAPER broker when the VPS-native
