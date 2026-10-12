@@ -68,6 +68,16 @@ make_fixture() {
 
   cp "$SCRIPT_DIR/deploy-staging.sh" "$repo/scripts/deployment/deploy-staging.sh"
   cp "$SCRIPT_DIR/rollback-staging.sh" "$repo/scripts/deployment/rollback-staging.sh"
+  mkdir -p "$repo/apps/api/scripts"
+  cat > "$repo/apps/api/scripts/audit-paper-payoff-shadow.cjs" <<'AUDIT'
+const fs = require('node:fs');
+fs.appendFileSync(process.env.COMMAND_LOG, 'paper-payoff-read-only-audit\n');
+if (process.env.FAKE_PAPER_AUDIT_FAILURE === '1') {
+  console.error('PAPER_PAYOFF_AUDIT_FAILED read-only audit could not be completed');
+  process.exit(1);
+}
+console.log('PAPER_PAYOFF_AUDIT {"executionAuthority":"PAPER_ONLY","modifiesExecution":false}');
+AUDIT
   printf '{"packageManager":"%s"}\n' "$ROOT_PACKAGE_MANAGER" > "$repo/package.json"
   printf 'prior\n' > "$repo/release-marker.txt"
   git -C "$repo" add .
@@ -490,6 +500,17 @@ grep -Fq 'ai-python -m pip check' "$COMMAND_LOG" || fail 'AI Python dependency c
 grep -Fq 'ai-python -c import pyarrow' "$COMMAND_LOG" || fail 'PyArrow runtime import verification missing.'
 grep -q '@irexpro/api migration:run' "$COMMAND_LOG" || fail 'Database migration missing.'
 grep -q '^pm2 restart irexpro-ai-staging ' "$COMMAND_LOG" || fail 'AI engine restart missing.'
+grep -q '^paper-payoff-read-only-audit$' "$COMMAND_LOG" || fail 'Read-only PAPER audit missing.'
+[[ "$deploy_output" == *'"modifiesExecution":false'* ]] || fail 'Diagnostic-only audit evidence missing.'
+
+make_fixture 'paper-audit-failure'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+if audit_failure_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_PAPER_AUDIT_FAILURE=1 2>&1)"; then
+  fail 'A failed PAPER audit must not be reported as a verified deployment.'
+fi
+[[ "$audit_failure_output" == *'failed_stage=paper-payoff-read-only-audit'* ]] || fail 'Audit failure stage missing.'
+[[ "$audit_failure_output" == *'PAPER_PAYOFF_AUDIT_FAILED read-only audit could not be completed'* ]] || fail 'Sanitized audit failure marker missing.'
+[[ "$audit_failure_output" != *'STAGING DEPLOYMENT VERIFIED'* ]] || fail 'Audit failure reported as verified.'
 
 make_fixture 'rollback-verification'
 rollback_output="$(run_rollback "$FIXTURE_CANDIDATE_SHA" "$FIXTURE_PRIOR_SHA")"
@@ -499,3 +520,4 @@ rollback_output="$(run_rollback "$FIXTURE_CANDIDATE_SHA" "$FIXTURE_PRIOR_SHA")"
 [[ "$(git -C "$FIXTURE_REPO" rev-parse HEAD)" == "$FIXTURE_PRIOR_SHA" ]] || fail 'Rollback did not finish on the exact rollback SHA.'
 
 printf 'Deployment script safety tests passed.\n'
+

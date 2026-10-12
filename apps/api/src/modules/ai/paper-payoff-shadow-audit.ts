@@ -506,6 +506,7 @@ export interface PaperExecutionRouteLink {
   direction: 'BUY' | 'SELL';
   marketBarTime: Date | string | null;
   policyVersion: string | null;
+  costModelVersion: string | null;
   executionRoute: string | null;
   research: boolean | null;
 }
@@ -530,6 +531,7 @@ export function attachPaperExecutionRoutes(
             link.instrument.trim().toUpperCase() === row.instrument.trim().toUpperCase() &&
             link.direction === row.direction &&
             link.policyVersion === row.policyVersion &&
+            link.costModelVersion === row.costModelVersion &&
             timestamp(link.marketBarTime) === rowBarTime,
         )
         .map((link) => classifyPaperRoute(link.executionRoute, link.research)),
@@ -541,8 +543,8 @@ export function attachPaperExecutionRoutes(
         matchedRoutes.size === 0
           ? 'SHADOW_UNLINKED'
           : matchedRoutes.size === 1
-            ? [...matchedRoutes][0]!
-            : 'MULTIPLE_EXECUTION_ROUTES',
+          ? [...matchedRoutes][0]!
+          : 'MULTIPLE_EXECUTION_ROUTES',
     };
   });
 }

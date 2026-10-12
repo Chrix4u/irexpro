@@ -56,7 +56,15 @@ export const PAPER_POST_LOSS_STATE_QUERY = `
   SELECT
     EXISTS (SELECT 1 FROM owned_connection)
       AND (EXISTS (SELECT 1 FROM provider_state WHERE valid)
-        OR NOT EXISTS (SELECT 1 FROM scoped_trades)) AS paper_post_loss_state_available,
+        OR NOT EXISTS (SELECT 1 FROM scoped_trades))
+      AND NOT EXISTS (
+        SELECT 1 FROM scoped_trades t CROSS JOIN provider_state ps
+        CROSS JOIN LATERAL jsonb_array_elements(
+          CASE WHEN ps.valid THEN ps.state->'positions' ELSE '[]'::jsonb END
+        ) AS position
+        WHERE t.status = 'CLOSED'
+          AND position->>'positionId' = COALESCE(t.external_position_id,t.external_order_id)
+      ) AS paper_post_loss_state_available,
     lc.id AS trade_id, lc.close_reason, lc.closed_at,
     CASE WHEN lc.close_reason IN ('STOP_LOSS_HIT', 'SL') THEN EXISTS (
       SELECT 1 FROM trading.trade_intents ti2

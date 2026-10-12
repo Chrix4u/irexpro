@@ -39,70 +39,128 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
     `);
   });
 
-  afterAll(async () => { await client?.end(); });
+  afterAll(async () => {
+    await client?.end();
+  });
 
   beforeEach(async () => {
     await client.query('TRUNCATE paper_intents, paper_trades, paper_states, paper_connections');
-    await client.query('INSERT INTO paper_connections VALUES ($1, $2, $3, NULL)',
-      [connection, user, 'paper-broker']);
-    await client.query('INSERT INTO paper_states VALUES ($1, 1, $2::jsonb)',
-      [connection, JSON.stringify({ version: 1, positions: [], closedTrades: [] })]);
+    await client.query('INSERT INTO paper_connections VALUES ($1, $2, $3, NULL)', [
+      connection,
+      user,
+      'paper-broker',
+    ]);
+    await client.query('INSERT INTO paper_states VALUES ($1, 1, $2::jsonb)', [
+      connection,
+      JSON.stringify({ version: 1, positions: [], closedTrades: [] }),
+    ]);
   });
 
-  async function addTrade(id: string, options: {
-    status?: string; intentStatus?: string; metadata?: Record<string, unknown>;
-    generatedAt?: string; tradeUser?: string; tradeConnection?: string;
-  } = {}) {
-    await client.query(`INSERT INTO paper_intents VALUES ($1,$2,$3,'USDCAD','SELL',$4::jsonb,$5,$6)`,
-      [id, user, connection, JSON.stringify({ ...lineage, ...options.metadata }),
-        options.intentStatus ?? 'EXECUTED', options.generatedAt ?? '2026-10-12T07:00:00Z']);
+  async function addTrade(
+    id: string,
+    options: {
+      status?: string;
+      intentStatus?: string;
+      metadata?: Record<string, unknown>;
+      generatedAt?: string;
+      tradeUser?: string;
+      tradeConnection?: string;
+    } = {},
+  ) {
+    await client.query(
+      `INSERT INTO paper_intents VALUES ($1,$2,$3,'USDCAD','SELL',$4::jsonb,$5,$6)`,
+      [
+        id,
+        user,
+        connection,
+        JSON.stringify({ ...lineage, ...options.metadata }),
+        options.intentStatus ?? 'EXECUTED',
+        options.generatedAt ?? '2026-10-12T07:00:00Z',
+      ],
+    );
     const status = options.status ?? 'CLOSED';
-    await client.query(`INSERT INTO paper_trades VALUES
+    await client.query(
+      `INSERT INTO paper_trades VALUES
       ($1,$1,$2,$3,'USDCAD','SELL',$4,$4,$5,'STOP_LOSS_HIT',$6,1.37,$7)`,
-      [id, options.tradeUser ?? user, options.tradeConnection ?? connection,
-        id, status, status === 'CLOSED' ? closedAt : null, options.generatedAt ?? '2026-10-12T07:00:00Z']);
+      [
+        id,
+        options.tradeUser ?? user,
+        options.tradeConnection ?? connection,
+        id,
+        status,
+        status === 'CLOSED' ? closedAt : null,
+        options.generatedAt ?? '2026-10-12T07:00:00Z',
+      ],
+    );
   }
 
   async function state() {
     const context = {
-      dataSource: { query: async (sql: string, params: unknown[]) => {
-        const scoped = sql
-          .replaceAll('trading.trade_intents', 'pg_temp.paper_intents')
-          .replaceAll('trading.trades', 'pg_temp.paper_trades')
-          .replaceAll('broker.paper_broker_states', 'pg_temp.paper_states')
-          .replaceAll('broker.broker_connections', 'pg_temp.paper_connections');
-        return (await client.query(scoped, params)).rows;
-      } },
-      logger: { warn: (message: string) => { throw new Error(message); } },
+      dataSource: {
+        query: async (sql: string, params: unknown[]) => {
+          const scoped = sql
+            .replaceAll('trading.trade_intents', 'pg_temp.paper_intents')
+            .replaceAll('trading.trades', 'pg_temp.paper_trades')
+            .replaceAll('broker.paper_broker_states', 'pg_temp.paper_states')
+            .replaceAll('broker.broker_connections', 'pg_temp.paper_connections');
+          return (await client.query(scoped, params)).rows;
+        },
+      },
+      logger: {
+        warn: (message: string) => {
+          throw new Error(message);
+        },
+      },
     };
-    return VpsForexSignalCollectorService.prototype['loadPaperPostLossEntryState']
-      .call(context, user, connection, 'USDCAD', 'SELL');
+    return VpsForexSignalCollectorService.prototype['loadPaperPostLossEntryState'].call(
+      context,
+      user,
+      connection,
+      'USDCAD',
+      'SELL',
+    );
   }
 
   it('sees a durable SL before the trade reconciler marks the position CLOSED', async () => {
     await addTrade(loss, { status: 'OPEN' });
-    await client.query(`UPDATE paper_states SET state = $1::jsonb`, [JSON.stringify({
-      version: 1, positions: [], closedTrades: [{
-        externalOrderId: loss, instrument: 'USDCAD', direction: 'SELL',
-        closeReason: 'SL', closedAt,
-      }],
-    })]);
+    await client.query(`UPDATE paper_states SET state = $1::jsonb`, [
+      JSON.stringify({
+        version: 1,
+        positions: [],
+        closedTrades: [
+          {
+            externalOrderId: loss,
+            instrument: 'USDCAD',
+            direction: 'SELL',
+            closeReason: 'SL',
+            closedAt,
+          },
+        ],
+      }),
+    ]);
     expect((await state()).lastClosedTrade).toMatchObject({
-      id: loss, closeReason: 'STOP_LOSS_HIT', reconfirmed: false,
+      id: loss,
+      closeReason: 'STOP_LOSS_HIT',
+      reconfirmed: false,
     });
   });
 
   it('does not let a rejected later intent release the stop-loss guard', async () => {
     await addTrade(loss);
-    await addTrade(later, { status: 'REJECTED', intentStatus: 'REJECTED',
-      generatedAt: '2026-10-12T07:05:00Z' });
+    await addTrade(later, {
+      status: 'REJECTED',
+      intentStatus: 'REJECTED',
+      generatedAt: '2026-10-12T07:05:00Z',
+    });
     expect((await state()).lastClosedTrade?.reconfirmed).toBe(false);
   });
 
   it.each([
     {},
-    { paper_post_loss_entry_guard_reason: 'DIRECTION_RECONFIRMED',
-      paper_post_loss_entry_guard_last_trade_id: later },
+    {
+      paper_post_loss_entry_guard_reason: 'DIRECTION_RECONFIRMED',
+      paper_post_loss_entry_guard_last_trade_id: later,
+    },
   ])('does not infer reconfirmation without evidence for this exact loss: %j', async (metadata) => {
     await addTrade(loss);
     await addTrade(later, { status: 'OPEN', generatedAt: '2026-10-12T07:05:00Z', metadata });
@@ -111,21 +169,34 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
 
   it('allows continued entries after a filled, recorded confirmation of the latest loss', async () => {
     await addTrade(loss);
-    await addTrade(later, { status: 'OPEN', generatedAt: '2026-10-12T07:05:00Z', metadata: {
-      paper_post_loss_entry_guard_reason: 'DIRECTION_RECONFIRMED',
-      paper_post_loss_entry_guard_last_trade_id: loss,
-    } });
+    await addTrade(later, {
+      status: 'OPEN',
+      generatedAt: '2026-10-12T07:05:00Z',
+      metadata: {
+        paper_post_loss_entry_guard_reason: 'DIRECTION_RECONFIRMED',
+        paper_post_loss_entry_guard_last_trade_id: loss,
+      },
+    });
     expect((await state()).lastClosedTrade?.reconfirmed).toBe(true);
   });
 
   it('does not treat a provider partial close as a fully closed position', async () => {
     await addTrade(loss, { status: 'OPEN' });
-    await client.query(`UPDATE paper_states SET state = $1::jsonb`, [JSON.stringify({
-      version: 1, positions: [{ positionId: loss }], closedTrades: [{
-        externalOrderId: loss, instrument: 'USDCAD', direction: 'SELL',
-        closeReason: 'SL', closedAt,
-      }],
-    })]);
+    await client.query(`UPDATE paper_states SET state = $1::jsonb`, [
+      JSON.stringify({
+        version: 1,
+        positions: [{ positionId: loss }],
+        closedTrades: [
+          {
+            externalOrderId: loss,
+            instrument: 'USDCAD',
+            direction: 'SELL',
+            closeReason: 'SL',
+            closedAt,
+          },
+        ],
+      }),
+    ]);
     expect((await state()).lastClosedTrade).toBeNull();
   });
 
@@ -142,12 +213,21 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
 
   it('holds when a CLOSED aggregate contradicts a surviving provider position', async () => {
     await addTrade(loss);
-    await client.query('UPDATE paper_states SET state=$1::jsonb', [JSON.stringify({
-      version: 1, positions: [{ positionId: loss }], closedTrades: [{
-        externalOrderId: loss, instrument: 'USDCAD', direction: 'SELL',
-        closeReason: 'SL', closedAt,
-      }],
-    })]);
+    await client.query('UPDATE paper_states SET state=$1::jsonb', [
+      JSON.stringify({
+        version: 1,
+        positions: [{ positionId: loss }],
+        closedTrades: [
+          {
+            externalOrderId: loss,
+            instrument: 'USDCAD',
+            direction: 'SELL',
+            closeReason: 'SL',
+            closedAt,
+          },
+        ],
+      }),
+    ]);
     expect((await state()).available).toBe(false);
   });
 });

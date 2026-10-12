@@ -14,17 +14,24 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
   const other = '55555555-5555-5555-5555-555555555555';
   let client: Client;
   const metadata = {
-    signal_source: 'EXTERNAL_PROVIDER', external_provider_code: 'irexpro-multimodel-ensemble-v1',
-    paper_execution_route: 'NORMAL_PAPER', paper_research_throughput: false,
-    decision_policy_version: 'p1', execution_cost_model_version: 'c1',
+    signal_source: 'EXTERNAL_PROVIDER',
+    external_provider_code: 'irexpro-multimodel-ensemble-v1',
+    paper_execution_route: 'NORMAL_PAPER',
+    paper_research_throughput: false,
+    decision_policy_version: 'p1',
+    execution_cost_model_version: 'c1',
     plan_b_ensemble_strategy_route: 'TREND_CONTINUATION',
     market_data_bar_time: '2026-10-12T01:00:00Z',
   };
 
   beforeAll(async () => {
-    client = new Client({ host: process.env.DB_HOST ?? '127.0.0.1',
-      port: Number(process.env.DB_PORT ?? 5432), user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD, database: process.env.DB_NAME });
+    client = new Client({
+      host: process.env.DB_HOST ?? '127.0.0.1',
+      port: Number(process.env.DB_PORT ?? 5432),
+      user: process.env.DB_USER,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_NAME,
+    });
     await client.connect();
     await client.query(`
       CREATE TEMP TABLE audit_connections (id uuid, user_id uuid, broker_id text,
@@ -50,44 +57,82 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
     `);
   });
 
-  afterAll(async () => { await client?.end(); });
+  afterAll(async () => {
+    await client?.end();
+  });
 
   beforeEach(async () => {
     await client.query(`TRUNCATE audit_connections, audit_intents, audit_trades,
       audit_orders, audit_states, audit_shadows`);
-    await client.query('INSERT INTO audit_connections VALUES ($1,$2,$3,NULL,$4)',
-      [connection, user, 'paper-broker', 'USD']);
-    await client.query(`INSERT INTO audit_intents VALUES
+    await client.query('INSERT INTO audit_connections VALUES ($1,$2,$3,NULL,$4)', [
+      connection,
+      user,
+      'paper-broker',
+      'USD',
+    ]);
+    await client.query(
+      `INSERT INTO audit_intents VALUES
       ($1,$2,$3,'EURUSD','BUY',$4::jsonb,'EXECUTED','2026-10-12T01:05:00Z',1.099,1.102,'m1')`,
-      [trade, user, connection, JSON.stringify(metadata)]);
-    await client.query(`INSERT INTO audit_trades VALUES
+      [trade, user, connection, JSON.stringify(metadata)],
+    );
+    await client.query(
+      `INSERT INTO audit_trades VALUES
       ($1,$1,$2,$3,$4,'EURUSD','BUY',0.1,1.1,1.099,1.102,1.1002,2,0,0,NULL,
         'provider-1',NULL,'CLOSED','PROFIT_PROTECTION','2026-10-12T01:05:00Z','2026-10-12T01:10:00Z','USD')`,
-      [trade, order, user, connection]);
-    await client.query(`INSERT INTO audit_orders VALUES ($1,$2,$3,$4,'EURUSD','BUY','FILLED',0.1,1.1)`,
-      [order, user, connection, trade]);
-    await client.query(`INSERT INTO audit_states VALUES ($1,$2::jsonb)`,
-      [connection, JSON.stringify({ closedTrades: [], positions: [] })]);
-    await client.query(`INSERT INTO audit_shadows VALUES
+      [trade, order, user, connection],
+    );
+    await client.query(
+      `INSERT INTO audit_orders VALUES ($1,$2,$3,$4,'EURUSD','BUY','FILLED',0.1,1.1)`,
+      [order, user, connection, trade],
+    );
+    await client.query(`INSERT INTO audit_states VALUES ($1,$2::jsonb)`, [
+      connection,
+      JSON.stringify({ closedTrades: [], positions: [] }),
+    ]);
+    await client.query(
+      `INSERT INTO audit_shadows VALUES
       ($1,$2,$3,'EURUSD','BUY','irexpro-multimodel-ensemble-v1','p1',1.1,
         '2026-10-12T01:00:00Z','2026-10-12T01:05:00Z','PAPER_ONLY',$4::jsonb)`,
-      [trade, user, connection, JSON.stringify({ stopLoss: 1.099, strategyRoute: 'TREND_CONTINUATION',
-        paperPostLossEntryGuard: { reason: 'NO_PREVIOUS_CLOSE' }, governance: {
-          costModelVersion: 'c1', executionSpreadEvidenceValid: true,
-          executionSpreadEvidence: { spreadPrice: 0.00001 },
-        } })]);
+      [
+        trade,
+        user,
+        connection,
+        JSON.stringify({
+          stopLoss: 1.099,
+          strategyRoute: 'TREND_CONTINUATION',
+          paperPostLossEntryGuard: { reason: 'NO_PREVIOUS_CLOSE' },
+          governance: {
+            costModelVersion: 'c1',
+            executionSpreadEvidenceValid: true,
+            executionSpreadEvidence: { spreadPrice: 0.00001 },
+          },
+        }),
+      ],
+    );
   });
 
   function audit(connectionId = connection) {
-    const scopedClient = { query: (sql: string, params: unknown[]) => client.query(sql
-      .replaceAll('broker.broker_connections', 'pg_temp.audit_connections')
-      .replaceAll('broker.paper_broker_states', 'pg_temp.audit_states')
-      .replaceAll('trading.trade_intents', 'pg_temp.audit_intents')
-      .replaceAll('trading.trades', 'pg_temp.audit_trades')
-      .replaceAll('trading.orders', 'pg_temp.audit_orders')
-      .replaceAll('trading.ensemble_shadow_decisions', 'pg_temp.audit_shadows'), params) };
-    return runPaperPayoffAudit({ client: scopedClient, helpers, paperMarketSpecs: PAPER_MARKET_SPECS,
-      userId: user, connectionId, since: '2026-10-11T00:00:00Z' });
+    const scopedClient = {
+      query: (sql: string, params: unknown[]) =>
+        client.query(
+          sql
+            .replaceAll('broker.broker_connections', 'pg_temp.audit_connections')
+            .replaceAll('broker.paper_broker_states', 'pg_temp.audit_states')
+            .replaceAll('trading.trade_intents', 'pg_temp.audit_intents')
+            .replaceAll('trading.trades', 'pg_temp.audit_trades')
+            .replaceAll('trading.orders', 'pg_temp.audit_orders')
+            .replaceAll('trading.ensemble_shadow_decisions', 'pg_temp.audit_shadows'),
+          params,
+        ),
+    };
+    return runPaperPayoffAudit({
+      client: scopedClient,
+      helpers,
+      paperMarketSpecs: PAPER_MARKET_SPECS,
+      userId: user,
+      connectionId,
+      since: '2026-10-11T00:00:00Z',
+    });
   }
 
   it('executes the complete audit SQL and links only proven fills to the matching shadow bar', async () => {
@@ -113,8 +158,11 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
   });
 
   it('labels filled partial closes as unproven full-size realised R', async () => {
-    await client.query(`INSERT INTO audit_orders VALUES
-      ($1,$2,$3,$4,'EURUSD','SELL','FILLED',0.05,1.1002)`, [other, user, connection, trade]);
+    await client.query(
+      `INSERT INTO audit_orders VALUES
+      ($1,$2,$3,$4,'EURUSD','SELL','FILLED',0.05,1.1002)`,
+      [other, user, connection, trade],
+    );
     const report = await audit();
     expect(report.realised[0].payoff.eligibleTrades).toBe(0);
     expect(report.realised[0].totals.reportedRealisedPnl).toBe(2);
@@ -136,11 +184,12 @@ describe('PAPER payoff audit — real PostgreSQL', () => {
 
   it('refuses R for a single breakeven partial close with a remaining provider position', async () => {
     await client.query('UPDATE audit_trades SET exit_price=fill_price, realised_pnl=0');
-    await client.query('UPDATE audit_states SET state=$1::jsonb', [JSON.stringify({
-      positions: [{ positionId: 'provider-1' }], closedTrades: [
-        { externalOrderId: 'provider-1', lotSize: '0.05' },
-      ],
-    })]);
+    await client.query('UPDATE audit_states SET state=$1::jsonb', [
+      JSON.stringify({
+        positions: [{ positionId: 'provider-1' }],
+        closedTrades: [{ externalOrderId: 'provider-1', lotSize: '0.05' }],
+      }),
+    ]);
     const report = await audit();
     expect(report.realised[0].payoff.eligibleTrades).toBe(0);
   });

@@ -11,15 +11,16 @@ const TRADES_SQL = `
     t.stop_loss AS "stopLoss", ti.stop_loss AS "initialStopLoss",
     t.take_profit AS "takeProfit", ti.take_profit AS "initialTakeProfit",
     t.exit_price AS "exitPrice", t.realised_pnl AS "realisedPnl",
-    bc.account_currency AS "accountCurrency", t.commission, t.swap,
+    t.account_currency AS "accountCurrency", t.commission, t.swap,
     t.trailing_stop_pips AS "trailingStopPips",
     o.filled_quantity AS "filledQuantity", o.avg_fill_price AS "filledEntryPrice",
-    (SELECT COUNT(*)::int FROM trading.trades duplicate
+    CASE WHEN COALESCE(t.external_position_id, t.external_order_id) IS NULL THEN 0
+      ELSE (SELECT COUNT(*)::int FROM trading.trades duplicate
       WHERE duplicate.user_id = $1 AND duplicate.broker_connection_id = $2
         AND (duplicate.id = t.id OR (
           COALESCE(t.external_position_id, t.external_order_id) IS NOT NULL
           AND COALESCE(duplicate.external_position_id, duplicate.external_order_id)
-            = COALESCE(t.external_position_id, t.external_order_id)))) AS "positionRecordCount",
+            = COALESCE(t.external_position_id, t.external_order_id)))) END AS "positionRecordCount",
     (EXISTS (SELECT 1 FROM trading.orders closing
       WHERE closing.user_id = $1 AND closing.broker_connection_id = $2
         AND closing.trade_id = t.id AND closing.id IS DISTINCT FROM t.order_id
@@ -31,7 +32,20 @@ const TRADES_SQL = `
           CASE WHEN jsonb_typeof(ps.state->'closedTrades') = 'array'
             THEN ps.state->'closedTrades' ELSE '[]'::jsonb END) event
         WHERE ps.connection_id = $2
-          AND event->>'externalOrderId' = t.external_order_id) > 1) AS "hasPartialCloseOrder",
+          AND event->>'externalOrderId' = t.external_order_id) > 1
+      OR EXISTS (SELECT 1 FROM broker.paper_broker_states ps
+        CROSS JOIN LATERAL jsonb_array_elements(
+          CASE WHEN jsonb_typeof(ps.state->'closedTrades') = 'array'
+            THEN ps.state->'closedTrades' ELSE '[]'::jsonb END) event
+        WHERE ps.connection_id = $2 AND event->>'externalOrderId' = t.external_order_id
+          AND COALESCE((event->>'lotSize')::numeric <> o.filled_quantity, true))
+      OR EXISTS (SELECT 1 FROM broker.paper_broker_states ps
+        CROSS JOIN LATERAL jsonb_array_elements(
+          CASE WHEN jsonb_typeof(ps.state->'positions') = 'array'
+            THEN ps.state->'positions' ELSE '[]'::jsonb END) position
+        WHERE ps.connection_id = $2
+          AND position->>'positionId' = COALESCE(t.external_position_id,t.external_order_id)))
+        AS "hasPartialCloseOrder",
     ti.metadata->>'paper_execution_route' AS "executionRoute",
     CASE ti.metadata->>'paper_research_throughput'
       WHEN 'true' THEN true WHEN 'false' THEN false ELSE NULL END AS research,
@@ -74,6 +88,7 @@ const LINKS_SQL = `
   SELECT ti.instrument, ti.direction,
     ti.metadata->>'market_data_bar_time' AS "marketBarTime",
     ti.metadata->>'decision_policy_version' AS "policyVersion",
+    ti.metadata->>'execution_cost_model_version' AS "costModelVersion",
     ti.metadata->>'paper_execution_route' AS "executionRoute",
     CASE ti.metadata->>'paper_research_throughput'
       WHEN 'true' THEN true WHEN 'false' THEN false ELSE NULL END AS research

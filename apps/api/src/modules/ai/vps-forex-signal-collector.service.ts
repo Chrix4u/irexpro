@@ -609,7 +609,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       // but no scanner signal should compete with an unverified scheduler.
       this.livePaperMarket.unregisterLiveConnection(connectionId);
       this.logger.error(
-        `VPS scanner could not isolate legacy scheduler; scanner remains disabled: ${(error as Error).message}`,
+        `VPS scanner could not isolate legacy scheduler; scanner remains disabled: ${
+          (error as Error).message
+        }`,
       );
       return;
     }
@@ -634,7 +636,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       }
     } catch (error) {
       this.logger.error(
-        `VPS startup state restore failed; live PAPER remains fail-closed: ${(error as Error).message}`,
+        `VPS startup state restore failed; live PAPER remains fail-closed: ${
+          (error as Error).message
+        }`,
       );
     }
 
@@ -674,7 +678,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       // rather than being valued against a mismatched simulator feed. The
       // periodic scanner can recover on a later successful provider request.
       this.logger.error(
-        `VPS startup market prime/heartbeat failed; live PAPER remains fail-closed: ${(error as Error).message}`,
+        `VPS startup market prime/heartbeat failed; live PAPER remains fail-closed: ${
+          (error as Error).message
+        }`,
       );
     }
   }
@@ -695,9 +701,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const configuredUserId = this.userId();
     const configured = Boolean(
       this.apiKey() &&
-      this.apiKey().toLowerCase() !== 'demo' &&
-      configuredUserId &&
-      this.connectionId(),
+        this.apiKey().toLowerCase() !== 'demo' &&
+        configuredUserId &&
+        this.connectionId(),
     );
     const ownsBinding = Boolean(configuredUserId && configuredUserId === requestingUserId);
     let activePaperSession = false;
@@ -709,14 +715,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const overlayScoringState = !brokerExpertConfigured
       ? 'BROKER_SOURCE_NOT_CONFIGURED'
       : marketSchedule.paused
-        ? 'READY_WAITING_FRESH_MARKET'
-        : lastOverlay?.state === 'CONFIRM' ||
-            lastOverlay?.state === 'CONFLICT' ||
-            lastOverlay?.state === 'ABSTAIN'
-          ? 'READY'
-          : lastOverlay?.state === 'STALE'
-            ? 'STALE'
-            : 'READY_WAITING_FRESH_SCORE';
+      ? 'READY_WAITING_FRESH_MARKET'
+      : lastOverlay?.state === 'CONFIRM' ||
+        lastOverlay?.state === 'CONFLICT' ||
+        lastOverlay?.state === 'ABSTAIN'
+      ? 'READY'
+      : lastOverlay?.state === 'STALE'
+      ? 'STALE'
+      : 'READY_WAITING_FRESH_SCORE';
     let highConvictionChallenger: Record<string, unknown> = {
       state: 'UNAVAILABLE',
       artifact: null,
@@ -740,10 +746,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         state: !challenger.configured
           ? 'NOT_CONFIGURED'
           : !challenger.loaded
-            ? 'ERROR'
-            : brokerExpertConfigured
-              ? 'BROKER_MTF_OVERLAY_READY'
-              : 'ARTIFACT_READY_BROKER_MTF_REQUIRED',
+          ? 'ERROR'
+          : brokerExpertConfigured
+          ? 'BROKER_MTF_OVERLAY_READY'
+          : 'ARTIFACT_READY_BROKER_MTF_REQUIRED',
         artifact: challenger.artifact,
         loaded: challenger.loaded,
         featureCount: challenger.feature_count,
@@ -774,8 +780,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       const session = await this.executionService.getActiveSession(requestingUserId);
       activePaperSession = Boolean(
         session &&
-        session.executionMode === ExecutionMode.PAPER_ONLY &&
-        session.brokerConnectionId === this.connectionId(),
+          session.executionMode === ExecutionMode.PAPER_ONLY &&
+          session.brokerConnectionId === this.connectionId(),
       );
     }
     const postEntryShadow = this.ensemblePostEntryProtection
@@ -893,8 +899,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           highConvictionChallenger.state === 'BROKER_MTF_OVERLAY_READY'
             ? 'BROKER_MTF_OVERLAY_READY_SHADOW_ONLY'
             : highConvictionChallenger.state === 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
-              ? 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
-              : 'CHALLENGER_VALIDATION',
+            ? 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
+            : 'CHALLENGER_VALIDATION',
         fastMicrostructureSpecialists: 'REJECTED_NO_QUALIFIED_SPECIALIST',
         newsEventRisk: this.macroEventRisk?.isConfigured()
           ? 'IMPLEMENTED'
@@ -925,21 +931,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         !ownsBinding || !configured
           ? 'WAITING_FOR_CONFIGURATION'
           : !this.enabled()
-            ? 'DISABLED'
-            : marketSchedule.paused
-              ? 'MARKET_PAUSED'
-              : this.providerCooldownUntil &&
-                  this.providerCooldownUntil.getTime() > Date.now() &&
-                  this.lastMarketDataAuthority !== 'METAAPI_BROKER_FALLBACK'
-                ? 'WAITING_FOR_PROVIDER_QUOTA'
-                : this.livePaperMarket.status(this.connectionId()).cachedInstrumentCount <
-                    SYMBOLS.length
-                  ? 'WAITING_FOR_MARKET_DATA'
-                  : MULTI_MODEL_PAPER_EXECUTION_ENABLED
-                    ? activePaperSession
-                      ? 'ACTIVE'
-                      : 'WAITING_FOR_PAPER_SESSION'
-                    : 'MULTI_MODEL_SHADOW',
+          ? 'DISABLED'
+          : marketSchedule.paused
+          ? 'MARKET_PAUSED'
+          : this.providerCooldownUntil &&
+            this.providerCooldownUntil.getTime() > Date.now() &&
+            this.lastMarketDataAuthority !== 'METAAPI_BROKER_FALLBACK'
+          ? 'WAITING_FOR_PROVIDER_QUOTA'
+          : this.livePaperMarket.status(this.connectionId()).cachedInstrumentCount < SYMBOLS.length
+          ? 'WAITING_FOR_MARKET_DATA'
+          : MULTI_MODEL_PAPER_EXECUTION_ENABLED
+          ? activePaperSession
+            ? 'ACTIVE'
+            : 'WAITING_FOR_PAPER_SESSION'
+          : 'MULTI_MODEL_SHADOW',
     };
   }
 
@@ -1076,7 +1081,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         }> = [];
 
         for (const best of [...pairCandidates].sort((a, b) => b.score - a.score)) {
-          const eventId = `${ACTIVE_ENGINE_CODE}|${best.instrument}|${best.barTime.toISOString()}|${best.direction}`;
+          const eventId = `${ACTIVE_ENGINE_CODE}|${best.instrument}|${best.barTime.toISOString()}|${
+            best.direction
+          }`;
           const signalId = uuidv5(eventId, SIGNAL_NAMESPACE);
           const digits = this.livePaperMarket.spec(best.instrument).digits;
           // Candidates store direction-aligned momentum for ranking/telemetry.
@@ -1219,7 +1226,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             };
             this.logger.log(
               `PAPER post-loss guard ${best.instrument} ${best.direction} execution=BLOCKED ` +
-                `reason=${paperPostLossEntryGuard.reason} lastTrade=${paperPostLossEntryGuard.lastClosedTradeId ?? 'none'}`,
+                `reason=${paperPostLossEntryGuard.reason} lastTrade=${
+                  paperPostLossEntryGuard.lastClosedTradeId ?? 'none'
+                }`,
             );
           }
           const decision = {
@@ -1401,7 +1410,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `PAPER research-throughput ${best.instrument} ${best.direction} execution=SHADOW_ONLY ` +
                   `reason=${paperResearchPairSideReliability.reason} samples=${paperResearchPairSideReliability.samples} ` +
                   `wins=${paperResearchPairSideReliability.wins} losses=${paperResearchPairSideReliability.losses} ` +
-                  `smoothedExpectedR=${paperResearchPairSideReliability.smoothedExpectedR.toFixed(4)}`,
+                  `smoothedExpectedR=${paperResearchPairSideReliability.smoothedExpectedR.toFixed(
+                    4,
+                  )}`,
               );
             } else {
               const previousEpisode = await this.loadPaperResearchEpisodeState(
@@ -1457,7 +1468,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `highConviction=${highConvictionOverlay.state} ` +
                 `canary=${rejectedEdgeCanary?.reason ?? canaryEvaluationState} ` +
                 `extensionExhaustion=${extensionExhaustionDiagnostic.reason} ` +
-                `paperGovernance=${ensembleGovernance.paperExecutionBlockers.join(',') || 'PASS'} ` +
+                `paperGovernance=${
+                  ensembleGovernance.paperExecutionBlockers.join(',') || 'PASS'
+                } ` +
                 `promotionGovernance=${ensembleGovernance.blockers.join(',') || 'PASS'} ` +
                 `reasons=${planBEnsemble.reasons.join(',')}`,
             );
@@ -1467,8 +1480,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             this.logger.warn(
               `Rejected-edge PAPER canary ${best.instrument} ${best.direction} execution=ELIGIBLE ` +
                 `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
-                `global30m=${rejectedEdgeCanaryEvidence?.global30m.positive ?? 0}/${rejectedEdgeCanaryEvidence?.global30m.samples ?? 0} ` +
-                `pairSide30m=${rejectedEdgeCanaryEvidence?.pairSide30m.positive ?? 0}/${rejectedEdgeCanaryEvidence?.pairSide30m.samples ?? 0}`,
+                `global30m=${rejectedEdgeCanaryEvidence?.global30m.positive ?? 0}/${
+                  rejectedEdgeCanaryEvidence?.global30m.samples ?? 0
+                } ` +
+                `pairSide30m=${rejectedEdgeCanaryEvidence?.pairSide30m.positive ?? 0}/${
+                  rejectedEdgeCanaryEvidence?.pairSide30m.samples ?? 0
+                }`,
             );
           }
 
@@ -1510,12 +1527,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             const edges = executableCounterfactuals
               .map(
                 (option) =>
-                  `${option.candidate.direction}:${option.ensembleGovernance.netExpectedR.toFixed(4)}R`,
+                  `${option.candidate.direction}:${option.ensembleGovernance.netExpectedR.toFixed(
+                    4,
+                  )}R`,
               )
               .join(' ');
             this.logger.log(
-              `Counterfactual ${pairCandidates[0]!.instrument} execution=ABSTAIN reason=${selection.reason} ` +
-                `edges=${edges} requiredMargin=${selection.requiredEdgeMarginR?.toFixed(4) ?? 'n/a'}R`,
+              `Counterfactual ${pairCandidates[0]!.instrument} execution=ABSTAIN reason=${
+                selection.reason
+              } ` +
+                `edges=${edges} requiredMargin=${
+                  selection.requiredEdgeMarginR?.toFixed(4) ?? 'n/a'
+                }R`,
             );
           }
           continue;
@@ -1572,15 +1595,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperExecutionRoute === 'REJECTED_EDGE_CANARY'
             ? { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'BASE' as const }
             : paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
-              ? { upperBound: PAPER_RESEARCH_THROUGHPUT_LOT_CAP, tier: 'RESEARCH' as const }
-              : dynamicPaperLotUpperBound({
-                  confidence: best.confidence,
-                  metaProbability: planBEnsemble.metaProbability,
-                  netExpectedR: ensembleGovernance.netExpectedR,
-                  consensusPassed: planBEnsemble.consensusPassed,
-                  consensusRequired: planBEnsemble.consensusRequired,
-                  volatilityScore: best.volatilityScore,
-                });
+            ? { upperBound: PAPER_RESEARCH_THROUGHPUT_LOT_CAP, tier: 'RESEARCH' as const }
+            : dynamicPaperLotUpperBound({
+                confidence: best.confidence,
+                metaProbability: planBEnsemble.metaProbability,
+                netExpectedR: ensembleGovernance.netExpectedR,
+                consensusPassed: planBEnsemble.consensusPassed,
+                consensusRequired: planBEnsemble.consensusRequired,
+                volatilityScore: best.volatilityScore,
+              });
 
         const outcome = await this.aiSignalService.receiveSignal({
           signalId,
@@ -1607,8 +1630,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperExecutionRoute === 'REJECTED_EDGE_CANARY'
               ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
               : paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
-                ? paperResearchThroughputModelVersion(ACTIVE_ENGINE_CODE)
-                : `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`,
+              ? paperResearchThroughputModelVersion(ACTIVE_ENGINE_CODE)
+              : `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`,
           metadata: {
             signal_source: 'EXTERNAL_PROVIDER',
             external_provider_code: ACTIVE_ENGINE_CODE,
@@ -1791,7 +1814,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           },
         });
         this.logger.log(
-          `Multi-model PAPER candidate ${best.instrument} ${best.direction} confidence=${best.confidence.toFixed(4)} ` +
+          `Multi-model PAPER candidate ${best.instrument} ${
+            best.direction
+          } confidence=${best.confidence.toFixed(4)} ` +
             `lotTier=${dynamicLotSizing.tier} lotCap=${dynamicLotSizing.upperBound.toFixed(2)} ` +
             `outcome=${outcome.outcome} signal=${signalId} cadence=bidirectional-counterfactual`,
         );
@@ -2706,10 +2731,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   ): Promise<PaperPostLossEntryState> {
     if (!this.dataSource) return { available: false, lastClosedTrade: null };
     try {
-      const rows = (await this.dataSource.query(
-        PAPER_POST_LOSS_STATE_QUERY,
-        [userId, connectionId, instrument, direction, ACTIVE_ENGINE_CODE],
-      )) as Array<{
+      const rows = (await this.dataSource.query(PAPER_POST_LOSS_STATE_QUERY, [
+        userId,
+        connectionId,
+        instrument,
+        direction,
+        ACTIVE_ENGINE_CODE,
+      ])) as Array<{
         paper_post_loss_state_available: boolean;
         trade_id: string | null;
         close_reason: string | null;
@@ -2732,7 +2760,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       };
     } catch (error) {
       this.logger.warn(
-        `PAPER post-loss history unavailable ${instrument} ${direction}: ${(error as Error).message}`,
+        `PAPER post-loss history unavailable ${instrument} ${direction}: ${
+          (error as Error).message
+        }`,
       );
       return { available: false, lastClosedTrade: null };
     }
@@ -3002,7 +3032,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
 
     this.logger.log(
-      `Multi-model shadow state restored instruments=${this.lastPublishedOpportunity.size}/6 latest=${this.lastEnsembleDecision.evaluatedAt?.toISOString() ?? 'none'}`,
+      `Multi-model shadow state restored instruments=${
+        this.lastPublishedOpportunity.size
+      }/6 latest=${this.lastEnsembleDecision.evaluatedAt?.toISOString() ?? 'none'}`,
     );
   }
 
@@ -3299,7 +3331,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     } catch (error) {
       this.lastMarketDataAuthority = 'NONE';
       throw new Error(
-        `Twelve Data unavailable (${reason}) and broker-native fallback failed: ${(error as Error).message}`,
+        `Twelve Data unavailable (${reason}) and broker-native fallback failed: ${
+          (error as Error).message
+        }`,
       );
     }
   }
@@ -3332,4 +3366,3 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     return this.config.get<string>('multimodelBrokerExpert.sourceConnectionId', '').trim();
   }
 }
-

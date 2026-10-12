@@ -26,8 +26,15 @@ function createCollector(...args: ConstructorParameters<typeof VpsForexSignalCol
     query: async (sql: string, params: unknown[]) => {
       const rows = original ? await original.query(sql, params) : [];
       if (sql === PAPER_POST_LOSS_STATE_QUERY && Array.isArray(rows) && rows.length === 0) {
-        return [{ paper_post_loss_state_available: true, trade_id: null,
-          close_reason: null, closed_at: null, reconfirmed: false }];
+        return [
+          {
+            paper_post_loss_state_available: true,
+            trade_id: null,
+            close_reason: null,
+            closed_at: null,
+            reconfirmed: false,
+          },
+        ];
       }
       return rows;
     },
@@ -137,14 +144,14 @@ function payload() {
       instrument === 'USDJPY'
         ? 157
         : instrument === 'GBPUSD'
-          ? 1.34
-          : instrument === 'USDCAD'
-            ? 1.37
-            : instrument === 'USDCHF'
-              ? 0.8
-              : instrument === 'AUDUSD'
-                ? 0.66
-                : 1.1;
+        ? 1.34
+        : instrument === 'USDCAD'
+        ? 1.37
+        : instrument === 'USDCHF'
+        ? 0.8
+        : instrument === 'AUDUSD'
+        ? 0.66
+        : 1.1;
     const digits = instrument === 'USDJPY' ? 3 : 5;
     const rows = isEur ? trendCandles(base, digits) : flatCandles(base, digits);
     data[provider] = {
@@ -169,14 +176,14 @@ function allTrendPayload() {
       instrument === 'USDJPY'
         ? 157
         : instrument === 'GBPUSD'
-          ? 1.34
-          : instrument === 'USDCAD'
-            ? 1.37
-            : instrument === 'USDCHF'
-              ? 0.8
-              : instrument === 'AUDUSD'
-                ? 0.66
-                : 1.1;
+        ? 1.34
+        : instrument === 'USDCAD'
+        ? 1.37
+        : instrument === 'USDCHF'
+        ? 0.8
+        : instrument === 'AUDUSD'
+        ? 0.66
+        : 1.1;
     const digits = instrument === 'USDJPY' ? 3 : 5;
     const rows =
       instrument === 'USDJPY'
@@ -1586,14 +1593,14 @@ describe('VpsForexSignalCollectorService', () => {
         instrument === 'USDJPY'
           ? 157
           : instrument === 'GBPUSD'
-            ? 1.34
-            : instrument === 'USDCAD'
-              ? 1.37
-              : instrument === 'USDCHF'
-                ? 0.8
-                : instrument === 'AUDUSD'
-                  ? 0.66
-                  : 1.1;
+          ? 1.34
+          : instrument === 'USDCAD'
+          ? 1.37
+          : instrument === 'USDCHF'
+          ? 0.8
+          : instrument === 'AUDUSD'
+          ? 0.66
+          : 1.1;
       live.updateClosedCandles(
         instrument,
         trendCandles(base, instrument === 'USDJPY' ? 3 : 5),
@@ -1687,14 +1694,14 @@ describe('VpsForexSignalCollectorService', () => {
             instrument === 'USDJPY'
               ? 157
               : instrument === 'GBPUSD'
-                ? 1.34
-                : instrument === 'USDCAD'
-                  ? 1.37
-                  : instrument === 'USDCHF'
-                    ? 0.8
-                    : instrument === 'AUDUSD'
-                      ? 0.66
-                      : 1.1;
+              ? 1.34
+              : instrument === 'USDCAD'
+              ? 1.37
+              : instrument === 'USDCHF'
+              ? 0.8
+              : instrument === 'AUDUSD'
+              ? 0.66
+              : 1.1;
           const digits = instrument === 'USDJPY' ? 3 : 5;
           return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
         }),
@@ -2084,14 +2091,14 @@ describe('transient primary-feed failover', () => {
   );
 });
 
-
 describe('PAPER post-loss history availability', () => {
   it.each([undefined, { query: jest.fn().mockResolvedValue([]) }])(
     'holds when the history store is missing or fails to return its anchored row',
     async (dataSource) => {
       const context = { dataSource, logger: { warn: jest.fn() } };
-      const state = await VpsForexSignalCollectorService.prototype['loadPaperPostLossEntryState']
-        .call(context, 'user', 'connection', 'EURUSD', 'BUY');
+      const state = await VpsForexSignalCollectorService.prototype[
+        'loadPaperPostLossEntryState'
+      ].call(context, 'user', 'connection', 'EURUSD', 'BUY');
       expect(state).toEqual({ available: false, lastClosedTrade: null });
     },
   );
