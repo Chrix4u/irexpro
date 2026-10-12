@@ -1,0 +1,49 @@
+name: Temporary PR353 formatting fix
+
+on:
+  push:
+    branches:
+      - paper-payoff-audit-20261012
+
+permissions:
+  contents: write
+
+jobs:
+  fix-single-prettier-error:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: paper-payoff-audit-20261012
+          fetch-depth: 0
+
+      - name: Remove the extra blank line
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('apps/api/src/modules/ai/vps-forex-signal-collector.service.spec.ts')
+          text = path.read_text()
+          before = "  return new VpsForexSignalCollectorService(...args);\n}\n\n\ndescribe('dynamic PAPER lot ceiling'"
+          after = "  return new VpsForexSignalCollectorService(...args);\n}\n\ndescribe('dynamic PAPER lot ceiling'"
+          if before not in text:
+              raise SystemExit('expected formatting defect not found; refusing broad edit')
+          path.write_text(text.replace(before, after, 1))
+          PY
+
+      - name: Commit exact formatting fix
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/api/src/modules/ai/vps-forex-signal-collector.service.spec.ts
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'No formatting change required.'
+            exit 0
+          fi
+          git commit -m 'style: remove collector spec extra blank line'
+          git push origin HEAD:paper-payoff-audit-20261012
