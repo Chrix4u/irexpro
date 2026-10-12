@@ -35,7 +35,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Collect sanitized trade-pipeline evidence
+      - name: Aggregate recent ensemble economics
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -43,53 +43,62 @@ jobs:
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -se' <<'REMOTE'
           set -Eeuo pipefail
-          app='/home/lightworld/webapps/irexpro-staging'
-          cd "$app"
-          echo "=== runtime ==="
-          echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          echo "head=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-          echo "branch=$(git branch --show-current 2>/dev/null || true)"
-
-          echo "=== pm2 ==="
-          pm2 list --no-color 2>/dev/null | grep -Ei 'irex|api|ai|online|errored|stopped' | head -40 || true
-
-          echo "=== health ==="
-          for port in 3000 3001 4000 8080; do
-            code=$(curl -sS -o /tmp/irex-health-body -w '%{http_code}' --max-time 3 "http://127.0.0.1:${port}/health/live" || true)
-            if [ "$code" != "000" ]; then
-              echo "port=${port} health=${code}"
-            fi
-          done
-
-          raw=$(mktemp)
-          pm2 logs --lines 5000 --nostream > "$raw" 2>&1 || true
-          echo "=== pipeline marker counts (recent pm2 window) ==="
-          while IFS='|' read -r label regex; do
-            [ -n "$label" ] || continue
-            count=$(grep -Eic "$regex" "$raw" || true)
-            printf '%s=%s\n' "$label" "$count"
-          done <<'PATTERNS'
-          market_ready|market.*(primed|ready)|cache.*(primed|ready)|quotes?.*(ready|fresh)
-          market_blocked|market.*(unavailable|stale|missing)|quotes?.*(unavailable|stale|missing)|no new market
-          provider_quota|quota|429|rate.?limit
-          signal_activity|signal|candidate
-          confidence_gate|confidence|threshold
-          economics_gate|execution.?cost|spread|payoff|expectancy|cost.?gate
-          risk_reject|risk.*(reject|veto|deny)|rejected.*risk|veto
-          order_submit|order.*(submit|place|create)|submission
-          execution_fill|fill|executed|position.*opened|trade.*opened
-          generic_error|error|exception|failed
-          PATTERNS
-
-          echo "=== latest relevant sanitized lines ==="
-          grep -Ei 'market|quote|provider|quota|429|signal|candidate|confidence|threshold|execution.?cost|spread|payoff|expectancy|risk|reject|veto|order|submit|fill|executed|position|trade|error|exception|failed' "$raw" \
-            | tail -n 220 \
-            | sed -E \
-                -e 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<uuid>/g' \
-                -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g' \
-                -e 's/\b[0-9]{7,}\b/<long-number>/g' \
-                -e 's/(token|secret|password|authorization|api[_-]?key)[=: ]+[^ ]+/\1=<redacted>/Ig' || true
-          rm -f "$raw" /tmp/irex-health-body
+          pm2 jlist > /tmp/irex-pm2.json
+          api_id=$(node -e "const x=require('/tmp/irex-pm2.json');const p=x.find(v=>v.name==='irexpro-api-staging'); if(!p)process.exit(2); process.stdout.write(String(p.pm_id));")
+          pm2 env "$api_id" > /tmp/irex-api-env
+          dburl=$(sed -n 's/^DATABASE_URL: //p' /tmp/irex-api-env | head -1)
+          if [ -z "$dburl" ]; then
+            echo 'decision_ledger=DATABASE_URL_UNAVAILABLE'
+            rm -f /tmp/irex-pm2.json /tmp/irex-api-env
+            exit 0
+          fi
+          echo '=== recent ensemble economics (120m, no identifiers) ==='
+          psql "$dburl" -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
+            WITH d AS (
+              SELECT instrument, direction,
+                NULLIF(components->'governance'->>'grossExpectedR','')::double precision AS gross_r,
+                NULLIF(components->'governance'->>'estimatedExecutionCostR','')::double precision AS cost_r,
+                NULLIF(components->'governance'->>'netExpectedR','')::double precision AS net_r,
+                components->'governance'->>'driftState' AS drift,
+                components->'governance'->>'executionCostSource' AS cost_source,
+                COALESCE(NULLIF(components->'governance'->>'executionSpreadEvidenceValid','')::boolean,false) AS spread_valid,
+                COALESCE(NULLIF(components->>'paperAdmitted','')::boolean,false) AS paper_admitted
+              FROM trading.ensemble_shadow_decisions
+              WHERE engine_code='irexpro-multimodel-ensemble-v1'
+                AND evaluated_at >= now() - interval '120 minutes'
+            )
+            SELECT instrument, direction, count(*) AS n,
+              round(avg(gross_r)::numeric,4) AS avg_gross_r,
+              round(avg(cost_r)::numeric,4) AS avg_cost_r,
+              round(avg(net_r)::numeric,4) AS avg_net_r,
+              round(max(net_r)::numeric,4) AS best_net_r,
+              count(*) FILTER (WHERE net_r >= 0.08) AS net_pass,
+              count(*) FILTER (WHERE drift='NORMAL') AS drift_normal,
+              count(*) FILTER (WHERE spread_valid) AS spread_valid,
+              count(*) FILTER (WHERE paper_admitted) AS paper_admitted
+            FROM d
+            GROUP BY instrument,direction
+            ORDER BY instrument,direction;"
+          echo '=== PAPER blocker counts (120m) ==='
+          psql "$dburl" -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
+            SELECT blocker, count(*)
+            FROM trading.ensemble_shadow_decisions d
+            CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(d.components->'governance'->'paperExecutionBlockers','[]'::jsonb)) blocker
+            WHERE d.engine_code='irexpro-multimodel-ensemble-v1'
+              AND d.evaluated_at >= now() - interval '120 minutes'
+            GROUP BY blocker ORDER BY count(*) DESC, blocker;"
+          echo '=== decision totals (120m) ==='
+          psql "$dburl" -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
+            SELECT count(*) AS decisions,
+              count(*) FILTER (WHERE COALESCE(NULLIF(components->>'paperAdmitted','')::boolean,false)) AS paper_admitted,
+              count(*) FILTER (WHERE COALESCE(NULLIF(components->'governance'->>'paperExecutionEligible','')::boolean,false)) AS governance_eligible,
+              count(*) FILTER (WHERE (components->'governance'->>'netExpectedR')::double precision >= 0.08) AS net_pass,
+              count(*) FILTER (WHERE components->'governance'->>'driftState'='NORMAL') AS drift_normal,
+              count(*) FILTER (WHERE COALESCE(NULLIF(components->'governance'->>'executionSpreadEvidenceValid','')::boolean,false)) AS spread_valid
+            FROM trading.ensemble_shadow_decisions
+            WHERE engine_code='irexpro-multimodel-ensemble-v1'
+              AND evaluated_at >= now() - interval '120 minutes';"
+          rm -f /tmp/irex-pm2.json /tmp/irex-api-env
           REMOTE
 
       - name: Remove ephemeral SSH material
