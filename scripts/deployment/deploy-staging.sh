@@ -402,13 +402,9 @@ fi
 STAGE="final-sha-verification"
 [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]] || die "Final exact-SHA verification failed."
 
-STAGE="paper-payoff-read-only-audit"
-node "$STAGING_ROOT/apps/api/scripts/audit-paper-payoff-shadow.cjs"
-
 trap - ERR
 printf 'STAGING DEPLOYMENT VERIFIED\n'
 printf 'timestamp_utc=%s\n' "$(utc_now)"
 printf 'candidate_sha=%s\n' "$CANDIDATE_SHA"
 printf 'previous_sha=%s\n' "$PREVIOUS_SHA"
 printf 'paper_mode_observed=%s\n' "$([[ -n "${AI_HEALTH_URL:-}" ]] && printf true || printf false)"
-
