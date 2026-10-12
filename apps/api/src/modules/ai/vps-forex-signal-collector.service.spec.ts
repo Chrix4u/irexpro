@@ -790,6 +790,96 @@ describe('VpsForexSignalCollectorService', () => {
     },
   );
 
+  it('blocks otherwise admitted PAPER entries when the latest broker close invalidated the current bar', async () => {
+    const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
+    const query = jest.fn().mockImplementation(async (sql: string) =>
+      sql.includes('paper_post_loss_state_available')
+        ? [
+            {
+              paper_post_loss_state_available: true,
+              trade_id: 'loss-1',
+              close_reason: 'STOP_LOSS_HIT',
+              closed_at: new Date(Date.now() - 60_000),
+              reconfirmed: false,
+            },
+          ]
+        : [],
+    );
+    const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
+    const modelSpy = jest
+      .spyOn(PlanBEnsembleModule, 'scorePlanBMultimodelShadow')
+      .mockImplementation((input, positions) => ({
+        ...actualPlanB(input, positions),
+        paperAdmitted: input.instrument === 'EURUSD' && input.direction === 'BUY',
+        admitted: input.instrument === 'EURUSD' && input.direction === 'BUY',
+        expectedR: 0.8,
+        strategyRoute: 'TREND_CONTINUATION',
+      }));
+    const actualGovernance = EnsembleGovernanceModule.evaluateEnsembleGovernance;
+    const governanceSpy = jest
+      .spyOn(EnsembleGovernanceModule, 'evaluateEnsembleGovernance')
+      .mockImplementation((input) => ({
+        ...actualGovernance(input),
+        paperExecutionEligible: true,
+        paperExecutionBlockers: [],
+        netExpectedR: 0.7,
+        eventRisk: 'CLEAR',
+        driftState: 'NORMAL',
+        executionSpreadEvidenceValid: true,
+      }));
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'fixture-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      {
+        getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
+        getOpenPositionsForConnection: jest.fn().mockResolvedValue({ positions: [] }),
+      } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+    try {
+      await collector.collectOnce(
+        jest.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          json: async () => allTrendPayload(),
+        }) as unknown as typeof fetch,
+      );
+      expect(receiveSignal).not.toHaveBeenCalled();
+      const insert = query.mock.calls.find(
+        ([sql, params]) =>
+          String(sql).includes('INSERT INTO trading.ensemble_shadow_decisions') &&
+          params[6] === 'EURUSD' &&
+          params[7] === 'BUY',
+      );
+      expect(insert).toBeDefined();
+      const components = JSON.parse(String(insert![1][23]));
+      expect(components.paperPostLossEntryGuard).toMatchObject({
+        eligible: false,
+        reason: 'WAITING_FOR_POST_LOSS_BAR',
+      });
+      expect(components.governance.paperExecutionBlockers).toContain(
+        'PAPER_POST_LOSS_WAITING_FOR_POST_LOSS_BAR',
+      );
+    } finally {
+      modelSpy.mockRestore();
+      governanceSpy.mockRestore();
+    }
+  });
+
   it('evaluates every qualifying pair in the same scan instead of only the top-ranked pair', async () => {
     const live = new LivePaperMarketDataService();
     const shadowQuery = jest.fn().mockResolvedValue([]);
