@@ -226,7 +226,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(isCollectionSlot('2026-10-05T10:00:00.000Z')).toBe(true);
     expect(isCollectionSlot('2026-10-05T10:05:00.000Z')).toBe(true);
     expect(isCollectionSlot('2026-10-05T10:10:00.000Z')).toBe(true);
-    expect(isCollectionSlot('2026-10-05T10:03:00.000Z')).toBe(false);
+    expect(isCollectionSlot('2026-10-05T10:03:00.000Z')).toBe(true);
 
     expect(isCollectionSlot('2026-10-10T12:00:00.000Z')).toBe(false);
     expect(isCollectionSlot('2026-10-11T20:55:00.000Z')).toBe(false);
@@ -1582,4 +1582,244 @@ describe('VpsForexSignalCollectorService', () => {
       /production Twelve Data key/,
     );
   });
+});
+
+describe('scheduled scan recovery', () => {
+  beforeEach(() => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-12T10:03:00.000Z'));
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+  function scanner() {
+    return new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+  }
+  function goodFeed() {
+    return new Response(JSON.stringify(allTrendPayload()), { status: 200 });
+  }
+  it('evaluates the current closed-bar slot after a restart between boundaries, only once per slot', async () => {
+    jest.spyOn(global, 'fetch').mockImplementation(async () => goodFeed());
+    const collector = scanner();
+    await collector.maybeCollect();
+    expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBe('2026-10-12T10:03:00.000Z');
+    jest.setSystemTime(new Date('2026-10-12T10:04:15.000Z'));
+    await collector.maybeCollect();
+    expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBe('2026-10-12T10:03:00.000Z');
+    jest.setSystemTime(new Date('2026-10-12T10:05:00.000Z'));
+    await collector.maybeCollect();
+    expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBe('2026-10-12T10:05:00.000Z');
+  });
+  it('recovers a failed slot after one minute without retrying on every 15-second timer tick', async () => {
+    jest.setSystemTime(new Date('2026-10-12T10:00:00.000Z'));
+    jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: 'feed unavailable' }), { status: 503 }),
+      )
+      .mockImplementation(async () => goodFeed());
+    const collector = scanner();
+    await collector.maybeCollect();
+    expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBeNull();
+    jest.setSystemTime(new Date('2026-10-12T10:00:15.000Z'));
+    await collector.maybeCollect();
+    expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBeNull();
+    jest.setSystemTime(new Date('2026-10-12T10:01:00.000Z'));
+    await collector.maybeCollect();
+    expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBe('2026-10-12T10:01:00.000Z');
+  });
+  it('cancels the pending initial scan when the scanner is destroyed', async () => {
+    jest.spyOn(global, 'fetch').mockImplementation(async () => goodFeed());
+    const collector = scanner();
+    await collector.onModuleInit();
+    const primedAt = (await collector.getStatus('user-1')).lastEvaluatedAt;
+    collector.onModuleDestroy();
+    await jest.advanceTimersByTimeAsync(2_000);
+    expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBe(primedAt);
+  });
+  it('keeps recovery paused during the weekend', async () => {
+    jest.setSystemTime(new Date('2026-10-10T10:03:00.000Z'));
+    jest.spyOn(global, 'fetch').mockImplementation(async () => goodFeed());
+    const collector = scanner();
+    await collector.maybeCollect();
+    expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBeNull();
+    expect((await collector.getStatus('user-1')).marketDataAuthority).toBe('NONE');
+  });
+});
+
+describe('transient primary-feed failover', () => {
+  beforeEach(() => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-12T10:00:00.000Z'));
+  });
+  afterEach(() => jest.useRealTimers());
+  function scanner(brokerOverrides: Partial<BrokerService> = {}) {
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockImplementation(async (_u: string, _c: string, instrument: string) =>
+          trendCandles(instrument === 'USDJPY' ? 157 : 1.1, instrument === 'USDJPY' ? 3 : 5),
+        ),
+      ...brokerOverrides,
+    } as unknown as BrokerService;
+    return new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'metaapi-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+  }
+  async function assertFallback(fetchImpl: typeof fetch) {
+    const collector = scanner();
+    const series = await (collector as any).fetchSixPairSeries('real-key-123456', fetchImpl);
+    expect([...series.keys()].sort()).toEqual(PAIRS.map(([p]) => p).sort());
+    for (const candles of series.values()) {
+      expect(candles.length).toBeGreaterThanOrEqual(55);
+      expect(
+        candles.every((c: { timestamp: Date }) => c.timestamp.getTime() + 300_000 <= Date.now()),
+      ).toBe(true);
+    }
+    const status = await collector.getStatus('user-1');
+    expect(status.marketDataAuthority).toBe('METAAPI_BROKER_FALLBACK');
+    expect(status.providerCooldownReason).toBeNull();
+    expect(status.executionAuthority).toBe('PAPER_ONLY');
+  }
+  it.each([429, 502, 503])('uses validated broker candles on transient HTTP %s', async (status) => {
+    await assertFallback(
+      async () =>
+        new Response(JSON.stringify({ message: 'temporary provider limit or outage' }), { status }),
+    );
+  });
+  it('uses validated broker candles when the provider request times out', async () => {
+    await assertFallback((async () => {
+      throw new Error('request timeout');
+    }) as typeof fetch);
+  });
+  it('uses validated broker candles when the provider returns malformed JSON', async () => {
+    await assertFallback(async () => new Response('{invalid', { status: 200 }));
+  });
+  it('uses one coherent broker batch when the primary batch omits an instrument', async () => {
+    const batch = allTrendPayload();
+    delete batch['USD/JPY'];
+    await assertFallback(async () => new Response(JSON.stringify(batch), { status: 200 }));
+  });
+  it('uses validated broker candles when a primary instrument is stale', async () => {
+    const batch = allTrendPayload();
+    batch['EUR/USD'].values = batch['EUR/USD'].values.map((c: { datetime: string }) => ({
+      ...c,
+      datetime: new Date(new Date(c.datetime.replace(' ', 'T') + 'Z').getTime() - 3_600_000)
+        .toISOString()
+        .slice(0, 19)
+        .replace('T', ' '),
+    }));
+    await assertFallback(async () => new Response(JSON.stringify(batch), { status: 200 }));
+  });
+  it('keeps authentication failures explicit instead of hiding configuration errors with fallback', async () => {
+    const collector = scanner();
+    await expect(
+      (collector as any).fetchSixPairSeries(
+        'real-key-123456',
+        async () => new Response(JSON.stringify({ message: 'invalid API key' }), { status: 401 }),
+      ),
+    ).rejects.toThrow('Twelve Data HTTP 401');
+    expect((await collector.getStatus('user-1')).marketDataAuthority).toBe('NONE');
+  });
+  it('fails over on a JSON null payload rather than throwing a parser-shape error', async () => {
+    await assertFallback(async () => new Response('null', { status: 200 }));
+  });
+  it('does not hide an authentication failure when its response body is not JSON', async () => {
+    const collector = scanner();
+    await expect(
+      (collector as any).fetchSixPairSeries(
+        'real-key-123456',
+        async () => new Response('unauthorized', { status: 401 }),
+      ),
+    ).rejects.toThrow('Twelve Data HTTP 401');
+    expect((await collector.getStatus('user-1')).marketDataAuthority).toBe('NONE');
+  });
+  it('limits primary requests to one per minute even when both providers fail', async () => {
+    const collector = scanner({
+      getOhlcvForConnection: jest.fn().mockRejectedValue(new Error('broker unavailable')),
+    });
+    let primaryRequests = 0;
+    const unavailableFeed = async () => {
+      primaryRequests += 1;
+      return new Response(JSON.stringify({ message: 'temporarily unavailable' }), { status: 503 });
+    };
+    await expect(
+      (collector as any).fetchSixPairSeries('real-key-123456', unavailableFeed),
+    ).rejects.toThrow('broker-native fallback failed');
+    await expect(
+      (collector as any).fetchSixPairSeries('real-key-123456', unavailableFeed),
+    ).rejects.toThrow('broker-native fallback failed');
+    expect(primaryRequests).toBe(1);
+    expect((await collector.getStatus('user-1')).marketDataAuthority).toBe('NONE');
+    jest.setSystemTime(new Date('2026-10-12T10:01:00.000Z'));
+    await expect(
+      (collector as any).fetchSixPairSeries('real-key-123456', unavailableFeed),
+    ).rejects.toThrow('broker-native fallback failed');
+    expect(primaryRequests).toBe(2);
+  });
+  it('treats current-minute credit wording as a minute limit, not a daily cooldown', async () => {
+    await assertFallback(
+      async () =>
+        new Response(
+          JSON.stringify({
+            message:
+              'You have run out of API credits for the current minute. 12 API credits were used, with the current limit being 8.',
+          }),
+          { status: 429 },
+        ),
+    );
+  });
+  it('tries the primary provider again in the next minute after a minute-limit fallback', async () => {
+    const collector = scanner();
+    await (collector as any).fetchSixPairSeries(
+      'real-key-123456',
+      async () =>
+        new Response(
+          JSON.stringify({
+            message:
+              'You have run out of API credits for the current minute, with the current limit being 8.',
+          }),
+          { status: 429 },
+        ),
+    );
+    jest.setSystemTime(new Date('2026-10-12T10:01:00.000Z'));
+    await (collector as any).fetchSixPairSeries(
+      'real-key-123456',
+      async () => new Response(JSON.stringify(allTrendPayload()), { status: 200 }),
+    );
+    expect((await collector.getStatus('user-1')).marketDataAuthority).toBe('TWELVE_DATA');
+    expect((await collector.getStatus('user-1')).providerCooldownUntil).toBeNull();
+  });
+  it.each([null, { open: '1.1' }])(
+    'uses a coherent broker batch when a primary candle row is malformed (%s)',
+    async (badRow) => {
+      const batch = allTrendPayload();
+      batch['EUR/USD'].values[0] = badRow;
+      await assertFallback(async () => new Response(JSON.stringify(batch), { status: 200 }));
+    },
+  );
 });
