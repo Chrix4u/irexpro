@@ -35,7 +35,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Evaluate high-conviction overlay evidence
+      - name: Evaluate specialist shadow evidence
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -51,70 +51,50 @@ jobs:
           dbssl="$(getv DB_SSL)"; if printf '%s' "$dbssl" | grep -Eqi '^(1|true|require)$'; then export PGSSLMODE=require; else export PGSSLMODE=prefer; fi
           policy='planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1'
 
-          echo '=== overlay states current policy ==='
-          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            SELECT COALESCE(components->'highConvictionOverlay'->>'state','MISSING') state,count(*) decisions,
-              count(*) FILTER (WHERE components ? 'outcome') resolved_rows,
-              count(*) FILTER (WHERE COALESCE((components->'governance'->>'paperExecutionEligible')::boolean,false)) base_governance_eligible
-            FROM trading.ensemble_shadow_decisions
-            WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}'
-            GROUP BY state ORDER BY decisions DESC;"
-
-          echo '=== overlay states recent 120m ==='
-          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            SELECT COALESCE(components->'highConvictionOverlay'->>'state','MISSING') state,count(*),
-              count(*) FILTER (WHERE NOT COALESCE((components->'governance'->>'paperExecutionEligible')::boolean,false)) base_rejected,
-              count(*) FILTER (WHERE (components->'governance'->>'netExpectedR')::double precision>=0.08) net_pass,
-              count(*) FILTER (WHERE components->'governance'->>'driftState'='NORMAL') drift_normal
-            FROM trading.ensemble_shadow_decisions
-            WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}' AND evaluated_at>=now()-interval '120 minutes'
-            GROUP BY state ORDER BY count(*) DESC;"
-
-          echo '=== independent resolved episodes by overlay state ==='
-          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            WITH base AS (
-              SELECT instrument,direction,COALESCE(components->'highConvictionOverlay'->>'state','MISSING') state,evaluated_at,
-                (components->'outcome'->>'resolvedAt')::timestamptz resolved_at,
-                (components->'outcome'->>'netR')::double precision realized_r,
-                COALESCE((components->'governance'->>'paperExecutionEligible')::boolean,false) base_eligible,
-                (components->'governance'->>'netExpectedR')::double precision predicted_r,
-                components->'governance'->>'driftState' drift
+          for specialist in extensionExhaustionShadow trendPersistenceShadow; do
+            echo "=== ${specialist} states current policy ==="
+            psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
+              SELECT COALESCE(components->'${specialist}'->>'reason','MISSING') reason,
+                count(*) decisions,
+                count(*) FILTER (WHERE COALESCE((components->'${specialist}'->>'candidate')::boolean,false)) candidates,
+                count(*) FILTER (WHERE components ? 'outcome') resolved_rows
               FROM trading.ensemble_shadow_decisions
               WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}'
-                AND components ? 'outcome' AND components->'outcome'->>'status'<>'AMBIGUOUS' AND components->'outcome'->>'netR' IS NOT NULL
-            ), marked AS (
-              SELECT *,max(resolved_at) OVER (PARTITION BY state,instrument,direction ORDER BY evaluated_at ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prev_end FROM base
-            ), episodes AS (SELECT * FROM marked WHERE prev_end IS NULL OR evaluated_at>prev_end)
-            SELECT state,count(*) episodes,count(*) FILTER (WHERE realized_r>0) wins,count(*) FILTER (WHERE realized_r<0) losses,
-              round(sum(realized_r)::numeric,4) total_r,round(avg(realized_r)::numeric,4) avg_r,
-              round((sum(realized_r) FILTER (WHERE realized_r>0)/NULLIF(abs(sum(realized_r) FILTER (WHERE realized_r<0)),0))::numeric,4) pf,
-              count(*) FILTER (WHERE NOT base_eligible) base_rejected,
-              count(*) FILTER (WHERE predicted_r>=0.08) net_pass,
-              count(*) FILTER (WHERE drift='NORMAL') drift_normal
-            FROM episodes GROUP BY state ORDER BY state;"
+              GROUP BY reason ORDER BY decisions DESC;"
 
-          echo '=== CONFIRM episodes where base governance rejected ==='
-          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            WITH base AS (
-              SELECT instrument,direction,evaluated_at,(components->'outcome'->>'resolvedAt')::timestamptz resolved_at,
-                (components->'outcome'->>'netR')::double precision realized_r,
-                (components->'governance'->>'netExpectedR')::double precision predicted_r,
-                components->'governance'->>'driftState' drift,
-                COALESCE((components->'governance'->>'executionSpreadEvidenceValid')::boolean,false) spread_ok,
-                components->'governance'->>'eventRisk' event_risk
+            echo "=== ${specialist} candidate independent outcomes ==="
+            psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
+              WITH base AS (
+                SELECT instrument,direction,evaluated_at,
+                  (components->'outcome'->>'resolvedAt')::timestamptz resolved_at,
+                  (components->'outcome'->>'netR')::double precision realized_r,
+                  (components->'governance'->>'netExpectedR')::double precision predicted_r,
+                  components->'governance'->>'driftState' drift,
+                  COALESCE((components->'governance'->>'executionSpreadEvidenceValid')::boolean,false) spread_ok,
+                  components->'governance'->>'eventRisk' event_risk
+                FROM trading.ensemble_shadow_decisions
+                WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}'
+                  AND COALESCE((components->'${specialist}'->>'candidate')::boolean,false)
+                  AND components ? 'outcome' AND components->'outcome'->>'status'<>'AMBIGUOUS' AND components->'outcome'->>'netR' IS NOT NULL
+              ), marked AS (
+                SELECT *,max(resolved_at) OVER (PARTITION BY instrument,direction ORDER BY evaluated_at ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prev_end FROM base
+              ), episodes AS (SELECT * FROM marked WHERE prev_end IS NULL OR evaluated_at>prev_end)
+              SELECT count(*) episodes,count(*) FILTER (WHERE realized_r>0) wins,count(*) FILTER (WHERE realized_r<0) losses,
+                round(sum(realized_r)::numeric,4) total_r,round(avg(realized_r)::numeric,4) avg_r,
+                round((sum(realized_r) FILTER (WHERE realized_r>0)/NULLIF(abs(sum(realized_r) FILTER (WHERE realized_r<0)),0))::numeric,4) pf,
+                round(avg(predicted_r)::numeric,4) avg_predicted_r,
+                count(*) FILTER (WHERE drift='NORMAL') normal_drift,
+                count(*) FILTER (WHERE spread_ok AND event_risk='CLEAR') clean_market
+              FROM episodes;"
+
+            echo "=== ${specialist} recent 120m candidate count ==="
+            psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
+              SELECT count(*) FILTER (WHERE COALESCE((components->'${specialist}'->>'candidate')::boolean,false)),
+                count(*) FILTER (WHERE COALESCE((components->'${specialist}'->>'candidate')::boolean,false) AND components->'governance'->>'eventRisk'='CLEAR')
               FROM trading.ensemble_shadow_decisions
-              WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}'
-                AND components ? 'outcome' AND components->'outcome'->>'status'<>'AMBIGUOUS' AND components->'outcome'->>'netR' IS NOT NULL
-                AND components->'highConvictionOverlay'->>'state'='CONFIRM'
-                AND NOT COALESCE((components->'governance'->>'paperExecutionEligible')::boolean,false)
-            ), marked AS (
-              SELECT *,max(resolved_at) OVER (PARTITION BY instrument,direction ORDER BY evaluated_at ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prev_end FROM base
-            ), episodes AS (SELECT * FROM marked WHERE prev_end IS NULL OR evaluated_at>prev_end)
-            SELECT count(*) episodes,count(*) FILTER (WHERE realized_r>0) wins,count(*) FILTER (WHERE realized_r<0) losses,
-              round(sum(realized_r)::numeric,4),round(avg(realized_r)::numeric,4),
-              round((sum(realized_r) FILTER (WHERE realized_r>0)/NULLIF(abs(sum(realized_r) FILTER (WHERE realized_r<0)),0))::numeric,4),
-              count(*) FILTER (WHERE predicted_r>=0.08),count(*) FILTER (WHERE drift='NORMAL'),count(*) FILTER (WHERE spread_ok AND event_risk='CLEAR')
-            FROM episodes;"
+              WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}' AND evaluated_at>=now()-interval '120 minutes';"
+          done
+
           unset PGPASSWORD
           rm -f /tmp/irex-pm2.json /tmp/irex-api-env
           REMOTE
