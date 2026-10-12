@@ -223,6 +223,7 @@ export interface Candidate {
   emaSeparation: number;
   mtfStrength: number;
   rsi14: number;
+  /** Direction-aligned price change / ATR: positive supports this candidate. */
   shortHorizonMomentumAtr: number;
 }
 
@@ -1042,6 +1043,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           const eventId = `${ACTIVE_ENGINE_CODE}|${best.instrument}|${best.barTime.toISOString()}|${best.direction}`;
           const signalId = uuidv5(eventId, SIGNAL_NAMESPACE);
           const digits = this.livePaperMarket.spec(best.instrument).digits;
+          // Candidates store direction-aligned momentum for ranking/telemetry.
+          // Model and governance inputs expect the raw signed price change and
+          // align it themselves. Undo candidate alignment once at this boundary.
+          const rawMarketMomentumAtr =
+            (best.direction === 'BUY' ? 1 : -1) * best.shortHorizonMomentumAtr;
           const v8Shadow = scoreV8ShadowMeta({
             instrument: best.instrument,
             direction: best.direction,
@@ -1051,7 +1057,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             emaSeparation: best.emaSeparation,
             mtfStrength: best.mtfStrength,
             rsi14: best.rsi14,
-            shortHorizonMomentumAtr: best.shortHorizonMomentumAtr,
+            shortHorizonMomentumAtr: rawMarketMomentumAtr,
             // Historical v7 events define scan_time as the close of the selected
             // M5 bar. Keep the prospective shadow feature clock identical.
             scanTime: new Date(best.barTime.getTime() + BAR_MS),
@@ -1065,7 +1071,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             emaSeparation: best.emaSeparation,
             mtfStrength: best.mtfStrength,
             rsi14: best.rsi14,
-            shortHorizonMomentumAtr: best.shortHorizonMomentumAtr,
+            shortHorizonMomentumAtr: rawMarketMomentumAtr,
             scanTime: new Date(best.barTime.getTime() + BAR_MS),
           });
           const portfolioPositions: PlanBPortfolioPosition[] = [];
@@ -1100,7 +1106,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               emaSeparation: best.emaSeparation,
               mtfStrength: best.mtfStrength,
               rsi14: best.rsi14,
-              shortHorizonMomentumAtr: best.shortHorizonMomentumAtr,
+              shortHorizonMomentumAtr: rawMarketMomentumAtr,
               scanTime: new Date(best.barTime.getTime() + BAR_MS),
             },
             portfolioPositions,
@@ -1148,7 +1154,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             emaSeparation: best.emaSeparation,
             mtfStrength: best.mtfStrength,
             rsi14: best.rsi14,
-            shortHorizonMomentumAtr: best.shortHorizonMomentumAtr,
+            shortHorizonMomentumAtr: rawMarketMomentumAtr,
             eventRisk: macroEventAssessment.state,
             sleeveEvidence,
             evaluatedAt,

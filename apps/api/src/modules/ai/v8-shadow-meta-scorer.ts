@@ -15,6 +15,7 @@ export interface V8ShadowMetaInput {
   emaSeparation: number;
   mtfStrength: number;
   rsi14: number;
+  /** Raw signed price change / ATR; SELL direction alignment happens inside the model. */
   shortHorizonMomentumAtr?: number;
   scanTime: Date;
 }

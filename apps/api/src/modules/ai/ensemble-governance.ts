@@ -44,6 +44,7 @@ export interface EnsembleGovernanceInput {
   emaSeparation: number;
   mtfStrength: number;
   rsi14: number;
+  /** Raw signed price change / ATR; SELL direction alignment happens inside the model. */
   shortHorizonMomentumAtr?: number;
   eventRisk?: EnsembleEventRiskState;
   sleeveEvidence?: EnsembleSleeveEvidence | null;

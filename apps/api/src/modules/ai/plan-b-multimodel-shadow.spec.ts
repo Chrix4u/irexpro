@@ -14,7 +14,7 @@ describe('Plan B multimodel prospective shadow', () => {
   });
 
   it('keeps the persisted active policy version within the decision-store varchar(160) contract', () => {
-    expect(PLAN_B_ACTIVE_MODEL_POLICY_VERSION).toBe('planb-v4-bi2-et2-nm2-hp3-dmw1-ts1-trr1-psrr1');
+    expect(PLAN_B_ACTIVE_MODEL_POLICY_VERSION).toBe('planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1');
     expect(PLAN_B_ACTIVE_MODEL_POLICY_VERSION.length).toBeLessThanOrEqual(160);
   });
 
