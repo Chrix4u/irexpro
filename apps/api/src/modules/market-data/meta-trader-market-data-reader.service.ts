@@ -114,10 +114,7 @@ export class MetaTraderMarketDataReaderService {
     }));
   }
 
-  private async getCurrentPriceViaRpc(
-    accountId: string,
-    instrument: string,
-  ): Promise<BrokerPrice> {
+  private async getCurrentPriceViaRpc(accountId: string, instrument: string): Promise<BrokerPrice> {
     const connection = await this.metaApiClient.getOrCreateConnection(accountId, {
       requireSynchronization: true,
     });
