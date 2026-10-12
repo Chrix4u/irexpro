@@ -42,7 +42,6 @@ function createCollector(...args: ConstructorParameters<typeof VpsForexSignalCol
   return new VpsForexSignalCollectorService(...args);
 }
 
-
 describe('dynamic PAPER lot ceiling', () => {
   const base = {
     confidence: 0.68,
