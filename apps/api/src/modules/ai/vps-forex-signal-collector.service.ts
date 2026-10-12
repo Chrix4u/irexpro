@@ -483,6 +483,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private lastSlot: string | null = null;
+  private nextCollectionAttemptAt = 0;
+  private transientProviderFailureMinute: string | null = null;
   private lastProviderFetchMinute: string | null = null;
   private lastProviderSeries: Map<string, LivePaperCandleInput[]> | null = null;
   private providerCooldownUntil: Date | null = null;
@@ -908,12 +910,22 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       this.providerCooldownReason = null;
     }
     if (!this.enabled() || this.running || !this.isCollectionSlot(now)) return;
-    const slot = now.toISOString().slice(0, 16);
+    if (now.getTime() < this.nextCollectionAttemptAt) return;
+    // A delayed timer or restart can still evaluate the current closed M5 bar.
+    // Reserve the whole five-minute slot, not just its boundary minute.
+    const slot = new Date(Math.floor(now.getTime() / BAR_MS) * BAR_MS).toISOString();
     if (this.lastSlot === slot) return;
     this.lastSlot = slot;
-    await this.collectOnce().catch((error) => {
-      this.logger.warn(`VPS forex scan failed: ${(error as Error).message}`);
-    });
+    try {
+      await this.collectOnce();
+      this.nextCollectionAttemptAt = 0;
+    } catch (error) {
+      // Failed collection must not consume the slot. One minute of backoff
+      // protects the six-credit primary batch from the 15-second timer.
+      this.lastSlot = null;
+      this.nextCollectionAttemptAt = Math.max(now.getTime(), Date.now()) + 60_000;
+      this.logger.warn(`VPS forex scan failed; retry in 60s: ${(error as Error).message}`);
+    }
   }
 
   async collectOnce(fetchImpl: typeof fetch = fetch): Promise<void> {
@@ -978,7 +990,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       // snapshot. Final execution is deferred until both directions have passed
       // through ensemble + governance, so a rejected primary side can be rescued
       // by a genuinely positive-edge opposite side.
-      // scanner already runs once per 10-minute slot and the deterministic
+      // scanner already runs once per five-minute slot and the deterministic
       // signal id includes the market bar time, so an additional same-direction
       // freshness throttle can hide valid repeat opportunities without adding
       // idempotency. Downstream ensemble, governance, risk, margin and portfolio
@@ -1746,8 +1758,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   }
 
   private isCollectionSlot(now: Date): boolean {
-    if (this.marketSchedule(now).paused) return false;
-    return now.getUTCMinutes() % COLLECTION_CADENCE_MINUTES === 0;
+    return Number.isFinite(now.getTime()) && this.isFxWeeklySessionOpen(now);
   }
 
   private recordEvaluation(candidates: Candidate[]): void {
@@ -2980,6 +2991,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       return this.lastProviderSeries;
     }
 
+    if (this.transientProviderFailureMinute === requestMinute) {
+      return this.fetchBrokerNativeFallbackSeries('TWELVE_DATA_TRANSIENT_MINUTE_BACKOFF');
+    }
+
     const now = Date.now();
     const lastClosedBoundary = Math.floor(now / BAR_MS) * BAR_MS - 1_000;
     const params = new URLSearchParams({
@@ -2991,20 +3006,35 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       end_date: new Date(lastClosedBoundary).toISOString().slice(0, 19),
       apikey: apiKey,
     });
-    const response = await fetchImpl(
-      `https://api.twelvedata.com/time_series?${params.toString()}`,
-      {
+    let response: Response;
+    let payload: TwelveDataResponse;
+    try {
+      response = await fetchImpl(`https://api.twelvedata.com/time_series?${params.toString()}`, {
         signal: AbortSignal.timeout(15_000),
         headers: { accept: 'application/json' },
-      },
-    );
-    const payload = (await response.json()) as TwelveDataResponse;
+      });
+    } catch {
+      return this.transientBrokerFallback('TWELVE_DATA_TRANSPORT_UNAVAILABLE', requestMinute);
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(`Twelve Data HTTP ${response.status}: provider authentication failed`);
+    }
+    try {
+      payload = (await response.json()) as TwelveDataResponse;
+    } catch {
+      if (!response.ok && response.status !== 429 && response.status < 500) {
+        throw new Error(`Twelve Data HTTP ${response.status}: invalid provider response`);
+      }
+      return this.transientBrokerFallback('TWELVE_DATA_INVALID_JSON', requestMinute);
+    }
     if (!response.ok) {
       const root = payload as TwelveDataSeries;
-      const message = root.message ?? 'request failed';
+      const message = root?.message ?? 'request failed';
       if (
         response.status === 429 &&
-        /run out of API credits for the day|current limit being/i.test(message)
+        /run out of API credits for the day|daily (?:API )?credits? (?:limit|quota)|credits? (?:per day|\/day)/i.test(
+          message,
+        )
       ) {
         const reset = new Date();
         reset.setUTCDate(reset.getUTCDate() + 1);
@@ -3016,16 +3046,23 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         );
         return this.fetchBrokerNativeFallbackSeries('TWELVE_DATA_DAILY_CREDIT_LIMIT');
       }
+      if (response.status === 429 || response.status >= 500) {
+        return this.transientBrokerFallback(`TWELVE_DATA_HTTP_${response.status}`, requestMinute);
+      }
       throw new Error(`Twelve Data HTTP ${response.status}: ${message}`);
     }
 
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return this.transientBrokerFallback('TWELVE_DATA_INCOMPLETE_BATCH', requestMinute);
+    }
     const result = new Map<string, LivePaperCandleInput[]>();
     for (const [instrument, providerSymbol] of SYMBOLS) {
       const series = this.resolveSeries(payload, providerSymbol);
       if (!series || series.status === 'error' || !Array.isArray(series.values)) {
-        throw new Error(
-          `Twelve Data missing ${providerSymbol}: ${series?.message ?? 'no time series returned'}`,
-        );
+        return this.transientBrokerFallback('TWELVE_DATA_INCOMPLETE_BATCH', requestMinute);
+      }
+      if (series.values.some((value) => !value || typeof value.datetime !== 'string')) {
+        return this.transientBrokerFallback('TWELVE_DATA_INCOMPLETE_BATCH', requestMinute);
       }
       const candles = series.values
         .map((value) => ({
@@ -3037,11 +3074,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         }))
         .filter((row) => Number.isFinite(row.timestamp.getTime()))
         .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-      if (candles.length < 55)
-        throw new Error(`Twelve Data returned only ${candles.length} ${providerSymbol} bars`);
+      if (candles.length < 55) {
+        return this.transientBrokerFallback('TWELVE_DATA_INCOMPLETE_BATCH', requestMinute);
+      }
       const latestClose = candles[candles.length - 1]!.timestamp.getTime() + BAR_MS;
       if (Date.now() - latestClose > 20 * 60_000) {
-        throw new Error(`${providerSymbol} latest fully closed M5 bar is stale`);
+        return this.transientBrokerFallback('TWELVE_DATA_STALE_BATCH', requestMinute);
       }
       result.set(instrument, candles);
     }
@@ -3049,6 +3087,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     this.lastProviderSeries = result;
     this.lastMarketDataAuthority = 'TWELVE_DATA';
     return result;
+  }
+
+  private transientBrokerFallback(
+    reason: string,
+    requestMinute: string,
+  ): Promise<Map<string, LivePaperCandleInput[]>> {
+    // Even when the broker is unavailable, a second startup/timer attempt in
+    // this minute must not spend another six primary-provider credits.
+    this.transientProviderFailureMinute = requestMinute;
+    return this.fetchBrokerNativeFallbackSeries(reason);
   }
 
   private async fetchBrokerNativeFallbackSeries(
