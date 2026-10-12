@@ -20,6 +20,7 @@ import { TradeIntentService, TradeIntentFacts } from '../execution/services/trad
 import type { TradeIntent } from '../execution/entities/trade-intent.entity';
 import { AllocationService } from '../execution/services/allocation.service';
 import { PositionSizingService } from '../execution/services/position-sizing.service';
+import type { PaperAllocationConfidenceTier } from '../execution/services/paper-allocation-sizing-policy';
 // Round 7.1 (P1 — sizing input freshness): the durable account-snapshot
 // authority whose 30s LIVE freshness window is now enforced BEFORE sizing.
 import {
@@ -499,6 +500,45 @@ export class StrategyOrchestratorService {
       // (no sizing-time freshness gate). Any failure is the typed rejection
       // below (never a stale-equity sizing).
       await this.ensureLiveSizingSnapshotFresh(userId, session);
+
+      let paperAllocationSizing:
+        | {
+            executionMode: string;
+            allocatedCapital: string | null;
+            confidenceTier: PaperAllocationConfidenceTier;
+          }
+        | undefined;
+      if (
+        session.executionMode === ExecutionMode.PAPER_ONLY &&
+        candidate.metadata?.external_provider_paper_only === true
+      ) {
+        const rawTier = candidate.metadata?.position_sizing_tier;
+        const allowedTiers: readonly PaperAllocationConfidenceTier[] = [
+          'BASE',
+          'STRONG',
+          'VERY_STRONG',
+          'EXCEPTIONAL',
+          'RESEARCH',
+        ];
+        const confidenceTier = allowedTiers.includes(rawTier as PaperAllocationConfidenceTier)
+          ? (rawTier as PaperAllocationConfidenceTier)
+          : null;
+
+        if (confidenceTier) {
+          const allocationState = await this.allocationService.getUserCapitalAllocationState(
+            userId,
+            session.brokerConnectionId,
+          );
+          paperAllocationSizing = {
+            executionMode: session.executionMode,
+            allocatedCapital: allocationState.hasAllocation
+              ? allocationState.allocatedCapital
+              : null,
+            confidenceTier,
+          };
+        }
+      }
+
       sized = await this.positionSizingService.sizePosition({
         userId,
         brokerConnectionId: session.brokerConnectionId,
@@ -514,6 +554,7 @@ export class StrategyOrchestratorService {
             ? String(executionCandidate.suggestedStopLoss)
             : null,
         requestedLotUpperBound: String(executionCandidate.suggestedVolume),
+        paperAllocationSizing,
       });
       await this.allocationService.resolveOrAllocate({
         intent: {
@@ -611,6 +652,7 @@ export class StrategyOrchestratorService {
       sessionGeneration: session.authorityGeneration,
       executionMode: session.executionMode,
       brokerConnectionId: session.brokerConnectionId,
+      allocationAwarePaperSizing: sized.inputs.allocationAwarePaper === true,
       generatedAt: candidate.generatedAt,
     };
 

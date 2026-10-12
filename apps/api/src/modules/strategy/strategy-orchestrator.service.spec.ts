@@ -95,6 +95,7 @@ describe('StrategyOrchestratorService', () => {
   let allocationMock: {
     resolveOrAllocate: jest.Mock;
     releaseAllocationForIntent: jest.Mock;
+    getUserCapitalAllocationState: jest.Mock;
   };
   /** Round 7.1 (P1): the LIVE fresh-snapshot authority seam (Gate 4.8). */
   let snapshotMock: { resolveFreshSnapshotForNewExposure: jest.Mock };
@@ -227,6 +228,19 @@ describe('StrategyOrchestratorService', () => {
     allocationMock = {
       resolveOrAllocate: jest.fn().mockResolvedValue({ id: 'alloc-1', status: 'ACTIVE' }),
       releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined),
+      getUserCapitalAllocationState: jest.fn().mockResolvedValue({
+        brokerConnectionId: 'conn-1',
+        logicalAccountKey: 'paper-broker::demo::acct-1',
+        accountCurrency: 'USD',
+        brokerEquity: '10000',
+        hasAllocation: true,
+        allocatedCapital: '1000',
+        committedCapital: '0',
+        inFlightCommitments: '0',
+        pendingOrderCommitments: '0',
+        openPositionCommitments: '0',
+        availableCapital: '1000',
+      }),
     };
 
     module = await Test.createTestingModule({
@@ -733,6 +747,61 @@ describe('StrategyOrchestratorService', () => {
       );
     });
 
+    it('passes explicit PAPER allocation + scanner tier into authoritative sizing', async () => {
+      const result = await service.processSignal(
+        validCandidate({
+          metadata: {
+            external_provider_paper_only: true,
+            position_sizing_tier: 'VERY_STRONG',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(allocationMock.getUserCapitalAllocationState).toHaveBeenCalledWith('user-1', 'conn-1');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          paperAllocationSizing: {
+            executionMode: ExecutionMode.PAPER_ONLY,
+            allocatedCapital: '1000',
+            confidenceTier: 'VERY_STRONG',
+          },
+        }),
+      );
+    });
+
+    it('carries allocation-aware PAPER sizing provenance into the Risk Engine', async () => {
+      sizingMock.sizePosition.mockResolvedValue({
+        lots: '0.20',
+        allocatedCapital: '200.00',
+        accountCurrency: 'USD',
+        entryPrice: '1.08500',
+        inputs: {
+          accountCurrency: 'USD',
+          equity: '10000',
+          allocationAwarePaper: true,
+        },
+      });
+
+      const result = await service.processSignal(
+        validCandidate({
+          metadata: {
+            external_provider_paper_only: true,
+            position_sizing_tier: 'BASE',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(riskService.validateProposedTrade).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          requestedLotSize: '0.20',
+          allocationAwarePaperSizing: true,
+        }),
+      );
+    });
+
     it('the SIZED volume flows to the Risk Engine — never the AI suggestedVolume (mock-seam regression: the Round 7 P0 allocation bug hid behind this exact seam)', async () => {
       // The AI suggests 9.99 lots; the (mocked) sizing authority derives
       // 0.20 from the risk budget. The Risk Engine must see 0.20.
@@ -762,6 +831,7 @@ describe('StrategyOrchestratorService', () => {
       expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
       expect(snapshotMock.resolveFreshSnapshotForNewExposure).not.toHaveBeenCalled();
       expect(brokerService.observeAccountSnapshotNow).not.toHaveBeenCalled();
+      expect(allocationMock.getUserCapitalAllocationState).not.toHaveBeenCalled();
       expect(sizingMock.sizePosition).toHaveBeenCalledTimes(1);
     });
 

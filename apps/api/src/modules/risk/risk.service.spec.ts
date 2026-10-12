@@ -988,6 +988,22 @@ describe('RiskService', () => {
       }
     });
 
+    it('does not re-cap allocation-aware PAPER sizing to the legacy fixed lot ceiling', async () => {
+      const trade = validTrade({
+        requestedLotSize: '0.20',
+        stopLoss: '1.08400',
+        allocationAwarePaperSizing: true,
+      });
+
+      const result = await service.validateProposedTrade('user-1', trade);
+
+      expect(result.decision).toBe('APPROVED');
+      if (result.decision === 'APPROVED') {
+        expect(result.validatedOrder.lotSize).toBe('0.20');
+        expect(result.appliedRules).toContain('POSITION_SIZE:ALLOCATION_AWARE_PAPER');
+      }
+    });
+
     it('does not modify lot size when within allowed limit', async () => {
       const result = await service.validateProposedTrade('user-1', validTrade()); // 0.05 < max 0.10
 

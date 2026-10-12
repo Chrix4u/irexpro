@@ -97,6 +97,13 @@ export interface ProposedTrade {
   sessionGeneration?: number;
   executionMode?: string;
   brokerConnectionId?: string;
+  /**
+   * Internal sizing provenance. True only when PositionSizingService sized an
+   * external-provider PAPER_ONLY signal from the user's explicit allocation.
+   * RiskService honors this only in PAPER_ONLY and still enforces all other
+   * risk, margin, stop, drawdown and allocation rules.
+   */
+  allocationAwarePaperSizing?: boolean;
   /** Round 5 (#302): producer-assigned signal generation timestamp for
    * freshness + future-skew enforcement. */
   generatedAt?: Date;
