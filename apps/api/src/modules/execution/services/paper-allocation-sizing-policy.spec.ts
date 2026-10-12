@@ -28,6 +28,7 @@ describe('paper allocation sizing policy', () => {
     expect(paperAllocationRiskTargetPercent('STRONG')).toBe(2);
     expect(paperAllocationRiskTargetPercent('VERY_STRONG')).toBe(2.5);
     expect(paperAllocationRiskTargetPercent('EXCEPTIONAL')).toBe(2.5);
+    expect(paperAllocationRiskTargetPercent('RESEARCH')).toBe(1);
   });
 
   it('never enables allocation-aware overrides outside PAPER', () => {

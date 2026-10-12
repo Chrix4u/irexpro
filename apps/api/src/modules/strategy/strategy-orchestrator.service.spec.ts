@@ -770,6 +770,38 @@ describe('StrategyOrchestratorService', () => {
       );
     });
 
+    it('carries allocation-aware PAPER sizing provenance into the Risk Engine', async () => {
+      sizingMock.sizePosition.mockResolvedValue({
+        lots: '0.20',
+        allocatedCapital: '200.00',
+        accountCurrency: 'USD',
+        entryPrice: '1.08500',
+        inputs: {
+          accountCurrency: 'USD',
+          equity: '10000',
+          allocationAwarePaper: true,
+        },
+      });
+
+      const result = await service.processSignal(
+        validCandidate({
+          metadata: {
+            external_provider_paper_only: true,
+            position_sizing_tier: 'BASE',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(riskService.validateProposedTrade).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          requestedLotSize: '0.20',
+          allocationAwarePaperSizing: true,
+        }),
+      );
+    });
+
     it('the SIZED volume flows to the Risk Engine — never the AI suggestedVolume (mock-seam regression: the Round 7 P0 allocation bug hid behind this exact seam)', async () => {
       // The AI suggests 9.99 lots; the (mocked) sizing authority derives
       // 0.20 from the risk budget. The Risk Engine must see 0.20.
@@ -799,6 +831,7 @@ describe('StrategyOrchestratorService', () => {
       expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
       expect(snapshotMock.resolveFreshSnapshotForNewExposure).not.toHaveBeenCalled();
       expect(brokerService.observeAccountSnapshotNow).not.toHaveBeenCalled();
+      expect(allocationMock.getUserCapitalAllocationState).not.toHaveBeenCalled();
       expect(sizingMock.sizePosition).toHaveBeenCalledTimes(1);
     });
 

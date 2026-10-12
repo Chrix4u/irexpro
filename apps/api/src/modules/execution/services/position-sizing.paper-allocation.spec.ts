@@ -121,6 +121,28 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.inputs.riskPercent).toBe('2.5');
   });
 
+  it('replaces the research 0.01-lot choke point with a 1% allocation risk budget', async () => {
+    const service = makeService();
+
+    const sized = await service.sizePosition({
+      ...params,
+      paperAllocationSizing: {
+        executionMode: 'PAPER_ONLY',
+        allocatedCapital: '1000.00',
+        confidenceTier: 'RESEARCH',
+      },
+    });
+
+    // $1,000 × 1% = $10 risk; at $100 risk per full lot this is 0.10 lot.
+    // The legacy signal still carries requestedLotUpperBound=0.01 for
+    // provenance/fail-closed fallback, but it is not an active PAPER cap.
+    expect(sized.lots).toBe('0.1');
+    expect(sized.inputs.riskAmount).toBe('10');
+    expect(sized.inputs.riskPercent).toBe('1');
+    expect(sized.inputs.requestedLotUpperBound).toBe('0.01');
+    expect(sized.inputs.allocationAwarePaper).toBe(true);
+  });
+
   it('keeps legacy lot ceilings outside PAPER_ONLY', async () => {
     const service = makeService({ maxTradeRiskPercent: '3.00' });
 
