@@ -35,7 +35,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Measure route coverage and outcomes
+      - name: Measure lower-edge NORMAL-drift research bands
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -51,66 +51,92 @@ jobs:
           dbssl="$(getv DB_SSL)"; if printf '%s' "$dbssl" | grep -Eqi '^(1|true|require)$'; then export PGSSLMODE=require; else export PGSSLMODE=prefer; fi
           policy='planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1'
 
-          echo '=== route distribution current policy ==='
-          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            SELECT components->>'strategyRoute' route, regime, count(*) decisions,
-              count(*) FILTER (WHERE COALESCE((components->>'paperAdmitted')::boolean,false)) paper_admitted,
-              count(*) FILTER (WHERE COALESCE((components->'governance'->>'paperExecutionEligible')::boolean,false)) governance_eligible,
-              count(*) FILTER (WHERE (components->'governance'->>'netExpectedR')::double precision >= CASE WHEN components->>'strategyRoute'='EARLY_TRANSITION' THEN 0.2 ELSE 0.08 END) net_pass,
-              count(*) FILTER (WHERE components->'governance'->>'driftState'='NORMAL') drift_normal,
-              count(*) FILTER (WHERE components ? 'outcome') resolved_rows
-            FROM trading.ensemble_shadow_decisions
-            WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}'
-            GROUP BY route,regime ORDER BY decisions DESC;"
-
-          echo '=== recent route distribution 120m ==='
-          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            SELECT components->>'strategyRoute' route, regime, count(*) decisions,
-              count(*) FILTER (WHERE COALESCE((components->>'paperAdmitted')::boolean,false)) paper_admitted,
-              count(*) FILTER (WHERE COALESCE((components->'governance'->>'paperExecutionEligible')::boolean,false)) governance_eligible,
-              count(*) FILTER (WHERE (components->'governance'->>'netExpectedR')::double precision >= CASE WHEN components->>'strategyRoute'='EARLY_TRANSITION' THEN 0.2 ELSE 0.08 END) net_pass,
-              count(*) FILTER (WHERE components->'governance'->>'driftState'='NORMAL') drift_normal
-            FROM trading.ensemble_shadow_decisions
-            WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}' AND evaluated_at>=now()-interval '120 minutes'
-            GROUP BY route,regime ORDER BY decisions DESC;"
-
-          echo '=== independent resolved episodes by route ==='
+          echo '=== independent NORMAL-drift outcome episodes by predicted-net band ==='
           psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
             WITH base AS (
-              SELECT instrument,direction,components->>'strategyRoute' route,evaluated_at,
+              SELECT instrument,direction,evaluated_at,
                 (components->'outcome'->>'resolvedAt')::timestamptz resolved_at,
-                (components->'outcome'->>'netR')::double precision net_r,
-                (components->'governance'->>'netExpectedR')::double precision predicted_net_r,
-                components->'governance'->>'driftState' drift
+                (components->'outcome'->>'netR')::double precision realized_r,
+                (components->'governance'->>'netExpectedR')::double precision predicted_r,
+                COALESCE((components->'governance'->>'executionSpreadEvidenceValid')::boolean,false) spread_ok,
+                components->'governance'->>'eventRisk' event_risk,
+                components->>'strategyRoute' route,
+                (components->>'directionQuality')::double precision direction_q,
+                (components->>'tradeQuality')::double precision trade_q,
+                (components->>'exitQuality')::double precision exit_q,
+                confidence::double precision confidence
               FROM trading.ensemble_shadow_decisions
               WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}'
-                AND components ? 'outcome' AND components->'outcome'->>'status'<>'AMBIGUOUS' AND components->'outcome'->>'netR' IS NOT NULL
+                AND components ? 'outcome'
+                AND components->'outcome'->>'status'<>'AMBIGUOUS'
+                AND components->'outcome'->>'netR' IS NOT NULL
+                AND components->'governance'->>'driftState'='NORMAL'
+                AND components->>'strategyRoute'='TREND_CONTINUATION'
             ), marked AS (
-              SELECT *,max(resolved_at) OVER (PARTITION BY route,instrument,direction ORDER BY evaluated_at ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prev_end FROM base
-            ), episodes AS (SELECT * FROM marked WHERE prev_end IS NULL OR evaluated_at>prev_end)
-            SELECT route,count(*) episodes,count(*) FILTER (WHERE net_r>0) wins,count(*) FILTER (WHERE net_r<0) losses,
-              round(sum(net_r)::numeric,4) total_net_r,round(avg(net_r)::numeric,4) avg_net_r,
-              round((sum(net_r) FILTER (WHERE net_r>0)/NULLIF(abs(sum(net_r) FILTER (WHERE net_r<0)),0))::numeric,4) profit_factor,
-              count(*) FILTER (WHERE drift='NORMAL') normal_drift,
-              round(avg(predicted_net_r)::numeric,4) avg_predicted_net_r
-            FROM episodes GROUP BY route ORDER BY route;"
+              SELECT *,max(resolved_at) OVER (PARTITION BY instrument,direction ORDER BY evaluated_at ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prev_end FROM base
+            ), episodes AS (SELECT * FROM marked WHERE prev_end IS NULL OR evaluated_at>prev_end), binned AS (
+              SELECT *,CASE
+                WHEN predicted_r>=0.08 THEN 'GE_080'
+                WHEN predicted_r>=0.06 THEN '060_080'
+                WHEN predicted_r>=0.04 THEN '040_060'
+                WHEN predicted_r>=0.02 THEN '020_040'
+                WHEN predicted_r>=0.00 THEN '000_020'
+                ELSE 'LT_000' END band
+              FROM episodes
+            )
+            SELECT band,count(*) episodes,count(*) FILTER (WHERE realized_r>0) wins,count(*) FILTER (WHERE realized_r<0) losses,
+              round(sum(realized_r)::numeric,4) total_r,round(avg(realized_r)::numeric,4) avg_r,
+              round((sum(realized_r) FILTER (WHERE realized_r>0)/NULLIF(abs(sum(realized_r) FILTER (WHERE realized_r<0)),0))::numeric,4) pf,
+              count(*) FILTER (WHERE spread_ok AND event_risk='CLEAR' AND confidence>=0.64 AND direction_q>=0.25 AND trade_q>=0.48 AND exit_q>=0.48) research_quality
+            FROM binned GROUP BY band ORDER BY min(predicted_r) DESC;"
 
-          echo '=== qualified route episodes by route (predicted net + normal drift) ==='
+          echo '=== independent research-quality NORMAL-drift episodes by floor ==='
           psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
             WITH base AS (
-              SELECT instrument,direction,components->>'strategyRoute' route,evaluated_at,
+              SELECT instrument,direction,evaluated_at,
                 (components->'outcome'->>'resolvedAt')::timestamptz resolved_at,
-                (components->'outcome'->>'netR')::double precision net_r
+                (components->'outcome'->>'netR')::double precision realized_r,
+                (components->'governance'->>'netExpectedR')::double precision predicted_r
               FROM trading.ensemble_shadow_decisions
               WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}'
                 AND components ? 'outcome' AND components->'outcome'->>'status'<>'AMBIGUOUS' AND components->'outcome'->>'netR' IS NOT NULL
                 AND components->'governance'->>'driftState'='NORMAL'
-                AND (components->'governance'->>'netExpectedR')::double precision >= CASE WHEN components->>'strategyRoute'='EARLY_TRANSITION' THEN 0.2 ELSE 0.08 END
+                AND components->>'strategyRoute'='TREND_CONTINUATION'
+                AND COALESCE((components->'governance'->>'executionSpreadEvidenceValid')::boolean,false)
+                AND components->'governance'->>'eventRisk'='CLEAR'
+                AND confidence::double precision>=0.64
+                AND (components->>'directionQuality')::double precision>=0.25
+                AND (components->>'tradeQuality')::double precision>=0.48
+                AND (components->>'exitQuality')::double precision>=0.48
             ), marked AS (
-              SELECT *,max(resolved_at) OVER (PARTITION BY route,instrument,direction ORDER BY evaluated_at ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prev_end FROM base
-            ), episodes AS (SELECT * FROM marked WHERE prev_end IS NULL OR evaluated_at>prev_end)
-            SELECT route,count(*) episodes,count(*) FILTER (WHERE net_r>0) wins,count(*) FILTER (WHERE net_r<0) losses,round(sum(net_r)::numeric,4),round(avg(net_r)::numeric,4)
-            FROM episodes GROUP BY route ORDER BY route;"
+              SELECT *,max(resolved_at) OVER (PARTITION BY instrument,direction ORDER BY evaluated_at ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prev_end FROM base
+            ), episodes AS (SELECT * FROM marked WHERE prev_end IS NULL OR evaluated_at>prev_end), floors AS (
+              SELECT unnest(ARRAY[0.08,0.06,0.04,0.02,0.00]::double precision[]) floor
+            )
+            SELECT floor,count(*) FILTER (WHERE predicted_r>=floor) episodes,
+              count(*) FILTER (WHERE predicted_r>=floor AND realized_r>0) wins,
+              count(*) FILTER (WHERE predicted_r>=floor AND realized_r<0) losses,
+              round(sum(realized_r) FILTER (WHERE predicted_r>=floor)::numeric,4) total_r,
+              round(avg(realized_r) FILTER (WHERE predicted_r>=floor)::numeric,4) avg_r,
+              round((sum(realized_r) FILTER (WHERE predicted_r>=floor AND realized_r>0)/NULLIF(abs(sum(realized_r) FILTER (WHERE predicted_r>=floor AND realized_r<0)),0))::numeric,4) pf
+            FROM episodes CROSS JOIN floors GROUP BY floor ORDER BY floor DESC;"
+
+          echo '=== recent 120m research-quality NORMAL-drift counts by floor ==='
+          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
+            WITH d AS (
+              SELECT (components->'governance'->>'netExpectedR')::double precision predicted_r
+              FROM trading.ensemble_shadow_decisions
+              WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version='${policy}' AND evaluated_at>=now()-interval '120 minutes'
+                AND components->'governance'->>'driftState'='NORMAL'
+                AND components->>'strategyRoute'='TREND_CONTINUATION'
+                AND COALESCE((components->'governance'->>'executionSpreadEvidenceValid')::boolean,false)
+                AND components->'governance'->>'eventRisk'='CLEAR'
+                AND confidence::double precision>=0.64
+                AND (components->>'directionQuality')::double precision>=0.25
+                AND (components->>'tradeQuality')::double precision>=0.48
+                AND (components->>'exitQuality')::double precision>=0.48
+            ), floors AS (SELECT unnest(ARRAY[0.08,0.06,0.04,0.02,0.00]::double precision[]) floor)
+            SELECT floor,count(*) FILTER (WHERE predicted_r>=floor) FROM d CROSS JOIN floors GROUP BY floor ORDER BY floor DESC;"
           unset PGPASSWORD
           rm -f /tmp/irex-pm2.json /tmp/irex-api-env
           REMOTE
