@@ -35,7 +35,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Verify post-deploy PAPER decision stream
+      - name: Inspect async market-prime recovery
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -45,43 +45,22 @@ jobs:
           set -Eeuo pipefail
           app='/home/lightworld/webapps/irexpro-staging'
           cd "$app"
-          echo '=== runtime ==='
           echo "head=$(git rev-parse HEAD)"
-          code=$(curl -sS -o /tmp/irex-live -w '%{http_code}' --max-time 5 http://127.0.0.1:3010/api/v1/health/live || true)
-          echo "api_live_http=${code}"
+          echo "api_live_http=$(curl -sS -o /tmp/irex-live -w '%{http_code}' --max-time 5 http://127.0.0.1:3010/api/v1/health/live || true)"
 
-          pm2 jlist > /tmp/irex-pm2.json
-          api_id=$(node -e "const x=require('/tmp/irex-pm2.json');const p=x.find(v=>v.name==='irexpro-api-staging');if(!p)process.exit(2);process.stdout.write(String(p.pm_id));")
-          pm2 env "$api_id" > /tmp/irex-api-env
-          getv(){ sed -n "s/^$1: //p" /tmp/irex-api-env | head -1; }
-          export PGHOST="$(getv DB_HOST)" PGPORT="$(getv DB_PORT)" PGUSER="$(getv DB_USER)" PGPASSWORD="$(getv DB_PASSWORD)" PGDATABASE="$(getv DB_NAME)"
-          dbssl="$(getv DB_SSL)"; if printf '%s' "$dbssl" | grep -Eqi '^(1|true|require)$'; then export PGSSLMODE=require; else export PGSSLMODE=prefer; fi
-
-          echo '=== ensemble decisions since deploy ==='
-          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            SELECT count(*) decisions,
-              max(evaluated_at) latest_evaluated_at,
-              count(*) FILTER (WHERE COALESCE(NULLIF(components->>'paperAdmitted','')::boolean,false)) paper_admitted,
-              count(*) FILTER (WHERE COALESCE(NULLIF(components->'governance'->>'paperExecutionEligible','')::boolean,false)) governance_eligible,
-              count(*) FILTER (WHERE (components->'governance'->>'netExpectedR')::double precision>=0.08) net_pass,
-              count(*) FILTER (WHERE components->'governance'->>'driftState'='NORMAL') drift_normal,
-              count(*) FILTER (WHERE COALESCE(NULLIF(components->'governance'->>'executionSpreadEvidenceValid','')::boolean,false)) spread_valid
-            FROM trading.ensemble_shadow_decisions
-            WHERE engine_code='irexpro-multimodel-ensemble-v1'
-              AND evaluated_at >= '2026-10-12T13:28:43Z'::timestamptz;"
-
-          echo '=== recent route/regime since deploy ==='
-          psql -X -v ON_ERROR_STOP=1 -P pager=off -F '|' -Atc "
-            SELECT components->>'strategyRoute',regime,count(*),
-              round(max((components->'governance'->>'netExpectedR')::numeric),4),
-              count(*) FILTER (WHERE components->'governance'->>'driftState'='NORMAL')
-            FROM trading.ensemble_shadow_decisions
-            WHERE engine_code='irexpro-multimodel-ensemble-v1'
-              AND evaluated_at >= '2026-10-12T13:28:43Z'::timestamptz
-            GROUP BY 1,2 ORDER BY 3 DESC;"
-
-          unset PGPASSWORD
-          rm -f /tmp/irex-live /tmp/irex-pm2.json /tmp/irex-api-env
+          echo '=== scanner/provider markers after restart ==='
+          raw=$(mktemp)
+          pm2 logs irexpro-api-staging --lines 1800 --nostream > "$raw" 2>&1 || true
+          for pat in 'live market cache primed' 'startup.*prime|prime.*market' 'Twelve Data|TWELVE_DATA' 'broker-native|MetaApi' 'No new market|market.*unavailable|market.*stale' 'Multi-model ensemble|execution=SHADOW_ONLY|paperAdmitted='; do
+            printf '%s=%s\n' "$pat" "$(grep -Eic "$pat" "$raw" || true)"
+          done
+          grep -Ei 'live market cache primed|startup.*prime|prime.*market|Twelve Data|TWELVE_DATA|broker-native|MetaApi|No new market|market.*unavailable|market.*stale|Multi-model ensemble|execution=SHADOW_ONLY|paperAdmitted=' "$raw" \
+            | tail -n 120 \
+            | sed -E \
+              -e 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<uuid>/g' \
+              -e 's/\b[0-9]{7,}\b/<long-number>/g' \
+              -e 's/(token|secret|password|authorization|api[_-]?key)[=: ]+[^ ]+/\1=<redacted>/Ig' || true
+          rm -f "$raw" /tmp/irex-live
           REMOTE
 
       - name: Remove ephemeral SSH material
