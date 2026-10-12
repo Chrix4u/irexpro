@@ -68,7 +68,7 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
     } = {},
   ) {
     await client.query(
-      `INSERT INTO paper_intents VALUES ($1,$2,$3,'USDCAD','SELL',$4::jsonb,$5,$6,$1::text)`,
+      `INSERT INTO paper_intents VALUES ($1,$2,$3,'USDCAD','SELL',$4::jsonb,$5,$6,$1::uuid::text)`,
       [
         id,
         user,
