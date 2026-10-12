@@ -79,6 +79,7 @@ import {
   classifyHighConvictionOverlay,
   summarizeHighConvictionOverlayCohort,
 } from './high-conviction-overlay';
+import { PAPER_POST_LOSS_STATE_QUERY } from './paper-post-loss-state-query';
 import {
   PaperPostLossEntryDecision,
   PaperPostLossEntryState,
@@ -2703,52 +2704,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     instrument: string,
     direction: 'BUY' | 'SELL',
   ): Promise<PaperPostLossEntryState> {
-    // DataSource is optional only for isolated unit construction. Production PAPER
-    // always has the trading store; with no store there is no historical loss
-    // evidence to apply, so preserve legacy isolated-test behavior.
-    if (!this.dataSource) return { available: true, lastClosedTrade: null };
+    if (!this.dataSource) return { available: false, lastClosedTrade: null };
     try {
       const rows = (await this.dataSource.query(
-        `
-          WITH latest_closed AS (
-            SELECT t.id, t.close_reason, t.closed_at
-            FROM trading.trade_intents ti
-            INNER JOIN trading.trades t ON t.trade_intent_id = ti.id
-            WHERE ti.user_id = $1
-              AND ti.broker_connection_id = $2
-              AND ti.instrument = $3
-              AND ti.direction = $4
-              AND ti.metadata->>'signal_source' = 'EXTERNAL_PROVIDER'
-              AND ti.metadata->>'external_provider_code' = $5
-              AND t.status = 'CLOSED'
-              AND t.closed_at IS NOT NULL
-            ORDER BY t.closed_at DESC, t.id DESC
-            LIMIT 1
-          )
-          SELECT
-            true AS paper_post_loss_state_available,
-            lc.id AS trade_id,
-            lc.close_reason,
-            lc.closed_at,
-            CASE
-              WHEN lc.id IS NULL THEN false
-              WHEN lc.close_reason NOT IN ('STOP_LOSS_HIT', 'SL') THEN false
-              ELSE EXISTS (
-                SELECT 1
-                FROM trading.trade_intents ti2
-                INNER JOIN trading.trades t2 ON t2.trade_intent_id = ti2.id
-                WHERE ti2.user_id = $1
-                  AND ti2.broker_connection_id = $2
-                  AND ti2.instrument = $3
-                  AND ti2.direction = $4
-                  AND ti2.metadata->>'signal_source' = 'EXTERNAL_PROVIDER'
-                  AND ti2.metadata->>'external_provider_code' = $5
-                  AND ti2.signal_generated_at > lc.closed_at
-              )
-            END AS reconfirmed
-          FROM (SELECT 1) anchor
-          LEFT JOIN latest_closed lc ON true
-        `,
+        PAPER_POST_LOSS_STATE_QUERY,
         [userId, connectionId, instrument, direction, ACTIVE_ENGINE_CODE],
       )) as Array<{
         paper_post_loss_state_available: boolean;
@@ -2758,10 +2717,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         reconfirmed: boolean;
       }>;
       const row = rows[0];
-      // The anchored production query always returns one row. An empty array is
-      // therefore only possible from a lightweight test/data-source adapter and
-      // is equivalent to no known prior close; actual query errors still fail closed.
-      if (!row) return { available: true, lastClosedTrade: null };
+      if (!row) return { available: false, lastClosedTrade: null };
       if (!row.paper_post_loss_state_available) return { available: false, lastClosedTrade: null };
       if (!row.trade_id) return { available: true, lastClosedTrade: null };
       const closedAt = row.closed_at == null ? null : new Date(row.closed_at);
@@ -3376,3 +3332,4 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     return this.config.get<string>('multimodelBrokerExpert.sourceConnectionId', '').trim();
   }
 }
+

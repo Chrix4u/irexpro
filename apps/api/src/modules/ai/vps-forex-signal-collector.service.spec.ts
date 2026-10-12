@@ -15,6 +15,25 @@ import { BrokerService } from '../broker/broker.service';
 import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
 import * as PlanBEnsembleModule from './plan-b-multimodel-shadow';
 import * as EnsembleGovernanceModule from './ensemble-governance';
+import { PAPER_POST_LOSS_STATE_QUERY } from './paper-post-loss-state-query';
+
+// Collection fixtures explicitly provide a healthy, empty PAPER history.
+// Missing/empty production store responses are tested separately below.
+function createCollector(...args: ConstructorParameters<typeof VpsForexSignalCollectorService>) {
+  const original = args[6];
+  args[6] = {
+    ...original,
+    query: async (sql: string, params: unknown[]) => {
+      const rows = original ? await original.query(sql, params) : [];
+      if (sql === PAPER_POST_LOSS_STATE_QUERY && Array.isArray(rows) && rows.length === 0) {
+        return [{ paper_post_loss_state_available: true, trade_id: null,
+          close_reason: null, closed_at: null, reconfirmed: false }];
+      }
+      return rows;
+    },
+  } as any;
+  return new VpsForexSignalCollectorService(...args);
+}
 
 describe('dynamic PAPER lot ceiling', () => {
   const base = {
@@ -210,7 +229,7 @@ describe('multi-model PAPER execution gate', () => {
 
 describe('VpsForexSignalCollectorService', () => {
   it('collects every closed M5 slot across the FX 24x5 market week', async () => {
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({}),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
       {} as unknown as ExecutionService,
@@ -266,7 +285,7 @@ describe('VpsForexSignalCollectorService', () => {
       outcome('WIN', `2026-10-09T${String(10 + index).padStart(2, '0')}:00:00.000Z`, 1.2),
     );
     const dataSource = { query: jest.fn().mockResolvedValue(rows) };
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({}),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
       {} as unknown as ExecutionService,
@@ -437,7 +456,7 @@ describe('VpsForexSignalCollectorService', () => {
       },
     ]);
 
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({}),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
       {} as unknown as ExecutionService,
@@ -481,7 +500,7 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('isolates campaign statistics to the current model policy version', async () => {
     const query = jest.fn().mockResolvedValue([]);
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({}),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
       {} as unknown as ExecutionService,
@@ -524,7 +543,7 @@ describe('VpsForexSignalCollectorService', () => {
       }
       return [];
     });
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({}),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
       {} as unknown as ExecutionService,
@@ -579,7 +598,7 @@ describe('VpsForexSignalCollectorService', () => {
         latest_sample_at: '2026-10-07T11:59:00.000Z',
       },
     ]);
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'multimodelBrokerExpert.sourceConnectionId': 'metaapi-source-1',
       }),
@@ -613,7 +632,7 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('builds sleeve qualification evidence from the actual PAPER execution policy cohort', async () => {
     const query = jest.fn().mockResolvedValue([]);
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({}),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
       {} as unknown as ExecutionService,
@@ -647,7 +666,7 @@ describe('VpsForexSignalCollectorService', () => {
       .mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED', signalId: 'x' });
     const heartbeat = jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -697,7 +716,7 @@ describe('VpsForexSignalCollectorService', () => {
       const shadowQuery = jest.fn().mockResolvedValue([]);
       const modelSpy = jest.spyOn(PlanBEnsembleModule, 'scorePlanBMultimodelShadow');
       const governanceSpy = jest.spyOn(EnsembleGovernanceModule, 'evaluateEnsembleGovernance');
-      const collector = new VpsForexSignalCollectorService(
+      const collector = createCollector(
         config({
           'vpsForexScanner.enabled': true,
           'vpsForexScanner.apiKey': 'fixture-key-123456',
@@ -827,7 +846,7 @@ describe('VpsForexSignalCollectorService', () => {
         driftState: 'NORMAL',
         executionSpreadEvidenceValid: true,
       }));
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'fixture-key-123456',
@@ -883,7 +902,7 @@ describe('VpsForexSignalCollectorService', () => {
   it('evaluates every qualifying pair in the same scan instead of only the top-ranked pair', async () => {
     const live = new LivePaperMarketDataService();
     const shadowQuery = jest.fn().mockResolvedValue([]);
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1006,7 +1025,7 @@ describe('VpsForexSignalCollectorService', () => {
         };
       });
 
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1151,7 +1170,7 @@ describe('VpsForexSignalCollectorService', () => {
         };
       });
 
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1267,7 +1286,7 @@ describe('VpsForexSignalCollectorService', () => {
         outcome('WIN', '2026-10-09T10:05:00Z', '2026-10-09T10:25:00Z'),
         outcome('LOSS', '2026-10-09T10:02:00Z', '2026-10-09T10:10:00Z'),
       ]);
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1324,7 +1343,7 @@ describe('VpsForexSignalCollectorService', () => {
         row('WIN', '2026-10-09T10:05:00Z', '2026-10-09T10:25:00Z'),
         row('LOSS', '2026-10-09T10:30:00Z', '2026-10-09T10:40:00Z'),
       ]);
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1356,7 +1375,7 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('loads pair-side research reliability only from the active episode-guarded research artifact', async () => {
     const query = jest.fn().mockResolvedValue([{ wins: '1', losses: '5' }]);
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1397,7 +1416,7 @@ describe('VpsForexSignalCollectorService', () => {
     const receiveSignal = jest.fn();
     const heartbeat = jest.fn();
     const shadowQuery = jest.fn().mockResolvedValue([]);
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1431,7 +1450,7 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('does not block API bootstrap while startup market priming is unresolved', async () => {
     const live = new LivePaperMarketDataService();
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1488,7 +1507,7 @@ describe('VpsForexSignalCollectorService', () => {
       }),
     } as unknown as ExecutionService;
     const startupHeartbeat = jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' });
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1530,7 +1549,7 @@ describe('VpsForexSignalCollectorService', () => {
     live.registerLiveConnection('conn-1');
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const heartbeat = jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' });
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1581,7 +1600,7 @@ describe('VpsForexSignalCollectorService', () => {
         'conn-1',
       );
     }
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1609,7 +1628,7 @@ describe('VpsForexSignalCollectorService', () => {
   });
 
   it('uses the full FX 24x5 session instead of pausing every weekday night', () => {
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({}),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
       {} as unknown as ExecutionService,
@@ -1680,7 +1699,7 @@ describe('VpsForexSignalCollectorService', () => {
           return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
         }),
     } as unknown as BrokerService;
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1731,7 +1750,7 @@ describe('VpsForexSignalCollectorService', () => {
           return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
         }),
     } as unknown as BrokerService;
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1773,7 +1792,7 @@ describe('VpsForexSignalCollectorService', () => {
       findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
       getOhlcvForConnection: jest.fn().mockRejectedValue(new Error('broker candles unavailable')),
     } as unknown as BrokerService;
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1806,7 +1825,7 @@ describe('VpsForexSignalCollectorService', () => {
   });
 
   it('rejects the shared Twelve Data demo key for production evidence', async () => {
-    const collector = new VpsForexSignalCollectorService(
+    const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'demo',
@@ -1834,7 +1853,7 @@ describe('scheduled scan recovery', () => {
     jest.restoreAllMocks();
   });
   function scanner() {
-    return new VpsForexSignalCollectorService(
+    return createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -1915,7 +1934,7 @@ describe('transient primary-feed failover', () => {
         ),
       ...brokerOverrides,
     } as unknown as BrokerService;
-    return new VpsForexSignalCollectorService(
+    return createCollector(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
@@ -2061,6 +2080,19 @@ describe('transient primary-feed failover', () => {
       const batch = allTrendPayload();
       batch['EUR/USD'].values[0] = badRow;
       await assertFallback(async () => new Response(JSON.stringify(batch), { status: 200 }));
+    },
+  );
+});
+
+
+describe('PAPER post-loss history availability', () => {
+  it.each([undefined, { query: jest.fn().mockResolvedValue([]) }])(
+    'holds when the history store is missing or fails to return its anchored row',
+    async (dataSource) => {
+      const context = { dataSource, logger: { warn: jest.fn() } };
+      const state = await VpsForexSignalCollectorService.prototype['loadPaperPostLossEntryState']
+        .call(context, 'user', 'connection', 'EURUSD', 'BUY');
+      expect(state).toEqual({ available: false, lastClosedTrade: null });
     },
   );
 });

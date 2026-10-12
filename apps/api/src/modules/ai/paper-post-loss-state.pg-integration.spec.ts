@@ -60,7 +60,7 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
     await client.query(`INSERT INTO paper_trades VALUES
       ($1,$1,$2,$3,'USDCAD','SELL',$4,$4,$5,'STOP_LOSS_HIT',$6,1.37,$7)`,
       [id, options.tradeUser ?? user, options.tradeConnection ?? connection,
-        id, status, status === 'CLOSED' ? closedAt : null, '2026-10-12T07:00:00Z']);
+        id, status, status === 'CLOSED' ? closedAt : null, options.generatedAt ?? '2026-10-12T07:00:00Z']);
   }
 
   async function state() {
