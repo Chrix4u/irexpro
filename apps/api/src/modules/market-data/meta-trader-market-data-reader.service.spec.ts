@@ -2,6 +2,7 @@ import { MetaTraderMarketDataReaderService } from './meta-trader-market-data-rea
 
 function createConnection(bid: number, ask: number) {
   return {
+    subscribeToMarketData: jest.fn().mockResolvedValue(undefined),
     getSymbolPrice: jest.fn().mockResolvedValue({
       bid,
       ask,
@@ -62,6 +63,8 @@ describe('MetaTraderMarketDataReaderService', () => {
     metaApiClient.getOrCreateStreamingConnection.mockRejectedValue(
       new Error('streaming unavailable'),
     );
+    connectionA.subscribeToMarketData.mockResolvedValue(undefined);
+    connectionB.subscribeToMarketData.mockResolvedValue(undefined);
     streamingConnectionA.subscribeToMarketData.mockResolvedValue(undefined);
     streamingConnectionA.terminalState.price.mockReturnValue({
       bid: 1.171,
@@ -96,7 +99,7 @@ describe('MetaTraderMarketDataReaderService', () => {
     expect(connectionA.getSymbolPrice).not.toHaveBeenCalled();
   });
 
-  it('falls back to account-scoped RPC quotes when streaming is unavailable', async () => {
+  it('falls back to subscribed account-scoped RPC quotes when streaming is unavailable', async () => {
     const reader = new MetaTraderMarketDataReaderService(metaApiClient as never);
 
     const [quoteA, quoteB] = await Promise.all([
@@ -114,8 +117,20 @@ describe('MetaTraderMarketDataReaderService', () => {
     expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith(accountB, {
       requireSynchronization: true,
     });
+    expect(connectionA.subscribeToMarketData).toHaveBeenCalledWith('EURUSD');
+    expect(connectionB.subscribeToMarketData).toHaveBeenCalledWith('EURUSD');
     expect(connectionA.getSymbolPrice).toHaveBeenCalledWith('EURUSD');
     expect(connectionB.getSymbolPrice).toHaveBeenCalledWith('EURUSD');
+  });
+
+  it('keeps a successful RPC symbol subscription across fallback reads', async () => {
+    const reader = new MetaTraderMarketDataReaderService(metaApiClient as never);
+
+    await reader.getCurrentPrice(accountA, 'EURUSD');
+    await reader.getCurrentPrice(accountA, 'EURUSD');
+
+    expect(connectionA.subscribeToMarketData).toHaveBeenCalledTimes(1);
+    expect(connectionA.getSymbolPrice).toHaveBeenCalledTimes(2);
   });
 
   it('falls back to RPC when streaming terminal state has no valid price yet', async () => {
@@ -126,6 +141,7 @@ describe('MetaTraderMarketDataReaderService', () => {
     const quote = await reader.getCurrentPrice(accountA, 'EURUSD');
 
     expect(quote.bid).toBe('1.17000000');
+    expect(connectionA.subscribeToMarketData).toHaveBeenCalledWith('EURUSD');
     expect(connectionA.getSymbolPrice).toHaveBeenCalledWith('EURUSD');
     expect(metaApiClient.removeStreamingConnection).not.toHaveBeenCalled();
   });
@@ -142,6 +158,7 @@ describe('MetaTraderMarketDataReaderService', () => {
       accountA,
       streamingConnectionA,
     );
+    expect(connectionA.subscribeToMarketData).toHaveBeenCalledWith('EURUSD');
     expect(connectionA.getSymbolPrice).toHaveBeenCalledWith('EURUSD');
   });
 
