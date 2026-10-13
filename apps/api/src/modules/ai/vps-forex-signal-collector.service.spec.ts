@@ -1340,6 +1340,7 @@ describe('VpsForexSignalCollectorService', () => {
       .spyOn(EnsembleGovernanceModule, 'evaluateEnsembleGovernance')
       .mockImplementation((input) => {
         const target = input.instrument === 'EURUSD';
+        const pairedReversalDrift = input.driftRoute === 'PAIRED_REVERSAL_RESEARCH';
         return {
           version: EnsembleGovernanceModule.ENSEMBLE_GOVERNANCE_VERSION,
           costModelVersion: EnsembleGovernanceModule.ENSEMBLE_COST_MODEL_VERSION,
@@ -1359,10 +1360,14 @@ describe('VpsForexSignalCollectorService', () => {
           netExpectedR: -0.13,
           paperNetExpectedRPassed: false,
           netExpectedRPassed: false,
-          driftState: target ? 'STRESSED' : 'OUT_OF_DISTRIBUTION',
-          driftQuality: target ? 0.75 : 0.1,
-          paperDriftPassed: false,
-          driftPassed: false,
+          driftState: target
+            ? pairedReversalDrift
+              ? 'NORMAL'
+              : 'OUT_OF_DISTRIBUTION'
+            : 'OUT_OF_DISTRIBUTION',
+          driftQuality: target && pairedReversalDrift ? 0.8 : 0.1,
+          paperDriftPassed: target && pairedReversalDrift,
+          driftPassed: target && pairedReversalDrift,
           sleeveState: 'COLLECTING',
           sleeveEvidence: null,
           eventRisk: 'CLEAR',
@@ -1371,7 +1376,7 @@ describe('VpsForexSignalCollectorService', () => {
             'ENSEMBLE_NOT_PAPER_ADMITTED',
             'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
             'PAPER_NET_EXPECTED_R',
-            target ? 'DRIFT_STRESSED' : 'DRIFT_OUT_OF_DISTRIBUTION',
+            'DRIFT_OUT_OF_DISTRIBUTION',
           ],
           paperPromotionEligible: false,
           blockers: ['ENSEMBLE_NOT_ADMITTED', 'NET_EXPECTED_R', 'SLEEVE_COLLECTING'],
@@ -1450,6 +1455,9 @@ describe('VpsForexSignalCollectorService', () => {
         .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
       await collector.collectOnce(fetchMock as unknown as typeof fetch);
 
+      expect(governanceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ driftRoute: 'PAIRED_REVERSAL_RESEARCH' }),
+      );
       expect(receiveSignal).toHaveBeenCalledTimes(1);
       expect(receiveSignal).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1464,6 +1472,7 @@ describe('VpsForexSignalCollectorService', () => {
             paired_reversal_research_qualification_evidence: false,
             paired_reversal_preferred_direction: 'SELL',
             paired_reversal_research_net_expected_r: 0.31,
+            paired_reversal_drift_state: 'NORMAL',
             main_strategy_qualification_evidence: false,
             production_eligible: false,
             position_sizing_tier: 'RESEARCH',
