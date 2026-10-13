@@ -51,6 +51,8 @@ export interface EnsembleGovernanceInput {
   sleeveEvidence?: EnsembleSleeveEvidence | null;
   evaluatedAt?: Date;
   executionSpreadEvidence?: ExecutionSpreadEvidence | null;
+  /** Route-specific drift envelope override for isolated PAPER research lanes. */
+  driftRoute?: 'PAIRED_REVERSAL_RESEARCH';
 }
 
 export interface EnsembleGovernanceDecision {
@@ -197,6 +199,7 @@ function earlyTransitionDriftOf(input: EnsembleGovernanceInput): {
 }
 
 function driftOf(input: EnsembleGovernanceInput): { state: EnsembleDriftState; quality: number } {
+  if (input.driftRoute === 'PAIRED_REVERSAL_RESEARCH') return reversalDriftOf(input);
   if (input.ensemble.regime === 'REVERSAL_CONFIRMED') return reversalDriftOf(input);
   if (input.ensemble.strategyRoute === 'EARLY_TRANSITION') return earlyTransitionDriftOf(input);
   const values = {
