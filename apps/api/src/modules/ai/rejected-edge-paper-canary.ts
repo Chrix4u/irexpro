@@ -11,6 +11,8 @@ export const REJECTED_EDGE_CANARY_STANDALONE_PAIR_MIN_AVG_R = 0.2;
 export const REJECTED_EDGE_CANARY_MIN_NET_EXPECTED_R = 0.12;
 export const REJECTED_EDGE_CANARY_MIN_CONFIDENCE = 0.6;
 export const REJECTED_EDGE_CANARY_MIN_PORTFOLIO_QUALITY = 0.35;
+export const REJECTED_EDGE_CANARY_MIN_ALIGNED_MOMENTUM_ATR = 0.15;
+export const REJECTED_EDGE_CANARY_MAX_ALIGNED_MOMENTUM_ATR = 1.5;
 
 export interface RejectedEdgeOutcomeEvidence {
   samples: number;
@@ -28,6 +30,8 @@ export interface RejectedEdgeCanaryEvidence {
 export interface RejectedEdgeCanaryCandidate {
   confidence: number;
   netExpectedR: number;
+  /** Direction-aligned short-horizon momentum in ATR units. */
+  alignedMomentumAtr: number;
   executionSpreadEvidenceValid: boolean;
   eventRisk: string;
   portfolioQuality: number;
@@ -99,6 +103,15 @@ export function evaluateRejectedEdgePaperCanary(input: {
 
   const { candidate, evidence } = input;
   if (candidate.strategyRoute !== 'TREND_CONTINUATION') return reject('ROUTE_NOT_VALIDATED');
+  if (
+    !Number.isFinite(candidate.alignedMomentumAtr) ||
+    candidate.alignedMomentumAtr < REJECTED_EDGE_CANARY_MIN_ALIGNED_MOMENTUM_ATR
+  ) {
+    return reject('MOMENTUM_NOT_CONFIRMED');
+  }
+  if (candidate.alignedMomentumAtr > REJECTED_EDGE_CANARY_MAX_ALIGNED_MOMENTUM_ATR) {
+    return reject('MOMENTUM_EXHAUSTED');
+  }
   if (!candidate.executionSpreadEvidenceValid) return reject('SPREAD_EVIDENCE_INVALID');
   if (candidate.eventRisk !== 'CLEAR') return reject('EVENT_RISK_NOT_CLEAR');
   if (candidate.portfolioQuality < REJECTED_EDGE_CANARY_MIN_PORTFOLIO_QUALITY) {

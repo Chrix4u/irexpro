@@ -1104,9 +1104,20 @@ describe('VpsForexSignalCollectorService', () => {
     });
 
     try {
+      const canaryPayload = allTrendPayload();
+      const eurUsdValues = canaryPayload['EUR/USD'].values;
+      const previousClose = Number(eurUsdValues.at(-2)!.close);
+      const confirmedClose = previousClose + 0.00008;
+      eurUsdValues[eurUsdValues.length - 1] = {
+        ...eurUsdValues.at(-1)!,
+        open: previousClose.toFixed(5),
+        high: (confirmedClose + 0.00008).toFixed(5),
+        low: (previousClose - 0.00008).toFixed(5),
+        close: confirmedClose.toFixed(5),
+      };
       const fetchMock = jest
         .fn()
-        .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
+        .mockResolvedValue({ ok: true, status: 200, json: async () => canaryPayload });
       await collector.collectOnce(fetchMock as unknown as typeof fetch);
 
       expect(getRejectedEdgeCanaryEvidence).toHaveBeenCalledWith('user-1', 'EURUSD', 'BUY');
