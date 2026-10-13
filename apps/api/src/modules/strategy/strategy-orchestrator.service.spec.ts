@@ -770,6 +770,50 @@ describe('StrategyOrchestratorService', () => {
       );
     });
 
+    it('carries PAPER MARKET reference geometry through sizing and risk', async () => {
+      sizingMock.sizePosition.mockResolvedValue({
+        lots: '0.39',
+        allocatedCapital: '436.00',
+        accountCurrency: 'USD',
+        entryPrice: '1.10010',
+        inputs: {
+          accountCurrency: 'USD',
+          equity: '10000',
+          allocationAwarePaper: true,
+          riskReferenceEntryPrice: '1.1',
+        },
+      });
+
+      const result = await service.processSignal(
+        validCandidate({
+          direction: 'SELL',
+          suggestedEntryPrice: 1.1,
+          suggestedStopLoss: 1.10051,
+          suggestedTakeProfit: 1.09949,
+          metadata: {
+            external_provider_paper_only: true,
+            position_sizing_tier: 'BASE',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          paperAllocationSizing: expect.objectContaining({
+            marketReferenceEntryPrice: '1.1',
+          }),
+        }),
+      );
+      expect(riskService.validateProposedTrade).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          allocationAwarePaperSizing: true,
+          paperMarketReferenceEntryPrice: '1.1',
+        }),
+      );
+    });
+
     it('carries allocation-aware PAPER sizing provenance into the Risk Engine', async () => {
       sizingMock.sizePosition.mockResolvedValue({
         lots: '0.20',

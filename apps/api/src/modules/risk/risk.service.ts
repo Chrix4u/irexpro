@@ -1337,6 +1337,46 @@ export class RiskService {
       entry = this.parseOrderDecimal(trade.entryPrice, 'entryPrice');
     }
 
+    // Allocation-aware PAPER MARKET signals carry geometry generated from a
+    // closed-bar/model reference. Re-anchor the exact intended stop/target
+    // distances to THIS fresh executable quote before validating them. This
+    // prevents harmless quote movement from shrinking a valid 5.1-pip stop
+    // below the 5-pip policy while preserving both risk distance and R:R.
+    if (
+      marketEntry &&
+      entry &&
+      session.executionMode === ExecutionMode.PAPER_ONLY &&
+      trade.allocationAwarePaperSizing === true &&
+      trade.paperMarketReferenceEntryPrice
+    ) {
+      const referenceEntry = ExactDecimal.tryParse(trade.paperMarketReferenceEntryPrice);
+      const originalStop = ExactDecimal.tryParse(trade.stopLoss ?? '');
+      const originalTake = ExactDecimal.tryParse(trade.takeProfit ?? '');
+      if (
+        referenceEntry?.isPositive() &&
+        originalStop?.isPositive() &&
+        originalTake?.isPositive()
+      ) {
+        const stopDistance = referenceEntry.sub(originalStop).abs();
+        const targetDistance = originalTake.sub(referenceEntry).abs();
+        const geometryDirectionValid =
+          trade.direction === 'BUY'
+            ? originalStop.lt(referenceEntry) && originalTake.gt(referenceEntry)
+            : originalStop.gt(referenceEntry) && originalTake.lt(referenceEntry);
+        if (geometryDirectionValid && stopDistance.isPositive() && targetDistance.isPositive()) {
+          trade.stopLoss =
+            trade.direction === 'BUY'
+              ? entry.sub(stopDistance).toString()
+              : entry.add(stopDistance).toString();
+          trade.takeProfit =
+            trade.direction === 'BUY'
+              ? entry.add(targetDistance).toString()
+              : entry.sub(targetDistance).toString();
+          appliedRules.push('PAPER_MARKET_GEOMETRY:REBASED');
+        }
+      }
+    }
+
     // MARKET order integrity is evaluated against the SAME fresh executable
     // side used by risk geometry. This closes the historical SELL-vs-zero bug
     // and prevents stale closed-bar references from approving invalid SL/TP.

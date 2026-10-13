@@ -104,6 +104,12 @@ export interface ProposedTrade {
    * risk, margin, stop, drawdown and allocation rules.
    */
   allocationAwarePaperSizing?: boolean;
+  /**
+   * Model/closed-bar entry reference for allocation-aware PAPER MARKET
+   * geometry. RiskService uses it only in PAPER_ONLY to preserve the model's
+   * SL/TP distances around the fresh executable quote.
+   */
+  paperMarketReferenceEntryPrice?: string;
   /** Round 5 (#302): producer-assigned signal generation timestamp for
    * freshness + future-skew enforcement. */
   generatedAt?: Date;

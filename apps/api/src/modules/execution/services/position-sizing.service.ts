@@ -64,6 +64,8 @@ export interface PositionSizingInputs {
   requestedRiskPercent: string;
   riskCapitalBase: string;
   allocationAwarePaper: boolean;
+  /** Entry reference used to derive stop risk. PAPER MARKET may preserve the model distance. */
+  riskReferenceEntryPrice?: string;
   riskAmount: string;
   baseCurrency: string;
   quoteCurrency: string;
@@ -159,6 +161,8 @@ export class PositionSizingService {
       executionMode: string;
       allocatedCapital: string | null;
       confidenceTier: PaperAllocationConfidenceTier;
+      /** Closed-bar/model entry used only to preserve PAPER MARKET risk distance. */
+      marketReferenceEntryPrice?: string | null;
     };
   }): Promise<SizedPosition> {
     const { userId, brokerConnectionId, instrument } = params;
@@ -302,11 +306,34 @@ export class PositionSizingService {
         `stop loss is not a provable positive decimal: ${params.stopLoss}`,
       );
     }
-    const slDistance = entry.sub(stopLoss).abs();
+    let riskReferenceEntry = entry;
+    if (
+      allocationAwarePaper &&
+      params.entryType === 'MARKET' &&
+      params.paperAllocationSizing?.marketReferenceEntryPrice != null
+    ) {
+      const modelReference = ExactDecimal.tryParse(
+        params.paperAllocationSizing.marketReferenceEntryPrice,
+      );
+      if (!modelReference || !modelReference.isPositive()) {
+        throw new PositionSizingError(
+          'ENTRY_PRICE_UNPARSEABLE',
+          `PAPER MARKET reference entry is not a provable positive decimal: ${params.paperAllocationSizing.marketReferenceEntryPrice}`,
+        );
+      }
+      riskReferenceEntry = modelReference;
+    }
+
+    // For allocation-aware PAPER MARKET signals the model stop is anchored to
+    // the closed-bar reference price. A fresh executable quote can move toward
+    // that absolute stop before dispatch; sizing from the shrunken distance
+    // would over-size the trade. Preserve the model's intended stop distance
+    // here; RiskService re-anchors the same geometry to its own fresh quote.
+    const slDistance = riskReferenceEntry.sub(stopLoss).abs();
     if (!slDistance.isPositive()) {
       throw new PositionSizingError(
         'STOP_LOSS_DISTANCE_INVALID',
-        `stop-loss distance is zero (entry ${entry.toString()} == stop ${stopLoss.toString()})`,
+        `stop-loss distance is zero (risk reference ${riskReferenceEntry.toString()} == stop ${stopLoss.toString()})`,
       );
     }
 
@@ -450,6 +477,7 @@ export class PositionSizingService {
       requestedRiskPercent: requestedRiskPercent.toString(),
       riskCapitalBase: riskCapitalBase.toString(),
       allocationAwarePaper,
+      riskReferenceEntryPrice: riskReferenceEntry.toString(),
       riskAmount: riskAmount.toString(),
       baseCurrency,
       quoteCurrency,
