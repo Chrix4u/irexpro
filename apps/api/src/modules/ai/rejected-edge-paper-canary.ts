@@ -5,6 +5,9 @@ export const REJECTED_EDGE_CANARY_MIN_GLOBAL_AVG_R = 0.5;
 export const REJECTED_EDGE_CANARY_MIN_PAIR_SIDE_SAMPLES = 2;
 export const REJECTED_EDGE_CANARY_MIN_PAIR_SIDE_POSITIVE_FRACTION = 0.5;
 export const REJECTED_EDGE_CANARY_MIN_PAIR_SIDE_AVG_R = 0.2;
+export const REJECTED_EDGE_CANARY_STANDALONE_PAIR_MIN_SAMPLES = 5;
+export const REJECTED_EDGE_CANARY_STANDALONE_PAIR_MIN_POSITIVE_FRACTION = 0.7;
+export const REJECTED_EDGE_CANARY_STANDALONE_PAIR_MIN_AVG_R = 0.2;
 export const REJECTED_EDGE_CANARY_MIN_NET_EXPECTED_R = 0.12;
 export const REJECTED_EDGE_CANARY_MIN_CONFIDENCE = 0.6;
 export const REJECTED_EDGE_CANARY_MIN_PORTFOLIO_QUALITY = 0.35;
@@ -111,24 +114,29 @@ export function evaluateRejectedEdgePaperCanary(input: {
   ) {
     return reject('UNSAFE_BLOCKER');
   }
-  if (
-    !evidencePasses(
-      evidence.global30m,
-      REJECTED_EDGE_CANARY_MIN_GLOBAL_SAMPLES,
-      REJECTED_EDGE_CANARY_MIN_GLOBAL_POSITIVE_FRACTION,
-      REJECTED_EDGE_CANARY_MIN_GLOBAL_AVG_R,
-    )
-  ) {
+  const globalEvidenceQualified = evidencePasses(
+    evidence.global30m,
+    REJECTED_EDGE_CANARY_MIN_GLOBAL_SAMPLES,
+    REJECTED_EDGE_CANARY_MIN_GLOBAL_POSITIVE_FRACTION,
+    REJECTED_EDGE_CANARY_MIN_GLOBAL_AVG_R,
+  );
+  const pairSideEvidenceQualified = evidencePasses(
+    evidence.pairSide30m,
+    REJECTED_EDGE_CANARY_MIN_PAIR_SIDE_SAMPLES,
+    REJECTED_EDGE_CANARY_MIN_PAIR_SIDE_POSITIVE_FRACTION,
+    REJECTED_EDGE_CANARY_MIN_PAIR_SIDE_AVG_R,
+  );
+  const standalonePairSideEvidenceQualified = evidencePasses(
+    evidence.pairSide30m,
+    REJECTED_EDGE_CANARY_STANDALONE_PAIR_MIN_SAMPLES,
+    REJECTED_EDGE_CANARY_STANDALONE_PAIR_MIN_POSITIVE_FRACTION,
+    REJECTED_EDGE_CANARY_STANDALONE_PAIR_MIN_AVG_R,
+  );
+
+  if (!globalEvidenceQualified && !standalonePairSideEvidenceQualified) {
     return reject('GLOBAL_EVIDENCE');
   }
-  if (
-    !evidencePasses(
-      evidence.pairSide30m,
-      REJECTED_EDGE_CANARY_MIN_PAIR_SIDE_SAMPLES,
-      REJECTED_EDGE_CANARY_MIN_PAIR_SIDE_POSITIVE_FRACTION,
-      REJECTED_EDGE_CANARY_MIN_PAIR_SIDE_AVG_R,
-    )
-  ) {
+  if (globalEvidenceQualified && !pairSideEvidenceQualified) {
     return reject('PAIR_SIDE_EVIDENCE');
   }
 
@@ -136,6 +144,6 @@ export function evaluateRejectedEdgePaperCanary(input: {
     eligible: true,
     route: 'REJECTED_EDGE_CANARY',
     artifact: REJECTED_EDGE_CANARY_ARTIFACT,
-    reason: 'EVIDENCE_QUALIFIED',
+    reason: globalEvidenceQualified ? 'EVIDENCE_QUALIFIED' : 'PAIR_SIDE_EVIDENCE_QUALIFIED',
   };
 }
