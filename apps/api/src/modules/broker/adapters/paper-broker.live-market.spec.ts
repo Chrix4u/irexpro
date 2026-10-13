@@ -230,46 +230,93 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     expect(position!.currentPrice).not.toBe(result.filledPrice);
   });
 
+  it('keeps live-PAPER profit lock shadow-only unless explicitly enabled', async () => {
+    const previous = process.env.PAPER_PROFIT_LOCK_ENABLED;
+    delete process.env.PAPER_PROFIT_LOCK_ENABLED;
+    try {
+      const live = new LivePaperMarketDataService();
+      live.registerLiveConnection('conn-profit-lock-default-off');
+      const bars = protectionBars();
+      live.updateClosedCandles('EURUSD', bars.initial, 'conn-profit-lock-default-off');
+      const adapter = new PaperBrokerAdapter(
+        undefined,
+        undefined,
+        undefined,
+        'conn-profit-lock-default-off',
+        live,
+      );
+      await adapter.connect({} as any);
+      await adapter.placeOrder({
+        idempotencyKey: 'live-profit-lock-default-off',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '0.01',
+        stopLoss: '1.09900',
+        takeProfit: '1.10500',
+        orderKind: 'MARKET',
+      });
+
+      live.updateStreamingMidQuote('EURUSD', 1.1008, new Date(), 'conn-profit-lock-default-off');
+      expect(await adapter.getOpenPositions()).toHaveLength(1);
+
+      live.updateStreamingMidQuote('EURUSD', 1.1003, new Date(), 'conn-profit-lock-default-off');
+      expect(await adapter.getOpenPositions()).toHaveLength(1);
+      expect(
+        await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000)),
+      ).toHaveLength(0);
+    } finally {
+      if (previous === undefined) delete process.env.PAPER_PROFIT_LOCK_ENABLED;
+      else process.env.PAPER_PROFIT_LOCK_ENABLED = previous;
+    }
+  });
+
   it('locks an armed live-PAPER profit on a fresh streaming give-back before M5 close', async () => {
-    const live = new LivePaperMarketDataService();
-    live.registerLiveConnection('conn-profit-lock');
-    const bars = protectionBars();
-    live.updateClosedCandles('EURUSD', bars.initial, 'conn-profit-lock');
-    const adapter = new PaperBrokerAdapter(
-      undefined,
-      undefined,
-      undefined,
-      'conn-profit-lock',
-      live,
-    );
-    await adapter.connect({} as any);
-    await adapter.placeOrder({
-      idempotencyKey: 'live-profit-lock',
-      instrument: 'EURUSD',
-      direction: 'BUY',
-      lotSize: '0.01',
-      stopLoss: '1.09900',
-      takeProfit: '1.10500',
-      orderKind: 'MARKET',
-    });
+    const previous = process.env.PAPER_PROFIT_LOCK_ENABLED;
+    process.env.PAPER_PROFIT_LOCK_ENABLED = 'true';
+    try {
+      const live = new LivePaperMarketDataService();
+      live.registerLiveConnection('conn-profit-lock');
+      const bars = protectionBars();
+      live.updateClosedCandles('EURUSD', bars.initial, 'conn-profit-lock');
+      const adapter = new PaperBrokerAdapter(
+        undefined,
+        undefined,
+        undefined,
+        'conn-profit-lock',
+        live,
+      );
+      await adapter.connect({} as any);
+      await adapter.placeOrder({
+        idempotencyKey: 'live-profit-lock',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '0.01',
+        stopLoss: '1.09900',
+        takeProfit: '1.10500',
+        orderKind: 'MARKET',
+      });
 
-    // Arm above 0.60R without touching TP. Fixed 1-pip spread => bid 1.10075.
-    live.updateStreamingMidQuote('EURUSD', 1.1008, new Date(), 'conn-profit-lock');
-    let positions = await adapter.getOpenPositions();
-    expect(positions).toHaveLength(1);
-    expect(Number(positions[0]!.pathDiagnostics?.maxFavorablePnl)).toBeGreaterThan(0.6);
+      // Arm above 0.60R without touching TP. Fixed 1-pip spread => bid 1.10075.
+      live.updateStreamingMidQuote('EURUSD', 1.1008, new Date(), 'conn-profit-lock');
+      let positions = await adapter.getOpenPositions();
+      expect(positions).toHaveLength(1);
+      expect(Number(positions[0]!.pathDiagnostics?.maxFavorablePnl)).toBeGreaterThan(0.6);
 
-    // Retreat below the 55%-of-peak retention floor. Fresh mark protection
-    // must close immediately instead of waiting for TP, SL or M5 close.
-    live.updateStreamingMidQuote('EURUSD', 1.1003, new Date(), 'conn-profit-lock');
-    positions = await adapter.getOpenPositions();
-    expect(positions).toHaveLength(0);
+      // Retreat below the 55%-of-peak retention floor. Fresh mark protection
+      // must close immediately instead of waiting for TP, SL or M5 close.
+      live.updateStreamingMidQuote('EURUSD', 1.1003, new Date(), 'conn-profit-lock');
+      positions = await adapter.getOpenPositions();
+      expect(positions).toHaveLength(0);
 
-    const closed = await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000));
-    expect(closed).toHaveLength(1);
-    expect(closed[0]!.closeReason).toBe('PROFIT_LOCK');
-    expect(Number(closed[0]!.realisedPnl)).toBeGreaterThan(0);
-    expect(Number(closed[0]!.pathDiagnostics?.profitGiveback)).toBeGreaterThan(0);
+      const closed = await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000));
+      expect(closed).toHaveLength(1);
+      expect(closed[0]!.closeReason).toBe('PROFIT_LOCK');
+      expect(Number(closed[0]!.realisedPnl)).toBeGreaterThan(0);
+      expect(Number(closed[0]!.pathDiagnostics?.profitGiveback)).toBeGreaterThan(0);
+    } finally {
+      if (previous === undefined) delete process.env.PAPER_PROFIT_LOCK_ENABLED;
+      else process.env.PAPER_PROFIT_LOCK_ENABLED = previous;
+    }
   });
 
   it('closes a BUY at TP from a fresh streaming bid before the M5 candle closes', async () => {
