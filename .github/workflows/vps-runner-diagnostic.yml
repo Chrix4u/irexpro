@@ -1,0 +1,53 @@
+name: VPS Runner Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irexpro-staging-vps-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    runs-on: [self-hosted, linux, x64, lightworld-vps, staging, irexpro-staging]
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify runner identity and host
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf 'runner_user='; whoami
+          printf 'host='; hostname
+          uname -a
+          uptime
+
+      - name: Verify staging path is readable
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          staging='/home/lightworld/webapps/irexpro-staging'
+          test -e "$staging" || test -L "$staging"
+          stat -c 'type=%F owner=%U group=%G mode=%a path=%n' "$staging"
+          printf 'resolved_path='; readlink -f "$staging"
+
+      - name: Verify read-only service health
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf 'api_health='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:3010/api/v1/health
+          printf 'web_login='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:3005/login
+          printf 'admin_root='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:3006/
+          printf 'ai_health='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:8011/api/v1/health
+          printf 'public_web='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 15 https://irexpro.lightworldtech.com/login
+          printf 'public_api='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 15 https://irexpro.lightworldtech.com/api/v1/health
+
+      - name: Report capacity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          df -h /
+          free -h

@@ -74,6 +74,8 @@ const WORKFLOW_RULES = [
       '.github/workflows/main-staging-release-gate.yml',
       '.github/workflows/staging-deploy.yml',
       '.github/workflows/six-pair-research-run.yml',
+      '.github/workflows/vps-ops-control.yml',
+      '.github/workflows/vps-runner-diagnostic.yml',
     ],
   },
   {
@@ -211,6 +213,16 @@ export function runSelfTests() {
     requiredWorkflowNames(['.github/workflows/six-pair-research-run.yml']),
     ['Release Security', 'Deployment Script Safety'],
     'six-pair research workflow change',
+  );
+  assertEqual(
+    requiredWorkflowNames(['.github/workflows/vps-ops-control.yml']),
+    ['Release Security', 'Deployment Script Safety'],
+    'VPS ops control workflow change',
+  );
+  assertEqual(
+    requiredWorkflowNames(['.github/workflows/vps-runner-diagnostic.yml']),
+    ['Release Security', 'Deployment Script Safety'],
+    'VPS runner diagnostic workflow change',
   );
   assertEqual(
     requiredWorkflowNames(['infrastructure/nginx/irexpro.conf']),
