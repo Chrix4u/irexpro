@@ -230,24 +230,24 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     expect(position!.currentPrice).not.toBe(result.filledPrice);
   });
 
-  it('keeps live-PAPER profit lock shadow-only unless explicitly enabled', async () => {
+  it('keeps profit protection active for live PAPER even when the legacy env flag is false', async () => {
     const previous = process.env.PAPER_PROFIT_LOCK_ENABLED;
-    delete process.env.PAPER_PROFIT_LOCK_ENABLED;
+    process.env.PAPER_PROFIT_LOCK_ENABLED = 'false';
     try {
       const live = new LivePaperMarketDataService();
-      live.registerLiveConnection('conn-profit-lock-default-off');
+      live.registerLiveConnection('conn-profit-lock-always-on');
       const bars = protectionBars();
-      live.updateClosedCandles('EURUSD', bars.initial, 'conn-profit-lock-default-off');
+      live.updateClosedCandles('EURUSD', bars.initial, 'conn-profit-lock-always-on');
       const adapter = new PaperBrokerAdapter(
         undefined,
         undefined,
         undefined,
-        'conn-profit-lock-default-off',
+        'conn-profit-lock-always-on',
         live,
       );
       await adapter.connect({} as any);
       await adapter.placeOrder({
-        idempotencyKey: 'live-profit-lock-default-off',
+        idempotencyKey: 'live-profit-lock-always-on',
         instrument: 'EURUSD',
         direction: 'BUY',
         lotSize: '0.01',
@@ -256,14 +256,16 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
         orderKind: 'MARKET',
       });
 
-      live.updateStreamingMidQuote('EURUSD', 1.1008, new Date(), 'conn-profit-lock-default-off');
+      // Reach just above +0.50R, then give back below the 20%-of-peak floor.
+      live.updateStreamingMidQuote('EURUSD', 1.1008, new Date(), 'conn-profit-lock-always-on');
       expect(await adapter.getOpenPositions()).toHaveLength(1);
 
-      live.updateStreamingMidQuote('EURUSD', 1.1003, new Date(), 'conn-profit-lock-default-off');
-      expect(await adapter.getOpenPositions()).toHaveLength(1);
-      expect(
-        await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000)),
-      ).toHaveLength(0);
+      live.updateStreamingMidQuote('EURUSD', 1.1002, new Date(), 'conn-profit-lock-always-on');
+      expect(await adapter.getOpenPositions()).toHaveLength(0);
+      const closed = await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000));
+      expect(closed).toHaveLength(1);
+      expect(closed[0]!.closeReason).toBe('PROFIT_LOCK');
+      expect(Number(closed[0]!.realisedPnl)).toBeGreaterThan(0);
     } finally {
       if (previous === undefined) delete process.env.PAPER_PROFIT_LOCK_ENABLED;
       else process.env.PAPER_PROFIT_LOCK_ENABLED = previous;
@@ -302,9 +304,9 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
       expect(positions).toHaveLength(1);
       expect(Number(positions[0]!.pathDiagnostics?.maxFavorablePnl)).toBeGreaterThan(0.6);
 
-      // Retreat below the 55%-of-peak retention floor. Fresh mark protection
-      // must close immediately instead of waiting for TP, SL or M5 close.
-      live.updateStreamingMidQuote('EURUSD', 1.1003, new Date(), 'conn-profit-lock');
+      // Retreat below the new 20%-of-peak floor at the first +0.50R tier.
+      // Fresh mark protection must close immediately instead of waiting for TP, SL or M5 close.
+      live.updateStreamingMidQuote('EURUSD', 1.1002, new Date(), 'conn-profit-lock');
       positions = await adapter.getOpenPositions();
       expect(positions).toHaveLength(0);
 

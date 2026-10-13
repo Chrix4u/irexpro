@@ -608,19 +608,25 @@ export function evaluatePaperProfitLock(input: {
     if (compareDecimalStrings(input.initialRiskPnl, '0') <= 0) return disabled;
     if (compareDecimalStrings(input.maxFavorablePnl, '0') <= 0) return disabled;
 
-    const armFloor = multiplyDecimalStrings(input.initialRiskPnl, '0.30');
+    // Let small favorable excursions breathe. Today's forward PAPER evidence
+    // showed that arming at 0.30R repeatedly harvested tiny wins while full SL
+    // losses remained ~1R. Arm only once the trade has demonstrated at least
+    // +0.50R, then tighten progressively as MFE becomes genuinely material.
+    const armFloor = multiplyDecimalStrings(input.initialRiskPnl, '0.50');
     if (compareDecimalStrings(input.maxFavorablePnl, armFloor) < 0) return disabled;
 
     const peak = input.maxFavorablePnl;
     const risk = input.initialRiskPnl;
     const retentionFraction =
-      compareDecimalStrings(peak, multiplyDecimalStrings(risk, '0.60')) < 0
-        ? '0.40'
+      compareDecimalStrings(peak, multiplyDecimalStrings(risk, '0.75')) < 0
+        ? '0.20'
         : compareDecimalStrings(peak, risk) < 0
-          ? '0.55'
+          ? '0.30'
           : compareDecimalStrings(peak, multiplyDecimalStrings(risk, '1.50')) < 0
-            ? '0.65'
-            : '0.75';
+            ? '0.50'
+            : compareDecimalStrings(peak, multiplyDecimalStrings(risk, '2.00')) < 0
+              ? '0.60'
+              : '0.70';
     const protectedFloorPnl = toMoney(multiplyDecimalStrings(peak, retentionFraction));
     return {
       armed: true,
@@ -841,12 +847,15 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   private paperProfitLockEnabled(): boolean {
+    // Forward live-PAPER trading always keeps profit protection active. The
+    // legacy environment flag may still opt deterministic replay/simulation
+    // runs in or out, but it must never silently disable protection on the
+    // live PAPER market path.
+    if (this.isLiveMarketMode()) return true;
+
     const configured = (process.env.PAPER_PROFIT_LOCK_ENABLED ?? '').trim().toLowerCase();
     if (configured === '0' || configured === 'false' || configured === 'off') return false;
     if (configured === '1' || configured === 'true' || configured === 'on') return true;
-    // Experimental profit-lock execution is explicit opt-in only. The default
-    // remains shadow/telemetry-only so PAPER trades preserve the same SL/TP
-    // payoff geometry used by admission and counterfactual evidence.
     return false;
   }
 
