@@ -42,6 +42,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
         userId: USER,
         maxTradeRiskPercent: '2.00',
         maxPositionSizeLot: '0.1000',
+        minStopLossPips: '5.00',
         ...profileOverrides,
       } as RiskProfile),
     };
@@ -85,6 +86,30 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.inputs.allocationAwarePaper).toBe(true);
     expect(sized.inputs.requestedLotUpperBound).toBe('0.01');
     expect(sized.inputs.profileMaxPositionSizeLot).toBe('0.1');
+  });
+
+  it('re-anchors an undersized PAPER MARKET stop to the fresh executable quote before sizing', async () => {
+    const service = makeService();
+
+    const sized = await service.sizePosition({
+      ...params,
+      direction: 'SELL',
+      // The model stop was 5.1 pips from its candle close, but the executable
+      // broker bid has moved toward it; at sizing time this is only 4.1 pips.
+      stopLoss: '1.08541',
+      paperAllocationSizing: {
+        executionMode: 'PAPER_ONLY',
+        allocatedCapital: '1000.00',
+        confidenceTier: 'BASE',
+      },
+    });
+
+    // Keep the durable 5-pip risk floor intact. Re-anchor to 5.1 pips from
+    // the fresh 1.08500 SELL entry, then recalculate $20 risk: 20 / $51 =
+    // 0.392... lots, normalized DOWN to broker step 0.01 => 0.39.
+    expect(sized.inputs.stopLoss).toBe('1.08551');
+    expect(sized.inputs.stopLossDistance).toBe('0.00051');
+    expect(sized.lots).toBe('0.39');
   });
 
   it('never exceeds the durable profile risk percent even when the PAPER tier requests 2.5%', async () => {

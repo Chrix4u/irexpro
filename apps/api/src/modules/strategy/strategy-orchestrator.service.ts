@@ -643,7 +643,7 @@ export class StrategyOrchestratorService {
       // MARKET sentinel: RiskService resolves an independent fresh,
       // direction-aware quote and the final dispatch gate rechecks again.
       entryPrice: '0',
-      stopLoss: String(executionCandidate.suggestedStopLoss),
+      stopLoss: sized.inputs.stopLoss ?? String(executionCandidate.suggestedStopLoss),
       takeProfit: String(executionCandidate.suggestedTakeProfit),
       idempotencyKey: `${candidate.userId}:${candidate.signalId}`,
       volatilityScore: candidate.volatilityScore,

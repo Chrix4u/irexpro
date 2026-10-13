@@ -97,6 +97,9 @@ export interface SizedPosition {
 
 /** Decimal scale for lot math (lot steps are 0.01/0.001 — 8 digits is exact). */
 const LOT_SCALE = 8;
+const DEFAULT_PIP_SIZE = '0.0001';
+const JPY_PIP_SIZE = '0.01';
+const PAPER_MARKET_STOP_BUFFER_PIPS = '0.1';
 
 /**
  * PositionSizingService (Round 6 live-execution completion §4) — the
@@ -295,14 +298,56 @@ export class PositionSizingService {
         'position sizing requires a stop loss (risk-distance anchor)',
       );
     }
-    const stopLoss = ExactDecimal.tryParse(params.stopLoss);
-    if (!stopLoss || !stopLoss.isPositive()) {
+    const requestedStopLoss = ExactDecimal.tryParse(params.stopLoss);
+    if (!requestedStopLoss || !requestedStopLoss.isPositive()) {
       throw new PositionSizingError(
         'STOP_LOSS_UNPARSEABLE',
         `stop loss is not a provable positive decimal: ${params.stopLoss}`,
       );
     }
-    const slDistance = entry.sub(stopLoss).abs();
+
+    let stopLoss = requestedStopLoss;
+    let slDistance = entry.sub(stopLoss).abs();
+
+    // Allocation-aware PAPER MARKET entries are sized from a fresh broker
+    // quote, while the model stop is anchored to the preceding candle close.
+    // If price has moved toward that stop, the durable 5-pip policy can be
+    // violated even though the model originally emitted a 5.1-pip floor.
+    // Re-anchor only a correctly-directed undersized PAPER stop to the fresh
+    // executable quote plus the same 0.1-pip safety buffer, then size from the
+    // wider geometry. DEMO/LIVE and malformed/wrong-side stops are unchanged.
+    if (allocationAwarePaper && params.entryType === 'MARKET') {
+      const minStopLossPips = ExactDecimal.tryParse(profile.minStopLossPips);
+      if (!minStopLossPips || !minStopLossPips.isPositive()) {
+        throw new PositionSizingError(
+          'RISK_PROFILE_UNPROVABLE',
+          `profile minStopLossPips is not a provable positive decimal: ${profile.minStopLossPips}`,
+        );
+      }
+      const pipSize = ExactDecimal.parse(
+        instrument.includes('JPY') ? JPY_PIP_SIZE : DEFAULT_PIP_SIZE,
+      );
+      const bufferedMinimumDistance = minStopLossPips
+        .add(ExactDecimal.parse(PAPER_MARKET_STOP_BUFFER_PIPS))
+        .mul(pipSize);
+      const stopIsCorrectSide =
+        params.direction === 'BUY' ? stopLoss.lt(entry) : stopLoss.gt(entry);
+
+      if (stopIsCorrectSide && slDistance.lt(bufferedMinimumDistance)) {
+        stopLoss =
+          params.direction === 'BUY'
+            ? entry.sub(bufferedMinimumDistance)
+            : entry.add(bufferedMinimumDistance);
+        slDistance = bufferedMinimumDistance;
+        this.logger.log(
+          `Re-anchored allocation-aware PAPER ${instrument} ${params.direction} MARKET stop ` +
+            `from ${requestedStopLoss.toString()} to ${stopLoss.toString()} using fresh entry ` +
+            `${entry.toString()} (${minStopLossPips.toString()} + ` +
+            `${PAPER_MARKET_STOP_BUFFER_PIPS} pips buffer)`,
+        );
+      }
+    }
+
     if (!slDistance.isPositive()) {
       throw new PositionSizingError(
         'STOP_LOSS_DISTANCE_INVALID',
