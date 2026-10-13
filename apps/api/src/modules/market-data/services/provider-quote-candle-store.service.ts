@@ -57,6 +57,85 @@ export class ProviderQuoteCandleStoreService {
     );
   }
 
+  async getLatestPositiveSpreadQuote(
+    connectionId: string,
+    instrument: string,
+    evaluatedAt = new Date(),
+  ): Promise<(BrokerPrice & { positiveSampleCount: number; latestPositiveSampleAt: Date }) | null> {
+    const rows = await this.dataSource.query(
+      `
+      WITH latest AS (
+        SELECT bid_close, ask_close, spread_close, last_sample_at
+        FROM market_data.provider_quote_candles
+        WHERE connection_id = $1
+          AND instrument = $2
+          AND timeframe = 'M1'
+          AND last_sample_at <= $3::timestamptz
+        ORDER BY last_sample_at DESC
+        LIMIT 1
+      ), positive AS (
+        SELECT spread_close, last_sample_at
+        FROM market_data.provider_quote_candles
+        WHERE connection_id = $1
+          AND instrument = $2
+          AND timeframe = 'M1'
+          AND spread_close > 0
+          AND last_sample_at > ($3::timestamptz - interval '30 minutes')
+          AND last_sample_at <= $3::timestamptz
+      )
+      SELECT
+        l.bid_close,
+        l.ask_close,
+        l.spread_close,
+        l.last_sample_at,
+        COUNT(p.*)::int AS positive_sample_count,
+        percentile_cont(0.90) WITHIN GROUP (ORDER BY p.spread_close::double precision) AS p90_spread,
+        MAX(p.last_sample_at) AS latest_positive_sample_at
+      FROM latest l
+      LEFT JOIN positive p ON true
+      GROUP BY l.bid_close, l.ask_close, l.spread_close, l.last_sample_at
+      `,
+      [connectionId, instrument, evaluatedAt.toISOString()],
+    );
+    const row = rows?.[0];
+    if (!row) return null;
+    const rawBid = Number(row.bid_close);
+    const rawAsk = Number(row.ask_close);
+    const p90Spread = Number(row.p90_spread);
+    const rawSpread = Math.max(0, rawAsk - rawBid);
+    const spread = Math.max(rawSpread, p90Spread);
+    const timestamp = new Date(row.last_sample_at);
+    const latestPositiveSampleAt = new Date(row.latest_positive_sample_at);
+    const positiveSampleCount = Number(row.positive_sample_count);
+    if (
+      !Number.isFinite(rawBid) ||
+      !Number.isFinite(rawAsk) ||
+      rawBid <= 0 ||
+      rawAsk <= 0 ||
+      rawAsk < rawBid ||
+      !Number.isFinite(spread) ||
+      spread <= 0 ||
+      !Number.isFinite(timestamp.getTime()) ||
+      !Number.isFinite(latestPositiveSampleAt.getTime()) ||
+      !Number.isFinite(positiveSampleCount) ||
+      positiveSampleCount <= 0
+    ) {
+      return null;
+    }
+    const mid = (rawBid + rawAsk) / 2;
+    const bid = mid - spread / 2;
+    const ask = mid + spread / 2;
+    return {
+      instrument,
+      bid: bid.toFixed(10),
+      ask: ask.toFixed(10),
+      spread: spread.toFixed(10),
+      timestamp,
+      positiveSampleCount,
+      latestPositiveSampleAt,
+    };
+  }
+
   async getLatestQuote(connectionId: string, instrument: string): Promise<BrokerPrice | null> {
     const rows = await this.dataSource.query(
       `

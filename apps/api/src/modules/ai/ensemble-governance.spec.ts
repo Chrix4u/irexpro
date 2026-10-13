@@ -94,7 +94,7 @@ describe('evaluateEnsembleGovernance', () => {
           },
         });
         expect(result.estimatedExecutionCostR).toBeCloseTo(
-          (1.25 * executableSpread) / stopDistance,
+          (1.25 * (executableSpread / 12)) / stopDistance,
           8,
         );
         const wider = evaluateEnsembleGovernance({
@@ -115,7 +115,7 @@ describe('evaluateEnsembleGovernance', () => {
     },
   );
 
-  it('rejects the observed USDCAD setup whose apparent edge disappears at the PAPER fill cost', () => {
+  it('does not replace fresh observed execution spread with a wider static PAPER assumption', () => {
     const result = evaluateEnsembleGovernance({
       ...base,
       instrument: 'USDCAD',
@@ -124,6 +124,23 @@ describe('evaluateEnsembleGovernance', () => {
       stopLoss: 1.42574,
       ensemble: { ...ensemble, expectedR: 0.12963357838064193 },
       executionSpreadEvidence: { ...base.executionSpreadEvidence, spreadPrice: 0.00001 },
+      eventRisk: 'CLEAR',
+    });
+    expect(result.estimatedExecutionCostR).toBeCloseTo(0.024509803921568627, 8);
+    expect(result.netExpectedR).toBeCloseTo(0.1051237744590733, 8);
+    expect(result.paperExecutionEligible).toBe(true);
+    expect(result.paperExecutionBlockers).not.toContain('PAPER_NET_EXPECTED_R');
+  });
+
+  it('still rejects a USDCAD setup when the broker-native spread itself is genuinely wide', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      instrument: 'USDCAD',
+      direction: 'SELL',
+      entryPrice: 1.42523,
+      stopLoss: 1.42574,
+      ensemble: { ...ensemble, expectedR: 0.12963357838064193 },
+      executionSpreadEvidence: { ...base.executionSpreadEvidence, spreadPrice: 0.00012 },
       eventRisk: 'CLEAR',
     });
     expect(result.estimatedExecutionCostR).toBeCloseTo(0.29411764705882354, 8);
@@ -217,7 +234,7 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.netExpectedRPassed).toBe(true);
   });
 
-  it('floors tight observed spreads at the PAPER fill spread', () => {
+  it('uses the conservative observed spread directly after provider execution alignment', () => {
     const result = evaluateEnsembleGovernance({
       ...base,
       ensemble: { ...ensemble, expectedR: 0.12 },
@@ -228,10 +245,10 @@ describe('evaluateEnsembleGovernance', () => {
       },
     });
     expect(result.executionCostSource).toBe('BROKER_OBSERVED_P90');
-    expect(result.estimatedExecutionCostR).toBeCloseTo(0.0625, 6);
-    expect(result.netExpectedR).toBeCloseTo(0.0575, 6);
-    expect(result.paperNetExpectedRPassed).toBe(false);
-    expect(result.paperExecutionEligible).toBe(false);
+    expect(result.estimatedExecutionCostR).toBeCloseTo(0.00625, 6);
+    expect(result.netExpectedR).toBeCloseTo(0.11375, 6);
+    expect(result.paperNetExpectedRPassed).toBe(true);
+    expect(result.paperExecutionEligible).toBe(true);
   });
 
   it('uses a dedicated fail-closed reversal envelope instead of the continuation drift envelope', () => {

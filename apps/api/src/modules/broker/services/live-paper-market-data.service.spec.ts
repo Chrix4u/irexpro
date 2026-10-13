@@ -64,7 +64,23 @@ describe('LivePaperMarketDataService', () => {
     expect(service.getOHLCV('EURUSD', 'M5', 2)).toEqual(before);
   });
 
-  it('uses exact broker-native provider bid/ask for read-only position marks without changing execution evidence', () => {
+  it('uses a fresh positive provider bid/ask as the PAPER execution quote without changing candle evidence', () => {
+    const service = new LivePaperMarketDataService();
+    service.updateClosedCandles('USDCAD', candles(1.42, 5));
+    const candlesBefore = service.getOHLCV('USDCAD', 'M5', 2);
+    const observedAt = new Date();
+
+    service.updateProviderQuote('USDCAD', '1.42480', '1.42481', observedAt);
+
+    const execution = service.getQuote('USDCAD');
+    expect(execution.source).toBe('PROVIDER');
+    expect(execution.bid).toBe('1.42480');
+    expect(execution.ask).toBe('1.42481');
+    expect(execution.timestamp).toEqual(observedAt);
+    expect(service.getOHLCV('USDCAD', 'M5', 2)).toEqual(candlesBefore);
+  });
+
+  it('uses exact broker-native provider bid/ask for both execution and position marks when fresh', () => {
     const service = new LivePaperMarketDataService();
     service.updateClosedCandles('USDCAD', candles(1.42, 5));
     const executionBefore = service.getQuote('USDCAD');
@@ -74,12 +90,24 @@ describe('LivePaperMarketDataService', () => {
 
     const executionAfter = service.getQuote('USDCAD');
     const mark = service.getPositionMarkQuote('USDCAD');
-    expect(executionAfter).toEqual(executionBefore);
+    expect(executionBefore.source).toBe('REST_M5');
+    expect(executionAfter.source).toBe('PROVIDER');
+    expect(executionAfter.bid).toBe('1.42480');
+    expect(executionAfter.ask).toBe('1.42492');
     expect(mark.source).toBe('PROVIDER');
     expect(mark.bid).toBe('1.42480');
     expect(mark.ask).toBe('1.42492');
     expect(mark.timestamp).toEqual(observedAt);
     expect(mark.isStale).toBe(false);
+  });
+
+  it('never uses a zero-spread provider snapshot as an execution fill', () => {
+    const service = new LivePaperMarketDataService();
+    service.updateClosedCandles('EURUSD', candles(1.1, 5));
+    service.updateProviderQuote('EURUSD', '1.11867', '1.11867', new Date());
+
+    expect(service.getQuote('EURUSD').source).toBe('REST_M5');
+    expect(service.getPositionMarkQuote('EURUSD').source).toBe('PROVIDER');
   });
 
   it('falls back to the closed-candle quote when no fresh streaming mark exists', () => {
