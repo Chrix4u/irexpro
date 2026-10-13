@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   recover:
-    name: Restart Desktop Commander
+    name: Repair Desktop Commander
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment:
@@ -48,7 +48,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Restart Desktop Commander agent
+      - name: Repair Desktop Commander agent
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -59,7 +59,7 @@ jobs:
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
-            "if [ \"\$(id -u)\" -eq 0 ]; then exec /usr/local/sbin/dc-recovery restart; else exec sudo -n /usr/local/sbin/dc-recovery restart; fi"
+            "if [ \"\$(id -u)\" -eq 0 ]; then exec /usr/local/sbin/dc-recovery repair; else exec sudo -n /usr/local/sbin/dc-recovery repair; fi"
 
       - name: Remove ephemeral SSH material
         if: always()
