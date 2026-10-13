@@ -1,0 +1,139 @@
+name: VPS Ops Control
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: irexpro-staging-vps-ops
+  cancel-in-progress: false
+
+jobs:
+  control:
+    if: >-
+      github.event.issue.number == 366 &&
+      github.actor == 'Chrix4u' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/vps ')
+    runs-on: [self-hosted, linux, x64, lightworld-vps, staging, irexpro-staging]
+    timeout-minutes: 5
+    env:
+      COMMENT_BODY: ${{ github.event.comment.body }}
+      GH_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      GH_REPOSITORY: ${{ github.repository }}
+      GH_API_URL: ${{ github.api_url }}
+      GITHUB_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Run allow-listed read-only operation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          output_file="$RUNNER_TEMP/vps-ops-output.txt"
+          : > "$output_file"
+
+          case "$COMMENT_BODY" in
+            "/vps status")
+              {
+                printf 'staging_path=/home/lightworld/webapps/irexpro-staging\n'
+                stat -c 'type=%F owner=%U group=%G mode=%a' /home/lightworld/webapps/irexpro-staging
+                printf 'resolved_path='; readlink -f /home/lightworld/webapps/irexpro-staging
+                printf 'api_health='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:3010/api/v1/health
+                printf 'web_login='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:3005/login
+                printf 'ai_health='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:8011/api/v1/health
+              } > "$output_file" 2>&1
+              ;;
+            "/vps health")
+              {
+                printf 'api_live='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:3010/api/v1/health/live
+                printf 'api_ready='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:3010/api/v1/health/ready
+                printf 'api_health='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:3010/api/v1/health
+                printf 'web_login='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:3005/login
+                printf 'admin_root='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:3006/
+                printf 'ai_health='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 10 http://127.0.0.1:8011/api/v1/health
+                printf 'public_api_live='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 15 https://irexpro.lightworldtech.com/api/v1/health/live
+                printf 'public_api_ready='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 15 https://irexpro.lightworldtech.com/api/v1/health/ready
+                printf 'public_web='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 15 https://irexpro.lightworldtech.com/login
+                printf 'public_admin='; curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' --max-time 15 https://irexproadmin.lightworldtech.com/
+              } > "$output_file" 2>&1
+              ;;
+            "/vps disk")
+              {
+                df -h /
+                free -h
+              } > "$output_file" 2>&1
+              ;;
+            "/vps runner-status")
+              {
+                printf 'runner_user='; whoami
+                printf 'host='; hostname
+                uptime
+                systemctl --no-pager --plain --type=service --state=running 'actions.runner.*irexpro*' 2>/dev/null || true
+              } > "$output_file" 2>&1
+              ;;
+            *)
+              printf 'Rejected: command is not in the read-only allow-list.\n' > "$output_file"
+              exit 64
+              ;;
+          esac
+
+          python3 - "$output_file" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding='utf-8', errors='replace')
+          text = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', text)
+          text = re.sub(
+              r'(?i)(token|password|secret|api[_-]?key)=\S+',
+              r'\1=[REDACTED]',
+              text,
+          )
+          text = text.replace('```', "'''")
+          if len(text) > 12000:
+              text = text[:12000] + '\n[output truncated]\n'
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Post sanitized result to control issue
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          async function postResult() {
+            const path = `${process.env.RUNNER_TEMP}/vps-ops-output.txt`;
+            const output = fs.readFileSync(path, 'utf8').trimEnd();
+            const body = [
+              '<!-- lightworld-vps-ops -->',
+              `**VPS Ops result** for \`${process.env.COMMENT_BODY}\``,
+              '',
+              '```text',
+              output || '(no output)',
+              '```',
+            ].join('\n');
+            const url = `${process.env.GH_API_URL}/repos/${process.env.GH_REPOSITORY}/issues/${process.env.GH_ISSUE_NUMBER}/comments`;
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+                'Content-Type': 'application/json',
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+              body: JSON.stringify({ body }),
+            });
+            if (!response.ok) throw new Error(`GitHub comment API returned ${response.status}`);
+          }
+
+          postResult().catch((error) => {
+            console.error(error instanceof Error ? error.message : String(error));
+            process.exitCode = 1;
+          });
+          NODE
