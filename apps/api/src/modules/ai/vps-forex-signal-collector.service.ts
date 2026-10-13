@@ -1700,7 +1700,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
         const dynamicLotSizing =
           paperExecutionRoute === 'REJECTED_EDGE_CANARY'
-            ? { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'BASE' as const }
+            ? { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'RESEARCH' as const }
             : paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
               ? { upperBound: PAPER_RESEARCH_THROUGHPUT_LOT_CAP, tier: 'RESEARCH' as const }
               : paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH'

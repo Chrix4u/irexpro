@@ -844,9 +844,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     const configured = (process.env.PAPER_PROFIT_LOCK_ENABLED ?? '').trim().toLowerCase();
     if (configured === '0' || configured === 'false' || configured === 'off') return false;
     if (configured === '1' || configured === 'true' || configured === 'on') return true;
-    // Default-on only for the VPS live PAPER adapter. Replay/unit simulation and
-    // every non-paper broker retain their historical behavior unless explicitly enabled.
-    return this.isLiveMarketMode();
+    // Experimental profit-lock execution is explicit opt-in only. The default
+    // remains shadow/telemetry-only so PAPER trades preserve the same SL/TP
+    // payoff geometry used by admission and counterfactual evidence.
+    return false;
   }
 
   private initialRiskPnlForPosition(position: PaperPosition): string | null {

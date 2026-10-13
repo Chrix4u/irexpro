@@ -982,7 +982,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('routes an evidence-qualified rejected-edge canary to PAPER with BASE sizing and research-only metadata', async () => {
+  it('routes an evidence-qualified rejected-edge canary to PAPER with RESEARCH sizing and research-only metadata', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
@@ -1123,7 +1123,7 @@ describe('VpsForexSignalCollectorService', () => {
             rejected_edge_canary_artifact: 'rejected-edge-paper-canary-v1',
             main_strategy_qualification_evidence: false,
             production_eligible: false,
-            position_sizing_tier: 'BASE',
+            position_sizing_tier: 'RESEARCH',
           }),
         }),
       );
