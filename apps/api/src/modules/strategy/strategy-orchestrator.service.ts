@@ -506,6 +506,7 @@ export class StrategyOrchestratorService {
             executionMode: string;
             allocatedCapital: string | null;
             confidenceTier: PaperAllocationConfidenceTier;
+            marketReferenceEntryPrice?: string;
           }
         | undefined;
       if (
@@ -535,6 +536,9 @@ export class StrategyOrchestratorService {
               ? allocationState.allocatedCapital
               : null,
             confidenceTier,
+            ...(executionCandidate.suggestedEntryPrice != null
+              ? { marketReferenceEntryPrice: String(executionCandidate.suggestedEntryPrice) }
+              : {}),
           };
         }
       }
@@ -653,6 +657,10 @@ export class StrategyOrchestratorService {
       executionMode: session.executionMode,
       brokerConnectionId: session.brokerConnectionId,
       allocationAwarePaperSizing: sized.inputs.allocationAwarePaper === true,
+      paperMarketReferenceEntryPrice:
+        sized.inputs.allocationAwarePaper === true && executionCandidate.suggestedEntryPrice != null
+          ? String(executionCandidate.suggestedEntryPrice)
+          : undefined,
       generatedAt: candidate.generatedAt,
     };
 

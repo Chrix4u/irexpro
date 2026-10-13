@@ -1115,6 +1115,31 @@ describe('RiskService', () => {
   });
 
   describe('Step 5c — Stop-loss distance', () => {
+    it('rebases allocation-aware PAPER MARKET SL/TP to the fresh executable quote while preserving model distances', async () => {
+      orderGeometry.resolveOrderGeometry.mockResolvedValue({
+        contractSize: ExactDecimal.parse('100000'),
+        freshQuote: ExactDecimal.parse('1.10010'),
+        quoteRef: { source: 'BROKER_TEST' },
+      });
+
+      const trade = validTrade({
+        direction: 'SELL',
+        entryPrice: '0',
+        requestedLotSize: '0.05',
+        stopLoss: '1.10051',
+        takeProfit: '1.09949',
+        allocationAwarePaperSizing: true,
+        paperMarketReferenceEntryPrice: '1.10000',
+      } as Partial<ProposedTrade>);
+
+      const result = await service.validateProposedTrade('user-1', trade);
+
+      expect(result.decision).toBe('APPROVED');
+      if (result.decision !== 'APPROVED') throw new Error(result.rejectionReason);
+      expect(result.validatedOrder.stopLoss).toBe('1.10061');
+      expect(result.validatedOrder.takeProfit).toBe('1.09959');
+      expect(result.appliedRules).toContain('PAPER_MARKET_GEOMETRY:REBASED');
+    });
     it('REJECTS when SL is too close to entry (below minStopLossPips)', async () => {
       const trade = {
         ...validTrade(),

@@ -19,7 +19,7 @@ const EURUSD_SPEC: BrokerInstrument = {
 };
 
 describe('PositionSizingService — allocation-aware PAPER sizing', () => {
-  const makeService = (profileOverrides: Partial<RiskProfile> = {}) => {
+  const makeService = (profileOverrides: Partial<RiskProfile> = {}, freshQuote = '1.08500') => {
     const brokerService = {
       getBrokerAccountState: jest.fn().mockResolvedValue({
         balance: '10000.00',
@@ -32,7 +32,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     const orderGeometry = {
       resolveOrderGeometry: jest.fn().mockResolvedValue({
         contractSize: ExactDecimal.parse('100000'),
-        freshQuote: ExactDecimal.parse('1.08500'),
+        freshQuote: ExactDecimal.parse(freshQuote),
         quoteRef: { source: 'M1' },
         instrumentSpec: EURUSD_SPEC,
       }),
@@ -141,6 +141,31 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.inputs.riskPercent).toBe('1');
     expect(sized.inputs.requestedLotUpperBound).toBe('0.01');
     expect(sized.inputs.allocationAwarePaper).toBe(true);
+  });
+
+  it('sizes PAPER MARKET risk from the model stop distance when the executable quote moved toward the stop', async () => {
+    const service = makeService({}, '1.10010');
+
+    const sized = await service.sizePosition({
+      ...params,
+      direction: 'SELL',
+      stopLoss: '1.10051',
+      paperAllocationSizing: {
+        executionMode: 'PAPER_ONLY',
+        allocatedCapital: '1000.00',
+        confidenceTier: 'BASE',
+        marketReferenceEntryPrice: '1.10000',
+      } as never,
+    });
+
+    // The model intended 5.1 pips of stop risk ($51 per standard lot). The
+    // fresh SELL quote moved one pip toward that absolute stop, but sizing
+    // must preserve the intended risk geometry: $20 / $51 = 0.392... -> 0.39.
+    expect(sized.lots).toBe('0.39');
+    expect((sized.inputs as unknown as Record<string, unknown>).riskReferenceEntryPrice).toBe(
+      '1.1',
+    );
+    expect(sized.inputs.stopLossDistance).toBe('0.00051');
   });
 
   it('keeps legacy lot ceilings outside PAPER_ONLY', async () => {
