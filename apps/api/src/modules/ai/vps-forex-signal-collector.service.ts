@@ -3337,6 +3337,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     // costs 6. Reuse one successful batch inside the same API-process minute
     // so a startup prime + collection slot cannot accidentally spend 12.
     const requestNow = new Date();
+    const requestMinute = requestNow.toISOString().slice(0, 16);
+    // Reuse any successful six-pair batch (primary or broker fallback) inside
+    // the current minute. In particular, daily-credit cooldown must not bypass
+    // this cache and hammer MetaApi with six fresh history calls every scan.
+    if (this.lastProviderFetchMinute === requestMinute && this.lastProviderSeries) {
+      this.logger.debug(
+        `Reusing six-pair market-data batch for minute=${requestMinute} authority=${this.lastMarketDataAuthority}`,
+      );
+      return this.lastProviderSeries;
+    }
     if (this.providerCooldownUntil && this.providerCooldownUntil.getTime() > requestNow.getTime()) {
       return this.fetchBrokerNativeFallbackSeries('TWELVE_DATA_DAILY_CREDIT_COOLDOWN');
     }
@@ -3347,12 +3357,6 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       this.providerCooldownUntil = null;
       this.providerCooldownReason = null;
     }
-    const requestMinute = requestNow.toISOString().slice(0, 16);
-    if (this.lastProviderFetchMinute === requestMinute && this.lastProviderSeries) {
-      this.logger.debug(`Reusing Twelve Data six-pair batch for minute=${requestMinute}`);
-      return this.lastProviderSeries;
-    }
-
     if (this.transientProviderFailureMinute === requestMinute) {
       return this.fetchBrokerNativeFallbackSeries('TWELVE_DATA_TRANSIENT_MINUTE_BACKOFF');
     }
@@ -3483,48 +3487,56 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
     const now = Date.now();
     try {
-      const rows = await Promise.all(
-        SYMBOLS.map(async ([instrument]) => {
-          const raw = await this.brokerService.getOhlcvForConnection(
-            userId,
-            sourceConnectionId,
-            instrument,
-            'M5',
-            500,
-          );
-          const candles = raw
-            .map((candle) => ({
-              timestamp:
-                candle.timestamp instanceof Date
-                  ? new Date(candle.timestamp)
-                  : new Date(candle.timestamp),
-              open: candle.open,
-              high: candle.high,
-              low: candle.low,
-              close: candle.close,
-            }))
-            .filter(
-              (candle) =>
-                Number.isFinite(candle.timestamp.getTime()) &&
-                candle.timestamp.getTime() + BAR_MS <= now,
-            )
-            .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+      const rows: Array<readonly [string, LivePaperCandleInput[]]> = [];
+      // MetaApi enforces a per-account historical-data concurrency ceiling.
+      // Keep two provider slots in reserve for other readers/quote recovery
+      // instead of issuing all six symbols at once.
+      const historyConcurrency = 3;
+      for (let offset = 0; offset < SYMBOLS.length; offset += historyConcurrency) {
+        const batch = await Promise.all(
+          SYMBOLS.slice(offset, offset + historyConcurrency).map(async ([instrument]) => {
+            const raw = await this.brokerService.getOhlcvForConnection(
+              userId,
+              sourceConnectionId,
+              instrument,
+              'M5',
+              500,
+            );
+            const candles = raw
+              .map((candle) => ({
+                timestamp:
+                  candle.timestamp instanceof Date
+                    ? new Date(candle.timestamp)
+                    : new Date(candle.timestamp),
+                open: candle.open,
+                high: candle.high,
+                low: candle.low,
+                close: candle.close,
+              }))
+              .filter(
+                (candle) =>
+                  Number.isFinite(candle.timestamp.getTime()) &&
+                  candle.timestamp.getTime() + BAR_MS <= now,
+              )
+              .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
-          if (candles.length < 55) {
-            throw new Error(
-              `MetaTrader fallback returned only ${candles.length} ${instrument} fully closed M5 bars`,
-            );
-          }
-          const latest = candles[candles.length - 1]!;
-          const latestClose = latest.timestamp.getTime() + BAR_MS;
-          if (now - latestClose > 20 * 60_000) {
-            throw new Error(
-              `MetaTrader fallback ${instrument} latest fully closed M5 bar is stale`,
-            );
-          }
-          return [instrument, candles] as const;
-        }),
-      );
+            if (candles.length < 55) {
+              throw new Error(
+                `MetaTrader fallback returned only ${candles.length} ${instrument} fully closed M5 bars`,
+              );
+            }
+            const latest = candles[candles.length - 1]!;
+            const latestClose = latest.timestamp.getTime() + BAR_MS;
+            if (now - latestClose > 20 * 60_000) {
+              throw new Error(
+                `MetaTrader fallback ${instrument} latest fully closed M5 bar is stale`,
+              );
+            }
+            return [instrument, candles] as const;
+          }),
+        );
+        rows.push(...batch);
+      }
       const result = new Map<string, LivePaperCandleInput[]>(rows);
       this.lastProviderFetchMinute = new Date(now).toISOString().slice(0, 16);
       this.lastProviderSeries = result;

@@ -18,6 +18,7 @@ describe('MetaApiClientService', () => {
     state: string;
     deploy: jest.Mock;
     waitDeployed: jest.Mock;
+    waitConnected: jest.Mock;
     getRPCConnection: jest.Mock;
     getStreamingConnection: jest.Mock;
   };
@@ -50,6 +51,7 @@ describe('MetaApiClientService', () => {
       state: 'DEPLOYED',
       deploy: jest.fn().mockResolvedValue(undefined),
       waitDeployed: jest.fn().mockResolvedValue(undefined),
+      waitConnected: jest.fn().mockResolvedValue(undefined),
       getRPCConnection: jest.fn().mockReturnValue(connection),
       getStreamingConnection: jest.fn().mockReturnValue(streamingConnection),
     };
@@ -65,6 +67,16 @@ describe('MetaApiClientService', () => {
 
   afterEach(async () => {
     await service.onModuleDestroy();
+  });
+
+  it('waits for the deployed MetaAPI terminal to connect to its broker before exposing RPC', async () => {
+    await service.getOrCreateConnection(accountId, { requireSynchronization: false });
+
+    expect(account.waitDeployed).toHaveBeenCalledTimes(1);
+    expect(account.waitConnected).toHaveBeenCalledTimes(1);
+    expect(account.waitConnected.mock.invocationCallOrder[0]).toBeLessThan(
+      account.getRPCConnection.mock.invocationCallOrder[0],
+    );
   });
 
   it('shares one in-flight RPC connection creation across concurrent callers', async () => {

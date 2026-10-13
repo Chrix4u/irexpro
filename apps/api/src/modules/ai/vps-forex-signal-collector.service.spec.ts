@@ -1912,6 +1912,46 @@ describe('VpsForexSignalCollectorService', () => {
     );
   });
 
+  it('bounds broker-native six-pair history concurrency below the MetaApi per-account limit', async () => {
+    let active = 0;
+    let peak = 0;
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
+          active += 1;
+          peak = Math.max(peak, active);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          active -= 1;
+          const base = instrument === 'USDJPY' ? 157 : 1.1;
+          const digits = instrument === 'USDJPY' ? 3 : 5;
+          return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
+        }),
+    } as unknown as BrokerService;
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'metaapi-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+
+    const series = await (collector as any).fetchBrokerNativeFallbackSeries('TEST_RATE_LIMIT');
+
+    expect(series.size).toBe(6);
+    expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
+    expect(peak).toBeLessThanOrEqual(3);
+  });
+
   it('fails over to broker-native MetaTrader candles after Twelve Data exhausts the daily quota', async () => {
     const live = new LivePaperMarketDataService();
     const broker = {
@@ -1975,7 +2015,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(status.providerFallbackActive).toBe(true);
   });
 
-  it('uses broker-native fallback without retrying Twelve Data while daily cooldown is active', async () => {
+  it('reuses broker-native fallback within the minute while daily cooldown is active', async () => {
     const broker = {
       findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
       getOhlcvForConnection: jest
@@ -2020,7 +2060,7 @@ describe('VpsForexSignalCollectorService', () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(12);
+    expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
   });
 
   it('fails closed when both Twelve Data quota and broker-native fallback are unavailable', async () => {
