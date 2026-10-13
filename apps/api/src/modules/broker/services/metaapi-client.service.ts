@@ -296,6 +296,11 @@ export class MetaApiClientService implements OnModuleDestroy {
       await account.deploy();
     }
     await account.waitDeployed();
+    // DEPLOYED only means MetaApi has provisioned the terminal. Historical
+    // data and streaming subscriptions still fail until the terminal itself
+    // is connected to the broker. Fail closed here rather than handing an
+    // unusable account to market-data callers.
+    await account.waitConnected(this.SYNC_TIMEOUT_SECONDS);
     return account;
   }
 
