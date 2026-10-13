@@ -1,4 +1,17 @@
-import { isTradeExecutionView } from './trader-execution';
+const mockExecutionApi = {
+  listOpenPositions: jest.fn(),
+  listRecentExecutions: jest.fn(),
+  listClosedExecutions: jest.fn(),
+};
+
+jest.mock('@irexpro/api-client/execution', () => ({
+  createExecutionApi: () => mockExecutionApi,
+}));
+
+import {
+  isTradeExecutionView,
+  loadTraderExecutionSnapshot,
+} from './trader-execution';
 
 const CLOSED_TRADE = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -24,7 +37,21 @@ const CLOSED_TRADE = {
   updatedAt: '2026-10-04T19:00:00.000Z',
 };
 
+const OPEN_TRADE = {
+  ...CLOSED_TRADE,
+  id: '22222222-2222-4222-8222-222222222222',
+  status: 'OPEN',
+  exitPrice: null,
+  realisedPnl: null,
+  closeReason: null,
+  closedAt: null,
+};
+
 describe('trader execution runtime contract', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it('accepts STRATEGY_CUTOVER history emitted by the execution API', () => {
     expect(
       isTradeExecutionView({
@@ -50,5 +77,60 @@ describe('trader execution runtime contract', () => {
         closeReason: 'UNRECOGNIZED_CLOSE_REASON',
       }),
     ).toBe(false);
+  });
+
+  it('preserves valid execution history when one stale row fails validation', async () => {
+    const staleLegacyRow = {
+      ...CLOSED_TRADE,
+      id: '33333333-3333-4333-8333-333333333333',
+      closeReason: 'LEGACY_UNKNOWN_CLOSE_REASON',
+    };
+
+    mockExecutionApi.listOpenPositions.mockResolvedValue([]);
+    mockExecutionApi.listRecentExecutions.mockResolvedValue([
+      CLOSED_TRADE,
+      staleLegacyRow,
+    ]);
+    mockExecutionApi.listClosedExecutions.mockResolvedValue([
+      CLOSED_TRADE,
+      staleLegacyRow,
+    ]);
+
+    await expect(loadTraderExecutionSnapshot()).resolves.toEqual({
+      openPositions: [],
+      recentExecutions: [CLOSED_TRADE],
+      closedExecutions: [CLOSED_TRADE],
+    });
+  });
+
+  it('preserves valid open positions when one stale open-position row fails validation', async () => {
+    const staleLegacyOpenRow = {
+      ...OPEN_TRADE,
+      id: '44444444-4444-4444-8444-444444444444',
+      brokerConnectionId: 'must-never-reach-the-frontend',
+    };
+
+    mockExecutionApi.listOpenPositions.mockResolvedValue([
+      OPEN_TRADE,
+      staleLegacyOpenRow,
+    ]);
+    mockExecutionApi.listRecentExecutions.mockResolvedValue([OPEN_TRADE]);
+    mockExecutionApi.listClosedExecutions.mockResolvedValue([]);
+
+    await expect(loadTraderExecutionSnapshot()).resolves.toEqual({
+      openPositions: [OPEN_TRADE],
+      recentExecutions: [OPEN_TRADE],
+      closedExecutions: [],
+    });
+  });
+
+  it('still fails closed when an endpoint returns a non-array payload', async () => {
+    mockExecutionApi.listOpenPositions.mockResolvedValue([]);
+    mockExecutionApi.listRecentExecutions.mockResolvedValue({ bad: 'shape' });
+    mockExecutionApi.listClosedExecutions.mockResolvedValue([]);
+
+    await expect(loadTraderExecutionSnapshot()).rejects.toThrow(
+      'Recent executions contract mismatch',
+    );
   });
 });

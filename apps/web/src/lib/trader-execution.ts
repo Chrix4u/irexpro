@@ -99,21 +99,30 @@ export async function loadTraderExecutionSnapshot(): Promise<TraderExecutionSnap
     executionApi.listClosedExecutions(50),
   ]);
 
-  if (!Array.isArray(openPositions) || !openPositions.every(isTradeExecutionView)) {
+  if (!Array.isArray(openPositions)) {
     throw new Error('Open positions contract mismatch');
   }
-  if (!Array.isArray(recentExecutions) || !recentExecutions.every(isTradeExecutionView)) {
+  if (!Array.isArray(recentExecutions)) {
     throw new Error('Recent executions contract mismatch');
   }
-  if (!Array.isArray(closedExecutions) || !closedExecutions.every(isTradeExecutionView)) {
+  if (!Array.isArray(closedExecutions)) {
     throw new Error('Closed executions contract mismatch');
   }
-  if (!openPositions.every((trade) => trade.status === 'OPEN')) {
+
+  const validOpenPositions = openPositions.filter(isTradeExecutionView);
+  const validRecentExecutions = recentExecutions.filter(isTradeExecutionView);
+  const validClosedExecutions = closedExecutions.filter(isTradeExecutionView);
+
+  if (!validOpenPositions.every((trade) => trade.status === 'OPEN')) {
     throw new Error('Open positions endpoint returned a non-OPEN trade');
   }
-  if (!closedExecutions.every((trade) => trade.status === 'CLOSED')) {
+  if (!validClosedExecutions.every((trade) => trade.status === 'CLOSED')) {
     throw new Error('Closed executions endpoint returned a non-CLOSED trade');
   }
 
-  return { openPositions, recentExecutions, closedExecutions };
+  return {
+    openPositions: validOpenPositions,
+    recentExecutions: validRecentExecutions,
+    closedExecutions: validClosedExecutions,
+  };
 }
