@@ -284,6 +284,35 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.paperExecutionEligible).toBe(true);
   });
 
+  it('uses the reversal drift envelope for paired-reversal PAPER research without weakening continuation drift', () => {
+    const countertrend = {
+      ...base,
+      instrument: 'EURUSD',
+      direction: 'SELL' as const,
+      entryPrice: 1.1,
+      stopLoss: 1.101,
+      takeProfit: 1.0983,
+      confidence: 0.66,
+      extensionAtr: 0.5,
+      volatilityScore: 0.2,
+      emaSeparation: 0,
+      mtfStrength: 0,
+      rsi14: 44,
+      shortHorizonMomentumAtr: -0.6,
+      eventRisk: 'CLEAR' as const,
+    };
+
+    const continuation = evaluateEnsembleGovernance(countertrend);
+    expect(continuation.driftState).toBe('OUT_OF_DISTRIBUTION');
+
+    const pairedReversal = evaluateEnsembleGovernance({
+      ...countertrend,
+      driftRoute: 'PAIRED_REVERSAL_RESEARCH',
+    } as any);
+    expect(pairedReversal.driftState).toBe('NORMAL');
+    expect(pairedReversal.paperDriftPassed).toBe(true);
+  });
+
   it('fails a reversal closed when its short-horizon impulse is outside the reversal envelope', () => {
     const result = evaluateEnsembleGovernance({
       ...base,

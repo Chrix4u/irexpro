@@ -1082,6 +1082,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           rejectedEdgeCanaryEvidence: RejectedEdgeCanaryEvidence | null;
           paperResearchThroughput: PaperResearchThroughputDecision;
           pairedDirectionReversal: PairedDirectionReversalDecision;
+          pairedReversalGovernance: EnsembleGovernanceDecision;
           pairedReversalResearch: ReturnType<typeof evaluatePaperPairedReversalResearch>;
           pairedReversalEpisodeKey: string;
           pairedReversalEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
@@ -1479,14 +1480,38 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             executionCostR: ensembleGovernance.estimatedExecutionCostR,
             targetRMultiple: TARGET_ATR_MULTIPLIER / STOP_ATR_MULTIPLIER,
           });
+          const pairedReversalGovernance =
+            pairedDirectionReversal.reversalCandidate &&
+            pairedDirectionReversal.preferredDirection === best.direction
+              ? evaluateEnsembleGovernance({
+                  ensemble: planBEnsemble,
+                  instrument: best.instrument,
+                  direction: best.direction,
+                  entryPrice: best.entry,
+                  stopLoss: best.stopLoss,
+                  takeProfit: best.takeProfit,
+                  confidence: best.confidence,
+                  extensionAtr: best.extensionAtr,
+                  volatilityScore: best.volatilityScore,
+                  emaSeparation: best.emaSeparation,
+                  mtfStrength: best.mtfStrength,
+                  rsi14: best.rsi14,
+                  shortHorizonMomentumAtr: rawMarketMomentumAtr,
+                  eventRisk: macroEventAssessment.state,
+                  sleeveEvidence,
+                  evaluatedAt,
+                  executionSpreadEvidence,
+                  driftRoute: 'PAIRED_REVERSAL_RESEARCH',
+                })
+              : ensembleGovernance;
           const pairedReversalResearch = evaluatePaperPairedReversalResearch({
             candidateDirection: best.direction,
             preferredDirection: pairedDirectionReversal.preferredDirection,
             reversalCandidate: pairedDirectionReversal.reversalCandidate,
             researchNetExpectedR: pairedDirectionReversal.researchNetExpectedR,
-            executionSpreadEvidenceValid: ensembleGovernance.executionSpreadEvidenceValid,
-            eventRisk: ensembleGovernance.eventRisk,
-            driftState: ensembleGovernance.driftState,
+            executionSpreadEvidenceValid: pairedReversalGovernance.executionSpreadEvidenceValid,
+            eventRisk: pairedReversalGovernance.eventRisk,
+            driftState: pairedReversalGovernance.driftState,
           });
           const pairedReversalEpisodeKey = `${best.instrument}|${best.direction}|${planBEnsemble.regime}|PAIRED_REVERSAL_RESEARCH`;
           let pairedReversalEpisodeGuard: ReturnType<
@@ -1577,6 +1602,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             rejectedEdgeCanaryEvidence,
             paperResearchThroughput,
             pairedDirectionReversal,
+            pairedReversalGovernance,
             pairedReversalResearch,
             pairedReversalEpisodeKey,
             pairedReversalEpisodeGuard,
@@ -1637,6 +1663,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           rejectedEdgeCanaryEvidence,
           paperResearchThroughput,
           pairedDirectionReversal,
+          pairedReversalGovernance,
           pairedReversalResearch,
           pairedReversalEpisodeKey,
           pairedReversalEpisodeGuard,
@@ -1756,6 +1783,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paired_reversal_directional_edge: pairedDirectionReversal.directionalEdge,
             paired_reversal_aligned_momentum_atr: pairedDirectionReversal.alignedMomentumAtr,
             paired_reversal_research_net_expected_r: pairedDirectionReversal.researchNetExpectedR,
+            paired_reversal_drift_state: pairedReversalGovernance.driftState,
             paired_reversal_episode_key: pairedReversalEpisodeKey,
             paired_reversal_episode_guard_reason: pairedReversalEpisodeGuard?.reason ?? null,
             paper_research_pair_side_reliability_reason:
