@@ -56,6 +56,24 @@ describe('rejected-edge PAPER canary', () => {
     ).toBe(false);
   });
 
+  it('allows strong standalone pair-side evidence when the global basket is weak', () => {
+    const weakGlobalStrongPair = {
+      global30m: { samples: 47, positive: 22, avgR: 0.068, minR: -0.882, maxR: 2.02 },
+      pairSide30m: { samples: 7, positive: 6, avgR: 0.754, minR: -0.076, maxR: 2.02 },
+    };
+
+    expect(
+      evaluateRejectedEdgePaperCanary({
+        candidate: { ...candidate, confidence: 0.6417, netExpectedR: 0.446 },
+        evidence: weakGlobalStrongPair,
+      }),
+    ).toMatchObject({
+      eligible: true,
+      route: 'REJECTED_EDGE_CANARY',
+      reason: 'PAIR_SIDE_EVIDENCE_QUALIFIED',
+    });
+  });
+
   it('rejects weak evidence and any blocker outside the research-only allowlist', () => {
     expect(
       evaluateRejectedEdgePaperCanary({
