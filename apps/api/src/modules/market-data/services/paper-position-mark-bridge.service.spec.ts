@@ -28,88 +28,106 @@ describe('PaperPositionMarkBridgeService', () => {
     } as unknown as BrokerAdapterRegistry;
   }
 
-  it('bridges each new sampled broker quote and runs server-side PAPER protection heartbeat', async () => {
+  function executionQuote(instrument: string, observedAt = '2026-10-05T10:55:20.000Z') {
+    return {
+      instrument,
+      bid: instrument === 'USDJPY' ? '149.1185' : '1.099995',
+      ask: instrument === 'USDJPY' ? '149.1215' : '1.100005',
+      spread: instrument === 'USDJPY' ? '0.003' : '0.00001',
+      timestamp: new Date(observedAt),
+      positiveSampleCount: 20,
+      latestPositiveSampleAt: new Date(observedAt),
+    };
+  }
+
+  function livePaper(updateProviderQuote = jest.fn()): LivePaperMarketDataService {
+    return {
+      instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'],
+      updateProviderQuote,
+    } as unknown as LivePaperMarketDataService;
+  }
+
+  it('primes executable provider quotes for all six PAPER instruments even with no open positions', async () => {
     const now = new Date('2026-10-05T10:55:30.000Z');
     const paperState = {
-      load: jest.fn().mockResolvedValue({
-        positions: [{ instrument: 'USDCAD' }, { instrument: 'USDCAD' }, { instrument: 'USDJPY' }],
-      }),
+      load: jest.fn().mockResolvedValue({ positions: [] }),
     } as unknown as PaperBrokerStateService;
-    const store = {
-      getLatestQuote: jest
-        .fn()
-        .mockImplementation(async (_connectionId: string, instrument: string) => ({
-          instrument,
-          bid: instrument === 'USDCAD' ? '1.42480' : '149.120',
-          ask: instrument === 'USDCAD' ? '1.42492' : '149.130',
-          spread: instrument === 'USDCAD' ? '0.00012' : '0.010',
-          timestamp: new Date('2026-10-05T10:55:20.000Z'),
-        })),
-    } as unknown as ProviderQuoteCandleStoreService;
-    const livePaper = {
-      updateProviderQuote: jest.fn(),
-    } as unknown as LivePaperMarketDataService;
+    const getLatestPositiveSpreadQuote = jest
+      .fn()
+      .mockImplementation(async (_connectionId: string, instrument: string) =>
+        executionQuote(instrument),
+      );
+    const store = { getLatestPositiveSpreadQuote } as unknown as ProviderQuoteCandleStoreService;
+    const updateProviderQuote = jest.fn();
+    const getOpenPositions = jest.fn().mockResolvedValue([]);
+    const service = new PaperPositionMarkBridgeService(
+      config(),
+      paperState,
+      store,
+      livePaper(updateProviderQuote),
+      brokerAdapters(getOpenPositions),
+    );
+
+    await service.collectOnce(now);
+
+    expect(getLatestPositiveSpreadQuote).toHaveBeenCalledTimes(6);
+    expect(updateProviderQuote).toHaveBeenCalledTimes(6);
+    expect(getOpenPositions).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates sampled provider timestamps while keeping protection heartbeat server-side', async () => {
+    const now = new Date('2026-10-05T10:55:30.000Z');
+    const paperState = {
+      load: jest.fn().mockResolvedValue({ positions: [{ instrument: 'USDCAD' }] }),
+    } as unknown as PaperBrokerStateService;
+    const getLatestPositiveSpreadQuote = jest
+      .fn()
+      .mockImplementation(async (_connectionId: string, instrument: string) =>
+        executionQuote(instrument),
+      );
+    const store = { getLatestPositiveSpreadQuote } as unknown as ProviderQuoteCandleStoreService;
+    const updateProviderQuote = jest.fn();
     const getOpenPositions = jest.fn().mockResolvedValue([]);
     const adapters = brokerAdapters(getOpenPositions);
     const service = new PaperPositionMarkBridgeService(
       config(),
       paperState,
       store,
-      livePaper,
+      livePaper(updateProviderQuote),
       adapters,
     );
 
     await service.collectOnce(now);
     await service.collectOnce(new Date('2026-10-05T10:55:35.000Z'));
 
-    expect((store.getLatestQuote as jest.Mock).mock.calls).toEqual([
-      ['metaapi-1', 'USDCAD'],
-      ['metaapi-1', 'USDJPY'],
-      ['metaapi-1', 'USDCAD'],
-      ['metaapi-1', 'USDJPY'],
-    ]);
-    expect(livePaper.updateProviderQuote).toHaveBeenCalledTimes(2);
-    expect(livePaper.updateProviderQuote).toHaveBeenCalledWith(
-      'USDCAD',
-      '1.42480',
-      '1.42492',
-      new Date('2026-10-05T10:55:20.000Z'),
-      'paper-1',
-    );
+    expect(getLatestPositiveSpreadQuote).toHaveBeenCalledTimes(12);
+    expect(updateProviderQuote).toHaveBeenCalledTimes(6);
     expect(adapters.getAdapterForConnection).toHaveBeenCalledTimes(2);
-    expect(adapters.getAdapterForConnection).toHaveBeenCalledWith('paper-1', 'paper-broker');
     expect(getOpenPositions).toHaveBeenCalledTimes(2);
   });
 
-  it('ignores stale sampled quotes but still invokes protection against any fresh cached mark', async () => {
+  it('fails closed on stale or insufficient positive-spread evidence but still checks open-position protection', async () => {
     const paperState = {
       load: jest.fn().mockResolvedValue({ positions: [{ instrument: 'USDCAD' }] }),
     } as unknown as PaperBrokerStateService;
+    const stale = executionQuote('USDCAD', '2026-10-05T10:53:00.000Z');
+    stale.positiveSampleCount = 5;
     const store = {
-      getLatestQuote: jest.fn().mockResolvedValue({
-        instrument: 'USDCAD',
-        bid: '1.42480',
-        ask: '1.42492',
-        spread: '0.00012',
-        timestamp: new Date('2026-10-05T10:53:00.000Z'),
-      }),
+      getLatestPositiveSpreadQuote: jest.fn().mockResolvedValue(stale),
     } as unknown as ProviderQuoteCandleStoreService;
-    const livePaper = {
-      updateProviderQuote: jest.fn(),
-    } as unknown as LivePaperMarketDataService;
+    const updateProviderQuote = jest.fn();
     const getOpenPositions = jest.fn().mockResolvedValue([]);
-    const adapters = brokerAdapters(getOpenPositions);
     const service = new PaperPositionMarkBridgeService(
       config(),
       paperState,
       store,
-      livePaper,
-      adapters,
+      livePaper(updateProviderQuote),
+      brokerAdapters(getOpenPositions),
     );
 
-    await service.collectOnce(new Date('2026-10-05T10:55:00.000Z'));
+    await service.collectOnce(new Date('2026-10-05T10:55:30.000Z'));
 
-    expect(livePaper.updateProviderQuote).not.toHaveBeenCalled();
+    expect(updateProviderQuote).not.toHaveBeenCalled();
     expect(getOpenPositions).toHaveBeenCalledTimes(1);
   });
 
@@ -118,17 +136,13 @@ describe('PaperPositionMarkBridgeService', () => {
       load: jest.fn().mockResolvedValue({ positions: [{ instrument: 'USDCAD' }] }),
     } as unknown as PaperBrokerStateService;
     const store = {
-      getLatestQuote: jest.fn().mockResolvedValue({
-        instrument: 'USDCAD',
-        bid: '1.42480',
-        ask: '1.42492',
-        spread: '0.00012',
-        timestamp: new Date('2026-10-05T10:55:20.000Z'),
-      }),
+      getLatestPositiveSpreadQuote: jest
+        .fn()
+        .mockImplementation(async (_connectionId: string, instrument: string) =>
+          executionQuote(instrument),
+        ),
     } as unknown as ProviderQuoteCandleStoreService;
-    const livePaper = {
-      updateProviderQuote: jest.fn(),
-    } as unknown as LivePaperMarketDataService;
+    const updateProviderQuote = jest.fn();
     const adapters = {
       getAdapterForConnection: jest.fn().mockReturnValue({
         getOpenPositions: jest.fn().mockRejectedValue(new Error('adapter not connected yet')),
@@ -138,13 +152,13 @@ describe('PaperPositionMarkBridgeService', () => {
       config(),
       paperState,
       store,
-      livePaper,
+      livePaper(updateProviderQuote),
       adapters,
     );
 
     await expect(
       service.collectOnce(new Date('2026-10-05T10:55:30.000Z')),
     ).resolves.toBeUndefined();
-    expect(livePaper.updateProviderQuote).toHaveBeenCalledTimes(1);
+    expect(updateProviderQuote).toHaveBeenCalledTimes(6);
   });
 });

@@ -2794,19 +2794,33 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
     const rows = (await this.dataSource.query(
       `
+        WITH positive AS (
+          SELECT spread_close, last_sample_at
+          FROM market_data.provider_quote_candles
+          WHERE connection_id = $1
+            AND instrument = $2
+            AND timeframe = 'M1'
+            AND spread_close > 0
+            AND last_sample_at > ($3::timestamptz - interval '30 minutes')
+            AND last_sample_at <= $3::timestamptz
+        ), latest AS (
+          SELECT spread_close
+          FROM market_data.provider_quote_candles
+          WHERE connection_id = $1
+            AND instrument = $2
+            AND timeframe = 'M1'
+            AND last_sample_at <= $3::timestamptz
+          ORDER BY last_sample_at DESC
+          LIMIT 1
+        )
         SELECT
           COUNT(*)::int AS sample_count,
-          percentile_cont(0.90) WITHIN GROUP (
-            ORDER BY spread_close::double precision
+          GREATEST(
+            percentile_cont(0.90) WITHIN GROUP (ORDER BY positive.spread_close::double precision),
+            COALESCE((SELECT spread_close::double precision FROM latest), 0)
           ) AS spread_price,
-          MAX(last_sample_at) AS latest_sample_at
-        FROM market_data.provider_quote_candles
-        WHERE connection_id = $1
-          AND instrument = $2
-          AND timeframe = 'M1'
-          AND spread_close > 0
-          AND last_sample_at > ($3::timestamptz - interval '30 minutes')
-          AND last_sample_at <= $3::timestamptz
+          MAX(positive.last_sample_at) AS latest_sample_at
+        FROM positive
       `,
       [sourceConnectionId, instrument.trim().toUpperCase(), evaluatedAt.toISOString()],
     )) as Array<{

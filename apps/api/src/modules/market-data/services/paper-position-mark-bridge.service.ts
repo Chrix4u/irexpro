@@ -63,26 +63,45 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
 
       const state = await this.paperState.load(paperConnectionId);
       const positions = Array.isArray(state?.positions) ? state.positions : [];
-      const instruments = [
-        ...new Set(
-          positions
-            .map((raw) =>
-              raw &&
-              typeof raw === 'object' &&
-              typeof (raw as { instrument?: unknown }).instrument === 'string'
-                ? (raw as { instrument: string }).instrument.trim().toUpperCase()
-                : '',
-            )
-            .filter(Boolean),
-        ),
-      ];
+      const openInstruments = new Set(
+        positions
+          .map((raw) =>
+            raw &&
+            typeof raw === 'object' &&
+            typeof (raw as { instrument?: unknown }).instrument === 'string'
+              ? (raw as { instrument: string }).instrument.trim().toUpperCase()
+              : '',
+          )
+          .filter(Boolean),
+      );
 
+      // Prime broker-native executable quotes for all six PAPER instruments,
+      // not only instruments that already have an open position. The store
+      // returns the latest provider mid with a conservative spread equal to
+      // max(current spread, rolling positive-spread P90). This prevents zero
+      // spread fills while avoiding the stale hard-coded PAPER spread floor.
+      const instruments = [...this.livePaperMarket.instruments];
       for (const instrument of instruments) {
-        const quote = await this.store.getLatestQuote(sourceConnectionId, instrument);
+        const quote = await this.store.getLatestPositiveSpreadQuote(
+          sourceConnectionId,
+          instrument,
+          now,
+        );
         if (!quote) continue;
         const observedAt = new Date(quote.timestamp);
         const ageMs = now.getTime() - observedAt.getTime();
-        if (!Number.isFinite(ageMs) || ageMs < -5_000 || ageMs > MAX_PROVIDER_MARK_AGE_MS) continue;
+        const positiveAgeMs = now.getTime() - quote.latestPositiveSampleAt.getTime();
+        if (
+          !Number.isFinite(ageMs) ||
+          ageMs < -5_000 ||
+          ageMs > MAX_PROVIDER_MARK_AGE_MS ||
+          !Number.isFinite(positiveAgeMs) ||
+          positiveAgeMs < -5_000 ||
+          positiveAgeMs > 5 * 60_000 ||
+          quote.positiveSampleCount < 10
+        ) {
+          continue;
+        }
 
         const lastApplied = this.lastSourceTimestampByInstrument.get(instrument) ?? 0;
         if (observedAt.getTime() <= lastApplied) continue;
@@ -98,7 +117,8 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
         if (!this.announcedInstruments.has(instrument)) {
           this.announcedInstruments.add(instrument);
           this.logger.log(
-            `PAPER position mark bridge active instrument=${instrument} sourceObservedAt=${observedAt.toISOString()}`,
+            `PAPER provider execution/mark bridge active instrument=${instrument} ` +
+              `sourceObservedAt=${observedAt.toISOString()} positiveSamples=${quote.positiveSampleCount}`,
           );
         }
       }
@@ -110,7 +130,7 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
       // protection before returning. If the adapter is not connected yet
       // during bootstrap, defer silently; the scanner will connect the same
       // isolated session.
-      if (instruments.length > 0) {
+      if (openInstruments.size > 0) {
         try {
           const adapter = this.brokerAdapters.getAdapterForConnection(
             paperConnectionId,

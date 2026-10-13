@@ -33,6 +33,7 @@ interface LivePaperMarketState {
   candles: Map<string, OHLCV[]>;
   candleQuotes: Map<string, LivePaperQuote>;
   streamingQuotes: Map<string, LivePaperQuote>;
+  providerExecutionQuotes: Map<string, LivePaperQuote>;
   latestObservedAt: Date | null;
   latestQuoteObservedAt: Date | null;
 }
@@ -64,6 +65,7 @@ export class LivePaperMarketDataService {
         candles: new Map<string, OHLCV[]>(),
         candleQuotes: new Map<string, LivePaperQuote>(),
         streamingQuotes: new Map<string, LivePaperQuote>(),
+        providerExecutionQuotes: new Map<string, LivePaperQuote>(),
         latestObservedAt: null,
         latestQuoteObservedAt: null,
       };
@@ -211,6 +213,16 @@ export class LivePaperMarketDataService {
     if (!current || timestamp.getTime() >= current.timestamp.getTime()) {
       state.streamingQuotes.set(symbol, quote);
     }
+    // A positive broker-native bid/ask is also execution-authoritative. Keep
+    // it separate from generic STREAM marks so a newer mid-only stream tick
+    // cannot overwrite executable provider evidence. Zero-spread provider
+    // snapshots remain valid read-only marks but never authorize a free fill.
+    if (askNumber > bidNumber) {
+      const currentExecution = state.providerExecutionQuotes.get(symbol);
+      if (!currentExecution || timestamp.getTime() >= currentExecution.timestamp.getTime()) {
+        state.providerExecutionQuotes.set(symbol, quote);
+      }
+    }
     if (!state.latestQuoteObservedAt || timestamp > state.latestQuoteObservedAt) {
       state.latestQuoteObservedAt = timestamp;
     }
@@ -223,6 +235,16 @@ export class LivePaperMarketDataService {
   getQuote(instrument: string, maxAgeMs = 20 * 60_000, connectionId?: string): LivePaperQuote {
     const state = this.marketState(connectionId);
     const symbol = this.requireSupported(instrument);
+    const provider = state.providerExecutionQuotes.get(symbol);
+    if (provider) {
+      const providerAge = Date.now() - provider.timestamp.getTime();
+      // Provider execution quotes are only trusted while genuinely fresh. The
+      // model remains closed-M5 causal; this quote is used only after a model
+      // decision for sizing, risk and broker fill.
+      if (Number.isFinite(providerAge) && providerAge >= -5_000 && providerAge <= 90_000) {
+        return { ...provider, timestamp: new Date(provider.timestamp) };
+      }
+    }
     const quote = state.candleQuotes.get(symbol);
     if (!quote) {
       throw new BrokerAdapterError(
@@ -397,7 +419,11 @@ export class LivePaperMarketDataService {
 
   status(connectionId?: string) {
     const state = this.marketState(connectionId);
-    const cached = new Set([...state.candleQuotes.keys(), ...state.streamingQuotes.keys()]);
+    const cached = new Set([
+      ...state.candleQuotes.keys(),
+      ...state.streamingQuotes.keys(),
+      ...state.providerExecutionQuotes.keys(),
+    ]);
     const now = Date.now();
     const streamingInstruments = [...state.streamingQuotes.entries()]
       .filter(([, quote]) => {
