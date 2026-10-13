@@ -11,6 +11,7 @@ describe('rejected-edge PAPER canary', () => {
   const candidate = {
     confidence: 0.64,
     netExpectedR: 0.2,
+    alignedMomentumAtr: 0.4,
     executionSpreadEvidenceValid: true,
     eventRisk: 'CLEAR' as const,
     portfolioQuality: 1,
@@ -27,6 +28,40 @@ describe('rejected-edge PAPER canary', () => {
       eligible: true,
       route: 'REJECTED_EDGE_CANARY',
     });
+  });
+
+  it('requires present-moment directional confirmation and rejects exhausted entries', () => {
+    expect(
+      evaluateRejectedEdgePaperCanary({
+        candidate: { ...candidate, alignedMomentumAtr: 0.149 },
+        evidence,
+      }),
+    ).toMatchObject({ eligible: false, reason: 'MOMENTUM_NOT_CONFIRMED' });
+    expect(
+      evaluateRejectedEdgePaperCanary({
+        candidate: { ...candidate, alignedMomentumAtr: -0.75 },
+        evidence,
+      }),
+    ).toMatchObject({ eligible: false, reason: 'MOMENTUM_NOT_CONFIRMED' });
+    expect(
+      evaluateRejectedEdgePaperCanary({
+        candidate: { ...candidate, alignedMomentumAtr: 1.501 },
+        evidence,
+      }),
+    ).toMatchObject({ eligible: false, reason: 'MOMENTUM_EXHAUSTED' });
+
+    expect(
+      evaluateRejectedEdgePaperCanary({
+        candidate: { ...candidate, alignedMomentumAtr: 0.15 },
+        evidence,
+      }).eligible,
+    ).toBe(true);
+    expect(
+      evaluateRejectedEdgePaperCanary({
+        candidate: { ...candidate, alignedMomentumAtr: 1.5 },
+        evidence,
+      }).eligible,
+    ).toBe(true);
   });
 
   it('fails closed when current economics, spread, event risk, or portfolio safety fail', () => {
