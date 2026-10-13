@@ -403,6 +403,31 @@ describe('MetaTraderAdapter', () => {
     });
   });
 
+  describe('quote recovery', () => {
+    it('evicts a stale pooled RPC connection after a quote timeout so the next poll can reconnect', async () => {
+      await adapter.connect(testCredentials);
+      (mockConnection.getSymbolPrice as jest.Mock).mockRejectedValueOnce(
+        new Error('MetaApi quote subscribe timed out while terminal connection was lost'),
+      );
+
+      await expect(adapter.getCurrentPrice('EURUSD')).rejects.toMatchObject({
+        code: BrokerErrorCode.CONNECTION_TIMEOUT,
+      });
+
+      expect(metaApiClient.removeConnection).toHaveBeenCalledWith('acc-uuid-123', mockConnection);
+    });
+
+    it('evicts a stale pooled RPC connection when MetaApi reports no deployed/connected terminal', async () => {
+      await adapter.connect(testCredentials);
+      (mockConnection.getSymbolPrice as jest.Mock).mockRejectedValueOnce(
+        new Error('no accounts deployed yet. Please deploy an account first'),
+      );
+
+      await expect(adapter.getCurrentPrice('EURUSD')).rejects.toBeInstanceOf(BrokerAdapterError);
+      expect(metaApiClient.removeConnection).toHaveBeenCalledWith('acc-uuid-123', mockConnection);
+    });
+  });
+
   describe('testConnection()', () => {
     it('returns success result on valid account', async () => {
       const result = await adapter.testConnection(testCredentials);
