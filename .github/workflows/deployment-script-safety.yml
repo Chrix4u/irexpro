@@ -11,6 +11,8 @@ on:
       - '.github/workflows/main-staging-release-gate.yml'
       - '.github/workflows/staging-deploy.yml'
       - '.github/workflows/six-pair-research-run.yml'
+      - '.github/workflows/vps-runner-diagnostic.yml'
+      - '.github/workflows/vps-ops-control.yml'
   push:
     branches: [main]
     paths:
@@ -21,6 +23,8 @@ on:
       - '.github/workflows/main-staging-release-gate.yml'
       - '.github/workflows/staging-deploy.yml'
       - '.github/workflows/six-pair-research-run.yml'
+      - '.github/workflows/vps-runner-diagnostic.yml'
+      - '.github/workflows/vps-ops-control.yml'
 
 permissions:
   contents: read
@@ -65,6 +69,7 @@ jobs:
           bash scripts/deployment/test-rollback-origin-provenance.sh
           bash scripts/deployment/test-health-contract.sh
           bash scripts/deployment/test-staging-cd-bootstrap.sh
+          bash scripts/deployment/test-lightworld-runner-phase1.sh
 
       - name: Test exact-main staging release gate policy
         run: node scripts/deployment/main-staging-release-gate.mjs --self-test
