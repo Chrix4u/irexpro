@@ -1815,6 +1815,77 @@ describe('VpsForexSignalCollectorService', () => {
     expect(heartbeat).toHaveBeenCalledTimes(12);
   });
 
+  it('primes all six pairs once, then refreshes only two pairs per M5 slot while retaining a coherent six-pair snapshot', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-13T00:00:00.000Z'));
+    try {
+      const collector = createCollector(
+        config({
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.apiKey': 'real-key-123456',
+          'vpsForexScanner.userId': 'user-1',
+          'vpsForexScanner.brokerConnectionId': 'conn-1',
+        }),
+        { receiveSignal: jest.fn() } as unknown as AiSignalService,
+        { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+        {} as unknown as BrokerService,
+        new LivePaperMarketDataService(),
+        aiEngineClientMock(),
+      );
+      const fullPayload = payload();
+      const requestedBatches: string[][] = [];
+      const fetchMock = jest.fn(async (input: string | URL | Request) => {
+        const url = new URL(String(input));
+        const requested = (url.searchParams.get('symbol') ?? '').split(',').filter(Boolean);
+        requestedBatches.push(requested);
+        const body = Object.fromEntries(requested.map((symbol) => [symbol, fullPayload[symbol]]));
+        return new Response(JSON.stringify(body), { status: 200 });
+      });
+
+      const startup = await (collector as any).fetchSixPairSeries(
+        'real-key-123456',
+        fetchMock as unknown as typeof fetch,
+      );
+      expect(startup.size).toBe(6);
+      expect(requestedBatches[0]).toEqual(PAIRS.map(([, provider]) => provider));
+
+      jest.setSystemTime(new Date('2026-10-13T00:05:00.000Z'));
+      const slotOne = await (collector as any).fetchSixPairSeries(
+        'real-key-123456',
+        fetchMock as unknown as typeof fetch,
+      );
+      jest.setSystemTime(new Date('2026-10-13T00:10:00.000Z'));
+      const slotTwo = await (collector as any).fetchSixPairSeries(
+        'real-key-123456',
+        fetchMock as unknown as typeof fetch,
+      );
+      jest.setSystemTime(new Date('2026-10-13T00:15:00.000Z'));
+      const slotThree = await (collector as any).fetchSixPairSeries(
+        'real-key-123456',
+        fetchMock as unknown as typeof fetch,
+      );
+
+      expect(requestedBatches.slice(1)).toEqual([
+        ['USD/JPY', 'AUD/USD'],
+        ['USD/CAD', 'USD/CHF'],
+        ['EUR/USD', 'GBP/USD'],
+      ]);
+      expect(requestedBatches.slice(1).every((batch) => batch.length === 2)).toBe(true);
+      for (const snapshot of [slotOne, slotTwo, slotThree]) {
+        expect([...snapshot.keys()].sort()).toEqual(PAIRS.map(([instrument]) => instrument).sort());
+      }
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps the steady-state Twelve Data budget below the 800-credit Basic daily allowance', () => {
+    const fiveMinuteSlotsPerDay = (24 * 60) / 5;
+    const steadyStateCredits = fiveMinuteSlotsPerDay * 2;
+    const startupPrimeCredits = PAIRS.length;
+    expect(steadyStateCredits).toBe(576);
+    expect(steadyStateCredits + startupPrimeCredits).toBeLessThan(800);
+  });
+
   it('reports PAPER authority waiting for a PAPER session when observation data is ready', async () => {
     const live = new LivePaperMarketDataService();
     for (const [instrument] of PAIRS) {
