@@ -3333,9 +3333,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     apiKey: string,
     fetchImpl: typeof fetch,
   ): Promise<Map<string, LivePaperCandleInput[]>> {
-    // Twelve Data Basic permits 8 credits/minute while this six-symbol batch
-    // costs 6. Reuse one successful batch inside the same API-process minute
-    // so a startup prime + collection slot cannot accidentally spend 12.
+    // Twelve Data Basic has a finite daily credit budget. Prime all six pairs
+    // when the cache is absent/stale, then refresh two pairs per closed M5 slot.
+    // This preserves a coherent six-pair snapshot while keeping steady-state
+    // usage below the Basic daily allowance instead of exhausting it mid-day.
     const requestNow = new Date();
     const requestMinute = requestNow.toISOString().slice(0, 16);
     // Reuse any successful six-pair batch (primary or broker fallback) inside
@@ -3361,10 +3362,25 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       return this.fetchBrokerNativeFallbackSeries('TWELVE_DATA_TRANSIENT_MINUTE_BACKOFF');
     }
 
-    const now = Date.now();
+    const now = requestNow.getTime();
+    const cacheIsCompleteAndFresh =
+      this.lastProviderSeries !== null &&
+      SYMBOLS.every(([instrument]) => {
+        const cached = this.lastProviderSeries?.get(instrument);
+        if (!cached?.length) return false;
+        const latestClose = cached[cached.length - 1]!.timestamp.getTime() + BAR_MS;
+        return now - latestClose <= 20 * 60_000;
+      });
+    const pairsPerRefresh = 2;
+    const refreshGroupCount = Math.ceil(SYMBOLS.length / pairsPerRefresh);
+    const refreshGroup = Math.floor(now / BAR_MS) % refreshGroupCount;
+    const requestedSymbols = cacheIsCompleteAndFresh
+      ? SYMBOLS.slice(refreshGroup * pairsPerRefresh, (refreshGroup + 1) * pairsPerRefresh)
+      : SYMBOLS;
+
     const lastClosedBoundary = Math.floor(now / BAR_MS) * BAR_MS - 1_000;
     const params = new URLSearchParams({
-      symbol: SYMBOLS.map(([, provider]) => provider).join(','),
+      symbol: requestedSymbols.map(([, provider]) => provider).join(','),
       interval: '5min',
       outputsize: '500',
       timezone: 'UTC',
@@ -3421,8 +3437,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return this.transientBrokerFallback('TWELVE_DATA_INCOMPLETE_BATCH', requestMinute);
     }
-    const result = new Map<string, LivePaperCandleInput[]>();
-    for (const [instrument, providerSymbol] of SYMBOLS) {
+    const result = cacheIsCompleteAndFresh
+      ? new Map(this.lastProviderSeries!)
+      : new Map<string, LivePaperCandleInput[]>();
+    for (const [instrument, providerSymbol] of requestedSymbols) {
       const series = this.resolveSeries(payload, providerSymbol);
       if (!series || series.status === 'error' || !Array.isArray(series.values)) {
         return this.transientBrokerFallback('TWELVE_DATA_INCOMPLETE_BATCH', requestMinute);
