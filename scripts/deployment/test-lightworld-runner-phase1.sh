@@ -22,11 +22,12 @@ grep -Fq 'github.event.issue.number == 366' "$CONTROL" || fail 'Control workflow
 grep -Fq "github.actor == 'Chrix4u'" "$CONTROL" || fail 'Control workflow must be pinned to the Chrix4u owner.'
 grep -Fq "github.event.comment.author_association == 'OWNER'" "$CONTROL" || fail 'Control workflow must require OWNER association.'
 grep -Fq 'runs-on: [self-hosted, linux, x64, lightworld-vps, staging, irexpro-staging]' "$CONTROL" || fail 'Control workflow must use the iRexPro runner labels.'
+grep -Fq 'contents: read' "$CONTROL" || fail 'Control workflow must keep repository contents read-only.'
 for command in status health disk runner-status; do
   grep -Fq "\"/vps ${command}\")" "$CONTROL" || fail "Missing allow-listed /vps ${command} command."
 done
-if grep -Eq '\beval\b|bash +-c|STAGING_SSH_|SSH_PRIVATE_KEY|secrets\.|lightworld-deploy-|lightworld-rollback-|pm2 +(restart|stop|delete|start)' "$CONTROL"; then
-  fail 'Phase-1 control workflow exposes a forbidden mutation or secret/SSH path.'
+if grep -Eq '\beval\b|bash +-c|STAGING_SSH_|SSH_PRIVATE_KEY|secrets\.|issues: +write|contents: +write|GITHUB_TOKEN|github\.token|lightworld-deploy-|lightworld-rollback-|pm2 +(restart|stop|delete|start)' "$CONTROL"; then
+  fail 'Phase-1 control workflow exposes a forbidden write, mutation, secret, or SSH path.'
 fi
 if grep -Fq 'uses: actions/checkout@' "$CONTROL"; then
   fail 'Control workflow must not checkout repository code onto the VPS runner.'
