@@ -1,9 +1,10 @@
 export const PAPER_RESEARCH_THROUGHPUT_ARTIFACT =
-  'paper-research-throughput-v5-controlled-execution';
+  'paper-research-throughput-v6-controlled-exploration';
 export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS = Object.freeze([
   'paper-research-throughput-v2-episode-guarded',
   'paper-research-throughput-v3-episode-guarded',
   'paper-research-throughput-v4-pair-side-reliability',
+  'paper-research-throughput-v5-controlled-execution',
   PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
 ]);
 export const PAPER_RESEARCH_THROUGHPUT_LOT_CAP = 0.01;
@@ -12,6 +13,10 @@ export const PAPER_RESEARCH_THROUGHPUT_MIN_CONFIDENCE = 0.64;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY = 0.25;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_TRADE_QUALITY = 0.48;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_EXIT_QUALITY = 0.48;
+export const PAPER_RESEARCH_EXPLORATION_MIN_CONFIDENCE = 0.58;
+export const PAPER_RESEARCH_EXPLORATION_MIN_DIRECTION_QUALITY = 0.1;
+export const PAPER_RESEARCH_EXPLORATION_MIN_TRADE_QUALITY = 0.4;
+export const PAPER_RESEARCH_EXPLORATION_MIN_EXIT_QUALITY = 0.4;
 
 export const PAPER_PAIRED_REVERSAL_RESEARCH_ARTIFACT = 'paper-paired-reversal-research-v1';
 export const PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP = 0.01;
@@ -184,6 +189,12 @@ const ALLOWED_RESEARCH_BLOCKERS = new Set([
   'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
 ]);
 
+const ALLOWED_RESEARCH_EXPLORATION_BLOCKERS = new Set([
+  ...ALLOWED_RESEARCH_BLOCKERS,
+  'DRIFT_STRESSED',
+  'DRIFT_OUT_OF_DISTRIBUTION',
+]);
+
 export interface PaperResearchThroughputInput {
   normalPaperExecution: boolean;
   confidence: number;
@@ -212,35 +223,73 @@ export interface PaperResearchThroughputDecision {
 export function evaluatePaperResearchThroughput(
   input: PaperResearchThroughputInput,
 ): PaperResearchThroughputDecision {
-  let reason = 'RESEARCH_EVIDENCE_CANDIDATE';
-
   if (input.normalPaperExecution) {
-    reason = 'NORMAL_PAPER_EXECUTION';
-  } else if (input.strategyRoute !== 'TREND_CONTINUATION') {
+    return {
+      eligible: false,
+      artifact: PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
+      route: 'PAPER_RESEARCH_THROUGHPUT',
+      reason: 'NORMAL_PAPER_EXECUTION',
+      qualificationEvidence: false,
+      executionAuthority: 'PAPER_ONLY_RESEARCH',
+    };
+  }
+
+  const costUsable = input.paperExecutionCostUsable ?? input.executionSpreadEvidenceValid;
+  const strictBlockersSafe =
+    (input.routeReliabilityDemoted || input.paperExecutionBlockers.length > 0) &&
+    input.paperExecutionBlockers.every((blocker) => ALLOWED_RESEARCH_BLOCKERS.has(blocker));
+  const strictEligible =
+    input.strategyRoute === 'TREND_CONTINUATION' &&
+    Number.isFinite(input.confidence) &&
+    input.confidence >= PAPER_RESEARCH_THROUGHPUT_MIN_CONFIDENCE &&
+    input.driftState === 'NORMAL' &&
+    Number.isFinite(input.directionQuality) &&
+    input.directionQuality >= PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY &&
+    Number.isFinite(input.tradeQuality) &&
+    input.tradeQuality >= PAPER_RESEARCH_THROUGHPUT_MIN_TRADE_QUALITY &&
+    Number.isFinite(input.exitQuality) &&
+    input.exitQuality >= PAPER_RESEARCH_THROUGHPUT_MIN_EXIT_QUALITY &&
+    costUsable &&
+    input.eventRisk === 'CLEAR' &&
+    Number.isFinite(input.netExpectedR) &&
+    input.netExpectedR >= PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R &&
+    strictBlockersSafe;
+
+  if (strictEligible) {
+    return {
+      eligible: true,
+      artifact: PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
+      route: 'PAPER_RESEARCH_THROUGHPUT',
+      reason: 'RESEARCH_EVIDENCE_CANDIDATE',
+      qualificationEvidence: false,
+      executionAuthority: 'PAPER_ONLY_RESEARCH',
+    };
+  }
+
+  let reason = 'RESEARCH_EXPLORATION_CANDIDATE';
+  if (input.strategyRoute !== 'TREND_CONTINUATION') {
     reason = 'ROUTE_NOT_VALIDATED';
   } else if (
     !Number.isFinite(input.confidence) ||
-    input.confidence < PAPER_RESEARCH_THROUGHPUT_MIN_CONFIDENCE
+    input.confidence < PAPER_RESEARCH_EXPLORATION_MIN_CONFIDENCE
   ) {
     reason = 'CONFIDENCE_TOO_LOW';
-  } else if (input.driftState !== 'NORMAL') {
-    reason = 'DRIFT_NOT_NORMAL';
   } else if (
     !Number.isFinite(input.directionQuality) ||
-    input.directionQuality < PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY
+    input.directionQuality < PAPER_RESEARCH_EXPLORATION_MIN_DIRECTION_QUALITY
   ) {
     reason = 'DIRECTION_QUALITY_TOO_LOW';
   } else if (
     !Number.isFinite(input.tradeQuality) ||
-    input.tradeQuality < PAPER_RESEARCH_THROUGHPUT_MIN_TRADE_QUALITY
+    input.tradeQuality < PAPER_RESEARCH_EXPLORATION_MIN_TRADE_QUALITY
   ) {
     reason = 'TRADE_QUALITY_TOO_LOW';
   } else if (
     !Number.isFinite(input.exitQuality) ||
-    input.exitQuality < PAPER_RESEARCH_THROUGHPUT_MIN_EXIT_QUALITY
+    input.exitQuality < PAPER_RESEARCH_EXPLORATION_MIN_EXIT_QUALITY
   ) {
     reason = 'EXIT_QUALITY_TOO_LOW';
-  } else if (!(input.paperExecutionCostUsable ?? input.executionSpreadEvidenceValid)) {
+  } else if (!costUsable) {
     reason = 'SPREAD_EVIDENCE_INVALID';
   } else if (input.eventRisk !== 'CLEAR') {
     reason = 'EVENT_RISK_NOT_CLEAR';
@@ -250,13 +299,15 @@ export function evaluatePaperResearchThroughput(
     reason = 'NET_EXPECTED_R_TOO_LOW';
   } else if (
     (!input.routeReliabilityDemoted && input.paperExecutionBlockers.length === 0) ||
-    input.paperExecutionBlockers.some((blocker) => !ALLOWED_RESEARCH_BLOCKERS.has(blocker))
+    input.paperExecutionBlockers.some(
+      (blocker) => !ALLOWED_RESEARCH_EXPLORATION_BLOCKERS.has(blocker),
+    )
   ) {
     reason = 'UNSAFE_BLOCKER';
   }
 
   return {
-    eligible: reason === 'RESEARCH_EVIDENCE_CANDIDATE',
+    eligible: reason === 'RESEARCH_EXPLORATION_CANDIDATE',
     artifact: PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
     route: 'PAPER_RESEARCH_THROUGHPUT',
     reason,
