@@ -78,7 +78,7 @@ class TradeIntentMirror {
   tradingSessionId: string | null;
   @Column({ name: 'strategy_code', type: 'varchar', length: 100, nullable: true })
   strategyCode: string | null;
-  @Column({ name: 'model_version', type: 'varchar', length: 100, nullable: true })
+  @Column({ name: 'model_version', type: 'varchar', length: 255, nullable: true })
   modelVersion: string | null;
   @Column({ name: 'timeframe', type: 'varchar', length: 20, nullable: true })
   timeframe: string | null;
