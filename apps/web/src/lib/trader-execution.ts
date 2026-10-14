@@ -7,10 +7,22 @@ import type {
 } from '@irexpro/types/execution';
 import { api } from '@/lib/api';
 
+export type TraderExecutionFeed =
+  | 'openPositions'
+  | 'recentExecutions'
+  | 'closedExecutions';
+
 export interface TraderExecutionSnapshot {
   openPositions: TradeExecutionView[];
   recentExecutions: TradeExecutionView[];
   closedExecutions: TradeExecutionView[];
+  degradedFeeds: TraderExecutionFeed[];
+}
+
+interface TraderExecutionRefreshRequests {
+  openPositions: Promise<unknown>;
+  recentExecutions: Promise<unknown>;
+  closedExecutions: Promise<unknown>;
 }
 
 const executionApi = createExecutionApi(api);
@@ -87,33 +99,87 @@ export function isTradeExecutionView(value: unknown): value is TradeExecutionVie
   );
 }
 
+function validateExecutionFeed(
+  feed: TraderExecutionFeed,
+  value: unknown,
+): TradeExecutionView[] | null {
+  if (!Array.isArray(value) || !value.every(isTradeExecutionView)) return null;
+  if (feed === 'openPositions' && !value.every((trade) => trade.status === 'OPEN')) {
+    return null;
+  }
+  if (feed === 'closedExecutions' && !value.every((trade) => trade.status === 'CLOSED')) {
+    return null;
+  }
+  return value;
+}
+
 /**
- * Load the first frontend-safe execution read model for the trader terminal.
- * Runtime validation fails closed if the API returns an unexpected or overly
- * broad object shape.
+ * Resolve the three execution read models independently. A transient failure or
+ * contract mismatch in one feed must not erase successful data from the other
+ * feeds. When a previous validated snapshot exists, only the failed segment is
+ * preserved from that last-known-good state.
  */
-export async function loadTraderExecutionSnapshot(): Promise<TraderExecutionSnapshot> {
-  const [openPositions, recentExecutions, closedExecutions] = await Promise.all([
-    executionApi.listOpenPositions(),
-    executionApi.listRecentExecutions(100),
-    executionApi.listClosedExecutions(50),
+export async function resolveTraderExecutionRefresh(
+  requests: TraderExecutionRefreshRequests,
+  previous: TraderExecutionSnapshot | null,
+): Promise<TraderExecutionSnapshot> {
+  const feeds: TraderExecutionFeed[] = [
+    'openPositions',
+    'recentExecutions',
+    'closedExecutions',
+  ];
+  const settled = await Promise.allSettled([
+    requests.openPositions,
+    requests.recentExecutions,
+    requests.closedExecutions,
   ]);
 
-  if (!Array.isArray(openPositions) || !openPositions.every(isTradeExecutionView)) {
-    throw new Error('Open positions contract mismatch');
-  }
-  if (!Array.isArray(recentExecutions) || !recentExecutions.every(isTradeExecutionView)) {
-    throw new Error('Recent executions contract mismatch');
-  }
-  if (!Array.isArray(closedExecutions) || !closedExecutions.every(isTradeExecutionView)) {
-    throw new Error('Closed executions contract mismatch');
-  }
-  if (!openPositions.every((trade) => trade.status === 'OPEN')) {
-    throw new Error('Open positions endpoint returned a non-OPEN trade');
-  }
-  if (!closedExecutions.every((trade) => trade.status === 'CLOSED')) {
-    throw new Error('Closed executions endpoint returned a non-CLOSED trade');
+  const degradedFeeds: TraderExecutionFeed[] = [];
+  const next = {} as Pick<
+    TraderExecutionSnapshot,
+    'openPositions' | 'recentExecutions' | 'closedExecutions'
+  >;
+
+  feeds.forEach((feed, index) => {
+    const result = settled[index];
+    const validated =
+      result.status === 'fulfilled'
+        ? validateExecutionFeed(feed, result.value)
+        : null;
+
+    if (validated) {
+      next[feed] = validated;
+      return;
+    }
+
+    degradedFeeds.push(feed);
+    next[feed] = previous?.[feed] ?? [];
+  });
+
+  if (degradedFeeds.length === feeds.length && previous === null) {
+    throw new Error('Execution feeds unavailable');
   }
 
-  return { openPositions, recentExecutions, closedExecutions };
+  return {
+    ...next,
+    degradedFeeds,
+  };
+}
+
+/**
+ * Load the frontend-safe execution read models for the trader terminal without
+ * coupling their availability. Runtime validation still fails closed per feed,
+ * while a transient failure preserves only that feed's last-known-good data.
+ */
+export async function loadTraderExecutionSnapshot(
+  previous: TraderExecutionSnapshot | null = null,
+): Promise<TraderExecutionSnapshot> {
+  return resolveTraderExecutionRefresh(
+    {
+      openPositions: executionApi.listOpenPositions(),
+      recentExecutions: executionApi.listRecentExecutions(100),
+      closedExecutions: executionApi.listClosedExecutions(50),
+    },
+    previous,
+  );
 }
