@@ -13,7 +13,7 @@ describe('TradeIntent model-version schema contract', () => {
     expect(Number(column?.options.length)).toBeGreaterThanOrEqual(255);
   });
 
-  it('includes a migration that widens execution.trade_intents.model_version', () => {
+  it('includes a migration that widens trading.trade_intents.model_version', () => {
     const migrationsDir = path.resolve(__dirname, '../../../database/migrations');
     const migrationBodies = fs
       .readdirSync(migrationsDir)
@@ -22,7 +22,7 @@ describe('TradeIntent model-version schema contract', () => {
       .join('\n');
 
     expect(migrationBodies).toMatch(
-      /ALTER\s+TABLE\s+execution\.trade_intents[\s\S]*ALTER\s+COLUMN\s+model_version[\s\S]*TYPE\s+varchar\(255\)/i,
+      /ALTER\s+TABLE\s+trading\.trade_intents[\s\S]*ALTER\s+COLUMN\s+model_version[\s\S]*TYPE\s+varchar\(255\)/i,
     );
   });
 });

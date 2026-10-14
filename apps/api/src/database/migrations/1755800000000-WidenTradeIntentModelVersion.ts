@@ -10,7 +10,7 @@ export class WidenTradeIntentModelVersion1755800000000 implements MigrationInter
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      ALTER TABLE execution.trade_intents
+      ALTER TABLE trading.trade_intents
       ALTER COLUMN model_version TYPE varchar(255)
     `);
   }
@@ -18,17 +18,17 @@ export class WidenTradeIntentModelVersion1755800000000 implements MigrationInter
   public async down(queryRunner: QueryRunner): Promise<void> {
     const rows: Array<{ max_length: number | string | null }> = await queryRunner.query(`
       SELECT MAX(char_length(model_version)) AS max_length
-      FROM execution.trade_intents
+      FROM trading.trade_intents
     `);
     const maxLength = Number(rows[0]?.max_length ?? 0);
     if (maxLength > 100) {
       throw new Error(
-        `Cannot revert execution.trade_intents.model_version to varchar(100): existing value length ${maxLength} exceeds 100`,
+        `Cannot revert trading.trade_intents.model_version to varchar(100): existing value length ${maxLength} exceeds 100`,
       );
     }
 
     await queryRunner.query(`
-      ALTER TABLE execution.trade_intents
+      ALTER TABLE trading.trade_intents
       ALTER COLUMN model_version TYPE varchar(100)
     `);
   }
