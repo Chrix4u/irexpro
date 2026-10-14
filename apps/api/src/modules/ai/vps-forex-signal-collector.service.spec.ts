@@ -640,7 +640,11 @@ describe('VpsForexSignalCollectorService', () => {
     );
 
     const evaluatedAt = new Date('2026-10-07T12:00:00.000Z');
-    const evidence = await (collector as any).loadExecutionSpreadEvidence('EURUSD', evaluatedAt);
+    const evidence = await (collector as any).loadExecutionSpreadEvidence(
+      'user-1',
+      'EURUSD',
+      evaluatedAt,
+    );
 
     expect(evidence).toEqual({
       source: 'BROKER_OBSERVED_P90',
@@ -654,6 +658,53 @@ describe('VpsForexSignalCollectorService', () => {
     expect(String(query.mock.calls[0][0])).toContain('market_data.provider_quote_candles');
     expect(query).toHaveBeenCalledWith(expect.any(String), [
       'metaapi-source-1',
+      'EURUSD',
+      evaluatedAt.toISOString(),
+    ]);
+  });
+
+  it('discovers the same user fresh connected MT5 spread source when deployment binding is absent', async () => {
+    const evaluatedAt = new Date('2026-10-07T12:00:00.000Z');
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ connection_id: 'metaapi-auto-source-1' }])
+      .mockResolvedValueOnce([
+        {
+          sample_count: 18,
+          spread_price: '0.00002000',
+          latest_sample_at: '2026-10-07T11:59:30.000Z',
+        },
+      ]);
+    const collector = createCollector(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    const evidence = await (collector as any).loadExecutionSpreadEvidence(
+      'user-1',
+      'EURUSD',
+      evaluatedAt,
+    );
+
+    expect(evidence).toMatchObject({
+      source: 'BROKER_OBSERVED_P90',
+      spreadPrice: 0.00002,
+      sampleCount: 18,
+      latestSampleAt: '2026-10-07T11:59:30.000Z',
+    });
+    const discoverySql = String(query.mock.calls[0][0]);
+    expect(discoverySql).toContain('broker.broker_connections');
+    expect(discoverySql).toContain("broker_id = 'metatrader5'");
+    expect(discoverySql).toContain("status = 'CONNECTED'");
+    expect(discoverySql).toContain('c.user_id = $1');
+    expect(query.mock.calls[0][1]).toEqual(['user-1', 'EURUSD', evaluatedAt.toISOString()]);
+    expect(query.mock.calls[1][1]).toEqual([
+      'metaapi-auto-source-1',
       'EURUSD',
       evaluatedAt.toISOString(),
     ]);
@@ -2045,6 +2096,48 @@ describe('VpsForexSignalCollectorService', () => {
     expect(series.size).toBe(6);
     expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
     expect(peak).toBeLessThanOrEqual(3);
+  });
+
+  it('discovers the same user connected MT5 source for broker-native history when deployment binding is absent', async () => {
+    const query = jest.fn().mockResolvedValue([{ id: 'metaapi-auto-source-1' }]);
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
+          const base = instrument === 'USDJPY' ? 157 : 1.1;
+          const digits = instrument === 'USDJPY' ? 3 : 5;
+          return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
+        }),
+    } as unknown as BrokerService;
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'paper-conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    const series = await (collector as any).fetchBrokerNativeFallbackSeries('DAILY_CREDIT_LIMIT');
+
+    expect(series.size).toBe(6);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("broker_id = 'metatrader5'"), [
+      'user-1',
+    ]);
+    expect((broker as any).getOhlcvForConnection).toHaveBeenCalledWith(
+      'user-1',
+      'metaapi-auto-source-1',
+      expect.any(String),
+      'M5',
+      expect.any(Number),
+    );
   });
 
   it('fails over to broker-native MetaTrader candles after Twelve Data exhausts the daily quota', async () => {

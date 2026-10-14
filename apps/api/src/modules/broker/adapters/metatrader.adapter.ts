@@ -446,8 +446,40 @@ export class MetaTraderAdapter implements IBrokerAdapter {
         timestamp: price.time ?? new Date(),
       };
     } catch (err) {
-      throw this.mapError(err);
+      const mapped = this.mapError(err);
+      if (this.currentAccountId && this.shouldInvalidateQuoteConnection(err, mapped)) {
+        try {
+          // Read-only quote failures are safe to heal by discarding only the
+          // exact pooled RPC instance which just failed. removeConnection's
+          // expected-instance guard prevents a concurrent successful reconnect
+          // from being torn down by an older failing request. The next quote
+          // poll then runs the normal deploy + broker-connected checks again.
+          await this.metaApiClient.removeConnection(this.currentAccountId, conn);
+        } catch {
+          // Never replace the original provider error with cleanup failure.
+        }
+      }
+      throw mapped;
     }
+  }
+
+  private shouldInvalidateQuoteConnection(err: unknown, mapped: BrokerAdapterError): boolean {
+    if (
+      mapped.code === BrokerErrorCode.CONNECTION_TIMEOUT ||
+      mapped.code === BrokerErrorCode.CONNECTION_LOST ||
+      mapped.code === BrokerErrorCode.BROKER_SERVER_ERROR ||
+      mapped.code === BrokerErrorCode.NOT_CONNECTED
+    ) {
+      return true;
+    }
+
+    const lower = String((err as any)?.message ?? '').toLowerCase();
+    return (
+      lower.includes('no accounts deployed') ||
+      lower.includes('not connected to broker') ||
+      lower.includes('subscribe timed out') ||
+      lower.includes('not synchronized')
+    );
   }
 
   async getOHLCV(

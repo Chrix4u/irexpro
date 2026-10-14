@@ -1217,6 +1217,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               };
           const evaluatedAt = new Date();
           const executionSpreadEvidence = await this.loadExecutionSpreadEvidence(
+            userId,
             best.instrument,
             evaluatedAt,
           );
@@ -2823,12 +2824,46 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     };
   }
 
+  private async discoverFreshSpreadSourceConnectionId(
+    userId: string,
+    instrument: string,
+    evaluatedAt: Date,
+  ): Promise<string> {
+    if (!this.dataSource || !userId) return '';
+    const rows = (await this.dataSource.query(
+      `
+        SELECT q.connection_id
+        FROM market_data.provider_quote_candles q
+        JOIN broker.broker_connections c ON c.id = q.connection_id
+        WHERE c.user_id = $1
+          AND c.broker_id = 'metatrader5'
+          AND c.account_type IN ('DEMO', 'LIVE')
+          AND c.status = 'CONNECTED'
+          AND c.authorization_status IN ('CONNECTED', 'AUTHORIZED', 'READY', 'ACTIVE')
+          AND c.deleted_at IS NULL
+          AND q.instrument = $2
+          AND q.timeframe = 'M1'
+          AND q.spread_close > 0
+          AND q.last_sample_at > ($3::timestamptz - interval '30 minutes')
+          AND q.last_sample_at <= $3::timestamptz
+        ORDER BY q.last_sample_at DESC
+        LIMIT 1
+      `,
+      [userId, instrument.trim().toUpperCase(), evaluatedAt.toISOString()],
+    )) as Array<{ connection_id: string | null }>;
+    return rows[0]?.connection_id?.trim() ?? '';
+  }
+
   private async loadExecutionSpreadEvidence(
+    userId: string,
     instrument: string,
     evaluatedAt: Date,
   ): Promise<ExecutionSpreadEvidence | null> {
-    const sourceConnectionId = this.brokerExpertSourceConnectionId();
-    if (!this.dataSource || !sourceConnectionId) return null;
+    if (!this.dataSource) return null;
+    const sourceConnectionId =
+      this.brokerExpertSourceConnectionId() ||
+      (await this.discoverFreshSpreadSourceConnectionId(userId, instrument, evaluatedAt));
+    if (!sourceConnectionId) return null;
 
     const rows = (await this.dataSource.query(
       `
@@ -3492,12 +3527,39 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     return this.fetchBrokerNativeFallbackSeries(reason);
   }
 
+  private async resolveBrokerNativeSourceConnectionId(userId: string): Promise<string> {
+    const configured = this.brokerExpertSourceConnectionId();
+    if (configured) return configured;
+    if (!this.dataSource || !userId) return '';
+
+    const rows = (await this.dataSource.query(
+      `
+        SELECT c.id
+        FROM broker.broker_connections c
+        LEFT JOIN market_data.provider_quote_candles q ON q.connection_id = c.id
+        WHERE c.user_id = $1
+          AND c.broker_id = 'metatrader5'
+          AND c.account_type IN ('DEMO', 'LIVE')
+          AND c.status = 'CONNECTED'
+          AND c.authorization_status IN ('CONNECTED', 'AUTHORIZED', 'READY', 'ACTIVE')
+          AND c.deleted_at IS NULL
+        GROUP BY c.id
+        ORDER BY MAX(q.last_sample_at) DESC NULLS LAST, c.id ASC
+        LIMIT 1
+      `,
+      [userId],
+    )) as Array<{ id: string | null }>;
+    return rows[0]?.id?.trim() ?? '';
+  }
+
   private async fetchBrokerNativeFallbackSeries(
     reason: string,
   ): Promise<Map<string, LivePaperCandleInput[]>> {
     const userId = this.userId();
-    const sourceConnectionId = this.brokerExpertSourceConnectionId();
-    if (!this.brokerExpertEnabled() || !userId || !sourceConnectionId) {
+    const sourceConnectionId = userId
+      ? await this.resolveBrokerNativeSourceConnectionId(userId)
+      : '';
+    if (!userId || !sourceConnectionId) {
       this.lastMarketDataAuthority = 'NONE';
       throw new Error(
         `Twelve Data unavailable (${reason}) and broker-native fallback is not configured`,
