@@ -1144,7 +1144,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('routes qualified research-throughput to tiny PAPER execution without qualification authority', async () => {
+  it('routes controlled exploration research-throughput to PAPER execution without qualification authority', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
@@ -1162,9 +1162,9 @@ describe('VpsForexSignalCollectorService', () => {
           admitted: false,
           consensusPassed: target ? 5 : 3,
           consensusRequired: 6,
-          directionQuality: target ? 0.65 : 0.2,
-          tradeQuality: target ? 0.6 : 0.2,
-          exitQuality: target ? 0.6 : 0.2,
+          directionQuality: target ? 0.18 : 0.2,
+          tradeQuality: target ? 0.44 : 0.2,
+          exitQuality: target ? 0.43 : 0.2,
           metaProbability: target ? 0.5 : 0.35,
           expectedR: target ? 0.25 : -0.2,
           ensembleScore: target ? 0.62 : 0.3,
@@ -1194,16 +1194,20 @@ describe('VpsForexSignalCollectorService', () => {
           netExpectedR: target ? 0.22 : -0.23,
           paperNetExpectedRPassed: target,
           netExpectedRPassed: target,
-          driftState: target ? 'NORMAL' : 'OUT_OF_DISTRIBUTION',
-          driftQuality: target ? 1 : 0.2,
-          paperDriftPassed: target,
-          driftPassed: target,
+          driftState: 'OUT_OF_DISTRIBUTION',
+          driftQuality: 0.2,
+          paperDriftPassed: false,
+          driftPassed: false,
           sleeveState: 'COLLECTING',
           sleeveEvidence: null,
           eventRisk: 'CLEAR',
           paperExecutionEligible: false,
           paperExecutionBlockers: target
-            ? ['ENSEMBLE_NOT_PAPER_ADMITTED', 'ENSEMBLE_NOT_PROMOTABLE_ADMISSION']
+            ? [
+                'ENSEMBLE_NOT_PAPER_ADMITTED',
+                'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+                'DRIFT_OUT_OF_DISTRIBUTION',
+              ]
             : ['PAPER_NET_EXPECTED_R'],
           paperPromotionEligible: false,
           blockers: ['ENSEMBLE_NOT_ADMITTED', 'SLEEVE_COLLECTING'],
@@ -1276,12 +1280,13 @@ describe('VpsForexSignalCollectorService', () => {
           direction: 'BUY',
           suggestedVolume: 0.01,
           modelVersion:
-            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v5-controlled-execution',
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v6-controlled-exploration',
           metadata: expect.objectContaining({
             paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
             paper_research_throughput: true,
             paper_research_throughput_qualification_evidence: false,
             paper_research_throughput_execution_authority: 'PAPER_ONLY_RESEARCH',
+            paper_research_throughput_reason: 'RESEARCH_EXPLORATION_CANDIDATE',
             main_strategy_qualification_evidence: false,
             production_eligible: false,
             position_sizing_tier: 'RESEARCH',
@@ -1644,6 +1649,7 @@ describe('VpsForexSignalCollectorService', () => {
           'paper-research-throughput-v3-episode-guarded',
           'paper-research-throughput-v4-pair-side-reliability',
           'paper-research-throughput-v5-controlled-execution',
+          'paper-research-throughput-v6-controlled-exploration',
         ],
         expect.any(String),
       ],

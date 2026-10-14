@@ -31,7 +31,7 @@ describe('evaluatePaperResearchThroughput', () => {
   it('marks a positive-EV research candidate PAPER-only without granting qualification authority', () => {
     expect(evaluatePaperResearchThroughput(base)).toEqual({
       eligible: true,
-      artifact: 'paper-research-throughput-v5-controlled-execution',
+      artifact: 'paper-research-throughput-v6-controlled-exploration',
       route: 'PAPER_RESEARCH_THROUGHPUT',
       reason: 'RESEARCH_EVIDENCE_CANDIDATE',
       qualificationEvidence: false,
@@ -39,33 +39,65 @@ describe('evaluatePaperResearchThroughput', () => {
     });
   });
 
-  it('rejects research throughput below the normal confidence floor', () => {
-    expect(evaluatePaperResearchThroughput({ ...base, confidence: 0.6399 })).toMatchObject({
+  it('admits a controlled PAPER exploration sample when strict confidence is missed but economics and quality remain usable', () => {
+    expect(
+      evaluatePaperResearchThroughput({
+        ...base,
+        confidence: 0.6,
+        driftState: 'OUT_OF_DISTRIBUTION',
+        directionQuality: 0.18,
+        tradeQuality: 0.44,
+        exitQuality: 0.43,
+        paperExecutionBlockers: [...base.paperExecutionBlockers, 'DRIFT_OUT_OF_DISTRIBUTION'],
+      }),
+    ).toMatchObject({
+      eligible: true,
+      reason: 'RESEARCH_EXPLORATION_CANDIDATE',
+      qualificationEvidence: false,
+      executionAuthority: 'PAPER_ONLY_RESEARCH',
+    });
+  });
+
+  it('keeps the exploration fallback bounded below its reduced confidence and quality floors', () => {
+    expect(evaluatePaperResearchThroughput({ ...base, confidence: 0.5799 })).toMatchObject({
       eligible: false,
       reason: 'CONFIDENCE_TOO_LOW',
     });
+    expect(
+      evaluatePaperResearchThroughput({ ...base, confidence: 0.6, directionQuality: 0.0999 }),
+    ).toMatchObject({ eligible: false, reason: 'DIRECTION_QUALITY_TOO_LOW' });
+    expect(
+      evaluatePaperResearchThroughput({ ...base, confidence: 0.6, tradeQuality: 0.3999 }),
+    ).toMatchObject({ eligible: false, reason: 'TRADE_QUALITY_TOO_LOW' });
+    expect(
+      evaluatePaperResearchThroughput({ ...base, confidence: 0.6, exitQuality: 0.3999 }),
+    ).toMatchObject({ eligible: false, reason: 'EXIT_QUALITY_TOO_LOW' });
   });
 
-  it('rejects stressed or out-of-distribution drift', () => {
+  it('allows stressed or out-of-distribution drift only through non-promotable exploration', () => {
     expect(evaluatePaperResearchThroughput({ ...base, driftState: 'STRESSED' })).toMatchObject({
-      eligible: false,
-      reason: 'DRIFT_NOT_NORMAL',
+      eligible: true,
+      reason: 'RESEARCH_EXPLORATION_CANDIDATE',
     });
     expect(
-      evaluatePaperResearchThroughput({ ...base, driftState: 'OUT_OF_DISTRIBUTION' }),
-    ).toMatchObject({ eligible: false, reason: 'DRIFT_NOT_NORMAL' });
+      evaluatePaperResearchThroughput({
+        ...base,
+        driftState: 'OUT_OF_DISTRIBUTION',
+        paperExecutionBlockers: [...base.paperExecutionBlockers, 'DRIFT_OUT_OF_DISTRIBUTION'],
+      }),
+    ).toMatchObject({ eligible: true, reason: 'RESEARCH_EXPLORATION_CANDIDATE' });
   });
 
-  it('rejects weak direction, trade, or exit quality', () => {
-    expect(evaluatePaperResearchThroughput({ ...base, directionQuality: 0.2499 })).toMatchObject({
+  it('rejects unusably weak direction, trade, or exit quality even for exploration', () => {
+    expect(evaluatePaperResearchThroughput({ ...base, directionQuality: 0.0999 })).toMatchObject({
       eligible: false,
       reason: 'DIRECTION_QUALITY_TOO_LOW',
     });
-    expect(evaluatePaperResearchThroughput({ ...base, tradeQuality: 0.4799 })).toMatchObject({
+    expect(evaluatePaperResearchThroughput({ ...base, tradeQuality: 0.3999 })).toMatchObject({
       eligible: false,
       reason: 'TRADE_QUALITY_TOO_LOW',
     });
-    expect(evaluatePaperResearchThroughput({ ...base, exitQuality: 0.4799 })).toMatchObject({
+    expect(evaluatePaperResearchThroughput({ ...base, exitQuality: 0.3999 })).toMatchObject({
       eligible: false,
       reason: 'EXIT_QUALITY_TOO_LOW',
     });
@@ -170,9 +202,15 @@ describe('PAPER research-throughput provenance and pair-side reliability', () =>
     );
   });
 
+  it('keeps the prior v5 cohort in reliability history while emitting a distinct exploration artifact', () => {
+    expect(PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS).toContain(
+      'paper-research-throughput-v5-controlled-execution',
+    );
+  });
+
   it('derives the emitted model version from the active research artifact', () => {
     expect(paperResearchThroughputModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v5-controlled-execution',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v6-controlled-exploration',
     );
   });
 
