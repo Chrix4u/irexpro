@@ -51,6 +51,12 @@ export interface EnsembleGovernanceInput {
   sleeveEvidence?: EnsembleSleeveEvidence | null;
   evaluatedAt?: Date;
   executionSpreadEvidence?: ExecutionSpreadEvidence | null;
+  /**
+   * PAPER-only conservative simulation spread used when broker-native bid/ask
+   * evidence is unavailable. This may authorize PAPER execution cost checks but
+   * never qualifies as promotion-grade execution evidence.
+   */
+  paperSimulationSpreadPrice?: number;
   /** Route-specific drift envelope override for isolated PAPER research lanes. */
   driftRoute?: 'PAIRED_REVERSAL_RESEARCH';
 }
@@ -61,8 +67,13 @@ export interface EnsembleGovernanceDecision {
   driftModelVersion: typeof ENSEMBLE_DRIFT_MODEL_VERSION;
   grossExpectedR: number;
   estimatedExecutionCostR: number;
-  executionCostSource: 'BROKER_OBSERVED_P90' | 'STATIC_DIAGNOSTIC_FALLBACK';
+  executionCostSource:
+    | 'BROKER_OBSERVED_P90'
+    | 'PAPER_SIMULATION_SPREAD'
+    | 'STATIC_DIAGNOSTIC_FALLBACK';
   executionSpreadEvidenceValid: boolean;
+  /** True when PAPER has a conservative finite execution-cost source. */
+  paperExecutionCostUsable?: boolean;
   executionSpreadEvidence: ExecutionSpreadEvidence | null;
   /** Explicit PAPER cost-floor provenance; absent on legacy stored decisions. */
   paperFillSpreadPrice?: number;
@@ -271,32 +282,48 @@ function executionSpreadEvidenceValid(input: EnsembleGovernanceInput): boolean {
 
 function executionCostR(input: EnsembleGovernanceInput): {
   costR: number;
-  source: 'BROKER_OBSERVED_P90' | 'STATIC_DIAGNOSTIC_FALLBACK';
+  source: 'BROKER_OBSERVED_P90' | 'PAPER_SIMULATION_SPREAD' | 'STATIC_DIAGNOSTIC_FALLBACK';
   evidenceValid: boolean;
+  paperCostUsable: boolean;
+  spreadPrice: number;
+  paperFallbackUsed: boolean;
 } {
   const evidenceValid = executionSpreadEvidenceValid(input);
-  const spread = evidenceValid ? input.executionSpreadEvidence!.spreadPrice : 0;
+  const simulationSpread = Number(input.paperSimulationSpreadPrice ?? 0);
+  const simulationSpreadValid = Number.isFinite(simulationSpread) && simulationSpread > 0;
+  const spread = evidenceValid
+    ? input.executionSpreadEvidence!.spreadPrice
+    : simulationSpreadValid
+      ? simulationSpread
+      : 0;
+  const source = evidenceValid
+    ? 'BROKER_OBSERVED_P90'
+    : simulationSpreadValid
+      ? 'PAPER_SIMULATION_SPREAD'
+      : 'STATIC_DIAGNOSTIC_FALLBACK';
   const stopDistance = Math.abs(input.entryPrice - input.stopLoss);
-  if (
-    !Number.isFinite(spread) ||
-    spread <= 0 ||
-    !Number.isFinite(stopDistance) ||
-    stopDistance <= 0
-  ) {
+  const spreadUsable = Number.isFinite(spread) && spread > 0;
+  if (!spreadUsable || !Number.isFinite(stopDistance) || stopDistance <= 0) {
     return {
       costR: Number.POSITIVE_INFINITY,
-      source: evidenceValid ? 'BROKER_OBSERVED_P90' : 'STATIC_DIAGNOSTIC_FALLBACK',
+      source,
       evidenceValid,
+      paperCostUsable: false,
+      spreadPrice: spreadUsable ? spread : 0,
+      paperFallbackUsed: !evidenceValid && simulationSpreadValid,
     };
   }
-  // PAPER enters/exits across bid/ask. The execution spread evidence is built
-  // from the larger of the latest broker-native spread and rolling P90, then
-  // receives a 25% slippage/quote buffer. Missing/stale observed evidence still
-  // blocks execution; a static simulation spread can never authorize a trade.
+  // Broker-observed P90 remains the only promotion-grade cost evidence. When it
+  // is unavailable, PAPER may continue evidence collection using the same
+  // conservative per-pair spread assumption as the PAPER broker. The fallback
+  // remains explicitly non-promotable because evidenceValid stays false.
   return {
     costR: (1.25 * spread) / stopDistance,
-    source: evidenceValid ? 'BROKER_OBSERVED_P90' : 'STATIC_DIAGNOSTIC_FALLBACK',
+    source,
     evidenceValid,
+    paperCostUsable: evidenceValid || simulationSpreadValid,
+    spreadPrice: spread,
+    paperFallbackUsed: !evidenceValid && simulationSpreadValid,
   };
 }
 
@@ -332,7 +359,7 @@ export function evaluateEnsembleGovernance(
   if (!input.ensemble.paperAdmitted) paperExecutionBlockers.push('ENSEMBLE_NOT_PAPER_ADMITTED');
   if (!input.ensemble.admitted && input.ensemble.strategyRoute !== 'EARLY_TRANSITION')
     paperExecutionBlockers.push('ENSEMBLE_NOT_PROMOTABLE_ADMISSION');
-  if (!executionCost.evidenceValid) paperExecutionBlockers.push('EXECUTION_SPREAD_UNAVAILABLE');
+  if (!executionCost.paperCostUsable) paperExecutionBlockers.push('EXECUTION_SPREAD_UNAVAILABLE');
   if (!paperNetExpectedRPassed) paperExecutionBlockers.push('PAPER_NET_EXPECTED_R');
   if (!paperDriftPassed) paperExecutionBlockers.push(`DRIFT_${drift.state}`);
   if (sleeveState === 'BLOCKED') paperExecutionBlockers.push('SLEEVE_BLOCKED');
@@ -354,14 +381,11 @@ export function evaluateEnsembleGovernance(
     estimatedExecutionCostR,
     executionCostSource: executionCost.source,
     executionSpreadEvidenceValid: executionCost.evidenceValid,
+    paperExecutionCostUsable: executionCost.paperCostUsable,
     executionSpreadEvidence: input.executionSpreadEvidence ?? null,
-    paperFillSpreadPrice: executionCost.evidenceValid
-      ? input.executionSpreadEvidence!.spreadPrice
-      : 0,
-    effectiveSpreadPrice: executionCost.evidenceValid
-      ? input.executionSpreadEvidence!.spreadPrice
-      : 0,
-    paperSpreadFloorApplied: false,
+    paperFillSpreadPrice: executionCost.spreadPrice,
+    effectiveSpreadPrice: executionCost.spreadPrice,
+    paperSpreadFloorApplied: executionCost.paperFallbackUsed,
     netExpectedR,
     paperNetExpectedRPassed,
     netExpectedRPassed,

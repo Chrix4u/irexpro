@@ -1467,7 +1467,10 @@ describe('VpsForexSignalCollectorService', () => {
       await collector.collectOnce(fetchMock as unknown as typeof fetch);
 
       expect(governanceSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ driftRoute: 'PAIRED_REVERSAL_RESEARCH' }),
+        expect.objectContaining({
+          driftRoute: 'PAIRED_REVERSAL_RESEARCH',
+          paperSimulationSpreadPrice: 0.0001,
+        }),
       );
       expect(receiveSignal).toHaveBeenCalledTimes(1);
       expect(receiveSignal).toHaveBeenCalledWith(

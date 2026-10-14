@@ -189,6 +189,7 @@ export interface PaperResearchThroughputInput {
   confidence: number;
   netExpectedR: number;
   executionSpreadEvidenceValid: boolean;
+  paperExecutionCostUsable?: boolean;
   eventRisk: string;
   strategyRoute: string;
   driftState: string;
@@ -239,7 +240,7 @@ export function evaluatePaperResearchThroughput(
     input.exitQuality < PAPER_RESEARCH_THROUGHPUT_MIN_EXIT_QUALITY
   ) {
     reason = 'EXIT_QUALITY_TOO_LOW';
-  } else if (!input.executionSpreadEvidenceValid) {
+  } else if (!(input.paperExecutionCostUsable ?? input.executionSpreadEvidenceValid)) {
     reason = 'SPREAD_EVIDENCE_INVALID';
   } else if (input.eventRisk !== 'CLEAR') {
     reason = 'EVENT_RISK_NOT_CLEAR';
@@ -270,6 +271,7 @@ export interface PaperPairedReversalResearchInput {
   reversalCandidate: boolean;
   researchNetExpectedR: number;
   executionSpreadEvidenceValid: boolean;
+  paperExecutionCostUsable?: boolean;
   eventRisk: string;
   driftState: string;
 }
@@ -301,7 +303,7 @@ export function evaluatePaperPairedReversalResearch(
     reason = 'PAIRED_REVERSAL_NOT_CONFIRMED';
   } else if (!input.preferredDirection || input.preferredDirection !== input.candidateDirection) {
     reason = 'PAIRED_DIRECTION_NOT_SELECTED';
-  } else if (!input.executionSpreadEvidenceValid) {
+  } else if (!(input.paperExecutionCostUsable ?? input.executionSpreadEvidenceValid)) {
     reason = 'SPREAD_EVIDENCE_INVALID';
   } else if (input.eventRisk !== 'CLEAR') {
     reason = 'EVENT_RISK_NOT_CLEAR';
