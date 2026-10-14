@@ -1435,6 +1435,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 netExpectedR: ensembleGovernance.netExpectedR,
                 alignedMomentumAtr: best.shortHorizonMomentumAtr,
                 executionSpreadEvidenceValid: ensembleGovernance.executionSpreadEvidenceValid,
+                paperExecutionCostUsable: ensembleGovernance.paperExecutionCostUsable,
                 eventRisk: ensembleGovernance.eventRisk,
                 portfolioQuality: planBEnsemble.portfolioQuality,
                 strategyRoute: planBEnsemble.strategyRoute,
