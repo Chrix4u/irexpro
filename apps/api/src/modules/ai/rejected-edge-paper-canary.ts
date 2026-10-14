@@ -33,6 +33,8 @@ export interface RejectedEdgeCanaryCandidate {
   /** Direction-aligned short-horizon momentum in ATR units. */
   alignedMomentumAtr: number;
   executionSpreadEvidenceValid: boolean;
+  /** PAPER-only cost usability, including the simulated spread fallback. */
+  paperExecutionCostUsable?: boolean;
   eventRisk: string;
   portfolioQuality: number;
   strategyRoute: string;
@@ -112,7 +114,9 @@ export function evaluateRejectedEdgePaperCanary(input: {
   if (candidate.alignedMomentumAtr > REJECTED_EDGE_CANARY_MAX_ALIGNED_MOMENTUM_ATR) {
     return reject('MOMENTUM_EXHAUSTED');
   }
-  if (!candidate.executionSpreadEvidenceValid) return reject('SPREAD_EVIDENCE_INVALID');
+  if (!(candidate.paperExecutionCostUsable ?? candidate.executionSpreadEvidenceValid)) {
+    return reject('SPREAD_EVIDENCE_INVALID');
+  }
   if (candidate.eventRisk !== 'CLEAR') return reject('EVENT_RISK_NOT_CLEAR');
   if (candidate.portfolioQuality < REJECTED_EDGE_CANARY_MIN_PORTFOLIO_QUALITY) {
     return reject('PORTFOLIO_QUALITY');

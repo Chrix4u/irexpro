@@ -30,6 +30,22 @@ describe('rejected-edge PAPER canary', () => {
     });
   });
 
+  it('accepts the PAPER cost fallback when live spread evidence is unavailable', () => {
+    expect(
+      evaluateRejectedEdgePaperCanary({
+        candidate: {
+          ...candidate,
+          executionSpreadEvidenceValid: false,
+          paperExecutionCostUsable: true,
+        },
+        evidence,
+      }),
+    ).toMatchObject({
+      eligible: true,
+      route: 'REJECTED_EDGE_CANARY',
+    });
+  });
+
   it('requires present-moment directional confirmation and rejects exhausted entries', () => {
     expect(
       evaluateRejectedEdgePaperCanary({
