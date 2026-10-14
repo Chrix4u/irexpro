@@ -406,7 +406,12 @@ export class StrategyOrchestratorService {
     // A duplicate delivery NEVER re-enters risk evaluation or dispatch: the
     // FIRST delivery's durable outcome is the truth for this signalId.
     if (registration.duplicate) {
-      return this.recoverDuplicateOutcome(candidate, registration);
+      const recovered = await this.recoverDuplicateOutcome(candidate, registration);
+      if (recovered) return recovered;
+      // An exact duplicate may resume only when durable state proves that the
+      // first attempt stopped before TradeIntent creation. The persisted
+      // identity (including original generatedAt) remains authoritative, so
+      // this is a retry of the SAME logical evaluation, never a fresh signal.
     }
 
     if (rebaseResearchPaperProbe) {
@@ -1161,7 +1166,7 @@ export class StrategyOrchestratorService {
   private async recoverDuplicateOutcome(
     candidate: AiSignalCandidate,
     registration: SignalIdentityRegistration,
-  ): Promise<StrategyResult> {
+  ): Promise<StrategyResult | null> {
     const { signalId, userId } = candidate;
     const originalGeneratedAt = registration.generatedAt.toISOString();
 
@@ -1217,13 +1222,46 @@ export class StrategyOrchestratorService {
       };
     }
 
-    // No trade exists for this signalId: the FIRST evaluation completed
-    // without creating one (risk-rejected, or a producer retry of a signal
-    // that never passed the pipeline). A transport retry of a rejected
-    // signal stays rejected — deterministically.
+    // No trade exists. Distinguish a genuinely completed/rejected first
+    // evaluation from a failure that stopped BEFORE durable TradeIntent
+    // creation. Only the latter is safe to resume: no allocation, risk grant,
+    // order reservation or provider dispatch can exist without the intent.
+    // This preserves exactly-once dispatch while allowing a transient intent
+    // persistence failure to recover on an exact duplicate delivery.
+    let existingIntent: TradeIntent | null;
+    try {
+      existingIntent = await this.tradeIntentService.findBySignal(userId, signalId);
+    } catch (err) {
+      const reason =
+        'Duplicate delivery whose prior trade-intent state could not be verified (fail-closed)';
+      this.logger.error(
+        `Signal ${signalId}: duplicate trade-intent recovery lookup failed`,
+        (err as Error).message,
+      );
+      await this.recordIgnored(
+        candidate,
+        'SIGNAL_INVALID',
+        'DUPLICATE_STATE_UNVERIFIED',
+        'Duplicate delivery — prior TradeIntent state could not be verified; fail-closed',
+        { existingTradeId: null, originalGeneratedAt },
+      );
+      return { outcome: 'SIGNAL_INVALID', signalId, reason };
+    }
+
+    if (!existingIntent) {
+      this.logger.warn(
+        `Signal ${signalId} duplicate redelivery is resuming from the pre-intent boundary ` +
+          '(no trade and no TradeIntent exist; provider dispatch was impossible)',
+      );
+      return null;
+    }
+
+    // A durable intent proves the first evaluation crossed the pre-intent
+    // boundary. With no trade present, keep the historical fail-closed
+    // behavior: the duplicate may not re-enter risk or dispatch.
     this.logger.log(
       `Signal ${signalId} duplicate redelivery recovered as REJECTED_PREVIOUSLY ` +
-        '(no trade was created by the original evaluation)',
+        '(durable TradeIntent exists but no trade was created)',
     );
     await this.recordIgnored(
       candidate,

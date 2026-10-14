@@ -2271,6 +2271,77 @@ describe('scheduled scan recovery', () => {
     await collector.maybeCollect();
     expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBe('2026-10-12T10:01:00.000Z');
   });
+  it('pins the exact producer generatedAt across the one-minute retry window', () => {
+    jest.setSystemTime(new Date('2026-10-12T10:00:00.000Z'));
+    const collector = scanner();
+    const generatedAtForRetry = (
+      collector as unknown as { signalGeneratedAtForRetry(signalId: string): Date }
+    ).signalGeneratedAtForRetry;
+    expect(typeof generatedAtForRetry).toBe('function');
+
+    const first = generatedAtForRetry.call(collector, 'signal-1') as Date;
+    jest.setSystemTime(new Date('2026-10-12T10:01:00.000Z'));
+    const retry = generatedAtForRetry.call(collector, 'signal-1') as Date;
+
+    expect(retry.toISOString()).toBe(first.toISOString());
+  });
+
+  it('classifies only the proven TradeIntent persistence failure as retry-safe', () => {
+    const collector = scanner();
+    const classify = (
+      collector as unknown as {
+        retrySafePreIntentErrorForOutcome(outcome: {
+          outcome: string;
+          signalId: string;
+          reason?: string;
+        }): (Error & { code: string }) | null;
+      }
+    ).retrySafePreIntentErrorForOutcome;
+    expect(typeof classify).toBe('function');
+
+    const retrySafe = classify.call(collector, {
+      outcome: 'EXECUTION_FAILED',
+      signalId: 'signal-1',
+      reason: 'Trade intent could not be recorded (fail-closed): database unavailable',
+    });
+    expect(retrySafe?.code).toBe('PAPER_PRE_INTENT_RETRY_SAFE');
+
+    expect(
+      classify.call(collector, {
+        outcome: 'EXECUTION_FAILED',
+        signalId: 'signal-1',
+        reason: 'Provider dispatch error: timeout',
+      }),
+    ).toBeNull();
+    expect(
+      classify.call(collector, {
+        outcome: 'RISK_REJECTED',
+        signalId: 'signal-1',
+        reason: 'risk veto',
+      }),
+    ).toBeNull();
+  });
+
+  it('retries a proven pre-intent failure only once within the same scan slot', async () => {
+    jest.setSystemTime(new Date('2026-10-12T10:00:00.000Z'));
+    const collector = scanner();
+    const retrySafeError = Object.assign(new Error('trade intent unavailable'), {
+      code: 'PAPER_PRE_INTENT_RETRY_SAFE',
+    });
+    const collectSpy = jest.spyOn(collector, 'collectOnce').mockRejectedValue(retrySafeError);
+
+    await collector.maybeCollect();
+    expect(collectSpy).toHaveBeenCalledTimes(1);
+
+    jest.setSystemTime(new Date('2026-10-12T10:01:00.000Z'));
+    await collector.maybeCollect();
+    expect(collectSpy).toHaveBeenCalledTimes(2);
+
+    jest.setSystemTime(new Date('2026-10-12T10:02:00.000Z'));
+    await collector.maybeCollect();
+    expect(collectSpy).toHaveBeenCalledTimes(2);
+  });
+
   it('cancels the pending initial scan when the scanner is destroyed', async () => {
     jest.spyOn(global, 'fetch').mockImplementation(async () => goodFeed());
     const collector = scanner();
