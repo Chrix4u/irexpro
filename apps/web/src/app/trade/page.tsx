@@ -29,6 +29,7 @@ import { formatAgeSeconds } from "@/lib/duration";
 import { mapApiError } from "@/lib/error-mapping";
 import { loadLiveAccountPositions } from "@/lib/live-account";
 import { loadMarketIntelligence } from "@/lib/market-intelligence";
+import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
 import {
   hasExternalProviderPerformanceUiShape,
   hasVpsScannerUiShape,
@@ -486,8 +487,14 @@ interface VpsForexScannerStatusView {
       blockers: string[];
     } | null;
     macroEventAssessment: {
+      state: "CLEAR" | "HIGH_IMPACT_BLOCK" | "UNVERIFIED";
       provider: "TRADING_ECONOMICS" | "FINANCE_CALENDAR" | "NONE";
       reason: string;
+      blockWindowMinutesAfter: number;
+      blockingEvents: Array<{
+        date: string;
+        event: string | null;
+      }>;
       attribution: {
         label: string;
         url: string;
@@ -1540,6 +1547,9 @@ export default function AiTradingPage() {
     Number(previousChartCandle.close) !== 0
       ? (chartMove / Number(previousChartCandle.close)) * 100
       : null;
+  const macroEventBlockDescription = describeMacroEventBlock(
+    vpsScannerStatus?.lastEnsembleDecision.macroEventAssessment,
+  );
 
   // The ACTIVE session is the execution authority. While it exists, the
   // workspace must stay visibly pinned to that exact broker account instead
@@ -1722,6 +1732,7 @@ export default function AiTradingPage() {
 
         const executionReadFailed = executionResult.status === "rejected";
         const positionsReadFailed = positionsResult.status === "rejected";
+        const executionReadDegraded = Boolean(snapshot?.degradedFeeds.length);
         if (executionReadFailed || positionsReadFailed) {
           const failedFeed =
             executionReadFailed && positionsReadFailed
@@ -1731,6 +1742,10 @@ export default function AiTradingPage() {
                 : "Open position details";
           setActivityWarning(
             `${failedFeed} could not be refreshed. Existing data remains on screen when available. Start/Stop remains available, and the page will retry automatically.`,
+          );
+        } else if (executionReadDegraded) {
+          setActivityWarning(
+            `One execution feed is temporarily degraded (${snapshot!.degradedFeeds.join(", ").replaceAll("_", " ").toLowerCase()}). Available trade history remains visible and the page will retry automatically.`,
           );
         } else {
           setActivityWarning(null);
@@ -2786,7 +2801,7 @@ export default function AiTradingPage() {
                           {vpsScannerStatus?.lastEnsembleDecision.governance?.eventRisk === "CLEAR"
                             ? `CLEAR · ${(vpsScannerStatus.lastEnsembleDecision.macroEventAssessment?.provider ?? "NONE").replaceAll("_", " ")}`
                             : vpsScannerStatus?.lastEnsembleDecision.governance?.eventRisk === "HIGH_IMPACT_BLOCK"
-                              ? `BLOCKED · HIGH IMPACT · ${(vpsScannerStatus.lastEnsembleDecision.macroEventAssessment?.provider ?? "NONE").replaceAll("_", " ")}`
+                              ? `BLOCKED · ${macroEventBlockDescription ?? "HIGH IMPACT"} · ${(vpsScannerStatus.lastEnsembleDecision.macroEventAssessment?.provider ?? "NONE").replaceAll("_", " ")}`
                               : "UNVERIFIED · FAIL CLOSED"}
                           {vpsScannerStatus?.lastEnsembleDecision.macroEventAssessment?.attribution ? (
                             <>
@@ -4127,15 +4142,17 @@ export default function AiTradingPage() {
                         {vpsConfidenceActive
                           ? vpsScannerStatus?.marketSchedule.paused
                             ? "No new decision while market is paused"
-                            : vpsScannerStatus?.lastEnsembleDecision.governance?.paperExecutionEligible
-                              ? vpsScannerStatus.executionAuthority === "PAPER_ONLY"
-                                ? "PAPER signal eligible"
-                                : "PAPER signal would be eligible"
-                              : vpsScannerStatus?.lastEnsembleDecision.paperAdmitted
-                                ? "PAPER model admitted · governance blocked"
-                                : vpsScannerStatus?.lastEnsembleDecision.admitted
-                                  ? "Promotion model admitted · PAPER governance blocked"
-                                  : "Ensemble decision · NO TRADE"
+                            : macroEventBlockDescription
+                              ? `PAPER paused · ${macroEventBlockDescription}`
+                              : vpsScannerStatus?.lastEnsembleDecision.governance?.paperExecutionEligible
+                                ? vpsScannerStatus.executionAuthority === "PAPER_ONLY"
+                                  ? "PAPER signal eligible"
+                                  : "PAPER signal would be eligible"
+                                : vpsScannerStatus?.lastEnsembleDecision.paperAdmitted
+                                  ? "PAPER model admitted · governance blocked"
+                                  : vpsScannerStatus?.lastEnsembleDecision.admitted
+                                    ? "Promotion model admitted · PAPER governance blocked"
+                                    : "Ensemble decision · NO TRADE"
                           : automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
                             ? "Waiting for new market data"
                             : confidencePercent >= 60
@@ -4157,8 +4174,10 @@ export default function AiTradingPage() {
                       {vpsConfidenceActive
                         ? vpsScannerStatus?.marketSchedule.paused
                           ? `Market paused: ${vpsScannerStatus.marketSchedule.reason === "WEEKEND" ? "weekend closure" : "rollover / low-liquidity window"}. Next eligible scan ${formatTimestamp(vpsScannerStatus.marketSchedule.nextEligibleScanAt)}.`
-                          : vpsScannerStatus?.lastEnsembleDecision.evaluatedAt
-                            ? `${vpsScannerStatus.lastEnsembleDecision.instrument ?? "Setup"} ${vpsScannerStatus.lastEnsembleDecision.direction ?? ""} · ${vpsScannerStatus.lastEnsembleDecision.regime ?? "regime pending"} · ${vpsScannerStatus.lastEnsembleDecision.reasons.join(", ") || "ADMIT"} · PAPER ${vpsScannerStatus.lastEnsembleDecision.governance?.paperExecutionEligible ? "eligible" : `blocked: ${vpsScannerStatus.lastEnsembleDecision.governance?.paperExecutionBlockers.join(", ") || "MODEL"}`} · DEMO/LIVE promotion ${vpsScannerStatus.lastEnsembleDecision.governance?.paperPromotionEligible ? "eligible for review" : "locked"} · evaluated ${formatTimestamp(vpsScannerStatus.lastEnsembleDecision.evaluatedAt)}`
+                          : macroEventBlockDescription
+                            ? `PAPER execution is intentionally paused for ${macroEventBlockDescription}. Market scanning continues; no order will be sent inside this safety window.`
+                            : vpsScannerStatus?.lastEnsembleDecision.evaluatedAt
+                              ? `${vpsScannerStatus.lastEnsembleDecision.instrument ?? "Setup"} ${vpsScannerStatus.lastEnsembleDecision.direction ?? ""} · ${vpsScannerStatus.lastEnsembleDecision.regime ?? "regime pending"} · ${vpsScannerStatus.lastEnsembleDecision.reasons.join(", ") || "ADMIT"} · PAPER ${vpsScannerStatus.lastEnsembleDecision.governance?.paperExecutionEligible ? "eligible" : `blocked: ${vpsScannerStatus.lastEnsembleDecision.governance?.paperExecutionBlockers.join(", ") || "MODEL"}`} · DEMO/LIVE promotion ${vpsScannerStatus.lastEnsembleDecision.governance?.paperPromotionEligible ? "eligible for review" : "locked"} · evaluated ${formatTimestamp(vpsScannerStatus.lastEnsembleDecision.evaluatedAt)}`
                             : "Multi-model ensemble is waiting for its first eligible market scan. Legacy v7 cannot execute during this transition."
                         : automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
                           ? `No new candle after ${formatTimestamp(automationRuntime?.last_market_data_at)}. Confidence will update when a new market revision is evaluated.`

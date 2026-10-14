@@ -52,3 +52,48 @@ describe('trader execution runtime contract', () => {
     ).toBe(false);
   });
 });
+
+import { api } from './api';
+import { loadTraderExecutionSnapshot } from './trader-execution';
+
+describe('trader execution refresh resilience', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('keeps recent and closed executions visible when the open-position read fails', async () => {
+    const request = jest.spyOn(api, 'request').mockImplementation(async (path: string) => {
+      if (path === '/execution/positions/open') {
+        throw new Error('temporary open-position read failure');
+      }
+      if (path === '/execution/trades/recent?limit=100') return [CLOSED_TRADE];
+      if (path === '/execution/trades/closed?limit=50') return [CLOSED_TRADE];
+      throw new Error(`unexpected path ${path}`);
+    });
+
+    const snapshot = await loadTraderExecutionSnapshot();
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(snapshot.recentExecutions).toEqual([CLOSED_TRADE]);
+    expect(snapshot.closedExecutions).toEqual([CLOSED_TRADE]);
+    expect(snapshot.openPositions).toEqual([]);
+    expect(snapshot.degradedFeeds).toEqual(['OPEN_POSITIONS']);
+  });
+
+  it('reconstructs closed executions from the recent feed when the closed-history read fails', async () => {
+    jest.spyOn(api, 'request').mockImplementation(async (path: string) => {
+      if (path === '/execution/positions/open') return [];
+      if (path === '/execution/trades/recent?limit=100') return [CLOSED_TRADE];
+      if (path === '/execution/trades/closed?limit=50') {
+        throw new Error('temporary closed-history read failure');
+      }
+      throw new Error(`unexpected path ${path}`);
+    });
+
+    const snapshot = await loadTraderExecutionSnapshot();
+
+    expect(snapshot.closedExecutions).toEqual([CLOSED_TRADE]);
+    expect(snapshot.recentExecutions).toEqual([CLOSED_TRADE]);
+    expect(snapshot.degradedFeeds).toEqual(['CLOSED_EXECUTIONS']);
+  });
+});

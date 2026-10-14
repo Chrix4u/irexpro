@@ -7,10 +7,17 @@ import type {
 } from '@irexpro/types/execution';
 import { api } from '@/lib/api';
 
+export type TraderExecutionDegradedFeed =
+  | 'OPEN_POSITIONS'
+  | 'RECENT_EXECUTIONS'
+  | 'CLOSED_EXECUTIONS';
+
 export interface TraderExecutionSnapshot {
   openPositions: TradeExecutionView[];
   recentExecutions: TradeExecutionView[];
   closedExecutions: TradeExecutionView[];
+  /** Native reads that failed contract/transport validation and were reconstructed when possible. */
+  degradedFeeds: TraderExecutionDegradedFeed[];
 }
 
 const executionApi = createExecutionApi(api);
@@ -93,27 +100,67 @@ export function isTradeExecutionView(value: unknown): value is TradeExecutionVie
  * broad object shape.
  */
 export async function loadTraderExecutionSnapshot(): Promise<TraderExecutionSnapshot> {
-  const [openPositions, recentExecutions, closedExecutions] = await Promise.all([
+  const [openResult, recentResult, closedResult] = await Promise.allSettled([
     executionApi.listOpenPositions(),
     executionApi.listRecentExecutions(100),
     executionApi.listClosedExecutions(50),
   ]);
 
-  if (!Array.isArray(openPositions) || !openPositions.every(isTradeExecutionView)) {
-    throw new Error('Open positions contract mismatch');
-  }
-  if (!Array.isArray(recentExecutions) || !recentExecutions.every(isTradeExecutionView)) {
-    throw new Error('Recent executions contract mismatch');
-  }
-  if (!Array.isArray(closedExecutions) || !closedExecutions.every(isTradeExecutionView)) {
-    throw new Error('Closed executions contract mismatch');
-  }
-  if (!openPositions.every((trade) => trade.status === 'OPEN')) {
-    throw new Error('Open positions endpoint returned a non-OPEN trade');
-  }
-  if (!closedExecutions.every((trade) => trade.status === 'CLOSED')) {
-    throw new Error('Closed executions endpoint returned a non-CLOSED trade');
+  const degradedFeeds: TraderExecutionDegradedFeed[] = [];
+
+  const openPositions =
+    openResult.status === 'fulfilled' &&
+    Array.isArray(openResult.value) &&
+    openResult.value.every(isTradeExecutionView) &&
+    openResult.value.every((trade) => trade.status === 'OPEN')
+      ? openResult.value
+      : null;
+  if (!openPositions) degradedFeeds.push('OPEN_POSITIONS');
+
+  const recentExecutions =
+    recentResult.status === 'fulfilled' &&
+    Array.isArray(recentResult.value) &&
+    recentResult.value.every(isTradeExecutionView)
+      ? recentResult.value
+      : null;
+  if (!recentExecutions) degradedFeeds.push('RECENT_EXECUTIONS');
+
+  const closedExecutions =
+    closedResult.status === 'fulfilled' &&
+    Array.isArray(closedResult.value) &&
+    closedResult.value.every(isTradeExecutionView) &&
+    closedResult.value.every((trade) => trade.status === 'CLOSED')
+      ? closedResult.value
+      : null;
+  if (!closedExecutions) degradedFeeds.push('CLOSED_EXECUTIONS');
+
+  if (!openPositions && !recentExecutions && !closedExecutions) {
+    throw new Error('Execution reads unavailable');
   }
 
-  return { openPositions, recentExecutions, closedExecutions };
+  const mergeFallbackExecutions = (
+    groups: Array<TradeExecutionView[] | null>,
+  ): TradeExecutionView[] => {
+    const byId = new Map<string, TradeExecutionView>();
+    for (const group of groups) {
+      for (const trade of group ?? []) byId.set(trade.id, trade);
+    }
+    return [...byId.values()].sort(
+      (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
+    );
+  };
+
+  const resolvedRecent =
+    recentExecutions ?? mergeFallbackExecutions([openPositions, closedExecutions]);
+  const resolvedOpen =
+    openPositions ?? resolvedRecent.filter((trade) => trade.status === 'OPEN');
+  const resolvedClosed =
+    closedExecutions ?? resolvedRecent.filter((trade) => trade.status === 'CLOSED');
+
+  return {
+    openPositions: resolvedOpen,
+    recentExecutions: resolvedRecent,
+    closedExecutions: resolvedClosed,
+    degradedFeeds,
+  };
 }
