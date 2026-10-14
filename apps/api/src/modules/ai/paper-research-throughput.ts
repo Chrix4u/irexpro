@@ -1,11 +1,17 @@
+import {
+  REJECTED_EDGE_CANARY_MAX_ALIGNED_MOMENTUM_ATR,
+  REJECTED_EDGE_CANARY_MIN_ALIGNED_MOMENTUM_ATR,
+} from './rejected-edge-paper-canary';
+
 export const PAPER_RESEARCH_THROUGHPUT_ARTIFACT =
-  'paper-research-throughput-v7-edge-tiered-exploration';
+  'paper-research-throughput-v8-momentum-confirmed-exploration';
 export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS = Object.freeze([
   'paper-research-throughput-v2-episode-guarded',
   'paper-research-throughput-v3-episode-guarded',
   'paper-research-throughput-v4-pair-side-reliability',
   'paper-research-throughput-v5-controlled-execution',
   'paper-research-throughput-v6-controlled-exploration',
+  'paper-research-throughput-v7-edge-tiered-exploration',
   PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
 ]);
 export const PAPER_RESEARCH_THROUGHPUT_LOT_CAP = 0.01;
@@ -210,6 +216,8 @@ export interface PaperResearchThroughputInput {
   strategyRoute: string;
   driftState: string;
   directionQuality: number;
+  /** Direction-aligned short-horizon momentum in ATR units; positive supports the candidate. */
+  alignedMomentumAtr?: number;
   tradeQuality: number;
   exitQuality: number;
   paperExecutionBlockers: string[];
@@ -280,6 +288,10 @@ export function evaluatePaperResearchThroughput(
   const explorationTradeFloor = strongEdgeExploration
     ? PAPER_RESEARCH_EXPLORATION_STRONG_MIN_TRADE_QUALITY
     : PAPER_RESEARCH_EXPLORATION_MIN_TRADE_QUALITY;
+  const alignedMomentumConfirmsDirection =
+    Number.isFinite(input.alignedMomentumAtr) &&
+    input.alignedMomentumAtr! >= REJECTED_EDGE_CANARY_MIN_ALIGNED_MOMENTUM_ATR &&
+    input.alignedMomentumAtr! <= REJECTED_EDGE_CANARY_MAX_ALIGNED_MOMENTUM_ATR;
   const explorationExitFloor = strongEdgeExploration
     ? PAPER_RESEARCH_EXPLORATION_STRONG_MIN_EXIT_QUALITY
     : PAPER_RESEARCH_EXPLORATION_MIN_EXIT_QUALITY;
@@ -293,8 +305,9 @@ export function evaluatePaperResearchThroughput(
   ) {
     reason = 'CONFIDENCE_TOO_LOW';
   } else if (
-    !Number.isFinite(input.directionQuality) ||
-    input.directionQuality < explorationDirectionFloor
+    (!Number.isFinite(input.directionQuality) ||
+      input.directionQuality < explorationDirectionFloor) &&
+    !alignedMomentumConfirmsDirection
   ) {
     reason = 'DIRECTION_QUALITY_TOO_LOW';
   } else if (!Number.isFinite(input.tradeQuality) || input.tradeQuality < explorationTradeFloor) {

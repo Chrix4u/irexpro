@@ -1425,6 +1425,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             strategyRoute: planBEnsemble.strategyRoute,
             driftState: ensembleGovernance.driftState,
             directionQuality: planBEnsemble.directionQuality,
+            alignedMomentumAtr: best.shortHorizonMomentumAtr,
             tradeQuality: planBEnsemble.tradeQuality,
             exitQuality: planBEnsemble.exitQuality,
             paperExecutionBlockers: ensembleGovernance.paperExecutionBlockers,

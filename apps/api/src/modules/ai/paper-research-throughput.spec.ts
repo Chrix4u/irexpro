@@ -31,7 +31,7 @@ describe('evaluatePaperResearchThroughput', () => {
   it('marks a positive-EV research candidate PAPER-only without granting qualification authority', () => {
     expect(evaluatePaperResearchThroughput(base)).toEqual({
       eligible: true,
-      artifact: 'paper-research-throughput-v7-edge-tiered-exploration',
+      artifact: 'paper-research-throughput-v8-momentum-confirmed-exploration',
       route: 'PAPER_RESEARCH_THROUGHPUT',
       reason: 'RESEARCH_EVIDENCE_CANDIDATE',
       qualificationEvidence: false,
@@ -94,6 +94,46 @@ describe('evaluatePaperResearchThroughput', () => {
       qualificationEvidence: false,
       executionAuthority: 'PAPER_ONLY_RESEARCH',
     });
+  });
+
+  it('accepts direction-confirmed PAPER exploration when fast aligned momentum covers a blind legacy direction score', () => {
+    const liveDirectionConfirmedCandidate = {
+      ...base,
+      confidence: 0.6,
+      netExpectedR: 0.0993,
+      driftState: 'OUT_OF_DISTRIBUTION',
+      directionQuality: 0,
+      tradeQuality: 0.4059,
+      exitQuality: 0.4018,
+      alignedMomentumAtr: 1.0247,
+      paperExecutionBlockers: [...base.paperExecutionBlockers, 'DRIFT_OUT_OF_DISTRIBUTION'],
+    };
+
+    expect(evaluatePaperResearchThroughput(liveDirectionConfirmedCandidate)).toMatchObject({
+      eligible: true,
+      reason: 'RESEARCH_EXPLORATION_CANDIDATE',
+      qualificationEvidence: false,
+      executionAuthority: 'PAPER_ONLY_RESEARCH',
+    });
+  });
+
+  it('does not let weak, opposing, or exhausted momentum bypass the direction floor', () => {
+    const momentumOnly = {
+      ...base,
+      confidence: 0.6,
+      netExpectedR: 0.1,
+      driftState: 'OUT_OF_DISTRIBUTION',
+      directionQuality: 0,
+      tradeQuality: 0.41,
+      exitQuality: 0.4,
+      paperExecutionBlockers: [...base.paperExecutionBlockers, 'DRIFT_OUT_OF_DISTRIBUTION'],
+    };
+
+    for (const alignedMomentumAtr of [-0.2, 0.1499, 1.5001]) {
+      expect(
+        evaluatePaperResearchThroughput({ ...momentumOnly, alignedMomentumAtr }),
+      ).toMatchObject({ eligible: false, reason: 'DIRECTION_QUALITY_TOO_LOW' });
+    }
   });
 
   it('keeps the exploration fallback bounded below its reduced confidence and quality floors', () => {
@@ -285,7 +325,7 @@ describe('PAPER research-throughput provenance and pair-side reliability', () =>
 
   it('derives the emitted model version from the active research artifact', () => {
     expect(paperResearchThroughputModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v7-edge-tiered-exploration',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v8-momentum-confirmed-exploration',
     );
   });
 

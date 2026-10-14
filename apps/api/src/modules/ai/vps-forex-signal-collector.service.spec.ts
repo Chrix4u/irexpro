@@ -1144,7 +1144,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('routes controlled exploration research-throughput to PAPER execution without qualification authority', async () => {
+  it('routes momentum-confirmed exploration research-throughput to PAPER execution without qualification authority', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
@@ -1162,7 +1162,7 @@ describe('VpsForexSignalCollectorService', () => {
           admitted: false,
           consensusPassed: target ? 5 : 3,
           consensusRequired: 6,
-          directionQuality: target ? 0.18 : 0.2,
+          directionQuality: target ? 0 : 0.2,
           tradeQuality: target ? 0.44 : 0.2,
           exitQuality: target ? 0.43 : 0.2,
           metaProbability: target ? 0.5 : 0.35,
@@ -1269,9 +1269,22 @@ describe('VpsForexSignalCollectorService', () => {
     const logSpy = jest.spyOn((collector as any).logger, 'log');
 
     try {
-      const fetchMock = jest
-        .fn()
-        .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
+      const directionConfirmedPayload = allTrendPayload();
+      const eurusdRows = directionConfirmedPayload['EUR/USD'].values;
+      const previousClose = Number(eurusdRows[eurusdRows.length - 2]!.close);
+      const directionConfirmedClose = previousClose + 0.00008;
+      eurusdRows[eurusdRows.length - 1] = {
+        ...eurusdRows[eurusdRows.length - 1],
+        open: previousClose.toFixed(5),
+        high: (directionConfirmedClose + 0.00008).toFixed(5),
+        low: (previousClose - 0.00008).toFixed(5),
+        close: directionConfirmedClose.toFixed(5),
+      };
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => directionConfirmedPayload,
+      });
       await collector.collectOnce(fetchMock as unknown as typeof fetch);
       expect(receiveSignal).toHaveBeenCalledTimes(1);
       expect(receiveSignal).toHaveBeenCalledWith(
@@ -1280,7 +1293,7 @@ describe('VpsForexSignalCollectorService', () => {
           direction: 'BUY',
           suggestedVolume: 0.01,
           modelVersion:
-            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v7-edge-tiered-exploration',
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v8-momentum-confirmed-exploration',
           metadata: expect.objectContaining({
             paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
             paper_research_throughput: true,
@@ -1651,6 +1664,7 @@ describe('VpsForexSignalCollectorService', () => {
           'paper-research-throughput-v5-controlled-execution',
           'paper-research-throughput-v6-controlled-exploration',
           'paper-research-throughput-v7-edge-tiered-exploration',
+          'paper-research-throughput-v8-momentum-confirmed-exploration',
         ],
         expect.any(String),
       ],
