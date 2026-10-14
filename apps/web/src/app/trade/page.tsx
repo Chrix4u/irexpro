@@ -1470,6 +1470,7 @@ export default function AiTradingPage() {
   const initializedActivity = useRef(false);
   const seenPositionIds = useRef<Set<string>>(new Set());
   const seenExecutionStates = useRef<Map<string, string>>(new Map());
+  const executionSnapshotRef = useRef<TraderExecutionSnapshot | null>(null);
   const tradingRefreshInFlight = useRef(false);
   const positionsRefreshInFlight = useRef(false);
 
@@ -1699,7 +1700,7 @@ export default function AiTradingPage() {
         }
 
         const [executionResult, positionsResult] = await Promise.allSettled([
-          loadTraderExecutionSnapshot(),
+          loadTraderExecutionSnapshot(executionSnapshotRef.current),
           loadLiveAccountPositions(),
         ]);
 
@@ -1713,24 +1714,33 @@ export default function AiTradingPage() {
         // Secondary read failures must never erase the last authoritative UI
         // snapshot. Keep the previous data on screen and let the existing
         // polling loops retry automatically.
-        if (snapshot) setExecution(snapshot);
+        if (snapshot) {
+          executionSnapshotRef.current = snapshot;
+          setExecution(snapshot);
+        }
         if (positions) setLivePositions(positions);
 
         if (snapshot && positions) {
           emitActivityToasts(positions, snapshot);
         }
 
-        const executionReadFailed = executionResult.status === "rejected";
-        const positionsReadFailed = positionsResult.status === "rejected";
-        if (executionReadFailed || positionsReadFailed) {
-          const failedFeed =
-            executionReadFailed && positionsReadFailed
-              ? "Recent activity and open position details"
-              : executionReadFailed
-                ? "Recent activity"
-                : "Open position details";
+        const failedFeeds: string[] = [];
+        if (executionResult.status === "rejected") {
+          failedFeeds.push("Execution activity");
+        } else {
+          for (const feed of executionResult.value.degradedFeeds) {
+            if (feed === "openPositions") failedFeeds.push("Execution position feed");
+            if (feed === "recentExecutions") failedFeeds.push("Recent activity");
+            if (feed === "closedExecutions") failedFeeds.push("Closed trade history");
+          }
+        }
+        if (positionsResult.status === "rejected") {
+          failedFeeds.push("Open position details");
+        }
+
+        if (failedFeeds.length > 0) {
           setActivityWarning(
-            `${failedFeed} could not be refreshed. Existing data remains on screen when available. Start/Stop remains available, and the page will retry automatically.`,
+            `${failedFeeds.join(", ")} could not be refreshed. Successful feeds remain live and failed sections keep their last-known-good data when available. Start/Stop remains available, and the page will retry automatically.`,
           );
         } else {
           setActivityWarning(null);
