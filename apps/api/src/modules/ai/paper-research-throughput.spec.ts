@@ -83,6 +83,16 @@ describe('evaluatePaperResearchThroughput', () => {
     });
   });
 
+  it('allows non-promotable research throughput when PAPER simulation cost is usable', () => {
+    expect(
+      evaluatePaperResearchThroughput({
+        ...base,
+        executionSpreadEvidenceValid: false,
+        paperExecutionCostUsable: true,
+      }),
+    ).toMatchObject({ eligible: true, reason: 'RESEARCH_EVIDENCE_CANDIDATE' });
+  });
+
   it('fails closed on non-positive-enough economics, invalid spread, or event risk', () => {
     expect(evaluatePaperResearchThroughput({ ...base, netExpectedR: 0.0799 })).toMatchObject({
       eligible: false,
@@ -329,6 +339,16 @@ describe('paired reversal PAPER research', () => {
     expect(
       evaluatePaperPairedReversalResearch({ ...base, reversalCandidate: false }),
     ).toMatchObject({ eligible: false, reason: 'PAIRED_REVERSAL_NOT_CONFIRMED' });
+  });
+
+  it('allows paired reversal research when PAPER simulation cost is usable', () => {
+    expect(
+      evaluatePaperPairedReversalResearch({
+        ...base,
+        executionSpreadEvidenceValid: false,
+        paperExecutionCostUsable: true,
+      }),
+    ).toMatchObject({ eligible: true, reason: 'PAIRED_REVERSAL_RESEARCH_CANDIDATE' });
   });
 
   it('fails closed on missing spread evidence, event risk, and out-of-distribution drift', () => {

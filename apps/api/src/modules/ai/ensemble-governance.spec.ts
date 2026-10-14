@@ -414,6 +414,25 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.blockers).toContain('EXECUTION_SPREAD_UNAVAILABLE');
   });
 
+  it('allows PAPER-only simulation cost fallback without granting promotion evidence', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      eventRisk: 'CLEAR',
+      executionSpreadEvidence: null,
+      paperSimulationSpreadPrice: 0.0001,
+    });
+
+    expect(result.executionCostSource).toBe('PAPER_SIMULATION_SPREAD');
+    expect(result.executionSpreadEvidenceValid).toBe(false);
+    expect(result.paperSpreadFloorApplied).toBe(true);
+    expect(result.paperFillSpreadPrice).toBe(0.0001);
+    expect(result.paperNetExpectedRPassed).toBe(true);
+    expect(result.paperExecutionEligible).toBe(true);
+    expect(result.paperExecutionBlockers).not.toContain('EXECUTION_SPREAD_UNAVAILABLE');
+    expect(result.paperPromotionEligible).toBe(false);
+    expect(result.blockers).toContain('EXECUTION_SPREAD_UNAVAILABLE');
+  });
+
   it('fails PAPER execution closed when broker spread evidence is stale', () => {
     const result = evaluateEnsembleGovernance({
       ...base,

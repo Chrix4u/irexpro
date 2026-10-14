@@ -11,6 +11,7 @@ import {
   LivePaperCandleInput,
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
+import { PAPER_MARKET_SPECS } from '../broker/services/paper-market-spec';
 import {
   PLAN_B_SHADOW_ADMISSION_THRESHOLD,
   scorePlanBShadowMeta,
@@ -1219,6 +1220,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             best.instrument,
             evaluatedAt,
           );
+          const paperSimulationSpreadPrice = paperSession
+            ? PAPER_MARKET_SPECS[best.instrument]?.spread
+            : undefined;
           let ensembleGovernance = evaluateEnsembleGovernance({
             ensemble: planBEnsemble,
             instrument: best.instrument,
@@ -1237,6 +1241,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             sleeveEvidence,
             evaluatedAt,
             executionSpreadEvidence,
+            paperSimulationSpreadPrice,
           });
           const paperPostLossEntryState = await this.loadPaperPostLossEntryState(
             userId,
@@ -1415,6 +1420,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             confidence: best.confidence,
             netExpectedR: ensembleGovernance.netExpectedR,
             executionSpreadEvidenceValid: ensembleGovernance.executionSpreadEvidenceValid,
+            paperExecutionCostUsable: ensembleGovernance.paperExecutionCostUsable,
             eventRisk: ensembleGovernance.eventRisk,
             strategyRoute: planBEnsemble.strategyRoute,
             driftState: ensembleGovernance.driftState,
@@ -1502,6 +1508,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                   sleeveEvidence,
                   evaluatedAt,
                   executionSpreadEvidence,
+                  paperSimulationSpreadPrice,
                   driftRoute: 'PAIRED_REVERSAL_RESEARCH',
                 })
               : ensembleGovernance;
@@ -1511,6 +1518,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             reversalCandidate: pairedDirectionReversal.reversalCandidate,
             researchNetExpectedR: pairedDirectionReversal.researchNetExpectedR,
             executionSpreadEvidenceValid: pairedReversalGovernance.executionSpreadEvidenceValid,
+            paperExecutionCostUsable: pairedReversalGovernance.paperExecutionCostUsable,
             eventRisk: pairedReversalGovernance.eventRisk,
             driftState: pairedReversalGovernance.driftState,
           });
