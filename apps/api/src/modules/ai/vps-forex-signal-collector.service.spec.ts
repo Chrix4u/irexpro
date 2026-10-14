@@ -1280,7 +1280,7 @@ describe('VpsForexSignalCollectorService', () => {
           direction: 'BUY',
           suggestedVolume: 0.01,
           modelVersion:
-            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v6-controlled-exploration',
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v7-edge-tiered-exploration',
           metadata: expect.objectContaining({
             paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
             paper_research_throughput: true,
@@ -1650,6 +1650,7 @@ describe('VpsForexSignalCollectorService', () => {
           'paper-research-throughput-v4-pair-side-reliability',
           'paper-research-throughput-v5-controlled-execution',
           'paper-research-throughput-v6-controlled-exploration',
+          'paper-research-throughput-v7-edge-tiered-exploration',
         ],
         expect.any(String),
       ],
