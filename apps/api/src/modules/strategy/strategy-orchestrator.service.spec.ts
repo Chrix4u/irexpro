@@ -81,6 +81,7 @@ describe('StrategyOrchestratorService', () => {
   /** Round 6 §2: TradeIntent-layer + authority-read mocks (seam level). */
   let tradeIntentMock: {
     recordOrReuseIntent: jest.Mock;
+    findBySignal: jest.Mock;
     markRejected: jest.Mock;
     markExecuted: jest.Mock;
   };
@@ -200,6 +201,12 @@ describe('StrategyOrchestratorService', () => {
             logicalAccountKey: 'paper-broker::demo::acct-1',
           },
         })),
+      findBySignal: jest.fn().mockResolvedValue({
+        id: 'intent-sig-001',
+        userId: 'user-1',
+        signalId: 'sig-001',
+        status: 'CREATED',
+      }),
       markRejected: jest.fn().mockResolvedValue(undefined),
       markExecuted: jest.fn().mockResolvedValue(undefined),
     };
@@ -1042,6 +1049,20 @@ describe('StrategyOrchestratorService', () => {
       expect(result.reason).toContain('previously rejected');
       expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
       expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+
+    it('duplicate with NO trade and NO durable intent resumes the exact pre-intent retry without a second provider dispatch path', async () => {
+      deliverAsDuplicate();
+      (executionService.findTradeBySignalId as jest.Mock).mockResolvedValue(null);
+      tradeIntentMock.findBySignal.mockResolvedValue(null);
+
+      const result = await service.processSignal(validCandidate());
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(tradeIntentMock.findBySignal).toHaveBeenCalledWith('user-1', 'sig-001');
+      expect(tradeIntentMock.recordOrReuseIntent).toHaveBeenCalledTimes(1);
+      expect(riskService.validateProposedTrade).toHaveBeenCalledTimes(1);
+      expect(executionService.executeTrade).toHaveBeenCalledTimes(1);
     });
 
     it('duplicate recovery lookup FAILURE → fail-closed SIGNAL_INVALID (never a fresh evaluation)', async () => {

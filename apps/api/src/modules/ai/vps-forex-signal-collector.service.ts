@@ -5,6 +5,7 @@ import { v5 as uuidv5 } from 'uuid';
 import { AiSignalService } from './ai-signal.service';
 import { ExecutionService } from '../execution/execution.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
+import { SIGNAL_MAX_AGE_MS } from '../execution/orchestration/signal-identity.gate';
 import { BrokerService } from '../broker/broker.service';
 import { AiEngineClient } from '../ai-engine-client/ai-engine-client.service';
 import {
@@ -201,6 +202,7 @@ const MIN_STOP_LOSS_PIPS = 5;
 const STOP_FLOOR_BUFFER_PIPS = 0.1;
 const BAR_MS = 5 * 60_000;
 const COLLECTION_CADENCE_MINUTES = 5;
+const PAPER_PRE_INTENT_RETRY_SAFE_CODE = 'PAPER_PRE_INTENT_RETRY_SAFE';
 const EXECUTION_SPREAD_WINDOW_MINUTES = 30;
 const FRESH_BREAKOUT_ATR = 0.5;
 const FRESH_CONFIDENCE_DELTA = 0.02;
@@ -511,6 +513,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private running = false;
   private lastSlot: string | null = null;
   private nextCollectionAttemptAt = 0;
+  private preIntentRetrySlot: string | null = null;
+  private readonly signalGeneratedAtById = new Map<string, Date>();
   private transientProviderFailureMinute: string | null = null;
   private lastProviderFetchMinute: string | null = null;
   private lastProviderSeries: Map<string, LivePaperCandleInput[]> | null = null;
@@ -977,8 +981,32 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       await this.collectOnce();
       this.nextCollectionAttemptAt = 0;
     } catch (error) {
-      // Failed collection must not consume the slot. One minute of backoff
-      // protects the six-credit primary batch from the 15-second timer.
+      const retrySafeCode = (error as { code?: string }).code;
+      if (retrySafeCode === PAPER_PRE_INTENT_RETRY_SAFE_CODE) {
+        if (this.preIntentRetrySlot === slot) {
+          // A pre-intent failure is safe to retry exactly once because durable
+          // state proves provider dispatch was impossible. Do not loop forever
+          // on a persistent database/schema failure inside the same scan slot.
+          this.nextCollectionAttemptAt = 0;
+          this.logger.error(
+            `VPS forex scan pre-intent retry exhausted for slot=${slot}; ` +
+              `holding until the next collection slot: ${(error as Error).message}`,
+          );
+          return;
+        }
+        this.preIntentRetrySlot = slot;
+        this.lastSlot = null;
+        this.nextCollectionAttemptAt = Math.max(now.getTime(), Date.now()) + 60_000;
+        this.logger.warn(
+          `VPS forex scan stopped before TradeIntent creation; retrying the exact slot once in 60s: ` +
+            `${(error as Error).message}`,
+        );
+        return;
+      }
+
+      // Generic failed collection must not consume the slot. One minute of
+      // backoff protects the six-credit primary batch from the 15-second timer.
+      // Feed/network failures keep their existing recover-until-success behavior.
       this.lastSlot = null;
       this.nextCollectionAttemptAt = Math.max(now.getTime(), Date.now()) + 60_000;
       this.logger.warn(`VPS forex scan failed; retry in 60s: ${(error as Error).message}`);
@@ -1744,7 +1772,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           strategyCode: `external-${ACTIVE_ENGINE_CODE}`,
           marketRegime: 'TRENDING',
           volatilityScore: best.volatilityScore,
-          generatedAt: new Date(),
+          generatedAt: this.signalGeneratedAtForRetry(signalId),
           modelVersion:
             paperExecutionRoute === 'REJECTED_EDGE_CANARY'
               ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
@@ -1957,10 +1985,43 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             `lotTier=${dynamicLotSizing.tier} lotCap=${dynamicLotSizing.upperBound.toFixed(2)} ` +
             `outcome=${outcome.outcome} signal=${signalId} cadence=bidirectional-counterfactual`,
         );
+        const retrySafePreIntentError = this.retrySafePreIntentErrorForOutcome(outcome);
+        if (retrySafePreIntentError) throw retrySafePreIntentError;
       }
     } finally {
       this.running = false;
     }
+  }
+
+  private signalGeneratedAtForRetry(signalId: string): Date {
+    const now = new Date();
+    const retentionMs = SIGNAL_MAX_AGE_MS - 5_000;
+    for (const [id, generatedAt] of this.signalGeneratedAtById.entries()) {
+      if (now.getTime() - generatedAt.getTime() > retentionMs) {
+        this.signalGeneratedAtById.delete(id);
+      }
+    }
+
+    const existing = this.signalGeneratedAtById.get(signalId);
+    if (existing) return existing;
+
+    this.signalGeneratedAtById.set(signalId, now);
+    return now;
+  }
+
+  private retrySafePreIntentErrorForOutcome(outcome: {
+    outcome: string;
+    reason?: string;
+  }): (Error & { code: typeof PAPER_PRE_INTENT_RETRY_SAFE_CODE }) | null {
+    const retrySafe =
+      outcome.outcome === 'EXECUTION_FAILED' &&
+      typeof outcome.reason === 'string' &&
+      outcome.reason.startsWith('Trade intent could not be recorded (fail-closed):');
+    if (!retrySafe) return null;
+
+    return Object.assign(new Error(`Retry-safe pre-intent PAPER failure: ${outcome.reason}`), {
+      code: PAPER_PRE_INTENT_RETRY_SAFE_CODE as typeof PAPER_PRE_INTENT_RETRY_SAFE_CODE,
+    });
   }
 
   private isFxWeeklySessionOpen(now: Date): boolean {
