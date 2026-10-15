@@ -265,11 +265,23 @@ describe('evaluatePaperResearchThroughput', () => {
 });
 
 describe('PAPER execution route provenance', () => {
-  it('gives rejected-edge canary precedence when both research routes qualify', () => {
+  it('quarantines rejected-edge canary execution by default and lets controlled research own the trade', () => {
     expect(
       selectPaperExecutionRoute({
         normalPaperExecution: false,
         rejectedEdgeCanaryEligible: true,
+        paperResearchThroughputEligible: true,
+        pairedReversalResearchEligible: true,
+      }),
+    ).toBe('PAPER_RESEARCH_THROUGHPUT');
+  });
+
+  it('can explicitly re-enable rejected-edge canary execution after new evidence qualifies it', () => {
+    expect(
+      selectPaperExecutionRoute({
+        normalPaperExecution: false,
+        rejectedEdgeCanaryEligible: true,
+        rejectedEdgeCanaryExecutionEnabled: true,
         paperResearchThroughputEligible: true,
         pairedReversalResearchEligible: true,
       }),

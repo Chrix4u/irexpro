@@ -982,7 +982,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('routes an evidence-qualified rejected-edge canary to PAPER with RESEARCH sizing and research-only metadata', async () => {
+  it('keeps an evidence-qualified rejected-edge canary in evaluation while quarantining PAPER execution', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
@@ -1121,22 +1121,16 @@ describe('VpsForexSignalCollectorService', () => {
       await collector.collectOnce(fetchMock as unknown as typeof fetch);
 
       expect(getRejectedEdgeCanaryEvidence).toHaveBeenCalledWith('user-1', 'EURUSD', 'BUY');
-      expect(receiveSignal).toHaveBeenCalledTimes(1);
-      expect(receiveSignal).toHaveBeenCalledWith(
-        expect.objectContaining({
-          instrument: 'EURUSD',
-          direction: 'BUY',
-          suggestedVolume: 0.1,
-          modelVersion:
-            'external-provider/irexpro-multimodel-ensemble-v1/paper-rejected-edge-canary-v1',
-          metadata: expect.objectContaining({
-            rejected_edge_canary: true,
-            rejected_edge_canary_artifact: 'rejected-edge-paper-canary-v1',
-            main_strategy_qualification_evidence: false,
-            production_eligible: false,
-            position_sizing_tier: 'RESEARCH',
-          }),
-        }),
+      // Canary scoring/evidence remains active, but the observed PF 0.15 lane is
+      // quarantined from PAPER execution until explicitly re-enabled.
+      expect(receiveSignal).not.toHaveBeenCalled();
+
+      const insertCalls = shadowQuery.mock.calls.filter(([sql]) =>
+        String(sql).includes('INSERT INTO trading.ensemble_shadow_decisions'),
+      );
+      expect(insertCalls.length).toBeGreaterThan(0);
+      expect(insertCalls.some(([, params]) => params[6] === 'EURUSD' && params[7] === 'BUY')).toBe(
+        true,
       );
     } finally {
       planBSpy.mockRestore();
