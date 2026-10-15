@@ -97,6 +97,12 @@ import {
   evaluatePairedDirectionReversal,
 } from './paired-direction-reversal';
 import {
+  PaperSpreadCalibrationDecision,
+  PaperSpreadCalibrationHistory,
+  classifyPaperSpreadSession,
+  evaluatePaperSpreadCalibrationShadow,
+} from './paper-spread-calibration-shadow';
+import {
   PaperCostAwareCohortEvidence,
   PaperCostAwareEntryDecision,
   evaluatePaperCostAwareEntry,
@@ -1102,6 +1108,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
       let representativeSet = false;
       let representativeIsPaperEligible = false;
+      const paperSpreadCalibrationHistoryCache = new Map<
+        string,
+        Promise<PaperSpreadCalibrationHistory>
+      >();
       for (const pairCandidates of candidatesByInstrument.values()) {
         const executableCounterfactuals: Array<{
           candidate: Candidate;
@@ -1253,13 +1263,35 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 attribution: null,
               };
           const evaluatedAt = new Date();
+          const fixedPaperSpreadPrice = PAPER_MARKET_SPECS[best.instrument]?.spread ?? 0;
+          const paperSpreadSession = classifyPaperSpreadSession(evaluatedAt);
+          const paperSpreadHistoryCacheKey = `${best.instrument}|${paperSpreadSession}`;
+          let paperSpreadHistoryPromise = paperSpreadCalibrationHistoryCache.get(
+            paperSpreadHistoryCacheKey,
+          );
+          if (!paperSpreadHistoryPromise) {
+            paperSpreadHistoryPromise = this.loadPaperSpreadCalibrationHistory(
+              best.instrument,
+              evaluatedAt,
+            );
+            paperSpreadCalibrationHistoryCache.set(
+              paperSpreadHistoryCacheKey,
+              paperSpreadHistoryPromise,
+            );
+          }
+          const paperSpreadCalibrationHistory = await paperSpreadHistoryPromise;
+          const paperSpreadCalibrationShadow = evaluatePaperSpreadCalibrationShadow({
+            instrument: best.instrument,
+            evaluatedAt,
+            fixedSpreadPrice: fixedPaperSpreadPrice,
+            stopDistancePrice: Math.abs(best.entry - best.stopLoss),
+            history: paperSpreadCalibrationHistory,
+          });
           const executionSpreadEvidence = await this.loadExecutionSpreadEvidence(
             best.instrument,
             evaluatedAt,
           );
-          const paperSimulationSpreadPrice = paperSession
-            ? PAPER_MARKET_SPECS[best.instrument]?.spread
-            : undefined;
+          const paperSimulationSpreadPrice = paperSession ? fixedPaperSpreadPrice : undefined;
           let ensembleGovernance = evaluateEnsembleGovernance({
             ensemble: planBEnsemble,
             instrument: best.instrument,
@@ -1344,6 +1376,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             macroEventAssessment,
             highConvictionOverlay,
             paperPostLossEntryGuard,
+            paperSpreadCalibrationShadow,
           );
           const normalPaperExecutionCandidate = canExecuteMultiModelPaper(
             planBEnsemble,
@@ -3070,6 +3103,54 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     };
   }
 
+  private async loadPaperSpreadCalibrationHistory(
+    instrument: string,
+    evaluatedAt: Date,
+  ): Promise<PaperSpreadCalibrationHistory> {
+    const sourceConnectionId = this.brokerExpertSourceConnectionId();
+    if (!this.dataSource || !sourceConnectionId) {
+      return { sampleCount: 0, p95SpreadPrice: 0 };
+    }
+
+    const session = classifyPaperSpreadSession(evaluatedAt);
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          COUNT(*)::int AS sample_count,
+          percentile_cont(0.95) WITHIN GROUP (
+            ORDER BY spread_close::double precision
+          ) AS p95_spread_price,
+          MAX(last_sample_at) AS latest_sample_at
+        FROM market_data.provider_quote_candles
+        WHERE connection_id = $1
+          AND instrument = $2
+          AND timeframe = 'M1'
+          AND spread_close > 0
+          AND last_sample_at > ($3::timestamptz - interval '21 days')
+          AND last_sample_at <= $3::timestamptz
+          AND CASE
+            WHEN EXTRACT(HOUR FROM last_sample_at AT TIME ZONE 'UTC') >= 21 THEN 'ROLLOVER'
+            WHEN EXTRACT(HOUR FROM last_sample_at AT TIME ZONE 'UTC') >= 13 THEN 'NEW_YORK'
+            WHEN EXTRACT(HOUR FROM last_sample_at AT TIME ZONE 'UTC') >= 7 THEN 'LONDON'
+            ELSE 'ASIA'
+          END = $4
+      `,
+      [sourceConnectionId, instrument.trim().toUpperCase(), evaluatedAt.toISOString(), session],
+    )) as Array<{
+      sample_count: number | string | null;
+      p95_spread_price: number | string | null;
+      latest_sample_at: string | Date | null;
+    }>;
+
+    const row = rows[0];
+    const sampleCount = Math.max(0, Number(row?.sample_count ?? 0));
+    const p95SpreadPrice = Number(row?.p95_spread_price ?? 0);
+    return {
+      sampleCount: Number.isFinite(sampleCount) ? sampleCount : 0,
+      p95SpreadPrice: Number.isFinite(p95SpreadPrice) && p95SpreadPrice > 0 ? p95SpreadPrice : 0,
+    };
+  }
+
   private async loadExecutionSpreadEvidence(
     instrument: string,
     evaluatedAt: Date,
@@ -3243,6 +3324,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     macroEventAssessment: MacroEventRiskAssessment,
     highConvictionOverlay: HighConvictionOverlay,
     paperPostLossEntryGuard: PaperPostLossEntryDecision,
+    paperSpreadCalibrationShadow: PaperSpreadCalibrationDecision,
   ): Promise<void> {
     if (!this.dataSource) return;
 
@@ -3357,6 +3439,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           takeProfit: candidate.takeProfit,
           governance,
           paperPostLossEntryGuard,
+          paperSpreadCalibrationShadow,
           macroEventRisk: macroEventAssessment,
           highConvictionOverlay,
           extensionExhaustionShadow,

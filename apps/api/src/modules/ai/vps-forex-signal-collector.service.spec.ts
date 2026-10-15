@@ -659,6 +659,46 @@ describe('VpsForexSignalCollectorService', () => {
     ]);
   });
 
+  it('loads same-session historical broker P95 for PAPER spread calibration shadow', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        sample_count: 240,
+        p95_spread_price: '0.00002000',
+        latest_sample_at: '2026-10-13T15:28:00.000Z',
+      },
+    ]);
+    const collector = createCollector(
+      config({
+        'multimodelBrokerExpert.sourceConnectionId': 'metaapi-source-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    const evaluatedAt = new Date('2026-10-15T14:00:00.000Z');
+    const history = await (collector as any).loadPaperSpreadCalibrationHistory(
+      'AUDUSD',
+      evaluatedAt,
+    );
+
+    expect(history).toEqual({ sampleCount: 240, p95SpreadPrice: 0.00002 });
+    const sql = String(query.mock.calls[0][0]);
+    expect(sql).toContain('percentile_cont(0.95)');
+    expect(sql).toContain("interval '21 days'");
+    expect(sql).toContain("AT TIME ZONE 'UTC'");
+    expect(sql).toContain('market_data.provider_quote_candles');
+    expect(query).toHaveBeenCalledWith(expect.any(String), [
+      'metaapi-source-1',
+      'AUDUSD',
+      evaluatedAt.toISOString(),
+      'NEW_YORK',
+    ]);
+  });
+
   it('builds sleeve qualification evidence from the actual PAPER execution policy cohort', async () => {
     const query = jest.fn().mockResolvedValue([]);
     const collector = createCollector(
@@ -2067,6 +2107,10 @@ describe('VpsForexSignalCollectorService', () => {
       .fn()
       .mockResolvedValue({ ok: true, status: 200, json: async () => payload() });
 
+    const calibrationHistorySpy = jest
+      .spyOn(collector as any, 'loadPaperSpreadCalibrationHistory')
+      .mockResolvedValue({ sampleCount: 240, p95SpreadPrice: 0.00002 });
+
     await collector.collectOnce(fetchMock as unknown as typeof fetch);
 
     expect(receiveSignal).not.toHaveBeenCalled();
@@ -2077,6 +2121,23 @@ describe('VpsForexSignalCollectorService', () => {
       expect.stringContaining('INSERT INTO trading.ensemble_shadow_decisions'),
       expect.arrayContaining(['user-1', null, 'conn-1', 'irexpro-multimodel-ensemble-v1']),
     );
+    expect(calibrationHistorySpy).toHaveBeenCalled();
+    const eurusdInsert = shadowQuery.mock.calls.find(
+      ([sql, params]) =>
+        String(sql).includes('INSERT INTO trading.ensemble_shadow_decisions') &&
+        Array.isArray(params) &&
+        params[6] === 'EURUSD',
+    );
+    expect(eurusdInsert).toBeDefined();
+    const eurusdComponents = JSON.parse(String(eurusdInsert?.[1]?.[23]));
+    expect(eurusdComponents.paperSpreadCalibrationShadow).toMatchObject({
+      artifact: 'paper-spread-calibration-shadow-v1',
+      fixedSpreadPrice: 0.0001,
+      calibratedSpreadPrice: 0.000025,
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+      qualificationEvidence: false,
+    });
     expect((collector as any).lastEnsembleDecision.evaluatedAt).toBeInstanceOf(Date);
     expect((collector as any).lastEnsembleDecision.instrument).toBe('EURUSD');
   });
