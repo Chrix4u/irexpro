@@ -1,6 +1,8 @@
 name: VPS No-Trade Diagnostics
 
 on:
+  push:
+    branches: [main]
   issue_comment:
     types: [created]
 
@@ -14,12 +16,16 @@ concurrency:
 jobs:
   diagnose:
     if: >-
-      github.event.issue.number == 366 &&
-      github.actor == 'Chrix4u' &&
-      github.event.comment.author_association == 'OWNER' &&
-      github.event.comment.body == '/vps no-trade-diagnostics'
+      github.event_name == 'push' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.number == 366 &&
+       github.actor == 'Chrix4u' &&
+       github.event.comment.author_association == 'OWNER' &&
+       github.event.comment.body == '/vps no-trade-diagnostics')
     runs-on: ubuntu-24.04
     timeout-minutes: 8
+    environment:
+      name: staging
     env:
       STAGING_SSH_HOST: vps.lightworldtech.com
       STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
