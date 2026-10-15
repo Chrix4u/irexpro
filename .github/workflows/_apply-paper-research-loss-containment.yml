@@ -1,17 +1,15 @@
 name: One-shot PAPER research containment patch
 
 on:
-  push:
-    branches:
-      - fix/paper-research-loss-containment-20261015
-    paths:
-      - .github/workflows/_apply-paper-research-loss-containment.yml
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   patch:
+    if: github.head_ref == 'fix/paper-research-loss-containment-20261015'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,14 +36,10 @@ jobs:
 
           canary = Path('apps/api/src/modules/ai/rejected-edge-paper-canary.ts')
           text = canary.read_text()
-          text, n = re.subn(
-              r"const ALLOWED_RESEARCH_BLOCKERS = new Set\(\[\n  'ENSEMBLE_NOT_PAPER_ADMITTED',\n  'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',\n  'DRIFT_OUT_OF_DISTRIBUTION',\n  'DRIFT_STRESSED',\n\]\);",
-              "const ALLOWED_RESEARCH_BLOCKERS = new Set([\n  'ENSEMBLE_NOT_PAPER_ADMITTED',\n  'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',\n]);",
-              text,
-              count=1,
-          )
-          assert n == 1, 'canary blocker allowlist shape changed'
-          canary.write_text(text)
+          old = """const ALLOWED_RESEARCH_BLOCKERS = new Set([\n  'ENSEMBLE_NOT_PAPER_ADMITTED',\n  'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',\n  'DRIFT_OUT_OF_DISTRIBUTION',\n  'DRIFT_STRESSED',\n]);"""
+          new = """const ALLOWED_RESEARCH_BLOCKERS = new Set([\n  'ENSEMBLE_NOT_PAPER_ADMITTED',\n  'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',\n]);"""
+          assert old in text, 'canary blocker allowlist shape changed'
+          canary.write_text(text.replace(old, new, 1))
 
           canary_spec = Path('apps/api/src/modules/ai/rejected-edge-paper-canary.spec.ts')
           text = canary_spec.read_text()
@@ -57,16 +51,8 @@ jobs:
           throughput_spec = Path('apps/api/src/modules/ai/paper-research-throughput.spec.ts')
           text = throughput_spec.read_text()
 
-          def replace_test(source: str, title: str, body: str) -> str:
-              pattern = re.compile(r"  it\('" + re.escape(title) + r"'.*?\n  \}\);", re.S)
-              source, count = pattern.subn(body.rstrip(), source, count=1)
-              assert count == 1, f'test block not found: {title}'
-              return source
-
-          text = replace_test(
-              text,
-              'admits a controlled PAPER exploration sample when strict confidence is missed but economics and quality remain usable',
-              """  it('keeps an out-of-distribution exploration sample shadow-only even when economics and quality remain usable', () => {
+          replacements = {
+            'admits a controlled PAPER exploration sample when strict confidence is missed but economics and quality remain usable': """  it('keeps an out-of-distribution exploration sample shadow-only even when economics and quality remain usable', () => {
     expect(
       evaluatePaperResearchThroughput({
         ...base,
@@ -79,11 +65,7 @@ jobs:
       }),
     ).toMatchObject({ eligible: false, reason: 'UNSAFE_BLOCKER' });
   });""",
-          )
-          text = replace_test(
-              text,
-              'admits a stronger positive-edge PAPER exploration sample at the bounded strong-edge structural floors',
-              """  it('does not let strong modeled edge override out-of-distribution drift', () => {
+            'admits a stronger positive-edge PAPER exploration sample at the bounded strong-edge structural floors': """  it('does not let strong modeled edge override out-of-distribution drift', () => {
     expect(
       evaluatePaperResearchThroughput({
         ...base,
@@ -97,11 +79,7 @@ jobs:
       }),
     ).toMatchObject({ eligible: false, reason: 'UNSAFE_BLOCKER' });
   });""",
-          )
-          text = replace_test(
-              text,
-              'accepts direction-confirmed PAPER exploration when fast aligned momentum covers a blind legacy direction score',
-              """  it('does not let fast aligned momentum override out-of-distribution drift', () => {
+            'accepts direction-confirmed PAPER exploration when fast aligned momentum covers a blind legacy direction score': """  it('does not let fast aligned momentum override out-of-distribution drift', () => {
     const liveDirectionConfirmedCandidate = {
       ...base,
       confidence: 0.6,
@@ -113,17 +91,12 @@ jobs:
       alignedMomentumAtr: 1.0247,
       paperExecutionBlockers: [...base.paperExecutionBlockers, 'DRIFT_OUT_OF_DISTRIBUTION'],
     };
-
     expect(evaluatePaperResearchThroughput(liveDirectionConfirmedCandidate)).toMatchObject({
       eligible: false,
       reason: 'UNSAFE_BLOCKER',
     });
   });""",
-          )
-          text = replace_test(
-              text,
-              'allows stressed or out-of-distribution drift only through non-promotable exploration',
-              """  it('keeps stressed and out-of-distribution drift shadow-only', () => {
+            'allows stressed or out-of-distribution drift only through non-promotable exploration': """  it('keeps stressed and out-of-distribution drift shadow-only', () => {
     expect(
       evaluatePaperResearchThroughput({
         ...base,
@@ -139,7 +112,11 @@ jobs:
       }),
     ).toMatchObject({ eligible: false, reason: 'UNSAFE_BLOCKER' });
   });""",
-          )
+          }
+          for title, body in replacements.items():
+              pattern = re.compile(r"  it\('" + re.escape(title) + r"'.*?\n  \}\);", re.S)
+              text, count = pattern.subn(body.rstrip(), text, count=1)
+              assert count == 1, f'test block not found: {title}'
           throughput_spec.write_text(text)
       - name: Commit patched source and remove one-shot workflow
         shell: bash
