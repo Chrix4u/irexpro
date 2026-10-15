@@ -200,11 +200,7 @@ const ALLOWED_RESEARCH_BLOCKERS = new Set([
   'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
 ]);
 
-const ALLOWED_RESEARCH_EXPLORATION_BLOCKERS = new Set([
-  ...ALLOWED_RESEARCH_BLOCKERS,
-  'DRIFT_STRESSED',
-  'DRIFT_OUT_OF_DISTRIBUTION',
-]);
+const ALLOWED_RESEARCH_EXPLORATION_BLOCKERS = ALLOWED_RESEARCH_BLOCKERS;
 
 export interface PaperResearchThroughputInput {
   normalPaperExecution: boolean;
@@ -322,6 +318,8 @@ export function evaluatePaperResearchThroughput(
     reason = 'NET_EXPECTED_R_INVALID';
   } else if (input.netExpectedR < PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R) {
     reason = 'NET_EXPECTED_R_TOO_LOW';
+  } else if (input.driftState !== 'NORMAL') {
+    reason = 'UNSAFE_BLOCKER';
   } else if (
     (!input.routeReliabilityDemoted && input.paperExecutionBlockers.length === 0) ||
     input.paperExecutionBlockers.some(
