@@ -96,6 +96,11 @@ import {
   PairedDirectionReversalDecision,
   evaluatePairedDirectionReversal,
 } from './paired-direction-reversal';
+import {
+  PaperCostAwareCohortEvidence,
+  PaperCostAwareEntryDecision,
+  evaluatePaperCostAwareEntry,
+} from './paper-cost-aware-entry';
 
 const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
@@ -1125,6 +1130,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperResearchEpisodeKey: string;
           paperResearchEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
           paperPostLossEntryGuard: PaperPostLossEntryDecision;
+          paperCostAwareEntry: PaperCostAwareEntryDecision;
+          paperCostAwareEvidence: PaperCostAwareCohortEvidence;
         }> = [];
 
         const rankedPairCandidates = [...pairCandidates].sort((a, b) => b.score - a.score);
@@ -1606,10 +1613,47 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperResearchThroughputEligible: paperResearchExecutionEligible,
             pairedReversalResearchEligible,
           });
-          const paperExecutionRoute = paperPostLossEntryGuard.eligible
+          let paperExecutionRoute = paperPostLossEntryGuard.eligible
             ? selectedPaperExecutionRoute
             : 'NONE';
-          if (paperResearchExecutionEligible) {
+          const paperCostAwareEvidence =
+            paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
+              ? await this.loadPaperCostAwareEntryEvidence(
+                  userId,
+                  connectionId,
+                  best.instrument,
+                  best.direction,
+                )
+              : { grossPositiveSamples: 0, costFlippedSamples: 0, netPositiveSamples: 0 };
+          const paperCostAwareEntry = evaluatePaperCostAwareEntry({
+            executionRoute: paperExecutionRoute === 'NONE' ? 'NORMAL_PAPER' : paperExecutionRoute,
+            grossExpectedR: ensembleGovernance.grossExpectedR,
+            netExpectedR: ensembleGovernance.netExpectedR,
+            estimatedExecutionCostR: ensembleGovernance.estimatedExecutionCostR,
+            evidence: paperCostAwareEvidence,
+          });
+          if (paperExecutionRoute !== 'NONE') {
+            await this.annotatePaperCostAwareEntryDecision(
+              userId,
+              connectionId,
+              eventId,
+              paperCostAwareEntry,
+              paperCostAwareEvidence,
+            );
+          }
+          if (
+            paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT' &&
+            paperCostAwareEntry.action !== 'ENTER_NOW'
+          ) {
+            this.logger.log(
+              `PAPER cost-aware entry ${best.instrument} ${best.direction} execution=${paperCostAwareEntry.action} ` +
+                `reason=${paperCostAwareEntry.reason} costFlipRate=${paperCostAwareEntry.costFlipRate?.toFixed(4) ?? 'n/a'} ` +
+                `currentCostRatio=${paperCostAwareEntry.currentCostRatio?.toFixed(4) ?? 'n/a'} ` +
+                `qualificationEvidence=false`,
+            );
+            paperExecutionRoute = 'NONE';
+          }
+          if (paperResearchExecutionEligible && paperCostAwareEntry.action === 'ENTER_NOW') {
             this.logger.log(
               `PAPER research-throughput ${best.instrument} ${best.direction} ` +
                 `execution=ELIGIBLE executionAuthority=PAPER_ONLY_RESEARCH ` +
@@ -1682,6 +1726,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperResearchEpisodeKey,
             paperResearchEpisodeGuard,
             paperPostLossEntryGuard,
+            paperCostAwareEntry,
+            paperCostAwareEvidence,
           });
         }
 
@@ -1743,6 +1789,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperResearchEpisodeKey,
           paperResearchEpisodeGuard,
           paperPostLossEntryGuard,
+          paperCostAwareEntry,
+          paperCostAwareEvidence,
         } = chosen;
 
         this.lastPublishedOpportunity.set(best.instrument, {
@@ -1832,6 +1880,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paper_research_throughput: paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT',
             paper_research_throughput_artifact: paperResearchThroughput.artifact,
             paper_research_throughput_reason: paperResearchThroughput.reason,
+            paper_cost_aware_entry_artifact: paperCostAwareEntry.artifact,
+            paper_cost_aware_entry_action: paperCostAwareEntry.action,
+            paper_cost_aware_entry_reason: paperCostAwareEntry.reason,
+            paper_cost_aware_entry_modifies_execution: paperCostAwareEntry.modifiesExecution,
+            paper_cost_aware_entry_qualification_evidence:
+              paperCostAwareEntry.qualificationEvidence,
+            paper_cost_aware_entry_cost_flip_rate: paperCostAwareEntry.costFlipRate,
+            paper_cost_aware_entry_current_cost_ratio: paperCostAwareEntry.currentCostRatio,
+            paper_cost_aware_entry_gross_positive_samples:
+              paperCostAwareEvidence.grossPositiveSamples,
+            paper_cost_aware_entry_cost_flipped_samples: paperCostAwareEvidence.costFlippedSamples,
+            paper_cost_aware_entry_net_positive_samples: paperCostAwareEvidence.netPositiveSamples,
             paper_research_throughput_qualification_evidence:
               paperResearchThroughput.qualificationEvidence,
             paper_research_throughput_execution_authority:
@@ -2729,6 +2789,102 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       rows.map((row) => ({ evaluatedAt: row.evaluated_at, outcome: row.outcome })),
     );
     return summarizeEnsembleSleeveOutcomes(episodes);
+  }
+
+  private async loadPaperCostAwareEntryEvidence(
+    userId: string,
+    connectionId: string,
+    instrument: string,
+    direction: 'BUY' | 'SELL',
+  ): Promise<PaperCostAwareCohortEvidence> {
+    if (!this.dataSource) {
+      return { grossPositiveSamples: 0, costFlippedSamples: 0, netPositiveSamples: 0 };
+    }
+
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          COUNT(*) FILTER (WHERE expected_r > 0)::int AS gross_positive_samples,
+          COUNT(*) FILTER (
+            WHERE expected_r > 0
+              AND COALESCE(NULLIF(components->'governance'->>'netExpectedR', '')::numeric, -999) <= 0
+          )::int AS cost_flipped_samples,
+          COUNT(*) FILTER (
+            WHERE expected_r > 0
+              AND COALESCE(NULLIF(components->'governance'->>'netExpectedR', '')::numeric, -999) > 0
+          )::int AS net_positive_samples
+        FROM trading.ensemble_shadow_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND engine_code = $3
+          AND model_version = $4
+          AND instrument = $5
+          AND direction = $6
+          AND components->>'strategyRoute' = 'TREND_CONTINUATION'
+          AND COALESCE(
+            (components->'governance'->>'paperExecutionCostUsable')::boolean,
+            false
+          ) = true
+          AND evaluated_at >= NOW() - INTERVAL '24 hours'
+      `,
+      [
+        userId,
+        connectionId,
+        ACTIVE_ENGINE_CODE,
+        ACTIVE_MODEL_POLICY_VERSION,
+        instrument.trim().toUpperCase(),
+        direction,
+      ],
+    )) as Array<{
+      gross_positive_samples: number | string | null;
+      cost_flipped_samples: number | string | null;
+      net_positive_samples: number | string | null;
+    }>;
+
+    const row = rows[0];
+    return {
+      grossPositiveSamples: Math.max(0, Number(row?.gross_positive_samples ?? 0)),
+      costFlippedSamples: Math.max(0, Number(row?.cost_flipped_samples ?? 0)),
+      netPositiveSamples: Math.max(0, Number(row?.net_positive_samples ?? 0)),
+    };
+  }
+
+  private async annotatePaperCostAwareEntryDecision(
+    userId: string,
+    connectionId: string,
+    opportunityKey: string,
+    decision: PaperCostAwareEntryDecision,
+    evidence: PaperCostAwareCohortEvidence,
+  ): Promise<void> {
+    if (!this.dataSource) return;
+    try {
+      await this.dataSource.query(
+        `
+          UPDATE trading.ensemble_shadow_decisions
+          SET components = jsonb_set(
+            components,
+            '{paperCostAwareEntry}',
+            $5::jsonb,
+            true
+          )
+          WHERE user_id = $1
+            AND broker_connection_id = $2
+            AND engine_code = $3
+            AND opportunity_key = $4
+        `,
+        [
+          userId,
+          connectionId,
+          ACTIVE_ENGINE_CODE,
+          opportunityKey,
+          JSON.stringify({ ...decision, evidence }),
+        ],
+      );
+    } catch (error) {
+      this.logger.warn(
+        `PAPER cost-aware entry annotation unavailable: ${(error as Error).message}`,
+      );
+    }
   }
 
   private async loadPaperResearchPairSideEvidence(
