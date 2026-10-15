@@ -72,8 +72,6 @@ export function rejectedEdgeCanaryEvaluationState(input: {
 const ALLOWED_RESEARCH_BLOCKERS = new Set([
   'ENSEMBLE_NOT_PAPER_ADMITTED',
   'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
-  'DRIFT_OUT_OF_DISTRIBUTION',
-  'DRIFT_STRESSED',
 ]);
 
 function evidencePasses(
