@@ -1607,7 +1607,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `execution=SHADOW_ONLY legacyV7Frozen=${LEGACY_V7_EXECUTION_FROZEN} ` +
                 `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
                 `costSource=${ensembleGovernance.executionCostSource} ` +
-                `drift=${ensembleGovernance.driftState} sleeve=${ensembleGovernance.sleeveState} ` +
+                `drift=${ensembleGovernance.driftState} ` +
+                `driftDiagnostics=${(ensembleGovernance.driftDiagnostics ?? []).join('|') || 'NONE'} ` +
+                `sleeve=${ensembleGovernance.sleeveState} ` +
                 `highConviction=${highConvictionOverlay.state} ` +
                 `canary=${rejectedEdgeCanary?.reason ?? canaryEvaluationState} ` +
                 `extensionExhaustion=${extensionExhaustionDiagnostic.reason} ` +

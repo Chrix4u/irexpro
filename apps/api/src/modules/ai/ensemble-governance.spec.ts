@@ -522,3 +522,38 @@ describe('evaluateEnsembleGovernance', () => {
     expect(blocked.paperPromotionEligible).toBe(false);
   });
 });
+
+describe('ensemble drift diagnostics', () => {
+  it('names the exact continuation-envelope features that force OOD without changing the decision', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      ensemble: {
+        ...ensemble,
+        paperAdmitted: false,
+        admitted: false,
+        regime: 'TREND_WEAK',
+        strategyRoute: 'TREND_CONTINUATION',
+      },
+      direction: 'SELL',
+      confidence: 0.66,
+      extensionAtr: 0.5,
+      volatilityScore: 0.2,
+      emaSeparation: 0,
+      mtfStrength: 0,
+      rsi14: 44,
+      shortHorizonMomentumAtr: -0.6,
+      eventRisk: 'CLEAR',
+    });
+
+    expect(result.driftState).toBe('OUT_OF_DISTRIBUTION');
+    expect(result.driftDiagnostics).toEqual(
+      expect.arrayContaining(['emaSeparation:HARD_LOW', 'mtfStrength:HARD_LOW']),
+    );
+  });
+
+  it('returns no violations for a normal continuation vector', () => {
+    const result = evaluateEnsembleGovernance({ ...base, eventRisk: 'CLEAR' });
+    expect(result.driftState).toBe('NORMAL');
+    expect(result.driftDiagnostics).toEqual([]);
+  });
+});

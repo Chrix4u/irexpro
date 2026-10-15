@@ -84,6 +84,8 @@ export interface EnsembleGovernanceDecision {
   netExpectedRPassed: boolean;
   driftState: EnsembleDriftState;
   driftQuality: number;
+  /** Additive diagnostics for why the active drift envelope classified this vector. */
+  driftDiagnostics?: string[];
   paperDriftPassed: boolean;
   driftPassed: boolean;
   sleeveState: EnsembleSleeveState;
@@ -139,6 +141,73 @@ function finite(value: number): number {
 function directionalMomentum(input: EnsembleGovernanceInput): number {
   const rawMomentum = finite(input.shortHorizonMomentumAtr ?? 0);
   return input.direction === 'SELL' ? -rawMomentum : rawMomentum;
+}
+
+function hardRangeDiagnostic(
+  feature: string,
+  value: number,
+  low: number,
+  high: number,
+): string | null {
+  if (!Number.isFinite(value)) return `${feature}:INVALID`;
+  if (value < low) return `${feature}:HARD_LOW`;
+  if (value > high) return `${feature}:HARD_HIGH`;
+  return null;
+}
+
+function routeDriftDiagnostics(input: EnsembleGovernanceInput): string[] {
+  const momentum = directionalMomentum(input);
+  if (
+    input.driftRoute === 'PAIRED_REVERSAL_RESEARCH' ||
+    input.ensemble.regime === 'REVERSAL_CONFIRMED'
+  ) {
+    return [
+      hardRangeDiagnostic('confidence', input.confidence, 0.64, 0.8),
+      hardRangeDiagnostic('extensionAtr', input.extensionAtr, 0, 1.15),
+      hardRangeDiagnostic('volatilityScore', input.volatilityScore, 0, 0.55),
+      hardRangeDiagnostic('emaSeparation', input.emaSeparation, 0, 0.5),
+      hardRangeDiagnostic('mtfStrength', input.mtfStrength, 0, 1),
+      hardRangeDiagnostic('rsi14', input.rsi14, 20, 80),
+      hardRangeDiagnostic('directionalMomentumAtr', momentum, 0.5, 1.5),
+    ].filter((diagnostic): diagnostic is string => diagnostic !== null);
+  }
+  if (input.ensemble.strategyRoute === 'EARLY_TRANSITION') {
+    const diagnostics = [
+      hardRangeDiagnostic('confidence', input.confidence, 0.64, 0.8),
+      hardRangeDiagnostic('extensionAtr', input.extensionAtr, 0, 0.9),
+      hardRangeDiagnostic('volatilityScore', input.volatilityScore, 0, 0.55),
+      hardRangeDiagnostic('emaSeparation', input.emaSeparation, 0.12, 0.5),
+      hardRangeDiagnostic('rsi14', input.rsi14, 20, 80),
+      hardRangeDiagnostic('directionalMomentumAtr', momentum, -0.5, 1.5),
+    ].filter((diagnostic): diagnostic is string => diagnostic !== null);
+    if (!Number.isFinite(input.mtfStrength)) diagnostics.push('mtfStrength:INVALID');
+    else if (input.mtfStrength < 0) diagnostics.push('mtfStrength:HARD_LOW');
+    else if (input.mtfStrength >= 0.12) diagnostics.push('mtfStrength:HARD_HIGH');
+    return diagnostics;
+  }
+
+  const rawValues = {
+    confidence: input.confidence,
+    extensionAtr: input.extensionAtr,
+    volatilityScore: input.volatilityScore,
+    emaSeparation: input.emaSeparation,
+    mtfStrength: input.mtfStrength,
+    rsi14: input.rsi14,
+  };
+  const diagnostics: string[] = [];
+  for (const key of Object.keys(DRIFT_ENVELOPE) as Array<keyof typeof DRIFT_ENVELOPE>) {
+    const raw = rawValues[key];
+    const bounds = DRIFT_ENVELOPE[key];
+    if (!Number.isFinite(raw)) {
+      diagnostics.push(`${key}:INVALID`);
+      continue;
+    }
+    if (raw < bounds.hardLow) diagnostics.push(`${key}:HARD_LOW`);
+    else if (raw > bounds.hardHigh) diagnostics.push(`${key}:HARD_HIGH`);
+    else if (raw < bounds.stressedLow) diagnostics.push(`${key}:STRESSED_LOW`);
+    else if (raw > bounds.stressedHigh) diagnostics.push(`${key}:STRESSED_HIGH`);
+  }
+  return diagnostics;
 }
 
 function reversalDriftOf(input: EnsembleGovernanceInput): {
@@ -343,6 +412,7 @@ export function evaluateEnsembleGovernance(
   const netExpectedRPassed =
     Number.isFinite(netExpectedR) && netExpectedR >= ENSEMBLE_NET_EXPECTED_R_FLOOR;
   const drift = driftOf(input);
+  const driftDiagnostics = routeDriftDiagnostics(input);
   const driftPassed = drift.state === 'NORMAL';
   // PAPER and eventual promotion share the same drift envelope. A stressed or
   // out-of-distribution vector can still be observed in shadow mode, but it is
@@ -391,6 +461,7 @@ export function evaluateEnsembleGovernance(
     netExpectedRPassed,
     driftState: drift.state,
     driftQuality: drift.quality,
+    driftDiagnostics,
     paperDriftPassed,
     driftPassed,
     sleeveState,
