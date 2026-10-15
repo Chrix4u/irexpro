@@ -19,7 +19,6 @@ describe('rejected-edge PAPER canary', () => {
     paperExecutionBlockers: [
       'ENSEMBLE_NOT_PAPER_ADMITTED',
       'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
-      'DRIFT_OUT_OF_DISTRIBUTION',
     ],
   };
 
@@ -147,6 +146,15 @@ describe('rejected-edge PAPER canary', () => {
         evidence,
       }).eligible,
     ).toBe(false);
+    expect(
+      evaluateRejectedEdgePaperCanary({
+        candidate: {
+          ...candidate,
+          paperExecutionBlockers: [...candidate.paperExecutionBlockers, 'DRIFT_STRESSED'],
+        },
+        evidence,
+      }),
+    ).toMatchObject({ eligible: false, reason: 'UNSAFE_BLOCKER' });
   });
 
   it('explains why the canary was not evaluated instead of reporting an opaque state', () => {
