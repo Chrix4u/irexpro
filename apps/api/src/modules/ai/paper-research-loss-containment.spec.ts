@@ -2,10 +2,7 @@ import { evaluatePaperResearchThroughput } from './paper-research-throughput';
 import { evaluateRejectedEdgePaperCanary } from './rejected-edge-paper-canary';
 
 describe('PAPER research loss containment', () => {
-  const governanceBlockers = [
-    'ENSEMBLE_NOT_PAPER_ADMITTED',
-    'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
-  ];
+  const governanceBlockers = ['ENSEMBLE_NOT_PAPER_ADMITTED', 'ENSEMBLE_NOT_PROMOTABLE_ADMISSION'];
 
   it.each(['OUT_OF_DISTRIBUTION', 'STRESSED'] as const)(
     'keeps %s research-throughput candidates shadow-only even when economics and momentum look attractive',
