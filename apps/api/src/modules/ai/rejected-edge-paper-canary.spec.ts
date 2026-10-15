@@ -16,10 +16,7 @@ describe('rejected-edge PAPER canary', () => {
     eventRisk: 'CLEAR' as const,
     portfolioQuality: 1,
     strategyRoute: 'TREND_CONTINUATION' as const,
-    paperExecutionBlockers: [
-      'ENSEMBLE_NOT_PAPER_ADMITTED',
-      'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
-    ],
+    paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'ENSEMBLE_NOT_PROMOTABLE_ADMISSION'],
   };
 
   it('enables a research canary only when global and pair-side rejected-edge evidence are strong', () => {
