@@ -107,6 +107,10 @@ import {
   PaperCostAwareEntryDecision,
   evaluatePaperCostAwareEntry,
 } from './paper-cost-aware-entry';
+import {
+  PaperCalibratedCostResearchRescueDecision,
+  evaluatePaperCalibratedCostResearchRescue,
+} from './paper-calibrated-cost-rescue';
 
 const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
@@ -1142,6 +1146,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperPostLossEntryGuard: PaperPostLossEntryDecision;
           paperCostAwareEntry: PaperCostAwareEntryDecision;
           paperCostAwareEvidence: PaperCostAwareCohortEvidence;
+          paperCalibratedCostRescue: PaperCalibratedCostResearchRescueDecision;
         }> = [];
 
         const rankedPairCandidates = [...pairCandidates].sort((a, b) => b.score - a.score);
@@ -1291,8 +1296,26 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             best.instrument,
             evaluatedAt,
           );
-          const paperSimulationSpreadPrice = paperSession ? fixedPaperSpreadPrice : undefined;
-          let ensembleGovernance = evaluateEnsembleGovernance({
+          const calibratedPaperSpreadPrice =
+            paperSpreadCalibrationShadow.reason === 'CALIBRATED_P95_WITH_FLOOR' &&
+            paperSpreadCalibrationShadow.calibratedSpreadPrice > 0
+              ? paperSpreadCalibrationShadow.calibratedSpreadPrice
+              : fixedPaperSpreadPrice;
+          if (paperSession && calibratedPaperSpreadPrice > 0) {
+            this.livePaperMarket.setPaperFallbackSpread(
+              best.instrument,
+              calibratedPaperSpreadPrice,
+              connectionId,
+            );
+          }
+          // Standard PAPER governance never becomes looser because of historical
+          // calibration: it uses the worse of fixed and calibrated fallback cost.
+          // A lower calibrated cost may be used only by the separately gated
+          // 0.01-lot calibrated-cost research rescue below.
+          const standardPaperSpreadPrice = paperSession
+            ? Math.max(fixedPaperSpreadPrice, calibratedPaperSpreadPrice)
+            : undefined;
+          const governanceInput = {
             ensemble: planBEnsemble,
             instrument: best.instrument,
             direction: best.direction,
@@ -1310,8 +1333,19 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             sleeveEvidence,
             evaluatedAt,
             executionSpreadEvidence,
-            paperSimulationSpreadPrice,
+          };
+          const fixedPaperGovernance = evaluateEnsembleGovernance({
+            ...governanceInput,
+            paperSimulationSpreadPrice: paperSession ? fixedPaperSpreadPrice : undefined,
           });
+          let ensembleGovernance =
+            standardPaperSpreadPrice === fixedPaperSpreadPrice
+              ? fixedPaperGovernance
+              : evaluateEnsembleGovernance({
+                  ...governanceInput,
+                  paperSimulationSpreadPrice: standardPaperSpreadPrice,
+                });
+          const paperSimulationSpreadPrice = standardPaperSpreadPrice;
           const paperPostLossEntryState = await this.loadPaperPostLossEntryState(
             userId,
             connectionId,
@@ -1486,6 +1520,37 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               evidence: rejectedEdgeCanaryEvidence,
             });
           }
+          const fixedPaperResearchThroughputInput = {
+            normalPaperExecution,
+            confidence: best.confidence,
+            netExpectedR: fixedPaperGovernance.netExpectedR,
+            executionSpreadEvidenceValid: fixedPaperGovernance.executionSpreadEvidenceValid,
+            paperExecutionCostUsable: fixedPaperGovernance.paperExecutionCostUsable,
+            eventRisk: fixedPaperGovernance.eventRisk,
+            strategyRoute: planBEnsemble.strategyRoute,
+            driftState: fixedPaperGovernance.driftState,
+            driftDiagnostics: fixedPaperGovernance.driftDiagnostics,
+            directionQuality: planBEnsemble.directionQuality,
+            alignedMomentumAtr: best.shortHorizonMomentumAtr,
+            tradeQuality: planBEnsemble.tradeQuality,
+            exitQuality: planBEnsemble.exitQuality,
+            paperExecutionBlockers: fixedPaperGovernance.paperExecutionBlockers,
+            routeReliabilityDemoted: pairSideReliabilityDemoted,
+          };
+          const paperCalibratedCostRescue = evaluatePaperCalibratedCostResearchRescue({
+            grossExpectedR: fixedPaperGovernance.grossExpectedR,
+            fixedNetExpectedR: fixedPaperGovernance.netExpectedR,
+            researchInput: fixedPaperResearchThroughputInput,
+            calibration: paperSpreadCalibrationShadow,
+            freshBrokerSpreadAvailable: Boolean(executionSpreadEvidence),
+          });
+          if (paperSession && paperCalibratedCostRescue.eligible) {
+            ensembleGovernance = evaluateEnsembleGovernance({
+              ...governanceInput,
+              paperSimulationSpreadPrice: calibratedPaperSpreadPrice,
+            });
+          }
+
           const paperResearchThroughputInput = {
             normalPaperExecution,
             confidence: best.confidence,
@@ -1663,6 +1728,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             grossExpectedR: ensembleGovernance.grossExpectedR,
             netExpectedR: ensembleGovernance.netExpectedR,
             estimatedExecutionCostR: ensembleGovernance.estimatedExecutionCostR,
+            calibratedCostRescue: paperCalibratedCostRescue.eligible,
             evidence: paperCostAwareEvidence,
           });
           if (paperExecutionRoute !== 'NONE') {
@@ -1761,6 +1827,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperPostLossEntryGuard,
             paperCostAwareEntry,
             paperCostAwareEvidence,
+            paperCalibratedCostRescue,
           });
         }
 
@@ -1824,6 +1891,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperPostLossEntryGuard,
           paperCostAwareEntry,
           paperCostAwareEvidence,
+          paperCalibratedCostRescue,
         } = chosen;
 
         this.lastPublishedOpportunity.set(best.instrument, {
@@ -1925,6 +1993,22 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               paperCostAwareEvidence.grossPositiveSamples,
             paper_cost_aware_entry_cost_flipped_samples: paperCostAwareEvidence.costFlippedSamples,
             paper_cost_aware_entry_net_positive_samples: paperCostAwareEvidence.netPositiveSamples,
+            paper_calibrated_cost_rescue: paperCalibratedCostRescue.eligible,
+            paper_calibrated_cost_rescue_artifact: paperCalibratedCostRescue.artifact,
+            paper_calibrated_cost_rescue_reason: paperCalibratedCostRescue.reason,
+            paper_calibrated_cost_rescue_execution_authority:
+              paperCalibratedCostRescue.executionAuthority,
+            paper_calibrated_cost_rescue_qualification_evidence:
+              paperCalibratedCostRescue.qualificationEvidence,
+            paper_calibrated_cost_rescue_fixed_net_expected_r:
+              paperCalibratedCostRescue.fixedNetExpectedR,
+            paper_calibrated_cost_rescue_calibrated_net_expected_r:
+              paperCalibratedCostRescue.calibratedNetExpectedR,
+            paper_calibrated_cost_rescue_fixed_execution_cost_r:
+              paperCalibratedCostRescue.fixedExecutionCostR,
+            paper_calibrated_cost_rescue_calibrated_execution_cost_r:
+              paperCalibratedCostRescue.calibratedExecutionCostR,
+            paper_calibrated_cost_rescue_cost_reduction_r: paperCalibratedCostRescue.costReductionR,
             paper_research_throughput_qualification_evidence:
               paperResearchThroughput.qualificationEvidence,
             paper_research_throughput_execution_authority:
@@ -3440,6 +3524,24 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           governance,
           paperPostLossEntryGuard,
           paperSpreadCalibrationShadow,
+          paperSpreadFallbackAuthority: {
+            artifact: 'paper-spread-fallback-authority-v1',
+            active:
+              Boolean(tradingSessionId) &&
+              paperSpreadCalibrationShadow.reason === 'CALIBRATED_P95_WITH_FLOOR',
+            executionAuthority: 'PAPER_ONLY',
+            modifiesExecution:
+              Boolean(tradingSessionId) &&
+              paperSpreadCalibrationShadow.reason === 'CALIBRATED_P95_WITH_FLOOR',
+            fallbackSpreadPrice: paperSpreadCalibrationShadow.calibratedSpreadPrice,
+            standardGovernanceSpreadPrice: Math.max(
+              paperSpreadCalibrationShadow.fixedSpreadPrice,
+              paperSpreadCalibrationShadow.calibratedSpreadPrice,
+            ),
+            freshProviderOverrides: true,
+            qualificationEvidence: false,
+            productionEligible: false,
+          },
           macroEventRisk: macroEventAssessment,
           highConvictionOverlay,
           extensionExhaustionShadow,

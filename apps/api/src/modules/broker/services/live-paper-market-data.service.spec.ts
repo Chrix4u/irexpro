@@ -47,6 +47,34 @@ describe('LivePaperMarketDataService', () => {
     ]);
   });
 
+  it('applies a connection-scoped calibrated fallback spread to the PAPER closed-candle execution quote', () => {
+    const service = new LivePaperMarketDataService();
+    service.updateClosedCandles('EURUSD', candles(1.1, 5), 'conn-a');
+    service.updateClosedCandles('EURUSD', candles(1.1, 5), 'conn-b');
+
+    service.setPaperFallbackSpread('EURUSD', 0.00004, 'conn-a');
+
+    const calibrated = service.getQuote('EURUSD', 20 * 60_000, 'conn-a');
+    const unchanged = service.getQuote('EURUSD', 20 * 60_000, 'conn-b');
+    expect(Number(calibrated.ask) - Number(calibrated.bid)).toBeCloseTo(0.00004, 5);
+    expect(Number(unchanged.ask) - Number(unchanged.bid)).toBeCloseTo(0.0001, 5);
+    expect(service.getPaperFallbackSpread('EURUSD', 'conn-a')).toBe(0.00004);
+    expect(service.getPaperFallbackSpread('EURUSD', 'conn-b')).toBe(0.0001);
+  });
+
+  it('keeps fresh provider bid/ask authoritative over the calibrated PAPER fallback spread', () => {
+    const service = new LivePaperMarketDataService();
+    service.updateClosedCandles('USDCAD', candles(1.42, 5), 'conn-a');
+    service.setPaperFallbackSpread('USDCAD', 0.00003, 'conn-a');
+    service.updateProviderQuote('USDCAD', '1.42480', '1.42481', new Date(), 'conn-a');
+
+    const execution = service.getQuote('USDCAD', 20 * 60_000, 'conn-a');
+    expect(execution.source).toBe('PROVIDER');
+    expect(execution.bid).toBe('1.42480');
+    expect(execution.ask).toBe('1.42481');
+    expect(service.getPaperFallbackSpread('USDCAD', 'conn-a')).toBe(0.00003);
+  });
+
   it('prefers a fresh streaming mark without changing the M5 execution quote or candle evidence', () => {
     const service = new LivePaperMarketDataService();
     service.updateClosedCandles('EURUSD', candles(1.1, 5));

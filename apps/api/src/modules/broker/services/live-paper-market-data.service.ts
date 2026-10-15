@@ -34,6 +34,7 @@ interface LivePaperMarketState {
   candleQuotes: Map<string, LivePaperQuote>;
   streamingQuotes: Map<string, LivePaperQuote>;
   providerExecutionQuotes: Map<string, LivePaperQuote>;
+  paperFallbackSpreads: Map<string, number>;
   latestObservedAt: Date | null;
   latestQuoteObservedAt: Date | null;
 }
@@ -66,6 +67,7 @@ export class LivePaperMarketDataService {
         candleQuotes: new Map<string, LivePaperQuote>(),
         streamingQuotes: new Map<string, LivePaperQuote>(),
         providerExecutionQuotes: new Map<string, LivePaperQuote>(),
+        paperFallbackSpreads: new Map<string, number>(),
         latestObservedAt: null,
         latestQuoteObservedAt: null,
       };
@@ -127,7 +129,7 @@ export class LivePaperMarketDataService {
     if (!Number.isFinite(mid) || mid <= 0) {
       throw new BrokerAdapterError(BrokerErrorCode.INVALID_PRICE, `Invalid ${symbol} close price.`);
     }
-    const halfSpread = spec.spread / 2;
+    const halfSpread = this.getPaperFallbackSpread(symbol, connectionId) / 2;
     const quoteTimestamp = new Date(latest.timestamp.getTime() + 5 * 60_000);
     state.candles.set(symbol, normalized.slice(-500));
     state.candleQuotes.set(symbol, {
@@ -161,7 +163,7 @@ export class LivePaperMarketDataService {
         `Invalid streaming PAPER quote for ${symbol}.`,
       );
     }
-    const halfSpread = spec.spread / 2;
+    const halfSpread = this.getPaperFallbackSpread(symbol, connectionId) / 2;
     const quote: LivePaperQuote = {
       bid: (mid - halfSpread).toFixed(spec.digits),
       ask: (mid + halfSpread).toFixed(spec.digits),
@@ -175,6 +177,57 @@ export class LivePaperMarketDataService {
     if (!state.latestQuoteObservedAt || timestamp > state.latestQuoteObservedAt) {
       state.latestQuoteObservedAt = timestamp;
     }
+  }
+
+  setPaperFallbackSpread(instrument: string, spreadPrice: number, connectionId?: string): void {
+    const state = this.marketState(connectionId);
+    const symbol = this.requireSupported(instrument);
+    const spread = Number(spreadPrice);
+    if (!Number.isFinite(spread) || spread <= 0) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_PRICE,
+        `Invalid PAPER fallback spread for ${symbol}: ${spreadPrice}.`,
+      );
+    }
+    state.paperFallbackSpreads.set(symbol, spread);
+
+    const spec = SPECS[symbol]!;
+    const rows = state.candles.get(symbol);
+    const latest = rows?.[rows.length - 1];
+    if (latest) {
+      const mid = Number(latest.close);
+      if (Number.isFinite(mid) && mid > 0) {
+        const halfSpread = spread / 2;
+        const current = state.candleQuotes.get(symbol);
+        const timestamp = current?.timestamp ?? new Date(latest.timestamp.getTime() + 5 * 60_000);
+        state.candleQuotes.set(symbol, {
+          bid: (mid - halfSpread).toFixed(spec.digits),
+          ask: (mid + halfSpread).toFixed(spec.digits),
+          timestamp: new Date(timestamp),
+          source: 'REST_M5',
+        });
+      }
+    }
+
+    const stream = state.streamingQuotes.get(symbol);
+    if (stream?.source === 'STREAM') {
+      const mid = (Number(stream.bid) + Number(stream.ask)) / 2;
+      if (Number.isFinite(mid) && mid > 0) {
+        const halfSpread = spread / 2;
+        state.streamingQuotes.set(symbol, {
+          bid: (mid - halfSpread).toFixed(spec.digits),
+          ask: (mid + halfSpread).toFixed(spec.digits),
+          timestamp: new Date(stream.timestamp),
+          source: 'STREAM',
+        });
+      }
+    }
+  }
+
+  getPaperFallbackSpread(instrument: string, connectionId?: string): number {
+    const state = this.marketState(connectionId);
+    const symbol = this.requireSupported(instrument);
+    return state.paperFallbackSpreads.get(symbol) ?? SPECS[symbol]!.spread;
   }
 
   updateProviderQuote(

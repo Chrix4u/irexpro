@@ -18,6 +18,7 @@ import * as PlanBEnsembleModule from './plan-b-multimodel-shadow';
 import * as EnsembleGovernanceModule from './ensemble-governance';
 import * as V8ShadowMetaModule from './v8-shadow-meta-scorer';
 import * as PairedDirectionReversalModule from './paired-direction-reversal';
+import * as PaperSpreadCalibrationModule from './paper-spread-calibration-shadow';
 import { PAPER_POST_LOSS_STATE_QUERY } from './paper-post-loss-state-query';
 
 // Collection fixtures explicitly provide a healthy, empty PAPER history.
@@ -1550,6 +1551,220 @@ describe('VpsForexSignalCollectorService', () => {
       logSpy.mockRestore();
       planBSpy.mockRestore();
       pairEvidenceSpy.mockRestore();
+      governanceSpy.mockRestore();
+    }
+  });
+
+  it('executes a 0.01-lot calibrated-cost PAPER rescue with governance and fill spread parity', async () => {
+    const live = new LivePaperMarketDataService();
+    const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
+    const shadowQuery = jest.fn().mockResolvedValue([]);
+    const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
+    const planBSpy = jest
+      .spyOn(PlanBEnsembleModule, 'scorePlanBMultimodelShadow')
+      .mockImplementation((input, positions) => {
+        const base = actualPlanB(input, positions);
+        const target = input.instrument === 'EURUSD' && input.direction === 'BUY';
+        return {
+          ...base,
+          strategyRoute: 'TREND_CONTINUATION',
+          portfolioQuality: 1,
+          paperAdmitted: false,
+          admitted: false,
+          consensusPassed: target ? 5 : 3,
+          consensusRequired: 6,
+          directionQuality: target ? 0.4 : 0.2,
+          tradeQuality: target ? 0.55 : 0.2,
+          exitQuality: target ? 0.55 : 0.2,
+          metaProbability: target ? 0.5 : 0.35,
+          expectedR: target ? 0.22 : -0.2,
+          ensembleScore: target ? 0.67 : 0.3,
+          reasons: target ? ['ENSEMBLE_CONSENSUS'] : ['META_EXPECTED_VALUE'],
+        };
+      });
+    const calibrationSpy = jest
+      .spyOn(PaperSpreadCalibrationModule, 'evaluatePaperSpreadCalibrationShadow')
+      .mockImplementation((input) => ({
+        artifact: 'paper-spread-calibration-shadow-v1',
+        instrument: input.instrument,
+        session: 'LONDON',
+        fixedSpreadPrice: 0.0001,
+        calibratedSpreadPrice: 0.00004,
+        minimumSpreadFloorPrice: 0.000025,
+        sampleCount: 320,
+        p95SpreadPrice: 0.00004,
+        fixedCostR: 0.25,
+        calibratedCostR: 0.1,
+        costReductionR: 0.15,
+        reason: 'CALIBRATED_P95_WITH_FLOOR',
+        executionAuthority: 'NONE',
+        modifiesExecution: false,
+        qualificationEvidence: false,
+      }));
+    const governanceSpy = jest
+      .spyOn(EnsembleGovernanceModule, 'evaluateEnsembleGovernance')
+      .mockImplementation((input) => {
+        const target = input.instrument === 'EURUSD' && input.direction === 'BUY';
+        const calibrated = target && input.paperSimulationSpreadPrice === 0.00004;
+        const fixed = target && input.paperSimulationSpreadPrice === 0.0001;
+        return {
+          version: EnsembleGovernanceModule.ENSEMBLE_GOVERNANCE_VERSION,
+          costModelVersion: EnsembleGovernanceModule.ENSEMBLE_COST_MODEL_VERSION,
+          driftModelVersion: EnsembleGovernanceModule.ENSEMBLE_DRIFT_MODEL_VERSION,
+          grossExpectedR: target ? 0.22 : -0.2,
+          estimatedExecutionCostR: calibrated ? 0.1 : fixed ? 0.25 : 0.03,
+          executionCostSource: 'PAPER_SIMULATION_SPREAD',
+          executionSpreadEvidenceValid: false,
+          executionSpreadEvidence: null,
+          paperExecutionCostUsable: true,
+          netExpectedR: calibrated ? 0.12 : fixed ? -0.03 : -0.23,
+          driftDiagnostics: target ? [] : ['confidence:HARD_LOW'],
+          paperNetExpectedRPassed: calibrated,
+          netExpectedRPassed: calibrated,
+          driftState: target ? 'NORMAL' : 'OUT_OF_DISTRIBUTION',
+          driftQuality: target ? 0.9 : 0.2,
+          paperDriftPassed: target,
+          driftPassed: target,
+          sleeveState: 'COLLECTING',
+          sleeveEvidence: null,
+          eventRisk: 'CLEAR',
+          paperExecutionEligible: false,
+          paperExecutionBlockers: target
+            ? calibrated
+              ? ['ENSEMBLE_NOT_PAPER_ADMITTED', 'ENSEMBLE_NOT_PROMOTABLE_ADMISSION']
+              : [
+                  'ENSEMBLE_NOT_PAPER_ADMITTED',
+                  'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+                  'PAPER_NET_EXPECTED_R',
+                ]
+            : ['PAPER_NET_EXPECTED_R'],
+          paperPromotionEligible: false,
+          blockers: ['ENSEMBLE_NOT_ADMITTED', 'SLEEVE_COLLECTING'],
+        };
+      });
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      {
+        getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
+        getOpenPositionsForConnection: jest.fn().mockResolvedValue({ positions: [] }),
+      } as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+      { query: shadowQuery } as any,
+      {
+        assess: jest.fn().mockResolvedValue({
+          state: 'CLEAR',
+          provider: 'TEST',
+          configured: true,
+          checkedAt: new Date().toISOString(),
+          instrument: 'EURUSD',
+          relevantCountries: [],
+          blockWindowMinutesBefore: 30,
+          blockWindowMinutesAfter: 30,
+          blockingEvents: [],
+          reason: null,
+          attribution: null,
+        }),
+      } as any,
+    );
+    jest.spyOn(collector as any, 'loadEnsembleSleeveEvidence').mockResolvedValue(null);
+    jest.spyOn(collector as any, 'loadExecutionSpreadEvidence').mockResolvedValue(null);
+    jest
+      .spyOn(collector as any, 'loadPaperSpreadCalibrationHistory')
+      .mockResolvedValue({ sampleCount: 320, p95SpreadPrice: 0.00004 });
+    jest
+      .spyOn(collector as any, 'loadPaperResearchPairSideEvidence')
+      .mockResolvedValue({ wins: 0, losses: 0 });
+    jest.spyOn(collector as any, 'loadPaperResearchEpisodeState').mockResolvedValue({
+      previousEpisodeKey: null,
+      previousTradeStatus: null,
+      previousClosedAt: null,
+    });
+    jest.spyOn(collector as any, 'loadPaperCostAwareEntryEvidence').mockResolvedValue({
+      grossPositiveSamples: 100,
+      costFlippedSamples: 90,
+      netPositiveSamples: 10,
+    });
+    try {
+      const directionConfirmedPayload = allTrendPayload();
+      const eurusdRows = directionConfirmedPayload['EUR/USD'].values;
+      const previousClose = Number(eurusdRows[eurusdRows.length - 2]!.close);
+      const directionConfirmedClose = previousClose + 0.00008;
+      eurusdRows[eurusdRows.length - 1] = {
+        ...eurusdRows[eurusdRows.length - 1],
+        open: previousClose.toFixed(5),
+        high: (directionConfirmedClose + 0.00008).toFixed(5),
+        low: (previousClose - 0.00008).toFixed(5),
+        close: directionConfirmedClose.toFixed(5),
+      };
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValue({ ok: true, status: 200, json: async () => directionConfirmedPayload });
+      await collector.collectOnce(fetchMock as unknown as typeof fetch);
+
+      const targetCalls = governanceSpy.mock.calls
+        .map(([input]) => input)
+        .filter((input) => input.instrument === 'EURUSD' && input.direction === 'BUY');
+      expect(targetCalls.some((input) => input.paperSimulationSpreadPrice === 0.0001)).toBe(true);
+      expect(targetCalls.some((input) => input.paperSimulationSpreadPrice === 0.00004)).toBe(true);
+      expect(live.getPaperFallbackSpread('EURUSD', 'conn-1')).toBe(0.00004);
+      const quote = live.getQuote('EURUSD', 20 * 60_000, 'conn-1');
+      expect(Number(quote.ask) - Number(quote.bid)).toBeCloseTo(0.00004, 5);
+      const eurusdInsert = shadowQuery.mock.calls.find(
+        ([sql, params]) =>
+          String(sql).includes('INSERT INTO trading.ensemble_shadow_decisions') &&
+          Array.isArray(params) &&
+          params[6] === 'EURUSD' &&
+          params[7] === 'BUY',
+      );
+      expect(eurusdInsert).toBeDefined();
+      const components = JSON.parse(String(eurusdInsert?.[1]?.[23]));
+      expect(components.paperSpreadFallbackAuthority).toMatchObject({
+        artifact: 'paper-spread-fallback-authority-v1',
+        active: true,
+        executionAuthority: 'PAPER_ONLY',
+        modifiesExecution: true,
+        fallbackSpreadPrice: 0.00004,
+        freshProviderOverrides: true,
+        qualificationEvidence: false,
+      });
+      expect(receiveSignal).toHaveBeenCalledTimes(1);
+      expect(receiveSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          suggestedVolume: 0.01,
+          metadata: expect.objectContaining({
+            paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
+            paper_calibrated_cost_rescue: true,
+            paper_calibrated_cost_rescue_artifact: 'paper-calibrated-cost-rescue-v1',
+            paper_calibrated_cost_rescue_execution_authority: 'PAPER_ONLY_RESEARCH',
+            paper_calibrated_cost_rescue_qualification_evidence: false,
+            paper_calibrated_cost_rescue_fixed_net_expected_r: -0.03,
+            paper_calibrated_cost_rescue_calibrated_net_expected_r: 0.12,
+            paper_cost_aware_entry_action: 'ENTER_NOW',
+            paper_cost_aware_entry_reason: 'CALIBRATED_RESCUE_CURRENT_EDGE',
+            production_eligible: false,
+            position_sizing_tier: 'RESEARCH',
+          }),
+        }),
+      );
+    } finally {
+      calibrationSpy.mockRestore();
+      planBSpy.mockRestore();
       governanceSpy.mockRestore();
     }
   });

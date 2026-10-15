@@ -2116,7 +2116,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     const symbol = this.requireInstrument(instrument);
     const spec = this.liveMarketData!.spec(symbol);
     const candles = this.liveMarketData!.getOHLCV(symbol, 'M5', 500, this._connectionId);
-    const halfSpread = spec.spread / 2;
+    const halfSpread = this.liveMarketData!.getPaperFallbackSpread(symbol, this._connectionId) / 2;
 
     for (const position of Array.from(this._positions.values())) {
       if (position.instrument !== symbol) continue;
