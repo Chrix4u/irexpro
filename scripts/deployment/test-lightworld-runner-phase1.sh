@@ -15,6 +15,24 @@ fail() {
 [[ -f "$CONTROL" ]] || fail 'Missing iRexPro VPS ops control workflow.'
 [[ -f "$DIAGNOSTIC" ]] || fail 'Missing iRexPro VPS runner diagnostic workflow.'
 
+# GitHub rejects a workflow before any job can start when the YAML document is
+# malformed. Parse the control workflow in CI so embedded shell/heredoc edits
+# cannot silently turn every repository push into a zero-job workflow failure.
+python3 - "$CONTROL" <<'PYAML'
+import sys
+import yaml
+
+path = sys.argv[1]
+try:
+    document = yaml.safe_load(open(path, encoding='utf-8'))
+except yaml.YAMLError as exc:
+    print(f'TEST FAILURE: VPS Ops Control workflow is not valid YAML: {exc}', file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(document, dict):
+    print('TEST FAILURE: VPS Ops Control workflow must parse as a YAML mapping.', file=sys.stderr)
+    raise SystemExit(1)
+PYAML
+
 # Control channel: owner-only, issue-pinned, read-only, repo-scoped runner.
 grep -Fq 'name: VPS Ops Control' "$CONTROL" || fail 'Control workflow name is missing.'
 grep -Fq 'issue_comment:' "$CONTROL" || fail 'Control workflow must use issue comments.'
