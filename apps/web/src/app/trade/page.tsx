@@ -36,6 +36,7 @@ import {
 } from "@/lib/vps-scanner-status";
 import {
   loadTraderExecutionSnapshot,
+  summarizeRecentExecutionActivity,
   type TraderExecutionSnapshot,
 } from "@/lib/trader-execution";
 import {
@@ -2186,6 +2187,9 @@ export default function AiTradingPage() {
 
   const recentClosedTrades = execution?.closedExecutions.slice(0, 10) ?? [];
   const latestClosedTrade = recentClosedTrades[0] ?? null;
+  const recentExecutionActivity = summarizeRecentExecutionActivity(
+    execution?.recentExecutions ?? [],
+  );
   const positionCurrencies = Array.from(
     new Set(
       livePositions
@@ -4322,6 +4326,36 @@ export default function AiTradingPage() {
               {livePositions.length === 0 ? (
                 <Card className="ai-empty-card">
                   <strong>No positions open right now</strong>
+                  {recentExecutionActivity.executionCount > 0 ? (
+                    <p className="muted">
+                      <strong>AI traded in the last 24 hours:</strong>{" "}
+                      {recentExecutionActivity.executionCount}{" "}
+                      {recentExecutionActivity.executionCount === 1
+                        ? "execution"
+                        : "executions"}
+                      {" · "}
+                      {recentExecutionActivity.wins}{" "}
+                      {recentExecutionActivity.wins === 1 ? "win" : "wins"}
+                      {" · "}
+                      {recentExecutionActivity.losses}{" "}
+                      {recentExecutionActivity.losses === 1 ? "loss" : "losses"}
+                      {recentExecutionActivity.netRealisedPnl !== null
+                        ? ` · ${
+                            recentExecutionActivity.netRealisedPnl.startsWith("-")
+                              ? ""
+                              : "+"
+                          }${money(
+                            recentExecutionActivity.netRealisedPnl,
+                            recentExecutionActivity.accountCurrency,
+                          )}`
+                        : ""}
+                      {recentExecutionActivity.latestOpenedAt
+                        ? ` · Last opened ${formatTimestamp(
+                            recentExecutionActivity.latestOpenedAt,
+                          )}`
+                        : ""}
+                    </p>
+                  ) : null}
                   <p className="muted">
                     Current unrealized P&amp;L:{" "}
                     {money("0", allocation?.accountCurrency)}.

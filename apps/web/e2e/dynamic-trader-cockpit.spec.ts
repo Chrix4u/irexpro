@@ -130,6 +130,7 @@ async function gotoAiTrader(
     sessionDataEnvelope?: boolean;
     sessionGenerationString?: boolean;
     failAllocationRead?: boolean;
+    recentClosedTradeAt?: string;
   } = {},
 ) {
   setupErrorCollectors(page);
@@ -207,12 +208,34 @@ async function gotoAiTrader(
     if (apiPath === "execution/trades/recent") {
       return options.failExecutionReads
         ? fulfill(500, { statusCode: 500, message: "Internal Server Error" })
-        : fulfill(200, [rejectedExecution, executionPosition, closedExecution]);
+        : fulfill(200, [
+            rejectedExecution,
+            executionPosition,
+            options.recentClosedTradeAt
+              ? {
+                  ...closedExecution,
+                  openedAt: options.recentClosedTradeAt,
+                  closedAt: options.recentClosedTradeAt,
+                  createdAt: options.recentClosedTradeAt,
+                  updatedAt: options.recentClosedTradeAt,
+                }
+              : closedExecution,
+          ]);
     }
     if (apiPath === "execution/trades/closed") {
       return options.failExecutionReads
         ? fulfill(500, { statusCode: 500, message: "Internal Server Error" })
-        : fulfill(200, [closedExecution]);
+        : fulfill(200, [
+            options.recentClosedTradeAt
+              ? {
+                  ...closedExecution,
+                  openedAt: options.recentClosedTradeAt,
+                  closedAt: options.recentClosedTradeAt,
+                  createdAt: options.recentClosedTradeAt,
+                  updatedAt: options.recentClosedTradeAt,
+                }
+              : closedExecution,
+          ]);
     }
     if (apiPath === "live-account/positions") {
       return options.failPositionRead
@@ -708,6 +731,21 @@ test.describe("AI Trader novice workflow", () => {
     await expect(page.getByText(/No execution activity yet/i)).toBeVisible();
 
     assertNoExternalRequests(page);
+  });
+
+  test("shows recent 24-hour execution evidence when no position is currently open", async ({
+    page,
+  }) => {
+    const recentClosedTradeAt = new Date(Date.now() - 60 * 60_000).toISOString();
+    await gotoAiTrader(page, { noOpenPositions: true, recentClosedTradeAt });
+
+    const emptyPositionCard = page
+      .locator(".ai-empty-card")
+      .filter({ hasText: "No positions open right now" });
+
+    await expect(emptyPositionCard).toBeVisible();
+    await expect(emptyPositionCard.getByText(/AI traded in the last 24 hours/i)).toBeVisible();
+    await expect(emptyPositionCard.getByText(/1 execution.*1 win.*0 losses.*16\.70 USD/i)).toBeVisible();
   });
 
   test("surfaces the latest completed AI trade when there are no open positions", async ({

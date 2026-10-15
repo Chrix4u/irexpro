@@ -1,4 +1,4 @@
-import { isTradeExecutionView } from './trader-execution';
+import { isTradeExecutionView, summarizeRecentExecutionActivity } from './trader-execution';
 
 const CLOSED_TRADE = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -95,5 +95,27 @@ describe('trader execution refresh resilience', () => {
     expect(snapshot.closedExecutions).toEqual([CLOSED_TRADE]);
     expect(snapshot.recentExecutions).toEqual([CLOSED_TRADE]);
     expect(snapshot.degradedFeeds).toEqual(['CLOSED_EXECUTIONS']);
+  });
+});
+
+
+describe('recent execution visibility summary', () => {
+  it('summarizes the last 24 hours so a flat account is not mistaken for an idle engine', () => {
+    const referenceTime = new Date('2026-10-15T15:16:00.000Z');
+    const trades = [
+      { ...CLOSED_TRADE, id: 'a', realisedPnl: '16.69', openedAt: '2026-10-15T13:50:08.000Z', closedAt: '2026-10-15T14:05:00.000Z', createdAt: '2026-10-15T13:50:08.000Z' },
+      { ...CLOSED_TRADE, id: 'b', realisedPnl: '-9.76', openedAt: '2026-10-15T13:07:25.000Z', closedAt: '2026-10-15T13:55:00.000Z', createdAt: '2026-10-15T13:07:25.000Z' },
+      { ...CLOSED_TRADE, id: 'old', realisedPnl: '99.00', openedAt: '2026-10-14T14:00:00.000Z', closedAt: '2026-10-14T14:05:00.000Z', createdAt: '2026-10-14T14:00:00.000Z' },
+    ];
+
+    expect(summarizeRecentExecutionActivity(trades as any, referenceTime)).toEqual({
+      executionCount: 2,
+      wins: 1,
+      losses: 1,
+      flats: 0,
+      netRealisedPnl: '6.93',
+      accountCurrency: 'USD',
+      latestOpenedAt: '2026-10-15T13:50:08.000Z',
+    });
   });
 });

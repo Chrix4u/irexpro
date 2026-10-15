@@ -22,6 +22,87 @@ export interface TraderExecutionSnapshot {
 
 const executionApi = createExecutionApi(api);
 
+export interface RecentExecutionActivitySummary {
+  executionCount: number;
+  wins: number;
+  losses: number;
+  flats: number;
+  netRealisedPnl: string | null;
+  accountCurrency: string | null;
+  latestOpenedAt: string | null;
+}
+
+function sumExactDecimalStrings(values: string[]): string | null {
+  if (values.length === 0) return '0';
+  const parsed = values.map((value) => {
+    const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
+    if (!match) return null;
+    return { negative: match[1] === '-', whole: match[2], fraction: match[3] ?? '' };
+  });
+  if (parsed.some((value) => value === null)) return null;
+  const decimals = parsed as Array<{ negative: boolean; whole: string; fraction: string }>;
+  const scale = Math.max(...decimals.map((value) => value.fraction.length), 0);
+  const factor = 10n ** BigInt(scale);
+  const total = decimals.reduce((acc, value) => {
+    const fraction = value.fraction.padEnd(scale, '0') || '0';
+    const scaled = BigInt(value.whole) * factor + (scale ? BigInt(fraction) : 0n);
+    return acc + (value.negative ? -scaled : scaled);
+  }, 0n);
+  const negative = total < 0n;
+  const absolute = negative ? -total : total;
+  const whole = absolute / factor;
+  const fraction = scale
+    ? (absolute % factor).toString().padStart(scale, '0').replace(/0+$/, '')
+    : '';
+  return `${negative ? '-' : ''}${whole.toString()}${fraction ? `.${fraction}` : ''}`;
+}
+
+/** Summarize proven executions opened within the trailing 24 hours. */
+export function summarizeRecentExecutionActivity(
+  trades: TradeExecutionView[],
+  referenceTime: Date = new Date(),
+): RecentExecutionActivitySummary {
+  const referenceMs = referenceTime.getTime();
+  const cutoffMs = referenceMs - 24 * 60 * 60_000;
+  const executions = trades.filter((trade) => {
+    if (!trade.openedAt) return false;
+    const openedMs = Date.parse(trade.openedAt);
+    return Number.isFinite(openedMs) && openedMs >= cutoffMs && openedMs <= referenceMs;
+  });
+  const closedWithPnl = executions.filter(
+    (trade) => trade.status === 'CLOSED' && trade.realisedPnl !== null,
+  );
+  let wins = 0;
+  let losses = 0;
+  let flats = 0;
+  for (const trade of closedWithPnl) {
+    const value = Number(trade.realisedPnl);
+    if (!Number.isFinite(value)) continue;
+    if (value > 0) wins += 1;
+    else if (value < 0) losses += 1;
+    else flats += 1;
+  }
+  const currencies = [...new Set(closedWithPnl.map((trade) => trade.accountCurrency).filter(Boolean))];
+  const accountCurrency = currencies.length === 1 ? currencies[0]! : null;
+  const pnlValues = closedWithPnl.map((trade) => trade.realisedPnl!).filter(Boolean);
+  const netRealisedPnl =
+    closedWithPnl.length === 0 || (accountCurrency && pnlValues.length === closedWithPnl.length)
+      ? sumExactDecimalStrings(pnlValues)
+      : null;
+  const latestOpenedAt = executions
+    .map((trade) => trade.openedAt!)
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
+  return {
+    executionCount: executions.length,
+    wins,
+    losses,
+    flats,
+    netRealisedPnl,
+    accountCurrency,
+    latestOpenedAt,
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
