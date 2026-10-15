@@ -25,6 +25,7 @@ export interface PaperCostAwareEntryInput {
   netExpectedR: number;
   estimatedExecutionCostR: number;
   evidence: PaperCostAwareCohortEvidence;
+  calibratedCostRescue?: boolean;
 }
 
 export interface PaperCostAwareEntryDecision {
@@ -38,6 +39,7 @@ export interface PaperCostAwareEntryDecision {
     | 'PAIR_SIDE_COST_DRAG_SEVERE'
     | 'CURRENT_COST_BURDEN_HIGH'
     | 'STRONG_CURRENT_EDGE_OVERRIDE'
+    | 'CALIBRATED_RESCUE_CURRENT_EDGE'
     | 'COST_EFFICIENT_ENTRY';
   modifiesExecution: boolean;
   qualificationEvidence: false;
@@ -91,16 +93,20 @@ export function evaluatePaperCostAwareEntry(
 
   const cohortMature = input.evidence.grossPositiveSamples >= PAPER_COST_AWARE_MIN_COHORT_SAMPLES;
 
-  if (cohortMature && costFlipRate !== null && costFlipRate >= PAPER_COST_AWARE_SHADOW_FLIP_RATE) {
-    return decision('SHADOW_ONLY', 'PAIR_SIDE_COST_DRAG_SEVERE');
-  }
-
   if (
     currentCostRatio !== null &&
     currentCostRatio >= PAPER_COST_AWARE_HIGH_CURRENT_COST_RATIO &&
     input.netExpectedR <= PAPER_COST_AWARE_MARGINAL_NET_EXPECTED_R
   ) {
     return decision('DEFER', 'CURRENT_COST_BURDEN_HIGH');
+  }
+
+  if (input.calibratedCostRescue) {
+    return decision('ENTER_NOW', 'CALIBRATED_RESCUE_CURRENT_EDGE');
+  }
+
+  if (cohortMature && costFlipRate !== null && costFlipRate >= PAPER_COST_AWARE_SHADOW_FLIP_RATE) {
+    return decision('SHADOW_ONLY', 'PAIR_SIDE_COST_DRAG_SEVERE');
   }
 
   if (!cohortMature) {

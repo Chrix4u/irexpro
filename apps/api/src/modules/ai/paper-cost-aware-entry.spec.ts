@@ -119,4 +119,36 @@ describe('evaluatePaperCostAwareEntry', () => {
       qualificationEvidence: false,
     });
   });
+
+  it('allows a calibrated-cost rescue to use current calibrated economics instead of historical fixed-cost flip drag', () => {
+    const decision = evaluatePaperCostAwareEntry({
+      executionRoute: 'PAPER_RESEARCH_THROUGHPUT',
+      grossExpectedR: 0.22,
+      netExpectedR: 0.12,
+      estimatedExecutionCostR: 0.1,
+      calibratedCostRescue: true,
+      evidence: { grossPositiveSamples: 100, costFlippedSamples: 90, netPositiveSamples: 10 },
+    });
+
+    expect(decision).toMatchObject({
+      action: 'ENTER_NOW',
+      reason: 'CALIBRATED_RESCUE_CURRENT_EDGE',
+      modifiesExecution: true,
+      qualificationEvidence: false,
+    });
+  });
+
+  it('still defers a calibrated rescue when its current calibrated cost burden is high and edge is marginal', () => {
+    const decision = evaluatePaperCostAwareEntry({
+      executionRoute: 'PAPER_RESEARCH_THROUGHPUT',
+      grossExpectedR: 0.22,
+      netExpectedR: 0.1,
+      estimatedExecutionCostR: 0.15,
+      calibratedCostRescue: true,
+      evidence: { grossPositiveSamples: 100, costFlippedSamples: 90, netPositiveSamples: 10 },
+    });
+
+    expect(decision.action).toBe('DEFER');
+    expect(decision.reason).toBe('CURRENT_COST_BURDEN_HIGH');
+  });
 });

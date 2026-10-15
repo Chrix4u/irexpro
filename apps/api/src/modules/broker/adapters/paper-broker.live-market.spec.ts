@@ -513,6 +513,21 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     expect(new Set(positions.map((p) => p.externalOrderId)).size).toBe(3);
   });
 
+  it('uses the calibrated PAPER fallback spread for closed-candle protection sides', async () => {
+    const live = new LivePaperMarketDataService();
+    const adapter = await openProtectedBuy(live);
+    live.setPaperFallbackSpread('EURUSD', 0.00002, 'conn-protection');
+    const bars = protectionBars({ high: 1.10104, low: 1.0996, close: 1.1002 });
+    live.updateClosedCandles('EURUSD', bars.advanced, 'conn-protection');
+
+    await adapter.getCurrentPrice('EURUSD');
+
+    const closed = await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]!.closeReason).toBe('TP');
+    expect(closed[0]!.closePrice).toBe('1.10100');
+  });
+
   it('closes at TP when a closed M5 candle touches target between polling points', async () => {
     const live = new LivePaperMarketDataService();
     const adapter = await openProtectedBuy(live);
