@@ -121,6 +121,7 @@ async function gotoAiTrader(
     failExecutionReads?: boolean;
     failPositionRead?: boolean;
     noOpenPositions?: boolean;
+    noLivePositions?: boolean;
     dropFirstRiskRead?: boolean;
     onRiskRead?: () => void;
     brokerPayload?: unknown[];
@@ -203,7 +204,7 @@ async function gotoAiTrader(
     if (apiPath === "execution/positions/open") {
       return options.failExecutionReads
         ? fulfill(500, { statusCode: 500, message: "Internal Server Error" })
-        : fulfill(200, [executionPosition]);
+        : fulfill(200, options.noOpenPositions ? [] : [executionPosition]);
     }
     if (apiPath === "execution/trades/recent") {
       return options.failExecutionReads
@@ -241,8 +242,8 @@ async function gotoAiTrader(
       return options.failPositionRead
         ? fulfill(500, { statusCode: 500, message: "Internal Server Error" })
         : fulfill(200, {
-            positions: options.noOpenPositions ? [] : [livePosition],
-            total: options.noOpenPositions ? 0 : 1,
+            positions: options.noOpenPositions || options.noLivePositions ? [] : [livePosition],
+            total: options.noOpenPositions || options.noLivePositions ? 0 : 1,
           });
     }
     if (apiPath === "execution/capital-allocation") {
@@ -729,6 +730,21 @@ test.describe("AI Trader novice workflow", () => {
     await expect(page.getByText(/Unable to reach the server/i)).toHaveCount(0);
     await expect(page.getByText(/No positions open right now/i)).toBeVisible();
     await expect(page.getByText(/No execution activity yet/i)).toBeVisible();
+
+    assertNoExternalRequests(page);
+  });
+
+  test("keeps a PAPER ledger position visible when live-account enrichment is empty", async ({
+    page,
+  }) => {
+    await gotoAiTrader(page, { noLivePositions: true });
+
+    await expect(page.getByText(/No positions open right now/i)).toHaveCount(0);
+    await expect(page.getByRole("table", { name: "Open positions live performance" })).toBeVisible();
+    const openPositions = page.getByRole("table", { name: "Open positions live performance" });
+    await expect(openPositions.getByText("EURUSD", { exact: true })).toBeVisible();
+    await expect(openPositions.getByText("0.1000", { exact: true })).toBeVisible();
+    await expect(openPositions.getByText("OPEN", { exact: true })).toBeVisible();
 
     assertNoExternalRequests(page);
   });
