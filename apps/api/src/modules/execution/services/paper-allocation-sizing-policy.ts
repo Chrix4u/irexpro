@@ -27,9 +27,10 @@ export interface PaperAllocationSizingPolicyDecision {
 
 /**
  * PAPER-only risk target. Research routes intentionally receive a smaller
- * budget than qualified routes, but are no longer forced to an arbitrary
- * fixed 0.01-lot quantity. The durable risk profile remains the final
- * percentage authority and may only reduce these requested percentages.
+ * allocation-risk budget and retain any explicit server-provided lot upper
+ * bound. Qualified PAPER routes may remain allocation-aware. The durable risk
+ * profile remains the final percentage authority and may only reduce these
+ * requested percentages.
  */
 export function paperAllocationRiskTargetPercent(tier: PaperAllocationConfidenceTier): number {
   switch (tier) {
@@ -55,9 +56,10 @@ export function paperAllocationRiskTargetPercent(tier: PaperAllocationConfidence
  *  - requires a positive finite explicit AI allocation;
  *  - requires a positive finite broker equity;
  *  - risk capital never exceeds current broker equity;
- *  - fixed AI/profile lot ceilings may be ignored only in PAPER, leaving
- *    stop-distance risk, broker min/max/step, margin, allocation and the
- *    durable maxTradeRiskPercent as the actual authorities.
+ *  - qualified PAPER may ignore fixed AI/profile lot ceilings;
+ *  - RESEARCH PAPER keeps the explicit AI lot upper bound as a hard ceiling;
+ *  - stop-distance risk, broker min/max/step, margin, allocation and the
+ *    durable maxTradeRiskPercent remain authoritative.
  */
 export function paperAllocationSizingPolicy(
   input: PaperAllocationSizingPolicyInput,
@@ -101,7 +103,7 @@ export function paperAllocationSizingPolicy(
     enabled: true,
     riskCapitalBase: Math.min(input.allocatedCapital as number, input.brokerEquity),
     requestedRiskPercent,
-    removeAiLotCeiling: true,
+    removeAiLotCeiling: input.confidenceTier !== 'RESEARCH',
     removeProfileLotCeiling: true,
     reason: 'ALLOCATION_AWARE_PAPER',
   };

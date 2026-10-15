@@ -23,6 +23,25 @@ describe('paper allocation sizing policy', () => {
     );
   });
 
+  it('preserves the explicit AI lot ceiling for PAPER research tiers', () => {
+    expect(
+      paperAllocationSizingPolicy({
+        executionMode: 'PAPER_ONLY',
+        allocatedCapital: 1_000,
+        brokerEquity: 10_000,
+        confidenceTier: 'RESEARCH',
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        riskCapitalBase: 1_000,
+        requestedRiskPercent: 1,
+        removeAiLotCeiling: false,
+        removeProfileLotCeiling: true,
+      }),
+    );
+  });
+
   it('requests 2.5% only for high-conviction PAPER tiers', () => {
     expect(paperAllocationRiskTargetPercent('BASE')).toBe(2);
     expect(paperAllocationRiskTargetPercent('STRONG')).toBe(2);
