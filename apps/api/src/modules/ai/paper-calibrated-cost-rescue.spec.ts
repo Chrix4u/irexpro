@@ -64,7 +64,7 @@ describe('PAPER calibrated cost research rescue', () => {
       calibratedNetExpectedR: 0.12,
       executionAuthority: 'PAPER_ONLY_RESEARCH',
       qualificationEvidence: false,
-      lotCap: 0.01,
+      lotCap: 1,
     });
   });
 

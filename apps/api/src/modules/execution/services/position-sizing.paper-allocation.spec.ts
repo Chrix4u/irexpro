@@ -61,7 +61,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     entryType: 'MARKET' as const,
     requestedEntryPrice: null,
     stopLoss: '1.08400',
-    requestedLotUpperBound: '0.01',
+    requestedLotUpperBound: '1.0',
   };
 
   it('sizes from the explicit PAPER allocation instead of fixed AI/profile lot ceilings', async () => {
@@ -83,7 +83,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.inputs.riskPercent).toBe('2');
     expect(sized.inputs.riskCapitalBase).toBe('1000');
     expect(sized.inputs.allocationAwarePaper).toBe(true);
-    expect(sized.inputs.requestedLotUpperBound).toBe('0.01');
+    expect(sized.inputs.requestedLotUpperBound).toBe('1');
     expect(sized.inputs.profileMaxPositionSizeLot).toBe('0.1');
   });
 
@@ -121,7 +121,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.inputs.riskPercent).toBe('2.5');
   });
 
-  it('keeps the explicit research lot upper bound while using the PAPER allocation risk budget', async () => {
+  it('risk-sizes RESEARCH PAPER instead of collapsing it to the old 0.01-lot ceiling', async () => {
     const service = makeService();
 
     const sized = await service.sizePosition({
@@ -133,14 +133,32 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
       },
     });
 
-    // ,000 × 1% permits up to 0.10 lot from stop-distance risk, but a
-    // bounded research route explicitly requested a 0.01-lot upper bound.
-    // Research must never be enlarged past that server-provided ceiling.
-    expect(sized.lots).toBe('0.01');
+    // $1,000 × 1% permits 0.10 lot from stop-distance risk. The 1.0-lot
+    // server safety ceiling must no longer suppress that legitimate risk-sized volume.
+    expect(sized.lots).toBe('0.1');
     expect(sized.inputs.riskAmount).toBe('10');
     expect(sized.inputs.riskPercent).toBe('1');
-    expect(sized.inputs.requestedLotUpperBound).toBe('0.01');
+    expect(sized.inputs.requestedLotUpperBound).toBe('1');
     expect(sized.inputs.allocationAwarePaper).toBe(true);
+  });
+
+  it('can reach 1.0 lot when the allocation and stop-distance risk budget justify it', async () => {
+    const service = makeService();
+
+    const sized = await service.sizePosition({
+      ...params,
+      requestedLotUpperBound: '1.0',
+      paperAllocationSizing: {
+        executionMode: 'PAPER_ONLY',
+        allocatedCapital: '10000.00',
+        confidenceTier: 'RESEARCH',
+      },
+    });
+
+    expect(sized.inputs.riskAmount).toBe('100');
+    expect(sized.inputs.riskPercent).toBe('1');
+    expect(sized.inputs.lotsByRiskBudget).toBe('1');
+    expect(sized.lots).toBe('1');
   });
 
   it('sizes PAPER MARKET risk from the model stop distance when the executable quote moved toward the stop', async () => {
@@ -173,6 +191,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
 
     const sized = await service.sizePosition({
       ...params,
+      requestedLotUpperBound: '0.01',
       paperAllocationSizing: {
         executionMode: 'DEMO',
         allocatedCapital: '1000.00',

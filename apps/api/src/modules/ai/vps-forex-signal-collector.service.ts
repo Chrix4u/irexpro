@@ -1311,7 +1311,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           // Standard PAPER governance never becomes looser because of historical
           // calibration: it uses the worse of fixed and calibrated fallback cost.
           // A lower calibrated cost may be used only by the separately gated
-          // 0.01-lot calibrated-cost research rescue below.
+          // calibrated-cost PAPER research rescue below; final lot remains risk-sized.
           const standardPaperSpreadPrice = paperSession
             ? Math.max(fixedPaperSpreadPrice, calibratedPaperSpreadPrice)
             : undefined;

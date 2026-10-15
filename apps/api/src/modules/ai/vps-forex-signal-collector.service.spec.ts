@@ -1337,7 +1337,7 @@ describe('VpsForexSignalCollectorService', () => {
         expect.objectContaining({
           instrument: 'EURUSD',
           direction: 'BUY',
-          suggestedVolume: 0.01,
+          suggestedVolume: 1,
           modelVersion:
             'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v10-evidence-backed-acceleration',
           metadata: expect.objectContaining({
@@ -1520,7 +1520,7 @@ describe('VpsForexSignalCollectorService', () => {
         expect.objectContaining({
           instrument: 'EURUSD',
           direction: 'BUY',
-          suggestedVolume: 0.01,
+          suggestedVolume: 1,
           modelVersion:
             'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v10-evidence-backed-acceleration',
           metadata: expect.objectContaining({
@@ -1555,7 +1555,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('executes a 0.01-lot calibrated-cost PAPER rescue with governance and fill spread parity', async () => {
+  it('executes a calibrated-cost PAPER rescue with a 1.0-lot risk-sizing ceiling and fill spread parity', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
@@ -1746,7 +1746,7 @@ describe('VpsForexSignalCollectorService', () => {
         expect.objectContaining({
           instrument: 'EURUSD',
           direction: 'BUY',
-          suggestedVolume: 0.01,
+          suggestedVolume: 1,
           metadata: expect.objectContaining({
             paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
             paper_calibrated_cost_rescue: true,
@@ -2121,7 +2121,7 @@ describe('VpsForexSignalCollectorService', () => {
         expect.objectContaining({
           instrument: 'EURUSD',
           direction: 'SELL',
-          suggestedVolume: 0.01,
+          suggestedVolume: 1,
           modelVersion:
             'external-provider/irexpro-multimodel-ensemble-v1/paper-paired-reversal-research-v1',
           metadata: expect.objectContaining({
