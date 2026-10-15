@@ -1298,7 +1298,7 @@ describe('VpsForexSignalCollectorService', () => {
           direction: 'BUY',
           suggestedVolume: 0.01,
           modelVersion:
-            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v9-bounded-mtf-exploration',
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v10-evidence-backed-acceleration',
           metadata: expect.objectContaining({
             paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
             paper_research_throughput: true,
@@ -1321,6 +1321,190 @@ describe('VpsForexSignalCollectorService', () => {
     } finally {
       logSpy.mockRestore();
       planBSpy.mockRestore();
+      governanceSpy.mockRestore();
+    }
+  });
+
+  it('routes evidence-backed profitable pair-side acceleration into PAPER research when only structural quality misses', async () => {
+    const live = new LivePaperMarketDataService();
+    const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
+    const shadowQuery = jest.fn().mockResolvedValue([]);
+    const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
+    const planBSpy = jest
+      .spyOn(PlanBEnsembleModule, 'scorePlanBMultimodelShadow')
+      .mockImplementation((input, positions) => {
+        const base = actualPlanB(input, positions);
+        const target = input.instrument === 'EURUSD' && input.direction === 'BUY';
+        return {
+          ...base,
+          strategyRoute: 'TREND_CONTINUATION',
+          portfolioQuality: 1,
+          paperAdmitted: false,
+          admitted: false,
+          consensusPassed: target ? 5 : 3,
+          consensusRequired: 6,
+          directionQuality: target ? 0.08 : 0.2,
+          tradeQuality: target ? 0.28 : 0.2,
+          exitQuality: target ? 0.31 : 0.2,
+          metaProbability: target ? 0.5 : 0.35,
+          expectedR: target ? 0.25 : -0.2,
+          ensembleScore: target ? 0.62 : 0.3,
+          reasons: target ? ['ENSEMBLE_CONSENSUS'] : ['META_EXPECTED_VALUE'],
+        };
+      });
+    const governanceSpy = jest
+      .spyOn(EnsembleGovernanceModule, 'evaluateEnsembleGovernance')
+      .mockImplementation((input) => {
+        const target = input.instrument === 'EURUSD' && input.ensemble.expectedR > 0;
+        return {
+          version: EnsembleGovernanceModule.ENSEMBLE_GOVERNANCE_VERSION,
+          costModelVersion: EnsembleGovernanceModule.ENSEMBLE_COST_MODEL_VERSION,
+          driftModelVersion: EnsembleGovernanceModule.ENSEMBLE_DRIFT_MODEL_VERSION,
+          grossExpectedR: target ? 0.25 : -0.2,
+          estimatedExecutionCostR: 0.03,
+          executionCostSource: 'BROKER_OBSERVED_P90',
+          executionSpreadEvidenceValid: true,
+          executionSpreadEvidence: {
+            source: 'BROKER_OBSERVED_P90',
+            spreadPrice: 0.00001,
+            sampleCount: 30,
+            percentile: 0.9,
+            windowMinutes: 30,
+            latestSampleAt: new Date().toISOString(),
+          },
+          netExpectedR: target ? 0.14 : -0.23,
+          driftDiagnostics: target
+            ? ['confidence:HARD_LOW', 'emaSeparation:HARD_LOW', 'mtfStrength:HARD_LOW']
+            : ['confidence:HARD_LOW'],
+          paperNetExpectedRPassed: target,
+          netExpectedRPassed: target,
+          driftState: 'OUT_OF_DISTRIBUTION',
+          driftQuality: 0.2,
+          paperDriftPassed: false,
+          driftPassed: false,
+          sleeveState: 'COLLECTING',
+          sleeveEvidence: null,
+          eventRisk: 'CLEAR',
+          paperExecutionEligible: false,
+          paperExecutionBlockers: target
+            ? [
+                'ENSEMBLE_NOT_PAPER_ADMITTED',
+                'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+                'DRIFT_OUT_OF_DISTRIBUTION',
+              ]
+            : ['PAPER_NET_EXPECTED_R'],
+          paperPromotionEligible: false,
+          blockers: ['ENSEMBLE_NOT_ADMITTED', 'SLEEVE_COLLECTING'],
+        };
+      });
+
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      {
+        getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
+        getOpenPositionsForConnection: jest.fn().mockResolvedValue({ positions: [] }),
+      } as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+      { query: shadowQuery } as any,
+      {
+        assess: jest.fn().mockResolvedValue({
+          state: 'CLEAR',
+          provider: 'TEST',
+          configured: true,
+          checkedAt: new Date().toISOString(),
+          instrument: 'EURUSD',
+          relevantCountries: [],
+          blockWindowMinutesBefore: 30,
+          blockWindowMinutesAfter: 30,
+          blockingEvents: [],
+          reason: null,
+          attribution: null,
+        }),
+      } as any,
+    );
+    jest.spyOn(collector as any, 'loadEnsembleSleeveEvidence').mockResolvedValue(null);
+    jest.spyOn(collector as any, 'loadExecutionSpreadEvidence').mockResolvedValue({
+      source: 'BROKER_OBSERVED_P90',
+      spreadPrice: 0.00001,
+      sampleCount: 30,
+      percentile: 0.9,
+      windowMinutes: 30,
+      latestSampleAt: new Date().toISOString(),
+    });
+    jest.spyOn(collector as any, 'loadPaperResearchEpisodeState').mockResolvedValue({
+      previousEpisodeKey: null,
+      previousTradeStatus: null,
+      previousClosedAt: null,
+    });
+    const pairEvidenceSpy = jest
+      .spyOn(collector as any, 'loadPaperResearchPairSideEvidence')
+      .mockResolvedValue({ wins: 3, losses: 1 });
+    const logSpy = jest.spyOn((collector as any).logger, 'log');
+
+    try {
+      const directionConfirmedPayload = allTrendPayload();
+      const eurusdRows = directionConfirmedPayload['EUR/USD'].values;
+      const previousClose = Number(eurusdRows[eurusdRows.length - 2]!.close);
+      const directionConfirmedClose = previousClose + 0.00008;
+      eurusdRows[eurusdRows.length - 1] = {
+        ...eurusdRows[eurusdRows.length - 1],
+        open: previousClose.toFixed(5),
+        high: (directionConfirmedClose + 0.00008).toFixed(5),
+        low: (previousClose - 0.00008).toFixed(5),
+        close: directionConfirmedClose.toFixed(5),
+      };
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => directionConfirmedPayload,
+      });
+      await collector.collectOnce(fetchMock as unknown as typeof fetch);
+      expect(pairEvidenceSpy).toHaveBeenCalledWith('user-1', 'conn-1', 'EURUSD', 'BUY');
+      expect(receiveSignal).toHaveBeenCalledTimes(1);
+      expect(receiveSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          suggestedVolume: 0.01,
+          modelVersion:
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v10-evidence-backed-acceleration',
+          metadata: expect.objectContaining({
+            paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
+            paper_research_throughput: true,
+            paper_research_throughput_qualification_evidence: false,
+            paper_research_throughput_execution_authority: 'PAPER_ONLY_RESEARCH',
+            paper_research_throughput_reason: 'EVIDENCE_BACKED_PAIR_SIDE_ACCELERATION',
+            main_strategy_qualification_evidence: false,
+            production_eligible: false,
+            position_sizing_tier: 'RESEARCH',
+          }),
+        }),
+      );
+      expect(
+        logSpy.mock.calls.some((call) =>
+          String(call[0]).includes(
+            'PAPER research-throughput EURUSD BUY execution=ELIGIBLE executionAuthority=PAPER_ONLY_RESEARCH',
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+      planBSpy.mockRestore();
+      pairEvidenceSpy.mockRestore();
       governanceSpy.mockRestore();
     }
   });
@@ -1671,6 +1855,7 @@ describe('VpsForexSignalCollectorService', () => {
           'paper-research-throughput-v7-edge-tiered-exploration',
           'paper-research-throughput-v8-momentum-confirmed-exploration',
           'paper-research-throughput-v9-bounded-mtf-exploration',
+          'paper-research-throughput-v10-evidence-backed-acceleration',
         ],
         expect.any(String),
       ],

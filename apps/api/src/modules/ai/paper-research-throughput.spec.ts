@@ -31,7 +31,7 @@ describe('evaluatePaperResearchThroughput', () => {
   it('marks a positive-EV research candidate PAPER-only without granting qualification authority', () => {
     expect(evaluatePaperResearchThroughput(base)).toEqual({
       eligible: true,
-      artifact: 'paper-research-throughput-v9-bounded-mtf-exploration',
+      artifact: 'paper-research-throughput-v10-evidence-backed-acceleration',
       route: 'PAPER_RESEARCH_THROUGHPUT',
       reason: 'RESEARCH_EVIDENCE_CANDIDATE',
       qualificationEvidence: false,
@@ -202,6 +202,37 @@ describe('evaluatePaperResearchThroughput', () => {
         alignedMomentumAtr: -0.04,
       }),
     ).toMatchObject({ eligible: false });
+  });
+
+  it('accelerates a quality-limited PAPER candidate only when recent pair-side expectancy is strongly positive', () => {
+    const qualityLimited = {
+      ...base,
+      confidence: 0.64,
+      netExpectedR: 0.14,
+      driftState: 'OUT_OF_DISTRIBUTION',
+      driftDiagnostics: ['confidence:HARD_LOW', 'emaSeparation:HARD_LOW', 'mtfStrength:HARD_LOW'],
+      directionQuality: 0.08,
+      tradeQuality: 0.28,
+      exitQuality: 0.31,
+      alignedMomentumAtr: 0.42,
+      paperExecutionBlockers: [...base.paperExecutionBlockers, 'DRIFT_OUT_OF_DISTRIBUTION'],
+      pairSideReliability: evaluatePaperResearchPairSideReliability({ wins: 3, losses: 1 }),
+    } as Parameters<typeof evaluatePaperResearchThroughput>[0] & {
+      pairSideReliability: ReturnType<typeof evaluatePaperResearchPairSideReliability>;
+    };
+
+    expect(evaluatePaperResearchThroughput(qualityLimited)).toMatchObject({
+      eligible: true,
+      reason: 'EVIDENCE_BACKED_PAIR_SIDE_ACCELERATION',
+      qualificationEvidence: false,
+      executionAuthority: 'PAPER_ONLY_RESEARCH',
+    });
+
+    const negativeEvidence = {
+      ...qualityLimited,
+      pairSideReliability: evaluatePaperResearchPairSideReliability({ wins: 1, losses: 2 }),
+    };
+    expect(evaluatePaperResearchThroughput(negativeEvidence)).toMatchObject({ eligible: false });
   });
 
   it('keeps the strong-edge relaxation bounded at 0.05 direction and 0.30 trade/exit quality', () => {
@@ -377,21 +408,29 @@ describe('PAPER research-throughput provenance and pair-side reliability', () =>
 
   it('derives the emitted model version from the active research artifact', () => {
     expect(paperResearchThroughputModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v9-bounded-mtf-exploration',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v10-evidence-backed-acceleration',
     );
   });
 
-  it('keeps collecting while pair-side evidence is still sparse', () => {
-    expect(evaluatePaperResearchPairSideReliability({ wins: 0, losses: 4 })).toMatchObject({
+  it('keeps collecting while mixed pair-side evidence is still sparse', () => {
+    expect(evaluatePaperResearchPairSideReliability({ wins: 1, losses: 2 })).toMatchObject({
       eligible: true,
-      samples: 4,
+      samples: 3,
       reason: 'INSUFFICIENT_EVIDENCE',
     });
     expect(PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES).toBe(5);
   });
 
+  it('brakes a three-loss pair-side before the normal five-sample reliability threshold', () => {
+    expect(evaluatePaperResearchPairSideReliability({ wins: 0, losses: 3 })).toMatchObject({
+      eligible: false,
+      samples: 3,
+      reason: 'EARLY_LOSS_STREAK',
+    });
+  });
+
   it('quarantines a sufficiently observed pair-side with negative smoothed expectancy', () => {
-    expect(evaluatePaperResearchPairSideReliability({ wins: 0, losses: 5 })).toMatchObject({
+    expect(evaluatePaperResearchPairSideReliability({ wins: 1, losses: 4 })).toMatchObject({
       eligible: false,
       samples: 5,
       reason: 'NEGATIVE_PAIR_SIDE_EXPECTANCY',
