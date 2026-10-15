@@ -4,7 +4,7 @@ import {
 } from './rejected-edge-paper-canary';
 
 export const PAPER_RESEARCH_THROUGHPUT_ARTIFACT =
-  'paper-research-throughput-v9-bounded-mtf-exploration';
+  'paper-research-throughput-v10-evidence-backed-acceleration';
 export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS = Object.freeze([
   'paper-research-throughput-v2-episode-guarded',
   'paper-research-throughput-v3-episode-guarded',
@@ -13,6 +13,7 @@ export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS = Object.fre
   'paper-research-throughput-v6-controlled-exploration',
   'paper-research-throughput-v7-edge-tiered-exploration',
   'paper-research-throughput-v8-momentum-confirmed-exploration',
+  'paper-research-throughput-v9-bounded-mtf-exploration',
   PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
 ]);
 export const PAPER_RESEARCH_THROUGHPUT_LOT_CAP = 0.01;
@@ -42,6 +43,12 @@ export const PAPER_PAIRED_REVERSAL_RESEARCH_MIN_NET_EXPECTED_R = 0.08;
 export const PAPER_RESEARCH_THROUGHPUT_EPISODE_COOLDOWN_MINUTES = 30;
 
 export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES = 5;
+export const PAPER_RESEARCH_THROUGHPUT_EARLY_LOSS_BRAKE_SAMPLES = 3;
+export const PAPER_RESEARCH_EVIDENCE_ACCELERATION_MIN_SAMPLES = 3;
+export const PAPER_RESEARCH_EVIDENCE_ACCELERATION_MIN_EXPECTED_R = 0.25;
+export const PAPER_RESEARCH_EVIDENCE_ACCELERATION_MIN_DIRECTION_QUALITY = 0.05;
+export const PAPER_RESEARCH_EVIDENCE_ACCELERATION_MIN_TRADE_QUALITY = 0.2;
+export const PAPER_RESEARCH_EVIDENCE_ACCELERATION_MIN_EXIT_QUALITY = 0.2;
 const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_WINS = 1;
 const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_LOSSES = 1;
 const PAPER_RESEARCH_THROUGHPUT_TARGET_R_MULTIPLE = 2.5 / 1.5;
@@ -62,6 +69,7 @@ export interface PaperResearchPairSideReliabilityDecision {
     | 'INSUFFICIENT_EVIDENCE'
     | 'POSITIVE_PAIR_SIDE_EXPECTANCY'
     | 'NEGATIVE_PAIR_SIDE_EXPECTANCY'
+    | 'EARLY_LOSS_STREAK'
     | 'INVALID_EVIDENCE';
 }
 
@@ -91,6 +99,22 @@ export function evaluatePaperResearchPairSideReliability(
       PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_LOSSES);
   const smoothedExpectedR =
     smoothedWinRate * PAPER_RESEARCH_THROUGHPUT_TARGET_R_MULTIPLE - (1 - smoothedWinRate);
+
+  if (
+    samples >= PAPER_RESEARCH_THROUGHPUT_EARLY_LOSS_BRAKE_SAMPLES &&
+    wins === 0 &&
+    losses >= PAPER_RESEARCH_THROUGHPUT_EARLY_LOSS_BRAKE_SAMPLES
+  ) {
+    return {
+      eligible: false,
+      samples,
+      wins,
+      losses,
+      smoothedWinRate,
+      smoothedExpectedR,
+      reason: 'EARLY_LOSS_STREAK',
+    };
+  }
 
   if (samples < PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES) {
     return {
@@ -232,6 +256,7 @@ export interface PaperResearchThroughputInput {
   exitQuality: number;
   paperExecutionBlockers: string[];
   routeReliabilityDemoted?: boolean;
+  pairSideReliability?: PaperResearchPairSideReliabilityDecision;
 }
 
 export interface PaperResearchThroughputDecision {
@@ -376,6 +401,48 @@ export function evaluatePaperResearchThroughput(
     )
   ) {
     reason = 'UNSAFE_BLOCKER';
+  }
+
+  const accelerationReliability = input.pairSideReliability;
+  const qualityLimited =
+    reason === 'DIRECTION_QUALITY_TOO_LOW' ||
+    reason === 'TRADE_QUALITY_TOO_LOW' ||
+    reason === 'EXIT_QUALITY_TOO_LOW';
+  const evidenceBackedPairSideAcceleration =
+    qualityLimited &&
+    Boolean(accelerationReliability?.eligible) &&
+    (accelerationReliability?.samples ?? 0) >= PAPER_RESEARCH_EVIDENCE_ACCELERATION_MIN_SAMPLES &&
+    (accelerationReliability?.smoothedExpectedR ?? Number.NEGATIVE_INFINITY) >=
+      PAPER_RESEARCH_EVIDENCE_ACCELERATION_MIN_EXPECTED_R &&
+    input.strategyRoute === 'TREND_CONTINUATION' &&
+    Number.isFinite(input.confidence) &&
+    input.confidence >= PAPER_RESEARCH_EXPLORATION_MIN_CONFIDENCE &&
+    Number.isFinite(input.netExpectedR) &&
+    input.netExpectedR >= PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R &&
+    Number.isFinite(input.directionQuality) &&
+    (input.directionQuality >= PAPER_RESEARCH_EVIDENCE_ACCELERATION_MIN_DIRECTION_QUALITY ||
+      alignedMomentumConfirmsDirection) &&
+    Number.isFinite(input.tradeQuality) &&
+    input.tradeQuality >= PAPER_RESEARCH_EVIDENCE_ACCELERATION_MIN_TRADE_QUALITY &&
+    Number.isFinite(input.exitQuality) &&
+    input.exitQuality >= PAPER_RESEARCH_EVIDENCE_ACCELERATION_MIN_EXIT_QUALITY &&
+    (input.driftState === 'NORMAL' || input.driftState === 'OUT_OF_DISTRIBUTION') &&
+    costUsable &&
+    input.eventRisk === 'CLEAR' &&
+    input.paperExecutionBlockers.length > 0 &&
+    input.paperExecutionBlockers.every((blocker) =>
+      ALLOWED_RESEARCH_EXPLORATION_BLOCKERS.has(blocker),
+    );
+
+  if (evidenceBackedPairSideAcceleration) {
+    return {
+      eligible: true,
+      artifact: PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
+      route: 'PAPER_RESEARCH_THROUGHPUT',
+      reason: 'EVIDENCE_BACKED_PAIR_SIDE_ACCELERATION',
+      qualificationEvidence: false,
+      executionAuthority: 'PAPER_ONLY_RESEARCH',
+    };
   }
 
   return {

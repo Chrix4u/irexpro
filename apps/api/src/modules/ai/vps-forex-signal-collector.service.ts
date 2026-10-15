@@ -49,6 +49,8 @@ import { scoreExtensionExhaustionShadow } from './extension-exhaustion-shadow';
 import { scoreTrendPersistenceShadow } from './trend-persistence-shadow';
 import {
   PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
+  PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R,
+  PAPER_RESEARCH_EXPLORATION_MIN_CONFIDENCE,
   PAPER_PAIRED_REVERSAL_RESEARCH_ARTIFACT,
   PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP,
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS,
@@ -1444,7 +1446,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               evidence: rejectedEdgeCanaryEvidence,
             });
           }
-          const paperResearchThroughput = evaluatePaperResearchThroughput({
+          const paperResearchThroughputInput = {
             normalPaperExecution,
             confidence: best.confidence,
             netExpectedR: ensembleGovernance.netExpectedR,
@@ -1460,14 +1462,30 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             exitQuality: planBEnsemble.exitQuality,
             paperExecutionBlockers: ensembleGovernance.paperExecutionBlockers,
             routeReliabilityDemoted: pairSideReliabilityDemoted,
-          });
+          };
+          let paperResearchThroughput = evaluatePaperResearchThroughput(
+            paperResearchThroughputInput,
+          );
+          const paperResearchQualityLimited =
+            paperResearchThroughput.reason === 'DIRECTION_QUALITY_TOO_LOW' ||
+            paperResearchThroughput.reason === 'TRADE_QUALITY_TOO_LOW' ||
+            paperResearchThroughput.reason === 'EXIT_QUALITY_TOO_LOW';
+          const paperResearchAccelerationEvidenceCandidate =
+            paperResearchQualityLimited &&
+            Number.isFinite(best.confidence) &&
+            best.confidence >= PAPER_RESEARCH_EXPLORATION_MIN_CONFIDENCE &&
+            Number.isFinite(ensembleGovernance.netExpectedR) &&
+            ensembleGovernance.netExpectedR >= PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R &&
+            (ensembleGovernance.paperExecutionCostUsable ??
+              ensembleGovernance.executionSpreadEvidenceValid) &&
+            ensembleGovernance.eventRisk === 'CLEAR';
           const paperResearchEpisodeKey = `${best.instrument}|${best.direction}|${planBEnsemble.regime}|${planBEnsemble.strategyRoute}`;
           let paperResearchPairSideReliability: PaperResearchPairSideReliabilityDecision | null =
             null;
           let paperResearchEpisodeGuard: ReturnType<
             typeof evaluatePaperResearchEpisodeGuard
           > | null = null;
-          if (paperResearchThroughput.eligible) {
+          if (paperResearchThroughput.eligible || paperResearchAccelerationEvidenceCandidate) {
             const reliabilityEvidence = await this.loadPaperResearchPairSideEvidence(
               userId,
               connectionId,
@@ -1476,14 +1494,22 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             );
             paperResearchPairSideReliability =
               evaluatePaperResearchPairSideReliability(reliabilityEvidence);
-            if (!paperResearchPairSideReliability.eligible) {
+
+            if (!paperResearchThroughput.eligible && paperResearchAccelerationEvidenceCandidate) {
+              paperResearchThroughput = evaluatePaperResearchThroughput({
+                ...paperResearchThroughputInput,
+                pairSideReliability: paperResearchPairSideReliability,
+              });
+            }
+
+            if (paperResearchThroughput.eligible && !paperResearchPairSideReliability.eligible) {
               this.logger.warn(
                 `PAPER research-throughput ${best.instrument} ${best.direction} execution=SHADOW_ONLY ` +
                   `reason=${paperResearchPairSideReliability.reason} samples=${paperResearchPairSideReliability.samples} ` +
                   `wins=${paperResearchPairSideReliability.wins} losses=${paperResearchPairSideReliability.losses} ` +
                   `smoothedExpectedR=${paperResearchPairSideReliability.smoothedExpectedR.toFixed(4)}`,
               );
-            } else {
+            } else if (paperResearchThroughput.eligible) {
               const previousEpisode = await this.loadPaperResearchEpisodeState(
                 userId,
                 connectionId,
