@@ -323,34 +323,76 @@ describe('PAPER research-throughput provenance and pair-side reliability', () =>
     );
   });
 
-  it('derives the emitted model version from the active research artifact', () => {
+  it('derives the emitted model version from the payoff-aware research artifact', () => {
+    expect(PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS).toContain(
+      'paper-research-throughput-v8-momentum-confirmed-exploration',
+    );
     expect(paperResearchThroughputModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v8-momentum-confirmed-exploration',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v9-payoff-aware-exploration',
     );
   });
 
-  it('keeps collecting while pair-side evidence is still sparse', () => {
-    expect(evaluatePaperResearchPairSideReliability({ wins: 0, losses: 4 })).toMatchObject({
+  it('keeps sparse mixed evidence collecting when no catastrophic early loss pattern exists', () => {
+    expect(
+      evaluatePaperResearchPairSideReliability({
+        wins: 1,
+        losses: 2,
+        grossProfit: 16,
+        grossLoss: 18,
+      } as any),
+    ).toMatchObject({
       eligible: true,
-      samples: 4,
+      samples: 3,
       reason: 'INSUFFICIENT_EVIDENCE',
     });
     expect(PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES).toBe(5);
   });
 
-  it('quarantines a sufficiently observed pair-side with negative smoothed expectancy', () => {
-    expect(evaluatePaperResearchPairSideReliability({ wins: 0, losses: 5 })).toMatchObject({
+  it('brakes a pair-side after three realised losses without a single winner', () => {
+    expect(
+      evaluatePaperResearchPairSideReliability({
+        wins: 0,
+        losses: 3,
+        grossProfit: 0,
+        grossLoss: 29.07,
+      } as any),
+    ).toMatchObject({
       eligible: false,
-      samples: 5,
-      reason: 'NEGATIVE_PAIR_SIDE_EXPECTANCY',
+      samples: 3,
+      profitFactor: 0,
+      reason: 'EARLY_REALIZED_LOSS_BRAKE',
     });
   });
 
-  it('keeps a sufficiently observed positive pair-side eligible', () => {
-    expect(evaluatePaperResearchPairSideReliability({ wins: 6, losses: 0 })).toMatchObject({
+  it('keeps a low-win-rate pair-side eligible when its realised payoff is profitable', () => {
+    expect(
+      evaluatePaperResearchPairSideReliability({
+        wins: 1,
+        losses: 4,
+        grossProfit: 40,
+        grossLoss: 30,
+      } as any),
+    ).toMatchObject({
       eligible: true,
-      samples: 6,
-      reason: 'POSITIVE_PAIR_SIDE_EXPECTANCY',
+      samples: 5,
+      profitFactor: 40 / 30,
+      reason: 'POSITIVE_REALIZED_PAYOFF',
+    });
+  });
+
+  it('quarantines a high-win-rate pair-side when its realised payoff loses money', () => {
+    expect(
+      evaluatePaperResearchPairSideReliability({
+        wins: 3,
+        losses: 2,
+        grossProfit: 15,
+        grossLoss: 30,
+      } as any),
+    ).toMatchObject({
+      eligible: false,
+      samples: 5,
+      profitFactor: 0.5,
+      reason: 'NEGATIVE_REALIZED_PAYOFF',
     });
   });
 });
