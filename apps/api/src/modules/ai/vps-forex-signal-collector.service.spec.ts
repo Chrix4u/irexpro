@@ -1293,13 +1293,16 @@ describe('VpsForexSignalCollectorService', () => {
           direction: 'BUY',
           suggestedVolume: 0.01,
           modelVersion:
-            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v8-momentum-confirmed-exploration',
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v9-payoff-aware-exploration',
           metadata: expect.objectContaining({
             paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
             paper_research_throughput: true,
             paper_research_throughput_qualification_evidence: false,
             paper_research_throughput_execution_authority: 'PAPER_ONLY_RESEARCH',
             paper_research_throughput_reason: 'RESEARCH_EXPLORATION_CANDIDATE',
+            paper_research_pair_side_reliability_gross_profit: 0,
+            paper_research_pair_side_reliability_gross_loss: 0,
+            paper_research_pair_side_reliability_profit_factor: null,
             main_strategy_qualification_evidence: false,
             production_eligible: false,
             position_sizing_tier: 'RESEARCH',
@@ -1631,7 +1634,9 @@ describe('VpsForexSignalCollectorService', () => {
   });
 
   it('loads pair-side research reliability only from the active episode-guarded research artifact', async () => {
-    const query = jest.fn().mockResolvedValue([{ wins: '1', losses: '5' }]);
+    const query = jest
+      .fn()
+      .mockResolvedValue([{ wins: '1', losses: '5', gross_profit: '40', gross_loss: '30' }]);
     const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
@@ -1649,7 +1654,7 @@ describe('VpsForexSignalCollectorService', () => {
 
     await expect(
       (collector as any).loadPaperResearchPairSideEvidence('user-1', 'conn-1', 'GBPUSD', 'SELL'),
-    ).resolves.toEqual({ wins: 1, losses: 5 });
+    ).resolves.toEqual({ wins: 1, losses: 5, grossProfit: 40, grossLoss: 30 });
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("paper_research_throughput_artifact' = ANY($5::text[])"),
       [
@@ -1665,6 +1670,7 @@ describe('VpsForexSignalCollectorService', () => {
           'paper-research-throughput-v6-controlled-exploration',
           'paper-research-throughput-v7-edge-tiered-exploration',
           'paper-research-throughput-v8-momentum-confirmed-exploration',
+          'paper-research-throughput-v9-payoff-aware-exploration',
         ],
         expect.any(String),
       ],

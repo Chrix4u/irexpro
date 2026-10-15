@@ -4,7 +4,7 @@ import {
 } from './rejected-edge-paper-canary';
 
 export const PAPER_RESEARCH_THROUGHPUT_ARTIFACT =
-  'paper-research-throughput-v8-momentum-confirmed-exploration';
+  'paper-research-throughput-v9-payoff-aware-exploration';
 export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS = Object.freeze([
   'paper-research-throughput-v2-episode-guarded',
   'paper-research-throughput-v3-episode-guarded',
@@ -12,6 +12,7 @@ export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS = Object.fre
   'paper-research-throughput-v5-controlled-execution',
   'paper-research-throughput-v6-controlled-exploration',
   'paper-research-throughput-v7-edge-tiered-exploration',
+  'paper-research-throughput-v8-momentum-confirmed-exploration',
   PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
 ]);
 export const PAPER_RESEARCH_THROUGHPUT_LOT_CAP = 0.01;
@@ -36,6 +37,8 @@ export const PAPER_PAIRED_REVERSAL_RESEARCH_MIN_NET_EXPECTED_R = 0.08;
 export const PAPER_RESEARCH_THROUGHPUT_EPISODE_COOLDOWN_MINUTES = 30;
 
 export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES = 5;
+export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES = 3;
+export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_PROFIT_FACTOR = 1;
 const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_WINS = 1;
 const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_LOSSES = 1;
 const PAPER_RESEARCH_THROUGHPUT_TARGET_R_MULTIPLE = 2.5 / 1.5;
@@ -43,6 +46,8 @@ const PAPER_RESEARCH_THROUGHPUT_TARGET_R_MULTIPLE = 2.5 / 1.5;
 export interface PaperResearchPairSideReliabilityInput {
   wins: number;
   losses: number;
+  grossProfit: number;
+  grossLoss: number;
 }
 
 export interface PaperResearchPairSideReliabilityDecision {
@@ -52,10 +57,14 @@ export interface PaperResearchPairSideReliabilityDecision {
   losses: number;
   smoothedWinRate: number;
   smoothedExpectedR: number;
+  grossProfit: number;
+  grossLoss: number;
+  profitFactor: number | null;
   reason:
     | 'INSUFFICIENT_EVIDENCE'
-    | 'POSITIVE_PAIR_SIDE_EXPECTANCY'
-    | 'NEGATIVE_PAIR_SIDE_EXPECTANCY'
+    | 'EARLY_REALIZED_LOSS_BRAKE'
+    | 'POSITIVE_REALIZED_PAYOFF'
+    | 'NEGATIVE_REALIZED_PAYOFF'
     | 'INVALID_EVIDENCE';
 }
 
@@ -64,7 +73,17 @@ export function evaluatePaperResearchPairSideReliability(
 ): PaperResearchPairSideReliabilityDecision {
   const wins = input.wins;
   const losses = input.losses;
-  const valid = Number.isInteger(wins) && Number.isInteger(losses) && wins >= 0 && losses >= 0;
+  const grossProfit = input.grossProfit;
+  const grossLoss = input.grossLoss;
+  const valid =
+    Number.isInteger(wins) &&
+    Number.isInteger(losses) &&
+    wins >= 0 &&
+    losses >= 0 &&
+    Number.isFinite(grossProfit) &&
+    Number.isFinite(grossLoss) &&
+    grossProfit >= 0 &&
+    grossLoss >= 0;
   if (!valid) {
     return {
       eligible: false,
@@ -73,6 +92,9 @@ export function evaluatePaperResearchPairSideReliability(
       losses: 0,
       smoothedWinRate: 0,
       smoothedExpectedR: -1,
+      grossProfit: 0,
+      grossLoss: 0,
+      profitFactor: null,
       reason: 'INVALID_EVIDENCE',
     };
   }
@@ -85,28 +107,44 @@ export function evaluatePaperResearchPairSideReliability(
       PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_LOSSES);
   const smoothedExpectedR =
     smoothedWinRate * PAPER_RESEARCH_THROUGHPUT_TARGET_R_MULTIPLE - (1 - smoothedWinRate);
-
-  if (samples < PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES) {
-    return {
-      eligible: true,
-      samples,
-      wins,
-      losses,
-      smoothedWinRate,
-      smoothedExpectedR,
-      reason: 'INSUFFICIENT_EVIDENCE',
-    };
-  }
-
-  const eligible = smoothedExpectedR > 0;
-  return {
-    eligible,
+  const profitFactor =
+    grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 || samples === 0 ? null : 0;
+  const base = {
     samples,
     wins,
     losses,
     smoothedWinRate,
     smoothedExpectedR,
-    reason: eligible ? 'POSITIVE_PAIR_SIDE_EXPECTANCY' : 'NEGATIVE_PAIR_SIDE_EXPECTANCY',
+    grossProfit,
+    grossLoss,
+    profitFactor,
+  };
+
+  if (
+    samples >= PAPER_RESEARCH_THROUGHPUT_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES &&
+    wins === 0 &&
+    losses >= PAPER_RESEARCH_THROUGHPUT_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES &&
+    grossProfit === 0 &&
+    grossLoss > 0
+  ) {
+    return { ...base, eligible: false, reason: 'EARLY_REALIZED_LOSS_BRAKE' };
+  }
+
+  if (samples < PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES) {
+    return { ...base, eligible: true, reason: 'INSUFFICIENT_EVIDENCE' };
+  }
+
+  const positiveRealizedPayoff =
+    grossProfit > 0 &&
+    (grossLoss === 0 ||
+      (profitFactor !== null &&
+        Number.isFinite(profitFactor) &&
+        profitFactor >= PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_PROFIT_FACTOR));
+
+  return {
+    ...base,
+    eligible: positiveRealizedPayoff,
+    reason: positiveRealizedPayoff ? 'POSITIVE_REALIZED_PAYOFF' : 'NEGATIVE_REALIZED_PAYOFF',
   };
 }
 

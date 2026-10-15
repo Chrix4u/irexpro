@@ -1839,6 +1839,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               paperResearchPairSideReliability?.smoothedWinRate ?? null,
             paper_research_pair_side_reliability_smoothed_expected_r:
               paperResearchPairSideReliability?.smoothedExpectedR ?? null,
+            paper_research_pair_side_reliability_gross_profit:
+              paperResearchPairSideReliability?.grossProfit ?? null,
+            paper_research_pair_side_reliability_gross_loss:
+              paperResearchPairSideReliability?.grossLoss ?? null,
+            paper_research_pair_side_reliability_profit_factor:
+              paperResearchPairSideReliability?.profitFactor ?? null,
             paper_research_episode_key: paperResearchEpisodeKey,
             paper_research_episode_guard_reason: paperResearchEpisodeGuard?.reason ?? null,
             paper_trend_route_reliability_artifact: paperTrendRouteReliability?.artifact ?? null,
@@ -2709,14 +2715,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     connectionId: string,
     instrument: string,
     direction: 'BUY' | 'SELL',
-  ): Promise<{ wins: number; losses: number }> {
-    if (!this.dataSource) return { wins: 0, losses: 0 };
+  ): Promise<{ wins: number; losses: number; grossProfit: number; grossLoss: number }> {
+    if (!this.dataSource) return { wins: 0, losses: 0, grossProfit: 0, grossLoss: 0 };
 
     const rows = (await this.dataSource.query(
       `
         SELECT
           COUNT(*) FILTER (WHERE realised_pnl > 0)::int AS wins,
-          COUNT(*) FILTER (WHERE realised_pnl < 0)::int AS losses
+          COUNT(*) FILTER (WHERE realised_pnl < 0)::int AS losses,
+          COALESCE(SUM(realised_pnl) FILTER (WHERE realised_pnl > 0), 0) AS gross_profit,
+          COALESCE(ABS(SUM(realised_pnl) FILTER (WHERE realised_pnl < 0)), 0) AS gross_loss
         FROM (
           SELECT t.realised_pnl
           FROM trading.trade_intents ti
@@ -2744,12 +2752,19 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         [...PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS],
         ACTIVE_MODEL_POLICY_VERSION,
       ],
-    )) as Array<{ wins: number | string | null; losses: number | string | null }>;
+    )) as Array<{
+      wins: number | string | null;
+      losses: number | string | null;
+      gross_profit: number | string | null;
+      gross_loss: number | string | null;
+    }>;
 
     const row = rows[0];
     return {
       wins: Math.max(0, Number(row?.wins ?? 0)),
       losses: Math.max(0, Number(row?.losses ?? 0)),
+      grossProfit: Math.max(0, Number(row?.gross_profit ?? 0)),
+      grossLoss: Math.max(0, Number(row?.gross_loss ?? 0)),
     };
   }
 

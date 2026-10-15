@@ -31,7 +31,7 @@ describe('evaluatePaperResearchThroughput', () => {
   it('marks a positive-EV research candidate PAPER-only without granting qualification authority', () => {
     expect(evaluatePaperResearchThroughput(base)).toEqual({
       eligible: true,
-      artifact: 'paper-research-throughput-v8-momentum-confirmed-exploration',
+      artifact: 'paper-research-throughput-v9-payoff-aware-exploration',
       route: 'PAPER_RESEARCH_THROUGHPUT',
       reason: 'RESEARCH_EVIDENCE_CANDIDATE',
       qualificationEvidence: false,
@@ -339,7 +339,7 @@ describe('PAPER research-throughput provenance and pair-side reliability', () =>
         losses: 2,
         grossProfit: 16,
         grossLoss: 18,
-      } as any),
+      }),
     ).toMatchObject({
       eligible: true,
       samples: 3,
@@ -355,7 +355,7 @@ describe('PAPER research-throughput provenance and pair-side reliability', () =>
         losses: 3,
         grossProfit: 0,
         grossLoss: 29.07,
-      } as any),
+      }),
     ).toMatchObject({
       eligible: false,
       samples: 3,
@@ -371,7 +371,7 @@ describe('PAPER research-throughput provenance and pair-side reliability', () =>
         losses: 4,
         grossProfit: 40,
         grossLoss: 30,
-      } as any),
+      }),
     ).toMatchObject({
       eligible: true,
       samples: 5,
@@ -387,7 +387,7 @@ describe('PAPER research-throughput provenance and pair-side reliability', () =>
         losses: 2,
         grossProfit: 15,
         grossLoss: 30,
-      } as any),
+      }),
     ).toMatchObject({
       eligible: false,
       samples: 5,

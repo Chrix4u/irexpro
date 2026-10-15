@@ -2186,6 +2186,20 @@ export default function AiTradingPage() {
 
   const recentClosedTrades = execution?.closedExecutions.slice(0, 10) ?? [];
   const latestClosedTrade = recentClosedTrades[0] ?? null;
+  const recentExecutedTrades =
+    execution?.recentExecutions.filter(
+      (trade) =>
+        trade.status === "OPEN" ||
+        trade.status === "CLOSED" ||
+        trade.status === "RECONCILIATION_PENDING",
+    ) ?? [];
+  const latestClosedTradePnl =
+    latestClosedTrade?.realisedPnl == null
+      ? "P&L unavailable"
+      : `${latestClosedTrade.realisedPnl.startsWith("-") ? "" : "+"}${money(
+          latestClosedTrade.realisedPnl,
+          latestClosedTrade.accountCurrency,
+        )}`;
   const positionCurrencies = Array.from(
     new Set(
       livePositions
@@ -2524,6 +2538,19 @@ export default function AiTradingPage() {
                   </strong>
                   <span className="muted text-sm">
                     Provider-enriched position state
+                  </span>
+                </Card>
+                <Card className="ai-overview-card ai-overview-card--compact">
+                  <span className="ai-control-card__label">Recent executed trades</span>
+                  <strong className="ai-overview-card__value">
+                    {recentExecutedTrades.length}
+                  </strong>
+                  <span className="muted text-sm">
+                    {latestClosedTrade
+                      ? `Latest completed · ${latestClosedTrade.instrument} ${latestClosedTrade.direction} · ${latestClosedTradePnl} · ${formatTimestamp(latestClosedTrade.closedAt)}`
+                      : recentExecutedTrades.length > 0
+                        ? "Latest execution is still active or reconciling"
+                        : "No executed trades in the recent execution feed"}
                   </span>
                 </Card>
                 <Card className="ai-overview-card ai-overview-card--compact">
