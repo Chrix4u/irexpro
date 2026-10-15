@@ -24,6 +24,8 @@ jobs:
        github.event.comment.body == '/vps no-trade-diagnostics')
     runs-on: ubuntu-24.04
     timeout-minutes: 8
+    environment:
+      name: staging
     env:
       STAGING_SSH_HOST: vps.lightworldtech.com
       STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
