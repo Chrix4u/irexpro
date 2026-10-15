@@ -202,7 +202,7 @@ async function gotoAiTrader(
     if (apiPath === "execution/positions/open") {
       return options.failExecutionReads
         ? fulfill(500, { statusCode: 500, message: "Internal Server Error" })
-        : fulfill(200, [executionPosition]);
+        : fulfill(200, options.noOpenPositions ? [] : [executionPosition]);
     }
     if (apiPath === "execution/trades/recent") {
       return options.failExecutionReads
