@@ -982,7 +982,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('keeps an evidence-qualified rejected-edge canary in evaluation while quarantining PAPER execution', async () => {
+  it('keeps the canary quarantined without letting it suppress eligible controlled PAPER research', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
@@ -1122,8 +1122,18 @@ describe('VpsForexSignalCollectorService', () => {
 
       expect(getRejectedEdgeCanaryEvidence).toHaveBeenCalledWith('user-1', 'EURUSD', 'BUY');
       // Canary scoring/evidence remains active, but the observed PF 0.15 lane is
-      // quarantined from PAPER execution until explicitly re-enabled.
-      expect(receiveSignal).not.toHaveBeenCalled();
+      // quarantined. Controlled research must still be able to own the candidate.
+      expect(receiveSignal).toHaveBeenCalledTimes(1);
+      expect(receiveSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          metadata: expect.objectContaining({
+            paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
+            paper_research_throughput_qualification_evidence: false,
+          }),
+        }),
+      );
 
       const insertCalls = shadowQuery.mock.calls.filter(([sql]) =>
         String(sql).includes('INSERT INTO trading.ensemble_shadow_decisions'),
@@ -1138,7 +1148,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('routes momentum-confirmed exploration research-throughput to PAPER execution without qualification authority', async () => {
+  it('routes bounded single-MTF-drift research-throughput to PAPER execution without qualification authority', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
@@ -1156,9 +1166,9 @@ describe('VpsForexSignalCollectorService', () => {
           admitted: false,
           consensusPassed: target ? 5 : 3,
           consensusRequired: 6,
-          directionQuality: target ? 0 : 0.2,
-          tradeQuality: target ? 0.44 : 0.2,
-          exitQuality: target ? 0.43 : 0.2,
+          directionQuality: target ? 0.197 : 0.2,
+          tradeQuality: target ? 0.218 : 0.2,
+          exitQuality: target ? 0.202 : 0.2,
           metaProbability: target ? 0.5 : 0.35,
           expectedR: target ? 0.25 : -0.2,
           ensembleScore: target ? 0.62 : 0.3,
@@ -1185,7 +1195,8 @@ describe('VpsForexSignalCollectorService', () => {
             windowMinutes: 30,
             latestSampleAt: new Date().toISOString(),
           },
-          netExpectedR: target ? 0.22 : -0.23,
+          netExpectedR: target ? 0.084 : -0.23,
+          driftDiagnostics: target ? ['mtfStrength:HARD_LOW'] : ['confidence:HARD_LOW'],
           paperNetExpectedRPassed: target,
           netExpectedRPassed: target,
           driftState: 'OUT_OF_DISTRIBUTION',
@@ -1287,13 +1298,13 @@ describe('VpsForexSignalCollectorService', () => {
           direction: 'BUY',
           suggestedVolume: 0.01,
           modelVersion:
-            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v8-momentum-confirmed-exploration',
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v9-bounded-mtf-exploration',
           metadata: expect.objectContaining({
             paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
             paper_research_throughput: true,
             paper_research_throughput_qualification_evidence: false,
             paper_research_throughput_execution_authority: 'PAPER_ONLY_RESEARCH',
-            paper_research_throughput_reason: 'RESEARCH_EXPLORATION_CANDIDATE',
+            paper_research_throughput_reason: 'BOUNDED_MTF_RESEARCH_CANDIDATE',
             main_strategy_qualification_evidence: false,
             production_eligible: false,
             position_sizing_tier: 'RESEARCH',
@@ -1659,6 +1670,7 @@ describe('VpsForexSignalCollectorService', () => {
           'paper-research-throughput-v6-controlled-exploration',
           'paper-research-throughput-v7-edge-tiered-exploration',
           'paper-research-throughput-v8-momentum-confirmed-exploration',
+          'paper-research-throughput-v9-bounded-mtf-exploration',
         ],
         expect.any(String),
       ],

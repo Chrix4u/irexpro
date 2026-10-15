@@ -4,7 +4,7 @@ import {
 } from './rejected-edge-paper-canary';
 
 export const PAPER_RESEARCH_THROUGHPUT_ARTIFACT =
-  'paper-research-throughput-v8-momentum-confirmed-exploration';
+  'paper-research-throughput-v9-bounded-mtf-exploration';
 export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS = Object.freeze([
   'paper-research-throughput-v2-episode-guarded',
   'paper-research-throughput-v3-episode-guarded',
@@ -12,6 +12,7 @@ export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS = Object.fre
   'paper-research-throughput-v5-controlled-execution',
   'paper-research-throughput-v6-controlled-exploration',
   'paper-research-throughput-v7-edge-tiered-exploration',
+  'paper-research-throughput-v8-momentum-confirmed-exploration',
   PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
 ]);
 export const PAPER_RESEARCH_THROUGHPUT_LOT_CAP = 0.01;
@@ -29,6 +30,10 @@ export const PAPER_RESEARCH_EXPLORATION_STRONG_NET_EXPECTED_R = 0.12;
 export const PAPER_RESEARCH_EXPLORATION_STRONG_MIN_DIRECTION_QUALITY = 0.05;
 export const PAPER_RESEARCH_EXPLORATION_STRONG_MIN_TRADE_QUALITY = 0.3;
 export const PAPER_RESEARCH_EXPLORATION_STRONG_MIN_EXIT_QUALITY = 0.3;
+export const PAPER_RESEARCH_BOUNDED_MTF_MIN_CONFIDENCE = 0.64;
+export const PAPER_RESEARCH_BOUNDED_MTF_MIN_DIRECTION_QUALITY = 0.15;
+export const PAPER_RESEARCH_BOUNDED_MTF_MIN_TRADE_QUALITY = 0.2;
+export const PAPER_RESEARCH_BOUNDED_MTF_MIN_EXIT_QUALITY = 0.2;
 
 export const PAPER_PAIRED_REVERSAL_RESEARCH_ARTIFACT = 'paper-paired-reversal-research-v1';
 export const PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP = 0.01;
@@ -219,6 +224,7 @@ export interface PaperResearchThroughputInput {
   eventRisk: string;
   strategyRoute: string;
   driftState: string;
+  driftDiagnostics?: string[];
   directionQuality: number;
   /** Direction-aligned short-horizon momentum in ATR units; positive supports the candidate. */
   alignedMomentumAtr?: number;
@@ -278,6 +284,43 @@ export function evaluatePaperResearchThroughput(
       artifact: PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
       route: 'PAPER_RESEARCH_THROUGHPUT',
       reason: 'RESEARCH_EVIDENCE_CANDIDATE',
+      qualificationEvidence: false,
+      executionAuthority: 'PAPER_ONLY_RESEARCH',
+    };
+  }
+
+  const boundedSingleMtfDriftResearch =
+    input.strategyRoute === 'TREND_CONTINUATION' &&
+    Number.isFinite(input.confidence) &&
+    input.confidence >= PAPER_RESEARCH_BOUNDED_MTF_MIN_CONFIDENCE &&
+    input.driftState === 'OUT_OF_DISTRIBUTION' &&
+    Array.isArray(input.driftDiagnostics) &&
+    input.driftDiagnostics.length === 1 &&
+    input.driftDiagnostics[0] === 'mtfStrength:HARD_LOW' &&
+    Number.isFinite(input.directionQuality) &&
+    input.directionQuality >= PAPER_RESEARCH_BOUNDED_MTF_MIN_DIRECTION_QUALITY &&
+    Number.isFinite(input.tradeQuality) &&
+    input.tradeQuality >= PAPER_RESEARCH_BOUNDED_MTF_MIN_TRADE_QUALITY &&
+    Number.isFinite(input.exitQuality) &&
+    input.exitQuality >= PAPER_RESEARCH_BOUNDED_MTF_MIN_EXIT_QUALITY &&
+    Number.isFinite(input.alignedMomentumAtr) &&
+    input.alignedMomentumAtr! >= REJECTED_EDGE_CANARY_MIN_ALIGNED_MOMENTUM_ATR &&
+    input.alignedMomentumAtr! <= REJECTED_EDGE_CANARY_MAX_ALIGNED_MOMENTUM_ATR &&
+    costUsable &&
+    input.eventRisk === 'CLEAR' &&
+    Number.isFinite(input.netExpectedR) &&
+    input.netExpectedR >= PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R &&
+    input.paperExecutionBlockers.length > 0 &&
+    input.paperExecutionBlockers.every((blocker) =>
+      ALLOWED_RESEARCH_EXPLORATION_BLOCKERS.has(blocker),
+    );
+
+  if (boundedSingleMtfDriftResearch) {
+    return {
+      eligible: true,
+      artifact: PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
+      route: 'PAPER_RESEARCH_THROUGHPUT',
+      reason: 'BOUNDED_MTF_RESEARCH_CANDIDATE',
       qualificationEvidence: false,
       executionAuthority: 'PAPER_ONLY_RESEARCH',
     };

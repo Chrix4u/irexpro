@@ -1445,7 +1445,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             });
           }
           const paperResearchThroughput = evaluatePaperResearchThroughput({
-            normalPaperExecution: normalPaperExecution || Boolean(rejectedEdgeCanary?.eligible),
+            normalPaperExecution,
             confidence: best.confidence,
             netExpectedR: ensembleGovernance.netExpectedR,
             executionSpreadEvidenceValid: ensembleGovernance.executionSpreadEvidenceValid,
@@ -1453,6 +1453,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             eventRisk: ensembleGovernance.eventRisk,
             strategyRoute: planBEnsemble.strategyRoute,
             driftState: ensembleGovernance.driftState,
+            driftDiagnostics: ensembleGovernance.driftDiagnostics,
             directionQuality: planBEnsemble.directionQuality,
             alignedMomentumAtr: best.shortHorizonMomentumAtr,
             tradeQuality: planBEnsemble.tradeQuality,

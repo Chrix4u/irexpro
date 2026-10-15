@@ -31,7 +31,7 @@ describe('evaluatePaperResearchThroughput', () => {
   it('marks a positive-EV research candidate PAPER-only without granting qualification authority', () => {
     expect(evaluatePaperResearchThroughput(base)).toEqual({
       eligible: true,
-      artifact: 'paper-research-throughput-v8-momentum-confirmed-exploration',
+      artifact: 'paper-research-throughput-v9-bounded-mtf-exploration',
       route: 'PAPER_RESEARCH_THROUGHPUT',
       reason: 'RESEARCH_EVIDENCE_CANDIDATE',
       qualificationEvidence: false,
@@ -165,6 +165,43 @@ describe('evaluatePaperResearchThroughput', () => {
         exitQuality: 0.3499,
       }),
     ).toMatchObject({ eligible: false, reason: 'EXIT_QUALITY_TOO_LOW' });
+  });
+
+  it('admits a bounded single-MTF-drift PAPER research sample without weakening the general exploration floor', () => {
+    const liveSingleMtfDriftCandidate = {
+      ...base,
+      confidence: 0.654,
+      netExpectedR: 0.084,
+      driftState: 'OUT_OF_DISTRIBUTION',
+      driftDiagnostics: ['mtfStrength:HARD_LOW'],
+      directionQuality: 0.197,
+      tradeQuality: 0.218,
+      exitQuality: 0.202,
+      alignedMomentumAtr: 0.853,
+      paperExecutionBlockers: [...base.paperExecutionBlockers, 'DRIFT_OUT_OF_DISTRIBUTION'],
+    };
+
+    expect(evaluatePaperResearchThroughput(liveSingleMtfDriftCandidate)).toMatchObject({
+      eligible: true,
+      reason: 'BOUNDED_MTF_RESEARCH_CANDIDATE',
+      qualificationEvidence: false,
+      executionAuthority: 'PAPER_ONLY_RESEARCH',
+    });
+
+    const unsafeMultiFeatureDriftCandidate = {
+      ...liveSingleMtfDriftCandidate,
+      driftDiagnostics: ['mtfStrength:HARD_LOW', 'confidence:HARD_LOW'],
+    };
+    expect(evaluatePaperResearchThroughput(unsafeMultiFeatureDriftCandidate)).toMatchObject({
+      eligible: false,
+    });
+
+    expect(
+      evaluatePaperResearchThroughput({
+        ...liveSingleMtfDriftCandidate,
+        alignedMomentumAtr: -0.04,
+      }),
+    ).toMatchObject({ eligible: false });
   });
 
   it('keeps the strong-edge relaxation bounded at 0.05 direction and 0.30 trade/exit quality', () => {
@@ -333,11 +370,14 @@ describe('PAPER research-throughput provenance and pair-side reliability', () =>
     expect(PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS).toContain(
       'paper-research-throughput-v5-controlled-execution',
     );
+    expect(PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS).toContain(
+      'paper-research-throughput-v8-momentum-confirmed-exploration',
+    );
   });
 
   it('derives the emitted model version from the active research artifact', () => {
     expect(paperResearchThroughputModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v8-momentum-confirmed-exploration',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v9-bounded-mtf-exploration',
     );
   });
 
