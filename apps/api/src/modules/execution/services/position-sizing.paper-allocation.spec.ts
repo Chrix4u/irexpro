@@ -121,7 +121,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.inputs.riskPercent).toBe('2.5');
   });
 
-  it('replaces the research 0.01-lot choke point with a 1% allocation risk budget', async () => {
+  it('keeps the explicit research lot upper bound while using the PAPER allocation risk budget', async () => {
     const service = makeService();
 
     const sized = await service.sizePosition({
@@ -133,10 +133,10 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
       },
     });
 
-    // $1,000 × 1% = $10 risk; at $100 risk per full lot this is 0.10 lot.
-    // The legacy signal still carries requestedLotUpperBound=0.01 for
-    // provenance/fail-closed fallback, but it is not an active PAPER cap.
-    expect(sized.lots).toBe('0.1');
+    // ,000 × 1% permits up to 0.10 lot from stop-distance risk, but a
+    // bounded research route explicitly requested a 0.01-lot upper bound.
+    // Research must never be enlarged past that server-provided ceiling.
+    expect(sized.lots).toBe('0.01');
     expect(sized.inputs.riskAmount).toBe('10');
     expect(sized.inputs.riskPercent).toBe('1');
     expect(sized.inputs.requestedLotUpperBound).toBe('0.01');
