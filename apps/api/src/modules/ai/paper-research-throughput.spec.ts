@@ -39,7 +39,7 @@ describe('evaluatePaperResearchThroughput', () => {
     });
   });
 
-  it('admits a controlled PAPER exploration sample when strict confidence is missed but economics and quality remain usable', () => {
+  it('keeps an out-of-distribution exploration sample shadow-only even when economics and quality remain usable', () => {
     expect(
       evaluatePaperResearchThroughput({
         ...base,
@@ -51,8 +51,8 @@ describe('evaluatePaperResearchThroughput', () => {
         paperExecutionBlockers: [...base.paperExecutionBlockers, 'DRIFT_OUT_OF_DISTRIBUTION'],
       }),
     ).toMatchObject({
-      eligible: true,
-      reason: 'RESEARCH_EXPLORATION_CANDIDATE',
+      eligible: false,
+      reason: 'UNSAFE_BLOCKER',
       qualificationEvidence: false,
       executionAuthority: 'PAPER_ONLY_RESEARCH',
     });
@@ -76,7 +76,7 @@ describe('evaluatePaperResearchThroughput', () => {
     });
   });
 
-  it('admits a stronger positive-edge PAPER exploration sample at the bounded strong-edge structural floors', () => {
+  it('does not let strong modeled edge override out-of-distribution drift', () => {
     expect(
       evaluatePaperResearchThroughput({
         ...base,
@@ -89,14 +89,14 @@ describe('evaluatePaperResearchThroughput', () => {
         paperExecutionBlockers: [...base.paperExecutionBlockers, 'DRIFT_OUT_OF_DISTRIBUTION'],
       }),
     ).toMatchObject({
-      eligible: true,
-      reason: 'RESEARCH_EXPLORATION_CANDIDATE',
+      eligible: false,
+      reason: 'UNSAFE_BLOCKER',
       qualificationEvidence: false,
       executionAuthority: 'PAPER_ONLY_RESEARCH',
     });
   });
 
-  it('accepts direction-confirmed PAPER exploration when fast aligned momentum covers a blind legacy direction score', () => {
+  it('does not let fast aligned momentum override out-of-distribution drift', () => {
     const liveDirectionConfirmedCandidate = {
       ...base,
       confidence: 0.6,
@@ -110,8 +110,8 @@ describe('evaluatePaperResearchThroughput', () => {
     };
 
     expect(evaluatePaperResearchThroughput(liveDirectionConfirmedCandidate)).toMatchObject({
-      eligible: true,
-      reason: 'RESEARCH_EXPLORATION_CANDIDATE',
+      eligible: false,
+      reason: 'UNSAFE_BLOCKER',
       qualificationEvidence: false,
       executionAuthority: 'PAPER_ONLY_RESEARCH',
     });
@@ -183,10 +183,10 @@ describe('evaluatePaperResearchThroughput', () => {
     });
   });
 
-  it('allows stressed or out-of-distribution drift only through non-promotable exploration', () => {
+  it('keeps stressed and out-of-distribution drift shadow-only', () => {
     expect(evaluatePaperResearchThroughput({ ...base, driftState: 'STRESSED' })).toMatchObject({
-      eligible: true,
-      reason: 'RESEARCH_EXPLORATION_CANDIDATE',
+      eligible: false,
+      reason: 'UNSAFE_BLOCKER',
     });
     expect(
       evaluatePaperResearchThroughput({
@@ -194,7 +194,7 @@ describe('evaluatePaperResearchThroughput', () => {
         driftState: 'OUT_OF_DISTRIBUTION',
         paperExecutionBlockers: [...base.paperExecutionBlockers, 'DRIFT_OUT_OF_DISTRIBUTION'],
       }),
-    ).toMatchObject({ eligible: true, reason: 'RESEARCH_EXPLORATION_CANDIDATE' });
+    ).toMatchObject({ eligible: false, reason: 'UNSAFE_BLOCKER' });
   });
 
   it('rejects unusably weak direction, trade, or exit quality even for exploration', () => {
