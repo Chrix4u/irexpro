@@ -28,6 +28,7 @@ import { api } from "@/lib/api";
 import { formatAgeSeconds } from "@/lib/duration";
 import { mapApiError } from "@/lib/error-mapping";
 import { loadLiveAccountPositions } from "@/lib/live-account";
+import { resolveAiOpenPositionRows } from "@/lib/ai-open-positions";
 import { loadMarketIntelligence } from "@/lib/market-intelligence";
 import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
 import {
@@ -2126,6 +2127,24 @@ export default function AiTradingPage() {
     }
   }
 
+  const aiOpenPositions = useMemo(
+    () =>
+      resolveAiOpenPositionRows({
+        executionMode: terminal?.session?.executionMode ?? null,
+        executionOpenPositions: execution?.openPositions ?? null,
+        livePositions,
+        paperBrokerConnectionId:
+          terminal?.sessionBroker?.id ?? terminal?.primaryBroker?.id ?? null,
+        paperBrokerName:
+          terminal?.sessionBroker?.displayName ??
+          terminal?.sessionBroker?.brokerName ??
+          terminal?.primaryBroker?.displayName ??
+          terminal?.primaryBroker?.brokerName ??
+          null,
+      }),
+    [execution?.openPositions, livePositions, terminal],
+  );
+
   async function closePositionNow(tradeId: string) {
     if (closingTradeId || closingAllPositions) return;
     setClosingTradeId(tradeId);
@@ -2152,7 +2171,7 @@ export default function AiTradingPage() {
   }
 
   async function closeAllPositionsNow() {
-    if (livePositions.length === 0 || closingTradeId || closingAllPositions)
+    if (aiOpenPositions.length === 0 || closingTradeId || closingAllPositions)
       return;
     setClosingAllPositions(true);
     setError(null);
@@ -2188,7 +2207,7 @@ export default function AiTradingPage() {
   const latestClosedTrade = recentClosedTrades[0] ?? null;
   const positionCurrencies = Array.from(
     new Set(
-      livePositions
+      aiOpenPositions
         .map((position) => position.accountCurrency ?? "")
         .filter(Boolean),
     ),
@@ -2196,13 +2215,13 @@ export default function AiTradingPage() {
   const positionCurrency =
     positionCurrencies.length === 1 ? positionCurrencies[0] : null;
   const totalUnrealisedPnl =
-    livePositions.length > 0 && positionCurrencies.length === 1
+    aiOpenPositions.length > 0 && positionCurrencies.length === 1
       ? sumDecimalStrings(
-          livePositions.map((position) => position.unrealisedPnl),
+          aiOpenPositions.map((position) => position.unrealisedPnl),
         )
       : null;
   const totalUnrealisedPnlUnavailable =
-    livePositions.length > 0 &&
+    aiOpenPositions.length > 0 &&
     (positionCurrencies.length !== 1 || totalUnrealisedPnl === null);
 
   if (restoring) {
@@ -2520,7 +2539,7 @@ export default function AiTradingPage() {
                 <Card className="ai-overview-card ai-overview-card--compact">
                   <span className="ai-control-card__label">Open positions</span>
                   <strong className="ai-overview-card__value">
-                    {livePositions.length}
+                    {aiOpenPositions.length}
                   </strong>
                   <span className="muted text-sm">
                     Provider-enriched position state
@@ -4270,7 +4289,7 @@ export default function AiTradingPage() {
                             : "is-positive"
                       }
                     >
-                      {livePositions.length === 0
+                      {aiOpenPositions.length === 0
                         ? money("0", allocation?.accountCurrency)
                         : totalUnrealisedPnlUnavailable
                           ? "Awaiting complete broker marks"
@@ -4302,10 +4321,10 @@ export default function AiTradingPage() {
                       Grid
                     </button>
                   </div>
-                  <Badge variant={livePositions.length ? "success" : "info"}>
-                    {livePositions.length} open
+                  <Badge variant={aiOpenPositions.length ? "success" : "info"}>
+                    {aiOpenPositions.length} open
                   </Badge>
-                  {livePositions.length > 0 && (
+                  {aiOpenPositions.length > 0 && (
                     <Button
                       type="button"
                       variant="danger"
@@ -4319,7 +4338,7 @@ export default function AiTradingPage() {
                   )}
                 </div>
               </div>
-              {livePositions.length === 0 ? (
+              {aiOpenPositions.length === 0 ? (
                 <Card className="ai-empty-card">
                   <strong>No positions open right now</strong>
                   <p className="muted">
@@ -4356,13 +4375,13 @@ export default function AiTradingPage() {
                 </Card>
               ) : positionView === "table" ? (
                 <PositionTable
-                  positions={livePositions}
+                  positions={aiOpenPositions}
                   closingTradeId={closingTradeId}
                   onClose={(tradeId) => void closePositionNow(tradeId)}
                 />
               ) : (
                 <div className="ai-position-grid">
-                  {livePositions.map((position) => (
+                  {aiOpenPositions.map((position) => (
                     <PositionCard
                       key={position.id}
                       position={position}
@@ -4615,7 +4634,7 @@ export default function AiTradingPage() {
                 </div>
                 <div>
                   <span>Open positions shown</span>
-                  <strong>{livePositions.length}</strong>
+                  <strong>{aiOpenPositions.length}</strong>
                 </div>
               </div>
 
