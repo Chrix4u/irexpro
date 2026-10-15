@@ -70,6 +70,91 @@ jobs:
                 systemctl --no-pager --plain --type=service --state=running 'actions.runner.*irexpro*' 2>/dev/null || true
               } > "$output_file" 2>&1
               ;;
+            "/vps no-trade-diagnostics")
+              {
+                staging=/home/lightworld/webapps/irexpro-staging
+                printf 'staging_sha='; git -C "$staging" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN\n'
+                printf 'utc_now='; date -u '+%Y-%m-%dT%H:%M:%SZ'
+                printf '%s\n' 'pm2_services:'
+                pm2 jlist 2>/dev/null | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{for(const p of JSON.parse(s||'[]')){if((p.name||'').includes('irexpro')) console.log(p.name+' status='+(p.pm2_env?.status||'unknown')+' restarts='+(p.pm2_env?.restart_time??'unknown'))}})" || true
+
+                ai_log="$RUNNER_TEMP/irexpro-ai-diagnostics.log"
+                api_log="$RUNNER_TEMP/irexpro-api-diagnostics.log"
+                pm2 logs irexpro-ai-staging --lines 6000 --nostream --raw > "$ai_log" 2>&1 || true
+                pm2 logs irexpro-api-staging --lines 6000 --nostream --raw > "$api_log" 2>&1 || true
+
+                python3 - "$ai_log" "$api_log" <<'PY'
+from collections import Counter
+from pathlib import Path
+import re
+import sys
+
+ai = Path(sys.argv[1]).read_text(encoding='utf-8', errors='replace')
+api = Path(sys.argv[2]).read_text(encoding='utf-8', errors='replace')
+combined = ai + '\n' + api
+
+print(f'ai_log_lines={len(ai.splitlines())}')
+print(f'api_log_lines={len(api.splitlines())}')
+
+reason_counts = Counter(re.findall(r'\breason=([A-Z][A-Z0-9_]+)', combined))
+blocker_counts = Counter(re.findall(r'\b(?:blocker|code)=([A-Z][A-Z0-9_]+)', combined))
+print('top_reason_counts:')
+for key, value in reason_counts.most_common(25):
+    print(f'  {key}={value}')
+print('top_blocker_counts:')
+for key, value in blocker_counts.most_common(20):
+    print(f'  {key}={value}')
+
+checks = [
+    'execution=SHADOW_ONLY',
+    'PAPER research-throughput',
+    'PAIRED_REVERSAL_RESEARCH',
+    'REJECTED_EDGE_CANARY',
+    'Counterfactual',
+    'SPREAD_EVIDENCE_INVALID',
+    'NET_EXPECTED_R_TOO_LOW',
+    'UNSAFE_BLOCKER',
+    'DIRECTION_QUALITY_TOO_LOW',
+    'TRADE_QUALITY_TOO_LOW',
+    'EXIT_QUALITY_TOO_LOW',
+    'EVENT_RISK_NOT_CLEAR',
+    'EPISODE_COOLDOWN',
+    'ACTIVE_RESEARCH_SAMPLE',
+    'POST_LOSS',
+    'No new market data revision',
+    'PAPER_PRE_INTENT_RETRY_SAFE',
+    'RISK REJECTED',
+    'order placed',
+    'signal submitted',
+    'execution failed',
+]
+print('keyword_counts:')
+for needle in checks:
+    print(f'  {needle}={combined.count(needle)}')
+
+interesting = []
+needles_lower = [needle.lower() for needle in checks] + [
+    'multi-model ensemble',
+    'paperadmitted=',
+    'netexpectedr=',
+    'scanner',
+    'market data',
+    'allocation',
+    'risk rejected',
+    'submitted',
+    'executed',
+]
+for line in combined.splitlines():
+    lower = line.lower()
+    if any(needle in lower for needle in needles_lower):
+        interesting.append(line)
+
+print('recent_relevant_events:')
+for line in interesting[-100:]:
+    print(line[:900])
+PY
+              } > "$output_file" 2>&1
+              ;;
             *)
               printf 'Rejected: command is not in the read-only allow-list.\n' > "$output_file"
               exit 64
@@ -77,23 +162,33 @@ jobs:
           esac
 
           python3 - "$output_file" <<'PY'
-          from pathlib import Path
-          import re
-          import sys
+from pathlib import Path
+import re
+import sys
 
-          path = Path(sys.argv[1])
-          text = path.read_text(encoding='utf-8', errors='replace')
-          text = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', text)
-          text = re.sub(
-              r'(?i)(token|password|secret|api[_-]?key)=\S+',
-              r'\1=[REDACTED]',
-              text,
-          )
-          text = text.replace('```', "'''")
-          if len(text) > 12000:
-              text = text[:12000] + '\n[output truncated]\n'
-          path.write_text(text, encoding='utf-8')
-          PY
+path = Path(sys.argv[1])
+text = path.read_text(encoding='utf-8', errors='replace')
+text = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', text)
+text = re.sub(
+    r'(?i)(token|password|secret|api[_-]?key)=\S+',
+    r'\1=[REDACTED]',
+    text,
+)
+text = re.sub(
+    r'\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b',
+    '[UUID_REDACTED]',
+    text,
+)
+text = re.sub(
+    r'(?i)\b(user(?:Id)?|account(?:Id)?|connection(?:Id)?|brokerConnectionId)=\S+',
+    lambda m: f'{m.group(1)}=[REDACTED]',
+    text,
+)
+text = text.replace('```', "'''")
+if len(text) > 12000:
+    text = text[:12000] + '\n[output truncated]\n'
+path.write_text(text, encoding='utf-8')
+PY
 
           printf '%s\n' '--- sanitized VPS result ---'
           cat "$output_file"
