@@ -3147,8 +3147,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const p95SpreadPrice = Number(row?.p95_spread_price ?? 0);
     return {
       sampleCount: Number.isFinite(sampleCount) ? sampleCount : 0,
-      p95SpreadPrice:
-        Number.isFinite(p95SpreadPrice) && p95SpreadPrice > 0 ? p95SpreadPrice : 0,
+      p95SpreadPrice: Number.isFinite(p95SpreadPrice) && p95SpreadPrice > 0 ? p95SpreadPrice : 0,
     };
   }
 

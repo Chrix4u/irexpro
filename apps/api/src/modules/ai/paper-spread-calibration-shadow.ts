@@ -1,5 +1,4 @@
-export const PAPER_SPREAD_CALIBRATION_SHADOW_ARTIFACT =
-  'paper-spread-calibration-shadow-v1';
+export const PAPER_SPREAD_CALIBRATION_SHADOW_ARTIFACT = 'paper-spread-calibration-shadow-v1';
 export const PAPER_SPREAD_CALIBRATION_MIN_SAMPLES = 100;
 export const PAPER_SPREAD_CALIBRATION_MIN_FIXED_FRACTION = 0.25;
 
@@ -69,7 +68,8 @@ export function evaluatePaperSpreadCalibrationShadow(
       : null;
 
   const base = {
-    artifact: PAPER_SPREAD_CALIBRATION_SHADOW_ARTIFACT as typeof PAPER_SPREAD_CALIBRATION_SHADOW_ARTIFACT,
+    artifact:
+      PAPER_SPREAD_CALIBRATION_SHADOW_ARTIFACT as typeof PAPER_SPREAD_CALIBRATION_SHADOW_ARTIFACT,
     instrument: input.instrument.trim().toUpperCase(),
     session,
     fixedSpreadPrice,
