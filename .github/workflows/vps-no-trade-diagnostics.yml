@@ -1,0 +1,199 @@
+name: VPS No-Trade Diagnostics
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irexpro-vps-no-trade-diagnostics
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: >-
+      github.event.issue.number == 366 &&
+      github.actor == 'Chrix4u' &&
+      github.event.comment.author_association == 'OWNER' &&
+      github.event.comment.body == '/vps no-trade-diagnostics'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+    steps:
+      - name: Validate pinned staging SSH configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_HOST"
+          test -n "$STAGING_SSH_PORT"
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          [[ "$STAGING_SSH_PORT" =~ ^[0-9]+$ ]]
+
+      - name: Configure pinned SSH identity and host keys
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Collect sanitized no-trade diagnostics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          output_file="$RUNNER_TEMP/no-trade-diagnostics.txt"
+
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            'bash -s' > "$output_file" 2>&1 <<'REMOTE'
+          set -Eeuo pipefail
+          staging='/home/lightworld/webapps/irexpro-staging'
+          ai_log="$(mktemp)"
+          api_log="$(mktemp)"
+          trap 'rm -f "$ai_log" "$api_log"' EXIT
+
+          printf 'staging_sha='; git -C "$staging" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN\n'
+          printf 'utc_now='; date -u '+%Y-%m-%dT%H:%M:%SZ'
+          printf '%s\n' 'pm2_services:'
+          pm2 jlist 2>/dev/null | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{for(const p of JSON.parse(s||'[]')){if((p.name||'').includes('irexpro')) console.log(p.name+' status='+(p.pm2_env?.status||'unknown')+' restarts='+(p.pm2_env?.restart_time??'unknown'))}})" || true
+
+          pm2 logs irexpro-ai-staging --lines 8000 --nostream --raw > "$ai_log" 2>&1 || true
+          pm2 logs irexpro-api-staging --lines 8000 --nostream --raw > "$api_log" 2>&1 || true
+
+          python3 - "$ai_log" "$api_log" <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+          import sys
+
+          ai = Path(sys.argv[1]).read_text(encoding='utf-8', errors='replace')
+          api = Path(sys.argv[2]).read_text(encoding='utf-8', errors='replace')
+          combined = ai + '\n' + api
+          lines = combined.splitlines()
+
+          print(f'ai_log_lines={len(ai.splitlines())}')
+          print(f'api_log_lines={len(api.splitlines())}')
+
+          reason_counts = Counter(re.findall(r'\breason=([A-Z][A-Z0-9_]+)', combined))
+          code_counts = Counter(re.findall(r'\b(?:blocker|code)=([A-Z][A-Z0-9_]+)', combined))
+          blocker_tokens = Counter()
+          for line in lines:
+              lower = line.lower()
+              if 'blocker' in lower or 'paperadmitted=' in lower or 'execution=shadow_only' in lower:
+                  blocker_tokens.update(re.findall(r'\b[A-Z][A-Z0-9_]{4,}\b', line))
+
+          print('top_reason_counts:')
+          for key, value in reason_counts.most_common(30):
+              print(f'  {key}={value}')
+          print('top_blocker_or_gate_tokens:')
+          merged_counts = code_counts + blocker_tokens
+          for key, value in merged_counts.most_common(35):
+              print(f'  {key}={value}')
+
+          checks = [
+              'execution=SHADOW_ONLY',
+              'execution=NORMAL_PAPER',
+              'PAPER research-throughput',
+              'PAPER_RESEARCH_THROUGHPUT',
+              'PAIRED_REVERSAL_RESEARCH',
+              'REJECTED_EDGE_CANARY',
+              'Counterfactual',
+              'AMBIGUOUS_DUAL_EDGE',
+              'SPREAD_EVIDENCE_INVALID',
+              'NET_EXPECTED_R_TOO_LOW',
+              'UNSAFE_BLOCKER',
+              'DIRECTION_QUALITY_TOO_LOW',
+              'TRADE_QUALITY_TOO_LOW',
+              'EXIT_QUALITY_TOO_LOW',
+              'CONFIDENCE_TOO_LOW',
+              'ROUTE_NOT_VALIDATED',
+              'EVENT_RISK_NOT_CLEAR',
+              'NEGATIVE_PAIR_SIDE_EXPECTANCY',
+              'EPISODE_COOLDOWN',
+              'ACTIVE_RESEARCH_SAMPLE',
+              'POST_LOSS',
+              'No new market data revision',
+              'PAPER_PRE_INTENT_RETRY_SAFE',
+              'RISK REJECTED',
+              'order placed',
+              'signal submitted',
+              'submission accepted',
+              'execution failed',
+              'allocation',
+          ]
+          print('keyword_counts:')
+          for needle in checks:
+              print(f'  {needle}={combined.count(needle)}')
+
+          interesting_needles = [needle.lower() for needle in checks] + [
+              'multi-model ensemble',
+              'paperadmitted=',
+              'netexpectedr=',
+              'consensuspassed=',
+              'drift=',
+              'scanner',
+              'market data',
+              'risk rejected',
+              'submitted',
+              'executed',
+          ]
+          interesting = [
+              line for line in lines
+              if any(needle in line.lower() for needle in interesting_needles)
+          ]
+          print('recent_relevant_events:')
+          for line in interesting[-140:]:
+              print(line[:1000])
+          PY
+          REMOTE
+
+          python3 - "$output_file" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding='utf-8', errors='replace')
+          text = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', text)
+          text = re.sub(r'(?i)(token|password|secret|api[_-]?key)=\S+', r'\1=[REDACTED]', text)
+          text = re.sub(
+              r'\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b',
+              '[UUID_REDACTED]',
+              text,
+          )
+          text = re.sub(
+              r'(?i)\b(user(?:Id)?|account(?:Id)?|connection(?:Id)?|brokerConnectionId)=\S+',
+              lambda m: f'{m.group(1)}=[REDACTED]',
+              text,
+          )
+          text = text.replace('```', "'''")
+          if len(text) > 18000:
+              text = text[:18000] + '\n[output truncated]\n'
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          printf '%s\n' '--- sanitized VPS no-trade diagnostics ---'
+          cat "$output_file"
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
