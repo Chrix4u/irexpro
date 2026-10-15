@@ -15,6 +15,7 @@ export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS = Object.fre
   PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
 ]);
 export const PAPER_RESEARCH_THROUGHPUT_LOT_CAP = 0.01;
+export const REJECTED_EDGE_CANARY_EXECUTION_ENABLED = false;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R = 0.08;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_CONFIDENCE = 0.64;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY = 0.25;
@@ -124,11 +125,14 @@ export type PaperExecutionRoute =
 export function selectPaperExecutionRoute(input: {
   normalPaperExecution: boolean;
   rejectedEdgeCanaryEligible: boolean;
+  rejectedEdgeCanaryExecutionEnabled?: boolean;
   paperResearchThroughputEligible: boolean;
   pairedReversalResearchEligible?: boolean;
 }): PaperExecutionRoute {
   if (input.normalPaperExecution) return 'NORMAL_PAPER';
-  if (input.rejectedEdgeCanaryEligible) return 'REJECTED_EDGE_CANARY';
+  const canaryExecutionEnabled =
+    input.rejectedEdgeCanaryExecutionEnabled ?? REJECTED_EDGE_CANARY_EXECUTION_ENABLED;
+  if (canaryExecutionEnabled && input.rejectedEdgeCanaryEligible) return 'REJECTED_EDGE_CANARY';
   if (input.paperResearchThroughputEligible) return 'PAPER_RESEARCH_THROUGHPUT';
   if (input.pairedReversalResearchEligible) return 'PAIRED_REVERSAL_RESEARCH';
   return 'NONE';
