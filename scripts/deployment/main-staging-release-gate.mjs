@@ -57,18 +57,38 @@ async function assertCurrentMain(repository, candidateSha, token, apiUrl) {
   }
 }
 
+export function selectMergedMainPullRequests(pullRequests, candidateSha, requireExactMergeSha = false) {
+  return pullRequests.filter(
+    (pullRequest) =>
+      pullRequest.state === 'closed' &&
+      Boolean(pullRequest.merged_at) &&
+      pullRequest.base?.ref === 'main' &&
+      (!requireExactMergeSha || pullRequest.merge_commit_sha === candidateSha),
+  );
+}
+
 async function assertMergedPullRequestProvenance(repository, candidateSha, token, apiUrl) {
-  const pullRequests = await githubJson(
+  const associatedPullRequests = await githubJson(
     `/repos/${repository}/commits/${candidateSha}/pulls?per_page=100`,
     token,
     apiUrl,
   );
-  const mergedIntoMain = pullRequests.filter(
-    (pullRequest) =>
-      pullRequest.state === 'closed' &&
-      Boolean(pullRequest.merged_at) &&
-      pullRequest.base?.ref === 'main',
-  );
+  let mergedIntoMain = selectMergedMainPullRequests(associatedPullRequests, candidateSha);
+  let provenanceSource = 'commit association';
+
+  if (mergedIntoMain.length === 0) {
+    const recentlyClosedMainPullRequests = await githubJson(
+      `/repos/${repository}/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100`,
+      token,
+      apiUrl,
+    );
+    mergedIntoMain = selectMergedMainPullRequests(
+      recentlyClosedMainPullRequests,
+      candidateSha,
+      true,
+    );
+    provenanceSource = 'exact merge SHA fallback';
+  }
 
   if (mergedIntoMain.length === 0) {
     throw new Error(
@@ -77,7 +97,7 @@ async function assertMergedPullRequestProvenance(repository, candidateSha, token
   }
 
   console.log(
-    `Merged PR provenance: ${mergedIntoMain.map((pullRequest) => `#${pullRequest.number}`).join(', ')}`,
+    `Merged PR provenance (${provenanceSource}): ${mergedIntoMain.map((pullRequest) => `#${pullRequest.number}`).join(', ')}`,
   );
 }
 
@@ -175,6 +195,40 @@ export function runSelfTests() {
     parseChangedFileList(`${largeDiff.join('\0')}\0`).length,
     312,
     'large local release diff must not truncate at the GitHub 300-file compare ceiling',
+  );
+  assertEqual(
+    selectMergedMainPullRequests(
+      [
+        {
+          number: 396,
+          state: 'closed',
+          merged_at: '2026-10-15T23:28:44Z',
+          base: { ref: 'main' },
+          merge_commit_sha: 'a'.repeat(40),
+        },
+      ],
+      'a'.repeat(40),
+      true,
+    ).map((pullRequest) => pullRequest.number),
+    [396],
+    'fallback provenance must accept the exact merged PR SHA',
+  );
+  assertEqual(
+    selectMergedMainPullRequests(
+      [
+        {
+          number: 395,
+          state: 'closed',
+          merged_at: '2026-10-15T22:51:20Z',
+          base: { ref: 'main' },
+          merge_commit_sha: 'b'.repeat(40),
+        },
+      ],
+      'a'.repeat(40),
+      true,
+    ).length,
+    0,
+    'fallback provenance must reject a different merge SHA',
   );
   console.log('Main staging release gate self-tests passed.');
 }
