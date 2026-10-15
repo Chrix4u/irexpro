@@ -286,8 +286,8 @@ describe('evaluatePaperResearchThroughput', () => {
     });
   });
 
-  it('uses a tiny fixed PAPER lot cap and calibrated research-only direction floor', () => {
-    expect(PAPER_RESEARCH_THROUGHPUT_LOT_CAP).toBe(0.01);
+  it('allows realistic risk-sized PAPER research up to a 1.0-lot safety ceiling', () => {
+    expect(PAPER_RESEARCH_THROUGHPUT_LOT_CAP).toBe(1);
     expect(PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY).toBe(0.25);
   });
 
@@ -568,9 +568,9 @@ describe('paired reversal PAPER research', () => {
       reason: 'PAIRED_REVERSAL_RESEARCH_CANDIDATE',
       qualificationEvidence: false,
       executionAuthority: 'PAPER_ONLY_RESEARCH',
-      lotCap: 0.01,
+      lotCap: 1,
     });
-    expect(PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP).toBe(0.01);
+    expect(PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP).toBe(1);
   });
 
   it('only allows the pairwise-selected side to enter reversal research', () => {
