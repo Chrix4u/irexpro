@@ -3,7 +3,7 @@
 ## Goal
 Make iRexPro materially more analytical and adaptive in the forex market by unifying current market regime, pair/direction/session evidence, execution economics, portfolio/currency exposure, drift, and realised trade feedback into one causal pre-trade intelligence layer.
 
-The first release is PAPER-execution capable and may alter candidate ranking and bounded risk sizing inside the existing PAPER authority. It does not create DEMO/LIVE authority, does not automatically promote a strategy, does not self-train model weights, and does not weaken the existing Risk Engine, event-risk gate, spread/cost governance, post-loss guards, margin checks, broker limits, or qualification gates.
+The first release is active PAPER execution authority when deployed to the production application: it alters candidate ranking immediately and may down-size/normal-size PAPER risk immediately; evidence-backed up-sizing above 1.00x remains gated by maturity. It does not create DEMO/LIVE authority, does not automatically promote a strategy, does not self-train model weights, and does not weaken the existing Risk Engine, event-risk gate, spread/cost governance, post-loss guards, margin checks, broker limits, or qualification gates.
 
 ## Existing Architecture To Preserve
 The implementation must extend, not bypass, the following existing authorities:
@@ -353,18 +353,21 @@ Add structured logs and operational counters for:
 
 Admin/user surfaces can expose these later, but API metadata and durable evidence are required in the first release.
 
-## Rollout
+## Deployment And Active Authority
 
-### Phase A — Counterfactual parity
-Compute and persist the adaptive object for every candidate but keep `adaptiveRiskMultiplier=1.00x` and preserve existing selection. Validate causality, latency, evidence isolation and score distribution.
+### Production application deployment
+Deploy the completed, verified feature through the normal protected release pipeline to the production application. The active trading authority in this release remains PAPER-only; this wording does not grant broker DEMO/LIVE execution authority.
 
-### Phase B — PAPER ranking authority
-Allow adaptive ranking to choose among candidates that already pass existing execution governance. Risk multiplier remains capped at `1.00x`. Compare selected-vs-old rank outcomes prospectively.
+### Immediate active PAPER ranking
+There is no observer-only rollout. On deployment, adaptive market state, shared-currency exposure and adaptive opportunity ranking actively select among candidates that already satisfy existing hard PAPER governance. The previous rank is still persisted as a counterfactual comparison, but it does not remain the execution authority.
 
-### Phase C — PAPER bounded sizing authority
-Enable `0.50x–1.25x` adaptive multipliers for normal PAPER only after Phase-B evidence demonstrates no structural regression. Research routes remain capped at `1.00x` multiplier and 1.0 lot.
+### Immediate bounded PAPER sizing
+On deployment, the adaptive multiplier may actively reduce permitted risk to `0.50x` or `0.75x` or leave it at `1.00x`. A multiplier above `1.00x` is active only when the already-specified mature positive-edge requirements are satisfied. Research routes remain capped at `1.00x` multiplier and the 1.0-lot research ceiling.
 
-### Phase D — Review for DEMO
+### Activity objective, not forced cadence
+The scanner continues evaluating every closed M5 opportunity cycle and must persist the best ranked opportunity and explicit abstention reason for every scan. The system does not force a trade every 2, 5 or 10 minutes. A frequency target cannot override negative net expected R, OOD/dislocated state, invalid cost evidence, event risk, post-loss confirmation, margin or portfolio-capacity controls. Productive activity comes from finding more genuinely positive post-cost opportunities and avoiding unnecessary suppression.
+
+### Review for DEMO
 No automatic transition. DEMO review requires the existing qualification gates plus a dedicated comparison showing adaptive policy performance, drawdown, calibration, cost burden and portfolio concentration are acceptable. LIVE remains a separate explicit approval stage.
 
 ## Testing Strategy
@@ -417,8 +420,8 @@ The first complete release is successful when:
 2. Every candidate has a versioned pair/direction/session/state edge assessment with explicit maturity.
 3. Executable candidates receive a transparent adaptive opportunity score and component breakdown.
 4. Currency concentration is assessed using economic risk rather than ticket count alone.
-5. Adaptive ranking can improve candidate priority without bypassing existing execution gates.
-6. Normal PAPER can use bounded `0.50x–1.25x` risk multipliers only under mature positive evidence; research cannot exceed `1.00x` multiplier.
+5. Adaptive ranking is the active PAPER selection authority immediately after deployment and cannot bypass existing execution gates.
+6. Normal PAPER immediately uses `0.50x`, `0.75x`, or `1.00x` as justified; `1.10x–1.25x` is active only under mature positive evidence, and research cannot exceed `1.00x` multiplier.
 7. PositionSizingService remains final authority and the 1.0-lot PAPER research safety ceiling remains intact for this release.
 8. Every adaptive decision and resulting trade is auditable end-to-end.
 9. Sparse, stale, unavailable or conflicting evidence cannot increase execution authority.
