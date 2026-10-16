@@ -1,13 +1,13 @@
-import fs from 'node:fs';
-import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
-const workflowPath = path.resolve(
+const workflowPath = resolve(
   __dirname,
   '../../../../../.github/workflows/vps-no-trade-diagnostics.yml',
 );
 
 function workflowSource(): string {
-  return fs.readFileSync(workflowPath, 'utf8');
+  return readFileSync(workflowPath, 'utf8');
 }
 
 describe('VPS no-trade diagnostics workflow contract', () => {
