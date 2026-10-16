@@ -144,6 +144,21 @@ class TradingDiagnosticsTests(unittest.TestCase):
             with self.subTest(workflow=filename):
                 self.assertIn("Adaptive allocation evidence unavailable", report(filename, api=api))
 
+    def test_scanner_startup_and_provider_recovery_events_remain_visible(self):
+        messages = [
+            "Multi-model shadow state restored instruments=6/6 latest=2026-10-16T03:50:00Z",
+            "iRexPro multi-model engine enabled engine=ensemble paperExecution=true cadence=5m",
+            "VPS startup market cache primed pairs=6/6 latest=2026-10-16T03:55:00Z",
+            "VPS startup market prime/heartbeat failed; live PAPER remains fail-closed: provider timeout",
+            "VPS forex scan failed; retry in 60s: provider unavailable",
+        ]
+        api = "".join(nest(f"3:35:0{i} AM", message) for i, message in enumerate(messages))
+        for filename in WORKFLOWS:
+            with self.subTest(workflow=filename):
+                output = report(filename, api=api)
+                for message in messages:
+                    self.assertIn(message, output)
+
     def test_sensitive_diagnostics_remain_redacted(self):
         api = nest(
             "3:35:00 AM",

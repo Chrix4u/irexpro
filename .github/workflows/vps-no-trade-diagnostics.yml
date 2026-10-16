@@ -165,6 +165,7 @@ jobs:
               print(f'{label}={event[:1000]}')
 
           needles = [needle.lower() for needle in checks] + [
+              '[vpsforexsignalcollectorservice]',
               'adaptive ', 'multi-model paper candidate', 'multi-model ensemble',
               'paperadmitted=', 'netexpectedr=', 'scanner', 'market data',
               'allocation-aware', 'simulated order placed', 'submitted', 'executed',
