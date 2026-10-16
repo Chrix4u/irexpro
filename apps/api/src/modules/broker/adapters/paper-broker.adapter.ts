@@ -870,6 +870,70 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     }
   }
 
+  private priceDigitsForPosition(position: PaperPosition): number {
+    if (this.isLiveMarketMode()) return this.liveMarketData!.spec(position.instrument).digits;
+    return this._replayFeed ? this._replayFeed.digits() : PAPER_PRICE_SCALE;
+  }
+
+  /**
+   * Convert a positive USD profit floor back to its executable exit price.
+   * This is the PAPER equivalent of a resting broker-side protection level:
+   * when a later sampled mark has already crossed an armed floor, the same
+   * zero-gap protection assumption used by SL/TP fills the proven crossing at
+   * the floor instead of at the worse sampled mark.
+   */
+  private profitLockExitPrice(position: PaperPosition, protectedFloorPnl: string): string | null {
+    try {
+      if (compareDecimalStrings(protectedFloorPnl, '0') <= 0) return null;
+      const symbol = position.instrument.trim().toUpperCase();
+      if (!/^[A-Z]{6}$/.test(symbol)) return null;
+      const baseCurrency = symbol.slice(0, 3);
+      const quoteCurrency = symbol.slice(3, 6);
+      const units = position.units.toString();
+      const digits = this.priceDigitsForPosition(position);
+      const workingScale = Math.max(digits + 8, 12);
+      let exactPrice: string;
+
+      if (quoteCurrency === PAPER_CURRENCY) {
+        const delta = divideDecimalStrings(protectedFloorPnl, units, workingScale);
+        exactPrice =
+          position.direction === 'BUY'
+            ? addDecimalStrings(position.entryPrice, delta)
+            : subtractDecimalStrings(position.entryPrice, delta);
+      } else if (baseCurrency === PAPER_CURRENCY) {
+        const numerator = multiplyDecimalStrings(units, position.entryPrice);
+        const denominator =
+          position.direction === 'BUY'
+            ? subtractDecimalStrings(units, protectedFloorPnl)
+            : addDecimalStrings(units, protectedFloorPnl);
+        if (compareDecimalStrings(denominator, '0') <= 0) return null;
+        exactPrice = divideDecimalStrings(numerator, denominator, workingScale);
+      } else {
+        return null;
+      }
+
+      let protectedPrice = roundHalfUpAtScale(exactPrice, digits);
+      // Price-step rounding must never lower the protected USD floor. Move by
+      // one favorable tick only when the nearest valid price undershoots it.
+      if (
+        compareDecimalStrings(
+          this.pnlAtExitPriceExact(position, protectedPrice),
+          protectedFloorPnl,
+        ) < 0
+      ) {
+        const tick = formatScaledDecimal(1n, digits);
+        protectedPrice =
+          position.direction === 'BUY'
+            ? addDecimalStrings(protectedPrice, tick)
+            : subtractDecimalStrings(protectedPrice, tick);
+        protectedPrice = roundHalfUpAtScale(protectedPrice, digits);
+      }
+      return protectedPrice;
+    } catch {
+      return null;
+    }
+  }
+
   private maybeCloseForProfitLock(
     position: PaperPosition,
     exitPrice: string,
@@ -894,11 +958,14 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         `peak=${position.pathMaxFavorablePnl} current=${currentPnl} risk=${initialRiskPnl} ` +
         `floor=${decision.protectedFloorPnl} retain=${decision.retentionFraction} [PAPER_ONLY]`,
     );
+    const protectedExitPrice = decision.protectedFloorPnl
+      ? (this.profitLockExitPrice(position, decision.protectedFloorPnl) ?? exitPrice)
+      : exitPrice;
     this.closePositionUnits(
       position,
       position.units,
       position.lotSize,
-      exitPrice,
+      protectedExitPrice,
       'PROFIT_LOCK',
       observedAt,
     );
