@@ -158,6 +158,40 @@ function validRows(
   });
 }
 
+function collapseOverlappingCalibrationEpisodes(
+  rows: Array<AdaptivePredictionOutcomeRow & { netR: number }>,
+): Array<AdaptivePredictionOutcomeRow & { netR: number }> {
+  const byPairSide = new Map<string, Array<AdaptivePredictionOutcomeRow & { netR: number }>>();
+  for (const row of rows) {
+    const key = `${row.instrument}|${row.direction}`;
+    const bucket = byPairSide.get(key) ?? [];
+    bucket.push(row);
+    byPairSide.set(key, bucket);
+  }
+
+  const episodes: Array<AdaptivePredictionOutcomeRow & { netR: number }> = [];
+  for (const bucket of byPairSide.values()) {
+    const ordered = [...bucket].sort(
+      (a, b) => new Date(a.evaluated_at).getTime() - new Date(b.evaluated_at).getTime(),
+    );
+    let activeEpisodeEnd = Number.NEGATIVE_INFINITY;
+    for (const row of ordered) {
+      const evaluatedAt = new Date(row.evaluated_at).getTime();
+      const resolvedAt = new Date(row.outcome_resolved_at ?? row.evaluated_at).getTime();
+      if (evaluatedAt > activeEpisodeEnd) {
+        episodes.push(row);
+        activeEpisodeEnd = resolvedAt;
+      } else {
+        activeEpisodeEnd = Math.max(activeEpisodeEnd, resolvedAt);
+      }
+    }
+  }
+
+  return episodes.sort(
+    (a, b) => new Date(a.evaluated_at).getTime() - new Date(b.evaluated_at).getTime(),
+  );
+}
+
 function chooseEvidence(
   rows: Array<AdaptivePredictionOutcomeRow & { netR: number }>,
   request: AdaptivePredictionCalibrationRequest,
@@ -173,10 +207,10 @@ function chooseEvidence(
     (row) => sessionOf(row) === request.session && stateOf(row) === request.state,
   );
   const candidates = [
-    ['EXACT', exact],
-    ['PAIR_DIRECTION_ROUTE', pairDirectionRoute],
-    ['ROUTE', route],
-    ['GLOBAL', rows],
+    ['EXACT', collapseOverlappingCalibrationEpisodes(exact)],
+    ['PAIR_DIRECTION_ROUTE', collapseOverlappingCalibrationEpisodes(pairDirectionRoute)],
+    ['ROUTE', collapseOverlappingCalibrationEpisodes(route)],
+    ['GLOBAL', collapseOverlappingCalibrationEpisodes(rows)],
   ] as const;
   for (const [sourceLevel, bucket] of candidates) {
     if (bucket.length >= ADAPTIVE_CALIBRATION_MIN_AUTHORITATIVE_SAMPLES) {
