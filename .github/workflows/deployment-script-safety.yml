@@ -13,6 +13,7 @@ on:
       - '.github/workflows/six-pair-research-run.yml'
       - '.github/workflows/vps-runner-diagnostic.yml'
       - '.github/workflows/vps-ops-control.yml'
+      - '.github/workflows/vps-no-trade-diagnostics.yml'
   push:
     branches: [main]
     paths:
@@ -25,6 +26,7 @@ on:
       - '.github/workflows/six-pair-research-run.yml'
       - '.github/workflows/vps-runner-diagnostic.yml'
       - '.github/workflows/vps-ops-control.yml'
+      - '.github/workflows/vps-no-trade-diagnostics.yml'
 
 permissions:
   contents: read
@@ -70,6 +72,7 @@ jobs:
           bash scripts/deployment/test-health-contract.sh
           bash scripts/deployment/test-staging-cd-bootstrap.sh
           bash scripts/deployment/test-lightworld-runner-phase1.sh
+          python3 scripts/deployment/test-trading-diagnostics.py
 
       - name: Test exact-main staging release gate policy
         run: node scripts/deployment/main-staging-release-gate.mjs --self-test

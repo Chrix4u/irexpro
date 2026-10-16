@@ -85,88 +85,105 @@ jobs:
 
           python3 - "$ai_log" "$api_log" <<'PY'
           from collections import Counter
+          from datetime import datetime
           from pathlib import Path
           import re
           import sys
 
-          ai = Path(sys.argv[1]).read_text(encoding='utf-8', errors='replace')
-          api = Path(sys.argv[2]).read_text(encoding='utf-8', errors='replace')
-          combined = ai + '\n' + api
-          lines = combined.splitlines()
+          def read_log(path):
+              return re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', Path(path).read_text(encoding='utf-8', errors='replace'))
 
+          ai = read_log(sys.argv[1])
+          api = read_log(sys.argv[2])
+          lines = (ai + '\n' + api).splitlines()
+          print('counts_scope=log_window_only; not lifetime totals or account performance')
           print(f'ai_log_lines={len(ai.splitlines())}')
           print(f'api_log_lines={len(api.splitlines())}')
 
-          reason_counts = Counter(re.findall(r'\breason=([A-Z][A-Z0-9_]+)', combined))
-          code_counts = Counter(re.findall(r'\b(?:blocker|code)=([A-Z][A-Z0-9_]+)', combined))
-          blocker_tokens = Counter()
-          for line in lines:
-              lower = line.lower()
-              if 'blocker' in lower or 'paperadmitted=' in lower or 'execution=shadow_only' in lower:
-                  blocker_tokens.update(re.findall(r'\b[A-Z][A-Z0-9_]{4,}\b', line))
-
-          print('top_reason_counts:')
-          for key, value in reason_counts.most_common(30):
+          orders = [line for line in lines if 'PaperBrokerAdapter: simulated order placed ' in line]
+          dispatches = [line for line in lines if 'cadence=adaptive-scan-ranked' in line]
+          print(f'paper_order_events={len(orders)}')
+          print('adaptive_dispatch_outcomes:')
+          for key, value in Counter(re.findall(r'\boutcome=([A-Z][A-Z0-9_]+)', '\n'.join(dispatches))).most_common(10):
               print(f'  {key}={value}')
-          print('top_blocker_or_gate_tokens:')
-          merged_counts = code_counts + blocker_tokens
-          for key, value in merged_counts.most_common(35):
+
+          reason_counts = Counter(re.findall(r'\breason=([A-Z][A-Z0-9_]+)', '\n'.join(lines)))
+          blocker_counts = Counter()
+          for value in re.findall(r'\b(?:blockers?|code|paperGovernance)=([A-Z][A-Z0-9_,]*)', '\n'.join(lines)):
+              blocker_counts.update(blocker for blocker in value.split(',') if blocker not in ('NONE', 'PASS'))
+          print('top_reason_counts:')
+          for key, value in reason_counts.most_common(15):
+              print(f'  {key}={value}')
+          print('top_blocker_counts:')
+          for key, value in blocker_counts.most_common(15):
               print(f'  {key}={value}')
 
           checks = [
-              'execution=SHADOW_ONLY',
-              'execution=NORMAL_PAPER',
-              'PAPER research-throughput',
-              'PAPER_RESEARCH_THROUGHPUT',
-              'PAIRED_REVERSAL_RESEARCH',
-              'REJECTED_EDGE_CANARY',
-              'Counterfactual',
-              'AMBIGUOUS_DUAL_EDGE',
-              'SPREAD_EVIDENCE_INVALID',
-              'NET_EXPECTED_R_TOO_LOW',
-              'UNSAFE_BLOCKER',
-              'DIRECTION_QUALITY_TOO_LOW',
-              'TRADE_QUALITY_TOO_LOW',
-              'EXIT_QUALITY_TOO_LOW',
-              'CONFIDENCE_TOO_LOW',
-              'ROUTE_NOT_VALIDATED',
-              'EVENT_RISK_NOT_CLEAR',
-              'NEGATIVE_PAIR_SIDE_EXPECTANCY',
-              'EPISODE_COOLDOWN',
-              'ACTIVE_RESEARCH_SAMPLE',
-              'POST_LOSS',
-              'No new market data revision',
-              'PAPER_PRE_INTENT_RETRY_SAFE',
-              'RISK REJECTED',
-              'order placed',
-              'signal submitted',
-              'submission accepted',
-              'execution failed',
-              'allocation',
+              'execution=SHADOW_ONLY', 'execution=NORMAL_PAPER',
+              'PAPER research-throughput', 'PAIRED_REVERSAL_RESEARCH',
+              'REJECTED_EDGE_CANARY', 'Counterfactual', 'AMBIGUOUS_DUAL_EDGE',
+              'SPREAD_EVIDENCE_INVALID', 'NET_EXPECTED_R_TOO_LOW', 'UNSAFE_BLOCKER',
+              'DIRECTION_QUALITY_TOO_LOW', 'TRADE_QUALITY_TOO_LOW', 'EXIT_QUALITY_TOO_LOW',
+              'CONFIDENCE_TOO_LOW', 'ROUTE_NOT_VALIDATED', 'EVENT_RISK_NOT_CLEAR',
+              'NEGATIVE_PAIR_SIDE_EXPECTANCY', 'EPISODE_COOLDOWN', 'ACTIVE_RESEARCH_SAMPLE',
+              'POST_LOSS', 'No new market data revision', 'PAPER_PRE_INTENT_RETRY_SAFE',
+              'RISK REJECTED', 'signal submitted', 'submission accepted', 'execution failed',
+              'Adaptive scan summary', 'Adaptive scan durable summary unavailable',
           ]
+          combined = '\n'.join(lines)
           print('keyword_counts:')
           for needle in checks:
               print(f'  {needle}={combined.count(needle)}')
 
-          interesting_needles = [needle.lower() for needle in checks] + [
-              'multi-model ensemble',
-              'paperadmitted=',
-              'netexpectedr=',
-              'consensuspassed=',
-              'drift=',
-              'scanner',
-              'market data',
-              'risk rejected',
-              'submitted',
-              'executed',
+          def event_key(indexed_line):
+              index, line = indexed_line
+              # PM2 prints stderr and stdout in separate sections. Sort within each
+              # service using the embedded timestamp, with capture order as the tie-break.
+              nest = re.search(r'\b(\d{1,2}/\d{1,2}/\d{4}, \d{1,2}:\d{2}:\d{2} [AP]M)\b', line)
+              iso = re.search(r'\b(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})', line)
+              try:
+                  if nest:
+                      return datetime.strptime(nest.group(1), '%m/%d/%Y, %I:%M:%S %p'), index
+                  if iso:
+                      return datetime.fromisoformat(iso.group(1)), index
+              except ValueError:
+                  pass
+              return datetime.min, index
+
+          def newest(source):
+              return [line for _, line in sorted(enumerate(source.splitlines()), key=event_key, reverse=True)]
+
+          api_events = newest(api)
+          highlights = [
+              ('latest_adaptive_scan_summary', 'Adaptive scan summary'),
+              ('latest_adaptive_dispatch', 'cadence=adaptive-scan-ranked'),
+              ('latest_paper_order', 'PaperBrokerAdapter: simulated order placed '),
+              ('latest_adaptive_audit_failure', 'Adaptive scan durable summary unavailable'),
           ]
-          interesting = [
-              line for line in lines
-              if any(needle in line.lower() for needle in interesting_needles)
+          for label, needle in highlights:
+              event = next((line for line in api_events if needle in line), 'UNAVAILABLE')
+              print(f'{label}={event[:1000]}')
+
+          needles = [needle.lower() for needle in checks] + [
+              'adaptive ', 'multi-model paper candidate', 'multi-model ensemble',
+              'paperadmitted=', 'netexpectedr=', 'scanner', 'market data',
+              'allocation-aware', 'simulated order placed', 'submitted', 'executed',
           ]
+          noise = re.compile(r'\[(HTTP|RouterExplorer|RoutesResolver|InstanceLoader)\]')
           print('recent_relevant_events:')
-          for line in interesting[-140:]:
-              print(line[:1000])
+          # Reserve a separate budget per service so one noisy log cannot hide the other.
+          # Newest first also keeps the latest evidence if an outer transport truncates.
+          for service, events in [('api', api_events), ('ai', newest(ai))]:
+              remaining = 2500
+              print(f'  {service}_events_newest_first:')
+              for line in events:
+                  if noise.search(line) or not any(needle in line.lower() for needle in needles):
+                      continue
+                  event = f'[{service}] {line[:1000]}\n'
+                  if len(event) > remaining:
+                      break
+                  print(event, end='')
+                  remaining -= len(event)
           PY
           REMOTE
 
