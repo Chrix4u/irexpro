@@ -1367,14 +1367,23 @@ function normalizeMarketRegime(marketRegime: string | undefined): ProposedTrade[
   const normalized = marketRegime.trim().toUpperCase();
   switch (normalized) {
     case 'TRENDING':
+    case 'TREND_HEALTHY':
+    case 'TREND_EXTENDED':
+    case 'TREND_WEAK':
       return 'TRENDING';
     case 'RANGING':
+    case 'RANGE':
       return 'RANGING';
     case 'LOW_LIQUIDITY':
+    case 'ROLLOVER_RISK':
       return 'LOW_LIQUIDITY';
     case 'HIGH_VOLATILITY':
     case 'VOLATILE':
+    case 'TRANSITION':
+    case 'REVERSAL':
+    case 'DISLOCATED':
       return 'HIGH_VOLATILITY';
+    case 'UNKNOWN':
     default:
       return undefined;
   }
