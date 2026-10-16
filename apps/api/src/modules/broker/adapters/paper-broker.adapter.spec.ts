@@ -1304,14 +1304,18 @@ describe('PaperBrokerAdapter', () => {
       expect(await sim.getOpenPositions()).toHaveLength(0);
 
       const [closed] = await sim.getClosedTrades(new Date(0), new Date(CLOCK_BASE_MS + 60_000));
+      // The armed protection behaves like a resting broker-side level under
+      // the PAPER simulator's existing zero-gap protection assumption. The
+      // peak was $9 on $10 initial risk, so the 30% retention tier protects
+      // $2.70 rather than surrendering the trade to the later $2 sampled mark.
       expect(closed).toMatchObject({
-        closePrice: '1.10030',
+        closePrice: '1.10037',
         closeReason: 'PROFIT_LOCK',
-        realisedPnl: '2.00',
+        realisedPnl: '2.70',
       });
       expect(closed.pathDiagnostics).toMatchObject({
         maxFavorablePnl: '9.00',
-        profitGiveback: '7.00',
+        profitGiveback: '6.30',
       });
     } finally {
       if (previous === undefined) delete process.env.PAPER_PROFIT_LOCK_ENABLED;

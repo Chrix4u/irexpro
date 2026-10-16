@@ -321,6 +321,56 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     }
   });
 
+  it('banks an armed USDCAD SELL protected floor after a streaming gap crosses it', async () => {
+    const live = new LivePaperMarketDataService();
+    live.registerLiveConnection('conn-usdcad-profit-lock');
+    live.updateClosedCandles('USDCAD', series(1.4, 5), 'conn-usdcad-profit-lock');
+    const adapter = new PaperBrokerAdapter(
+      undefined,
+      undefined,
+      undefined,
+      'conn-usdcad-profit-lock',
+      live,
+    );
+    await adapter.connect({} as any);
+    await adapter.placeOrder({
+      idempotencyKey: 'usdcad-profit-lock-floor',
+      instrument: 'USDCAD',
+      direction: 'SELL',
+      lotSize: '0.01',
+      stopLoss: '1.40200',
+      takeProfit: '1.39500',
+      orderKind: 'MARKET',
+    });
+
+    // Establish a material favorable excursion first.
+    live.updateStreamingMidQuote(
+      'USDCAD',
+      1.3985,
+      new Date(Date.now() + 1_000),
+      'conn-usdcad-profit-lock',
+    );
+    expect(await adapter.getOpenPositions()).toHaveLength(1);
+
+    // The next executable mark gaps back through entry but remains above SL.
+    // A resting protection level must bank a positive floor rather than book
+    // the worse sampled mark after the already-proven crossing.
+    live.updateStreamingMidQuote(
+      'USDCAD',
+      1.4005,
+      new Date(Date.now() + 2_000),
+      'conn-usdcad-profit-lock',
+    );
+    expect(await adapter.getOpenPositions()).toHaveLength(0);
+
+    const closed = await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]!.closeReason).toBe('PROFIT_LOCK');
+    expect(Number(closed[0]!.realisedPnl)).toBeGreaterThan(0);
+    expect(Number(closed[0]!.pathDiagnostics?.maxFavorablePnl)).toBeGreaterThan(0);
+    expect(Number(closed[0]!.pathDiagnostics?.profitGiveback)).toBeGreaterThan(0);
+  });
+
   it('closes a BUY at TP from a fresh streaming bid before the M5 candle closes', async () => {
     const live = new LivePaperMarketDataService();
     const adapter = await openProtectedBuy(live);
