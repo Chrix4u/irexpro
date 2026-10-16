@@ -340,6 +340,19 @@ export function applyAdaptivePredictionCalibrationAuthority(
     };
   }
 
+  const localExecutionEvidence =
+    input.calibration.sourceLevel === 'EXACT' ||
+    input.calibration.sourceLevel === 'PAIR_DIRECTION_ROUTE';
+  if (!localExecutionEvidence) {
+    return {
+      effectiveConfidence: input.rawConfidence,
+      effectiveNetExpectedR: input.rawNetExpectedR,
+      effectivePaperExecutionBlockers: [...input.paperExecutionBlockers],
+      blockExecution: false,
+      rescueApplied: false,
+    };
+  }
+
   let effectivePaperExecutionBlockers = [...input.paperExecutionBlockers];
   const rescueApplied =
     input.allowResearchRescue &&
