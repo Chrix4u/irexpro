@@ -777,6 +777,27 @@ describe('StrategyOrchestratorService', () => {
       );
     });
 
+    it('passes adaptive PAPER risk multiplier into authoritative sizing', async () => {
+      const result = await service.processSignal(
+        validCandidate({
+          metadata: {
+            external_provider_paper_only: true,
+            position_sizing_tier: 'BASE',
+            adaptive_risk_multiplier: 1.25,
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          paperAllocationSizing: expect.objectContaining({
+            adaptiveRiskMultiplier: '1.25',
+          }),
+        }),
+      );
+    });
+
     it('carries PAPER MARKET reference geometry through sizing and risk', async () => {
       sizingMock.sizePosition.mockResolvedValue({
         lots: '0.39',
