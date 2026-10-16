@@ -62,10 +62,14 @@ export interface PositionSizingInputs {
   freeMargin: string;
   riskPercent: string;
   requestedRiskPercent: string;
+  baseRiskPercent: string;
+  adaptiveRiskMultiplier: string;
+  adaptiveRiskPercent: string;
   riskCapitalBase: string;
   allocationAwarePaper: boolean;
   /** Entry reference used to derive stop risk. PAPER MARKET may preserve the model distance. */
   riskReferenceEntryPrice?: string;
+  baseRiskAmount: string;
   riskAmount: string;
   baseCurrency: string;
   quoteCurrency: string;
@@ -163,6 +167,8 @@ export class PositionSizingService {
       confidenceTier: PaperAllocationConfidenceTier;
       /** Closed-bar/model entry used only to preserve PAPER MARKET risk distance. */
       marketReferenceEntryPrice?: string | null;
+      /** PAPER-only intelligence multiplier; ignored outside allocation-aware PAPER. */
+      adaptiveRiskMultiplier?: string | null;
     };
   }): Promise<SizedPosition> {
     const { userId, brokerConnectionId, instrument } = params;
@@ -248,6 +254,39 @@ export class PositionSizingService {
         removeProfileLotCeiling = policy.removeProfileLotCeiling;
       }
     }
+
+    const baseRiskPercent = effectiveRiskPercent;
+    let adaptiveRiskMultiplier = ExactDecimal.ONE;
+    if (allocationAwarePaper && params.paperAllocationSizing?.adaptiveRiskMultiplier != null) {
+      const requestedAdaptiveMultiplier = ExactDecimal.tryParse(
+        params.paperAllocationSizing.adaptiveRiskMultiplier,
+      );
+      const minimumAdaptiveMultiplier = ExactDecimal.parse('0.5');
+      const maximumAdaptiveMultiplier = ExactDecimal.parse('1.25');
+      if (
+        !requestedAdaptiveMultiplier ||
+        requestedAdaptiveMultiplier.lt(minimumAdaptiveMultiplier) ||
+        requestedAdaptiveMultiplier.gt(maximumAdaptiveMultiplier)
+      ) {
+        throw new PositionSizingError(
+          'RISK_BUDGET_UNPARSEABLE',
+          `adaptive PAPER risk multiplier must be between 0.50 and 1.25: ${params.paperAllocationSizing.adaptiveRiskMultiplier}`,
+        );
+      }
+      const routeMultiplierCeiling =
+        params.paperAllocationSizing.confidenceTier === 'RESEARCH'
+          ? ExactDecimal.ONE
+          : maximumAdaptiveMultiplier;
+      adaptiveRiskMultiplier = ExactDecimal.min(
+        requestedAdaptiveMultiplier,
+        routeMultiplierCeiling,
+      );
+      effectiveRiskPercent = ExactDecimal.min(
+        baseRiskPercent.mul(adaptiveRiskMultiplier),
+        riskPercent,
+      );
+    }
+    const adaptiveRiskPercent = effectiveRiskPercent;
 
     // ── 3. Geometry: entry reference + PROVEN contract size (§1a seam). ───
     const geometry = await this.orderGeometry.resolveOrderGeometry({
@@ -381,7 +420,8 @@ export class PositionSizingService {
     }
     const baseCurrency = normalizedInstrument.slice(0, 3);
     const quoteCurrency = normalizedInstrument.slice(3, 6);
-    const riskAmount = riskCapitalBase.mul(effectiveRiskPercent).divByPowerOfTen(2); // account currency
+    const baseRiskAmount = riskCapitalBase.mul(baseRiskPercent).divByPowerOfTen(2);
+    const riskAmount = riskCapitalBase.mul(adaptiveRiskPercent).divByPowerOfTen(2); // account currency
     let riskAmountInQuoteCurrency: ExactDecimal;
     let riskCurrencyConversion: 'ACCOUNT_IS_QUOTE' | 'ACCOUNT_IS_BASE_USING_ENTRY';
     if (quoteCurrency === accountCurrency) {
@@ -473,11 +513,15 @@ export class PositionSizingService {
       accountCurrency,
       equity: equity.toString(),
       freeMargin: freeMargin.toString(),
-      riskPercent: effectiveRiskPercent.toString(),
+      riskPercent: adaptiveRiskPercent.toString(),
       requestedRiskPercent: requestedRiskPercent.toString(),
+      baseRiskPercent: baseRiskPercent.toString(),
+      adaptiveRiskMultiplier: adaptiveRiskMultiplier.toString(),
+      adaptiveRiskPercent: adaptiveRiskPercent.toString(),
       riskCapitalBase: riskCapitalBase.toString(),
       allocationAwarePaper,
       riskReferenceEntryPrice: riskReferenceEntry.toString(),
+      baseRiskAmount: baseRiskAmount.toString(),
       riskAmount: riskAmount.toString(),
       baseCurrency,
       quoteCurrency,
@@ -503,6 +547,7 @@ export class PositionSizingService {
     this.logger.log(
       `Sized ${instrument} ${params.direction}: ${lots.toString()} lots ` +
         `(risk ${riskAmount.toString()} ${accountCurrency} from ${riskCapitalBase.toString()} capital, ` +
+        `adaptiveMultiplier ${adaptiveRiskMultiplier.toString()}x, ` +
         `requiredMargin ${allocatedCapital.toString()}, ` +
         `notional ${grossNotional.toString()})`,
     );
