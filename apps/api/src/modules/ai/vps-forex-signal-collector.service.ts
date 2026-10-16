@@ -2732,6 +2732,37 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         `reason=${input.reason}`,
     );
     if (!this.dataSource) return;
+    const durableResourceId = `${input.connectionId}:${input.scanStartedAt.toISOString()}`;
+    try {
+      await this.dataSource.query(
+        `
+          INSERT INTO audit.audit_logs (
+            actor_user_id,
+            actor_type,
+            action,
+            resource_type,
+            resource_id,
+            metadata,
+            severity
+          )
+          SELECT $1, 'SYSTEM', 'AI_ADAPTIVE_SCAN_SUMMARY', 'AdaptiveScan', $2, $3::jsonb, 'INFO'
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM audit.audit_logs
+            WHERE actor_user_id = $1
+              AND actor_type = 'SYSTEM'
+              AND action = 'AI_ADAPTIVE_SCAN_SUMMARY'
+              AND resource_type = 'AdaptiveScan'
+              AND resource_id = $2
+          )
+        `,
+        [input.userId, durableResourceId, JSON.stringify(summary)],
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Adaptive scan durable summary unavailable for ${durableResourceId}: ${(error as Error).message}`,
+      );
+    }
     await this.dataSource.query(
       `
         UPDATE trading.ensemble_shadow_decisions

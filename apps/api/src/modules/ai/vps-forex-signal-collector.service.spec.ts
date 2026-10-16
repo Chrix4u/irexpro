@@ -1048,6 +1048,80 @@ describe('VpsForexSignalCollectorService', () => {
     });
   });
 
+  it('persists an idempotent scan summary even when the scan created no decision row', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const collector = createCollector(
+      config({}),
+      {} as AiSignalService,
+      {} as ExecutionService,
+      {} as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+    const scanStartedAt = new Date('2026-10-16T02:10:00.000Z');
+
+    await (collector as any).persistAdaptiveScanSummary({
+      userId: '00000000-0000-4000-8000-000000000001',
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      scanStartedAt,
+      evaluatedCandidates: 0,
+      executableWinners: 0,
+      best: null,
+      reason: 'NO_EXECUTABLE_PAIR_WINNER',
+    });
+
+    const durableCall = query.mock.calls.find(([sql]) =>
+      String(sql).includes('INSERT INTO audit.audit_logs'),
+    );
+    expect(durableCall).toBeDefined();
+    expect(String(durableCall![0])).toContain('AI_ADAPTIVE_SCAN_SUMMARY');
+    expect(durableCall![1][0]).toBe('00000000-0000-4000-8000-000000000001');
+    expect(durableCall![1][1]).toBe(
+      '11111111-1111-4111-8111-111111111111:2026-10-16T02:10:00.000Z',
+    );
+    expect(JSON.parse(String(durableCall![1][2]))).toMatchObject({
+      artifact: 'adaptive-scan-summary-v1',
+      evaluatedCandidates: 0,
+      executableWinners: 0,
+      reason: 'NO_EXECUTABLE_PAIR_WINNER',
+    });
+  });
+
+  it('keeps adaptive scan diagnostics non-blocking when durable audit persistence fails', async () => {
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (String(sql).includes('INSERT INTO audit.audit_logs')) {
+        return Promise.reject(new Error('audit unavailable'));
+      }
+      return Promise.resolve([]);
+    });
+    const collector = createCollector(
+      config({}),
+      {} as AiSignalService,
+      {} as ExecutionService,
+      {} as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    await expect(
+      (collector as any).persistAdaptiveScanSummary({
+        userId: '00000000-0000-4000-8000-000000000001',
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        scanStartedAt: new Date('2026-10-16T02:15:00.000Z'),
+        evaluatedCandidates: 0,
+        executableWinners: 0,
+        best: null,
+        reason: 'NO_EXECUTABLE_PAIR_WINNER',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("'adaptiveScanSummary'"))).toBe(
+      true,
+    );
+  });
+
   it('ranks pair winners across the scan and rechecks shared-currency risk before later dispatches', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
