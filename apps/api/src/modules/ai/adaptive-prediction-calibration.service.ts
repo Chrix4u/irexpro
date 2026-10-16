@@ -274,8 +274,7 @@ export function buildAdaptivePredictionCalibration(
   const blockRecommended =
     localExecutionEvidence &&
     (maturity === 'DEGRADED' ||
-      (maturity === 'MATURE' &&
-        (calibratedNetExpectedR <= 0 || calibratedWinProbability < 0.45)));
+      (maturity === 'MATURE' && (calibratedNetExpectedR <= 0 || calibratedWinProbability < 0.45)));
   const rescueEligible =
     localExecutionEvidence &&
     maturity === 'MATURE' &&
