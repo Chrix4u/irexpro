@@ -269,10 +269,14 @@ export function buildAdaptivePredictionCalibration(
     : mature
       ? 'MATURE'
       : 'COLLECTING';
+  const localExecutionEvidence =
+    selected.sourceLevel === 'EXACT' || selected.sourceLevel === 'PAIR_DIRECTION_ROUTE';
   const blockRecommended =
-    maturity === 'DEGRADED' ||
-    (maturity === 'MATURE' && (calibratedNetExpectedR <= 0 || calibratedWinProbability < 0.45));
+    localExecutionEvidence &&
+    (maturity === 'DEGRADED' ||
+      (maturity === 'MATURE' && (calibratedNetExpectedR <= 0 || calibratedWinProbability < 0.45)));
   const rescueEligible =
+    localExecutionEvidence &&
     maturity === 'MATURE' &&
     !recentDegradation &&
     calibratedNetExpectedR >= ADAPTIVE_CALIBRATION_RESCUE_MIN_NET_EXPECTED_R &&
