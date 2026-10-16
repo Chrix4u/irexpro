@@ -1,8 +1,9 @@
 name: VPS No-Trade Diagnostics
 
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: ['Staging Deploy']
+    types: [completed]
   issue_comment:
     types: [created]
 
@@ -16,7 +17,9 @@ concurrency:
 jobs:
   diagnose:
     if: >-
-      github.event_name == 'push' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main') ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.number == 366 &&
        github.actor == 'Chrix4u' &&
@@ -32,6 +35,7 @@ jobs:
       STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
       SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+      EXPECTED_DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
 
     steps:
       - name: Validate pinned staging SSH configuration
@@ -44,6 +48,9 @@ jobs:
           test -n "$SSH_PRIVATE_KEY"
           test -n "$SSH_KNOWN_HOSTS"
           [[ "$STAGING_SSH_PORT" =~ ^[0-9]+$ ]]
+          if [[ -n "$EXPECTED_DEPLOY_SHA" ]]; then
+            [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          fi
 
       - name: Configure pinned SSH identity and host keys
         shell: bash
@@ -157,6 +164,9 @@ jobs:
           highlights = [
               ('latest_adaptive_scan_summary', 'Adaptive scan summary'),
               ('latest_adaptive_dispatch', 'cadence=adaptive-scan-ranked'),
+              ('latest_execution_failed', 'outcome=EXECUTION_FAILED'),
+              ('latest_risk_rejected', 'outcome=RISK_REJECTED'),
+              ('latest_counterfactual', 'Counterfactual '),
               ('latest_paper_order', 'PaperBrokerAdapter: simulated order placed '),
               ('latest_adaptive_audit_failure', 'Adaptive scan durable summary unavailable'),
           ]
@@ -169,6 +179,7 @@ jobs:
               'adaptive ', 'multi-model paper candidate', 'multi-model ensemble',
               'paperadmitted=', 'netexpectedr=', 'scanner', 'market data',
               'allocation-aware', 'simulated order placed', 'submitted', 'executed',
+              'outcome=execution_failed', 'outcome=risk_rejected',
           ]
           noise = re.compile(r'\[(HTTP|RouterExplorer|RoutesResolver|InstanceLoader)\]')
           print('recent_relevant_events:')
@@ -187,6 +198,18 @@ jobs:
                   remaining -= len(event)
           PY
           REMOTE
+
+          actual_staging_sha="$(sed -n 's/^staging_sha=//p' "$output_file" | head -1 | tr -d '\r')"
+          if [[ -n "$EXPECTED_DEPLOY_SHA" ]]; then
+            if [[ ! "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Invalid expected deploy SHA" >&2
+              exit 1
+            fi
+            if [[ "$actual_staging_sha" != "$EXPECTED_DEPLOY_SHA" ]]; then
+              echo "VPS staging SHA mismatch: expected=$EXPECTED_DEPLOY_SHA actual=$actual_staging_sha" >&2
+              exit 1
+            fi
+          fi
 
           python3 - "$output_file" <<'PY'
           from pathlib import Path
