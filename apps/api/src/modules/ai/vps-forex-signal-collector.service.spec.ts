@@ -1076,6 +1076,9 @@ describe('VpsForexSignalCollectorService', () => {
     );
     expect(durableCall).toBeDefined();
     expect(String(durableCall![0])).toContain('AI_ADAPTIVE_SCAN_SUMMARY');
+    expect(String(durableCall![0])).toContain('$1::uuid');
+    expect(String(durableCall![0])).toContain('$2::varchar');
+    expect(String(durableCall![0])).toContain('resource_id = $2::varchar');
     expect(durableCall![1][0]).toBe('00000000-0000-4000-8000-000000000001');
     expect(durableCall![1][1]).toBe(
       '11111111-1111-4111-8111-111111111111:2026-10-16T02:10:00.000Z',
