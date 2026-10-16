@@ -513,6 +513,7 @@ export class StrategyOrchestratorService {
             confidenceTier: PaperAllocationConfidenceTier;
             marketReferenceEntryPrice?: string;
             adaptiveRiskMultiplier?: string;
+            minimumExecutableLot?: string;
           }
         | undefined;
       if (
@@ -559,6 +560,7 @@ export class StrategyOrchestratorService {
               ? { marketReferenceEntryPrice: String(executionCandidate.suggestedEntryPrice) }
               : {}),
             ...(adaptiveRiskMultiplier ? { adaptiveRiskMultiplier } : {}),
+            minimumExecutableLot: '0.10',
           };
         }
       }

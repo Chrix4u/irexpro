@@ -807,6 +807,7 @@ describe('StrategyOrchestratorService', () => {
             executionMode: ExecutionMode.PAPER_ONLY,
             allocatedCapital: '1000',
             confidenceTier: 'VERY_STRONG',
+            minimumExecutableLot: '0.10',
           },
         }),
       );

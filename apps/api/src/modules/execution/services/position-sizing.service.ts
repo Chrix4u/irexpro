@@ -42,6 +42,8 @@ export type PositionSizingFailureCode =
    * rounding UP to minLot would EXCEED the risk budget, so it is a
    * rejection, never a round-up. */
   | 'POSITION_SIZE_BELOW_MINIMUM'
+  | 'POSITION_SIZE_BELOW_POLICY_MINIMUM'
+  | 'POLICY_MINIMUM_LOT_UNPROVABLE'
   | 'POSITION_SIZE_ZERO';
 
 /** Typed fail-closed sizing rejection — carries the stable machine code. */
@@ -81,6 +83,7 @@ export interface PositionSizingInputs {
   stopLossDistance: string;
   contractSize: string;
   minLot: string;
+  policyMinimumExecutableLot?: string | null;
   maxLot: string;
   lotStep: string;
   profileMaxPositionSizeLot: string;
@@ -169,6 +172,8 @@ export class PositionSizingService {
       marketReferenceEntryPrice?: string | null;
       /** PAPER-only intelligence multiplier; ignored outside allocation-aware PAPER. */
       adaptiveRiskMultiplier?: string | null;
+      /** PAPER-only product floor. Never rounded up; below-floor sizing rejects. */
+      minimumExecutableLot?: string | null;
     };
   }): Promise<SizedPosition> {
     const { userId, brokerConnectionId, instrument } = params;
@@ -481,6 +486,26 @@ export class PositionSizingService {
       );
     }
 
+    let policyMinimumExecutableLot: ExactDecimal | null = null;
+    if (allocationAwarePaper && params.paperAllocationSizing?.minimumExecutableLot != null) {
+      policyMinimumExecutableLot = ExactDecimal.tryParse(
+        params.paperAllocationSizing.minimumExecutableLot,
+      );
+      if (!policyMinimumExecutableLot || !policyMinimumExecutableLot.isPositive()) {
+        throw new PositionSizingError(
+          'POLICY_MINIMUM_LOT_UNPROVABLE',
+          `PAPER minimum executable lot is not a provable positive decimal: ${params.paperAllocationSizing.minimumExecutableLot}`,
+        );
+      }
+      if (lots.lt(policyMinimumExecutableLot)) {
+        throw new PositionSizingError(
+          'POSITION_SIZE_BELOW_POLICY_MINIMUM',
+          `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} is below the PAPER policy minimum ` +
+            `${policyMinimumExecutableLot.toString()} — the engine abstains instead of rounding risk upward`,
+        );
+      }
+    }
+
     // ── 8. Capital commitment = broker-required margin, not gross notional. ──
     // A leveraged FX position's notional can be many times larger than the
     // actual account capital consumed. Comparing gross notional with the user's
@@ -533,6 +558,7 @@ export class PositionSizingService {
       stopLossDistance: slDistance.toString(),
       contractSize: contractSize.toString(),
       minLot: minLot.toString(),
+      policyMinimumExecutableLot: policyMinimumExecutableLot?.toString() ?? null,
       maxLot: maxLot.toString(),
       lotStep: lotStep.toString(),
       profileMaxPositionSizeLot: profileMaxLots.toString(),

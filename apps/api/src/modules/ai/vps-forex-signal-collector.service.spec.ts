@@ -503,7 +503,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
+      PlanBEnsembleModule.PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
     ]);
     expect(restored).toBeDefined();
     expect(restored.direction).toBe(current!.direction);
@@ -546,11 +546,11 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
+      PlanBEnsembleModule.PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
     ]);
   });
 
-  it('resolves outcomes for PAPER-executable decisions even when strict promotion admission is false', async () => {
+  it('resolves rejected counterfactual outcomes instead of learning only from admitted decisions', async () => {
     const query = jest.fn().mockImplementation(async (sql: string) => {
       if (String(sql).includes('SELECT') && String(sql).includes('ensemble_shadow_decisions')) {
         return [
@@ -564,7 +564,7 @@ describe('VpsForexSignalCollectorService', () => {
               stopLoss: 1.099,
               takeProfit: 1.102,
               governance: {
-                paperExecutionEligible: true,
+                paperExecutionEligible: false,
                 estimatedExecutionCostR: 0.1,
               },
             },
@@ -600,15 +600,12 @@ describe('VpsForexSignalCollectorService', () => {
     await (collector as any).resolvePendingEnsembleShadowOutcomes('user-1', 'conn-1', candles);
 
     const selectSql = String(query.mock.calls[0][0]);
-    expect(selectSql).toContain('admitted = true');
-    expect(selectSql).toContain('paperExecutionEligible');
-    expect(selectSql).toContain('OR COALESCE');
-    expect(selectSql).toContain('highConvictionOverlay');
-    expect(selectSql).toContain('trendPersistenceShadow');
-    expect(selectSql).toContain('allBrokerNative');
-    expect(selectSql).toContain("'CONFIRM'");
-    expect(selectSql).toContain("'CONFLICT'");
-    expect(selectSql).toContain("'ABSTAIN'");
+    expect(selectSql).toContain('market_bar_time >= $4');
+    expect(selectSql).toContain('model_version = ANY($5::text[])');
+    expect(selectSql).not.toContain('admitted = true');
+    expect(selectSql).not.toContain('paperExecutionEligible');
+    expect(selectSql).not.toContain('highConvictionOverlay');
+    expect(selectSql).not.toContain('trendPersistenceShadow');
     const updateCall = query.mock.calls.find(([sql]) =>
       String(sql).includes('UPDATE trading.ensemble_shadow_decisions'),
     );
@@ -724,7 +721,7 @@ describe('VpsForexSignalCollectorService', () => {
       'irexpro-multimodel-ensemble-v1',
       'USDJPY',
       'BUY',
-      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
+      PlanBEnsembleModule.PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
     ]);
   });
 
@@ -1388,6 +1385,75 @@ describe('VpsForexSignalCollectorService', () => {
       governanceSpy.mockRestore();
       planBSpy.mockRestore();
     }
+  });
+
+  it('uses mature prediction calibration as active PAPER authority inside adaptive scoring', async () => {
+    const collector = createCollector(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    (collector as any).adaptivePredictionCalibration = {
+      getCalibration: jest.fn().mockResolvedValue({
+        artifact: 'adaptive-prediction-calibration-v1',
+        available: true,
+        authoritative: true,
+        sourceLevel: 'PAIR_DIRECTION_ROUTE',
+        maturity: 'COLLECTING',
+        samples: 15,
+        wins: 5,
+        losses: 10,
+        empiricalWinRate: 5 / 15,
+        rawConfidence: 0.67,
+        calibratedWinProbability: 0.41,
+        confidenceCorrection: -0.26,
+        rawNetExpectedR: 0.12,
+        calibratedNetExpectedR: -0.18,
+        profitFactor: 0.5,
+        recentDegradation: false,
+        blockRecommended: true,
+        rescueEligible: false,
+        reason: 'CALIBRATED_EDGE_UNFAVOURABLE',
+      }),
+    };
+    const candidate = buildCandidate('EURUSD', trendCandles())!;
+    const result = await (collector as any).evaluateAdaptiveCore({
+      userId: 'user-1',
+      connectionId: 'conn-1',
+      candidate,
+      ensemble: {
+        regime: 'TREND_HEALTHY',
+        strategyRoute: 'TREND_CONTINUATION',
+        metaProbability: 0.7,
+        directionQuality: 0.72,
+        tradeQuality: 0.74,
+        exitQuality: 0.7,
+        consensusPassed: 6,
+        consensusRequired: 6,
+      },
+      governance: {
+        paperExecutionCostUsable: true,
+        executionSpreadEvidenceValid: true,
+        driftState: 'NORMAL',
+        driftQuality: 0.9,
+        netExpectedR: 0.12,
+        estimatedExecutionCostR: 0.04,
+        paperExecutionBlockers: [],
+      },
+      executionRoute: 'NORMAL_PAPER',
+      evaluatedAt: new Date('2026-10-16T03:00:00.000Z'),
+      allocationCapital: '1000',
+      portfolio: { available: true, positions: [] },
+    });
+
+    expect(result.predictionCalibration.blockRecommended).toBe(true);
+    expect(result.rawNetExpectedR).toBe(0.12);
+    expect(result.netExpectedR).toBe(-0.18);
+    expect(result.opportunity.executionEligible).toBe(false);
+    expect(result.opportunity.hardBlockers).toContain('ADAPTIVE_CALIBRATION_NEGATIVE_EDGE');
   });
 
   it('keeps the canary quarantined without letting it suppress eligible controlled PAPER research', async () => {
@@ -2573,12 +2639,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(sql).toContain('model_version = ANY($4::text[])');
     expect(params.slice(0, 3)).toEqual(['user-1', 'conn-1', 'irexpro-multimodel-ensemble-v1']);
     expect(params[3]).toEqual([
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1-trend-route-reliability-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1-trend-route-reliability-v1-pair-side-route-reliability-v1',
-      'planb-v4-bi2-et2-nm2-hp3-dmw1-ts1-trr1-psrr1',
-      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
+      ...PlanBEnsembleModule.PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
     ]);
   });
   it('loads pair-side continuation reliability from independent episode-collapsed shadow evidence', async () => {

@@ -20,6 +20,7 @@ import {
 } from './v8-shadow-meta-scorer';
 import {
   PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+  PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_ENSEMBLE_ARTIFACT,
   PLAN_B_GROSS_EXPECTED_R_FLOOR,
@@ -135,6 +136,12 @@ import {
   AdaptiveRiskMultiplierDecision,
   selectAdaptiveRiskMultiplier,
 } from './adaptive-risk-multiplier';
+import {
+  AdaptivePredictionCalibrationService,
+  applyAdaptivePredictionCalibrationAuthority,
+  unavailableAdaptivePredictionCalibration,
+  type AdaptivePredictionCalibrationDecision,
+} from './adaptive-prediction-calibration.service';
 import {
   adaptiveCandidateRiskAtStop,
   adaptiveMarketDataFreshness,
@@ -348,6 +355,8 @@ interface AdaptiveScanWinner {
   exposure: AdaptiveCurrencyExposureDecision;
   opportunity: AdaptiveOpportunityDecision;
   riskMultiplier: AdaptiveRiskMultiplierDecision;
+  predictionCalibration: AdaptivePredictionCalibrationDecision;
+  rawNetExpectedR: number;
   candidateRiskAtStop: number | null;
   requestedRiskPercent: number;
   adaptiveScore: number;
@@ -693,6 +702,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     private readonly ensemblePostEntryProtection?: EnsemblePostEntryProtectionShadowService,
     @Optional() private readonly adaptiveEdgeMatrix?: AdaptiveEdgeMatrixService,
     @Optional() private readonly allocationService?: AllocationService,
+    @Optional()
+    private readonly adaptivePredictionCalibration?: AdaptivePredictionCalibrationService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -1510,6 +1521,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 exposure: preliminaryAdaptive.exposure,
                 opportunity: preliminaryAdaptive.opportunity,
                 riskMultiplier: preliminaryAdaptive.riskMultiplier,
+                predictionCalibration: preliminaryAdaptive.predictionCalibration,
+                rawNetExpectedR: preliminaryAdaptive.rawNetExpectedR,
                 candidateRiskAtStop: preliminaryAdaptive.candidateRiskAtStop,
                 requestedRiskPercent: preliminaryAdaptive.requestedRiskPercent,
                 adaptiveScore: preliminaryAdaptive.opportunity.score,
@@ -1655,10 +1668,34 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             });
           }
 
+          const researchCalibrationRequest = {
+            userId,
+            brokerConnectionId: connectionId,
+            instrument: best.instrument,
+            direction: best.direction,
+            session: preliminaryAdaptive.marketState.session,
+            state: preliminaryAdaptive.marketState.state,
+            strategyRoute: planBEnsemble.strategyRoute,
+            decisionPolicyVersions: PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS,
+            evaluatedAt,
+            rawConfidence: best.confidence,
+            rawNetExpectedR: ensembleGovernance.netExpectedR,
+          } as const;
+          const researchPredictionCalibration = this.adaptivePredictionCalibration
+            ? await this.adaptivePredictionCalibration.getCalibration(researchCalibrationRequest)
+            : unavailableAdaptivePredictionCalibration(researchCalibrationRequest);
+          const researchCalibrationAuthority = applyAdaptivePredictionCalibrationAuthority({
+            calibration: researchPredictionCalibration,
+            rawConfidence: best.confidence,
+            rawNetExpectedR: ensembleGovernance.netExpectedR,
+            paperExecutionBlockers: ensembleGovernance.paperExecutionBlockers,
+            allowResearchRescue: true,
+          });
+
           const paperResearchThroughputInput = {
             normalPaperExecution,
-            confidence: best.confidence,
-            netExpectedR: ensembleGovernance.netExpectedR,
+            confidence: researchCalibrationAuthority.effectiveConfidence,
+            netExpectedR: researchCalibrationAuthority.effectiveNetExpectedR,
             executionSpreadEvidenceValid: ensembleGovernance.executionSpreadEvidenceValid,
             paperExecutionCostUsable: ensembleGovernance.paperExecutionCostUsable,
             eventRisk: ensembleGovernance.eventRisk,
@@ -1669,7 +1706,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             alignedMomentumAtr: best.shortHorizonMomentumAtr,
             tradeQuality: planBEnsemble.tradeQuality,
             exitQuality: planBEnsemble.exitQuality,
-            paperExecutionBlockers: ensembleGovernance.paperExecutionBlockers,
+            paperExecutionBlockers: researchCalibrationAuthority.effectivePaperExecutionBlockers,
             routeReliabilityDemoted: pairSideReliabilityDemoted,
           };
           let paperResearchThroughput = evaluatePaperResearchThroughput(
@@ -1681,10 +1718,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperResearchThroughput.reason === 'EXIT_QUALITY_TOO_LOW';
           const paperResearchAccelerationEvidenceCandidate =
             paperResearchQualityLimited &&
-            Number.isFinite(best.confidence) &&
-            best.confidence >= PAPER_RESEARCH_EXPLORATION_MIN_CONFIDENCE &&
-            Number.isFinite(ensembleGovernance.netExpectedR) &&
-            ensembleGovernance.netExpectedR >= PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R &&
+            Number.isFinite(researchCalibrationAuthority.effectiveConfidence) &&
+            researchCalibrationAuthority.effectiveConfidence >=
+              PAPER_RESEARCH_EXPLORATION_MIN_CONFIDENCE &&
+            Number.isFinite(researchCalibrationAuthority.effectiveNetExpectedR) &&
+            researchCalibrationAuthority.effectiveNetExpectedR >=
+              PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R &&
             (ensembleGovernance.paperExecutionCostUsable ??
               ensembleGovernance.executionSpreadEvidenceValid) &&
             ensembleGovernance.eventRisk === 'CLEAR';
@@ -1830,7 +1869,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           const paperCostAwareEntry = evaluatePaperCostAwareEntry({
             executionRoute: paperExecutionRoute === 'NONE' ? 'NORMAL_PAPER' : paperExecutionRoute,
             grossExpectedR: ensembleGovernance.grossExpectedR,
-            netExpectedR: ensembleGovernance.netExpectedR,
+            netExpectedR: researchCalibrationAuthority.effectiveNetExpectedR,
             estimatedExecutionCostR: ensembleGovernance.estimatedExecutionCostR,
             calibratedCostRescue: paperCalibratedCostRescue.eligible,
             evidence: paperCostAwareEvidence,
@@ -1860,7 +1899,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             this.logger.log(
               `PAPER research-throughput ${best.instrument} ${best.direction} ` +
                 `execution=ELIGIBLE executionAuthority=PAPER_ONLY_RESEARCH ` +
-                `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
+                `netExpectedR=${researchCalibrationAuthority.effectiveNetExpectedR.toFixed(4)} ` +
+                `rawNetExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
+                `calibration=${researchPredictionCalibration.reason} ` +
                 `qualificationEvidence=false`,
             );
           }
@@ -2002,6 +2043,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           exposure: adaptive.exposure,
           opportunity: adaptive.opportunity,
           riskMultiplier: adaptive.riskMultiplier,
+          predictionCalibration: adaptive.predictionCalibration,
+          rawNetExpectedR: adaptive.rawNetExpectedR,
           candidateRiskAtStop: adaptive.candidateRiskAtStop,
           requestedRiskPercent: adaptive.requestedRiskPercent,
           adaptiveScore: adaptive.opportunity.score,
@@ -2049,6 +2092,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           exposure: refreshed.exposure,
           opportunity: refreshed.opportunity,
           riskMultiplier: refreshed.riskMultiplier,
+          predictionCalibration: refreshed.predictionCalibration,
+          rawNetExpectedR: refreshed.rawNetExpectedR,
           candidateRiskAtStop: refreshed.candidateRiskAtStop,
           requestedRiskPercent: refreshed.requestedRiskPercent,
           adaptiveScore: refreshed.opportunity.score,
@@ -2063,6 +2108,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             exposure: adaptiveWinner.exposure,
             opportunity: adaptiveWinner.opportunity,
             riskMultiplier: adaptiveWinner.riskMultiplier,
+            predictionCalibration: adaptiveWinner.predictionCalibration,
+            rawNetExpectedR: adaptiveWinner.rawNetExpectedR,
             candidateRiskAtStop: adaptiveWinner.candidateRiskAtStop,
             requestedRiskPercent: adaptiveWinner.requestedRiskPercent,
             adaptiveScore: adaptiveWinner.adaptiveScore,
@@ -2526,6 +2573,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     exposure: AdaptiveCurrencyExposureDecision;
     opportunity: AdaptiveOpportunityDecision;
     riskMultiplier: AdaptiveRiskMultiplierDecision;
+    predictionCalibration: AdaptivePredictionCalibrationDecision;
+    rawNetExpectedR: number;
     candidateRiskAtStop: number | null;
     requestedRiskPercent: number;
     sizingTier: PaperAllocationConfidenceTier;
@@ -2570,13 +2619,42 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const edge = this.adaptiveEdgeMatrix
       ? await this.adaptiveEdgeMatrix.getEvidence(edgeRequest)
       : unavailableAdaptiveEdgeEvidence(edgeRequest);
+    const rawNetExpectedR =
+      input.executionRoute === 'PAIRED_REVERSAL_RESEARCH' &&
+      Number.isFinite(input.pairedReversalNetExpectedR)
+        ? input.pairedReversalNetExpectedR!
+        : input.governance.netExpectedR;
+    const calibrationRequest = {
+      userId: input.userId,
+      brokerConnectionId: input.connectionId,
+      instrument: input.candidate.instrument,
+      direction: input.candidate.direction,
+      session: marketState.session,
+      state: marketState.state,
+      strategyRoute: input.ensemble.strategyRoute,
+      decisionPolicyVersions: PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS,
+      evaluatedAt: input.evaluatedAt,
+      rawConfidence: input.candidate.confidence,
+      rawNetExpectedR,
+    } as const;
+    const predictionCalibration = this.adaptivePredictionCalibration
+      ? await this.adaptivePredictionCalibration.getCalibration(calibrationRequest)
+      : unavailableAdaptivePredictionCalibration(calibrationRequest);
+    const calibrationAuthority = applyAdaptivePredictionCalibrationAuthority({
+      calibration: predictionCalibration,
+      rawConfidence: input.candidate.confidence,
+      rawNetExpectedR,
+      paperExecutionBlockers: [],
+      allowResearchRescue: false,
+    });
+    const netExpectedR = calibrationAuthority.effectiveNetExpectedR;
 
     const sizing =
       input.executionRoute === 'NORMAL_PAPER'
         ? dynamicPaperLotUpperBound({
             confidence: input.candidate.confidence,
             metaProbability: input.ensemble.metaProbability,
-            netExpectedR: input.governance.netExpectedR,
+            netExpectedR,
             consensusPassed: input.ensemble.consensusPassed,
             consensusRequired: input.ensemble.consensusRequired,
             volatilityScore: input.candidate.volatilityScore,
@@ -2608,13 +2686,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         riskAtStop: candidateRiskAtStop ?? 1,
       },
     });
-    const netExpectedR =
-      input.executionRoute === 'PAIRED_REVERSAL_RESEARCH' &&
-      Number.isFinite(input.pairedReversalNetExpectedR)
-        ? input.pairedReversalNetExpectedR!
-        : input.governance.netExpectedR;
     const hardBlockers = [
       ...(input.executionRoute === 'NONE' ? input.governance.paperExecutionBlockers : []),
+      ...(calibrationAuthority.blockExecution ? ['ADAPTIVE_CALIBRATION_NEGATIVE_EDGE'] : []),
       ...(exposure.capacity === 'BLOCKED' ? ['ADAPTIVE_CURRENCY_CONCENTRATION_BLOCKED'] : []),
     ];
     const opportunity = scoreAdaptiveOpportunity({
@@ -2645,6 +2719,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       exposure,
       opportunity,
       riskMultiplier,
+      predictionCalibration,
+      rawNetExpectedR,
       candidateRiskAtStop,
       requestedRiskPercent,
       sizingTier: sizing.tier as PaperAllocationConfidenceTier,
@@ -2669,6 +2745,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       exposure: adaptive.exposure,
       opportunity: adaptive.opportunity,
       riskMultiplier: adaptive.riskMultiplier,
+      predictionCalibration: adaptive.predictionCalibration,
+      rawNetExpectedR: adaptive.rawNetExpectedR,
       candidateRiskAtStop: adaptive.candidateRiskAtStop,
       requestedRiskPercent: adaptive.requestedRiskPercent,
       scanRank: adaptive.adaptiveScanRank ?? null,
@@ -3198,6 +3276,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     seriesByInstrument: Map<string, LivePaperCandleInput[]>,
   ): Promise<void> {
     if (!this.dataSource) return;
+    const earliestCandleMs = [...seriesByInstrument.values()]
+      .flatMap((candles) => candles.map((candle) => candle.timestamp.getTime()))
+      .filter(Number.isFinite)
+      .reduce((earliest, timestamp) => Math.min(earliest, timestamp), Number.POSITIVE_INFINITY);
+    if (!Number.isFinite(earliestCandleMs)) return;
+    const earliestResolvableDecisionBar = new Date(earliestCandleMs - BAR_MS);
 
     const rows = (await this.dataSource.query(
       `
@@ -3212,33 +3296,19 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         WHERE user_id = $1
           AND broker_connection_id = $2
           AND engine_code = $3
-          AND (
-            admitted = true
-            OR COALESCE(
-              (components->'governance'->>'paperExecutionEligible')::boolean,
-              false
-            ) = true
-            OR (
-              COALESCE(
-                (components->'highConvictionOverlay'->>'allBrokerNative')::boolean,
-                false
-              ) = true
-              AND components->'highConvictionOverlay'->>'state' IN (
-                'CONFIRM',
-                'CONFLICT',
-                'ABSTAIN'
-              )
-            )
-            OR COALESCE(
-              (components->'trendPersistenceShadow'->>'candidate')::boolean,
-              false
-            ) = true
-          )
+          AND market_bar_time >= $4
+          AND model_version = ANY($5::text[])
           AND NOT (components ? 'outcome')
         ORDER BY evaluated_at ASC
-        LIMIT 500
+        LIMIT 1500
       `,
-      [userId, connectionId, ACTIVE_ENGINE_CODE],
+      [
+        userId,
+        connectionId,
+        ACTIVE_ENGINE_CODE,
+        earliestResolvableDecisionBar,
+        [...PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS],
+      ],
     )) as Array<{
       id: string;
       instrument: string;

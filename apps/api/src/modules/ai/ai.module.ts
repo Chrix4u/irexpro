@@ -12,6 +12,7 @@ import { AiCopilotController } from './ai-copilot.controller';
 import { ExternalSignalPerformanceController } from './external-signal-performance.controller';
 import { ExternalSignalPerformanceService } from './external-signal-performance.service';
 import { AdaptiveEdgeMatrixService } from './adaptive-edge-matrix.service';
+import { AdaptivePredictionCalibrationService } from './adaptive-prediction-calibration.service';
 import { TradingViewWebhookController } from './tradingview-webhook.controller';
 import { TradingViewWebhookService } from './tradingview-webhook.service';
 import { TradingViewWebhookGuard } from '../../common/guards/tradingview-webhook.guard';
@@ -72,6 +73,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     ExternalSignalApiKeyGuard,
     ExternalSignalPerformanceService,
     AdaptiveEdgeMatrixService,
+    AdaptivePredictionCalibrationService,
     TradingViewWebhookService,
     TradingViewWebhookGuard,
     VpsForexSignalCollectorService,
