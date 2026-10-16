@@ -104,6 +104,27 @@ describe('adaptive prediction calibration', () => {
     expect(result.blockRecommended).toBe(false);
   });
 
+  it('collapses overlapping outcome horizons before calibration evidence can mature', () => {
+    const rows = Array.from({ length: 24 }, (_, i) => {
+      const evaluated = new Date(Date.parse('2026-10-15T08:00:00.000Z') + i * 5 * 60_000);
+      return outcome(i, i % 3 === 2 ? 'LOSS' : 'WIN', i % 3 === 2 ? -1 : 1.1, {
+        evaluated_at: evaluated,
+        outcome_resolved_at: new Date(evaluated.getTime() + 60 * 60_000),
+      });
+    });
+
+    const result = buildAdaptivePredictionCalibration(rows, {
+      ...request,
+      rawConfidence: 0.6,
+      rawNetExpectedR: 0.04,
+    });
+
+    expect(result.samples).toBe(1);
+    expect(result.authoritative).toBe(false);
+    expect(result.maturity).toBe('SPARSE');
+    expect(result.rescueEligible).toBe(false);
+  });
+
   it('defensively excludes outcomes that were not resolved before the current decision', () => {
     const historical = Array.from({ length: 12 }, (_, i) => outcome(i, 'LOSS', -1));
     const future = outcome(99, 'WIN', 5, {
