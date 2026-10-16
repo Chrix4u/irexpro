@@ -1,5 +1,6 @@
 export const PAPER_POST_LOSS_ENTRY_GUARD_ARTIFACT = 'paper-post-loss-confirmation-v1';
 const CLOSED_M5_BAR_MS = 5 * 60_000;
+export const PAPER_POST_LOSS_MULTI_EVIDENCE_MIN_NET_R = 0.12;
 
 export interface PaperPostLossEntryState {
   available: boolean;
@@ -19,6 +20,7 @@ export type PaperPostLossEntryReason =
   | 'WAITING_FOR_POST_LOSS_BAR'
   | 'DIRECTION_NOT_RECONFIRMED'
   | 'DIRECTION_RECONFIRMED'
+  | 'MULTI_EVIDENCE_RECONFIRMED'
   | 'DIRECTION_ALREADY_RECONFIRMED';
 export interface PaperPostLossEntryDecision {
   artifact: typeof PAPER_POST_LOSS_ENTRY_GUARD_ARTIFACT;
@@ -38,6 +40,13 @@ export function evaluatePaperPostLossEntryGuard(input: {
   evaluatedAt: Date;
   /** Direction-aligned momentum, positive for renewed support on either side. */
   alignedMomentumAtr: number;
+  /** Existing authoritative post-cost edge before adding this guard's blocker. */
+  netExpectedR?: number;
+  driftState?: string;
+  consensusPassed?: number;
+  consensusRequired?: number;
+  eventRisk?: string;
+  executionCostUsable?: boolean;
 }): PaperPostLossEntryDecision {
   const previous = input.state.lastClosedTrade;
   const closedAtMs = previous?.closedAt?.getTime() ?? Number.NaN;
@@ -76,6 +85,21 @@ export function evaluatePaperPostLossEntryGuard(input: {
   }
   if (barMs < closedAtMs) return decision(false, 'WAITING_FOR_POST_LOSS_BAR');
   if (previous.reconfirmed) return decision(true, 'DIRECTION_ALREADY_RECONFIRMED');
-  if (input.alignedMomentumAtr <= 0) return decision(false, 'DIRECTION_NOT_RECONFIRMED');
-  return decision(true, 'DIRECTION_RECONFIRMED');
+  if (input.alignedMomentumAtr > 0) return decision(true, 'DIRECTION_RECONFIRMED');
+
+  const netExpectedR = Number(input.netExpectedR);
+  const consensusPassed = Number(input.consensusPassed);
+  const consensusRequired = Number(input.consensusRequired);
+  const multiEvidenceReconfirmed =
+    Number.isFinite(netExpectedR) &&
+    netExpectedR >= PAPER_POST_LOSS_MULTI_EVIDENCE_MIN_NET_R &&
+    input.driftState === 'NORMAL' &&
+    Number.isFinite(consensusPassed) &&
+    Number.isFinite(consensusRequired) &&
+    consensusRequired > 0 &&
+    consensusPassed >= consensusRequired &&
+    input.eventRisk === 'CLEAR' &&
+    input.executionCostUsable === true;
+  if (multiEvidenceReconfirmed) return decision(true, 'MULTI_EVIDENCE_RECONFIRMED');
+  return decision(false, 'DIRECTION_NOT_RECONFIRMED');
 }

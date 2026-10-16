@@ -20,6 +20,7 @@ import * as V8ShadowMetaModule from './v8-shadow-meta-scorer';
 import * as PairedDirectionReversalModule from './paired-direction-reversal';
 import * as PaperSpreadCalibrationModule from './paper-spread-calibration-shadow';
 import { PAPER_POST_LOSS_STATE_QUERY } from './paper-post-loss-state-query';
+import * as PaperPostLossEntryGuardModule from './paper-post-loss-entry-guard';
 
 // Collection fixtures explicitly provide a healthy, empty PAPER history.
 // Missing/empty production store responses are tested separately below.
@@ -891,6 +892,10 @@ describe('VpsForexSignalCollectorService', () => {
           ]
         : [],
     );
+    const postLossGuardSpy = jest.spyOn(
+      PaperPostLossEntryGuardModule,
+      'evaluatePaperPostLossEntryGuard',
+    );
     const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
     const modelSpy = jest
       .spyOn(PlanBEnsembleModule, 'scorePlanBMultimodelShadow')
@@ -898,6 +903,8 @@ describe('VpsForexSignalCollectorService', () => {
         ...actualPlanB(input, positions),
         paperAdmitted: input.instrument === 'EURUSD' && input.direction === 'BUY',
         admitted: input.instrument === 'EURUSD' && input.direction === 'BUY',
+        consensusPassed: input.instrument === 'EURUSD' && input.direction === 'BUY' ? 6 : 3,
+        consensusRequired: 6,
         expectedR: 0.8,
         strategyRoute: 'TREND_CONTINUATION',
       }));
@@ -912,6 +919,7 @@ describe('VpsForexSignalCollectorService', () => {
         eventRisk: 'CLEAR',
         driftState: 'NORMAL',
         executionSpreadEvidenceValid: true,
+        paperExecutionCostUsable: true,
       }));
     const collector = createCollector(
       config({
@@ -945,6 +953,16 @@ describe('VpsForexSignalCollectorService', () => {
         }) as unknown as typeof fetch,
       );
       expect(receiveSignal).not.toHaveBeenCalled();
+      expect(postLossGuardSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          netExpectedR: 0.7,
+          driftState: 'NORMAL',
+          consensusPassed: 6,
+          consensusRequired: 6,
+          eventRisk: 'CLEAR',
+          executionCostUsable: true,
+        }),
+      );
       const insert = query.mock.calls.find(
         ([sql, params]) =>
           String(sql).includes('INSERT INTO trading.ensemble_shadow_decisions') &&
@@ -961,6 +979,7 @@ describe('VpsForexSignalCollectorService', () => {
         'PAPER_POST_LOSS_WAITING_FOR_POST_LOSS_BAR',
       );
     } finally {
+      postLossGuardSpy.mockRestore();
       modelSpy.mockRestore();
       governanceSpy.mockRestore();
     }
