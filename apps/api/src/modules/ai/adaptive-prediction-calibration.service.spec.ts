@@ -188,6 +188,34 @@ describe('adaptive prediction calibration', () => {
     expect(authority.effectiveConfidence).toBe(calibration.calibratedWinProbability);
   });
 
+  it('does not hard-veto a raw-positive pair from broad route-wide calibration evidence', () => {
+    const winIndexes = new Set([0, 1, 2, 16, 20]);
+    const calibration = buildAdaptivePredictionCalibration(
+      Array.from({ length: 24 }, (_, i) =>
+        winIndexes.has(i)
+          ? outcome(i, 'WIN', 1.0, { instrument: 'GBPUSD', direction: 'SELL' })
+          : outcome(i, 'LOSS', -1.1, { instrument: 'GBPUSD', direction: 'SELL' }),
+      ),
+      { ...request, rawConfidence: 0.68, rawNetExpectedR: 0.18 },
+    );
+    const authority = applyAdaptivePredictionCalibrationAuthority({
+      calibration,
+      rawConfidence: 0.68,
+      rawNetExpectedR: 0.18,
+      paperExecutionBlockers: [],
+      allowResearchRescue: true,
+    });
+
+    expect(calibration.sourceLevel).toBe('ROUTE');
+    expect(calibration.maturity).toBe('MATURE');
+    expect(calibration.calibratedNetExpectedR).toBeLessThan(0);
+    expect(calibration.blockRecommended).toBe(false);
+    expect(authority.blockExecution).toBe(false);
+    expect(authority.effectivePaperExecutionBlockers).not.toContain(
+      'ADAPTIVE_CALIBRATION_NEGATIVE_EDGE',
+    );
+  });
+
   it('never rescues from sparse calibration evidence', () => {
     const calibration = buildAdaptivePredictionCalibration(
       Array.from({ length: 6 }, (_, i) => outcome(i, 'WIN', 1.2)),
