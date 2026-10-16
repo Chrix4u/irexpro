@@ -72,6 +72,20 @@ type EvidenceRow = {
   plan_b_ensemble_meta_probability?: string | number | null;
   plan_b_ensemble_score?: string | number | null;
   plan_b_ensemble_admitted?: string | boolean | null;
+  adaptive_market_state?: string | null;
+  adaptive_risk_multiplier?: string | number | null;
+  adaptive_opportunity_score?: string | number | null;
+  adaptive_scan_rank?: string | number | null;
+  adaptive_pre_scan_rank?: string | number | null;
+};
+
+type AdaptiveDecisionDiagnosticRow = {
+  adaptive_state: string | null;
+  adaptive_score: string | number | null;
+  adaptive_multiplier: string | number | null;
+  adaptive_scan_rank: string | number | null;
+  pre_adaptive_scan_rank: string | number | null;
+  edge_available: string | boolean | null;
 };
 
 type EquitySnapshotRow = {
@@ -83,6 +97,136 @@ type EquitySnapshotRow = {
 function finite(value: unknown): number | null {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function adaptiveBoolean(value: unknown): boolean {
+  return (
+    value === true || value === 1 || value === '1' || String(value ?? '').toLowerCase() === 'true'
+  );
+}
+
+function buildAdaptiveMarketIntelligenceDiagnostics(
+  decisions: AdaptiveDecisionDiagnosticRow[],
+  evidenceRows: EvidenceRow[],
+) {
+  const scores = decisions
+    .map((row) => finite(row.adaptive_score))
+    .filter((value): value is number => value !== null);
+  const multipliers = decisions
+    .map((row) => finite(row.adaptive_multiplier))
+    .filter((value): value is number => value !== null);
+  const stateCounts = decisions.reduce<Record<string, number>>((acc, row) => {
+    const state = row.adaptive_state?.trim() || 'UNKNOWN';
+    acc[state] = (acc[state] ?? 0) + 1;
+    return acc;
+  }, {});
+  const multiplierCounts = multipliers.reduce<Record<string, number>>((acc, multiplier) => {
+    const key = String(multiplier);
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  const comparableRanks = decisions
+    .map((row) => ({
+      adaptive: finite(row.adaptive_scan_rank),
+      prior: finite(row.pre_adaptive_scan_rank),
+    }))
+    .filter(
+      (row): row is { adaptive: number; prior: number } =>
+        row.adaptive !== null && row.prior !== null && row.adaptive > 0 && row.prior > 0,
+    );
+  const rankDeltas = comparableRanks.map((row) => row.prior - row.adaptive);
+  const edgeEvidenceAvailableDecisions = decisions.filter((row) =>
+    adaptiveBoolean(row.edge_available),
+  ).length;
+  const adaptiveExecutedRows = evidenceRows.filter(
+    (row) =>
+      row.trade_id != null &&
+      (Boolean(row.adaptive_market_state?.trim()) || finite(row.adaptive_risk_multiplier) !== null),
+  );
+  const adaptiveClosedRows = adaptiveExecutedRows.filter(
+    (row) =>
+      row.trade_status === 'CLOSED' &&
+      row.closed_at != null &&
+      finite(row.realised_pnl) !== null &&
+      (row.close_reason === 'STOP_LOSS_HIT' ||
+        row.close_reason === 'TAKE_PROFIT_HIT' ||
+        row.close_reason === 'PROFIT_PROTECTION'),
+  );
+
+  const aggregateOutcomes = <T extends string | number>(
+    keyOf: (row: EvidenceRow) => T | null,
+    label: 'state' | 'multiplier',
+  ) => {
+    const buckets = new Map<string, { key: T; rows: EvidenceRow[] }>();
+    for (const row of adaptiveClosedRows) {
+      const key = keyOf(row);
+      if (key === null) continue;
+      const mapKey = String(key);
+      const bucket = buckets.get(mapKey) ?? { key, rows: [] };
+      bucket.rows.push(row);
+      buckets.set(mapKey, bucket);
+    }
+    return [...buckets.values()]
+      .map(({ key, rows }) => {
+        const pnls = rows.map((row) => finite(row.realised_pnl) ?? 0);
+        return {
+          [label]: key,
+          closedTrades: rows.length,
+          wins: pnls.filter((value) => value > 0).length,
+          losses: pnls.filter((value) => value < 0).length,
+          realisedPnl: pnls.reduce((sum, value) => sum + value, 0),
+          averagePnl: rows.length
+            ? pnls.reduce((sum, value) => sum + value, 0) / rows.length
+            : null,
+          profitFactor: profitFactor(pnls),
+        };
+      })
+      .sort((a, b) => String(a[label]).localeCompare(String(b[label])));
+  };
+
+  return {
+    mode: 'DIAGNOSTIC_ONLY' as const,
+    modifiesExecution: false as const,
+    qualificationEvidence: false as const,
+    evidenceAvailable: decisions.length > 0,
+    adaptiveTaggedDecisions: decisions.length,
+    edgeEvidenceAvailableDecisions,
+    edgeEvidenceAvailabilityRate: decisions.length
+      ? edgeEvidenceAvailableDecisions / decisions.length
+      : 0,
+    stateCounts,
+    multiplierCounts,
+    scoreDistribution: {
+      count: scores.length,
+      minimum: scores.length ? Math.min(...scores) : null,
+      maximum: scores.length ? Math.max(...scores) : null,
+      average: scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null,
+      bands: {
+        below0_4: scores.filter((value) => value < 0.4).length,
+        from0_4To0_6: scores.filter((value) => value >= 0.4 && value < 0.6).length,
+        from0_6To0_8: scores.filter((value) => value >= 0.6 && value < 0.8).length,
+        atLeast0_8: scores.filter((value) => value >= 0.8).length,
+      },
+    },
+    rankComparison: {
+      comparableWinners: comparableRanks.length,
+      improved: rankDeltas.filter((delta) => delta > 0).length,
+      unchanged: rankDeltas.filter((delta) => delta === 0).length,
+      worsened: rankDeltas.filter((delta) => delta < 0).length,
+      averageRankImprovement: rankDeltas.length
+        ? rankDeltas.reduce((sum, value) => sum + value, 0) / rankDeltas.length
+        : null,
+    },
+    executedAdaptiveSignals: adaptiveExecutedRows.length,
+    closedAdaptiveTrades: adaptiveClosedRows.length,
+    realisedByState: aggregateOutcomes((row) => row.adaptive_market_state?.trim() || null, 'state'),
+    realisedByMultiplier: aggregateOutcomes(
+      (row) => finite(row.adaptive_risk_multiplier),
+      'multiplier',
+    ),
+    methodology:
+      'Read-only operational diagnostics from persisted adaptive decision metadata and resolved PAPER outcomes. These distributions never modify qualification gates, promotion eligibility, sizing, or execution authority.',
+  };
 }
 
 function median(values: number[]): number | null {
@@ -489,7 +633,12 @@ export class ExternalSignalPerformanceService {
           ti.metadata->>'plan_b_ensemble_same_instrument_count' AS plan_b_ensemble_same_instrument_count,
           ti.metadata->>'plan_b_ensemble_meta_probability' AS plan_b_ensemble_meta_probability,
           ti.metadata->>'plan_b_ensemble_score' AS plan_b_ensemble_score,
-          ti.metadata->>'plan_b_ensemble_admitted' AS plan_b_ensemble_admitted
+          ti.metadata->>'plan_b_ensemble_admitted' AS plan_b_ensemble_admitted,
+          ti.metadata->>'adaptive_market_state' AS adaptive_market_state,
+          ti.metadata->>'adaptive_risk_multiplier' AS adaptive_risk_multiplier,
+          ti.metadata->>'adaptive_opportunity_score' AS adaptive_opportunity_score,
+          ti.metadata->>'adaptive_scan_rank' AS adaptive_scan_rank,
+          ti.metadata->>'adaptive_pre_scan_rank' AS adaptive_pre_scan_rank
         FROM trading.trade_intents ti
         LEFT JOIN trading.trades t ON t.trade_intent_id = ti.id
         LEFT JOIN trading.capital_allocations ca ON ca.trade_intent_id = ti.id
@@ -502,6 +651,27 @@ export class ExternalSignalPerformanceService {
       `,
       evidenceQueryParams,
     )) as EvidenceRow[];
+
+    const adaptiveDecisionRows = isMultimodelProvider
+      ? ((await this.dataSource.query(
+          `
+            SELECT
+              components->'adaptiveMarketIntelligence'->'marketState'->>'state' AS adaptive_state,
+              components->'adaptiveMarketIntelligence'->'opportunity'->>'score' AS adaptive_score,
+              components->'adaptiveMarketIntelligence'->'riskMultiplier'->>'multiplier' AS adaptive_multiplier,
+              components->'adaptiveMarketIntelligence'->>'scanRank' AS adaptive_scan_rank,
+              components->'adaptiveMarketIntelligence'->>'preAdaptiveScanRank' AS pre_adaptive_scan_rank,
+              components->'adaptiveMarketIntelligence'->'edge'->>'available' AS edge_available
+            FROM trading.ensemble_shadow_decisions
+            WHERE user_id = $1
+              AND engine_code = $2
+              AND components ? 'adaptiveMarketIntelligence'
+              AND components->'adaptiveMarketIntelligence'->>'policyVersion' = $3
+            ORDER BY evaluated_at ASC, id ASC
+          `,
+          [userId, providerCode, expectedDecisionPolicyVersion],
+        )) as AdaptiveDecisionDiagnosticRow[])
+      : [];
 
     const signalTimes = rows
       .map((row) => {
@@ -875,6 +1045,11 @@ export class ExternalSignalPerformanceService {
           )
         : observedMarketDataAuthorities.length <= 1;
 
+    const adaptiveMarketIntelligenceDiagnostics = buildAdaptiveMarketIntelligenceDiagnostics(
+      adaptiveDecisionRows,
+      rows,
+    );
+
     const observed = {
       receivedSignals: rows.length,
       buySignals,
@@ -961,6 +1136,7 @@ export class ExternalSignalPerformanceService {
       profitProtectionShadow,
       v8ProspectiveShadow,
       planBEnsembleShadow,
+      adaptiveMarketIntelligenceDiagnostics,
       methodology: {
         completedTradeEvidence:
           'Qualification metrics count only PAPER trades durably closed by STOP_LOSS_HIT or TAKE_PROFIT_HIT. Manual, kill-switch, reconciliation and unknown broker closes are censored/interrupted and do not count toward the 100-trade gate.',

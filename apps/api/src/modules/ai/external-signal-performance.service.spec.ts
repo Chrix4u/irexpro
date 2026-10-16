@@ -480,6 +480,156 @@ describe('ExternalSignalPerformanceService', () => {
     expect(report.v8ProspectiveShadow.nextStage).toBe('COLLECTING_PROSPECTIVE_SHADOW');
   });
 
+  it('exposes additive adaptive intelligence diagnostics without changing qualification gates', async () => {
+    const start = new Date('2026-10-16T00:00:00.000Z');
+    const evidenceRows = [
+      {
+        signal_generated_at: start,
+        market_data_bar_time: start,
+        market_data_authority: 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
+        intent_status: 'EXECUTED',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        confidence_score: '0.72',
+        trade_id: 'adaptive-trade-1',
+        trade_status: 'CLOSED',
+        fill_price: '1.0',
+        exit_price: '1.01',
+        realised_pnl: '12',
+        close_reason: 'TAKE_PROFIT_HIT',
+        closed_at: new Date(start.getTime() + 60_000),
+        allocated_capital: '100',
+        broker_connection_id: null,
+        session_opening_balance: '10000',
+        session_started_at: start,
+        adaptive_market_state: 'TREND_HEALTHY',
+        adaptive_risk_multiplier: '1.25',
+        adaptive_opportunity_score: '0.88',
+        adaptive_scan_rank: '1',
+        adaptive_pre_scan_rank: '2',
+      },
+      {
+        signal_generated_at: new Date(start.getTime() + 300_000),
+        market_data_bar_time: new Date(start.getTime() + 300_000),
+        market_data_authority: 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
+        intent_status: 'EXECUTED',
+        instrument: 'GBPUSD',
+        direction: 'BUY',
+        confidence_score: '0.70',
+        trade_id: 'adaptive-trade-2',
+        trade_status: 'CLOSED',
+        fill_price: '1.0',
+        exit_price: '0.995',
+        realised_pnl: '-5',
+        close_reason: 'STOP_LOSS_HIT',
+        closed_at: new Date(start.getTime() + 360_000),
+        allocated_capital: '100',
+        broker_connection_id: null,
+        session_opening_balance: '10000',
+        session_started_at: start,
+        adaptive_market_state: 'REVERSAL',
+        adaptive_risk_multiplier: '1',
+        adaptive_opportunity_score: '0.74',
+        adaptive_scan_rank: '2',
+        adaptive_pre_scan_rank: '1',
+      },
+    ];
+    const adaptiveDecisionRows = [
+      {
+        adaptive_state: 'TREND_HEALTHY',
+        adaptive_score: '0.88',
+        adaptive_multiplier: '1.25',
+        adaptive_scan_rank: '1',
+        pre_adaptive_scan_rank: '2',
+        edge_available: 'true',
+      },
+      {
+        adaptive_state: 'REVERSAL',
+        adaptive_score: '0.74',
+        adaptive_multiplier: '1',
+        adaptive_scan_rank: '2',
+        pre_adaptive_scan_rank: '1',
+        edge_available: 'true',
+      },
+      {
+        adaptive_state: 'TREND_WEAK',
+        adaptive_score: '0.48',
+        adaptive_multiplier: '0.75',
+        adaptive_scan_rank: null,
+        pre_adaptive_scan_rank: '3',
+        edge_available: 'false',
+      },
+      {
+        adaptive_state: 'DISLOCATED',
+        adaptive_score: '0.21',
+        adaptive_multiplier: '0.5',
+        adaptive_scan_rank: null,
+        pre_adaptive_scan_rank: '4',
+        edge_available: 'true',
+      },
+    ];
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('FROM trading.ensemble_shadow_decisions')) return adaptiveDecisionRows;
+      if (sql.includes('broker.broker_account_snapshots')) return [];
+      return evidenceRows;
+    });
+    const service = new ExternalSignalPerformanceService({ query } as unknown as DataSource);
+
+    const report = await service.getProviderPerformance('user-1', 'irexpro-multimodel-ensemble-v1');
+
+    expect(report.adaptiveMarketIntelligenceDiagnostics).toMatchObject({
+      mode: 'DIAGNOSTIC_ONLY',
+      modifiesExecution: false,
+      evidenceAvailable: true,
+      adaptiveTaggedDecisions: 4,
+      edgeEvidenceAvailableDecisions: 3,
+      edgeEvidenceAvailabilityRate: 0.75,
+      stateCounts: {
+        TREND_HEALTHY: 1,
+        REVERSAL: 1,
+        TREND_WEAK: 1,
+        DISLOCATED: 1,
+      },
+      multiplierCounts: {
+        '0.5': 1,
+        '0.75': 1,
+        '1': 1,
+        '1.25': 1,
+      },
+      rankComparison: {
+        comparableWinners: 2,
+        improved: 1,
+        unchanged: 0,
+        worsened: 1,
+      },
+      executedAdaptiveSignals: 2,
+      closedAdaptiveTrades: 2,
+    });
+    expect(report.adaptiveMarketIntelligenceDiagnostics.scoreDistribution.average).toBeCloseTo(
+      0.5775,
+      8,
+    );
+    expect(report.adaptiveMarketIntelligenceDiagnostics.realisedByState).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ state: 'TREND_HEALTHY', closedTrades: 1, realisedPnl: 12 }),
+        expect.objectContaining({ state: 'REVERSAL', closedTrades: 1, realisedPnl: -5 }),
+      ]),
+    );
+    expect(report.adaptiveMarketIntelligenceDiagnostics.realisedByMultiplier).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ multiplier: 1.25, closedTrades: 1, realisedPnl: 12 }),
+        expect.objectContaining({ multiplier: 1, closedTrades: 1, realisedPnl: -5 }),
+      ]),
+    );
+    expect(report.checks.evidence).toBe(false);
+    expect(report.automaticDemoPromotion).toBe(false);
+    expect(report.automaticLivePromotion).toBe(false);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('FROM trading.ensemble_shadow_decisions'),
+      ['user-1', 'irexpro-multimodel-ensemble-v1', PLAN_B_ACTIVE_MODEL_POLICY_VERSION],
+    );
+  });
+
   it('isolates multimodel qualification to the active policy and primary PAPER market-data authority', async () => {
     const query = jest.fn().mockResolvedValue([]);
     const service = new ExternalSignalPerformanceService({ query } as unknown as DataSource);
