@@ -813,6 +813,26 @@ describe('StrategyOrchestratorService', () => {
       );
     });
 
+    it('marks the durable TradeIntent REJECTED when sizing fails closed', async () => {
+      const sizingError = Object.assign(
+        new Error('risk-budget volume 0.07000000 is below the PAPER policy minimum 0.1'),
+        { code: 'POSITION_SIZE_BELOW_POLICY_MINIMUM' },
+      );
+      sizingMock.sizePosition.mockRejectedValueOnce(sizingError);
+
+      const result = await service.processSignal(validCandidate());
+
+      expect(result).toMatchObject({
+        outcome: 'EXECUTION_FAILED',
+        signalId: 'sig-001',
+      });
+      expect(result.reason).toContain('POSITION_SIZE_BELOW_POLICY_MINIMUM');
+      expect(tradeIntentMock.markRejected).toHaveBeenCalledTimes(1);
+      expect(tradeIntentMock.markRejected).toHaveBeenCalledWith('intent-sig-001');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+
     it('passes adaptive PAPER risk multiplier into authoritative sizing', async () => {
       const result = await service.processSignal(
         validCandidate({

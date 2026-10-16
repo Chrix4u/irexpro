@@ -645,6 +645,19 @@ export class StrategyOrchestratorService {
           : METRIC_NAMES.SIZING_FAILURES,
         { code },
       );
+      // Sizing/allocation fail-closed is definitive for this exact AI decision.
+      // Keep the durable TradeIntent lifecycle truthful: a signal that can no
+      // longer proceed must not remain CREATED and look like a stuck order.
+      // The guarded CAS transition is idempotent and cannot regress an already
+      // executed/terminal intent.
+      await this.tradeIntentService
+        .markRejected(tradeIntent.id)
+        .catch((intentErr) =>
+          this.logger.warn(
+            `Signal ${signalId}: intent ${tradeIntent.id} could not be marked REJECTED after ` +
+              `sizing/allocation failure (${(intentErr as Error).message}) — duplicate recovery still fails closed`,
+          ),
+        );
       await this.markSignalProcessed(userId, signalId);
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
