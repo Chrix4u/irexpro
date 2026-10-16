@@ -111,6 +111,35 @@ import {
   PaperCalibratedCostResearchRescueDecision,
   evaluatePaperCalibratedCostResearchRescue,
 } from './paper-calibrated-cost-rescue';
+import { AllocationService } from '../execution/services/allocation.service';
+import {
+  paperAllocationRiskTargetPercent,
+  type PaperAllocationConfidenceTier,
+} from '../execution/services/paper-allocation-sizing-policy';
+import { AdaptiveMarketStateDecision, classifyAdaptiveMarketState } from './adaptive-market-state';
+import {
+  AdaptiveCurrencyExposureDecision,
+  AdaptiveCurrencyRiskPosition,
+  analyzeAdaptiveCurrencyExposure,
+} from './adaptive-currency-exposure';
+import {
+  AdaptiveEdgeEvidence,
+  AdaptiveEdgeMatrixService,
+  unavailableAdaptiveEdgeEvidence,
+} from './adaptive-edge-matrix.service';
+import {
+  AdaptiveOpportunityDecision,
+  scoreAdaptiveOpportunity,
+} from './adaptive-opportunity-score';
+import {
+  AdaptiveRiskMultiplierDecision,
+  selectAdaptiveRiskMultiplier,
+} from './adaptive-risk-multiplier';
+import {
+  adaptiveCandidateRiskAtStop,
+  adaptiveMarketDataFreshness,
+  rankAdaptivePaperScanWinners,
+} from './adaptive-paper-authority';
 
 const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
@@ -275,6 +304,63 @@ export interface CounterfactualExecutionSelection {
     | 'STRONGER_NET_EDGE'
     | 'AMBIGUOUS_DUAL_EDGE';
   requiredEdgeMarginR: number | null;
+}
+
+interface ExecutableCounterfactual {
+  opportunityKey: string;
+  evaluatedAt: Date;
+  candidate: Candidate;
+  signalId: string;
+  digits: number;
+  v8Shadow: ReturnType<typeof scoreV8ShadowMeta>;
+  planBShadow: ReturnType<typeof scorePlanBShadowMeta>;
+  planBEnsemble: PlanBEnsembleScore;
+  portfolioSnapshotAvailable: boolean;
+  ensembleGovernance: EnsembleGovernanceDecision;
+  macroEventAssessment: MacroEventRiskAssessment;
+  highConvictionOverlay: HighConvictionOverlay;
+  rejectedEdgeCanary: RejectedEdgeCanaryDecision | null;
+  rejectedEdgeCanaryEvidence: RejectedEdgeCanaryEvidence | null;
+  paperResearchThroughput: PaperResearchThroughputDecision;
+  pairedDirectionReversal: PairedDirectionReversalDecision;
+  pairedReversalGovernance: EnsembleGovernanceDecision;
+  pairedReversalResearch: ReturnType<typeof evaluatePaperPairedReversalResearch>;
+  pairedReversalEpisodeKey: string;
+  pairedReversalEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
+  paperResearchPairSideReliability: PaperResearchPairSideReliabilityDecision | null;
+  paperTrendRouteReliability: PaperTrendRouteReliabilityDecision | null;
+  paperTrendPairSideReliability: PaperTrendPairSideReliabilityDecision | null;
+  paperTrendPairSideReliabilityShadow: PaperTrendPairSideReliabilityShadowDecision | null;
+  paperExecutionRoute: ReturnType<typeof selectPaperExecutionRoute>;
+  paperResearchEpisodeKey: string;
+  paperResearchEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
+  paperPostLossEntryGuard: PaperPostLossEntryDecision;
+  paperCostAwareEntry: PaperCostAwareEntryDecision;
+  paperCostAwareEvidence: PaperCostAwareCohortEvidence;
+  paperCalibratedCostRescue: PaperCalibratedCostResearchRescueDecision;
+}
+
+interface AdaptiveScanWinner {
+  chosen: ExecutableCounterfactual;
+  selection: CounterfactualExecutionSelection;
+  marketState: AdaptiveMarketStateDecision;
+  edge: AdaptiveEdgeEvidence;
+  exposure: AdaptiveCurrencyExposureDecision;
+  opportunity: AdaptiveOpportunityDecision;
+  riskMultiplier: AdaptiveRiskMultiplierDecision;
+  candidateRiskAtStop: number | null;
+  requestedRiskPercent: number;
+  adaptiveScore: number;
+  netExpectedR: number;
+  executionCostR: number;
+  preAdaptiveScanRank: number;
+  adaptiveScanRank?: number;
+}
+
+function executableNetExpectedR(option: ExecutableCounterfactual): number {
+  return option.paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH'
+    ? option.pairedDirectionReversal.researchNetExpectedR
+    : option.ensembleGovernance.netExpectedR;
 }
 
 export function selectCounterfactualExecutionCandidate(
@@ -605,6 +691,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     @Optional() private readonly macroEventRisk?: MacroEventRiskService,
     @Optional()
     private readonly ensemblePostEntryProtection?: EnsemblePostEntryProtectionShadowService,
+    @Optional() private readonly adaptiveEdgeMatrix?: AdaptiveEdgeMatrixService,
+    @Optional() private readonly allocationService?: AllocationService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -1112,42 +1200,26 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
       let representativeSet = false;
       let representativeIsPaperEligible = false;
+      const adaptiveScanStartedAt = new Date();
+      const preAdaptiveCandidateRanks = new Map<Candidate, number>(
+        rankedCandidates.map((candidate, index) => [candidate, index + 1]),
+      );
+      const adaptiveAllocationCapital = paperSession
+        ? await this.loadAdaptiveAllocationCapital(userId, connectionId)
+        : null;
+      const initialAdaptivePortfolio = paperSession
+        ? await this.loadAdaptiveOpenRiskPositions(userId, connectionId)
+        : { available: false, positions: [] as AdaptiveCurrencyRiskPosition[] };
+      const adaptiveScanWinners: Array<{
+        chosen: ExecutableCounterfactual;
+        selection: CounterfactualExecutionSelection;
+      }> = [];
       const paperSpreadCalibrationHistoryCache = new Map<
         string,
         Promise<PaperSpreadCalibrationHistory>
       >();
       for (const pairCandidates of candidatesByInstrument.values()) {
-        const executableCounterfactuals: Array<{
-          candidate: Candidate;
-          signalId: string;
-          digits: number;
-          v8Shadow: ReturnType<typeof scoreV8ShadowMeta>;
-          planBShadow: ReturnType<typeof scorePlanBShadowMeta>;
-          planBEnsemble: PlanBEnsembleScore;
-          portfolioSnapshotAvailable: boolean;
-          ensembleGovernance: EnsembleGovernanceDecision;
-          macroEventAssessment: MacroEventRiskAssessment;
-          highConvictionOverlay: HighConvictionOverlay;
-          rejectedEdgeCanary: RejectedEdgeCanaryDecision | null;
-          rejectedEdgeCanaryEvidence: RejectedEdgeCanaryEvidence | null;
-          paperResearchThroughput: PaperResearchThroughputDecision;
-          pairedDirectionReversal: PairedDirectionReversalDecision;
-          pairedReversalGovernance: EnsembleGovernanceDecision;
-          pairedReversalResearch: ReturnType<typeof evaluatePaperPairedReversalResearch>;
-          pairedReversalEpisodeKey: string;
-          pairedReversalEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
-          paperResearchPairSideReliability: PaperResearchPairSideReliabilityDecision | null;
-          paperTrendRouteReliability: PaperTrendRouteReliabilityDecision | null;
-          paperTrendPairSideReliability: PaperTrendPairSideReliabilityDecision | null;
-          paperTrendPairSideReliabilityShadow: PaperTrendPairSideReliabilityShadowDecision | null;
-          paperExecutionRoute: ReturnType<typeof selectPaperExecutionRoute>;
-          paperResearchEpisodeKey: string;
-          paperResearchEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
-          paperPostLossEntryGuard: PaperPostLossEntryDecision;
-          paperCostAwareEntry: PaperCostAwareEntryDecision;
-          paperCostAwareEvidence: PaperCostAwareCohortEvidence;
-          paperCalibratedCostRescue: PaperCalibratedCostResearchRescueDecision;
-        }> = [];
+        const executableCounterfactuals: ExecutableCounterfactual[] = [];
 
         const rankedPairCandidates = [...pairCandidates].sort((a, b) => b.score - a.score);
         const primaryDirection = rankedPairCandidates[0]?.direction ?? null;
@@ -1398,6 +1470,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             representativeSet = true;
             representativeIsPaperEligible = ensembleGovernance.paperExecutionEligible;
           }
+          const normalPaperExecutionCandidate = canExecuteMultiModelPaper(
+            planBEnsemble,
+            ensembleGovernance,
+          );
           await this.persistEnsembleShadowDecision(
             userId,
             paperSession?.id ?? null,
@@ -1412,9 +1488,37 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperPostLossEntryGuard,
             paperSpreadCalibrationShadow,
           );
-          const normalPaperExecutionCandidate = canExecuteMultiModelPaper(
-            planBEnsemble,
-            ensembleGovernance,
+          const preliminaryAdaptive = await this.evaluateAdaptiveCore({
+            userId,
+            connectionId,
+            candidate: best,
+            ensemble: planBEnsemble,
+            governance: ensembleGovernance,
+            executionRoute: normalPaperExecutionCandidate ? 'NORMAL_PAPER' : 'NONE',
+            evaluatedAt,
+            allocationCapital: adaptiveAllocationCapital,
+            portfolio: initialAdaptivePortfolio,
+          });
+          const preliminaryRank = preAdaptiveCandidateRanks.get(best) ?? rankedCandidates.length;
+          await this.persistAdaptiveDecisionAnnotation(
+            userId,
+            eventId,
+            this.adaptiveMarketIntelligencePayload(
+              {
+                marketState: preliminaryAdaptive.marketState,
+                edge: preliminaryAdaptive.edge,
+                exposure: preliminaryAdaptive.exposure,
+                opportunity: preliminaryAdaptive.opportunity,
+                riskMultiplier: preliminaryAdaptive.riskMultiplier,
+                candidateRiskAtStop: preliminaryAdaptive.candidateRiskAtStop,
+                requestedRiskPercent: preliminaryAdaptive.requestedRiskPercent,
+                adaptiveScore: preliminaryAdaptive.opportunity.score,
+                netExpectedR: preliminaryAdaptive.netExpectedR,
+                executionCostR: preliminaryAdaptive.executionCostR,
+                preAdaptiveScanRank: preliminaryRank,
+              },
+              normalPaperExecutionCandidate ? 'NORMAL_PAPER' : 'NONE',
+            ),
           );
           let paperTrendRouteReliability: PaperTrendRouteReliabilityDecision | null = null;
           let paperTrendPairSideReliability: PaperTrendPairSideReliabilityDecision | null = null;
@@ -1799,6 +1903,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           }
 
           executableCounterfactuals.push({
+            opportunityKey: eventId,
+            evaluatedAt,
             candidate: best,
             signalId,
             digits,
@@ -1864,6 +1970,125 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           (option) => option.candidate === selection.selected!.candidate,
         );
         if (!chosen) continue;
+        adaptiveScanWinners.push({ chosen, selection });
+      }
+
+      const preAdaptiveWinnerOrder = [...adaptiveScanWinners].sort(
+        (a, b) =>
+          executableNetExpectedR(b.chosen) - executableNetExpectedR(a.chosen) ||
+          b.chosen.candidate.score - a.chosen.candidate.score,
+      );
+      const preAdaptiveWinnerRanks = new Map<ExecutableCounterfactual, number>(
+        preAdaptiveWinnerOrder.map((entry, index) => [entry.chosen, index + 1]),
+      );
+      const initiallyEvaluatedWinners: AdaptiveScanWinner[] = [];
+      for (const entry of adaptiveScanWinners) {
+        const adaptive = await this.evaluateAdaptiveCore({
+          userId,
+          connectionId,
+          candidate: entry.chosen.candidate,
+          ensemble: entry.chosen.planBEnsemble,
+          governance: entry.chosen.ensembleGovernance,
+          executionRoute: entry.chosen.paperExecutionRoute,
+          evaluatedAt: entry.chosen.evaluatedAt,
+          allocationCapital: adaptiveAllocationCapital,
+          portfolio: initialAdaptivePortfolio,
+          pairedReversalNetExpectedR: entry.chosen.pairedDirectionReversal.researchNetExpectedR,
+        });
+        initiallyEvaluatedWinners.push({
+          ...entry,
+          marketState: adaptive.marketState,
+          edge: adaptive.edge,
+          exposure: adaptive.exposure,
+          opportunity: adaptive.opportunity,
+          riskMultiplier: adaptive.riskMultiplier,
+          candidateRiskAtStop: adaptive.candidateRiskAtStop,
+          requestedRiskPercent: adaptive.requestedRiskPercent,
+          adaptiveScore: adaptive.opportunity.score,
+          netExpectedR: adaptive.netExpectedR,
+          executionCostR: adaptive.executionCostR,
+          preAdaptiveScanRank:
+            preAdaptiveWinnerRanks.get(entry.chosen) ?? adaptiveScanWinners.length,
+        });
+      }
+      const adaptiveRankedWinners = rankAdaptivePaperScanWinners(initiallyEvaluatedWinners);
+      await this.persistAdaptiveScanSummary({
+        userId,
+        connectionId,
+        scanStartedAt: adaptiveScanStartedAt,
+        evaluatedCandidates: rankedCandidates.length,
+        executableWinners: adaptiveRankedWinners.length,
+        best: adaptiveRankedWinners[0] ?? null,
+        reason:
+          adaptiveRankedWinners.length > 0
+            ? 'ADAPTIVE_WINNERS_RANKED'
+            : 'NO_EXECUTABLE_PAIR_WINNER',
+      });
+
+      for (const rankedWinner of adaptiveRankedWinners) {
+        const refreshedPortfolio = paperSession
+          ? await this.loadAdaptiveOpenRiskPositions(userId, connectionId)
+          : initialAdaptivePortfolio;
+        const refreshed = await this.evaluateAdaptiveCore({
+          userId,
+          connectionId,
+          candidate: rankedWinner.chosen.candidate,
+          ensemble: rankedWinner.chosen.planBEnsemble,
+          governance: rankedWinner.chosen.ensembleGovernance,
+          executionRoute: rankedWinner.chosen.paperExecutionRoute,
+          evaluatedAt: rankedWinner.chosen.evaluatedAt,
+          allocationCapital: adaptiveAllocationCapital,
+          portfolio: refreshedPortfolio,
+          pairedReversalNetExpectedR:
+            rankedWinner.chosen.pairedDirectionReversal.researchNetExpectedR,
+        });
+        const adaptiveWinner: AdaptiveScanWinner = {
+          ...rankedWinner,
+          marketState: refreshed.marketState,
+          edge: refreshed.edge,
+          exposure: refreshed.exposure,
+          opportunity: refreshed.opportunity,
+          riskMultiplier: refreshed.riskMultiplier,
+          candidateRiskAtStop: refreshed.candidateRiskAtStop,
+          requestedRiskPercent: refreshed.requestedRiskPercent,
+          adaptiveScore: refreshed.opportunity.score,
+          netExpectedR: refreshed.netExpectedR,
+          executionCostR: refreshed.executionCostR,
+          adaptiveScanRank: rankedWinner.adaptiveScanRank,
+        };
+        const adaptivePayload = this.adaptiveMarketIntelligencePayload(
+          {
+            marketState: adaptiveWinner.marketState,
+            edge: adaptiveWinner.edge,
+            exposure: adaptiveWinner.exposure,
+            opportunity: adaptiveWinner.opportunity,
+            riskMultiplier: adaptiveWinner.riskMultiplier,
+            candidateRiskAtStop: adaptiveWinner.candidateRiskAtStop,
+            requestedRiskPercent: adaptiveWinner.requestedRiskPercent,
+            adaptiveScore: adaptiveWinner.adaptiveScore,
+            netExpectedR: adaptiveWinner.netExpectedR,
+            executionCostR: adaptiveWinner.executionCostR,
+            preAdaptiveScanRank: adaptiveWinner.preAdaptiveScanRank,
+            adaptiveScanRank: adaptiveWinner.adaptiveScanRank,
+          },
+          adaptiveWinner.chosen.paperExecutionRoute,
+        );
+        await this.persistAdaptiveDecisionAnnotation(
+          userId,
+          adaptiveWinner.chosen.opportunityKey,
+          adaptivePayload,
+        );
+        if (!adaptiveWinner.opportunity.executionEligible) {
+          this.logger.log(
+            `Adaptive PAPER ${adaptiveWinner.chosen.candidate.instrument} ${adaptiveWinner.chosen.candidate.direction} ` +
+              `execution=ABSTAIN rank=${adaptiveWinner.adaptiveScanRank ?? 'n/a'} ` +
+              `score=${adaptiveWinner.adaptiveScore.toFixed(4)} ` +
+              `blockers=${adaptiveWinner.opportunity.hardBlockers.join(',') || 'NONE'}`,
+          );
+          continue;
+        }
+
+        const { chosen, selection } = adaptiveWinner;
         const {
           candidate: best,
           signalId,
@@ -1915,21 +2140,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           continue;
         }
 
-        const dynamicLotSizing =
-          paperExecutionRoute === 'REJECTED_EDGE_CANARY'
-            ? { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'RESEARCH' as const }
-            : paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
-              ? { upperBound: PAPER_RESEARCH_THROUGHPUT_LOT_CAP, tier: 'RESEARCH' as const }
-              : paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH'
-                ? { upperBound: PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP, tier: 'RESEARCH' as const }
-                : dynamicPaperLotUpperBound({
-                    confidence: best.confidence,
-                    metaProbability: planBEnsemble.metaProbability,
-                    netExpectedR: ensembleGovernance.netExpectedR,
-                    consensusPassed: planBEnsemble.consensusPassed,
-                    consensusRequired: planBEnsemble.consensusRequired,
-                    volatilityScore: best.volatilityScore,
-                  });
+        const dynamicLotSizing = this.adaptiveLotSizingFor(chosen);
 
         const outcome = await this.aiSignalService.receiveSignal({
           signalId,
@@ -1949,7 +2160,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           suggestedVolume: dynamicLotSizing.upperBound,
           timeframe: 'M5',
           strategyCode: `external-${ACTIVE_ENGINE_CODE}`,
-          marketRegime: 'TRENDING',
+          marketRegime: adaptiveWinner.marketState.state,
           volatilityScore: best.volatilityScore,
           generatedAt: this.signalGeneratedAtForRetry(signalId),
           modelVersion:
@@ -1969,6 +2180,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             external_provider_paper_only: true,
             production_eligible: false,
             paper_execution_route: paperExecutionRoute,
+            adaptive_risk_multiplier: adaptiveWinner.riskMultiplier.multiplier,
+            adaptive_market_state: adaptiveWinner.marketState.state,
+            adaptive_opportunity_score: adaptiveWinner.adaptiveScore,
+            adaptive_scan_rank: adaptiveWinner.adaptiveScanRank ?? null,
+            adaptive_pre_scan_rank: adaptiveWinner.preAdaptiveScanRank,
+            adaptiveMarketIntelligence: adaptivePayload,
             paper_post_loss_entry_guard_artifact: paperPostLossEntryGuard.artifact,
             paper_post_loss_entry_guard_reason: paperPostLossEntryGuard.reason,
             paper_post_loss_entry_guard_last_trade_id: paperPostLossEntryGuard.lastClosedTradeId,
@@ -2189,8 +2406,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         });
         this.logger.log(
           `Multi-model PAPER candidate ${best.instrument} ${best.direction} confidence=${best.confidence.toFixed(4)} ` +
+            `adaptiveRank=${adaptiveWinner.adaptiveScanRank ?? 'n/a'} adaptiveScore=${adaptiveWinner.adaptiveScore.toFixed(4)} ` +
+            `riskMultiplier=${adaptiveWinner.riskMultiplier.multiplier.toFixed(2)}x ` +
             `lotTier=${dynamicLotSizing.tier} lotCap=${dynamicLotSizing.upperBound.toFixed(2)} ` +
-            `outcome=${outcome.outcome} signal=${signalId} cadence=bidirectional-counterfactual`,
+            `outcome=${outcome.outcome} signal=${signalId} cadence=adaptive-scan-ranked`,
         );
         const retrySafePreIntentError = this.retrySafePreIntentErrorForOutcome(outcome);
         if (retrySafePreIntentError) throw retrySafePreIntentError;
@@ -2198,6 +2417,346 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     } finally {
       this.running = false;
     }
+  }
+
+  private async loadAdaptiveOpenRiskPositions(
+    userId: string,
+    connectionId: string,
+  ): Promise<{ available: boolean; positions: AdaptiveCurrencyRiskPosition[] }> {
+    if (!this.dataSource) return { available: false, positions: [] };
+    try {
+      const rows = (await this.dataSource.query(
+        `
+          SELECT
+            ti.instrument,
+            ti.direction,
+            NULLIF(ca.sizing_inputs->>'riskAmount', '')::numeric AS risk_at_stop
+          FROM trading.capital_allocations ca
+          JOIN trading.trade_intents ti ON ti.id = ca.trade_intent_id
+          JOIN trading.trades t ON t.trade_intent_id = ti.id
+          WHERE ti.user_id = $1
+            AND ti.broker_connection_id = $2
+            AND ca.status = 'ACTIVE'
+            AND t.status = 'OPEN'
+          ORDER BY t.opened_at ASC, t.id ASC
+        `,
+        [userId, connectionId],
+      )) as Array<{
+        instrument: string;
+        direction: 'BUY' | 'SELL';
+        risk_at_stop: string | number | null;
+      }>;
+      return {
+        available: true,
+        positions: rows.map((row) => ({
+          instrument: row.instrument,
+          direction: row.direction,
+          riskAtStop:
+            row.risk_at_stop == null || !Number.isFinite(Number(row.risk_at_stop))
+              ? null
+              : Number(row.risk_at_stop),
+        })),
+      };
+    } catch (error) {
+      this.logger.warn(`Adaptive portfolio risk evidence unavailable: ${(error as Error).message}`);
+      return { available: false, positions: [] };
+    }
+  }
+
+  private async loadAdaptiveAllocationCapital(
+    userId: string,
+    connectionId: string,
+  ): Promise<string | null> {
+    if (!this.allocationService) return null;
+    try {
+      const state = await this.allocationService.getUserCapitalAllocationState(
+        userId,
+        connectionId,
+      );
+      return state.hasAllocation ? state.allocatedCapital : null;
+    } catch (error) {
+      this.logger.warn(`Adaptive allocation evidence unavailable: ${(error as Error).message}`);
+      return null;
+    }
+  }
+
+  private adaptiveLotSizingFor(option: {
+    paperExecutionRoute: ReturnType<typeof selectPaperExecutionRoute>;
+    candidate: Candidate;
+    planBEnsemble: PlanBEnsembleScore;
+    ensembleGovernance: EnsembleGovernanceDecision;
+  }): {
+    upperBound: number;
+    tier: PaperAllocationConfidenceTier;
+  } {
+    if (option.paperExecutionRoute === 'REJECTED_EDGE_CANARY') {
+      return { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'RESEARCH' };
+    }
+    if (option.paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT') {
+      return { upperBound: PAPER_RESEARCH_THROUGHPUT_LOT_CAP, tier: 'RESEARCH' };
+    }
+    if (option.paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH') {
+      return { upperBound: PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP, tier: 'RESEARCH' };
+    }
+    const normal = dynamicPaperLotUpperBound({
+      confidence: option.candidate.confidence,
+      metaProbability: option.planBEnsemble.metaProbability,
+      netExpectedR: option.ensembleGovernance.netExpectedR,
+      consensusPassed: option.planBEnsemble.consensusPassed,
+      consensusRequired: option.planBEnsemble.consensusRequired,
+      volatilityScore: option.candidate.volatilityScore,
+    });
+    return { upperBound: normal.upperBound, tier: normal.tier };
+  }
+
+  private async evaluateAdaptiveCore(input: {
+    userId: string;
+    connectionId: string;
+    candidate: Candidate;
+    ensemble: PlanBEnsembleScore;
+    governance: EnsembleGovernanceDecision;
+    executionRoute: ReturnType<typeof selectPaperExecutionRoute>;
+    evaluatedAt: Date;
+    allocationCapital: string | null;
+    portfolio: { available: boolean; positions: AdaptiveCurrencyRiskPosition[] };
+    pairedReversalNetExpectedR?: number;
+  }): Promise<{
+    marketState: AdaptiveMarketStateDecision;
+    edge: AdaptiveEdgeEvidence;
+    exposure: AdaptiveCurrencyExposureDecision;
+    opportunity: AdaptiveOpportunityDecision;
+    riskMultiplier: AdaptiveRiskMultiplierDecision;
+    candidateRiskAtStop: number | null;
+    requestedRiskPercent: number;
+    sizingTier: PaperAllocationConfidenceTier;
+    sizingUpperBound: number;
+    netExpectedR: number;
+    executionCostR: number;
+  }> {
+    const executionCostUsable = Boolean(
+      input.governance.paperExecutionCostUsable ?? input.governance.executionSpreadEvidenceValid,
+    );
+    const marketState = classifyAdaptiveMarketState({
+      scanTime: input.evaluatedAt,
+      legacyRegime: input.ensemble.regime,
+      strategyRoute: input.ensemble.strategyRoute,
+      driftState: input.governance.driftState,
+      confidence: input.candidate.confidence,
+      emaSeparation: input.candidate.emaSeparation,
+      mtfStrength: input.candidate.mtfStrength,
+      extensionAtr: input.candidate.extensionAtr,
+      shortHorizonMomentumAtr: input.candidate.shortHorizonMomentumAtr,
+      volatilityScore: input.candidate.volatilityScore,
+      rsi14: input.candidate.rsi14,
+      executionCostUsable,
+      dataFreshness: adaptiveMarketDataFreshness(
+        new Date(input.candidate.barTime.getTime() + BAR_MS),
+        input.evaluatedAt,
+      ),
+    });
+    const evidenceClass = input.executionRoute === 'NORMAL_PAPER' ? 'QUALIFICATION' : 'RESEARCH';
+    const edgeRequest = {
+      userId: input.userId,
+      brokerConnectionId: input.connectionId,
+      instrument: input.candidate.instrument,
+      direction: input.candidate.direction,
+      session: marketState.session,
+      state: marketState.state,
+      strategyRoute: input.ensemble.strategyRoute,
+      decisionPolicyVersion: ACTIVE_MODEL_POLICY_VERSION,
+      evaluatedAt: input.evaluatedAt,
+      evidenceClass,
+    } as const;
+    const edge = this.adaptiveEdgeMatrix
+      ? await this.adaptiveEdgeMatrix.getEvidence(edgeRequest)
+      : unavailableAdaptiveEdgeEvidence(edgeRequest);
+
+    const sizing =
+      input.executionRoute === 'NORMAL_PAPER'
+        ? dynamicPaperLotUpperBound({
+            confidence: input.candidate.confidence,
+            metaProbability: input.ensemble.metaProbability,
+            netExpectedR: input.governance.netExpectedR,
+            consensusPassed: input.ensemble.consensusPassed,
+            consensusRequired: input.ensemble.consensusRequired,
+            volatilityScore: input.candidate.volatilityScore,
+          })
+        : input.executionRoute === 'NONE'
+          ? { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'BASE' as const }
+          : this.adaptiveLotSizingFor({
+              paperExecutionRoute: input.executionRoute,
+              candidate: input.candidate,
+              planBEnsemble: input.ensemble,
+              ensembleGovernance: input.governance,
+            });
+    const requestedRiskPercent = paperAllocationRiskTargetPercent(
+      sizing.tier as PaperAllocationConfidenceTier,
+    );
+    const candidateRiskAtStop = adaptiveCandidateRiskAtStop(
+      input.allocationCapital,
+      requestedRiskPercent,
+    );
+    const portfolioPositions = [...input.portfolio.positions];
+    if (!input.portfolio.available || candidateRiskAtStop === null) {
+      portfolioPositions.push({ instrument: 'UNKNOWN', direction: 'BUY', riskAtStop: null });
+    }
+    const exposure = analyzeAdaptiveCurrencyExposure({
+      positions: portfolioPositions,
+      candidate: {
+        instrument: input.candidate.instrument,
+        direction: input.candidate.direction,
+        riskAtStop: candidateRiskAtStop ?? 1,
+      },
+    });
+    const netExpectedR =
+      input.executionRoute === 'PAIRED_REVERSAL_RESEARCH' &&
+      Number.isFinite(input.pairedReversalNetExpectedR)
+        ? input.pairedReversalNetExpectedR!
+        : input.governance.netExpectedR;
+    const hardBlockers = [
+      ...(input.executionRoute === 'NONE' ? input.governance.paperExecutionBlockers : []),
+      ...(exposure.capacity === 'BLOCKED' ? ['ADAPTIVE_CURRENCY_CONCENTRATION_BLOCKED'] : []),
+    ];
+    const opportunity = scoreAdaptiveOpportunity({
+      netExpectedR,
+      estimatedExecutionCostR: input.governance.estimatedExecutionCostR,
+      directionQuality: input.ensemble.directionQuality,
+      tradeQuality: input.ensemble.tradeQuality,
+      exitQuality: input.ensemble.exitQuality,
+      driftQuality: input.governance.driftQuality,
+      hardBlockers,
+      marketState,
+      edge,
+      exposure,
+    });
+    const riskMultiplier = selectAdaptiveRiskMultiplier({
+      executionRoute: input.executionRoute,
+      opportunityScore: opportunity.score,
+      netExpectedR,
+      executionCostUsable,
+      hardBlockers,
+      marketState,
+      edge,
+      exposure,
+    });
+    return {
+      marketState,
+      edge,
+      exposure,
+      opportunity,
+      riskMultiplier,
+      candidateRiskAtStop,
+      requestedRiskPercent,
+      sizingTier: sizing.tier as PaperAllocationConfidenceTier,
+      sizingUpperBound: sizing.upperBound,
+      netExpectedR,
+      executionCostR: input.governance.estimatedExecutionCostR,
+    };
+  }
+
+  private adaptiveMarketIntelligencePayload(
+    adaptive: Omit<AdaptiveScanWinner, 'chosen' | 'selection'>,
+    executionRoute: ReturnType<typeof selectPaperExecutionRoute>,
+  ): Record<string, unknown> {
+    return {
+      artifact: 'adaptive-market-intelligence-v1',
+      policyVersion: ACTIVE_MODEL_POLICY_VERSION,
+      executionAuthority: 'PAPER_ONLY',
+      executionRoute,
+      marketState: adaptive.marketState,
+      evidenceClass: adaptive.edge.evidenceClass,
+      edge: adaptive.edge,
+      exposure: adaptive.exposure,
+      opportunity: adaptive.opportunity,
+      riskMultiplier: adaptive.riskMultiplier,
+      candidateRiskAtStop: adaptive.candidateRiskAtStop,
+      requestedRiskPercent: adaptive.requestedRiskPercent,
+      scanRank: adaptive.adaptiveScanRank ?? null,
+      preAdaptiveScanRank: adaptive.preAdaptiveScanRank,
+      netExpectedR: adaptive.netExpectedR,
+      executionCostR: adaptive.executionCostR,
+      qualificationEvidence: executionRoute === 'NORMAL_PAPER',
+      productionEligible: false,
+    };
+  }
+
+  private async persistAdaptiveDecisionAnnotation(
+    userId: string,
+    opportunityKey: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.dataSource) {
+      throw new Error('adaptive decision persistence unavailable');
+    }
+    await this.dataSource.query(
+      `
+        UPDATE trading.ensemble_shadow_decisions
+        SET components = COALESCE(components, '{}'::jsonb) || jsonb_build_object(
+          'adaptiveMarketIntelligence', $4::jsonb
+        )
+        WHERE user_id = $1
+          AND engine_code = $2
+          AND opportunity_key = $3
+      `,
+      [userId, ACTIVE_ENGINE_CODE, opportunityKey, JSON.stringify(payload)],
+    );
+  }
+
+  private async persistAdaptiveScanSummary(input: {
+    userId: string;
+    connectionId: string;
+    scanStartedAt: Date;
+    evaluatedCandidates: number;
+    executableWinners: number;
+    best: AdaptiveScanWinner | null;
+    reason: string;
+  }): Promise<void> {
+    const summary = {
+      artifact: 'adaptive-scan-summary-v1',
+      policyVersion: ACTIVE_MODEL_POLICY_VERSION,
+      scanStartedAt: input.scanStartedAt.toISOString(),
+      evaluatedCandidates: input.evaluatedCandidates,
+      executableWinners: input.executableWinners,
+      bestInstrument: input.best?.chosen.candidate.instrument ?? null,
+      bestDirection: input.best?.chosen.candidate.direction ?? null,
+      bestAdaptiveScore: input.best?.adaptiveScore ?? null,
+      bestNetExpectedR: input.best?.netExpectedR ?? null,
+      bestState: input.best?.marketState.state ?? null,
+      bestBlockers: input.best?.opportunity.hardBlockers ?? [],
+      reason: input.reason,
+    };
+    this.logger.log(
+      `Adaptive scan summary winners=${input.executableWinners} ` +
+        `best=${summary.bestInstrument ?? 'NONE'} ${summary.bestDirection ?? ''} ` +
+        `score=${summary.bestAdaptiveScore ?? 'n/a'} netR=${summary.bestNetExpectedR ?? 'n/a'} ` +
+        `reason=${input.reason}`,
+    );
+    if (!this.dataSource) return;
+    await this.dataSource.query(
+      `
+        UPDATE trading.ensemble_shadow_decisions
+        SET components = COALESCE(components, '{}'::jsonb) || jsonb_build_object(
+          'adaptiveScanSummary', $5::jsonb
+        )
+        WHERE id = (
+          SELECT id
+          FROM trading.ensemble_shadow_decisions
+          WHERE user_id = $1
+            AND broker_connection_id = $2
+            AND engine_code = $3
+            AND evaluated_at >= $4
+          ORDER BY evaluated_at DESC, id DESC
+          LIMIT 1
+        )
+      `,
+      [
+        input.userId,
+        input.connectionId,
+        ACTIVE_ENGINE_CODE,
+        input.scanStartedAt,
+        JSON.stringify(summary),
+      ],
+    );
   }
 
   private signalGeneratedAtForRetry(signalId: string): Date {

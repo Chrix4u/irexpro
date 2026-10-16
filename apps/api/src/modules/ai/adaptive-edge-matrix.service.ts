@@ -216,7 +216,9 @@ function edgeCellKey(request: AdaptiveEdgeEvidenceRequest): string {
   ].join('|');
 }
 
-function unavailable(request: AdaptiveEdgeEvidenceRequest): AdaptiveEdgeEvidence {
+export function unavailableAdaptiveEdgeEvidence(
+  request: AdaptiveEdgeEvidenceRequest,
+): AdaptiveEdgeEvidence {
   return {
     artifact: ADAPTIVE_EDGE_MATRIX_ARTIFACT,
     available: false,
@@ -484,7 +486,7 @@ export class AdaptiveEdgeMatrixService {
       this.cache.set(cacheKey, { expiresAt: Date.now() + 5_000, result });
       return result;
     } catch {
-      return unavailable(request);
+      return unavailableAdaptiveEdgeEvidence(request);
     }
   }
 }

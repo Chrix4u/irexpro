@@ -1021,6 +1021,296 @@ describe('VpsForexSignalCollectorService', () => {
         modifiesExecution: false,
       });
     }
+    const adaptiveAnnotationCalls = shadowQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("'adaptiveMarketIntelligence'"),
+    );
+    expect(adaptiveAnnotationCalls).toHaveLength(12);
+    for (const [, params] of adaptiveAnnotationCalls) {
+      const adaptive = JSON.parse(String(params[3]));
+      expect(adaptive).toMatchObject({
+        artifact: 'adaptive-market-intelligence-v1',
+        executionAuthority: 'PAPER_ONLY',
+        productionEligible: false,
+      });
+      expect(adaptive.marketState.state).not.toBe('UNKNOWN');
+      expect(typeof adaptive.opportunity.score).toBe('number');
+      expect(adaptive.edge.available).toBe(false);
+      expect(adaptive.riskMultiplier.multiplier).toBeLessThanOrEqual(1);
+    }
+    const scanSummaryCalls = shadowQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("'adaptiveScanSummary'"),
+    );
+    expect(scanSummaryCalls).toHaveLength(1);
+    expect(JSON.parse(String(scanSummaryCalls[0]![1][4]))).toMatchObject({
+      artifact: 'adaptive-scan-summary-v1',
+      executableWinners: 0,
+      reason: 'NO_EXECUTABLE_PAIR_WINNER',
+    });
+  });
+
+  it('ranks pair winners across the scan and rechecks shared-currency risk before later dispatches', async () => {
+    const live = new LivePaperMarketDataService();
+    const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
+    const shadowQuery = jest.fn().mockResolvedValue([]);
+    const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
+    const planBSpy = jest
+      .spyOn(PlanBEnsembleModule, 'scorePlanBMultimodelShadow')
+      .mockImplementation((input, positions) => {
+        const base = actualPlanB(input, positions);
+        const target =
+          input.direction === 'BUY' &&
+          (input.instrument === 'EURUSD' || input.instrument === 'GBPUSD');
+        const expectedR = input.instrument === 'EURUSD' ? 0.35 : 0.3;
+        return {
+          ...base,
+          regime: target ? 'REVERSAL_CONFIRMED' : 'TREND_WEAK',
+          strategyRoute: target ? 'CONFIRMED_REVERSAL' : 'TREND_CONTINUATION',
+          portfolioQuality: 1,
+          paperAdmitted: target,
+          admitted: target,
+          consensusPassed: target ? 6 : 2,
+          consensusRequired: 6,
+          directionQuality: target ? 0.82 : 0.2,
+          tradeQuality: target ? 0.8 : 0.2,
+          exitQuality: target ? 0.78 : 0.2,
+          metaProbability: target ? 0.7 : 0.3,
+          expectedR: target ? expectedR : -0.2,
+          ensembleScore: target ? 0.82 : 0.3,
+          reasons: target ? ['ADAPTIVE_TEST_ELIGIBLE'] : ['META_EXPECTED_VALUE'],
+        };
+      });
+    const governanceSpy = jest
+      .spyOn(EnsembleGovernanceModule, 'evaluateEnsembleGovernance')
+      .mockImplementation((input) => {
+        const target =
+          input.direction === 'BUY' &&
+          (input.instrument === 'EURUSD' || input.instrument === 'GBPUSD');
+        const netExpectedR = input.instrument === 'EURUSD' ? 0.3 : 0.28;
+        return {
+          version: EnsembleGovernanceModule.ENSEMBLE_GOVERNANCE_VERSION,
+          costModelVersion: EnsembleGovernanceModule.ENSEMBLE_COST_MODEL_VERSION,
+          driftModelVersion: EnsembleGovernanceModule.ENSEMBLE_DRIFT_MODEL_VERSION,
+          grossExpectedR: target ? netExpectedR + 0.04 : -0.2,
+          estimatedExecutionCostR: 0.04,
+          executionCostSource: 'BROKER_OBSERVED_P90',
+          executionSpreadEvidenceValid: true,
+          paperExecutionCostUsable: true,
+          executionSpreadEvidence: {
+            source: 'BROKER_OBSERVED_P90',
+            spreadPrice: 0.00001,
+            sampleCount: 30,
+            percentile: 0.9,
+            windowMinutes: 30,
+            latestSampleAt: new Date().toISOString(),
+          },
+          netExpectedR: target ? netExpectedR : -0.24,
+          paperNetExpectedRPassed: target,
+          netExpectedRPassed: target,
+          driftState: target ? 'NORMAL' : 'OUT_OF_DISTRIBUTION',
+          driftQuality: target ? 1 : 0.2,
+          driftDiagnostics: target ? [] : ['confidence:HARD_LOW'],
+          paperDriftPassed: target,
+          driftPassed: target,
+          sleeveState: 'COLLECTING',
+          sleeveEvidence: null,
+          eventRisk: 'CLEAR',
+          paperExecutionEligible: target,
+          paperExecutionBlockers: target ? [] : ['PAPER_NET_EXPECTED_R'],
+          paperPromotionEligible: false,
+          blockers: target ? ['SLEEVE_COLLECTING'] : ['ENSEMBLE_NOT_ADMITTED'],
+        } as any;
+      });
+    const reversalSpy = jest
+      .spyOn(PairedDirectionReversalModule, 'evaluatePairedDirectionReversal')
+      .mockReturnValue({
+        buyDirectionalProbability: 0.5,
+        sellDirectionalProbability: 0.5,
+        preferredDirection: null,
+        preferredAbsoluteProbability: 0,
+        directionalEdge: 0,
+        alignedMomentumAtr: 0,
+        researchNetExpectedR: Number.NEGATIVE_INFINITY,
+        reversalCandidate: false,
+        reason: 'DIRECTION_EDGE_TOO_SMALL',
+      });
+
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      {
+        getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
+        getOpenPositionsForConnection: jest.fn().mockResolvedValue({ positions: [] }),
+      } as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+      { query: shadowQuery } as any,
+      {
+        assess: jest.fn().mockImplementation(async (instrument: string) => ({
+          state: 'CLEAR',
+          provider: 'TEST',
+          configured: true,
+          checkedAt: new Date().toISOString(),
+          instrument,
+          relevantCountries: [],
+          blockWindowMinutesBefore: 30,
+          blockWindowMinutesAfter: 30,
+          blockingEvents: [],
+          reason: null,
+          attribution: null,
+        })),
+      } as any,
+    );
+    jest.spyOn(collector as any, 'loadAdaptiveAllocationCapital').mockResolvedValue('1000');
+    const riskSnapshotSpy = jest
+      .spyOn(collector as any, 'loadAdaptiveOpenRiskPositions')
+      .mockResolvedValueOnce({ available: true, positions: [] })
+      .mockResolvedValueOnce({ available: true, positions: [] })
+      .mockResolvedValue({
+        available: true,
+        positions: [{ instrument: 'GBPUSD', direction: 'BUY', riskAtStop: 40 }],
+      });
+    jest.spyOn(collector as any, 'evaluateAdaptiveCore').mockImplementation(async (input: any) => {
+      const isGbp = input.candidate.instrument === 'GBPUSD' && input.candidate.direction === 'BUY';
+      const isEur = input.candidate.instrument === 'EURUSD' && input.candidate.direction === 'BUY';
+      const concentratedEur = isEur && input.portfolio.positions.length > 0;
+      const target = isGbp || isEur;
+      const score = isGbp ? 0.9 : isEur ? 0.75 : 0.1;
+      const blockers = concentratedEur
+        ? ['ADAPTIVE_CURRENCY_CONCENTRATION_BLOCKED']
+        : target && input.executionRoute === 'NORMAL_PAPER'
+          ? []
+          : ['LEGACY_ROUTE_NOT_EXECUTABLE'];
+      return {
+        marketState: {
+          artifact: 'adaptive-market-state-v1',
+          state: target ? 'REVERSAL' : 'TREND_WEAK',
+          stateConfidence: 0.9,
+          tradingConfidence: input.candidate.confidence,
+          trendStrength: 0.7,
+          transitionScore: 0.1,
+          reversalScore: 0.8,
+          volatilityState: 'NORMAL',
+          higherTimeframeAgreement: 0.8,
+          session: 'ASIA',
+          reasons: ['TEST_STATE'],
+          dataFreshness: 'FRESH',
+          canUpsize: target,
+        },
+        edge: {
+          artifact: 'adaptive-edge-matrix-v1',
+          available: true,
+          cellKey: `${input.candidate.instrument}|BUY`,
+          evidenceClass: 'QUALIFICATION',
+          maturity: 'MATURE',
+          recentStatus: 'STABLE',
+          closedTrades: 24,
+          exactClosedTrades: 24,
+          broaderClosedTrades: 0,
+          prospectiveSamples: 24,
+          priorSamples: 24,
+          wins: 18,
+          losses: 6,
+          smoothedWinRate: 0.72,
+          averageRealizedR: 0.4,
+          smoothedExpectedR: 0.32,
+          profitFactor: 1.8,
+          sharpe: 1.3,
+          maxDrawdown: 0.05,
+          positiveWindowFraction: 0.7,
+          averageExecutionCostR: 0.04,
+          averageMfeR: 0.7,
+          averageMaeR: 0.2,
+          averageProfitGivebackR: 0.1,
+          calibrationGap: 0.02,
+          recentDegradation: false,
+          latestResolvedAt: new Date(Date.now() - 60_000).toISOString(),
+          sourceLevel: 'EXACT',
+          canUpsize: true,
+          reason: 'EVIDENCE_AVAILABLE',
+          reasons: ['EVIDENCE_AVAILABLE'],
+        },
+        exposure: {
+          artifact: 'adaptive-currency-exposure-v1',
+          currencyRiskMap: {},
+          candidateCurrencyRisk: {},
+          projectedCurrencyRiskMap: {},
+          correlatedExposureScore: concentratedEur ? 1 : 0,
+          diversificationQuality: concentratedEur ? 0 : 1,
+          largestAlignedCurrencyConcentration: concentratedEur ? 2 : 0,
+          sameInstrumentDirectionalRisk: 0,
+          riskEvidenceComplete: true,
+          capacity: concentratedEur ? 'BLOCKED' : 'CLEAR',
+          canUpsize: !concentratedEur,
+          reasons: concentratedEur
+            ? ['SHARED_CURRENCY_CONCENTRATION_BLOCKED']
+            : ['PORTFOLIO_CAPACITY_CLEAR'],
+        },
+        opportunity: {
+          artifact: 'adaptive-opportunity-score-v1',
+          score: concentratedEur ? 0.2 : score,
+          executionEligible: blockers.length === 0,
+          hardBlockers: blockers,
+          components: {},
+          reasons: blockers.length ? ['HARD_GOVERNANCE_BLOCKED'] : ['ADAPTIVE_OPPORTUNITY_HEALTHY'],
+        },
+        riskMultiplier: {
+          artifact: 'adaptive-risk-multiplier-v1',
+          multiplier: concentratedEur ? 0.5 : 1,
+          canUpsize: false,
+          executionEligible: blockers.length === 0,
+          hardBlockers: blockers,
+          reasons: blockers.length ? ['HARD_GOVERNANCE_BLOCKED'] : ['STANDARD_RISK'],
+        },
+        candidateRiskAtStop: 20,
+        requestedRiskPercent: 2,
+        sizingTier: 'BASE',
+        sizingUpperBound: 0.1,
+        netExpectedR: input.governance.netExpectedR,
+        executionCostR: input.governance.estimatedExecutionCostR,
+      };
+    });
+
+    try {
+      await collector.collectOnce(
+        jest.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          json: async () => allTrendPayload(),
+        }) as unknown as typeof fetch,
+      );
+
+      expect(riskSnapshotSpy).toHaveBeenCalledTimes(3);
+      expect(receiveSignal).toHaveBeenCalledTimes(1);
+      expect(receiveSignal.mock.calls[0]![0]).toEqual(
+        expect.objectContaining({
+          instrument: 'GBPUSD',
+          direction: 'BUY',
+          metadata: expect.objectContaining({
+            adaptive_scan_rank: 1,
+            adaptive_opportunity_score: 0.9,
+          }),
+        }),
+      );
+      expect(
+        receiveSignal.mock.calls.some(([signal]) => (signal as any).instrument === 'EURUSD'),
+      ).toBe(false);
+    } finally {
+      reversalSpy.mockRestore();
+      governanceSpy.mockRestore();
+      planBSpy.mockRestore();
+    }
   });
 
   it('keeps the canary quarantined without letting it suppress eligible controlled PAPER research', async () => {
@@ -1352,6 +1642,18 @@ describe('VpsForexSignalCollectorService', () => {
           }),
         }),
       );
+      const emitted = receiveSignal.mock.calls[0]![0] as any;
+      expect(emitted.marketRegime).toBe('DISLOCATED');
+      expect(emitted.marketRegime).not.toBe('TRENDING');
+      expect(emitted.suggestedVolume).toBeLessThanOrEqual(1);
+      expect(emitted.metadata.adaptive_risk_multiplier).toBeLessThanOrEqual(1);
+      expect(emitted.metadata.adaptiveMarketIntelligence).toMatchObject({
+        artifact: 'adaptive-market-intelligence-v1',
+        executionRoute: 'PAPER_RESEARCH_THROUGHPUT',
+        productionEligible: false,
+        marketState: expect.objectContaining({ state: 'DISLOCATED' }),
+        riskMultiplier: expect.objectContaining({ multiplier: expect.any(Number) }),
+      });
       expect(
         logSpy.mock.calls.some((call) =>
           String(call[0]).includes(
