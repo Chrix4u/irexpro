@@ -216,6 +216,30 @@ describe('adaptive prediction calibration', () => {
     );
   });
 
+  it('does not rescue a raw-negative pair from broad route-wide calibration evidence', () => {
+    const calibration = buildAdaptivePredictionCalibration(
+      Array.from({ length: 24 }, (_, i) =>
+        i % 3 === 2
+          ? outcome(i, 'LOSS', -1.0, { instrument: 'GBPUSD', direction: 'SELL' })
+          : outcome(i, 'WIN', 1.1, { instrument: 'GBPUSD', direction: 'SELL' }),
+      ),
+      { ...request, rawConfidence: 0.6, rawNetExpectedR: -0.05 },
+    );
+    const authority = applyAdaptivePredictionCalibrationAuthority({
+      calibration,
+      rawConfidence: 0.6,
+      rawNetExpectedR: -0.05,
+      paperExecutionBlockers: ['PAPER_NET_EXPECTED_R'],
+      allowResearchRescue: true,
+    });
+
+    expect(calibration.sourceLevel).toBe('ROUTE');
+    expect(calibration.maturity).toBe('MATURE');
+    expect(calibration.rescueEligible).toBe(false);
+    expect(authority.rescueApplied).toBe(false);
+    expect(authority.effectivePaperExecutionBlockers).toContain('PAPER_NET_EXPECTED_R');
+  });
+
   it('never rescues from sparse calibration evidence', () => {
     const calibration = buildAdaptivePredictionCalibration(
       Array.from({ length: 6 }, (_, i) => outcome(i, 'WIN', 1.2)),
