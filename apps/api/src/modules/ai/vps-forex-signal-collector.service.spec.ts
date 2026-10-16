@@ -2174,7 +2174,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('executes a calibrated-cost PAPER rescue with a 1.0-lot risk-sizing ceiling and fill spread parity', async () => {
+  it('executes calibrated PAPER research when fixed costs are positive but below the 0.08R floor', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
@@ -2212,9 +2212,9 @@ describe('VpsForexSignalCollectorService', () => {
         minimumSpreadFloorPrice: 0.000025,
         sampleCount: 320,
         p95SpreadPrice: 0.00004,
-        fixedCostR: 0.25,
-        calibratedCostR: 0.1,
-        costReductionR: 0.15,
+        fixedCostR: 0.18,
+        calibratedCostR: 0.13,
+        costReductionR: 0.05,
         reason: 'CALIBRATED_P95_WITH_FLOOR',
         executionAuthority: 'NONE',
         modifiesExecution: false,
@@ -2231,12 +2231,12 @@ describe('VpsForexSignalCollectorService', () => {
           costModelVersion: EnsembleGovernanceModule.ENSEMBLE_COST_MODEL_VERSION,
           driftModelVersion: EnsembleGovernanceModule.ENSEMBLE_DRIFT_MODEL_VERSION,
           grossExpectedR: target ? 0.22 : -0.2,
-          estimatedExecutionCostR: calibrated ? 0.1 : fixed ? 0.25 : 0.03,
+          estimatedExecutionCostR: calibrated ? 0.13 : fixed ? 0.18 : 0.03,
           executionCostSource: 'PAPER_SIMULATION_SPREAD',
           executionSpreadEvidenceValid: false,
           executionSpreadEvidence: null,
           paperExecutionCostUsable: true,
-          netExpectedR: calibrated ? 0.12 : fixed ? -0.03 : -0.23,
+          netExpectedR: calibrated ? 0.09 : fixed ? 0.04 : -0.23,
           driftDiagnostics: target ? [] : ['confidence:HARD_LOW'],
           paperNetExpectedRPassed: calibrated,
           netExpectedRPassed: calibrated,
@@ -2372,8 +2372,8 @@ describe('VpsForexSignalCollectorService', () => {
             paper_calibrated_cost_rescue_artifact: 'paper-calibrated-cost-rescue-v1',
             paper_calibrated_cost_rescue_execution_authority: 'PAPER_ONLY_RESEARCH',
             paper_calibrated_cost_rescue_qualification_evidence: false,
-            paper_calibrated_cost_rescue_fixed_net_expected_r: -0.03,
-            paper_calibrated_cost_rescue_calibrated_net_expected_r: 0.12,
+            paper_calibrated_cost_rescue_fixed_net_expected_r: 0.04,
+            paper_calibrated_cost_rescue_calibrated_net_expected_r: 0.09,
             paper_cost_aware_entry_action: 'ENTER_NOW',
             paper_cost_aware_entry_reason: 'CALIBRATED_RESCUE_CURRENT_EDGE',
             production_eligible: false,

@@ -49,7 +49,7 @@ const calibration = (
 });
 
 describe('PAPER calibrated cost research rescue', () => {
-  it('rescues a fixed-cost-negative setup when mature non-rollover calibrated economics clear 0.10R and all other research rules pass', () => {
+  it('rescues a fixed-cost-negative setup when mature non-rollover calibrated economics clear the 0.08R research floor and all other research rules pass', () => {
     const decision = evaluatePaperCalibratedCostResearchRescue({
       grossExpectedR: 0.22,
       fixedNetExpectedR: -0.03,
@@ -79,15 +79,29 @@ describe('PAPER calibrated cost research rescue', () => {
     expect(decision.reason).toBe('ROLLOVER_EXCLUDED');
   });
 
-  it('does not rescue when the fixed model is not actually net-negative', () => {
+  it('rescues a fixed-cost setup that is positive but below the 0.08R research floor when calibrated economics clear the same floor', () => {
+    const decision = evaluatePaperCalibratedCostResearchRescue({
+      grossExpectedR: 0.18,
+      fixedNetExpectedR: 0.04,
+      researchInput: researchInput({ netExpectedR: 0.04 }),
+      calibration: calibration({ fixedCostR: 0.14, calibratedCostR: 0.09, costReductionR: 0.05 }),
+    });
+    expect(decision).toMatchObject({
+      eligible: true,
+      reason: 'CALIBRATED_COST_RESEARCH_RESCUE',
+      calibratedNetExpectedR: 0.09,
+    });
+  });
+
+  it('does not rescue when fixed-cost economics already clear the 0.08R research floor', () => {
     const decision = evaluatePaperCalibratedCostResearchRescue({
       grossExpectedR: 0.22,
-      fixedNetExpectedR: 0.01,
-      researchInput: researchInput({ netExpectedR: 0.01 }),
+      fixedNetExpectedR: 0.08,
+      researchInput: researchInput({ netExpectedR: 0.08 }),
       calibration: calibration(),
     });
     expect(decision.eligible).toBe(false);
-    expect(decision.reason).toBe('FIXED_NET_NOT_NEGATIVE');
+    expect(decision.reason).toBe('FIXED_NET_ALREADY_SUFFICIENT');
   });
 
   it('does not rescue when calibrated P95 cost is not lower than fixed cost', () => {
@@ -101,12 +115,12 @@ describe('PAPER calibrated cost research rescue', () => {
     expect(decision.reason).toBe('NO_CALIBRATED_COST_ADVANTAGE');
   });
 
-  it('does not rescue when calibrated net edge is below the 0.10R safety margin', () => {
+  it('does not rescue when calibrated net edge remains below the 0.08R research floor', () => {
     const decision = evaluatePaperCalibratedCostResearchRescue({
-      grossExpectedR: 0.18,
-      fixedNetExpectedR: -0.07,
+      grossExpectedR: 0.16,
+      fixedNetExpectedR: -0.09,
       researchInput: researchInput(),
-      calibration: calibration({ calibratedCostR: 0.09, costReductionR: 0.16 }),
+      calibration: calibration({ calibratedCostR: 0.081, costReductionR: 0.169 }),
     });
     expect(decision.eligible).toBe(false);
     expect(decision.reason).toBe('CALIBRATED_NET_EDGE_TOO_LOW');
