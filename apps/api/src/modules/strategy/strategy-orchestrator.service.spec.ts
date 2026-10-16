@@ -610,6 +610,41 @@ describe('StrategyOrchestratorService', () => {
       );
     });
 
+    it('maps adaptive DISLOCATED state into the conservative risk-engine regime vocabulary', async () => {
+      await service.processSignal(validCandidate({ marketRegime: 'DISLOCATED' }));
+
+      expect(riskService.validateProposedTrade).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          signalId: 'sig-001',
+          regime: 'HIGH_VOLATILITY',
+        }),
+      );
+    });
+
+    it.each([
+      ['TREND_HEALTHY', 'TRENDING'],
+      ['TREND_EXTENDED', 'TRENDING'],
+      ['TREND_WEAK', 'TRENDING'],
+      ['RANGE', 'RANGING'],
+      ['TRANSITION', 'HIGH_VOLATILITY'],
+      ['REVERSAL', 'HIGH_VOLATILITY'],
+      ['HIGH_VOLATILITY', 'HIGH_VOLATILITY'],
+      ['DISLOCATED', 'HIGH_VOLATILITY'],
+      ['ROLLOVER_RISK', 'LOW_LIQUIDITY'],
+      ['UNKNOWN', undefined],
+    ] as const)(
+      'maps adaptive market state %s to risk regime %s',
+      async (marketRegime, expectedRegime) => {
+        await service.processSignal(validCandidate({ marketRegime }));
+
+        expect(riskService.validateProposedTrade).toHaveBeenCalledWith(
+          'user-1',
+          expect.objectContaining({ regime: expectedRegime }),
+        );
+      },
+    );
+
     it('does not call ExecutionService when RiskService rejects', async () => {
       (riskService.validateProposedTrade as jest.Mock).mockResolvedValue({
         decision: 'REJECTED',
