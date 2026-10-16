@@ -1,4 +1,7 @@
-import { selectAdaptiveRiskMultiplier, type AdaptiveRiskMultiplierInput } from './adaptive-risk-multiplier';
+import {
+  selectAdaptiveRiskMultiplier,
+  type AdaptiveRiskMultiplierInput,
+} from './adaptive-risk-multiplier';
 
 const base: AdaptiveRiskMultiplierInput = {
   executionRoute: 'NORMAL_PAPER',
@@ -21,8 +24,17 @@ const base: AdaptiveRiskMultiplierInput = {
 
 describe('selectAdaptiveRiskMultiplier', () => {
   it('never upsizes research execution routes', () => {
-    for (const route of ['PAPER_RESEARCH_THROUGHPUT', 'PAIRED_REVERSAL_RESEARCH', 'REJECTED_EDGE_CANARY'] as const) {
-      const decision = selectAdaptiveRiskMultiplier({ ...base, executionRoute: route, opportunityScore: 0.99, netExpectedR: 0.5 });
+    for (const route of [
+      'PAPER_RESEARCH_THROUGHPUT',
+      'PAIRED_REVERSAL_RESEARCH',
+      'REJECTED_EDGE_CANARY',
+    ] as const) {
+      const decision = selectAdaptiveRiskMultiplier({
+        ...base,
+        executionRoute: route,
+        opportunityScore: 0.99,
+        netExpectedR: 0.5,
+      });
       expect(decision.multiplier).toBeLessThanOrEqual(1);
       expect(decision.canUpsize).toBe(false);
     }
@@ -31,13 +43,25 @@ describe('selectAdaptiveRiskMultiplier', () => {
   it('never upsizes sparse, degraded, dislocated, rollover, high-volatility or invalid-cost evidence', () => {
     const cases: AdaptiveRiskMultiplierInput[] = [
       { ...base, edge: { ...base.edge, maturity: 'SPARSE', canUpsize: false } },
-      { ...base, edge: { ...base.edge, maturity: 'DEGRADED', recentDegradation: true, canUpsize: false } },
+      {
+        ...base,
+        edge: { ...base.edge, maturity: 'DEGRADED', recentDegradation: true, canUpsize: false },
+      },
       { ...base, marketState: { ...base.marketState, state: 'DISLOCATED', canUpsize: false } },
-      { ...base, marketState: { ...base.marketState, state: 'ROLLOVER_RISK', session: 'ROLLOVER', canUpsize: false } },
+      {
+        ...base,
+        marketState: {
+          ...base.marketState,
+          state: 'ROLLOVER_RISK',
+          session: 'ROLLOVER',
+          canUpsize: false,
+        },
+      },
       { ...base, marketState: { ...base.marketState, state: 'HIGH_VOLATILITY', canUpsize: false } },
       { ...base, executionCostUsable: false },
     ];
-    for (const input of cases) expect(selectAdaptiveRiskMultiplier(input).multiplier).toBeLessThanOrEqual(1);
+    for (const input of cases)
+      expect(selectAdaptiveRiskMultiplier(input).multiplier).toBeLessThanOrEqual(1);
   });
 
   it('allows 1.10x for mature positive normal PAPER edge', () => {
@@ -47,7 +71,11 @@ describe('selectAdaptiveRiskMultiplier', () => {
   });
 
   it('allows 1.25x only for exceptional mature positive normal PAPER edge', () => {
-    const decision = selectAdaptiveRiskMultiplier({ ...base, opportunityScore: 0.9, netExpectedR: 0.28 });
+    const decision = selectAdaptiveRiskMultiplier({
+      ...base,
+      opportunityScore: 0.9,
+      netExpectedR: 0.28,
+    });
     expect(decision.multiplier).toBe(1.25);
     expect(decision.canUpsize).toBe(true);
   });
@@ -68,7 +96,10 @@ describe('selectAdaptiveRiskMultiplier', () => {
   });
 
   it('does not use a multiplier to bypass hard governance blockers', () => {
-    const decision = selectAdaptiveRiskMultiplier({ ...base, hardBlockers: ['PAPER_NET_EXPECTED_R'] });
+    const decision = selectAdaptiveRiskMultiplier({
+      ...base,
+      hardBlockers: ['PAPER_NET_EXPECTED_R'],
+    });
     expect(decision.multiplier).toBe(0.5);
     expect(decision.executionEligible).toBe(false);
     expect(decision.hardBlockers).toEqual(['PAPER_NET_EXPECTED_R']);

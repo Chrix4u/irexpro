@@ -115,7 +115,8 @@ export function scoreAdaptiveOpportunity(
     executionCostQuality: 1 - clamp01(input.estimatedExecutionCostR / 0.6),
     diversificationQuality: clamp01(input.exposure.diversificationQuality),
     stabilityQuality: clamp01(
-      input.driftQuality * (input.edge.recentDegradation ? 0.25 : 1) *
+      input.driftQuality *
+        (input.edge.recentDegradation ? 0.25 : 1) *
         (input.exposure.riskEvidenceComplete ? 1 : 0.65),
     ),
   };

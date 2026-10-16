@@ -127,7 +127,8 @@ function profitFactor(values: number[]): number | null {
 function sharpe(values: number[]): number | null {
   if (values.length < 2) return null;
   const mean = average(values)!;
-  const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1);
+  const variance =
+    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1);
   const sd = Math.sqrt(variance);
   return sd > 0 && Number.isFinite(sd) ? (Math.sqrt(values.length) * mean) / sd : null;
 }
@@ -271,7 +272,8 @@ export function buildAdaptiveEdgeEvidence(
   });
   const instrument = request.instrument.trim().toUpperCase();
   const pairDirection = rows.filter(
-    (row) => row.instrument.trim().toUpperCase() === instrument && row.direction === request.direction,
+    (row) =>
+      row.instrument.trim().toUpperCase() === instrument && row.direction === request.direction,
   );
   const pairSession = pairDirection.filter((row) => row.session === request.session);
   const exact = pairSession.filter(

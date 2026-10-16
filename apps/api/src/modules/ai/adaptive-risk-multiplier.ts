@@ -109,8 +109,7 @@ export function selectAdaptiveRiskMultiplier(
     input.netExpectedR > 0;
 
   if (maturePositiveUpsize) {
-    multiplier =
-      input.opportunityScore >= 0.85 && input.netExpectedR >= 0.2 ? 1.25 : 1.1;
+    multiplier = input.opportunityScore >= 0.85 && input.netExpectedR >= 0.2 ? 1.25 : 1.1;
   }
 
   if (research && multiplier > 1) multiplier = 1;
@@ -122,7 +121,8 @@ export function selectAdaptiveRiskMultiplier(
   if (evidenceUnavailable) reasons.push('ADAPTIVE_EVIDENCE_INCOMPLETE');
   if (unsafeState) reasons.push(`MARKET_STATE_${input.marketState.state}`);
   if (!input.executionCostUsable) reasons.push('EXECUTION_COST_UNUSABLE');
-  if (maturePositiveUpsize) reasons.push(multiplier === 1.25 ? 'EXCEPTIONAL_MATURE_EDGE' : 'MATURE_POSITIVE_EDGE');
+  if (maturePositiveUpsize)
+    reasons.push(multiplier === 1.25 ? 'EXCEPTIONAL_MATURE_EDGE' : 'MATURE_POSITIVE_EDGE');
   if (!reasons.length) reasons.push('STANDARD_RISK');
 
   return {

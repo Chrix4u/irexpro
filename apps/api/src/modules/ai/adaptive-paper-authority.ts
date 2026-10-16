@@ -11,7 +11,8 @@ export function adaptiveCandidateRiskAtStop(
   allocatedCapital: string | number | null,
   requestedRiskPercent: number,
 ): number | null {
-  const capital = typeof allocatedCapital === 'number' ? allocatedCapital : Number(allocatedCapital);
+  const capital =
+    typeof allocatedCapital === 'number' ? allocatedCapital : Number(allocatedCapital);
   if (
     !Number.isFinite(capital) ||
     capital <= 0 ||
@@ -31,7 +32,8 @@ export function adaptiveMarketDataFreshness(
 ): 'FRESH' | 'STALE' | 'UNKNOWN' {
   const latest = latestClosedBarAt.getTime();
   const evaluated = evaluatedAt.getTime();
-  if (!Number.isFinite(latest) || !Number.isFinite(evaluated) || evaluated < latest) return 'UNKNOWN';
+  if (!Number.isFinite(latest) || !Number.isFinite(evaluated) || evaluated < latest)
+    return 'UNKNOWN';
   return evaluated - latest <= 15 * 60_000 ? 'FRESH' : 'STALE';
 }
 
@@ -39,7 +41,9 @@ export function rankAdaptivePaperScanWinners<T extends AdaptiveRankableScanWinne
   winners: T[],
 ): Array<AdaptiveRankedScanWinner<T>> {
   return [...winners]
-    .filter((winner) => Number.isFinite(winner.adaptiveScore) && Number.isFinite(winner.netExpectedR))
+    .filter(
+      (winner) => Number.isFinite(winner.adaptiveScore) && Number.isFinite(winner.netExpectedR),
+    )
     .sort((a, b) => b.adaptiveScore - a.adaptiveScore || b.netExpectedR - a.netExpectedR)
     .map((winner, index) => ({ ...winner, adaptiveScanRank: index + 1 }));
 }

@@ -21,7 +21,7 @@ describe('adaptive PAPER authority helpers', () => {
 
   it('ranks the entire scan by adaptive score then authoritative net edge', () => {
     const ranked = rankAdaptivePaperScanWinners([
-      { id: 'EURUSD', adaptiveScore: 0.71, netExpectedR: 0.20 },
+      { id: 'EURUSD', adaptiveScore: 0.71, netExpectedR: 0.2 },
       { id: 'USDJPY', adaptiveScore: 0.83, netExpectedR: 0.12 },
       { id: 'GBPUSD', adaptiveScore: 0.83, netExpectedR: 0.19 },
     ]);

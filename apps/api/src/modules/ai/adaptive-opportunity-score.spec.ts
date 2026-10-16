@@ -47,7 +47,10 @@ describe('scoreAdaptiveOpportunity', () => {
       diversificationQuality: 0.07,
       stabilityQuality: 0.05,
     });
-    expect(Object.values(ADAPTIVE_OPPORTUNITY_WEIGHTS).reduce((a, b) => a + b, 0)).toBeCloseTo(1, 12);
+    expect(Object.values(ADAPTIVE_OPPORTUNITY_WEIGHTS).reduce((a, b) => a + b, 0)).toBeCloseTo(
+      1,
+      12,
+    );
   });
 
   it('never lowers the score when authoritative net expected R improves', () => {
