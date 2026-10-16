@@ -64,7 +64,7 @@ describe('AdaptiveEdgeMatrixService', () => {
     expect(sql).toContain('t.closed_at < $3');
     expect(sql).toContain("ti.metadata->>'decision_policy_version' = $4");
     expect(sql).toContain("ti.metadata->>'external_provider_paper_only' = 'true'");
-    expect(sql).toContain("main_strategy_qualification_evidence");
+    expect(sql).toContain('main_strategy_qualification_evidence');
     expect(sql).toContain('= $6');
     expect(params).toEqual([
       request.userId,
@@ -161,7 +161,7 @@ describe('AdaptiveEdgeMatrixService', () => {
     await service.getEvidence({ ...request, evidenceClass: 'RESEARCH' });
 
     const [sql] = query.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain("main_strategy_qualification_evidence");
+    expect(sql).toContain('main_strategy_qualification_evidence');
     expect(sql).toContain('= $6');
     const params = query.mock.calls[0][1] as unknown[];
     expect(params[5]).toBe('RESEARCH');
