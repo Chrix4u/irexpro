@@ -347,6 +347,15 @@ interface ExecutableCounterfactual {
   paperCalibratedCostRescue: PaperCalibratedCostResearchRescueDecision;
 }
 
+interface AdaptiveScanDiagnosticCandidate {
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  adaptiveScore: number;
+  netExpectedR: number;
+  state: AdaptiveMarketStateDecision['state'];
+  blockers: string[];
+}
+
 interface AdaptiveScanWinner {
   chosen: ExecutableCounterfactual;
   selection: CounterfactualExecutionSelection;
@@ -1225,6 +1234,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         chosen: ExecutableCounterfactual;
         selection: CounterfactualExecutionSelection;
       }> = [];
+      let bestAdaptiveDiagnostic: AdaptiveScanDiagnosticCandidate | null = null;
       const paperSpreadCalibrationHistoryCache = new Map<
         string,
         Promise<PaperSpreadCalibrationHistory>
@@ -1511,6 +1521,24 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             portfolio: initialAdaptivePortfolio,
           });
           const preliminaryRank = preAdaptiveCandidateRanks.get(best) ?? rankedCandidates.length;
+          const diagnosticCandidate: AdaptiveScanDiagnosticCandidate = {
+            instrument: best.instrument,
+            direction: best.direction,
+            adaptiveScore: preliminaryAdaptive.opportunity.score,
+            netExpectedR: preliminaryAdaptive.netExpectedR,
+            state: preliminaryAdaptive.marketState.state,
+            blockers: preliminaryAdaptive.opportunity.hardBlockers,
+          };
+          if (
+            Number.isFinite(diagnosticCandidate.netExpectedR) &&
+            Number.isFinite(diagnosticCandidate.adaptiveScore) &&
+            (bestAdaptiveDiagnostic === null ||
+              diagnosticCandidate.netExpectedR > bestAdaptiveDiagnostic.netExpectedR ||
+              (diagnosticCandidate.netExpectedR === bestAdaptiveDiagnostic.netExpectedR &&
+                diagnosticCandidate.adaptiveScore > bestAdaptiveDiagnostic.adaptiveScore))
+          ) {
+            bestAdaptiveDiagnostic = diagnosticCandidate;
+          }
           await this.persistAdaptiveDecisionAnnotation(
             userId,
             eventId,
@@ -2062,6 +2090,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         evaluatedCandidates: rankedCandidates.length,
         executableWinners: adaptiveRankedWinners.length,
         best: adaptiveRankedWinners[0] ?? null,
+        bestEvaluated: bestAdaptiveDiagnostic,
         reason:
           adaptiveRankedWinners.length > 0
             ? 'ADAPTIVE_WINNERS_RANKED'
@@ -2787,20 +2816,31 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     evaluatedCandidates: number;
     executableWinners: number;
     best: AdaptiveScanWinner | null;
+    bestEvaluated?: AdaptiveScanDiagnosticCandidate | null;
     reason: string;
   }): Promise<void> {
+    const best = input.best
+      ? {
+          instrument: input.best.chosen.candidate.instrument,
+          direction: input.best.chosen.candidate.direction,
+          adaptiveScore: input.best.adaptiveScore,
+          netExpectedR: input.best.netExpectedR,
+          state: input.best.marketState.state,
+          blockers: input.best.opportunity.hardBlockers,
+        }
+      : (input.bestEvaluated ?? null);
     const summary = {
       artifact: 'adaptive-scan-summary-v1',
       policyVersion: ACTIVE_MODEL_POLICY_VERSION,
       scanStartedAt: input.scanStartedAt.toISOString(),
       evaluatedCandidates: input.evaluatedCandidates,
       executableWinners: input.executableWinners,
-      bestInstrument: input.best?.chosen.candidate.instrument ?? null,
-      bestDirection: input.best?.chosen.candidate.direction ?? null,
-      bestAdaptiveScore: input.best?.adaptiveScore ?? null,
-      bestNetExpectedR: input.best?.netExpectedR ?? null,
-      bestState: input.best?.marketState.state ?? null,
-      bestBlockers: input.best?.opportunity.hardBlockers ?? [],
+      bestInstrument: best?.instrument ?? null,
+      bestDirection: best?.direction ?? null,
+      bestAdaptiveScore: best?.adaptiveScore ?? null,
+      bestNetExpectedR: best?.netExpectedR ?? null,
+      bestState: best?.state ?? null,
+      bestBlockers: best?.blockers ?? [],
       reason: input.reason,
     };
     this.logger.log(
