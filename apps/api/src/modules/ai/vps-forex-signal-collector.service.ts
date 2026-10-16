@@ -2745,15 +2745,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             metadata,
             severity
           )
-          SELECT $1, 'SYSTEM', 'AI_ADAPTIVE_SCAN_SUMMARY', 'AdaptiveScan', $2, $3::jsonb, 'INFO'
+          SELECT $1::uuid, 'SYSTEM', 'AI_ADAPTIVE_SCAN_SUMMARY', 'AdaptiveScan', $2::varchar, $3::jsonb, 'INFO'
           WHERE NOT EXISTS (
             SELECT 1
             FROM audit.audit_logs
-            WHERE actor_user_id = $1
+            WHERE actor_user_id = $1::uuid
               AND actor_type = 'SYSTEM'
               AND action = 'AI_ADAPTIVE_SCAN_SUMMARY'
               AND resource_type = 'AdaptiveScan'
-              AND resource_id = $2
+              AND resource_id = $2::varchar
           )
         `,
         [input.userId, durableResourceId, JSON.stringify(summary)],
