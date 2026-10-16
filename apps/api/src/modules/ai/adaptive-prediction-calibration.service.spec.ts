@@ -44,19 +44,32 @@ function outcome(
 
 describe('adaptive prediction calibration', () => {
   it('corrects materially overconfident predictions downward from resolved outcomes', () => {
-    const rows = [
-      ...Array.from({ length: 5 }, (_, i) => outcome(i, 'WIN', 1.15)),
-      ...Array.from({ length: 10 }, (_, i) => outcome(i + 5, 'LOSS', -1.1)),
-    ];
+    const rows = Array.from({ length: 24 }, (_, i) =>
+      i % 4 === 0 ? outcome(i, 'WIN', 1.15) : outcome(i, 'LOSS', -1.1),
+    );
     const result = buildAdaptivePredictionCalibration(rows, request);
 
     expect(result.authoritative).toBe(true);
-    expect(result.samples).toBe(15);
-    expect(result.wins).toBe(5);
-    expect(result.losses).toBe(10);
+    expect(result.samples).toBe(24);
+    expect(result.wins).toBe(6);
+    expect(result.losses).toBe(18);
     expect(result.calibratedWinProbability).toBeLessThan(request.rawConfidence);
     expect(result.calibratedNetExpectedR).toBeLessThan(0);
     expect(result.blockRecommended).toBe(true);
+    expect(result.rescueEligible).toBe(false);
+  });
+
+  it('uses collecting evidence to recalibrate and down-rank without hard-vetoing execution', () => {
+    const rows = Array.from({ length: 15 }, (_, i) =>
+      i % 3 === 0 ? outcome(i, 'WIN', 1.15) : outcome(i, 'LOSS', -1.1),
+    );
+    const result = buildAdaptivePredictionCalibration(rows, request);
+
+    expect(result.authoritative).toBe(true);
+    expect(result.maturity).toBe('COLLECTING');
+    expect(result.calibratedWinProbability).toBeLessThan(request.rawConfidence);
+    expect(result.calibratedNetExpectedR).toBeLessThan(0);
+    expect(result.blockRecommended).toBe(false);
     expect(result.rescueEligible).toBe(false);
   });
 

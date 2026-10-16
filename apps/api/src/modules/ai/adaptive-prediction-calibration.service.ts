@@ -270,7 +270,8 @@ export function buildAdaptivePredictionCalibration(
       ? 'MATURE'
       : 'COLLECTING';
   const blockRecommended =
-    recentDegradation || calibratedNetExpectedR <= 0 || calibratedWinProbability < 0.45;
+    maturity === 'DEGRADED' ||
+    (maturity === 'MATURE' && (calibratedNetExpectedR <= 0 || calibratedWinProbability < 0.45));
   const rescueEligible =
     maturity === 'MATURE' &&
     !recentDegradation &&
