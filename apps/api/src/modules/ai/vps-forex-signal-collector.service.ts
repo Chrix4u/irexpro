@@ -291,6 +291,10 @@ export interface Candidate {
   extensionAtr: number;
   emaSeparation: number;
   mtfStrength: number;
+  /** Direction-aligned trend support from fully closed H4 candles only. */
+  h4Alignment?: number;
+  h4ContextAvailable?: boolean;
+  h4ClosedBarCount?: number;
   rsi14: number;
   /** Direction-aligned price change / ATR: positive supports this candidate. */
   shortHorizonMomentumAtr: number;
@@ -504,6 +508,59 @@ export function aggregateCandles(
     }));
 }
 
+export function aggregateCompletedCandles(
+  candles: LivePaperCandleInput[],
+  bucketMinutes: number,
+  baseBarMinutes = 5,
+): LivePaperCandleInput[] {
+  if (
+    !candles.length ||
+    bucketMinutes <= 0 ||
+    baseBarMinutes <= 0 ||
+    bucketMinutes % baseBarMinutes !== 0
+  ) {
+    return [];
+  }
+  const baseBarMs = baseBarMinutes * 60_000;
+  const bucketMs = bucketMinutes * 60_000;
+  const expectedBars = bucketMinutes / baseBarMinutes;
+  const latestOpenMs = new Date(candles[candles.length - 1]!.timestamp).getTime();
+  if (!Number.isFinite(latestOpenMs)) return [];
+  const knownThroughMs = latestOpenMs + baseBarMs;
+  const groups = new Map<number, LivePaperCandleInput[]>();
+  for (const candle of candles) {
+    const openMs = new Date(candle.timestamp).getTime();
+    if (!Number.isFinite(openMs)) continue;
+    const bucketOpenMs = Math.floor(openMs / bucketMs) * bucketMs;
+    if (bucketOpenMs + bucketMs > knownThroughMs) continue;
+    const rows = groups.get(bucketOpenMs) ?? [];
+    rows.push(candle);
+    groups.set(bucketOpenMs, rows);
+  }
+  return [...groups.entries()]
+    .filter(([, rows]) => {
+      if (rows.length !== expectedBars) return false;
+      const opens = new Set(rows.map((row) => new Date(row.timestamp).getTime()));
+      return rows.every((row, index) => {
+        const bucketOpenMs = Math.floor(new Date(row.timestamp).getTime() / bucketMs) * bucketMs;
+        return opens.has(bucketOpenMs + index * baseBarMs);
+      });
+    })
+    .sort((a, b) => a[0] - b[0])
+    .map(([bucketOpenMs, rows]) => {
+      const ordered = [...rows].sort(
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+      );
+      return {
+        timestamp: new Date(bucketOpenMs),
+        open: ordered[0]!.open,
+        high: String(Math.max(...ordered.map((row) => Number(row.high)))),
+        low: String(Math.min(...ordered.map((row) => Number(row.low)))),
+        close: ordered[ordered.length - 1]!.close,
+      };
+    });
+}
+
 export function atr(candles: LivePaperCandleInput[], period = 14): number {
   if (candles.length <= period) return NaN;
   const trs: number[] = [];
@@ -534,15 +591,22 @@ export function buildDirectionalCandidates(
   const atr14 = atr(candles, 14);
   const m15 = aggregateCandles(candles, 15);
   const h1 = aggregateCandles(candles, 60);
+  const h4 = aggregateCompletedCandles(candles, 240);
   if (m15.length < 30 || h1.length < 24) return [];
   const m15Closes = m15.map((c) => Number(c.close));
   const h1Closes = h1.map((c) => Number(c.close));
   const m15Ema9 = ema(m15Closes, 9);
   const m15Ema21 = ema(m15Closes, 21);
   const h1Ema21 = ema(h1Closes, 21);
+  const h4Closes = h4.map((c) => Number(c.close));
+  const h4ContextAvailable = h4.length >= 9 && h4Closes.every(Number.isFinite);
+  const h4Ema3 = h4ContextAvailable ? ema(h4Closes, 3) : Number.NaN;
+  const h4Ema8 = h4ContextAvailable ? ema(h4Closes, 8) : Number.NaN;
+  const h4Atr5 = h4ContextAvailable ? atr(h4, 5) : Number.NaN;
   if (
     ![ema9, ema21, ema50, rsi14, atr14, m15Ema9, m15Ema21, h1Ema21].every(Number.isFinite) ||
-    atr14 <= 0
+    atr14 <= 0 ||
+    (h4ContextAvailable && (![h4Ema3, h4Ema8, h4Atr5].every(Number.isFinite) || h4Atr5 <= 0))
   ) {
     return [];
   }
@@ -573,6 +637,9 @@ export function buildDirectionalCandidates(
     const emaSeparation = Math.max(0, Math.min(1, (sign * (ema9 - ema21)) / atr14 / 2));
     const mtfStrength = Math.min(1, Math.max(0, (sign * (m15Ema9 - m15Ema21)) / atr14));
     const h1Alignment = Math.max(0, Math.min(1, (sign * (px - h1Ema21)) / atr14));
+    const h4Alignment = h4ContextAvailable
+      ? Math.max(0, Math.min(1, (sign * (h4Ema3 - h4Ema8)) / h4Atr5))
+      : 0;
     const rsiStrength =
       direction === 'BUY'
         ? Math.max(0, Math.min(1, (rsi14 - 50) / 22))
@@ -588,6 +655,7 @@ export function buildDirectionalCandidates(
       0.05 * emaSeparation +
       0.025 * mtfStrength +
       0.015 * h1Alignment +
+      0.015 * h4Alignment +
       0.015 * momentumQuality -
       0.02 * volatilityScore -
       0.02 * Math.min(1.5, extensionAtr);
@@ -606,6 +674,9 @@ export function buildDirectionalCandidates(
       extensionAtr,
       emaSeparation,
       mtfStrength,
+      h4Alignment,
+      h4ContextAvailable,
+      h4ClosedBarCount: h4.length,
       rsi14,
       shortHorizonMomentumAtr,
     };
@@ -2423,6 +2494,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             feature_extension_atr: best.extensionAtr,
             feature_ema_separation: best.emaSeparation,
             feature_mtf_strength: best.mtfStrength,
+            feature_h4_alignment: best.h4Alignment ?? 0,
+            feature_h4_context_available: best.h4ContextAvailable ?? false,
+            feature_h4_closed_bar_count: best.h4ClosedBarCount ?? 0,
             feature_rsi14: best.rsi14,
             feature_volatility_score: best.volatilityScore,
             feature_atr: best.atr,
@@ -2688,6 +2762,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       confidence: input.candidate.confidence,
       emaSeparation: input.candidate.emaSeparation,
       mtfStrength: input.candidate.mtfStrength,
+      h4Alignment: input.candidate.h4Alignment ?? 0,
+      h4ContextAvailable: input.candidate.h4ContextAvailable ?? false,
       extensionAtr: input.candidate.extensionAtr,
       shortHorizonMomentumAtr: input.candidate.shortHorizonMomentumAtr,
       volatilityScore: input.candidate.volatilityScore,
