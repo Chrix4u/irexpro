@@ -95,6 +95,28 @@ describe('selectAdaptiveRiskMultiplier', () => {
     ).toBe(0.75);
   });
 
+  it('keeps otherwise eligible research at the 0.75x risk band instead of collapsing productive evidence collection to 0.50x', () => {
+    const decision = selectAdaptiveRiskMultiplier({
+      ...base,
+      executionRoute: 'PAPER_RESEARCH_THROUGHPUT',
+      marketState: { ...base.marketState, state: 'DISLOCATED', canUpsize: false },
+      edge: { ...base.edge, maturity: 'SPARSE', canUpsize: false },
+    });
+    expect(decision.multiplier).toBe(0.75);
+    expect(decision.canUpsize).toBe(false);
+    expect(decision.executionEligible).toBe(true);
+    expect(decision.reasons).toContain('RESEARCH_UPSIZE_DISABLED');
+  });
+
+  it('keeps the 0.50x band for genuinely degraded research evidence', () => {
+    const decision = selectAdaptiveRiskMultiplier({
+      ...base,
+      executionRoute: 'PAPER_RESEARCH_THROUGHPUT',
+      edge: { ...base.edge, maturity: 'DEGRADED', recentDegradation: true, canUpsize: false },
+    });
+    expect(decision.multiplier).toBe(0.5);
+  });
+
   it('does not use a multiplier to bypass hard governance blockers', () => {
     const decision = selectAdaptiveRiskMultiplier({
       ...base,

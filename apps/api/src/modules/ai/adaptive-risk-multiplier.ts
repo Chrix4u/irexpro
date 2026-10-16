@@ -86,6 +86,10 @@ export function selectAdaptiveRiskMultiplier(
     multiplier = 0.75;
   }
 
+  const researchMinimumRiskBandApplied =
+    research && !hardBlocked && !degraded && !blockedExposure && multiplier === 0.5;
+  if (researchMinimumRiskBandApplied) multiplier = 0.75;
+
   const maturePositiveUpsize =
     !hardBlocked &&
     !research &&
@@ -115,6 +119,7 @@ export function selectAdaptiveRiskMultiplier(
   if (research && multiplier > 1) multiplier = 1;
   if (hardBlocked) reasons.push('HARD_GOVERNANCE_BLOCKED');
   if (research) reasons.push('RESEARCH_UPSIZE_DISABLED');
+  if (researchMinimumRiskBandApplied) reasons.push('RESEARCH_MINIMUM_RISK_BAND');
   if (degraded) reasons.push('EDGE_DEGRADED');
   if (blockedExposure) reasons.push('PORTFOLIO_CAPACITY_BLOCKED');
   else if (reducedExposure) reasons.push('PORTFOLIO_CAPACITY_REDUCED');

@@ -2217,6 +2217,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         }
 
         const dynamicLotSizing = this.adaptiveLotSizingFor(chosen);
+        const signalDelivery = await this.resolveSignalDeliveryTimestamp(userId, signalId);
+        if (!signalDelivery.deliver || !signalDelivery.generatedAt) {
+          this.logger.log(
+            `Adaptive PAPER ${best.instrument} ${best.direction} execution=SKIPPED ` +
+              `signal=${signalId} reason=${signalDelivery.reason}`,
+          );
+          continue;
+        }
 
         const outcome = await this.aiSignalService.receiveSignal({
           signalId,
@@ -2238,7 +2246,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           strategyCode: `external-${ACTIVE_ENGINE_CODE}`,
           marketRegime: adaptiveWinner.marketState.state,
           volatilityScore: best.volatilityScore,
-          generatedAt: this.signalGeneratedAtForRetry(signalId),
+          generatedAt: signalDelivery.generatedAt,
           modelVersion:
             paperExecutionRoute === 'REJECTED_EDGE_CANARY'
               ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
@@ -2908,7 +2916,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     );
   }
 
-  private signalGeneratedAtForRetry(signalId: string): Date {
+  private async resolveSignalDeliveryTimestamp(
+    userId: string,
+    signalId: string,
+  ): Promise<{
+    deliver: boolean;
+    generatedAt: Date | null;
+    reason:
+      | 'NEW_MARKET_EVENT'
+      | 'IN_MEMORY_RETRY_IDENTITY_REUSED'
+      | 'DURABLE_RETRY_IDENTITY_REUSED'
+      | 'MARKET_EVENT_ALREADY_EVALUATED';
+  }> {
     const now = new Date();
     const retentionMs = SIGNAL_MAX_AGE_MS - 5_000;
     for (const [id, generatedAt] of this.signalGeneratedAtById.entries()) {
@@ -2917,11 +2936,58 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       }
     }
 
-    const existing = this.signalGeneratedAtById.get(signalId);
-    if (existing) return existing;
+    const inMemory = this.signalGeneratedAtById.get(signalId);
+    if (inMemory) {
+      return {
+        deliver: true,
+        generatedAt: inMemory,
+        reason: 'IN_MEMORY_RETRY_IDENTITY_REUSED',
+      };
+    }
+
+    if (this.dataSource) {
+      let rows: Array<{ generated_at: Date | string | null }>;
+      try {
+        rows = (await this.dataSource.query(
+          `
+            SELECT generated_at
+            FROM trading.ai_signal_identities
+            WHERE user_id = $1
+              AND signal_id = $2
+            LIMIT 1
+          `,
+          [userId, signalId],
+        )) as Array<{ generated_at: Date | string | null }>;
+      } catch (error) {
+        throw new Error(
+          `Adaptive signal identity lookup failed closed: ${(error as Error).message}`,
+        );
+      }
+
+      const persistedRaw = rows[0]?.generated_at ?? null;
+      if (persistedRaw != null) {
+        const persisted = new Date(persistedRaw);
+        if (!Number.isFinite(persisted.getTime())) {
+          throw new Error('Adaptive signal identity lookup returned an invalid generated_at');
+        }
+        if (now.getTime() - persisted.getTime() <= retentionMs) {
+          this.signalGeneratedAtById.set(signalId, persisted);
+          return {
+            deliver: true,
+            generatedAt: persisted,
+            reason: 'DURABLE_RETRY_IDENTITY_REUSED',
+          };
+        }
+        return {
+          deliver: false,
+          generatedAt: null,
+          reason: 'MARKET_EVENT_ALREADY_EVALUATED',
+        };
+      }
+    }
 
     this.signalGeneratedAtById.set(signalId, now);
-    return now;
+    return { deliver: true, generatedAt: now, reason: 'NEW_MARKET_EVENT' };
   }
 
   private retrySafePreIntentErrorForOutcome(outcome: {

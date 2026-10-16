@@ -207,6 +207,31 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.lots).toBe('0.1');
   });
 
+  it('keeps AUDUSD-like 5.1-pip research geometry executable at 0.75x without rounding risk upward', async () => {
+    const service = makeService({}, '0.69576');
+
+    const sized = await service.sizePosition({
+      ...params,
+      instrument: 'AUDUSD',
+      direction: 'SELL',
+      stopLoss: '0.69627',
+      paperAllocationSizing: {
+        executionMode: 'PAPER_ONLY',
+        allocatedCapital: '1000.00',
+        confidenceTier: 'RESEARCH',
+        adaptiveRiskMultiplier: '0.75',
+        minimumExecutableLot: '0.10',
+        marketReferenceEntryPrice: '0.69576',
+      },
+    });
+
+    expect(sized.inputs.baseRiskAmount).toBe('10');
+    expect(sized.inputs.riskAmount).toBe('7.5');
+    expect(sized.inputs.stopLossDistance).toBe('0.00051');
+    expect(sized.lots).toBe('0.14');
+    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.1');
+  });
+
   it('allows 1.25x only inside the durable profile risk ceiling', async () => {
     const permissive = makeService({ maxTradeRiskPercent: '3.00' });
     const sized = await permissive.sizePosition({
