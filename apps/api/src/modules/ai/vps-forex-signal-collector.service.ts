@@ -1450,6 +1450,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             marketBarOpenedAt: best.barTime,
             evaluatedAt,
             alignedMomentumAtr: best.shortHorizonMomentumAtr,
+            netExpectedR: ensembleGovernance.netExpectedR,
+            driftState: ensembleGovernance.driftState,
+            consensusPassed: planBEnsemble.consensusPassed,
+            consensusRequired: planBEnsemble.consensusRequired,
+            eventRisk: ensembleGovernance.eventRisk,
+            executionCostUsable: Boolean(
+              ensembleGovernance.paperExecutionCostUsable ??
+              ensembleGovernance.executionSpreadEvidenceValid,
+            ),
           });
           if (paperSession && !paperPostLossEntryGuard.eligible) {
             const blocker = `PAPER_POST_LOSS_${paperPostLossEntryGuard.reason}`;
@@ -1923,7 +1932,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             );
             paperExecutionRoute = 'NONE';
           }
-          if (paperResearchExecutionEligible && paperCostAwareEntry.action === 'ENTER_NOW') {
+          if (
+            paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT' &&
+            paperCostAwareEntry.action === 'ENTER_NOW'
+          ) {
             this.logger.log(
               `PAPER research-throughput ${best.instrument} ${best.direction} ` +
                 `execution=ELIGIBLE executionAuthority=PAPER_ONLY_RESEARCH ` +

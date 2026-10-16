@@ -68,6 +68,47 @@ describe('PAPER post-stop-loss entry confirmation', () => {
       });
     },
   );
+  it('permits strong multi-evidence reconfirmation when one-bar momentum is still negative', () => {
+    expect(
+      evaluatePaperPostLossEntryGuard({
+        ...base,
+        alignedMomentumAtr: -0.2,
+        netExpectedR: 0.15,
+        driftState: 'NORMAL',
+        consensusPassed: 6,
+        consensusRequired: 6,
+        eventRisk: 'CLEAR',
+        executionCostUsable: true,
+      }),
+    ).toMatchObject({
+      eligible: true,
+      reason: 'MULTI_EVIDENCE_RECONFIRMED',
+      lastClosedTradeId: 'loss-1',
+    });
+  });
+
+  it.each([
+    ['edge below floor', { netExpectedR: 0.119 }],
+    ['stressed drift', { driftState: 'STRESSED' }],
+    ['incomplete consensus', { consensusPassed: 5 }],
+    ['event risk not clear', { eventRisk: 'UNVERIFIED' }],
+    ['execution cost unusable', { executionCostUsable: false }],
+  ])('keeps the post-loss block when %s', (_label, override) => {
+    expect(
+      evaluatePaperPostLossEntryGuard({
+        ...base,
+        alignedMomentumAtr: -0.2,
+        netExpectedR: 0.15,
+        driftState: 'NORMAL',
+        consensusPassed: 6,
+        consensusRequired: 6,
+        eventRisk: 'CLEAR',
+        executionCostUsable: true,
+        ...override,
+      }),
+    ).toMatchObject({ eligible: false, reason: 'DIRECTION_NOT_RECONFIRMED' });
+  });
+
   it('permits renewed direction without a fixed cooldown or entry cap', () => {
     expect(evaluatePaperPostLossEntryGuard(base)).toMatchObject({
       eligible: true,
