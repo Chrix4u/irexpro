@@ -512,6 +512,7 @@ export class StrategyOrchestratorService {
             allocatedCapital: string | null;
             confidenceTier: PaperAllocationConfidenceTier;
             marketReferenceEntryPrice?: string;
+            adaptiveRiskMultiplier?: string;
           }
         | undefined;
       if (
@@ -535,6 +536,19 @@ export class StrategyOrchestratorService {
             userId,
             session.brokerConnectionId,
           );
+          const rawAdaptiveRiskMultiplier = candidate.metadata?.adaptive_risk_multiplier;
+          const adaptiveRiskMultiplier =
+            typeof rawAdaptiveRiskMultiplier === 'number' &&
+            Number.isFinite(rawAdaptiveRiskMultiplier) &&
+            rawAdaptiveRiskMultiplier >= 0.5 &&
+            rawAdaptiveRiskMultiplier <= 1.25
+              ? String(rawAdaptiveRiskMultiplier)
+              : typeof rawAdaptiveRiskMultiplier === 'string' &&
+                  Number.isFinite(Number(rawAdaptiveRiskMultiplier)) &&
+                  Number(rawAdaptiveRiskMultiplier) >= 0.5 &&
+                  Number(rawAdaptiveRiskMultiplier) <= 1.25
+                ? rawAdaptiveRiskMultiplier
+                : undefined;
           paperAllocationSizing = {
             executionMode: session.executionMode,
             allocatedCapital: allocationState.hasAllocation
@@ -544,6 +558,7 @@ export class StrategyOrchestratorService {
             ...(executionCandidate.suggestedEntryPrice != null
               ? { marketReferenceEntryPrice: String(executionCandidate.suggestedEntryPrice) }
               : {}),
+            ...(adaptiveRiskMultiplier ? { adaptiveRiskMultiplier } : {}),
           };
         }
       }

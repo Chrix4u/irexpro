@@ -186,6 +186,58 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.inputs.stopLossDistance).toBe('0.00051');
   });
 
+  it('applies a 0.50x adaptive multiplier to the PAPER risk budget before lot sizing', async () => {
+    const service = makeService();
+
+    const sized = await service.sizePosition({
+      ...params,
+      paperAllocationSizing: {
+        executionMode: 'PAPER_ONLY',
+        allocatedCapital: '1000.00',
+        confidenceTier: 'BASE',
+        adaptiveRiskMultiplier: '0.50',
+      },
+    });
+
+    expect(sized.inputs.baseRiskPercent).toBe('2');
+    expect(sized.inputs.adaptiveRiskMultiplier).toBe('0.5');
+    expect(sized.inputs.adaptiveRiskPercent).toBe('1');
+    expect(sized.inputs.baseRiskAmount).toBe('20');
+    expect(sized.inputs.riskAmount).toBe('10');
+    expect(sized.lots).toBe('0.1');
+  });
+
+  it('allows 1.25x only inside the durable profile risk ceiling', async () => {
+    const permissive = makeService({ maxTradeRiskPercent: '3.00' });
+    const sized = await permissive.sizePosition({
+      ...params,
+      paperAllocationSizing: {
+        executionMode: 'PAPER_ONLY',
+        allocatedCapital: '1000.00',
+        confidenceTier: 'BASE',
+        adaptiveRiskMultiplier: '1.25',
+      },
+    });
+    expect(sized.inputs.baseRiskPercent).toBe('2');
+    expect(sized.inputs.adaptiveRiskPercent).toBe('2.5');
+    expect(sized.inputs.baseRiskAmount).toBe('20');
+    expect(sized.inputs.riskAmount).toBe('25');
+    expect(sized.lots).toBe('0.25');
+
+    const capped = makeService({ maxTradeRiskPercent: '2.00' });
+    const cappedSized = await capped.sizePosition({
+      ...params,
+      paperAllocationSizing: {
+        executionMode: 'PAPER_ONLY',
+        allocatedCapital: '1000.00',
+        confidenceTier: 'BASE',
+        adaptiveRiskMultiplier: '1.25',
+      },
+    });
+    expect(cappedSized.inputs.adaptiveRiskPercent).toBe('2');
+    expect(cappedSized.inputs.riskAmount).toBe('20');
+  });
+
   it('keeps legacy lot ceilings outside PAPER_ONLY', async () => {
     const service = makeService({ maxTradeRiskPercent: '3.00' });
 
