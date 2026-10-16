@@ -71,6 +71,42 @@ describe('classifyAdaptiveMarketState', () => {
     expect(incomplete.canUpsize).toBe(false);
   });
 
+  it('uses H4 alignment to refine healthy-trend confidence without making H4 a hard veto', () => {
+    const aligned = classifyAdaptiveMarketState({
+      ...base(),
+      h4ContextAvailable: true,
+      h4Alignment: 0.9,
+    });
+    const conflict = classifyAdaptiveMarketState({
+      ...base(),
+      h4ContextAvailable: true,
+      h4Alignment: 0.05,
+    });
+
+    expect(aligned.state).toBe('TREND_HEALTHY');
+    expect(conflict.state).toBe('TREND_HEALTHY');
+    expect(aligned.higherTimeframeAgreement).toBeGreaterThan(conflict.higherTimeframeAgreement);
+    expect(aligned.stateConfidence).toBeGreaterThan(conflict.stateConfidence);
+    expect(aligned.canUpsize).toBe(true);
+    expect(conflict.canUpsize).toBe(false);
+    expect(conflict.reasons).toContain('H4_CONTEXT_CONFLICT');
+  });
+
+  it('keeps existing state behavior when H4 context is unavailable', () => {
+    const withoutH4 = classifyAdaptiveMarketState(base());
+    const explicitlyUnavailable = classifyAdaptiveMarketState({
+      ...base(),
+      h4ContextAvailable: false,
+      h4Alignment: 0,
+    });
+    expect(explicitlyUnavailable.state).toBe(withoutH4.state);
+    expect(explicitlyUnavailable.canUpsize).toBe(withoutH4.canUpsize);
+    expect(explicitlyUnavailable.higherTimeframeAgreement).toBeCloseTo(
+      withoutH4.higherTimeframeAgreement,
+      10,
+    );
+  });
+
   it('keeps state confidence separate from trading confidence', () => {
     const result = classifyAdaptiveMarketState({ ...base(), confidence: 0.99 });
     expect(result.stateConfidence).not.toBe(0.99);

@@ -5,6 +5,7 @@ import {
   canExecuteMultiModelPaper,
   buildCandidate,
   buildDirectionalCandidates,
+  aggregateCompletedCandles,
   selectCounterfactualExecutionCandidate,
   prioritizeCounterfactualExecutionRoutes,
   dynamicPaperLotUpperBound,
@@ -111,13 +112,13 @@ const PAIRS = [
   ['USDCHF', 'USD/CHF'],
 ] as const;
 
-function trendCandles(base = 1.1, digits = 5, drift = 0.00001, amp = 0.0001) {
+function trendCandles(base = 1.1, digits = 5, drift = 0.00001, amp = 0.0001, count = 360) {
   const latestOpen = Math.floor(Date.now() / 300000) * 300000 - 300000;
-  return Array.from({ length: 360 }, (_, i) => {
+  return Array.from({ length: count }, (_, i) => {
     const close = base + i * drift + Math.sin(i / 2) * amp;
     const range = base > 10 ? 0.01 : 0.00008;
     return {
-      timestamp: new Date(latestOpen - (359 - i) * 300000),
+      timestamp: new Date(latestOpen - (count - 1 - i) * 300000),
       open: close.toFixed(digits),
       high: (close + range).toFixed(digits),
       low: (close - range).toFixed(digits),
@@ -357,6 +358,46 @@ describe('VpsForexSignalCollectorService', () => {
       researchFallbackRequested: false,
       reason: 'INSUFFICIENT_PAIR_SIDE_EVIDENCE',
     });
+  });
+
+  it('excludes an incomplete H4 bucket from causal higher-timeframe context', () => {
+    const candles = Array.from({ length: 8 }, (_, index) => ({
+      timestamp: new Date(Date.UTC(2026, 9, 16, 12, index * 5, 0)),
+      open: '1.10000',
+      high: '1.10100',
+      low: '1.09900',
+      close: '1.10050',
+    }));
+    expect(aggregateCompletedCandles(candles, 240)).toHaveLength(0);
+
+    const fullH4 = Array.from({ length: 48 }, (_, index) => ({
+      timestamp: new Date(Date.UTC(2026, 9, 16, 12, index * 5, 0)),
+      open: '1.10000',
+      high: '1.10100',
+      low: '1.09900',
+      close: '1.10050',
+    }));
+    const completed = aggregateCompletedCandles(fullH4, 240);
+    expect(completed).toHaveLength(1);
+    expect(completed[0]?.timestamp.toISOString()).toBe('2026-10-16T12:00:00.000Z');
+
+    const missingOneBar = fullH4.filter((_, index) => index !== 17);
+    expect(aggregateCompletedCandles(missingOneBar, 240)).toHaveLength(0);
+  });
+
+  it('adds causal H4 alignment only when enough fully closed H4 evidence exists', () => {
+    const longHistory = trendCandles(1.1, 5, 0.00001, 0.0001, 500);
+    const candidates = buildDirectionalCandidates('EURUSD', longHistory);
+    const buy = candidates.find((candidate) => candidate.direction === 'BUY')!;
+    const sell = candidates.find((candidate) => candidate.direction === 'SELL')!;
+    expect(buy.h4ContextAvailable).toBe(true);
+    expect(sell.h4ContextAvailable).toBe(true);
+    expect(buy.h4ClosedBarCount).toBeGreaterThanOrEqual(9);
+    expect(buy.h4Alignment!).toBeGreaterThan(sell.h4Alignment!);
+
+    const shortHistory = buildDirectionalCandidates('EURUSD', trendCandles());
+    expect(shortHistory.every((candidate) => candidate.h4ContextAvailable === false)).toBe(true);
+    expect(shortHistory.every((candidate) => candidate.h4Alignment === 0)).toBe(true);
   });
 
   it('builds BUY and SELL counterfactuals from the same market snapshot', () => {
@@ -1916,11 +1957,18 @@ describe('VpsForexSignalCollectorService', () => {
       expect(emitted.marketRegime).not.toBe('TRENDING');
       expect(emitted.suggestedVolume).toBeLessThanOrEqual(1);
       expect(emitted.metadata.adaptive_risk_multiplier).toBeLessThanOrEqual(1);
+      expect(emitted.metadata.feature_h4_context_available).toBe(false);
+      expect(emitted.metadata.feature_h4_alignment).toBe(0);
+      expect(emitted.metadata.feature_h4_closed_bar_count).toBeGreaterThanOrEqual(0);
       expect(emitted.metadata.adaptiveMarketIntelligence).toMatchObject({
         artifact: 'adaptive-market-intelligence-v1',
         executionRoute: 'PAPER_RESEARCH_THROUGHPUT',
         productionEligible: false,
-        marketState: expect.objectContaining({ state: 'DISLOCATED' }),
+        marketState: expect.objectContaining({
+          state: 'DISLOCATED',
+          h4ContextAvailable: false,
+          h4Alignment: 0,
+        }),
         riskMultiplier: expect.objectContaining({ multiplier: expect.any(Number) }),
       });
       expect(

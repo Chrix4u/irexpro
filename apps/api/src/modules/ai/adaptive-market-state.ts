@@ -22,6 +22,8 @@ export interface AdaptiveMarketStateInput {
   confidence: number;
   emaSeparation: number;
   mtfStrength: number;
+  h4Alignment?: number;
+  h4ContextAvailable?: boolean;
   extensionAtr: number;
   shortHorizonMomentumAtr: number;
   volatilityScore: number;
@@ -40,6 +42,8 @@ export interface AdaptiveMarketStateDecision {
   reversalScore: number;
   volatilityState: 'NORMAL' | 'ELEVATED' | 'HIGH' | 'UNKNOWN';
   higherTimeframeAgreement: number;
+  h4Alignment: number;
+  h4ContextAvailable: boolean;
   session: AdaptiveMarketSession;
   reasons: string[];
   dataFreshness: AdaptiveMarketStateInput['dataFreshness'];
@@ -59,6 +63,7 @@ export function adaptiveMarketSession(scanTime: Date): AdaptiveMarketSession {
 }
 
 function finiteInputs(input: AdaptiveMarketStateInput): boolean {
+  if (input.h4ContextAvailable === true && !Number.isFinite(input.h4Alignment)) return false;
   return [
     input.scanTime.getTime(),
     input.confidence,
@@ -75,9 +80,16 @@ export function classifyAdaptiveMarketState(
   input: AdaptiveMarketStateInput,
 ): AdaptiveMarketStateDecision {
   const session = adaptiveMarketSession(input.scanTime);
-  const higherTimeframeAgreement = finiteInputs(input)
+  const h4ContextAvailable =
+    input.h4ContextAvailable === true && Number.isFinite(input.h4Alignment);
+  const h4Alignment = h4ContextAvailable ? clamp01(input.h4Alignment ?? 0) : 0;
+  const baseHigherTimeframeAgreement = finiteInputs(input)
     ? clamp01((Math.max(0, input.emaSeparation) + Math.max(0, input.mtfStrength)) / 0.8)
     : 0;
+  const higherTimeframeAgreement = h4ContextAvailable
+    ? clamp01(0.75 * baseHigherTimeframeAgreement + 0.25 * h4Alignment)
+    : baseHigherTimeframeAgreement;
+  const h4Conflict = h4ContextAvailable && h4Alignment < 0.15;
   const trendStrength = finiteInputs(input)
     ? clamp01(
         0.42 * clamp01(input.emaSeparation / 0.5) +
@@ -117,6 +129,8 @@ export function classifyAdaptiveMarketState(
     reversalScore,
     volatilityState,
     higherTimeframeAgreement,
+    h4Alignment,
+    h4ContextAvailable,
     session,
     dataFreshness: input.dataFreshness,
   } as const;
@@ -157,7 +171,7 @@ export function classifyAdaptiveMarketState(
       state: 'REVERSAL',
       stateConfidence: clamp01(0.55 + 0.35 * reversalScore),
       reasons: ['CONFIRMED_REVERSAL_ROUTE'],
-      canUpsize: input.executionCostUsable && input.driftState === 'NORMAL',
+      canUpsize: input.executionCostUsable && input.driftState === 'NORMAL' && !h4Conflict,
     };
   }
 
@@ -220,12 +234,16 @@ export function classifyAdaptiveMarketState(
     input.legacyRegime === 'TREND_HEALTHY' &&
     input.driftState === 'NORMAL' &&
     input.executionCostUsable &&
-    trendStrength >= 0.45;
+    trendStrength >= 0.45 &&
+    !h4Conflict;
+  const healthyReasons = ['HEALTHY_TREND_STRUCTURE'];
+  if (h4ContextAvailable && h4Alignment >= 0.55) healthyReasons.push('H4_CONTEXT_ALIGNED');
+  if (h4Conflict) healthyReasons.push('H4_CONTEXT_CONFLICT');
   return {
     ...base,
     state: 'TREND_HEALTHY',
     stateConfidence: clamp01(0.62 + 0.25 * higherTimeframeAgreement),
-    reasons: ['HEALTHY_TREND_STRUCTURE'],
+    reasons: healthyReasons,
     canUpsize,
   };
 }
