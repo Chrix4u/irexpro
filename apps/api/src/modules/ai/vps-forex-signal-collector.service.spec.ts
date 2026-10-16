@@ -1149,6 +1149,105 @@ describe('VpsForexSignalCollectorService', () => {
     );
   });
 
+  describe('adaptive PAPER provider-position truth', () => {
+    function portfolioCollector(
+      brokerPositions: Array<{
+        externalOrderId: string;
+        instrument: string;
+        direction: 'BUY' | 'SELL';
+        lotSize: string;
+      }>,
+      rows: Array<Record<string, unknown>>,
+    ) {
+      const query = jest.fn().mockResolvedValue(rows);
+      const getOpenPositionsForConnection = jest.fn().mockResolvedValue({
+        positions: brokerPositions,
+      });
+      const collector = createCollector(
+        config({}),
+        {} as AiSignalService,
+        {} as ExecutionService,
+        { getOpenPositionsForConnection } as unknown as BrokerService,
+        new LivePaperMarketDataService(),
+        aiEngineClientMock(),
+        { query } as any,
+      );
+      return { collector, query, getOpenPositionsForConnection };
+    }
+
+    it('does not carry ghost adaptive exposure after the PAPER provider has already closed the position', async () => {
+      const { collector, query, getOpenPositionsForConnection } = portfolioCollector(
+        [],
+        [
+          {
+            external_order_id: 'paper-order-000041',
+            external_position_id: null,
+            instrument: 'AUDUSD',
+            direction: 'SELL',
+            risk_at_stop: '15',
+          },
+        ],
+      );
+
+      await expect(
+        (collector as any).loadAdaptiveOpenRiskPositions('user-1', 'conn-1'),
+      ).resolves.toEqual({ available: true, positions: [] });
+      expect(getOpenPositionsForConnection).toHaveBeenCalledWith('conn-1', 'user-1');
+      expect(query).not.toHaveBeenCalled();
+    });
+
+    it('maps provider-open PAPER positions to durable risk-at-stop by exact provider position id', async () => {
+      const { collector, query } = portfolioCollector(
+        [
+          {
+            externalOrderId: 'paper-order-000042',
+            instrument: 'AUDUSD',
+            direction: 'SELL',
+            lotSize: '0.29',
+          },
+        ],
+        [
+          {
+            external_order_id: 'paper-order-000042',
+            external_position_id: null,
+            instrument: 'AUDUSD',
+            direction: 'SELL',
+            risk_at_stop: '15',
+          },
+        ],
+      );
+
+      await expect(
+        (collector as any).loadAdaptiveOpenRiskPositions('user-1', 'conn-1'),
+      ).resolves.toEqual({
+        available: true,
+        positions: [{ instrument: 'AUDUSD', direction: 'SELL', riskAtStop: 15 }],
+      });
+      expect(String(query.mock.calls[0]?.[0] ?? '')).toContain('external_order_id');
+    });
+
+    it('fails closed on risk evidence when a provider-open PAPER position cannot be mapped durably', async () => {
+      const { collector } = portfolioCollector(
+        [
+          {
+            externalOrderId: 'paper-order-unmapped',
+            instrument: 'GBPUSD',
+            direction: 'BUY',
+            lotSize: '0.20',
+          },
+        ],
+        [],
+      );
+
+      await expect(
+        (collector as any).loadAdaptiveOpenRiskPositions('user-1', 'conn-1'),
+      ).resolves.toEqual({
+        available: true,
+        positions: [{ instrument: 'GBPUSD', direction: 'BUY', riskAtStop: null }],
+      });
+    });
+  });
+
   it('ranks pair winners across the scan and rechecks shared-currency risk before later dispatches', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });

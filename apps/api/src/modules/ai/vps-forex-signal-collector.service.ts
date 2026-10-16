@@ -2519,13 +2519,47 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     userId: string,
     connectionId: string,
   ): Promise<{ available: boolean; positions: AdaptiveCurrencyRiskPosition[] }> {
-    if (!this.dataSource) return { available: false, positions: [] };
+    let providerPositions: Array<{
+      externalOrderId: string;
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+    }>;
+    try {
+      const snapshot = await this.brokerService.getOpenPositionsForConnection(connectionId, userId);
+      providerPositions = snapshot.positions.map((position) => ({
+        externalOrderId: position.externalOrderId,
+        instrument: position.instrument,
+        direction: position.direction,
+      }));
+    } catch (error) {
+      this.logger.warn(
+        `Adaptive provider position evidence unavailable: ${(error as Error).message}`,
+      );
+      return { available: false, positions: [] };
+    }
+
+    // PAPER provider state is the current exposure authority. Durable trade
+    // reconciliation can trail a simulator SL/TP/profit-lock close by several
+    // minutes, so an empty provider snapshot must clear exposure immediately
+    // rather than carrying a ghost OPEN trade from the database.
+    if (providerPositions.length === 0) return { available: true, positions: [] };
+    if (!this.dataSource) {
+      return {
+        available: false,
+        positions: providerPositions.map((position) => ({
+          instrument: position.instrument,
+          direction: position.direction,
+          riskAtStop: null,
+        })),
+      };
+    }
+
     try {
       const rows = (await this.dataSource.query(
         `
           SELECT
-            ti.instrument,
-            ti.direction,
+            t.external_order_id,
+            t.external_position_id,
             NULLIF(ca.sizing_inputs->>'riskAmount', '')::numeric AS risk_at_stop
           FROM trading.capital_allocations ca
           JOIN trading.trade_intents ti ON ti.id = ca.trade_intent_id
@@ -2533,29 +2567,41 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           WHERE ti.user_id = $1
             AND ti.broker_connection_id = $2
             AND ca.status = 'ACTIVE'
-            AND t.status = 'OPEN'
           ORDER BY t.opened_at ASC, t.id ASC
         `,
         [userId, connectionId],
       )) as Array<{
-        instrument: string;
-        direction: 'BUY' | 'SELL';
+        external_order_id: string | null;
+        external_position_id: string | null;
         risk_at_stop: string | number | null;
       }>;
+      const riskByProviderId = new Map<string, number | null>();
+      for (const row of rows) {
+        const parsed =
+          row.risk_at_stop == null || !Number.isFinite(Number(row.risk_at_stop))
+            ? null
+            : Number(row.risk_at_stop);
+        if (row.external_position_id) riskByProviderId.set(row.external_position_id, parsed);
+        if (row.external_order_id) riskByProviderId.set(row.external_order_id, parsed);
+      }
       return {
         available: true,
-        positions: rows.map((row) => ({
-          instrument: row.instrument,
-          direction: row.direction,
-          riskAtStop:
-            row.risk_at_stop == null || !Number.isFinite(Number(row.risk_at_stop))
-              ? null
-              : Number(row.risk_at_stop),
+        positions: providerPositions.map((position) => ({
+          instrument: position.instrument,
+          direction: position.direction,
+          riskAtStop: riskByProviderId.get(position.externalOrderId) ?? null,
         })),
       };
     } catch (error) {
       this.logger.warn(`Adaptive portfolio risk evidence unavailable: ${(error as Error).message}`);
-      return { available: false, positions: [] };
+      return {
+        available: false,
+        positions: providerPositions.map((position) => ({
+          instrument: position.instrument,
+          direction: position.direction,
+          riskAtStop: null,
+        })),
+      };
     }
   }
 
