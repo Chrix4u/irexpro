@@ -75,6 +75,7 @@ const WORKFLOW_RULES = [
       '.github/workflows/staging-deploy.yml',
       '.github/workflows/six-pair-research-run.yml',
       '.github/workflows/vps-ops-control.yml',
+      '.github/workflows/vps-no-trade-diagnostics.yml',
       '.github/workflows/vps-runner-diagnostic.yml',
     ],
   },
@@ -218,6 +219,11 @@ export function runSelfTests() {
     requiredWorkflowNames(['.github/workflows/vps-ops-control.yml']),
     ['Release Security', 'Deployment Script Safety'],
     'VPS ops control workflow change',
+  );
+  assertEqual(
+    requiredWorkflowNames(['.github/workflows/vps-no-trade-diagnostics.yml']),
+    ['Release Security', 'Deployment Script Safety'],
+    'VPS trading diagnostics workflow change',
   );
   assertEqual(
     requiredWorkflowNames(['.github/workflows/vps-runner-diagnostic.yml']),
