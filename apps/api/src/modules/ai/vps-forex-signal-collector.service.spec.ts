@@ -1038,11 +1038,19 @@ describe('VpsForexSignalCollectorService', () => {
       String(sql).includes("'adaptiveScanSummary'"),
     );
     expect(scanSummaryCalls).toHaveLength(1);
-    expect(JSON.parse(String(scanSummaryCalls[0]![1][4]))).toMatchObject({
+    const noTradeSummary = JSON.parse(String(scanSummaryCalls[0]![1][4]));
+    expect(noTradeSummary).toMatchObject({
       artifact: 'adaptive-scan-summary-v1',
       executableWinners: 0,
       reason: 'NO_EXECUTABLE_PAIR_WINNER',
+      bestInstrument: expect.any(String),
+      bestDirection: expect.stringMatching(/^(BUY|SELL)$/),
+      bestAdaptiveScore: expect.any(Number),
+      bestNetExpectedR: expect.any(Number),
+      bestState: expect.any(String),
+      bestBlockers: expect.any(Array),
     });
+    expect(noTradeSummary.bestBlockers.length).toBeGreaterThan(0);
   });
 
   it('persists an idempotent scan summary even when the scan created no decision row', async () => {
