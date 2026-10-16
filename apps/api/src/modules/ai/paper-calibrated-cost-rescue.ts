@@ -1,5 +1,6 @@
 import {
   PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
+  PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R,
   type PaperResearchThroughputInput,
   evaluatePaperResearchThroughput,
 } from './paper-research-throughput';
@@ -9,7 +10,8 @@ import {
 } from './paper-spread-calibration-shadow';
 
 export const PAPER_CALIBRATED_COST_RESCUE_ARTIFACT = 'paper-calibrated-cost-rescue-v1';
-export const PAPER_CALIBRATED_COST_RESCUE_MIN_NET_EXPECTED_R = 0.1;
+export const PAPER_CALIBRATED_COST_RESCUE_MIN_NET_EXPECTED_R =
+  PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R;
 
 export interface PaperCalibratedCostResearchRescueInput {
   grossExpectedR: number;
@@ -29,7 +31,7 @@ export interface PaperCalibratedCostResearchRescueDecision {
     | 'FRESH_BROKER_SPREAD_AUTHORITATIVE'
     | 'CALIBRATION_EVIDENCE_IMMATURE'
     | 'CALIBRATION_NOT_USABLE'
-    | 'FIXED_NET_NOT_NEGATIVE'
+    | 'FIXED_NET_ALREADY_SUFFICIENT'
     | 'FIXED_NET_BLOCKER_MISSING'
     | 'NO_CALIBRATED_COST_ADVANTAGE'
     | 'CALIBRATED_NET_EDGE_TOO_LOW'
@@ -111,8 +113,8 @@ export function evaluatePaperCalibratedCostResearchRescue(
     return decision(false, 'CALIBRATION_NOT_USABLE');
   }
 
-  if (fixedNetExpectedR >= 0) {
-    return decision(false, 'FIXED_NET_NOT_NEGATIVE');
+  if (fixedNetExpectedR >= PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R) {
+    return decision(false, 'FIXED_NET_ALREADY_SUFFICIENT');
   }
 
   if (!input.researchInput.paperExecutionBlockers.includes('PAPER_NET_EXPECTED_R')) {
