@@ -211,6 +211,8 @@ describe('adaptive prediction calibration', () => {
     expect(calibration.calibratedNetExpectedR).toBeLessThan(0);
     expect(calibration.blockRecommended).toBe(false);
     expect(authority.blockExecution).toBe(false);
+    expect(authority.effectiveConfidence).toBe(0.68);
+    expect(authority.effectiveNetExpectedR).toBe(0.18);
     expect(authority.effectivePaperExecutionBlockers).not.toContain(
       'ADAPTIVE_CALIBRATION_NEGATIVE_EDGE',
     );
@@ -237,6 +239,8 @@ describe('adaptive prediction calibration', () => {
     expect(calibration.maturity).toBe('MATURE');
     expect(calibration.rescueEligible).toBe(false);
     expect(authority.rescueApplied).toBe(false);
+    expect(authority.effectiveConfidence).toBe(0.6);
+    expect(authority.effectiveNetExpectedR).toBe(-0.05);
     expect(authority.effectivePaperExecutionBlockers).toContain('PAPER_NET_EXPECTED_R');
   });
 
