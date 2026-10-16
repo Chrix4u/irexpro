@@ -3320,7 +3320,7 @@ describe('scheduled scan recovery', () => {
     jest.useRealTimers();
     jest.restoreAllMocks();
   });
-  function scanner() {
+  function scanner(dataSource?: any) {
     return createCollector(
       config({
         'vpsForexScanner.enabled': true,
@@ -3333,6 +3333,7 @@ describe('scheduled scan recovery', () => {
       {} as unknown as BrokerService,
       new LivePaperMarketDataService(),
       aiEngineClientMock(),
+      dataSource,
     );
   }
   function goodFeed() {
@@ -3368,19 +3369,49 @@ describe('scheduled scan recovery', () => {
     await collector.maybeCollect();
     expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBe('2026-10-12T10:01:00.000Z');
   });
-  it('pins the exact producer generatedAt across the one-minute retry window', () => {
+  it('pins the exact producer generatedAt across the one-minute retry window', async () => {
     jest.setSystemTime(new Date('2026-10-12T10:00:00.000Z'));
-    const collector = scanner();
-    const generatedAtForRetry = (
-      collector as unknown as { signalGeneratedAtForRetry(signalId: string): Date }
-    ).signalGeneratedAtForRetry;
-    expect(typeof generatedAtForRetry).toBe('function');
+    const query = jest.fn().mockResolvedValue([]);
+    const collector = scanner({ query });
+    const resolveDelivery = (collector as any).resolveSignalDeliveryTimestamp;
+    expect(typeof resolveDelivery).toBe('function');
 
-    const first = generatedAtForRetry.call(collector, 'signal-1') as Date;
+    const first = await resolveDelivery.call(collector, 'user-1', 'signal-1');
     jest.setSystemTime(new Date('2026-10-12T10:01:00.000Z'));
-    const retry = generatedAtForRetry.call(collector, 'signal-1') as Date;
+    const retry = await resolveDelivery.call(collector, 'user-1', 'signal-1');
 
-    expect(retry.toISOString()).toBe(first.toISOString());
+    expect(first.deliver).toBe(true);
+    expect(retry.deliver).toBe(true);
+    expect(retry.generatedAt.toISOString()).toBe(first.generatedAt.toISOString());
+  });
+
+  it('reuses the durable original generatedAt after restart while the identity is still fresh', async () => {
+    jest.setSystemTime(new Date('2026-10-12T10:01:00.000Z'));
+    const query = jest
+      .fn()
+      .mockResolvedValue([{ generated_at: new Date('2026-10-12T10:00:30.000Z') }]);
+    const collector = scanner({ query });
+
+    const delivery = await (collector as any).resolveSignalDeliveryTimestamp('user-1', 'signal-1');
+
+    expect(delivery).toMatchObject({ deliver: true, reason: 'DURABLE_RETRY_IDENTITY_REUSED' });
+    expect(delivery.generatedAt.toISOString()).toBe('2026-10-12T10:00:30.000Z');
+  });
+
+  it('suppresses an already-evaluated market event after the signal freshness window', async () => {
+    jest.setSystemTime(new Date('2026-10-12T10:05:00.000Z'));
+    const query = jest
+      .fn()
+      .mockResolvedValue([{ generated_at: new Date('2026-10-12T10:00:00.000Z') }]);
+    const collector = scanner({ query });
+
+    const delivery = await (collector as any).resolveSignalDeliveryTimestamp('user-1', 'signal-1');
+
+    expect(delivery).toMatchObject({
+      deliver: false,
+      generatedAt: null,
+      reason: 'MARKET_EVENT_ALREADY_EVALUATED',
+    });
   });
 
   it('classifies only the proven TradeIntent persistence failure as retry-safe', () => {
