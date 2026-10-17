@@ -135,10 +135,13 @@ async function gotoAiTrader(
     sessionGenerationString?: boolean;
     failAllocationRead?: boolean;
     recentClosedTradeAt?: string;
+    marketClosed?: boolean;
+    marketClosedReads?: number;
   } = {},
 ) {
   setupErrorCollectors(page);
   let riskReadCount = 0;
+  let marketStatusReadCount = 0;
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
     const apiPath = url.pathname.split("/api/v1/")[1] ?? "";
@@ -270,6 +273,60 @@ async function gotoAiTrader(
         availableCapital: "2250.00000000",
       });
     }
+    if (apiPath === "ai/external/vps-forex/status") {
+      if (options.marketClosed === undefined) return fulfill(200, {});
+      marketStatusReadCount += 1;
+      const marketClosed =
+        options.marketClosed === true &&
+        (options.marketClosedReads === undefined ||
+          marketStatusReadCount <= options.marketClosedReads);
+      return fulfill(200, {
+        enabled: true,
+        activeEngineCode: "irexpro-multimodel-ensemble-v1",
+        executionAuthority: "PAPER_ONLY",
+        ensembleThresholds: {
+          candidateConfidenceFloor: 0.64,
+          metaProbabilityFloor: 0.40828402366863903,
+          grossExpectedRFloor: 0.08,
+          paperNetExpectedRFloor: 0,
+          promotionNetExpectedRFloor: 0.08,
+          sleeveCoreMinClosedTrades: 100,
+        },
+        marketSchedule: marketClosed
+          ? {
+              paused: true,
+              reason: "WEEKEND",
+              nextEligibleScanAt: "2026-10-18T21:00:00.000Z",
+            }
+          : {
+              paused: false,
+              reason: null,
+              nextEligibleScanAt: "2026-10-17T13:00:00.000Z",
+            },
+        lastEnsembleDecision: {
+          reasons: [],
+          governance: {
+            paperNetExpectedRPassed: false,
+            paperExecutionEligible: false,
+            paperExecutionBlockers: ["ENSEMBLE_NOT_ADMITTED"],
+            paperPromotionEligible: false,
+          },
+          macroEventAssessment: null,
+          highConvictionOverlay: null,
+        },
+        ensembleCampaign: {
+          sleeves: [],
+          highConvictionOverlayCounts: {},
+          highConvictionOverlayPerformance: { CONFIRM: {}, CONFLICT: {}, ABSTAIN: {} },
+          profitProtection: { counterfactuals: [] },
+        },
+        highConvictionChallenger: { frozenConsensus: null, historicalValidation: null },
+        expertRegistry: { entries: [] },
+        marketCache: {},
+        postEntryShadow: { evidenceMinimums: {} },
+        pairSideReliability: [],
+      });
+    }
     if (apiPath === "market-data/intelligence")
       return fulfill(200, marketSnapshot);
     if (
@@ -331,10 +388,39 @@ async function gotoAiTrader(
 
   await page.goto("/trade");
   await expect(page.getByTestId("ai-trader-workspace")).toBeVisible();
-  await expect(
-    page.getByRole("heading", { level: 1, name: "AI Trader" }),
-  ).toBeVisible();
+  if (options.marketClosed) {
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Forex market is closed" }),
+    ).toBeVisible();
+  } else {
+    await expect(
+      page.getByRole("heading", { level: 1, name: "AI Trader" }),
+    ).toBeVisible();
+  }
 }
+
+test.describe("AI Trader market schedule", () => {
+  test("replaces the AI workspace with the closed-market state during the weekend pause", async ({ page }) => {
+    await gotoAiTrader(page, { marketClosed: true });
+
+    await expect(page.getByTestId("market-closed-state")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Forex market is closed" })).toBeVisible();
+    await expect(page.getByText(/Sunday, October 18, 2026/)).toBeVisible();
+    await expect(page.getByText(/resumes automatically/i)).toBeVisible();
+    await expect(page.getByTestId("market-reopen-countdown")).toBeVisible();
+    await expect(page.getByRole("region", { name: "AI trading controls" })).toHaveCount(0);
+  });
+
+  test("automatically restores the AI workspace when the authoritative market schedule reopens", async ({ page }) => {
+    await gotoAiTrader(page, { marketClosed: true, marketClosedReads: 2 });
+
+    await expect(page.getByTestId("market-closed-state")).toBeVisible();
+    await expect(page.getByRole("region", { name: "AI trading controls" })).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId("market-closed-state")).toHaveCount(0);
+  });
+});
 
 test.describe("AI Trader novice workflow", () => {
   test("shows broker, allocation, one automation control, positions and AI activity", async ({

@@ -24,6 +24,7 @@ import {
 import { useAuth } from "@/context/auth-context";
 import { useNotification } from "@/hooks/useNotification";
 import { MotionStatusOrb } from "@/components/ui/motion-status-orb";
+import { MarketClosedState } from "./MarketClosedState";
 import { api } from "@/lib/api";
 import { formatAgeSeconds } from "@/lib/duration";
 import { mapApiError } from "@/lib/error-mapping";
@@ -2246,6 +2247,27 @@ export default function AiTradingPage() {
           </Link>
         </Card>
       </div>
+    );
+  }
+
+  const weekendMarketClosed =
+    vpsScannerStatus?.marketSchedule.paused === true &&
+    vpsScannerStatus.marketSchedule.reason === "WEEKEND";
+
+  if (weekendMarketClosed) {
+    return (
+      <DashboardShell
+        user={user}
+        onLogout={logout}
+        activeRoute="/trade"
+        title="AI Trading"
+      >
+        <main className="ai-trader" data-testid="ai-trader-workspace">
+          <MarketClosedState
+            nextEligibleScanAt={vpsScannerStatus.marketSchedule.nextEligibleScanAt}
+          />
+        </main>
+      </DashboardShell>
     );
   }
 
