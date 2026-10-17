@@ -293,6 +293,20 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       );
     });
 
+    it('starts MOBILE authorization without requiring the WEB redirect allowlist', async () => {
+      config.get.mockImplementation((key: string) => {
+        if (key === 'broker.ctraderMobileCallbackUris') return MOBILE_SLOT;
+        if (key === 'BROKER_ENCRYPTION_KEY') return ENCRYPTION_KEY;
+        return undefined;
+      });
+
+      const result = await startFlow('mobile');
+
+      expect(result.flowId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(ctraderClient.buildAuthorizationUrl).toHaveBeenCalledWith(MOBILE_SLOT);
+      expect((await row(result.flowId))?.redirectUri).toBe(MOBILE_SLOT);
+    });
+
     it('claims a configured mobile callback slot for the MOBILE channel (client redirect ignored)', async () => {
       const result = await startFlow('mobile', 'https://evil.example.com/cb');
       expect(ctraderClient.buildAuthorizationUrl).toHaveBeenCalledWith(MOBILE_SLOT);

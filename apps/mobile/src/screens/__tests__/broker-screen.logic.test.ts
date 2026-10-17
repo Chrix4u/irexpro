@@ -104,6 +104,28 @@ describe("isConnectableEntry (fail-closed gating)", () => {
   it("keeps older registry payloads without readiness metadata connectable", () => {
     expect(isConnectableEntry(entry({ connectionReadiness: undefined }))).toBe(true);
   });
+
+  it("blocks mobile connect when web is ready but mobile OAuth callback slots are missing", () => {
+    expect(
+      isConnectableEntry(
+        entry({
+          connectionReadiness: {
+            ready: true,
+            code: "READY",
+            message: null,
+            channels: {
+              web: { ready: true, code: "READY", message: null },
+              mobile: {
+                ready: false,
+                code: "MOBILE_OAUTH_CALLBACK_REQUIRED",
+                message: "Mobile callback slots are required.",
+              },
+            },
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("isLiveSelectable (Phase I — production-LIVE release-truth)", () => {

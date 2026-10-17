@@ -191,15 +191,6 @@ export class BrokerOAuthService {
           'partner-approval flow at openapi.ctrader.com).',
       );
     }
-    const allowedRedirectUris = this.allowedRedirectUris();
-    if (allowedRedirectUris.length === 0) {
-      throw new BadRequestException(
-        'No cTrader OAuth redirect URI is configured on the platform — set ' +
-          'CTRADER_REDIRECT_URIS (the redirect URI(s) registered on the platform cTrader ' +
-          'Open API application).',
-      );
-    }
-
     await this.sweepStaleFlows();
 
     let flow: BrokerOAuthFlow;
@@ -209,6 +200,14 @@ export class BrokerOAuthService {
       // callback (a slot URI), never on a client-controlled custom scheme.
       flow = await this.claimMobileSlotFlow(userId, brokerId);
     } else {
+      const allowedRedirectUris = this.allowedRedirectUris();
+      if (allowedRedirectUris.length === 0) {
+        throw new BadRequestException(
+          'No cTrader OAuth redirect URI is configured on the platform — set ' +
+            'CTRADER_REDIRECT_URIS (the redirect URI(s) registered on the platform cTrader ' +
+            'Open API application).',
+        );
+      }
       const resolvedRedirectUri = redirectUri ?? allowedRedirectUris[0];
       if (!allowedRedirectUris.includes(resolvedRedirectUri)) {
         throw new BadRequestException(

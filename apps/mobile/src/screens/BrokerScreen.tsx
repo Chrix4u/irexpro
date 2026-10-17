@@ -42,6 +42,7 @@ import {
   credentialFields,
   isConnectableEntry,
   isLiveSelectable,
+  mobileConnectionReadiness,
   keyCapabilityChips,
   routeLabel,
   statusPresentation,
@@ -454,10 +455,11 @@ export default function BrokerScreen() {
         {registry.map((entry) => {
           const presentation = statusPresentation(entry.status);
           const connectable = isConnectableEntry(entry);
+          const mobileReadiness = mobileConnectionReadiness(entry);
           const runtimeBlocked =
             entry.adapterAvailable === true &&
             presentation.connectable &&
-            !isBrokerConnectionRuntimeReady(entry);
+            mobileReadiness?.ready === false;
           // Fixed taxonomy label — e.g. an UNVERIFIED BETA provider is
           // 'Production LIVE Unverified', never simply "Live".
           const verificationLabel = verificationLabelForEntry(entry);
@@ -512,7 +514,7 @@ export default function BrokerScreen() {
               </View>
               {runtimeBlocked ? (
                 <Text style={styles.errorTextSmall}>
-                  {entry.connectionReadiness?.message ??
+                  {mobileReadiness?.message ??
                     "This broker is awaiting platform configuration."}
                 </Text>
               ) : null}
@@ -615,7 +617,8 @@ function ConnectFlowModal({
   onConnected: () => Promise<void>;
 }) {
   const isOAuthBroker = entry.authenticationType === "OAUTH";
-  const runtimeReady = isBrokerConnectionRuntimeReady(entry);
+  const mobileReadiness = mobileConnectionReadiness(entry);
+  const runtimeReady = mobileReadiness?.ready !== false;
   const fields = credentialFields(entry.authenticationType);
   // Environment truth (Phase I): options derive STRICTLY from the entry's
   // declared environments, with LIVE additionally gated by isLiveSelectable
@@ -893,7 +896,7 @@ function ConnectFlowModal({
 
               {!runtimeReady ? (
                 <Text style={styles.errorText} accessibilityLiveRegion="polite">
-                  {entry.connectionReadiness?.message ??
+                  {mobileReadiness?.message ??
                     "Broker authorization is awaiting platform configuration."}
                 </Text>
               ) : null}

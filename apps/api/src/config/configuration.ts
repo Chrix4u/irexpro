@@ -92,10 +92,10 @@ export default () => ({
     // AUTHENTICATION_FAILED configuration message. NEVER log these values.
     ctraderClientId: process.env.CTRADER_CLIENT_ID,
     ctraderClientSecret: process.env.CTRADER_CLIENT_SECRET,
-    // Sprint 56 correction round 1 (audit point 6) — the platform's
-    // registered OAuth redirect URI(s), comma-separated (web callback page
-    // and, if registered by the operator, the mobile deep-link scheme).
-    // The user-facing OAuth flow fails closed when empty.
+    // cTrader WEB OAuth redirect URI(s), comma-separated HTTPS pages.
+    // Custom app schemes are not provider callbacks; mobile authorizations
+    // use ctraderMobileCallbackUris below and deep-link only after the server
+    // has exchanged the provider code. Web OAuth fails closed when empty.
     ctraderRedirectUris: process.env.CTRADER_REDIRECT_URIS,
     // Sprint 56 correction round 2 (architect finding 4) — the HTTPS SERVER
     // callback slot URI(s) registered on the platform cTrader Open API
