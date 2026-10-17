@@ -130,6 +130,18 @@ export function deriveProviderCertificationState(
   return 'CERTIFIED';
 }
 
+export type BrokerConnectionReadinessCode =
+  | 'READY'
+  | 'ADAPTER_UNAVAILABLE'
+  | 'PLATFORM_CREDENTIALS_REQUIRED'
+  | 'OAUTH_REDIRECT_REQUIRED';
+
+export interface BrokerConnectionReadiness {
+  ready: boolean;
+  code: BrokerConnectionReadinessCode;
+  message: string | null;
+}
+
 export interface BrokerRegistryEntry {
   id: string;
   name: string;
@@ -154,6 +166,8 @@ export interface BrokerRegistryEntry {
   regions: string[];
   /** True when a live adapter is registered for this entry right now. */
   adapterAvailable: boolean;
+  /** Runtime/operator prerequisites for starting a new broker connection. */
+  connectionReadiness?: BrokerConnectionReadiness;
 }
 
 export interface BrokerRegistryCatalog {

@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { BROKER_CATALOG, BROKER_CATALOG_VERSION } from './broker-catalog';
 import {
   BrokerAvailabilityStatus,
@@ -12,6 +13,18 @@ import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
 
 /** Materialized (always-present) production-LIVE verification status. */
 export type BrokerProductionLiveVerificationStatus = 'UNVERIFIED' | 'VERIFIED';
+
+export type BrokerConnectionReadinessCode =
+  | 'READY'
+  | 'ADAPTER_UNAVAILABLE'
+  | 'PLATFORM_CREDENTIALS_REQUIRED'
+  | 'OAUTH_REDIRECT_REQUIRED';
+
+export interface BrokerConnectionReadiness {
+  ready: boolean;
+  code: BrokerConnectionReadinessCode;
+  message: string | null;
+}
 
 /** Frontend-safe registry view (no adapter instances, no secrets). */
 export interface BrokerRegistryEntry {
@@ -48,6 +61,8 @@ export interface BrokerRegistryEntry {
   regions: string[];
   /** True when a live adapter is registered for this entry right now. */
   adapterAvailable: boolean;
+  /** Runtime/operator prerequisites for starting a new broker connection. */
+  connectionReadiness: BrokerConnectionReadiness;
 }
 
 /**
@@ -65,7 +80,10 @@ export interface BrokerRegistryEntry {
  */
 @Injectable()
 export class BrokerProviderRegistryService {
-  constructor(private readonly adapterRegistry: BrokerAdapterRegistry) {}
+  constructor(
+    private readonly adapterRegistry: BrokerAdapterRegistry,
+    @Optional() private readonly configService?: ConfigService,
+  ) {}
 
   /** Full catalog with runtime adapter availability overlay. */
   getCatalog(): BrokerRegistryEntry[] {
@@ -102,8 +120,52 @@ export class BrokerProviderRegistryService {
         environments: [...entry.environments],
         regions: [...entry.regions],
         adapterAvailable,
+        connectionReadiness: this.connectionReadiness(entry.adapterId, adapterAvailable),
       };
     });
+  }
+
+  private connectionReadiness(
+    adapterId: string | null,
+    adapterAvailable: boolean,
+  ): BrokerConnectionReadiness {
+    if (!adapterAvailable) {
+      return {
+        ready: false,
+        code: 'ADAPTER_UNAVAILABLE',
+        message: 'This broker integration is not available on the current server.',
+      };
+    }
+
+    if (adapterId === 'ctrader') {
+      const clientId =
+        this.configService?.get<string>('broker.ctraderClientId') ?? process.env.CTRADER_CLIENT_ID;
+      const clientSecret =
+        this.configService?.get<string>('broker.ctraderClientSecret') ??
+        process.env.CTRADER_CLIENT_SECRET;
+      if (!clientId?.trim() || !clientSecret?.trim()) {
+        return {
+          ready: false,
+          code: 'PLATFORM_CREDENTIALS_REQUIRED',
+          message:
+            'cTrader authorization is awaiting platform configuration. Contact the iRexPro operator.',
+        };
+      }
+
+      const redirectUris =
+        this.configService?.get<string>('broker.ctraderRedirectUris') ??
+        process.env.CTRADER_REDIRECT_URIS;
+      if (!redirectUris?.trim()) {
+        return {
+          ready: false,
+          code: 'OAUTH_REDIRECT_REQUIRED',
+          message:
+            'cTrader authorization is awaiting its approved callback configuration. Contact the iRexPro operator.',
+        };
+      }
+    }
+
+    return { ready: true, code: 'READY', message: null };
   }
 
   /** Single entry by id (null when unknown). */

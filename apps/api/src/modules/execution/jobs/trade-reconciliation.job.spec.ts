@@ -55,6 +55,7 @@ import {
 import { ReconciliationRunStatus } from '../reconciliation/reconciliation.enums';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { ExecutionService } from '../execution.service';
+import { LivePaperMarketDataService } from '../../broker/services/live-paper-market-data.service';
 
 const makeConnection = (id: string): BrokerConnection =>
   ({ id, userId: `user-${id}`, brokerId: 'paper-broker' }) as unknown as BrokerConnection;
@@ -97,6 +98,7 @@ describe('TradeReconciliationJob', () => {
   };
   let protectiveOrderReconciliation: { reconcileProtectiveOrders: jest.Mock };
   let executionService: { closeStopRequestedAiPositions: jest.Mock };
+  let livePaperMarketData: { isLiveConnection: jest.Mock };
 
   beforeEach(async () => {
     stateReconciliation = {
@@ -110,6 +112,9 @@ describe('TradeReconciliationJob', () => {
     executionService = {
       closeStopRequestedAiPositions: jest.fn().mockResolvedValue([]),
     };
+    livePaperMarketData = {
+      isLiveConnection: jest.fn().mockReturnValue(false),
+    };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -120,6 +125,7 @@ describe('TradeReconciliationJob', () => {
           useValue: protectiveOrderReconciliation,
         },
         { provide: ExecutionService, useValue: executionService },
+        { provide: LivePaperMarketDataService, useValue: livePaperMarketData },
       ],
     }).compile();
     module.useLogger(false);
@@ -218,6 +224,29 @@ describe('TradeReconciliationJob', () => {
   });
 
   // ─── Round 6 §8: the protective-order loop ─────────────────────────────
+
+  it('defers the heavy live-PAPER sweep while the FX weekly session is closed and preserves safety follow-ups', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-17T12:00:00.000Z'));
+    try {
+      const connection = makeConnection('conn-weekend');
+      livePaperMarketData.isLiveConnection.mockReturnValue(true);
+      stateReconciliation.findReconcilableConnections.mockResolvedValue([connection]);
+
+      const result = await job.process(fakeJob);
+
+      expect(stateReconciliation.runForConnection).not.toHaveBeenCalled();
+      expect(executionService.closeStopRequestedAiPositions).toHaveBeenCalledWith(
+        'user-conn-weekend',
+        'conn-weekend',
+      );
+      expect(protectiveOrderReconciliation.reconcileProtectiveOrders).toHaveBeenCalledWith(
+        connection,
+      );
+      expect(result).toMatchObject({ connectionsReconciled: 0, failedConnections: 0 });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 
   it('defers only the heavy sweep during provider quota cooldown and preserves safety follow-ups', async () => {
     stateReconciliation.findReconcilableConnections.mockResolvedValue([makeConnection('conn-1')]);
