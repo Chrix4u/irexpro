@@ -9,6 +9,7 @@ import {
   paperAllocationSizingPolicy,
   type PaperAllocationConfidenceTier,
 } from './paper-allocation-sizing-policy';
+import { drawdownRiskAdjustment } from './drawdown-risk-scaling';
 
 /**
  * Round 6 live-execution completion (§4) — typed failure codes for the
@@ -67,6 +68,12 @@ export interface PositionSizingInputs {
   baseRiskPercent: string;
   adaptiveRiskMultiplier: string;
   adaptiveRiskPercent: string;
+  sessionPeakEquity: string | null;
+  currentDrawdownPercent: string | null;
+  maxDrawdownPercent: string | null;
+  drawdownRiskMultiplier: string;
+  combinedRiskMultiplier: string;
+  drawdownAdjustedRiskPercent: string;
   riskCapitalBase: string;
   allocationAwarePaper: boolean;
   /** Entry reference used to derive stop risk. PAPER MARKET may preserve the model distance. */
@@ -172,6 +179,8 @@ export class PositionSizingService {
       marketReferenceEntryPrice?: string | null;
       /** PAPER-only intelligence multiplier; ignored outside allocation-aware PAPER. */
       adaptiveRiskMultiplier?: string | null;
+      /** Session peak equity used only to reduce risk before the hard drawdown boundary. */
+      sessionPeakEquity?: string | null;
       /** PAPER-only product floor. Never rounded up; below-floor sizing rejects. */
       minimumExecutableLot?: string | null;
     };
@@ -292,6 +301,21 @@ export class PositionSizingService {
       );
     }
     const adaptiveRiskPercent = effectiveRiskPercent;
+    const drawdownAdjustment = allocationAwarePaper
+      ? drawdownRiskAdjustment({
+          equity,
+          sessionPeakEquity: params.paperAllocationSizing?.sessionPeakEquity,
+          maxDrawdownPercent: profile.maxDrawdownPercent,
+        })
+      : {
+          currentDrawdownPercent: null,
+          maxDrawdownPercent: null,
+          multiplier: '1' as const,
+        };
+    const drawdownRiskMultiplier = ExactDecimal.parse(drawdownAdjustment.multiplier);
+    effectiveRiskPercent = adaptiveRiskPercent.mul(drawdownRiskMultiplier);
+    const drawdownAdjustedRiskPercent = effectiveRiskPercent;
+    const combinedRiskMultiplier = drawdownAdjustedRiskPercent.divDown(baseRiskPercent, 8);
 
     // ── 3. Geometry: entry reference + PROVEN contract size (§1a seam). ───
     const geometry = await this.orderGeometry.resolveOrderGeometry({
@@ -426,7 +450,7 @@ export class PositionSizingService {
     const baseCurrency = normalizedInstrument.slice(0, 3);
     const quoteCurrency = normalizedInstrument.slice(3, 6);
     const baseRiskAmount = riskCapitalBase.mul(baseRiskPercent).divByPowerOfTen(2);
-    const riskAmount = riskCapitalBase.mul(adaptiveRiskPercent).divByPowerOfTen(2); // account currency
+    const riskAmount = riskCapitalBase.mul(drawdownAdjustedRiskPercent).divByPowerOfTen(2); // account currency
     let riskAmountInQuoteCurrency: ExactDecimal;
     let riskCurrencyConversion: 'ACCOUNT_IS_QUOTE' | 'ACCOUNT_IS_BASE_USING_ENTRY';
     if (quoteCurrency === accountCurrency) {
@@ -538,11 +562,17 @@ export class PositionSizingService {
       accountCurrency,
       equity: equity.toString(),
       freeMargin: freeMargin.toString(),
-      riskPercent: adaptiveRiskPercent.toString(),
+      riskPercent: drawdownAdjustedRiskPercent.toString(),
       requestedRiskPercent: requestedRiskPercent.toString(),
       baseRiskPercent: baseRiskPercent.toString(),
       adaptiveRiskMultiplier: adaptiveRiskMultiplier.toString(),
       adaptiveRiskPercent: adaptiveRiskPercent.toString(),
+      sessionPeakEquity: params.paperAllocationSizing?.sessionPeakEquity ?? null,
+      currentDrawdownPercent: drawdownAdjustment.currentDrawdownPercent,
+      maxDrawdownPercent: drawdownAdjustment.maxDrawdownPercent,
+      drawdownRiskMultiplier: drawdownRiskMultiplier.toString(),
+      combinedRiskMultiplier: combinedRiskMultiplier.toString(),
+      drawdownAdjustedRiskPercent: drawdownAdjustedRiskPercent.toString(),
       riskCapitalBase: riskCapitalBase.toString(),
       allocationAwarePaper,
       riskReferenceEntryPrice: riskReferenceEntry.toString(),
@@ -574,6 +604,7 @@ export class PositionSizingService {
       `Sized ${instrument} ${params.direction}: ${lots.toString()} lots ` +
         `(risk ${riskAmount.toString()} ${accountCurrency} from ${riskCapitalBase.toString()} capital, ` +
         `adaptiveMultiplier ${adaptiveRiskMultiplier.toString()}x, ` +
+        `drawdownMultiplier ${drawdownRiskMultiplier.toString()}x, ` +
         `requiredMargin ${allocatedCapital.toString()}, ` +
         `notional ${grossNotional.toString()})`,
     );

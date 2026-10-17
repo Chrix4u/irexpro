@@ -513,6 +513,7 @@ export class StrategyOrchestratorService {
             confidenceTier: PaperAllocationConfidenceTier;
             marketReferenceEntryPrice?: string;
             adaptiveRiskMultiplier?: string;
+            sessionPeakEquity?: string | null;
             minimumExecutableLot?: string;
           }
         | undefined;
@@ -556,6 +557,7 @@ export class StrategyOrchestratorService {
               ? allocationState.allocatedCapital
               : null,
             confidenceTier,
+            sessionPeakEquity: session.peakEquity,
             ...(executionCandidate.suggestedEntryPrice != null
               ? { marketReferenceEntryPrice: String(executionCandidate.suggestedEntryPrice) }
               : {}),
