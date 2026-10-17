@@ -790,7 +790,7 @@ describe('StrategyOrchestratorService', () => {
       );
     });
 
-    it('passes explicit PAPER allocation + scanner tier into authoritative sizing', async () => {
+    it('lets broker minimum and risk math govern PAPER sizing without an artificial 0.10 floor', async () => {
       const result = await service.processSignal(
         validCandidate({
           metadata: {
@@ -809,7 +809,6 @@ describe('StrategyOrchestratorService', () => {
             allocatedCapital: '1000',
             confidenceTier: 'VERY_STRONG',
             sessionPeakEquity: '10000.00',
-            minimumExecutableLot: '0.10',
           },
         }),
       );
