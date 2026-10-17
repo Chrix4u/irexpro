@@ -174,3 +174,19 @@ export interface BrokerRegistryCatalog {
   catalogVersion: string;
   brokers: BrokerRegistryEntry[];
 }
+
+/**
+ * Runtime connection readiness shared by every client. Current API payloads
+ * always include connectionReadiness; the field remains optional so older
+ * cached/mobile payloads do not become unusable during rolling deployments.
+ * Only an explicit server `ready: false` blocks the flow.
+ */
+export function isBrokerConnectionRuntimeReady(
+  entry:
+    | Pick<BrokerRegistryEntry, 'connectionReadiness'>
+    | null
+    | undefined,
+): boolean {
+  if (!entry) return false;
+  return entry.connectionReadiness?.ready !== false;
+}

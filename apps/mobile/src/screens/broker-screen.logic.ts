@@ -14,6 +14,10 @@ import type {
   BrokerRegistryEntry,
   CreateBrokerConnectionRequest,
 } from "@irexpro/types";
+import {
+  deriveProviderCertificationState,
+  isBrokerConnectionRuntimeReady,
+} from "@irexpro/types";
 import type { ProviderVerificationLabel } from "@irexpro/types/provider-verification";
 import { assessProviderVerification } from "@irexpro/types/provider-verification";
 
@@ -89,26 +93,32 @@ export function statusPresentation(
  */
 export function isConnectableEntry(entry: BrokerRegistryEntry): boolean {
   const presentation = statusPresentation(entry.status);
-  return presentation.connectable && entry.adapterAvailable === true;
+  return (
+    presentation.connectable &&
+    entry.adapterAvailable === true &&
+    isBrokerConnectionRuntimeReady(entry)
+  );
 }
 
 /**
  * Production-LIVE selection gate (architect Phase I / registry Phase H).
  *
  * The environment selector may offer LIVE ONLY when the server registry
- * BOTH declares the LIVE environment AND carries VERIFIED production-LIVE
- * evidence (`productionLiveVerification.status === 'VERIFIED'`). BETA and
- * UNVERIFIED providers (and entries whose verification payload is absent —
- * older cached wire data) fail closed: DEMO stays their only option.
+ * BOTH declares the LIVE environment AND carries the current certification
+ * state `CERTIFIED`. Historical `VERIFIED` / LEGACY_ATTESTATION evidence is
+ * informational only and must never unlock production LIVE. Older cached
+ * payloads that predate the materialized `certificationState` derive it from
+ * the evidence record and still fail closed unless that record satisfies the
+ * complete HARNESS_CERTIFIED contract.
  *
  * No client-side overrides, no hard-coded broker exceptions — the server
  * registry is the single source of release-truth (Directive §AU).
  */
 export function isLiveSelectable(entry: BrokerRegistryEntry): boolean {
-  return (
-    entry.environments.includes("LIVE") &&
-    entry.productionLiveVerification?.status === "VERIFIED"
-  );
+  const certificationState =
+    entry.certificationState ??
+    deriveProviderCertificationState(entry.productionLiveVerification);
+  return entry.environments.includes("LIVE") && certificationState === "CERTIFIED";
 }
 
 /** Key capabilities surfaced as chips (keep the catalog list readable). */

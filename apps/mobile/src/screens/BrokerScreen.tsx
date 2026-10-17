@@ -7,8 +7,8 @@
  * client-side broker list. Entries without a live adapter are rendered
  * with honest status and are NOT connectable (fail-closed §AB).
  * Production-LIVE release-truth (Phase I): the environment selector
- * offers LIVE only for VERIFIED entries (isLiveSelectable); BETA/
- * UNVERIFIED providers are DEMO-only. Credentials are typed once, sent
+ * offers LIVE only for current CERTIFIED entries (isLiveSelectable); BETA,
+ * UNVERIFIED and legacy-verified providers are DEMO-only. Credentials are typed once, sent
  * through the encrypted broker-credential flow (test → create → connect),
  * and never rendered back.
  */
@@ -34,6 +34,7 @@ import type {
   BrokerRegistryEntry,
   CreateBrokerConnectionRequest,
 } from "@irexpro/types";
+import { isBrokerConnectionRuntimeReady } from "@irexpro/types";
 import { api } from "../lib/api";
 import {
   brokerConnectionAction,
@@ -316,11 +317,15 @@ export default function BrokerScreen() {
             // Fixed six-label verification taxonomy (Sprint 56 round 5):
             // joined with the registry by brokerId; a missing join degrades
             // fail-closed — never a simple "Live" claim.
+            const registryEntry =
+              registry.find((entry) => entry.id === connection.brokerId) ?? null;
             const verificationLabel = verificationLabelForConnection(
               connection,
-              registry.find((entry) => entry.id === connection.brokerId) ?? null,
+              registryEntry,
             );
             const connectionAction = brokerConnectionAction(connection.status);
+            const runtimeReady = isBrokerConnectionRuntimeReady(registryEntry);
+            const reconnectBlocked = connectionAction === "RECONNECT" && !runtimeReady;
             return (
             <View
               key={connection.id}
@@ -406,15 +411,21 @@ export default function BrokerScreen() {
                   {connection.lastErrorMessage}
                 </Text>
               ) : null}
+              {reconnectBlocked ? (
+                <Text style={styles.errorTextSmall}>
+                  {registryEntry?.connectionReadiness?.message ??
+                    "Broker reconnection is awaiting platform configuration."}
+                </Text>
+              ) : null}
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`${connectionAction === "DISCONNECT" ? "Disconnect" : "Reconnect"} ${connection.brokerName}`}
-                disabled={connectionAction === "WAIT"}
+                accessibilityLabel={`${reconnectBlocked ? "Reconnect unavailable for" : connectionAction === "DISCONNECT" ? "Disconnect" : "Reconnect"} ${connection.brokerName}`}
+                disabled={connectionAction === "WAIT" || reconnectBlocked}
                 style={[
                   connectionAction === "DISCONNECT"
                     ? styles.dangerButton
                     : styles.secondaryButton,
-                  connectionAction === "WAIT" && styles.buttonDisabled,
+                  (connectionAction === "WAIT" || reconnectBlocked) && styles.buttonDisabled,
                 ]}
                 onPress={() => openConnectionAction(connection)}
               >
@@ -427,9 +438,11 @@ export default function BrokerScreen() {
                 >
                   {connectionAction === "DISCONNECT"
                     ? "Disconnect"
-                    : connectionAction === "WAIT"
-                      ? "Connecting…"
-                      : "Reconnect"}
+                    : reconnectBlocked
+                      ? "Reconnect unavailable"
+                      : connectionAction === "WAIT"
+                        ? "Connecting…"
+                        : "Reconnect"}
                 </Text>
               </Pressable>
             </View>
@@ -441,6 +454,10 @@ export default function BrokerScreen() {
         {registry.map((entry) => {
           const presentation = statusPresentation(entry.status);
           const connectable = isConnectableEntry(entry);
+          const runtimeBlocked =
+            entry.adapterAvailable === true &&
+            presentation.connectable &&
+            !isBrokerConnectionRuntimeReady(entry);
           // Fixed taxonomy label — e.g. an UNVERIFIED BETA provider is
           // 'Production LIVE Unverified', never simply "Live".
           const verificationLabel = verificationLabelForEntry(entry);
@@ -493,6 +510,12 @@ export default function BrokerScreen() {
                   </Text>
                 ))}
               </View>
+              {runtimeBlocked ? (
+                <Text style={styles.errorTextSmall}>
+                  {entry.connectionReadiness?.message ??
+                    "This broker is awaiting platform configuration."}
+                </Text>
+              ) : null}
               {connectable ? (
                 <Pressable
                   accessibilityRole="button"
@@ -501,6 +524,15 @@ export default function BrokerScreen() {
                   onPress={() => setConnectTarget(entry)}
                 >
                   <Text style={styles.primaryButtonText}>Connect</Text>
+                </Pressable>
+              ) : runtimeBlocked ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`${entry.name} connection unavailable`}
+                  style={[styles.secondaryButton, styles.buttonDisabled]}
+                  disabled
+                >
+                  <Text style={styles.secondaryButtonText}>Platform setup required</Text>
                 </Pressable>
               ) : null}
             </View>
@@ -583,6 +615,7 @@ function ConnectFlowModal({
   onConnected: () => Promise<void>;
 }) {
   const isOAuthBroker = entry.authenticationType === "OAUTH";
+  const runtimeReady = isBrokerConnectionRuntimeReady(entry);
   const fields = credentialFields(entry.authenticationType);
   // Environment truth (Phase I): options derive STRICTLY from the entry's
   // declared environments, with LIVE additionally gated by isLiveSelectable
@@ -858,6 +891,12 @@ function ConnectFlowModal({
                 accounts are discovered automatically after authorization.
               </Text>
 
+              {!runtimeReady ? (
+                <Text style={styles.errorText} accessibilityLiveRegion="polite">
+                  {entry.connectionReadiness?.message ??
+                    "Broker authorization is awaiting platform configuration."}
+                </Text>
+              ) : null}
               {feedback ? (
                 <Text
                   style={feedback.ok ? styles.successText : styles.errorText}
@@ -876,7 +915,7 @@ function ConnectFlowModal({
                       styles.primaryButton,
                       oauthBusy ? styles.buttonDisabled : null,
                     ]}
-                    disabled={oauthBusy !== null}
+                    disabled={oauthBusy !== null || !runtimeReady}
                     onPress={() => void startOAuth()}
                   >
                     {oauthBusy === "start" ? (

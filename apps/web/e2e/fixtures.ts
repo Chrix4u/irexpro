@@ -205,6 +205,35 @@ export const mockBrokerRegistry: BrokerRegistryCatalog = {
       regions: [],
       adapterAvailable: true,
     },
+    {
+      id: "ctrader",
+      name: "cTrader",
+      description: "cTrader deterministic E2E catalog fixture.",
+      status: "BETA",
+      productionLiveVerification: {
+        status: "UNVERIFIED",
+        verifiedAt: null,
+        evidenceRef: null,
+      },
+      connectionRoutes: ["CTRADER"],
+      capabilities: [
+        "ACCOUNT_READ",
+        "BALANCE_READ",
+        "OAUTH",
+        "DEMO",
+        "LIVE",
+        "ORDER_PLACEMENT",
+      ],
+      authenticationType: "OAUTH",
+      environments: ["DEMO", "LIVE"],
+      regions: [],
+      adapterAvailable: true,
+      connectionReadiness: {
+        ready: false,
+        code: "PLATFORM_CREDENTIALS_REQUIRED",
+        message: "cTrader authorization is awaiting platform configuration. Contact the iRexPro operator.",
+      },
+    },
   ],
 };
 
