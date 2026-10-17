@@ -730,6 +730,26 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
         outcome: 'RISK_REJECTED',
       });
+      // A Risk Engine exception is definitive for this exact evaluation: no
+      // provider dispatch occurred, so the already-created intent must not
+      // remain CREATED until the expiry sweeper. Terminalize it immediately
+      // and release its capital reservation just like an explicit rejection.
+      await this.tradeIntentService
+        .markRejected(tradeIntent.id)
+        .catch((intentErr) =>
+          this.logger.warn(
+            `Signal ${signalId}: intent ${tradeIntent.id} could not be marked REJECTED after ` +
+              `Risk Engine exception (${(intentErr as Error).message}) — duplicate recovery still fails closed`,
+          ),
+        );
+      await this.allocationService
+        .releaseAllocationForIntent(tradeIntent.id, 'RISK_ENGINE_ERROR')
+        .catch((allocationErr) =>
+          this.logger.warn(
+            `Signal ${signalId}: allocation for intent ${tradeIntent.id} could not be released after ` +
+              `Risk Engine exception (${(allocationErr as Error).message}) — the aggregate self-heals from intent status`,
+          ),
+        );
       await this.markSignalProcessed(userId, signalId);
       return { outcome: 'RISK_REJECTED', signalId, reason };
     }
