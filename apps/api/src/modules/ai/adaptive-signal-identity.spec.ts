@@ -5,9 +5,7 @@ import {
   materializeAdaptiveSignalIdentity,
 } from './adaptive-signal-identity';
 
-const adaptiveCandidate = (
-  overrides: Partial<AiSignalCandidate> = {},
-): AiSignalCandidate => ({
+const adaptiveCandidate = (overrides: Partial<AiSignalCandidate> = {}): AiSignalCandidate => ({
   signalId: '4f3ae8e5-a38f-5727-b1bf-2f75b1653aef',
   userId: 'user-1',
   tradingSessionId: 'session-1',
