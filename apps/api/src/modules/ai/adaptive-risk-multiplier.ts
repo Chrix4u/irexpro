@@ -31,6 +31,16 @@ export interface AdaptiveRiskMultiplierInput {
     canUpsize: boolean;
     riskEvidenceComplete: boolean;
   };
+  /**
+   * Research-only pair-side evidence. This can only REDUCE risk; admission\/quarantine
+   * authority remains with the paper-research reliability gate.
+   */
+  researchPairSideReliability?: {
+    eligible: boolean;
+    samples: number;
+    smoothedExpectedR: number;
+    reason: string;
+  } | null;
 }
 
 export interface AdaptiveRiskMultiplierDecision {
@@ -70,6 +80,15 @@ export function selectAdaptiveRiskMultiplier(
   const blockedExposure = input.exposure.capacity === 'BLOCKED';
   const reducedExposure = input.exposure.capacity === 'REDUCED';
   const evidenceUnavailable = !input.edge.available || !input.exposure.riskEvidenceComplete;
+  const pairSide = input.researchPairSideReliability;
+  const weakResearchPairSide =
+    input.executionRoute === 'PAPER_RESEARCH_THROUGHPUT' &&
+    pairSide?.eligible === true &&
+    pairSide.reason === 'INSUFFICIENT_EVIDENCE' &&
+    Number.isInteger(pairSide.samples) &&
+    pairSide.samples >= 2 &&
+    Number.isFinite(pairSide.smoothedExpectedR) &&
+    pairSide.smoothedExpectedR <= 0.1;
 
   let multiplier: AdaptiveRiskMultiplier = 1;
   const reasons: string[] = [];
@@ -89,6 +108,13 @@ export function selectAdaptiveRiskMultiplier(
   const researchMinimumRiskBandApplied =
     research && !hardBlocked && !degraded && !blockedExposure && multiplier === 0.5;
   if (researchMinimumRiskBandApplied) multiplier = 0.75;
+
+  // Sparse research normally stays at the 0.75x collection band, but once a
+  // still-eligible pair-side has multiple resolved outcomes and its smoothed
+  // expectancy has deteriorated to <= 0.10R, cut risk to 0.50x. This is a
+  // soft de-risk only: it never creates eligibility and never overrides the
+  // existing reliability quarantine.
+  if (weakResearchPairSide && !hardBlocked) multiplier = 0.5;
 
   const maturePositiveUpsize =
     !hardBlocked &&
@@ -120,6 +146,7 @@ export function selectAdaptiveRiskMultiplier(
   if (hardBlocked) reasons.push('HARD_GOVERNANCE_BLOCKED');
   if (research) reasons.push('RESEARCH_UPSIZE_DISABLED');
   if (researchMinimumRiskBandApplied) reasons.push('RESEARCH_MINIMUM_RISK_BAND');
+  if (weakResearchPairSide) reasons.push('PAIR_SIDE_RELIABILITY_DERISK');
   if (degraded) reasons.push('EDGE_DEGRADED');
   if (blockedExposure) reasons.push('PORTFOLIO_CAPACITY_BLOCKED');
   else if (reducedExposure) reasons.push('PORTFOLIO_CAPACITY_REDUCED');

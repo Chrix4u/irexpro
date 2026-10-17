@@ -2143,6 +2143,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           allocationCapital: adaptiveAllocationCapital,
           portfolio: initialAdaptivePortfolio,
           pairedReversalNetExpectedR: entry.chosen.pairedDirectionReversal.researchNetExpectedR,
+          paperResearchPairSideReliability: entry.chosen.paperResearchPairSideReliability,
         });
         initiallyEvaluatedWinners.push({
           ...entry,
@@ -2193,6 +2194,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           portfolio: refreshedPortfolio,
           pairedReversalNetExpectedR:
             rankedWinner.chosen.pairedDirectionReversal.researchNetExpectedR,
+          paperResearchPairSideReliability: rankedWinner.chosen.paperResearchPairSideReliability,
         });
         const adaptiveWinner: AdaptiveScanWinner = {
           ...rankedWinner,
@@ -2751,6 +2753,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     allocationCapital: string | null;
     portfolio: { available: boolean; positions: AdaptiveCurrencyRiskPosition[] };
     pairedReversalNetExpectedR?: number;
+    paperResearchPairSideReliability?: PaperResearchPairSideReliabilityDecision | null;
   }): Promise<{
     marketState: AdaptiveMarketStateDecision;
     edge: AdaptiveEdgeEvidence;
@@ -2898,6 +2901,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       marketState,
       edge,
       exposure,
+      researchPairSideReliability: input.paperResearchPairSideReliability,
     });
     return {
       marketState,

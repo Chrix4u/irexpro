@@ -1912,6 +1912,9 @@ describe('VpsForexSignalCollectorService', () => {
       previousTradeStatus: null,
       previousClosedAt: null,
     });
+    jest
+      .spyOn(collector as any, 'loadPaperResearchPairSideEvidence')
+      .mockResolvedValue({ wins: 1, losses: 2 });
     const logSpy = jest.spyOn((collector as any).logger, 'log');
 
     try {
@@ -1956,7 +1959,7 @@ describe('VpsForexSignalCollectorService', () => {
       expect(emitted.marketRegime).toBe('DISLOCATED');
       expect(emitted.marketRegime).not.toBe('TRENDING');
       expect(emitted.suggestedVolume).toBeLessThanOrEqual(1);
-      expect(emitted.metadata.adaptive_risk_multiplier).toBeLessThanOrEqual(1);
+      expect(emitted.metadata.adaptive_risk_multiplier).toBe(0.5);
       expect(emitted.metadata.feature_h4_context_available).toBe(false);
       expect(emitted.metadata.feature_h4_alignment).toBe(0);
       expect(emitted.metadata.feature_h4_closed_bar_count).toBeGreaterThanOrEqual(0);
@@ -1969,7 +1972,10 @@ describe('VpsForexSignalCollectorService', () => {
           h4ContextAvailable: false,
           h4Alignment: 0,
         }),
-        riskMultiplier: expect.objectContaining({ multiplier: expect.any(Number) }),
+        riskMultiplier: expect.objectContaining({
+          multiplier: 0.5,
+          reasons: expect.arrayContaining(['PAIR_SIDE_RELIABILITY_DERISK']),
+        }),
       });
       expect(
         logSpy.mock.calls.some((call) =>
