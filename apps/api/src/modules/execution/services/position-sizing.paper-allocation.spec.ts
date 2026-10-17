@@ -19,12 +19,16 @@ const EURUSD_SPEC: BrokerInstrument = {
 };
 
 describe('PositionSizingService — allocation-aware PAPER sizing', () => {
-  const makeService = (profileOverrides: Partial<RiskProfile> = {}, freshQuote = '1.08500') => {
+  const makeService = (
+    profileOverrides: Partial<RiskProfile> = {},
+    freshQuote = '1.08500',
+    accountEquity = '10000.00',
+  ) => {
     const brokerService = {
       getBrokerAccountState: jest.fn().mockResolvedValue({
-        balance: '10000.00',
-        equity: '10000.00',
-        freeMargin: '9500.00',
+        balance: accountEquity,
+        equity: accountEquity,
+        freeMargin: accountEquity,
         currency: 'USD',
       }),
       getRequiredMargin: jest.fn().mockResolvedValue('200.00'),
@@ -41,6 +45,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
       findOne: jest.fn().mockResolvedValue({
         userId: USER,
         maxTradeRiskPercent: '2.00',
+        maxDrawdownPercent: '10.00',
         maxPositionSizeLot: '0.1000',
         ...profileOverrides,
       } as RiskProfile),
@@ -207,6 +212,62 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.lots).toBe('0.1');
   });
 
+  it.each([
+    ['below first band', '9800.00', '1', '2', '0.2'],
+    ['at 25% of allowed drawdown', '9750.00', '0.75', '1.5', '0.15'],
+    ['at 50% of allowed drawdown', '9500.00', '0.5', '1', '0.1'],
+    ['at 75% of allowed drawdown', '9250.00', '0.25', '0.5', '0.05'],
+  ])(
+    'softly de-risks PAPER sizing %s',
+    async (_label, accountEquity, expectedMultiplier, expectedRiskPercent, expectedLots) => {
+      const service = makeService({}, '1.08500', accountEquity);
+
+      const sized = await service.sizePosition({
+        ...params,
+        paperAllocationSizing: {
+          executionMode: 'PAPER_ONLY',
+          allocatedCapital: '1000.00',
+          confidenceTier: 'BASE',
+          sessionPeakEquity: '10000.00',
+        } as never,
+      });
+
+      expect((sized.inputs as unknown as Record<string, unknown>).drawdownRiskMultiplier).toBe(
+        expectedMultiplier,
+      );
+      expect((sized.inputs as unknown as Record<string, unknown>).currentDrawdownPercent).toBe(
+        accountEquity === '9800.00'
+          ? '2'
+          : accountEquity === '9750.00'
+            ? '2.5'
+            : accountEquity === '9500.00'
+              ? '5'
+              : '7.5',
+      );
+      expect(sized.inputs.riskPercent).toBe(expectedRiskPercent);
+      expect(sized.lots).toBe(expectedLots);
+    },
+  );
+
+  it('never penalizes a new equity high with the soft drawdown multiplier', async () => {
+    const service = makeService({}, '1.08500', '10050.00');
+
+    const sized = await service.sizePosition({
+      ...params,
+      paperAllocationSizing: {
+        executionMode: 'PAPER_ONLY',
+        allocatedCapital: '1000.00',
+        confidenceTier: 'BASE',
+        sessionPeakEquity: '10000.00',
+      } as never,
+    });
+
+    expect((sized.inputs as unknown as Record<string, unknown>).drawdownRiskMultiplier).toBe('1');
+    expect((sized.inputs as unknown as Record<string, unknown>).currentDrawdownPercent).toBe('0');
+    expect(sized.inputs.riskPercent).toBe('2');
+    expect(sized.lots).toBe('0.2');
+  });
+
   it('keeps AUDUSD-like 5.1-pip research geometry executable at 0.75x without rounding risk upward', async () => {
     const service = makeService({}, '0.69576');
 
@@ -245,6 +306,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     });
     expect(sized.inputs.baseRiskPercent).toBe('2');
     expect(sized.inputs.adaptiveRiskPercent).toBe('2.5');
+    expect(sized.inputs.combinedRiskMultiplier).toBe('1.25');
     expect(sized.inputs.baseRiskAmount).toBe('20');
     expect(sized.inputs.riskAmount).toBe('25');
     expect(sized.lots).toBe('0.25');
@@ -260,6 +322,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
       },
     });
     expect(cappedSized.inputs.adaptiveRiskPercent).toBe('2');
+    expect(cappedSized.inputs.combinedRiskMultiplier).toBe('1');
     expect(cappedSized.inputs.riskAmount).toBe('20');
   });
 

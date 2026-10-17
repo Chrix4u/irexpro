@@ -50,6 +50,7 @@ const activeSession = (): TradingSession =>
     brokerConnectionId: 'conn-1',
     status: TradingSessionStatus.ACTIVE,
     executionMode: ExecutionMode.PAPER_ONLY,
+    peakEquity: '10000.00',
   }) as TradingSession;
 
 const approvedRiskDecision = () => ({
@@ -807,6 +808,7 @@ describe('StrategyOrchestratorService', () => {
             executionMode: ExecutionMode.PAPER_ONLY,
             allocatedCapital: '1000',
             confidenceTier: 'VERY_STRONG',
+            sessionPeakEquity: '10000.00',
             minimumExecutableLot: '0.10',
           },
         }),
