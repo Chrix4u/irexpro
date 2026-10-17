@@ -108,6 +108,59 @@ describe('selectAdaptiveRiskMultiplier', () => {
     expect(decision.reasons).toContain('RESEARCH_UPSIZE_DISABLED');
   });
 
+  it('caps still-eligible research at 0.50x when pair-side expectancy deteriorates after multiple outcomes', () => {
+    const input = {
+      ...base,
+      executionRoute: 'PAPER_RESEARCH_THROUGHPUT' as const,
+      marketState: { ...base.marketState, state: 'DISLOCATED' as const, canUpsize: false },
+      edge: { ...base.edge, maturity: 'SPARSE' as const, canUpsize: false },
+      researchPairSideReliability: {
+        eligible: true,
+        samples: 3,
+        smoothedExpectedR: 0.0666666667,
+        reason: 'INSUFFICIENT_EVIDENCE' as const,
+      },
+    };
+
+    const decision = selectAdaptiveRiskMultiplier(input);
+
+    expect(decision.multiplier).toBe(0.5);
+    expect(decision.canUpsize).toBe(false);
+    expect(decision.executionEligible).toBe(true);
+    expect(decision.reasons).toContain('PAIR_SIDE_RELIABILITY_DERISK');
+  });
+
+  it('does not overreact to one isolated pair-side loss', () => {
+    const input = {
+      ...base,
+      executionRoute: 'PAPER_RESEARCH_THROUGHPUT' as const,
+      marketState: { ...base.marketState, state: 'DISLOCATED' as const, canUpsize: false },
+      edge: { ...base.edge, maturity: 'SPARSE' as const, canUpsize: false },
+      researchPairSideReliability: {
+        eligible: true,
+        samples: 1,
+        smoothedExpectedR: -0.1111111111,
+        reason: 'INSUFFICIENT_EVIDENCE' as const,
+      },
+    };
+
+    expect(selectAdaptiveRiskMultiplier(input).multiplier).toBe(0.75);
+  });
+
+  it('never applies the research pair-side soft cap to normal PAPER', () => {
+    const input = {
+      ...base,
+      researchPairSideReliability: {
+        eligible: true,
+        samples: 3,
+        smoothedExpectedR: 0.0666666667,
+        reason: 'INSUFFICIENT_EVIDENCE' as const,
+      },
+    };
+
+    expect(selectAdaptiveRiskMultiplier(input).multiplier).toBe(1.1);
+  });
+
   it('keeps the 0.50x band for genuinely degraded research evidence', () => {
     const decision = selectAdaptiveRiskMultiplier({
       ...base,
