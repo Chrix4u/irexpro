@@ -321,7 +321,6 @@ interface ExecutableCounterfactual {
   opportunityKey: string;
   evaluatedAt: Date;
   candidate: Candidate;
-  signalId: string;
   digits: number;
   v8Shadow: ReturnType<typeof scoreV8ShadowMeta>;
   planBShadow: ReturnType<typeof scorePlanBShadowMeta>;
@@ -1336,7 +1335,6 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
         for (const best of rankedPairCandidates) {
           const eventId = `${ACTIVE_ENGINE_CODE}|${best.instrument}|${best.barTime.toISOString()}|${best.direction}`;
-          const signalId = uuidv5(eventId, SIGNAL_NAMESPACE);
           const digits = this.livePaperMarket.spec(best.instrument).digits;
           // Candidates store direction-aligned momentum for ranking/telemetry.
           // Model and governance inputs expect the raw signed price change and
@@ -2058,7 +2056,6 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             opportunityKey: eventId,
             evaluatedAt,
             candidate: best,
-            signalId,
             digits,
             v8Shadow,
             planBShadow,
@@ -2249,8 +2246,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
         const { chosen, selection } = adaptiveWinner;
         const {
+          opportunityKey,
           candidate: best,
-          signalId,
           digits,
           v8Shadow,
           planBShadow,
@@ -2300,6 +2297,31 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         }
 
         const dynamicLotSizing = this.adaptiveLotSizingFor(chosen);
+        const suggestedEntryPrice = Number(best.entry.toFixed(digits));
+        const suggestedStopLoss = Number(best.stopLoss.toFixed(digits));
+        const suggestedTakeProfit = Number(best.takeProfit.toFixed(digits));
+        const strategyCode = `external-${ACTIVE_ENGINE_CODE}`;
+        const timeframe = 'M5';
+        const modelVersion =
+          paperExecutionRoute === 'REJECTED_EDGE_CANARY'
+            ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
+            : paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
+              ? paperResearchThroughputModelVersion(ACTIVE_ENGINE_CODE)
+              : paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH'
+                ? `external-provider/${ACTIVE_ENGINE_CODE}/${PAPER_PAIRED_REVERSAL_RESEARCH_ARTIFACT}`
+                : `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`;
+        const signalId = this.materialSignalIdFor({
+          opportunityKey,
+          instrument: best.instrument,
+          direction: best.direction,
+          requestedLotSize: String(dynamicLotSizing.upperBound),
+          entryPrice: suggestedEntryPrice,
+          stopLoss: suggestedStopLoss,
+          takeProfit: suggestedTakeProfit,
+          strategyCode,
+          timeframe,
+          modelVersion,
+        });
         const signalDelivery = await this.resolveSignalDeliveryTimestamp(userId, signalId);
         if (!signalDelivery.deliver || !signalDelivery.generatedAt) {
           this.logger.log(
@@ -2317,27 +2339,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           instrument: best.instrument,
           direction: best.direction,
           confidenceScore: best.confidence,
-          suggestedEntryPrice: Number(best.entry.toFixed(digits)),
-          suggestedStopLoss: Number(best.stopLoss.toFixed(digits)),
-          suggestedTakeProfit: Number(best.takeProfit.toFixed(digits)),
+          suggestedEntryPrice,
+          suggestedStopLoss,
+          suggestedTakeProfit,
           // PAPER-only dynamic upper bound. PositionSizingService still computes
           // the actual lot from equity, stop distance, risk %, broker min/max/step,
           // available margin, allocation and the user's profile max. Stronger size
           // therefore cannot bypass the authoritative risk engine.
           suggestedVolume: dynamicLotSizing.upperBound,
-          timeframe: 'M5',
-          strategyCode: `external-${ACTIVE_ENGINE_CODE}`,
+          timeframe,
+          strategyCode,
           marketRegime: adaptiveWinner.marketState.state,
           volatilityScore: best.volatilityScore,
           generatedAt: signalDelivery.generatedAt,
-          modelVersion:
-            paperExecutionRoute === 'REJECTED_EDGE_CANARY'
-              ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
-              : paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
-                ? paperResearchThroughputModelVersion(ACTIVE_ENGINE_CODE)
-                : paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH'
-                  ? `external-provider/${ACTIVE_ENGINE_CODE}/${PAPER_PAIRED_REVERSAL_RESEARCH_ARTIFACT}`
-                  : `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`,
+          modelVersion,
           metadata: {
             signal_source: 'EXTERNAL_PROVIDER',
             external_provider_code: ACTIVE_ENGINE_CODE,
@@ -3048,6 +3063,33 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         JSON.stringify(summary),
       ],
     );
+  }
+
+  private materialSignalIdFor(input: {
+    opportunityKey: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    requestedLotSize: string;
+    entryPrice: number;
+    stopLoss: number;
+    takeProfit: number;
+    strategyCode: string;
+    timeframe: string;
+    modelVersion: string;
+  }): string {
+    const canonicalMaterial = JSON.stringify([
+      input.opportunityKey,
+      input.instrument,
+      input.direction,
+      input.requestedLotSize,
+      input.entryPrice,
+      input.stopLoss,
+      input.takeProfit,
+      input.strategyCode,
+      input.timeframe,
+      input.modelVersion,
+    ]);
+    return uuidv5(canonicalMaterial, SIGNAL_NAMESPACE);
   }
 
   private async resolveSignalDeliveryTimestamp(

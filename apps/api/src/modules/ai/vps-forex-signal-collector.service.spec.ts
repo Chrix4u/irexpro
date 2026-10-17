@@ -3535,6 +3535,58 @@ describe('scheduled scan recovery', () => {
     await collector.maybeCollect();
     expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBe('2026-10-12T10:01:00.000Z');
   });
+  it('keeps the deterministic signal id stable for an identical identity-bound decision', () => {
+    const collector = scanner();
+    const derive = (collector as any).materialSignalIdFor;
+    expect(typeof derive).toBe('function');
+    const material = {
+      opportunityKey: 'irexpro-multimodel-ensemble-v1|AUDUSD|2026-10-16T08:20:00.000Z|SELL',
+      instrument: 'AUDUSD',
+      direction: 'SELL',
+      requestedLotSize: '0.09',
+      entryPrice: 0.65981,
+      stopLoss: 0.66061,
+      takeProfit: 0.65861,
+      strategyCode: 'external-irexpro-multimodel-ensemble-v1',
+      timeframe: 'M5',
+      modelVersion:
+        'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v10-evidence-backed-acceleration',
+    };
+
+    expect(derive.call(collector, material)).toBe(derive.call(collector, { ...material }));
+  });
+
+  it('changes the deterministic signal id whenever identity-bound execution material changes', () => {
+    const collector = scanner();
+    const derive = (collector as any).materialSignalIdFor;
+    expect(typeof derive).toBe('function');
+    const material = {
+      opportunityKey: 'irexpro-multimodel-ensemble-v1|AUDUSD|2026-10-16T08:20:00.000Z|SELL',
+      instrument: 'AUDUSD',
+      direction: 'SELL',
+      requestedLotSize: '0.09',
+      entryPrice: 0.65981,
+      stopLoss: 0.66061,
+      takeProfit: 0.65861,
+      strategyCode: 'external-irexpro-multimodel-ensemble-v1',
+      timeframe: 'M5',
+      modelVersion:
+        'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v10-evidence-backed-acceleration',
+    };
+    const original = derive.call(collector, material);
+    const revisions = [
+      { requestedLotSize: '0.08' },
+      { entryPrice: 0.65982 },
+      { stopLoss: 0.66062 },
+      { takeProfit: 0.65862 },
+      { modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/paper-only-v1' },
+    ];
+
+    for (const revision of revisions) {
+      expect(derive.call(collector, { ...material, ...revision })).not.toBe(original);
+    }
+  });
+
   it('pins the exact producer generatedAt across the one-minute retry window', async () => {
     jest.setSystemTime(new Date('2026-10-12T10:00:00.000Z'));
     const query = jest.fn().mockResolvedValue([]);
