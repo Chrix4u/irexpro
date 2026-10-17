@@ -2,6 +2,8 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
+import { LivePaperMarketDataService } from '../../broker/services/live-paper-market-data.service';
+import { isFxWeeklySessionOpen } from '../../market-data/utils/fx-weekly-session';
 import { StateReconciliationService } from '../reconciliation/state-reconciliation.service';
 import { ReconciliationRunOutcome } from '../reconciliation/state-reconciliation.service';
 import { ExecutionService } from '../execution.service';
@@ -55,6 +57,7 @@ export class TradeReconciliationJob extends WorkerHost {
     // Explicit user Stop AI Trading continuation: after provider truth has
     // been reconciled, flatten any late fill tied to a durably marked session.
     private readonly executionService: ExecutionService,
+    private readonly livePaperMarketData: LivePaperMarketDataService,
   ) {
     super();
   }
@@ -93,6 +96,7 @@ export class TradeReconciliationJob extends WorkerHost {
 
     let connectionsReconciled = 0;
     let providerQuotaDeferredConnections = 0;
+    let marketSessionDeferredConnections = 0;
     let discrepanciesDetected = 0;
     let discrepanciesNew = 0;
     let discrepanciesAutoResolved = 0;
@@ -108,11 +112,21 @@ export class TradeReconciliationJob extends WorkerHost {
       const quotaCooldownUntil = this.stateReconciliation.getProviderQuotaCooldownUntil(
         connection.id,
       );
+      const livePaperMarketClosed =
+        connection.brokerId === 'paper-broker' &&
+        this.livePaperMarketData.isLiveConnection(connection.id) &&
+        !isFxWeeklySessionOpen(new Date());
       if (quotaCooldownUntil) {
         providerQuotaDeferredConnections++;
         this.logger.warn(
           `Deferring full reconciliation sweep for connection ${connection.id} ` +
             `until ${quotaCooldownUntil.toISOString()} because provider quota is cooling down`,
+        );
+      } else if (livePaperMarketClosed) {
+        marketSessionDeferredConnections++;
+        this.logger.debug(
+          `Deferring full reconciliation sweep for live PAPER connection ${connection.id} ` +
+            'while the FX weekly session is closed; safety follow-ups remain active',
         );
       } else {
         connectionsReconciled++;
@@ -166,6 +180,7 @@ export class TradeReconciliationJob extends WorkerHost {
     this.logger.log(
       `Reconciliation cycle complete: ${connectionsReconciled} reconciled, ` +
         `${providerQuotaDeferredConnections} provider-quota deferred, ` +
+        `${marketSessionDeferredConnections} market-session deferred, ` +
         `${discrepanciesDetected} detected (${discrepanciesNew} new), ` +
         `${discrepanciesAutoResolved} auto-resolved, ${discrepanciesOpen} open discrepancies, ` +
         `${failedConnections} failed; protective orders: ${protectiveOrdersChecked} ` +

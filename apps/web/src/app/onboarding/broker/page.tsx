@@ -369,6 +369,8 @@ export default function OnboardingBrokerPage() {
   // registry is unreachable (offline-tolerant, same as before).
   const selectedRegistryEntry = registryEntries.find((e) => e.id === selectedBrokerId);
   const selectedIsOAuth = selectedRegistryEntry?.authenticationType === 'OAUTH';
+  const selectedConnectionReadiness = selectedRegistryEntry?.connectionReadiness;
+  const selectedConnectionReady = selectedConnectionReadiness?.ready ?? true;
   const selectableEntries = registryEntries.filter(
     (e) =>
       e.adapterAvailable &&
@@ -580,14 +582,26 @@ export default function OnboardingBrokerPage() {
                   </span>
                 </Alert>
               )}
+              {!selectedConnectionReady && (
+                <Alert variant="warning">
+                  <span style={{ flex: 1 }}>
+                    {selectedConnectionReadiness?.message ??
+                      'Broker authorization is awaiting platform configuration.'}
+                  </span>
+                </Alert>
+              )}
               <Button
                 type="button"
                 variant="primary"
                 onClick={handleAuthorizeOAuth}
-                disabled={loading}
+                disabled={loading || !selectedConnectionReady}
                 loading={action === 'saving'}
               >
-                {action === 'saving' ? 'Starting authorization…' : 'Authorize with cTrader ID'}
+                {action === 'saving'
+                  ? 'Starting authorization…'
+                  : selectedConnectionReady
+                    ? 'Authorize with cTrader ID'
+                    : 'cTrader authorization unavailable'}
               </Button>
             </div>
           ) : (

@@ -57,6 +57,10 @@ async function bootstrap() {
   // callers cannot make Express honor arbitrary X-Forwarded-For values.
   const expressApp = app.getHttpAdapter().getInstance() as Express;
   expressApp.set('trust proxy', isTrustedReverseProxy);
+  // This API serves dynamic, authenticated trading state. Disable Express ETags
+  // so browser/proxy revalidation cannot turn JSON reads into bodyless 304s.
+  // Client-side reads still use cache: 'no-store' as an additional safeguard.
+  expressApp.disable('etag');
 
   app.setGlobalPrefix(apiPrefix);
   app.useWebSocketAdapter(new RealtimeIoAdapter(app, corsOrigins));

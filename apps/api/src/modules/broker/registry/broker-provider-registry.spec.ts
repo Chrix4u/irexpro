@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BrokerProviderRegistryService } from './broker-provider-registry.service';
 import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
@@ -29,13 +30,22 @@ const adapterWith = (brokerId: string, supported: string[]) => ({
 });
 
 describe('BrokerProviderRegistryService', () => {
-  const buildService = async (supportedAdapters: string[]) => {
+  const buildService = async (
+    supportedAdapters: string[],
+    config: Record<string, string | undefined> = {},
+  ) => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BrokerProviderRegistryService,
         {
           provide: BrokerAdapterRegistry,
           useValue: adapterWith('any', supportedAdapters),
+        },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn((key: string, defaultValue?: string) => config[key] ?? defaultValue),
+          },
         },
         { provide: getRepositoryToken(BrokerConnection), useValue: {} },
         { provide: getRepositoryToken(BrokerAccount), useValue: {} },
@@ -106,6 +116,49 @@ describe('BrokerProviderRegistryService', () => {
         expect(service.isConnectable(id)).toBe(true);
         expect(entry?.productionLiveVerification.status).toBe('UNVERIFIED');
         expect(service.isProductionLiveEligible(id)).toBe(false);
+      }
+    });
+
+    it('reports cTrader OAuth as operationally blocked when platform credentials are absent', async () => {
+      const service = await buildService(['ctrader']);
+      const ctrader = service.getEntry('ctrader');
+
+      expect(ctrader?.connectionReadiness).toEqual({
+        ready: false,
+        code: 'PLATFORM_CREDENTIALS_REQUIRED',
+        message:
+          'cTrader authorization is awaiting platform configuration. Contact the iRexPro operator.',
+      });
+    });
+
+    it('reports cTrader OAuth as blocked when credentials exist but the approved callback is absent', async () => {
+      const service = await buildService(['ctrader'], {
+        'broker.ctraderClientId': 'client-id',
+        'broker.ctraderClientSecret': 'client-secret',
+      });
+
+      expect(service.getEntry('ctrader')?.connectionReadiness).toEqual({
+        ready: false,
+        code: 'OAUTH_REDIRECT_REQUIRED',
+        message:
+          'cTrader authorization is awaiting its approved callback configuration. Contact the iRexPro operator.',
+      });
+    });
+
+    it('reports every cTrader family alias ready only when credentials and callback are configured', async () => {
+      const service = await buildService(['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader'], {
+        'broker.ctraderClientId': 'client-id',
+        'broker.ctraderClientSecret': 'client-secret',
+        'broker.ctraderRedirectUris':
+          'https://irexpro.lightworldtech.com/onboarding/broker/callback',
+      });
+
+      for (const id of ['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader']) {
+        expect(service.getEntry(id)?.connectionReadiness).toEqual({
+          ready: true,
+          code: 'READY',
+          message: null,
+        });
       }
     });
   });
