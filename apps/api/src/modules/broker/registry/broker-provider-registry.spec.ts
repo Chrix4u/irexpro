@@ -146,15 +146,12 @@ describe('BrokerProviderRegistryService', () => {
     });
 
     it('reports every cTrader family alias ready only when credentials and callback are configured', async () => {
-      const service = await buildService(
-        ['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader'],
-        {
-          'broker.ctraderClientId': 'client-id',
-          'broker.ctraderClientSecret': 'client-secret',
-          'broker.ctraderRedirectUris':
-            'https://irexpro.lightworldtech.com/onboarding/broker/callback',
-        },
-      );
+      const service = await buildService(['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader'], {
+        'broker.ctraderClientId': 'client-id',
+        'broker.ctraderClientSecret': 'client-secret',
+        'broker.ctraderRedirectUris':
+          'https://irexpro.lightworldtech.com/onboarding/broker/callback',
+      });
 
       for (const id of ['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader']) {
         expect(service.getEntry(id)?.connectionReadiness).toEqual({
