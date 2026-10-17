@@ -671,12 +671,17 @@ describe('StrategyOrchestratorService', () => {
       expect(result.outcome).toBe('RISK_SUSPENDED');
     });
 
-    it('rejects (fail-closed) when RiskService throws an error', async () => {
+    it('rejects (fail-closed) when RiskService throws an error and terminalizes the durable intent', async () => {
       (riskService.validateProposedTrade as jest.Mock).mockRejectedValue(
         new Error('Risk Engine crash'),
       );
       const result = await service.processSignal(validCandidate());
       expect(result.outcome).toBe('RISK_REJECTED');
+      expect(tradeIntentMock.markRejected).toHaveBeenCalledWith('intent-sig-001');
+      expect(allocationMock.releaseAllocationForIntent).toHaveBeenCalledWith(
+        'intent-sig-001',
+        'RISK_ENGINE_ERROR',
+      );
       expect(executionService.executeTrade).not.toHaveBeenCalled();
     });
   });
