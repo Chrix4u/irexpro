@@ -86,6 +86,24 @@ describe("isConnectableEntry (fail-closed gating)", () => {
       ),
     ).toBe(false);
   });
+
+  it("blocks connect when the server reports runtime prerequisites are missing", () => {
+    expect(
+      isConnectableEntry(
+        entry({
+          connectionReadiness: {
+            ready: false,
+            code: "PLATFORM_CREDENTIALS_REQUIRED",
+            message: "cTrader authorization is awaiting platform configuration.",
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps older registry payloads without readiness metadata connectable", () => {
+    expect(isConnectableEntry(entry({ connectionReadiness: undefined }))).toBe(true);
+  });
 });
 
 describe("isLiveSelectable (Phase I — production-LIVE release-truth)", () => {
@@ -104,7 +122,7 @@ describe("isLiveSelectable (Phase I — production-LIVE release-truth)", () => {
     ).toBe(false);
   });
 
-  it("VERIFIED evidence + LIVE environment offers LIVE", () => {
+  it("legacy VERIFIED evidence does not offer LIVE without current harness certification", () => {
     expect(
       isLiveSelectable(
         entry({
@@ -112,6 +130,25 @@ describe("isLiveSelectable (Phase I — production-LIVE release-truth)", () => {
             status: "VERIFIED",
             verifiedAt: "2025-09-01T00:00:00.000Z",
             evidenceRef: "docs/brokers/provider-matrix.md",
+            certifiedVia: "LEGACY_ATTESTATION",
+            certificationRunRef: null,
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("offers LIVE only for current HARNESS_CERTIFIED evidence", () => {
+    expect(
+      isLiveSelectable(
+        entry({
+          productionLiveVerification: {
+            status: "VERIFIED",
+            verifiedAt: "2026-10-17T00:00:00.000Z",
+            evidenceRef: "docs/brokers/certifications/current.json",
+            certifiedVia: "HARNESS_CERTIFIED",
+            certificationRunRef:
+              "11111111-1111-4111-8111-111111111111@sha256:" + "a".repeat(64),
           },
         }),
       ),
@@ -218,13 +255,16 @@ describe("buildConnectionRequest (fail-closed validation)", () => {
     }
   });
 
-  it("allows LIVE only when the registry carries VERIFIED production evidence", () => {
+  it("allows LIVE only when the registry carries current harness certification", () => {
     const result = buildConnectionRequest(
       entry({
         productionLiveVerification: {
           status: "VERIFIED",
-          verifiedAt: "2025-09-01T00:00:00.000Z",
-          evidenceRef: "docs/brokers/provider-matrix.md",
+          verifiedAt: "2026-10-17T00:00:00.000Z",
+          evidenceRef: "docs/brokers/certifications/current.json",
+          certifiedVia: "HARNESS_CERTIFIED",
+          certificationRunRef:
+            "11111111-1111-4111-8111-111111111111@sha256:" + "b".repeat(64),
         },
       }),
       "LIVE",

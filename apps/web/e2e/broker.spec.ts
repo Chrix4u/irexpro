@@ -106,6 +106,17 @@ test.describe('Onboarding / Broker', () => {
     await expect(page.getByRole('button', { name: /save connection/i })).toBeVisible();
   });
 
+  test('cTrader platform prerequisites are surfaced before OAuth can start', async ({ page }) => {
+    await page.locator('#broker-select').selectOption('ctrader');
+
+    await expect(
+      page.getByText(/cTrader authorization is awaiting platform configuration/i),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: /cTrader authorization unavailable/i }),
+    ).toBeDisabled();
+  });
+
   // ── Credential leak invariant ─────────────────────────────────────────────
 
   test('no credential values appear in DOM text (apiKey/apiSecret stay in password inputs)', async ({ page }) => {

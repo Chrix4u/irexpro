@@ -10,7 +10,7 @@ import { useNotification } from '@/hooks/useNotification';
 import { mapApiError } from '@/lib/error-mapping';
 import { api } from '@/lib/api';
 import { IREXPRO_BROKER_OAUTH_FLOW_KEY } from '@/lib/broker-oauth-flow';
-import { formatEnumLabel } from '@irexpro/types';
+import { formatEnumLabel, isBrokerConnectionRuntimeReady } from '@irexpro/types';
 import { connectionVerificationLabel } from '@/lib/trader-session';
 import type {
   SupportedBroker,
@@ -370,7 +370,19 @@ export default function OnboardingBrokerPage() {
   const selectedRegistryEntry = registryEntries.find((e) => e.id === selectedBrokerId);
   const selectedIsOAuth = selectedRegistryEntry?.authenticationType === 'OAUTH';
   const selectedConnectionReadiness = selectedRegistryEntry?.connectionReadiness;
-  const selectedConnectionReady = selectedConnectionReadiness?.ready ?? true;
+  const selectedConnectionReady = isBrokerConnectionRuntimeReady(selectedRegistryEntry);
+
+  function registryEntryForConnection(connection: BrokerConnectionView): BrokerRegistryEntry | null {
+    return registryEntries.find((entry) => entry.id === connection.brokerId) ?? null;
+  }
+
+  function connectionRuntimeReady(connection: BrokerConnectionView): boolean {
+    return isBrokerConnectionRuntimeReady(registryEntryForConnection(connection));
+  }
+
+  function connectionRuntimeMessage(connection: BrokerConnectionView): string | null {
+    return registryEntryForConnection(connection)?.connectionReadiness?.message ?? null;
+  }
   const selectableEntries = registryEntries.filter(
     (e) =>
       e.adapterAvailable &&
@@ -485,6 +497,29 @@ export default function OnboardingBrokerPage() {
                       Logical account key: {conn.logicalAccountKey}
                     </div>
                   )}
+                  <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', marginTop: 'var(--space-2)' }}>
+                    <Badge variant={conn.authorizationStatus === 'ACTIVE' ? 'success' : 'info'}>
+                      Auth: {formatEnumLabel(conn.authorizationStatus)}
+                    </Badge>
+                    <Badge variant={conn.credentialStatus === 'VERIFIED' ? 'success' : 'warning'}>
+                      Credential: {formatEnumLabel(conn.credentialStatus)}
+                    </Badge>
+                  </div>
+                  {!connectionRuntimeReady(conn) && (
+                    <div className="text-sm" style={{ color: 'var(--warning)', marginTop: 'var(--space-2)' }}>
+                      {connectionRuntimeMessage(conn) ?? 'Broker reconnection is awaiting platform configuration.'}
+                    </div>
+                  )}
+                  {conn.lastErrorMessage && (
+                    <div className="text-sm" style={{ color: 'var(--error)', marginTop: 'var(--space-2)' }}>
+                      Last error: {conn.lastErrorMessage}
+                    </div>
+                  )}
+                  {conn.lastHealthCheckAt && (
+                    <div className="text-sm muted" style={{ marginTop: 'var(--space-1)' }}>
+                      Last health check: {new Date(conn.lastHealthCheckAt).toLocaleString()}
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
@@ -504,10 +539,14 @@ export default function OnboardingBrokerPage() {
                       variant="primary"
                       size="sm"
                       onClick={() => handleConnect(conn.id)}
-                      disabled={loading}
+                      disabled={loading || !connectionRuntimeReady(conn)}
                       loading={action === 'connecting' && pendingConnectionId === conn.id}
                     >
-                      {action === 'connecting' && pendingConnectionId === conn.id ? 'Connecting…' : 'Connect'}
+                      {!connectionRuntimeReady(conn)
+                        ? 'Platform setup required'
+                        : action === 'connecting' && pendingConnectionId === conn.id
+                          ? 'Connecting…'
+                          : 'Connect'}
                     </Button>
                   )}
                   <Button
@@ -548,6 +587,7 @@ export default function OnboardingBrokerPage() {
                     <option key={e.id} value={e.id}>
                       {e.name}
                       {e.status === 'BETA' ? ' (Beta)' : ''}
+                      {!isBrokerConnectionRuntimeReady(e) ? ' — Setup required' : ''}
                     </option>
                   ))
                 : supportedBrokers.map((b) => (
