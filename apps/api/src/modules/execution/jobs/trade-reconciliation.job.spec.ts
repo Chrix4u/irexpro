@@ -43,6 +43,7 @@ jest.mock('@nestjs/bullmq', () => {
 
 import { Test } from '@nestjs/testing';
 import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { TradeReconciliationJob } from './trade-reconciliation.job';
 import {
   ReconciliationRunOutcome,
@@ -99,6 +100,7 @@ describe('TradeReconciliationJob', () => {
   let protectiveOrderReconciliation: { reconcileProtectiveOrders: jest.Mock };
   let executionService: { closeStopRequestedAiPositions: jest.Mock };
   let livePaperMarketData: { isLiveConnection: jest.Mock };
+  let configService: { get: jest.Mock };
 
   beforeEach(async () => {
     stateReconciliation = {
@@ -115,6 +117,9 @@ describe('TradeReconciliationJob', () => {
     livePaperMarketData = {
       isLiveConnection: jest.fn().mockReturnValue(false),
     };
+    configService = {
+      get: jest.fn((_key: string, fallback?: unknown) => fallback),
+    };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -126,6 +131,7 @@ describe('TradeReconciliationJob', () => {
         },
         { provide: ExecutionService, useValue: executionService },
         { provide: LivePaperMarketDataService, useValue: livePaperMarketData },
+        { provide: ConfigService, useValue: configService },
       ],
     }).compile();
     module.useLogger(false);
@@ -242,6 +248,55 @@ describe('TradeReconciliationJob', () => {
       expect(protectiveOrderReconciliation.reconcileProtectiveOrders).toHaveBeenCalledWith(
         connection,
       );
+      expect(result).toMatchObject({ connectionsReconciled: 0, failedConnections: 0 });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('uses the configured VPS live-PAPER binding during bootstrap before the in-memory claim exists', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-17T12:00:00.000Z'));
+    try {
+      const connection = makeConnection('conn-configured-live-paper');
+      livePaperMarketData.isLiveConnection.mockReturnValue(false);
+      configService.get.mockImplementation((key: string, fallback?: unknown) => {
+        if (key === 'vpsForexScanner.enabled') return true;
+        if (key === 'vpsForexScanner.brokerConnectionId') return connection.id;
+        return fallback;
+      });
+      stateReconciliation.findReconcilableConnections.mockResolvedValue([connection]);
+
+      const result = await job.process(fakeJob);
+
+      expect(stateReconciliation.runForConnection).not.toHaveBeenCalled();
+      expect(executionService.closeStopRequestedAiPositions).toHaveBeenCalledWith(
+        'user-conn-configured-live-paper',
+        'conn-configured-live-paper',
+      );
+      expect(protectiveOrderReconciliation.reconcileProtectiveOrders).toHaveBeenCalledWith(
+        connection,
+      );
+      expect(result).toMatchObject({ connectionsReconciled: 0, failedConnections: 0 });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('uses the configured broker-parity live-PAPER binding during bootstrap', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-17T12:00:00.000Z'));
+    try {
+      const connection = makeConnection('conn-parity-live-paper');
+      livePaperMarketData.isLiveConnection.mockReturnValue(false);
+      configService.get.mockImplementation((key: string, fallback?: unknown) => {
+        if (key === 'brokerParityV7.enabled') return true;
+        if (key === 'brokerParityV7.paperConnectionId') return connection.id;
+        return fallback;
+      });
+      stateReconciliation.findReconcilableConnections.mockResolvedValue([connection]);
+
+      const result = await job.process(fakeJob);
+
+      expect(stateReconciliation.runForConnection).not.toHaveBeenCalled();
       expect(result).toMatchObject({ connectionsReconciled: 0, failedConnections: 0 });
     } finally {
       jest.useRealTimers();

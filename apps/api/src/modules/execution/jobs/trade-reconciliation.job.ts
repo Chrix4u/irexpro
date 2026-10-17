@@ -1,5 +1,6 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Job } from 'bullmq';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { BrokerConnectionStatus } from '../../broker/interfaces/broker-adapter.interface';
@@ -59,8 +60,33 @@ export class TradeReconciliationJob extends WorkerHost {
     // been reconciled, flatten any late fill tied to a durably marked session.
     private readonly executionService: ExecutionService,
     private readonly livePaperMarketData: LivePaperMarketDataService,
+    private readonly configService: ConfigService,
   ) {
     super();
+  }
+
+  private isLivePaperConnection(connectionId: string): boolean {
+    if (this.livePaperMarketData.isLiveConnection(connectionId)) return true;
+
+    // The configured binding is durable across process restarts, whereas the
+    // LivePaperMarketDataService claim is intentionally in-memory. BullMQ can
+    // dispatch reconciliation before the scanner/parity module's onModuleInit
+    // has restored that claim, so use the exact enabled binding as a bootstrap
+    // fallback. This affects only closed-session heavy-sweep deferral; entry,
+    // risk and protection pricing remain governed by fresh provider evidence.
+    const vpsScannerEnabled =
+      this.configService.get<boolean>('vpsForexScanner.enabled', false) === true;
+    const vpsScannerConnectionId = this.configService
+      .get<string>('vpsForexScanner.brokerConnectionId', '')
+      .trim();
+    if (vpsScannerEnabled && vpsScannerConnectionId === connectionId) return true;
+
+    const brokerParityEnabled =
+      this.configService.get<boolean>('brokerParityV7.enabled', false) === true;
+    const brokerParityConnectionId = this.configService
+      .get<string>('brokerParityV7.paperConnectionId', '')
+      .trim();
+    return brokerParityEnabled && brokerParityConnectionId === connectionId;
   }
 
   async process(job: Job): Promise<{
@@ -116,7 +142,7 @@ export class TradeReconciliationJob extends WorkerHost {
       );
       const livePaperMarketClosed =
         connection.brokerId === 'paper-broker' &&
-        this.livePaperMarketData.isLiveConnection(connection.id) &&
+        this.isLivePaperConnection(connection.id) &&
         !isFxWeeklySessionOpen(new Date());
       const brokerSuspended = connection.status === BrokerConnectionStatus.SUSPENDED;
       if (brokerSuspended) {
