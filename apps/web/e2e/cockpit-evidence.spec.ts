@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { LivePositionRowView } from "@irexpro/types/live-account";
 import {
   assertNoExternalRequests,
   mockAuthTokens,
@@ -52,7 +53,9 @@ const livePosition = {
   currentPrice: "1.10420000",
   markSource: "PROVIDER",
   markObservedAt: "2026-09-18T13:05:15.000Z",
+  markIsStale: false,
   unrealisedPnl: "41.00",
+  pathDiagnostics: null,
   commission: "0.20",
   swap: "0",
   stopLoss: "1.09500000",
@@ -61,7 +64,7 @@ const livePosition = {
   status: "OPEN",
   openedAt: "2026-09-18T13:00:00.000Z",
   createdAt: "2026-09-18T12:59:00.000Z",
-};
+} satisfies LivePositionRowView;
 
 const marketSnapshot = {
   instrument: "EURUSD",
