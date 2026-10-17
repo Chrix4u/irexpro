@@ -201,14 +201,17 @@ export class BrokerOAuthService {
       flow = await this.claimMobileSlotFlow(userId, brokerId);
     } else {
       const allowedRedirectUris = this.allowedRedirectUris();
-      if (allowedRedirectUris.length === 0) {
+      const httpsRedirectUris = allowedRedirectUris.filter(
+        (candidate) => this.schemeOf(candidate) === 'https:',
+      );
+      if (httpsRedirectUris.length === 0) {
         throw new BadRequestException(
           'No cTrader OAuth redirect URI is configured on the platform — set ' +
             'CTRADER_REDIRECT_URIS (the redirect URI(s) registered on the platform cTrader ' +
             'Open API application).',
         );
       }
-      const resolvedRedirectUri = redirectUri ?? allowedRedirectUris[0];
+      const resolvedRedirectUri = redirectUri ?? httpsRedirectUris[0];
       if (!allowedRedirectUris.includes(resolvedRedirectUri)) {
         throw new BadRequestException(
           'The requested redirect URI is not registered for the platform cTrader OAuth ' +
@@ -1075,7 +1078,7 @@ export class BrokerOAuthService {
     return raw
       .split(',')
       .map((uri) => uri.trim())
-      .filter((uri) => uri.length > 0);
+      .filter((uri) => uri.length > 0 && this.schemeOf(uri) === 'https:');
   }
 
   private schemeOf(uri: string): string {

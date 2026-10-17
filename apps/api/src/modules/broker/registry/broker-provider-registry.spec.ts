@@ -155,6 +155,24 @@ describe('BrokerProviderRegistryService', () => {
       });
     });
 
+    it('does not report custom-scheme-only cTrader callbacks as runtime ready', async () => {
+      const service = await buildService(['ctrader'], {
+        'broker.ctraderClientId': 'client-id',
+        'broker.ctraderClientSecret': 'client-secret',
+        'broker.ctraderRedirectUris': 'irexpro://broker/oauth/callback',
+        'broker.ctraderMobileCallbackUris': 'irexpro://broker/oauth/mobile',
+      });
+
+      expect(service.getEntry('ctrader')?.connectionReadiness).toMatchObject({
+        ready: false,
+        code: 'OAUTH_REDIRECT_REQUIRED',
+        channels: {
+          web: { ready: false, code: 'OAUTH_REDIRECT_REQUIRED' },
+          mobile: { ready: false, code: 'MOBILE_OAUTH_CALLBACK_REQUIRED' },
+        },
+      });
+    });
+
     it('keeps mobile cTrader OAuth ready when mobile slots exist even if the web callback is absent', async () => {
       const service = await buildService(['ctrader'], {
         'broker.ctraderClientId': 'client-id',

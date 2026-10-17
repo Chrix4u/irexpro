@@ -161,7 +161,7 @@ export class BrokerProviderRegistryService {
       const redirectUris =
         this.configService?.get<string>('broker.ctraderRedirectUris') ??
         process.env.CTRADER_REDIRECT_URIS;
-      const web: BrokerConnectionChannelReadiness = redirectUris?.trim()
+      const web: BrokerConnectionChannelReadiness = this.hasHttpsCallback(redirectUris)
         ? { ready: true, code: 'READY', message: null }
         : {
             ready: false,
@@ -173,7 +173,7 @@ export class BrokerProviderRegistryService {
       const mobileCallbackUris =
         this.configService?.get<string>('broker.ctraderMobileCallbackUris') ??
         process.env.CTRADER_MOBILE_CALLBACK_URIS;
-      const mobile: BrokerConnectionChannelReadiness = mobileCallbackUris?.trim()
+      const mobile: BrokerConnectionChannelReadiness = this.hasHttpsCallback(mobileCallbackUris)
         ? { ready: true, code: 'READY', message: null }
         : {
             ready: false,
@@ -186,6 +186,21 @@ export class BrokerProviderRegistryService {
     }
 
     return { ready: true, code: 'READY', message: null };
+  }
+
+  private hasHttpsCallback(raw: string | undefined): boolean {
+    if (!raw?.trim()) return false;
+    return raw
+      .split(',')
+      .map((uri) => uri.trim())
+      .filter(Boolean)
+      .some((uri) => {
+        try {
+          return new URL(uri).protocol === 'https:';
+        } catch {
+          return false;
+        }
+      });
   }
 
   /** Single entry by id (null when unknown). */
