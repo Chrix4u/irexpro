@@ -2,6 +2,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
+import { BrokerConnectionStatus } from '../../broker/interfaces/broker-adapter.interface';
 import { LivePaperMarketDataService } from '../../broker/services/live-paper-market-data.service';
 import { isFxWeeklySessionOpen } from '../../market-data/utils/fx-weekly-session';
 import { StateReconciliationService } from '../reconciliation/state-reconciliation.service';
@@ -96,6 +97,7 @@ export class TradeReconciliationJob extends WorkerHost {
 
     let connectionsReconciled = 0;
     let providerQuotaDeferredConnections = 0;
+    let suspendedDeferredConnections = 0;
     let marketSessionDeferredConnections = 0;
     let discrepanciesDetected = 0;
     let discrepanciesNew = 0;
@@ -116,7 +118,14 @@ export class TradeReconciliationJob extends WorkerHost {
         connection.brokerId === 'paper-broker' &&
         this.livePaperMarketData.isLiveConnection(connection.id) &&
         !isFxWeeklySessionOpen(new Date());
-      if (quotaCooldownUntil) {
+      const brokerSuspended = connection.status === BrokerConnectionStatus.SUSPENDED;
+      if (brokerSuspended) {
+        suspendedDeferredConnections++;
+        this.logger.debug(
+          `Deferring full reconciliation sweep for suspended connection ${connection.id}; ` +
+            'broker health recovery owns reconnection while safety follow-ups remain active',
+        );
+      } else if (quotaCooldownUntil) {
         providerQuotaDeferredConnections++;
         this.logger.warn(
           `Deferring full reconciliation sweep for connection ${connection.id} ` +
@@ -180,6 +189,7 @@ export class TradeReconciliationJob extends WorkerHost {
     this.logger.log(
       `Reconciliation cycle complete: ${connectionsReconciled} reconciled, ` +
         `${providerQuotaDeferredConnections} provider-quota deferred, ` +
+        `${suspendedDeferredConnections} suspended deferred, ` +
         `${marketSessionDeferredConnections} market-session deferred, ` +
         `${discrepanciesDetected} detected (${discrepanciesNew} new), ` +
         `${discrepanciesAutoResolved} auto-resolved, ${discrepanciesOpen} open discrepancies, ` +

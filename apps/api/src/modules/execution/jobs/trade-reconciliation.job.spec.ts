@@ -248,6 +248,29 @@ describe('TradeReconciliationJob', () => {
     }
   });
 
+  it('defers only the heavy sweep for a suspended broker and preserves safety follow-ups', async () => {
+    const suspended = {
+      ...makeConnection('conn-suspended'),
+      status: 'SUSPENDED',
+    } as BrokerConnection;
+    stateReconciliation.findReconcilableConnections.mockResolvedValue([suspended]);
+
+    const result = await job.process(fakeJob);
+
+    expect(stateReconciliation.runForConnection).not.toHaveBeenCalled();
+    expect(executionService.closeStopRequestedAiPositions).toHaveBeenCalledWith(
+      'user-conn-suspended',
+      'conn-suspended',
+    );
+    expect(protectiveOrderReconciliation.reconcileProtectiveOrders).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'conn-suspended' }),
+    );
+    expect(result).toMatchObject({
+      connectionsReconciled: 0,
+      failedConnections: 0,
+    });
+  });
+
   it('defers only the heavy sweep during provider quota cooldown and preserves safety follow-ups', async () => {
     stateReconciliation.findReconcilableConnections.mockResolvedValue([makeConnection('conn-1')]);
     stateReconciliation.getProviderQuotaCooldownUntil.mockReturnValue(
