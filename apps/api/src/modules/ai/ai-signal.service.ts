@@ -11,6 +11,7 @@ import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { AiSignalCandidate } from './interfaces/ai-signal-candidate.interface';
 import { StrategyResult } from '../strategy/interfaces/strategy.interface';
 import { AiExitResult, AiExitSignal } from '../strategy/interfaces/ai-exit-signal.interface';
+import { materializeAdaptiveSignalIdentity } from './adaptive-signal-identity';
 
 const AGENT_CONTEXT_STATUSES = new Set(['ALIGNED', 'CONFLICT', 'INSUFFICIENT', 'BLOCKED']);
 const AGENT_CONTEXT_DIRECTIONS = new Set(['BUY', 'SELL', 'NEUTRAL']);
@@ -170,9 +171,9 @@ export class AiSignalService {
         `instrument=${candidate.instrument} direction=${candidate.direction}`,
     );
 
-    const safeEvidence = this.buildSafeEvidence(candidate);
     const validationError = this.validateCandidate(candidate);
     if (validationError) {
+      const safeEvidence = this.buildSafeEvidence(candidate);
       this.logger.warn(`Signal ${candidate.signalId} validation failed: ${validationError}`);
       await this.auditService.log({
         actorUserId: candidate.userId,
@@ -192,24 +193,27 @@ export class AiSignalService {
       };
     }
 
+    const executionCandidate = materializeAdaptiveSignalIdentity(candidate);
+    const safeEvidence = this.buildSafeEvidence(executionCandidate);
+
     await this.auditService.log({
-      actorUserId: candidate.userId,
+      actorUserId: executionCandidate.userId,
       action: AuditAction.AI_SIGNAL_RECEIVED,
       severity: AuditSeverity.INFO,
       resourceType: 'AiSignal',
-      resourceId: candidate.signalId,
+      resourceId: executionCandidate.signalId,
       metadata: safeEvidence,
     });
 
-    this.eventBus.publish(DomainEventType.AI_SIGNAL_RECEIVED, candidate.userId, {
-      signalId: candidate.signalId,
-      instrument: candidate.instrument,
-      direction: candidate.direction,
-      confidenceScore: candidate.confidenceScore,
-      strategyCode: candidate.strategyCode,
+    this.eventBus.publish(DomainEventType.AI_SIGNAL_RECEIVED, executionCandidate.userId, {
+      signalId: executionCandidate.signalId,
+      instrument: executionCandidate.instrument,
+      direction: executionCandidate.direction,
+      confidenceScore: executionCandidate.confidenceScore,
+      strategyCode: executionCandidate.strategyCode,
     });
 
-    return this.forwardToStrategyOrchestrator(candidate);
+    return this.forwardToStrategyOrchestrator(executionCandidate);
   }
 
   /**
