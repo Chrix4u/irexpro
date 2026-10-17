@@ -262,6 +262,19 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       expect(await flowRepo.count()).toBe(0);
     });
 
+    it('uses the first valid HTTPS WEB callback when legacy custom-scheme entries are also configured', async () => {
+      config.get.mockImplementation((key: string) => {
+        if (key === 'broker.ctraderRedirectUris') return `${MOBILE_REDIRECT},${WEB_REDIRECT}`;
+        if (key === 'broker.ctraderMobileCallbackUris') return MOBILE_SLOT;
+        if (key === 'BROKER_ENCRYPTION_KEY') return ENCRYPTION_KEY;
+        return undefined;
+      });
+
+      await startFlow('web');
+
+      expect(ctraderClient.buildAuthorizationUrl).toHaveBeenCalledWith(WEB_REDIRECT);
+    });
+
     it('rejects redirect URIs outside the server-configured allowlist', async () => {
       await expect(startFlow('web', 'https://evil.example.com/cb')).rejects.toThrow(
         BadRequestException,
@@ -291,6 +304,35 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       await expect(service.startAuthorization(USER, 'ctrader')).rejects.toThrow(
         BadRequestException,
       );
+    });
+
+    it('starts MOBILE authorization without requiring the WEB redirect allowlist', async () => {
+      config.get.mockImplementation((key: string) => {
+        if (key === 'broker.ctraderMobileCallbackUris') return MOBILE_SLOT;
+        if (key === 'BROKER_ENCRYPTION_KEY') return ENCRYPTION_KEY;
+        return undefined;
+      });
+
+      const result = await startFlow('mobile');
+
+      expect(result.flowId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(ctraderClient.buildAuthorizationUrl).toHaveBeenCalledWith(MOBILE_SLOT);
+      expect((await row(result.flowId))?.redirectUri).toBe(MOBILE_SLOT);
+    });
+
+    it('ignores non-HTTPS mobile callback entries and claims the valid HTTPS server slot', async () => {
+      config.get.mockImplementation((key: string) => {
+        if (key === 'broker.ctraderRedirectUris') return WEB_REDIRECT;
+        if (key === 'broker.ctraderMobileCallbackUris')
+          return `irexpro://broker/oauth/callback,${MOBILE_SLOT}`;
+        if (key === 'BROKER_ENCRYPTION_KEY') return ENCRYPTION_KEY;
+        return undefined;
+      });
+
+      const result = await startFlow('mobile');
+
+      expect(ctraderClient.buildAuthorizationUrl).toHaveBeenCalledWith(MOBILE_SLOT);
+      expect((await row(result.flowId))?.redirectUri).toBe(MOBILE_SLOT);
     });
 
     it('claims a configured mobile callback slot for the MOBILE channel (client redirect ignored)', async () => {

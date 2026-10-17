@@ -14,10 +14,7 @@ import type {
   BrokerRegistryEntry,
   CreateBrokerConnectionRequest,
 } from "@irexpro/types";
-import {
-  deriveProviderCertificationState,
-  isBrokerConnectionRuntimeReady,
-} from "@irexpro/types";
+import { deriveProviderCertificationState } from "@irexpro/types";
 import type { ProviderVerificationLabel } from "@irexpro/types/provider-verification";
 import { assessProviderVerification } from "@irexpro/types/provider-verification";
 
@@ -91,12 +88,19 @@ export function statusPresentation(
  * connectable ONLY when the registry says an adapter is live AND its status
  * is one of the adapter-backed statuses.
  */
+export function mobileConnectionReadiness(
+  entry: BrokerRegistryEntry,
+): BrokerRegistryEntry["connectionReadiness"] {
+  return entry.connectionReadiness?.channels?.mobile ?? entry.connectionReadiness;
+}
+
 export function isConnectableEntry(entry: BrokerRegistryEntry): boolean {
   const presentation = statusPresentation(entry.status);
+  const readiness = mobileConnectionReadiness(entry);
   return (
     presentation.connectable &&
     entry.adapterAvailable === true &&
-    isBrokerConnectionRuntimeReady(entry)
+    readiness?.ready !== false
   );
 }
 

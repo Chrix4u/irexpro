@@ -458,13 +458,16 @@ user selects cTrader-family broker (web onboarding / mobile SDK55 screen)
     id.ctrader.com consent URL + flowId)
   → external browser / system browser consent     (cTrader password NEVER
     captured by iRexPro)
-  → redirect to the platform-registered redirect URI (env
-    CTRADER_REDIRECT_URIS allowlist: web callback page
-    /onboarding/broker/callback and, if operator-registered, the mobile
-    deep link irexpro://broker/oauth/callback)
-  → POST complete {flowId, code}                  (ownership-checked,
-    single-use; code exchanged server-side with the PLATFORM application
-    credentials; cTID accounts discovered via 2149 with isLive flags)
+  → WEB: provider redirects to an HTTPS page from CTRADER_REDIRECT_URIS
+    (normally /onboarding/broker/callback) → authenticated POST complete
+  → MOBILE: provider redirects to a claimed HTTPS SERVER slot from
+    CTRADER_MOBILE_CALLBACK_URIS (…/oauth/callback/m1 … /mN) → server
+    exchanges the provider code → 302 to irexpro://broker/oauth/handoff with
+    only an opaque one-time handoff token → authenticated POST handoff
+  → server-side completion/handoff               (ownership-checked,
+    single-use; provider code exchanged server-side with the PLATFORM
+    application credentials; cTID accounts discovered via 2149 with isLive
+    flags; provider code/tokens never reach the mobile app)
   → user picks an account
   → POST link {flowId, ctidTraderAccountId}       (canonical
     createConnection path: AES-256-GCM-encrypted credentials incl.

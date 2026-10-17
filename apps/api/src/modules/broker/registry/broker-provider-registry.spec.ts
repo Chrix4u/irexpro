@@ -137,15 +137,85 @@ describe('BrokerProviderRegistryService', () => {
         'broker.ctraderClientSecret': 'client-secret',
       });
 
-      expect(service.getEntry('ctrader')?.connectionReadiness).toEqual({
+      expect(service.getEntry('ctrader')?.connectionReadiness).toMatchObject({
         ready: false,
         code: 'OAUTH_REDIRECT_REQUIRED',
         message:
           'cTrader authorization is awaiting its approved callback configuration. Contact the iRexPro operator.',
+        channels: {
+          web: {
+            ready: false,
+            code: 'OAUTH_REDIRECT_REQUIRED',
+          },
+          mobile: {
+            ready: false,
+            code: 'MOBILE_OAUTH_CALLBACK_REQUIRED',
+          },
+        },
       });
     });
 
-    it('reports every cTrader family alias ready only when credentials and callback are configured', async () => {
+    it('does not report custom-scheme-only cTrader callbacks as runtime ready', async () => {
+      const service = await buildService(['ctrader'], {
+        'broker.ctraderClientId': 'client-id',
+        'broker.ctraderClientSecret': 'client-secret',
+        'broker.ctraderRedirectUris': 'irexpro://broker/oauth/callback',
+        'broker.ctraderMobileCallbackUris': 'irexpro://broker/oauth/mobile',
+      });
+
+      expect(service.getEntry('ctrader')?.connectionReadiness).toMatchObject({
+        ready: false,
+        code: 'OAUTH_REDIRECT_REQUIRED',
+        channels: {
+          web: { ready: false, code: 'OAUTH_REDIRECT_REQUIRED' },
+          mobile: { ready: false, code: 'MOBILE_OAUTH_CALLBACK_REQUIRED' },
+        },
+      });
+    });
+
+    it('keeps mobile cTrader OAuth ready when mobile slots exist even if the web callback is absent', async () => {
+      const service = await buildService(['ctrader'], {
+        'broker.ctraderClientId': 'client-id',
+        'broker.ctraderClientSecret': 'client-secret',
+        'broker.ctraderMobileCallbackUris':
+          'https://irexpro.lightworldtech.com/api/v1/broker/connections/oauth/callback/m1',
+      });
+
+      expect(service.getEntry('ctrader')?.connectionReadiness).toMatchObject({
+        ready: false,
+        code: 'OAUTH_REDIRECT_REQUIRED',
+        channels: {
+          web: { ready: false, code: 'OAUTH_REDIRECT_REQUIRED' },
+          mobile: { ready: true, code: 'READY', message: null },
+        },
+      });
+    });
+
+    it('reports mobile cTrader OAuth blocked when web callback is ready but mobile slots are absent', async () => {
+      const service = await buildService(['ctrader'], {
+        'broker.ctraderClientId': 'client-id',
+        'broker.ctraderClientSecret': 'client-secret',
+        'broker.ctraderRedirectUris':
+          'https://irexpro.lightworldtech.com/onboarding/broker/callback',
+      });
+
+      expect(service.getEntry('ctrader')?.connectionReadiness).toMatchObject({
+        ready: true,
+        code: 'READY',
+        message: null,
+        channels: {
+          web: { ready: true, code: 'READY', message: null },
+          mobile: {
+            ready: false,
+            code: 'MOBILE_OAUTH_CALLBACK_REQUIRED',
+            message:
+              'cTrader mobile authorization is awaiting its approved callback configuration. Contact the iRexPro operator.',
+          },
+        },
+      });
+    });
+
+    it('reports every cTrader family alias web-ready when credentials and web callback are configured', async () => {
       const service = await buildService(['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader'], {
         'broker.ctraderClientId': 'client-id',
         'broker.ctraderClientSecret': 'client-secret',
@@ -154,10 +224,17 @@ describe('BrokerProviderRegistryService', () => {
       });
 
       for (const id of ['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader']) {
-        expect(service.getEntry(id)?.connectionReadiness).toEqual({
+        expect(service.getEntry(id)?.connectionReadiness).toMatchObject({
           ready: true,
           code: 'READY',
           message: null,
+          channels: {
+            web: { ready: true, code: 'READY', message: null },
+            mobile: {
+              ready: false,
+              code: 'MOBILE_OAUTH_CALLBACK_REQUIRED',
+            },
+          },
         });
       }
     });

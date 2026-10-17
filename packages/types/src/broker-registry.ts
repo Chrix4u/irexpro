@@ -134,12 +134,18 @@ export type BrokerConnectionReadinessCode =
   | 'READY'
   | 'ADAPTER_UNAVAILABLE'
   | 'PLATFORM_CREDENTIALS_REQUIRED'
-  | 'OAUTH_REDIRECT_REQUIRED';
+  | 'OAUTH_REDIRECT_REQUIRED'
+  | 'MOBILE_OAUTH_CALLBACK_REQUIRED';
 
-export interface BrokerConnectionReadiness {
+export interface BrokerConnectionChannelReadiness {
   ready: boolean;
   code: BrokerConnectionReadinessCode;
   message: string | null;
+}
+
+export interface BrokerConnectionReadiness extends BrokerConnectionChannelReadiness {
+  /** Channel-specific OAuth prerequisites when web/mobile differ. */
+  channels?: Partial<Record<'web' | 'mobile', BrokerConnectionChannelReadiness>>;
 }
 
 export interface BrokerRegistryEntry {
@@ -166,7 +172,7 @@ export interface BrokerRegistryEntry {
   regions: string[];
   /** True when a live adapter is registered for this entry right now. */
   adapterAvailable: boolean;
-  /** Runtime/operator prerequisites for starting a new broker connection. */
+  /** Default/web prerequisites; OAuth clients use channel overrides when present. */
   connectionReadiness?: BrokerConnectionReadiness;
 }
 

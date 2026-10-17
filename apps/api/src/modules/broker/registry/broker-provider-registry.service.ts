@@ -18,12 +18,18 @@ export type BrokerConnectionReadinessCode =
   | 'READY'
   | 'ADAPTER_UNAVAILABLE'
   | 'PLATFORM_CREDENTIALS_REQUIRED'
-  | 'OAUTH_REDIRECT_REQUIRED';
+  | 'OAUTH_REDIRECT_REQUIRED'
+  | 'MOBILE_OAUTH_CALLBACK_REQUIRED';
 
-export interface BrokerConnectionReadiness {
+export interface BrokerConnectionChannelReadiness {
   ready: boolean;
   code: BrokerConnectionReadinessCode;
   message: string | null;
+}
+
+export interface BrokerConnectionReadiness extends BrokerConnectionChannelReadiness {
+  /** Channel-specific OAuth prerequisites when web/mobile differ. */
+  channels?: Partial<Record<'web' | 'mobile', BrokerConnectionChannelReadiness>>;
 }
 
 /** Frontend-safe registry view (no adapter instances, no secrets). */
@@ -61,7 +67,7 @@ export interface BrokerRegistryEntry {
   regions: string[];
   /** True when a live adapter is registered for this entry right now. */
   adapterAvailable: boolean;
-  /** Runtime/operator prerequisites for starting a new broker connection. */
+  /** Default/web prerequisites; OAuth clients use channel overrides when present. */
   connectionReadiness: BrokerConnectionReadiness;
 }
 
@@ -155,17 +161,46 @@ export class BrokerProviderRegistryService {
       const redirectUris =
         this.configService?.get<string>('broker.ctraderRedirectUris') ??
         process.env.CTRADER_REDIRECT_URIS;
-      if (!redirectUris?.trim()) {
-        return {
-          ready: false,
-          code: 'OAUTH_REDIRECT_REQUIRED',
-          message:
-            'cTrader authorization is awaiting its approved callback configuration. Contact the iRexPro operator.',
-        };
-      }
+      const web: BrokerConnectionChannelReadiness = this.hasHttpsCallback(redirectUris)
+        ? { ready: true, code: 'READY', message: null }
+        : {
+            ready: false,
+            code: 'OAUTH_REDIRECT_REQUIRED',
+            message:
+              'cTrader authorization is awaiting its approved callback configuration. Contact the iRexPro operator.',
+          };
+
+      const mobileCallbackUris =
+        this.configService?.get<string>('broker.ctraderMobileCallbackUris') ??
+        process.env.CTRADER_MOBILE_CALLBACK_URIS;
+      const mobile: BrokerConnectionChannelReadiness = this.hasHttpsCallback(mobileCallbackUris)
+        ? { ready: true, code: 'READY', message: null }
+        : {
+            ready: false,
+            code: 'MOBILE_OAUTH_CALLBACK_REQUIRED',
+            message:
+              'cTrader mobile authorization is awaiting its approved callback configuration. Contact the iRexPro operator.',
+          };
+
+      return { ...web, channels: { web, mobile } };
     }
 
     return { ready: true, code: 'READY', message: null };
+  }
+
+  private hasHttpsCallback(raw: string | undefined): boolean {
+    if (!raw?.trim()) return false;
+    return raw
+      .split(',')
+      .map((uri) => uri.trim())
+      .filter(Boolean)
+      .some((uri) => {
+        try {
+          return new URL(uri).protocol === 'https:';
+        } catch {
+          return false;
+        }
+      });
   }
 
   /** Single entry by id (null when unknown). */
