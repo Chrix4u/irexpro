@@ -61,8 +61,11 @@ const CODE_MESSAGES: Record<string, string> = {
  */
 const KNOWN_ONBOARDING_STEPS: Record<string, string> = {
   profile: '/onboarding/profile',
+  eligibility: '/onboarding/eligibility',
   broker: '/onboarding/broker',
+  broker_connection: '/onboarding/broker',
   risk: '/onboarding/risk',
+  risk_profile: '/onboarding/risk',
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

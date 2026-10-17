@@ -384,6 +384,21 @@ function isLiveAccountOrdersPage(value: unknown): value is LiveAccountOrdersPage
   );
 }
 
+function isLivePositionPathDiagnostics(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.maxFavorablePnl) &&
+    isString(value.maxAdversePnl) &&
+    isString(value.latestUnrealisedPnl) &&
+    isString(value.profitGiveback) &&
+    isNonNegativeInteger(value.observationCount) &&
+    isNonNegativeInteger(value.sameBarProtectionAmbiguityCount) &&
+    isNullableIsoDateString(value.lastSameBarProtectionAmbiguityAt) &&
+    isNullableIsoDateString(value.peakObservedAt) &&
+    isNullableIsoDateString(value.lastObservedAt)
+  );
+}
+
 function isLivePositionRowView(value: unknown): value is LivePositionRowView {
   if (!isRecord(value)) return false;
   return (
@@ -403,7 +418,11 @@ function isLivePositionRowView(value: unknown): value is LivePositionRowView {
       value.markSource === 'REST_M5' ||
       value.markSource === 'PROVIDER') &&
     isNullableIsoDateString(value.markObservedAt) &&
+    typeof value.markIsStale === 'boolean' &&
     isNullableString(value.unrealisedPnl) &&
+    (value.pathDiagnostics === undefined ||
+      value.pathDiagnostics === null ||
+      isLivePositionPathDiagnostics(value.pathDiagnostics)) &&
     isNullableString(value.commission) &&
     isNullableString(value.swap) &&
     isString(value.stopLoss) &&

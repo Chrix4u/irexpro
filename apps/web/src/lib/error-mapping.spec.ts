@@ -29,12 +29,17 @@ describe('mapApiError', () => {
         statusCode: 403,
         code: 'TRADING_NOT_READY',
         message: 'Your trading setup is not ready.',
-        missingSteps: ['PROFILE', 'BROKER_CONNECTION'],
+        missingSteps: ['PROFILE', 'ELIGIBILITY', 'BROKER_CONNECTION', 'RISK_PROFILE'],
       },
     };
     const result = mapApiError(error);
     expect(result.code).toBe('TRADING_NOT_READY');
-    expect(result.missingSteps).toEqual(['/onboarding/profile', '/onboarding/broker']);
+    expect(result.missingSteps).toEqual([
+      '/onboarding/profile',
+      '/onboarding/eligibility',
+      '/onboarding/broker',
+      '/onboarding/risk',
+    ]);
   });
 
   it('should preserve a safe actionable 4xx broker explanation', () => {

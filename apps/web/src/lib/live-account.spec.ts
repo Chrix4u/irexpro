@@ -2,6 +2,7 @@ import type {
   LiveAccountOrdersPage,
   LiveAccountOverviewView,
   LiveOrderRowView,
+  LivePositionRowView,
 } from '@irexpro/types/live-account';
 import {
   loadLiveAccountOrders,
@@ -193,59 +194,82 @@ describe('loadLiveAccountPositions runtime guards', () => {
     requestMock.mockReset();
   });
 
+  const positionRow = (overrides: Partial<LivePositionRowView> = {}): LivePositionRowView => ({
+    id: 'pos_44444444-4444-4444-8444-444444444444',
+    brokerConnectionId: 'bconn_11111111-1111-4111-8111-111111111111',
+    brokerName: null,
+    environment: 'UNKNOWN',
+    instrument: 'EURUSD',
+    direction: 'BUY',
+    lotSize: '0.1000',
+    requestedEntryPrice: '1.10000000',
+    fillPrice: null,
+    accountCurrency: 'USD',
+    currentPrice: '1.10100000',
+    markSource: 'PROVIDER',
+    markObservedAt: '2026-09-01T09:36:00.000Z',
+    markIsStale: false,
+    unrealisedPnl: '10.00',
+    pathDiagnostics: null,
+    commission: '0.00',
+    swap: '0.00',
+    stopLoss: '1.09500000',
+    takeProfit: '1.11000000',
+    trailingStopPips: null,
+    status: 'OPEN',
+    openedAt: '2026-09-01T09:35:00.000Z',
+    createdAt: '2026-09-01T09:34:00.000Z',
+    ...overrides,
+  });
+
   it('accepts position rows with environment UNKNOWN', async () => {
-    requestMock.mockResolvedValue({
-      positions: [
-        {
-          id: 'pos_44444444-4444-4444-8444-444444444444',
-          brokerConnectionId: 'bconn_11111111-1111-4111-8111-111111111111',
-          brokerName: null,
-          environment: 'UNKNOWN',
-          instrument: 'EURUSD',
-          direction: 'BUY',
-          lotSize: '0.1000',
-          requestedEntryPrice: '1.10000000',
-          fillPrice: null,
-          stopLoss: '1.09500000',
-          takeProfit: '1.11000000',
-          trailingStopPips: null,
-          status: 'OPEN',
-          openedAt: '2026-09-01T09:35:00.000Z',
-          createdAt: '2026-09-01T09:34:00.000Z',
-        },
-      ],
-      total: 1,
-    });
+    requestMock.mockResolvedValue({ positions: [positionRow()], total: 1 });
 
     const positions = await loadLiveAccountPositions();
 
     expect(positions.positions[0].environment).toBe('UNKNOWN');
     expect(positions.positions[0].brokerName).toBeNull();
+    expect(positions.positions[0].markIsStale).toBe(false);
   });
 
   it('rejects a position environment value outside the contract', async () => {
     requestMock.mockResolvedValue({
-      positions: [],
-      total: 0,
+      positions: [{ ...positionRow(), environment: 'MYSTERY' }],
+      total: 1,
     });
-    requestMock.mockResolvedValueOnce({
+
+    await expect(loadLiveAccountPositions()).rejects.toThrow(
+      'Live account positions contract mismatch',
+    );
+  });
+
+  it('rejects a non-boolean markIsStale value instead of treating it as truthy', async () => {
+    requestMock.mockResolvedValue({
+      positions: [{ ...positionRow(), markIsStale: 'false' }],
+      total: 1,
+    });
+
+    await expect(loadLiveAccountPositions()).rejects.toThrow(
+      'Live account positions contract mismatch',
+    );
+  });
+
+  it('rejects malformed path diagnostics when they are present', async () => {
+    requestMock.mockResolvedValue({
       positions: [
         {
-          id: 'pos_1',
-          brokerConnectionId: 'conn-1',
-          brokerName: null,
-          environment: 'MYSTERY',
-          instrument: 'EURUSD',
-          direction: 'BUY',
-          lotSize: '0.1000',
-          requestedEntryPrice: '1.10000000',
-          fillPrice: null,
-          stopLoss: '1.09500000',
-          takeProfit: '1.11000000',
-          trailingStopPips: null,
-          status: 'OPEN',
-          openedAt: null,
-          createdAt: '2026-09-01T09:34:00.000Z',
+          ...positionRow(),
+          pathDiagnostics: {
+            maxFavorablePnl: '12.00',
+            maxAdversePnl: '-3.00',
+            latestUnrealisedPnl: '10.00',
+            profitGiveback: '2.00',
+            observationCount: 'not-a-number',
+            sameBarProtectionAmbiguityCount: 0,
+            lastSameBarProtectionAmbiguityAt: null,
+            peakObservedAt: null,
+            lastObservedAt: null,
+          },
         },
       ],
       total: 1,
