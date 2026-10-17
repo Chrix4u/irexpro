@@ -653,9 +653,15 @@ export class TradingService {
         userId,
         session.brokerConnectionId,
       );
-      const legacyRuntime = await this.aiEngineClient.getSessionStatus(sessionId);
-      if (legacyRuntime.registered) {
-        await this.aiEngineClient.notifySessionStopped({ tradingSessionId: sessionId });
+      try {
+        const legacyRuntime = await this.aiEngineClient.getSessionStatus(sessionId);
+        if (legacyRuntime.registered) {
+          await this.aiEngineClient.notifySessionStopped({ tradingSessionId: sessionId });
+        }
+      } catch (error) {
+        this.logger.warn(
+          `VPS scanner owns automation status for session ${sessionId}; legacy scheduler cleanup was unavailable: ${(error as Error).message}`,
+        );
       }
       return {
         enabled: true,

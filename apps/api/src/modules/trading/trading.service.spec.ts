@@ -1078,6 +1078,35 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       ]);
     });
 
+    it('keeps VPS-owned automation status available when the legacy scheduler is unreachable', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      aiEngineClient.getSessionStatus.mockRejectedValue(new TypeError('fetch failed'));
+
+      const status = await service.getAutomationRuntimeStatus('user-1', 'session-1');
+
+      expect(aiEngineClient.notifySessionStopped).not.toHaveBeenCalled();
+      expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+      expect(status).toEqual(
+        expect.objectContaining({
+          enabled: true,
+          registered: true,
+          active: true,
+          source: 'vps-twelvedata',
+          last_decision: 'MULTI_MODEL_SHADOW',
+          last_reason: 'multimodel_evidence_binding_owns_session',
+          model_version: 'irexpro-multimodel-ensemble-v1',
+        }),
+      );
+    });
+
     it('reports multi-model shadow and suppresses legacy self-heal on a non-evidence DEMO broker session', async () => {
       const values: Record<string, unknown> = {
         'vpsForexScanner.enabled': true,
