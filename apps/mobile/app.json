@@ -28,6 +28,12 @@
     "plugins": [
       "expo-secure-store",
       "expo-system-ui"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "d3f2e011-163e-487b-aa77-dbc03dd594df"
+      }
+    },
+    "owner": "lightworld-technologies-limited"
   }
 }
