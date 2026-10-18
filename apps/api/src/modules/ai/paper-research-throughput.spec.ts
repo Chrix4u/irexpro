@@ -444,6 +444,57 @@ describe('PAPER research-throughput provenance and pair-side reliability', () =>
       reason: 'POSITIVE_PAIR_SIDE_EXPECTANCY',
     });
   });
+
+  it('quarantines a pair-side whose realised payoff is negative even when win-count expectancy is positive', () => {
+    expect(
+      evaluatePaperResearchPairSideReliability({
+        wins: 3,
+        losses: 2,
+        realisedRSamples: 5,
+        realisedRSum: -0.5,
+      }),
+    ).toMatchObject({
+      eligible: false,
+      samples: 5,
+      realisedRSamples: 5,
+      realisedAverageR: -0.1,
+      reason: 'NEGATIVE_REALISED_PAIR_SIDE_EXPECTANCY',
+    });
+  });
+
+  it('keeps positive realised-R payoff eligible after the five-sample threshold', () => {
+    expect(
+      evaluatePaperResearchPairSideReliability({
+        wins: 2,
+        losses: 3,
+        realisedRSamples: 5,
+        realisedRSum: 0.6,
+      }),
+    ).toMatchObject({
+      eligible: true,
+      samples: 5,
+      realisedRSamples: 5,
+      realisedAverageR: 0.12,
+      reason: 'POSITIVE_PAIR_SIDE_EXPECTANCY',
+    });
+  });
+
+  it('does not make incomplete realised-R geometry authoritative before five valid payoff samples', () => {
+    expect(
+      evaluatePaperResearchPairSideReliability({
+        wins: 3,
+        losses: 2,
+        realisedRSamples: 4,
+        realisedRSum: -4,
+      }),
+    ).toMatchObject({
+      eligible: true,
+      samples: 5,
+      realisedRSamples: 4,
+      realisedAverageR: -1,
+      reason: 'POSITIVE_PAIR_SIDE_EXPECTANCY',
+    });
+  });
 });
 
 describe('evaluatePaperResearchEpisodeGuard', () => {

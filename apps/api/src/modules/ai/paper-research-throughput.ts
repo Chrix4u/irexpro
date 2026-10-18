@@ -56,6 +56,9 @@ const PAPER_RESEARCH_THROUGHPUT_TARGET_R_MULTIPLE = 2.5 / 1.5;
 export interface PaperResearchPairSideReliabilityInput {
   wins: number;
   losses: number;
+  /** Optional unitless realised-R evidence from closed trade geometry. */
+  realisedRSamples?: number;
+  realisedRSum?: number;
 }
 
 export interface PaperResearchPairSideReliabilityDecision {
@@ -65,10 +68,13 @@ export interface PaperResearchPairSideReliabilityDecision {
   losses: number;
   smoothedWinRate: number;
   smoothedExpectedR: number;
+  realisedRSamples: number;
+  realisedAverageR: number | null;
   reason:
     | 'INSUFFICIENT_EVIDENCE'
     | 'POSITIVE_PAIR_SIDE_EXPECTANCY'
     | 'NEGATIVE_PAIR_SIDE_EXPECTANCY'
+    | 'NEGATIVE_REALISED_PAIR_SIDE_EXPECTANCY'
     | 'EARLY_LOSS_STREAK'
     | 'INVALID_EVIDENCE';
 }
@@ -78,7 +84,25 @@ export function evaluatePaperResearchPairSideReliability(
 ): PaperResearchPairSideReliabilityDecision {
   const wins = input.wins;
   const losses = input.losses;
-  const valid = Number.isInteger(wins) && Number.isInteger(losses) && wins >= 0 && losses >= 0;
+  const samples = Number.isInteger(wins) && Number.isInteger(losses) ? wins + losses : 0;
+  const hasRealisedREvidence =
+    input.realisedRSamples !== undefined || input.realisedRSum !== undefined;
+  const realisedRSamples = input.realisedRSamples ?? 0;
+  const realisedRSum = input.realisedRSum ?? 0;
+  const realisedEvidenceValid =
+    !hasRealisedREvidence ||
+    (Number.isInteger(realisedRSamples) &&
+      realisedRSamples >= 0 &&
+      realisedRSamples <= samples &&
+      Number.isFinite(realisedRSum));
+  const valid =
+    Number.isInteger(wins) &&
+    Number.isInteger(losses) &&
+    wins >= 0 &&
+    losses >= 0 &&
+    realisedEvidenceValid;
+  const realisedAverageR = valid && realisedRSamples > 0 ? realisedRSum / realisedRSamples : null;
+
   if (!valid) {
     return {
       eligible: false,
@@ -87,11 +111,12 @@ export function evaluatePaperResearchPairSideReliability(
       losses: 0,
       smoothedWinRate: 0,
       smoothedExpectedR: -1,
+      realisedRSamples: 0,
+      realisedAverageR: null,
       reason: 'INVALID_EVIDENCE',
     };
   }
 
-  const samples = wins + losses;
   const smoothedWinRate =
     (wins + PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_WINS) /
     (samples +
@@ -112,6 +137,8 @@ export function evaluatePaperResearchPairSideReliability(
       losses,
       smoothedWinRate,
       smoothedExpectedR,
+      realisedRSamples,
+      realisedAverageR,
       reason: 'EARLY_LOSS_STREAK',
     };
   }
@@ -124,7 +151,32 @@ export function evaluatePaperResearchPairSideReliability(
       losses,
       smoothedWinRate,
       smoothedExpectedR,
+      realisedRSamples,
+      realisedAverageR,
       reason: 'INSUFFICIENT_EVIDENCE',
+    };
+  }
+
+  // Win/loss counts assume the design target payoff (2.5R / 1.5R). Once at
+  // least five closed trades carry trustworthy price geometry, observed
+  // realised-R becomes an additional fail-closed requirement. This prevents
+  // profit-protection exits from making the binary win rate look healthy while
+  // actual winners are much smaller than full-stop losses.
+  if (
+    realisedRSamples >= PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES &&
+    realisedAverageR !== null &&
+    realisedAverageR <= 0
+  ) {
+    return {
+      eligible: false,
+      samples,
+      wins,
+      losses,
+      smoothedWinRate,
+      smoothedExpectedR,
+      realisedRSamples,
+      realisedAverageR,
+      reason: 'NEGATIVE_REALISED_PAIR_SIDE_EXPECTANCY',
     };
   }
 
@@ -136,6 +188,8 @@ export function evaluatePaperResearchPairSideReliability(
     losses,
     smoothedWinRate,
     smoothedExpectedR,
+    realisedRSamples,
+    realisedAverageR,
     reason: eligible ? 'POSITIVE_PAIR_SIDE_EXPECTANCY' : 'NEGATIVE_PAIR_SIDE_EXPECTANCY',
   };
 }
