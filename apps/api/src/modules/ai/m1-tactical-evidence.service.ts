@@ -34,6 +34,7 @@ export interface M1TacticalDecisionRecord {
   signalId: string | null;
   tradeIntentId: string | null;
   outcomeState: string | null;
+  outcomeReason: string | null;
   outcomeObservedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -85,6 +86,7 @@ interface DecisionRow {
   signal_id: string | null;
   trade_intent_id: string | null;
   outcome_state: string | null;
+  outcome_reason: string | null;
   outcome_observed_at: string | Date | null;
   created_at: string | Date;
   updated_at: string | Date;
@@ -140,7 +142,7 @@ export class M1TacticalEvidenceService {
         RETURNING
           id, user_id, broker_connection_id, instrument, direction, route, bar_time,
           policy_version, execution_authority, blockers, signal_id, trade_intent_id,
-          outcome_state, outcome_observed_at, created_at, updated_at
+          outcome_state, outcome_reason, outcome_observed_at, created_at, updated_at
       `,
       [
         input.userId,
@@ -254,16 +256,18 @@ export class M1TacticalEvidenceService {
     decisionId: string,
     outcomeState: string,
     observedAt = new Date(),
+    outcomeReason?: string,
   ): Promise<void> {
     await this.dataSource.query(
       `
         UPDATE trading.m1_tactical_decisions
         SET outcome_state = $2,
             outcome_observed_at = $3,
+            outcome_reason = $4,
             updated_at = now()
         WHERE id = $1
       `,
-      [decisionId, outcomeState, observedAt.toISOString()],
+      [decisionId, outcomeState, observedAt.toISOString(), outcomeReason ?? null],
     );
   }
 
@@ -347,6 +351,7 @@ export class M1TacticalEvidenceService {
       signalId: row.signal_id,
       tradeIntentId: row.trade_intent_id,
       outcomeState: row.outcome_state,
+      outcomeReason: row.outcome_reason,
       outcomeObservedAt: nullableDate(row.outcome_observed_at),
       createdAt: date(row.created_at),
       updatedAt: date(row.updated_at),

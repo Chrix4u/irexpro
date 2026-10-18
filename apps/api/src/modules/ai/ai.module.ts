@@ -31,7 +31,11 @@ import { PostEntryProtectionShadowService } from './post-entry-protection-shadow
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import { M1TacticalMarketDataService } from './m1-tactical-market-data.service';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
-import { M1TacticalSchedulerService } from './m1-tactical-scheduler.service';
+import {
+  M1TacticalSchedulerService,
+  M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
+  M1_TACTICAL_ROLLOUT_POLICY_V2,
+} from './m1-tactical-scheduler.service';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
 import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-api-key.guard';
 
@@ -87,6 +91,10 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     EnsemblePostEntryProtectionShadowService,
     M1TacticalMarketDataService,
     M1TacticalEvidenceService,
+    {
+      provide: M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
+      useValue: M1_TACTICAL_ROLLOUT_POLICY_V2,
+    },
     M1TacticalSchedulerService,
   ],
   exports: [AiService, AiSignalService],

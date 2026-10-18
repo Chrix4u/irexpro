@@ -7,6 +7,9 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { v5 as uuidv5 } from 'uuid';
+import { ExecutionService } from '../execution/execution.service';
+import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { AiSignalService } from './ai-signal.service';
 import { MacroEventRiskService } from './macro-event-risk.service';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
@@ -17,7 +20,11 @@ import {
   type M1TacticalCandidate,
 } from './m1-tactical-candidate';
 import { buildM1TacticalFeatures } from './m1-tactical-features';
-import { classifyM1TacticalRoute, type M1TacticalRouteDecision } from './m1-tactical-route';
+import {
+  classifyM1TacticalRoute,
+  type M1TacticalRoute,
+  type M1TacticalRouteDecision,
+} from './m1-tactical-route';
 import { evaluateM1TacticalGovernance } from './m1-tactical-governance';
 import {
   evaluateM1RoutePairSideReliability,
@@ -32,6 +39,7 @@ export interface M1TacticalRolloutPolicy {
   phase: M1TacticalExecutionPhase;
   cadenceMs: number;
   instruments: readonly string[];
+  paperVolumeCap: number;
 }
 
 export const M1_TACTICAL_ROLLOUT_POLICY_TOKEN = 'M1_TACTICAL_ROLLOUT_POLICY';
@@ -40,7 +48,29 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V1: Readonly<M1TacticalRolloutPolicy> = 
   phase: 'SHADOW',
   cadenceMs: 15_000,
   instruments: Object.freeze(['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF']),
+  paperVolumeCap: 0.05,
 });
+
+export const M1_TACTICAL_ROLLOUT_POLICY_V2: Readonly<M1TacticalRolloutPolicy> = Object.freeze({
+  ...M1_TACTICAL_ROLLOUT_POLICY_V1,
+  version: 'm1-tactical-rollout-v2',
+  phase: 'PAPER_CONTINUATION',
+});
+
+export function m1RouteExecutableInPhase(
+  phase: M1TacticalExecutionPhase,
+  route: M1TacticalRoute,
+): boolean {
+  if (phase === 'SHADOW' || route === 'ABSTAIN') return false;
+  if (phase === 'PAPER_CONTINUATION') return route === 'M1_TREND_CONTINUATION';
+  return (
+    route === 'M1_TREND_CONTINUATION' ||
+    route === 'M1_CONFIRMED_REVERSAL' ||
+    route === 'M1_EARLY_TRANSITION'
+  );
+}
+
+const M1_SIGNAL_NAMESPACE = 'df913329-57f7-4c08-8f19-8272540b7efd';
 
 function minuteBoundary(now: Date): Date {
   const value = now.getTime();
@@ -71,6 +101,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     @Optional()
     @Inject(M1_TACTICAL_ROLLOUT_POLICY_TOKEN)
     rolloutPolicy?: M1TacticalRolloutPolicy,
+    @Optional() private readonly executionService?: ExecutionService,
   ) {
     this.rolloutPolicy = rolloutPolicy ?? M1_TACTICAL_ROLLOUT_POLICY_V1;
   }
@@ -219,9 +250,20 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     });
 
     const shadowOnly = this.rolloutPolicy.phase === 'SHADOW';
-    const blockers = unique([...governance.blockers, ...(shadowOnly ? ['M1_PHASE_SHADOW'] : [])]);
+    const routeExecutable = m1RouteExecutableInPhase(this.rolloutPolicy.phase, routeDecision.route);
+    const canExecute =
+      routeExecutable &&
+      governance.paperEligible &&
+      governance.executionAuthority === 'PAPER_ONLY_RESEARCH';
+    const blockers = unique([
+      ...governance.blockers,
+      ...(shadowOnly ? ['M1_PHASE_SHADOW'] : []),
+      ...(!shadowOnly && !routeExecutable && routeDecision.route !== 'ABSTAIN'
+        ? ['M1_PHASE_ROUTE_SHADOW']
+        : []),
+    ]);
 
-    await this.evidence.recordDecision({
+    const decision = await this.evidence.recordDecision({
       userId,
       brokerConnectionId,
       instrument: candidate.instrument,
@@ -230,7 +272,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       barTime: candidate.latestM1OpenTime,
       evaluatedAt: decisionTime,
       policyVersion: candidate.policyVersion,
-      executionAuthority: shadowOnly ? 'NONE' : governance.executionAuthority,
+      executionAuthority: canExecute ? 'PAPER_ONLY_RESEARCH' : 'NONE',
       candidate: { ...candidate },
       governance: {
         ...governance,
@@ -242,9 +284,102 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       blockers,
     });
 
-    // Task 6 is intentionally observational. Task 7 is the first task allowed
-    // to call AiSignalService, and even then only through PAPER governance.
-    void this.aiSignalService;
+    if (canExecute) {
+      await this.submitPaperDecision(
+        decision.id,
+        userId,
+        brokerConnectionId,
+        candidate,
+        routeDecision,
+        governance,
+        features,
+        decisionTime,
+      );
+    }
+  }
+
+  private async submitPaperDecision(
+    decisionId: string,
+    userId: string,
+    brokerConnectionId: string,
+    candidate: M1TacticalCandidate,
+    routeDecision: M1TacticalRouteDecision,
+    governance: ReturnType<typeof evaluateM1TacticalGovernance>,
+    features: NonNullable<ReturnType<typeof buildM1TacticalFeatures>>,
+    decisionTime: Date,
+  ): Promise<void> {
+    const session = this.executionService
+      ? await this.executionService.getActiveSession(userId)
+      : null;
+    if (
+      !session ||
+      session.executionMode !== ExecutionMode.PAPER_ONLY ||
+      session.brokerConnectionId !== brokerConnectionId
+    ) {
+      await this.evidence.markOutcomeState(
+        decisionId,
+        'SESSION_INACTIVE',
+        new Date(),
+        'M1 requires the exact active PAPER session bound to this broker connection',
+      );
+      return;
+    }
+
+    const signalIdentity = [
+      userId,
+      brokerConnectionId,
+      candidate.instrument,
+      candidate.direction,
+      routeDecision.route,
+      candidate.latestM1OpenTime.toISOString(),
+      candidate.policyVersion,
+    ].join('|');
+    const signalId = uuidv5(signalIdentity, M1_SIGNAL_NAMESPACE);
+    await this.evidence.markExecutionLink(decisionId, signalId, undefined);
+
+    try {
+      const result = await this.aiSignalService.receiveSignal({
+        signalId,
+        userId,
+        tradingSessionId: session.id,
+        brokerConnectionId,
+        instrument: candidate.instrument,
+        direction: candidate.direction,
+        confidenceScore: candidate.confidence,
+        suggestedEntryPrice: candidate.entry,
+        suggestedStopLoss: candidate.stopLoss,
+        suggestedTakeProfit: candidate.takeProfit,
+        suggestedVolume: this.rolloutPolicy.paperVolumeCap,
+        timeframe: 'M1',
+        strategyCode: 'external-irexpro-m1-tactical',
+        marketRegime: routeDecision.route,
+        volatilityScore: features.volatilityScore,
+        generatedAt: new Date(decisionTime),
+        modelVersion: `external-provider/irexpro-m1-tactical/${candidate.policyVersion}`,
+        metadata: {
+          external_provider_paper_only: true,
+          production_eligible: false,
+          m1_tactical_route: routeDecision.route,
+          m1_policy_version: candidate.policyVersion,
+          m1_rollout_policy_version: this.rolloutPolicy.version,
+          m1_rollout_phase: this.rolloutPolicy.phase,
+          m1_decision_id: decisionId,
+          m1_gross_expected_r: candidate.grossExpectedR,
+          m1_execution_cost_r: governance.genericGovernance.estimatedExecutionCostR,
+          m1_net_expected_r: governance.netExpectedR,
+          m1_execution_authority: 'PAPER_ONLY_RESEARCH',
+        },
+      });
+      await this.evidence.markOutcomeState(decisionId, result.outcome, new Date(), result.reason);
+    } catch (error) {
+      await this.evidence.markOutcomeState(
+        decisionId,
+        'EXECUTION_FAILED',
+        new Date(),
+        (error as Error).message,
+      );
+      throw error;
+    }
   }
 
   private async reliabilityFor(

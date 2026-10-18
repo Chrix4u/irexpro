@@ -22,6 +22,7 @@ export class CreateM1TacticalDecisionStore1792342000000 implements MigrationInte
         signal_id varchar(100) NULL,
         trade_intent_id uuid NULL,
         outcome_state varchar(40) NULL,
+        outcome_reason text NULL,
         outcome_observed_at timestamptz NULL,
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now(),

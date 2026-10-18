@@ -48,6 +48,7 @@ describe('M1 tactical decision migration contract', () => {
       'signal_id',
       'trade_intent_id',
       'outcome_state',
+      'outcome_reason',
       'outcome_observed_at',
       'created_at',
       'updated_at',
@@ -182,6 +183,28 @@ describe('M1TacticalEvidenceService', () => {
     expect(String(sql)).toContain('signal_id = COALESCE(signal_id, $2)');
     expect(String(sql)).toContain('trade_intent_id = COALESCE(trade_intent_id, $3)');
     expect(params).toEqual(['decision-1', 'signal-1', '44444444-4444-4444-8444-444444444444']);
+  });
+
+  it('persists terminal outcome reason together with outcome state', async () => {
+    const query = jest.fn().mockResolvedValue([{ id: 'decision-1' }]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const observedAt = new Date('2026-10-18T12:31:00.000Z');
+
+    await service.markOutcomeState(
+      'decision-1',
+      'RISK_REJECTED',
+      observedAt,
+      'risk gate rejected test candidate',
+    );
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(String(sql)).toContain('outcome_reason = $4');
+    expect(params).toEqual([
+      'decision-1',
+      'RISK_REJECTED',
+      observedAt.toISOString(),
+      'risk gate rejected test candidate',
+    ]);
   });
 
   it('computes outcome metrics from authoritative closed trades rather than stored decision PnL', async () => {
