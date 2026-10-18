@@ -13,8 +13,7 @@ function config(overrides: Record<string, unknown> = {}) {
     'vpsForexScanner.userId': 'user-1',
     'vpsForexScanner.m1MarketDataConnectionId': 'ctrader-1',
     'vpsForexScanner.m1CtraderCollectionIntervalMs': 15_000,
-    'vpsForexScanner.m1CtraderCollectionInstruments':
-      'EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF',
+    'vpsForexScanner.m1CtraderCollectionInstruments': 'EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF',
     ...overrides,
   };
   return {
@@ -80,9 +79,7 @@ describe('CTraderQuoteCollectorService', () => {
 
     expect(h.findConnectionById).toHaveBeenCalledWith('ctrader-1', 'user-1');
     expect(h.getOhlcvForConnection).toHaveBeenCalledTimes(4);
-    expect(
-      h.getOhlcvForConnection.mock.calls.filter((call) => call[3] === 'M1'),
-    ).toHaveLength(3);
+    expect(h.getOhlcvForConnection.mock.calls.filter((call) => call[3] === 'M1')).toHaveLength(3);
     expect(h.getOhlcvForConnection.mock.calls[3]![3]).toBe('H1');
     for (const call of h.getOhlcvForConnection.mock.calls) {
       expect(call[0]).toBe('user-1');
