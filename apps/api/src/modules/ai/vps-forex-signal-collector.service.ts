@@ -1876,7 +1876,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `PAPER research-throughput ${best.instrument} ${best.direction} execution=SHADOW_ONLY ` +
                   `reason=${paperResearchPairSideReliability.reason} samples=${paperResearchPairSideReliability.samples} ` +
                   `wins=${paperResearchPairSideReliability.wins} losses=${paperResearchPairSideReliability.losses} ` +
-                  `smoothedExpectedR=${paperResearchPairSideReliability.smoothedExpectedR.toFixed(4)}`,
+                  `smoothedExpectedR=${paperResearchPairSideReliability.smoothedExpectedR.toFixed(4)} ` +
+                  `realisedRSamples=${paperResearchPairSideReliability.realisedRSamples} ` +
+                  `realisedAverageR=${paperResearchPairSideReliability.realisedAverageR?.toFixed(4) ?? 'n/a'}`,
               );
             } else if (paperResearchThroughput.eligible) {
               const previousEpisode = await this.loadPaperResearchEpisodeState(
@@ -2459,6 +2461,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               paperResearchPairSideReliability?.smoothedWinRate ?? null,
             paper_research_pair_side_reliability_smoothed_expected_r:
               paperResearchPairSideReliability?.smoothedExpectedR ?? null,
+            paper_research_pair_side_reliability_realised_r_samples:
+              paperResearchPairSideReliability?.realisedRSamples ?? null,
+            paper_research_pair_side_reliability_realised_average_r:
+              paperResearchPairSideReliability?.realisedAverageR ?? null,
             paper_research_episode_key: paperResearchEpisodeKey,
             paper_research_episode_guard_reason: paperResearchEpisodeGuard?.reason ?? null,
             paper_trend_route_reliability_artifact: paperTrendRouteReliability?.artifact ?? null,
@@ -3970,14 +3976,19 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     connectionId: string,
     instrument: string,
     direction: 'BUY' | 'SELL',
-  ): Promise<{ wins: number; losses: number }> {
-    if (!this.dataSource) return { wins: 0, losses: 0 };
+  ): Promise<{ wins: number; losses: number; realisedRSamples: number; realisedRSum: number }> {
+    if (!this.dataSource) {
+      return { wins: 0, losses: 0, realisedRSamples: 0, realisedRSum: 0 };
+    }
 
     const rows = (await this.dataSource.query(
       `
         SELECT
           ti.metadata->>'decision_policy_version' AS policy_version,
           t.realised_pnl,
+          t.fill_price,
+          t.exit_price,
+          t.stop_loss,
           t.closed_at
         FROM trading.trade_intents ti
         JOIN trading.trades t ON t.trade_intent_id = ti.id
@@ -4010,6 +4021,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     )) as Array<{
       policy_version: string | null;
       realised_pnl: number | string | null;
+      fill_price: number | string | null;
+      exit_price: number | string | null;
+      stop_loss: number | string | null;
       closed_at: string | Date | null;
     }>;
 
@@ -4031,9 +4045,34 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             ),
           ];
 
+    const realisedRs = selected
+      .map((row) => {
+        const fill = Number(row.fill_price);
+        const exit = Number(row.exit_price);
+        const initialStop = Number(row.stop_loss);
+        if (
+          !Number.isFinite(fill) ||
+          !Number.isFinite(exit) ||
+          !Number.isFinite(initialStop) ||
+          fill <= 0 ||
+          exit <= 0 ||
+          initialStop <= 0
+        ) {
+          return null;
+        }
+        const riskDistance = direction === 'BUY' ? fill - initialStop : initialStop - fill;
+        if (!Number.isFinite(riskDistance) || riskDistance <= 0) return null;
+        const realisedMove = direction === 'BUY' ? exit - fill : fill - exit;
+        const realisedR = realisedMove / riskDistance;
+        return Number.isFinite(realisedR) ? realisedR : null;
+      })
+      .filter((value): value is number => value !== null);
+
     return {
       wins: selected.filter((row) => Number(row.realised_pnl) > 0).length,
       losses: selected.filter((row) => Number(row.realised_pnl) < 0).length,
+      realisedRSamples: realisedRs.length,
+      realisedRSum: realisedRs.reduce((sum, value) => sum + value, 0),
     };
   }
 

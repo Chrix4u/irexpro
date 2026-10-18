@@ -2927,7 +2927,12 @@ describe('VpsForexSignalCollectorService', () => {
 
     await expect(
       (collector as any).loadPaperResearchPairSideEvidence('user-1', 'conn-1', 'GBPUSD', 'SELL'),
-    ).resolves.toEqual({ wins: 1, losses: 5 });
+    ).resolves.toEqual({
+      wins: 1,
+      losses: 5,
+      realisedRSamples: 0,
+      realisedRSum: 0,
+    });
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("paper_research_throughput_artifact' = ANY($5::text[])"),
       [
@@ -3627,7 +3632,7 @@ describe('scheduled scan recovery', () => {
       'SELL',
     );
 
-    expect(evidence).toEqual({ wins: 0, losses: 5 });
+    expect(evidence).toEqual({ wins: 0, losses: 5, realisedRSamples: 0, realisedRSum: 0 });
     const params = query.mock.calls[0]?.[1] as unknown[];
     expect(params[5]).toEqual([
       'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
@@ -3690,7 +3695,49 @@ describe('scheduled scan recovery', () => {
       'SELL',
     );
 
-    expect(evidence).toEqual({ wins: 5, losses: 1 });
+    expect(evidence).toEqual({ wins: 5, losses: 1, realisedRSamples: 0, realisedRSum: 0 });
+  });
+
+  it('derives realised-R payoff from the selected pair-side trade geometry', async () => {
+    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
+    const rows = [
+      ...Array.from({ length: 3 }, (_, index) => ({
+        policy_version: currentPolicy,
+        realised_pnl: 2,
+        fill_price: '1.1000',
+        exit_price: '1.0995',
+        stop_loss: '1.1010',
+        closed_at: new Date(Date.UTC(2026, 9, 12, 9, 59 - index, 0)),
+      })),
+      ...Array.from({ length: 2 }, (_, index) => ({
+        policy_version: currentPolicy,
+        realised_pnl: -4,
+        fill_price: '1.1000',
+        exit_price: '1.1010',
+        stop_loss: '1.1010',
+        closed_at: new Date(Date.UTC(2026, 9, 12, 9, 56 - index, 0)),
+      })),
+    ];
+    const query = jest.fn().mockResolvedValue(rows);
+    const collector = scanner({ query });
+
+    const evidence = await (collector as any).loadPaperResearchPairSideEvidence(
+      'user-1',
+      'conn-1',
+      'EURUSD',
+      'SELL',
+    );
+
+    expect(evidence).toMatchObject({
+      wins: 3,
+      losses: 2,
+      realisedRSamples: 5,
+    });
+    expect(evidence.realisedRSum).toBeCloseTo(-0.5, 10);
+    const sql = String(query.mock.calls[0]?.[0] ?? '');
+    expect(sql).toContain('t.fill_price');
+    expect(sql).toContain('t.exit_price');
+    expect(sql).toContain('t.stop_loss');
   });
 
   it('expires compatible pair-side carry-forward evidence after seven days', async () => {
@@ -3721,7 +3768,7 @@ describe('scheduled scan recovery', () => {
       'BUY',
     );
 
-    expect(evidence).toEqual({ wins: 20, losses: 0 });
+    expect(evidence).toEqual({ wins: 20, losses: 0, realisedRSamples: 0, realisedRSum: 0 });
   });
 
   it('filters break-even trades before applying the pair-side reliability row cap', async () => {
