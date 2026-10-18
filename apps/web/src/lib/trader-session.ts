@@ -81,6 +81,114 @@ function isSessionPayload(value: unknown): value is TradingSessionView {
   return isTradingSession(value);
 }
 
+export type AutomationStartBroker = Pick<
+  BrokerConnectionView,
+  "id" | "brokerId" | "accountType" | "authorizationStatus" | "demoValidated"
+>;
+
+export type BrokerAutomationPreparationResult =
+  | { ready: true }
+  | { ready: false; message: string };
+
+interface DemoValidationStepView {
+  name: string;
+  status: "PASS" | "FAIL" | "SKIPPED";
+  detail?: string;
+}
+
+interface DemoValidationResultView {
+  overall: "PASS" | "FAIL";
+  demoValidated: boolean;
+  steps: DemoValidationStepView[];
+}
+
+function isDemoValidationStep(value: unknown): value is DemoValidationStepView {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.name === "string" &&
+    (value.status === "PASS" || value.status === "FAIL" || value.status === "SKIPPED") &&
+    (value.detail === undefined || typeof value.detail === "string")
+  );
+}
+
+function parseDemoValidationResult(value: unknown): DemoValidationResultView {
+  if (
+    !isRecord(value) ||
+    (value.overall !== "PASS" && value.overall !== "FAIL") ||
+    typeof value.demoValidated !== "boolean" ||
+    !Array.isArray(value.steps) ||
+    !value.steps.every(isDemoValidationStep)
+  ) {
+    throw new Error("DEMO validation response contract mismatch");
+  }
+
+  // A PASS that does not persist the authoritative validation flag is not a
+  // usable success. Treat contradictory evidence as a contract failure rather
+  // than enabling automation from the browser.
+  if (value.overall === "PASS" && value.demoValidated !== true) {
+    throw new Error("DEMO validation response contract mismatch");
+  }
+
+  return {
+    overall: value.overall,
+    demoValidated: value.demoValidated,
+    steps: value.steps,
+  };
+}
+
+function describeDemoValidationFailure(result: DemoValidationResultView): string {
+  const failedStep = result.steps.find((step) => step.status === "FAIL");
+  if (!failedStep) {
+    return "DEMO validation failed. Check the broker connection and try again.";
+  }
+
+  const detail = failedStep.detail?.trim();
+  return detail
+    ? `DEMO validation failed at ${failedStep.name}: ${detail}`
+    : `DEMO validation failed at ${failedStep.name}.`;
+}
+
+/**
+ * Prepare the selected broker for an AI Trading START request.
+ *
+ * External DEMO brokers are evidence-gated: an unvalidated connection must
+ * pass the server's real validate-demo checklist before the browser may ask
+ * to activate DEMO automation. PAPER and LIVE paths are untouched, and an
+ * already-ACTIVE DEMO connection requires no preparation.
+ */
+export async function prepareBrokerForAutomationStart(
+  broker: AutomationStartBroker,
+): Promise<BrokerAutomationPreparationResult> {
+  if (
+    broker.accountType !== "DEMO" ||
+    broker.brokerId === "paper-broker" ||
+    broker.authorizationStatus === "ACTIVE"
+  ) {
+    return { ready: true };
+  }
+
+  if (!broker.demoValidated) {
+    const rawValidation = await api.request<unknown>(
+      `/broker/connections/${encodeURIComponent(broker.id)}/validate-demo`,
+      { method: "POST" },
+    );
+    const validation = parseDemoValidationResult(rawValidation);
+    if (validation.overall !== "PASS" || !validation.demoValidated) {
+      return {
+        ready: false,
+        message: describeDemoValidationFailure(validation),
+      };
+    }
+  }
+
+  await api.request<void>(
+    `/broker/connections/${encodeURIComponent(broker.id)}/enable-demo-trading`,
+    { method: "POST" },
+  );
+
+  return { ready: true };
+}
+
 /**
  * POST /trading/sessions/:id/mode — audited execution-mode change. The
  * RETURNED session (bumped authorityGeneration included) becomes the

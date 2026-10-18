@@ -170,8 +170,8 @@ export class BrokerController {
       'small market order with partial/full close and closed-trade history, a ' +
       'pending limit order with modification and cancellation where ' +
       "supported, margin info). A PASS sets the connection's demoValidated " +
-      'flag to true — the prerequisite for enabling LIVE trading; a FAIL ' +
-      'revokes it (overriding the weak connect-implies-validated write). The ' +
+      'flag to true — the prerequisite for enabling automated DEMO/LIVE paths; a FAIL ' +
+      'revokes stale validation and any active DEMO automation authority. The ' +
       'response carries the sanitized step-by-step evidence (no credentials); ' +
       'the full evidence is also recorded in the audit trail.',
   })

@@ -20,47 +20,35 @@ import {
 
 /**
  * BrokerDemoValidationService — the EVIDENCE-BASED write path for
- * BrokerConnection.demoValidated (Sprint 56 / Task 47-C5; re-integrated onto
- * new main as Task 48-D).
+ * BrokerConnection.demoValidated.
  *
- * RELATIONSHIP TO THE CONNECT AUTO-WRITE (new main): BrokerService.connectBroker
- * already dual-writes `demoValidated: true` when a DEMO connection reaches
- * CONNECTED — a WEAK connect-implies-validated proxy that unblocks the
- * enableLiveTrading gate for anything that can complete a handshake. This
- * service is the STRONGER, checklist-driven re-validation on top: it
- * exercises the adapter's actual trading surface, records per-step sanitized
- * evidence, and OVERRIDES the proxy when the evidence contradicts it:
- *   PASS  → demoValidated: true (idempotent when the auto-write already set
- *           it — the proxy and the evidence now agree; fresh evidence is
- *           recorded either way);
- *   FAIL  → demoValidated: false — the evidence-based revocation that catches
- *           dead/stale connections the connect auto-write blessed.
+ * External broker handshakes prove connectivity and credential validity only;
+ * they do NOT set demoValidated. This service exercises the actual DEMO
+ * trading surface and is the runtime authority for external DEMO validation:
+ *   PASS → demoValidated: true + durable sanitized audit evidence;
+ *   FAIL → demoValidated: false and, when automation authority exists,
+ *          atomic authorization revocation so ACTIVE cannot survive failed
+ *          evidence.
+ *
+ * The built-in paper simulator deliberately retains its historical
+ * connect-time shortcut because it is an internal deterministic adapter and
+ * has a separate PAPER_ONLY execution policy. Running this checklist against
+ * paper still provides the same stronger step-by-step evidence and can revoke
+ * a stale paper validation on failure.
  *
  * SECURITY INVARIANTS:
- * 1. Ownership-checked: the connection must belong to the requesting user
- *    (NotFound for anyone else — same rule as every BrokerService method).
- * 2. DEMO only: LIVE connections are rejected (BadRequest) — LIVE trading is
- *    gated BEHIND a validated DEMO connection, never validated itself. The
- *    paper broker is allowed: its connections are DEMO by definition.
- * 3. Connection state transitions go through BrokerService.connectBroker
- *    (the canonical CONNECTING→CONNECTED machine with BrokerAccount upsert
- *    and BROKER_CONNECTED audit) — the checklist then exercises the adapter
- *    directly, exactly like BrokerService's market-data methods.
- * 4. Credentials are decrypted inside connectBroker only (memory-only, zeroed
- *    in its finally block); this service never touches plaintext credentials.
- * 5. Evidence is SANITIZED: step results carry statuses, provider order ids
- *    (non-secret by entity design), instrument symbols and sanitized details —
- *    never credentials (fragment redaction on every free-text detail + a final
- *    redactSensitive pass over the audit metadata).
+ * 1. Ownership-checked: the connection must belong to the requesting user.
+ * 2. DEMO only: LIVE connections are rejected before provider interaction.
+ * 3. Connection state transitions go through BrokerService.connectBroker; the
+ *    checklist then exercises the connection-scoped adapter session.
+ * 4. Credentials are decrypted only inside connectBroker and never persisted
+ *    or returned in plaintext by this service.
+ * 5. Evidence is sanitized and persisted in the audit trail; provider-order
+ *    identifiers and safe diagnostic detail may be recorded, credentials may not.
  *
- * STORAGE DECISION (documented, no migrations): BrokerConnection has a
- * `demoValidated` boolean but NO column for the checklist result — and this
- * task deliberately ships NO schema change (the stack owns migrations). The
- * FULL sanitized checklist evidence therefore lives in TWO places only: the
- * API response (returned to the user so they can see exactly WHY a validation
- * failed) and the audit trail (BROKER_DEMO_VALIDATION_PASSED/_FAILED with the
- * step results in the audit log's metadata jsonb). Only the boolean persists
- * on the connection.
+ * STORAGE: the connection keeps the compact demoValidated projection while the
+ * full sanitized checklist result is durable in BROKER_DEMO_VALIDATION_PASSED /
+ * BROKER_DEMO_VALIDATION_FAILED audit metadata and returned to the caller.
  */
 @Injectable()
 export class BrokerDemoValidationService {
@@ -112,10 +100,10 @@ export class BrokerDemoValidationService {
       );
     }
 
-    // Step 1 — connect through the canonical state machine. connectBroker
-    // audits BROKER_CONNECTED/_CONNECT_FAILED itself and (new main)
-    // auto-writes demoValidated: true on a successful DEMO connect; only its
-    // OUTCOME is recorded in the validation evidence here.
+    // Step 1 — connect through the canonical state machine. External brokers
+    // remain CONNECTED and unvalidated after this handshake; paper-broker keeps
+    // its explicit simulator shortcut. Only the connection OUTCOME is recorded
+    // as the checklist's first evidence step.
     let connectStep: ProviderVerificationStep;
     try {
       await this.brokerService.connectBroker(connectionId, userId, ipAddress);
@@ -134,14 +122,10 @@ export class BrokerDemoValidationService {
       };
     }
 
-    // Re-read the persisted flag AFTER the connect step: this is the value
-    // the evidence-based decision is measured against. When connectBroker's
-    // auto-write blessed it to true, a FAILING checklist must revoke that
-    // bless — and a PASSING one simply confirms it (idempotent). When the
-    // connect itself failed, this still reflects the last persisted value
-    // (the ERROR path never touches demoValidated), so a previously
-    // validated connection whose re-validation cannot even connect is
-    // honestly revoked too.
+    // Re-read the persisted flag AFTER the connect step. External brokers stay
+    // false until checklist PASS; paper-broker may already be true from its
+    // simulator shortcut. A failing re-validation revokes stale evidence in
+    // either case, including when reconnect itself fails.
     let previousDemoValidated = connection.demoValidated ?? false;
     try {
       const postConnect = await this.brokerService.findConnectionById(connectionId, userId);
@@ -169,11 +153,16 @@ export class BrokerDemoValidationService {
 
     const demoValidated = evidence.overall === 'PASS';
 
-    // Persist ONLY the boolean (see the storage decision in the class docs).
-    // Evidence-consistent write: PASS sets true (no-op when the connect
-    // auto-write already set it); FAIL revokes any blessed/stale true.
-    if (demoValidated !== previousDemoValidated) {
-      await this.connectionRepo.update(connectionId, { demoValidated });
+    // PASS persists the evidence flag. FAIL is stronger: if the connection
+    // currently carries automation authority, BrokerService atomically clears
+    // the flag and revokes that authority so ACTIVE can never survive failed
+    // evidence. Non-authorized rows are simply left false/cleared as needed.
+    if (demoValidated) {
+      if (!previousDemoValidated) {
+        await this.connectionRepo.update(connectionId, { demoValidated: true });
+      }
+    } else {
+      await this.brokerService.applyDemoValidationFailure(connectionId, userId);
     }
 
     await this.auditService.log({
@@ -188,9 +177,8 @@ export class BrokerDemoValidationService {
       metadata: redactSensitive({
         brokerId: connection.brokerId,
         accountType: connection.accountType,
-        // The persisted value observed after the connect step — i.e. the
-        // value this run confirms (PASS) or overrides (FAIL). Includes the
-        // connect auto-write when it fired.
+        // Persisted value observed after connect: normally false for external
+        // brokers; paper-broker may already carry its simulator shortcut.
         previousDemoValidated,
         demoValidated,
         overall: evidence.overall,
@@ -234,8 +222,7 @@ export interface BrokerDemoValidationResult {
   brokerId: string;
   accountType: BrokerMode.DEMO;
   /**
-   * The evidence-consistent flag value (PASS ⇒ true, FAIL ⇒ false — a FAIL
-   * revokes any connect-time auto-bless, see the class docs).
+   * Evidence-consistent flag value (PASS ⇒ true, FAIL ⇒ false).
    */
   demoValidated: boolean;
   overall: VerificationOverallStatus;

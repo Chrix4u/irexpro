@@ -700,14 +700,11 @@ describe('BrokerService', () => {
       expect(refreshedCredentials.apiKey).toBeNull();
     });
 
-    // ─── Sprint 56 / Task 48-D — the connect-time demoValidated auto-write ────
-    // This is the WEAK connect-implies-validated proxy: connectBroker
-    // dual-writes demoValidated: true when a DEMO connection reaches
-    // CONNECTED. BrokerDemoValidationService (the evidence-based
-    // re-validation service) builds ON TOP of it — PASS confirms the proxy,
-    // FAIL revokes it — so its behavior is pinned here.
+    // A successful provider handshake proves connectivity and credential
+    // validity only. DEMO execution authority must come exclusively from the
+    // evidence-based validate-demo checklist.
 
-    it('dual-writes demoValidated: true on a successful DEMO connect (connect-implies-validated proxy)', async () => {
+    it('does NOT auto-validate a DEMO connection after a successful handshake', async () => {
       const mockAdapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockResolvedValue({
@@ -748,14 +745,11 @@ describe('BrokerService', () => {
         .map((call) => call[1])
         .find((patch) => patch.status === BrokerConnectionStatus.CONNECTED);
       expect(connectedPatch).toBeDefined();
-      // The weak proxy write rides inside the CONNECTED transition (DEMO only).
-      expect(connectedPatch).toMatchObject({
-        demoValidated: true,
-        credentialStatus: 'VERIFIED',
-      });
+      expect(connectedPatch).toMatchObject({ credentialStatus: 'VERIFIED' });
+      expect('demoValidated' in connectedPatch).toBe(false);
     });
 
-    it('does NOT write demoValidated for LIVE connections (the proxy is DEMO-only)', async () => {
+    it('does NOT write demoValidated for LIVE connections', async () => {
       const mockAdapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockResolvedValue({
@@ -838,7 +832,7 @@ describe('BrokerService', () => {
       );
 
       // Fail-closed: an ERROR transition is written; NO CONNECTED/AUTHORIZED
-      // transition, NO demoValidated proxy, NO credential VERIFIED write.
+      // transition, NO demoValidated write, NO credential VERIFIED write.
       const patches = connectionRepo.update.mock.calls.map((call) => call[1]);
       const errorPatch = patches.find((patch) => patch.status === BrokerConnectionStatus.ERROR);
       expect(errorPatch).toBeDefined();
@@ -904,6 +898,51 @@ describe('BrokerService', () => {
     });
   });
 
+  // ─── failed DEMO validation revocation ───────────────────────────────────
+
+  describe('applyDemoValidationFailure()', () => {
+    it('retries a CONNECTED→ACTIVE race and revokes the winning ACTIVE state', async () => {
+      const connected = {
+        id: 'conn-demo',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        accountType: BrokerMode.DEMO,
+        status: BrokerConnectionStatus.CONNECTED,
+        demoValidated: true,
+        authorizationStatus: BrokerAuthorizationStatus.CONNECTED,
+      };
+      const active = {
+        ...connected,
+        authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+      };
+
+      // First read sees CONNECTED. The guarded clear loses a race to an
+      // enable-demo-trading writer that moved the row to ACTIVE; the retry
+      // must re-read ACTIVE and revoke that winner instead of returning with
+      // executable authority plus failed validation evidence.
+      connectionRepo.findOne
+        .mockResolvedValueOnce(connected)
+        .mockResolvedValueOnce(active)
+        .mockResolvedValueOnce(active);
+      connectionRepo.update
+        .mockResolvedValueOnce({ affected: 0 })
+        .mockResolvedValueOnce({ affected: 1 });
+
+      await expect(
+        service.applyDemoValidationFailure('conn-demo', 'user-1'),
+      ).resolves.not.toThrow();
+
+      expect(connectionRepo.update).toHaveBeenLastCalledWith(
+        { id: 'conn-demo', authorizationStatus: BrokerAuthorizationStatus.ACTIVE },
+        expect.objectContaining({
+          demoValidated: false,
+          authorizationStatus: BrokerAuthorizationStatus.REVOKED,
+          liveTradingEnabled: false,
+        }),
+      );
+    });
+  });
+
   // ─── enableDemoTrading ────────────────────────────────────────────────────
 
   describe('enableDemoTrading()', () => {
@@ -915,15 +954,15 @@ describe('BrokerService', () => {
         brokerId: 'metatrader5',
         status: BrokerConnectionStatus.CONNECTED,
         demoValidated: true,
-        authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
-        authorizedAt: new Date('2026-10-04T12:00:00Z'),
+        authorizationStatus: BrokerAuthorizationStatus.CONNECTED,
+        authorizedAt: null,
       });
       connectionRepo.update.mockResolvedValue({ affected: 1 });
 
       await expect(service.enableDemoTrading('conn-demo', 'user-1')).resolves.not.toThrow();
 
       expect(connectionRepo.update).toHaveBeenCalledWith(
-        { id: 'conn-demo', authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED },
+        { id: 'conn-demo', authorizationStatus: BrokerAuthorizationStatus.CONNECTED },
         expect.objectContaining({
           authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
           liveTradingEnabled: false,
