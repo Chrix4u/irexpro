@@ -145,7 +145,8 @@ export default () => ({
     // Optional read-only broker-native source for the M1 tactical sleeve.
     // PAPER execution/evidence remains bound to brokerConnectionId.
     m1MarketDataConnectionId: process.env.M1_TACTICAL_MARKET_DATA_CONNECTION_ID,
-    m1CtraderCollectionEnabled: process.env.M1_TACTICAL_CTRADER_COLLECTION_ENABLED === 'true',
+    m1CtraderCollectionEnabled:
+      process.env.M1_TACTICAL_CTRADER_COLLECTION_ENABLED === 'true',
     m1CtraderCollectionIntervalMs: parseInt(
       process.env.M1_TACTICAL_CTRADER_COLLECTION_INTERVAL_MS ?? '15000',
       10,
