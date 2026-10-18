@@ -568,6 +568,8 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
   }
 
   private marketDataConnectionId(): string {
+    const m1Source = this.config.get<string>('vpsForexScanner.m1MarketDataConnectionId', '').trim();
+    if (m1Source) return m1Source;
     if (!this.config.get<boolean>('multimodelBrokerExpert.enabled', false)) return '';
     return this.config.get<string>('multimodelBrokerExpert.sourceConnectionId', '').trim();
   }

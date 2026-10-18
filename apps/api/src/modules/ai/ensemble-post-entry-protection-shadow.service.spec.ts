@@ -66,6 +66,9 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
         if (key === 'vpsForexScanner.userId') {
           return '00000000-0000-0000-0000-000000000002';
         }
+        if (key === 'vpsForexScanner.m1MarketDataConnectionId') {
+          return '00000000-0000-0000-0000-000000000088';
+        }
         if (key === 'multimodelBrokerExpert.enabled') return true;
         if (key === 'multimodelBrokerExpert.sourceConnectionId') {
           return '00000000-0000-0000-0000-000000000099';
@@ -116,7 +119,7 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
 
     expect(aiEngineClient.scorePlanBV85PostEntryBrokerCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
-        brokerConnectionId: '00000000-0000-0000-0000-000000000099',
+        brokerConnectionId: '00000000-0000-0000-0000-000000000088',
         instrument: 'EURUSD',
         direction: 'BUY',
         checkpointMinutes: 5,
