@@ -27,7 +27,16 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
 
     expect(query).toHaveBeenCalledTimes(1);
     const [sql, params] = query.mock.calls[0]!;
-    expect(String(sql)).toContain('NULL, NULL, NULL');
+    const statement = String(sql);
+    expect(statement).toContain('NULL, NULL, NULL');
+    // A history refresh may collide with an M1 row that already contains a
+    // live broker spread. Never move that real observation time to bar-end.
+    expect(statement).toContain(
+      'first_sample_at = market_data.provider_quote_candles.first_sample_at',
+    );
+    expect(statement).toContain(
+      'last_sample_at = market_data.provider_quote_candles.last_sample_at',
+    );
     expect(params[0]).toBe('ctrader-1');
     expect(params[1]).toBe('EURUSD');
     expect(params[2]).toBe('H4');
