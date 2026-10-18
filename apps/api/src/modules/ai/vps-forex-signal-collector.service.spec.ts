@@ -3280,7 +3280,9 @@ describe('VpsForexSignalCollectorService', () => {
     let active = 0;
     let peak = 0;
     const broker = {
-      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      findConnectionById: jest
+        .fn()
+        .mockResolvedValue({ brokerId: 'metatrader5', status: 'CONNECTED' }),
       getOhlcvForConnection: jest
         .fn()
         .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
@@ -3319,7 +3321,9 @@ describe('VpsForexSignalCollectorService', () => {
   it('fails over to broker-native MetaTrader candles after Twelve Data exhausts the daily quota', async () => {
     const live = new LivePaperMarketDataService();
     const broker = {
-      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      findConnectionById: jest
+        .fn()
+        .mockResolvedValue({ brokerId: 'metatrader5', status: 'CONNECTED' }),
       getOhlcvForConnection: jest
         .fn()
         .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
@@ -3381,7 +3385,9 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('reuses broker-native fallback within the minute while daily cooldown is active', async () => {
     const broker = {
-      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      findConnectionById: jest
+        .fn()
+        .mockResolvedValue({ brokerId: 'metatrader5', status: 'CONNECTED' }),
       getOhlcvForConnection: jest
         .fn()
         .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
@@ -3427,9 +3433,44 @@ describe('VpsForexSignalCollectorService', () => {
     expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
   });
 
+  it('rejects a non-connected MetaTrader fallback source before any history request', async () => {
+    const getOhlcvForConnection = jest.fn().mockRejectedValue(new Error('must not be called'));
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({
+        brokerId: 'metatrader5',
+        status: 'SUSPENDED',
+      }),
+      getOhlcvForConnection,
+    } as unknown as BrokerService;
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'metaapi-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+
+    await expect(
+      (collector as any).fetchBrokerNativeFallbackSeries('TWELVE_DATA_DAILY_CREDIT_LIMIT'),
+    ).rejects.toMatchObject({
+      code: 'BROKER_FALLBACK_SOURCE_UNAVAILABLE',
+    });
+    expect(getOhlcvForConnection).not.toHaveBeenCalled();
+  });
+
   it('fails closed when both Twelve Data quota and broker-native fallback are unavailable', async () => {
     const broker = {
-      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      findConnectionById: jest
+        .fn()
+        .mockResolvedValue({ brokerId: 'metatrader5', status: 'CONNECTED' }),
       getOhlcvForConnection: jest.fn().mockRejectedValue(new Error('broker candles unavailable')),
     } as unknown as BrokerService;
     const collector = createCollector(
@@ -3593,6 +3634,26 @@ describe('scheduled scan recovery', () => {
     }
   });
 
+  it('does not reopen the same M5 slot when broker fallback is known unavailable', async () => {
+    jest.setSystemTime(new Date('2026-10-12T10:00:00.000Z'));
+    const collector = scanner();
+    const fallbackUnavailable = Object.assign(new Error('fallback source is SUSPENDED'), {
+      code: 'BROKER_FALLBACK_SOURCE_UNAVAILABLE',
+    });
+    const collectSpy = jest.spyOn(collector, 'collectOnce').mockRejectedValue(fallbackUnavailable);
+
+    await collector.maybeCollect();
+    expect(collectSpy).toHaveBeenCalledTimes(1);
+
+    jest.setSystemTime(new Date('2026-10-12T10:01:00.000Z'));
+    await collector.maybeCollect();
+    expect(collectSpy).toHaveBeenCalledTimes(1);
+
+    jest.setSystemTime(new Date('2026-10-12T10:05:00.000Z'));
+    await collector.maybeCollect();
+    expect(collectSpy).toHaveBeenCalledTimes(2);
+  });
+
   it('pins the exact producer generatedAt across the one-minute retry window', async () => {
     jest.setSystemTime(new Date('2026-10-12T10:00:00.000Z'));
     const query = jest.fn().mockResolvedValue([]);
@@ -3720,7 +3781,9 @@ describe('transient primary-feed failover', () => {
   afterEach(() => jest.useRealTimers());
   function scanner(brokerOverrides: Partial<BrokerService> = {}) {
     const broker = {
-      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      findConnectionById: jest
+        .fn()
+        .mockResolvedValue({ brokerId: 'metatrader5', status: 'CONNECTED' }),
       getOhlcvForConnection: jest
         .fn()
         .mockImplementation(async (_u: string, _c: string, instrument: string) =>
