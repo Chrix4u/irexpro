@@ -168,10 +168,7 @@ export const validationSchema = Joi.object({
     .guid({ version: ['uuidv4'] })
     .optional()
     .allow(''),
-  M1_TACTICAL_CTRADER_COLLECTION_ENABLED: Joi.string()
-    .valid('true', 'false')
-    .optional()
-    .allow(''),
+  M1_TACTICAL_CTRADER_COLLECTION_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
   M1_TACTICAL_CTRADER_COLLECTION_INTERVAL_MS: Joi.number()
     .integer()
     .min(10_000)
