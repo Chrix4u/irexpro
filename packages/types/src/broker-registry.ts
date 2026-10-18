@@ -62,16 +62,46 @@ export type BrokerAvailabilityStatus =
 
 export type BrokerAuthenticationType = 'API_TOKEN' | 'OAUTH' | 'SESSION_AUTH';
 
+/**
+ * Production-LIVE verification evidence (architect Phase H).
+ *
+ * BETA ≠ production-LIVE: a BETA status only means the adapter is
+ * implemented + contract-tested. VERIFIED here is the separate
+ * operator-attested evidence record; the runtime additionally requires a
+ * complete current HARNESS_CERTIFIED record before production LIVE is
+ * authorized. `evidenceRef` is a doc/ticket reference — never secrets.
+ */
 export interface BrokerProductionLiveVerification {
   status: 'UNVERIFIED' | 'VERIFIED';
+  /** ISO timestamp of the operator-attested verification (null when unverified/unknown). */
   verifiedAt: string | null;
+  /** Short evidence reference (doc/ticket id — never secrets; null when unverified). */
   evidenceRef: string | null;
+  /**
+   * Round 7.1 (P0-3): provenance — LEGACY_ATTESTATION (historical operator
+   * attestation, no dated artifact) vs HARNESS_CERTIFIED (documented
+   * certification protocol with a durable evidence artifact). Null when
+   * UNVERIFIED or on older payloads.
+   */
   certifiedVia?: 'LEGACY_ATTESTATION' | 'HARNESS_CERTIFIED' | null;
+  /** Harness run reference (`runId@sha256:<hash>`) for HARNESS_CERTIFIED entries. */
   certificationRunRef?: string | null;
 }
 
+/**
+ * Round 7.1 (P0-3): the truthful, derived certification state for UI and
+ * runtime interpretation. CERTIFICATION_PENDING /
+ * EVIDENCE_PERSISTENCE_FAILED are run-level outcomes (harness evidence), NOT
+ * catalog states.
+ */
 export type ProviderCertificationState = 'NOT_CERTIFIED' | 'LEGACY_VERIFIED' | 'CERTIFIED';
 
+/**
+ * Derive the display/runtime state (mirror of the API-side derivation).
+ * A HARNESS_CERTIFIED label by itself is insufficient: CERTIFIED requires a
+ * parseable verification timestamp, non-empty evidence reference, and a
+ * valid UUIDv4 + SHA-256 run reference.
+ */
 export function deriveProviderCertificationState(
   verification: BrokerProductionLiveVerification | undefined | null,
 ): ProviderCertificationState {
@@ -115,6 +145,7 @@ export interface BrokerConnectionChannelReadiness {
 }
 
 export interface BrokerConnectionReadiness extends BrokerConnectionChannelReadiness {
+  /** Channel-specific OAuth prerequisites when web/mobile differ. */
   channels?: Partial<Record<'web' | 'mobile', BrokerConnectionChannelReadiness>>;
 }
 
@@ -123,14 +154,26 @@ export interface BrokerRegistryEntry {
   name: string;
   description: string;
   status: BrokerAvailabilityStatus;
+  /**
+   * Production-LIVE verification evidence — BETA ≠ production-LIVE.
+   * Present in current API payloads; optional so older cached payloads
+   * remain valid for consumers.
+   */
   productionLiveVerification?: BrokerProductionLiveVerification;
+  /**
+   * Round 7.1 (P0-3): always-materialized derived certification state
+   * (present in current API payloads; absent on older cached payloads —
+   * derive it client-side via deriveProviderCertificationState when missing).
+   */
   certificationState?: ProviderCertificationState;
   connectionRoutes: BrokerConnectionRoute[];
   capabilities: BrokerCapability[];
   authenticationType: BrokerAuthenticationType;
   environments: ('DEMO' | 'LIVE')[];
   regions: string[];
+  /** True when a live adapter is registered for this entry right now. */
   adapterAvailable: boolean;
+  /** Default/web prerequisites; OAuth clients use channel overrides when present. */
   connectionReadiness?: BrokerConnectionReadiness;
 }
 
@@ -139,6 +182,12 @@ export interface BrokerRegistryCatalog {
   brokers: BrokerRegistryEntry[];
 }
 
+/**
+ * Runtime connection readiness shared by every client. Current API payloads
+ * always include connectionReadiness; the field remains optional so older
+ * cached/mobile payloads do not become unusable during rolling deployments.
+ * Only an explicit server `ready: false` blocks the flow.
+ */
 export function isBrokerConnectionRuntimeReady(
   entry:
     | Pick<BrokerRegistryEntry, 'connectionReadiness'>
