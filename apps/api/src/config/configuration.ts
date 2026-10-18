@@ -11,19 +11,9 @@ export default () => ({
     env: process.env.NODE_ENV ?? 'development',
     apiPrefix: process.env.API_PREFIX ?? 'api/v1',
     corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS),
-    // Sprint 28: base URL of the web app, used to build password reset links.
-    // e.g. https://irexpro.lightworldtech.com
-    // All reset links (web + admin) use this single base URL — admin users
-    // reset via the web reset page, then log in to the admin portal.
     webBaseUrl: process.env.WEB_BASE_URL,
-    // Sprint 28 amendment: admin base URL (for future admin-specific reset
-    // links if needed). Currently reset links point to the web app for all
-    // users — admin forgot-password calls the same endpoint and shows a
-    // generic message pointing users to the web reset page.
     adminBaseUrl: process.env.ADMIN_BASE_URL,
   },
-  // Sprint 28 amendment: email provider config. When EMAIL_SMTP_URL is set,
-  // the delivery service uses nodemailer to send real reset/verification emails.
   email: {
     smtpUrl: process.env.EMAIL_SMTP_URL,
     fromAddress: process.env.EMAIL_FROM ?? process.env.EMAIL_FROM_ADDRESS ?? 'no-reply@irexpro.com',
@@ -42,8 +32,6 @@ export default () => ({
     accessExpiry: process.env.JWT_ACCESS_EXPIRY ?? '15m',
     refreshExpiry: process.env.JWT_REFRESH_EXPIRY ?? '7d',
   },
-  // AppModule loads this root configuration object (not auth.config.ts), so
-  // auth-domain services must receive their validated runtime values here.
   auth: {
     argon2MemoryCost: parseInt(process.env.ARGON2_MEMORY_COST ?? '65536', 10),
     argon2TimeCost: parseInt(process.env.ARGON2_TIME_COST ?? '3', 10),
@@ -86,42 +74,21 @@ export default () => ({
   broker: {
     encryptionKey: process.env.BROKER_ENCRYPTION_KEY,
     metaApiToken: process.env.METAAPI_TOKEN,
-    // Sprint 56 / Task 48-B — platform cTrader Open API app credentials.
-    // OPTIONAL: without them the cTrader adapter still registers (the catalog
-    // stays truthful) but connections fail closed with a clear
-    // AUTHENTICATION_FAILED configuration message. NEVER log these values.
     ctraderClientId: process.env.CTRADER_CLIENT_ID,
     ctraderClientSecret: process.env.CTRADER_CLIENT_SECRET,
-    // cTrader WEB OAuth redirect URI(s), comma-separated HTTPS pages.
-    // Custom app schemes are not provider callbacks; mobile authorizations
-    // use ctraderMobileCallbackUris below and deep-link only after the server
-    // has exchanged the provider code. Web OAuth fails closed when empty.
+    // Operator-observed Spotware application state. Keep `pending` while the
+    // Open API portal reports the app blocked/inactive; switch to `active`
+    // only after provider approval is visible there.
+    ctraderAppApprovalStatus: process.env.CTRADER_APP_APPROVAL_STATUS ?? 'unknown',
     ctraderRedirectUris: process.env.CTRADER_REDIRECT_URIS,
-    // Sprint 56 correction round 2 (architect finding 4) — the HTTPS SERVER
-    // callback slot URI(s) registered on the platform cTrader Open API
-    // application for MOBILE flows, comma-separated. Each slot URI is
-    // distinct (e.g. …/oauth/callback/m1 … /mN); authorize(channel=mobile)
-    // atomically claims a free slot (a single configured slot serializes
-    // mobile authorizations platform-wide — register more for parallelism).
-    // Mobile authorizations fail closed when empty.
     ctraderMobileCallbackUris: process.env.CTRADER_MOBILE_CALLBACK_URIS,
-    // Sprint 56 correction round 2 (architect finding 4) — the controlled
-    // deep link the server callback redirects to after exchanging the
-    // provider code (the app receives ONLY the one-time handoff token).
     ctraderMobileDeepLink: process.env.CTRADER_MOBILE_DEEP_LINK ?? 'irexpro://broker/oauth/handoff',
-    // Round 7 (R7-impl-harness) — operator-only PRODUCTION-LIVE certification
-    // master gate. FAIL-CLOSED: ONLY the EXACT string 'true' enables it;
-    // absent, blank, 'false', or any other value = disabled. NEVER a
-    // default-true. Consumed through isLiveCertificationEnabled() by the LIVE
-    // certification harness (modules/broker/verification) — it never affects
-    // trading authorization (that stays the catalog VERIFIED process).
     allowLiveCertification: process.env.IREXPRO_ALLOW_LIVE_CERTIFICATION === 'true',
   },
   internalApi: {
     key: process.env.NESTJS_INTERNAL_API_KEY,
   },
   externalSignals: {
-    // Generic trusted-provider intake. Fail-closed unless explicitly enabled.
     enabled: process.env.EXTERNAL_SIGNAL_PROVIDER_ENABLED === 'true',
     apiKey: process.env.EXTERNAL_SIGNAL_PROVIDER_KEY,
   },
@@ -130,19 +97,24 @@ export default () => ({
     userId: process.env.TRADINGVIEW_WEBHOOK_USER_ID,
   },
   vpsForexScanner: {
-    // Server-native six-pair PAPER evidence collector. Fail-closed unless an
-    // explicit production Twelve Data key + exact user/paper connection are
-    // configured. The public 'demo' key is never accepted for evidence.
     enabled: process.env.VPS_FOREX_SCANNER_ENABLED === 'true',
     apiKey: process.env.TWELVEDATA_API_KEY,
     userId: process.env.VPS_FOREX_SCANNER_USER_ID,
     brokerConnectionId: process.env.VPS_FOREX_SCANNER_BROKER_CONNECTION_ID,
     fastMarkStreamEnabled: process.env.TWELVEDATA_FAST_MARK_STREAM_ENABLED !== 'false',
+    // Optional read-only provider binding for the M1 tactical sleeve. PAPER
+    // execution/evidence remains bound to brokerConnectionId.
+    m1MarketDataConnectionId: process.env.M1_TACTICAL_MARKET_DATA_CONNECTION_ID,
+    m1CtraderCollectionEnabled: process.env.M1_TACTICAL_CTRADER_COLLECTION_ENABLED === 'true',
+    m1CtraderCollectionIntervalMs: parseInt(
+      process.env.M1_TACTICAL_CTRADER_COLLECTION_INTERVAL_MS ?? '15000',
+      10,
+    ),
+    m1CtraderCollectionInstruments:
+      process.env.M1_TACTICAL_CTRADER_INSTRUMENTS ??
+      'EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF',
   },
   brokerParityV7: {
-    // Separate broker-native PAPER cohort. It is disabled by default and will
-    // never publish signals unless a formally frozen artifact digest and the
-    // second explicit execution switch are present.
     enabled: process.env.BROKER_PARITY_V7_ENABLED === 'true',
     signalExecutionEnabled: process.env.BROKER_PARITY_V7_SIGNAL_EXECUTION_ENABLED === 'true',
     userId: process.env.BROKER_PARITY_V7_USER_ID,
@@ -151,14 +123,10 @@ export default () => ({
     artifactDigest: process.env.BROKER_PARITY_V7_ARTIFACT_DIGEST,
   },
   multimodelBrokerExpert: {
-    // Read-only broker-native MTF source for the frozen high-conviction
-    // challenger. This overlay never receives execution authority.
     enabled: process.env.MULTIMODEL_BROKER_EXPERT_ENABLED === 'true',
     sourceConnectionId: process.env.MULTIMODEL_BROKER_EXPERT_SOURCE_CONNECTION_ID,
   },
   v8DedicatedPaper: {
-    // Preparation gate only. No v8 dedicated PAPER campaign can start from
-    // this configuration until prospective screening and artifact checks pass.
     enabled: process.env.V8_DEDICATED_PAPER_ENABLED === 'true',
     userId: process.env.V8_DEDICATED_PAPER_USER_ID,
     paperConnectionId: process.env.V8_DEDICATED_PAPER_CONNECTION_ID,
@@ -169,22 +137,16 @@ export default () => ({
     schedulerEnabled: process.env.AI_ENGINE_SCHEDULER_ENABLED === 'true',
   },
   paystack: {
-    // Fail-closed by default — PAYSTACK_ENABLED must be explicitly 'true' to
-    // allow live checkout/webhook verification. Never log this secret.
     enabled: process.env.PAYSTACK_ENABLED === 'true',
     secretKey: process.env.PAYSTACK_SECRET_KEY || undefined,
-    // Public key is safe to expose to clients if ever needed; not used server-side.
     publicKey: process.env.PAYSTACK_PUBLIC_KEY || undefined,
     webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET || undefined,
     baseUrl: process.env.PAYSTACK_BASE_URL || 'https://api.paystack.co',
     callbackUrl: process.env.PAYSTACK_CALLBACK_URL || undefined,
   },
   stripe: {
-    // Fail-closed by default — STRIPE_ENABLED must be explicitly 'true' to
-    // allow live checkout/webhook verification. Never log this secret.
     enabled: process.env.STRIPE_ENABLED === 'true',
     secretKey: process.env.STRIPE_SECRET_KEY || undefined,
-    // Publishable key is safe to expose to clients if ever needed; not used server-side.
     publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || undefined,
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || undefined,
     baseUrl: process.env.STRIPE_BASE_URL || 'https://api.stripe.com',
@@ -193,33 +155,12 @@ export default () => ({
   },
 });
 
-// ─── Round 7 — operator-only LIVE certification gate helper ──────────────────
-
-/**
- * Minimal structural view of the root configuration the LIVE certification
- * gate reads (structural so the harness, specs, and the app config object all
- * satisfy it without a Nest runtime).
- */
 export interface LiveCertificationConfigView {
   broker?: {
     allowLiveCertification?: boolean;
   };
 }
 
-/**
- * Round 7 (R7-impl-harness) — resolves the operator-only PRODUCTION-LIVE
- * certification gate from a configuration object.
- *
- * FAIL-CLOSED: returns true ONLY when the configuration explicitly carries
- * `broker.allowLiveCertification === true` — i.e. the environment variable
- * IREXPRO_ALLOW_LIVE_CERTIFICATION was the EXACT string 'true'. Absent,
- * blank, 'false', or any other value (and a missing/undefined config object)
- * resolves to DISABLED. NEVER a default-true.
- *
- * Usable by the LIVE certification harness
- * (apps/api/src/modules/broker/verification) and its spec entry points:
- *   isLiveCertificationEnabled(configuration())
- */
 export function isLiveCertificationEnabled(
   config: LiveCertificationConfigView | null | undefined,
 ): boolean {
