@@ -157,14 +157,8 @@ export class ProviderQuoteCandleStoreService {
           EXCLUDED.sample_count
         ),
         source = EXCLUDED.source,
-        first_sample_at = LEAST(
-          market_data.provider_quote_candles.first_sample_at,
-          EXCLUDED.first_sample_at
-        ),
-        last_sample_at = GREATEST(
-          market_data.provider_quote_candles.last_sample_at,
-          EXCLUDED.last_sample_at
-        ),
+        first_sample_at = market_data.provider_quote_candles.first_sample_at,
+        last_sample_at = market_data.provider_quote_candles.last_sample_at,
         updated_at = now()
       `,
       [
