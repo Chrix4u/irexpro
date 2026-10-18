@@ -7,6 +7,7 @@ import { ExecutionService } from '../execution/execution.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { SIGNAL_MAX_AGE_MS } from '../execution/orchestration/signal-identity.gate';
 import { BrokerService } from '../broker/broker.service';
+import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
 import { AiEngineClient } from '../ai-engine-client/ai-engine-client.service';
 import {
   LivePaperCandleInput,
@@ -256,6 +257,7 @@ const STOP_FLOOR_BUFFER_PIPS = 0.1;
 const BAR_MS = 5 * 60_000;
 const COLLECTION_CADENCE_MINUTES = 5;
 const PAPER_PRE_INTENT_RETRY_SAFE_CODE = 'PAPER_PRE_INTENT_RETRY_SAFE';
+const BROKER_FALLBACK_SOURCE_UNAVAILABLE_CODE = 'BROKER_FALLBACK_SOURCE_UNAVAILABLE';
 const EXECUTION_SPREAD_WINDOW_MINUTES = 30;
 const FRESH_BREAKOUT_ATR = 0.5;
 const FRESH_CONFIDENCE_DELTA = 0.02;
@@ -1177,6 +1179,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       this.nextCollectionAttemptAt = 0;
     } catch (error) {
       const retrySafeCode = (error as { code?: string }).code;
+      if (retrySafeCode === BROKER_FALLBACK_SOURCE_UNAVAILABLE_CODE) {
+        // A configured fallback connection in SUSPENDED/CONNECTING/etc. state
+        // cannot become usable by repeating history calls inside this same M5
+        // market slot. Keep the slot consumed and let the next normal closed
+        // bar retry after broker health/recovery has had time to run.
+        this.nextCollectionAttemptAt = 0;
+        this.logger.warn(
+          `VPS forex broker fallback unavailable; holding until the next collection slot: ` +
+            `${(error as Error).message}`,
+        );
+        return;
+      }
       if (retrySafeCode === PAPER_PRE_INTENT_RETRY_SAFE_CODE) {
         if (this.preIntentRetrySlot === slot) {
           // A pre-intent failure is safe to retry exactly once because durable
@@ -4887,6 +4901,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       this.lastMarketDataAuthority = 'NONE';
       throw new Error(
         `Twelve Data unavailable (${reason}) and configured fallback is not MetaTrader`,
+      );
+    }
+    if (source.status !== BrokerConnectionStatus.CONNECTED) {
+      this.lastMarketDataAuthority = 'NONE';
+      throw Object.assign(
+        new Error(
+          `Twelve Data unavailable (${reason}) and MetaTrader fallback source is ${source.status}`,
+        ),
+        { code: BROKER_FALLBACK_SOURCE_UNAVAILABLE_CODE },
       );
     }
 
