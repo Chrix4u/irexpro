@@ -12,6 +12,16 @@ export interface ProviderQuoteCandle extends OHLCV {
   lastSampleAt: Date;
 }
 
+const TIMEFRAME_MINUTES: Record<string, number> = {
+  M1: 1,
+  M5: 5,
+  M15: 15,
+  M30: 30,
+  H1: 60,
+  H4: 240,
+  D1: 1440,
+};
+
 @Injectable()
 export class ProviderQuoteCandleStoreService {
   constructor(private readonly dataSource: DataSource) {}
@@ -71,16 +81,21 @@ export class ProviderQuoteCandleStoreService {
   }
 
   /**
-   * Backfill broker-native M1 OHLC without inventing bid/ask or spread evidence.
-   * Historical cTrader trendbars are price bars, not executable spread samples;
-   * live getCurrentPrice() observations must still build the spread window.
+   * Stores provider-native historical OHLC without fabricating bid/ask spread.
+   * Historical cTrader trendbars are bar evidence only. Live getCurrentPrice()
+   * observations remain the sole source of execution-spread evidence.
    */
-  async upsertM1History(
+  async upsertHistoricalCandles(
     connectionId: string,
     instrument: string,
+    timeframe: string,
     rows: OHLCV[],
     source: ProviderQuoteSource,
   ): Promise<void> {
+    const normalizedTimeframe = timeframe.trim().toUpperCase();
+    const bucketMinutes = TIMEFRAME_MINUTES[normalizedTimeframe];
+    if (!bucketMinutes) return;
+
     const normalized = rows
       .map((row) => ({
         timestamp: new Date(row.timestamp),
@@ -120,9 +135,10 @@ export class ProviderQuoteCandleStoreService {
         sample_count, source, first_sample_at, last_sample_at
       )
       SELECT
-        $1, $2, 'M1', x.timestamp, x.open, x.high, x.low, x.close,
-        NULL, NULL, NULL, x.sample_count, $4, x.timestamp, x.timestamp + interval '59 seconds'
-      FROM jsonb_to_recordset($3::jsonb) AS x(
+        $1, $2, $3, x.timestamp, x.open, x.high, x.low, x.close,
+        NULL, NULL, NULL, x.sample_count, $5, x.timestamp,
+        x.timestamp + ($4::int * interval '1 minute') - interval '1 second'
+      FROM jsonb_to_recordset($6::jsonb) AS x(
         timestamp timestamptz,
         open numeric,
         high numeric,
@@ -133,8 +149,8 @@ export class ProviderQuoteCandleStoreService {
       ON CONFLICT (connection_id, instrument, timeframe, bucket_time)
       DO UPDATE SET
         open = EXCLUDED.open,
-        high = GREATEST(market_data.provider_quote_candles.high, EXCLUDED.high),
-        low = LEAST(market_data.provider_quote_candles.low, EXCLUDED.low),
+        high = EXCLUDED.high,
+        low = EXCLUDED.low,
         close = EXCLUDED.close,
         sample_count = GREATEST(
           market_data.provider_quote_candles.sample_count,
@@ -151,8 +167,24 @@ export class ProviderQuoteCandleStoreService {
         ),
         updated_at = now()
       `,
-      [connectionId, instrument, JSON.stringify(normalized), source],
+      [
+        connectionId,
+        instrument,
+        normalizedTimeframe,
+        bucketMinutes,
+        source,
+        JSON.stringify(normalized),
+      ],
     );
+  }
+
+  async upsertM1History(
+    connectionId: string,
+    instrument: string,
+    rows: OHLCV[],
+    source: ProviderQuoteSource,
+  ): Promise<void> {
+    await this.upsertHistoricalCandles(connectionId, instrument, 'M1', rows, source);
   }
 
   async getLatestPositiveSpreadQuote(
@@ -168,6 +200,9 @@ export class ProviderQuoteCandleStoreService {
         WHERE connection_id = $1
           AND instrument = $2
           AND timeframe = 'M1'
+          AND bid_close IS NOT NULL
+          AND ask_close IS NOT NULL
+          AND spread_close IS NOT NULL
           AND last_sample_at <= $3::timestamptz
         ORDER BY last_sample_at DESC
         LIMIT 1
@@ -271,23 +306,36 @@ export class ProviderQuoteCandleStoreService {
     };
   }
 
-  async getM1Candles(
+  async getStoredCandles(
     connectionId: string,
     instrument: string,
+    timeframe: string,
     count: number,
     evaluatedAt = new Date(),
   ): Promise<ProviderQuoteCandle[]> {
+    const normalizedTimeframe = timeframe.trim().toUpperCase();
+    const bucketMinutes = TIMEFRAME_MINUTES[normalizedTimeframe];
+    if (!bucketMinutes) return [];
     const rows = await this.dataSource.query(
       `
       SELECT bucket_time, open, high, low, close, sample_count, spread_close,
              source, first_sample_at, last_sample_at
       FROM market_data.provider_quote_candles
-      WHERE connection_id = $1 AND instrument = $2 AND timeframe = 'M1'
-        AND bucket_time < date_trunc('minute', $4::timestamptz)
+      WHERE connection_id = $1
+        AND instrument = $2
+        AND timeframe = $3
+        AND bucket_time + ($6::int * interval '1 minute') <= $5::timestamptz
       ORDER BY bucket_time DESC
-      LIMIT $3
+      LIMIT $4
       `,
-      [connectionId, instrument, count, evaluatedAt.toISOString()],
+      [
+        connectionId,
+        instrument,
+        normalizedTimeframe,
+        count,
+        evaluatedAt.toISOString(),
+        bucketMinutes,
+      ],
     );
 
     return [...rows].reverse().map((row: any) => ({
@@ -306,6 +354,15 @@ export class ProviderQuoteCandleStoreService {
     }));
   }
 
+  async getM1Candles(
+    connectionId: string,
+    instrument: string,
+    count: number,
+    evaluatedAt = new Date(),
+  ): Promise<ProviderQuoteCandle[]> {
+    return this.getStoredCandles(connectionId, instrument, 'M1', count, evaluatedAt);
+  }
+
   async getCandles(
     connectionId: string,
     instrument: string,
@@ -318,16 +375,21 @@ export class ProviderQuoteCandleStoreService {
       return this.getM1Candles(connectionId, instrument, count, evaluatedAt);
     }
 
-    const minutesByTimeframe: Record<string, number> = {
-      M5: 5,
-      M15: 15,
-      M30: 30,
-      H1: 60,
-      H4: 240,
-      D1: 1440,
-    };
-    const bucketMinutes = minutesByTimeframe[normalized];
+    const bucketMinutes = TIMEFRAME_MINUTES[normalized];
     if (!bucketMinutes) return [];
+
+    // cTrader warms H1/H4 directly so the tactical model does not need days
+    // of sampled M1 history before higher-timeframe context becomes causal.
+    if (normalized === 'H1' || normalized === 'H4') {
+      const direct = await this.getStoredCandles(
+        connectionId,
+        instrument,
+        normalized,
+        count,
+        evaluatedAt,
+      );
+      if (direct.length > 0) return direct;
+    }
 
     const m1 = await this.getM1Candles(
       connectionId,
@@ -375,19 +437,6 @@ export class ProviderQuoteCandleStoreService {
     }
 
     return aggregated.slice(-count);
-  }
-
-  async getOldestM1OpenTime(connectionId: string, instrument: string): Promise<Date | null> {
-    const rows = await this.dataSource.query(
-      `SELECT MIN(bucket_time) AS oldest
-       FROM market_data.provider_quote_candles
-       WHERE connection_id = $1 AND instrument = $2 AND timeframe = 'M1'`,
-      [connectionId, instrument],
-    );
-    const raw = rows?.[0]?.oldest;
-    if (!raw) return null;
-    const oldest = new Date(raw);
-    return Number.isFinite(oldest.getTime()) ? oldest : null;
   }
 
   async countM1Candles(connectionId: string, instrument: string): Promise<number> {
