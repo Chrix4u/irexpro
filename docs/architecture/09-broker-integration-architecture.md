@@ -388,12 +388,12 @@ without ever opening a socket.
 `demoValidated` write path: a capability-aware checklist (14 user-facing
 steps from connect through order round-trips to history) runs against the
 real adapter, with every step PASS/FAIL/SKIPPED and sanitized detail
-(credentials never recorded — `redactString` on all evidence). PASS sets
-`demoValidated`; **FAIL revokes a previously-set flag** (fail-closed — the
-`enableLiveTrading` gate re-checks at that moment). This strengthens main's
-connect-time `demoValidated` auto-write (a connect-implies-validated proxy)
-into checklist-driven validation with audit evidence, unblocking the
-DEMO-first LIVE-authorization invariant.
+(credentials never recorded — `redactString` on all evidence). External broker
+handshakes stop at CONNECTED and do **not** set `demoValidated`; PASS on this
+checklist is the runtime authority that sets it. **FAIL revokes a previously-set
+flag and atomically revokes AUTHORIZED/READY/ACTIVE DEMO automation authority**
+so executable state cannot outlive failed evidence. The built-in paper simulator
+is the sole connect-time shortcut and remains isolated from LIVE execution.
 
 ### 14.4 The credential-gated provider-verification harness program
 

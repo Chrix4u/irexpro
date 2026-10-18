@@ -692,15 +692,17 @@ export class BrokerService {
       // closed on missing currency identity.
       await this.upsertBrokerAccount(connectionId, result.currency ?? undefined);
 
-      // Successful handshake verifies the credential set (Directive §14)
-      // and advances the authorization state machine (Directive §15):
-      //   DEMO account  → AUTHORIZED (demo validation — fixes the previously
-      //                   unreachable demoValidated gate; dual-written below)
-      //   LIVE account → CONNECTED (explicit enable-live-trading still required)
-      const postConnectAuthorization =
-        connection.accountType === BrokerMode.DEMO
-          ? BrokerAuthorizationStatus.AUTHORIZED
-          : BrokerAuthorizationStatus.CONNECTED;
+      // A successful handshake proves transport + credential validity only.
+      // External DEMO brokers MUST remain CONNECTED until the evidence-based
+      // validate-demo checklist passes; a handshake by itself is not trading
+      // validation. The built-in paper simulator keeps its historical
+      // AUTHORIZED shortcut because it is an internal deterministic adapter
+      // and ExecutionAwareBrokerService intentionally treats it specially.
+      const paperDemoShortcut =
+        connection.accountType === BrokerMode.DEMO && connection.brokerId === 'paper-broker';
+      const postConnectAuthorization = paperDemoShortcut
+        ? BrokerAuthorizationStatus.AUTHORIZED
+        : BrokerAuthorizationStatus.CONNECTED;
 
       // Round 6 live-execution completion (§1b): PROVIDER ACCOUNT IDENTITY
       // DRIFT — the handshake reached a DIFFERENT provider account than the
@@ -744,8 +746,9 @@ export class BrokerService {
           )
             ? { authorizationStatus: postConnectAuthorization }
             : {}),
-          // Dual-write legacy booleans (backward compatibility)
-          ...(connection.accountType === BrokerMode.DEMO ? { demoValidated: true } : {}),
+          // The paper simulator preserves its legacy deterministic shortcut.
+          // External DEMO connections are validated ONLY by validate-demo.
+          ...(paperDemoShortcut ? { demoValidated: true } : {}),
         },
         'connectBroker CONNECTED transition',
       );
@@ -1019,6 +1022,81 @@ export class BrokerService {
       }
     }
     return evidence;
+  }
+
+  /**
+   * Apply a failed DEMO validation fail-closed.
+   *
+   * The validation flag alone is not an execution gate: ACTIVE is. Therefore
+   * a failed re-validation of an AUTHORIZED/READY/ACTIVE DEMO connection must
+   * atomically clear demoValidated AND revoke automation authority. Otherwise
+   * the row could remain executable after its evidence had already failed.
+   */
+  async applyDemoValidationFailure(connectionId: string, userId: string): Promise<void> {
+    // A validation failure must converge to a non-executable state even when
+    // enable-demo-trading races this operation. Retry optimistic conflicts so
+    // we re-read the winning state and revoke it if it became authoritative.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const connection = await this.findConnectionById(connectionId, userId);
+
+      if (connection.accountType !== BrokerMode.DEMO) {
+        throw new BadRequestException(
+          'DEMO validation failure can only be applied to DEMO connections',
+        );
+      }
+
+      const authorityBearingStatuses = new Set<BrokerAuthorizationStatus>([
+        BrokerAuthorizationStatus.AUTHORIZED,
+        BrokerAuthorizationStatus.READY,
+        BrokerAuthorizationStatus.ACTIVE,
+      ]);
+      const mustRevokeAuthority = authorityBearingStatuses.has(connection.authorizationStatus);
+
+      try {
+        if (mustRevokeAuthority) {
+          if (!this.canTransitionTo(connection, BrokerAuthorizationStatus.REVOKED)) {
+            throw new ConflictException(
+              `Connection authorization state ${connection.authorizationStatus} cannot be revoked after DEMO validation failure`,
+            );
+          }
+
+          await this.applyGuardedAuthorizationUpdate(
+            connectionId,
+            connection.authorizationStatus,
+            {
+              demoValidated: false,
+              authorizationStatus: BrokerAuthorizationStatus.REVOKED,
+              authorizationRevokedAt: new Date(),
+              liveTradingEnabled: false,
+            },
+            'applyDemoValidationFailure REVOKED transition',
+          );
+
+          await this.invalidateBrokerAuthority(
+            userId,
+            'BROKER_AUTHORIZATION_REVOKED',
+            `DEMO validation failed for connection ${connectionId}`,
+          );
+          return;
+        }
+
+        // Already fail-closed and non-executable: nothing remains to revoke.
+        if (!connection.demoValidated) return;
+
+        // Clear stale validation only if the authorization state is still the
+        // one we inspected. If another request made it ACTIVE, the guard loses
+        // and the retry above will re-read/revoke that winning state.
+        await this.applyGuardedAuthorizationUpdate(
+          connectionId,
+          connection.authorizationStatus,
+          { demoValidated: false },
+          'applyDemoValidationFailure validation-clear',
+        );
+        return;
+      } catch (err) {
+        if (!(err instanceof ConflictException) || attempt === 2) throw err;
+      }
+    }
   }
 
   /**

@@ -75,9 +75,9 @@ export enum AuditAction {
   // Sprint 56 / Task 48-D — evidence-based write path for
   // BrokerConnection.demoValidated: a DEMO connection validation checklist
   // run (sanitized step evidence in metadata — never credentials). PASSED is
-  // the only action that confirms/sets demoValidated to true on top of the
-  // weak connect-implies-validated proxy write; FAILED revokes a blessed or
-  // stale true (fail-closed).
+  // the only runtime action that confirms/sets demoValidated to true for
+  // external brokers; FAILED revokes stale validation and any executable DEMO
+  // authority (fail-closed). The built-in paper simulator is the sole shortcut.
   BROKER_DEMO_VALIDATION_PASSED = 'BROKER_DEMO_VALIDATION_PASSED',
   BROKER_DEMO_VALIDATION_FAILED = 'BROKER_DEMO_VALIDATION_FAILED',
   // Sprint 56 correction round 1 (audit point 1) — cTrader OAuth token

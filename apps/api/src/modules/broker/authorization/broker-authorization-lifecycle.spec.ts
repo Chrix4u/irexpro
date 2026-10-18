@@ -203,7 +203,7 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
   });
 
   describe('connectBroker() — state machine + credential advancement', () => {
-    it('DEMO connect success → AUTHORIZED + demoValidated dual-write + VERIFIED credentials', async () => {
+    it('external DEMO connect success → CONNECTED without demo validation + VERIFIED credentials', async () => {
       connectionRepo.findOne
         .mockResolvedValueOnce(baseConnection({ accountType: BrokerMode.DEMO }))
         .mockResolvedValue(baseConnection());
@@ -221,9 +221,9 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
         (c) => c[1].status === BrokerConnectionStatus.CONNECTED,
       );
       expect(updateCall).toBeDefined();
-      expect(updateCall![1].authorizationStatus).toBe(BrokerAuthorizationStatus.AUTHORIZED);
+      expect(updateCall![1].authorizationStatus).toBe(BrokerAuthorizationStatus.CONNECTED);
       expect(updateCall![1].credentialStatus).toBe(BrokerCredentialStatus.VERIFIED);
-      expect(updateCall![1].demoValidated).toBe(true);
+      expect(updateCall![1].demoValidated).toBeUndefined();
     });
 
     it('LIVE connect success → CONNECTED (NOT ACTIVE — explicit authorization still required)', async () => {

@@ -67,8 +67,9 @@ const ALLOWED_TRANSITIONS: Readonly<
   ],
   [BrokerAuthorizationStatus.CONNECTING]: [
     BrokerAuthorizationStatus.CONNECTED,
-    // DEMO validation completes within the handshake: the adapter confirms the
-    // account is a DEMO account, which is exactly the demo-validation gate.
+    // Reserved for the built-in paper simulator shortcut. External DEMO broker
+    // handshakes stop at CONNECTED; validate-demo evidence is required before
+    // automation may become ACTIVE.
     BrokerAuthorizationStatus.AUTHORIZED,
     BrokerAuthorizationStatus.ERROR,
     BrokerAuthorizationStatus.NOT_CONNECTED,

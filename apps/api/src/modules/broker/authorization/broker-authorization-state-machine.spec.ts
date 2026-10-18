@@ -125,7 +125,7 @@ describe('BrokerAuthorizationStateMachine', () => {
       ).toBe(false);
     });
 
-    it('allows CONNECTING → AUTHORIZED (DEMO validation completes within the handshake)', () => {
+    it('allows CONNECTING → AUTHORIZED for the built-in paper simulator shortcut', () => {
       expect(
         BrokerAuthorizationStateMachine.canTransition(
           BrokerAuthorizationStatus.CONNECTING,

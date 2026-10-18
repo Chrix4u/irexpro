@@ -37,9 +37,11 @@ Now:
 - `ACTIVE` is reachable ONLY through the explicit `enable-live-trading`
   endpoint (LIVE accounts, registry LIVE support, prior validated DEMO, user
   action).
-- A successful **DEMO handshake now completes demo validation**
-  (`CONNECTING → AUTHORIZED` + `demoValidated=true` dual-write), fixing the
-  unreachable gate.
+- Historical Sprint 50 behavior: a successful **DEMO handshake completed demo
+  validation** (`CONNECTING → AUTHORIZED` + `demoValidated=true`). **Superseded
+  2026-10-18 for external brokers:** handshakes now stop at CONNECTED and only
+  evidence-based `validate-demo` PASS sets `demoValidated`; paper-broker retains
+  the simulator-only shortcut.
 - Legacy booleans dual-written for backward compatibility; the state machine
   is authoritative.
 - New endpoints: `POST :id/revoke-authorization` (→ REVOKED, fail-closes
