@@ -59,6 +59,7 @@ import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { ConnectBrokerDto } from './dto/connect-broker.dto';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
+import { isFxWeeklySessionOpen as isFxWeeklySessionOpenAt } from '../market-data/utils/fx-weekly-session';
 
 /**
  * BrokerService — Core broker connection lifecycle management.
@@ -1573,11 +1574,20 @@ export class BrokerService {
         err.code === BrokerErrorCode.PROVIDER_UNAVAILABLE &&
         err.isRetryable === true;
       if (isTransientLivePaperMarketDataGap) {
+        const marketOpen = isFxWeeklySessionOpenAt(new Date());
         await this.connectionRepo.update(connectionId, {
           consecutiveFailureCount: 0,
-          lastErrorMessage: (err as Error).message,
+          lastErrorMessage: marketOpen ? (err as Error).message : null,
           lastHealthCheckAt: new Date(),
         });
+        if (!marketOpen) {
+          // The PAPER broker has no obligation to produce fresh FX quotes while
+          // the authoritative weekly session is closed. Treat the connection
+          // itself as healthy so the scheduler does not publish false broker
+          // failures all weekend. Exposure remains impossible because the
+          // market-session and fresh-quote execution gates stay fail-closed.
+          return true;
+        }
         this.logger.warn(
           `PAPER connection ${connectionId} market data temporarily unavailable; ` +
             'retaining CONNECTED status while exposure remains fail-closed until quotes recover',
