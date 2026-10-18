@@ -9,9 +9,7 @@ import {
 } from './m1-tactical-features';
 import { classifyM1TacticalRoute } from './m1-tactical-route';
 
-function snapshot(
-  overrides: Partial<M1TacticalFeatureSnapshot> = {},
-): M1TacticalFeatureSnapshot {
+function snapshot(overrides: Partial<M1TacticalFeatureSnapshot> = {}): M1TacticalFeatureSnapshot {
   return {
     artifact: M1_TACTICAL_FEATURE_ARTIFACT,
     instrument: 'EURUSD',
@@ -46,7 +44,9 @@ function snapshot(
   };
 }
 
-function pair(source: M1TacticalFeatureSnapshot): readonly [M1TacticalCandidate, M1TacticalCandidate] {
+function pair(
+  source: M1TacticalFeatureSnapshot,
+): readonly [M1TacticalCandidate, M1TacticalCandidate] {
   return buildM1TacticalCandidates(source, M1_TACTICAL_POLICY_V1);
 }
 

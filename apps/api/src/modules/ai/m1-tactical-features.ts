@@ -141,7 +141,9 @@ function atr(rows: LivePaperCandleInput[], period = 14): number {
   for (let index = 1; index < rows.length; index += 1) {
     const [, high, low] = numbers(rows[index]!);
     const previousClose = Number(rows[index - 1]!.close);
-    ranges.push(Math.max(high - low, Math.abs(high - previousClose), Math.abs(low - previousClose)));
+    ranges.push(
+      Math.max(high - low, Math.abs(high - previousClose), Math.abs(low - previousClose)),
+    );
   }
   if (ranges.length < period) return Number.NaN;
   let value = ranges.slice(0, period).reduce((sum, current) => sum + current, 0) / period;
@@ -289,7 +291,7 @@ export function buildM1TacticalFeatures(
     efficiency5,
     volatilityChange,
     extensionAtr: Math.abs(close - ema21) / localAtr,
-    volatilityScore: clamp((localAtr / close) / 0.0015, 0, 1),
+    volatilityScore: clamp(localAtr / close / 0.0015, 0, 1),
     session: adaptiveMarketSession(input.decisionTime),
     alignment,
     higherTimeframeAgreement,

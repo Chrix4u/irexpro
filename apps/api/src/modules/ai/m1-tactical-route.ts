@@ -66,10 +66,7 @@ function abstain(
   };
 }
 
-function confirmedReversal(
-  candidate: M1TacticalCandidate,
-  policy: M1TacticalPolicy,
-): boolean {
+function confirmedReversal(candidate: M1TacticalCandidate, policy: M1TacticalPolicy): boolean {
   return (
     candidate.failedBreakoutAgainstDirection &&
     candidate.directionQuality >= policy.minReversalQuality &&
