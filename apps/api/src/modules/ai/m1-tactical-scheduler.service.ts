@@ -31,6 +31,11 @@ import {
   type M1ReliabilityRoute,
 } from './m1-tactical-reliability';
 import { isFxWeeklySessionOpen } from '../market-data/utils/fx-weekly-session';
+import {
+  evaluateM1FailedMoveRescue,
+  type M1FailedMoveRescueInput,
+  type M1FailedMoveRescueDecision,
+} from './m1-failed-move-rescue';
 
 export type M1TacticalExecutionPhase = 'SHADOW' | 'PAPER_CONTINUATION' | 'PAPER_ALL_ROUTES';
 
@@ -40,6 +45,22 @@ export interface M1TacticalRolloutPolicy {
   cadenceMs: number;
   instruments: readonly string[];
   paperVolumeCap: number;
+  routeNetExpectedRFloors: Readonly<Record<Exclude<M1TacticalRoute, 'ABSTAIN'>, number>>;
+}
+
+export interface M1OpenPositionRescueShadowInput {
+  decisionId: string;
+  userId: string;
+  brokerConnectionId: string;
+  instrument: string;
+  originalDirection: 'BUY' | 'SELL';
+  oppositeDirection: 'BUY' | 'SELL';
+  originalInvalidated: boolean;
+  originalNetExpectedR: number;
+  oppositeNetExpectedR: number;
+  oppositeGovernanceEligible: boolean;
+  oppositeBlockers: readonly string[];
+  observedAt?: Date;
 }
 
 export const M1_TACTICAL_ROLLOUT_POLICY_TOKEN = 'M1_TACTICAL_ROLLOUT_POLICY';
@@ -49,12 +70,23 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V1: Readonly<M1TacticalRolloutPolicy> = 
   cadenceMs: 15_000,
   instruments: Object.freeze(['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF']),
   paperVolumeCap: 0.05,
+  routeNetExpectedRFloors: Object.freeze({
+    M1_TREND_CONTINUATION: 0.08,
+    M1_CONFIRMED_REVERSAL: 0.12,
+    M1_EARLY_TRANSITION: 0.2,
+  }),
 });
 
 export const M1_TACTICAL_ROLLOUT_POLICY_V2: Readonly<M1TacticalRolloutPolicy> = Object.freeze({
   ...M1_TACTICAL_ROLLOUT_POLICY_V1,
   version: 'm1-tactical-rollout-v2',
   phase: 'PAPER_CONTINUATION',
+});
+
+export const M1_TACTICAL_ROLLOUT_POLICY_V3: Readonly<M1TacticalRolloutPolicy> = Object.freeze({
+  ...M1_TACTICAL_ROLLOUT_POLICY_V2,
+  version: 'm1-tactical-rollout-v3',
+  phase: 'PAPER_ALL_ROUTES',
 });
 
 export function m1RouteExecutableInPhase(
@@ -251,12 +283,20 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
 
     const shadowOnly = this.rolloutPolicy.phase === 'SHADOW';
     const routeExecutable = m1RouteExecutableInPhase(this.rolloutPolicy.phase, routeDecision.route);
+    const routeNetExpectedRFloor =
+      routeDecision.route === 'ABSTAIN'
+        ? Number.POSITIVE_INFINITY
+        : this.rolloutPolicy.routeNetExpectedRFloors[routeDecision.route];
+    const routePayoffEligible =
+      routeDecision.route !== 'ABSTAIN' && governance.netExpectedR >= routeNetExpectedRFloor;
     const canExecute =
       routeExecutable &&
+      routePayoffEligible &&
       governance.paperEligible &&
       governance.executionAuthority === 'PAPER_ONLY_RESEARCH';
     const blockers = unique([
       ...governance.blockers,
+      ...(routeExecutable && !routePayoffEligible ? ['M1_ROUTE_NET_EXPECTED_R_FLOOR'] : []),
       ...(shadowOnly ? ['M1_PHASE_SHADOW'] : []),
       ...(!shadowOnly && !routeExecutable && routeDecision.route !== 'ABSTAIN'
         ? ['M1_PHASE_ROUTE_SHADOW']
@@ -280,6 +320,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         reliability: reliability ? { ...reliability } : null,
         rolloutPolicyVersion: this.rolloutPolicy.version,
         rolloutPhase: this.rolloutPolicy.phase,
+        routeNetExpectedRFloor,
       },
       blockers,
     });
@@ -367,6 +408,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_gross_expected_r: candidate.grossExpectedR,
           m1_execution_cost_r: governance.genericGovernance.estimatedExecutionCostR,
           m1_net_expected_r: governance.netExpectedR,
+          m1_route_net_expected_r_floor:
+            this.rolloutPolicy.routeNetExpectedRFloors[
+              routeDecision.route as Exclude<M1TacticalRoute, 'ABSTAIN'>
+            ],
           m1_execution_authority: 'PAPER_ONLY_RESEARCH',
         },
       });
@@ -380,6 +425,63 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       );
       throw error;
     }
+  }
+
+  async observeOpenPositionRescueShadow(
+    input: M1OpenPositionRescueShadowInput,
+  ): Promise<M1FailedMoveRescueDecision | null> {
+    const instrument = input.instrument.trim().toUpperCase();
+    const positions = await this.evidence.loadOpenPaperPositions({
+      userId: input.userId,
+      brokerConnectionId: input.brokerConnectionId,
+      instrument,
+    });
+    const open = positions.find(
+      (position) =>
+        position.instrument === instrument && position.direction === input.originalDirection,
+    );
+    if (!open) return null;
+
+    const duplicateOppositeIntent = await this.evidence.hasActiveOppositeM1Intent({
+      userId: input.userId,
+      brokerConnectionId: input.brokerConnectionId,
+      instrument,
+      direction: input.oppositeDirection,
+    });
+    const reversalAllowedByPolicy =
+      this.rolloutPolicy.phase === 'PAPER_ALL_ROUTES' &&
+      m1RouteExecutableInPhase(this.rolloutPolicy.phase, 'M1_CONFIRMED_REVERSAL');
+
+    return this.recordFailedMoveRescueShadow(
+      input.decisionId,
+      {
+        originalInvalidated: input.originalInvalidated,
+        originalNetExpectedR: input.originalNetExpectedR,
+        oppositeNetExpectedR: input.oppositeNetExpectedR,
+        oppositeGovernanceEligible: input.oppositeGovernanceEligible,
+        oppositeBlockers: input.oppositeBlockers,
+        duplicateOppositeIntent,
+        reversalAllowedByPolicy,
+      },
+      { openTradeId: open.tradeId, openDecisionId: open.decisionId },
+      input.observedAt ?? new Date(),
+    );
+  }
+
+  async recordFailedMoveRescueShadow(
+    decisionId: string,
+    input: M1FailedMoveRescueInput,
+    linkage: { openTradeId: string; openDecisionId: string },
+    observedAt = new Date(),
+  ): Promise<M1FailedMoveRescueDecision> {
+    const rescue = evaluateM1FailedMoveRescue(input);
+    await this.evidence.markRescueObservation(decisionId, {
+      openTradeId: linkage.openTradeId,
+      openDecisionId: linkage.openDecisionId,
+      observedAt,
+      rescue,
+    });
+    return rescue;
   }
 
   private async reliabilityFor(

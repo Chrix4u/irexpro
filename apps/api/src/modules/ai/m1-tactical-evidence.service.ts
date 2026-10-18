@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import type { M1ReliabilityRoute, M1RoutePairSideEvidenceRow } from './m1-tactical-reliability';
+import type { M1FailedMoveRescueDecision } from './m1-failed-move-rescue';
 
 export type M1TacticalDecisionRoute = M1ReliabilityRoute | 'ABSTAIN';
 export type M1TacticalDecisionAuthority = 'NONE' | 'PAPER_ONLY_RESEARCH';
@@ -49,6 +50,38 @@ export interface M1RoutePairSideEvidenceQuery {
   currentPolicyVersion: string;
   compatiblePolicyVersions: string[];
   evaluatedAt: Date;
+}
+
+export interface M1OpenPaperPositionQuery {
+  userId: string;
+  brokerConnectionId: string;
+  instrument: string;
+}
+
+export interface M1ActiveOppositeIntentQuery {
+  userId: string;
+  brokerConnectionId: string;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+}
+
+export interface M1OpenPaperPositionSnapshot {
+  tradeId: string;
+  tradeIntentId: string;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  openedAt: Date;
+  decisionId: string;
+  route: M1ReliabilityRoute;
+  policyVersion: string;
+  originalNetExpectedR: number;
+}
+
+export interface M1RescueObservationInput {
+  openTradeId: string;
+  openDecisionId: string;
+  observedAt: Date;
+  rescue: M1FailedMoveRescueDecision;
 }
 
 export interface M1TacticalOutcomeMetricsFilter {
@@ -233,6 +266,131 @@ export class M1TacticalEvidenceService {
       realisedPnl: number(row.realised_pnl),
       closedAt: date(row.closed_at),
     }));
+  }
+
+  async loadOpenPaperPositions(
+    input: M1OpenPaperPositionQuery,
+  ): Promise<M1OpenPaperPositionSnapshot[]> {
+    const instrument = input.instrument.trim().toUpperCase();
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          t.id AS trade_id,
+          t.trade_intent_id,
+          t.instrument,
+          t.direction,
+          t.opened_at,
+          ti.metadata ->> 'm1_decision_id' AS decision_id,
+          ti.metadata ->> 'm1_tactical_route' AS route,
+          ti.metadata ->> 'm1_policy_version' AS policy_version,
+          ti.metadata ->> 'm1_net_expected_r' AS original_net_expected_r
+        FROM trading.trades t
+        JOIN trading.trade_intents ti
+          ON ti.id = t.trade_intent_id
+         AND ti.user_id = t.user_id
+         AND ti.broker_connection_id = t.broker_connection_id
+        WHERE t.user_id = $1
+          AND t.broker_connection_id = $2
+          AND t.instrument = $3
+          AND t.status = 'OPEN'
+          AND ti.strategy_code = 'external-irexpro-m1-tactical'
+          AND ti.timeframe = 'M1'
+          AND ti.metadata ->> 'external_provider_paper_only' = 'true'
+        ORDER BY t.opened_at ASC
+      `,
+      [input.userId, input.brokerConnectionId, instrument],
+    )) as Array<Record<string, unknown>>;
+    const validRoutes = new Set<M1ReliabilityRoute>([
+      'M1_TREND_CONTINUATION',
+      'M1_CONFIRMED_REVERSAL',
+      'M1_EARLY_TRANSITION',
+    ]);
+    return rows.flatMap((row) => {
+      const route = String(row.route ?? '') as M1ReliabilityRoute;
+      const direction = String(row.direction ?? '') as 'BUY' | 'SELL';
+      const openedAt = date(row.opened_at as string | Date);
+      const originalNetExpectedR = number(row.original_net_expected_r);
+      const tradeId = String(row.trade_id ?? '');
+      const tradeIntentId = String(row.trade_intent_id ?? '');
+      const decisionId = String(row.decision_id ?? '');
+      const policyVersion = String(row.policy_version ?? '');
+      if (
+        !tradeId ||
+        !tradeIntentId ||
+        !decisionId ||
+        !policyVersion ||
+        !validRoutes.has(route) ||
+        !['BUY', 'SELL'].includes(direction) ||
+        !Number.isFinite(openedAt.getTime()) ||
+        !Number.isFinite(originalNetExpectedR)
+      ) {
+        return [];
+      }
+      return [
+        {
+          tradeId,
+          tradeIntentId,
+          instrument: String(row.instrument ?? instrument).toUpperCase(),
+          direction,
+          openedAt,
+          decisionId,
+          route,
+          policyVersion,
+          originalNetExpectedR,
+        },
+      ];
+    });
+  }
+
+  async hasActiveOppositeM1Intent(input: M1ActiveOppositeIntentQuery): Promise<boolean> {
+    const instrument = input.instrument.trim().toUpperCase();
+    const rows = (await this.dataSource.query(
+      `
+        SELECT EXISTS (
+          SELECT 1
+          FROM trading.trade_intents ti
+          LEFT JOIN trading.trades t
+            ON t.id = ti.trade_id
+           AND t.user_id = ti.user_id
+           AND t.broker_connection_id = ti.broker_connection_id
+          WHERE ti.user_id = $1
+            AND ti.broker_connection_id = $2
+            AND ti.instrument = $3
+            AND ti.direction = $4
+            AND ti.strategy_code = 'external-irexpro-m1-tactical'
+            AND ti.timeframe = 'M1'
+            AND (
+              ti.status = 'CREATED'
+              OR (ti.status = 'EXECUTED' AND t.status = 'OPEN')
+            )
+        ) AS exists
+      `,
+      [input.userId, input.brokerConnectionId, instrument, input.direction],
+    )) as Array<{ exists: boolean }>;
+    return rows[0]?.exists === true;
+  }
+
+  async markRescueObservation(
+    decisionId: string,
+    observation: M1RescueObservationInput,
+  ): Promise<void> {
+    await this.dataSource.query(
+      `
+        UPDATE trading.m1_tactical_decisions
+        SET governance = jsonb_set(governance, '{failedMoveRescue}', $2::jsonb, true),
+            updated_at = now()
+        WHERE id = $1
+      `,
+      [
+        decisionId,
+        JSON.stringify({
+          openTradeId: observation.openTradeId,
+          openDecisionId: observation.openDecisionId,
+          observedAt: observation.observedAt.toISOString(),
+          rescue: observation.rescue,
+        }),
+      ],
+    );
   }
 
   async markExecutionLink(

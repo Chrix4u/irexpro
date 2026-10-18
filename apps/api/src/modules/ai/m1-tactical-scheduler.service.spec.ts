@@ -21,6 +21,7 @@ import {
   M1TacticalSchedulerService,
   M1_TACTICAL_ROLLOUT_POLICY_V1,
   M1_TACTICAL_ROLLOUT_POLICY_V2,
+  M1_TACTICAL_ROLLOUT_POLICY_V3,
   m1RouteExecutableInPhase,
 } from './m1-tactical-scheduler.service';
 
@@ -252,6 +253,10 @@ function phase2Harness(
     spreadUsable?: boolean;
     reliabilityLosses?: number;
     signalOutcome?: 'EXECUTION_SUCCEEDED' | 'RISK_REJECTED';
+    rollout?: any;
+    evidenceByRoute?: Record<string, any[]>;
+    openPositions?: any[];
+    duplicateOppositeIntent?: boolean;
   } = {},
 ) {
   const config = {
@@ -280,23 +285,32 @@ function phase2Harness(
     updatedAt: value.evaluatedAt,
   }));
   const lossCount = options.reliabilityLosses ?? 0;
-  const loadRoutePairSideEvidence = jest.fn().mockResolvedValue(
-    Array.from({ length: lossCount }, (_, index) => ({
-      route: 'M1_TREND_CONTINUATION',
-      instrument: 'EURUSD',
-      direction: 'BUY',
-      policyVersion: 'm1-tactical-v1',
-      realisedPnl: -1,
-      closedAt: new Date(`2026-10-15T10:${20 + index}:00.000Z`),
-    })),
+  const continuationLosses = Array.from({ length: lossCount }, (_, index) => ({
+    route: 'M1_TREND_CONTINUATION',
+    instrument: 'EURUSD',
+    direction: 'BUY',
+    policyVersion: 'm1-tactical-v1',
+    realisedPnl: -1,
+    closedAt: new Date(`2026-10-15T10:${20 + index}:00.000Z`),
+  }));
+  const loadRoutePairSideEvidence = jest.fn(
+    async (request: any) => options.evidenceByRoute?.[request.route] ?? continuationLosses,
   );
   const markExecutionLink = jest.fn().mockResolvedValue(undefined);
   const markOutcomeState = jest.fn().mockResolvedValue(undefined);
+  const loadOpenPaperPositions = jest.fn().mockResolvedValue(options.openPositions ?? []);
+  const hasActiveOppositeM1Intent = jest
+    .fn()
+    .mockResolvedValue(options.duplicateOppositeIntent ?? false);
+  const markRescueObservation = jest.fn().mockResolvedValue(undefined);
   const evidence = {
     recordDecision,
     loadRoutePairSideEvidence,
     markExecutionLink,
     markOutcomeState,
+    loadOpenPaperPositions,
+    hasActiveOppositeM1Intent,
+    markRescueObservation,
   } as unknown as M1TacticalEvidenceService;
   const receiveSignal = jest.fn(async (candidate: any) => ({
     outcome: options.signalOutcome ?? 'EXECUTION_SUCCEEDED',
@@ -313,9 +327,10 @@ function phase2Harness(
         ? { id: 'session-1', executionMode: ExecutionMode.PAPER_ONLY, brokerConnectionId: 'conn-1' }
         : options.session,
     );
-  const execution = { getActiveSession } as unknown as ExecutionService;
+  const closeTrade = jest.fn();
+  const execution = { getActiveSession, closeTrade } as unknown as ExecutionService;
   const rollout = {
-    ...M1_TACTICAL_ROLLOUT_POLICY_V2,
+    ...(options.rollout ?? M1_TACTICAL_ROLLOUT_POLICY_V2),
     instruments: ['EURUSD'] as const,
   };
   const service = new M1TacticalSchedulerService(
@@ -335,6 +350,10 @@ function phase2Harness(
     markOutcomeState,
     receiveSignal,
     getActiveSession,
+    closeTrade,
+    loadOpenPaperPositions,
+    hasActiveOppositeM1Intent,
+    markRescueObservation,
   };
 }
 
@@ -481,5 +500,227 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
     expect(first.receiveSignal.mock.calls[0]![0].signalId).toBe(
       second.receiveSignal.mock.calls[0]![0].signalId,
     );
+  });
+});
+
+function reversalFeatures(): M1TacticalFeatureSnapshot {
+  return {
+    ...cleanContinuationFeatures(),
+    failedBreakoutDown: true,
+    breakoutUpAtr: 0.1,
+    emaSeparationAtr: 0.22,
+    emaSlopeAtr: 0.35,
+    momentum1Atr: 0.55,
+    momentum3Atr: 0.72,
+    momentum5Atr: 0.48,
+    alignment: { m5: 0.08, m15: -0.08, h1: -0.18, h4: -0.22 },
+    higherTimeframeAgreement: -0.1,
+    closeLocation: 0.9,
+    lowerWickRatio: 0.55,
+    upperWickRatio: 0.05,
+  };
+}
+
+function transitionFeatures(): M1TacticalFeatureSnapshot {
+  return {
+    ...cleanContinuationFeatures(),
+    emaSeparationAtr: 0.2,
+    emaSlopeAtr: 0.32,
+    momentum1Atr: 0.42,
+    momentum3Atr: 0.5,
+    momentum5Atr: 0.45,
+    breakoutUpAtr: 0.12,
+    alignment: { m5: 0.25, m15: 0.11, h1: -0.06, h4: -0.08 },
+    higherTimeframeAgreement: 0.055,
+    efficiency5: 0.78,
+    closeLocation: 0.88,
+  };
+}
+
+async function driveFeatures(
+  h: ReturnType<typeof phase2Harness>,
+  features: M1TacticalFeatureSnapshot,
+) {
+  const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
+  const route = classifyM1TacticalRoute(buy, sell, features, M1_TACTICAL_POLICY_V1);
+  await (h.service as any).persistCandidate(
+    'user-1',
+    'conn-1',
+    buy,
+    sell,
+    features,
+    'CLEAR',
+    {
+      source: 'BROKER_OBSERVED_P90',
+      spreadPrice: 0.00004,
+      sampleCount: 20,
+      percentile: 0.9,
+      windowMinutes: 30,
+      latestSampleAt: features.decisionTime.toISOString(),
+    },
+    features.decisionTime,
+  );
+  return route;
+}
+
+describe('M1TacticalSchedulerService PAPER all-routes phase', () => {
+  it('version-gates phase 3 to all three research routes', () => {
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V3.phase).toBe('PAPER_ALL_ROUTES');
+    expect(m1RouteExecutableInPhase('PAPER_ALL_ROUTES', 'M1_TREND_CONTINUATION')).toBe(true);
+    expect(m1RouteExecutableInPhase('PAPER_ALL_ROUTES', 'M1_CONFIRMED_REVERSAL')).toBe(true);
+    expect(m1RouteExecutableInPhase('PAPER_ALL_ROUTES', 'M1_EARLY_TRANSITION')).toBe(true);
+    expect(m1RouteExecutableInPhase('PAPER_ALL_ROUTES', 'ABSTAIN')).toBe(false);
+  });
+
+  it('qualifies reversal only from the reversal route evidence key and never borrows continuation losses', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V3,
+      evidenceByRoute: {
+        M1_TREND_CONTINUATION: Array.from({ length: 3 }, () => ({
+          route: 'M1_TREND_CONTINUATION',
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          policyVersion: 'm1-tactical-v1',
+          realisedPnl: -1,
+          closedAt: new Date('2026-10-15T10:20:00.000Z'),
+        })),
+        M1_CONFIRMED_REVERSAL: [],
+      },
+    });
+    const route = await driveFeatures(h, reversalFeatures());
+    expect(route.route).toBe('M1_CONFIRMED_REVERSAL');
+    expect(h.loadRoutePairSideEvidence).toHaveBeenCalledWith(
+      expect.objectContaining({ route: 'M1_CONFIRMED_REVERSAL' }),
+    );
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0].metadata.m1_tactical_route).toBe(
+      'M1_CONFIRMED_REVERSAL',
+    );
+  });
+
+  it('qualifies early transition only from the transition evidence key with its own route floor', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V3,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+    const route = await driveFeatures(h, transitionFeatures());
+    expect(route.route).toBe('M1_EARLY_TRANSITION');
+    expect(h.loadRoutePairSideEvidence).toHaveBeenCalledWith(
+      expect.objectContaining({ route: 'M1_EARLY_TRANSITION' }),
+    );
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0].metadata).toEqual(
+      expect.objectContaining({
+        m1_tactical_route: 'M1_EARLY_TRANSITION',
+        m1_route_net_expected_r_floor: expect.any(Number),
+      }),
+    );
+  });
+
+  it('loads the authoritative open M1 position and duplicate-opposite state before recording rescue shadow evidence', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V3,
+      openPositions: [
+        {
+          tradeId: 'trade-1',
+          tradeIntentId: 'intent-1',
+          instrument: 'EURUSD',
+          direction: 'SELL',
+          openedAt: new Date('2026-10-15T10:00:00.000Z'),
+          decisionId: 'decision-old',
+          route: 'M1_TREND_CONTINUATION',
+          policyVersion: 'm1-tactical-v1',
+          originalNetExpectedR: 0.18,
+        },
+      ],
+      duplicateOppositeIntent: false,
+    });
+
+    const rescue = await (h.service as any).observeOpenPositionRescueShadow({
+      decisionId: 'decision-current',
+      userId: 'user-1',
+      brokerConnectionId: 'conn-1',
+      instrument: 'EURUSD',
+      originalDirection: 'SELL',
+      oppositeDirection: 'BUY',
+      originalInvalidated: true,
+      originalNetExpectedR: -0.1,
+      oppositeNetExpectedR: 0.45,
+      oppositeGovernanceEligible: true,
+      oppositeBlockers: [],
+      observedAt: new Date('2026-10-15T10:31:00.000Z'),
+    });
+
+    expect(h.loadOpenPaperPositions).toHaveBeenCalledWith({
+      userId: 'user-1',
+      brokerConnectionId: 'conn-1',
+      instrument: 'EURUSD',
+    });
+    expect(h.hasActiveOppositeM1Intent).toHaveBeenCalledWith({
+      userId: 'user-1',
+      brokerConnectionId: 'conn-1',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+    });
+    expect(rescue).toMatchObject({
+      eligible: true,
+      reason: 'SHADOW_RESCUE_CANDIDATE',
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+    });
+    expect(h.markRescueObservation).toHaveBeenCalledWith(
+      'decision-current',
+      expect.objectContaining({
+        openTradeId: 'trade-1',
+        openDecisionId: 'decision-old',
+        rescue: expect.objectContaining({ executionAuthority: 'NONE', modifiesExecution: false }),
+      }),
+    );
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.closeTrade).not.toHaveBeenCalled();
+  });
+
+  it('records a rescue candidate as shadow evidence without submitting or closing anything', async () => {
+    const h = phase2Harness({ rollout: M1_TACTICAL_ROLLOUT_POLICY_V3 });
+    const schedulerSource = fs.readFileSync(
+      path.resolve(__dirname, './m1-tactical-scheduler.service.ts'),
+      'utf8',
+    );
+    const decision = await (h.service as any).recordFailedMoveRescueShadow(
+      'decision-current',
+      {
+        originalInvalidated: true,
+        originalNetExpectedR: -0.1,
+        oppositeNetExpectedR: 0.45,
+        oppositeGovernanceEligible: true,
+        oppositeBlockers: [],
+        duplicateOppositeIntent: false,
+        reversalAllowedByPolicy: true,
+      },
+      { openTradeId: 'trade-1', openDecisionId: 'decision-old' },
+      new Date('2026-10-15T10:31:00.000Z'),
+    );
+    expect(decision).toMatchObject({
+      eligible: true,
+      reason: 'SHADOW_RESCUE_CANDIDATE',
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+    });
+    expect(h.markRescueObservation).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.closeTrade).not.toHaveBeenCalled();
+    expect(schedulerSource).not.toContain('BrokerAdapter');
+    expect(schedulerSource).not.toContain('BrokerService');
+  });
+});
+
+describe('M1 tactical phase-3 module wiring', () => {
+  it('binds AiModule to the versioned PAPER_ALL_ROUTES rollout without an environment escape hatch', () => {
+    const moduleSource = fs.readFileSync(path.resolve(__dirname, './ai.module.ts'), 'utf8');
+    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V3');
+    expect(moduleSource).toMatch(
+      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V3/,
+    );
+    expect(moduleSource).not.toMatch(/process\.env[^\n]*M1_TACTICAL/);
   });
 });

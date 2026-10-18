@@ -242,3 +242,104 @@ describe('M1TacticalEvidenceService', () => {
     expect(sql).not.toContain('d.realised_pnl');
   });
 });
+
+describe('M1TacticalEvidenceService rescue evidence', () => {
+  it('loads only authoritative OPEN M1 PAPER positions for the exact tenant/account/instrument', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        trade_id: 'trade-1',
+        trade_intent_id: 'intent-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        opened_at: '2026-10-18T12:00:00.000Z',
+        decision_id: 'decision-old',
+        route: 'M1_TREND_CONTINUATION',
+        policy_version: 'm1-tactical-v1',
+        original_net_expected_r: '0.22',
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const rows = await service.loadOpenPaperPositions({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'eurusd',
+    });
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        tradeId: 'trade-1',
+        direction: 'BUY',
+        route: 'M1_TREND_CONTINUATION',
+        originalNetExpectedR: 0.22,
+      }),
+    ]);
+    const [sql, params] = query.mock.calls[0]!;
+    const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain('t.user_id = $1');
+    expect(normalized).toContain('t.broker_connection_id = $2');
+    expect(normalized).toContain('t.instrument = $3');
+    expect(normalized).toContain("t.status = 'OPEN'");
+    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-m1-tactical'");
+    expect(normalized).toContain("ti.timeframe = 'M1'");
+    expect(normalized).toContain("ti.metadata ->> 'external_provider_paper_only' = 'true'");
+    expect(params).toEqual([input().userId, input().brokerConnectionId, 'EURUSD']);
+  });
+
+  it('checks active opposite M1 intent identity without treating historical closed intents as duplicates', async () => {
+    const query = jest.fn().mockResolvedValue([{ exists: true }]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const exists = await service.hasActiveOppositeM1Intent({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'eurusd',
+      direction: 'SELL',
+    });
+
+    expect(exists).toBe(true);
+    const [sql, params] = query.mock.calls[0]!;
+    const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain('ti.user_id = $1');
+    expect(normalized).toContain('ti.broker_connection_id = $2');
+    expect(normalized).toContain('ti.instrument = $3');
+    expect(normalized).toContain('ti.direction = $4');
+    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-m1-tactical'");
+    expect(normalized).toContain("ti.timeframe = 'M1'");
+    expect(normalized).toContain("ti.status = 'CREATED'");
+    expect(normalized).toContain("ti.status = 'EXECUTED' AND t.status = 'OPEN'");
+    expect(params).toEqual([input().userId, input().brokerConnectionId, 'EURUSD', 'SELL']);
+  });
+
+  it('persists a rescue observation inside decision governance without creating financial truth', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const rescue = {
+      eligible: true,
+      reason: 'SHADOW_RESCUE_CANDIDATE' as const,
+      originalInvalidated: true,
+      originalNetExpectedR: -0.1,
+      oppositeNetExpectedR: 0.45,
+      edgeDelta: 0.55,
+      executionAuthority: 'NONE' as const,
+      modifiesExecution: false as const,
+    };
+
+    await service.markRescueObservation('decision-current', {
+      openTradeId: 'trade-1',
+      openDecisionId: 'decision-old',
+      observedAt: new Date('2026-10-18T12:31:00.000Z'),
+      rescue,
+    });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(String(sql)).toContain("jsonb_set(governance, '{failedMoveRescue}'");
+    expect(String(sql)).not.toContain('realised_pnl');
+    expect(params[0]).toBe('decision-current');
+    expect(JSON.parse(params[1])).toMatchObject({
+      openTradeId: 'trade-1',
+      openDecisionId: 'decision-old',
+      rescue: expect.objectContaining({ executionAuthority: 'NONE', modifiesExecution: false }),
+    });
+  });
+});
