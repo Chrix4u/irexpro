@@ -2877,7 +2877,39 @@ describe('VpsForexSignalCollectorService', () => {
   });
 
   it('loads pair-side research reliability only from the active episode-guarded research artifact', async () => {
-    const query = jest.fn().mockResolvedValue([{ wins: '1', losses: '5' }]);
+    const activePolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
+    const query = jest.fn().mockResolvedValue([
+      {
+        policy_version: activePolicy,
+        realised_pnl: 2,
+        closed_at: new Date('2026-10-16T10:30:00Z'),
+      },
+      {
+        policy_version: activePolicy,
+        realised_pnl: -1,
+        closed_at: new Date('2026-10-16T10:25:00Z'),
+      },
+      {
+        policy_version: activePolicy,
+        realised_pnl: -1,
+        closed_at: new Date('2026-10-16T10:20:00Z'),
+      },
+      {
+        policy_version: activePolicy,
+        realised_pnl: -1,
+        closed_at: new Date('2026-10-16T10:15:00Z'),
+      },
+      {
+        policy_version: activePolicy,
+        realised_pnl: -1,
+        closed_at: new Date('2026-10-16T10:10:00Z'),
+      },
+      {
+        policy_version: activePolicy,
+        realised_pnl: -1,
+        closed_at: new Date('2026-10-16T10:05:00Z'),
+      },
+    ]);
     const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
@@ -2914,7 +2946,8 @@ describe('VpsForexSignalCollectorService', () => {
           'paper-research-throughput-v9-bounded-mtf-exploration',
           'paper-research-throughput-v10-evidence-backed-acceleration',
         ],
-        expect.any(String),
+        ['planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1', activePolicy],
+        activePolicy,
       ],
     );
   });
@@ -3552,6 +3585,160 @@ describe('scheduled scan recovery', () => {
   function goodFeed() {
     return new Response(JSON.stringify(allTrendPayload()), { status: 200 });
   }
+  it('carries forward only the missing recent compatible pair-side samples across a calibration policy bump', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1',
+        realised_pnl: -1,
+        closed_at: new Date('2026-10-12T09:55:00.000Z'),
+      },
+      {
+        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1',
+        realised_pnl: -1,
+        closed_at: new Date('2026-10-12T09:50:00.000Z'),
+      },
+      {
+        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
+        realised_pnl: -1,
+        closed_at: new Date('2026-10-12T09:45:00.000Z'),
+      },
+      {
+        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
+        realised_pnl: -1,
+        closed_at: new Date('2026-10-12T09:40:00.000Z'),
+      },
+      {
+        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
+        realised_pnl: -1,
+        closed_at: new Date('2026-10-12T09:35:00.000Z'),
+      },
+      {
+        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
+        realised_pnl: 10,
+        closed_at: new Date('2026-10-12T09:30:00.000Z'),
+      },
+    ]);
+    const collector = scanner({ query });
+
+    const evidence = await (collector as any).loadPaperResearchPairSideEvidence(
+      'user-1',
+      'conn-1',
+      'EURUSD',
+      'SELL',
+    );
+
+    expect(evidence).toEqual({ wins: 0, losses: 5 });
+    const params = query.mock.calls[0]?.[1] as unknown[];
+    expect(params[5]).toEqual([
+      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
+      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1',
+    ]);
+    expect(params[6]).toBe('planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1');
+  });
+
+  it('uses the current policy sample history once it is self-sufficient and ignores predecessor losses', async () => {
+    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
+    const previousPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1';
+    const query = jest.fn().mockResolvedValue([
+      {
+        policy_version: currentPolicy,
+        realised_pnl: 2,
+        closed_at: new Date('2026-10-12T09:59:00.000Z'),
+      },
+      {
+        policy_version: currentPolicy,
+        realised_pnl: 2,
+        closed_at: new Date('2026-10-12T09:58:00.000Z'),
+      },
+      {
+        policy_version: currentPolicy,
+        realised_pnl: 2,
+        closed_at: new Date('2026-10-12T09:57:00.000Z'),
+      },
+      {
+        policy_version: currentPolicy,
+        realised_pnl: 2,
+        closed_at: new Date('2026-10-12T09:56:00.000Z'),
+      },
+      {
+        policy_version: currentPolicy,
+        realised_pnl: 2,
+        closed_at: new Date('2026-10-12T09:55:00.000Z'),
+      },
+      {
+        policy_version: currentPolicy,
+        realised_pnl: -1,
+        closed_at: new Date('2026-10-12T09:54:00.000Z'),
+      },
+      {
+        policy_version: previousPolicy,
+        realised_pnl: -5,
+        closed_at: new Date('2026-10-12T09:53:00.000Z'),
+      },
+      {
+        policy_version: previousPolicy,
+        realised_pnl: -5,
+        closed_at: new Date('2026-10-12T09:52:00.000Z'),
+      },
+    ]);
+    const collector = scanner({ query });
+
+    const evidence = await (collector as any).loadPaperResearchPairSideEvidence(
+      'user-1',
+      'conn-1',
+      'AUDUSD',
+      'SELL',
+    );
+
+    expect(evidence).toEqual({ wins: 5, losses: 1 });
+  });
+
+  it('expires compatible pair-side carry-forward evidence after seven days', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const collector = scanner({ query });
+
+    await (collector as any).loadPaperResearchPairSideEvidence('user-1', 'conn-1', 'USDJPY', 'BUY');
+
+    const sql = String(query.mock.calls[0]?.[0] ?? '');
+    expect(sql).toContain("INTERVAL '7 days'");
+    expect(sql).not.toContain("INTERVAL '24 hours'");
+  });
+
+  it('caps self-sufficient current-policy pair-side evidence at twenty samples', async () => {
+    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
+    const rows = Array.from({ length: 21 }, (_, index) => ({
+      policy_version: currentPolicy,
+      realised_pnl: 1,
+      closed_at: new Date(Date.UTC(2026, 9, 12, 9, 59 - index, 0)),
+    }));
+    const query = jest.fn().mockResolvedValue(rows);
+    const collector = scanner({ query });
+
+    const evidence = await (collector as any).loadPaperResearchPairSideEvidence(
+      'user-1',
+      'conn-1',
+      'USDCAD',
+      'BUY',
+    );
+
+    expect(evidence).toEqual({ wins: 20, losses: 0 });
+  });
+
+  it('filters break-even trades before applying the pair-side reliability row cap', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const collector = scanner({ query });
+
+    await (collector as any).loadPaperResearchPairSideEvidence(
+      'user-1',
+      'conn-1',
+      'EURUSD',
+      'SELL',
+    );
+
+    const sql = String(query.mock.calls[0]?.[0] ?? '');
+    expect(sql).toContain('AND t.realised_pnl <> 0');
+  });
+
   it('evaluates the current closed-bar slot after a restart between boundaries, only once per slot', async () => {
     jest.spyOn(global, 'fetch').mockImplementation(async () => goodFeed());
     const collector = scanner();
