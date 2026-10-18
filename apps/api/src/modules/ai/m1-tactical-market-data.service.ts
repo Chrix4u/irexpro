@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { OHLCV } from '../broker/interfaces/broker-adapter.interface';
 import {
   ProviderQuoteCandleStoreService,
@@ -40,14 +41,17 @@ function singleM1Source(rows: OHLCV[]): string | null {
 
 @Injectable()
 export class M1TacticalMarketDataService {
-  constructor(private readonly store: ProviderQuoteCandleStoreService) {}
+  constructor(
+    private readonly store: ProviderQuoteCandleStoreService,
+    @Optional() private readonly config?: ConfigService,
+  ) {}
 
   async loadSnapshot(
     connectionId: string,
     instrument: string,
     decisionTime: Date,
   ): Promise<M1TacticalMarketSnapshot | null> {
-    const normalizedConnectionId = connectionId.trim();
+    const normalizedConnectionId = this.marketDataConnectionId(connectionId);
     const normalizedInstrument = instrument.trim().toUpperCase();
     if (
       !normalizedConnectionId ||
@@ -155,5 +159,13 @@ export class M1TacticalMarketDataService {
         latestSampleAt: spreadQuote.latestPositiveSampleAt.toISOString(),
       },
     };
+  }
+
+  private marketDataConnectionId(executionConnectionId: string): string {
+    const execution = executionConnectionId.trim();
+    const configured = this.config
+      ?.get<string>('vpsForexScanner.m1MarketDataConnectionId', execution)
+      ?.trim();
+    return configured || execution;
   }
 }
