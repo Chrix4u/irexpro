@@ -58,11 +58,7 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
     ]);
     const service = new ProviderQuoteCandleStoreService({ query } as unknown as DataSource);
 
-    const quote = await service.getLatestPositiveSpreadQuote(
-      'ctrader-1',
-      'EURUSD',
-      EVALUATED_AT,
-    );
+    const quote = await service.getLatestPositiveSpreadQuote('ctrader-1', 'EURUSD', EVALUATED_AT);
 
     const sql = String(query.mock.calls[0]![0]);
     expect(sql).toContain('bid_close IS NOT NULL');
