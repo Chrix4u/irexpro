@@ -47,8 +47,10 @@ describe('ProviderQuoteCandleStoreService completed-bar reads', () => {
     expect(result).toHaveLength(1);
     expect(query).toHaveBeenCalledTimes(1);
     const [sql, params] = query.mock.calls[0]!;
-    expect(String(sql)).toContain("bucket_time < date_trunc('minute', $4::timestamptz)");
-    expect(params).toEqual(['conn-1', 'EURUSD', 30, DECISION_TIME.toISOString()]);
+    expect(String(sql)).toContain(
+      "bucket_time + ($6::int * interval '1 minute') <= $5::timestamptz",
+    );
+    expect(params).toEqual(['conn-1', 'EURUSD', 'M1', 30, DECISION_TIME.toISOString(), 1]);
   });
 
   it('exposes causal source/sample metadata with each completed M1 candle', async () => {

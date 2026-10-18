@@ -85,6 +85,10 @@ export const validationSchema = Joi.object({
   // at https://openapi.ctrader.com (Spotware approval flow). NEVER log these.
   CTRADER_CLIENT_ID: Joi.string().optional().allow(''),
   CTRADER_CLIENT_SECRET: Joi.string().optional().allow(''),
+  CTRADER_APP_APPROVAL_STATUS: Joi.string()
+    .valid('unknown', 'pending', 'active')
+    .optional()
+    .allow(''),
   // Comma-separated redirect URI allowlist for the cTrader OAuth flow
   // (Sprint 56 correction round). OPTIONAL — the flow fails closed (honest
   // message) when unset. NEVER log these values.
@@ -156,6 +160,17 @@ export const validationSchema = Joi.object({
       .optional()
       .allow(''),
   }),
+  M1_TACTICAL_MARKET_DATA_CONNECTION_ID: Joi.string()
+    .guid({ version: ['uuidv4'] })
+    .optional()
+    .allow(''),
+  M1_TACTICAL_CTRADER_COLLECTION_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
+  M1_TACTICAL_CTRADER_COLLECTION_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(10_000)
+    .max(300_000)
+    .optional(),
+  M1_TACTICAL_CTRADER_INSTRUMENTS: Joi.string().optional().allow(''),
 
   // Read-only MetaTrader broker-native MTF source for the frozen
   // high-conviction overlay. Enabling this never grants trade authority.

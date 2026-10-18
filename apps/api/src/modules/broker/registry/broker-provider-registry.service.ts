@@ -18,6 +18,7 @@ export type BrokerConnectionReadinessCode =
   | 'READY'
   | 'ADAPTER_UNAVAILABLE'
   | 'PLATFORM_CREDENTIALS_REQUIRED'
+  | 'PROVIDER_APP_APPROVAL_REQUIRED'
   | 'OAUTH_REDIRECT_REQUIRED'
   | 'MOBILE_OAUTH_CALLBACK_REQUIRED';
 
@@ -155,6 +156,19 @@ export class BrokerProviderRegistryService {
           code: 'PLATFORM_CREDENTIALS_REQUIRED',
           message:
             'cTrader authorization is awaiting platform configuration. Contact the iRexPro operator.',
+        };
+      }
+
+      const approvalStatus =
+        this.configService?.get<string>('broker.ctraderAppApprovalStatus') ??
+        process.env.CTRADER_APP_APPROVAL_STATUS ??
+        'unknown';
+      if (approvalStatus.trim().toLowerCase() === 'pending') {
+        return {
+          ready: false,
+          code: 'PROVIDER_APP_APPROVAL_REQUIRED',
+          message:
+            'cTrader Open API access is awaiting Spotware application approval. Connection will unlock after the app is marked active.',
         };
       }
 
