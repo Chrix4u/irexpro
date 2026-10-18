@@ -1942,7 +1942,7 @@ describe('VpsForexSignalCollectorService', () => {
           direction: 'BUY',
           suggestedVolume: 1,
           modelVersion:
-            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v10-evidence-backed-acceleration',
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v11-momentum-confirmed-exploration',
           metadata: expect.objectContaining({
             paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
             paper_research_throughput: true,
@@ -2147,7 +2147,7 @@ describe('VpsForexSignalCollectorService', () => {
           direction: 'BUY',
           suggestedVolume: 1,
           modelVersion:
-            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v10-evidence-backed-acceleration',
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v11-momentum-confirmed-exploration',
           metadata: expect.objectContaining({
             paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
             paper_research_throughput: true,
@@ -2950,6 +2950,7 @@ describe('VpsForexSignalCollectorService', () => {
           'paper-research-throughput-v8-momentum-confirmed-exploration',
           'paper-research-throughput-v9-bounded-mtf-exploration',
           'paper-research-throughput-v10-evidence-backed-acceleration',
+          'paper-research-throughput-v11-momentum-confirmed-exploration',
         ],
         ['planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1', activePolicy],
         activePolicy,
