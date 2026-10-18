@@ -2,6 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { BrokerPrice, OHLCV } from '../../broker/interfaces/broker-adapter.interface';
 
+export interface ProviderQuoteCandle extends OHLCV {
+  source: string;
+  sampleCount: number;
+  spreadClose: string | null;
+  firstSampleAt: Date;
+  lastSampleAt: Date;
+}
+
 @Injectable()
 export class ProviderQuoteCandleStoreService {
   constructor(private readonly dataSource: DataSource) {}
@@ -171,17 +179,23 @@ export class ProviderQuoteCandleStoreService {
     };
   }
 
-  async getM1Candles(connectionId: string, instrument: string, count: number): Promise<OHLCV[]> {
+  async getM1Candles(
+    connectionId: string,
+    instrument: string,
+    count: number,
+    evaluatedAt = new Date(),
+  ): Promise<ProviderQuoteCandle[]> {
     const rows = await this.dataSource.query(
       `
-      SELECT bucket_time, open, high, low, close, sample_count, spread_close
+      SELECT bucket_time, open, high, low, close, sample_count, spread_close,
+             source, first_sample_at, last_sample_at
       FROM market_data.provider_quote_candles
       WHERE connection_id = $1 AND instrument = $2 AND timeframe = 'M1'
-        AND bucket_time < date_trunc('minute', now())
+        AND bucket_time < date_trunc('minute', $4::timestamptz)
       ORDER BY bucket_time DESC
       LIMIT $3
       `,
-      [connectionId, instrument, count],
+      [connectionId, instrument, count, evaluatedAt.toISOString()],
     );
 
     return [...rows].reverse().map((row: any) => ({
@@ -192,6 +206,11 @@ export class ProviderQuoteCandleStoreService {
       close: String(row.close),
       volume: String(row.sample_count),
       tickVolume: String(row.sample_count),
+      source: String(row.source ?? ''),
+      sampleCount: Number(row.sample_count),
+      spreadClose: row.spread_close == null ? null : String(row.spread_close),
+      firstSampleAt: new Date(row.first_sample_at),
+      lastSampleAt: new Date(row.last_sample_at),
     }));
   }
 
@@ -200,10 +219,11 @@ export class ProviderQuoteCandleStoreService {
     instrument: string,
     timeframe: string,
     count: number,
+    evaluatedAt = new Date(),
   ): Promise<OHLCV[]> {
     const normalized = timeframe.toUpperCase();
     if (normalized === 'M1') {
-      return this.getM1Candles(connectionId, instrument, count);
+      return this.getM1Candles(connectionId, instrument, count, evaluatedAt);
     }
 
     const minutesByTimeframe: Record<string, number> = {
@@ -221,6 +241,7 @@ export class ProviderQuoteCandleStoreService {
       connectionId,
       instrument,
       Math.max(count * bucketMinutes * 2, bucketMinutes),
+      evaluatedAt,
     );
     const groups = new Map<number, OHLCV[]>();
     const bucketMs = bucketMinutes * 60_000;
@@ -232,14 +253,18 @@ export class ProviderQuoteCandleStoreService {
       groups.set(key, group);
     }
 
-    const now = Date.now();
+    const evaluatedAtMs = evaluatedAt.getTime();
     const aggregated: OHLCV[] = [];
     for (const [bucketStart, group] of [...groups.entries()].sort((a, b) => a[0] - b[0])) {
       if (group.length !== bucketMinutes) continue;
-      if (bucketStart + bucketMs > now) continue;
+      if (!Number.isFinite(evaluatedAtMs) || bucketStart + bucketMs > evaluatedAtMs) continue;
       const ordered = [...group].sort(
         (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
       );
+      const contiguous = ordered.every(
+        (candle, index) => new Date(candle.timestamp).getTime() === bucketStart + index * 60_000,
+      );
+      if (!contiguous) continue;
       const highs = ordered.map((x) => Number(x.high));
       const lows = ordered.map((x) => Number(x.low));
       if (highs.some((x) => !Number.isFinite(x)) || lows.some((x) => !Number.isFinite(x))) {
