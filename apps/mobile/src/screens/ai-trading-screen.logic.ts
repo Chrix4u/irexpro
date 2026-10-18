@@ -12,6 +12,140 @@ export type AutomationStopPresentation = {
   message: string;
 };
 
+export type MobileForexMarketSchedule = {
+  paused: boolean;
+  reason: "WEEKEND" | "ROLLOVER_LOW_LIQUIDITY" | null;
+  nextEligibleScanAt: string;
+};
+
+type BrokerPreparationRequest = <T>(
+  path: string,
+  options?: { method?: "POST" | "GET" },
+) => Promise<T>;
+
+type DemoValidationStepView = {
+  name: string;
+  status: "PASS" | "FAIL" | "SKIPPED";
+  detail?: string;
+};
+
+type DemoValidationResultView = {
+  overall: "PASS" | "FAIL";
+  demoValidated: boolean;
+  steps: DemoValidationStepView[];
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function extractForexMarketSchedule(value: unknown): MobileForexMarketSchedule | null {
+  if (!isRecord(value) || !isRecord(value.marketSchedule)) return null;
+  const schedule = value.marketSchedule;
+  const reason = schedule.reason;
+  if (
+    typeof schedule.paused !== "boolean" ||
+    (reason !== null && reason !== "WEEKEND" && reason !== "ROLLOVER_LOW_LIQUIDITY") ||
+    typeof schedule.nextEligibleScanAt !== "string" ||
+    !Number.isFinite(Date.parse(schedule.nextEligibleScanAt))
+  ) {
+    return null;
+  }
+  return {
+    paused: schedule.paused,
+    reason,
+    nextEligibleScanAt: schedule.nextEligibleScanAt,
+  };
+}
+
+export function isWeekendMarketClosed(
+  schedule: MobileForexMarketSchedule | null,
+): boolean {
+  return schedule?.paused === true && schedule.reason === "WEEKEND";
+}
+
+export function formatMarketReopenCountdown(
+  schedule: MobileForexMarketSchedule | null,
+  nowMs: number,
+): string {
+  if (!schedule) return "Reopening shortly";
+  const targetMs = Date.parse(schedule.nextEligibleScanAt);
+  if (!Number.isFinite(targetMs)) return "Reopening shortly";
+  const remainingSeconds = Math.max(0, Math.floor((targetMs - nowMs) / 1000));
+  if (remainingSeconds <= 0) return "Reopening shortly";
+  const days = Math.floor(remainingSeconds / 86400);
+  const hours = Math.floor((remainingSeconds % 86400) / 3600);
+  const minutes = Math.floor((remainingSeconds % 3600) / 60);
+  const seconds = remainingSeconds % 60;
+  const hh = hours > 0 || days > 0 ? `${hours}h ` : "";
+  const dd = days > 0 ? `${days}d ` : "";
+  return `${dd}${hh}${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function parseDemoValidation(value: unknown): DemoValidationResultView {
+  if (!isRecord(value) || (value.overall !== "PASS" && value.overall !== "FAIL") ||
+      typeof value.demoValidated !== "boolean" || !Array.isArray(value.steps)) {
+    throw new Error("DEMO validation response contract mismatch");
+  }
+  const steps: DemoValidationStepView[] = [];
+  for (const raw of value.steps) {
+    if (!isRecord(raw) || typeof raw.name !== "string" ||
+        (raw.status !== "PASS" && raw.status !== "FAIL" && raw.status !== "SKIPPED") ||
+        (raw.detail !== undefined && typeof raw.detail !== "string")) {
+      throw new Error("DEMO validation response contract mismatch");
+    }
+    steps.push({
+      name: raw.name,
+      status: raw.status,
+      ...(typeof raw.detail === "string" ? { detail: raw.detail } : {}),
+    });
+  }
+  if (value.overall === "PASS" && value.demoValidated !== true) {
+    throw new Error("DEMO validation response contract mismatch");
+  }
+  return { overall: value.overall, demoValidated: value.demoValidated, steps };
+}
+
+export async function prepareBrokerForAutomationStart(
+  broker: Pick<BrokerConnectionView, "id" | "brokerId" | "accountType" | "authorizationStatus" | "demoValidated">,
+  request: BrokerPreparationRequest,
+): Promise<{ ready: true } | { ready: false; message: string }> {
+  if (
+    broker.accountType !== "DEMO" ||
+    broker.brokerId === "paper-broker" ||
+    broker.authorizationStatus === "ACTIVE"
+  ) {
+    return { ready: true };
+  }
+
+  if (!broker.demoValidated) {
+    const validation = parseDemoValidation(
+      await request<unknown>(
+        `/broker/connections/${encodeURIComponent(broker.id)}/validate-demo`,
+        { method: "POST" },
+      ),
+    );
+    if (validation.overall !== "PASS" || !validation.demoValidated) {
+      const failed = validation.steps.find((step) => step.status === "FAIL");
+      const detail = failed?.detail?.trim();
+      return {
+        ready: false,
+        message: failed
+          ? detail
+            ? `DEMO validation failed at ${failed.name}: ${detail}`
+            : `DEMO validation failed at ${failed.name}.`
+          : "DEMO validation failed. Check the broker connection and try again.",
+      };
+    }
+  }
+
+  await request<void>(
+    `/broker/connections/${encodeURIComponent(broker.id)}/enable-demo-trading`,
+    { method: "POST" },
+  );
+  return { ready: true };
+}
+
 export function isAutomationRunning(
   session: TradingSessionView | null,
 ): boolean {
@@ -27,6 +161,17 @@ export function isBrokerExecutionReady(
   // cannot create LIVE exposure. Backend session start gates it on connected
   // transport + fresh health, not ACTIVE external-provider authorization.
   if (connection.brokerId === "paper-broker") return true;
+
+  // External DEMO may still need the server's validate-demo/enable-demo
+  // preparation sequence. AUTHORIZED/READY are therefore preparable states;
+  // the backend remains the final execution authority. LIVE stays ACTIVE-only.
+  if (connection.accountType === "DEMO") {
+    return (
+      connection.authorizationStatus === "AUTHORIZED" ||
+      connection.authorizationStatus === "READY" ||
+      connection.authorizationStatus === "ACTIVE"
+    );
+  }
 
   return connection.authorizationStatus === "ACTIVE";
 }
@@ -57,6 +202,14 @@ export function pinnedBrokerId(
       return requestedId;
     }
   }
+
+  const fullyActive = connections.find(
+    (connection) =>
+      connection.status === "CONNECTED" &&
+      (connection.brokerId === "paper-broker" ||
+        connection.authorizationStatus === "ACTIVE"),
+  );
+  if (fullyActive) return fullyActive.id;
 
   const executionReady = connections.find(isBrokerExecutionReady);
   if (executionReady) return executionReady.id;

@@ -22,10 +22,15 @@ import { api } from "../lib/api";
 import { ActionDialog, Banner } from "../components/ui";
 import {
   describeStopSummary,
+  extractForexMarketSchedule,
+  formatMarketReopenCountdown,
   isAutomationRunning,
   isBrokerExecutionReady,
+  isWeekendMarketClosed,
   pinnedBrokerId,
+  prepareBrokerForAutomationStart,
   startExecutionModeFor,
+  type MobileForexMarketSchedule,
 } from "./ai-trading-screen.logic";
 
 type BusyAction = "ALLOCATE" | "START" | "STOP" | null;
@@ -129,8 +134,12 @@ export default function AiTradingScreen() {
   const [confirmationsWarning, setConfirmationsWarning] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [actionDialog, setActionDialog] = useState<AiActionDialog | null>(null);
+  const [marketSchedule, setMarketSchedule] =
+    useState<MobileForexMarketSchedule | null>(null);
+  const [marketClockNowMs, setMarketClockNowMs] = useState(() => Date.now());
 
   const automationOn = isAutomationRunning(session);
+  const marketClosed = isWeekendMarketClosed(marketSchedule);
 
   const selectedBroker = useMemo(
     () =>
@@ -213,6 +222,17 @@ export default function AiTradingScreen() {
     }
   }, []);
 
+  const loadMarketSchedule = useCallback(async () => {
+    try {
+      const payload = await api.request<unknown>("/ai/external/vps-forex/status");
+      setMarketSchedule(extractForexMarketSchedule(payload));
+    } catch {
+      // Scanner status is secondary UI evidence. Do not hide or disable the
+      // normal AI workspace when the status endpoint itself is unavailable.
+      setMarketSchedule(null);
+    }
+  }, []);
+
   const loadConfirmations = useCallback(async (activeSession: TradingSessionView | null) => {
     if (!activeSession || activeSession.executionMode !== "SEMI_AUTO") {
       setConfirmations([]);
@@ -255,6 +275,7 @@ export default function AiTradingScreen() {
         loadAllocation(nextBrokerId),
         loadRuntime(activeSession.session),
         loadConfirmations(activeSession.session),
+        loadMarketSchedule(),
       ]);
     } catch (requestError) {
       setError(safeMessage(requestError, "Failed to load AI Trading"));
@@ -262,7 +283,7 @@ export default function AiTradingScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [loadAllocation, loadConfirmations, loadRuntime]);
+  }, [loadAllocation, loadConfirmations, loadMarketSchedule, loadRuntime]);
 
   useEffect(() => {
     void load();
@@ -275,6 +296,22 @@ export default function AiTradingScreen() {
     }, 8000);
     return () => clearInterval(timer);
   }, [loadRuntime, session]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      void loadMarketSchedule();
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [loadMarketSchedule]);
+
+  useEffect(() => {
+    if (!marketClosed) return;
+    setMarketClockNowMs(Date.now());
+    const timer = setInterval(() => {
+      setMarketClockNowMs(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [marketClosed]);
 
   useEffect(() => {
     if (!session || session.executionMode !== "SEMI_AUTO") return;
@@ -362,6 +399,15 @@ export default function AiTradingScreen() {
     setError(null);
     setNotice(null);
     try {
+      const preparation = await prepareBrokerForAutomationStart(
+        selectedBroker,
+        (path, options) => api.request(path, options),
+      );
+      if (!preparation.ready) {
+        setError(preparation.message);
+        return;
+      }
+
       await api.startTradingSession({
         brokerConnectionId: selectedBroker.id,
         executionMode: startExecutionModeFor(selectedBroker),
@@ -496,7 +542,9 @@ export default function AiTradingScreen() {
       setNotice({
         variant: "info",
         message:
-          "Broker not ready. This account must be CONNECTED with ACTIVE authorization before AI Trading can start.",
+          selectedBroker.accountType === "DEMO"
+            ? "Broker not ready. Connect and authorize this DEMO account so iRexPro can run the server validation checklist before AI Trading starts."
+            : "Broker not ready. LIVE automation requires a CONNECTED account with ACTIVE authorization.",
       });
       return;
     }
@@ -559,6 +607,56 @@ export default function AiTradingScreen() {
         <ActivityIndicator color="#14b8a6" />
         <Text style={styles.muted}>Loading AI Trading…</Text>
       </View>
+    );
+  }
+
+  if (marketClosed && marketSchedule) {
+    return (
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={[styles.scrollContent, styles.marketClosedContent]}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={refresh}
+              tintColor="#14b8a6"
+            />
+          }
+        >
+          <View style={styles.marketClosedHero}>
+            <Text style={styles.marketClosedEyebrow}>FOREX WEEKLY SESSION</Text>
+            <Text style={styles.marketClosedIcon}>◷</Text>
+            <Text style={styles.marketClosedTitle}>Forex market is closed</Text>
+            <Text style={styles.marketClosedSubtitle}>
+              AI scanning and new trade entry are safely paused for the weekly market closure.
+            </Text>
+          </View>
+
+          <View
+            style={styles.marketClosedCard}
+            accessibilityRole="summary"
+            accessibilityLabel="Forex market closed"
+          >
+            <Text style={styles.marketClosedLabel}>EXPECTED REOPEN</Text>
+            <Text style={styles.marketClosedTime}>
+              {formatRuntimeTime(marketSchedule.nextEligibleScanAt)}
+            </Text>
+            <View style={styles.marketCountdownPill}>
+              <Text style={styles.marketCountdownLabel}>Reopens in</Text>
+              <Text style={styles.marketCountdownValue}>
+                {formatMarketReopenCountdown(marketSchedule, marketClockNowMs)}
+              </Text>
+            </View>
+            <Text style={styles.marketClosedNote}>
+              iRexPro will re-check the authoritative server schedule automatically. The full AI Trading workspace returns as soon as the market is reported open—no app restart is required.
+            </Text>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     );
   }
 
@@ -1115,6 +1213,88 @@ const styles = StyleSheet.create({
     backgroundColor: "#0b1020",
     padding: 16,
     paddingBottom: 44,
+  },
+  marketClosedContent: {
+    flexGrow: 1,
+    justifyContent: "center",
+  },
+  marketClosedHero: {
+    alignItems: "center",
+    paddingHorizontal: 14,
+    marginBottom: 18,
+  },
+  marketClosedEyebrow: {
+    color: "#5eead4",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 1.8,
+    marginBottom: 14,
+  },
+  marketClosedIcon: {
+    color: "#2dd4bf",
+    fontSize: 58,
+    lineHeight: 66,
+    marginBottom: 10,
+  },
+  marketClosedTitle: {
+    color: "#f8fafc",
+    fontSize: 26,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  marketClosedSubtitle: {
+    color: "#94a3b8",
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: "center",
+    marginTop: 8,
+  },
+  marketClosedCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#1f6f69",
+    backgroundColor: "#0d1e25",
+    padding: 20,
+    alignItems: "center",
+    gap: 10,
+  },
+  marketClosedLabel: {
+    color: "#6ee7d8",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 1.4,
+  },
+  marketClosedTime: {
+    color: "#f8fafc",
+    fontSize: 18,
+    lineHeight: 25,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  marketCountdownPill: {
+    marginTop: 4,
+    borderRadius: 14,
+    backgroundColor: "#072f2d",
+    borderWidth: 1,
+    borderColor: "#0f766e",
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    alignItems: "center",
+    minWidth: 180,
+  },
+  marketCountdownLabel: { color: "#8fded6", fontSize: 10, fontWeight: "700" },
+  marketCountdownValue: {
+    color: "#5eead4",
+    fontSize: 20,
+    fontWeight: "900",
+    marginTop: 2,
+  },
+  marketClosedNote: {
+    color: "#9fb1c9",
+    fontSize: 12,
+    lineHeight: 19,
+    textAlign: "center",
+    marginTop: 4,
   },
   hero: {
     flexDirection: "row",

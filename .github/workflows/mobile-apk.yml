@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - feat/native-mobile-onboarding-20260930
+      - main
     paths:
       - 'apps/mobile/**'
       - 'packages/api-client/**'
@@ -35,10 +35,17 @@ jobs:
     timeout-minutes: 35
 
     steps:
-      - name: Checkout candidate
+      - name: Checkout exact main candidate
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Verify exact candidate checkout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0

@@ -5,9 +5,13 @@ import type {
 } from "@irexpro/types/execution";
 import {
   describeStopSummary,
+  extractForexMarketSchedule,
+  formatMarketReopenCountdown,
   isAutomationRunning,
   isBrokerExecutionReady,
+  isWeekendMarketClosed,
   pinnedBrokerId,
+  prepareBrokerForAutomationStart,
   startExecutionModeFor,
 } from "../ai-trading-screen.logic";
 
@@ -113,15 +117,21 @@ describe("AI Trading mobile logic", () => {
     expect(pinnedBrokerId(connections, null, null)).toBe("broker-active");
   });
 
-  it("requires ACTIVE authorization for external brokers", () => {
-    expect(isBrokerExecutionReady(broker())).toBe(true);
+  it("requires ACTIVE authorization for LIVE external brokers", () => {
     expect(
       isBrokerExecutionReady(
-        broker({ authorizationStatus: "READY" }),
+        broker({ accountType: "LIVE", authorizationStatus: "ACTIVE" }),
+      ),
+    ).toBe(true);
+    expect(
+      isBrokerExecutionReady(
+        broker({ accountType: "LIVE", authorizationStatus: "READY" }),
       ),
     ).toBe(false);
     expect(
-      isBrokerExecutionReady(broker({ status: "DISCONNECTED" })),
+      isBrokerExecutionReady(
+        broker({ accountType: "LIVE", status: "DISCONNECTED" }),
+      ),
     ).toBe(false);
   });
 
@@ -144,6 +154,111 @@ describe("AI Trading mobile logic", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("shows the closed-market replacement only for an authoritative weekend pause", () => {
+    const weekend = extractForexMarketSchedule({
+      marketSchedule: {
+        paused: true,
+        reason: "WEEKEND",
+        nextEligibleScanAt: "2026-10-18T21:00:00.000Z",
+      },
+    });
+    expect(weekend).not.toBeNull();
+    expect(isWeekendMarketClosed(weekend)).toBe(true);
+    expect(
+      formatMarketReopenCountdown(weekend, Date.parse("2026-10-18T19:30:00.000Z")),
+    ).toBe("1h 30m 00s");
+
+    expect(
+      isWeekendMarketClosed({
+        paused: true,
+        reason: "ROLLOVER_LOW_LIQUIDITY",
+        nextEligibleScanAt: "2026-10-18T21:00:00.000Z",
+      }),
+    ).toBe(false);
+    expect(
+      isWeekendMarketClosed({
+        paused: false,
+        reason: null,
+        nextEligibleScanAt: "2026-10-18T21:00:00.000Z",
+      }),
+    ).toBe(false);
+    expect(extractForexMarketSchedule({ marketSchedule: { paused: true } })).toBeNull();
+  });
+
+  it("treats authorized external DEMO as preparable while LIVE still requires ACTIVE", () => {
+    expect(
+      isBrokerExecutionReady(
+        broker({ accountType: "DEMO", authorizationStatus: "AUTHORIZED" }),
+      ),
+    ).toBe(true);
+    expect(
+      isBrokerExecutionReady(
+        broker({ accountType: "DEMO", authorizationStatus: "READY" }),
+      ),
+    ).toBe(true);
+    expect(
+      isBrokerExecutionReady(
+        broker({ accountType: "LIVE", authorizationStatus: "READY" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("validates and enables an unvalidated external DEMO before automation start", async () => {
+    const request = jest
+      .fn()
+      .mockResolvedValueOnce({
+        overall: "PASS",
+        demoValidated: true,
+        steps: [{ name: "market-order", status: "PASS" }],
+      })
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      prepareBrokerForAutomationStart(
+        broker({
+          accountType: "DEMO",
+          authorizationStatus: "AUTHORIZED",
+          demoValidated: false,
+        }),
+        request,
+      ),
+    ).resolves.toEqual({ ready: true });
+
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "/broker/connections/broker-1/validate-demo",
+      { method: "POST" },
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "/broker/connections/broker-1/enable-demo-trading",
+      { method: "POST" },
+    );
+  });
+
+  it("does not enable a DEMO account when server validation fails", async () => {
+    const request = jest.fn().mockResolvedValueOnce({
+      overall: "FAIL",
+      demoValidated: false,
+      steps: [{ name: "market-order", status: "FAIL", detail: "order rejected" }],
+    });
+
+    await expect(
+      prepareBrokerForAutomationStart(
+        broker({
+          accountType: "DEMO",
+          authorizationStatus: "AUTHORIZED",
+          demoValidated: false,
+        }),
+        request,
+      ),
+    ).resolves.toEqual({
+      ready: false,
+      message: "DEMO validation failed at market-order: order rejected",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("keeps only the internal paper broker in PAPER_ONLY mode", () => {
