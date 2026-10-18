@@ -1105,44 +1105,83 @@ describe('BrokerService', () => {
       expect(updateCall.status).toBeUndefined();
     });
 
-    it('keeps the internal PAPER connection CONNECTED when only live market data is temporarily unavailable', async () => {
-      const adapter = {
-        setMode: jest.fn(),
-        connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
-        getAccountInfo: jest
-          .fn()
-          .mockRejectedValue(
-            new BrokerAdapterError(
-              BrokerErrorCode.PROVIDER_UNAVAILABLE,
-              'No live PAPER quote is cached yet for USDJPY.',
-              undefined,
-              true,
+    it('treats a PAPER quote gap as healthy while the authoritative FX weekly session is closed', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-17T12:00:00.000Z'));
+      try {
+        const adapter = {
+          setMode: jest.fn(),
+          connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
+          getAccountInfo: jest
+            .fn()
+            .mockRejectedValue(
+              new BrokerAdapterError(
+                BrokerErrorCode.PROVIDER_UNAVAILABLE,
+                'No live PAPER quote is cached yet for USDJPY.',
+                undefined,
+                true,
+              ),
             ),
-          ),
-      };
-      registry.getAdapter.mockReturnValue(adapter);
-      connectionRepo.findOne.mockResolvedValue(
-        connectedConnection({ brokerId: 'paper-broker', consecutiveFailureCount: 2 }),
-      );
+        };
+        registry.getAdapter.mockReturnValue(adapter);
+        connectionRepo.findOne.mockResolvedValue(
+          connectedConnection({ brokerId: 'paper-broker', consecutiveFailureCount: 2 }),
+        );
 
-      const result = await service.healthCheck('conn-1');
+        const result = await service.healthCheck('conn-1');
 
-      expect(result).toBe(false);
-      expect(connectionRepo.update).toHaveBeenCalledWith(
-        'conn-1',
-        expect.objectContaining({
-          consecutiveFailureCount: 0,
-          lastErrorMessage: 'No live PAPER quote is cached yet for USDJPY.',
-        }),
-      );
-      expect(connectionRepo.update).not.toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({ status: BrokerConnectionStatus.SUSPENDED }),
-      );
-      expect(registry.releaseAdapterForConnection).not.toHaveBeenCalled();
-      expect(auditService.log).not.toHaveBeenCalledWith(
-        expect.objectContaining({ action: AuditAction.BROKER_SUSPENDED_HEALTH_FAILURE }),
-      );
+        expect(result).toBe(true);
+        expect(connectionRepo.update).toHaveBeenCalledWith(
+          'conn-1',
+          expect.objectContaining({
+            consecutiveFailureCount: 0,
+            lastErrorMessage: null,
+          }),
+        );
+        expect(registry.releaseAdapterForConnection).not.toHaveBeenCalled();
+        expect(auditService.log).not.toHaveBeenCalledWith(
+          expect.objectContaining({ action: AuditAction.BROKER_SUSPENDED_HEALTH_FAILURE }),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('keeps a PAPER quote gap degraded while the authoritative FX weekly session is open', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-19T12:00:00.000Z'));
+      try {
+        const adapter = {
+          setMode: jest.fn(),
+          connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
+          getAccountInfo: jest
+            .fn()
+            .mockRejectedValue(
+              new BrokerAdapterError(
+                BrokerErrorCode.PROVIDER_UNAVAILABLE,
+                'No live PAPER quote is cached yet for USDJPY.',
+                undefined,
+                true,
+              ),
+            ),
+        };
+        registry.getAdapter.mockReturnValue(adapter);
+        connectionRepo.findOne.mockResolvedValue(
+          connectedConnection({ brokerId: 'paper-broker', consecutiveFailureCount: 2 }),
+        );
+
+        const result = await service.healthCheck('conn-1');
+
+        expect(result).toBe(false);
+        expect(connectionRepo.update).toHaveBeenCalledWith(
+          'conn-1',
+          expect.objectContaining({
+            consecutiveFailureCount: 0,
+            lastErrorMessage: 'No live PAPER quote is cached yet for USDJPY.',
+          }),
+        );
+        expect(registry.releaseAdapterForConnection).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('1st failure: increments failureCount to 1 — does NOT suspend', async () => {
