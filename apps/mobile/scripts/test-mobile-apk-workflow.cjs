@@ -5,6 +5,9 @@ const assert = require('node:assert/strict');
 const workflowPath = path.resolve(__dirname, '../../../.github/workflows/mobile-apk.yml');
 const workflow = fs.readFileSync(workflowPath, 'utf8');
 
+assert.match(workflow, /\n  pull_request:\n/, 'APK workflow must validate native builds on pull requests before merge');
+assert.match(workflow, /  pull_request:[\s\S]*?paths:[\s\S]*?apps\/mobile\/\*\*/, 'APK PR validation must be scoped to mobile changes');
+
 const installMarker = '- name: Install pinned Android native toolchain';
 const buildMarker = '- name: Build standalone release APK';
 const installIndex = workflow.indexOf(installMarker);

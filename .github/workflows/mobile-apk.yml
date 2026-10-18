@@ -2,6 +2,15 @@ name: Mobile APK Preview
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'apps/mobile/**'
+      - 'packages/api-client/**'
+      - 'packages/types/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - '.github/workflows/mobile-apk.yml'
   push:
     branches:
       - main
@@ -35,7 +44,7 @@ jobs:
     timeout-minutes: 35
 
     steps:
-      - name: Checkout exact main candidate
+      - name: Checkout exact candidate
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.sha }}
