@@ -68,6 +68,40 @@ jobs:
           "$JAVA_HOME_17_X64/bin/java" -version
           test -d "$ANDROID_HOME"
 
+      - name: Install pinned Android native toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager"
+
+          install_cmake_version() {
+            version="$1"
+            cmake_dir="$ANDROID_HOME/cmake/$version"
+            if test -x "$cmake_dir/bin/cmake" && "$cmake_dir/bin/cmake" --version; then
+              echo "CMake $version is already available."
+              return 0
+            fi
+
+            for attempt in 1 2 3; do
+              rm -rf "$cmake_dir"
+              if "$sdkmanager" --install "cmake;$version"; then
+                if test -x "$cmake_dir/bin/cmake" && "$cmake_dir/bin/cmake" --version; then
+                  return 0
+                fi
+              fi
+              echo "::warning::CMake $version install attempt ${attempt}/3 failed; retrying serially."
+              sleep $((attempt * 3))
+            done
+            return 1
+          }
+
+          # Expo modules and React Native currently request different CMake
+          # versions. Install both serially before Gradle so parallel native
+          # configuration tasks never race Android SDK auto-installation.
+          install_cmake_version '3.22.1'
+          install_cmake_version '3.30.5'
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
