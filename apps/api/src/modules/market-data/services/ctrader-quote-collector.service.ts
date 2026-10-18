@@ -127,13 +127,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     if (contextTasks.length === 0) return;
     const context = contextTasks[this.contextRotationOffset % contextTasks.length]!;
     this.contextRotationOffset = (this.contextRotationOffset + 1) % contextTasks.length;
-    await this.refreshContext(
-      userId,
-      connectionId,
-      context.instrument,
-      context.timeframe,
-      now,
-    );
+    await this.refreshContext(userId, connectionId, context.instrument, context.timeframe, now);
   }
 
   private async refreshM1(
@@ -283,16 +277,19 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
 
   private schedule(intervalMs: number, delayMs: number): void {
     if (this.stopping) return;
-    this.timer = setTimeout(async () => {
-      const startedAt = Date.now();
-      try {
-        await this.collectOnce();
-      } finally {
-        if (!this.stopping) {
-          this.schedule(intervalMs, Math.max(1_000, intervalMs - (Date.now() - startedAt)));
+    this.timer = setTimeout(
+      async () => {
+        const startedAt = Date.now();
+        try {
+          await this.collectOnce();
+        } finally {
+          if (!this.stopping) {
+            this.schedule(intervalMs, Math.max(1_000, intervalMs - (Date.now() - startedAt)));
+          }
         }
-      }
-    }, Math.max(0, delayMs));
+      },
+      Math.max(0, delayMs),
+    );
     this.timer.unref?.();
   }
 
