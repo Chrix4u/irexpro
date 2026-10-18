@@ -92,6 +92,10 @@ export default () => ({
     // AUTHENTICATION_FAILED configuration message. NEVER log these values.
     ctraderClientId: process.env.CTRADER_CLIENT_ID,
     ctraderClientSecret: process.env.CTRADER_CLIENT_SECRET,
+    // Operator-observed Spotware application approval state. 'pending' keeps
+    // OAuth fail-closed even when credentials/callbacks are present; switch to
+    // 'active' only after the Open API portal reports the application active.
+    ctraderAppApprovalStatus: process.env.CTRADER_APP_APPROVAL_STATUS ?? 'unknown',
     // cTrader WEB OAuth redirect URI(s), comma-separated HTTPS pages.
     // Custom app schemes are not provider callbacks; mobile authorizations
     // use ctraderMobileCallbackUris below and deep-link only after the server
@@ -137,6 +141,18 @@ export default () => ({
     apiKey: process.env.TWELVEDATA_API_KEY,
     userId: process.env.VPS_FOREX_SCANNER_USER_ID,
     brokerConnectionId: process.env.VPS_FOREX_SCANNER_BROKER_CONNECTION_ID,
+    // Optional broker-native source for the M1 tactical sleeve. Execution and
+    // evidence remain bound to brokerConnectionId (PAPER); this id is read-only.
+    m1MarketDataConnectionId: process.env.M1_TACTICAL_MARKET_DATA_CONNECTION_ID,
+    // Exact-binding cTrader collector for the M1 tactical sleeve. This remains
+    // read-only against the provider connection and never changes execution authority.
+    m1CtraderCollectionEnabled: process.env.M1_TACTICAL_CTRADER_COLLECTION_ENABLED === 'true',
+    m1CtraderCollectionIntervalMs: parseInt(
+      process.env.M1_TACTICAL_CTRADER_COLLECTION_INTERVAL_MS ?? '15000',
+      10,
+    ),
+    m1CtraderCollectionInstruments:
+      process.env.M1_TACTICAL_CTRADER_INSTRUMENTS ?? 'EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF',
     fastMarkStreamEnabled: process.env.TWELVEDATA_FAST_MARK_STREAM_ENABLED !== 'false',
   },
   brokerParityV7: {

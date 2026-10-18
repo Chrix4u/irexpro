@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { BrokerPrice, OHLCV } from '../../broker/interfaces/broker-adapter.interface';
 
+export type ProviderQuoteSource = 'metaapi-rpc-sampled' | 'ctrader-broker-native';
+
 export interface ProviderQuoteCandle extends OHLCV {
   source: string;
   sampleCount: number;
@@ -9,6 +11,16 @@ export interface ProviderQuoteCandle extends OHLCV {
   firstSampleAt: Date;
   lastSampleAt: Date;
 }
+
+const TIMEFRAME_MINUTES: Record<string, number> = {
+  M1: 1,
+  M5: 5,
+  M15: 15,
+  M30: 30,
+  H1: 60,
+  H4: 240,
+  D1: 1440,
+};
 
 @Injectable()
 export class ProviderQuoteCandleStoreService {
@@ -18,6 +30,7 @@ export class ProviderQuoteCandleStoreService {
     connectionId: string,
     instrument: string,
     quote: BrokerPrice,
+    source: ProviderQuoteSource = 'metaapi-rpc-sampled',
   ): Promise<void> {
     const bid = Number(quote.bid);
     const ask = Number(quote.ask);
@@ -36,7 +49,7 @@ export class ProviderQuoteCandleStoreService {
         connection_id, instrument, timeframe, bucket_time,
         open, high, low, close, bid_close, ask_close, spread_close,
         sample_count, source, first_sample_at, last_sample_at
-      ) VALUES ($1, $2, 'M1', $3, $4, $4, $4, $4, $5, $6, $7, 1, 'metaapi-rpc-sampled', $8, $8)
+      ) VALUES ($1, $2, 'M1', $3, $4, $4, $4, $4, $5, $6, $7, 1, $9, $8, $8)
       ON CONFLICT (connection_id, instrument, timeframe, bucket_time)
       DO UPDATE SET
         high = GREATEST(market_data.provider_quote_candles.high, EXCLUDED.high),
@@ -46,6 +59,7 @@ export class ProviderQuoteCandleStoreService {
         ask_close = EXCLUDED.ask_close,
         spread_close = EXCLUDED.spread_close,
         sample_count = market_data.provider_quote_candles.sample_count + 1,
+        source = EXCLUDED.source,
         last_sample_at = GREATEST(
           market_data.provider_quote_candles.last_sample_at,
           EXCLUDED.last_sample_at
@@ -61,8 +75,116 @@ export class ProviderQuoteCandleStoreService {
         ask.toFixed(10),
         spread.toFixed(10),
         sampleAt.toISOString(),
+        source,
       ],
     );
+  }
+
+  /**
+   * Stores provider-native historical OHLC without fabricating bid/ask spread.
+   * Historical cTrader trendbars are bar evidence only. Live getCurrentPrice()
+   * observations remain the sole source of execution-spread evidence.
+   */
+  async upsertHistoricalCandles(
+    connectionId: string,
+    instrument: string,
+    timeframe: string,
+    rows: OHLCV[],
+    source: ProviderQuoteSource,
+  ): Promise<void> {
+    const normalizedTimeframe = timeframe.trim().toUpperCase();
+    const bucketMinutes = TIMEFRAME_MINUTES[normalizedTimeframe];
+    if (!bucketMinutes) return;
+
+    const normalized = rows
+      .map((row) => ({
+        timestamp: new Date(row.timestamp),
+        open: Number(row.open),
+        high: Number(row.high),
+        low: Number(row.low),
+        close: Number(row.close),
+        volume: Number(row.tickVolume ?? row.volume ?? 0),
+      }))
+      .filter(
+        (row) =>
+          Number.isFinite(row.timestamp.getTime()) &&
+          Number.isFinite(row.open) &&
+          Number.isFinite(row.high) &&
+          Number.isFinite(row.low) &&
+          Number.isFinite(row.close) &&
+          row.open > 0 &&
+          row.high > 0 &&
+          row.low > 0 &&
+          row.close > 0,
+      )
+      .map((row) => ({
+        timestamp: row.timestamp.toISOString(),
+        open: row.open.toFixed(10),
+        high: row.high.toFixed(10),
+        low: row.low.toFixed(10),
+        close: row.close.toFixed(10),
+        sampleCount: Math.max(1, Math.floor(Number.isFinite(row.volume) ? row.volume : 0)),
+      }));
+    if (normalized.length === 0) return;
+
+    await this.dataSource.query(
+      `
+      INSERT INTO market_data.provider_quote_candles (
+        connection_id, instrument, timeframe, bucket_time,
+        open, high, low, close, bid_close, ask_close, spread_close,
+        sample_count, source, first_sample_at, last_sample_at
+      )
+      SELECT
+        $1, $2, $3, x.timestamp, x.open, x.high, x.low, x.close,
+        NULL, NULL, NULL, x.sample_count, $5, x.timestamp,
+        x.timestamp + ($4::int * interval '1 minute') - interval '1 second'
+      FROM jsonb_to_recordset($6::jsonb) AS x(
+        timestamp timestamptz,
+        open numeric,
+        high numeric,
+        low numeric,
+        close numeric,
+        sample_count integer
+      )
+      ON CONFLICT (connection_id, instrument, timeframe, bucket_time)
+      DO UPDATE SET
+        open = EXCLUDED.open,
+        high = EXCLUDED.high,
+        low = EXCLUDED.low,
+        close = EXCLUDED.close,
+        sample_count = GREATEST(
+          market_data.provider_quote_candles.sample_count,
+          EXCLUDED.sample_count
+        ),
+        source = EXCLUDED.source,
+        first_sample_at = LEAST(
+          market_data.provider_quote_candles.first_sample_at,
+          EXCLUDED.first_sample_at
+        ),
+        last_sample_at = GREATEST(
+          market_data.provider_quote_candles.last_sample_at,
+          EXCLUDED.last_sample_at
+        ),
+        updated_at = now()
+      `,
+      [
+        connectionId,
+        instrument,
+        normalizedTimeframe,
+        bucketMinutes,
+        source,
+        JSON.stringify(normalized),
+      ],
+    );
+  }
+
+  async upsertM1History(
+    connectionId: string,
+    instrument: string,
+    rows: OHLCV[],
+    source: ProviderQuoteSource,
+  ): Promise<void> {
+    await this.upsertHistoricalCandles(connectionId, instrument, 'M1', rows, source);
   }
 
   async getLatestPositiveSpreadQuote(
@@ -78,6 +200,9 @@ export class ProviderQuoteCandleStoreService {
         WHERE connection_id = $1
           AND instrument = $2
           AND timeframe = 'M1'
+          AND bid_close IS NOT NULL
+          AND ask_close IS NOT NULL
+          AND spread_close IS NOT NULL
           AND last_sample_at <= $3::timestamptz
         ORDER BY last_sample_at DESC
         LIMIT 1
@@ -150,6 +275,8 @@ export class ProviderQuoteCandleStoreService {
       SELECT bid_close, ask_close, spread_close, last_sample_at
       FROM market_data.provider_quote_candles
       WHERE connection_id = $1 AND instrument = $2 AND timeframe = 'M1'
+        AND bid_close IS NOT NULL
+        AND ask_close IS NOT NULL
       ORDER BY last_sample_at DESC
       LIMIT 1
       `,
@@ -179,23 +306,36 @@ export class ProviderQuoteCandleStoreService {
     };
   }
 
-  async getM1Candles(
+  async getStoredCandles(
     connectionId: string,
     instrument: string,
+    timeframe: string,
     count: number,
     evaluatedAt = new Date(),
   ): Promise<ProviderQuoteCandle[]> {
+    const normalizedTimeframe = timeframe.trim().toUpperCase();
+    const bucketMinutes = TIMEFRAME_MINUTES[normalizedTimeframe];
+    if (!bucketMinutes) return [];
     const rows = await this.dataSource.query(
       `
       SELECT bucket_time, open, high, low, close, sample_count, spread_close,
              source, first_sample_at, last_sample_at
       FROM market_data.provider_quote_candles
-      WHERE connection_id = $1 AND instrument = $2 AND timeframe = 'M1'
-        AND bucket_time < date_trunc('minute', $4::timestamptz)
+      WHERE connection_id = $1
+        AND instrument = $2
+        AND timeframe = $3
+        AND bucket_time + ($6::int * interval '1 minute') <= $5::timestamptz
       ORDER BY bucket_time DESC
-      LIMIT $3
+      LIMIT $4
       `,
-      [connectionId, instrument, count, evaluatedAt.toISOString()],
+      [
+        connectionId,
+        instrument,
+        normalizedTimeframe,
+        count,
+        evaluatedAt.toISOString(),
+        bucketMinutes,
+      ],
     );
 
     return [...rows].reverse().map((row: any) => ({
@@ -214,6 +354,15 @@ export class ProviderQuoteCandleStoreService {
     }));
   }
 
+  async getM1Candles(
+    connectionId: string,
+    instrument: string,
+    count: number,
+    evaluatedAt = new Date(),
+  ): Promise<ProviderQuoteCandle[]> {
+    return this.getStoredCandles(connectionId, instrument, 'M1', count, evaluatedAt);
+  }
+
   async getCandles(
     connectionId: string,
     instrument: string,
@@ -226,16 +375,21 @@ export class ProviderQuoteCandleStoreService {
       return this.getM1Candles(connectionId, instrument, count, evaluatedAt);
     }
 
-    const minutesByTimeframe: Record<string, number> = {
-      M5: 5,
-      M15: 15,
-      M30: 30,
-      H1: 60,
-      H4: 240,
-      D1: 1440,
-    };
-    const bucketMinutes = minutesByTimeframe[normalized];
+    const bucketMinutes = TIMEFRAME_MINUTES[normalized];
     if (!bucketMinutes) return [];
+
+    // cTrader warms H1/H4 directly so the tactical model does not need days
+    // of sampled M1 history before higher-timeframe context becomes causal.
+    if (normalized === 'H1' || normalized === 'H4') {
+      const direct = await this.getStoredCandles(
+        connectionId,
+        instrument,
+        normalized,
+        count,
+        evaluatedAt,
+      );
+      if (direct.length > 0) return direct;
+    }
 
     const m1 = await this.getM1Candles(
       connectionId,

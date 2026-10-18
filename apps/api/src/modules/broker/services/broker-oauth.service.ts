@@ -191,6 +191,17 @@ export class BrokerOAuthService {
           'partner-approval flow at openapi.ctrader.com).',
       );
     }
+    const approvalStatus = (
+      this.configService.get<string>('broker.ctraderAppApprovalStatus', 'unknown') ?? 'unknown'
+    )
+      .trim()
+      .toLowerCase();
+    if (approvalStatus === 'pending') {
+      throw new BadRequestException(
+        'cTrader Open API access is awaiting Spotware application approval. ' +
+          'The connection flow will unlock after the platform app is marked active.',
+      );
+    }
     await this.sweepStaleFlows();
 
     let flow: BrokerOAuthFlow;

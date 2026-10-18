@@ -8,6 +8,7 @@ import { AuditModule } from '../audit/audit.module';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
 import { ProviderQuoteCandleStoreService } from './services/provider-quote-candle-store.service';
 import { MetaApiQuoteCollectorService } from './services/metaapi-quote-collector.service';
+import { CTraderQuoteCollectorService } from './services/ctrader-quote-collector.service';
 import { PaperPositionMarkBridgeService } from './services/paper-position-mark-bridge.service';
 
 @Module({
@@ -20,6 +21,7 @@ import { PaperPositionMarkBridgeService } from './services/paper-position-mark-b
     InternalApiKeyGuard,
     ProviderQuoteCandleStoreService,
     MetaApiQuoteCollectorService,
+    CTraderQuoteCollectorService,
     PaperPositionMarkBridgeService,
   ],
   exports: [MarketDataService, MarketIntelligenceService, ProviderQuoteCandleStoreService],
