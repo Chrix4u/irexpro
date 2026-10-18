@@ -6,6 +6,7 @@ import {
   executionBlockedReasons,
   formatExpiryCountdown,
   loadPendingExecutionConfirmations,
+  prepareBrokerForAutomationStart,
 } from './trader-session';
 
 /**
@@ -39,6 +40,7 @@ import { ApiClientError } from '@irexpro/api-client';
 const changeModeMock = api.changeTradingSessionMode as jest.Mock;
 const confirmMock = api.confirmExecutionConfirmation as jest.Mock;
 const pendingMock = api.listPendingExecutionConfirmations as jest.Mock;
+const requestMock = api.request as jest.Mock;
 
 const SESSION = {
   id: 'sess_00000000-0000-0000-0000-000000000001',
@@ -60,6 +62,90 @@ const CONFIRMATION = {
   expiresAt: '2026-09-10T00:05:00.000Z',
   orderPayloadDigest: 'sha256:fixture-digest',
 } satisfies ExecutionConfirmationView;
+
+describe('prepareBrokerForAutomationStart', () => {
+  beforeEach(() => {
+    requestMock.mockReset();
+  });
+
+  const externalDemo = {
+    id: 'bconn-demo-1',
+    brokerId: 'ctrader',
+    accountType: 'DEMO',
+    authorizationStatus: 'CONNECTED',
+    demoValidated: false,
+  } as const;
+
+  it('validates an unvalidated external DEMO before enabling automation', async () => {
+    requestMock
+      .mockResolvedValueOnce({
+        overall: 'PASS',
+        demoValidated: true,
+        steps: [{ name: 'connect', status: 'PASS', detail: 'connected' }],
+      })
+      .mockResolvedValueOnce(undefined);
+
+    const result = await prepareBrokerForAutomationStart(externalDemo);
+
+    expect(result).toEqual({ ready: true });
+    expect(requestMock).toHaveBeenNthCalledWith(
+      1,
+      '/broker/connections/bconn-demo-1/validate-demo',
+      { method: 'POST' },
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      2,
+      '/broker/connections/bconn-demo-1/enable-demo-trading',
+      { method: 'POST' },
+    );
+  });
+
+  it('fails closed and does not enable automation when DEMO validation fails', async () => {
+    requestMock.mockResolvedValueOnce({
+      overall: 'FAIL',
+      demoValidated: false,
+      steps: [
+        { name: 'market-data', status: 'FAIL', detail: 'No fresh EURUSD quote was available.' },
+      ],
+    });
+
+    const result = await prepareBrokerForAutomationStart(externalDemo);
+
+    expect(result).toEqual({
+      ready: false,
+      message: 'DEMO validation failed at market-data: No fresh EURUSD quote was available.',
+    });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips re-validation when evidence already exists, but still activates the DEMO authority', async () => {
+    requestMock.mockResolvedValueOnce(undefined);
+
+    const result = await prepareBrokerForAutomationStart({
+      ...externalDemo,
+      demoValidated: true,
+    });
+
+    expect(result).toEqual({ ready: true });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(requestMock).toHaveBeenCalledWith(
+      '/broker/connections/bconn-demo-1/enable-demo-trading',
+      { method: 'POST' },
+    );
+  });
+
+  it('does not touch validation or DEMO activation for paper, live, or already ACTIVE brokers', async () => {
+    for (const broker of [
+      { ...externalDemo, brokerId: 'paper-broker' },
+      { ...externalDemo, accountType: 'LIVE' as const },
+      { ...externalDemo, authorizationStatus: 'ACTIVE' as const },
+    ]) {
+      await expect(prepareBrokerForAutomationStart(broker)).resolves.toEqual({ ready: true });
+    }
+
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+});
 
 describe('changeSessionExecutionMode', () => {
   beforeEach(() => {

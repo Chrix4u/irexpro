@@ -46,6 +46,7 @@ import {
   type TraderTerminalStatus,
   type TerminalBrokerView,
 } from "@/lib/trader-terminal-status";
+import { prepareBrokerForAutomationStart } from "@/lib/trader-session";
 import "./ai-trader.css";
 
 function formatTimestamp(value: string | null | undefined): string {
@@ -2095,16 +2096,14 @@ export default function AiTradingPage() {
           return;
         }
         const executionMode = startExecutionModeForBroker(selectedBroker);
-        if (
-          selectedBroker.accountType === "DEMO" &&
-          selectedBroker.brokerId !== "paper-broker" &&
-          selectedBroker.authorizationStatus !== "ACTIVE"
-        ) {
-          await api.request<void>(
-            `/broker/connections/${encodeURIComponent(selectedBroker.id)}/enable-demo-trading`,
-            { method: "POST" },
-          );
+        const preparation = await prepareBrokerForAutomationStart(selectedBroker);
+        if (!preparation.ready) {
+          setError(preparation.message);
+          notify.error(preparation.message);
+          setPendingAutomationAction(null);
+          return;
         }
+
         await api.startTradingSession({
           brokerConnectionId: selectedBroker.id,
           executionMode,

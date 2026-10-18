@@ -51,6 +51,7 @@ export type TerminalBrokerView = Pick<
   | "accountType"
   | "status"
   | "authorizationStatus"
+  | "demoValidated"
   | "liveTradingEnabled"
   | "providerBrokerIdentity"
   | "logicalAccountKey"
@@ -267,6 +268,8 @@ function normalizeTerminalBroker(value: unknown): TerminalBrokerView | null {
     accountType: value.accountType,
     status: value.status,
     authorizationStatus,
+    demoValidated:
+      typeof value.demoValidated === "boolean" ? value.demoValidated : false,
     liveTradingEnabled:
       typeof value.liveTradingEnabled === "boolean"
         ? value.liveTradingEnabled
