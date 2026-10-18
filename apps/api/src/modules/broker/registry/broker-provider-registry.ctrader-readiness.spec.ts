@@ -20,8 +20,7 @@ describe('cTrader provider application readiness', () => {
       'broker.ctraderClientId': 'client-id',
       'broker.ctraderClientSecret': 'client-secret',
       'broker.ctraderAppApprovalStatus': 'pending',
-      'broker.ctraderRedirectUris':
-        'https://irexpro.lightworldtech.com/onboarding/broker/callback',
+      'broker.ctraderRedirectUris': 'https://irexpro.lightworldtech.com/onboarding/broker/callback',
     });
 
     expect(registry.getEntry('ctrader')?.connectionReadiness).toEqual({
@@ -37,8 +36,7 @@ describe('cTrader provider application readiness', () => {
       'broker.ctraderClientId': 'client-id',
       'broker.ctraderClientSecret': 'client-secret',
       'broker.ctraderAppApprovalStatus': 'active',
-      'broker.ctraderRedirectUris':
-        'https://irexpro.lightworldtech.com/onboarding/broker/callback',
+      'broker.ctraderRedirectUris': 'https://irexpro.lightworldtech.com/onboarding/broker/callback',
     });
 
     expect(registry.getEntry('ctrader')?.connectionReadiness).toMatchObject({
