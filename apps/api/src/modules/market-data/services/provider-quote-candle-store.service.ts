@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { BrokerPrice, OHLCV } from '../../broker/interfaces/broker-adapter.interface';
 
+export type ProviderQuoteSource = 'metaapi-rpc-sampled' | 'ctrader-broker-native';
+
 export interface ProviderQuoteCandle extends OHLCV {
   source: string;
   sampleCount: number;
@@ -18,6 +20,7 @@ export class ProviderQuoteCandleStoreService {
     connectionId: string,
     instrument: string,
     quote: BrokerPrice,
+    source: ProviderQuoteSource = 'metaapi-rpc-sampled',
   ): Promise<void> {
     const bid = Number(quote.bid);
     const ask = Number(quote.ask);
@@ -36,7 +39,7 @@ export class ProviderQuoteCandleStoreService {
         connection_id, instrument, timeframe, bucket_time,
         open, high, low, close, bid_close, ask_close, spread_close,
         sample_count, source, first_sample_at, last_sample_at
-      ) VALUES ($1, $2, 'M1', $3, $4, $4, $4, $4, $5, $6, $7, 1, 'metaapi-rpc-sampled', $8, $8)
+      ) VALUES ($1, $2, 'M1', $3, $4, $4, $4, $4, $5, $6, $7, 1, $9, $8, $8)
       ON CONFLICT (connection_id, instrument, timeframe, bucket_time)
       DO UPDATE SET
         high = GREATEST(market_data.provider_quote_candles.high, EXCLUDED.high),
@@ -46,6 +49,7 @@ export class ProviderQuoteCandleStoreService {
         ask_close = EXCLUDED.ask_close,
         spread_close = EXCLUDED.spread_close,
         sample_count = market_data.provider_quote_candles.sample_count + 1,
+        source = EXCLUDED.source,
         last_sample_at = GREATEST(
           market_data.provider_quote_candles.last_sample_at,
           EXCLUDED.last_sample_at
@@ -61,7 +65,93 @@ export class ProviderQuoteCandleStoreService {
         ask.toFixed(10),
         spread.toFixed(10),
         sampleAt.toISOString(),
+        source,
       ],
+    );
+  }
+
+  /**
+   * Backfill broker-native M1 OHLC without inventing bid/ask or spread evidence.
+   * Historical cTrader trendbars are price bars, not executable spread samples;
+   * live getCurrentPrice() observations must still build the spread window.
+   */
+  async upsertM1History(
+    connectionId: string,
+    instrument: string,
+    rows: OHLCV[],
+    source: ProviderQuoteSource,
+  ): Promise<void> {
+    const normalized = rows
+      .map((row) => ({
+        timestamp: new Date(row.timestamp),
+        open: Number(row.open),
+        high: Number(row.high),
+        low: Number(row.low),
+        close: Number(row.close),
+        volume: Number(row.tickVolume ?? row.volume ?? 0),
+      }))
+      .filter(
+        (row) =>
+          Number.isFinite(row.timestamp.getTime()) &&
+          Number.isFinite(row.open) &&
+          Number.isFinite(row.high) &&
+          Number.isFinite(row.low) &&
+          Number.isFinite(row.close) &&
+          row.open > 0 &&
+          row.high > 0 &&
+          row.low > 0 &&
+          row.close > 0,
+      )
+      .map((row) => ({
+        timestamp: row.timestamp.toISOString(),
+        open: row.open.toFixed(10),
+        high: row.high.toFixed(10),
+        low: row.low.toFixed(10),
+        close: row.close.toFixed(10),
+        sampleCount: Math.max(1, Math.floor(Number.isFinite(row.volume) ? row.volume : 0)),
+      }));
+    if (normalized.length === 0) return;
+
+    await this.dataSource.query(
+      `
+      INSERT INTO market_data.provider_quote_candles (
+        connection_id, instrument, timeframe, bucket_time,
+        open, high, low, close, bid_close, ask_close, spread_close,
+        sample_count, source, first_sample_at, last_sample_at
+      )
+      SELECT
+        $1, $2, 'M1', x.timestamp, x.open, x.high, x.low, x.close,
+        NULL, NULL, NULL, x.sample_count, $4, x.timestamp, x.timestamp + interval '59 seconds'
+      FROM jsonb_to_recordset($3::jsonb) AS x(
+        timestamp timestamptz,
+        open numeric,
+        high numeric,
+        low numeric,
+        close numeric,
+        sample_count integer
+      )
+      ON CONFLICT (connection_id, instrument, timeframe, bucket_time)
+      DO UPDATE SET
+        open = EXCLUDED.open,
+        high = GREATEST(market_data.provider_quote_candles.high, EXCLUDED.high),
+        low = LEAST(market_data.provider_quote_candles.low, EXCLUDED.low),
+        close = EXCLUDED.close,
+        sample_count = GREATEST(
+          market_data.provider_quote_candles.sample_count,
+          EXCLUDED.sample_count
+        ),
+        source = EXCLUDED.source,
+        first_sample_at = LEAST(
+          market_data.provider_quote_candles.first_sample_at,
+          EXCLUDED.first_sample_at
+        ),
+        last_sample_at = GREATEST(
+          market_data.provider_quote_candles.last_sample_at,
+          EXCLUDED.last_sample_at
+        ),
+        updated_at = now()
+      `,
+      [connectionId, instrument, JSON.stringify(normalized), source],
     );
   }
 
@@ -150,6 +240,8 @@ export class ProviderQuoteCandleStoreService {
       SELECT bid_close, ask_close, spread_close, last_sample_at
       FROM market_data.provider_quote_candles
       WHERE connection_id = $1 AND instrument = $2 AND timeframe = 'M1'
+        AND bid_close IS NOT NULL
+        AND ask_close IS NOT NULL
       ORDER BY last_sample_at DESC
       LIMIT 1
       `,
@@ -283,6 +375,19 @@ export class ProviderQuoteCandleStoreService {
     }
 
     return aggregated.slice(-count);
+  }
+
+  async getOldestM1OpenTime(connectionId: string, instrument: string): Promise<Date | null> {
+    const rows = await this.dataSource.query(
+      `SELECT MIN(bucket_time) AS oldest
+       FROM market_data.provider_quote_candles
+       WHERE connection_id = $1 AND instrument = $2 AND timeframe = 'M1'`,
+      [connectionId, instrument],
+    );
+    const raw = rows?.[0]?.oldest;
+    if (!raw) return null;
+    const oldest = new Date(raw);
+    return Number.isFinite(oldest.getTime()) ? oldest : null;
   }
 
   async countM1Candles(connectionId: string, instrument: string): Promise<number> {
