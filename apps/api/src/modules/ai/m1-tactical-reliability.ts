@@ -1,0 +1,184 @@
+import type { M1TacticalRoute } from './m1-tactical-route';
+import { M1_TACTICAL_POLICY_V1 } from './m1-tactical-candidate';
+
+export type M1ReliabilityRoute = Exclude<M1TacticalRoute, 'ABSTAIN'>;
+
+export const M1_RELIABILITY_MIN_SAMPLES = 5;
+export const M1_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES = 3;
+export const M1_RELIABILITY_MAX_SAMPLES = 20;
+export const M1_RELIABILITY_CARRY_FORWARD_DAYS = 7;
+
+const POLICY_LINEAGE: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  'm1-tactical-v1': Object.freeze(['m1-tactical-v1']),
+  'm1-tactical-v1-cal1': Object.freeze(['m1-tactical-v1-cal1', 'm1-tactical-v1']),
+});
+
+const PRIOR_WINS = 1;
+const PRIOR_LOSSES = 1;
+
+export interface M1RoutePairSideEvidenceRow {
+  route: M1ReliabilityRoute;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  policyVersion: string;
+  realisedPnl: number;
+  closedAt: Date;
+}
+
+export interface M1RoutePairSideReliabilityInput {
+  route: M1ReliabilityRoute;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  currentPolicyVersion: string;
+  evaluatedAt: Date;
+  evidenceRows: M1RoutePairSideEvidenceRow[];
+}
+
+export type M1RoutePairSideReliabilityReason =
+  | 'INSUFFICIENT_EVIDENCE'
+  | 'POSITIVE_EXPECTANCY'
+  | 'NEGATIVE_EXPECTANCY'
+  | 'EARLY_LOSS_STREAK'
+  | 'INVALID_EVIDENCE';
+
+export interface M1RoutePairSideReliabilityDecision {
+  eligible: boolean;
+  samples: number;
+  currentPolicySamples: number;
+  carriedSamples: number;
+  wins: number;
+  losses: number;
+  smoothedWinRate: number;
+  smoothedExpectedR: number;
+  reason: M1RoutePairSideReliabilityReason;
+  consideredPolicyVersions: string[];
+}
+
+function empty(reason: M1RoutePairSideReliabilityReason): M1RoutePairSideReliabilityDecision {
+  return {
+    eligible: reason === 'INSUFFICIENT_EVIDENCE',
+    samples: 0,
+    currentPolicySamples: 0,
+    carriedSamples: 0,
+    wins: 0,
+    losses: 0,
+    smoothedWinRate: 0.5,
+    smoothedExpectedR: 0.5 * M1_TACTICAL_POLICY_V1.targetR - 0.5,
+    reason,
+    consideredPolicyVersions: [],
+  };
+}
+
+function compatiblePolicies(currentPolicyVersion: string): readonly string[] {
+  return POLICY_LINEAGE[currentPolicyVersion] ?? [currentPolicyVersion];
+}
+
+export function evaluateM1RoutePairSideReliability(
+  input: M1RoutePairSideReliabilityInput,
+): M1RoutePairSideReliabilityDecision {
+  const evaluatedAtMs = input.evaluatedAt.getTime();
+  const instrument = input.instrument.trim().toUpperCase();
+  if (
+    !Number.isFinite(evaluatedAtMs) ||
+    !instrument ||
+    !input.currentPolicyVersion.trim() ||
+    !Array.isArray(input.evidenceRows)
+  ) {
+    return empty('INVALID_EVIDENCE');
+  }
+
+  const compatible = compatiblePolicies(input.currentPolicyVersion);
+  const compatibleSet = new Set(compatible);
+  const cutoffMs = evaluatedAtMs - M1_RELIABILITY_CARRY_FORWARD_DAYS * 24 * 60 * 60_000;
+  const matching = input.evidenceRows
+    .filter((row) => {
+      const closedAtMs = row.closedAt instanceof Date ? row.closedAt.getTime() : Number.NaN;
+      return (
+        row.route === input.route &&
+        row.instrument.trim().toUpperCase() === instrument &&
+        row.direction === input.direction &&
+        compatibleSet.has(row.policyVersion) &&
+        Number.isFinite(row.realisedPnl) &&
+        row.realisedPnl !== 0 &&
+        Number.isFinite(closedAtMs) &&
+        closedAtMs <= evaluatedAtMs &&
+        closedAtMs >= cutoffMs
+      );
+    })
+    .sort((a, b) => b.closedAt.getTime() - a.closedAt.getTime());
+
+  const current = matching
+    .filter((row) => row.policyVersion === input.currentPolicyVersion)
+    .slice(0, M1_RELIABILITY_MAX_SAMPLES);
+
+  let selected: M1RoutePairSideEvidenceRow[];
+  let carriedSamples = 0;
+  if (current.length >= M1_RELIABILITY_MIN_SAMPLES) {
+    selected = current;
+  } else {
+    const missing = M1_RELIABILITY_MIN_SAMPLES - current.length;
+    const predecessor = matching
+      .filter((row) => row.policyVersion !== input.currentPolicyVersion)
+      .sort((a, b) => {
+        const policyOrder =
+          compatible.indexOf(a.policyVersion) - compatible.indexOf(b.policyVersion);
+        return policyOrder !== 0 ? policyOrder : b.closedAt.getTime() - a.closedAt.getTime();
+      })
+      .slice(0, missing);
+    carriedSamples = predecessor.length;
+    selected = [...current, ...predecessor];
+  }
+
+  const wins = selected.filter((row) => row.realisedPnl > 0).length;
+  const losses = selected.filter((row) => row.realisedPnl < 0).length;
+  const samples = wins + losses;
+  const smoothedWinRate = (wins + PRIOR_WINS) / (samples + PRIOR_WINS + PRIOR_LOSSES);
+  const smoothedExpectedR = smoothedWinRate * M1_TACTICAL_POLICY_V1.targetR - (1 - smoothedWinRate);
+  const consideredPolicyVersions = compatible.filter((version) =>
+    selected.some((row) => row.policyVersion === version),
+  );
+
+  if (samples >= M1_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES && wins === 0 && losses >= 3) {
+    return {
+      eligible: false,
+      samples,
+      currentPolicySamples: current.length,
+      carriedSamples,
+      wins,
+      losses,
+      smoothedWinRate,
+      smoothedExpectedR,
+      reason: 'EARLY_LOSS_STREAK',
+      consideredPolicyVersions: [...consideredPolicyVersions],
+    };
+  }
+
+  if (samples < M1_RELIABILITY_MIN_SAMPLES) {
+    return {
+      eligible: true,
+      samples,
+      currentPolicySamples: current.length,
+      carriedSamples,
+      wins,
+      losses,
+      smoothedWinRate,
+      smoothedExpectedR,
+      reason: 'INSUFFICIENT_EVIDENCE',
+      consideredPolicyVersions: [...consideredPolicyVersions],
+    };
+  }
+
+  const eligible = smoothedExpectedR > 0;
+  return {
+    eligible,
+    samples,
+    currentPolicySamples: current.length,
+    carriedSamples,
+    wins,
+    losses,
+    smoothedWinRate,
+    smoothedExpectedR,
+    reason: eligible ? 'POSITIVE_EXPECTANCY' : 'NEGATIVE_EXPECTANCY',
+    consideredPolicyVersions: [...consideredPolicyVersions],
+  };
+}
