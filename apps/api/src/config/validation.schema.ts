@@ -42,70 +42,34 @@ export const validationSchema = Joi.object({
 
   COOKIE_SECRET: Joi.string().min(16).required(),
 
-  // Independent AES-256-GCM key for TOTP seeds at rest. Production must fail
-  // fast if it is absent or blank; dev/test may omit it until MFA is exercised.
   MFA_ENCRYPTION_KEY: Joi.when('NODE_ENV', {
     is: 'production',
     then: Joi.string().min(32).required(),
     otherwise: Joi.string().min(32).optional().allow(''),
   }),
 
-  // Dedicated HMAC pepper for low-entropy phone verification codes. Production
-  // requires independent secret material so stored code digests are not
-  // offline-enumerable after a database-only compromise.
   AUTH_VERIFICATION_PEPPER: Joi.when('NODE_ENV', {
     is: 'production',
     then: Joi.string().min(32).required(),
     otherwise: Joi.string().min(32).optional().allow(''),
   }),
 
-  // Broker credential encryption (AES-256-GCM)
-  // Must be at least 32 characters (256 bits).
-  // In production: managed by AWS KMS / HashiCorp Vault.
   BROKER_ENCRYPTION_KEY: Joi.string().min(32).required(),
-
-  // MetaAPI platform token — ONE token for the entire platform (not per-user)
-  // Obtain from: https://app.metaapi.cloud/api-access/generate-token
-  // In production: store in AWS Secrets Manager / HashiCorp Vault
   METAAPI_TOKEN: Joi.string().optional().allow(''),
-
-  // Round 7 (R7-impl-harness) — operator-only PRODUCTION-LIVE certification
-  // master gate (IREXPRO_ALLOW_LIVE_CERTIFICATION). OPTIONAL and FAIL-CLOSED:
-  // the configuration maps ONLY the EXACT string 'true' to enabled; absent,
-  // blank, 'false', or anything else means DISABLED (never a default-true).
-  // Any value other than 'true'/'false'/'' fails validation loudly at boot so
-  // an operator typo can never silently disable (or enable) LIVE certification.
-  // This gate arms the operator-run LIVE certification harness ONLY — it never
-  // affects trading authorization (that remains the catalog VERIFIED process).
   IREXPRO_ALLOW_LIVE_CERTIFICATION: Joi.string().valid('true', 'false').optional().allow(''),
 
-  // cTrader Open API platform application credentials (Sprint 56 / Task 48-B).
-  // OPTIONAL — the adapter registers truthfully without them, but connections
-  // fail closed with a clear configuration message. Register the platform app
-  // at https://openapi.ctrader.com (Spotware approval flow). NEVER log these.
   CTRADER_CLIENT_ID: Joi.string().optional().allow(''),
   CTRADER_CLIENT_SECRET: Joi.string().optional().allow(''),
-  // Comma-separated redirect URI allowlist for the cTrader OAuth flow
-  // (Sprint 56 correction round). OPTIONAL — the flow fails closed (honest
-  // message) when unset. NEVER log these values.
+  CTRADER_APP_APPROVAL_STATUS: Joi.string()
+    .valid('unknown', 'pending', 'active')
+    .optional()
+    .allow(''),
   CTRADER_REDIRECT_URIS: Joi.string().optional().allow(''),
-  // Sprint 56 correction round 2 (architect finding 4) — comma-separated
-  // HTTPS SERVER callback slot URI(s) registered on the cTrader Open API
-  // application for MOBILE flows. OPTIONAL — mobile-channel authorizations
-  // fail closed (honest operator guidance) when unset. NEVER log these.
   CTRADER_MOBILE_CALLBACK_URIS: Joi.string().optional().allow(''),
-  // Controlled deep link the server callback redirects to with the one-time
-  // handoff token. OPTIONAL — defaults to irexpro://broker/oauth/handoff.
   CTRADER_MOBILE_DEEP_LINK: Joi.string().optional().allow(''),
 
-  // Internal API key for Python AI Engine → NestJS communication.
-  // Must match NESTJS_INTERNAL_API_KEY in services/ai-engine/.env.
-  // In production: store in AWS Secrets Manager / HashiCorp Vault.
   NESTJS_INTERNAL_API_KEY: Joi.string().optional().allow(''),
 
-  // Generic external strategy/signal provider intake. It is fail-closed by
-  // default and PAPER_ONLY even when enabled. Provider secrets are supplied
-  // as a service header; never place them in TradingView webhook bodies.
   EXTERNAL_SIGNAL_PROVIDER_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
   EXTERNAL_SIGNAL_PROVIDER_KEY: Joi.when('EXTERNAL_SIGNAL_PROVIDER_ENABLED', {
     is: 'true',
@@ -113,9 +77,6 @@ export const validationSchema = Joi.object({
     otherwise: Joi.string().min(32).optional().allow(''),
   }),
 
-  // TradingView's public webhook route is authenticated at the network edge
-  // (Cloudflare origin + official TradingView source-IP allowlist). User and
-  // broker/session bindings stay server-side and never appear in the alert.
   TRADINGVIEW_WEBHOOK_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
   TRADINGVIEW_WEBHOOK_USER_ID: Joi.when('TRADINGVIEW_WEBHOOK_ENABLED', {
     is: 'true',
@@ -128,8 +89,6 @@ export const validationSchema = Joi.object({
       .allow(''),
   }),
 
-  // VPS-native six-pair PAPER evidence. A real Twelve Data key is required
-  // when enabled; the shared demo key is intentionally rejected.
   VPS_FOREX_SCANNER_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
   TWELVEDATA_API_KEY: Joi.when('VPS_FOREX_SCANNER_ENABLED', {
     is: 'true',
@@ -156,9 +115,21 @@ export const validationSchema = Joi.object({
       .optional()
       .allow(''),
   }),
+  M1_TACTICAL_MARKET_DATA_CONNECTION_ID: Joi.string()
+    .guid({ version: ['uuidv4'] })
+    .optional()
+    .allow(''),
+  M1_TACTICAL_CTRADER_COLLECTION_ENABLED: Joi.string()
+    .valid('true', 'false')
+    .optional()
+    .allow(''),
+  M1_TACTICAL_CTRADER_COLLECTION_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(10_000)
+    .max(300_000)
+    .optional(),
+  M1_TACTICAL_CTRADER_INSTRUMENTS: Joi.string().optional().allow(''),
 
-  // Read-only MetaTrader broker-native MTF source for the frozen
-  // high-conviction overlay. Enabling this never grants trade authority.
   MULTIMODEL_BROKER_EXPERT_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
   MULTIMODEL_BROKER_EXPERT_SOURCE_CONNECTION_ID: Joi.when('MULTIMODEL_BROKER_EXPERT_ENABLED', {
     is: 'true',
@@ -171,12 +142,9 @@ export const validationSchema = Joi.object({
       .allow(''),
   }),
 
-  // Python AI engine scheduler coordination (NestJS → AI engine)
   AI_ENGINE_BASE_URL: Joi.string().default('http://localhost:8001/api/v1'),
   AI_ENGINE_SCHEDULER_ENABLED: Joi.boolean().default(false),
 
-  // Paystack sandbox integration (Sprint 15) — fail-closed by default.
-  // PAYSTACK_SECRET_KEY must never be logged or returned; only present in local .env.
   PAYSTACK_ENABLED: Joi.boolean().default(false),
   PAYSTACK_SECRET_KEY: Joi.string().optional().allow(''),
   PAYSTACK_PUBLIC_KEY: Joi.string().optional().allow(''),
@@ -184,9 +152,6 @@ export const validationSchema = Joi.object({
   PAYSTACK_BASE_URL: Joi.string().default('https://api.paystack.co'),
   PAYSTACK_CALLBACK_URL: Joi.string().optional().allow(''),
 
-  // Stripe sandbox integration (Sprint 17) — fail-closed by default.
-  // STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET must never be logged or returned;
-  // only present in local .env. The app must boot without either being set.
   STRIPE_ENABLED: Joi.boolean().default(false),
   STRIPE_SECRET_KEY: Joi.string().optional().allow(''),
   STRIPE_PUBLISHABLE_KEY: Joi.string().optional().allow(''),
@@ -195,15 +160,12 @@ export const validationSchema = Joi.object({
   STRIPE_SUCCESS_URL: Joi.string().optional().allow(''),
   STRIPE_CANCEL_URL: Joi.string().optional().allow(''),
 
-  // Sprint 28 — password reset / verification delivery.
   WEB_BASE_URL: Joi.string().optional().allow(''),
   ADMIN_BASE_URL: Joi.string().optional().allow(''),
   EMAIL_SMTP_URL: Joi.string().optional().allow(''),
   EMAIL_FROM: Joi.string().optional().allow(''),
   EMAIL_FROM_ADDRESS: Joi.string().optional().allow(''),
 
-  // Sprint 48 — phone verification delivery. Provider values stay optional so
-  // the service can fail closed when SMS is intentionally not configured.
   TWILIO_ACCOUNT_SID: Joi.string().optional().allow(''),
   TWILIO_AUTH_TOKEN: Joi.string().optional().allow(''),
   TWILIO_API_KEY: Joi.string().optional().allow(''),
