@@ -52,6 +52,7 @@ import { scoreTrendPersistenceShadow } from './trend-persistence-shadow';
 import {
   PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
   PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R,
+  PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES,
   PAPER_RESEARCH_EXPLORATION_MIN_CONFIDENCE,
   PAPER_PAIRED_REVERSAL_RESEARCH_ARTIFACT,
   PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP,
@@ -3975,26 +3976,27 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const rows = (await this.dataSource.query(
       `
         SELECT
-          COUNT(*) FILTER (WHERE realised_pnl > 0)::int AS wins,
-          COUNT(*) FILTER (WHERE realised_pnl < 0)::int AS losses
-        FROM (
-          SELECT t.realised_pnl
-          FROM trading.trade_intents ti
-          JOIN trading.trades t ON t.trade_intent_id = ti.id
-          WHERE ti.user_id = $1
-            AND ti.broker_connection_id = $2
-            AND ti.instrument = $3
-            AND ti.direction = $4
-            AND ti.status = 'EXECUTED'
-            AND ti.metadata->>'paper_research_throughput' = 'true'
-            AND ti.metadata->>'paper_research_throughput_artifact' = ANY($5::text[])
-            AND ti.metadata->>'decision_policy_version' = $6
-            AND t.status = 'CLOSED'
-            AND t.realised_pnl IS NOT NULL
-            AND t.closed_at >= NOW() - INTERVAL '24 hours'
-          ORDER BY t.closed_at DESC
-          LIMIT 20
-        ) recent_research_samples
+          ti.metadata->>'decision_policy_version' AS policy_version,
+          t.realised_pnl,
+          t.closed_at
+        FROM trading.trade_intents ti
+        JOIN trading.trades t ON t.trade_intent_id = ti.id
+        WHERE ti.user_id = $1
+          AND ti.broker_connection_id = $2
+          AND ti.instrument = $3
+          AND ti.direction = $4
+          AND ti.status = 'EXECUTED'
+          AND ti.metadata->>'paper_research_throughput' = 'true'
+          AND ti.metadata->>'paper_research_throughput_artifact' = ANY($5::text[])
+          AND ti.metadata->>'decision_policy_version' = ANY($6::text[])
+          AND t.status = 'CLOSED'
+          AND t.realised_pnl IS NOT NULL
+          AND t.realised_pnl <> 0
+          AND t.closed_at >= NOW() - INTERVAL '7 days'
+        ORDER BY
+          CASE WHEN ti.metadata->>'decision_policy_version' = $7 THEN 0 ELSE 1 END,
+          t.closed_at DESC
+        LIMIT 25
       `,
       [
         userId,
@@ -4002,14 +4004,36 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         instrument.trim().toUpperCase(),
         direction,
         [...PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS],
+        [...PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS],
         ACTIVE_MODEL_POLICY_VERSION,
       ],
-    )) as Array<{ wins: number | string | null; losses: number | string | null }>;
+    )) as Array<{
+      policy_version: string | null;
+      realised_pnl: number | string | null;
+      closed_at: string | Date | null;
+    }>;
 
-    const row = rows[0];
+    const currentPolicyRows = rows.filter(
+      (row) => row.policy_version === ACTIVE_MODEL_POLICY_VERSION && Number(row.realised_pnl) !== 0,
+    );
+    const predecessorRows = rows.filter(
+      (row) => row.policy_version !== ACTIVE_MODEL_POLICY_VERSION && Number(row.realised_pnl) !== 0,
+    );
+    const maxSamples = 20;
+    const selected =
+      currentPolicyRows.length >= PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES
+        ? currentPolicyRows.slice(0, maxSamples)
+        : [
+            ...currentPolicyRows,
+            ...predecessorRows.slice(
+              0,
+              PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES - currentPolicyRows.length,
+            ),
+          ];
+
     return {
-      wins: Math.max(0, Number(row?.wins ?? 0)),
-      losses: Math.max(0, Number(row?.losses ?? 0)),
+      wins: selected.filter((row) => Number(row.realised_pnl) > 0).length,
+      losses: selected.filter((row) => Number(row.realised_pnl) < 0).length,
     };
   }
 
