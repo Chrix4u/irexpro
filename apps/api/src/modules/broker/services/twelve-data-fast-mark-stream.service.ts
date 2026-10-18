@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { LivePaperMarketDataService } from './live-paper-market-data.service';
 import { PaperBrokerStateService } from './paper-broker-state.service';
+import { isFxWeeklySessionOpen } from '../../market-data/utils/fx-weekly-session';
 
 type WsEvent = { data?: unknown; code?: number };
 type NativeWebSocketLike = {
@@ -30,6 +31,7 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
   private preferenceTimer: NodeJS.Timeout | null = null;
   private reconnectDelayMs = 5_000;
   private destroyed = false;
+  private marketSessionPaused = false;
   private preferredProviderSymbol = PROVIDER_SYMBOLS[0]!;
 
   constructor(
@@ -41,9 +43,9 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
   async onModuleInit(): Promise<void> {
     if (process.env.NODE_ENV === 'test' || !this.enabled()) return;
     await this.refreshPreferredSymbol(false);
-    this.connect();
+    this.reconcileMarketSession();
     this.preferenceTimer = setInterval(() => {
-      void this.refreshPreferredSymbol(true);
+      void this.refreshPreferredSymbol(true).finally(() => this.reconcileMarketSession());
     }, 30_000);
     this.preferenceTimer.unref?.();
   }
@@ -72,8 +74,46 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
     return Boolean(key && key.toLowerCase() !== 'demo');
   }
 
+  private reconcileMarketSession(): void {
+    if (this.destroyed || !this.enabled()) return;
+    const marketOpen = isFxWeeklySessionOpen(new Date());
+    if (!marketOpen) {
+      if (!this.marketSessionPaused) {
+        this.marketSessionPaused = true;
+        this.logger.log(
+          'Twelve Data fast-mark stream paused while the FX weekly session is closed',
+        );
+      }
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      if (this.heartbeatTimer) {
+        clearInterval(this.heartbeatTimer);
+        this.heartbeatTimer = null;
+      }
+      const socket = this.socket;
+      this.socket = null;
+      if (socket) {
+        try {
+          socket.close();
+        } catch {
+          // Session-close owns the disconnect; no reconnect while the market is closed.
+        }
+      }
+      return;
+    }
+
+    if (this.marketSessionPaused) {
+      this.marketSessionPaused = false;
+      this.logger.log('Twelve Data fast-mark stream resuming for the open FX weekly session');
+    }
+    this.connect();
+  }
+
   private connect(): void {
-    if (this.destroyed || !this.enabled() || this.socket) return;
+    if (this.destroyed || !this.enabled() || this.socket || !isFxWeeklySessionOpen(new Date()))
+      return;
     const Ctor = (globalThis as unknown as { WebSocket?: NativeWebSocketCtor }).WebSocket;
     if (!Ctor) {
       this.logger.warn('Node WebSocket client unavailable; fast PAPER marks disabled');
@@ -238,7 +278,13 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
   }
 
   private scheduleReconnect(): void {
-    if (this.destroyed || !this.enabled() || this.reconnectTimer) return;
+    if (
+      this.destroyed ||
+      !this.enabled() ||
+      this.reconnectTimer ||
+      !isFxWeeklySessionOpen(new Date())
+    )
+      return;
     const delay = this.reconnectDelayMs;
     this.reconnectDelayMs = Math.min(60_000, this.reconnectDelayMs * 2);
     this.reconnectTimer = setTimeout(() => {
