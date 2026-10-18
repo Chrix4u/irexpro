@@ -35,12 +35,71 @@ class FakeWebSocket {
 describe('TwelveDataFastMarkStreamService', () => {
   const originalWebSocket = (globalThis as unknown as { WebSocket?: unknown }).WebSocket;
 
+  beforeEach(() => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-19T12:00:00.000Z'));
+  });
+
   afterEach(() => {
     const target = globalThis as unknown as { WebSocket?: unknown };
     if (originalWebSocket === undefined) delete target.WebSocket;
     else target.WebSocket = originalWebSocket;
     FakeWebSocket.last = null;
     jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+
+  it('keeps the fast-mark socket off while FX is closed and reconnects when the session opens', () => {
+    (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
+    const config = {
+      get: jest.fn((key: string, fallback?: unknown) => {
+        const values: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.fastMarkStreamEnabled': true,
+          'vpsForexScanner.apiKey': 'test-key',
+        };
+        return key in values ? values[key] : fallback;
+      }),
+    } as unknown as ConfigService;
+    const market = { updateStreamingMidQuote: jest.fn() } as unknown as LivePaperMarketDataService;
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const service = new TwelveDataFastMarkStreamService(config, market, paperState);
+    const reconcile = (service as unknown as { reconcileMarketSession(): void })
+      .reconcileMarketSession;
+
+    expect(typeof reconcile).toBe('function');
+    jest.setSystemTime(new Date('2026-10-17T12:00:00.000Z'));
+    reconcile.call(service);
+    expect(FakeWebSocket.last).toBeNull();
+
+    jest.setSystemTime(new Date('2026-10-19T12:00:00.000Z'));
+    reconcile.call(service);
+    expect(FakeWebSocket.last).not.toBeNull();
+    service.onModuleDestroy();
+  });
+
+  it('does not schedule reconnect attempts while the FX weekly session is closed', () => {
+    (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
+    const config = {
+      get: jest.fn((key: string, fallback?: unknown) => {
+        const values: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.fastMarkStreamEnabled': true,
+          'vpsForexScanner.apiKey': 'test-key',
+        };
+        return key in values ? values[key] : fallback;
+      }),
+    } as unknown as ConfigService;
+    const market = { updateStreamingMidQuote: jest.fn() } as unknown as LivePaperMarketDataService;
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const service = new TwelveDataFastMarkStreamService(config, market, paperState);
+
+    jest.setSystemTime(new Date('2026-10-17T12:00:00.000Z'));
+    (service as unknown as { scheduleReconnect(): void }).scheduleReconnect();
+
+    expect(
+      (service as unknown as { reconnectTimer: NodeJS.Timeout | null }).reconnectTimer,
+    ).toBeNull();
+    service.onModuleDestroy();
   });
 
   it('subscribes only to the selected fast-mark pair and routes its price', () => {
