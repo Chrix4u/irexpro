@@ -8,9 +8,7 @@ import {
   type M1TacticalFeatureSnapshot,
 } from './m1-tactical-features';
 
-function snapshot(
-  overrides: Partial<M1TacticalFeatureSnapshot> = {},
-): M1TacticalFeatureSnapshot {
+function snapshot(overrides: Partial<M1TacticalFeatureSnapshot> = {}): M1TacticalFeatureSnapshot {
   return {
     artifact: M1_TACTICAL_FEATURE_ARTIFACT,
     instrument: 'EURUSD',
@@ -125,6 +123,28 @@ describe('buildM1TacticalCandidates', () => {
 
     expect(buy.directionQuality).toBeCloseTo(sell.directionQuality, 12);
     expect(buy.score).toBeCloseTo(sell.score, 12);
+  });
+
+  it('caps candidate confidence at the versioned governance-compatible ceiling', () => {
+    const strong = snapshot({
+      emaSeparationAtr: 1,
+      emaSlopeAtr: 1,
+      momentum1Atr: 1,
+      momentum3Atr: 1,
+      momentum5Atr: 1,
+      efficiency5: 1,
+      volatilityScore: 0,
+      alignment: { m5: 1, m15: 1, h1: 1, h4: 1 },
+      higherTimeframeAgreement: 1,
+      closeLocation: 1,
+      upperWickRatio: 0,
+      lowerWickRatio: 1,
+      rsi14: 70,
+      breakoutUpAtr: 1,
+    });
+    const [buy] = buildM1TacticalCandidates(strong, M1_TACTICAL_POLICY_V1);
+    expect(buy.confidence).toBeLessThanOrEqual(M1_TACTICAL_POLICY_V1.maxConfidence);
+    expect(M1_TACTICAL_POLICY_V1.maxConfidence).toBe(0.738);
   });
 
   it('honours an explicit versioned policy geometry', () => {

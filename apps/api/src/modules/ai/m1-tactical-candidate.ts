@@ -7,6 +7,7 @@ export interface M1TacticalPolicy {
   stopAtrMultiplier: number;
   targetR: number;
   minStopPips: number;
+  maxConfidence: number;
   minDirectionalEdge: number;
   minContinuationQuality: number;
   minContinuationMomentumAtr: number;
@@ -23,6 +24,7 @@ export const M1_TACTICAL_POLICY_V1: Readonly<M1TacticalPolicy> = Object.freeze({
   stopAtrMultiplier: 1.1,
   targetR: 1.6,
   minStopPips: 5,
+  maxConfidence: 0.738,
   minDirectionalEdge: 0.08,
   minContinuationQuality: 0.58,
   minContinuationMomentumAtr: 0.12,
@@ -107,8 +109,7 @@ function buildCandidate(
     direction === 'BUY' ? snapshot.failedBreakoutDown : snapshot.failedBreakoutUp;
 
   const closePressure = sign * (snapshot.closeLocation - 0.5) * 2;
-  const wickPressure =
-    sign * (snapshot.lowerWickRatio - snapshot.upperWickRatio);
+  const wickPressure = sign * (snapshot.lowerWickRatio - snapshot.upperWickRatio);
   const rsiBias = sign * ((snapshot.rsi14 - 50) / 25);
   const directionalComposite = clampSigned(
     0.19 * clampSigned(alignedEmaSeparationAtr) +
@@ -122,8 +123,11 @@ function buildCandidate(
       0.08 * clampSigned(breakoutAtr),
   );
   const directionQuality = clamp01(0.5 + directionalComposite / 2);
-  const confidence = clamp01(
-    0.5 + 0.3 * directionQuality + 0.08 * snapshot.efficiency5 - 0.08 * snapshot.volatilityScore,
+  const confidence = Math.min(
+    policy.maxConfidence,
+    clamp01(
+      0.5 + 0.3 * directionQuality + 0.08 * snapshot.efficiency5 - 0.08 * snapshot.volatilityScore,
+    ),
   );
   const score =
     directionQuality +
@@ -169,8 +173,5 @@ export function buildM1TacticalCandidates(
   snapshot: M1TacticalFeatureSnapshot,
   policy: M1TacticalPolicy = M1_TACTICAL_POLICY_V1,
 ): readonly [M1TacticalCandidate, M1TacticalCandidate] {
-  return [
-    buildCandidate(snapshot, 'BUY', policy),
-    buildCandidate(snapshot, 'SELL', policy),
-  ];
+  return [buildCandidate(snapshot, 'BUY', policy), buildCandidate(snapshot, 'SELL', policy)];
 }
