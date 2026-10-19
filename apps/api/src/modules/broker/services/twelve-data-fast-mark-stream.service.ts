@@ -248,7 +248,7 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
         this.logger.warn(
           `M1 PAPER bootstrap deferred for ${providerSymbol}: ${(error as Error).message}`,
         );
-        if (force) this.scheduleM1GapRepair(providerSymbol);
+        this.scheduleM1GapRepair(providerSymbol);
       })
       .finally(() => {
         if (this.m1BootstrapTasks.get(providerSymbol) === task) {
