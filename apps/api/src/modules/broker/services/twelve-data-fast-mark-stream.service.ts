@@ -33,6 +33,8 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
   private destroyed = false;
   private marketSessionPaused = false;
   private preferredProviderSymbol = PROVIDER_SYMBOLS[0]!;
+  private readonly m1BootstrapTasks = new Map<string, Promise<void>>();
+  private readonly m1BootstrapCompletedAt = new Map<string, number>();
 
   constructor(
     private readonly config: ConfigService,
@@ -142,7 +144,7 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
         `Twelve Data fast-mark WebSocket connected; primary=${this.preferredProviderSymbol} subscription requested`,
       );
     });
-    socket.addEventListener('message', (event) => this.onMessage(event.data));
+    socket.addEventListener('message', (event) => void this.onMessage(event.data));
     socket.addEventListener('error', () => {
       this.logger.warn('Twelve Data fast-mark WebSocket reported an error');
     });
@@ -154,7 +156,7 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
     });
   }
 
-  private onMessage(raw: unknown): void {
+  private async onMessage(raw: unknown): Promise<void> {
     let message: Record<string, unknown>;
     try {
       message = JSON.parse(String(raw)) as Record<string, unknown>;
@@ -194,6 +196,9 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
         );
         this.socket.send(JSON.stringify({ action: 'subscribe', params: { symbols: 'EUR/USD' } }));
       }
+      for (const providerSymbol of success) {
+        await this.ensureM1Bootstrap(providerSymbol);
+      }
       return;
     }
 
@@ -217,6 +222,96 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
     // recalculate unrealized P&L. v5 PAPER SL/TP remains governed by the
     // closed-M5 evidence path; tick-level exits require a separately
     // versioned execution model once a six-pair broker-grade stream exists.
+  }
+
+  private ensureM1Bootstrap(providerSymbol: string): Promise<void> {
+    const now = Date.now();
+    const completedAt = this.m1BootstrapCompletedAt.get(providerSymbol);
+    if (completedAt != null && now - completedAt < 60_000) return Promise.resolve();
+
+    const existing = this.m1BootstrapTasks.get(providerSymbol);
+    if (existing) return existing;
+
+    const task: Promise<void> = this.bootstrapM1History(providerSymbol)
+      .then(() => {
+        this.m1BootstrapCompletedAt.set(providerSymbol, Date.now());
+      })
+      .catch((error) => {
+        this.logger.warn(
+          `M1 PAPER bootstrap deferred for ${providerSymbol}: ${(error as Error).message}`,
+        );
+      })
+      .finally(() => {
+        if (this.m1BootstrapTasks.get(providerSymbol) === task) {
+          this.m1BootstrapTasks.delete(providerSymbol);
+        }
+      });
+    this.m1BootstrapTasks.set(providerSymbol, task);
+    return task;
+  }
+
+  private async bootstrapM1History(providerSymbol: string): Promise<void> {
+    const instrument = SYMBOL_MAP.get(providerSymbol);
+    if (!instrument) return;
+    const apiKey = this.config.get<string>('vpsForexScanner.apiKey', '').trim();
+    if (!apiKey) throw new Error('Twelve Data API key is unavailable');
+    const connectionId = this.config.get<string>('vpsForexScanner.brokerConnectionId', '').trim();
+    if (!connectionId) throw new Error('PAPER broker connection binding is unavailable');
+
+    const currentMinuteStart = Math.floor(Date.now() / 60_000) * 60_000;
+    const params = new URLSearchParams({
+      symbol: providerSymbol,
+      interval: '1min',
+      outputsize: '100',
+      timezone: 'UTC',
+      order: 'asc',
+      end_date: new Date(currentMinuteStart - 1_000).toISOString().slice(0, 19),
+      apikey: apiKey,
+    });
+    const response = await fetch(`https://api.twelvedata.com/time_series?${params.toString()}`, {
+      signal: AbortSignal.timeout(10_000),
+      headers: { accept: 'application/json' },
+    });
+    if (!response.ok) throw new Error(`Twelve Data HTTP ${response.status}`);
+    const payload = (await response.json()) as {
+      status?: string;
+      message?: string;
+      values?: Array<{
+        datetime?: string;
+        open?: string;
+        high?: string;
+        low?: string;
+        close?: string;
+      }>;
+    };
+    if (payload.status === 'error' || !Array.isArray(payload.values)) {
+      throw new Error(payload.message || 'Twelve Data returned no M1 history');
+    }
+    const rows = payload.values
+      .map((value) => ({
+        timestamp: new Date(`${String(value.datetime ?? '').replace(' ', 'T')}Z`),
+        open: String(value.open ?? ''),
+        high: String(value.high ?? ''),
+        low: String(value.low ?? ''),
+        close: String(value.close ?? ''),
+      }))
+      .filter((row) => {
+        const timestamp = row.timestamp.getTime();
+        const prices = [row.open, row.high, row.low, row.close].map(Number);
+        return (
+          Number.isFinite(timestamp) &&
+          timestamp < currentMinuteStart &&
+          prices.every((price) => Number.isFinite(price) && price > 0)
+        );
+      })
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    if (rows.length < 60) {
+      throw new Error(`Twelve Data returned only ${rows.length} completed M1 candles`);
+    }
+    this.market.updateClosedM1Candles(instrument, rows.slice(-100), connectionId);
+    this.logger.log(
+      `M1 PAPER history bootstrapped instrument=${instrument} candles=${Math.min(rows.length, 100)} source=TWELVE_DATA_REST`,
+    );
   }
 
   private async refreshPreferredSymbol(reconnectOnChange: boolean): Promise<void> {

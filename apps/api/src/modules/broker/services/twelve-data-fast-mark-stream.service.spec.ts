@@ -174,6 +174,110 @@ describe('TwelveDataFastMarkStreamService', () => {
     service.onModuleDestroy();
   });
 
+  it('deduplicates M1 bootstrap within a minute and refreshes it after a later accepted reconnect', async () => {
+    (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
+    const values = Array.from({ length: 70 }, (_, index) => {
+      const timestamp = new Date(Date.UTC(2026, 9, 19, 10, 50 + index));
+      return {
+        datetime: timestamp.toISOString().slice(0, 19).replace('T', ' '),
+        open: '1.10000',
+        high: '1.10020',
+        low: '1.09980',
+        close: '1.10010',
+      };
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({ status: 'ok', values }),
+    });
+    jest.spyOn(globalThis, 'fetch').mockImplementation(fetchMock as typeof fetch);
+    const config = {
+      get: jest.fn((key: string, fallback?: unknown) => {
+        const configured: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.fastMarkStreamEnabled': true,
+          'vpsForexScanner.apiKey': 'test-key',
+          'vpsForexScanner.brokerConnectionId': 'paper-1',
+        };
+        return key in configured ? configured[key] : fallback;
+      }),
+    } as unknown as ConfigService;
+    const market = {
+      updateStreamingMidQuote: jest.fn(),
+      updateClosedM1Candles: jest.fn(),
+    } as unknown as LivePaperMarketDataService;
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const service = new TwelveDataFastMarkStreamService(config, market, paperState);
+
+    await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+      JSON.stringify({ event: 'subscribe-status', success: [{ symbol: 'EUR/USD' }], fails: [] }),
+    );
+    await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+      JSON.stringify({ event: 'subscribe-status', success: [{ symbol: 'EUR/USD' }], fails: [] }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    jest.setSystemTime(new Date('2026-10-19T12:02:00.000Z'));
+    await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+      JSON.stringify({ event: 'subscribe-status', success: [{ symbol: 'EUR/USD' }], fails: [] }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const url = String(fetchMock.mock.calls[0]![0]);
+    expect(url).toContain('interval=1min');
+    expect(url).toContain('symbol=EUR%2FUSD');
+    expect(url).toContain('outputsize=100');
+    expect(market.updateClosedM1Candles).toHaveBeenCalledTimes(2);
+    const [instrument, rows, connectionId] = (market.updateClosedM1Candles as jest.Mock).mock
+      .calls[0]!;
+    expect(instrument).toBe('EURUSD');
+    expect(connectionId).toBe('paper-1');
+    expect(rows.length).toBeGreaterThanOrEqual(60);
+    expect(
+      rows.every(
+        (row: { timestamp: Date }) => row.timestamp < new Date('2026-10-19T12:00:00.000Z'),
+      ),
+    ).toBe(true);
+    service.onModuleDestroy();
+  });
+
+  it('does not bootstrap a rejected entitlement symbol before EUR/USD fallback is accepted', async () => {
+    (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({ status: 'ok', values: [] }),
+    });
+    jest.spyOn(globalThis, 'fetch').mockImplementation(fetchMock as typeof fetch);
+    const config = {
+      get: jest.fn((key: string, fallback?: unknown) => {
+        const configured: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.fastMarkStreamEnabled': true,
+          'vpsForexScanner.apiKey': 'test-key',
+          'vpsForexScanner.brokerConnectionId': 'paper-1',
+        };
+        return key in configured ? configured[key] : fallback;
+      }),
+    } as unknown as ConfigService;
+    const market = {
+      updateStreamingMidQuote: jest.fn(),
+      updateClosedM1Candles: jest.fn(),
+    } as unknown as LivePaperMarketDataService;
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const service = new TwelveDataFastMarkStreamService(config, market, paperState);
+    (service as unknown as { preferredProviderSymbol: string }).preferredProviderSymbol = 'USD/JPY';
+    (service as unknown as { socket: FakeWebSocket | null }).socket = new FakeWebSocket('test');
+
+    await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+      JSON.stringify({ event: 'subscribe-status', success: [], fails: [{ symbol: 'USD/JPY' }] }),
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(market.updateClosedM1Candles).not.toHaveBeenCalled();
+    service.onModuleDestroy();
+  });
+
   it('does not connect when fast marks are disabled', () => {
     (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
     const config = {

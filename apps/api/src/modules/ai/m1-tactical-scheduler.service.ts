@@ -243,6 +243,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         eventRisk.state,
         market.spreadEvidence,
         decisionTime,
+        market.paperSimulationSpreadPrice,
       );
     }
   }
@@ -256,6 +257,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     eventRisk: 'CLEAR' | 'HIGH_IMPACT_BLOCK' | 'UNVERIFIED',
     spreadEvidence: Parameters<typeof evaluateM1TacticalGovernance>[0]['executionSpreadEvidence'],
     decisionTime: Date,
+    paperSimulationSpreadPrice?: number,
   ): Promise<void> {
     if (!features) return;
     const routeDecision = classifyM1TacticalRoute(
@@ -278,6 +280,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       eventRisk,
       evaluatedAt: decisionTime,
       executionSpreadEvidence: spreadEvidence,
+      paperSimulationSpreadPrice,
       reliability,
     });
 
@@ -407,6 +410,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_decision_id: decisionId,
           m1_gross_expected_r: candidate.grossExpectedR,
           m1_execution_cost_r: governance.genericGovernance.estimatedExecutionCostR,
+          m1_execution_cost_source: governance.genericGovernance.executionCostSource,
           m1_net_expected_r: governance.netExpectedR,
           m1_route_net_expected_r_floor:
             this.rolloutPolicy.routeNetExpectedRFloors[
