@@ -80,6 +80,11 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
     if (this.config.get<boolean>('vpsForexScanner.enabled', false) !== true) return false;
     if (this.config.get<boolean>('vpsForexScanner.fastMarkStreamEnabled', true) === false)
       return false;
+    const provider = this.config
+      .get<string>('vpsForexScanner.fastMarkProvider', 'TWELVE_DATA')
+      .trim()
+      .toUpperCase();
+    if (provider !== 'TWELVE_DATA') return false;
     const key = this.config.get<string>('vpsForexScanner.apiKey', '').trim();
     return Boolean(key && key.toLowerCase() !== 'demo');
   }
