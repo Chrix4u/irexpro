@@ -455,6 +455,7 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
       metadata: expect.objectContaining({
         external_provider_paper_only: true,
         production_eligible: false,
+        position_sizing_tier: 'RESEARCH',
         m1_tactical_route: 'M1_TREND_CONTINUATION',
         m1_policy_version: 'm1-tactical-v1',
         m1_decision_id: 'decision-EURUSD-BUY-M1_TREND_CONTINUATION',

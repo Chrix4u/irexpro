@@ -421,6 +421,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         metadata: {
           external_provider_paper_only: true,
           production_eligible: false,
+          position_sizing_tier: 'RESEARCH',
           m1_tactical_route: routeDecision.route,
           m1_policy_version: candidate.policyVersion,
           m1_rollout_policy_version: this.rolloutPolicy.version,
