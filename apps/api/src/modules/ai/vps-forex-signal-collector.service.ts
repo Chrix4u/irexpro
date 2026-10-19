@@ -47,7 +47,11 @@ import {
   summarizeEnsembleSleeveOutcomes,
 } from './ensemble-shadow-outcome';
 import { buildEnsembleExpertRegistry } from './ensemble-expert-registry';
-import { scoreExtensionExhaustionShadow } from './extension-exhaustion-shadow';
+import {
+  PAPER_EXTENSION_EXHAUSTION_RESEARCH_ARTIFACT,
+  evaluatePaperExtensionExhaustionResearch,
+  scoreExtensionExhaustionShadow,
+} from './extension-exhaustion-shadow';
 import { scoreTrendPersistenceShadow } from './trend-persistence-shadow';
 import {
   PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
@@ -335,6 +339,10 @@ interface ExecutableCounterfactual {
   rejectedEdgeCanary: RejectedEdgeCanaryDecision | null;
   rejectedEdgeCanaryEvidence: RejectedEdgeCanaryEvidence | null;
   paperResearchThroughput: PaperResearchThroughputDecision;
+  paperExtensionExhaustionResearch: ReturnType<typeof evaluatePaperExtensionExhaustionResearch>;
+  paperExtensionExhaustionPairSideReliability: PaperResearchPairSideReliabilityDecision | null;
+  paperExtensionExhaustionEpisodeKey: string;
+  paperExtensionExhaustionEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
   pairedDirectionReversal: PairedDirectionReversalDecision;
   pairedReversalGovernance: EnsembleGovernanceDecision;
   pairedReversalResearch: ReturnType<typeof evaluatePaperPairedReversalResearch>;
@@ -1906,6 +1914,99 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperResearchThroughput.eligible &&
             Boolean(paperResearchPairSideReliability?.eligible) &&
             Boolean(paperResearchEpisodeGuard?.eligible);
+          const paperExtensionExhaustionResearch = evaluatePaperExtensionExhaustionResearch({
+            regime: planBEnsemble.regime,
+            driftState: ensembleGovernance.driftState,
+            confidence: best.confidence,
+            netExpectedR: ensembleGovernance.netExpectedR,
+            directionQuality: planBEnsemble.directionQuality,
+            tradeQuality: planBEnsemble.tradeQuality,
+            exitQuality: planBEnsemble.exitQuality,
+            extensionAtr: best.extensionAtr,
+            eventRisk: ensembleGovernance.eventRisk,
+            paperExecutionCostUsable: Boolean(
+              ensembleGovernance.paperExecutionCostUsable ??
+              ensembleGovernance.executionSpreadEvidenceValid,
+            ),
+          });
+          const paperExtensionExhaustionEpisodeKey = `${best.instrument}|${best.direction}|${planBEnsemble.regime}|PAPER_EXTENSION_EXHAUSTION_RESEARCH`;
+          let paperExtensionExhaustionPairSideReliability: PaperResearchPairSideReliabilityDecision | null =
+            null;
+          let paperExtensionExhaustionEpisodeGuard: ReturnType<
+            typeof evaluatePaperResearchEpisodeGuard
+          > | null = null;
+          if (
+            paperExtensionExhaustionResearch.eligible &&
+            !researchPredictionCalibration.blockRecommended
+          ) {
+            const inheritedReliabilityEvidence = paperResearchPairSideReliability
+              ? null
+              : await this.loadPaperResearchPairSideEvidence(
+                  userId,
+                  connectionId,
+                  best.instrument,
+                  best.direction,
+                );
+            const extensionRouteReliabilityEvidence =
+              await this.loadPaperExtensionExhaustionPairSideEvidence(
+                userId,
+                connectionId,
+                best.instrument,
+                best.direction,
+              );
+            if (
+              paperResearchPairSideReliability &&
+              extensionRouteReliabilityEvidence.wins === 0 &&
+              extensionRouteReliabilityEvidence.losses === 0
+            ) {
+              paperExtensionExhaustionPairSideReliability = paperResearchPairSideReliability;
+            } else {
+              const inherited = inheritedReliabilityEvidence ?? {
+                wins: paperResearchPairSideReliability?.wins ?? 0,
+                losses: paperResearchPairSideReliability?.losses ?? 0,
+                realisedRSamples: paperResearchPairSideReliability?.realisedRSamples ?? 0,
+                realisedRSum:
+                  (paperResearchPairSideReliability?.realisedAverageR ?? 0) *
+                  (paperResearchPairSideReliability?.realisedRSamples ?? 0),
+              };
+              paperExtensionExhaustionPairSideReliability =
+                evaluatePaperResearchPairSideReliability({
+                  wins: inherited.wins + extensionRouteReliabilityEvidence.wins,
+                  losses: inherited.losses + extensionRouteReliabilityEvidence.losses,
+                  realisedRSamples:
+                    inherited.realisedRSamples + extensionRouteReliabilityEvidence.realisedRSamples,
+                  realisedRSum:
+                    inherited.realisedRSum + extensionRouteReliabilityEvidence.realisedRSum,
+                });
+            }
+            if (!paperExtensionExhaustionPairSideReliability.eligible) {
+              this.logger.warn(
+                `PAPER extension-exhaustion ${best.instrument} ${best.direction} execution=SHADOW_ONLY ` +
+                  `reason=${paperExtensionExhaustionPairSideReliability.reason} samples=${paperExtensionExhaustionPairSideReliability.samples} ` +
+                  `realisedRSamples=${paperExtensionExhaustionPairSideReliability.realisedRSamples} ` +
+                  `realisedAverageR=${paperExtensionExhaustionPairSideReliability.realisedAverageR?.toFixed(4) ?? 'n/a'}`,
+              );
+            } else {
+              const previousExtensionEpisode = await this.loadPaperExtensionExhaustionEpisodeState(
+                userId,
+                connectionId,
+                best.instrument,
+                best.direction,
+              );
+              paperExtensionExhaustionEpisodeGuard = evaluatePaperResearchEpisodeGuard({
+                currentEpisodeKey: paperExtensionExhaustionEpisodeKey,
+                previousEpisodeKey: previousExtensionEpisode.previousEpisodeKey,
+                previousTradeStatus: previousExtensionEpisode.previousTradeStatus,
+                previousClosedAt: previousExtensionEpisode.previousClosedAt,
+                evaluatedAt,
+              });
+            }
+          }
+          const paperExtensionExhaustionResearchEligible =
+            paperExtensionExhaustionResearch.eligible &&
+            !researchPredictionCalibration.blockRecommended &&
+            Boolean(paperExtensionExhaustionPairSideReliability?.eligible) &&
+            Boolean(paperExtensionExhaustionEpisodeGuard?.eligible);
           const pairedDirectionReversal = evaluatePairedDirectionReversal({
             primaryDirection: primaryDirection ?? best.direction,
             buyProbability: pairMetaProbabilities.get('BUY') ?? 0,
@@ -1975,6 +2076,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             normalPaperExecution,
             rejectedEdgeCanaryEligible: Boolean(rejectedEdgeCanary?.eligible),
             paperResearchThroughputEligible: paperResearchExecutionEligible,
+            extensionExhaustionResearchEligible: paperExtensionExhaustionResearchEligible,
             pairedReversalResearchEligible,
           });
           let paperExecutionRoute = paperPostLossEntryGuard.eligible
@@ -2031,6 +2133,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `qualificationEvidence=false`,
             );
           }
+          if (paperExtensionExhaustionResearchEligible) {
+            this.logger.log(
+              `PAPER extension-exhaustion ${best.instrument} ${best.direction} ` +
+                `execution=ELIGIBLE executionAuthority=PAPER_ONLY_RESEARCH ` +
+                `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
+                `calibration=${researchPredictionCalibration.reason} qualificationEvidence=false`,
+            );
+          }
           if (pairedReversalResearchEligible) {
             this.logger.log(
               `PAPER paired-reversal ${best.instrument} ${best.direction} ` +
@@ -2084,6 +2194,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             rejectedEdgeCanary,
             rejectedEdgeCanaryEvidence,
             paperResearchThroughput,
+            paperExtensionExhaustionResearch,
+            paperExtensionExhaustionPairSideReliability,
+            paperExtensionExhaustionEpisodeKey,
+            paperExtensionExhaustionEpisodeGuard,
             pairedDirectionReversal,
             pairedReversalGovernance,
             pairedReversalResearch,
@@ -2160,7 +2274,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           allocationCapital: adaptiveAllocationCapital,
           portfolio: initialAdaptivePortfolio,
           pairedReversalNetExpectedR: entry.chosen.pairedDirectionReversal.researchNetExpectedR,
-          paperResearchPairSideReliability: entry.chosen.paperResearchPairSideReliability,
+          paperResearchPairSideReliability:
+            entry.chosen.paperExecutionRoute === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH'
+              ? entry.chosen.paperExtensionExhaustionPairSideReliability
+              : entry.chosen.paperResearchPairSideReliability,
         });
         initiallyEvaluatedWinners.push({
           ...entry,
@@ -2211,7 +2328,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           portfolio: refreshedPortfolio,
           pairedReversalNetExpectedR:
             rankedWinner.chosen.pairedDirectionReversal.researchNetExpectedR,
-          paperResearchPairSideReliability: rankedWinner.chosen.paperResearchPairSideReliability,
+          paperResearchPairSideReliability:
+            rankedWinner.chosen.paperExecutionRoute === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH'
+              ? rankedWinner.chosen.paperExtensionExhaustionPairSideReliability
+              : rankedWinner.chosen.paperResearchPairSideReliability,
         });
         const adaptiveWinner: AdaptiveScanWinner = {
           ...rankedWinner,
@@ -2276,6 +2396,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           rejectedEdgeCanary,
           rejectedEdgeCanaryEvidence,
           paperResearchThroughput,
+          paperExtensionExhaustionResearch,
+          paperExtensionExhaustionPairSideReliability,
+          paperExtensionExhaustionEpisodeKey,
+          paperExtensionExhaustionEpisodeGuard,
           pairedDirectionReversal,
           pairedReversalGovernance,
           pairedReversalResearch,
@@ -2326,9 +2450,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
             : paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
               ? paperResearchThroughputModelVersion(ACTIVE_ENGINE_CODE)
-              : paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH'
-                ? `external-provider/${ACTIVE_ENGINE_CODE}/${PAPER_PAIRED_REVERSAL_RESEARCH_ARTIFACT}`
-                : `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`;
+              : paperExecutionRoute === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH'
+                ? `external-provider/${ACTIVE_ENGINE_CODE}/${PAPER_EXTENSION_EXHAUSTION_RESEARCH_ARTIFACT}`
+                : paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH'
+                  ? `external-provider/${ACTIVE_ENGINE_CODE}/${PAPER_PAIRED_REVERSAL_RESEARCH_ARTIFACT}`
+                  : `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`;
         const signalId = this.materialSignalIdFor({
           opportunityKey,
           instrument: best.instrument,
@@ -2431,6 +2557,23 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               paperResearchThroughput.qualificationEvidence,
             paper_research_throughput_execution_authority:
               paperResearchThroughput.executionAuthority,
+            paper_extension_exhaustion_research:
+              paperExecutionRoute === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH',
+            paper_extension_exhaustion_research_artifact: paperExtensionExhaustionResearch.artifact,
+            paper_extension_exhaustion_research_reason: paperExtensionExhaustionResearch.reason,
+            paper_extension_exhaustion_research_qualification_evidence:
+              paperExtensionExhaustionResearch.qualificationEvidence,
+            paper_extension_exhaustion_research_execution_authority:
+              paperExtensionExhaustionResearch.executionAuthority,
+            paper_extension_exhaustion_episode_key: paperExtensionExhaustionEpisodeKey,
+            paper_extension_exhaustion_episode_guard_reason:
+              paperExtensionExhaustionEpisodeGuard?.reason ?? null,
+            paper_extension_exhaustion_pair_side_reliability_reason:
+              paperExtensionExhaustionPairSideReliability?.reason ?? null,
+            paper_extension_exhaustion_pair_side_reliability_realised_r_samples:
+              paperExtensionExhaustionPairSideReliability?.realisedRSamples ?? null,
+            paper_extension_exhaustion_pair_side_reliability_realised_average_r:
+              paperExtensionExhaustionPairSideReliability?.realisedAverageR ?? null,
             paired_reversal_research: paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH',
             paired_reversal_research_artifact: PAPER_PAIRED_REVERSAL_RESEARCH_ARTIFACT,
             paired_reversal_research_reason: pairedReversalResearch.reason,
@@ -2749,6 +2892,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     if (option.paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT') {
       return { upperBound: PAPER_RESEARCH_THROUGHPUT_LOT_CAP, tier: 'RESEARCH' };
     }
+    if (option.paperExecutionRoute === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH') {
+      return { upperBound: PAPER_RESEARCH_THROUGHPUT_LOT_CAP, tier: 'RESEARCH' };
+    }
     if (option.paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH') {
       return { upperBound: PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP, tier: 'RESEARCH' };
     }
@@ -2857,7 +3003,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       paperExecutionBlockers: [],
       allowResearchRescue: false,
     });
-    const netExpectedR = calibrationAuthority.effectiveNetExpectedR;
+    const extensionCollectingCalibrationDiagnosticOnly =
+      input.executionRoute === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH' &&
+      predictionCalibration.maturity === 'COLLECTING' &&
+      !predictionCalibration.blockRecommended;
+    const netExpectedR = extensionCollectingCalibrationDiagnosticOnly
+      ? rawNetExpectedR
+      : calibrationAuthority.effectiveNetExpectedR;
 
     const sizing =
       input.executionRoute === 'NORMAL_PAPER'
@@ -4133,6 +4285,128 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       closed_at: string | Date | null;
     }>;
 
+    const row = rows[0];
+    if (!row) return empty;
+    const closedAt = row.closed_at ? new Date(row.closed_at) : null;
+    return {
+      previousEpisodeKey: row.episode_key ?? null,
+      previousTradeStatus: row.trade_status ?? null,
+      previousClosedAt: closedAt && Number.isFinite(closedAt.getTime()) ? closedAt : null,
+    };
+  }
+
+  private async loadPaperExtensionExhaustionPairSideEvidence(
+    userId: string,
+    connectionId: string,
+    instrument: string,
+    direction: 'BUY' | 'SELL',
+  ): Promise<{ wins: number; losses: number; realisedRSamples: number; realisedRSum: number }> {
+    if (!this.dataSource) {
+      return { wins: 0, losses: 0, realisedRSamples: 0, realisedRSum: 0 };
+    }
+    const rows = (await this.dataSource.query(
+      `
+        SELECT t.realised_pnl, t.fill_price, t.exit_price, t.stop_loss
+        FROM trading.trade_intents ti
+        JOIN trading.trades t ON t.trade_intent_id = ti.id
+        WHERE ti.user_id = $1
+          AND ti.broker_connection_id = $2
+          AND ti.instrument = $3
+          AND ti.direction = $4
+          AND ti.status = 'EXECUTED'
+          AND ti.metadata->>'paper_extension_exhaustion_research' = 'true'
+          AND ti.metadata->>'paper_extension_exhaustion_research_artifact' = $5
+          AND t.status = 'CLOSED'
+          AND t.realised_pnl IS NOT NULL
+          AND t.realised_pnl <> 0
+          AND t.closed_at >= NOW() - INTERVAL '7 days'
+        ORDER BY t.closed_at DESC
+        LIMIT 20
+      `,
+      [
+        userId,
+        connectionId,
+        instrument.trim().toUpperCase(),
+        direction,
+        PAPER_EXTENSION_EXHAUSTION_RESEARCH_ARTIFACT,
+      ],
+    )) as Array<{
+      realised_pnl: number | string | null;
+      fill_price: number | string | null;
+      exit_price: number | string | null;
+      stop_loss: number | string | null;
+    }>;
+    const realisedRs = rows
+      .map((row) => {
+        const fill = Number(row.fill_price);
+        const exit = Number(row.exit_price);
+        const initialStop = Number(row.stop_loss);
+        if (!Number.isFinite(fill) || !Number.isFinite(exit) || !Number.isFinite(initialStop)) {
+          return null;
+        }
+        const riskDistance = direction === 'BUY' ? fill - initialStop : initialStop - fill;
+        if (!Number.isFinite(riskDistance) || riskDistance <= 0) return null;
+        const realisedMove = direction === 'BUY' ? exit - fill : fill - exit;
+        const realisedR = realisedMove / riskDistance;
+        return Number.isFinite(realisedR) ? realisedR : null;
+      })
+      .filter((value): value is number => value !== null);
+    return {
+      wins: rows.filter((row) => Number(row.realised_pnl) > 0).length,
+      losses: rows.filter((row) => Number(row.realised_pnl) < 0).length,
+      realisedRSamples: realisedRs.length,
+      realisedRSum: realisedRs.reduce((sum, value) => sum + value, 0),
+    };
+  }
+
+  private async loadPaperExtensionExhaustionEpisodeState(
+    userId: string,
+    connectionId: string,
+    instrument: string,
+    direction: 'BUY' | 'SELL',
+  ): Promise<{
+    previousEpisodeKey: string | null;
+    previousTradeStatus: string | null;
+    previousClosedAt: Date | null;
+  }> {
+    const empty = {
+      previousEpisodeKey: null,
+      previousTradeStatus: null,
+      previousClosedAt: null,
+    };
+    if (!this.dataSource) return empty;
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          ti.metadata->>'paper_extension_exhaustion_episode_key' AS episode_key,
+          t.status AS trade_status,
+          t.closed_at
+        FROM trading.trade_intents ti
+        JOIN trading.trades t ON t.trade_intent_id = ti.id
+        WHERE ti.user_id = $1
+          AND ti.broker_connection_id = $2
+          AND ti.instrument = $3
+          AND ti.direction = $4
+          AND ti.status = 'EXECUTED'
+          AND ti.model_version = $5
+          AND t.status IN ('PENDING', 'OPEN', 'RECONCILIATION_PENDING', 'CLOSED')
+        ORDER BY
+          CASE WHEN t.status IN ('PENDING', 'OPEN', 'RECONCILIATION_PENDING') THEN 0 ELSE 1 END,
+          COALESCE(t.closed_at, ti.created_at) DESC
+        LIMIT 1
+      `,
+      [
+        userId,
+        connectionId,
+        instrument.trim().toUpperCase(),
+        direction,
+        `external-provider/${ACTIVE_ENGINE_CODE}/${PAPER_EXTENSION_EXHAUSTION_RESEARCH_ARTIFACT}`,
+      ],
+    )) as Array<{
+      episode_key: string | null;
+      trade_status: string | null;
+      closed_at: string | Date | null;
+    }>;
     const row = rows[0];
     if (!row) return empty;
     const closedAt = row.closed_at ? new Date(row.closed_at) : null;

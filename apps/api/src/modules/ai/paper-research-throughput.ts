@@ -203,6 +203,7 @@ export type PaperExecutionRoute =
   | 'NORMAL_PAPER'
   | 'REJECTED_EDGE_CANARY'
   | 'PAPER_RESEARCH_THROUGHPUT'
+  | 'PAPER_EXTENSION_EXHAUSTION_RESEARCH'
   | 'PAIRED_REVERSAL_RESEARCH'
   | 'NONE';
 
@@ -211,6 +212,7 @@ export function selectPaperExecutionRoute(input: {
   rejectedEdgeCanaryEligible: boolean;
   rejectedEdgeCanaryExecutionEnabled?: boolean;
   paperResearchThroughputEligible: boolean;
+  extensionExhaustionResearchEligible?: boolean;
   pairedReversalResearchEligible?: boolean;
 }): PaperExecutionRoute {
   if (input.normalPaperExecution) return 'NORMAL_PAPER';
@@ -218,6 +220,7 @@ export function selectPaperExecutionRoute(input: {
     input.rejectedEdgeCanaryExecutionEnabled ?? REJECTED_EDGE_CANARY_EXECUTION_ENABLED;
   if (canaryExecutionEnabled && input.rejectedEdgeCanaryEligible) return 'REJECTED_EDGE_CANARY';
   if (input.paperResearchThroughputEligible) return 'PAPER_RESEARCH_THROUGHPUT';
+  if (input.extensionExhaustionResearchEligible) return 'PAPER_EXTENSION_EXHAUSTION_RESEARCH';
   if (input.pairedReversalResearchEligible) return 'PAIRED_REVERSAL_RESEARCH';
   return 'NONE';
 }

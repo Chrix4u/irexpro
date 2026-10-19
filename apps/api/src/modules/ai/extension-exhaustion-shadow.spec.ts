@@ -1,4 +1,6 @@
-import { scoreExtensionExhaustionShadow } from './extension-exhaustion-shadow';
+import * as ExtensionExhaustion from './extension-exhaustion-shadow';
+
+const { scoreExtensionExhaustionShadow } = ExtensionExhaustion;
 
 describe('scoreExtensionExhaustionShadow', () => {
   const base = {
@@ -50,6 +52,48 @@ describe('scoreExtensionExhaustionShadow', () => {
     ).toMatchObject({
       candidate: false,
       reason: 'SPREAD_EVIDENCE_INVALID',
+    });
+  });
+});
+
+describe('PAPER extension-exhaustion research', () => {
+  it('exposes a separate PAPER-only evaluator instead of granting execution authority to the shadow scorer', () => {
+    expect(typeof ExtensionExhaustion.evaluatePaperExtensionExhaustionResearch).toBe('function');
+  });
+
+  it('admits only a strong extended NORMAL-drift candidate with clear event risk and usable PAPER costs', () => {
+    const evaluate = ExtensionExhaustion.evaluatePaperExtensionExhaustionResearch;
+    const base = {
+      regime: 'TREND_EXTENDED',
+      driftState: 'NORMAL',
+      confidence: 0.67,
+      netExpectedR: 0.14,
+      directionQuality: 0.41,
+      tradeQuality: 0.31,
+      exitQuality: 0.29,
+      extensionAtr: 1.2,
+      eventRisk: 'CLEAR',
+      paperExecutionCostUsable: true,
+    };
+    expect(evaluate(base)).toMatchObject({
+      artifact: 'paper-extension-exhaustion-research-v1',
+      eligible: true,
+      reason: 'PAPER_RESEARCH_CANDIDATE',
+      executionAuthority: 'PAPER_ONLY',
+      productionEligible: false,
+      qualificationEvidence: false,
+    });
+    expect(evaluate({ ...base, netExpectedR: 0.119 })).toMatchObject({
+      eligible: false,
+      reason: 'NET_EXPECTED_R_TOO_LOW',
+    });
+    expect(evaluate({ ...base, eventRisk: 'BLOCKED' })).toMatchObject({
+      eligible: false,
+      reason: 'EVENT_RISK_NOT_CLEAR',
+    });
+    expect(evaluate({ ...base, paperExecutionCostUsable: false })).toMatchObject({
+      eligible: false,
+      reason: 'EXECUTION_COST_UNUSABLE',
     });
   });
 });

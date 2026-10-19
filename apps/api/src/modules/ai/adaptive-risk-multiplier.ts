@@ -54,6 +54,7 @@ export interface AdaptiveRiskMultiplierDecision {
 
 const RESEARCH_ROUTES = new Set<PaperExecutionRoute>([
   'PAPER_RESEARCH_THROUGHPUT',
+  'PAPER_EXTENSION_EXHAUSTION_RESEARCH',
   'PAIRED_REVERSAL_RESEARCH',
   'REJECTED_EDGE_CANARY',
 ]);
@@ -74,6 +75,8 @@ export function selectAdaptiveRiskMultiplier(
 ): AdaptiveRiskMultiplierDecision {
   const hardBlocked = input.hardBlockers.length > 0;
   const research = RESEARCH_ROUTES.has(input.executionRoute);
+  const extensionExhaustionResearch =
+    input.executionRoute === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH';
   const degraded = input.edge.maturity === 'DEGRADED' || input.edge.recentDegradation;
   const unsafeState =
     NO_UPSIZE_STATES.has(input.marketState.state) || input.marketState.session === 'ROLLOVER';
@@ -105,8 +108,15 @@ export function selectAdaptiveRiskMultiplier(
     multiplier = 0.75;
   }
 
+  if (extensionExhaustionResearch && !hardBlocked) multiplier = 0.5;
+
   const researchMinimumRiskBandApplied =
-    research && !hardBlocked && !degraded && !blockedExposure && multiplier === 0.5;
+    research &&
+    !extensionExhaustionResearch &&
+    !hardBlocked &&
+    !degraded &&
+    !blockedExposure &&
+    multiplier === 0.5;
   if (researchMinimumRiskBandApplied) multiplier = 0.75;
 
   // Sparse research normally stays at the 0.75x collection band, but once a
@@ -145,6 +155,8 @@ export function selectAdaptiveRiskMultiplier(
   if (research && multiplier > 1) multiplier = 1;
   if (hardBlocked) reasons.push('HARD_GOVERNANCE_BLOCKED');
   if (research) reasons.push('RESEARCH_UPSIZE_DISABLED');
+  if (extensionExhaustionResearch && !hardBlocked)
+    reasons.push('EXTENSION_EXHAUSTION_RESEARCH_HALF_RISK');
   if (researchMinimumRiskBandApplied) reasons.push('RESEARCH_MINIMUM_RISK_BAND');
   if (weakResearchPairSide) reasons.push('PAIR_SIDE_RELIABILITY_DERISK');
   if (degraded) reasons.push('EDGE_DEGRADED');

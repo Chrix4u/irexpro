@@ -425,6 +425,18 @@ describe('PAPER execution route provenance', () => {
     ).toBe('PAPER_RESEARCH_THROUGHPUT');
   });
 
+  it('selects extension-exhaustion PAPER research when the existing routes do not qualify', () => {
+    expect(
+      selectPaperExecutionRoute({
+        normalPaperExecution: false,
+        rejectedEdgeCanaryEligible: false,
+        paperResearchThroughputEligible: false,
+        pairedReversalResearchEligible: false,
+        extensionExhaustionResearchEligible: true,
+      }),
+    ).toBe('PAPER_EXTENSION_EXHAUSTION_RESEARCH');
+  });
+
   it('abstains when no PAPER route qualifies', () => {
     expect(
       selectPaperExecutionRoute({

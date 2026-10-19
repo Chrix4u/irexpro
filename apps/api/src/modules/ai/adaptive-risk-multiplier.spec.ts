@@ -40,6 +40,19 @@ describe('selectAdaptiveRiskMultiplier', () => {
     }
   });
 
+  it('starts extension-exhaustion PAPER research at exactly half normal adaptive risk', () => {
+    const decision = selectAdaptiveRiskMultiplier({
+      ...base,
+      executionRoute: 'PAPER_EXTENSION_EXHAUSTION_RESEARCH',
+      opportunityScore: 0.99,
+      netExpectedR: 0.3,
+    });
+    expect(decision.multiplier).toBe(0.5);
+    expect(decision.canUpsize).toBe(false);
+    expect(decision.executionEligible).toBe(true);
+    expect(decision.reasons).toContain('EXTENSION_EXHAUSTION_RESEARCH_HALF_RISK');
+  });
+
   it('never upsizes sparse, degraded, dislocated, rollover, high-volatility or invalid-cost evidence', () => {
     const cases: AdaptiveRiskMultiplierInput[] = [
       { ...base, edge: { ...base.edge, maturity: 'SPARSE', canUpsize: false } },
