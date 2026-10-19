@@ -539,6 +539,10 @@ export class M1TacticalEvidenceService {
             outcome_reason = $4,
             updated_at = now()
         WHERE id = $1
+          AND (
+            outcome_state IS DISTINCT FROM 'EXECUTION_SUCCEEDED'
+            OR $2 = 'EXECUTION_SUCCEEDED'
+          )
       `,
       [decisionId, outcomeState, observedAt.toISOString(), outcomeReason ?? null],
     );

@@ -398,7 +398,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       blockers,
     });
 
-    if (canExecute) {
+    const executionAlreadyDurable =
+      Boolean(decision.tradeIntentId) || decision.outcomeState === 'EXECUTION_SUCCEEDED';
+
+    if (canExecute && !executionAlreadyDurable) {
       await this.submitPaperDecision(
         decision.id,
         userId,
