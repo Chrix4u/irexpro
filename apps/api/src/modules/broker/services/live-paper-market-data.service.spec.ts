@@ -388,6 +388,61 @@ describe('LivePaperMarketDataService', () => {
     });
   });
 
+  it('builds read-only M5 chart candles from complete M1 buckets without creating execution authority', () => {
+    const service = new LivePaperMarketDataService();
+    const connectionId = 'paper-readonly-chart';
+    const firstOpen = new Date('2026-10-19T09:50:00.000Z').getTime();
+    const rows = Array.from({ length: 500 }, (_, index) => {
+      const open = 1.1 + index / 100000;
+      return {
+        timestamp: new Date(firstOpen + index * 60_000),
+        open: open.toFixed(5),
+        high: (open + 0.00008).toFixed(5),
+        low: (open - 0.00005).toFixed(5),
+        close: (open + 0.00003).toFixed(5),
+      };
+    });
+    service.updateClosedM1Candles('EURUSD', rows, connectionId);
+    service.updateStreamingMidQuote(
+      'EURUSD',
+      1.1051,
+      new Date(firstOpen + 500 * 60_000 + 10_000),
+      connectionId,
+      'DERIV',
+    );
+
+    const chart = service.getReadOnlyOHLCV('EURUSD', 'M5', 90, connectionId);
+    expect(chart).toHaveLength(90);
+    expect(chart.every((row) => row.timestamp.getUTCMinutes() % 5 === 0)).toBe(true);
+    expect(chart.at(-1)).toMatchObject({
+      timestamp: new Date('2026-10-19T18:05:00.000Z'),
+    });
+    expect(() => service.getQuote('EURUSD', 20 * 60_000, connectionId)).toThrow(
+      /No live PAPER execution quote/,
+    );
+  });
+
+  it('prefers existing provider-backed M5 history for read-only charts when it is available', () => {
+    const service = new LivePaperMarketDataService();
+    const connectionId = 'paper-readonly-existing';
+    service.updateClosedCandles('EURUSD', candles(1.1, 5, 70), connectionId);
+    service.updateClosedM1Candles(
+      'EURUSD',
+      Array.from({ length: 20 }, (_, index) => ({
+        timestamp: new Date(Date.UTC(2026, 9, 19, 16, index)),
+        open: '1.20000',
+        high: '1.20010',
+        low: '1.19990',
+        close: '1.20005',
+      })),
+      connectionId,
+    );
+
+    const chart = service.getReadOnlyOHLCV('EURUSD', 'M5', 60, connectionId);
+    expect(chart).toHaveLength(60);
+    expect(Number(chart.at(-1)!.close)).toBeLessThan(1.2);
+  });
+
   it('tracks Deriv source lag and fresh divergence from the closed-M5 reference without changing execution authority', () => {
     const nowMs = new Date('2026-10-19T12:00:10.000Z').getTime();
     const now = jest.spyOn(Date, 'now').mockReturnValue(nowMs);

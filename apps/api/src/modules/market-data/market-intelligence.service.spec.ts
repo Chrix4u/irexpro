@@ -28,10 +28,16 @@ describe('MarketIntelligenceService', () => {
   };
   const encryptionService = { decrypt: jest.fn() };
   const auditService = { log: jest.fn().mockResolvedValue(undefined) };
+  const livePaperMarket = {
+    isLiveConnection: jest.fn().mockReturnValue(false),
+    getPositionMarkQuote: jest.fn(),
+    getReadOnlyOHLCV: jest.fn(),
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
     brokerService.findActiveConnectionForUser.mockResolvedValue(connection);
+    livePaperMarket.isLiveConnection.mockReturnValue(false);
     encryptionService.decrypt.mockReturnValue({ ...credentials });
   });
 
@@ -45,6 +51,7 @@ describe('MarketIntelligenceService', () => {
       marketDataReader as never,
       encryptionService as never,
       auditService as never,
+      livePaperMarket as never,
     );
   }
 
@@ -151,6 +158,67 @@ describe('MarketIntelligenceService', () => {
     );
     expect(marketDataReader.getCurrentPrice).not.toHaveBeenCalled();
     expect(result.instrument).toBe('EURUSD');
+  });
+
+  it('serves scanner-owned PAPER market intelligence from the read-only live cache without touching execution quotes', async () => {
+    const now = new Date('2026-10-19T18:10:30.000Z');
+    jest.spyOn(Date, 'now').mockReturnValue(now.getTime());
+    const paperConnection = {
+      ...connection,
+      id: '00000000-0000-0000-0000-000000000099',
+      brokerId: 'paper-broker',
+      accountType: 'DEMO',
+      status: 'CONNECTED',
+    };
+    brokerService.findConnectionById.mockResolvedValue(paperConnection);
+    livePaperMarket.isLiveConnection.mockReturnValue(true);
+    livePaperMarket.getPositionMarkQuote.mockReturnValue({
+      bid: '152.301',
+      ask: '152.311',
+      timestamp: new Date('2026-10-19T18:10:20.000Z'),
+      source: 'STREAM',
+      streamProvider: 'DERIV',
+      isStale: false,
+    });
+    livePaperMarket.getReadOnlyOHLCV.mockReturnValue([
+      {
+        timestamp: new Date('2026-10-19T18:05:00.000Z'),
+        open: '152.250',
+        high: '152.340',
+        low: '152.240',
+        close: '152.300',
+        volume: '0',
+      },
+    ]);
+
+    const result = await createService().getSnapshot(userId, {
+      instrument: 'USDJPY',
+      timeframe: 'M5',
+      limit: 90,
+      brokerConnectionId: paperConnection.id,
+    });
+
+    expect(livePaperMarket.getPositionMarkQuote).toHaveBeenCalledWith(
+      'USDJPY',
+      60_000,
+      20 * 60_000,
+      paperConnection.id,
+    );
+    expect(livePaperMarket.getReadOnlyOHLCV).toHaveBeenCalledWith(
+      'USDJPY',
+      'M5',
+      90,
+      paperConnection.id,
+    );
+    expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
+    expect(brokerService.getOhlcvForConnection).not.toHaveBeenCalled();
+    expect(result.quote).toMatchObject({
+      bid: '152.301',
+      ask: '152.311',
+      spread: '0.010',
+      freshness: 'FRESH',
+    });
+    expect(result.candles).toHaveLength(1);
   });
 
   it('fails closed when an explicitly selected broker is not CONNECTED', async () => {

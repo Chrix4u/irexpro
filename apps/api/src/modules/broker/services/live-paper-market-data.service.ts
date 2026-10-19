@@ -543,6 +543,120 @@ export class LivePaperMarketDataService {
     return { ...latest, timestamp: new Date(latest.timestamp), isStale: true };
   }
 
+  /**
+   * Trader-facing/read-only candles for a scanner-owned PAPER connection.
+   *
+   * This path NEVER writes candleQuotes/providerExecutionQuotes and therefore
+   * cannot become execution, sizing, margin, SL/TP, or model-evidence authority.
+   * Prefer the deeper provider-backed M5 cache when it exists; otherwise build
+   * complete higher-timeframe buckets causally from the Deriv-backed M1 cache.
+   */
+  getReadOnlyOHLCV(
+    instrument: string,
+    timeframe: string,
+    count: number,
+    connectionId?: string,
+  ): OHLCV[] {
+    const state = this.marketState(connectionId);
+    const symbol = this.requireSupported(instrument);
+    const tf = timeframe.trim().toUpperCase();
+
+    if (tf === 'M1') {
+      return this.getOHLCV(symbol, tf, count, connectionId);
+    }
+
+    // If the scanner has a real provider-backed M5 corpus, retain its deeper
+    // history for the UI. This is a read only projection of existing evidence.
+    if ((state.candles.get(symbol) ?? []).length > 0) {
+      return this.getOHLCV(symbol, tf, count, connectionId);
+    }
+
+    const timeframeMinutes: Record<string, number> = {
+      M5: 5,
+      M15: 15,
+      M30: 30,
+      H1: 60,
+      H4: 240,
+      D1: 1440,
+    };
+    const minutes = timeframeMinutes[tf];
+    if (!minutes) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        `VPS live PAPER read-only market data supports M1/M5/M15/M30/H1/H4/D1 (requested ${timeframe}).`,
+      );
+    }
+
+    const latestClosedAt = state.latestM1ObservedAt?.getTime() ?? 0;
+    const closedM1 = (state.m1Candles.get(symbol) ?? []).filter(
+      (row) => row.timestamp.getTime() + 60_000 <= latestClosedAt,
+    );
+    if (!closedM1.length) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.PROVIDER_UNAVAILABLE,
+        `No live PAPER read-only M1 candles are cached yet for ${symbol}.`,
+        undefined,
+        true,
+      );
+    }
+
+    const bucketMs = minutes * 60_000;
+    const buckets = new Map<number, OHLCV[]>();
+    for (const row of closedM1) {
+      const ts = row.timestamp.getTime();
+      const bucketStart = Math.floor(ts / bucketMs) * bucketMs;
+      if (bucketStart + bucketMs > latestClosedAt) continue;
+      const bucket = buckets.get(bucketStart) ?? [];
+      bucket.push(row);
+      buckets.set(bucketStart, bucket);
+    }
+
+    const expectedRows = minutes;
+    const aggregated = [...buckets.entries()]
+      .sort(([a], [b]) => a - b)
+      .filter(([bucketStart, bucket]) => {
+        if (bucket.length !== expectedRows) return false;
+        if (bucket[0]!.timestamp.getTime() !== bucketStart) return false;
+        if (bucket.at(-1)!.timestamp.getTime() !== bucketStart + (expectedRows - 1) * 60_000) {
+          return false;
+        }
+        return bucket.every(
+          (row, index) => row.timestamp.getTime() === bucketStart + index * 60_000,
+        );
+      })
+      .map(([bucketStart, bucket]) => {
+        const first = bucket[0]!;
+        const last = bucket.at(-1)!;
+        const digits = first.priceDigits ?? this.spec(symbol).digits;
+        const high = Math.max(...bucket.map((row) => Number(row.high)));
+        const low = Math.min(...bucket.map((row) => Number(row.low)));
+        const volume = bucket.reduce((sum, row) => sum + Number(row.volume || '0'), 0);
+        const tickVolume = bucket.reduce((sum, row) => sum + Number(row.tickVolume || '0'), 0);
+        return {
+          ...first,
+          timestamp: new Date(bucketStart),
+          open: first.open,
+          high: high.toFixed(digits),
+          low: low.toFixed(digits),
+          close: last.close,
+          volume: String(volume),
+          tickVolume: String(tickVolume),
+          brokerTime: new Date(bucketStart).toISOString(),
+        };
+      });
+
+    if (!aggregated.length) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.PROVIDER_UNAVAILABLE,
+        `No complete live PAPER ${tf} read-only candles are cached yet for ${symbol}.`,
+        undefined,
+        true,
+      );
+    }
+
+    return aggregated.slice(-Math.max(1, count));
+  }
+
   getOHLCV(instrument: string, timeframe: string, count: number, connectionId?: string): OHLCV[] {
     const state = this.marketState(connectionId);
     const symbol = this.requireSupported(instrument);
