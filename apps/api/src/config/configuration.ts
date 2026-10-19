@@ -154,6 +154,9 @@ export default () => ({
     m1CtraderCollectionInstruments:
       process.env.M1_TACTICAL_CTRADER_INSTRUMENTS ?? 'EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF',
     fastMarkStreamEnabled: process.env.TWELVEDATA_FAST_MARK_STREAM_ENABLED !== 'false',
+    // Exactly one low-latency PAPER mark stream may own the STREAM lane at a time.
+    // DERIV is public/no-auth and mid-only; TWELVE_DATA remains the safe default.
+    fastMarkProvider: (process.env.FAST_MARK_STREAM_PROVIDER ?? 'TWELVE_DATA').trim().toUpperCase(),
   },
   brokerParityV7: {
     // Separate broker-native PAPER cohort. It is disabled by default and will
