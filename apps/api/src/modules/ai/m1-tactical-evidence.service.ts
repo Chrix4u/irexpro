@@ -421,8 +421,12 @@ export class M1TacticalEvidenceService {
           AND instrument = $3
           AND route <> 'ABSTAIN'
           AND execution_authority = 'NONE'
-          AND jsonb_array_length(blockers) = 1
-          AND blockers <@ '["DRIFT_OUT_OF_DISTRIBUTION","DRIFT_STRESSED"]'::jsonb
+          AND jsonb_array_length(blockers) <= 2
+          AND blockers <@ '["DRIFT_OUT_OF_DISTRIBUTION","DRIFT_STRESSED","M1_PHASE_SHADOW"]'::jsonb
+          AND (
+            blockers @> '["DRIFT_OUT_OF_DISTRIBUTION"]'::jsonb
+            OR blockers @> '["DRIFT_STRESSED"]'::jsonb
+          )
           AND governance -> 'driftCounterfactual15m' IS NULL
           AND evaluated_at <= ($4::timestamptz - interval '16 minutes')
           AND policy_version = $5
