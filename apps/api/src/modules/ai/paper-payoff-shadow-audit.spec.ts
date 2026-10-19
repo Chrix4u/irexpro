@@ -39,7 +39,7 @@ const trade = (changes: Partial<PaperTradeAuditRow> = {}): PaperTradeAuditRow =>
   ...changes,
 });
 const outcome = (changes: Partial<EnsembleShadowOutcome> = {}): EnsembleShadowOutcome => ({
-  version: 'm5-first-hit-72bar-net-r-path-v3',
+  version: 'm5-first-hit-72bar-side-aware-v4',
   status: 'LOSS',
   resolvedAt: '2026-10-12T01:00:00Z',
   barsObserved: 12,

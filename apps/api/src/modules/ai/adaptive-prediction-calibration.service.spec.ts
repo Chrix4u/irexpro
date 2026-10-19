@@ -146,6 +146,7 @@ describe('adaptive prediction calibration', () => {
     expect(sql).toContain("components ? 'outcome'");
     expect(sql).toContain('model_version = ANY($4::text[])');
     expect(sql).toContain('evaluated_at < $5');
+    expect(sql).toContain("components->'outcome'->>'version' = $6");
     expect(sql).not.toContain('admitted = true');
     expect(sql).not.toContain('paperExecutionEligible');
     expect(query.mock.calls[0]?.[1]).toEqual([
@@ -154,6 +155,7 @@ describe('adaptive prediction calibration', () => {
       'irexpro-multimodel-ensemble-v1',
       ['policy-before-calibration', 'policy-calibration-v1'],
       evaluatedAt,
+      'm5-first-hit-72bar-side-aware-v4',
     ]);
   });
 

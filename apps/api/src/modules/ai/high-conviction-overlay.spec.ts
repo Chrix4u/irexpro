@@ -104,7 +104,7 @@ describe('summarizeHighConvictionOverlayCohort', () => {
   it('summarizes resolved net-R evidence without treating ambiguous bars as returns', () => {
     const cohort = summarizeHighConvictionOverlayCohort('CONFIRM', 4, [
       {
-        version: 'm5-first-hit-72bar-net-r-path-v3',
+        version: 'm5-first-hit-72bar-side-aware-v4',
         status: 'WIN',
         resolvedAt: '2026-10-05T10:10:00Z',
         barsObserved: 2,
@@ -115,7 +115,7 @@ describe('summarizeHighConvictionOverlayCohort', () => {
         postEntryTelemetry: null,
       },
       {
-        version: 'm5-first-hit-72bar-net-r-path-v3',
+        version: 'm5-first-hit-72bar-side-aware-v4',
         status: 'LOSS',
         resolvedAt: '2026-10-06T10:10:00Z',
         barsObserved: 3,
@@ -126,7 +126,7 @@ describe('summarizeHighConvictionOverlayCohort', () => {
         postEntryTelemetry: null,
       },
       {
-        version: 'm5-first-hit-72bar-net-r-path-v3',
+        version: 'm5-first-hit-72bar-side-aware-v4',
         status: 'AMBIGUOUS',
         resolvedAt: '2026-10-07T10:10:00Z',
         barsObserved: 1,

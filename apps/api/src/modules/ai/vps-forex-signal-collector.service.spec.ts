@@ -17,6 +17,7 @@ import { BrokerService } from '../broker/broker.service';
 import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
 import * as PlanBEnsembleModule from './plan-b-multimodel-shadow';
 import * as EnsembleGovernanceModule from './ensemble-governance';
+import { ENSEMBLE_OUTCOME_MODEL_VERSION } from './ensemble-shadow-outcome';
 import * as V8ShadowMetaModule from './v8-shadow-meta-scorer';
 import * as PairedDirectionReversalModule from './paired-direction-reversal';
 import * as PaperSpreadCalibrationModule from './paper-spread-calibration-shadow';
@@ -302,7 +303,7 @@ describe('VpsForexSignalCollectorService', () => {
       instrument: 'USDJPY',
       direction: 'BUY',
       outcome: {
-        version: 'm5-first-hit-72bar-net-r-path-v3',
+        version: ENSEMBLE_OUTCOME_MODEL_VERSION,
         status,
         resolvedAt: new Date(new Date(evaluatedAt).getTime() + 60_000).toISOString(),
         barsObserved: 1,
@@ -338,6 +339,9 @@ describe('VpsForexSignalCollectorService', () => {
     );
 
     expect(dataSource.query).toHaveBeenCalledTimes(1);
+    const [snapshotSql, snapshotParams] = dataSource.query.mock.calls[0] as [string, unknown[]];
+    expect(snapshotSql).toContain("components->'outcome'->>'version' = $6");
+    expect(snapshotParams[5]).toBe(ENSEMBLE_OUTCOME_MODEL_VERSION);
     expect(cachedSnapshot).toBe(snapshot);
     expect(snapshot).toHaveLength(12);
     expect(
@@ -599,15 +603,17 @@ describe('VpsForexSignalCollectorService', () => {
           {
             id: 'paper-only-decision',
             instrument: 'EURUSD',
-            direction: 'BUY',
+            direction: 'SELL',
             market_bar_time: new Date('2026-10-05T10:00:00.000Z'),
+            evaluated_at: new Date('2026-10-05T10:00:30.000Z'),
             entry_price: '1.1000',
             components: {
-              stopLoss: 1.099,
-              takeProfit: 1.102,
+              stopLoss: 1.1005,
+              takeProfit: 1.099,
               governance: {
                 paperExecutionEligible: false,
                 estimatedExecutionCostR: 0.1,
+                executionSpreadEvidence: { spreadPrice: 0.00004 },
               },
             },
           },
@@ -624,6 +630,7 @@ describe('VpsForexSignalCollectorService', () => {
       aiEngineClientMock(),
       { query } as any,
     );
+    (collector as any).lastMarketDataAuthority = 'METAAPI_BROKER_FALLBACK';
     const candles = new Map([
       [
         'EURUSD',
@@ -631,9 +638,9 @@ describe('VpsForexSignalCollectorService', () => {
           {
             timestamp: new Date('2026-10-05T10:05:00.000Z'),
             open: '1.1000',
-            high: '1.1005',
-            low: '1.0988',
-            close: '1.0991',
+            high: '1.10047',
+            low: '1.0995',
+            close: '1.1001',
           },
         ],
       ],
@@ -757,6 +764,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(sql).toContain('paperExecutionEligible');
     expect(sql).not.toContain('AND admitted = true');
     expect(sql).toContain('model_version = $6');
+    expect(sql).toContain("components->'outcome'->>'version' = $7");
     expect(query).toHaveBeenCalledWith(expect.any(String), [
       'user-1',
       'conn-1',
@@ -764,6 +772,7 @@ describe('VpsForexSignalCollectorService', () => {
       'USDJPY',
       'BUY',
       PlanBEnsembleModule.PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+      ENSEMBLE_OUTCOME_MODEL_VERSION,
     ]);
   });
 
@@ -3029,10 +3038,12 @@ describe('VpsForexSignalCollectorService', () => {
     const [sql, params] = query.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain("components->>'strategyRoute' = 'TREND_CONTINUATION'");
     expect(sql).toContain('model_version = ANY($4::text[])');
+    expect(sql).toContain("components->'outcome'->>'version' = $5");
     expect(params.slice(0, 3)).toEqual(['user-1', 'conn-1', 'irexpro-multimodel-ensemble-v1']);
     expect(params[3]).toEqual([
       ...PlanBEnsembleModule.PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
     ]);
+    expect(params[4]).toBe(ENSEMBLE_OUTCOME_MODEL_VERSION);
   });
   it('loads pair-side continuation reliability from independent episode-collapsed shadow evidence', async () => {
     const row = (status: 'WIN' | 'LOSS', evaluatedAt: string, resolvedAt: string) => ({
@@ -3083,9 +3094,11 @@ describe('VpsForexSignalCollectorService', () => {
     const [sql, params] = query.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('instrument = $5');
     expect(sql).toContain('direction = $6');
+    expect(sql).toContain("components->'outcome'->>'version' = $7");
     expect(params.slice(0, 3)).toEqual(['user-1', 'conn-1', 'irexpro-multimodel-ensemble-v1']);
     expect(params[4]).toBe('EURUSD');
     expect(params[5]).toBe('SELL');
+    expect(params[6]).toBe(ENSEMBLE_OUTCOME_MODEL_VERSION);
   });
 
   it('loads pair-side research reliability only from the active episode-guarded research artifact', async () => {
