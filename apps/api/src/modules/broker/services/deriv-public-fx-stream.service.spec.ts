@@ -123,6 +123,8 @@ describe('DerivPublicFxStreamService', () => {
       1.12118,
       new Date(1792440872 * 1000),
       'paper-1',
+      'DERIV',
+      expect.any(Date),
     );
     service.onModuleDestroy();
   });
@@ -165,6 +167,89 @@ describe('DerivPublicFxStreamService', () => {
       new Date('2026-10-19T11:59:00.000Z'),
       'paper-1',
     );
+    service.onModuleDestroy();
+  });
+
+  it('recycles a connected Deriv socket that stops delivering ticks so marks can fall back to M5', async () => {
+    const market = marketMock();
+    const service = new DerivPublicFxStreamService(configWith(), market);
+
+    (service as unknown as { connect(): void }).connect();
+    const socket = FakeWebSocket.last!;
+    socket.emit('open');
+    await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+      JSON.stringify({
+        msg_type: 'tick',
+        tick: { symbol: 'frxEURUSD', quote: 1.12118, epoch: Date.now() / 1000 },
+      }),
+    );
+
+    jest.advanceTimersByTime(50_000);
+    expect(socket.closed).toBe(true);
+
+    jest.advanceTimersByTime(5_000);
+    expect(FakeWebSocket.last).not.toBe(socket);
+    service.onModuleDestroy();
+  });
+
+  it('recycles the Deriv socket when one subscribed pair goes stale while other pairs still tick', async () => {
+    const market = marketMock();
+    const service = new DerivPublicFxStreamService(configWith(), market);
+
+    (service as unknown as { connect(): void }).connect();
+    const socket = FakeWebSocket.last!;
+    socket.emit('open');
+    const symbols = ['frxEURUSD', 'frxGBPUSD', 'frxUSDJPY', 'frxAUDUSD', 'frxUSDCAD', 'frxUSDCHF'];
+    for (const symbol of symbols) {
+      await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+        JSON.stringify({
+          msg_type: 'tick',
+          tick: { symbol, quote: 1.12118, epoch: Date.now() / 1000 },
+        }),
+      );
+    }
+
+    jest.advanceTimersByTime(40_000);
+    await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+      JSON.stringify({
+        msg_type: 'tick',
+        tick: { symbol: 'frxEURUSD', quote: 1.12119, epoch: Date.now() / 1000 },
+      }),
+    );
+    jest.advanceTimersByTime(10_000);
+
+    expect(socket.closed).toBe(true);
+    service.onModuleDestroy();
+  });
+
+  it('ignores a late close event from a recycled socket so the replacement watchdog stays armed', async () => {
+    const market = marketMock();
+    const service = new DerivPublicFxStreamService(configWith(), market);
+
+    (service as unknown as { connect(): void }).connect();
+    const oldSocket = FakeWebSocket.last!;
+    oldSocket.emit('open');
+    const symbols = ['frxEURUSD', 'frxGBPUSD', 'frxUSDJPY', 'frxAUDUSD', 'frxUSDCAD', 'frxUSDCHF'];
+    for (const symbol of symbols) {
+      await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+        JSON.stringify({
+          msg_type: 'tick',
+          tick: { symbol, quote: 1.12118, epoch: Date.now() / 1000 },
+        }),
+      );
+    }
+
+    jest.advanceTimersByTime(50_000);
+    expect(oldSocket.closed).toBe(true);
+    jest.advanceTimersByTime(5_000);
+    const replacement = FakeWebSocket.last!;
+    expect(replacement).not.toBe(oldSocket);
+    replacement.emit('open');
+
+    oldSocket.emit('close');
+    jest.advanceTimersByTime(50_000);
+
+    expect(replacement.closed).toBe(true);
     service.onModuleDestroy();
   });
 

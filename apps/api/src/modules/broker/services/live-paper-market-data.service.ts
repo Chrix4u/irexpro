@@ -6,11 +6,14 @@ import { Injectable } from '@nestjs/common';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 import type { OHLCV } from '../interfaces/broker-adapter.interface';
 
+export type FastMarkProvider = 'DERIV' | 'TWELVE_DATA';
+
 export interface LivePaperQuote {
   bid: string;
   ask: string;
   timestamp: Date;
   source: 'REST_M5' | 'STREAM' | 'PROVIDER';
+  streamProvider?: FastMarkProvider;
 }
 
 export interface LivePaperPositionMark extends LivePaperQuote {
@@ -29,12 +32,20 @@ export interface LivePaperCandleInput {
   close: string;
 }
 
+interface FastMarkObservation {
+  mid: number;
+  observedAt: Date;
+  receivedAt: Date;
+  sourceLagMs: number;
+}
+
 interface LivePaperMarketState {
   candles: Map<string, OHLCV[]>;
   m1Candles: Map<string, OHLCV[]>;
   candleQuotes: Map<string, LivePaperQuote>;
   streamingQuotes: Map<string, LivePaperQuote>;
   providerExecutionQuotes: Map<string, LivePaperQuote>;
+  streamProviderObservations: Map<string, Map<FastMarkProvider, FastMarkObservation>>;
   paperFallbackSpreads: Map<string, number>;
   latestObservedAt: Date | null;
   latestQuoteObservedAt: Date | null;
@@ -42,6 +53,10 @@ interface LivePaperMarketState {
 }
 
 const DEFAULT_MARKET_SCOPE = '__default__';
+const PROVIDER_HEALTH_MAX_AGE_MS = 15_000;
+const EXECUTION_REFERENCE_MAX_SKEW_MS = 90_000;
+const FAST_MARK_FRESH_MAX_AGE_MS = 60_000;
+const FAST_MARK_PROVIDERS = Object.freeze(['DERIV', 'TWELVE_DATA'] as const);
 
 /**
  * In-memory market cache used only by the PAPER broker when the VPS-native
@@ -70,6 +85,7 @@ export class LivePaperMarketDataService {
         candleQuotes: new Map<string, LivePaperQuote>(),
         streamingQuotes: new Map<string, LivePaperQuote>(),
         providerExecutionQuotes: new Map<string, LivePaperQuote>(),
+        streamProviderObservations: new Map<string, Map<FastMarkProvider, FastMarkObservation>>(),
         paperFallbackSpreads: new Map<string, number>(),
         latestObservedAt: null,
         latestQuoteObservedAt: null,
@@ -234,17 +250,40 @@ export class LivePaperMarketDataService {
     price: number | string,
     observedAt: Date,
     connectionId?: string,
+    streamProvider?: FastMarkProvider,
+    receivedAt = new Date(),
   ): void {
     const state = this.marketState(connectionId);
     const symbol = this.requireSupported(instrument);
     const spec = SPECS[symbol]!;
     const mid = Number(price);
     const timestamp = new Date(observedAt);
-    if (!Number.isFinite(mid) || mid <= 0 || !Number.isFinite(timestamp.getTime())) {
+    const received = new Date(receivedAt);
+    if (
+      !Number.isFinite(mid) ||
+      mid <= 0 ||
+      !Number.isFinite(timestamp.getTime()) ||
+      !Number.isFinite(received.getTime())
+    ) {
       throw new BrokerAdapterError(
         BrokerErrorCode.INVALID_PRICE,
         `Invalid streaming PAPER quote for ${symbol}.`,
       );
+    }
+    if (streamProvider) {
+      const byProvider =
+        state.streamProviderObservations.get(symbol) ??
+        new Map<FastMarkProvider, FastMarkObservation>();
+      const currentObservation = byProvider.get(streamProvider);
+      if (!currentObservation || timestamp.getTime() >= currentObservation.observedAt.getTime()) {
+        byProvider.set(streamProvider, {
+          mid,
+          observedAt: new Date(timestamp),
+          receivedAt: new Date(received),
+          sourceLagMs: Math.max(0, received.getTime() - timestamp.getTime()),
+        });
+        state.streamProviderObservations.set(symbol, byProvider);
+      }
     }
     const previousM1ObservedAt = state.latestM1ObservedAt?.getTime() ?? Number.NEGATIVE_INFINITY;
     if (timestamp.getTime() >= previousM1ObservedAt) {
@@ -280,6 +319,7 @@ export class LivePaperMarketDataService {
       ask: (mid + halfSpread).toFixed(spec.digits),
       timestamp,
       source: 'STREAM',
+      ...(streamProvider ? { streamProvider } : {}),
     };
     const current = state.streamingQuotes.get(symbol);
     if (!current || timestamp.getTime() >= current.timestamp.getTime()) {
@@ -330,6 +370,7 @@ export class LivePaperMarketDataService {
           ask: (mid + halfSpread).toFixed(spec.digits),
           timestamp: new Date(stream.timestamp),
           source: 'STREAM',
+          ...(stream.streamProvider ? { streamProvider: stream.streamProvider } : {}),
         });
       }
     }
@@ -608,19 +649,139 @@ export class LivePaperMarketDataService {
     const streamingInstruments = [...state.streamingQuotes.entries()]
       .filter(([, quote]) => {
         const age = now - quote.timestamp.getTime();
-        return Number.isFinite(age) && age >= -5_000 && age <= 60_000;
+        return Number.isFinite(age) && age >= -5_000 && age <= FAST_MARK_FRESH_MAX_AGE_MS;
       })
       .map(([symbol]) => symbol)
+      .sort();
+    const fastMarkFallbackInstruments = [...state.candleQuotes.keys()]
+      .filter((symbol) => !streamingInstruments.includes(symbol))
       .sort();
     return {
       cachedInstruments: [...cached].sort(),
       cachedInstrumentCount: cached.size,
       streamingInstruments,
       streamingInstrumentCount: streamingInstruments.length,
+      fastMarkFallbackInstruments,
+      providerHealth: this.providerHealthSnapshot(state, now),
       latestObservedAt: state.latestObservedAt ? new Date(state.latestObservedAt) : null,
       latestQuoteObservedAt: state.latestQuoteObservedAt
         ? new Date(state.latestQuoteObservedAt)
         : null,
+    };
+  }
+
+  private providerHealthSnapshot(state: LivePaperMarketState, now: number) {
+    const providers = Object.fromEntries(
+      FAST_MARK_PROVIDERS.map((provider) => {
+        const rows = [...state.streamProviderObservations.entries()]
+          .map(([instrument, byProvider]) => ({
+            instrument,
+            observation: byProvider.get(provider),
+          }))
+          .filter((row): row is { instrument: string; observation: FastMarkObservation } =>
+            Boolean(row.observation),
+          );
+        const freshRows = rows.filter(({ observation }) => {
+          const age = now - observation.observedAt.getTime();
+          return Number.isFinite(age) && age >= -5_000 && age <= PROVIDER_HEALTH_MAX_AGE_MS;
+        });
+        const latest = rows
+          .slice()
+          .sort(
+            (left, right) =>
+              right.observation.observedAt.getTime() - left.observation.observedAt.getTime(),
+          )[0];
+        return [
+          provider,
+          {
+            freshInstruments: freshRows.map(({ instrument }) => instrument).sort(),
+            freshInstrumentCount: freshRows.length,
+            staleInstruments: rows
+              .filter(({ observation }) => {
+                const age = now - observation.observedAt.getTime();
+                return !Number.isFinite(age) || age < -5_000 || age > PROVIDER_HEALTH_MAX_AGE_MS;
+              })
+              .map(({ instrument }) => instrument)
+              .sort(),
+            latestObservedAt: latest ? new Date(latest.observation.observedAt) : null,
+            latestReceivedAt: latest ? new Date(latest.observation.receivedAt) : null,
+            latestSourceLagMs: latest?.observation.sourceLagMs ?? null,
+            maxFreshSourceLagMs:
+              freshRows.length > 0
+                ? Math.max(...freshRows.map(({ observation }) => observation.sourceLagMs))
+                : null,
+          },
+        ];
+      }),
+    ) as Record<
+      FastMarkProvider,
+      {
+        freshInstruments: string[];
+        freshInstrumentCount: number;
+        staleInstruments: string[];
+        latestObservedAt: Date | null;
+        latestReceivedAt: Date | null;
+        latestSourceLagMs: number | null;
+        maxFreshSourceLagMs: number | null;
+      }
+    >;
+
+    const comparisons = [...state.streamingQuotes.entries()]
+      .map(([instrument, stream]) => {
+        if (!stream.streamProvider) return null;
+        const observation = state.streamProviderObservations
+          .get(instrument)
+          ?.get(stream.streamProvider);
+        const reference = state.candleQuotes.get(instrument);
+        if (!observation || !reference) return null;
+        const streamAge = now - observation.observedAt.getTime();
+        const referenceAge = now - reference.timestamp.getTime();
+        const timestampSkewMs = Math.abs(
+          observation.observedAt.getTime() - reference.timestamp.getTime(),
+        );
+        if (
+          streamAge < -5_000 ||
+          streamAge > PROVIDER_HEALTH_MAX_AGE_MS ||
+          referenceAge < -5_000 ||
+          referenceAge > EXECUTION_REFERENCE_MAX_SKEW_MS ||
+          timestampSkewMs > EXECUTION_REFERENCE_MAX_SKEW_MS
+        ) {
+          return null;
+        }
+        const referenceMid = (Number(reference.bid) + Number(reference.ask)) / 2;
+        if (!Number.isFinite(referenceMid) || referenceMid <= 0) return null;
+        const pipSize = SPECS[instrument]!.digits === 3 ? 0.01 : 0.0001;
+        const difference = Math.abs(observation.mid - referenceMid);
+        return {
+          instrument,
+          streamProvider: stream.streamProvider,
+          timestampSkewMs,
+          divergencePips: Number((difference / pipSize).toFixed(4)),
+          divergenceBps: Number(((difference / referenceMid) * 10_000).toFixed(4)),
+          streamObservedAt: new Date(observation.observedAt),
+          referenceObservedAt: new Date(reference.timestamp),
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      .sort((left, right) => left.instrument.localeCompare(right.instrument));
+    const divergencePips = comparisons.map((row) => row.divergencePips);
+
+    return {
+      freshnessMaxAgeMs: PROVIDER_HEALTH_MAX_AGE_MS,
+      executionReference: {
+        comparisonMaxSkewMs: EXECUTION_REFERENCE_MAX_SKEW_MS,
+        comparisonCount: comparisons.length,
+        comparisons,
+        maxDivergencePips: divergencePips.length ? Math.max(...divergencePips) : null,
+        averageDivergencePips: divergencePips.length
+          ? Number(
+              (
+                divergencePips.reduce((sum, value) => sum + value, 0) / divergencePips.length
+              ).toFixed(4),
+            )
+          : null,
+      },
+      providers,
     };
   }
 

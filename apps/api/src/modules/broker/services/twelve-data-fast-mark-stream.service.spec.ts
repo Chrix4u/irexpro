@@ -136,6 +136,8 @@ describe('TwelveDataFastMarkStreamService', () => {
       1.12345,
       new Date(1790875800 * 1000),
       undefined,
+      'TWELVE_DATA',
+      expect.any(Date),
     );
     service.onModuleDestroy();
     expect(socket.closed).toBe(true);

@@ -26,12 +26,15 @@ const DERIV_SYMBOLS = Object.freeze([
 ] as const);
 const INSTRUMENT_BY_DERIV_SYMBOL = new Map<string, string>(DERIV_SYMBOLS);
 const REQUIRED_M1_CONTINUITY_BARS = 60;
+const SILENT_STREAM_MAX_AGE_MS = 45_000;
+const SILENT_STREAM_WATCHDOG_INTERVAL_MS = 5_000;
 
 @Injectable()
 export class DerivPublicFxStreamService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DerivPublicFxStreamService.name);
   private socket: NativeWebSocketLike | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private watchdogTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private sessionTimer: NodeJS.Timeout | null = null;
   private reconnectDelayMs = 5_000;
@@ -39,6 +42,8 @@ export class DerivPublicFxStreamService implements OnModuleInit, OnModuleDestroy
   private marketSessionPaused = false;
   private readonly seenInstruments = new Set<string>();
   private sixPairReadyLogged = false;
+  private connectedAtMs: number | null = null;
+  private readonly lastTickReceivedAtByInstrument = new Map<string, number>();
 
   constructor(
     private readonly config: ConfigService,
@@ -55,11 +60,15 @@ export class DerivPublicFxStreamService implements OnModuleInit, OnModuleDestroy
   onModuleDestroy(): void {
     this.destroyed = true;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.watchdogTimer) clearInterval(this.watchdogTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.sessionTimer) clearInterval(this.sessionTimer);
     this.heartbeatTimer = null;
+    this.watchdogTimer = null;
     this.reconnectTimer = null;
     this.sessionTimer = null;
+    this.connectedAtMs = null;
+    this.lastTickReceivedAtByInstrument.clear();
     const socket = this.socket;
     this.socket = null;
     if (socket) {
@@ -96,8 +105,12 @@ export class DerivPublicFxStreamService implements OnModuleInit, OnModuleDestroy
       }
       if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
       if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+      if (this.watchdogTimer) clearInterval(this.watchdogTimer);
       this.reconnectTimer = null;
       this.heartbeatTimer = null;
+      this.watchdogTimer = null;
+      this.connectedAtMs = null;
+      this.lastTickReceivedAtByInstrument.clear();
       const socket = this.socket;
       this.socket = null;
       if (socket) {
@@ -130,6 +143,8 @@ export class DerivPublicFxStreamService implements OnModuleInit, OnModuleDestroy
     this.socket = socket;
     socket.addEventListener('open', () => {
       this.reconnectDelayMs = 5_000;
+      this.connectedAtMs = Date.now();
+      this.lastTickReceivedAtByInstrument.clear();
       this.seenInstruments.clear();
       this.sixPairReadyLogged = false;
       socket.send(
@@ -152,6 +167,7 @@ export class DerivPublicFxStreamService implements OnModuleInit, OnModuleDestroy
         );
       });
       this.startHeartbeat();
+      this.startWatchdog();
       this.logger.log('Deriv public FX WebSocket connected; six-pair stream requested');
     });
     socket.addEventListener('message', (event) => void this.onMessage(event.data));
@@ -159,9 +175,16 @@ export class DerivPublicFxStreamService implements OnModuleInit, OnModuleDestroy
       this.logger.warn('Deriv public FX WebSocket reported an error');
     });
     socket.addEventListener('close', () => {
-      if (this.socket === socket) this.socket = null;
+      // A watchdog recycle clears this.socket before closing the stale socket.
+      // Its delayed close event must never disarm timers owned by a replacement.
+      if (this.socket !== socket) return;
+      this.socket = null;
       if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+      if (this.watchdogTimer) clearInterval(this.watchdogTimer);
       this.heartbeatTimer = null;
+      this.watchdogTimer = null;
+      this.connectedAtMs = null;
+      this.lastTickReceivedAtByInstrument.clear();
       this.scheduleReconnect();
     });
   }
@@ -208,11 +231,20 @@ export class DerivPublicFxStreamService implements OnModuleInit, OnModuleDestroy
       return;
     }
     const observedAt = new Date(epochSeconds * 1000);
+    const receivedAt = new Date();
+    this.lastTickReceivedAtByInstrument.set(instrument, receivedAt.getTime());
     try {
       // Deriv exposes a single public FX quote rather than executable broker
       // Bid/Ask. Keep it in the generic STREAM lane so it can improve marks
       // and M1 telemetry without ever gaining PAPER execution authority.
-      this.market.updateStreamingMidQuote(instrument, price, observedAt, this.connectionId());
+      this.market.updateStreamingMidQuote(
+        instrument,
+        price,
+        observedAt,
+        this.connectionId(),
+        'DERIV',
+        receivedAt,
+      );
     } catch (error) {
       this.logger.warn(`Rejected Deriv fast mark for ${instrument}: ${(error as Error).message}`);
       return;
@@ -305,6 +337,40 @@ export class DerivPublicFxStreamService implements OnModuleInit, OnModuleDestroy
       }
     }, 30_000);
     this.heartbeatTimer.unref?.();
+  }
+
+  private startWatchdog(): void {
+    if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+    this.watchdogTimer = setInterval(() => {
+      if (this.destroyed || this.socket?.readyState !== 1 || !isFxWeeklySessionOpen(new Date())) {
+        return;
+      }
+      if (this.connectedAtMs == null) return;
+      const now = Date.now();
+      const staleInstruments = DERIV_SYMBOLS.map(([, instrument]) => instrument).filter(
+        (instrument) =>
+          now - (this.lastTickReceivedAtByInstrument.get(instrument) ?? this.connectedAtMs!) >
+          SILENT_STREAM_MAX_AGE_MS,
+      );
+      if (staleInstruments.length === 0) return;
+
+      const socket = this.socket;
+      this.socket = null;
+      if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+      this.connectedAtMs = null;
+      this.lastTickReceivedAtByInstrument.clear();
+      this.logger.warn(
+        `Deriv public FX stream stale instruments=${staleInstruments.join(',')} for >${SILENT_STREAM_MAX_AGE_MS / 1000}s; recycling socket while PAPER marks fall back to closed M5`,
+      );
+      try {
+        socket.close();
+      } catch {
+        // Reconnect below owns recovery even if close throws.
+      }
+      this.scheduleReconnect();
+    }, SILENT_STREAM_WATCHDOG_INTERVAL_MS);
+    this.watchdogTimer.unref?.();
   }
 
   private scheduleReconnect(): void {
