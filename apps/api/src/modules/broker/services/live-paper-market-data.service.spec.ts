@@ -178,10 +178,79 @@ describe('LivePaperMarketDataService', () => {
     );
   });
 
+  it('stores completed M1 bootstrap candles and closes streamed M1 buckets causally per connection', () => {
+    const service = new LivePaperMarketDataService();
+    const connectionId = 'paper-m1';
+    service.updateClosedM1Candles(
+      'EURUSD',
+      [
+        {
+          timestamp: new Date('2026-10-19T08:00:00.000Z'),
+          open: '1.10000',
+          high: '1.10020',
+          low: '1.09990',
+          close: '1.10010',
+        },
+        {
+          timestamp: new Date('2026-10-19T08:01:00.000Z'),
+          open: '1.10010',
+          high: '1.10030',
+          low: '1.10000',
+          close: '1.10020',
+        },
+      ],
+      connectionId,
+    );
+
+    expect(service.getOHLCV('EURUSD', 'M1', 10, connectionId)).toHaveLength(2);
+    expect(() => service.getOHLCV('EURUSD', 'M1', 10, 'other-paper')).toThrow(
+      /No live PAPER M1 candles/,
+    );
+
+    service.updateStreamingMidQuote(
+      'EURUSD',
+      1.10025,
+      new Date('2026-10-19T08:02:10.000Z'),
+      connectionId,
+    );
+    service.updateStreamingMidQuote(
+      'EURUSD',
+      1.1004,
+      new Date('2026-10-19T08:02:35.000Z'),
+      connectionId,
+    );
+    service.updateStreamingMidQuote(
+      'EURUSD',
+      1.10015,
+      new Date('2026-10-19T08:02:50.000Z'),
+      connectionId,
+    );
+
+    expect(service.getOHLCV('EURUSD', 'M1', 10, connectionId)).toHaveLength(2);
+
+    service.updateStreamingMidQuote(
+      'EURUSD',
+      1.1003,
+      new Date('2026-10-19T08:03:05.000Z'),
+      connectionId,
+    );
+    const closed = service.getOHLCV('EURUSD', 'M1', 10, connectionId);
+    expect(closed).toHaveLength(3);
+    expect(closed.at(-1)).toMatchObject({
+      timestamp: new Date('2026-10-19T08:02:00.000Z'),
+      open: '1.10025',
+      high: '1.10040',
+      low: '1.10015',
+      close: '1.10015',
+    });
+  });
+
   it('fails closed on unsupported timeframes and missing quotes', () => {
     const service = new LivePaperMarketDataService();
     expect(() => service.getQuote('EURUSD')).toThrow(/No live PAPER execution quote/);
     service.updateClosedCandles('EURUSD', candles(1.1, 5));
-    expect(() => service.getOHLCV('EURUSD', 'M1', 10)).toThrow(/supports M5\/M15\/M30\/H1\/H4\/D1/);
+    expect(() => service.getOHLCV('EURUSD', 'M2', 10)).toThrow(
+      /supports M1\/M5\/M15\/M30\/H1\/H4\/D1/,
+    );
   });
 });

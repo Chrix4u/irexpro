@@ -31,12 +31,14 @@ export interface LivePaperCandleInput {
 
 interface LivePaperMarketState {
   candles: Map<string, OHLCV[]>;
+  m1Candles: Map<string, OHLCV[]>;
   candleQuotes: Map<string, LivePaperQuote>;
   streamingQuotes: Map<string, LivePaperQuote>;
   providerExecutionQuotes: Map<string, LivePaperQuote>;
   paperFallbackSpreads: Map<string, number>;
   latestObservedAt: Date | null;
   latestQuoteObservedAt: Date | null;
+  latestM1ObservedAt: Date | null;
 }
 
 const DEFAULT_MARKET_SCOPE = '__default__';
@@ -64,12 +66,14 @@ export class LivePaperMarketDataService {
     if (!state) {
       state = {
         candles: new Map<string, OHLCV[]>(),
+        m1Candles: new Map<string, OHLCV[]>(),
         candleQuotes: new Map<string, LivePaperQuote>(),
         streamingQuotes: new Map<string, LivePaperQuote>(),
         providerExecutionQuotes: new Map<string, LivePaperQuote>(),
         paperFallbackSpreads: new Map<string, number>(),
         latestObservedAt: null,
         latestQuoteObservedAt: null,
+        latestM1ObservedAt: null,
       };
       this.states.set(key, state);
     }
@@ -146,6 +150,47 @@ export class LivePaperMarketDataService {
     }
   }
 
+  updateClosedM1Candles(
+    instrument: string,
+    rows: LivePaperCandleInput[],
+    connectionId?: string,
+  ): void {
+    const state = this.marketState(connectionId);
+    const symbol = this.requireSupported(instrument);
+    if (rows.length < 2) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        `Live paper M1 market data requires at least two closed candles for ${symbol}.`,
+      );
+    }
+    const spec = SPECS[symbol]!;
+    const normalized = rows
+      .map((row) => ({
+        timestamp: new Date(row.timestamp),
+        open: this.decimal(row.open, spec.digits),
+        high: this.decimal(row.high, spec.digits),
+        low: this.decimal(row.low, spec.digits),
+        close: this.decimal(row.close, spec.digits),
+        volume: '0',
+        tickVolume: '0',
+        priceDigits: spec.digits,
+        brokerTime: new Date(row.timestamp).toISOString(),
+      }))
+      .filter((row) => Number.isFinite(row.timestamp.getTime()))
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    if (normalized.length < 2) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        `Live paper M1 market data contains insufficient valid timestamps for ${symbol}.`,
+      );
+    }
+    state.m1Candles.set(symbol, normalized.slice(-500));
+    const latestClosedAt = normalized.at(-1)!.timestamp.getTime() + 60_000;
+    if (!state.latestM1ObservedAt || latestClosedAt > state.latestM1ObservedAt.getTime()) {
+      state.latestM1ObservedAt = new Date(latestClosedAt);
+    }
+  }
+
   updateStreamingMidQuote(
     instrument: string,
     price: number | string,
@@ -162,6 +207,34 @@ export class LivePaperMarketDataService {
         BrokerErrorCode.INVALID_PRICE,
         `Invalid streaming PAPER quote for ${symbol}.`,
       );
+    }
+    const previousM1ObservedAt = state.latestM1ObservedAt?.getTime() ?? Number.NEGATIVE_INFINITY;
+    if (timestamp.getTime() >= previousM1ObservedAt) {
+      const bucketTime = Math.floor(timestamp.getTime() / 60_000) * 60_000;
+      const rows = state.m1Candles.get(symbol) ?? [];
+      const latest = rows.at(-1);
+      if (latest && latest.timestamp.getTime() === bucketTime) {
+        const high = Math.max(Number(latest.high), mid);
+        const low = Math.min(Number(latest.low), mid);
+        latest.high = high.toFixed(spec.digits);
+        latest.low = low.toFixed(spec.digits);
+        latest.close = mid.toFixed(spec.digits);
+        latest.tickVolume = String(Number(latest.tickVolume || '0') + 1);
+      } else if (!latest || latest.timestamp.getTime() < bucketTime) {
+        rows.push({
+          timestamp: new Date(bucketTime),
+          open: mid.toFixed(spec.digits),
+          high: mid.toFixed(spec.digits),
+          low: mid.toFixed(spec.digits),
+          close: mid.toFixed(spec.digits),
+          volume: '0',
+          tickVolume: '1',
+          priceDigits: spec.digits,
+          brokerTime: new Date(bucketTime).toISOString(),
+        });
+        state.m1Candles.set(symbol, rows.slice(-500));
+      }
+      state.latestM1ObservedAt = new Date(timestamp);
     }
     const halfSpread = this.getPaperFallbackSpread(symbol, connectionId) / 2;
     const quote: LivePaperQuote = {
@@ -395,6 +468,22 @@ export class LivePaperMarketDataService {
     const state = this.marketState(connectionId);
     const symbol = this.requireSupported(instrument);
     const tf = timeframe.trim().toUpperCase();
+    if (tf === 'M1') {
+      const rows = state.m1Candles.get(symbol) ?? [];
+      const observedAt = state.latestM1ObservedAt?.getTime() ?? 0;
+      const closed = rows.filter((row) => row.timestamp.getTime() + 60_000 <= observedAt);
+      if (!closed.length) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.PROVIDER_UNAVAILABLE,
+          `No live PAPER M1 candles are cached yet for ${symbol}.`,
+          undefined,
+          true,
+        );
+      }
+      return closed
+        .slice(-Math.max(1, count))
+        .map((row) => ({ ...row, timestamp: new Date(row.timestamp) }));
+    }
     const timeframeMinutes: Record<string, number> = {
       M5: 5,
       M15: 15,
@@ -407,7 +496,7 @@ export class LivePaperMarketDataService {
     if (!minutes) {
       throw new BrokerAdapterError(
         BrokerErrorCode.INVALID_REQUEST,
-        `VPS live PAPER market data supports M5/M15/M30/H1/H4/D1 (requested ${timeframe}).`,
+        `VPS live PAPER market data supports M1/M5/M15/M30/H1/H4/D1 (requested ${timeframe}).`,
       );
     }
     const rows = state.candles.get(symbol) ?? [];
