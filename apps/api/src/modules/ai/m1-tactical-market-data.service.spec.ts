@@ -94,6 +94,7 @@ describe('M1TacticalMarketDataService', () => {
       connectionId: 'conn-1',
       instrument: 'EURUSD',
       candleSource: 'metaapi-rpc-sampled',
+      marketDataAuthority: 'BROKER_NATIVE',
       spreadEvidence: {
         source: 'BROKER_OBSERVED_P90',
         sampleCount: 20,
@@ -106,7 +107,8 @@ describe('M1TacticalMarketDataService', () => {
     expect(result!.m15).toHaveLength(30);
     expect(result!.h1).toHaveLength(30);
     expect(result!.h4).toHaveLength(30);
-    expect(result!.spreadEvidence.spreadPrice).toBeCloseTo(0.00004, 8);
+    expect(result!.spreadEvidence).not.toBeNull();
+    expect(result!.spreadEvidence!.spreadPrice).toBeCloseTo(0.00004, 8);
     expect(getCandles).toHaveBeenCalledTimes(5);
     for (const call of getCandles.mock.calls) {
       expect(call[4]).toEqual(DECISION);

@@ -52,6 +52,7 @@ function snapshot(instrument: string, decisionTime: Date): M1TacticalMarketSnaps
     instrument,
     decisionTime,
     candleSource: 'metaapi-rpc-sampled',
+    marketDataAuthority: 'BROKER_NATIVE',
     m1: seriesEndingAt(decisionTime, 60, 1),
     m5: seriesEndingAt(decisionTime, 35, 5, 1.09, 0.00012),
     m15: seriesEndingAt(decisionTime, 35, 15, 1.08, 0.00015),
@@ -448,6 +449,41 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
       'decision-EURUSD-BUY-M1_TREND_CONTINUATION',
       signal.signalId,
       undefined,
+    );
+  });
+
+  it('allows conservative PAPER simulation spread without upgrading it to production evidence', async () => {
+    const h = phase2Harness();
+    const features = cleanContinuationFeatures();
+    const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
+
+    await (h.service as any).persistCandidate(
+      'user-1',
+      'conn-1',
+      buy,
+      sell,
+      features,
+      'CLEAR',
+      null,
+      features.decisionTime,
+      0.0001,
+    );
+
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0].metadata).toEqual(
+      expect.objectContaining({
+        external_provider_paper_only: true,
+        production_eligible: false,
+        m1_execution_cost_source: 'PAPER_SIMULATION_SPREAD',
+      }),
+    );
+    expect(h.recordDecision.mock.calls[0]![0].governance.genericGovernance).toEqual(
+      expect.objectContaining({
+        executionCostSource: 'PAPER_SIMULATION_SPREAD',
+        executionSpreadEvidenceValid: false,
+        paperExecutionCostUsable: true,
+        paperPromotionEligible: false,
+      }),
     );
   });
 

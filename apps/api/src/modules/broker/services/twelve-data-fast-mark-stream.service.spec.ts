@@ -174,7 +174,7 @@ describe('TwelveDataFastMarkStreamService', () => {
     service.onModuleDestroy();
   });
 
-  it('bootstraps completed M1 history exactly once after the provider accepts the streamed symbol', async () => {
+  it('deduplicates M1 bootstrap within a minute and refreshes it after a later accepted reconnect', async () => {
     (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
     const values = Array.from({ length: 70 }, (_, index) => {
       const timestamp = new Date(Date.UTC(2026, 9, 19, 10, 50 + index));
@@ -217,11 +217,18 @@ describe('TwelveDataFastMarkStreamService', () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    jest.setSystemTime(new Date('2026-10-19T12:02:00.000Z'));
+    await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+      JSON.stringify({ event: 'subscribe-status', success: [{ symbol: 'EUR/USD' }], fails: [] }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
     const url = String(fetchMock.mock.calls[0]![0]);
     expect(url).toContain('interval=1min');
     expect(url).toContain('symbol=EUR%2FUSD');
     expect(url).toContain('outputsize=100');
-    expect(market.updateClosedM1Candles).toHaveBeenCalledTimes(1);
+    expect(market.updateClosedM1Candles).toHaveBeenCalledTimes(2);
     const [instrument, rows, connectionId] = (market.updateClosedM1Candles as jest.Mock).mock
       .calls[0]!;
     expect(instrument).toBe('EURUSD');

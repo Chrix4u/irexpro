@@ -135,7 +135,7 @@ export class LivePaperMarketDataService {
     }
     const halfSpread = this.getPaperFallbackSpread(symbol, connectionId) / 2;
     const quoteTimestamp = new Date(latest.timestamp.getTime() + 5 * 60_000);
-    state.candles.set(symbol, normalized.slice(-500));
+    state.candles.set(symbol, normalized.slice(-1200));
     state.candleQuotes.set(symbol, {
       bid: (mid - halfSpread).toFixed(spec.digits),
       ask: (mid + halfSpread).toFixed(spec.digits),
@@ -184,7 +184,20 @@ export class LivePaperMarketDataService {
         `Live paper M1 market data contains insufficient valid timestamps for ${symbol}.`,
       );
     }
-    state.m1Candles.set(symbol, normalized.slice(-500));
+    const mergedByOpenTime = new Map<number, OHLCV>();
+    for (const row of state.m1Candles.get(symbol) ?? []) {
+      mergedByOpenTime.set(row.timestamp.getTime(), row);
+    }
+    // REST bootstrap rows are complete provider candles and may repair an
+    // already closed streamed bucket. A newer live/incomplete bucket is not
+    // present in the bootstrap response and therefore survives this merge.
+    for (const row of normalized) {
+      mergedByOpenTime.set(row.timestamp.getTime(), row);
+    }
+    const merged = [...mergedByOpenTime.values()].sort(
+      (left, right) => left.timestamp.getTime() - right.timestamp.getTime(),
+    );
+    state.m1Candles.set(symbol, merged.slice(-500));
     const latestClosedAt = normalized.at(-1)!.timestamp.getTime() + 60_000;
     if (!state.latestM1ObservedAt || latestClosedAt > state.latestM1ObservedAt.getTime()) {
       state.latestM1ObservedAt = new Date(latestClosedAt);

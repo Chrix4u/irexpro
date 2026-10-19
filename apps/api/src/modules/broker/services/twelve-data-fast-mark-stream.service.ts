@@ -34,6 +34,7 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
   private marketSessionPaused = false;
   private preferredProviderSymbol = PROVIDER_SYMBOLS[0]!;
   private readonly m1BootstrapTasks = new Map<string, Promise<void>>();
+  private readonly m1BootstrapCompletedAt = new Map<string, number>();
 
   constructor(
     private readonly config: ConfigService,
@@ -224,14 +225,27 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
   }
 
   private ensureM1Bootstrap(providerSymbol: string): Promise<void> {
+    const now = Date.now();
+    const completedAt = this.m1BootstrapCompletedAt.get(providerSymbol);
+    if (completedAt != null && now - completedAt < 60_000) return Promise.resolve();
+
     const existing = this.m1BootstrapTasks.get(providerSymbol);
     if (existing) return existing;
-    const task = this.bootstrapM1History(providerSymbol).catch((error) => {
-      this.m1BootstrapTasks.delete(providerSymbol);
-      this.logger.warn(
-        `M1 PAPER bootstrap deferred for ${providerSymbol}: ${(error as Error).message}`,
-      );
-    });
+
+    const task: Promise<void> = this.bootstrapM1History(providerSymbol)
+      .then(() => {
+        this.m1BootstrapCompletedAt.set(providerSymbol, Date.now());
+      })
+      .catch((error) => {
+        this.logger.warn(
+          `M1 PAPER bootstrap deferred for ${providerSymbol}: ${(error as Error).message}`,
+        );
+      })
+      .finally(() => {
+        if (this.m1BootstrapTasks.get(providerSymbol) === task) {
+          this.m1BootstrapTasks.delete(providerSymbol);
+        }
+      });
     this.m1BootstrapTasks.set(providerSymbol, task);
     return task;
   }

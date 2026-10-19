@@ -5120,7 +5120,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const params = new URLSearchParams({
       symbol: requestedSymbols.map(([, provider]) => provider).join(','),
       interval: '5min',
-      outputsize: '500',
+      outputsize: '1200',
       timezone: 'UTC',
       order: 'asc',
       end_date: new Date(lastClosedBoundary).toISOString().slice(0, 19),
