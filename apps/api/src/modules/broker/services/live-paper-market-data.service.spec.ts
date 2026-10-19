@@ -388,6 +388,71 @@ describe('LivePaperMarketDataService', () => {
     });
   });
 
+  it('tracks Deriv source lag and fresh divergence from the closed-M5 reference without changing execution authority', () => {
+    const nowMs = new Date('2026-10-19T12:00:10.000Z').getTime();
+    const now = jest.spyOn(Date, 'now').mockReturnValue(nowMs);
+    try {
+      const service = new LivePaperMarketDataService();
+      const connectionId = 'paper-provider-health';
+      service.updateClosedCandles('EURUSD', candles(1.1, 5), connectionId);
+      const executionBefore = service.getQuote('EURUSD', 20 * 60_000, connectionId);
+      const referenceMid = (Number(executionBefore.bid) + Number(executionBefore.ask)) / 2;
+
+      service.updateStreamingMidQuote(
+        'EURUSD',
+        referenceMid + 0.00005,
+        new Date('2026-10-19T12:00:08.000Z'),
+        connectionId,
+        'DERIV',
+        new Date('2026-10-19T12:00:10.000Z'),
+      );
+
+      const status = service.status(connectionId);
+      expect(status.providerHealth.providers.DERIV).toMatchObject({
+        freshInstruments: ['EURUSD'],
+        freshInstrumentCount: 1,
+        latestSourceLagMs: 2000,
+      });
+      expect(status.providerHealth.executionReference.comparisons).toEqual([
+        expect.objectContaining({
+          instrument: 'EURUSD',
+          streamProvider: 'DERIV',
+          divergencePips: 0.5,
+        }),
+      ]);
+      expect(service.getQuote('EURUSD', 20 * 60_000, connectionId)).toEqual(executionBefore);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('reports stale Deriv marks as fast-mark fallback while getMarkQuote uses the closed-M5 cache', () => {
+    const nowMs = new Date('2026-10-19T12:00:00.000Z').getTime();
+    const now = jest.spyOn(Date, 'now').mockReturnValue(nowMs);
+    try {
+      const service = new LivePaperMarketDataService();
+      const connectionId = 'paper-stream-fallback';
+      service.updateClosedCandles('EURUSD', candles(1.1, 5), connectionId);
+      service.updateStreamingMidQuote(
+        'EURUSD',
+        1.12345,
+        new Date(nowMs - 61_000),
+        connectionId,
+        'DERIV',
+        new Date(nowMs - 60_500),
+      );
+
+      expect(service.getMarkQuote('EURUSD', 60_000, 20 * 60_000, connectionId).source).toBe(
+        'REST_M5',
+      );
+      const status = service.status(connectionId);
+      expect(status.providerHealth.providers.DERIV.staleInstruments).toEqual(['EURUSD']);
+      expect(status.fastMarkFallbackInstruments).toContain('EURUSD');
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it('fails closed on unsupported timeframes and missing quotes', () => {
     const service = new LivePaperMarketDataService();
     expect(() => service.getQuote('EURUSD')).toThrow(/No live PAPER execution quote/);

@@ -226,7 +226,14 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
         : new Date();
     try {
       const connectionId = this.config.get<string>('vpsForexScanner.brokerConnectionId', '').trim();
-      this.market.updateStreamingMidQuote(instrument, price, observedAt, connectionId || undefined);
+      this.market.updateStreamingMidQuote(
+        instrument,
+        price,
+        observedAt,
+        connectionId || undefined,
+        'TWELVE_DATA',
+        new Date(),
+      );
     } catch (error) {
       this.logger.warn(`Rejected fast mark for ${instrument}: ${(error as Error).message}`);
       return;
