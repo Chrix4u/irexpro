@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import type { M1ReliabilityRoute, M1RoutePairSideEvidenceRow } from './m1-tactical-reliability';
 import type { M1FailedMoveRescueDecision } from './m1-failed-move-rescue';
+import type { M1DriftCounterfactualResult } from './m1-drift-counterfactual';
 
 export type M1TacticalDecisionRoute = M1ReliabilityRoute | 'ABSTAIN';
 export type M1TacticalDecisionAuthority = 'NONE' | 'PAPER_ONLY_RESEARCH';
@@ -84,6 +85,27 @@ export interface M1RescueObservationInput {
   rescue: M1FailedMoveRescueDecision;
 }
 
+export interface M1PendingDriftCounterfactualQuery {
+  userId: string;
+  brokerConnectionId: string;
+  instrument: string;
+  asOf: Date;
+  policyVersion: string;
+}
+
+export interface M1PendingDriftCounterfactual {
+  id: string;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  route: M1ReliabilityRoute;
+  evaluatedAt: Date;
+  stopDistance: number;
+  targetDistance: number;
+  estimatedExecutionCostR: number;
+  driftState: string | null;
+  driftDiagnostics: string[];
+}
+
 export interface M1TacticalOutcomeMetricsFilter {
   userId: string;
   brokerConnectionId: string;
@@ -138,6 +160,23 @@ function nullableDate(value: string | Date | null): Date | null {
   if (value == null) return null;
   const parsed = date(value);
   return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
 }
 
 function blockers(value: unknown): string[] {
@@ -368,6 +407,82 @@ export class M1TacticalEvidenceService {
       [input.userId, input.brokerConnectionId, instrument, input.direction],
     )) as Array<{ exists: boolean }>;
     return rows[0]?.exists === true;
+  }
+
+  async loadPendingDriftCounterfactuals(
+    input: M1PendingDriftCounterfactualQuery,
+  ): Promise<M1PendingDriftCounterfactual[]> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT id, instrument, direction, route, evaluated_at, candidate, governance
+        FROM trading.m1_tactical_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND instrument = $3
+          AND route <> 'ABSTAIN'
+          AND execution_authority = 'NONE'
+          AND jsonb_array_length(blockers) = 1
+          AND blockers <@ '["DRIFT_OUT_OF_DISTRIBUTION","DRIFT_STRESSED"]'::jsonb
+          AND governance -> 'driftCounterfactual15m' IS NULL
+          AND evaluated_at <= ($4::timestamptz - interval '15 minutes')
+          AND policy_version = $5
+        ORDER BY evaluated_at DESC
+        LIMIT 50
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument.trim().toUpperCase(),
+        input.asOf.toISOString(),
+        input.policyVersion,
+      ],
+    )) as Array<{
+      id: string;
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      route: M1ReliabilityRoute;
+      evaluated_at: string | Date;
+      candidate: unknown;
+      governance: unknown;
+    }>;
+
+    return rows.map((row) => {
+      const candidate = jsonObject(row.candidate);
+      const governance = jsonObject(row.governance);
+      const genericGovernance = jsonObject(governance.genericGovernance);
+      const diagnostics = genericGovernance.driftDiagnostics;
+      return {
+        id: row.id,
+        instrument: row.instrument.trim().toUpperCase(),
+        direction: row.direction,
+        route: row.route,
+        evaluatedAt: date(row.evaluated_at),
+        stopDistance: number(candidate.stopDistance),
+        targetDistance: number(candidate.targetDistance),
+        estimatedExecutionCostR: number(genericGovernance.estimatedExecutionCostR),
+        driftState:
+          typeof genericGovernance.driftState === 'string' ? genericGovernance.driftState : null,
+        driftDiagnostics: Array.isArray(diagnostics)
+          ? diagnostics.filter((item): item is string => typeof item === 'string')
+          : [],
+      };
+    });
+  }
+
+  async markDriftCounterfactual15m(
+    decisionId: string,
+    observation: M1DriftCounterfactualResult,
+  ): Promise<void> {
+    await this.dataSource.query(
+      `
+        UPDATE trading.m1_tactical_decisions
+        SET governance = jsonb_set(governance, '{driftCounterfactual15m}', $2::jsonb, true),
+            updated_at = now()
+        WHERE id = $1
+          AND governance -> 'driftCounterfactual15m' IS NULL
+      `,
+      [decisionId, JSON.stringify(observation)],
+    );
   }
 
   async markRescueObservation(
