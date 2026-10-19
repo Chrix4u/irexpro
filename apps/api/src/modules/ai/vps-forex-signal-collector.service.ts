@@ -41,6 +41,7 @@ import {
 } from './ensemble-governance';
 import { MacroEventRiskAssessment, MacroEventRiskService } from './macro-event-risk.service';
 import {
+  ENSEMBLE_OUTCOME_MODEL_VERSION,
   EnsembleShadowOutcome,
   collapseEnsembleOutcomeEpisodes,
   resolveEnsembleShadowOutcome,
@@ -3749,6 +3750,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           instrument,
           direction,
           market_bar_time,
+          evaluated_at,
           entry_price,
           components
         FROM trading.ensemble_shadow_decisions
@@ -3773,6 +3775,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       instrument: string;
       direction: 'BUY' | 'SELL';
       market_bar_time: string | Date;
+      evaluated_at: string | Date;
       entry_price: string | number;
       components: Record<string, unknown> | null;
     }>;
@@ -3790,6 +3793,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           ? (components.governance as Record<string, unknown>)
           : null;
       const estimatedExecutionCostR = Number(governance?.estimatedExecutionCostR ?? 0);
+      const spreadEvidence =
+        governance?.executionSpreadEvidence &&
+        typeof governance.executionSpreadEvidence === 'object'
+          ? (governance.executionSpreadEvidence as Record<string, unknown>)
+          : null;
+      const rawExecutionSpreadPrice = Number(spreadEvidence?.spreadPrice ?? 0);
+      const executionSpreadPrice =
+        Number.isFinite(rawExecutionSpreadPrice) && rawExecutionSpreadPrice >= 0
+          ? rawExecutionSpreadPrice
+          : 0;
       if (
         !Number.isFinite(stopLoss) ||
         !Number.isFinite(takeProfit) ||
@@ -3802,10 +3815,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         {
           direction: row.direction,
           marketBarTime: row.market_bar_time,
+          evaluatedAt: row.evaluated_at,
           entryPrice: Number(row.entry_price),
           stopLoss,
           takeProfit,
           estimatedExecutionCostR,
+          executionSpreadPrice,
+          candlePriceBasis:
+            this.lastMarketDataAuthority === 'METAAPI_BROKER_FALLBACK' ? 'BID' : 'MID',
         },
         candles,
       );
@@ -3849,6 +3866,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             false
           ) = true
           AND components ? 'outcome'
+          AND components->'outcome'->>'version' = $5
         ORDER BY evaluated_at ASC
       `,
       [
@@ -3856,6 +3874,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         connectionId,
         ACTIVE_ENGINE_CODE,
         [...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
+        ENSEMBLE_OUTCOME_MODEL_VERSION,
       ],
     )) as Array<{
       instrument: string;
@@ -3896,6 +3915,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       userId,
       connectionId,
       ...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
+      ENSEMBLE_OUTCOME_MODEL_VERSION,
     ].join(':');
     const cached = this.pairSideReliabilityStatusCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.snapshot;
@@ -3918,6 +3938,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 false
               ) = true
               AND components ? 'outcome'
+              AND components->'outcome'->>'version' = $6
             ORDER BY instrument, direction, evaluated_at ASC
           `,
           [
@@ -3926,6 +3947,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             ACTIVE_ENGINE_CODE,
             [...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
             SYMBOLS.map(([instrument]) => instrument),
+            ENSEMBLE_OUTCOME_MODEL_VERSION,
           ],
         )) as Array<{
           instrument: string;
@@ -4006,6 +4028,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             false
           ) = true
           AND components ? 'outcome'
+          AND components->'outcome'->>'version' = $7
         ORDER BY evaluated_at ASC
       `,
       [
@@ -4015,6 +4038,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         [...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
         instrument,
         direction,
+        ENSEMBLE_OUTCOME_MODEL_VERSION,
       ],
     )) as Array<{
       evaluated_at: string | Date;
@@ -4625,6 +4649,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             false
           ) = true
           AND components ? 'outcome'
+          AND components->'outcome'->>'version' = $7
         ORDER BY evaluated_at ASC
       `,
       [
@@ -4634,6 +4659,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         instrument,
         direction,
         ACTIVE_MODEL_POLICY_VERSION,
+        ENSEMBLE_OUTCOME_MODEL_VERSION,
       ],
     )) as Array<{ evaluated_at: string | Date; outcome: EnsembleShadowOutcome | null }>;
 

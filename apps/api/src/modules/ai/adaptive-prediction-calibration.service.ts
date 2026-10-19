@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { ENSEMBLE_OUTCOME_MODEL_VERSION } from './ensemble-shadow-outcome';
 import type { AdaptiveMarketSession, AdaptiveMarketState } from './adaptive-market-state';
 
 export const ADAPTIVE_PREDICTION_CALIBRATION_ARTIFACT = 'adaptive-prediction-calibration-v1';
@@ -463,6 +464,7 @@ export class AdaptivePredictionCalibrationService {
             AND model_version = ANY($4::text[])
             AND evaluated_at < $5
             AND components ? 'outcome'
+            AND components->'outcome'->>'version' = $6
             AND NULLIF(components->'outcome'->>'resolvedAt', '')::timestamptz < $5
           ORDER BY evaluated_at ASC, id ASC
           LIMIT 4000
@@ -473,6 +475,7 @@ export class AdaptivePredictionCalibrationService {
           'irexpro-multimodel-ensemble-v1',
           [...request.decisionPolicyVersions],
           request.evaluatedAt,
+          ENSEMBLE_OUTCOME_MODEL_VERSION,
         ],
       )) as AdaptivePredictionOutcomeRow[];
       const result = buildAdaptivePredictionCalibration(rows, request);
