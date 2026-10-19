@@ -893,11 +893,14 @@ describe('M1TacticalSchedulerService PAPER all-routes phase', () => {
   });
 });
 
-describe('M1 tactical phase-3 module wiring', () => {
-  it('binds AiModule to the versioned PAPER_ALL_ROUTES rollout without an environment escape hatch', () => {
+describe('M1 tactical shadow-only module wiring', () => {
+  it('binds AiModule to SHADOW after negative live PAPER evidence', () => {
     const moduleSource = fs.readFileSync(path.resolve(__dirname, './ai.module.ts'), 'utf8');
-    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V3');
+    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V1');
     expect(moduleSource).toMatch(
+      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V1/,
+    );
+    expect(moduleSource).not.toMatch(
       /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V3/,
     );
     expect(moduleSource).not.toMatch(/process\.env[^\n]*M1_TACTICAL/);

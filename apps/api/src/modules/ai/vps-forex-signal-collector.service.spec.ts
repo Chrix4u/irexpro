@@ -58,8 +58,8 @@ describe('dynamic PAPER lot ceiling', () => {
     volatilityScore: 0.35,
   };
 
-  it('keeps ordinary admitted signals at the 0.10 lot ceiling', () => {
-    expect(dynamicPaperLotUpperBound(base)).toEqual({ upperBound: 0.1, tier: 'BASE' });
+  it('starts the M5 dynamic PAPER target band at 0.20 lots', () => {
+    expect(dynamicPaperLotUpperBound(base)).toEqual({ upperBound: 0.2, tier: 'BASE' });
   });
 
   it('permits larger PAPER ceilings only when confidence, meta probability, EV, consensus and volatility all qualify', () => {
@@ -70,7 +70,7 @@ describe('dynamic PAPER lot ceiling', () => {
         metaProbability: 0.57,
         netExpectedR: 0.2,
       }),
-    ).toEqual({ upperBound: 0.2, tier: 'STRONG' });
+    ).toEqual({ upperBound: 0.5, tier: 'STRONG' });
     expect(
       dynamicPaperLotUpperBound({
         ...base,
@@ -78,7 +78,7 @@ describe('dynamic PAPER lot ceiling', () => {
         metaProbability: 0.64,
         netExpectedR: 0.31,
       }),
-    ).toEqual({ upperBound: 0.3, tier: 'VERY_STRONG' });
+    ).toEqual({ upperBound: 1.0, tier: 'VERY_STRONG' });
     expect(
       dynamicPaperLotUpperBound({
         ...base,
@@ -87,7 +87,7 @@ describe('dynamic PAPER lot ceiling', () => {
         netExpectedR: 0.45,
         volatilityScore: 0.5,
       }),
-    ).toEqual({ upperBound: 0.5, tier: 'EXCEPTIONAL' });
+    ).toEqual({ upperBound: 2.0, tier: 'EXCEPTIONAL' });
   });
 
   it('does not upscale on confidence alone', () => {
@@ -99,7 +99,7 @@ describe('dynamic PAPER lot ceiling', () => {
         netExpectedR: 0.1,
         consensusPassed: 5,
       }),
-    ).toEqual({ upperBound: 0.1, tier: 'BASE' });
+    ).toEqual({ upperBound: 0.2, tier: 'BASE' });
   });
 });
 
