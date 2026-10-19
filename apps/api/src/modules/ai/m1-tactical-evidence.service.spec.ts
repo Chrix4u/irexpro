@@ -342,4 +342,102 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
       rescue: expect.objectContaining({ executionAuthority: 'NONE', modifiesExecution: false }),
     });
   });
+
+  it('loads only mature decisions whose sole blocker is drift and whose counterfactual is unsettled', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        id: 'decision-drift-1',
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        route: 'M1_TREND_CONTINUATION',
+        evaluated_at: '2026-10-19T10:55:00.000Z',
+        candidate: { stopDistance: 0.0005, targetDistance: 0.0008 },
+        governance: {
+          genericGovernance: {
+            driftState: 'OUT_OF_DISTRIBUTION',
+            estimatedExecutionCostR: 0.0625,
+            driftDiagnostics: ['extensionAtr:HARD_HIGH'],
+          },
+        },
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const asOf = new Date('2026-10-19T11:10:00.000Z');
+
+    const result = await service.loadPendingDriftCounterfactuals({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'EURUSD',
+      asOf,
+      policyVersion: 'm1-tactical-v1',
+    });
+
+    const [sql, params] = query.mock.calls[0]!;
+    const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain("route <> 'ABSTAIN'");
+    expect(normalized).toContain("execution_authority = 'NONE'");
+    expect(normalized).toContain('jsonb_array_length(blockers) = 1');
+    expect(normalized).toContain(
+      'blockers <@ \'["DRIFT_OUT_OF_DISTRIBUTION","DRIFT_STRESSED"]\'::jsonb',
+    );
+    expect(normalized).toContain("governance -> 'driftCounterfactual15m' IS NULL");
+    expect(normalized).toContain("evaluated_at <= ($4::timestamptz - interval '15 minutes')");
+    expect(normalized).toContain('policy_version = $5');
+    expect(normalized).toContain('ORDER BY evaluated_at DESC');
+    expect(params).toEqual([
+      input().userId,
+      input().brokerConnectionId,
+      'EURUSD',
+      asOf.toISOString(),
+      'm1-tactical-v1',
+    ]);
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 'decision-drift-1',
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        route: 'M1_TREND_CONTINUATION',
+        evaluatedAt: new Date('2026-10-19T10:55:00.000Z'),
+        stopDistance: 0.0005,
+        targetDistance: 0.0008,
+        estimatedExecutionCostR: 0.0625,
+        driftState: 'OUT_OF_DISTRIBUTION',
+        driftDiagnostics: ['extensionAtr:HARD_HIGH'],
+      }),
+    ]);
+  });
+
+  it('settles the 15-minute drift counterfactual idempotently inside governance only', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const observation = {
+      artifact: 'm1-drift-counterfactual-15m-v1' as const,
+      modifiesExecution: false as const,
+      source: 'COMPLETED_M1_OHLC' as const,
+      horizonBars: 15 as const,
+      outcome: 'MTM' as const,
+      entryBarOpenTime: '2026-10-19T10:55:00.000Z',
+      observedAt: '2026-10-19T11:10:00.000Z',
+      terminalBarOpenTime: '2026-10-19T11:09:00.000Z',
+      entryPrice: 1.1,
+      stopLoss: 1.1005,
+      takeProfit: 1.0992,
+      terminalPrice: 1.0997,
+      estimatedExecutionCostR: 0.0625,
+      grossRMultiple: 0.6,
+      netRMultiple: 0.5375,
+    };
+
+    await service.markDriftCounterfactual15m('decision-drift-1', observation);
+
+    const [sql, params] = query.mock.calls[0]!;
+    const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain("jsonb_set(governance, '{driftCounterfactual15m}'");
+    expect(normalized).toContain("governance -> 'driftCounterfactual15m' IS NULL");
+    expect(normalized).not.toContain('signal_id =');
+    expect(normalized).not.toContain('trade_intent_id =');
+    expect(normalized).not.toContain('outcome_state =');
+    expect(params[0]).toBe('decision-drift-1');
+    expect(JSON.parse(params[1])).toEqual(observation);
+  });
 });

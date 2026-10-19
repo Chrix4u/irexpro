@@ -32,6 +32,7 @@ import {
   type M1ReliabilityRoute,
 } from './m1-tactical-reliability';
 import { isFxWeeklySessionOpen } from '../market-data/utils/fx-weekly-session';
+import { evaluateM1DriftCounterfactual15m } from './m1-drift-counterfactual';
 import {
   evaluateM1FailedMoveRescue,
   type M1FailedMoveRescueInput,
@@ -263,6 +264,57 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         decisionTime,
         market.paperSimulationSpreadPrice,
       );
+    }
+
+    await this.settleMatureDriftCounterfactuals(
+      userId,
+      brokerConnectionId,
+      instrument,
+      decisionTime,
+      market.m1,
+    );
+  }
+
+  private async settleMatureDriftCounterfactuals(
+    userId: string,
+    brokerConnectionId: string,
+    instrument: string,
+    decisionTime: Date,
+    m1Bars: Parameters<typeof evaluateM1DriftCounterfactual15m>[0]['bars'],
+  ): Promise<void> {
+    let pending: Awaited<ReturnType<M1TacticalEvidenceService['loadPendingDriftCounterfactuals']>>;
+    try {
+      pending = await this.evidence.loadPendingDriftCounterfactuals({
+        userId,
+        brokerConnectionId,
+        instrument,
+        asOf: decisionTime,
+        policyVersion: M1_TACTICAL_POLICY_V1.version,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `M1 drift counterfactual load deferred ${instrument}: ${(error as Error).message}`,
+      );
+      return;
+    }
+
+    for (const decision of pending) {
+      const observation = evaluateM1DriftCounterfactual15m({
+        direction: decision.direction,
+        evaluatedAt: decision.evaluatedAt,
+        stopDistance: decision.stopDistance,
+        targetDistance: decision.targetDistance,
+        executionCostR: decision.estimatedExecutionCostR,
+        bars: m1Bars,
+      });
+      if (!observation) continue;
+      try {
+        await this.evidence.markDriftCounterfactual15m(decision.id, observation);
+      } catch (error) {
+        this.logger.warn(
+          `M1 drift counterfactual settlement deferred decision=${decision.id}: ${(error as Error).message}`,
+        );
+      }
     }
   }
 

@@ -98,9 +98,13 @@ function harness(options: { marketDataErrorFor?: string; warm?: boolean } = {}) 
     updatedAt: value.evaluatedAt,
   }));
   const loadRoutePairSideEvidence = jest.fn().mockResolvedValue([]);
+  const loadPendingDriftCounterfactuals = jest.fn().mockResolvedValue([]);
+  const markDriftCounterfactual15m = jest.fn().mockResolvedValue(undefined);
   const evidence = {
     recordDecision,
     loadRoutePairSideEvidence,
+    loadPendingDriftCounterfactuals,
+    markDriftCounterfactual15m,
   } as unknown as M1TacticalEvidenceService;
   const receiveSignal = jest.fn();
   const signal = { receiveSignal } as unknown as AiSignalService;
@@ -111,6 +115,8 @@ function harness(options: { marketDataErrorFor?: string; warm?: boolean } = {}) 
     assess,
     recordDecision,
     loadRoutePairSideEvidence,
+    loadPendingDriftCounterfactuals,
+    markDriftCounterfactual15m,
     receiveSignal,
   };
 }
@@ -172,6 +178,49 @@ describe('M1TacticalSchedulerService shadow phase', () => {
       expect(row.policyVersion).toBe('m1-tactical-v1');
       expect(row.barTime).toBeInstanceOf(Date);
     }
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
+
+  it('settles a mature drift-blocked decision from real completed M1 bars without submitting a signal', async () => {
+    const h = harness();
+    h.loadPendingDriftCounterfactuals.mockImplementation(async (request: any) =>
+      request.instrument === 'EURUSD'
+        ? [
+            {
+              id: 'decision-drift-1',
+              instrument: 'EURUSD',
+              direction: 'BUY',
+              route: 'M1_TREND_CONTINUATION',
+              evaluatedAt: new Date('2026-10-15T12:15:00.000Z'),
+              stopDistance: 0.0005,
+              targetDistance: 0.0008,
+              estimatedExecutionCostR: 0.0625,
+              driftState: 'OUT_OF_DISTRIBUTION',
+              driftDiagnostics: ['extensionAtr:HARD_HIGH'],
+            },
+          ]
+        : [],
+    );
+
+    await h.service.runOnce(OPEN_NOW);
+
+    expect(h.loadPendingDriftCounterfactuals).toHaveBeenCalledWith({
+      userId: 'user-1',
+      brokerConnectionId: 'conn-1',
+      instrument: 'EURUSD',
+      asOf: new Date('2026-10-15T12:30:00.000Z'),
+      policyVersion: 'm1-tactical-v1',
+    });
+    expect(h.markDriftCounterfactual15m).toHaveBeenCalledTimes(1);
+    expect(h.markDriftCounterfactual15m.mock.calls[0]![0]).toBe('decision-drift-1');
+    expect(h.markDriftCounterfactual15m.mock.calls[0]![1]).toEqual(
+      expect.objectContaining({
+        artifact: 'm1-drift-counterfactual-15m-v1',
+        modifiesExecution: false,
+        source: 'COMPLETED_M1_OHLC',
+        horizonBars: 15,
+      }),
+    );
     expect(h.receiveSignal).not.toHaveBeenCalled();
   });
 
@@ -307,6 +356,8 @@ function phase2Harness(
     .fn()
     .mockResolvedValue(options.duplicateOppositeIntent ?? false);
   const markRescueObservation = jest.fn().mockResolvedValue(undefined);
+  const loadPendingDriftCounterfactuals = jest.fn().mockResolvedValue([]);
+  const markDriftCounterfactual15m = jest.fn().mockResolvedValue(undefined);
   const evidence = {
     recordDecision,
     loadRoutePairSideEvidence,
@@ -315,6 +366,8 @@ function phase2Harness(
     loadOpenPaperPositions,
     hasActiveOppositeM1Intent,
     markRescueObservation,
+    loadPendingDriftCounterfactuals,
+    markDriftCounterfactual15m,
   } as unknown as M1TacticalEvidenceService;
   const receiveSignal = jest.fn(async (candidate: any) => ({
     outcome: options.signalOutcome ?? 'EXECUTION_SUCCEEDED',
@@ -363,6 +416,8 @@ function phase2Harness(
     loadOpenPaperPositions,
     hasActiveOppositeM1Intent,
     markRescueObservation,
+    loadPendingDriftCounterfactuals,
+    markDriftCounterfactual15m,
     findBySignal,
   };
 }
@@ -436,6 +491,25 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
       await driveCleanContinuation(bad);
       expect(bad.receiveSignal).not.toHaveBeenCalled();
     }
+  });
+
+  it('keeps PAPER execution independent when the counterfactual observer is unavailable', async () => {
+    const h = phase2Harness();
+    h.loadPendingDriftCounterfactuals.mockRejectedValueOnce(new Error('observer unavailable'));
+    const market = snapshot('EURUSD', new Date('2026-10-15T10:30:00.000Z'));
+
+    await expect(
+      (h.service as any).settleMatureDriftCounterfactuals(
+        'user-1',
+        'conn-1',
+        'EURUSD',
+        new Date('2026-10-15T10:30:00.000Z'),
+        market.m1,
+      ),
+    ).resolves.toBeUndefined();
+    await driveCleanContinuation(h);
+
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
   });
 
   it('emits a PAPER-only M1 signal with durable decision and payoff metadata', async () => {
