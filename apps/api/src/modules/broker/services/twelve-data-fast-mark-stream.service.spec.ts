@@ -205,6 +205,7 @@ describe('TwelveDataFastMarkStreamService', () => {
     const market = {
       updateStreamingMidQuote: jest.fn(),
       updateClosedM1Candles: jest.fn(),
+      hasContiguousM1History: jest.fn().mockReturnValue(true),
     } as unknown as LivePaperMarketDataService;
     const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
     const service = new TwelveDataFastMarkStreamService(config, market, paperState);
@@ -239,6 +240,122 @@ describe('TwelveDataFastMarkStreamService', () => {
         (row: { timestamp: Date }) => row.timestamp < new Date('2026-10-19T12:00:00.000Z'),
       ),
     ).toBe(true);
+    service.onModuleDestroy();
+  });
+
+  it('repairs a provider-lagged startup M1 gap with bounded delayed REST bootstrap', async () => {
+    (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
+    const history = (latestOpen: string) => {
+      const latestMs = new Date(latestOpen).getTime();
+      return Array.from({ length: 70 }, (_, index) => {
+        const timestamp = new Date(latestMs - (69 - index) * 60_000);
+        return {
+          datetime: timestamp.toISOString().slice(0, 19).replace('T', ' '),
+          open: '1.10000',
+          high: '1.10020',
+          low: '1.09980',
+          close: '1.10010',
+        };
+      });
+    };
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: jest
+          .fn()
+          .mockResolvedValue({ status: 'ok', values: history('2026-10-19T11:58:00.000Z') }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: jest
+          .fn()
+          .mockResolvedValue({ status: 'ok', values: history('2026-10-19T11:59:00.000Z') }),
+      });
+    jest.spyOn(globalThis, 'fetch').mockImplementation(fetchMock as typeof fetch);
+    const config = {
+      get: jest.fn((key: string, fallback?: unknown) => {
+        const configured: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.fastMarkStreamEnabled': true,
+          'vpsForexScanner.apiKey': 'test-key',
+          'vpsForexScanner.brokerConnectionId': 'paper-1',
+        };
+        return key in configured ? configured[key] : fallback;
+      }),
+    } as unknown as ConfigService;
+    const market = {
+      updateStreamingMidQuote: jest.fn(),
+      updateClosedM1Candles: jest.fn(),
+      hasContiguousM1History: jest.fn().mockReturnValueOnce(false).mockReturnValue(true),
+    } as unknown as LivePaperMarketDataService;
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const service = new TwelveDataFastMarkStreamService(config, market, paperState);
+
+    await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+      JSON.stringify({ event: 'subscribe-status', success: [{ symbol: 'EUR/USD' }], fails: [] }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(market.updateClosedM1Candles).toHaveBeenCalledTimes(2);
+    expect(market.hasContiguousM1History).toHaveBeenLastCalledWith(
+      'EURUSD',
+      60,
+      new Date('2026-10-19T11:59:00.000Z'),
+      'paper-1',
+    );
+
+    await jest.advanceTimersByTimeAsync(120_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    service.onModuleDestroy();
+  });
+
+  it('stops startup continuity REST repair after three failed attempts', async () => {
+    const values = Array.from({ length: 70 }, (_, index) => {
+      const timestamp = new Date(
+        new Date('2026-10-19T11:58:00.000Z').getTime() - (69 - index) * 60_000,
+      );
+      return {
+        datetime: timestamp.toISOString().slice(0, 19).replace('T', ' '),
+        open: '1.10000',
+        high: '1.10020',
+        low: '1.09980',
+        close: '1.10010',
+      };
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({ status: 'ok', values }),
+    });
+    jest.spyOn(globalThis, 'fetch').mockImplementation(fetchMock as typeof fetch);
+    const config = {
+      get: jest.fn((key: string, fallback?: unknown) => {
+        const configured: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.fastMarkStreamEnabled': true,
+          'vpsForexScanner.apiKey': 'test-key',
+          'vpsForexScanner.brokerConnectionId': 'paper-1',
+        };
+        return key in configured ? configured[key] : fallback;
+      }),
+    } as unknown as ConfigService;
+    const market = {
+      updateClosedM1Candles: jest.fn(),
+      hasContiguousM1History: jest.fn().mockReturnValue(false),
+    } as unknown as LivePaperMarketDataService;
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const service = new TwelveDataFastMarkStreamService(config, market, paperState);
+
+    await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+      JSON.stringify({ event: 'subscribe-status', success: [{ symbol: 'EUR/USD' }], fails: [] }),
+    );
+    await jest.advanceTimersByTimeAsync(120_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    await jest.advanceTimersByTimeAsync(120_000);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     service.onModuleDestroy();
   });
 

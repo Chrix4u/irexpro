@@ -242,6 +242,85 @@ describe('LivePaperMarketDataService', () => {
     });
   });
 
+  it('reports M1 continuity only when the exact expected closed minute is covered without gaps', () => {
+    const service = new LivePaperMarketDataService();
+    const connectionId = 'paper-m1-continuity';
+    service.updateClosedM1Candles(
+      'EURUSD',
+      [
+        {
+          timestamp: new Date('2026-10-19T11:56:00.000Z'),
+          open: '1.10000',
+          high: '1.10020',
+          low: '1.09990',
+          close: '1.10010',
+        },
+        {
+          timestamp: new Date('2026-10-19T11:57:00.000Z'),
+          open: '1.10010',
+          high: '1.10030',
+          low: '1.10000',
+          close: '1.10020',
+        },
+        {
+          timestamp: new Date('2026-10-19T11:59:00.000Z'),
+          open: '1.10020',
+          high: '1.10040',
+          low: '1.10010',
+          close: '1.10030',
+        },
+      ],
+      connectionId,
+    );
+
+    expect(
+      service.hasContiguousM1History(
+        'EURUSD',
+        3,
+        new Date('2026-10-19T11:59:00.000Z'),
+        connectionId,
+      ),
+    ).toBe(false);
+
+    service.updateClosedM1Candles(
+      'EURUSD',
+      [
+        {
+          timestamp: new Date('2026-10-19T11:58:00.000Z'),
+          open: '1.10020',
+          high: '1.10035',
+          low: '1.10010',
+          close: '1.10025',
+        },
+        {
+          timestamp: new Date('2026-10-19T11:59:00.000Z'),
+          open: '1.10025',
+          high: '1.10040',
+          low: '1.10015',
+          close: '1.10030',
+        },
+      ],
+      connectionId,
+    );
+
+    expect(
+      service.hasContiguousM1History(
+        'EURUSD',
+        3,
+        new Date('2026-10-19T11:59:00.000Z'),
+        connectionId,
+      ),
+    ).toBe(true);
+    expect(
+      service.hasContiguousM1History(
+        'EURUSD',
+        3,
+        new Date('2026-10-19T12:00:00.000Z'),
+        connectionId,
+      ),
+    ).toBe(false);
+  });
+
   it('stores completed M1 bootstrap candles and closes streamed M1 buckets causally per connection', () => {
     const service = new LivePaperMarketDataService();
     const connectionId = 'paper-m1';

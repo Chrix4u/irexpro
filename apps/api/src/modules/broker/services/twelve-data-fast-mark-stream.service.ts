@@ -21,6 +21,9 @@ const SYMBOL_MAP = new Map(PROVIDER_SYMBOLS.map((symbol) => [symbol, symbol.repl
 const PROVIDER_BY_INSTRUMENT = new Map(
   [...SYMBOL_MAP.entries()].map(([provider, instrument]) => [instrument, provider]),
 );
+const M1_CONTINUITY_BARS = 60;
+const M1_GAP_REPAIR_DELAY_MS = 15_000;
+const M1_GAP_REPAIR_MAX_ATTEMPTS = 3;
 
 @Injectable()
 export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDestroy {
@@ -35,6 +38,8 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
   private preferredProviderSymbol = PROVIDER_SYMBOLS[0]!;
   private readonly m1BootstrapTasks = new Map<string, Promise<void>>();
   private readonly m1BootstrapCompletedAt = new Map<string, number>();
+  private readonly m1GapRepairTimers = new Map<string, NodeJS.Timeout>();
+  private readonly m1GapRepairAttempts = new Map<string, number>();
 
   constructor(
     private readonly config: ConfigService,
@@ -57,6 +62,9 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.preferenceTimer) clearInterval(this.preferenceTimer);
+    for (const timer of this.m1GapRepairTimers.values()) clearTimeout(timer);
+    this.m1GapRepairTimers.clear();
+    this.m1GapRepairAttempts.clear();
     this.heartbeatTimer = null;
     this.reconnectTimer = null;
     this.preferenceTimer = null;
@@ -224,10 +232,10 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
     // versioned execution model once a six-pair broker-grade stream exists.
   }
 
-  private ensureM1Bootstrap(providerSymbol: string): Promise<void> {
+  private ensureM1Bootstrap(providerSymbol: string, force = false): Promise<void> {
     const now = Date.now();
     const completedAt = this.m1BootstrapCompletedAt.get(providerSymbol);
-    if (completedAt != null && now - completedAt < 60_000) return Promise.resolve();
+    if (!force && completedAt != null && now - completedAt < 60_000) return Promise.resolve();
 
     const existing = this.m1BootstrapTasks.get(providerSymbol);
     if (existing) return existing;
@@ -240,6 +248,7 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
         this.logger.warn(
           `M1 PAPER bootstrap deferred for ${providerSymbol}: ${(error as Error).message}`,
         );
+        if (force) this.scheduleM1GapRepair(providerSymbol);
       })
       .finally(() => {
         if (this.m1BootstrapTasks.get(providerSymbol) === task) {
@@ -312,6 +321,55 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
     this.logger.log(
       `M1 PAPER history bootstrapped instrument=${instrument} candles=${Math.min(rows.length, 100)} source=TWELVE_DATA_REST`,
     );
+
+    const expectedLatestClosedOpen = new Date(currentMinuteStart - 60_000);
+    if (
+      this.market.hasContiguousM1History(
+        instrument,
+        M1_CONTINUITY_BARS,
+        expectedLatestClosedOpen,
+        connectionId,
+      )
+    ) {
+      this.clearM1GapRepair(providerSymbol);
+    } else {
+      this.scheduleM1GapRepair(providerSymbol);
+    }
+  }
+
+  private scheduleM1GapRepair(providerSymbol: string): void {
+    if (this.destroyed || this.m1GapRepairTimers.has(providerSymbol)) return;
+    const attempts = this.m1GapRepairAttempts.get(providerSymbol) ?? 0;
+    if (attempts >= M1_GAP_REPAIR_MAX_ATTEMPTS) {
+      this.logger.warn(
+        `M1 PAPER continuity repair exhausted for ${providerSymbol} after ${attempts} REST attempts`,
+      );
+      return;
+    }
+    this.logger.warn(
+      `M1 PAPER continuity gap detected for ${providerSymbol}; scheduling bounded REST repair attempt ${attempts + 1}/${M1_GAP_REPAIR_MAX_ATTEMPTS}`,
+    );
+    const timer = setTimeout(() => {
+      this.m1GapRepairTimers.delete(providerSymbol);
+      if (this.destroyed) return;
+      this.m1GapRepairAttempts.set(providerSymbol, attempts + 1);
+      void this.ensureM1Bootstrap(providerSymbol, true);
+    }, M1_GAP_REPAIR_DELAY_MS);
+    timer.unref?.();
+    this.m1GapRepairTimers.set(providerSymbol, timer);
+  }
+
+  private clearM1GapRepair(providerSymbol: string): void {
+    const timer = this.m1GapRepairTimers.get(providerSymbol);
+    if (timer) clearTimeout(timer);
+    this.m1GapRepairTimers.delete(providerSymbol);
+    const attempts = this.m1GapRepairAttempts.get(providerSymbol) ?? 0;
+    this.m1GapRepairAttempts.delete(providerSymbol);
+    if (attempts > 0) {
+      this.logger.log(
+        `M1 PAPER continuity repaired for ${providerSymbol} after ${attempts} REST attempt(s)`,
+      );
+    }
   }
 
   private async refreshPreferredSymbol(reconnectOnChange: boolean): Promise<void> {

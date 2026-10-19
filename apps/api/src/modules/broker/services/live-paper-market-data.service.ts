@@ -204,6 +204,31 @@ export class LivePaperMarketDataService {
     }
   }
 
+  hasContiguousM1History(
+    instrument: string,
+    count: number,
+    throughOpenTime: Date,
+    connectionId?: string,
+  ): boolean {
+    const state = this.marketState(connectionId);
+    const symbol = this.requireSupported(instrument);
+    const required = Math.max(2, Math.floor(count));
+    const throughMs = new Date(throughOpenTime).getTime();
+    if (!Number.isFinite(throughMs)) return false;
+
+    const eligible = (state.m1Candles.get(symbol) ?? []).filter(
+      (row) => row.timestamp.getTime() <= throughMs,
+    );
+    const window = eligible.slice(-required);
+    if (window.length < required || window.at(-1)!.timestamp.getTime() !== throughMs) return false;
+    for (let index = 1; index < window.length; index += 1) {
+      if (window[index]!.timestamp.getTime() - window[index - 1]!.timestamp.getTime() !== 60_000) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   updateStreamingMidQuote(
     instrument: string,
     price: number | string,
