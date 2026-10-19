@@ -9,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { v5 as uuidv5 } from 'uuid';
 import { ExecutionService } from '../execution/execution.service';
+import { TradeIntentService } from '../execution/services/trade-intent.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { AiSignalService } from './ai-signal.service';
 import { MacroEventRiskService } from './macro-event-risk.service';
@@ -150,6 +151,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     @Inject(M1_TACTICAL_ROLLOUT_POLICY_TOKEN)
     rolloutPolicy?: M1TacticalRolloutPolicy,
     @Optional() private readonly executionService?: ExecutionService,
+    @Optional() private readonly tradeIntentService?: TradeIntentService,
   ) {
     this.rolloutPolicy = rolloutPolicy ?? M1_TACTICAL_ROLLOUT_POLICY_V1;
   }
@@ -435,6 +437,18 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_execution_authority: 'PAPER_ONLY_RESEARCH',
         },
       });
+      if (this.tradeIntentService) {
+        try {
+          const intent = await this.tradeIntentService.findBySignal(userId, signalId);
+          if (intent?.id) {
+            await this.evidence.markExecutionLink(decisionId, signalId, intent.id);
+          }
+        } catch (error) {
+          this.logger.warn(
+            `M1 decision ${decisionId} trade-intent audit linkage deferred: ${(error as Error).message}`,
+          );
+        }
+      }
       await this.evidence.markOutcomeState(decisionId, result.outcome, new Date(), result.reason);
     } catch (error) {
       await this.evidence.markOutcomeState(
