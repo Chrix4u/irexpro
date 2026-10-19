@@ -26,6 +26,7 @@ const DERIV_SYMBOLS = Object.freeze([
 ] as const);
 const INSTRUMENT_BY_DERIV_SYMBOL = new Map<string, string>(DERIV_SYMBOLS);
 const REQUIRED_M1_CONTINUITY_BARS = 60;
+const M1_BOOTSTRAP_CANDLES = 500;
 const SILENT_STREAM_MAX_AGE_MS = 45_000;
 const SILENT_STREAM_WATCHDOG_INTERVAL_MS = 5_000;
 
@@ -158,7 +159,7 @@ export class DerivPublicFxStreamService implements OnModuleInit, OnModuleDestroy
         socket.send(
           JSON.stringify({
             ticks_history: symbol,
-            count: 100,
+            count: M1_BOOTSTRAP_CANDLES,
             end: 'latest',
             style: 'candles',
             granularity: 60,
@@ -307,7 +308,11 @@ export class DerivPublicFxStreamService implements OnModuleInit, OnModuleDestroy
 
     const connectionId = this.connectionId();
     try {
-      this.market.updateClosedM1Candles(instrument, rows.slice(-100), connectionId);
+      this.market.updateClosedM1Candles(
+        instrument,
+        rows.slice(-M1_BOOTSTRAP_CANDLES),
+        connectionId,
+      );
       const latestOpen = rows.at(-1)!.timestamp;
       const contiguous = this.market.hasContiguousM1History(
         instrument,
@@ -316,7 +321,7 @@ export class DerivPublicFxStreamService implements OnModuleInit, OnModuleDestroy
         connectionId,
       );
       this.logger.log(
-        `Deriv M1 PAPER history bootstrapped instrument=${instrument} candles=${Math.min(rows.length, 100)} contiguous60=${contiguous}`,
+        `Deriv M1 PAPER history bootstrapped instrument=${instrument} candles=${Math.min(rows.length, M1_BOOTSTRAP_CANDLES)} contiguous60=${contiguous}`,
       );
     } catch (error) {
       this.logger.warn(

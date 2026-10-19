@@ -3,6 +3,7 @@ import { AuditAction } from '../../common/enums/audit-action.enum';
 import { BrokerService } from '../broker/broker.service';
 import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
 import { CredentialEncryptionService } from '../broker/services/credential-encryption.service';
+import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
 import { BrokerCredentialLifecycle } from '../broker/authorization/broker-credential-status';
 import { AuditService } from '../audit/audit.service';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
@@ -47,7 +48,8 @@ function freshness(timestamp: Date, thresholdMs: number, nowMs: number): MarketD
  * the single exception: it may expose its own authoritative deterministic
  * simulator quote/OHLCV through the same server-side broker-adapter seams used
  * by the paper execution engine. No browser market values are synthesized and
- * no real/live broker eligibility is widened.
+ * no real/live broker eligibility is widened. Scanner-owned PAPER charts use
+ * the read-only live market cache; execution quotes remain on the stricter seam.
  *
  * MetaTrader reads are account-scoped by the decrypted MetaAPI account
  * reference. Credentials remain in memory only and are cleared in a finally
@@ -63,6 +65,7 @@ export class MarketIntelligenceService {
     private readonly marketDataReader: MetaTraderMarketDataReaderService,
     private readonly encryptionService: CredentialEncryptionService,
     private readonly auditService: AuditService,
+    private readonly livePaperMarket: LivePaperMarketDataService,
   ) {}
 
   async getSnapshot(
@@ -108,10 +111,43 @@ export class MarketIntelligenceService {
         });
       }
 
+      const scannerOwned = this.livePaperMarket.isLiveConnection(connection.id);
       try {
-        // Deliberately sequential. The paper quote advances the deterministic
-        // simulator by one tick; candles then anchor to that same simulator
-        // clock. Both reads remain server-side and connection-scoped.
+        if (scannerOwned) {
+          // Trader charts are read-only. Use the fast Deriv mark + causal M1-derived
+          // candles directly from the exact scanner-owned cache. Never route this
+          // view through getCurrentPriceForConnection(), which is deliberately the
+          // strict execution-safety quote seam and must remain M5/Bid-Ask based.
+          const mark = this.livePaperMarket.getPositionMarkQuote(
+            instrument,
+            QUOTE_FRESHNESS_MS,
+            20 * 60_000,
+            connection.id,
+          );
+          const decimals = Math.max(
+            mark.bid.split('.')[1]?.length ?? 0,
+            mark.ask.split('.')[1]?.length ?? 0,
+          );
+          const spread = (Number(mark.ask) - Number(mark.bid)).toFixed(decimals);
+          const rawCandles = this.livePaperMarket.getReadOnlyOHLCV(
+            instrument,
+            timeframe,
+            query.limit,
+            connection.id,
+          );
+          return await this.buildSnapshot(
+            userId,
+            connection.id,
+            instrument,
+            timeframe,
+            query.limit,
+            { bid: mark.bid, ask: mark.ask, spread, timestamp: mark.timestamp },
+            rawCandles,
+          );
+        }
+
+        // Non-scanner PAPER retains the deterministic simulator behavior. The
+        // quote advances one simulator tick and candles anchor to that clock.
         const quote = await this.brokerService.getCurrentPriceForConnection(
           userId,
           connection.id,
@@ -143,7 +179,7 @@ export class MarketIntelligenceService {
           connection.id,
           instrument,
           timeframe,
-          'simulator-unavailable',
+          scannerOwned ? 'paper-live-cache-unavailable' : 'simulator-unavailable',
         );
         this.logger.warn(
           `Paper market-data request failed user=${userId} instrument=${instrument} timeframe=${timeframe}`,
@@ -311,7 +347,7 @@ export class MarketIntelligenceService {
     connectionId: string,
     instrument: string,
     timeframe: string,
-    reason: 'provider-unavailable' | 'simulator-unavailable',
+    reason: 'provider-unavailable' | 'simulator-unavailable' | 'paper-live-cache-unavailable',
   ): Promise<void> {
     await this.auditService.log({
       actorUserId: userId,

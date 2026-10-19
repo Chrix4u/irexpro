@@ -93,7 +93,7 @@ describe('DerivPublicFxStreamService', () => {
       expect.arrayContaining([
         expect.objectContaining({
           ticks_history: 'frxEURUSD',
-          count: 100,
+          count: 500,
           end: 'latest',
           style: 'candles',
           granularity: 60,
@@ -105,6 +105,32 @@ describe('DerivPublicFxStreamService', () => {
 
     service.onModuleDestroy();
     expect(socket.closed).toBe(true);
+  });
+
+  it('keeps the latest 500 completed Deriv M1 bootstrap candles for read-only chart aggregation', async () => {
+    const market = marketMock();
+    const service = new DerivPublicFxStreamService(configWith(), market);
+    const currentMinuteStart = Math.floor(Date.now() / 60_000) * 60_000;
+    const firstOpen = currentMinuteStart - 501 * 60_000;
+    const candles = Array.from({ length: 502 }, (_, index) => ({
+      epoch: (firstOpen + index * 60_000) / 1000,
+      open: 1.1 + index / 100000,
+      high: 1.1002 + index / 100000,
+      low: 1.0998 + index / 100000,
+      close: 1.1001 + index / 100000,
+    }));
+
+    await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+      JSON.stringify({
+        msg_type: 'candles',
+        candles,
+        echo_req: { ticks_history: 'frxEURUSD' },
+      }),
+    );
+
+    const rows = (market.updateClosedM1Candles as jest.Mock).mock.calls[0]![1];
+    expect(rows).toHaveLength(500);
+    service.onModuleDestroy();
   });
 
   it('routes a Deriv tick into the PAPER mid-quote stream with the exact paper binding', async () => {
