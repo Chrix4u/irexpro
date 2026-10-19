@@ -22,8 +22,8 @@ const PROVIDER_BY_INSTRUMENT = new Map(
   [...SYMBOL_MAP.entries()].map(([provider, instrument]) => [instrument, provider]),
 );
 const M1_CONTINUITY_BARS = 60;
-const M1_GAP_REPAIR_DELAY_MS = 15_000;
-const M1_GAP_REPAIR_MAX_ATTEMPTS = 3;
+const M1_GAP_REPAIR_DELAYS_MS = Object.freeze([15_000, 60_000, 120_000] as const);
+const M1_GAP_REPAIR_MAX_ATTEMPTS = M1_GAP_REPAIR_DELAYS_MS.length;
 
 @Injectable()
 export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDestroy {
@@ -346,15 +346,16 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
       );
       return;
     }
+    const delayMs = M1_GAP_REPAIR_DELAYS_MS[attempts]!;
     this.logger.warn(
-      `M1 PAPER continuity gap detected for ${providerSymbol}; scheduling bounded REST repair attempt ${attempts + 1}/${M1_GAP_REPAIR_MAX_ATTEMPTS}`,
+      `M1 PAPER continuity gap detected for ${providerSymbol}; scheduling bounded REST repair attempt ${attempts + 1}/${M1_GAP_REPAIR_MAX_ATTEMPTS} in ${Math.round(delayMs / 1000)}s`,
     );
     const timer = setTimeout(() => {
       this.m1GapRepairTimers.delete(providerSymbol);
       if (this.destroyed) return;
       this.m1GapRepairAttempts.set(providerSymbol, attempts + 1);
       void this.ensureM1Bootstrap(providerSymbol, true);
-    }, M1_GAP_REPAIR_DELAY_MS);
+    }, delayMs);
     timer.unref?.();
     this.m1GapRepairTimers.set(providerSymbol, timer);
   }

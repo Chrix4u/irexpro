@@ -312,6 +312,52 @@ describe('TwelveDataFastMarkStreamService', () => {
     service.onModuleDestroy();
   });
 
+  it('spreads repeated bootstrap failures across provider reset windows instead of exhausting retries in one minute', async () => {
+    (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
+    const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 429 });
+    jest.spyOn(globalThis, 'fetch').mockImplementation(fetchMock as typeof fetch);
+    const config = {
+      get: jest.fn((key: string, fallback?: unknown) => {
+        const configured: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.fastMarkStreamEnabled': true,
+          'vpsForexScanner.apiKey': 'test-key',
+          'vpsForexScanner.brokerConnectionId': 'paper-1',
+        };
+        return key in configured ? configured[key] : fallback;
+      }),
+    } as unknown as ConfigService;
+    const market = {
+      updateStreamingMidQuote: jest.fn(),
+      updateClosedM1Candles: jest.fn(),
+      hasContiguousM1History: jest.fn(),
+    } as unknown as LivePaperMarketDataService;
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const service = new TwelveDataFastMarkStreamService(config, market, paperState);
+
+    await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+      JSON.stringify({ event: 'subscribe-status', success: [{ symbol: 'EUR/USD' }], fails: [] }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(15_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await jest.advanceTimersByTimeAsync(59_999);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    await jest.advanceTimersByTimeAsync(119_999);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+
+    await jest.advanceTimersByTimeAsync(300_000);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    service.onModuleDestroy();
+  });
+
   it('stops startup continuity REST repair after three failed attempts', async () => {
     const values = Array.from({ length: 70 }, (_, index) => {
       const timestamp = new Date(
@@ -351,10 +397,10 @@ describe('TwelveDataFastMarkStreamService', () => {
     await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
       JSON.stringify({ event: 'subscribe-status', success: [{ symbol: 'EUR/USD' }], fails: [] }),
     );
-    await jest.advanceTimersByTimeAsync(120_000);
+    await jest.advanceTimersByTimeAsync(195_000);
 
     expect(fetchMock).toHaveBeenCalledTimes(4);
-    await jest.advanceTimersByTimeAsync(120_000);
+    await jest.advanceTimersByTimeAsync(300_000);
     expect(fetchMock).toHaveBeenCalledTimes(4);
     service.onModuleDestroy();
   });
