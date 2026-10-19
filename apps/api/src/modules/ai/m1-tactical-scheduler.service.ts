@@ -89,6 +89,22 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V3: Readonly<M1TacticalRolloutPolicy> = 
   phase: 'PAPER_ALL_ROUTES',
 });
 
+export function m1RiskMarketRegime(
+  route: M1TacticalRoute,
+): 'TREND_HEALTHY' | 'REVERSAL' | 'TRANSITION' | undefined {
+  switch (route) {
+    case 'M1_TREND_CONTINUATION':
+      return 'TREND_HEALTHY';
+    case 'M1_CONFIRMED_REVERSAL':
+      return 'REVERSAL';
+    case 'M1_EARLY_TRANSITION':
+      return 'TRANSITION';
+    case 'ABSTAIN':
+    default:
+      return undefined;
+  }
+}
+
 export function m1RouteExecutableInPhase(
   phase: M1TacticalExecutionPhase,
   route: M1TacticalRoute,
@@ -396,7 +412,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         suggestedVolume: this.rolloutPolicy.paperVolumeCap,
         timeframe: 'M1',
         strategyCode: 'external-irexpro-m1-tactical',
-        marketRegime: routeDecision.route,
+        marketRegime: m1RiskMarketRegime(routeDecision.route),
         volatilityScore: features.volatilityScore,
         generatedAt: new Date(decisionTime),
         modelVersion: `external-provider/irexpro-m1-tactical/${candidate.policyVersion}`,

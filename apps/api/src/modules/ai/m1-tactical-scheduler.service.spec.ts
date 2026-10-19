@@ -22,6 +22,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V1,
   M1_TACTICAL_ROLLOUT_POLICY_V2,
   M1_TACTICAL_ROLLOUT_POLICY_V3,
+  m1RiskMarketRegime,
   m1RouteExecutableInPhase,
 } from './m1-tactical-scheduler.service';
 
@@ -390,6 +391,15 @@ async function driveCleanContinuation(
   );
 }
 
+describe('M1 risk-regime contract', () => {
+  it('maps M1 strategy routes into the risk engine regime vocabulary', () => {
+    expect(m1RiskMarketRegime('M1_TREND_CONTINUATION')).toBe('TREND_HEALTHY');
+    expect(m1RiskMarketRegime('M1_CONFIRMED_REVERSAL')).toBe('REVERSAL');
+    expect(m1RiskMarketRegime('M1_EARLY_TRANSITION')).toBe('TRANSITION');
+    expect(m1RiskMarketRegime('ABSTAIN')).toBeUndefined();
+  });
+});
+
 describe('M1TacticalSchedulerService PAPER continuation phase', () => {
   it('version-gates route execution so phase 2 permits continuation only', () => {
     expect(M1_TACTICAL_ROLLOUT_POLICY_V2.phase).toBe('PAPER_CONTINUATION');
@@ -433,6 +443,7 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
       timeframe: 'M1',
       strategyCode: 'external-irexpro-m1-tactical',
       modelVersion: 'external-provider/irexpro-m1-tactical/m1-tactical-v1',
+      marketRegime: 'TREND_HEALTHY',
       metadata: expect.objectContaining({
         external_provider_paper_only: true,
         production_eligible: false,
