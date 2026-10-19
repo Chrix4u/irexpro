@@ -358,7 +358,7 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     });
   });
 
-  it('loads only mature decisions whose sole blocker is drift and whose counterfactual is unsettled', async () => {
+  it('loads mature drift-only shadow decisions while excluding substantive non-drift blockers', async () => {
     const query = jest.fn().mockResolvedValue([
       {
         id: 'decision-drift-1',
@@ -391,9 +391,12 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     const normalized = String(sql).replace(/\s+/g, ' ');
     expect(normalized).toContain("route <> 'ABSTAIN'");
     expect(normalized).toContain("execution_authority = 'NONE'");
-    expect(normalized).toContain('jsonb_array_length(blockers) = 1');
+    expect(normalized).toContain('jsonb_array_length(blockers) <= 2');
     expect(normalized).toContain(
-      'blockers <@ \'["DRIFT_OUT_OF_DISTRIBUTION","DRIFT_STRESSED"]\'::jsonb',
+      'blockers <@ \'["DRIFT_OUT_OF_DISTRIBUTION","DRIFT_STRESSED","M1_PHASE_SHADOW"]\'::jsonb',
+    );
+    expect(normalized).toContain(
+      'blockers @> \'["DRIFT_OUT_OF_DISTRIBUTION"]\'::jsonb OR blockers @> \'["DRIFT_STRESSED"]\'::jsonb',
     );
     expect(normalized).toContain("governance -> 'driftCounterfactual15m' IS NULL");
     expect(normalized).toContain("evaluated_at <= ($4::timestamptz - interval '16 minutes')");
