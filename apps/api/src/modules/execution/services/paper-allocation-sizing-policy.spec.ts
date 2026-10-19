@@ -17,13 +17,13 @@ describe('paper allocation sizing policy', () => {
         enabled: true,
         riskCapitalBase: 1_000,
         requestedRiskPercent: 2,
-        removeAiLotCeiling: true,
+        removeAiLotCeiling: false,
         removeProfileLotCeiling: true,
       }),
     );
   });
 
-  it('preserves the explicit AI lot ceiling for PAPER research tiers', () => {
+  it('preserves the explicit AI lot ceiling for every PAPER tier, including research', () => {
     expect(
       paperAllocationSizingPolicy({
         executionMode: 'PAPER_ONLY',

@@ -56,7 +56,8 @@ export function paperAllocationRiskTargetPercent(tier: PaperAllocationConfidence
  *  - requires a positive finite explicit AI allocation;
  *  - requires a positive finite broker equity;
  *  - risk capital never exceeds current broker equity;
- *  - qualified PAPER may ignore fixed AI/profile lot ceilings;
+ *  - qualified PAPER preserves the model-provided dynamic AI lot ceiling;
+ *  - the legacy profile lot ceiling may be removed for allocation-aware PAPER;
  *  - RESEARCH PAPER keeps the explicit AI lot upper bound as a hard ceiling;
  *  - stop-distance risk, broker min/max/step, margin, allocation and the
  *    durable maxTradeRiskPercent remain authoritative.
@@ -103,7 +104,7 @@ export function paperAllocationSizingPolicy(
     enabled: true,
     riskCapitalBase: Math.min(input.allocatedCapital as number, input.brokerEquity),
     requestedRiskPercent,
-    removeAiLotCeiling: input.confidenceTier !== 'RESEARCH',
+    removeAiLotCeiling: false,
     removeProfileLotCeiling: true,
     reason: 'ALLOCATION_AWARE_PAPER',
   };

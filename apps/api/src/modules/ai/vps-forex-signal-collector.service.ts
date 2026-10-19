@@ -185,7 +185,7 @@ const COUNTERFACTUAL_COST_UNCERTAINTY_FRACTION = 0.25;
 const ACTIVE_MODEL_POLICY_VERSION = PLAN_B_ACTIVE_MODEL_POLICY_VERSION;
 const STOP_ATR_MULTIPLIER = 1.5;
 const TARGET_ATR_MULTIPLIER = 2.5;
-const PAPER_BASE_LOT_UPPER_BOUND = 0.1;
+const PAPER_BASE_LOT_UPPER_BOUND = 0.2;
 const PAPER_RELIABILITY_STATUS_CACHE_TTL_MS = 30_000;
 
 export interface PaperTrendPairSideReliabilityStatus {
@@ -235,7 +235,7 @@ export function dynamicPaperLotUpperBound(
     input.netExpectedR >= 0.4 &&
     input.volatilityScore <= 0.55
   ) {
-    return { upperBound: 0.5, tier: 'EXCEPTIONAL' };
+    return { upperBound: 2.0, tier: 'EXCEPTIONAL' };
   }
   if (
     fullConsensus &&
@@ -244,7 +244,7 @@ export function dynamicPaperLotUpperBound(
     input.netExpectedR >= 0.28 &&
     input.volatilityScore <= 0.65
   ) {
-    return { upperBound: 0.3, tier: 'VERY_STRONG' };
+    return { upperBound: 1.0, tier: 'VERY_STRONG' };
   }
   if (
     fullConsensus &&
@@ -253,7 +253,7 @@ export function dynamicPaperLotUpperBound(
     input.netExpectedR >= 0.18 &&
     input.volatilityScore <= 0.75
   ) {
-    return { upperBound: 0.2, tier: 'STRONG' };
+    return { upperBound: 0.5, tier: 'STRONG' };
   }
   return { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'BASE' };
 }
@@ -2746,7 +2746,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             plan_b_ensemble_paper_admitted: planBEnsemble.paperAdmitted,
             plan_b_ensemble_admitted: planBEnsemble.admitted,
             plan_b_ensemble_reasons: planBEnsemble.reasons,
-            position_sizing_policy: 'risk-managed-dynamic-paper-cap-v1',
+            position_sizing_policy: 'risk-managed-dynamic-paper-band-v2',
             position_sizing_tier: dynamicLotSizing.tier,
             position_sizing_upper_bound_lots: dynamicLotSizing.upperBound,
             position_sizing_confidence: best.confidence,
