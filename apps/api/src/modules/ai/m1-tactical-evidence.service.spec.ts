@@ -185,6 +185,21 @@ describe('M1TacticalEvidenceService', () => {
     expect(params).toEqual(['decision-1', 'signal-1', '44444444-4444-4444-8444-444444444444']);
   });
 
+  it('never downgrades EXECUTION_SUCCEEDED with a later duplicate outcome', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    await service.markOutcomeState(
+      'decision-1',
+      'SIGNAL_INVALID',
+      new Date('2026-10-19T11:53:10.000Z'),
+      'duplicate payload mismatch',
+    );
+
+    const [sql] = query.mock.calls[0]!;
+    expect(String(sql)).toContain("outcome_state IS DISTINCT FROM 'EXECUTION_SUCCEEDED'");
+  });
+
   it('persists terminal outcome reason together with outcome state', async () => {
     const query = jest.fn().mockResolvedValue([{ id: 'decision-1' }]);
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);

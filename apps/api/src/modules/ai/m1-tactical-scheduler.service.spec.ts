@@ -310,6 +310,12 @@ function phase2Harness(
     openPositions?: any[];
     duplicateOppositeIntent?: boolean;
     tradeIntentId?: string | null;
+    existingDecision?: {
+      signalId?: string | null;
+      tradeIntentId?: string | null;
+      outcomeState?: string | null;
+      outcomeReason?: string | null;
+    };
   } = {},
 ) {
   const config = {
@@ -329,10 +335,10 @@ function phase2Harness(
   const recordDecision = jest.fn(async (value: any) => ({
     id: `decision-${value.instrument}-${value.direction}-${value.route}`,
     ...value,
-    signalId: null,
-    tradeIntentId: null,
-    outcomeState: null,
-    outcomeReason: null,
+    signalId: options.existingDecision?.signalId ?? null,
+    tradeIntentId: options.existingDecision?.tradeIntentId ?? null,
+    outcomeState: options.existingDecision?.outcomeState ?? null,
+    outcomeReason: options.existingDecision?.outcomeReason ?? null,
     outcomeObservedAt: null,
     createdAt: value.evaluatedAt,
     updatedAt: value.evaluatedAt,
@@ -544,6 +550,36 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
       signal.signalId,
       undefined,
     );
+  });
+
+  it('does not resubmit a durable decision that already created a trade intent', async () => {
+    const h = phase2Harness({
+      existingDecision: {
+        signalId: 'existing-signal',
+        tradeIntentId: 'existing-intent',
+        outcomeState: 'EXECUTION_SUCCEEDED',
+      },
+    });
+
+    await driveCleanContinuation(h);
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.markExecutionLink).not.toHaveBeenCalled();
+    expect(h.markOutcomeState).not.toHaveBeenCalled();
+  });
+
+  it('keeps a pre-intent RISK_REJECTED decision retryable', async () => {
+    const h = phase2Harness({
+      existingDecision: {
+        signalId: 'existing-signal',
+        tradeIntentId: null,
+        outcomeState: 'RISK_REJECTED',
+      },
+    });
+
+    await driveCleanContinuation(h);
+
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
   });
 
   it('backfills the durable TradeIntent id onto an executed M1 decision after signal processing', async () => {
