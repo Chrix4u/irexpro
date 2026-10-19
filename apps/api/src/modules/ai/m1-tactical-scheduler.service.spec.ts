@@ -4,6 +4,7 @@ import type { ConfigService } from '@nestjs/config';
 import type { LivePaperCandleInput } from '../broker/services/live-paper-market-data.service';
 import type { AiSignalService } from './ai-signal.service';
 import type { ExecutionService } from '../execution/execution.service';
+import type { TradeIntentService } from '../execution/services/trade-intent.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { M1_TACTICAL_POLICY_V1, buildM1TacticalCandidates } from './m1-tactical-candidate';
 import {
@@ -259,6 +260,7 @@ function phase2Harness(
     evidenceByRoute?: Record<string, any[]>;
     openPositions?: any[];
     duplicateOppositeIntent?: boolean;
+    tradeIntentId?: string | null;
   } = {},
 ) {
   const config = {
@@ -331,6 +333,10 @@ function phase2Harness(
     );
   const closeTrade = jest.fn();
   const execution = { getActiveSession, closeTrade } as unknown as ExecutionService;
+  const findBySignal = jest
+    .fn()
+    .mockResolvedValue(options.tradeIntentId ? { id: options.tradeIntentId } : null);
+  const tradeIntent = { findBySignal } as unknown as TradeIntentService;
   const rollout = {
     ...(options.rollout ?? M1_TACTICAL_ROLLOUT_POLICY_V2),
     instruments: ['EURUSD'] as const,
@@ -343,6 +349,7 @@ function phase2Harness(
     signal,
     rollout,
     execution,
+    options.tradeIntentId === undefined ? undefined : tradeIntent,
   );
   return {
     service,
@@ -356,6 +363,7 @@ function phase2Harness(
     loadOpenPaperPositions,
     hasActiveOppositeM1Intent,
     markRescueObservation,
+    findBySignal,
   };
 }
 
@@ -460,6 +468,19 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
       'decision-EURUSD-BUY-M1_TREND_CONTINUATION',
       signal.signalId,
       undefined,
+    );
+  });
+
+  it('backfills the durable TradeIntent id onto an executed M1 decision after signal processing', async () => {
+    const h = phase2Harness({ tradeIntentId: 'intent-1' });
+    await driveCleanContinuation(h);
+
+    const signalId = h.receiveSignal.mock.calls[0]![0].signalId;
+    expect(h.findBySignal).toHaveBeenCalledWith('user-1', signalId);
+    expect(h.markExecutionLink).toHaveBeenLastCalledWith(
+      'decision-EURUSD-BUY-M1_TREND_CONTINUATION',
+      signalId,
+      'intent-1',
     );
   });
 
