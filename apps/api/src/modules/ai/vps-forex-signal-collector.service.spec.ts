@@ -1554,6 +1554,86 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
+  it('keeps collecting calibration diagnostic for extension-exhaustion PAPER research', async () => {
+    const collector = createCollector(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    (collector as any).adaptivePredictionCalibration = {
+      getCalibration: jest.fn().mockResolvedValue({
+        artifact: 'adaptive-prediction-calibration-v1',
+        available: true,
+        authoritative: true,
+        sourceLevel: 'PAIR_DIRECTION_ROUTE',
+        maturity: 'COLLECTING',
+        samples: 13,
+        wins: 4,
+        losses: 9,
+        empiricalWinRate: 4 / 13,
+        rawConfidence: 0.66,
+        calibratedWinProbability: 0.44,
+        confidenceCorrection: -0.22,
+        rawNetExpectedR: 0.14,
+        calibratedNetExpectedR: -0.15,
+        profitFactor: 0.58,
+        recentDegradation: false,
+        blockRecommended: false,
+        rescueEligible: false,
+        reason: 'CALIBRATION_APPLIED',
+      }),
+    };
+    const candidate = buildCandidate('EURUSD', trendCandles())!;
+    const result = await (collector as any).evaluateAdaptiveCore({
+      userId: 'user-1',
+      connectionId: 'conn-1',
+      candidate,
+      ensemble: {
+        regime: 'TREND_EXTENDED',
+        strategyRoute: 'TREND_CONTINUATION',
+        metaProbability: 0.58,
+        directionQuality: 0.42,
+        tradeQuality: 0.22,
+        exitQuality: 0.23,
+        consensusPassed: 4,
+        consensusRequired: 6,
+      },
+      governance: {
+        paperExecutionCostUsable: true,
+        executionSpreadEvidenceValid: false,
+        driftState: 'NORMAL',
+        driftQuality: 1,
+        netExpectedR: 0.14,
+        estimatedExecutionCostR: 0.05,
+        paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED'],
+      },
+      executionRoute: 'PAPER_EXTENSION_EXHAUSTION_RESEARCH',
+      evaluatedAt: new Date('2026-10-16T03:00:00.000Z'),
+      allocationCapital: '1000',
+      portfolio: { available: true, positions: [] },
+      paperResearchPairSideReliability: {
+        eligible: true,
+        reason: 'POSITIVE_PAIR_SIDE_EXPECTANCY',
+        samples: 4,
+        wins: 3,
+        losses: 1,
+        smoothedWinRate: 2 / 3,
+        smoothedExpectedR: 0.4,
+        realisedRSamples: 4,
+        realisedAverageR: 0.45,
+      },
+    });
+
+    expect(result.predictionCalibration.maturity).toBe('COLLECTING');
+    expect(result.predictionCalibration.calibratedNetExpectedR).toBe(-0.15);
+    expect(result.rawNetExpectedR).toBe(0.14);
+    expect(result.netExpectedR).toBe(0.14);
+    expect(result.opportunity.hardBlockers).not.toContain('ADAPTIVE_CALIBRATION_NEGATIVE_EDGE');
+  });
+
   it('uses mature prediction calibration as active PAPER authority inside adaptive scoring', async () => {
     const collector = createCollector(
       config({}),
@@ -2567,6 +2647,138 @@ describe('VpsForexSignalCollectorService', () => {
       planBSpy.mockRestore();
       pairEvidenceSpy.mockRestore();
       costEvidenceSpy.mockRestore();
+      governanceSpy.mockRestore();
+    }
+  });
+
+  it('routes a qualified extension-exhaustion setup into half-risk PAPER research', async () => {
+    const live = new LivePaperMarketDataService();
+    const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
+    const shadowQuery = jest.fn().mockResolvedValue([]);
+    const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
+    const planBSpy = jest
+      .spyOn(PlanBEnsembleModule, 'scorePlanBMultimodelShadow')
+      .mockImplementation((input, positions) => {
+        const base = actualPlanB(input, positions);
+        const target = input.instrument === 'EURUSD' && input.direction === 'BUY';
+        return {
+          ...base,
+          regime: target ? 'TREND_EXTENDED' : base.regime,
+          strategyRoute: 'TREND_CONTINUATION',
+          regimeAllowed: false,
+          paperAdmitted: false,
+          admitted: false,
+          consensusPassed: target ? 4 : 2,
+          consensusRequired: 6,
+          directionQuality: target ? 0.42 : 0.1,
+          tradeQuality: target ? 0.22 : 0.15,
+          exitQuality: target ? 0.23 : 0.15,
+          metaProbability: target ? 0.58 : 0.3,
+          expectedR: target ? 0.14 : -0.3,
+          ensembleScore: target ? 0.62 : 0.2,
+          reasons: ['META_EXPECTED_VALUE'],
+        };
+      });
+    const governanceSpy = jest
+      .spyOn(EnsembleGovernanceModule, 'evaluateEnsembleGovernance')
+      .mockImplementation((input) => {
+        const target = input.instrument === 'EURUSD' && input.direction === 'BUY';
+        return {
+          version: EnsembleGovernanceModule.ENSEMBLE_GOVERNANCE_VERSION,
+          costModelVersion: EnsembleGovernanceModule.ENSEMBLE_COST_MODEL_VERSION,
+          driftModelVersion: EnsembleGovernanceModule.ENSEMBLE_DRIFT_MODEL_VERSION,
+          grossExpectedR: target ? 0.19 : -0.1,
+          estimatedExecutionCostR: 0.05,
+          executionCostSource: 'PAPER_SIMULATION_SPREAD',
+          executionSpreadEvidenceValid: false,
+          executionSpreadEvidence: null,
+          paperExecutionCostUsable: true,
+          netExpectedR: target ? 0.14 : -0.15,
+          paperNetExpectedRPassed: target,
+          netExpectedRPassed: target,
+          driftState: target ? 'NORMAL' : 'OUT_OF_DISTRIBUTION',
+          driftQuality: target ? 1 : 0.1,
+          driftDiagnostics: target ? [] : ['confidence:HARD_LOW'],
+          paperDriftPassed: target,
+          driftPassed: target,
+          sleeveState: 'COLLECTING',
+          sleeveEvidence: null,
+          eventRisk: 'CLEAR',
+          paperExecutionEligible: false,
+          paperExecutionBlockers: target
+            ? ['ENSEMBLE_NOT_PAPER_ADMITTED', 'ENSEMBLE_NOT_PROMOTABLE_ADMISSION']
+            : ['PAPER_NET_EXPECTED_R', 'DRIFT_OUT_OF_DISTRIBUTION'],
+          paperPromotionEligible: false,
+          blockers: ['ENSEMBLE_NOT_ADMITTED', 'SLEEVE_COLLECTING'],
+        } as any;
+      });
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'test-key',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      {
+        getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
+        getOpenPositionsForConnection: jest.fn().mockResolvedValue({ positions: [] }),
+      } as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+      { query: shadowQuery } as any,
+      {
+        assess: jest.fn().mockResolvedValue({
+          state: 'CLEAR',
+          provider: 'TEST',
+          configured: true,
+          checkedAt: new Date().toISOString(),
+          instrument: 'EURUSD',
+          relevantCountries: [],
+          blockWindowMinutesBefore: 30,
+          blockWindowMinutesAfter: 30,
+          blockingEvents: [],
+          reason: null,
+          attribution: null,
+        }),
+      } as any,
+    );
+    jest.spyOn(collector as any, 'loadEnsembleSleeveEvidence').mockResolvedValue(null);
+    jest
+      .spyOn(collector as any, 'loadPaperResearchPairSideEvidence')
+      .mockResolvedValue({ wins: 3, losses: 1, realisedRSamples: 4, realisedRSum: 1.8 });
+    try {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
+      await collector.collectOnce(fetchMock as unknown as typeof fetch);
+      expect(receiveSignal).toHaveBeenCalledTimes(1);
+      expect(receiveSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          modelVersion:
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-extension-exhaustion-research-v1',
+          metadata: expect.objectContaining({
+            paper_execution_route: 'PAPER_EXTENSION_EXHAUSTION_RESEARCH',
+            paper_extension_exhaustion_research: true,
+            paper_extension_exhaustion_research_qualification_evidence: false,
+            paper_extension_exhaustion_research_execution_authority: 'PAPER_ONLY',
+            adaptive_risk_multiplier: 0.5,
+            position_sizing_tier: 'RESEARCH',
+            production_eligible: false,
+          }),
+        }),
+      );
+    } finally {
+      planBSpy.mockRestore();
       governanceSpy.mockRestore();
     }
   });
