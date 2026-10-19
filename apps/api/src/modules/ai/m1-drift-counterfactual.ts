@@ -57,13 +57,14 @@ export function evaluateM1DriftCounterfactual15m(
     return null;
   }
 
+  const firstCausalOpenMs = evaluatedMs + 60_000;
   const window = input.bars
     .filter((bar) => {
       const openedAt = new Date(bar.timestamp).getTime();
       return (
         Number.isFinite(openedAt) &&
-        openedAt >= evaluatedMs &&
-        openedAt < evaluatedMs + M1_DRIFT_COUNTERFACTUAL_HORIZON_BARS * 60_000
+        openedAt >= firstCausalOpenMs &&
+        openedAt < firstCausalOpenMs + M1_DRIFT_COUNTERFACTUAL_HORIZON_BARS * 60_000
       );
     })
     .sort(
@@ -72,7 +73,8 @@ export function evaluateM1DriftCounterfactual15m(
 
   if (window.length !== M1_DRIFT_COUNTERFACTUAL_HORIZON_BARS) return null;
   for (let index = 0; index < window.length; index += 1) {
-    if (new Date(window[index]!.timestamp).getTime() !== evaluatedMs + index * 60_000) return null;
+    if (new Date(window[index]!.timestamp).getTime() !== firstCausalOpenMs + index * 60_000)
+      return null;
   }
 
   const entryPrice = finitePrice(window[0]!.open);
@@ -80,7 +82,7 @@ export function evaluateM1DriftCounterfactual15m(
   const sign = input.direction === 'BUY' ? 1 : -1;
   const stopLoss = entryPrice - sign * input.stopDistance;
   const takeProfit = entryPrice + sign * input.targetDistance;
-  const observedAt = new Date(evaluatedMs + M1_DRIFT_COUNTERFACTUAL_HORIZON_BARS * 60_000);
+  const observedAt = new Date(firstCausalOpenMs + M1_DRIFT_COUNTERFACTUAL_HORIZON_BARS * 60_000);
 
   for (const bar of window) {
     const high = finitePrice(bar.high);

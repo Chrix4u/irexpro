@@ -424,7 +424,7 @@ export class M1TacticalEvidenceService {
           AND jsonb_array_length(blockers) = 1
           AND blockers <@ '["DRIFT_OUT_OF_DISTRIBUTION","DRIFT_STRESSED"]'::jsonb
           AND governance -> 'driftCounterfactual15m' IS NULL
-          AND evaluated_at <= ($4::timestamptz - interval '15 minutes')
+          AND evaluated_at <= ($4::timestamptz - interval '16 minutes')
           AND policy_version = $5
         ORDER BY evaluated_at DESC
         LIMIT 50

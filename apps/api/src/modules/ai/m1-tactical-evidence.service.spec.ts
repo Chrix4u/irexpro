@@ -362,7 +362,7 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
       },
     ]);
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
-    const asOf = new Date('2026-10-19T11:10:00.000Z');
+    const asOf = new Date('2026-10-19T11:11:00.000Z');
 
     const result = await service.loadPendingDriftCounterfactuals({
       userId: input().userId,
@@ -381,7 +381,7 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
       'blockers <@ \'["DRIFT_OUT_OF_DISTRIBUTION","DRIFT_STRESSED"]\'::jsonb',
     );
     expect(normalized).toContain("governance -> 'driftCounterfactual15m' IS NULL");
-    expect(normalized).toContain("evaluated_at <= ($4::timestamptz - interval '15 minutes')");
+    expect(normalized).toContain("evaluated_at <= ($4::timestamptz - interval '16 minutes')");
     expect(normalized).toContain('policy_version = $5');
     expect(normalized).toContain('ORDER BY evaluated_at DESC');
     expect(params).toEqual([
@@ -417,8 +417,8 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
       horizonBars: 15 as const,
       outcome: 'MTM' as const,
       entryBarOpenTime: '2026-10-19T10:55:00.000Z',
-      observedAt: '2026-10-19T11:10:00.000Z',
-      terminalBarOpenTime: '2026-10-19T11:09:00.000Z',
+      observedAt: '2026-10-19T11:11:00.000Z',
+      terminalBarOpenTime: '2026-10-19T11:10:00.000Z',
       entryPrice: 1.1,
       stopLoss: 1.1005,
       takeProfit: 1.0992,
