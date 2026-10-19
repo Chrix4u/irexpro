@@ -13,7 +13,7 @@ function bar(openTime: string, open: number, high: number, low: number, close: n
   } as OHLCV;
 }
 
-function flatWindow(start = '2026-10-19T10:55:00.000Z'): OHLCV[] {
+function flatWindow(start = '2026-10-19T10:56:00.000Z'): OHLCV[] {
   const startMs = new Date(start).getTime();
   return Array.from({ length: 15 }, (_, index) =>
     bar(new Date(startMs + index * 60_000).toISOString(), 1.1, 1.1002, 1.0998, 1.1),
@@ -23,7 +23,7 @@ function flatWindow(start = '2026-10-19T10:55:00.000Z'): OHLCV[] {
 describe('evaluateM1DriftCounterfactual15m', () => {
   it('uses the first causal bar open and settles TP from completed contiguous M1 bars', () => {
     const bars = flatWindow();
-    bars[3] = bar('2026-10-19T10:58:00.000Z', 1.1001, 1.1009, 1.1, 1.1008);
+    bars[3] = bar('2026-10-19T10:59:00.000Z', 1.1001, 1.1009, 1.1, 1.1008);
 
     const result = evaluateM1DriftCounterfactual15m({
       direction: 'BUY',
@@ -39,7 +39,7 @@ describe('evaluateM1DriftCounterfactual15m', () => {
       modifiesExecution: false,
       source: 'COMPLETED_M1_OHLC',
       outcome: 'TP',
-      entryBarOpenTime: '2026-10-19T10:55:00.000Z',
+      entryBarOpenTime: '2026-10-19T10:56:00.000Z',
       entryPrice: 1.1,
       estimatedExecutionCostR: 0.0625,
       grossRMultiple: 1.6,
@@ -65,7 +65,7 @@ describe('evaluateM1DriftCounterfactual15m', () => {
 
   it('records same-bar stop/target contact as ambiguous instead of inventing fill order', () => {
     const bars = flatWindow();
-    bars[0] = bar('2026-10-19T10:55:00.000Z', 1.1, 1.101, 1.099, 1.1002);
+    bars[0] = bar('2026-10-19T10:56:00.000Z', 1.1, 1.101, 1.099, 1.1002);
     const result = evaluateM1DriftCounterfactual15m({
       direction: 'BUY',
       evaluatedAt: new Date('2026-10-19T10:55:00.000Z'),

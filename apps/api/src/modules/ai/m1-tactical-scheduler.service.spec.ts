@@ -191,7 +191,7 @@ describe('M1TacticalSchedulerService shadow phase', () => {
               instrument: 'EURUSD',
               direction: 'BUY',
               route: 'M1_TREND_CONTINUATION',
-              evaluatedAt: new Date('2026-10-15T12:15:00.000Z'),
+              evaluatedAt: new Date('2026-10-15T12:14:00.000Z'),
               stopDistance: 0.0005,
               targetDistance: 0.0008,
               estimatedExecutionCostR: 0.0625,
