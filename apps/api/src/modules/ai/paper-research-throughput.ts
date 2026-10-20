@@ -54,6 +54,128 @@ const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_WINS = 1;
 const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_LOSSES = 1;
 const PAPER_RESEARCH_THROUGHPUT_TARGET_R_MULTIPLE = 2.5 / 1.5;
 
+export interface PaperResearchCalibrationBrakeInput {
+  authoritative: boolean;
+  sourceLevel: 'EXACT' | 'PAIR_DIRECTION_ROUTE' | 'ROUTE' | 'GLOBAL' | 'NONE';
+  maturity: 'SPARSE' | 'COLLECTING' | 'MATURE' | 'DEGRADED';
+  samples: number;
+  calibratedNetExpectedR: number;
+  recentDegradation: boolean;
+}
+
+export interface PaperResearchCalibrationBrakeDecision {
+  blocked: boolean;
+  reason:
+    | 'CALIBRATION_NOT_AUTHORITATIVE'
+    | 'LOCAL_CALIBRATION_AUTHORITY'
+    | 'BROAD_CALIBRATION_COLLECTING'
+    | 'BROAD_CALIBRATION_NEGATIVE_EDGE'
+    | 'BROAD_CALIBRATION_DEGRADED'
+    | 'BROAD_CALIBRATION_CLEAR';
+}
+
+/**
+ * Broad calibration cannot admit a research trade, but mature negative broad
+ * evidence may veto one. Local calibration keeps its existing execution-authority path.
+ */
+export function evaluatePaperResearchCalibrationBrake(
+  input: PaperResearchCalibrationBrakeInput,
+): PaperResearchCalibrationBrakeDecision {
+  if (!input.authoritative) {
+    return { blocked: false, reason: 'CALIBRATION_NOT_AUTHORITATIVE' };
+  }
+  if (input.sourceLevel === 'EXACT' || input.sourceLevel === 'PAIR_DIRECTION_ROUTE') {
+    return { blocked: false, reason: 'LOCAL_CALIBRATION_AUTHORITY' };
+  }
+  if (input.sourceLevel !== 'ROUTE' && input.sourceLevel !== 'GLOBAL') {
+    return { blocked: false, reason: 'BROAD_CALIBRATION_COLLECTING' };
+  }
+  if (input.maturity === 'DEGRADED' || input.recentDegradation) {
+    return { blocked: true, reason: 'BROAD_CALIBRATION_DEGRADED' };
+  }
+  if (input.maturity !== 'MATURE') {
+    return { blocked: false, reason: 'BROAD_CALIBRATION_COLLECTING' };
+  }
+  if (Number.isFinite(input.calibratedNetExpectedR) && input.calibratedNetExpectedR <= 0) {
+    return { blocked: true, reason: 'BROAD_CALIBRATION_NEGATIVE_EDGE' };
+  }
+  return { blocked: false, reason: 'BROAD_CALIBRATION_CLEAR' };
+}
+
+export interface PaperResearchExecutionGateDecision {
+  eligible: boolean;
+  reason:
+    | 'RESEARCH_ROUTE_NOT_ELIGIBLE'
+    | 'PAIR_SIDE_RELIABILITY_BLOCK'
+    | 'EPISODE_GUARD_BLOCK'
+    | 'BROAD_CALIBRATION_BRAKE'
+    | 'PORTFOLIO_LOSS_BRAKE'
+    | 'RESEARCH_EXECUTION_ELIGIBLE';
+}
+
+export function evaluatePaperResearchExecutionGate(input: {
+  throughputEligible: boolean;
+  pairSideEligible: boolean;
+  episodeEligible: boolean;
+  calibrationBlocked: boolean;
+  portfolioBlocked: boolean;
+}): PaperResearchExecutionGateDecision {
+  if (!input.throughputEligible) return { eligible: false, reason: 'RESEARCH_ROUTE_NOT_ELIGIBLE' };
+  if (!input.pairSideEligible) return { eligible: false, reason: 'PAIR_SIDE_RELIABILITY_BLOCK' };
+  if (!input.episodeEligible) return { eligible: false, reason: 'EPISODE_GUARD_BLOCK' };
+  if (input.calibrationBlocked) return { eligible: false, reason: 'BROAD_CALIBRATION_BRAKE' };
+  if (input.portfolioBlocked) return { eligible: false, reason: 'PORTFOLIO_LOSS_BRAKE' };
+  return { eligible: true, reason: 'RESEARCH_EXECUTION_ELIGIBLE' };
+}
+
+export const PAPER_RESEARCH_PORTFOLIO_BRAKE_WINDOW = 5;
+export const PAPER_RESEARCH_PORTFOLIO_BRAKE_MIN_LOSSES = 3;
+
+export interface PaperResearchPortfolioBrakeDecision {
+  blocked: boolean;
+  samples: number;
+  wins: number;
+  losses: number;
+  reason:
+    | 'INSUFFICIENT_PORTFOLIO_EVIDENCE'
+    | 'RECENT_RESEARCH_LOSS_CLUSTER'
+    | 'RECENT_RESEARCH_WINDOW_CLEAR';
+}
+
+/** Cross-pair circuit breaker for the research lane only. */
+export function evaluatePaperResearchPortfolioBrake(input: {
+  outcomes: Array<'WIN' | 'LOSS'>;
+}): PaperResearchPortfolioBrakeDecision {
+  const recent = input.outcomes.slice(0, PAPER_RESEARCH_PORTFOLIO_BRAKE_WINDOW);
+  const wins = recent.filter((outcome) => outcome === 'WIN').length;
+  const losses = recent.filter((outcome) => outcome === 'LOSS').length;
+  if (recent.length < PAPER_RESEARCH_PORTFOLIO_BRAKE_WINDOW) {
+    return {
+      blocked: false,
+      samples: recent.length,
+      wins,
+      losses,
+      reason: 'INSUFFICIENT_PORTFOLIO_EVIDENCE',
+    };
+  }
+  if (losses >= PAPER_RESEARCH_PORTFOLIO_BRAKE_MIN_LOSSES) {
+    return {
+      blocked: true,
+      samples: recent.length,
+      wins,
+      losses,
+      reason: 'RECENT_RESEARCH_LOSS_CLUSTER',
+    };
+  }
+  return {
+    blocked: false,
+    samples: recent.length,
+    wins,
+    losses,
+    reason: 'RECENT_RESEARCH_WINDOW_CLEAR',
+  };
+}
+
 export interface PaperResearchPairSideReliabilityInput {
   wins: number;
   losses: number;

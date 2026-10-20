@@ -64,7 +64,10 @@ import {
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS,
   PaperResearchPairSideReliabilityDecision,
   PaperResearchThroughputDecision,
+  evaluatePaperResearchCalibrationBrake,
   evaluatePaperResearchEpisodeGuard,
+  evaluatePaperResearchExecutionGate,
+  evaluatePaperResearchPortfolioBrake,
   evaluatePaperResearchPairSideReliability,
   evaluatePaperResearchThroughput,
   evaluatePaperPairedReversalResearch,
@@ -1821,6 +1824,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperExecutionBlockers: ensembleGovernance.paperExecutionBlockers,
             allowResearchRescue: true,
           });
+          const paperResearchCalibrationBrake = evaluatePaperResearchCalibrationBrake({
+            authoritative: researchPredictionCalibration.authoritative,
+            sourceLevel: researchPredictionCalibration.sourceLevel,
+            maturity: researchPredictionCalibration.maturity,
+            samples: researchPredictionCalibration.samples,
+            calibratedNetExpectedR: researchPredictionCalibration.calibratedNetExpectedR,
+            recentDegradation: researchPredictionCalibration.recentDegradation,
+          });
 
           const paperResearchThroughputInput = {
             normalPaperExecution,
@@ -1911,10 +1922,32 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               }
             }
           }
-          const paperResearchExecutionEligible =
+          let paperResearchPortfolioBrake = evaluatePaperResearchPortfolioBrake({ outcomes: [] });
+          if (
             paperResearchThroughput.eligible &&
             Boolean(paperResearchPairSideReliability?.eligible) &&
-            Boolean(paperResearchEpisodeGuard?.eligible);
+            Boolean(paperResearchEpisodeGuard?.eligible) &&
+            !paperResearchCalibrationBrake.blocked
+          ) {
+            paperResearchPortfolioBrake = evaluatePaperResearchPortfolioBrake({
+              outcomes: await this.loadPaperResearchPortfolioOutcomes(userId, connectionId),
+            });
+          }
+          const paperResearchExecutionGate = evaluatePaperResearchExecutionGate({
+            throughputEligible: paperResearchThroughput.eligible,
+            pairSideEligible: Boolean(paperResearchPairSideReliability?.eligible),
+            episodeEligible: Boolean(paperResearchEpisodeGuard?.eligible),
+            calibrationBlocked: paperResearchCalibrationBrake.blocked,
+            portfolioBlocked: paperResearchPortfolioBrake.blocked,
+          });
+          const paperResearchExecutionEligible = paperResearchExecutionGate.eligible;
+          if (paperResearchThroughput.eligible && !paperResearchExecutionEligible) {
+            this.logger.warn(
+              `PAPER research-throughput ${best.instrument} ${best.direction} execution=SHADOW_ONLY ` +
+                `reason=${paperResearchExecutionGate.reason} calibrationBrake=${paperResearchCalibrationBrake.reason} ` +
+                `portfolioBrake=${paperResearchPortfolioBrake.reason} recentPortfolio=${paperResearchPortfolioBrake.wins}W/${paperResearchPortfolioBrake.losses}L`,
+            );
+          }
           const paperExtensionExhaustionResearch = evaluatePaperExtensionExhaustionResearch({
             regime: planBEnsemble.regime,
             driftState: ensembleGovernance.driftState,
@@ -4144,6 +4177,48 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       this.logger.warn(
         `PAPER cost-aware entry annotation unavailable: ${(error as Error).message}`,
       );
+    }
+  }
+
+  private async loadPaperResearchPortfolioOutcomes(
+    userId: string,
+    connectionId: string,
+  ): Promise<Array<'WIN' | 'LOSS'>> {
+    if (!this.dataSource) return [];
+    try {
+      const rows = (await this.dataSource.query(
+        `
+          SELECT CASE WHEN t.realised_pnl > 0 THEN 'WIN' ELSE 'LOSS' END AS outcome
+          FROM trading.trade_intents ti
+          JOIN trading.trades t ON t.trade_intent_id = ti.id
+          WHERE ti.user_id = $1
+            AND ti.broker_connection_id = $2
+            AND ti.status = 'EXECUTED'
+            AND ti.metadata->>'paper_research_throughput' = 'true'
+            AND ti.metadata->>'paper_research_throughput_artifact' = ANY($3::text[])
+            AND ti.metadata->>'decision_policy_version' = $4
+            AND t.status = 'CLOSED'
+            AND t.realised_pnl IS NOT NULL
+            AND t.realised_pnl <> 0
+            AND t.closed_at >= NOW() - INTERVAL '6 hours'
+          ORDER BY t.closed_at DESC
+          LIMIT 5
+        `,
+        [
+          userId,
+          connectionId,
+          [...PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS],
+          ACTIVE_MODEL_POLICY_VERSION,
+        ],
+      )) as Array<{ outcome: 'WIN' | 'LOSS' }>;
+      return rows
+        .map((row) => row.outcome)
+        .filter((outcome): outcome is 'WIN' | 'LOSS' => outcome === 'WIN' || outcome === 'LOSS');
+    } catch (error) {
+      this.logger.warn(
+        `PAPER research portfolio brake evidence unavailable: ${(error as Error).message}`,
+      );
+      return [];
     }
   }
 
