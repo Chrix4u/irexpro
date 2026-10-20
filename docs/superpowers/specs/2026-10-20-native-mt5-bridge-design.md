@@ -61,6 +61,33 @@ After the native bridge passes DEMO and LIVE certification:
 
 No in-place provider-id mutation is allowed while orders/positions are active.
 
+## 5.3 Product terminology and connection workflow
+
+The product must keep these concepts separate:
+
+- **Broker** — the regulated trading firm/account provider that holds the client trading account (for example Deriv, Pepperstone, IC Markets or OANDA).
+- **Trading platform** — the account technology the broker exposes (for example MetaTrader 5 or cTrader). MetaTrader 5 and cTrader are not brokers.
+- **iRexPro connector** — the transport/integration iRexPro uses to reach that platform/account (for example iRexPro Native MT5 Bridge, MetaApi Cloud, cTrader Open API or a broker-native API).
+
+`BrokerConnection` remains the internal persisted entity name for backward compatibility, but customer-facing copy should use **Trading account connection** or **Connect trading account** where practical. The provider id identifies the connector technology; `providerBrokerIdentity` records the server-derived actual broker identity when the platform exposes it.
+
+The connection workflow becomes:
+
+1. Choose the **connection method / platform**.
+2. For **MetaTrader 5 — iRexPro Native Bridge**, pair the already logged-in MT5 terminal; the bridge detects account login, broker/company, server, DEMO/LIVE mode and capabilities.
+3. For **cTrader — Open API**, authorize with cTrader ID; iRexPro discovers the cTrader trading accounts and their broker identity.
+4. For a direct broker API such as OANDA, authorize the broker directly.
+5. Show the detected **Broker**, **Platform**, **Connection method**, **Account** and **Environment** for confirmation before DEMO validation/execution eligibility.
+
+Canonical customer-facing connector labels:
+
+- `metatrader5-native` — **MetaTrader 5 — iRexPro Native Bridge** (preferred first-party MT5 route once certified).
+- `metatrader5` — **MetaTrader 5 — MetaApi Cloud** (optional hosted/compatibility route).
+- `ctrader` — **cTrader — Open API**.
+- Direct broker adapters retain the broker brand in the label, e.g. **OANDA — Direct API**.
+
+A broker may expose more than one platform and those accounts remain distinct. For example, a Deriv MT5 account is connected through the MT5 connector, while a Deriv cTrader account is connected through the cTrader connector. iRexPro must never assume a cTrader account is reachable through MT5 merely because the same broker also supports MT5.
+
 ## 6. Architecture
 
 ```text
