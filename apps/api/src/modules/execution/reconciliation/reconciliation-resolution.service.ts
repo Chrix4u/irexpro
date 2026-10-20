@@ -166,6 +166,7 @@ export class ReconciliationResolutionService {
     if (providerReason === 'TP') return TradeCloseReason.TAKE_PROFIT_HIT;
     if (providerReason === 'SL') return TradeCloseReason.STOP_LOSS_HIT;
     if (providerReason === 'PROFIT_LOCK') return TradeCloseReason.PROFIT_PROTECTION;
+    if (providerReason === 'TIME_TO_WORK') return TradeCloseReason.AI_CLOSE_SIGNAL;
     // MANUAL/SYSTEM/UNKNOWN from a provider observation cannot prove who or
     // what initiated the close. Keep the durable reason conservative.
     return TradeCloseReason.BROKER_CLOSE;
