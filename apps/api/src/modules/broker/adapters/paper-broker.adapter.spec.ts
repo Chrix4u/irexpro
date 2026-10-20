@@ -3,6 +3,7 @@ import {
   DeterministicPaperClock,
   DeterministicPaperPriceFeed,
   evaluatePaperProfitLock,
+  evaluatePaperTimeToWork,
   PaperBrokerAdapter,
   PaperClock,
   PaperPriceFeed,
@@ -120,6 +121,70 @@ async function expectAdapterError(
   expect((err as BrokerAdapterError).code).toBe(code);
   return err as BrokerAdapterError;
 }
+
+describe('PAPER time-to-work policy', () => {
+  const base = {
+    maxFavorablePnl: '0.00',
+    currentPnl: '-6.00',
+    initialRiskPnl: '10.00',
+  };
+
+  it('lets a new M5 trade breathe before the first 15-minute checkpoint', () => {
+    expect(evaluatePaperTimeToWork({ ...base, elapsedMinutes: 14.99 })).toMatchObject({
+      shouldClose: false,
+      checkpointMinutes: null,
+    });
+  });
+
+  it('cuts a badly failing non-progressing trade at 15 minutes', () => {
+    expect(evaluatePaperTimeToWork({ ...base, elapsedMinutes: 15 })).toMatchObject({
+      shouldClose: true,
+      checkpointMinutes: 15,
+      reason: 'FAILED_TO_WORK_15M',
+    });
+  });
+
+  it('cuts a stagnant loser at 30 minutes before it reaches full SL', () => {
+    expect(
+      evaluatePaperTimeToWork({
+        ...base,
+        elapsedMinutes: 30,
+        maxFavorablePnl: '2.00',
+        currentPnl: '-3.00',
+      }),
+    ).toMatchObject({
+      shouldClose: true,
+      checkpointMinutes: 30,
+      reason: 'FAILED_TO_WORK_30M',
+    });
+  });
+
+  it('exits a one-hour dead trade that is still non-profitable', () => {
+    expect(
+      evaluatePaperTimeToWork({
+        ...base,
+        elapsedMinutes: 60,
+        maxFavorablePnl: '4.90',
+        currentPnl: '-0.01',
+      }),
+    ).toMatchObject({
+      shouldClose: true,
+      checkpointMinutes: 60,
+      reason: 'FAILED_TO_WORK_60M',
+    });
+  });
+
+  it('never time-closes a trade that has already demonstrated at least 0.50R', () => {
+    expect(
+      evaluatePaperTimeToWork({
+        ...base,
+        elapsedMinutes: 120,
+        maxFavorablePnl: '5.00',
+        currentPnl: '-1.00',
+      }),
+    ).toMatchObject({ shouldClose: false, reason: 'PROFIT_PROTECTION_OWNS_TRADE' });
+  });
+});
 
 describe('PAPER profit-lock policy', () => {
   it('stays disarmed below a 0.50R favorable peak so small winners have room to develop', () => {

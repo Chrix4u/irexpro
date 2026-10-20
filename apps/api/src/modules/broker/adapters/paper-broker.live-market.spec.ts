@@ -371,6 +371,42 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     expect(Number(closed[0]!.pathDiagnostics?.profitGiveback)).toBeGreaterThan(0);
   });
 
+  it('time-closes a stagnant live-PAPER loser after 30 minutes instead of waiting for full SL', async () => {
+    const live = new LivePaperMarketDataService();
+    live.registerLiveConnection('conn-time-to-work');
+    live.updateClosedCandles('EURUSD', protectionBars().initial, 'conn-time-to-work');
+    const adapter = new PaperBrokerAdapter(
+      undefined,
+      undefined,
+      undefined,
+      'conn-time-to-work',
+      live,
+    );
+    await adapter.connect({} as any);
+    await adapter.placeOrder({
+      idempotencyKey: 'time-to-work-buy',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      lotSize: '0.01',
+      stopLoss: '1.09900',
+      takeProfit: '1.10500',
+      orderKind: 'MARKET',
+    });
+
+    const internalPosition = Array.from((adapter as any)._positions.values())[0] as any;
+    internalPosition.openedAt = new Date(Date.now() - 31 * 60_000);
+    live.updateStreamingMidQuote('EURUSD', 1.09975, new Date(), 'conn-time-to-work');
+
+    expect(await adapter.getOpenPositions()).toHaveLength(0);
+    const closed = await adapter.getClosedTrades(
+      new Date(0),
+      new Date(Date.now() + 2 * 60 * 60_000),
+    );
+    expect(closed).toHaveLength(1);
+    expect(closed[0]!.closeReason).toBe('TIME_TO_WORK');
+    expect(Number(closed[0]!.realisedPnl)).toBeGreaterThan(-1);
+  });
+
   it('closes a BUY at TP from a fresh streaming bid before the M5 candle closes', async () => {
     const live = new LivePaperMarketDataService();
     const adapter = await openProtectedBuy(live);

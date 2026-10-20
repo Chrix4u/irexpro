@@ -574,6 +574,57 @@ function lotSizeToUnits(lotSize: string): bigint {
   return units;
 }
 
+export interface PaperTimeToWorkDecision {
+  shouldClose: boolean;
+  checkpointMinutes: 15 | 30 | 60 | null;
+  reason:
+    | 'INSUFFICIENT_ELAPSED_TIME'
+    | 'INVALID_RISK'
+    | 'PROFIT_PROTECTION_OWNS_TRADE'
+    | 'FAILED_TO_WORK_15M'
+    | 'FAILED_TO_WORK_30M'
+    | 'FAILED_TO_WORK_60M'
+    | 'HOLD';
+}
+
+export function evaluatePaperTimeToWork(input: {
+  elapsedMinutes: number;
+  maxFavorablePnl: string;
+  currentPnl: string;
+  initialRiskPnl: string;
+}): PaperTimeToWorkDecision {
+  const hold = (
+    reason: PaperTimeToWorkDecision['reason'],
+    checkpointMinutes: PaperTimeToWorkDecision['checkpointMinutes'] = null,
+  ): PaperTimeToWorkDecision => ({ shouldClose: false, checkpointMinutes, reason });
+  try {
+    if (!Number.isFinite(input.elapsedMinutes) || input.elapsedMinutes < 15)
+      return hold('INSUFFICIENT_ELAPSED_TIME');
+    if (compareDecimalStrings(input.initialRiskPnl, '0') <= 0) return hold('INVALID_RISK');
+    const risk = input.initialRiskPnl;
+    const peak = input.maxFavorablePnl;
+    const current = input.currentPnl;
+    if (compareDecimalStrings(peak, multiplyDecimalStrings(risk, '0.50')) >= 0)
+      return hold('PROFIT_PROTECTION_OWNS_TRADE');
+    if (input.elapsedMinutes >= 60 && compareDecimalStrings(current, '0') <= 0)
+      return { shouldClose: true, checkpointMinutes: 60, reason: 'FAILED_TO_WORK_60M' };
+    if (
+      input.elapsedMinutes >= 30 &&
+      compareDecimalStrings(current, multiplyDecimalStrings(risk, '-0.25')) <= 0
+    )
+      return { shouldClose: true, checkpointMinutes: 30, reason: 'FAILED_TO_WORK_30M' };
+    if (
+      input.elapsedMinutes >= 15 &&
+      compareDecimalStrings(peak, multiplyDecimalStrings(risk, '0.25')) < 0 &&
+      compareDecimalStrings(current, multiplyDecimalStrings(risk, '-0.50')) <= 0
+    )
+      return { shouldClose: true, checkpointMinutes: 15, reason: 'FAILED_TO_WORK_15M' };
+    return hold('HOLD');
+  } catch {
+    return hold('INVALID_RISK');
+  }
+}
+
 export interface PaperProfitLockDecision {
   armed: boolean;
   shouldClose: boolean;
@@ -711,7 +762,7 @@ interface PaperClosedTrade {
   closedAt: Date;
   commission: string;
   swap: string;
-  closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM' | 'PROFIT_LOCK';
+  closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM' | 'PROFIT_LOCK' | 'TIME_TO_WORK';
   pathMaxFavorablePnl: string;
   pathMaxAdversePnl: string;
   pathLatestUnrealisedPnl: string;
@@ -971,6 +1022,39 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       position.lotSize,
       protectedExitPrice,
       'PROFIT_LOCK',
+      observedAt,
+    );
+    return true;
+  }
+
+  private maybeCloseForTimeToWork(
+    position: PaperPosition,
+    exitPrice: string,
+    observedAt: Date,
+  ): boolean {
+    if (!this.isLiveMarketMode()) return false;
+    const initialRiskPnl =
+      position.profitLockInitialRiskPnl ?? this.initialRiskPnlForPosition(position);
+    if (!initialRiskPnl) return false;
+    position.profitLockInitialRiskPnl = initialRiskPnl;
+    const elapsedMinutes = (observedAt.getTime() - position.openedAt.getTime()) / 60_000;
+    const currentPnl = toMoney(this.pnlAtExitPriceExact(position, exitPrice));
+    const decision = evaluatePaperTimeToWork({
+      elapsedMinutes,
+      maxFavorablePnl: position.pathMaxFavorablePnl,
+      currentPnl,
+      initialRiskPnl,
+    });
+    if (!decision.shouldClose) return false;
+    this.logger.warn(
+      `PaperBrokerAdapter: TIME_TO_WORK id=${position.positionId} instrument=${position.instrument} elapsed=${elapsedMinutes.toFixed(2)}m peak=${position.pathMaxFavorablePnl} current=${currentPnl} risk=${initialRiskPnl} checkpoint=${decision.checkpointMinutes} reason=${decision.reason} [PAPER_ONLY]`,
+    );
+    this.closePositionUnits(
+      position,
+      position.units,
+      position.lotSize,
+      exitPrice,
+      'TIME_TO_WORK',
       observedAt,
     );
     return true;
@@ -2343,7 +2427,8 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
           );
           continue;
         }
-        this.maybeCloseForProfitLock(position, quote.bid, observedAt);
+        if (this.maybeCloseForProfitLock(position, quote.bid, observedAt)) continue;
+        this.maybeCloseForTimeToWork(position, quote.bid, observedAt);
       } else {
         if (
           !isZeroLevel(position.stopLoss) &&
@@ -2373,7 +2458,8 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
           );
           continue;
         }
-        this.maybeCloseForProfitLock(position, quote.ask, observedAt);
+        if (this.maybeCloseForProfitLock(position, quote.ask, observedAt)) continue;
+        this.maybeCloseForTimeToWork(position, quote.ask, observedAt);
       }
     }
   }

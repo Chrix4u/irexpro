@@ -407,7 +407,7 @@ export interface BrokerClosedTrade {
   closedAt: Date;
   commission: string;
   swap: string;
-  closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM' | 'PROFIT_LOCK' | 'UNKNOWN';
+  closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM' | 'PROFIT_LOCK' | 'TIME_TO_WORK' | 'UNKNOWN';
   pathDiagnostics?: BrokerTradePathDiagnostics;
 }
 
