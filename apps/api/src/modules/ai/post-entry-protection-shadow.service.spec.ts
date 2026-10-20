@@ -41,7 +41,7 @@ describe('PostEntryProtectionShadowService', () => {
     expect(dueV85Checkpoints(openedAt, closedAt, new Set())).toEqual([5, 10]);
   });
 
-  it('scores a due checkpoint from the broker-native source and persists shadow-only evidence', async () => {
+  it("scores a due checkpoint from the trade's execution connection and persists shadow-only evidence", async () => {
     const now = new Date('2026-10-05T10:06:00Z');
     const query = jest
       .fn()
@@ -114,7 +114,7 @@ describe('PostEntryProtectionShadowService', () => {
     expect(aiEngineClient.scorePlanBV85PostEntryBrokerCheckpoint).toHaveBeenCalledTimes(1);
     expect(aiEngineClient.scorePlanBV85PostEntryBrokerCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
-        brokerConnectionId: '00000000-0000-0000-0000-000000000088',
+        brokerConnectionId: '00000000-0000-0000-0000-000000000004',
         instrument: 'EURUSD',
         direction: 'BUY',
         checkpointMinutes: 5,
@@ -140,7 +140,7 @@ describe('PostEntryProtectionShadowService', () => {
           trade_id: '00000000-0000-0000-0000-000000000001',
           user_id: '00000000-0000-0000-0000-000000000002',
           trade_intent_id: '00000000-0000-0000-0000-000000000003',
-          execution_broker_connection_id: '00000000-0000-0000-0000-000000000004',
+          execution_broker_connection_id: '',
           instrument: 'EURUSD',
           direction: 'BUY',
           entry_price: '1.10000000',

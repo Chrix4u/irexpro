@@ -13,6 +13,7 @@ import { InternalOhlcvQueryDto } from './dto/internal-ohlcv-query.dto';
 import { InternalOhlcvResponseDto } from './dto/internal-ohlcv-response.dto';
 import { NormalizedOhlcvCandle } from './interfaces/ohlcv-candle.interface';
 import { ProviderQuoteCandleStoreService } from './services/provider-quote-candle-store.service';
+import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
 
 /**
  * MarketDataService — Internal OHLCV access for the Python AI engine.
@@ -30,6 +31,7 @@ export class MarketDataService {
     private readonly brokerService: BrokerService,
     private readonly auditService: AuditService,
     private readonly providerQuoteStore: ProviderQuoteCandleStoreService,
+    private readonly livePaperMarketData: LivePaperMarketDataService,
   ) {}
 
   async getInternalOhlcv(query: InternalOhlcvQueryDto): Promise<InternalOhlcvResponseDto> {
@@ -38,7 +40,15 @@ export class MarketDataService {
 
     try {
       const connection = await this.brokerService.findConnectionById(brokerConnectionId, userId);
-      let source = connection.brokerId === 'paper-broker' ? 'paper-broker' : 'broker';
+      const livePaperProvider =
+        connection.brokerId === 'paper-broker' &&
+        this.livePaperMarketData.isLiveConnection(brokerConnectionId);
+      let source =
+        connection.brokerId === 'paper-broker'
+          ? livePaperProvider
+            ? 'paper-live-provider'
+            : 'paper-broker'
+          : 'broker';
 
       if (source === 'paper-broker' && advanceSimulation && !before) {
         const heartbeat = await this.brokerService.getCurrentPriceForConnection(

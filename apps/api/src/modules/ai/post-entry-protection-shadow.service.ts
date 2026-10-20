@@ -218,7 +218,7 @@ export class PostEntryProtectionShadowService implements OnModuleInit, OnModuleD
         .map((item) => Number(item.checkpoint_minutes)),
     );
     const due = dueV85Checkpoints(openedAt, observationEnd, terminal);
-    const marketDataConnectionId = this.marketDataConnectionId();
+    const marketDataConnectionId = this.marketDataConnectionId(row.execution_broker_connection_id);
 
     for (const checkpointMinutes of due) {
       const checkpointAt = new Date(openedAt.getTime() + checkpointMinutes * 60_000);
@@ -337,7 +337,10 @@ export class PostEntryProtectionShadowService implements OnModuleInit, OnModuleD
     );
   }
 
-  private marketDataConnectionId(): string {
+  private marketDataConnectionId(executionBrokerConnectionId?: string): string {
+    const executionSource = (executionBrokerConnectionId ?? '').trim();
+    if (executionSource) return executionSource;
+
     const m1Source = this.config.get<string>('vpsForexScanner.m1MarketDataConnectionId', '').trim();
     if (m1Source) return m1Source;
     if (!this.config.get<boolean>('multimodelBrokerExpert.enabled', false)) return '';
