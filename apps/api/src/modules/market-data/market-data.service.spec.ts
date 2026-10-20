@@ -6,12 +6,14 @@ import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { InternalOhlcvQueryDto } from './dto/internal-ohlcv-query.dto';
 import { ProviderQuoteCandleStoreService } from './services/provider-quote-candle-store.service';
+import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
 
 describe('MarketDataService', () => {
   let service: MarketDataService;
   let brokerService: jest.Mocked<Partial<BrokerService>>;
   let auditService: jest.Mocked<Partial<AuditService>>;
   let providerQuoteStore: { getCandles: jest.Mock };
+  let livePaperMarketData: { isLiveConnection: jest.Mock };
 
   const query: InternalOhlcvQueryDto = {
     userId: '00000000-0000-0000-0000-000000000001',
@@ -58,6 +60,9 @@ describe('MarketDataService', () => {
     providerQuoteStore = {
       getCandles: jest.fn().mockResolvedValue([]),
     };
+    livePaperMarketData = {
+      isLiveConnection: jest.fn().mockReturnValue(false),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -65,6 +70,7 @@ describe('MarketDataService', () => {
         { provide: BrokerService, useValue: brokerService },
         { provide: AuditService, useValue: auditService },
         { provide: ProviderQuoteCandleStoreService, useValue: providerQuoteStore },
+        { provide: LivePaperMarketDataService, useValue: livePaperMarketData },
       ],
     }).compile();
 
@@ -123,6 +129,19 @@ describe('MarketDataService', () => {
     );
     expect(result.source).toBe('paper-broker');
     expect(result.candles[0]?.source).toBe('paper-broker');
+  });
+
+  it('marks live PAPER provider candles separately from deterministic simulator data', async () => {
+    (brokerService.findConnectionById as jest.Mock).mockResolvedValueOnce({
+      id: query.brokerConnectionId,
+      brokerId: 'paper-broker',
+    });
+    livePaperMarketData.isLiveConnection.mockReturnValueOnce(true);
+
+    const result = await service.getInternalOhlcv(query);
+
+    expect(result.source).toBe('paper-live-provider');
+    expect(result.candles[0]?.source).toBe('paper-live-provider');
   });
 
   it('does not advance provider-backed market data when simulation heartbeat is requested', async () => {
