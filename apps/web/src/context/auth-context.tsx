@@ -3,7 +3,7 @@
 import { createContext, useContext, useCallback, useMemo, useState, useEffect, ReactNode } from 'react';
 import type { AuthUser } from '@irexpro/types';
 import type { BrowserAuthTokens } from '@irexpro/api-client/browser-auth';
-import { setAccessToken, api, browserAuth } from '@/lib/api';
+import { setAccessToken, api, browserAuth, refreshBrowserSession } from '@/lib/api';
 
 /**
  * Web auth context — Sprint 25 hybrid strategy.
@@ -76,8 +76,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        const tokens = await browserAuth.refresh();
-        if (cancelled) return;
+        const tokens = await refreshBrowserSession();
+        if (cancelled || !tokens) return;
         storeTokens(tokens);
         await fetchMe(tokens.accessToken);
       } catch {

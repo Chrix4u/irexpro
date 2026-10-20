@@ -77,6 +77,8 @@ export default function OnboardingBrokerPage() {
   const [testResult, setTestResult] = useState<BrokerTestResult | null>(null);
 
   useEffect(() => {
+    if (restoring || !user) return;
+
     let cancelled = false;
     (async () => {
       try {
@@ -108,7 +110,7 @@ export default function OnboardingBrokerPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [notify]);
+  }, [notify, restoring, user]);
 
   if (restoring) {
     return <div style={{ padding: '3rem' }}><p className="muted">Restoring session…</p></div>;
