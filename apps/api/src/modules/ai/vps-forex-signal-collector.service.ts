@@ -271,6 +271,168 @@ const EXECUTION_SPREAD_WINDOW_MINUTES = 30;
 const FRESH_BREAKOUT_ATR = 0.5;
 const FRESH_CONFIDENCE_DELTA = 0.02;
 const MAX_CONFIDENCE_DECAY_ON_BREAKOUT = 0.015;
+const PAPER_ENTRY_MAX_STOP_BUDGET_CONSUMED = 0.25;
+const PAPER_ENTRY_FAST_MARK_MAX_AGE_MS = 60_000;
+
+export interface PaperEntryMarketAlignmentInput {
+  direction: 'BUY' | 'SELL';
+  candidateBarTime: Date;
+  evaluatedAt: Date;
+  stopLoss: number;
+  executionQuote: {
+    bid: string;
+    ask: string;
+    timestamp: Date;
+    source: 'REST_M5' | 'STREAM' | 'PROVIDER';
+  };
+  fastMark: {
+    bid: string;
+    ask: string;
+    timestamp: Date;
+    source: 'REST_M5' | 'STREAM' | 'PROVIDER';
+    streamProvider?: string;
+  };
+}
+
+export interface PaperEntryMarketAlignmentDecision {
+  eligible: boolean;
+  reason:
+    | 'ALIGNED'
+    | 'STALE_M5_CANDIDATE'
+    | 'EXECUTION_SNAPSHOT_MISMATCH'
+    | 'FAST_MARK_UNAVAILABLE'
+    | 'FAST_MARK_STALE'
+    | 'INVALID_ENTRY_GEOMETRY'
+    | 'LIVE_STOP_ALREADY_BREACHED'
+    | 'ADVERSE_MOVE_CONSUMED_STOP_BUDGET';
+  plannedEntry: number | null;
+  liveProtectivePrice: number | null;
+  plannedStopDistance: number | null;
+  remainingStopDistance: number | null;
+  stopBudgetConsumedFraction: number | null;
+}
+
+/**
+ * Final PAPER-only entry sanity check between the closed-M5 decision/fill lane
+ * and the fresh fast-mark protection lane.
+ *
+ * The fast mark is VETO-ONLY: it can reject an already stale/dislocated entry,
+ * but it never becomes model evidence, a fill price, sizing authority or a
+ * replacement stop/target. That keeps the trained M5 distribution unchanged
+ * while preventing a trade from opening with most/all of its stop already
+ * consumed in the live market.
+ */
+export function evaluatePaperEntryMarketAlignment(
+  input: PaperEntryMarketAlignmentInput,
+): PaperEntryMarketAlignmentDecision {
+  const reject = (
+    reason: Exclude<PaperEntryMarketAlignmentDecision['reason'], 'ALIGNED'>,
+    details: Partial<Omit<PaperEntryMarketAlignmentDecision, 'eligible' | 'reason'>> = {},
+  ): PaperEntryMarketAlignmentDecision => ({
+    eligible: false,
+    reason,
+    plannedEntry: null,
+    liveProtectivePrice: null,
+    plannedStopDistance: null,
+    remainingStopDistance: null,
+    stopBudgetConsumedFraction: null,
+    ...details,
+  });
+
+  const evaluatedAtMs = new Date(input.evaluatedAt).getTime();
+  const candidateBarMs = new Date(input.candidateBarTime).getTime();
+  if (!Number.isFinite(evaluatedAtMs) || !Number.isFinite(candidateBarMs)) {
+    return reject('INVALID_ENTRY_GEOMETRY');
+  }
+  const expectedLatestClosedBarMs = Math.floor(evaluatedAtMs / BAR_MS) * BAR_MS - BAR_MS;
+  if (candidateBarMs !== expectedLatestClosedBarMs) {
+    return reject('STALE_M5_CANDIDATE');
+  }
+
+  const executionTimestampMs = new Date(input.executionQuote.timestamp).getTime();
+  if (
+    input.executionQuote.source === 'REST_M5' &&
+    executionTimestampMs !== candidateBarMs + BAR_MS
+  ) {
+    return reject('EXECUTION_SNAPSHOT_MISMATCH');
+  }
+
+  if (input.fastMark.source === 'REST_M5') {
+    return reject('FAST_MARK_UNAVAILABLE');
+  }
+  const fastMarkMs = new Date(input.fastMark.timestamp).getTime();
+  const fastMarkAgeMs = evaluatedAtMs - fastMarkMs;
+  if (
+    !Number.isFinite(fastMarkMs) ||
+    !Number.isFinite(fastMarkAgeMs) ||
+    fastMarkAgeMs < -5_000 ||
+    fastMarkAgeMs > PAPER_ENTRY_FAST_MARK_MAX_AGE_MS
+  ) {
+    return reject('FAST_MARK_STALE');
+  }
+
+  const plannedEntry = Number(
+    input.direction === 'BUY' ? input.executionQuote.ask : input.executionQuote.bid,
+  );
+  const liveProtectivePrice = Number(
+    input.direction === 'BUY' ? input.fastMark.bid : input.fastMark.ask,
+  );
+  const stopLoss = Number(input.stopLoss);
+  if (
+    !Number.isFinite(plannedEntry) ||
+    !Number.isFinite(liveProtectivePrice) ||
+    !Number.isFinite(stopLoss) ||
+    plannedEntry <= 0 ||
+    liveProtectivePrice <= 0 ||
+    stopLoss <= 0
+  ) {
+    return reject('INVALID_ENTRY_GEOMETRY');
+  }
+
+  const plannedStopDistance =
+    input.direction === 'BUY' ? plannedEntry - stopLoss : stopLoss - plannedEntry;
+  const remainingStopDistance =
+    input.direction === 'BUY' ? liveProtectivePrice - stopLoss : stopLoss - liveProtectivePrice;
+  if (!Number.isFinite(plannedStopDistance) || plannedStopDistance <= 0) {
+    return reject('INVALID_ENTRY_GEOMETRY', {
+      plannedEntry,
+      liveProtectivePrice,
+      plannedStopDistance,
+      remainingStopDistance,
+    });
+  }
+  if (!Number.isFinite(remainingStopDistance) || remainingStopDistance <= 0) {
+    return reject('LIVE_STOP_ALREADY_BREACHED', {
+      plannedEntry,
+      liveProtectivePrice,
+      plannedStopDistance,
+      remainingStopDistance,
+      stopBudgetConsumedFraction: 1,
+    });
+  }
+
+  const stopBudgetConsumedFraction =
+    (plannedStopDistance - remainingStopDistance) / plannedStopDistance;
+  if (stopBudgetConsumedFraction >= PAPER_ENTRY_MAX_STOP_BUDGET_CONSUMED) {
+    return reject('ADVERSE_MOVE_CONSUMED_STOP_BUDGET', {
+      plannedEntry,
+      liveProtectivePrice,
+      plannedStopDistance,
+      remainingStopDistance,
+      stopBudgetConsumedFraction,
+    });
+  }
+
+  return {
+    eligible: true,
+    reason: 'ALIGNED',
+    plannedEntry,
+    liveProtectivePrice,
+    plannedStopDistance,
+    remainingStopDistance,
+    stopBudgetConsumedFraction,
+  };
+}
 
 interface TwelveDataValue {
   datetime: string;
@@ -2473,9 +2635,51 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           continue;
         }
 
+        const entryAlignmentCheckedAt = new Date();
+        const suggestedStopLoss = Number(best.stopLoss.toFixed(digits));
+        let paperEntryMarketAlignment: PaperEntryMarketAlignmentDecision;
+        let paperEntryExecutionQuote: ReturnType<LivePaperMarketDataService['getQuote']>;
+        let paperEntryFastMark: ReturnType<LivePaperMarketDataService['getMarkQuote']>;
+        try {
+          paperEntryExecutionQuote = this.livePaperMarket.getQuote(
+            best.instrument,
+            20 * 60_000,
+            connectionId,
+          );
+          paperEntryFastMark = this.livePaperMarket.getMarkQuote(
+            best.instrument,
+            PAPER_ENTRY_FAST_MARK_MAX_AGE_MS,
+            20 * 60_000,
+            connectionId,
+          );
+          paperEntryMarketAlignment = evaluatePaperEntryMarketAlignment({
+            direction: best.direction,
+            candidateBarTime: best.barTime,
+            evaluatedAt: entryAlignmentCheckedAt,
+            stopLoss: suggestedStopLoss,
+            executionQuote: paperEntryExecutionQuote,
+            fastMark: paperEntryFastMark,
+          });
+        } catch (error) {
+          this.logger.warn(
+            `PAPER entry alignment ${best.instrument} ${best.direction} execution=BLOCKED ` +
+              `reason=ENTRY_MARKET_DATA_UNAVAILABLE detail=${(error as Error).message}`,
+          );
+          continue;
+        }
+        if (!paperEntryMarketAlignment.eligible) {
+          this.logger.warn(
+            `PAPER entry alignment ${best.instrument} ${best.direction} execution=BLOCKED ` +
+              `reason=${paperEntryMarketAlignment.reason} candidateBar=${best.barTime.toISOString()} ` +
+              `executionSource=${paperEntryExecutionQuote.source} fastMarkSource=${paperEntryFastMark.source} ` +
+              `fastMarkProvider=${paperEntryFastMark.streamProvider ?? 'NONE'} ` +
+              `stopBudgetConsumed=${paperEntryMarketAlignment.stopBudgetConsumedFraction ?? 'n/a'}`,
+          );
+          continue;
+        }
+
         const dynamicLotSizing = this.adaptiveLotSizingFor(chosen);
         const suggestedEntryPrice = Number(best.entry.toFixed(digits));
-        const suggestedStopLoss = Number(best.stopLoss.toFixed(digits));
         const suggestedTakeProfit = Number(best.takeProfit.toFixed(digits));
         const strategyCode = `external-${ACTIVE_ENGINE_CODE}`;
         const timeframe = 'M5';
@@ -2551,6 +2755,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paper_post_loss_entry_guard_reason: paperPostLossEntryGuard.reason,
             paper_post_loss_entry_guard_last_trade_id: paperPostLossEntryGuard.lastClosedTradeId,
             paper_post_loss_entry_guard_last_closed_at: paperPostLossEntryGuard.lastClosedAt,
+            paper_entry_market_alignment_artifact: 'paper-entry-market-alignment-v1',
+            paper_entry_market_alignment_reason: paperEntryMarketAlignment.reason,
+            paper_entry_market_alignment_checked_at: entryAlignmentCheckedAt.toISOString(),
+            paper_entry_market_alignment_execution_quote_source: paperEntryExecutionQuote.source,
+            paper_entry_market_alignment_fast_mark_source: paperEntryFastMark.source,
+            paper_entry_market_alignment_fast_mark_provider:
+              paperEntryFastMark.streamProvider ?? null,
+            paper_entry_market_alignment_stop_budget_consumed_fraction:
+              paperEntryMarketAlignment.stopBudgetConsumedFraction,
             rejected_edge_canary: paperExecutionRoute === 'REJECTED_EDGE_CANARY',
             rejected_edge_canary_artifact: rejectedEdgeCanary?.artifact ?? null,
             rejected_edge_canary_reason: rejectedEdgeCanary?.reason ?? null,

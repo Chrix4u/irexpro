@@ -10,6 +10,7 @@ import {
   prioritizeCounterfactualExecutionRoutes,
   dynamicPaperLotUpperBound,
   isFreshOpportunity,
+  evaluatePaperEntryMarketAlignment,
 } from './vps-forex-signal-collector.service';
 import { ExecutionService } from '../execution/execution.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
@@ -223,6 +224,130 @@ function config(values: Record<string, unknown>) {
     get: jest.fn((key: string, fallback?: unknown) => (key in values ? values[key] : fallback)),
   } as unknown as ConfigService;
 }
+
+function installAlignedFastMarkMirror(live: LivePaperMarketDataService): void {
+  jest
+    .spyOn(live, 'getMarkQuote')
+    .mockImplementation((instrument, _streamAge, _fallbackAge, connectionId) => {
+      const execution = live.getQuote(instrument, 20 * 60_000, connectionId);
+      return {
+        ...execution,
+        timestamp: new Date(),
+        source: 'STREAM',
+        streamProvider: 'DERIV',
+      };
+    });
+}
+
+describe('PAPER entry market alignment', () => {
+  const base = {
+    direction: 'BUY' as const,
+    candidateBarTime: new Date('2026-10-20T08:45:00.000Z'),
+    evaluatedAt: new Date('2026-10-20T08:50:22.000Z'),
+    stopLoss: 158.116,
+    executionQuote: {
+      bid: '158.165',
+      ask: '158.177',
+      timestamp: new Date('2026-10-20T08:50:00.000Z'),
+      source: 'REST_M5' as const,
+    },
+    fastMark: {
+      bid: '158.160',
+      ask: '158.170',
+      timestamp: new Date('2026-10-20T08:50:21.000Z'),
+      source: 'STREAM' as const,
+      streamProvider: 'DERIV' as const,
+    },
+  };
+
+  it('allows a fresh fast mark when little of the planned stop distance has been consumed', () => {
+    expect(
+      evaluatePaperEntryMarketAlignment({
+        ...base,
+        fastMark: { ...base.fastMark, bid: '158.170', ask: '158.180' },
+      }),
+    ).toMatchObject({ eligible: true, reason: 'ALIGNED' });
+  });
+
+  it('blocks a candidate that is not the latest fully closed M5 bar', () => {
+    expect(
+      evaluatePaperEntryMarketAlignment({
+        ...base,
+        candidateBarTime: new Date('2026-10-20T08:30:00.000Z'),
+      }),
+    ).toMatchObject({ eligible: false, reason: 'STALE_M5_CANDIDATE' });
+  });
+
+  it('blocks when the execution quote is not bound to the candidate close boundary', () => {
+    expect(
+      evaluatePaperEntryMarketAlignment({
+        ...base,
+        executionQuote: {
+          ...base.executionQuote,
+          timestamp: new Date('2026-10-20T08:45:00.000Z'),
+        },
+      }),
+    ).toMatchObject({ eligible: false, reason: 'EXECUTION_SNAPSHOT_MISMATCH' });
+  });
+
+  it('requires an independent fresh fast mark instead of falling back to REST M5', () => {
+    expect(
+      evaluatePaperEntryMarketAlignment({
+        ...base,
+        fastMark: {
+          ...base.fastMark,
+          source: 'REST_M5',
+          streamProvider: undefined,
+        },
+      }),
+    ).toMatchObject({ eligible: false, reason: 'FAST_MARK_UNAVAILABLE' });
+  });
+
+  it('blocks BUY when the live bid is already through the planned stop', () => {
+    expect(
+      evaluatePaperEntryMarketAlignment({
+        ...base,
+        fastMark: { ...base.fastMark, bid: '158.110', ask: '158.120' },
+      }),
+    ).toMatchObject({ eligible: false, reason: 'LIVE_STOP_ALREADY_BREACHED' });
+  });
+
+  it('blocks SELL when the live ask is already through the planned stop', () => {
+    expect(
+      evaluatePaperEntryMarketAlignment({
+        direction: 'SELL',
+        candidateBarTime: new Date('2026-10-20T06:00:00.000Z'),
+        evaluatedAt: new Date('2026-10-20T06:05:19.000Z'),
+        stopLoss: 158.195,
+        executionQuote: {
+          bid: '158.135',
+          ask: '158.145',
+          timestamp: new Date('2026-10-20T06:05:00.000Z'),
+          source: 'REST_M5',
+        },
+        fastMark: {
+          bid: '158.192',
+          ask: '158.202',
+          timestamp: new Date('2026-10-20T06:05:18.000Z'),
+          source: 'STREAM',
+          streamProvider: 'DERIV',
+        },
+      }),
+    ).toMatchObject({ eligible: false, reason: 'LIVE_STOP_ALREADY_BREACHED' });
+  });
+
+  it('blocks an entry after at least 25 percent of its stop budget has already been consumed', () => {
+    expect(
+      evaluatePaperEntryMarketAlignment({
+        ...base,
+        fastMark: { ...base.fastMark, bid: '158.147', ask: '158.157' },
+      }),
+    ).toMatchObject({
+      eligible: false,
+      reason: 'ADVERSE_MOVE_CONSUMED_STOP_BUDGET',
+    });
+  });
+});
 
 describe('multi-model PAPER execution gate', () => {
   it('allows an admitted setup when PAPER governance passes even while promotion remains separate', () => {
@@ -1300,6 +1425,7 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('ranks pair winners across the scan and rechecks shared-currency risk before later dispatches', async () => {
     const live = new LivePaperMarketDataService();
+    installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
     const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
@@ -1550,6 +1676,10 @@ describe('VpsForexSignalCollectorService', () => {
           metadata: expect.objectContaining({
             adaptive_scan_rank: 1,
             adaptive_opportunity_score: 0.9,
+            paper_entry_market_alignment_artifact: 'paper-entry-market-alignment-v1',
+            paper_entry_market_alignment_reason: 'ALIGNED',
+            paper_entry_market_alignment_fast_mark_source: 'STREAM',
+            paper_entry_market_alignment_fast_mark_provider: 'DERIV',
           }),
         }),
       );
@@ -1714,6 +1844,7 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('keeps the canary quarantined without letting it suppress eligible controlled PAPER research', async () => {
     const live = new LivePaperMarketDataService();
+    installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
     const evidence = {
@@ -1880,6 +2011,7 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('routes bounded single-MTF-drift research-throughput to PAPER execution without qualification authority', async () => {
     const live = new LivePaperMarketDataService();
+    installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
     const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
@@ -2082,6 +2214,7 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('routes evidence-backed profitable pair-side acceleration into PAPER research when only structural quality misses', async () => {
     const live = new LivePaperMarketDataService();
+    installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
     const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
@@ -2271,6 +2404,7 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('executes calibrated PAPER research when fixed costs are positive but below the 0.08R floor', async () => {
     const live = new LivePaperMarketDataService();
+    installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
     const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
@@ -2662,6 +2796,7 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('routes a qualified extension-exhaustion setup into half-risk PAPER research', async () => {
     const live = new LivePaperMarketDataService();
+    installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
     const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
@@ -2794,6 +2929,7 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('routes only the paired opposite-side winner into tiny reversal research without qualification authority', async () => {
     const live = new LivePaperMarketDataService();
+    installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
     const shadowQuery = jest.fn().mockResolvedValue([]);
     const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
