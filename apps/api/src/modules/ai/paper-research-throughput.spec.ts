@@ -5,7 +5,10 @@ import {
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES,
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS,
   PAPER_PAIRED_REVERSAL_RESEARCH_LOT_CAP,
+  evaluatePaperResearchCalibrationBrake,
+  evaluatePaperResearchExecutionGate,
   evaluatePaperResearchEpisodeGuard,
+  evaluatePaperResearchPortfolioBrake,
   evaluatePaperResearchPairSideReliability,
   evaluatePaperResearchThroughput,
   evaluatePaperPairedReversalResearch,
@@ -555,6 +558,136 @@ describe('PAPER research-throughput provenance and pair-side reliability', () =>
       realisedRSamples: 4,
       realisedAverageR: -1,
       reason: 'POSITIVE_PAIR_SIDE_EXPECTANCY',
+    });
+  });
+});
+
+describe('research-throughput loss brakes', () => {
+  it('vetoes mature negative ROUTE calibration without granting broad evidence positive admission authority', () => {
+    expect(
+      evaluatePaperResearchCalibrationBrake({
+        authoritative: true,
+        sourceLevel: 'ROUTE',
+        maturity: 'MATURE',
+        samples: 35,
+        calibratedNetExpectedR: -0.06,
+        recentDegradation: false,
+      }),
+    ).toEqual({ blocked: true, reason: 'BROAD_CALIBRATION_NEGATIVE_EDGE' });
+
+    expect(
+      evaluatePaperResearchCalibrationBrake({
+        authoritative: true,
+        sourceLevel: 'ROUTE',
+        maturity: 'MATURE',
+        samples: 35,
+        calibratedNetExpectedR: 0.04,
+        recentDegradation: false,
+      }),
+    ).toEqual({ blocked: false, reason: 'BROAD_CALIBRATION_CLEAR' });
+  });
+
+  it('vetoes degraded broad calibration but leaves local calibration to the existing local authority path', () => {
+    expect(
+      evaluatePaperResearchCalibrationBrake({
+        authoritative: true,
+        sourceLevel: 'GLOBAL',
+        maturity: 'DEGRADED',
+        samples: 18,
+        calibratedNetExpectedR: 0.02,
+        recentDegradation: true,
+      }),
+    ).toEqual({ blocked: true, reason: 'BROAD_CALIBRATION_DEGRADED' });
+
+    expect(
+      evaluatePaperResearchCalibrationBrake({
+        authoritative: true,
+        sourceLevel: 'PAIR_DIRECTION_ROUTE',
+        maturity: 'MATURE',
+        samples: 30,
+        calibratedNetExpectedR: -0.2,
+        recentDegradation: false,
+      }),
+    ).toEqual({ blocked: false, reason: 'LOCAL_CALIBRATION_AUTHORITY' });
+  });
+
+  it('does not let sparse or collecting broad calibration block research', () => {
+    expect(
+      evaluatePaperResearchCalibrationBrake({
+        authoritative: false,
+        sourceLevel: 'ROUTE',
+        maturity: 'SPARSE',
+        samples: 7,
+        calibratedNetExpectedR: -0.4,
+        recentDegradation: false,
+      }),
+    ).toEqual({ blocked: false, reason: 'CALIBRATION_NOT_AUTHORITATIVE' });
+
+    expect(
+      evaluatePaperResearchCalibrationBrake({
+        authoritative: true,
+        sourceLevel: 'ROUTE',
+        maturity: 'COLLECTING',
+        samples: 14,
+        calibratedNetExpectedR: -0.08,
+        recentDegradation: false,
+      }),
+    ).toEqual({ blocked: false, reason: 'BROAD_CALIBRATION_COLLECTING' });
+  });
+
+  it('fails the research execution gate when either negative-evidence brake is active', () => {
+    expect(
+      evaluatePaperResearchExecutionGate({
+        throughputEligible: true,
+        pairSideEligible: true,
+        episodeEligible: true,
+        calibrationBlocked: true,
+        portfolioBlocked: false,
+      }),
+    ).toEqual({ eligible: false, reason: 'BROAD_CALIBRATION_BRAKE' });
+    expect(
+      evaluatePaperResearchExecutionGate({
+        throughputEligible: true,
+        pairSideEligible: true,
+        episodeEligible: true,
+        calibrationBlocked: false,
+        portfolioBlocked: true,
+      }),
+    ).toEqual({ eligible: false, reason: 'PORTFOLIO_LOSS_BRAKE' });
+    expect(
+      evaluatePaperResearchExecutionGate({
+        throughputEligible: true,
+        pairSideEligible: true,
+        episodeEligible: true,
+        calibrationBlocked: false,
+        portfolioBlocked: false,
+      }),
+    ).toEqual({ eligible: true, reason: 'RESEARCH_EXECUTION_ELIGIBLE' });
+  });
+
+  it('brakes cross-pair research after three losses in the latest five closed research trades', () => {
+    expect(
+      evaluatePaperResearchPortfolioBrake({ outcomes: ['WIN', 'LOSS', 'LOSS', 'WIN', 'LOSS'] }),
+    ).toEqual({
+      blocked: true,
+      samples: 5,
+      wins: 2,
+      losses: 3,
+      reason: 'RECENT_RESEARCH_LOSS_CLUSTER',
+    });
+  });
+
+  it('keeps research available before five closes and for a non-losing five-trade window', () => {
+    expect(
+      evaluatePaperResearchPortfolioBrake({ outcomes: ['LOSS', 'LOSS', 'WIN', 'WIN'] }),
+    ).toMatchObject({ blocked: false, samples: 4, reason: 'INSUFFICIENT_PORTFOLIO_EVIDENCE' });
+    expect(
+      evaluatePaperResearchPortfolioBrake({ outcomes: ['LOSS', 'WIN', 'WIN', 'LOSS', 'WIN'] }),
+    ).toMatchObject({
+      blocked: false,
+      samples: 5,
+      losses: 2,
+      reason: 'RECENT_RESEARCH_WINDOW_CLEAR',
     });
   });
 });
