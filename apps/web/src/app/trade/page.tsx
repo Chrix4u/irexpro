@@ -33,6 +33,7 @@ import { resolveAiOpenPositionRows } from "@/lib/ai-open-positions";
 import { loadMarketIntelligence } from "@/lib/market-intelligence";
 import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
 import {
+  deriveFastMarkFeedUiState,
   hasExternalProviderPerformanceUiShape,
   hasVpsScannerUiShape,
 } from "@/lib/vps-scanner-status";
@@ -1506,6 +1507,10 @@ export default function AiTradingPage() {
             : "running";
 
   const vpsConfidenceActive = vpsScannerStatus?.enabled === true;
+  const fastMarkFeed = deriveFastMarkFeedUiState(
+    vpsScannerStatus?.marketCache,
+    chartInstrument,
+  );
   const submittedVpsConfidence =
     providerEvidence?.observed.latestSubmittedConfidence ?? null;
   const displayedConfidence = vpsConfidenceActive
@@ -4073,6 +4078,13 @@ export default function AiTradingPage() {
                             ? "DATA ISSUE"
                             : "SCANNING"}
                     </Badge>
+                    <span
+                      title="Read-only fast market feed. Execution quote authority remains separate."
+                    >
+                      <Badge variant={fastMarkFeed.badgeVariant}>
+                        {fastMarkFeed.badgeLabel}
+                      </Badge>
+                    </span>
                   </div>
                 </div>
 
@@ -4284,6 +4296,42 @@ export default function AiTradingPage() {
                           automationRuntime?.last_market_data_at,
                         )}
                       </strong>
+                    </div>
+                    <div>
+                      <span>Fast market feed</span>
+                      <strong>
+                        {fastMarkFeed.provider ?? "VERIFYING"} · {fastMarkFeed.state.replaceAll("_", " ")} · {fastMarkFeed.freshCount}/{fastMarkFeed.expectedCount}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Feed last tick</span>
+                      <strong>
+                        {formatMarkFreshness(fastMarkFeed.latestObservedAt)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Feed source lag</span>
+                      <strong>
+                        {fastMarkFeed.latestSourceLagMs == null
+                          ? "Not available"
+                          : `${Math.round(fastMarkFeed.latestSourceLagMs)} ms latest${
+                              fastMarkFeed.maxFreshSourceLagMs == null
+                                ? ""
+                                : ` · ${Math.round(fastMarkFeed.maxFreshSourceLagMs)} ms max`
+                            }`}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>M5 reference divergence</span>
+                      <strong>
+                        {fastMarkFeed.divergencePips == null || fastMarkFeed.divergenceBps == null
+                          ? "Not comparable"
+                          : `${fastMarkFeed.divergencePips.toFixed(2)} pips · ${fastMarkFeed.divergenceBps.toFixed(2)} bps`}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Feed authority</span>
+                      <strong>READ-ONLY · EXECUTION SEPARATE</strong>
                     </div>
                   </div>
                 </details>

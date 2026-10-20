@@ -14,6 +14,233 @@ function isNullableFiniteNumber(value: unknown): boolean {
   );
 }
 
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
+function isNullableTimestamp(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function isFastMarkProviderRow(value: unknown): value is UnknownRecord {
+  if (!isRecord(value)) return false;
+  return (
+    isStringArray(value.freshInstruments) &&
+    typeof value.freshInstrumentCount === "number" &&
+    Number.isInteger(value.freshInstrumentCount) &&
+    value.freshInstrumentCount >= 0 &&
+    isStringArray(value.staleInstruments) &&
+    isNullableTimestamp(value.latestObservedAt) &&
+    isNullableTimestamp(value.latestReceivedAt) &&
+    isNullableFiniteNumber(value.latestSourceLagMs) &&
+    isNullableFiniteNumber(value.maxFreshSourceLagMs)
+  );
+}
+
+function isFastMarkComparison(value: unknown): value is UnknownRecord {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.instrument === "string" &&
+    typeof value.streamProvider === "string" &&
+    typeof value.timestampSkewMs === "number" &&
+    Number.isFinite(value.timestampSkewMs) &&
+    typeof value.divergencePips === "number" &&
+    Number.isFinite(value.divergencePips) &&
+    typeof value.divergenceBps === "number" &&
+    Number.isFinite(value.divergenceBps) &&
+    typeof value.streamObservedAt === "string" &&
+    typeof value.referenceObservedAt === "string"
+  );
+}
+
+function isFastMarkProviderHealth(value: unknown): value is UnknownRecord {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.providers) ||
+    !isRecord(value.executionReference)
+  ) {
+    return false;
+  }
+
+  const providerRows = Object.values(value.providers);
+  const reference = value.executionReference;
+  return (
+    typeof value.freshnessMaxAgeMs === "number" &&
+    Number.isFinite(value.freshnessMaxAgeMs) &&
+    value.freshnessMaxAgeMs > 0 &&
+    providerRows.length > 0 &&
+    providerRows.every(isFastMarkProviderRow) &&
+    typeof reference.comparisonMaxSkewMs === "number" &&
+    Number.isFinite(reference.comparisonMaxSkewMs) &&
+    typeof reference.comparisonCount === "number" &&
+    Number.isInteger(reference.comparisonCount) &&
+    reference.comparisonCount >= 0 &&
+    Array.isArray(reference.comparisons) &&
+    reference.comparisons.every(isFastMarkComparison) &&
+    isNullableFiniteNumber(reference.maxDivergencePips) &&
+    isNullableFiniteNumber(reference.averageDivergencePips)
+  );
+}
+
+export interface FastMarkFeedUiState {
+  state: "LIVE" | "DEGRADED" | "M5_FALLBACK" | "UNAVAILABLE";
+  provider: string | null;
+  freshCount: number;
+  expectedCount: number;
+  streamingCount: number;
+  fallbackCount: number;
+  selectedInstrumentFallback: boolean;
+  latestObservedAt: string | null;
+  latestSourceLagMs: number | null;
+  maxFreshSourceLagMs: number | null;
+  divergencePips: number | null;
+  divergenceBps: number | null;
+  badgeLabel: string;
+  badgeVariant: "success" | "warning" | "info";
+}
+
+const EXPECTED_FAST_MARK_INSTRUMENTS = 6;
+
+/**
+ * Converts optional scanner market-cache telemetry into one fail-closed UI state.
+ * This describes the read-only fast-mark feed only; it never implies execution authority.
+ */
+export function deriveFastMarkFeedUiState(
+  marketCache: unknown,
+  selectedInstrument: string,
+): FastMarkFeedUiState {
+  const unavailable: FastMarkFeedUiState = {
+    state: "UNAVAILABLE",
+    provider: null,
+    freshCount: 0,
+    expectedCount: EXPECTED_FAST_MARK_INSTRUMENTS,
+    streamingCount: 0,
+    fallbackCount: 0,
+    selectedInstrumentFallback: false,
+    latestObservedAt: null,
+    latestSourceLagMs: null,
+    maxFreshSourceLagMs: null,
+    divergencePips: null,
+    divergenceBps: null,
+    badgeLabel: "MARKET FEED · VERIFYING",
+    badgeVariant: "info",
+  };
+
+  if (
+    !isRecord(marketCache) ||
+    !isFastMarkProviderHealth(marketCache.providerHealth)
+  ) {
+    return unavailable;
+  }
+
+  const health = marketCache.providerHealth;
+  const providers = health.providers as UnknownRecord;
+  const reference = health.executionReference as UnknownRecord;
+  const comparisons = reference.comparisons as UnknownRecord[];
+  const instrument = selectedInstrument.trim().toUpperCase();
+  const selectedComparison = comparisons.find(
+    (row) => String(row.instrument).toUpperCase() === instrument,
+  );
+
+  const candidates = Object.entries(providers)
+    .filter(
+      ([, row]) =>
+        isFastMarkProviderRow(row) && Number(row.freshInstrumentCount) > 0,
+    )
+    .sort((left, right) => {
+      const freshDelta =
+        Number((right[1] as UnknownRecord).freshInstrumentCount) -
+        Number((left[1] as UnknownRecord).freshInstrumentCount);
+      return freshDelta !== 0 ? freshDelta : left[0].localeCompare(right[0]);
+    });
+
+  let active = candidates[0] ?? null;
+  if (selectedComparison) {
+    const comparisonProvider = String(selectedComparison.streamProvider);
+    const comparisonRow = providers[comparisonProvider];
+    if (
+      isFastMarkProviderRow(comparisonRow) &&
+      Number(comparisonRow.freshInstrumentCount) > 0
+    ) {
+      active = [comparisonProvider, comparisonRow];
+    }
+  }
+  if (!active) return unavailable;
+
+  const [provider, providerRowValue] = active;
+  const providerRow = providerRowValue as UnknownRecord;
+  const streamingInstruments = isStringArray(marketCache.streamingInstruments)
+    ? marketCache.streamingInstruments.map((symbol) => symbol.toUpperCase())
+    : [];
+  const fallbackInstruments = isStringArray(
+    marketCache.fastMarkFallbackInstruments,
+  )
+    ? marketCache.fastMarkFallbackInstruments.map((symbol) =>
+        symbol.toUpperCase(),
+      )
+    : [];
+  const freshCount = Number(providerRow.freshInstrumentCount);
+  const streamingCount =
+    typeof marketCache.streamingInstrumentCount === "number" &&
+    Number.isFinite(marketCache.streamingInstrumentCount)
+      ? marketCache.streamingInstrumentCount
+      : streamingInstruments.length;
+  const selectedInstrumentFallback = fallbackInstruments.includes(instrument);
+
+  let state: FastMarkFeedUiState["state"];
+  if (selectedInstrumentFallback) {
+    state = "M5_FALLBACK";
+  } else if (
+    freshCount >= EXPECTED_FAST_MARK_INSTRUMENTS &&
+    streamingCount >= EXPECTED_FAST_MARK_INSTRUMENTS &&
+    streamingInstruments.includes(instrument)
+  ) {
+    state = "LIVE";
+  } else {
+    state = "DEGRADED";
+  }
+
+  const badgeLabel =
+    state === "M5_FALLBACK"
+      ? `M5 FALLBACK · ${instrument}`
+      : `${provider} · ${state} · ${freshCount}/${EXPECTED_FAST_MARK_INSTRUMENTS}`;
+
+  return {
+    state,
+    provider,
+    freshCount,
+    expectedCount: EXPECTED_FAST_MARK_INSTRUMENTS,
+    streamingCount,
+    fallbackCount: fallbackInstruments.length,
+    selectedInstrumentFallback,
+    latestObservedAt:
+      typeof providerRow.latestObservedAt === "string"
+        ? providerRow.latestObservedAt
+        : null,
+    latestSourceLagMs:
+      typeof providerRow.latestSourceLagMs === "number"
+        ? providerRow.latestSourceLagMs
+        : null,
+    maxFreshSourceLagMs:
+      typeof providerRow.maxFreshSourceLagMs === "number"
+        ? providerRow.maxFreshSourceLagMs
+        : null,
+    divergencePips:
+      selectedComparison &&
+      typeof selectedComparison.divergencePips === "number"
+        ? selectedComparison.divergencePips
+        : null,
+    divergenceBps:
+      selectedComparison && typeof selectedComparison.divergenceBps === "number"
+        ? selectedComparison.divergenceBps
+        : null,
+    badgeLabel,
+    badgeVariant: state === "LIVE" ? "success" : "warning",
+  };
+}
+
 function isPairSideReliabilityRow(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
@@ -92,6 +319,15 @@ export function hasVpsScannerUiShape(value: unknown): boolean {
     !isRecord(registry) ||
     !Array.isArray(registry.entries) ||
     !isRecord(marketCache)
+  ) {
+    return false;
+  }
+
+  if (
+    (marketCache.fastMarkFallbackInstruments !== undefined &&
+      !isStringArray(marketCache.fastMarkFallbackInstruments)) ||
+    (marketCache.providerHealth !== undefined &&
+      !isFastMarkProviderHealth(marketCache.providerHealth))
   ) {
     return false;
   }

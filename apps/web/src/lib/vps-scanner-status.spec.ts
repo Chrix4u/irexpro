@@ -1,4 +1,5 @@
 import {
+  deriveFastMarkFeedUiState,
   hasExternalProviderPerformanceUiShape,
   hasVpsScannerUiShape,
 } from "./vps-scanner-status";
@@ -113,6 +114,187 @@ describe("VPS scanner UI status runtime guard", () => {
         marketSchedule: {},
       }),
     ).toBe(false);
+  });
+
+  it("accepts provider-health telemetry when its nested shape is safe", () => {
+    expect(
+      hasVpsScannerUiShape({
+        ...VALID_STATUS,
+        marketCache: HEALTHY_DERIV_MARKET_CACHE,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects malformed provider-health telemetry when it is present", () => {
+    expect(
+      hasVpsScannerUiShape({
+        ...VALID_STATUS,
+        marketCache: {
+          ...HEALTHY_DERIV_MARKET_CACHE,
+          providerHealth: {
+            providers: { DERIV: { freshInstrumentCount: "six" } },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
+const HEALTHY_DERIV_MARKET_CACHE = {
+  cachedInstruments: [
+    "AUDUSD",
+    "EURUSD",
+    "GBPUSD",
+    "USDCAD",
+    "USDCHF",
+    "USDJPY",
+  ],
+  cachedInstrumentCount: 6,
+  streamingInstruments: [
+    "AUDUSD",
+    "EURUSD",
+    "GBPUSD",
+    "USDCAD",
+    "USDCHF",
+    "USDJPY",
+  ],
+  streamingInstrumentCount: 6,
+  fastMarkFallbackInstruments: [],
+  latestObservedAt: "2026-10-20T02:55:00.000Z",
+  latestQuoteObservedAt: "2026-10-20T02:55:00.000Z",
+  providerHealth: {
+    freshnessMaxAgeMs: 45_000,
+    providers: {
+      DERIV: {
+        freshInstruments: [
+          "AUDUSD",
+          "EURUSD",
+          "GBPUSD",
+          "USDCAD",
+          "USDCHF",
+          "USDJPY",
+        ],
+        freshInstrumentCount: 6,
+        staleInstruments: [],
+        latestObservedAt: "2026-10-20T02:55:00.000Z",
+        latestReceivedAt: "2026-10-20T02:55:00.120Z",
+        latestSourceLagMs: 120,
+        maxFreshSourceLagMs: 240,
+      },
+      TWELVE_DATA: {
+        freshInstruments: [],
+        freshInstrumentCount: 0,
+        staleInstruments: [],
+        latestObservedAt: null,
+        latestReceivedAt: null,
+        latestSourceLagMs: null,
+        maxFreshSourceLagMs: null,
+      },
+    },
+    executionReference: {
+      comparisonMaxSkewMs: 360_000,
+      comparisonCount: 1,
+      comparisons: [
+        {
+          instrument: "USDJPY",
+          streamProvider: "DERIV",
+          timestampSkewMs: 20_000,
+          divergencePips: 0.4,
+          divergenceBps: 0.27,
+          streamObservedAt: "2026-10-20T02:55:00.000Z",
+          referenceObservedAt: "2026-10-20T02:54:40.000Z",
+        },
+      ],
+      maxDivergencePips: 0.4,
+      averageDivergencePips: 0.4,
+    },
+  },
+};
+
+describe("fast-mark feed UI state", () => {
+  it("reports a healthy six-pair Deriv stream as live", () => {
+    expect(
+      deriveFastMarkFeedUiState(HEALTHY_DERIV_MARKET_CACHE, "USDJPY"),
+    ).toMatchObject({
+      state: "LIVE",
+      provider: "DERIV",
+      freshCount: 6,
+      expectedCount: 6,
+      selectedInstrumentFallback: false,
+      latestSourceLagMs: 120,
+      maxFreshSourceLagMs: 240,
+      divergencePips: 0.4,
+      divergenceBps: 0.27,
+      badgeLabel: "DERIV · LIVE · 6/6",
+      badgeVariant: "success",
+    });
+  });
+
+  it("reports a partially stale six-pair stream as degraded", () => {
+    const cache: any = JSON.parse(JSON.stringify(HEALTHY_DERIV_MARKET_CACHE));
+    cache.streamingInstruments = cache.streamingInstruments.filter(
+      (symbol: string) => symbol !== "GBPUSD",
+    );
+    cache.streamingInstrumentCount = 5;
+    cache.providerHealth.providers.DERIV.freshInstruments =
+      cache.providerHealth.providers.DERIV.freshInstruments.filter(
+        (symbol: string) => symbol !== "GBPUSD",
+      );
+    cache.providerHealth.providers.DERIV.freshInstrumentCount = 5;
+    cache.providerHealth.providers.DERIV.staleInstruments = ["GBPUSD"];
+
+    expect(deriveFastMarkFeedUiState(cache, "USDJPY")).toMatchObject({
+      state: "DEGRADED",
+      provider: "DERIV",
+      freshCount: 5,
+      selectedInstrumentFallback: false,
+      badgeLabel: "DERIV · DEGRADED · 5/6",
+      badgeVariant: "warning",
+    });
+  });
+
+  it("makes selected-pair M5 fallback more visible than general provider health", () => {
+    const cache: any = JSON.parse(JSON.stringify(HEALTHY_DERIV_MARKET_CACHE));
+    cache.streamingInstruments = cache.streamingInstruments.filter(
+      (symbol: string) => symbol !== "USDJPY",
+    );
+    cache.streamingInstrumentCount = 5;
+    cache.fastMarkFallbackInstruments = ["USDJPY"];
+    cache.providerHealth.providers.DERIV.freshInstruments =
+      cache.providerHealth.providers.DERIV.freshInstruments.filter(
+        (symbol: string) => symbol !== "USDJPY",
+      );
+    cache.providerHealth.providers.DERIV.freshInstrumentCount = 5;
+    cache.providerHealth.providers.DERIV.staleInstruments = ["USDJPY"];
+
+    expect(deriveFastMarkFeedUiState(cache, "USDJPY")).toMatchObject({
+      state: "M5_FALLBACK",
+      provider: "DERIV",
+      freshCount: 5,
+      selectedInstrumentFallback: true,
+      badgeLabel: "M5 FALLBACK · USDJPY",
+      badgeVariant: "warning",
+    });
+  });
+
+  it("fails closed to unavailable while provider telemetry is absent during a rolling deployment", () => {
+    expect(
+      deriveFastMarkFeedUiState(
+        {
+          cachedInstruments: ["USDJPY"],
+          cachedInstrumentCount: 1,
+          streamingInstruments: ["USDJPY"],
+          streamingInstrumentCount: 1,
+        },
+        "USDJPY",
+      ),
+    ).toMatchObject({
+      state: "UNAVAILABLE",
+      provider: null,
+      selectedInstrumentFallback: false,
+      badgeLabel: "MARKET FEED · VERIFYING",
+      badgeVariant: "info",
+    });
   });
 });
 
