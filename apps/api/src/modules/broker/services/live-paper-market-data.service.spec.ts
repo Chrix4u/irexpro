@@ -233,12 +233,19 @@ describe('LivePaperMarketDataService', () => {
     );
 
     const closed = service.getOHLCV('EURUSD', 'M1', 10, connectionId);
+    expect(closed[0]).toMatchObject({
+      timestamp: new Date('2026-10-19T08:00:00.000Z'),
+      spreadPoints: '10',
+      priceDigits: 5,
+    });
     expect(closed.at(-1)).toMatchObject({
       timestamp: new Date('2026-10-19T08:02:00.000Z'),
       open: '1.10025',
       high: '1.10040',
       low: '1.10025',
       close: '1.10040',
+      spreadPoints: '10',
+      priceDigits: 5,
     });
   });
 
