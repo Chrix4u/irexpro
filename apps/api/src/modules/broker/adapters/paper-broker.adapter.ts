@@ -644,14 +644,15 @@ export interface PaperProfitLockDecision {
  *
  * The lock arms only after a meaningful favorable excursion (0.50R). Once
  * armed it protects a progressively larger share of the best executable P&L:
- *   0.50R–<0.75R peak -> retain 40%
- *   0.75R–<1.00R peak -> retain 70%
- *   1.00R–<1.50R peak -> retain 75%
- *   1.50R–<2.00R peak -> retain 80%
- *   >=2.00R peak       -> retain 85%
+ *   0.50R–<0.75R peak -> retain 70%
+ *   0.75R–<1.00R peak -> retain 75%
+ *   1.00R–<1.50R peak -> retain 80%
+ *   1.50R–<2.00R peak -> retain 85%
+ *   >=2.00R peak       -> retain 90%
  *
  * This deliberately stops near-1R winners from giving back most of their
- * excursion while still leaving sub-0.75R trades enough room to develop.
+ * excursion. Once +0.50R is proven, no armed tier is allowed to surrender
+ * more than 30% of the best executable P&L observed so far.
  *
  * Invalid/unprovable risk fails closed: no automatic profit-lock exit.
  */
@@ -681,14 +682,14 @@ export function evaluatePaperProfitLock(input: {
     const risk = input.initialRiskPnl;
     const retentionFraction =
       compareDecimalStrings(peak, multiplyDecimalStrings(risk, '0.75')) < 0
-        ? '0.40'
+        ? '0.70'
         : compareDecimalStrings(peak, risk) < 0
-          ? '0.70'
+          ? '0.75'
           : compareDecimalStrings(peak, multiplyDecimalStrings(risk, '1.50')) < 0
-            ? '0.75'
+            ? '0.80'
             : compareDecimalStrings(peak, multiplyDecimalStrings(risk, '2.00')) < 0
-              ? '0.80'
-              : '0.85';
+              ? '0.85'
+              : '0.90';
     const protectedFloorPnl = toMoney(multiplyDecimalStrings(peak, retentionFraction));
     return {
       armed: true,
