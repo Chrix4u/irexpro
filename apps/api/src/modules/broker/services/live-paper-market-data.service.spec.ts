@@ -385,6 +385,8 @@ describe('LivePaperMarketDataService', () => {
       high: '1.10040',
       low: '1.10015',
       close: '1.10015',
+      spreadPoints: '10',
+      priceDigits: 5,
     });
   });
 
