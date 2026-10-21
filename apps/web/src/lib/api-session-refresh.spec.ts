@@ -47,4 +47,26 @@ describe('browser session refresh single-flight', () => {
       expect.objectContaining({ method: 'POST', credentials: 'include' }),
     );
   });
+
+  it('drains a rejected refresh response before returning signed-out state', async () => {
+    const json = jest.fn(async () => {
+      throw new SyntaxError('non-JSON error body');
+    });
+    const fetchMock = jest.fn(async () => ({
+      ok: false,
+      status: 404,
+      json,
+    } as unknown as Response));
+    global.fetch = fetchMock as typeof fetch;
+
+    const apiModule = require('./api') as Record<string, unknown>;
+    const refreshBrowserSession = apiModule.refreshBrowserSession as
+      | (() => Promise<unknown>)
+      | undefined;
+
+    expect(typeof refreshBrowserSession).toBe('function');
+    await expect(refreshBrowserSession!()).resolves.toBeNull();
+    expect(json).toHaveBeenCalledTimes(1);
+  });
+
 });

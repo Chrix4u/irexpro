@@ -55,6 +55,16 @@ export function refreshBrowserSession(): Promise<BrowserAuthTokens | null> {
         body: JSON.stringify({}),
       });
       if (!response.ok) {
+        // Consume the response body before returning. In browser/CI builds the
+        // API base can intentionally point at the Next.js server; a 404 HTML
+        // response that is left unread can keep Chromium's fetch request open
+        // and prevent Playwright/network-idle from settling. The prior shared
+        // ApiClient path always consumed error bodies before throwing.
+        try {
+          await response.json();
+        } catch {
+          // The error body may be HTML or empty; reading it is what matters.
+        }
         setAccessToken(null);
         return null;
       }
