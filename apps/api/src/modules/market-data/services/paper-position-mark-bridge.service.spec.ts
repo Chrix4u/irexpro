@@ -131,6 +131,102 @@ describe('PaperPositionMarkBridgeService', () => {
     expect(getOpenPositions).toHaveBeenCalledTimes(1);
   });
 
+  it('runs protection independently of the 5-second provider refresh and MetaApi collection', async () => {
+    const disabledProviderConfig = {
+      get: jest.fn((key: string, fallback?: unknown) => {
+        const values: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.brokerConnectionId': 'paper-1',
+          'multimodelBrokerExpert.sourceConnectionId': '',
+          METAAPI_QUOTE_COLLECTION_ENABLED: 'false',
+        };
+        return key in values ? values[key] : fallback;
+      }),
+    } as unknown as ConfigService;
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const store = {
+      getLatestPositiveSpreadQuote: jest.fn(),
+    } as unknown as ProviderQuoteCandleStoreService;
+    const getOpenPositions = jest.fn().mockResolvedValue([]);
+    const adapters = brokerAdapters(getOpenPositions);
+    const service = new PaperPositionMarkBridgeService(
+      disabledProviderConfig,
+      paperState,
+      store,
+      livePaper(),
+      adapters,
+    );
+
+    await service.protectOnce();
+
+    expect(adapters.getAdapterForConnection).toHaveBeenCalledWith('paper-1', 'paper-broker');
+    expect(getOpenPositions).toHaveBeenCalledTimes(1);
+    expect(paperState.load).not.toHaveBeenCalled();
+    expect(store.getLatestPositiveSpreadQuote).not.toHaveBeenCalled();
+  });
+
+  it('coalesces overlapping fast protection heartbeats', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const getOpenPositions = jest.fn().mockImplementation(async () => pending);
+    const service = new PaperPositionMarkBridgeService(
+      config(),
+      { load: jest.fn() } as unknown as PaperBrokerStateService,
+      { getLatestPositiveSpreadQuote: jest.fn() } as unknown as ProviderQuoteCandleStoreService,
+      livePaper(),
+      brokerAdapters(getOpenPositions),
+    );
+
+    const first = service.protectOnce();
+    const overlapping = service.protectOnce();
+    expect(getOpenPositions).toHaveBeenCalledTimes(1);
+
+    release();
+    await Promise.all([first, overlapping]);
+    await service.protectOnce();
+    expect(getOpenPositions).toHaveBeenCalledTimes(2);
+  });
+
+  it('schedules a 1-second protection heartbeat even when provider refresh is disabled', async () => {
+    jest.useFakeTimers();
+    try {
+      const disabledProviderConfig = {
+        get: jest.fn((key: string, fallback?: unknown) => {
+          const values: Record<string, unknown> = {
+            'vpsForexScanner.enabled': true,
+            'vpsForexScanner.brokerConnectionId': 'paper-1',
+            'multimodelBrokerExpert.sourceConnectionId': '',
+            METAAPI_QUOTE_COLLECTION_ENABLED: 'false',
+          };
+          return key in values ? values[key] : fallback;
+        }),
+      } as unknown as ConfigService;
+      const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+      const store = {
+        getLatestPositiveSpreadQuote: jest.fn(),
+      } as unknown as ProviderQuoteCandleStoreService;
+      const getOpenPositions = jest.fn().mockResolvedValue([]);
+      const service = new PaperPositionMarkBridgeService(
+        disabledProviderConfig,
+        paperState,
+        store,
+        livePaper(),
+        brokerAdapters(getOpenPositions),
+      );
+
+      service.onModuleInit();
+      await jest.advanceTimersByTimeAsync(1_050);
+
+      expect(getOpenPositions).toHaveBeenCalledTimes(1);
+      expect(store.getLatestPositiveSpreadQuote).not.toHaveBeenCalled();
+      service.onModuleDestroy();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('never lets a temporary adapter/bootstrap failure stop the bridge loop', async () => {
     const paperState = {
       load: jest.fn().mockResolvedValue({ positions: [{ instrument: 'USDCAD' }] }),
