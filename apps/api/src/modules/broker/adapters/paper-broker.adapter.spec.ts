@@ -129,10 +129,18 @@ describe('PAPER time-to-work policy', () => {
     initialRiskPnl: '10.00',
   };
 
-  it('lets a new M5 trade breathe before the first 15-minute checkpoint', () => {
-    expect(evaluatePaperTimeToWork({ ...base, elapsedMinutes: 14.99 })).toMatchObject({
+  it('lets a new M5 trade breathe before the first 5-minute checkpoint', () => {
+    expect(evaluatePaperTimeToWork({ ...base, elapsedMinutes: 4.99 })).toMatchObject({
       shouldClose: false,
       checkpointMinutes: null,
+    });
+  });
+
+  it('cuts a deeply failing non-progressing trade at 5 minutes', () => {
+    expect(evaluatePaperTimeToWork({ ...base, elapsedMinutes: 5 })).toMatchObject({
+      shouldClose: true,
+      checkpointMinutes: 5,
+      reason: 'FAILED_TO_WORK_5M',
     });
   });
 

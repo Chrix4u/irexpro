@@ -576,11 +576,12 @@ function lotSizeToUnits(lotSize: string): bigint {
 
 export interface PaperTimeToWorkDecision {
   shouldClose: boolean;
-  checkpointMinutes: 15 | 30 | 60 | null;
+  checkpointMinutes: 5 | 15 | 30 | 60 | null;
   reason:
     | 'INSUFFICIENT_ELAPSED_TIME'
     | 'INVALID_RISK'
     | 'PROFIT_PROTECTION_OWNS_TRADE'
+    | 'FAILED_TO_WORK_5M'
     | 'FAILED_TO_WORK_15M'
     | 'FAILED_TO_WORK_30M'
     | 'FAILED_TO_WORK_60M'
@@ -598,7 +599,7 @@ export function evaluatePaperTimeToWork(input: {
     checkpointMinutes: PaperTimeToWorkDecision['checkpointMinutes'] = null,
   ): PaperTimeToWorkDecision => ({ shouldClose: false, checkpointMinutes, reason });
   try {
-    if (!Number.isFinite(input.elapsedMinutes) || input.elapsedMinutes < 15)
+    if (!Number.isFinite(input.elapsedMinutes) || input.elapsedMinutes < 5)
       return hold('INSUFFICIENT_ELAPSED_TIME');
     if (compareDecimalStrings(input.initialRiskPnl, '0') <= 0) return hold('INVALID_RISK');
     const risk = input.initialRiskPnl;
@@ -619,6 +620,12 @@ export function evaluatePaperTimeToWork(input: {
       compareDecimalStrings(current, multiplyDecimalStrings(risk, '-0.50')) <= 0
     )
       return { shouldClose: true, checkpointMinutes: 15, reason: 'FAILED_TO_WORK_15M' };
+    if (
+      input.elapsedMinutes >= 5 &&
+      compareDecimalStrings(peak, multiplyDecimalStrings(risk, '0.25')) < 0 &&
+      compareDecimalStrings(current, multiplyDecimalStrings(risk, '-0.50')) <= 0
+    )
+      return { shouldClose: true, checkpointMinutes: 5, reason: 'FAILED_TO_WORK_5M' };
     return hold('HOLD');
   } catch {
     return hold('INVALID_RISK');
