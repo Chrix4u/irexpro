@@ -177,6 +177,33 @@ export interface M1TacticalOutcomeMetrics {
   profitFactor: number | null;
 }
 
+export interface M1ShadowOutcomeMetricsFilter {
+  userId: string;
+  brokerConnectionId: string;
+  route?: M1ReliabilityRoute;
+  instrument?: string;
+  direction?: 'BUY' | 'SELL';
+  policyVersion?: string;
+  from: Date;
+  to: Date;
+}
+
+export interface M1ShadowOutcomeMetrics {
+  totalEpisodeLeaders: number;
+  evaluableEpisodes: number;
+  ambiguousEpisodes: number;
+  unobservableEpisodes: number;
+  positiveEpisodes: number;
+  negativeEpisodes: number;
+  flatEpisodes: number;
+  cumulativeNetR: number;
+  averageNetR: number;
+  grossPositiveR: number;
+  grossNegativeR: number;
+  profitFactor: number | null;
+  maximumDrawdownR: number;
+}
+
 interface DecisionRow {
   id: string;
   user_id: string;
@@ -750,6 +777,110 @@ export class M1TacticalEvidenceService {
       `,
       [decisionId, outcomeState, observedAt.toISOString(), outcomeReason ?? null],
     );
+  }
+
+  async loadShadowOutcomeMetrics(
+    filter: M1ShadowOutcomeMetricsFilter,
+  ): Promise<M1ShadowOutcomeMetrics> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          id,
+          evaluated_at,
+          governance -> 'shadowOutcome15mV1' AS shadow_outcome
+        FROM trading.m1_tactical_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND ($3::text IS NULL OR route = $3)
+          AND ($4::text IS NULL OR instrument = $4)
+          AND ($5::text IS NULL OR direction = $5)
+          AND ($6::text IS NULL OR policy_version = $6)
+          AND evaluated_at >= $7::timestamptz
+          AND evaluated_at <= $8::timestamptz
+          AND governance -> 'shadowOutcome15mV1' ->> 'artifact' = $9
+        ORDER BY evaluated_at ASC
+      `,
+      [
+        filter.userId,
+        filter.brokerConnectionId,
+        filter.route ?? null,
+        filter.instrument?.trim().toUpperCase() ?? null,
+        filter.direction ?? null,
+        filter.policyVersion ?? null,
+        filter.from.toISOString(),
+        filter.to.toISOString(),
+        M1_SHADOW_OUTCOME_15M_ARTIFACT,
+      ],
+    )) as Array<{
+      id: string;
+      evaluated_at: string | Date;
+      shadow_outcome: unknown;
+    }>;
+
+    let evaluableEpisodes = 0;
+    let ambiguousEpisodes = 0;
+    let unobservableEpisodes = 0;
+    let positiveEpisodes = 0;
+    let negativeEpisodes = 0;
+    let flatEpisodes = 0;
+    let cumulativeNetR = 0;
+    let grossPositiveR = 0;
+    let grossNegativeR = 0;
+    let peakNetR = 0;
+    let maximumDrawdownR = 0;
+
+    for (const row of rows) {
+      const outcome = jsonObject(row.shadow_outcome);
+      const state = typeof outcome.outcome === 'string' ? outcome.outcome : '';
+      if (state === 'AMBIGUOUS') {
+        ambiguousEpisodes += 1;
+        continue;
+      }
+      if (state === 'UNOBSERVABLE_DATA_GAP') {
+        unobservableEpisodes += 1;
+        continue;
+      }
+      if (!['TP', 'SL', 'MTM'].includes(state)) continue;
+      const rawNetR = outcome.netRMultiple;
+      if (rawNetR === null || rawNetR === undefined || rawNetR === '') continue;
+      const netR = Number(rawNetR);
+      if (!Number.isFinite(netR)) continue;
+
+      evaluableEpisodes += 1;
+      cumulativeNetR += netR;
+      if (netR > 0) {
+        positiveEpisodes += 1;
+        grossPositiveR += netR;
+      } else if (netR < 0) {
+        negativeEpisodes += 1;
+        grossNegativeR += Math.abs(netR);
+      } else {
+        flatEpisodes += 1;
+      }
+      peakNetR = Math.max(peakNetR, cumulativeNetR);
+      maximumDrawdownR = Math.max(maximumDrawdownR, peakNetR - cumulativeNetR);
+    }
+
+    return {
+      totalEpisodeLeaders: rows.length,
+      evaluableEpisodes,
+      ambiguousEpisodes,
+      unobservableEpisodes,
+      positiveEpisodes,
+      negativeEpisodes,
+      flatEpisodes,
+      cumulativeNetR,
+      averageNetR: evaluableEpisodes > 0 ? cumulativeNetR / evaluableEpisodes : 0,
+      grossPositiveR,
+      grossNegativeR,
+      profitFactor:
+        grossNegativeR > 0
+          ? grossPositiveR / grossNegativeR
+          : grossPositiveR > 0
+            ? Number.POSITIVE_INFINITY
+            : null,
+      maximumDrawdownR,
+    };
   }
 
   async loadOutcomeMetrics(

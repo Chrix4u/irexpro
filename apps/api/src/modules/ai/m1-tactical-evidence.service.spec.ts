@@ -600,3 +600,104 @@ describe('M1TacticalEvidenceService shadow episode evidence', () => {
     }
   });
 });
+
+
+describe('M1TacticalEvidenceService shadow outcome metrics', () => {
+  it('counts all episode outcomes but excludes ambiguous and data-gap observations from P&L metrics', async () => {
+    const rows = [
+      ['2026-10-21T10:16:00.000Z', 'TP', 1.5],
+      ['2026-10-21T10:26:00.000Z', 'SL', -1],
+      ['2026-10-21T10:36:00.000Z', 'MTM', 0.25],
+      ['2026-10-21T10:46:00.000Z', 'AMBIGUOUS', null],
+      ['2026-10-21T10:51:00.000Z', 'TP', null],
+      ['2026-10-21T10:56:00.000Z', 'UNOBSERVABLE_DATA_GAP', null],
+    ].map(([evaluated_at, outcome, netRMultiple], index) => ({
+      id: `leader-${index + 1}`,
+      evaluated_at,
+      shadow_outcome: {
+        artifact: 'm1-shadow-outcome-15m-v1',
+        outcome,
+        netRMultiple,
+      },
+    }));
+    const query = jest.fn().mockResolvedValue(rows);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const result = await service.loadShadowOutcomeMetrics({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      route: 'M1_EARLY_TRANSITION',
+      instrument: 'eurusd',
+      direction: 'BUY',
+      policyVersion: 'm1-tactical-v1',
+      from: new Date('2026-10-21T10:00:00.000Z'),
+      to: new Date('2026-10-21T11:00:00.000Z'),
+    });
+
+    expect(result).toEqual({
+      totalEpisodeLeaders: 6,
+      evaluableEpisodes: 3,
+      ambiguousEpisodes: 1,
+      unobservableEpisodes: 1,
+      positiveEpisodes: 2,
+      negativeEpisodes: 1,
+      flatEpisodes: 0,
+      cumulativeNetR: 0.75,
+      averageNetR: 0.25,
+      grossPositiveR: 1.75,
+      grossNegativeR: 1,
+      profitFactor: 1.75,
+      maximumDrawdownR: 1,
+    });
+
+    const [sql, params] = query.mock.calls[0]!;
+    const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain("governance -> 'shadowOutcome15mV1' AS shadow_outcome");
+    expect(normalized).toContain("governance -> 'shadowOutcome15mV1' ->> 'artifact' = $9");
+    expect(normalized).toContain('user_id = $1');
+    expect(normalized).toContain('broker_connection_id = $2');
+    expect(normalized).toContain('($3::text IS NULL OR route = $3)');
+    expect(normalized).toContain('($4::text IS NULL OR instrument = $4)');
+    expect(normalized).toContain('($5::text IS NULL OR direction = $5)');
+    expect(normalized).toContain('($6::text IS NULL OR policy_version = $6)');
+    expect(normalized).toContain('evaluated_at >= $7::timestamptz');
+    expect(normalized).toContain('evaluated_at <= $8::timestamptz');
+    expect(normalized).toContain('ORDER BY evaluated_at ASC');
+    expect(params).toEqual([
+      input().userId,
+      input().brokerConnectionId,
+      'M1_EARLY_TRANSITION',
+      'EURUSD',
+      'BUY',
+      'm1-tactical-v1',
+      '2026-10-21T10:00:00.000Z',
+      '2026-10-21T11:00:00.000Z',
+      'm1-shadow-outcome-15m-v1',
+    ]);
+  });
+
+  it('uses the existing infinity convention when positive R has no negative denominator', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        id: 'leader-win',
+        evaluated_at: '2026-10-21T10:16:00.000Z',
+        shadow_outcome: {
+          artifact: 'm1-shadow-outcome-15m-v1',
+          outcome: 'TP',
+          netRMultiple: 1.2,
+        },
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const result = await service.loadShadowOutcomeMetrics({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      from: new Date('2026-10-21T10:00:00.000Z'),
+      to: new Date('2026-10-21T11:00:00.000Z'),
+    });
+
+    expect(result.profitFactor).toBe(Number.POSITIVE_INFINITY);
+    expect(result.maximumDrawdownR).toBe(0);
+  });
+});
