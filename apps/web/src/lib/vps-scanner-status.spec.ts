@@ -321,3 +321,103 @@ describe("external provider performance runtime guard", () => {
     ).toBe(false);
   });
 });
+
+describe("production trade-readiness presentation", () => {
+  const statusModule = require("./vps-scanner-status") as Record<string, unknown>;
+
+  function derive(input: Record<string, unknown>) {
+    expect(typeof statusModule.deriveTradeReadinessUiState).toBe("function");
+    return (statusModule.deriveTradeReadinessUiState as (value: Record<string, unknown>) => any)(input);
+  }
+
+  it("never enters the green zone when backend PAPER execution is blocked", () => {
+    const status = JSON.parse(JSON.stringify(VALID_STATUS));
+    status.lastEnsembleDecision.candidateConfidence = 0.91;
+    status.lastEnsembleDecision.metaProbability = 0.81;
+    status.lastEnsembleDecision.expectedR = 0.42;
+    status.lastEnsembleDecision.consensusPassed = 6;
+    status.lastEnsembleDecision.consensusRequired = 6;
+    status.lastEnsembleDecision.paperAdmitted = true;
+    status.lastEnsembleDecision.admitted = true;
+    status.lastEnsembleDecision.governance = {
+      ...status.lastEnsembleDecision.governance,
+      netExpectedR: 0.3,
+      paperNetExpectedRPassed: true,
+      paperDriftPassed: true,
+      driftState: "NORMAL",
+      eventRisk: "CLEAR",
+      paperExecutionEligible: false,
+      paperExecutionBlockers: ["PAIR_SIDE_RELIABILITY"],
+    };
+
+    expect(
+      derive({ automationOn: true, scannerStatus: status, fastMarkState: "LIVE" }),
+    ).toMatchObject({
+      band: "FORMING",
+      tradeExpected: false,
+    });
+    expect(
+      derive({ automationOn: true, scannerStatus: status, fastMarkState: "LIVE" }).score,
+    ).toBeLessThan(70);
+  });
+
+  it("enters the green zone only when the current setup is execution eligible", () => {
+    const status = JSON.parse(JSON.stringify(VALID_STATUS));
+    status.lastEnsembleDecision.candidateConfidence = 0.82;
+    status.lastEnsembleDecision.metaProbability = 0.72;
+    status.lastEnsembleDecision.expectedR = 0.24;
+    status.lastEnsembleDecision.consensusPassed = 6;
+    status.lastEnsembleDecision.consensusRequired = 6;
+    status.lastEnsembleDecision.paperAdmitted = true;
+    status.lastEnsembleDecision.admitted = true;
+    status.lastEnsembleDecision.instrument = "EURUSD";
+    status.lastEnsembleDecision.direction = "BUY";
+    status.lastEnsembleDecision.governance = {
+      ...status.lastEnsembleDecision.governance,
+      netExpectedR: 0.18,
+      paperNetExpectedRPassed: true,
+      paperDriftPassed: true,
+      driftState: "NORMAL",
+      eventRisk: "CLEAR",
+      paperExecutionEligible: true,
+      paperExecutionBlockers: [],
+    };
+
+    const result = derive({
+      automationOn: true,
+      scannerStatus: status,
+      fastMarkState: "LIVE",
+    });
+    expect(result.band).toBe("READY");
+    expect(result.tradeExpected).toBe(true);
+    expect(result.score).toBeGreaterThanOrEqual(70);
+    expect(result.score).toBeLessThanOrEqual(100);
+    expect(result.instrument).toBe("EURUSD");
+    expect(result.direction).toBe("BUY");
+  });
+
+  it("shows a waiting state while the authoritative market schedule is paused", () => {
+    const status = JSON.parse(JSON.stringify(VALID_STATUS));
+    status.marketSchedule.paused = true;
+    status.marketSchedule.reason = "WEEKEND";
+
+    expect(
+      derive({ automationOn: true, scannerStatus: status, fastMarkState: "LIVE" }),
+    ).toMatchObject({
+      band: "WAITING",
+      tradeExpected: false,
+      headline: "Market paused",
+    });
+  });
+
+  it("shows AI stopped instead of implying a setup can execute", () => {
+    expect(
+      derive({ automationOn: false, scannerStatus: VALID_STATUS, fastMarkState: "LIVE" }),
+    ).toMatchObject({
+      score: 0,
+      band: "WAITING",
+      tradeExpected: false,
+      headline: "AI Trading is stopped",
+    });
+  });
+});

@@ -432,23 +432,21 @@ test.describe("AI Trader novice workflow", () => {
       page.getByRole("combobox", { name: "Broker account" }),
     ).toHaveValue(mockBrokerConnections[0].id);
 
-    const researchUat = page.locator(".ai-research-uat-copy");
-    const researchUatHeading = researchUat.getByText(
-      "Research PAPER UAT · simulated execution only.",
-      { exact: true },
-    );
-    const researchUatBody = researchUat.getByText(
-      /Accelerated replay may advance multiple simulated market steps/i,
-    );
-    await expect(researchUatHeading).toBeVisible();
-    await expect(researchUatBody).toBeVisible();
-    const [researchHeadingBox, researchBodyBox] = await Promise.all([
-      researchUatHeading.boundingBox(),
-      researchUatBody.boundingBox(),
-    ]);
-    expect(researchHeadingBox).not.toBeNull();
-    expect(researchBodyBox).not.toBeNull();
-    expect(researchBodyBox!.y).toBeGreaterThan(researchHeadingBox!.y);
+    await expect(page.getByTestId("ai-financial-overview")).toBeVisible();
+    await expect(page.getByText("Equity", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("AI Allocation", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("24h Net P&L", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Open P&L", { exact: true }).first()).toBeVisible();
+
+    const readiness = page.getByRole("meter", { name: "Trade readiness" });
+    await expect(readiness).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Trade Readiness" })).toBeVisible();
+    await expect(page.getByText(/Setup forming|Waiting for a stronger setup|Final checks in progress/).first()).toBeVisible();
+
+    await expect(page.getByText(/Research PAPER UAT/i)).toHaveCount(0);
+    await expect(page.getByText(/Strategy identity & promotion path/i)).toHaveCount(0);
+    await expect(page.getByText(/External signal evidence/i)).toHaveCount(0);
+    await expect(page.getByText("Technical details", { exact: true })).toHaveCount(0);
 
     await expect(
       page.getByText("10,000.00 USD", { exact: true }).first(),
@@ -460,21 +458,14 @@ test.describe("AI Trader novice workflow", () => {
     await expect(pool.getByText("Available", { exact: true })).toBeVisible();
     await expect(pool.getByText("2,250.00 USD", { exact: true })).toBeVisible();
     await expect(
-      pool.getByText("Committed now", { exact: true }),
+      pool.getByText("Capital in use", { exact: true }),
     ).toBeVisible();
     await expect(pool.getByText("250.00 USD", { exact: true })).toBeVisible();
-    await expect(
-      pool.getByText("Open positions", { exact: true }),
-    ).toBeVisible();
-    await expect(pool.getByText("175.00 USD", { exact: true })).toBeVisible();
     await expect(
       pool.getByText("Pending orders", { exact: true }),
     ).toBeVisible();
     await expect(pool.getByText("50.00 USD", { exact: true })).toBeVisible();
-    await expect(
-      pool.getByText("In-flight decisions", { exact: true }),
-    ).toBeVisible();
-    await expect(pool.getByText("25.00 USD", { exact: true })).toBeVisible();
+    await expect(pool.getByText("In-flight decisions", { exact: true })).toHaveCount(0);
     await expect(
       page.getByText(/Shared across multiple AI trades/i),
     ).toBeVisible();
@@ -486,22 +477,15 @@ test.describe("AI Trader novice workflow", () => {
     ).toBeVisible();
 
     await expect(
-      page.getByRole("heading", { level: 2, name: "Live Market Intelligence" }),
+      page.getByRole("heading", { level: 2, name: "Market" }),
     ).toBeVisible();
     await expect(page.getByText("SCANNING", { exact: true })).toBeVisible();
-    await expect(
-      page
-        .locator(".ai-control-card__label")
-        .filter({ hasText: /EURUSD.*GBPUSD.*USDJPY/i })
-        .first(),
-    ).toBeVisible();
-    await expect(page.getByText("54.00%", { exact: true })).toBeVisible();
-    await expect(page.getByText("60.00% gate", { exact: true })).toBeVisible();
-    await expect(
-      page.getByText("Market setup did not meet the confidence threshold", {
-        exact: true,
-      }),
-    ).toBeVisible();
+    await expect(page.getByText("60.00% gate", { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/Candidate .* floor/i)).toHaveCount(0);
+    await expect(page.getByText(/Meta .* gate/i)).toHaveCount(0);
+    await expect(page.getByText(/provider-enriched/i)).toHaveCount(0);
+    await expect(page.getByText(/replay close/i)).toHaveCount(0);
+    await expect(page.getByText(/Research PAPER/i)).toHaveCount(0);
 
     await expect(
       page.getByRole("heading", { level: 2, name: "Open Positions" }),
@@ -532,7 +516,7 @@ test.describe("AI Trader novice workflow", () => {
     await expect(page.getByText("OPEN", { exact: true }).first()).toBeVisible();
     await expect(
       page.getByText(
-        /execution quote was too far from the risk-validated reference price/i,
+        /market moved too far before the order could open/i,
       ),
     ).toBeVisible();
 
