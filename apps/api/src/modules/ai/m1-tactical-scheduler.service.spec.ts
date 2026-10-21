@@ -100,11 +100,15 @@ function harness(options: { marketDataErrorFor?: string; warm?: boolean } = {}) 
   const loadRoutePairSideEvidence = jest.fn().mockResolvedValue([]);
   const loadPendingDriftCounterfactuals = jest.fn().mockResolvedValue([]);
   const markDriftCounterfactual15m = jest.fn().mockResolvedValue(undefined);
+  const loadMatureShadowEpisodeLeaders = jest.fn().mockResolvedValue([]);
+  const markShadowOutcome15mV1 = jest.fn().mockResolvedValue(undefined);
   const evidence = {
     recordDecision,
     loadRoutePairSideEvidence,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
+    loadMatureShadowEpisodeLeaders,
+    markShadowOutcome15mV1,
   } as unknown as M1TacticalEvidenceService;
   const receiveSignal = jest.fn();
   const signal = { receiveSignal } as unknown as AiSignalService;
@@ -117,6 +121,8 @@ function harness(options: { marketDataErrorFor?: string; warm?: boolean } = {}) 
     loadRoutePairSideEvidence,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
+    loadMatureShadowEpisodeLeaders,
+    markShadowOutcome15mV1,
     receiveSignal,
   };
 }
@@ -219,6 +225,126 @@ describe('M1TacticalSchedulerService shadow phase', () => {
         modifiesExecution: false,
         source: 'COMPLETED_M1_OHLC',
         horizonBars: 15,
+      }),
+    );
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
+
+  it('settles a mature governance-clean SHADOW episode from the existing M1 window without dispatching a signal', async () => {
+    const h = harness();
+    h.loadMatureShadowEpisodeLeaders.mockImplementation(async (request: any) =>
+      request.instrument === 'EURUSD'
+        ? [
+            {
+              id: 'shadow-leader-1',
+              instrument: 'EURUSD',
+              direction: 'BUY',
+              route: 'M1_EARLY_TRANSITION',
+              barTime: new Date('2026-10-15T12:14:00.000Z'),
+              evaluatedAt: new Date('2026-10-15T12:14:00.000Z'),
+              policyVersion: 'm1-tactical-v1',
+              stopDistance: 0.0005,
+              targetDistance: 0.0008,
+              estimatedExecutionCostR: 0.0625,
+              executionCostSource: 'BROKER_OBSERVED_P90',
+              rolloutPhase: 'SHADOW',
+            },
+          ]
+        : [],
+    );
+
+    await h.service.runOnce(OPEN_NOW);
+
+    expect(h.loadMatureShadowEpisodeLeaders).toHaveBeenCalledWith({
+      userId: 'user-1',
+      brokerConnectionId: 'conn-1',
+      instrument: 'EURUSD',
+      policyVersion: 'm1-tactical-v1',
+      asOf: new Date('2026-10-15T12:30:00.000Z'),
+    });
+    expect(h.markShadowOutcome15mV1).toHaveBeenCalledTimes(1);
+    expect(h.markShadowOutcome15mV1).toHaveBeenCalledWith(
+      'shadow-leader-1',
+      expect.objectContaining({
+        artifact: 'm1-shadow-outcome-15m-v1',
+        modifiesExecution: false,
+        episodeLeaderDecisionId: 'shadow-leader-1',
+        route: 'M1_EARLY_TRANSITION',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        policyVersion: 'm1-tactical-v1',
+        source: 'COMPLETED_M1_OHLC',
+        outcome: 'TP',
+      }),
+    );
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V1.phase).toBe('SHADOW');
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
+
+  it('keeps a SHADOW episode pending while its causal 15-bar window is not complete', async () => {
+    const h = harness();
+    h.loadMatureShadowEpisodeLeaders.mockImplementation(async (request: any) =>
+      request.instrument === 'EURUSD'
+        ? [
+            {
+              id: 'shadow-pending-1',
+              instrument: 'EURUSD',
+              direction: 'SELL',
+              route: 'M1_TREND_CONTINUATION',
+              barTime: new Date('2026-10-15T12:20:00.000Z'),
+              evaluatedAt: new Date('2026-10-15T12:20:00.000Z'),
+              policyVersion: 'm1-tactical-v1',
+              stopDistance: 0.0005,
+              targetDistance: 0.0008,
+              estimatedExecutionCostR: 0.05,
+              executionCostSource: 'PAPER_SIMULATION_SPREAD',
+              rolloutPhase: 'SHADOW',
+            },
+          ]
+        : [],
+    );
+
+    await h.service.runOnce(OPEN_NOW);
+
+    expect(h.markShadowOutcome15mV1).not.toHaveBeenCalled();
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
+
+  it('finalizes an unreconstructable SHADOW episode beyond the 60-minute observability boundary as a data gap', async () => {
+    const h = harness();
+    h.loadMatureShadowEpisodeLeaders.mockImplementation(async (request: any) =>
+      request.instrument === 'EURUSD'
+        ? [
+            {
+              id: 'shadow-gap-1',
+              instrument: 'EURUSD',
+              direction: 'BUY',
+              route: 'M1_CONFIRMED_REVERSAL',
+              barTime: new Date('2026-10-15T11:20:00.000Z'),
+              evaluatedAt: new Date('2026-10-15T11:20:00.000Z'),
+              policyVersion: 'm1-tactical-v1',
+              stopDistance: 0.0005,
+              targetDistance: 0.0008,
+              estimatedExecutionCostR: 0.07,
+              executionCostSource: 'BROKER_OBSERVED_P90',
+              rolloutPhase: 'SHADOW',
+            },
+          ]
+        : [],
+    );
+
+    await h.service.runOnce(OPEN_NOW);
+
+    expect(h.markShadowOutcome15mV1).toHaveBeenCalledTimes(1);
+    expect(h.markShadowOutcome15mV1).toHaveBeenCalledWith(
+      'shadow-gap-1',
+      expect.objectContaining({
+        artifact: 'm1-shadow-outcome-15m-v1',
+        modifiesExecution: false,
+        source: 'UNOBSERVABLE_DATA_GAP',
+        outcome: 'UNOBSERVABLE_DATA_GAP',
+        grossRMultiple: null,
+        netRMultiple: null,
       }),
     );
     expect(h.receiveSignal).not.toHaveBeenCalled();

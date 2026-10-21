@@ -609,16 +609,14 @@ export class M1TacticalEvidenceService {
             typeof genericGovernance.executionCostSource === 'string'
               ? genericGovernance.executionCostSource
               : null,
-          rolloutPhase: typeof governance.rolloutPhase === 'string' ? governance.rolloutPhase : null,
+          rolloutPhase:
+            typeof governance.rolloutPhase === 'string' ? governance.rolloutPhase : null,
         },
       ];
     });
   }
 
-  async markShadowOutcome15mV1(
-    decisionId: string,
-    outcome: M1ShadowOutcome15mV1,
-  ): Promise<void> {
+  async markShadowOutcome15mV1(decisionId: string, outcome: M1ShadowOutcome15mV1): Promise<void> {
     const payload: M1ShadowOutcome15mV1 = {
       ...outcome,
       artifact: M1_SHADOW_OUTCOME_15M_ARTIFACT,
