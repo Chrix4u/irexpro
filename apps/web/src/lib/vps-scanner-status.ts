@@ -103,6 +103,179 @@ export interface FastMarkFeedUiState {
 
 const EXPECTED_FAST_MARK_INSTRUMENTS = 6;
 
+export type TradeReadinessBand = "WAITING" | "FORMING" | "READY";
+
+export interface TradeReadinessUiState {
+  score: number;
+  band: TradeReadinessBand;
+  headline: string;
+  detail: string;
+  tradeExpected: boolean;
+  instrument: string | null;
+  direction: "BUY" | "SELL" | null;
+}
+
+export interface TradeReadinessUiInput {
+  automationOn: boolean;
+  scannerStatus: unknown;
+  fastMarkState?: FastMarkFeedUiState["state"] | null;
+  fallbackConfidence?: number | null;
+  fallbackThreshold?: number | null;
+}
+
+function finite(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizedProgress(value: number | null, target: number | null): number {
+  if (value == null || target == null || target <= 0) return 0;
+  return Math.max(0, Math.min(1, value / target));
+}
+
+/**
+ * Customer-facing summary of the current trading gates.
+ *
+ * This is presentation-only. It never grants execution authority and can only
+ * enter the green zone when the backend has already declared the current PAPER
+ * setup execution-eligible. Fast-mark health can reduce readiness, never raise it.
+ */
+export function deriveTradeReadinessUiState(
+  input: TradeReadinessUiInput,
+): TradeReadinessUiState {
+  const waiting = (
+    score: number,
+    headline: string,
+    detail: string,
+    instrument: string | null = null,
+    direction: "BUY" | "SELL" | null = null,
+  ): TradeReadinessUiState => ({
+    score: Math.max(0, Math.min(100, Math.round(score))),
+    band: score >= 40 ? "FORMING" : "WAITING",
+    headline,
+    detail,
+    tradeExpected: false,
+    instrument,
+    direction,
+  });
+
+  if (!input.automationOn) {
+    return waiting(
+      0,
+      "AI Trading is stopped",
+      "Start AI Trading when you want iRexPro to evaluate and execute qualified opportunities.",
+    );
+  }
+
+  const status = isRecord(input.scannerStatus) ? input.scannerStatus : null;
+  const schedule = status && isRecord(status.marketSchedule) ? status.marketSchedule : null;
+  if (schedule?.paused === true) {
+    return waiting(
+      8,
+      "Market paused",
+      "The AI is ready to resume automatically when the authoritative market window reopens.",
+    );
+  }
+
+  const decision = status && isRecord(status.lastEnsembleDecision)
+    ? status.lastEnsembleDecision
+    : null;
+  const governance = decision && isRecord(decision.governance) ? decision.governance : null;
+  const thresholds = status && isRecord(status.ensembleThresholds)
+    ? status.ensembleThresholds
+    : null;
+  const instrument = decision && typeof decision.instrument === "string"
+    ? decision.instrument
+    : null;
+  const direction = decision?.direction === "BUY" || decision?.direction === "SELL"
+    ? decision.direction
+    : null;
+
+  if (!decision || !thresholds) {
+    const confidence = finite(input.fallbackConfidence);
+    const threshold = finite(input.fallbackThreshold);
+    const progress = normalizedProgress(confidence, threshold);
+    const score = Math.min(64, 24 + progress * 40);
+    return waiting(
+      score,
+      confidence == null ? "Scanning the market" : "Setup forming",
+      "The AI is evaluating market quality, risk and execution conditions before it can trade.",
+      instrument,
+      direction,
+    );
+  }
+
+  const candidateConfidence = finite(decision.candidateConfidence);
+  const candidateFloor = finite(thresholds.candidateConfidenceFloor);
+  const metaProbability = finite(decision.metaProbability);
+  const metaFloor = finite(thresholds.metaProbabilityFloor);
+  const expectedR = finite(decision.expectedR);
+  const grossFloor = finite(thresholds.grossExpectedRFloor);
+  const consensusPassed = finite(decision.consensusPassed);
+  const consensusRequired = finite(decision.consensusRequired);
+
+  let score = 0;
+  score += normalizedProgress(candidateConfidence, candidateFloor) * 20;
+  score += normalizedProgress(metaProbability, metaFloor) * 15;
+  score += normalizedProgress(expectedR, grossFloor) * 15;
+  score += normalizedProgress(consensusPassed, consensusRequired) * 15;
+  score += governance?.paperNetExpectedRPassed === true ? 10 : 0;
+  score += governance?.paperDriftPassed === true ? 8 : 0;
+  score += governance?.eventRisk === "CLEAR" ? 7 : 0;
+  score += decision.paperAdmitted === true || decision.admitted === true ? 5 : 0;
+  score += governance?.paperExecutionEligible === true ? 5 : 0;
+
+  const executionEligible = governance?.paperExecutionEligible === true;
+  if (executionEligible) score = Math.max(score, 78);
+  else score = Math.min(score, 69);
+
+  if (governance?.eventRisk === "HIGH_IMPACT_BLOCK" || governance?.eventRisk === "UNVERIFIED") {
+    score = Math.min(score, 49);
+  }
+
+  if (input.fastMarkState === "DEGRADED") score = Math.min(score, 64);
+  if (input.fastMarkState === "M5_FALLBACK") score = Math.min(score, 54);
+  if (input.fastMarkState === "UNAVAILABLE") score = Math.min(score, 49);
+
+  const rounded = Math.max(0, Math.min(100, Math.round(score)));
+  const tradeExpected = executionEligible && rounded >= 70 && input.fastMarkState !== "DEGRADED" &&
+    input.fastMarkState !== "M5_FALLBACK" && input.fastMarkState !== "UNAVAILABLE";
+
+  if (tradeExpected) {
+    return {
+      score: rounded,
+      band: "READY",
+      headline: "Trade conditions ready",
+      detail: "The current setup has passed the active model, risk and execution checks. An order may open when final dispatch conditions remain valid.",
+      tradeExpected: true,
+      instrument,
+      direction,
+    };
+  }
+
+  if (rounded >= 40) {
+    return {
+      score: rounded,
+      band: "FORMING",
+      headline: decision.paperAdmitted === true ? "Final checks in progress" : "Setup forming",
+      detail: "Several conditions are aligned, but at least one required trade check is still holding the setup back.",
+      tradeExpected: false,
+      instrument,
+      direction,
+    };
+  }
+
+  return {
+    score: rounded,
+    band: "WAITING",
+    headline: "Waiting for a stronger setup",
+    detail: "The AI is monitoring the market and will stay out until enough conditions align.",
+    tradeExpected: false,
+    instrument,
+    direction,
+  };
+}
+
+
 /**
  * Converts optional scanner market-cache telemetry into one fail-closed UI state.
  * This describes the read-only fast-mark feed only; it never implies execution authority.

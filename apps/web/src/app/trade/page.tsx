@@ -34,6 +34,7 @@ import { loadMarketIntelligence } from "@/lib/market-intelligence";
 import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
 import {
   deriveFastMarkFeedUiState,
+  deriveTradeReadinessUiState,
   hasExternalProviderPerformanceUiShape,
   hasVpsScannerUiShape,
 } from "@/lib/vps-scanner-status";
@@ -866,25 +867,18 @@ interface AiAutomationRuntimeStatus {
 }
 
 function runtimeReasonLabel(reason: string | null | undefined): string {
-  if (!reason) return "Waiting for first market scan";
+  if (!reason) return "Scanning for the next opportunity";
   const labels: Record<string, string> = {
-    confidence_below_threshold:
-      "Market setup did not meet the confidence threshold",
-    confidence_threshold_passed:
-      "Signal passed the confidence threshold and was published",
-    market_data_unchanged:
-      "No new market-data revision was available, so no duplicate signal was published",
-    scheduler_integration_disabled: "AI scheduler integration is disabled",
-    model_not_approved_for_live:
-      "Current AI model is not yet approved for live-money automation",
-    MarketDataError:
-      "Market data is unavailable or invalid; this scan was skipped and no confidence was evaluated",
-    research_uat_replay_budget_exhausted:
-      "Research PAPER replay completed its bounded market steps without an eligible signal",
-    uat_workflow_probe_published:
-      "Synthetic Research PAPER workflow probe published. The model did not pass the normal confidence gate.",
+    confidence_below_threshold: "Waiting for a stronger market setup",
+    confidence_threshold_passed: "Trade conditions qualified",
+    market_data_unchanged: "Waiting for fresh market movement",
+    scheduler_integration_disabled: "AI Trading is temporarily unavailable",
+    model_not_approved_for_live: "Live trading is not enabled for this account",
+    MarketDataError: "Market data is temporarily unavailable",
+    research_uat_replay_budget_exhausted: "No qualified setup found in the latest scan",
+    uat_workflow_probe_published: "No qualified setup found in the latest scan",
   };
-  return labels[reason] ?? reason.replaceAll("_", " ");
+  return labels[reason] ?? "Scanning for the next qualified opportunity";
 }
 
 function formatConfidence(value: number | null | undefined): string {
@@ -904,23 +898,23 @@ function executionReasonLabel(code: string | null | undefined): string | null {
   if (!code) return null;
   const labels: Record<string, string> = {
     MARKET_SAFETY_MARKET_DATA_UNAVAILABLE:
-      "Execution blocked because a current paper-market quote could not be proven.",
+      "Trade skipped because a current market price could not be confirmed.",
     MARKET_SAFETY_STALE_PRICE:
-      "Execution blocked because the provider quote was outside the allowed freshness window.",
+      "Trade skipped because the available market price was not fresh enough.",
     MARKET_SAFETY_ABNORMAL_SPREAD:
-      "Execution blocked because the current spread exceeded the market-safety limit.",
+      "Trade skipped because transaction costs were temporarily too high.",
     MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE:
-      "Execution blocked because the execution quote was too far from the risk-validated reference price.",
+      "Trade skipped because the market moved too far before the order could open.",
     DISPATCH_BOUNDARY_BLOCKED:
-      "Execution authority changed before provider dispatch, so the order was blocked safely.",
+      "Trade skipped because conditions changed before the order could be sent.",
     EXECUTION_UNRESOLVED:
-      "Provider outcome is not yet proven; reconciliation is still required.",
+      "Order confirmation is still pending.",
     EXECUTION_CANCELLED:
-      "The order was cancelled before an active position was established.",
+      "The order was cancelled before a position opened.",
     EXECUTION_REJECTED:
-      "The order was rejected before an active position was established.",
+      "The order was not opened.",
   };
-  return labels[code] ?? "Execution did not establish an active position.";
+  return labels[code] ?? "The order did not establish an active position.";
 }
 
 function sumDecimalStrings(
@@ -1285,6 +1279,160 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
         {trade.closedAt ? ` · Closed ${formatTimestamp(trade.closedAt)}` : ""}
       </div>
     </article>
+  );
+}
+
+
+function signedMoney(
+  value: string | null | undefined,
+  currency: string | null | undefined,
+): string {
+  if (value == null) return "—";
+  const formatted = money(value, currency);
+  if (formatted === "—") return formatted;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return formatted;
+  return `+${formatted}`;
+}
+
+function FinancialKpi({
+  label,
+  value,
+  hint,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  tone?: "positive" | "negative" | "neutral";
+}) {
+  return (
+    <article className={`ai-kpi-card ai-kpi-card--${tone}`}>
+      <span className="ai-kpi-card__label">{label}</span>
+      <strong className="ai-kpi-card__value">{value}</strong>
+      <span className="ai-kpi-card__hint">{hint}</span>
+    </article>
+  );
+}
+
+function TradeReadinessGauge({
+  score,
+  band,
+  headline,
+  detail,
+  tradeExpected,
+  instrument,
+  direction,
+}: {
+  score: number;
+  band: "WAITING" | "FORMING" | "READY";
+  headline: string;
+  detail: string;
+  tradeExpected: boolean;
+  instrument: string | null;
+  direction: "BUY" | "SELL" | null;
+}) {
+  const angle = -180 + Math.max(0, Math.min(100, score)) * 1.8;
+  const tone = band === "READY" ? "ready" : band === "FORMING" ? "forming" : "waiting";
+  return (
+    <section className={`ai-readiness ai-readiness--${tone}`} aria-labelledby="trade-readiness-title">
+      <div className="ai-readiness__head">
+        <div>
+          <p className="workspace-hero__eyebrow">Live decision state</p>
+          <h2 id="trade-readiness-title">Trade Readiness</h2>
+        </div>
+        <Badge variant={band === "READY" ? "success" : band === "FORMING" ? "warning" : "info"}>
+          {band === "READY" ? "TRADE READY" : band === "FORMING" ? "FORMING" : "WAITING"}
+        </Badge>
+      </div>
+      <div
+        className="ai-readiness__meter"
+        role="meter"
+        aria-label="Trade readiness"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={score}
+        aria-valuetext={`${headline}, ${score} percent`}
+      >
+        <div className="ai-readiness__arc" aria-hidden="true">
+          <span className="ai-readiness__needle" style={{ transform: `rotate(${angle}deg)` }} />
+          <span className="ai-readiness__hub" />
+        </div>
+        <strong className="ai-readiness__score">{score}</strong>
+        <span className="ai-readiness__score-label">/ 100</span>
+      </div>
+      <div className="ai-readiness__copy">
+        <strong>{headline}</strong>
+        <p>{detail}</p>
+        {instrument ? (
+          <span className="ai-readiness__focus">
+            Current focus: <b>{instrument}</b>{direction ? ` · ${direction}` : ""}
+          </span>
+        ) : null}
+      </div>
+      <div className="ai-readiness__legend" aria-hidden="true">
+        <span><i className="is-waiting" />Wait</span>
+        <span><i className="is-forming" />Forming</span>
+        <span><i className="is-ready" />Ready</span>
+      </div>
+      <p className="ai-readiness__disclaimer">
+        {tradeExpected
+          ? "Green means the current setup is eligible. Final dispatch checks can still prevent an order if conditions change."
+          : "The AI stays out until the required model, market, risk and execution conditions align."}
+      </p>
+    </section>
+  );
+}
+
+function RealisedPnlMiniChart({
+  trades,
+  currency,
+}: {
+  trades: TradeExecutionView[];
+  currency: string | null | undefined;
+}) {
+  const points = [...trades]
+    .filter((trade) => trade.status === "CLOSED" && trade.realisedPnl != null)
+    .sort((a, b) => Date.parse(a.closedAt ?? a.updatedAt) - Date.parse(b.closedAt ?? b.updatedAt))
+    .slice(-20)
+    .reduce<Array<{ x: number; value: number }>>((rows, trade, index) => {
+      const pnl = Number(trade.realisedPnl);
+      if (!Number.isFinite(pnl)) return rows;
+      const previous = rows.at(-1)?.value ?? 0;
+      rows.push({ x: index, value: previous + pnl });
+      return rows;
+    }, []);
+
+  if (!points.length) {
+    return <div className="ai-performance-chart__empty">Performance appears here after completed trades.</div>;
+  }
+
+  const width = 520;
+  const height = 150;
+  const pad = 12;
+  const values = [0, ...points.map((point) => point.value)];
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = Math.max(max - min, 1);
+  const x = (index: number) =>
+    points.length === 1 ? width / 2 : pad + (index / (points.length - 1)) * (width - pad * 2);
+  const y = (value: number) => pad + ((max - value) / range) * (height - pad * 2);
+  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${x(index)} ${y(point.value)}`).join(" ");
+  const latest = points.at(-1)?.value ?? 0;
+
+  return (
+    <div className="ai-performance-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Recent cumulative realized profit and loss">
+        <line className="ai-performance-chart__zero" x1={pad} x2={width - pad} y1={y(0)} y2={y(0)} />
+        <path className="ai-performance-chart__line" d={path} />
+      </svg>
+      <div className="ai-performance-chart__foot">
+        <span>Last {points.length} completed trade{points.length === 1 ? "" : "s"}</span>
+        <strong className={latest < 0 ? "is-negative" : "is-positive"}>
+          {signedMoney(String(latest), currency)}
+        </strong>
+      </div>
+    </div>
   );
 }
 
@@ -2115,7 +2263,7 @@ export default function AiTradingPage() {
         });
         notify.success(
           selectedBroker.brokerId === "paper-broker"
-            ? "Research PAPER UAT started in the internal simulator. No live broker funds are reachable."
+            ? "Paper Trading started. Simulated funds only; no live broker funds are used."
             : selectedBroker.accountType === "DEMO"
               ? "AI Trading started against this broker's DEMO environment. No live funds are used."
               : "AI Trading started for the verified live account.",
@@ -2232,6 +2380,28 @@ export default function AiTradingPage() {
   const totalUnrealisedPnlUnavailable =
     aiOpenPositions.length > 0 &&
     (positionCurrencies.length !== 1 || totalUnrealisedPnl === null);
+  const tradeReadiness = deriveTradeReadinessUiState({
+    automationOn,
+    scannerStatus: vpsScannerStatus,
+    fastMarkState: fastMarkFeed.state,
+    fallbackConfidence: displayedConfidence,
+    fallbackThreshold: displayedConfidenceThreshold,
+  });
+  const openPnlTone = totalUnrealisedPnlUnavailable || totalUnrealisedPnl == null
+    ? "neutral"
+    : Number(totalUnrealisedPnl) < 0
+      ? "negative"
+      : Number(totalUnrealisedPnl) > 0
+        ? "positive"
+        : "neutral";
+  const netPnlTone = recentExecutionActivity.netRealisedPnl == null
+    ? "neutral"
+    : Number(recentExecutionActivity.netRealisedPnl) < 0
+      ? "negative"
+      : Number(recentExecutionActivity.netRealisedPnl) > 0
+        ? "positive"
+        : "neutral";
+  const showDeveloperDiagnostics = false;
 
   if (restoring) {
     return (
@@ -2285,12 +2455,12 @@ export default function AiTradingPage() {
       <main className="ai-trader" data-testid="ai-trader-workspace">
         <section className="ai-trader__hero">
           <div>
-            <p className="workspace-hero__eyebrow">AI trading made simple</p>
+            <p className="workspace-hero__eyebrow">Autonomous trading control</p>
             <h1>AI Trader</h1>
             <p>
-              Connect your broker, choose how much capital the AI may use, then
-              start AI Trading. Strategy selection, position sizing and risk
-              checks run automatically on the server.
+              Monitor your account, trade readiness and performance from one place.
+              iRexPro opens only qualified opportunities and manages each AI position
+              within your allocation and protection rules.
             </p>
           </div>
           <div className="ai-trader__hero-state" data-ai-state={aiVisualState}>
@@ -2314,7 +2484,7 @@ export default function AiTradingPage() {
               {automationOn ? "RUNNING" : "STOPPED"}
             </Badge>
             {selectedBroker?.brokerId === "paper-broker" && (
-              <Badge variant="warning">RESEARCH PAPER</Badge>
+              <Badge variant="warning">PAPER</Badge>
             )}
           </div>
         </section>
@@ -2334,13 +2504,11 @@ export default function AiTradingPage() {
         )}
         {selectedBroker?.brokerId === "paper-broker" && (
           <Alert variant="info">
-            <div className="ai-research-uat-copy">
-              <strong>Research PAPER UAT · simulated execution only.</strong>
+            <div className="ai-paper-mode-copy">
+              <strong>Paper Trading · simulated funds.</strong>
               <span>
-                Accelerated replay may advance multiple simulated market steps
-                per cycle so the end-to-end AI, risk, execution, position and
-                P&amp;L workflow can be tested faster. No live broker funds are
-                reachable, and model promotion gates remain unchanged.
+                AI decisions, position management and performance are being exercised
+                without placing orders against live broker funds.
               </span>
             </div>
           </Alert>
@@ -2352,6 +2520,80 @@ export default function AiTradingPage() {
           </Card>
         ) : (
           <>
+            <section
+              className="ai-kpi-grid"
+              data-testid="ai-financial-overview"
+              aria-label="AI trading financial overview"
+            >
+              <FinancialKpi
+                label="Equity"
+                value={money(allocation?.brokerEquity, allocation?.accountCurrency)}
+                hint="Current broker account equity"
+              />
+              <FinancialKpi
+                label="AI Allocation"
+                value={money(allocation?.allocatedCapital, allocation?.accountCurrency)}
+                hint={`${money(allocation?.availableCapital, allocation?.accountCurrency)} available`}
+              />
+              <FinancialKpi
+                label="24h Net P&L"
+                value={signedMoney(recentExecutionActivity.netRealisedPnl, recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency)}
+                hint={`${recentExecutionActivity.wins} wins · ${recentExecutionActivity.losses} losses`}
+                tone={netPnlTone}
+              />
+              <FinancialKpi
+                label="Open P&L"
+                value={
+                  aiOpenPositions.length === 0
+                    ? money("0", allocation?.accountCurrency)
+                    : totalUnrealisedPnlUnavailable
+                      ? "Awaiting marks"
+                      : signedMoney(totalUnrealisedPnl, positionCurrency ?? allocation?.accountCurrency)
+                }
+                hint={`${aiOpenPositions.length} open position${aiOpenPositions.length === 1 ? "" : "s"}`}
+                tone={openPnlTone}
+              />
+            </section>
+
+            <section className="ai-production-overview" aria-label="AI trading at a glance">
+              <TradeReadinessGauge {...tradeReadiness} />
+              <section className="ai-performance-panel" aria-labelledby="recent-performance-title">
+                <div className="ai-performance-panel__head">
+                  <div>
+                    <p className="workspace-hero__eyebrow">Realized results</p>
+                    <h2 id="recent-performance-title">Recent Performance</h2>
+                  </div>
+                  <Badge variant={netPnlTone === "negative" ? "error" : netPnlTone === "positive" ? "success" : "info"}>
+                    {recentExecutionActivity.executionCount} trades · 24h
+                  </Badge>
+                </div>
+                <div className="ai-performance-panel__stats">
+                  <div>
+                    <span>Net P&amp;L</span>
+                    <strong className={netPnlTone === "negative" ? "is-negative" : netPnlTone === "positive" ? "is-positive" : ""}>
+                      {signedMoney(recentExecutionActivity.netRealisedPnl, recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Win rate</span>
+                    <strong>
+                      {recentExecutionActivity.wins + recentExecutionActivity.losses + recentExecutionActivity.flats > 0
+                        ? `${((recentExecutionActivity.wins / (recentExecutionActivity.wins + recentExecutionActivity.losses + recentExecutionActivity.flats)) * 100).toFixed(0)}%`
+                        : "—"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Open trades</span>
+                    <strong>{aiOpenPositions.length}</strong>
+                  </div>
+                </div>
+                <RealisedPnlMiniChart
+                  trades={execution?.closedExecutions ?? []}
+                  currency={recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency}
+                />
+              </section>
+            </section>
+
             <section
               className="ai-control-deck"
               aria-label="AI trading controls"
@@ -2400,16 +2642,6 @@ export default function AiTradingPage() {
                     </Link>
                   </>
                 )}
-              </Card>
-
-              <Card className="ai-control-card">
-                <span className="ai-control-card__label">Broker equity</span>
-                <strong className="ai-control-card__value">
-                  {money(allocation?.brokerEquity, allocation?.accountCurrency)}
-                </strong>
-                <span className="ai-control-card__hint">
-                  Authoritative broker account snapshot
-                </span>
               </Card>
 
               <Card className="ai-control-card ai-control-card--allocation">
@@ -2515,19 +2747,10 @@ export default function AiTradingPage() {
                     </dd>
                   </div>
                   <div>
-                    <dt>Committed now</dt>
+                    <dt>Capital in use</dt>
                     <dd>
                       {money(
                         allocation?.committedCapital,
-                        allocation?.accountCurrency,
-                      )}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Open positions</dt>
-                    <dd>
-                      {money(
-                        allocation?.openPositionCommitments,
                         allocation?.accountCurrency,
                       )}
                     </dd>
@@ -2550,15 +2773,6 @@ export default function AiTradingPage() {
                       )}
                     </dd>
                   </div>
-                  <div>
-                    <dt>In-flight decisions</dt>
-                    <dd>
-                      {money(
-                        allocation?.inFlightCommitments,
-                        allocation?.accountCurrency,
-                      )}
-                    </dd>
-                  </div>
                 </dl>
               </Card>
 
@@ -2572,14 +2786,14 @@ export default function AiTradingPage() {
                     {aiOpenPositions.length}
                   </strong>
                   <span className="muted text-sm">
-                    Provider-enriched position state
+                    Live AI-managed positions
                   </span>
                 </Card>
                 <Card className="ai-overview-card ai-overview-card--compact">
                   <span className="ai-control-card__label">AI session</span>
                   <strong className="ai-overview-card__value">
                     {!terminal?.sessionStateKnown
-                      ? "UNAVAILABLE"
+                      ? "Checking"
                       : (terminal.session?.status ?? "STOPPED")}
                   </strong>
                   <span className="muted text-sm">
@@ -2591,30 +2805,22 @@ export default function AiTradingPage() {
                   </span>
                 </Card>
                 <Card className="ai-overview-card ai-overview-card--compact">
-                  <span className="ai-control-card__label">
-                    {automationRuntime?.instruments?.length
-                      ? `${automationRuntime.instruments.join(" · ")} · ${automationRuntime.timeframe ?? "MTF"}`
-                      : "Market snapshot"}
-                  </span>
+                  <span className="ai-control-card__label">Market status</span>
                   <strong className="ai-overview-card__value">
-                    {automationRuntime?.research_uat
-                      ? (automationRuntime.last_market_data_close ?? "—")
-                      : (market?.quote.bid ?? "—")}
+                    {market?.quote.bid ?? automationRuntime?.last_market_data_close ?? "—"}
                   </strong>
                   <span className="muted text-sm">
-                    {automationRuntime?.research_uat
-                      ? automationRuntime.last_market_data_close
-                        ? `Replay close · ${formatTimestamp(automationRuntime.last_market_data_at)}`
-                        : "Awaiting first replay market evaluation"
-                      : market
-                        ? `Spread ${market.quote.spread} · ${market.status}`
-                        : "Market snapshot unavailable"}
+                    {market
+                      ? `Updated ${formatTimestamp(market.quote.timestamp)}`
+                      : automationRuntime?.last_market_data_at
+                        ? `Updated ${formatTimestamp(automationRuntime.last_market_data_at)}`
+                        : "Waiting for a market update"}
                   </span>
                 </Card>
               </div>
             </section>
 
-            {selectedBroker?.brokerId === "paper-broker" && (
+            {showDeveloperDiagnostics && selectedBroker?.brokerId === "paper-broker" && (
               <section
                 className="ai-strategy-path"
                 aria-labelledby="strategy-promotion-title"
@@ -2962,7 +3168,7 @@ export default function AiTradingPage() {
               </section>
             )}
 
-            {selectedBroker?.brokerId === "paper-broker" && (
+            {showDeveloperDiagnostics && selectedBroker?.brokerId === "paper-broker" && (
               <section
                 className="ai-provider-evidence"
                 aria-labelledby="provider-evidence-title"
@@ -4045,8 +4251,8 @@ export default function AiTradingPage() {
               >
                 <div className="ai-cockpit__topbar">
                   <div>
-                    <p className="workspace-hero__eyebrow">AI market cockpit</p>
-                    <h2>Live Market Intelligence</h2>
+                    <p className="workspace-hero__eyebrow">Live market</p>
+                    <h2>Market</h2>
                   </div>
                   <div className="ai-cockpit__status">
                     <MotionStatusOrb
@@ -4078,13 +4284,7 @@ export default function AiTradingPage() {
                             ? "DATA ISSUE"
                             : "SCANNING"}
                     </Badge>
-                    <span
-                      title="Read-only fast market feed. Execution quote authority remains separate."
-                    >
-                      <Badge variant={fastMarkFeed.badgeVariant}>
-                        {fastMarkFeed.badgeLabel}
-                      </Badge>
-                    </span>
+
                   </div>
                 </div>
 
@@ -4179,69 +4379,24 @@ export default function AiTradingPage() {
                     <MarketPriceChart candles={market?.candles ?? []} />
                   </div>
 
-                  <aside
-                    className={`ai-confidence ai-confidence--${confidenceTone}`}
-                  >
-                    <span className="ai-cockpit__label">
-                      {vpsConfidenceActive
-                        ? "Multi-model ensemble score · diagnostic"
-                        : "AI confidence"}
-                    </span>
-                    <strong className="ai-confidence__value">
-                      {formatConfidence(displayedConfidence)}
-                    </strong>
-                    <div className="ai-confidence__track" aria-hidden="true">
-                      <span style={{ width: `${confidencePercent}%` }} />
+                  <aside className={`ai-market-readiness ai-market-readiness--${tradeReadiness.band.toLowerCase()}`}>
+                    <span className="ai-cockpit__label">Current AI view</span>
+                    <strong>{tradeReadiness.headline}</strong>
+                    <p>{tradeReadiness.detail}</p>
+                    <div className="ai-market-readiness__score">
+                      <span>Readiness</span>
+                      <b>{tradeReadiness.score}/100</b>
                     </div>
-                    <div className="ai-confidence__meta">
-                      <span>
-                        {vpsConfidenceActive
-                          ? vpsScannerStatus?.marketSchedule.paused
-                            ? "No new decision while market is paused"
-                            : macroEventBlockDescription
-                              ? `PAPER paused · ${macroEventBlockDescription}`
-                              : vpsScannerStatus?.lastEnsembleDecision.governance?.paperExecutionEligible
-                                ? vpsScannerStatus.executionAuthority === "PAPER_ONLY"
-                                  ? "PAPER signal eligible"
-                                  : "PAPER signal would be eligible"
-                                : vpsScannerStatus?.lastEnsembleDecision.paperAdmitted
-                                  ? "PAPER model admitted · governance blocked"
-                                  : vpsScannerStatus?.lastEnsembleDecision.admitted
-                                    ? "Promotion model admitted · PAPER governance blocked"
-                                    : "Ensemble decision · NO TRADE"
-                          : automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
-                            ? "Waiting for new market data"
-                            : confidencePercent >= 60
-                              ? "Qualified strength"
-                              : "Building conviction"}
-                      </span>
-                      <span>
-                        {vpsConfidenceActive
-                          ? `${vpsScannerStatus?.lastEnsembleDecision.consensusPassed ?? 0} passed · ${vpsScannerStatus?.lastEnsembleDecision.consensusRequired ?? 0} required`
-                          : `${formatConfidence(displayedConfidenceThreshold)} gate`}
-                      </span>
-                    </div>
-                    {vpsConfidenceActive && vpsScannerStatus?.lastEnsembleDecision.evaluatedAt ? (
-                      <p>
-                        Candidate {formatConfidence(vpsScannerStatus.lastEnsembleDecision.candidateConfidence)} / {formatConfidence(vpsScannerStatus.ensembleThresholds.candidateConfidenceFloor)} floor · Meta {formatConfidence(vpsScannerStatus.lastEnsembleDecision.metaProbability)} / {formatConfidence(vpsScannerStatus.ensembleThresholds.metaProbabilityFloor)} gate · Gross EV {providerMetric(vpsScannerStatus.lastEnsembleDecision.expectedR, 3)} R / {providerMetric(vpsScannerStatus.ensembleThresholds.grossExpectedRFloor, 3)} R · Net EV {providerMetric(vpsScannerStatus.lastEnsembleDecision.governance?.netExpectedR ?? null, 3)} R / &gt; {providerMetric(vpsScannerStatus.ensembleThresholds.paperNetExpectedRFloor, 3)} R PAPER · {providerMetric(vpsScannerStatus.ensembleThresholds.promotionNetExpectedRFloor, 3)} R promotion · Sleeve {vpsScannerStatus.lastEnsembleDecision.governance?.sleeveState ?? "UNKNOWN"} {vpsScannerStatus.lastEnsembleDecision.governance?.sleeveEvidence?.closedTrades ?? 0}/{vpsScannerStatus.ensembleThresholds.sleeveCoreMinClosedTrades}
-                      </p>
+                    {tradeReadiness.instrument ? (
+                      <div className="ai-market-readiness__focus">
+                        <span>Focus</span>
+                        <b>{tradeReadiness.instrument}{tradeReadiness.direction ? ` · ${tradeReadiness.direction}` : ""}</b>
+                      </div>
                     ) : null}
-                    <p>
-                      {vpsConfidenceActive
-                        ? vpsScannerStatus?.marketSchedule.paused
-                          ? `Market paused: ${vpsScannerStatus.marketSchedule.reason === "WEEKEND" ? "weekend closure" : "rollover / low-liquidity window"}. Next eligible scan ${formatTimestamp(vpsScannerStatus.marketSchedule.nextEligibleScanAt)}.`
-                          : macroEventBlockDescription
-                            ? `PAPER execution is intentionally paused for ${macroEventBlockDescription}. Market scanning continues; no order will be sent inside this safety window.`
-                            : vpsScannerStatus?.lastEnsembleDecision.evaluatedAt
-                              ? `${vpsScannerStatus.lastEnsembleDecision.instrument ?? "Setup"} ${vpsScannerStatus.lastEnsembleDecision.direction ?? ""} · ${vpsScannerStatus.lastEnsembleDecision.regime ?? "regime pending"} · ${vpsScannerStatus.lastEnsembleDecision.reasons.join(", ") || "ADMIT"} · PAPER ${vpsScannerStatus.lastEnsembleDecision.governance?.paperExecutionEligible ? "eligible" : `blocked: ${vpsScannerStatus.lastEnsembleDecision.governance?.paperExecutionBlockers.join(", ") || "MODEL"}`} · DEMO/LIVE promotion ${vpsScannerStatus.lastEnsembleDecision.governance?.paperPromotionEligible ? "eligible for review" : "locked"} · evaluated ${formatTimestamp(vpsScannerStatus.lastEnsembleDecision.evaluatedAt)}`
-                            : "Multi-model ensemble is waiting for its first eligible market scan. Legacy v7 cannot execute during this transition."
-                        : automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
-                          ? `No new candle after ${formatTimestamp(automationRuntime?.last_market_data_at)}. Confidence will update when a new market revision is evaluated.`
-                          : runtimeReasonLabel(automationRuntime?.last_reason)}
-                    </p>
                   </aside>
                 </div>
 
+                {showDeveloperDiagnostics ? (
                 <details className="ai-cockpit__technical">
                   <summary>Technical details</summary>
                   <div className="ai-cockpit__technical-grid">
@@ -4335,6 +4490,7 @@ export default function AiTradingPage() {
                     </div>
                   </div>
                 </details>
+                ) : null}
               </section>
             )}
 
