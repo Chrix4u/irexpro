@@ -38,6 +38,8 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
   const [linkedConnection, setLinkedConnection] = useState<BrokerConnectionView | null>(null);
 
   useEffect(() => {
+    if (restoring || !user || phase !== 'exchanging') return;
+
     let cancelled = false;
     (async () => {
       const storedFlowId = sessionStorage.getItem(IREXPRO_BROKER_OAUTH_FLOW_KEY);
@@ -76,7 +78,7 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
     return () => {
       cancelled = true;
     };
-  }, [code]);
+  }, [code, phase, restoring, user]);
 
   const handleLink = useCallback(
     async (account: BrokerOAuthAccount) => {
