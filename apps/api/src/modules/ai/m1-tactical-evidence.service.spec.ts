@@ -459,3 +459,144 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(JSON.parse(params[1])).toEqual(observation);
   });
 });
+
+
+describe('M1TacticalEvidenceService shadow episode evidence', () => {
+  it('loads only mature independent SHADOW episode leaders from governance-clean chronology', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        id: 'decision-leader-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        route: 'M1_EARLY_TRANSITION',
+        bar_time: '2026-10-21T10:00:00.000Z',
+        evaluated_at: '2026-10-21T10:00:30.000Z',
+        policy_version: 'm1-tactical-v1',
+        candidate: { stopDistance: 0.0005, targetDistance: 0.0008 },
+        governance: {
+          genericGovernance: {
+            estimatedExecutionCostR: 0.0625,
+            executionCostSource: 'PAPER_SIMULATION_SPREAD',
+          },
+          rolloutPhase: 'SHADOW',
+        },
+      },
+      {
+        id: 'decision-leader-2',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        route: 'M1_EARLY_TRANSITION',
+        bar_time: '2026-10-21T10:07:00.000Z',
+        evaluated_at: '2026-10-21T10:07:30.000Z',
+        policy_version: 'm1-tactical-v1',
+        candidate: { stopDistance: 0.0006, targetDistance: 0.0009 },
+        governance: {
+          genericGovernance: {
+            estimatedExecutionCostR: 0.05,
+            executionCostSource: 'BROKER_OBSERVED_P90',
+          },
+          rolloutPhase: 'SHADOW',
+        },
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const asOf = new Date('2026-10-21T10:30:00.000Z');
+
+    const result = await service.loadMatureShadowEpisodeLeaders({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'eurusd',
+      policyVersion: 'm1-tactical-v1',
+      asOf,
+    });
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 'decision-leader-1',
+        route: 'M1_EARLY_TRANSITION',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        policyVersion: 'm1-tactical-v1',
+        stopDistance: 0.0005,
+        targetDistance: 0.0008,
+        estimatedExecutionCostR: 0.0625,
+        executionCostSource: 'PAPER_SIMULATION_SPREAD',
+        rolloutPhase: 'SHADOW',
+      }),
+      expect.objectContaining({ id: 'decision-leader-2', stopDistance: 0.0006 }),
+    ]);
+
+    const [sql, params] = query.mock.calls[0]!;
+    const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain("route <> 'ABSTAIN'");
+    expect(normalized).toContain("execution_authority = 'NONE'");
+    expect(normalized).toContain(
+      `(blockers = '[]'::jsonb OR blockers = '["M1_PHASE_SHADOW"]'::jsonb)`,
+    );
+    expect(normalized).toContain('LAG(bar_time) OVER');
+    expect(normalized).toContain(
+      'PARTITION BY user_id, broker_connection_id, instrument, direction, route, policy_version',
+    );
+    expect(normalized).toContain("bar_time - previous_bar_time > interval '5 minutes'");
+    expect(normalized).toContain("governance -> 'shadowOutcome15mV1' IS NULL");
+    expect(normalized).toContain("evaluated_at <= ($5::timestamptz - interval '16 minutes')");
+    expect(normalized).toContain('policy_version = $4');
+    expect(normalized).toContain('instrument = $3');
+    expect(params).toEqual([
+      input().userId,
+      input().brokerConnectionId,
+      'EURUSD',
+      'm1-tactical-v1',
+      asOf.toISOString(),
+    ]);
+  });
+
+  it('persists shadowOutcome15mV1 idempotently without writing real execution outcome fields', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const outcome = {
+      artifact: 'm1-shadow-outcome-15m-v1' as const,
+      modifiesExecution: false as const,
+      episodeLeaderDecisionId: 'decision-leader-1',
+      episodeStartBarTime: '2026-10-21T10:00:00.000Z',
+      route: 'M1_EARLY_TRANSITION' as const,
+      instrument: 'EURUSD',
+      direction: 'BUY' as const,
+      policyVersion: 'm1-tactical-v1',
+      source: 'COMPLETED_M1_OHLC' as const,
+      executionCostSource: 'PAPER_SIMULATION_SPREAD',
+      rolloutPhase: 'SHADOW',
+      outcome: 'TP' as const,
+      entryBarOpenTime: '2026-10-21T10:01:00.000Z',
+      observedAt: '2026-10-21T10:16:00.000Z',
+      terminalBarOpenTime: '2026-10-21T10:04:00.000Z',
+      entryPrice: 1.1,
+      stopLoss: 1.0995,
+      takeProfit: 1.1008,
+      terminalPrice: 1.1008,
+      estimatedExecutionCostR: 0.0625,
+      grossRMultiple: 1.6,
+      netRMultiple: 1.5375,
+    };
+
+    await service.markShadowOutcome15mV1('decision-leader-1', outcome);
+    await service.markShadowOutcome15mV1('decision-leader-1', outcome);
+
+    expect(query).toHaveBeenCalledTimes(2);
+    for (const [sql, params] of query.mock.calls) {
+      const normalized = String(sql).replace(/\s+/g, ' ');
+      expect(normalized).toContain("jsonb_set(governance, '{shadowOutcome15mV1}'");
+      expect(normalized).toContain("governance -> 'shadowOutcome15mV1' IS NULL");
+      expect(normalized).not.toContain('outcome_state =');
+      expect(normalized).not.toContain('outcome_reason =');
+      expect(normalized).not.toContain('signal_id =');
+      expect(normalized).not.toContain('trade_intent_id =');
+      expect(params[0]).toBe('decision-leader-1');
+      expect(JSON.parse(params[1])).toMatchObject({
+        artifact: 'm1-shadow-outcome-15m-v1',
+        modifiesExecution: false,
+        outcome: 'TP',
+      });
+    }
+  });
+});
