@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import OnboardingBrokerPage from './page';
 import BrokerOAuthCallbackClient from './callback/callback-client';
 import { IREXPRO_BROKER_OAUTH_FLOW_KEY } from '@/lib/broker-oauth-flow';
@@ -13,6 +13,7 @@ const listSupportedBrokers = jest.fn();
 const listBrokerConnections = jest.fn();
 const listBrokerRegistry = jest.fn();
 const completeBrokerOAuth = jest.fn();
+const linkBrokerOAuth = jest.fn();
 
 
 jest.mock('@/components/ui', () => {
@@ -50,6 +51,7 @@ jest.mock('@/lib/api', () => ({
     listBrokerConnections: (...args: unknown[]) => listBrokerConnections(...args),
     listBrokerRegistry: (...args: unknown[]) => listBrokerRegistry(...args),
     completeBrokerOAuth: (...args: unknown[]) => completeBrokerOAuth(...args),
+    linkBrokerOAuth: (...args: unknown[]) => linkBrokerOAuth(...args),
   },
 }));
 
@@ -81,6 +83,7 @@ describe('broker auth restoration gating', () => {
     listBrokerConnections.mockReset().mockResolvedValue([]);
     listBrokerRegistry.mockReset().mockResolvedValue({ brokers: [] });
     completeBrokerOAuth.mockReset().mockResolvedValue({ flowId: 'flow-1', accounts: [] });
+    linkBrokerOAuth.mockReset().mockResolvedValue({ brokerName: 'Spotware', accountId: '1234567' });
     sessionStorage.clear();
   });
 
@@ -118,5 +121,42 @@ describe('broker auth restoration gating', () => {
         code: 'authorization-code',
       });
     });
+    expect(sessionStorage.getItem(IREXPRO_BROKER_OAUTH_FLOW_KEY)).toBe('flow-1');
   });
+
+  it('retains the authorized flow until durable account linking succeeds', async () => {
+    authState.user = { id: 'user-1' };
+    authState.restoring = false;
+    sessionStorage.setItem(IREXPRO_BROKER_OAUTH_FLOW_KEY, 'flow-1');
+    completeBrokerOAuth.mockResolvedValue({
+      flowId: 'flow-1',
+      accounts: [
+        {
+          ctidTraderAccountId: '1234567',
+          isLive: false,
+          traderLogin: 987654,
+          brokerTitleShort: 'Spotware',
+        },
+      ],
+    });
+
+    render(<BrokerOAuthCallbackClient code="authorization-code" />);
+
+    const linkButton = await screen.findByRole('button', { name: 'Link this account' });
+    expect(sessionStorage.getItem(IREXPRO_BROKER_OAUTH_FLOW_KEY)).toBe('flow-1');
+
+    fireEvent.click(linkButton);
+
+    await waitFor(() => {
+      expect(linkBrokerOAuth).toHaveBeenCalledWith({
+        flowId: 'flow-1',
+        ctidTraderAccountId: '1234567',
+        displayName: 'Spotware DEMO 1234567',
+      });
+    });
+    await waitFor(() => {
+      expect(sessionStorage.getItem(IREXPRO_BROKER_OAUTH_FLOW_KEY)).toBeNull();
+    });
+  });
+
 });

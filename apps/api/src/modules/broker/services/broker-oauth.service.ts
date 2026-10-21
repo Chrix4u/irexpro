@@ -287,6 +287,26 @@ export class BrokerOAuthService {
   ): Promise<BrokerOAuthCompleteResult> {
     const flow = await this.requireOwnedFlow(flowId, userId);
     await this.sweepStaleFlows();
+
+    // Web callback recovery: once the provider code has been exchanged, the
+    // durable AUTHORIZED flow is the source of truth. A browser reload or a
+    // lost response may call this endpoint again with the now-spent provider
+    // code; return only the already-sanitized account discovery result and
+    // NEVER replay the code against cTrader. The flow id is still tenant-bound
+    // by requireOwnedFlow(), and expiry remains fail-closed.
+    if (flow.state === 'AUTHORIZED') {
+      await this.assertNotExpired(
+        flow,
+        'The broker OAuth authorization has expired — start again.',
+      );
+      if (flow.accounts === null) {
+        throw new ConflictException(
+          'The broker OAuth authorization is incomplete — start the authorization flow again.',
+        );
+      }
+      return { flowId, accounts: flow.accounts };
+    }
+
     if (flow.state !== 'PENDING') {
       throw new ConflictException('This broker OAuth flow is not awaiting an authorization code.');
     }
