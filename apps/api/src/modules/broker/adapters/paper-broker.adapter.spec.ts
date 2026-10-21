@@ -215,8 +215,8 @@ describe('PAPER profit-lock policy', () => {
     ).toMatchObject({
       armed: true,
       shouldClose: true,
-      retentionFraction: '0.40',
-      protectedFloorPnl: '2.00',
+      retentionFraction: '0.70',
+      protectedFloorPnl: '3.50',
     });
 
     expect(
@@ -228,21 +228,21 @@ describe('PAPER profit-lock policy', () => {
     ).toMatchObject({
       armed: true,
       shouldClose: true,
-      retentionFraction: '0.70',
-      protectedFloorPnl: '5.60',
+      retentionFraction: '0.75',
+      protectedFloorPnl: '6.00',
     });
 
     expect(
       evaluatePaperProfitLock({
         maxFavorablePnl: '12.00',
-        currentPnl: '9.10',
+        currentPnl: '9.70',
         initialRiskPnl: '10.00',
       }),
     ).toMatchObject({
       armed: true,
       shouldClose: false,
-      retentionFraction: '0.75',
-      protectedFloorPnl: '9.00',
+      retentionFraction: '0.80',
+      protectedFloorPnl: '9.60',
     });
 
     expect(
@@ -254,8 +254,8 @@ describe('PAPER profit-lock policy', () => {
     ).toMatchObject({
       armed: true,
       shouldClose: true,
-      retentionFraction: '0.80',
-      protectedFloorPnl: '12.80',
+      retentionFraction: '0.85',
+      protectedFloorPnl: '13.60',
     });
 
     expect(
@@ -267,12 +267,27 @@ describe('PAPER profit-lock policy', () => {
     ).toMatchObject({
       armed: true,
       shouldClose: true,
-      retentionFraction: '0.85',
-      protectedFloorPnl: '18.70',
+      retentionFraction: '0.90',
+      protectedFloorPnl: '19.80',
     });
   });
 
-  it('retains seventy percent of a near-1R peak instead of surrendering most of the winner', () => {
+  it("retains seventy percent of a just-over-half-R peak like today's USDCHF winner", () => {
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '7.50',
+        currentPnl: '5.24',
+        initialRiskPnl: '12.36',
+      }),
+    ).toMatchObject({
+      armed: true,
+      shouldClose: true,
+      retentionFraction: '0.70',
+      protectedFloorPnl: '5.25',
+    });
+  });
+
+  it('retains seventy-five percent of a near-1R peak instead of surrendering most of the winner', () => {
     expect(
       evaluatePaperProfitLock({
         maxFavorablePnl: '10.00',
@@ -282,8 +297,8 @@ describe('PAPER profit-lock policy', () => {
     ).toMatchObject({
       armed: true,
       shouldClose: true,
-      retentionFraction: '0.70',
-      protectedFloorPnl: '7.00',
+      retentionFraction: '0.75',
+      protectedFloorPnl: '7.50',
     });
   });
 
@@ -1394,16 +1409,16 @@ describe('PaperBrokerAdapter', () => {
       const [closed] = await sim.getClosedTrades(new Date(0), new Date(CLOCK_BASE_MS + 60_000));
       // The armed protection behaves like a resting broker-side level under
       // the PAPER simulator's existing zero-gap protection assumption. The
-      // peak was $9 on $10 initial risk, so the 70% retention tier protects
-      // $6.30 rather than surrendering most of the trade to the later $2 sampled mark.
+      // peak was $9 on $10 initial risk, so the 75% retention tier protects
+      // about $6.75 rather than surrendering most of the trade to the later $2 sampled mark.
       expect(closed).toMatchObject({
-        closePrice: '1.10073',
+        closePrice: '1.10078',
         closeReason: 'PROFIT_LOCK',
-        realisedPnl: '6.30',
+        realisedPnl: '6.80',
       });
       expect(closed.pathDiagnostics).toMatchObject({
         maxFavorablePnl: '9.00',
-        profitGiveback: '2.70',
+        profitGiveback: '2.20',
       });
     } finally {
       if (previous === undefined) delete process.env.PAPER_PROFIT_LOCK_ENABLED;

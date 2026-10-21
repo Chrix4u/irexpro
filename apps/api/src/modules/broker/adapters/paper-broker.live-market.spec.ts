@@ -256,7 +256,7 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
         orderKind: 'MARKET',
       });
 
-      // Reach just above +0.50R, then give back below the 40%-of-peak floor.
+      // Reach just above +0.50R, then give back below the 70%-of-peak floor.
       live.updateStreamingMidQuote('EURUSD', 1.1008, new Date(), 'conn-profit-lock-always-on');
       expect(await adapter.getOpenPositions()).toHaveLength(1);
 
@@ -304,7 +304,7 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
       expect(positions).toHaveLength(1);
       expect(Number(positions[0]!.pathDiagnostics?.maxFavorablePnl)).toBeGreaterThan(0.6);
 
-      // Retreat below the new 40%-of-peak floor at the first +0.50R tier.
+      // Retreat below the new 70%-of-peak floor at the first +0.50R tier.
       // Fresh mark protection must close immediately instead of waiting for TP, SL or M5 close.
       live.updateStreamingMidQuote('EURUSD', 1.1002, new Date(), 'conn-profit-lock');
       positions = await adapter.getOpenPositions();
