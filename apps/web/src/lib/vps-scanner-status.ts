@@ -102,6 +102,8 @@ export interface FastMarkFeedUiState {
 }
 
 const EXPECTED_FAST_MARK_INSTRUMENTS = 6;
+const MAX_BLOCKED_GATE_SCORE = 95;
+const MAX_BLOCKED_READINESS_SCORE = 69;
 
 export type TradeReadinessBand = "WAITING" | "FORMING" | "READY";
 
@@ -225,8 +227,18 @@ export function deriveTradeReadinessUiState(
   score += governance?.paperExecutionEligible === true ? 5 : 0;
 
   const executionEligible = governance?.paperExecutionEligible === true;
-  if (executionEligible) score = Math.max(score, 78);
-  else score = Math.min(score, 69);
+  if (executionEligible) {
+    score = Math.max(score, 78);
+  } else {
+    // Preserve the full 0–69 forming range instead of pinning every strong-but-
+    // blocked setup at 69. The blocked score is normalized against the maximum
+    // points available before execution eligibility (95). Green remains reserved
+    // exclusively for backend-declared execution-eligible setups.
+    score = Math.min(
+      MAX_BLOCKED_READINESS_SCORE,
+      (score / MAX_BLOCKED_GATE_SCORE) * MAX_BLOCKED_READINESS_SCORE,
+    );
+  }
 
   if (governance?.eventRisk === "HIGH_IMPACT_BLOCK" || governance?.eventRisk === "UNVERIFIED") {
     score = Math.min(score, 49);
