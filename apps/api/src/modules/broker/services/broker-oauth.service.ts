@@ -295,7 +295,10 @@ export class BrokerOAuthService {
     // NEVER replay the code against cTrader. The flow id is still tenant-bound
     // by requireOwnedFlow(), and expiry remains fail-closed.
     if (flow.state === 'AUTHORIZED') {
-      await this.assertNotExpired(flow, 'The broker OAuth authorization has expired — start again.');
+      await this.assertNotExpired(
+        flow,
+        'The broker OAuth authorization has expired — start again.',
+      );
       if (flow.accounts === null) {
         throw new ConflictException(
           'The broker OAuth authorization is incomplete — start the authorization flow again.',
