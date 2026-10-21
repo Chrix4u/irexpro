@@ -22,6 +22,11 @@ const REALTIME_REQUEST_ZONE =
   'limit_req_zone $server_name zone=irexpro_realtime_requests:1m rate=200r/s;';
 const REALTIME_CONNECTION_ZONE =
   'limit_conn_zone $server_name zone=irexpro_realtime_connections:1m;';
+const OAUTH_CALLBACK_LOCATION = 'location = /onboarding/broker/callback {';
+const REQUIRED_OAUTH_CALLBACK_DIRECTIVES = [
+  'access_log off;',
+  'add_header Referrer-Policy "no-referrer" always;',
+];
 const REQUIRED_REALTIME_DIRECTIVES = [
   'client_max_body_size 64k;',
   'limit_req zone=irexpro_realtime_requests burst=400 nodelay;',
@@ -87,6 +92,23 @@ export function validateProductionRunbookRealtimePolicy(source) {
   for (const directive of [REALTIME_REQUEST_ZONE, REALTIME_CONNECTION_ZONE]) {
     if (!section.includes(directive)) {
       errors.push(`production runbook is missing realtime safety-zone directive: ${directive}`);
+    }
+  }
+
+  const oauthCallbackLocations = extractBlocks(section, OAUTH_CALLBACK_LOCATION, errors);
+  if (oauthCallbackLocations.length !== 1) {
+    errors.push(
+      `production runbook must show exactly 1 OAuth callback location, found ${oauthCallbackLocations.length}`,
+    );
+  } else {
+    const oauthCallbackLocation = oauthCallbackLocations[0];
+    for (const directive of REQUIRED_OAUTH_CALLBACK_DIRECTIVES) {
+      if (!oauthCallbackLocation.includes(directive)) {
+        errors.push(`production runbook OAuth callback location is missing: ${directive}`);
+      }
+    }
+    if (!oauthCallbackLocation.includes('proxy_pass http://irexpro_frontend;')) {
+      errors.push('production runbook OAuth callback location must proxy to irexpro_frontend');
     }
   }
 
@@ -180,6 +202,21 @@ export function validateNginxPolicy(source) {
     }
   }
 
+  const oauthCallbackLocations = extractBlocks(activeDirectives, OAUTH_CALLBACK_LOCATION, errors);
+  if (oauthCallbackLocations.length !== 1) {
+    errors.push(`expected exactly 1 OAuth callback location, found ${oauthCallbackLocations.length}`);
+  } else {
+    const oauthCallbackLocation = oauthCallbackLocations[0];
+    for (const directive of REQUIRED_OAUTH_CALLBACK_DIRECTIVES) {
+      if (!oauthCallbackLocation.includes(directive)) {
+        errors.push(`OAuth callback location is missing required directive: ${directive}`);
+      }
+    }
+    if (!oauthCallbackLocation.includes('proxy_pass http://irexpro_web;')) {
+      errors.push('OAuth callback location must proxy to irexpro_web');
+    }
+  }
+
   const apiLocations = extractBlocks(activeDirectives, 'location ^~ /api/v1/ {', errors);
   if (apiLocations.length !== 1) {
     errors.push(`expected exactly 1 public API location, found ${apiLocations.length}`);
@@ -265,6 +302,18 @@ function runSelfTest() {
       `production runbook failed before adversarial tests: ${runbookBaselineErrors.join('; ')}`,
     );
   }
+
+  expectRejected(
+    'missing OAuth callback log suppression',
+    canonicalSource.replace('access_log off;', 'access_log on;'),
+  );
+  expectRejected(
+    'missing OAuth callback no-referrer policy',
+    canonicalSource.replace(
+      'add_header Referrer-Policy "no-referrer" always;',
+      'add_header Referrer-Policy "strict-origin-when-cross-origin" always;',
+    ),
+  );
 
   expectRejected(
     'missing Socket.IO route',

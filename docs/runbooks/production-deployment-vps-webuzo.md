@@ -785,6 +785,10 @@ A version-controlled example is also at
   or route unpredictably.
 - Use `location ^~ /api/v1/` (with `^~`) for the NestJS API so it takes
   precedence over the frontend `location /` catch-all.
+- The cTrader OAuth callback carries a one-time authorization code in its query
+  string. Give `/onboarding/broker/callback` an exact location with `access_log
+  off` and `Referrer-Policy: no-referrer` so neither the callback request nor
+  subsequent API Referer values persist that code in reverse-proxy logs.
 - Route the default Socket.IO / Engine.IO transport path with an explicit
   `location ^~ /socket.io/` block to the NestJS API. `/realtime` is the
   application namespace; it is not the HTTP/WebSocket transport path.
@@ -852,6 +856,18 @@ server {
         proxy_read_timeout 75s;
         proxy_send_timeout 75s;
         proxy_buffering off;
+    }
+
+    # ── cTrader OAuth callback — never log authorization-code URLs ──
+    location = /onboarding/broker/callback {
+        access_log off;
+        proxy_pass http://irexpro_frontend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Referrer-Policy "no-referrer" always;
     }
 
     # ── NestJS API (public) — takes precedence over the frontend catch-all ──
@@ -944,6 +960,7 @@ any frontend.
 
 | Nginx location | Proxies to | Purpose |
 |---|---|---|
+| `location = /onboarding/broker/callback` | `http://127.0.0.1:3005` (Next.js web) | cTrader callback; access logging off + no-referrer |
 | `location ^~ /api/v1/` | `http://127.0.0.1:3010` (NestJS API) | Public API — takes precedence |
 | `location ^~ /socket.io/` | `http://127.0.0.1:3010` (NestJS realtime transport) | Engine.IO handshake, polling, and WebSocket upgrade; `/realtime` remains the Socket.IO namespace |
 | `location ^~ /_next/static/` | `http://127.0.0.1:3005` (Next.js web) | Web static assets — cache aggressively |
