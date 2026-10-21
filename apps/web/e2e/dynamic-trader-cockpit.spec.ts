@@ -751,7 +751,7 @@ test.describe("AI Trader novice workflow", () => {
     await expect(
       page
         .getByLabel("Trading snapshot")
-        .getByText("UNAVAILABLE", { exact: true }),
+        .getByText("Checking", { exact: true }),
     ).toBeVisible();
     await expect(
       page.getByText(/Something went wrong\. Please try again\./i),

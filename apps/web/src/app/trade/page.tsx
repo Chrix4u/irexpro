@@ -2793,7 +2793,7 @@ export default function AiTradingPage() {
                   <span className="ai-control-card__label">AI session</span>
                   <strong className="ai-overview-card__value">
                     {!terminal?.sessionStateKnown
-                      ? "CHECKING"
+                      ? "Checking"
                       : (terminal.session?.status ?? "STOPPED")}
                   </strong>
                   <span className="muted text-sm">
