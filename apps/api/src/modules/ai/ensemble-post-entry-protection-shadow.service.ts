@@ -568,6 +568,13 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
   }
 
   private marketDataConnectionId(): string {
+    // Virtual post-entry observations must follow the same current PAPER
+    // evidence stack as the scanner/execution cohort. A separate tactical M1
+    // provider may be stale or unavailable (for example a suspended MetaApi
+    // account) and must not silently starve this shadow evaluator.
+    const paperSource = this.config.get<string>('vpsForexScanner.brokerConnectionId', '').trim();
+    if (paperSource) return paperSource;
+
     const m1Source = this.config.get<string>('vpsForexScanner.m1MarketDataConnectionId', '').trim();
     if (m1Source) return m1Source;
     if (!this.config.get<boolean>('multimodelBrokerExpert.enabled', false)) return '';

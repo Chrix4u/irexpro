@@ -187,6 +187,12 @@ export class LivePaperMarketDataService {
       );
     }
     const spec = SPECS[symbol]!;
+    const spreadPoints = String(
+      Math.max(
+        0,
+        Math.round((state.paperFallbackSpreads.get(symbol) ?? spec.spread) * 10 ** spec.digits),
+      ),
+    );
     const normalized = rows
       .map((row) => ({
         timestamp: new Date(row.timestamp),
@@ -196,6 +202,7 @@ export class LivePaperMarketDataService {
         close: this.decimal(row.close, spec.digits),
         volume: '0',
         tickVolume: '0',
+        spreadPoints,
         priceDigits: spec.digits,
         brokerTime: new Date(row.timestamp).toISOString(),
       }))
