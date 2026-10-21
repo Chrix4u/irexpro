@@ -11,6 +11,7 @@ import {
   dynamicPaperLotUpperBound,
   isFreshOpportunity,
   evaluatePaperEntryMarketAlignment,
+  executableNetExpectedR,
 } from './vps-forex-signal-collector.service';
 import { ExecutionService } from '../execution/execution.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
@@ -102,6 +103,51 @@ describe('dynamic PAPER lot ceiling', () => {
         consensusPassed: 5,
       }),
     ).toEqual({ upperBound: 0.2, tier: 'BASE' });
+  });
+});
+
+describe('calibrated idle recovery scanner plumbing', () => {
+  it('ranks an eligible idle-recovery research candidate by calibrated edge', () => {
+    expect(
+      executableNetExpectedR({
+        paperExecutionRoute: 'PAPER_RESEARCH_THROUGHPUT',
+        paperCalibratedIdleRecovery: {
+          eligible: true,
+          calibratedNetExpectedR: 0.173,
+        },
+        ensembleGovernance: { netExpectedR: -0.114 },
+        pairedDirectionReversal: { researchNetExpectedR: 0.31 },
+      } as any),
+    ).toBeCloseTo(0.173, 6);
+  });
+
+  it('caps idle-recovery research at 0.05 lots', () => {
+    const collector = Object.create(VpsForexSignalCollectorService.prototype) as any;
+    expect(
+      collector.adaptiveLotSizingFor({
+        paperExecutionRoute: 'PAPER_RESEARCH_THROUGHPUT',
+        paperCalibratedIdleRecovery: { eligible: true, lotCap: 0.05 },
+        candidate: {},
+        planBEnsemble: {},
+        ensembleGovernance: {},
+      }),
+    ).toEqual({ upperBound: 0.05, tier: 'RESEARCH' });
+  });
+
+  it('derives idle minutes from the most recent signal-driven PAPER trade', async () => {
+    const collector = Object.create(VpsForexSignalCollectorService.prototype) as any;
+    const query = jest
+      .fn()
+      .mockResolvedValue([{ last_opened_at: new Date('2026-10-20T12:00:00.000Z') }]);
+    collector.dataSource = { query };
+    await expect(
+      collector.loadPaperIdleState('user-1', 'conn-1', new Date('2026-10-20T17:00:00.000Z')),
+    ).resolves.toMatchObject({
+      available: true,
+      lastOpenedAt: new Date('2026-10-20T12:00:00.000Z'),
+      idleMinutes: 300,
+    });
+    expect(query).toHaveBeenCalledTimes(1);
   });
 });
 
