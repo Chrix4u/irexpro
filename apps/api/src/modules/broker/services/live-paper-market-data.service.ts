@@ -122,6 +122,12 @@ export class LivePaperMarketDataService {
       );
     }
     const spec = SPECS[symbol]!;
+    const spreadPoints = String(
+      Math.max(
+        0,
+        Math.round((state.paperFallbackSpreads.get(symbol) ?? spec.spread) * 10 ** spec.digits),
+      ),
+    );
     const normalized = rows
       .map((row) => ({
         timestamp: new Date(row.timestamp),
@@ -131,6 +137,7 @@ export class LivePaperMarketDataService {
         close: this.decimal(row.close, spec.digits),
         volume: '0',
         tickVolume: '0',
+        spreadPoints,
         priceDigits: spec.digits,
         brokerTime: new Date(row.timestamp).toISOString(),
       }))
@@ -285,6 +292,12 @@ export class LivePaperMarketDataService {
         state.streamProviderObservations.set(symbol, byProvider);
       }
     }
+    const spreadPoints = String(
+      Math.max(
+        0,
+        Math.round((state.paperFallbackSpreads.get(symbol) ?? spec.spread) * 10 ** spec.digits),
+      ),
+    );
     const previousM1ObservedAt = state.latestM1ObservedAt?.getTime() ?? Number.NEGATIVE_INFINITY;
     if (timestamp.getTime() >= previousM1ObservedAt) {
       const bucketTime = Math.floor(timestamp.getTime() / 60_000) * 60_000;
@@ -297,6 +310,8 @@ export class LivePaperMarketDataService {
         latest.low = low.toFixed(spec.digits);
         latest.close = mid.toFixed(spec.digits);
         latest.tickVolume = String(Number(latest.tickVolume || '0') + 1);
+        latest.spreadPoints = spreadPoints;
+        latest.priceDigits = spec.digits;
       } else if (!latest || latest.timestamp.getTime() < bucketTime) {
         rows.push({
           timestamp: new Date(bucketTime),
@@ -306,6 +321,7 @@ export class LivePaperMarketDataService {
           close: mid.toFixed(spec.digits),
           volume: '0',
           tickVolume: '1',
+          spreadPoints,
           priceDigits: spec.digits,
           brokerTime: new Date(bucketTime).toISOString(),
         });
