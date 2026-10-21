@@ -361,6 +361,47 @@ describe("production trade-readiness presentation", () => {
     ).toBeLessThan(70);
   });
 
+  it("keeps blocked readiness dynamic instead of pinning distinct setups at 69", () => {
+    const strong = JSON.parse(JSON.stringify(VALID_STATUS));
+    strong.lastEnsembleDecision.candidateConfidence = 0.82;
+    strong.lastEnsembleDecision.metaProbability = 0.72;
+    strong.lastEnsembleDecision.expectedR = 0.24;
+    strong.lastEnsembleDecision.consensusPassed = 6;
+    strong.lastEnsembleDecision.consensusRequired = 6;
+    strong.lastEnsembleDecision.paperAdmitted = true;
+    strong.lastEnsembleDecision.admitted = true;
+    strong.lastEnsembleDecision.governance = {
+      ...strong.lastEnsembleDecision.governance,
+      paperNetExpectedRPassed: true,
+      paperDriftPassed: true,
+      eventRisk: "CLEAR",
+      paperExecutionEligible: false,
+      paperExecutionBlockers: ["PAIR_SIDE_RELIABILITY"],
+    };
+
+    const forming = JSON.parse(JSON.stringify(strong));
+    forming.lastEnsembleDecision.governance = {
+      ...forming.lastEnsembleDecision.governance,
+      paperNetExpectedRPassed: false,
+      paperExecutionBlockers: ["PAPER_NET_EXPECTED_R", "PAIR_SIDE_RELIABILITY"],
+    };
+
+    const strongResult = derive({
+      automationOn: true,
+      scannerStatus: strong,
+      fastMarkState: "LIVE",
+    });
+    const formingResult = derive({
+      automationOn: true,
+      scannerStatus: forming,
+      fastMarkState: "LIVE",
+    });
+
+    expect(strongResult.score).toBeLessThan(70);
+    expect(formingResult.score).toBeLessThan(strongResult.score);
+    expect(formingResult.score).not.toBe(69);
+  });
+
   it("enters the green zone only when the current setup is execution eligible", () => {
     const status = JSON.parse(JSON.stringify(VALID_STATUS));
     status.lastEnsembleDecision.candidateConfidence = 0.82;
