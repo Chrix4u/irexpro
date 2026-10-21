@@ -460,7 +460,6 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
   });
 });
 
-
 describe('M1TacticalEvidenceService shadow episode evidence', () => {
   it('loads only mature independent SHADOW episode leaders from governance-clean chronology', async () => {
     const query = jest.fn().mockResolvedValue([
@@ -601,7 +600,6 @@ describe('M1TacticalEvidenceService shadow episode evidence', () => {
   });
 });
 
-
 describe('M1TacticalEvidenceService shadow outcome metrics', () => {
   it('counts all episode outcomes but excludes ambiguous and data-gap observations from P&L metrics', async () => {
     const rows = [
@@ -699,5 +697,37 @@ describe('M1TacticalEvidenceService shadow outcome metrics', () => {
 
     expect(result.profitFactor).toBe(Number.POSITIVE_INFINITY);
     expect(result.maximumDrawdownR).toBe(0);
+  });
+});
+
+describe('M1TacticalEvidenceService shadow episode fail-closed mapping', () => {
+  it('excludes an episode leader when estimated execution cost R is missing', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        id: 'decision-missing-cost',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        route: 'M1_EARLY_TRANSITION',
+        bar_time: '2026-10-21T10:00:00.000Z',
+        evaluated_at: '2026-10-21T10:00:30.000Z',
+        policy_version: 'm1-tactical-v1',
+        candidate: { stopDistance: 0.0005, targetDistance: 0.0008 },
+        governance: {
+          genericGovernance: { executionCostSource: 'BROKER_OBSERVED_P90' },
+          rolloutPhase: 'SHADOW',
+        },
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    await expect(
+      service.loadMatureShadowEpisodeLeaders({
+        userId: input().userId,
+        brokerConnectionId: input().brokerConnectionId,
+        instrument: 'EURUSD',
+        policyVersion: 'm1-tactical-v1',
+        asOf: new Date('2026-10-21T10:30:00.000Z'),
+      }),
+    ).resolves.toEqual([]);
   });
 });

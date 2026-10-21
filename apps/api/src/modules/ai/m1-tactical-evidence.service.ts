@@ -581,12 +581,17 @@ export class M1TacticalEvidenceService {
       const genericGovernance = jsonObject(governance.genericGovernance);
       const stopDistance = number(candidate.stopDistance);
       const targetDistance = number(candidate.targetDistance);
-      const estimatedExecutionCostR = number(genericGovernance.estimatedExecutionCostR);
+      const rawExecutionCostR = genericGovernance.estimatedExecutionCostR;
+      const estimatedExecutionCostR = Number(rawExecutionCostR);
       const barTime = date(row.bar_time);
       const evaluatedAt = date(row.evaluated_at);
       if (
         stopDistance <= 0 ||
         targetDistance <= 0 ||
+        rawExecutionCostR === null ||
+        rawExecutionCostR === undefined ||
+        rawExecutionCostR === '' ||
+        !Number.isFinite(estimatedExecutionCostR) ||
         estimatedExecutionCostR < 0 ||
         !Number.isFinite(barTime.getTime()) ||
         !Number.isFinite(evaluatedAt.getTime())
