@@ -419,6 +419,170 @@ const ALLOWED_RESEARCH_EXPLORATION_BLOCKERS = new Set([
   'DRIFT_OUT_OF_DISTRIBUTION',
 ]);
 
+export const PAPER_CALIBRATED_IDLE_RECOVERY_ARTIFACT = 'paper-calibrated-idle-recovery-v1' as const;
+export const PAPER_CALIBRATED_IDLE_RECOVERY_MIN_IDLE_MINUTES = 240;
+export const PAPER_CALIBRATED_IDLE_RECOVERY_LOT_CAP = 0.05;
+const PAPER_CALIBRATED_IDLE_RECOVERY_MIN_SAMPLES = 10;
+const PAPER_CALIBRATED_IDLE_RECOVERY_MIN_NET_EXPECTED_R = 0.12;
+const PAPER_CALIBRATED_IDLE_RECOVERY_MIN_WIN_PROBABILITY = 0.56;
+const PAPER_CALIBRATED_IDLE_RECOVERY_MIN_PROFIT_FACTOR = 1.2;
+const PAPER_CALIBRATED_IDLE_RECOVERY_MIN_CONSENSUS = 4;
+
+const ALLOWED_CALIBRATED_IDLE_RECOVERY_BLOCKERS = new Set([
+  ...ALLOWED_RESEARCH_EXPLORATION_BLOCKERS,
+  'PAPER_NET_EXPECTED_R',
+]);
+
+export interface PaperCalibratedIdleRecoveryInput {
+  idleMinutes: number | null;
+  paperExecutionBlockers: string[];
+  consensusPassed: number;
+  consensusRequired: number;
+  eventRisk: string;
+  executionCostUsable: boolean;
+  calibration: {
+    authoritative: boolean;
+    sourceLevel: string;
+    maturity: string;
+    samples: number;
+    calibratedNetExpectedR: number;
+    calibratedWinProbability: number;
+    profitFactor: number | null;
+    recentDegradation: boolean;
+    blockRecommended: boolean;
+  };
+}
+
+export interface PaperCalibratedIdleRecoveryDecision {
+  eligible: boolean;
+  artifact: typeof PAPER_CALIBRATED_IDLE_RECOVERY_ARTIFACT;
+  reason:
+    | 'CALIBRATED_IDLE_RECOVERY'
+    | 'IDLE_EVIDENCE_UNAVAILABLE'
+    | 'IDLE_WINDOW_NOT_REACHED'
+    | 'CALIBRATION_NOT_AUTHORITATIVE'
+    | 'CALIBRATION_NOT_LOCAL'
+    | 'CALIBRATION_NOT_MATURE_ENOUGH'
+    | 'CALIBRATION_SAMPLE_TOO_SMALL'
+    | 'CALIBRATION_DEGRADED'
+    | 'CALIBRATED_EDGE_TOO_LOW'
+    | 'CALIBRATED_WIN_PROBABILITY_TOO_LOW'
+    | 'CALIBRATED_PROFIT_FACTOR_TOO_LOW'
+    | 'CONSENSUS_TOO_LOW'
+    | 'EXECUTION_COST_UNUSABLE'
+    | 'EVENT_RISK_NOT_CLEAR'
+    | 'RAW_NET_EDGE_NOT_BLOCKING'
+    | 'UNSAFE_BLOCKER';
+  effectivePaperExecutionBlockers: string[];
+  lotCap: typeof PAPER_CALIBRATED_IDLE_RECOVERY_LOT_CAP;
+  idleMinutes: number | null;
+  calibratedNetExpectedR: number | null;
+  calibrationSourceLevel: string | null;
+  calibrationSamples: number | null;
+}
+
+/**
+ * PAPER-only starvation recovery. Idleness never creates an edge: it only lets
+ * strong, local, prospective calibration replace the stale raw-EV blocker.
+ * Every other research blocker remains intact and downstream research, loss,
+ * episode, cost, portfolio and entry-alignment gates remain authoritative.
+ */
+export function evaluatePaperCalibratedIdleRecovery(
+  input: PaperCalibratedIdleRecoveryInput,
+): PaperCalibratedIdleRecoveryDecision {
+  const reject = (
+    reason: Exclude<PaperCalibratedIdleRecoveryDecision['reason'], 'CALIBRATED_IDLE_RECOVERY'>,
+  ): PaperCalibratedIdleRecoveryDecision => ({
+    eligible: false,
+    artifact: PAPER_CALIBRATED_IDLE_RECOVERY_ARTIFACT,
+    reason,
+    effectivePaperExecutionBlockers: [...input.paperExecutionBlockers],
+    lotCap: PAPER_CALIBRATED_IDLE_RECOVERY_LOT_CAP,
+    idleMinutes: Number.isFinite(input.idleMinutes) ? input.idleMinutes : null,
+    calibratedNetExpectedR: Number.isFinite(input.calibration.calibratedNetExpectedR)
+      ? input.calibration.calibratedNetExpectedR
+      : null,
+    calibrationSourceLevel: input.calibration.sourceLevel || null,
+    calibrationSamples: Number.isFinite(input.calibration.samples)
+      ? input.calibration.samples
+      : null,
+  });
+
+  if (!Number.isFinite(input.idleMinutes)) return reject('IDLE_EVIDENCE_UNAVAILABLE');
+  if (input.idleMinutes! < PAPER_CALIBRATED_IDLE_RECOVERY_MIN_IDLE_MINUTES) {
+    return reject('IDLE_WINDOW_NOT_REACHED');
+  }
+  const calibration = input.calibration;
+  if (!calibration.authoritative) return reject('CALIBRATION_NOT_AUTHORITATIVE');
+  if (calibration.sourceLevel !== 'EXACT' && calibration.sourceLevel !== 'PAIR_DIRECTION_ROUTE') {
+    return reject('CALIBRATION_NOT_LOCAL');
+  }
+  if (calibration.maturity !== 'COLLECTING' && calibration.maturity !== 'MATURE') {
+    return reject('CALIBRATION_NOT_MATURE_ENOUGH');
+  }
+  if (
+    !Number.isFinite(calibration.samples) ||
+    calibration.samples < PAPER_CALIBRATED_IDLE_RECOVERY_MIN_SAMPLES
+  ) {
+    return reject('CALIBRATION_SAMPLE_TOO_SMALL');
+  }
+  if (calibration.blockRecommended || calibration.recentDegradation) {
+    return reject('CALIBRATION_DEGRADED');
+  }
+  if (
+    !Number.isFinite(calibration.calibratedNetExpectedR) ||
+    calibration.calibratedNetExpectedR < PAPER_CALIBRATED_IDLE_RECOVERY_MIN_NET_EXPECTED_R
+  ) {
+    return reject('CALIBRATED_EDGE_TOO_LOW');
+  }
+  if (
+    !Number.isFinite(calibration.calibratedWinProbability) ||
+    calibration.calibratedWinProbability < PAPER_CALIBRATED_IDLE_RECOVERY_MIN_WIN_PROBABILITY
+  ) {
+    return reject('CALIBRATED_WIN_PROBABILITY_TOO_LOW');
+  }
+  if (
+    !Number.isFinite(calibration.profitFactor) ||
+    calibration.profitFactor! < PAPER_CALIBRATED_IDLE_RECOVERY_MIN_PROFIT_FACTOR
+  ) {
+    return reject('CALIBRATED_PROFIT_FACTOR_TOO_LOW');
+  }
+  if (
+    !Number.isFinite(input.consensusPassed) ||
+    input.consensusPassed < PAPER_CALIBRATED_IDLE_RECOVERY_MIN_CONSENSUS ||
+    !Number.isFinite(input.consensusRequired) ||
+    input.consensusRequired < PAPER_CALIBRATED_IDLE_RECOVERY_MIN_CONSENSUS
+  ) {
+    return reject('CONSENSUS_TOO_LOW');
+  }
+  if (!input.executionCostUsable) return reject('EXECUTION_COST_UNUSABLE');
+  if (input.eventRisk !== 'CLEAR') return reject('EVENT_RISK_NOT_CLEAR');
+  if (!input.paperExecutionBlockers.includes('PAPER_NET_EXPECTED_R')) {
+    return reject('RAW_NET_EDGE_NOT_BLOCKING');
+  }
+  if (
+    input.paperExecutionBlockers.some(
+      (blocker) => !ALLOWED_CALIBRATED_IDLE_RECOVERY_BLOCKERS.has(blocker),
+    )
+  ) {
+    return reject('UNSAFE_BLOCKER');
+  }
+
+  return {
+    eligible: true,
+    artifact: PAPER_CALIBRATED_IDLE_RECOVERY_ARTIFACT,
+    reason: 'CALIBRATED_IDLE_RECOVERY',
+    effectivePaperExecutionBlockers: input.paperExecutionBlockers.filter(
+      (blocker) => blocker !== 'PAPER_NET_EXPECTED_R',
+    ),
+    lotCap: PAPER_CALIBRATED_IDLE_RECOVERY_LOT_CAP,
+    idleMinutes: input.idleMinutes,
+    calibratedNetExpectedR: calibration.calibratedNetExpectedR,
+    calibrationSourceLevel: calibration.sourceLevel,
+    calibrationSamples: calibration.samples,
+  };
+}
+
 export interface PaperResearchThroughputInput {
   normalPaperExecution: boolean;
   confidence: number;

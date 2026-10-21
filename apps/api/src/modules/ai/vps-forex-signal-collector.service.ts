@@ -56,6 +56,7 @@ import {
 import { scoreTrendPersistenceShadow } from './trend-persistence-shadow';
 import {
   PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
+  PAPER_CALIBRATED_IDLE_RECOVERY_LOT_CAP,
   PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R,
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES,
   PAPER_RESEARCH_EXPLORATION_MIN_CONFIDENCE,
@@ -64,7 +65,9 @@ import {
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS,
   PaperResearchPairSideReliabilityDecision,
   PaperResearchThroughputDecision,
+  PaperCalibratedIdleRecoveryDecision,
   evaluatePaperResearchCalibrationBrake,
+  evaluatePaperCalibratedIdleRecovery,
   evaluatePaperResearchEpisodeGuard,
   evaluatePaperResearchExecutionGate,
   evaluatePaperResearchPortfolioBrake,
@@ -505,6 +508,7 @@ interface ExecutableCounterfactual {
   rejectedEdgeCanary: RejectedEdgeCanaryDecision | null;
   rejectedEdgeCanaryEvidence: RejectedEdgeCanaryEvidence | null;
   paperResearchThroughput: PaperResearchThroughputDecision;
+  paperCalibratedIdleRecovery: PaperCalibratedIdleRecoveryDecision | null;
   paperExtensionExhaustionResearch: ReturnType<typeof evaluatePaperExtensionExhaustionResearch>;
   paperExtensionExhaustionPairSideReliability: PaperResearchPairSideReliabilityDecision | null;
   paperExtensionExhaustionEpisodeKey: string;
@@ -555,10 +559,26 @@ interface AdaptiveScanWinner {
   adaptiveScanRank?: number;
 }
 
-function executableNetExpectedR(option: ExecutableCounterfactual): number {
-  return option.paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH'
-    ? option.pairedDirectionReversal.researchNetExpectedR
-    : option.ensembleGovernance.netExpectedR;
+export function executableNetExpectedR(
+  option: Pick<
+    ExecutableCounterfactual,
+    | 'paperExecutionRoute'
+    | 'pairedDirectionReversal'
+    | 'ensembleGovernance'
+    | 'paperCalibratedIdleRecovery'
+  >,
+): number {
+  if (option.paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH') {
+    return option.pairedDirectionReversal.researchNetExpectedR;
+  }
+  if (
+    option.paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT' &&
+    option.paperCalibratedIdleRecovery?.eligible &&
+    Number.isFinite(option.paperCalibratedIdleRecovery.calibratedNetExpectedR)
+  ) {
+    return option.paperCalibratedIdleRecovery.calibratedNetExpectedR!;
+  }
+  return option.ensembleGovernance.netExpectedR;
 }
 
 export function selectCounterfactualExecutionCandidate(
@@ -1480,6 +1500,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       let representativeSet = false;
       let representativeIsPaperEligible = false;
       const adaptiveScanStartedAt = new Date();
+      const paperIdleState = paperSession
+        ? await this.loadPaperIdleState(userId, connectionId, adaptiveScanStartedAt)
+        : { available: false, lastOpenedAt: null, idleMinutes: null };
       const preAdaptiveCandidateRanks = new Map<Candidate, number>(
         rankedCandidates.map((candidate, index) => [candidate, index + 1]),
       );
@@ -1994,6 +2017,38 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             calibratedNetExpectedR: researchPredictionCalibration.calibratedNetExpectedR,
             recentDegradation: researchPredictionCalibration.recentDegradation,
           });
+          const paperCalibratedIdleRecovery = evaluatePaperCalibratedIdleRecovery({
+            idleMinutes: paperIdleState.idleMinutes,
+            paperExecutionBlockers: researchCalibrationAuthority.effectivePaperExecutionBlockers,
+            consensusPassed: planBEnsemble.consensusPassed,
+            consensusRequired: planBEnsemble.consensusRequired,
+            eventRisk: ensembleGovernance.eventRisk,
+            executionCostUsable: Boolean(
+              ensembleGovernance.paperExecutionCostUsable ??
+              ensembleGovernance.executionSpreadEvidenceValid,
+            ),
+            calibration: {
+              authoritative: researchPredictionCalibration.authoritative,
+              sourceLevel: researchPredictionCalibration.sourceLevel,
+              maturity: researchPredictionCalibration.maturity,
+              samples: researchPredictionCalibration.samples,
+              calibratedNetExpectedR: researchPredictionCalibration.calibratedNetExpectedR,
+              calibratedWinProbability: researchPredictionCalibration.calibratedWinProbability,
+              profitFactor: researchPredictionCalibration.profitFactor,
+              recentDegradation: researchPredictionCalibration.recentDegradation,
+              blockRecommended: researchPredictionCalibration.blockRecommended,
+            },
+          });
+          if (paperCalibratedIdleRecovery.eligible) {
+            this.logger.warn(
+              `PAPER calibrated idle recovery ${best.instrument} ${best.direction} execution=ELIGIBLE ` +
+                `idleMinutes=${paperCalibratedIdleRecovery.idleMinutes?.toFixed(1) ?? 'n/a'} ` +
+                `source=${paperCalibratedIdleRecovery.calibrationSourceLevel ?? 'NONE'} ` +
+                `samples=${paperCalibratedIdleRecovery.calibrationSamples ?? 0} ` +
+                `calibratedNetExpectedR=${paperCalibratedIdleRecovery.calibratedNetExpectedR?.toFixed(4) ?? 'n/a'} ` +
+                `lotCap=${paperCalibratedIdleRecovery.lotCap.toFixed(2)}`,
+            );
+          }
 
           const paperResearchThroughputInput = {
             normalPaperExecution,
@@ -2009,7 +2064,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             alignedMomentumAtr: best.shortHorizonMomentumAtr,
             tradeQuality: planBEnsemble.tradeQuality,
             exitQuality: planBEnsemble.exitQuality,
-            paperExecutionBlockers: researchCalibrationAuthority.effectivePaperExecutionBlockers,
+            paperExecutionBlockers: paperCalibratedIdleRecovery.eligible
+              ? paperCalibratedIdleRecovery.effectivePaperExecutionBlockers
+              : researchCalibrationAuthority.effectivePaperExecutionBlockers,
             routeReliabilityDemoted: pairSideReliabilityDemoted,
           };
           let paperResearchThroughput = evaluatePaperResearchThroughput(
@@ -2390,6 +2447,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             rejectedEdgeCanary,
             rejectedEdgeCanaryEvidence,
             paperResearchThroughput,
+            paperCalibratedIdleRecovery,
             paperExtensionExhaustionResearch,
             paperExtensionExhaustionPairSideReliability,
             paperExtensionExhaustionEpisodeKey,
@@ -2419,10 +2477,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           prioritizedCounterfactuals.map((option) => ({
             candidate: option.candidate,
             paperExecutionEligible: true,
-            netExpectedR:
-              option.paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH'
-                ? option.pairedDirectionReversal.researchNetExpectedR
-                : option.ensembleGovernance.netExpectedR,
+            netExpectedR: executableNetExpectedR(option),
             estimatedExecutionCostR: option.ensembleGovernance.estimatedExecutionCostR,
           })),
         );
@@ -2431,7 +2486,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             const edges = executableCounterfactuals
               .map(
                 (option) =>
-                  `${option.candidate.direction}:${option.ensembleGovernance.netExpectedR.toFixed(4)}R`,
+                  `${option.candidate.direction}:${executableNetExpectedR(option).toFixed(4)}R`,
               )
               .join(' ');
             this.logger.log(
@@ -2769,6 +2824,19 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             rejected_edge_canary_reason: rejectedEdgeCanary?.reason ?? null,
             rejected_edge_canary_global_30m: rejectedEdgeCanaryEvidence?.global30m ?? null,
             rejected_edge_canary_pair_side_30m: rejectedEdgeCanaryEvidence?.pairSide30m ?? null,
+            paper_calibrated_idle_recovery: chosen.paperCalibratedIdleRecovery?.eligible ?? false,
+            paper_calibrated_idle_recovery_artifact:
+              chosen.paperCalibratedIdleRecovery?.artifact ?? null,
+            paper_calibrated_idle_recovery_reason:
+              chosen.paperCalibratedIdleRecovery?.reason ?? null,
+            paper_calibrated_idle_recovery_idle_minutes:
+              chosen.paperCalibratedIdleRecovery?.idleMinutes ?? null,
+            paper_calibrated_idle_recovery_calibrated_net_expected_r:
+              chosen.paperCalibratedIdleRecovery?.calibratedNetExpectedR ?? null,
+            paper_calibrated_idle_recovery_lot_cap: chosen.paperCalibratedIdleRecovery?.eligible
+              ? PAPER_CALIBRATED_IDLE_RECOVERY_LOT_CAP
+              : null,
+            paper_calibrated_idle_recovery_qualification_evidence: false,
             paper_research_throughput: paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT',
             paper_research_throughput_artifact: paperResearchThroughput.artifact,
             paper_research_throughput_reason: paperResearchThroughput.reason,
@@ -3129,12 +3197,19 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     candidate: Candidate;
     planBEnsemble: PlanBEnsembleScore;
     ensembleGovernance: EnsembleGovernanceDecision;
+    paperCalibratedIdleRecovery?: PaperCalibratedIdleRecoveryDecision | null;
   }): {
     upperBound: number;
     tier: PaperAllocationConfidenceTier;
   } {
     if (option.paperExecutionRoute === 'REJECTED_EDGE_CANARY') {
       return { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'RESEARCH' };
+    }
+    if (
+      option.paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT' &&
+      option.paperCalibratedIdleRecovery?.eligible
+    ) {
+      return { upperBound: PAPER_CALIBRATED_IDLE_RECOVERY_LOT_CAP, tier: 'RESEARCH' };
     }
     if (option.paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT') {
       return { upperBound: PAPER_RESEARCH_THROUGHPUT_LOT_CAP, tier: 'RESEARCH' };
@@ -4390,6 +4465,47 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       this.logger.warn(
         `PAPER cost-aware entry annotation unavailable: ${(error as Error).message}`,
       );
+    }
+  }
+
+  private async loadPaperIdleState(
+    userId: string,
+    connectionId: string,
+    evaluatedAt: Date,
+  ): Promise<{ available: boolean; lastOpenedAt: Date | null; idleMinutes: number | null }> {
+    if (!this.dataSource) {
+      return { available: false, lastOpenedAt: null, idleMinutes: null };
+    }
+    try {
+      const rows = (await this.dataSource.query(
+        `
+          SELECT MAX(t.opened_at) AS last_opened_at
+          FROM trading.trades t
+          WHERE t.user_id = $1
+            AND t.broker_connection_id = $2
+            AND t.signal_id IS NOT NULL
+        `,
+        [userId, connectionId],
+      )) as Array<{ last_opened_at: string | Date | null }>;
+      const raw = rows[0]?.last_opened_at ?? null;
+      if (!raw) return { available: true, lastOpenedAt: null, idleMinutes: null };
+      const lastOpenedAt = new Date(raw);
+      const elapsedMs = evaluatedAt.getTime() - lastOpenedAt.getTime();
+      if (
+        !Number.isFinite(lastOpenedAt.getTime()) ||
+        !Number.isFinite(elapsedMs) ||
+        elapsedMs < 0
+      ) {
+        return { available: false, lastOpenedAt: null, idleMinutes: null };
+      }
+      return {
+        available: true,
+        lastOpenedAt,
+        idleMinutes: elapsedMs / 60_000,
+      };
+    } catch (error) {
+      this.logger.warn(`PAPER idle recovery evidence unavailable: ${(error as Error).message}`);
+      return { available: false, lastOpenedAt: null, idleMinutes: null };
     }
   }
 
