@@ -467,10 +467,14 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       await expect(completeFlow(start.flowId)).rejects.toThrow(NotFoundException);
     });
 
-    it('rejects completing a flow twice (single-use states)', async () => {
+    it('resumes an already AUTHORIZED web flow without replaying the provider code', async () => {
       const start = await startFlow();
-      await completeFlow(start.flowId);
-      await expect(completeFlow(start.flowId, 'another-code')).rejects.toThrow(ConflictException);
+      const first = await completeFlow(start.flowId);
+      const resumed = await completeFlow(start.flowId, 'already-spent-code');
+
+      expect(resumed).toEqual(first);
+      expect(ctraderClient.exchangeAuthorizationCode).toHaveBeenCalledTimes(1);
+      expect(ctraderClient.discoverAccounts).toHaveBeenCalledTimes(1);
     });
 
     it('rejects an expired PENDING flow and sweeps its row', async () => {

@@ -62,15 +62,18 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
       try {
         const result = await api.completeBrokerOAuth({ flowId: storedFlowId, code });
         if (cancelled) return;
-        // The code is spent — clear the local flow reference. The server
-        // keeps the flow AUTHORIZED (memory-only, bounded TTL) for linking.
-        sessionStorage.removeItem(IREXPRO_BROKER_OAUTH_FLOW_KEY);
+        // The provider code is spent, but retain the flow reference until
+        // durable account linking succeeds. The server can resume an already
+        // AUTHORIZED flow from its sanitized persisted account list without
+        // replaying the provider code, so a callback-page reload remains safe.
         setFlowId(result.flowId);
         setAccounts(result.accounts);
         setPhase('pick');
       } catch (err) {
         if (cancelled) return;
-        sessionStorage.removeItem(IREXPRO_BROKER_OAUTH_FLOW_KEY);
+        // Keep the flow reference on callback failure: a transport/lost-response
+        // failure may have happened after the server durably reached AUTHORIZED,
+        // in which case a reload can resume without replaying the cTrader code.
         setPhase('error');
         setError(mapApiError(err).message);
       }
@@ -90,6 +93,7 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
           ctidTraderAccountId: account.ctidTraderAccountId,
           displayName: `${account.brokerTitleShort ?? 'cTrader'} DEMO ${account.ctidTraderAccountId}`,
         });
+        sessionStorage.removeItem(IREXPRO_BROKER_OAUTH_FLOW_KEY);
         setLinkedConnection(connection);
         setPhase('done');
         notify.success('cTrader account linked.');
