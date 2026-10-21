@@ -6,6 +6,7 @@ import { PaperBrokerStateService } from '../../broker/services/paper-broker-stat
 import { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.service';
 
 const DEFAULT_BRIDGE_INTERVAL_MS = 5_000;
+const DEFAULT_PROTECTION_INTERVAL_MS = 1_000;
 const MAX_PROVIDER_MARK_AGE_MS = 90_000;
 
 /**
@@ -25,7 +26,9 @@ const MAX_PROVIDER_MARK_AGE_MS = 90_000;
 export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PaperPositionMarkBridgeService.name);
   private timer: NodeJS.Timeout | null = null;
+  private protectionTimer: NodeJS.Timeout | null = null;
   private busy = false;
+  private protectionBusy = false;
   private lastSourceTimestampByInstrument = new Map<string, number>();
   private readonly announcedInstruments = new Set<string>();
 
@@ -38,19 +41,55 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
   ) {}
 
   onModuleInit(): void {
-    if (!this.enabled()) return;
-    const initial = setTimeout(() => void this.collectOnce(), 1_000);
-    initial.unref?.();
-    this.timer = setInterval(() => void this.collectOnce(), DEFAULT_BRIDGE_INTERVAL_MS);
-    this.timer.unref?.();
-    this.logger.log(
-      'PAPER position mark/protection bridge enabled source=STREAM/MetaApi sampled quotes cadence=5s',
-    );
+    const providerBridgeEnabled = this.enabled();
+    const protectionEnabled = this.protectionEnabled();
+    if (!providerBridgeEnabled && !protectionEnabled) return;
+
+    if (providerBridgeEnabled) {
+      const initial = setTimeout(() => void this.collectOnce(), 1_000);
+      initial.unref?.();
+      this.timer = setInterval(() => void this.collectOnce(), DEFAULT_BRIDGE_INTERVAL_MS);
+      this.timer.unref?.();
+      this.logger.log(
+        'PAPER provider execution/mark bridge enabled source=STREAM/MetaApi sampled quotes cadence=5s',
+      );
+    }
+
+    if (protectionEnabled) {
+      this.protectionTimer = setInterval(
+        () => void this.protectOnce(),
+        DEFAULT_PROTECTION_INTERVAL_MS,
+      );
+      this.protectionTimer.unref?.();
+      this.logger.log(
+        'PAPER fast protection heartbeat enabled cadence=1s source=cached live marks',
+      );
+    }
   }
 
   onModuleDestroy(): void {
     if (this.timer) clearInterval(this.timer);
+    if (this.protectionTimer) clearInterval(this.protectionTimer);
     this.timer = null;
+    this.protectionTimer = null;
+  }
+
+  async protectOnce(): Promise<void> {
+    if (this.protectionBusy || !this.protectionEnabled()) return;
+    this.protectionBusy = true;
+    try {
+      const paperConnectionId = this.paperConnectionId();
+      if (!paperConnectionId) return;
+      const adapter = this.brokerAdapters.getAdapterForConnection(
+        paperConnectionId,
+        'paper-broker',
+      );
+      await adapter.getOpenPositions();
+    } catch (error) {
+      this.logger.debug(`PAPER fast protection heartbeat deferred: ${(error as Error).message}`);
+    } finally {
+      this.protectionBusy = false;
+    }
   }
 
   async collectOnce(now = new Date()): Promise<void> {
@@ -146,6 +185,13 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
     } finally {
       this.busy = false;
     }
+  }
+
+  private protectionEnabled(): boolean {
+    return (
+      this.config.get<boolean>('vpsForexScanner.enabled', false) === true &&
+      Boolean(this.paperConnectionId())
+    );
   }
 
   private enabled(): boolean {
