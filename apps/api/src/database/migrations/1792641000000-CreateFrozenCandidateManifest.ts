@@ -81,7 +81,9 @@ export class CreateFrozenCandidateManifest1792641000000 implements MigrationInte
       DROP TRIGGER IF EXISTS trg_reject_frozen_candidate_manifest_mutation
       ON trading.frozen_candidate_manifests
     `);
-    await queryRunner.query(`DROP FUNCTION IF EXISTS trading.reject_frozen_candidate_manifest_mutation()`);
+    await queryRunner.query(
+      `DROP FUNCTION IF EXISTS trading.reject_frozen_candidate_manifest_mutation()`,
+    );
     await queryRunner.query(`DROP TABLE IF EXISTS trading.frozen_candidate_cohorts`);
     await queryRunner.query(`DROP TABLE IF EXISTS trading.frozen_candidate_manifests`);
   }
