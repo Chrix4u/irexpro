@@ -156,7 +156,10 @@ describe('FrozenCandidateManifestService', () => {
 
   it('asserts exact manifest and policy identity for execution and rejects missing evidence', async () => {
     const hash = hashFrozenCandidateSemanticPolicy(policy());
-    const query = jest.fn().mockResolvedValueOnce([row(hash)]).mockResolvedValueOnce([]);
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([row(hash)])
+      .mockResolvedValueOnce([]);
     const service = new FrozenCandidateManifestService({ query } as unknown as DataSource);
 
     await expect(
