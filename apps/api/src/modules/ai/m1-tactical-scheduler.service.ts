@@ -13,7 +13,11 @@ import { TradeIntentService } from '../execution/services/trade-intent.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { AiSignalService } from './ai-signal.service';
 import { MacroEventRiskService } from './macro-event-risk.service';
-import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
+import {
+  M1_SHADOW_OUTCOME_15M_ARTIFACT,
+  M1TacticalEvidenceService,
+  type M1ShadowOutcome15mV1,
+} from './m1-tactical-evidence.service';
 import { M1TacticalMarketDataService } from './m1-tactical-market-data.service';
 import {
   buildM1TacticalCandidates,
@@ -33,6 +37,7 @@ import {
 } from './m1-tactical-reliability';
 import { isFxWeeklySessionOpen } from '../market-data/utils/fx-weekly-session';
 import { evaluateM1DriftCounterfactual15m } from './m1-drift-counterfactual';
+import { evaluateM1CausalOutcome15m } from './m1-causal-outcome';
 import {
   evaluateM1FailedMoveRescue,
   type M1FailedMoveRescueInput,
@@ -273,6 +278,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       decisionTime,
       market.m1,
     );
+    await this.settleMatureShadowEpisodes(
+      userId,
+      brokerConnectionId,
+      instrument,
+      decisionTime,
+      market.m1,
+    );
   }
 
   private async settleMatureDriftCounterfactuals(
@@ -313,6 +325,103 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       } catch (error) {
         this.logger.warn(
           `M1 drift counterfactual settlement deferred decision=${decision.id}: ${(error as Error).message}`,
+        );
+      }
+    }
+  }
+
+  private async settleMatureShadowEpisodes(
+    userId: string,
+    brokerConnectionId: string,
+    instrument: string,
+    decisionTime: Date,
+    m1Bars: Parameters<typeof evaluateM1CausalOutcome15m>[0]['bars'],
+  ): Promise<void> {
+    let leaders: Awaited<ReturnType<M1TacticalEvidenceService['loadMatureShadowEpisodeLeaders']>>;
+    try {
+      leaders = await this.evidence.loadMatureShadowEpisodeLeaders({
+        userId,
+        brokerConnectionId,
+        instrument,
+        policyVersion: M1_TACTICAL_POLICY_V1.version,
+        asOf: decisionTime,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `M1 shadow outcome load deferred ${instrument}: ${(error as Error).message}`,
+      );
+      return;
+    }
+
+    for (const leader of leaders) {
+      const observation = evaluateM1CausalOutcome15m({
+        direction: leader.direction,
+        evaluatedAt: leader.evaluatedAt,
+        stopDistance: leader.stopDistance,
+        targetDistance: leader.targetDistance,
+        executionCostR: leader.estimatedExecutionCostR,
+        bars: m1Bars,
+      });
+
+      let outcome: M1ShadowOutcome15mV1 | null = null;
+      if (observation) {
+        outcome = {
+          artifact: M1_SHADOW_OUTCOME_15M_ARTIFACT,
+          modifiesExecution: false,
+          episodeLeaderDecisionId: leader.id,
+          episodeStartBarTime: leader.barTime.toISOString(),
+          route: leader.route,
+          instrument: leader.instrument,
+          direction: leader.direction,
+          policyVersion: leader.policyVersion,
+          source: observation.source,
+          executionCostSource: leader.executionCostSource,
+          rolloutPhase: leader.rolloutPhase,
+          outcome: observation.outcome,
+          entryBarOpenTime: observation.entryBarOpenTime,
+          observedAt: observation.observedAt,
+          terminalBarOpenTime: observation.terminalBarOpenTime,
+          entryPrice: observation.entryPrice,
+          stopLoss: observation.stopLoss,
+          takeProfit: observation.takeProfit,
+          terminalPrice: observation.terminalPrice,
+          estimatedExecutionCostR: observation.estimatedExecutionCostR,
+          grossRMultiple: observation.grossRMultiple,
+          netRMultiple: observation.netRMultiple,
+        };
+      } else if (decisionTime.getTime() - leader.evaluatedAt.getTime() > 60 * 60_000) {
+        outcome = {
+          artifact: M1_SHADOW_OUTCOME_15M_ARTIFACT,
+          modifiesExecution: false,
+          episodeLeaderDecisionId: leader.id,
+          episodeStartBarTime: leader.barTime.toISOString(),
+          route: leader.route,
+          instrument: leader.instrument,
+          direction: leader.direction,
+          policyVersion: leader.policyVersion,
+          source: 'UNOBSERVABLE_DATA_GAP',
+          executionCostSource: leader.executionCostSource,
+          rolloutPhase: leader.rolloutPhase,
+          outcome: 'UNOBSERVABLE_DATA_GAP',
+          entryBarOpenTime: null,
+          observedAt: decisionTime.toISOString(),
+          terminalBarOpenTime: null,
+          entryPrice: null,
+          stopLoss: null,
+          takeProfit: null,
+          terminalPrice: null,
+          estimatedExecutionCostR: leader.estimatedExecutionCostR,
+          grossRMultiple: null,
+          netRMultiple: null,
+        };
+      }
+
+      if (!outcome) continue;
+      try {
+        await this.evidence.markShadowOutcome15mV1(leader.id, outcome);
+      } catch (error) {
+        this.logger.warn(
+          `M1 shadow outcome settlement deferred decision=${leader.id}: ${(error as Error).message}`,
         );
       }
     }

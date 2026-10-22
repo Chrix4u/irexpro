@@ -42,6 +42,56 @@ export interface M1TacticalDecisionRecord {
   updatedAt: Date;
 }
 
+export const M1_SHADOW_OUTCOME_15M_ARTIFACT = 'm1-shadow-outcome-15m-v1' as const;
+
+export interface M1ShadowEpisodeLeaderQuery {
+  userId: string;
+  brokerConnectionId: string;
+  instrument: string;
+  policyVersion: string;
+  asOf: Date;
+}
+
+export interface M1ShadowEpisodeLeader {
+  id: string;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  route: M1ReliabilityRoute;
+  barTime: Date;
+  evaluatedAt: Date;
+  policyVersion: string;
+  stopDistance: number;
+  targetDistance: number;
+  estimatedExecutionCostR: number;
+  executionCostSource: string | null;
+  rolloutPhase: string | null;
+}
+
+export interface M1ShadowOutcome15mV1 {
+  artifact: typeof M1_SHADOW_OUTCOME_15M_ARTIFACT;
+  modifiesExecution: false;
+  episodeLeaderDecisionId: string;
+  episodeStartBarTime: string;
+  route: M1ReliabilityRoute;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  policyVersion: string;
+  source: 'COMPLETED_M1_OHLC' | 'UNOBSERVABLE_DATA_GAP';
+  executionCostSource: string | null;
+  rolloutPhase: string | null;
+  outcome: 'TP' | 'SL' | 'MTM' | 'AMBIGUOUS' | 'UNOBSERVABLE_DATA_GAP';
+  entryBarOpenTime: string | null;
+  observedAt: string;
+  terminalBarOpenTime: string | null;
+  entryPrice: number | null;
+  stopLoss: number | null;
+  takeProfit: number | null;
+  terminalPrice: number | null;
+  estimatedExecutionCostR: number;
+  grossRMultiple: number | null;
+  netRMultiple: number | null;
+}
+
 export interface M1RoutePairSideEvidenceQuery {
   userId: string;
   brokerConnectionId: string;
@@ -125,6 +175,33 @@ export interface M1TacticalOutcomeMetrics {
   grossProfit: number;
   grossLoss: number;
   profitFactor: number | null;
+}
+
+export interface M1ShadowOutcomeMetricsFilter {
+  userId: string;
+  brokerConnectionId: string;
+  route?: M1ReliabilityRoute;
+  instrument?: string;
+  direction?: 'BUY' | 'SELL';
+  policyVersion?: string;
+  from: Date;
+  to: Date;
+}
+
+export interface M1ShadowOutcomeMetrics {
+  totalEpisodeLeaders: number;
+  evaluableEpisodes: number;
+  ambiguousEpisodes: number;
+  unobservableEpisodes: number;
+  positiveEpisodes: number;
+  negativeEpisodes: number;
+  flatEpisodes: number;
+  cumulativeNetR: number;
+  averageNetR: number;
+  grossPositiveR: number;
+  grossNegativeR: number;
+  profitFactor: number | null;
+  maximumDrawdownR: number;
 }
 
 interface DecisionRow {
@@ -409,6 +486,159 @@ export class M1TacticalEvidenceService {
     return rows[0]?.exists === true;
   }
 
+  async loadMatureShadowEpisodeLeaders(
+    input: M1ShadowEpisodeLeaderQuery,
+  ): Promise<M1ShadowEpisodeLeader[]> {
+    const instrument = input.instrument.trim().toUpperCase();
+    const rows = (await this.dataSource.query(
+      `
+        WITH eligible AS (
+          SELECT
+            id,
+            user_id,
+            broker_connection_id,
+            instrument,
+            direction,
+            route,
+            bar_time,
+            evaluated_at,
+            policy_version,
+            candidate,
+            governance,
+            LAG(bar_time) OVER (
+              PARTITION BY user_id, broker_connection_id, instrument, direction, route, policy_version
+              ORDER BY bar_time ASC
+            ) AS previous_bar_time
+          FROM trading.m1_tactical_decisions
+          WHERE user_id = $1
+            AND broker_connection_id = $2
+            AND instrument = $3
+            AND policy_version = $4
+            AND route <> 'ABSTAIN'
+            AND execution_authority = 'NONE'
+            AND (blockers = '[]'::jsonb OR blockers = '["M1_PHASE_SHADOW"]'::jsonb)
+        ),
+        episode_marked AS (
+          SELECT
+            *,
+            CASE
+              WHEN previous_bar_time IS NULL
+                OR bar_time - previous_bar_time > interval '5 minutes'
+              THEN 1
+              ELSE 0
+            END AS episode_start
+          FROM eligible
+        ),
+        leaders AS (
+          SELECT *
+          FROM episode_marked
+          WHERE episode_start = 1
+        )
+        SELECT
+          id,
+          instrument,
+          direction,
+          route,
+          bar_time,
+          evaluated_at,
+          policy_version,
+          candidate,
+          governance
+        FROM leaders
+        WHERE governance -> 'shadowOutcome15mV1' IS NULL
+          AND evaluated_at <= ($5::timestamptz - interval '16 minutes')
+        ORDER BY evaluated_at ASC
+        LIMIT 100
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        instrument,
+        input.policyVersion,
+        input.asOf.toISOString(),
+      ],
+    )) as Array<{
+      id: string;
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      route: M1ReliabilityRoute;
+      bar_time: string | Date;
+      evaluated_at: string | Date;
+      policy_version: string;
+      candidate: unknown;
+      governance: unknown;
+    }>;
+
+    const validRoutes = new Set<M1ReliabilityRoute>([
+      'M1_TREND_CONTINUATION',
+      'M1_CONFIRMED_REVERSAL',
+      'M1_EARLY_TRANSITION',
+    ]);
+    return rows.flatMap((row) => {
+      if (!validRoutes.has(row.route)) return [];
+      const candidate = jsonObject(row.candidate);
+      const governance = jsonObject(row.governance);
+      const genericGovernance = jsonObject(governance.genericGovernance);
+      const stopDistance = number(candidate.stopDistance);
+      const targetDistance = number(candidate.targetDistance);
+      const rawExecutionCostR = genericGovernance.estimatedExecutionCostR;
+      const estimatedExecutionCostR = Number(rawExecutionCostR);
+      const barTime = date(row.bar_time);
+      const evaluatedAt = date(row.evaluated_at);
+      if (
+        stopDistance <= 0 ||
+        targetDistance <= 0 ||
+        rawExecutionCostR === null ||
+        rawExecutionCostR === undefined ||
+        rawExecutionCostR === '' ||
+        !Number.isFinite(estimatedExecutionCostR) ||
+        estimatedExecutionCostR < 0 ||
+        !Number.isFinite(barTime.getTime()) ||
+        !Number.isFinite(evaluatedAt.getTime())
+      ) {
+        return [];
+      }
+      return [
+        {
+          id: row.id,
+          instrument: row.instrument.trim().toUpperCase(),
+          direction: row.direction,
+          route: row.route,
+          barTime,
+          evaluatedAt,
+          policyVersion: row.policy_version,
+          stopDistance,
+          targetDistance,
+          estimatedExecutionCostR,
+          executionCostSource:
+            typeof genericGovernance.executionCostSource === 'string'
+              ? genericGovernance.executionCostSource
+              : null,
+          rolloutPhase:
+            typeof governance.rolloutPhase === 'string' ? governance.rolloutPhase : null,
+        },
+      ];
+    });
+  }
+
+  async markShadowOutcome15mV1(decisionId: string, outcome: M1ShadowOutcome15mV1): Promise<void> {
+    const payload: M1ShadowOutcome15mV1 = {
+      ...outcome,
+      artifact: M1_SHADOW_OUTCOME_15M_ARTIFACT,
+      modifiesExecution: false,
+    };
+    await this.dataSource.query(
+      `
+        UPDATE trading.m1_tactical_decisions
+        SET governance = jsonb_set(governance, '{shadowOutcome15mV1}', $2::jsonb, true),
+            updated_at = now()
+        WHERE id = $1
+          AND governance -> 'shadowOutcome15mV1' IS NULL
+      `,
+      [decisionId, JSON.stringify(payload)],
+    );
+  }
+
   async loadPendingDriftCounterfactuals(
     input: M1PendingDriftCounterfactualQuery,
   ): Promise<M1PendingDriftCounterfactual[]> {
@@ -550,6 +780,110 @@ export class M1TacticalEvidenceService {
       `,
       [decisionId, outcomeState, observedAt.toISOString(), outcomeReason ?? null],
     );
+  }
+
+  async loadShadowOutcomeMetrics(
+    filter: M1ShadowOutcomeMetricsFilter,
+  ): Promise<M1ShadowOutcomeMetrics> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          id,
+          evaluated_at,
+          governance -> 'shadowOutcome15mV1' AS shadow_outcome
+        FROM trading.m1_tactical_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND ($3::text IS NULL OR route = $3)
+          AND ($4::text IS NULL OR instrument = $4)
+          AND ($5::text IS NULL OR direction = $5)
+          AND ($6::text IS NULL OR policy_version = $6)
+          AND evaluated_at >= $7::timestamptz
+          AND evaluated_at <= $8::timestamptz
+          AND governance -> 'shadowOutcome15mV1' ->> 'artifact' = $9
+        ORDER BY evaluated_at ASC
+      `,
+      [
+        filter.userId,
+        filter.brokerConnectionId,
+        filter.route ?? null,
+        filter.instrument?.trim().toUpperCase() ?? null,
+        filter.direction ?? null,
+        filter.policyVersion ?? null,
+        filter.from.toISOString(),
+        filter.to.toISOString(),
+        M1_SHADOW_OUTCOME_15M_ARTIFACT,
+      ],
+    )) as Array<{
+      id: string;
+      evaluated_at: string | Date;
+      shadow_outcome: unknown;
+    }>;
+
+    let evaluableEpisodes = 0;
+    let ambiguousEpisodes = 0;
+    let unobservableEpisodes = 0;
+    let positiveEpisodes = 0;
+    let negativeEpisodes = 0;
+    let flatEpisodes = 0;
+    let cumulativeNetR = 0;
+    let grossPositiveR = 0;
+    let grossNegativeR = 0;
+    let peakNetR = 0;
+    let maximumDrawdownR = 0;
+
+    for (const row of rows) {
+      const outcome = jsonObject(row.shadow_outcome);
+      const state = typeof outcome.outcome === 'string' ? outcome.outcome : '';
+      if (state === 'AMBIGUOUS') {
+        ambiguousEpisodes += 1;
+        continue;
+      }
+      if (state === 'UNOBSERVABLE_DATA_GAP') {
+        unobservableEpisodes += 1;
+        continue;
+      }
+      if (!['TP', 'SL', 'MTM'].includes(state)) continue;
+      const rawNetR = outcome.netRMultiple;
+      if (rawNetR === null || rawNetR === undefined || rawNetR === '') continue;
+      const netR = Number(rawNetR);
+      if (!Number.isFinite(netR)) continue;
+
+      evaluableEpisodes += 1;
+      cumulativeNetR += netR;
+      if (netR > 0) {
+        positiveEpisodes += 1;
+        grossPositiveR += netR;
+      } else if (netR < 0) {
+        negativeEpisodes += 1;
+        grossNegativeR += Math.abs(netR);
+      } else {
+        flatEpisodes += 1;
+      }
+      peakNetR = Math.max(peakNetR, cumulativeNetR);
+      maximumDrawdownR = Math.max(maximumDrawdownR, peakNetR - cumulativeNetR);
+    }
+
+    return {
+      totalEpisodeLeaders: rows.length,
+      evaluableEpisodes,
+      ambiguousEpisodes,
+      unobservableEpisodes,
+      positiveEpisodes,
+      negativeEpisodes,
+      flatEpisodes,
+      cumulativeNetR,
+      averageNetR: evaluableEpisodes > 0 ? cumulativeNetR / evaluableEpisodes : 0,
+      grossPositiveR,
+      grossNegativeR,
+      profitFactor:
+        grossNegativeR > 0
+          ? grossPositiveR / grossNegativeR
+          : grossPositiveR > 0
+            ? Number.POSITIVE_INFINITY
+            : null,
+      maximumDrawdownR,
+    };
   }
 
   async loadOutcomeMetrics(
