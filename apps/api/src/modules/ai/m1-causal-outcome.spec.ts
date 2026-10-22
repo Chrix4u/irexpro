@@ -16,7 +16,13 @@ function bar(openTime: string, open: number, high: number, low: number, close: n
 function causalWindow(start = '2026-10-21T10:01:00.000Z', price = 1.1): OHLCV[] {
   const startMs = new Date(start).getTime();
   return Array.from({ length: 15 }, (_, index) =>
-    bar(new Date(startMs + index * 60_000).toISOString(), price, price + 0.0001, price - 0.0001, price),
+    bar(
+      new Date(startMs + index * 60_000).toISOString(),
+      price,
+      price + 0.0001,
+      price - 0.0001,
+      price,
+    ),
   );
 }
 
@@ -99,7 +105,12 @@ describe('evaluateM1CausalOutcome15m', () => {
 
   it('fails closed when the full causal window is missing or non-contiguous', () => {
     expect(evaluate('BUY', causalWindow().slice(0, 14))).toBeNull();
-    expect(evaluate('BUY', causalWindow().filter((_, index) => index !== 7))).toBeNull();
+    expect(
+      evaluate(
+        'BUY',
+        causalWindow().filter((_, index) => index !== 7),
+      ),
+    ).toBeNull();
   });
 
   it('fails closed on non-positive or invalid OHLC prices', () => {
