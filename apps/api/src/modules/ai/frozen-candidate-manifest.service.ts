@@ -72,7 +72,9 @@ function canonicalize(value: unknown): unknown {
 }
 
 export function hashFrozenCandidateSemanticPolicy(policy: FrozenCandidateSemanticPolicy): string {
-  return createHash('sha256').update(JSON.stringify(canonicalize(policy)), 'utf8').digest('hex');
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalize(policy)), 'utf8')
+    .digest('hex');
 }
 
 @Injectable()
@@ -227,7 +229,9 @@ export class FrozenCandidateManifestService {
     return manifest;
   }
 
-  private async loadActiveManifest(scannerIdentity: string): Promise<FrozenCandidateManifest | null> {
+  private async loadActiveManifest(
+    scannerIdentity: string,
+  ): Promise<FrozenCandidateManifest | null> {
     const rows = (await this.dataSource.query(
       `
         SELECT
@@ -275,10 +279,14 @@ export class FrozenCandidateManifestService {
 
   private assertInput(input: EnsureActiveFrozenCandidateManifestInput): void {
     if (!input.scannerIdentity.trim()) {
-      throw new FrozenCandidatePolicyMismatchError('Frozen candidate scanner identity is required.');
+      throw new FrozenCandidatePolicyMismatchError(
+        'Frozen candidate scanner identity is required.',
+      );
     }
     if (!/^[0-9a-f]{40}$/i.test(input.gitCommitSha)) {
-      throw new FrozenCandidatePolicyMismatchError('Frozen candidate git commit SHA must be exact.');
+      throw new FrozenCandidatePolicyMismatchError(
+        'Frozen candidate git commit SHA must be exact.',
+      );
     }
     if (
       input.semanticPolicy.candidateCode !== UNIFIED_FROZEN_CANDIDATE_CODE ||
