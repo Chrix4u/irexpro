@@ -13,7 +13,9 @@ import {
 const scannerIdentity = 'vps-paper-six-pair-primary';
 const gitCommitSha = 'bab0e57a7d13462fb644b78c5834bca46eb617ff';
 
-function policy(overrides: Partial<FrozenCandidateSemanticPolicy> = {}): FrozenCandidateSemanticPolicy {
+function policy(
+  overrides: Partial<FrozenCandidateSemanticPolicy> = {},
+): FrozenCandidateSemanticPolicy {
   return {
     candidateCode: UNIFIED_FROZEN_CANDIDATE_CODE,
     policyVersion: UNIFIED_FROZEN_POLICY_VERSION,
@@ -111,9 +113,9 @@ describe('FrozenCandidateManifestService', () => {
     expect(hashFrozenCandidateSemanticPolicy(policy({ directionalMarginR: 0.03 }))).not.toBe(
       baseHash,
     );
-    expect(
-      hashFrozenCandidateSemanticPolicy(policy({ bootstrapRiskMultiplier: 0.75 })),
-    ).not.toBe(baseHash);
+    expect(hashFrozenCandidateSemanticPolicy(policy({ bootstrapRiskMultiplier: 0.75 }))).not.toBe(
+      baseHash,
+    );
   });
 
   it('returns the same active manifest on restart without mutating it', async () => {
@@ -154,10 +156,7 @@ describe('FrozenCandidateManifestService', () => {
 
   it('asserts exact manifest and policy identity for execution and rejects missing evidence', async () => {
     const hash = hashFrozenCandidateSemanticPolicy(policy());
-    const query = jest
-      .fn()
-      .mockResolvedValueOnce([row(hash)])
-      .mockResolvedValueOnce([]);
+    const query = jest.fn().mockResolvedValueOnce([row(hash)]).mockResolvedValueOnce([]);
     const service = new FrozenCandidateManifestService({ query } as unknown as DataSource);
 
     await expect(
