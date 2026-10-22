@@ -13,6 +13,7 @@ import { ExternalSignalPerformanceController } from './external-signal-performan
 import { ExternalSignalPerformanceService } from './external-signal-performance.service';
 import { AdaptiveEdgeMatrixService } from './adaptive-edge-matrix.service';
 import { AdaptivePredictionCalibrationService } from './adaptive-prediction-calibration.service';
+import { FrozenCandidateManifestService } from './frozen-candidate-manifest.service';
 import { TradingViewWebhookController } from './tradingview-webhook.controller';
 import { TradingViewWebhookService } from './tradingview-webhook.service';
 import { TradingViewWebhookGuard } from '../../common/guards/tradingview-webhook.guard';
@@ -81,6 +82,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     ExternalSignalPerformanceService,
     AdaptiveEdgeMatrixService,
     AdaptivePredictionCalibrationService,
+    FrozenCandidateManifestService,
     TradingViewWebhookService,
     TradingViewWebhookGuard,
     VpsForexSignalCollectorService,
@@ -97,6 +99,6 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     },
     M1TacticalSchedulerService,
   ],
-  exports: [AiService, AiSignalService],
+  exports: [AiService, AiSignalService, FrozenCandidateManifestService],
 })
 export class AiModule {}
