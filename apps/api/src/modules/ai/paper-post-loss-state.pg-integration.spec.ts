@@ -181,6 +181,19 @@ describe('PAPER post-loss evidence — real PostgreSQL', () => {
     expect((await state()).lastClosedTrade?.reconfirmed).toBe(true);
   });
 
+  it('allows continued entries after a filled multi-evidence reconfirmation of the latest loss', async () => {
+    await addTrade(loss);
+    await addTrade(later, {
+      status: 'OPEN',
+      generatedAt: '2026-10-12T07:05:00Z',
+      metadata: {
+        paper_post_loss_entry_guard_reason: 'MULTI_EVIDENCE_RECONFIRMED',
+        paper_post_loss_entry_guard_last_trade_id: loss,
+      },
+    });
+    expect((await state()).lastClosedTrade?.reconfirmed).toBe(true);
+  });
+
   it('does not treat a provider partial close as a fully closed position', async () => {
     await addTrade(loss, { status: 'OPEN' });
     await client.query(`UPDATE paper_states SET state = $1::jsonb`, [
