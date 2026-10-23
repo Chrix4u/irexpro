@@ -74,6 +74,7 @@ import {
   evaluatePaperResearchPairSideReliability,
   evaluatePaperResearchThroughput,
   evaluatePaperPairedReversalResearch,
+  isOct19ProvenM5PaperExecutionAllowed,
   paperResearchThroughputModelVersion,
   selectPaperExecutionRoute,
 } from './paper-research-throughput';
@@ -2423,6 +2424,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             );
             continue;
           }
+          if (!isOct19ProvenM5PaperExecutionAllowed(paperExecutionRoute)) {
+            this.logger.log(
+              `Oct19 proven M5 PAPER control ${best.instrument} ${best.direction} ` +
+                `execution=SHADOW_ONLY route=${paperExecutionRoute} reason=ROUTE_OUTSIDE_PROVEN_M5_COHORT`,
+            );
+            continue;
+          }
+
           if (rejectedEdgeCanary?.eligible) {
             this.logger.warn(
               `Rejected-edge PAPER canary ${best.instrument} ${best.direction} execution=ELIGIBLE ` +
