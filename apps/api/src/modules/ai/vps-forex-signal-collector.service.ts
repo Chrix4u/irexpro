@@ -171,6 +171,10 @@ import {
 
 const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
+
+export function paperOpportunityScoutModelVersion(engineCode: string): string {
+  return `external-provider/${engineCode}/paper-opportunity-scout-v2`;
+}
 const LEGACY_V7_EXECUTION_FROZEN = true;
 const MULTI_MODEL_PAPER_EXECUTION_ENABLED = true;
 
@@ -1813,6 +1817,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             eventRisk: ensembleGovernance.eventRisk,
             portfolioQuality: planBEnsemble.portfolioQuality,
             driftState: ensembleGovernance.driftState,
+            idleMinutes: paperIdleState.idleMinutes,
           });
           const normalPaperExecutionCandidate =
             fullSizePaperExecutionCandidate || paperOpportunityScout.eligible;
@@ -1821,7 +1826,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               `PAPER opportunity scout ${best.instrument} ${best.direction} qualification=ELIGIBLE ` +
                 `confidence=${best.confidence.toFixed(4)} consensus=${planBEnsemble.consensusPassed}/${planBEnsemble.consensusRequired} ` +
                 `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} drift=${ensembleGovernance.driftState} ` +
-                `lotCap=${paperOpportunityScout.lotUpperBound.toFixed(2)}`,
+                `mode=${paperOpportunityScout.mode} idleMinutes=${paperOpportunityScout.idleMinutes?.toFixed(1) ?? 'n/a'} ` +
+                `targetWindowMinutes=${paperOpportunityScout.targetWindowMinutes} lotCap=${paperOpportunityScout.lotUpperBound.toFixed(2)}`,
             );
           }
           await this.persistEnsembleShadowDecision(
@@ -2800,7 +2806,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         const strategyCode = `external-${ACTIVE_ENGINE_CODE}`;
         const timeframe = 'M5';
         const modelVersion = paperOpportunityScout.eligible
-          ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-opportunity-scout-v1`
+          ? paperOpportunityScoutModelVersion(ACTIVE_ENGINE_CODE)
           : paperExecutionRoute === 'REJECTED_EDGE_CANARY'
             ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
             : paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
@@ -2866,6 +2872,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paper_opportunity_scout_reason: paperOpportunityScout.reason,
             paper_opportunity_scout_lot_cap: paperOpportunityScout.lotUpperBound,
             paper_opportunity_scout_sizing_tier: paperOpportunityScout.sizingTier,
+            paper_opportunity_scout_mode: paperOpportunityScout.mode,
+            paper_opportunity_scout_idle_minutes: paperOpportunityScout.idleMinutes,
+            paper_opportunity_scout_target_window_minutes:
+              paperOpportunityScout.targetWindowMinutes,
             adaptive_risk_multiplier: adaptiveWinner.riskMultiplier.multiplier,
             adaptive_market_state: adaptiveWinner.marketState.state,
             adaptive_opportunity_score: adaptiveWinner.adaptiveScore,
