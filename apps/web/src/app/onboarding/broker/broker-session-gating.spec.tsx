@@ -124,7 +124,7 @@ describe('broker auth restoration gating', () => {
     expect(sessionStorage.getItem(IREXPRO_BROKER_OAUTH_FLOW_KEY)).toBe('flow-1');
   });
 
-  it('retains the authorized flow until durable account linking succeeds', async () => {
+  it('automatically links the only discovered DEMO account after authorization', async () => {
     authState.user = { id: 'user-1' };
     authState.restoring = false;
     sessionStorage.setItem(IREXPRO_BROKER_OAUTH_FLOW_KEY, 'flow-1');
@@ -141,11 +141,6 @@ describe('broker auth restoration gating', () => {
     });
 
     render(<BrokerOAuthCallbackClient code="authorization-code" />);
-
-    const linkButton = await screen.findByRole('button', { name: 'Link this account' });
-    expect(sessionStorage.getItem(IREXPRO_BROKER_OAUTH_FLOW_KEY)).toBe('flow-1');
-
-    fireEvent.click(linkButton);
 
     await waitFor(() => {
       expect(linkBrokerOAuth).toHaveBeenCalledWith({
