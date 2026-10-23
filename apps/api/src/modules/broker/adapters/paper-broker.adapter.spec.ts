@@ -136,6 +136,22 @@ describe('PAPER time-to-work policy', () => {
     });
   });
 
+  it('keeps the USDJPY-style M5 thesis alive inside its 20-minute forecast horizon', () => {
+    expect(
+      evaluatePaperTimeToWork({
+        elapsedMinutes: 6.96,
+        maxFavorablePnl: '0.36',
+        currentPnl: '-7.39',
+        initialRiskPnl: '14.55',
+        minimumHoldMinutes: 20,
+      }),
+    ).toMatchObject({
+      shouldClose: false,
+      checkpointMinutes: null,
+      reason: 'FORECAST_HORIZON_ACTIVE',
+    });
+  });
+
   it('cuts a deeply failing non-progressing trade at 5 minutes', () => {
     expect(evaluatePaperTimeToWork({ ...base, elapsedMinutes: 5 })).toMatchObject({
       shouldClose: true,
@@ -1346,6 +1362,32 @@ describe('PaperBrokerAdapter', () => {
   });
 
   // ─── closeOrder (full / partial) ──────────────────────────────────────────
+
+  it('does not panic-close a live M5 PAPER position inside the 20-minute forecast horizon', async () => {
+    const clock = new FakePaperClock(CLOCK_BASE_MS);
+    const sim = new PaperBrokerAdapter(
+      new ScriptedPaperPriceFeed([BASE, { bid: '1.09950', ask: '1.09960' }]),
+      clock,
+    );
+    await sim.connect({ accountId: 'paper-account-001' });
+    await sim.placeOrder(
+      order({
+        idempotencyKey: 'm5-forecast-hold',
+        stopLoss: '1.09910',
+        takeProfit: '1.10210',
+      }),
+    );
+
+    clock.advance(7 * 60_000);
+    await sim.getCurrentPrice('EURUSD');
+
+    const [position] = await sim.getOpenPositions();
+    expect(position).toBeDefined();
+    expect(position.unrealisedPnl).toBe('-6.00');
+    expect(
+      await sim.getClosedTrades(new Date(0), new Date(CLOCK_BASE_MS + 10 * 60_000)),
+    ).toHaveLength(0);
+  });
 
   it('tracks peak P&L and profit give-back without changing execution', async () => {
     const sim = scriptedAdapter([

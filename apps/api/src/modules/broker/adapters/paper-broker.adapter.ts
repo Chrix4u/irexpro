@@ -574,6 +574,8 @@ function lotSizeToUnits(lotSize: string): bigint {
   return units;
 }
 
+export const PAPER_M5_MINIMUM_FORECAST_HOLD_MINUTES = 20;
+
 export interface PaperTimeToWorkDecision {
   shouldClose: boolean;
   checkpointMinutes: 5 | 15 | 30 | 60 | null;
@@ -581,6 +583,7 @@ export interface PaperTimeToWorkDecision {
     | 'INSUFFICIENT_ELAPSED_TIME'
     | 'INVALID_RISK'
     | 'PROFIT_PROTECTION_OWNS_TRADE'
+    | 'FORECAST_HORIZON_ACTIVE'
     | 'FAILED_TO_WORK_5M'
     | 'FAILED_TO_WORK_15M'
     | 'FAILED_TO_WORK_30M'
@@ -593,6 +596,7 @@ export function evaluatePaperTimeToWork(input: {
   maxFavorablePnl: string;
   currentPnl: string;
   initialRiskPnl: string;
+  minimumHoldMinutes?: number;
 }): PaperTimeToWorkDecision {
   const hold = (
     reason: PaperTimeToWorkDecision['reason'],
@@ -602,6 +606,13 @@ export function evaluatePaperTimeToWork(input: {
     if (!Number.isFinite(input.elapsedMinutes) || input.elapsedMinutes < 5)
       return hold('INSUFFICIENT_ELAPSED_TIME');
     if (compareDecimalStrings(input.initialRiskPnl, '0') <= 0) return hold('INVALID_RISK');
+    if (
+      Number.isFinite(input.minimumHoldMinutes) &&
+      input.minimumHoldMinutes! > 0 &&
+      input.elapsedMinutes < input.minimumHoldMinutes!
+    ) {
+      return hold('FORECAST_HORIZON_ACTIVE');
+    }
     const risk = input.initialRiskPnl;
     const peak = input.maxFavorablePnl;
     const current = input.currentPnl;
@@ -1052,6 +1063,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       maxFavorablePnl: position.pathMaxFavorablePnl,
       currentPnl,
       initialRiskPnl,
+      minimumHoldMinutes: PAPER_M5_MINIMUM_FORECAST_HOLD_MINUTES,
     });
     if (!decision.shouldClose) return false;
     this.logger.warn(
