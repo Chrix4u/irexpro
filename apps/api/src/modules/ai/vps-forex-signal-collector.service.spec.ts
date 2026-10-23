@@ -182,6 +182,25 @@ describe('calibrated idle recovery scanner plumbing', () => {
     });
     expect(query).toHaveBeenCalledTimes(1);
   });
+
+  it('derives idle minutes from PAPER session start when no signal trade exists yet', async () => {
+    const collector = Object.create(VpsForexSignalCollectorService.prototype) as any;
+    const query = jest.fn().mockResolvedValue([{ last_opened_at: null }]);
+    collector.dataSource = { query };
+    await expect(
+      collector.loadPaperIdleState(
+        'user-1',
+        'conn-1',
+        new Date('2026-10-20T17:00:00.000Z'),
+        new Date('2026-10-20T16:00:00.000Z'),
+      ),
+    ).resolves.toEqual({
+      available: true,
+      lastOpenedAt: null,
+      idleMinutes: 60,
+    });
+    expect(query).toHaveBeenCalledTimes(1);
+  });
 });
 
 const PAIRS = [
