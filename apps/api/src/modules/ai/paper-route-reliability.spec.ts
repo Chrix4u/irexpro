@@ -81,10 +81,10 @@ describe('PAPER trend-route reliability', () => {
 });
 
 describe('PAPER trend pair-side reliability shadow', () => {
-  it('is observational only and does not apply to non-continuation routes', () => {
+  it('is observational only and does not apply to early-transition routes', () => {
     expect(
       evaluatePaperTrendPairSideReliabilityShadow({
-        strategyRoute: 'CONFIRMED_REVERSAL',
+        strategyRoute: 'EARLY_TRANSITION',
         evidence: evidence({ closedTrades: 20, profitFactor: 0.1, maxDrawdown: 0.4 }),
       }),
     ).toMatchObject({
@@ -155,6 +155,24 @@ describe('PAPER trend pair-side reliability execution gate', () => {
     expect(
       evaluatePaperTrendPairSideReliability({
         strategyRoute: 'TREND_CONTINUATION',
+        evidence: evidence({
+          closedTrades: PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES,
+          profitFactor: 0.72,
+          maxDrawdown: 0.05,
+        }),
+      }),
+    ).toMatchObject({
+      state: 'RESEARCH_ONLY',
+      fullSizeEligible: false,
+      researchFallbackRequested: true,
+      reason: 'PAIR_SIDE_PROFIT_FACTOR_BELOW_ONE',
+    });
+  });
+
+  it('demotes a mature weak confirmed-reversal pair-side to research-only', () => {
+    expect(
+      evaluatePaperTrendPairSideReliability({
+        strategyRoute: 'CONFIRMED_REVERSAL',
         evidence: evidence({
           closedTrades: PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES,
           profitFactor: 0.72,

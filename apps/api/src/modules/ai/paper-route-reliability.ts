@@ -54,7 +54,10 @@ export function evaluatePaperTrendPairSideReliabilityShadow(input: {
     positiveWindowFraction,
   };
 
-  if (input.strategyRoute !== 'TREND_CONTINUATION') {
+  if (
+    input.strategyRoute !== 'TREND_CONTINUATION' &&
+    input.strategyRoute !== 'CONFIRMED_REVERSAL'
+  ) {
     return { ...base, state: 'NOT_APPLICABLE', reason: 'NON_CONTINUATION_ROUTE' };
   }
 
