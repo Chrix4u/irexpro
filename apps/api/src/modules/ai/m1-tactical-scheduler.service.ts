@@ -43,8 +43,17 @@ import {
   type M1FailedMoveRescueInput,
   type M1FailedMoveRescueDecision,
 } from './m1-failed-move-rescue';
+import {
+  evaluateM1ShadowPairSideReliability,
+  M1_SHADOW_MICRO_RELIABILITY_ARTIFACT,
+  type M1ShadowPairSideReliabilityDecision,
+} from './m1-shadow-pair-side-reliability';
 
-export type M1TacticalExecutionPhase = 'SHADOW' | 'PAPER_CONTINUATION' | 'PAPER_ALL_ROUTES';
+export type M1TacticalExecutionPhase =
+  | 'SHADOW'
+  | 'PAPER_CONTINUATION'
+  | 'PAPER_ALL_ROUTES'
+  | 'PAPER_EARLY_TRANSITION_MICRO';
 
 export interface M1TacticalRolloutPolicy {
   version: string;
@@ -96,6 +105,13 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V3: Readonly<M1TacticalRolloutPolicy> = 
   phase: 'PAPER_ALL_ROUTES',
 });
 
+export const M1_TACTICAL_ROLLOUT_POLICY_V4: Readonly<M1TacticalRolloutPolicy> = Object.freeze({
+  ...M1_TACTICAL_ROLLOUT_POLICY_V1,
+  version: 'm1-tactical-rollout-v4-early-transition-micro',
+  phase: 'PAPER_EARLY_TRANSITION_MICRO',
+  paperVolumeCap: 0.01,
+});
+
 export function m1RiskMarketRegime(
   route: M1TacticalRoute,
 ): 'TREND_HEALTHY' | 'REVERSAL' | 'TRANSITION' | undefined {
@@ -118,6 +134,7 @@ export function m1RouteExecutableInPhase(
 ): boolean {
   if (phase === 'SHADOW' || route === 'ABSTAIN') return false;
   if (phase === 'PAPER_CONTINUATION') return route === 'M1_TREND_CONTINUATION';
+  if (phase === 'PAPER_EARLY_TRANSITION_MICRO') return route === 'M1_EARLY_TRANSITION';
   return (
     route === 'M1_TREND_CONTINUATION' ||
     route === 'M1_CONFIRMED_REVERSAL' ||
@@ -462,6 +479,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       paperSimulationSpreadPrice,
       reliability,
     });
+    const shadowPairSideReliability = await this.shadowPairSideReliabilityFor(
+      userId,
+      brokerConnectionId,
+      candidate,
+      routeDecision,
+      decisionTime,
+    );
 
     const shadowOnly = this.rolloutPolicy.phase === 'SHADOW';
     const routeExecutable = m1RouteExecutableInPhase(this.rolloutPolicy.phase, routeDecision.route);
@@ -471,13 +495,27 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         : this.rolloutPolicy.routeNetExpectedRFloors[routeDecision.route];
     const routePayoffEligible =
       routeDecision.route !== 'ABSTAIN' && governance.netExpectedR >= routeNetExpectedRFloor;
-    const canExecute =
-      routeExecutable &&
-      routePayoffEligible &&
-      governance.paperEligible &&
-      governance.executionAuthority === 'PAPER_ONLY_RESEARCH';
+    const earlyTransitionMicro =
+      this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_MICRO' &&
+      routeDecision.route === 'M1_EARLY_TRANSITION';
+    const microDriftOnlyRescue =
+      earlyTransitionMicro &&
+      shadowPairSideReliability?.eligible === true &&
+      governance.blockers.length === 1 &&
+      governance.blockers[0] === 'DRIFT_OUT_OF_DISTRIBUTION';
+    const standardGovernanceExecutable =
+      governance.paperEligible && governance.executionAuthority === 'PAPER_ONLY_RESEARCH';
+    const governanceExecutable = earlyTransitionMicro
+      ? shadowPairSideReliability?.eligible === true &&
+        (standardGovernanceExecutable || microDriftOnlyRescue)
+      : standardGovernanceExecutable;
+    const canExecute = routeExecutable && routePayoffEligible && governanceExecutable;
+    const effectiveGovernanceBlockers = microDriftOnlyRescue ? [] : governance.blockers;
     const blockers = unique([
-      ...governance.blockers,
+      ...effectiveGovernanceBlockers,
+      ...(earlyTransitionMicro && shadowPairSideReliability?.eligible !== true
+        ? [`M1_SHADOW_RELIABILITY_${shadowPairSideReliability?.reason ?? 'UNAVAILABLE'}`]
+        : []),
       ...(routeExecutable && !routePayoffEligible ? ['M1_ROUTE_NET_EXPECTED_R_FLOOR'] : []),
       ...(shadowOnly ? ['M1_PHASE_SHADOW'] : []),
       ...(!shadowOnly && !routeExecutable && routeDecision.route !== 'ABSTAIN'
@@ -500,6 +538,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ...governance,
         routeDecision: { ...routeDecision },
         reliability: reliability ? { ...reliability } : null,
+        shadowPairSideReliability: shadowPairSideReliability
+          ? { artifact: M1_SHADOW_MICRO_RELIABILITY_ARTIFACT, ...shadowPairSideReliability }
+          : null,
+        microDriftOnlyRescue,
         rolloutPolicyVersion: this.rolloutPolicy.version,
         rolloutPhase: this.rolloutPolicy.phase,
         routeNetExpectedRFloor,
@@ -520,6 +562,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         governance,
         features,
         decisionTime,
+        shadowPairSideReliability,
+        microDriftOnlyRescue,
       );
     }
   }
@@ -533,6 +577,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     governance: ReturnType<typeof evaluateM1TacticalGovernance>,
     features: NonNullable<ReturnType<typeof buildM1TacticalFeatures>>,
     decisionTime: Date,
+    shadowPairSideReliability: M1ShadowPairSideReliabilityDecision | null,
+    microDriftOnlyRescue: boolean,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -590,6 +636,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_policy_version: candidate.policyVersion,
           m1_rollout_policy_version: this.rolloutPolicy.version,
           m1_rollout_phase: this.rolloutPolicy.phase,
+          m1_shadow_pair_side_reliability_artifact: shadowPairSideReliability
+            ? M1_SHADOW_MICRO_RELIABILITY_ARTIFACT
+            : null,
+          m1_shadow_pair_side_reliability_reason: shadowPairSideReliability?.reason ?? null,
+          m1_shadow_pair_side_reliability_samples: shadowPairSideReliability?.samples ?? 0,
+          m1_shadow_pair_side_reliability_average_r: shadowPairSideReliability?.averageNetR ?? null,
+          m1_shadow_pair_side_reliability_profit_factor:
+            shadowPairSideReliability?.profitFactor ?? null,
+          m1_shadow_pair_side_reliability_positive_fraction:
+            shadowPairSideReliability?.positiveFraction ?? null,
+          m1_micro_drift_only_rescue: microDriftOnlyRescue,
           m1_decision_id: decisionId,
           m1_gross_expected_r: candidate.grossExpectedR,
           m1_execution_cost_r: governance.genericGovernance.estimatedExecutionCostR,
@@ -681,6 +738,37 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       rescue,
     });
     return rescue;
+  }
+
+  private async shadowPairSideReliabilityFor(
+    userId: string,
+    brokerConnectionId: string,
+    candidate: M1TacticalCandidate,
+    routeDecision: M1TacticalRouteDecision,
+    evaluatedAt: Date,
+  ): Promise<M1ShadowPairSideReliabilityDecision | null> {
+    if (
+      this.rolloutPolicy.phase !== 'PAPER_EARLY_TRANSITION_MICRO' ||
+      !routeDecision.eligible ||
+      routeDecision.route !== 'M1_EARLY_TRANSITION'
+    ) {
+      return null;
+    }
+
+    const outcomes = await this.evidence.loadShadowPairSideOutcomes({
+      userId,
+      brokerConnectionId,
+      route: 'M1_EARLY_TRANSITION',
+      instrument: candidate.instrument,
+      direction: candidate.direction,
+      policyVersion: candidate.policyVersion,
+      evaluatedAt,
+    });
+    return evaluateM1ShadowPairSideReliability({
+      route: 'M1_EARLY_TRANSITION',
+      evaluatedAt,
+      outcomes,
+    });
   }
 
   private async reliabilityFor(
