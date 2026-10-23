@@ -68,6 +68,25 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
         // replaying the provider code, so a callback-page reload remains safe.
         setFlowId(result.flowId);
         setAccounts(result.accounts);
+
+        // Exactly one eligible DEMO account needs no second account-selection
+        // click. Link it while this durable AUTHORIZED flow is still valid.
+        // Multiple-account and LIVE cases still stop at explicit selection.
+        const autoLinkAccount =
+          result.accounts.length === 1 && !result.accounts[0].isLive ? result.accounts[0] : null;
+        if (autoLinkAccount) {
+          const connection = await api.linkBrokerOAuth({
+            flowId: result.flowId,
+            ctidTraderAccountId: autoLinkAccount.ctidTraderAccountId,
+            displayName: `${autoLinkAccount.brokerTitleShort ?? 'cTrader'} DEMO ${autoLinkAccount.ctidTraderAccountId}`,
+          });
+          if (cancelled) return;
+          sessionStorage.removeItem(IREXPRO_BROKER_OAUTH_FLOW_KEY);
+          setLinkedConnection(connection);
+          setPhase('done');
+          return;
+        }
+
         setPhase('pick');
       } catch (err) {
         if (cancelled) return;
