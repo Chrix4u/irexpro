@@ -4,6 +4,8 @@ export const PAPER_TREND_ROUTE_RELIABILITY_ARTIFACT = 'paper-trend-route-reliabi
 export const PAPER_TREND_ROUTE_RELIABILITY_MIN_EPISODES = 20;
 export const PAPER_TREND_ROUTE_RELIABILITY_MIN_PROFIT_FACTOR = 1.0;
 export const PAPER_TREND_ROUTE_RELIABILITY_MAX_DRAWDOWN = 0.12;
+export const PAPER_REVERSAL_ROUTE_RELIABILITY_ARTIFACT = 'paper-reversal-route-reliability-v1';
+export const PAPER_REVERSAL_ROUTE_RELIABILITY_MIN_EPISODES = 8;
 
 export const PAPER_TREND_PAIR_SIDE_RELIABILITY_SHADOW_ARTIFACT =
   'paper-trend-pair-side-reliability-shadow-v1';
@@ -130,6 +132,116 @@ export function evaluatePaperTrendPairSideReliability(input: {
     state: shadow.state,
     fullSizeEligible: true,
     researchFallbackRequested: false,
+  };
+}
+
+export interface PaperReversalRouteReliabilityDecision {
+  artifact: typeof PAPER_REVERSAL_ROUTE_RELIABILITY_ARTIFACT;
+  state: PaperTrendRouteReliabilityState;
+  fullSizeEligible: boolean;
+  researchFallbackRequested: boolean;
+  episodes: number;
+  profitFactor: number | null;
+  maxDrawdown: number | null;
+  reason:
+    | 'NON_REVERSAL_ROUTE'
+    | 'INSUFFICIENT_REVERSAL_ROUTE_EVIDENCE'
+    | 'REVERSAL_ROUTE_HEALTHY'
+    | 'REVERSAL_ROUTE_PROFIT_FACTOR_BELOW_ONE'
+    | 'REVERSAL_ROUTE_DRAWDOWN_EXCEEDED';
+}
+
+export function evaluatePaperReversalRouteReliability(input: {
+  strategyRoute: string;
+  evidence?: EnsembleSleeveEvidence | null;
+}): PaperReversalRouteReliabilityDecision {
+  const evidence = input.evidence ?? null;
+  const episodes = Math.max(0, Math.trunc(evidence?.closedTrades ?? 0));
+  const profitFactor = evidence?.profitFactor ?? null;
+  const maxDrawdown = evidence?.maxDrawdown ?? null;
+  const base = {
+    artifact: PAPER_REVERSAL_ROUTE_RELIABILITY_ARTIFACT,
+    episodes,
+    profitFactor,
+    maxDrawdown,
+  } as const;
+
+  if (input.strategyRoute !== 'CONFIRMED_REVERSAL') {
+    return {
+      ...base,
+      state: 'NOT_APPLICABLE',
+      fullSizeEligible: true,
+      researchFallbackRequested: false,
+      reason: 'NON_REVERSAL_ROUTE',
+    };
+  }
+
+  if (episodes < PAPER_REVERSAL_ROUTE_RELIABILITY_MIN_EPISODES) {
+    return {
+      ...base,
+      state: 'COLLECTING',
+      fullSizeEligible: true,
+      researchFallbackRequested: false,
+      reason: 'INSUFFICIENT_REVERSAL_ROUTE_EVIDENCE',
+    };
+  }
+
+  if (maxDrawdown != null && maxDrawdown > PAPER_TREND_ROUTE_RELIABILITY_MAX_DRAWDOWN) {
+    return {
+      ...base,
+      state: 'RESEARCH_ONLY',
+      fullSizeEligible: false,
+      researchFallbackRequested: true,
+      reason: 'REVERSAL_ROUTE_DRAWDOWN_EXCEEDED',
+    };
+  }
+
+  if (
+    profitFactor != null &&
+    Number.isFinite(profitFactor) &&
+    profitFactor < PAPER_TREND_ROUTE_RELIABILITY_MIN_PROFIT_FACTOR
+  ) {
+    return {
+      ...base,
+      state: 'RESEARCH_ONLY',
+      fullSizeEligible: false,
+      researchFallbackRequested: true,
+      reason: 'REVERSAL_ROUTE_PROFIT_FACTOR_BELOW_ONE',
+    };
+  }
+
+  return {
+    ...base,
+    state: 'HEALTHY',
+    fullSizeEligible: true,
+    researchFallbackRequested: false,
+    reason: 'REVERSAL_ROUTE_HEALTHY',
+  };
+}
+
+export interface PaperReliabilityExecutionGateDecision {
+  fullSizeEligible: boolean;
+  pairSideDemoted: boolean;
+  routeDemoted: boolean;
+  routeDiagnosticOnly: boolean;
+}
+
+export function evaluatePaperReliabilityExecutionGate(input: {
+  strategyRoute: string;
+  route: { fullSizeEligible: boolean };
+  pairSide: PaperTrendPairSideReliabilityDecision;
+}): PaperReliabilityExecutionGateDecision {
+  const pairSideDemoted = !input.pairSide.fullSizeEligible;
+  const matureHealthyPairSide = input.pairSide.state === 'HEALTHY';
+  const routeDemoted =
+    input.strategyRoute === 'CONFIRMED_REVERSAL' &&
+    !input.route.fullSizeEligible &&
+    !matureHealthyPairSide;
+  return {
+    fullSizeEligible: !pairSideDemoted && !routeDemoted,
+    pairSideDemoted,
+    routeDemoted,
+    routeDiagnosticOnly: !routeDemoted,
   };
 }
 
