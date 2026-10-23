@@ -98,7 +98,8 @@ export const PAPER_POST_LOSS_STATE_QUERY = `
         AND t2.fill_price > 0 AND t2.external_order_id IS NOT NULL
         AND t2.opened_at > lc.closed_at
         AND ti2.signal_generated_at > lc.closed_at
-        AND ti2.metadata->>'paper_post_loss_entry_guard_reason' = 'DIRECTION_RECONFIRMED'
+        AND ti2.metadata->>'paper_post_loss_entry_guard_reason'
+          IN ('DIRECTION_RECONFIRMED', 'MULTI_EVIDENCE_RECONFIRMED')
         AND ti2.metadata->>'paper_post_loss_entry_guard_last_trade_id' = lc.id::text
     ) ELSE false END AS reconfirmed
   FROM (SELECT 1) anchor LEFT JOIN latest_closed lc ON true
