@@ -12,6 +12,7 @@ import {
   isFreshOpportunity,
   evaluatePaperEntryMarketAlignment,
   executableNetExpectedR,
+  paperOpportunityScoutModelVersion,
 } from './vps-forex-signal-collector.service';
 import { ExecutionService } from '../execution/execution.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
@@ -25,6 +26,7 @@ import * as PairedDirectionReversalModule from './paired-direction-reversal';
 import * as PaperSpreadCalibrationModule from './paper-spread-calibration-shadow';
 import { PAPER_POST_LOSS_STATE_QUERY } from './paper-post-loss-state-query';
 import * as PaperPostLossEntryGuardModule from './paper-post-loss-entry-guard';
+import * as PaperOpportunityScoutModule from './paper-opportunity-scout';
 
 // Collection fixtures explicitly provide a healthy, empty PAPER history.
 // Missing/empty production store responses are tested separately below.
@@ -103,6 +105,14 @@ describe('dynamic PAPER lot ceiling', () => {
         consensusPassed: 5,
       }),
     ).toEqual({ upperBound: 0.2, tier: 'BASE' });
+  });
+});
+
+describe('PAPER opportunity scout model identity', () => {
+  it('separates idle-aware participation outcomes from the v1 scout cohort', () => {
+    expect(paperOpportunityScoutModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v2',
+    );
   });
 });
 
@@ -1542,6 +1552,7 @@ describe('VpsForexSignalCollectorService', () => {
           blockers: target ? ['SLEEVE_COLLECTING'] : ['ENSEMBLE_NOT_ADMITTED'],
         } as any;
       });
+    const scoutSpy = jest.spyOn(PaperOpportunityScoutModule, 'evaluatePaperOpportunityScout');
     const reversalSpy = jest
       .spyOn(PairedDirectionReversalModule, 'evaluatePairedDirectionReversal')
       .mockReturnValue({
@@ -1595,6 +1606,11 @@ describe('VpsForexSignalCollectorService', () => {
       } as any,
     );
     jest.spyOn(collector as any, 'loadAdaptiveAllocationCapital').mockResolvedValue('1000');
+    jest.spyOn(collector as any, 'loadPaperIdleState').mockResolvedValue({
+      available: true,
+      lastOpenedAt: new Date(Date.now() - 65 * 60_000),
+      idleMinutes: 65,
+    });
     const pairSideReliabilitySpy = jest
       .spyOn(collector as any, 'loadPaperTrendPairSideReliabilityEvidence')
       .mockResolvedValue(null);
@@ -1725,6 +1741,7 @@ describe('VpsForexSignalCollectorService', () => {
         }) as unknown as typeof fetch,
       );
 
+      expect(scoutSpy).toHaveBeenCalledWith(expect.objectContaining({ idleMinutes: 65 }));
       expect(riskSnapshotSpy).toHaveBeenCalledTimes(3);
       expect(receiveSignal).toHaveBeenCalledTimes(1);
       expect(receiveSignal.mock.calls[0]![0]).toEqual(
@@ -1738,6 +1755,9 @@ describe('VpsForexSignalCollectorService', () => {
             paper_entry_market_alignment_reason: 'ALIGNED',
             paper_entry_market_alignment_fast_mark_source: 'STREAM',
             paper_entry_market_alignment_fast_mark_provider: 'DERIV',
+            paper_opportunity_scout_mode: 'RECOVERY',
+            paper_opportunity_scout_idle_minutes: 65,
+            paper_opportunity_scout_target_window_minutes: 30,
           }),
         }),
       );
@@ -1753,6 +1773,7 @@ describe('VpsForexSignalCollectorService', () => {
       );
       expect(reversalRouteReliabilitySpy).toHaveBeenCalledWith('user-1', 'conn-1');
     } finally {
+      scoutSpy.mockRestore();
       reversalSpy.mockRestore();
       governanceSpy.mockRestore();
       planBSpy.mockRestore();

@@ -1,8 +1,21 @@
 export const PAPER_OPPORTUNITY_SCOUT_LOT_CAP = 0.05;
+export const PAPER_OPPORTUNITY_SCOUT_ACTIVE_LOT_CAP = 0.03;
+export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_LOT_CAP = 0.02;
+export const PAPER_OPPORTUNITY_SCOUT_TARGET_WINDOW_MINUTES = 30;
+export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_IDLE_MINUTES = 60;
 export const PAPER_OPPORTUNITY_SCOUT_MIN_CONFIDENCE = 0.6;
+export const PAPER_OPPORTUNITY_SCOUT_ACTIVE_MIN_CONFIDENCE = 0.58;
+export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_CONFIDENCE = 0.56;
 export const PAPER_OPPORTUNITY_SCOUT_MIN_NET_EXPECTED_R = 0.08;
+export const PAPER_OPPORTUNITY_SCOUT_ACTIVE_MIN_NET_EXPECTED_R = 0.06;
+export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_NET_EXPECTED_R = 0.04;
 export const PAPER_OPPORTUNITY_SCOUT_MIN_QUALITY = 0.3;
+export const PAPER_OPPORTUNITY_SCOUT_ACTIVE_MIN_QUALITY = 0.25;
+export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_QUALITY = 0.2;
 export const PAPER_OPPORTUNITY_SCOUT_MIN_PORTFOLIO_QUALITY = 0.35;
+export const PAPER_OPPORTUNITY_SCOUT_RELAXED_MIN_ALIGNED_MOMENTUM_ATR = 0.15;
+
+export type PaperOpportunityScoutMode = 'BASE' | 'ACTIVE' | 'RECOVERY';
 
 export interface PaperOpportunityScoutInput {
   normalPaperExecution: boolean;
@@ -27,6 +40,7 @@ export interface PaperOpportunityScoutInput {
   eventRisk: 'CLEAR' | 'HIGH_IMPACT_BLOCK' | 'UNVERIFIED';
   portfolioQuality: number;
   driftState: 'NORMAL' | 'STRESSED' | 'OUT_OF_DISTRIBUTION';
+  idleMinutes?: number | null;
 }
 
 export type PaperOpportunityScoutReason =
@@ -49,26 +63,91 @@ export interface PaperOpportunityScoutDecision {
   reason: PaperOpportunityScoutReason;
   lotUpperBound: number;
   sizingTier: 'RESEARCH';
+  mode: PaperOpportunityScoutMode;
+  targetWindowMinutes: typeof PAPER_OPPORTUNITY_SCOUT_TARGET_WINDOW_MINUTES;
+  idleMinutes: number | null;
 }
 
-function reject(reason: PaperOpportunityScoutReason): PaperOpportunityScoutDecision {
+interface PaperOpportunityScoutPolicy {
+  mode: PaperOpportunityScoutMode;
+  lotUpperBound: number;
+  minConfidence: number;
+  minNetExpectedR: number;
+  minQuality: number;
+  requireAlignedMomentum: boolean;
+  idleMinutes: number | null;
+}
+
+function resolvePolicy(idleMinutes: number | null | undefined): PaperOpportunityScoutPolicy {
+  const normalizedIdleMinutes =
+    Number.isFinite(idleMinutes) && idleMinutes! >= 0 ? idleMinutes! : null;
+  if (
+    normalizedIdleMinutes !== null &&
+    normalizedIdleMinutes >= PAPER_OPPORTUNITY_SCOUT_RECOVERY_IDLE_MINUTES
+  ) {
+    return {
+      mode: 'RECOVERY',
+      lotUpperBound: PAPER_OPPORTUNITY_SCOUT_RECOVERY_LOT_CAP,
+      minConfidence: PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_CONFIDENCE,
+      minNetExpectedR: PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_NET_EXPECTED_R,
+      minQuality: PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_QUALITY,
+      requireAlignedMomentum: true,
+      idleMinutes: normalizedIdleMinutes,
+    };
+  }
+  if (
+    normalizedIdleMinutes !== null &&
+    normalizedIdleMinutes >= PAPER_OPPORTUNITY_SCOUT_TARGET_WINDOW_MINUTES
+  ) {
+    return {
+      mode: 'ACTIVE',
+      lotUpperBound: PAPER_OPPORTUNITY_SCOUT_ACTIVE_LOT_CAP,
+      minConfidence: PAPER_OPPORTUNITY_SCOUT_ACTIVE_MIN_CONFIDENCE,
+      minNetExpectedR: PAPER_OPPORTUNITY_SCOUT_ACTIVE_MIN_NET_EXPECTED_R,
+      minQuality: PAPER_OPPORTUNITY_SCOUT_ACTIVE_MIN_QUALITY,
+      requireAlignedMomentum: true,
+      idleMinutes: normalizedIdleMinutes,
+    };
+  }
   return {
-    eligible: false,
-    reason,
+    mode: 'BASE',
     lotUpperBound: PAPER_OPPORTUNITY_SCOUT_LOT_CAP,
+    minConfidence: PAPER_OPPORTUNITY_SCOUT_MIN_CONFIDENCE,
+    minNetExpectedR: PAPER_OPPORTUNITY_SCOUT_MIN_NET_EXPECTED_R,
+    minQuality: PAPER_OPPORTUNITY_SCOUT_MIN_QUALITY,
+    requireAlignedMomentum: false,
+    idleMinutes: normalizedIdleMinutes,
+  };
+}
+
+function decision(
+  policy: PaperOpportunityScoutPolicy,
+  eligible: boolean,
+  reason: PaperOpportunityScoutReason,
+): PaperOpportunityScoutDecision {
+  return {
+    eligible,
+    reason,
+    lotUpperBound: policy.lotUpperBound,
     sizingTier: 'RESEARCH',
+    mode: policy.mode,
+    targetWindowMinutes: PAPER_OPPORTUNITY_SCOUT_TARGET_WINDOW_MINUTES,
+    idleMinutes: policy.idleMinutes,
   };
 }
 
 /**
  * PAPER-only participation lane for positive-edge M5 trend opportunities that
- * miss a small number of soft ensemble votes. It never re-opens research or
- * confirmed-reversal authority, and it keeps hard event/cost/portfolio safety
- * evidence fail-closed. OOD candidates require materially stronger evidence.
+ * miss a small number of soft ensemble votes. Longer idleness may relax only
+ * soft predictive floors while position size falls. Hard event/cost/portfolio,
+ * route/regime and OOD evidence requirements remain fail-closed.
  */
 export function evaluatePaperOpportunityScout(
   input: PaperOpportunityScoutInput,
 ): PaperOpportunityScoutDecision {
+  const policy = resolvePolicy(input.idleMinutes);
+  const reject = (reason: PaperOpportunityScoutReason) => decision(policy, false, reason);
+
   if (input.normalPaperExecution) return reject('FULL_SIZE_ALREADY_ELIGIBLE');
   if (input.strategyRoute !== 'TREND_CONTINUATION') return reject('ROUTE_NOT_SCOUTABLE');
   if (!['TREND_HEALTHY', 'TREND_EXTENDED', 'TREND_WEAK'].includes(input.regime))
@@ -80,15 +159,9 @@ export function evaluatePaperOpportunityScout(
     input.portfolioQuality < PAPER_OPPORTUNITY_SCOUT_MIN_PORTFOLIO_QUALITY
   )
     return reject('PORTFOLIO_QUALITY_TOO_LOW');
-  if (
-    !Number.isFinite(input.confidence) ||
-    input.confidence < PAPER_OPPORTUNITY_SCOUT_MIN_CONFIDENCE
-  )
+  if (!Number.isFinite(input.confidence) || input.confidence < policy.minConfidence)
     return reject('CONFIDENCE_TOO_LOW');
-  if (
-    !Number.isFinite(input.netExpectedR) ||
-    input.netExpectedR < PAPER_OPPORTUNITY_SCOUT_MIN_NET_EXPECTED_R
-  )
+  if (!Number.isFinite(input.netExpectedR) || input.netExpectedR < policy.minNetExpectedR)
     return reject('NET_EXPECTED_R_TOO_LOW');
 
   const minimumConsensus = Math.max(4, input.consensusRequired - 2);
@@ -97,14 +170,19 @@ export function evaluatePaperOpportunityScout(
 
   if (
     [input.directionQuality, input.tradeQuality, input.exitQuality].some(
-      (value) => !Number.isFinite(value) || value < PAPER_OPPORTUNITY_SCOUT_MIN_QUALITY,
+      (value) => !Number.isFinite(value) || value < policy.minQuality,
     )
   )
     return reject('QUALITY_TOO_LOW');
 
+  const requiresMomentum =
+    policy.requireAlignedMomentum ||
+    input.regime === 'TREND_EXTENDED' ||
+    input.regime === 'TREND_WEAK';
   if (
-    (input.regime === 'TREND_EXTENDED' || input.regime === 'TREND_WEAK') &&
-    (!Number.isFinite(input.alignedMomentumAtr) || input.alignedMomentumAtr < 0.15)
+    requiresMomentum &&
+    (!Number.isFinite(input.alignedMomentumAtr) ||
+      input.alignedMomentumAtr < PAPER_OPPORTUNITY_SCOUT_RELAXED_MIN_ALIGNED_MOMENTUM_ATR)
   )
     return reject('MOMENTUM_NOT_CONFIRMED');
 
@@ -115,10 +193,5 @@ export function evaluatePaperOpportunityScout(
       return reject('DRIFT_EVIDENCE_TOO_WEAK');
   }
 
-  return {
-    eligible: true,
-    reason: 'OPPORTUNITY_SCOUT',
-    lotUpperBound: PAPER_OPPORTUNITY_SCOUT_LOT_CAP,
-    sizingTier: 'RESEARCH',
-  };
+  return decision(policy, true, 'OPPORTUNITY_SCOUT');
 }
