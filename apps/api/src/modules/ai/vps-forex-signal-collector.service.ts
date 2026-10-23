@@ -74,6 +74,7 @@ import {
   evaluatePaperResearchPairSideReliability,
   evaluatePaperResearchThroughput,
   evaluatePaperPairedReversalResearch,
+  isFridayBaselinePaperExecutionAllowed,
   paperResearchThroughputModelVersion,
   selectPaperExecutionRoute,
 } from './paper-research-throughput';
@@ -2423,6 +2424,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             );
             continue;
           }
+          if (!isFridayBaselinePaperExecutionAllowed(paperExecutionRoute)) {
+            this.logger.log(
+              `Friday baseline PAPER control ${best.instrument} ${best.direction} ` +
+                `execution=SHADOW_ONLY route=${paperExecutionRoute} reason=NON_NORMAL_ROUTE_QUARANTINED`,
+            );
+            continue;
+          }
+
           if (rejectedEdgeCanary?.eligible) {
             this.logger.warn(
               `Rejected-edge PAPER canary ${best.instrument} ${best.direction} execution=ELIGIBLE ` +

@@ -4,7 +4,7 @@
 
 **Goal:** Run a clean forward PAPER control using the proven Friday core entry path while retaining the current profit-protection improvements and keeping all exploratory execution shadow-only.
 
-**Architecture:** Preserve current `main` model scoring, risk, sizing, entry-alignment, stop/target, early-loss and 1-second profit-protection behavior. Narrow only final PAPER route selection so `NORMAL_PAPER` is the sole route permitted to create an order; canary, research-throughput, extension-exhaustion and paired-reversal remain available for scoring/evidence but cannot execute.
+**Architecture:** Preserve current `main` model scoring, risk, sizing, entry-alignment, stop/target, early-loss and 1-second profit-protection behavior. Keep route classification intact for research/evidence, then add a final execution-authority boundary before adaptive ranking/dispatch so only `NORMAL_PAPER` may create an order; canary, research-throughput, extension-exhaustion and paired-reversal remain fully scored and persisted but cannot execute.
 
 **Tech Stack:** NestJS/TypeScript, Jest, GitHub Actions, PostgreSQL-backed release gates.
 
@@ -38,19 +38,21 @@
 - Produces: regression proof that only `NORMAL_PAPER` may execute during the control.
 
 - [x] **Step 1: Write the failing test** covering normal PAPER and all four non-normal execution routes.
-- [ ] **Step 2: Run CI to verify current behavior fails the new quarantine assertions.**
+- [x] **Step 2: Run the regression against current behavior and confirm RED (4 failures / 1 pass).**
 
 ### Task 2: Quarantine non-normal PAPER execution routes
 
 **Files:**
 - Modify: `apps/api/src/modules/ai/paper-research-throughput.ts`
+- Modify: `apps/api/src/modules/ai/vps-forex-signal-collector.service.ts`
+- Modify: `apps/api/src/modules/ai/vps-forex-signal-collector.service.spec.ts`
 
 **Interfaces:**
-- Consumes: existing route eligibility inputs unchanged.
-- Produces: `NORMAL_PAPER` when normal admission passes; otherwise `NONE`.
+- Consumes: existing route classification and research-evidence pipeline unchanged.
+- Produces: a final pure authority predicate where only `NORMAL_PAPER` may enter adaptive execution ranking/dispatch; all other routes stay shadow-only.
 
-- [ ] **Step 1: Implement the minimal selector change without touching scoring/evidence functions.**
-- [ ] **Step 2: Run focused and full API verification.**
+- [x] **Step 1: Implement the minimal final-dispatch authority boundary without disabling scoring/evidence.**
+- [x] **Step 2: Run focused trading verification (164/164) and protection verification (113/113).**
 - [ ] **Step 3: Verify build, lint, PostgreSQL concurrency and release security.**
 
 ### Task 3: Release and forward-test the exact candidate

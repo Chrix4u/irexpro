@@ -347,6 +347,18 @@ export function selectPaperExecutionRoute(input: {
   return 'NONE';
 }
 
+/**
+ * Execution boundary for the Friday baseline forward-control cohort.
+ *
+ * Non-normal routes remain fully scored and persisted as research evidence, but
+ * only the core NORMAL_PAPER route may create a PAPER order. Keeping this as a
+ * pure final-authority predicate prevents exploratory candidates from
+ * contaminating the baseline without disabling their shadow learning.
+ */
+export function isFridayBaselinePaperExecutionAllowed(route: PaperExecutionRoute): boolean {
+  return route === 'NORMAL_PAPER';
+}
+
 export interface PaperResearchEpisodeGuardInput {
   currentEpisodeKey: string;
   previousEpisodeKey: string | null;
