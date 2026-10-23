@@ -1517,7 +1517,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       let representativeIsPaperEligible = false;
       const adaptiveScanStartedAt = new Date();
       const paperIdleState = paperSession
-        ? await this.loadPaperIdleState(userId, connectionId, adaptiveScanStartedAt)
+        ? await this.loadPaperIdleState(
+            userId,
+            connectionId,
+            adaptiveScanStartedAt,
+            paperSession.startedAt,
+          )
         : { available: false, lastOpenedAt: null, idleMinutes: null };
       const preAdaptiveCandidateRanks = new Map<Candidate, number>(
         rankedCandidates.map((candidate, index) => [candidate, index + 1]),
@@ -4672,6 +4677,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     userId: string,
     connectionId: string,
     evaluatedAt: Date,
+    sessionStartedAt?: Date | null,
   ): Promise<{ available: boolean; lastOpenedAt: Date | null; idleMinutes: number | null }> {
     if (!this.dataSource) {
       return { available: false, lastOpenedAt: null, idleMinutes: null };
@@ -4688,14 +4694,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         [userId, connectionId],
       )) as Array<{ last_opened_at: string | Date | null }>;
       const raw = rows[0]?.last_opened_at ?? null;
-      if (!raw) return { available: true, lastOpenedAt: null, idleMinutes: null };
-      const lastOpenedAt = new Date(raw);
-      const elapsedMs = evaluatedAt.getTime() - lastOpenedAt.getTime();
-      if (
-        !Number.isFinite(lastOpenedAt.getTime()) ||
-        !Number.isFinite(elapsedMs) ||
-        elapsedMs < 0
-      ) {
+      const lastOpenedAt = raw ? new Date(raw) : null;
+      const idleAnchor = lastOpenedAt ?? (sessionStartedAt ? new Date(sessionStartedAt) : null);
+      if (!idleAnchor) return { available: true, lastOpenedAt: null, idleMinutes: null };
+      const elapsedMs = evaluatedAt.getTime() - idleAnchor.getTime();
+      if (!Number.isFinite(idleAnchor.getTime()) || !Number.isFinite(elapsedMs) || elapsedMs < 0) {
         return { available: false, lastOpenedAt: null, idleMinutes: null };
       }
       return {
