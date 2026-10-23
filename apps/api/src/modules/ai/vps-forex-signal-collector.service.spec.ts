@@ -2840,7 +2840,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('routes a qualified extension-exhaustion setup into half-risk PAPER research', async () => {
+  it('keeps extension-exhaustion research shadow-only after fresh route losses', async () => {
     const live = new LivePaperMarketDataService();
     installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
@@ -2949,24 +2949,7 @@ describe('VpsForexSignalCollectorService', () => {
         .fn()
         .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
       await collector.collectOnce(fetchMock as unknown as typeof fetch);
-      expect(receiveSignal).toHaveBeenCalledTimes(1);
-      expect(receiveSignal).toHaveBeenCalledWith(
-        expect.objectContaining({
-          instrument: 'EURUSD',
-          direction: 'BUY',
-          modelVersion:
-            'external-provider/irexpro-multimodel-ensemble-v1/paper-extension-exhaustion-research-v1',
-          metadata: expect.objectContaining({
-            paper_execution_route: 'PAPER_EXTENSION_EXHAUSTION_RESEARCH',
-            paper_extension_exhaustion_research: true,
-            paper_extension_exhaustion_research_qualification_evidence: false,
-            paper_extension_exhaustion_research_execution_authority: 'PAPER_ONLY',
-            adaptive_risk_multiplier: 0.5,
-            position_sizing_tier: 'RESEARCH',
-            production_eligible: false,
-          }),
-        }),
-      );
+      expect(receiveSignal).not.toHaveBeenCalled();
     } finally {
       planBSpy.mockRestore();
       governanceSpy.mockRestore();

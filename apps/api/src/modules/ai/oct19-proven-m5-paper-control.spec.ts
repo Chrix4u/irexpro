@@ -29,7 +29,7 @@ describe('Oct 19 proven M5 PAPER control', () => {
     expect(isOct19ProvenM5PaperExecutionAllowed(route)).toBe(true);
   });
 
-  it('keeps extension-exhaustion M5 execution available', () => {
+  it('keeps extension-exhaustion classified for evidence but quarantines execution after fresh losses', () => {
     const route = selectPaperExecutionRoute({
       normalPaperExecution: false,
       rejectedEdgeCanaryEligible: false,
@@ -38,7 +38,7 @@ describe('Oct 19 proven M5 PAPER control', () => {
       pairedReversalResearchEligible: false,
     });
     expect(route).toBe('PAPER_EXTENSION_EXHAUSTION_RESEARCH');
-    expect(isOct19ProvenM5PaperExecutionAllowed(route)).toBe(true);
+    expect(isOct19ProvenM5PaperExecutionAllowed(route)).toBe(false);
   });
 
   it('keeps rejected-edge canary classified for evidence but quarantines execution', () => {

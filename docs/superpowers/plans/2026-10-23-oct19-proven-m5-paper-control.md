@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Run a clean forward PAPER control using the exact M5 route families that produced the verified 2026-10-19 10-trade, 9W/1L, +$34.02 cohort, while retaining the current stronger profit-protection and post-loss safeguards.
+**Goal:** Run a clean forward PAPER control using the strongest provenance-verified core from the 2026-10-19 M5 cohort: v11 research-throughput plus normal M5, which together produced 9 trades, 8W/1L, +$32.85, while retaining the current stronger profit-protection and post-loss safeguards.
 
-**Architecture:** Preserve current `main` model scoring, risk, sizing, entry-alignment, stop/target, early-loss and 1-second profit-protection behavior. Keep route classification intact. Permit the three verified M5 route families (`NORMAL_PAPER`, `PAPER_RESEARCH_THROUGHPUT` using the current v11 artifact, and `PAPER_EXTENSION_EXHAUSTION_RESEARCH`) to reach execution only after all current guards pass. Keep rejected-edge canary and paired-reversal shadow-only. M1 remains SHADOW under the already-merged M5-focus policy.
+**Architecture:** Preserve current `main` model scoring, risk, sizing, entry-alignment, stop/target, early-loss and 1-second profit-protection behavior. Keep route classification intact. Permit only `NORMAL_PAPER` and current v11 `PAPER_RESEARCH_THROUGHPUT` to reach execution after all current guards pass. Keep extension-exhaustion, rejected-edge canary, and paired-reversal shadow-only. Extension-exhaustion is explicitly excluded after two fresh losses on 2026-10-23. M1 remains SHADOW under the already-merged M5-focus policy.
 
 **Tech Stack:** NestJS/TypeScript, Jest, GitHub Actions, PostgreSQL-backed release gates.
 
@@ -22,7 +22,7 @@
 
 - `NORMAL_PAPER` must remain executable.
 - Current v11 `PAPER_RESEARCH_THROUGHPUT` must remain executable only after calibration, pair-side, episode, portfolio-loss, cost, and post-loss guards pass.
-- `PAPER_EXTENSION_EXHAUSTION_RESEARCH` must remain executable only through its existing guarded half-risk path.
+- `PAPER_EXTENSION_EXHAUSTION_RESEARCH` must remain fully scored but shadow-only after two fresh losses.
 - Explicit rejected-edge canary execution must not bypass the control.
 - Paired-reversal research must remain shadow-only.
 - M1 Tactical must remain SHADOW.
@@ -50,7 +50,7 @@
 
 **Interfaces:**
 - Consumes: existing route classification and research-evidence pipeline unchanged.
-- Produces: a final provenance predicate allowing `NORMAL_PAPER`, current v11 `PAPER_RESEARCH_THROUGHPUT`, and `PAPER_EXTENSION_EXHAUSTION_RESEARCH`; canary and paired-reversal stay shadow-only.
+- Produces: a final provenance predicate allowing only `NORMAL_PAPER` and current v11 `PAPER_RESEARCH_THROUGHPUT`; extension-exhaustion, canary and paired-reversal stay shadow-only.
 
 - [x] **Step 1: Implement the minimal final-dispatch authority boundary without disabling scoring/evidence.**
 - [x] **Step 2: Run focused trading verification (164/164) and protection verification (113/113).**
