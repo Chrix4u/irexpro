@@ -129,6 +129,10 @@ import {
   PaperCalibratedCostResearchRescueDecision,
   evaluatePaperCalibratedCostResearchRescue,
 } from './paper-calibrated-cost-rescue';
+import {
+  PaperOpportunityScoutDecision,
+  evaluatePaperOpportunityScout,
+} from './paper-opportunity-scout';
 import { AllocationService } from '../execution/services/allocation.service';
 import {
   paperAllocationRiskTargetPercent,
@@ -529,6 +533,7 @@ interface ExecutableCounterfactual {
     | null;
   paperTrendPairSideReliability: PaperTrendPairSideReliabilityDecision | null;
   paperTrendPairSideReliabilityShadow: PaperTrendPairSideReliabilityShadowDecision | null;
+  paperOpportunityScout: PaperOpportunityScoutDecision;
   paperExecutionRoute: ReturnType<typeof selectPaperExecutionRoute>;
   paperResearchEpisodeKey: string;
   paperResearchEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
@@ -1788,10 +1793,37 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             representativeSet = true;
             representativeIsPaperEligible = ensembleGovernance.paperExecutionEligible;
           }
-          const normalPaperExecutionCandidate = canExecuteMultiModelPaper(
+          const fullSizePaperExecutionCandidate = canExecuteMultiModelPaper(
             planBEnsemble,
             ensembleGovernance,
           );
+          const paperOpportunityScout = evaluatePaperOpportunityScout({
+            normalPaperExecution: fullSizePaperExecutionCandidate,
+            strategyRoute: planBEnsemble.strategyRoute,
+            regime: planBEnsemble.regime,
+            confidence: best.confidence,
+            consensusPassed: planBEnsemble.consensusPassed,
+            consensusRequired: planBEnsemble.consensusRequired,
+            netExpectedR: ensembleGovernance.netExpectedR,
+            directionQuality: planBEnsemble.directionQuality,
+            tradeQuality: planBEnsemble.tradeQuality,
+            exitQuality: planBEnsemble.exitQuality,
+            alignedMomentumAtr: best.shortHorizonMomentumAtr,
+            paperExecutionCostUsable: Boolean(ensembleGovernance.paperExecutionCostUsable),
+            eventRisk: ensembleGovernance.eventRisk,
+            portfolioQuality: planBEnsemble.portfolioQuality,
+            driftState: ensembleGovernance.driftState,
+          });
+          const normalPaperExecutionCandidate =
+            fullSizePaperExecutionCandidate || paperOpportunityScout.eligible;
+          if (paperOpportunityScout.eligible) {
+            this.logger.log(
+              `PAPER opportunity scout ${best.instrument} ${best.direction} qualification=ELIGIBLE ` +
+                `confidence=${best.confidence.toFixed(4)} consensus=${planBEnsemble.consensusPassed}/${planBEnsemble.consensusRequired} ` +
+                `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} drift=${ensembleGovernance.driftState} ` +
+                `lotCap=${paperOpportunityScout.lotUpperBound.toFixed(2)}`,
+            );
+          }
           await this.persistEnsembleShadowDecision(
             userId,
             paperSession?.id ?? null,
@@ -2488,6 +2520,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperTrendRouteReliability,
             paperTrendPairSideReliability,
             paperTrendPairSideReliabilityShadow,
+            paperOpportunityScout,
             paperExecutionRoute,
             paperResearchEpisodeKey,
             paperResearchEpisodeGuard,
@@ -2687,6 +2720,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperTrendRouteReliability,
           paperTrendPairSideReliability,
           paperTrendPairSideReliabilityShadow,
+          paperOpportunityScout,
           paperExecutionRoute,
           paperResearchEpisodeKey,
           paperResearchEpisodeGuard,
@@ -2765,8 +2799,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         const suggestedTakeProfit = Number(best.takeProfit.toFixed(digits));
         const strategyCode = `external-${ACTIVE_ENGINE_CODE}`;
         const timeframe = 'M5';
-        const modelVersion =
-          paperExecutionRoute === 'REJECTED_EDGE_CANARY'
+        const modelVersion = paperOpportunityScout.eligible
+          ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-opportunity-scout-v1`
+          : paperExecutionRoute === 'REJECTED_EDGE_CANARY'
             ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
             : paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
               ? paperResearchThroughputModelVersion(ACTIVE_ENGINE_CODE)
@@ -2827,6 +2862,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             external_provider_paper_only: true,
             production_eligible: false,
             paper_execution_route: paperExecutionRoute,
+            paper_opportunity_scout_eligible: paperOpportunityScout.eligible,
+            paper_opportunity_scout_reason: paperOpportunityScout.reason,
+            paper_opportunity_scout_lot_cap: paperOpportunityScout.lotUpperBound,
+            paper_opportunity_scout_sizing_tier: paperOpportunityScout.sizingTier,
             adaptive_risk_multiplier: adaptiveWinner.riskMultiplier.multiplier,
             adaptive_market_state: adaptiveWinner.marketState.state,
             adaptive_opportunity_score: adaptiveWinner.adaptiveScore,
@@ -3088,7 +3127,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             plan_b_ensemble_paper_admitted: planBEnsemble.paperAdmitted,
             plan_b_ensemble_admitted: planBEnsemble.admitted,
             plan_b_ensemble_reasons: planBEnsemble.reasons,
-            position_sizing_policy: 'risk-managed-dynamic-paper-band-v2',
+            position_sizing_policy: paperOpportunityScout.eligible
+              ? 'paper-opportunity-scout-capped-v1'
+              : 'risk-managed-dynamic-paper-band-v2',
             position_sizing_tier: dynamicLotSizing.tier,
             position_sizing_upper_bound_lots: dynamicLotSizing.upperBound,
             position_sizing_confidence: best.confidence,
@@ -3225,10 +3266,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     planBEnsemble: PlanBEnsembleScore;
     ensembleGovernance: EnsembleGovernanceDecision;
     paperCalibratedIdleRecovery?: PaperCalibratedIdleRecoveryDecision | null;
+    paperOpportunityScout?: PaperOpportunityScoutDecision | null;
   }): {
     upperBound: number;
     tier: PaperAllocationConfidenceTier;
   } {
+    if (option.paperOpportunityScout?.eligible) {
+      return {
+        upperBound: option.paperOpportunityScout.lotUpperBound,
+        tier: option.paperOpportunityScout.sizingTier,
+      };
+    }
     if (option.paperExecutionRoute === 'REJECTED_EDGE_CANARY') {
       return { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'RESEARCH' };
     }
