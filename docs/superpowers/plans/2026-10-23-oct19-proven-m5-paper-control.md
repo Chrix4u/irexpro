@@ -1,10 +1,10 @@
-# Friday Baseline PAPER Control Implementation Plan
+# Oct 19 Proven M5 PAPER Control Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Run a clean forward PAPER control using the proven Friday core entry path while retaining the current profit-protection improvements and keeping all exploratory execution shadow-only.
+**Goal:** Run a clean forward PAPER control using the exact M5 route families that produced the verified 2026-10-19 10-trade, 9W/1L, +$34.02 cohort, while retaining the current stronger profit-protection and post-loss safeguards.
 
-**Architecture:** Preserve current `main` model scoring, risk, sizing, entry-alignment, stop/target, early-loss and 1-second profit-protection behavior. Keep route classification intact for research/evidence, then add a final execution-authority boundary before adaptive ranking/dispatch so only `NORMAL_PAPER` may create an order; canary, research-throughput, extension-exhaustion and paired-reversal remain fully scored and persisted but cannot execute.
+**Architecture:** Preserve current `main` model scoring, risk, sizing, entry-alignment, stop/target, early-loss and 1-second profit-protection behavior. Keep route classification intact. Permit the three verified M5 route families (`NORMAL_PAPER`, `PAPER_RESEARCH_THROUGHPUT` using the current v11 artifact, and `PAPER_EXTENSION_EXHAUSTION_RESEARCH`) to reach execution only after all current guards pass. Keep rejected-edge canary and paired-reversal shadow-only. M1 remains SHADOW under the already-merged M5-focus policy.
 
 **Tech Stack:** NestJS/TypeScript, Jest, GitHub Actions, PostgreSQL-backed release gates.
 
@@ -20,27 +20,28 @@
 
 ## Review Focus
 
-- `NORMAL_PAPER=true` must still execute as `NORMAL_PAPER`.
-- Explicit rejected-edge canary enablement must not bypass the control.
-- Research-throughput eligibility must not create a PAPER order.
-- Extension-exhaustion research eligibility must not create a PAPER order.
-- Paired-reversal research eligibility must not create a PAPER order.
+- `NORMAL_PAPER` must remain executable.
+- Current v11 `PAPER_RESEARCH_THROUGHPUT` must remain executable only after calibration, pair-side, episode, portfolio-loss, cost, and post-loss guards pass.
+- `PAPER_EXTENSION_EXHAUSTION_RESEARCH` must remain executable only through its existing guarded half-risk path.
+- Explicit rejected-edge canary execution must not bypass the control.
+- Paired-reversal research must remain shadow-only.
+- M1 Tactical must remain SHADOW.
 
 ---
 
-### Task 1: Pin the control with a failing route regression
+### Task 1: Pin the proven M5 cohort with an execution-authority regression
 
 **Files:**
-- Create: `apps/api/src/modules/ai/friday-baseline-paper-control.spec.ts`
+- Create: `apps/api/src/modules/ai/oct19-proven-m5-paper-control.spec.ts`
 
 **Interfaces:**
 - Consumes: `selectPaperExecutionRoute()`.
-- Produces: regression proof that only `NORMAL_PAPER` may execute during the control.
+- Produces: regression proof that only the three provenance-verified Oct 19 M5 route families may execute during the control.
 
 - [x] **Step 1: Write the failing test** covering normal PAPER and all four non-normal execution routes.
-- [x] **Step 2: Run the regression against current behavior and confirm RED (4 failures / 1 pass).**
+- [x] **Step 2: Confirm current main has no provenance boundary and permits paired-reversal execution outside the proven cohort.**
 
-### Task 2: Quarantine non-normal PAPER execution routes
+### Task 2: Enforce the provenance boundary without removing later safeguards
 
 **Files:**
 - Modify: `apps/api/src/modules/ai/paper-research-throughput.ts`
@@ -49,7 +50,7 @@
 
 **Interfaces:**
 - Consumes: existing route classification and research-evidence pipeline unchanged.
-- Produces: a final pure authority predicate where only `NORMAL_PAPER` may enter adaptive execution ranking/dispatch; all other routes stay shadow-only.
+- Produces: a final provenance predicate allowing `NORMAL_PAPER`, current v11 `PAPER_RESEARCH_THROUGHPUT`, and `PAPER_EXTENSION_EXHAUSTION_RESEARCH`; canary and paired-reversal stay shadow-only.
 
 - [x] **Step 1: Implement the minimal final-dispatch authority boundary without disabling scoring/evidence.**
 - [x] **Step 2: Run focused trading verification (164/164) and protection verification (113/113).**

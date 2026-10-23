@@ -348,15 +348,19 @@ export function selectPaperExecutionRoute(input: {
 }
 
 /**
- * Execution boundary for the Friday baseline forward-control cohort.
+ * Execution boundary for the proven 2026-10-19 M5 forward-control cohort.
  *
- * Non-normal routes remain fully scored and persisted as research evidence, but
- * only the core NORMAL_PAPER route may create a PAPER order. Keeping this as a
- * pure final-authority predicate prevents exploratory candidates from
- * contaminating the baseline without disabling their shadow learning.
+ * The exact M5 route families that produced the 10-trade 9W/1L +$34.02 cohort
+ * remain executable under today's stricter downstream brakes and protection.
+ * Rejected-edge canary and paired-reversal stay shadow-only. This predicate
+ * changes final execution authority only; route scoring/evidence remains intact.
  */
-export function isFridayBaselinePaperExecutionAllowed(route: PaperExecutionRoute): boolean {
-  return route === 'NORMAL_PAPER';
+export function isOct19ProvenM5PaperExecutionAllowed(route: PaperExecutionRoute): boolean {
+  return (
+    route === 'NORMAL_PAPER' ||
+    route === 'PAPER_RESEARCH_THROUGHPUT' ||
+    route === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH'
+  );
 }
 
 export interface PaperResearchEpisodeGuardInput {
