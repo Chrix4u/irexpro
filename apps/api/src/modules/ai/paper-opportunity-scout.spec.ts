@@ -205,6 +205,73 @@ describe('PAPER opportunity scout', () => {
     });
   });
 
+  it('admits the observed 19:30 GBPUSD calibrated OOD opportunity above the evidence-backed 0.08 direction-quality floor', () => {
+    expect(
+      evaluatePaperOpportunityScout({
+        ...base,
+        idleMinutes: 65,
+        driftState: 'OUT_OF_DISTRIBUTION',
+        driftDiagnostics: [
+          'confidence:HARD_LOW',
+          'extensionAtr:STRESSED_LOW',
+          'emaSeparation:HARD_LOW',
+        ],
+        confidence: 0.6,
+        consensusPassed: 4,
+        netExpectedR: 0.06428745122227793,
+        directionQuality: 0.08694993758243813,
+        tradeQuality: 0.575158568988934,
+        exitQuality: 0.5822114407259837,
+        alignedMomentumAtr: 0.18702597095742032,
+        calibration: {
+          authoritative: true,
+          sourceLevel: 'EXACT',
+          maturity: 'COLLECTING',
+          samples: 13,
+          calibratedWinProbability: 0.6095238095238096,
+          profitFactor: 1.843279981350856,
+          calibratedNetExpectedR: 0.06428745122227793,
+          recentDegradation: false,
+          blockRecommended: false,
+        },
+      }),
+    ).toMatchObject({
+      eligible: true,
+      reason: 'CALIBRATED_OOD_MICRO_SCOUT',
+      lotUpperBound: 0.01,
+      mode: 'RECOVERY',
+    });
+  });
+
+  it('keeps calibrated OOD micro scouting blocked below the empirically losing 0.08 direction-quality boundary', () => {
+    expect(
+      evaluatePaperOpportunityScout({
+        ...base,
+        idleMinutes: 65,
+        driftState: 'OUT_OF_DISTRIBUTION',
+        driftDiagnostics: ['confidence:HARD_LOW', 'emaSeparation:HARD_LOW'],
+        confidence: 0.61,
+        consensusPassed: 4,
+        netExpectedR: 0.07,
+        directionQuality: 0.079,
+        tradeQuality: 0.58,
+        exitQuality: 0.58,
+        alignedMomentumAtr: 0.18,
+        calibration: {
+          authoritative: true,
+          sourceLevel: 'EXACT',
+          maturity: 'COLLECTING',
+          samples: 13,
+          calibratedWinProbability: 0.61,
+          profitFactor: 1.84,
+          calibratedNetExpectedR: 0.07,
+          recentDegradation: false,
+          blockRecommended: false,
+        },
+      }),
+    ).toMatchObject({ eligible: false, reason: 'QUALITY_TOO_LOW' });
+  });
+
   it('keeps calibrated OOD micro scouting fail-closed for opposite momentum, hard MTF disagreement, or weak calibration', () => {
     const calibratedOod = {
       ...base,
