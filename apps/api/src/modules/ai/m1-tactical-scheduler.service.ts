@@ -112,6 +112,13 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V4: Readonly<M1TacticalRolloutPolicy> = 
   paperVolumeCap: 0.01,
 });
 
+export const M1_TACTICAL_ROLLOUT_POLICY_V5: Readonly<M1TacticalRolloutPolicy> = Object.freeze({
+  ...M1_TACTICAL_ROLLOUT_POLICY_V1,
+  version: 'm1-tactical-rollout-v5-meaningful-size-shadow',
+  phase: 'SHADOW',
+  paperVolumeCap: 0.2,
+});
+
 export function m1RiskMarketRegime(
   route: M1TacticalRoute,
 ): 'TREND_HEALTHY' | 'REVERSAL' | 'TRANSITION' | undefined {
