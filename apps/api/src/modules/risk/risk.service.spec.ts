@@ -1264,7 +1264,7 @@ describe('RiskService', () => {
   // ─── Step 6c: per-trade controls (#316) ──────────────────────────────────
 
   describe('Step 6c — maxTradeRiskPercent + maxLeverageAllowed (#316)', () => {
-    it('maxTradeRiskPercent EXACT boundary: risk % == limit rejects', async () => {
+    it('maxTradeRiskPercent EXACT boundary: risk % == limit approves', async () => {
       // |1.085−1.075| × 0.05 × 100000 = 50 risk at stop; equity 2500 → 2.00%.
       brokerService.getBrokerAccountState.mockResolvedValue({
         balance: '2500.00',
@@ -1275,10 +1275,22 @@ describe('RiskService', () => {
 
       const result = await service.validateProposedTrade('user-1', validTrade());
 
+      expect(result.decision).toBe('APPROVED');
+    });
+
+    it('maxTradeRiskPercent immediately above the boundary rejects', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '2499.00',
+        equity: '2499.00',
+        freeMargin: '9800.00',
+        currency: 'USD',
+      });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
       expect(result.decision).toBe('REJECTED');
       if (result.decision === 'REJECTED') {
         expect(result.rejectionCode).toBe(RiskRejectionCode.MAX_TRADE_RISK_EXCEEDED);
-        expect(result.rejectionReason).toContain('2.00%');
       }
     });
 

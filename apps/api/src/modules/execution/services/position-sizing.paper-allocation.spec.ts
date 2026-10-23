@@ -138,9 +138,10 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
       },
     });
 
-    // $1,000 × 1% permits 0.10 lot from stop-distance risk. The 1.0-lot
-    // server safety ceiling must no longer suppress that legitimate risk-sized volume.
-    expect(sized.lots).toBe('0.1');
+    // $1,000 × 1% produces a 0.10-lot soft budget, but allocation-aware PAPER
+    // has a product minimum of 0.20 lots. The 0.20 stop risk is exactly the
+    // durable 2% profile ceiling, so the engine lifts to the product floor.
+    expect(sized.lots).toBe('0.2');
     expect(sized.inputs.riskAmount).toBe('10');
     expect(sized.inputs.riskPercent).toBe('1');
     expect(sized.inputs.requestedLotUpperBound).toBe('1');
@@ -209,14 +210,14 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.inputs.adaptiveRiskPercent).toBe('1');
     expect(sized.inputs.baseRiskAmount).toBe('20');
     expect(sized.inputs.riskAmount).toBe('10');
-    expect(sized.lots).toBe('0.1');
+    expect(sized.lots).toBe('0.2');
   });
 
   it.each([
     ['below first band', '9800.00', '1', '2', '0.2'],
-    ['at 25% of allowed drawdown', '9750.00', '0.75', '1.5', '0.15'],
-    ['at 50% of allowed drawdown', '9500.00', '0.5', '1', '0.1'],
-    ['at 75% of allowed drawdown', '9250.00', '0.25', '0.5', '0.05'],
+    ['at 25% of allowed drawdown', '9750.00', '0.75', '1.5', '0.2'],
+    ['at 50% of allowed drawdown', '9500.00', '0.5', '1', '0.2'],
+    ['at 75% of allowed drawdown', '9250.00', '0.25', '0.5', '0.2'],
   ])(
     'softly de-risks PAPER sizing %s',
     async (_label, accountEquity, expectedMultiplier, expectedRiskPercent, expectedLots) => {
@@ -268,7 +269,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.lots).toBe('0.2');
   });
 
-  it('keeps AUDUSD-like 5.1-pip research geometry executable at 0.75x without rounding risk upward', async () => {
+  it('lifts AUDUSD-like 5.1-pip research geometry to the 0.20 PAPER product floor inside the durable risk ceiling', async () => {
     const service = makeService({}, '0.69576');
 
     const sized = await service.sizePosition({
@@ -289,8 +290,8 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.inputs.baseRiskAmount).toBe('10');
     expect(sized.inputs.riskAmount).toBe('7.5');
     expect(sized.inputs.stopLossDistance).toBe('0.00051');
-    expect(sized.lots).toBe('0.14');
-    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.1');
+    expect(sized.lots).toBe('0.2');
+    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.2');
   });
 
   it('allows 1.25x only inside the durable profile risk ceiling', async () => {
@@ -326,6 +327,23 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(cappedSized.inputs.riskAmount).toBe('20');
   });
 
+  it('caps allocation-aware PAPER at the 2.00-lot product maximum even when capital and the caller request more', async () => {
+    const service = makeService({ maxTradeRiskPercent: '3.00' }, '1.08500', '100000.00');
+
+    const sized = await service.sizePosition({
+      ...params,
+      requestedLotUpperBound: '9.99',
+      paperAllocationSizing: {
+        executionMode: 'PAPER_ONLY',
+        allocatedCapital: '100000.00',
+        confidenceTier: 'VERY_STRONG',
+      },
+    });
+
+    expect(sized.inputs.lotsByRiskBudget).toBe('25');
+    expect(sized.lots).toBe('2');
+  });
+
   it('keeps legacy lot ceilings outside PAPER_ONLY', async () => {
     const service = makeService({ maxTradeRiskPercent: '3.00' });
 
@@ -343,7 +361,28 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.inputs.allocationAwarePaper).toBe(false);
   });
 
-  it('rejects a PAPER trade below the 0.10 policy floor instead of rounding 0.08 up', async () => {
+  it('lifts a PAPER RESEARCH soft budget to the 0.20 product floor when the durable 2% risk ceiling can afford it', async () => {
+    const service = makeService();
+
+    const sized = await service.sizePosition({
+      ...params,
+      paperAllocationSizing: {
+        executionMode: 'PAPER_ONLY',
+        allocatedCapital: '1000.00',
+        confidenceTier: 'RESEARCH',
+        minimumExecutableLot: '0.20',
+      },
+    });
+
+    // RESEARCH asks for 1% ($10), which would normally size 0.10 lot.
+    // The product floor is 0.20 lot, whose $20 stop risk is exactly the
+    // durable 2% profile ceiling, so PAPER may lift to the floor.
+    expect(sized.inputs.lotsByRiskBudget).toBe('0.1');
+    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.2');
+    expect(sized.lots).toBe('0.2');
+  });
+
+  it('rejects the 0.20 PAPER floor when its actual stop risk would exceed the durable profile ceiling', async () => {
     const service = makeService();
 
     await expect(
@@ -353,13 +392,29 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
           executionMode: 'PAPER_ONLY',
           allocatedCapital: '800.00',
           confidenceTier: 'RESEARCH',
-          minimumExecutableLot: '0.10',
+          minimumExecutableLot: '0.20',
         },
       }),
     ).rejects.toMatchObject({ code: 'POSITION_SIZE_BELOW_POLICY_MINIMUM' });
   });
 
-  it('allows exactly 0.10 lot when risk mathematics justify the PAPER floor', async () => {
+  it('rejects the 0.20 PAPER product floor when 0.20 would exceed the durable risk ceiling', async () => {
+    const service = makeService();
+
+    await expect(
+      service.sizePosition({
+        ...params,
+        paperAllocationSizing: {
+          executionMode: 'PAPER_ONLY',
+          allocatedCapital: '800.00',
+          confidenceTier: 'RESEARCH',
+          minimumExecutableLot: '0.20',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'POSITION_SIZE_BELOW_POLICY_MINIMUM' });
+  });
+
+  it('enforces the 0.20 PAPER product floor even when a caller requests 0.10', async () => {
     const service = makeService();
     const sized = await service.sizePosition({
       ...params,
@@ -371,8 +426,8 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
       },
     });
 
-    expect(sized.lots).toBe('0.1');
-    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.1');
+    expect(sized.lots).toBe('0.2');
+    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.2');
   });
 
   it('does not apply the PAPER 0.10 policy floor to DEMO sizing', async () => {

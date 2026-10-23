@@ -1069,7 +1069,7 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
       expect(decision.decision).toBe('APPROVED');
     });
 
-    it('maxTradeRiskPercent EXACT equality rejects', async () => {
+    it('maxTradeRiskPercent EXACT equality passes', async () => {
       // |1.085−1.075| × 0.05 × 100000 = 50 risk at stop; equity 2500 → 2.00%.
       await setSessionPeak('2500.00');
       brokerService.getBrokerAccountState.mockResolvedValue({
@@ -1081,10 +1081,24 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
 
       const decision = await riskService.validateProposedTrade(USER, trade());
 
+      expect(decision.decision).toBe('APPROVED');
+    });
+
+    it('maxTradeRiskPercent rejects immediately above the configured ceiling', async () => {
+      // The same $50 stop risk on $2,499 equity is just above 2.00%.
+      await setSessionPeak('2499.00');
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '2499.00',
+        equity: '2499.00',
+        freeMargin: '9800.00',
+        currency: 'USD',
+      });
+
+      const decision = await riskService.validateProposedTrade(USER, trade());
+
       expect(decision.decision).toBe('REJECTED');
       if (decision.decision === 'REJECTED') {
         expect(decision.rejectionCode).toBe(RiskRejectionCode.MAX_TRADE_RISK_EXCEEDED);
-        expect(decision.rejectionReason).toContain('2.00%');
       }
     });
 

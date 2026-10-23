@@ -91,10 +91,16 @@ export interface PositionSizingInputs {
   contractSize: string;
   minLot: string;
   policyMinimumExecutableLot?: string | null;
+  policyMinimumLotLifted?: boolean;
+  finalRiskAtStop?: string;
+  finalRiskAtStopPercentOfCapital?: string;
   maxLot: string;
   lotStep: string;
   profileMaxPositionSizeLot: string;
   requestedLotUpperBound: string;
+  effectiveRequestedLotUpperBound?: string;
+  paperProductMinimumLot?: string | null;
+  paperProductMaximumLot?: string | null;
   lotsByRiskBudget: string;
   lotsBeforeStepNormalization: string;
   grossNotional: string;
@@ -113,6 +119,8 @@ export interface SizedPosition {
 
 /** Decimal scale for lot math (lot steps are 0.01/0.001 — 8 digits is exact). */
 const LOT_SCALE = 8;
+const PAPER_PRODUCT_MIN_LOT = '0.2';
+const PAPER_PRODUCT_MAX_LOT = '2';
 
 /**
  * PositionSizingService (Round 6 live-execution completion §4) — the
@@ -181,7 +189,7 @@ export class PositionSizingService {
       adaptiveRiskMultiplier?: string | null;
       /** Session peak equity used only to reduce risk before the hard drawdown boundary. */
       sessionPeakEquity?: string | null;
-      /** PAPER-only product floor. Never rounded up; below-floor sizing rejects. */
+      /** PAPER-only product floor. May lift soft-budget sizing up to this floor when the final stop risk remains inside the durable profile ceiling. */
       minimumExecutableLot?: string | null;
     };
   }): Promise<SizedPosition> {
@@ -467,6 +475,16 @@ export class PositionSizingService {
       );
     }
 
+    // Durable PAPER floor authority uses the profile's maximum trade risk as
+    // the absolute ceiling. Soft confidence/research/drawdown budgets may size
+    // below the product floor, but the floor may be restored only when its
+    // actual stop risk is still inside this durable ceiling.
+    const profileRiskCeilingAmount = riskCapitalBase.mul(riskPercent).divByPowerOfTen(2);
+    const profileRiskCeilingAmountInQuoteCurrency =
+      riskCurrencyConversion === 'ACCOUNT_IS_QUOTE'
+        ? profileRiskCeilingAmount
+        : profileRiskCeilingAmount.mul(entry);
+
     // ── 7. The sizing math (ExactDecimal only). ───────────────────────────
     const riskPerLot = slDistance.mul(contractSize);
     const lotsByRiskBudget = riskAmountInQuoteCurrency.divDown(riskPerLot, LOT_SCALE);
@@ -484,17 +502,38 @@ export class PositionSizingService {
         `AI requested lot upper bound is not a provable positive decimal: ${params.requestedLotUpperBound}`,
       );
     }
+
+    const paperProductMinimumLot = allocationAwarePaper
+      ? ExactDecimal.parse(PAPER_PRODUCT_MIN_LOT)
+      : null;
+    const paperProductMaximumLot = allocationAwarePaper
+      ? ExactDecimal.parse(PAPER_PRODUCT_MAX_LOT)
+      : null;
+    let effectiveRequestedLotUpperBound = requestedLotUpperBound;
+    if (paperProductMinimumLot && paperProductMaximumLot) {
+      // PAPER sizing lives inside the product's 0.20–2.00 lot band. Caller
+      // hints below the floor cannot create tiny PAPER positions, and caller
+      // hints above the ceiling cannot exceed the product maximum.
+      effectiveRequestedLotUpperBound = ExactDecimal.min(
+        ExactDecimal.max(requestedLotUpperBound, paperProductMinimumLot),
+        paperProductMaximumLot,
+      );
+    }
+
     let lotsBeforeStep = ExactDecimal.min(lotsByRiskBudget, maxLot);
+    if (paperProductMaximumLot) {
+      lotsBeforeStep = ExactDecimal.min(lotsBeforeStep, paperProductMaximumLot);
+    }
     if (!removeProfileLotCeiling) {
       lotsBeforeStep = ExactDecimal.min(lotsBeforeStep, profileMaxLots);
     }
     if (!removeAiLotCeiling) {
-      lotsBeforeStep = ExactDecimal.min(lotsBeforeStep, requestedLotUpperBound);
+      lotsBeforeStep = ExactDecimal.min(lotsBeforeStep, effectiveRequestedLotUpperBound);
     }
 
     // Normalize DOWN to the instrument's volume step (conservative for risk).
     const steps = lotsBeforeStep.divDown(lotStep, 0); // integer step count
-    const lots = steps.mul(lotStep);
+    let lots = steps.mul(lotStep);
 
     if (!lots.isPositive()) {
       throw new PositionSizingError(
@@ -511,24 +550,65 @@ export class PositionSizingService {
     }
 
     let policyMinimumExecutableLot: ExactDecimal | null = null;
-    if (allocationAwarePaper && params.paperAllocationSizing?.minimumExecutableLot != null) {
-      policyMinimumExecutableLot = ExactDecimal.tryParse(
-        params.paperAllocationSizing.minimumExecutableLot,
-      );
-      if (!policyMinimumExecutableLot || !policyMinimumExecutableLot.isPositive()) {
-        throw new PositionSizingError(
-          'POLICY_MINIMUM_LOT_UNPROVABLE',
-          `PAPER minimum executable lot is not a provable positive decimal: ${params.paperAllocationSizing.minimumExecutableLot}`,
+    let policyMinimumLotLifted = false;
+    if (allocationAwarePaper && paperProductMinimumLot) {
+      let requestedPolicyMinimumLot = paperProductMinimumLot;
+      if (params.paperAllocationSizing?.minimumExecutableLot != null) {
+        const parsedRequestedMinimum = ExactDecimal.tryParse(
+          params.paperAllocationSizing.minimumExecutableLot,
         );
+        if (!parsedRequestedMinimum || !parsedRequestedMinimum.isPositive()) {
+          throw new PositionSizingError(
+            'POLICY_MINIMUM_LOT_UNPROVABLE',
+            `PAPER minimum executable lot is not a provable positive decimal: ${params.paperAllocationSizing.minimumExecutableLot}`,
+          );
+        }
+        requestedPolicyMinimumLot = parsedRequestedMinimum;
       }
+      policyMinimumExecutableLot = ExactDecimal.max(
+        requestedPolicyMinimumLot,
+        paperProductMinimumLot,
+      );
+
+      // The product floor must itself be a broker-valid step and stay inside
+      // every hard lot ceiling. We never use the floor to bypass broker specs
+      // or an explicit model upper bound.
+      const floorSteps = policyMinimumExecutableLot.divDown(lotStep, 0);
+      const normalizedFloor = floorSteps.mul(lotStep);
+      const floorFitsLotCeilings =
+        normalizedFloor.eq(policyMinimumExecutableLot) &&
+        policyMinimumExecutableLot.lte(maxLot) &&
+        (removeProfileLotCeiling || policyMinimumExecutableLot.lte(profileMaxLots)) &&
+        (removeAiLotCeiling || policyMinimumExecutableLot.lte(effectiveRequestedLotUpperBound));
+
       if (lots.lt(policyMinimumExecutableLot)) {
-        throw new PositionSizingError(
-          'POSITION_SIZE_BELOW_POLICY_MINIMUM',
-          `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} is below the PAPER policy minimum ` +
-            `${policyMinimumExecutableLot.toString()} — the engine abstains instead of rounding risk upward`,
+        const floorRiskInQuoteCurrency = policyMinimumExecutableLot.mul(riskPerLot);
+        const floorFitsDurableRisk = floorRiskInQuoteCurrency.lte(
+          profileRiskCeilingAmountInQuoteCurrency,
         );
+
+        if (!floorFitsLotCeilings || !floorFitsDurableRisk) {
+          throw new PositionSizingError(
+            'POSITION_SIZE_BELOW_POLICY_MINIMUM',
+            `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} is below the PAPER policy minimum ` +
+              `${policyMinimumExecutableLot.toString()} and lifting to the floor would exceed a durable ` +
+              `lot/risk ceiling`,
+          );
+        }
+
+        lots = policyMinimumExecutableLot;
+        policyMinimumLotLifted = true;
       }
     }
+
+    const finalRiskAtStopInQuoteCurrency = lots.mul(riskPerLot);
+    const finalRiskAtStop =
+      riskCurrencyConversion === 'ACCOUNT_IS_QUOTE'
+        ? finalRiskAtStopInQuoteCurrency
+        : finalRiskAtStopInQuoteCurrency.divDown(entry, LOT_SCALE);
+    const finalRiskAtStopPercentOfCapital = finalRiskAtStop
+      .divDown(riskCapitalBase, LOT_SCALE)
+      .mulByPowerOfTen(2);
 
     // ── 8. Capital commitment = broker-required margin, not gross notional. ──
     // A leveraged FX position's notional can be many times larger than the
@@ -589,10 +669,16 @@ export class PositionSizingService {
       contractSize: contractSize.toString(),
       minLot: minLot.toString(),
       policyMinimumExecutableLot: policyMinimumExecutableLot?.toString() ?? null,
+      policyMinimumLotLifted,
+      finalRiskAtStop: finalRiskAtStop.toString(),
+      finalRiskAtStopPercentOfCapital: finalRiskAtStopPercentOfCapital.toString(),
       maxLot: maxLot.toString(),
       lotStep: lotStep.toString(),
       profileMaxPositionSizeLot: profileMaxLots.toString(),
       requestedLotUpperBound: requestedLotUpperBound.toString(),
+      effectiveRequestedLotUpperBound: effectiveRequestedLotUpperBound.toString(),
+      paperProductMinimumLot: paperProductMinimumLot?.toString() ?? null,
+      paperProductMaximumLot: paperProductMaximumLot?.toString() ?? null,
       lotsByRiskBudget: lotsByRiskBudget.toString(),
       lotsBeforeStepNormalization: lotsBeforeStep.toString(),
       grossNotional: grossNotional.toString(),
@@ -602,7 +688,8 @@ export class PositionSizingService {
 
     this.logger.log(
       `Sized ${instrument} ${params.direction}: ${lots.toString()} lots ` +
-        `(risk ${riskAmount.toString()} ${accountCurrency} from ${riskCapitalBase.toString()} capital, ` +
+        `(actualRiskAtStop ${finalRiskAtStop.toString()} ${accountCurrency} (${finalRiskAtStopPercentOfCapital.toString()}%), ` +
+        `softBudget ${riskAmount.toString()} ${accountCurrency} from ${riskCapitalBase.toString()} capital, ` +
         `adaptiveMultiplier ${adaptiveRiskMultiplier.toString()}x, ` +
         `drawdownMultiplier ${drawdownRiskMultiplier.toString()}x, ` +
         `requiredMargin ${allocatedCapital.toString()}, ` +
