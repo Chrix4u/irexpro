@@ -2,6 +2,7 @@ export const PAPER_OPPORTUNITY_SCOUT_LOT_CAP = 0.05;
 export const PAPER_OPPORTUNITY_SCOUT_ACTIVE_LOT_CAP = 0.03;
 export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_LOT_CAP = 0.02;
 export const PAPER_OPPORTUNITY_SCOUT_CALIBRATED_OOD_MICRO_LOT_CAP = 0.01;
+export const PAPER_OPPORTUNITY_SCOUT_CALIBRATED_OOD_MIN_DIRECTION_QUALITY = 0.08;
 export const PAPER_OPPORTUNITY_SCOUT_TARGET_WINDOW_MINUTES = 30;
 export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_IDLE_MINUTES = 60;
 export const PAPER_OPPORTUNITY_SCOUT_MIN_CONFIDENCE = 0.6;
@@ -199,7 +200,7 @@ export function evaluatePaperOpportunityScout(
       Number.isFinite(input.netExpectedR) &&
       input.netExpectedR >= 0.05 &&
       Number.isFinite(input.directionQuality) &&
-      input.directionQuality >= 0.15 &&
+      input.directionQuality >= PAPER_OPPORTUNITY_SCOUT_CALIBRATED_OOD_MIN_DIRECTION_QUALITY &&
       Number.isFinite(input.tradeQuality) &&
       input.tradeQuality >= 0.3 &&
       Number.isFinite(input.exitQuality) &&
