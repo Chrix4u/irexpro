@@ -17,7 +17,7 @@ describe('Oct 19 proven M5 PAPER control', () => {
     expect(isOct19ProvenM5PaperExecutionAllowed(route)).toBe(true);
   });
 
-  it('keeps the v11 PAPER research-throughput family executable under current brakes', () => {
+  it('quarantines v11 PAPER research-throughput after the Oct 20-22 deterioration cohort', () => {
     const route = selectPaperExecutionRoute({
       normalPaperExecution: false,
       rejectedEdgeCanaryEligible: false,
@@ -26,7 +26,7 @@ describe('Oct 19 proven M5 PAPER control', () => {
       pairedReversalResearchEligible: false,
     });
     expect(route).toBe('PAPER_RESEARCH_THROUGHPUT');
-    expect(isOct19ProvenM5PaperExecutionAllowed(route)).toBe(true);
+    expect(isOct19ProvenM5PaperExecutionAllowed(route)).toBe(false);
   });
 
   it('keeps extension-exhaustion classified for evidence but quarantines execution after fresh losses', () => {
