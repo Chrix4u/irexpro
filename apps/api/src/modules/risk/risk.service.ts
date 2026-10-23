@@ -1522,7 +1522,7 @@ export class RiskService {
       };
     }
     const riskPercent = riskAtStop.divUp(equity, RISK_PERCENT_SCALE).mulByPowerOfTen(2);
-    if (riskPercent.gte(maxTradeRiskPercent)) {
+    if (riskPercent.gt(maxTradeRiskPercent)) {
       appliedRules.push('MAX_TRADE_RISK');
       return {
         rejection: await this.rejectAndRecord(
@@ -1530,7 +1530,7 @@ export class RiskService {
           trade,
           RiskRejectionCode.MAX_TRADE_RISK_EXCEEDED,
           `Risk at stop ${riskAtStop.toFixed(2)} is ${riskPercent.toFixed(2)}% of equity ` +
-            `(${equity.toFixed(2)}) — has reached the maxTradeRiskPercent limit (${maxTradeRiskPercent.toString()}%)`,
+            `(${equity.toFixed(2)}) — exceeds the maxTradeRiskPercent limit (${maxTradeRiskPercent.toString()}%)`,
           contextSnapshot,
           evaluatedAt,
         ),
