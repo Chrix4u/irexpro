@@ -24,15 +24,15 @@ describe('PAPER opportunity scout', () => {
     expect(evaluatePaperOpportunityScout(base)).toEqual({
       eligible: true,
       reason: 'OPPORTUNITY_SCOUT',
-      lotUpperBound: 0.05,
-      sizingTier: 'RESEARCH',
+      lotUpperBound: 0.2,
+      sizingTier: 'BASE',
       mode: 'BASE',
       targetWindowMinutes: 30,
       idleMinutes: null,
     });
   });
 
-  it('uses an active participation tier after 30 idle minutes with smaller size', () => {
+  it('uses an active participation tier after 30 idle minutes without shrinking below the 0.20 product floor', () => {
     expect(
       evaluatePaperOpportunityScout({
         ...base,
@@ -47,14 +47,14 @@ describe('PAPER opportunity scout', () => {
     ).toMatchObject({
       eligible: true,
       reason: 'OPPORTUNITY_SCOUT',
-      lotUpperBound: 0.03,
+      lotUpperBound: 0.2,
       mode: 'ACTIVE',
       targetWindowMinutes: 30,
       idleMinutes: 35,
     });
   });
 
-  it('uses a micro recovery tier after 60 idle minutes while keeping four-vote consensus', () => {
+  it('uses a recovery tier after 60 idle minutes while keeping four-vote consensus and the 0.20 product floor', () => {
     expect(
       evaluatePaperOpportunityScout({
         ...base,
@@ -68,7 +68,7 @@ describe('PAPER opportunity scout', () => {
       }),
     ).toMatchObject({
       eligible: true,
-      lotUpperBound: 0.02,
+      lotUpperBound: 0.2,
       mode: 'RECOVERY',
       targetWindowMinutes: 30,
       idleMinutes: 65,
@@ -171,7 +171,7 @@ describe('PAPER opportunity scout', () => {
     });
   });
 
-  it('admits the observed GBPUSD calibrated OOD opportunity at micro size after sustained idle time', () => {
+  it('does not execute calibrated OOD micro opportunities below the 0.20 product floor', () => {
     expect(
       evaluatePaperOpportunityScout({
         ...base,
@@ -198,14 +198,13 @@ describe('PAPER opportunity scout', () => {
         },
       }),
     ).toMatchObject({
-      eligible: true,
-      reason: 'CALIBRATED_OOD_MICRO_SCOUT',
-      lotUpperBound: 0.01,
+      eligible: false,
+      reason: 'QUALITY_TOO_LOW',
       mode: 'RECOVERY',
     });
   });
 
-  it('admits the observed 19:30 GBPUSD calibrated OOD opportunity above the evidence-backed 0.08 direction-quality floor', () => {
+  it('keeps the observed 19:30 GBPUSD calibrated OOD micro opportunity shadow-only', () => {
     expect(
       evaluatePaperOpportunityScout({
         ...base,
@@ -236,9 +235,8 @@ describe('PAPER opportunity scout', () => {
         },
       }),
     ).toMatchObject({
-      eligible: true,
-      reason: 'CALIBRATED_OOD_MICRO_SCOUT',
-      lotUpperBound: 0.01,
+      eligible: false,
+      reason: 'QUALITY_TOO_LOW',
       mode: 'RECOVERY',
     });
   });

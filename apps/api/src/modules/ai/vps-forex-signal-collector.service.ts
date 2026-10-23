@@ -173,7 +173,7 @@ const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 
 export function paperOpportunityScoutModelVersion(engineCode: string): string {
-  return `external-provider/${engineCode}/paper-opportunity-scout-v3`;
+  return `external-provider/${engineCode}/paper-opportunity-scout-v4`;
 }
 const LEGACY_V7_EXECUTION_FROZEN = true;
 const MULTI_MODEL_PAPER_EXECUTION_ENABLED = true;
@@ -3189,7 +3189,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             plan_b_ensemble_admitted: planBEnsemble.admitted,
             plan_b_ensemble_reasons: planBEnsemble.reasons,
             position_sizing_policy: paperOpportunityScout.eligible
-              ? 'paper-opportunity-scout-capped-v1'
+              ? 'paper-opportunity-scout-0.20-floor-v2'
               : 'risk-managed-dynamic-paper-band-v2',
             position_sizing_tier: dynamicLotSizing.tier,
             position_sizing_upper_bound_lots: dynamicLotSizing.upperBound,

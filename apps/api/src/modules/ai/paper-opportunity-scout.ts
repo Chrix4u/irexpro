@@ -1,7 +1,6 @@
-export const PAPER_OPPORTUNITY_SCOUT_LOT_CAP = 0.05;
-export const PAPER_OPPORTUNITY_SCOUT_ACTIVE_LOT_CAP = 0.03;
-export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_LOT_CAP = 0.02;
-export const PAPER_OPPORTUNITY_SCOUT_CALIBRATED_OOD_MICRO_LOT_CAP = 0.01;
+export const PAPER_OPPORTUNITY_SCOUT_LOT_CAP = 0.2;
+export const PAPER_OPPORTUNITY_SCOUT_ACTIVE_LOT_CAP = 0.2;
+export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_LOT_CAP = 0.2;
 export const PAPER_OPPORTUNITY_SCOUT_CALIBRATED_OOD_MIN_DIRECTION_QUALITY = 0.08;
 export const PAPER_OPPORTUNITY_SCOUT_TARGET_WINDOW_MINUTES = 30;
 export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_IDLE_MINUTES = 60;
@@ -59,7 +58,6 @@ export interface PaperOpportunityScoutInput {
 
 export type PaperOpportunityScoutReason =
   | 'OPPORTUNITY_SCOUT'
-  | 'CALIBRATED_OOD_MICRO_SCOUT'
   | 'FULL_SIZE_ALREADY_ELIGIBLE'
   | 'ROUTE_NOT_SCOUTABLE'
   | 'REGIME_NOT_SCOUTABLE'
@@ -77,7 +75,7 @@ export interface PaperOpportunityScoutDecision {
   eligible: boolean;
   reason: PaperOpportunityScoutReason;
   lotUpperBound: number;
-  sizingTier: 'RESEARCH';
+  sizingTier: 'BASE';
   mode: PaperOpportunityScoutMode;
   targetWindowMinutes: typeof PAPER_OPPORTUNITY_SCOUT_TARGET_WINDOW_MINUTES;
   idleMinutes: number | null;
@@ -145,7 +143,7 @@ function decision(
     eligible,
     reason,
     lotUpperBound,
-    sizingTier: 'RESEARCH',
+    sizingTier: 'BASE',
     mode: policy.mode,
     targetWindowMinutes: PAPER_OPPORTUNITY_SCOUT_TARGET_WINDOW_MINUTES,
     idleMinutes: policy.idleMinutes,
@@ -217,14 +215,11 @@ export function evaluatePaperOpportunityScout(
     if (localCalibration && microStructureValid && !momentumConfirmed) {
       return reject('MOMENTUM_NOT_CONFIRMED');
     }
-    if (localCalibration && microStructureValid && momentumConfirmed) {
-      return decision(
-        policy,
-        true,
-        'CALIBRATED_OOD_MICRO_SCOUT',
-        PAPER_OPPORTUNITY_SCOUT_CALIBRATED_OOD_MICRO_LOT_CAP,
-      );
-    }
+    // Calibrated OOD micro opportunities used to execute at 0.01 lots.
+    // The PAPER product now requires economically meaningful execution at
+    // >= 0.20 lots. Do not upsize a micro-risk OOD idea to meet that floor;
+    // keep it shadow-only and require it to satisfy the normal strong-OOD
+    // evidence path below before it can execute.
   }
   if (!Number.isFinite(input.confidence) || input.confidence < policy.minConfidence)
     return reject('CONFIDENCE_TOO_LOW');

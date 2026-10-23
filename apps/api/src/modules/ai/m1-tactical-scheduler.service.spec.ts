@@ -24,6 +24,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V2,
   M1_TACTICAL_ROLLOUT_POLICY_V3,
   M1_TACTICAL_ROLLOUT_POLICY_V4,
+  M1_TACTICAL_ROLLOUT_POLICY_V5,
   m1RiskMarketRegime,
   m1RouteExecutableInPhase,
 } from './m1-tactical-scheduler.service';
@@ -1158,12 +1159,25 @@ describe('M1 early-transition micro PAPER phase', () => {
   });
 });
 
-describe('M1 tactical micro module wiring', () => {
-  it('binds AiModule to the evidence-qualified early-transition micro policy', () => {
+describe('M1 meaningful-size shadow module wiring', () => {
+  it('keeps the historical 0.01 V4 cohort immutable but makes V5 shadow-only at the 0.20 product floor', () => {
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V4.phase).toBe('PAPER_EARLY_TRANSITION_MICRO');
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V4.paperVolumeCap).toBe(0.01);
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V5).toMatchObject({
+      version: 'm1-tactical-rollout-v5-meaningful-size-shadow',
+      phase: 'SHADOW',
+      paperVolumeCap: 0.2,
+    });
+    expect(
+      m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V5.phase, 'M1_EARLY_TRANSITION'),
+    ).toBe(false);
+  });
+
+  it('binds AiModule to V5 shadow observation instead of the 0.01 micro execution policy', () => {
     const moduleSource = fs.readFileSync(path.resolve(__dirname, './ai.module.ts'), 'utf8');
-    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V4');
+    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V5');
     expect(moduleSource).toMatch(
-      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V4/,
+      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V5/,
     );
     expect(moduleSource).not.toMatch(/process\.env[^\n]*M1_TACTICAL/);
   });

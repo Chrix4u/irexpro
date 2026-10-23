@@ -29,3 +29,11 @@ Persist and log scout mode, idle minutes, 30-minute target window, reason and lo
 1. Lower normal admission thresholds globally — rejected because it increases full-size exposure and weakens all regimes.
 2. Force one trade every N bars — rejected because time alone cannot create edge.
 3. Idle-aware reduced-risk scout — chosen because it converts inactivity into bounded exploration while keeping hard safety authoritative.
+
+## PAPER execution size invariant
+
+- Every executable external-provider PAPER trade uses a product lot band of **0.20 to 2.00 lots**.
+- Opportunity-scout idleness may relax only soft predictive floors; it must never shrink an executed trade below 0.20 lots.
+- `PositionSizingService` remains authoritative for stop-distance risk and margin. If safe computed volume is below 0.20 lots, execution must fail closed with `POSITION_SIZE_BELOW_POLICY_MINIMUM` rather than round risk upward.
+- Calibrated OOD ideas that only justify micro sizing remain shadow-only; they must not execute at 0.01/0.02/0.03/0.05 lots.
+- M1 tactical V4 remains an immutable historical 0.01-lot cohort, but active wiring uses `m1-tactical-rollout-v5-meaningful-size-shadow`: M1 continues observing at one-minute cadence and cannot execute until it qualifies for the 0.20-lot product floor.

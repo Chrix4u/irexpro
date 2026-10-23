@@ -34,7 +34,7 @@ import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
 import {
   M1TacticalSchedulerService,
   M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
-  M1_TACTICAL_ROLLOUT_POLICY_V4,
+  M1_TACTICAL_ROLLOUT_POLICY_V5,
 } from './m1-tactical-scheduler.service';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
 import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-api-key.guard';
@@ -93,7 +93,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     M1TacticalEvidenceService,
     {
       provide: M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
-      useValue: M1_TACTICAL_ROLLOUT_POLICY_V4,
+      useValue: M1_TACTICAL_ROLLOUT_POLICY_V5,
     },
     M1TacticalSchedulerService,
   ],
