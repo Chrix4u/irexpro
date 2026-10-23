@@ -9,7 +9,7 @@ on:
       - .github/workflows/temp-expo-lock-refresh.yml
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   NODE_VERSION: '22'
@@ -75,3 +75,21 @@ jobs:
           path: pnpm-lock.yaml
           if-no-files-found: error
           retention-days: 1
+
+      - name: Commit verified lockfile only
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          git add pnpm-lock.yaml
+          if git diff --cached --quiet; then
+            echo "Lockfile is already current; no commit required."
+            exit 0
+          fi
+          git config user.name "iRexPro Verification Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "fix(mobile): refresh Expo 55.0.32 lockfile"
+          auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            push "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"
