@@ -170,4 +170,85 @@ describe('PAPER opportunity scout', () => {
       mode: 'RECOVERY',
     });
   });
+
+  it('admits the observed GBPUSD calibrated OOD opportunity at micro size after sustained idle time', () => {
+    expect(
+      evaluatePaperOpportunityScout({
+        ...base,
+        idleMinutes: 65,
+        driftState: 'OUT_OF_DISTRIBUTION',
+        driftDiagnostics: ['confidence:HARD_LOW', 'emaSeparation:HARD_LOW'],
+        confidence: 0.6,
+        consensusPassed: 4,
+        netExpectedR: 0.07108316353572111,
+        directionQuality: 0.18733685947336046,
+        tradeQuality: 0.630311869260798,
+        exitQuality: 0.6484997164263697,
+        alignedMomentumAtr: 0.0755538621204476,
+        calibration: {
+          authoritative: true,
+          sourceLevel: 'EXACT',
+          maturity: 'COLLECTING',
+          samples: 12,
+          calibratedWinProbability: 0.64,
+          profitFactor: 2.3307759200025924,
+          calibratedNetExpectedR: 0.07108316353572111,
+          recentDegradation: false,
+          blockRecommended: false,
+        },
+      }),
+    ).toMatchObject({
+      eligible: true,
+      reason: 'CALIBRATED_OOD_MICRO_SCOUT',
+      lotUpperBound: 0.01,
+      mode: 'RECOVERY',
+    });
+  });
+
+  it('keeps calibrated OOD micro scouting fail-closed for opposite momentum, hard MTF disagreement, or weak calibration', () => {
+    const calibratedOod = {
+      ...base,
+      idleMinutes: 65,
+      driftState: 'OUT_OF_DISTRIBUTION' as const,
+      driftDiagnostics: ['confidence:HARD_LOW', 'emaSeparation:HARD_LOW'],
+      confidence: 0.6,
+      consensusPassed: 4,
+      netExpectedR: 0.07108316353572111,
+      directionQuality: 0.18733685947336046,
+      tradeQuality: 0.630311869260798,
+      exitQuality: 0.6484997164263697,
+      alignedMomentumAtr: 0.0755538621204476,
+      calibration: {
+        authoritative: true,
+        sourceLevel: 'EXACT',
+        maturity: 'COLLECTING',
+        samples: 12,
+        calibratedWinProbability: 0.64,
+        profitFactor: 2.3307759200025924,
+        calibratedNetExpectedR: 0.07108316353572111,
+        recentDegradation: false,
+        blockRecommended: false,
+      },
+    } as const;
+
+    expect(
+      evaluatePaperOpportunityScout({ ...calibratedOod, alignedMomentumAtr: -0.376 }),
+    ).toMatchObject({ eligible: false, reason: 'MOMENTUM_NOT_CONFIRMED' });
+    expect(
+      evaluatePaperOpportunityScout({
+        ...calibratedOod,
+        driftDiagnostics: ['confidence:HARD_LOW', 'mtfStrength:HARD_LOW'],
+      }),
+    ).toMatchObject({ eligible: false, reason: 'DRIFT_EVIDENCE_TOO_WEAK' });
+    expect(
+      evaluatePaperOpportunityScout({
+        ...calibratedOod,
+        calibration: {
+          ...calibratedOod.calibration,
+          calibratedWinProbability: 0.49,
+          profitFactor: 1.03,
+        },
+      }),
+    ).toMatchObject({ eligible: false, reason: 'DRIFT_EVIDENCE_TOO_WEAK' });
+  });
 });

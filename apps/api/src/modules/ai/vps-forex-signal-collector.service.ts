@@ -173,7 +173,7 @@ const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 
 export function paperOpportunityScoutModelVersion(engineCode: string): string {
-  return `external-provider/${engineCode}/paper-opportunity-scout-v2`;
+  return `external-provider/${engineCode}/paper-opportunity-scout-v3`;
 }
 const LEGACY_V7_EXECUTION_FROZEN = true;
 const MULTI_MODEL_PAPER_EXECUTION_ENABLED = true;
@@ -1801,6 +1801,22 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             planBEnsemble,
             ensembleGovernance,
           );
+          // Evidence pass first: adaptive calibration must be available before the
+          // scout decides whether a soft-gated opportunity deserves PAPER authority.
+          // A scout candidate is then re-evaluated as NORMAL_PAPER so ranking/risk
+          // sees its actual executable route rather than the diagnostic NONE route.
+          const adaptiveEvidencePass = await this.evaluateAdaptiveCore({
+            userId,
+            connectionId,
+            candidate: best,
+            ensemble: planBEnsemble,
+            governance: ensembleGovernance,
+            executionRoute: fullSizePaperExecutionCandidate ? 'NORMAL_PAPER' : 'NONE',
+            evaluatedAt,
+            allocationCapital: adaptiveAllocationCapital,
+            portfolio: initialAdaptivePortfolio,
+          });
+          const calibration = adaptiveEvidencePass.predictionCalibration;
           const paperOpportunityScout = evaluatePaperOpportunityScout({
             normalPaperExecution: fullSizePaperExecutionCandidate,
             strategyRoute: planBEnsemble.strategyRoute,
@@ -1808,7 +1824,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             confidence: best.confidence,
             consensusPassed: planBEnsemble.consensusPassed,
             consensusRequired: planBEnsemble.consensusRequired,
-            netExpectedR: ensembleGovernance.netExpectedR,
+            netExpectedR: adaptiveEvidencePass.netExpectedR,
             directionQuality: planBEnsemble.directionQuality,
             tradeQuality: planBEnsemble.tradeQuality,
             exitQuality: planBEnsemble.exitQuality,
@@ -1817,17 +1833,47 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             eventRisk: ensembleGovernance.eventRisk,
             portfolioQuality: planBEnsemble.portfolioQuality,
             driftState: ensembleGovernance.driftState,
+            driftDiagnostics: ensembleGovernance.driftDiagnostics,
             idleMinutes: paperIdleState.idleMinutes,
+            calibration: {
+              authoritative: calibration.authoritative,
+              sourceLevel: calibration.sourceLevel,
+              maturity: calibration.maturity,
+              samples: calibration.samples,
+              calibratedWinProbability: calibration.calibratedWinProbability,
+              profitFactor: calibration.profitFactor,
+              calibratedNetExpectedR: calibration.calibratedNetExpectedR,
+              recentDegradation: calibration.recentDegradation,
+              blockRecommended: calibration.blockRecommended,
+            },
           });
           const normalPaperExecutionCandidate =
             fullSizePaperExecutionCandidate || paperOpportunityScout.eligible;
+          const preliminaryAdaptive =
+            paperOpportunityScout.eligible && !fullSizePaperExecutionCandidate
+              ? await this.evaluateAdaptiveCore({
+                  userId,
+                  connectionId,
+                  candidate: best,
+                  ensemble: planBEnsemble,
+                  governance: ensembleGovernance,
+                  executionRoute: 'NORMAL_PAPER',
+                  evaluatedAt,
+                  allocationCapital: adaptiveAllocationCapital,
+                  portfolio: initialAdaptivePortfolio,
+                })
+              : adaptiveEvidencePass;
           if (paperOpportunityScout.eligible) {
             this.logger.log(
               `PAPER opportunity scout ${best.instrument} ${best.direction} qualification=ELIGIBLE ` +
-                `confidence=${best.confidence.toFixed(4)} consensus=${planBEnsemble.consensusPassed}/${planBEnsemble.consensusRequired} ` +
-                `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} drift=${ensembleGovernance.driftState} ` +
-                `mode=${paperOpportunityScout.mode} idleMinutes=${paperOpportunityScout.idleMinutes?.toFixed(1) ?? 'n/a'} ` +
-                `targetWindowMinutes=${paperOpportunityScout.targetWindowMinutes} lotCap=${paperOpportunityScout.lotUpperBound.toFixed(2)}`,
+                `reason=${paperOpportunityScout.reason} confidence=${best.confidence.toFixed(4)} ` +
+                `consensus=${planBEnsemble.consensusPassed}/${planBEnsemble.consensusRequired} ` +
+                `rawNetExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
+                `effectiveNetExpectedR=${adaptiveEvidencePass.netExpectedR.toFixed(4)} ` +
+                `drift=${ensembleGovernance.driftState} mode=${paperOpportunityScout.mode} ` +
+                `idleMinutes=${paperOpportunityScout.idleMinutes?.toFixed(1) ?? 'n/a'} ` +
+                `targetWindowMinutes=${paperOpportunityScout.targetWindowMinutes} ` +
+                `lotCap=${paperOpportunityScout.lotUpperBound.toFixed(2)}`,
             );
           }
           await this.persistEnsembleShadowDecision(
@@ -1844,17 +1890,6 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperPostLossEntryGuard,
             paperSpreadCalibrationShadow,
           );
-          const preliminaryAdaptive = await this.evaluateAdaptiveCore({
-            userId,
-            connectionId,
-            candidate: best,
-            ensemble: planBEnsemble,
-            governance: ensembleGovernance,
-            executionRoute: normalPaperExecutionCandidate ? 'NORMAL_PAPER' : 'NONE',
-            evaluatedAt,
-            allocationCapital: adaptiveAllocationCapital,
-            portfolio: initialAdaptivePortfolio,
-          });
           const preliminaryRank = preAdaptiveCandidateRanks.get(best) ?? rankedCandidates.length;
           const diagnosticCandidate: AdaptiveScanDiagnosticCandidate = {
             instrument: best.instrument,
@@ -2876,6 +2911,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paper_opportunity_scout_idle_minutes: paperOpportunityScout.idleMinutes,
             paper_opportunity_scout_target_window_minutes:
               paperOpportunityScout.targetWindowMinutes,
+            paper_opportunity_scout_effective_net_expected_r: adaptiveWinner.netExpectedR,
+            paper_opportunity_scout_raw_net_expected_r: adaptiveWinner.rawNetExpectedR,
+            paper_opportunity_scout_calibration_source_level:
+              adaptiveWinner.predictionCalibration.sourceLevel,
+            paper_opportunity_scout_calibration_samples:
+              adaptiveWinner.predictionCalibration.samples,
+            paper_opportunity_scout_calibrated_win_probability:
+              adaptiveWinner.predictionCalibration.calibratedWinProbability,
+            paper_opportunity_scout_calibration_profit_factor:
+              adaptiveWinner.predictionCalibration.profitFactor,
+            paper_opportunity_scout_drift_diagnostics: ensembleGovernance.driftDiagnostics ?? [],
             adaptive_risk_multiplier: adaptiveWinner.riskMultiplier.multiplier,
             adaptive_market_state: adaptiveWinner.marketState.state,
             adaptive_opportunity_score: adaptiveWinner.adaptiveScore,

@@ -1,6 +1,7 @@
 export const PAPER_OPPORTUNITY_SCOUT_LOT_CAP = 0.05;
 export const PAPER_OPPORTUNITY_SCOUT_ACTIVE_LOT_CAP = 0.03;
 export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_LOT_CAP = 0.02;
+export const PAPER_OPPORTUNITY_SCOUT_CALIBRATED_OOD_MICRO_LOT_CAP = 0.01;
 export const PAPER_OPPORTUNITY_SCOUT_TARGET_WINDOW_MINUTES = 30;
 export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_IDLE_MINUTES = 60;
 export const PAPER_OPPORTUNITY_SCOUT_MIN_CONFIDENCE = 0.6;
@@ -41,10 +42,23 @@ export interface PaperOpportunityScoutInput {
   portfolioQuality: number;
   driftState: 'NORMAL' | 'STRESSED' | 'OUT_OF_DISTRIBUTION';
   idleMinutes?: number | null;
+  driftDiagnostics?: readonly string[];
+  calibration?: {
+    authoritative: boolean;
+    sourceLevel: string;
+    maturity: string;
+    samples: number;
+    calibratedWinProbability: number;
+    profitFactor: number | null;
+    calibratedNetExpectedR: number;
+    recentDegradation: boolean;
+    blockRecommended: boolean;
+  } | null;
 }
 
 export type PaperOpportunityScoutReason =
   | 'OPPORTUNITY_SCOUT'
+  | 'CALIBRATED_OOD_MICRO_SCOUT'
   | 'FULL_SIZE_ALREADY_ELIGIBLE'
   | 'ROUTE_NOT_SCOUTABLE'
   | 'REGIME_NOT_SCOUTABLE'
@@ -124,11 +138,12 @@ function decision(
   policy: PaperOpportunityScoutPolicy,
   eligible: boolean,
   reason: PaperOpportunityScoutReason,
+  lotUpperBound = policy.lotUpperBound,
 ): PaperOpportunityScoutDecision {
   return {
     eligible,
     reason,
-    lotUpperBound: policy.lotUpperBound,
+    lotUpperBound,
     sizingTier: 'RESEARCH',
     mode: policy.mode,
     targetWindowMinutes: PAPER_OPPORTUNITY_SCOUT_TARGET_WINDOW_MINUTES,
@@ -159,6 +174,57 @@ export function evaluatePaperOpportunityScout(
     input.portfolioQuality < PAPER_OPPORTUNITY_SCOUT_MIN_PORTFOLIO_QUALITY
   )
     return reject('PORTFOLIO_QUALITY_TOO_LOW');
+
+  if (input.driftState === 'OUT_OF_DISTRIBUTION') {
+    const calibration = input.calibration;
+    const localCalibration =
+      calibration?.authoritative === true &&
+      (calibration.sourceLevel === 'EXACT' || calibration.sourceLevel === 'PAIR_DIRECTION_ROUTE') &&
+      (calibration.maturity === 'COLLECTING' || calibration.maturity === 'MATURE') &&
+      calibration.samples >= 10 &&
+      Number.isFinite(calibration.calibratedWinProbability) &&
+      calibration.calibratedWinProbability >= 0.6 &&
+      Number.isFinite(calibration.profitFactor) &&
+      calibration.profitFactor! >= 1.5 &&
+      Number.isFinite(calibration.calibratedNetExpectedR) &&
+      calibration.calibratedNetExpectedR >= 0.05 &&
+      !calibration.recentDegradation &&
+      !calibration.blockRecommended;
+    const idleWindowReached = policy.idleMinutes !== null && policy.idleMinutes >= 30;
+    const hasHardMtfDisagreement = (input.driftDiagnostics ?? []).includes('mtfStrength:HARD_LOW');
+    const microStructureValid =
+      idleWindowReached &&
+      input.consensusRequired > 0 &&
+      input.consensusPassed >= 4 &&
+      Number.isFinite(input.netExpectedR) &&
+      input.netExpectedR >= 0.05 &&
+      Number.isFinite(input.directionQuality) &&
+      input.directionQuality >= 0.15 &&
+      Number.isFinite(input.tradeQuality) &&
+      input.tradeQuality >= 0.3 &&
+      Number.isFinite(input.exitQuality) &&
+      input.exitQuality >= 0.3;
+    const momentumConfirmed =
+      Number.isFinite(input.alignedMomentumAtr) && input.alignedMomentumAtr >= 0.05;
+
+    if (idleWindowReached && input.calibration && !localCalibration) {
+      return reject('DRIFT_EVIDENCE_TOO_WEAK');
+    }
+    if (localCalibration && microStructureValid && hasHardMtfDisagreement) {
+      return reject('DRIFT_EVIDENCE_TOO_WEAK');
+    }
+    if (localCalibration && microStructureValid && !momentumConfirmed) {
+      return reject('MOMENTUM_NOT_CONFIRMED');
+    }
+    if (localCalibration && microStructureValid && momentumConfirmed) {
+      return decision(
+        policy,
+        true,
+        'CALIBRATED_OOD_MICRO_SCOUT',
+        PAPER_OPPORTUNITY_SCOUT_CALIBRATED_OOD_MICRO_LOT_CAP,
+      );
+    }
+  }
   if (!Number.isFinite(input.confidence) || input.confidence < policy.minConfidence)
     return reject('CONFIDENCE_TOO_LOW');
   if (!Number.isFinite(input.netExpectedR) || input.netExpectedR < policy.minNetExpectedR)
