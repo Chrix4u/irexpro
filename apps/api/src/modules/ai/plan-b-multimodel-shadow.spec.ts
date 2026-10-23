@@ -2,6 +2,8 @@ import {
   PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
   PLAN_B_ENSEMBLE_ARTIFACT,
   PLAN_B_PRE_COMPACT_POLICY_VERSION,
+  PLAN_B_PRE_CALIBRATION_POLICY_VERSION,
+  PLAN_B_REVERSAL_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_ENSEMBLE_MODE,
   scorePlanBMultimodelShadow,
 } from './plan-b-multimodel-shadow';
@@ -11,6 +13,13 @@ describe('Plan B multimodel prospective shadow', () => {
     expect(PLAN_B_PRE_COMPACT_POLICY_VERSION).toBe(
       'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1-trend-route-reliability-v1-pair-side-route-reliability-v1',
     );
+  });
+
+  it('keeps reversal reliability evidence on momentum-compatible policy versions only', () => {
+    expect([...PLAN_B_REVERSAL_RELIABILITY_EVIDENCE_POLICY_VERSIONS]).toEqual([
+      PLAN_B_PRE_CALIBRATION_POLICY_VERSION,
+      PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+    ]);
   });
 
   it('keeps the persisted active policy version within the decision-store varchar(160) contract', () => {

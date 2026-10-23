@@ -22,6 +22,7 @@ import {
 import {
   PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
   PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS,
+  PLAN_B_REVERSAL_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_ENSEMBLE_ARTIFACT,
   PLAN_B_GROSS_EXPECTED_R_FLOOR,
@@ -87,12 +88,14 @@ import {
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import { isFxWeeklySessionOpen as isFxWeeklySessionOpenAt } from '../market-data/utils/fx-weekly-session';
 import {
+  PaperReversalRouteReliabilityDecision,
   PaperTrendPairSideReliabilityDecision,
   PaperTrendPairSideReliabilityShadowDecision,
   PaperTrendRouteReliabilityDecision,
+  evaluatePaperReliabilityExecutionGate,
+  evaluatePaperReversalRouteReliability,
   evaluatePaperTrendPairSideReliability,
   evaluatePaperTrendPairSideReliabilityShadow,
-  evaluatePaperTrendReliabilityExecutionGate,
   evaluatePaperTrendRouteReliability,
 } from './paper-route-reliability';
 import {
@@ -520,7 +523,10 @@ interface ExecutableCounterfactual {
   pairedReversalEpisodeKey: string;
   pairedReversalEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
   paperResearchPairSideReliability: PaperResearchPairSideReliabilityDecision | null;
-  paperTrendRouteReliability: PaperTrendRouteReliabilityDecision | null;
+  paperTrendRouteReliability:
+    | PaperTrendRouteReliabilityDecision
+    | PaperReversalRouteReliabilityDecision
+    | null;
   paperTrendPairSideReliability: PaperTrendPairSideReliabilityDecision | null;
   paperTrendPairSideReliabilityShadow: PaperTrendPairSideReliabilityShadowDecision | null;
   paperExecutionRoute: ReturnType<typeof selectPaperExecutionRoute>;
@@ -1852,7 +1858,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               normalPaperExecutionCandidate ? 'NORMAL_PAPER' : 'NONE',
             ),
           );
-          let paperTrendRouteReliability: PaperTrendRouteReliabilityDecision | null = null;
+          let paperTrendRouteReliability:
+            | PaperTrendRouteReliabilityDecision
+            | PaperReversalRouteReliabilityDecision
+            | null = null;
           let paperTrendPairSideReliability: PaperTrendPairSideReliabilityDecision | null = null;
           let paperTrendPairSideReliabilityShadow: PaperTrendPairSideReliabilityShadowDecision | null =
             null;
@@ -1865,11 +1874,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             const routeEvidence =
               planBEnsemble.strategyRoute === 'TREND_CONTINUATION'
                 ? await this.loadPaperTrendRouteReliabilityEvidence(userId, connectionId)
-                : null;
-            paperTrendRouteReliability = evaluatePaperTrendRouteReliability({
-              strategyRoute: planBEnsemble.strategyRoute,
-              evidence: routeEvidence,
-            });
+                : await this.loadPaperReversalRouteReliabilityEvidence(userId, connectionId);
+            paperTrendRouteReliability =
+              planBEnsemble.strategyRoute === 'TREND_CONTINUATION'
+                ? evaluatePaperTrendRouteReliability({
+                    strategyRoute: planBEnsemble.strategyRoute,
+                    evidence: routeEvidence,
+                  })
+                : evaluatePaperReversalRouteReliability({
+                    strategyRoute: planBEnsemble.strategyRoute,
+                    evidence: routeEvidence,
+                  });
             const pairSideEvidence = await this.loadPaperTrendPairSideReliabilityEvidence(
               userId,
               connectionId,
@@ -1893,7 +1908,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `maxDrawdown=${paperTrendPairSideReliabilityShadow.maxDrawdown ?? 'n/a'} ` +
                 `executionAuthority=${paperTrendPairSideReliabilityShadow.executionAuthority}`,
             );
-            const reliabilityExecutionGate = evaluatePaperTrendReliabilityExecutionGate({
+            const reliabilityExecutionGate = evaluatePaperReliabilityExecutionGate({
+              strategyRoute: planBEnsemble.strategyRoute,
               route: paperTrendRouteReliability,
               pairSide: paperTrendPairSideReliability,
             });
@@ -4239,6 +4255,68 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     return summarizeEnsembleSleeveOutcomes(episodes);
   }
 
+  private async loadPaperReversalRouteReliabilityEvidence(
+    userId: string,
+    connectionId: string,
+  ): Promise<EnsembleSleeveEvidence | null> {
+    if (!this.dataSource) return null;
+
+    const rows = (await this.dataSource.query(
+      `
+        SELECT instrument, direction, evaluated_at, components->'outcome' AS outcome
+        FROM trading.ensemble_shadow_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND engine_code = $3
+          AND model_version = ANY($4::text[])
+          AND components->>'strategyRoute' = 'CONFIRMED_REVERSAL'
+          AND COALESCE((components->>'paperAdmitted')::boolean, false) = true
+          AND COALESCE(
+            (components->'governance'->>'paperExecutionEligible')::boolean,
+            false
+          ) = true
+          AND components ? 'outcome'
+          AND components->'outcome'->>'version' = $5
+        ORDER BY evaluated_at ASC
+      `,
+      [
+        userId,
+        connectionId,
+        ACTIVE_ENGINE_CODE,
+        [...PLAN_B_REVERSAL_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
+        ENSEMBLE_OUTCOME_MODEL_VERSION,
+      ],
+    )) as Array<{
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      evaluated_at: string | Date;
+      outcome: EnsembleShadowOutcome | null;
+    }>;
+
+    const byPairSide = new Map<
+      string,
+      Array<{ evaluatedAt: string | Date; outcome: EnsembleShadowOutcome }>
+    >();
+    for (const row of rows) {
+      if (
+        !row.outcome ||
+        typeof row.outcome !== 'object' ||
+        typeof row.outcome.status !== 'string'
+      ) {
+        continue;
+      }
+      const key = `${row.instrument}|${row.direction}`;
+      const observations = byPairSide.get(key) ?? [];
+      observations.push({ evaluatedAt: row.evaluated_at, outcome: row.outcome });
+      byPairSide.set(key, observations);
+    }
+
+    const episodes = [...byPairSide.values()]
+      .flatMap((observations) => collapseEnsembleOutcomeEpisodes(observations))
+      .sort((a, b) => new Date(a.resolvedAt).getTime() - new Date(b.resolvedAt).getTime());
+    return summarizeEnsembleSleeveOutcomes(episodes);
+  }
+
   private async loadPaperTrendPairSideReliabilitySnapshot(
     userId: string,
     connectionId: string,
@@ -4344,6 +4422,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   ): Promise<EnsembleSleeveEvidence | null> {
     if (!this.dataSource) return null;
 
+    const evidencePolicyVersions =
+      strategyRoute === 'CONFIRMED_REVERSAL'
+        ? [...PLAN_B_REVERSAL_RELIABILITY_EVIDENCE_POLICY_VERSIONS]
+        : [...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS];
+
     const rows = (await this.dataSource.query(
       `
         SELECT evaluated_at, components->'outcome' AS outcome
@@ -4368,7 +4451,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         userId,
         connectionId,
         ACTIVE_ENGINE_CODE,
-        [...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
+        evidencePolicyVersions,
         instrument,
         direction,
         strategyRoute,

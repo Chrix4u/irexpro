@@ -1,6 +1,9 @@
 import {
+  PAPER_REVERSAL_ROUTE_RELIABILITY_MIN_EPISODES,
   PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES,
   PAPER_TREND_ROUTE_RELIABILITY_MIN_EPISODES,
+  evaluatePaperReliabilityExecutionGate,
+  evaluatePaperReversalRouteReliability,
   evaluatePaperTrendPairSideReliability,
   evaluatePaperTrendPairSideReliabilityShadow,
   evaluatePaperTrendReliabilityExecutionGate,
@@ -270,6 +273,100 @@ describe('PAPER trend reliability execution composition', () => {
       fullSizeEligible: false,
       pairSideDemoted: true,
       routeDiagnosticOnly: true,
+    });
+  });
+});
+
+describe('PAPER confirmed-reversal route reliability', () => {
+  it('keeps a reversal route collecting until eight compatible episodes exist', () => {
+    expect(
+      evaluatePaperReversalRouteReliability({
+        strategyRoute: 'CONFIRMED_REVERSAL',
+        evidence: evidence({
+          closedTrades: PAPER_REVERSAL_ROUTE_RELIABILITY_MIN_EPISODES - 1,
+          profitFactor: 0.2,
+          maxDrawdown: 0.2,
+        }),
+      }),
+    ).toMatchObject({
+      state: 'COLLECTING',
+      fullSizeEligible: true,
+      reason: 'INSUFFICIENT_REVERSAL_ROUTE_EVIDENCE',
+    });
+  });
+
+  it('demotes a mature losing reversal route', () => {
+    expect(
+      evaluatePaperReversalRouteReliability({
+        strategyRoute: 'CONFIRMED_REVERSAL',
+        evidence: evidence({
+          closedTrades: PAPER_REVERSAL_ROUTE_RELIABILITY_MIN_EPISODES,
+          profitFactor: 0.32,
+          maxDrawdown: 0.06,
+        }),
+      }),
+    ).toMatchObject({
+      state: 'RESEARCH_ONLY',
+      fullSizeEligible: false,
+      reason: 'REVERSAL_ROUTE_PROFIT_FACTOR_BELOW_ONE',
+    });
+  });
+
+  it('blocks an immature reversal pair-side when the mature route is weak', () => {
+    const route = evaluatePaperReversalRouteReliability({
+      strategyRoute: 'CONFIRMED_REVERSAL',
+      evidence: evidence({
+        closedTrades: PAPER_REVERSAL_ROUTE_RELIABILITY_MIN_EPISODES,
+        profitFactor: 0.32,
+        maxDrawdown: 0.06,
+      }),
+    });
+    const pairSide = evaluatePaperTrendPairSideReliability({
+      strategyRoute: 'CONFIRMED_REVERSAL',
+      evidence: evidence({ closedTrades: 2, profitFactor: 2.0, maxDrawdown: 0.01 }),
+    });
+
+    expect(
+      evaluatePaperReliabilityExecutionGate({
+        strategyRoute: 'CONFIRMED_REVERSAL',
+        route,
+        pairSide,
+      }),
+    ).toMatchObject({
+      fullSizeEligible: false,
+      routeDemoted: true,
+      pairSideDemoted: false,
+    });
+  });
+
+  it('allows a mature healthy reversal pair-side to override a weak aggregate route', () => {
+    const route = evaluatePaperReversalRouteReliability({
+      strategyRoute: 'CONFIRMED_REVERSAL',
+      evidence: evidence({
+        closedTrades: PAPER_REVERSAL_ROUTE_RELIABILITY_MIN_EPISODES,
+        profitFactor: 0.32,
+        maxDrawdown: 0.06,
+      }),
+    });
+    const pairSide = evaluatePaperTrendPairSideReliability({
+      strategyRoute: 'CONFIRMED_REVERSAL',
+      evidence: evidence({
+        closedTrades: PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES,
+        profitFactor: 1.4,
+        maxDrawdown: 0.04,
+      }),
+    });
+
+    expect(
+      evaluatePaperReliabilityExecutionGate({
+        strategyRoute: 'CONFIRMED_REVERSAL',
+        route,
+        pairSide,
+      }),
+    ).toMatchObject({
+      fullSizeEligible: true,
+      routeDemoted: false,
+      pairSideDemoted: false,
     });
   });
 });

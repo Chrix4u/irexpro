@@ -1598,6 +1598,15 @@ describe('VpsForexSignalCollectorService', () => {
     const pairSideReliabilitySpy = jest
       .spyOn(collector as any, 'loadPaperTrendPairSideReliabilityEvidence')
       .mockResolvedValue(null);
+    const reversalRouteReliabilitySpy = jest
+      .spyOn(collector as any, 'loadPaperReversalRouteReliabilityEvidence')
+      .mockResolvedValue({
+        closedTrades: 8,
+        profitFactor: 1.4,
+        sharpe: 1.1,
+        maxDrawdown: 0.04,
+        positiveWindowFraction: 0.75,
+      });
     const riskSnapshotSpy = jest
       .spyOn(collector as any, 'loadAdaptiveOpenRiskPositions')
       .mockResolvedValueOnce({ available: true, positions: [] })
@@ -1742,6 +1751,7 @@ describe('VpsForexSignalCollectorService', () => {
         'BUY',
         'CONFIRMED_REVERSAL',
       );
+      expect(reversalRouteReliabilitySpy).toHaveBeenCalledWith('user-1', 'conn-1');
     } finally {
       reversalSpy.mockRestore();
       governanceSpy.mockRestore();
