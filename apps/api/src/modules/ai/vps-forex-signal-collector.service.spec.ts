@@ -111,8 +111,31 @@ describe('dynamic PAPER lot ceiling', () => {
 describe('PAPER opportunity scout model identity', () => {
   it('separates idle-aware participation outcomes from the v1 scout cohort', () => {
     expect(paperOpportunityScoutModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v2',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v3',
     );
+  });
+});
+
+describe('calibrated OOD micro scout sizing', () => {
+  it('keeps a calibrated OOD scout capped at 0.01 lots in final PAPER sizing', () => {
+    const collector = Object.create(VpsForexSignalCollectorService.prototype) as any;
+    expect(
+      collector.adaptiveLotSizingFor({
+        paperExecutionRoute: 'NORMAL_PAPER',
+        paperOpportunityScout: {
+          eligible: true,
+          lotUpperBound: 0.01,
+          sizingTier: 'RESEARCH',
+          reason: 'CALIBRATED_OOD_MICRO_SCOUT',
+          mode: 'RECOVERY',
+          targetWindowMinutes: 30,
+          idleMinutes: 65,
+        },
+        candidate: {},
+        planBEnsemble: {},
+        ensembleGovernance: {},
+      }),
+    ).toEqual({ upperBound: 0.01, tier: 'RESEARCH' });
   });
 });
 
@@ -1725,9 +1748,22 @@ describe('VpsForexSignalCollectorService', () => {
         },
         candidateRiskAtStop: 20,
         requestedRiskPercent: 2,
+        predictionCalibration: {
+          authoritative: true,
+          sourceLevel: 'EXACT',
+          maturity: 'MATURE',
+          samples: 12,
+          calibratedWinProbability: 0.68,
+          profitFactor: 1.8,
+          calibratedNetExpectedR: target ? 0.42 : input.governance.netExpectedR,
+          recentDegradation: false,
+          blockRecommended: false,
+          reason: 'CALIBRATION_APPLIED',
+        },
+        rawNetExpectedR: input.governance.netExpectedR,
         sizingTier: 'BASE',
         sizingUpperBound: 0.1,
-        netExpectedR: input.governance.netExpectedR,
+        netExpectedR: target ? 0.42 : input.governance.netExpectedR,
         executionCostR: input.governance.estimatedExecutionCostR,
       };
     });
@@ -1741,7 +1777,18 @@ describe('VpsForexSignalCollectorService', () => {
         }) as unknown as typeof fetch,
       );
 
-      expect(scoutSpy).toHaveBeenCalledWith(expect.objectContaining({ idleMinutes: 65 }));
+      expect(scoutSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          idleMinutes: 65,
+          netExpectedR: 0.42,
+          calibration: expect.objectContaining({
+            authoritative: true,
+            sourceLevel: 'EXACT',
+            samples: 12,
+            calibratedNetExpectedR: 0.42,
+          }),
+        }),
+      );
       expect(riskSnapshotSpy).toHaveBeenCalledTimes(3);
       expect(receiveSignal).toHaveBeenCalledTimes(1);
       expect(receiveSignal.mock.calls[0]![0]).toEqual(
