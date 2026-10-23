@@ -820,6 +820,31 @@ describe('StrategyOrchestratorService', () => {
       );
     });
 
+    it('passes the 0.10 PAPER floor only for an explicitly eligible opportunity scout', async () => {
+      const result = await service.processSignal(
+        validCandidate({
+          suggestedVolume: 0.1,
+          metadata: {
+            external_provider_paper_only: true,
+            position_sizing_tier: 'RESEARCH',
+            paper_opportunity_scout_eligible: true,
+            paper_opportunity_scout_reason: 'OPPORTUNITY_SCOUT',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedLotUpperBound: '0.1',
+          paperAllocationSizing: expect.objectContaining({
+            confidenceTier: 'RESEARCH',
+            minimumExecutableLot: '0.1',
+          }),
+        }),
+      );
+    });
+
     it('marks the durable TradeIntent REJECTED when sizing fails closed', async () => {
       const sizingError = Object.assign(
         new Error('risk-budget volume 0.19000000 is below the PAPER policy minimum 0.2'),

@@ -119,7 +119,8 @@ export interface SizedPosition {
 
 /** Decimal scale for lot math (lot steps are 0.01/0.001 — 8 digits is exact). */
 const LOT_SCALE = 8;
-const PAPER_PRODUCT_MIN_LOT = '0.2';
+const PAPER_PRODUCT_ABSOLUTE_MIN_LOT = '0.1';
+const PAPER_PRODUCT_DEFAULT_MIN_LOT = '0.2';
 const PAPER_PRODUCT_MAX_LOT = '2';
 
 /**
@@ -504,16 +505,16 @@ export class PositionSizingService {
     }
 
     const paperProductMinimumLot = allocationAwarePaper
-      ? ExactDecimal.parse(PAPER_PRODUCT_MIN_LOT)
+      ? ExactDecimal.parse(PAPER_PRODUCT_ABSOLUTE_MIN_LOT)
       : null;
     const paperProductMaximumLot = allocationAwarePaper
       ? ExactDecimal.parse(PAPER_PRODUCT_MAX_LOT)
       : null;
     let effectiveRequestedLotUpperBound = requestedLotUpperBound;
     if (paperProductMinimumLot && paperProductMaximumLot) {
-      // PAPER sizing lives inside the product's 0.20–2.00 lot band. Caller
-      // hints below the floor cannot create tiny PAPER positions, and caller
-      // hints above the ceiling cannot exceed the product maximum.
+      // PAPER sizing has an absolute 0.10–2.00 lot product band. Normal PAPER
+      // callers explicitly/default to 0.20; evidence-backed scouts may request
+      // the 0.10 floor. Caller hints above 2.00 cannot exceed the product maximum.
       effectiveRequestedLotUpperBound = ExactDecimal.min(
         ExactDecimal.max(requestedLotUpperBound, paperProductMinimumLot),
         paperProductMaximumLot,
@@ -552,7 +553,7 @@ export class PositionSizingService {
     let policyMinimumExecutableLot: ExactDecimal | null = null;
     let policyMinimumLotLifted = false;
     if (allocationAwarePaper && paperProductMinimumLot) {
-      let requestedPolicyMinimumLot = paperProductMinimumLot;
+      let requestedPolicyMinimumLot = ExactDecimal.parse(PAPER_PRODUCT_DEFAULT_MIN_LOT);
       if (params.paperAllocationSizing?.minimumExecutableLot != null) {
         const parsedRequestedMinimum = ExactDecimal.tryParse(
           params.paperAllocationSizing.minimumExecutableLot,

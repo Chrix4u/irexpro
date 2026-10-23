@@ -52,8 +52,8 @@
 
 ## PAPER execution size invariant
 
-- Every executable external-provider PAPER trade uses a product lot band of **0.20 to 2.00 lots**.
-- Opportunity-scout idleness may relax only soft predictive floors; it must never shrink an executed trade below 0.20 lots.
-- `PositionSizingService` remains authoritative for stop-distance risk and margin. If safe computed volume is below 0.20 lots, execution must fail closed with `POSITION_SIZE_BELOW_POLICY_MINIMUM` rather than round risk upward.
-- Calibrated OOD ideas that only justify micro sizing remain shadow-only; they must not execute at 0.01/0.02/0.03/0.05 lots.
+- Executable external-provider PAPER trades use an overall product lot band of **0.10 to 2.00 lots**; **0.10 is reserved for explicitly eligible opportunity scouts**, while normal PAPER starts at 0.20.
+- Opportunity-scout idleness may relax only soft predictive floors and may size an eligible scout at 0.10 lots; it must never lower normal PAPER below 0.20 or bypass hard safety.
+- `PositionSizingService` remains authoritative for stop-distance risk and margin. It honors an explicit 0.10 scout floor or the 0.20 normal floor only when the actual stop-loss risk fits the durable ceiling; otherwise execution fails closed with `POSITION_SIZE_BELOW_POLICY_MINIMUM`.
+- Calibrated OOD ideas may execute only through the evidence-backed 0.10 scout tier; legacy 0.01/0.02/0.03/0.05 execution remains disabled.
 - M1 tactical V4 remains an immutable historical 0.01-lot cohort, but active wiring uses `m1-tactical-rollout-v5-meaningful-size-shadow`: M1 continues observing at one-minute cadence and cannot execute until it qualifies for the 0.20-lot product floor.
