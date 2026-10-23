@@ -350,14 +350,13 @@ export function selectPaperExecutionRoute(input: {
 /**
  * Execution boundary for the proven 2026-10-19 M5 forward-control cohort.
  *
- * The two strongest M5 route families from the 2026-10-19 cohort remain
- * executable under today's stricter downstream brakes and protection:
- * NORMAL_PAPER plus v11 PAPER_RESEARCH_THROUGHPUT. Extension-exhaustion is
- * now shadow-only after two fresh losses on 2026-10-23; rejected-edge canary
- * and paired-reversal also stay shadow-only. Route scoring/evidence remains intact.
+ * The Oct 19 cohort remains useful as research evidence, but forward results
+ * changed the execution authority. From Oct 20 onward v11 throughput produced
+ * a materially losing cohort, so every research route stays shadow-only. Only
+ * NORMAL_PAPER may create an order; route scoring/evidence remains intact.
  */
 export function isOct19ProvenM5PaperExecutionAllowed(route: PaperExecutionRoute): boolean {
-  return route === 'NORMAL_PAPER' || route === 'PAPER_RESEARCH_THROUGHPUT';
+  return route === 'NORMAL_PAPER';
 }
 
 export interface PaperResearchEpisodeGuardInput {

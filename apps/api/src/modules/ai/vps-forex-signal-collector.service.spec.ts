@@ -1908,7 +1908,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(result.opportunity.hardBlockers).toContain('ADAPTIVE_CALIBRATION_NEGATIVE_EDGE');
   });
 
-  it('keeps the canary quarantined without letting it suppress eligible controlled PAPER research', async () => {
+  it('keeps canary and v11 controlled research shadow-only while preserving evidence', async () => {
     const live = new LivePaperMarketDataService();
     installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
@@ -2048,19 +2048,9 @@ describe('VpsForexSignalCollectorService', () => {
       await collector.collectOnce(fetchMock as unknown as typeof fetch);
 
       expect(getRejectedEdgeCanaryEvidence).toHaveBeenCalledWith('user-1', 'EURUSD', 'BUY');
-      // Canary scoring/evidence remains active, but the observed PF 0.15 lane is
-      // quarantined. Controlled research must still be able to own the candidate.
-      expect(receiveSignal).toHaveBeenCalledTimes(1);
-      expect(receiveSignal).toHaveBeenCalledWith(
-        expect.objectContaining({
-          instrument: 'EURUSD',
-          direction: 'BUY',
-          metadata: expect.objectContaining({
-            paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
-            paper_research_throughput_qualification_evidence: false,
-          }),
-        }),
-      );
+      // Canary and v11 research scoring/evidence remain active, but neither
+      // route may dispatch a PAPER order under the current control.
+      expect(receiveSignal).not.toHaveBeenCalled();
 
       const insertCalls = shadowQuery.mock.calls.filter(([sql]) =>
         String(sql).includes('INSERT INTO trading.ensemble_shadow_decisions'),
@@ -2075,7 +2065,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('routes bounded single-MTF-drift research-throughput to PAPER execution without qualification authority', async () => {
+  it('keeps bounded single-MTF-drift v11 research shadow-only while preserving eligibility evidence', async () => {
     const live = new LivePaperMarketDataService();
     installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
@@ -2222,48 +2212,7 @@ describe('VpsForexSignalCollectorService', () => {
         json: async () => directionConfirmedPayload,
       });
       await collector.collectOnce(fetchMock as unknown as typeof fetch);
-      expect(receiveSignal).toHaveBeenCalledTimes(1);
-      expect(receiveSignal).toHaveBeenCalledWith(
-        expect.objectContaining({
-          instrument: 'EURUSD',
-          direction: 'BUY',
-          suggestedVolume: 1,
-          modelVersion:
-            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v11-momentum-confirmed-exploration',
-          metadata: expect.objectContaining({
-            paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
-            paper_research_throughput: true,
-            paper_research_throughput_qualification_evidence: false,
-            paper_research_throughput_execution_authority: 'PAPER_ONLY_RESEARCH',
-            paper_research_throughput_reason: 'BOUNDED_MTF_RESEARCH_CANDIDATE',
-            main_strategy_qualification_evidence: false,
-            production_eligible: false,
-            position_sizing_tier: 'RESEARCH',
-          }),
-        }),
-      );
-      const emitted = receiveSignal.mock.calls[0]![0] as any;
-      expect(emitted.marketRegime).toBe('DISLOCATED');
-      expect(emitted.marketRegime).not.toBe('TRENDING');
-      expect(emitted.suggestedVolume).toBeLessThanOrEqual(1);
-      expect(emitted.metadata.adaptive_risk_multiplier).toBe(0.5);
-      expect(emitted.metadata.feature_h4_context_available).toBe(false);
-      expect(emitted.metadata.feature_h4_alignment).toBe(0);
-      expect(emitted.metadata.feature_h4_closed_bar_count).toBeGreaterThanOrEqual(0);
-      expect(emitted.metadata.adaptiveMarketIntelligence).toMatchObject({
-        artifact: 'adaptive-market-intelligence-v1',
-        executionRoute: 'PAPER_RESEARCH_THROUGHPUT',
-        productionEligible: false,
-        marketState: expect.objectContaining({
-          state: 'DISLOCATED',
-          h4ContextAvailable: false,
-          h4Alignment: 0,
-        }),
-        riskMultiplier: expect.objectContaining({
-          multiplier: 0.5,
-          reasons: expect.arrayContaining(['PAIR_SIDE_RELIABILITY_DERISK']),
-        }),
-      });
+      expect(receiveSignal).not.toHaveBeenCalled();
       expect(
         logSpy.mock.calls.some((call) =>
           String(call[0]).includes(
@@ -2278,7 +2227,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('routes evidence-backed profitable pair-side acceleration into PAPER research when only structural quality misses', async () => {
+  it('keeps evidence-backed v11 pair-side acceleration shadow-only while preserving eligibility evidence', async () => {
     const live = new LivePaperMarketDataService();
     installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
@@ -2428,31 +2377,7 @@ describe('VpsForexSignalCollectorService', () => {
       });
       await collector.collectOnce(fetchMock as unknown as typeof fetch);
       expect(pairEvidenceSpy).toHaveBeenCalledWith('user-1', 'conn-1', 'EURUSD', 'BUY');
-      expect(receiveSignal).toHaveBeenCalledTimes(1);
-      expect(receiveSignal).toHaveBeenCalledWith(
-        expect.objectContaining({
-          instrument: 'EURUSD',
-          direction: 'BUY',
-          suggestedVolume: 1,
-          modelVersion:
-            'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v11-momentum-confirmed-exploration',
-          metadata: expect.objectContaining({
-            paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
-            paper_research_throughput: true,
-            paper_research_throughput_qualification_evidence: false,
-            paper_research_throughput_execution_authority: 'PAPER_ONLY_RESEARCH',
-            paper_research_throughput_reason: 'EVIDENCE_BACKED_PAIR_SIDE_ACCELERATION',
-            paper_cost_aware_entry_artifact: 'paper-cost-aware-entry-v1',
-            paper_cost_aware_entry_action: 'ENTER_NOW',
-            paper_cost_aware_entry_reason: 'SPARSE_COHORT_EVIDENCE',
-            paper_cost_aware_entry_modifies_execution: true,
-            paper_cost_aware_entry_qualification_evidence: false,
-            main_strategy_qualification_evidence: false,
-            production_eligible: false,
-            position_sizing_tier: 'RESEARCH',
-          }),
-        }),
-      );
+      expect(receiveSignal).not.toHaveBeenCalled();
       expect(
         logSpy.mock.calls.some((call) =>
           String(call[0]).includes(
@@ -2468,7 +2393,7 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
-  it('executes calibrated PAPER research when fixed costs are positive but below the 0.08R floor', async () => {
+  it('keeps calibrated v11 research shadow-only when fixed costs are positive but below the 0.08R floor', async () => {
     const live = new LivePaperMarketDataService();
     installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
@@ -2655,27 +2580,7 @@ describe('VpsForexSignalCollectorService', () => {
         freshProviderOverrides: true,
         qualificationEvidence: false,
       });
-      expect(receiveSignal).toHaveBeenCalledTimes(1);
-      expect(receiveSignal).toHaveBeenCalledWith(
-        expect.objectContaining({
-          instrument: 'EURUSD',
-          direction: 'BUY',
-          suggestedVolume: 1,
-          metadata: expect.objectContaining({
-            paper_execution_route: 'PAPER_RESEARCH_THROUGHPUT',
-            paper_calibrated_cost_rescue: true,
-            paper_calibrated_cost_rescue_artifact: 'paper-calibrated-cost-rescue-v1',
-            paper_calibrated_cost_rescue_execution_authority: 'PAPER_ONLY_RESEARCH',
-            paper_calibrated_cost_rescue_qualification_evidence: false,
-            paper_calibrated_cost_rescue_fixed_net_expected_r: 0.04,
-            paper_calibrated_cost_rescue_calibrated_net_expected_r: 0.09,
-            paper_cost_aware_entry_action: 'ENTER_NOW',
-            paper_cost_aware_entry_reason: 'CALIBRATED_RESCUE_CURRENT_EDGE',
-            production_eligible: false,
-            position_sizing_tier: 'RESEARCH',
-          }),
-        }),
-      );
+      expect(receiveSignal).not.toHaveBeenCalled();
     } finally {
       calibrationSpy.mockRestore();
       planBSpy.mockRestore();
