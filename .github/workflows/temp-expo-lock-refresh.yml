@@ -1,0 +1,77 @@
+name: Temporary Expo Lock Refresh Verification
+
+on:
+  push:
+    branches:
+      - fix/next-15-5-28-security-20261023
+    paths:
+      - apps/mobile/package.json
+      - .github/workflows/temp-expo-lock-refresh.yml
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '10.34.5'
+  CI: '1'
+  EXPO_NO_TELEMETRY: '1'
+  EXPO_PUBLIC_API_BASE_URL: 'https://irexpro.lightworldtech.com/api/v1'
+
+jobs:
+  verify-and-export-lock:
+    name: Verify Expo compatibility and export lockfile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Refresh lockfile deterministically
+        run: pnpm install --lockfile-only --ignore-scripts
+
+      - name: Install verified dependency graph
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Validate mobile source and Expo compatibility
+        run: |
+          set -Eeuo pipefail
+          pnpm --filter @irexpro/mobile typecheck
+          pnpm --filter @irexpro/mobile test
+          pnpm --filter @irexpro/mobile validate:release-config
+          pnpm --filter @irexpro/mobile exec expo install --check
+
+      - name: Re-run VPS production dependency policy
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p security-artifacts
+          set +e
+          pnpm audit --prod --json > security-artifacts/pnpm-audit-full.json
+          audit_status=$?
+          set -e
+          echo "pnpm audit raw status=${audit_status}; scoped policy decides the gate."
+          node scripts/security/filter-vps-production-audit.mjs \
+            security-artifacts/pnpm-audit-full.json \
+            security-artifacts/vps-pnpm-audit.json
+
+      - name: Upload verified lockfile
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: verified-expo-lockfile
+          path: pnpm-lock.yaml
+          if-no-files-found: error
+          retention-days: 1
