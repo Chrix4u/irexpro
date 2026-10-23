@@ -49,3 +49,10 @@
 - [ ] Run scout + collector + PAPER broker lifecycle suites.
 - [ ] Run API build and full API test suite.
 - [ ] Push branch and open PR only after local verification is green.
+
+## PAPER execution size invariant
+
+- Every executable external-provider PAPER trade uses a product lot band of **0.20 to 2.00 lots**.
+- Opportunity-scout idleness may relax only soft predictive floors; it must never shrink an executed trade below 0.20 lots.
+- `PositionSizingService` remains authoritative for stop-distance risk and margin. If safe computed volume is below 0.20 lots, execution must fail closed with `POSITION_SIZE_BELOW_POLICY_MINIMUM` rather than round risk upward.
+- Calibrated OOD ideas that only justify micro sizing remain shadow-only; they must not execute at 0.01/0.02/0.03/0.05 lots.

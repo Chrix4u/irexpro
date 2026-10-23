@@ -795,7 +795,7 @@ describe('StrategyOrchestratorService', () => {
       );
     });
 
-    it('lets broker minimum and risk math govern PAPER sizing without an artificial 0.10 floor', async () => {
+    it('enforces the 0.20 PAPER product floor through authoritative sizing', async () => {
       const result = await service.processSignal(
         validCandidate({
           metadata: {
@@ -814,6 +814,7 @@ describe('StrategyOrchestratorService', () => {
             allocatedCapital: '1000',
             confidenceTier: 'VERY_STRONG',
             sessionPeakEquity: '10000.00',
+            minimumExecutableLot: '0.2',
           },
         }),
       );
@@ -821,7 +822,7 @@ describe('StrategyOrchestratorService', () => {
 
     it('marks the durable TradeIntent REJECTED when sizing fails closed', async () => {
       const sizingError = Object.assign(
-        new Error('risk-budget volume 0.07000000 is below the PAPER policy minimum 0.1'),
+        new Error('risk-budget volume 0.19000000 is below the PAPER policy minimum 0.2'),
         { code: 'POSITION_SIZE_BELOW_POLICY_MINIMUM' },
       );
       sizingMock.sizePosition.mockRejectedValueOnce(sizingError);

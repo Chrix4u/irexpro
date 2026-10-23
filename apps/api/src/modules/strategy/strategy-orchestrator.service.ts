@@ -514,6 +514,7 @@ export class StrategyOrchestratorService {
             marketReferenceEntryPrice?: string;
             adaptiveRiskMultiplier?: string;
             sessionPeakEquity?: string | null;
+            minimumExecutableLot?: string;
           }
         | undefined;
       if (
@@ -557,6 +558,7 @@ export class StrategyOrchestratorService {
               : null,
             confidenceTier,
             sessionPeakEquity: session.peakEquity,
+            minimumExecutableLot: '0.2',
             ...(executionCandidate.suggestedEntryPrice != null
               ? { marketReferenceEntryPrice: String(executionCandidate.suggestedEntryPrice) }
               : {}),
