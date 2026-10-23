@@ -732,7 +732,6 @@ describe('M1TacticalEvidenceService shadow episode fail-closed mapping', () => {
   });
 });
 
-
 describe('M1TacticalEvidenceService causal shadow pair-side outcomes', () => {
   it('loads only causal exact-route pair-side outcomes for the active policy window', async () => {
     const query = jest.fn().mockResolvedValue([
@@ -765,12 +764,14 @@ describe('M1TacticalEvidenceService causal shadow pair-side outcomes', () => {
 
     const [sql, params] = query.mock.calls[0]!;
     const normalized = String(sql).replace(/\s+/g, ' ');
-    expect(normalized).toContain("route = $3");
-    expect(normalized).toContain("instrument = $4");
-    expect(normalized).toContain("direction = $5");
-    expect(normalized).toContain("policy_version = $6");
+    expect(normalized).toContain('route = $3');
+    expect(normalized).toContain('instrument = $4');
+    expect(normalized).toContain('direction = $5');
+    expect(normalized).toContain('policy_version = $6');
     expect(normalized).toContain("governance -> 'shadowOutcome15mV1' ->> 'artifact' = $7");
-    expect(normalized).toContain("(governance -> 'shadowOutcome15mV1' ->> 'observedAt')::timestamptz <= $8::timestamptz");
+    expect(normalized).toContain(
+      "(governance -> 'shadowOutcome15mV1' ->> 'observedAt')::timestamptz <= $8::timestamptz",
+    );
     expect(normalized).toContain("evaluated_at >= ($8::timestamptz - interval '7 days')");
     expect(normalized).toContain('ORDER BY observed_at DESC');
     expect(normalized).toContain('LIMIT 20');
