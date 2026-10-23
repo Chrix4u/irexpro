@@ -1,5 +1,6 @@
 import type { M1TacticalRoute } from './m1-tactical-route';
 
+export const M1_SHADOW_MICRO_RELIABILITY_ARTIFACT = 'm1-shadow-pair-side-reliability-v1' as const;
 export const M1_SHADOW_MICRO_MIN_SAMPLES = 3;
 export const M1_SHADOW_MICRO_MAX_SAMPLES = 20;
 export const M1_SHADOW_MICRO_MAX_AGE_DAYS = 7;
@@ -56,7 +57,8 @@ function decision(
     nonPositive,
     averageNetR: selected.length > 0 ? totalNetR / selected.length : 0,
     totalNetR,
-    profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Number.POSITIVE_INFINITY : null,
+    profitFactor:
+      grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Number.POSITIVE_INFINITY : null,
     positiveFraction: selected.length > 0 ? positive / selected.length : 0,
   };
 }

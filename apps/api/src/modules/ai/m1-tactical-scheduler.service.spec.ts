@@ -23,6 +23,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V1,
   M1_TACTICAL_ROLLOUT_POLICY_V2,
   M1_TACTICAL_ROLLOUT_POLICY_V3,
+  M1_TACTICAL_ROLLOUT_POLICY_V4,
   m1RiskMarketRegime,
   m1RouteExecutableInPhase,
 } from './m1-tactical-scheduler.service';
@@ -433,6 +434,7 @@ function phase2Harness(
     signalOutcome?: 'EXECUTION_SUCCEEDED' | 'RISK_REJECTED';
     rollout?: any;
     evidenceByRoute?: Record<string, any[]>;
+    shadowPairSideOutcomes?: Array<{ observedAt: Date; netR: number }>;
     openPositions?: any[];
     duplicateOppositeIntent?: boolean;
     tradeIntentId?: string | null;
@@ -481,6 +483,9 @@ function phase2Harness(
   const loadRoutePairSideEvidence = jest.fn(
     async (request: any) => options.evidenceByRoute?.[request.route] ?? continuationLosses,
   );
+  const loadShadowPairSideOutcomes = jest
+    .fn()
+    .mockResolvedValue(options.shadowPairSideOutcomes ?? []);
   const markExecutionLink = jest.fn().mockResolvedValue(undefined);
   const markOutcomeState = jest.fn().mockResolvedValue(undefined);
   const loadOpenPaperPositions = jest.fn().mockResolvedValue(options.openPositions ?? []);
@@ -493,6 +498,7 @@ function phase2Harness(
   const evidence = {
     recordDecision,
     loadRoutePairSideEvidence,
+    loadShadowPairSideOutcomes,
     markExecutionLink,
     markOutcomeState,
     loadOpenPaperPositions,
@@ -540,6 +546,7 @@ function phase2Harness(
     service,
     recordDecision,
     loadRoutePairSideEvidence,
+    loadShadowPairSideOutcomes,
     markExecutionLink,
     markOutcomeState,
     receiveSignal,
@@ -845,6 +852,10 @@ function transitionFeatures(): M1TacticalFeatureSnapshot {
 async function driveFeatures(
   h: ReturnType<typeof phase2Harness>,
   features: M1TacticalFeatureSnapshot,
+  options: {
+    eventRisk?: 'CLEAR' | 'HIGH_IMPACT_BLOCK' | 'UNVERIFIED';
+    spreadEvidence?: any;
+  } = {},
 ) {
   const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
   const route = classifyM1TacticalRoute(buy, sell, features, M1_TACTICAL_POLICY_V1);
@@ -854,15 +865,17 @@ async function driveFeatures(
     buy,
     sell,
     features,
-    'CLEAR',
-    {
-      source: 'BROKER_OBSERVED_P90',
-      spreadPrice: 0.00004,
-      sampleCount: 20,
-      percentile: 0.9,
-      windowMinutes: 30,
-      latestSampleAt: features.decisionTime.toISOString(),
-    },
+    options.eventRisk ?? 'CLEAR',
+    options.spreadEvidence === undefined
+      ? {
+          source: 'BROKER_OBSERVED_P90',
+          spreadPrice: 0.00004,
+          sampleCount: 20,
+          percentile: 0.9,
+          windowMinutes: 30,
+          latestSampleAt: features.decisionTime.toISOString(),
+        }
+      : options.spreadEvidence,
     features.decisionTime,
   );
   return route;
@@ -1019,15 +1032,138 @@ describe('M1TacticalSchedulerService PAPER all-routes phase', () => {
   });
 });
 
-describe('M1 tactical shadow-only module wiring', () => {
-  it('binds AiModule to SHADOW after negative live PAPER evidence', () => {
-    const moduleSource = fs.readFileSync(path.resolve(__dirname, './ai.module.ts'), 'utf8');
-    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V1');
-    expect(moduleSource).toMatch(
-      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V1/,
+describe('M1 early-transition micro PAPER phase', () => {
+  const positiveShadowOutcomes = [
+    { observedAt: new Date('2026-10-15T10:20:00.000Z'), netR: 1.5 },
+    { observedAt: new Date('2026-10-15T09:20:00.000Z'), netR: 0.225 },
+    { observedAt: new Date('2026-10-15T08:20:00.000Z'), netR: -0.195 },
+  ];
+
+  it('executes only early-transition at a 0.01 lot cap', () => {
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V4.phase).toBe('PAPER_EARLY_TRANSITION_MICRO');
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V4.paperVolumeCap).toBe(0.01);
+    expect(m1RouteExecutableInPhase('PAPER_EARLY_TRANSITION_MICRO', 'M1_EARLY_TRANSITION')).toBe(
+      true,
     );
-    expect(moduleSource).not.toMatch(
-      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V3/,
+    expect(m1RouteExecutableInPhase('PAPER_EARLY_TRANSITION_MICRO', 'M1_TREND_CONTINUATION')).toBe(
+      false,
+    );
+    expect(m1RouteExecutableInPhase('PAPER_EARLY_TRANSITION_MICRO', 'M1_CONFIRMED_REVERSAL')).toBe(
+      false,
+    );
+    expect(m1RouteExecutableInPhase('PAPER_EARLY_TRANSITION_MICRO', 'ABSTAIN')).toBe(false);
+  });
+
+  it('submits a causally qualified early-transition sleeve at micro size', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V4,
+      shadowPairSideOutcomes: positiveShadowOutcomes,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+
+    const route = await driveFeatures(h, transitionFeatures());
+
+    expect(route.route).toBe('M1_EARLY_TRANSITION');
+    expect(h.loadShadowPairSideOutcomes).toHaveBeenCalledWith({
+      userId: 'user-1',
+      brokerConnectionId: 'conn-1',
+      route: 'M1_EARLY_TRANSITION',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      policyVersion: 'm1-tactical-v1',
+      evaluatedAt: new Date('2026-10-15T10:30:00.000Z'),
+    });
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({
+        suggestedVolume: 0.01,
+        timeframe: 'M1',
+        metadata: expect.objectContaining({
+          m1_rollout_phase: 'PAPER_EARLY_TRANSITION_MICRO',
+          m1_shadow_pair_side_reliability_reason: 'POSITIVE_SHADOW_EXPECTANCY',
+          m1_shadow_pair_side_reliability_samples: 3,
+        }),
+      }),
+    );
+  });
+
+  it('keeps an early-transition sleeve shadow-only until causal pair-side evidence qualifies', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V4,
+      shadowPairSideOutcomes: positiveShadowOutcomes.slice(0, 2),
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+
+    await driveFeatures(h, transitionFeatures());
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.recordDecision.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({
+        executionAuthority: 'NONE',
+        blockers: expect.arrayContaining(['M1_SHADOW_RELIABILITY_INSUFFICIENT_SHADOW_EVIDENCE']),
+      }),
+    );
+  });
+
+  it('rescues only an out-of-distribution generic governance blocker for a qualified micro sleeve', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V4,
+      shadowPairSideOutcomes: positiveShadowOutcomes,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+    const features = { ...transitionFeatures(), volatilityScore: 0.9 };
+
+    const route = await driveFeatures(h, features);
+
+    expect(route.route).toBe('M1_EARLY_TRANSITION');
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0].metadata).toEqual(
+      expect.objectContaining({ m1_micro_drift_only_rescue: true }),
+    );
+  });
+
+  it('never lets micro authority bypass event, cost, or mature actual-trade reliability blockers', async () => {
+    const eventBlocked = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V4,
+      shadowPairSideOutcomes: positiveShadowOutcomes,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+    await driveFeatures(eventBlocked, transitionFeatures(), { eventRisk: 'UNVERIFIED' });
+    expect(eventBlocked.receiveSignal).not.toHaveBeenCalled();
+
+    const costBlocked = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V4,
+      shadowPairSideOutcomes: positiveShadowOutcomes,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+    await driveFeatures(costBlocked, transitionFeatures(), { spreadEvidence: null });
+    expect(costBlocked.receiveSignal).not.toHaveBeenCalled();
+
+    const reliabilityBlocked = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V4,
+      shadowPairSideOutcomes: positiveShadowOutcomes,
+      evidenceByRoute: {
+        M1_EARLY_TRANSITION: [0, 1, 2].map((index) => ({
+          route: 'M1_EARLY_TRANSITION',
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          policyVersion: 'm1-tactical-v1',
+          realisedPnl: -1,
+          closedAt: new Date(`2026-10-15T10:${20 + index}:00.000Z`),
+        })),
+      },
+    });
+    await driveFeatures(reliabilityBlocked, transitionFeatures());
+    expect(reliabilityBlocked.receiveSignal).not.toHaveBeenCalled();
+  });
+});
+
+describe('M1 tactical micro module wiring', () => {
+  it('binds AiModule to the evidence-qualified early-transition micro policy', () => {
+    const moduleSource = fs.readFileSync(path.resolve(__dirname, './ai.module.ts'), 'utf8');
+    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V4');
+    expect(moduleSource).toMatch(
+      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V4/,
     );
     expect(moduleSource).not.toMatch(/process\.env[^\n]*M1_TACTICAL/);
   });
