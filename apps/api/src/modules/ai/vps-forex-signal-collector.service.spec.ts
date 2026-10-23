@@ -1595,6 +1595,9 @@ describe('VpsForexSignalCollectorService', () => {
       } as any,
     );
     jest.spyOn(collector as any, 'loadAdaptiveAllocationCapital').mockResolvedValue('1000');
+    const pairSideReliabilitySpy = jest
+      .spyOn(collector as any, 'loadPaperTrendPairSideReliabilityEvidence')
+      .mockResolvedValue(null);
     const riskSnapshotSpy = jest
       .spyOn(collector as any, 'loadAdaptiveOpenRiskPositions')
       .mockResolvedValueOnce({ available: true, positions: [] })
@@ -1732,6 +1735,13 @@ describe('VpsForexSignalCollectorService', () => {
       expect(
         receiveSignal.mock.calls.some(([signal]) => (signal as any).instrument === 'EURUSD'),
       ).toBe(false);
+      expect(pairSideReliabilitySpy).toHaveBeenCalledWith(
+        'user-1',
+        'conn-1',
+        'GBPUSD',
+        'BUY',
+        'CONFIRMED_REVERSAL',
+      );
     } finally {
       reversalSpy.mockRestore();
       governanceSpy.mockRestore();
@@ -3234,16 +3244,19 @@ describe('VpsForexSignalCollectorService', () => {
       'conn-1',
       'EURUSD',
       'SELL',
+      'CONFIRMED_REVERSAL',
     );
     expect(result.closedTrades).toBe(2);
     const [sql, params] = query.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('instrument = $5');
     expect(sql).toContain('direction = $6');
-    expect(sql).toContain("components->'outcome'->>'version' = $7");
+    expect(sql).toContain("components->>'strategyRoute' = $7");
+    expect(sql).toContain("components->'outcome'->>'version' = $8");
     expect(params.slice(0, 3)).toEqual(['user-1', 'conn-1', 'irexpro-multimodel-ensemble-v1']);
     expect(params[4]).toBe('EURUSD');
     expect(params[5]).toBe('SELL');
-    expect(params[6]).toBe(ENSEMBLE_OUTCOME_MODEL_VERSION);
+    expect(params[6]).toBe('CONFIRMED_REVERSAL');
+    expect(params[7]).toBe(ENSEMBLE_OUTCOME_MODEL_VERSION);
   });
 
   it('loads pair-side research reliability only from the active episode-guarded research artifact', async () => {

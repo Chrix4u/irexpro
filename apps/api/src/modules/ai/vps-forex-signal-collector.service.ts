@@ -1859,12 +1859,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           let normalPaperExecution = normalPaperExecutionCandidate;
           if (
             normalPaperExecutionCandidate &&
-            planBEnsemble.strategyRoute === 'TREND_CONTINUATION'
+            (planBEnsemble.strategyRoute === 'TREND_CONTINUATION' ||
+              planBEnsemble.strategyRoute === 'CONFIRMED_REVERSAL')
           ) {
-            const routeEvidence = await this.loadPaperTrendRouteReliabilityEvidence(
-              userId,
-              connectionId,
-            );
+            const routeEvidence =
+              planBEnsemble.strategyRoute === 'TREND_CONTINUATION'
+                ? await this.loadPaperTrendRouteReliabilityEvidence(userId, connectionId)
+                : null;
             paperTrendRouteReliability = evaluatePaperTrendRouteReliability({
               strategyRoute: planBEnsemble.strategyRoute,
               evidence: routeEvidence,
@@ -1874,6 +1875,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               connectionId,
               best.instrument,
               best.direction,
+              planBEnsemble.strategyRoute,
             );
             paperTrendPairSideReliabilityShadow = evaluatePaperTrendPairSideReliabilityShadow({
               strategyRoute: planBEnsemble.strategyRoute,
@@ -4338,6 +4340,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     connectionId: string,
     instrument: string,
     direction: 'BUY' | 'SELL',
+    strategyRoute = 'TREND_CONTINUATION',
   ): Promise<EnsembleSleeveEvidence | null> {
     if (!this.dataSource) return null;
 
@@ -4351,14 +4354,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           AND model_version = ANY($4::text[])
           AND instrument = $5
           AND direction = $6
-          AND components->>'strategyRoute' = 'TREND_CONTINUATION'
+          AND components->>'strategyRoute' = $7
           AND COALESCE((components->>'paperAdmitted')::boolean, false) = true
           AND COALESCE(
             (components->'governance'->>'paperExecutionEligible')::boolean,
             false
           ) = true
           AND components ? 'outcome'
-          AND components->'outcome'->>'version' = $7
+          AND components->'outcome'->>'version' = $8
         ORDER BY evaluated_at ASC
       `,
       [
@@ -4368,6 +4371,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         [...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
         instrument,
         direction,
+        strategyRoute,
         ENSEMBLE_OUTCOME_MODEL_VERSION,
       ],
     )) as Array<{
