@@ -282,7 +282,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
         allocatedCapital: '1000.00',
         confidenceTier: 'RESEARCH',
         adaptiveRiskMultiplier: '0.75',
-        minimumExecutableLot: '0.10',
+        minimumExecutableLot: '0.20',
         marketReferenceEntryPrice: '0.69576',
       },
     });
@@ -398,7 +398,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     ).rejects.toMatchObject({ code: 'POSITION_SIZE_BELOW_POLICY_MINIMUM' });
   });
 
-  it('rejects the 0.20 PAPER product floor when 0.20 would exceed the durable risk ceiling', async () => {
+  it('rejects the 0.10 scout floor when its actual stop risk would exceed the durable risk ceiling', async () => {
     const service = makeService();
 
     await expect(
@@ -406,18 +406,19 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
         ...params,
         paperAllocationSizing: {
           executionMode: 'PAPER_ONLY',
-          allocatedCapital: '800.00',
+          allocatedCapital: '400.00',
           confidenceTier: 'RESEARCH',
-          minimumExecutableLot: '0.20',
+          minimumExecutableLot: '0.10',
         },
       }),
     ).rejects.toMatchObject({ code: 'POSITION_SIZE_BELOW_POLICY_MINIMUM' });
   });
 
-  it('enforces the 0.20 PAPER product floor even when a caller requests 0.10', async () => {
+  it('honors an explicit 0.10 scout floor while the normal PAPER floor remains caller-controlled at 0.20', async () => {
     const service = makeService();
     const sized = await service.sizePosition({
       ...params,
+      requestedLotUpperBound: '0.10',
       paperAllocationSizing: {
         executionMode: 'PAPER_ONLY',
         allocatedCapital: '1000.00',
@@ -426,8 +427,11 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
       },
     });
 
-    expect(sized.lots).toBe('0.2');
-    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.2');
+    expect(sized.inputs.lotsByRiskBudget).toBe('0.1');
+    expect(sized.lots).toBe('0.1');
+    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.1');
+    expect(sized.inputs.paperProductMinimumLot).toBe('0.1');
+    expect(sized.inputs.paperProductMaximumLot).toBe('2');
   });
 
   it('does not apply the PAPER 0.10 policy floor to DEMO sizing', async () => {

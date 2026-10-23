@@ -551,6 +551,9 @@ export class StrategyOrchestratorService {
                   Number(rawAdaptiveRiskMultiplier) <= 1.25
                 ? rawAdaptiveRiskMultiplier
                 : undefined;
+          const opportunityScoutEligible =
+            confidenceTier === 'RESEARCH' &&
+            candidate.metadata?.paper_opportunity_scout_eligible === true;
           paperAllocationSizing = {
             executionMode: session.executionMode,
             allocatedCapital: allocationState.hasAllocation
@@ -558,7 +561,7 @@ export class StrategyOrchestratorService {
               : null,
             confidenceTier,
             sessionPeakEquity: session.peakEquity,
-            minimumExecutableLot: '0.2',
+            minimumExecutableLot: opportunityScoutEligible ? '0.1' : '0.2',
             ...(executionCandidate.suggestedEntryPrice != null
               ? { marketReferenceEntryPrice: String(executionCandidate.suggestedEntryPrice) }
               : {}),

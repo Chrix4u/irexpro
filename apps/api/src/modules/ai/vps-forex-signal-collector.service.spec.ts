@@ -111,22 +111,22 @@ describe('dynamic PAPER lot ceiling', () => {
 describe('PAPER opportunity scout model identity', () => {
   it('separates idle-aware participation outcomes from the v1 scout cohort', () => {
     expect(paperOpportunityScoutModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v4',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v5-0.10-tier',
     );
   });
 });
 
 describe('PAPER scout product sizing floor', () => {
-  it('keeps every executable scout at the 0.20-lot product floor', () => {
+  it('keeps an executable scout at the 0.10 RESEARCH tier', () => {
     const collector = Object.create(VpsForexSignalCollectorService.prototype) as any;
     expect(
       collector.adaptiveLotSizingFor({
         paperExecutionRoute: 'NORMAL_PAPER',
         paperOpportunityScout: {
           eligible: true,
-          lotUpperBound: 0.2,
-          sizingTier: 'BASE',
-          reason: 'OPPORTUNITY_SCOUT',
+          lotUpperBound: 0.1,
+          sizingTier: 'RESEARCH',
+          reason: 'CALIBRATED_OOD_SCOUT',
           mode: 'RECOVERY',
           targetWindowMinutes: 30,
           idleMinutes: 65,
@@ -135,7 +135,7 @@ describe('PAPER scout product sizing floor', () => {
         planBEnsemble: {},
         ensembleGovernance: {},
       }),
-    ).toEqual({ upperBound: 0.2, tier: 'BASE' });
+    ).toEqual({ upperBound: 0.1, tier: 'RESEARCH' });
   });
 });
 
