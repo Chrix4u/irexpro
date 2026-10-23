@@ -2,7 +2,7 @@
   "name": "@irexpro/admin",
   "version": "0.1.0",
   "private": true,
-  "description": "iRexPro — admin/back-office portal (Next.js 15, App Router, TypeScript).",
+  "description": "iRexPro \u2014 admin/back-office portal (Next.js 15, App Router, TypeScript).",
   "scripts": {
     "dev": "next dev -p 3006",
     "build": "next build",
@@ -16,7 +16,7 @@
   "dependencies": {
     "@irexpro/api-client": "workspace:*",
     "@irexpro/types": "workspace:*",
-    "next": "15.5.24",
+    "next": "15.5.28",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
@@ -26,7 +26,7 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "eslint": "8.57.0",
-    "eslint-config-next": "15.5.24",
+    "eslint-config-next": "15.5.28",
     "typescript": "5.5.4"
   }
 }
