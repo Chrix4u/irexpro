@@ -731,3 +731,58 @@ describe('M1TacticalEvidenceService shadow episode fail-closed mapping', () => {
     ).resolves.toEqual([]);
   });
 });
+
+
+describe('M1TacticalEvidenceService causal shadow pair-side outcomes', () => {
+  it('loads only causal exact-route pair-side outcomes for the active policy window', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        observed_at: '2026-10-23T18:40:00.000Z',
+        net_r_multiple: '0.55',
+      },
+      {
+        observed_at: '2026-10-23T17:20:00.000Z',
+        net_r_multiple: '-0.20',
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const evaluatedAt = new Date('2026-10-23T19:00:00.000Z');
+
+    await expect(
+      service.loadShadowPairSideOutcomes({
+        userId: input().userId,
+        brokerConnectionId: input().brokerConnectionId,
+        route: 'M1_EARLY_TRANSITION',
+        instrument: 'usdjpy',
+        direction: 'BUY',
+        policyVersion: 'm1-tactical-v3-shadow-outcomes',
+        evaluatedAt,
+      }),
+    ).resolves.toEqual([
+      { observedAt: new Date('2026-10-23T18:40:00.000Z'), netR: 0.55 },
+      { observedAt: new Date('2026-10-23T17:20:00.000Z'), netR: -0.2 },
+    ]);
+
+    const [sql, params] = query.mock.calls[0]!;
+    const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain("route = $3");
+    expect(normalized).toContain("instrument = $4");
+    expect(normalized).toContain("direction = $5");
+    expect(normalized).toContain("policy_version = $6");
+    expect(normalized).toContain("governance -> 'shadowOutcome15mV1' ->> 'artifact' = $7");
+    expect(normalized).toContain("(governance -> 'shadowOutcome15mV1' ->> 'observedAt')::timestamptz <= $8::timestamptz");
+    expect(normalized).toContain("evaluated_at >= ($8::timestamptz - interval '7 days')");
+    expect(normalized).toContain('ORDER BY observed_at DESC');
+    expect(normalized).toContain('LIMIT 20');
+    expect(params).toEqual([
+      input().userId,
+      input().brokerConnectionId,
+      'M1_EARLY_TRANSITION',
+      'USDJPY',
+      'BUY',
+      'm1-tactical-v3-shadow-outcomes',
+      'm1-shadow-outcome-15m-v1',
+      evaluatedAt.toISOString(),
+    ]);
+  });
+});

@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 import type { M1ReliabilityRoute, M1RoutePairSideEvidenceRow } from './m1-tactical-reliability';
 import type { M1FailedMoveRescueDecision } from './m1-failed-move-rescue';
 import type { M1DriftCounterfactualResult } from './m1-drift-counterfactual';
+import type { M1ShadowPairSideOutcome } from './m1-shadow-pair-side-reliability';
 
 export type M1TacticalDecisionRoute = M1ReliabilityRoute | 'ABSTAIN';
 export type M1TacticalDecisionAuthority = 'NONE' | 'PAPER_ONLY_RESEARCH';
@@ -202,6 +203,16 @@ export interface M1ShadowOutcomeMetrics {
   grossNegativeR: number;
   profitFactor: number | null;
   maximumDrawdownR: number;
+}
+
+export interface M1ShadowPairSideOutcomeQuery {
+  userId: string;
+  brokerConnectionId: string;
+  route: M1ReliabilityRoute;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  policyVersion: string;
+  evaluatedAt: Date;
 }
 
 interface DecisionRow {
@@ -484,6 +495,51 @@ export class M1TacticalEvidenceService {
       [input.userId, input.brokerConnectionId, instrument, input.direction],
     )) as Array<{ exists: boolean }>;
     return rows[0]?.exists === true;
+  }
+
+  async loadShadowPairSideOutcomes(
+    input: M1ShadowPairSideOutcomeQuery,
+  ): Promise<M1ShadowPairSideOutcome[]> {
+    const instrument = input.instrument.trim().toUpperCase();
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          governance -> 'shadowOutcome15mV1' ->> 'observedAt' AS observed_at,
+          governance -> 'shadowOutcome15mV1' ->> 'netRMultiple' AS net_r_multiple
+        FROM trading.m1_tactical_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND route = $3
+          AND instrument = $4
+          AND direction = $5
+          AND policy_version = $6
+          AND execution_authority = 'NONE'
+          AND governance -> 'shadowOutcome15mV1' ->> 'artifact' = $7
+          AND governance -> 'shadowOutcome15mV1' ->> 'netRMultiple' IS NOT NULL
+          AND governance -> 'shadowOutcome15mV1' ->> 'outcome' IN ('TP', 'SL', 'MTM')
+          AND (governance -> 'shadowOutcome15mV1' ->> 'observedAt')::timestamptz <= $8::timestamptz
+          AND evaluated_at >= ($8::timestamptz - interval '7 days')
+        ORDER BY observed_at DESC
+        LIMIT 20
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.route,
+        instrument,
+        input.direction,
+        input.policyVersion,
+        M1_SHADOW_OUTCOME_15M_ARTIFACT,
+        input.evaluatedAt.toISOString(),
+      ],
+    )) as Array<{ observed_at: string | Date; net_r_multiple: string | number }>;
+
+    return rows.flatMap((row) => {
+      const observedAt = date(row.observed_at);
+      const netR = Number(row.net_r_multiple);
+      if (!Number.isFinite(observedAt.getTime()) || !Number.isFinite(netR)) return [];
+      return [{ observedAt, netR }];
+    });
   }
 
   async loadMatureShadowEpisodeLeaders(
