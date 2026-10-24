@@ -11,6 +11,7 @@ const base: AdaptiveOpportunityInput = {
   tradeQuality: 0.68,
   exitQuality: 0.7,
   driftQuality: 1,
+  shadowDirectionalPulseQuality: 0.5,
   hardBlockers: [],
   marketState: {
     state: 'TREND_HEALTHY',
@@ -37,12 +38,13 @@ const base: AdaptiveOpportunityInput = {
 describe('scoreAdaptiveOpportunity', () => {
   it('uses the exact approved component weights summing to one', () => {
     expect(ADAPTIVE_OPPORTUNITY_WEIGHTS).toEqual({
-      netExpectedR: 0.25,
-      regimeFit: 0.15,
-      directionQuality: 0.12,
+      netExpectedR: 0.24,
+      regimeFit: 0.14,
+      directionQuality: 0.11,
       tradeQuality: 0.1,
       exitQuality: 0.08,
-      edgeQuality: 0.1,
+      edgeQuality: 0.08,
+      shadowDirectionalPulseQuality: 0.05,
       executionCostQuality: 0.08,
       diversificationQuality: 0.07,
       stabilityQuality: 0.05,
@@ -63,6 +65,27 @@ describe('scoreAdaptiveOpportunity', () => {
     const cheap = scoreAdaptiveOpportunity({ ...base, estimatedExecutionCostR: 0.08 });
     const expensive = scoreAdaptiveOpportunity({ ...base, estimatedExecutionCostR: 0.45 });
     expect(expensive.score).toBeLessThan(cheap.score);
+  });
+
+  it('uses the causal shadow pulse only to rank the currently supported side', () => {
+    const supported = scoreAdaptiveOpportunity({ ...base, shadowDirectionalPulseQuality: 0.9 });
+    const neutral = scoreAdaptiveOpportunity({ ...base, shadowDirectionalPulseQuality: 0.5 });
+    const opposed = scoreAdaptiveOpportunity({ ...base, shadowDirectionalPulseQuality: 0.1 });
+
+    expect(supported.score).toBeGreaterThan(neutral.score);
+    expect(neutral.score).toBeGreaterThan(opposed.score);
+    expect(supported.reasons).toContain('SHADOW_DIRECTION_SUPPORTED');
+    expect(opposed.reasons).toContain('SHADOW_DIRECTION_OPPOSED');
+  });
+
+  it('treats a missing shadow pulse as neutral for backwards-compatible callers', () => {
+    const explicitNeutral = scoreAdaptiveOpportunity({ ...base, shadowDirectionalPulseQuality: 0.5 });
+    const missing = scoreAdaptiveOpportunity({
+      ...base,
+      shadowDirectionalPulseQuality: undefined,
+    });
+    expect(missing.components.shadowDirectionalPulseQuality).toBe(0.5);
+    expect(missing.score).toBeCloseTo(explicitNeutral.score, 12);
   });
 
   it('penalizes degraded evidence and shared-currency concentration', () => {
@@ -101,12 +124,14 @@ describe('scoreAdaptiveOpportunity', () => {
     expect(unavailable.reasons).toContain('EDGE_EVIDENCE_UNAVAILABLE');
   });
 
-  it('carries hard blockers through verbatim and never clears them', () => {
+  it('carries hard blockers through verbatim and the pulse never clears them', () => {
     const result = scoreAdaptiveOpportunity({
       ...base,
+      shadowDirectionalPulseQuality: 1,
       hardBlockers: ['PAPER_NET_EXPECTED_R', 'DRIFT_OUT_OF_DISTRIBUTION'],
     });
     expect(result.hardBlockers).toEqual(['PAPER_NET_EXPECTED_R', 'DRIFT_OUT_OF_DISTRIBUTION']);
     expect(result.executionEligible).toBe(false);
+    expect(result.reasons).toContain('HARD_GOVERNANCE_BLOCKED');
   });
 });
