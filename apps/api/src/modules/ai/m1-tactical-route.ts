@@ -16,6 +16,7 @@ export type M1TacticalRouteReason =
   | 'TREND_STRUCTURE_ALIGNED'
   | 'FAILED_MOVE_WITH_MULTI_BAR_REVERSAL_IMPULSE'
   | 'EARLY_TRANSITION_IMPULSE'
+  | 'LOCAL_IMPULSE_AGAINST_HTF'
   | 'DIRECTION_EDGE_TOO_SMALL'
   | 'HIGHER_TIMEFRAME_CONFLICT'
   | 'NO_VALID_ROUTE'
@@ -66,6 +67,26 @@ function abstain(
   };
 }
 
+function localImpulseAgainstHtf(
+  candidate: M1TacticalCandidate,
+  scoreEdge: number,
+  policy: M1TacticalPolicy,
+): boolean {
+  return (
+    Number.isFinite(scoreEdge) &&
+    scoreEdge >= 0.35 &&
+    candidate.directionQuality >= 0.68 &&
+    candidate.alignedMomentum1Atr >= 0.2 &&
+    candidate.alignedMomentum3Atr >= 0.5 &&
+    candidate.alignedMomentum5Atr >= 0.5 &&
+    candidate.alignedEmaSlopeAtr > 0 &&
+    candidate.alignedEmaSeparationAtr > 0 &&
+    candidate.alignedHigherTimeframeAgreement >= -0.5 &&
+    candidate.alignedHigherTimeframeAgreement < -policy.minContinuationHtfAgreement &&
+    !candidate.failedBreakoutWithDirection
+  );
+}
+
 function confirmedReversal(candidate: M1TacticalCandidate, policy: M1TacticalPolicy): boolean {
   return (
     candidate.failedBreakoutAgainstDirection &&
@@ -89,8 +110,10 @@ export function classifyM1TacticalRoute(
   }
 
   const reversal = confirmedReversal(candidate, policy);
+  const localImpulseScout = !reversal && localImpulseAgainstHtf(candidate, scoreEdge, policy);
   if (
     !reversal &&
+    !localImpulseScout &&
     candidate.alignedHigherTimeframeAgreement <= -policy.minContinuationHtfAgreement
   ) {
     return abstain('HIGHER_TIMEFRAME_CONFLICT', scoreEdge, policy.version);
@@ -106,6 +129,17 @@ export function classifyM1TacticalRoute(
       direction: candidate.direction,
       eligible: true,
       reason: 'FAILED_MOVE_WITH_MULTI_BAR_REVERSAL_IMPULSE',
+      scoreEdge,
+      policyVersion: policy.version,
+    };
+  }
+
+  if (localImpulseScout) {
+    return {
+      route: 'M1_EARLY_TRANSITION',
+      direction: candidate.direction,
+      eligible: true,
+      reason: 'LOCAL_IMPULSE_AGAINST_HTF',
       scoreEdge,
       policyVersion: policy.version,
     };

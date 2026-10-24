@@ -138,6 +138,7 @@ export function evaluateM1TacticalGovernance(
   }
   if (
     input.routeDecision.route !== 'M1_CONFIRMED_REVERSAL' &&
+    input.routeDecision.reason !== 'LOCAL_IMPULSE_AGAINST_HTF' &&
     input.candidate.alignedHigherTimeframeAgreement <=
       -M1_TACTICAL_POLICY_V1.minContinuationHtfAgreement
   ) {

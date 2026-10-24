@@ -130,6 +130,30 @@ describe('classifyM1TacticalRoute', () => {
     expect(result.eligible).toBe(true);
   });
 
+  it('classifies strong local impulse against bounded higher-timeframe conflict as an early-transition scout', () => {
+    const source = snapshot({
+      emaSeparationAtr: 1.04,
+      emaSlopeAtr: 0.54,
+      momentum1Atr: 0.38,
+      momentum3Atr: 2.01,
+      momentum5Atr: 2.87,
+      breakoutUpAtr: 0,
+      alignment: { m5: 1, m15: -0.27, h1: -0.37, h4: 0.3 },
+      higherTimeframeAgreement: -0.336,
+      efficiency5: 0.82,
+      closeLocation: 0.9,
+      failedBreakoutUp: false,
+    });
+    const [buy, sell] = pair(source);
+    const result = classifyM1TacticalRoute(buy, sell, source, M1_TACTICAL_POLICY_V1);
+
+    expect(result.route).toBe('M1_EARLY_TRANSITION');
+    expect(result.direction).toBe('BUY');
+    expect(result.eligible).toBe(true);
+    expect(result.reason).toBe('LOCAL_IMPULSE_AGAINST_HTF');
+    expect(result.scoreEdge).toBeGreaterThanOrEqual(0.35);
+  });
+
   it('abstains from an ordinary candidate with material higher-timeframe conflict', () => {
     const source = snapshot({
       alignment: { m5: -0.2, m15: -0.45, h1: -0.65, h4: -0.72 },

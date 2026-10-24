@@ -177,6 +177,35 @@ describe('evaluateM1TacticalGovernance', () => {
     expectNoElevatedAuthority(result);
   });
 
+  it('does not re-block a tagged local-impulse early-transition scout with the generic HTF conflict blocker', () => {
+    const input = baseInput();
+    const features = snapshot({
+      emaSeparationAtr: 1.04,
+      emaSlopeAtr: 0.54,
+      momentum1Atr: 0.38,
+      momentum3Atr: 2.01,
+      momentum5Atr: 2.87,
+      alignment: { m5: 1, m15: -0.27, h1: -0.37, h4: 0.3 },
+      higherTimeframeAgreement: -0.336,
+      extensionAtr: 0.4,
+      volatilityScore: 0.28,
+    });
+    const [candidate] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
+    const result = evaluateM1TacticalGovernance({
+      ...input,
+      candidate,
+      routeDecision: route(candidate, {
+        route: 'M1_EARLY_TRANSITION',
+        reason: 'LOCAL_IMPULSE_AGAINST_HTF',
+        scoreEdge: 0.6,
+      }),
+      features,
+    });
+
+    expect(result.blockers).not.toContain('M1_HIGHER_TIMEFRAME_CONFLICT');
+    expectNoElevatedAuthority(result);
+  });
+
   it('adds an M1 higher-timeframe conflict blocker even if a caller presents an eligible route', () => {
     const input = baseInput();
     const features = snapshot({
