@@ -24,21 +24,28 @@ SHORT_HORIZON_MIN_PERIODS_PER_DAY = {
     20: 12.0,
     60: 6.0,
 }
-SHORT_HORIZON_CHALLENGER_EXPERIMENT = "short_horizon_event_hybrid_payoff_risk"
-SHORT_HORIZON_CHALLENGER_VARIANT = "short_horizon_v1_hybrid_payoff_risk"
+SHORT_HORIZON_V1_EXPERIMENT = "short_horizon_event_hybrid_payoff_risk"
+SHORT_HORIZON_V1_VARIANT = "short_horizon_v1_hybrid_payoff_risk"
+SHORT_HORIZON_CHALLENGER_EXPERIMENT = "short_horizon_event_pair_experts_v2"
+SHORT_HORIZON_CHALLENGER_VARIANT = "short_horizon_v2_pair_experts"
 
 
 def short_horizon_experiments() -> tuple[QualificationExperiment, ...]:
-    """Return the locked baseline plus one fixed bounded short-horizon challenger."""
+    """Return baseline, retained v1, and the v2 actionable-only pair expert challenger."""
     return (
         QualificationExperiment(
             name="baseline",
             variants=(ModelVariant(name="baseline_locked"),),
         ),
         QualificationExperiment(
+            name=SHORT_HORIZON_V1_EXPERIMENT,
+            variants=(ModelVariant(name=SHORT_HORIZON_V1_VARIANT),),
+            mode="event_hybrid_dual_direction_payoff_risk",
+        ),
+        QualificationExperiment(
             name=SHORT_HORIZON_CHALLENGER_EXPERIMENT,
             variants=(ModelVariant(name=SHORT_HORIZON_CHALLENGER_VARIANT),),
-            mode="event_hybrid_dual_direction_payoff_risk",
+            mode="two_stage_event_pair_experts",
         ),
     )
 
@@ -211,9 +218,10 @@ def evaluate_short_horizon_corpora(
         for block in horizons.values()
     )
     result: dict[str, Any] = {
-        "report_version": 1,
+        "report_version": 2,
         "purpose": "short_horizon_opportunity_research_only",
-        "model_family": "event_hybrid_dual_direction_payoff_risk",
+        "model_family": "two_stage_event_pair_experts",
+        "retained_control_model_family": "event_hybrid_dual_direction_payoff_risk",
         "horizon_minutes": list(SHORT_HORIZON_MINUTES),
         "confidence_floor": confidence_floor,
         "decision_time_before": decision_time_before,
