@@ -1,3 +1,5 @@
+import type { AdaptiveShadowDirectionalPulseDecision } from './adaptive-shadow-directional-pulse';
+
 export const PAPER_OPPORTUNITY_SCOUT_LOT_CAP = 0.1;
 export const PAPER_OPPORTUNITY_SCOUT_ACTIVE_LOT_CAP = 0.1;
 export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_LOT_CAP = 0.1;
@@ -15,11 +17,19 @@ export const PAPER_OPPORTUNITY_SCOUT_ACTIVE_MIN_QUALITY = 0.25;
 export const PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_QUALITY = 0.2;
 export const PAPER_OPPORTUNITY_SCOUT_MIN_PORTFOLIO_QUALITY = 0.35;
 export const PAPER_OPPORTUNITY_SCOUT_RELAXED_MIN_ALIGNED_MOMENTUM_ATR = 0.15;
+export const PAPER_SHADOW_PULSE_SCOUT_MIN_CONFIDENCE = 0.52;
+export const PAPER_SHADOW_PULSE_SCOUT_MIN_NET_EXPECTED_R = 0.04;
+export const PAPER_SHADOW_PULSE_SCOUT_MIN_QUALITY = 0.2;
+export const PAPER_SHADOW_PULSE_SCOUT_MIN_ALIGNED_MOMENTUM_ATR = 0.1;
+export const PAPER_SHADOW_PULSE_SCOUT_MIN_WEIGHTED_R = 0.25;
+export const PAPER_SHADOW_PULSE_SCOUT_MIN_ADVANTAGE_R = 0.75;
+export const PAPER_SHADOW_PULSE_SCOUT_MIN_PULSE_QUALITY = 0.68;
 
 export type PaperOpportunityScoutMode = 'BASE' | 'ACTIVE' | 'RECOVERY';
 
 export interface PaperOpportunityScoutInput {
   normalPaperExecution: boolean;
+  direction: 'BUY' | 'SELL';
   strategyRoute: 'TREND_CONTINUATION' | 'CONFIRMED_REVERSAL' | 'EARLY_TRANSITION';
   regime:
     | 'TREND_HEALTHY'
@@ -43,6 +53,7 @@ export interface PaperOpportunityScoutInput {
   driftState: 'NORMAL' | 'STRESSED' | 'OUT_OF_DISTRIBUTION';
   idleMinutes?: number | null;
   driftDiagnostics?: readonly string[];
+  shadowDirectionalPulse?: AdaptiveShadowDirectionalPulseDecision | null;
   calibration?: {
     authoritative: boolean;
     sourceLevel: string;
@@ -59,6 +70,7 @@ export interface PaperOpportunityScoutInput {
 export type PaperOpportunityScoutReason =
   | 'OPPORTUNITY_SCOUT'
   | 'CALIBRATED_OOD_SCOUT'
+  | 'SHADOW_PULSE_SCOUT'
   | 'FULL_SIZE_ALREADY_ELIGIBLE'
   | 'ROUTE_NOT_SCOUTABLE'
   | 'REGIME_NOT_SCOUTABLE'
@@ -174,6 +186,48 @@ export function evaluatePaperOpportunityScout(
     input.portfolioQuality < PAPER_OPPORTUNITY_SCOUT_MIN_PORTFOLIO_QUALITY
   )
     return reject('PORTFOLIO_QUALITY_TOO_LOW');
+
+  const shadowPulse = input.shadowDirectionalPulse;
+  const strongShadowPulse =
+    shadowPulse?.available === true &&
+    shadowPulse.status === 'SUPPORTED' &&
+    shadowPulse.direction === input.direction &&
+    shadowPulse.candidateSamples >= 4 &&
+    shadowPulse.oppositeSamples >= 4 &&
+    Number.isFinite(shadowPulse.candidateWeightedR) &&
+    shadowPulse.candidateWeightedR >= PAPER_SHADOW_PULSE_SCOUT_MIN_WEIGHTED_R &&
+    Number.isFinite(shadowPulse.advantageR) &&
+    shadowPulse.advantageR >= PAPER_SHADOW_PULSE_SCOUT_MIN_ADVANTAGE_R &&
+    Number.isFinite(shadowPulse.quality) &&
+    shadowPulse.quality >= PAPER_SHADOW_PULSE_SCOUT_MIN_PULSE_QUALITY;
+
+  if (strongShadowPulse) {
+    if (input.driftState === 'OUT_OF_DISTRIBUTION') return reject('DRIFT_EVIDENCE_TOO_WEAK');
+    if (
+      !Number.isFinite(input.confidence) ||
+      input.confidence < PAPER_SHADOW_PULSE_SCOUT_MIN_CONFIDENCE
+    )
+      return reject('CONFIDENCE_TOO_LOW');
+    if (
+      !Number.isFinite(input.netExpectedR) ||
+      input.netExpectedR < PAPER_SHADOW_PULSE_SCOUT_MIN_NET_EXPECTED_R
+    )
+      return reject('NET_EXPECTED_R_TOO_LOW');
+    if (input.consensusRequired <= 0 || input.consensusPassed < 4)
+      return reject('CONSENSUS_TOO_LOW');
+    if (
+      [input.directionQuality, input.tradeQuality, input.exitQuality].some(
+        (value) => !Number.isFinite(value) || value < PAPER_SHADOW_PULSE_SCOUT_MIN_QUALITY,
+      )
+    )
+      return reject('QUALITY_TOO_LOW');
+    if (
+      !Number.isFinite(input.alignedMomentumAtr) ||
+      input.alignedMomentumAtr < PAPER_SHADOW_PULSE_SCOUT_MIN_ALIGNED_MOMENTUM_ATR
+    )
+      return reject('MOMENTUM_NOT_CONFIRMED');
+    return decision(policy, true, 'SHADOW_PULSE_SCOUT', PAPER_OPPORTUNITY_SCOUT_LOT_CAP);
+  }
 
   if (input.driftState === 'OUT_OF_DISTRIBUTION') {
     const calibration = input.calibration;
