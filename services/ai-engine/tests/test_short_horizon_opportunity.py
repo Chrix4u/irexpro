@@ -9,6 +9,7 @@ from app.domain.training.short_horizon_opportunity import (
     SHORT_HORIZON_MIN_PERIODS_PER_DAY,
     SHORT_HORIZON_MINUTES,
     SHORT_HORIZON_V1_EXPERIMENT,
+    SHORT_HORIZON_V2_EXPERIMENT,
     short_horizon_experiments,
     summarize_horizon_report,
 )
@@ -50,13 +51,15 @@ def test_short_horizon_contract_is_exact_and_baseline_first() -> None:
     assert [experiment.name for experiment in experiments] == [
         "baseline",
         SHORT_HORIZON_V1_EXPERIMENT,
+        SHORT_HORIZON_V2_EXPERIMENT,
         SHORT_HORIZON_CHALLENGER_EXPERIMENT,
     ]
     assert experiments[0].mode == "directional"
     assert experiments[1].mode == "event_hybrid_dual_direction_payoff_risk"
     assert experiments[2].mode == "two_stage_event_pair_experts"
-    assert experiments[2].tune_decision_threshold is False
-    assert len(experiments[2].variants) == 1
+    assert experiments[3].mode == "event_pair_hybrid_dual_direction_payoff_risk"
+    assert experiments[3].tune_decision_threshold is False
+    assert len(experiments[3].variants) == 1
 
 
 def test_summary_requires_economics_and_frequency() -> None:
@@ -169,11 +172,16 @@ def test_three_horizon_runner_is_shadow_only_and_uses_fixed_matrix(tmp_path, mon
     assert all(call["max_splits"] == 3 for call in run_calls)
     assert all(
         [experiment.name for experiment in call["experiments"]]
-        == ["baseline", SHORT_HORIZON_V1_EXPERIMENT, SHORT_HORIZON_CHALLENGER_EXPERIMENT]
+        == [
+            "baseline",
+            SHORT_HORIZON_V1_EXPERIMENT,
+            SHORT_HORIZON_V2_EXPERIMENT,
+            SHORT_HORIZON_CHALLENGER_EXPERIMENT,
+        ]
         for call in run_calls
     )
     assert all(
-        call["experiments"][2].mode == "two_stage_event_pair_experts"
+        call["experiments"][3].mode == "event_pair_hybrid_dual_direction_payoff_risk"
         for call in run_calls
     )
     assert result["short_horizon_research_passed"] is True
