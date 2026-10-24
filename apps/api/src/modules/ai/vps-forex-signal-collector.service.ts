@@ -1932,6 +1932,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               {
                 marketState: preliminaryAdaptive.marketState,
                 edge: preliminaryAdaptive.edge,
+                shadowDirectionalPulse: preliminaryAdaptive.shadowDirectionalPulse,
                 exposure: preliminaryAdaptive.exposure,
                 opportunity: preliminaryAdaptive.opportunity,
                 riskMultiplier: preliminaryAdaptive.riskMultiplier,
@@ -3544,7 +3545,6 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       hardBlockers,
       marketState,
       edge,
-      shadowDirectionalPulse,
       exposure,
     });
     const riskMultiplier = selectAdaptiveRiskMultiplier({
@@ -3561,6 +3561,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     return {
       marketState,
       edge,
+      shadowDirectionalPulse,
       exposure,
       opportunity,
       riskMultiplier,
