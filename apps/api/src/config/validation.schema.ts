@@ -69,6 +69,10 @@ export const validationSchema = Joi.object({
   // In production: store in AWS Secrets Manager / HashiCorp Vault
   METAAPI_TOKEN: Joi.string().optional().allow(''),
 
+  // Direct MT5 connector HMAC pepper. Optional until the direct connector is enabled;
+  // pairing/token operations fail closed unless a >=32 character secret is configured.
+  DIRECT_MT5_CONNECTOR_PEPPER: Joi.string().min(32).optional().allow(''),
+
   // Round 7 (R7-impl-harness) — operator-only PRODUCTION-LIVE certification
   // master gate (IREXPRO_ALLOW_LIVE_CERTIFICATION). OPTIONAL and FAIL-CLOSED:
   // the configuration maps ONLY the EXACT string 'true' to enabled; absent,
