@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.domain.models.multitimeframe_features import INITIAL_FOREX_UNIVERSE
 from app.domain.training.model_qualification import (
@@ -19,9 +20,9 @@ from app.domain.training.train_multitimeframe import load_and_prepare_corpora
 
 SHORT_HORIZON_MINUTES = (5, 20, 60)
 SHORT_HORIZON_MIN_PERIODS_PER_DAY = {
-    5: 6.0,
-    20: 4.0,
-    60: 2.0,
+    5: 24.0,
+    20: 12.0,
+    60: 6.0,
 }
 SHORT_HORIZON_CHALLENGER_EXPERIMENT = "short_horizon_event_hybrid_payoff_risk"
 SHORT_HORIZON_CHALLENGER_VARIANT = "short_horizon_v1_hybrid_payoff_risk"
@@ -42,16 +43,50 @@ def short_horizon_experiments() -> tuple[QualificationExperiment, ...]:
     )
 
 
+_NEW_YORK = ZoneInfo("America/New_York")
+
+
+def _parse_utc(value: Any) -> datetime:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("outer validation timestamps must be timezone-aware")
+    return parsed.astimezone(UTC)
+
+
+def _fx_active_seconds(start: datetime, end: datetime) -> float:
+    """Return overlap with the 24x5 FX week, DST-aware in New York time."""
+    if end < start:
+        raise ValueError("outer validation end precedes start")
+    if end == start:
+        return 0.0
+
+    local_start = start.astimezone(_NEW_YORK).date() - timedelta(days=6)
+    local_end = end.astimezone(_NEW_YORK).date()
+    current = local_start
+    active_seconds = 0.0
+    while current <= local_end:
+        if current.weekday() == 6:  # Sunday
+            open_local = datetime.combine(current, time(17, 0), tzinfo=_NEW_YORK)
+            close_local = datetime.combine(
+                current + timedelta(days=5), time(17, 0), tzinfo=_NEW_YORK
+            )
+            open_utc = open_local.astimezone(UTC)
+            close_utc = close_local.astimezone(UTC)
+            overlap_start = max(start, open_utc)
+            overlap_end = min(end, close_utc)
+            if overlap_end > overlap_start:
+                active_seconds += (overlap_end - overlap_start).total_seconds()
+        current += timedelta(days=1)
+    return active_seconds
+
+
 def _validation_days(folds: list[dict[str, Any]]) -> float:
-    """Return the summed untouched outer-validation wall-clock duration in days."""
+    """Return summed outer-validation duration in active 24x5 FX-market days."""
     seconds = 0.0
     for fold in folds:
-        start = datetime.fromisoformat(str(fold["validation_start"]).replace("Z", "+00:00"))
-        end = datetime.fromisoformat(str(fold["validation_end"]).replace("Z", "+00:00"))
-        elapsed = (end - start).total_seconds()
-        if elapsed < 0:
-            raise ValueError("outer validation end precedes start")
-        seconds += elapsed
+        start = _parse_utc(fold["validation_start"])
+        end = _parse_utc(fold["validation_end"])
+        seconds += _fx_active_seconds(start, end)
     return seconds / 86_400.0
 
 

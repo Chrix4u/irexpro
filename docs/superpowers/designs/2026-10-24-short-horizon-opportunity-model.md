@@ -17,9 +17,9 @@ Each horizon uses the fixed event-barrier hybrid payoff-risk candidate:
 The challenger has no PAPER, DEMO, or LIVE authority in this change.
 
 ## Horizons and participation targets
-- 5 minutes: >= 6 non-overlapping opportunity periods per validation day.
-- 20 minutes: >= 4 per validation day.
-- 60 minutes: >= 2 per validation day.
+- 5 minutes: >= 24 non-overlapping opportunity periods per active FX validation day.
+- 20 minutes: >= 12 per active FX validation day.
+- 60 minutes: >= 6 per active FX validation day.
 
 These are research qualification requirements, never forced-trade quotas. A model that cannot find enough qualified opportunities fails the participation objective; a model that trades frequently but fails economics/risk gates also fails.
 

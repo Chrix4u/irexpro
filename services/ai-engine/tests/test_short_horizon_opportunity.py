@@ -43,7 +43,7 @@ def _report(*, research_passed: bool, periods: int, hours: int = 24) -> dict:
 
 def test_short_horizon_contract_is_exact_and_baseline_first() -> None:
     assert SHORT_HORIZON_MINUTES == (5, 20, 60)
-    assert SHORT_HORIZON_MIN_PERIODS_PER_DAY == {5: 6.0, 20: 4.0, 60: 2.0}
+    assert SHORT_HORIZON_MIN_PERIODS_PER_DAY == {5: 24.0, 20: 12.0, 60: 6.0}
 
     experiments = short_horizon_experiments()
     assert [experiment.name for experiment in experiments] == [
@@ -57,9 +57,9 @@ def test_short_horizon_contract_is_exact_and_baseline_first() -> None:
 
 
 def test_summary_requires_economics_and_frequency() -> None:
-    passed = summarize_horizon_report(_report(research_passed=True, periods=6), horizon_minutes=5)
-    assert passed["opportunities_per_validation_day"] == 6.0
-    assert passed["participation_target"] == 6.0
+    passed = summarize_horizon_report(_report(research_passed=True, periods=24), horizon_minutes=5)
+    assert passed["opportunities_per_validation_day"] == 24.0
+    assert passed["participation_target"] == 24.0
     assert passed["research_gate_passed"] is True
     assert passed["participation_gate_passed"] is True
     assert passed["short_horizon_research_passed"] is True
@@ -67,14 +67,14 @@ def test_summary_requires_economics_and_frequency() -> None:
     assert passed["approved_for_live"] is False
 
     too_quiet = summarize_horizon_report(
-        _report(research_passed=True, periods=5), horizon_minutes=5
+        _report(research_passed=True, periods=23), horizon_minutes=5
     )
     assert too_quiet["research_gate_passed"] is True
     assert too_quiet["participation_gate_passed"] is False
     assert too_quiet["short_horizon_research_passed"] is False
 
     bad_economics = summarize_horizon_report(
-        _report(research_passed=False, periods=12), horizon_minutes=5
+        _report(research_passed=False, periods=48), horizon_minutes=5
     )
     assert bad_economics["participation_gate_passed"] is True
     assert bad_economics["research_gate_passed"] is False
@@ -82,10 +82,10 @@ def test_summary_requires_economics_and_frequency() -> None:
 
 
 def test_summary_uses_outer_validation_duration_and_rejects_unknown_horizon() -> None:
-    report = _report(research_passed=True, periods=3, hours=12)
+    report = _report(research_passed=True, periods=12, hours=12)
     summary = summarize_horizon_report(report, horizon_minutes=5)
     assert summary["validation_days"] == 0.5
-    assert summary["opportunities_per_validation_day"] == 6.0
+    assert summary["opportunities_per_validation_day"] == 24.0
 
     try:
         summarize_horizon_report(report, horizon_minutes=15)
@@ -195,3 +195,27 @@ def test_three_horizon_runner_rejects_partial_universe(tmp_path) -> None:
             decision_time_before="2026-10-01T00:00:00Z",
             report_path=tmp_path / "partial.json",
         )
+
+
+def test_summary_excludes_fx_weekend_closure_from_active_market_days() -> None:
+    start = datetime(2026, 10, 23, 20, 0, tzinfo=UTC)  # Friday
+    fold = {
+        "validation_start": start.isoformat(),
+        "validation_end": datetime(2026, 10, 26, 1, 0, tzinfo=UTC).isoformat(),
+        "aggregate": {"trading": {"trade_or_period_count": 5}},
+    }
+    report = {
+        "experiments": {
+            SHORT_HORIZON_CHALLENGER_EXPERIMENT: {
+                "research_gate": {"research_gate_passed": True},
+                "folds": [fold],
+                "overall": {"classification": {}, "trading": {}},
+            }
+        }
+    }
+
+    summary = summarize_horizon_report(report, horizon_minutes=5)
+    # Active FX time is Friday 20:00-21:00 plus Sunday 21:00-Monday 01:00 = 5h.
+    assert summary["validation_days"] == pytest.approx(5 / 24)
+    assert summary["opportunities_per_validation_day"] == pytest.approx(24.0)
+    assert summary["participation_gate_passed"] is True
