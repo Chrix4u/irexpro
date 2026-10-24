@@ -79,7 +79,10 @@ describe('scoreAdaptiveOpportunity', () => {
   });
 
   it('treats a missing shadow pulse as neutral for backwards-compatible callers', () => {
-    const explicitNeutral = scoreAdaptiveOpportunity({ ...base, shadowDirectionalPulseQuality: 0.5 });
+    const explicitNeutral = scoreAdaptiveOpportunity({
+      ...base,
+      shadowDirectionalPulseQuality: 0.5,
+    });
     const missing = scoreAdaptiveOpportunity({
       ...base,
       shadowDirectionalPulseQuality: undefined,
