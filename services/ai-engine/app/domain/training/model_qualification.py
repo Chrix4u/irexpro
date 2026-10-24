@@ -2048,6 +2048,191 @@ def _fit_event_hybrid_payoff_risk_for_outer(
     return direction_models, opportunity_model, payoff_models, feature_columns, counts
 
 
+def _fit_event_pair_hybrid_payoff_risk_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[
+    dict[str, XGBClassifier],
+    XGBClassifier,
+    dict[str, XGBRegressor],
+    list[str],
+    dict[str, Any],
+]:
+    """Fit pooled opportunity plus pair-specific v10-style direction/payoff experts."""
+    feature_columns = _feature_columns(variant.feature_policy)
+    labeled = _ensure_event_dual_actionability_targets(training_window)
+    fit, early = _split_internal_early_stopping_tail(
+        labeled,
+        horizon_bars=horizon_bars,
+    )
+
+    opportunity_variant = ModelVariant(
+        name=f"{variant.name}_pooled_opportunity",
+        parameter_overrides=variant.parameter_overrides,
+        sample_weight_policy="class_balance",
+        calibration="none",
+        feature_policy=variant.feature_policy,
+    )
+    opportunity_model = _fit_binary_variant(
+        opportunity_variant,
+        fit=fit,
+        early_stop=early,
+        feature_columns=feature_columns,
+        target_column=EVENT_ACTIONABLE_TARGET_COLUMN,
+        sample_weight_policy="class_balance",
+    )
+
+    direction_models: dict[str, XGBClassifier] = {}
+    payoff_models: dict[str, XGBRegressor] = {}
+    pair_counts: dict[str, dict[str, int]] = {}
+    instruments = sorted(str(value) for value in labeled["instrument"].unique())
+    if not instruments:
+        raise ValueError("pair hybrid payoff-risk training requires at least one instrument")
+
+    for instrument in instruments:
+        pair_fit = fit.loc[fit["instrument"] == instrument].copy()
+        pair_early = early.loc[early["instrument"] == instrument].copy()
+        if pair_fit.empty or pair_early.empty:
+            raise ValueError(
+                f"pair hybrid payoff-risk expert {instrument} lacks fit/early-stop rows"
+            )
+
+        for side, target_column in {
+            "long": EVENT_LONG_ACTIONABLE_TARGET_COLUMN,
+            "short": EVENT_SHORT_ACTIONABLE_TARGET_COLUMN,
+        }.items():
+            side_variant = ModelVariant(
+                name=f"{variant.name}_{instrument}_{side}",
+                parameter_overrides=variant.parameter_overrides,
+                sample_weight_policy="class_balance",
+                calibration="none",
+                feature_policy=variant.feature_policy,
+            )
+            direction_models[f"{instrument}::{side}"] = _fit_binary_variant(
+                side_variant,
+                fit=pair_fit,
+                early_stop=pair_early,
+                feature_columns=feature_columns,
+                target_column=target_column,
+                sample_weight_policy="class_balance",
+            )
+
+            return_column = (
+                EVENT_LONG_NET_RETURN_COLUMN
+                if side == "long"
+                else EVENT_SHORT_NET_RETURN_COLUMN
+            )
+            fit_return = (
+                pd.to_numeric(pair_fit[return_column], errors="raise").to_numpy(dtype=float)
+                * 10_000.0
+            )
+            early_return = (
+                pd.to_numeric(pair_early[return_column], errors="raise").to_numpy(dtype=float)
+                * 10_000.0
+            )
+            for component, fit_target, early_target in (
+                ("upside", np.maximum(fit_return, 0.0), np.maximum(early_return, 0.0)),
+                ("downside", np.maximum(-fit_return, 0.0), np.maximum(-early_return, 0.0)),
+            ):
+                payoff_variant = ModelVariant(
+                    name=f"{variant.name}_{instrument}_{side}_{component}",
+                    parameter_overrides=variant.parameter_overrides,
+                    sample_weight_policy="economic",
+                    calibration="none",
+                    feature_policy=variant.feature_policy,
+                )
+                model = _regression_model_for_variant(payoff_variant)
+                model.fit(
+                    pair_fit[feature_columns],
+                    fit_target,
+                    eval_set=[(pair_early[feature_columns], early_target)],
+                    verbose=False,
+                )
+                payoff_models[f"{instrument}::{side}_{component}"] = model
+
+        pair_counts[instrument] = {
+            "fit_rows": int(len(pair_fit)),
+            "early_stop_rows": int(len(pair_early)),
+            "event_actionable_fit_rows": int(
+                pair_fit[EVENT_ACTIONABLE_TARGET_COLUMN].sum()
+            ),
+            "long_actionable_fit_rows": int(
+                pair_fit[EVENT_LONG_ACTIONABLE_TARGET_COLUMN].sum()
+            ),
+            "short_actionable_fit_rows": int(
+                pair_fit[EVENT_SHORT_ACTIONABLE_TARGET_COLUMN].sum()
+            ),
+        }
+
+    counts: dict[str, Any] = {
+        "fit_rows": int(len(fit)),
+        "early_stop_rows": int(len(early)),
+        "pair_count": int(len(instruments)),
+        "pair_counts": pair_counts,
+        "expert_router": "instrument_identity",
+        "direction_policy": "pair_specific_independent_long_vs_rest_and_short_vs_rest",
+        "payoff_filter_policy": (
+            "pair_specific_train_only_selected_expected_upside_downside_ratio_gte_1_15"
+        ),
+        "payoff_risk_ratio_floor": PAYOFF_RISK_RATIO_FLOOR,
+    }
+    return direction_models, opportunity_model, payoff_models, feature_columns, counts
+
+
+def _pair_hybrid_classifier_probabilities(
+    models: dict[str, XGBClassifier],
+    frame: pd.DataFrame,
+    feature_columns: list[str],
+    *,
+    side: str,
+) -> np.ndarray:
+    """Route each validation row to its pair-specific LONG or SHORT classifier."""
+    if side not in {"long", "short"}:
+        raise ValueError(f"unsupported pair hybrid classifier side: {side}")
+    probabilities = np.full(len(frame), np.nan, dtype=float)
+    positions = pd.Series(np.arange(len(frame), dtype=int), index=frame.index)
+    for instrument, group in frame.groupby("instrument", sort=False):
+        key = f"{instrument}::{side}"
+        model = models.get(key)
+        if model is None:
+            raise ValueError(f"missing pair hybrid classifier {key}")
+        group_positions = positions.loc[group.index].to_numpy(dtype=int)
+        probabilities[group_positions] = _probabilities(model, group, feature_columns)
+    if not np.isfinite(probabilities).all():
+        raise ValueError("pair hybrid classifier routing produced non-finite probabilities")
+    return probabilities
+
+
+def _pair_hybrid_regression_predictions(
+    models: dict[str, XGBRegressor],
+    frame: pd.DataFrame,
+    feature_columns: list[str],
+    *,
+    component: str,
+) -> np.ndarray:
+    """Route each validation row to its pair-specific payoff-risk regressor."""
+    valid = {"long_upside", "long_downside", "short_upside", "short_downside"}
+    if component not in valid:
+        raise ValueError(f"unsupported pair hybrid payoff component: {component}")
+    values = np.full(len(frame), np.nan, dtype=float)
+    positions = pd.Series(np.arange(len(frame), dtype=int), index=frame.index)
+    for instrument, group in frame.groupby("instrument", sort=False):
+        key = f"{instrument}::{component}"
+        model = models.get(key)
+        if model is None:
+            raise ValueError(f"missing pair hybrid payoff model {key}")
+        group_positions = positions.loc[group.index].to_numpy(dtype=int)
+        values[group_positions] = np.asarray(
+            model.predict(group[feature_columns]),
+            dtype=float,
+        )
+    if not np.isfinite(values).all():
+        raise ValueError("pair hybrid payoff routing produced non-finite predictions")
+    return values
+
+
 def _fit_event_pair_experts_for_outer(
     training_window: pd.DataFrame,
     *,
@@ -3548,6 +3733,97 @@ def run_nested_qualification_experiments(
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "direction_policy": "independent_long_vs_rest_and_short_vs_rest_normalized",
                     "payoff_policy": "train_only_expected_upside_downside_ratio",
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
+            elif experiment.mode == "event_pair_hybrid_dual_direction_payoff_risk":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "pair hybrid payoff-risk research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    direction_models,
+                    opportunity_model,
+                    payoff_models,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_event_pair_hybrid_payoff_risk_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                model = None
+                long_probabilities = _pair_hybrid_classifier_probabilities(
+                    direction_models,
+                    outer_validation,
+                    feature_columns,
+                    side="long",
+                )
+                short_probabilities = _pair_hybrid_classifier_probabilities(
+                    direction_models,
+                    outer_validation,
+                    feature_columns,
+                    side="short",
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                predictions = _event_hybrid_payoff_risk_prediction_frame(
+                    outer_validation,
+                    long_probabilities=long_probabilities,
+                    short_probabilities=short_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    expected_long_upside_bps=_pair_hybrid_regression_predictions(
+                        payoff_models,
+                        outer_validation,
+                        feature_columns,
+                        component="long_upside",
+                    ),
+                    expected_long_downside_bps=_pair_hybrid_regression_predictions(
+                        payoff_models,
+                        outer_validation,
+                        feature_columns,
+                        component="long_downside",
+                    ),
+                    expected_short_upside_bps=_pair_hybrid_regression_predictions(
+                        payoff_models,
+                        outer_validation,
+                        feature_columns,
+                        component="short_upside",
+                    ),
+                    expected_short_downside_bps=_pair_hybrid_regression_predictions(
+                        payoff_models,
+                        outer_validation,
+                        feature_columns,
+                        component="short_downside",
+                    ),
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                predictions["confidence_policy"] = (
+                    "pooled_opportunity_probability_gte_floor_and_pair_specific_"
+                    "normalized_direction_confidence_gte_floor_and_side_margin_gte_0_10_"
+                    "and_pair_specific_train_only_expected_upside_downside_ratio_gte_1_15"
+                )
+                selection = {
+                    "policy": "fixed_event_barrier_v11_pair_hybrid_payoff_risk_no_outer_tuning",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": confidence_floor,
+                    "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
+                    "direction_confidence_threshold": confidence_floor,
+                    "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+                    "payoff_risk_ratio_floor": PAYOFF_RISK_RATIO_FLOOR,
+                    "event_label_policy": EVENT_LABEL_POLICY,
+                    "expert_router": "instrument_identity",
+                    "direction_policy": "pair_specific_independent_long_vs_rest_and_short_vs_rest",
+                    "payoff_policy": "pair_specific_train_only_expected_upside_downside_ratio",
                     "candidate_reports": [],
                     "training_counts": training_counts,
                 }

@@ -62,6 +62,67 @@ def test_short_horizon_contract_is_exact_and_baseline_first() -> None:
     assert len(experiments[3].variants) == 1
 
 
+
+def test_pair_hybrid_v3_routes_each_row_to_its_own_pair_models() -> None:
+    import numpy as np
+    import pandas as pd
+
+    from app.domain.training.model_qualification import (
+        _pair_hybrid_classifier_probabilities,
+        _pair_hybrid_regression_predictions,
+    )
+
+    class Classifier:
+        def __init__(self, probability: float) -> None:
+            self.probability = probability
+
+        def predict_proba(self, frame):
+            return np.tile([1.0 - self.probability, self.probability], (len(frame), 1))
+
+    class Regressor:
+        def __init__(self, value: float) -> None:
+            self.value = value
+
+        def predict(self, frame):
+            return np.full(len(frame), self.value, dtype=float)
+
+    frame = pd.DataFrame(
+        {
+            "instrument": ["EURUSD", "USDJPY", "EURUSD"],
+            "feature": [1.0, 2.0, 3.0],
+        },
+        index=[10, 20, 30],
+    )
+    classifiers = {
+        "EURUSD::long": Classifier(0.61),
+        "USDJPY::long": Classifier(0.73),
+    }
+    payoffs = {
+        "EURUSD::long_upside": Regressor(2.5),
+        "USDJPY::long_upside": Regressor(4.5),
+    }
+
+    assert _pair_hybrid_classifier_probabilities(
+        classifiers,
+        frame,
+        ["feature"],
+        side="long",
+    ).tolist() == pytest.approx([0.61, 0.73, 0.61])
+    assert _pair_hybrid_regression_predictions(
+        payoffs,
+        frame,
+        ["feature"],
+        component="long_upside",
+    ).tolist() == pytest.approx([2.5, 4.5, 2.5])
+
+    with pytest.raises(ValueError, match="missing pair hybrid classifier"):
+        _pair_hybrid_classifier_probabilities(
+            {"EURUSD::long": Classifier(0.61)},
+            frame,
+            ["feature"],
+            side="long",
+        )
+
 def test_summary_requires_economics_and_frequency() -> None:
     passed = summarize_horizon_report(_report(research_passed=True, periods=24), horizon_minutes=5)
     assert passed["opportunities_per_validation_day"] == 24.0
