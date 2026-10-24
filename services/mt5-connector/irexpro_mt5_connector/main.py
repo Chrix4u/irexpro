@@ -77,12 +77,12 @@ def run(args: argparse.Namespace) -> int:
     client = IrexProConnectorClient(settings.server_url, secret_store)
     terminal = MetaQuotesMt5Terminal(settings.terminal_path)
     journal = CommandJournal(args.journal)
-    sequence = 0
     try:
         identity = terminal.initialize()
         client._assert_identity(settings, identity)
         while True:
-            sequence += 1
+            identity = terminal.identity()
+            sequence = journal.next_heartbeat_sequence()
             client.heartbeat(settings, identity, sequence)
             command = client.lease_next_command(settings)
             if command is not None:
@@ -93,6 +93,11 @@ def run(args: argparse.Namespace) -> int:
                     account_login=settings.account_login,
                     broker_server=settings.broker_server,
                 )
+                # Re-read terminal identity immediately before any command.
+                # A user switching accounts between heartbeat and dispatch must
+                # never move an iRexPro order to the newly-selected account.
+                identity = terminal.identity()
+                client._assert_identity(settings, identity)
                 entry = journal.begin(command)
                 if entry.state != "EXECUTING":
                     _report_existing(client, settings, entry)

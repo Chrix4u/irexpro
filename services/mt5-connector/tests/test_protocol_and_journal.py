@@ -80,3 +80,19 @@ def test_restart_turns_interrupted_execution_into_uncertain(tmp_path: Path) -> N
         assert recovered.begin(command()).state == "UNCERTAIN"
     finally:
         recovered.close()
+
+
+def test_heartbeat_sequence_remains_monotonic_across_connector_restart(tmp_path: Path) -> None:
+    path = tmp_path / "journal.db"
+    first = CommandJournal(path)
+    try:
+        assert first.next_heartbeat_sequence() == 1
+        assert first.next_heartbeat_sequence() == 2
+    finally:
+        first.close()
+
+    recovered = CommandJournal(path)
+    try:
+        assert recovered.next_heartbeat_sequence() == 3
+    finally:
+        recovered.close()

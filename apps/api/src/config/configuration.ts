@@ -86,6 +86,7 @@ export default () => ({
   broker: {
     encryptionKey: process.env.BROKER_ENCRYPTION_KEY,
     metaApiToken: process.env.METAAPI_TOKEN,
+    directMt5ConnectorPepper: process.env.DIRECT_MT5_CONNECTOR_PEPPER,
     // Sprint 56 / Task 48-B — platform cTrader Open API app credentials.
     // OPTIONAL: without them the cTrader adapter still registers (the catalog
     // stays truthful) but connections fail closed with a clear

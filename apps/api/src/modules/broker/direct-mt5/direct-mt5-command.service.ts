@@ -104,19 +104,45 @@ export class DirectMt5CommandService {
   }
 
   async leaseNext(connectorId: string): Promise<DirectMt5Command | null> {
-    // A timed-out dispatch may already have reached MT5. Never put it back in
-    // PENDING. Mark it UNCERTAIN and require provider reconciliation instead.
+    // A timed-out mutation may already have reached MT5. Never put mutations
+    // back in PENDING: mark them UNCERTAIN and require provider reconciliation.
+    // Read-only commands have no provider-side mutation to reconcile, so an
+    // expired read lease can be safely cancelled and requested again later.
     await this.dataSource.query(
       `
-        UPDATE broker.direct_mt5_commands
-        SET state = 'UNCERTAIN',
-            error = COALESCE(error, 'command lease expired before authoritative result'),
-            lease_owner = NULL,
-            lease_expires_at = NULL,
-            updated_at = now()
-        WHERE connector_id = $1
-          AND state = 'LEASED'
-          AND lease_expires_at <= now()
+        WITH uncertain AS (
+          UPDATE broker.direct_mt5_commands
+          SET state = 'UNCERTAIN',
+              error = COALESCE(
+                error,
+                'command lease expired after possible MT5 mutation; reconcile provider state'
+              ),
+              lease_owner = NULL,
+              lease_expires_at = NULL,
+              updated_at = now()
+          WHERE connector_id = $1
+            AND state = 'LEASED'
+            AND lease_expires_at <= now()
+            AND (
+              command_type = 'PLACE_ORDER'
+              OR command_type IN ('MODIFY_ORDER', 'CLOSE_ORDER', 'CLOSE_ALL')
+            )
+          RETURNING id
+        ), cancelled AS (
+          UPDATE broker.direct_mt5_commands
+          SET state = 'CANCELLED',
+              error = COALESCE(error, 'read-only command lease expired before authoritative result'),
+              lease_owner = NULL,
+              lease_expires_at = NULL,
+              completed_at = COALESCE(completed_at, now()),
+              updated_at = now()
+          WHERE connector_id = $1
+            AND state = 'LEASED'
+            AND lease_expires_at <= now()
+            AND command_type NOT IN ('PLACE_ORDER', 'MODIFY_ORDER', 'CLOSE_ORDER', 'CLOSE_ALL')
+          RETURNING id
+        )
+        SELECT 1
       `,
       [connectorId],
     );
@@ -130,6 +156,12 @@ export class DirectMt5CommandService {
           WHERE cmd.connector_id = $1
             AND cmd.state = 'PENDING'
             AND c.state = 'ACTIVE'
+            AND c.last_heartbeat_at >= now() - interval '15 seconds'
+            AND (cmd.command_type <> 'PLACE_ORDER' OR c.trade_allowed = true)
+            AND (
+              cmd.command_type NOT IN ('MODIFY_ORDER', 'CLOSE_ORDER', 'CLOSE_ALL')
+              OR c.trade_allowed = true
+            )
           ORDER BY cmd.created_at ASC
           FOR UPDATE OF cmd SKIP LOCKED
           LIMIT 1
