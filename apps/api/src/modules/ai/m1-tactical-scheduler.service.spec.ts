@@ -25,6 +25,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V3,
   M1_TACTICAL_ROLLOUT_POLICY_V4,
   M1_TACTICAL_ROLLOUT_POLICY_V5,
+  M1_TACTICAL_ROLLOUT_POLICY_V6,
   m1RiskMarketRegime,
   m1RouteExecutableInPhase,
 } from './m1-tactical-scheduler.service';
@@ -1173,12 +1174,131 @@ describe('M1 meaningful-size shadow module wiring', () => {
     ).toBe(false);
   });
 
-  it('binds AiModule to V5 shadow observation instead of the 0.01 micro execution policy', () => {
+  it('keeps historical V5 immutable but no longer binds it as the active rollout', () => {
     const moduleSource = fs.readFileSync(path.resolve(__dirname, './ai.module.ts'), 'utf8');
-    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V5');
-    expect(moduleSource).toMatch(
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V5).toMatchObject({
+      version: 'm1-tactical-rollout-v5-meaningful-size-shadow',
+      phase: 'SHADOW',
+      paperVolumeCap: 0.2,
+    });
+    expect(moduleSource).not.toMatch(
       /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V5/,
     );
     expect(moduleSource).not.toMatch(/process\.env[^\n]*M1_TACTICAL/);
+  });
+});
+
+
+describe('M1 early-transition meaningful 0.10 PAPER scout phase', () => {
+  const matureHealthyOutcomes = [
+    { observedAt: new Date('2026-10-15T10:29:00.000Z'), netR: 0.74 },
+    { observedAt: new Date('2026-10-15T10:19:00.000Z'), netR: 0.44 },
+    { observedAt: new Date('2026-10-15T10:09:00.000Z'), netR: -0.2 },
+    { observedAt: new Date('2026-10-15T09:59:00.000Z'), netR: -0.08 },
+    { observedAt: new Date('2026-10-15T09:49:00.000Z'), netR: 0.46 },
+    { observedAt: new Date('2026-10-15T09:39:00.000Z'), netR: -0.06 },
+  ];
+
+  it('version-gates V6 to early-transition only at a 0.10 lot cap', () => {
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V6).toMatchObject({
+      version: 'm1-tactical-rollout-v6-early-transition-scout-010',
+      phase: 'PAPER_EARLY_TRANSITION_SCOUT_010',
+      paperVolumeCap: 0.1,
+    });
+    expect(
+      m1RouteExecutableInPhase('PAPER_EARLY_TRANSITION_SCOUT_010', 'M1_EARLY_TRANSITION'),
+    ).toBe(true);
+    expect(
+      m1RouteExecutableInPhase('PAPER_EARLY_TRANSITION_SCOUT_010', 'M1_TREND_CONTINUATION'),
+    ).toBe(false);
+    expect(
+      m1RouteExecutableInPhase('PAPER_EARLY_TRANSITION_SCOUT_010', 'M1_CONFIRMED_REVERSAL'),
+    ).toBe(false);
+  });
+
+  it('submits only a mature healthy early-transition sleeve at 0.10 lots with explicit sizing provenance', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V6,
+      shadowPairSideOutcomes: matureHealthyOutcomes,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+
+    const route = await driveFeatures(h, transitionFeatures());
+
+    expect(route.route).toBe('M1_EARLY_TRANSITION');
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({
+        suggestedVolume: 0.1,
+        timeframe: 'M1',
+        strategyCode: 'external-irexpro-m1-tactical',
+        metadata: expect.objectContaining({
+          m1_rollout_phase: 'PAPER_EARLY_TRANSITION_SCOUT_010',
+          m1_evidence_qualified_scout_eligible: true,
+          m1_meaningful_scout_reliability_artifact: 'm1-meaningful-scout-reliability-v1',
+          m1_meaningful_scout_reliability_samples: 6,
+          m1_meaningful_scout_reliability_recent_net_r: expect.any(Number),
+        }),
+      }),
+    );
+  });
+
+  it('keeps a strong three-sample sleeve shadow-only until meaningful evidence matures', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V6,
+      shadowPairSideOutcomes: matureHealthyOutcomes.slice(0, 3),
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+
+    await driveFeatures(h, transitionFeatures());
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.recordDecision.mock.calls[0]![0].blockers).toEqual(
+      expect.arrayContaining([
+        'M1_MEANINGFUL_SCOUT_RELIABILITY_INSUFFICIENT_MEANINGFUL_EVIDENCE',
+      ]),
+    );
+  });
+
+  it('does not carry the legacy micro OOD-only rescue into meaningful 0.10 sizing', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V6,
+      shadowPairSideOutcomes: matureHealthyOutcomes,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+    const features = { ...transitionFeatures(), volatilityScore: 0.9 };
+
+    const route = await driveFeatures(h, features);
+
+    expect(route.route).toBe('M1_EARLY_TRANSITION');
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.recordDecision.mock.calls[0]![0].blockers).toEqual(
+      expect.arrayContaining(['DRIFT_OUT_OF_DISTRIBUTION']),
+    );
+  });
+
+  it('keeps continuation and confirmed-reversal shadow-only in V6', async () => {
+    const continuation = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V6,
+      shadowPairSideOutcomes: matureHealthyOutcomes,
+    });
+    await driveCleanContinuation(continuation);
+    expect(continuation.receiveSignal).not.toHaveBeenCalled();
+
+    const reversal = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V6,
+      shadowPairSideOutcomes: matureHealthyOutcomes,
+    });
+    const route = await driveFeatures(reversal, reversalFeatures());
+    expect(route.route).toBe('M1_CONFIRMED_REVERSAL');
+    expect(reversal.receiveSignal).not.toHaveBeenCalled();
+  });
+
+  it('binds AiModule to V6 instead of shadow-only V5', () => {
+    const moduleSource = fs.readFileSync(path.resolve(__dirname, './ai.module.ts'), 'utf8');
+    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V6');
+    expect(moduleSource).toMatch(
+      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V6/,
+    );
   });
 });

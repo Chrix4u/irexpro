@@ -48,12 +48,22 @@ import {
   M1_SHADOW_MICRO_RELIABILITY_ARTIFACT,
   type M1ShadowPairSideReliabilityDecision,
 } from './m1-shadow-pair-side-reliability';
+import {
+  evaluateM1MeaningfulScoutReliability,
+  M1_MEANINGFUL_SCOUT_RELIABILITY_ARTIFACT,
+  type M1MeaningfulScoutReliabilityDecision,
+} from './m1-meaningful-scout-reliability';
+
+type M1ScoutPairSideReliabilityDecision =
+  | M1ShadowPairSideReliabilityDecision
+  | M1MeaningfulScoutReliabilityDecision;
 
 export type M1TacticalExecutionPhase =
   | 'SHADOW'
   | 'PAPER_CONTINUATION'
   | 'PAPER_ALL_ROUTES'
-  | 'PAPER_EARLY_TRANSITION_MICRO';
+  | 'PAPER_EARLY_TRANSITION_MICRO'
+  | 'PAPER_EARLY_TRANSITION_SCOUT_010';
 
 export interface M1TacticalRolloutPolicy {
   version: string;
@@ -119,6 +129,13 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V5: Readonly<M1TacticalRolloutPolicy> = 
   paperVolumeCap: 0.2,
 });
 
+export const M1_TACTICAL_ROLLOUT_POLICY_V6: Readonly<M1TacticalRolloutPolicy> = Object.freeze({
+  ...M1_TACTICAL_ROLLOUT_POLICY_V1,
+  version: 'm1-tactical-rollout-v6-early-transition-scout-010',
+  phase: 'PAPER_EARLY_TRANSITION_SCOUT_010',
+  paperVolumeCap: 0.1,
+});
+
 export function m1RiskMarketRegime(
   route: M1TacticalRoute,
 ): 'TREND_HEALTHY' | 'REVERSAL' | 'TRANSITION' | undefined {
@@ -141,7 +158,11 @@ export function m1RouteExecutableInPhase(
 ): boolean {
   if (phase === 'SHADOW' || route === 'ABSTAIN') return false;
   if (phase === 'PAPER_CONTINUATION') return route === 'M1_TREND_CONTINUATION';
-  if (phase === 'PAPER_EARLY_TRANSITION_MICRO') return route === 'M1_EARLY_TRANSITION';
+  if (
+    phase === 'PAPER_EARLY_TRANSITION_MICRO' ||
+    phase === 'PAPER_EARLY_TRANSITION_SCOUT_010'
+  )
+    return route === 'M1_EARLY_TRANSITION';
   return (
     route === 'M1_TREND_CONTINUATION' ||
     route === 'M1_CONFIRMED_REVERSAL' ||
@@ -505,6 +526,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const earlyTransitionMicro =
       this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_MICRO' &&
       routeDecision.route === 'M1_EARLY_TRANSITION';
+    const earlyTransitionMeaningfulScout =
+      this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_010' &&
+      routeDecision.route === 'M1_EARLY_TRANSITION';
     const microDriftOnlyRescue =
       earlyTransitionMicro &&
       shadowPairSideReliability?.eligible === true &&
@@ -515,13 +539,20 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const governanceExecutable = earlyTransitionMicro
       ? shadowPairSideReliability?.eligible === true &&
         (standardGovernanceExecutable || microDriftOnlyRescue)
-      : standardGovernanceExecutable;
+      : earlyTransitionMeaningfulScout
+        ? shadowPairSideReliability?.eligible === true && standardGovernanceExecutable
+        : standardGovernanceExecutable;
     const canExecute = routeExecutable && routePayoffEligible && governanceExecutable;
     const effectiveGovernanceBlockers = microDriftOnlyRescue ? [] : governance.blockers;
     const blockers = unique([
       ...effectiveGovernanceBlockers,
       ...(earlyTransitionMicro && shadowPairSideReliability?.eligible !== true
         ? [`M1_SHADOW_RELIABILITY_${shadowPairSideReliability?.reason ?? 'UNAVAILABLE'}`]
+        : []),
+      ...(earlyTransitionMeaningfulScout && shadowPairSideReliability?.eligible !== true
+        ? [
+            `M1_MEANINGFUL_SCOUT_RELIABILITY_${shadowPairSideReliability?.reason ?? 'UNAVAILABLE'}`,
+          ]
         : []),
       ...(routeExecutable && !routePayoffEligible ? ['M1_ROUTE_NET_EXPECTED_R_FLOOR'] : []),
       ...(shadowOnly ? ['M1_PHASE_SHADOW'] : []),
@@ -546,8 +577,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         routeDecision: { ...routeDecision },
         reliability: reliability ? { ...reliability } : null,
         shadowPairSideReliability: shadowPairSideReliability
-          ? { artifact: M1_SHADOW_MICRO_RELIABILITY_ARTIFACT, ...shadowPairSideReliability }
+          ? {
+              artifact: earlyTransitionMeaningfulScout
+                ? M1_MEANINGFUL_SCOUT_RELIABILITY_ARTIFACT
+                : M1_SHADOW_MICRO_RELIABILITY_ARTIFACT,
+              ...shadowPairSideReliability,
+            }
           : null,
+        meaningfulScoutReliability:
+          earlyTransitionMeaningfulScout && shadowPairSideReliability
+            ? { ...shadowPairSideReliability }
+            : null,
         microDriftOnlyRescue,
         rolloutPolicyVersion: this.rolloutPolicy.version,
         rolloutPhase: this.rolloutPolicy.phase,
@@ -571,6 +611,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         decisionTime,
         shadowPairSideReliability,
         microDriftOnlyRescue,
+        earlyTransitionMeaningfulScout,
       );
     }
   }
@@ -584,8 +625,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     governance: ReturnType<typeof evaluateM1TacticalGovernance>,
     features: NonNullable<ReturnType<typeof buildM1TacticalFeatures>>,
     decisionTime: Date,
-    shadowPairSideReliability: M1ShadowPairSideReliabilityDecision | null,
+    shadowPairSideReliability: M1ScoutPairSideReliabilityDecision | null,
     microDriftOnlyRescue: boolean,
+    meaningfulScoutEligible: boolean,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -644,7 +686,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_rollout_policy_version: this.rolloutPolicy.version,
           m1_rollout_phase: this.rolloutPolicy.phase,
           m1_shadow_pair_side_reliability_artifact: shadowPairSideReliability
-            ? M1_SHADOW_MICRO_RELIABILITY_ARTIFACT
+            ? meaningfulScoutEligible
+              ? M1_MEANINGFUL_SCOUT_RELIABILITY_ARTIFACT
+              : M1_SHADOW_MICRO_RELIABILITY_ARTIFACT
             : null,
           m1_shadow_pair_side_reliability_reason: shadowPairSideReliability?.reason ?? null,
           m1_shadow_pair_side_reliability_samples: shadowPairSideReliability?.samples ?? 0,
@@ -653,6 +697,20 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             shadowPairSideReliability?.profitFactor ?? null,
           m1_shadow_pair_side_reliability_positive_fraction:
             shadowPairSideReliability?.positiveFraction ?? null,
+          m1_evidence_qualified_scout_eligible:
+            meaningfulScoutEligible && shadowPairSideReliability?.eligible === true,
+          m1_meaningful_scout_reliability_artifact: meaningfulScoutEligible
+            ? M1_MEANINGFUL_SCOUT_RELIABILITY_ARTIFACT
+            : null,
+          m1_meaningful_scout_reliability_samples: meaningfulScoutEligible
+            ? (shadowPairSideReliability?.samples ?? 0)
+            : 0,
+          m1_meaningful_scout_reliability_recent_net_r:
+            meaningfulScoutEligible &&
+            shadowPairSideReliability &&
+            'recentNetR' in shadowPairSideReliability
+              ? shadowPairSideReliability.recentNetR
+              : null,
           m1_micro_drift_only_rescue: microDriftOnlyRescue,
           m1_decision_id: decisionId,
           m1_gross_expected_r: candidate.grossExpectedR,
@@ -753,9 +811,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     candidate: M1TacticalCandidate,
     routeDecision: M1TacticalRouteDecision,
     evaluatedAt: Date,
-  ): Promise<M1ShadowPairSideReliabilityDecision | null> {
+  ): Promise<M1ScoutPairSideReliabilityDecision | null> {
+    const earlyTransitionScoutPhase =
+      this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_MICRO' ||
+      this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_010';
     if (
-      this.rolloutPolicy.phase !== 'PAPER_EARLY_TRANSITION_MICRO' ||
+      !earlyTransitionScoutPhase ||
       !routeDecision.eligible ||
       routeDecision.route !== 'M1_EARLY_TRANSITION'
     ) {
@@ -771,6 +832,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       policyVersion: candidate.policyVersion,
       evaluatedAt,
     });
+    if (this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_010') {
+      return evaluateM1MeaningfulScoutReliability({
+        route: 'M1_EARLY_TRANSITION',
+        evaluatedAt,
+        outcomes,
+      });
+    }
     return evaluateM1ShadowPairSideReliability({
       route: 'M1_EARLY_TRANSITION',
       evaluatedAt,
