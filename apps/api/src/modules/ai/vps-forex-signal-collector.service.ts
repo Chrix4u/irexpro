@@ -154,6 +154,12 @@ import {
   scoreAdaptiveOpportunity,
 } from './adaptive-opportunity-score';
 import {
+  ADAPTIVE_SHADOW_DIRECTIONAL_PULSE_MAX_OUTCOMES_PER_SIDE,
+  AdaptiveShadowDirectionalOutcome,
+  AdaptiveShadowDirectionalPulseDecision,
+  buildAdaptiveShadowDirectionalPulse,
+} from './adaptive-shadow-directional-pulse';
+import {
   AdaptiveRiskMultiplierDecision,
   selectAdaptiveRiskMultiplier,
 } from './adaptive-risk-multiplier';
@@ -561,6 +567,7 @@ interface AdaptiveScanWinner {
   selection: CounterfactualExecutionSelection;
   marketState: AdaptiveMarketStateDecision;
   edge: AdaptiveEdgeEvidence;
+  shadowDirectionalPulse: AdaptiveShadowDirectionalPulseDecision;
   exposure: AdaptiveCurrencyExposureDecision;
   opportunity: AdaptiveOpportunityDecision;
   riskMultiplier: AdaptiveRiskMultiplierDecision;
@@ -929,6 +936,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private readonly pairSideReliabilityStatusCache = new Map<
     string,
     { expiresAt: number; snapshot: PaperTrendPairSideReliabilityStatus[] }
+  >();
+  private readonly shadowDirectionalOutcomeCache = new Map<
+    string,
+    { expiresAt: number; outcomes: AdaptiveShadowDirectionalOutcome[] }
   >();
   private lastEnsembleDecision: {
     evaluatedAt: Date | null;
@@ -1921,6 +1932,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               {
                 marketState: preliminaryAdaptive.marketState,
                 edge: preliminaryAdaptive.edge,
+                shadowDirectionalPulse: preliminaryAdaptive.shadowDirectionalPulse,
                 exposure: preliminaryAdaptive.exposure,
                 opportunity: preliminaryAdaptive.opportunity,
                 riskMultiplier: preliminaryAdaptive.riskMultiplier,
@@ -2640,6 +2652,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           ...entry,
           marketState: adaptive.marketState,
           edge: adaptive.edge,
+          shadowDirectionalPulse: adaptive.shadowDirectionalPulse,
           exposure: adaptive.exposure,
           opportunity: adaptive.opportunity,
           riskMultiplier: adaptive.riskMultiplier,
@@ -2694,6 +2707,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           ...rankedWinner,
           marketState: refreshed.marketState,
           edge: refreshed.edge,
+          shadowDirectionalPulse: refreshed.shadowDirectionalPulse,
           exposure: refreshed.exposure,
           opportunity: refreshed.opportunity,
           riskMultiplier: refreshed.riskMultiplier,
@@ -2710,6 +2724,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           {
             marketState: adaptiveWinner.marketState,
             edge: adaptiveWinner.edge,
+            shadowDirectionalPulse: adaptiveWinner.shadowDirectionalPulse,
             exposure: adaptiveWinner.exposure,
             opportunity: adaptiveWinner.opportunity,
             riskMultiplier: adaptiveWinner.riskMultiplier,
@@ -3382,6 +3397,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   }): Promise<{
     marketState: AdaptiveMarketStateDecision;
     edge: AdaptiveEdgeEvidence;
+    shadowDirectionalPulse: AdaptiveShadowDirectionalPulseDecision;
     exposure: AdaptiveCurrencyExposureDecision;
     opportunity: AdaptiveOpportunityDecision;
     riskMultiplier: AdaptiveRiskMultiplierDecision;
@@ -3433,6 +3449,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const edge = this.adaptiveEdgeMatrix
       ? await this.adaptiveEdgeMatrix.getEvidence(edgeRequest)
       : unavailableAdaptiveEdgeEvidence(edgeRequest);
+    const shadowDirectionalPulse = await this.loadAdaptiveShadowDirectionalPulse(
+      input.userId,
+      input.connectionId,
+      input.candidate.instrument,
+      input.candidate.direction,
+      input.evaluatedAt,
+    );
     const rawNetExpectedR =
       input.executionRoute === 'PAIRED_REVERSAL_RESEARCH' &&
       Number.isFinite(input.pairedReversalNetExpectedR)
@@ -3518,6 +3541,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       tradeQuality: input.ensemble.tradeQuality,
       exitQuality: input.ensemble.exitQuality,
       driftQuality: input.governance.driftQuality,
+      shadowDirectionalPulseQuality: shadowDirectionalPulse.quality,
       hardBlockers,
       marketState,
       edge,
@@ -3537,6 +3561,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     return {
       marketState,
       edge,
+      shadowDirectionalPulse,
       exposure,
       opportunity,
       riskMultiplier,
@@ -3563,6 +3588,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       marketState: adaptive.marketState,
       evidenceClass: adaptive.edge.evidenceClass,
       edge: adaptive.edge,
+      shadowDirectionalPulse: adaptive.shadowDirectionalPulse,
       exposure: adaptive.exposure,
       opportunity: adaptive.opportunity,
       riskMultiplier: adaptive.riskMultiplier,
@@ -4670,6 +4696,93 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       this.logger.warn(
         `PAPER cost-aware entry annotation unavailable: ${(error as Error).message}`,
       );
+    }
+  }
+
+  private async loadAdaptiveShadowDirectionalPulse(
+    userId: string,
+    connectionId: string,
+    instrument: string,
+    direction: 'BUY' | 'SELL',
+    evaluatedAt: Date,
+  ): Promise<AdaptiveShadowDirectionalPulseDecision> {
+    const neutral = (outcomes: AdaptiveShadowDirectionalOutcome[] = []) =>
+      buildAdaptiveShadowDirectionalPulse({ direction, evaluatedAt, outcomes });
+    if (!this.dataSource || !Number.isFinite(evaluatedAt.getTime())) return neutral();
+
+    const cacheKey = `${userId}|${connectionId}|${instrument}|${evaluatedAt.toISOString()}`;
+    const cached = this.shadowDirectionalOutcomeCache?.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return neutral(cached.outcomes);
+    }
+
+    try {
+      const rows = (await this.dataSource.query(
+        `
+          WITH ranked AS (
+            SELECT
+              direction,
+              NULLIF(components->'outcome'->>'netR', '')::numeric AS net_r,
+              NULLIF(components->'outcome'->>'resolvedAt', '')::timestamptz AS resolved_at,
+              ROW_NUMBER() OVER (
+                PARTITION BY direction
+                ORDER BY NULLIF(components->'outcome'->>'resolvedAt', '')::timestamptz DESC, id DESC
+              ) AS rn
+            FROM trading.ensemble_shadow_decisions
+            WHERE user_id = $1
+              AND broker_connection_id = $2
+              AND instrument = $3
+              AND evaluated_at < $4
+              AND model_version = $5
+              AND components ? 'outcome'
+              AND components->'outcome'->>'status' IN ('WIN', 'LOSS')
+              AND NULLIF(components->'outcome'->>'netR', '') IS NOT NULL
+              AND NULLIF(components->'outcome'->>'resolvedAt', '') IS NOT NULL
+              AND NULLIF(components->'outcome'->>'resolvedAt', '')::timestamptz < $4
+          )
+          SELECT direction, net_r, resolved_at
+          FROM ranked
+          WHERE rn <= $6
+          ORDER BY resolved_at ASC
+        `,
+        [
+          userId,
+          connectionId,
+          instrument,
+          evaluatedAt,
+          ACTIVE_MODEL_POLICY_VERSION,
+          ADAPTIVE_SHADOW_DIRECTIONAL_PULSE_MAX_OUTCOMES_PER_SIDE,
+        ],
+      )) as Array<{
+        direction: 'BUY' | 'SELL';
+        net_r: string | number;
+        resolved_at: string | Date;
+      }>;
+      const outcomes = rows.flatMap((row) => {
+        const netR = Number(row.net_r);
+        if ((row.direction !== 'BUY' && row.direction !== 'SELL') || !Number.isFinite(netR)) {
+          return [];
+        }
+        return [{ direction: row.direction, netR, resolvedAt: row.resolved_at }];
+      });
+      if (this.shadowDirectionalOutcomeCache) {
+        if (this.shadowDirectionalOutcomeCache.size >= 100) {
+          const oldestKey = this.shadowDirectionalOutcomeCache.keys().next().value as
+            | string
+            | undefined;
+          if (oldestKey) this.shadowDirectionalOutcomeCache.delete(oldestKey);
+        }
+        this.shadowDirectionalOutcomeCache.set(cacheKey, {
+          expiresAt: Date.now() + 5_000,
+          outcomes,
+        });
+      }
+      return neutral(outcomes);
+    } catch (error) {
+      this.logger?.warn?.(
+        `Adaptive shadow directional pulse unavailable ${instrument}: ${(error as Error).message}`,
+      );
+      return neutral();
     }
   }
 
