@@ -26,12 +26,14 @@ SHORT_HORIZON_MIN_PERIODS_PER_DAY = {
 }
 SHORT_HORIZON_V1_EXPERIMENT = "short_horizon_event_hybrid_payoff_risk"
 SHORT_HORIZON_V1_VARIANT = "short_horizon_v1_hybrid_payoff_risk"
-SHORT_HORIZON_CHALLENGER_EXPERIMENT = "short_horizon_event_pair_experts_v2"
-SHORT_HORIZON_CHALLENGER_VARIANT = "short_horizon_v2_pair_experts"
+SHORT_HORIZON_V2_EXPERIMENT = "short_horizon_event_pair_experts_v2"
+SHORT_HORIZON_V2_VARIANT = "short_horizon_v2_pair_experts"
+SHORT_HORIZON_CHALLENGER_EXPERIMENT = "short_horizon_pair_hybrid_payoff_risk_v3"
+SHORT_HORIZON_CHALLENGER_VARIANT = "short_horizon_v3_pair_hybrid_payoff_risk"
 
 
 def short_horizon_experiments() -> tuple[QualificationExperiment, ...]:
-    """Return baseline, retained v1, and the v2 actionable-only pair expert challenger."""
+    """Return locked controls plus the pair-specific payoff-risk v3 challenger."""
     return (
         QualificationExperiment(
             name="baseline",
@@ -43,9 +45,14 @@ def short_horizon_experiments() -> tuple[QualificationExperiment, ...]:
             mode="event_hybrid_dual_direction_payoff_risk",
         ),
         QualificationExperiment(
+            name=SHORT_HORIZON_V2_EXPERIMENT,
+            variants=(ModelVariant(name=SHORT_HORIZON_V2_VARIANT),),
+            mode="two_stage_event_pair_experts",
+        ),
+        QualificationExperiment(
             name=SHORT_HORIZON_CHALLENGER_EXPERIMENT,
             variants=(ModelVariant(name=SHORT_HORIZON_CHALLENGER_VARIANT),),
-            mode="two_stage_event_pair_experts",
+            mode="event_pair_hybrid_dual_direction_payoff_risk",
         ),
     )
 
@@ -218,10 +225,11 @@ def evaluate_short_horizon_corpora(
         for block in horizons.values()
     )
     result: dict[str, Any] = {
-        "report_version": 2,
+        "report_version": 3,
         "purpose": "short_horizon_opportunity_research_only",
-        "model_family": "two_stage_event_pair_experts",
+        "model_family": "event_pair_hybrid_dual_direction_payoff_risk",
         "retained_control_model_family": "event_hybrid_dual_direction_payoff_risk",
+        "retained_v2_model_family": "two_stage_event_pair_experts",
         "horizon_minutes": list(SHORT_HORIZON_MINUTES),
         "confidence_floor": confidence_floor,
         "decision_time_before": decision_time_before,
