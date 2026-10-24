@@ -398,6 +398,7 @@ export class ExecutionService {
       // this pipeline never produces for MARKET AI signals.
       referencePrice: this.resolveMarketReferencePrice(order, preCommitmentGrant),
       comment: order.idempotencyKey,
+      strategyTimeframe: order.strategyTimeframe,
       providerAction: 'PLACE',
     };
 

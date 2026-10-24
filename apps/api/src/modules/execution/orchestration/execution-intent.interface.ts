@@ -59,6 +59,9 @@ export interface ExecutionIntent {
   /** Free-form provider comment (never contains credentials). */
   comment?: string;
 
+  /** Strategy timeframe provenance for PAPER lifecycle timing. */
+  strategyTimeframe?: string;
+
   /**
    * Provider primitive to use for this intent:
    * - PLACE — open a new position (adapter.placeOrder)

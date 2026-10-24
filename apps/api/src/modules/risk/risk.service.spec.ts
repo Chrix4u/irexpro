@@ -348,8 +348,11 @@ describe('RiskService', () => {
       expect(result.decision).toBe('APPROVED');
     });
 
-    it('returns a ValidatedOrder in the APPROVED result', async () => {
-      const result = await service.validateProposedTrade('user-1', validTrade());
+    it('returns a ValidatedOrder in the APPROVED result and preserves strategy timeframe', async () => {
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({ strategyTimeframe: 'M1' }),
+      );
 
       expect(result.decision).toBe('APPROVED');
       if (result.decision === 'APPROVED') {
@@ -358,6 +361,7 @@ describe('RiskService', () => {
         expect(result.validatedOrder.stopLoss).toBe('1.07500');
         expect(result.validatedOrder.takeProfit).toBe('1.09500');
         expect(result.validatedOrder.idempotencyKey).toBe('idem-abc');
+        expect(result.validatedOrder.strategyTimeframe).toBe('M1');
       }
     });
 

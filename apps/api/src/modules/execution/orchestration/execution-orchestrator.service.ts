@@ -835,6 +835,7 @@ export class ExecutionOrchestrator {
         limitPrice: intent.requestedPrice ?? undefined,
         stopPrice: intent.stopPrice ?? undefined,
         clientOrderId: intent.clientOrderId,
+        strategyTimeframe: intent.strategyTimeframe,
       };
       return adapter.placeOrder(request);
     };

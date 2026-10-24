@@ -72,6 +72,8 @@ export interface AuthoritativeOrderPayload {
   stopLoss?: string | null;
   takeProfit?: string | null;
   marketRegime?: string | null;
+  /** Strategy timeframe provenance when it materially affects PAPER lifecycle timing. */
+  strategyTimeframe?: string | null;
 }
 
 /**

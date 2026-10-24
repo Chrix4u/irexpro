@@ -277,6 +277,12 @@ export interface BrokerOrderRequest {
   stopPrice?: string;
   /** Caller-supplied stable identifier — the provider-side dedup surface. */
   clientOrderId?: string;
+  /**
+   * Strategy timeframe provenance for PAPER lifecycle timing. Real providers
+   * ignore this hint; the PAPER adapter maps only known values to bounded
+   * forecast-hold windows and falls back conservatively for unknown values.
+   */
+  strategyTimeframe?: string;
 }
 
 export interface BrokerOrderModification {

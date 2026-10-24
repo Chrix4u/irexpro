@@ -70,6 +70,7 @@ const intent: ExecutionIntent = {
   stopLoss: '1.07500',
   takeProfit: '1.09500',
   comment: 'caller-idem-key',
+  strategyTimeframe: 'M1',
   providerAction: 'PLACE',
 };
 
@@ -578,6 +579,9 @@ describe('ExecutionOrchestrator', () => {
       );
       expect(outcome.outcome).toBe('FILLED');
       expect(adapter.placeOrder).toHaveBeenCalledTimes(1);
+      expect(adapter.placeOrder).toHaveBeenCalledWith(
+        expect.objectContaining({ strategyTimeframe: 'M1' }),
+      );
     });
   });
 

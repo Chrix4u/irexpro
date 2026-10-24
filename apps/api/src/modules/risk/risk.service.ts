@@ -1112,6 +1112,7 @@ export class RiskService {
       takeProfit: trade.takeProfit!,
       trailingStopPips: trade.trailingStopPips,
       idempotencyKey: trade.idempotencyKey,
+      strategyTimeframe: trade.strategyTimeframe,
     };
 
     // Approval is impossible without a durable grant: any issuance failure
@@ -1601,6 +1602,7 @@ export class RiskService {
       stopLoss: normalizeDecimalStringForDigest(trade.stopLoss),
       takeProfit: normalizeDecimalStringForDigest(trade.takeProfit),
       marketRegime: trade.regime ?? null,
+      strategyTimeframe: trade.strategyTimeframe ?? null,
       sessionId: session.id,
       brokerConnectionId: session.brokerConnectionId,
     });
@@ -1619,6 +1621,7 @@ export class RiskService {
       stopLoss: normalizeDecimalStringForDigest(validatedOrder.stopLoss),
       takeProfit: normalizeDecimalStringForDigest(validatedOrder.takeProfit),
       marketRegime: trade.regime ?? null,
+      strategyTimeframe: validatedOrder.strategyTimeframe ?? null,
     };
 
     // Digest of the validated order — covers the material execution fields
@@ -1633,6 +1636,7 @@ export class RiskService {
       trailingStopPips: normalizeDecimalStringForDigest(validatedOrder.trailingStopPips),
       idempotencyKey: validatedOrder.idempotencyKey,
       marketRegime: orderPayload.marketRegime,
+      strategyTimeframe: orderPayload.strategyTimeframe,
     });
 
     // RiskProfile binding: the profile has no version column — bind the id +

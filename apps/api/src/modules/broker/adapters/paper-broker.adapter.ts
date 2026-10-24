@@ -574,7 +574,14 @@ function lotSizeToUnits(lotSize: string): bigint {
   return units;
 }
 
+export const PAPER_M1_MINIMUM_FORECAST_HOLD_MINUTES = 15;
 export const PAPER_M5_MINIMUM_FORECAST_HOLD_MINUTES = 20;
+
+export function paperMinimumForecastHoldMinutes(strategyTimeframe?: string): number {
+  return strategyTimeframe?.trim().toUpperCase() === 'M1'
+    ? PAPER_M1_MINIMUM_FORECAST_HOLD_MINUTES
+    : PAPER_M5_MINIMUM_FORECAST_HOLD_MINUTES;
+}
 
 export interface PaperTimeToWorkDecision {
   shouldClose: boolean;
@@ -732,6 +739,7 @@ interface PaperWorkingOrder {
   stopPrice?: string;
   stopLoss: string; // '0' = none
   takeProfit: string; // '0' = none
+  minimumForecastHoldMinutes: number;
   status: PaperOrderStatus; // WORKING or TRIGGERED while in the working set
   placedAt: Date;
 }
@@ -750,6 +758,7 @@ interface PaperPosition {
   entryPrice: string;
   stopLoss: string;
   takeProfit: string;
+  minimumForecastHoldMinutes: number;
   openedAt: Date;
   /** Initial SL risk in account currency; fixed at fill for R-normalized profit locking. */
   profitLockInitialRiskPnl: string | null;
@@ -1063,7 +1072,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       maxFavorablePnl: position.pathMaxFavorablePnl,
       currentPnl,
       initialRiskPnl,
-      minimumHoldMinutes: PAPER_M5_MINIMUM_FORECAST_HOLD_MINUTES,
+      minimumHoldMinutes: position.minimumForecastHoldMinutes,
     });
     if (!decision.shouldClose) return false;
     this.logger.warn(
@@ -1832,6 +1841,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
           stopPrice: order.stopPrice?.trim(),
           stopLoss,
           takeProfit,
+          minimumForecastHoldMinutes: paperMinimumForecastHoldMinutes(order.strategyTimeframe),
           status: 'WORKING',
           placedAt,
         };
@@ -1927,6 +1937,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       takeProfit,
       order.clientOrderId ?? order.idempotencyKey,
       comment,
+      paperMinimumForecastHoldMinutes(order.strategyTimeframe),
     );
     this._orderStates.set(orderId, {
       providerOrderId: orderId,
@@ -1966,6 +1977,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     takeProfit: string,
     dedupeKey = '',
     comment = '',
+    minimumForecastHoldMinutes = PAPER_M5_MINIMUM_FORECAST_HOLD_MINUTES,
   ): PaperPosition {
     const position: PaperPosition = {
       positionId: orderId,
@@ -1978,6 +1990,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       entryPrice,
       stopLoss,
       takeProfit,
+      minimumForecastHoldMinutes,
       openedAt: this.currentTime(),
       profitLockInitialRiskPnl: null,
       pathMaxFavorablePnl: '0.00',
@@ -2571,6 +2584,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       order.takeProfit,
       order.dedupeKey,
       order.comment,
+      order.minimumForecastHoldMinutes,
     );
     // Correct the originating order's terminal state: it was a working
     // order that filled at the prevailing quote, not a market order.
@@ -2812,6 +2826,9 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       this._working.length,
       ...state.working.map((order) => ({
         ...order,
+        minimumForecastHoldMinutes: Number.isFinite(order.minimumForecastHoldMinutes)
+          ? order.minimumForecastHoldMinutes
+          : PAPER_M5_MINIMUM_FORECAST_HOLD_MINUTES,
         placedAt: new Date(order.placedAt),
       })),
     );
@@ -2822,6 +2839,9 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       this._positions.set(position.positionId, {
         ...position,
         units: BigInt(position.units),
+        minimumForecastHoldMinutes: Number.isFinite(position.minimumForecastHoldMinutes)
+          ? position.minimumForecastHoldMinutes
+          : PAPER_M5_MINIMUM_FORECAST_HOLD_MINUTES,
         openedAt,
         profitLockInitialRiskPnl:
           typeof position.profitLockInitialRiskPnl === 'string'

@@ -46,6 +46,7 @@ const approvedDecision: RiskDecision = {
     stopLoss: '1.07500',
     takeProfit: '1.09500',
     idempotencyKey: 'idem-abc',
+    strategyTimeframe: 'M1',
   },
   appliedRules: ['KILL_SWITCH:OK'],
   riskScore: 30,
@@ -427,9 +428,14 @@ describe('ExecutionService', () => {
       expect(orchestrator.dispatchOrder).not.toHaveBeenCalled();
     });
 
-    it('APPROVED decision passes the gate and proceeds to dispatch', async () => {
+    it('APPROVED decision passes the gate and carries strategy timeframe to dispatch', async () => {
       await service.executeTrade('user-1', approvedDecision);
       expect(orchestrator.dispatchOrder).toHaveBeenCalledTimes(1);
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledWith(
+        expect.objectContaining({ strategyTimeframe: 'M1' }),
+        expect.anything(),
+        expect.anything(),
+      );
     });
   });
 

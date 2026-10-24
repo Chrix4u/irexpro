@@ -345,9 +345,15 @@ describe('StrategyOrchestratorService', () => {
       expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
     });
 
-    it('accepts signal at confidence threshold (0.6)', async () => {
-      const result = await service.processSignal(validCandidate({ confidenceScore: 0.6 }));
+    it('accepts signal at confidence threshold (0.6) and carries strategy timeframe into risk', async () => {
+      const result = await service.processSignal(
+        validCandidate({ confidenceScore: 0.6, timeframe: 'M1' }),
+      );
       expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(riskService.validateProposedTrade).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({ strategyTimeframe: 'M1' }),
+      );
     });
   });
 
