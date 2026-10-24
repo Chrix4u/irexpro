@@ -10,7 +10,9 @@ describe('DirectMt5PairingService', () => {
   it('creates a single-use pairing code without persisting the raw code', async () => {
     const query = jest
       .fn()
-      .mockResolvedValueOnce([{ id: 'connection-1', broker_id: 'metatrader5' }])
+      .mockResolvedValueOnce([
+        { id: 'connection-1', broker_id: 'metatrader5', account_type: 'DEMO' },
+      ])
       .mockResolvedValueOnce([]);
     const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
 
@@ -44,6 +46,18 @@ describe('DirectMt5PairingService', () => {
     );
   });
 
+  it('rejects Direct MT5 pairing for a LIVE BrokerConnection', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([
+        { id: 'connection-live', broker_id: 'metatrader5', account_type: 'LIVE' },
+      ]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+
+    await expect(service.createPairing('user-1', 'connection-live')).rejects.toThrow('DEMO');
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
   it('redeems a pairing code once and persists only a connector-token digest', async () => {
     const query = jest.fn().mockResolvedValueOnce([
       {
@@ -66,6 +80,36 @@ describe('DirectMt5PairingService', () => {
     const params = query.mock.calls[0]![1] as unknown[];
     expect(params).not.toContain(result.connectorToken);
     expect(String(params[1])).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('does not activate a pairing when the terminal login differs from the BrokerConnection account', async () => {
+    const query = jest.fn().mockImplementation(async (sql: string) => {
+      // Current implementation updates the connector without consulting the
+      // BrokerConnection. The corrected implementation must join/fence the
+      // expected account id, which makes this mismatched terminal return no row.
+      if (sql.includes('broker.broker_connections')) return [];
+      return [
+        {
+          id: 'connector-1',
+          broker_connection_id: 'connection-1',
+          user_id: 'user-1',
+        },
+      ];
+    });
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+
+    await expect(
+      service.redeemPairing('ABCDEFGH23', {
+        accountLogin: '999999999',
+        brokerServer: 'Broker-Demo',
+        currency: 'USD',
+        tradeAllowed: true,
+      }),
+    ).rejects.toThrow('account');
+
+    const sql = String(query.mock.calls[0]![0]);
+    expect(sql).toContain('broker.broker_connections');
+    expect(sql).toContain('bc.account_id = $3');
   });
 
   it('fails closed when a pairing code is expired, consumed, or unknown', async () => {
