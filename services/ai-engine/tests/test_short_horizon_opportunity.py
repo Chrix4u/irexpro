@@ -6,9 +6,9 @@ import pytest
 
 from app.domain.training.short_horizon_opportunity import (
     SHORT_HORIZON_CHALLENGER_EXPERIMENT,
-    SHORT_HORIZON_V1_EXPERIMENT,
-    SHORT_HORIZON_MIN_PERIODS_PER_DAY,
     SHORT_HORIZON_MINUTES,
+    SHORT_HORIZON_MIN_PERIODS_PER_DAY,
+    SHORT_HORIZON_V1_EXPERIMENT,
     short_horizon_experiments,
     summarize_horizon_report,
 )
