@@ -1188,7 +1188,6 @@ describe('M1 meaningful-size shadow module wiring', () => {
   });
 });
 
-
 describe('M1 early-transition meaningful 0.10 PAPER scout phase', () => {
   const matureHealthyOutcomes = [
     { observedAt: new Date('2026-10-15T10:29:00.000Z'), netR: 0.74 },
@@ -1254,9 +1253,7 @@ describe('M1 early-transition meaningful 0.10 PAPER scout phase', () => {
 
     expect(h.receiveSignal).not.toHaveBeenCalled();
     expect(h.recordDecision.mock.calls[0]![0].blockers).toEqual(
-      expect.arrayContaining([
-        'M1_MEANINGFUL_SCOUT_RELIABILITY_INSUFFICIENT_MEANINGFUL_EVIDENCE',
-      ]),
+      expect.arrayContaining(['M1_MEANINGFUL_SCOUT_RELIABILITY_INSUFFICIENT_MEANINGFUL_EVIDENCE']),
     );
   });
 

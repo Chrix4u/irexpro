@@ -158,10 +158,7 @@ export function m1RouteExecutableInPhase(
 ): boolean {
   if (phase === 'SHADOW' || route === 'ABSTAIN') return false;
   if (phase === 'PAPER_CONTINUATION') return route === 'M1_TREND_CONTINUATION';
-  if (
-    phase === 'PAPER_EARLY_TRANSITION_MICRO' ||
-    phase === 'PAPER_EARLY_TRANSITION_SCOUT_010'
-  )
+  if (phase === 'PAPER_EARLY_TRANSITION_MICRO' || phase === 'PAPER_EARLY_TRANSITION_SCOUT_010')
     return route === 'M1_EARLY_TRANSITION';
   return (
     route === 'M1_TREND_CONTINUATION' ||
@@ -550,9 +547,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? [`M1_SHADOW_RELIABILITY_${shadowPairSideReliability?.reason ?? 'UNAVAILABLE'}`]
         : []),
       ...(earlyTransitionMeaningfulScout && shadowPairSideReliability?.eligible !== true
-        ? [
-            `M1_MEANINGFUL_SCOUT_RELIABILITY_${shadowPairSideReliability?.reason ?? 'UNAVAILABLE'}`,
-          ]
+        ? [`M1_MEANINGFUL_SCOUT_RELIABILITY_${shadowPairSideReliability?.reason ?? 'UNAVAILABLE'}`]
         : []),
       ...(routeExecutable && !routePayoffEligible ? ['M1_ROUTE_NET_EXPECTED_R_FLOOR'] : []),
       ...(shadowOnly ? ['M1_PHASE_SHADOW'] : []),
