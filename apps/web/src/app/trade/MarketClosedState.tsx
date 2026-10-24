@@ -81,13 +81,13 @@ export function MarketClosedState({ nextEligibleScanAt }: MarketClosedStateProps
 
       <div className="market-closed-state__reopen-card">
         <span className="market-closed-state__reopen-label">Expected market reopen</span>
-        <strong>{formatReopenAt(nextEligibleScanAt)}</strong>
+        <strong suppressHydrationWarning>{formatReopenAt(nextEligibleScanAt)}</strong>
         <span className="market-closed-state__local-note">Shown in your local time</span>
       </div>
 
       <div className="market-closed-state__countdown" data-testid="market-reopen-countdown">
         <span>Reopens in</span>
-        <strong>{countdownLabel(target, nowMs)}</strong>
+        <strong suppressHydrationWarning>{countdownLabel(target, nowMs)}</strong>
       </div>
 
       <div className="market-closed-state__assurance">
