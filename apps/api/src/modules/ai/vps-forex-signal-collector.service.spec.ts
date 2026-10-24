@@ -111,7 +111,7 @@ describe('dynamic PAPER lot ceiling', () => {
 describe('PAPER opportunity scout model identity', () => {
   it('separates idle-aware participation outcomes from the v1 scout cohort', () => {
     expect(paperOpportunityScoutModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v5-0.10-tier',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v6-shadow-pulse-0.10-tier',
     );
   });
 });
@@ -1165,6 +1165,17 @@ describe('VpsForexSignalCollectorService', () => {
           ]
         : [],
     );
+    const scoutAuthoritySpy = jest
+      .spyOn(PaperOpportunityScoutModule, 'evaluatePaperOpportunityScout')
+      .mockReturnValue({
+        eligible: true,
+        reason: 'SHADOW_PULSE_SCOUT',
+        lotUpperBound: 0.1,
+        sizingTier: 'RESEARCH',
+        mode: 'BASE',
+        targetWindowMinutes: 30,
+        idleMinutes: null,
+      });
     const postLossGuardSpy = jest.spyOn(
       PaperPostLossEntryGuardModule,
       'evaluatePaperPostLossEntryGuard',
@@ -1225,6 +1236,7 @@ describe('VpsForexSignalCollectorService', () => {
           json: async () => allTrendPayload(),
         }) as unknown as typeof fetch,
       );
+      expect(scoutAuthoritySpy).toHaveBeenCalled();
       expect(receiveSignal).not.toHaveBeenCalled();
       expect(postLossGuardSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1252,6 +1264,7 @@ describe('VpsForexSignalCollectorService', () => {
         'PAPER_POST_LOSS_WAITING_FOR_POST_LOSS_BAR',
       );
     } finally {
+      scoutAuthoritySpy.mockRestore();
       postLossGuardSpy.mockRestore();
       modelSpy.mockRestore();
       governanceSpy.mockRestore();
@@ -1733,6 +1746,18 @@ describe('VpsForexSignalCollectorService', () => {
           reason: 'EVIDENCE_AVAILABLE',
           reasons: ['EVIDENCE_AVAILABLE'],
         },
+        shadowDirectionalPulse: {
+          artifact: 'adaptive-shadow-directional-pulse-v1',
+          available: true,
+          direction: input.candidate.direction,
+          status: 'SUPPORTED',
+          candidateSamples: 8,
+          oppositeSamples: 8,
+          candidateWeightedR: 0.62,
+          oppositeWeightedR: -0.28,
+          advantageR: 0.9,
+          quality: 0.725,
+        },
         exposure: {
           artifact: 'adaptive-currency-exposure-v1',
           currencyRiskMap: {},
@@ -1800,6 +1825,13 @@ describe('VpsForexSignalCollectorService', () => {
         expect.objectContaining({
           idleMinutes: 65,
           netExpectedR: 0.42,
+          shadowDirectionalPulse: expect.objectContaining({
+            status: 'SUPPORTED',
+            candidateSamples: 8,
+            oppositeSamples: 8,
+            advantageR: 0.9,
+            quality: 0.725,
+          }),
           calibration: expect.objectContaining({
             authoritative: true,
             sourceLevel: 'EXACT',
@@ -1824,6 +1856,11 @@ describe('VpsForexSignalCollectorService', () => {
             paper_opportunity_scout_mode: 'RECOVERY',
             paper_opportunity_scout_idle_minutes: 65,
             paper_opportunity_scout_target_window_minutes: 30,
+            paper_opportunity_scout_shadow_pulse_status: 'SUPPORTED',
+            paper_opportunity_scout_shadow_pulse_candidate_samples: 8,
+            paper_opportunity_scout_shadow_pulse_opposite_samples: 8,
+            paper_opportunity_scout_shadow_pulse_advantage_r: 0.9,
+            paper_opportunity_scout_shadow_pulse_quality: 0.725,
           }),
         }),
       );

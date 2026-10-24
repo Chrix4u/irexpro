@@ -179,7 +179,7 @@ const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 
 export function paperOpportunityScoutModelVersion(engineCode: string): string {
-  return `external-provider/${engineCode}/paper-opportunity-scout-v5-0.10-tier`;
+  return `external-provider/${engineCode}/paper-opportunity-scout-v6-shadow-pulse-0.10-tier`;
 }
 const LEGACY_V7_EXECUTION_FROZEN = true;
 const MULTI_MODEL_PAPER_EXECUTION_ENABLED = true;
@@ -1835,6 +1835,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           const calibration = adaptiveEvidencePass.predictionCalibration;
           const paperOpportunityScout = evaluatePaperOpportunityScout({
             normalPaperExecution: fullSizePaperExecutionCandidate,
+            direction: best.direction,
             strategyRoute: planBEnsemble.strategyRoute,
             regime: planBEnsemble.regime,
             confidence: best.confidence,
@@ -1851,6 +1852,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             driftState: ensembleGovernance.driftState,
             driftDiagnostics: ensembleGovernance.driftDiagnostics,
             idleMinutes: paperIdleState.idleMinutes,
+            shadowDirectionalPulse: adaptiveEvidencePass.shadowDirectionalPulse,
             calibration: {
               authoritative: calibration.authoritative,
               sourceLevel: calibration.sourceLevel,
@@ -2942,6 +2944,22 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paper_opportunity_scout_calibration_profit_factor:
               adaptiveWinner.predictionCalibration.profitFactor,
             paper_opportunity_scout_drift_diagnostics: ensembleGovernance.driftDiagnostics ?? [],
+            paper_opportunity_scout_shadow_pulse_artifact:
+              adaptiveWinner.shadowDirectionalPulse.artifact,
+            paper_opportunity_scout_shadow_pulse_status:
+              adaptiveWinner.shadowDirectionalPulse.status,
+            paper_opportunity_scout_shadow_pulse_candidate_samples:
+              adaptiveWinner.shadowDirectionalPulse.candidateSamples,
+            paper_opportunity_scout_shadow_pulse_opposite_samples:
+              adaptiveWinner.shadowDirectionalPulse.oppositeSamples,
+            paper_opportunity_scout_shadow_pulse_candidate_weighted_r:
+              adaptiveWinner.shadowDirectionalPulse.candidateWeightedR,
+            paper_opportunity_scout_shadow_pulse_opposite_weighted_r:
+              adaptiveWinner.shadowDirectionalPulse.oppositeWeightedR,
+            paper_opportunity_scout_shadow_pulse_advantage_r:
+              adaptiveWinner.shadowDirectionalPulse.advantageR,
+            paper_opportunity_scout_shadow_pulse_quality:
+              adaptiveWinner.shadowDirectionalPulse.quality,
             adaptive_risk_multiplier: adaptiveWinner.riskMultiplier.multiplier,
             adaptive_market_state: adaptiveWinner.marketState.state,
             adaptive_opportunity_score: adaptiveWinner.adaptiveScore,

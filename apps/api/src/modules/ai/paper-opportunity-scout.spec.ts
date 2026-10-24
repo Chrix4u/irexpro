@@ -3,6 +3,7 @@ import { evaluatePaperOpportunityScout } from './paper-opportunity-scout';
 describe('PAPER opportunity scout', () => {
   const base = {
     normalPaperExecution: false,
+    direction: 'BUY' as const,
     strategyRoute: 'TREND_CONTINUATION' as const,
     regime: 'TREND_HEALTHY' as const,
     confidence: 0.66,
@@ -321,5 +322,128 @@ describe('PAPER opportunity scout', () => {
         },
       }),
     ).toMatchObject({ eligible: false, reason: 'DRIFT_EVIDENCE_TOO_WEAK' });
+  });
+
+  describe('causal shadow-pulse confidence rescue', () => {
+    const supportedPulse = {
+      artifact: 'adaptive-shadow-directional-pulse-v1' as const,
+      available: true,
+      direction: 'BUY' as const,
+      status: 'SUPPORTED' as const,
+      candidateSamples: 8,
+      oppositeSamples: 8,
+      candidateWeightedR: 0.62,
+      oppositeWeightedR: -0.28,
+      advantageR: 0.9,
+      quality: 0.725,
+    };
+
+    it('rescues a positive-edge trend candidate at 0.10 lots when causal shadow evidence strongly supports the side', () => {
+      expect(
+        evaluatePaperOpportunityScout({
+          ...base,
+          confidence: 0.54,
+          netExpectedR: 0.052,
+          directionQuality: 0.24,
+          tradeQuality: 0.25,
+          exitQuality: 0.26,
+          alignedMomentumAtr: 0.14,
+          driftState: 'STRESSED',
+          shadowDirectionalPulse: supportedPulse,
+        }),
+      ).toMatchObject({
+        eligible: true,
+        reason: 'SHADOW_PULSE_SCOUT',
+        lotUpperBound: 0.1,
+        sizingTier: 'RESEARCH',
+      });
+    });
+
+    it('does not let neutral, opposed, sparse, or weak-advantage pulse evidence rescue the trade', () => {
+      for (const shadowDirectionalPulse of [
+        { ...supportedPulse, status: 'NEUTRAL' as const, advantageR: 0.4, quality: 0.6 },
+        { ...supportedPulse, status: 'OPPOSED' as const, advantageR: -0.9, quality: 0.275 },
+        {
+          ...supportedPulse,
+          available: false,
+          status: 'INSUFFICIENT' as const,
+          candidateSamples: 3,
+        },
+        { ...supportedPulse, advantageR: 0.7, quality: 0.675 },
+      ]) {
+        expect(
+          evaluatePaperOpportunityScout({
+            ...base,
+            confidence: 0.54,
+            netExpectedR: 0.052,
+            directionQuality: 0.24,
+            tradeQuality: 0.25,
+            exitQuality: 0.26,
+            alignedMomentumAtr: 0.14,
+            shadowDirectionalPulse,
+          }),
+        ).toMatchObject({ eligible: false, reason: 'CONFIDENCE_TOO_LOW' });
+      }
+    });
+
+    it('keeps hard economics, consensus, OOD, route, event and cost boundaries authoritative despite a strong pulse', () => {
+      const common = {
+        ...base,
+        confidence: 0.54,
+        netExpectedR: 0.052,
+        directionQuality: 0.24,
+        tradeQuality: 0.25,
+        exitQuality: 0.26,
+        alignedMomentumAtr: 0.14,
+        shadowDirectionalPulse: supportedPulse,
+      };
+      expect(evaluatePaperOpportunityScout({ ...common, netExpectedR: 0.039 })).toMatchObject({
+        eligible: false,
+        reason: 'NET_EXPECTED_R_TOO_LOW',
+      });
+      expect(evaluatePaperOpportunityScout({ ...common, consensusPassed: 3 })).toMatchObject({
+        eligible: false,
+        reason: 'CONSENSUS_TOO_LOW',
+      });
+      expect(
+        evaluatePaperOpportunityScout({ ...common, driftState: 'OUT_OF_DISTRIBUTION' }),
+      ).toMatchObject({ eligible: false, reason: 'DRIFT_EVIDENCE_TOO_WEAK' });
+      expect(
+        evaluatePaperOpportunityScout({
+          ...common,
+          strategyRoute: 'CONFIRMED_REVERSAL',
+          regime: 'REVERSAL_CONFIRMED',
+        }),
+      ).toMatchObject({ eligible: false, reason: 'ROUTE_NOT_SCOUTABLE' });
+      expect(evaluatePaperOpportunityScout({ ...common, eventRisk: 'UNVERIFIED' })).toMatchObject({
+        eligible: false,
+        reason: 'EVENT_RISK_NOT_CLEAR',
+      });
+      expect(
+        evaluatePaperOpportunityScout({ ...common, paperExecutionCostUsable: false }),
+      ).toMatchObject({ eligible: false, reason: 'EXECUTION_COST_UNUSABLE' });
+    });
+
+    it('requires genuinely strong causal pulse quality, payoff and sample depth', () => {
+      const common = {
+        ...base,
+        confidence: 0.54,
+        netExpectedR: 0.052,
+        directionQuality: 0.24,
+        tradeQuality: 0.25,
+        exitQuality: 0.26,
+        alignedMomentumAtr: 0.14,
+      };
+      for (const shadowDirectionalPulse of [
+        { ...supportedPulse, candidateWeightedR: 0.24 },
+        { ...supportedPulse, quality: 0.67 },
+        { ...supportedPulse, oppositeSamples: 3 },
+      ]) {
+        expect(evaluatePaperOpportunityScout({ ...common, shadowDirectionalPulse })).toMatchObject({
+          eligible: false,
+          reason: 'CONFIDENCE_TOO_LOW',
+        });
+      }
+    });
   });
 });
