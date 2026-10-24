@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app.domain.models.multitimeframe_features import INITIAL_FOREX_UNIVERSE
 from app.domain.training.model_qualification import (
     CONFIDENCE_FLOOR,
     ModelVariant,
@@ -14,7 +15,6 @@ from app.domain.training.model_qualification import (
     _qualification_checkpoint_fingerprint,
     run_nested_qualification_experiments,
 )
-from app.domain.models.multitimeframe_features import INITIAL_FOREX_UNIVERSE
 from app.domain.training.train_multitimeframe import load_and_prepare_corpora
 
 SHORT_HORIZON_MINUTES = (5, 20, 60)

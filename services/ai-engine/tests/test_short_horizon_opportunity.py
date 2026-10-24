@@ -97,6 +97,7 @@ def test_summary_uses_outer_validation_duration_and_rejects_unknown_horizon() ->
 
 def test_three_horizon_runner_is_shadow_only_and_uses_fixed_matrix(tmp_path, monkeypatch) -> None:
     import pandas as pd
+
     import app.domain.training.short_horizon_opportunity as module
 
     load_calls: list[dict] = []
