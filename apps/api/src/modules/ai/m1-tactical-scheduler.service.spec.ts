@@ -1242,6 +1242,48 @@ describe('M1 early-transition meaningful 0.10 PAPER scout phase', () => {
     );
   });
 
+  it('executes a mature healthy local-impulse scout despite bounded HTF drift conflict', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V6,
+      shadowPairSideOutcomes: matureHealthyOutcomes,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+    const features = {
+      ...transitionFeatures(),
+      emaSeparationAtr: 1.04,
+      emaSlopeAtr: 0.54,
+      momentum1Atr: 0.38,
+      momentum3Atr: 2.01,
+      momentum5Atr: 2.87,
+      alignment: { m5: 1, m15: -0.27, h1: -0.37, h4: 0.3 },
+      higherTimeframeAgreement: -0.336,
+      efficiency5: 0.82,
+      closeLocation: 0.9,
+      extensionAtr: 0.4,
+      volatilityScore: 0.28,
+    };
+
+    const route = await driveFeatures(h, features);
+
+    expect(route).toMatchObject({
+      route: 'M1_EARLY_TRANSITION',
+      direction: 'BUY',
+      reason: 'LOCAL_IMPULSE_AGAINST_HTF',
+      eligible: true,
+    });
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({
+        suggestedVolume: 0.1,
+        timeframe: 'M1',
+        metadata: expect.objectContaining({
+          m1_evidence_qualified_scout_eligible: true,
+          m1_local_impulse_drift_only_rescue: true,
+        }),
+      }),
+    );
+  });
+
   it('keeps a strong three-sample sleeve shadow-only until meaningful evidence matures', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V6,

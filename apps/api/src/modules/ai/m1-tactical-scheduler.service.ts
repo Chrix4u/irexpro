@@ -531,16 +531,24 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       shadowPairSideReliability?.eligible === true &&
       governance.blockers.length === 1 &&
       governance.blockers[0] === 'DRIFT_OUT_OF_DISTRIBUTION';
+    const localImpulseDriftOnlyRescue =
+      earlyTransitionMeaningfulScout &&
+      routeDecision.reason === 'LOCAL_IMPULSE_AGAINST_HTF' &&
+      shadowPairSideReliability?.eligible === true &&
+      governance.blockers.length === 1 &&
+      governance.blockers[0] === 'DRIFT_OUT_OF_DISTRIBUTION';
     const standardGovernanceExecutable =
       governance.paperEligible && governance.executionAuthority === 'PAPER_ONLY_RESEARCH';
     const governanceExecutable = earlyTransitionMicro
       ? shadowPairSideReliability?.eligible === true &&
         (standardGovernanceExecutable || microDriftOnlyRescue)
       : earlyTransitionMeaningfulScout
-        ? shadowPairSideReliability?.eligible === true && standardGovernanceExecutable
+        ? shadowPairSideReliability?.eligible === true &&
+          (standardGovernanceExecutable || localImpulseDriftOnlyRescue)
         : standardGovernanceExecutable;
     const canExecute = routeExecutable && routePayoffEligible && governanceExecutable;
-    const effectiveGovernanceBlockers = microDriftOnlyRescue ? [] : governance.blockers;
+    const effectiveGovernanceBlockers =
+      microDriftOnlyRescue || localImpulseDriftOnlyRescue ? [] : governance.blockers;
     const blockers = unique([
       ...effectiveGovernanceBlockers,
       ...(earlyTransitionMicro && shadowPairSideReliability?.eligible !== true
@@ -584,6 +592,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? { ...shadowPairSideReliability }
             : null,
         microDriftOnlyRescue,
+        localImpulseDriftOnlyRescue,
         rolloutPolicyVersion: this.rolloutPolicy.version,
         rolloutPhase: this.rolloutPolicy.phase,
         routeNetExpectedRFloor,
@@ -606,6 +615,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         decisionTime,
         shadowPairSideReliability,
         microDriftOnlyRescue,
+        localImpulseDriftOnlyRescue,
         earlyTransitionMeaningfulScout,
       );
     }
@@ -622,6 +632,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     decisionTime: Date,
     shadowPairSideReliability: M1ScoutPairSideReliabilityDecision | null,
     microDriftOnlyRescue: boolean,
+    localImpulseDriftOnlyRescue: boolean,
     meaningfulScoutEligible: boolean,
   ): Promise<void> {
     const session = this.executionService
@@ -707,6 +718,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
               ? shadowPairSideReliability.recentNetR
               : null,
           m1_micro_drift_only_rescue: microDriftOnlyRescue,
+          m1_local_impulse_drift_only_rescue: localImpulseDriftOnlyRescue,
           m1_decision_id: decisionId,
           m1_gross_expected_r: candidate.grossExpectedR,
           m1_execution_cost_r: governance.genericGovernance.estimatedExecutionCostR,
