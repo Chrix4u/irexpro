@@ -1,0 +1,209 @@
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { isDeepStrictEqual } from 'util';
+import { DataSource } from 'typeorm';
+import {
+  DIRECT_MT5_COMMAND_TYPES,
+  DIRECT_MT5_PROTOCOL_VERSION,
+  DirectMt5Command,
+  DirectMt5CommandType,
+  parseDirectMt5Command,
+} from './direct-mt5.protocol';
+
+export interface EnqueueDirectMt5Command {
+  connectorId: string;
+  brokerConnectionId: string;
+  idempotencyKey: string;
+  commandType: DirectMt5CommandType;
+  payload: Record<string, unknown>;
+}
+
+export interface DirectMt5StoredCommand {
+  id: string;
+  connector_id: string;
+  broker_connection_id: string;
+  idempotency_key: string;
+  command_type: DirectMt5CommandType;
+  payload: Record<string, unknown>;
+  state: string;
+}
+
+export interface DirectMt5CommandResultInput {
+  state: 'SUCCEEDED' | 'FAILED' | 'UNCERTAIN';
+  result: Record<string, unknown> | null;
+  error: string | null;
+}
+
+@Injectable()
+export class DirectMt5CommandService {
+  constructor(private readonly dataSource: DataSource) {}
+
+  async enqueue(input: EnqueueDirectMt5Command): Promise<DirectMt5StoredCommand> {
+    if (!(DIRECT_MT5_COMMAND_TYPES as readonly string[]).includes(input.commandType)) {
+      throw new ConflictException(`Unsupported direct MT5 command type: ${input.commandType}`);
+    }
+    if (!input.idempotencyKey?.trim()) {
+      throw new ConflictException('Direct MT5 command idempotency key is required');
+    }
+
+    const commandId = randomUUID();
+    const inserted = (await this.dataSource.query(
+      `
+        INSERT INTO broker.direct_mt5_commands (
+          id, connector_id, broker_connection_id, idempotency_key,
+          command_type, payload, state, created_at, updated_at
+        )
+        SELECT $1, $2, $3, $4, $5, $6::jsonb, 'PENDING', now(), now()
+        WHERE EXISTS (
+          SELECT 1
+          FROM broker.direct_mt5_connectors c
+          WHERE c.id = $2
+            AND c.broker_connection_id = $3
+            AND c.state = 'ACTIVE'
+        )
+        ON CONFLICT (broker_connection_id, idempotency_key) DO NOTHING
+        RETURNING id, connector_id, broker_connection_id, idempotency_key,
+                  command_type, payload, state
+      `,
+      [
+        commandId,
+        input.connectorId,
+        input.brokerConnectionId,
+        input.idempotencyKey,
+        input.commandType,
+        JSON.stringify(input.payload),
+      ],
+    )) as DirectMt5StoredCommand[];
+    if (inserted[0]) return inserted[0];
+
+    const existing = (await this.dataSource.query(
+      `
+        SELECT id, connector_id, broker_connection_id, idempotency_key,
+               command_type, payload, state
+        FROM broker.direct_mt5_commands
+        WHERE broker_connection_id = $1
+          AND idempotency_key = $2
+        LIMIT 1
+      `,
+      [input.brokerConnectionId, input.idempotencyKey],
+    )) as DirectMt5StoredCommand[];
+    const command = existing[0];
+    if (!command) {
+      throw new NotFoundException('Direct MT5 connector is not active for this broker connection');
+    }
+    if (
+      command.connector_id !== input.connectorId ||
+      command.command_type !== input.commandType ||
+      !isDeepStrictEqual(command.payload, input.payload)
+    ) {
+      throw new ConflictException(
+        'Direct MT5 idempotency key was already used for different command semantics',
+      );
+    }
+    return command;
+  }
+
+  async leaseNext(connectorId: string): Promise<DirectMt5Command | null> {
+    // A timed-out dispatch may already have reached MT5. Never put it back in
+    // PENDING. Mark it UNCERTAIN and require provider reconciliation instead.
+    await this.dataSource.query(
+      `
+        UPDATE broker.direct_mt5_commands
+        SET state = 'UNCERTAIN',
+            error = COALESCE(error, 'command lease expired before authoritative result'),
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = now()
+        WHERE connector_id = $1
+          AND state = 'LEASED'
+          AND lease_expires_at <= now()
+      `,
+      [connectorId],
+    );
+
+    const rows = (await this.dataSource.query(
+      `
+        WITH candidate AS (
+          SELECT cmd.id
+          FROM broker.direct_mt5_commands cmd
+          JOIN broker.direct_mt5_connectors c ON c.id = cmd.connector_id
+          WHERE cmd.connector_id = $1
+            AND cmd.state = 'PENDING'
+            AND c.state = 'ACTIVE'
+          ORDER BY cmd.created_at ASC
+          FOR UPDATE OF cmd SKIP LOCKED
+          LIMIT 1
+        )
+        UPDATE broker.direct_mt5_commands cmd
+        SET state = 'LEASED',
+            lease_owner = replace(gen_random_uuid()::text, '-', ''),
+            lease_expires_at = now() + interval '30 seconds',
+            updated_at = now()
+        FROM candidate, broker.direct_mt5_connectors c
+        WHERE cmd.id = candidate.id
+          AND c.id = cmd.connector_id
+        RETURNING cmd.id, cmd.connector_id, cmd.broker_connection_id,
+                  cmd.idempotency_key, cmd.command_type, cmd.payload,
+                  cmd.created_at, cmd.lease_expires_at,
+                  c.account_login, c.broker_server
+      `,
+      [connectorId],
+    )) as Array<{
+      id: string;
+      connector_id: string;
+      broker_connection_id: string;
+      idempotency_key: string;
+      command_type: DirectMt5CommandType;
+      payload: Record<string, unknown>;
+      created_at: string | Date;
+      lease_expires_at: string | Date;
+      account_login: string;
+      broker_server: string;
+    }>;
+    const row = rows[0];
+    if (!row) return null;
+
+    return parseDirectMt5Command({
+      protocolVersion: DIRECT_MT5_PROTOCOL_VERSION,
+      commandId: row.id,
+      idempotencyKey: row.idempotency_key,
+      connectorId: row.connector_id,
+      brokerConnectionId: row.broker_connection_id,
+      accountLogin: row.account_login,
+      brokerServer: row.broker_server,
+      commandType: row.command_type,
+      createdAt: new Date(row.created_at).toISOString(),
+      leaseExpiresAt: new Date(row.lease_expires_at).toISOString(),
+      payload: row.payload,
+    });
+  }
+
+  async recordResult(
+    connectorId: string,
+    commandId: string,
+    input: DirectMt5CommandResultInput,
+  ): Promise<{ id: string; state: string }> {
+    const rows = (await this.dataSource.query(
+      `
+        UPDATE broker.direct_mt5_commands
+        SET state = $3,
+            result = $4::jsonb,
+            error = $5,
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            completed_at = CASE WHEN $3 IN ('SUCCEEDED','FAILED') THEN now() ELSE completed_at END,
+            updated_at = now()
+        WHERE connector_id = $1
+          AND id = $2
+          AND state IN ('LEASED','UNCERTAIN')
+        RETURNING id, state
+      `,
+      [connectorId, commandId, input.state, JSON.stringify(input.result), input.error],
+    )) as Array<{ id: string; state: string }>;
+    const command = rows[0];
+    if (!command) {
+      throw new NotFoundException('Direct MT5 command is not leased by this connector');
+    }
+    return command;
+  }
+}
