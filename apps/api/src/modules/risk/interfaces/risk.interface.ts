@@ -67,6 +67,8 @@ export interface ValidatedOrder {
   takeProfit: string;
   trailingStopPips?: string;
   idempotencyKey: string;
+  /** Strategy timeframe provenance carried into PAPER lifecycle timing. */
+  strategyTimeframe?: string;
 }
 
 // ─── Proposed trade (input to Risk Engine) ───────────────────────────────────
@@ -85,6 +87,8 @@ export interface ProposedTrade {
   takeProfit?: string;
   trailingStopPips?: string;
   idempotencyKey: string;
+  /** Strategy timeframe provenance from the originating AI signal. */
+  strategyTimeframe?: string;
   /** Volatility score 0.0–1.0 from AI Signal Engine. Higher = more volatile. */
   volatilityScore?: number;
   /** Market regime classification from AI. */

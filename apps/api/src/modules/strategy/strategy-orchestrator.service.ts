@@ -697,6 +697,7 @@ export class StrategyOrchestratorService {
       stopLoss: String(executionCandidate.suggestedStopLoss),
       takeProfit: String(executionCandidate.suggestedTakeProfit),
       idempotencyKey: `${candidate.userId}:${candidate.signalId}`,
+      strategyTimeframe: candidate.timeframe,
       volatilityScore: candidate.volatilityScore,
       regime: normalizeMarketRegime(candidate.marketRegime),
       sessionId: session.id,
