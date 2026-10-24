@@ -3,3 +3,4 @@
 export * from './index';
 export * from './broker-registry';
 export * from './live-account';
+export * from './market-schedule';
