@@ -43,11 +43,42 @@ class CommandJournal:
             )
             """
         )
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS connector_state (
+                key TEXT PRIMARY KEY,
+                integer_value INTEGER NOT NULL
+            )
+            """
+        )
         self._db.commit()
         self._recover_interrupted()
 
     def close(self) -> None:
         self._db.close()
+
+    def next_heartbeat_sequence(self) -> int:
+        """Return a durable strictly-increasing heartbeat sequence.
+
+        The counter lives beside the command journal so a process/Windows
+        restart cannot reset the connector to sequence 1 and trigger the
+        server's replay protection.
+        """
+        self._db.execute(
+            """
+            INSERT INTO connector_state(key, integer_value)
+            VALUES ('heartbeat_sequence', 1)
+            ON CONFLICT(key) DO UPDATE
+              SET integer_value = connector_state.integer_value + 1
+            """
+        )
+        row = self._db.execute(
+            "SELECT integer_value FROM connector_state WHERE key = 'heartbeat_sequence'"
+        ).fetchone()
+        self._db.commit()
+        if row is None:
+            raise RuntimeError("heartbeat sequence state unavailable")
+        return int(row[0])
 
     def _recover_interrupted(self) -> None:
         self._db.execute(

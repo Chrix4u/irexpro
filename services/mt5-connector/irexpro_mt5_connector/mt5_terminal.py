@@ -19,6 +19,7 @@ class AccountIdentity:
 
 class TerminalPort(Protocol):
     def initialize(self) -> AccountIdentity: ...
+    def identity(self) -> AccountIdentity: ...
     def shutdown(self) -> None: ...
     def account_snapshot(self) -> dict[str, Any]: ...
     def current_price(self, symbol: str) -> dict[str, Any]: ...
@@ -68,10 +69,17 @@ class MetaQuotesMt5Terminal:
         ok = mt5.initialize(self.terminal_path) if self.terminal_path else mt5.initialize()
         if not ok:
             raise Mt5TerminalError(f"MT5 initialize failed: {mt5.last_error()}")
+        try:
+            return self.identity()
+        except Exception:
+            mt5.shutdown()
+            raise
+
+    def identity(self) -> AccountIdentity:
+        mt5 = self._module()
         account = mt5.account_info()
         terminal = mt5.terminal_info()
         if account is None or terminal is None:
-            mt5.shutdown()
             raise Mt5TerminalError("MT5 terminal is not logged into a trading account")
         return AccountIdentity(
             login=str(account.login),

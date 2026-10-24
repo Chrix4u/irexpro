@@ -81,8 +81,15 @@ describe('DirectMt5CommandService', () => {
 
     const leased = await service.leaseNext('connector-1');
 
-    expect(String(query.mock.calls[0]![0])).toContain("state = 'UNCERTAIN'");
-    expect(String(query.mock.calls[1]![0])).toContain('FOR UPDATE OF cmd SKIP LOCKED');
+    const cleanupSql = String(query.mock.calls[0]![0]);
+    const leaseSql = String(query.mock.calls[1]![0]);
+    expect(cleanupSql).toContain("state = 'UNCERTAIN'");
+    expect(cleanupSql).toContain("command_type = 'PLACE_ORDER'");
+    expect(cleanupSql).toContain("state = 'CANCELLED'");
+    expect(leaseSql).toContain('FOR UPDATE OF cmd SKIP LOCKED');
+    expect(leaseSql).toContain("last_heartbeat_at >= now() - interval '15 seconds'");
+    expect(leaseSql).toContain("cmd.command_type <> 'PLACE_ORDER'");
+    expect(leaseSql).toContain('c.trade_allowed = true');
     expect(query.mock.calls[1]![1]).toEqual(['connector-1']);
     expect(leased).toMatchObject({ commandId: 'cmd-1', connectorId: 'connector-1' });
   });
