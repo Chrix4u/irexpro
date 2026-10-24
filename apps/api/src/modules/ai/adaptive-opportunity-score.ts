@@ -5,12 +5,13 @@ import type { AdaptivePortfolioCapacity } from './adaptive-currency-exposure';
 export const ADAPTIVE_OPPORTUNITY_SCORE_ARTIFACT = 'adaptive-opportunity-score-v1';
 
 export const ADAPTIVE_OPPORTUNITY_WEIGHTS = Object.freeze({
-  netExpectedR: 0.25,
-  regimeFit: 0.15,
-  directionQuality: 0.12,
+  netExpectedR: 0.24,
+  regimeFit: 0.14,
+  directionQuality: 0.11,
   tradeQuality: 0.1,
   exitQuality: 0.08,
-  edgeQuality: 0.1,
+  edgeQuality: 0.08,
+  shadowDirectionalPulseQuality: 0.05,
   executionCostQuality: 0.08,
   diversificationQuality: 0.07,
   stabilityQuality: 0.05,
@@ -23,6 +24,7 @@ export interface AdaptiveOpportunityInput {
   tradeQuality: number;
   exitQuality: number;
   driftQuality: number;
+  shadowDirectionalPulseQuality?: number;
   hardBlockers: string[];
   marketState: {
     state: AdaptiveMarketState;
@@ -53,6 +55,7 @@ export interface AdaptiveOpportunityComponents {
   tradeQuality: number;
   exitQuality: number;
   edgeQuality: number;
+  shadowDirectionalPulseQuality: number;
   executionCostQuality: number;
   diversificationQuality: number;
   stabilityQuality: number;
@@ -105,6 +108,10 @@ function edgeQualityOf(input: AdaptiveOpportunityInput['edge']): number {
 export function scoreAdaptiveOpportunity(
   input: AdaptiveOpportunityInput,
 ): AdaptiveOpportunityDecision {
+  const shadowDirectionalPulseQuality =
+    input.shadowDirectionalPulseQuality === undefined
+      ? 0.5
+      : clamp01(input.shadowDirectionalPulseQuality);
   const components: AdaptiveOpportunityComponents = {
     netExpectedRQuality: clamp01((input.netExpectedR + 0.05) / 0.45),
     regimeFit: regimeFitOf(input.marketState.state, input.marketState.stateConfidence),
@@ -112,6 +119,7 @@ export function scoreAdaptiveOpportunity(
     tradeQuality: clamp01(input.tradeQuality),
     exitQuality: clamp01(input.exitQuality),
     edgeQuality: edgeQualityOf(input.edge),
+    shadowDirectionalPulseQuality,
     executionCostQuality: 1 - clamp01(input.estimatedExecutionCostR / 0.6),
     diversificationQuality: clamp01(input.exposure.diversificationQuality),
     stabilityQuality: clamp01(
@@ -128,6 +136,8 @@ export function scoreAdaptiveOpportunity(
       ADAPTIVE_OPPORTUNITY_WEIGHTS.tradeQuality * components.tradeQuality +
       ADAPTIVE_OPPORTUNITY_WEIGHTS.exitQuality * components.exitQuality +
       ADAPTIVE_OPPORTUNITY_WEIGHTS.edgeQuality * components.edgeQuality +
+      ADAPTIVE_OPPORTUNITY_WEIGHTS.shadowDirectionalPulseQuality *
+        components.shadowDirectionalPulseQuality +
       ADAPTIVE_OPPORTUNITY_WEIGHTS.executionCostQuality * components.executionCostQuality +
       ADAPTIVE_OPPORTUNITY_WEIGHTS.diversificationQuality * components.diversificationQuality +
       ADAPTIVE_OPPORTUNITY_WEIGHTS.stabilityQuality * components.stabilityQuality,
@@ -137,6 +147,8 @@ export function scoreAdaptiveOpportunity(
   if (!input.edge.available) reasons.push('EDGE_EVIDENCE_UNAVAILABLE');
   if (input.edge.maturity === 'DEGRADED' || input.edge.recentDegradation)
     reasons.push('EDGE_DEGRADED');
+  if (shadowDirectionalPulseQuality >= 0.65) reasons.push('SHADOW_DIRECTION_SUPPORTED');
+  if (shadowDirectionalPulseQuality <= 0.35) reasons.push('SHADOW_DIRECTION_OPPOSED');
   if (input.exposure.capacity === 'REDUCED') reasons.push('PORTFOLIO_CAPACITY_REDUCED');
   if (input.exposure.capacity === 'BLOCKED') reasons.push('PORTFOLIO_CAPACITY_BLOCKED');
   if (!input.exposure.riskEvidenceComplete) reasons.push('PORTFOLIO_RISK_EVIDENCE_INCOMPLETE');
