@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "irexpro-mt5-connector"
+version = "0.1.0"
+description = "Local Windows bridge between iRexPro and a logged-in MetaTrader 5 terminal"
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.32,<3",
+  "MetaTrader5>=5.0.45; platform_system == 'Windows'",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.3,<9"]
+
+[project.scripts]
+irexpro-mt5-connector = "irexpro_mt5_connector.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["irexpro_mt5_connector*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
