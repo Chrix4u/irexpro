@@ -845,6 +845,82 @@ describe('StrategyOrchestratorService', () => {
       );
     });
 
+    it('passes the 0.10 PAPER floor for an evidence-qualified M1 tactical scout', async () => {
+      const result = await service.processSignal(
+        validCandidate({
+          signalId: 'sig-m1-scout',
+          timeframe: 'M1',
+          strategyCode: 'external-irexpro-m1-tactical',
+          suggestedVolume: 0.1,
+          metadata: {
+            external_provider_paper_only: true,
+            position_sizing_tier: 'RESEARCH',
+            m1_evidence_qualified_scout_eligible: true,
+            m1_tactical_route: 'M1_EARLY_TRANSITION',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedLotUpperBound: '0.1',
+          paperAllocationSizing: expect.objectContaining({
+            confidenceTier: 'RESEARCH',
+            minimumExecutableLot: '0.1',
+          }),
+        }),
+      );
+    });
+
+    it('does not honor the M1 scout flag on the wrong timeframe', async () => {
+      const result = await service.processSignal(
+        validCandidate({
+          signalId: 'sig-forged-m1-timeframe',
+          timeframe: 'M5',
+          strategyCode: 'external-irexpro-m1-tactical',
+          suggestedVolume: 0.2,
+          metadata: {
+            external_provider_paper_only: true,
+            position_sizing_tier: 'RESEARCH',
+            m1_evidence_qualified_scout_eligible: true,
+            m1_tactical_route: 'M1_EARLY_TRANSITION',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          paperAllocationSizing: expect.objectContaining({ minimumExecutableLot: '0.2' }),
+        }),
+      );
+    });
+
+    it('does not honor the M1 scout flag for another strategy', async () => {
+      const result = await service.processSignal(
+        validCandidate({
+          signalId: 'sig-forged-m1-strategy',
+          timeframe: 'M1',
+          strategyCode: 'external-other-strategy',
+          suggestedVolume: 0.2,
+          metadata: {
+            external_provider_paper_only: true,
+            position_sizing_tier: 'RESEARCH',
+            m1_evidence_qualified_scout_eligible: true,
+            m1_tactical_route: 'M1_EARLY_TRANSITION',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          paperAllocationSizing: expect.objectContaining({ minimumExecutableLot: '0.2' }),
+        }),
+      );
+    });
+
     it('marks the durable TradeIntent REJECTED when sizing fails closed', async () => {
       const sizingError = Object.assign(
         new Error('risk-budget volume 0.19000000 is below the PAPER policy minimum 0.2'),
