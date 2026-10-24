@@ -35,6 +35,7 @@ import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
 import {
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
+  deriveValidationPipelineUiState,
   hasExternalProviderPerformanceUiShape,
   hasVpsScannerUiShape,
 } from "@/lib/vps-scanner-status";
@@ -522,6 +523,7 @@ interface VpsForexScannerStatusView {
       modifiesExecution: false;
     } | null;
   };
+  validationPipeline?: unknown;
   components: Record<string, string>;
   marketCache: {
     cachedInstruments: string[];
@@ -2387,6 +2389,9 @@ export default function AiTradingPage() {
     fallbackConfidence: displayedConfidence,
     fallbackThreshold: displayedConfidenceThreshold,
   });
+  const validationPipeline = deriveValidationPipelineUiState(
+    vpsScannerStatus?.validationPipeline,
+  );
   const openPnlTone = totalUnrealisedPnlUnavailable || totalUnrealisedPnl == null
     ? "neutral"
     : Number(totalUnrealisedPnl) < 0
@@ -2818,6 +2823,190 @@ export default function AiTradingPage() {
                   </span>
                 </Card>
               </div>
+            </section>
+
+            <section
+              className="ai-validation-pipeline"
+              aria-labelledby="ai-validation-pipeline-title"
+              data-testid="ai-validation-pipeline"
+            >
+              <Card className="ai-validation-pipeline__card">
+                <div className="ai-validation-pipeline__head">
+                  <div>
+                    <p className="workspace-hero__eyebrow">Live decision engine</p>
+                    <h2 id="ai-validation-pipeline-title">Scan &amp; validation pipeline</h2>
+                    <p>
+                      Watch each currency pair move through the same validation gates the backend uses before any PAPER order can be dispatched.
+                    </p>
+                  </div>
+                  <div className="ai-validation-pipeline__live-state">
+                    <span
+                      className={`ai-scan-live-dot ${vpsScannerStatus?.marketSchedule.paused ? "is-paused" : "is-live"}`}
+                      aria-hidden="true"
+                    />
+                    <Badge
+                      variant={
+                        vpsScannerStatus?.marketSchedule.paused
+                          ? "warning"
+                          : validationPipeline?.readyPairs
+                            ? "success"
+                            : "info"
+                      }
+                    >
+                      {vpsScannerStatus?.marketSchedule.paused
+                        ? vpsScannerStatus.marketSchedule.reason === "ROLLOVER_LOW_LIQUIDITY"
+                          ? "ROLLOVER PROTECTION"
+                          : "MARKET PAUSED"
+                        : vpsScannerStatus?.state === "ACTIVE"
+                          ? "SCANNING LIVE"
+                          : "SCANNER VERIFYING"}
+                    </Badge>
+                  </div>
+                </div>
+
+                <div className="ai-validation-pipeline__summary" aria-label="Latest scan summary">
+                  <div>
+                    <span>Pairs evaluated</span>
+                    <strong>
+                      {validationPipeline
+                        ? `${validationPipeline.pairsEvaluated}/${validationPipeline.pairsExpected}`
+                        : "0/6"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Execution ready</span>
+                    <strong>{validationPipeline?.readyPairs ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span>Blocked safely</span>
+                    <strong>{validationPipeline?.blockedPairs ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span>Still evaluating</span>
+                    <strong>{validationPipeline?.waitingPairs ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span>Latest M5 bar</span>
+                    <strong>{formatTimestamp(validationPipeline?.marketBarTime)}</strong>
+                  </div>
+                </div>
+
+                <div className="ai-validation-sequence" aria-label="Validation gate sequence">
+                  {[
+                    "Market data",
+                    "Regime",
+                    "Model quality",
+                    "Consensus",
+                    "Net edge",
+                    "Drift",
+                    "Event risk",
+                    "Execution",
+                  ].map((label, index, steps) => (
+                    <div className="ai-validation-sequence__step" key={label}>
+                      <span>{index + 1}</span>
+                      <strong>{label}</strong>
+                      {index < steps.length - 1 ? <i aria-hidden="true">→</i> : null}
+                    </div>
+                  ))}
+                </div>
+
+                {validationPipeline && validationPipeline.candidates.length > 0 ? (
+                  <div
+                    className="ai-validation-table"
+                    role="table"
+                    aria-label="Currency pair validation progress"
+                  >
+                    <div className="ai-validation-table__header" role="row">
+                      <span role="columnheader">Pair / route</span>
+                      <span role="columnheader">Validation gates</span>
+                      <span role="columnheader">Net edge</span>
+                      <span role="columnheader">Decision</span>
+                    </div>
+                    {validationPipeline.candidates.map((candidate) => (
+                      <div
+                        className="ai-validation-row"
+                        role="row"
+                        key={candidate.instrument}
+                        data-testid={`validation-pair-${candidate.instrument.toLowerCase()}`}
+                        data-validation-status={candidate.status.toLowerCase()}
+                      >
+                        <div className="ai-validation-row__pair" role="cell">
+                          <div>
+                            <strong>{candidate.instrument}</strong>
+                            <Badge variant={candidate.direction === "BUY" ? "success" : "warning"}>
+                              {candidate.direction}
+                            </Badge>
+                          </div>
+                          <span>{candidate.regime.replaceAll("_", " ")}</span>
+                          <small>{candidate.strategyRoute?.replaceAll("_", " ") ?? "Route evaluating"}</small>
+                        </div>
+
+                        <div className="ai-validation-row__gates" role="cell">
+                          <div className="ai-validation-gate-track">
+                            {candidate.gates.map((gate) => (
+                              <span
+                                key={gate.code}
+                                className={`ai-validation-gate is-${gate.state.toLowerCase()}`}
+                                title={gate.detail}
+                                aria-label={`${gate.label}: ${gate.state}. ${gate.detail}`}
+                              >
+                                <b aria-hidden="true">
+                                  {gate.state === "PASS" ? "✓" : gate.state === "BLOCKED" ? "×" : "•"}
+                                </b>
+                                <em>{gate.label}</em>
+                              </span>
+                            ))}
+                          </div>
+                          <small className="ai-validation-row__progress">
+                            {candidate.passedGates}/{candidate.totalGates} gates passed
+                          </small>
+                        </div>
+
+                        <div className="ai-validation-row__edge" role="cell">
+                          <strong>
+                            {candidate.netExpectedR == null
+                              ? "—"
+                              : `${candidate.netExpectedR >= 0 ? "+" : ""}${candidate.netExpectedR.toFixed(3)}R`}
+                          </strong>
+                          <small>{Math.round(candidate.confidence * 100)}% candidate confidence</small>
+                        </div>
+
+                        <div className="ai-validation-row__decision" role="cell">
+                          <Badge
+                            variant={
+                              candidate.status === "READY"
+                                ? "success"
+                                : candidate.status === "BLOCKED"
+                                  ? "warning"
+                                  : "info"
+                            }
+                          >
+                            {candidate.status === "READY"
+                              ? "READY FOR PAPER"
+                              : candidate.status === "BLOCKED"
+                                ? "NO TRADE"
+                                : "EVALUATING"}
+                          </Badge>
+                          <small title={candidate.primaryBlocker ?? undefined}>
+                            {candidate.primaryBlocker ?? "All required gates passed"}
+                          </small>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="ai-validation-pipeline__empty" data-testid="validation-pipeline-empty">
+                    <LoadingSpinner text="Building the latest six-pair validation snapshot…" />
+                    <span>
+                      Trading controls remain available while read-only validation telemetry warms up.
+                    </span>
+                  </div>
+                )}
+
+                <p className="ai-validation-pipeline__footnote">
+                  Read-only observability. This panel cannot approve a trade, change a threshold, or bypass backend risk and execution authority.
+                </p>
+              </Card>
             </section>
 
             {showDeveloperDiagnostics && selectedBroker?.brokerId === "paper-broker" && (

@@ -426,6 +426,157 @@ export function deriveFastMarkFeedUiState(
   };
 }
 
+export type ValidationPipelineGateState = "PASS" | "BLOCKED" | "WAITING";
+export type ValidationPipelineGateCode =
+  | "MARKET_DATA"
+  | "REGIME"
+  | "MODEL_QUALITY"
+  | "CONSENSUS"
+  | "NET_EDGE"
+  | "DRIFT"
+  | "EVENT_RISK"
+  | "PAPER_EXECUTION";
+
+export interface ValidationPipelineUiGate {
+  code: ValidationPipelineGateCode;
+  label: string;
+  state: ValidationPipelineGateState;
+  detail: string;
+}
+
+export interface ValidationPipelineUiCandidate {
+  instrument: string;
+  direction: "BUY" | "SELL";
+  evaluatedAt: string;
+  marketBarTime: string;
+  regime: string;
+  strategyRoute: string | null;
+  confidence: number;
+  ensembleScore: number;
+  metaProbability: number;
+  expectedR: number;
+  netExpectedR: number | null;
+  status: "READY" | "BLOCKED" | "WAITING";
+  passedGates: number;
+  totalGates: number;
+  primaryBlocker: string | null;
+  blockers: string[];
+  gates: ValidationPipelineUiGate[];
+}
+
+export interface ValidationPipelineUiState {
+  generatedAt: string;
+  marketBarTime: string | null;
+  pairsExpected: number;
+  pairsEvaluated: number;
+  readyPairs: number;
+  blockedPairs: number;
+  waitingPairs: number;
+  error: string | null;
+  candidates: ValidationPipelineUiCandidate[];
+}
+
+const VALIDATION_GATE_CODES = new Set<ValidationPipelineGateCode>([
+  "MARKET_DATA",
+  "REGIME",
+  "MODEL_QUALITY",
+  "CONSENSUS",
+  "NET_EDGE",
+  "DRIFT",
+  "EVENT_RISK",
+  "PAPER_EXECUTION",
+]);
+
+function isValidationPipelineGate(value: unknown): value is ValidationPipelineUiGate {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.code === "string" &&
+    VALIDATION_GATE_CODES.has(value.code as ValidationPipelineGateCode) &&
+    typeof value.label === "string" &&
+    (value.state === "PASS" || value.state === "BLOCKED" || value.state === "WAITING") &&
+    typeof value.detail === "string"
+  );
+}
+
+function isValidationPipelineCandidate(value: unknown): value is ValidationPipelineUiCandidate {
+  if (!isRecord(value) || !Array.isArray(value.gates)) return false;
+  return (
+    typeof value.instrument === "string" &&
+    (value.direction === "BUY" || value.direction === "SELL") &&
+    typeof value.evaluatedAt === "string" &&
+    typeof value.marketBarTime === "string" &&
+    typeof value.regime === "string" &&
+    (value.strategyRoute === null || typeof value.strategyRoute === "string") &&
+    typeof value.confidence === "number" &&
+    Number.isFinite(value.confidence) &&
+    typeof value.ensembleScore === "number" &&
+    Number.isFinite(value.ensembleScore) &&
+    typeof value.metaProbability === "number" &&
+    Number.isFinite(value.metaProbability) &&
+    typeof value.expectedR === "number" &&
+    Number.isFinite(value.expectedR) &&
+    isNullableFiniteNumber(value.netExpectedR) &&
+    (value.status === "READY" || value.status === "BLOCKED" || value.status === "WAITING") &&
+    typeof value.passedGates === "number" &&
+    Number.isInteger(value.passedGates) &&
+    value.passedGates >= 0 &&
+    typeof value.totalGates === "number" &&
+    Number.isInteger(value.totalGates) &&
+    value.totalGates >= value.passedGates &&
+    (value.primaryBlocker === null || typeof value.primaryBlocker === "string") &&
+    isStringArray(value.blockers) &&
+    value.gates.length === value.totalGates &&
+    value.gates.every(isValidationPipelineGate)
+  );
+}
+
+export function deriveValidationPipelineUiState(value: unknown): ValidationPipelineUiState | null {
+  if (!isRecord(value) || !Array.isArray(value.candidates)) return null;
+  if (
+    typeof value.generatedAt !== "string" ||
+    !isNullableTimestamp(value.marketBarTime) ||
+    typeof value.pairsExpected !== "number" ||
+    !Number.isInteger(value.pairsExpected) ||
+    value.pairsExpected < 0 ||
+    typeof value.pairsEvaluated !== "number" ||
+    !Number.isInteger(value.pairsEvaluated) ||
+    value.pairsEvaluated < 0 ||
+    typeof value.readyPairs !== "number" ||
+    !Number.isInteger(value.readyPairs) ||
+    value.readyPairs < 0 ||
+    typeof value.blockedPairs !== "number" ||
+    !Number.isInteger(value.blockedPairs) ||
+    value.blockedPairs < 0 ||
+    typeof value.waitingPairs !== "number" ||
+    !Number.isInteger(value.waitingPairs) ||
+    value.waitingPairs < 0 ||
+    (value.error !== null && value.error !== undefined && typeof value.error !== "string") ||
+    !value.candidates.every(isValidationPipelineCandidate)
+  ) {
+    return null;
+  }
+
+  const candidates = value.candidates as ValidationPipelineUiCandidate[];
+  if (
+    value.pairsEvaluated !== candidates.length ||
+    value.readyPairs + value.blockedPairs + value.waitingPairs !== candidates.length
+  ) {
+    return null;
+  }
+
+  return {
+    generatedAt: value.generatedAt,
+    marketBarTime: value.marketBarTime as string | null,
+    pairsExpected: value.pairsExpected,
+    pairsEvaluated: value.pairsEvaluated,
+    readyPairs: value.readyPairs,
+    blockedPairs: value.blockedPairs,
+    waitingPairs: value.waitingPairs,
+    error: typeof value.error === "string" ? value.error : null,
+    candidates,
+  };
+}
+
 function isPairSideReliabilityRow(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (

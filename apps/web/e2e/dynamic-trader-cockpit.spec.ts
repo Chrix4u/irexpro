@@ -89,6 +89,77 @@ const livePosition = {
   createdAt: "2026-08-31T00:44:00.000Z",
 } satisfies LivePositionRowView;
 
+const validationGateSequence = [
+  ["MARKET_DATA", "Market data"],
+  ["REGIME", "Regime"],
+  ["MODEL_QUALITY", "Model quality"],
+  ["CONSENSUS", "Consensus"],
+  ["NET_EDGE", "Net edge"],
+  ["DRIFT", "Drift"],
+  ["EVENT_RISK", "Event risk"],
+  ["PAPER_EXECUTION", "Execution"],
+] as const;
+
+function validationPipelineFixture() {
+  const instruments = ["AUDUSD", "EURUSD", "GBPUSD", "USDCAD", "USDCHF", "USDJPY"];
+  return {
+    generatedAt: "2026-10-21T19:20:12.000Z",
+    marketBarTime: "2026-10-21T19:20:00.000Z",
+    pairsExpected: 6,
+    pairsEvaluated: 6,
+    readyPairs: 1,
+    blockedPairs: 4,
+    waitingPairs: 1,
+    error: null,
+    candidates: instruments.map((instrument, index) => {
+      const status = index === 1 ? "READY" : index === 5 ? "WAITING" : "BLOCKED";
+      return {
+        instrument,
+        direction: index % 2 === 0 ? "SELL" : "BUY",
+        evaluatedAt: "2026-10-21T19:20:10.000Z",
+        marketBarTime: "2026-10-21T19:20:00.000Z",
+        regime: index === 5 ? "TREND_WEAK" : "TREND_HEALTHY",
+        strategyRoute: index === 1 ? "EARLY_TRANSITION" : "TREND_CONTINUATION",
+        confidence: index === 5 ? 0.61 : 0.72,
+        ensembleScore: 0.74,
+        metaProbability: 0.68,
+        expectedR: 0.22,
+        netExpectedR: status === "READY" ? 0.11 : status === "BLOCKED" ? -0.11 : null,
+        status,
+        passedGates: status === "READY" ? 8 : status === "BLOCKED" ? 4 : 3,
+        totalGates: 8,
+        primaryBlocker:
+          status === "READY"
+            ? null
+            : status === "BLOCKED"
+              ? "Net edge -0.110R is below the PAPER floor"
+              : "Model-quality evidence is still being assembled",
+        blockers: status === "BLOCKED" ? ["PAPER_NET_EXPECTED_R"] : [],
+        gates: validationGateSequence.map(([code, label], gateIndex) => ({
+          code,
+          label,
+          state:
+            status === "READY"
+              ? "PASS"
+              : status === "WAITING"
+                ? gateIndex < 3
+                  ? "PASS"
+                  : "WAITING"
+                : gateIndex < 4
+                  ? "PASS"
+                  : gateIndex === 4 || gateIndex === 7
+                    ? "BLOCKED"
+                    : "WAITING",
+          detail:
+            status === "BLOCKED" && gateIndex === 4
+              ? "Net edge -0.110R is below the PAPER floor"
+              : `${label} evidence`,
+        })),
+      };
+    }),
+  };
+}
+
 const marketSnapshot = {
   instrument: "EURUSD",
   timeframe: "H1",
@@ -137,6 +208,7 @@ async function gotoAiTrader(
     recentClosedTradeAt?: string;
     marketClosed?: boolean;
     marketClosedReads?: number;
+    validationPipeline?: unknown;
   } = {},
 ) {
   setupErrorCollectors(page);
@@ -282,6 +354,7 @@ async function gotoAiTrader(
           marketStatusReadCount <= options.marketClosedReads);
       return fulfill(200, {
         enabled: true,
+        state: "ACTIVE",
         activeEngineCode: "irexpro-multimodel-ensemble-v1",
         executionAuthority: "PAPER_ONLY",
         ensembleThresholds: {
@@ -325,6 +398,9 @@ async function gotoAiTrader(
         marketCache: {},
         postEntryShadow: { evidenceMinimums: {} },
         pairSideReliability: [],
+        ...(options.validationPipeline !== undefined
+          ? { validationPipeline: options.validationPipeline }
+          : {}),
       });
     }
     if (apiPath === "market-data/intelligence")
@@ -419,6 +495,53 @@ test.describe("AI Trader market schedule", () => {
       timeout: 15_000,
     });
     await expect(page.getByTestId("market-closed-state")).toHaveCount(0);
+  });
+});
+
+test.describe("AI Trader live validation pipeline", () => {
+  test("shows all six pairs moving through backend validation gates", async ({ page }) => {
+    await gotoAiTrader(page, {
+      marketClosed: false,
+      validationPipeline: validationPipelineFixture(),
+    });
+
+    const pipeline = page.getByTestId("ai-validation-pipeline");
+    await expect(pipeline).toBeVisible();
+    await expect(
+      pipeline.getByRole("heading", { name: "Scan & validation pipeline" }),
+    ).toBeVisible();
+    await expect(pipeline.getByText("6/6", { exact: true })).toBeVisible();
+    await expect(pipeline.getByText("SCANNING LIVE", { exact: true })).toBeVisible();
+
+    for (const instrument of ["audusd", "eurusd", "gbpusd", "usdcad", "usdchf", "usdjpy"]) {
+      await expect(page.getByTestId(`validation-pair-${instrument}`)).toBeVisible();
+    }
+
+    const eurusd = page.getByTestId("validation-pair-eurusd");
+    await expect(eurusd).toHaveAttribute("data-validation-status", "ready");
+    await expect(eurusd.getByText("READY FOR PAPER", { exact: true })).toBeVisible();
+    await expect(eurusd.getByLabel(/Market data: PASS/)).toBeVisible();
+    await expect(eurusd.getByLabel(/Execution: PASS/)).toBeVisible();
+
+    const audusd = page.getByTestId("validation-pair-audusd");
+    await expect(audusd).toHaveAttribute("data-validation-status", "blocked");
+    await expect(audusd.getByText("NO TRADE", { exact: true })).toBeVisible();
+    await expect(audusd.getByLabel(/Net edge: BLOCKED/)).toBeVisible();
+    await expect(audusd).toContainText("Net edge -0.110R is below the PAPER floor");
+
+    await assertNoHorizontalOverflow(page);
+  });
+
+  test("keeps trading controls usable when optional validation telemetry is malformed", async ({ page }) => {
+    await gotoAiTrader(page, {
+      marketClosed: false,
+      validationPipeline: { pairsExpected: 6, candidates: [{ status: "READY" }] },
+    });
+
+    await expect(page.getByTestId("ai-validation-pipeline")).toBeVisible();
+    await expect(page.getByTestId("validation-pipeline-empty")).toBeVisible();
+    await expect(page.getByRole("region", { name: "AI trading controls" })).toBeVisible();
+    await assertNoHorizontalOverflow(page);
   });
 });
 

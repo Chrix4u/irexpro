@@ -520,6 +520,71 @@ describe('VpsForexSignalCollectorService', () => {
     expect(status.skippedUtcHours).toEqual([]);
   });
 
+  it('builds the live validation pipeline from the strongest candidate on each pair latest bar', async () => {
+    const decisionRows = [
+      {
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        market_bar_time: new Date('2026-10-21T19:20:00.000Z'),
+        evaluated_at: new Date('2026-10-21T19:20:10.000Z'),
+        confidence: 0.72,
+        regime: 'TREND_HEALTHY',
+        regime_allowed: true,
+        ensemble_score: 0.74,
+        meta_probability: 0.68,
+        expected_r: 0.22,
+        consensus_passed: 6,
+        consensus_required: 6,
+        admitted: true,
+        reasons: [],
+        components: {
+          strategyRoute: 'TREND_CONTINUATION',
+          directionQuality: 0.7,
+          tradeQuality: 0.66,
+          exitQuality: 0.64,
+          governance: {
+            netExpectedR: 0.11,
+            paperNetExpectedRPassed: true,
+            paperDriftPassed: true,
+            eventRisk: 'CLEAR',
+            paperExecutionEligible: true,
+            paperExecutionBlockers: [],
+          },
+        },
+      },
+    ];
+    const query = jest.fn().mockResolvedValue(decisionRows);
+    const collector = createCollector(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    const pipeline = await (collector as any).loadValidationPipelineStatus('user-1', 'conn-1');
+
+    expect(pipeline).toMatchObject({
+      pairsEvaluated: 1,
+      readyPairs: 1,
+      blockedPairs: 0,
+      waitingPairs: 0,
+      candidates: [
+        expect.objectContaining({
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          status: 'READY',
+        }),
+      ],
+    });
+    const sql = String(query.mock.calls[0]?.[0] ?? '');
+    expect(sql).toContain('ROW_NUMBER() OVER');
+    expect(sql).toContain("components ->> 'candidateScore'");
+    expect(sql).toContain('market_bar_time DESC');
+  });
+
   it('builds one read-only pair-side reliability snapshot for all 12 sleeves', async () => {
     const outcome = (status: 'WIN' | 'LOSS', evaluatedAt: string, netR: number) => ({
       evaluated_at: new Date(evaluatedAt),

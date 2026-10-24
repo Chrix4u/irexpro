@@ -50,6 +50,10 @@ import {
 } from './ensemble-shadow-outcome';
 import { buildEnsembleExpertRegistry } from './ensemble-expert-registry';
 import {
+  ValidationPipelineCandidate,
+  buildValidationPipelineCandidate,
+} from './validation-pipeline';
+import {
   PAPER_EXTENSION_EXHAUSTION_RESEARCH_ARTIFACT,
   evaluatePaperExtensionExhaustionResearch,
   scoreExtensionExhaustionShadow,
@@ -1143,6 +1147,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     let activePaperSession = false;
     let pairSideReliability: PaperTrendPairSideReliabilityStatus[] = [];
     let ensembleCampaign = await this.loadEnsembleCampaignStatus('', '');
+    let validationPipeline = {
+      generatedAt: now.toISOString(),
+      marketBarTime: null as string | null,
+      pairsExpected: SYMBOLS.length,
+      pairsEvaluated: 0,
+      readyPairs: 0,
+      blockedPairs: 0,
+      waitingPairs: 0,
+      candidates: [] as ValidationPipelineCandidate[],
+    };
     const brokerExpertConfigured =
       ownsBinding && this.brokerExpertEnabled() && Boolean(this.brokerExpertSourceConnectionId());
     const lastOverlay = this.lastEnsembleDecision.highConvictionOverlay;
@@ -1207,9 +1221,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
     const configuredConnectionId = this.connectionId();
     if (ownsBinding && configuredConnectionId) {
-      [ensembleCampaign, pairSideReliability] = await Promise.all([
+      [ensembleCampaign, pairSideReliability, validationPipeline] = await Promise.all([
         this.loadEnsembleCampaignStatus(requestingUserId, configuredConnectionId),
         this.loadPaperTrendPairSideReliabilitySnapshot(requestingUserId, configuredConnectionId),
+        this.loadValidationPipelineStatus(requestingUserId, configuredConnectionId),
       ]);
       const session = await this.executionService.getActiveSession(requestingUserId);
       activePaperSession = Boolean(
@@ -1299,6 +1314,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       marketSchedule,
       ensembleCampaign,
       pairSideReliability,
+      validationPipeline,
       highConvictionChallenger,
       postEntryShadow,
       expertRegistry,
@@ -5610,6 +5626,108 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         }),
       ],
     );
+  }
+
+  private async loadValidationPipelineStatus(userId: string, connectionId: string) {
+    const generatedAt = new Date().toISOString();
+    const empty = {
+      generatedAt,
+      marketBarTime: null as string | null,
+      pairsExpected: SYMBOLS.length,
+      pairsEvaluated: 0,
+      readyPairs: 0,
+      blockedPairs: 0,
+      waitingPairs: 0,
+      candidates: [] as ValidationPipelineCandidate[],
+      error: null as string | null,
+    };
+    if (!this.dataSource || !userId || !connectionId) return empty;
+
+    try {
+      const rows = (await this.dataSource.query(
+        `
+          WITH ranked AS (
+            SELECT
+              d.instrument,
+              d.direction,
+              d.market_bar_time,
+              d.evaluated_at,
+              d.confidence,
+              d.regime,
+              d.regime_allowed,
+              d.ensemble_score,
+              d.meta_probability,
+              d.expected_r,
+              d.consensus_passed,
+              d.consensus_required,
+              d.admitted,
+              d.reasons,
+              d.components,
+              ROW_NUMBER() OVER (
+                PARTITION BY d.instrument
+                ORDER BY
+                  d.market_bar_time DESC,
+                  COALESCE((d.components ->> 'candidateScore')::numeric, d.ensemble_score) DESC,
+                  d.evaluated_at DESC,
+                  d.id DESC
+              ) AS candidate_rank
+            FROM trading.ensemble_shadow_decisions d
+            WHERE d.user_id = $1
+              AND d.broker_connection_id = $2
+              AND d.engine_code = $3
+              AND d.model_version = $4
+          )
+          SELECT
+            instrument,
+            direction,
+            market_bar_time,
+            evaluated_at,
+            confidence,
+            regime,
+            regime_allowed,
+            ensemble_score,
+            meta_probability,
+            expected_r,
+            consensus_passed,
+            consensus_required,
+            admitted,
+            reasons,
+            components
+          FROM ranked
+          WHERE candidate_rank = 1
+          ORDER BY instrument ASC
+        `,
+        [userId, connectionId, ACTIVE_ENGINE_CODE, ACTIVE_MODEL_POLICY_VERSION],
+      )) as Array<Record<string, unknown>>;
+
+      const candidates = rows.map((row) =>
+        buildValidationPipelineCandidate(row, {
+          candidateConfidenceFloor: CONFIDENCE_FLOOR,
+          metaProbabilityFloor: PLAN_B_SHADOW_ADMISSION_THRESHOLD,
+        }),
+      );
+      const marketBarTime =
+        candidates
+          .map((candidate) => candidate.marketBarTime)
+          .filter(Boolean)
+          .sort()
+          .at(-1) ?? null;
+
+      return {
+        generatedAt,
+        marketBarTime,
+        pairsExpected: SYMBOLS.length,
+        pairsEvaluated: candidates.length,
+        readyPairs: candidates.filter((candidate) => candidate.status === 'READY').length,
+        blockedPairs: candidates.filter((candidate) => candidate.status === 'BLOCKED').length,
+        waitingPairs: candidates.filter((candidate) => candidate.status === 'WAITING').length,
+        candidates,
+        error: null,
+      };
+    } catch (error) {
+      this.logger.warn(`Validation pipeline status unavailable: ${(error as Error).message}`);
+      return { ...empty, error: (error as Error).message };
+    }
   }
 
   private async restorePublishedOpportunities(userId: string, connectionId: string): Promise<void> {
