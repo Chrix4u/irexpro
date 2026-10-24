@@ -77,4 +77,95 @@ describe('DirectMt5PairingService', () => {
       }),
     ).rejects.toThrow('invalid or expired');
   });
+
+  it('authenticates a connector token without comparing raw secrets in SQL', async () => {
+    const query = jest.fn();
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const token = 'connector-secret-token';
+    query.mockResolvedValueOnce([
+      {
+        id: 'connector-1',
+        user_id: 'user-1',
+        broker_connection_id: 'connection-1',
+        token_hash: service.digestToken(token),
+        account_login: '113392789',
+        broker_server: 'Broker-Demo',
+        last_sequence: '7',
+      },
+    ]);
+
+    await expect(service.authenticateConnector('connector-1', token)).resolves.toMatchObject({
+      connectorId: 'connector-1',
+      brokerConnectionId: 'connection-1',
+      accountLogin: '113392789',
+      brokerServer: 'Broker-Demo',
+      lastSequence: 7,
+    });
+    expect(query.mock.calls[0]![1]).toEqual(['connector-1']);
+  });
+
+  it('rejects a wrong connector token', async () => {
+    const query = jest.fn();
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    query.mockResolvedValueOnce([
+      {
+        id: 'connector-1',
+        user_id: 'user-1',
+        broker_connection_id: 'connection-1',
+        token_hash: service.digestToken('right-token'),
+        account_login: '113392789',
+        broker_server: 'Broker-Demo',
+        last_sequence: '0',
+      },
+    ]);
+    await expect(service.authenticateConnector('connector-1', 'wrong-token')).rejects.toThrow(
+      'authentication',
+    );
+  });
+
+  it('accepts only monotonic heartbeats from the paired MT5 account', async () => {
+    const query = jest.fn().mockResolvedValueOnce([{ id: 'connector-1', last_sequence: '8' }]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const binding = {
+      connectorId: 'connector-1',
+      userId: 'user-1',
+      brokerConnectionId: 'connection-1',
+      accountLogin: '113392789',
+      brokerServer: 'Broker-Demo',
+      lastSequence: 7,
+    };
+
+    await expect(
+      service.recordHeartbeat(binding, {
+        accountLogin: '113392789',
+        brokerServer: 'Broker-Demo',
+        sequence: 8,
+        tradeAllowed: true,
+      }),
+    ).resolves.toMatchObject({ lastSequence: 8 });
+  });
+
+  it('suspends a connector when the terminal account identity changes', async () => {
+    const query = jest.fn().mockResolvedValueOnce([]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const binding = {
+      connectorId: 'connector-1',
+      userId: 'user-1',
+      brokerConnectionId: 'connection-1',
+      accountLogin: '113392789',
+      brokerServer: 'Broker-Demo',
+      lastSequence: 7,
+    };
+
+    await expect(
+      service.recordHeartbeat(binding, {
+        accountLogin: '999999',
+        brokerServer: 'Other-Server',
+        sequence: 8,
+        tradeAllowed: true,
+      }),
+    ).rejects.toThrow('identity changed');
+    expect(String(query.mock.calls[0]![0])).toContain("state = 'SUSPENDED'");
+  });
+
 });

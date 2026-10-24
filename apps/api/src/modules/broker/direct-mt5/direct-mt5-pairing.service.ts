@@ -1,6 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHmac, randomBytes, randomUUID } from 'crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import { DataSource } from 'typeorm';
 
 const PAIRING_TTL_MS = 10 * 60_000;
@@ -24,6 +30,22 @@ export interface DirectMt5RedeemResult {
   connectorId: string;
   brokerConnectionId: string;
   connectorToken: string;
+}
+
+export interface DirectMt5ConnectorBinding {
+  connectorId: string;
+  userId: string;
+  brokerConnectionId: string;
+  accountLogin: string;
+  brokerServer: string;
+  lastSequence: number;
+}
+
+export interface DirectMt5HeartbeatInput {
+  accountLogin: string;
+  brokerServer: string;
+  sequence: number;
+  tradeAllowed: boolean;
 }
 
 @Injectable()
@@ -147,8 +169,107 @@ export class DirectMt5PairingService {
     };
   }
 
+  async authenticateConnector(
+    connectorId: string,
+    rawToken: string,
+  ): Promise<DirectMt5ConnectorBinding> {
+    if (!connectorId || !rawToken) {
+      throw new UnauthorizedException('Connector authentication failed');
+    }
+    const rows = (await this.dataSource.query(
+      `
+        SELECT id, user_id, broker_connection_id, token_hash,
+               account_login, broker_server, last_sequence
+        FROM broker.direct_mt5_connectors
+        WHERE id = $1
+          AND state = 'ACTIVE'
+          AND token_hash IS NOT NULL
+        LIMIT 1
+      `,
+      [connectorId],
+    )) as Array<{
+      id: string;
+      user_id: string;
+      broker_connection_id: string;
+      token_hash: string;
+      account_login: string;
+      broker_server: string;
+      last_sequence: string | number;
+    }>;
+    const row = rows[0];
+    if (!row || !this.safeDigestEquals(row.token_hash, this.digestToken(rawToken))) {
+      throw new UnauthorizedException('Connector authentication failed');
+    }
+    return {
+      connectorId: row.id,
+      userId: row.user_id,
+      brokerConnectionId: row.broker_connection_id,
+      accountLogin: row.account_login,
+      brokerServer: row.broker_server,
+      lastSequence: Number(row.last_sequence),
+    };
+  }
+
+  async recordHeartbeat(
+    binding: DirectMt5ConnectorBinding,
+    heartbeat: DirectMt5HeartbeatInput,
+  ): Promise<{ lastSequence: number }> {
+    if (
+      heartbeat.accountLogin !== binding.accountLogin ||
+      heartbeat.brokerServer !== binding.brokerServer
+    ) {
+      await this.dataSource.query(
+        `
+          UPDATE broker.direct_mt5_connectors
+          SET state = 'SUSPENDED', updated_at = now()
+          WHERE id = $1 AND state = 'ACTIVE'
+        `,
+        [binding.connectorId],
+      );
+      throw new ConflictException('MT5 terminal identity changed; connector suspended');
+    }
+    if (!Number.isSafeInteger(heartbeat.sequence) || heartbeat.sequence <= binding.lastSequence) {
+      throw new BadRequestException('Heartbeat sequence is stale or invalid');
+    }
+
+    const rows = (await this.dataSource.query(
+      `
+        UPDATE broker.direct_mt5_connectors
+        SET last_sequence = $2,
+            last_heartbeat_at = now(),
+            trade_allowed = $3,
+            updated_at = now()
+        WHERE id = $1
+          AND state = 'ACTIVE'
+          AND account_login = $4
+          AND broker_server = $5
+          AND last_sequence < $2
+        RETURNING id, last_sequence
+      `,
+      [
+        binding.connectorId,
+        heartbeat.sequence,
+        heartbeat.tradeAllowed,
+        binding.accountLogin,
+        binding.brokerServer,
+      ],
+    )) as Array<{ id: string; last_sequence: string | number }>;
+    const row = rows[0];
+    if (!row) {
+      throw new ConflictException('Heartbeat replay or concurrent connector activity detected');
+    }
+    return { lastSequence: Number(row.last_sequence) };
+  }
+
   digestToken(token: string): string {
     return this.digest('token', token);
+  }
+
+  private safeDigestEquals(expectedHex: string, actualHex: string): boolean {
+    if (!/^[0-9a-f]{64}$/i.test(expectedHex) || !/^[0-9a-f]{64}$/i.test(actualHex)) {
+      return false;
+    }
+    return timingSafeEqual(Buffer.from(expectedHex, 'hex'), Buffer.from(actualHex, 'hex'));
   }
 
   private digest(domain: 'pairing' | 'token', value: string): string {
