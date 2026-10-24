@@ -1,13 +1,21 @@
 """Research-only 5/20/60-minute opportunity challenger orchestration."""
 from __future__ import annotations
 
+import argparse
+import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from app.domain.training.model_qualification import (
+    CONFIDENCE_FLOOR,
     ModelVariant,
     QualificationExperiment,
+    _qualification_checkpoint_fingerprint,
+    run_nested_qualification_experiments,
 )
+from app.domain.models.multitimeframe_features import INITIAL_FOREX_UNIVERSE
+from app.domain.training.train_multitimeframe import load_and_prepare_corpora
 
 SHORT_HORIZON_MINUTES = (5, 20, 60)
 SHORT_HORIZON_MIN_PERIODS_PER_DAY = {
@@ -105,3 +113,128 @@ def summarize_horizon_report(
         "approved_for_paper": False,
         "approved_for_live": False,
     }
+
+
+def evaluate_short_horizon_corpora(
+    datasets: dict[str, str | Path],
+    *,
+    decision_time_before: str,
+    report_path: str | Path,
+    confidence_floor: float = CONFIDENCE_FLOOR,
+    max_splits: int = 5,
+) -> dict[str, Any]:
+    """Run the fixed challenger independently at 5/20/60 minutes."""
+    if set(datasets) != set(INITIAL_FOREX_UNIVERSE):
+        raise ValueError("short-horizon research requires the complete six-pair universe")
+    if not decision_time_before:
+        raise ValueError("decision_time_before is required")
+    if confidence_floor < CONFIDENCE_FLOOR:
+        raise ValueError("confidence floor must not be lowered below 0.60")
+
+    output = Path(report_path)
+    experiments = short_horizon_experiments()
+    horizons: dict[str, Any] = {}
+
+    for horizon in SHORT_HORIZON_MINUTES:
+        pooled, hashes = load_and_prepare_corpora(
+            datasets,
+            horizon_bars=horizon,
+            decision_time_before=decision_time_before,
+        )
+        fingerprint = _qualification_checkpoint_fingerprint(
+            dataset_sha256=hashes,
+            decision_time_before=decision_time_before,
+            horizon_bars=horizon,
+            confidence_floor=confidence_floor,
+            max_splits=max_splits,
+            experiments=experiments,
+        )
+        checkpoint_dir = output.parent / f"{output.stem}.h{horizon}.checkpoints"
+        qualification = run_nested_qualification_experiments(
+            pooled,
+            horizon_bars=horizon,
+            confidence_floor=confidence_floor,
+            max_splits=max_splits,
+            experiments=experiments,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_fingerprint=fingerprint,
+        )
+        qualification["dataset_sha256"] = hashes
+        qualification["qualification_checkpoint_fingerprint"] = fingerprint
+        qualification["qualification_decision_time_before"] = decision_time_before
+        summary = summarize_horizon_report(
+            qualification,
+            horizon_minutes=horizon,
+        )
+        horizons[f"{horizon}m"] = {
+            "summary": summary,
+            "qualification": qualification,
+        }
+
+    passed = all(
+        block["summary"]["short_horizon_research_passed"]
+        for block in horizons.values()
+    )
+    result: dict[str, Any] = {
+        "report_version": 1,
+        "purpose": "short_horizon_opportunity_research_only",
+        "model_family": "event_hybrid_dual_direction_payoff_risk",
+        "horizon_minutes": list(SHORT_HORIZON_MINUTES),
+        "confidence_floor": confidence_floor,
+        "decision_time_before": decision_time_before,
+        "short_horizon_research_passed": passed,
+        "horizons": horizons,
+        "governance": {
+            "shadow_only": True,
+            "approved_for_paper": False,
+            "approved_for_demo": False,
+            "approved_for_live": False,
+            "forced_trade_quota": False,
+        },
+    }
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(result, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    temporary.replace(output)
+    return {**result, "report_path": str(output)}
+
+
+def _parse_dataset_args(values: list[str]) -> dict[str, str]:
+    datasets: dict[str, str] = {}
+    for value in values:
+        instrument, separator, path = value.partition("=")
+        instrument = instrument.strip().upper()
+        if not separator or not instrument or not path.strip():
+            raise ValueError("--dataset must use INSTRUMENT=/path/to/corpus.csv")
+        if instrument in datasets:
+            raise ValueError(f"duplicate dataset for {instrument}")
+        datasets[instrument] = path.strip()
+    return datasets
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Evaluate the shadow-only 5/20/60-minute opportunity challenger"
+    )
+    parser.add_argument("--dataset", action="append", required=True)
+    parser.add_argument("--decision-time-before", required=True)
+    parser.add_argument("--report", required=True)
+    parser.add_argument("--max-splits", type=int, default=5)
+    parser.add_argument("--confidence-floor", type=float, default=CONFIDENCE_FLOOR)
+    args = parser.parse_args()
+    result = evaluate_short_horizon_corpora(
+        _parse_dataset_args(args.dataset),
+        decision_time_before=args.decision_time_before,
+        report_path=args.report,
+        confidence_floor=args.confidence_floor,
+        max_splits=args.max_splits,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True, default=str))
+
+
+if __name__ == "__main__":
+    main()

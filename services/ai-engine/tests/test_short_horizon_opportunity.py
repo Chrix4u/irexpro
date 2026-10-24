@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app.domain.training.short_horizon_opportunity import (
     SHORT_HORIZON_CHALLENGER_EXPERIMENT,
     SHORT_HORIZON_MIN_PERIODS_PER_DAY,
@@ -91,3 +93,104 @@ def test_summary_uses_outer_validation_duration_and_rejects_unknown_horizon() ->
         assert "unsupported short horizon" in str(exc).lower()
     else:
         raise AssertionError("unsupported horizon must fail closed")
+
+
+def test_three_horizon_runner_is_shadow_only_and_uses_fixed_matrix(tmp_path, monkeypatch) -> None:
+    import pandas as pd
+    import app.domain.training.short_horizon_opportunity as module
+
+    load_calls: list[dict] = []
+    run_calls: list[dict] = []
+
+    def fake_load(datasets, *, horizon_bars, decision_time_before):
+        load_calls.append(
+            {
+                "datasets": datasets,
+                "horizon_bars": horizon_bars,
+                "decision_time_before": decision_time_before,
+            }
+        )
+        return pd.DataFrame({"target": [0, 1]}), {"EURUSD": f"sha-{horizon_bars}"}
+
+    def fake_run(
+        dataset,
+        *,
+        horizon_bars,
+        confidence_floor,
+        max_splits,
+        experiments,
+        checkpoint_dir,
+        checkpoint_fingerprint,
+    ):
+        run_calls.append(
+            {
+                "horizon_bars": horizon_bars,
+                "confidence_floor": confidence_floor,
+                "max_splits": max_splits,
+                "experiments": experiments,
+                "checkpoint_dir": checkpoint_dir,
+                "checkpoint_fingerprint": checkpoint_fingerprint,
+            }
+        )
+        target = SHORT_HORIZON_MIN_PERIODS_PER_DAY[horizon_bars]
+        return _report(
+            research_passed=True,
+            periods=int(target),
+            hours=24,
+        )
+
+    monkeypatch.setattr(module, "load_and_prepare_corpora", fake_load)
+    monkeypatch.setattr(module, "run_nested_qualification_experiments", fake_run)
+    monkeypatch.setattr(
+        module,
+        "_qualification_checkpoint_fingerprint",
+        lambda **kwargs: f"fingerprint-{kwargs['horizon_bars']}",
+    )
+
+    datasets = {
+        pair: f"/tmp/{pair}_MTF.csv"
+        for pair in ("EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF")
+    }
+    output = tmp_path / "short-horizon.json"
+    result = module.evaluate_short_horizon_corpora(
+        datasets,
+        decision_time_before="2026-10-01T00:00:00Z",
+        report_path=output,
+        max_splits=3,
+    )
+
+    assert [call["horizon_bars"] for call in load_calls] == [5, 20, 60]
+    assert [call["horizon_bars"] for call in run_calls] == [5, 20, 60]
+    assert all(call["confidence_floor"] == 0.60 for call in run_calls)
+    assert all(call["max_splits"] == 3 for call in run_calls)
+    assert all(
+        [experiment.name for experiment in call["experiments"]]
+        == ["baseline", SHORT_HORIZON_CHALLENGER_EXPERIMENT]
+        for call in run_calls
+    )
+    assert all(
+        call["experiments"][1].mode == "event_hybrid_dual_direction_payoff_risk"
+        for call in run_calls
+    )
+    assert result["short_horizon_research_passed"] is True
+    assert set(result["horizons"]) == {"5m", "20m", "60m"}
+    assert result["governance"] == {
+        "shadow_only": True,
+        "approved_for_paper": False,
+        "approved_for_demo": False,
+        "approved_for_live": False,
+        "forced_trade_quota": False,
+    }
+    assert output.is_file()
+    assert output.with_suffix(".json.tmp").exists() is False
+
+
+def test_three_horizon_runner_rejects_partial_universe(tmp_path) -> None:
+    import app.domain.training.short_horizon_opportunity as module
+
+    with pytest.raises(ValueError, match="complete six-pair universe"):
+        module.evaluate_short_horizon_corpora(
+            {"EURUSD": "/tmp/EURUSD_MTF.csv"},
+            decision_time_before="2026-10-01T00:00:00Z",
+            report_path=tmp_path / "partial.json",
+        )
