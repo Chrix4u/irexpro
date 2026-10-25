@@ -13,7 +13,15 @@ class Mt5TerminalError(RuntimeError):
 class AccountIdentity:
     login: str
     server: str
+    company: str
+    environment: str
     currency: str | None
+    leverage: int
+    margin_mode: str
+    terminal_connected: bool
+    terminal_trade_allowed: bool
+    account_trade_allowed: bool
+    ea_trading_allowed: bool
     trade_allowed: bool
 
 
@@ -81,11 +89,40 @@ class MetaQuotesMt5Terminal:
         terminal = mt5.terminal_info()
         if account is None or terminal is None:
             raise Mt5TerminalError("MT5 terminal is not logged into a trading account")
+        trade_mode = int(getattr(account, "trade_mode", -1))
+        environment = (
+            "DEMO"
+            if trade_mode == int(getattr(mt5, "ACCOUNT_TRADE_MODE_DEMO", 0))
+            else "LIVE"
+        )
+        margin_mode_value = int(getattr(account, "margin_mode", -1))
+        margin_mode = {
+            int(getattr(mt5, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", 2)): "HEDGING",
+            int(getattr(mt5, "ACCOUNT_MARGIN_MODE_RETAIL_NETTING", 0)): "NETTING",
+            int(getattr(mt5, "ACCOUNT_MARGIN_MODE_EXCHANGE", 1)): "EXCHANGE",
+        }.get(margin_mode_value, "EXCHANGE")
+        terminal_connected = bool(getattr(terminal, "connected", False))
+        terminal_trade_allowed = bool(getattr(terminal, "trade_allowed", False))
+        account_trade_allowed = bool(getattr(account, "trade_allowed", False))
+        ea_trading_allowed = bool(getattr(account, "trade_expert", False))
         return AccountIdentity(
             login=str(account.login),
             server=str(account.server),
+            company=str(getattr(account, "company", "") or getattr(terminal, "company", "")),
+            environment=environment,
             currency=str(account.currency) if account.currency else None,
-            trade_allowed=bool(getattr(terminal, "trade_allowed", False)),
+            leverage=int(account.leverage),
+            margin_mode=margin_mode,
+            terminal_connected=terminal_connected,
+            terminal_trade_allowed=terminal_trade_allowed,
+            account_trade_allowed=account_trade_allowed,
+            ea_trading_allowed=ea_trading_allowed,
+            trade_allowed=(
+                terminal_connected
+                and terminal_trade_allowed
+                and account_trade_allowed
+                and ea_trading_allowed
+            ),
         )
 
     def shutdown(self) -> None:
