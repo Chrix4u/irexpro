@@ -145,6 +145,7 @@ import {
 import {
   PaperShadowLocalEdgePocketDecision,
   evaluatePaperShadowLocalEdgePocket,
+  isHighConvictionPaperShadowLocalEdgePocket,
 } from './paper-shadow-local-edge-pocket';
 import {
   PaperChampionDirectionPriorDecision,
@@ -203,6 +204,30 @@ export function isPaperLocalShadowEdgeScoutReason(
   reason: PaperOpportunityScoutDecision['reason'] | null | undefined,
 ): boolean {
   return reason === 'LOCAL_SHADOW_EDGE_SCOUT' || reason === 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT';
+}
+
+export function canHighConvictionLocalScoutOverrideRealisedRoute(input: {
+  fullSizePaperExecutionCandidate: boolean;
+  scoutEligible: boolean;
+  scoutReason: PaperOpportunityScoutDecision['reason'] | null | undefined;
+  scoutLotUpperBound: number | null | undefined;
+  localPocketHighConviction: boolean;
+  structuralRouteEligible: boolean;
+  pairSideEligible: boolean;
+  realisedRouteEligible: boolean | null;
+}): boolean {
+  return (
+    !input.fullSizePaperExecutionCandidate &&
+    input.scoutEligible &&
+    isPaperLocalShadowEdgeScoutReason(input.scoutReason) &&
+    Number.isFinite(input.scoutLotUpperBound) &&
+    Number(input.scoutLotUpperBound) > 0 &&
+    Number(input.scoutLotUpperBound) <= 0.1 &&
+    input.localPocketHighConviction &&
+    input.structuralRouteEligible &&
+    input.pairSideEligible &&
+    input.realisedRouteEligible === false
+  );
 }
 const PAPER_CHAMPION_MODEL_VERSION =
   'external-provider/irexpro-multimodel-ensemble-v1/paper-only-v1';
@@ -577,6 +602,7 @@ interface ExecutableCounterfactual {
   paperTrendPairSideReliabilityShadow: PaperTrendPairSideReliabilityShadowDecision | null;
   paperRealisedContinuationRouteReliability: PaperRealisedContinuationRouteReliabilityDecision | null;
   paperRealisedContinuationExecutionGate: PaperRealisedContinuationExecutionGateDecision | null;
+  paperLocalShadowRealisedRouteOverride: boolean;
   paperOpportunityScout: PaperOpportunityScoutDecision;
   paperShadowLocalEdgePocket: PaperShadowLocalEdgePocketDecision | null;
   paperExecutionRoute: ReturnType<typeof selectPaperExecutionRoute>;
@@ -2051,6 +2077,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             null;
           let paperRealisedContinuationExecutionGate: PaperRealisedContinuationExecutionGateDecision | null =
             null;
+          let paperLocalShadowRealisedRouteOverride = false;
           let normalPaperExecution = normalPaperExecutionCandidate;
           if (
             normalPaperExecutionCandidate &&
@@ -2069,7 +2096,32 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperTrendPairSideReliabilityShadow = reliabilityGate.pairSideShadow;
             paperRealisedContinuationRouteReliability = reliabilityGate.realisedContinuationRoute;
             paperRealisedContinuationExecutionGate = reliabilityGate.realisedExecutionGate;
-            if (!reliabilityGate.fullSizeEligible) normalPaperExecution = false;
+            paperLocalShadowRealisedRouteOverride =
+              canHighConvictionLocalScoutOverrideRealisedRoute({
+                fullSizePaperExecutionCandidate,
+                scoutEligible: paperOpportunityScout.eligible,
+                scoutReason: paperOpportunityScout.reason,
+                scoutLotUpperBound: paperOpportunityScout.lotUpperBound,
+                localPocketHighConviction: Boolean(
+                  paperShadowLocalEdgePocket &&
+                  isHighConvictionPaperShadowLocalEdgePocket(paperShadowLocalEdgePocket),
+                ),
+                structuralRouteEligible: reliabilityGate.route?.fullSizeEligible ?? true,
+                pairSideEligible: reliabilityGate.pairSide?.fullSizeEligible ?? true,
+                realisedRouteEligible:
+                  reliabilityGate.realisedExecutionGate?.fullSizeEligible ?? null,
+              });
+            if (!reliabilityGate.fullSizeEligible && !paperLocalShadowRealisedRouteOverride) {
+              normalPaperExecution = false;
+            }
+            if (paperLocalShadowRealisedRouteOverride) {
+              this.logger.warn(
+                `PAPER local shadow-edge scout ${best.instrument} ${best.direction} ` +
+                  `realisedRoute=OVERRIDDEN_MICRO_ONLY reason=HIGH_CONVICTION_LOCAL_EDGE ` +
+                  `lotCap=${paperOpportunityScout.lotUpperBound.toFixed(2)} ` +
+                  `broadPf=${reliabilityGate.realisedContinuationRoute?.profitFactor ?? 'n/a'}`,
+              );
+            }
           }
           const pairSideReliabilityDemoted = normalPaperExecutionCandidate && !normalPaperExecution;
           const canaryEvaluationState = rejectedEdgeCanaryEvaluationState({
@@ -2689,6 +2741,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperTrendPairSideReliabilityShadow,
             paperRealisedContinuationRouteReliability,
             paperRealisedContinuationExecutionGate,
+            paperLocalShadowRealisedRouteOverride,
             paperOpportunityScout,
             paperShadowLocalEdgePocket,
             paperExecutionRoute,
@@ -2905,6 +2958,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperTrendPairSideReliabilityShadow,
           paperRealisedContinuationRouteReliability,
           paperRealisedContinuationExecutionGate,
+          paperLocalShadowRealisedRouteOverride,
           paperOpportunityScout,
           paperShadowLocalEdgePocket,
           paperExecutionRoute,
@@ -3277,6 +3331,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               paperRealisedContinuationExecutionGate?.routeDemoted ?? false,
             paper_realised_continuation_route_reliability_pair_side_override:
               paperRealisedContinuationExecutionGate?.matureHealthyPairSideOverride ?? false,
+            paper_realised_continuation_route_reliability_local_shadow_micro_override:
+              paperLocalShadowRealisedRouteOverride,
             paper_realised_continuation_route_reliability_modifies_execution:
               paperRealisedContinuationRouteReliability != null,
             paper_realised_continuation_route_reliability_execution_authority:
