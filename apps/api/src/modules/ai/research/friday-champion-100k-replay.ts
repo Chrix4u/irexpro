@@ -238,11 +238,18 @@ function closeEpisode(
   };
 }
 
-export function replayPaperEpisode(
+export interface ReplayEpisodeState {
+  candidate: Candidate;
+  entry: ExecutableReplayQuote;
+  previous: ExecutableReplayQuote;
+  initialRiskPrice: number;
+  maxFavorableR: number;
+}
+
+export function startReplayPaperEpisode(
   candidate: Candidate,
   entryQuote: ReplayQuote,
-  futureQuotes: readonly ReplayQuote[],
-): ReplayEpisode {
+): ReplayEpisodeState {
   const entry = buildExecutableReplayQuote(
     candidate.instrument,
     candidate.direction,
@@ -255,131 +262,119 @@ export function replayPaperEpisode(
   const initialRiskPrice =
     candidate.direction === 'BUY' ? entry.executable - stopLoss : stopLoss - entry.executable;
   finitePositive(initialRiskPrice, 'INVALID_REPLAY_ENTRY_GEOMETRY');
+  return {
+    candidate,
+    entry,
+    previous: entry,
+    initialRiskPrice,
+    maxFavorableR: 0,
+  };
+}
 
-  let maxFavorableR = 0;
-  let previous = entry;
-  for (const rawQuote of futureQuotes) {
-    const observedAt = new Date(rawQuote.observedAt);
-    if (
-      !Number.isFinite(observedAt.getTime()) ||
-      observedAt.getTime() <= previous.observedAt.getTime()
-    ) {
-      throw new Error('INVALID_REPLAY_QUOTE_TIME');
-    }
-    if (observedAt.getTime() - previous.observedAt.getTime() !== 60_000) {
-      return closeEpisode(
-        candidate,
-        entry.observedAt,
-        entry.executable,
-        initialRiskPrice,
-        previous,
-        maxFavorableR,
-        'DATA_GAP',
-      );
-    }
-    const quote = buildExecutableReplayQuote(
-      candidate.instrument,
-      candidate.direction,
-      rawQuote.mid,
-      rawQuote.spread,
-      observedAt,
-    );
-    const r = currentR(candidate.direction, entry.executable, quote.executable, initialRiskPrice);
-    maxFavorableR = Math.max(maxFavorableR, r);
+export function finishReplayPaperEpisode(
+  state: ReplayEpisodeState,
+  reason: ReplayExitReason = 'DATA_END',
+): ReplayEpisode {
+  return closeEpisode(
+    state.candidate,
+    state.entry.observedAt,
+    state.entry.executable,
+    state.initialRiskPrice,
+    state.previous,
+    state.maxFavorableR,
+    reason,
+  );
+}
 
-    const stopTouched =
-      candidate.direction === 'BUY'
-        ? quote.executable <= candidate.stopLoss
-        : quote.executable >= candidate.stopLoss;
-    if (stopTouched) {
-      return closeEpisode(
-        candidate,
-        entry.observedAt,
-        entry.executable,
-        initialRiskPrice,
-        quote,
-        maxFavorableR,
-        'STOP_LOSS',
-      );
-    }
-    const targetTouched =
-      candidate.direction === 'BUY'
-        ? quote.executable >= candidate.takeProfit
-        : quote.executable <= candidate.takeProfit;
-    if (targetTouched) {
-      return closeEpisode(
-        candidate,
-        entry.observedAt,
-        entry.executable,
-        initialRiskPrice,
-        quote,
-        maxFavorableR,
-        'TAKE_PROFIT',
-      );
-    }
-
-    const riskUnit = '1.00000000';
-    const currentPnl = r.toFixed(8);
-    const maxFavorablePnl = maxFavorableR.toFixed(8);
-    const profitLock = evaluatePaperProfitLock({
-      maxFavorablePnl,
-      currentPnl,
-      initialRiskPnl: riskUnit,
-    });
-    if (profitLock.shouldClose) {
-      return closeEpisode(
-        candidate,
-        entry.observedAt,
-        entry.executable,
-        initialRiskPrice,
-        quote,
-        maxFavorableR,
-        'PROFIT_LOCK',
-      );
-    }
-
-    const elapsedMinutes = (quote.observedAt.getTime() - entry.observedAt.getTime()) / 60_000;
-    const timeToWork = evaluatePaperTimeToWork({
-      elapsedMinutes,
-      maxFavorablePnl,
-      currentPnl,
-      initialRiskPnl: riskUnit,
-      minimumHoldMinutes: 20,
-    });
-    if (timeToWork.shouldClose) {
-      return closeEpisode(
-        candidate,
-        entry.observedAt,
-        entry.executable,
-        initialRiskPrice,
-        quote,
-        maxFavorableR,
-        timeToWork.reason as ReplayExitReason,
-      );
-    }
-    if (elapsedMinutes >= 12 * 60) {
-      return closeEpisode(
-        candidate,
-        entry.observedAt,
-        entry.executable,
-        initialRiskPrice,
-        quote,
-        maxFavorableR,
-        'TIMEBOX_12H',
-      );
-    }
-    previous = quote;
+export function advanceReplayPaperEpisode(
+  state: ReplayEpisodeState,
+  rawQuote: ReplayQuote,
+): { state: ReplayEpisodeState; closed: ReplayEpisode | null } {
+  const observedAt = new Date(rawQuote.observedAt);
+  if (
+    !Number.isFinite(observedAt.getTime()) ||
+    observedAt.getTime() <= state.previous.observedAt.getTime()
+  ) {
+    throw new Error('INVALID_REPLAY_QUOTE_TIME');
+  }
+  if (observedAt.getTime() - state.previous.observedAt.getTime() !== 60_000) {
+    return { state, closed: finishReplayPaperEpisode(state, 'DATA_GAP') };
   }
 
-  return closeEpisode(
-    candidate,
-    entry.observedAt,
-    entry.executable,
-    initialRiskPrice,
-    previous,
-    maxFavorableR,
-    'DATA_END',
+  const quote = buildExecutableReplayQuote(
+    state.candidate.instrument,
+    state.candidate.direction,
+    rawQuote.mid,
+    rawQuote.spread,
+    observedAt,
   );
+  const r = currentR(
+    state.candidate.direction,
+    state.entry.executable,
+    quote.executable,
+    state.initialRiskPrice,
+  );
+  const maxFavorableR = Math.max(state.maxFavorableR, r);
+  const nextState: ReplayEpisodeState = { ...state, previous: quote, maxFavorableR };
+
+  const stopTouched =
+    state.candidate.direction === 'BUY'
+      ? quote.executable <= state.candidate.stopLoss
+      : quote.executable >= state.candidate.stopLoss;
+  if (stopTouched)
+    return { state: nextState, closed: finishReplayPaperEpisode(nextState, 'STOP_LOSS') };
+
+  const targetTouched =
+    state.candidate.direction === 'BUY'
+      ? quote.executable >= state.candidate.takeProfit
+      : quote.executable <= state.candidate.takeProfit;
+  if (targetTouched)
+    return { state: nextState, closed: finishReplayPaperEpisode(nextState, 'TAKE_PROFIT') };
+
+  const riskUnit = '1.00000000';
+  const currentPnl = r.toFixed(8);
+  const maxFavorablePnl = maxFavorableR.toFixed(8);
+  const profitLock = evaluatePaperProfitLock({
+    maxFavorablePnl,
+    currentPnl,
+    initialRiskPnl: riskUnit,
+  });
+  if (profitLock.shouldClose) {
+    return { state: nextState, closed: finishReplayPaperEpisode(nextState, 'PROFIT_LOCK') };
+  }
+
+  const elapsedMinutes = (quote.observedAt.getTime() - state.entry.observedAt.getTime()) / 60_000;
+  const timeToWork = evaluatePaperTimeToWork({
+    elapsedMinutes,
+    maxFavorablePnl,
+    currentPnl,
+    initialRiskPnl: riskUnit,
+    minimumHoldMinutes: 20,
+  });
+  if (timeToWork.shouldClose) {
+    return {
+      state: nextState,
+      closed: finishReplayPaperEpisode(nextState, timeToWork.reason as ReplayExitReason),
+    };
+  }
+  if (elapsedMinutes >= 12 * 60) {
+    return { state: nextState, closed: finishReplayPaperEpisode(nextState, 'TIMEBOX_12H') };
+  }
+  return { state: nextState, closed: null };
+}
+
+export function replayPaperEpisode(
+  candidate: Candidate,
+  entryQuote: ReplayQuote,
+  futureQuotes: readonly ReplayQuote[],
+): ReplayEpisode {
+  let state = startReplayPaperEpisode(candidate, entryQuote);
+  for (const rawQuote of futureQuotes) {
+    const advanced = advanceReplayPaperEpisode(state, rawQuote);
+    state = advanced.state;
+    if (advanced.closed) return advanced.closed;
+  }
+  return finishReplayPaperEpisode(state, 'DATA_END');
 }
 
 export interface ReplayEvidenceEpisode extends ReplayEpisode {

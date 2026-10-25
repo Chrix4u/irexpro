@@ -343,3 +343,30 @@ describe('Friday champion 100k replay metrics and folds', () => {
     expect(report.folds).toHaveLength(3);
   });
 });
+
+import {
+  advanceReplayPaperEpisode,
+  finishReplayPaperEpisode,
+  startReplayPaperEpisode,
+} from './friday-champion-100k-replay';
+
+describe('Friday champion 100k replay incremental lifecycle state', () => {
+  it('matches the batch lifecycle result when advanced one M1 quote at a time', () => {
+    const candidate = replayCandidate('BUY');
+    const entry = quote('2026-07-01T10:05:00Z', 1.1);
+    const path = [quote('2026-07-01T10:06:00Z', 1.1002), quote('2026-07-01T10:07:00Z', 1.1022)];
+    const batch = replayPaperEpisode(candidate, entry, path);
+
+    let state = startReplayPaperEpisode(candidate, entry);
+    let closed = null;
+    for (const next of path) {
+      const advanced = advanceReplayPaperEpisode(state, next);
+      state = advanced.state;
+      if (advanced.closed) {
+        closed = advanced.closed;
+        break;
+      }
+    }
+    expect(closed ?? finishReplayPaperEpisode(state, 'DATA_END')).toEqual(batch);
+  });
+});
