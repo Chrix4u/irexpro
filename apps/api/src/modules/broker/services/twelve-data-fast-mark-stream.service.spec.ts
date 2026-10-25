@@ -102,7 +102,39 @@ describe('TwelveDataFastMarkStreamService', () => {
     service.onModuleDestroy();
   });
 
-  it('subscribes only to the selected fast-mark pair and routes its price', () => {
+  it('subscribes all six PAPER forex pairs within the Basic eight-symbol WebSocket allowance', () => {
+    (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
+    const config = {
+      get: jest.fn((key: string, fallback?: unknown) => {
+        const values: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.fastMarkStreamEnabled': true,
+          'vpsForexScanner.fastMarkProvider': 'TWELVE_DATA',
+          'vpsForexScanner.apiKey': 'test-key',
+        };
+        return key in values ? values[key] : fallback;
+      }),
+    } as unknown as ConfigService;
+    const market = { updateStreamingMidQuote: jest.fn() } as unknown as LivePaperMarketDataService;
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const service = new TwelveDataFastMarkStreamService(config, market, paperState);
+
+    (service as unknown as { connect(): void }).connect();
+    const socket = FakeWebSocket.last!;
+    socket.emit('open');
+
+    const subscribe = JSON.parse(socket.sent[0]!) as {
+      action: string;
+      params: { symbols: string };
+    };
+    expect(subscribe).toEqual({
+      action: 'subscribe',
+      params: { symbols: 'EUR/USD,GBP/USD,USD/JPY,AUD/USD,USD/CAD,USD/CHF' },
+    });
+    service.onModuleDestroy();
+  });
+
+  it('routes an accepted price from the six-pair fast-mark subscription', () => {
     (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
     const config = {
       get: jest.fn((key: string, fallback?: unknown) => {
@@ -126,7 +158,7 @@ describe('TwelveDataFastMarkStreamService', () => {
       params: { symbols: string };
     };
     expect(subscribe.action).toBe('subscribe');
-    expect(subscribe.params.symbols).toBe('EUR/USD');
+    expect(subscribe.params.symbols).toBe('EUR/USD,GBP/USD,USD/JPY,AUD/USD,USD/CAD,USD/CHF');
 
     socket.emit('message', {
       data: JSON.stringify({ symbol: 'EUR/USD', price: '1.12345', timestamp: 1790875800 }),
@@ -143,7 +175,7 @@ describe('TwelveDataFastMarkStreamService', () => {
     expect(socket.closed).toBe(true);
   });
 
-  it('falls back to EUR/USD when the selected pair is rejected by the entitlement', () => {
+  it('keeps a rejected fast-mark symbol fail-closed without a fallback subscription', () => {
     (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
     const config = {
       get: jest.fn((key: string, fallback?: unknown) => {
@@ -158,12 +190,12 @@ describe('TwelveDataFastMarkStreamService', () => {
     const market = { updateStreamingMidQuote: jest.fn() } as unknown as LivePaperMarketDataService;
     const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
     const service = new TwelveDataFastMarkStreamService(config, market, paperState);
-    (service as unknown as { preferredProviderSymbol: string }).preferredProviderSymbol = 'USD/JPY';
-
     (service as unknown as { connect(): void }).connect();
     const socket = FakeWebSocket.last!;
     socket.emit('open');
-    expect(JSON.parse(socket.sent[0]!).params.symbols).toBe('USD/JPY');
+    expect(JSON.parse(socket.sent[0]!).params.symbols).toBe(
+      'EUR/USD,GBP/USD,USD/JPY,AUD/USD,USD/CAD,USD/CHF',
+    );
 
     socket.emit('message', {
       data: JSON.stringify({
@@ -172,7 +204,70 @@ describe('TwelveDataFastMarkStreamService', () => {
         fails: [{ symbol: 'USD/JPY' }],
       }),
     });
-    expect(JSON.parse(socket.sent[1]!).params.symbols).toBe('EUR/USD');
+    expect(socket.sent).toHaveLength(1);
+    service.onModuleDestroy();
+  });
+
+  it('bootstraps real M1 history for every accepted six-pair subscription symbol', async () => {
+    const values = Array.from({ length: 70 }, (_, index) => {
+      const timestamp = new Date(Date.UTC(2026, 9, 19, 10, 50 + index));
+      return {
+        datetime: timestamp.toISOString().slice(0, 19).replace('T', ' '),
+        open: '1.10000',
+        high: '1.10020',
+        low: '1.09980',
+        close: '1.10010',
+      };
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({ status: 'ok', values }),
+    });
+    jest.spyOn(globalThis, 'fetch').mockImplementation(fetchMock as typeof fetch);
+    const config = {
+      get: jest.fn((key: string, fallback?: unknown) => {
+        const configured: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.fastMarkStreamEnabled': true,
+          'vpsForexScanner.fastMarkProvider': 'TWELVE_DATA',
+          'vpsForexScanner.apiKey': 'test-key',
+          'vpsForexScanner.brokerConnectionId': 'paper-1',
+        };
+        return key in configured ? configured[key] : fallback;
+      }),
+    } as unknown as ConfigService;
+    const market = {
+      updateStreamingMidQuote: jest.fn(),
+      updateClosedM1Candles: jest.fn(),
+      hasContiguousM1History: jest.fn().mockReturnValue(true),
+    } as unknown as LivePaperMarketDataService;
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const service = new TwelveDataFastMarkStreamService(config, market, paperState);
+
+    await (service as unknown as { onMessage(raw: unknown): Promise<void> }).onMessage(
+      JSON.stringify({
+        event: 'subscribe-status',
+        success: [
+          { symbol: 'EUR/USD' },
+          { symbol: 'GBP/USD' },
+          { symbol: 'USD/JPY' },
+          { symbol: 'AUD/USD' },
+          { symbol: 'USD/CAD' },
+          { symbol: 'USD/CHF' },
+        ],
+        fails: [],
+      }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect((market.updateClosedM1Candles as jest.Mock).mock.calls.map((call) => call[0])).toEqual([
+      'EURUSD',
+      'GBPUSD',
+      'USDJPY',
+      'AUDUSD',
+      'USDCAD',
+      'USDCHF',
+    ]);
     service.onModuleDestroy();
   });
 
@@ -459,7 +554,7 @@ describe('TwelveDataFastMarkStreamService', () => {
     service.onModuleDestroy();
   });
 
-  it('does not bootstrap a rejected entitlement symbol before EUR/USD fallback is accepted', async () => {
+  it('does not bootstrap a rejected entitlement symbol', async () => {
     (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
