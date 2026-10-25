@@ -19,6 +19,26 @@ const M1_CLOSE_MAX_AGE_MS = 90_000;
 
 export type M1TacticalMarketDataAuthority = 'BROKER_NATIVE' | 'PAPER_PROVIDER_SIMULATION';
 
+export type M1TacticalMarketReadinessReason =
+  | 'READY'
+  | 'INVALID_INPUT'
+  | 'BROKER_M1_SOURCE_UNAVAILABLE'
+  | 'BROKER_M1_STALE'
+  | 'BROKER_SPREAD_UNAVAILABLE'
+  | 'BROKER_SPREAD_UNUSABLE'
+  | 'BROKER_FEATURE_CONTEXT_UNAVAILABLE'
+  | 'PAPER_CACHE_UNAVAILABLE'
+  | 'PAPER_M1_STALE'
+  | 'PAPER_SPREAD_UNAVAILABLE'
+  | 'PAPER_FEATURE_CONTEXT_UNAVAILABLE';
+
+export interface M1TacticalMarketReadiness {
+  ready: boolean;
+  reason: M1TacticalMarketReadinessReason;
+  authority: M1TacticalMarketDataAuthority | null;
+  observedAt: string;
+}
+
 export interface M1TacticalMarketSnapshot extends M1TacticalFeatureInput {
   connectionId: string;
   candleSource: string;
@@ -46,11 +66,36 @@ function singleM1Source(rows: OHLCV[]): string | null {
 
 @Injectable()
 export class M1TacticalMarketDataService {
+  private readonly readiness = new Map<string, M1TacticalMarketReadiness>();
+
   constructor(
     private readonly store: ProviderQuoteCandleStoreService,
     @Optional() private readonly config?: ConfigService,
     @Optional() private readonly paperMarket?: LivePaperMarketDataService,
   ) {}
+
+  getLastReadiness(connectionId: string, instrument: string): M1TacticalMarketReadiness | null {
+    return this.readiness.get(this.readinessKey(connectionId, instrument)) ?? null;
+  }
+
+  private setReadiness(
+    connectionId: string,
+    instrument: string,
+    reason: M1TacticalMarketReadinessReason,
+    authority: M1TacticalMarketDataAuthority | null,
+    observedAt: Date,
+  ): void {
+    this.readiness.set(this.readinessKey(connectionId, instrument), {
+      ready: reason === 'READY',
+      reason,
+      authority,
+      observedAt: observedAt.toISOString(),
+    });
+  }
+
+  private readinessKey(connectionId: string, instrument: string): string {
+    return `${connectionId.trim()}|${instrument.trim().toUpperCase()}`;
+  }
 
   async loadSnapshot(
     connectionId: string,
@@ -64,6 +109,13 @@ export class M1TacticalMarketDataService {
       !normalizedInstrument ||
       !Number.isFinite(decisionTime.getTime())
     ) {
+      this.setReadiness(
+        executionConnectionId,
+        normalizedInstrument,
+        'INVALID_INPUT',
+        null,
+        Number.isFinite(decisionTime.getTime()) ? decisionTime : new Date(),
+      );
       return null;
     }
 
@@ -98,12 +150,25 @@ export class M1TacticalMarketDataService {
     ]);
 
     const candleSource = singleM1Source(m1);
-    if (!candleSource) return null;
-    const m1CloseAgeMs = latestCloseAgeMs(m1, 1, decisionTime);
-    if (m1CloseAgeMs === null || m1CloseAgeMs < 0 || m1CloseAgeMs > M1_CLOSE_MAX_AGE_MS) {
+    if (!candleSource) {
+      this.setReadiness(
+        connectionId,
+        instrument,
+        'BROKER_M1_SOURCE_UNAVAILABLE',
+        null,
+        decisionTime,
+      );
       return null;
     }
-    if (!spreadQuote) return null;
+    const m1CloseAgeMs = latestCloseAgeMs(m1, 1, decisionTime);
+    if (m1CloseAgeMs === null || m1CloseAgeMs < 0 || m1CloseAgeMs > M1_CLOSE_MAX_AGE_MS) {
+      this.setReadiness(connectionId, instrument, 'BROKER_M1_STALE', null, decisionTime);
+      return null;
+    }
+    if (!spreadQuote) {
+      this.setReadiness(connectionId, instrument, 'BROKER_SPREAD_UNAVAILABLE', null, decisionTime);
+      return null;
+    }
     const spreadPrice = Number(spreadQuote.spread);
     const positiveSampleCount = Number(spreadQuote.positiveSampleCount);
     const latestPositiveSampleAt = spreadQuote.latestPositiveSampleAt.getTime();
@@ -117,6 +182,7 @@ export class M1TacticalMarketDataService {
       spreadAgeMs < 0 ||
       spreadAgeMs > ENSEMBLE_EXECUTION_SPREAD_MAX_AGE_MS
     ) {
+      this.setReadiness(connectionId, instrument, 'BROKER_SPREAD_UNUSABLE', null, decisionTime);
       return null;
     }
 
@@ -129,8 +195,18 @@ export class M1TacticalMarketDataService {
       h1,
       h4,
     };
-    if (!buildM1TacticalFeatures(featureInput)) return null;
+    if (!buildM1TacticalFeatures(featureInput)) {
+      this.setReadiness(
+        connectionId,
+        instrument,
+        'BROKER_FEATURE_CONTEXT_UNAVAILABLE',
+        null,
+        decisionTime,
+      );
+      return null;
+    }
 
+    this.setReadiness(connectionId, instrument, 'READY', 'BROKER_NATIVE', decisionTime);
     return {
       connectionId,
       ...featureInput,
@@ -152,7 +228,10 @@ export class M1TacticalMarketDataService {
     instrument: string,
     decisionTime: Date,
   ): M1TacticalMarketSnapshot | null {
-    if (!this.paperMarket) return null;
+    if (!this.paperMarket) {
+      this.setReadiness(connectionId, instrument, 'PAPER_CACHE_UNAVAILABLE', null, decisionTime);
+      return null;
+    }
     let m1: OHLCV[];
     let m5: OHLCV[];
     let m15: OHLCV[];
@@ -165,10 +244,12 @@ export class M1TacticalMarketDataService {
       h1 = this.paperMarket.getOHLCV(instrument, 'H1', CONTEXT_HISTORY_COUNT, connectionId);
       h4 = this.paperMarket.getOHLCV(instrument, 'H4', CONTEXT_HISTORY_COUNT, connectionId);
     } catch {
+      this.setReadiness(connectionId, instrument, 'PAPER_CACHE_UNAVAILABLE', null, decisionTime);
       return null;
     }
     const m1CloseAgeMs = latestCloseAgeMs(m1, 1, decisionTime);
     if (m1CloseAgeMs === null || m1CloseAgeMs < 0 || m1CloseAgeMs > M1_CLOSE_MAX_AGE_MS) {
+      this.setReadiness(connectionId, instrument, 'PAPER_M1_STALE', null, decisionTime);
       return null;
     }
     const paperSimulationSpreadPrice = this.paperMarket.getPaperFallbackSpread(
@@ -176,6 +257,7 @@ export class M1TacticalMarketDataService {
       connectionId,
     );
     if (!Number.isFinite(paperSimulationSpreadPrice) || paperSimulationSpreadPrice <= 0) {
+      this.setReadiness(connectionId, instrument, 'PAPER_SPREAD_UNAVAILABLE', null, decisionTime);
       return null;
     }
     const featureInput: M1TacticalFeatureInput = {
@@ -187,8 +269,18 @@ export class M1TacticalMarketDataService {
       h1,
       h4,
     };
-    if (!buildM1TacticalFeatures(featureInput)) return null;
+    if (!buildM1TacticalFeatures(featureInput)) {
+      this.setReadiness(
+        connectionId,
+        instrument,
+        'PAPER_FEATURE_CONTEXT_UNAVAILABLE',
+        null,
+        decisionTime,
+      );
+      return null;
+    }
 
+    this.setReadiness(connectionId, instrument, 'READY', 'PAPER_PROVIDER_SIMULATION', decisionTime);
     return {
       connectionId,
       ...featureInput,

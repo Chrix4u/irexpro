@@ -88,7 +88,18 @@ function harness(options: { marketDataErrorFor?: string; warm?: boolean } = {}) 
     if (options.marketDataErrorFor === instrument) throw new Error('M1 data failure');
     return options.warm === false ? null : snapshot(instrument, at);
   });
-  const marketData = { loadSnapshot } as unknown as M1TacticalMarketDataService;
+  const getLastReadiness = jest.fn((_connectionId: string, instrument: string) =>
+    options.warm === false
+      ? {
+          ready: false,
+          reason: 'PAPER_M1_STALE',
+          authority: null,
+          observedAt: OPEN_NOW.toISOString(),
+          instrument,
+        }
+      : null,
+  );
+  const marketData = { loadSnapshot, getLastReadiness } as unknown as M1TacticalMarketDataService;
   const assess = jest.fn().mockResolvedValue({ state: 'CLEAR' });
   const macro = { assess } as unknown as MacroEventRiskService;
   const recordDecision = jest.fn(async (value: any) => ({
@@ -120,6 +131,7 @@ function harness(options: { marketDataErrorFor?: string; warm?: boolean } = {}) 
   return {
     service,
     loadSnapshot,
+    getLastReadiness,
     assess,
     recordDecision,
     loadRoutePairSideEvidence,
@@ -168,6 +180,28 @@ describe('M1TacticalSchedulerService shadow phase', () => {
     const h = harness({ warm: false });
     await h.service.runOnce(OPEN_NOW);
     expect(h.loadSnapshot).toHaveBeenCalledTimes(6);
+    expect(h.recordDecision).not.toHaveBeenCalled();
+  });
+
+  it('surfaces per-pair readiness when warm history is unavailable', async () => {
+    const h = harness({ warm: false });
+
+    await h.service.runOnce(OPEN_NOW);
+
+    expect(h.service.getStatus()).toEqual(
+      expect.objectContaining({
+        marketReadiness: expect.objectContaining({
+          EURUSD: expect.objectContaining({
+            ready: false,
+            reason: 'PAPER_M1_STALE',
+          }),
+          USDJPY: expect.objectContaining({
+            ready: false,
+            reason: 'PAPER_M1_STALE',
+          }),
+        }),
+      }),
+    );
     expect(h.recordDecision).not.toHaveBeenCalled();
   });
 
