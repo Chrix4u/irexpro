@@ -1,10 +1,24 @@
 import { buildPaperChampionEvidence } from './paper-champion-evidence';
 
-const {
-  runPaperChampionEvidenceAudit,
-} = require('../../../scripts/audit-paper-champion-evidence.cjs') as {
-  runPaperChampionEvidenceAudit: (input: Record<string, unknown>) => Promise<Record<string, any>>;
+interface AuditReport {
+  artifact: string;
+  mode: string;
+  generatedAt: string;
+  modifiesExecution: boolean;
+  approvedForDemo: boolean;
+  approvedForLive: boolean;
+  forward: { champion: { metrics: { trades: number } } };
+  research: {
+    genericSixPair: { verdict: string };
+    brokerNativeProspective: { verdict: string; nextAction: string };
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const auditRunner = require('../../../scripts/audit-paper-champion-evidence.cjs') as {
+  runPaperChampionEvidenceAudit: (input: Record<string, unknown>) => Promise<AuditReport>;
 };
+const { runPaperChampionEvidenceAudit } = auditRunner;
 
 const CHAMPION = 'external-provider/irexpro-multimodel-ensemble-v1/paper-only-v1';
 const PAIRS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'];

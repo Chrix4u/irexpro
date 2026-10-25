@@ -171,8 +171,8 @@ export function buildPaperChampionEvidence(
   );
   const positiveInstrumentFraction =
     options.expectedInstruments.length > 0
-      ? options.expectedInstruments.filter((instrument) => positiveInstruments.has(instrument)).length /
-        options.expectedInstruments.length
+      ? options.expectedInstruments.filter((instrument) => positiveInstruments.has(instrument))
+          .length / options.expectedInstruments.length
       : 0;
   const profitFactorPass =
     championMetrics.grossLoss === 0
@@ -189,7 +189,8 @@ export function buildPaperChampionEvidence(
 
   const compatiblePolicies = new Set(options.compatiblePolicyVersions);
   const compatibleRows = championRows.filter(
-    (row) => row.decisionPolicyVersion !== null && compatiblePolicies.has(row.decisionPolicyVersion),
+    (row) =>
+      row.decisionPolicyVersion !== null && compatiblePolicies.has(row.decisionPolicyVersion),
   );
   const compatibleGroups = new Map<string, PaperChampionTradeEvidenceRow[]>();
   for (const row of compatibleRows) {

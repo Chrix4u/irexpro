@@ -36,11 +36,11 @@
 - Consumes: sanitized trade rows and the compatible policy-version list.
 - Produces: `buildPaperChampionEvidence(...)` with champion checks and grouped realised metrics.
 
-- [ ] **Step 1: Write failing tests** for champion qualification, grouping, zero-loss PF, and stale-policy exclusion.
-- [ ] **Step 2: Run focused Jest and verify RED.**
-- [ ] **Step 3: Implement the minimum pure summarizer.**
-- [ ] **Step 4: Run focused Jest and verify GREEN.**
-- [ ] **Step 5: Commit the pure summarizer.**
+- [x] **Step 1: Write failing tests** for champion qualification, grouping, zero-loss PF, and stale-policy exclusion.
+- [x] **Step 2: Run focused Jest and verify RED.**
+- [x] **Step 3: Implement the minimum pure summarizer.**
+- [x] **Step 4: Run focused Jest and verify GREEN.**
+- [x] **Step 5: Commit the pure summarizer.**
 
 ### Task 2: Read-only evidence audit runner
 
@@ -52,11 +52,11 @@
 - Consumes: PostgreSQL PAPER rows, `buildPaperChampionEvidence`, frozen six-pair summary JSON, frozen v84 prospective JSON.
 - Produces: one sanitized `friday-champion-evidence-v1` JSON object.
 
-- [ ] **Step 1: Write failing runner tests** with an injected fake client and frozen fixture-shaped objects.
-- [ ] **Step 2: Run focused Jest and verify RED.**
-- [ ] **Step 3: Implement repeatable-read read-only runner and explicit research-file validation.**
-- [ ] **Step 4: Run focused Jest and verify GREEN.**
-- [ ] **Step 5: Commit the runner.**
+- [x] **Step 1: Write failing runner tests** with an injected fake client and frozen fixture-shaped objects.
+- [x] **Step 2: Run focused Jest and verify RED.**
+- [x] **Step 3: Implement repeatable-read read-only runner and explicit research-file validation.**
+- [x] **Step 4: Run focused Jest and verify GREEN.**
+- [x] **Step 5: Commit the runner.**
 
 ### Task 3: Freeze current VPS evidence
 
@@ -69,8 +69,20 @@
 - Consumes: exact clean branch code plus read-only VPS data and frozen research artifacts.
 - Produces: immutable sanitized evidence for the next market-open decision.
 
-- [ ] **Step 1: Build the API and run the read-only audit against VPS data.**
-- [ ] **Step 2: Validate that the JSON contains no prohibited identifiers/secrets.**
-- [ ] **Step 3: Freeze the JSON and SHA-256.**
-- [ ] **Step 4: Run focused tests, `git diff --check`, and API build.**
-- [ ] **Step 5: Commit the frozen evidence and mark this plan complete.**
+- [x] **Step 1: Build the API and run the read-only audit against VPS data.**
+- [x] **Step 2: Validate that the JSON contains no prohibited identifiers/secrets.**
+- [x] **Step 3: Freeze the JSON and SHA-256.**
+- [x] **Step 4: Run focused tests, `git diff --check`, and API build.**
+- [x] **Step 5: Commit the frozen evidence and mark this plan complete.**
+
+## Verification Record
+
+- Focused champion/control verification: 4 suites, 34 tests passed.
+- Full API verification: 327 executed suites passed; 4,775 executed tests passed; 2 suites / 13 tests intentionally skipped; exit code 0 with Jest `--forceExit` after an existing open-handle shutdown issue.
+- API build passed.
+- ESLint passed for the new TypeScript evidence files.
+- `node --check` passed for the read-only CJS runner.
+- `git diff --check` passed.
+- Frozen JSON contains no UUID-like values or identifier-like keys and its SHA-256 verifies.
+- A fresh-worktree sqlite3 native binary required a newer glibc than the VPS; verification used the same sqlite3 6.0.1 native binary from the working staging install. This touched only untracked `node_modules`, not source or evidence.
+- Trading authority remains unchanged.
