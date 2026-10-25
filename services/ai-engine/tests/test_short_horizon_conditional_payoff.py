@@ -232,3 +232,208 @@ def test_pair_expert_rejects_missing_exact_pair() -> None:
             min_conditional_fit_rows=20,
             min_conditional_early_rows=5,
         )
+
+
+def _payoff_score_fixture(
+    selected_expected_net: np.ndarray,
+    predicted_long: np.ndarray,
+):
+    from app.domain.training.short_horizon_conditional_payoff import ConditionalPayoffScore
+
+    selected_expected_net = np.asarray(selected_expected_net, dtype=float)
+    predicted_long = np.asarray(predicted_long, dtype=bool)
+    zeros = np.zeros(len(selected_expected_net), dtype=float)
+    ones = np.ones(len(selected_expected_net), dtype=float)
+    return ConditionalPayoffScore(
+        long_expected_favorable=zeros.copy(),
+        long_expected_adverse=zeros.copy(),
+        short_expected_favorable=zeros.copy(),
+        short_expected_adverse=zeros.copy(),
+        long_expected_net=np.where(predicted_long, selected_expected_net, -selected_expected_net),
+        short_expected_net=np.where(predicted_long, -selected_expected_net, selected_expected_net),
+        predicted_long=predicted_long,
+        selected_expected_favorable=ones,
+        selected_expected_adverse=np.full(len(selected_expected_net), 0.5),
+        selected_expected_net=selected_expected_net,
+        selected_payoff_ratio=np.full(len(selected_expected_net), 2.0),
+    )
+
+
+def _realized_sides(
+    selected_realized_bps: np.ndarray,
+    predicted_long: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    selected = np.asarray(selected_realized_bps, dtype=float)
+    predicted_long = np.asarray(predicted_long, dtype=bool)
+    return (
+        np.where(predicted_long, selected, -np.abs(selected)),
+        np.where(predicted_long, -np.abs(selected), selected),
+    )
+
+
+def test_payoff_calibration_discovers_profitable_top_score_tail() -> None:
+    from app.domain.training.short_horizon_conditional_payoff import (
+        select_conditional_payoff_calibration,
+    )
+
+    n = 1000
+    selected_expected_net = np.linspace(0.01, 1.0, n)
+    predicted_long = np.arange(n) % 2 == 0
+    selected_realized = np.full(n, -0.30, dtype=float)
+    top = np.arange(n) >= 800
+    selected_realized[top] = 1.0
+    selected_realized[np.arange(n) >= 800] = np.where(
+        np.arange(n)[top] % 10 == 0,
+        -0.20,
+        selected_realized[top],
+    )
+    long_bps, short_bps = _realized_sides(selected_realized, predicted_long)
+
+    calibration = select_conditional_payoff_calibration(
+        _payoff_score_fixture(selected_expected_net, predicted_long),
+        long_bps,
+        short_bps,
+        min_rows=100,
+    )
+
+    assert calibration.passed is True
+    assert calibration.reason == "CALIBRATED"
+    assert calibration.min_expected_net is not None
+    assert 0.05 <= calibration.density <= 0.25
+    assert calibration.mean_realized_bps > 0.0
+    assert calibration.profit_factor is not None
+    assert calibration.profit_factor >= 1.10
+    assert calibration.long_fraction >= 0.05
+    assert calibration.short_fraction >= 0.05
+
+
+def test_payoff_calibration_rejects_high_score_tail_with_negative_economics() -> None:
+    from app.domain.training.short_horizon_conditional_payoff import (
+        select_conditional_payoff_calibration,
+    )
+
+    n = 1000
+    selected_expected_net = np.linspace(0.01, 1.0, n)
+    predicted_long = np.arange(n) % 2 == 0
+    long_bps, short_bps = _realized_sides(
+        np.full(n, -0.25, dtype=float), predicted_long
+    )
+
+    calibration = select_conditional_payoff_calibration(
+        _payoff_score_fixture(selected_expected_net, predicted_long),
+        long_bps,
+        short_bps,
+        min_rows=100,
+    )
+
+    assert calibration.passed is False
+    assert calibration.reason == "NO_ECONOMIC_SCORE_TAIL"
+
+
+def test_payoff_calibration_rejects_one_sided_activation() -> None:
+    from app.domain.training.short_horizon_conditional_payoff import (
+        select_conditional_payoff_calibration,
+    )
+
+    n = 1000
+    selected_expected_net = np.linspace(0.01, 1.0, n)
+    predicted_long = np.ones(n, dtype=bool)
+    long_bps = np.full(n, 1.0, dtype=float)
+    short_bps = np.full(n, -0.5, dtype=float)
+
+    calibration = select_conditional_payoff_calibration(
+        _payoff_score_fixture(selected_expected_net, predicted_long),
+        long_bps,
+        short_bps,
+        min_rows=100,
+    )
+
+    assert calibration.passed is False
+    assert calibration.reason == "NO_ECONOMIC_SCORE_TAIL"
+
+
+class _ConstantClassifier:
+    def __init__(self, positive: float) -> None:
+        self.positive = positive
+
+    def predict_proba(self, features: pd.DataFrame) -> np.ndarray:
+        positive = np.full(len(features), self.positive, dtype=float)
+        return np.column_stack([1.0 - positive, positive])
+
+
+class _ConstantRegressor:
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+    def predict(self, features: pd.DataFrame) -> np.ndarray:
+        return np.full(len(features), self.value, dtype=float)
+
+
+def _routing_expert(*, passed: bool = True):
+    from app.domain.training.short_horizon_conditional_payoff import (
+        ConditionalPayoffCalibration,
+        ConditionalPayoffPairExpert,
+        ConditionalSeverityModels,
+    )
+
+    calibration = ConditionalPayoffCalibration(
+        passed=passed,
+        reason="CALIBRATED" if passed else "NO_ECONOMIC_SCORE_TAIL",
+        min_expected_net=0.50 if passed else None,
+        active_rows=200 if passed else 0,
+        density=0.20 if passed else 0.0,
+        mean_realized_bps=0.8 if passed else 0.0,
+        profit_factor=1.5 if passed else None,
+        profit_throughput_bps=0.16 if passed else 0.0,
+        long_fraction=0.5 if passed else 0.0,
+        short_fraction=0.5 if passed else 0.0,
+    )
+    return ConditionalPayoffPairExpert(
+        instrument="EURUSD",
+        long_model=_ConstantClassifier(0.40),
+        short_model=_ConstantClassifier(0.60),
+        severity_models=ConditionalSeverityModels(
+            long_favorable=_ConstantRegressor(3.0),
+            long_adverse=_ConstantRegressor(0.5),
+            short_favorable=_ConstantRegressor(0.8),
+            short_adverse=_ConstantRegressor(2.0),
+        ),
+        feature_columns=("feature",),
+        calibration=calibration,
+    )
+
+
+def test_payoff_router_uses_expected_net_side_and_pair_calibration() -> None:
+    from app.domain.training.short_horizon_conditional_payoff import (
+        route_conditional_payoff_predictions,
+    )
+
+    frame = pd.DataFrame({"instrument": ["EURUSD"], "feature": [1.0]})
+    routed = route_conditional_payoff_predictions(frame, {"EURUSD": _routing_expert()})
+
+    assert routed["long_probability"].tolist() == pytest.approx([0.40])
+    assert routed["short_probability"].tolist() == pytest.approx([0.60])
+    assert routed["predicted_long"].tolist() == [True]
+    assert routed["selected_expected_net"].tolist() == pytest.approx([0.90])
+    assert routed["active_trade"].tolist() == [True]
+    assert routed["action"].tolist() == ["BUY"]
+    assert routed["route_reason"].tolist() == ["CONDITIONAL_PAYOFF_SIGNAL"]
+
+
+def test_payoff_router_fails_closed_for_missing_or_failed_pair_calibration() -> None:
+    from app.domain.training.short_horizon_conditional_payoff import (
+        route_conditional_payoff_predictions,
+    )
+
+    frame = pd.DataFrame({"instrument": ["EURUSD"], "feature": [1.0]})
+    missing = route_conditional_payoff_predictions(frame, {})
+    failed = route_conditional_payoff_predictions(
+        frame, {"EURUSD": _routing_expert(passed=False)}
+    )
+
+    assert missing["active_trade"].tolist() == [False]
+    assert missing["action"].tolist() == ["ABSTAIN"]
+    assert missing["route_reason"].tolist() == ["MISSING_PAIR_EXPERT"]
+    assert failed["active_trade"].tolist() == [False]
+    assert failed["action"].tolist() == ["ABSTAIN"]
+    assert failed["route_reason"].tolist() == ["PAIR_CALIBRATION_FAILED"]

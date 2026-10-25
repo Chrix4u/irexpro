@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,6 +12,8 @@ from app.domain.training.model_qualification import ModelVariant, _regression_mo
 from app.domain.training.short_horizon_barrier_calibrated import (
     _barrier_classifier,
     _binary_class_weights,
+    _positive_probability,
+    _profit_factor,
     _with_side_targets,
 )
 from app.domain.training.train_multitimeframe import (
@@ -39,12 +41,27 @@ class ConditionalSeverityModels:
 
 
 @dataclass(frozen=True)
+class ConditionalPayoffCalibration:
+    passed: bool
+    reason: str
+    min_expected_net: float | None
+    active_rows: int
+    density: float
+    mean_realized_bps: float
+    profit_factor: float | None
+    profit_throughput_bps: float
+    long_fraction: float
+    short_fraction: float
+
+
+@dataclass(frozen=True)
 class ConditionalPayoffPairExpert:
     instrument: str
     long_model: Any
     short_model: Any
     severity_models: ConditionalSeverityModels
     feature_columns: tuple[str, ...]
+    calibration: ConditionalPayoffCalibration | None = None
 
 
 @dataclass(frozen=True)
@@ -246,6 +263,249 @@ def fit_pair_conditional_payoff_expert(
         ),
         feature_columns=feature_columns,
     )
+
+
+CALIBRATION_SCORE_QUANTILES = (0.75, 0.80, 0.85, 0.90, 0.95)
+CALIBRATION_MIN_ROWS = 200
+CALIBRATION_MIN_DENSITY = 0.05
+CALIBRATION_MAX_DENSITY = 0.25
+CALIBRATION_MIN_SIDE_FRACTION = 0.05
+CALIBRATION_MIN_PROFIT_FACTOR = 1.10
+
+
+def _failed_calibration(reason: str) -> ConditionalPayoffCalibration:
+    return ConditionalPayoffCalibration(
+        passed=False,
+        reason=reason,
+        min_expected_net=None,
+        active_rows=0,
+        density=0.0,
+        mean_realized_bps=0.0,
+        profit_factor=None,
+        profit_throughput_bps=0.0,
+        long_fraction=0.0,
+        short_fraction=0.0,
+    )
+
+
+def _predict_nonnegative_severity(model: Any, features: pd.DataFrame) -> np.ndarray:
+    prediction = np.asarray(model.predict(features), dtype=float)
+    if prediction.ndim != 1 or len(prediction) != len(features):
+        raise ValueError("conditional severity model must return one value per row")
+    if not np.isfinite(prediction).all():
+        raise ValueError("conditional severity predictions must be finite")
+    return np.maximum(prediction, 0.0)
+
+
+def _score_pair_expert(
+    frame: pd.DataFrame,
+    expert: ConditionalPayoffPairExpert,
+) -> ConditionalPayoffScore:
+    missing = [column for column in expert.feature_columns if column not in frame.columns]
+    if missing:
+        raise ValueError(f"conditional payoff frame missing features: {missing}")
+    features = frame[list(expert.feature_columns)]
+    long_probability = _positive_probability(expert.long_model, features)
+    short_probability = _positive_probability(expert.short_model, features)
+    severity = expert.severity_models
+    return score_conditional_payoff(
+        long_probability=long_probability,
+        short_probability=short_probability,
+        long_favorable_severity=_predict_nonnegative_severity(
+            severity.long_favorable, features
+        ),
+        long_adverse_severity=_predict_nonnegative_severity(
+            severity.long_adverse, features
+        ),
+        short_favorable_severity=_predict_nonnegative_severity(
+            severity.short_favorable, features
+        ),
+        short_adverse_severity=_predict_nonnegative_severity(
+            severity.short_adverse, features
+        ),
+    )
+
+
+def select_conditional_payoff_calibration(
+    score: ConditionalPayoffScore,
+    realized_long_bps: np.ndarray | Iterable[float],
+    realized_short_bps: np.ndarray | Iterable[float],
+    *,
+    score_quantiles: tuple[float, ...] = CALIBRATION_SCORE_QUANTILES,
+    min_rows: int = CALIBRATION_MIN_ROWS,
+    min_density: float = CALIBRATION_MIN_DENSITY,
+    max_density: float = CALIBRATION_MAX_DENSITY,
+    min_side_fraction: float = CALIBRATION_MIN_SIDE_FRACTION,
+    min_profit_factor: float = CALIBRATION_MIN_PROFIT_FACTOR,
+) -> ConditionalPayoffCalibration:
+    selected_expected_net = _as_vector(score.selected_expected_net)
+    predicted_long = np.asarray(score.predicted_long, dtype=bool)
+    long_bps = _as_vector(realized_long_bps)
+    short_bps = _as_vector(realized_short_bps)
+    lengths = {
+        len(selected_expected_net),
+        len(predicted_long),
+        len(long_bps),
+        len(short_bps),
+    }
+    if len(lengths) != 1:
+        raise ValueError("conditional payoff calibration inputs must have equal lengths")
+    rows = len(selected_expected_net)
+    if rows < min_rows:
+        return _failed_calibration("INSUFFICIENT_CALIBRATION_ROWS")
+    if not all(
+        np.isfinite(values).all()
+        for values in (selected_expected_net, long_bps, short_bps)
+    ):
+        return _failed_calibration("NON_FINITE_CALIBRATION_INPUT")
+    if (
+        not score_quantiles
+        or min_rows < 1
+        or not (0.0 <= min_density <= max_density <= 1.0)
+        or not (0.0 <= min_side_fraction <= 0.5)
+        or min_profit_factor <= 0.0
+        or any(not 0.0 < float(value) < 1.0 for value in score_quantiles)
+    ):
+        raise ValueError("invalid conditional payoff calibration policy")
+
+    thresholds = sorted(
+        {
+            max(0.0, float(np.quantile(selected_expected_net, float(quantile))))
+            for quantile in score_quantiles
+        }
+    )
+    candidates: list[ConditionalPayoffCalibration] = []
+    for threshold in thresholds:
+        active = (selected_expected_net >= threshold) & (selected_expected_net > 0.0)
+        active_rows = int(active.sum())
+        if active_rows < min_rows:
+            continue
+        density = active_rows / rows
+        if density < min_density or density > max_density:
+            continue
+        active_long = predicted_long[active]
+        long_fraction = float(active_long.mean())
+        short_fraction = 1.0 - long_fraction
+        if long_fraction < min_side_fraction or short_fraction < min_side_fraction:
+            continue
+        selected_realized = np.where(
+            active_long,
+            long_bps[active],
+            short_bps[active],
+        )
+        mean_realized_bps = float(selected_realized.mean())
+        profit_factor = _profit_factor(selected_realized)
+        if mean_realized_bps <= 0.0:
+            continue
+        if (
+            profit_factor is None
+            or not np.isfinite(profit_factor)
+            or float(profit_factor) < min_profit_factor
+        ):
+            continue
+        candidates.append(
+            ConditionalPayoffCalibration(
+                passed=True,
+                reason="CALIBRATED",
+                min_expected_net=threshold,
+                active_rows=active_rows,
+                density=density,
+                mean_realized_bps=mean_realized_bps,
+                profit_factor=float(profit_factor),
+                profit_throughput_bps=mean_realized_bps * density,
+                long_fraction=long_fraction,
+                short_fraction=short_fraction,
+            )
+        )
+
+    if not candidates:
+        return _failed_calibration("NO_ECONOMIC_SCORE_TAIL")
+    return max(
+        candidates,
+        key=lambda candidate: (
+            candidate.profit_throughput_bps,
+            candidate.profit_factor or 0.0,
+            candidate.density,
+            candidate.min_expected_net or 0.0,
+        ),
+    )
+
+
+def route_conditional_payoff_predictions(
+    frame: pd.DataFrame,
+    experts_by_instrument: Mapping[str, ConditionalPayoffPairExpert],
+) -> pd.DataFrame:
+    if "instrument" not in frame.columns:
+        raise ValueError("conditional payoff routing requires instrument identity")
+    result = frame.copy()
+    for column in (
+        "long_probability",
+        "short_probability",
+        "long_expected_net",
+        "short_expected_net",
+        "selected_expected_favorable",
+        "selected_expected_adverse",
+        "selected_expected_net",
+        "selected_payoff_ratio",
+    ):
+        result[column] = np.nan
+    result["predicted_long"] = False
+    result["active_trade"] = False
+    result["action"] = "ABSTAIN"
+    result["route_reason"] = "MISSING_PAIR_EXPERT"
+
+    canonical = {str(key).upper(): expert for key, expert in experts_by_instrument.items()}
+    instruments = result["instrument"].astype(str).str.upper()
+    for instrument in instruments.unique():
+        index = result.index[instruments == instrument]
+        expert = canonical.get(instrument)
+        if expert is None or expert.instrument.upper() != instrument:
+            continue
+        calibration = expert.calibration
+        if (
+            calibration is None
+            or not calibration.passed
+            or calibration.min_expected_net is None
+        ):
+            result.loc[index, "route_reason"] = "PAIR_CALIBRATION_FAILED"
+            continue
+        missing = [column for column in expert.feature_columns if column not in result.columns]
+        if missing:
+            result.loc[index, "route_reason"] = "MISSING_PAIR_FEATURES"
+            continue
+
+        pair_frame = result.loc[index]
+        score = _score_pair_expert(pair_frame, expert)
+        features = pair_frame[list(expert.feature_columns)]
+        long_probability = _positive_probability(expert.long_model, features)
+        short_probability = _positive_probability(expert.short_model, features)
+        active = (
+            (score.selected_expected_net >= calibration.min_expected_net)
+            & (score.selected_expected_net > 0.0)
+        )
+
+        result.loc[index, "long_probability"] = long_probability
+        result.loc[index, "short_probability"] = short_probability
+        result.loc[index, "long_expected_net"] = score.long_expected_net
+        result.loc[index, "short_expected_net"] = score.short_expected_net
+        result.loc[index, "selected_expected_favorable"] = score.selected_expected_favorable
+        result.loc[index, "selected_expected_adverse"] = score.selected_expected_adverse
+        result.loc[index, "selected_expected_net"] = score.selected_expected_net
+        result.loc[index, "selected_payoff_ratio"] = score.selected_payoff_ratio
+        result.loc[index, "predicted_long"] = score.predicted_long
+        result.loc[index, "active_trade"] = active
+        result.loc[index, "action"] = np.where(
+            active,
+            np.where(score.predicted_long, "BUY", "SELL"),
+            "ABSTAIN",
+        )
+        result.loc[index, "route_reason"] = np.where(
+            active,
+            "CONDITIONAL_PAYOFF_SIGNAL",
+            "EXPECTED_NET_THRESHOLD_NOT_MET",
+        )
+
+    return result
 
 
 def score_conditional_payoff(
