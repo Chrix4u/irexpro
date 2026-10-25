@@ -55,11 +55,11 @@
 - Consumes: residual frame from Task 1 with existing long/short net-return labels.
 - Produces: `calibrate_relative_value_policy(...)` and `route_relative_value_signals(...)` with predeclared mean-reversion/continuation hypotheses and bounded quantile floors.
 
-- [ ] **Step 1: Add failing tests** proving calibration never sees validation rows, both sides are required, losing high-activity tails fail, and missing calibration abstains.
-- [ ] **Step 2: Confirm RED.**
-- [ ] **Step 3: Implement the minimal bounded calibration/router.**
-- [ ] **Step 4: Run focused tests and Ruff GREEN.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Add failing tests** proving calibration never sees validation rows, both sides are required, losing high-activity tails fail, and missing calibration abstains.
+- [x] **Step 2: Confirm RED.**
+- [x] **Step 3: Implement the minimal bounded calibration/router.**
+- [x] **Step 4: Run focused tests and Ruff GREEN.**
+- [x] **Step 5: Commit.**
 
 ### Task 3: One-fold early-rejection evaluator
 
