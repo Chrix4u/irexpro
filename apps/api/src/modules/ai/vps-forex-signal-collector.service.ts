@@ -143,6 +143,10 @@ import {
   evaluatePaperOpportunityScout,
 } from './paper-opportunity-scout';
 import {
+  PaperShadowLocalEdgePocketDecision,
+  evaluatePaperShadowLocalEdgePocket,
+} from './paper-shadow-local-edge-pocket';
+import {
   PaperChampionDirectionPriorDecision,
   evaluatePaperChampionDirectionPrior,
 } from './paper-champion-direction-prior';
@@ -192,12 +196,19 @@ const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 
 export function paperOpportunityScoutModelVersion(engineCode: string): string {
-  return `external-provider/${engineCode}/paper-opportunity-scout-v6-shadow-pulse-0.10-tier`;
+  return `external-provider/${engineCode}/paper-opportunity-scout-v7-local-edge-pocket-0.10-tier`;
 }
 const PAPER_CHAMPION_MODEL_VERSION =
   'external-provider/irexpro-multimodel-ensemble-v1/paper-only-v1';
 const LEGACY_V7_EXECUTION_FROZEN = true;
 const MULTI_MODEL_PAPER_EXECUTION_ENABLED = true;
+
+export function adaptiveCalibrationExecutionBlockers(
+  blockExecution: boolean,
+  localShadowEdgeOverride: boolean,
+): string[] {
+  return blockExecution && !localShadowEdgeOverride ? ['ADAPTIVE_CALIBRATION_NEGATIVE_EDGE'] : [];
+}
 
 export function canExecuteMultiModelPaper(
   ensemble: Pick<PlanBEnsembleScore, 'paperAdmitted'>,
@@ -561,6 +572,7 @@ interface ExecutableCounterfactual {
   paperRealisedContinuationRouteReliability: PaperRealisedContinuationRouteReliabilityDecision | null;
   paperRealisedContinuationExecutionGate: PaperRealisedContinuationExecutionGateDecision | null;
   paperOpportunityScout: PaperOpportunityScoutDecision;
+  paperShadowLocalEdgePocket: PaperShadowLocalEdgePocketDecision | null;
   paperExecutionRoute: ReturnType<typeof selectPaperExecutionRoute>;
   paperResearchEpisodeKey: string;
   paperResearchEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
@@ -606,8 +618,16 @@ export function executableNetExpectedR(
     | 'pairedDirectionReversal'
     | 'ensembleGovernance'
     | 'paperCalibratedIdleRecovery'
-  >,
+  > &
+    Partial<Pick<ExecutableCounterfactual, 'paperOpportunityScout' | 'paperShadowLocalEdgePocket'>>,
 ): number {
+  if (
+    option.paperOpportunityScout?.reason === 'LOCAL_SHADOW_EDGE_SCOUT' &&
+    option.paperShadowLocalEdgePocket?.supported &&
+    Number.isFinite(option.paperShadowLocalEdgePocket.averageNetR)
+  ) {
+    return option.paperShadowLocalEdgePocket.averageNetR;
+  }
   if (option.paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH') {
     return option.pairedDirectionReversal.researchNetExpectedR;
   }
@@ -1865,6 +1885,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperChampionDirectionPriorSnapshot.find(
               (prior) => prior.instrument === best.instrument && prior.direction === best.direction,
             ) ?? null;
+          const paperShadowLocalEdgePocket = paperSession
+            ? await this.loadPaperShadowLocalEdgePocketEvidence(
+                userId,
+                connectionId,
+                best.instrument,
+                best.direction,
+                adaptiveEvidencePass.marketState.session,
+                adaptiveEvidencePass.marketState.state,
+                planBEnsemble.strategyRoute,
+                evaluatedAt,
+              )
+            : null;
           const paperOpportunityScout = evaluatePaperOpportunityScout({
             normalPaperExecution: fullSizePaperExecutionCandidate,
             direction: best.direction,
@@ -1885,6 +1917,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             driftDiagnostics: ensembleGovernance.driftDiagnostics,
             idleMinutes: paperIdleState.idleMinutes,
             championDirectionPrior,
+            shadowLocalEdgePocket: paperShadowLocalEdgePocket,
             shadowDirectionalPulse: adaptiveEvidencePass.shadowDirectionalPulse,
             calibration: {
               authoritative: calibration.authoritative,
@@ -1912,6 +1945,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                   evaluatedAt,
                   allocationCapital: adaptiveAllocationCapital,
                   portfolio: initialAdaptivePortfolio,
+                  localShadowEdgeNetExpectedR:
+                    paperOpportunityScout.reason === 'LOCAL_SHADOW_EDGE_SCOUT'
+                      ? paperShadowLocalEdgePocket?.averageNetR
+                      : null,
                 })
               : adaptiveEvidencePass;
           if (paperOpportunityScout.eligible) {
@@ -1925,6 +1962,19 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `idleMinutes=${paperOpportunityScout.idleMinutes?.toFixed(1) ?? 'n/a'} ` +
                 `targetWindowMinutes=${paperOpportunityScout.targetWindowMinutes} ` +
                 `lotCap=${paperOpportunityScout.lotUpperBound.toFixed(2)}`,
+            );
+          }
+          if (
+            paperOpportunityScout.reason === 'LOCAL_SHADOW_EDGE_SCOUT' &&
+            paperShadowLocalEdgePocket
+          ) {
+            this.logger.warn(
+              `PAPER local shadow-edge scout ${best.instrument} ${best.direction} execution=ELIGIBLE ` +
+                `session=${adaptiveEvidencePass.marketState.session} state=${adaptiveEvidencePass.marketState.state} ` +
+                `samples=${paperShadowLocalEdgePocket.samples} winRate=${paperShadowLocalEdgePocket.winRate.toFixed(3)} ` +
+                `avgR=${paperShadowLocalEdgePocket.averageNetR.toFixed(3)} pf=${paperShadowLocalEdgePocket.profitFactor.toFixed(3)} ` +
+                `recentWins=${paperShadowLocalEdgePocket.recentWins}/${paperShadowLocalEdgePocket.recentSamples} ` +
+                `recentR=${paperShadowLocalEdgePocket.recentNetR.toFixed(3)}`,
             );
           }
           await this.persistEnsembleShadowDecision(
@@ -2633,6 +2683,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperRealisedContinuationRouteReliability,
             paperRealisedContinuationExecutionGate,
             paperOpportunityScout,
+            paperShadowLocalEdgePocket,
             paperExecutionRoute,
             paperResearchEpisodeKey,
             paperResearchEpisodeGuard,
@@ -2701,6 +2752,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             entry.chosen.paperExecutionRoute === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH'
               ? entry.chosen.paperExtensionExhaustionPairSideReliability
               : entry.chosen.paperResearchPairSideReliability,
+          localShadowEdgeNetExpectedR:
+            entry.chosen.paperOpportunityScout.reason === 'LOCAL_SHADOW_EDGE_SCOUT'
+              ? entry.chosen.paperShadowLocalEdgePocket?.averageNetR
+              : null,
         });
         initiallyEvaluatedWinners.push({
           ...entry,
@@ -2756,6 +2811,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             rankedWinner.chosen.paperExecutionRoute === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH'
               ? rankedWinner.chosen.paperExtensionExhaustionPairSideReliability
               : rankedWinner.chosen.paperResearchPairSideReliability,
+          localShadowEdgeNetExpectedR:
+            rankedWinner.chosen.paperOpportunityScout.reason === 'LOCAL_SHADOW_EDGE_SCOUT'
+              ? rankedWinner.chosen.paperShadowLocalEdgePocket?.averageNetR
+              : null,
         });
         const adaptiveWinner: AdaptiveScanWinner = {
           ...rankedWinner,
@@ -2838,6 +2897,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperRealisedContinuationRouteReliability,
           paperRealisedContinuationExecutionGate,
           paperOpportunityScout,
+          paperShadowLocalEdgePocket,
           paperExecutionRoute,
           paperResearchEpisodeKey,
           paperResearchEpisodeGuard,
@@ -2857,7 +2917,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
         this.logger.log(
           `Counterfactual ${best.instrument} execution=${best.direction} selection=${selection.reason} ` +
-            `netExpectedR=${(paperExecutionRoute === 'PAIRED_REVERSAL_RESEARCH' ? pairedDirectionReversal.researchNetExpectedR : ensembleGovernance.netExpectedR).toFixed(4)}R ` +
+            `netExpectedR=${executableNetExpectedR(chosen).toFixed(4)}R ` +
             `shortHorizonMomentum=${best.shortHorizonMomentumAtr.toFixed(3)}ATR`,
         );
 
@@ -2987,6 +3047,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paper_opportunity_scout_idle_minutes: paperOpportunityScout.idleMinutes,
             paper_opportunity_scout_target_window_minutes:
               paperOpportunityScout.targetWindowMinutes,
+            paper_shadow_local_edge_artifact: paperShadowLocalEdgePocket?.artifact ?? null,
+            paper_shadow_local_edge_state: paperShadowLocalEdgePocket?.state ?? null,
+            paper_shadow_local_edge_reason: paperShadowLocalEdgePocket?.reason ?? null,
+            paper_shadow_local_edge_samples: paperShadowLocalEdgePocket?.samples ?? null,
+            paper_shadow_local_edge_win_rate: paperShadowLocalEdgePocket?.winRate ?? null,
+            paper_shadow_local_edge_average_net_r: paperShadowLocalEdgePocket?.averageNetR ?? null,
+            paper_shadow_local_edge_profit_factor: paperShadowLocalEdgePocket?.profitFactor ?? null,
+            paper_shadow_local_edge_recent_wins: paperShadowLocalEdgePocket?.recentWins ?? null,
+            paper_shadow_local_edge_recent_net_r: paperShadowLocalEdgePocket?.recentNetR ?? null,
+            paper_shadow_local_edge_latest_resolved_at:
+              paperShadowLocalEdgePocket?.latestResolvedAt ?? null,
             paper_opportunity_scout_effective_net_expected_r: adaptiveWinner.netExpectedR,
             paper_opportunity_scout_raw_net_expected_r: adaptiveWinner.rawNetExpectedR,
             paper_opportunity_scout_calibration_source_level:
@@ -3486,6 +3557,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     portfolio: { available: boolean; positions: AdaptiveCurrencyRiskPosition[] };
     pairedReversalNetExpectedR?: number;
     paperResearchPairSideReliability?: PaperResearchPairSideReliabilityDecision | null;
+    localShadowEdgeNetExpectedR?: number | null;
   }): Promise<{
     marketState: AdaptiveMarketStateDecision;
     edge: AdaptiveEdgeEvidence;
@@ -3580,9 +3652,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       input.executionRoute === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH' &&
       predictionCalibration.maturity === 'COLLECTING' &&
       !predictionCalibration.blockRecommended;
-    const netExpectedR = extensionCollectingCalibrationDiagnosticOnly
-      ? rawNetExpectedR
-      : calibrationAuthority.effectiveNetExpectedR;
+    const localShadowEdgeOverride =
+      Number.isFinite(input.localShadowEdgeNetExpectedR) &&
+      input.localShadowEdgeNetExpectedR !== null;
+    const netExpectedR = localShadowEdgeOverride
+      ? input.localShadowEdgeNetExpectedR!
+      : extensionCollectingCalibrationDiagnosticOnly
+        ? rawNetExpectedR
+        : calibrationAuthority.effectiveNetExpectedR;
 
     const sizing =
       input.executionRoute === 'NORMAL_PAPER'
@@ -3623,7 +3700,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     });
     const hardBlockers = [
       ...(input.executionRoute === 'NONE' ? input.governance.paperExecutionBlockers : []),
-      ...(calibrationAuthority.blockExecution ? ['ADAPTIVE_CALIBRATION_NEGATIVE_EDGE'] : []),
+      ...adaptiveCalibrationExecutionBlockers(
+        calibrationAuthority.blockExecution,
+        localShadowEdgeOverride,
+      ),
       ...(exposure.capacity === 'BLOCKED' ? ['ADAPTIVE_CURRENCY_CONCENTRATION_BLOCKED'] : []),
     ];
     const opportunity = scoreAdaptiveOpportunity({
@@ -5110,6 +5190,149 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       this.logger.warn(
         `PAPER cost-aware entry annotation unavailable: ${(error as Error).message}`,
       );
+    }
+  }
+
+  private async loadPaperShadowLocalEdgePocketEvidence(
+    userId: string,
+    connectionId: string,
+    instrument: string,
+    direction: 'BUY' | 'SELL',
+    session: AdaptiveMarketStateDecision['session'],
+    state: AdaptiveMarketStateDecision['state'],
+    strategyRoute: PlanBEnsembleScore['strategyRoute'],
+    evaluatedAt: Date,
+  ): Promise<PaperShadowLocalEdgePocketDecision> {
+    const empty = () =>
+      evaluatePaperShadowLocalEdgePocket({
+        samples: 0,
+        wins: 0,
+        losses: 0,
+        grossProfitR: 0,
+        grossLossR: 0,
+        netR: 0,
+        averageNetR: 0,
+        profitFactor: 0,
+        recentSamples: 0,
+        recentWins: 0,
+        recentNetR: 0,
+        latestResolvedAt: null,
+      });
+    if (
+      !this.dataSource ||
+      strategyRoute !== 'TREND_CONTINUATION' ||
+      !Number.isFinite(evaluatedAt.getTime())
+    ) {
+      return empty();
+    }
+
+    try {
+      const rows = (await this.dataSource.query(
+        `
+          WITH source AS (
+            SELECT
+              id,
+              NULLIF(components->'outcome'->>'netR', '')::numeric AS net_r,
+              NULLIF(components->'outcome'->>'resolvedAt', '')::timestamptz AS resolved_at
+            FROM trading.ensemble_shadow_decisions
+            WHERE user_id = $1
+              AND broker_connection_id = $2
+              AND engine_code = $3
+              AND model_version = $4
+              AND instrument = $5
+              AND direction = $6
+              AND components->'adaptiveMarketIntelligence'->'marketState'->>'session' = $7
+              AND components->>'strategyRoute' = $8
+              AND components->'outcome'->>'version' = $9
+              AND evaluated_at < $10
+              AND components->'adaptiveMarketIntelligence'->'marketState'->>'state' = $11
+              AND components->'outcome'->>'status' IN ('WIN', 'LOSS')
+              AND NULLIF(components->'outcome'->>'netR', '') IS NOT NULL
+              AND NULLIF(components->'outcome'->>'resolvedAt', '') IS NOT NULL
+          ),
+          pocket AS (
+            SELECT *
+            FROM source
+            WHERE resolved_at < $10
+          ),
+          ranked AS (
+            SELECT
+              *,
+              ROW_NUMBER() OVER (ORDER BY resolved_at DESC, id DESC) AS rn
+            FROM pocket
+          )
+          SELECT
+            COUNT(*)::int AS samples,
+            COUNT(*) FILTER (WHERE net_r > 0)::int AS wins,
+            COUNT(*) FILTER (WHERE net_r < 0)::int AS losses,
+            COALESCE(SUM(CASE WHEN net_r > 0 THEN net_r ELSE 0 END), 0)::text AS gross_profit_r,
+            COALESCE(ABS(SUM(CASE WHEN net_r < 0 THEN net_r ELSE 0 END)), 0)::text AS gross_loss_r,
+            COALESCE(SUM(net_r), 0)::text AS net_r,
+            COALESCE(AVG(net_r), 0)::text AS average_net_r,
+            CASE
+              WHEN ABS(SUM(CASE WHEN net_r < 0 THEN net_r ELSE 0 END)) > 0
+                THEN SUM(CASE WHEN net_r > 0 THEN net_r ELSE 0 END) /
+                     ABS(SUM(CASE WHEN net_r < 0 THEN net_r ELSE 0 END))
+              WHEN SUM(CASE WHEN net_r > 0 THEN net_r ELSE 0 END) > 0 THEN 1000000
+              ELSE 0
+            END::text AS profit_factor,
+            COUNT(*) FILTER (WHERE rn <= 8)::int AS recent_samples,
+            COUNT(*) FILTER (WHERE rn <= 8 AND net_r > 0)::int AS recent_wins,
+            COALESCE(SUM(net_r) FILTER (WHERE rn <= 8), 0)::text AS recent_net_r,
+            MAX(resolved_at) AS latest_resolved_at
+          FROM ranked
+        `,
+        [
+          userId,
+          connectionId,
+          ACTIVE_ENGINE_CODE,
+          ACTIVE_MODEL_POLICY_VERSION,
+          instrument,
+          direction,
+          session,
+          strategyRoute,
+          ENSEMBLE_OUTCOME_MODEL_VERSION,
+          evaluatedAt,
+          state,
+        ],
+      )) as Array<{
+        samples: string | number | null;
+        wins: string | number | null;
+        losses: string | number | null;
+        gross_profit_r: string | number | null;
+        gross_loss_r: string | number | null;
+        net_r: string | number | null;
+        average_net_r: string | number | null;
+        profit_factor: string | number | null;
+        recent_samples: string | number | null;
+        recent_wins: string | number | null;
+        recent_net_r: string | number | null;
+        latest_resolved_at: string | Date | null;
+      }>;
+      const row = rows[0];
+      if (!row) return empty();
+      const latestResolvedAt = row.latest_resolved_at
+        ? new Date(row.latest_resolved_at).toISOString()
+        : null;
+      return evaluatePaperShadowLocalEdgePocket({
+        samples: Number(row.samples ?? 0),
+        wins: Number(row.wins ?? 0),
+        losses: Number(row.losses ?? 0),
+        grossProfitR: Number(row.gross_profit_r ?? 0),
+        grossLossR: Number(row.gross_loss_r ?? 0),
+        netR: Number(row.net_r ?? 0),
+        averageNetR: Number(row.average_net_r ?? 0),
+        profitFactor: Number(row.profit_factor ?? 0),
+        recentSamples: Number(row.recent_samples ?? 0),
+        recentWins: Number(row.recent_wins ?? 0),
+        recentNetR: Number(row.recent_net_r ?? 0),
+        latestResolvedAt,
+      });
+    } catch (error) {
+      this.logger?.warn?.(
+        `PAPER shadow local-edge evidence unavailable ${instrument} ${direction}: ${(error as Error).message}`,
+      );
+      return empty();
     }
   }
 

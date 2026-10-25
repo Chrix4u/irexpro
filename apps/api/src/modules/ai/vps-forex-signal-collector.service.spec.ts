@@ -12,6 +12,7 @@ import {
   isFreshOpportunity,
   evaluatePaperEntryMarketAlignment,
   executableNetExpectedR,
+  adaptiveCalibrationExecutionBlockers,
   paperOpportunityScoutModelVersion,
 } from './vps-forex-signal-collector.service';
 import { ExecutionService } from '../execution/execution.service';
@@ -112,7 +113,7 @@ describe('dynamic PAPER lot ceiling', () => {
 describe('PAPER opportunity scout model identity', () => {
   it('separates idle-aware participation outcomes from the v1 scout cohort', () => {
     expect(paperOpportunityScoutModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v6-shadow-pulse-0.10-tier',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v7-local-edge-pocket-0.10-tier',
     );
   });
 });
@@ -137,6 +138,29 @@ describe('PAPER scout product sizing floor', () => {
         ensembleGovernance: {},
       }),
     ).toEqual({ upperBound: 0.1, tier: 'RESEARCH' });
+  });
+});
+
+describe('PAPER local shadow-edge adaptive authority', () => {
+  it('ranks a local pocket by empirical pocket R instead of the globally negative edge', () => {
+    expect(
+      executableNetExpectedR({
+        paperExecutionRoute: 'NORMAL_PAPER',
+        paperCalibratedIdleRecovery: null,
+        ensembleGovernance: { netExpectedR: -0.48 },
+        pairedDirectionReversal: { researchNetExpectedR: -0.2 },
+        paperOpportunityScout: { reason: 'LOCAL_SHADOW_EDGE_SCOUT' },
+        paperShadowLocalEdgePocket: { supported: true, averageNetR: 0.588 },
+      } as any),
+    ).toBeCloseTo(0.588, 6);
+  });
+
+  it('suppresses only the calibration negative-edge blocker when local pocket authority is explicit', () => {
+    expect(adaptiveCalibrationExecutionBlockers(true, false)).toEqual([
+      'ADAPTIVE_CALIBRATION_NEGATIVE_EDGE',
+    ]);
+    expect(adaptiveCalibrationExecutionBlockers(true, true)).toEqual([]);
+    expect(adaptiveCalibrationExecutionBlockers(false, true)).toEqual([]);
   });
 });
 
@@ -1415,8 +1439,10 @@ describe('VpsForexSignalCollectorService', () => {
         modifiesExecution: false,
       });
     }
-    const adaptiveAnnotationCalls = shadowQuery.mock.calls.filter(([sql]) =>
-      String(sql).includes("'adaptiveMarketIntelligence'"),
+    const adaptiveAnnotationCalls = shadowQuery.mock.calls.filter(
+      ([sql]) =>
+        String(sql).includes('UPDATE trading.ensemble_shadow_decisions') &&
+        String(sql).includes("'adaptiveMarketIntelligence'"),
     );
     expect(adaptiveAnnotationCalls).toHaveLength(12);
     for (const [, params] of adaptiveAnnotationCalls) {
@@ -5014,4 +5040,68 @@ describe('PAPER post-loss history availability', () => {
       expect(state).toEqual({ available: false, lastClosedTrade: null });
     },
   );
+});
+
+describe('PAPER shadow local-edge pocket evidence loader', () => {
+  it('loads an exact active-policy causal pocket and returns its support decision', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        samples: '44',
+        wins: '31',
+        losses: '13',
+        gross_profit_r: '40.2',
+        gross_loss_r: '14.33',
+        net_r: '25.87',
+        average_net_r: '0.588',
+        profit_factor: '2.542',
+        recent_samples: '8',
+        recent_wins: '8',
+        recent_net_r: '10.98',
+        latest_resolved_at: '2026-10-23T20:40:00.000Z',
+      },
+    ]);
+    const collector = Object.create(VpsForexSignalCollectorService.prototype) as any;
+    collector.dataSource = { query };
+    const evaluatedAt = new Date('2026-10-23T20:55:00.000Z');
+
+    await expect(
+      collector.loadPaperShadowLocalEdgePocketEvidence(
+        'user-1',
+        'conn-1',
+        'GBPUSD',
+        'SELL',
+        'NEW_YORK',
+        'DISLOCATED',
+        'TREND_CONTINUATION',
+        evaluatedAt,
+      ),
+    ).resolves.toMatchObject({
+      supported: true,
+      state: 'SUPPORTED',
+      samples: 44,
+      recentWins: 8,
+      recentNetR: 10.98,
+    });
+
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0]!;
+    expect(String(sql)).toContain('model_version = $4');
+    expect(String(sql)).toContain("components->>'strategyRoute' = $8");
+    expect(String(sql)).toContain("components->'outcome'->>'version' = $9");
+    expect(String(sql)).toContain('evaluated_at < $10');
+    expect(String(sql)).toContain('resolved_at < $10');
+    expect(params).toEqual([
+      'user-1',
+      'conn-1',
+      'irexpro-multimodel-ensemble-v1',
+      PlanBEnsembleModule.PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+      'GBPUSD',
+      'SELL',
+      'NEW_YORK',
+      'TREND_CONTINUATION',
+      ENSEMBLE_OUTCOME_MODEL_VERSION,
+      evaluatedAt,
+      'DISLOCATED',
+    ]);
+  });
 });

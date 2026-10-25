@@ -1,5 +1,6 @@
 import { evaluatePaperOpportunityScout } from './paper-opportunity-scout';
 import { evaluatePaperChampionDirectionPrior } from './paper-champion-direction-prior';
+import { evaluatePaperShadowLocalEdgePocket } from './paper-shadow-local-edge-pocket';
 
 describe('PAPER opportunity scout', () => {
   const base = {
@@ -583,5 +584,76 @@ describe('PAPER opportunity scout', () => {
         }),
       ).toMatchObject({ eligible: false, reason: 'DRIFT_EVIDENCE_TOO_WEAK' });
     });
+  });
+});
+
+describe('PAPER local shadow-edge scout authority', () => {
+  const supportedPocket = evaluatePaperShadowLocalEdgePocket({
+    samples: 44,
+    wins: 31,
+    losses: 13,
+    grossProfitR: 40.2,
+    grossLossR: 14.33,
+    netR: 25.87,
+    averageNetR: 0.588,
+    profitFactor: 2.542,
+    recentSamples: 8,
+    recentWins: 8,
+    recentNetR: 10.98,
+    latestResolvedAt: '2026-10-23T20:40:00.000Z',
+  });
+
+  const candidate = {
+    normalPaperExecution: false,
+    direction: 'SELL' as const,
+    strategyRoute: 'TREND_CONTINUATION' as const,
+    regime: 'TREND_WEAK' as const,
+    confidence: 0.6,
+    consensusPassed: 4,
+    consensusRequired: 6,
+    netExpectedR: -0.48,
+    directionQuality: 0,
+    tradeQuality: 0.32,
+    exitQuality: 0.31,
+    alignedMomentumAtr: -0.7,
+    paperExecutionCostUsable: true,
+    eventRisk: 'CLEAR' as const,
+    portfolioQuality: 0.8,
+    driftState: 'OUT_OF_DISTRIBUTION' as const,
+    idleMinutes: 65,
+    calibration: {
+      authoritative: true,
+      sourceLevel: 'EXACT',
+      maturity: 'MATURE',
+      samples: 40,
+      calibratedWinProbability: 0.42,
+      profitFactor: 0.7,
+      calibratedNetExpectedR: -0.48,
+      recentDegradation: false,
+      blockRecommended: true,
+    },
+    shadowLocalEdgePocket: supportedPocket,
+  };
+
+  it('lets mature local pocket evidence override global drift/net-R/calibration at micro PAPER size', () => {
+    expect(evaluatePaperOpportunityScout(candidate)).toMatchObject({
+      eligible: true,
+      reason: 'LOCAL_SHADOW_EDGE_SCOUT',
+      lotUpperBound: 0.1,
+      sizingTier: 'RESEARCH',
+    });
+  });
+
+  it('still requires four-vote consensus for the local pocket lane', () => {
+    expect(evaluatePaperOpportunityScout({ ...candidate, consensusPassed: 3 })).toMatchObject({
+      eligible: false,
+      reason: 'CONSENSUS_TOO_LOW',
+    });
+  });
+
+  it('still lets hard event risk veto a supported local pocket', () => {
+    expect(
+      evaluatePaperOpportunityScout({ ...candidate, eventRisk: 'HIGH_IMPACT_BLOCK' }),
+    ).toMatchObject({ eligible: false, reason: 'EVENT_RISK_NOT_CLEAR' });
   });
 });

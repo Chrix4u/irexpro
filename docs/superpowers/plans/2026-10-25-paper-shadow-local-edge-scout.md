@@ -34,10 +34,10 @@
 **Interfaces:**
 - Produces `evaluatePaperShadowLocalEdgePocket(evidence)` and `PaperShadowLocalEdgePocketDecision`.
 
-- [ ] Write RED tests for supported, sparse, low-PF, low-average-R, and recent-deterioration evidence.
-- [ ] Implement minimal evaluator.
-- [ ] Run focused test GREEN.
-- [ ] Commit.
+- [x] Write RED tests for supported, sparse, low-PF, low-average-R, and recent-deterioration evidence.
+- [x] Implement minimal evaluator.
+- [x] Run focused test GREEN.
+- [x] Commit.
 
 ### Task 2: Causal exact-pocket loader and scout authority
 **Files:**
@@ -49,11 +49,11 @@
 - Consumes exact `instrument + direction + session + adaptive state + TREND_CONTINUATION + active policy` resolved shadows.
 - Produces `LOCAL_SHADOW_EDGE_SCOUT` qualification at 0.10 lots.
 
-- [ ] Write RED loader test proving active-policy, exact-cell, pre-evaluation SQL constraints.
-- [ ] Write RED scout test proving supported pocket can override negative global edge/calibration at >=4 consensus.
-- [ ] Implement loader and collector wiring.
-- [ ] Preserve downstream reliability/post-loss/alignment/risk gates.
-- [ ] Run collector + scout suites GREEN.
+- [x] Write RED loader test proving active-policy, exact-cell, pre-evaluation SQL constraints.
+- [x] Write RED scout test proving supported pocket can override negative global edge/calibration at >=4 consensus.
+- [x] Implement loader and collector wiring.
+- [x] Preserve downstream reliability/post-loss/alignment/risk gates.
+- [x] Run collector + scout suites GREEN (148/148).
 - [ ] Commit.
 
 ### Task 3: Release verification
