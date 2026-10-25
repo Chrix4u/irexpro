@@ -1,4 +1,5 @@
 import type { AdaptiveShadowDirectionalPulseDecision } from './adaptive-shadow-directional-pulse';
+import type { PaperChampionDirectionPriorDecision } from './paper-champion-direction-prior';
 
 export const PAPER_OPPORTUNITY_SCOUT_LOT_CAP = 0.1;
 export const PAPER_OPPORTUNITY_SCOUT_ACTIVE_LOT_CAP = 0.1;
@@ -25,7 +26,7 @@ export const PAPER_SHADOW_PULSE_SCOUT_MIN_WEIGHTED_R = 0.25;
 export const PAPER_SHADOW_PULSE_SCOUT_MIN_ADVANTAGE_R = 0.75;
 export const PAPER_SHADOW_PULSE_SCOUT_MIN_PULSE_QUALITY = 0.68;
 
-export type PaperOpportunityScoutMode = 'BASE' | 'ACTIVE' | 'RECOVERY';
+export type PaperOpportunityScoutMode = 'BASE' | 'ACTIVE' | 'RECOVERY' | 'CHAMPION_DIRECTION';
 
 export interface PaperOpportunityScoutInput {
   normalPaperExecution: boolean;
@@ -54,6 +55,7 @@ export interface PaperOpportunityScoutInput {
   idleMinutes?: number | null;
   driftDiagnostics?: readonly string[];
   shadowDirectionalPulse?: AdaptiveShadowDirectionalPulseDecision | null;
+  championDirectionPrior?: PaperChampionDirectionPriorDecision | null;
   calibration?: {
     authoritative: boolean;
     sourceLevel: string;
@@ -71,6 +73,7 @@ export type PaperOpportunityScoutReason =
   | 'OPPORTUNITY_SCOUT'
   | 'CALIBRATED_OOD_SCOUT'
   | 'SHADOW_PULSE_SCOUT'
+  | 'CHAMPION_DIRECTION_SCOUT'
   | 'FULL_SIZE_ALREADY_ELIGIBLE'
   | 'ROUTE_NOT_SCOUTABLE'
   | 'REGIME_NOT_SCOUTABLE'
@@ -104,9 +107,23 @@ interface PaperOpportunityScoutPolicy {
   idleMinutes: number | null;
 }
 
-function resolvePolicy(idleMinutes: number | null | undefined): PaperOpportunityScoutPolicy {
+function resolvePolicy(
+  idleMinutes: number | null | undefined,
+  championDirectionPrior?: PaperChampionDirectionPriorDecision | null,
+): PaperOpportunityScoutPolicy {
   const normalizedIdleMinutes =
     Number.isFinite(idleMinutes) && idleMinutes! >= 0 ? idleMinutes! : null;
+  if (championDirectionPrior?.supported === true) {
+    return {
+      mode: 'CHAMPION_DIRECTION',
+      lotUpperBound: PAPER_OPPORTUNITY_SCOUT_RECOVERY_LOT_CAP,
+      minConfidence: PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_CONFIDENCE,
+      minNetExpectedR: PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_NET_EXPECTED_R,
+      minQuality: PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_QUALITY,
+      requireAlignedMomentum: true,
+      idleMinutes: normalizedIdleMinutes,
+    };
+  }
   if (
     normalizedIdleMinutes !== null &&
     normalizedIdleMinutes >= PAPER_OPPORTUNITY_SCOUT_RECOVERY_IDLE_MINUTES
@@ -172,7 +189,10 @@ function decision(
 export function evaluatePaperOpportunityScout(
   input: PaperOpportunityScoutInput,
 ): PaperOpportunityScoutDecision {
-  const policy = resolvePolicy(input.idleMinutes);
+  const policy = resolvePolicy(
+    input.idleMinutes,
+    input.strategyRoute === 'TREND_CONTINUATION' ? input.championDirectionPrior : null,
+  );
   const reject = (reason: PaperOpportunityScoutReason) => decision(policy, false, reason);
 
   if (input.normalPaperExecution) return reject('FULL_SIZE_ALREADY_ELIGIBLE');
@@ -244,7 +264,9 @@ export function evaluatePaperOpportunityScout(
       calibration.calibratedNetExpectedR >= 0.05 &&
       !calibration.recentDegradation &&
       !calibration.blockRecommended;
-    const idleWindowReached = policy.idleMinutes !== null && policy.idleMinutes >= 30;
+    const idleWindowReached =
+      policy.mode === 'CHAMPION_DIRECTION' ||
+      (policy.idleMinutes !== null && policy.idleMinutes >= 30);
     const hasHardMtfDisagreement = (input.driftDiagnostics ?? []).includes('mtfStrength:HARD_LOW');
     const microStructureValid =
       idleWindowReached &&
@@ -308,5 +330,9 @@ export function evaluatePaperOpportunityScout(
       return reject('DRIFT_EVIDENCE_TOO_WEAK');
   }
 
-  return decision(policy, true, 'OPPORTUNITY_SCOUT');
+  return decision(
+    policy,
+    true,
+    policy.mode === 'CHAMPION_DIRECTION' ? 'CHAMPION_DIRECTION_SCOUT' : 'OPPORTUNITY_SCOUT',
+  );
 }
