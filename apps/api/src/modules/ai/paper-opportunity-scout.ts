@@ -1,5 +1,6 @@
 import type { AdaptiveShadowDirectionalPulseDecision } from './adaptive-shadow-directional-pulse';
 import type { PaperChampionDirectionPriorDecision } from './paper-champion-direction-prior';
+import type { PaperShadowLocalEdgePocketDecision } from './paper-shadow-local-edge-pocket';
 
 export const PAPER_OPPORTUNITY_SCOUT_LOT_CAP = 0.1;
 export const PAPER_OPPORTUNITY_SCOUT_ACTIVE_LOT_CAP = 0.1;
@@ -56,6 +57,7 @@ export interface PaperOpportunityScoutInput {
   driftDiagnostics?: readonly string[];
   shadowDirectionalPulse?: AdaptiveShadowDirectionalPulseDecision | null;
   championDirectionPrior?: PaperChampionDirectionPriorDecision | null;
+  shadowLocalEdgePocket?: PaperShadowLocalEdgePocketDecision | null;
   calibration?: {
     authoritative: boolean;
     sourceLevel: string;
@@ -74,6 +76,7 @@ export type PaperOpportunityScoutReason =
   | 'CALIBRATED_OOD_SCOUT'
   | 'SHADOW_PULSE_SCOUT'
   | 'CHAMPION_DIRECTION_SCOUT'
+  | 'LOCAL_SHADOW_EDGE_SCOUT'
   | 'FULL_SIZE_ALREADY_ELIGIBLE'
   | 'ROUTE_NOT_SCOUTABLE'
   | 'REGIME_NOT_SCOUTABLE'
@@ -219,6 +222,21 @@ export function evaluatePaperOpportunityScout(
     input.portfolioQuality < PAPER_OPPORTUNITY_SCOUT_MIN_PORTFOLIO_QUALITY
   )
     return reject('PORTFOLIO_QUALITY_TOO_LOW');
+
+  if (input.shadowLocalEdgePocket?.supported === true) {
+    if (!Number.isFinite(input.confidence) || input.confidence < 0.6)
+      return reject('CONFIDENCE_TOO_LOW');
+    if (input.consensusRequired <= 0 || input.consensusPassed < 4)
+      return reject('CONSENSUS_TOO_LOW');
+    if (
+      !Number.isFinite(input.tradeQuality) ||
+      input.tradeQuality < 0.3 ||
+      !Number.isFinite(input.exitQuality) ||
+      input.exitQuality < 0.3
+    )
+      return reject('QUALITY_TOO_LOW');
+    return decision(policy, true, 'LOCAL_SHADOW_EDGE_SCOUT', 0.1);
+  }
 
   const shadowPulse = input.shadowDirectionalPulse;
   const strongShadowPulse =
