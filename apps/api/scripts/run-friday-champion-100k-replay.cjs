@@ -263,6 +263,7 @@ async function main() {
   };
   report.pairs = summarizeBy(episodes, (episode) => episode.instrument, expectedInstruments, replay.summarizeReplayEpisodes);
   report.sleeves = replay.summarizeReplaySleeves(episodes);
+  report.routeSleeves = replay.summarizeReplayRouteSleeves(episodes);
   report.routes = summarizeBy(episodes, (episode) => episode.strategyRoute, expectedInstruments, replay.summarizeReplayEpisodes);
   report.exitReasons = Object.entries(
     episodes.reduce((acc, episode) => {

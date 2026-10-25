@@ -254,6 +254,7 @@ import {
   buildReplayStressReport,
   summarizeReplayEpisodes,
   summarizeReplaySleeves,
+  summarizeReplayRouteSleeves,
   type ReplayEvidenceEpisode,
 } from './friday-champion-100k-replay';
 
@@ -336,6 +337,28 @@ describe('Friday champion 100k replay metrics and folds', () => {
       expect.objectContaining({ key: 'GBPUSD|SELL', episodes: 1, netR: 0.5 }),
       expect.objectContaining({ key: 'USDJPY|BUY', episodes: 1, netR: 1 }),
       expect.objectContaining({ key: 'USDJPY|SELL', episodes: 1, netR: -1 }),
+    ]);
+  });
+
+  it('summarizes pair-direction-route sleeves independently', () => {
+    const buyTrend = {
+      ...evidenceEpisode('USDJPY', '2026-06-01T00:00:00Z', 1),
+      strategyRoute: 'TREND_CONTINUATION' as const,
+    };
+    const sellTrend = {
+      ...evidenceEpisode('USDJPY', '2026-06-01T00:05:00Z', -1),
+      direction: 'SELL' as const,
+      strategyRoute: 'TREND_CONTINUATION' as const,
+    };
+    const buyReversal = {
+      ...evidenceEpisode('USDJPY', '2026-06-01T00:10:00Z', 0.5),
+      strategyRoute: 'CONFIRMED_REVERSAL' as const,
+    };
+
+    expect(summarizeReplayRouteSleeves([buyTrend, sellTrend, buyReversal])).toEqual([
+      expect.objectContaining({ key: 'USDJPY|BUY|CONFIRMED_REVERSAL', episodes: 1, netR: 0.5 }),
+      expect.objectContaining({ key: 'USDJPY|BUY|TREND_CONTINUATION', episodes: 1, netR: 1 }),
+      expect.objectContaining({ key: 'USDJPY|SELL|TREND_CONTINUATION', episodes: 1, netR: -1 }),
     ]);
   });
 
