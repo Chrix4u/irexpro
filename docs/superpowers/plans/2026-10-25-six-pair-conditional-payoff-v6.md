@@ -100,7 +100,22 @@
 - Create: `.github/workflows/conditional-payoff-v6-one-minute-screen.yml` only if/when the local screen is promising enough to preserve as repeatable CI evidence.
 - Update: `docs/superpowers/plans/2026-10-25-six-pair-conditional-payoff-v6.md`
 
-- [ ] **Step 1: Run one local frozen-corpus outer fold using the established six-pair dataset/cutoff and historical spread-aware labels.**
-- [ ] **Step 2: Record pair calibrations, opportunities/day, BA, PF, Sharpe, DD, side balance, positive-instrument fraction, and governance=false.**
-- [ ] **Step 3: If economics or participation fails, stop and diagnose; do not run multi-fold or wider horizons.**
+- [x] **Step 1: Run one local frozen-corpus outer fold using the established six-pair dataset/cutoff and historical spread-aware labels.**
+- [x] **Step 2: Record pair calibrations, opportunities/day, BA, PF, Sharpe, DD, side balance, positive-instrument fraction, and governance=false.**
+- [x] **Step 3: If economics or participation fails, stop and diagnose; do not run multi-fold or wider horizons.**
 - [ ] **Step 4: If the early screen is credible, add exact-SHA CI evidence and then run multi-fold horizon 1 before any wider horizon or PAPER discussion.**
+
+
+### Task 5 result — REJECTED at horizon 1
+
+Exact screened SHA: `50c7a0ac78cacde304800bc4b0d40ac1801f5fe3`
+
+Frozen-corpus one-fold result:
+- 593,563 pooled rows; 100,166 unique decision periods; 7 validation days.
+- 0 raw active signals and 0 non-overlapping opportunities/day versus the 24/day target.
+- EURUSD, GBPUSD, and USDJPY had enough conditional-event training evidence but returned `NO_ECONOMIC_SCORE_TAIL`.
+- AUDUSD, USDCAD, and USDCHF failed closed before model fitting because LONG-favorable conditional fit evidence was only 146, 189, and 261 rows respectively versus the locked 500-row floor.
+- Balanced accuracy, Profit Factor, and Sharpe were therefore undefined; positive-fold and positive-instrument fractions were 0.0.
+- Governance remained false for PAPER, DEMO, and LIVE.
+
+Decision: stop v6. Do not add a CI screen, do not run multi-fold horizon 1, and do not run wider horizons. The result is an architecture rejection, not a threshold-tuning invitation: lowering the evidence or economics floors would violate the project gates.

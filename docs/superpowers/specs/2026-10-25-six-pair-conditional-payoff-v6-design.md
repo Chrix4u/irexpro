@@ -60,3 +60,10 @@ A one-fold early screen cannot establish the positive-fold fraction by itself; i
 1. **Conditional expected payoff (chosen):** strongest historical economic evidence and directly addresses v5's side-ranking failure.
 2. **Direct expected-return regression:** simpler, but multiple historical variants (including v37/v50/v51/v67 expected-return work) failed out of sample.
 3. **Pairwise edge/meta-label ranking:** v69 approached breakeven but validation economics remained negative; weaker evidence than conditional payoff.
+
+
+## Closure — rejected by the first frozen-corpus gate
+
+The exact-SHA horizon-1 early-rejection screen at `50c7a0ac78cacde304800bc4b0d40ac1801f5fe3` produced no eligible pair calibration. EURUSD, GBPUSD, and USDJPY had sufficient training evidence but no economically valid expected-payoff score tail. AUDUSD, USDCAD, and USDCHF failed closed on insufficient LONG-favorable conditional-event evidence (146/189/261 rows versus the 500-row fit floor). Consequently the validation fold produced zero active signals and zero opportunities/day.
+
+This rejects the six-pair conditional-payoff v6 architecture as specified. No evidence/economic floor is to be lowered, no multi-fold or wider-horizon expansion is authorized, and no PAPER/DEMO/LIVE promotion is permitted.
