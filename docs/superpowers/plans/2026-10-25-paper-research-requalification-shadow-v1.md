@@ -54,13 +54,13 @@
 - Consumes: Task 1 evaluators.
 - Produces: `components.paperResearchRequalificationShadow` annotation on the existing ensemble shadow row.
 
-- [ ] **Step 1:** Add failing collector tests proving a portfolio-blocked but locally valid candidate is annotated as shadow recovery candidate while `isOct19ProvenM5PaperExecutionAllowed` still prevents order execution.
-- [ ] **Step 2:** Add failing tests for pair/side, calibration, episode, and cost-aware blockers.
-- [ ] **Step 3:** Confirm RED.
-- [ ] **Step 4:** Reuse `loadPaperCostAwareEntryEvidence` for locally valid shadow candidates, evaluate the same PAPER_RESEARCH_THROUGHPUT cost policy, and annotate the decision before the global quarantine `continue`.
-- [ ] **Step 5:** Reuse the loaded cost evidence for ordinary research route handling to avoid duplicate queries.
-- [ ] **Step 6:** Run collector + shadow-policy focused tests and confirm GREEN.
-- [ ] **Step 7:** Commit collector wiring.
+- [x] **Step 1:** Add failing collector tests proving a portfolio-blocked but locally valid candidate is annotated as shadow recovery candidate while `isOct19ProvenM5PaperExecutionAllowed` still prevents order execution.
+- [x] **Step 2:** Add failing tests for pair/side, calibration, episode, and cost-aware blockers.
+- [x] **Step 3:** Confirm RED.
+- [x] **Step 4:** Reuse `loadPaperCostAwareEntryEvidence` for locally valid shadow candidates, evaluate the same PAPER_RESEARCH_THROUGHPUT cost policy, and annotate the decision before the global quarantine `continue`.
+- [x] **Step 5:** Reuse the loaded cost evidence for ordinary research route handling to avoid duplicate queries.
+- [x] **Step 6:** Run collector + shadow-policy focused tests and confirm GREEN.
+- [x] **Step 7:** Commit collector wiring.
 
 ### Task 3: Read-only requalification audit
 
