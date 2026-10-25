@@ -38,11 +38,11 @@
 **Interfaces:**
 - Produces: `evaluatePaperResearchRequalificationShadow(input)` and `evaluatePaperResearchRequalificationEvidence(input)`.
 
-- [ ] **Step 1:** Write failing tests for local-gate rejection, portfolio-brake diagnostic-only behavior, cost-aware rejection, immutable zero execution authority, collecting status, recovery signal, weak mature cohort, and zero-loss positive cohort.
-- [ ] **Step 2:** Run `pnpm test -- paper-research-requalification-shadow.spec.ts --runInBand` and confirm RED because the module/API does not exist.
-- [ ] **Step 3:** Implement the two pure evaluators with the exact constants and statuses from the spec.
-- [ ] **Step 4:** Run the focused test and confirm GREEN.
-- [ ] **Step 5:** Commit the pure policy.
+- [x] **Step 1:** Write failing tests for local-gate rejection, portfolio-brake diagnostic-only behavior, cost-aware rejection, immutable zero execution authority, collecting status, recovery signal, weak mature cohort, and zero-loss positive cohort.
+- [x] **Step 2:** Run `pnpm test -- paper-research-requalification-shadow.spec.ts --runInBand` and confirm RED because the module/API does not exist.
+- [x] **Step 3:** Implement the two pure evaluators with the exact constants and statuses from the spec.
+- [x] **Step 4:** Run the focused test and confirm GREEN.
+- [x] **Step 5:** Commit the pure policy.
 
 ### Task 2: Collector annotation wiring
 
