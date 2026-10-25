@@ -158,6 +158,37 @@ def test_walk_forward_fits_all_six_pairs_without_validation_leakage() -> None:
     assert report["approved_for_live"] is False
 
 
+def test_walk_forward_report_preserves_pair_calibration_evidence() -> None:
+    frame = _frame(1100)
+    calls: list[dict[str, object]] = []
+
+    report = evaluate_barrier_calibrated_frame(
+        frame,
+        horizon_bars=5,
+        min_train_periods=300,
+        validation_periods=720,
+        max_splits=1,
+        expert_fitter=_fake_fitter(calls),
+        router=_perfect_router,
+    )
+
+    pair_calibrations = report["folds"][0]["pair_calibrations"]
+    assert set(pair_calibrations) == set(PAIRS)
+    assert pair_calibrations["EURUSD"] == {
+        "passed": True,
+        "reason": "CALIBRATED",
+        "min_probability": 0.60,
+        "min_margin": 0.10,
+        "active_rows": 240,
+        "density": 0.20,
+        "mean_realized_bps": 0.5,
+        "profit_factor": 1.5,
+        "profit_throughput_bps": 0.1,
+        "long_fraction": 0.5,
+        "short_fraction": 0.5,
+    }
+
+
 def test_high_activity_cannot_pass_when_economics_are_losing() -> None:
     frame = _frame(1100, losing=True)
     calls: list[dict[str, object]] = []

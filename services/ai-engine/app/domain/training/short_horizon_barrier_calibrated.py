@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -647,6 +647,10 @@ def evaluate_barrier_calibrated_frame(
                 "calibration_end": pd.Timestamp(calibration["decision_time"].max()).isoformat(),
                 "validation_start": pd.Timestamp(validation["decision_time"].min()).isoformat(),
                 "validation_end": pd.Timestamp(validation["decision_time"].max()).isoformat(),
+                "pair_calibrations": {
+                    instrument: asdict(expert.calibration)
+                    for instrument, expert in sorted(experts.items())
+                },
                 "active_signals": int(routed["active_trade"].sum()),
                 "non_overlapping_opportunities": int(len(fold_periods)),
                 "total_return": float(fold_metrics["total_return"]),
