@@ -39,11 +39,11 @@
 **Interfaces:**
 - Produces: `BarrierPairCalibration` and `select_barrier_pair_calibration(...)`.
 
-- [ ] **Step 1: Write RED tests** for profitable calibration selection, losing high-density rejection, insufficient rows, one-sided rejection, and profit-throughput preference among candidates that already pass economics.
-- [ ] **Step 2: Run focused pytest and confirm RED** because the module/API does not yet exist.
-- [ ] **Step 3: Implement the minimal pure calibration policy.**
-- [ ] **Step 4: Run focused pytest and confirm GREEN.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Write RED tests** for profitable calibration selection, losing high-density rejection, insufficient rows, one-sided rejection, and profit-throughput preference among candidates that already pass economics.
+- [x] **Step 2: Run focused pytest and confirm RED** because the module/API does not yet exist.
+- [x] **Step 3: Implement the minimal pure calibration policy.**
+- [x] **Step 4: Run focused pytest and confirm GREEN.**
+- [x] **Step 5: Commit.**
 
 ### Task 2: Pair-specific LONG/SHORT classifier fit and routing
 
@@ -55,11 +55,11 @@
 - Produces: `fit_pair_barrier_experts(...)` and `route_pair_barrier_predictions(...)`.
 - Consumes existing causal event-barrier LONG/SHORT target columns and MTF feature policy.
 
-- [ ] **Step 1: Add RED tests** for exact-pair routing, calibrated probability+margin activation, missing expert failure, failed calibration ABSTAIN, and no cross-pair fallback.
-- [ ] **Step 2: Run focused pytest and confirm RED.**
-- [ ] **Step 3: Implement pair classifiers and routing, reusing established class-balance/early-stop patterns where appropriate.**
-- [ ] **Step 4: Run focused pytest and confirm GREEN.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Add RED tests** for exact-pair routing, calibrated probability+margin activation, missing expert failure, failed calibration ABSTAIN, and no cross-pair fallback.
+- [x] **Step 2: Run focused pytest and confirm RED.**
+- [x] **Step 3: Implement pair classifiers and routing, reusing established class-balance/early-stop patterns where appropriate.**
+- [x] **Step 4: Run focused pytest and confirm GREEN.**
+- [x] **Step 5: Commit.**
 
 ### Task 3: Purged walk-forward economics and participation evaluator
 
@@ -70,11 +70,11 @@
 **Interfaces:**
 - Produces: `evaluate_barrier_calibrated_frame(...)` and six-pair corpus/report wrapper.
 
-- [ ] **Step 1: Add RED tests** proving horizon-sized purge/embargo, train-only calibration, conservative non-overlap counting, six-pair breadth, and that high activity cannot pass when PF/Sharpe/economics fail.
-- [ ] **Step 2: Run focused pytest and confirm RED.**
-- [ ] **Step 3: Implement expanding purged walk-forward evaluation and atomic JSON reporting.**
-- [ ] **Step 4: Run focused tests + AI Engine suite and confirm GREEN.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Add RED tests** proving horizon-sized purge/embargo, train-only calibration, conservative non-overlap counting, six-pair breadth, and that high activity cannot pass when PF/Sharpe/economics fail.
+- [x] **Step 2: Run focused pytest and confirm RED.**
+- [x] **Step 3: Implement expanding purged walk-forward evaluation and atomic JSON reporting.**
+- [x] **Step 4: Run focused tests + AI Engine suite and confirm GREEN.**
+- [x] **Step 5: Commit.**
 
 ### Task 4: Bounded 5m one-fold evidence screen
 
@@ -85,7 +85,7 @@
 - Consumes exact research SHA and existing complete six-pair MTF corpus cache.
 - Produces a research JSON report and Actions-log evidence only; no deployment.
 
-- [ ] **Step 1: Add exact-SHA research workflow** using an isolated VPS research worktree and existing corpus cache.
+- [x] **Step 1: Add exact-SHA research workflow** using an isolated VPS research worktree and existing corpus cache.
 - [ ] **Step 2: Run only 5m / one purged fold.**
 - [ ] **Step 3: Record opportunities/day, mean interval, BA, PF, Sharpe, DD, positive fold/instrument fractions, LONG/SHORT balance, and governance=false.**
 - [ ] **Step 4: If either economics or participation fails, stop and diagnose; do not run 20m/60m. If both pass, proceed to full multi-fold 5m before any wider study.**

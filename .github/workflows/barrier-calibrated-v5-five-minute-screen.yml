@@ -1,0 +1,215 @@
+name: Barrier Calibrated v5 Five Minute Screen
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/barrier-calibrated-v5-five-minute-screen.yml'
+      - 'services/ai-engine/app/domain/training/short_horizon_barrier_calibrated.py'
+      - 'services/ai-engine/tests/test_short_horizon_barrier_calibrated*.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+  CANDIDATE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref_name }}
+  STAGING_SSH_HOST: vps.lightworldtech.com
+  STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+  STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+  SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+jobs:
+  five-minute-screen:
+    name: 5m one-fold economics and participation
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.ref == 'research/short-horizon-barrier-calibrated-v5-20261025'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment:
+      name: staging
+    concurrency:
+      group: irexpro-barrier-v5-five-minute-screen
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout exact research candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact candidate identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -n "$CANDIDATE_REF"
+          printf 'BARRIER_V5_SCREEN candidate=%s ref=%s\n' "$CANDIDATE_SHA" "$CANDIDATE_REF"
+
+      - name: Configure pinned SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run bounded 5m screen in isolated VPS worktree
+        id: screen
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_output="$(
+            ssh \
+              -i "$HOME/.ssh/irexpro_staging" \
+              -p "$STAGING_SSH_PORT" \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+              "bash -s -- '$CANDIDATE_SHA' '$CANDIDATE_REF'" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          candidate_ref="$2"
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly CORPUS_ROOT='/home/lightworld/research/irexpro-six-pair/341e107b0066f26b3b373e29a2329f007bda35b4/corpora'
+          readonly STUDY_CUTOFF='2026-09-22T18:23:05.100429+00:00'
+          readonly RESEARCH_ROOT="/home/lightworld/research/irexpro-barrier-v5-screen/$candidate_sha"
+          readonly WORKTREE="$RESEARCH_ROOT/worktree"
+          readonly REPORT="$RESEARCH_ROOT/barrier-v5-5m-one-fold.json"
+
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          git fetch --quiet --no-tags origin "$candidate_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$candidate_sha"
+
+          for pair in EURUSD GBPUSD USDJPY AUDUSD USDCAD USDCHF; do
+            test -r "$CORPUS_ROOT/${pair}_MTF.csv"
+          done
+
+          python_bin="$STAGING_ROOT/services/ai-engine/.venv/bin/python"
+          test -x "$python_bin"
+          "$python_bin" - <<'PY'
+          import numpy, pandas, sklearn, xgboost
+          print('BARRIER_V5_RUNTIME_OK')
+          PY
+
+          install -d -m 700 "$RESEARCH_ROOT"
+          if [[ -d "$WORKTREE" ]]; then
+            git worktree remove --force "$WORKTREE" 2>/dev/null || rm -rf "$WORKTREE"
+          fi
+          git worktree add --detach "$WORKTREE" "$candidate_sha" >/dev/null
+          cleanup() {
+            cd "$STAGING_ROOT"
+            git worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          cd "$WORKTREE/services/ai-engine"
+          export IREXPRO_XGB_N_JOBS=4
+          "$python_bin" -m app.domain.training.short_horizon_barrier_calibrated \
+            --dataset "EURUSD=$CORPUS_ROOT/EURUSD_MTF.csv" \
+            --dataset "GBPUSD=$CORPUS_ROOT/GBPUSD_MTF.csv" \
+            --dataset "USDJPY=$CORPUS_ROOT/USDJPY_MTF.csv" \
+            --dataset "AUDUSD=$CORPUS_ROOT/AUDUSD_MTF.csv" \
+            --dataset "USDCAD=$CORPUS_ROOT/USDCAD_MTF.csv" \
+            --dataset "USDCHF=$CORPUS_ROOT/USDCHF_MTF.csv" \
+            --horizon-bars 5 \
+            --validation-periods 7200 \
+            --max-splits 1 \
+            --decision-time-before "$STUDY_CUTOFF" \
+            --report "$REPORT" \
+            > "$RESEARCH_ROOT/run.log" 2>&1
+
+          "$python_bin" - "$REPORT" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          report = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          participation = report['participation']
+          trading = report['trading']
+          classification = report['classification']
+          gates = report['gates']
+          print(
+              'BARRIER_V5_RESULT '
+              f"passed={str(report['research_gate_passed']).lower()} "
+              f"opportunities_per_day={participation['opportunities_per_validation_day']:.4f} "
+              f"target_per_day={participation['target_per_validation_day']:.4f} "
+              f"balanced_accuracy={classification['balanced_accuracy']} "
+              f"profit_factor={trading['profit_factor']} "
+              f"sharpe={trading['sharpe_ratio']} "
+              f"max_drawdown={trading['max_drawdown']} "
+              f"positive_fold_fraction={report['robustness']['positive_fold_fraction']} "
+              f"positive_instrument_fraction={report['robustness']['positive_instrument_fraction']}"
+          )
+          print('BARRIER_V5_GATES ' + json.dumps(gates, sort_keys=True))
+          print('BARRIER_V5_GOVERNANCE approved_for_paper=false approved_for_demo=false approved_for_live=false')
+          PY
+          REMOTE
+          )"
+          printf '%s\n' "$remote_output"
+          result_line="$(grep '^BARRIER_V5_RESULT ' <<<"$remote_output" | tail -1)"
+          test -n "$result_line"
+          if grep -q 'passed=true' <<<"$result_line"; then
+            printf 'research_gate_passed=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'research_gate_passed=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download research evidence
+        if: always() && steps.screen.outcome == 'success'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          scp \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -P "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST:/home/lightworld/research/irexpro-barrier-v5-screen/$CANDIDATE_SHA/barrier-v5-5m-one-fold.json" \
+            artifacts/
+          scp \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -P "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST:/home/lightworld/research/irexpro-barrier-v5-screen/$CANDIDATE_SHA/run.log" \
+            artifacts/
+
+      - name: Upload 5m research evidence
+        if: always() && hashFiles('artifacts/*') != ''
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: barrier-v5-5m-${{ env.CANDIDATE_SHA }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce research-only scope
+        if: always() && steps.screen.outcome == 'success'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf 'BARRIER_V5_RESEARCH_ONLY paper=false demo=false live=false\n'
+          if [[ "${{ steps.screen.outputs.research_gate_passed }}" == 'true' ]]; then
+            printf 'BARRIER_V5_SCREEN_PASS next=full_multifold_5m\n'
+          else
+            printf 'BARRIER_V5_SCREEN_REJECTED next=diagnose_5m do_not_run_20m_or_60m\n'
+          fi
