@@ -1,4 +1,7 @@
-import { evaluatePaperShadowLocalEdgePocket } from './paper-shadow-local-edge-pocket';
+import {
+  evaluatePaperShadowLocalEdgePocket,
+  isHighConvictionPaperShadowLocalEdgePocket,
+} from './paper-shadow-local-edge-pocket';
 
 const supported = {
   samples: 44,
@@ -74,5 +77,23 @@ describe('PAPER shadow local-edge pocket', () => {
       state: 'UNAVAILABLE',
       reason: 'LOCAL_EDGE_EVIDENCE_INVALID',
     });
+  });
+
+  it('identifies only unusually strong mature pockets for the three-vote scout', () => {
+    const decision = evaluatePaperShadowLocalEdgePocket(supported);
+    expect(isHighConvictionPaperShadowLocalEdgePocket(decision)).toBe(true);
+
+    const merelySupported = evaluatePaperShadowLocalEdgePocket({
+      ...supported,
+      samples: 24,
+      wins: 14,
+      losses: 10,
+      averageNetR: 0.12,
+      profitFactor: 1.3,
+      recentWins: 5,
+      recentNetR: 0.6,
+    });
+    expect(merelySupported.supported).toBe(true);
+    expect(isHighConvictionPaperShadowLocalEdgePocket(merelySupported)).toBe(false);
   });
 });
