@@ -213,37 +213,25 @@ def fit_pair_conditional_payoff_expert(
         labeled,
         horizon_bars=horizon_bars,
     )
-    classifier_builder = classifier_factory or _barrier_classifier
-    classifiers: dict[str, Any] = {}
-    for side, target_column in (
+    classifier_targets = (
         ("long", "barrier_long_target"),
         ("short", "barrier_short_target"),
-    ):
+    )
+    for side, target_column in classifier_targets:
         if fit[target_column].nunique() < 2 or early[target_column].nunique() < 2:
             raise InsufficientConditionalEvidenceError(
                 f"{pair} {side} barrier expert requires both classes"
             )
-        model = classifier_builder(side)
-        model.fit(
-            fit[list(feature_columns)],
-            fit[target_column].astype(int),
-            sample_weight=_binary_class_weights(fit[target_column]),
-            eval_set=[(early[list(feature_columns)], early[target_column].astype(int))],
-            sample_weight_eval_set=[_binary_class_weights(early[target_column])],
-            verbose=False,
-        )
-        classifiers[side] = model
 
     fit_targets = _conditional_severity_targets(fit)
     early_targets = _conditional_severity_targets(early)
-    severity_builder = regressor_factory or _severity_regressor
-    severity_models: dict[str, Any] = {}
-    for component in (
+    severity_components = (
         "long_favorable",
         "long_adverse",
         "short_favorable",
         "short_adverse",
-    ):
+    )
+    for component in severity_components:
         fit_target = fit_targets[component]
         early_target = early_targets[component]
         if len(fit_target.values) < min_conditional_fit_rows:
@@ -256,6 +244,26 @@ def fit_pair_conditional_payoff_expert(
                 f"{pair} conditional {component} early evidence too small: "
                 f"{len(early_target.values)}"
             )
+
+    classifier_builder = classifier_factory or _barrier_classifier
+    classifiers: dict[str, Any] = {}
+    for side, target_column in classifier_targets:
+        model = classifier_builder(side)
+        model.fit(
+            fit[list(feature_columns)],
+            fit[target_column].astype(int),
+            sample_weight=_binary_class_weights(fit[target_column]),
+            eval_set=[(early[list(feature_columns)], early[target_column].astype(int))],
+            sample_weight_eval_set=[_binary_class_weights(early[target_column])],
+            verbose=False,
+        )
+        classifiers[side] = model
+
+    severity_builder = regressor_factory or _severity_regressor
+    severity_models: dict[str, Any] = {}
+    for component in severity_components:
+        fit_target = fit_targets[component]
+        early_target = early_targets[component]
         model = severity_builder(component)
         model.fit(
             fit.loc[fit_target.row_index, list(feature_columns)],

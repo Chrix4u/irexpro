@@ -190,6 +190,8 @@ def test_pair_expert_rejects_insufficient_conditional_side_evidence() -> None:
             min_conditional_early_rows=5,
         )
 
+    assert calls == []
+
 
 def test_pair_expert_rejects_one_class_barrier_classifier_evidence() -> None:
     from app.domain.training.short_horizon_conditional_payoff import (
