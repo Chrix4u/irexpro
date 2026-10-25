@@ -519,7 +519,13 @@ def _attach_selected_barrier_return(routed: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def _barrier_metrics(periods: pd.DataFrame, *, horizon_bars: int) -> dict[str, Any]:
+def _barrier_metrics(
+    periods: pd.DataFrame,
+    *,
+    validation_days: int,
+) -> dict[str, Any]:
+    observed_daily_frequency = float(len(periods) / max(validation_days, 1))
+    annualization_factor = max(observed_daily_frequency * 260.0, 1.0)
     if periods.empty:
         return {
             "trade_or_period_count": 0,
@@ -531,10 +537,14 @@ def _barrier_metrics(periods: pd.DataFrame, *, horizon_bars: int) -> dict[str, A
             "sharpe_ratio": None,
             "sortino_ratio": None,
             "max_drawdown": 0.0,
+            "annualization_factor": annualization_factor,
         }
     returns = periods["portfolio_net_return"].to_numpy(dtype=float)
-    periods_per_year = (365.25 * 24.0 * 60.0) / float(horizon_bars)
-    return compute_backtest_metrics(returns, annualization_factor=periods_per_year)
+    metrics = compute_backtest_metrics(
+        returns,
+        annualization_factor=annualization_factor,
+    )
+    return {**metrics, "annualization_factor": annualization_factor}
 
 
 def _active_balanced_accuracy(predictions: pd.DataFrame) -> float | None:
@@ -621,7 +631,13 @@ def evaluate_barrier_calibrated_frame(
             routed,
             horizon_bars=horizon_bars,
         )
-        fold_metrics = _barrier_metrics(fold_periods, horizon_bars=horizon_bars)
+        fold_validation_days = int(
+            routed["decision_time"].dt.normalize().drop_duplicates().shape[0]
+        )
+        fold_metrics = _barrier_metrics(
+            fold_periods,
+            validation_days=fold_validation_days,
+        )
         folds.append(
             {
                 "fold": fold_index,
@@ -643,9 +659,12 @@ def evaluate_barrier_calibrated_frame(
         all_predictions,
         horizon_bars=horizon_bars,
     )
-    metrics = _barrier_metrics(periods, horizon_bars=horizon_bars)
     validation_days = int(
         all_predictions["decision_time"].dt.normalize().drop_duplicates().shape[0]
+    )
+    metrics = _barrier_metrics(
+        periods,
+        validation_days=validation_days,
     )
     opportunities_per_day = float(len(periods) / max(validation_days, 1))
     target_per_day = PARTICIPATION_TARGETS_PER_DAY[horizon_bars]

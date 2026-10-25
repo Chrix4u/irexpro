@@ -173,6 +173,9 @@ def test_high_activity_cannot_pass_when_economics_are_losing() -> None:
     )
 
     assert report["participation"]["opportunities_per_validation_day"] >= 24.0
+    assert report["trading"]["annualization_factor"] == (
+        report["participation"]["opportunities_per_validation_day"] * 260.0
+    )
     assert report["gates"]["participation"] is True
     assert report["gates"]["profit_factor"] is False
     assert report["gates"]["sharpe"] is False
