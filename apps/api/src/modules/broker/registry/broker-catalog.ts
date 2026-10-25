@@ -55,7 +55,9 @@ export const CTRADER_FAMILY_BROKER_IDS: readonly string[] = [
 export const BROKER_CATALOG: readonly BrokerDefinition[] = [
   {
     id: 'metatrader5',
-    name: 'MetaTrader 5 (via MetaApi)',
+    name: 'MetaTrader 5 — MetaApi Cloud',
+    platform: 'METATRADER5',
+    connectionMethod: 'METAAPI_CLOUD',
     description:
       'MT4/MT5 accounts connected through the MetaApi cloud bridge. Full order, ' +
       'position, margin and history support with per-account RPC pooling.',
@@ -106,8 +108,41 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
     regions: [],
   },
   {
+    id: 'metatrader5-native',
+    name: 'MetaTrader 5 — iRexPro Native Bridge',
+    platform: 'METATRADER5',
+    connectionMethod: 'IREXPRO_NATIVE_BRIDGE',
+    description:
+      'First-party MT5 connector. The iRexPro Bridge EA runs inside the already logged-in MetaTrader 5 terminal and creates an outbound authenticated connection to iRexPro; no broker password is stored by iRexPro.',
+    adapterId: 'metatrader5-native',
+    status: BrokerAvailabilityStatus.BETA,
+    productionLiveVerification: { status: 'UNVERIFIED' },
+    connectionRoutes: [BrokerConnectionRoute.METATRADER],
+    capabilities: [
+      BrokerCapability.ACCOUNT_READ,
+      BrokerCapability.BALANCE_READ,
+      BrokerCapability.POSITION_READ,
+      BrokerCapability.ORDER_READ,
+      BrokerCapability.HISTORY_READ,
+      BrokerCapability.MARKET_DATA,
+      BrokerCapability.MARKET_DATA_STREAMING,
+      BrokerCapability.SESSION_AUTH,
+      BrokerCapability.DEMO,
+      BrokerCapability.METATRADER,
+      BrokerCapability.ORDER_PLACEMENT,
+      BrokerCapability.ORDER_MODIFICATION,
+      BrokerCapability.CLOSE_ALL,
+      BrokerCapability.MARGIN_CALCULATION,
+    ],
+    authenticationType: 'SESSION_AUTH',
+    environments: ['DEMO'],
+    regions: [],
+  },
+  {
     id: 'paper-broker',
     name: 'iRexPro Paper Broker',
+    platform: 'IREXPRO_PAPER',
+    connectionMethod: 'INTERNAL_PAPER',
     description:
       'Deterministic in-platform simulation broker for PAPER execution. ' +
       'Cannot reach LIVE infrastructure by design — environment isolation is enforced.',
@@ -135,6 +170,8 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
   {
     id: 'oanda',
     name: 'OANDA (v20 REST — BETA)',
+    platform: 'OANDA',
+    connectionMethod: 'OANDA_V20_REST',
     description:
       'Native OANDA v20 REST adapter (Sprint 51 PR-7). Accounts, pricing, ' +
       'instruments, market/limit/stop orders, positions (trades), history, ' +
@@ -173,6 +210,8 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
   {
     id: 'ctrader',
     name: 'cTrader (Open API — BETA)',
+    platform: 'CTRADER',
+    connectionMethod: 'CTRADER_OPEN_API',
     description:
       'Universal cTrader Open API adapter (JSON over WebSocket, port 5036; ' +
       'Sprint 56 / Task 48-B). Accounts, pricing, instruments, MARKET/LIMIT/STOP/' +
@@ -215,6 +254,8 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
   {
     id: 'pepperstone-ctrader',
     name: 'Pepperstone (via cTrader Open API — BETA)',
+    platform: 'CTRADER',
+    connectionMethod: 'CTRADER_OPEN_API',
     description:
       'Pepperstone cTrader accounts reached through the shared universal ' +
       'cTrader Open API engine (adapterId ctrader — JSON over WebSocket). ' +
@@ -250,6 +291,8 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
   {
     id: 'icmarkets-ctrader',
     name: 'IC Markets (via cTrader Open API — BETA)',
+    platform: 'CTRADER',
+    connectionMethod: 'CTRADER_OPEN_API',
     description:
       'IC Markets cTrader accounts reached through the shared universal ' +
       'cTrader Open API engine (adapterId ctrader — JSON over WebSocket). ' +
