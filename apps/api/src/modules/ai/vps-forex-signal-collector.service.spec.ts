@@ -27,6 +27,7 @@ import * as PaperSpreadCalibrationModule from './paper-spread-calibration-shadow
 import { PAPER_POST_LOSS_STATE_QUERY } from './paper-post-loss-state-query';
 import * as PaperPostLossEntryGuardModule from './paper-post-loss-entry-guard';
 import * as PaperOpportunityScoutModule from './paper-opportunity-scout';
+import * as PaperChampionDirectionPriorModule from './paper-champion-direction-prior';
 
 // Collection fixtures explicitly provide a healthy, empty PAPER history.
 // Missing/empty production store responses are tested separately below.
@@ -585,6 +586,97 @@ describe('VpsForexSignalCollectorService', () => {
       researchFallbackRequested: false,
       reason: 'INSUFFICIENT_PAIR_SIDE_EVIDENCE',
     });
+  });
+
+  it('builds and caches a 12-sleeve champion direction prior snapshot from the latest 100 champion trades', async () => {
+    const dataSource = {
+      query: jest.fn().mockResolvedValue([
+        {
+          instrument: 'GBPUSD',
+          direction: 'SELL',
+          trades: 12,
+          gross_profit: '27.8',
+          gross_loss: '20.4',
+          net_pnl: '7.4',
+        },
+        {
+          instrument: 'EURUSD',
+          direction: 'SELL',
+          trades: 11,
+          gross_profit: '20.4',
+          gross_loss: '39.5',
+          net_pnl: '-19.1',
+        },
+      ]),
+    };
+    const collector = createCollector(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      dataSource as any,
+    );
+
+    const snapshot = await (collector as any).loadPaperChampionDirectionPriorSnapshot(
+      'user-1',
+      'conn-1',
+    );
+    const cached = await (collector as any).loadPaperChampionDirectionPriorSnapshot(
+      'user-1',
+      'conn-1',
+    );
+
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
+    const [sql, params] = dataSource.query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('LIMIT 100');
+    expect(params).toEqual(
+      expect.arrayContaining([
+        'user-1',
+        'conn-1',
+        'external-provider/irexpro-multimodel-ensemble-v1/paper-only-v1',
+      ]),
+    );
+    expect(cached).toBe(snapshot);
+    expect(snapshot).toHaveLength(12);
+    expect(
+      snapshot.find((row: any) => row.instrument === 'GBPUSD' && row.direction === 'SELL'),
+    ).toMatchObject({
+      supported: true,
+      reason: 'CHAMPION_DIRECTION_SUPPORTED',
+      trades: 12,
+      netPnl: 7.4,
+    });
+    expect(
+      snapshot.find((row: any) => row.instrument === 'EURUSD' && row.direction === 'SELL'),
+    ).toMatchObject({
+      supported: false,
+      reason: 'CHAMPION_DIRECTION_NET_PNL_NOT_POSITIVE',
+    });
+    expect(
+      snapshot.find((row: any) => row.instrument === 'USDJPY' && row.direction === 'BUY'),
+    ).toMatchObject({
+      supported: false,
+      reason: 'INSUFFICIENT_CHAMPION_DIRECTION_EVIDENCE',
+      trades: 0,
+    });
+  });
+
+  it('fails closed to no champion direction prior when the snapshot query is unavailable', async () => {
+    const collector = createCollector(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query: jest.fn().mockRejectedValue(new Error('db unavailable')) } as any,
+    );
+
+    await expect(
+      (collector as any).loadPaperChampionDirectionPriorSnapshot('user-1', 'conn-1'),
+    ).resolves.toEqual([]);
   });
 
   it('excludes an incomplete H4 bucket from causal higher-timeframe context', () => {
@@ -1666,6 +1758,15 @@ describe('VpsForexSignalCollectorService', () => {
       lastOpenedAt: new Date(Date.now() - 65 * 60_000),
       idleMinutes: 65,
     });
+    const championDirectionPrior =
+      PaperChampionDirectionPriorModule.evaluatePaperChampionDirectionPrior({
+        instrument: 'GBPUSD',
+        direction: 'BUY',
+        evidence: { trades: 8, grossProfit: 18, grossLoss: 6, netPnl: 12 },
+      });
+    const championPriorSnapshotSpy = jest
+      .spyOn(collector as any, 'loadPaperChampionDirectionPriorSnapshot')
+      .mockResolvedValue([championDirectionPrior]);
     const pairSideReliabilitySpy = jest
       .spyOn(collector as any, 'loadPaperTrendPairSideReliabilityEvidence')
       .mockResolvedValue(null);
@@ -1821,10 +1922,17 @@ describe('VpsForexSignalCollectorService', () => {
         }) as unknown as typeof fetch,
       );
 
+      expect(championPriorSnapshotSpy).toHaveBeenCalledWith('user-1', 'conn-1');
       expect(scoutSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           idleMinutes: 65,
           netExpectedR: 0.42,
+          championDirectionPrior: expect.objectContaining({
+            instrument: 'GBPUSD',
+            direction: 'BUY',
+            supported: true,
+            reason: 'CHAMPION_DIRECTION_SUPPORTED',
+          }),
           shadowDirectionalPulse: expect.objectContaining({
             status: 'SUPPORTED',
             candidateSamples: 8,

@@ -524,7 +524,7 @@ describe('PAPER opportunity scout', () => {
           regime: 'REVERSAL_CONFIRMED',
           championDirectionPrior: supportedPrior,
         }),
-      ).toMatchObject({ eligible: false, reason: 'ROUTE_NOT_SCOUTABLE' });
+      ).toMatchObject({ eligible: false, reason: 'ROUTE_NOT_SCOUTABLE', mode: 'BASE' });
       expect(
         evaluatePaperOpportunityScout({
           ...base,

@@ -189,7 +189,10 @@ function decision(
 export function evaluatePaperOpportunityScout(
   input: PaperOpportunityScoutInput,
 ): PaperOpportunityScoutDecision {
-  const policy = resolvePolicy(input.idleMinutes, input.championDirectionPrior);
+  const policy = resolvePolicy(
+    input.idleMinutes,
+    input.strategyRoute === 'TREND_CONTINUATION' ? input.championDirectionPrior : null,
+  );
   const reject = (reason: PaperOpportunityScoutReason) => decision(policy, false, reason);
 
   if (input.normalPaperExecution) return reject('FULL_SIZE_ALREADY_ELIGIBLE');

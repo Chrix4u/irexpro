@@ -78,7 +78,8 @@ export function evaluatePaperChampionDirectionPrior(
   }
   if (
     profitFactor !== null &&
-    (!Number.isFinite(profitFactor) || profitFactor < PAPER_CHAMPION_DIRECTION_PRIOR_MIN_PROFIT_FACTOR)
+    (!Number.isFinite(profitFactor) ||
+      profitFactor < PAPER_CHAMPION_DIRECTION_PRIOR_MIN_PROFIT_FACTOR)
   ) {
     return {
       ...base,

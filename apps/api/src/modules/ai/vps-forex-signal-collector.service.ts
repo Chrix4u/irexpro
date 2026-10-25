@@ -133,6 +133,10 @@ import {
   PaperOpportunityScoutDecision,
   evaluatePaperOpportunityScout,
 } from './paper-opportunity-scout';
+import {
+  PaperChampionDirectionPriorDecision,
+  evaluatePaperChampionDirectionPrior,
+} from './paper-champion-direction-prior';
 import { AllocationService } from '../execution/services/allocation.service';
 import {
   paperAllocationRiskTargetPercent,
@@ -181,6 +185,8 @@ const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 export function paperOpportunityScoutModelVersion(engineCode: string): string {
   return `external-provider/${engineCode}/paper-opportunity-scout-v6-shadow-pulse-0.10-tier`;
 }
+const PAPER_CHAMPION_MODEL_VERSION =
+  'external-provider/irexpro-multimodel-ensemble-v1/paper-only-v1';
 const LEGACY_V7_EXECUTION_FROZEN = true;
 const MULTI_MODEL_PAPER_EXECUTION_ENABLED = true;
 
@@ -937,6 +943,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     string,
     { expiresAt: number; snapshot: PaperTrendPairSideReliabilityStatus[] }
   >();
+  private readonly championDirectionPriorCache = new Map<
+    string,
+    { expiresAt: number; snapshot: PaperChampionDirectionPriorDecision[] }
+  >();
   private readonly shadowDirectionalOutcomeCache = new Map<
     string,
     { expiresAt: number; outcomes: AdaptiveShadowDirectionalOutcome[] }
@@ -1535,6 +1545,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperSession.startedAt,
           )
         : { available: false, lastOpenedAt: null, idleMinutes: null };
+      const paperChampionDirectionPriorSnapshot = paperSession
+        ? await this.loadPaperChampionDirectionPriorSnapshot(userId, connectionId)
+        : [];
       const preAdaptiveCandidateRanks = new Map<Candidate, number>(
         rankedCandidates.map((candidate, index) => [candidate, index + 1]),
       );
@@ -1833,6 +1846,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             portfolio: initialAdaptivePortfolio,
           });
           const calibration = adaptiveEvidencePass.predictionCalibration;
+          const championDirectionPrior =
+            paperChampionDirectionPriorSnapshot.find(
+              (prior) => prior.instrument === best.instrument && prior.direction === best.direction,
+            ) ?? null;
           const paperOpportunityScout = evaluatePaperOpportunityScout({
             normalPaperExecution: fullSizePaperExecutionCandidate,
             direction: best.direction,
@@ -1852,6 +1869,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             driftState: ensembleGovernance.driftState,
             driftDiagnostics: ensembleGovernance.driftDiagnostics,
             idleMinutes: paperIdleState.idleMinutes,
+            championDirectionPrior,
             shadowDirectionalPulse: adaptiveEvidencePass.shadowDirectionalPulse,
             calibration: {
               authoritative: calibration.authoritative,
@@ -4468,6 +4486,88 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       .flatMap((observations) => collapseEnsembleOutcomeEpisodes(observations))
       .sort((a, b) => new Date(a.resolvedAt).getTime() - new Date(b.resolvedAt).getTime());
     return summarizeEnsembleSleeveOutcomes(episodes);
+  }
+
+  private async loadPaperChampionDirectionPriorSnapshot(
+    userId: string,
+    connectionId: string,
+  ): Promise<PaperChampionDirectionPriorDecision[]> {
+    const cacheKey = `${userId}:${connectionId}:${PAPER_CHAMPION_MODEL_VERSION}`;
+    const cached = this.championDirectionPriorCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.snapshot;
+    if (!this.dataSource) return [];
+
+    try {
+      const rows = (await this.dataSource.query(
+        `
+          WITH champion AS (
+            SELECT t.instrument, t.direction, t.realised_pnl, t.closed_at
+            FROM trading.trades t
+            INNER JOIN trading.trade_intents ti ON ti.id = t.trade_intent_id
+            WHERE t.user_id = $1
+              AND t.broker_connection_id = $2
+              AND t.status = 'CLOSED'
+              AND t.realised_pnl IS NOT NULL
+              AND ti.model_version = $3
+            ORDER BY t.closed_at DESC
+            LIMIT 100
+          )
+          SELECT
+            instrument,
+            direction,
+            COUNT(*)::int AS trades,
+            COALESCE(SUM(CASE WHEN realised_pnl > 0 THEN realised_pnl ELSE 0 END), 0)::text AS gross_profit,
+            COALESCE(ABS(SUM(CASE WHEN realised_pnl < 0 THEN realised_pnl ELSE 0 END)), 0)::text AS gross_loss,
+            COALESCE(SUM(realised_pnl), 0)::text AS net_pnl
+          FROM champion
+          WHERE instrument = ANY($4::text[])
+            AND direction IN ('BUY', 'SELL')
+          GROUP BY instrument, direction
+        `,
+        [userId, connectionId, PAPER_CHAMPION_MODEL_VERSION, SYMBOLS.map(([symbol]) => symbol)],
+      )) as Array<{
+        instrument: string;
+        direction: 'BUY' | 'SELL';
+        trades: number | string;
+        gross_profit: number | string;
+        gross_loss: number | string;
+        net_pnl: number | string;
+      }>;
+
+      const byDirection = new Map<string, (typeof rows)[number]>();
+      for (const row of rows) {
+        const instrument = String(row.instrument).trim().toUpperCase();
+        if (!SYMBOLS.some(([symbol]) => symbol === instrument)) continue;
+        if (row.direction !== 'BUY' && row.direction !== 'SELL') continue;
+        byDirection.set(`${instrument}:${row.direction}`, { ...row, instrument });
+      }
+
+      const snapshot = SYMBOLS.flatMap(([instrument]) =>
+        (['BUY', 'SELL'] as const).map((direction) => {
+          const row = byDirection.get(`${instrument}:${direction}`);
+          return evaluatePaperChampionDirectionPrior({
+            instrument,
+            direction,
+            evidence: row
+              ? {
+                  trades: Number(row.trades),
+                  grossProfit: Number(row.gross_profit),
+                  grossLoss: Number(row.gross_loss),
+                  netPnl: Number(row.net_pnl),
+                }
+              : { trades: 0, grossProfit: 0, grossLoss: 0, netPnl: 0 },
+          });
+        }),
+      );
+      this.championDirectionPriorCache.set(cacheKey, {
+        expiresAt: Date.now() + PAPER_RELIABILITY_STATUS_CACHE_TTL_MS,
+        snapshot,
+      });
+      return snapshot;
+    } catch (error) {
+      this.logger.warn(`PAPER champion direction prior unavailable: ${(error as Error).message}`);
+      return [];
+    }
   }
 
   private async loadPaperTrendPairSideReliabilitySnapshot(
