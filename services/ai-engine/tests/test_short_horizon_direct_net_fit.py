@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import app.domain.training.short_horizon_direct_net as DirectNetModule
+import app.domain.training.short_horizon_direct_net as direct_net_module
 from app.domain.training.short_horizon_direct_net import (
     DirectNetCalibration,
     fit_pair_direct_net_experts,
@@ -43,7 +43,7 @@ class _RecordingRegressor:
         *,
         eval_set: list[tuple[pd.DataFrame, np.ndarray]],
         verbose: bool,
-    ) -> "_RecordingRegressor":
+    ) -> _RecordingRegressor:
         del target, verbose
         early_frame, _ = eval_set[0]
         self.records[f"{self.instrument}::{self.side}"] = _FitRecord(
@@ -112,8 +112,8 @@ def test_fit_uses_pair_specific_models_and_inner_tail_for_calibration(
         calibration_rows.append(len(predicted_best_bps))
         return _passed_calibration()
 
-    monkeypatch.setattr(DirectNetModule, "_make_direct_net_regressor", make_regressor)
-    monkeypatch.setattr(DirectNetModule, "select_density_budgeted_threshold", calibrate)
+    monkeypatch.setattr(direct_net_module, "_make_direct_net_regressor", make_regressor)
+    monkeypatch.setattr(direct_net_module, "select_density_budgeted_threshold", calibrate)
 
     models, calibrations, counts = fit_pair_direct_net_experts(
         _training_frame(),
