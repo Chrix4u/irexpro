@@ -95,7 +95,7 @@ export class DirectMt5PairingService {
   async createPairing(userId: string, brokerConnectionId: string): Promise<DirectMt5PairingResult> {
     const rows = (await this.dataSource.query(
       `
-        SELECT id, broker_id
+        SELECT id, broker_id, account_type
         FROM broker.broker_connections
         WHERE id = $1
           AND user_id = $2
@@ -103,13 +103,18 @@ export class DirectMt5PairingService {
         LIMIT 1
       `,
       [brokerConnectionId, userId],
-    )) as Array<{ id: string; broker_id: string }>;
+    )) as Array<{ id: string; broker_id: string; account_type: string }>;
     const connection = rows[0];
     if (!connection) {
       throw new NotFoundException('Broker connection not found');
     }
     if (connection.broker_id !== 'metatrader5') {
       throw new BadRequestException('Direct connector pairing is available only for MetaTrader 5');
+    }
+    if (connection.account_type !== 'DEMO') {
+      throw new BadRequestException(
+        'Direct MT5 onboarding is DEMO-only until LIVE is explicitly certified',
+      );
     }
 
     const connectorId = randomUUID();
@@ -182,7 +187,7 @@ export class DirectMt5PairingService {
 
     const rows = (await this.dataSource.query(
       `
-        UPDATE broker.direct_mt5_connectors
+        UPDATE broker.direct_mt5_connectors AS c
         SET state = 'ACTIVE',
             token_hash = $2,
             pairing_code_hash = NULL,
@@ -195,10 +200,15 @@ export class DirectMt5PairingService {
             last_heartbeat_at = now(),
             last_sequence = 0,
             updated_at = now()
-        WHERE pairing_code_hash = $1
-          AND state = 'PAIRING'
-          AND pairing_expires_at > now()
-        RETURNING id, broker_connection_id, user_id
+        FROM broker.broker_connections AS bc
+        WHERE c.pairing_code_hash = $1
+          AND c.state = 'PAIRING'
+          AND c.pairing_expires_at > now()
+          AND bc.id = c.broker_connection_id
+          AND bc.deleted_at IS NULL
+          AND bc.broker_id = 'metatrader5'
+          AND bc.account_id = $3
+        RETURNING c.id, c.broker_connection_id, c.user_id
       `,
       [
         pairingHash,
@@ -212,7 +222,9 @@ export class DirectMt5PairingService {
 
     const connector = rows[0];
     if (!connector) {
-      throw new BadRequestException('Pairing code is invalid or expired');
+      throw new BadRequestException(
+        'Pairing code is invalid or expired, or the MT5 account does not match this broker connection',
+      );
     }
 
     return {

@@ -695,6 +695,52 @@ export interface BrokerTestResult {
   errorMessage?: string;
 }
 
+/** Direct MT5 owner pairing code returned to authenticated onboarding clients. */
+export interface DirectMt5PairingView {
+  connectorId: string;
+  brokerConnectionId: string;
+  pairingCode: string;
+  expiresAt: string;
+}
+
+export type DirectMt5ConnectorState =
+  | "UNPAIRED"
+  | "PAIRING"
+  | "ACTIVE"
+  | "SUSPENDED"
+  | "REVOKED";
+
+export type DirectMt5ConnectorHealthReason =
+  | "READY"
+  | "NOT_PAIRED"
+  | "PAIRING_INCOMPLETE"
+  | "CONNECTOR_SUSPENDED"
+  | "CONNECTOR_REVOKED"
+  | "HEARTBEAT_MISSING"
+  | "HEARTBEAT_INVALID"
+  | "HEARTBEAT_STALE"
+  | "TRADING_DISABLED";
+
+/** Frontend-safe health projection. No connector token or MT5 credential material. */
+export interface DirectMt5ConnectionHealthView {
+  connectorId: string | null;
+  brokerConnectionId: string;
+  state: DirectMt5ConnectorState;
+  connected: boolean;
+  executionReady: boolean;
+  tradeAllowed: boolean;
+  lastHeartbeatAt: string | null;
+  heartbeatAgeMs: number | null;
+  accountLogin: string | null;
+  brokerServer: string | null;
+  reason: DirectMt5ConnectorHealthReason;
+}
+
+export interface DirectMt5RevokeResult {
+  connectorId: string;
+  revoked: true;
+}
+
 // ── Sprint 29: Onboarding + Risk Profile ─────────────────────────────────────
 
 /** Onboarding step identifiers. */
