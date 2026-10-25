@@ -59,6 +59,10 @@ Frequency is an additional requirement, never a replacement for economics:
 
 Inner pair calibration uses PF >= 1.10 and positive mean realised net bps so that the outer validation still has to prove the stricter research gate.
 
+## 5m conclusion
+
+After repairing score-scale coverage, the exact frozen one-fold 5m rerun produced 36–40 structurally eligible calibration choices per pair, but zero economically eligible choices across all six pairs. Even each pair's best structural slice remained negative after historical spread/friction accounting; USDJPY was closest at about -0.096 bps mean with PF 0.875. The model family therefore fails at economic side ranking rather than participation mechanics. v5 is rejected at 5m, and 20m/60m are intentionally not run under the early-rejection protocol.
+
 ## Governance
 
 This candidate is RESEARCH / SHADOW ONLY.

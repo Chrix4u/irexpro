@@ -102,5 +102,5 @@
 - [x] **Step 2: Add a RED regression** proving the default calibration can discover an economically valid 5–25% tail even when all useful model scores are below 0.55.
 - [x] **Step 3: Replace the absolute default score grid with bounded training-only probability/margin quantiles; keep row-count, density, side-balance, mean-return, and PF floors unchanged.**
 - [x] **Step 4: Run focused v5 tests, Ruff, and diff checks GREEN.**
-- [ ] **Step 5: Rerun the exact 5m / one-fold frozen-corpus screen with the adaptive grid.**
-- [ ] **Step 6: If economics or participation still fails, reject/diagnose 5m again and do not spend compute on 20m/60m. If it passes, proceed to full multi-fold 5m.**
+- [x] **Step 5: Rerun the exact 5m / one-fold frozen-corpus screen with the adaptive grid.** Every pair now had 36–40 structurally eligible calibration choices, confirming the score-scale defect was repaired.
+- [x] **Step 6: Reject v5 at 5m on economics and stop before 20m/60m.** All six pairs still had zero positive-mean / PF>=1.10 calibration candidates. Best structural means remained negative: EURUSD -0.231 bps (PF 0.693), GBPUSD -0.334 (0.662), USDJPY -0.096 (0.875), AUDUSD -1.076 (0.418), USDCAD -0.733 (0.432), USDCHF -0.862 (0.554). No pair was allowed to activate, so outer validation correctly remained at zero trades/opportunities.
