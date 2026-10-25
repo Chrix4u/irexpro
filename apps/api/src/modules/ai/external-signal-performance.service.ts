@@ -563,30 +563,52 @@ export class ExternalSignalPerformanceService {
     const targetWindowMinutes = 30;
     const windowStart = new Date(now.getTime() - targetWindowMinutes * 60_000);
 
-    const [tradeRows, m5Rows, blockerRows, m1Rows] = await Promise.all([
+    // Resolve the exact PAPER connection from the provider's own recent M5
+    // evidence before reading trade or M1 activity. This prevents a user's
+    // second broker connection from contaminating participation diagnostics.
+    const m5Rows = (await this.dataSource.query(
+      `
+        SELECT
+          broker_connection_id,
+          evaluated_at,
+          components -> 'adaptiveScanSummary' AS adaptive_scan_summary
+        FROM trading.ensemble_shadow_decisions
+        WHERE user_id = $1
+          AND engine_code = $2
+          AND evaluated_at >= $3
+          AND components ? 'adaptiveScanSummary'
+        ORDER BY evaluated_at DESC, id DESC
+        LIMIT 1
+      `,
+      [userId, providerCode, windowStart.toISOString()],
+    )) as Array<{
+      broker_connection_id?: string | null;
+      evaluated_at?: string | Date | null;
+      adaptive_scan_summary?: Record<string, unknown> | null;
+    }>;
+
+    const connectionId = String(m5Rows[0]?.broker_connection_id ?? '').trim();
+    if (!connectionId) {
+      return buildPaperParticipationDiagnostics({
+        now,
+        lastTradeAt: null,
+        targetWindowMinutes,
+        m5: null,
+        m5RecentBlockers: [],
+        m1Decisions: [],
+      });
+    }
+
+    const [tradeRows, blockerRows, m1Rows] = await Promise.all([
       this.dataSource.query(
         `
           SELECT MAX(t.opened_at) AS last_trade_at
           FROM trading.trades t
           WHERE t.user_id = $1
+            AND t.broker_connection_id = $2
             AND t.signal_id IS NOT NULL
         `,
-        [userId],
-      ),
-      this.dataSource.query(
-        `
-          SELECT
-            evaluated_at,
-            components -> 'adaptiveScanSummary' AS adaptive_scan_summary
-          FROM trading.ensemble_shadow_decisions
-          WHERE user_id = $1
-            AND engine_code = $2
-            AND evaluated_at >= $3
-            AND components ? 'adaptiveScanSummary'
-          ORDER BY evaluated_at DESC, id DESC
-          LIMIT 1
-        `,
-        [userId, providerCode, windowStart.toISOString()],
+        [userId, connectionId],
       ),
       this.dataSource.query(
         `
@@ -595,7 +617,8 @@ export class ExternalSignalPerformanceService {
             FROM trading.ensemble_shadow_decisions
             WHERE user_id = $1
               AND engine_code = $2
-              AND evaluated_at >= $3
+              AND broker_connection_id = $3
+              AND evaluated_at >= $4
           )
           SELECT jsonb_array_elements_text(
             COALESCE(components -> 'governance' -> 'paperExecutionBlockers', '[]'::jsonb)
@@ -607,18 +630,19 @@ export class ExternalSignalPerformanceService {
           ) AS recent_m5_blocker
           FROM recent
         `,
-        [userId, providerCode, windowStart.toISOString()],
+        [userId, providerCode, connectionId, windowStart.toISOString()],
       ),
       this.dataSource.query(
         `
           SELECT evaluated_at, route, execution_authority, blockers
           FROM trading.m1_tactical_decisions
           WHERE user_id = $1
-            AND evaluated_at >= $2
+            AND broker_connection_id = $2
+            AND evaluated_at >= $3
           ORDER BY evaluated_at DESC, id DESC
           LIMIT 240
         `,
-        [userId, windowStart.toISOString()],
+        [userId, connectionId, windowStart.toISOString()],
       ),
     ]);
 
@@ -628,7 +652,14 @@ export class ExternalSignalPerformanceService {
     const rawM5 = m5Rows[0]?.adaptive_scan_summary ?? null;
     let m5: PaperParticipationM5Summary | null = null;
     if (rawM5 && typeof rawM5 === 'object') {
-      const latestScanAt = new Date(rawM5.scanStartedAt ?? m5Rows[0]?.evaluated_at ?? Number.NaN);
+      const rawScanStartedAt = rawM5.scanStartedAt;
+      const scanStartedAtValue =
+        typeof rawScanStartedAt === 'string' ||
+        typeof rawScanStartedAt === 'number' ||
+        rawScanStartedAt instanceof Date
+          ? rawScanStartedAt
+          : (m5Rows[0]?.evaluated_at ?? Number.NaN);
+      const latestScanAt = new Date(scanStartedAtValue);
       if (Number.isFinite(latestScanAt.getTime())) {
         const direction = rawM5.bestDirection;
         m5 = {

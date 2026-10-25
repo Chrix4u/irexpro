@@ -671,13 +671,11 @@ it('builds user-scoped PAPER participation diagnostics from persisted M5 and M1 
   jest.useFakeTimers().setSystemTime(now);
   const query = jest.fn().mockImplementation(async (sql: string, params: unknown[]) => {
     expect(params[0]).toBe('user-1');
-    if (sql.includes('MAX(t.opened_at) AS last_trade_at')) {
-      return [{ last_trade_at: new Date('2026-10-26T07:00:00.000Z') }];
-    }
     if (sql.includes("components -> 'adaptiveScanSummary' AS adaptive_scan_summary")) {
       expect(params[1]).toBe('irexpro-multimodel-ensemble-v1');
       return [
         {
+          broker_connection_id: 'conn-paper-1',
           evaluated_at: new Date('2026-10-26T08:59:00.000Z'),
           adaptive_scan_summary: {
             scanStartedAt: '2026-10-26T08:59:00.000Z',
@@ -691,7 +689,12 @@ it('builds user-scoped PAPER participation diagnostics from persisted M5 and M1 
         },
       ];
     }
+    if (sql.includes('MAX(t.opened_at) AS last_trade_at')) {
+      expect(params[1]).toBe('conn-paper-1');
+      return [{ last_trade_at: new Date('2026-10-26T07:00:00.000Z') }];
+    }
     if (sql.includes('recent_m5_blocker')) {
+      expect(params[2]).toBe('conn-paper-1');
       expect(params[1]).toBe('irexpro-multimodel-ensemble-v1');
       return [
         { recent_m5_blocker: 'DRIFT_OUT_OF_DISTRIBUTION' },
@@ -699,6 +702,7 @@ it('builds user-scoped PAPER participation diagnostics from persisted M5 and M1 
       ];
     }
     if (sql.includes('FROM trading.m1_tactical_decisions')) {
+      expect(params[1]).toBe('conn-paper-1');
       return [
         {
           evaluated_at: new Date('2026-10-26T08:58:00.000Z'),
