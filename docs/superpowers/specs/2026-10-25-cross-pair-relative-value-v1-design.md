@@ -36,3 +36,9 @@ Run one horizon-1 outer fold first. If no calibrated mean-reversion or continuat
 ## Governance
 
 Research only. `approved_for_paper=false`, `approved_for_demo=false`, and `approved_for_live=false` regardless of screen outcome. No forced trade quota and no lowering economics/evidence gates.
+
+## Final Evidence — 2026-10-25
+
+The one-fold frozen horizon-1 screen was executed only after pushing evaluator SHA `34f78eac810d9656330a4224fd5486b4640e5994`. All six MTF corpus SHA-256 values matched the frozen v6 manifest. The train-only calibration tail failed economics before outer validation: the best bounded candidate was mean reversion at the 95th residual percentile (`|z| >= 2.055381`), with 4,207 active rows, LONG/SHORT fractions 50.72%/49.28%, mean spread-aware net return `-0.0001006548`, PF `0.125790`, and negative profit throughput. Its fail-closed reason was `NO_ECONOMIC_RESIDUAL_TAIL`.
+
+Because calibration failed, the untouched outer validation fold admitted zero signals and zero non-overlapping opportunities across seven validation days. PF, Sharpe and balanced accuracy are therefore undefined rather than zero-quality estimates. The candidate is **rejected** under the predeclared early-rejection rule. No learned cross-pair v2 or horizon-5 expansion is justified from this hypothesis, and no PAPER/DEMO/LIVE authority changes. Evidence is frozen in `services/ai-engine/reports/cross-pair-relative-value-v1-h1-one-fold-34f78eac810d9656330a4224fd5486b4640e5994.json` with report SHA-256 `3cc5ad7bdff221ce9b0b3e05dffd0759263174680ce3fc34f8cf6ada29d7850d`.

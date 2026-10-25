@@ -1,0 +1,103 @@
+{
+  "approved_for_demo": false,
+  "approved_for_live": false,
+  "approved_for_paper": false,
+  "candidate": "cross-pair-relative-value-v1",
+  "classification": {
+    "balanced_accuracy": null
+  },
+  "cost_model": {
+    "commission_bps_round_trip": 0.0,
+    "historical_spread": "half spread at entry + half spread at exit",
+    "slippage_bps_round_trip": 0.0
+  },
+  "dataset_sha256": {
+    "AUDUSD": "3531aeaf9e690674efb07eedbd1ade20ee51ee8d785bbc34a7c43ae8d3ad1d3a",
+    "EURUSD": "ee1934c2d58e23689e8a0b12a8c479bb2fa36f9236b9d99100eea66749c52375",
+    "GBPUSD": "e2faad48912271a0a3a5edc72624974c247fbb8aaec3bf25605c7c574ddd0348",
+    "USDCAD": "17fec4b7825e46f0c9c58cb5666b038f25f9f5b80763e7d518e292d47f17181b",
+    "USDCHF": "1649d1f1cc4816ef2b0bb419b0b4d69a125276b918a0da0457bbb3d857b62bce",
+    "USDJPY": "3601e7a92bda8ac36fd99a983f38827da435848bb12ee17afda8b3b02ff785db"
+  },
+  "decision_time_before": "2026-09-22T18:23:05.100429+00:00",
+  "folds": [
+    {
+      "active_signals": 0,
+      "calibration_end": "2026-08-27T08:28:00+00:00",
+      "calibration_policy": {
+        "active_rows": 4207,
+        "density": 0.050001188523615965,
+        "hypothesis": "mean_reversion",
+        "long_fraction": 0.5072498217256952,
+        "mean_net_return": -0.00010065481570389953,
+        "min_abs_residual_z": 2.055381171895871,
+        "passed": false,
+        "profit_factor": 0.12579017288922228,
+        "profit_throughput": -5.032860415820501e-06,
+        "quantile": 0.95,
+        "reason": "NO_ECONOMIC_RESIDUAL_TAIL",
+        "short_fraction": 0.4927501782743048
+      },
+      "calibration_start": "2026-08-13T04:18:00+00:00",
+      "fit_end": "2026-08-13T04:16:00+00:00",
+      "fit_start": "2026-06-17T12:59:00+00:00",
+      "fold": 1,
+      "non_overlapping_opportunities": 0,
+      "outer_train_end": "2026-08-27T08:28:00+00:00",
+      "total_return": 0.0,
+      "validation_end": "2026-09-03T13:32:00+00:00",
+      "validation_start": "2026-08-27T08:30:00+00:00"
+    }
+  ],
+  "gates": {
+    "balanced_accuracy": false,
+    "max_drawdown": true,
+    "participation": false,
+    "positive_fold_fraction": false,
+    "positive_instrument_fraction": false,
+    "profit_factor": false,
+    "sharpe": false
+  },
+  "horizon_minutes": 1,
+  "participation": {
+    "non_overlapping_opportunities": 0,
+    "opportunities_per_validation_day": 0.0,
+    "raw_active_signals": 0,
+    "target_per_validation_day": 24.0,
+    "validation_days": 7
+  },
+  "protocol": {
+    "all_six_pairs_required": true,
+    "embargo_periods": 1,
+    "inner_calibration_train_only": true,
+    "leave_one_out_usd_factor": true,
+    "non_overlapping_portfolio_counting": true,
+    "purge_periods": 1
+  },
+  "research_gate_passed": false,
+  "research_only": true,
+  "robustness": {
+    "instrument_positive": {
+      "AUDUSD": false,
+      "EURUSD": false,
+      "GBPUSD": false,
+      "USDCAD": false,
+      "USDCHF": false,
+      "USDJPY": false
+    },
+    "positive_fold_fraction": 0.0,
+    "positive_instrument_fraction": 0.0
+  },
+  "trading": {
+    "annualization_factor": 1.0,
+    "average_net_return": 0.0,
+    "max_drawdown": 0.0,
+    "median_net_return": 0.0,
+    "profit_factor": null,
+    "sharpe_ratio": null,
+    "sortino_ratio": null,
+    "total_return": 0.0,
+    "trade_or_period_count": 0,
+    "win_rate": 0.0
+  }
+}
