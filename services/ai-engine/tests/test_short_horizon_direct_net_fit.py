@@ -14,6 +14,7 @@ from app.domain.training.short_horizon_direct_net import (
 from app.domain.training.train_multitimeframe import (
     LONG_NET_RETURN_COLUMN,
     SHORT_NET_RETURN_COLUMN,
+    TARGET_COLUMN,
 )
 
 
@@ -71,6 +72,7 @@ def _training_frame() -> pd.DataFrame:
                     "decision_time": decision_time,
                     "instrument": instrument,
                     "feature_x": feature,
+                    TARGET_COLUMN: index % 2,
                     LONG_NET_RETURN_COLUMN: 0.0002 + index * 1e-8,
                     SHORT_NET_RETURN_COLUMN: -0.0001 + index * 1e-8,
                 }
