@@ -6,7 +6,10 @@ import { ReconciliationRunStatus } from './reconciliation.enums';
 describe('StateReconciliationService — provider error redaction', () => {
   it('redacts secret-like provider error material before persistence and audit', async () => {
     const secret = 'ABCDEFGHIJKLMNOP12345678';
-    const sanitized = 'provider rejected token [redacted]';
+    const accountIdentifier = '7fca0744-fd72-4f6a-ba1d-e0c0fced94da';
+    const providerUrl = `https://mt-provisioning-api.example.test/users/current/accounts/${accountIdentifier}/deploy`;
+    const sanitized =
+      'provider rejected token [redacted]; account [redacted-id]; Request URL: [redacted-url]';
 
     const tradeRepo = {};
     const orderRepo = {};
@@ -18,7 +21,13 @@ describe('StateReconciliationService — provider error redaction', () => {
     const adapter = {
       setMode: jest.fn(),
       connect: jest.fn().mockResolvedValue({ success: true, accountType: 'DEMO' }),
-      listOrders: jest.fn().mockRejectedValue(new Error(`provider rejected token ${secret}`)),
+      listOrders: jest
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            `provider rejected token ${secret}; account ${accountIdentifier}; Request URL: ${providerUrl}`,
+          ),
+        ),
       getOpenPositions: jest.fn().mockResolvedValue([]),
       getAccountInfo: jest.fn().mockResolvedValue({}),
     };
@@ -86,5 +95,9 @@ describe('StateReconciliationService — provider error redaction', () => {
 
     expect(JSON.stringify(persistence.failRun.mock.calls)).not.toContain(secret);
     expect(JSON.stringify(auditService.log.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify(persistence.failRun.mock.calls)).not.toContain(accountIdentifier);
+    expect(JSON.stringify(auditService.log.mock.calls)).not.toContain(accountIdentifier);
+    expect(JSON.stringify(persistence.failRun.mock.calls)).not.toContain(providerUrl);
+    expect(JSON.stringify(auditService.log.mock.calls)).not.toContain(providerUrl);
   });
 });

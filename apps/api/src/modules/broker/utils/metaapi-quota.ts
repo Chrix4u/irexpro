@@ -11,3 +11,10 @@ export function isMetaApiQuotaError(error: unknown): boolean {
     message.includes('429')
   );
 }
+
+export function isMetaApiDeploymentFundingError(error: unknown): boolean {
+  const message = (error as Error)?.message?.toLowerCase?.() ?? String(error).toLowerCase();
+  return (
+    message.includes('allow trading account deployment') && message.includes('top up your account')
+  );
+}

@@ -155,7 +155,7 @@ export class TradeReconciliationJob extends WorkerHost {
         providerQuotaDeferredConnections++;
         this.logger.warn(
           `Deferring full reconciliation sweep for connection ${connection.id} ` +
-            `until ${quotaCooldownUntil.toISOString()} because provider quota is cooling down`,
+            `until ${quotaCooldownUntil.toISOString()} because provider access is cooling down`,
         );
       } else if (livePaperMarketClosed) {
         marketSessionDeferredConnections++;
