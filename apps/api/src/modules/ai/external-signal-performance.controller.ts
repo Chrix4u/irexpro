@@ -25,4 +25,21 @@ export class ExternalSignalPerformanceController {
     }
     return this.performance.getProviderPerformance(userId, normalized);
   }
+  @Get('participation')
+  @ApiOperation({
+    summary: 'Read combined PAPER participation diagnostics',
+    description:
+      'Read-only user-scoped M5/M1 participation evidence. The 30-minute target is diagnostic only and never forces a trade or changes execution authority.',
+  })
+  @ApiQuery({ name: 'providerCode', required: true, example: 'irexpro-multimodel-ensemble-v1' })
+  async getParticipation(
+    @CurrentUserId() userId: string,
+    @Query('providerCode') providerCode: string,
+  ) {
+    const normalized = String(providerCode ?? '').trim();
+    if (!/^[a-zA-Z0-9._-]{2,64}$/.test(normalized)) {
+      throw new BadRequestException('Invalid providerCode');
+    }
+    return this.performance.getPaperParticipationDiagnostics(userId, normalized);
+  }
 }

@@ -21,3 +21,29 @@ describe('ExternalSignalPerformanceController', () => {
     );
   });
 });
+
+it('routes participation diagnostics through authenticated user scope', async () => {
+  const getPaperParticipationDiagnostics = jest.fn().mockResolvedValue({
+    state: 'NO_QUALIFIED_OPPORTUNITY',
+  });
+  const controller = new ExternalSignalPerformanceController({
+    getPaperParticipationDiagnostics,
+  } as unknown as ExternalSignalPerformanceService);
+
+  await controller.getParticipation('user-7', '  irexpro-multimodel-ensemble-v1  ');
+
+  expect(getPaperParticipationDiagnostics).toHaveBeenCalledWith(
+    'user-7',
+    'irexpro-multimodel-ensemble-v1',
+  );
+});
+
+it('rejects malformed provider codes for participation diagnostics', async () => {
+  const controller = new ExternalSignalPerformanceController({
+    getPaperParticipationDiagnostics: jest.fn(),
+  } as unknown as ExternalSignalPerformanceService);
+
+  await expect(controller.getParticipation('user-7', '../bad provider')).rejects.toBeInstanceOf(
+    BadRequestException,
+  );
+});
