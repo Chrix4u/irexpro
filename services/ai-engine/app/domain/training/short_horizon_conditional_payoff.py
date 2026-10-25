@@ -1,20 +1,30 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
+from app.domain.models.multitimeframe_features import (
+    INITIAL_FOREX_UNIVERSE,
+    MULTITIMEFRAME_FEATURE_COLUMNS,
+)
 from app.domain.training.model_qualification import ModelVariant, _regression_model_for_variant
 from app.domain.training.short_horizon_barrier_calibrated import (
+    _active_balanced_accuracy,
+    _attach_selected_barrier_return,
     _barrier_classifier,
+    _barrier_metrics,
     _binary_class_weights,
     _positive_probability,
     _profit_factor,
+    _split_barrier_train_calibration,
     _with_side_targets,
+    collapse_non_overlapping_barrier_signals,
 )
 from app.domain.training.train_multitimeframe import (
     EVENT_ACTIONABLE_TARGET_COLUMN,
@@ -23,7 +33,9 @@ from app.domain.training.train_multitimeframe import (
     EVENT_LONG_NET_RETURN_COLUMN,
     EVENT_SHORT_NET_RETURN_COLUMN,
     _split_internal_early_stopping_tail,
+    load_and_prepare_corpora,
 )
+from app.domain.training.validation import iter_purged_walk_forward_time_splits
 
 
 @dataclass(frozen=True)
@@ -570,3 +582,312 @@ def score_conditional_payoff(
         selected_expected_net=selected_expected_net,
         selected_payoff_ratio=selected_payoff_ratio,
     )
+
+PARTICIPATION_TARGET_PER_DAY = 24.0
+
+
+def _fit_and_calibrate_pair_expert(
+    training_frame: pd.DataFrame,
+    calibration_frame: pd.DataFrame,
+    *,
+    instrument: str,
+    horizon_bars: int,
+    calibration_min_rows: int,
+    expert_fitter: Callable[..., ConditionalPayoffPairExpert] | None = None,
+) -> ConditionalPayoffPairExpert:
+    fitter = expert_fitter or fit_pair_conditional_payoff_expert
+    expert = fitter(
+        training_frame,
+        instrument=instrument,
+        horizon_bars=horizon_bars,
+    )
+    pair = instrument.strip().upper()
+    if expert.instrument.upper() != pair:
+        raise ValueError(
+            f"conditional payoff fitter returned mismatched expert for {pair}"
+        )
+    pair_calibration = calibration_frame.loc[
+        calibration_frame["instrument"].astype(str).str.upper() == pair
+    ].copy()
+    if pair_calibration.empty:
+        raise ValueError(f"missing exact-pair calibration rows for {pair}")
+    score = _score_pair_expert(pair_calibration, expert)
+    calibration = select_conditional_payoff_calibration(
+        score,
+        pd.to_numeric(
+            pair_calibration[EVENT_LONG_NET_RETURN_COLUMN], errors="raise"
+        ).to_numpy(float)
+        * 10_000.0,
+        pd.to_numeric(
+            pair_calibration[EVENT_SHORT_NET_RETURN_COLUMN], errors="raise"
+        ).to_numpy(float)
+        * 10_000.0,
+        min_rows=calibration_min_rows,
+    )
+    return replace(expert, calibration=calibration)
+
+
+def evaluate_conditional_payoff_frame(
+    frame: pd.DataFrame,
+    *,
+    horizon_bars: int,
+    min_train_periods: int,
+    validation_periods: int,
+    max_splits: int = 3,
+    calibration_min_rows: int = CALIBRATION_MIN_ROWS,
+    expert_fitter: Callable[..., ConditionalPayoffPairExpert] | None = None,
+    router: Callable[
+        [pd.DataFrame, Mapping[str, ConditionalPayoffPairExpert]], pd.DataFrame
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    """Evaluate six-pair conditional-payoff v6 with purged walk-forward validation."""
+    if horizon_bars != 1:
+        raise ValueError("conditional payoff v6 first screen requires horizon_bars=1")
+    if calibration_min_rows < 1:
+        raise ValueError("calibration_min_rows must be positive")
+    required = {
+        "decision_time",
+        "instrument",
+        EVENT_ACTIONABLE_TARGET_COLUMN,
+        EVENT_DIRECTION_TARGET_COLUMN,
+        EVENT_BARRIER_RETURN_COLUMN,
+        EVENT_LONG_NET_RETURN_COLUMN,
+        EVENT_SHORT_NET_RETURN_COLUMN,
+    }
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(f"conditional payoff evaluator missing columns: {missing}")
+
+    dataset = frame.copy()
+    dataset["decision_time"] = pd.to_datetime(
+        dataset["decision_time"], utc=True, errors="raise"
+    )
+    expected_pairs = set(INITIAL_FOREX_UNIVERSE)
+    observed_pairs = set(dataset["instrument"].astype(str).str.upper().unique())
+    if observed_pairs != expected_pairs:
+        raise ValueError(
+            "conditional payoff evaluator requires exact six-pair universe; "
+            f"got {sorted(observed_pairs)}"
+        )
+    dataset = dataset.sort_values(["decision_time", "instrument"]).reset_index(
+        drop=True
+    )
+
+    routing = router or route_conditional_payoff_predictions
+    folds: list[dict[str, Any]] = []
+    predictions: list[pd.DataFrame] = []
+    for fold_index, (outer_train, validation) in enumerate(
+        iter_purged_walk_forward_time_splits(
+            dataset,
+            time_column="decision_time",
+            min_train_periods=min_train_periods,
+            validation_periods=validation_periods,
+            purge_periods=horizon_bars,
+            embargo_periods=horizon_bars,
+            max_splits=max_splits,
+        ),
+        start=1,
+    ):
+        model_train, calibration_frame = _split_barrier_train_calibration(
+            outer_train,
+            horizon_bars=horizon_bars,
+        )
+        experts: dict[str, ConditionalPayoffPairExpert] = {}
+        for instrument in INITIAL_FOREX_UNIVERSE:
+            experts[instrument] = _fit_and_calibrate_pair_expert(
+                model_train,
+                calibration_frame,
+                instrument=instrument,
+                horizon_bars=horizon_bars,
+                calibration_min_rows=calibration_min_rows,
+                expert_fitter=expert_fitter,
+            )
+
+        routed = routing(validation.copy(), experts)
+        required_route = {"active_trade", "predicted_long", "action"}
+        if not required_route.issubset(routed.columns):
+            raise ValueError("conditional payoff router omitted required execution columns")
+        routed = _attach_selected_barrier_return(routed)
+        routed["fold"] = fold_index
+        fold_periods = collapse_non_overlapping_barrier_signals(
+            routed,
+            horizon_bars=horizon_bars,
+        )
+        fold_validation_days = int(
+            routed["decision_time"].dt.normalize().drop_duplicates().shape[0]
+        )
+        fold_metrics = _barrier_metrics(
+            fold_periods,
+            validation_days=fold_validation_days,
+        )
+        folds.append(
+            {
+                "fold": fold_index,
+                "train_start": pd.Timestamp(outer_train["decision_time"].min()).isoformat(),
+                "train_end": pd.Timestamp(outer_train["decision_time"].max()).isoformat(),
+                "calibration_start": pd.Timestamp(
+                    calibration_frame["decision_time"].min()
+                ).isoformat(),
+                "calibration_end": pd.Timestamp(
+                    calibration_frame["decision_time"].max()
+                ).isoformat(),
+                "validation_start": pd.Timestamp(
+                    validation["decision_time"].min()
+                ).isoformat(),
+                "validation_end": pd.Timestamp(
+                    validation["decision_time"].max()
+                ).isoformat(),
+                "pair_calibrations": {
+                    instrument: (
+                        asdict(expert.calibration)
+                        if expert.calibration is not None
+                        else None
+                    )
+                    for instrument, expert in sorted(experts.items())
+                },
+                "active_signals": int(routed["active_trade"].sum()),
+                "non_overlapping_opportunities": int(len(fold_periods)),
+                "total_return": float(fold_metrics["total_return"]),
+            }
+        )
+        predictions.append(routed)
+
+    if not predictions:
+        raise ValueError("conditional payoff evaluator produced no validation folds")
+    all_predictions = pd.concat(predictions, ignore_index=True)
+    periods = collapse_non_overlapping_barrier_signals(
+        all_predictions,
+        horizon_bars=horizon_bars,
+    )
+    validation_days = int(
+        all_predictions["decision_time"].dt.normalize().drop_duplicates().shape[0]
+    )
+    metrics = _barrier_metrics(periods, validation_days=validation_days)
+    opportunities_per_day = float(len(periods) / max(validation_days, 1))
+    balanced_accuracy = _active_balanced_accuracy(all_predictions)
+
+    instrument_positive: dict[str, bool] = {}
+    for instrument, group in all_predictions.groupby("instrument", sort=True):
+        selected = group.loc[
+            group["active_trade"].astype(bool), "selected_net_return"
+        ]
+        instrument_positive[str(instrument)] = bool(
+            len(selected) and float(selected.sum()) > 0.0
+        )
+    positive_instrument_fraction = float(
+        sum(instrument_positive.values()) / len(INITIAL_FOREX_UNIVERSE)
+    )
+    positive_fold_fraction = float(
+        sum(float(fold["total_return"]) > 0.0 for fold in folds) / len(folds)
+    )
+
+    profit_factor = metrics["profit_factor"]
+    sharpe = metrics["sharpe_ratio"]
+    max_drawdown = float(metrics["max_drawdown"])
+    gates = {
+        "participation": opportunities_per_day >= PARTICIPATION_TARGET_PER_DAY,
+        "balanced_accuracy": balanced_accuracy is not None
+        and balanced_accuracy >= 0.52,
+        "profit_factor": profit_factor is not None and float(profit_factor) >= 1.15,
+        "sharpe": sharpe is not None and float(sharpe) >= 1.0,
+        "max_drawdown": max_drawdown <= 0.12,
+        "positive_fold_fraction": positive_fold_fraction >= 0.60,
+        "positive_instrument_fraction": positive_instrument_fraction >= 0.67,
+    }
+    return {
+        "candidate": "six-pair-conditional-payoff-v6",
+        "research_only": True,
+        "approved_for_paper": False,
+        "approved_for_demo": False,
+        "approved_for_live": False,
+        "horizon_minutes": horizon_bars,
+        "protocol": {
+            "purge_periods": horizon_bars,
+            "embargo_periods": horizon_bars,
+            "inner_calibration_train_only": True,
+            "pair_specific_probability_models": True,
+            "pair_specific_severity_models": True,
+            "expected_payoff_side_selection": True,
+            "cross_pair_fallback": False,
+            "non_overlapping_portfolio_counting": True,
+        },
+        "folds": folds,
+        "classification": {"balanced_accuracy": balanced_accuracy},
+        "trading": metrics,
+        "participation": {
+            "raw_active_signals": int(all_predictions["active_trade"].sum()),
+            "non_overlapping_opportunities": int(len(periods)),
+            "validation_days": validation_days,
+            "opportunities_per_validation_day": opportunities_per_day,
+            "target_per_validation_day": PARTICIPATION_TARGET_PER_DAY,
+        },
+        "robustness": {
+            "positive_fold_fraction": positive_fold_fraction,
+            "positive_instrument_fraction": positive_instrument_fraction,
+            "instrument_positive": instrument_positive,
+        },
+        "gates": gates,
+        "research_gate_passed": all(gates.values()),
+    }
+
+
+def evaluate_conditional_payoff_corpora(
+    datasets: Mapping[str, str | Path],
+    *,
+    horizon_bars: int,
+    report_path: str | Path,
+    min_train_periods: int | None = None,
+    validation_periods: int = 7200,
+    max_splits: int = 1,
+    calibration_min_rows: int = CALIBRATION_MIN_ROWS,
+    decision_time_before: str | pd.Timestamp | None = None,
+    commission_bps: float = 0.0,
+    slippage_bps: float = 0.0,
+) -> dict[str, Any]:
+    normalized = {str(key).upper(): value for key, value in datasets.items()}
+    expected = set(INITIAL_FOREX_UNIVERSE)
+    if set(normalized) != expected:
+        raise ValueError(
+            "conditional payoff corpus evaluation requires exact six-pair universe; "
+            f"got {sorted(normalized)}"
+        )
+    pooled, hashes = load_and_prepare_corpora(
+        normalized,
+        horizon_bars=horizon_bars,
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
+        decision_time_before=decision_time_before,
+    )
+    unique_periods = int(pooled["decision_time"].nunique())
+    train_periods = min_train_periods or max(1000, int(unique_periods * 0.70))
+    if train_periods + horizon_bars + validation_periods > unique_periods:
+        validation_periods = max(200, unique_periods - train_periods - horizon_bars)
+    report = evaluate_conditional_payoff_frame(
+        pooled,
+        horizon_bars=horizon_bars,
+        min_train_periods=train_periods,
+        validation_periods=validation_periods,
+        max_splits=max_splits,
+        calibration_min_rows=calibration_min_rows,
+    )
+    report["dataset_sha256"] = hashes
+    report["decision_time_before"] = (
+        pd.Timestamp(decision_time_before).isoformat()
+        if decision_time_before is not None
+        else None
+    )
+    report["cost_model"] = {
+        "commission_bps_round_trip": float(commission_bps),
+        "slippage_bps_round_trip": float(slippage_bps),
+        "historical_spread": "half spread at entry + half spread at exit",
+    }
+    output = Path(report_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(report, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    temporary.replace(output)
+    return {**report, "report_path": str(output)}
