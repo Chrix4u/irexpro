@@ -191,3 +191,188 @@ def test_validation_values_cannot_change_calibration_policy() -> None:
     policy_after = calibrate_relative_value_policy(calibration, min_active_rows=20)
 
     assert policy_after == policy_before
+
+
+def _evaluation_frame(periods: int = 420) -> pd.DataFrame:
+    times = pd.date_range("2026-08-01T00:00:00Z", periods=periods, freq="min")
+    rows: list[dict[str, object]] = []
+    for minute, decision_time in enumerate(times):
+        common = np.sin(minute / 11.0) * 0.0002
+        for pair_index, pair in enumerate(PAIRS):
+            orientation = 1.0 if pair in USD_BASE_PAIRS else -1.0
+            idiosyncratic = np.sin((minute + pair_index * 3) / 7.0) * 0.00008
+            pair_return = orientation * (common + idiosyncratic)
+            long_net = 0.00025 if pair_index % 2 == 0 else -0.00010
+            short_net = -0.00010 if pair_index % 2 == 0 else 0.00025
+            rows.append(
+                {
+                    "decision_time": decision_time,
+                    "instrument": pair,
+                    "m1_simple_return": pair_return,
+                    "long_net_return": long_net,
+                    "short_net_return": short_net,
+                }
+            )
+    return pd.DataFrame.from_records(rows)
+
+
+def _passed_policy() -> object:
+    from app.domain.training.cross_pair_relative_value import RelativeValuePolicy
+
+    return RelativeValuePolicy(
+        passed=True,
+        reason="PASSED",
+        hypothesis="mean_reversion",
+        quantile=0.70,
+        min_abs_residual_z=0.0,
+        active_rows=100,
+        density=0.25,
+        mean_net_return=0.0002,
+        profit_factor=2.0,
+        profit_throughput=0.00005,
+        long_fraction=0.5,
+        short_fraction=0.5,
+    )
+
+
+def test_one_fold_evaluator_preserves_outer_and_inner_horizon_purges() -> None:
+    from app.domain.training.cross_pair_relative_value import evaluate_relative_value_frame
+
+    def calibrator(frame: pd.DataFrame, **_: object) -> object:
+        assert not frame.empty
+        return _passed_policy()
+
+    report = evaluate_relative_value_frame(
+        _evaluation_frame(),
+        horizon_bars=1,
+        min_train_periods=260,
+        validation_periods=60,
+        max_splits=1,
+        rolling_window=5,
+        calibration_min_periods=60,
+        calibration_min_rows=10,
+        calibrator=calibrator,
+    )
+
+    fold = report["folds"][0]
+    fit_end = pd.Timestamp(fold["fit_end"])
+    calibration_start = pd.Timestamp(fold["calibration_start"])
+    outer_train_end = pd.Timestamp(fold["outer_train_end"])
+    validation_start = pd.Timestamp(fold["validation_start"])
+    assert calibration_start - fit_end >= pd.Timedelta(minutes=2)
+    assert validation_start - outer_train_end >= pd.Timedelta(minutes=2)
+    assert report["protocol"]["purge_periods"] == 1
+    assert report["protocol"]["inner_calibration_train_only"] is True
+
+
+def test_evaluator_counts_simultaneous_six_pair_signals_as_one_portfolio_opportunity() -> None:
+    from app.domain.training.cross_pair_relative_value import evaluate_relative_value_frame
+
+    def calibrator(_: pd.DataFrame, **__: object) -> object:
+        return _passed_policy()
+
+    def route_all(frame: pd.DataFrame, _: object) -> pd.DataFrame:
+        routed = frame.copy()
+        routed["active_trade"] = True
+        routed["predicted_long"] = True
+        routed["selected_net_return"] = 0.0002
+        return routed
+
+    report = evaluate_relative_value_frame(
+        _evaluation_frame(),
+        horizon_bars=1,
+        min_train_periods=260,
+        validation_periods=60,
+        max_splits=1,
+        rolling_window=5,
+        calibration_min_periods=60,
+        calibration_min_rows=10,
+        calibrator=calibrator,
+        router=route_all,
+    )
+
+    assert report["participation"]["raw_active_signals"] == 60 * 6
+    assert report["participation"]["non_overlapping_opportunities"] == 60
+
+
+def test_positive_instrument_fraction_uses_all_six_pairs_as_denominator() -> None:
+    from app.domain.training.cross_pair_relative_value import evaluate_relative_value_frame
+
+    def calibrator(_: pd.DataFrame, **__: object) -> object:
+        return _passed_policy()
+
+    def route_one_pair(frame: pd.DataFrame, _: object) -> pd.DataFrame:
+        routed = frame.copy()
+        active = routed["instrument"].eq("EURUSD")
+        routed["active_trade"] = active
+        routed["predicted_long"] = True
+        routed["selected_net_return"] = np.where(active, 0.0003, 0.0)
+        return routed
+
+    report = evaluate_relative_value_frame(
+        _evaluation_frame(),
+        horizon_bars=1,
+        min_train_periods=260,
+        validation_periods=60,
+        max_splits=1,
+        rolling_window=5,
+        calibration_min_periods=60,
+        calibration_min_rows=10,
+        calibrator=calibrator,
+        router=route_one_pair,
+    )
+
+    assert report["robustness"]["positive_instrument_fraction"] == 1 / 6
+    assert report["robustness"]["instrument_positive"]["EURUSD"] is True
+    assert sum(report["robustness"]["instrument_positive"].values()) == 1
+
+
+def test_corpus_evaluator_requires_frozen_hashes_and_never_grants_trading_authority(
+    tmp_path: object, monkeypatch: object
+) -> None:
+    import app.domain.training.cross_pair_relative_value as module
+
+    report_path = tmp_path / "report.json"  # type: ignore[operator]
+    frame = _evaluation_frame()
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        module,
+        "load_and_prepare_corpora",
+        lambda *args, **kwargs: (frame.copy(), dict(module.FROZEN_CORPUS_SHA256)),
+    )
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        module,
+        "evaluate_relative_value_frame",
+        lambda *args, **kwargs: {
+            "candidate": "cross-pair-relative-value-v1",
+            "research_only": True,
+            "approved_for_paper": False,
+            "approved_for_demo": False,
+            "approved_for_live": False,
+            "folds": [],
+        },
+    )
+
+    result = module.evaluate_relative_value_corpora(
+        {pair: f"/{pair}.parquet" for pair in PAIRS},
+        report_path=report_path,
+        decision_time_before="2026-09-22T18:23:05.100429+00:00",
+    )
+
+    assert result["dataset_sha256"] == module.FROZEN_CORPUS_SHA256
+    assert result["approved_for_paper"] is False
+    assert result["approved_for_demo"] is False
+    assert result["approved_for_live"] is False
+    assert report_path.exists()
+    assert not report_path.with_suffix(".json.tmp").exists()
+
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        module,
+        "load_and_prepare_corpora",
+        lambda *args, **kwargs: (frame.copy(), {**module.FROZEN_CORPUS_SHA256, "EURUSD": "wrong"}),
+    )
+    with __import__("pytest").raises(ValueError, match="frozen corpus SHA-256 mismatch"):
+        module.evaluate_relative_value_corpora(
+            {pair: f"/{pair}.parquet" for pair in PAIRS},
+            report_path=report_path,
+            decision_time_before="2026-09-22T18:23:05.100429+00:00",
+        )
