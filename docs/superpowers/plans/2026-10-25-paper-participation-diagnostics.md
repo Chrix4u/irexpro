@@ -1,6 +1,6 @@
 # PAPER Participation Diagnostics Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Expose a combined read-only M5/M1 participation snapshot that explains low PAPER cadence without changing trade authority.
 
@@ -33,11 +33,11 @@
 **Interfaces:**
 - Produces: `buildPaperParticipationDiagnostics(input)` and blocker classification.
 
-- [ ] Write failing policy/aggregation tests.
-- [ ] Run focused test and confirm RED.
-- [ ] Implement the pure aggregator.
-- [ ] Run focused test and confirm GREEN.
-- [ ] Commit.
+- [x] Write failing policy/aggregation tests.
+- [x] Run focused test and confirm RED.
+- [x] Implement the pure aggregator.
+- [x] Run focused test and confirm GREEN.
+- [x] Commit.
 
 ### Task 2: Read-only API integration
 **Files:**
@@ -49,9 +49,9 @@
 - Consumes: `buildPaperParticipationDiagnostics`.
 - Produces: `GET /ai/external/providers/participation?providerCode=...`.
 
-- [ ] Write failing service/controller tests for user scoping and response shape.
-- [ ] Confirm RED.
-- [ ] Implement read-only queries and endpoint.
-- [ ] Run service/controller/pure tests GREEN.
-- [ ] Run API build, lint, formatting and diff checks.
-- [ ] Commit and push exact head for CI.
+- [x] Write failing service/controller tests for user scoping and response shape.
+- [x] Confirm RED.
+- [x] Implement read-only queries and endpoint.
+- [x] Run service/controller/pure tests GREEN.
+- [x] Run API build, lint, formatting and diff checks.
+- [x] Commit and push exact head for CI.

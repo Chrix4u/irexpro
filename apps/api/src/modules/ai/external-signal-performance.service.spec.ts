@@ -665,3 +665,72 @@ describe('ExternalSignalPerformanceService', () => {
     ]);
   });
 });
+
+it('builds user-scoped PAPER participation diagnostics from persisted M5 and M1 evidence', async () => {
+  const now = new Date('2026-10-26T09:00:00.000Z');
+  jest.useFakeTimers().setSystemTime(now);
+  const query = jest.fn().mockImplementation(async (sql: string, params: unknown[]) => {
+    expect(params[0]).toBe('user-1');
+    if (sql.includes('MAX(t.opened_at) AS last_trade_at')) {
+      return [{ last_trade_at: new Date('2026-10-26T07:00:00.000Z') }];
+    }
+    if (sql.includes("components -> 'adaptiveScanSummary' AS adaptive_scan_summary")) {
+      expect(params[1]).toBe('irexpro-multimodel-ensemble-v1');
+      return [
+        {
+          evaluated_at: new Date('2026-10-26T08:59:00.000Z'),
+          adaptive_scan_summary: {
+            scanStartedAt: '2026-10-26T08:59:00.000Z',
+            evaluatedCandidates: 12,
+            executableWinners: 0,
+            bestInstrument: 'GBPUSD',
+            bestDirection: 'SELL',
+            bestNetExpectedR: 0.11,
+            bestBlockers: ['DRIFT_OUT_OF_DISTRIBUTION'],
+          },
+        },
+      ];
+    }
+    if (sql.includes('recent_m5_blocker')) {
+      expect(params[1]).toBe('irexpro-multimodel-ensemble-v1');
+      return [
+        { recent_m5_blocker: 'DRIFT_OUT_OF_DISTRIBUTION' },
+        { recent_m5_blocker: 'DRIFT_OUT_OF_DISTRIBUTION' },
+      ];
+    }
+    if (sql.includes('FROM trading.m1_tactical_decisions')) {
+      return [
+        {
+          evaluated_at: new Date('2026-10-26T08:58:00.000Z'),
+          route: 'M1_EARLY_TRANSITION',
+          execution_authority: 'NONE',
+          blockers: ['M1_TIERED_SCOUT_RELIABILITY_INSUFFICIENT_PROVISIONAL_EVIDENCE'],
+        },
+      ];
+    }
+    throw new Error(`unexpected query: ${sql}`);
+  });
+
+  try {
+    const service = new ExternalSignalPerformanceService({ query } as unknown as DataSource);
+    const report = await service.getPaperParticipationDiagnostics(
+      'user-1',
+      'irexpro-multimodel-ensemble-v1',
+    );
+
+    expect(report.mode).toBe('DIAGNOSTIC_ONLY');
+    expect(report.modifiesExecution).toBe(false);
+    expect(report.state).toBe('QUALIFIED_BUT_BLOCKED');
+    expect(report.minutesSinceLastTrade).toBe(120);
+    expect(report.m5.evaluatedCandidates).toBe(12);
+    expect(report.m1.routeQualifiedDecisions).toBe(1);
+    expect(report.topBlockers[0]).toEqual({
+      blocker: 'DRIFT_OUT_OF_DISTRIBUTION',
+      category: 'EVIDENCE_QUALITY',
+      count: 2,
+    });
+    expect(query).toHaveBeenCalledTimes(4);
+  } finally {
+    jest.useRealTimers();
+  }
+});

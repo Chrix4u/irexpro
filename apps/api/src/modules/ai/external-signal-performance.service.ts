@@ -10,6 +10,11 @@ import {
   PLAN_B_ENSEMBLE_ARTIFACT,
   PLAN_B_ENSEMBLE_MODE,
 } from './plan-b-multimodel-shadow';
+import {
+  buildPaperParticipationDiagnostics,
+  type PaperParticipationM1Decision,
+  type PaperParticipationM5Summary,
+} from './paper-participation-diagnostics';
 
 const INSTRUMENTS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'] as const;
 const MIN_CLOSED_TRADES = 100;
@@ -552,6 +557,131 @@ export function buildShadowCalibrationDiagnostics(rows: EvidenceRow[]) {
 @Injectable()
 export class ExternalSignalPerformanceService {
   constructor(private readonly dataSource: DataSource) {}
+
+  async getPaperParticipationDiagnostics(userId: string, providerCode: string) {
+    const now = new Date();
+    const targetWindowMinutes = 30;
+    const windowStart = new Date(now.getTime() - targetWindowMinutes * 60_000);
+
+    const [tradeRows, m5Rows, blockerRows, m1Rows] = await Promise.all([
+      this.dataSource.query(
+        `
+          SELECT MAX(t.opened_at) AS last_trade_at
+          FROM trading.trades t
+          WHERE t.user_id = $1
+            AND t.signal_id IS NOT NULL
+        `,
+        [userId],
+      ),
+      this.dataSource.query(
+        `
+          SELECT
+            evaluated_at,
+            components -> 'adaptiveScanSummary' AS adaptive_scan_summary
+          FROM trading.ensemble_shadow_decisions
+          WHERE user_id = $1
+            AND engine_code = $2
+            AND evaluated_at >= $3
+            AND components ? 'adaptiveScanSummary'
+          ORDER BY evaluated_at DESC, id DESC
+          LIMIT 1
+        `,
+        [userId, providerCode, windowStart.toISOString()],
+      ),
+      this.dataSource.query(
+        `
+          WITH recent AS (
+            SELECT components
+            FROM trading.ensemble_shadow_decisions
+            WHERE user_id = $1
+              AND engine_code = $2
+              AND evaluated_at >= $3
+          )
+          SELECT jsonb_array_elements_text(
+            COALESCE(components -> 'governance' -> 'paperExecutionBlockers', '[]'::jsonb)
+          ) AS recent_m5_blocker
+          FROM recent
+          UNION ALL
+          SELECT jsonb_array_elements_text(
+            COALESCE(components -> 'adaptiveScanSummary' -> 'bestBlockers', '[]'::jsonb)
+          ) AS recent_m5_blocker
+          FROM recent
+        `,
+        [userId, providerCode, windowStart.toISOString()],
+      ),
+      this.dataSource.query(
+        `
+          SELECT evaluated_at, route, execution_authority, blockers
+          FROM trading.m1_tactical_decisions
+          WHERE user_id = $1
+            AND evaluated_at >= $2
+          ORDER BY evaluated_at DESC, id DESC
+          LIMIT 240
+        `,
+        [userId, windowStart.toISOString()],
+      ),
+    ]);
+
+    const rawLastTradeAt = tradeRows[0]?.last_trade_at ?? null;
+    const lastTradeAt = rawLastTradeAt ? new Date(rawLastTradeAt) : null;
+
+    const rawM5 = m5Rows[0]?.adaptive_scan_summary ?? null;
+    let m5: PaperParticipationM5Summary | null = null;
+    if (rawM5 && typeof rawM5 === 'object') {
+      const latestScanAt = new Date(rawM5.scanStartedAt ?? m5Rows[0]?.evaluated_at ?? Number.NaN);
+      if (Number.isFinite(latestScanAt.getTime())) {
+        const direction = rawM5.bestDirection;
+        m5 = {
+          latestScanAt,
+          evaluatedCandidates: Number(rawM5.evaluatedCandidates ?? 0),
+          executableWinners: Number(rawM5.executableWinners ?? 0),
+          bestInstrument: typeof rawM5.bestInstrument === 'string' ? rawM5.bestInstrument : null,
+          bestDirection: direction === 'BUY' || direction === 'SELL' ? direction : null,
+          bestNetExpectedR:
+            rawM5.bestNetExpectedR === null || rawM5.bestNetExpectedR === undefined
+              ? null
+              : Number(rawM5.bestNetExpectedR),
+          blockers: Array.isArray(rawM5.bestBlockers)
+            ? rawM5.bestBlockers.map((value: unknown) => String(value))
+            : [],
+        };
+      }
+    }
+
+    const m5RecentBlockers = blockerRows
+      .map((row: { recent_m5_blocker?: unknown }) => String(row.recent_m5_blocker ?? '').trim())
+      .filter(Boolean);
+    const m1Decisions: PaperParticipationM1Decision[] = m1Rows.flatMap(
+      (row: {
+        evaluated_at?: string | Date;
+        route?: unknown;
+        execution_authority?: unknown;
+        blockers?: unknown;
+      }) => {
+        const evaluatedAt = new Date(row.evaluated_at ?? Number.NaN);
+        if (!Number.isFinite(evaluatedAt.getTime())) return [];
+        return [
+          {
+            evaluatedAt,
+            route: String(row.route ?? 'ABSTAIN'),
+            executionAuthority: String(row.execution_authority ?? 'NONE'),
+            blockers: Array.isArray(row.blockers)
+              ? row.blockers.map((value: unknown) => String(value))
+              : [],
+          },
+        ];
+      },
+    );
+
+    return buildPaperParticipationDiagnostics({
+      now,
+      lastTradeAt,
+      targetWindowMinutes,
+      m5,
+      m5RecentBlockers,
+      m1Decisions,
+    });
+  }
 
   async getProviderPerformance(userId: string, providerCode: string) {
     // One provider family may eventually have multiple execution/data-source
