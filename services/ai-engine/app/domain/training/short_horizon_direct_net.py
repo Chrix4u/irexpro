@@ -165,7 +165,7 @@ def _make_direct_net_regressor(
 ) -> XGBRegressor:
     """Return a deterministic pair/side/horizon expected-net-return regressor."""
 
-    seed_material = f"{instrument}|{side}|{horizon_bars}".encode("utf-8")
+    seed_material = f"{instrument}|{side}|{horizon_bars}".encode()
     random_state = zlib.crc32(seed_material) & 0x7FFFFFFF
     return XGBRegressor(
         objective="reg:squarederror",
