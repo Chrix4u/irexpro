@@ -1,0 +1,168 @@
+{
+  "artifact": "broker-native-v84-base-h5-prospective-v1",
+  "mode": "FALSIFICATION_ONLY_UNTOUCHED_POST_CUTOFF",
+  "development_cutoff": "2026-10-02T21:00:00+00:00",
+  "holdout_manifest_sha256": "1ba57f8da881a146999be1a1b81283135535ef09ac307055ef2680130b970c2a",
+  "holdout_rows": 27724,
+  "metrics": {
+    "n": 3,
+    "profit_factor": 0.0,
+    "sharpe": -1.8562876365031116,
+    "max_drawdown": 0.00099339888189931,
+    "net_return": -0.000993632461223313,
+    "win_rate": 0.0,
+    "balanced_accuracy": 0.5,
+    "positive_instrument_fraction": 0.0,
+    "median_gap_minutes": 1190.0,
+    "mean_confidence": 0.5975395430579965,
+    "by_instrument": {
+      "EURUSD": 0.0,
+      "GBPUSD": 0.0,
+      "USDJPY": -0.000101206071982286,
+      "AUDUSD": 0.0,
+      "USDCAD": -0.000892426389241027,
+      "USDCHF": 0.0
+    }
+  },
+  "positive_fold_fraction": 0.0,
+  "checks": {
+    "trades_gte_100": false,
+    "profit_factor_gte_1_15": false,
+    "sharpe_gte_1": false,
+    "max_drawdown_lte_0_12": true,
+    "balanced_accuracy_gte_0_52": false,
+    "positive_fold_fraction_gte_0_60": false,
+    "positive_instrument_fraction_gte_0_67": false,
+    "median_gap_lte_10m": false,
+    "mean_confidence_gte_0_60": false,
+    "positive_net_return": false
+  },
+  "economic_screen_passed": false,
+  "promotion_eligible": false,
+  "approved_for_paper": false,
+  "approved_for_demo": false,
+  "approved_for_live": false,
+  "next_action": "REJECT_BASE_5M_BROKER_NATIVE_ARCHITECTURE",
+  "architecture": "v84_base_two_stage_actionability_then_direction_h5_purged_refit",
+  "threshold_policy": {
+    "actionability_floor": 0.55,
+    "direction_confidence_floor": 0.55,
+    "threshold_search": "NONE_PREDECLARED_V84"
+  },
+  "model": {
+    "n_estimators": 160,
+    "max_depth": 3,
+    "learning_rate": 0.035,
+    "min_child_weight": 20,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "reg_lambda": 10.0,
+    "reg_alpha": 0.1,
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "tree_method": "hist",
+    "n_jobs": 2,
+    "random_state": 20261004
+  },
+  "fit_protocol": {
+    "fit_rows": 119653,
+    "calibration_rows": 29927,
+    "direction_fit_rows": 15707,
+    "direction_calibration_rows": 6082,
+    "fit_start": "2026-09-09T13:12:00+00:00",
+    "fit_end": "2026-09-29T09:41:00+00:00",
+    "calibration_start": "2026-09-29T09:47:00+00:00",
+    "calibration_end": "2026-10-02T20:54:00+00:00"
+  },
+  "holdout_classification": {
+    "actionability_balanced_accuracy": 0.5023831031626218,
+    "direction_on_actionable_balanced_accuracy": 0.512874295515805
+  },
+  "holdout_stability": {
+    "policy": "three_chronological_windows_no_refit_no_selection",
+    "window_net_returns": [
+      -0.000101206071982286,
+      -0.000892426389241027,
+      0.0
+    ],
+    "positive_window_fraction": 0.0
+  },
+  "participation": {
+    "scorable_rows": 27724,
+    "selected_trades": 3,
+    "holdout_calendar_days_with_rows": 8,
+    "trades_per_holdout_day": 0.375
+  },
+  "sampled_holdout_limitations": [
+    "post-cutoff rows are locally sampled MetaApi midpoint candles, not full provider historical bars",
+    "sample_count is not broker-native tickVolume and is excluded by the base feature contract",
+    "success cannot authorize PAPER, DEMO, or LIVE; it only justifies deeper broker-native history"
+  ],
+  "development_manifest_sha256": "0420818a0ceeaf7e4f6efca0b47b33565dea26275a0f5e815fa960f8fe5f5c46",
+  "pair_evidence": {
+    "EURUSD": {
+      "development_source_rows": 25000,
+      "development_model_rows": 24935,
+      "holdout_source_rows": 8295,
+      "holdout_scorable_rows": 4709,
+      "development_sha256": "afede2ee77aa1e5cdb16b4833dadd1a18da6afd1f69c44a12f078f809006093f",
+      "holdout_sha256": "8e97977feb7f08aec1f5a6d998066ffe03c48bcd4e7f8e48098332cb7ddb735c",
+      "holdout_start": "2026-10-05T03:55:00+00:00",
+      "holdout_end": "2026-10-13T18:44:00+00:00"
+    },
+    "GBPUSD": {
+      "development_source_rows": 25000,
+      "development_model_rows": 24935,
+      "holdout_source_rows": 8267,
+      "holdout_scorable_rows": 4706,
+      "development_sha256": "98dbb845580435c773afe3afdb29dd94fee72e295db7e948cd0c6452422ef7c2",
+      "holdout_sha256": "9fc21cac5ebcbb87e118e0f8cace38d22fed38536282b0bb542b992c34d11fba",
+      "holdout_start": "2026-10-05T03:55:00+00:00",
+      "holdout_end": "2026-10-13T19:23:00+00:00"
+    },
+    "USDJPY": {
+      "development_source_rows": 25000,
+      "development_model_rows": 24935,
+      "holdout_source_rows": 8303,
+      "holdout_scorable_rows": 4846,
+      "development_sha256": "3ca38bd1309b11f6b79192a86790c52ca6ce459da6ca5af700a8c6a179cd9dcf",
+      "holdout_sha256": "dd011a8bd99f7543976f4ab53591e81a8d34a254fc0e50678a7f8619cb6e0cca",
+      "holdout_start": "2026-10-05T03:55:00+00:00",
+      "holdout_end": "2026-10-13T18:44:00+00:00"
+    },
+    "AUDUSD": {
+      "development_source_rows": 25000,
+      "development_model_rows": 24935,
+      "holdout_source_rows": 8291,
+      "holdout_scorable_rows": 4377,
+      "development_sha256": "3df8cca369af4195188b10c8951153b20b59e5ba119060bf047372eb0eb823cb",
+      "holdout_sha256": "45d2921cc49789fee379201ddf9918993fd5fe0b7af4d74fda699aab5c608768",
+      "holdout_start": "2026-10-05T04:01:00+00:00",
+      "holdout_end": "2026-10-13T19:23:00+00:00"
+    },
+    "USDCAD": {
+      "development_source_rows": 25000,
+      "development_model_rows": 24935,
+      "holdout_source_rows": 8271,
+      "holdout_scorable_rows": 4593,
+      "development_sha256": "1fd9bc8ef788d92fd0b85fc102777d14c7a5262e417861b3bed2d2cef3d6dc08",
+      "holdout_sha256": "3ba6f071e1afd79ff131f8dc2cd17ee3937eb18720751ac5646087d1a26ab296",
+      "holdout_start": "2026-10-05T03:55:00+00:00",
+      "holdout_end": "2026-10-13T19:23:00+00:00"
+    },
+    "USDCHF": {
+      "development_source_rows": 25000,
+      "development_model_rows": 24935,
+      "holdout_source_rows": 8272,
+      "holdout_scorable_rows": 4493,
+      "development_sha256": "b59e58efbcca039285f21ea32d3490d0150e151381077149e43afe721d555962",
+      "holdout_sha256": "0169e97286a7918678443ac1e6d35816adbbc8ff05da7009cedf95ae12fd4090",
+      "holdout_start": "2026-10-05T03:55:00+00:00",
+      "holdout_end": "2026-10-13T18:44:00+00:00"
+    }
+  },
+  "development_rows": 149610,
+  "holdout_scorable_rows": 27724,
+  "sealed_prior_future_holdouts_used_for_selection": false,
+  "research_only": true
+}
