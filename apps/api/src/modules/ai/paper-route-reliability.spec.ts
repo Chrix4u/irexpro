@@ -1,7 +1,10 @@
 import {
+  PAPER_REALISED_CONTINUATION_ROUTE_RELIABILITY_MIN_TRADES,
   PAPER_REVERSAL_ROUTE_RELIABILITY_MIN_EPISODES,
   PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES,
   PAPER_TREND_ROUTE_RELIABILITY_MIN_EPISODES,
+  evaluatePaperRealisedContinuationExecutionGate,
+  evaluatePaperRealisedContinuationRouteReliability,
   evaluatePaperReliabilityExecutionGate,
   evaluatePaperReversalRouteReliability,
   evaluatePaperTrendPairSideReliability,
@@ -367,6 +370,132 @@ describe('PAPER confirmed-reversal route reliability', () => {
       fullSizeEligible: true,
       routeDemoted: false,
       pairSideDemoted: false,
+    });
+  });
+});
+
+describe('PAPER realised continuation route reliability', () => {
+  const realised = (overrides: Record<string, unknown> = {}) => ({
+    closedTrades: PAPER_REALISED_CONTINUATION_ROUTE_RELIABILITY_MIN_TRADES,
+    grossProfit: 12,
+    grossLoss: 10,
+    netPnl: 2,
+    ...overrides,
+  });
+
+  it('keeps normal PAPER eligible while compatible realised evidence is still collecting', () => {
+    expect(
+      evaluatePaperRealisedContinuationRouteReliability({
+        ...realised({ closedTrades: PAPER_REALISED_CONTINUATION_ROUTE_RELIABILITY_MIN_TRADES - 1 }),
+      }),
+    ).toMatchObject({
+      state: 'COLLECTING',
+      fullSizeEligible: true,
+      profitFactor: 1.2,
+      reason: 'INSUFFICIENT_REALISED_ROUTE_EVIDENCE',
+    });
+  });
+
+  it('demotes a mature compatible realised continuation route with profit factor below one', () => {
+    expect(
+      evaluatePaperRealisedContinuationRouteReliability({
+        ...realised({ grossProfit: 7, grossLoss: 10, netPnl: -3 }),
+      }),
+    ).toMatchObject({
+      state: 'RESEARCH_ONLY',
+      fullSizeEligible: false,
+      researchFallbackRequested: true,
+      profitFactor: 0.7,
+      reason: 'REALISED_ROUTE_PROFIT_FACTOR_BELOW_ONE',
+    });
+  });
+
+  it('treats a mature all-loss route as weak with zero profit factor', () => {
+    expect(
+      evaluatePaperRealisedContinuationRouteReliability({
+        ...realised({ grossProfit: 0, grossLoss: 10, netPnl: -10 }),
+      }),
+    ).toMatchObject({
+      state: 'RESEARCH_ONLY',
+      fullSizeEligible: false,
+      profitFactor: 0,
+      reason: 'REALISED_ROUTE_PROFIT_FACTOR_BELOW_ONE',
+    });
+  });
+
+  it('treats a mature positive no-loss route as healthy without inventing a finite PF', () => {
+    expect(
+      evaluatePaperRealisedContinuationRouteReliability({
+        ...realised({ grossProfit: 10, grossLoss: 0, netPnl: 10 }),
+      }),
+    ).toMatchObject({
+      state: 'HEALTHY',
+      fullSizeEligible: true,
+      profitFactor: null,
+      reason: 'REALISED_ROUTE_HEALTHY',
+    });
+  });
+
+  it('keeps a mature route at PF exactly one eligible', () => {
+    expect(
+      evaluatePaperRealisedContinuationRouteReliability({
+        ...realised({ grossProfit: 10, grossLoss: 10, netPnl: 0 }),
+      }),
+    ).toMatchObject({ state: 'HEALTHY', fullSizeEligible: true, profitFactor: 1 });
+  });
+});
+
+describe('PAPER realised continuation execution composition', () => {
+  const weakRoute = evaluatePaperRealisedContinuationRouteReliability({
+    closedTrades: PAPER_REALISED_CONTINUATION_ROUTE_RELIABILITY_MIN_TRADES,
+    grossProfit: 7,
+    grossLoss: 10,
+    netPnl: -3,
+  });
+
+  it('demotes mature weak realised continuation when pair-side evidence is still collecting', () => {
+    const pairSide = evaluatePaperTrendPairSideReliability({
+      strategyRoute: 'TREND_CONTINUATION',
+      evidence: evidence({ closedTrades: 3, profitFactor: 1.8, maxDrawdown: 0.02 }),
+    });
+    expect(evaluatePaperRealisedContinuationExecutionGate({ route: weakRoute, pairSide })).toEqual({
+      fullSizeEligible: false,
+      routeDemoted: true,
+      matureHealthyPairSideOverride: false,
+    });
+  });
+
+  it('allows only a mature healthy pair-side to override a mature weak realised route', () => {
+    const pairSide = evaluatePaperTrendPairSideReliability({
+      strategyRoute: 'TREND_CONTINUATION',
+      evidence: evidence({
+        closedTrades: PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES,
+        profitFactor: 1.4,
+        maxDrawdown: 0.04,
+      }),
+    });
+    expect(evaluatePaperRealisedContinuationExecutionGate({ route: weakRoute, pairSide })).toEqual({
+      fullSizeEligible: true,
+      routeDemoted: false,
+      matureHealthyPairSideOverride: true,
+    });
+  });
+
+  it('does not demote when the realised route is healthy', () => {
+    const route = evaluatePaperRealisedContinuationRouteReliability({
+      closedTrades: PAPER_REALISED_CONTINUATION_ROUTE_RELIABILITY_MIN_TRADES,
+      grossProfit: 12,
+      grossLoss: 10,
+      netPnl: 2,
+    });
+    const pairSide = evaluatePaperTrendPairSideReliability({
+      strategyRoute: 'TREND_CONTINUATION',
+      evidence: evidence({ closedTrades: 0 }),
+    });
+    expect(evaluatePaperRealisedContinuationExecutionGate({ route, pairSide })).toEqual({
+      fullSizeEligible: true,
+      routeDemoted: false,
+      matureHealthyPairSideOverride: false,
     });
   });
 });

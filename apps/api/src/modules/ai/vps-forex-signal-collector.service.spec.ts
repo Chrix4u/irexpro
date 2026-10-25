@@ -3347,6 +3347,266 @@ describe('VpsForexSignalCollectorService', () => {
     ]);
     expect(params[4]).toBe(ENSEMBLE_OUTCOME_MODEL_VERSION);
   });
+  it('loads realised continuation route reliability from the exact compatible champion PAPER cohort', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        trades: '30',
+        gross_profit: '45.20',
+        gross_loss: '64.37',
+        net_pnl: '-19.17',
+      },
+    ]);
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn() } as unknown as ExecutionService,
+      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    await expect(
+      (collector as any).loadPaperRealisedContinuationRouteEvidence('user-1', 'conn-1'),
+    ).resolves.toEqual({
+      closedTrades: 30,
+      grossProfit: 45.2,
+      grossLoss: 64.37,
+      netPnl: -19.17,
+    });
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("bc.broker_id = 'paper-broker'");
+    expect(sql).toContain("t.status = 'CLOSED'");
+    expect(sql).toContain('t.realised_pnl IS NOT NULL');
+    expect(sql).toContain("ti.status = 'EXECUTED'");
+    expect(sql).toContain("ti.timeframe = 'M5'");
+    expect(sql).toContain('ti.model_version = $3');
+    expect(sql).toContain("ti.metadata->>'signal_source' = 'EXTERNAL_PROVIDER'");
+    expect(sql).toContain("ti.metadata->>'external_provider_code' = $4");
+    expect(sql).toContain("ti.metadata->>'plan_b_ensemble_strategy_route' = 'TREND_CONTINUATION'");
+    expect(sql).toContain("ti.metadata->>'decision_policy_version' = ANY($5::text[])");
+    expect(params).toEqual([
+      'user-1',
+      'conn-1',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-only-v1',
+      'irexpro-multimodel-ensemble-v1',
+      [...PlanBEnsembleModule.PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
+    ]);
+  });
+
+  it('caches realised continuation route reliability evidence on the existing reliability TTL', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValue([{ trades: 21, gross_profit: 9, gross_loss: 10, net_pnl: -1 }]);
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn() } as unknown as ExecutionService,
+      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    const first = await (collector as any).loadPaperRealisedContinuationRouteEvidence(
+      'user-1',
+      'conn-1',
+    );
+    const second = await (collector as any).loadPaperRealisedContinuationRouteEvidence(
+      'user-1',
+      'conn-1',
+    );
+
+    expect(first).toEqual({ closedTrades: 21, grossProfit: 9, grossLoss: 10, netPnl: -1 });
+    expect(second).toEqual(first);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns neutral collecting realised-route evidence when the aggregate query fails', async () => {
+    const query = jest.fn().mockRejectedValue(new Error('temporary database read failure'));
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn() } as unknown as ExecutionService,
+      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    await expect(
+      (collector as any).loadPaperRealisedContinuationRouteEvidence('user-1', 'conn-1'),
+    ).resolves.toEqual({ closedTrades: 0, grossProfit: 0, grossLoss: 0, netPnl: 0 });
+  });
+
+  it('demotes normal PAPER continuation when mature realised route evidence is weak and pair-side is collecting', async () => {
+    const collector = createCollector(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    jest.spyOn(collector as any, 'loadPaperTrendRouteReliabilityEvidence').mockResolvedValue(null);
+    jest
+      .spyOn(collector as any, 'loadPaperTrendPairSideReliabilityEvidence')
+      .mockResolvedValue(null);
+    jest
+      .spyOn(collector as any, 'loadPaperRealisedContinuationRouteEvidence')
+      .mockResolvedValue({ closedTrades: 30, grossProfit: 45.2, grossLoss: 64.37, netPnl: -19.17 });
+
+    await expect(
+      (collector as any).evaluatePaperNormalRouteReliabilityGate({
+        userId: 'user-1',
+        connectionId: 'conn-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        strategyRoute: 'TREND_CONTINUATION',
+      }),
+    ).resolves.toMatchObject({
+      fullSizeEligible: false,
+      realisedContinuationRoute: {
+        state: 'RESEARCH_ONLY',
+        fullSizeEligible: false,
+        profitFactor: 45.2 / 64.37,
+        closedTrades: 30,
+      },
+      realisedExecutionGate: {
+        routeDemoted: true,
+        matureHealthyPairSideOverride: false,
+      },
+      pairSide: { state: 'COLLECTING' },
+    });
+  });
+
+  it('allows a mature healthy continuation pair-side to override a weak realised route', async () => {
+    const collector = createCollector(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    jest.spyOn(collector as any, 'loadPaperTrendRouteReliabilityEvidence').mockResolvedValue(null);
+    jest.spyOn(collector as any, 'loadPaperTrendPairSideReliabilityEvidence').mockResolvedValue({
+      closedTrades: 8,
+      profitFactor: 1.4,
+      sharpe: 1.2,
+      maxDrawdown: 0.04,
+      positiveWindowFraction: 0.75,
+    });
+    jest
+      .spyOn(collector as any, 'loadPaperRealisedContinuationRouteEvidence')
+      .mockResolvedValue({ closedTrades: 30, grossProfit: 45.2, grossLoss: 64.37, netPnl: -19.17 });
+
+    await expect(
+      (collector as any).evaluatePaperNormalRouteReliabilityGate({
+        userId: 'user-1',
+        connectionId: 'conn-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        strategyRoute: 'TREND_CONTINUATION',
+      }),
+    ).resolves.toMatchObject({
+      fullSizeEligible: true,
+      realisedContinuationRoute: { state: 'RESEARCH_ONLY' },
+      realisedExecutionGate: {
+        routeDemoted: false,
+        matureHealthyPairSideOverride: true,
+      },
+      pairSide: { state: 'HEALTHY' },
+    });
+  });
+
+  it('does not apply the realised continuation brake to confirmed reversal', async () => {
+    const collector = createCollector(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    const realised = jest
+      .spyOn(collector as any, 'loadPaperRealisedContinuationRouteEvidence')
+      .mockResolvedValue({ closedTrades: 30, grossProfit: 0, grossLoss: 100, netPnl: -100 });
+    jest.spyOn(collector as any, 'loadPaperReversalRouteReliabilityEvidence').mockResolvedValue({
+      closedTrades: 8,
+      profitFactor: 1.4,
+      sharpe: 1.2,
+      maxDrawdown: 0.04,
+      positiveWindowFraction: 0.75,
+    });
+    jest
+      .spyOn(collector as any, 'loadPaperTrendPairSideReliabilityEvidence')
+      .mockResolvedValue(null);
+
+    await expect(
+      (collector as any).evaluatePaperNormalRouteReliabilityGate({
+        userId: 'user-1',
+        connectionId: 'conn-1',
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        strategyRoute: 'CONFIRMED_REVERSAL',
+      }),
+    ).resolves.toMatchObject({
+      fullSizeEligible: true,
+      realisedContinuationRoute: null,
+      realisedExecutionGate: null,
+    });
+    expect(realised).not.toHaveBeenCalled();
+  });
+
+  it('leaves early transition outside continuation/reversal reliability composition', async () => {
+    const collector = createCollector(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    const realised = jest.spyOn(collector as any, 'loadPaperRealisedContinuationRouteEvidence');
+    const pairSide = jest.spyOn(collector as any, 'loadPaperTrendPairSideReliabilityEvidence');
+
+    await expect(
+      (collector as any).evaluatePaperNormalRouteReliabilityGate({
+        userId: 'user-1',
+        connectionId: 'conn-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        strategyRoute: 'EARLY_TRANSITION',
+      }),
+    ).resolves.toEqual({
+      fullSizeEligible: true,
+      route: null,
+      pairSide: null,
+      pairSideShadow: null,
+      realisedContinuationRoute: null,
+      realisedExecutionGate: null,
+    });
+    expect(realised).not.toHaveBeenCalled();
+    expect(pairSide).not.toHaveBeenCalled();
+  });
+
   it('loads pair-side continuation reliability from independent episode-collapsed shadow evidence', async () => {
     const row = (status: 'WIN' | 'LOSS', evaluatedAt: string, resolvedAt: string) => ({
       instrument: 'EURUSD',
