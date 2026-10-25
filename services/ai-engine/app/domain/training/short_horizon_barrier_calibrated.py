@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import argparse
+import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import balanced_accuracy_score
 from xgboost import XGBClassifier
 
-from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
+from app.domain.models.multitimeframe_features import (
+    INITIAL_FOREX_UNIVERSE,
+    MULTITIMEFRAME_FEATURE_COLUMNS,
+)
 from app.domain.training.train_multitimeframe import (
     EVENT_ACTIONABLE_TARGET_COLUMN,
     EVENT_DIRECTION_TARGET_COLUMN,
@@ -16,6 +23,11 @@ from app.domain.training.train_multitimeframe import (
     EVENT_SHORT_NET_RETURN_COLUMN,
     _split_internal_early_stopping_tail,
     _xgboost_n_jobs,
+    load_and_prepare_corpora,
+)
+from app.domain.training.validation import (
+    compute_backtest_metrics,
+    iter_purged_walk_forward_time_splits,
 )
 
 MIN_CALIBRATION_ROWS = 200
@@ -390,3 +402,410 @@ def route_pair_barrier_predictions(
         result.loc[index, "route_reason"] = reason
 
     return result
+
+
+PARTICIPATION_TARGETS_PER_DAY = {5: 24.0, 20: 12.0, 60: 6.0}
+
+
+def _split_barrier_train_calibration(
+    training_window: pd.DataFrame,
+    *,
+    horizon_bars: int,
+    calibration_fraction: float = 0.20,
+    minimum_calibration_periods: int = 200,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split outer-train rows into model-training and train-only calibration tails.
+
+    A full horizon-sized gap separates the two sets, so labels used by the fit
+    portion cannot cross into the calibration window.
+    """
+    if horizon_bars < 1:
+        raise ValueError("horizon_bars must be positive")
+    if not 0.0 < calibration_fraction < 0.5:
+        raise ValueError("calibration_fraction must be in (0, 0.5)")
+    if minimum_calibration_periods < 1:
+        raise ValueError("minimum_calibration_periods must be positive")
+    if "decision_time" not in training_window.columns:
+        raise ValueError("barrier calibration split requires decision_time")
+
+    times = pd.Series(
+        pd.to_datetime(training_window["decision_time"], utc=True, errors="coerce")
+    )
+    if times.isna().any():
+        raise ValueError("barrier calibration split contains invalid decision_time")
+    unique_times = pd.Index(times.drop_duplicates().sort_values())
+    requested = max(minimum_calibration_periods, int(len(unique_times) * calibration_fraction))
+    max_calibration = len(unique_times) - horizon_bars - 50
+    calibration_periods = min(requested, max_calibration)
+    if calibration_periods < 50:
+        raise ValueError("outer training window is too small for barrier calibration")
+
+    calibration_start = len(unique_times) - calibration_periods
+    fit_end = calibration_start - horizon_bars
+    if fit_end < 50:
+        raise ValueError("outer training window is too small after barrier purge")
+
+    fit_last = unique_times[fit_end - 1]
+    calibration_first = unique_times[calibration_start]
+    fit = training_window.loc[times <= fit_last].copy()
+    calibration = training_window.loc[times >= calibration_first].copy()
+    if fit.empty or calibration.empty:
+        raise ValueError("barrier train/calibration split produced an empty frame")
+    return fit, calibration
+
+
+def collapse_non_overlapping_barrier_signals(
+    signals: pd.DataFrame,
+    *,
+    horizon_bars: int,
+) -> pd.DataFrame:
+    """Collapse simultaneous pair signals and overlapping holding windows."""
+    if horizon_bars < 1:
+        raise ValueError("horizon_bars must be positive")
+    required = {"decision_time", "active_trade", "selected_net_return"}
+    missing = sorted(required.difference(signals.columns))
+    if missing:
+        raise ValueError(f"barrier signal collapse requires columns: {missing}")
+    active = signals.loc[signals["active_trade"].astype(bool)].copy()
+    if active.empty:
+        return pd.DataFrame(
+            columns=["decision_time", "portfolio_net_return", "signal_count"]
+        )
+    active["decision_time"] = pd.to_datetime(
+        active["decision_time"], utc=True, errors="raise"
+    )
+    active["selected_net_return"] = pd.to_numeric(
+        active["selected_net_return"], errors="raise"
+    )
+    grouped = (
+        active.groupby("decision_time", sort=True)["selected_net_return"]
+        .agg(portfolio_net_return="mean", signal_count="size")
+        .reset_index()
+        .sort_values("decision_time")
+    )
+
+    accepted: list[dict[str, Any]] = []
+    next_available: pd.Timestamp | None = None
+    holding_period = pd.Timedelta(minutes=horizon_bars)
+    for row in grouped.itertuples(index=False):
+        decision_time = pd.Timestamp(row.decision_time)
+        if next_available is not None and decision_time < next_available:
+            continue
+        accepted.append(
+            {
+                "decision_time": decision_time,
+                "portfolio_net_return": float(row.portfolio_net_return),
+                "signal_count": int(row.signal_count),
+            }
+        )
+        next_available = decision_time + holding_period
+    return pd.DataFrame.from_records(accepted)
+
+
+def _attach_selected_barrier_return(routed: pd.DataFrame) -> pd.DataFrame:
+    result = routed.copy()
+    required = {EVENT_LONG_NET_RETURN_COLUMN, EVENT_SHORT_NET_RETURN_COLUMN}
+    missing = sorted(required.difference(result.columns))
+    if missing:
+        raise ValueError(f"barrier routed frame missing realised returns: {missing}")
+    long_return = pd.to_numeric(result[EVENT_LONG_NET_RETURN_COLUMN], errors="raise")
+    short_return = pd.to_numeric(result[EVENT_SHORT_NET_RETURN_COLUMN], errors="raise")
+    action = result["action"].astype(str)
+    result["selected_net_return"] = np.where(
+        action == "BUY",
+        long_return,
+        np.where(action == "SELL", short_return, 0.0),
+    )
+    return result
+
+
+def _barrier_metrics(periods: pd.DataFrame, *, horizon_bars: int) -> dict[str, Any]:
+    if periods.empty:
+        return {
+            "trade_or_period_count": 0,
+            "total_return": 0.0,
+            "average_net_return": 0.0,
+            "median_net_return": 0.0,
+            "win_rate": 0.0,
+            "profit_factor": None,
+            "sharpe_ratio": None,
+            "sortino_ratio": None,
+            "max_drawdown": 0.0,
+        }
+    returns = periods["portfolio_net_return"].to_numpy(dtype=float)
+    periods_per_year = (365.25 * 24.0 * 60.0) / float(horizon_bars)
+    return compute_backtest_metrics(returns, annualization_factor=periods_per_year)
+
+
+def _active_balanced_accuracy(predictions: pd.DataFrame) -> float | None:
+    active = predictions.loc[predictions["active_trade"].astype(bool)].copy()
+    if active.empty or EVENT_DIRECTION_TARGET_COLUMN not in active.columns:
+        return None
+    truth = pd.to_numeric(active[EVENT_DIRECTION_TARGET_COLUMN], errors="raise").to_numpy(int)
+    predicted = active["predicted_long"].astype(bool).to_numpy(dtype=int)
+    if len(np.unique(truth)) < 2:
+        return None
+    return float(balanced_accuracy_score(truth, predicted))
+
+
+def evaluate_barrier_calibrated_frame(
+    frame: pd.DataFrame,
+    *,
+    horizon_bars: int,
+    min_train_periods: int,
+    validation_periods: int,
+    max_splits: int = 3,
+    expert_fitter: Callable[..., BarrierPairExperts] = fit_pair_barrier_experts,
+    router: Callable[[pd.DataFrame, Mapping[str, BarrierPairExperts]], pd.DataFrame] = (
+        route_pair_barrier_predictions
+    ),
+) -> dict[str, Any]:
+    """Evaluate v5 with expanding horizon-purged walk-forward validation."""
+    if horizon_bars not in PARTICIPATION_TARGETS_PER_DAY:
+        raise ValueError("barrier evaluator horizon must be one of 5/20/60 minutes")
+    required = {
+        "decision_time",
+        "instrument",
+        EVENT_ACTIONABLE_TARGET_COLUMN,
+        EVENT_DIRECTION_TARGET_COLUMN,
+        EVENT_LONG_NET_RETURN_COLUMN,
+        EVENT_SHORT_NET_RETURN_COLUMN,
+    }
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(f"barrier evaluator missing columns: {missing}")
+    dataset = frame.copy()
+    dataset["decision_time"] = pd.to_datetime(
+        dataset["decision_time"], utc=True, errors="raise"
+    )
+    observed_pairs = set(dataset["instrument"].astype(str).str.upper().unique())
+    expected_pairs = set(INITIAL_FOREX_UNIVERSE)
+    if observed_pairs != expected_pairs:
+        raise ValueError(
+            f"barrier evaluator requires exact six-pair universe; got {sorted(observed_pairs)}"
+        )
+    dataset = dataset.sort_values(["decision_time", "instrument"]).reset_index(drop=True)
+
+    folds: list[dict[str, Any]] = []
+    predictions: list[pd.DataFrame] = []
+    for fold_index, (outer_train, validation) in enumerate(
+        iter_purged_walk_forward_time_splits(
+            dataset,
+            time_column="decision_time",
+            min_train_periods=min_train_periods,
+            validation_periods=validation_periods,
+            purge_periods=horizon_bars,
+            embargo_periods=horizon_bars,
+            max_splits=max_splits,
+        ),
+        start=1,
+    ):
+        model_train, calibration = _split_barrier_train_calibration(
+            outer_train,
+            horizon_bars=horizon_bars,
+        )
+        experts: dict[str, BarrierPairExperts] = {}
+        for instrument in INITIAL_FOREX_UNIVERSE:
+            experts[instrument] = expert_fitter(
+                model_train,
+                calibration,
+                instrument=instrument,
+                horizon_bars=horizon_bars,
+            )
+        routed = router(validation.copy(), experts)
+        if "active_trade" not in routed or "predicted_long" not in routed or "action" not in routed:
+            raise ValueError("barrier router omitted required execution columns")
+        routed = _attach_selected_barrier_return(routed)
+        routed["fold"] = fold_index
+        fold_periods = collapse_non_overlapping_barrier_signals(
+            routed,
+            horizon_bars=horizon_bars,
+        )
+        fold_metrics = _barrier_metrics(fold_periods, horizon_bars=horizon_bars)
+        folds.append(
+            {
+                "fold": fold_index,
+                "train_start": pd.Timestamp(outer_train["decision_time"].min()).isoformat(),
+                "train_end": pd.Timestamp(outer_train["decision_time"].max()).isoformat(),
+                "calibration_start": pd.Timestamp(calibration["decision_time"].min()).isoformat(),
+                "calibration_end": pd.Timestamp(calibration["decision_time"].max()).isoformat(),
+                "validation_start": pd.Timestamp(validation["decision_time"].min()).isoformat(),
+                "validation_end": pd.Timestamp(validation["decision_time"].max()).isoformat(),
+                "active_signals": int(routed["active_trade"].sum()),
+                "non_overlapping_opportunities": int(len(fold_periods)),
+                "total_return": float(fold_metrics["total_return"]),
+            }
+        )
+        predictions.append(routed)
+
+    all_predictions = pd.concat(predictions, ignore_index=True)
+    periods = collapse_non_overlapping_barrier_signals(
+        all_predictions,
+        horizon_bars=horizon_bars,
+    )
+    metrics = _barrier_metrics(periods, horizon_bars=horizon_bars)
+    validation_days = int(
+        all_predictions["decision_time"].dt.normalize().drop_duplicates().shape[0]
+    )
+    opportunities_per_day = float(len(periods) / max(validation_days, 1))
+    target_per_day = PARTICIPATION_TARGETS_PER_DAY[horizon_bars]
+    balanced_accuracy = _active_balanced_accuracy(all_predictions)
+
+    instrument_positive: dict[str, bool] = {}
+    for instrument, group in all_predictions.groupby("instrument", sort=True):
+        selected = group.loc[group["active_trade"].astype(bool), "selected_net_return"]
+        instrument_positive[str(instrument)] = bool(len(selected) and float(selected.sum()) > 0.0)
+    positive_instrument_fraction = float(
+        sum(instrument_positive.values()) / len(INITIAL_FOREX_UNIVERSE)
+    )
+    positive_fold_fraction = float(
+        sum(float(fold["total_return"]) > 0.0 for fold in folds) / len(folds)
+    )
+
+    profit_factor = metrics["profit_factor"]
+    sharpe = metrics["sharpe_ratio"]
+    max_drawdown = float(metrics["max_drawdown"])
+    gates = {
+        "participation": opportunities_per_day >= target_per_day,
+        "balanced_accuracy": balanced_accuracy is not None and balanced_accuracy >= 0.52,
+        "profit_factor": profit_factor is not None and float(profit_factor) >= 1.15,
+        "sharpe": sharpe is not None and float(sharpe) >= 1.0,
+        "max_drawdown": max_drawdown <= 0.12,
+        "positive_fold_fraction": positive_fold_fraction >= 0.60,
+        "positive_instrument_fraction": positive_instrument_fraction >= 0.67,
+    }
+    return {
+        "candidate": "short-horizon-barrier-calibrated-v5",
+        "research_only": True,
+        "approved_for_paper": False,
+        "approved_for_demo": False,
+        "approved_for_live": False,
+        "horizon_minutes": horizon_bars,
+        "protocol": {
+            "purge_periods": horizon_bars,
+            "embargo_periods": horizon_bars,
+            "inner_calibration_train_only": True,
+            "pair_specific_experts": True,
+            "cross_pair_fallback": False,
+            "non_overlapping_portfolio_counting": True,
+        },
+        "folds": folds,
+        "classification": {"balanced_accuracy": balanced_accuracy},
+        "trading": metrics,
+        "participation": {
+            "raw_active_signals": int(all_predictions["active_trade"].sum()),
+            "non_overlapping_opportunities": int(len(periods)),
+            "validation_days": validation_days,
+            "opportunities_per_validation_day": opportunities_per_day,
+            "target_per_validation_day": target_per_day,
+        },
+        "robustness": {
+            "positive_fold_fraction": positive_fold_fraction,
+            "positive_instrument_fraction": positive_instrument_fraction,
+            "instrument_positive": instrument_positive,
+        },
+        "gates": gates,
+        "research_gate_passed": all(gates.values()),
+    }
+
+
+def evaluate_barrier_calibrated_corpora(
+    datasets: Mapping[str, str | Path],
+    *,
+    horizon_bars: int,
+    report_path: str | Path,
+    min_train_periods: int | None = None,
+    validation_periods: int = 7200,
+    max_splits: int = 1,
+    decision_time_before: str | pd.Timestamp | None = None,
+    commission_bps: float = 0.0,
+    slippage_bps: float = 0.0,
+) -> dict[str, Any]:
+    """Load the exact six-pair corpus, evaluate v5, and atomically persist JSON."""
+    normalized = {str(key).upper(): value for key, value in datasets.items()}
+    expected = set(INITIAL_FOREX_UNIVERSE)
+    if set(normalized) != expected:
+        raise ValueError(
+            f"barrier corpus evaluation requires exact six-pair universe; got {sorted(normalized)}"
+        )
+    pooled, hashes = load_and_prepare_corpora(
+        normalized,
+        horizon_bars=horizon_bars,
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
+        decision_time_before=decision_time_before,
+    )
+    unique_periods = int(pooled["decision_time"].nunique())
+    train_periods = min_train_periods or max(1000, int(unique_periods * 0.70))
+    if train_periods + horizon_bars + validation_periods > unique_periods:
+        validation_periods = max(200, unique_periods - train_periods - horizon_bars)
+    report = evaluate_barrier_calibrated_frame(
+        pooled,
+        horizon_bars=horizon_bars,
+        min_train_periods=train_periods,
+        validation_periods=validation_periods,
+        max_splits=max_splits,
+    )
+    report["dataset_sha256"] = hashes
+    report["decision_time_before"] = (
+        pd.Timestamp(decision_time_before).isoformat()
+        if decision_time_before is not None
+        else None
+    )
+    report["cost_model"] = {
+        "commission_bps_round_trip": float(commission_bps),
+        "slippage_bps_round_trip": float(slippage_bps),
+        "historical_spread": "half spread at entry + half spread at exit",
+    }
+    output = Path(report_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    temporary.replace(output)
+    return {**report, "report_path": str(output)}
+
+
+def _parse_dataset_args(values: list[str]) -> dict[str, str]:
+    datasets: dict[str, str] = {}
+    for value in values:
+        instrument, separator, raw_path = value.partition("=")
+        instrument = instrument.strip().upper()
+        if not separator or not instrument or not raw_path.strip():
+            raise ValueError("--dataset must use INSTRUMENT=/path/to/corpus.csv")
+        if instrument in datasets:
+            raise ValueError(f"duplicate dataset for {instrument}")
+        datasets[instrument] = raw_path.strip()
+    return datasets
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Evaluate pair-specific short-horizon barrier-calibrated v5 research"
+    )
+    parser.add_argument("--dataset", action="append", required=True)
+    parser.add_argument("--horizon-bars", type=int, choices=(5, 20, 60), required=True)
+    parser.add_argument("--report", required=True)
+    parser.add_argument("--min-train-periods", type=int)
+    parser.add_argument("--validation-periods", type=int, default=7200)
+    parser.add_argument("--max-splits", type=int, default=1)
+    parser.add_argument("--decision-time-before")
+    parser.add_argument("--commission-bps", type=float, default=0.0)
+    parser.add_argument("--slippage-bps", type=float, default=0.0)
+    args = parser.parse_args()
+
+    report = evaluate_barrier_calibrated_corpora(
+        _parse_dataset_args(args.dataset),
+        horizon_bars=args.horizon_bars,
+        report_path=args.report,
+        min_train_periods=args.min_train_periods,
+        validation_periods=args.validation_periods,
+        max_splits=args.max_splits,
+        decision_time_before=args.decision_time_before,
+        commission_bps=args.commission_bps,
+        slippage_bps=args.slippage_bps,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True, default=str))
+
+
+if __name__ == "__main__":
+    main()
