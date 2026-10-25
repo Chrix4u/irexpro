@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 import numpy as np
 import pandas as pd
+from xgboost import XGBRegressor
+
+from app.domain.training.train_multitimeframe import (
+    LONG_NET_RETURN_COLUMN,
+    SHORT_NET_RETURN_COLUMN,
+    _split_internal_early_stopping_tail,
+    _xgboost_n_jobs,
+)
 
 DIRECT_NET_HORIZONS = (5, 20, 60)
 MIN_CALIBRATION_ROWS = 200
@@ -146,6 +155,145 @@ def select_density_budgeted_threshold(
             decision.density,
         ),
     )
+
+
+def _make_direct_net_regressor(
+    *,
+    instrument: str,
+    side: str,
+    horizon_bars: int,
+) -> XGBRegressor:
+    """Return a deterministic pair/side/horizon expected-net-return regressor."""
+
+    seed_material = f"{instrument}|{side}|{horizon_bars}".encode("utf-8")
+    random_state = zlib.crc32(seed_material) & 0x7FFFFFFF
+    return XGBRegressor(
+        objective="reg:squarederror",
+        eval_metric="rmse",
+        n_estimators=900,
+        learning_rate=0.02,
+        max_depth=5,
+        min_child_weight=5.0,
+        subsample=0.85,
+        colsample_bytree=0.80,
+        reg_alpha=0.10,
+        reg_lambda=1.75,
+        random_state=random_state,
+        n_jobs=_xgboost_n_jobs(),
+        tree_method="hist",
+        early_stopping_rounds=70,
+    )
+
+
+def fit_pair_direct_net_experts(
+    training_window: pd.DataFrame,
+    *,
+    horizon_bars: int,
+    feature_columns: list[str],
+) -> tuple[dict[str, _RegressorLike], dict[str, DirectNetCalibration], dict[str, Any]]:
+    """Fit exact-pair LONG/SHORT experts and calibrate from the inner tail only."""
+
+    if horizon_bars not in DIRECT_NET_HORIZONS:
+        raise ValueError(f"unsupported direct-net horizon: {horizon_bars}")
+    required_columns = {
+        "instrument",
+        *feature_columns,
+        LONG_NET_RETURN_COLUMN,
+        SHORT_NET_RETURN_COLUMN,
+    }
+    missing = sorted(required_columns.difference(training_window.columns))
+    if missing:
+        raise ValueError(f"direct-net training frame missing columns: {missing}")
+    if training_window.empty:
+        raise ValueError("direct-net training frame is empty")
+
+    fit_window, early_window = _split_internal_early_stopping_tail(
+        training_window,
+        horizon_bars=horizon_bars,
+    )
+    models: dict[str, _RegressorLike] = {}
+    calibrations: dict[str, DirectNetCalibration] = {}
+    pair_counts: dict[str, dict[str, Any]] = {}
+
+    instruments = sorted(training_window["instrument"].astype(str).unique())
+    for instrument in instruments:
+        pair_fit = fit_window.loc[fit_window["instrument"].astype(str) == instrument]
+        pair_early = early_window.loc[early_window["instrument"].astype(str) == instrument]
+        if pair_fit.empty or pair_early.empty:
+            raise ValueError(f"direct-net split lacks pair evidence for {instrument}")
+
+        pair_models: dict[str, _RegressorLike] = {}
+        for side, return_column in (
+            ("long", LONG_NET_RETURN_COLUMN),
+            ("short", SHORT_NET_RETURN_COLUMN),
+        ):
+            fit_target = (
+                pd.to_numeric(pair_fit[return_column], errors="raise").to_numpy(dtype=float)
+                * 10_000.0
+            )
+            early_target = (
+                pd.to_numeric(pair_early[return_column], errors="raise").to_numpy(dtype=float)
+                * 10_000.0
+            )
+            if not np.isfinite(fit_target).all() or not np.isfinite(early_target).all():
+                raise ValueError(f"non-finite direct-net target for {instrument}::{side}")
+
+            model = _make_direct_net_regressor(
+                instrument=instrument,
+                side=side,
+                horizon_bars=horizon_bars,
+            )
+            model.fit(
+                pair_fit[feature_columns],
+                fit_target,
+                eval_set=[(pair_early[feature_columns], early_target)],
+                verbose=False,
+            )
+            key = f"{instrument}::{side}"
+            models[key] = model
+            pair_models[side] = model
+
+        early_long = np.asarray(
+            pair_models["long"].predict(pair_early[feature_columns]),
+            dtype=float,
+        )
+        early_short = np.asarray(
+            pair_models["short"].predict(pair_early[feature_columns]),
+            dtype=float,
+        )
+        if not np.isfinite(early_long).all() or not np.isfinite(early_short).all():
+            raise ValueError(f"non-finite direct-net calibration predictions for {instrument}")
+
+        predicted_long = early_long >= early_short
+        predicted_best = np.maximum(early_long, early_short)
+        realized_long = (
+            pd.to_numeric(pair_early[LONG_NET_RETURN_COLUMN], errors="raise").to_numpy(dtype=float)
+            * 10_000.0
+        )
+        realized_short = (
+            pd.to_numeric(pair_early[SHORT_NET_RETURN_COLUMN], errors="raise").to_numpy(dtype=float)
+            * 10_000.0
+        )
+        realized_selected = np.where(predicted_long, realized_long, realized_short)
+        calibration = select_density_budgeted_threshold(
+            predicted_best,
+            predicted_long,
+            realized_selected,
+        )
+        calibrations[instrument] = calibration
+        pair_counts[instrument] = {
+            "fit_rows": int(len(pair_fit)),
+            "early_rows": int(len(pair_early)),
+            "calibration_reason": calibration.reason,
+            "calibration_passed": calibration.passed,
+        }
+
+    return models, calibrations, {
+        "pair_count": len(instruments),
+        "fit_rows": int(len(fit_window)),
+        "early_rows": int(len(early_window)),
+        "pairs": pair_counts,
+    }
 
 
 def route_pair_direct_net_predictions(
