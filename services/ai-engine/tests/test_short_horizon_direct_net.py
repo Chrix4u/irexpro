@@ -21,6 +21,7 @@ from app.domain.training.short_horizon_direct_net import (
 from app.domain.training.train_multitimeframe import (
     LONG_NET_RETURN_COLUMN,
     SHORT_NET_RETURN_COLUMN,
+    TARGET_COLUMN,
 )
 
 
@@ -224,7 +225,7 @@ def test_failed_pair_calibration_abstains_instead_of_borrowing_threshold() -> No
 
 def _runner_frame(*, positive: bool = True) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    times = pd.date_range("2026-01-05T00:00:00Z", periods=30, freq="min")
+    times = pd.date_range("2026-01-05T00:00:00Z", periods=200, freq="min")
     long_pairs = set(INITIAL_FOREX_UNIVERSE[:3])
     for step, decision_time in enumerate(times):
         for instrument in INITIAL_FOREX_UNIVERSE:
@@ -236,6 +237,7 @@ def _runner_frame(*, positive: bool = True) -> pd.DataFrame:
                     "decision_time": decision_time,
                     "instrument": instrument,
                     "feature_x": float(step),
+                    TARGET_COLUMN: 1 if is_long else 0,
                     LONG_NET_RETURN_COLUMN: chosen_return if is_long else other_return,
                     SHORT_NET_RETURN_COLUMN: other_return if is_long else chosen_return,
                 }
@@ -265,8 +267,8 @@ def _install_runner_fakes(monkeypatch: pytest.MonkeyPatch, *, positive: bool = T
         del min_train_periods, validation_periods, max_splits
         split_calls.append((purge_periods, embargo_periods))
         times = pd.Index(frame[time_column].drop_duplicates().sort_values())
-        train = frame.loc[frame[time_column] <= times[17]].copy()
-        validation = frame.loc[(frame[time_column] >= times[23]) & (frame[time_column] <= times[28])].copy()
+        train = frame.loc[frame[time_column] <= times[59]].copy()
+        validation = frame.loc[(frame[time_column] >= times[70]) & (frame[time_column] <= times[199])].copy()
         assert train[time_column].max() < validation[time_column].min()
         yield train, validation
 

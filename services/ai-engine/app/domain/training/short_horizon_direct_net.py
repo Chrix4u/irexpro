@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import zlib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 import numpy as np
@@ -11,12 +14,14 @@ import pandas as pd
 from sklearn.metrics import balanced_accuracy_score
 from xgboost import XGBRegressor
 
+from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
 from app.domain.training.train_multitimeframe import (
     LONG_NET_RETURN_COLUMN,
     SHORT_NET_RETURN_COLUMN,
     TARGET_COLUMN,
     _split_internal_early_stopping_tail,
     _xgboost_n_jobs,
+    load_and_prepare_corpora,
 )
 from app.domain.training.validation import (
     compute_backtest_metrics,
@@ -497,10 +502,17 @@ def _direct_net_summary(
     decision_times = pd.to_datetime(predictions["decision_time"], utc=True, errors="raise")
     validation_days = max(int(pd.Series(decision_times.dt.normalize()).nunique()), 1)
     opportunities_per_day = float(len(periods)) / validation_days
+    active_count = int(len(active))
+    long_fraction = (
+        float((active["action"].astype(str) == "BUY").mean()) if active_count else 0.0
+    )
+    short_fraction = (
+        float((active["action"].astype(str) == "SELL").mean()) if active_count else 0.0
+    )
     return {
         "classification": {
             "balanced_accuracy": balanced_accuracy,
-            "active_sample_count": int(len(active)),
+            "active_sample_count": active_count,
         },
         "trading": trading,
         "active_signals": int(predictions["active_trade"].astype(bool).sum()),
@@ -509,6 +521,8 @@ def _direct_net_summary(
         "opportunities_per_validation_day": opportunities_per_day,
         "mean_minutes_between_entries": mean_interval,
         "median_minutes_between_entries": median_interval,
+        "long_fraction": long_fraction,
+        "short_fraction": short_fraction,
     }
 
 
@@ -676,3 +690,153 @@ def evaluate_direct_net_frame(
             "research_only": True,
         },
     }
+
+def _corpus_horizon_summary(evaluation: dict[str, Any]) -> dict[str, Any]:
+    overall = evaluation["overall"]
+    gate = evaluation["research_gate"]
+    checks = dict(gate["checks"])
+    participation_passed = bool(checks.pop("participation", False))
+    research_gate_passed = all(bool(value) for value in checks.values())
+    return {
+        "horizon_minutes": int(evaluation["horizon_bars"]),
+        "opportunity_count": int(overall["non_overlapping_opportunities"]),
+        "active_signal_count": int(overall["active_signals"]),
+        "validation_days": int(overall["validation_days"]),
+        "opportunities_per_validation_day": float(
+            overall["opportunities_per_validation_day"]
+        ),
+        "participation_target": float(evaluation["participation_target_per_day"]),
+        "participation_gate_passed": participation_passed,
+        "research_gate_passed": research_gate_passed,
+        "short_horizon_research_passed": (
+            research_gate_passed and participation_passed
+        ),
+        "balanced_accuracy": float(overall["classification"]["balanced_accuracy"]),
+        "profit_factor": overall["trading"]["profit_factor"],
+        "sharpe_ratio": overall["trading"]["sharpe_ratio"],
+        "max_drawdown": float(overall["trading"]["max_drawdown"]),
+        "positive_fold_fraction": float(evaluation["positive_fold_fraction"]),
+        "positive_instrument_fraction": float(
+            evaluation["positive_instrument_fraction"]
+        ),
+        "mean_minutes_between_entries": overall["mean_minutes_between_entries"],
+        "median_minutes_between_entries": overall["median_minutes_between_entries"],
+        "long_fraction": float(overall["long_fraction"]),
+        "short_fraction": float(overall["short_fraction"]),
+        "approved_for_paper": False,
+        "approved_for_demo": False,
+        "approved_for_live": False,
+    }
+
+
+def evaluate_direct_net_corpora(
+    datasets: dict[str, str | Path],
+    *,
+    decision_time_before: str,
+    report_path: str | Path,
+    feature_columns: list[str] | None = None,
+    max_splits: int = 5,
+) -> dict[str, Any]:
+    """Evaluate v4 across six pair corpora at 5/20/60m without execution authority."""
+
+    normalized = {str(key).upper(): value for key, value in datasets.items()}
+    if set(normalized) != set(DIRECT_NET_INSTRUMENTS):
+        raise ValueError("direct-net research requires complete six-pair universe")
+    if not decision_time_before:
+        raise ValueError("decision_time_before is required")
+    if max_splits < 1:
+        raise ValueError("max_splits must be at least 1")
+
+    selected_features = list(feature_columns or MULTITIMEFRAME_FEATURE_COLUMNS)
+    if not selected_features:
+        raise ValueError("direct-net research requires at least one feature")
+
+    horizons: dict[str, Any] = {}
+    dataset_hashes: dict[str, dict[str, str]] = {}
+    for horizon in DIRECT_NET_HORIZONS:
+        pooled, hashes = load_and_prepare_corpora(
+            normalized,
+            horizon_bars=horizon,
+            decision_time_before=decision_time_before,
+        )
+        evaluation = evaluate_direct_net_frame(
+            pooled,
+            horizon_bars=horizon,
+            feature_columns=selected_features,
+            max_splits=max_splits,
+        )
+        summary = _corpus_horizon_summary(evaluation)
+        horizons[f"{horizon}m"] = {
+            "summary": summary,
+            "evaluation": evaluation,
+        }
+        dataset_hashes[f"{horizon}m"] = hashes
+
+    passed = all(
+        bool(block["summary"]["short_horizon_research_passed"])
+        for block in horizons.values()
+    )
+    result: dict[str, Any] = {
+        "report_version": 4,
+        "artifact": "short-horizon-direct-net-v4",
+        "purpose": "direct_short_horizon_net_return_research_only",
+        "decision_time_before": decision_time_before,
+        "horizon_minutes": list(DIRECT_NET_HORIZONS),
+        "feature_columns": selected_features,
+        "dataset_sha256": dataset_hashes,
+        "short_horizon_research_passed": passed,
+        "horizons": horizons,
+        "governance": {
+            "shadow_only": True,
+            "approved_for_paper": False,
+            "approved_for_demo": False,
+            "approved_for_live": False,
+            "forced_trade_quota": False,
+        },
+    }
+
+    output = Path(report_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(result, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    temporary.replace(output)
+    return result
+
+
+def _parse_dataset_args(values: list[str]) -> dict[str, str]:
+    datasets: dict[str, str] = {}
+    for value in values:
+        instrument, separator, path = value.partition("=")
+        instrument = instrument.strip().upper()
+        path = path.strip()
+        if not separator or not instrument or not path:
+            raise ValueError("--dataset must use INSTRUMENT=/path/to/corpus.csv")
+        if instrument in datasets:
+            raise ValueError(f"duplicate dataset for {instrument}")
+        datasets[instrument] = path
+    return datasets
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Evaluate research-only direct LONG/SHORT net-return ranker v4"
+    )
+    parser.add_argument("--dataset", action="append", required=True)
+    parser.add_argument("--decision-time-before", required=True)
+    parser.add_argument("--report", required=True)
+    parser.add_argument("--max-splits", type=int, default=5)
+    args = parser.parse_args()
+    result = evaluate_direct_net_corpora(
+        _parse_dataset_args(args.dataset),
+        decision_time_before=args.decision_time_before,
+        report_path=args.report,
+        max_splits=args.max_splits,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True, default=str))
+
+
+if __name__ == "__main__":
+    main()
