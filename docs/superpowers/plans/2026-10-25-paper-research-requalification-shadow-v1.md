@@ -81,9 +81,24 @@
 
 ### Task 4: Verification and delivery
 
-- [ ] **Step 1:** Run the focused shadow, collector, and audit suites.
-- [ ] **Step 2:** Run API build and targeted ESLint.
-- [ ] **Step 3:** Run `git diff --check`.
-- [ ] **Step 4:** Run the broader API regression suite with source-hash guard.
+- [x] **Step 1:** Run the focused shadow, collector, and audit suites.
+- [x] **Step 2:** Run API build and targeted ESLint.
+- [x] **Step 3:** Run `git diff --check`.
+- [x] **Step 4:** Run the broader API regression suite with source-hash guard.
 - [ ] **Step 5:** Push the isolated branch and use repository CI; do not merge if any required check is red.
 - [ ] **Step 6:** After merge/CD, verify exact deployed SHA, API/AI health, PAPER mode, and run the read-only scorecard. No order-count increase is expected from this feature itself.
+
+## Verification Evidence — 2026-10-25
+
+- Base/deployed SHA at branch creation: `7b3d7a241de2fbcd935710989316e4d3ae4ae716`.
+- Pure policy TDD: RED missing module; GREEN **12/12** tests.
+- Collector TDD: RED because cost evidence was unreachable behind the blocked realised portfolio brake; GREEN with shadow annotation while real execution remained blocked.
+- Read-only audit TDD: RED missing audit entry point; GREEN **3/3** runner tests.
+- Staging pre-deploy audit at `2026-10-25T18:55:35.180Z`: 0 annotations, 0 resolved episodes, `COLLECTING`, proving no legacy backfill.
+- Final focused verification: **191/191 tests passed** across shadow policy, audit runner, collector, research-throughput, and Oct-19 execution-control suites.
+- API `nest build`: **PASS** on formatted verification commit `26f06ef8a1be52de7b2d182adb80bb899fab2a40`.
+- Targeted ESLint: **PASS** after Prettier normalization.
+- `git diff --check`: **PASS**.
+- Detached full API regression on exact commit `26f06ef8a1be52de7b2d182adb80bb899fab2a40`: **332 passed suites / 4,846 passed tests / 0 failures**; 2 suites / 13 tests intentionally skipped.
+- Before/after SHA-256 guard across the six changed code/test/script files: **PASS**; the verifier tested byte-identical source.
+- Global Oct-19 execution boundary was not modified; the new artifact always reports `executionAuthority=NONE`, `modifiesExecution=false`, `qualificationEvidence=false`, `productionEligible=false`.
