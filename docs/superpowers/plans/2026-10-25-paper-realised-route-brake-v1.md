@@ -34,7 +34,7 @@
 - [x] Run broader API test suite if resource budget permits.
 - [x] Run `git diff --check`.
 - [x] Re-run the read-only champion audit and document the current compatible route metrics.
-- [ ] Commit and push the isolated branch only after all gates are green.
+- [x] Commit and push the isolated branch only after all gates are green.
 - [x] Do not merge/deploy until verification shows no regression in PAPER scanner startup and the change is limited to continuation normal-PAPER authority.
 
 ## Verification Evidence — 2026-10-25
@@ -52,3 +52,5 @@
 - New realised-route policy decision on that frozen snapshot: `RESEARCH_ONLY`, `fullSizeEligible=false`, reason `REALISED_ROUTE_PROFIT_FACTOR_BELOW_ONE`.
 - `CONFIRMED_REVERSAL` and `EARLY_TRANSITION` are not subject to this realised continuation brake.
 - Research fallback remains available because reliability demotion is an explicitly safe input to `PAPER_RESEARCH_THROUGHPUT`; normal PAPER demotion therefore does not erase qualifying research evidence.
+
+- Feature commit pushed and remote-verified: `86560d5731f2fe61b1c9b0c4b9ca701d4542ea5a`.
