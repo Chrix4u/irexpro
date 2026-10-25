@@ -38,6 +38,10 @@ from app.domain.training.train_multitimeframe import (
 from app.domain.training.validation import iter_purged_walk_forward_time_splits
 
 
+class InsufficientConditionalEvidenceError(ValueError):
+    """Expected pair-level evidence shortage that must fail closed to ABSTAIN."""
+
+
 @dataclass(frozen=True)
 class ConditionalSeverityTarget:
     row_index: np.ndarray
@@ -74,6 +78,7 @@ class ConditionalPayoffPairExpert:
     severity_models: ConditionalSeverityModels
     feature_columns: tuple[str, ...]
     calibration: ConditionalPayoffCalibration | None = None
+    evidence_failure: str | None = None
 
 
 @dataclass(frozen=True)
@@ -215,7 +220,9 @@ def fit_pair_conditional_payoff_expert(
         ("short", "barrier_short_target"),
     ):
         if fit[target_column].nunique() < 2 or early[target_column].nunique() < 2:
-            raise ValueError(f"{pair} {side} barrier expert requires both classes")
+            raise InsufficientConditionalEvidenceError(
+                f"{pair} {side} barrier expert requires both classes"
+            )
         model = classifier_builder(side)
         model.fit(
             fit[list(feature_columns)],
@@ -240,12 +247,12 @@ def fit_pair_conditional_payoff_expert(
         fit_target = fit_targets[component]
         early_target = early_targets[component]
         if len(fit_target.values) < min_conditional_fit_rows:
-            raise ValueError(
+            raise InsufficientConditionalEvidenceError(
                 f"{pair} conditional {component} fit evidence too small: "
                 f"{len(fit_target.values)}"
             )
         if len(early_target.values) < min_conditional_early_rows:
-            raise ValueError(
+            raise InsufficientConditionalEvidenceError(
                 f"{pair} conditional {component} early evidence too small: "
                 f"{len(early_target.values)}"
             )
@@ -596,12 +603,28 @@ def _fit_and_calibrate_pair_expert(
     expert_fitter: Callable[..., ConditionalPayoffPairExpert] | None = None,
 ) -> ConditionalPayoffPairExpert:
     fitter = expert_fitter or fit_pair_conditional_payoff_expert
-    expert = fitter(
-        training_frame,
-        instrument=instrument,
-        horizon_bars=horizon_bars,
-    )
     pair = instrument.strip().upper()
+    try:
+        expert = fitter(
+            training_frame,
+            instrument=instrument,
+            horizon_bars=horizon_bars,
+        )
+    except InsufficientConditionalEvidenceError as exc:
+        return ConditionalPayoffPairExpert(
+            instrument=pair,
+            long_model=None,
+            short_model=None,
+            severity_models=ConditionalSeverityModels(
+                long_favorable=None,
+                long_adverse=None,
+                short_favorable=None,
+                short_adverse=None,
+            ),
+            feature_columns=(),
+            calibration=_failed_calibration("INSUFFICIENT_CONDITIONAL_EVIDENCE"),
+            evidence_failure=str(exc),
+        )
     if expert.instrument.upper() != pair:
         raise ValueError(
             f"conditional payoff fitter returned mismatched expert for {pair}"
@@ -745,6 +768,11 @@ def evaluate_conditional_payoff_frame(
                         else None
                     )
                     for instrument, expert in sorted(experts.items())
+                },
+                "pair_evidence_failures": {
+                    instrument: expert.evidence_failure
+                    for instrument, expert in sorted(experts.items())
+                    if expert.evidence_failure is not None
                 },
                 "active_signals": int(routed["active_trade"].sum()),
                 "non_overlapping_opportunities": int(len(fold_periods)),

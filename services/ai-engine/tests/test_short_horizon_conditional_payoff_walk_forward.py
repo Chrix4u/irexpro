@@ -179,3 +179,58 @@ def test_corpora_wrapper_persists_json_evidence(
     assert '"candidate": "six-pair-conditional-payoff-v6"' in persisted
     assert report["dataset_sha256"] == hashes
     assert report["report_path"] == str(output)
+
+
+def test_walk_forward_fails_closed_per_pair_on_insufficient_conditional_evidence() -> None:
+    from app.domain.training.short_horizon_conditional_payoff import (
+        InsufficientConditionalEvidenceError,
+        evaluate_conditional_payoff_frame,
+    )
+
+    calls: list[dict[str, object]] = []
+    base_fitter = _fake_fitter(calls)
+
+    def fitter(
+        training_frame: pd.DataFrame,
+        *,
+        instrument: str,
+        horizon_bars: int,
+        **kwargs: object,
+    ) -> ConditionalPayoffPairExpert:
+        if instrument == "AUDUSD":
+            raise InsufficientConditionalEvidenceError(
+                "AUDUSD conditional long_favorable fit evidence too small: 146"
+            )
+        return base_fitter(
+            training_frame,
+            instrument=instrument,
+            horizon_bars=horizon_bars,
+            **kwargs,
+        )
+
+    report = evaluate_conditional_payoff_frame(
+        _frame(),
+        horizon_bars=1,
+        min_train_periods=300,
+        validation_periods=720,
+        max_splits=1,
+        calibration_min_rows=20,
+        expert_fitter=fitter,
+    )
+
+    fold = report["folds"][0]
+    assert fold["pair_calibrations"]["AUDUSD"]["passed"] is False
+    assert (
+        fold["pair_calibrations"]["AUDUSD"]["reason"]
+        == "INSUFFICIENT_CONDITIONAL_EVIDENCE"
+    )
+    assert fold["pair_evidence_failures"]["AUDUSD"] == (
+        "AUDUSD conditional long_favorable fit evidence too small: 146"
+    )
+    assert all(
+        fold["pair_calibrations"][pair]["passed"]
+        for pair in PAIRS
+        if pair != "AUDUSD"
+    )
+    assert report["participation"]["raw_active_signals"] > 0
+    assert report["approved_for_paper"] is False
