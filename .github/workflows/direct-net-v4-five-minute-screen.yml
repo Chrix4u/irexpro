@@ -1,0 +1,224 @@
+name: Direct Net V4 Five-Minute Screen
+
+on:
+  push:
+    branches: ['research/short-horizon-direct-net-v4-20261024']
+    paths:
+      - 'services/ai-engine/app/domain/training/short_horizon_direct_net.py'
+      - 'services/ai-engine/tests/test_short_horizon_direct_net.py'
+      - '.github/workflows/direct-net-v4-five-minute-screen.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: ${{ github.sha }}
+  STAGING_SSH_HOST: vps.lightworldtech.com
+  STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+  STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+  SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+jobs:
+  screen:
+    name: Research-only 5m one-fold screen
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment:
+      name: staging
+    concurrency:
+      group: irexpro-direct-net-v4-five-minute-screen
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout exact research candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact research branch candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "${GITHUB_REF_NAME}" = 'research/short-horizon-direct-net-v4-20261024'
+
+      - name: Configure pinned SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run bounded 5m direct-net evidence screen
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]
+          staging='/home/lightworld/webapps/irexpro-staging'
+          six_pair_root='/home/lightworld/research/irexpro-six-pair'
+          research_root='/home/lightworld/research/irexpro-direct-net-v4'
+          output="$research_root/$candidate_sha"
+          worktree="$output/worktree"
+          report="$output/direct-net-v4-5m-one-fold.json"
+          pairs=(EURUSD GBPUSD USDJPY AUDUSD USDCAD USDCHF)
+
+          cd "$staging"
+          test "$(git rev-parse --show-toplevel)" = "$staging"
+          git fetch --quiet --no-tags origin "$candidate_sha"
+          git cat-file -e "${candidate_sha}^{commit}"
+          install -d -m 700 "$output"
+          git worktree prune
+          if [[ -e "$worktree/.git" ]]; then
+            test "$(git -C "$worktree" rev-parse HEAD)" = "$candidate_sha"
+          else
+            rm -rf "$worktree"
+            git worktree add --detach "$worktree" "$candidate_sha"
+          fi
+
+          corpus_root=''
+          while IFS= read -r candidate_root; do
+            valid=true
+            for pair in "${pairs[@]}"; do
+              test -s "$candidate_root/corpora/${pair}_MTF.csv" || valid=false
+              test -s "$candidate_root/corpora/${pair}_MTF.manifest.json" || valid=false
+            done
+            if [[ "$valid" == true ]]; then
+              corpus_root="$candidate_root"
+              break
+            fi
+          done < <(
+            find "$six_pair_root" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
+              | sort -nr | cut -d' ' -f2-
+          )
+          test -n "$corpus_root" || {
+            echo 'DIRECT_NET_V4_HOLD reason=no_complete_six_pair_corpus' >&2
+            exit 21
+          }
+
+          python_bin=''
+          for candidate in \
+            "$staging/services/ai-engine/.venv/bin/python" \
+            "$staging/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          test -n "$python_bin" || {
+            echo 'DIRECT_NET_V4_HOLD reason=python_runtime_missing' >&2
+            exit 22
+          }
+
+          cd "$worktree/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_XGB_N_JOBS=4
+          "$python_bin" - "$corpus_root" "$report" "$candidate_sha" <<'PY'
+          from __future__ import annotations
+
+          import json
+          import sys
+          from pathlib import Path
+
+          from app.domain.models.multitimeframe_features import (
+              INITIAL_FOREX_UNIVERSE,
+              MULTITIMEFRAME_FEATURE_COLUMNS,
+          )
+          from app.domain.training.run_first_six_pair import _research_qualification_cutoff
+          from app.domain.training.short_horizon_direct_net import (
+              _corpus_horizon_summary,
+              evaluate_direct_net_frame,
+          )
+          from app.domain.training.train_multitimeframe import load_and_prepare_corpora
+
+          corpus_root = Path(sys.argv[1])
+          report_path = Path(sys.argv[2])
+          candidate_sha = sys.argv[3]
+          datasets = {
+              instrument: corpus_root / 'corpora' / f'{instrument}_MTF.csv'
+              for instrument in INITIAL_FOREX_UNIVERSE
+          }
+          cutoff = _research_qualification_cutoff(datasets)
+          pooled, hashes = load_and_prepare_corpora(
+              datasets,
+              horizon_bars=5,
+              decision_time_before=cutoff.isoformat(),
+          )
+          evaluation = evaluate_direct_net_frame(
+              pooled,
+              horizon_bars=5,
+              feature_columns=list(MULTITIMEFRAME_FEATURE_COLUMNS),
+              max_splits=1,
+          )
+          summary = _corpus_horizon_summary(evaluation)
+          payload = {
+              'report_version': 4,
+              'artifact': 'short-horizon-direct-net-v4',
+              'screen': '5m_one_fold_early_rejection',
+              'candidate_sha': candidate_sha,
+              'corpus_root': str(corpus_root),
+              'decision_time_before': cutoff.isoformat(),
+              'dataset_sha256': hashes,
+              'summary': summary,
+              'evaluation': evaluation,
+              'governance': {
+                  'shadow_only': True,
+                  'approved_for_paper': False,
+                  'approved_for_demo': False,
+                  'approved_for_live': False,
+                  'forced_trade_quota': False,
+              },
+          }
+          report_path.parent.mkdir(parents=True, exist_ok=True)
+          tmp = report_path.with_suffix(report_path.suffix + '.tmp')
+          tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding='utf-8')
+          tmp.replace(report_path)
+          print('DIRECT_NET_V4_5M_SCREEN', json.dumps(summary, sort_keys=True))
+          print('DIRECT_NET_V4_5M_REPORT', report_path)
+          PY
+          REMOTE
+
+      - name: Copy and print evidence report
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          local_report="$RUNNER_TEMP/direct-net-v4-5m-one-fold.json"
+          remote_report="/home/lightworld/research/irexpro-direct-net-v4/$CANDIDATE_SHA/direct-net-v4-5m-one-fold.json"
+          scp -i "$HOME/.ssh/irexpro_staging" -P "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST:$remote_report" "$local_report"
+          python - "$local_report" <<'PY'
+          import json, sys
+          report=json.load(open(sys.argv[1], encoding='utf-8'))
+          summary=report['summary']
+          print('DIRECT_NET_V4_EVIDENCE_BEGIN')
+          print(json.dumps({
+              'candidate_sha': report['candidate_sha'],
+              'decision_time_before': report['decision_time_before'],
+              'summary': summary,
+              'governance': report['governance'],
+          }, indent=2, sort_keys=True))
+          print('DIRECT_NET_V4_EVIDENCE_END')
+          PY
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
