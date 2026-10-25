@@ -114,6 +114,9 @@ describe('M1TacticalMarketDataService', () => {
       expect(call[4]).toEqual(DECISION);
     }
     expect(getLatestPositiveSpreadQuote).toHaveBeenCalledWith('conn-1', 'EURUSD', DECISION);
+    expect(service.getLastReadiness('conn-1', 'EURUSD')).toEqual(
+      expect.objectContaining({ ready: true, reason: 'READY', authority: 'BROKER_NATIVE' }),
+    );
   });
 
   it('fails closed when H1 or H4 warm history is insufficient', async () => {
@@ -124,6 +127,19 @@ describe('M1TacticalMarketDataService', () => {
   it('fails closed when the latest completed M1 bar is stale', async () => {
     const { service } = fixture({ M1: rows(60, 1, new Date('2026-10-15T12:20:00.000Z')) });
     await expect(service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
+  });
+
+  it('records why a stale M1 snapshot was unavailable', async () => {
+    const { service } = fixture({ M1: rows(60, 1, new Date('2026-10-15T12:20:00.000Z')) });
+
+    await expect(service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
+    expect(service.getLastReadiness('conn-1', 'EURUSD')).toEqual(
+      expect.objectContaining({
+        ready: false,
+        reason: 'BROKER_M1_STALE',
+        authority: null,
+      }),
+    );
   });
 
   it('fails closed when positive spread evidence is stale or under-sampled', async () => {

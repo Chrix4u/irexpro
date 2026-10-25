@@ -18,7 +18,10 @@ import {
   M1TacticalEvidenceService,
   type M1ShadowOutcome15mV1,
 } from './m1-tactical-evidence.service';
-import { M1TacticalMarketDataService } from './m1-tactical-market-data.service';
+import {
+  M1TacticalMarketDataService,
+  type M1TacticalMarketReadiness,
+} from './m1-tactical-market-data.service';
 import {
   buildM1TacticalCandidates,
   M1_TACTICAL_POLICY_V1,
@@ -207,6 +210,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
   private lastSlotKey: string | null = null;
   private lastRunAt: Date | null = null;
   private lastError: string | null = null;
+  private readonly marketReadiness = new Map<string, M1TacticalMarketReadiness>();
 
   constructor(
     private readonly config: ConfigService,
@@ -255,6 +259,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       lastSlotKey: this.lastSlotKey,
       lastRunAt: this.lastRunAt?.toISOString() ?? null,
       lastError: this.lastError,
+      marketReadiness: Object.fromEntries(
+        [...this.marketReadiness.entries()].map(([instrument, readiness]) => [
+          instrument,
+          { ...readiness },
+        ]),
+      ),
       m5Independent: true as const,
     };
   }
@@ -300,6 +310,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     decisionTime: Date,
   ): Promise<void> {
     const market = await this.marketData.loadSnapshot(brokerConnectionId, instrument, decisionTime);
+    const readiness = this.marketData.getLastReadiness?.(brokerConnectionId, instrument) ?? null;
+    if (readiness) {
+      const previous = this.marketReadiness.get(instrument);
+      this.marketReadiness.set(instrument, { ...readiness });
+      if (previous?.reason !== readiness.reason || previous?.ready !== readiness.ready) {
+        this.logger.log(
+          `M1 tactical readiness instrument=${instrument} ready=${readiness.ready} ` +
+            `reason=${readiness.reason} authority=${readiness.authority ?? 'NONE'}`,
+        );
+      }
+    }
     if (!market) return;
 
     const features = buildM1TacticalFeatures({
