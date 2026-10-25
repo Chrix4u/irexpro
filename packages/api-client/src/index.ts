@@ -6,6 +6,9 @@ import type {
   BrokerConnectionView,
   BrokerTestResult,
   CreateBrokerConnectionRequest,
+  DirectMt5PairingView,
+  DirectMt5ConnectionHealthView,
+  DirectMt5RevokeResult,
   ForgotPasswordRequest,
   ForgotPasswordResponse,
   HealthResponse,
@@ -42,7 +45,7 @@ import type {
   ChangePasswordRequest,
   MyProfileView,
   SecurityEventListResponse,
-} from '@irexpro/types';
+} from "@irexpro/types";
 import type {
   ActiveTradingSessionResponse,
   AiAutomationRuntimeStatusView,
@@ -57,7 +60,7 @@ import type {
   SetUserCapitalAllocationRequest,
   TradeExecutionView,
   UserCapitalAllocationView,
-} from '@irexpro/types/execution';
+} from "@irexpro/types/execution";
 
 /**
  * Options for the shared API client.
@@ -96,7 +99,7 @@ export interface AdvancedAiControlsResponse {
     executionConfidenceMin: number;
     executionConfidenceMax: number;
     qualifiedMinimumConfidence: number;
-    appliesTo: 'ALL_EXECUTION_MODES';
+    appliesTo: "ALL_EXECUTION_MODES";
     revision: number;
   };
   modelQualification: {
@@ -168,7 +171,9 @@ export interface ApiClient {
 
   // ── Sprint 43: Account governance ───────────────────────────────────────
   /** Public, generic-response account-access appeal request. */
-  submitAccountAppeal(body: SubmitAccountAppealRequest): Promise<SubmitAccountAppealResponse>;
+  submitAccountAppeal(
+    body: SubmitAccountAppealRequest,
+  ): Promise<SubmitAccountAppealResponse>;
   /** Admin-only appeal queue with bounded, server-authoritative pagination. */
   listAccountAppeals(query?: {
     status?: AccountAppealStatus;
@@ -181,7 +186,10 @@ export interface ApiClient {
     body: ResolveAccountAppealRequest,
   ): Promise<AccountAppealAdminView>;
   /** Admin-only account-access action. */
-  updateAccountStatus(userId: string, body: UpdateAccountStatusRequest): Promise<AdminAccountStatusView>;
+  updateAccountStatus(
+    userId: string,
+    body: UpdateAccountStatusRequest,
+  ): Promise<AdminAccountStatusView>;
 
   // ── Sprint 55: Account security center ──────────────────────────────────
   /**
@@ -191,7 +199,9 @@ export interface ApiClient {
    */
   changePassword(body: ChangePasswordRequest): Promise<AuthActionResponse>;
   /** Re-authenticate and accept the warning before Advanced AI Controls. */
-  stepUpAdvancedAiControls(body: AdvancedAiStepUpRequest): Promise<AdvancedAiStepUpResponse>;
+  stepUpAdvancedAiControls(
+    body: AdvancedAiStepUpRequest,
+  ): Promise<AdvancedAiStepUpResponse>;
   /**
    * POST /auth/sessions/revoke-others (requires Authorization: Bearer) →
    * { accessToken, refreshToken }. Revokes every session except the caller's
@@ -222,7 +232,9 @@ export interface ApiClient {
   /** PATCH /risk/profile → update risk profile + risk acknowledgement. */
   updateRiskProfile(body: UpdateRiskProfileRequest): Promise<RiskProfile>;
   /** Step-up protected Advanced AI Controls and active-model qualification evidence. */
-  getAdvancedAiControls(stepUpToken: string): Promise<AdvancedAiControlsResponse>;
+  getAdvancedAiControls(
+    stepUpToken: string,
+  ): Promise<AdvancedAiControlsResponse>;
   /** Update the LIVE-promotable execution confidence preference. */
   updateAdvancedAiControls(
     stepUpToken: string,
@@ -246,7 +258,9 @@ export interface ApiClient {
     options?: { channel?: BrokerOAuthChannel },
   ): Promise<BrokerOAuthStartResult>;
   /** POST /broker/connections/oauth/complete → discovered cTID accounts (no tokens). */
-  completeBrokerOAuth(body: CompleteBrokerOAuthRequest): Promise<BrokerOAuthAccountsResult>;
+  completeBrokerOAuth(
+    body: CompleteBrokerOAuthRequest,
+  ): Promise<BrokerOAuthAccountsResult>;
   /**
    * POST /broker/connections/oauth/handoff → discovered cTID accounts via the
    * one-time deep-link handoff token (no provider token material ever).
@@ -257,9 +271,25 @@ export interface ApiClient {
   /** POST /broker/connections/oauth/link → link a discovered account (encrypted server-side). */
   linkBrokerOAuth(body: LinkBrokerOAuthRequest): Promise<BrokerConnectionView>;
   /** POST /broker/connections → create a new broker connection (encrypts credentials). */
-  createBrokerConnection(body: CreateBrokerConnectionRequest): Promise<BrokerConnectionView>;
+  createBrokerConnection(
+    body: CreateBrokerConnectionRequest,
+  ): Promise<BrokerConnectionView>;
+  /** Generate a short-lived pairing code for an owned DEMO MT5 BrokerConnection. */
+  createDirectMt5Pairing(
+    brokerConnectionId: string,
+  ): Promise<DirectMt5PairingView>;
+  /** Read the authenticated owner's Direct MT5 connector health. */
+  getDirectMt5ConnectionHealth(
+    brokerConnectionId: string,
+  ): Promise<DirectMt5ConnectionHealthView>;
+  /** Revoke the Direct MT5 connector bound to this BrokerConnection. */
+  revokeDirectMt5Connector(
+    brokerConnectionId: string,
+  ): Promise<DirectMt5RevokeResult>;
   /** POST /broker/connections/test → test credentials without saving (returns success/error). */
-  testBrokerCredentials(body: CreateBrokerConnectionRequest): Promise<BrokerTestResult>;
+  testBrokerCredentials(
+    body: CreateBrokerConnectionRequest,
+  ): Promise<BrokerTestResult>;
   /** POST /broker/connections/:id/connect → connect (set status to CONNECTED). */
   connectBroker(connectionId: string): Promise<BrokerConnectionView>;
   /** POST /broker/connections/:id/disconnect → disconnect. */
@@ -267,7 +297,9 @@ export interface ApiClient {
 
   // ── AI capital allocation ───────────────────────────────────────────────
   /** GET /execution/capital-allocation?brokerConnectionId=... → explicit user allocation. */
-  getCapitalAllocation(brokerConnectionId: string): Promise<UserCapitalAllocationView>;
+  getCapitalAllocation(
+    brokerConnectionId: string,
+  ): Promise<UserCapitalAllocationView>;
   /** POST /execution/capital-allocation → persist explicit allocation for the exact broker account. */
   setCapitalAllocation(
     body: SetUserCapitalAllocationRequest,
@@ -285,10 +317,14 @@ export interface ApiClient {
    */
   getActiveTradingSession(): Promise<ActiveTradingSessionResponse>;
   /** GET /trading/sessions/:id/automation-status → server-authoritative AI runtime. */
-  getAutomationRuntimeStatus(sessionId: string): Promise<AiAutomationRuntimeStatusView>;
+  getAutomationRuntimeStatus(
+    sessionId: string,
+  ): Promise<AiAutomationRuntimeStatusView>;
   /** POST /trading/sessions/start → 201 `{ session }` (body binds the exact
    *  brokerConnectionId + executionMode; server-validated fail-closed). */
-  startTradingSession(body: StartTradingSessionRequest): Promise<StartTradingSessionResponse>;
+  startTradingSession(
+    body: StartTradingSessionRequest,
+  ): Promise<StartTradingSessionResponse>;
   /**
    * POST /trading/sessions/:id/stop → stop new AI exposure first, then request
    * closure of AI-opened positions and return the server-authoritative summary.
@@ -336,7 +372,7 @@ export class ApiClientError extends Error {
     public readonly raw?: unknown,
   ) {
     super(message);
-    this.name = 'ApiClientError';
+    this.name = "ApiClientError";
   }
 }
 
@@ -352,12 +388,17 @@ export class ApiClientError extends Error {
  * platform-agnostic and never hardcodes a URL.
  */
 export function createApiClient(options: CreateApiClientOptions): ApiClient {
-  const { baseUrl, includeCredentials = false, getAccessToken, recoverUnauthorized } = options;
+  const {
+    baseUrl,
+    includeCredentials = false,
+    getAccessToken,
+    recoverUnauthorized,
+  } = options;
   let unauthorizedRecovery: Promise<boolean> | null = null;
 
   if (!baseUrl) {
     throw new Error(
-      'ApiClient: baseUrl is required. Pass the API base URL from your app env config.',
+      "ApiClient: baseUrl is required. Pass the API base URL from your app env config.",
     );
   }
 
@@ -368,19 +409,20 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
   ): Promise<T> {
     const url = `${baseUrl}${path}`;
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
+      "Content-Type": "application/json",
+      Accept: "application/json",
       ...((init?.headers as Record<string, string>) ?? {}),
     };
 
     const token = getAccessToken?.();
-    if (token && !headers['Authorization']) {
-      headers['Authorization'] = `Bearer ${token}`;
+    if (token && !headers["Authorization"]) {
+      headers["Authorization"] = `Bearer ${token}`;
     }
 
-    const method = (init?.method ?? 'GET').toUpperCase();
+    const method = (init?.method ?? "GET").toUpperCase();
     const cache =
-      init?.cache ?? (method === 'GET' || method === 'HEAD' ? 'no-store' : undefined);
+      init?.cache ??
+      (method === "GET" || method === "HEAD" ? "no-store" : undefined);
 
     let res: Response;
     try {
@@ -388,7 +430,7 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
         ...init,
         ...(cache ? { cache } : {}),
         headers,
-        credentials: includeCredentials ? 'include' : 'same-origin',
+        credentials: includeCredentials ? "include" : "same-origin",
       });
     } catch (err) {
       throw new ApiClientError(
@@ -401,9 +443,9 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       res.status === 401 &&
       !hasRetriedAfterUnauthorized &&
       Boolean(recoverUnauthorized) &&
-      !path.startsWith('/auth/refresh') &&
-      !path.startsWith('/auth/login') &&
-      !path.startsWith('/auth/register');
+      !path.startsWith("/auth/refresh") &&
+      !path.startsWith("/auth/login") &&
+      !path.startsWith("/auth/register");
 
     if (mayRecover) {
       unauthorizedRecovery ??= recoverUnauthorized!().finally(() => {
@@ -438,23 +480,23 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
   return {
     baseUrl,
 
-    health: () => request<HealthResponse>('/health'),
+    health: () => request<HealthResponse>("/health"),
 
     register: (body) =>
-      request<AuthTokens>('/auth/register', {
-        method: 'POST',
+      request<AuthTokens>("/auth/register", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
     login: (body) =>
-      request<AuthTokens>('/auth/login', {
-        method: 'POST',
+      request<AuthTokens>("/auth/login", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
     refresh: (refreshToken?: string) =>
-      request<AuthTokens>('/auth/refresh', {
-        method: 'POST',
+      request<AuthTokens>("/auth/refresh", {
+        method: "POST",
         // Sprint 25: if refreshToken is provided (mobile), send it in the body.
         // If omitted (web/admin), send '{}' as the body — the httpOnly cookie
         // is sent automatically via credentials:'include' set in request().
@@ -469,166 +511,181 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
           : JSON.stringify({}),
       }),
 
-    logout: () =>
-      request<LogoutResponse>('/auth/logout', { method: 'POST' }),
+    logout: () => request<LogoutResponse>("/auth/logout", { method: "POST" }),
 
-    me: () => request<AuthUser>('/auth/me'),
+    me: () => request<AuthUser>("/auth/me"),
 
     beginMfaSetup: (password) =>
-      request<MfaSetupResponse>('/auth/mfa/setup', {
-        method: 'POST',
+      request<MfaSetupResponse>("/auth/mfa/setup", {
+        method: "POST",
         body: JSON.stringify({ password }),
       }),
 
     enableMfa: (code) =>
-      request<AuthActionResponse>('/auth/mfa/enable', {
-        method: 'POST',
+      request<AuthActionResponse>("/auth/mfa/enable", {
+        method: "POST",
         body: JSON.stringify({ code }),
       }),
 
     disableMfa: (code, password) =>
-      request<AuthActionResponse>('/auth/mfa/disable', {
-        method: 'POST',
+      request<AuthActionResponse>("/auth/mfa/disable", {
+        method: "POST",
         body: JSON.stringify({ code, password }),
       }),
 
     requestEmailVerification: () =>
-      request<AuthActionResponse>('/auth/verification/email/request', { method: 'POST' }),
+      request<AuthActionResponse>("/auth/verification/email/request", {
+        method: "POST",
+      }),
 
     confirmEmailVerification: (token) =>
-      request<AuthActionResponse>('/auth/verification/email/confirm', {
-        method: 'POST',
+      request<AuthActionResponse>("/auth/verification/email/confirm", {
+        method: "POST",
         body: JSON.stringify({ token }),
       }),
 
     requestPhoneVerification: () =>
-      request<AuthActionResponse>('/auth/verification/phone/request', { method: 'POST' }),
+      request<AuthActionResponse>("/auth/verification/phone/request", {
+        method: "POST",
+      }),
 
     confirmPhoneVerification: (code) =>
-      request<AuthActionResponse>('/auth/verification/phone/confirm', {
-        method: 'POST',
+      request<AuthActionResponse>("/auth/verification/phone/confirm", {
+        method: "POST",
         body: JSON.stringify({ code }),
       }),
 
     // Sprint 28: password reset
     forgotPassword: (body) =>
-      request<ForgotPasswordResponse>('/auth/forgot-password', {
-        method: 'POST',
+      request<ForgotPasswordResponse>("/auth/forgot-password", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
     resetPassword: (body) =>
-      request<ResetPasswordResponse>('/auth/reset-password', {
-        method: 'POST',
+      request<ResetPasswordResponse>("/auth/reset-password", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
     // Sprint 43: account governance
     submitAccountAppeal: (body) =>
-      request<SubmitAccountAppealResponse>('/account-appeals', {
-        method: 'POST',
+      request<SubmitAccountAppealResponse>("/account-appeals", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
     listAccountAppeals: (query) => {
       const params = new URLSearchParams();
-      if (query?.status !== undefined) params.set('status', query.status);
-      if (query?.page !== undefined) params.set('page', String(query.page));
-      if (query?.limit !== undefined) params.set('limit', String(query.limit));
+      if (query?.status !== undefined) params.set("status", query.status);
+      if (query?.page !== undefined) params.set("page", String(query.page));
+      if (query?.limit !== undefined) params.set("limit", String(query.limit));
       const search = params.toString();
       return request<AccountAppealListResponse>(
-        search ? `/admin/account-appeals?${search}` : '/admin/account-appeals',
+        search ? `/admin/account-appeals?${search}` : "/admin/account-appeals",
       );
     },
 
     resolveAccountAppeal: (appealId, body) =>
-      request<AccountAppealAdminView>(`/admin/account-appeals/${encodeURIComponent(appealId)}/resolve`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      }),
+      request<AccountAppealAdminView>(
+        `/admin/account-appeals/${encodeURIComponent(appealId)}/resolve`,
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+        },
+      ),
 
     updateAccountStatus: (userId, body) =>
-      request<AdminAccountStatusView>(`/admin/users/${encodeURIComponent(userId)}/account-status`, {
-        method: 'PATCH',
-        body: JSON.stringify(body),
-      }),
+      request<AdminAccountStatusView>(
+        `/admin/users/${encodeURIComponent(userId)}/account-status`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        },
+      ),
 
     // Sprint 55: account security center
     changePassword: (body) =>
-      request<AuthActionResponse>('/auth/change-password', {
-        method: 'POST',
+      request<AuthActionResponse>("/auth/change-password", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
     stepUpAdvancedAiControls: (body) =>
-      request<AdvancedAiStepUpResponse>('/auth/step-up/advanced-ai-controls', {
-        method: 'POST',
+      request<AdvancedAiStepUpResponse>("/auth/step-up/advanced-ai-controls", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
     revokeOtherSessions: () =>
-      request<AuthTokens>('/auth/sessions/revoke-others', { method: 'POST' }),
+      request<AuthTokens>("/auth/sessions/revoke-others", { method: "POST" }),
 
     listSecurityEvents: (query) => {
       // Mirror of the listAccountAppeals convention: build the query string
       // ONLY from provided params so absent ones are omitted entirely.
       const params = new URLSearchParams();
       if (query?.limit !== undefined) {
-        params.set('limit', String(query.limit));
+        params.set("limit", String(query.limit));
       }
       if (query?.offset !== undefined) {
-        params.set('offset', String(query.offset));
+        params.set("offset", String(query.offset));
       }
       const search = params.toString();
       return request<SecurityEventListResponse>(
-        search ? `/auth/security-events?${search}` : '/auth/security-events',
+        search ? `/auth/security-events?${search}` : "/auth/security-events",
       );
     },
 
     // Sprint 29: users / onboarding / risk / broker
-    getMyProfile: () => request<MyProfileView>('/users/me'),
+    getMyProfile: () => request<MyProfileView>("/users/me"),
 
     updateMyProfile: (body) =>
-      request<MyProfileView>('/users/me', {
-        method: 'PATCH',
+      request<MyProfileView>("/users/me", {
+        method: "PATCH",
         body: JSON.stringify(body),
       }),
 
     getOnboardingStatus: () =>
-      request<OnboardingStatus>('/users/me/onboarding-status'),
+      request<OnboardingStatus>("/users/me/onboarding-status"),
 
-    getRiskProfile: () => request<RiskProfile>('/risk/profile'),
+    getRiskProfile: () => request<RiskProfile>("/risk/profile"),
 
     updateRiskProfile: (body) =>
-      request<RiskProfile>('/risk/profile', {
-        method: 'PATCH',
+      request<RiskProfile>("/risk/profile", {
+        method: "PATCH",
         body: JSON.stringify(body),
       }),
 
     getAdvancedAiControls: (stepUpToken) =>
-      request<AdvancedAiControlsResponse>('/trading/sessions/advanced-controls', {
-        headers: { 'x-irexpro-step-up': stepUpToken },
-      }),
+      request<AdvancedAiControlsResponse>(
+        "/trading/sessions/advanced-controls",
+        {
+          headers: { "x-irexpro-step-up": stepUpToken },
+        },
+      ),
 
     updateAdvancedAiControls: (stepUpToken, body) =>
-      request<AdvancedAiControlsResponse>('/trading/sessions/advanced-controls', {
-        method: 'POST',
-        headers: { 'x-irexpro-step-up': stepUpToken },
-        body: JSON.stringify(body),
-      }),
+      request<AdvancedAiControlsResponse>(
+        "/trading/sessions/advanced-controls",
+        {
+          method: "POST",
+          headers: { "x-irexpro-step-up": stepUpToken },
+          body: JSON.stringify(body),
+        },
+      ),
 
     listSupportedBrokers: () =>
-      request<SupportedBroker[]>('/broker/connections/supported'),
+      request<SupportedBroker[]>("/broker/connections/supported"),
 
     listBrokerConnections: () =>
-      request<BrokerConnectionView[]>('/broker/connections'),
+      request<BrokerConnectionView[]>("/broker/connections"),
 
     listBrokerRegistry: () =>
-      request<BrokerRegistryCatalog>('/broker/registry'),
+      request<BrokerRegistryCatalog>("/broker/registry"),
 
     startBrokerOAuth: (brokerId, options) =>
-      request<BrokerOAuthStartResult>('/broker/connections/oauth/authorize', {
-        method: 'POST',
+      request<BrokerOAuthStartResult>("/broker/connections/oauth/authorize", {
+        method: "POST",
         // Architect finding 4: the body carries only the broker id and the
         // optional channel — NO redirect URI. The server embeds its own
         // HTTPS callback slot in the authorization URL it returns; custom
@@ -640,48 +697,68 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       }),
 
     completeBrokerOAuth: (body) =>
-      request<BrokerOAuthAccountsResult>('/broker/connections/oauth/complete', {
-        method: 'POST',
+      request<BrokerOAuthAccountsResult>("/broker/connections/oauth/complete", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
     exchangeBrokerOAuthHandoff: (body) =>
-      request<BrokerOAuthAccountsResult>('/broker/connections/oauth/handoff', {
-        method: 'POST',
+      request<BrokerOAuthAccountsResult>("/broker/connections/oauth/handoff", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
     linkBrokerOAuth: (body) =>
-      request<BrokerConnectionView>('/broker/connections/oauth/link', {
-        method: 'POST',
+      request<BrokerConnectionView>("/broker/connections/oauth/link", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
     createBrokerConnection: (body) =>
-      request<BrokerConnectionView>('/broker/connections', {
-        method: 'POST',
+      request<BrokerConnectionView>("/broker/connections", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
+    createDirectMt5Pairing: (brokerConnectionId) =>
+      request<DirectMt5PairingView>("/broker/direct-mt5/pairings", {
+        method: "POST",
+        body: JSON.stringify({ brokerConnectionId }),
+      }),
+
+    getDirectMt5ConnectionHealth: (brokerConnectionId) =>
+      request<DirectMt5ConnectionHealthView>(
+        `/broker/direct-mt5/pairings/${encodeURIComponent(brokerConnectionId)}/health`,
+      ),
+
+    revokeDirectMt5Connector: (brokerConnectionId) =>
+      request<DirectMt5RevokeResult>(
+        `/broker/direct-mt5/pairings/${encodeURIComponent(brokerConnectionId)}/revoke`,
+        { method: "POST" },
+      ),
+
     testBrokerCredentials: (body) =>
-      request<BrokerTestResult>('/broker/connections/test', {
-        method: 'POST',
+      request<BrokerTestResult>("/broker/connections/test", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
     connectBroker: (connectionId) =>
-      request<BrokerConnectionView>(`/broker/connections/${connectionId}/connect`, {
-        method: 'POST',
-      }),
+      request<BrokerConnectionView>(
+        `/broker/connections/${connectionId}/connect`,
+        {
+          method: "POST",
+        },
+      ),
 
     disconnectBroker: (connectionId) =>
       request<void>(`/broker/connections/${connectionId}/disconnect`, {
-        method: 'POST',
+        method: "POST",
       }),
 
     // Sprint 56 correction round 5: execution authority (#295/#298)
     getActiveTradingSession: () =>
-      request<ActiveTradingSessionResponse>('/trading/sessions/active'),
+      request<ActiveTradingSessionResponse>("/trading/sessions/active"),
 
     getAutomationRuntimeStatus: (sessionId) =>
       request<AiAutomationRuntimeStatusView>(
@@ -689,22 +766,22 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       ),
 
     startTradingSession: (body) =>
-      request<StartTradingSessionResponse>('/trading/sessions/start', {
-        method: 'POST',
+      request<StartTradingSessionResponse>("/trading/sessions/start", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
     stopTradingSession: (sessionId) =>
       request<StopTradingSessionResponse>(
         `/trading/sessions/${encodeURIComponent(sessionId)}/stop`,
-        { method: 'POST' },
+        { method: "POST" },
       ),
 
     changeTradingSessionMode: (sessionId, body) =>
       request<ChangeTradingSessionModeResponse>(
         `/trading/sessions/${encodeURIComponent(sessionId)}/mode`,
         {
-          method: 'POST',
+          method: "POST",
           body: JSON.stringify(body),
         },
       ),
@@ -715,8 +792,8 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       ),
 
     setCapitalAllocation: (body) =>
-      request<UserCapitalAllocationView>('/execution/capital-allocation', {
-        method: 'POST',
+      request<UserCapitalAllocationView>("/execution/capital-allocation", {
+        method: "POST",
         body: JSON.stringify(body),
       }),
 
@@ -724,32 +801,31 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       request<TradeExecutionView>(
         `/execution/positions/${encodeURIComponent(tradeId)}/close`,
         {
-          method: 'POST',
+          method: "POST",
           body: JSON.stringify({}),
         },
       ),
 
     closeAllAiPositions: () =>
-      request<AiPositionCloseResultView[]>('/execution/positions/close-all', {
-        method: 'POST',
+      request<AiPositionCloseResultView[]>("/execution/positions/close-all", {
+        method: "POST",
         body: JSON.stringify({}),
       }),
 
     listPendingExecutionConfirmations: () =>
       request<PendingExecutionConfirmationsResponse>(
-        '/execution/confirmations/pending',
+        "/execution/confirmations/pending",
       ),
 
     confirmExecutionConfirmation: (confirmationId) =>
       request<ConfirmExecutionConfirmationResponse>(
         `/execution/confirmations/${encodeURIComponent(confirmationId)}/confirm`,
         {
-          method: 'POST',
+          method: "POST",
         },
       ),
 
-    listProviders: () =>
-      request<PaymentProviderInfo[]>('/payments/providers'),
+    listProviders: () => request<PaymentProviderInfo[]>("/payments/providers"),
 
     getInvoice: (invoiceId) =>
       request<Invoice>(`/payments/invoices/${invoiceId}`),
