@@ -381,3 +381,163 @@ export function replayPaperEpisode(
     'DATA_END',
   );
 }
+
+export interface ReplayEvidenceEpisode extends ReplayEpisode {
+  strategyRoute: string;
+  confidence: number;
+}
+
+export interface ReplayEpisodeMetrics {
+  episodes: number;
+  wins: number;
+  losses: number;
+  breakeven: number;
+  netR: number;
+  averageR: number | null;
+  grossPositiveR: number;
+  grossNegativeR: number;
+  profitFactor: number | null;
+  episodeSharpe: number | null;
+  maxDrawdownR: number;
+  positiveInstrumentFraction: number;
+}
+
+function sampleEpisodeSharpe(values: readonly number[]): number | null {
+  if (values.length < 2) return null;
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const variance =
+    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1);
+  const std = Math.sqrt(variance);
+  if (!Number.isFinite(std) || std <= 0) return mean > 0 ? null : mean < 0 ? null : 0;
+  return (mean / std) * Math.sqrt(values.length);
+}
+
+function maximumDrawdownR(values: readonly number[]): number {
+  let cumulative = 0;
+  let peak = 0;
+  let maxDrawdown = 0;
+  for (const value of values) {
+    cumulative += value;
+    peak = Math.max(peak, cumulative);
+    maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
+  }
+  return maxDrawdown;
+}
+
+export function summarizeReplayEpisodes(
+  episodes: readonly ReplayEvidenceEpisode[],
+  expectedInstruments: readonly string[],
+): ReplayEpisodeMetrics {
+  const returns = episodes.map((episode) => episode.r);
+  const wins = returns.filter((value) => value > 0).length;
+  const losses = returns.filter((value) => value < 0).length;
+  const breakeven = returns.length - wins - losses;
+  const grossPositiveR = returns
+    .filter((value) => value > 0)
+    .reduce((sum, value) => sum + value, 0);
+  const grossNegativeR = -returns
+    .filter((value) => value < 0)
+    .reduce((sum, value) => sum + value, 0);
+  const netR = grossPositiveR - grossNegativeR;
+  const byInstrument = new Map<string, number>();
+  for (const episode of episodes) {
+    byInstrument.set(episode.instrument, (byInstrument.get(episode.instrument) ?? 0) + episode.r);
+  }
+  const positiveInstrumentFraction =
+    expectedInstruments.length === 0
+      ? 0
+      : expectedInstruments.filter((instrument) => (byInstrument.get(instrument) ?? 0) > 0).length /
+        expectedInstruments.length;
+  return {
+    episodes: episodes.length,
+    wins,
+    losses,
+    breakeven,
+    netR,
+    averageR: episodes.length > 0 ? netR / episodes.length : null,
+    grossPositiveR,
+    grossNegativeR,
+    profitFactor: grossNegativeR > 0 ? grossPositiveR / grossNegativeR : null,
+    episodeSharpe: sampleEpisodeSharpe(returns),
+    maxDrawdownR: maximumDrawdownR(returns),
+    positiveInstrumentFraction,
+  };
+}
+
+export function buildChronologicalReplayFolds(
+  episodes: readonly ReplayEvidenceEpisode[],
+  foldCount = 3,
+): ReplayEvidenceEpisode[][] {
+  if (!Number.isInteger(foldCount) || foldCount <= 0) throw new Error('INVALID_REPLAY_FOLD_COUNT');
+  const ordered = [...episodes].sort(
+    (left, right) =>
+      left.openedAt.getTime() - right.openedAt.getTime() ||
+      left.instrument.localeCompare(right.instrument),
+  );
+  const uniqueTimes = [...new Set(ordered.map((episode) => episode.openedAt.getTime()))];
+  const foldByTime = new Map<number, number>();
+  uniqueTimes.forEach((time, index) => {
+    const fold =
+      uniqueTimes.length === 0
+        ? 0
+        : Math.min(foldCount - 1, Math.floor((index * foldCount) / uniqueTimes.length));
+    foldByTime.set(time, fold);
+  });
+  const folds = Array.from({ length: foldCount }, () => [] as ReplayEvidenceEpisode[]);
+  for (const episode of ordered) {
+    folds[foldByTime.get(episode.openedAt.getTime()) ?? 0]!.push(episode);
+  }
+  return folds;
+}
+
+interface BuildReplayStressReportOptions {
+  sourceCommit: string;
+  corpusLabel: string;
+  observedTradingDays: number;
+  expectedInstruments: string[];
+}
+
+export function buildReplayStressReport(
+  episodes: readonly ReplayEvidenceEpisode[],
+  options: BuildReplayStressReportOptions,
+) {
+  const folds = buildChronologicalReplayFolds(episodes, 3);
+  const foldMetrics = folds.map((fold, index) => ({
+    fold: index + 1,
+    ...summarizeReplayEpisodes(fold, options.expectedInstruments),
+  }));
+  const positiveFoldFraction =
+    foldMetrics.filter((fold) => fold.netR > 0).length / Math.max(1, foldMetrics.length);
+  const aggregate = summarizeReplayEpisodes(episodes, options.expectedInstruments);
+  const pfPass =
+    aggregate.grossNegativeR === 0
+      ? aggregate.grossPositiveR > 0
+      : aggregate.profitFactor !== null && aggregate.profitFactor >= 1.15;
+  const measurableChecks = {
+    profitFactorGte1_15: pfPass,
+    episodeSharpeGte1: aggregate.episodeSharpe !== null && aggregate.episodeSharpe >= 1,
+    maxDrawdownRLe12: aggregate.maxDrawdownR <= 12,
+    positiveFoldFractionGte0_60: positiveFoldFraction >= 0.6,
+    positiveInstrumentFractionGte0_67: aggregate.positiveInstrumentFraction >= 0.67,
+  };
+  return {
+    artifact: 'friday-champion-100k-replay-v1',
+    classification: 'HISTORICAL_ARCHITECTURE_STRESS_REPLAY' as const,
+    sourceCommit: options.sourceCommit,
+    corpusLabel: options.corpusLabel,
+    observedTradingDays: options.observedTradingDays,
+    aggregate,
+    opportunityRatePerObservedDay:
+      options.observedTradingDays > 0 ? episodes.length / options.observedTradingDays : null,
+    folds: foldMetrics,
+    positiveFoldFraction,
+    measurableChecks,
+    stressChecksPassed: Object.values(measurableChecks).every(Boolean),
+    balancedAccuracy: null,
+    maxDrawdownAccountPercent: null,
+    approvedForPaper: false,
+    approvedForDemo: false,
+    approvedForLive: false,
+    note: 'Historical architecture stress only; no model fitting or promotion authority.',
+  };
+}
