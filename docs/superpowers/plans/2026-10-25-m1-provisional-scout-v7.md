@@ -11,6 +11,7 @@
 **Spec:** `docs/superpowers/designs/2026-10-25-m1-provisional-scout-v7.md`
 
 ## Global Constraints
+
 - PAPER only.
 - M1_EARLY_TRANSITION only.
 - Mature >=6 uses existing v6 evaluator and 0.10 cap.
@@ -18,6 +19,7 @@
 - M1 trend/reversal remain shadow-only.
 
 ## Review Focus
+
 - 6+ samples cannot fall back to provisional when mature evidence is weak.
 - A 3-sample strong sleeve uses 0.05, never 0.10.
 - Recent degradation blocks provisional.
@@ -25,11 +27,15 @@
 - Execution metadata clearly identifies provisional vs mature tier.
 
 ---
+
 ### Task 1: Provisional reliability policy
-Create evaluator + tests; prove RED then GREEN.
+
+Create evaluator + tests; prove RED then GREEN. **Complete.**
 
 ### Task 2: Rollout v7 and dynamic sizing
-Add phase/policy v7; wire mature/provisional tier selection and 0.10/0.05 caps with scheduler tests.
+
+Add phase/policy v7; wire mature/provisional tier selection and 0.10/0.05 caps with scheduler tests. **Complete.**
 
 ### Task 3: Verification and release
-Run reliability, scheduler, API build/lint/format/diff checks; exact-head PR CI before merge/deploy.
+
+Run reliability, scheduler, API build/lint/format/diff checks; exact-head PR CI before merge/deploy. **Local verification complete; exact-head PR CI pending.**

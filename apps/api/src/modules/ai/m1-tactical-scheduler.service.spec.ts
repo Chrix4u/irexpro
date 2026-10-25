@@ -26,6 +26,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V4,
   M1_TACTICAL_ROLLOUT_POLICY_V5,
   M1_TACTICAL_ROLLOUT_POLICY_V6,
+  M1_TACTICAL_ROLLOUT_POLICY_V7,
   m1RiskMarketRegime,
   m1RouteExecutableInPhase,
 } from './m1-tactical-scheduler.service';
@@ -1333,11 +1334,126 @@ describe('M1 early-transition meaningful 0.10 PAPER scout phase', () => {
     expect(reversal.receiveSignal).not.toHaveBeenCalled();
   });
 
-  it('binds AiModule to V6 instead of shadow-only V5', () => {
+  it('keeps historical V6 immutable but no longer binds it once v7 is active', () => {
     const moduleSource = fs.readFileSync(path.resolve(__dirname, './ai.module.ts'), 'utf8');
-    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V6');
-    expect(moduleSource).toMatch(
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V6).toMatchObject({
+      version: 'm1-tactical-rollout-v6-early-transition-scout-010',
+      phase: 'PAPER_EARLY_TRANSITION_SCOUT_010',
+      paperVolumeCap: 0.1,
+    });
+    expect(moduleSource).not.toMatch(
       /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V6/,
+    );
+  });
+});
+
+describe('M1 early-transition tiered v7 PAPER scout', () => {
+  const strongProvisionalOutcomes = [
+    { observedAt: new Date('2026-10-15T10:29:00.000Z'), netR: 1.5 },
+    { observedAt: new Date('2026-10-15T10:19:00.000Z'), netR: 0.3 },
+    { observedAt: new Date('2026-10-15T10:09:00.000Z'), netR: -0.2 },
+  ];
+  const matureHealthyOutcomes = [
+    { observedAt: new Date('2026-10-15T10:29:00.000Z'), netR: 0.74 },
+    { observedAt: new Date('2026-10-15T10:19:00.000Z'), netR: 0.44 },
+    { observedAt: new Date('2026-10-15T10:09:00.000Z'), netR: -0.2 },
+    { observedAt: new Date('2026-10-15T09:59:00.000Z'), netR: -0.08 },
+    { observedAt: new Date('2026-10-15T09:49:00.000Z'), netR: 0.46 },
+    { observedAt: new Date('2026-10-15T09:39:00.000Z'), netR: -0.06 },
+  ];
+
+  it('version-gates v7 to early-transition and keeps trend/reversal shadow-only', () => {
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V7).toMatchObject({
+      version: 'm1-tactical-rollout-v7-early-transition-tiered-scout',
+      phase: 'PAPER_EARLY_TRANSITION_SCOUT_TIERED',
+      paperVolumeCap: 0.1,
+    });
+    expect(
+      m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V7.phase, 'M1_EARLY_TRANSITION'),
+    ).toBe(true);
+    expect(
+      m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V7.phase, 'M1_TREND_CONTINUATION'),
+    ).toBe(false);
+    expect(
+      m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V7.phase, 'M1_CONFIRMED_REVERSAL'),
+    ).toBe(false);
+  });
+
+  it('executes a strong three-sample provisional sleeve at 0.05 lots with explicit provenance', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V7,
+      shadowPairSideOutcomes: strongProvisionalOutcomes,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+
+    await driveFeatures(h, transitionFeatures());
+
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({
+        suggestedVolume: 0.05,
+        metadata: expect.objectContaining({
+          m1_rollout_phase: 'PAPER_EARLY_TRANSITION_SCOUT_TIERED',
+          m1_scout_reliability_tier: 'PROVISIONAL',
+          m1_provisional_scout_reliability_artifact: 'm1-provisional-scout-reliability-v1',
+          m1_provisional_scout_reliability_samples: 3,
+          m1_provisional_scout_reliability_recent_net_r: expect.any(Number),
+        }),
+      }),
+    );
+  });
+
+  it('keeps a mature healthy sleeve at the existing 0.10 meaningful tier', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V7,
+      shadowPairSideOutcomes: matureHealthyOutcomes,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+
+    await driveFeatures(h, transitionFeatures());
+
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({
+        suggestedVolume: 0.1,
+        metadata: expect.objectContaining({
+          m1_scout_reliability_tier: 'MATURE',
+          m1_meaningful_scout_reliability_artifact: 'm1-meaningful-scout-reliability-v1',
+          m1_meaningful_scout_reliability_samples: 6,
+          m1_provisional_scout_reliability_artifact: null,
+        }),
+      }),
+    );
+  });
+
+  it('binds AiModule to the tiered v7 rollout', () => {
+    const moduleSource = fs.readFileSync(path.resolve(__dirname, './ai.module.ts'), 'utf8');
+    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V7');
+    expect(moduleSource).toMatch(
+      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V7/,
+    );
+  });
+
+  it('does not let weak mature evidence fall back to the provisional tier', async () => {
+    const weakMature = [
+      { observedAt: new Date('2026-10-15T10:29:00.000Z'), netR: 0.4 },
+      { observedAt: new Date('2026-10-15T10:19:00.000Z'), netR: -0.8 },
+      { observedAt: new Date('2026-10-15T10:09:00.000Z'), netR: 0.2 },
+      { observedAt: new Date('2026-10-15T09:59:00.000Z'), netR: -0.6 },
+      { observedAt: new Date('2026-10-15T09:49:00.000Z'), netR: 0.1 },
+      { observedAt: new Date('2026-10-15T09:39:00.000Z'), netR: -0.5 },
+    ];
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V7,
+      shadowPairSideOutcomes: weakMature,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+
+    await driveFeatures(h, transitionFeatures());
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.recordDecision.mock.calls[0]![0].blockers).toEqual(
+      expect.arrayContaining([expect.stringContaining('M1_TIERED_SCOUT_RELIABILITY_')]),
     );
   });
 });
