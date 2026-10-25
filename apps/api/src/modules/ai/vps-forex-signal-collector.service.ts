@@ -131,6 +131,10 @@ import {
   evaluatePaperCostAwareEntry,
 } from './paper-cost-aware-entry';
 import {
+  PaperResearchRequalificationShadowDecision,
+  evaluatePaperResearchRequalificationShadow,
+} from './paper-research-requalification-shadow';
+import {
   PaperCalibratedCostResearchRescueDecision,
   evaluatePaperCalibratedCostResearchRescue,
 } from './paper-calibrated-cost-rescue';
@@ -2263,6 +2267,61 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `portfolioBrake=${paperResearchPortfolioBrake.reason} recentPortfolio=${paperResearchPortfolioBrake.wins}W/${paperResearchPortfolioBrake.losses}L`,
             );
           }
+          let paperResearchRequalificationCostEvidence: PaperCostAwareCohortEvidence | null = null;
+          let paperResearchRequalificationCostAwareEntry: PaperCostAwareEntryDecision | null = null;
+          let paperResearchRequalificationShadow: PaperResearchRequalificationShadowDecision | null =
+            null;
+          const paperResearchLocalRequalificationEligible =
+            paperResearchThroughput.eligible &&
+            Boolean(paperResearchPairSideReliability?.eligible) &&
+            Boolean(paperResearchEpisodeGuard?.eligible) &&
+            !paperResearchCalibrationBrake.blocked;
+          if (paperResearchLocalRequalificationEligible) {
+            paperResearchRequalificationCostEvidence = await this.loadPaperCostAwareEntryEvidence(
+              userId,
+              connectionId,
+              best.instrument,
+              best.direction,
+            );
+            paperResearchRequalificationCostAwareEntry = evaluatePaperCostAwareEntry({
+              executionRoute: 'PAPER_RESEARCH_THROUGHPUT',
+              grossExpectedR: ensembleGovernance.grossExpectedR,
+              netExpectedR: researchCalibrationAuthority.effectiveNetExpectedR,
+              estimatedExecutionCostR: ensembleGovernance.estimatedExecutionCostR,
+              calibratedCostRescue: paperCalibratedCostRescue.eligible,
+              evidence: paperResearchRequalificationCostEvidence,
+            });
+          }
+          if (paperResearchThroughput.eligible) {
+            paperResearchRequalificationShadow = evaluatePaperResearchRequalificationShadow({
+              throughputEligible: paperResearchThroughput.eligible,
+              pairSideEligible: Boolean(paperResearchPairSideReliability?.eligible),
+              episodeEligible: Boolean(paperResearchEpisodeGuard?.eligible),
+              calibrationBlocked: paperResearchCalibrationBrake.blocked,
+              portfolioBlocked: paperResearchPortfolioBrake.blocked,
+              costAwareAction: paperResearchRequalificationCostAwareEntry?.action ?? 'SHADOW_ONLY',
+              costAwareReason:
+                paperResearchRequalificationCostAwareEntry?.reason ??
+                'LOCAL_GATES_NOT_COST_EVALUATED',
+              pairSideSamples: paperResearchPairSideReliability?.samples ?? 0,
+              pairSideRealisedAverageR: paperResearchPairSideReliability?.realisedAverageR ?? null,
+            });
+            await this.annotatePaperResearchRequalificationShadowDecision(
+              userId,
+              connectionId,
+              eventId,
+              paperResearchRequalificationShadow,
+            );
+            if (paperResearchRequalificationShadow.candidate) {
+              this.logger.log(
+                `PAPER research requalification ${best.instrument} ${best.direction} shadow=CANDIDATE ` +
+                  `portfolioBrake=${paperResearchPortfolioBrake.reason} ` +
+                  `pairSideSamples=${paperResearchRequalificationShadow.pairSideSamples} ` +
+                  `realisedAverageR=${paperResearchRequalificationShadow.pairSideRealisedAverageR?.toFixed(4) ?? 'n/a'} ` +
+                  `executionAuthority=${paperResearchRequalificationShadow.executionAuthority}`,
+              );
+            }
+          }
           const paperExtensionExhaustionResearch = evaluatePaperExtensionExhaustionResearch({
             regime: planBEnsemble.regime,
             driftState: ensembleGovernance.driftState,
@@ -2433,21 +2492,27 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             : 'NONE';
           const paperCostAwareEvidence =
             paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
-              ? await this.loadPaperCostAwareEntryEvidence(
+              ? (paperResearchRequalificationCostEvidence ??
+                (await this.loadPaperCostAwareEntryEvidence(
                   userId,
                   connectionId,
                   best.instrument,
                   best.direction,
-                )
+                )))
               : { grossPositiveSamples: 0, costFlippedSamples: 0, netPositiveSamples: 0 };
-          const paperCostAwareEntry = evaluatePaperCostAwareEntry({
-            executionRoute: paperExecutionRoute === 'NONE' ? 'NORMAL_PAPER' : paperExecutionRoute,
-            grossExpectedR: ensembleGovernance.grossExpectedR,
-            netExpectedR: researchCalibrationAuthority.effectiveNetExpectedR,
-            estimatedExecutionCostR: ensembleGovernance.estimatedExecutionCostR,
-            calibratedCostRescue: paperCalibratedCostRescue.eligible,
-            evidence: paperCostAwareEvidence,
-          });
+          const paperCostAwareEntry =
+            paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT' &&
+            paperResearchRequalificationCostAwareEntry
+              ? paperResearchRequalificationCostAwareEntry
+              : evaluatePaperCostAwareEntry({
+                  executionRoute:
+                    paperExecutionRoute === 'NONE' ? 'NORMAL_PAPER' : paperExecutionRoute,
+                  grossExpectedR: ensembleGovernance.grossExpectedR,
+                  netExpectedR: researchCalibrationAuthority.effectiveNetExpectedR,
+                  estimatedExecutionCostR: ensembleGovernance.estimatedExecutionCostR,
+                  calibratedCostRescue: paperCalibratedCostRescue.eligible,
+                  evidence: paperCostAwareEvidence,
+                });
           if (paperExecutionRoute !== 'NONE') {
             await this.annotatePaperCostAwareEntryDecision(
               userId,
@@ -4977,6 +5042,37 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       costFlippedSamples: Math.max(0, Number(row?.cost_flipped_samples ?? 0)),
       netPositiveSamples: Math.max(0, Number(row?.net_positive_samples ?? 0)),
     };
+  }
+
+  private async annotatePaperResearchRequalificationShadowDecision(
+    userId: string,
+    connectionId: string,
+    opportunityKey: string,
+    decision: PaperResearchRequalificationShadowDecision,
+  ): Promise<void> {
+    if (!this.dataSource) return;
+    try {
+      await this.dataSource.query(
+        `
+          UPDATE trading.ensemble_shadow_decisions
+          SET components = jsonb_set(
+            components,
+            '{paperResearchRequalificationShadow}',
+            $5::jsonb,
+            true
+          )
+          WHERE user_id = $1
+            AND broker_connection_id = $2
+            AND engine_code = $3
+            AND opportunity_key = $4
+        `,
+        [userId, connectionId, ACTIVE_ENGINE_CODE, opportunityKey, JSON.stringify(decision)],
+      );
+    } catch (error) {
+      this.logger.warn(
+        `PAPER research requalification annotation unavailable: ${(error as Error).message}`,
+      );
+    }
   }
 
   private async annotatePaperCostAwareEntryDecision(

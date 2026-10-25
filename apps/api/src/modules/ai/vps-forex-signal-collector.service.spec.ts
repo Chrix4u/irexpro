@@ -2587,7 +2587,22 @@ describe('VpsForexSignalCollectorService', () => {
     });
     const pairEvidenceSpy = jest
       .spyOn(collector as any, 'loadPaperResearchPairSideEvidence')
-      .mockResolvedValue({ wins: 3, losses: 1 });
+      .mockResolvedValue({
+        wins: 8,
+        losses: 2,
+        realisedRSamples: 10,
+        realisedRSum: 2.6,
+      });
+    const portfolioEvidenceSpy = jest
+      .spyOn(collector as any, 'loadPaperResearchPortfolioOutcomes')
+      .mockResolvedValue(['LOSS', 'LOSS', 'WIN', 'LOSS', 'WIN']);
+    const costEvidenceSpy = jest
+      .spyOn(collector as any, 'loadPaperCostAwareEntryEvidence')
+      .mockResolvedValue({
+        grossPositiveSamples: 10,
+        costFlippedSamples: 2,
+        netPositiveSamples: 8,
+      });
     const logSpy = jest.spyOn((collector as any).logger, 'log');
 
     try {
@@ -2609,11 +2624,31 @@ describe('VpsForexSignalCollectorService', () => {
       });
       await collector.collectOnce(fetchMock as unknown as typeof fetch);
       expect(pairEvidenceSpy).toHaveBeenCalledWith('user-1', 'conn-1', 'EURUSD', 'BUY');
+      expect(portfolioEvidenceSpy).toHaveBeenCalledWith('user-1', 'conn-1');
+      expect(costEvidenceSpy).toHaveBeenCalledWith('user-1', 'conn-1', 'EURUSD', 'BUY');
       expect(receiveSignal).not.toHaveBeenCalled();
+      const requalificationUpdate = shadowQuery.mock.calls.find(([query]) =>
+        String(query).includes("'{paperResearchRequalificationShadow}'"),
+      );
+      expect(requalificationUpdate).toBeDefined();
+      const requalificationPayload = JSON.parse(String(requalificationUpdate?.[1]?.[4]));
+      expect(requalificationPayload).toMatchObject({
+        artifact: 'paper-research-requalification-shadow-v1',
+        candidate: true,
+        reason: 'SHADOW_RECOVERY_CANDIDATE',
+        executionAuthority: 'NONE',
+        modifiesExecution: false,
+        qualificationEvidence: false,
+        productionEligible: false,
+        portfolioBrakeBlocked: true,
+        pairSideSamples: 10,
+        pairSideRealisedAverageR: 0.26,
+        costAwareAction: 'ENTER_NOW',
+      });
       expect(
         logSpy.mock.calls.some((call) =>
           String(call[0]).includes(
-            'PAPER research-throughput EURUSD BUY execution=ELIGIBLE executionAuthority=PAPER_ONLY_RESEARCH',
+            'PAPER research requalification EURUSD BUY shadow=CANDIDATE portfolioBrake=RECENT_RESEARCH_LOSS_CLUSTER',
           ),
         ),
       ).toBe(true);
@@ -2621,6 +2656,8 @@ describe('VpsForexSignalCollectorService', () => {
       logSpy.mockRestore();
       planBSpy.mockRestore();
       pairEvidenceSpy.mockRestore();
+      portfolioEvidenceSpy.mockRestore();
+      costEvidenceSpy.mockRestore();
       governanceSpy.mockRestore();
     }
   });
