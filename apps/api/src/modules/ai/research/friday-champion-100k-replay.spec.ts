@@ -161,3 +161,90 @@ describe('Friday champion 100k replay production scorer wiring', () => {
     ).toBe('SELL');
   });
 });
+
+import { PAPER_MARKET_SPECS } from '../../broker/services/paper-market-spec';
+import {
+  buildExecutableReplayQuote,
+  replayPaperEpisode,
+  type ReplayQuote,
+} from './friday-champion-100k-replay';
+
+function replayCandidate(direction: 'BUY' | 'SELL') {
+  const entry = 1.1;
+  return {
+    instrument: 'EURUSD',
+    direction,
+    confidence: 0.7,
+    volatilityScore: 0.2,
+    entry,
+    stopLoss: direction === 'BUY' ? 1.099 : 1.101,
+    takeProfit: direction === 'BUY' ? 1.102 : 1.098,
+    barTime: new Date('2026-07-01T10:00:00Z'),
+    score: 1,
+    atr: 0.0005,
+    extensionAtr: 0.2,
+    emaSeparation: 0.2,
+    mtfStrength: 0.2,
+    h4Alignment: 0,
+    h4ContextAvailable: false,
+    h4ClosedBarCount: 0,
+    rsi14: 55,
+    shortHorizonMomentumAtr: 0.1,
+  };
+}
+
+function quote(at: string, mid: number, spread = 0.0001): ReplayQuote {
+  return { observedAt: new Date(at), mid, spread };
+}
+
+describe('Friday champion 100k replay PAPER lifecycle economics', () => {
+  it('uses the executable side and never a cheaper spread than the PAPER fallback', () => {
+    const paperSpread = PAPER_MARKET_SPECS.EURUSD!.spread;
+    const buy = buildExecutableReplayQuote('EURUSD', 'BUY', 1.1, paperSpread / 2);
+    const sell = buildExecutableReplayQuote('EURUSD', 'SELL', 1.1, paperSpread / 2);
+    expect(buy.spread).toBe(paperSpread);
+    expect(buy.executable).toBeCloseTo(1.1 + paperSpread / 2, 10);
+    expect(sell.executable).toBeCloseTo(1.1 - paperSpread / 2, 10);
+  });
+
+  it('closes BUY and SELL episodes on the production executable protective side', () => {
+    const buy = replayPaperEpisode(replayCandidate('BUY'), quote('2026-07-01T10:05:00Z', 1.1), [
+      quote('2026-07-01T10:06:00Z', 1.1022),
+    ]);
+    expect(buy.exitReason).toBe('TAKE_PROFIT');
+    expect(buy.r).toBeGreaterThan(0);
+
+    const sell = replayPaperEpisode(replayCandidate('SELL'), quote('2026-07-01T10:05:00Z', 1.1), [
+      quote('2026-07-01T10:06:00Z', 1.1012),
+    ]);
+    expect(sell.exitReason).toBe('STOP_LOSS');
+    expect(sell.r).toBeLessThan(0);
+  });
+
+  it('uses the production profit lock and M5 time-to-work lifecycle', () => {
+    const candidate = replayCandidate('BUY');
+    const locked = replayPaperEpisode(candidate, quote('2026-07-01T10:05:00Z', 1.1), [
+      quote('2026-07-01T10:06:00Z', 1.1008),
+      quote('2026-07-01T10:07:00Z', 1.10055),
+    ]);
+    expect(locked.exitReason).toBe('PROFIT_LOCK');
+    expect(locked.maxFavorableR).toBeGreaterThanOrEqual(0.5);
+
+    const timedPath = Array.from({ length: 30 }, (_, index) => {
+      const minute = index + 1;
+      const at = new Date(Date.parse('2026-07-01T10:05:00Z') + minute * 60_000).toISOString();
+      return quote(at, minute === 30 ? 1.0997 : 1.1);
+    });
+    const timed = replayPaperEpisode(candidate, quote('2026-07-01T10:05:00Z', 1.1), timedPath);
+    expect(timed.exitReason).toBe('FAILED_TO_WORK_30M');
+  });
+
+  it('fails closed at an M1 data gap instead of carrying a position across missing history', () => {
+    const episode = replayPaperEpisode(replayCandidate('BUY'), quote('2026-07-01T10:05:00Z', 1.1), [
+      quote('2026-07-01T10:06:00Z', 1.1001),
+      quote('2026-07-01T10:12:00Z', 1.1002),
+    ]);
+    expect(episode.exitReason).toBe('DATA_GAP');
+    expect(episode.exitAt).toEqual(new Date('2026-07-01T10:06:00Z'));
+  });
+});

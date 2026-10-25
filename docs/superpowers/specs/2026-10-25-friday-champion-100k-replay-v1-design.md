@@ -26,14 +26,19 @@ At each newly available M5 close after enough history exists:
 4. For trade-path stress, select at most one side per pair/bar: highest production candidate score among intrinsically paper-admitted sides. Equal-score ties fail closed (no trade).
 
 ## Execution economics
-- Entry uses the PAPER executable side around the closed-candle mid: BUY at ask, SELL at bid.
-- Stop/target are the candidate's production-authorized levels, computed from mid by the live candidate builder.
-- Subsequent closed M5 candles are converted to executable bid/ask extremes using the same PAPER spread assumption.
-- SL is checked before TP when both are touched in one bar, matching PAPER's conservative ambiguity rule.
-- Profit-lock and time-to-work decisions use the exported production pure functions.
+- Entry uses the PAPER executable side around the causal M1 close available at the M5 decision: BUY at ask, SELL at bid.
+- Stop/target are the candidate's production-authorized levels, computed by the live candidate builder from the closed M5 mid.
+- The MTF corpus provides a causal M1 quote path. Replay lifecycle checks at each subsequent M1 availability timestamp rather than inventing intrabar first-passage from M5 highs/lows.
+- Effective spread is `max(corpus M1 spread_price, PAPER_MARKET_SPECS[instrument].spread)`, preventing the historical corpus from receiving a cheaper spread than the deployed PAPER fallback.
+- BUY protective/exit marks use bid; SELL marks use ask, matching the PAPER adapter executable side.
+- SL/TP, profit-lock, and time-to-work are evaluated in the same order as the PAPER adapter. Profit-lock and time-to-work call the exported production pure functions directly.
 - M5 minimum forecast hold is 20 minutes.
 - Profit/loss is reported in R, using initial executable entry-to-stop risk. This avoids lot-size/account-currency assumptions while preserving exact risk economics.
-- If no exit occurs within 12 hours, close at the executable side of the final bar and label `TIMEBOX_12H`. This is a research timebox only and must be reported separately.
+- A missing M1 minute closes the research episode at the last known executable mark with `DATA_GAP`; positions never jump across weekends/session gaps.
+- If no exit occurs within 12 hours, close at the executable mark and label `TIMEBOX_12H`. This is a research timebox only and must be reported separately.
+
+### Known replay limitation
+The live PAPER market can receive streaming mid marks between closed candles. The frozen corpus contains M1 OHLC/availability, not the exact historical streaming mark sequence that the deployed service observed. Therefore M1-close lifecycle replay is the highest causal fidelity available from this frozen dataset, but it is not a byte-for-byte reconstruction of every live intra-minute mark.
 
 ## Non-overlap
 One active replay trade per instrument at a time. A new signal for that pair is ignored until the prior replay trade closes. This prevents overlapping same-pair trades from reusing the same future path and gives a conservative independent episode count. Portfolio/cross-pair overlap remains allowed because live iRexPro supports multiple instruments.
@@ -46,7 +51,6 @@ Report aggregate and by pair/route:
 - max drawdown in cumulative R;
 - positive-instrument fraction;
 - route breadth;
-- same-bar SL/TP ambiguity count;
 - lifecycle exit reasons;
 - opportunity rate per observed trading day.
 
