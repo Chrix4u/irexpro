@@ -113,13 +113,26 @@ function resolvePolicy(
 ): PaperOpportunityScoutPolicy {
   const normalizedIdleMinutes =
     Number.isFinite(idleMinutes) && idleMinutes! >= 0 ? idleMinutes! : null;
-  if (championDirectionPrior?.supported === true) {
+  if (
+    championDirectionPrior?.supported === true &&
+    normalizedIdleMinutes !== null &&
+    normalizedIdleMinutes >= PAPER_OPPORTUNITY_SCOUT_TARGET_WINDOW_MINUTES
+  ) {
+    const recovery = normalizedIdleMinutes >= PAPER_OPPORTUNITY_SCOUT_RECOVERY_IDLE_MINUTES;
     return {
       mode: 'CHAMPION_DIRECTION',
-      lotUpperBound: PAPER_OPPORTUNITY_SCOUT_RECOVERY_LOT_CAP,
-      minConfidence: PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_CONFIDENCE,
-      minNetExpectedR: PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_NET_EXPECTED_R,
-      minQuality: PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_QUALITY,
+      lotUpperBound: recovery
+        ? PAPER_OPPORTUNITY_SCOUT_RECOVERY_LOT_CAP
+        : PAPER_OPPORTUNITY_SCOUT_ACTIVE_LOT_CAP,
+      minConfidence: recovery
+        ? PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_CONFIDENCE
+        : PAPER_OPPORTUNITY_SCOUT_ACTIVE_MIN_CONFIDENCE,
+      minNetExpectedR: recovery
+        ? PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_NET_EXPECTED_R
+        : PAPER_OPPORTUNITY_SCOUT_ACTIVE_MIN_NET_EXPECTED_R,
+      minQuality: recovery
+        ? PAPER_OPPORTUNITY_SCOUT_RECOVERY_MIN_QUALITY
+        : PAPER_OPPORTUNITY_SCOUT_ACTIVE_MIN_QUALITY,
       requireAlignedMomentum: true,
       idleMinutes: normalizedIdleMinutes,
     };

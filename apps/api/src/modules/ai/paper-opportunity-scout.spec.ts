@@ -455,7 +455,7 @@ describe('PAPER opportunity scout', () => {
       evidence: { trades: 12, grossProfit: 27.8, grossLoss: 20.4, netPnl: 7.4 },
     });
 
-    it('uses recovery soft floors immediately for a supported direction before the idle window', () => {
+    it('does not bypass the idle window for a supported champion direction', () => {
       expect(
         evaluatePaperOpportunityScout({
           ...base,
@@ -470,11 +470,33 @@ describe('PAPER opportunity scout', () => {
           championDirectionPrior: supportedPrior,
         }),
       ).toMatchObject({
+        eligible: false,
+        reason: 'CONFIDENCE_TOO_LOW',
+        mode: 'BASE',
+        idleMinutes: 5,
+      });
+    });
+
+    it('uses champion labeling only after the active participation window is reached', () => {
+      expect(
+        evaluatePaperOpportunityScout({
+          ...base,
+          direction: 'SELL',
+          idleMinutes: 35,
+          confidence: 0.59,
+          netExpectedR: 0.07,
+          directionQuality: 0.27,
+          tradeQuality: 0.27,
+          exitQuality: 0.27,
+          alignedMomentumAtr: 0.18,
+          championDirectionPrior: supportedPrior,
+        }),
+      ).toMatchObject({
         eligible: true,
         reason: 'CHAMPION_DIRECTION_SCOUT',
         lotUpperBound: 0.1,
         mode: 'CHAMPION_DIRECTION',
-        idleMinutes: 5,
+        idleMinutes: 35,
       });
     });
 
@@ -506,7 +528,7 @@ describe('PAPER opportunity scout', () => {
           ...base,
           direction: 'SELL',
           idleMinutes: 5,
-          confidence: 0.58,
+          confidence: 0.62,
           consensusPassed: 3,
           netExpectedR: 0.08,
           directionQuality: 0.3,
