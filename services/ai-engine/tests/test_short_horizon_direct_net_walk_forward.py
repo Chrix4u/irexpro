@@ -100,12 +100,15 @@ def test_walk_forward_uses_horizon_purge_and_reports_density_without_authority(
     ) -> pd.DataFrame:
         del models, calibrations, feature_columns
         result = frame.copy()
-        predicted_long = result[TARGET_COLUMN].to_numpy(dtype=int) == 1
+        true_long = result[TARGET_COLUMN].to_numpy(dtype=int) == 1
+        ordinal = pd.factorize(pd.to_datetime(result["decision_time"], utc=True))[0]
+        # Every fifth timestamp participates; every 25th timestamp deliberately
+        # picks the wrong side so PF/Sharpe are finite rather than perfect-toy values.
+        predicted_long = np.where(ordinal % 25 == 0, ~true_long, true_long)
         result["predicted_long_net_bps"] = np.where(predicted_long, 3.0, -1.0)
         result["predicted_short_net_bps"] = np.where(predicted_long, -1.0, 3.0)
         result["predicted_best_net_bps"] = 3.0
         result["activation_threshold_bps"] = 0.5
-        ordinal = pd.factorize(pd.to_datetime(result["decision_time"], utc=True))[0]
         active = ordinal % 5 == 0
         result["active_trade"] = active
         result["action"] = np.where(
