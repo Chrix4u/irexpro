@@ -72,12 +72,12 @@
 - Consumes: persisted Task 2 annotation, existing `components.outcome`, existing overlap-collapse and sleeve-summary helpers, Task 1 evidence classifier.
 - Produces: one JSON read-only scorecard grouped overall and by pair/side.
 
-- [ ] **Step 1:** Write failing runner tests for exact PAPER scope, artifact/outcome-version filters, overlap collapse, and zero execution/qualification authority in output.
-- [ ] **Step 2:** Confirm RED.
-- [ ] **Step 3:** Implement the repeatable-read/read-only runner and CLI script; do not write to the database.
-- [ ] **Step 4:** Run runner tests and confirm GREEN.
-- [ ] **Step 5:** Run the audit on staging; before the market creates new annotations, expect zero fresh episodes rather than backfilling legacy evidence.
-- [ ] **Step 6:** Commit the audit.
+- [x] **Step 1:** Write failing runner tests for exact PAPER scope, artifact/outcome-version filters, overlap collapse, and zero execution/qualification authority in output.
+- [x] **Step 2:** Confirm RED.
+- [x] **Step 3:** Implement the repeatable-read/read-only runner and CLI script; do not write to the database.
+- [x] **Step 4:** Run runner tests and confirm GREEN.
+- [x] **Step 5:** Run the audit on staging; before the market creates new annotations, expect zero fresh episodes rather than backfilling legacy evidence.
+- [x] **Step 6:** Commit the audit.
 
 ### Task 4: Verification and delivery
 
