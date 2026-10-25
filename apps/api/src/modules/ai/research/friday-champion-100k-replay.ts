@@ -83,3 +83,57 @@ export function reconstructClosedM5Bars(rows: readonly MtfM5Row[]): Reconstructe
   }
   return [...byOpen.values()].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 }
+
+import { buildDirectionalCandidates, type Candidate } from '../vps-forex-signal-collector.service';
+import { scorePlanBMultimodelShadow, type PlanBEnsembleScore } from '../plan-b-multimodel-shadow';
+import type { V8ShadowMetaInput } from '../v8-shadow-meta-scorer';
+
+const M5_BAR_MS = 5 * 60_000;
+
+export interface IntrinsicReplayCandidate {
+  candidate: Candidate;
+  ensemble: PlanBEnsembleScore;
+}
+
+export function candidateToPlanBInput(candidate: Candidate): V8ShadowMetaInput {
+  return {
+    instrument: candidate.instrument,
+    direction: candidate.direction,
+    confidence: candidate.confidence,
+    extensionAtr: candidate.extensionAtr,
+    volatilityScore: candidate.volatilityScore,
+    emaSeparation: candidate.emaSeparation,
+    mtfStrength: candidate.mtfStrength,
+    rsi14: candidate.rsi14,
+    shortHorizonMomentumAtr:
+      (candidate.direction === 'BUY' ? 1 : -1) * candidate.shortHorizonMomentumAtr,
+    scanTime: new Date(candidate.barTime.getTime() + M5_BAR_MS),
+  };
+}
+
+export function scoreIntrinsicM5Snapshot(
+  instrument: string,
+  candles: readonly LivePaperCandleInput[],
+): IntrinsicReplayCandidate[] {
+  const mutableCandles = candles.map((candle) => ({ ...candle }));
+  return buildDirectionalCandidates(instrument, mutableCandles).map((candidate) => ({
+    candidate,
+    ensemble: scorePlanBMultimodelShadow(candidateToPlanBInput(candidate), []),
+  }));
+}
+
+export function selectIntrinsicPaperSide(
+  candidates: readonly IntrinsicReplayCandidate[],
+): IntrinsicReplayCandidate | null {
+  const eligible = candidates
+    .filter((entry) => entry.ensemble.paperAdmitted)
+    .sort((a, b) => b.candidate.score - a.candidate.score);
+  if (eligible.length === 0) return null;
+  if (
+    eligible.length > 1 &&
+    Math.abs(eligible[0]!.candidate.score - eligible[1]!.candidate.score) <= Number.EPSILON
+  ) {
+    return null;
+  }
+  return eligible[0]!;
+}
