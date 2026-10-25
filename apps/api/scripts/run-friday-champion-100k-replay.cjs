@@ -262,6 +262,7 @@ async function main() {
     spreadPolicy: 'MAX_CORPUS_M1_SPREAD_AND_PAPER_FALLBACK',
   };
   report.pairs = summarizeBy(episodes, (episode) => episode.instrument, expectedInstruments, replay.summarizeReplayEpisodes);
+  report.sleeves = replay.summarizeReplaySleeves(episodes);
   report.routes = summarizeBy(episodes, (episode) => episode.strategyRoute, expectedInstruments, replay.summarizeReplayEpisodes);
   report.exitReasons = Object.entries(
     episodes.reduce((acc, episode) => {

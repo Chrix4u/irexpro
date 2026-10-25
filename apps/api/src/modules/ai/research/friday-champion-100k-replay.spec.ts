@@ -253,6 +253,7 @@ import {
   buildChronologicalReplayFolds,
   buildReplayStressReport,
   summarizeReplayEpisodes,
+  summarizeReplaySleeves,
   type ReplayEvidenceEpisode,
 } from './friday-champion-100k-replay';
 
@@ -318,6 +319,24 @@ describe('Friday champion 100k replay metrics and folds', () => {
     const sameTime = memberships.filter((item) => item.at === '2026-06-01T00:00:00.000Z');
     expect(new Set(sameTime.map((item) => item.index)).size).toBe(1);
     expect(folds).toHaveLength(3);
+  });
+
+  it('summarizes pair-direction sleeves independently', () => {
+    const buy = evidenceEpisode('USDJPY', '2026-06-01T00:00:00Z', 1);
+    const sell = {
+      ...evidenceEpisode('USDJPY', '2026-06-01T00:05:00Z', -1),
+      direction: 'SELL' as const,
+    };
+    const gbpSell = {
+      ...evidenceEpisode('GBPUSD', '2026-06-01T00:10:00Z', 0.5),
+      direction: 'SELL' as const,
+    };
+
+    expect(summarizeReplaySleeves([buy, sell, gbpSell])).toEqual([
+      expect.objectContaining({ key: 'GBPUSD|SELL', episodes: 1, netR: 0.5 }),
+      expect.objectContaining({ key: 'USDJPY|BUY', episodes: 1, netR: 1 }),
+      expect.objectContaining({ key: 'USDJPY|SELL', episodes: 1, netR: -1 }),
+    ]);
   });
 
   it('builds a stress report with all promotion flags permanently false', () => {

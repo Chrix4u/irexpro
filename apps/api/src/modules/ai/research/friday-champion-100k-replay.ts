@@ -459,6 +459,22 @@ export function summarizeReplayEpisodes(
   };
 }
 
+export function summarizeReplaySleeves(episodes: readonly ReplayEvidenceEpisode[]) {
+  const groups = new Map<string, ReplayEvidenceEpisode[]>();
+  for (const episode of episodes) {
+    const key = `${episode.instrument}|${episode.direction}`;
+    const group = groups.get(key) ?? [];
+    group.push(episode);
+    groups.set(key, group);
+  }
+  return [...groups.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, group]) => ({
+      key,
+      ...summarizeReplayEpisodes(group, [group[0]!.instrument]),
+    }));
+}
+
 export function buildChronologicalReplayFolds(
   episodes: readonly ReplayEvidenceEpisode[],
   foldCount = 3,
