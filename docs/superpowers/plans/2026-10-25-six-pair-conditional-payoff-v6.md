@@ -42,11 +42,11 @@
 - Produces: `ConditionalSeverityModels`, `ConditionalPayoffScore`, `_barrier_units(...)`, `score_conditional_payoff(...)`.
 - Consumes: existing causal event label/return columns and pair barrier probability helpers.
 
-- [ ] **Step 1: Write RED tests** proving favorable/adverse barrier-unit targets use only the proper event side, score outputs are finite, and the side with larger expected net payoff is selected even when its raw event probability is lower.
-- [ ] **Step 2: Run the focused tests and confirm RED.**
-- [ ] **Step 3: Implement the minimal pure target/scoring primitives.**
-- [ ] **Step 4: Run focused tests and confirm GREEN.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Write RED tests** proving favorable/adverse barrier-unit targets use only the proper event side, score outputs are finite, and the side with larger expected net payoff is selected even when its raw event probability is lower.
+- [x] **Step 2: Run the focused tests and confirm RED.**
+- [x] **Step 3: Implement the minimal pure target/scoring primitives.**
+- [x] **Step 4: Run focused tests and confirm GREEN.**
+- [x] **Step 5: Commit.**
 
 ### Task 2: Exact-pair probability + severity fitting
 
@@ -58,11 +58,11 @@
 - Produces: `ConditionalPayoffPairExpert`, `fit_pair_conditional_payoff_expert(...)`.
 - Consumes: v5 pair LONG/SHORT probability model fitting behavior, `_split_internal_early_stopping_tail(...)`, causal MTF feature policy.
 
-- [ ] **Step 1: Add RED tests** for exact-pair filtering, both-class classifier evidence, minimum LONG/SHORT conditional rows, and no cross-pair fallback.
-- [ ] **Step 2: Confirm RED.**
-- [ ] **Step 3: Fit pair LONG/SHORT event classifiers and four severity regressors using only the pair's purged fit/early-stop data.**
-- [ ] **Step 4: Confirm focused tests GREEN.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Add RED tests** for exact-pair filtering, both-class classifier evidence, minimum LONG/SHORT conditional rows, and no cross-pair fallback.
+- [x] **Step 2: Confirm RED.**
+- [x] **Step 3: Fit pair LONG/SHORT event classifiers and four severity regressors using only the pair's purged fit/early-stop data.**
+- [x] **Step 4: Confirm focused tests GREEN.**
+- [x] **Step 5: Commit.**
 
 ### Task 3: Train-only economic tail calibration and routing
 
@@ -73,11 +73,11 @@
 **Interfaces:**
 - Produces: `ConditionalPayoffCalibration`, `select_conditional_payoff_calibration(...)`, `route_conditional_payoff_predictions(...)`.
 
-- [ ] **Step 1: Add RED tests** showing calibration can discover a profitable top score tail, rejects negative economics, rejects one-sided activation, and routes failed/missing pair experts to ABSTAIN.
-- [ ] **Step 2: Confirm RED.**
-- [ ] **Step 3: Implement pair-specific train-only score-tail calibration with unchanged economics/side/density floors.**
-- [ ] **Step 4: Confirm focused tests GREEN.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Add RED tests** showing calibration can discover a profitable top score tail, rejects negative economics, rejects one-sided activation, and routes failed/missing pair experts to ABSTAIN.
+- [x] **Step 2: Confirm RED.**
+- [x] **Step 3: Implement pair-specific train-only score-tail calibration with unchanged economics/side/density floors.**
+- [x] **Step 4: Confirm focused tests GREEN.**
+- [x] **Step 5: Commit.**
 
 ### Task 4: Purged six-pair walk-forward evaluator
 
@@ -88,11 +88,11 @@
 **Interfaces:**
 - Produces: `evaluate_conditional_payoff_frame(...)`, `evaluate_conditional_payoff_corpora(...)` and atomic JSON evidence report.
 
-- [ ] **Step 1: Add RED tests** for horizon purge/embargo, train-only calibration, six-pair breadth, pair-level calibration evidence, conservative non-overlap aggregation, and all governance flags false.
-- [ ] **Step 2: Confirm RED.**
-- [ ] **Step 3: Implement the evaluator and report using existing validation/backtest utilities.**
-- [ ] **Step 4: Run focused suite, Ruff, and diff checks GREEN.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Add RED tests** for horizon purge/embargo, train-only calibration, six-pair breadth, pair-level calibration evidence, conservative non-overlap aggregation, and all governance flags false.
+- [x] **Step 2: Confirm RED.**
+- [x] **Step 3: Implement the evaluator and report using existing validation/backtest utilities.**
+- [x] **Step 4: Run focused suite, Ruff, and diff checks GREEN.**
+- [x] **Step 5: Commit.**
 
 ### Task 5: Bounded horizon-1 frozen-corpus screen
 
