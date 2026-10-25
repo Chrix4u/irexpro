@@ -109,9 +109,14 @@ describe('PAPER research requalification shadow read-only audit', () => {
     assert.equal(report.annotatedDecisions, 4);
     assert.equal(report.overall.metrics.episodes, 3);
     assert.equal(report.overall.scorecard.state, 'COLLECTING');
-    assert.equal(report.byPairSide.find((row: any) => row.pairSide === 'EURUSD:BUY').metrics.episodes, 2);
+    assert.equal(
+      report.byPairSide.find((row: any) => row.pairSide === 'EURUSD:BUY').metrics.episodes,
+      2,
+    );
 
-    const select = client.calls.find((call) => call.sql.includes('FROM trading.ensemble_shadow_decisions'));
+    const select = client.calls.find((call) =>
+      call.sql.includes('FROM trading.ensemble_shadow_decisions'),
+    );
     assert.deepEqual(select?.params, [
       userId,
       connectionId,

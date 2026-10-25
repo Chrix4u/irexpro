@@ -63,8 +63,7 @@ export function evaluatePaperResearchRequalificationShadow(
     portfolioBrakeBlocked: input.portfolioBlocked,
     pairSideSamples: Math.max(0, Math.trunc(input.pairSideSamples)),
     pairSideRealisedAverageR:
-      input.pairSideRealisedAverageR !== null &&
-      Number.isFinite(input.pairSideRealisedAverageR)
+      input.pairSideRealisedAverageR !== null && Number.isFinite(input.pairSideRealisedAverageR)
         ? input.pairSideRealisedAverageR
         : null,
     costAwareAction: input.costAwareAction,
@@ -87,10 +86,7 @@ export interface PaperResearchRequalificationEvidenceInput {
 export interface PaperResearchRequalificationEvidenceDecision {
   artifact: typeof PAPER_RESEARCH_REQUALIFICATION_SHADOW_ARTIFACT;
   state: PaperResearchRequalificationEvidenceState;
-  reason:
-    | 'INSUFFICIENT_FRESH_EPISODES'
-    | 'FRESH_EDGE_RECOVERY_SIGNAL'
-    | 'FRESH_EDGE_NOT_RECOVERED';
+  reason: 'INSUFFICIENT_FRESH_EPISODES' | 'FRESH_EDGE_RECOVERY_SIGNAL' | 'FRESH_EDGE_NOT_RECOVERED';
   executionAuthority: 'NONE';
   modifiesExecution: false;
   qualificationEvidence: false;
@@ -112,14 +108,13 @@ export function evaluatePaperResearchRequalificationEvidence(
   const losses = Math.max(0, Math.trunc(input.losses));
   const netR = Number.isFinite(input.netR) ? input.netR : 0;
   const profitFactor =
-    input.profitFactor !== null && Number.isFinite(input.profitFactor)
-      ? input.profitFactor
-      : null;
+    input.profitFactor !== null && Number.isFinite(input.profitFactor) ? input.profitFactor : null;
   const sharpe = input.sharpe !== null && Number.isFinite(input.sharpe) ? input.sharpe : null;
   const maxDrawdown =
     input.maxDrawdown !== null && Number.isFinite(input.maxDrawdown) ? input.maxDrawdown : null;
   const base = {
-    artifact: PAPER_RESEARCH_REQUALIFICATION_SHADOW_ARTIFACT as typeof PAPER_RESEARCH_REQUALIFICATION_SHADOW_ARTIFACT,
+    artifact:
+      PAPER_RESEARCH_REQUALIFICATION_SHADOW_ARTIFACT as typeof PAPER_RESEARCH_REQUALIFICATION_SHADOW_ARTIFACT,
     executionAuthority: 'NONE' as const,
     modifiesExecution: false as const,
     qualificationEvidence: false as const,
@@ -140,8 +135,7 @@ export function evaluatePaperResearchRequalificationEvidence(
   const profitFactorPassed =
     losses === 0
       ? wins > 0 && netR > 0
-      : profitFactor !== null &&
-        profitFactor >= PAPER_RESEARCH_REQUALIFICATION_MIN_PROFIT_FACTOR;
+      : profitFactor !== null && profitFactor >= PAPER_RESEARCH_REQUALIFICATION_MIN_PROFIT_FACTOR;
   const recovered =
     profitFactorPassed &&
     sharpe !== null &&

@@ -2301,10 +2301,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               portfolioBlocked: paperResearchPortfolioBrake.blocked,
               costAwareAction: paperResearchRequalificationCostAwareEntry?.action ?? 'SHADOW_ONLY',
               costAwareReason:
-                paperResearchRequalificationCostAwareEntry?.reason ?? 'LOCAL_GATES_NOT_COST_EVALUATED',
+                paperResearchRequalificationCostAwareEntry?.reason ??
+                'LOCAL_GATES_NOT_COST_EVALUATED',
               pairSideSamples: paperResearchPairSideReliability?.samples ?? 0,
-              pairSideRealisedAverageR:
-                paperResearchPairSideReliability?.realisedAverageR ?? null,
+              pairSideRealisedAverageR: paperResearchPairSideReliability?.realisedAverageR ?? null,
             });
             await this.annotatePaperResearchRequalificationShadowDecision(
               userId,

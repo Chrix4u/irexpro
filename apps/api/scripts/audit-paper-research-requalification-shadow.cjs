@@ -149,9 +149,7 @@ async function runPaperResearchRequalificationShadowAudit({
         ),
       });
     }
-    allEpisodes.sort(
-      (a, b) => new Date(a.resolvedAt).getTime() - new Date(b.resolvedAt).getTime(),
-    );
+    allEpisodes.sort((a, b) => new Date(a.resolvedAt).getTime() - new Date(b.resolvedAt).getTime());
 
     const report = {
       artifact: 'paper-research-requalification-shadow-audit-v1',
@@ -182,7 +180,10 @@ async function runPaperResearchRequalificationShadowAudit({
 
 async function main() {
   const path = require('node:path');
-  require('dotenv').config({ path: process.env.IREXPRO_API_ENV_PATH || path.join(__dirname, '../.env'), quiet: true });
+  require('dotenv').config({
+    path: process.env.IREXPRO_API_ENV_PATH || path.join(__dirname, '../.env'),
+    quiet: true,
+  });
   if (process.env.VPS_FOREX_SCANNER_ENABLED !== 'true') {
     console.log('PAPER_RESEARCH_REQUALIFICATION_SHADOW_AUDIT_SKIPPED scanner_disabled');
     return;
