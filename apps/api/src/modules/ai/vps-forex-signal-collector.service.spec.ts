@@ -15,6 +15,7 @@ import {
   isPaperLocalShadowEdgeScoutReason,
   adaptiveCalibrationExecutionBlockers,
   paperOpportunityScoutModelVersion,
+  canHighConvictionLocalScoutOverrideRealisedRoute,
 } from './vps-forex-signal-collector.service';
 import { ExecutionService } from '../execution/execution.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
@@ -176,6 +177,63 @@ describe('PAPER local shadow-edge adaptive authority', () => {
     ]);
     expect(adaptiveCalibrationExecutionBlockers(true, true)).toEqual([]);
     expect(adaptiveCalibrationExecutionBlockers(false, true)).toEqual([]);
+  });
+
+  it('lets only a high-conviction micro local scout override the broad realised-route demotion', () => {
+    const base = {
+      fullSizePaperExecutionCandidate: false,
+      scoutEligible: true,
+      scoutReason: 'LOCAL_SHADOW_EDGE_SCOUT' as const,
+      scoutLotUpperBound: 0.1,
+      localPocketHighConviction: true,
+      structuralRouteEligible: true,
+      pairSideEligible: true,
+      realisedRouteEligible: false,
+    };
+
+    expect(canHighConvictionLocalScoutOverrideRealisedRoute(base)).toBe(true);
+    expect(
+      canHighConvictionLocalScoutOverrideRealisedRoute({
+        ...base,
+        scoutReason: 'CALIBRATED_OOD_SCOUT',
+      }),
+    ).toBe(false);
+    expect(
+      canHighConvictionLocalScoutOverrideRealisedRoute({
+        ...base,
+        localPocketHighConviction: false,
+      }),
+    ).toBe(false);
+    expect(
+      canHighConvictionLocalScoutOverrideRealisedRoute({
+        ...base,
+        structuralRouteEligible: false,
+      }),
+    ).toBe(false);
+    expect(
+      canHighConvictionLocalScoutOverrideRealisedRoute({
+        ...base,
+        pairSideEligible: false,
+      }),
+    ).toBe(false);
+    expect(
+      canHighConvictionLocalScoutOverrideRealisedRoute({
+        ...base,
+        scoutLotUpperBound: 0.2,
+      }),
+    ).toBe(false);
+    expect(
+      canHighConvictionLocalScoutOverrideRealisedRoute({
+        ...base,
+        fullSizePaperExecutionCandidate: true,
+      }),
+    ).toBe(false);
+    expect(
+      canHighConvictionLocalScoutOverrideRealisedRoute({
+        ...base,
+        realisedRouteEligible: true,
+      }),
+    ).toBe(false);
   });
 });
 
