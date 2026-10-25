@@ -1,5 +1,6 @@
 import {
   deriveFastMarkFeedUiState,
+  deriveValidationPipelineUiState,
   hasExternalProviderPerformanceUiShape,
   hasVpsScannerUiShape,
 } from "./vps-scanner-status";
@@ -137,6 +138,80 @@ describe("VPS scanner UI status runtime guard", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("live validation pipeline UI projection", () => {
+  const pipeline = {
+    generatedAt: "2026-10-21T19:20:12.000Z",
+    marketBarTime: "2026-10-21T19:20:00.000Z",
+    pairsExpected: 6,
+    pairsEvaluated: 1,
+    readyPairs: 0,
+    blockedPairs: 1,
+    waitingPairs: 0,
+    error: null,
+    candidates: [
+      {
+        instrument: "EURUSD",
+        direction: "BUY",
+        evaluatedAt: "2026-10-21T19:20:10.000Z",
+        marketBarTime: "2026-10-21T19:20:00.000Z",
+        regime: "TREND_HEALTHY",
+        strategyRoute: "TREND_CONTINUATION",
+        confidence: 0.72,
+        ensembleScore: 0.74,
+        metaProbability: 0.68,
+        expectedR: 0.22,
+        netExpectedR: -0.11,
+        status: "BLOCKED",
+        passedGates: 4,
+        totalGates: 8,
+        primaryBlocker: "Net edge -0.110R is below the PAPER floor",
+        blockers: ["PAPER_NET_EXPECTED_R"],
+        gates: [
+          { code: "MARKET_DATA", label: "Market data", state: "PASS", detail: "Fresh" },
+          { code: "REGIME", label: "Regime", state: "PASS", detail: "Eligible" },
+          { code: "MODEL_QUALITY", label: "Model quality", state: "PASS", detail: "Passed" },
+          { code: "CONSENSUS", label: "Consensus", state: "PASS", detail: "6/6" },
+          { code: "NET_EDGE", label: "Net edge", state: "BLOCKED", detail: "Negative edge" },
+          { code: "DRIFT", label: "Drift", state: "WAITING", detail: "Checking" },
+          { code: "EVENT_RISK", label: "Event risk", state: "WAITING", detail: "Checking" },
+          { code: "PAPER_EXECUTION", label: "Execution", state: "BLOCKED", detail: "Blocked" },
+        ],
+      },
+    ],
+  };
+
+  it("accepts a fail-closed pair pipeline and preserves the backend gate order", () => {
+    const result = deriveValidationPipelineUiState(pipeline);
+    expect(result).not.toBeNull();
+    expect(result?.candidates[0]).toMatchObject({
+      instrument: "EURUSD",
+      status: "BLOCKED",
+      passedGates: 4,
+      totalGates: 8,
+    });
+    expect(result?.candidates[0]?.gates.map((gate) => gate.code)).toEqual([
+      "MARKET_DATA",
+      "REGIME",
+      "MODEL_QUALITY",
+      "CONSENSUS",
+      "NET_EDGE",
+      "DRIFT",
+      "EVENT_RISK",
+      "PAPER_EXECUTION",
+    ]);
+  });
+
+  it("rejects malformed gate evidence instead of turning it into a green UI state", () => {
+    const malformed = JSON.parse(JSON.stringify(pipeline)) as typeof pipeline;
+    malformed.candidates[0]!.gates[4]!.state = "MAYBE" as never;
+    expect(deriveValidationPipelineUiState(malformed)).toBeNull();
+  });
+
+  it("keeps the core scanner payload valid when the optional pipeline is absent", () => {
+    expect(hasVpsScannerUiShape(VALID_STATUS)).toBe(true);
   });
 });
 
