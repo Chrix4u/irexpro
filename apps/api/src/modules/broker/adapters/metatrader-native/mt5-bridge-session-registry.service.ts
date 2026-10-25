@@ -93,6 +93,12 @@ export class Mt5BridgeSessionRegistry {
     return true;
   }
 
+  currentSequence(connectionId: string): number {
+    const attached = this.sessions.get(connectionId);
+    if (!attached) throw new Mt5BridgeSessionRegistryError('SESSION_NOT_FOUND');
+    return attached.lastSequence;
+  }
+
   getHealthySession(
     connectionId: string,
     expectedIdentity?: Mt5BridgeAccountIdentity,
