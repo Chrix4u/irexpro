@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 import numpy as np
+import pandas as pd
 
 DIRECT_NET_HORIZONS = (5, 20, 60)
 MIN_CALIBRATION_ROWS = 200
@@ -22,6 +23,10 @@ DirectNetCalibrationReason = Literal[
     "INVALID_CALIBRATION_SHAPE",
     "NO_ECONOMIC_THRESHOLD",
 ]
+
+
+class _RegressorLike(Protocol):
+    def predict(self, frame: pd.DataFrame) -> np.ndarray: ...
 
 
 @dataclass(frozen=True)
@@ -141,3 +146,71 @@ def select_density_budgeted_threshold(
             decision.density,
         ),
     )
+
+
+def route_pair_direct_net_predictions(
+    frame: pd.DataFrame,
+    *,
+    models: dict[str, _RegressorLike],
+    calibrations: dict[str, DirectNetCalibration],
+    feature_columns: list[str],
+) -> pd.DataFrame:
+    """Route rows to exact pair experts and emit BUY, SELL or ABSTAIN."""
+
+    if "instrument" not in frame.columns:
+        raise ValueError("direct-net prediction frame requires instrument")
+    missing_features = [column for column in feature_columns if column not in frame.columns]
+    if missing_features:
+        raise ValueError(f"direct-net prediction frame missing features: {missing_features}")
+
+    count = len(frame)
+    long_prediction = np.full(count, np.nan, dtype=float)
+    short_prediction = np.full(count, np.nan, dtype=float)
+    threshold = np.full(count, np.nan, dtype=float)
+    active_trade = np.zeros(count, dtype=bool)
+    action = np.full(count, "ABSTAIN", dtype=object)
+    instruments = frame["instrument"].astype(str).to_numpy()
+
+    for instrument in pd.unique(instruments):
+        pair_positions = np.flatnonzero(instruments == instrument)
+        pair_frame = frame.iloc[pair_positions]
+        calibration = calibrations.get(instrument)
+        if calibration is None:
+            raise ValueError(f"missing direct-net calibration {instrument}")
+
+        pair_predictions: dict[str, np.ndarray] = {}
+        for side in ("long", "short"):
+            key = f"{instrument}::{side}"
+            model = models.get(key)
+            if model is None:
+                raise ValueError(f"missing direct-net expert {key}")
+            values = np.asarray(model.predict(pair_frame[feature_columns]), dtype=float)
+            if values.shape != (len(pair_frame),) or not np.isfinite(values).all():
+                raise ValueError(f"invalid direct-net predictions from {key}")
+            pair_predictions[side] = values
+
+        pair_long = pair_predictions["long"]
+        pair_short = pair_predictions["short"]
+        long_prediction[pair_positions] = pair_long
+        short_prediction[pair_positions] = pair_short
+
+        if not calibration.passed or calibration.threshold_bps is None:
+            continue
+
+        pair_threshold = float(calibration.threshold_bps)
+        threshold[pair_positions] = pair_threshold
+        predicted_long = pair_long >= pair_short
+        predicted_best = np.maximum(pair_long, pair_short)
+        pair_active = predicted_best >= pair_threshold
+        active_trade[pair_positions] = pair_active
+        pair_action = np.where(predicted_long, "BUY", "SELL")
+        action[pair_positions] = np.where(pair_active, pair_action, "ABSTAIN")
+
+    result = frame.copy()
+    result["predicted_long_net_bps"] = long_prediction
+    result["predicted_short_net_bps"] = short_prediction
+    result["predicted_best_net_bps"] = np.maximum(long_prediction, short_prediction)
+    result["activation_threshold_bps"] = threshold
+    result["active_trade"] = active_trade
+    result["action"] = action
+    return result
