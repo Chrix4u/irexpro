@@ -644,11 +644,55 @@ describe('PAPER local shadow-edge scout authority', () => {
     });
   });
 
-  it('still requires four-vote consensus for the local pocket lane', () => {
+  it('lets an exceptionally strong mature local pocket execute with three of six votes', () => {
     expect(evaluatePaperOpportunityScout({ ...candidate, consensusPassed: 3 })).toMatchObject({
+      eligible: true,
+      reason: 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT',
+      lotUpperBound: 0.1,
+      sizingTier: 'RESEARCH',
+    });
+  });
+
+  it('keeps an ordinary supported local pocket behind the existing four-vote floor', () => {
+    const ordinarySupportedPocket = evaluatePaperShadowLocalEdgePocket({
+      samples: 24,
+      wins: 14,
+      losses: 10,
+      grossProfitR: 7.8,
+      grossLossR: 6,
+      netR: 2.88,
+      averageNetR: 0.12,
+      profitFactor: 1.3,
+      recentSamples: 8,
+      recentWins: 5,
+      recentNetR: 0.6,
+      latestResolvedAt: '2026-10-25T20:40:00.000Z',
+    });
+    expect(ordinarySupportedPocket.supported).toBe(true);
+    expect(
+      evaluatePaperOpportunityScout({
+        ...candidate,
+        consensusPassed: 3,
+        shadowLocalEdgePocket: ordinarySupportedPocket,
+      }),
+    ).toMatchObject({ eligible: false, reason: 'CONSENSUS_TOO_LOW' });
+  });
+
+  it('never lets local pocket evidence reduce consensus below three votes', () => {
+    expect(evaluatePaperOpportunityScout({ ...candidate, consensusPassed: 2 })).toMatchObject({
       eligible: false,
       reason: 'CONSENSUS_TOO_LOW',
     });
+  });
+
+  it('keeps rollover-risk regimes non-scoutable even with exceptional local evidence', () => {
+    expect(
+      evaluatePaperOpportunityScout({
+        ...candidate,
+        consensusPassed: 3,
+        regime: 'ROLLOVER_RISK',
+      }),
+    ).toMatchObject({ eligible: false, reason: 'REGIME_NOT_SCOUTABLE' });
   });
 
   it('still lets hard event risk veto a supported local pocket', () => {

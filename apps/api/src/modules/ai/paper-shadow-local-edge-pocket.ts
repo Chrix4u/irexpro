@@ -4,6 +4,11 @@ export const PAPER_SHADOW_LOCAL_EDGE_MIN_PROFIT_FACTOR = 1.2;
 export const PAPER_SHADOW_LOCAL_EDGE_MIN_AVERAGE_R = 0.1;
 export const PAPER_SHADOW_LOCAL_EDGE_RECENT_WINDOW = 8;
 export const PAPER_SHADOW_LOCAL_EDGE_MIN_RECENT_WINS = 5;
+export const PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_SAMPLES = 30;
+export const PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_PROFIT_FACTOR = 1.5;
+export const PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_AVERAGE_R = 0.2;
+export const PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_RECENT_WINS = 6;
+export const PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_RECENT_NET_R = 0.5;
 
 export interface PaperShadowLocalEdgePocketEvidence {
   samples: number;
@@ -138,4 +143,18 @@ export function evaluatePaperShadowLocalEdgePocket(
     reason: 'LOCAL_EDGE_POCKET_SUPPORTED',
     supported: true,
   };
+}
+
+export function isHighConvictionPaperShadowLocalEdgePocket(
+  decision: PaperShadowLocalEdgePocketDecision,
+): boolean {
+  return (
+    decision.supported === true &&
+    decision.samples >= PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_SAMPLES &&
+    decision.profitFactor >= PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_PROFIT_FACTOR &&
+    decision.averageNetR >= PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_AVERAGE_R &&
+    decision.recentSamples >= PAPER_SHADOW_LOCAL_EDGE_RECENT_WINDOW &&
+    decision.recentWins >= PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_RECENT_WINS &&
+    decision.recentNetR >= PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_RECENT_NET_R
+  );
 }

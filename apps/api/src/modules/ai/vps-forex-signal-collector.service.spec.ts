@@ -12,6 +12,7 @@ import {
   isFreshOpportunity,
   evaluatePaperEntryMarketAlignment,
   executableNetExpectedR,
+  isPaperLocalShadowEdgeScoutReason,
   adaptiveCalibrationExecutionBlockers,
   paperOpportunityScoutModelVersion,
 } from './vps-forex-signal-collector.service';
@@ -113,7 +114,7 @@ describe('dynamic PAPER lot ceiling', () => {
 describe('PAPER opportunity scout model identity', () => {
   it('separates idle-aware participation outcomes from the v1 scout cohort', () => {
     expect(paperOpportunityScoutModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v7-local-edge-pocket-0.10-tier',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v8-high-conviction-consensus-0.10-tier',
     );
   });
 });
@@ -150,6 +151,20 @@ describe('PAPER local shadow-edge adaptive authority', () => {
         ensembleGovernance: { netExpectedR: -0.48 },
         pairedDirectionReversal: { researchNetExpectedR: -0.2 },
         paperOpportunityScout: { reason: 'LOCAL_SHADOW_EDGE_SCOUT' },
+        paperShadowLocalEdgePocket: { supported: true, averageNetR: 0.588 },
+      } as any),
+    ).toBeCloseTo(0.588, 6);
+  });
+
+  it('ranks the three-vote high-conviction local pocket by the same empirical edge', () => {
+    expect(isPaperLocalShadowEdgeScoutReason('LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT')).toBe(true);
+    expect(
+      executableNetExpectedR({
+        paperExecutionRoute: 'NORMAL_PAPER',
+        paperCalibratedIdleRecovery: null,
+        ensembleGovernance: { netExpectedR: -0.48 },
+        pairedDirectionReversal: { researchNetExpectedR: -0.2 },
+        paperOpportunityScout: { reason: 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT' },
         paperShadowLocalEdgePocket: { supported: true, averageNetR: 0.588 },
       } as any),
     ).toBeCloseTo(0.588, 6);

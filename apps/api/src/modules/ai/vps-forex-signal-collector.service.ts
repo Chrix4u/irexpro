@@ -196,7 +196,13 @@ const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 
 export function paperOpportunityScoutModelVersion(engineCode: string): string {
-  return `external-provider/${engineCode}/paper-opportunity-scout-v7-local-edge-pocket-0.10-tier`;
+  return `external-provider/${engineCode}/paper-opportunity-scout-v8-high-conviction-consensus-0.10-tier`;
+}
+
+export function isPaperLocalShadowEdgeScoutReason(
+  reason: PaperOpportunityScoutDecision['reason'] | null | undefined,
+): boolean {
+  return reason === 'LOCAL_SHADOW_EDGE_SCOUT' || reason === 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT';
 }
 const PAPER_CHAMPION_MODEL_VERSION =
   'external-provider/irexpro-multimodel-ensemble-v1/paper-only-v1';
@@ -622,7 +628,7 @@ export function executableNetExpectedR(
     Partial<Pick<ExecutableCounterfactual, 'paperOpportunityScout' | 'paperShadowLocalEdgePocket'>>,
 ): number {
   if (
-    option.paperOpportunityScout?.reason === 'LOCAL_SHADOW_EDGE_SCOUT' &&
+    isPaperLocalShadowEdgeScoutReason(option.paperOpportunityScout?.reason) &&
     option.paperShadowLocalEdgePocket?.supported &&
     Number.isFinite(option.paperShadowLocalEdgePocket.averageNetR)
   ) {
@@ -1945,10 +1951,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                   evaluatedAt,
                   allocationCapital: adaptiveAllocationCapital,
                   portfolio: initialAdaptivePortfolio,
-                  localShadowEdgeNetExpectedR:
-                    paperOpportunityScout.reason === 'LOCAL_SHADOW_EDGE_SCOUT'
-                      ? paperShadowLocalEdgePocket?.averageNetR
-                      : null,
+                  localShadowEdgeNetExpectedR: isPaperLocalShadowEdgeScoutReason(
+                    paperOpportunityScout.reason,
+                  )
+                    ? paperShadowLocalEdgePocket?.averageNetR
+                    : null,
                 })
               : adaptiveEvidencePass;
           if (paperOpportunityScout.eligible) {
@@ -1965,7 +1972,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             );
           }
           if (
-            paperOpportunityScout.reason === 'LOCAL_SHADOW_EDGE_SCOUT' &&
+            isPaperLocalShadowEdgeScoutReason(paperOpportunityScout.reason) &&
             paperShadowLocalEdgePocket
           ) {
             this.logger.warn(
@@ -2752,10 +2759,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             entry.chosen.paperExecutionRoute === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH'
               ? entry.chosen.paperExtensionExhaustionPairSideReliability
               : entry.chosen.paperResearchPairSideReliability,
-          localShadowEdgeNetExpectedR:
-            entry.chosen.paperOpportunityScout.reason === 'LOCAL_SHADOW_EDGE_SCOUT'
-              ? entry.chosen.paperShadowLocalEdgePocket?.averageNetR
-              : null,
+          localShadowEdgeNetExpectedR: isPaperLocalShadowEdgeScoutReason(
+            entry.chosen.paperOpportunityScout.reason,
+          )
+            ? entry.chosen.paperShadowLocalEdgePocket?.averageNetR
+            : null,
         });
         initiallyEvaluatedWinners.push({
           ...entry,
@@ -2811,10 +2819,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             rankedWinner.chosen.paperExecutionRoute === 'PAPER_EXTENSION_EXHAUSTION_RESEARCH'
               ? rankedWinner.chosen.paperExtensionExhaustionPairSideReliability
               : rankedWinner.chosen.paperResearchPairSideReliability,
-          localShadowEdgeNetExpectedR:
-            rankedWinner.chosen.paperOpportunityScout.reason === 'LOCAL_SHADOW_EDGE_SCOUT'
-              ? rankedWinner.chosen.paperShadowLocalEdgePocket?.averageNetR
-              : null,
+          localShadowEdgeNetExpectedR: isPaperLocalShadowEdgeScoutReason(
+            rankedWinner.chosen.paperOpportunityScout.reason,
+          )
+            ? rankedWinner.chosen.paperShadowLocalEdgePocket?.averageNetR
+            : null,
         });
         const adaptiveWinner: AdaptiveScanWinner = {
           ...rankedWinner,
