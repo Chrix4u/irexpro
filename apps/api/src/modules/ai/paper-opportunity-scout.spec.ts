@@ -1,4 +1,5 @@
 import { evaluatePaperOpportunityScout } from './paper-opportunity-scout';
+import { evaluatePaperChampionDirectionPrior } from './paper-champion-direction-prior';
 
 describe('PAPER opportunity scout', () => {
   const base = {
@@ -444,6 +445,121 @@ describe('PAPER opportunity scout', () => {
           reason: 'CONFIDENCE_TOO_LOW',
         });
       }
+    });
+  });
+
+  describe('champion direction prior acceleration', () => {
+    const supportedPrior = evaluatePaperChampionDirectionPrior({
+      instrument: 'GBPUSD',
+      direction: 'SELL',
+      evidence: { trades: 12, grossProfit: 27.8, grossLoss: 20.4, netPnl: 7.4 },
+    });
+
+    it('uses recovery soft floors immediately for a supported direction before the idle window', () => {
+      expect(
+        evaluatePaperOpportunityScout({
+          ...base,
+          direction: 'SELL',
+          idleMinutes: 5,
+          confidence: 0.57,
+          netExpectedR: 0.05,
+          directionQuality: 0.22,
+          tradeQuality: 0.22,
+          exitQuality: 0.22,
+          alignedMomentumAtr: 0.18,
+          championDirectionPrior: supportedPrior,
+        }),
+      ).toMatchObject({
+        eligible: true,
+        reason: 'CHAMPION_DIRECTION_SCOUT',
+        lotUpperBound: 0.1,
+        mode: 'CHAMPION_DIRECTION',
+        idleMinutes: 5,
+      });
+    });
+
+    it('does not accelerate an unsupported direction', () => {
+      const unsupportedPrior = evaluatePaperChampionDirectionPrior({
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        evidence: { trades: 11, grossProfit: 20.4, grossLoss: 39.5, netPnl: -19.1 },
+      });
+      expect(
+        evaluatePaperOpportunityScout({
+          ...base,
+          direction: 'SELL',
+          idleMinutes: 5,
+          confidence: 0.57,
+          netExpectedR: 0.05,
+          directionQuality: 0.22,
+          tradeQuality: 0.22,
+          exitQuality: 0.22,
+          alignedMomentumAtr: 0.18,
+          championDirectionPrior: unsupportedPrior,
+        }),
+      ).toMatchObject({ eligible: false, reason: 'CONFIDENCE_TOO_LOW', mode: 'BASE' });
+    });
+
+    it('keeps consensus, route and hard safety vetoes authoritative', () => {
+      expect(
+        evaluatePaperOpportunityScout({
+          ...base,
+          direction: 'SELL',
+          idleMinutes: 5,
+          confidence: 0.58,
+          consensusPassed: 3,
+          netExpectedR: 0.08,
+          directionQuality: 0.3,
+          tradeQuality: 0.3,
+          exitQuality: 0.3,
+          alignedMomentumAtr: 0.2,
+          championDirectionPrior: supportedPrior,
+        }),
+      ).toMatchObject({ eligible: false, reason: 'CONSENSUS_TOO_LOW' });
+      expect(
+        evaluatePaperOpportunityScout({
+          ...base,
+          direction: 'SELL',
+          strategyRoute: 'CONFIRMED_REVERSAL',
+          regime: 'REVERSAL_CONFIRMED',
+          championDirectionPrior: supportedPrior,
+        }),
+      ).toMatchObject({ eligible: false, reason: 'ROUTE_NOT_SCOUTABLE' });
+      expect(
+        evaluatePaperOpportunityScout({
+          ...base,
+          direction: 'SELL',
+          eventRisk: 'UNVERIFIED',
+          championDirectionPrior: supportedPrior,
+        }),
+      ).toMatchObject({ eligible: false, reason: 'EVENT_RISK_NOT_CLEAR' });
+      expect(
+        evaluatePaperOpportunityScout({
+          ...base,
+          direction: 'SELL',
+          paperExecutionCostUsable: false,
+          championDirectionPrior: supportedPrior,
+        }),
+      ).toMatchObject({ eligible: false, reason: 'EXECUTION_COST_UNUSABLE' });
+    });
+
+    it('does not use the prior to bypass OOD calibration evidence', () => {
+      expect(
+        evaluatePaperOpportunityScout({
+          ...base,
+          direction: 'SELL',
+          idleMinutes: 5,
+          driftState: 'OUT_OF_DISTRIBUTION',
+          confidence: 0.61,
+          consensusPassed: 5,
+          netExpectedR: 0.11,
+          directionQuality: 0.35,
+          tradeQuality: 0.35,
+          exitQuality: 0.35,
+          alignedMomentumAtr: 0.2,
+          championDirectionPrior: supportedPrior,
+        }),
+      ).toMatchObject({ eligible: false, reason: 'DRIFT_EVIDENCE_TOO_WEAK' });
     });
   });
 });
