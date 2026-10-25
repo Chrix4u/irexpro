@@ -34,6 +34,20 @@ export interface DirectMt5CommandResultInput {
   error: string | null;
 }
 
+export type DirectMt5CommandOutcomeState =
+  | 'PENDING'
+  | 'LEASED'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'UNCERTAIN'
+  | 'CANCELLED';
+
+export interface DirectMt5CommandOutcome {
+  state: DirectMt5CommandOutcomeState;
+  result: Record<string, unknown> | null;
+  error: string | null;
+}
+
 @Injectable()
 export class DirectMt5CommandService {
   constructor(private readonly dataSource: DataSource) {}
@@ -208,6 +222,30 @@ export class DirectMt5CommandService {
       leaseExpiresAt: new Date(row.lease_expires_at).toISOString(),
       payload: row.payload,
     });
+  }
+
+  async waitForOutcome(commandId: string, maxWaitMs = 4_500): Promise<DirectMt5CommandOutcome> {
+    const deadline = Date.now() + Math.max(0, maxWaitMs);
+    while (true) {
+      const rows = (await this.dataSource.query(
+        `
+          SELECT state, result, error
+          FROM broker.direct_mt5_commands
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [commandId],
+      )) as DirectMt5CommandOutcome[];
+      const outcome = rows[0];
+      if (!outcome) {
+        throw new NotFoundException('Direct MT5 command was not found');
+      }
+      if (['SUCCEEDED', 'FAILED', 'UNCERTAIN', 'CANCELLED'].includes(outcome.state)) {
+        return outcome;
+      }
+      if (Date.now() >= deadline) return outcome;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 
   async recordResult(
