@@ -86,6 +86,21 @@
 - Produces a research JSON report and Actions-log evidence only; no deployment.
 
 - [x] **Step 1: Add exact-SHA research workflow** using an isolated VPS research worktree and existing corpus cache.
-- [ ] **Step 2: Run only 5m / one purged fold.**
-- [ ] **Step 3: Record opportunities/day, mean interval, BA, PF, Sharpe, DD, positive fold/instrument fractions, LONG/SHORT balance, and governance=false.**
-- [ ] **Step 4: If either economics or participation fails, stop and diagnose; do not run 20m/60m. If both pass, proceed to full multi-fold 5m before any wider study.**
+- [x] **Step 2: Run only 5m / one purged fold.** Initial exact-SHA screen produced zero active signals/opportunities.
+- [x] **Step 3: Record opportunities/day, BA, PF, Sharpe, DD, positive fold/instrument fractions, and governance=false.** The zero-signal screen left trade-only metrics undefined, correctly failing all economics/participation gates except drawdown.
+- [x] **Step 4: Stop and diagnose; do not run 20m/60m.** Frozen-corpus probing found zero structurally eligible calibration cells for all six pairs because the absolute probability grid started above most pair score distributions.
+
+### Task 5: Repair calibration score-scale coverage and rerun 5m
+
+**Files:**
+- Modify: `services/ai-engine/app/domain/training/short_horizon_barrier_calibrated.py`
+- Modify: `services/ai-engine/tests/test_short_horizon_barrier_calibrated.py`
+- Modify: `services/ai-engine/tests/test_short_horizon_barrier_calibrated_walk_forward.py`
+- Modify: `docs/superpowers/designs/2026-10-25-short-horizon-barrier-calibrated-v5.md`
+
+- [x] **Step 1: Preserve pair-level calibration decisions in fold evidence** so future screens expose calibration failures instead of only aggregate zero activity.
+- [x] **Step 2: Add a RED regression** proving the default calibration can discover an economically valid 5–25% tail even when all useful model scores are below 0.55.
+- [x] **Step 3: Replace the absolute default score grid with bounded training-only probability/margin quantiles; keep row-count, density, side-balance, mean-return, and PF floors unchanged.**
+- [x] **Step 4: Run focused v5 tests, Ruff, and diff checks GREEN.**
+- [ ] **Step 5: Rerun the exact 5m / one-fold frozen-corpus screen with the adaptive grid.**
+- [ ] **Step 6: If economics or participation still fails, reject/diagnose 5m again and do not spend compute on 20m/60m. If it passes, proceed to full multi-fold 5m.**

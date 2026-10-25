@@ -70,6 +70,37 @@ def test_selects_profit_throughput_after_economic_floors_pass() -> None:
     assert 0.05 <= decision.short_fraction <= 0.95
 
 
+def test_default_calibration_search_adapts_to_low_probability_scale() -> None:
+    rows = 1000
+    index = np.arange(rows)
+    choose_long = index % 2 == 0
+    winning_probability = np.linspace(0.30, 0.52, rows)
+    losing_probability = winning_probability - 0.04
+    long_probability = np.where(choose_long, winning_probability, losing_probability)
+    short_probability = np.where(choose_long, losing_probability, winning_probability)
+
+    selected_return = np.full(rows, -0.5, dtype=float)
+    high_tail = index >= 750
+    selected_return[high_tail] = np.where(index[high_tail] % 5 == 0, -1.0, 1.0)
+    realized_long = np.where(choose_long, selected_return, -0.5)
+    realized_short = np.where(choose_long, -0.5, selected_return)
+
+    decision = select_barrier_pair_calibration(
+        long_probability,
+        short_probability,
+        realized_long,
+        realized_short,
+    )
+
+    assert decision.passed is True
+    assert decision.min_probability is not None
+    assert decision.min_probability < 0.55
+    assert 0.05 <= decision.density <= 0.25
+    assert decision.mean_realized_bps > 0.0
+    assert decision.profit_factor is not None
+    assert decision.profit_factor >= 1.10
+
+
 def test_rejects_high_density_when_realized_economics_are_negative() -> None:
     rows = 1200
     long_probability, short_probability, _ = _balanced_side_probabilities(0.75, 0.20, rows)

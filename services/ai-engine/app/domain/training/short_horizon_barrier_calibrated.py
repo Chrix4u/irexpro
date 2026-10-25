@@ -36,8 +36,8 @@ MAX_CALIBRATION_DENSITY = 0.25
 MIN_SIDE_FRACTION = 0.05
 CALIBRATION_MIN_PROFIT_FACTOR = 1.10
 CALIBRATION_MIN_MEAN_BPS = 0.0
-DEFAULT_PROBABILITY_THRESHOLDS = (0.55, 0.60, 0.65, 0.70, 0.75, 0.80)
-DEFAULT_MARGIN_THRESHOLDS = (0.05, 0.10, 0.15, 0.20, 0.25)
+DEFAULT_PROBABILITY_QUANTILES = (0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95)
+DEFAULT_MARGIN_QUANTILES = (0.25, 0.50, 0.60, 0.70, 0.80, 0.90, 0.95)
 
 
 @dataclass(frozen=True)
@@ -101,8 +101,8 @@ def select_barrier_pair_calibration(
     realized_long_bps: np.ndarray | Iterable[float],
     realized_short_bps: np.ndarray | Iterable[float],
     *,
-    probability_thresholds: tuple[float, ...] = DEFAULT_PROBABILITY_THRESHOLDS,
-    margin_thresholds: tuple[float, ...] = DEFAULT_MARGIN_THRESHOLDS,
+    probability_thresholds: tuple[float, ...] | None = None,
+    margin_thresholds: tuple[float, ...] | None = None,
     min_rows: int = MIN_CALIBRATION_ROWS,
     min_density: float = MIN_CALIBRATION_DENSITY,
     max_density: float = MAX_CALIBRATION_DENSITY,
@@ -133,19 +133,37 @@ def select_barrier_pair_calibration(
     ):
         return _failed("NON_FINITE_CALIBRATION_INPUT")
     if (
-        not probability_thresholds
-        or not margin_thresholds
-        or min_rows <= 0
+        min_rows <= 0
         or not (0.0 <= min_density <= max_density <= 1.0)
         or not (0.0 <= min_side_fraction <= 0.5)
     ):
         raise ValueError("invalid barrier calibration policy")
 
-    candidates: list[BarrierPairCalibration] = []
     winning_long = long_p > short_p
     winning_probability = np.maximum(long_p, short_p)
     separation = np.abs(long_p - short_p)
+    if probability_thresholds is None:
+        probability_thresholds = tuple(
+            float(np.quantile(winning_probability, quantile))
+            for quantile in DEFAULT_PROBABILITY_QUANTILES
+        )
+    if margin_thresholds is None:
+        margin_thresholds = (
+            0.0,
+            *(
+                float(np.quantile(separation, quantile))
+                for quantile in DEFAULT_MARGIN_QUANTILES
+            ),
+        )
+    if (
+        not probability_thresholds
+        or not margin_thresholds
+        or not all(0.0 <= float(value) <= 1.0 for value in probability_thresholds)
+        or not all(0.0 <= float(value) <= 1.0 for value in margin_thresholds)
+    ):
+        raise ValueError("invalid barrier calibration policy")
 
+    candidates: list[BarrierPairCalibration] = []
     for min_probability in sorted(set(float(value) for value in probability_thresholds)):
         for min_margin in sorted(set(float(value) for value in margin_thresholds)):
             active = (winning_probability >= min_probability) & (separation >= min_margin)

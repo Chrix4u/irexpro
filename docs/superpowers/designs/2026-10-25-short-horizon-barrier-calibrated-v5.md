@@ -12,6 +12,10 @@ The repository already contains a causal first-passage event-barrier label. It a
 
 Earlier barrier research showed that predicting whether a meaningful move happens soon was substantially stronger than predicting its direction. v7 then replaced the weak direction head with independent LONG-vs-rest and SHORT-vs-rest models, but used fixed activation rules: winning side probability >= 0.60 and LONG-vs-SHORT probability margin >= 0.10. Later v8-v10 hybrid/payoff/risk experiments also remained research candidates rather than proving promotion-quality economics.
 
+## First 5m screen diagnosis
+
+The first exact-SHA one-fold v5 screen produced zero active signals. A frozen-corpus calibration probe showed this was initially a search-grid defect rather than an economic rejection: all six pair calibrations had zero structurally eligible grid cells because the absolute probability grid began at 0.55 while pair-specific 99th-percentile winning scores ranged roughly 0.467–0.560. The first-passage labels themselves remained populated and two-sided. v5 therefore uses training-only empirical score quantiles so calibration can evaluate the intended 5–25% activation-density region before economics decide whether a pair passes.
+
 ## Chosen architecture
 
 v5 keeps the path-aware first-passage target but removes fixed global activity gates.
@@ -19,9 +23,10 @@ v5 keeps the path-aware first-passage target but removes fixed global activity g
 For each of the six pairs and each horizon (5/20/60 minutes):
 
 1. Fit an independent LONG-actionability classifier and SHORT-actionability classifier using only causal MTF features.
-2. Use an inner, horizon-purged training-only calibration tail to search a bounded grid of:
-   - minimum winning-side probability; and
-   - minimum LONG-vs-SHORT probability separation.
+2. Use an inner, horizon-purged training-only calibration tail to search a bounded, pair-adaptive grid of:
+   - minimum winning-side probability derived from calibration-tail score quantiles; and
+   - minimum LONG-vs-SHORT probability separation derived from calibration-tail margin quantiles, including a zero-margin anchor.
+   The grid adapts to each expert's score scale while remaining entirely train-only; absolute validation/future score levels never select thresholds.
 3. A calibration candidate is eligible only when it has enough active rows, bounded activation density, positive mean realised net return, Profit Factor >= 1.10, and both BUY and SELL representation where the data supports both sides.
 4. Among economically eligible candidates, select the candidate with the best **profit throughput** (`mean realised net bps × activation density`), then Profit Factor, then density. This explicitly rewards useful frequency only after economics pass.
 5. Validation routing is pair-specific and fail-closed. A row trades only when the pair calibration passed, the winning side clears its probability threshold, and its side separation clears the calibrated margin. Missing models/calibration never borrow another pair's policy.
