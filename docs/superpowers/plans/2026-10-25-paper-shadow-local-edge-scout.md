@@ -54,10 +54,10 @@
 - [x] Implement loader and collector wiring.
 - [x] Preserve downstream reliability/post-loss/alignment/risk gates.
 - [x] Run collector + scout suites GREEN (148/148).
-- [ ] Commit.
+- [x] Commit.
 
 ### Task 3: Release verification
-- [ ] Run changed-file lint/format/diff check.
-- [ ] Run API build and trading-critical suites.
+- [x] Run changed-file lint/format/diff check.
+- [x] Run API build and trading-critical suites (148/148 trading, 109/109 broker lifecycle, 7/7 mark bridge).
 - [ ] Push PR and require exact-head API/concurrency/security/Required CI.
 - [ ] Merge only after green, then verify exact-main staging release/deploy and runtime attribution.

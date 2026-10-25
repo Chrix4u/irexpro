@@ -36,8 +36,7 @@ export type PaperShadowLocalEdgePocketReason =
   | 'LOCAL_EDGE_RECENT_DEGRADATION'
   | 'LOCAL_EDGE_POCKET_SUPPORTED';
 
-export interface PaperShadowLocalEdgePocketDecision
-  extends PaperShadowLocalEdgePocketEvidence {
+export interface PaperShadowLocalEdgePocketDecision extends PaperShadowLocalEdgePocketEvidence {
   artifact: typeof PAPER_SHADOW_LOCAL_EDGE_POCKET_ARTIFACT;
   state: PaperShadowLocalEdgePocketState;
   reason: PaperShadowLocalEdgePocketReason;
@@ -125,10 +124,7 @@ export function evaluatePaperShadowLocalEdgePocket(
       supported: false,
     };
   }
-  if (
-    evidence.recentWins < PAPER_SHADOW_LOCAL_EDGE_MIN_RECENT_WINS ||
-    evidence.recentNetR <= 0
-  ) {
+  if (evidence.recentWins < PAPER_SHADOW_LOCAL_EDGE_MIN_RECENT_WINS || evidence.recentNetR <= 0) {
     return {
       ...common,
       state: 'DEGRADED',
