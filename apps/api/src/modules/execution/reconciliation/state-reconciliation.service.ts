@@ -37,6 +37,7 @@ import { ReconciliationResolutionService } from './reconciliation-resolution.ser
 import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
 import {
   METAAPI_PROVIDER_QUOTA_COOLDOWN_MS,
+  isMetaApiDeploymentFundingError,
   isMetaApiQuotaError,
 } from '../../broker/utils/metaapi-quota';
 
@@ -93,6 +94,9 @@ const RECONCILABLE_TRADE_STATUSES = [
 
 /** Keep reconciliation error handling aligned with the execution boundary. */
 const SECRET_LIKE_RUN = /[A-Za-z0-9]{16,}/g;
+const UUID_LIKE_RUN =
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
+const URL_LIKE_RUN = /https?:\/\/[^\s)]+/gi;
 const RECONCILIATION_REASON_MAX_LENGTH = 500;
 
 const PAPER_BROKER_ID = 'paper-broker';
@@ -170,7 +174,11 @@ function sanitizeReconciliationReason(reason: unknown): string {
   ) {
     raw = (reason as { message: string }).message;
   }
-  return raw.slice(0, RECONCILIATION_REASON_MAX_LENGTH).replace(SECRET_LIKE_RUN, '[redacted]');
+  return raw
+    .slice(0, RECONCILIATION_REASON_MAX_LENGTH)
+    .replace(URL_LIKE_RUN, '[redacted-url]')
+    .replace(UUID_LIKE_RUN, '[redacted-id]')
+    .replace(SECRET_LIKE_RUN, '[redacted]');
 }
 
 /**
@@ -884,13 +892,16 @@ export class StateReconciliationService {
       };
     } catch (err) {
       // Provider read failure or unexpected error → FAILED run. MetaAPI quota
-      // exhaustion is operational rather than state-corruption: record the
-      // failed run once, then cool down only the read-heavy reconciliation
-      // sweep for this connection. Stop-AI flattening and protective-order
-      // safety remain owned by the job and continue every cycle.
-      const metaApiQuotaLimited =
-        ['metatrader4', 'metatrader5'].includes(connection.brokerId) && isMetaApiQuotaError(err);
-      const cooldownUntil = metaApiQuotaLimited
+      // exhaustion and deployment-funding blocks are operational rather than
+      // state-corruption: record the failed run once, then cool down only the
+      // read-heavy reconciliation sweep for this connection. Stop-AI flattening
+      // and protective-order safety remain owned by the job and continue every cycle.
+      const metaApiConnection = ['metatrader4', 'metatrader5'].includes(connection.brokerId);
+      const metaApiQuotaLimited = metaApiConnection && isMetaApiQuotaError(err);
+      const metaApiDeploymentFundingBlocked =
+        metaApiConnection && isMetaApiDeploymentFundingError(err);
+      const metaApiProviderBackoff = metaApiQuotaLimited || metaApiDeploymentFundingBlocked;
+      const cooldownUntil = metaApiProviderBackoff
         ? Date.now() + METAAPI_PROVIDER_QUOTA_COOLDOWN_MS
         : null;
       if (cooldownUntil) {
@@ -906,7 +917,7 @@ export class StateReconciliationService {
           action: AuditAction.RECONCILIATION_RUN_FAILED,
           resourceType: 'BrokerConnection',
           resourceId: connection.id,
-          severity: metaApiQuotaLimited ? AuditSeverity.WARNING : AuditSeverity.CRITICAL,
+          severity: metaApiProviderBackoff ? AuditSeverity.WARNING : AuditSeverity.CRITICAL,
           metadata: {
             runId: run.id,
             brokerId: connection.brokerId,
@@ -919,7 +930,7 @@ export class StateReconciliationService {
         .catch(() => undefined);
       if (cooldownUntil) {
         this.logger.warn(
-          `Reconciliation run ${run.id} quota-limited; connection=${connection.id} ` +
+          `Reconciliation run ${run.id} provider-backoff; connection=${connection.id} ` +
             `full sweep cooling down until ${new Date(cooldownUntil).toISOString()}: ${message}`,
         );
       } else {

@@ -364,6 +364,37 @@ describe('StateReconciliationService', () => {
     );
   });
 
+  it('starts a MetaAPI reconciliation cooldown when account deployment is blocked pending provider top-up', async () => {
+    const metaConnection = {
+      ...connection(),
+      brokerId: 'metatrader5',
+      accountId: 'meta-account-1',
+    } as unknown as BrokerConnection;
+    adapter.connect.mockRejectedValueOnce(
+      new Error('To allow trading account deployment please top up your account.'),
+    );
+
+    const outcome = await service.runForConnection(metaConnection);
+    const cooldownUntil = service.getProviderQuotaCooldownUntil(metaConnection.id);
+
+    expect(outcome.status).toBe(ReconciliationRunStatus.FAILED);
+    expect(cooldownUntil).toBeInstanceOf(Date);
+    expect(cooldownUntil!.getTime()).toBeGreaterThan(Date.now());
+    expect(persistence.failRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.stringContaining('top up your account'),
+    );
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditAction.RECONCILIATION_RUN_FAILED,
+        severity: 'WARNING',
+        metadata: expect.objectContaining({
+          providerQuotaCooldownUntil: expect.any(String),
+        }),
+      }),
+    );
+  });
+
   describe('runForConnection — clean state', () => {
     it('completes with COMPLETED status and zero discrepancies', async () => {
       // Provider and internal agree: one position each.
