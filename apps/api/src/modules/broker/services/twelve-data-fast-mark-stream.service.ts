@@ -142,19 +142,19 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
 
     socket.addEventListener('open', () => {
       this.reconnectDelayMs = 5_000;
-      // Twelve Data Basic currently accepts only one forex WebSocket symbol.
-      // Request the selected exposure-aware symbol explicitly; sending all six
-      // lets the provider choose a different symbol (observed: EUR/USD), which
-      // defeats the fast-mark preference logic.
+      // Basic currently exposes eight trial WebSocket credits. The six PAPER
+      // FX pairs consume six credits, so request the complete real-time universe
+      // in one subscription event. Every accepted symbol bootstraps its own real
+      // M1 history; rejected symbols remain fail-closed and visible in readiness.
       socket.send(
         JSON.stringify({
           action: 'subscribe',
-          params: { symbols: this.preferredProviderSymbol },
+          params: { symbols: PROVIDER_SYMBOLS.join(',') },
         }),
       );
       this.startHeartbeat();
       this.logger.log(
-        `Twelve Data fast-mark WebSocket connected; primary=${this.preferredProviderSymbol} subscription requested`,
+        `Twelve Data fast-mark WebSocket connected; six-pair subscription requested symbols=${PROVIDER_SYMBOLS.join(',')}`,
       );
     });
     socket.addEventListener('message', (event) => void this.onMessage(event.data));
@@ -198,16 +198,10 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
       this.logger.log(
         `Twelve Data fast-mark subscription accepted=${success.join(',') || 'none'} fallback=${fails.join(',') || 'none'}`,
       );
-      if (
-        success.length === 0 &&
-        fails.includes(this.preferredProviderSymbol) &&
-        this.preferredProviderSymbol !== 'EUR/USD' &&
-        this.socket?.readyState === 1
-      ) {
+      if (fails.length > 0) {
         this.logger.warn(
-          `Fast-mark entitlement rejected ${this.preferredProviderSymbol}; falling back to EUR/USD`,
+          `Twelve Data fast-mark entitlement rejected symbols=${fails.join(',')}; rejected pairs remain fail-closed`,
         );
-        this.socket.send(JSON.stringify({ action: 'subscribe', params: { symbols: 'EUR/USD' } }));
       }
       for (const providerSymbol of success) {
         await this.ensureM1Bootstrap(providerSymbol);
@@ -385,7 +379,7 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
     }
   }
 
-  private async refreshPreferredSymbol(reconnectOnChange: boolean): Promise<void> {
+  private async refreshPreferredSymbol(_reconnectOnChange: boolean): Promise<void> {
     const connectionId = this.config.get<string>('vpsForexScanner.brokerConnectionId', '').trim();
     if (!connectionId) return;
     let state: Record<string, unknown> | null = null;
@@ -420,13 +414,8 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
     this.logger.log(
       `Fast-mark primary changed ${previous} -> ${preferred} based on open PAPER exposure`,
     );
-    if (reconnectOnChange && this.socket) {
-      try {
-        this.socket.close();
-      } catch {
-        // close/reconnect handler owns recovery
-      }
-    }
+    // All six pairs now remain subscribed concurrently, so changing the
+    // exposure preference must not recycle the socket or spend bootstrap credits.
   }
 
   private startHeartbeat(): void {
