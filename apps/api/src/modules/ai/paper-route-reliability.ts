@@ -363,3 +363,107 @@ export function evaluatePaperTrendRouteReliability(input: {
     reason: 'ROUTE_HEALTHY',
   };
 }
+
+export const PAPER_REALISED_CONTINUATION_ROUTE_RELIABILITY_ARTIFACT =
+  'paper-realised-continuation-route-reliability-v1';
+export const PAPER_REALISED_CONTINUATION_ROUTE_RELIABILITY_MIN_TRADES = 20;
+
+export interface PaperRealisedContinuationRouteEvidence {
+  closedTrades: number;
+  grossProfit: number;
+  grossLoss: number;
+  netPnl: number;
+}
+
+export type PaperRealisedContinuationRouteReliabilityState =
+  | 'COLLECTING'
+  | 'HEALTHY'
+  | 'RESEARCH_ONLY';
+
+export interface PaperRealisedContinuationRouteReliabilityDecision {
+  artifact: typeof PAPER_REALISED_CONTINUATION_ROUTE_RELIABILITY_ARTIFACT;
+  state: PaperRealisedContinuationRouteReliabilityState;
+  fullSizeEligible: boolean;
+  researchFallbackRequested: boolean;
+  closedTrades: number;
+  grossProfit: number;
+  grossLoss: number;
+  netPnl: number;
+  profitFactor: number | null;
+  reason:
+    | 'INSUFFICIENT_REALISED_ROUTE_EVIDENCE'
+    | 'REALISED_ROUTE_PROFIT_FACTOR_BELOW_ONE'
+    | 'REALISED_ROUTE_HEALTHY';
+}
+
+function finiteNonNegative(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+export function evaluatePaperRealisedContinuationRouteReliability(
+  input: PaperRealisedContinuationRouteEvidence,
+): PaperRealisedContinuationRouteReliabilityDecision {
+  const closedTrades = Number.isFinite(input.closedTrades)
+    ? Math.max(0, Math.trunc(input.closedTrades))
+    : 0;
+  const grossProfit = finiteNonNegative(input.grossProfit);
+  const grossLoss = finiteNonNegative(input.grossLoss);
+  const netPnl = Number.isFinite(input.netPnl) ? input.netPnl : grossProfit - grossLoss;
+  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : null;
+  const base = {
+    artifact: PAPER_REALISED_CONTINUATION_ROUTE_RELIABILITY_ARTIFACT,
+    closedTrades,
+    grossProfit,
+    grossLoss,
+    netPnl,
+    profitFactor,
+  } as const;
+
+  if (closedTrades < PAPER_REALISED_CONTINUATION_ROUTE_RELIABILITY_MIN_TRADES) {
+    return {
+      ...base,
+      state: 'COLLECTING',
+      fullSizeEligible: true,
+      researchFallbackRequested: false,
+      reason: 'INSUFFICIENT_REALISED_ROUTE_EVIDENCE',
+    };
+  }
+
+  if (profitFactor !== null && profitFactor < PAPER_TREND_ROUTE_RELIABILITY_MIN_PROFIT_FACTOR) {
+    return {
+      ...base,
+      state: 'RESEARCH_ONLY',
+      fullSizeEligible: false,
+      researchFallbackRequested: true,
+      reason: 'REALISED_ROUTE_PROFIT_FACTOR_BELOW_ONE',
+    };
+  }
+
+  return {
+    ...base,
+    state: 'HEALTHY',
+    fullSizeEligible: true,
+    researchFallbackRequested: false,
+    reason: 'REALISED_ROUTE_HEALTHY',
+  };
+}
+
+export interface PaperRealisedContinuationExecutionGateDecision {
+  fullSizeEligible: boolean;
+  routeDemoted: boolean;
+  matureHealthyPairSideOverride: boolean;
+}
+
+export function evaluatePaperRealisedContinuationExecutionGate(input: {
+  route: PaperRealisedContinuationRouteReliabilityDecision;
+  pairSide: PaperTrendPairSideReliabilityDecision;
+}): PaperRealisedContinuationExecutionGateDecision {
+  const matureHealthyPairSideOverride =
+    !input.route.fullSizeEligible && input.pairSide.state === 'HEALTHY';
+  const routeDemoted = !input.route.fullSizeEligible && !matureHealthyPairSideOverride;
+  return {
+    fullSizeEligible: !routeDemoted,
+    routeDemoted,
+    matureHealthyPairSideOverride,
+  };
+}

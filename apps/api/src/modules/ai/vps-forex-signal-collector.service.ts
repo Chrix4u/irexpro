@@ -88,10 +88,15 @@ import {
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import { isFxWeeklySessionOpen as isFxWeeklySessionOpenAt } from '../market-data/utils/fx-weekly-session';
 import {
+  PaperRealisedContinuationExecutionGateDecision,
+  PaperRealisedContinuationRouteEvidence,
+  PaperRealisedContinuationRouteReliabilityDecision,
   PaperReversalRouteReliabilityDecision,
   PaperTrendPairSideReliabilityDecision,
   PaperTrendPairSideReliabilityShadowDecision,
   PaperTrendRouteReliabilityDecision,
+  evaluatePaperRealisedContinuationExecutionGate,
+  evaluatePaperRealisedContinuationRouteReliability,
   evaluatePaperReliabilityExecutionGate,
   evaluatePaperReversalRouteReliability,
   evaluatePaperTrendPairSideReliability,
@@ -549,6 +554,8 @@ interface ExecutableCounterfactual {
     | null;
   paperTrendPairSideReliability: PaperTrendPairSideReliabilityDecision | null;
   paperTrendPairSideReliabilityShadow: PaperTrendPairSideReliabilityShadowDecision | null;
+  paperRealisedContinuationRouteReliability: PaperRealisedContinuationRouteReliabilityDecision | null;
+  paperRealisedContinuationExecutionGate: PaperRealisedContinuationExecutionGateDecision | null;
   paperOpportunityScout: PaperOpportunityScoutDecision;
   paperExecutionRoute: ReturnType<typeof selectPaperExecutionRoute>;
   paperResearchEpisodeKey: string;
@@ -946,6 +953,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private readonly championDirectionPriorCache = new Map<
     string,
     { expiresAt: number; snapshot: PaperChampionDirectionPriorDecision[] }
+  >();
+  private readonly realisedContinuationRouteReliabilityCache = new Map<
+    string,
+    { expiresAt: number; evidence: PaperRealisedContinuationRouteEvidence }
   >();
   private readonly shadowDirectionalOutcomeCache = new Map<
     string,
@@ -1975,73 +1986,29 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           let paperTrendPairSideReliability: PaperTrendPairSideReliabilityDecision | null = null;
           let paperTrendPairSideReliabilityShadow: PaperTrendPairSideReliabilityShadowDecision | null =
             null;
+          let paperRealisedContinuationRouteReliability: PaperRealisedContinuationRouteReliabilityDecision | null =
+            null;
+          let paperRealisedContinuationExecutionGate: PaperRealisedContinuationExecutionGateDecision | null =
+            null;
           let normalPaperExecution = normalPaperExecutionCandidate;
           if (
             normalPaperExecutionCandidate &&
             (planBEnsemble.strategyRoute === 'TREND_CONTINUATION' ||
               planBEnsemble.strategyRoute === 'CONFIRMED_REVERSAL')
           ) {
-            const routeEvidence =
-              planBEnsemble.strategyRoute === 'TREND_CONTINUATION'
-                ? await this.loadPaperTrendRouteReliabilityEvidence(userId, connectionId)
-                : await this.loadPaperReversalRouteReliabilityEvidence(userId, connectionId);
-            paperTrendRouteReliability =
-              planBEnsemble.strategyRoute === 'TREND_CONTINUATION'
-                ? evaluatePaperTrendRouteReliability({
-                    strategyRoute: planBEnsemble.strategyRoute,
-                    evidence: routeEvidence,
-                  })
-                : evaluatePaperReversalRouteReliability({
-                    strategyRoute: planBEnsemble.strategyRoute,
-                    evidence: routeEvidence,
-                  });
-            const pairSideEvidence = await this.loadPaperTrendPairSideReliabilityEvidence(
+            const reliabilityGate = await this.evaluatePaperNormalRouteReliabilityGate({
               userId,
               connectionId,
-              best.instrument,
-              best.direction,
-              planBEnsemble.strategyRoute,
-            );
-            paperTrendPairSideReliabilityShadow = evaluatePaperTrendPairSideReliabilityShadow({
+              instrument: best.instrument,
+              direction: best.direction,
               strategyRoute: planBEnsemble.strategyRoute,
-              evidence: pairSideEvidence,
             });
-            paperTrendPairSideReliability = evaluatePaperTrendPairSideReliability({
-              strategyRoute: planBEnsemble.strategyRoute,
-              evidence: pairSideEvidence,
-            });
-            this.logger.log(
-              `PAPER pair-side reliability shadow ${best.instrument} ${best.direction} ` +
-                `state=${paperTrendPairSideReliabilityShadow.state} ` +
-                `episodes=${paperTrendPairSideReliabilityShadow.episodes} ` +
-                `profitFactor=${paperTrendPairSideReliabilityShadow.profitFactor ?? 'n/a'} ` +
-                `maxDrawdown=${paperTrendPairSideReliabilityShadow.maxDrawdown ?? 'n/a'} ` +
-                `executionAuthority=${paperTrendPairSideReliabilityShadow.executionAuthority}`,
-            );
-            const reliabilityExecutionGate = evaluatePaperReliabilityExecutionGate({
-              strategyRoute: planBEnsemble.strategyRoute,
-              route: paperTrendRouteReliability,
-              pairSide: paperTrendPairSideReliability,
-            });
-            if (!paperTrendRouteReliability.fullSizeEligible) {
-              this.logger.warn(
-                `PAPER trend-route reliability ${best.instrument} ${best.direction} execution=DIAGNOSTIC_ONLY ` +
-                  `state=${paperTrendRouteReliability.state} reason=${paperTrendRouteReliability.reason} ` +
-                  `episodes=${paperTrendRouteReliability.episodes} ` +
-                  `profitFactor=${paperTrendRouteReliability.profitFactor ?? 'n/a'} ` +
-                  `maxDrawdown=${paperTrendRouteReliability.maxDrawdown ?? 'n/a'}`,
-              );
-            }
-            if (!reliabilityExecutionGate.fullSizeEligible) {
-              normalPaperExecution = false;
-              this.logger.warn(
-                `PAPER pair-side reliability ${best.instrument} ${best.direction} fullSize=DEMOTED ` +
-                  `state=${paperTrendPairSideReliability.state} reason=${paperTrendPairSideReliability.reason} ` +
-                  `episodes=${paperTrendPairSideReliability.episodes} ` +
-                  `profitFactor=${paperTrendPairSideReliability.profitFactor ?? 'n/a'} ` +
-                  `maxDrawdown=${paperTrendPairSideReliability.maxDrawdown ?? 'n/a'}`,
-              );
-            }
+            paperTrendRouteReliability = reliabilityGate.route;
+            paperTrendPairSideReliability = reliabilityGate.pairSide;
+            paperTrendPairSideReliabilityShadow = reliabilityGate.pairSideShadow;
+            paperRealisedContinuationRouteReliability = reliabilityGate.realisedContinuationRoute;
+            paperRealisedContinuationExecutionGate = reliabilityGate.realisedExecutionGate;
+            if (!reliabilityGate.fullSizeEligible) normalPaperExecution = false;
           }
           const pairSideReliabilityDemoted = normalPaperExecutionCandidate && !normalPaperExecution;
           const canaryEvaluationState = rejectedEdgeCanaryEvaluationState({
@@ -2598,6 +2565,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperTrendRouteReliability,
             paperTrendPairSideReliability,
             paperTrendPairSideReliabilityShadow,
+            paperRealisedContinuationRouteReliability,
+            paperRealisedContinuationExecutionGate,
             paperOpportunityScout,
             paperExecutionRoute,
             paperResearchEpisodeKey,
@@ -2801,6 +2770,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperTrendRouteReliability,
           paperTrendPairSideReliability,
           paperTrendPairSideReliabilityShadow,
+          paperRealisedContinuationRouteReliability,
+          paperRealisedContinuationExecutionGate,
           paperOpportunityScout,
           paperExecutionRoute,
           paperResearchEpisodeKey,
@@ -3145,6 +3116,26 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               paperTrendPairSideReliabilityShadow?.modifiesExecution ?? false,
             paper_trend_pair_side_reliability_shadow_execution_authority:
               paperTrendPairSideReliabilityShadow?.executionAuthority ?? 'NONE',
+            paper_realised_continuation_route_reliability_artifact:
+              paperRealisedContinuationRouteReliability?.artifact ?? null,
+            paper_realised_continuation_route_reliability_state:
+              paperRealisedContinuationRouteReliability?.state ?? null,
+            paper_realised_continuation_route_reliability_reason:
+              paperRealisedContinuationRouteReliability?.reason ?? null,
+            paper_realised_continuation_route_reliability_closed_trades:
+              paperRealisedContinuationRouteReliability?.closedTrades ?? null,
+            paper_realised_continuation_route_reliability_profit_factor:
+              paperRealisedContinuationRouteReliability?.profitFactor ?? null,
+            paper_realised_continuation_route_reliability_net_pnl:
+              paperRealisedContinuationRouteReliability?.netPnl ?? null,
+            paper_realised_continuation_route_reliability_demoted:
+              paperRealisedContinuationExecutionGate?.routeDemoted ?? false,
+            paper_realised_continuation_route_reliability_pair_side_override:
+              paperRealisedContinuationExecutionGate?.matureHealthyPairSideOverride ?? false,
+            paper_realised_continuation_route_reliability_modifies_execution:
+              paperRealisedContinuationRouteReliability != null,
+            paper_realised_continuation_route_reliability_execution_authority:
+              paperRealisedContinuationRouteReliability == null ? 'NONE' : 'PAPER_ONLY',
             main_strategy_qualification_evidence: paperExecutionRoute === 'NORMAL_PAPER',
             source_reference:
               this.lastMarketDataAuthority === 'METAAPI_BROKER_FALLBACK'
@@ -4361,6 +4352,215 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
     if (resolvedCount > 0) {
       this.logger.log(`Multi-model shadow outcomes resolved count=${resolvedCount}`);
+    }
+  }
+
+  private async evaluatePaperNormalRouteReliabilityGate(input: {
+    userId: string;
+    connectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    strategyRoute: PlanBEnsembleScore['strategyRoute'];
+  }): Promise<{
+    fullSizeEligible: boolean;
+    route: PaperTrendRouteReliabilityDecision | PaperReversalRouteReliabilityDecision | null;
+    pairSide: PaperTrendPairSideReliabilityDecision | null;
+    pairSideShadow: PaperTrendPairSideReliabilityShadowDecision | null;
+    realisedContinuationRoute: PaperRealisedContinuationRouteReliabilityDecision | null;
+    realisedExecutionGate: PaperRealisedContinuationExecutionGateDecision | null;
+  }> {
+    if (
+      input.strategyRoute !== 'TREND_CONTINUATION' &&
+      input.strategyRoute !== 'CONFIRMED_REVERSAL'
+    ) {
+      return {
+        fullSizeEligible: true,
+        route: null,
+        pairSide: null,
+        pairSideShadow: null,
+        realisedContinuationRoute: null,
+        realisedExecutionGate: null,
+      };
+    }
+
+    const routeEvidence =
+      input.strategyRoute === 'TREND_CONTINUATION'
+        ? await this.loadPaperTrendRouteReliabilityEvidence(input.userId, input.connectionId)
+        : await this.loadPaperReversalRouteReliabilityEvidence(input.userId, input.connectionId);
+    const route =
+      input.strategyRoute === 'TREND_CONTINUATION'
+        ? evaluatePaperTrendRouteReliability({
+            strategyRoute: input.strategyRoute,
+            evidence: routeEvidence,
+          })
+        : evaluatePaperReversalRouteReliability({
+            strategyRoute: input.strategyRoute,
+            evidence: routeEvidence,
+          });
+    const pairSideEvidence = await this.loadPaperTrendPairSideReliabilityEvidence(
+      input.userId,
+      input.connectionId,
+      input.instrument,
+      input.direction,
+      input.strategyRoute,
+    );
+    const pairSideShadow = evaluatePaperTrendPairSideReliabilityShadow({
+      strategyRoute: input.strategyRoute,
+      evidence: pairSideEvidence,
+    });
+    const pairSide = evaluatePaperTrendPairSideReliability({
+      strategyRoute: input.strategyRoute,
+      evidence: pairSideEvidence,
+    });
+    this.logger.log(
+      `PAPER pair-side reliability shadow ${input.instrument} ${input.direction} ` +
+        `state=${pairSideShadow.state} episodes=${pairSideShadow.episodes} ` +
+        `profitFactor=${pairSideShadow.profitFactor ?? 'n/a'} ` +
+        `maxDrawdown=${pairSideShadow.maxDrawdown ?? 'n/a'} ` +
+        `executionAuthority=${pairSideShadow.executionAuthority}`,
+    );
+
+    const existingExecutionGate = evaluatePaperReliabilityExecutionGate({
+      strategyRoute: input.strategyRoute,
+      route,
+      pairSide,
+    });
+    if (!route.fullSizeEligible) {
+      this.logger.warn(
+        `PAPER trend-route reliability ${input.instrument} ${input.direction} execution=DIAGNOSTIC_ONLY ` +
+          `state=${route.state} reason=${route.reason} episodes=${route.episodes} ` +
+          `profitFactor=${route.profitFactor ?? 'n/a'} maxDrawdown=${route.maxDrawdown ?? 'n/a'}`,
+      );
+    }
+    if (!existingExecutionGate.fullSizeEligible) {
+      this.logger.warn(
+        `PAPER pair-side reliability ${input.instrument} ${input.direction} fullSize=DEMOTED ` +
+          `state=${pairSide.state} reason=${pairSide.reason} episodes=${pairSide.episodes} ` +
+          `profitFactor=${pairSide.profitFactor ?? 'n/a'} maxDrawdown=${pairSide.maxDrawdown ?? 'n/a'}`,
+      );
+    }
+
+    let realisedContinuationRoute: PaperRealisedContinuationRouteReliabilityDecision | null = null;
+    let realisedExecutionGate: PaperRealisedContinuationExecutionGateDecision | null = null;
+    if (input.strategyRoute === 'TREND_CONTINUATION') {
+      const realisedEvidence = await this.loadPaperRealisedContinuationRouteEvidence(
+        input.userId,
+        input.connectionId,
+      );
+      realisedContinuationRoute =
+        evaluatePaperRealisedContinuationRouteReliability(realisedEvidence);
+      realisedExecutionGate = evaluatePaperRealisedContinuationExecutionGate({
+        route: realisedContinuationRoute,
+        pairSide,
+      });
+      this.logger.log(
+        `PAPER realised continuation reliability ${input.instrument} ${input.direction} ` +
+          `state=${realisedContinuationRoute.state} reason=${realisedContinuationRoute.reason} ` +
+          `closedTrades=${realisedContinuationRoute.closedTrades} ` +
+          `profitFactor=${realisedContinuationRoute.profitFactor ?? 'n/a'} ` +
+          `netPnl=${realisedContinuationRoute.netPnl.toFixed(2)} ` +
+          `fullSize=${realisedExecutionGate.fullSizeEligible ? 'ELIGIBLE' : 'DEMOTED'} ` +
+          `pairSideOverride=${realisedExecutionGate.matureHealthyPairSideOverride}`,
+      );
+    }
+
+    return {
+      fullSizeEligible:
+        existingExecutionGate.fullSizeEligible && (realisedExecutionGate?.fullSizeEligible ?? true),
+      route,
+      pairSide,
+      pairSideShadow,
+      realisedContinuationRoute,
+      realisedExecutionGate,
+    };
+  }
+
+  private async loadPaperRealisedContinuationRouteEvidence(
+    userId: string,
+    connectionId: string,
+  ): Promise<PaperRealisedContinuationRouteEvidence> {
+    const empty: PaperRealisedContinuationRouteEvidence = {
+      closedTrades: 0,
+      grossProfit: 0,
+      grossLoss: 0,
+      netPnl: 0,
+    };
+    if (!this.dataSource) return empty;
+
+    const cacheKey = [
+      userId,
+      connectionId,
+      PAPER_CHAMPION_MODEL_VERSION,
+      ...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
+    ].join(':');
+    const cached = this.realisedContinuationRouteReliabilityCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.evidence;
+
+    try {
+      const rows = (await this.dataSource.query(
+        `
+          SELECT
+            COUNT(*)::int AS trades,
+            COALESCE(SUM(CASE WHEN t.realised_pnl > 0 THEN t.realised_pnl ELSE 0 END), 0)::text AS gross_profit,
+            COALESCE(ABS(SUM(CASE WHEN t.realised_pnl < 0 THEN t.realised_pnl ELSE 0 END)), 0)::text AS gross_loss,
+            COALESCE(SUM(t.realised_pnl), 0)::text AS net_pnl
+          FROM trading.trades t
+          INNER JOIN trading.trade_intents ti
+            ON ti.id = t.trade_intent_id
+            AND ti.user_id = $1
+            AND ti.broker_connection_id = $2
+          INNER JOIN broker.broker_connections bc
+            ON bc.id = t.broker_connection_id
+            AND bc.user_id = $1
+            AND bc.id = $2
+            AND bc.broker_id = 'paper-broker'
+            AND bc.deleted_at IS NULL
+          WHERE t.user_id = $1
+            AND t.broker_connection_id = $2
+            AND t.status = 'CLOSED'
+            AND t.realised_pnl IS NOT NULL
+            AND ti.status = 'EXECUTED'
+            AND ti.timeframe = 'M5'
+            AND ti.model_version = $3
+            AND ti.metadata->>'signal_source' = 'EXTERNAL_PROVIDER'
+            AND ti.metadata->>'external_provider_code' = $4
+            AND ti.metadata->>'plan_b_ensemble_strategy_route' = 'TREND_CONTINUATION'
+            AND ti.metadata->>'decision_policy_version' = ANY($5::text[])
+        `,
+        [
+          userId,
+          connectionId,
+          PAPER_CHAMPION_MODEL_VERSION,
+          ACTIVE_ENGINE_CODE,
+          [...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
+        ],
+      )) as Array<{
+        trades: number | string | null;
+        gross_profit: number | string | null;
+        gross_loss: number | string | null;
+        net_pnl: number | string | null;
+      }>;
+      const row = rows[0];
+      const evidence: PaperRealisedContinuationRouteEvidence = {
+        closedTrades: Number(row?.trades ?? 0),
+        grossProfit: Number(row?.gross_profit ?? 0),
+        grossLoss: Number(row?.gross_loss ?? 0),
+        netPnl: Number(row?.net_pnl ?? 0),
+      };
+      this.realisedContinuationRouteReliabilityCache.set(cacheKey, {
+        expiresAt: Date.now() + PAPER_RELIABILITY_STATUS_CACHE_TTL_MS,
+        evidence,
+      });
+      return evidence;
+    } catch (error) {
+      this.logger.warn(
+        `PAPER realised continuation route evidence unavailable: ${(error as Error).message}`,
+      );
+      this.realisedContinuationRouteReliabilityCache.set(cacheKey, {
+        expiresAt: Date.now() + PAPER_RELIABILITY_STATUS_CACHE_TTL_MS,
+        evidence: empty,
+      });
+      return empty;
     }
   }
 
