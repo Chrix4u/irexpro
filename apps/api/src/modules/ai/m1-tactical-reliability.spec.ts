@@ -17,6 +17,7 @@ function row(
     direction: 'BUY',
     policyVersion: 'm1-tactical-v1',
     realisedPnl,
+    riskAtStop: 1,
     closedAt: new Date(NOW.getTime() - 60_000),
     ...changes,
   };
@@ -123,7 +124,7 @@ describe('evaluateM1RoutePairSideReliability', () => {
     expect(evaluate([...olderWins, ...recent]).recentPayoffAverageR).toBeCloseTo(-0.1, 10);
   });
 
-  it('does not substitute older risk-normalized trades when the latest five contain missing stop-risk evidence', () => {
+  it('fails closed once mature executed evidence is missing stop-risk payoff geometry', () => {
     const recent = [
       row(-0.4, { riskAtStop: null, closedAt: new Date(NOW.getTime() - 60_000) }),
       row(0.05, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - 2 * 60_000) }),
@@ -137,7 +138,12 @@ describe('evaluateM1RoutePairSideReliability', () => {
     const result = evaluate([...olderWins, ...recent]);
     expect(result.recentPayoffRSamples).toBe(4);
     expect(result.recentPayoffAverageR).toBeNull();
-    expect(result.reason).not.toBe('RECENT_NEGATIVE_PAYOFF');
+    expect(result).toMatchObject({
+      eligible: false,
+      reason: 'PAYOFF_EVIDENCE_INCOMPLETE',
+      samples: 10,
+      realizedRSamples: 9,
+    });
   });
 
   it('uses actual risk-normalized payoff so small protected wins cannot mask full-stop losses', () => {
@@ -160,13 +166,16 @@ describe('evaluateM1RoutePairSideReliability', () => {
   it.each([
     [[1, 1, 1, 1, -1], true, 'POSITIVE_EXPECTANCY'],
     [[1, -1, -1, -1, -1], false, 'NEGATIVE_EXPECTANCY'],
-  ] as const)('uses smoothed expectancy once five samples exist: %j', (pnls, eligible, reason) => {
-    const result = evaluate(pnls.map((pnl) => row(pnl)));
-    expect(result.samples).toBe(5);
-    expect(result.eligible).toBe(eligible);
-    expect(result.reason).toBe(reason);
-    expect(Number.isFinite(result.smoothedExpectedR)).toBe(true);
-  });
+  ] as const)(
+    'uses payoff-aware expectancy once five samples exist: %j',
+    (pnls, eligible, reason) => {
+      const result = evaluate(pnls.map((pnl) => row(pnl)));
+      expect(result.samples).toBe(5);
+      expect(result.eligible).toBe(eligible);
+      expect(result.reason).toBe(reason);
+      expect(Number.isFinite(result.smoothedExpectedR)).toBe(true);
+    },
+  );
 
   it('carries only the missing compatible predecessor samples across an explicit policy successor', () => {
     const evidence = [

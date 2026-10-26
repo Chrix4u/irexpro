@@ -1,4 +1,7 @@
-import { evaluatePaperChampionDirectionPrior } from './paper-champion-direction-prior';
+import {
+  applyPaperChampionDirectionRiskCap,
+  evaluatePaperChampionDirectionPrior,
+} from './paper-champion-direction-prior';
 
 describe('PAPER champion directional prior', () => {
   const base = {
@@ -56,5 +59,80 @@ describe('PAPER champion directional prior', () => {
         evidence: { trades: 8, grossProfit: 16, grossLoss: 0, netPnl: 16 },
       }),
     ).toMatchObject({ supported: true, profitFactor: null });
+  });
+});
+
+describe('PAPER champion direction risk cap', () => {
+  const weak = evaluatePaperChampionDirectionPrior({
+    instrument: 'USDCAD',
+    direction: 'BUY',
+    evidence: { trades: 14, grossProfit: 17.9, grossLoss: 27.92, netPnl: -10.02 },
+  });
+  const healthy = evaluatePaperChampionDirectionPrior({
+    instrument: 'USDJPY',
+    direction: 'BUY',
+    evidence: { trades: 11, grossProfit: 67.85, grossLoss: 25.93, netPnl: 41.92 },
+  });
+
+  it('caps only a mature weak NORMAL_PAPER direction at 0.50x', () => {
+    expect(
+      applyPaperChampionDirectionRiskCap({
+        executionRoute: 'NORMAL_PAPER',
+        rawMultiplier: 1,
+        prior: weak,
+      }),
+    ).toMatchObject({
+      active: true,
+      reason: 'MATURE_CHAMPION_DIRECTION_WEAK',
+      multiplierCap: 0.5,
+      rawMultiplier: 1,
+      effectiveMultiplier: 0.5,
+    });
+  });
+
+  it('does not penalize a supported champion direction', () => {
+    expect(
+      applyPaperChampionDirectionRiskCap({
+        executionRoute: 'NORMAL_PAPER',
+        rawMultiplier: 1.25,
+        prior: healthy,
+      }),
+    ).toMatchObject({
+      active: false,
+      reason: 'CHAMPION_DIRECTION_SUPPORTED',
+      effectiveMultiplier: 1.25,
+    });
+  });
+
+  it('does not cap sparse evidence or research routes', () => {
+    const sparse = evaluatePaperChampionDirectionPrior({
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      evidence: { trades: 2, grossProfit: 26.3, grossLoss: 0, netPnl: 26.3 },
+    });
+    expect(
+      applyPaperChampionDirectionRiskCap({
+        executionRoute: 'NORMAL_PAPER',
+        rawMultiplier: 1,
+        prior: sparse,
+      }),
+    ).toMatchObject({ active: false, reason: 'CHAMPION_DIRECTION_NOT_MATURE' });
+    expect(
+      applyPaperChampionDirectionRiskCap({
+        executionRoute: 'PAPER_RESEARCH_THROUGHPUT',
+        rawMultiplier: 1,
+        prior: weak,
+      }),
+    ).toMatchObject({ active: false, reason: 'NON_NORMAL_PAPER_ROUTE' });
+  });
+
+  it('never increases an already defensive raw multiplier', () => {
+    expect(
+      applyPaperChampionDirectionRiskCap({
+        executionRoute: 'NORMAL_PAPER',
+        rawMultiplier: 0.5,
+        prior: weak,
+      }),
+    ).toMatchObject({ active: true, effectiveMultiplier: 0.5 });
   });
 });

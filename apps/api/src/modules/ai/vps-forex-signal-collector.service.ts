@@ -156,6 +156,7 @@ import {
 } from './paper-shadow-local-edge-pocket';
 import {
   PaperChampionDirectionPriorDecision,
+  applyPaperChampionDirectionRiskCap,
   evaluatePaperChampionDirectionPrior,
 } from './paper-champion-direction-prior';
 import { AllocationService } from '../execution/services/allocation.service';
@@ -204,17 +205,14 @@ const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 
 export function paperOpportunityScoutModelVersion(engineCode: string): string {
-  return `external-provider/${engineCode}/paper-opportunity-scout-v9-provisional-local-edge-0.10-tier`;
+  return `external-provider/${engineCode}/paper-opportunity-scout-v10-local-edge-shadow-quarantine-0.10-tier`;
 }
 
 export function isPaperLocalShadowEdgeScoutReason(
   reason: PaperOpportunityScoutDecision['reason'] | null | undefined,
 ): boolean {
-  return (
-    reason === 'LOCAL_SHADOW_EDGE_SCOUT' ||
-    reason === 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT' ||
-    reason === 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT'
-  );
+  void reason;
+  return false;
 }
 
 export function canHighConvictionLocalScoutOverrideRealisedRoute(input: {
@@ -228,25 +226,8 @@ export function canHighConvictionLocalScoutOverrideRealisedRoute(input: {
   pairSideEligible: boolean;
   realisedRouteEligible: boolean | null;
 }): boolean {
-  const matureLocalOverride =
-    input.localPocketHighConviction &&
-    (input.scoutReason === 'LOCAL_SHADOW_EDGE_SCOUT' ||
-      input.scoutReason === 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT');
-  const provisionalLocalOverride =
-    input.localPocketProvisional === true &&
-    input.scoutReason === 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT';
-  return (
-    !input.fullSizePaperExecutionCandidate &&
-    input.scoutEligible &&
-    isPaperLocalShadowEdgeScoutReason(input.scoutReason) &&
-    Number.isFinite(input.scoutLotUpperBound) &&
-    Number(input.scoutLotUpperBound) > 0 &&
-    Number(input.scoutLotUpperBound) <= 0.1 &&
-    (matureLocalOverride || provisionalLocalOverride) &&
-    input.structuralRouteEligible &&
-    input.pairSideEligible &&
-    input.realisedRouteEligible === false
-  );
+  void input;
+  return false;
 }
 const PAPER_CHAMPION_MODEL_VERSION =
   'external-provider/irexpro-multimodel-ensemble-v1/paper-only-v1';
@@ -683,9 +664,7 @@ export function executableNetExpectedR(
 ): number {
   if (
     isPaperLocalShadowEdgeScoutReason(option.paperOpportunityScout?.reason) &&
-    option.paperShadowLocalEdgePocket &&
-    (option.paperShadowLocalEdgePocket.supported ||
-      option.paperOpportunityScout?.reason === 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT') &&
+    option.paperShadowLocalEdgePocket?.supported === true &&
     Number.isFinite(option.paperShadowLocalEdgePocket.averageNetR)
   ) {
     return option.paperShadowLocalEdgePocket.averageNetR;
@@ -3010,6 +2989,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperCostAwareEvidence,
           paperCalibratedCostRescue,
         } = chosen;
+        const selectedChampionDirectionPrior =
+          paperChampionDirectionPriorSnapshot.find(
+            (prior) => prior.instrument === best.instrument && prior.direction === best.direction,
+          ) ?? null;
+        const championDirectionRiskCap = applyPaperChampionDirectionRiskCap({
+          executionRoute: paperExecutionRoute,
+          rawMultiplier: adaptiveWinner.riskMultiplier.multiplier,
+          prior: selectedChampionDirectionPrior,
+        });
+        const effectiveAdaptiveRiskMultiplier = championDirectionRiskCap.effectiveMultiplier;
 
         this.lastPublishedOpportunity.set(best.instrument, {
           direction: best.direction,
@@ -3235,7 +3224,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               adaptiveWinner.shadowDirectionalPulse.advantageR,
             paper_opportunity_scout_shadow_pulse_quality:
               adaptiveWinner.shadowDirectionalPulse.quality,
-            adaptive_risk_multiplier: adaptiveWinner.riskMultiplier.multiplier,
+            adaptive_risk_multiplier: effectiveAdaptiveRiskMultiplier,
+            adaptive_risk_multiplier_raw: adaptiveWinner.riskMultiplier.multiplier,
+            paper_champion_direction_risk_cap_artifact: championDirectionRiskCap.artifact,
+            paper_champion_direction_risk_cap_active: championDirectionRiskCap.active,
+            paper_champion_direction_risk_cap_reason: championDirectionRiskCap.reason,
+            paper_champion_direction_risk_cap_multiplier: championDirectionRiskCap.multiplierCap,
+            paper_champion_direction_risk_cap_prior_reason: championDirectionRiskCap.priorReason,
+            paper_champion_direction_risk_cap_trades: championDirectionRiskCap.trades,
+            paper_champion_direction_risk_cap_profit_factor: championDirectionRiskCap.profitFactor,
+            paper_champion_direction_risk_cap_net_pnl: championDirectionRiskCap.netPnl,
             adaptive_market_state: adaptiveWinner.marketState.state,
             adaptive_opportunity_score: adaptiveWinner.adaptiveScore,
             adaptive_scan_rank: adaptiveWinner.adaptiveScanRank ?? null,
@@ -3532,7 +3530,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         this.logger.log(
           `Multi-model PAPER candidate ${best.instrument} ${best.direction} confidence=${best.confidence.toFixed(4)} ` +
             `adaptiveRank=${adaptiveWinner.adaptiveScanRank ?? 'n/a'} adaptiveScore=${adaptiveWinner.adaptiveScore.toFixed(4)} ` +
-            `riskMultiplier=${adaptiveWinner.riskMultiplier.multiplier.toFixed(2)}x ` +
+            `riskMultiplier=${effectiveAdaptiveRiskMultiplier.toFixed(2)}x ` +
+            `rawRiskMultiplier=${adaptiveWinner.riskMultiplier.multiplier.toFixed(2)}x ` +
+            `championSideRisk=${championDirectionRiskCap.reason} ` +
             `lotTier=${dynamicLotSizing.tier} lotCap=${dynamicLotSizing.upperBound.toFixed(2)} ` +
             `outcome=${outcome.outcome} signal=${signalId} cadence=adaptive-scan-ranked`,
         );

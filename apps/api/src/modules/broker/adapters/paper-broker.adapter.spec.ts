@@ -221,6 +221,53 @@ describe('PAPER profit-lock policy', () => {
     ).toMatchObject({ armed: false, shouldClose: false });
   });
 
+  it('adds a narrow M1-only rescue band at 0.40R without loosening the default 0.50R arm floor', () => {
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '4.50',
+        currentPnl: '-1.00',
+        initialRiskPnl: '10.00',
+      }),
+    ).toMatchObject({ armed: false, shouldClose: false });
+
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '3.99',
+        currentPnl: '-1.00',
+        initialRiskPnl: '10.00',
+        isM1Strategy: true,
+      }),
+    ).toMatchObject({ armed: false, shouldClose: false });
+
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '4.00',
+        currentPnl: '1.59',
+        initialRiskPnl: '10.00',
+        isM1Strategy: true,
+      }),
+    ).toMatchObject({
+      armed: true,
+      shouldClose: true,
+      retentionFraction: '0.40',
+      protectedFloorPnl: '1.60',
+    });
+
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '5.00',
+        currentPnl: '3.49',
+        initialRiskPnl: '10.00',
+        isM1Strategy: true,
+      }),
+    ).toMatchObject({
+      armed: true,
+      shouldClose: true,
+      retentionFraction: '0.70',
+      protectedFloorPnl: '3.50',
+    });
+  });
+
   it('protects progressively more of the peak only after meaningful R milestones', () => {
     expect(
       evaluatePaperProfitLock({
@@ -1423,6 +1470,46 @@ describe('PaperBrokerAdapter', () => {
       latestUnrealisedPnl: '1.00',
       profitGiveback: '8.00',
     });
+  });
+
+  it('turns an M1 0.40R excursion into protected profit instead of allowing a red give-back', async () => {
+    const previous = process.env.PAPER_PROFIT_LOCK_ENABLED;
+    process.env.PAPER_PROFIT_LOCK_ENABLED = 'true';
+    try {
+      const sim = scriptedAdapter([
+        BASE,
+        { bid: '1.10050', ask: '1.10060' },
+        { bid: '1.10020', ask: '1.10030' },
+      ]);
+      await sim.placeOrder(
+        order({
+          idempotencyKey: 'm1-rescue-profit-lock',
+          stopLoss: '1.09910',
+          takeProfit: '1.11000',
+          strategyTimeframe: 'M1',
+        }),
+      );
+
+      await sim.getCurrentPrice('EURUSD');
+      expect(await sim.getOpenPositions()).toHaveLength(1);
+
+      await sim.getCurrentPrice('EURUSD');
+      expect(await sim.getOpenPositions()).toHaveLength(0);
+
+      const [closed] = await sim.getClosedTrades(new Date(0), new Date(CLOCK_BASE_MS + 60_000));
+      expect(closed).toMatchObject({
+        closePrice: '1.10026',
+        closeReason: 'PROFIT_LOCK',
+        realisedPnl: '1.60',
+      });
+      expect(closed.pathDiagnostics).toMatchObject({
+        maxFavorablePnl: '4.00',
+        profitGiveback: '2.40',
+      });
+    } finally {
+      if (previous === undefined) delete process.env.PAPER_PROFIT_LOCK_ENABLED;
+      else process.env.PAPER_PROFIT_LOCK_ENABLED = previous;
+    }
   });
 
   it('actively locks PAPER profit after an armed peak gives back beyond its R-tier floor', async () => {

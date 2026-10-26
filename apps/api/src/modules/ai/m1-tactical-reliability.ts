@@ -43,6 +43,7 @@ export type M1RoutePairSideReliabilityReason =
   | 'POSITIVE_EXPECTANCY'
   | 'NEGATIVE_EXPECTANCY'
   | 'RECENT_NEGATIVE_PAYOFF'
+  | 'PAYOFF_EVIDENCE_INCOMPLETE'
   | 'EARLY_LOSS_STREAK'
   | 'INVALID_EVIDENCE';
 
@@ -226,8 +227,32 @@ export function evaluateM1RoutePairSideReliability(
     };
   }
 
-  const payoffAware = realizedRSamples >= M1_RELIABILITY_MIN_SAMPLES;
-  const fullWindowEligible = payoffAware ? (averageRealizedR ?? 0) > 0 : smoothedExpectedR > 0;
+  // Once the sleeve has enough executed evidence to govern admission, every
+  // selected trade must also have provable initial-risk geometry. Falling back
+  // to win-count expectancy here lets tiny protected wins mask full-stop losses.
+  // Cold-start sleeves may still learn below the normal sample floor, but mature
+  // execution is fail-closed until payoff evidence is complete.
+  if (realizedRSamples !== samples) {
+    return {
+      eligible: false,
+      samples,
+      currentPolicySamples: current.length,
+      carriedSamples,
+      wins,
+      losses,
+      smoothedWinRate,
+      smoothedExpectedR,
+      realizedRSamples,
+      averageRealizedR,
+      recentRealizedR,
+      recentPayoffRSamples,
+      recentPayoffAverageR,
+      reason: 'PAYOFF_EVIDENCE_INCOMPLETE',
+      consideredPolicyVersions: [...consideredPolicyVersions],
+    };
+  }
+
+  const fullWindowEligible = (averageRealizedR ?? 0) > 0;
   if (!fullWindowEligible) {
     return {
       eligible: false,

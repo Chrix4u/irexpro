@@ -662,17 +662,19 @@ export interface PaperProfitLockDecision {
 /**
  * PAPER-only dynamic profit lock expressed in initial-risk (R) terms.
  *
- * The lock arms only after a meaningful favorable excursion (0.50R). Once
- * armed it protects a progressively larger share of the best executable P&L:
- *   0.50R–<0.75R peak -> retain 70%
- *   0.75R–<1.00R peak -> retain 75%
- *   1.00R–<1.50R peak -> retain 80%
- *   1.50R–<2.00R peak -> retain 85%
- *   >=2.00R peak       -> retain 90%
+ * The standard lock arms only after a meaningful favorable excursion (0.50R).
+ * M1 gets one deliberately loose rescue band below that standard threshold:
+ *   M1 0.40R–<0.50R peak -> retain 40%
+ *   0.50R–<0.75R peak    -> retain 70%
+ *   0.75R–<1.00R peak    -> retain 75%
+ *   1.00R–<1.50R peak    -> retain 80%
+ *   1.50R–<2.00R peak    -> retain 85%
+ *   >=2.00R peak          -> retain 90%
  *
- * This deliberately stops near-1R winners from giving back most of their
- * excursion. Once +0.50R is proven, no armed tier is allowed to surrender
- * more than 30% of the best executable P&L observed so far.
+ * The M1 rescue band is intentionally much looser than the standard lock: it
+ * only prevents a trade that already proved ~0.40R from turning into a full
+ * loss. It does not restore the old 0.30R arm floor that harvested too many
+ * tiny wins. Once +0.50R is proven, the existing stronger tiers are unchanged.
  *
  * Invalid/unprovable risk fails closed: no automatic profit-lock exit.
  */
@@ -680,6 +682,7 @@ export function evaluatePaperProfitLock(input: {
   maxFavorablePnl: string;
   currentPnl: string;
   initialRiskPnl: string;
+  isM1Strategy?: boolean;
 }): PaperProfitLockDecision {
   const disabled: PaperProfitLockDecision = {
     armed: false,
@@ -691,17 +694,25 @@ export function evaluatePaperProfitLock(input: {
     if (compareDecimalStrings(input.initialRiskPnl, '0') <= 0) return disabled;
     if (compareDecimalStrings(input.maxFavorablePnl, '0') <= 0) return disabled;
 
-    // Let small favorable excursions breathe. Today's forward PAPER evidence
-    // showed that arming at 0.30R repeatedly harvested tiny wins while full SL
-    // losses remained ~1R. Arm only once the trade has demonstrated at least
-    // +0.50R, then tighten progressively as MFE becomes genuinely material.
-    const armFloor = multiplyDecimalStrings(input.initialRiskPnl, '0.50');
-    if (compareDecimalStrings(input.maxFavorablePnl, armFloor) < 0) return disabled;
-
-    const peak = input.maxFavorablePnl;
+    // Let small favorable excursions breathe. Forward PAPER evidence showed
+    // that arming at 0.30R repeatedly harvested tiny wins while full SL losses
+    // remained ~1R. The default floor therefore stays at +0.50R. M1 alone gets
+    // a loose +0.40R rescue band after the latest R-normalized audit showed
+    // repeated 0.40R–0.50R excursions subsequently closing red.
     const risk = input.initialRiskPnl;
-    const retentionFraction =
-      compareDecimalStrings(peak, multiplyDecimalStrings(risk, '0.75')) < 0
+    const peak = input.maxFavorablePnl;
+    const standardArmFloor = multiplyDecimalStrings(risk, '0.50');
+    const m1RescueArmFloor = multiplyDecimalStrings(risk, '0.40');
+    const standardArmed = compareDecimalStrings(peak, standardArmFloor) >= 0;
+    const m1RescueArmed =
+      input.isM1Strategy === true &&
+      !standardArmed &&
+      compareDecimalStrings(peak, m1RescueArmFloor) >= 0;
+    if (!standardArmed && !m1RescueArmed) return disabled;
+
+    const retentionFraction = m1RescueArmed
+      ? '0.40'
+      : compareDecimalStrings(peak, multiplyDecimalStrings(risk, '0.75')) < 0
         ? '0.70'
         : compareDecimalStrings(peak, risk) < 0
           ? '0.75'
@@ -1035,6 +1046,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       maxFavorablePnl: position.pathMaxFavorablePnl,
       currentPnl,
       initialRiskPnl,
+      isM1Strategy: position.minimumForecastHoldMinutes === PAPER_M1_MINIMUM_FORECAST_HOLD_MINUTES,
     });
     if (!decision.shouldClose) return false;
 

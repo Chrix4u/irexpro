@@ -113,9 +113,9 @@ describe('dynamic PAPER lot ceiling', () => {
 });
 
 describe('PAPER opportunity scout model identity', () => {
-  it('separates idle-aware participation outcomes from the v1 scout cohort', () => {
+  it('separates local-edge shadow-quarantine outcomes from earlier executable scout cohorts', () => {
     expect(paperOpportunityScoutModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v9-provisional-local-edge-0.10-tier',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v10-local-edge-shadow-quarantine-0.10-tier',
     );
   });
 });
@@ -151,7 +151,7 @@ describe('PAPER scout product sizing floor', () => {
           eligible: true,
           lotUpperBound: 0.1,
           sizingTier: 'RESEARCH',
-          reason: 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT',
+          reason: 'CALIBRATED_OOD_SCOUT',
           mode: 'ACTIVE',
           targetWindowMinutes: 30,
           idleMinutes: 45,
@@ -170,7 +170,8 @@ describe('PAPER scout product sizing floor', () => {
 });
 
 describe('PAPER local shadow-edge adaptive authority', () => {
-  it('ranks a local pocket by empirical pocket R instead of the globally negative edge', () => {
+  it('keeps mature local-pocket shadow evidence out of executable edge until transfer is validated', () => {
+    expect(isPaperLocalShadowEdgeScoutReason('LOCAL_SHADOW_EDGE_SCOUT')).toBe(false);
     expect(
       executableNetExpectedR({
         paperExecutionRoute: 'NORMAL_PAPER',
@@ -180,11 +181,12 @@ describe('PAPER local shadow-edge adaptive authority', () => {
         paperOpportunityScout: { reason: 'LOCAL_SHADOW_EDGE_SCOUT' },
         paperShadowLocalEdgePocket: { supported: true, averageNetR: 0.588 },
       } as any),
-    ).toBeCloseTo(0.588, 6);
+    ).toBeCloseTo(-0.48, 6);
   });
 
-  it('ranks the three-vote high-conviction local pocket by the same empirical edge', () => {
-    expect(isPaperLocalShadowEdgeScoutReason('LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT')).toBe(true);
+  it('keeps the three-vote high-conviction local pocket out of executable edge too', () => {
+    expect(isPaperLocalShadowEdgeScoutReason('LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT')).toBe(false);
+    expect(isPaperLocalShadowEdgeScoutReason('LOCAL_EDGE_TRANSFER_SHADOW_ONLY')).toBe(false);
     expect(
       executableNetExpectedR({
         paperExecutionRoute: 'NORMAL_PAPER',
@@ -194,11 +196,12 @@ describe('PAPER local shadow-edge adaptive authority', () => {
         paperOpportunityScout: { reason: 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT' },
         paperShadowLocalEdgePocket: { supported: true, averageNetR: 0.588 },
       } as any),
-    ).toBeCloseTo(0.588, 6);
+    ).toBeCloseTo(-0.48, 6);
   });
 
-  it('ranks a provisional local pocket by its empirical edge and recognizes its scout reason', () => {
-    expect(isPaperLocalShadowEdgeScoutReason('PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT')).toBe(true);
+  it('keeps provisional local-pocket evidence out of executable edge and route-override authority', () => {
+    expect(isPaperLocalShadowEdgeScoutReason('PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT')).toBe(false);
+    expect(isPaperLocalShadowEdgeScoutReason('PROVISIONAL_LOCAL_EDGE_SHADOW_ONLY')).toBe(false);
     expect(
       executableNetExpectedR({
         paperExecutionRoute: 'NORMAL_PAPER',
@@ -208,33 +211,20 @@ describe('PAPER local shadow-edge adaptive authority', () => {
         paperOpportunityScout: { reason: 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT' },
         paperShadowLocalEdgePocket: { supported: false, averageNetR: 0.6 },
       } as any),
-    ).toBeCloseTo(0.6, 6);
-  });
+    ).toBeCloseTo(0.12, 6);
 
-  it('lets a strict provisional micro local scout override only the broad realised-route demotion', () => {
-    const base = {
-      fullSizePaperExecutionCandidate: false,
-      scoutEligible: true,
-      scoutReason: 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT' as const,
-      scoutLotUpperBound: 0.1,
-      localPocketHighConviction: false,
-      localPocketProvisional: true,
-      structuralRouteEligible: true,
-      pairSideEligible: true,
-      realisedRouteEligible: false,
-    };
-    expect(canHighConvictionLocalScoutOverrideRealisedRoute(base)).toBe(true);
     expect(
-      canHighConvictionLocalScoutOverrideRealisedRoute({ ...base, localPocketProvisional: false }),
-    ).toBe(false);
-    expect(
-      canHighConvictionLocalScoutOverrideRealisedRoute({ ...base, structuralRouteEligible: false }),
-    ).toBe(false);
-    expect(
-      canHighConvictionLocalScoutOverrideRealisedRoute({ ...base, pairSideEligible: false }),
-    ).toBe(false);
-    expect(
-      canHighConvictionLocalScoutOverrideRealisedRoute({ ...base, scoutLotUpperBound: 0.2 }),
+      canHighConvictionLocalScoutOverrideRealisedRoute({
+        fullSizePaperExecutionCandidate: false,
+        scoutEligible: true,
+        scoutReason: 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT',
+        scoutLotUpperBound: 0.1,
+        localPocketHighConviction: false,
+        localPocketProvisional: true,
+        structuralRouteEligible: true,
+        pairSideEligible: true,
+        realisedRouteEligible: false,
+      }),
     ).toBe(false);
   });
 
@@ -246,7 +236,7 @@ describe('PAPER local shadow-edge adaptive authority', () => {
     expect(adaptiveCalibrationExecutionBlockers(false, true)).toEqual([]);
   });
 
-  it('lets only a high-conviction micro local scout override the broad realised-route demotion', () => {
+  it('does not let high-conviction local shadow evidence override realised-route demotion before transfer validation', () => {
     const base = {
       fullSizePaperExecutionCandidate: false,
       scoutEligible: true,
@@ -258,7 +248,7 @@ describe('PAPER local shadow-edge adaptive authority', () => {
       realisedRouteEligible: false,
     };
 
-    expect(canHighConvictionLocalScoutOverrideRealisedRoute(base)).toBe(true);
+    expect(canHighConvictionLocalScoutOverrideRealisedRoute(base)).toBe(false);
     expect(
       canHighConvictionLocalScoutOverrideRealisedRoute({
         ...base,
@@ -2205,6 +2195,12 @@ describe('VpsForexSignalCollectorService', () => {
           metadata: expect.objectContaining({
             adaptive_scan_rank: 1,
             adaptive_opportunity_score: 0.9,
+            adaptive_risk_multiplier: 1,
+            adaptive_risk_multiplier_raw: 1,
+            paper_champion_direction_risk_cap_active: false,
+            paper_champion_direction_risk_cap_reason: 'CHAMPION_DIRECTION_SUPPORTED',
+            paper_champion_direction_risk_cap_multiplier: null,
+            paper_champion_direction_risk_cap_trades: 8,
             paper_entry_market_alignment_artifact: 'paper-entry-market-alignment-v1',
             paper_entry_market_alignment_reason: 'ALIGNED',
             paper_entry_market_alignment_fast_mark_source: 'STREAM',

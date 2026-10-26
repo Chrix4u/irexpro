@@ -880,6 +880,35 @@ describe('StrategyOrchestratorService', () => {
       );
     });
 
+    it('passes a 0.05 PAPER floor for an explicitly provisional M1 tactical scout', async () => {
+      const result = await service.processSignal(
+        validCandidate({
+          signalId: 'sig-m1-provisional-scout',
+          timeframe: 'M1',
+          strategyCode: 'external-irexpro-m1-tactical',
+          suggestedVolume: 0.05,
+          metadata: {
+            external_provider_paper_only: true,
+            position_sizing_tier: 'RESEARCH',
+            m1_evidence_qualified_scout_eligible: true,
+            m1_tactical_route: 'M1_EARLY_TRANSITION',
+            m1_scout_reliability_tier: 'PROVISIONAL',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedLotUpperBound: '0.05',
+          paperAllocationSizing: expect.objectContaining({
+            confidenceTier: 'RESEARCH',
+            minimumExecutableLot: '0.05',
+          }),
+        }),
+      );
+    });
+
     it('does not honor the M1 scout flag on the wrong timeframe', async () => {
       const result = await service.processSignal(
         validCandidate({
