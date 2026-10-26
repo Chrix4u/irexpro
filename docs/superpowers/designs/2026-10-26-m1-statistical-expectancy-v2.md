@@ -1,12 +1,15 @@
 # M1 Statistical Expectancy V2 Design
 
 ## Intent
+
 Stop treating the fixed M1 reward/risk target as if it were statistical edge. Preserve stop/target geometry, but make execution/ranking depend on an expectancy estimate that changes with predictive quality and causal pair/side payoff evidence.
 
 ## Problem
+
 `M1TacticalCandidate.grossExpectedR` currently equals `policy.targetR` (normally 1.6R) for every candidate. Generic governance subtracts execution cost from that constant, so most M1 candidates report ~1.5R net expected value regardless of actual quality. Confidence is also a heuristic score, not a calibrated probability. This leaves drift/reliability gates doing nearly all selection and makes the displayed expected-R field misleading.
 
 ## Chosen approach
+
 Add a pure M1 expectancy estimator and keep geometry separate from edge.
 
 1. `targetR` / existing `grossExpectedR` remains the intended TP/SL geometry only.
@@ -17,6 +20,7 @@ Add a pure M1 expectancy estimator and keep geometry separate from edge.
 6. Persist the expectancy artifact/source/prior/evidence values into decision governance and signal metadata.
 
 ## Prior mapping
+
 For target R `T`, breakeven probability is `1 / (1 + T)`. Candidate heuristic quality is `(confidence + directionQuality) / 2`. Convert it conservatively into an implied probability:
 
 `p = breakeven + 0.5 * (heuristicQuality - 0.5)`
@@ -28,6 +32,7 @@ Prior expected R is `p*T - (1-p)`.
 This deliberately makes a neutral quality score produce ~0R instead of +1.6R. A strong heuristic setup can earn a modest positive prior, but mature realised evidence has increasing authority.
 
 ## Goals
+
 - Two candidates with identical TP/SL geometry but different predictive quality get different expected R.
 - Mature positive realised-R sleeves can earn positive expectancy and continue trading.
 - Mature negative or freshly decaying sleeves get lower/negative expectancy in addition to existing reliability vetoes.
@@ -35,12 +40,14 @@ This deliberately makes a neutral quality score produce ~0R instead of +1.6R. A 
 - Hard event/drift/cost/currency-exposure/broker/risk controls stay unchanged.
 
 ## Non-goals
+
 - No new DEMO/LIVE authority.
 - No lowering of route payoff floors merely to increase trade count.
 - No replacement of the existing reliability brakes.
 - No claim that heuristic confidence is a calibrated probability.
 
 ## Approaches considered
+
 - **Keep fixed target-R as EV and rely on blockers:** rejected because it is semantically wrong and non-discriminative.
 - **Use raw confidence directly as win probability:** rejected because M1 confidence is heuristic/capped and not calibrated.
 - **Conservative prior + causal realised-R shrinkage (chosen):** improves discrimination immediately while allowing local causal evidence to dominate as it matures.

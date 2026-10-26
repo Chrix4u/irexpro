@@ -11,6 +11,7 @@
 **Spec:** `docs/superpowers/designs/2026-10-26-m1-statistical-expectancy-v2.md`
 
 ## Global Constraints
+
 - PAPER-only authority unchanged; no DEMO/LIVE expansion.
 - `grossExpectedR` remains target geometry for backward-compatible audit fields.
 - Route floors use new statistical expected R before execution cost.
@@ -18,6 +19,7 @@
 - Causal evidence only: no outcome resolved after the evaluated decision time may affect it.
 
 ## Review Focus
+
 - Sparse evidence must not turn 1.6R target geometry into an automatic +1.6R edge.
 - Mature negative realised R must lower expectancy despite high heuristic confidence.
 - Mature positive realised R may raise expectancy but cannot bypass a reliability veto.
@@ -29,10 +31,12 @@
 ### Task 1: Pure M1 expectancy estimator
 
 **Files:**
+
 - Create: `apps/api/src/modules/ai/m1-tactical-expectancy.ts`
 - Create: `apps/api/src/modules/ai/m1-tactical-expectancy.spec.ts`
 
 **Interfaces:**
+
 - Consumes: `M1TacticalCandidate`, `M1RoutePairSideReliabilityDecision | null`.
 - Produces: `evaluateM1TacticalExpectancy(input): M1TacticalExpectancyDecision` with `targetR`, `heuristicPriorExpectedR`, `statisticalExpectedR`, `impliedWinProbability`, evidence sample/value fields, source and artifact.
 
@@ -45,11 +49,13 @@
 ### Task 2: Governance and scheduler integration
 
 **Files:**
+
 - Modify: `apps/api/src/modules/ai/m1-tactical-governance.ts`
 - Modify: `apps/api/src/modules/ai/m1-tactical-scheduler.service.ts`
 - Modify: relevant M1 governance/scheduler specs.
 
 **Interfaces:**
+
 - Consumes: Task 1 expectancy decision.
 - Produces: generic governance `expectedR` from `statisticalExpectedR`; decision governance + signal metadata include expectancy attribution.
 
@@ -62,9 +68,11 @@
 ### Task 3: Release verification
 
 **Files:**
+
 - No behavior change beyond Tasks 1-2 unless verification finds a root cause defect.
 
 **Interfaces:**
+
 - Consumes: exact green branch head.
 - Produces: merge/deploy candidate with exact-head evidence.
 
