@@ -1,6 +1,7 @@
 import {
   evaluatePaperShadowLocalEdgePocket,
   isHighConvictionPaperShadowLocalEdgePocket,
+  isProvisionalPaperShadowLocalEdgePocket,
 } from './paper-shadow-local-edge-pocket';
 
 const supported = {
@@ -77,6 +78,60 @@ describe('PAPER shadow local-edge pocket', () => {
       state: 'UNAVAILABLE',
       reason: 'LOCAL_EDGE_EVIDENCE_INVALID',
     });
+  });
+
+  it('recognizes a fresh 3-for-3 exact pocket as provisional without calling it mature', () => {
+    const decision = evaluatePaperShadowLocalEdgePocket({
+      ...supported,
+      samples: 3,
+      wins: 3,
+      losses: 0,
+      grossProfitR: 1.8,
+      grossLossR: 0,
+      netR: 1.8,
+      averageNetR: 0.6,
+      profitFactor: 1_000_000,
+      recentSamples: 3,
+      recentWins: 3,
+      recentNetR: 1.8,
+      latestResolvedAt: '2026-10-26T16:00:00.000Z',
+    });
+    expect(decision).toMatchObject({ supported: false, state: 'COLLECTING' });
+    expect(
+      isProvisionalPaperShadowLocalEdgePocket(decision, new Date('2026-10-26T16:30:00.000Z')),
+    ).toBe(true);
+  });
+
+  it('keeps two samples, any loss, and stale evidence out of provisional authority', () => {
+    const baseDecision = evaluatePaperShadowLocalEdgePocket({
+      ...supported,
+      samples: 3,
+      wins: 3,
+      losses: 0,
+      grossProfitR: 1.8,
+      grossLossR: 0,
+      netR: 1.8,
+      averageNetR: 0.6,
+      profitFactor: 1_000_000,
+      recentSamples: 3,
+      recentWins: 3,
+      recentNetR: 1.8,
+      latestResolvedAt: '2026-10-26T16:00:00.000Z',
+    });
+    const twoSamples = { ...baseDecision, samples: 2, wins: 2, recentSamples: 2, recentWins: 2 };
+    const oneLoss = {
+      ...baseDecision,
+      wins: 2,
+      losses: 1,
+      grossLossR: 0.2,
+      netR: 1.4,
+      recentWins: 2,
+    };
+    const stale = { ...baseDecision, latestResolvedAt: '2026-10-24T12:00:00.000Z' };
+    const now = new Date('2026-10-26T16:30:00.000Z');
+    expect(isProvisionalPaperShadowLocalEdgePocket(twoSamples, now)).toBe(false);
+    expect(isProvisionalPaperShadowLocalEdgePocket(oneLoss, now)).toBe(false);
+    expect(isProvisionalPaperShadowLocalEdgePocket(stale, now)).toBe(false);
   });
 
   it('identifies only unusually strong mature pockets for the three-vote scout', () => {

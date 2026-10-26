@@ -2,6 +2,7 @@ import type { AdaptiveShadowDirectionalPulseDecision } from './adaptive-shadow-d
 import type { PaperChampionDirectionPriorDecision } from './paper-champion-direction-prior';
 import {
   isHighConvictionPaperShadowLocalEdgePocket,
+  isProvisionalPaperShadowLocalEdgePocket,
   type PaperShadowLocalEdgePocketDecision,
 } from './paper-shadow-local-edge-pocket';
 
@@ -57,6 +58,7 @@ export interface PaperOpportunityScoutInput {
   portfolioQuality: number;
   driftState: 'NORMAL' | 'STRESSED' | 'OUT_OF_DISTRIBUTION';
   idleMinutes?: number | null;
+  evaluatedAt?: Date | null;
   driftDiagnostics?: readonly string[];
   shadowDirectionalPulse?: AdaptiveShadowDirectionalPulseDecision | null;
   championDirectionPrior?: PaperChampionDirectionPriorDecision | null;
@@ -81,6 +83,7 @@ export type PaperOpportunityScoutReason =
   | 'CHAMPION_DIRECTION_SCOUT'
   | 'LOCAL_SHADOW_EDGE_SCOUT'
   | 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT'
+  | 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT'
   | 'FULL_SIZE_ALREADY_ELIGIBLE'
   | 'ROUTE_NOT_SCOUTABLE'
   | 'REGIME_NOT_SCOUTABLE'
@@ -226,6 +229,29 @@ export function evaluatePaperOpportunityScout(
     input.portfolioQuality < PAPER_OPPORTUNITY_SCOUT_MIN_PORTFOLIO_QUALITY
   )
     return reject('PORTFOLIO_QUALITY_TOO_LOW');
+
+  const provisionalLocalPocket =
+    input.shadowLocalEdgePocket != null &&
+    input.evaluatedAt instanceof Date &&
+    isProvisionalPaperShadowLocalEdgePocket(input.shadowLocalEdgePocket, input.evaluatedAt);
+  if (provisionalLocalPocket) {
+    if (input.driftState === 'OUT_OF_DISTRIBUTION') return reject('DRIFT_EVIDENCE_TOO_WEAK');
+    if (!Number.isFinite(input.confidence) || input.confidence < 0.6)
+      return reject('CONFIDENCE_TOO_LOW');
+    if (!Number.isFinite(input.netExpectedR) || input.netExpectedR < 0.08)
+      return reject('NET_EXPECTED_R_TOO_LOW');
+    if (input.consensusRequired <= 0 || input.consensusPassed < 4)
+      return reject('CONSENSUS_TOO_LOW');
+    if (
+      [input.directionQuality, input.tradeQuality, input.exitQuality].some(
+        (value) => !Number.isFinite(value) || value < 0.3,
+      )
+    )
+      return reject('QUALITY_TOO_LOW');
+    if (!Number.isFinite(input.alignedMomentumAtr) || input.alignedMomentumAtr < 0.1)
+      return reject('MOMENTUM_NOT_CONFIRMED');
+    return decision(policy, true, 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT', 0.1);
+  }
 
   if (input.shadowLocalEdgePocket?.supported === true) {
     if (!Number.isFinite(input.confidence) || input.confidence < 0.6)

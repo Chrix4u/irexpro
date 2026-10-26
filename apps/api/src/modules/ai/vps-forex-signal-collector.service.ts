@@ -146,6 +146,7 @@ import {
   PaperShadowLocalEdgePocketDecision,
   evaluatePaperShadowLocalEdgePocket,
   isHighConvictionPaperShadowLocalEdgePocket,
+  isProvisionalPaperShadowLocalEdgePocket,
 } from './paper-shadow-local-edge-pocket';
 import {
   PaperChampionDirectionPriorDecision,
@@ -197,13 +198,17 @@ const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 
 export function paperOpportunityScoutModelVersion(engineCode: string): string {
-  return `external-provider/${engineCode}/paper-opportunity-scout-v8-high-conviction-consensus-0.10-tier`;
+  return `external-provider/${engineCode}/paper-opportunity-scout-v9-provisional-local-edge-0.10-tier`;
 }
 
 export function isPaperLocalShadowEdgeScoutReason(
   reason: PaperOpportunityScoutDecision['reason'] | null | undefined,
 ): boolean {
-  return reason === 'LOCAL_SHADOW_EDGE_SCOUT' || reason === 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT';
+  return (
+    reason === 'LOCAL_SHADOW_EDGE_SCOUT' ||
+    reason === 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT' ||
+    reason === 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT'
+  );
 }
 
 export function canHighConvictionLocalScoutOverrideRealisedRoute(input: {
@@ -212,10 +217,18 @@ export function canHighConvictionLocalScoutOverrideRealisedRoute(input: {
   scoutReason: PaperOpportunityScoutDecision['reason'] | null | undefined;
   scoutLotUpperBound: number | null | undefined;
   localPocketHighConviction: boolean;
+  localPocketProvisional?: boolean;
   structuralRouteEligible: boolean;
   pairSideEligible: boolean;
   realisedRouteEligible: boolean | null;
 }): boolean {
+  const matureLocalOverride =
+    input.localPocketHighConviction &&
+    (input.scoutReason === 'LOCAL_SHADOW_EDGE_SCOUT' ||
+      input.scoutReason === 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT');
+  const provisionalLocalOverride =
+    input.localPocketProvisional === true &&
+    input.scoutReason === 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT';
   return (
     !input.fullSizePaperExecutionCandidate &&
     input.scoutEligible &&
@@ -223,7 +236,7 @@ export function canHighConvictionLocalScoutOverrideRealisedRoute(input: {
     Number.isFinite(input.scoutLotUpperBound) &&
     Number(input.scoutLotUpperBound) > 0 &&
     Number(input.scoutLotUpperBound) <= 0.1 &&
-    input.localPocketHighConviction &&
+    (matureLocalOverride || provisionalLocalOverride) &&
     input.structuralRouteEligible &&
     input.pairSideEligible &&
     input.realisedRouteEligible === false
@@ -655,7 +668,9 @@ export function executableNetExpectedR(
 ): number {
   if (
     isPaperLocalShadowEdgeScoutReason(option.paperOpportunityScout?.reason) &&
-    option.paperShadowLocalEdgePocket?.supported &&
+    option.paperShadowLocalEdgePocket &&
+    (option.paperShadowLocalEdgePocket.supported ||
+      option.paperOpportunityScout?.reason === 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT') &&
     Number.isFinite(option.paperShadowLocalEdgePocket.averageNetR)
   ) {
     return option.paperShadowLocalEdgePocket.averageNetR;
@@ -1948,6 +1963,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             driftState: ensembleGovernance.driftState,
             driftDiagnostics: ensembleGovernance.driftDiagnostics,
             idleMinutes: paperIdleState.idleMinutes,
+            evaluatedAt,
             championDirectionPrior,
             shadowLocalEdgePocket: paperShadowLocalEdgePocket,
             shadowDirectionalPulse: adaptiveEvidencePass.shadowDirectionalPulse,
@@ -2106,6 +2122,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                   paperShadowLocalEdgePocket &&
                   isHighConvictionPaperShadowLocalEdgePocket(paperShadowLocalEdgePocket),
                 ),
+                localPocketProvisional: Boolean(
+                  paperShadowLocalEdgePocket &&
+                  isProvisionalPaperShadowLocalEdgePocket(paperShadowLocalEdgePocket, evaluatedAt),
+                ),
                 structuralRouteEligible: reliabilityGate.route?.fullSizeEligible ?? true,
                 pairSideEligible: reliabilityGate.pairSide?.fullSizeEligible ?? true,
                 realisedRouteEligible:
@@ -2117,7 +2137,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             if (paperLocalShadowRealisedRouteOverride) {
               this.logger.warn(
                 `PAPER local shadow-edge scout ${best.instrument} ${best.direction} ` +
-                  `realisedRoute=OVERRIDDEN_MICRO_ONLY reason=HIGH_CONVICTION_LOCAL_EDGE ` +
+                  `realisedRoute=OVERRIDDEN_MICRO_ONLY reason=${paperOpportunityScout.reason} ` +
                   `lotCap=${paperOpportunityScout.lotUpperBound.toFixed(2)} ` +
                   `broadPf=${reliabilityGate.realisedContinuationRoute?.profitFactor ?? 'n/a'}`,
               );

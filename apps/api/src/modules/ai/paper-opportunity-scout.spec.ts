@@ -701,3 +701,63 @@ describe('PAPER local shadow-edge scout authority', () => {
     ).toMatchObject({ eligible: false, reason: 'EVENT_RISK_NOT_CLEAR' });
   });
 });
+
+describe('PAPER provisional local-edge scout', () => {
+  const provisionalPocket = evaluatePaperShadowLocalEdgePocket({
+    samples: 3,
+    wins: 3,
+    losses: 0,
+    grossProfitR: 1.8,
+    grossLossR: 0,
+    netR: 1.8,
+    averageNetR: 0.6,
+    profitFactor: 1_000_000,
+    recentSamples: 3,
+    recentWins: 3,
+    recentNetR: 1.8,
+    latestResolvedAt: '2026-10-26T16:00:00.000Z',
+  });
+  const candidate = {
+    normalPaperExecution: false,
+    evaluatedAt: new Date('2026-10-26T16:30:00.000Z'),
+    direction: 'SELL' as const,
+    strategyRoute: 'TREND_CONTINUATION' as const,
+    regime: 'TREND_WEAK' as const,
+    confidence: 0.62,
+    consensusPassed: 4,
+    consensusRequired: 6,
+    netExpectedR: 0.12,
+    directionQuality: 0.34,
+    tradeQuality: 0.4,
+    exitQuality: 0.38,
+    alignedMomentumAtr: 0.18,
+    paperExecutionCostUsable: true,
+    eventRisk: 'CLEAR' as const,
+    portfolioQuality: 0.8,
+    driftState: 'NORMAL' as const,
+    idleMinutes: 90,
+    shadowLocalEdgePocket: provisionalPocket,
+  };
+
+  it('admits a fresh 3-for-3 exact local pocket only at micro PAPER size', () => {
+    expect(evaluatePaperOpportunityScout(candidate)).toMatchObject({
+      eligible: true,
+      reason: 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT',
+      lotUpperBound: 0.1,
+      sizingTier: 'RESEARCH',
+    });
+  });
+
+  it('does not let provisional evidence rescue OOD, non-positive edge, or event risk', () => {
+    expect(
+      evaluatePaperOpportunityScout({ ...candidate, driftState: 'OUT_OF_DISTRIBUTION' }),
+    ).toMatchObject({ eligible: false, reason: 'DRIFT_EVIDENCE_TOO_WEAK' });
+    expect(evaluatePaperOpportunityScout({ ...candidate, netExpectedR: 0.01 })).toMatchObject({
+      eligible: false,
+      reason: 'NET_EXPECTED_R_TOO_LOW',
+    });
+    expect(
+      evaluatePaperOpportunityScout({ ...candidate, eventRisk: 'HIGH_IMPACT_BLOCK' }),
+    ).toMatchObject({ eligible: false, reason: 'EVENT_RISK_NOT_CLEAR' });
+  });
+});
