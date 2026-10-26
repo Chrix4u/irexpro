@@ -42,9 +42,7 @@ const candidate = {
 
 describe('M1 currency exposure respects the executable PAPER product floor', () => {
   it('blocks a 0.10 scout when exposure requires a sub-minimum reduction', async () => {
-    const service = serviceFor(1000, [
-      { instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 18 },
-    ]);
+    const service = serviceFor(1000, [{ instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 18 }]);
 
     await expect(
       (service as any).resolveM1CurrencyExposureGuard('user-1', 'conn-1', candidate, 0.1),
@@ -54,11 +52,8 @@ describe('M1 currency exposure respects the executable PAPER product floor', () 
       decision: { capacity: 'REDUCED' },
     });
   });
-
   it('reduces a larger scout only to the real 0.10 PAPER floor when that clears exposure', async () => {
-    const service = serviceFor(1000, [
-      { instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 14 },
-    ]);
+    const service = serviceFor(1000, [{ instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 14 }]);
 
     await expect(
       (service as any).resolveM1CurrencyExposureGuard('user-1', 'conn-1', candidate, 0.2),

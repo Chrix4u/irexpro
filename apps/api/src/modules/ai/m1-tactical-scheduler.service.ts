@@ -11,6 +11,7 @@ import { v5 as uuidv5 } from 'uuid';
 import { ExecutionService } from '../execution/execution.service';
 import { TradeIntentService } from '../execution/services/trade-intent.service';
 import { AllocationService } from '../execution/services/allocation.service';
+import { PAPER_PRODUCT_ABSOLUTE_MIN_LOT } from '../execution/services/position-sizing.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { AiSignalService } from './ai-signal.service';
 import { MacroEventRiskService } from './macro-event-risk.service';
@@ -714,7 +715,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     brokerConnectionId: string,
     candidate: M1TacticalCandidate,
     requestedVolumeCap: number,
-  ): Promise<{ allowed: boolean; volumeCap: number; decision: M1CurrencyExposureDecision }> {
+  ): Promise<{
+    allowed: boolean;
+    volumeCap: number;
+    decision: M1CurrencyExposureDecision;
+    productFloorBlocked: boolean;
+  }> {
     const unavailable = evaluateM1TacticalCurrencyExposure({
       allocatedCapital: 0,
       positions: [],
@@ -725,7 +731,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       },
     });
     if (!this.allocationService) {
-      return { allowed: false, volumeCap: 0, decision: unavailable };
+      return { allowed: false, volumeCap: 0, decision: unavailable, productFloorBlocked: false };
     }
 
     let allocatedCapital = 0;
@@ -738,7 +744,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         allocatedCapital = Number(allocation.allocatedCapital);
       }
     } catch {
-      return { allowed: false, volumeCap: 0, decision: unavailable };
+      return { allowed: false, volumeCap: 0, decision: unavailable, productFloorBlocked: false };
     }
 
     let positions;
@@ -756,7 +762,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           riskAtStop: 0,
         },
       });
-      return { allowed: false, volumeCap: 0, decision };
+      return { allowed: false, volumeCap: 0, decision, productFloorBlocked: false };
     }
 
     const evaluateAtVolume = (volume: number) => {
@@ -777,21 +783,42 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       });
     };
 
+    const productFloor = Number(PAPER_PRODUCT_ABSOLUTE_MIN_LOT);
+    if (!Number.isFinite(productFloor) || productFloor <= 0) {
+      return { allowed: false, volumeCap: 0, decision: unavailable, productFloorBlocked: false };
+    }
+
     let volumeCap = requestedVolumeCap;
     let decision = evaluateAtVolume(volumeCap);
-    if (decision.capacity === 'BLOCKED' && volumeCap > 0.05) {
-      const reducedCap = Math.min(volumeCap, 0.05);
-      const reducedDecision = evaluateAtVolume(reducedCap);
-      if (reducedDecision.capacity !== 'BLOCKED') {
-        volumeCap = reducedCap;
-        decision = reducedDecision;
-      }
+
+    if (!Number.isFinite(volumeCap) || volumeCap <= 0) {
+      return { allowed: false, volumeCap: 0, decision, productFloorBlocked: false };
     }
-    if (decision.capacity === 'REDUCED') volumeCap = Math.min(volumeCap, 0.05);
+
+    if (decision.capacity !== 'CLEAR') {
+      if (volumeCap <= productFloor) {
+        return { allowed: false, volumeCap: 0, decision, productFloorBlocked: true };
+      }
+
+      const floorDecision = evaluateAtVolume(productFloor);
+      if (floorDecision.capacity !== 'CLEAR') {
+        return {
+          allowed: false,
+          volumeCap: 0,
+          decision: floorDecision,
+          productFloorBlocked: true,
+        };
+      }
+
+      volumeCap = productFloor;
+      decision = floorDecision;
+    }
+
     return {
-      allowed: decision.capacity !== 'BLOCKED',
-      volumeCap: decision.capacity === 'BLOCKED' ? 0 : volumeCap,
+      allowed: true,
+      volumeCap,
       decision,
+      productFloorBlocked: false,
     };
   }
 
@@ -835,9 +862,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       executionVolumeCap,
     );
     if (!currencyExposureGuard.allowed) {
-      const reason =
-        `M1_CURRENCY_EXPOSURE_BLOCKED capacity=${currencyExposureGuard.decision.capacity} ` +
-        `alignedRiskPercent=${currencyExposureGuard.decision.projectedAlignedRiskPercent}`;
+      const reason = currencyExposureGuard.productFloorBlocked
+        ? `M1_CURRENCY_EXPOSURE_PRODUCT_FLOOR_BLOCKED requestedCap=${executionVolumeCap} ` +
+          `productFloor=${PAPER_PRODUCT_ABSOLUTE_MIN_LOT} capacity=${currencyExposureGuard.decision.capacity} ` +
+          `alignedRiskPercent=${currencyExposureGuard.decision.projectedAlignedRiskPercent}`
+        : `M1_CURRENCY_EXPOSURE_BLOCKED capacity=${currencyExposureGuard.decision.capacity} ` +
+          `alignedRiskPercent=${currencyExposureGuard.decision.projectedAlignedRiskPercent}`;
       this.logger.warn(
         `M1 tactical ${candidate.instrument} ${candidate.direction} execution=BLOCKED ${reason}`,
       );
