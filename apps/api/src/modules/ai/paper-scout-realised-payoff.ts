@@ -11,11 +11,7 @@ export interface PaperScoutRealisedPayoffEvidence {
   netPnl: number;
 }
 
-export type PaperScoutRealisedPayoffState =
-  | 'COLLECTING'
-  | 'HEALTHY'
-  | 'REDUCED'
-  | 'SHADOW_ONLY';
+export type PaperScoutRealisedPayoffState = 'COLLECTING' | 'HEALTHY' | 'REDUCED' | 'SHADOW_ONLY';
 
 export interface PaperScoutRealisedPayoffDecision {
   artifact: typeof PAPER_SCOUT_REALISED_PAYOFF_ARTIFACT;
@@ -67,11 +63,7 @@ export function evaluatePaperScoutRealisedPayoff(
     };
   }
 
-  if (
-    netPnl < 0 &&
-    profitFactor !== null &&
-    profitFactor < PAPER_SCOUT_REALISED_PAYOFF_SHADOW_PF
-  ) {
+  if (netPnl < 0 && profitFactor !== null && profitFactor < PAPER_SCOUT_REALISED_PAYOFF_SHADOW_PF) {
     return {
       ...base,
       state: 'SHADOW_ONLY',
@@ -81,11 +73,7 @@ export function evaluatePaperScoutRealisedPayoff(
     };
   }
 
-  if (
-    netPnl < 0 &&
-    profitFactor !== null &&
-    profitFactor < PAPER_SCOUT_REALISED_PAYOFF_REDUCE_PF
-  ) {
+  if (netPnl < 0 && profitFactor !== null && profitFactor < PAPER_SCOUT_REALISED_PAYOFF_REDUCE_PF) {
     return {
       ...base,
       state: 'REDUCED',
@@ -102,4 +90,21 @@ export function evaluatePaperScoutRealisedPayoff(
     maxLotCap: null,
     reason: 'SCOUT_REALISED_PAYOFF_HEALTHY',
   };
+}
+
+export function applyPaperScoutRealisedPayoffAuthority(
+  currentLotUpperBound: number,
+  decision: PaperScoutRealisedPayoffDecision,
+): { executionAllowed: boolean; lotUpperBound: number } {
+  const current = Number.isFinite(currentLotUpperBound) ? Math.max(0, currentLotUpperBound) : 0;
+  if (decision.executionAuthority === 'SHADOW_ONLY') {
+    return { executionAllowed: false, lotUpperBound: 0 };
+  }
+  if (decision.maxLotCap !== null && Number.isFinite(decision.maxLotCap)) {
+    return {
+      executionAllowed: true,
+      lotUpperBound: Math.min(current, Math.max(0, decision.maxLotCap)),
+    };
+  }
+  return { executionAllowed: true, lotUpperBound: current };
 }

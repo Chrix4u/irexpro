@@ -141,6 +141,32 @@ describe('PAPER scout product sizing floor', () => {
       }),
     ).toEqual({ upperBound: 0.1, tier: 'RESEARCH' });
   });
+
+  it('reduces only an eligible scout to 0.05 when its exact generation payoff is marginal', () => {
+    const collector = Object.create(VpsForexSignalCollectorService.prototype) as any;
+    expect(
+      collector.adaptiveLotSizingFor({
+        paperExecutionRoute: 'NORMAL_PAPER',
+        paperOpportunityScout: {
+          eligible: true,
+          lotUpperBound: 0.1,
+          sizingTier: 'RESEARCH',
+          reason: 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT',
+          mode: 'ACTIVE',
+          targetWindowMinutes: 30,
+          idleMinutes: 45,
+        },
+        paperScoutRealisedPayoff: {
+          state: 'REDUCED',
+          executionAuthority: 'PAPER',
+          maxLotCap: 0.05,
+        },
+        candidate: {},
+        planBEnsemble: {},
+        ensembleGovernance: {},
+      }),
+    ).toEqual({ upperBound: 0.05, tier: 'RESEARCH' });
+  });
 });
 
 describe('PAPER local shadow-edge adaptive authority', () => {
@@ -3657,6 +3683,47 @@ describe('VpsForexSignalCollectorService', () => {
       'irexpro-multimodel-ensemble-v1',
       [...PlanBEnsembleModule.PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
     ]);
+  });
+
+  it('loads realised payoff from the exact scout model generation only', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValue([
+        { trades: '7', gross_profit: '4.79', gross_loss: '9.46', net_pnl: '-4.67' },
+      ]);
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn() } as unknown as ExecutionService,
+      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+    const modelVersion = paperOpportunityScoutModelVersion('irexpro-multimodel-ensemble-v1');
+
+    await expect(
+      (collector as any).loadPaperScoutRealisedPayoffEvidence('user-1', 'conn-1', modelVersion),
+    ).resolves.toEqual({
+      closedTrades: 7,
+      grossProfit: 4.79,
+      grossLoss: 9.46,
+      netPnl: -4.67,
+    });
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("bc.broker_id = 'paper-broker'");
+    expect(sql).toContain("t.status = 'CLOSED'");
+    expect(sql).toContain("ti.status = 'EXECUTED'");
+    expect(sql).toContain("ti.timeframe = 'M5'");
+    expect(sql).toContain('ti.model_version = $3');
+    expect(sql).toContain("ti.metadata->>'signal_source' = 'EXTERNAL_PROVIDER'");
+    expect(params).toEqual(['user-1', 'conn-1', modelVersion]);
   });
 
   it('caches realised continuation route reliability evidence on the existing reliability TTL', async () => {
