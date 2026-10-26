@@ -635,19 +635,19 @@ describe('PAPER local shadow-edge scout authority', () => {
     shadowLocalEdgePocket: supportedPocket,
   };
 
-  it('lets mature local pocket evidence override global drift/net-R/calibration at micro PAPER size', () => {
+  it('keeps mature local pocket evidence shadow-only until execution transfer is validated', () => {
     expect(evaluatePaperOpportunityScout(candidate)).toMatchObject({
-      eligible: true,
-      reason: 'LOCAL_SHADOW_EDGE_SCOUT',
+      eligible: false,
+      reason: 'LOCAL_EDGE_TRANSFER_SHADOW_ONLY',
       lotUpperBound: 0.1,
       sizingTier: 'RESEARCH',
     });
   });
 
-  it('lets an exceptionally strong mature local pocket execute with three of six votes', () => {
+  it('keeps even an exceptionally strong three-vote local pocket shadow-only until transfer is validated', () => {
     expect(evaluatePaperOpportunityScout({ ...candidate, consensusPassed: 3 })).toMatchObject({
-      eligible: true,
-      reason: 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT',
+      eligible: false,
+      reason: 'LOCAL_EDGE_TRANSFER_SHADOW_ONLY',
       lotUpperBound: 0.1,
       sizingTier: 'RESEARCH',
     });
@@ -739,10 +739,10 @@ describe('PAPER provisional local-edge scout', () => {
     shadowLocalEdgePocket: provisionalPocket,
   };
 
-  it('admits a fresh 3-for-3 exact local pocket only at micro PAPER size', () => {
+  it('keeps a fresh 3-for-3 exact local pocket shadow-only until mature support is established', () => {
     expect(evaluatePaperOpportunityScout(candidate)).toMatchObject({
-      eligible: true,
-      reason: 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT',
+      eligible: false,
+      reason: 'PROVISIONAL_LOCAL_EDGE_SHADOW_ONLY',
       lotUpperBound: 0.1,
       sizingTier: 'RESEARCH',
     });

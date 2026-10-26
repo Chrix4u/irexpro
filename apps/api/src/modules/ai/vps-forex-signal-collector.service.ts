@@ -204,17 +204,14 @@ const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 
 export function paperOpportunityScoutModelVersion(engineCode: string): string {
-  return `external-provider/${engineCode}/paper-opportunity-scout-v9-provisional-local-edge-0.10-tier`;
+  return `external-provider/${engineCode}/paper-opportunity-scout-v10-local-edge-shadow-quarantine-0.10-tier`;
 }
 
 export function isPaperLocalShadowEdgeScoutReason(
   reason: PaperOpportunityScoutDecision['reason'] | null | undefined,
 ): boolean {
-  return (
-    reason === 'LOCAL_SHADOW_EDGE_SCOUT' ||
-    reason === 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT' ||
-    reason === 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT'
-  );
+  void reason;
+  return false;
 }
 
 export function canHighConvictionLocalScoutOverrideRealisedRoute(input: {
@@ -228,25 +225,8 @@ export function canHighConvictionLocalScoutOverrideRealisedRoute(input: {
   pairSideEligible: boolean;
   realisedRouteEligible: boolean | null;
 }): boolean {
-  const matureLocalOverride =
-    input.localPocketHighConviction &&
-    (input.scoutReason === 'LOCAL_SHADOW_EDGE_SCOUT' ||
-      input.scoutReason === 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT');
-  const provisionalLocalOverride =
-    input.localPocketProvisional === true &&
-    input.scoutReason === 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT';
-  return (
-    !input.fullSizePaperExecutionCandidate &&
-    input.scoutEligible &&
-    isPaperLocalShadowEdgeScoutReason(input.scoutReason) &&
-    Number.isFinite(input.scoutLotUpperBound) &&
-    Number(input.scoutLotUpperBound) > 0 &&
-    Number(input.scoutLotUpperBound) <= 0.1 &&
-    (matureLocalOverride || provisionalLocalOverride) &&
-    input.structuralRouteEligible &&
-    input.pairSideEligible &&
-    input.realisedRouteEligible === false
-  );
+  void input;
+  return false;
 }
 const PAPER_CHAMPION_MODEL_VERSION =
   'external-provider/irexpro-multimodel-ensemble-v1/paper-only-v1';
@@ -683,9 +663,7 @@ export function executableNetExpectedR(
 ): number {
   if (
     isPaperLocalShadowEdgeScoutReason(option.paperOpportunityScout?.reason) &&
-    option.paperShadowLocalEdgePocket &&
-    (option.paperShadowLocalEdgePocket.supported ||
-      option.paperOpportunityScout?.reason === 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT') &&
+    option.paperShadowLocalEdgePocket?.supported === true &&
     Number.isFinite(option.paperShadowLocalEdgePocket.averageNetR)
   ) {
     return option.paperShadowLocalEdgePocket.averageNetR;

@@ -84,6 +84,8 @@ export type PaperOpportunityScoutReason =
   | 'LOCAL_SHADOW_EDGE_SCOUT'
   | 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT'
   | 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT'
+  | 'PROVISIONAL_LOCAL_EDGE_SHADOW_ONLY'
+  | 'LOCAL_EDGE_TRANSFER_SHADOW_ONLY'
   | 'FULL_SIZE_ALREADY_ELIGIBLE'
   | 'ROUTE_NOT_SCOUTABLE'
   | 'REGIME_NOT_SCOUTABLE'
@@ -250,7 +252,7 @@ export function evaluatePaperOpportunityScout(
       return reject('QUALITY_TOO_LOW');
     if (!Number.isFinite(input.alignedMomentumAtr) || input.alignedMomentumAtr < 0.1)
       return reject('MOMENTUM_NOT_CONFIRMED');
-    return decision(policy, true, 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT', 0.1);
+    return decision(policy, false, 'PROVISIONAL_LOCAL_EDGE_SHADOW_ONLY', 0.1);
   }
 
   if (input.shadowLocalEdgePocket?.supported === true) {
@@ -269,14 +271,7 @@ export function evaluatePaperOpportunityScout(
       input.exitQuality < 0.3
     )
       return reject('QUALITY_TOO_LOW');
-    return decision(
-      policy,
-      true,
-      highConvictionLocalPocket && input.consensusPassed === 3
-        ? 'LOCAL_SHADOW_EDGE_CONSENSUS_SCOUT'
-        : 'LOCAL_SHADOW_EDGE_SCOUT',
-      0.1,
-    );
+    return decision(policy, false, 'LOCAL_EDGE_TRANSFER_SHADOW_ONLY', 0.1);
   }
 
   const shadowPulse = input.shadowDirectionalPulse;
