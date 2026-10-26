@@ -2195,6 +2195,12 @@ describe('VpsForexSignalCollectorService', () => {
           metadata: expect.objectContaining({
             adaptive_scan_rank: 1,
             adaptive_opportunity_score: 0.9,
+            adaptive_risk_multiplier: 1,
+            adaptive_risk_multiplier_raw: 1,
+            paper_champion_direction_risk_cap_active: false,
+            paper_champion_direction_risk_cap_reason: 'CHAMPION_DIRECTION_SUPPORTED',
+            paper_champion_direction_risk_cap_multiplier: null,
+            paper_champion_direction_risk_cap_trades: 8,
             paper_entry_market_alignment_artifact: 'paper-entry-market-alignment-v1',
             paper_entry_market_alignment_reason: 'ALIGNED',
             paper_entry_market_alignment_fast_mark_source: 'STREAM',
