@@ -6653,10 +6653,106 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       }
       result.set(instrument, candles);
     }
+    const freshnessOverlaid = await this.refreshStalePaperProviderM5Tails(result, now);
     this.lastProviderFetchMinute = requestMinute;
-    this.lastProviderSeries = result;
+    this.lastProviderSeries = freshnessOverlaid;
     this.lastMarketDataAuthority = 'TWELVE_DATA';
-    return result;
+    return freshnessOverlaid;
+  }
+
+  private async refreshStalePaperProviderM5Tails(
+    series: Map<string, LivePaperCandleInput[]>,
+    nowMs: number,
+  ): Promise<Map<string, LivePaperCandleInput[]>> {
+    const expectedLatestOpen = Math.floor(nowMs / BAR_MS) * BAR_MS - BAR_MS;
+    const staleInstruments = SYMBOLS.map(([instrument]) => instrument).filter((instrument) => {
+      const candles = series.get(instrument);
+      return (
+        !candles?.length || candles[candles.length - 1]!.timestamp.getTime() !== expectedLatestOpen
+      );
+    });
+    if (staleInstruments.length === 0) return series;
+
+    const userId = this.userId();
+    const executionConnectionId = this.connectionId();
+    if (!userId || !executionConnectionId) return series;
+
+    const refreshed = new Map(series);
+    let refreshedCount = 0;
+    const historyConcurrency = 3;
+    for (let offset = 0; offset < staleInstruments.length; offset += historyConcurrency) {
+      const batch = staleInstruments.slice(offset, offset + historyConcurrency);
+      const rows = await Promise.all(
+        batch.map(async (instrument) => {
+          try {
+            // The active PAPER adapter is already fed by the six-pair provider
+            // M1 cache. Pull only the recent M1 tail and causally aggregate five
+            // fully closed M1 bars into M5. This preserves the long Twelve Data
+            // history while eliminating the 15-minute rotating-cache blind spot.
+            const rawM1 = await this.brokerService.getOhlcvForConnection(
+              userId,
+              executionConnectionId,
+              instrument,
+              'M1',
+              30,
+            );
+            const m1Candles: LivePaperCandleInput[] = rawM1
+              .map((candle) => ({
+                timestamp:
+                  candle.timestamp instanceof Date
+                    ? new Date(candle.timestamp)
+                    : new Date(candle.timestamp),
+                open: candle.open,
+                high: candle.high,
+                low: candle.low,
+                close: candle.close,
+              }))
+              .filter(
+                (candle) =>
+                  Number.isFinite(candle.timestamp.getTime()) &&
+                  candle.timestamp.getTime() + 60_000 <= nowMs,
+              )
+              .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+            const m5Tail = aggregateCompletedCandles(m1Candles, 5, 1);
+            const latest = m5Tail[m5Tail.length - 1];
+            if (!latest || latest.timestamp.getTime() !== expectedLatestOpen) return null;
+            return { instrument, m5Tail };
+          } catch (error) {
+            // Best-effort freshness overlay only. If live M1 is unavailable the
+            // strict STALE_M5_CANDIDATE gate remains authoritative downstream.
+            this.logger.warn(
+              `PAPER M1->M5 freshness overlay failed instrument=${instrument}: ${(error as Error).message}`,
+            );
+            return null;
+          }
+        }),
+      );
+
+      for (const row of rows) {
+        if (!row) continue;
+        const merged = new Map<number, LivePaperCandleInput>();
+        for (const candle of refreshed.get(row.instrument) ?? []) {
+          merged.set(candle.timestamp.getTime(), candle);
+        }
+        for (const candle of row.m5Tail) {
+          merged.set(candle.timestamp.getTime(), candle);
+        }
+        refreshed.set(
+          row.instrument,
+          [...merged.values()]
+            .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+            .slice(-1200),
+        );
+        refreshedCount += 1;
+      }
+    }
+
+    if (refreshedCount > 0) {
+      this.logger.log(
+        `PAPER M1->M5 freshness overlay refreshed=${refreshedCount}/${staleInstruments.length} stalePairs before scoring`,
+      );
+    }
+    return refreshed;
   }
 
   private transientBrokerFallback(

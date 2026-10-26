@@ -64,6 +64,35 @@ describe('evaluateM1RoutePairSideReliability', () => {
     expect(result.reason).toBe('EARLY_LOSS_STREAK');
   });
 
+  it('brakes a fresh three-loss streak even when older wins still dominate the sample', () => {
+    const recentLosses = [-1, -1, -1].map((pnl, index) =>
+      row(pnl, { closedAt: new Date(NOW.getTime() - (index + 1) * 60_000) }),
+    );
+    const olderWins = Array.from({ length: 7 }, (_, index) =>
+      row(1, { closedAt: new Date(NOW.getTime() - (index + 10) * 60_000) }),
+    );
+    const result = evaluate([...olderWins, ...recentLosses]);
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('EARLY_LOSS_STREAK');
+  });
+
+  it('uses actual risk-normalized payoff so small protected wins cannot mask full-stop losses', () => {
+    const payouts = [-3.18, 1.5, -3.18, 1.5, -3.18, 1.5, -3.18, 1.5, 1.5, 1.5];
+    const result = evaluate(
+      payouts.map((pnl, index) =>
+        row(pnl, {
+          closedAt: new Date(NOW.getTime() - (index + 1) * 60_000),
+          riskAtStop: 3.18,
+        } as Partial<M1RoutePairSideEvidenceRow>),
+      ),
+    );
+    expect(result.wins).toBe(6);
+    expect(result.losses).toBe(4);
+    expect(result.averageRealizedR).toBeLessThan(0);
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('NEGATIVE_EXPECTANCY');
+  });
+
   it.each([
     [[1, 1, 1, 1, -1], true, 'POSITIVE_EXPECTANCY'],
     [[1, -1, -1, -1, -1], false, 'NEGATIVE_EXPECTANCY'],

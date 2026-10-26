@@ -4241,6 +4241,102 @@ describe('VpsForexSignalCollectorService', () => {
     );
   });
 
+  it('refreshes stale cached M5 tails from active PAPER M1 before scoring the six-pair snapshot', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-26T11:00:20.000Z'));
+    try {
+      const baseFor = (instrument: string) =>
+        instrument === 'USDJPY'
+          ? 157
+          : instrument === 'GBPUSD'
+            ? 1.34
+            : instrument === 'USDCAD'
+              ? 1.37
+              : instrument === 'USDCHF'
+                ? 0.8
+                : instrument === 'AUDUSD'
+                  ? 0.66
+                  : 1.1;
+      const digitsFor = (instrument: string) => (instrument === 'USDJPY' ? 3 : 5);
+      const staleSeries = new Map(
+        PAIRS.map(([instrument]) => [
+          instrument,
+          trendCandles(baseFor(instrument), digitsFor(instrument)).map((row) => ({
+            ...row,
+            timestamp: new Date(row.timestamp.getTime() - 300_000),
+          })),
+        ]),
+      );
+      const freshM1 = (instrument: string) => {
+        const base = baseFor(instrument);
+        const digits = digitsFor(instrument);
+        const latestOpen = Math.floor(Date.now() / 60_000) * 60_000 - 60_000;
+        return Array.from({ length: 30 }, (_, index) => {
+          const openTime = latestOpen - (29 - index) * 60_000;
+          const close = base + index * (base > 10 ? 0.001 : 0.00001);
+          const range = base > 10 ? 0.01 : 0.00008;
+          return {
+            timestamp: new Date(openTime),
+            open: close.toFixed(digits),
+            high: (close + range).toFixed(digits),
+            low: (close - range).toFixed(digits),
+            close: close.toFixed(digits),
+            volume: '0',
+          };
+        });
+      };
+      const broker = {
+        getOhlcvForConnection: jest
+          .fn()
+          .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) =>
+            freshM1(instrument),
+          ),
+      } as unknown as BrokerService;
+      const collector = createCollector(
+        config({
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.apiKey': 'real-key-123456',
+          'vpsForexScanner.userId': 'user-1',
+          'vpsForexScanner.brokerConnectionId': 'conn-1',
+          'multimodelBrokerExpert.enabled': true,
+          'multimodelBrokerExpert.sourceConnectionId': 'metaapi-demo-1',
+        }),
+        { receiveSignal: jest.fn() } as unknown as AiSignalService,
+        { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+        broker,
+        new LivePaperMarketDataService(),
+        aiEngineClientMock(),
+      );
+      (collector as any).lastProviderSeries = staleSeries;
+      (collector as any).lastProviderFetchMinute = '2026-10-26T10:59';
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => allTrendPayload(),
+      });
+
+      const series = await (collector as any).fetchSixPairSeries(
+        'real-key-123456',
+        fetchMock as unknown as typeof fetch,
+      );
+
+      const expectedLatestOpen = new Date('2026-10-26T10:55:00.000Z').getTime();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(4);
+      for (const call of (broker as any).getOhlcvForConnection.mock.calls) {
+        expect(call[0]).toBe('user-1');
+        expect(call[1]).toBe('conn-1');
+        expect(call[3]).toBe('M1');
+        expect(call[4]).toBe(30);
+      }
+      expect(series.size).toBe(6);
+      for (const candles of series.values()) {
+        expect(candles.at(-1)?.timestamp.getTime()).toBe(expectedLatestOpen);
+      }
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('bounds broker-native six-pair history concurrency below the MetaApi per-account limit', async () => {
     let active = 0;
     let peak = 0;
