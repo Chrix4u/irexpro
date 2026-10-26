@@ -5534,9 +5534,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         `
           SELECT MAX(t.opened_at) AS last_opened_at
           FROM trading.trades t
+          JOIN trading.trade_intents ti ON ti.id = t.trade_intent_id
           WHERE t.user_id = $1
             AND t.broker_connection_id = $2
             AND t.signal_id IS NOT NULL
+            AND ti.timeframe = 'M5'
         `,
         [userId, connectionId],
       )) as Array<{ last_opened_at: string | Date | null }>;
