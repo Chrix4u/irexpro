@@ -34,7 +34,7 @@ jobs:
       STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
       STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
       SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
-      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
       EXPECTED_DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
 
     steps:
