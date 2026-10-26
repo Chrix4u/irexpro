@@ -577,6 +577,8 @@ function lotSizeToUnits(lotSize: string): bigint {
 export const PAPER_M1_MINIMUM_FORECAST_HOLD_MINUTES = 15;
 export const PAPER_M5_MINIMUM_FORECAST_HOLD_MINUTES = 20;
 
+const M1_PAPER_EXECUTION_QUOTE_MAX_AGE_MS = 15_000;
+
 export function paperMinimumForecastHoldMinutes(strategyTimeframe?: string): number {
   return strategyTimeframe?.trim().toUpperCase() === 'M1'
     ? PAPER_M1_MINIMUM_FORECAST_HOLD_MINUTES
@@ -1089,6 +1091,49 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     return true;
   }
 
+  private executionQuoteForTimeframe(instrument: string, strategyTimeframe?: string): PaperQuote {
+    const isM1 = strategyTimeframe?.trim().toUpperCase() === 'M1';
+    if (!this.isLiveMarketMode() || !isM1) return this.quoteForInstrument(instrument);
+
+    let quote: ReturnType<LivePaperMarketDataService['getMarkQuote']>;
+    try {
+      quote = this.liveMarketData!.getMarkQuote(
+        instrument,
+        M1_PAPER_EXECUTION_QUOTE_MAX_AGE_MS,
+        0,
+        this._connectionId,
+      );
+    } catch (error) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.PROVIDER_UNAVAILABLE,
+        `No fresh M1 execution quote is available for ${instrument}.`,
+        error,
+        true,
+      );
+    }
+
+    const ageMs = Date.now() - quote.timestamp.getTime();
+    if (
+      !Number.isFinite(ageMs) ||
+      ageMs < -5_000 ||
+      ageMs > M1_PAPER_EXECUTION_QUOTE_MAX_AGE_MS ||
+      quote.source === 'REST_M5'
+    ) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.PROVIDER_UNAVAILABLE,
+        `No fresh M1 execution quote is available for ${instrument}.`,
+        undefined,
+        true,
+      );
+    }
+    return {
+      bid: quote.bid,
+      ask: quote.ask,
+      timestamp: new Date(quote.timestamp),
+      source: quote.source,
+    };
+  }
+
   private quoteForInstrument(instrument: string): PaperQuote {
     if (this.isLiveMarketMode()) {
       const quote = this.liveMarketData!.getQuote(instrument, 20 * 60_000, this._connectionId);
@@ -1530,7 +1575,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       ? {
           bid: liveQuote.bid,
           ask: liveQuote.ask,
-          timestamp: liveQuote.timestamp,
+          timestamp: liveQuote.timestamp ?? this.currentTime(),
           source: liveQuote.source,
         }
       : this.quoteForInstrument(position.instrument);
@@ -1655,12 +1700,12 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
    */
   async getCurrentPrice(
     instrument: string,
-    options?: { advanceSimulation?: boolean },
+    options?: { advanceSimulation?: boolean; strategyTimeframe?: string },
   ): Promise<BrokerPrice> {
     this.assertConnected();
     const symbol = this.requireInstrument(instrument);
     if (this.isLiveMarketMode()) {
-      const liveQuote = this.liveMarketData!.getQuote(symbol, 20 * 60_000, this._connectionId);
+      const liveQuote = this.executionQuoteForTimeframe(symbol, options?.strategyTimeframe);
       const quote: PaperQuote = { bid: liveQuote.bid, ask: liveQuote.ask };
       // First replay every fully closed M5 candle since each position opened.
       // This is the conservative recovery path for missed ticks/restarts. If
@@ -1668,7 +1713,8 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       this.evaluateLiveCandleProtection(symbol);
       // Fresh STREAM/PROVIDER bid/ask marks are protection-authoritative for
       // already-open positions, so TP/SL does not wait for M5 candle close.
-      // Entry fills/resting orders/model evidence remain closed-M5 based.
+      // M5 entry/model evidence remains closed-M5 based. M1 execution uses a
+      // separate strict fast-mark path keyed by strategyTimeframe.
       this.applyFreshLiveProtectionMarks(symbol);
       this._marketTickCounter += 1;
       this.evaluateWorkingOrders(quote, symbol);
@@ -1678,7 +1724,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         bid: quote.bid,
         ask: quote.ask,
         spread: subtractDecimalStrings(quote.ask, quote.bid),
-        timestamp: liveQuote.timestamp,
+        timestamp: liveQuote.timestamp ?? this.currentTime(),
       };
     }
     const shouldAdvance = !this._replayFeed || options?.advanceSimulation === true;
@@ -1916,7 +1962,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     takeProfit: string,
     comment: string,
   ): BrokerOrderResult {
-    const quote = this.quoteForInstrument(instrument);
+    const quote = this.executionQuoteForTimeframe(instrument, order.strategyTimeframe);
     const fillPrice = order.direction === 'BUY' ? quote.ask : quote.bid;
     const units = lotSizeToUnits(order.lotSize);
     const requiredMargin = toMoney(this.marginInAccountCurrencyExact(instrument, units, fillPrice));

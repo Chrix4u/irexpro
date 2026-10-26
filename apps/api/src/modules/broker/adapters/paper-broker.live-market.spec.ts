@@ -196,6 +196,65 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     );
   });
 
+  it('fills M1 MARKET orders from a fresh streaming mark instead of the closed-M5 quote', async () => {
+    const live = new LivePaperMarketDataService();
+    live.registerLiveConnection('conn-m1-fresh-fill');
+    const bars = protectionBars();
+    live.updateClosedCandles('EURUSD', bars.initial, 'conn-m1-fresh-fill');
+    live.updateStreamingMidQuote('EURUSD', 1.105, new Date(), 'conn-m1-fresh-fill', 'DERIV');
+    const freshMark = live.getMarkQuote('EURUSD', 15_000, 0, 'conn-m1-fresh-fill');
+    const closedM5 = live.getQuote('EURUSD', 20 * 60_000, 'conn-m1-fresh-fill');
+    expect(freshMark.bid).not.toBe(closedM5.bid);
+
+    const adapter = new PaperBrokerAdapter(
+      undefined,
+      undefined,
+      undefined,
+      'conn-m1-fresh-fill',
+      live,
+    );
+    await adapter.connect({} as any);
+    const result = await adapter.placeOrder({
+      idempotencyKey: 'm1-fresh-fill-sell',
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      lotSize: '0.01',
+      stopLoss: '1.11000',
+      takeProfit: '1.10000',
+      orderKind: 'MARKET',
+      strategyTimeframe: 'M1',
+    });
+
+    expect(result.filledPrice).toBe(freshMark.bid);
+  });
+
+  it('fails M1 MARKET execution closed when only a closed-M5 quote is available', async () => {
+    const live = new LivePaperMarketDataService();
+    live.registerLiveConnection('conn-m1-no-fast-mark');
+    live.updateClosedCandles('EURUSD', protectionBars().initial, 'conn-m1-no-fast-mark');
+    const adapter = new PaperBrokerAdapter(
+      undefined,
+      undefined,
+      undefined,
+      'conn-m1-no-fast-mark',
+      live,
+    );
+    await adapter.connect({} as any);
+
+    await expect(
+      adapter.placeOrder({
+        idempotencyKey: 'm1-no-fast-mark-sell',
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        lotSize: '0.01',
+        stopLoss: '1.11000',
+        takeProfit: '1.09000',
+        orderKind: 'MARKET',
+        strategyTimeframe: 'M1',
+      }),
+    ).rejects.toThrow(/fresh M1 execution quote/i);
+  });
+
   it('uses streaming ticks for position marks/protection but not PAPER entry fills', async () => {
     const live = new LivePaperMarketDataService();
     live.registerLiveConnection('conn-mark-only');
@@ -421,6 +480,7 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     const live = new LivePaperMarketDataService();
     live.registerLiveConnection('conn-time-to-work-m1');
     live.updateClosedCandles('EURUSD', protectionBars().initial, 'conn-time-to-work-m1');
+    live.updateStreamingMidQuote('EURUSD', 1.1, new Date(), 'conn-time-to-work-m1', 'DERIV');
     const adapter = new PaperBrokerAdapter(
       undefined,
       undefined,

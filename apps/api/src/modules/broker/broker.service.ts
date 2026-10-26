@@ -2218,6 +2218,7 @@ export class BrokerService {
     options?: {
       advanceSimulation?: boolean;
       propagateProviderError?: boolean;
+      strategyTimeframe?: string;
     },
   ): Promise<BrokerPrice | null> {
     const connection = await this.findConnectionById(brokerConnectionId, userId);
@@ -2253,6 +2254,7 @@ export class BrokerService {
       if (!alreadyConnected) await adapter.connect(credentials);
       const price = await adapter.getCurrentPrice(instrument, {
         advanceSimulation: options?.advanceSimulation,
+        strategyTimeframe: options?.strategyTimeframe,
       });
       if (
         !price ||
