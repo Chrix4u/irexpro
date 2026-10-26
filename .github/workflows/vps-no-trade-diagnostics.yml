@@ -103,13 +103,24 @@ jobs:
           ai = read_log(sys.argv[1])
           api = read_log(sys.argv[2])
           lines = (ai + '\n' + api).splitlines()
-          print('counts_scope=log_window_only; not lifetime totals or account performance')
+          print('counts_scope=log_window_only; database M1 summaries below use a 24h UTC rolling window')
           print(f'ai_log_lines={len(ai.splitlines())}')
           print(f'api_log_lines={len(api.splitlines())}')
 
           orders = [line for line in lines if 'PaperBrokerAdapter: simulated order placed ' in line]
           dispatches = [line for line in lines if 'cadence=adaptive-scan-ranked' in line]
+          m1_lines = [line for line in lines if 'M1 tactical' in line]
+          m1_readiness = [line for line in m1_lines if 'M1 tactical readiness ' in line]
+          m1_exposure_blocks = [line for line in m1_lines if 'M1_CURRENCY_EXPOSURE_BLOCKED' in line]
+          m1_fail_closed = [line for line in m1_lines if 'failed closed:' in line]
           print(f'paper_order_events={len(orders)}')
+          print(f'm1_tactical_log_events={len(m1_lines)}')
+          print(f'm1_readiness_change_events={len(m1_readiness)}')
+          print(f'm1_currency_exposure_block_events={len(m1_exposure_blocks)}')
+          print(f'm1_fail_closed_events={len(m1_fail_closed)}')
+          print('m1_readiness_reason_counts:')
+          for key, value in Counter(re.findall(r'M1 tactical readiness .*?reason=([A-Z][A-Z0-9_]+)', '\n'.join(m1_readiness))).most_common(15):
+              print(f'  {key}={value}')
           print('adaptive_dispatch_outcomes:')
           for key, value in Counter(re.findall(r'\boutcome=([A-Z][A-Z0-9_]+)', '\n'.join(dispatches))).most_common(10):
               print(f'  {key}={value}')
@@ -136,6 +147,8 @@ jobs:
               'POST_LOSS', 'No new market data revision', 'PAPER_PRE_INTENT_RETRY_SAFE',
               'RISK REJECTED', 'signal submitted', 'submission accepted', 'execution failed',
               'Adaptive scan summary', 'Adaptive scan durable summary unavailable',
+              'M1 tactical', 'M1 tactical readiness', 'M1_CURRENCY_EXPOSURE_BLOCKED',
+              'M1_PHASE_ROUTE_SHADOW', 'M1_ROUTE_NET_EXPECTED_R_FLOOR',
           ]
           combined = '\n'.join(lines)
           print('keyword_counts:')
@@ -164,6 +177,9 @@ jobs:
           highlights = [
               ('latest_adaptive_scan_summary', 'Adaptive scan summary'),
               ('latest_adaptive_dispatch', 'cadence=adaptive-scan-ranked'),
+              ('latest_m1_readiness', 'M1 tactical readiness '),
+              ('latest_m1_exposure_block', 'M1_CURRENCY_EXPOSURE_BLOCKED'),
+              ('latest_m1_fail_closed', 'M1 tactical slot='),
               ('latest_execution_failed', 'outcome=EXECUTION_FAILED'),
               ('latest_risk_rejected', 'outcome=RISK_REJECTED'),
               ('latest_counterfactual', 'Counterfactual '),
@@ -175,7 +191,7 @@ jobs:
               print(f'{label}={event[:1000]}')
 
           needles = [needle.lower() for needle in checks] + [
-              '[vpsforexsignalcollectorservice]',
+              '[vpsforexsignalcollectorservice]', '[m1tacticalschedulerservice]',
               'adaptive ', 'multi-model paper candidate', 'multi-model ensemble',
               'paperadmitted=', 'netexpectedr=', 'scanner', 'market data',
               'allocation-aware', 'simulated order placed', 'submitted', 'executed',
@@ -186,7 +202,7 @@ jobs:
           # Reserve a separate budget per service so one noisy log cannot hide the other.
           # Newest first also keeps the latest evidence if an outer transport truncates.
           for service, events in [('api', api_events), ('ai', newest(ai))]:
-              remaining = 2500
+              remaining = 3500
               print(f'  {service}_events_newest_first:')
               for line in events:
                   if noise.search(line) or not any(needle in line.lower() for needle in needles):
@@ -197,6 +213,177 @@ jobs:
                   print(event, end='')
                   remaining -= len(event)
           PY
+
+          printf '%s\n' 'm1_database_24h:'
+          api_env="$staging/apps/api/.env"
+          if command -v psql >/dev/null 2>&1 && [[ -f "$api_env" ]]; then
+            set +u
+            set -a
+            # The staging .env is owned by the deployment and has already been
+            # validated by the application. Never print its contents.
+            . "$api_env" >/dev/null 2>&1 || true
+            set +a
+            set -u
+            db_name="${DB_NAME:-${DB_DATABASE:-}}"
+            db_port="${DB_PORT:-5432}"
+            if [[ -n "${DB_HOST:-}" && -n "${DB_USER:-}" && -n "${DB_PASSWORD:-}" && -n "$db_name" ]]; then
+              PGPASSWORD="$DB_PASSWORD" psql \
+                -h "$DB_HOST" -p "$db_port" -U "$DB_USER" -d "$db_name" \
+                -v ON_ERROR_STOP=1 -P pager=off -AtF '|' 2>/dev/null <<'SQL' || printf '%s\n' 'm1_database_query_status=FAILED'
+          SELECT
+            'm1_decision_24h',
+            route,
+            execution_authority,
+            COALESCE(outcome_state, 'PENDING'),
+            COUNT(*)
+          FROM trading.m1_tactical_decisions
+          WHERE evaluated_at >= NOW() - interval '24 hours'
+          GROUP BY route, execution_authority, COALESCE(outcome_state, 'PENDING')
+          ORDER BY route, execution_authority, COALESCE(outcome_state, 'PENDING');
+
+          WITH linked AS (
+            SELECT DISTINCT ON (t.id)
+              t.id,
+              d.route,
+              t.instrument,
+              t.direction,
+              t.status::text AS status,
+              t.lot_size,
+              t.realised_pnl,
+              t.opened_at,
+              t.closed_at,
+              COALESCE(ti.metadata->>'m1_currency_exposure_capacity', 'UNKNOWN') AS exposure_capacity
+            FROM trading.m1_tactical_decisions d
+            JOIN trading.trade_intents ti
+              ON ti.user_id = d.user_id
+             AND ti.broker_connection_id = d.broker_connection_id
+             AND (
+               ti.id = d.trade_intent_id
+               OR (d.trade_intent_id IS NULL AND d.signal_id IS NOT NULL AND ti.signal_id = d.signal_id)
+             )
+            JOIN trading.trades t
+              ON t.trade_intent_id = ti.id
+             AND t.user_id = d.user_id
+             AND t.broker_connection_id = d.broker_connection_id
+            WHERE d.evaluated_at >= NOW() - interval '24 hours'
+            ORDER BY t.id, d.evaluated_at DESC
+          )
+          SELECT
+            'm1_trade_24h',
+            route,
+            COUNT(*),
+            COUNT(*) FILTER (WHERE UPPER(status) = 'OPEN'),
+            COUNT(*) FILTER (WHERE UPPER(status) = 'CLOSED'),
+            COUNT(*) FILTER (WHERE UPPER(status) = 'CLOSED' AND realised_pnl > 0),
+            COUNT(*) FILTER (WHERE UPPER(status) = 'CLOSED' AND realised_pnl < 0),
+            ROUND(COALESCE(SUM(realised_pnl) FILTER (WHERE UPPER(status) = 'CLOSED'), 0)::numeric, 2),
+            ROUND(
+              CASE
+                WHEN ABS(COALESCE(SUM(realised_pnl) FILTER (WHERE UPPER(status) = 'CLOSED' AND realised_pnl < 0), 0)) > 0
+                  THEN COALESCE(SUM(realised_pnl) FILTER (WHERE UPPER(status) = 'CLOSED' AND realised_pnl > 0), 0)
+                       / ABS(SUM(realised_pnl) FILTER (WHERE UPPER(status) = 'CLOSED' AND realised_pnl < 0))
+                ELSE NULL
+              END::numeric,
+              3
+            )
+          FROM linked
+          GROUP BY route
+          ORDER BY route;
+
+          WITH linked AS (
+            SELECT DISTINCT ON (t.id)
+              t.id,
+              t.instrument,
+              t.direction,
+              d.route,
+              t.status::text AS status,
+              t.lot_size,
+              t.realised_pnl,
+              t.opened_at,
+              t.closed_at,
+              COALESCE(ti.metadata->>'m1_currency_exposure_capacity', 'UNKNOWN') AS exposure_capacity,
+              COALESCE(ti.metadata->>'m1_scout_reliability_tier', 'NONE') AS reliability_tier
+            FROM trading.m1_tactical_decisions d
+            JOIN trading.trade_intents ti
+              ON ti.user_id = d.user_id
+             AND ti.broker_connection_id = d.broker_connection_id
+             AND (
+               ti.id = d.trade_intent_id
+               OR (d.trade_intent_id IS NULL AND d.signal_id IS NOT NULL AND ti.signal_id = d.signal_id)
+             )
+            JOIN trading.trades t
+              ON t.trade_intent_id = ti.id
+             AND t.user_id = d.user_id
+             AND t.broker_connection_id = d.broker_connection_id
+            WHERE d.evaluated_at >= NOW() - interval '24 hours'
+            ORDER BY t.id, d.evaluated_at DESC
+          )
+          SELECT
+            'm1_exposure_capacity_24h',
+            exposure_capacity,
+            COUNT(*)
+          FROM linked
+          GROUP BY exposure_capacity
+          ORDER BY exposure_capacity;
+
+          SELECT
+            'm1_exposure_block_24h',
+            COUNT(*)
+          FROM trading.m1_tactical_decisions
+          WHERE evaluated_at >= NOW() - interval '24 hours'
+            AND outcome_reason LIKE 'M1_CURRENCY_EXPOSURE_BLOCKED%';
+
+          WITH recent AS (
+            SELECT DISTINCT ON (t.id)
+              t.id,
+              t.instrument,
+              t.direction,
+              d.route,
+              t.status::text AS status,
+              t.lot_size,
+              t.realised_pnl,
+              t.opened_at,
+              t.closed_at,
+              COALESCE(ti.metadata->>'m1_currency_exposure_capacity', 'UNKNOWN') AS exposure_capacity,
+              COALESCE(ti.metadata->>'m1_scout_reliability_tier', 'NONE') AS reliability_tier
+            FROM trading.m1_tactical_decisions d
+            JOIN trading.trade_intents ti
+              ON ti.user_id = d.user_id
+             AND ti.broker_connection_id = d.broker_connection_id
+             AND (
+               ti.id = d.trade_intent_id
+               OR (d.trade_intent_id IS NULL AND d.signal_id IS NOT NULL AND ti.signal_id = d.signal_id)
+             )
+            JOIN trading.trades t
+              ON t.trade_intent_id = ti.id
+             AND t.user_id = d.user_id
+             AND t.broker_connection_id = d.broker_connection_id
+            WHERE d.evaluated_at >= NOW() - interval '24 hours'
+            ORDER BY t.id, d.evaluated_at DESC
+          )
+          SELECT
+            'm1_recent_trade',
+            instrument,
+            direction,
+            route,
+            UPPER(status),
+            lot_size,
+            COALESCE(ROUND(realised_pnl::numeric, 2)::text, ''),
+            to_char(opened_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+            COALESCE(to_char(closed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), ''),
+            exposure_capacity,
+            reliability_tier
+          FROM recent
+          ORDER BY opened_at DESC
+          LIMIT 20;
+          SQL
+            else
+              printf '%s\n' 'm1_database_query_status=SKIPPED_MISSING_DB_ENV'
+            fi
+          else
+            printf '%s\n' 'm1_database_query_status=SKIPPED_PSQL_OR_ENV_UNAVAILABLE'
+          fi
+
           REMOTE
 
           actual_staging_sha="$(sed -n 's/^staging_sha=//p' "$output_file" | head -1 | tr -d '\r')"
@@ -231,8 +418,8 @@ jobs:
               text,
           )
           text = text.replace('```', "'''")
-          if len(text) > 18000:
-              text = text[:18000] + '\n[output truncated]\n'
+          if len(text) > 24000:
+              text = text[:24000] + '\n[output truncated]\n'
           path.write_text(text, encoding='utf-8')
           PY
 
