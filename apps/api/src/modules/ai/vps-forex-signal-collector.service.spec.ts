@@ -322,6 +322,29 @@ describe('calibrated idle recovery scanner plumbing', () => {
     expect(query).toHaveBeenCalledTimes(1);
   });
 
+  it('does not let a newer M1 trade reset the M5 participation idle clock', async () => {
+    const collector = Object.create(VpsForexSignalCollectorService.prototype) as any;
+    const query = jest.fn().mockImplementation(async (sql: string) => {
+      if (sql.includes("ti.timeframe = 'M5'")) {
+        return [{ last_opened_at: new Date('2026-10-20T12:00:00.000Z') }];
+      }
+      return [{ last_opened_at: new Date('2026-10-20T16:55:00.000Z') }];
+    });
+    collector.dataSource = { query };
+
+    await expect(
+      collector.loadPaperIdleState('user-1', 'conn-1', new Date('2026-10-20T17:00:00.000Z')),
+    ).resolves.toMatchObject({
+      available: true,
+      lastOpenedAt: new Date('2026-10-20T12:00:00.000Z'),
+      idleMinutes: 300,
+    });
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("ti.timeframe = 'M5'"), [
+      'user-1',
+      'conn-1',
+    ]);
+  });
+
   it('derives idle minutes from PAPER session start when no signal trade exists yet', async () => {
     const collector = Object.create(VpsForexSignalCollectorService.prototype) as any;
     const query = jest.fn().mockResolvedValue([{ last_opened_at: null }]);
