@@ -120,6 +120,7 @@ export interface SizedPosition {
 /** Decimal scale for lot math (lot steps are 0.01/0.001 — 8 digits is exact). */
 const LOT_SCALE = 8;
 export const PAPER_PRODUCT_ABSOLUTE_MIN_LOT = '0.1';
+const PAPER_PRODUCT_PROVISIONAL_SCOUT_MIN_LOT = '0.05';
 const PAPER_PRODUCT_DEFAULT_MIN_LOT = '0.2';
 const PAPER_PRODUCT_MAX_LOT = '2';
 
@@ -506,19 +507,28 @@ export class PositionSizingService {
       );
     }
 
+    const requestedPaperPolicyMinimumLot = ExactDecimal.tryParse(
+      params.paperAllocationSizing?.minimumExecutableLot ?? '',
+    );
+    const provisionalScoutProductMinimum = ExactDecimal.parse(
+      PAPER_PRODUCT_PROVISIONAL_SCOUT_MIN_LOT,
+    );
     const paperProductMinimumLot = allocationAwarePaper
-      ? ExactDecimal.parse(PAPER_PRODUCT_ABSOLUTE_MIN_LOT)
+      ? requestedPaperPolicyMinimumLot?.eq(provisionalScoutProductMinimum)
+        ? provisionalScoutProductMinimum
+        : ExactDecimal.parse(PAPER_PRODUCT_ABSOLUTE_MIN_LOT)
       : null;
     const paperProductMaximumLot = allocationAwarePaper
       ? ExactDecimal.parse(PAPER_PRODUCT_MAX_LOT)
       : null;
     let effectiveRequestedLotUpperBound = requestedLotUpperBound;
     if (paperProductMinimumLot && paperProductMaximumLot) {
-      // PAPER sizing has an absolute 0.10–2.00 lot product band. Normal PAPER
-      // callers explicitly/default to 0.20; evidence-backed scouts may request
-      // the 0.10 floor. Caller hints above 2.00 cannot exceed the product maximum.
+      // PAPER may cap an oversized caller request at the product maximum, but an
+      // explicit model/research upper bound is authoritative and must never be
+      // raised to a product floor. The floor check below fails closed when a
+      // requested cap is smaller than the applicable executable minimum.
       effectiveRequestedLotUpperBound = ExactDecimal.min(
-        ExactDecimal.max(requestedLotUpperBound, paperProductMinimumLot),
+        requestedLotUpperBound,
         paperProductMaximumLot,
       );
     }

@@ -560,6 +560,9 @@ export class StrategyOrchestratorService {
             candidate.strategyCode === 'external-irexpro-m1-tactical' &&
             candidate.metadata?.m1_tactical_route === 'M1_EARLY_TRANSITION' &&
             candidate.metadata?.m1_evidence_qualified_scout_eligible === true;
+          const m1ProvisionalScoutEligible =
+            m1EvidenceQualifiedScoutEligible &&
+            candidate.metadata?.m1_scout_reliability_tier === 'PROVISIONAL';
           paperAllocationSizing = {
             executionMode: session.executionMode,
             allocatedCapital: allocationState.hasAllocation
@@ -567,8 +570,11 @@ export class StrategyOrchestratorService {
               : null,
             confidenceTier,
             sessionPeakEquity: session.peakEquity,
-            minimumExecutableLot:
-              opportunityScoutEligible || m1EvidenceQualifiedScoutEligible ? '0.1' : '0.2',
+            minimumExecutableLot: m1ProvisionalScoutEligible
+              ? '0.05'
+              : opportunityScoutEligible || m1EvidenceQualifiedScoutEligible
+                ? '0.1'
+                : '0.2',
             ...(executionCandidate.suggestedEntryPrice != null
               ? { marketReferenceEntryPrice: String(executionCandidate.suggestedEntryPrice) }
               : {}),
