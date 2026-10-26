@@ -194,15 +194,15 @@ describe('M1 tactical aligned-currency exposure guard', () => {
     });
   });
 
-  it('steps a candidate down to 0.05 lots when full size would over-concentrate currency risk', async () => {
+  it('blocks when a 0.10 scout would require a sub-floor exposure reduction', async () => {
     const { service } = guardHarness(1000, [
       { instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 25 },
     ]);
     await expect(
       (service as any).resolveM1CurrencyExposureGuard('user-1', 'conn-1', candidate, 0.1),
     ).resolves.toMatchObject({
-      allowed: true,
-      volumeCap: 0.05,
+      allowed: false,
+      volumeCap: 0,
       decision: { capacity: 'REDUCED' },
     });
   });

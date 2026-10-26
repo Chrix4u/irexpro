@@ -119,7 +119,7 @@ export interface SizedPosition {
 
 /** Decimal scale for lot math (lot steps are 0.01/0.001 — 8 digits is exact). */
 const LOT_SCALE = 8;
-const PAPER_PRODUCT_ABSOLUTE_MIN_LOT = '0.1';
+export const PAPER_PRODUCT_ABSOLUTE_MIN_LOT = '0.1';
 const PAPER_PRODUCT_DEFAULT_MIN_LOT = '0.2';
 const PAPER_PRODUCT_MAX_LOT = '2';
 
