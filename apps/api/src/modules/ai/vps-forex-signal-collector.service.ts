@@ -368,6 +368,7 @@ const PAPER_ENTRY_FAST_MARK_MAX_AGE_MS = 60_000;
 export interface PaperEntryMarketAlignmentInput {
   direction: 'BUY' | 'SELL';
   candidateBarTime: Date;
+  scanStartedAt: Date;
   evaluatedAt: Date;
   stopLoss: number;
   executionQuote: {
@@ -431,11 +432,19 @@ export function evaluatePaperEntryMarketAlignment(
   });
 
   const evaluatedAtMs = new Date(input.evaluatedAt).getTime();
+  const scanStartedAtMs = new Date(input.scanStartedAt).getTime();
   const candidateBarMs = new Date(input.candidateBarTime).getTime();
-  if (!Number.isFinite(evaluatedAtMs) || !Number.isFinite(candidateBarMs)) {
+  if (
+    !Number.isFinite(evaluatedAtMs) ||
+    !Number.isFinite(scanStartedAtMs) ||
+    !Number.isFinite(candidateBarMs)
+  ) {
     return reject('INVALID_ENTRY_GEOMETRY');
   }
-  const expectedLatestClosedBarMs = Math.floor(evaluatedAtMs / BAR_MS) * BAR_MS - BAR_MS;
+  // Candidate freshness belongs to the immutable scan snapshot, not the later
+  // dispatch wall clock. A multi-pair inference pass may legitimately cross
+  // the next M5 boundary while still acting on the same fresh closed-bar set.
+  const expectedLatestClosedBarMs = Math.floor(scanStartedAtMs / BAR_MS) * BAR_MS - BAR_MS;
   if (candidateBarMs !== expectedLatestClosedBarMs) {
     return reject('STALE_M5_CANDIDATE');
   }
@@ -3033,6 +3042,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperEntryMarketAlignment = evaluatePaperEntryMarketAlignment({
             direction: best.direction,
             candidateBarTime: best.barTime,
+            scanStartedAt: adaptiveScanStartedAt,
             evaluatedAt: entryAlignmentCheckedAt,
             stopLoss: suggestedStopLoss,
             executionQuote: paperEntryExecutionQuote,
