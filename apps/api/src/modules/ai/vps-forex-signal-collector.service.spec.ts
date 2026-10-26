@@ -115,7 +115,7 @@ describe('dynamic PAPER lot ceiling', () => {
 describe('PAPER opportunity scout model identity', () => {
   it('separates idle-aware participation outcomes from the v1 scout cohort', () => {
     expect(paperOpportunityScoutModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
-      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v8-high-conviction-consensus-0.10-tier',
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v9-provisional-local-edge-0.10-tier',
     );
   });
 });
@@ -169,6 +169,47 @@ describe('PAPER local shadow-edge adaptive authority', () => {
         paperShadowLocalEdgePocket: { supported: true, averageNetR: 0.588 },
       } as any),
     ).toBeCloseTo(0.588, 6);
+  });
+
+  it('ranks a provisional local pocket by its empirical edge and recognizes its scout reason', () => {
+    expect(isPaperLocalShadowEdgeScoutReason('PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT')).toBe(true);
+    expect(
+      executableNetExpectedR({
+        paperExecutionRoute: 'NORMAL_PAPER',
+        paperCalibratedIdleRecovery: null,
+        ensembleGovernance: { netExpectedR: 0.12 },
+        pairedDirectionReversal: { researchNetExpectedR: -0.2 },
+        paperOpportunityScout: { reason: 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT' },
+        paperShadowLocalEdgePocket: { supported: false, averageNetR: 0.6 },
+      } as any),
+    ).toBeCloseTo(0.6, 6);
+  });
+
+  it('lets a strict provisional micro local scout override only the broad realised-route demotion', () => {
+    const base = {
+      fullSizePaperExecutionCandidate: false,
+      scoutEligible: true,
+      scoutReason: 'PROVISIONAL_LOCAL_SHADOW_EDGE_SCOUT' as const,
+      scoutLotUpperBound: 0.1,
+      localPocketHighConviction: false,
+      localPocketProvisional: true,
+      structuralRouteEligible: true,
+      pairSideEligible: true,
+      realisedRouteEligible: false,
+    };
+    expect(canHighConvictionLocalScoutOverrideRealisedRoute(base)).toBe(true);
+    expect(
+      canHighConvictionLocalScoutOverrideRealisedRoute({ ...base, localPocketProvisional: false }),
+    ).toBe(false);
+    expect(
+      canHighConvictionLocalScoutOverrideRealisedRoute({ ...base, structuralRouteEligible: false }),
+    ).toBe(false);
+    expect(
+      canHighConvictionLocalScoutOverrideRealisedRoute({ ...base, pairSideEligible: false }),
+    ).toBe(false);
+    expect(
+      canHighConvictionLocalScoutOverrideRealisedRoute({ ...base, scoutLotUpperBound: 0.2 }),
+    ).toBe(false);
   });
 
   it('suppresses only the calibration negative-edge blocker when local pocket authority is explicit', () => {

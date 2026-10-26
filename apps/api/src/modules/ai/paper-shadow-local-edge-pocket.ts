@@ -9,6 +9,10 @@ export const PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_PROFIT_FACTOR = 1.5;
 export const PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_AVERAGE_R = 0.2;
 export const PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_RECENT_WINS = 6;
 export const PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_RECENT_NET_R = 0.5;
+export const PAPER_SHADOW_LOCAL_EDGE_PROVISIONAL_MIN_SAMPLES = 3;
+export const PAPER_SHADOW_LOCAL_EDGE_PROVISIONAL_MIN_AVERAGE_R = 0.5;
+export const PAPER_SHADOW_LOCAL_EDGE_PROVISIONAL_MIN_RECENT_NET_R = 1.5;
+export const PAPER_SHADOW_LOCAL_EDGE_PROVISIONAL_MAX_AGE_HOURS = 24;
 
 export interface PaperShadowLocalEdgePocketEvidence {
   samples: number;
@@ -156,5 +160,36 @@ export function isHighConvictionPaperShadowLocalEdgePocket(
     decision.recentSamples >= PAPER_SHADOW_LOCAL_EDGE_RECENT_WINDOW &&
     decision.recentWins >= PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_RECENT_WINS &&
     decision.recentNetR >= PAPER_SHADOW_LOCAL_EDGE_HIGH_CONVICTION_MIN_RECENT_NET_R
+  );
+}
+
+export function isProvisionalPaperShadowLocalEdgePocket(
+  decision: PaperShadowLocalEdgePocketDecision,
+  evaluatedAt: Date,
+): boolean {
+  const latestResolvedAt = decision.latestResolvedAt ? new Date(decision.latestResolvedAt) : null;
+  if (
+    !Number.isFinite(evaluatedAt.getTime()) ||
+    !latestResolvedAt ||
+    !Number.isFinite(latestResolvedAt.getTime())
+  ) {
+    return false;
+  }
+  const ageMs = evaluatedAt.getTime() - latestResolvedAt.getTime();
+  const maxAgeMs = PAPER_SHADOW_LOCAL_EDGE_PROVISIONAL_MAX_AGE_HOURS * 60 * 60 * 1000;
+  return (
+    decision.supported === false &&
+    decision.state === 'COLLECTING' &&
+    decision.reason === 'INSUFFICIENT_LOCAL_EDGE_SAMPLES' &&
+    decision.samples >= PAPER_SHADOW_LOCAL_EDGE_PROVISIONAL_MIN_SAMPLES &&
+    decision.samples < PAPER_SHADOW_LOCAL_EDGE_MIN_SAMPLES &&
+    decision.wins === decision.samples &&
+    decision.losses === 0 &&
+    decision.averageNetR >= PAPER_SHADOW_LOCAL_EDGE_PROVISIONAL_MIN_AVERAGE_R &&
+    decision.recentSamples >= PAPER_SHADOW_LOCAL_EDGE_PROVISIONAL_MIN_SAMPLES &&
+    decision.recentWins === decision.recentSamples &&
+    decision.recentNetR >= PAPER_SHADOW_LOCAL_EDGE_PROVISIONAL_MIN_RECENT_NET_R &&
+    ageMs >= 0 &&
+    ageMs <= maxAgeMs
   );
 }
