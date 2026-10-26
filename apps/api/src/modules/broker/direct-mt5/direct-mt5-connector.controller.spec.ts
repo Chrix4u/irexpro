@@ -7,7 +7,7 @@ import {
 describe('Direct MT5 connector controllers', () => {
   it('creates a pairing only for the authenticated user connection', async () => {
     const pairing = { createPairing: jest.fn().mockResolvedValue({ connectorId: 'c1' }) } as any;
-    const controller = new DirectMt5PairingController(pairing);
+    const controller = new DirectMt5PairingController(pairing, {} as any);
     await expect(
       controller.createPairing('user-1', { brokerConnectionId: 'conn-1' } as any),
     ).resolves.toEqual({
@@ -32,7 +32,7 @@ describe('Direct MT5 connector controllers', () => {
         reason: 'READY',
       }),
     } as any;
-    const controller = new DirectMt5PairingController(pairing);
+    const controller = new DirectMt5PairingController(pairing, {} as any);
 
     await expect(controller.health('user-1', 'conn-1')).resolves.toMatchObject({
       connected: true,
@@ -46,37 +46,55 @@ describe('Direct MT5 connector controllers', () => {
     const pairing = {
       revokeConnector: jest.fn().mockResolvedValue({ connectorId: 'c1', revoked: true }),
     } as any;
-    const controller = new DirectMt5PairingController(pairing);
+    const sessions = { detach: jest.fn().mockReturnValue(true) } as any;
+    const controller = new DirectMt5PairingController(pairing, sessions);
 
     await expect(controller.revoke('user-1', 'conn-1')).resolves.toEqual({
       connectorId: 'c1',
       revoked: true,
     });
     expect(pairing.revokeConnector).toHaveBeenCalledWith('user-1', 'conn-1');
+    expect(sessions.detach).toHaveBeenCalledWith('conn-1', 'c1');
   });
 
   it('redeems the public one-time pairing code through the pairing service', async () => {
     const pairing = {
       redeemPairing: jest.fn().mockResolvedValue({ connectorId: 'c1', connectorToken: 'secret' }),
     } as any;
-    const controller = new DirectMt5ConnectorController(pairing, {} as any);
+    const controller = new DirectMt5ConnectorController(pairing, {} as any, {} as any);
     await controller.redeem({
       pairingCode: 'ABCDEFGH23',
       accountLogin: '113392789',
       brokerServer: 'Broker-Demo',
+      company: 'Broker Ltd',
+      environment: 'DEMO',
       currency: 'USD',
+      leverage: 100,
+      marginMode: 'HEDGING',
+      terminalConnected: true,
+      terminalTradeAllowed: true,
+      accountTradeAllowed: true,
+      eaTradingAllowed: true,
       tradeAllowed: true,
     } as any);
     expect(pairing.redeemPairing).toHaveBeenCalledWith('ABCDEFGH23', {
       accountLogin: '113392789',
       brokerServer: 'Broker-Demo',
+      company: 'Broker Ltd',
+      environment: 'DEMO',
       currency: 'USD',
+      leverage: 100,
+      marginMode: 'HEDGING',
+      terminalConnected: true,
+      terminalTradeAllowed: true,
+      accountTradeAllowed: true,
+      eaTradingAllowed: true,
       tradeAllowed: true,
     });
   });
 
   it('rejects connector endpoints without a Bearer token', async () => {
-    const controller = new DirectMt5ConnectorController({} as any, {} as any);
+    const controller = new DirectMt5ConnectorController({} as any, {} as any, {} as any);
     await expect(
       controller.heartbeat('connector-1', undefined, {
         brokerConnectionId: 'conn-1',
@@ -102,18 +120,46 @@ describe('Direct MT5 connector controllers', () => {
       authenticateConnector: jest.fn().mockResolvedValue(binding),
       recordHeartbeat: jest.fn().mockResolvedValue({ lastSequence: 4 }),
     } as any;
-    const controller = new DirectMt5ConnectorController(pairing, {} as any);
-    await expect(
-      controller.heartbeat('connector-1', 'Bearer token-1', {
+    const sessions = { synchronize: jest.fn() } as any;
+    const controller = new DirectMt5ConnectorController(pairing, {} as any, sessions);
+    const body = {
+      brokerConnectionId: 'conn-1',
+      accountLogin: '113392789',
+      brokerServer: 'Broker-Demo',
+      sequence: 4,
+      company: 'Broker Ltd',
+      environment: 'DEMO',
+      currency: 'USD',
+      leverage: 100,
+      marginMode: 'HEDGING',
+      terminalConnected: true,
+      terminalTradeAllowed: true,
+      accountTradeAllowed: true,
+      eaTradingAllowed: true,
+    } as any;
+    await expect(controller.heartbeat('connector-1', 'Bearer token-1', body)).resolves.toEqual({
+      lastSequence: 4,
+    });
+    expect(pairing.authenticateConnector).toHaveBeenCalledWith('connector-1', 'token-1');
+    expect(pairing.recordHeartbeat).toHaveBeenCalledWith(binding, {
+      accountLogin: '113392789',
+      brokerServer: 'Broker-Demo',
+      sequence: 4,
+      tradeAllowed: true,
+    });
+    expect(sessions.synchronize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectorId: 'connector-1',
         brokerConnectionId: 'conn-1',
         accountLogin: '113392789',
-        brokerServer: 'Broker-Demo',
-        sequence: 4,
+        environment: 'DEMO',
+        marginMode: 'HEDGING',
         terminalConnected: true,
-        tradingAllowed: true,
-      } as any),
-    ).resolves.toEqual({ lastSequence: 4 });
-    expect(pairing.authenticateConnector).toHaveBeenCalledWith('connector-1', 'token-1');
+        terminalTradeAllowed: true,
+        accountTradeAllowed: true,
+        eaTradingAllowed: true,
+      }),
+    );
   });
 
   it('leases only after token and broker-connection identity match', async () => {
@@ -127,7 +173,7 @@ describe('Direct MT5 connector controllers', () => {
     };
     const pairing = { authenticateConnector: jest.fn().mockResolvedValue(binding) } as any;
     const commands = { leaseNext: jest.fn().mockResolvedValue(null) } as any;
-    const controller = new DirectMt5ConnectorController(pairing, commands);
+    const controller = new DirectMt5ConnectorController(pairing, commands, {} as any);
 
     await expect(
       controller.leaseNext('connector-1', 'Bearer token-1', {
@@ -152,7 +198,7 @@ describe('Direct MT5 connector controllers', () => {
     const commands = {
       recordResult: jest.fn().mockResolvedValue({ id: 'cmd-1', state: 'SUCCEEDED' }),
     } as any;
-    const controller = new DirectMt5ConnectorController(pairing, commands);
+    const controller = new DirectMt5ConnectorController(pairing, commands, {} as any);
 
     await expect(
       controller.recordResult('connector-1', 'cmd-1', 'Bearer token-1', {
@@ -182,7 +228,7 @@ describe('Direct MT5 connector controllers', () => {
     };
     const pairing = { authenticateConnector: jest.fn().mockResolvedValue(binding) } as any;
     const commands = { recordResult: jest.fn() } as any;
-    const controller = new DirectMt5ConnectorController(pairing, commands);
+    const controller = new DirectMt5ConnectorController(pairing, commands, {} as any);
 
     await expect(
       controller.recordResult('connector-1', 'cmd-1', 'Bearer token-1', {

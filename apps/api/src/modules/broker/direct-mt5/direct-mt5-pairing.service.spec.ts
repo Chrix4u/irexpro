@@ -11,7 +11,7 @@ describe('DirectMt5PairingService', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([
-        { id: 'connection-1', broker_id: 'metatrader5', account_type: 'DEMO' },
+        { id: 'connection-1', broker_id: 'metatrader5-native', account_type: 'DEMO' },
       ])
       .mockResolvedValueOnce([]);
     const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
@@ -46,11 +46,25 @@ describe('DirectMt5PairingService', () => {
     );
   });
 
+  it('refuses to attach the native connector to a legacy MetaApi-backed MT5 connection', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([
+        { id: 'connection-cloud', broker_id: 'metatrader5', account_type: 'DEMO' },
+      ]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+
+    await expect(service.createPairing('user-1', 'connection-cloud')).rejects.toThrow(
+      'Native Bridge',
+    );
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects Direct MT5 pairing for a LIVE BrokerConnection', async () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([
-        { id: 'connection-live', broker_id: 'metatrader5', account_type: 'LIVE' },
+        { id: 'connection-live', broker_id: 'metatrader5-native', account_type: 'LIVE' },
       ]);
     const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
 
@@ -71,7 +85,15 @@ describe('DirectMt5PairingService', () => {
     const result = await service.redeemPairing('ABCDEFGH23', {
       accountLogin: '113392789',
       brokerServer: 'Broker-Demo',
+      company: 'Broker Ltd',
+      environment: 'DEMO',
       currency: 'USD',
+      leverage: 100,
+      marginMode: 'HEDGING',
+      terminalConnected: true,
+      terminalTradeAllowed: true,
+      accountTradeAllowed: true,
+      eaTradingAllowed: true,
       tradeAllowed: true,
     });
 
@@ -102,7 +124,15 @@ describe('DirectMt5PairingService', () => {
       service.redeemPairing('ABCDEFGH23', {
         accountLogin: '999999999',
         brokerServer: 'Broker-Demo',
+        company: 'Broker Ltd',
+        environment: 'DEMO',
         currency: 'USD',
+        leverage: 100,
+        marginMode: 'HEDGING',
+        terminalConnected: true,
+        terminalTradeAllowed: true,
+        accountTradeAllowed: true,
+        eaTradingAllowed: true,
         tradeAllowed: true,
       }),
     ).rejects.toThrow('account');
@@ -110,6 +140,30 @@ describe('DirectMt5PairingService', () => {
     const sql = String(query.mock.calls[0]![0]);
     expect(sql).toContain('broker.broker_connections');
     expect(sql).toContain('bc.account_id = $3');
+  });
+
+  it('rejects a LIVE terminal identity before issuing a native connector token', async () => {
+    const service = new DirectMt5PairingService(
+      { query: jest.fn() } as unknown as DataSource,
+      config,
+    );
+
+    await expect(
+      service.redeemPairing('ABCDEFGH23', {
+        accountLogin: '113392789',
+        brokerServer: 'Broker-Live',
+        company: 'Broker Ltd',
+        environment: 'LIVE',
+        currency: 'USD',
+        leverage: 100,
+        marginMode: 'HEDGING',
+        terminalConnected: true,
+        terminalTradeAllowed: true,
+        accountTradeAllowed: true,
+        eaTradingAllowed: true,
+        tradeAllowed: true,
+      }),
+    ).rejects.toThrow('DEMO');
   });
 
   it('fails closed when a pairing code is expired, consumed, or unknown', async () => {
@@ -121,7 +175,15 @@ describe('DirectMt5PairingService', () => {
       service.redeemPairing('ABCDEFGH23', {
         accountLogin: '1',
         brokerServer: 'Demo',
+        company: 'Broker Ltd',
+        environment: 'DEMO',
         currency: 'USD',
+        leverage: 100,
+        marginMode: 'HEDGING',
+        terminalConnected: true,
+        terminalTradeAllowed: true,
+        accountTradeAllowed: true,
+        eaTradingAllowed: true,
         tradeAllowed: true,
       }),
     ).rejects.toThrow('invalid or expired');

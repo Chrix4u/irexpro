@@ -42,7 +42,15 @@ export interface DirectMt5ConnectionHealth {
 export interface DirectMt5TerminalIdentity {
   accountLogin: string;
   brokerServer: string;
+  company: string;
+  environment: 'DEMO' | 'LIVE';
   currency: string | null;
+  leverage: number;
+  marginMode: 'HEDGING' | 'NETTING' | 'EXCHANGE';
+  terminalConnected: boolean;
+  terminalTradeAllowed: boolean;
+  accountTradeAllowed: boolean;
+  eaTradingAllowed: boolean;
   tradeAllowed: boolean;
 }
 
@@ -108,8 +116,10 @@ export class DirectMt5PairingService {
     if (!connection) {
       throw new NotFoundException('Broker connection not found');
     }
-    if (connection.broker_id !== 'metatrader5') {
-      throw new BadRequestException('Direct connector pairing is available only for MetaTrader 5');
+    if (connection.broker_id !== 'metatrader5-native') {
+      throw new BadRequestException(
+        'Direct connector pairing is available only for MetaTrader 5 — iRexPro Native Bridge',
+      );
     }
     if (connection.account_type !== 'DEMO') {
       throw new BadRequestException(
@@ -206,7 +216,8 @@ export class DirectMt5PairingService {
           AND c.pairing_expires_at > now()
           AND bc.id = c.broker_connection_id
           AND bc.deleted_at IS NULL
-          AND bc.broker_id = 'metatrader5'
+          AND bc.broker_id = 'metatrader5-native'
+          AND bc.account_type = 'DEMO'
           AND bc.account_id = $3
         RETURNING c.id, c.broker_connection_id, c.user_id
       `,
@@ -499,8 +510,32 @@ export class DirectMt5PairingService {
     if (!identity.brokerServer?.trim() || identity.brokerServer.length > 255) {
       throw new BadRequestException('MT5 broker server is invalid');
     }
+    if (!identity.company?.trim() || identity.company.length > 255) {
+      throw new BadRequestException('MT5 broker company is invalid');
+    }
+    if (identity.environment !== 'DEMO') {
+      throw new BadRequestException(
+        'Native MT5 connector is DEMO-only until LIVE is explicitly certified',
+      );
+    }
     if (identity.currency !== null && !/^[A-Za-z]{3,8}$/.test(identity.currency)) {
       throw new BadRequestException('MT5 account currency is invalid');
+    }
+    if (!Number.isSafeInteger(identity.leverage) || identity.leverage <= 0) {
+      throw new BadRequestException('MT5 account leverage is invalid');
+    }
+    if (!['HEDGING', 'NETTING', 'EXCHANGE'].includes(identity.marginMode)) {
+      throw new BadRequestException('MT5 account margin mode is invalid');
+    }
+    const flags = [
+      identity.terminalConnected,
+      identity.terminalTradeAllowed,
+      identity.accountTradeAllowed,
+      identity.eaTradingAllowed,
+      identity.tradeAllowed,
+    ];
+    if (flags.some((value) => typeof value !== 'boolean')) {
+      throw new BadRequestException('MT5 terminal capability flags are invalid');
     }
   }
 }
