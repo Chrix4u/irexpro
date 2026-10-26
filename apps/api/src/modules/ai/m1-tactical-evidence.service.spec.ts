@@ -175,6 +175,77 @@ describe('M1TacticalEvidenceService', () => {
     ]);
   });
 
+  it('loads a recent exact pair-side fast-stop brake only from PAPER M1 stop-outs', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        closed_at: '2026-10-18T12:28:30.000Z',
+        duration_minutes: '0.75',
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const evaluatedAt = new Date('2026-10-18T12:30:00.000Z');
+
+    const result = await service.loadFastStopRegimeBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'usdjpy',
+      direction: 'SELL',
+      evaluatedAt,
+    });
+
+    expect(result).toMatchObject({
+      active: true,
+      reason: 'RECENT_FAST_STOP',
+      latestFastStopDurationMinutes: 0.75,
+      latestFastStopClosedAt: new Date('2026-10-18T12:28:30.000Z'),
+      cooldownMinutes: 5,
+      maxStopDurationMinutes: 2,
+    });
+    const [sql, params] = query.mock.calls[0]!;
+    const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain('t.user_id = $1');
+    expect(normalized).toContain('t.broker_connection_id = $2');
+    expect(normalized).toContain('t.instrument = $3');
+    expect(normalized).toContain('t.direction = $4');
+    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-m1-tactical'");
+    expect(normalized).toContain("ti.timeframe = 'M1'");
+    expect(normalized).toContain("ti.metadata ->> 'external_provider_paper_only' = 'true'");
+    expect(normalized).toContain("t.close_reason = 'STOP_LOSS_HIT'");
+    expect(normalized).toContain("t.closed_at > ($5::timestamptz - ($6::double precision * interval '1 second'))");
+    expect(normalized).toContain('EXTRACT(EPOCH FROM (t.closed_at - t.opened_at)) <= $7');
+    expect(normalized).toContain('ORDER BY t.closed_at DESC');
+    expect(normalized).toContain('LIMIT 1');
+    expect(params).toEqual([
+      input().userId,
+      input().brokerConnectionId,
+      'USDJPY',
+      'SELL',
+      evaluatedAt.toISOString(),
+      300,
+      120,
+    ]);
+  });
+
+  it('returns a clear fast-stop brake when no qualifying stop-out exists', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    await expect(
+      service.loadFastStopRegimeBrake({
+        userId: input().userId,
+        brokerConnectionId: input().brokerConnectionId,
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        evaluatedAt: new Date('2026-10-18T12:30:00.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      active: false,
+      reason: 'CLEAR',
+      latestFastStopClosedAt: null,
+      latestFastStopDurationMinutes: null,
+    });
+  });
+
   it('marks signal/trade-intent linkage without changing decision identity', async () => {
     const query = jest.fn().mockResolvedValue([{ id: 'decision-1' }]);
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);

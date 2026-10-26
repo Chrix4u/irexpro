@@ -94,6 +94,29 @@ export interface M1ShadowOutcome15mV1 {
   netRMultiple: number | null;
 }
 
+export const M1_FAST_STOP_REGIME_BRAKE_ARTIFACT = 'm1-fast-stop-regime-brake-v1' as const;
+export const M1_FAST_STOP_MAX_DURATION_MINUTES = 2;
+export const M1_FAST_STOP_COOLDOWN_MINUTES = 5;
+
+export interface M1FastStopRegimeBrakeQuery {
+  userId: string;
+  brokerConnectionId: string;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  evaluatedAt: Date;
+}
+
+export interface M1FastStopRegimeBrakeDecision {
+  artifact: typeof M1_FAST_STOP_REGIME_BRAKE_ARTIFACT;
+  active: boolean;
+  reason: 'CLEAR' | 'RECENT_FAST_STOP';
+  latestFastStopClosedAt: Date | null;
+  latestFastStopDurationMinutes: number | null;
+  cooldownMinutes: number;
+  maxStopDurationMinutes: number;
+  cooldownRemainingSeconds: number;
+}
+
 export interface M1RoutePairSideEvidenceQuery {
   userId: string;
   brokerConnectionId: string;
@@ -417,6 +440,85 @@ export class M1TacticalEvidenceService {
       }),
       closedAt: date(row.closed_at),
     }));
+  }
+
+  async loadFastStopRegimeBrake(
+    input: M1FastStopRegimeBrakeQuery,
+  ): Promise<M1FastStopRegimeBrakeDecision> {
+    const instrument = input.instrument.trim().toUpperCase();
+    const cooldownSeconds = M1_FAST_STOP_COOLDOWN_MINUTES * 60;
+    const maxStopDurationSeconds = M1_FAST_STOP_MAX_DURATION_MINUTES * 60;
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          t.closed_at,
+          EXTRACT(EPOCH FROM (t.closed_at - t.opened_at)) / 60.0 AS duration_minutes
+        FROM trading.trades t
+        JOIN trading.trade_intents ti
+          ON ti.id = t.trade_intent_id
+         AND ti.user_id = t.user_id
+         AND ti.broker_connection_id = t.broker_connection_id
+        WHERE t.user_id = $1
+          AND t.broker_connection_id = $2
+          AND t.instrument = $3
+          AND t.direction = $4
+          AND ti.strategy_code = 'external-irexpro-m1-tactical'
+          AND ti.timeframe = 'M1'
+          AND ti.metadata ->> 'external_provider_paper_only' = 'true'
+          AND t.status = 'CLOSED'
+          AND t.close_reason = 'STOP_LOSS_HIT'
+          AND t.opened_at IS NOT NULL
+          AND t.closed_at IS NOT NULL
+          AND t.closed_at <= $5::timestamptz
+          AND t.closed_at > ($5::timestamptz - ($6::double precision * interval '1 second'))
+          AND EXTRACT(EPOCH FROM (t.closed_at - t.opened_at)) >= 0
+          AND EXTRACT(EPOCH FROM (t.closed_at - t.opened_at)) <= $7
+        ORDER BY t.closed_at DESC
+        LIMIT 1
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        instrument,
+        input.direction,
+        input.evaluatedAt.toISOString(),
+        cooldownSeconds,
+        maxStopDurationSeconds,
+      ],
+    )) as Array<{ closed_at: string | Date; duration_minutes: string | number }>;
+
+    const row = rows[0];
+    if (!row) {
+      return {
+        artifact: M1_FAST_STOP_REGIME_BRAKE_ARTIFACT,
+        active: false,
+        reason: 'CLEAR',
+        latestFastStopClosedAt: null,
+        latestFastStopDurationMinutes: null,
+        cooldownMinutes: M1_FAST_STOP_COOLDOWN_MINUTES,
+        maxStopDurationMinutes: M1_FAST_STOP_MAX_DURATION_MINUTES,
+        cooldownRemainingSeconds: 0,
+      };
+    }
+
+    const latestFastStopClosedAt = date(row.closed_at);
+    const latestFastStopDurationMinutes = number(row.duration_minutes);
+    const cooldownUntilMs =
+      latestFastStopClosedAt.getTime() + M1_FAST_STOP_COOLDOWN_MINUTES * 60_000;
+    const cooldownRemainingSeconds = Math.max(
+      0,
+      Math.ceil((cooldownUntilMs - input.evaluatedAt.getTime()) / 1000),
+    );
+    return {
+      artifact: M1_FAST_STOP_REGIME_BRAKE_ARTIFACT,
+      active: cooldownRemainingSeconds > 0,
+      reason: cooldownRemainingSeconds > 0 ? 'RECENT_FAST_STOP' : 'CLEAR',
+      latestFastStopClosedAt,
+      latestFastStopDurationMinutes,
+      cooldownMinutes: M1_FAST_STOP_COOLDOWN_MINUTES,
+      maxStopDurationMinutes: M1_FAST_STOP_MAX_DURATION_MINUTES,
+      cooldownRemainingSeconds,
+    };
   }
 
   async loadOpenPaperRiskPositions(

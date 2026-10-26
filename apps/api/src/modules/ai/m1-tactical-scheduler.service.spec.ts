@@ -627,6 +627,14 @@ function phase2Harness(
     openPositions?: any[];
     duplicateOppositeIntent?: boolean;
     tradeIntentId?: string | null;
+    fastStopBrake?: {
+      active: boolean;
+      reason: 'CLEAR' | 'RECENT_FAST_STOP';
+      latestFastStopClosedAt: Date | null;
+      latestFastStopDurationMinutes: number | null;
+      cooldownMinutes: number;
+      maxStopDurationMinutes: number;
+    };
     existingDecision?: {
       signalId?: string | null;
       tradeIntentId?: string | null;
@@ -679,6 +687,16 @@ function phase2Harness(
   const markOutcomeState = jest.fn().mockResolvedValue(undefined);
   const loadOpenPaperPositions = jest.fn().mockResolvedValue(options.openPositions ?? []);
   const loadOpenPaperRiskPositions = jest.fn().mockResolvedValue([]);
+  const loadFastStopRegimeBrake = jest.fn().mockResolvedValue(
+    options.fastStopBrake ?? {
+      active: false,
+      reason: 'CLEAR',
+      latestFastStopClosedAt: null,
+      latestFastStopDurationMinutes: null,
+      cooldownMinutes: 5,
+      maxStopDurationMinutes: 2,
+    },
+  );
   const hasActiveOppositeM1Intent = jest
     .fn()
     .mockResolvedValue(options.duplicateOppositeIntent ?? false);
@@ -693,6 +711,7 @@ function phase2Harness(
     markOutcomeState,
     loadOpenPaperPositions,
     loadOpenPaperRiskPositions,
+    loadFastStopRegimeBrake,
     hasActiveOppositeM1Intent,
     markRescueObservation,
     loadPendingDriftCounterfactuals,
@@ -752,6 +771,7 @@ function phase2Harness(
     closeTrade,
     loadOpenPaperPositions,
     loadOpenPaperRiskPositions,
+    loadFastStopRegimeBrake,
     hasActiveOppositeM1Intent,
     markRescueObservation,
     loadPendingDriftCounterfactuals,
@@ -992,6 +1012,40 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
     const reliabilityBlocked = phase2Harness({ reliabilityLosses: 3 });
     await driveCleanContinuation(reliabilityBlocked);
     expect(reliabilityBlocked.receiveSignal).not.toHaveBeenCalled();
+  });
+
+  it('blocks an otherwise executable pair-side for five minutes after an unusually fast stop-out', async () => {
+    const h = phase2Harness({
+      fastStopBrake: {
+        active: true,
+        reason: 'RECENT_FAST_STOP',
+        latestFastStopClosedAt: new Date('2026-10-15T10:28:30.000Z'),
+        latestFastStopDurationMinutes: 0.75,
+        cooldownMinutes: 5,
+        maxStopDurationMinutes: 2,
+      },
+    });
+
+    await driveCleanContinuation(h);
+
+    expect(h.loadFastStopRegimeBrake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        brokerConnectionId: 'conn-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+      }),
+    );
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.recordDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionAuthority: 'NONE',
+        blockers: expect.arrayContaining(['M1_FAST_STOP_REGIME_BRAKE']),
+        governance: expect.objectContaining({
+          fastStopRegimeBrake: expect.objectContaining({ active: true, reason: 'RECENT_FAST_STOP' }),
+        }),
+      }),
+    );
   });
 
   it('persists downstream risk rejection and reuses the same signal identity on retry/restart', async () => {
