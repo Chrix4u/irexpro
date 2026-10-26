@@ -9,7 +9,7 @@ Make M1 PAPER admission and execution-cost simulation deterministic across API r
 ## Goals
 - Derive M1 PAPER spread from durable 21-day, same-UTC-session broker spread history using the existing P95 + 25%-of-static floor rule.
 - Seed the PAPER execution cache with that same derived spread before M1 can submit a trade, so admission economics and simulated fill geometry agree.
-- Cache by broker-source connection, instrument, and spread session to avoid repeated database queries.
+- Cache by broker-source connection, instrument, UTC date, and spread session to avoid repeated database queries.
 - Fall back to the existing static instrument spread when history is missing, invalid, or below the existing 100-sample maturity threshold.
 - Preserve all DEMO/LIVE broker-native spread requirements and promotion rules.
 

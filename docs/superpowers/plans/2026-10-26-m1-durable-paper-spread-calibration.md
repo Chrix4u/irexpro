@@ -4,7 +4,7 @@
 
 **Goal:** Make M1 PAPER spread calibration restart-stable and independent of M5 candidate ordering while keeping existing conservative calibration and promotion rules.
 
-**Architecture:** Extract the durable same-session spread-history query into a shared helper. M1 resolves the existing calibration rule directly from durable history, caches it per source/instrument/session, and seeds the PAPER execution cache before returning its market snapshot. M5 reuses the same helper with no intended semantic change.
+**Architecture:** Extract the durable same-session spread-history query into a shared helper. M1 resolves the existing calibration rule directly from durable history, caches it per source/instrument/UTC-date/session, and seeds the PAPER execution cache before returning its market snapshot. M5 reuses the same helper with no intended semantic change.
 
 **Tech Stack:** NestJS/TypeScript, TypeORM `DataSource`, Jest, PostgreSQL.
 
