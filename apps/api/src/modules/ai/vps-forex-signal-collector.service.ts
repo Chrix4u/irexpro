@@ -918,10 +918,12 @@ export function buildDirectionalCandidates(
   // later by comparing two independently scored counterfactuals from the same
   // closed market snapshot.
   const extensionAtr = Math.abs(px - ema21) / atr14;
-  if (!Number.isFinite(extensionAtr) || extensionAtr > 1.5) return [];
+  if (!Number.isFinite(extensionAtr)) return [];
   const relativeAtr = atr14 / px;
   const volatilityScore = Math.max(0, Math.min(1, relativeAtr / 0.0015));
-  if (volatilityScore >= 0.75) return [];
+  // Do not erase valid fast/extended markets before the models can score them.
+  // Extension and volatility remain first-class features for regime, drift,
+  // expected-R and risk governance, which may still reject or downsize them.
 
   const barTime = new Date(candles[candles.length - 1]!.timestamp);
   const pipSize = instrument.endsWith('JPY') ? 0.01 : 0.0001;

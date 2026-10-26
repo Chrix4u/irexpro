@@ -871,6 +871,38 @@ describe('VpsForexSignalCollectorService', () => {
     expect(buy.mtfStrength).toBeGreaterThan(sell.mtfStrength);
   });
 
+  it('keeps a valid extended market snapshot visible to downstream AI governance', () => {
+    const candles = trendCandles();
+    const last = candles[candles.length - 1]!;
+    const jumpedClose = Number(last.close) + 0.004;
+    candles[candles.length - 1] = {
+      ...last,
+      open: jumpedClose.toFixed(5),
+      high: (jumpedClose + 0.00008).toFixed(5),
+      low: (jumpedClose - 0.00008).toFixed(5),
+      close: jumpedClose.toFixed(5),
+    };
+
+    const candidates = buildDirectionalCandidates('EURUSD', candles);
+    expect(candidates).toHaveLength(2);
+    expect(candidates.every((candidate) => candidate.extensionAtr > 1.5)).toBe(true);
+  });
+
+  it('keeps a valid high-volatility snapshot visible to downstream AI governance', () => {
+    const candles = trendCandles().map((candle) => {
+      const close = Number(candle.close);
+      return {
+        ...candle,
+        high: (close + 0.0012).toFixed(5),
+        low: (close - 0.0012).toFixed(5),
+      };
+    });
+
+    const candidates = buildDirectionalCandidates('EURUSD', candles);
+    expect(candidates).toHaveLength(2);
+    expect(candidates.every((candidate) => candidate.volatilityScore >= 0.75)).toBe(true);
+  });
+
   it('rescues to the opposite direction when only that counterfactual is executable', () => {
     const [buy, sell] = buildDirectionalCandidates('EURUSD', trendCandles());
     expect(buy).toBeDefined();
