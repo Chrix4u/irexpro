@@ -480,6 +480,7 @@ describe('PAPER entry market alignment', () => {
   const base = {
     direction: 'BUY' as const,
     candidateBarTime: new Date('2026-10-20T08:45:00.000Z'),
+    scanStartedAt: new Date('2026-10-20T08:50:01.000Z'),
     evaluatedAt: new Date('2026-10-20T08:50:22.000Z'),
     stopLoss: 158.116,
     executionQuote: {
@@ -502,6 +503,31 @@ describe('PAPER entry market alignment', () => {
       evaluatePaperEntryMarketAlignment({
         ...base,
         fastMark: { ...base.fastMark, bid: '158.170', ask: '158.180' },
+      }),
+    ).toMatchObject({ eligible: true, reason: 'ALIGNED' });
+  });
+
+  it('keeps a scan-snapshot-fresh candidate eligible when scoring crosses the next M5 boundary', () => {
+    expect(
+      evaluatePaperEntryMarketAlignment({
+        ...base,
+        candidateBarTime: new Date('2026-10-26T17:40:00.000Z'),
+        scanStartedAt: new Date('2026-10-26T17:49:42.000Z'),
+        evaluatedAt: new Date('2026-10-26T17:50:29.000Z'),
+        executionQuote: {
+          bid: '0.65880',
+          ask: '0.65890',
+          timestamp: new Date('2026-10-26T17:45:00.000Z'),
+          source: 'REST_M5',
+        },
+        fastMark: {
+          bid: '0.65888',
+          ask: '0.65898',
+          timestamp: new Date('2026-10-26T17:50:28.000Z'),
+          source: 'STREAM',
+          streamProvider: 'DERIV',
+        },
+        stopLoss: 0.6579,
       }),
     ).toMatchObject({ eligible: true, reason: 'ALIGNED' });
   });
@@ -554,6 +580,7 @@ describe('PAPER entry market alignment', () => {
       evaluatePaperEntryMarketAlignment({
         direction: 'SELL',
         candidateBarTime: new Date('2026-10-20T06:00:00.000Z'),
+        scanStartedAt: new Date('2026-10-20T06:05:01.000Z'),
         evaluatedAt: new Date('2026-10-20T06:05:19.000Z'),
         stopLoss: 158.195,
         executionQuote: {
