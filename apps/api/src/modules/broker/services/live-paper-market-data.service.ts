@@ -345,7 +345,13 @@ export class LivePaperMarketDataService {
       ...(streamProvider ? { streamProvider } : {}),
     };
     const current = state.streamingQuotes.get(symbol);
-    if (!current || timestamp.getTime() >= current.timestamp.getTime()) {
+    const incomingIsTwelveDataFallback = streamProvider === 'TWELVE_DATA';
+    const currentIsFreshDerivPrimary =
+      current?.streamProvider === 'DERIV' &&
+      timestamp.getTime() >= current.timestamp.getTime() &&
+      timestamp.getTime() - current.timestamp.getTime() <= FAST_MARK_FRESH_MAX_AGE_MS;
+    const mayReplaceCurrent = !(incomingIsTwelveDataFallback && currentIsFreshDerivPrimary);
+    if (mayReplaceCurrent && (!current || timestamp.getTime() >= current.timestamp.getTime())) {
       state.streamingQuotes.set(symbol, quote);
     }
     if (!state.latestQuoteObservedAt || timestamp > state.latestQuoteObservedAt) {

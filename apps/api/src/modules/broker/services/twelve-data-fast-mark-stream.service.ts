@@ -84,7 +84,13 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
       .get<string>('vpsForexScanner.fastMarkProvider', 'TWELVE_DATA')
       .trim()
       .toUpperCase();
-    if (provider !== 'TWELVE_DATA') return false;
+    const failoverEnabled = this.config.get<boolean>(
+      'vpsForexScanner.fastMarkFailoverEnabled',
+      true,
+    );
+    const primaryOrSecondary =
+      provider === 'TWELVE_DATA' || (provider === 'DERIV' && failoverEnabled === true);
+    if (!primaryOrSecondary) return false;
     const key = this.config.get<string>('vpsForexScanner.apiKey', '').trim();
     return Boolean(key && key.toLowerCase() !== 'demo');
   }

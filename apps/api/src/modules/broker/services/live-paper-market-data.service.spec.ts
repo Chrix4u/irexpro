@@ -490,6 +490,79 @@ describe('LivePaperMarketDataService', () => {
     }
   });
 
+  it('keeps fresh Deriv primary when a newer Twelve Data fallback tick arrives', () => {
+    const nowMs = new Date('2026-10-26T01:00:10.000Z').getTime();
+    const now = jest.spyOn(Date, 'now').mockReturnValue(nowMs);
+    try {
+      const service = new LivePaperMarketDataService();
+      const connectionId = 'paper-provider-priority';
+      service.updateStreamingMidQuote(
+        'EURUSD',
+        1.1,
+        new Date('2026-10-26T01:00:05.000Z'),
+        connectionId,
+        'DERIV',
+        new Date('2026-10-26T01:00:05.100Z'),
+      );
+      service.updateStreamingMidQuote(
+        'EURUSD',
+        1.2,
+        new Date('2026-10-26T01:00:08.000Z'),
+        connectionId,
+        'TWELVE_DATA',
+        new Date('2026-10-26T01:00:08.100Z'),
+      );
+
+      const mark = service.getMarkQuote('EURUSD', 60_000, 20 * 60_000, connectionId);
+      expect(mark.streamProvider).toBe('DERIV');
+      expect((Number(mark.bid) + Number(mark.ask)) / 2).toBeCloseTo(1.1, 5);
+      expect(
+        service.status(connectionId).providerHealth.providers.TWELVE_DATA.freshInstruments,
+      ).toEqual(['EURUSD']);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('fails over to fresh Twelve Data after Deriv becomes stale and returns to Deriv on recovery', () => {
+    const nowMs = new Date('2026-10-26T01:01:10.000Z').getTime();
+    const now = jest.spyOn(Date, 'now').mockReturnValue(nowMs);
+    try {
+      const service = new LivePaperMarketDataService();
+      const connectionId = 'paper-provider-failover';
+      service.updateStreamingMidQuote(
+        'EURUSD',
+        1.1,
+        new Date('2026-10-26T01:00:00.000Z'),
+        connectionId,
+        'DERIV',
+      );
+      service.updateStreamingMidQuote(
+        'EURUSD',
+        1.101,
+        new Date('2026-10-26T01:01:08.000Z'),
+        connectionId,
+        'TWELVE_DATA',
+      );
+      expect(service.getMarkQuote('EURUSD', 60_000, 20 * 60_000, connectionId).streamProvider).toBe(
+        'TWELVE_DATA',
+      );
+
+      service.updateStreamingMidQuote(
+        'EURUSD',
+        1.102,
+        new Date('2026-10-26T01:01:09.000Z'),
+        connectionId,
+        'DERIV',
+      );
+      expect(service.getMarkQuote('EURUSD', 60_000, 20 * 60_000, connectionId).streamProvider).toBe(
+        'DERIV',
+      );
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it('reports stale Deriv marks as fast-mark fallback while getMarkQuote uses the closed-M5 cache', () => {
     const nowMs = new Date('2026-10-19T12:00:00.000Z').getTime();
     const now = jest.spyOn(Date, 'now').mockReturnValue(nowMs);
