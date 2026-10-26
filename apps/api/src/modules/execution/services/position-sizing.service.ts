@@ -180,6 +180,7 @@ export class PositionSizingService {
     requestedEntryPrice: string | null;
     stopLoss: string | null;
     requestedLotUpperBound: string;
+    strategyTimeframe?: string;
     paperAllocationSizing?: {
       executionMode: string;
       allocatedCapital: string | null;
@@ -333,6 +334,7 @@ export class PositionSizingService {
       instrument,
       direction: params.direction,
       needFreshQuote: params.entryType === 'MARKET',
+      strategyTimeframe: params.strategyTimeframe,
     });
     const contractSize =
       geometry.contractSize ??

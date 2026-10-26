@@ -392,6 +392,7 @@ describe('StrategyOrchestratorService', () => {
         'user-1',
         'conn-1',
         'EURUSD',
+        { strategyTimeframe: 'H1' },
       );
       expect(sizingMock.sizePosition).toHaveBeenCalledWith(
         expect.objectContaining({

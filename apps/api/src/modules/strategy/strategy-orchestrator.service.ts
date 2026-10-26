@@ -592,6 +592,7 @@ export class StrategyOrchestratorService {
             ? String(executionCandidate.suggestedStopLoss)
             : null,
         requestedLotUpperBound: String(executionCandidate.suggestedVolume),
+        strategyTimeframe: executionCandidate.timeframe,
         paperAllocationSizing,
       });
       await this.allocationService.resolveOrAllocate({
@@ -980,6 +981,7 @@ export class StrategyOrchestratorService {
       candidate.userId,
       session.brokerConnectionId,
       candidate.instrument,
+      { strategyTimeframe: candidate.timeframe },
     );
     if (!quote) {
       throw new Error('current paper quote is unavailable');

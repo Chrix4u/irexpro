@@ -97,6 +97,7 @@ export class MarketSafetyGateService {
       intent.userId,
       intent.brokerConnectionId,
       intent.instrument,
+      { strategyTimeframe: intent.strategyTimeframe ?? undefined },
     );
     if (!quote) {
       await this.rejectForMarketSafety(orderId, intent, 'MARKET_DATA_UNAVAILABLE', (m) =>

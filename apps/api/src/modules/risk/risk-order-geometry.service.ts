@@ -56,6 +56,7 @@ export class RiskOrderGeometryService {
     instrument: string;
     direction: 'BUY' | 'SELL';
     needFreshQuote: boolean;
+    strategyTimeframe?: string;
   }): Promise<{
     contractSize: ExactDecimal | null;
     freshQuote: ExactDecimal | null;
@@ -71,6 +72,7 @@ export class RiskOrderGeometryService {
           params.userId,
           params.brokerConnectionId,
           params.instrument,
+          { strategyTimeframe: params.strategyTimeframe },
         );
         const bid = ExactDecimal.tryParse(quote?.bid ?? '');
         const ask = ExactDecimal.tryParse(quote?.ask ?? '');

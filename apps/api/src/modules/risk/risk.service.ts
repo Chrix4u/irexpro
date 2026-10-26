@@ -1306,6 +1306,7 @@ export class RiskService {
       instrument: trade.instrument,
       direction: trade.direction,
       needFreshQuote: marketEntry,
+      strategyTimeframe: trade.strategyTimeframe,
     });
 
     // LIVE NEW exposure = LIVE account on a session that can dispatch it.
