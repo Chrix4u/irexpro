@@ -61,6 +61,10 @@
     "./provider-verification": {
       "types": "./src/provider-verification.ts",
       "default": "./src/provider-verification.ts"
+    },
+    "./market-schedule": {
+      "types": "./src/market-schedule.ts",
+      "default": "./src/market-schedule.ts"
     }
   },
   "scripts": {
