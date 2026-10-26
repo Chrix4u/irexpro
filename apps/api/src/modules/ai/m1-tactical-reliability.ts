@@ -22,6 +22,8 @@ export interface M1RoutePairSideEvidenceRow {
   direction: 'BUY' | 'SELL';
   policyVersion: string;
   realisedPnl: number;
+  /** USD risk to the original stop for this executed PAPER trade. */
+  riskAtStop?: number | null;
   closedAt: Date;
 }
 
@@ -50,6 +52,9 @@ export interface M1RoutePairSideReliabilityDecision {
   losses: number;
   smoothedWinRate: number;
   smoothedExpectedR: number;
+  realizedRSamples: number;
+  averageRealizedR: number | null;
+  recentRealizedR: number | null;
   reason: M1RoutePairSideReliabilityReason;
   consideredPolicyVersions: string[];
 }
@@ -64,6 +69,9 @@ function empty(reason: M1RoutePairSideReliabilityReason): M1RoutePairSideReliabi
     losses: 0,
     smoothedWinRate: 0.5,
     smoothedExpectedR: 0.5 * M1_TACTICAL_POLICY_V1.targetR - 0.5,
+    realizedRSamples: 0,
+    averageRealizedR: null,
+    recentRealizedR: null,
     reason,
     consideredPolicyVersions: [],
   };
@@ -129,16 +137,37 @@ export function evaluateM1RoutePairSideReliability(
     selected = [...current, ...predecessor];
   }
 
+  selected = [...selected].sort((a, b) => b.closedAt.getTime() - a.closedAt.getTime());
   const wins = selected.filter((row) => row.realisedPnl > 0).length;
   const losses = selected.filter((row) => row.realisedPnl < 0).length;
   const samples = wins + losses;
   const smoothedWinRate = (wins + PRIOR_WINS) / (samples + PRIOR_WINS + PRIOR_LOSSES);
   const smoothedExpectedR = smoothedWinRate * M1_TACTICAL_POLICY_V1.targetR - (1 - smoothedWinRate);
+  const realizedRValues = selected.flatMap((row) => {
+    const riskAtStop = Number(row.riskAtStop);
+    return Number.isFinite(riskAtStop) && riskAtStop > 0 ? [row.realisedPnl / riskAtStop] : [];
+  });
+  const realizedRSamples = realizedRValues.length;
+  const averageRealizedR =
+    realizedRSamples > 0
+      ? realizedRValues.reduce((sum, value) => sum + value, 0) / realizedRSamples
+      : null;
+  const recentRealizedValues = selected.slice(0, 3).flatMap((row) => {
+    const riskAtStop = Number(row.riskAtStop);
+    return Number.isFinite(riskAtStop) && riskAtStop > 0 ? [row.realisedPnl / riskAtStop] : [];
+  });
+  const recentRealizedR =
+    recentRealizedValues.length > 0
+      ? recentRealizedValues.reduce((sum, value) => sum + value, 0)
+      : null;
   const consideredPolicyVersions = compatible.filter((version) =>
     selected.some((row) => row.policyVersion === version),
   );
+  const recentLossStreak =
+    selected.length >= M1_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES &&
+    selected.slice(0, M1_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES).every((row) => row.realisedPnl < 0);
 
-  if (samples >= M1_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES && wins === 0 && losses >= 3) {
+  if (recentLossStreak) {
     return {
       eligible: false,
       samples,
@@ -148,6 +177,9 @@ export function evaluateM1RoutePairSideReliability(
       losses,
       smoothedWinRate,
       smoothedExpectedR,
+      realizedRSamples,
+      averageRealizedR,
+      recentRealizedR,
       reason: 'EARLY_LOSS_STREAK',
       consideredPolicyVersions: [...consideredPolicyVersions],
     };
@@ -163,12 +195,16 @@ export function evaluateM1RoutePairSideReliability(
       losses,
       smoothedWinRate,
       smoothedExpectedR,
+      realizedRSamples,
+      averageRealizedR,
+      recentRealizedR,
       reason: 'INSUFFICIENT_EVIDENCE',
       consideredPolicyVersions: [...consideredPolicyVersions],
     };
   }
 
-  const eligible = smoothedExpectedR > 0;
+  const payoffAware = realizedRSamples >= M1_RELIABILITY_MIN_SAMPLES;
+  const eligible = payoffAware ? (averageRealizedR ?? 0) > 0 : smoothedExpectedR > 0;
   return {
     eligible,
     samples,
@@ -178,6 +214,9 @@ export function evaluateM1RoutePairSideReliability(
     losses,
     smoothedWinRate,
     smoothedExpectedR,
+    realizedRSamples,
+    averageRealizedR,
+    recentRealizedR,
     reason: eligible ? 'POSITIVE_EXPECTANCY' : 'NEGATIVE_EXPECTANCY',
     consideredPolicyVersions: [...consideredPolicyVersions],
   };

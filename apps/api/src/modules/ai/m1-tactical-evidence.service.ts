@@ -351,6 +351,9 @@ export class M1TacticalEvidenceService {
           d.direction,
           d.policy_version,
           t.realised_pnl,
+          t.lot_size,
+          t.fill_price,
+          t.stop_loss,
           t.closed_at
         FROM trading.m1_tactical_decisions d
         JOIN trading.trade_intents ti
@@ -395,6 +398,9 @@ export class M1TacticalEvidenceService {
       direction: 'BUY' | 'SELL';
       policy_version: string;
       realised_pnl: string | number;
+      lot_size: string | number | null;
+      fill_price: string | number | null;
+      stop_loss: string | number | null;
       closed_at: string | Date;
     }>;
     return rows.map((row) => ({
@@ -403,6 +409,12 @@ export class M1TacticalEvidenceService {
       direction: row.direction,
       policyVersion: row.policy_version,
       realisedPnl: number(row.realised_pnl),
+      riskAtStop: m1UsdRiskAtStop({
+        instrument: row.instrument,
+        lotSize: number(row.lot_size),
+        entryPrice: number(row.fill_price),
+        stopLoss: number(row.stop_loss),
+      }),
       closedAt: date(row.closed_at),
     }));
   }

@@ -123,6 +123,9 @@ describe('M1TacticalEvidenceService', () => {
         direction: 'BUY',
         policy_version: 'm1-tactical-v1',
         realised_pnl: '3.5',
+        lot_size: '0.10',
+        fill_price: '1.1000',
+        stop_loss: '1.0990',
         closed_at: '2026-10-18T12:20:00.000Z',
       },
     ]);
@@ -141,7 +144,11 @@ describe('M1TacticalEvidenceService', () => {
     });
 
     expect(result).toEqual([
-      expect.objectContaining({ realisedPnl: 3.5, policyVersion: 'm1-tactical-v1' }),
+      expect.objectContaining({
+        realisedPnl: 3.5,
+        riskAtStop: expect.closeTo(10, 8),
+        policyVersion: 'm1-tactical-v1',
+      }),
     ]);
     const [sql, params] = query.mock.calls[0]!;
     const normalized = String(sql).replace(/\s+/g, ' ');
