@@ -638,7 +638,11 @@ export class M1TacticalEvidenceService {
             AND policy_version = $4
             AND route <> 'ABSTAIN'
             AND execution_authority = 'NONE'
-            AND (blockers = '[]'::jsonb OR blockers = '["M1_PHASE_SHADOW"]'::jsonb)
+            AND (
+              governance ->> 'shadowOutcomeEligible' = 'true'
+              OR blockers = '[]'::jsonb
+              OR blockers = '["M1_PHASE_SHADOW"]'::jsonb
+            )
         ),
         episode_marked AS (
           SELECT

@@ -165,6 +165,18 @@ describe('evaluateM1TacticalGovernance', () => {
     expectNoElevatedAuthority(result);
   });
 
+  it('removes PAPER authority when recent pair-side payoff has decayed', () => {
+    const reliability: NonNullable<M1TacticalGovernanceInput['reliability']> = {
+      eligible: false,
+      reason: 'RECENT_NEGATIVE_PAYOFF',
+    };
+    const result = evaluateM1TacticalGovernance({ ...baseInput(), reliability });
+    expect(result.paperEligible).toBe(false);
+    expect(result.executionAuthority).toBe('NONE');
+    expect(result.blockers).toContain('M1_RELIABILITY_RECENT_NEGATIVE_PAYOFF');
+    expectNoElevatedAuthority(result);
+  });
+
   it('blocks when execution cost makes net expected R non-positive', () => {
     const result = evaluateM1TacticalGovernance({
       ...baseInput(),

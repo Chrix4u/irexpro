@@ -5,6 +5,8 @@ export type M1ReliabilityRoute = Exclude<M1TacticalRoute, 'ABSTAIN'>;
 
 export const M1_RELIABILITY_MIN_SAMPLES = 5;
 export const M1_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES = 3;
+export const M1_RELIABILITY_RECENT_PAYOFF_SAMPLES = 5;
+export const M1_RELIABILITY_RECENT_AVERAGE_R_FLOOR = -0.1;
 export const M1_RELIABILITY_MAX_SAMPLES = 20;
 export const M1_RELIABILITY_CARRY_FORWARD_DAYS = 7;
 
@@ -40,6 +42,7 @@ export type M1RoutePairSideReliabilityReason =
   | 'INSUFFICIENT_EVIDENCE'
   | 'POSITIVE_EXPECTANCY'
   | 'NEGATIVE_EXPECTANCY'
+  | 'RECENT_NEGATIVE_PAYOFF'
   | 'EARLY_LOSS_STREAK'
   | 'INVALID_EVIDENCE';
 
@@ -55,6 +58,8 @@ export interface M1RoutePairSideReliabilityDecision {
   realizedRSamples: number;
   averageRealizedR: number | null;
   recentRealizedR: number | null;
+  recentPayoffRSamples: number;
+  recentPayoffAverageR: number | null;
   reason: M1RoutePairSideReliabilityReason;
   consideredPolicyVersions: string[];
 }
@@ -72,6 +77,8 @@ function empty(reason: M1RoutePairSideReliabilityReason): M1RoutePairSideReliabi
     realizedRSamples: 0,
     averageRealizedR: null,
     recentRealizedR: null,
+    recentPayoffRSamples: 0,
+    recentPayoffAverageR: null,
     reason,
     consideredPolicyVersions: [],
   };
@@ -160,6 +167,18 @@ export function evaluateM1RoutePairSideReliability(
     recentRealizedValues.length > 0
       ? recentRealizedValues.reduce((sum, value) => sum + value, 0)
       : null;
+  const recentPayoffRows = selected.slice(0, M1_RELIABILITY_RECENT_PAYOFF_SAMPLES);
+  const recentPayoffValues = recentPayoffRows.flatMap((row) => {
+    const riskAtStop = Number(row.riskAtStop);
+    return Number.isFinite(riskAtStop) && riskAtStop > 0 ? [row.realisedPnl / riskAtStop] : [];
+  });
+  const recentPayoffRSamples = recentPayoffValues.length;
+  const recentPayoffAverageR =
+    recentPayoffRows.length === M1_RELIABILITY_RECENT_PAYOFF_SAMPLES &&
+    recentPayoffRSamples === M1_RELIABILITY_RECENT_PAYOFF_SAMPLES
+      ? recentPayoffValues.reduce((sum, value) => sum + value, 0) /
+        M1_RELIABILITY_RECENT_PAYOFF_SAMPLES
+      : null;
   const consideredPolicyVersions = compatible.filter((version) =>
     selected.some((row) => row.policyVersion === version),
   );
@@ -180,6 +199,8 @@ export function evaluateM1RoutePairSideReliability(
       realizedRSamples,
       averageRealizedR,
       recentRealizedR,
+      recentPayoffRSamples,
+      recentPayoffAverageR,
       reason: 'EARLY_LOSS_STREAK',
       consideredPolicyVersions: [...consideredPolicyVersions],
     };
@@ -198,15 +219,61 @@ export function evaluateM1RoutePairSideReliability(
       realizedRSamples,
       averageRealizedR,
       recentRealizedR,
+      recentPayoffRSamples,
+      recentPayoffAverageR,
       reason: 'INSUFFICIENT_EVIDENCE',
       consideredPolicyVersions: [...consideredPolicyVersions],
     };
   }
 
   const payoffAware = realizedRSamples >= M1_RELIABILITY_MIN_SAMPLES;
-  const eligible = payoffAware ? (averageRealizedR ?? 0) > 0 : smoothedExpectedR > 0;
+  const fullWindowEligible = payoffAware ? (averageRealizedR ?? 0) > 0 : smoothedExpectedR > 0;
+  if (!fullWindowEligible) {
+    return {
+      eligible: false,
+      samples,
+      currentPolicySamples: current.length,
+      carriedSamples,
+      wins,
+      losses,
+      smoothedWinRate,
+      smoothedExpectedR,
+      realizedRSamples,
+      averageRealizedR,
+      recentRealizedR,
+      recentPayoffRSamples,
+      recentPayoffAverageR,
+      reason: 'NEGATIVE_EXPECTANCY',
+      consideredPolicyVersions: [...consideredPolicyVersions],
+    };
+  }
+
+  const recentPayoffDecayed =
+    recentPayoffRSamples === M1_RELIABILITY_RECENT_PAYOFF_SAMPLES &&
+    recentPayoffAverageR !== null &&
+    recentPayoffAverageR < M1_RELIABILITY_RECENT_AVERAGE_R_FLOOR;
+  if (recentPayoffDecayed) {
+    return {
+      eligible: false,
+      samples,
+      currentPolicySamples: current.length,
+      carriedSamples,
+      wins,
+      losses,
+      smoothedWinRate,
+      smoothedExpectedR,
+      realizedRSamples,
+      averageRealizedR,
+      recentRealizedR,
+      recentPayoffRSamples,
+      recentPayoffAverageR,
+      reason: 'RECENT_NEGATIVE_PAYOFF',
+      consideredPolicyVersions: [...consideredPolicyVersions],
+    };
+  }
+
   return {
-    eligible,
+    eligible: true,
     samples,
     currentPolicySamples: current.length,
     carriedSamples,
@@ -217,7 +284,9 @@ export function evaluateM1RoutePairSideReliability(
     realizedRSamples,
     averageRealizedR,
     recentRealizedR,
-    reason: eligible ? 'POSITIVE_EXPECTANCY' : 'NEGATIVE_EXPECTANCY',
+    recentPayoffRSamples,
+    recentPayoffAverageR,
+    reason: 'POSITIVE_EXPECTANCY',
     consideredPolicyVersions: [...consideredPolicyVersions],
   };
 }
