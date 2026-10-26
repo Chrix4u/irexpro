@@ -5,6 +5,7 @@ import type { LivePaperCandleInput } from '../broker/services/live-paper-market-
 import type { AiSignalService } from './ai-signal.service';
 import type { ExecutionService } from '../execution/execution.service';
 import type { TradeIntentService } from '../execution/services/trade-intent.service';
+import type { AllocationService } from '../execution/services/allocation.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { M1_TACTICAL_POLICY_V1, buildM1TacticalCandidates } from './m1-tactical-candidate';
 import {
@@ -144,6 +145,81 @@ function harness(options: { marketDataErrorFor?: string; warm?: boolean } = {}) 
 }
 
 const OPEN_NOW = new Date('2026-10-15T12:30:15.000Z');
+
+describe('M1 tactical aligned-currency exposure guard', () => {
+  function guardHarness(
+    allocatedCapital: number,
+    positions: Array<{ instrument: string; direction: 'BUY' | 'SELL'; riskAtStop: number | null }>,
+  ) {
+    const evidence = {
+      loadOpenPaperRiskPositions: jest.fn().mockResolvedValue(positions),
+    } as unknown as M1TacticalEvidenceService;
+    const allocation = {
+      getUserCapitalAllocationState: jest.fn().mockResolvedValue({
+        hasAllocation: true,
+        allocatedCapital: String(allocatedCapital),
+      }),
+    } as unknown as AllocationService;
+    const service = new M1TacticalSchedulerService(
+      {} as ConfigService,
+      {} as M1TacticalMarketDataService,
+      {} as MacroEventRiskService,
+      evidence,
+      {} as AiSignalService,
+      undefined,
+      undefined,
+      undefined,
+      allocation,
+    );
+    return { service, evidence, allocation };
+  }
+
+  const candidate = {
+    instrument: 'EURUSD',
+    direction: 'SELL',
+    entry: 1.1222,
+    stopLoss: 1.1227,
+  } as any;
+
+  it('keeps full M1 scout size while aligned stop-risk stays below two percent', async () => {
+    const { service } = guardHarness(1000, [
+      { instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 5 },
+    ]);
+    await expect(
+      (service as any).resolveM1CurrencyExposureGuard('user-1', 'conn-1', candidate, 0.1),
+    ).resolves.toMatchObject({
+      allowed: true,
+      volumeCap: 0.1,
+      decision: { capacity: 'CLEAR' },
+    });
+  });
+
+  it('steps a candidate down to 0.05 lots when full size would over-concentrate currency risk', async () => {
+    const { service } = guardHarness(1000, [
+      { instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 25 },
+    ]);
+    await expect(
+      (service as any).resolveM1CurrencyExposureGuard('user-1', 'conn-1', candidate, 0.1),
+    ).resolves.toMatchObject({
+      allowed: true,
+      volumeCap: 0.05,
+      decision: { capacity: 'REDUCED' },
+    });
+  });
+
+  it('blocks another aligned M1 entry when even 0.05 lots remains above three percent', async () => {
+    const { service } = guardHarness(1000, [
+      { instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 35 },
+    ]);
+    await expect(
+      (service as any).resolveM1CurrencyExposureGuard('user-1', 'conn-1', candidate, 0.1),
+    ).resolves.toMatchObject({
+      allowed: false,
+      volumeCap: 0,
+      decision: { capacity: 'BLOCKED' },
+    });
+  });
+});
 
 describe('M1TacticalSchedulerService shadow phase', () => {
   afterEach(() => jest.useRealTimers());
@@ -526,6 +602,7 @@ function phase2Harness(
   const markExecutionLink = jest.fn().mockResolvedValue(undefined);
   const markOutcomeState = jest.fn().mockResolvedValue(undefined);
   const loadOpenPaperPositions = jest.fn().mockResolvedValue(options.openPositions ?? []);
+  const loadOpenPaperRiskPositions = jest.fn().mockResolvedValue([]);
   const hasActiveOppositeM1Intent = jest
     .fn()
     .mockResolvedValue(options.duplicateOppositeIntent ?? false);
@@ -539,6 +616,7 @@ function phase2Harness(
     markExecutionLink,
     markOutcomeState,
     loadOpenPaperPositions,
+    loadOpenPaperRiskPositions,
     hasActiveOppositeM1Intent,
     markRescueObservation,
     loadPendingDriftCounterfactuals,
@@ -569,6 +647,12 @@ function phase2Harness(
     ...(options.rollout ?? M1_TACTICAL_ROLLOUT_POLICY_V2),
     instruments: ['EURUSD'] as const,
   };
+  const allocation = {
+    getUserCapitalAllocationState: jest.fn().mockResolvedValue({
+      hasAllocation: true,
+      allocatedCapital: '1000',
+    }),
+  } as unknown as AllocationService;
   const service = new M1TacticalSchedulerService(
     config,
     marketData,
@@ -578,6 +662,7 @@ function phase2Harness(
     rollout,
     execution,
     options.tradeIntentId === undefined ? undefined : tradeIntent,
+    allocation,
   );
   return {
     service,
@@ -590,6 +675,7 @@ function phase2Harness(
     getActiveSession,
     closeTrade,
     loadOpenPaperPositions,
+    loadOpenPaperRiskPositions,
     hasActiveOppositeM1Intent,
     markRescueObservation,
     loadPendingDriftCounterfactuals,
