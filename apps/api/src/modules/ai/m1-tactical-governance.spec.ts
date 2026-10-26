@@ -13,6 +13,7 @@ import {
   type M1TacticalGovernanceInput,
 } from './m1-tactical-governance';
 import type { EnsembleSleeveEvidence, ExecutionSpreadEvidence } from './ensemble-governance';
+import { evaluateM1TacticalExpectancy } from './m1-tactical-expectancy';
 
 function snapshot(overrides: Partial<M1TacticalFeatureSnapshot> = {}): M1TacticalFeatureSnapshot {
   return {
@@ -87,6 +88,12 @@ function baseInput(): M1TacticalGovernanceInput {
     paperSimulationSpreadPrice: 0.00008,
     sleeveEvidence: null,
     reliability: null,
+    expectancy: evaluateM1TacticalExpectancy({
+      targetR: candidate.grossExpectedR,
+      confidence: candidate.confidence,
+      directionQuality: candidate.directionQuality,
+      reliability: null,
+    }),
   };
 }
 
@@ -99,6 +106,25 @@ function expectNoElevatedAuthority(result: ReturnType<typeof evaluateM1TacticalG
 }
 
 describe('evaluateM1TacticalGovernance', () => {
+  it('uses statistical expectancy rather than fixed target geometry as expected R', () => {
+    const input = baseInput();
+    const stronger = evaluateM1TacticalGovernance({
+      ...input,
+      expectancy: { ...input.expectancy, statisticalExpectedR: 0.35 },
+    });
+    const weaker = evaluateM1TacticalGovernance({
+      ...input,
+      expectancy: { ...input.expectancy, statisticalExpectedR: 0.05 },
+    });
+
+    expect(stronger.netExpectedR).toBeGreaterThan(weaker.netExpectedR);
+    expect(stronger.genericGovernance.grossExpectedR).toBeCloseTo(0.35, 12);
+    expect(weaker.genericGovernance.grossExpectedR).toBeCloseTo(0.05, 12);
+    expect(stronger.genericGovernance.grossExpectedR).not.toBeCloseTo(
+      input.candidate.grossExpectedR,
+      6,
+    );
+  });
   it('allows a clean continuation only as PAPER_ONLY_RESEARCH', () => {
     const result = evaluateM1TacticalGovernance(baseInput());
     expect(result.paperEligible).toBe(true);

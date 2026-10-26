@@ -1,8 +1,10 @@
 import type { M1TacticalCandidate } from './m1-tactical-candidate';
 import { M1_TACTICAL_POLICY_V1 } from './m1-tactical-candidate';
+import type { M1TacticalExpectancyDecision } from './m1-tactical-expectancy';
 import type { M1TacticalFeatureSnapshot } from './m1-tactical-features';
 import type { M1TacticalRoute, M1TacticalRouteDecision } from './m1-tactical-route';
 import {
+  ENSEMBLE_NET_EXPECTED_R_FLOOR,
   evaluateEnsembleGovernance,
   type EnsembleEventRiskState,
   type EnsembleGovernanceDecision,
@@ -32,6 +34,7 @@ export interface M1TacticalGovernanceInput {
   paperSimulationSpreadPrice?: number;
   sleeveEvidence?: EnsembleSleeveEvidence | null;
   reliability?: M1TacticalReliabilityAdmission | null;
+  expectancy: M1TacticalExpectancyDecision;
 }
 
 export interface M1TacticalGovernanceDecision {
@@ -44,6 +47,7 @@ export interface M1TacticalGovernanceDecision {
   netExpectedR: number;
   blockers: string[];
   genericGovernance: EnsembleGovernanceDecision;
+  expectancy: M1TacticalExpectancyDecision;
 }
 
 function strategySemantics(route: M1TacticalRoute): {
@@ -73,7 +77,7 @@ function ensembleScore(input: M1TacticalGovernanceInput): PlanBEnsembleScore {
     regimeAllowed: input.routeDecision.eligible,
     strategyRoute: semantics.strategyRoute,
     directionQuality: input.candidate.directionQuality,
-    expectedR: input.candidate.grossExpectedR,
+    expectedR: input.expectancy.statisticalExpectedR,
     tradeQuality: input.candidate.directionQuality,
     exitQuality: input.candidate.directionQuality,
     pairSideQuality: input.candidate.directionQuality,
@@ -120,6 +124,7 @@ export function evaluateM1TacticalGovernance(
     evaluatedAt: input.evaluatedAt,
     executionSpreadEvidence: input.executionSpreadEvidence ?? null,
     paperSimulationSpreadPrice: input.paperSimulationSpreadPrice,
+    paperNetExpectedRFloorOverride: ENSEMBLE_NET_EXPECTED_R_FLOOR,
   });
 
   const blockers = [...genericGovernance.paperExecutionBlockers];
@@ -160,5 +165,6 @@ export function evaluateM1TacticalGovernance(
     netExpectedR: genericGovernance.netExpectedR,
     blockers: finalBlockers,
     genericGovernance,
+    expectancy: input.expectancy,
   };
 }

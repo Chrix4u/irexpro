@@ -402,6 +402,39 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.paperExecutionBlockers).toContain('PAPER_NET_EXPECTED_R');
   });
 
+  it('supports an explicit caller-scoped PAPER net-R floor without changing the early-transition default', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      ensemble: {
+        ...ensemble,
+        regime: 'TRANSITION_EARLY',
+        strategyRoute: 'EARLY_TRANSITION',
+        expectedR: 0.24885575,
+        paperAdmitted: true,
+        admitted: false,
+        reasons: ['PAPER_ADMIT_EARLY_TRANSITION'],
+      },
+      instrument: 'EURUSD',
+      entryPrice: 1.1,
+      stopLoss: 1.09945,
+      takeProfit: 1.10088,
+      confidence: 0.734505,
+      extensionAtr: 0.4,
+      volatilityScore: 0.28,
+      emaSeparation: 0.2,
+      mtfStrength: 0.11,
+      rsi14: 58,
+      shortHorizonMomentumAtr: 0.5,
+      eventRisk: 'CLEAR',
+      executionSpreadEvidence: { ...base.executionSpreadEvidence, spreadPrice: 0.00004 },
+      paperNetExpectedRFloorOverride: 0.08,
+    });
+
+    expect(result.netExpectedR).toBeGreaterThanOrEqual(0.08);
+    expect(result.netExpectedR).toBeLessThan(0.2);
+    expect(result.paperExecutionBlockers).not.toContain('PAPER_NET_EXPECTED_R');
+  });
+
   it('fails PAPER execution closed when broker spread evidence is unavailable', () => {
     const result = evaluateEnsembleGovernance({
       ...base,

@@ -36,6 +36,7 @@ import {
   type M1TacticalRouteDecision,
 } from './m1-tactical-route';
 import { evaluateM1TacticalGovernance } from './m1-tactical-governance';
+import { evaluateM1TacticalExpectancy } from './m1-tactical-expectancy';
 import {
   evaluateM1RoutePairSideReliability,
   type M1ReliabilityRoute,
@@ -565,6 +566,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       routeDecision,
       decisionTime,
     );
+    const expectancy = evaluateM1TacticalExpectancy({
+      targetR: candidate.grossExpectedR,
+      confidence: candidate.confidence,
+      directionQuality: candidate.directionQuality,
+      reliability,
+    });
     const governance = evaluateM1TacticalGovernance({
       candidate,
       routeDecision,
@@ -574,6 +581,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       executionSpreadEvidence: spreadEvidence,
       paperSimulationSpreadPrice,
       reliability,
+      expectancy,
     });
     const shadowPairSideReliability = await this.shadowPairSideReliabilityFor(
       userId,
@@ -590,7 +598,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? Number.POSITIVE_INFINITY
         : this.rolloutPolicy.routeNetExpectedRFloors[routeDecision.route];
     const routePayoffEligible =
-      routeDecision.route !== 'ABSTAIN' && governance.netExpectedR >= routeNetExpectedRFloor;
+      routeDecision.route !== 'ABSTAIN' &&
+      governance.expectancy.statisticalExpectedR >= routeNetExpectedRFloor;
     const shadowOutcomeEligible = m1ShadowOutcomeEligible({
       routeEligible: routeDecision.eligible,
       route: routeDecision.route,
@@ -1001,6 +1010,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_micro_drift_only_rescue: microDriftOnlyRescue,
           m1_local_impulse_drift_only_rescue: localImpulseDriftOnlyRescue,
           m1_decision_id: decisionId,
+          m1_target_r_geometry: candidate.grossExpectedR,
+          m1_expectancy_artifact: governance.expectancy.artifact,
+          m1_expectancy_source: governance.expectancy.source,
+          m1_heuristic_prior_expected_r: governance.expectancy.heuristicPriorExpectedR,
+          m1_statistical_expected_r: governance.expectancy.statisticalExpectedR,
+          m1_expectancy_implied_win_probability: governance.expectancy.impliedWinProbability,
+          m1_expectancy_evidence_samples: governance.expectancy.evidenceSamples,
+          m1_expectancy_evidence_average_realized_r: governance.expectancy.evidenceAverageRealizedR,
+          m1_expectancy_recent_payoff_average_r: governance.expectancy.recentPayoffAverageR,
           m1_gross_expected_r: candidate.grossExpectedR,
           m1_execution_cost_r: governance.genericGovernance.estimatedExecutionCostR,
           m1_execution_cost_source: governance.genericGovernance.executionCostSource,
