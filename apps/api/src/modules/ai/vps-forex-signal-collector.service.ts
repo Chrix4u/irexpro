@@ -143,6 +143,12 @@ import {
   evaluatePaperOpportunityScout,
 } from './paper-opportunity-scout';
 import {
+  PaperScoutRealisedPayoffDecision,
+  PaperScoutRealisedPayoffEvidence,
+  applyPaperScoutRealisedPayoffAuthority,
+  evaluatePaperScoutRealisedPayoff,
+} from './paper-scout-realised-payoff';
+import {
   PaperShadowLocalEdgePocketDecision,
   evaluatePaperShadowLocalEdgePocket,
   isHighConvictionPaperShadowLocalEdgePocket,
@@ -1039,6 +1045,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private readonly realisedContinuationRouteReliabilityCache = new Map<
     string,
     { expiresAt: number; evidence: PaperRealisedContinuationRouteEvidence }
+  >();
+  private readonly scoutRealisedPayoffCache = new Map<
+    string,
+    { expiresAt: number; evidence: PaperScoutRealisedPayoffEvidence }
   >();
   private readonly shadowDirectionalOutcomeCache = new Map<
     string,
@@ -3066,13 +3076,49 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           continue;
         }
 
-        const dynamicLotSizing = this.adaptiveLotSizingFor(chosen);
+        const scoutModelVersion = paperOpportunityScout.eligible
+          ? paperOpportunityScoutModelVersion(ACTIVE_ENGINE_CODE)
+          : null;
+        let paperScoutRealisedPayoff: PaperScoutRealisedPayoffDecision | null = null;
+        if (scoutModelVersion) {
+          const scoutPayoffEvidence = await this.loadPaperScoutRealisedPayoffEvidence(
+            userId,
+            connectionId,
+            scoutModelVersion,
+          );
+          paperScoutRealisedPayoff = evaluatePaperScoutRealisedPayoff(scoutPayoffEvidence);
+          const scoutAuthority = applyPaperScoutRealisedPayoffAuthority(
+            paperOpportunityScout.lotUpperBound,
+            paperScoutRealisedPayoff,
+          );
+          this.logger.log(
+            `PAPER scout realised payoff ${best.instrument} ${best.direction} ` +
+              `model=${scoutModelVersion} state=${paperScoutRealisedPayoff.state} ` +
+              `trades=${paperScoutRealisedPayoff.closedTrades} ` +
+              `profitFactor=${paperScoutRealisedPayoff.profitFactor ?? 'n/a'} ` +
+              `netPnl=${paperScoutRealisedPayoff.netPnl.toFixed(2)} ` +
+              `authority=${paperScoutRealisedPayoff.executionAuthority} ` +
+              `lotCap=${scoutAuthority.lotUpperBound.toFixed(2)}`,
+          );
+          if (!scoutAuthority.executionAllowed) {
+            this.logger.warn(
+              `PAPER scout ${best.instrument} ${best.direction} execution=SHADOW_ONLY ` +
+                `reason=${paperScoutRealisedPayoff.reason} model=${scoutModelVersion}`,
+            );
+            continue;
+          }
+        }
+
+        const dynamicLotSizing = this.adaptiveLotSizingFor({
+          ...chosen,
+          paperScoutRealisedPayoff,
+        });
         const suggestedEntryPrice = Number(best.entry.toFixed(digits));
         const suggestedTakeProfit = Number(best.takeProfit.toFixed(digits));
         const strategyCode = `external-${ACTIVE_ENGINE_CODE}`;
         const timeframe = 'M5';
-        const modelVersion = paperOpportunityScout.eligible
-          ? paperOpportunityScoutModelVersion(ACTIVE_ENGINE_CODE)
+        const modelVersion = scoutModelVersion
+          ? scoutModelVersion
           : paperExecutionRoute === 'REJECTED_EDGE_CANARY'
             ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
             : paperExecutionRoute === 'PAPER_RESEARCH_THROUGHPUT'
@@ -3142,6 +3188,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paper_opportunity_scout_idle_minutes: paperOpportunityScout.idleMinutes,
             paper_opportunity_scout_target_window_minutes:
               paperOpportunityScout.targetWindowMinutes,
+            paper_scout_realised_payoff_artifact: paperScoutRealisedPayoff?.artifact ?? null,
+            paper_scout_realised_payoff_state: paperScoutRealisedPayoff?.state ?? null,
+            paper_scout_realised_payoff_reason: paperScoutRealisedPayoff?.reason ?? null,
+            paper_scout_realised_payoff_closed_trades:
+              paperScoutRealisedPayoff?.closedTrades ?? null,
+            paper_scout_realised_payoff_profit_factor:
+              paperScoutRealisedPayoff?.profitFactor ?? null,
+            paper_scout_realised_payoff_net_pnl: paperScoutRealisedPayoff?.netPnl ?? null,
+            paper_scout_realised_payoff_max_lot_cap: paperScoutRealisedPayoff?.maxLotCap ?? null,
             paper_shadow_local_edge_artifact: paperShadowLocalEdgePocket?.artifact ?? null,
             paper_shadow_local_edge_state: paperShadowLocalEdgePocket?.state ?? null,
             paper_shadow_local_edge_reason: paperShadowLocalEdgePocket?.reason ?? null,
@@ -3603,13 +3658,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     ensembleGovernance: EnsembleGovernanceDecision;
     paperCalibratedIdleRecovery?: PaperCalibratedIdleRecoveryDecision | null;
     paperOpportunityScout?: PaperOpportunityScoutDecision | null;
+    paperScoutRealisedPayoff?: PaperScoutRealisedPayoffDecision | null;
   }): {
     upperBound: number;
     tier: PaperAllocationConfidenceTier;
   } {
     if (option.paperOpportunityScout?.eligible) {
+      const authority = option.paperScoutRealisedPayoff
+        ? applyPaperScoutRealisedPayoffAuthority(
+            option.paperOpportunityScout.lotUpperBound,
+            option.paperScoutRealisedPayoff,
+          )
+        : { executionAllowed: true, lotUpperBound: option.paperOpportunityScout.lotUpperBound };
       return {
-        upperBound: option.paperOpportunityScout.lotUpperBound,
+        upperBound: authority.lotUpperBound,
         tier: option.paperOpportunityScout.sizingTier,
       };
     }
@@ -4799,6 +4861,82 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         `PAPER realised continuation route evidence unavailable: ${(error as Error).message}`,
       );
       this.realisedContinuationRouteReliabilityCache.set(cacheKey, {
+        expiresAt: Date.now() + PAPER_RELIABILITY_STATUS_CACHE_TTL_MS,
+        evidence: empty,
+      });
+      return empty;
+    }
+  }
+
+  private async loadPaperScoutRealisedPayoffEvidence(
+    userId: string,
+    connectionId: string,
+    modelVersion: string,
+  ): Promise<PaperScoutRealisedPayoffEvidence> {
+    const empty: PaperScoutRealisedPayoffEvidence = {
+      closedTrades: 0,
+      grossProfit: 0,
+      grossLoss: 0,
+      netPnl: 0,
+    };
+    if (!this.dataSource) return empty;
+
+    const cacheKey = [userId, connectionId, modelVersion].join(':');
+    const cached = this.scoutRealisedPayoffCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.evidence;
+
+    try {
+      const rows = (await this.dataSource.query(
+        `
+          SELECT
+            COUNT(*)::int AS trades,
+            COALESCE(SUM(CASE WHEN t.realised_pnl > 0 THEN t.realised_pnl ELSE 0 END), 0)::text AS gross_profit,
+            COALESCE(ABS(SUM(CASE WHEN t.realised_pnl < 0 THEN t.realised_pnl ELSE 0 END)), 0)::text AS gross_loss,
+            COALESCE(SUM(t.realised_pnl), 0)::text AS net_pnl
+          FROM trading.trades t
+          INNER JOIN trading.trade_intents ti
+            ON ti.id = t.trade_intent_id
+            AND ti.user_id = $1
+            AND ti.broker_connection_id = $2
+          INNER JOIN broker.broker_connections bc
+            ON bc.id = t.broker_connection_id
+            AND bc.user_id = $1
+            AND bc.id = $2
+            AND bc.broker_id = 'paper-broker'
+            AND bc.deleted_at IS NULL
+          WHERE t.user_id = $1
+            AND t.broker_connection_id = $2
+            AND t.status = 'CLOSED'
+            AND t.realised_pnl IS NOT NULL
+            AND ti.status = 'EXECUTED'
+            AND ti.timeframe = 'M5'
+            AND ti.model_version = $3
+            AND ti.metadata->>'signal_source' = 'EXTERNAL_PROVIDER'
+        `,
+        [userId, connectionId, modelVersion],
+      )) as Array<{
+        trades: number | string | null;
+        gross_profit: number | string | null;
+        gross_loss: number | string | null;
+        net_pnl: number | string | null;
+      }>;
+      const row = rows[0];
+      const evidence: PaperScoutRealisedPayoffEvidence = {
+        closedTrades: Number(row?.trades ?? 0),
+        grossProfit: Number(row?.gross_profit ?? 0),
+        grossLoss: Number(row?.gross_loss ?? 0),
+        netPnl: Number(row?.net_pnl ?? 0),
+      };
+      this.scoutRealisedPayoffCache.set(cacheKey, {
+        expiresAt: Date.now() + PAPER_RELIABILITY_STATUS_CACHE_TTL_MS,
+        evidence,
+      });
+      return evidence;
+    } catch (error) {
+      this.logger.warn(
+        `PAPER scout realised payoff evidence unavailable: ${(error as Error).message}`,
+      );
+      this.scoutRealisedPayoffCache.set(cacheKey, {
         expiresAt: Date.now() + PAPER_RELIABILITY_STATUS_CACHE_TTL_MS,
         evidence: empty,
       });
