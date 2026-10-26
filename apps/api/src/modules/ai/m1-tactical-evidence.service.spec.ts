@@ -301,6 +301,45 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(params).toEqual([input().userId, input().brokerConnectionId, 'EURUSD']);
   });
 
+  it('loads all open M1 PAPER positions with durable USD stop-risk evidence', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        lot_size: '0.1000',
+        fill_price: '1.12221',
+        stop_loss: '1.12271',
+      },
+      {
+        instrument: 'USDJPY',
+        direction: 'BUY',
+        lot_size: '0.1000',
+        fill_price: '157.00000',
+        stop_loss: '156.95000',
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    await expect(
+      service.loadOpenPaperRiskPositions({
+        userId: input().userId,
+        brokerConnectionId: input().brokerConnectionId,
+      }),
+    ).resolves.toEqual([
+      { instrument: 'EURUSD', direction: 'SELL', riskAtStop: expect.closeTo(5, 6) },
+      { instrument: 'USDJPY', direction: 'BUY', riskAtStop: expect.closeTo(3.184713, 5) },
+    ]);
+    const [sql, params] = query.mock.calls[0]!;
+    const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).not.toContain('t.instrument = $3');
+    expect(normalized).toContain("t.status = 'OPEN'");
+    expect(normalized).toContain('t.lot_size');
+    expect(normalized).toContain('t.fill_price');
+    expect(normalized).toContain('t.stop_loss');
+    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-m1-tactical'");
+    expect(params).toEqual([input().userId, input().brokerConnectionId]);
+  });
+
   it('checks active opposite M1 intent identity without treating historical closed intents as duplicates', async () => {
     const query = jest.fn().mockResolvedValue([{ exists: true }]);
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);

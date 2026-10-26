@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { v5 as uuidv5 } from 'uuid';
 import { ExecutionService } from '../execution/execution.service';
 import { TradeIntentService } from '../execution/services/trade-intent.service';
+import { AllocationService } from '../execution/services/allocation.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { AiSignalService } from './ai-signal.service';
 import { MacroEventRiskService } from './macro-event-risk.service';
@@ -62,6 +63,11 @@ import {
   M1_PROVISIONAL_SCOUT_RELIABILITY_ARTIFACT,
   type M1ProvisionalScoutReliabilityDecision,
 } from './m1-provisional-scout-reliability';
+import {
+  evaluateM1TacticalCurrencyExposure,
+  m1UsdRiskAtStop,
+  type M1CurrencyExposureDecision,
+} from './m1-tactical-currency-exposure';
 
 type M1ScoutPairSideReliabilityDecision =
   | M1ShadowPairSideReliabilityDecision
@@ -223,6 +229,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     rolloutPolicy?: M1TacticalRolloutPolicy,
     @Optional() private readonly executionService?: ExecutionService,
     @Optional() private readonly tradeIntentService?: TradeIntentService,
+    @Optional() private readonly allocationService?: AllocationService,
   ) {
     this.rolloutPolicy = rolloutPolicy ?? M1_TACTICAL_ROLLOUT_POLICY_V1;
   }
@@ -702,6 +709,92 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     }
   }
 
+  private async resolveM1CurrencyExposureGuard(
+    userId: string,
+    brokerConnectionId: string,
+    candidate: M1TacticalCandidate,
+    requestedVolumeCap: number,
+  ): Promise<{ allowed: boolean; volumeCap: number; decision: M1CurrencyExposureDecision }> {
+    const unavailable = evaluateM1TacticalCurrencyExposure({
+      allocatedCapital: 0,
+      positions: [],
+      candidate: {
+        instrument: candidate.instrument,
+        direction: candidate.direction,
+        riskAtStop: 0,
+      },
+    });
+    if (!this.allocationService) {
+      return { allowed: false, volumeCap: 0, decision: unavailable };
+    }
+
+    let allocatedCapital = 0;
+    try {
+      const allocation = await this.allocationService.getUserCapitalAllocationState(
+        userId,
+        brokerConnectionId,
+      );
+      if (allocation.hasAllocation && allocation.allocatedCapital) {
+        allocatedCapital = Number(allocation.allocatedCapital);
+      }
+    } catch {
+      return { allowed: false, volumeCap: 0, decision: unavailable };
+    }
+
+    let positions;
+    try {
+      positions = await this.evidence.loadOpenPaperRiskPositions({ userId, brokerConnectionId });
+    } catch {
+      const decision = evaluateM1TacticalCurrencyExposure({
+        allocatedCapital,
+        positions: [
+          { instrument: candidate.instrument, direction: candidate.direction, riskAtStop: null },
+        ],
+        candidate: {
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          riskAtStop: 0,
+        },
+      });
+      return { allowed: false, volumeCap: 0, decision };
+    }
+
+    const evaluateAtVolume = (volume: number) => {
+      const riskAtStop = m1UsdRiskAtStop({
+        instrument: candidate.instrument,
+        lotSize: volume,
+        entryPrice: candidate.entry,
+        stopLoss: candidate.stopLoss,
+      });
+      return evaluateM1TacticalCurrencyExposure({
+        allocatedCapital,
+        positions,
+        candidate: {
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          riskAtStop: riskAtStop ?? 0,
+        },
+      });
+    };
+
+    let volumeCap = requestedVolumeCap;
+    let decision = evaluateAtVolume(volumeCap);
+    if (decision.capacity === 'BLOCKED' && volumeCap > 0.05) {
+      const reducedCap = Math.min(volumeCap, 0.05);
+      const reducedDecision = evaluateAtVolume(reducedCap);
+      if (reducedDecision.capacity !== 'BLOCKED') {
+        volumeCap = reducedCap;
+        decision = reducedDecision;
+      }
+    }
+    if (decision.capacity === 'REDUCED') volumeCap = Math.min(volumeCap, 0.05);
+    return {
+      allowed: decision.capacity !== 'BLOCKED',
+      volumeCap: decision.capacity === 'BLOCKED' ? 0 : volumeCap,
+      decision,
+    };
+  }
+
   private async submitPaperDecision(
     decisionId: string,
     userId: string,
@@ -734,6 +827,24 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       );
       return;
     }
+
+    const currencyExposureGuard = await this.resolveM1CurrencyExposureGuard(
+      userId,
+      brokerConnectionId,
+      candidate,
+      executionVolumeCap,
+    );
+    if (!currencyExposureGuard.allowed) {
+      const reason =
+        `M1_CURRENCY_EXPOSURE_BLOCKED capacity=${currencyExposureGuard.decision.capacity} ` +
+        `alignedRiskPercent=${currencyExposureGuard.decision.projectedAlignedRiskPercent}`;
+      this.logger.warn(
+        `M1 tactical ${candidate.instrument} ${candidate.direction} execution=BLOCKED ${reason}`,
+      );
+      await this.evidence.markOutcomeState(decisionId, 'RISK_REJECTED', new Date(), reason);
+      return;
+    }
+    const finalExecutionVolumeCap = currencyExposureGuard.volumeCap;
 
     const scoutReliabilityArtifact = shadowPairSideReliability
       ? 'artifact' in shadowPairSideReliability
@@ -777,7 +888,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         suggestedEntryPrice: candidate.entry,
         suggestedStopLoss: candidate.stopLoss,
         suggestedTakeProfit: candidate.takeProfit,
-        suggestedVolume: executionVolumeCap,
+        suggestedVolume: finalExecutionVolumeCap,
         timeframe: 'M1',
         strategyCode: 'external-irexpro-m1-tactical',
         marketRegime: m1RiskMarketRegime(routeDecision.route),
@@ -803,7 +914,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_evidence_qualified_scout_eligible:
             evidenceQualifiedScout && shadowPairSideReliability?.eligible === true,
           m1_scout_reliability_tier: scoutReliabilityTier,
-          m1_scout_execution_volume_cap: executionVolumeCap,
+          m1_scout_requested_volume_cap: executionVolumeCap,
+          m1_scout_execution_volume_cap: finalExecutionVolumeCap,
+          m1_currency_exposure_capacity: currencyExposureGuard.decision.capacity,
+          m1_currency_exposure_reason: currencyExposureGuard.decision.reason,
+          m1_currency_exposure_projected_aligned_risk:
+            currencyExposureGuard.decision.projectedAlignedRisk,
+          m1_currency_exposure_projected_aligned_risk_percent:
+            currencyExposureGuard.decision.projectedAlignedRiskPercent,
+          m1_currency_exposure_allocated_capital: currencyExposureGuard.decision.allocatedCapital,
           m1_meaningful_scout_reliability_artifact: meaningfulScoutReliability
             ? M1_MEANINGFUL_SCOUT_RELIABILITY_ARTIFACT
             : null,

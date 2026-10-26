@@ -4,6 +4,7 @@ import type { M1ReliabilityRoute, M1RoutePairSideEvidenceRow } from './m1-tactic
 import type { M1FailedMoveRescueDecision } from './m1-failed-move-rescue';
 import type { M1DriftCounterfactualResult } from './m1-drift-counterfactual';
 import type { M1ShadowPairSideOutcome } from './m1-shadow-pair-side-reliability';
+import { m1UsdRiskAtStop } from './m1-tactical-currency-exposure';
 
 export type M1TacticalDecisionRoute = M1ReliabilityRoute | 'ABSTAIN';
 export type M1TacticalDecisionAuthority = 'NONE' | 'PAPER_ONLY_RESEARCH';
@@ -108,6 +109,17 @@ export interface M1OpenPaperPositionQuery {
   userId: string;
   brokerConnectionId: string;
   instrument: string;
+}
+
+export interface M1OpenPaperRiskPositionQuery {
+  userId: string;
+  brokerConnectionId: string;
+}
+
+export interface M1OpenPaperRiskPositionSnapshot {
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  riskAtStop: number | null;
 }
 
 export interface M1ActiveOppositeIntentQuery {
@@ -393,6 +405,48 @@ export class M1TacticalEvidenceService {
       realisedPnl: number(row.realised_pnl),
       closedAt: date(row.closed_at),
     }));
+  }
+
+  async loadOpenPaperRiskPositions(
+    input: M1OpenPaperRiskPositionQuery,
+  ): Promise<M1OpenPaperRiskPositionSnapshot[]> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          t.instrument,
+          t.direction,
+          t.lot_size,
+          t.fill_price,
+          t.stop_loss
+        FROM trading.trades t
+        JOIN trading.trade_intents ti
+          ON ti.id = t.trade_intent_id
+         AND ti.user_id = t.user_id
+         AND ti.broker_connection_id = t.broker_connection_id
+        WHERE t.user_id = $1
+          AND t.broker_connection_id = $2
+          AND t.status = 'OPEN'
+          AND ti.strategy_code = 'external-irexpro-m1-tactical'
+          AND ti.timeframe = 'M1'
+          AND ti.metadata ->> 'external_provider_paper_only' = 'true'
+        ORDER BY t.opened_at ASC
+      `,
+      [input.userId, input.brokerConnectionId],
+    )) as Array<Record<string, unknown>>;
+
+    return rows.map((row) => {
+      const instrument = String(row.instrument ?? '')
+        .trim()
+        .toUpperCase();
+      const direction = String(row.direction ?? '') as 'BUY' | 'SELL';
+      const lotSize = Number(row.lot_size);
+      const entryPrice = Number(row.fill_price);
+      const stopLoss = Number(row.stop_loss);
+      const riskAtStop = ['BUY', 'SELL'].includes(direction)
+        ? m1UsdRiskAtStop({ instrument, lotSize, entryPrice, stopLoss })
+        : null;
+      return { instrument, direction, riskAtStop };
+    });
   }
 
   async loadOpenPaperPositions(
