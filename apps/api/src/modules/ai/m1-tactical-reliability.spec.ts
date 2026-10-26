@@ -108,6 +108,38 @@ describe('evaluateM1RoutePairSideReliability', () => {
     });
   });
 
+  it('does not brake at exactly the -0.10R payoff-decay floor', () => {
+    const recent = [-0.2, 0.1, -0.2, 0.1, -0.3].map((realisedR, index) =>
+      row(realisedR, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - (index + 1) * 60_000) }),
+    );
+    const olderWins = Array.from({ length: 5 }, (_, index) =>
+      row(1, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - (index + 10) * 60_000) }),
+    );
+    expect(evaluate([...olderWins, ...recent])).toMatchObject({
+      eligible: true,
+      reason: 'POSITIVE_EXPECTANCY',
+      recentPayoffRSamples: 5,
+    });
+    expect(evaluate([...olderWins, ...recent]).recentPayoffAverageR).toBeCloseTo(-0.1, 10);
+  });
+
+  it('does not substitute older risk-normalized trades when the latest five contain missing stop-risk evidence', () => {
+    const recent = [
+      row(-0.4, { riskAtStop: null, closedAt: new Date(NOW.getTime() - 60_000) }),
+      row(0.05, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - 2 * 60_000) }),
+      row(-0.2, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - 3 * 60_000) }),
+      row(0.05, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - 4 * 60_000) }),
+      row(-0.3, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - 5 * 60_000) }),
+    ];
+    const olderWins = Array.from({ length: 5 }, (_, index) =>
+      row(1, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - (index + 10) * 60_000) }),
+    );
+    const result = evaluate([...olderWins, ...recent]);
+    expect(result.recentPayoffRSamples).toBe(4);
+    expect(result.recentPayoffAverageR).toBeNull();
+    expect(result.reason).not.toBe('RECENT_NEGATIVE_PAYOFF');
+  });
+
   it('uses actual risk-normalized payoff so small protected wins cannot mask full-stop losses', () => {
     const payouts = [-3.18, 1.5, -3.18, 1.5, -3.18, 1.5, -3.18, 1.5, 1.5, 1.5];
     const result = evaluate(

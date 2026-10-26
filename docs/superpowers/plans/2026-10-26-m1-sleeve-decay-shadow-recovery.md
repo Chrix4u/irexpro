@@ -25,7 +25,7 @@
 
 ### Task 1: Recent payoff decay
 - [x] RED regression for positive full-window / negative latest-five payoff.
-- [x] Implement 5-sample window and -0.10R floor.
+- [x] Implement a 5-sample window that demotes only when the recent average is strictly worse than -0.10R, with all five stop-risk values present.
 - [x] Preserve reason precedence.
 - [x] Verify reliability/governance behavior.
 

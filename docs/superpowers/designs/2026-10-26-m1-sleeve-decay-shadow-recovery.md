@@ -9,7 +9,7 @@ On 2026-10-26 the active M1 early-transition SELL sleeves diverged sharply. USDJ
 The resolved 15-minute M1 shadow ledger contains 175 independent episodes but stops on 2026-10-23 because the resolver only recognizes the old global SHADOW blocker shape. Active-rollout route-shadow and reliability-demoted candidates therefore stopped producing fresh counterfactual outcomes.
 
 ## Chosen approach
-1. Add a five-trade realized-R recency window to exact route/pair/side reliability. If the full window remains positive but the latest 5 average <= -0.10R, demote with `RECENT_NEGATIVE_PAYOFF`. Preserve the faster three-loss brake and full-window negative-expectancy precedence.
+1. Add a five-trade realized-R recency window to exact route/pair/side reliability. If the full window remains positive but the latest 5 average is strictly worse than -0.10R, demote with `RECENT_NEGATIVE_PAYOFF`. Require valid original-stop risk for all five recent trades; do not substitute older trades when a recent risk value is unavailable. Preserve the faster three-loss brake and full-window negative-expectancy precedence.
 2. Persist `shadowOutcomeEligible` on structurally valid non-executed M1 decisions. Reliability/rollout demotion does not stop learning. Hard event, execution-cost, policy/HTF and unrelated drift failures remain excluded. The explicit local-impulse early-transition drift exception remains eligible for counterfactual learning only.
 3. Extend the resolver to select `shadowOutcomeEligible=true` while retaining legacy SHADOW rows.
 

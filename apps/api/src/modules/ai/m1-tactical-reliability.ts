@@ -167,11 +167,17 @@ export function evaluateM1RoutePairSideReliability(
     recentRealizedValues.length > 0
       ? recentRealizedValues.reduce((sum, value) => sum + value, 0)
       : null;
-  const recentPayoffValues = realizedRValues.slice(0, M1_RELIABILITY_RECENT_PAYOFF_SAMPLES);
+  const recentPayoffRows = selected.slice(0, M1_RELIABILITY_RECENT_PAYOFF_SAMPLES);
+  const recentPayoffValues = recentPayoffRows.flatMap((row) => {
+    const riskAtStop = Number(row.riskAtStop);
+    return Number.isFinite(riskAtStop) && riskAtStop > 0 ? [row.realisedPnl / riskAtStop] : [];
+  });
   const recentPayoffRSamples = recentPayoffValues.length;
   const recentPayoffAverageR =
-    recentPayoffRSamples > 0
-      ? recentPayoffValues.reduce((sum, value) => sum + value, 0) / recentPayoffRSamples
+    recentPayoffRows.length === M1_RELIABILITY_RECENT_PAYOFF_SAMPLES &&
+    recentPayoffRSamples === M1_RELIABILITY_RECENT_PAYOFF_SAMPLES
+      ? recentPayoffValues.reduce((sum, value) => sum + value, 0) /
+        M1_RELIABILITY_RECENT_PAYOFF_SAMPLES
       : null;
   const consideredPolicyVersions = compatible.filter((version) =>
     selected.some((row) => row.policyVersion === version),
@@ -243,9 +249,9 @@ export function evaluateM1RoutePairSideReliability(
   }
 
   const recentPayoffDecayed =
-    recentPayoffRSamples >= M1_RELIABILITY_RECENT_PAYOFF_SAMPLES &&
+    recentPayoffRSamples === M1_RELIABILITY_RECENT_PAYOFF_SAMPLES &&
     recentPayoffAverageR !== null &&
-    recentPayoffAverageR <= M1_RELIABILITY_RECENT_AVERAGE_R_FLOOR;
+    recentPayoffAverageR < M1_RELIABILITY_RECENT_AVERAGE_R_FLOOR;
   if (recentPayoffDecayed) {
     return {
       eligible: false,
