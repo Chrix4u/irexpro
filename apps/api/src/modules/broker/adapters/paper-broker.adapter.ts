@@ -1046,8 +1046,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       maxFavorablePnl: position.pathMaxFavorablePnl,
       currentPnl,
       initialRiskPnl,
-      isM1Strategy:
-        position.minimumForecastHoldMinutes === PAPER_M1_MINIMUM_FORECAST_HOLD_MINUTES,
+      isM1Strategy: position.minimumForecastHoldMinutes === PAPER_M1_MINIMUM_FORECAST_HOLD_MINUTES,
     });
     if (!decision.shouldClose) return false;
 

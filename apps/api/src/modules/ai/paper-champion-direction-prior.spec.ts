@@ -62,7 +62,6 @@ describe('PAPER champion directional prior', () => {
   });
 });
 
-
 describe('PAPER champion direction risk cap', () => {
   const weak = evaluatePaperChampionDirectionPrior({
     instrument: 'USDCAD',

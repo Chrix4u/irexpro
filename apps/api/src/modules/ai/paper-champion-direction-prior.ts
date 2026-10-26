@@ -90,7 +90,6 @@ export function evaluatePaperChampionDirectionPrior(
   return { ...base, supported: true, reason: 'CHAMPION_DIRECTION_SUPPORTED' };
 }
 
-
 export const PAPER_CHAMPION_DIRECTION_RISK_CAP_ARTIFACT =
   'paper-champion-direction-risk-cap-v1' as const;
 export const PAPER_CHAMPION_DIRECTION_WEAK_RISK_MULTIPLIER_CAP = 0.5;

@@ -166,13 +166,16 @@ describe('evaluateM1RoutePairSideReliability', () => {
   it.each([
     [[1, 1, 1, 1, -1], true, 'POSITIVE_EXPECTANCY'],
     [[1, -1, -1, -1, -1], false, 'NEGATIVE_EXPECTANCY'],
-  ] as const)('uses payoff-aware expectancy once five samples exist: %j', (pnls, eligible, reason) => {
-    const result = evaluate(pnls.map((pnl) => row(pnl)));
-    expect(result.samples).toBe(5);
-    expect(result.eligible).toBe(eligible);
-    expect(result.reason).toBe(reason);
-    expect(Number.isFinite(result.smoothedExpectedR)).toBe(true);
-  });
+  ] as const)(
+    'uses payoff-aware expectancy once five samples exist: %j',
+    (pnls, eligible, reason) => {
+      const result = evaluate(pnls.map((pnl) => row(pnl)));
+      expect(result.samples).toBe(5);
+      expect(result.eligible).toBe(eligible);
+      expect(result.reason).toBe(reason);
+      expect(Number.isFinite(result.smoothedExpectedR)).toBe(true);
+    },
+  );
 
   it('carries only the missing compatible predecessor samples across an explicit policy successor', () => {
     const evidence = [

@@ -3531,8 +3531,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           `Multi-model PAPER candidate ${best.instrument} ${best.direction} confidence=${best.confidence.toFixed(4)} ` +
             `adaptiveRank=${adaptiveWinner.adaptiveScanRank ?? 'n/a'} adaptiveScore=${adaptiveWinner.adaptiveScore.toFixed(4)} ` +
             `riskMultiplier=${effectiveAdaptiveRiskMultiplier.toFixed(2)}x ` +
-              `rawRiskMultiplier=${adaptiveWinner.riskMultiplier.multiplier.toFixed(2)}x ` +
-              `championSideRisk=${championDirectionRiskCap.reason} ` +
+            `rawRiskMultiplier=${adaptiveWinner.riskMultiplier.multiplier.toFixed(2)}x ` +
+            `championSideRisk=${championDirectionRiskCap.reason} ` +
             `lotTier=${dynamicLotSizing.tier} lotCap=${dynamicLotSizing.upperBound.toFixed(2)} ` +
             `outcome=${outcome.outcome} signal=${signalId} cadence=adaptive-scan-ranked`,
         );

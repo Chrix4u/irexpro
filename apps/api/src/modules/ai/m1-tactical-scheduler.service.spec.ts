@@ -1042,7 +1042,10 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
         executionAuthority: 'NONE',
         blockers: expect.arrayContaining(['M1_FAST_STOP_REGIME_BRAKE']),
         governance: expect.objectContaining({
-          fastStopRegimeBrake: expect.objectContaining({ active: true, reason: 'RECENT_FAST_STOP' }),
+          fastStopRegimeBrake: expect.objectContaining({
+            active: true,
+            reason: 'RECENT_FAST_STOP',
+          }),
         }),
       }),
     );

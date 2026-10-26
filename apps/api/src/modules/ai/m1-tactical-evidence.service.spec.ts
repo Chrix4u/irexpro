@@ -211,7 +211,9 @@ describe('M1TacticalEvidenceService', () => {
     expect(normalized).toContain("ti.timeframe = 'M1'");
     expect(normalized).toContain("ti.metadata ->> 'external_provider_paper_only' = 'true'");
     expect(normalized).toContain("t.close_reason = 'STOP_LOSS_HIT'");
-    expect(normalized).toContain("t.closed_at > ($5::timestamptz - ($6::double precision * interval '1 second'))");
+    expect(normalized).toContain(
+      "t.closed_at > ($5::timestamptz - ($6::double precision * interval '1 second'))",
+    );
     expect(normalized).toContain('EXTRACT(EPOCH FROM (t.closed_at - t.opened_at)) <= $7');
     expect(normalized).toContain('ORDER BY t.closed_at DESC');
     expect(normalized).toContain('LIMIT 1');
