@@ -426,8 +426,8 @@ export class M1TacticalEvidenceService {
         WHERE t.user_id = $1
           AND t.broker_connection_id = $2
           AND t.status = 'OPEN'
-          AND ti.strategy_code = 'external-irexpro-m1-tactical'
-          AND ti.timeframe = 'M1'
+          AND ti.strategy_code LIKE 'external-irexpro-%'
+          AND ti.timeframe IN ('M1', 'M5')
           AND ti.metadata ->> 'external_provider_paper_only' = 'true'
         ORDER BY t.opened_at ASC
       `,

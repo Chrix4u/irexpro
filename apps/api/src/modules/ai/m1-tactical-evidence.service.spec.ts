@@ -301,7 +301,7 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(params).toEqual([input().userId, input().brokerConnectionId, 'EURUSD']);
   });
 
-  it('loads all open M1 PAPER positions with durable USD stop-risk evidence', async () => {
+  it('loads all open iRexPro PAPER entry exposure across M1 and M5 with durable USD stop-risk evidence', async () => {
     const query = jest.fn().mockResolvedValue([
       {
         instrument: 'EURUSD',
@@ -336,7 +336,9 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(normalized).toContain('t.lot_size');
     expect(normalized).toContain('t.fill_price');
     expect(normalized).toContain('t.stop_loss');
-    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-m1-tactical'");
+    expect(normalized).toContain("ti.strategy_code LIKE 'external-irexpro-%'");
+    expect(normalized).toContain("ti.timeframe IN ('M1', 'M5')");
+    expect(normalized).toContain("ti.metadata ->> 'external_provider_paper_only' = 'true'");
     expect(params).toEqual([input().userId, input().brokerConnectionId]);
   });
 

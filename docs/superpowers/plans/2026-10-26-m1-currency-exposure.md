@@ -4,7 +4,7 @@
 
 **Goal:** Preserve high-frequency M1 PAPER participation while preventing repeated same-thesis entries from exceeding an aligned-currency stop-risk budget.
 
-**Architecture:** Keep raw trade counts unbounded. Convert each open M1 position and candidate to USD stop-risk, decompose that risk into base/quote currency exposure, then reduce new M1 size at 2% of the explicit allocated PAPER pool and block additional aligned exposure at 3%. Existing positions are never force-closed; M5, DEMO and LIVE authority are unchanged.
+**Architecture:** Keep raw trade counts unbounded. Convert each open iRexPro PAPER entry position (M1 or M5) and the new M1 candidate to USD stop-risk, decompose that risk into base/quote currency exposure, then reduce new M1 size at 2% of the explicit allocated PAPER pool and block additional aligned exposure at 3%. Existing positions are never force-closed; M5, DEMO and LIVE authority are unchanged.
 
 **Tech Stack:** NestJS/TypeScript, PostgreSQL, Jest.
 
@@ -22,7 +22,7 @@
 - [ ] Run focused tests GREEN.
 
 ### Task 2: Durable open M1 risk evidence
-- [ ] Add RED evidence-service test for all open M1 positions with fill/SL/lot stop-risk.
+- [ ] Add RED evidence-service test for all open iRexPro PAPER M1/M5 positions with fill/SL/lot stop-risk.
 - [ ] Implement `loadOpenPaperRiskPositions`.
 - [ ] Run evidence tests GREEN.
 
