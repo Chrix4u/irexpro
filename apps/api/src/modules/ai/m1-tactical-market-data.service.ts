@@ -1,7 +1,10 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectDataSource } from '@nestjs/typeorm';
+import type { DataSource } from 'typeorm';
 import type { OHLCV } from '../broker/interfaces/broker-adapter.interface';
 import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
+import { PAPER_MARKET_SPECS } from '../broker/services/paper-market-spec';
 import {
   ProviderQuoteCandleStoreService,
   type ProviderQuoteCandle,
@@ -12,6 +15,12 @@ import {
   type ExecutionSpreadEvidence,
 } from './ensemble-governance';
 import { buildM1TacticalFeatures, type M1TacticalFeatureInput } from './m1-tactical-features';
+import { loadPaperSpreadCalibrationHistory } from './paper-spread-calibration-history';
+import {
+  classifyPaperSpreadSession,
+  evaluatePaperSpreadCalibrationShadow,
+  type PaperSpreadCalibrationHistory,
+} from './paper-spread-calibration-shadow';
 
 const M1_HISTORY_COUNT = 60;
 const CONTEXT_HISTORY_COUNT = 30;
@@ -67,11 +76,13 @@ function singleM1Source(rows: OHLCV[]): string | null {
 @Injectable()
 export class M1TacticalMarketDataService {
   private readonly readiness = new Map<string, M1TacticalMarketReadiness>();
+  private readonly paperSpreadHistory = new Map<string, Promise<PaperSpreadCalibrationHistory>>();
 
   constructor(
     private readonly store: ProviderQuoteCandleStoreService,
     @Optional() private readonly config?: ConfigService,
     @Optional() private readonly paperMarket?: LivePaperMarketDataService,
+    @Optional() @InjectDataSource() private readonly dataSource?: DataSource,
   ) {}
 
   getLastReadiness(connectionId: string, instrument: string): M1TacticalMarketReadiness | null {
@@ -223,11 +234,11 @@ export class M1TacticalMarketDataService {
     };
   }
 
-  private loadPaperSnapshot(
+  private async loadPaperSnapshot(
     connectionId: string,
     instrument: string,
     decisionTime: Date,
-  ): M1TacticalMarketSnapshot | null {
+  ): Promise<M1TacticalMarketSnapshot | null> {
     if (!this.paperMarket) {
       this.setReadiness(connectionId, instrument, 'PAPER_CACHE_UNAVAILABLE', null, decisionTime);
       return null;
@@ -252,9 +263,10 @@ export class M1TacticalMarketDataService {
       this.setReadiness(connectionId, instrument, 'PAPER_M1_STALE', null, decisionTime);
       return null;
     }
-    const paperSimulationSpreadPrice = this.paperMarket.getPaperFallbackSpread(
-      instrument,
+    const paperSimulationSpreadPrice = await this.resolvePaperSimulationSpreadPrice(
       connectionId,
+      instrument,
+      decisionTime,
     );
     if (!Number.isFinite(paperSimulationSpreadPrice) || paperSimulationSpreadPrice <= 0) {
       this.setReadiness(connectionId, instrument, 'PAPER_SPREAD_UNAVAILABLE', null, decisionTime);
@@ -289,6 +301,48 @@ export class M1TacticalMarketDataService {
       paperSimulationSpreadPrice,
       marketDataAuthority: 'PAPER_PROVIDER_SIMULATION',
     };
+  }
+
+  private async resolvePaperSimulationSpreadPrice(
+    connectionId: string,
+    instrument: string,
+    decisionTime: Date,
+  ): Promise<number> {
+    const fixedSpreadPrice = PAPER_MARKET_SPECS[instrument]?.spread ?? 0;
+    if (!Number.isFinite(fixedSpreadPrice) || fixedSpreadPrice <= 0) return 0;
+
+    const sourceConnectionId =
+      this.config?.get<string>('multimodelBrokerExpert.sourceConnectionId', '')?.trim() || '';
+    let calibratedSpreadPrice = fixedSpreadPrice;
+    if (this.dataSource && sourceConnectionId) {
+      const session = classifyPaperSpreadSession(decisionTime);
+      const utcDate = decisionTime.toISOString().slice(0, 10);
+      const cacheKey = `${sourceConnectionId}|${instrument}|${utcDate}|${session}`;
+      let historyPromise = this.paperSpreadHistory.get(cacheKey);
+      if (!historyPromise) {
+        historyPromise = loadPaperSpreadCalibrationHistory(
+          this.dataSource,
+          sourceConnectionId,
+          instrument,
+          decisionTime,
+        ).catch(() => {
+          this.paperSpreadHistory.delete(cacheKey);
+          return { sampleCount: 0, p95SpreadPrice: 0 };
+        });
+        this.paperSpreadHistory.set(cacheKey, historyPromise);
+      }
+      const history = await historyPromise;
+      calibratedSpreadPrice = evaluatePaperSpreadCalibrationShadow({
+        instrument,
+        evaluatedAt: decisionTime,
+        fixedSpreadPrice,
+        stopDistancePrice: fixedSpreadPrice,
+        history,
+      }).calibratedSpreadPrice;
+    }
+
+    this.paperMarket?.setPaperFallbackSpread(instrument, calibratedSpreadPrice, connectionId);
+    return calibratedSpreadPrice;
   }
 
   private configuredMarketDataConnectionId(): string {
