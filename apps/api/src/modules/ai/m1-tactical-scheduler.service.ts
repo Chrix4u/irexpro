@@ -196,6 +196,29 @@ export function m1RouteExecutableInPhase(
   );
 }
 
+export function m1ShadowOutcomeEligible(input: {
+  routeEligible: boolean;
+  route: M1TacticalRoute;
+  routeReason: string;
+  routePayoffEligible: boolean;
+  blockers: readonly string[];
+  eventRisk: 'CLEAR' | 'HIGH_IMPACT_BLOCK' | 'UNVERIFIED';
+  paperExecutionCostUsable: boolean;
+}): boolean {
+  if (!input.routeEligible || input.route === 'ABSTAIN' || !input.routePayoffEligible) return false;
+  if (input.eventRisk !== 'CLEAR' || !input.paperExecutionCostUsable) return false;
+
+  const hardBlockers = input.blockers.filter((blocker) => !blocker.startsWith('M1_RELIABILITY_'));
+  if (hardBlockers.length === 0) return true;
+
+  return (
+    input.route === 'M1_EARLY_TRANSITION' &&
+    input.routeReason === 'LOCAL_IMPULSE_AGAINST_HTF' &&
+    hardBlockers.length === 1 &&
+    hardBlockers[0] === 'DRIFT_OUT_OF_DISTRIBUTION'
+  );
+}
+
 const M1_SIGNAL_NAMESPACE = 'df913329-57f7-4c08-8f19-8272540b7efd';
 
 function minuteBoundary(now: Date): Date {
@@ -568,6 +591,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         : this.rolloutPolicy.routeNetExpectedRFloors[routeDecision.route];
     const routePayoffEligible =
       routeDecision.route !== 'ABSTAIN' && governance.netExpectedR >= routeNetExpectedRFloor;
+    const shadowOutcomeEligible = m1ShadowOutcomeEligible({
+      routeEligible: routeDecision.eligible,
+      route: routeDecision.route,
+      routeReason: routeDecision.reason,
+      routePayoffEligible,
+      blockers: governance.blockers,
+      eventRisk,
+      paperExecutionCostUsable: governance.genericGovernance.paperExecutionCostUsable === true,
+    });
     const earlyTransitionMicro =
       this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_MICRO' &&
       routeDecision.route === 'M1_EARLY_TRANSITION';
@@ -683,6 +715,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         rolloutPolicyVersion: this.rolloutPolicy.version,
         rolloutPhase: this.rolloutPolicy.phase,
         routeNetExpectedRFloor,
+        shadowOutcomeEligible,
       },
       blockers,
     });

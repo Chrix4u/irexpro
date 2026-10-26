@@ -577,9 +577,9 @@ describe('M1TacticalEvidenceService shadow episode evidence', () => {
     const normalized = String(sql).replace(/\s+/g, ' ');
     expect(normalized).toContain("route <> 'ABSTAIN'");
     expect(normalized).toContain("execution_authority = 'NONE'");
-    expect(normalized).toContain(
-      `(blockers = '[]'::jsonb OR blockers = '["M1_PHASE_SHADOW"]'::jsonb)`,
-    );
+    expect(normalized).toContain("governance ->> 'shadowOutcomeEligible' = 'true'");
+    expect(normalized).toContain("OR blockers = '[]'::jsonb");
+    expect(normalized).toContain(`OR blockers = '["M1_PHASE_SHADOW"]'::jsonb`);
     expect(normalized).toContain('LAG(bar_time) OVER');
     expect(normalized).toContain(
       'PARTITION BY user_id, broker_connection_id, instrument, direction, route, policy_version',

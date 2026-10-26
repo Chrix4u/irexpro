@@ -30,6 +30,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V7,
   m1RiskMarketRegime,
   m1RouteExecutableInPhase,
+  m1ShadowOutcomeEligible,
 } from './m1-tactical-scheduler.service';
 
 function seriesEndingAt(
@@ -145,6 +146,72 @@ function harness(options: { marketDataErrorFor?: string; warm?: boolean } = {}) 
 }
 
 const OPEN_NOW = new Date('2026-10-15T12:30:15.000Z');
+
+describe('M1 active-rollout shadow outcome eligibility', () => {
+  it('keeps a reliability-demoted but otherwise clean sleeve learning in shadow', () => {
+    expect(
+      m1ShadowOutcomeEligible({
+        routeEligible: true,
+        route: 'M1_EARLY_TRANSITION',
+        routeReason: 'EARLY_TRANSITION',
+        routePayoffEligible: true,
+        blockers: ['M1_RELIABILITY_RECENT_NEGATIVE_PAYOFF'],
+        eventRisk: 'CLEAR',
+        paperExecutionCostUsable: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('keeps hard safety failures out of the promotion ledger', () => {
+    expect(
+      m1ShadowOutcomeEligible({
+        routeEligible: true,
+        route: 'M1_EARLY_TRANSITION',
+        routeReason: 'EARLY_TRANSITION',
+        routePayoffEligible: true,
+        blockers: ['EXECUTION_SPREAD_UNAVAILABLE'],
+        eventRisk: 'CLEAR',
+        paperExecutionCostUsable: false,
+      }),
+    ).toBe(false);
+    expect(
+      m1ShadowOutcomeEligible({
+        routeEligible: true,
+        route: 'M1_EARLY_TRANSITION',
+        routeReason: 'EARLY_TRANSITION',
+        routePayoffEligible: true,
+        blockers: ['EVENT_RISK_UNVERIFIED'],
+        eventRisk: 'UNVERIFIED',
+        paperExecutionCostUsable: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('allows only the explicit local-impulse drift counterfactual exception', () => {
+    expect(
+      m1ShadowOutcomeEligible({
+        routeEligible: true,
+        route: 'M1_EARLY_TRANSITION',
+        routeReason: 'LOCAL_IMPULSE_AGAINST_HTF',
+        routePayoffEligible: true,
+        blockers: ['DRIFT_OUT_OF_DISTRIBUTION', 'M1_RELIABILITY_NEGATIVE_EXPECTANCY'],
+        eventRisk: 'CLEAR',
+        paperExecutionCostUsable: true,
+      }),
+    ).toBe(true);
+    expect(
+      m1ShadowOutcomeEligible({
+        routeEligible: true,
+        route: 'M1_TREND_CONTINUATION',
+        routeReason: 'TREND_CONTINUATION',
+        routePayoffEligible: true,
+        blockers: ['DRIFT_OUT_OF_DISTRIBUTION'],
+        eventRisk: 'CLEAR',
+        paperExecutionCostUsable: true,
+      }),
+    ).toBe(false);
+  });
+});
 
 describe('M1 tactical aligned-currency exposure guard', () => {
   function guardHarness(
@@ -297,6 +364,7 @@ describe('M1TacticalSchedulerService shadow phase', () => {
       expect(row.blockers).toContain('M1_PHASE_SHADOW');
       expect(row.policyVersion).toBe('m1-tactical-v1');
       expect(row.barTime).toBeInstanceOf(Date);
+      expect(typeof row.governance.shadowOutcomeEligible).toBe('boolean');
     }
     expect(h.receiveSignal).not.toHaveBeenCalled();
   });

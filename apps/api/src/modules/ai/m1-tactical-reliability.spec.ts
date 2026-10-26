@@ -76,6 +76,38 @@ describe('evaluateM1RoutePairSideReliability', () => {
     expect(result.reason).toBe('EARLY_LOSS_STREAK');
   });
 
+  it('brakes recent payoff decay before a mixed sequence becomes a three-loss streak', () => {
+    const recent = [-1, -1, 0.5, 0.4, 0.4].map((realisedR, index) =>
+      row(realisedR, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - (index + 1) * 60_000) }),
+    );
+    const olderWins = Array.from({ length: 5 }, (_, index) =>
+      row(1, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - (index + 10) * 60_000) }),
+    );
+    const result = evaluate([...olderWins, ...recent]);
+    expect(result.averageRealizedR).toBeGreaterThan(0);
+    expect(result).toMatchObject({
+      eligible: false,
+      reason: 'RECENT_NEGATIVE_PAYOFF',
+      recentPayoffRSamples: 5,
+      recentPayoffAverageR: -0.14,
+    });
+  });
+
+  it('does not brake mild recent noise above the payoff-decay floor', () => {
+    const recent = [-0.5, -0.2, 0.1, 0.1, 0.1].map((realisedR, index) =>
+      row(realisedR, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - (index + 1) * 60_000) }),
+    );
+    const olderWins = Array.from({ length: 5 }, (_, index) =>
+      row(1, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - (index + 10) * 60_000) }),
+    );
+    expect(evaluate([...olderWins, ...recent])).toMatchObject({
+      eligible: true,
+      reason: 'POSITIVE_EXPECTANCY',
+      recentPayoffRSamples: 5,
+      recentPayoffAverageR: -0.08,
+    });
+  });
+
   it('uses actual risk-normalized payoff so small protected wins cannot mask full-stop losses', () => {
     const payouts = [-3.18, 1.5, -3.18, 1.5, -3.18, 1.5, -3.18, 1.5, 1.5, 1.5];
     const result = evaluate(
