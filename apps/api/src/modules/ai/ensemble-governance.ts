@@ -59,6 +59,12 @@ export interface EnsembleGovernanceInput {
   paperSimulationSpreadPrice?: number;
   /** Route-specific drift envelope override for isolated PAPER research lanes. */
   driftRoute?: 'PAIRED_REVERSAL_RESEARCH';
+  /**
+   * Caller-scoped PAPER post-cost expectancy floor. The global 0.08R hard
+   * economics floor remains the minimum, so callers can only replace a
+   * stronger route default with an explicitly bounded value.
+   */
+  paperNetExpectedRFloorOverride?: number;
 }
 
 export interface EnsembleGovernanceDecision {
@@ -403,10 +409,14 @@ export function evaluateEnsembleGovernance(
   const executionCost = executionCostR(input);
   const estimatedExecutionCostR = executionCost.costR;
   const netExpectedR = grossExpectedR - estimatedExecutionCostR;
-  const paperNetExpectedRFloor =
+  const defaultPaperNetExpectedRFloor =
     input.ensemble.strategyRoute === 'EARLY_TRANSITION'
       ? ENSEMBLE_EARLY_TRANSITION_PAPER_NET_EXPECTED_R_FLOOR
       : ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR;
+  const overridePaperNetExpectedRFloor = Number.isFinite(input.paperNetExpectedRFloorOverride)
+    ? Math.max(ENSEMBLE_NET_EXPECTED_R_FLOOR, Number(input.paperNetExpectedRFloorOverride))
+    : null;
+  const paperNetExpectedRFloor = overridePaperNetExpectedRFloor ?? defaultPaperNetExpectedRFloor;
   const paperNetExpectedRPassed =
     Number.isFinite(netExpectedR) && netExpectedR >= paperNetExpectedRFloor;
   const netExpectedRPassed =

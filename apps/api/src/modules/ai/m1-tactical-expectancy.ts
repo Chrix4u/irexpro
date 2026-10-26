@@ -31,6 +31,7 @@ export interface M1TacticalExpectancyDecision {
 }
 
 function finite(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
   const number = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -58,8 +59,7 @@ export function evaluateM1TacticalExpectancy(
     Math.max(0, breakevenWinProbability - 0.1),
     Math.min(1, breakevenWinProbability + 0.2),
   );
-  const heuristicPriorExpectedR =
-    impliedWinProbability * targetR - (1 - impliedWinProbability);
+  const heuristicPriorExpectedR = impliedWinProbability * targetR - (1 - impliedWinProbability);
 
   const reliability = input.reliability ?? null;
   const evidenceSamples = Math.max(0, Math.floor(finite(reliability?.realizedRSamples) ?? 0));

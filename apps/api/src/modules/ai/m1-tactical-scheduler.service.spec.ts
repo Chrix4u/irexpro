@@ -365,6 +365,14 @@ describe('M1TacticalSchedulerService shadow phase', () => {
       expect(row.policyVersion).toBe('m1-tactical-v1');
       expect(row.barTime).toBeInstanceOf(Date);
       expect(typeof row.governance.shadowOutcomeEligible).toBe('boolean');
+      expect(row.governance.expectancy).toEqual(
+        expect.objectContaining({
+          artifact: 'm1-tactical-statistical-expectancy-v2',
+          targetR: 1.6,
+          statisticalExpectedR: expect.any(Number),
+        }),
+      );
+      expect(row.governance.netExpectedR).not.toBeCloseTo(1.6, 6);
     }
     expect(h.receiveSignal).not.toHaveBeenCalled();
   });
@@ -921,7 +929,7 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
 
   it('allows conservative PAPER simulation spread without upgrading it to production evidence', async () => {
     const h = phase2Harness();
-    const features = cleanContinuationFeatures();
+    const features = { ...cleanContinuationFeatures(), closeLocation: 0.85 };
     const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
 
     await (h.service as any).persistCandidate(

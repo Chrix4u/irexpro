@@ -123,6 +123,19 @@ describe('M1 tactical statistical expectancy', () => {
     expect(decayed.recentPayoffApplied).toBe(true);
   });
 
+  it('preserves unavailable realised-payoff evidence as null instead of fabricating zero-R evidence', () => {
+    const result = evaluateM1TacticalExpectancy({
+      ...base,
+      reliability: reliability(),
+    });
+
+    expect(result.source).toBe('HEURISTIC_PRIOR');
+    expect(result.evidenceSamples).toBe(0);
+    expect(result.evidenceAverageRealizedR).toBeNull();
+    expect(result.recentPayoffSamples).toBe(0);
+    expect(result.recentPayoffAverageR).toBeNull();
+  });
+
   it('fails conservative and finite when evidence contains invalid numbers', () => {
     const result = evaluateM1TacticalExpectancy({
       targetR: Number.NaN,
