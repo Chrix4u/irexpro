@@ -4,6 +4,7 @@ import type {
   TradingSessionView,
 } from "@irexpro/types/execution";
 import { api } from "@/lib/api";
+import { reconcileSelectedTraderBrokerId } from "@/lib/trader-broker-context";
 
 // The authoritative session contract now lives in the shared types package
 // (Sprint 56 correction round 5 — issues #292/#293/#295/#298): the session
@@ -382,6 +383,12 @@ export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> 
     brokers.find((broker) => broker.status === "CONNECTED") ??
     brokers[0] ??
     null;
+
+  reconcileSelectedTraderBrokerId({
+    brokerIds: brokers.map((broker) => broker.id),
+    sessionBrokerId: sessionBroker?.id ?? null,
+    primaryBrokerId: primaryBroker?.id ?? null,
+  });
 
   return {
     risk,
