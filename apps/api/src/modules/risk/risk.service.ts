@@ -862,10 +862,14 @@ export class RiskService {
     const requestedLots = this.parseOrderDecimal(trade.requestedLotSize, 'requestedLotSize');
     const maxLots = this.parseProfileDecimal(profile.maxPositionSizeLot, 'maxPositionSizeLot');
     let effectiveLotSize = trade.requestedLotSize;
-    const allocationAwarePaperSizing =
-      trade.executionMode === ExecutionMode.PAPER_ONLY && trade.allocationAwarePaperSizing === true;
+    const allocationAwareDemoSizing =
+      trade.allocationAwarePaperSizing === true &&
+      connection.accountType === BrokerMode.DEMO &&
+      [ExecutionMode.PAPER_ONLY, ExecutionMode.SEMI_AUTO, ExecutionMode.FULL_AUTO].includes(
+        session.executionMode,
+      );
 
-    if (requestedLots.gt(maxLots) && !allocationAwarePaperSizing) {
+    if (requestedLots.gt(maxLots) && !allocationAwareDemoSizing) {
       // Soft reduction: cap to max, don't reject outright. Allocation-aware
       // PAPER is the one exception: its lot was already derived from the
       // explicit allocation + stop distance under the durable risk-% ceiling.
@@ -888,11 +892,15 @@ export class RiskService {
           instrument: trade.instrument,
         },
       });
-    } else if (allocationAwarePaperSizing) {
-      appliedRules.push('POSITION_SIZE:ALLOCATION_AWARE_PAPER');
+    } else if (allocationAwareDemoSizing) {
+      const allocationRule =
+        session.executionMode === ExecutionMode.PAPER_ONLY
+          ? 'POSITION_SIZE:ALLOCATION_AWARE_PAPER'
+          : 'POSITION_SIZE:ALLOCATION_AWARE_DEMO';
+      appliedRules.push(allocationRule);
       this.logger.log(
-        `Signal ${trade.signalId}: allocation-aware PAPER sizing retained ${requestedLots.toString()} lots; ` +
-          `legacy maxPositionSizeLot=${maxLots.toString()} is not an independent PAPER cap`,
+        `Signal ${trade.signalId}: allocation-aware DEMO sizing retained ${requestedLots.toString()} lots; ` +
+          `legacy maxPositionSizeLot=${maxLots.toString()} is not an independent promoted-DEMO cap`,
       );
     } else {
       appliedRules.push('POSITION_SIZE:OK');
@@ -1347,7 +1355,7 @@ export class RiskService {
     if (
       marketEntry &&
       entry &&
-      session.executionMode === ExecutionMode.PAPER_ONLY &&
+      connection.accountType === BrokerMode.DEMO &&
       trade.allocationAwarePaperSizing === true &&
       trade.paperMarketReferenceEntryPrice
     ) {
@@ -1374,7 +1382,11 @@ export class RiskService {
             trade.direction === 'BUY'
               ? entry.add(targetDistance).toString()
               : entry.sub(targetDistance).toString();
-          appliedRules.push('PAPER_MARKET_GEOMETRY:REBASED');
+          appliedRules.push(
+            session.executionMode === ExecutionMode.PAPER_ONLY
+              ? 'PAPER_MARKET_GEOMETRY:REBASED'
+              : 'DEMO_MARKET_GEOMETRY:REBASED',
+          );
         }
       }
     }

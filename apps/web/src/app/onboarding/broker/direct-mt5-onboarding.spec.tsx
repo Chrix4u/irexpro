@@ -145,7 +145,7 @@ describe('Direct MT5 onboarding', () => {
 
     await waitFor(() => {
       expect(createBrokerConnection).toHaveBeenCalledWith({
-        brokerId: 'metatrader5',
+        brokerId: 'direct-mt5',
         accountType: 'DEMO',
         accountId: '113392789',
         displayName: 'My MT5 demo',
