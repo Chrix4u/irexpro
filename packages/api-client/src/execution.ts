@@ -2,9 +2,15 @@ import type { TradeExecutionView } from '@irexpro/types/execution';
 import type { ApiClient } from './index';
 
 export interface ExecutionApi {
-  listOpenPositions(): Promise<TradeExecutionView[]>;
-  listRecentExecutions(limit?: number): Promise<TradeExecutionView[]>;
-  listClosedExecutions(limit?: number): Promise<TradeExecutionView[]>;
+  listOpenPositions(brokerConnectionId?: string): Promise<TradeExecutionView[]>;
+  listRecentExecutions(limit?: number, brokerConnectionId?: string): Promise<TradeExecutionView[]>;
+  listClosedExecutions(limit?: number, brokerConnectionId?: string): Promise<TradeExecutionView[]>;
+}
+
+function brokerQuery(brokerConnectionId: string | undefined, separator: '?' | '&'): string {
+  return brokerConnectionId
+    ? `${separator}brokerConnectionId=${encodeURIComponent(brokerConnectionId)}`
+    : '';
 }
 
 /**
@@ -18,20 +24,22 @@ export function createExecutionApi(
   client: Pick<ApiClient, 'request'>,
 ): ExecutionApi {
   return {
-    listOpenPositions: () =>
-      client.request<TradeExecutionView[]>('/execution/positions/open'),
+    listOpenPositions: (brokerConnectionId) =>
+      client.request<TradeExecutionView[]>(
+        `/execution/positions/open${brokerQuery(brokerConnectionId, '?')}`,
+      ),
 
-    listRecentExecutions: (limit = 50) => {
+    listRecentExecutions: (limit = 50, brokerConnectionId) => {
       const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
       return client.request<TradeExecutionView[]>(
-        `/execution/trades/recent?limit=${safeLimit}`,
+        `/execution/trades/recent?limit=${safeLimit}${brokerQuery(brokerConnectionId, '&')}`,
       );
     },
 
-    listClosedExecutions: (limit = 50) => {
+    listClosedExecutions: (limit = 50, brokerConnectionId) => {
       const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
       return client.request<TradeExecutionView[]>(
-        `/execution/trades/closed?limit=${safeLimit}`,
+        `/execution/trades/closed?limit=${safeLimit}${brokerQuery(brokerConnectionId, '&')}`,
       );
     },
   };
