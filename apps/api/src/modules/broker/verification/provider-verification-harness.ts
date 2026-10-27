@@ -355,6 +355,12 @@ export interface ProviderVerificationChecklistOptions {
    */
   steps?: readonly string[];
   /**
+   * Optional provider-specific safety preflights already executed by the
+   * application service after connection and before this checklist may mutate
+   * broker state. Any FAIL blocks every remaining validation step.
+   */
+  preflightSteps?: readonly ProviderVerificationStep[];
+  /**
    * Pre-computed connect step result. When provided the engine does NOT call
    * adapter.connect() itself — BrokerDemoValidationService injects the result
    * of BrokerService.connectBroker (the canonical CONNECTING→CONNECTED state
@@ -928,21 +934,32 @@ export async function runVerificationChecklist(
     }
   }
 
-  const connectFailed = statuses.get('connect') === 'FAIL';
+  const connectionFailed = statuses.get('connect') === 'FAIL';
+  let preflightFailed = false;
+  if (!connectionFailed) {
+    for (const step of options.preflightSteps ?? []) {
+      pushStep(step.name, step.status, step);
+      if (step.status === 'FAIL') preflightFailed = true;
+    }
+  }
+  const prerequisiteFailed = connectionFailed || preflightFailed;
 
-  // Fail-closed cascade: without a connection nothing else can be verified.
+  // Fail-closed cascade: without a connection or a passing safety preflight,
+  // nothing that can mutate broker state may be attempted.
   for (const name of PROVIDER_VERIFICATION_STEPS) {
     if (!selected.has(name) || name === 'connect') continue;
-    if (connectFailed && statuses.get(name) === undefined) {
+    if (prerequisiteFailed && statuses.get(name) === undefined) {
       pushStep(name, 'SKIPPED', {
         status: 'SKIPPED',
-        detail: 'connect failed — step not attempted',
+        detail: connectionFailed
+          ? 'connect failed — step not attempted'
+          : 'validation safety preflight failed — step not attempted',
       });
     }
   }
 
   // ── Step: account-info ────────────────────────────────────────────────────
-  if (selected.has('account-info') && !connectFailed) {
+  if (selected.has('account-info') && !prerequisiteFailed) {
     await runStep('account-info', async () => {
       const info = await adapter.getAccountInfo();
       const violations = decimalStringViolations(
@@ -961,7 +978,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: market-data (instrument catalog + current price) ─────────────────
-  if (selected.has('market-data') && !connectFailed) {
+  if (selected.has('market-data') && !prerequisiteFailed) {
     await runStep('market-data', async () => {
       const instruments = await adapter.getInstrumentList();
       if (!Array.isArray(instruments) || instruments.length === 0) {
@@ -1000,7 +1017,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: positions-snapshot ──────────────────────────────────────────────
-  if (selected.has('positions-snapshot') && !connectFailed) {
+  if (selected.has('positions-snapshot') && !prerequisiteFailed) {
     await runStep('positions-snapshot', async () => {
       const [positions, workingOrders] = await Promise.all([
         adapter.getOpenPositions(),
@@ -1028,7 +1045,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: market-order (small DEMO market order) ──────────────────────────
-  if (selected.has('market-order') && !connectFailed) {
+  if (selected.has('market-order') && !prerequisiteFailed) {
     await runStep('market-order', async () => {
       if (!passed('market-data')) {
         return skipped('market-data did not pass — no instrument/lot context');
@@ -1103,7 +1120,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: position-verify (the order reached the open positions) ───────────
-  if (selected.has('position-verify') && !connectFailed) {
+  if (selected.has('position-verify') && !prerequisiteFailed) {
     await runStep('position-verify', async () => {
       if (!passed('market-order')) {
         return skipped('market-order did not pass — no position to verify');
@@ -1133,7 +1150,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: modify-sl-tp (SL/TP modification where supported) ────────────────
-  if (selected.has('modify-sl-tp') && !connectFailed) {
+  if (selected.has('modify-sl-tp') && !prerequisiteFailed) {
     await runStep('modify-sl-tp', async () => {
       if (!passed('position-verify')) {
         return skipped('position-verify did not pass — no position to modify');
@@ -1171,7 +1188,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: partial-close ───────────────────────────────────────────────────
-  if (selected.has('partial-close') && !connectFailed) {
+  if (selected.has('partial-close') && !prerequisiteFailed) {
     await runStep('partial-close', async () => {
       if (!passed('market-order')) {
         return skipped('market-order did not pass — no position to partially close');
@@ -1190,7 +1207,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: full-close ──────────────────────────────────────────────────────
-  if (selected.has('full-close') && !connectFailed) {
+  if (selected.has('full-close') && !prerequisiteFailed) {
     await runStep('full-close', async () => {
       if (!passed('market-order')) {
         return skipped('market-order did not pass — no position to close');
@@ -1209,7 +1226,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: trade-history (closed-trade history contains the trade) ──────────
-  if (selected.has('trade-history') && !connectFailed) {
+  if (selected.has('trade-history') && !prerequisiteFailed) {
     await runStep('trade-history', async () => {
       if (!passed('full-close')) {
         return skipped('full-close did not pass — trade not closed');
@@ -1243,7 +1260,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: pending-limit-order (far-from-market, stays WORKING) ─────────────
-  if (selected.has('pending-limit-order') && !connectFailed) {
+  if (selected.has('pending-limit-order') && !prerequisiteFailed) {
     await runStep('pending-limit-order', async () => {
       if (!passed('market-data')) {
         return skipped('market-data did not pass — no instrument/price context');
@@ -1287,7 +1304,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: pending-modify (modify SL/TP of the working order) ───────────────
-  if (selected.has('pending-modify') && !connectFailed) {
+  if (selected.has('pending-modify') && !prerequisiteFailed) {
     await runStep('pending-modify', async () => {
       if (!passed('pending-limit-order')) {
         return skipped('pending-limit-order did not pass — no working order to modify');
@@ -1330,7 +1347,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: pending-cancel ──────────────────────────────────────────────────
-  if (selected.has('pending-cancel') && !connectFailed) {
+  if (selected.has('pending-cancel') && !prerequisiteFailed) {
     await runStep('pending-cancel', async () => {
       if (!passed('pending-limit-order')) {
         return skipped('pending-limit-order did not pass — no working order to cancel');
@@ -1355,7 +1372,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: order-history (working-order listing; cancelled order gone) ──────
-  if (selected.has('order-history') && !connectFailed) {
+  if (selected.has('order-history') && !prerequisiteFailed) {
     await runStep('order-history', async () => {
       // listOrders() is a REQUIRED interface member (BrokerOrderState
       // reconciliation surface) — no capability gate, it must resolve.
@@ -1387,7 +1404,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: margin-info (getRequiredMargin sanity; null is acceptable) ───────
-  if (selected.has('margin-info') && !connectFailed) {
+  if (selected.has('margin-info') && !prerequisiteFailed) {
     await runStep('margin-info', async () => {
       if (!passed('market-data')) {
         return skipped('market-data did not pass — no instrument context');
@@ -1413,7 +1430,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: reconciliation (positions + working orders consistent) ───────────
-  if (selected.has('reconciliation') && !connectFailed) {
+  if (selected.has('reconciliation') && !prerequisiteFailed) {
     await runStep('reconciliation', async () => {
       const positions: BrokerPosition[] = await adapter.getOpenPositions();
       const workingOrders: BrokerOrderState[] = await adapter.listOrders();
@@ -1436,7 +1453,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: reconnect (disconnect → connect → account read) ──────────────────
-  if (selected.has('reconnect') && !connectFailed) {
+  if (selected.has('reconnect') && !prerequisiteFailed) {
     await runStep('reconnect', async () => {
       if (!options.credentials) {
         return skipped('no credentials supplied — reconnect cannot re-authenticate');
@@ -1454,7 +1471,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: provider-error-path (typed error, never a crash) ─────────────────
-  if (selected.has('provider-error-path') && !connectFailed) {
+  if (selected.has('provider-error-path') && !prerequisiteFailed) {
     await runStep('provider-error-path', async () => {
       try {
         const price = await adapter.getCurrentPrice(HARNESS_INVALID_INSTRUMENT);
@@ -1478,7 +1495,7 @@ export async function runVerificationChecklist(
   }
 
   const cleanupNeeded =
-    !connectFailed &&
+    !prerequisiteFailed &&
     ((Boolean(ctx.marketOrderId || ctx.marketProviderOrderId) && !passed('full-close')) ||
       (ctx.marketOrderAttempted &&
         ctx.marketDispatchNeedsReconciliation &&
