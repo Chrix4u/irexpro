@@ -26,6 +26,7 @@ import { OnboardingService } from '../users/onboarding.service';
 import { TradingNotReadyException } from '../../common/exceptions/trading-not-ready.exception';
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
+import { BrokerAuthorizationStatus } from '../broker/authorization/broker-authorization-status';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
 import { ExactDecimal } from '../../common/utils/exact-decimal';
@@ -250,6 +251,7 @@ export class TradingService {
     }
     const connection = await this.resolveConnection(userId, brokerConnectionId);
     this.assertBrokerConnectionHealthy(connection);
+    this.assertVpsScannerExecutionAuthority(userId, connection, executionMode);
 
     // ── Gate 3: Explicit AI capital allocation for this exact account ───────
     const allocation = await this.allocationService.getUserCapitalAllocationState(
@@ -781,6 +783,37 @@ export class TradingService {
     }
 
     return executionConnection.id;
+  }
+
+  private assertVpsScannerExecutionAuthority(
+    userId: string,
+    connection: BrokerConnection,
+    executionMode: ExecutionMode,
+  ): void {
+    if (!this.isVpsForexScannerUser(userId)) return;
+
+    const configuredPaperConnectionId = this.configService
+      .get<string>('vpsForexScanner.brokerConnectionId', '')
+      .trim();
+    const exactPaperResearchBinding =
+      connection.id === configuredPaperConnectionId &&
+      connection.brokerId === 'paper-broker' &&
+      executionMode === ExecutionMode.PAPER_ONLY;
+    if (exactPaperResearchBinding) return;
+
+    const promotedDemoBinding =
+      connection.id !== configuredPaperConnectionId &&
+      connection.brokerId !== 'paper-broker' &&
+      connection.accountType === BrokerMode.DEMO &&
+      executionMode === ExecutionMode.FULL_AUTO &&
+      connection.demoValidated === true &&
+      connection.authorizationStatus === BrokerAuthorizationStatus.ACTIVE &&
+      connection.liveTradingEnabled !== true;
+    if (promotedDemoBinding) return;
+
+    throw new ForbiddenException(
+      'This V8 rollout permits only the exact PAPER research binding or an ACTIVE, validated real-provider DEMO connection in FULL_AUTO. LIVE execution remains disabled.',
+    );
   }
 
   private isVpsForexScannerUser(userId: string): boolean {

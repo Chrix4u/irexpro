@@ -17,6 +17,7 @@ import { BrokerConnectionRequiredException } from '../execution/execution-sessio
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
+import { BrokerAuthorizationStatus } from '../broker/authorization/broker-authorization-status';
 import { TradeCloseReason, TradeStatus } from '../execution/entities/trade.entity';
 import { AuthService } from '../auth/auth.service';
 import { AiRuntimePreference } from './entities/ai-runtime-preference.entity';
@@ -393,9 +394,16 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       brokerService.findConnectionById.mockResolvedValue(
         buildHealthyConnection({
           id: 'conn-1',
-          brokerId: 'metatrader5',
-          brokerName: 'MetaTrader 5',
+          brokerId: 'ctrader',
+          brokerName: 'cTrader (Open API)',
+          accountType: BrokerMode.DEMO,
+          demoValidated: true,
+          authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+          liveTradingEnabled: false,
         }),
+      );
+      executionService.startSession.mockResolvedValue(
+        mockSession({ brokerConnectionId: 'conn-1', executionMode: ExecutionMode.FULL_AUTO }),
       );
 
       const session = await service.startTradingSession(
@@ -405,8 +413,68 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       );
 
       expect(session.id).toBe('session-1');
-      expect(executionService.startSession).toHaveBeenCalled();
+      expect(executionService.startSession.mock.calls[0]?.[0]).toBe('user-1');
+      expect(executionService.startSession.mock.calls[0]?.[1]).toBe('conn-1');
+      expect(executionService.startSession.mock.calls[0]?.[4]).toBe(ExecutionMode.FULL_AUTO);
       expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+    });
+
+    it('rejects scanner-owned FULL_AUTO when the external DEMO has not passed validation', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({
+          id: 'conn-1',
+          brokerId: 'ctrader',
+          brokerName: 'cTrader (Open API)',
+          accountType: BrokerMode.DEMO,
+          demoValidated: false,
+          authorizationStatus: BrokerAuthorizationStatus.CONNECTED,
+          liveTradingEnabled: false,
+        }),
+      );
+
+      await expect(
+        service.startTradingSession('user-1', 'conn-1', ExecutionMode.FULL_AUTO),
+      ).rejects.toThrow(ForbiddenException);
+      expect(allocationService.getUserCapitalAllocationState).not.toHaveBeenCalled();
+      expect(executionService.startSession).not.toHaveBeenCalled();
+    });
+
+    it('rejects scanner-owned FULL_AUTO on LIVE even when live trading is separately enabled', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({
+          id: 'conn-1',
+          brokerId: 'ctrader',
+          brokerName: 'cTrader (Open API)',
+          accountType: BrokerMode.LIVE,
+          demoValidated: true,
+          authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+          liveTradingEnabled: true,
+        }),
+      );
+
+      await expect(
+        service.startTradingSession('user-1', 'conn-1', ExecutionMode.FULL_AUTO),
+      ).rejects.toThrow(ForbiddenException);
+      expect(allocationService.getUserCapitalAllocationState).not.toHaveBeenCalled();
+      expect(executionService.startSession).not.toHaveBeenCalled();
     });
 
     it('keeps PAPER execution bound while using a connected MT5 DEMO account for market data', async () => {
