@@ -76,6 +76,25 @@ class AcceptedOrderIdDiffersFromPositionIdAdapter extends PaperBrokerAdapter {
   }
 }
 
+class DispatchUncertainAfterProviderFillAdapter extends PaperBrokerAdapter {
+  actualPositionId: string | null = null;
+  readonly closeIds: string[] = [];
+
+  async placeOrder(order: BrokerOrderRequest): Promise<BrokerOrderResult> {
+    const filled = await super.placeOrder(order);
+    this.actualPositionId = filled.externalOrderId ?? null;
+    throw new BrokerAdapterError(
+      BrokerErrorCode.CONNECTION_TIMEOUT,
+      'Transport outcome uncertain after provider accepted the market order',
+    );
+  }
+
+  async closeOrder(externalOrderId: string, lotSize?: string): Promise<BrokerOrderResult> {
+    this.closeIds.push(externalOrderId);
+    return super.closeOrder(externalOrderId, lotSize);
+  }
+}
+
 class ReconciliationErrorAfterProviderFillAdapter extends PaperBrokerAdapter {
   readonly acceptedOrderId = 'provider-order-uncertain';
   actualPositionId: string | null = null;
@@ -124,6 +143,22 @@ describe('DEMO validation — validation position identity and cleanup', () => {
     expect(adapter.actualPositionId).not.toBe(adapter.acceptedOrderId);
     expect(adapter.closeIds).toContain(adapter.actualPositionId!);
     expect(adapter.closeIds).not.toContain(adapter.acceptedOrderId);
+    await expect(adapter.getOpenPositions()).resolves.toHaveLength(0);
+  });
+
+  it('cleans a newly-created validation position when dispatch becomes uncertain before any order id is returned', async () => {
+    const adapter = new DispatchUncertainAfterProviderFillAdapter();
+
+    const evidence = await runVerificationChecklist(adapter, {
+      brokerId: 'paper-broker',
+      mode: 'DEMO',
+      steps: MARKET_LIFECYCLE_STEPS,
+      credentials: { accountId: 'paper-dispatch-uncertain' },
+    });
+
+    expect(evidence.overall).toBe('FAIL');
+    expect(adapter.actualPositionId).toBeTruthy();
+    expect(adapter.closeIds).toContain(adapter.actualPositionId!);
     await expect(adapter.getOpenPositions()).resolves.toHaveLength(0);
   });
 

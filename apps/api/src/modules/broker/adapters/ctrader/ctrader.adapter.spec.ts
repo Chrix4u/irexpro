@@ -837,6 +837,44 @@ describe('CTraderAdapter', () => {
       });
     });
 
+    it('finds an open position by the exact iRexPro client reference carried in label/comment', async () => {
+      const reference = 'harness-exact-correlation-123';
+      scriptReconcile(
+        [
+          {
+            ...SAMPLE_POSITION,
+            tradeData: {
+              ...SAMPLE_POSITION.tradeData,
+              label: reference,
+              comment: reference,
+            },
+          },
+        ],
+        [],
+      );
+      server.on(CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_RES,
+          {
+            ctidTraderAccountId: payload.ctidTraderAccountId,
+            positionUnrealizedPnL: [],
+            moneyDigits: 2,
+          },
+          envelope,
+        ),
+      );
+      await connectDemo();
+
+      await expect(adapter.findPositionByClientReference(reference)).resolves.toMatchObject({
+        externalOrderId: '7654321',
+        instrument: 'EUR/USD',
+        direction: 'BUY',
+      });
+      await expect(
+        adapter.findPositionByClientReference('different-reference'),
+      ).resolves.toBeNull();
+    });
+
     it('ignores non-OPEN positions (CLOSED/CREATED) and returns null for unknown ids', async () => {
       scriptReconcile(
         [

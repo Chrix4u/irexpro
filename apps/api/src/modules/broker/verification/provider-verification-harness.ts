@@ -76,6 +76,10 @@ import {
   IBrokerAdapter,
 } from '../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
+import {
+  defaultCertaintyForCode,
+  ProviderDispatchCertainty,
+} from '../interfaces/provider-dispatch-certainty';
 import { redactString } from '../../../common/utils/redact-sensitive.util';
 import { PaperBrokerAdapter } from '../adapters/paper-broker.adapter';
 import { OandaAdapter } from '../adapters/oanda/oanda.adapter';
@@ -316,6 +320,20 @@ interface AdapterWithCancelOrder {
   cancelOrder(externalOrderId: string): Promise<BrokerOrderResult>;
 }
 
+interface AdapterWithPositionClientReferenceLookup {
+  findPositionByClientReference(clientReference: string): Promise<BrokerPosition | null>;
+}
+
+function hasPositionClientReferenceLookup(
+  adapter: IBrokerAdapter,
+): adapter is IBrokerAdapter & AdapterWithPositionClientReferenceLookup {
+  return (
+    'findPositionByClientReference' in adapter &&
+    typeof (adapter as { findPositionByClientReference?: unknown })
+      .findPositionByClientReference === 'function'
+  );
+}
+
 export function hasCancelOrder(
   adapter: IBrokerAdapter,
 ): adapter is IBrokerAdapter & AdapterWithCancelOrder {
@@ -363,6 +381,19 @@ interface ChecklistContext {
   digits: number;
   partialLot: string;
   marketLot: string;
+  baselinePositionIds: Set<string>;
+  baselineWorkingOrderIds: Set<string>;
+  /** Unique idempotency/client reference placed on the MARKET validation order. */
+  marketClientReference?: string;
+  /** True once the MARKET mutation is invoked. */
+  marketOrderAttempted: boolean;
+  /** True when the dispatch may have reached the provider and therefore needs reconciliation. */
+  marketDispatchNeedsReconciliation: boolean;
+  /** Provider order id from the initial MARKET acknowledgement (may differ from position id). */
+  marketProviderOrderId?: string;
+  /** True only when the provider initially acknowledged MARKET as accepted/PENDING. */
+  marketOrderWasPending?: boolean;
+  /** Actual open-position id used for position reads/closes/history. */
   marketOrderId?: string;
   pendingOrderId?: string;
 }
@@ -454,6 +485,10 @@ export async function runVerificationChecklist(
     // close. Exact decimal math — never floats.
     partialLot: '0.01',
     marketLot: '0.02',
+    baselinePositionIds: new Set<string>(),
+    baselineWorkingOrderIds: new Set<string>(),
+    marketOrderAttempted: false,
+    marketDispatchNeedsReconciliation: false,
   };
 
   const pushStep = (name: string, status: VerificationStepStatus, outcome?: StepOutcome): void => {
@@ -555,9 +590,21 @@ export async function runVerificationChecklist(
         }
 
         if (state.status === 'FILLED') {
+          // cTrader's accepted acknowledgement exposes an ORDER id, while
+          // closeOrder()/getOpenPositions operate on the resulting POSITION id.
+          // ORDER_DETAILS includes positionId in raw ProtoOAOrder when filled.
+          const raw =
+            state.raw && typeof state.raw === 'object'
+              ? (state.raw as Record<string, unknown>)
+              : null;
+          const filledPositionId =
+            raw?.positionId !== undefined && raw.positionId !== null
+              ? String(raw.positionId)
+              : undefined;
           return {
             ...result,
             success: true,
+            externalOrderId: filledPositionId ?? result.externalOrderId,
             status: 'FILLED',
             filledPrice: state.avgFillPrice ?? result.filledPrice,
             filledQuantity: state.filledQuantity || result.filledQuantity,
@@ -593,6 +640,253 @@ export async function runVerificationChecklist(
       brokerMessage:
         `Accepted market order did not reach FILLED within ${timeoutMs}ms ` +
         `(last provider state ${lastStatus})`,
+    };
+  };
+
+  const equalDecimalStrings = (left: string, right: string): boolean => {
+    const a = parseDecimalString(left);
+    const b = parseDecimalString(right);
+    if (!a || !b) return false;
+    const scale = Math.max(a.scale, b.scale);
+    return rescale(a, scale).digits === rescale(b, scale).digits;
+  };
+
+  /**
+   * Resolve positions created by this validation run only. Pre-existing
+   * positions are protected by the baseline snapshot and are never touched.
+   */
+  const validationPositionCandidates = (positions: BrokerPosition[]): BrokerPosition[] => {
+    if (!passed('positions-snapshot') || !ctx.instrumentSymbol) return [];
+    return positions.filter(
+      (position) =>
+        !ctx.baselinePositionIds.has(position.externalOrderId) &&
+        position.instrument === ctx.instrumentSymbol &&
+        position.direction === 'BUY' &&
+        (equalDecimalStrings(position.lotSize, ctx.marketLot) ||
+          equalDecimalStrings(position.lotSize, ctx.partialLot)),
+    );
+  };
+
+  const orderCarriesClientReference = (order: BrokerOrderState): boolean => {
+    if (!ctx.marketClientReference || !order.raw || typeof order.raw !== 'object') return false;
+    const raw = order.raw as Record<string, unknown>;
+    const tradeData =
+      raw.tradeData && typeof raw.tradeData === 'object'
+        ? (raw.tradeData as Record<string, unknown>)
+        : null;
+    const reference = ctx.marketClientReference;
+    return (
+      raw.clientOrderId === reference.slice(0, 50) ||
+      tradeData?.label === reference.slice(0, 100) ||
+      tradeData?.comment === reference.slice(0, 512)
+    );
+  };
+
+  const validationWorkingOrderCandidates = (orders: BrokerOrderState[]): BrokerOrderState[] => {
+    if (!passed('positions-snapshot') || !ctx.instrumentSymbol) return [];
+    const newOrders = orders.filter(
+      (order) => !ctx.baselineWorkingOrderIds.has(order.providerOrderId),
+    );
+    const exactTagged = newOrders.filter(orderCarriesClientReference);
+    if (exactTagged.length > 0) return exactTagged;
+
+    // cTrader exposes exact client-reference correlation. If it found no tag,
+    // do not fall back to pair/lot matching and risk cancelling a user's own
+    // concurrent order. Adapters without this capability retain the bounded
+    // delta fallback used by the paper/contract harnesses.
+    if (hasPositionClientReferenceLookup(adapter)) return [];
+
+    return newOrders.filter(
+      (order) =>
+        order.instrument === ctx.instrumentSymbol &&
+        order.direction === 'BUY' &&
+        equalDecimalStrings(order.requestedQuantity, ctx.marketLot),
+    );
+  };
+
+  /**
+   * Last-resort DEMO cleanup. It never closes a position that existed before
+   * validation. If provider order state is uncertain we still close an
+   * unambiguous new validation position, but return FAIL unless the accepted
+   * provider order itself can also be proven terminal/cancelled.
+   */
+  const cleanupValidationExposure = async (): Promise<StepOutcome> => {
+    let unresolvedAcceptedMarketOrder = false;
+
+    if (ctx.marketOrderWasPending && ctx.marketProviderOrderId && !passed('full-close')) {
+      try {
+        const state = await adapter.getOrderById(ctx.marketProviderOrderId);
+        if (state?.status === 'FILLED' && !ctx.marketOrderId) {
+          const raw =
+            state.raw && typeof state.raw === 'object'
+              ? (state.raw as Record<string, unknown>)
+              : null;
+          if (raw?.positionId !== undefined && raw.positionId !== null) {
+            ctx.marketOrderId = String(raw.positionId);
+          }
+        } else if (state && (state.status === 'WORKING' || state.status === 'PARTIALLY_FILLED')) {
+          if (hasCancelOrder(adapter)) {
+            try {
+              await adapter.cancelOrder(ctx.marketProviderOrderId);
+            } catch {
+              unresolvedAcceptedMarketOrder = true;
+            }
+          } else {
+            unresolvedAcceptedMarketOrder = true;
+          }
+        } else if (state?.status === 'UNKNOWN') {
+          unresolvedAcceptedMarketOrder = true;
+        }
+      } catch {
+        // The provider may already have filled the order even when order-details
+        // is unavailable. Continue with position-delta cleanup, then keep the
+        // cleanup result FAIL because a future fill cannot be ruled out.
+        unresolvedAcceptedMarketOrder = true;
+        if (hasCancelOrder(adapter)) {
+          try {
+            await adapter.cancelOrder(ctx.marketProviderOrderId);
+            unresolvedAcceptedMarketOrder = false;
+          } catch {
+            // Best effort only; the position delta below is still authoritative
+            // for any fill already visible on the account.
+          }
+        }
+      }
+    }
+
+    let positions = await adapter.getOpenPositions();
+    let target = ctx.marketOrderId
+      ? positions.find((position) => position.externalOrderId === ctx.marketOrderId)
+      : undefined;
+
+    if (
+      !target &&
+      !passed('full-close') &&
+      ctx.marketClientReference &&
+      hasPositionClientReferenceLookup(adapter)
+    ) {
+      const exact = await adapter.findPositionByClientReference(ctx.marketClientReference);
+      if (exact && !ctx.baselinePositionIds.has(exact.externalOrderId)) {
+        target = exact;
+        ctx.marketOrderId = exact.externalOrderId;
+      }
+    }
+
+    if (!target && !passed('full-close') && !hasPositionClientReferenceLookup(adapter)) {
+      const candidates = validationPositionCandidates(positions);
+      if (candidates.length > 1) {
+        return {
+          status: 'FAIL',
+          detail:
+            `validation cleanup found ${candidates.length} new matching positions; ` +
+            'refusing to guess which one belongs to the harness',
+        };
+      }
+      target = candidates[0];
+      if (target) ctx.marketOrderId = target.externalOrderId;
+    }
+
+    if (target) {
+      try {
+        await adapter.closeOrder(target.externalOrderId);
+      } catch (err) {
+        return {
+          status: 'FAIL',
+          detail: `validation position ${target.externalOrderId} cleanup close failed: ${describeError(err)}`,
+          providerOrderId: target.externalOrderId,
+        };
+      }
+      positions = await adapter.getOpenPositions();
+      if (positions.some((position) => position.externalOrderId === target!.externalOrderId)) {
+        return {
+          status: 'FAIL',
+          detail: `validation position ${target.externalOrderId} still open after cleanup close`,
+          providerOrderId: target.externalOrderId,
+        };
+      }
+    }
+
+    // An uncertain dispatch may not return any provider order id. Reconcile
+    // working orders by delta against the baseline captured before mutation.
+    // This never cancels a pre-existing user/broker order.
+    let uncertainMarketOrderLeak = false;
+    if (ctx.marketDispatchNeedsReconciliation && !passed('full-close')) {
+      let working: BrokerOrderState[] = [];
+      try {
+        working = await adapter.listOrders();
+      } catch {
+        uncertainMarketOrderLeak = true;
+      }
+      const newMarketOrders = validationWorkingOrderCandidates(working);
+      if (newMarketOrders.length > 1) {
+        return {
+          status: 'FAIL',
+          detail:
+            `validation cleanup found ${newMarketOrders.length} new matching working orders; ` +
+            'refusing to guess which one belongs to the harness',
+        };
+      }
+      const leakedMarketOrder = newMarketOrders[0];
+      if (leakedMarketOrder) {
+        if (!hasCancelOrder(adapter)) {
+          uncertainMarketOrderLeak = true;
+        } else {
+          try {
+            await adapter.cancelOrder(leakedMarketOrder.providerOrderId);
+            const after = await adapter.listOrders();
+            uncertainMarketOrderLeak = after.some(
+              (order) => order.providerOrderId === leakedMarketOrder.providerOrderId,
+            );
+          } catch {
+            uncertainMarketOrderLeak = true;
+          }
+        }
+      }
+
+      // If dispatch certainty was unknown and neither a position nor a working
+      // order was visible, do not claim a clean PASS. The connection remains
+      // unvalidated/fail-closed so a late provider event cannot start AI.
+      if (!target && newMarketOrders.length === 0 && !ctx.marketProviderOrderId) {
+        uncertainMarketOrderLeak = true;
+      }
+    }
+
+    let pendingOrderLeak = false;
+    if (ctx.pendingOrderId && !passed('pending-cancel')) {
+      try {
+        const working = await adapter.listOrders();
+        if (working.some((order) => order.providerOrderId === ctx.pendingOrderId)) {
+          if (!hasCancelOrder(adapter)) {
+            pendingOrderLeak = true;
+          } else {
+            await adapter.cancelOrder(ctx.pendingOrderId);
+            const after = await adapter.listOrders();
+            pendingOrderLeak = after.some((order) => order.providerOrderId === ctx.pendingOrderId);
+          }
+        }
+      } catch {
+        pendingOrderLeak = true;
+      }
+    }
+
+    if (unresolvedAcceptedMarketOrder || uncertainMarketOrderLeak || pendingOrderLeak) {
+      return {
+        status: 'FAIL',
+        detail: unresolvedAcceptedMarketOrder
+          ? 'validation position was cleaned where visible, but accepted MARKET order state remains uncertain'
+          : uncertainMarketOrderLeak
+            ? 'validation MARKET dispatch remains uncertain after position/order reconciliation; connection stays unvalidated'
+            : 'validation pending order could not be proven cancelled',
+        ...(ctx.marketOrderId ? { providerOrderId: ctx.marketOrderId } : {}),
+      };
+    }
+
+    return {
+      status: 'PASS',
+      detail: target
+        ? `emergency cleanup closed validation position ${target.externalOrderId}; no residual validation exposure remains`
+        : 'no residual validation position or working order remains',
+      ...(target ? { providerOrderId: target.externalOrderId } : {}),
     };
   };
 
@@ -703,7 +997,10 @@ export async function runVerificationChecklist(
   // ── Step: positions-snapshot ──────────────────────────────────────────────
   if (selected.has('positions-snapshot') && !connectFailed) {
     await runStep('positions-snapshot', async () => {
-      const positions = await adapter.getOpenPositions();
+      const [positions, workingOrders] = await Promise.all([
+        adapter.getOpenPositions(),
+        adapter.listOrders(),
+      ]);
       for (const [index, position] of positions.entries()) {
         const violations = decimalStringViolations(
           `position[${position.externalOrderId ?? index}]`,
@@ -714,7 +1011,14 @@ export async function runVerificationChecklist(
           return { status: 'FAIL', detail: violations.join('; ') };
         }
       }
-      return { status: 'PASS', detail: `snapshot resolved (${positions.length} open position(s))` };
+      ctx.baselinePositionIds = new Set(positions.map((position) => position.externalOrderId));
+      ctx.baselineWorkingOrderIds = new Set(workingOrders.map((order) => order.providerOrderId));
+      return {
+        status: 'PASS',
+        detail:
+          `snapshot resolved (${positions.length} open position(s), ` +
+          `${workingOrders.length} working order(s))`,
+      };
     });
   }
 
@@ -724,8 +1028,9 @@ export async function runVerificationChecklist(
       if (!passed('market-data')) {
         return skipped('market-data did not pass — no instrument/lot context');
       }
+      ctx.marketClientReference = `harness-${randomUUID()}`;
       const request: BrokerOrderRequest = {
-        idempotencyKey: `harness-${randomUUID()}`,
+        idempotencyKey: ctx.marketClientReference,
         instrument: ctx.instrumentSymbol!,
         direction: 'BUY',
         lotSize: ctx.marketLot,
@@ -737,14 +1042,48 @@ export async function runVerificationChecklist(
         connectionReference: ctx.connectionReference,
       };
       let result: BrokerOrderResult;
+      ctx.marketOrderAttempted = true;
       try {
         result = await adapter.placeOrder(request);
       } catch (err) {
         const na = notApplicable(err);
         if (na) return na;
+        if (err instanceof BrokerAdapterError) {
+          const certainty = err.dispatchCertainty ?? defaultCertaintyForCode(err.code);
+          ctx.marketDispatchNeedsReconciliation =
+            certainty === ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER;
+        } else {
+          // Untyped mutation failures are conservatively uncertain.
+          ctx.marketDispatchNeedsReconciliation = true;
+        }
         throw err;
       }
+      ctx.marketProviderOrderId = result.externalOrderId;
+      ctx.marketOrderWasPending = result.status === 'PENDING';
+      ctx.marketDispatchNeedsReconciliation = result.success && result.status === 'PENDING';
       result = await awaitAcceptedMarketFill(result);
+
+      // Generic provider fallback: if an accepted order id differs from the
+      // filled position id, resolve the one new validation position against
+      // the pre-order snapshot instead of using an order id for closeOrder().
+      if (result.success && result.status === 'FILLED' && passed('positions-snapshot')) {
+        const positions = await adapter.getOpenPositions();
+        const exact = result.externalOrderId
+          ? positions.find((position) => position.externalOrderId === result.externalOrderId)
+          : undefined;
+        if (!exact && ctx.marketClientReference && hasPositionClientReferenceLookup(adapter)) {
+          const referenced = await adapter.findPositionByClientReference(ctx.marketClientReference);
+          if (referenced && !ctx.baselinePositionIds.has(referenced.externalOrderId)) {
+            result = { ...result, externalOrderId: referenced.externalOrderId };
+          }
+        } else if (!exact && !hasPositionClientReferenceLookup(adapter)) {
+          const candidates = validationPositionCandidates(positions);
+          if (candidates.length === 1) {
+            result = { ...result, externalOrderId: candidates[0]!.externalOrderId };
+          }
+        }
+      }
+
       const violations = assertOrderResult('marketOrder', result, 'FILLED', true);
       if (violations.length > 0) {
         return { status: 'FAIL', detail: violations.join('; ') };
@@ -1131,6 +1470,17 @@ export async function runVerificationChecklist(
         };
       }
     });
+  }
+
+  const cleanupNeeded =
+    !connectFailed &&
+    ((Boolean(ctx.marketOrderId || ctx.marketProviderOrderId) && !passed('full-close')) ||
+      (ctx.marketOrderAttempted &&
+        ctx.marketDispatchNeedsReconciliation &&
+        !passed('full-close')) ||
+      (Boolean(ctx.pendingOrderId) && !passed('pending-cancel')));
+  if (cleanupNeeded) {
+    await runStep('validation-exposure-cleanup', cleanupValidationExposure);
   }
 
   const finishedAt = new Date();
