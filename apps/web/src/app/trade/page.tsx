@@ -41,6 +41,7 @@ import {
   type LiveScanFrame,
 } from "@/lib/ai-live-visuals";
 import {
+  deriveActiveModelUiState,
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
   hasExternalProviderPerformanceUiShape,
@@ -2565,6 +2566,7 @@ export default function AiTradingPage() {
     fallbackConfidence: displayedConfidence,
     fallbackThreshold: displayedConfidenceThreshold,
   });
+  const activeModelUi = deriveActiveModelUiState(m1TacticalStatus);
   const openPnlTone = totalUnrealisedPnlUnavailable || totalUnrealisedPnl == null
     ? "neutral"
     : Number(totalUnrealisedPnl) < 0
@@ -2731,6 +2733,23 @@ export default function AiTradingPage() {
                 hint={`${aiOpenPositions.length} open position${aiOpenPositions.length === 1 ? "" : "s"}`}
                 tone={openPnlTone}
               />
+            </section>
+
+            <section className="ai-active-model-strip" aria-label="Active AI decision engine">
+              <div className="ai-active-model-strip__identity">
+                <span>Active decision engine</span>
+                <strong>{activeModelUi.label}</strong>
+                <small>{activeModelUi.engineCode}</small>
+              </div>
+              <div className="ai-active-model-strip__signals">
+                <span>{activeModelUi.authorityLabel}</span>
+                <span>{activeModelUi.planBLabel}</span>
+                <span>{activeModelUi.trainedExpertLabel}</span>
+                <span>{activeModelUi.m1TimingLabel}</span>
+              </div>
+              <Badge variant={activeModelUi.executable ? "success" : "info"}>
+                {activeModelUi.executable ? "QUORUM READY" : "SCANNING"}
+              </Badge>
             </section>
 
             <section className="ai-production-overview" aria-label="AI trading at a glance">

@@ -34,6 +34,19 @@ export interface M1TacticalLatestDecisionState {
   executionAuthority: M1TacticalDecisionAuthority;
   blockers: string[];
   outcomeState: string | null;
+  primaryEngineCode: string | null;
+  primaryConfidence: number | null;
+  primaryNetExpectedR: number | null;
+  planBRoute: string | null;
+  planBPaperAdmitted: boolean | null;
+  multimodelExecutable: boolean | null;
+  trainedExpertState: string | null;
+  trainedExpertDirection: 'BUY' | 'SELL' | null;
+  trainedExpertConfidence: number | null;
+  trainedExpertLongVotes: number | null;
+  trainedExpertShortVotes: number | null;
+  m1TacticalRole: string | null;
+  m1TimingRoute: M1TacticalDecisionRoute;
 }
 
 export interface M1TacticalDecisionRecord {
@@ -290,6 +303,16 @@ function number(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function nullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 function date(value: string | Date): Date {
   return value instanceof Date ? new Date(value) : new Date(value);
 }
@@ -374,6 +397,11 @@ export class M1TacticalEvidenceService {
     if (!row) return null;
     const candidate = jsonObject(row.candidate);
     const governance = jsonObject(row.governance);
+    const multimodelEnsemble = jsonObject(governance.multimodelEnsemble);
+    const multimodelGovernance = jsonObject(governance.multimodelGovernance);
+    const trainedExpert = jsonObject(governance.multimodelTrainedExpert);
+    const multimodelAuthority = jsonObject(governance.multimodelAuthority);
+    const trainedDirection = nullableString(trainedExpert.direction);
     return {
       instrument: String(row.instrument).trim().toUpperCase(),
       direction: row.direction,
@@ -384,6 +412,24 @@ export class M1TacticalEvidenceService {
       executionAuthority: row.execution_authority,
       blockers: blockers(row.blockers),
       outcomeState: row.outcome_state ?? null,
+      primaryEngineCode: nullableString(governance.primaryEngineCode),
+      primaryConfidence: nullableNumber(multimodelEnsemble.ensembleScore),
+      primaryNetExpectedR: nullableNumber(multimodelGovernance.netExpectedR),
+      planBRoute: nullableString(multimodelEnsemble.strategyRoute),
+      planBPaperAdmitted:
+        typeof multimodelEnsemble.paperAdmitted === 'boolean'
+          ? multimodelEnsemble.paperAdmitted
+          : null,
+      multimodelExecutable:
+        typeof multimodelAuthority.executable === 'boolean' ? multimodelAuthority.executable : null,
+      trainedExpertState: nullableString(trainedExpert.state),
+      trainedExpertDirection:
+        trainedDirection === 'BUY' || trainedDirection === 'SELL' ? trainedDirection : null,
+      trainedExpertConfidence: nullableNumber(trainedExpert.ensembleConfidence),
+      trainedExpertLongVotes: nullableNumber(trainedExpert.longVotes),
+      trainedExpertShortVotes: nullableNumber(trainedExpert.shortVotes),
+      m1TacticalRole: nullableString(governance.m1TacticalRole),
+      m1TimingRoute: row.route,
     };
   }
 

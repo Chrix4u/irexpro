@@ -1,5 +1,7 @@
 import {
+  deriveActiveModelUiState,
   deriveFastMarkFeedUiState,
+  deriveTradeReadinessUiState,
   hasExternalProviderPerformanceUiShape,
   hasVpsScannerUiShape,
 } from "./vps-scanner-status";
@@ -534,5 +536,68 @@ describe("production trade-readiness presentation", () => {
       tradeExpected: false,
       headline: "AI Trading is stopped",
     });
+  });
+});
+
+
+describe("active multi-model execution presentation", () => {
+  const status = {
+    enabled: true,
+    phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+    primaryEngineCode: "irexpro-multimodel-ensemble-v1",
+    primaryEngineDisplayName: "iRexPro Multi-Model Ensemble",
+    authorityMode: "DEMO_FULL_AUTO",
+    m1TacticalRole: "TIMING_SPECIALIST",
+    lastRunAt: "2026-10-27T20:31:09.000Z",
+    lastError: null,
+    latestDecision: {
+      instrument: "USDJPY",
+      direction: "SELL",
+      route: "M1_TREND_CONTINUATION",
+      barTime: "2026-10-27T20:30:00.000Z",
+      confidence: 0.738,
+      netExpectedR: 0.24,
+      executionAuthority: "PAPER_ONLY_RESEARCH",
+      blockers: [],
+      outcomeState: null,
+      primaryEngineCode: "irexpro-multimodel-ensemble-v1",
+      primaryConfidence: 0.704,
+      primaryNetExpectedR: 0.19,
+      planBRoute: "TREND_CONTINUATION",
+      planBPaperAdmitted: true,
+      multimodelExecutable: true,
+      trainedExpertState: "CONFIRM",
+      trainedExpertDirection: "SELL",
+      trainedExpertConfidence: 0.81,
+      trainedExpertLongVotes: 0,
+      trainedExpertShortVotes: 3,
+      m1TacticalRole: "TIMING_SPECIALIST",
+      m1TimingRoute: "M1_TREND_CONTINUATION",
+    },
+  };
+
+  it("labels the multi-model ensemble as active and M1 as the timing specialist", () => {
+    expect(deriveActiveModelUiState(status)).toEqual({
+      label: "Multi-model ensemble · ACTIVE",
+      engineCode: "irexpro-multimodel-ensemble-v1",
+      authorityLabel: "DEMO FULL AUTO",
+      planBLabel: "Trend continuation · 70%",
+      trainedExpertLabel: "3/3 SELL votes · 81%",
+      m1TimingLabel: "M1 timing · Trend continuation",
+      executable: true,
+    });
+  });
+
+  it("uses primary ensemble confidence and blockers for readiness, not the M1 candidate confidence", () => {
+    const result = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: status,
+      fastMarkState: "UNAVAILABLE",
+    });
+    expect(result.band).toBe("READY");
+    expect(result.tradeExpected).toBe(true);
+    expect(result.score).toBe(78);
+    expect(result.detail).toMatch(/multi-model/i);
   });
 });

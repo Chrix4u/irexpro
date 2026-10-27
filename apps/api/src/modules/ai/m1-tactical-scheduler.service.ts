@@ -326,7 +326,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ? 'DEMO_FULL_AUTO_PROMOTED'
           : 'PAPER_ONLY_RESEARCH';
     this.logger.log(
-      `M1 tactical scheduler enabled phase=${this.rolloutPolicy.phase} cadence=${this.rolloutPolicy.cadenceMs / 1000}s authority=${startupAuthority}`,
+      `M1 tactical scheduler enabled phase=${this.rolloutPolicy.phase} cadence=${this.rolloutPolicy.cadenceMs / 1000}s authority=${startupAuthority} primaryEngine=${this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' ? MULTIMODEL_DEMO_ENGINE_CODE : 'irexpro-m1-tactical'} m1Role=${this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE'}`,
     );
     this.timer = setInterval(() => void this.runOnce(), this.rolloutPolicy.cadenceMs);
     this.timer.unref?.();
@@ -339,8 +339,22 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
   }
 
   getStatus() {
+    const professionalDemoPhase =
+      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
     return {
       enabled: this.enabled(),
+      primaryEngineCode: professionalDemoPhase
+        ? MULTIMODEL_DEMO_ENGINE_CODE
+        : 'irexpro-m1-tactical',
+      primaryEngineDisplayName: professionalDemoPhase
+        ? 'iRexPro Multi-Model Ensemble'
+        : 'iRexPro M1 Tactical',
+      authorityMode: professionalDemoPhase
+        ? 'DEMO_FULL_AUTO'
+        : this.rolloutPolicy.phase === 'SHADOW'
+          ? 'SHADOW'
+          : 'PAPER_RESEARCH',
+      m1TacticalRole: professionalDemoPhase ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE',
       policyVersion: this.rolloutPolicy.version,
       modelPolicyVersion: M1_TACTICAL_POLICY_V1.version,
       phase: this.rolloutPolicy.phase,

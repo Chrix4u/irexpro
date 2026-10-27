@@ -30,9 +30,9 @@ export class VpsForexSignalCollectorController {
 
   @Get('m1-tactical/status')
   @ApiOperation({
-    summary: 'Read the active M1 tactical execution runtime and latest decision',
+    summary: 'Read the active broker-native multi-model runtime and latest decision',
     description:
-      'User-scoped cockpit status for the promoted M1 broker-native engine. Returns no broker identifiers or credentials.',
+      'User-scoped cockpit status for the active multi-model DEMO authority with M1 timing-specialist telemetry. Returns no broker identifiers or credentials.',
   })
   async getM1TacticalStatus(@CurrentUserId() userId: string) {
     const runtime = this.m1Tactical.getStatus();

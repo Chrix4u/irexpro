@@ -2627,3 +2627,56 @@
   .ai-readiness__scan-pulse { animation: none; }
   .ai-readiness__pipeline > div { transition: none; }
 }
+
+
+/* Primary strategy authority — keeps multi-model execution and M1 timing roles explicit. */
+.ai-active-model-strip {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.75fr) minmax(0, 1.7fr) auto;
+  gap: 0.8rem;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid rgba(45, 212, 191, 0.16);
+  border-radius: 14px;
+  background: rgba(13, 148, 136, 0.055);
+}
+.ai-active-model-strip__identity {
+  min-width: 0;
+  display: grid;
+  gap: 0.1rem;
+}
+.ai-active-model-strip__identity > span,
+.ai-active-model-strip__identity > small {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+.ai-active-model-strip__identity > span {
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 750;
+}
+.ai-active-model-strip__identity > strong {
+  font-size: 0.92rem;
+}
+.ai-active-model-strip__identity > small {
+  overflow-wrap: anywhere;
+}
+.ai-active-model-strip__signals {
+  min-width: 0;
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.ai-active-model-strip__signals > span {
+  padding: 0.28rem 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.35);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.25;
+}
+@media (max-width: 760px) {
+  .ai-active-model-strip { grid-template-columns: 1fr; align-items: start; }
+}
