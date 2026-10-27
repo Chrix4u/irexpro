@@ -5,6 +5,7 @@ export type M1ReliabilityRoute = Exclude<M1TacticalRoute, 'ABSTAIN'>;
 
 export const M1_RELIABILITY_MIN_SAMPLES = 5;
 export const M1_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES = 3;
+export const M1_RELIABILITY_EARLY_TRANSITION_LOSS_BRAKE_SAMPLES = 2;
 export const M1_RELIABILITY_RECENT_PAYOFF_SAMPLES = 5;
 export const M1_RELIABILITY_RECENT_AVERAGE_R_FLOOR = -0.1;
 export const M1_RELIABILITY_MAX_SAMPLES = 20;
@@ -183,9 +184,13 @@ export function evaluateM1RoutePairSideReliability(
   const consideredPolicyVersions = compatible.filter((version) =>
     selected.some((row) => row.policyVersion === version),
   );
+  const earlyLossBrakeSamples =
+    input.route === 'M1_EARLY_TRANSITION'
+      ? M1_RELIABILITY_EARLY_TRANSITION_LOSS_BRAKE_SAMPLES
+      : M1_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES;
   const recentLossStreak =
-    selected.length >= M1_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES &&
-    selected.slice(0, M1_RELIABILITY_EARLY_LOSS_BRAKE_SAMPLES).every((row) => row.realisedPnl < 0);
+    selected.length >= earlyLossBrakeSamples &&
+    selected.slice(0, earlyLossBrakeSamples).every((row) => row.realisedPnl < 0);
 
   if (recentLossStreak) {
     return {
