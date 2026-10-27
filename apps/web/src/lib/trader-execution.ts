@@ -178,13 +178,17 @@ export function isTradeExecutionView(value: unknown): value is TradeExecutionVie
 /**
  * Load the first frontend-safe execution read model for the trader terminal.
  * Runtime validation fails closed if the API returns an unexpected or overly
- * broad object shape.
+ * broad object shape. When brokerConnectionId is supplied, all three reads are
+ * pinned to that broker so account currencies and execution histories cannot
+ * bleed across the user's other broker connections.
  */
-export async function loadTraderExecutionSnapshot(): Promise<TraderExecutionSnapshot> {
+export async function loadTraderExecutionSnapshot(
+  brokerConnectionId?: string,
+): Promise<TraderExecutionSnapshot> {
   const [openResult, recentResult, closedResult] = await Promise.allSettled([
-    executionApi.listOpenPositions(),
-    executionApi.listRecentExecutions(100),
-    executionApi.listClosedExecutions(50),
+    executionApi.listOpenPositions(brokerConnectionId),
+    executionApi.listRecentExecutions(100, brokerConnectionId),
+    executionApi.listClosedExecutions(50, brokerConnectionId),
   ]);
 
   const degradedFeeds: TraderExecutionDegradedFeed[] = [];
