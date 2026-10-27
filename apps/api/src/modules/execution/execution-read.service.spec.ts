@@ -7,6 +7,7 @@ describe('ExecutionReadService', () => {
   let tradeRepo: Pick<Repository<Trade>, 'find'> & { find: jest.Mock };
 
   const USER_ID = '11111111-1111-4111-8111-111111111111';
+  const BROKER_CONNECTION_ID = '22222222-2222-4222-8222-222222222222';
 
   beforeEach(() => {
     tradeRepo = { find: jest.fn().mockResolvedValue([]) };
@@ -29,6 +30,37 @@ describe('ExecutionReadService', () => {
     expect(tradeRepo.find).toHaveBeenCalledWith({
       where: { userId: USER_ID },
       order: { createdAt: 'DESC' },
+      take: 25,
+    });
+  });
+
+  it('scopes all trader reads to the selected broker connection when supplied', async () => {
+    await service.listOpenPositions(USER_ID, BROKER_CONNECTION_ID);
+    expect(tradeRepo.find).toHaveBeenLastCalledWith({
+      where: {
+        userId: USER_ID,
+        brokerConnectionId: BROKER_CONNECTION_ID,
+        status: TradeStatus.OPEN,
+      },
+      order: { openedAt: 'DESC', createdAt: 'DESC' },
+      take: 100,
+    });
+
+    await service.listRecentExecutions(USER_ID, 25, BROKER_CONNECTION_ID);
+    expect(tradeRepo.find).toHaveBeenLastCalledWith({
+      where: { userId: USER_ID, brokerConnectionId: BROKER_CONNECTION_ID },
+      order: { createdAt: 'DESC' },
+      take: 25,
+    });
+
+    await service.listClosedExecutions(USER_ID, 25, BROKER_CONNECTION_ID);
+    expect(tradeRepo.find).toHaveBeenLastCalledWith({
+      where: {
+        userId: USER_ID,
+        brokerConnectionId: BROKER_CONNECTION_ID,
+        status: TradeStatus.CLOSED,
+      },
+      order: { closedAt: 'DESC', createdAt: 'DESC' },
       take: 25,
     });
   });

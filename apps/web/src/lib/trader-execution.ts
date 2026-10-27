@@ -180,11 +180,13 @@ export function isTradeExecutionView(value: unknown): value is TradeExecutionVie
  * Runtime validation fails closed if the API returns an unexpected or overly
  * broad object shape.
  */
-export async function loadTraderExecutionSnapshot(): Promise<TraderExecutionSnapshot> {
+export async function loadTraderExecutionSnapshot(
+  brokerConnectionId?: string,
+): Promise<TraderExecutionSnapshot> {
   const [openResult, recentResult, closedResult] = await Promise.allSettled([
-    executionApi.listOpenPositions(),
-    executionApi.listRecentExecutions(100),
-    executionApi.listClosedExecutions(50),
+    executionApi.listOpenPositions(brokerConnectionId),
+    executionApi.listRecentExecutions(100, brokerConnectionId),
+    executionApi.listClosedExecutions(50, brokerConnectionId),
   ]);
 
   const degradedFeeds: TraderExecutionDegradedFeed[] = [];

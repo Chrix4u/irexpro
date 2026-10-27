@@ -17,27 +17,43 @@ export class ExecutionReadService {
     private readonly tradeRepo: Repository<Trade>,
   ) {}
 
-  async listOpenPositions(userId: string): Promise<Trade[]> {
+  async listOpenPositions(userId: string, brokerConnectionId?: string): Promise<Trade[]> {
     return this.tradeRepo.find({
-      where: { userId, status: TradeStatus.OPEN },
+      where: {
+        userId,
+        ...(brokerConnectionId ? { brokerConnectionId } : {}),
+        status: TradeStatus.OPEN,
+      },
       order: { openedAt: 'DESC', createdAt: 'DESC' },
       take: 100,
     });
   }
 
-  async listRecentExecutions(userId: string, limit = 50): Promise<Trade[]> {
+  async listRecentExecutions(
+    userId: string,
+    limit = 50,
+    brokerConnectionId?: string,
+  ): Promise<Trade[]> {
     const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
     return this.tradeRepo.find({
-      where: { userId },
+      where: { userId, ...(brokerConnectionId ? { brokerConnectionId } : {}) },
       order: { createdAt: 'DESC' },
       take: safeLimit,
     });
   }
 
-  async listClosedExecutions(userId: string, limit = 50): Promise<Trade[]> {
+  async listClosedExecutions(
+    userId: string,
+    limit = 50,
+    brokerConnectionId?: string,
+  ): Promise<Trade[]> {
     const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
     return this.tradeRepo.find({
-      where: { userId, status: TradeStatus.CLOSED },
+      where: {
+        userId,
+        ...(brokerConnectionId ? { brokerConnectionId } : {}),
+        status: TradeStatus.CLOSED,
+      },
       order: { closedAt: 'DESC', createdAt: 'DESC' },
       take: safeLimit,
     });

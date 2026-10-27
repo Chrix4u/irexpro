@@ -61,6 +61,24 @@ describe('trader execution refresh resilience', () => {
     jest.restoreAllMocks();
   });
 
+  it('scopes all execution reads to the selected broker account', async () => {
+    const brokerConnectionId = 'ctrader/demo account';
+    const encodedBrokerId = encodeURIComponent(brokerConnectionId);
+    const request = jest.spyOn(api, 'request').mockResolvedValue([]);
+
+    await loadTraderExecutionSnapshot(brokerConnectionId);
+
+    expect(request).toHaveBeenCalledWith(
+      `/execution/positions/open?brokerConnectionId=${encodedBrokerId}`,
+    );
+    expect(request).toHaveBeenCalledWith(
+      `/execution/trades/recent?limit=100&brokerConnectionId=${encodedBrokerId}`,
+    );
+    expect(request).toHaveBeenCalledWith(
+      `/execution/trades/closed?limit=50&brokerConnectionId=${encodedBrokerId}`,
+    );
+  });
+
   it('keeps recent and closed executions visible when the open-position read fails', async () => {
     const request = jest.spyOn(api, 'request').mockImplementation(async (path: string) => {
       if (path === '/execution/positions/open') {

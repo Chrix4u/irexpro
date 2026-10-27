@@ -97,19 +97,40 @@ describe('ExecutionController frontend-safe responses', () => {
     );
   });
 
-  it('passes only the authenticated user UUID into open-position reads', async () => {
+  it('passes only the authenticated user UUID into unscoped open-position reads', async () => {
     await controller.listOpenPositions(USER_ID);
-    expect(readService.listOpenPositions).toHaveBeenCalledWith(USER_ID);
+    expect(readService.listOpenPositions).toHaveBeenCalledWith(USER_ID, undefined);
+  });
+
+  it('forwards the selected broker connection into all trader execution reads', async () => {
+    const brokerConnectionId = '33333333-3333-4333-8333-333333333333';
+
+    await controller.listOpenPositions(USER_ID, brokerConnectionId);
+    expect(readService.listOpenPositions).toHaveBeenLastCalledWith(USER_ID, brokerConnectionId);
+
+    await controller.listRecentExecutions(USER_ID, 25, brokerConnectionId);
+    expect(readService.listRecentExecutions).toHaveBeenLastCalledWith(
+      USER_ID,
+      25,
+      brokerConnectionId,
+    );
+
+    await controller.listClosedExecutions(USER_ID, 25, brokerConnectionId);
+    expect(readService.listClosedExecutions).toHaveBeenLastCalledWith(
+      USER_ID,
+      25,
+      brokerConnectionId,
+    );
   });
 
   it('passes user UUID and requested limit into recent execution reads', async () => {
     await controller.listRecentExecutions(USER_ID, 25);
-    expect(readService.listRecentExecutions).toHaveBeenCalledWith(USER_ID, 25);
+    expect(readService.listRecentExecutions).toHaveBeenCalledWith(USER_ID, 25, undefined);
   });
 
   it('passes user UUID and requested limit into closed-trade reads', async () => {
     await controller.listClosedExecutions(USER_ID, 25);
-    expect(readService.listClosedExecutions).toHaveBeenCalledWith(USER_ID, 25);
+    expect(readService.listClosedExecutions).toHaveBeenCalledWith(USER_ID, 25, undefined);
   });
 
   it('does not expose internal execution entity identifiers', async () => {

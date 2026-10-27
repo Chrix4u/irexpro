@@ -1865,8 +1865,14 @@ export default function AiTradingPage() {
           setAutomationRuntimeWarning(null);
         }
 
+        const brokerId =
+          status.sessionBroker?.id ||
+          selectedBrokerId ||
+          status.primaryBroker?.id ||
+          "";
+
         const [executionResult, positionsResult] = await Promise.allSettled([
-          loadTraderExecutionSnapshot(),
+          loadTraderExecutionSnapshot(brokerId || undefined),
           loadLiveAccountPositions(),
         ]);
 
@@ -1908,11 +1914,6 @@ export default function AiTradingPage() {
           setActivityWarning(null);
         }
 
-        const brokerId =
-          status.sessionBroker?.id ||
-          selectedBrokerId ||
-          status.primaryBroker?.id ||
-          "";
         if (brokerId) {
           setSelectedBrokerId(
             (current) => status.sessionBroker?.id || current || brokerId,
