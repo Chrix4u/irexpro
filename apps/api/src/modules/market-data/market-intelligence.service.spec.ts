@@ -440,6 +440,67 @@ describe('MarketIntelligenceService', () => {
     expect(encryptionService.decrypt).not.toHaveBeenCalled();
   });
 
+  it('serves cTrader DEMO market intelligence through the exact connection-scoped broker adapter', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-10-27T20:00:30.000Z').getTime());
+    const ctraderConnection = {
+      ...connection,
+      id: '00000000-0000-0000-0000-000000000077',
+      brokerId: 'ctrader',
+      accountType: 'DEMO',
+      status: 'CONNECTED',
+    };
+    brokerService.findConnectionById.mockResolvedValue(ctraderConnection);
+    brokerService.getCurrentPriceForConnection.mockResolvedValue({
+      instrument: 'EURUSD',
+      bid: '1.11350',
+      ask: '1.11353',
+      spread: '0.00003',
+      timestamp: new Date('2026-10-27T20:00:25.000Z'),
+    });
+    brokerService.getOhlcvForConnection.mockResolvedValue([
+      {
+        timestamp: new Date('2026-10-27T20:00:00.000Z'),
+        open: '1.11340',
+        high: '1.11360',
+        low: '1.11330',
+        close: '1.11350',
+        volume: '42',
+      },
+    ]);
+
+    const result = await createService().getSnapshot(userId, {
+      instrument: 'EURUSD',
+      timeframe: 'M1',
+      limit: 90,
+      brokerConnectionId: ctraderConnection.id,
+    });
+
+    expect(brokerService.getCurrentPriceForConnection).toHaveBeenCalledWith(
+      userId,
+      ctraderConnection.id,
+      'EURUSD',
+      { propagateProviderError: true },
+    );
+    expect(brokerService.getOhlcvForConnection).toHaveBeenCalledWith(
+      userId,
+      ctraderConnection.id,
+      'EURUSD',
+      'M1',
+      90,
+    );
+    expect(encryptionService.decrypt).not.toHaveBeenCalled();
+    expect(marketDataReader.getOHLCV).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        instrument: 'EURUSD',
+        timeframe: 'M1',
+        source: 'BROKER',
+        quote: expect.objectContaining({ bid: '1.11350', ask: '1.11353' }),
+      }),
+    );
+    expect(result.candles).toHaveLength(1);
+  });
+
   it('keeps unsupported real brokers fail-closed before decrypting credentials', async () => {
     brokerService.findActiveConnectionForUser.mockResolvedValue({
       ...connection,

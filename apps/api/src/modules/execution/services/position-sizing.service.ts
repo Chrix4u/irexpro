@@ -35,9 +35,8 @@ export type PositionSizingFailureCode =
   | 'RISK_BUDGET_UNPARSEABLE'
   /** The broker cannot prove the capital/margin required by the final sized volume. */
   | 'REQUIRED_MARGIN_UNPROVABLE'
-  /** The instrument's quote currency is not the account currency — no
-   * implicit FX conversion is ever invented (trusted-FX authority required
-   * for cross-currency sizing, deliberately out of scope). */
+  /** The account-to-quote conversion cannot be proven. Cross-currency sizing
+   * is allowed only with a fresh quote from the exact connected broker. */
   | 'CURRENCY_MISMATCH'
   /** The risk budget cannot afford the instrument's minimum volume —
    * rounding UP to minLot would EXCEED the risk budget, so it is a
@@ -83,7 +82,13 @@ export interface PositionSizingInputs {
   baseCurrency: string;
   quoteCurrency: string;
   riskAmountInQuoteCurrency: string;
-  riskCurrencyConversion: 'ACCOUNT_IS_QUOTE' | 'ACCOUNT_IS_BASE_USING_ENTRY';
+  riskCurrencyConversion:
+    | 'ACCOUNT_IS_QUOTE'
+    | 'ACCOUNT_IS_BASE_USING_ENTRY'
+    | 'ACCOUNT_TO_QUOTE_USING_BROKER_BID';
+  /** Exact FX pair/rate used when a third-currency account needs conversion evidence. */
+  riskCurrencyConversionInstrument?: string | null;
+  riskCurrencyConversionRate?: string | null;
   entryPrice: string;
   entryPriceSource: 'MARKET_QUOTE' | 'REQUESTED_LIMIT';
   stopLoss: string;
@@ -141,9 +146,10 @@ const PAPER_PRODUCT_MAX_LOT = '4';
  *    lot), normalized DOWN to the instrument's volume step. Rounding DOWN
  *    is the conservative direction for risk; rounding UP to minLot would
  *    exceed the risk budget, so a below-minimum result is a typed rejection.
- *  - Currency honesty: the notional is computed in the instrument's QUOTE
- *    currency; when that is not the account currency the sizing fails with
- *    CURRENCY_MISMATCH — no implicit FX conversion is ever invented.
+ *  - Currency honesty: stop risk is computed in the instrument's QUOTE
+ *    currency. If the account uses a third currency, conversion is permitted
+ *    only from a fresh quote on the exact connected broker; otherwise sizing
+ *    fails closed with CURRENCY_MISMATCH.
  *  - The AI capital-allocation ledger reserves broker-required margin/capital
  *    consumption, NOT gross leveraged FX notional. The broker adapter is the
  *    authority for required margin because leverage/margin rules vary by
@@ -460,9 +466,9 @@ export class PositionSizingService {
     // currency is the quote currency, no conversion is needed. When the
     // account currency is the base currency (e.g. USD account trading
     // USDJPY), the already-proven entry quote is the authoritative
-    // quote-currency-per-account-currency conversion rate. A third-currency
-    // account still fails closed because that would require another trusted
-    // FX conversion authority.
+    // quote-currency-per-account-currency conversion rate. For a third-currency
+    // account, use only a fresh direct account/quote cross from this exact
+    // broker and use its bid conservatively; otherwise fail closed.
     const normalizedInstrument = instrument.toUpperCase();
     if (!/^[A-Z]{6}$/.test(normalizedInstrument)) {
       throw new PositionSizingError(
@@ -476,19 +482,58 @@ export class PositionSizingService {
     const baseRiskAmount = riskCapitalBase.mul(baseRiskPercent).divByPowerOfTen(2);
     const riskAmount = riskCapitalBase.mul(drawdownAdjustedRiskPercent).divByPowerOfTen(2); // account currency
     let riskAmountInQuoteCurrency: ExactDecimal;
-    let riskCurrencyConversion: 'ACCOUNT_IS_QUOTE' | 'ACCOUNT_IS_BASE_USING_ENTRY';
+    let riskCurrencyConversion:
+      | 'ACCOUNT_IS_QUOTE'
+      | 'ACCOUNT_IS_BASE_USING_ENTRY'
+      | 'ACCOUNT_TO_QUOTE_USING_BROKER_BID';
+    let quotePerAccountCurrency = ExactDecimal.ONE;
+    let riskCurrencyConversionInstrument: string | null = null;
+    let riskCurrencyConversionRate: string | null = null;
     if (quoteCurrency === accountCurrency) {
       riskAmountInQuoteCurrency = riskAmount;
       riskCurrencyConversion = 'ACCOUNT_IS_QUOTE';
     } else if (baseCurrency === accountCurrency) {
-      riskAmountInQuoteCurrency = riskAmount.mul(entry);
+      quotePerAccountCurrency = entry;
+      riskAmountInQuoteCurrency = riskAmount.mul(quotePerAccountCurrency);
       riskCurrencyConversion = 'ACCOUNT_IS_BASE_USING_ENTRY';
+      riskCurrencyConversionInstrument = normalizedInstrument;
+      riskCurrencyConversionRate = quotePerAccountCurrency.toString();
     } else {
-      throw new PositionSizingError(
-        'CURRENCY_MISMATCH',
-        `instrument ${instrument} is ${baseCurrency}/${quoteCurrency} but account currency is ` +
-          `${accountCurrency} — neither FX leg matches the account currency`,
-      );
+      const conversionInstrument = `${accountCurrency}${quoteCurrency}`;
+      let conversionQuote: Awaited<ReturnType<BrokerService['getCurrentPriceForConnection']>> = null;
+      try {
+        conversionQuote = await this.brokerService.getCurrentPriceForConnection(
+          userId,
+          brokerConnectionId,
+          conversionInstrument,
+          { propagateProviderError: true },
+        );
+      } catch {
+        conversionQuote = null;
+      }
+      const conversionBid = ExactDecimal.tryParse(conversionQuote?.bid ?? '');
+      const conversionTimestamp = conversionQuote?.timestamp
+        ? new Date(conversionQuote.timestamp).getTime()
+        : Number.NaN;
+      const conversionAgeMs = Date.now() - conversionTimestamp;
+      if (
+        !conversionBid ||
+        !conversionBid.isPositive() ||
+        !Number.isFinite(conversionTimestamp) ||
+        conversionAgeMs < -5_000 ||
+        conversionAgeMs > 60_000
+      ) {
+        throw new PositionSizingError(
+          'CURRENCY_MISMATCH',
+          `instrument ${instrument} is ${baseCurrency}/${quoteCurrency} but account currency is ` +
+            `${accountCurrency} — fresh broker conversion ${conversionInstrument} could not be proven`,
+        );
+      }
+      quotePerAccountCurrency = conversionBid;
+      riskAmountInQuoteCurrency = riskAmount.mul(quotePerAccountCurrency);
+      riskCurrencyConversion = 'ACCOUNT_TO_QUOTE_USING_BROKER_BID';
+      riskCurrencyConversionInstrument = conversionInstrument;
+      riskCurrencyConversionRate = quotePerAccountCurrency.toString();
     }
 
     // Durable PAPER floor authority uses the profile's maximum trade risk as
@@ -497,9 +542,7 @@ export class PositionSizingService {
     // actual stop risk is still inside this durable ceiling.
     const profileRiskCeilingAmount = riskCapitalBase.mul(riskPercent).divByPowerOfTen(2);
     const profileRiskCeilingAmountInQuoteCurrency =
-      riskCurrencyConversion === 'ACCOUNT_IS_QUOTE'
-        ? profileRiskCeilingAmount
-        : profileRiskCeilingAmount.mul(entry);
+      profileRiskCeilingAmount.mul(quotePerAccountCurrency);
 
     // ── 7. The sizing math (ExactDecimal only). ───────────────────────────
     const riskPerLot = slDistance.mul(contractSize);
@@ -623,10 +666,10 @@ export class PositionSizingService {
     }
 
     const finalRiskAtStopInQuoteCurrency = lots.mul(riskPerLot);
-    const finalRiskAtStop =
-      riskCurrencyConversion === 'ACCOUNT_IS_QUOTE'
-        ? finalRiskAtStopInQuoteCurrency
-        : finalRiskAtStopInQuoteCurrency.divDown(entry, LOT_SCALE);
+    const finalRiskAtStop = finalRiskAtStopInQuoteCurrency.divDown(
+      quotePerAccountCurrency,
+      LOT_SCALE,
+    );
     const finalRiskAtStopPercentOfCapital = finalRiskAtStop
       .divDown(riskCapitalBase, LOT_SCALE)
       .mulByPowerOfTen(2);
@@ -683,6 +726,8 @@ export class PositionSizingService {
       quoteCurrency,
       riskAmountInQuoteCurrency: riskAmountInQuoteCurrency.toString(),
       riskCurrencyConversion,
+      riskCurrencyConversionInstrument,
+      riskCurrencyConversionRate,
       entryPrice: entry.toString(),
       entryPriceSource,
       stopLoss: stopLoss.toString(),

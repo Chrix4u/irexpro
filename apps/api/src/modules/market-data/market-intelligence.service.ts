@@ -5,6 +5,7 @@ import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.inte
 import { CredentialEncryptionService } from '../broker/services/credential-encryption.service';
 import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
 import { BrokerCredentialLifecycle } from '../broker/authorization/broker-credential-status';
+import { CTRADER_FAMILY_BROKER_IDS } from '../broker/registry/broker-catalog';
 import { AuditService } from '../audit/audit.service';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { MarketIntelligenceQueryDto } from './dto/market-intelligence-query.dto';
@@ -187,6 +188,50 @@ export class MarketIntelligenceService {
         throw new ServiceUnavailableException({
           code: 'MARKET_DATA_UNAVAILABLE',
           message: 'Unable to fetch paper market data at this time',
+        });
+      }
+    }
+
+    if (
+      CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId) &&
+      connection.accountType === 'DEMO'
+    ) {
+      try {
+        const [quote, rawCandles] = await Promise.all([
+          this.brokerService.getCurrentPriceForConnection(
+            userId,
+            connection.id,
+            instrument,
+            { propagateProviderError: true },
+          ),
+          this.brokerService.getOhlcvForConnection(
+            userId,
+            connection.id,
+            instrument,
+            timeframe,
+            query.limit,
+          ),
+        ]);
+        if (!quote) {
+          throw new Error('cTrader broker returned no verifiable quote');
+        }
+        return await this.buildSnapshot(
+          userId,
+          connection.id,
+          instrument,
+          timeframe,
+          query.limit,
+          quote,
+          rawCandles,
+        );
+      } catch {
+        await this.auditFailure(userId, connection.id, instrument, timeframe, 'provider-unavailable');
+        this.logger.warn(
+          `cTrader market-data request failed user=${userId} instrument=${instrument} timeframe=${timeframe}`,
+        );
+        throw new ServiceUnavailableException({
+          code: 'MARKET_DATA_UNAVAILABLE',
+          message: 'Unable to fetch live market data from broker at this time',
         });
       }
     }
