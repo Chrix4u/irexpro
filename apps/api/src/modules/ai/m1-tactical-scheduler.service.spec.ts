@@ -651,6 +651,7 @@ function phase2Harness(
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.userId': 'user-1',
         'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'vpsForexScanner.m1MarketDataConnectionId': 'demo-conn-1',
       };
       return values[key] ?? fallback;
     }),
@@ -787,6 +788,20 @@ function phase2Harness(
     loadSnapshot: (marketData as any).loadSnapshot as jest.Mock,
   };
 }
+
+describe('M1 tactical scheduler broker binding', () => {
+  it('binds professional DEMO V8 execution to the broker-native M1 connection', () => {
+    const { service } = phase2Harness({ rollout: M1_TACTICAL_ROLLOUT_POLICY_V8 });
+
+    expect((service as any).connectionId()).toBe('demo-conn-1');
+  });
+
+  it('keeps PAPER rollout execution bound to the research paper connection', () => {
+    const { service } = phase2Harness({ rollout: M1_TACTICAL_ROLLOUT_POLICY_V7 });
+
+    expect((service as any).connectionId()).toBe('conn-1');
+  });
+});
 
 async function driveCleanContinuation(
   h: ReturnType<typeof phase2Harness>,
@@ -1739,7 +1754,6 @@ describe('M1 early-transition tiered v7 PAPER scout', () => {
   });
 });
 
-
 describe('M1 professional v8 DEMO promotion', () => {
   const matureHealthyOutcomes = [
     { observedAt: new Date('2026-10-15T10:29:00.000Z'), netR: 0.74 },
@@ -1756,9 +1770,15 @@ describe('M1 professional v8 DEMO promotion', () => {
       phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
       paperVolumeCap: 4,
     });
-    expect(m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V8.phase, 'M1_EARLY_TRANSITION')).toBe(true);
-    expect(m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V8.phase, 'M1_TREND_CONTINUATION')).toBe(false);
-    expect(m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V8.phase, 'M1_CONFIRMED_REVERSAL')).toBe(false);
+    expect(
+      m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V8.phase, 'M1_EARLY_TRANSITION'),
+    ).toBe(true);
+    expect(
+      m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V8.phase, 'M1_TREND_CONTINUATION'),
+    ).toBe(false);
+    expect(
+      m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V8.phase, 'M1_CONFIRMED_REVERSAL'),
+    ).toBe(false);
   });
 
   it('binds AiModule to v8 and leaves v7 immutable for historical evidence', () => {
