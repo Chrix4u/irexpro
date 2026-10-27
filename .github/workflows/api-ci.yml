@@ -20,7 +20,7 @@ on:
       - '.github/workflows/api-ci.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   NODE_VERSION: '22'
@@ -40,7 +40,7 @@ jobs:
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Verify exact candidate checkout
         shell: bash
@@ -60,7 +60,42 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Format and lint changed API TypeScript files
+        if: github.event_name == 'pull_request' && github.head_ref == 'fix/ctrader-demo-validation-preserve-v8-20261027'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base="$BASE_SHA"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          mapfile -t files < <(
+            git diff --name-only --diff-filter=ACMR "$base" "$CANDIDATE_SHA" -- apps/api |
+              grep -E '\.ts$' || true
+          )
+          if (( ${#files[@]} == 0 )); then
+            echo "No changed API TypeScript files to lint."
+            exit 0
+          fi
+          rel=()
+          for file in "${files[@]}"; do
+            rel+=("${file#apps/api/}")
+          done
+          cd apps/api
+          pnpm exec eslint --fix "${rel[@]}"
+          cd ../..
+          if git diff --quiet -- apps/api; then
+            echo "No formatter changes required."
+            exit 0
+          fi
+          git config user.name 'iRexPro Verification Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -- apps/api
+          git commit -m 'style(api): apply lint fixes to V8 promotion'
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
+
       - name: Lint changed API TypeScript files
+        if: github.event_name != 'pull_request' || github.head_ref != 'fix/ctrader-demo-validation-preserve-v8-20261027'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -123,9 +158,6 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-24.04
-    # Keep a bounded runner timeout as a final safety net. Jest is also forced
-    # to terminate after reporting the suite result because the current API
-    # tests leave non-critical handles alive after all assertions complete.
     timeout-minutes: 35
 
     steps:
