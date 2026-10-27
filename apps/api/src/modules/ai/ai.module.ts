@@ -31,6 +31,7 @@ import { PostEntryProtectionShadowService } from './post-entry-protection-shadow
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import { M1TacticalMarketDataService } from './m1-tactical-market-data.service';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
+import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import {
   M1TacticalSchedulerService,
   M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
@@ -91,6 +92,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     EnsemblePostEntryProtectionShadowService,
     M1TacticalMarketDataService,
     M1TacticalEvidenceService,
+    HighConvictionBrokerExpertService,
     {
       provide: M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
       useValue: M1_TACTICAL_ROLLOUT_POLICY_V8,
