@@ -298,8 +298,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       );
       return;
     }
+    const startupAuthority =
+      this.rolloutPolicy.phase === 'SHADOW'
+        ? 'NONE'
+        : this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
+          ? 'DEMO_FULL_AUTO_PROMOTED'
+          : 'PAPER_ONLY_RESEARCH';
     this.logger.log(
-      `M1 tactical scheduler enabled phase=${this.rolloutPolicy.phase} cadence=${this.rolloutPolicy.cadenceMs / 1000}s authority=${this.rolloutPolicy.phase === 'SHADOW' ? 'NONE' : 'PAPER_ONLY_RESEARCH'}`,
+      `M1 tactical scheduler enabled phase=${this.rolloutPolicy.phase} cadence=${this.rolloutPolicy.cadenceMs / 1000}s authority=${startupAuthority}`,
     );
     this.timer = setInterval(() => void this.runOnce(), this.rolloutPolicy.cadenceMs);
     this.timer.unref?.();

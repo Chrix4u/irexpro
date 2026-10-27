@@ -302,6 +302,7 @@ describe('M1TacticalSchedulerService shadow phase', () => {
     expect(M1_TACTICAL_ROLLOUT_POLICY_V1.phase).toBe('SHADOW');
     expect(interval).toHaveBeenCalledWith(expect.any(Function), 15_000);
     service.onModuleDestroy();
+    interval.mockRestore();
   });
 
   it('evaluates one completed minute only once even when woken again inside the same minute', async () => {
@@ -799,6 +800,16 @@ describe('M1 tactical scheduler broker binding', () => {
     const { service } = phase2Harness({ rollout: M1_TACTICAL_ROLLOUT_POLICY_V8 });
 
     expect((service as any).connectionId()).toBe('demo-conn-1');
+  });
+
+  it('reports promoted DEMO authority in V8 startup telemetry', () => {
+    const { service } = phase2Harness({ rollout: M1_TACTICAL_ROLLOUT_POLICY_V8 });
+    const log = jest.spyOn((service as any).logger, 'log').mockImplementation(() => undefined);
+
+    service.onModuleInit();
+    service.onModuleDestroy();
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('authority=DEMO_FULL_AUTO_PROMOTED'));
   });
 
   it('keeps PAPER rollout execution bound to the research paper connection', () => {
