@@ -33,6 +33,14 @@ import { resolveAiOpenPositionRows } from "@/lib/ai-open-positions";
 import { loadMarketIntelligence } from "@/lib/market-intelligence";
 import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
 import {
+  LIVE_SCAN_STAGES,
+  deriveLiveScanFrame,
+  selectChartWindow,
+  shiftChartWindow,
+  zoomChartWindow,
+  type LiveScanFrame,
+} from "@/lib/ai-live-visuals";
+import {
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
   hasExternalProviderPerformanceUiShape,
@@ -1325,6 +1333,8 @@ function TradeReadinessGauge({
   tradeExpected,
   instrument,
   direction,
+  scanFrame,
+  lastRunAt,
 }: {
   score: number;
   band: "WAITING" | "FORMING" | "READY";
@@ -1333,9 +1343,16 @@ function TradeReadinessGauge({
   tradeExpected: boolean;
   instrument: string | null;
   direction: "BUY" | "SELL" | null;
+  scanFrame: LiveScanFrame;
+  lastRunAt: string | null;
 }) {
   const angle = -180 + Math.max(0, Math.min(100, score)) * 1.8;
+  const scanAngle = -180 + scanFrame.sweepPercent * 1.8;
   const tone = band === "READY" ? "ready" : band === "FORMING" ? "forming" : "waiting";
+  const lastRunAge = lastRunAt
+    ? Math.max(0, Math.floor((Date.now() - new Date(lastRunAt).getTime()) / 1000))
+    : null;
+
   return (
     <section className={`ai-readiness ai-readiness--${tone}`} aria-labelledby="trade-readiness-title">
       <div className="ai-readiness__head">
@@ -1357,11 +1374,37 @@ function TradeReadinessGauge({
         aria-valuetext={`${headline}, ${score} percent`}
       >
         <div className="ai-readiness__arc" aria-hidden="true">
+          <span className="ai-readiness__scan-needle" style={{ transform: `rotate(${scanAngle}deg)` }} />
           <span className="ai-readiness__needle" style={{ transform: `rotate(${angle}deg)` }} />
           <span className="ai-readiness__hub" />
         </div>
         <strong className="ai-readiness__score">{score}</strong>
         <span className="ai-readiness__score-label">/ 100</span>
+      </div>
+      <div className="ai-readiness__scan-live">
+        <span className="ai-readiness__scan-pulse" aria-hidden="true" />
+        <div>
+          <span>Scanning now</span>
+          <strong>{scanFrame.stage.label}</strong>
+          <small>
+            {scanFrame.stage.detail}
+            {lastRunAge != null && Number.isFinite(lastRunAge)
+              ? ` · Last model decision ${lastRunAge}s ago`
+              : ""}
+          </small>
+        </div>
+      </div>
+      <div className="ai-readiness__pipeline" aria-label="Live AI scanning pipeline">
+        {LIVE_SCAN_STAGES.map((stage, index) => (
+          <div
+            key={stage.id}
+            className={index === scanFrame.stageIndex ? "is-active" : ""}
+            title={stage.detail}
+          >
+            <i aria-hidden="true" />
+            <span>{stage.label}</span>
+          </div>
+        ))}
       </div>
       <div className="ai-readiness__copy">
         <strong>{headline}</strong>
@@ -1380,7 +1423,7 @@ function TradeReadinessGauge({
       <p className="ai-readiness__disclaimer">
         {tradeExpected
           ? "Green means the current setup is eligible. Final dispatch checks can still prevent an order if conditions change."
-          : "The AI stays out until the required model, market, risk and execution conditions align."}
+          : "The white needle is the real readiness score. The moving teal sweep shows continuous scanning activity; it does not change the model score."}
       </p>
     </section>
   );
@@ -1440,10 +1483,12 @@ function RealisedPnlMiniChart({
 
 function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [chartType, setChartType] = useState<"CANDLES" | "LINE" | "AREA">("CANDLES");
+  const [visibleCount, setVisibleCount] = useState(50);
+  const [windowOffset, setWindowOffset] = useState(0);
+
   if (!candles.length) {
-    return (
-      <div className="ai-market-chart__empty">Waiting for market candles…</div>
-    );
+    return <div className="ai-market-chart__empty">Waiting for market candles…</div>;
   }
 
   const parsed = candles
@@ -1456,63 +1501,135 @@ function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
       volumeN: Number(candle.volume),
     }))
     .filter((candle) =>
-      [candle.openN, candle.highN, candle.lowN, candle.closeN].every(
-        Number.isFinite,
-      ),
+      [candle.openN, candle.highN, candle.lowN, candle.closeN].every(Number.isFinite),
     );
-  if (!parsed.length)
-    return <div className="ai-market-chart__empty">Chart unavailable</div>;
+  if (!parsed.length) return <div className="ai-market-chart__empty">Chart unavailable</div>;
 
+  const visible = selectChartWindow(parsed, visibleCount, windowOffset);
   const width = 820;
   const height = 320;
   const priceBottom = 245;
   const volumeTop = 262;
   const padX = 26;
-  const min = Math.min(...parsed.map((candle) => candle.lowN));
-  const max = Math.max(...parsed.map((candle) => candle.highN));
+  const min = Math.min(...visible.map((candle) => candle.lowN));
+  const max = Math.max(...visible.map((candle) => candle.highN));
   const range = Math.max(max - min, Math.abs(max) * 0.0001, 0.00001);
-  const maxVolume = Math.max(...parsed.map((candle) => candle.volumeN), 1);
-  const slot = (width - padX * 2) / Math.max(parsed.length, 1);
-  const bodyWidth = Math.max(2.2, Math.min(8, slot * 0.58));
-  const y = (value: number) =>
-    14 + ((max - value) / range) * (priceBottom - 28);
-  const activeIndex = hoveredIndex == null ? parsed.length - 1 : hoveredIndex;
-  const active = parsed[Math.max(0, Math.min(activeIndex, parsed.length - 1))];
+  const maxVolume = Math.max(...visible.map((candle) => candle.volumeN), 1);
+  const slot = (width - padX * 2) / Math.max(visible.length, 1);
+  const bodyWidth = Math.max(2.2, Math.min(10, slot * 0.58));
+  const y = (value: number) => 14 + ((max - value) / range) * (priceBottom - 28);
+  const xAt = (index: number) => padX + slot * index + slot / 2;
+  const activeIndex = hoveredIndex == null ? visible.length - 1 : hoveredIndex;
+  const active = visible[Math.max(0, Math.min(activeIndex, visible.length - 1))]!;
+  const linePath = visible
+    .map((candle, index) => `${index === 0 ? "M" : "L"} ${xAt(index)} ${y(candle.closeN)}`)
+    .join(" ");
+  const areaPath = visible.length
+    ? `${linePath} L ${xAt(visible.length - 1)} ${priceBottom} L ${xAt(0)} ${priceBottom} Z`
+    : "";
+  const maxOffset = Math.max(0, parsed.length - Math.min(parsed.length, visibleCount));
+  const atLatest = windowOffset === 0;
 
-  const onMove = (event: React.MouseEvent<SVGSVGElement>) => {
+  const onMove = (event: React.PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const x = ((event.clientX - rect.left) / rect.width) * width;
     const index = Math.round((x - padX - slot / 2) / slot);
-    setHoveredIndex(Math.max(0, Math.min(parsed.length - 1, index)));
+    setHoveredIndex(Math.max(0, Math.min(visible.length - 1, index)));
+  };
+
+  const resetView = () => {
+    setVisibleCount(Math.min(50, Math.max(20, parsed.length)));
+    setWindowOffset(0);
+    setHoveredIndex(null);
   };
 
   return (
     <div className="ai-market-chart">
+      <div className="ai-market-chart__toolbar">
+        <div className="ai-market-chart__type" aria-label="Chart type">
+          {(["CANDLES", "LINE", "AREA"] as const).map((type) => (
+            <button
+              key={type}
+              type="button"
+              className={chartType === type ? "is-active" : ""}
+              onClick={() => setChartType(type)}
+              aria-pressed={chartType === type}
+            >
+              {type === "CANDLES" ? "Candles" : type === "LINE" ? "Line" : "Area"}
+            </button>
+          ))}
+        </div>
+        <div className="ai-market-chart__nav" aria-label="Chart navigation">
+          <button
+            type="button"
+            onClick={() => setWindowOffset((value) => shiftChartWindow(value, "BACK", visibleCount, parsed.length))}
+            disabled={windowOffset >= maxOffset}
+            aria-label="Pan chart backward"
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            onClick={() => setWindowOffset((value) => shiftChartWindow(value, "FORWARD", visibleCount, parsed.length))}
+            disabled={windowOffset <= 0}
+            aria-label="Pan chart forward"
+          >
+            →
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setVisibleCount((value) => zoomChartWindow(value, "OUT", parsed.length));
+              setWindowOffset(0);
+            }}
+            disabled={visibleCount >= parsed.length}
+            aria-label="Zoom chart out"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setVisibleCount((value) => zoomChartWindow(value, "IN", parsed.length));
+              setWindowOffset(0);
+            }}
+            disabled={visibleCount <= 20}
+            aria-label="Zoom chart in"
+          >
+            +
+          </button>
+          <button type="button" onClick={resetView} aria-label="Reset chart view">
+            Reset
+          </button>
+        </div>
+      </div>
+      <div className="ai-market-chart__status">
+        <span className={atLatest ? "is-live" : ""}>{atLatest ? "LIVE" : "HISTORY"}</span>
+        <span>{visible.length} of {parsed.length} bars</span>
+        <span>{chartType === "CANDLES" ? "OHLC + volume" : `${chartType.toLowerCase()} close-price view`}</span>
+      </div>
       <div className="ai-market-chart__ohlc">
         <span>{new Date(active.timestamp).toLocaleString()}</span>
-        <span>
-          O <strong>{active.open}</strong>
-        </span>
-        <span>
-          H <strong>{active.high}</strong>
-        </span>
-        <span>
-          L <strong>{active.low}</strong>
-        </span>
-        <span>
-          C <strong>{active.close}</strong>
-        </span>
-        <span>
-          Vol <strong>{active.volume}</strong>
-        </span>
+        <span>O <strong>{active.open}</strong></span>
+        <span>H <strong>{active.high}</strong></span>
+        <span>L <strong>{active.low}</strong></span>
+        <span>C <strong>{active.close}</strong></span>
+        <span>Vol <strong>{active.volume}</strong></span>
       </div>
       <svg
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label="Interactive candlestick chart"
-        onMouseMove={onMove}
-        onMouseLeave={() => setHoveredIndex(null)}
+        aria-label={`Interactive ${chartType.toLowerCase()} market chart`}
+        onPointerMove={onMove}
+        onPointerLeave={() => setHoveredIndex(null)}
+        onDoubleClick={resetView}
       >
+        <defs>
+          <linearGradient id="irex-market-area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="currentColor" stopOpacity="0.24" />
+            <stop offset="100%" stopColor="currentColor" stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
         {[0.2, 0.4, 0.6, 0.8].map((fraction) => (
           <line
             key={fraction}
@@ -1523,60 +1640,62 @@ function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
             y2={14 + (priceBottom - 28) * fraction}
           />
         ))}
-        {parsed.map((candle, index) => {
-          const x = padX + slot * index + slot / 2;
+        {visible.map((candle, index) => {
+          const x = xAt(index);
           const isUp = candle.closeN >= candle.openN;
-          const top = y(Math.max(candle.openN, candle.closeN));
-          const bottom = y(Math.min(candle.openN, candle.closeN));
           const volumeHeight = Math.max(2, (candle.volumeN / maxVolume) * 42);
           return (
-            <g
-              key={`${candle.timestamp}-${index}`}
-              className={isUp ? "is-up" : "is-down"}
-            >
-              <line
-                className="ai-market-chart__wick"
-                x1={x}
-                x2={x}
-                y1={y(candle.highN)}
-                y2={y(candle.lowN)}
-              />
-              <rect
-                className="ai-market-chart__candle"
-                x={x - bodyWidth / 2}
-                y={Math.min(top, bottom)}
-                width={bodyWidth}
-                height={Math.max(1.8, Math.abs(bottom - top))}
-                rx="1.2"
-              />
-              <rect
-                className="ai-market-chart__volume"
-                x={x - bodyWidth / 2}
-                y={volumeTop + 42 - volumeHeight}
-                width={bodyWidth}
-                height={volumeHeight}
-                rx="1"
-              />
-            </g>
+            <rect
+              key={`vol-${candle.timestamp}-${index}`}
+              className={`ai-market-chart__volume ${isUp ? "is-up" : "is-down"}`}
+              x={x - Math.max(1.5, bodyWidth / 2)}
+              y={volumeTop + 42 - volumeHeight}
+              width={Math.max(3, bodyWidth)}
+              height={volumeHeight}
+              rx="1"
+            />
           );
         })}
-        {hoveredIndex != null &&
-          (() => {
-            const x = padX + slot * activeIndex + slot / 2;
+        {chartType === "CANDLES" ? (
+          visible.map((candle, index) => {
+            const x = xAt(index);
+            const isUp = candle.closeN >= candle.openN;
+            const top = y(Math.max(candle.openN, candle.closeN));
+            const bottom = y(Math.min(candle.openN, candle.closeN));
             return (
-              <line
-                className="ai-market-chart__crosshair"
-                x1={x}
-                x2={x}
-                y1="8"
-                y2={height - 10}
-              />
+              <g key={`${candle.timestamp}-${index}`} className={isUp ? "is-up" : "is-down"}>
+                <line className="ai-market-chart__wick" x1={x} x2={x} y1={y(candle.highN)} y2={y(candle.lowN)} />
+                <rect
+                  className="ai-market-chart__candle"
+                  x={x - bodyWidth / 2}
+                  y={Math.min(top, bottom)}
+                  width={bodyWidth}
+                  height={Math.max(1.8, Math.abs(bottom - top))}
+                  rx="1.2"
+                />
+              </g>
             );
-          })()}
+          })
+        ) : (
+          <>
+            {chartType === "AREA" ? <path className="ai-market-chart__area-price" d={areaPath} /> : null}
+            <path className="ai-market-chart__price-line" d={linePath} />
+          </>
+        )}
+        {hoveredIndex != null ? (
+          <line
+            className="ai-market-chart__crosshair"
+            x1={xAt(activeIndex)}
+            x2={xAt(activeIndex)}
+            y1="8"
+            y2={height - 10}
+          />
+        ) : null}
       </svg>
       <div className="ai-market-chart__range">
-        <span>{min.toFixed(3)}</span>
-        <span>{max.toFixed(3)}</span>
+        <span>{min.toFixed(5)}</span>
+        <span>Double-tap/click chart to reset</span>
+        <span>{max.toFixed(5)}</span>
       </div>
     </div>
   );
@@ -1595,8 +1714,9 @@ export default function AiTradingPage() {
   const [chartInstrument, setChartInstrument] = useState("USDJPY");
   const [chartTimeframe, setChartTimeframe] = useState<
     "M1" | "M5" | "M15" | "H1" | "H4"
-  >("M5");
+  >("M1");
   const [chartLoading, setChartLoading] = useState(false);
+  const [liveScanTick, setLiveScanTick] = useState(0);
   const [allocation, setAllocation] =
     useState<UserCapitalAllocationView | null>(null);
   const [selectedBrokerId, setSelectedBrokerId] = useState<string>("");
@@ -1636,6 +1756,7 @@ export default function AiTradingPage() {
   const seenExecutionStates = useRef<Map<string, string>>(new Map());
   const tradingRefreshInFlight = useRef(false);
   const positionsRefreshInFlight = useRef(false);
+  const tacticalRefreshInFlight = useRef(false);
 
   const controlStateReady = Boolean(
     terminal?.risk && terminal?.sessionStateKnown,
@@ -1657,6 +1778,11 @@ export default function AiTradingPage() {
               automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
             ? "scanning"
             : "running";
+  const liveScanFrame = deriveLiveScanFrame({
+    tick: liveScanTick,
+    automationOn,
+  });
+
 
   const vpsConfidenceActive = vpsScannerStatus?.enabled === true;
   const fastMarkFeed = deriveFastMarkFeedUiState(
@@ -1973,6 +2099,46 @@ export default function AiTradingPage() {
   }, [user, refreshTradingData]);
 
   useEffect(() => {
+    if (!automationOn) {
+      setLiveScanTick(0);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setLiveScanTick((value) => value + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [automationOn]);
+
+  useEffect(() => {
+    if (!user || !automationOn) return;
+    let disposed = false;
+
+    const refreshTacticalStatus = async () => {
+      if (tacticalRefreshInFlight.current) return;
+      tacticalRefreshInFlight.current = true;
+      try {
+        const tacticalStatus = await api.request<unknown>(
+          "/ai/external/vps-forex/m1-tactical/status",
+        );
+        if (!disposed && hasM1TacticalStatusUiShape(tacticalStatus)) {
+          setM1TacticalStatus(tacticalStatus);
+        }
+      } catch {
+        // Keep the latest valid tactical snapshot; the broader 4s refresh owns warnings.
+      } finally {
+        tacticalRefreshInFlight.current = false;
+      }
+    };
+
+    void refreshTacticalStatus();
+    const timer = window.setInterval(() => void refreshTacticalStatus(), 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [user, automationOn]);
+
+  useEffect(() => {
     if (!user) return;
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") {
@@ -1987,12 +2153,6 @@ export default function AiTradingPage() {
       window.removeEventListener("focus", refreshOnFocus);
     };
   }, [user, refreshTradingData]);
-
-  useEffect(() => {
-    if (vpsScannerStatus?.enabled && chartTimeframe === "M1") {
-      setChartTimeframe("M5");
-    }
-  }, [vpsScannerStatus?.enabled, chartTimeframe]);
 
   useEffect(() => {
     const watched = automationRuntime?.instruments ?? [];
@@ -2038,7 +2198,8 @@ export default function AiTradingPage() {
       }
     };
     void refreshChart();
-    const timer = window.setInterval(() => void refreshChart(), 5000);
+    const refreshIntervalMs = chartTimeframe === "M1" ? 1000 : 5000;
+    const timer = window.setInterval(() => void refreshChart(), refreshIntervalMs);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -2573,7 +2734,11 @@ export default function AiTradingPage() {
             </section>
 
             <section className="ai-production-overview" aria-label="AI trading at a glance">
-              <TradeReadinessGauge {...tradeReadiness} />
+              <TradeReadinessGauge
+                {...tradeReadiness}
+                scanFrame={liveScanFrame}
+                lastRunAt={m1TacticalStatus?.lastRunAt ?? null}
+              />
               <section className="ai-performance-panel" aria-labelledby="recent-performance-title">
                 <div className="ai-performance-panel__head">
                   <div>
@@ -4344,10 +4509,7 @@ export default function AiTradingPage() {
                         </small>
                       </div>
                       <div className="ai-cockpit__timeframes">
-                        {(vpsScannerStatus?.enabled
-                          ? (["M5", "M15", "H1", "H4"] as const)
-                          : (["M1", "M5", "M15", "H1", "H4"] as const)
-                        ).map((timeframe) => (
+                        {(["M1", "M5", "M15", "H1", "H4"] as const).map((timeframe) => (
                           <button
                             key={timeframe}
                             type="button"
@@ -4393,7 +4555,10 @@ export default function AiTradingPage() {
                         </strong>
                       </div>
                     </div>
-                    <MarketPriceChart candles={market?.candles ?? []} />
+                    <MarketPriceChart
+                      key={`${chartInstrument}-${chartTimeframe}`}
+                      candles={market?.candles ?? []}
+                    />
                   </div>
 
                   <aside className={`ai-market-readiness ai-market-readiness--${tradeReadiness.band.toLowerCase()}`}>
