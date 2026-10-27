@@ -283,7 +283,10 @@ export class ExecutionOrchestrator {
         'Broker credentials are not usable for execution (credential lifecycle is not active).',
       );
     }
-    if (!directMt5Terminal && (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)) {
+    if (
+      !directMt5Terminal &&
+      (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)
+    ) {
       this.logger.warn(
         `Dispatch blocked: connection ${ctx.connection.id} has no stored credential ` +
           'ciphertext — refusing provider dispatch (fail-closed)',
@@ -752,14 +755,15 @@ export class ExecutionOrchestrator {
     intent: ExecutionIntent,
     connection: BrokerConnection,
   ): Promise<BrokerOrderResult> {
-    const credentials = connection.brokerId === 'direct-mt5'
-      ? { accountId: connection.accountId ?? connection.id }
-      : this.encryptionService.decrypt({
-          ciphertext: connection.encryptedCredentials!,
-          iv: connection.credentialIv!,
-          tag: connection.credentialTag!,
-          keyId: connection.encryptionKeyId!,
-        });
+    const credentials =
+      connection.brokerId === 'direct-mt5'
+        ? { accountId: connection.accountId ?? connection.id }
+        : this.encryptionService.decrypt({
+            ciphertext: connection.encryptedCredentials!,
+            iv: connection.credentialIv!,
+            tag: connection.credentialTag!,
+            keyId: connection.encryptionKeyId!,
+          });
 
     // #291 / correction round 3: dispatch uses the connection-scoped adapter
     // context — the same mutable context connectBroker/healthCheck operate on,

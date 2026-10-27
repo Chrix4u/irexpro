@@ -111,7 +111,9 @@ export class DirectMt5PairingService {
       throw new NotFoundException('Broker connection not found');
     }
     if (connection.broker_id !== 'direct-mt5') {
-      throw new BadRequestException('Direct connector pairing is available only for the Direct MT5 provider');
+      throw new BadRequestException(
+        'Direct connector pairing is available only for the Direct MT5 provider',
+      );
     }
     if (connection.account_type !== 'DEMO') {
       throw new BadRequestException(
@@ -230,7 +232,9 @@ export class DirectMt5PairingService {
       );
     }
     if (identity.accountType !== 'DEMO') {
-      throw new BadRequestException('Direct MT5 is DEMO-only; a REAL terminal account cannot be paired');
+      throw new BadRequestException(
+        'Direct MT5 is DEMO-only; a REAL terminal account cannot be paired',
+      );
     }
     await this.dataSource.query(
       `UPDATE broker.broker_connections

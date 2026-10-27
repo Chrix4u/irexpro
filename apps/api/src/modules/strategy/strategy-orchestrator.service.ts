@@ -29,7 +29,6 @@ import {
 } from '../broker/services/broker-account-snapshot.service';
 import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 
-
 /**
  * Server-side DEMO promotion allowlist. Transport metadata can never grant
  * this authority: only an exact frozen strategy/model/timeframe tuple can

@@ -529,9 +529,7 @@ export async function runVerificationChecklist(
    * must reconcile that accepted provider order by its stable id instead of
    * treating the intermediate acknowledgement as a failed trade.
    */
-  const awaitAcceptedMarketFill = async (
-    result: BrokerOrderResult,
-  ): Promise<BrokerOrderResult> => {
+  const awaitAcceptedMarketFill = async (result: BrokerOrderResult): Promise<BrokerOrderResult> => {
     if (result.status !== 'PENDING' || !result.success || !result.externalOrderId) {
       return result;
     }
@@ -546,10 +544,7 @@ export async function runVerificationChecklist(
       const state = await adapter.getOrderById(providerOrderId);
       if (state) {
         lastStatus = state.status;
-        const stateViolations = orderStateViolations(
-          `marketOrderState[${providerOrderId}]`,
-          state,
-        );
+        const stateViolations = orderStateViolations(`marketOrderState[${providerOrderId}]`, state);
         if (stateViolations.length > 0) {
           return {
             ...result,

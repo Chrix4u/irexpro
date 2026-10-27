@@ -163,7 +163,6 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V7: Readonly<M1TacticalRolloutPolicy> = 
   paperVolumeCap: 0.1,
 });
 
-
 /**
  * V8 is the first real-provider DEMO rollout. It preserves the V7 validated
  * early-transition route/evidence gates but removes the scout micro-lot cap.
@@ -935,8 +934,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
       : null;
-    const professionalDemoPhase =
-      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
+    const professionalDemoPhase = this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
     const requiredExecutionMode = professionalDemoPhase
       ? ExecutionMode.FULL_AUTO
       : ExecutionMode.PAPER_ONLY;

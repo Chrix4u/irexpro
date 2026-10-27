@@ -199,7 +199,8 @@ export class BrokerModule implements OnModuleInit {
     this.registry.register(this.metaTraderAdapter, () => new MetaTraderAdapter(this.metaApiClient));
     this.registry.register(
       this.directMt5Adapter,
-      (_requestedBrokerId, connectionId) => new DirectMt5Adapter(this.directMt5Commands, connectionId),
+      (_requestedBrokerId, connectionId) =>
+        new DirectMt5Adapter(this.directMt5Commands, connectionId),
     );
     this.registry.register(
       this.paperBrokerAdapter,

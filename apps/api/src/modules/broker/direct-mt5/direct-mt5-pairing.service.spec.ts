@@ -105,7 +105,7 @@ describe('DirectMt5PairingService', () => {
         brokerServer: 'Broker-Demo',
         currency: 'USD',
         tradeAllowed: true,
-      accountType: 'DEMO',
+        accountType: 'DEMO',
       }),
     ).rejects.toThrow('account');
 
@@ -125,7 +125,7 @@ describe('DirectMt5PairingService', () => {
         brokerServer: 'Demo',
         currency: 'USD',
         tradeAllowed: true,
-      accountType: 'DEMO',
+        accountType: 'DEMO',
       }),
     ).rejects.toThrow('invalid or expired');
   });
@@ -193,7 +193,7 @@ describe('DirectMt5PairingService', () => {
         brokerServer: 'Broker-Demo',
         sequence: 8,
         tradeAllowed: true,
-      accountType: 'DEMO',
+        accountType: 'DEMO',
       }),
     ).resolves.toMatchObject({ lastSequence: 8 });
   });
@@ -216,7 +216,7 @@ describe('DirectMt5PairingService', () => {
         brokerServer: 'Other-Server',
         sequence: 8,
         tradeAllowed: true,
-      accountType: 'DEMO',
+        accountType: 'DEMO',
       }),
     ).rejects.toThrow('identity changed');
     expect(String(query.mock.calls[0]![0])).toContain("state = 'SUSPENDED'");

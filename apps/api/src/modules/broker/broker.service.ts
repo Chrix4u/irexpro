@@ -2084,11 +2084,15 @@ export class BrokerService {
     }
 
     const directMt5 = connection.brokerId === 'direct-mt5';
-    if (!directMt5 && (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)) {
+    if (
+      !directMt5 &&
+      (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)
+    ) {
       throw new ForbiddenException('Broker connection credentials unavailable');
     }
 
-    if (!directMt5) this.assertCredentialsUsable(connection, 'getSupportedInstrumentsForConnection');
+    if (!directMt5)
+      this.assertCredentialsUsable(connection, 'getSupportedInstrumentsForConnection');
 
     const adapter = this.adapterRegistry.getAdapterForConnection(
       connection.id,
@@ -2155,7 +2159,10 @@ export class BrokerService {
     }
 
     const directMt5 = connection.brokerId === 'direct-mt5';
-    if (!directMt5 && (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)) {
+    if (
+      !directMt5 &&
+      (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)
+    ) {
       throw new ForbiddenException('Broker connection credentials unavailable');
     }
 
@@ -2234,7 +2241,10 @@ export class BrokerService {
     }
 
     const directMt5 = connection.brokerId === 'direct-mt5';
-    if (!directMt5 && (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)) {
+    if (
+      !directMt5 &&
+      (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)
+    ) {
       throw new ForbiddenException('Broker connection credentials unavailable');
     }
 
