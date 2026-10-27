@@ -476,6 +476,37 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     }
   }
 
+  /**
+   * Resolve an OPEN cTrader position by the iRexPro client reference carried
+   * in ProtoOA tradeData.label/comment. This is intentionally provider-specific
+   * and is used by DEMO validation cleanup when a MARKET dispatch outcome is
+   * uncertain and no provider order/position id was returned.
+   */
+  async findPositionByClientReference(clientReference: string): Promise<BrokerPosition | null> {
+    const session = this.requireCurrentSession();
+    const reference = String(clientReference ?? '');
+    if (!reference) return null;
+    try {
+      const positions = await this.fetchReconcilePositions(session);
+      const label = reference.slice(0, 100);
+      const comment = reference.slice(0, 512);
+      const matches = positions.filter(
+        (position) => position.tradeData.label === label || position.tradeData.comment === comment,
+      );
+      if (matches.length > 1) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          `cTrader returned ${matches.length} open positions for one client reference; refusing ambiguous cleanup.`,
+        );
+      }
+      if (matches.length === 0) return null;
+      const [mapped] = await this.enrichPositions(session, [matches[0]!]);
+      return mapped ?? null;
+    } catch (err) {
+      throw this.mapError(err);
+    }
+  }
+
   async getRequiredMargin(params: RequiredMarginParams): Promise<string | null> {
     // Sprint 32 Gate 2 contract: null whenever the margin cannot be safely
     // computed — the Risk Engine then fails closed.
