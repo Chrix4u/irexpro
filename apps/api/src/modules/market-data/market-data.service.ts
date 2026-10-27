@@ -14,6 +14,7 @@ import { InternalOhlcvResponseDto } from './dto/internal-ohlcv-response.dto';
 import { NormalizedOhlcvCandle } from './interfaces/ohlcv-candle.interface';
 import { ProviderQuoteCandleStoreService } from './services/provider-quote-candle-store.service';
 import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
+import { CTRADER_FAMILY_BROKER_IDS } from '../broker/registry/broker-catalog';
 
 /**
  * MarketDataService — Internal OHLCV access for the Python AI engine.
@@ -63,32 +64,76 @@ export class MarketDataService {
       }
 
       let rawCandles: OHLCV[];
-      try {
-        rawCandles = await this.brokerService.getOhlcvForConnection(
-          userId,
+      const ctraderLocalFirst =
+        CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId) && !before;
+
+      if (ctraderLocalFirst) {
+        const local = await this.providerQuoteStore.getCandles(
           brokerConnectionId,
-          instrument,
-          timeframe,
+          instrument.toUpperCase(),
+          timeframe.toUpperCase(),
           limit,
-          before ? new Date(before) : undefined,
         );
-      } catch (providerError) {
-        const canUseLocalProviderSamples = connection.brokerId === 'metatrader5' && !before;
-        const local = canUseLocalProviderSamples
-          ? await this.providerQuoteStore.getCandles(
-              brokerConnectionId,
-              instrument.toUpperCase(),
-              timeframe.toUpperCase(),
-              limit,
-            )
-          : [];
-        if (local.length === 0) throw providerError;
-        rawCandles = local;
-        source = 'provider-sampled-local';
-        this.logger.warn(
-          `Using sampled provider candle fallback connection=${brokerConnectionId} ` +
-            `instrument=${instrument} timeframe=${timeframe} count=${local.length}`,
-        );
+        if (local.length < 20) {
+          throw new Error(
+            `Persisted cTrader broker-native ${timeframe.toUpperCase()} context is too sparse`,
+          );
+        }
+
+        if (timeframe.toUpperCase() === 'M1') {
+          const latest = local.at(-1)!;
+          const latestCloseTime = new Date(new Date(latest.timestamp).getTime() + 60_000);
+          const spreadQuote = await this.providerQuoteStore.getLatestPositiveSpreadQuote(
+            brokerConnectionId,
+            instrument.toUpperCase(),
+            latestCloseTime,
+          );
+          if (!spreadQuote) {
+            throw new Error('Persisted cTrader broker spread evidence is unavailable');
+          }
+          const spread = Number(spreadQuote.spread);
+          if (!Number.isFinite(spread) || spread <= 0) {
+            throw new Error('Persisted cTrader broker spread evidence is invalid');
+          }
+          const priceDigits = 10;
+          const spreadPoints = (spread * 10 ** priceDigits).toFixed(0);
+          rawCandles = local.map((candle, index) =>
+            index === local.length - 1
+              ? { ...candle, spreadPoints, priceDigits }
+              : candle,
+          );
+        } else {
+          rawCandles = local;
+        }
+        source = 'broker';
+      } else {
+        try {
+          rawCandles = await this.brokerService.getOhlcvForConnection(
+            userId,
+            brokerConnectionId,
+            instrument,
+            timeframe,
+            limit,
+            before ? new Date(before) : undefined,
+          );
+        } catch (providerError) {
+          const canUseLocalProviderSamples = connection.brokerId === 'metatrader5' && !before;
+          const local = canUseLocalProviderSamples
+            ? await this.providerQuoteStore.getCandles(
+                brokerConnectionId,
+                instrument.toUpperCase(),
+                timeframe.toUpperCase(),
+                limit,
+              )
+            : [];
+          if (local.length === 0) throw providerError;
+          rawCandles = local;
+          source = 'provider-sampled-local';
+          this.logger.warn(
+            `Using sampled provider candle fallback connection=${brokerConnectionId} ` +
+              `instrument=${instrument} timeframe=${timeframe} count=${local.length}`,
+          );
+        }
       }
 
       const candles = rawCandles.map((c) =>

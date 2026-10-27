@@ -12,7 +12,7 @@ describe('MarketDataService', () => {
   let service: MarketDataService;
   let brokerService: jest.Mocked<Partial<BrokerService>>;
   let auditService: jest.Mocked<Partial<AuditService>>;
-  let providerQuoteStore: { getCandles: jest.Mock };
+  let providerQuoteStore: { getCandles: jest.Mock; getLatestPositiveSpreadQuote: jest.Mock };
   let livePaperMarketData: { isLiveConnection: jest.Mock };
 
   const query: InternalOhlcvQueryDto = {
@@ -59,6 +59,7 @@ describe('MarketDataService', () => {
     };
     providerQuoteStore = {
       getCandles: jest.fn().mockResolvedValue([]),
+      getLatestPositiveSpreadQuote: jest.fn().mockResolvedValue(null),
     };
     livePaperMarketData = {
       isLiveConnection: jest.fn().mockReturnValue(false),
@@ -181,6 +182,66 @@ describe('MarketDataService', () => {
         resourceId: query.brokerConnectionId,
       }),
     );
+  });
+
+  it('serves persisted cTrader broker-native candles before any on-demand broker history request', async () => {
+    (brokerService.findConnectionById as jest.Mock).mockResolvedValueOnce({
+      id: query.brokerConnectionId,
+      brokerId: 'ctrader',
+    });
+    const localM1 = Array.from({ length: 25 }, (_, index) => ({
+      timestamp: new Date(Date.UTC(2026, 9, 27, 20, index, 0)),
+      open: '1.10000',
+      high: '1.10100',
+      low: '1.09900',
+      close: '1.10050',
+      volume: '20',
+    }));
+    providerQuoteStore.getCandles.mockResolvedValueOnce(localM1);
+    providerQuoteStore.getLatestPositiveSpreadQuote.mockResolvedValueOnce({
+      instrument: 'EURUSD',
+      bid: '1.10045',
+      ask: '1.10055',
+      spread: '0.00010',
+      timestamp: new Date('2026-10-27T20:25:00.000Z'),
+      positiveSampleCount: 20,
+      latestPositiveSampleAt: new Date('2026-10-27T20:24:55.000Z'),
+    });
+
+    const result = await service.getInternalOhlcv({
+      ...query,
+      timeframe: 'M1',
+      limit: 100,
+    });
+
+    expect(brokerService.getOhlcvForConnection).not.toHaveBeenCalled();
+    expect(providerQuoteStore.getCandles).toHaveBeenCalledWith(
+      query.brokerConnectionId,
+      'EURUSD',
+      'M1',
+      100,
+    );
+    expect(result.source).toBe('broker');
+    expect(result.count).toBe(25);
+    expect(result.candles.at(-1)).toMatchObject({
+      source: 'broker',
+      spreadPoints: '1000000',
+      priceDigits: 10,
+    });
+  });
+
+  it('fails closed for cTrader AI OHLCV when the persisted broker-native store is too sparse instead of bursting broker history', async () => {
+    (brokerService.findConnectionById as jest.Mock).mockResolvedValueOnce({
+      id: query.brokerConnectionId,
+      brokerId: 'ctrader',
+    });
+    providerQuoteStore.getCandles.mockResolvedValueOnce(mockCandles.slice(0, 1));
+
+    await expect(
+      service.getInternalOhlcv({ ...query, timeframe: 'M15', limit: 100 }),
+    ).rejects.toThrow(ServiceUnavailableException);
+
+    expect(brokerService.getOhlcvForConnection).not.toHaveBeenCalled();
   });
 
   it('falls back to sampled provider candles when MetaApi historical data is unavailable', async () => {
