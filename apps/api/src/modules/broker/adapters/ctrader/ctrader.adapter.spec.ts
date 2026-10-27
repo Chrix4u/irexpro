@@ -1163,6 +1163,43 @@ describe('CTraderAdapter', () => {
       });
     });
 
+    it('confirms an ORDER_ACCEPTED close through reconciliation before reporting FILLED', async () => {
+      let positions = [SAMPLE_POSITION];
+      server.on(CTRADER_PAYLOAD_TYPE.RECONCILE_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.RECONCILE_RES,
+          { ctidTraderAccountId: payload.ctidTraderAccountId, position: positions, order: [] },
+          envelope,
+        ),
+      );
+      server.on(CTRADER_PAYLOAD_TYPE.CLOSE_POSITION_REQ, (payload, envelope) => {
+        positions = [];
+        return echo(
+          CTRADER_PAYLOAD_TYPE.EXECUTION_EVENT,
+          {
+            ctidTraderAccountId: payload.ctidTraderAccountId,
+            executionType: 2, // ORDER_ACCEPTED: successful close acknowledgement
+            position: { positionId: payload.positionId },
+          },
+          envelope,
+        );
+      });
+      await connectDemo();
+
+      const result = await adapter.closeOrder('7654321');
+
+      expect(result).toMatchObject({
+        success: true,
+        externalOrderId: '7654321',
+        status: 'FILLED',
+      });
+      expect(
+        server.requests.filter(
+          (request) => request.payloadType === CTRADER_PAYLOAD_TYPE.RECONCILE_REQ,
+        ),
+      ).toHaveLength(2);
+    });
+
     it('converts partial close lot sizes into cents', async () => {
       scriptReconcile([SAMPLE_POSITION], []);
       await connectDemo();

@@ -1699,6 +1699,44 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         rawResponse: response.payload,
       };
     }
+    if (event.executionType === CtraderExecutionType.ORDER_ACCEPTED) {
+      const originalVolume = position.tradeData.volume;
+      const expectedRemainingVolume = Math.max(0, originalVolume - volumeCents);
+      const deadline = Date.now() + 5_000;
+      let remainingVolume = originalVolume;
+
+      while (Date.now() <= deadline) {
+        const positions = await this.fetchReconcilePositions(session);
+        const current = positions.find((candidate) => candidate.positionId === position.positionId);
+        remainingVolume = current?.tradeData.volume ?? 0;
+        if (!current || remainingVolume <= expectedRemainingVolume) {
+          return {
+            success: true,
+            externalOrderId: String(position.positionId),
+            filledQuantity:
+              symbolLotSizeCents !== undefined
+                ? volumeCentsToLotString(volumeCents, symbolLotSizeCents)
+                : undefined,
+            filledAt: new Date(),
+            status: 'FILLED',
+            brokerMessage: 'Close accepted and confirmed by provider reconciliation',
+            rawResponse: response.payload,
+          };
+        }
+        if (Date.now() >= deadline) break;
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+
+      return {
+        success: false,
+        externalOrderId: String(position.positionId),
+        status: 'FAILED',
+        brokerMessage:
+          `Close was accepted but provider reconciliation did not confirm the requested volume reduction ` +
+          `within 5000ms (remainingVolume=${remainingVolume}, expected<=${expectedRemainingVolume})`,
+        rawResponse: response.payload,
+      };
+    }
     const filled =
       event.executionType === CtraderExecutionType.ORDER_FILLED ||
       event.executionType === CtraderExecutionType.ORDER_PARTIAL_FILL;
