@@ -123,7 +123,7 @@ export class ProviderQuoteCandleStoreService {
         high: row.high.toFixed(10),
         low: row.low.toFixed(10),
         close: row.close.toFixed(10),
-        sampleCount: Math.max(1, Math.floor(Number.isFinite(row.volume) ? row.volume : 0)),
+        sample_count: Math.max(1, Math.floor(Number.isFinite(row.volume) ? row.volume : 0)),
       }));
     if (normalized.length === 0) return;
 
