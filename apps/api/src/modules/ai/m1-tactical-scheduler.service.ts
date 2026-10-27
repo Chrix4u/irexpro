@@ -36,6 +36,16 @@ import {
   type M1TacticalRouteDecision,
 } from './m1-tactical-route';
 import { evaluateM1TacticalGovernance } from './m1-tactical-governance';
+import { evaluateEnsembleGovernance, type EnsembleGovernanceDecision } from './ensemble-governance';
+import { scorePlanBMultimodelShadow, type PlanBEnsembleScore, type PlanBPortfolioPosition } from './plan-b-multimodel-shadow';
+import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
+import type { HighConvictionOverlay } from './high-conviction-overlay';
+import {
+  evaluateMultimodelDemoAuthority,
+  m1CandidateToPlanBInput,
+  MULTIMODEL_DEMO_ENGINE_CODE,
+  type MultimodelDemoAuthorityDecision,
+} from './multimodel-demo-authority';
 import { evaluateM1TacticalExpectancy } from './m1-tactical-expectancy';
 import {
   evaluateM1RoutePairSideReliability,
@@ -81,6 +91,14 @@ type M1ScoutPairSideReliabilityDecision = (
   bootstrapSampleCount?: number;
   evidenceConnectionIds?: string[];
 };
+
+interface MultimodelDemoEvaluation {
+  ensemble: PlanBEnsembleScore;
+  governance: EnsembleGovernanceDecision;
+  trainedExpert: HighConvictionOverlay;
+  authority: MultimodelDemoAuthorityDecision;
+  portfolioSnapshotAvailable: boolean;
+}
 
 export type M1TacticalExecutionPhase =
   | 'SHADOW'
@@ -288,6 +306,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     @Optional() private readonly executionService?: ExecutionService,
     @Optional() private readonly tradeIntentService?: TradeIntentService,
     @Optional() private readonly allocationService?: AllocationService,
+    @Optional() private readonly highConvictionBrokerExpert?: HighConvictionBrokerExpertService,
   ) {
     this.rolloutPolicy = rolloutPolicy ?? M1_TACTICAL_ROLLOUT_POLICY_V1;
   }
@@ -591,6 +610,108 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     }
   }
 
+  private async evaluateDemoMultimodel(
+    userId: string,
+    brokerConnectionId: string,
+    candidate: M1TacticalCandidate,
+    features: NonNullable<ReturnType<typeof buildM1TacticalFeatures>>,
+    eventRisk: 'CLEAR' | 'HIGH_IMPACT_BLOCK' | 'UNVERIFIED',
+    spreadEvidence: Parameters<typeof evaluateM1TacticalGovernance>[0]['executionSpreadEvidence'],
+    decisionTime: Date,
+    paperSimulationSpreadPrice?: number,
+  ): Promise<MultimodelDemoEvaluation> {
+    const planBInput = m1CandidateToPlanBInput(candidate, features, decisionTime);
+    const portfolioPositions: PlanBPortfolioPosition[] = [];
+    let portfolioSnapshotAvailable = false;
+    try {
+      const snapshot = await this.evidence.loadOpenPaperRiskPositions({
+        userId,
+        brokerConnectionId,
+      });
+      portfolioPositions.push(
+        ...snapshot.map((position) => ({
+          instrument: position.instrument,
+          direction: position.direction,
+          lotSize: position.lotSize,
+        })),
+      );
+      portfolioSnapshotAvailable = true;
+    } catch (error) {
+      this.logger.warn(
+        `Multi-model portfolio snapshot unavailable connection=${brokerConnectionId}: ${(error as Error).message}`,
+      );
+    }
+
+    const ensemble = scorePlanBMultimodelShadow(planBInput, portfolioPositions);
+    const governance = evaluateEnsembleGovernance({
+      ensemble,
+      instrument: candidate.instrument,
+      direction: candidate.direction,
+      entryPrice: candidate.entry,
+      stopLoss: candidate.stopLoss,
+      takeProfit: candidate.takeProfit,
+      confidence: candidate.confidence,
+      extensionAtr: planBInput.extensionAtr,
+      volatilityScore: planBInput.volatilityScore,
+      emaSeparation: planBInput.emaSeparation,
+      mtfStrength: planBInput.mtfStrength,
+      rsi14: planBInput.rsi14,
+      shortHorizonMomentumAtr: planBInput.shortHorizonMomentumAtr,
+      eventRisk,
+      evaluatedAt: decisionTime,
+      executionSpreadEvidence: spreadEvidence ?? null,
+      paperSimulationSpreadPrice,
+    });
+
+    const trainedExpert: HighConvictionOverlay = this.highConvictionBrokerExpert
+      ? await this.highConvictionBrokerExpert.evaluate({
+          userId,
+          brokerConnectionId,
+          instrument: candidate.instrument,
+          candidateDirection: candidate.direction,
+          candidateCloseTime: decisionTime,
+        })
+      : {
+          state: 'UNAVAILABLE',
+          reason: 'TRAINED_EXPERT_SERVICE_UNAVAILABLE',
+          decisionTime: null,
+          freshnessSeconds: null,
+          allBrokerNative: false,
+          direction: null,
+          admitted: null,
+          ensembleConfidence: null,
+          meanOpportunityProbability: null,
+          longVotes: null,
+          shortVotes: null,
+          regime: null,
+          modifiesExecution: false,
+        };
+
+    const baseAuthority = evaluateMultimodelDemoAuthority({
+      ensemble,
+      governance,
+      trainedExpert,
+      candidateDirection: candidate.direction,
+      m1TimingRoute: classifyM1TacticalRoute(
+        candidate,
+        buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1).find(
+          (item) => item.direction !== candidate.direction,
+        )!,
+        features,
+        M1_TACTICAL_POLICY_V1,
+      ).route,
+    });
+    const portfolioBlocker = portfolioSnapshotAvailable
+      ? []
+      : ['MULTIMODEL_PORTFOLIO_SNAPSHOT_UNAVAILABLE'];
+    const authority: MultimodelDemoAuthorityDecision = {
+      ...baseAuthority,
+      executable: baseAuthority.executable && portfolioSnapshotAvailable,
+      blockers: unique([...baseAuthority.blockers, ...portfolioBlocker]),
+    };
+    return { ensemble, governance, trainedExpert, authority, portfolioSnapshotAvailable };
+  }
+
   private async persistCandidate(
     userId: string,
     brokerConnectionId: string,
@@ -640,6 +761,20 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       routeDecision,
       decisionTime,
     );
+    const professionalDemoPhase =
+      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
+    const multimodelDemo = professionalDemoPhase
+      ? await this.evaluateDemoMultimodel(
+          userId,
+          brokerConnectionId,
+          candidate,
+          features,
+          eventRisk,
+          spreadEvidence,
+          decisionTime,
+          paperSimulationSpreadPrice,
+        )
+      : null;
 
     const shadowOnly = this.rolloutPolicy.phase === 'SHADOW';
     const routeExecutable = m1RouteExecutableInPhase(this.rolloutPolicy.phase, routeDecision.route);
@@ -724,7 +859,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? shadowPairSideReliability?.eligible === true &&
           (standardGovernanceExecutable || localImpulseDriftOnlyRescue)
         : standardGovernanceExecutable;
-    const preliminaryCanExecute = routeExecutable && routePayoffEligible && governanceExecutable;
+    const preliminaryCanExecute = professionalDemoPhase
+      ? multimodelDemo?.authority.executable === true
+      : routeExecutable && routePayoffEligible && governanceExecutable;
     const fastStopRegimeBrake = preliminaryCanExecute
       ? await this.evidence.loadFastStopRegimeBrake({
           userId,
@@ -737,7 +874,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const canExecute = preliminaryCanExecute && fastStopRegimeBrake?.active !== true;
     const effectiveGovernanceBlockers =
       microDriftOnlyRescue || localImpulseDriftOnlyRescue ? [] : governance.blockers;
-    const blockers = unique([
+    const researchBlockers = unique([
       ...effectiveGovernanceBlockers,
       ...(earlyTransitionMicro && shadowPairSideReliability?.eligible !== true
         ? [`M1_SHADOW_RELIABILITY_${shadowPairSideReliability?.reason ?? 'UNAVAILABLE'}`]
@@ -749,12 +886,20 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? [`M1_TIERED_SCOUT_RELIABILITY_${shadowPairSideReliability?.reason ?? 'UNAVAILABLE'}`]
         : []),
       ...(routeExecutable && !routePayoffEligible ? ['M1_ROUTE_NET_EXPECTED_R_FLOOR'] : []),
-      ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
       ...(shadowOnly ? ['M1_PHASE_SHADOW'] : []),
       ...(!shadowOnly && !routeExecutable && routeDecision.route !== 'ABSTAIN'
         ? ['M1_PHASE_ROUTE_SHADOW']
         : []),
     ]);
+    const blockers = professionalDemoPhase
+      ? unique([
+          ...(multimodelDemo?.authority.blockers ?? ['MULTIMODEL_AUTHORITY_UNAVAILABLE']),
+          ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
+        ])
+      : unique([
+          ...researchBlockers,
+          ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
+        ]);
 
     const decision = await this.evidence.recordDecision({
       userId,
@@ -790,6 +935,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         rolloutPhase: this.rolloutPolicy.phase,
         routeNetExpectedRFloor,
         fastStopRegimeBrake: fastStopRegimeBrake ? { ...fastStopRegimeBrake } : null,
+        primaryEngineCode: professionalDemoPhase ? MULTIMODEL_DEMO_ENGINE_CODE : 'irexpro-m1-tactical',
+        m1TacticalRole: professionalDemoPhase ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE',
+        multimodelEnsemble: multimodelDemo?.ensemble ?? null,
+        multimodelGovernance: multimodelDemo?.governance ?? null,
+        multimodelTrainedExpert: multimodelDemo?.trainedExpert ?? null,
+        multimodelAuthority: multimodelDemo?.authority ?? null,
+        multimodelPortfolioSnapshotAvailable: multimodelDemo?.portfolioSnapshotAvailable ?? null,
         shadowOutcomeEligible,
       },
       blockers,
@@ -814,6 +966,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         evidenceQualifiedScout,
         scoutReliabilityTier,
         executionVolumeCap,
+        multimodelDemo,
       );
     }
   }
@@ -945,6 +1098,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     evidenceQualifiedScout: boolean,
     scoutReliabilityTier: 'NONE' | 'MICRO' | 'PROVISIONAL' | 'MATURE',
     executionVolumeCap: number,
+    multimodelDemo: MultimodelDemoEvaluation | null = null,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -1028,18 +1182,51 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         brokerConnectionId,
         instrument: candidate.instrument,
         direction: candidate.direction,
-        confidenceScore: candidate.confidence,
+        confidenceScore:
+          professionalDemoPhase && multimodelDemo
+            ? multimodelDemo.ensemble.ensembleScore
+            : candidate.confidence,
         suggestedEntryPrice: candidate.entry,
         suggestedStopLoss: candidate.stopLoss,
         suggestedTakeProfit: candidate.takeProfit,
         suggestedVolume: finalExecutionVolumeCap,
         timeframe: 'M1',
-        strategyCode: 'external-irexpro-m1-tactical',
-        marketRegime: m1RiskMarketRegime(routeDecision.route),
+        strategyCode: professionalDemoPhase
+          ? 'external-irexpro-multimodel-ensemble'
+          : 'external-irexpro-m1-tactical',
+        marketRegime: professionalDemoPhase && multimodelDemo
+          ? multimodelDemo.ensemble.strategyRoute === 'TREND_CONTINUATION'
+            ? 'TREND_HEALTHY'
+            : multimodelDemo.ensemble.strategyRoute === 'CONFIRMED_REVERSAL'
+              ? 'REVERSAL'
+              : 'TRANSITION'
+          : m1RiskMarketRegime(routeDecision.route),
         volatilityScore: features.volatilityScore,
         generatedAt: new Date(decisionTime),
-        modelVersion: `external-provider/irexpro-m1-tactical/${candidate.policyVersion}`,
+        modelVersion: professionalDemoPhase
+          ? `external-provider/${MULTIMODEL_DEMO_ENGINE_CODE}/demo-v1`
+          : `external-provider/irexpro-m1-tactical/${candidate.policyVersion}`,
         metadata: {
+          primary_engine_code: professionalDemoPhase
+            ? MULTIMODEL_DEMO_ENGINE_CODE
+            : 'irexpro-m1-tactical',
+          m1_tactical_role: professionalDemoPhase ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE',
+          multimodel_plan_b_score: multimodelDemo?.ensemble.ensembleScore ?? null,
+          multimodel_plan_b_route: multimodelDemo?.ensemble.strategyRoute ?? null,
+          multimodel_plan_b_expected_r: multimodelDemo?.ensemble.expectedR ?? null,
+          multimodel_plan_b_paper_admitted: multimodelDemo?.ensemble.paperAdmitted ?? null,
+          multimodel_governance_net_expected_r: multimodelDemo?.governance.netExpectedR ?? null,
+          multimodel_trained_expert_state: multimodelDemo?.trainedExpert.state ?? null,
+          multimodel_trained_expert_direction: multimodelDemo?.trainedExpert.direction ?? null,
+          multimodel_trained_expert_confidence:
+            multimodelDemo?.trainedExpert.ensembleConfidence ?? null,
+          multimodel_trained_expert_opportunity_probability:
+            multimodelDemo?.trainedExpert.meanOpportunityProbability ?? null,
+          multimodel_trained_expert_long_votes: multimodelDemo?.trainedExpert.longVotes ?? null,
+          multimodel_trained_expert_short_votes: multimodelDemo?.trainedExpert.shortVotes ?? null,
+          multimodel_execution_authority: professionalDemoPhase
+            ? 'DEMO_FULL_AUTO_PROMOTED'
+            : null,
           external_provider_paper_only: true,
           production_eligible: false,
           position_sizing_tier:
@@ -1109,10 +1296,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             this.rolloutPolicy.routeNetExpectedRFloors[
               routeDecision.route as Exclude<M1TacticalRoute, 'ABSTAIN'>
             ],
-          m1_execution_authority:
-            this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
-              ? 'DEMO_FULL_AUTO_PROMOTED'
-              : 'PAPER_ONLY_RESEARCH',
+          m1_execution_authority: professionalDemoPhase
+            ? 'TIMING_SPECIALIST_NO_PRIMARY_AUTHORITY'
+            : 'PAPER_ONLY_RESEARCH',
         },
       });
       if (this.tradeIntentService) {

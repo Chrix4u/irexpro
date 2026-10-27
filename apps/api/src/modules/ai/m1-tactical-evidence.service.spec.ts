@@ -440,8 +440,8 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
         brokerConnectionId: input().brokerConnectionId,
       }),
     ).resolves.toEqual([
-      { instrument: 'EURUSD', direction: 'SELL', riskAtStop: expect.closeTo(5, 6) },
-      { instrument: 'USDJPY', direction: 'BUY', riskAtStop: expect.closeTo(3.184713, 5) },
+      { instrument: 'EURUSD', direction: 'SELL', lotSize: 0.1, riskAtStop: expect.closeTo(5, 6) },
+      { instrument: 'USDJPY', direction: 'BUY', lotSize: 0.1, riskAtStop: expect.closeTo(3.184713, 5) },
     ]);
     const [sql, params] = query.mock.calls[0]!;
     const normalized = String(sql).replace(/\s+/g, ' ');

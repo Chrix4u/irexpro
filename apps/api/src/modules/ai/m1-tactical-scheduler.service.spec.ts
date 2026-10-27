@@ -6,6 +6,7 @@ import type { AiSignalService } from './ai-signal.service';
 import type { ExecutionService } from '../execution/execution.service';
 import type { TradeIntentService } from '../execution/services/trade-intent.service';
 import type { AllocationService } from '../execution/services/allocation.service';
+import type { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { M1_TACTICAL_POLICY_V1, buildM1TacticalCandidates } from './m1-tactical-candidate';
 import {
@@ -650,6 +651,8 @@ function phase2Harness(
       cooldownMinutes: number;
       maxStopDurationMinutes: number;
     };
+    trainedExpertState?: 'CONFIRM' | 'CONFLICT' | 'ABSTAIN' | 'STALE' | 'UNAVAILABLE';
+    trainedExpertDirection?: 'BUY' | 'SELL';
     existingDecision?: {
       signalId?: string | null;
       tradeIntentId?: string | null;
@@ -772,6 +775,28 @@ function phase2Harness(
       allocatedCapital: '1000',
     }),
   } as unknown as AllocationService;
+  const trainedExpertEvaluate = jest.fn().mockImplementation(async (input: any) => {
+    const state = options.trainedExpertState ?? 'CONFIRM';
+    const direction = options.trainedExpertDirection ?? input.candidateDirection;
+    return {
+      state,
+      reason: state === 'UNAVAILABLE' ? 'BROKER_MARKET_DATA_UNAVAILABLE' : null,
+      decisionTime: input.candidateCloseTime.toISOString(),
+      freshnessSeconds: 0,
+      allBrokerNative: state !== 'STALE',
+      direction: state === 'ABSTAIN' || state === 'UNAVAILABLE' ? null : direction,
+      admitted: state === 'CONFIRM' || state === 'CONFLICT',
+      ensembleConfidence: 0.76,
+      meanOpportunityProbability: 0.63,
+      longVotes: direction === 'BUY' ? 3 : 0,
+      shortVotes: direction === 'SELL' ? 3 : 0,
+      regime: 'calm',
+      modifiesExecution: false,
+    };
+  });
+  const highConvictionExpert = {
+    evaluate: trainedExpertEvaluate,
+  } as unknown as HighConvictionBrokerExpertService;
   const service = new M1TacticalSchedulerService(
     config,
     marketData,
@@ -783,6 +808,7 @@ function phase2Harness(
     options.tradeIntentId === undefined ? undefined : tradeIntent,
     allocation,
   );
+  (service as any).highConvictionBrokerExpert = highConvictionExpert;
   return {
     service,
     recordDecision,
@@ -802,6 +828,7 @@ function phase2Harness(
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
     findBySignal,
+    trainedExpertEvaluate,
     loadSnapshot: (marketData as any).loadSnapshot as jest.Mock,
   };
 }
@@ -1142,7 +1169,9 @@ function reversalFeatures(): M1TacticalFeatureSnapshot {
 function transitionFeatures(): M1TacticalFeatureSnapshot {
   return {
     ...cleanContinuationFeatures(),
-    emaSeparationAtr: 0.2,
+    // 0.28 remains an M1 early-transition structure while mapping to the
+    // frozen Plan-B transition minimum (0.14 after the historical /2 scale).
+    emaSeparationAtr: 0.28,
     emaSlopeAtr: 0.32,
     momentum1Atr: 0.42,
     momentum3Atr: 0.5,
@@ -1943,5 +1972,122 @@ describe('M1 professional v8 DEMO promotion', () => {
         position_sizing_tier: expect.stringMatching(/^(BASE|STRONG|VERY_STRONG|ELITE)$/),
       }),
     );
+  });
+});
+
+
+describe('M1 V8 multi-model DEMO authority', () => {
+  const fullAutoSession = {
+    id: 'session-demo-1',
+    executionMode: ExecutionMode.FULL_AUTO,
+    brokerConnectionId: 'demo-conn-2',
+  };
+
+  it('lets a Plan-B + trained-expert confirmed continuation execute even though the M1 rollout route was historically shadow-only', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      trainedExpertState: 'CONFIRM',
+    });
+
+    const route = await driveFeatures(h, cleanContinuationFeatures(), {
+      brokerConnectionId: 'demo-conn-2',
+    });
+
+    expect(route.route).toBe('M1_TREND_CONTINUATION');
+    expect(h.trainedExpertEvaluate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        brokerConnectionId: 'demo-conn-2',
+        instrument: 'EURUSD',
+        candidateDirection: 'BUY',
+      }),
+    );
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        brokerConnectionId: 'demo-conn-2',
+        strategyCode: 'external-irexpro-multimodel-ensemble',
+        modelVersion: expect.stringContaining('irexpro-multimodel-ensemble-v1'),
+        metadata: expect.objectContaining({
+          primary_engine_code: 'irexpro-multimodel-ensemble-v1',
+          m1_tactical_role: 'TIMING_SPECIALIST',
+          multimodel_trained_expert_state: 'CONFIRM',
+          multimodel_trained_expert_long_votes: 3,
+          multimodel_trained_expert_short_votes: 0,
+        }),
+      }),
+    );
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(recorded?.blockers ?? []).not.toContain('M1_PHASE_ROUTE_SHADOW');
+    expect(recorded?.governance).toEqual(
+      expect.objectContaining({
+        primaryEngineCode: 'irexpro-multimodel-ensemble-v1',
+        m1TacticalRole: 'TIMING_SPECIALIST',
+        multimodelAuthority: expect.objectContaining({ executable: true }),
+      }),
+    );
+  });
+
+  it.each(['CONFLICT', 'UNAVAILABLE'] as const)(
+    'fails closed when the trained expert is %s',
+    async (trainedExpertState) => {
+      const h = phase2Harness({
+        rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+        session: fullAutoSession,
+        trainedExpertState,
+        trainedExpertDirection: trainedExpertState === 'CONFLICT' ? 'SELL' : 'BUY',
+      });
+
+      await driveFeatures(h, cleanContinuationFeatures(), {
+        brokerConnectionId: 'demo-conn-2',
+      });
+
+      expect(h.trainedExpertEvaluate).toHaveBeenCalled();
+      expect(h.receiveSignal).not.toHaveBeenCalled();
+      const recorded = h.recordDecision.mock.calls.find(
+        ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
+      )?.[0];
+      expect(recorded?.blockers).toContain(
+        `MULTIMODEL_TRAINED_EXPERT_${trainedExpertState}`,
+      );
+    },
+  );
+
+  it('still requires the exact active FULL_AUTO broker connection at final dispatch', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: {
+        ...fullAutoSession,
+        brokerConnectionId: 'different-demo-connection',
+      },
+      trainedExpertState: 'CONFIRM',
+    });
+
+    await driveFeatures(h, cleanContinuationFeatures(), {
+      brokerConnectionId: 'demo-conn-2',
+    });
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.markOutcomeState).toHaveBeenCalledWith(
+      expect.any(String),
+      'SESSION_INACTIVE',
+      expect.any(Date),
+      expect.stringContaining('exact active FULL_AUTO DEMO session'),
+    );
+  });
+
+  it('leaves historical PAPER route gating independent of the trained expert', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V2,
+      trainedExpertState: 'CONFLICT',
+    });
+
+    await driveCleanContinuation(h);
+
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.trainedExpertEvaluate).not.toHaveBeenCalled();
   });
 });

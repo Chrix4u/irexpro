@@ -154,6 +154,7 @@ export interface M1OpenPaperRiskPositionQuery {
 export interface M1OpenPaperRiskPositionSnapshot {
   instrument: string;
   direction: 'BUY' | 'SELL';
+  lotSize: number;
   riskAtStop: number | null;
 }
 
@@ -624,7 +625,7 @@ export class M1TacticalEvidenceService {
       const riskAtStop = ['BUY', 'SELL'].includes(direction)
         ? m1UsdRiskAtStop({ instrument, lotSize, entryPrice, stopLoss })
         : null;
-      return { instrument, direction, riskAtStop };
+      return { instrument, direction, lotSize, riskAtStop };
     });
   }
 
