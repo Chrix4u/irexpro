@@ -55,6 +55,9 @@ class RedeemDirectMt5PairingDto {
 
   @IsBoolean()
   tradeAllowed!: boolean;
+
+  @IsIn(['DEMO'])
+  accountType!: 'DEMO';
 }
 
 class DirectMt5ConnectorIdentityDto {
@@ -70,6 +73,8 @@ class DirectMt5ConnectorIdentityDto {
 }
 
 class DirectMt5HeartbeatDto extends DirectMt5ConnectorIdentityDto {
+  @IsIn(['DEMO'])
+  accountType!: 'DEMO';
   @IsInt()
   @Min(1)
   sequence!: number;
@@ -137,6 +142,7 @@ export class DirectMt5ConnectorController {
       brokerServer: body.brokerServer,
       currency: body.currency ?? null,
       tradeAllowed: body.tradeAllowed,
+      accountType: body.accountType,
     });
   }
 
@@ -159,6 +165,7 @@ export class DirectMt5ConnectorController {
       brokerServer: body.brokerServer,
       sequence: body.sequence,
       tradeAllowed: body.tradingAllowed && body.terminalConnected,
+      accountType: body.accountType,
     });
   }
 

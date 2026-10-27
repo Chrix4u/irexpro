@@ -2,6 +2,7 @@ import type { ApiClient } from '@irexpro/api-client';
 import type { BrowserAuthTokens } from '@irexpro/api-client/browser-auth';
 import { createApiClient } from '@irexpro/api-client';
 import { createBrowserAuthClient } from '@irexpro/api-client/browser-auth';
+import { setSelectedTraderBrokerId } from '@/lib/trader-broker-context';
 
 /**
  * Shared API client for the web app.
@@ -90,11 +91,29 @@ async function recoverUnauthorized(): Promise<boolean> {
   return Boolean(await refreshBrowserSession());
 }
 
-export const api: ApiClient = createApiClient({
+const apiClient: ApiClient = createApiClient({
   baseUrl,
   includeCredentials: true,
   getAccessToken: () => cachedAccessToken,
   recoverUnauthorized,
 });
 
+// Capital-allocation reads/writes are the trader workspace's explicit broker
+// selection boundary. Mirror that selection into the web data-layer context so
+// execution history stays pinned to the same account even when no trading
+// session is active. The original ApiClient methods remain authoritative for
+// transport and validation.
+const getCapitalAllocation = apiClient.getCapitalAllocation.bind(apiClient);
+apiClient.getCapitalAllocation = async (brokerConnectionId: string) => {
+  setSelectedTraderBrokerId(brokerConnectionId);
+  return getCapitalAllocation(brokerConnectionId);
+};
+
+const setCapitalAllocation = apiClient.setCapitalAllocation.bind(apiClient);
+apiClient.setCapitalAllocation = async (input) => {
+  setSelectedTraderBrokerId(input.brokerConnectionId);
+  return setCapitalAllocation(input);
+};
+
+export const api: ApiClient = apiClient;
 export const browserAuth = createBrowserAuthClient(api);

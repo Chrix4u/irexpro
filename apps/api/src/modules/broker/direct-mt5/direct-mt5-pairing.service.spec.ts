@@ -11,7 +11,7 @@ describe('DirectMt5PairingService', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([
-        { id: 'connection-1', broker_id: 'metatrader5', account_type: 'DEMO' },
+        { id: 'connection-1', broker_id: 'direct-mt5', account_type: 'DEMO' },
       ])
       .mockResolvedValueOnce([]);
     const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
@@ -42,7 +42,7 @@ describe('DirectMt5PairingService', () => {
       config,
     );
     await expect(wrongProvider.createPairing('user-1', 'connection-1')).rejects.toThrow(
-      'MetaTrader 5',
+      'Direct MT5 provider',
     );
   });
 
@@ -50,7 +50,7 @@ describe('DirectMt5PairingService', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([
-        { id: 'connection-live', broker_id: 'metatrader5', account_type: 'LIVE' },
+        { id: 'connection-live', broker_id: 'direct-mt5', account_type: 'LIVE' },
       ]);
     const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
 
@@ -73,6 +73,7 @@ describe('DirectMt5PairingService', () => {
       brokerServer: 'Broker-Demo',
       currency: 'USD',
       tradeAllowed: true,
+      accountType: 'DEMO',
     });
 
     expect(result.connectorToken.length).toBeGreaterThan(40);
@@ -104,6 +105,7 @@ describe('DirectMt5PairingService', () => {
         brokerServer: 'Broker-Demo',
         currency: 'USD',
         tradeAllowed: true,
+      accountType: 'DEMO',
       }),
     ).rejects.toThrow('account');
 
@@ -123,6 +125,7 @@ describe('DirectMt5PairingService', () => {
         brokerServer: 'Demo',
         currency: 'USD',
         tradeAllowed: true,
+      accountType: 'DEMO',
       }),
     ).rejects.toThrow('invalid or expired');
   });
@@ -190,6 +193,7 @@ describe('DirectMt5PairingService', () => {
         brokerServer: 'Broker-Demo',
         sequence: 8,
         tradeAllowed: true,
+      accountType: 'DEMO',
       }),
     ).resolves.toMatchObject({ lastSequence: 8 });
   });
@@ -212,6 +216,7 @@ describe('DirectMt5PairingService', () => {
         brokerServer: 'Other-Server',
         sequence: 8,
         tradeAllowed: true,
+      accountType: 'DEMO',
       }),
     ).rejects.toThrow('identity changed');
     expect(String(query.mock.calls[0]![0])).toContain("state = 'SUSPENDED'");

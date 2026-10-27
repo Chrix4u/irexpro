@@ -1008,6 +1008,32 @@ describe('RiskService', () => {
       }
     });
 
+    it('does not re-cap allocation-aware FULL_AUTO DEMO sizing to the legacy fixed lot ceiling', async () => {
+      sessionRepo.findOne.mockResolvedValue(
+        defaultSession({ executionMode: ExecutionMode.FULL_AUTO }),
+      );
+      sessionResolution.resolveActiveSessionAuthority.mockResolvedValue({
+        sessionId: 'session-1',
+        sessionGeneration: 1,
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'conn-1',
+      });
+      const trade = validTrade({
+        executionMode: ExecutionMode.FULL_AUTO,
+        requestedLotSize: '0.50',
+        stopLoss: '1.08400',
+        allocationAwarePaperSizing: true,
+      });
+
+      const result = await service.validateProposedTrade('user-1', trade);
+
+      expect(result.decision).toBe('APPROVED');
+      if (result.decision === 'APPROVED') {
+        expect(result.validatedOrder.lotSize).toBe('0.50');
+        expect(result.appliedRules).toContain('POSITION_SIZE:ALLOCATION_AWARE_DEMO');
+      }
+    });
+
     it('does not modify lot size when within allowed limit', async () => {
       const result = await service.validateProposedTrade('user-1', validTrade()); // 0.05 < max 0.10
 

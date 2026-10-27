@@ -6,6 +6,7 @@ import type {
   TradeExecutionView,
 } from '@irexpro/types/execution';
 import { api } from '@/lib/api';
+import { getSelectedTraderBrokerId } from '@/lib/trader-broker-context';
 
 export type TraderExecutionDegradedFeed =
   | 'OPEN_POSITIONS'
@@ -178,13 +179,21 @@ export function isTradeExecutionView(value: unknown): value is TradeExecutionVie
 /**
  * Load the first frontend-safe execution read model for the trader terminal.
  * Runtime validation fails closed if the API returns an unexpected or overly
- * broad object shape.
+ * broad object shape. Explicit broker scope wins; otherwise the shared trader
+ * broker context established by terminal/allocation reads is used. This keeps
+ * the existing page call safe even while AI Trading is stopped and no active
+ * session exists.
  */
-export async function loadTraderExecutionSnapshot(): Promise<TraderExecutionSnapshot> {
+export async function loadTraderExecutionSnapshot(
+  brokerConnectionId?: string,
+): Promise<TraderExecutionSnapshot> {
+  const selectedBrokerConnectionId =
+    brokerConnectionId ?? getSelectedTraderBrokerId() ?? undefined;
+
   const [openResult, recentResult, closedResult] = await Promise.allSettled([
-    executionApi.listOpenPositions(),
-    executionApi.listRecentExecutions(100),
-    executionApi.listClosedExecutions(50),
+    executionApi.listOpenPositions(selectedBrokerConnectionId),
+    executionApi.listRecentExecutions(100, selectedBrokerConnectionId),
+    executionApi.listClosedExecutions(50, selectedBrokerConnectionId),
   ]);
 
   const degradedFeeds: TraderExecutionDegradedFeed[] = [];

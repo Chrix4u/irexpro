@@ -103,14 +103,14 @@ export interface ProposedTrade {
   brokerConnectionId?: string;
   /**
    * Internal sizing provenance. True only when PositionSizingService sized an
-   * external-provider PAPER_ONLY signal from the user's explicit allocation.
-   * RiskService honors this only in PAPER_ONLY and still enforces all other
+   * promoted external-provider DEMO signal from the user's explicit allocation.
+   * RiskService honors this only for DEMO broker accounts in PAPER_ONLY, SEMI_AUTO or FULL_AUTO and still enforces all other
    * risk, margin, stop, drawdown and allocation rules.
    */
   allocationAwarePaperSizing?: boolean;
   /**
-   * Model/closed-bar entry reference for allocation-aware PAPER MARKET
-   * geometry. RiskService uses it only in PAPER_ONLY to preserve the model's
+   * Model/closed-bar entry reference for allocation-aware DEMO MARKET
+   * geometry. RiskService uses it only on DEMO broker accounts to preserve the model's
    * SL/TP distances around the fresh executable quote.
    */
   paperMarketReferenceEntryPrice?: string;

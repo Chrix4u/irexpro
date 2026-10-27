@@ -9,6 +9,7 @@ import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
 import { redactSensitive } from '../../../common/utils/redact-sensitive.util';
 import { BrokerMode } from '../interfaces/broker-adapter.interface';
+import { withDemoValidationOrderReconciliation } from './demo-validation-order-reconciliation';
 import {
   DEMO_VALIDATION_STEPS,
   ProviderVerificationStep,
@@ -74,7 +75,9 @@ export class BrokerDemoValidationService {
    *   4. positions snapshot — getOpenPositions must resolve
    *   5. small market order (2 × minLot, 0.01 fallback floor) → verify the
    *      position is open → partial close (minLot) → full close → the closed
-   *      trade must appear in getClosedTrades
+   *      trade must appear in getClosedTrades. Providers that acknowledge a
+   *      MARKET order as PENDING are reconciled for a short bounded window;
+   *      only a provider-proven FILLED state may continue the checklist.
    *   6. pending limit order far from market (10% below the ask — stays
    *      working) → modify its SL/TP → cancel it (where the adapter exposes
    *      cancelOrder) → verify it is gone from listOrders
@@ -139,9 +142,17 @@ export class BrokerDemoValidationService {
     // IS the same instance connectBroker just connected (same
     // BrokerConnection.id → same session; the checklist's injected connect
     // step prevents a second adapter.connect()). #291 / correction round 3.
-    const adapter = this.adapterRegistry.getAdapterForConnection(
-      connection.id,
-      connection.brokerId,
+    //
+    // Some real providers (notably cTrader) acknowledge a market order before
+    // the asynchronous execution event arrives. The DEMO-only wrapper below
+    // reconciles that transient PENDING state via getOrderById. It NEVER turns
+    // PENDING into success: only provider-proven FILLED proceeds; rejection,
+    // cancellation, expiry, unknown state or timeout remain validation FAILs.
+    const adapter = withDemoValidationOrderReconciliation(
+      this.adapterRegistry.getAdapterForConnection(
+        connection.id,
+        connection.brokerId,
+      ),
     );
     const evidence = await runVerificationChecklist(adapter, {
       brokerId: connection.brokerId,

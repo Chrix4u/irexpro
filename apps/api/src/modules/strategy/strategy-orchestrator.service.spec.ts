@@ -552,6 +552,55 @@ describe('StrategyOrchestratorService', () => {
       expect(executionService.executeTrade).not.toHaveBeenCalled();
     });
 
+    it('allows only the server-promoted M1 tactical model on an activated real-provider DEMO FULL_AUTO session and applies professional sizing', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.FULL_AUTO,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        accountType: BrokerMode.DEMO,
+        authorizationStatus: 'ACTIVE',
+        demoValidated: true,
+        liveTradingEnabled: false,
+        logicalAccountKey: 'metatrader5::demo::acct-1',
+      });
+
+      const result = await service.processSignal(
+        validCandidate({
+          confidenceScore: 0.72,
+          timeframe: 'M1',
+          strategyCode: 'external-irexpro-m1-tactical',
+          modelVersion: 'external-provider/irexpro-m1-tactical/m1-tactical-v1',
+          suggestedVolume: 0.5,
+          metadata: {
+            signal_source: 'EXTERNAL_PROVIDER',
+            external_provider_code: 'irexpro-m1-tactical',
+            external_provider_paper_only: true,
+            position_sizing_tier: 'BASE',
+            production_eligible: false,
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(allocationMock.getUserCapitalAllocationState).toHaveBeenCalledWith('user-1', 'conn-1');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedLotUpperBound: '0.5',
+          paperAllocationSizing: expect.objectContaining({
+            executionMode: ExecutionMode.FULL_AUTO,
+            confidenceTier: 'BASE',
+            minimumExecutableLot: '0.2',
+          }),
+        }),
+      );
+      expect(riskService.validateProposedTrade).toHaveBeenCalled();
+      expect(executionService.executeTrade).toHaveBeenCalled();
+    });
+
     it('rejects an external provider signal on a real-provider DEMO connection', async () => {
       (executionService.getActiveSession as jest.Mock).mockResolvedValue({
         ...activeSession(),

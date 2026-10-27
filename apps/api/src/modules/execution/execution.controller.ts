@@ -34,7 +34,9 @@ import {
  *
  * All routes are protected by the global JwtAuthGuard. The controller accepts
  * only the authenticated user's UUID and returns explicit DTOs rather than raw
- * execution entities.
+ * execution entities. Account-facing reads can also be scoped to one broker
+ * connection; the service keeps userId in every query so the broker id never
+ * becomes a cross-tenant lookup primitive.
  */
 @ApiTags('Execution')
 @Controller('execution')
@@ -85,9 +87,16 @@ export class ExecutionController {
 
   @Get('positions/open')
   @ApiOperation({ summary: 'List current open positions for the authenticated user' })
+  @ApiQuery({ name: 'brokerConnectionId', required: false, type: String })
   @ApiResponse({ status: 200, type: TradeExecutionResponseDto, isArray: true })
-  async listOpenPositions(@CurrentUserId() userId: string): Promise<TradeExecutionResponseDto[]> {
-    const trades = await this.executionReadService.listOpenPositions(userId);
+  async listOpenPositions(
+    @CurrentUserId() userId: string,
+    @Query('brokerConnectionId') brokerConnectionId?: string,
+  ): Promise<TradeExecutionResponseDto[]> {
+    const trades = await this.executionReadService.listOpenPositions(
+      userId,
+      brokerConnectionId,
+    );
     const telemetryByPosition = new Map<string, PaperOpenPositionTelemetry>();
     const connectionIds = [...new Set(trades.map((trade) => trade.brokerConnectionId))];
 
@@ -141,24 +150,36 @@ export class ExecutionController {
     summary: 'List recent closed trades with realized P&L for the authenticated user',
   })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 50 })
+  @ApiQuery({ name: 'brokerConnectionId', required: false, type: String })
   @ApiResponse({ status: 200, type: TradeExecutionResponseDto, isArray: true })
   async listClosedExecutions(
     @CurrentUserId() userId: string,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query('brokerConnectionId') brokerConnectionId?: string,
   ): Promise<TradeExecutionResponseDto[]> {
-    const trades = await this.executionReadService.listClosedExecutions(userId, limit);
+    const trades = await this.executionReadService.listClosedExecutions(
+      userId,
+      limit,
+      brokerConnectionId,
+    );
     return trades.map((trade) => toTradeExecutionResponse(trade));
   }
 
   @Get('trades/recent')
   @ApiOperation({ summary: 'List recent execution lifecycle records for the authenticated user' })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 50 })
+  @ApiQuery({ name: 'brokerConnectionId', required: false, type: String })
   @ApiResponse({ status: 200, type: TradeExecutionResponseDto, isArray: true })
   async listRecentExecutions(
     @CurrentUserId() userId: string,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query('brokerConnectionId') brokerConnectionId?: string,
   ): Promise<TradeExecutionResponseDto[]> {
-    const trades = await this.executionReadService.listRecentExecutions(userId, limit);
+    const trades = await this.executionReadService.listRecentExecutions(
+      userId,
+      limit,
+      brokerConnectionId,
+    );
     return trades.map((trade) => toTradeExecutionResponse(trade));
   }
 }

@@ -44,6 +44,7 @@ export interface DirectMt5TerminalIdentity {
   brokerServer: string;
   currency: string | null;
   tradeAllowed: boolean;
+  accountType: 'DEMO';
 }
 
 export interface DirectMt5PairingResult {
@@ -73,6 +74,7 @@ export interface DirectMt5HeartbeatInput {
   brokerServer: string;
   sequence: number;
   tradeAllowed: boolean;
+  accountType: 'DEMO';
 }
 
 @Injectable()
@@ -108,8 +110,8 @@ export class DirectMt5PairingService {
     if (!connection) {
       throw new NotFoundException('Broker connection not found');
     }
-    if (connection.broker_id !== 'metatrader5') {
-      throw new BadRequestException('Direct connector pairing is available only for MetaTrader 5');
+    if (connection.broker_id !== 'direct-mt5') {
+      throw new BadRequestException('Direct connector pairing is available only for the Direct MT5 provider');
     }
     if (connection.account_type !== 'DEMO') {
       throw new BadRequestException(
@@ -206,7 +208,8 @@ export class DirectMt5PairingService {
           AND c.pairing_expires_at > now()
           AND bc.id = c.broker_connection_id
           AND bc.deleted_at IS NULL
-          AND bc.broker_id = 'metatrader5'
+          AND bc.broker_id = 'direct-mt5'
+          AND bc.account_type = 'DEMO'
           AND bc.account_id = $3
         RETURNING c.id, c.broker_connection_id, c.user_id
       `,
@@ -226,6 +229,17 @@ export class DirectMt5PairingService {
         'Pairing code is invalid or expired, or the MT5 account does not match this broker connection',
       );
     }
+    if (identity.accountType !== 'DEMO') {
+      throw new BadRequestException('Direct MT5 is DEMO-only; a REAL terminal account cannot be paired');
+    }
+    await this.dataSource.query(
+      `UPDATE broker.broker_connections
+       SET status = 'CONNECTED', authorization_status = 'CONNECTED', demo_validated = true,
+           live_trading_enabled = false, account_currency = COALESCE($2, account_currency),
+           credential_status = 'VERIFIED', updated_at = now()
+       WHERE id = $1 AND broker_id = 'direct-mt5' AND account_type = 'DEMO'`,
+      [connector.broker_connection_id, identity.currency],
+    );
 
     return {
       connectorId: connector.id,
@@ -279,6 +293,13 @@ export class DirectMt5PairingService {
     binding: DirectMt5ConnectorBinding,
     heartbeat: DirectMt5HeartbeatInput,
   ): Promise<{ lastSequence: number }> {
+    if (heartbeat.accountType !== 'DEMO') {
+      await this.dataSource.query(
+        `UPDATE broker.broker_connections SET status='SUSPENDED', authorization_status='SUSPENDED', live_trading_enabled=false, updated_at=now() WHERE id=$1`,
+        [binding.brokerConnectionId],
+      );
+      throw new ConflictException('Direct MT5 observed a non-DEMO terminal; automation suspended');
+    }
     if (
       heartbeat.accountLogin !== binding.accountLogin ||
       heartbeat.brokerServer !== binding.brokerServer
@@ -323,6 +344,19 @@ export class DirectMt5PairingService {
     if (!row) {
       throw new ConflictException('Heartbeat replay or concurrent connector activity detected');
     }
+    await this.dataSource.query(
+      heartbeat.tradeAllowed
+        ? `UPDATE broker.broker_connections
+           SET status='CONNECTED', demo_validated=true, authorization_status='ACTIVE',
+               live_trading_enabled=false, updated_at=now()
+           WHERE id=$1 AND broker_id='direct-mt5' AND account_type='DEMO'
+             AND authorization_status IN ('CONNECTED','AUTHORIZED','READY','ACTIVE','SUSPENDED')`
+        : `UPDATE broker.broker_connections
+           SET status='SUSPENDED', authorization_status=CASE WHEN authorization_status='ACTIVE' THEN 'SUSPENDED' ELSE authorization_status END,
+               live_trading_enabled=false, updated_at=now()
+           WHERE id=$1 AND broker_id='direct-mt5'`,
+      [binding.brokerConnectionId],
+    );
     return { lastSequence: Number(row.last_sequence) };
   }
 
@@ -451,6 +485,10 @@ export class DirectMt5PairingService {
     if (!row) {
       throw new NotFoundException('Direct MT5 connector not found');
     }
+    await this.dataSource.query(
+      `UPDATE broker.broker_connections SET status='DISCONNECTED', authorization_status='REVOKED', demo_validated=false, live_trading_enabled=false, updated_at=now() WHERE id=$1 AND user_id=$2`,
+      [brokerConnectionId, userId],
+    );
     return { connectorId: row.id, revoked: true };
   }
 

@@ -1,4 +1,10 @@
-import { isTradeExecutionView, summarizeRecentExecutionActivity } from './trader-execution';
+import { api } from './api';
+import { setSelectedTraderBrokerId } from './trader-broker-context';
+import {
+  isTradeExecutionView,
+  loadTraderExecutionSnapshot,
+  summarizeRecentExecutionActivity,
+} from './trader-execution';
 
 const CLOSED_TRADE = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -23,6 +29,9 @@ const CLOSED_TRADE = {
   createdAt: '2026-10-04T18:00:00.000Z',
   updatedAt: '2026-10-04T19:00:00.000Z',
 };
+
+const BROKER_ID = '22222222-2222-4222-8222-222222222222';
+const BROKER_QUERY = encodeURIComponent(BROKER_ID);
 
 describe('trader execution runtime contract', () => {
   it('accepts STRATEGY_CUTOVER history emitted by the execution API', () => {
@@ -53,21 +62,18 @@ describe('trader execution runtime contract', () => {
   });
 });
 
-import { api } from './api';
-import { loadTraderExecutionSnapshot } from './trader-execution';
-
 describe('trader execution refresh resilience', () => {
   afterEach(() => {
+    setSelectedTraderBrokerId(null);
     jest.restoreAllMocks();
   });
 
-  it('keeps recent and closed executions visible when the open-position read fails', async () => {
+  it('uses the shared selected-broker context when the page calls the loader without an explicit broker id', async () => {
+    setSelectedTraderBrokerId(BROKER_ID);
     const request = jest.spyOn(api, 'request').mockImplementation(async (path: string) => {
-      if (path === '/execution/positions/open') {
-        throw new Error('temporary open-position read failure');
-      }
-      if (path === '/execution/trades/recent?limit=100') return [CLOSED_TRADE];
-      if (path === '/execution/trades/closed?limit=50') return [CLOSED_TRADE];
+      if (path === `/execution/positions/open?brokerConnectionId=${BROKER_QUERY}`) return [];
+      if (path === `/execution/trades/recent?limit=100&brokerConnectionId=${BROKER_QUERY}`) return [CLOSED_TRADE];
+      if (path === `/execution/trades/closed?limit=50&brokerConnectionId=${BROKER_QUERY}`) return [CLOSED_TRADE];
       throw new Error(`unexpected path ${path}`);
     });
 
@@ -77,27 +83,62 @@ describe('trader execution refresh resilience', () => {
     expect(snapshot.recentExecutions).toEqual([CLOSED_TRADE]);
     expect(snapshot.closedExecutions).toEqual([CLOSED_TRADE]);
     expect(snapshot.openPositions).toEqual([]);
+    expect(snapshot.degradedFeeds).toEqual([]);
+  });
+
+  it('scopes every execution feed to an explicitly selected broker so another account currency cannot leak into performance', async () => {
+    const request = jest.spyOn(api, 'request').mockImplementation(async (path: string) => {
+      if (path === `/execution/positions/open?brokerConnectionId=${BROKER_QUERY}`) return [];
+      if (path === `/execution/trades/recent?limit=100&brokerConnectionId=${BROKER_QUERY}`) return [CLOSED_TRADE];
+      if (path === `/execution/trades/closed?limit=50&brokerConnectionId=${BROKER_QUERY}`) return [CLOSED_TRADE];
+      throw new Error(`unexpected path ${path}`);
+    });
+
+    const snapshot = await loadTraderExecutionSnapshot(BROKER_ID);
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(snapshot.recentExecutions).toEqual([CLOSED_TRADE]);
+    expect(snapshot.closedExecutions).toEqual([CLOSED_TRADE]);
+    expect(snapshot.openPositions).toEqual([]);
+    expect(snapshot.degradedFeeds).toEqual([]);
+  });
+
+  it('keeps recent and closed executions visible when the broker-scoped open-position read fails', async () => {
+    const request = jest.spyOn(api, 'request').mockImplementation(async (path: string) => {
+      if (path === `/execution/positions/open?brokerConnectionId=${BROKER_QUERY}`) {
+        throw new Error('temporary open-position read failure');
+      }
+      if (path === `/execution/trades/recent?limit=100&brokerConnectionId=${BROKER_QUERY}`) return [CLOSED_TRADE];
+      if (path === `/execution/trades/closed?limit=50&brokerConnectionId=${BROKER_QUERY}`) return [CLOSED_TRADE];
+      throw new Error(`unexpected path ${path}`);
+    });
+
+    const snapshot = await loadTraderExecutionSnapshot(BROKER_ID);
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(snapshot.recentExecutions).toEqual([CLOSED_TRADE]);
+    expect(snapshot.closedExecutions).toEqual([CLOSED_TRADE]);
+    expect(snapshot.openPositions).toEqual([]);
     expect(snapshot.degradedFeeds).toEqual(['OPEN_POSITIONS']);
   });
 
-  it('reconstructs closed executions from the recent feed when the closed-history read fails', async () => {
+  it('reconstructs closed executions from the broker-scoped recent feed when the closed-history read fails', async () => {
     jest.spyOn(api, 'request').mockImplementation(async (path: string) => {
-      if (path === '/execution/positions/open') return [];
-      if (path === '/execution/trades/recent?limit=100') return [CLOSED_TRADE];
-      if (path === '/execution/trades/closed?limit=50') {
+      if (path === `/execution/positions/open?brokerConnectionId=${BROKER_QUERY}`) return [];
+      if (path === `/execution/trades/recent?limit=100&brokerConnectionId=${BROKER_QUERY}`) return [CLOSED_TRADE];
+      if (path === `/execution/trades/closed?limit=50&brokerConnectionId=${BROKER_QUERY}`) {
         throw new Error('temporary closed-history read failure');
       }
       throw new Error(`unexpected path ${path}`);
     });
 
-    const snapshot = await loadTraderExecutionSnapshot();
+    const snapshot = await loadTraderExecutionSnapshot(BROKER_ID);
 
     expect(snapshot.closedExecutions).toEqual([CLOSED_TRADE]);
     expect(snapshot.recentExecutions).toEqual([CLOSED_TRADE]);
     expect(snapshot.degradedFeeds).toEqual(['CLOSED_EXECUTIONS']);
   });
 });
-
 
 describe('recent execution visibility summary', () => {
   it('summarizes the last 24 hours so a flat account is not mistaken for an idle engine', () => {

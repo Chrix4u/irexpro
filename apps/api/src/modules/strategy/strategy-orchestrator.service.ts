@@ -28,6 +28,23 @@ import {
   SnapshotNotFreshError,
 } from '../broker/services/broker-account-snapshot.service';
 import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
+
+
+/**
+ * Server-side DEMO promotion allowlist. Transport metadata can never grant
+ * this authority: only an exact frozen strategy/model/timeframe tuple can
+ * cross from the external evidence feed onto a real-provider DEMO account.
+ * LIVE remains governed by the separate production verification boundary.
+ */
+const PROMOTED_EXTERNAL_DEMO_MODELS = new Set([
+  'external-irexpro-m1-tactical|external-provider/irexpro-m1-tactical/m1-tactical-v1|M1',
+]);
+
+function isServerPromotedExternalDemoModel(candidate: AiSignalCandidate): boolean {
+  return PROMOTED_EXTERNAL_DEMO_MODELS.has(
+    `${candidate.strategyCode ?? ''}|${candidate.modelVersion ?? ''}|${candidate.timeframe ?? ''}`,
+  );
+}
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
 import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
@@ -257,6 +274,7 @@ export class StrategyOrchestratorService {
     const externalProviderPaperOnly =
       candidate.metadata?.signal_source === 'EXTERNAL_PROVIDER' &&
       candidate.metadata?.external_provider_paper_only === true;
+    let externalProviderDemoPromoted = false;
     if (externalProviderPaperOnly) {
       let paperConnection;
       try {
@@ -272,9 +290,19 @@ export class StrategyOrchestratorService {
         candidate.brokerConnectionId === session.brokerConnectionId &&
         paperConnection?.brokerId === 'paper-broker' &&
         paperConnection?.accountType === BrokerMode.DEMO;
-      if (!exactPaperBoundary) {
+      const exactPromotedDemoBoundary =
+        isServerPromotedExternalDemoModel(candidate) &&
+        session.executionMode === ExecutionMode.FULL_AUTO &&
+        candidate.brokerConnectionId === session.brokerConnectionId &&
+        paperConnection?.brokerId !== 'paper-broker' &&
+        paperConnection?.accountType === BrokerMode.DEMO &&
+        paperConnection?.authorizationStatus === 'ACTIVE' &&
+        paperConnection?.demoValidated === true &&
+        paperConnection?.liveTradingEnabled !== true;
+      externalProviderDemoPromoted = Boolean(exactPromotedDemoBoundary);
+      if (!exactPaperBoundary && !exactPromotedDemoBoundary) {
         const reason =
-          'External provider signal rejected: provider is PAPER_ONLY and requires the exact internal paper-broker DEMO session';
+          'External provider signal rejected: requires the exact PAPER_ONLY internal paper-broker DEMO session or a server-promoted, validated real-provider DEMO model/session';
         this.logger.warn(`Signal ${signalId} rejected: ${reason}`);
         await this.recordIgnored(
           candidate,
@@ -518,7 +546,7 @@ export class StrategyOrchestratorService {
           }
         | undefined;
       if (
-        session.executionMode === ExecutionMode.PAPER_ONLY &&
+        (session.executionMode === ExecutionMode.PAPER_ONLY || externalProviderDemoPromoted) &&
         candidate.metadata?.external_provider_paper_only === true
       ) {
         const rawTier = candidate.metadata?.position_sizing_tier;
@@ -527,6 +555,7 @@ export class StrategyOrchestratorService {
           'STRONG',
           'VERY_STRONG',
           'EXCEPTIONAL',
+          'ELITE',
           'RESEARCH',
         ];
         const confidenceTier = allowedTiers.includes(rawTier as PaperAllocationConfidenceTier)
@@ -570,11 +599,13 @@ export class StrategyOrchestratorService {
               : null,
             confidenceTier,
             sessionPeakEquity: session.peakEquity,
-            minimumExecutableLot: m1ProvisionalScoutEligible
-              ? '0.05'
-              : opportunityScoutEligible || m1EvidenceQualifiedScoutEligible
-                ? '0.1'
-                : '0.2',
+            minimumExecutableLot: externalProviderDemoPromoted
+              ? '0.2'
+              : m1ProvisionalScoutEligible
+                ? '0.05'
+                : opportunityScoutEligible || m1EvidenceQualifiedScoutEligible
+                  ? '0.1'
+                  : '0.2',
             ...(executionCandidate.suggestedEntryPrice != null
               ? { marketReferenceEntryPrice: String(executionCandidate.suggestedEntryPrice) }
               : {}),

@@ -25,6 +25,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     accountEquity = '10000.00',
   ) => {
     const brokerService = {
+      findConnectionById: jest.fn().mockResolvedValue({ accountType: 'DEMO' }),
       getBrokerAccountState: jest.fn().mockResolvedValue({
         balance: accountEquity,
         equity: accountEquity,
@@ -327,7 +328,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(cappedSized.inputs.riskAmount).toBe('20');
   });
 
-  it('caps allocation-aware PAPER at the 2.00-lot product maximum even when capital and the caller request more', async () => {
+  it('caps promoted allocation-aware execution at the 4.00-lot product maximum even when capital and the caller request more', async () => {
     const service = makeService({ maxTradeRiskPercent: '3.00' }, '1.08500', '100000.00');
 
     const sized = await service.sizePosition({
@@ -341,24 +342,49 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     });
 
     expect(sized.inputs.lotsByRiskBudget).toBe('25');
-    expect(sized.lots).toBe('2');
+    expect(sized.lots).toBe('4');
   });
 
-  it('keeps legacy lot ceilings outside PAPER_ONLY', async () => {
+  it.each([
+    ['0.50', '2500.00', '0.5'],
+    ['1.00', '5000.00', '1'],
+    ['2.00', '10000.00', '2'],
+    ['3.00', '15000.00', '3'],
+    ['4.00', '20000.00', '4'],
+  ])(
+    'permits %s lots when stop-risk, allocation, broker limits and margin justify it',
+    async (_label, capital, expectedLots) => {
+      const service = makeService({}, '1.08500', capital);
+      const sized = await service.sizePosition({
+        ...params,
+        requestedLotUpperBound: '4.00',
+        paperAllocationSizing: {
+          executionMode: 'PAPER_ONLY',
+          allocatedCapital: capital,
+          confidenceTier: 'BASE',
+        },
+      });
+      expect(sized.lots).toBe(expectedLots);
+      expect(Number(sized.inputs.finalRiskAtStopPercentOfCapital)).toBeLessThanOrEqual(2);
+    },
+  );
+
+  it('applies professional allocation-aware sizing to validated DEMO execution instead of legacy micro caps', async () => {
     const service = makeService({ maxTradeRiskPercent: '3.00' });
 
     const sized = await service.sizePosition({
       ...params,
-      requestedLotUpperBound: '0.01',
+      requestedLotUpperBound: '4.00',
       paperAllocationSizing: {
-        executionMode: 'DEMO',
+        executionMode: 'FULL_AUTO',
         allocatedCapital: '1000.00',
         confidenceTier: 'VERY_STRONG',
       },
     });
 
-    expect(sized.lots).toBe('0.01');
-    expect(sized.inputs.allocationAwarePaper).toBe(false);
+    expect(sized.lots).toBe('0.25');
+    expect(sized.inputs.allocationAwarePaper).toBe(true);
+    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.2');
   });
 
   it('lifts a PAPER RESEARCH soft budget to the 0.20 product floor when the durable 2% risk ceiling can afford it', async () => {
@@ -414,45 +440,36 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     ).rejects.toMatchObject({ code: 'POSITION_SIZE_BELOW_POLICY_MINIMUM' });
   });
 
-  it('honors an explicit 0.10 scout floor while the normal PAPER floor remains caller-controlled at 0.20', async () => {
+  it('refuses a promoted 0.10 scout cap instead of dispatching below the 0.20 professional floor', async () => {
     const service = makeService();
-    const sized = await service.sizePosition({
-      ...params,
-      requestedLotUpperBound: '0.10',
-      paperAllocationSizing: {
-        executionMode: 'PAPER_ONLY',
-        allocatedCapital: '1000.00',
-        confidenceTier: 'RESEARCH',
-        minimumExecutableLot: '0.10',
-      },
-    });
-
-    expect(sized.inputs.lotsByRiskBudget).toBe('0.1');
-    expect(sized.lots).toBe('0.1');
-    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.1');
-    expect(sized.inputs.paperProductMinimumLot).toBe('0.1');
-    expect(sized.inputs.paperProductMaximumLot).toBe('2');
+    await expect(
+      service.sizePosition({
+        ...params,
+        requestedLotUpperBound: '0.10',
+        paperAllocationSizing: {
+          executionMode: 'PAPER_ONLY',
+          allocatedCapital: '1000.00',
+          confidenceTier: 'RESEARCH',
+          minimumExecutableLot: '0.10',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'POSITION_SIZE_BELOW_POLICY_MINIMUM' });
   });
 
-  it('honors an explicit 0.05 provisional M1 scout cap without silently lifting it to 0.10', async () => {
+  it('refuses a promoted 0.05 provisional scout cap instead of dispatching a micro lot', async () => {
     const service = makeService();
-    const sized = await service.sizePosition({
-      ...params,
-      requestedLotUpperBound: '0.05',
-      paperAllocationSizing: {
-        executionMode: 'PAPER_ONLY',
-        allocatedCapital: '1000.00',
-        confidenceTier: 'RESEARCH',
-        minimumExecutableLot: '0.05',
-      },
-    });
-
-    expect(sized.inputs.lotsByRiskBudget).toBe('0.1');
-    expect(sized.lots).toBe('0.05');
-    expect(sized.inputs.requestedLotUpperBound).toBe('0.05');
-    expect(sized.inputs.effectiveRequestedLotUpperBound).toBe('0.05');
-    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.05');
-    expect(sized.inputs.paperProductMinimumLot).toBe('0.05');
+    await expect(
+      service.sizePosition({
+        ...params,
+        requestedLotUpperBound: '0.05',
+        paperAllocationSizing: {
+          executionMode: 'PAPER_ONLY',
+          allocatedCapital: '1000.00',
+          confidenceTier: 'RESEARCH',
+          minimumExecutableLot: '0.05',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'POSITION_SIZE_BELOW_POLICY_MINIMUM' });
   });
 
   it('fails closed instead of rounding a caller lot cap upward to a PAPER floor', async () => {
@@ -472,20 +489,19 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     ).rejects.toMatchObject({ code: 'POSITION_SIZE_BELOW_POLICY_MINIMUM' });
   });
 
-  it('does not apply the PAPER 0.10 policy floor to DEMO sizing', async () => {
+  it('enforces the same 0.20 professional floor for DEMO and refuses a micro caller cap', async () => {
     const service = makeService({ maxTradeRiskPercent: '3.00' });
-    const sized = await service.sizePosition({
-      ...params,
-      requestedLotUpperBound: '0.01',
-      paperAllocationSizing: {
-        executionMode: 'DEMO',
-        allocatedCapital: '1000.00',
-        confidenceTier: 'VERY_STRONG',
-        minimumExecutableLot: '0.10',
-      },
-    });
-
-    expect(sized.lots).toBe('0.01');
-    expect(sized.inputs.policyMinimumExecutableLot).toBeNull();
+    await expect(
+      service.sizePosition({
+        ...params,
+        requestedLotUpperBound: '0.10',
+        paperAllocationSizing: {
+          executionMode: 'FULL_AUTO',
+          allocatedCapital: '1000.00',
+          confidenceTier: 'VERY_STRONG',
+          minimumExecutableLot: '0.10',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'POSITION_SIZE_BELOW_POLICY_MINIMUM' });
   });
 });

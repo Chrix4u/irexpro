@@ -6,6 +6,7 @@ import { BrokerModule } from '../broker.module';
 import { MetaTraderAdapter } from './metatrader.adapter';
 import { PaperBrokerAdapter } from './paper-broker.adapter';
 import { CTraderAdapter } from './ctrader/ctrader.adapter';
+import { DirectMt5Adapter } from './direct-mt5/direct-mt5.adapter';
 import { CTraderClientService } from './ctrader/ctrader-client.service';
 import { OandaAdapter } from './oanda/oanda.adapter';
 import { MetaApiClientService } from '../services/metaapi-client.service';
@@ -403,12 +404,15 @@ describe('BrokerModule — connection-scoped cTrader adapter factory wiring', ()
     ctraderClientStub = { isAvailable: () => false } as unknown as CTraderClientService;
     const configService = new ConfigService();
     const metaApiClient = {} as unknown as MetaApiClientService;
+    const directMt5Commands = {} as any;
     const brokerModule = new BrokerModule(
       registry,
       new MetaTraderAdapter(metaApiClient),
       new PaperBrokerAdapter(),
       new OandaAdapter(configService),
       new CTraderAdapter(ctraderClientStub),
+      new DirectMt5Adapter(directMt5Commands),
+      directMt5Commands,
       metaApiClient,
       configService,
       ctraderClientStub,
@@ -418,7 +422,7 @@ describe('BrokerModule — connection-scoped cTrader adapter factory wiring', ()
   });
 
   it('registers every canonical provider WITH an isolation factory (no metadata-only gaps)', () => {
-    for (const brokerId of ['metatrader5', 'paper-broker', 'oanda', 'ctrader']) {
+    for (const brokerId of ['metatrader5', 'direct-mt5', 'paper-broker', 'oanda', 'ctrader']) {
       expect(() => registry.createEphemeralAdapter(brokerId)).not.toThrow();
     }
   });
@@ -511,6 +515,6 @@ describe('BrokerModule — connection-scoped cTrader adapter factory wiring', ()
         .getSupportedBrokers()
         .map((b) => b.brokerId)
         .sort(),
-    ).toEqual(['ctrader', 'metatrader5', 'oanda', 'paper-broker']);
+    ).toEqual(['ctrader', 'direct-mt5', 'metatrader5', 'oanda', 'paper-broker']);
   });
 });

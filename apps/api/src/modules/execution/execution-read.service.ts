@@ -9,6 +9,9 @@ import { Trade, TradeStatus } from './entities/trade.entity';
  * Keeping read queries separate from ExecutionService prevents browser-facing
  * concerns from expanding the live order-placement engine. Every query is
  * explicitly scoped by userId before DTO mapping occurs in the controller.
+ * When a brokerConnectionId is supplied, account-facing reads are additionally
+ * pinned to that exact broker account so history and monetary currencies cannot
+ * leak across the user's other PAPER/DEMO/LIVE connections.
  */
 @Injectable()
 export class ExecutionReadService {
@@ -17,27 +20,42 @@ export class ExecutionReadService {
     private readonly tradeRepo: Repository<Trade>,
   ) {}
 
-  async listOpenPositions(userId: string): Promise<Trade[]> {
+  async listOpenPositions(
+    userId: string,
+    brokerConnectionId?: string,
+  ): Promise<Trade[]> {
     return this.tradeRepo.find({
-      where: { userId, status: TradeStatus.OPEN },
+      where: brokerConnectionId
+        ? { userId, brokerConnectionId, status: TradeStatus.OPEN }
+        : { userId, status: TradeStatus.OPEN },
       order: { openedAt: 'DESC', createdAt: 'DESC' },
       take: 100,
     });
   }
 
-  async listRecentExecutions(userId: string, limit = 50): Promise<Trade[]> {
+  async listRecentExecutions(
+    userId: string,
+    limit = 50,
+    brokerConnectionId?: string,
+  ): Promise<Trade[]> {
     const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
     return this.tradeRepo.find({
-      where: { userId },
+      where: brokerConnectionId ? { userId, brokerConnectionId } : { userId },
       order: { createdAt: 'DESC' },
       take: safeLimit,
     });
   }
 
-  async listClosedExecutions(userId: string, limit = 50): Promise<Trade[]> {
+  async listClosedExecutions(
+    userId: string,
+    limit = 50,
+    brokerConnectionId?: string,
+  ): Promise<Trade[]> {
     const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
     return this.tradeRepo.find({
-      where: { userId, status: TradeStatus.CLOSED },
+      where: brokerConnectionId
+        ? { userId, brokerConnectionId, status: TradeStatus.CLOSED }
+        : { userId, status: TradeStatus.CLOSED },
       order: { closedAt: 'DESC', createdAt: 'DESC' },
       take: safeLimit,
     });

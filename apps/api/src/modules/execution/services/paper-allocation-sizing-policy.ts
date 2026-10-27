@@ -3,10 +3,12 @@ export type PaperAllocationConfidenceTier =
   | 'STRONG'
   | 'VERY_STRONG'
   | 'EXCEPTIONAL'
+  | 'ELITE'
   | 'RESEARCH';
 
 export interface PaperAllocationSizingPolicyInput {
   executionMode: string;
+  brokerAccountType: string | null;
   allocatedCapital: number | null;
   brokerEquity: number;
   confidenceTier: PaperAllocationConfidenceTier;
@@ -36,6 +38,7 @@ export function paperAllocationRiskTargetPercent(tier: PaperAllocationConfidence
   switch (tier) {
     case 'VERY_STRONG':
     case 'EXCEPTIONAL':
+    case 'ELITE':
       return 2.5;
     case 'RESEARCH':
       return 1;
@@ -47,12 +50,12 @@ export function paperAllocationRiskTargetPercent(tier: PaperAllocationConfidence
 }
 
 /**
- * Decide whether allocation-aware sizing may replace the legacy PAPER lot
- * ceilings. This function does not size a trade; it only selects the capital
+ * Decide whether allocation-aware sizing may replace legacy micro-lot
+ * ceilings for promoted non-LIVE execution. This function does not size a trade; it only selects the capital
  * base and requested risk target consumed by PositionSizingService.
  *
  * Fail-closed properties:
- *  - never enabled outside PAPER_ONLY;
+ *  - enabled only on a DEMO broker account; the executionMode may be PAPER_ONLY, SEMI_AUTO or FULL_AUTO;
  *  - requires a positive finite explicit AI allocation;
  *  - requires a positive finite broker equity;
  *  - risk capital never exceeds current broker equity;
@@ -67,7 +70,10 @@ export function paperAllocationSizingPolicy(
 ): PaperAllocationSizingPolicyDecision {
   const requestedRiskPercent = paperAllocationRiskTargetPercent(input.confidenceTier);
 
-  if (input.executionMode !== 'PAPER_ONLY') {
+  if (
+    input.brokerAccountType !== 'DEMO' ||
+    !['PAPER_ONLY', 'SEMI_AUTO', 'FULL_AUTO'].includes(input.executionMode)
+  ) {
     return {
       enabled: false,
       riskCapitalBase: null,
