@@ -204,6 +204,57 @@ describe('NativeMetaTrader5Adapter', () => {
     });
   });
 
+  it('preserves terminal rejection and never retries or falls back after a healthy direct session responds', async () => {
+    const { adapter, session } = setup(async (command) => {
+      if (command.commandName === 'PLACE_ORDER') {
+        return {
+          protocolVersion: 1,
+          type: 'RESPONSE',
+          sessionId: command.sessionId,
+          requestId: command.requestId,
+          sequence: command.sequence,
+          sentAt: new Date().toISOString(),
+          nonce: `response-${command.nonce}`,
+          ok: false,
+          error: {
+            code: 'MARKET_CLOSED',
+            message: 'Market closed',
+            certainty: 'REJECTED',
+          },
+        };
+      }
+      return response(command, {
+        accountId: identity.accountLogin,
+        currency: 'USD',
+        leverage: 100,
+        balance: '10000',
+        equity: '10000',
+        margin: '0',
+        freeMargin: '10000',
+        marginLevel: '0',
+      });
+    });
+    await adapter.connect(credentials);
+
+    await expect(
+      adapter.placeOrder({
+        idempotencyKey: 'market-closed:open',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '0.20',
+        stopLoss: '1.09500',
+        takeProfit: '1.11000',
+      }),
+    ).rejects.toMatchObject({
+      code: BrokerErrorCode.MARKET_CLOSED,
+      message: 'Market closed',
+      dispatchCertainty: ProviderDispatchCertainty.SENT_RESPONSE_RECEIVED,
+    });
+    expect(
+      session.commands.filter((command) => command.commandName === 'PLACE_ORDER'),
+    ).toHaveLength(1);
+  });
+
   it('classifies a lost mutation response as uncertain and never auto-success', async () => {
     const { adapter } = setup(async (command) => {
       if (command.commandName === 'PLACE_ORDER') {
