@@ -240,7 +240,9 @@ export function m1ShadowOutcomeEligible(input: {
   if (!input.routeEligible || input.route === 'ABSTAIN' || !input.routePayoffEligible) return false;
   if (input.eventRisk !== 'CLEAR' || !input.paperExecutionCostUsable) return false;
 
-  const hardBlockers = input.blockers.filter((blocker) => !blocker.startsWith('M1_RELIABILITY_'));
+  const hardBlockers = input.blockers.filter(
+    (blocker) => !/^M1_(?:SHADOW_|MEANINGFUL_SCOUT_|TIERED_SCOUT_)?RELIABILITY_/.test(blocker),
+  );
   if (hardBlockers.length === 0) return true;
 
   return (

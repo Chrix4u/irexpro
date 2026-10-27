@@ -161,6 +161,17 @@ describe('M1 active-rollout shadow outcome eligibility', () => {
         paperExecutionCostUsable: true,
       }),
     ).toBe(true);
+    expect(
+      m1ShadowOutcomeEligible({
+        routeEligible: true,
+        route: 'M1_EARLY_TRANSITION',
+        routeReason: 'EARLY_TRANSITION_IMPULSE',
+        routePayoffEligible: true,
+        blockers: ['M1_TIERED_SCOUT_RELIABILITY_WEAK_PROVISIONAL_EXPECTANCY'],
+        eventRisk: 'CLEAR',
+        paperExecutionCostUsable: true,
+      }),
+    ).toBe(true);
   });
 
   it('keeps hard safety failures out of the promotion ledger', () => {
