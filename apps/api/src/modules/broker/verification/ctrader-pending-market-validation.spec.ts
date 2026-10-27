@@ -4,10 +4,7 @@ import {
   BrokerOrderResult,
 } from '../interfaces/broker-adapter.interface';
 import { PaperBrokerAdapter } from '../adapters/paper-broker.adapter';
-import {
-  DEMO_VALIDATION_STEPS,
-  runVerificationChecklist,
-} from './provider-verification-harness';
+import { DEMO_VALIDATION_STEPS, runVerificationChecklist } from './provider-verification-harness';
 
 class AcceptedThenFilledPaperAdapter extends PaperBrokerAdapter {
   async placeOrder(order: BrokerOrderRequest): Promise<BrokerOrderResult> {
