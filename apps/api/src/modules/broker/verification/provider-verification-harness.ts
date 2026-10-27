@@ -523,6 +523,84 @@ export async function runVerificationChecklist(
     return violations;
   };
 
+  /**
+   * cTrader (and other asynchronous providers) may acknowledge a MARKET order
+   * with PENDING/accepted before the execution event is observable. Validation
+   * must reconcile that accepted provider order by its stable id instead of
+   * treating the intermediate acknowledgement as a failed trade.
+   */
+  const awaitAcceptedMarketFill = async (
+    result: BrokerOrderResult,
+  ): Promise<BrokerOrderResult> => {
+    if (result.status !== 'PENDING' || !result.success || !result.externalOrderId) {
+      return result;
+    }
+
+    const providerOrderId = result.externalOrderId;
+    const timeoutMs = 5_000;
+    const pollMs = 100;
+    const deadline = Date.now() + timeoutMs;
+    let lastStatus: BrokerOrderState['status'] | 'NOT_FOUND' = 'NOT_FOUND';
+
+    while (Date.now() <= deadline) {
+      const state = await adapter.getOrderById(providerOrderId);
+      if (state) {
+        lastStatus = state.status;
+        const stateViolations = orderStateViolations(
+          `marketOrderState[${providerOrderId}]`,
+          state,
+        );
+        if (stateViolations.length > 0) {
+          return {
+            ...result,
+            success: false,
+            status: 'FAILED',
+            brokerMessage: stateViolations.join('; '),
+          };
+        }
+
+        if (state.status === 'FILLED') {
+          return {
+            ...result,
+            success: true,
+            status: 'FILLED',
+            filledPrice: state.avgFillPrice ?? result.filledPrice,
+            filledQuantity: state.filledQuantity || result.filledQuantity,
+            filledAt: state.updatedAt ?? result.filledAt,
+            brokerMessage: result.brokerMessage
+              ? `${result.brokerMessage}; observed FILLED after provider acceptance`
+              : 'Observed FILLED after provider acceptance',
+          };
+        }
+
+        if (
+          state.status === 'REJECTED' ||
+          state.status === 'CANCELLED' ||
+          state.status === 'EXPIRED'
+        ) {
+          return {
+            ...result,
+            success: false,
+            status: state.status === 'REJECTED' ? 'REJECTED' : 'FAILED',
+            brokerMessage: `Accepted market order became ${state.status}`,
+          };
+        }
+      }
+
+      if (Date.now() >= deadline) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+    }
+
+    return {
+      ...result,
+      success: false,
+      status: 'FAILED',
+      brokerMessage:
+        `Accepted market order did not reach FILLED within ${timeoutMs}ms ` +
+        `(last provider state ${lastStatus})`,
+    };
+  };
+
   // ── Step: connect ─────────────────────────────────────────────────────────
   if (selected.has('connect')) {
     if (options.connectStep) {
@@ -671,6 +749,7 @@ export async function runVerificationChecklist(
         if (na) return na;
         throw err;
       }
+      result = await awaitAcceptedMarketFill(result);
       const violations = assertOrderResult('marketOrder', result, 'FILLED', true);
       if (violations.length > 0) {
         return { status: 'FAIL', detail: violations.join('; ') };
