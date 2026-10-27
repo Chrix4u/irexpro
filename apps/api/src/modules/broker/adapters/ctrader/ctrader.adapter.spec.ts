@@ -1250,6 +1250,7 @@ describe('CTraderAdapter', () => {
             },
             orderType: 2,
             orderStatus: 1,
+            limitPrice: 1.00324,
           },
         ],
       );
@@ -1260,6 +1261,8 @@ describe('CTraderAdapter', () => {
       expect(findRequest(server, CTRADER_PAYLOAD_TYPE.AMEND_ORDER_REQ)!.payload).toMatchObject({
         ctidTraderAccountId: 1234567,
         orderId: 555,
+        volume: 1_000_000,
+        limitPrice: 1.00324,
         stopLoss: 1.07,
       });
     });
@@ -1321,6 +1324,124 @@ describe('CTraderAdapter', () => {
 
       const result = await adapter.cancelOrder('555');
       expect(result).toMatchObject({ success: false, status: 'REJECTED' });
+    });
+  });
+
+  describe('cleanupDemoValidationExposure', () => {
+    it('closes and cancels only stale harness-labelled DEMO exposure', async () => {
+      await connectDemo();
+
+      const harnessPosition = {
+        ...SAMPLE_POSITION,
+        positionId: 7001,
+        tradeData: {
+          ...SAMPLE_POSITION.tradeData,
+          label: 'harness-old-validation-position',
+          comment: 'harness-old-validation-position',
+        },
+      };
+      const unrelatedPosition = {
+        ...SAMPLE_POSITION,
+        positionId: 7002,
+        tradeData: {
+          ...SAMPLE_POSITION.tradeData,
+          label: 'irexpro-ai-position',
+          comment: 'normal-user-exposure',
+        },
+      };
+      const harnessOrder = {
+        orderId: 8001,
+        tradeData: {
+          symbolId: 101,
+          volume: 1_000_000,
+          tradeSide: 1,
+          openTimestamp: 1757000000000,
+          label: 'harness-old-validation-order',
+          comment: 'harness-old-validation-order',
+        },
+        orderType: 2,
+        orderStatus: 1,
+        limitPrice: 1.00324,
+      };
+      const unrelatedOrder = {
+        ...harnessOrder,
+        orderId: 8002,
+        tradeData: {
+          ...harnessOrder.tradeData,
+          label: 'irexpro-ai-order',
+          comment: 'normal-user-order',
+        },
+      };
+
+      const fetchReconcile = jest
+        .fn()
+        .mockResolvedValueOnce({
+          positions: [harnessPosition, unrelatedPosition],
+          orders: [harnessOrder, unrelatedOrder],
+        })
+        .mockResolvedValueOnce({
+          positions: [unrelatedPosition],
+          orders: [unrelatedOrder],
+        });
+      Object.defineProperty(adapter, 'fetchReconcile', { value: fetchReconcile });
+      const closeSpy = jest.spyOn(adapter, 'closeOrder').mockResolvedValue({
+        success: true,
+        externalOrderId: '7001',
+        status: 'FILLED',
+      });
+      const cancelSpy = jest.spyOn(adapter, 'cancelOrder').mockResolvedValue({
+        success: true,
+        externalOrderId: '8001',
+        status: 'FILLED',
+      });
+
+      await expect(adapter.cleanupDemoValidationExposure()).resolves.toEqual({
+        positionsClosed: 1,
+        ordersCancelled: 1,
+        remainingPositions: 0,
+        remainingOrders: 0,
+      });
+      expect(fetchReconcile).toHaveBeenCalledTimes(2);
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect(closeSpy).toHaveBeenCalledWith('7001');
+      expect(cancelSpy).toHaveBeenCalledTimes(1);
+      expect(cancelSpy).toHaveBeenCalledWith('8001');
+      expect(closeSpy).not.toHaveBeenCalledWith('7002');
+      expect(cancelSpy).not.toHaveBeenCalledWith('8002');
+    });
+
+    it('fails closed outside DEMO mode', async () => {
+      adapter.setMode(BrokerMode.LIVE);
+      await expect(adapter.cleanupDemoValidationExposure()).rejects.toMatchObject({
+        code: BrokerErrorCode.INVALID_REQUEST,
+      });
+    });
+
+    it('fails when tagged validation exposure remains after cleanup', async () => {
+      await connectDemo();
+      const harnessPosition = {
+        ...SAMPLE_POSITION,
+        positionId: 7003,
+        tradeData: {
+          ...SAMPLE_POSITION.tradeData,
+          label: 'harness-still-open',
+          comment: 'harness-still-open',
+        },
+      };
+      const fetchReconcile = jest
+        .fn()
+        .mockResolvedValue({ positions: [harnessPosition], orders: [] });
+      Object.defineProperty(adapter, 'fetchReconcile', { value: fetchReconcile });
+      jest.spyOn(adapter, 'closeOrder').mockResolvedValue({
+        success: true,
+        externalOrderId: '7003',
+        status: 'FILLED',
+      });
+
+      await expect(adapter.cleanupDemoValidationExposure()).rejects.toMatchObject({
+        code: BrokerErrorCode.BROKER_SERVER_ERROR,
+        message: expect.stringContaining('still present'),
+      });
     });
   });
 

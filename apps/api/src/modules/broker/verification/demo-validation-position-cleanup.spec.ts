@@ -178,4 +178,32 @@ describe('DEMO validation — validation position identity and cleanup', () => {
     expect(adapter.closeIds).not.toContain(adapter.acceptedOrderId);
     await expect(adapter.getOpenPositions()).resolves.toHaveLength(0);
   });
+
+  it('does not place a validation order when a DEMO cleanup preflight fails', async () => {
+    const adapter = new PaperBrokerAdapter();
+    const placeOrder = jest.spyOn(adapter, 'placeOrder');
+
+    const evidence = await runVerificationChecklist(adapter, {
+      brokerId: 'paper-broker',
+      mode: 'DEMO',
+      steps: MARKET_LIFECYCLE_STEPS,
+      credentials: { accountId: 'paper-preflight-fail' },
+      preflightSteps: [
+        {
+          name: 'legacy-validation-cleanup',
+          status: 'FAIL',
+          detail: 'tagged DEMO validation exposure could not be proven flat',
+        },
+      ],
+    });
+
+    expect(evidence.overall).toBe('FAIL');
+    expect(evidence.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'legacy-validation-cleanup', status: 'FAIL' }),
+        expect.objectContaining({ name: 'market-order', status: 'SKIPPED' }),
+      ]),
+    );
+    expect(placeOrder).not.toHaveBeenCalled();
+  });
 });
