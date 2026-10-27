@@ -1,4 +1,10 @@
-import { isTradeExecutionView, summarizeRecentExecutionActivity } from './trader-execution';
+import { api } from './api';
+import { setSelectedTraderBrokerId } from './trader-broker-context';
+import {
+  isTradeExecutionView,
+  loadTraderExecutionSnapshot,
+  summarizeRecentExecutionActivity,
+} from './trader-execution';
 
 const CLOSED_TRADE = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -56,15 +62,14 @@ describe('trader execution runtime contract', () => {
   });
 });
 
-import { api } from './api';
-import { loadTraderExecutionSnapshot } from './trader-execution';
-
 describe('trader execution refresh resilience', () => {
   afterEach(() => {
+    setSelectedTraderBrokerId(null);
     jest.restoreAllMocks();
   });
 
-  it('scopes every execution feed to the selected broker so another account currency cannot leak into performance', async () => {
+  it('uses the shared selected-broker context when the page calls the loader without an explicit broker id', async () => {
+    setSelectedTraderBrokerId(BROKER_ID);
     const request = jest.spyOn(api, 'request').mockImplementation(async (path: string) => {
       if (path === `/execution/positions/open?brokerConnectionId=${BROKER_QUERY}`) return [];
       if (path === `/execution/trades/recent?limit=100&brokerConnectionId=${BROKER_QUERY}`) return [CLOSED_TRADE];
@@ -72,7 +77,24 @@ describe('trader execution refresh resilience', () => {
       throw new Error(`unexpected path ${path}`);
     });
 
-    const snapshot = await (loadTraderExecutionSnapshot as any)(BROKER_ID);
+    const snapshot = await loadTraderExecutionSnapshot();
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(snapshot.recentExecutions).toEqual([CLOSED_TRADE]);
+    expect(snapshot.closedExecutions).toEqual([CLOSED_TRADE]);
+    expect(snapshot.openPositions).toEqual([]);
+    expect(snapshot.degradedFeeds).toEqual([]);
+  });
+
+  it('scopes every execution feed to an explicitly selected broker so another account currency cannot leak into performance', async () => {
+    const request = jest.spyOn(api, 'request').mockImplementation(async (path: string) => {
+      if (path === `/execution/positions/open?brokerConnectionId=${BROKER_QUERY}`) return [];
+      if (path === `/execution/trades/recent?limit=100&brokerConnectionId=${BROKER_QUERY}`) return [CLOSED_TRADE];
+      if (path === `/execution/trades/closed?limit=50&brokerConnectionId=${BROKER_QUERY}`) return [CLOSED_TRADE];
+      throw new Error(`unexpected path ${path}`);
+    });
+
+    const snapshot = await loadTraderExecutionSnapshot(BROKER_ID);
 
     expect(request).toHaveBeenCalledTimes(3);
     expect(snapshot.recentExecutions).toEqual([CLOSED_TRADE]);
@@ -91,7 +113,7 @@ describe('trader execution refresh resilience', () => {
       throw new Error(`unexpected path ${path}`);
     });
 
-    const snapshot = await (loadTraderExecutionSnapshot as any)(BROKER_ID);
+    const snapshot = await loadTraderExecutionSnapshot(BROKER_ID);
 
     expect(request).toHaveBeenCalledTimes(3);
     expect(snapshot.recentExecutions).toEqual([CLOSED_TRADE]);
@@ -110,14 +132,13 @@ describe('trader execution refresh resilience', () => {
       throw new Error(`unexpected path ${path}`);
     });
 
-    const snapshot = await (loadTraderExecutionSnapshot as any)(BROKER_ID);
+    const snapshot = await loadTraderExecutionSnapshot(BROKER_ID);
 
     expect(snapshot.closedExecutions).toEqual([CLOSED_TRADE]);
     expect(snapshot.recentExecutions).toEqual([CLOSED_TRADE]);
     expect(snapshot.degradedFeeds).toEqual(['CLOSED_EXECUTIONS']);
   });
 });
-
 
 describe('recent execution visibility summary', () => {
   it('summarizes the last 24 hours so a flat account is not mistaken for an idle engine', () => {
