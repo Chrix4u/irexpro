@@ -601,6 +601,98 @@ describe('StrategyOrchestratorService', () => {
       expect(executionService.executeTrade).toHaveBeenCalled();
     });
 
+    it('allows only the server-promoted multi-model ensemble tuple on an activated real-provider DEMO FULL_AUTO session', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.FULL_AUTO,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'ctrader',
+        accountType: BrokerMode.DEMO,
+        authorizationStatus: 'ACTIVE',
+        demoValidated: true,
+        liveTradingEnabled: false,
+        logicalAccountKey: 'ctrader::demo::acct-1',
+      });
+
+      const result = await service.processSignal(
+        validCandidate({
+          confidenceScore: 0.72,
+          timeframe: 'M1',
+          strategyCode: 'external-irexpro-multimodel-ensemble',
+          modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+          suggestedVolume: 0.5,
+          metadata: {
+            signal_source: 'EXTERNAL_PROVIDER',
+            external_provider_code: 'irexpro-multimodel-ensemble-v1',
+            external_provider_paper_only: true,
+            position_sizing_tier: 'BASE',
+            production_eligible: false,
+            primary_engine_code: 'irexpro-multimodel-ensemble-v1',
+            multimodel_execution_authority: 'DEMO_FULL_AUTO_PROMOTED',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(allocationMock.getUserCapitalAllocationState).toHaveBeenCalledWith('user-1', 'conn-1');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedLotUpperBound: '0.5',
+          paperAllocationSizing: expect.objectContaining({
+            executionMode: ExecutionMode.FULL_AUTO,
+            confidenceTier: 'BASE',
+            minimumExecutableLot: '0.2',
+          }),
+        }),
+      );
+      expect(riskService.validateProposedTrade).toHaveBeenCalled();
+      expect(executionService.executeTrade).toHaveBeenCalled();
+    });
+
+    it('keeps the promoted multi-model tuple fail-closed on a LIVE broker account', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.FULL_AUTO,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'ctrader',
+        accountType: BrokerMode.LIVE,
+        authorizationStatus: 'ACTIVE',
+        demoValidated: false,
+        liveTradingEnabled: true,
+        logicalAccountKey: 'ctrader::live::acct-1',
+      });
+
+      const result = await service.processSignal(
+        validCandidate({
+          confidenceScore: 0.72,
+          timeframe: 'M1',
+          strategyCode: 'external-irexpro-multimodel-ensemble',
+          modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+          suggestedVolume: 0.5,
+          metadata: {
+            signal_source: 'EXTERNAL_PROVIDER',
+            external_provider_code: 'irexpro-multimodel-ensemble-v1',
+            external_provider_paper_only: true,
+            position_sizing_tier: 'BASE',
+            production_eligible: false,
+            primary_engine_code: 'irexpro-multimodel-ensemble-v1',
+            multimodel_execution_authority: 'DEMO_FULL_AUTO_PROMOTED',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('SIGNAL_INVALID');
+      expect(result.reason).toContain('DEMO');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+
     it('rejects an external provider signal on a real-provider DEMO connection', async () => {
       (executionService.getActiveSession as jest.Mock).mockResolvedValue({
         ...activeSession(),

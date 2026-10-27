@@ -1221,6 +1221,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ? `external-provider/${MULTIMODEL_DEMO_ENGINE_CODE}/demo-v1`
           : `external-provider/irexpro-m1-tactical/${candidate.policyVersion}`,
         metadata: {
+          signal_source: 'EXTERNAL_PROVIDER',
+          external_provider_code: professionalDemoPhase
+            ? MULTIMODEL_DEMO_ENGINE_CODE
+            : 'irexpro-m1-tactical',
           primary_engine_code: professionalDemoPhase
             ? MULTIMODEL_DEMO_ENGINE_CODE
             : 'irexpro-m1-tactical',

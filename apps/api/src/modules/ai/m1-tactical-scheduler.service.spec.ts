@@ -2010,6 +2010,8 @@ describe('M1 V8 multi-model DEMO authority', () => {
         strategyCode: 'external-irexpro-multimodel-ensemble',
         modelVersion: expect.stringContaining('irexpro-multimodel-ensemble-v1'),
         metadata: expect.objectContaining({
+          signal_source: 'EXTERNAL_PROVIDER',
+          external_provider_code: 'irexpro-multimodel-ensemble-v1',
           primary_engine_code: 'irexpro-multimodel-ensemble-v1',
           m1_tactical_role: 'TIMING_SPECIALIST',
           multimodel_trained_expert_state: 'CONFIRM',

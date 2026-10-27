@@ -275,7 +275,9 @@ describe('M1TacticalEvidenceService', () => {
     expect(normalized).toContain('t.broker_connection_id = $2');
     expect(normalized).toContain('t.instrument = $3');
     expect(normalized).toContain('t.direction = $4');
-    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-m1-tactical'");
+    expect(normalized).toContain(
+      "ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')",
+    );
     expect(normalized).toContain("ti.timeframe = 'M1'");
     expect(normalized).toContain("ti.metadata ->> 'external_provider_paper_only' = 'true'");
     expect(normalized).toContain("t.close_reason = 'STOP_LOSS_HIT'");
@@ -443,7 +445,9 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(normalized).toContain('t.broker_connection_id = $2');
     expect(normalized).toContain('t.instrument = $3');
     expect(normalized).toContain("t.status = 'OPEN'");
-    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-m1-tactical'");
+    expect(normalized).toContain(
+      "ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')",
+    );
     expect(normalized).toContain("ti.timeframe = 'M1'");
     expect(normalized).toContain("ti.metadata ->> 'external_provider_paper_only' = 'true'");
     expect(params).toEqual([input().userId, input().brokerConnectionId, 'EURUSD']);
@@ -504,6 +508,9 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(exists).toBe(true);
     const [sql, params] = query.mock.calls[0]!;
     const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain(
+      "ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')",
+    );
     expect(normalized).toContain("ti.status = 'CREATED'");
     expect(normalized).toContain("ti.status = 'EXECUTED' AND t.status = 'OPEN'");
     expect(params).toEqual([input().userId, input().brokerConnectionId, 'EURUSD', 'BUY']);
@@ -527,7 +534,9 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(normalized).toContain('ti.broker_connection_id = $2');
     expect(normalized).toContain('ti.instrument = $3');
     expect(normalized).toContain('ti.direction = $4');
-    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-m1-tactical'");
+    expect(normalized).toContain(
+      "ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')",
+    );
     expect(normalized).toContain("ti.timeframe = 'M1'");
     expect(normalized).toContain("ti.status = 'CREATED'");
     expect(normalized).toContain("ti.status = 'EXECUTED' AND t.status = 'OPEN'");

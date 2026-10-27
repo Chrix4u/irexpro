@@ -38,6 +38,7 @@ import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
  */
 const PROMOTED_EXTERNAL_DEMO_MODELS = new Set([
   'external-irexpro-m1-tactical|external-provider/irexpro-m1-tactical/m1-tactical-v1|M1',
+  'external-irexpro-multimodel-ensemble|external-provider/irexpro-multimodel-ensemble-v1/demo-v1|M1',
 ]);
 
 function isServerPromotedExternalDemoModel(candidate: AiSignalCandidate): boolean {

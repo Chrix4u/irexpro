@@ -574,7 +574,7 @@ export class M1TacticalEvidenceService {
           AND t.broker_connection_id = $2
           AND t.instrument = $3
           AND t.direction = $4
-          AND ti.strategy_code = 'external-irexpro-m1-tactical'
+          AND ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')
           AND ti.timeframe = 'M1'
           AND ti.metadata ->> 'external_provider_paper_only' = 'true'
           AND t.status = 'CLOSED'
@@ -700,7 +700,7 @@ export class M1TacticalEvidenceService {
           AND t.broker_connection_id = $2
           AND t.instrument = $3
           AND t.status = 'OPEN'
-          AND ti.strategy_code = 'external-irexpro-m1-tactical'
+          AND ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')
           AND ti.timeframe = 'M1'
           AND ti.metadata ->> 'external_provider_paper_only' = 'true'
         ORDER BY t.opened_at ASC
@@ -764,7 +764,7 @@ export class M1TacticalEvidenceService {
             AND ti.broker_connection_id = $2
             AND ti.instrument = $3
             AND ti.direction = $4
-            AND ti.strategy_code = 'external-irexpro-m1-tactical'
+            AND ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')
             AND ti.timeframe = 'M1'
             AND (
               ti.status = 'CREATED'
