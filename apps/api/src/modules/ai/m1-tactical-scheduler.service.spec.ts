@@ -1197,24 +1197,19 @@ describe('M1TacticalSchedulerService PAPER all-routes phase', () => {
     );
   });
 
-  it('blocks a second executable M1 entry on the same instrument and direction while one is active', async () => {
+  it('preserves same pair-side participation while realised reliability remains eligible', async () => {
     const h = phase2Harness({ duplicateSameDirectionIntent: true });
 
     await driveCleanContinuation(h);
 
-    expect(h.hasActiveM1Intent).toHaveBeenCalledWith({
-      userId: 'user-1',
-      brokerConnectionId: 'conn-1',
-      instrument: 'EURUSD',
-      direction: 'BUY',
-    });
+    expect(h.hasActiveM1Intent).not.toHaveBeenCalled();
     expect(h.recordDecision).toHaveBeenCalledWith(
       expect.objectContaining({
-        blockers: expect.arrayContaining(['M1_ACTIVE_PAIR_SIDE_INTENT']),
-        executionAuthority: 'NONE',
+        blockers: expect.not.arrayContaining(['M1_ACTIVE_PAIR_SIDE_INTENT']),
+        executionAuthority: 'PAPER_ONLY_RESEARCH',
       }),
     );
-    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
   });
 
   it('loads the authoritative open M1 position and duplicate-opposite state before recording rescue shadow evidence', async () => {

@@ -671,28 +671,16 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           (standardGovernanceExecutable || localImpulseDriftOnlyRescue)
         : standardGovernanceExecutable;
     const preliminaryCanExecute = routeExecutable && routePayoffEligible && governanceExecutable;
-    const duplicateSameDirectionIntent = preliminaryCanExecute
-      ? await this.evidence.hasActiveM1Intent({
+    const fastStopRegimeBrake = preliminaryCanExecute
+      ? await this.evidence.loadFastStopRegimeBrake({
           userId,
           brokerConnectionId,
           instrument: candidate.instrument,
           direction: candidate.direction,
+          evaluatedAt: decisionTime,
         })
-      : false;
-    const fastStopRegimeBrake =
-      preliminaryCanExecute && !duplicateSameDirectionIntent
-        ? await this.evidence.loadFastStopRegimeBrake({
-            userId,
-            brokerConnectionId,
-            instrument: candidate.instrument,
-            direction: candidate.direction,
-            evaluatedAt: decisionTime,
-          })
-        : null;
-    const canExecute =
-      preliminaryCanExecute &&
-      !duplicateSameDirectionIntent &&
-      fastStopRegimeBrake?.active !== true;
+      : null;
+    const canExecute = preliminaryCanExecute && fastStopRegimeBrake?.active !== true;
     const effectiveGovernanceBlockers =
       microDriftOnlyRescue || localImpulseDriftOnlyRescue ? [] : governance.blockers;
     const blockers = unique([
@@ -707,7 +695,6 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? [`M1_TIERED_SCOUT_RELIABILITY_${shadowPairSideReliability?.reason ?? 'UNAVAILABLE'}`]
         : []),
       ...(routeExecutable && !routePayoffEligible ? ['M1_ROUTE_NET_EXPECTED_R_FLOOR'] : []),
-      ...(duplicateSameDirectionIntent ? ['M1_ACTIVE_PAIR_SIDE_INTENT'] : []),
       ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
       ...(shadowOnly ? ['M1_PHASE_SHADOW'] : []),
       ...(!shadowOnly && !routeExecutable && routeDecision.route !== 'ABSTAIN'
@@ -748,7 +735,6 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         rolloutPolicyVersion: this.rolloutPolicy.version,
         rolloutPhase: this.rolloutPolicy.phase,
         routeNetExpectedRFloor,
-        duplicateSameDirectionIntent,
         fastStopRegimeBrake: fastStopRegimeBrake ? { ...fastStopRegimeBrake } : null,
         shadowOutcomeEligible,
       },
