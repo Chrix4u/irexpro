@@ -121,8 +121,6 @@ export class TradingController {
     @Body() dto: StartSessionDto,
   ): Promise<TradingSessionResponseDto> {
     const executionMode = this.resolveExecutionMode(dto);
-    this.assertVpsScannerPaperAuthority(userId, dto.brokerConnectionId, executionMode);
-
     const session = await this.tradingService.startTradingSession(
       userId,
       dto.brokerConnectionId,
@@ -157,44 +155,10 @@ export class TradingController {
   }
 
   /**
-   * Research authority lock for the VPS-native multi-model campaign.
-   *
-   * A real-provider DEMO connection may stay connected for broker-native MTF
-   * market data and parity validation, but it must not become an execution
-   * target merely because a user selects it in the generic trading UI. While
-   * the configured research user is owned by vpsForexScanner, session starts
-   * are fail-closed to the exact configured PAPER connection in PAPER_ONLY.
-   * DEMO/LIVE promotion therefore requires an explicit future promotion
-   * change rather than an accidental generic Start or mode-change request.
+   * Mode changes remain locked to PAPER_ONLY for the scanner-owned research user.
+   * New-session V8 DEMO authority is enforced in TradingService where the exact
+   * broker environment and validation state are available.
    */
-  private assertVpsScannerPaperAuthority(
-    userId: string,
-    brokerConnectionId: string | undefined,
-    executionMode: ExecutionMode,
-  ): void {
-    if (this.configService.get<boolean>('vpsForexScanner.enabled', false) !== true) return;
-
-    const configuredUserId = this.configService.get<string>('vpsForexScanner.userId', '').trim();
-    const apiKey = this.configService.get<string>('vpsForexScanner.apiKey', '').trim();
-    if (!apiKey || apiKey.toLowerCase() === 'demo' || configuredUserId !== userId) return;
-
-    const configuredPaperConnectionId = this.configService
-      .get<string>('vpsForexScanner.brokerConnectionId', '')
-      .trim();
-    const exactPaperAuthority =
-      Boolean(configuredPaperConnectionId) &&
-      brokerConnectionId === configuredPaperConnectionId &&
-      executionMode === ExecutionMode.PAPER_ONLY;
-
-    if (exactPaperAuthority) return;
-
-    throw new ForbiddenException(
-      'The iRexPro multi-model research campaign is PAPER-only. Keep MetaApi connected ' +
-        'for broker-native data and parity validation; DEMO/LIVE execution remains locked ' +
-        'until an explicit strategy promotion.',
-    );
-  }
-
   private assertVpsScannerPaperMode(userId: string, executionMode: ExecutionMode): void {
     if (this.configService.get<boolean>('vpsForexScanner.enabled', false) !== true) return;
 
