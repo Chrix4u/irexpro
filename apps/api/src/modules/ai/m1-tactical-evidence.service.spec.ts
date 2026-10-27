@@ -498,7 +498,7 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     });
   });
 
-  it('loads mature drift-only shadow decisions while excluding substantive non-drift blockers', async () => {
+  it('loads mature drift counterfactuals with reliability-only blockers while excluding substantive hard blockers', async () => {
     const query = jest.fn().mockResolvedValue([
       {
         id: 'decision-drift-1',
@@ -531,9 +531,12 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     const normalized = String(sql).replace(/\s+/g, ' ');
     expect(normalized).toContain("route <> 'ABSTAIN'");
     expect(normalized).toContain("execution_authority = 'NONE'");
-    expect(normalized).toContain('jsonb_array_length(blockers) <= 2');
+    expect(normalized).toContain('jsonb_array_elements_text(blockers)');
     expect(normalized).toContain(
-      'blockers <@ \'["DRIFT_OUT_OF_DISTRIBUTION","DRIFT_STRESSED","M1_PHASE_SHADOW"]\'::jsonb',
+      "blocker.value !~ '^M1_(SHADOW_|MEANINGFUL_SCOUT_|TIERED_SCOUT_)?RELIABILITY_'",
+    );
+    expect(normalized).toMatch(
+      /blocker\.value NOT IN\s*\(\s*'DRIFT_OUT_OF_DISTRIBUTION', 'DRIFT_STRESSED', 'M1_PHASE_SHADOW'\s*\)/,
     );
     expect(normalized).toContain(
       'blockers @> \'["DRIFT_OUT_OF_DISTRIBUTION"]\'::jsonb OR blockers @> \'["DRIFT_STRESSED"]\'::jsonb',

@@ -885,11 +885,19 @@ export class M1TacticalEvidenceService {
           AND instrument = $3
           AND route <> 'ABSTAIN'
           AND execution_authority = 'NONE'
-          AND jsonb_array_length(blockers) <= 2
-          AND blockers <@ '["DRIFT_OUT_OF_DISTRIBUTION","DRIFT_STRESSED","M1_PHASE_SHADOW"]'::jsonb
           AND (
             blockers @> '["DRIFT_OUT_OF_DISTRIBUTION"]'::jsonb
             OR blockers @> '["DRIFT_STRESSED"]'::jsonb
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(blockers) AS blocker(value)
+            WHERE blocker.value NOT IN (
+              'DRIFT_OUT_OF_DISTRIBUTION',
+              'DRIFT_STRESSED',
+              'M1_PHASE_SHADOW'
+            )
+              AND blocker.value !~ '^M1_(SHADOW_|MEANINGFUL_SCOUT_|TIERED_SCOUT_)?RELIABILITY_'
           )
           AND governance -> 'driftCounterfactual15m' IS NULL
           AND evaluated_at <= ($4::timestamptz - interval '16 minutes')
