@@ -91,6 +91,15 @@ describe('dynamic PAPER lot ceiling', () => {
     expect(
       dynamicPaperLotUpperBound({
         ...base,
+        confidence: 0.9,
+        metaProbability: 0.78,
+        netExpectedR: 0.6,
+        volatilityScore: 0.45,
+      }),
+    ).toEqual({ upperBound: 4.0, tier: 'ELITE' });
+    expect(
+      dynamicPaperLotUpperBound({
+        ...base,
         confidence: 0.84,
         metaProbability: 0.7,
         netExpectedR: 0.45,

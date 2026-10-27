@@ -97,7 +97,7 @@ export class RiskProfile {
 
   /**
    * Maximum position size in lots per single trade.
-   * Default: 0.1 lots — AI-suggested sizes larger than this are reduced, not rejected,
+   * Default: 4.0 lots — this is a ceiling only; risk %, stop distance, margin and broker constraints still determine the actual size,
    * unless reduction would be below broker's minimum lot size.
    */
   @Column({
@@ -105,7 +105,7 @@ export class RiskProfile {
     type: 'numeric',
     precision: 8,
     scale: 4,
-    default: '0.1000',
+    default: '4.0000',
   })
   maxPositionSizeLot: string;
 

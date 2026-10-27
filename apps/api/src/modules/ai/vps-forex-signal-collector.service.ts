@@ -296,7 +296,7 @@ export interface DynamicPaperLotSizingInput {
 
 export interface DynamicPaperLotSizingDecision {
   upperBound: number;
-  tier: 'BASE' | 'STRONG' | 'VERY_STRONG' | 'EXCEPTIONAL';
+  tier: 'BASE' | 'STRONG' | 'VERY_STRONG' | 'EXCEPTIONAL' | 'ELITE';
 }
 
 /**
@@ -311,6 +311,15 @@ export function dynamicPaperLotUpperBound(
   const fullConsensus =
     input.consensusRequired > 0 && input.consensusPassed >= input.consensusRequired;
 
+  if (
+    fullConsensus &&
+    input.confidence >= 0.88 &&
+    input.metaProbability >= 0.75 &&
+    input.netExpectedR >= 0.55 &&
+    input.volatilityScore <= 0.5
+  ) {
+    return { upperBound: 4.0, tier: 'ELITE' };
+  }
   if (
     fullConsensus &&
     input.confidence >= 0.82 &&
@@ -3702,7 +3711,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       consensusRequired: option.planBEnsemble.consensusRequired,
       volatilityScore: option.candidate.volatilityScore,
     });
-    return { upperBound: normal.upperBound, tier: normal.tier };
+    return {
+      upperBound: normal.upperBound,
+      tier: normal.tier === 'ELITE' ? 'VERY_STRONG' : normal.tier,
+    };
   }
 
   private async evaluateAdaptiveCore(input: {
