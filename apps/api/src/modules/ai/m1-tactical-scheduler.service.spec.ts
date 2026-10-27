@@ -625,6 +625,7 @@ function phase2Harness(
     rollout?: any;
     evidenceByRoute?: Record<string, any[]>;
     shadowPairSideOutcomes?: Array<{ observedAt: Date; netR: number }>;
+    shadowPairSideOutcomesByConnection?: Record<string, Array<{ observedAt: Date; netR: number }>>;
     openPositions?: any[];
     duplicateOppositeIntent?: boolean;
     duplicateSameDirectionIntent?: boolean;
@@ -683,9 +684,13 @@ function phase2Harness(
   const loadRoutePairSideEvidence = jest.fn(
     async (request: any) => options.evidenceByRoute?.[request.route] ?? continuationLosses,
   );
-  const loadShadowPairSideOutcomes = jest
-    .fn()
-    .mockResolvedValue(options.shadowPairSideOutcomes ?? []);
+  const loadShadowPairSideOutcomes = jest.fn(async (request: any) => {
+    return (
+      options.shadowPairSideOutcomesByConnection?.[request.brokerConnectionId] ??
+      options.shadowPairSideOutcomes ??
+      []
+    );
+  });
   const markExecutionLink = jest.fn().mockResolvedValue(undefined);
   const markOutcomeState = jest.fn().mockResolvedValue(undefined);
   const loadOpenPaperPositions = jest.fn().mockResolvedValue(options.openPositions ?? []);
@@ -1810,6 +1815,84 @@ describe('M1 professional v8 DEMO promotion', () => {
       'demo-conn-2',
       'EURUSD',
       new Date('2026-10-15T10:30:00.000Z'),
+    );
+  });
+
+  it('bootstraps V8 provisional reliability from at most three compatible paper outcomes until cTrader has its own minimum sample', async () => {
+    const bootstrapOutcomes = [
+      { observedAt: new Date('2026-10-15T10:20:00.000Z'), netR: 0.6 },
+      { observedAt: new Date('2026-10-15T10:10:00.000Z'), netR: 0.4 },
+      { observedAt: new Date('2026-10-15T10:00:00.000Z'), netR: -0.1 },
+    ];
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: {
+        id: 'session-demo-1',
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'demo-conn-2',
+      },
+      shadowPairSideOutcomesByConnection: {
+        'demo-conn-2': [],
+        'conn-1': bootstrapOutcomes,
+      },
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+
+    await driveFeatures(h, transitionFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.loadShadowPairSideOutcomes).toHaveBeenCalledWith(
+      expect.objectContaining({ brokerConnectionId: 'demo-conn-2' }),
+    );
+    expect(h.loadShadowPairSideOutcomes).toHaveBeenCalledWith(
+      expect.objectContaining({ brokerConnectionId: 'conn-1' }),
+    );
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0].metadata).toEqual(
+      expect.objectContaining({
+        m1_scout_broker_native_reliability_samples: 0,
+        m1_scout_bootstrap_reliability_samples: 3,
+        m1_scout_evidence_connection_ids: ['demo-conn-2', 'conn-1'],
+      }),
+    );
+  });
+
+  it('stops using paper bootstrap evidence once cTrader has three native reliability samples', async () => {
+    const nativeOutcomes = [
+      { observedAt: new Date('2026-10-15T10:20:00.000Z'), netR: 0.6 },
+      { observedAt: new Date('2026-10-15T10:10:00.000Z'), netR: 0.4 },
+      { observedAt: new Date('2026-10-15T10:00:00.000Z'), netR: -0.1 },
+    ];
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: {
+        id: 'session-demo-1',
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'demo-conn-2',
+      },
+      shadowPairSideOutcomesByConnection: {
+        'demo-conn-2': nativeOutcomes,
+        'conn-1': [
+          { observedAt: new Date('2026-10-15T10:25:00.000Z'), netR: 1.2 },
+          { observedAt: new Date('2026-10-15T10:15:00.000Z'), netR: 1.1 },
+          { observedAt: new Date('2026-10-15T10:05:00.000Z'), netR: 1.0 },
+        ],
+      },
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+
+    await driveFeatures(h, transitionFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.loadShadowPairSideOutcomes).toHaveBeenCalledTimes(1);
+    expect(h.loadShadowPairSideOutcomes).toHaveBeenCalledWith(
+      expect.objectContaining({ brokerConnectionId: 'demo-conn-2' }),
+    );
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0].metadata).toEqual(
+      expect.objectContaining({
+        m1_scout_broker_native_reliability_samples: 3,
+        m1_scout_bootstrap_reliability_samples: 0,
+        m1_scout_evidence_connection_ids: ['demo-conn-2'],
+      }),
     );
   });
 

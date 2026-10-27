@@ -62,6 +62,7 @@ import {
 } from './m1-meaningful-scout-reliability';
 import {
   evaluateM1ProvisionalScoutReliability,
+  M1_PROVISIONAL_SCOUT_MIN_SAMPLES,
   M1_PROVISIONAL_SCOUT_RELIABILITY_ARTIFACT,
   type M1ProvisionalScoutReliabilityDecision,
 } from './m1-provisional-scout-reliability';
@@ -71,10 +72,15 @@ import {
   type M1CurrencyExposureDecision,
 } from './m1-tactical-currency-exposure';
 
-type M1ScoutPairSideReliabilityDecision =
+type M1ScoutPairSideReliabilityDecision = (
   | M1ShadowPairSideReliabilityDecision
   | M1MeaningfulScoutReliabilityDecision
-  | M1ProvisionalScoutReliabilityDecision;
+  | M1ProvisionalScoutReliabilityDecision
+) & {
+  brokerNativeSampleCount?: number;
+  bootstrapSampleCount?: number;
+  evidenceConnectionIds?: string[];
+};
 
 export type M1TacticalExecutionPhase =
   | 'SHADOW'
@@ -1046,6 +1052,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_evidence_qualified_scout_eligible:
             evidenceQualifiedScout && shadowPairSideReliability?.eligible === true,
           m1_scout_reliability_tier: scoutReliabilityTier,
+          m1_scout_broker_native_reliability_samples:
+            shadowPairSideReliability?.brokerNativeSampleCount ?? 0,
+          m1_scout_bootstrap_reliability_samples:
+            shadowPairSideReliability?.bootstrapSampleCount ?? 0,
+          m1_scout_evidence_connection_ids: shadowPairSideReliability?.evidenceConnectionIds ?? [
+            brokerConnectionId,
+          ],
           m1_scout_requested_volume_cap: executionVolumeCap,
           m1_scout_execution_volume_cap: finalExecutionVolumeCap,
           m1_currency_exposure_capacity: currencyExposureGuard.decision.capacity,
@@ -1194,7 +1207,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       return null;
     }
 
-    const outcomes = await this.evidence.loadShadowPairSideOutcomes({
+    const brokerNativeOutcomes = await this.evidence.loadShadowPairSideOutcomes({
       userId,
       brokerConnectionId,
       route: 'M1_EARLY_TRANSITION',
@@ -1203,12 +1216,60 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       policyVersion: candidate.policyVersion,
       evaluatedAt,
     });
+    let outcomes = brokerNativeOutcomes;
+    let bootstrapSampleCount = 0;
+    const evidenceConnectionIds = [brokerConnectionId];
+
+    if (
+      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&
+      brokerNativeOutcomes.length < M1_PROVISIONAL_SCOUT_MIN_SAMPLES
+    ) {
+      const fallbackConnectionId = this.config
+        .get<string>('vpsForexScanner.brokerConnectionId', '')
+        .trim();
+      if (fallbackConnectionId && fallbackConnectionId !== brokerConnectionId) {
+        try {
+          const fallbackOutcomes = await this.evidence.loadShadowPairSideOutcomes({
+            userId,
+            brokerConnectionId: fallbackConnectionId,
+            route: 'M1_EARLY_TRANSITION',
+            instrument: candidate.instrument,
+            direction: candidate.direction,
+            policyVersion: candidate.policyVersion,
+            evaluatedAt,
+          });
+          const needed = Math.max(
+            0,
+            M1_PROVISIONAL_SCOUT_MIN_SAMPLES - brokerNativeOutcomes.length,
+          );
+          const bootstrapOutcomes = fallbackOutcomes.slice(0, needed);
+          if (bootstrapOutcomes.length > 0) {
+            outcomes = [...brokerNativeOutcomes, ...bootstrapOutcomes];
+            bootstrapSampleCount = bootstrapOutcomes.length;
+            evidenceConnectionIds.push(fallbackConnectionId);
+          }
+        } catch (error) {
+          this.logger.warn(
+            `M1 V8 reliability bootstrap deferred ${candidate.instrument} ${candidate.direction}: ${(error as Error).message}`,
+          );
+        }
+      }
+    }
+
+    const provenance = {
+      brokerNativeSampleCount: brokerNativeOutcomes.length,
+      bootstrapSampleCount,
+      evidenceConnectionIds,
+    };
     if (this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_010') {
-      return evaluateM1MeaningfulScoutReliability({
-        route: 'M1_EARLY_TRANSITION',
-        evaluatedAt,
-        outcomes,
-      });
+      return {
+        ...evaluateM1MeaningfulScoutReliability({
+          route: 'M1_EARLY_TRANSITION',
+          evaluatedAt,
+          outcomes,
+        }),
+        ...provenance,
+      };
     }
     if (
       this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_TIERED' ||
@@ -1219,18 +1280,26 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         evaluatedAt,
         outcomes,
       });
-      if (meaningful.samples >= M1_MEANINGFUL_SCOUT_MIN_SAMPLES) return meaningful;
-      return evaluateM1ProvisionalScoutReliability({
+      if (meaningful.samples >= M1_MEANINGFUL_SCOUT_MIN_SAMPLES) {
+        return { ...meaningful, ...provenance };
+      }
+      return {
+        ...evaluateM1ProvisionalScoutReliability({
+          route: 'M1_EARLY_TRANSITION',
+          evaluatedAt,
+          outcomes,
+        }),
+        ...provenance,
+      };
+    }
+    return {
+      ...evaluateM1ShadowPairSideReliability({
         route: 'M1_EARLY_TRANSITION',
         evaluatedAt,
         outcomes,
-      });
-    }
-    return evaluateM1ShadowPairSideReliability({
-      route: 'M1_EARLY_TRANSITION',
-      evaluatedAt,
-      outcomes,
-    });
+      }),
+      ...provenance,
+    };
   }
 
   private async reliabilityFor(
