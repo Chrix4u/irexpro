@@ -380,12 +380,14 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
     });
 
-    it('does not register the legacy scheduler for a different DEMO broker owned by the multi-model user', async () => {
+    it('rejects an unpromoted DEMO broker for the scanner-owned user even when the service is called directly', async () => {
       const values: Record<string, unknown> = {
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
         'vpsForexScanner.userId': 'user-1',
         'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+        'vpsForexScanner.m1DemoExecutionEnabled': true,
+        'vpsForexScanner.m1DemoExecutionConnectionId': 'promoted-demo-1',
       };
       configService.get.mockImplementation((key: string, fallback?: unknown) =>
         key in values ? values[key] : fallback,
@@ -395,18 +397,76 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           id: 'conn-1',
           brokerId: 'metatrader5',
           brokerName: 'MetaTrader 5',
+          accountType: BrokerMode.DEMO,
         }),
       );
 
-      const session = await service.startTradingSession(
+      await expect(
+        service.startTradingSession('user-1', 'conn-1', ExecutionMode.FULL_AUTO),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(executionService.startSession).not.toHaveBeenCalled();
+    });
+
+    it('allows the exact explicitly promoted DEMO binding in FULL_AUTO', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+        'vpsForexScanner.m1DemoExecutionEnabled': true,
+        'vpsForexScanner.m1DemoExecutionConnectionId': 'conn-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({
+          id: 'conn-1',
+          brokerId: 'ctrader',
+          brokerName: 'cTrader',
+          accountType: BrokerMode.DEMO,
+        }),
+      );
+
+      const started = await service.startTradingSession(
         'user-1',
         'conn-1',
         ExecutionMode.FULL_AUTO,
       );
 
-      expect(session.id).toBe('session-1');
+      expect(started.id).toBe('session-1');
       expect(executionService.startSession).toHaveBeenCalled();
       expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+    });
+
+    it('rejects LIVE even if the promoted connection id is misconfigured to a LIVE broker', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+        'vpsForexScanner.m1DemoExecutionEnabled': true,
+        'vpsForexScanner.m1DemoExecutionConnectionId': 'conn-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({
+          id: 'conn-1',
+          brokerId: 'ctrader',
+          brokerName: 'cTrader',
+          accountType: BrokerMode.LIVE,
+          liveTradingEnabled: true,
+        }),
+      );
+
+      await expect(
+        service.startTradingSession('user-1', 'conn-1', ExecutionMode.FULL_AUTO),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(executionService.startSession).not.toHaveBeenCalled();
     });
 
     it('keeps PAPER execution bound while using a connected MT5 DEMO account for market data', async () => {

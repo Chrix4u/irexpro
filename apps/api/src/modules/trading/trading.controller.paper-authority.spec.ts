@@ -8,6 +8,7 @@ import { TradingSessionStatus } from '../execution/entities/trading-session.enti
 
 const PAPER_CONNECTION_ID = '11111111-1111-4111-8111-111111111111';
 const METAAPI_CONNECTION_ID = '22222222-2222-4222-8222-222222222222';
+const PROMOTED_DEMO_CONNECTION_ID = '44444444-4444-4444-8444-444444444444';
 const SESSION_ID = '33333333-3333-4333-8333-333333333333';
 const RESEARCH_USER_ID = 'research-user';
 
@@ -37,6 +38,8 @@ function buildController(configOverrides: Record<string, unknown> = {}) {
     'vpsForexScanner.userId': RESEARCH_USER_ID,
     'vpsForexScanner.apiKey': 'production-key-present',
     'vpsForexScanner.brokerConnectionId': PAPER_CONNECTION_ID,
+    'vpsForexScanner.m1DemoExecutionEnabled': false,
+    'vpsForexScanner.m1DemoExecutionConnectionId': '',
     ...configOverrides,
   };
 
@@ -86,6 +89,32 @@ describe('TradingController multi-model PAPER authority lock', () => {
     ).rejects.toThrow(ForbiddenException);
 
     expect(tradingService.startTradingSession).not.toHaveBeenCalled();
+  });
+
+  it('allows the explicitly promoted DEMO connection in FULL_AUTO only when promotion is enabled', async () => {
+    const { controller, tradingService } = buildController({
+      'vpsForexScanner.m1DemoExecutionEnabled': true,
+      'vpsForexScanner.m1DemoExecutionConnectionId': PROMOTED_DEMO_CONNECTION_ID,
+    });
+    (tradingService.startTradingSession as jest.Mock).mockResolvedValue(
+      session({
+        brokerConnectionId: PROMOTED_DEMO_CONNECTION_ID,
+        executionMode: ExecutionMode.FULL_AUTO,
+      }),
+    );
+
+    const result = await controller.startSession(RESEARCH_USER_ID, {
+      brokerConnectionId: PROMOTED_DEMO_CONNECTION_ID,
+      executionMode: ExecutionMode.FULL_AUTO,
+    } as StartSessionDto);
+
+    expect(tradingService.startTradingSession).toHaveBeenCalledWith(
+      RESEARCH_USER_ID,
+      PROMOTED_DEMO_CONNECTION_ID,
+      ExecutionMode.FULL_AUTO,
+    );
+    expect(result.brokerConnectionId).toBe(PROMOTED_DEMO_CONNECTION_ID);
+    expect(result.executionMode).toBe(ExecutionMode.FULL_AUTO);
   });
 
   it('rejects another connection even when the request says PAPER_ONLY', async () => {

@@ -249,6 +249,7 @@ export class TradingService {
       throw new BrokerConnectionRequiredException();
     }
     const connection = await this.resolveConnection(userId, brokerConnectionId);
+    this.assertVpsForexScannerExecutionAuthority(userId, connection, executionMode);
     this.assertBrokerConnectionHealthy(connection);
 
     // ── Gate 3: Explicit AI capital allocation for this exact account ───────
@@ -796,6 +797,47 @@ export class TradingService {
       .get<string>('vpsForexScanner.brokerConnectionId', '')
       .trim();
     return configuredConnectionId === brokerConnectionId;
+  }
+
+  private assertVpsForexScannerExecutionAuthority(
+    userId: string,
+    connection: BrokerConnection,
+    executionMode: ExecutionMode,
+  ): void {
+    if (!this.isVpsForexScannerUser(userId)) return;
+
+    const configuredPaperConnectionId = this.configService
+      .get<string>('vpsForexScanner.brokerConnectionId', '')
+      .trim();
+    if (
+      Boolean(configuredPaperConnectionId) &&
+      connection.id === configuredPaperConnectionId &&
+      executionMode === ExecutionMode.PAPER_ONLY
+    ) {
+      return;
+    }
+
+    const demoPromotionEnabled = this.configService.get<boolean>(
+      'vpsForexScanner.m1DemoExecutionEnabled',
+      false,
+    );
+    const configuredDemoConnectionId = this.configService
+      .get<string>('vpsForexScanner.m1DemoExecutionConnectionId', '')
+      .trim();
+    if (
+      demoPromotionEnabled === true &&
+      Boolean(configuredDemoConnectionId) &&
+      connection.id === configuredDemoConnectionId &&
+      connection.accountType === BrokerMode.DEMO &&
+      executionMode === ExecutionMode.FULL_AUTO
+    ) {
+      return;
+    }
+
+    throw new ForbiddenException(
+      'The iRexPro multi-model campaign permits only its exact PAPER_ONLY research binding ' +
+        'or the explicitly promoted FULL_AUTO DEMO binding. LIVE execution remains locked.',
+    );
   }
 
   private getResearchReplayStepsPerCycle(): number {

@@ -142,8 +142,14 @@ export default () => ({
     apiKey: process.env.TWELVEDATA_API_KEY,
     userId: process.env.VPS_FOREX_SCANNER_USER_ID,
     brokerConnectionId: process.env.VPS_FOREX_SCANNER_BROKER_CONNECTION_ID,
-    // Optional broker-native source for the M1 tactical sleeve. Execution and
-    // evidence remain bound to brokerConnectionId (PAPER); this id is read-only.
+    // Explicit V8 promotion boundary. FULL_AUTO is permitted only for this
+    // exact DEMO connection when the separate enable flag is true. LIVE is
+    // never granted by this setting.
+    m1DemoExecutionEnabled: process.env.M1_TACTICAL_DEMO_EXECUTION_ENABLED === 'true',
+    m1DemoExecutionConnectionId: process.env.M1_TACTICAL_DEMO_EXECUTION_CONNECTION_ID,
+    // Optional broker-native source for the M1 tactical sleeve. The PAPER
+    // evidence binding remains brokerConnectionId; this source may also be the
+    // explicitly promoted DEMO execution connection when the gate above is on.
     m1MarketDataConnectionId: process.env.M1_TACTICAL_MARKET_DATA_CONNECTION_ID,
     // Exact-binding cTrader collector for the M1 tactical sleeve. This remains
     // read-only against the provider connection and never changes execution authority.

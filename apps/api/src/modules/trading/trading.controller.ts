@@ -188,10 +188,24 @@ export class TradingController {
 
     if (exactPaperAuthority) return;
 
+    const demoPromotionEnabled = this.configService.get<boolean>(
+      'vpsForexScanner.m1DemoExecutionEnabled',
+      false,
+    );
+    const configuredDemoConnectionId = this.configService
+      .get<string>('vpsForexScanner.m1DemoExecutionConnectionId', '')
+      .trim();
+    const exactPromotedDemoAuthority =
+      demoPromotionEnabled === true &&
+      Boolean(configuredDemoConnectionId) &&
+      brokerConnectionId === configuredDemoConnectionId &&
+      executionMode === ExecutionMode.FULL_AUTO;
+
+    if (exactPromotedDemoAuthority) return;
+
     throw new ForbiddenException(
-      'The iRexPro multi-model research campaign is PAPER-only. Keep MetaApi connected ' +
-        'for broker-native data and parity validation; DEMO/LIVE execution remains locked ' +
-        'until an explicit strategy promotion.',
+      'The iRexPro multi-model campaign permits only its exact PAPER_ONLY research binding ' +
+        'or the explicitly promoted FULL_AUTO DEMO binding. LIVE execution remains locked.',
     );
   }
 
