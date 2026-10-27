@@ -4,6 +4,8 @@ import { BrokerAdapterRegistry } from './broker-adapter.registry';
 import { BrokerMode, IBrokerAdapter } from '../interfaces/broker-adapter.interface';
 import { BrokerModule } from '../broker.module';
 import { MetaTraderAdapter } from './metatrader.adapter';
+import { NativeMetaTrader5Adapter } from './metatrader-native/native-metatrader5.adapter';
+import { Mt5BridgeSessionRegistry } from './metatrader-native/mt5-bridge-session-registry.service';
 import { PaperBrokerAdapter } from './paper-broker.adapter';
 import { CTraderAdapter } from './ctrader/ctrader.adapter';
 import { CTraderClientService } from './ctrader/ctrader-client.service';
@@ -390,9 +392,10 @@ describe('BrokerAdapterRegistry', () => {
 
 // ─── REAL wiring: the production BrokerModule factory contract (cTrader) ─────
 
-describe('BrokerModule — connection-scoped cTrader adapter factory wiring', () => {
+describe('BrokerModule — connection-scoped broker adapter factory wiring', () => {
   let registry: BrokerAdapterRegistry;
   let ctraderClientStub: CTraderClientService;
+  let mt5BridgeSessions: Mt5BridgeSessionRegistry;
 
   beforeEach(() => {
     // The REAL BrokerModule class with its REAL onModuleInit wiring — exactly
@@ -403,9 +406,12 @@ describe('BrokerModule — connection-scoped cTrader adapter factory wiring', ()
     ctraderClientStub = { isAvailable: () => false } as unknown as CTraderClientService;
     const configService = new ConfigService();
     const metaApiClient = {} as unknown as MetaApiClientService;
+    mt5BridgeSessions = new Mt5BridgeSessionRegistry();
     const brokerModule = new BrokerModule(
       registry,
       new MetaTraderAdapter(metaApiClient),
+      new NativeMetaTrader5Adapter(mt5BridgeSessions),
+      mt5BridgeSessions,
       new PaperBrokerAdapter(),
       new OandaAdapter(configService),
       new CTraderAdapter(ctraderClientStub),
@@ -418,9 +424,34 @@ describe('BrokerModule — connection-scoped cTrader adapter factory wiring', ()
   });
 
   it('registers every canonical provider WITH an isolation factory (no metadata-only gaps)', () => {
-    for (const brokerId of ['metatrader5', 'paper-broker', 'oanda', 'ctrader']) {
+    for (const brokerId of [
+      'metatrader5',
+      'metatrader5-native',
+      'paper-broker',
+      'oanda',
+      'ctrader',
+    ]) {
       expect(() => registry.createEphemeralAdapter(brokerId)).not.toThrow();
     }
+  });
+
+  it('native MT5 uses one adapter context per persisted BrokerConnection and shares only the bridge registry', () => {
+    const root = registry.getAdapter('metatrader5-native');
+    const first = registry.getAdapterForConnection('native-conn-1', 'metatrader5-native');
+    const second = registry.getAdapterForConnection('native-conn-2', 'metatrader5-native');
+
+    expect(root).toBeInstanceOf(NativeMetaTrader5Adapter);
+    expect(first).toBeInstanceOf(NativeMetaTrader5Adapter);
+    expect(second).toBeInstanceOf(NativeMetaTrader5Adapter);
+    expect(first).not.toBe(second);
+    expect(first).not.toBe(root);
+    expect(second).not.toBe(root);
+    const nativeState = (adapter: unknown) =>
+      adapter as { sessions: Mt5BridgeSessionRegistry; connectionId?: string };
+    expect(nativeState(first).sessions).toBe(mt5BridgeSessions);
+    expect(nativeState(second).sessions).toBe(mt5BridgeSessions);
+    expect(nativeState(first).connectionId).toBe('native-conn-1');
+    expect(nativeState(second).connectionId).toBe('native-conn-2');
   });
 
   it('cTrader family aliases share the canonical factory, NEVER a mutable adapter object', () => {
@@ -511,6 +542,6 @@ describe('BrokerModule — connection-scoped cTrader adapter factory wiring', ()
         .getSupportedBrokers()
         .map((b) => b.brokerId)
         .sort(),
-    ).toEqual(['ctrader', 'metatrader5', 'oanda', 'paper-broker']);
+    ).toEqual(['ctrader', 'metatrader5', 'metatrader5-native', 'oanda', 'paper-broker']);
   });
 });

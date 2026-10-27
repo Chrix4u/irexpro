@@ -54,6 +54,41 @@ describe('BrokerProviderRegistryService', () => {
     return module.get(BrokerProviderRegistryService);
   };
 
+  describe('native MT5 connector identity', () => {
+    it('keeps native MT5 separate from MetaApi and DEMO-only until certified', async () => {
+      const service = await buildService(['metatrader5', 'metatrader5-native']);
+      const legacy = service.getEntry('metatrader5');
+      const native = service.getEntry('metatrader5-native');
+
+      expect(legacy).toMatchObject({
+        id: 'metatrader5',
+        name: 'MetaTrader 5 — MetaApi Cloud',
+        platform: 'METATRADER5',
+        connectionMethod: 'METAAPI_CLOUD',
+      });
+      expect(native).toMatchObject({
+        id: 'metatrader5-native',
+        name: 'MetaTrader 5 — iRexPro Native Bridge',
+        platform: 'METATRADER5',
+        connectionMethod: 'IREXPRO_NATIVE_BRIDGE',
+        environments: ['DEMO'],
+        adapterAvailable: true,
+        certificationState: 'NOT_CERTIFIED',
+      });
+      expect(native?.productionLiveVerification.status).toBe('UNVERIFIED');
+      expect(service.supportsEnvironment('metatrader5-native', 'LIVE')).toBe(false);
+      expect(service.isProductionLiveEligible('metatrader5-native')).toBe(false);
+    });
+
+    it('describes cTrader as a platform route rather than a broker brand', async () => {
+      const service = await buildService(['ctrader']);
+      expect(service.getEntry('ctrader')).toMatchObject({
+        platform: 'CTRADER',
+        connectionMethod: 'CTRADER_OPEN_API',
+      });
+    });
+  });
+
   describe('status honesty (Directive §AB)', () => {
     it('reports SUPPORTED only when the adapter is actually registered', async () => {
       const service = await buildService(['metatrader5', 'paper-broker']);
@@ -542,7 +577,11 @@ describe('BrokerProviderRegistryService', () => {
       const mtEntries = catalog.filter((e) =>
         e.connectionRoutes.includes(BrokerConnectionRoute.METATRADER),
       );
-      expect(mtEntries).toHaveLength(1);
+      expect(mtEntries.map((entry) => entry.id).sort()).toEqual([
+        'metatrader5',
+        'metatrader5-native',
+      ]);
+      expect(new Set(mtEntries.map((entry) => entry.connectionMethod)).size).toBe(2);
 
       const ctrader = catalog.find((e) => e.id === 'ctrader');
       expect(ctrader?.connectionRoutes).toEqual([BrokerConnectionRoute.CTRADER]);

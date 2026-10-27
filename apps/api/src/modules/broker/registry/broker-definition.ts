@@ -123,11 +123,24 @@ export function deriveProviderCertificationState(
   return 'CERTIFIED';
 }
 
+export type BrokerPlatform = 'METATRADER5' | 'CTRADER' | 'OANDA' | 'IREXPRO_PAPER';
+
+export type BrokerConnectionMethod =
+  | 'IREXPRO_NATIVE_BRIDGE'
+  | 'METAAPI_CLOUD'
+  | 'CTRADER_OPEN_API'
+  | 'OANDA_V20_REST'
+  | 'INTERNAL_PAPER';
+
 export interface BrokerDefinition {
   /** Catalog id (stable, e.g. "metatrader5"). */
   id: string;
   /** Display name. */
   name: string;
+  /** Trading platform/technology exposed to the customer separately from broker identity. */
+  platform: BrokerPlatform;
+  /** iRexPro transport/connector used to reach the platform. */
+  connectionMethod: BrokerConnectionMethod;
   /** Short description for the broker-onboarding UI. */
   description: string;
   /** Adapter id registered in BrokerAdapterRegistry; null = no adapter yet. */

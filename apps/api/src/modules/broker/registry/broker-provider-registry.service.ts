@@ -5,6 +5,8 @@ import {
   BrokerAvailabilityStatus,
   BrokerConnectionRoute,
   BrokerDefinition,
+  BrokerConnectionMethod,
+  BrokerPlatform,
   deriveProviderCertificationState,
   ProviderCertificationState,
 } from './broker-definition';
@@ -38,6 +40,8 @@ export interface BrokerRegistryEntry {
   id: string;
   name: string;
   description: string;
+  platform: BrokerPlatform;
+  connectionMethod: BrokerConnectionMethod;
   status: BrokerAvailabilityStatus;
   /**
    * Production-LIVE verification evidence — always materialized. Historical
@@ -111,6 +115,8 @@ export class BrokerProviderRegistryService {
         id: entry.id,
         name: entry.name,
         description: entry.description,
+        platform: entry.platform,
+        connectionMethod: entry.connectionMethod,
         status: effectiveStatus,
         productionLiveVerification: {
           status: entry.productionLiveVerification?.status ?? 'UNVERIFIED',

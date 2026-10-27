@@ -75,7 +75,15 @@ def test_connector_rejects_terminal_account_switch() -> None:
     changed = AccountIdentity(
         login="999999",
         server="Other-Server",
+        company="Other Broker",
+        environment="DEMO",
         currency="USD",
+        leverage=100,
+        margin_mode="HEDGING",
+        terminal_connected=True,
+        terminal_trade_allowed=True,
+        account_trade_allowed=True,
+        ea_trading_allowed=True,
         trade_allowed=True,
     )
     try:
@@ -84,3 +92,61 @@ def test_connector_rejects_terminal_account_switch() -> None:
         assert "changed after pairing" in str(exc)
     else:
         raise AssertionError("account switch must fail closed")
+
+
+def test_heartbeat_reports_full_native_mt5_identity() -> None:
+    from irexpro_mt5_connector.client import IrexProConnectorClient
+    from irexpro_mt5_connector.mt5_terminal import AccountIdentity
+
+    class SecretStore:
+        def get(self, connector_id): return "connector-token"
+        def set(self, connector_id, token): pass
+        def delete(self, connector_id): pass
+
+    class Response:
+        status_code = 200
+        text = ""
+        def json(self): return {}
+
+    class Session:
+        def __init__(self): self.calls = []
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return Response()
+
+    session = Session()
+    client = IrexProConnectorClient("https://irexpro.example", SecretStore(), session=session)
+    settings = ConnectorSettings(
+        server_url="https://irexpro.example",
+        connector_id="connector-1",
+        broker_connection_id="connection-1",
+        account_login="113392789",
+        broker_server="Broker-Demo",
+    )
+    identity = AccountIdentity(
+        login="113392789",
+        server="Broker-Demo",
+        company="Broker Ltd",
+        environment="DEMO",
+        currency="USD",
+        leverage=100,
+        margin_mode="HEDGING",
+        terminal_connected=True,
+        terminal_trade_allowed=True,
+        account_trade_allowed=True,
+        ea_trading_allowed=True,
+        trade_allowed=True,
+    )
+
+    client.heartbeat(settings, identity, 9)
+
+    payload = session.calls[0][1]["json"]
+    assert payload["environment"] == "DEMO"
+    assert payload["company"] == "Broker Ltd"
+    assert payload["currency"] == "USD"
+    assert payload["leverage"] == 100
+    assert payload["marginMode"] == "HEDGING"
+    assert payload["terminalConnected"] is True
+    assert payload["terminalTradeAllowed"] is True
+    assert payload["accountTradeAllowed"] is True
+    assert payload["eaTradingAllowed"] is True

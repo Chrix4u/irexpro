@@ -31,6 +31,7 @@ import { CurrentUserId } from '../../../common/decorators/current-user.decorator
 import { Public } from '../../../common/decorators/public.decorator';
 import { DirectMt5CommandService } from './direct-mt5-command.service';
 import { DirectMt5ConnectorBinding, DirectMt5PairingService } from './direct-mt5-pairing.service';
+import { DirectMt5BridgeSessionManager } from '../adapters/metatrader-native/direct-mt5-bridge-session-manager.service';
 
 class CreateDirectMt5PairingDto {
   @IsUUID()
@@ -49,12 +50,39 @@ class RedeemDirectMt5PairingDto {
   @Length(1, 255)
   brokerServer!: string;
 
+  @IsString()
+  @Length(1, 255)
+  company!: string;
+
+  @IsIn(['DEMO', 'LIVE'])
+  environment!: 'DEMO' | 'LIVE';
+
   @IsOptional()
   @Matches(/^[A-Za-z]{3,8}$/)
   currency?: string | null;
 
+  @IsInt()
+  @Min(1)
+  leverage!: number;
+
+  @IsIn(['HEDGING', 'NETTING', 'EXCHANGE'])
+  marginMode!: 'HEDGING' | 'NETTING' | 'EXCHANGE';
+
   @IsBoolean()
-  tradeAllowed!: boolean;
+  terminalConnected!: boolean;
+
+  @IsBoolean()
+  terminalTradeAllowed!: boolean;
+
+  @IsBoolean()
+  accountTradeAllowed!: boolean;
+
+  @IsBoolean()
+  eaTradingAllowed!: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  tradeAllowed?: boolean;
 }
 
 class DirectMt5ConnectorIdentityDto {
@@ -74,11 +102,38 @@ class DirectMt5HeartbeatDto extends DirectMt5ConnectorIdentityDto {
   @Min(1)
   sequence!: number;
 
+  @IsString()
+  @Length(1, 255)
+  company!: string;
+
+  @IsIn(['DEMO', 'LIVE'])
+  environment!: 'DEMO' | 'LIVE';
+
+  @Matches(/^[A-Za-z]{3,8}$/)
+  currency!: string;
+
+  @IsInt()
+  @Min(1)
+  leverage!: number;
+
+  @IsIn(['HEDGING', 'NETTING', 'EXCHANGE'])
+  marginMode!: 'HEDGING' | 'NETTING' | 'EXCHANGE';
+
   @IsBoolean()
   terminalConnected!: boolean;
 
   @IsBoolean()
-  tradingAllowed!: boolean;
+  terminalTradeAllowed!: boolean;
+
+  @IsBoolean()
+  accountTradeAllowed!: boolean;
+
+  @IsBoolean()
+  eaTradingAllowed!: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  tradingAllowed?: boolean;
 }
 
 class DirectMt5CommandResultDto extends DirectMt5ConnectorIdentityDto {
@@ -99,7 +154,10 @@ class DirectMt5CommandResultDto extends DirectMt5ConnectorIdentityDto {
 @UseGuards(JwtAuthGuard)
 @Controller('broker/direct-mt5')
 export class DirectMt5PairingController {
-  constructor(private readonly pairingService: DirectMt5PairingService) {}
+  constructor(
+    private readonly pairingService: DirectMt5PairingService,
+    private readonly bridgeSessions: DirectMt5BridgeSessionManager,
+  ) {}
 
   @Post('pairings')
   @ApiOperation({ summary: 'Generate a short-lived pairing code for a MetaTrader 5 connection' })
@@ -115,8 +173,13 @@ export class DirectMt5PairingController {
 
   @Post('pairings/:brokerConnectionId/revoke')
   @ApiOperation({ summary: 'Revoke the direct MT5 connector bound to this broker connection' })
-  revoke(@CurrentUserId() userId: string, @Param('brokerConnectionId') brokerConnectionId: string) {
-    return this.pairingService.revokeConnector(userId, brokerConnectionId);
+  async revoke(
+    @CurrentUserId() userId: string,
+    @Param('brokerConnectionId') brokerConnectionId: string,
+  ) {
+    const result = await this.pairingService.revokeConnector(userId, brokerConnectionId);
+    this.bridgeSessions.detach(brokerConnectionId, result.connectorId);
+    return result;
   }
 }
 
@@ -126,17 +189,31 @@ export class DirectMt5ConnectorController {
   constructor(
     private readonly pairingService: DirectMt5PairingService,
     private readonly commandService: DirectMt5CommandService,
+    private readonly bridgeSessions: DirectMt5BridgeSessionManager,
   ) {}
 
   @Public()
   @Post('redeem')
   @ApiOperation({ summary: 'Redeem a one-time MT5 pairing code from the local connector' })
   redeem(@Body() body: RedeemDirectMt5PairingDto) {
+    const tradeAllowed =
+      body.terminalConnected &&
+      body.terminalTradeAllowed &&
+      body.accountTradeAllowed &&
+      body.eaTradingAllowed;
     return this.pairingService.redeemPairing(body.pairingCode, {
       accountLogin: body.accountLogin,
       brokerServer: body.brokerServer,
+      company: body.company,
+      environment: body.environment,
       currency: body.currency ?? null,
-      tradeAllowed: body.tradeAllowed,
+      leverage: body.leverage,
+      marginMode: body.marginMode,
+      terminalConnected: body.terminalConnected,
+      terminalTradeAllowed: body.terminalTradeAllowed,
+      accountTradeAllowed: body.accountTradeAllowed,
+      eaTradingAllowed: body.eaTradingAllowed,
+      tradeAllowed,
     });
   }
 
@@ -154,12 +231,34 @@ export class DirectMt5ConnectorController {
     }
     // recordHeartbeat owns account-login/server comparison so a terminal account
     // switch atomically SUSPENDS the connector instead of merely returning 409.
-    return this.pairingService.recordHeartbeat(binding, {
+    const tradeAllowed =
+      body.terminalConnected &&
+      body.terminalTradeAllowed &&
+      body.accountTradeAllowed &&
+      body.eaTradingAllowed;
+    const result = await this.pairingService.recordHeartbeat(binding, {
       accountLogin: body.accountLogin,
       brokerServer: body.brokerServer,
       sequence: body.sequence,
-      tradeAllowed: body.tradingAllowed && body.terminalConnected,
+      tradeAllowed,
     });
+    this.bridgeSessions.synchronize({
+      connectorId,
+      brokerConnectionId: body.brokerConnectionId,
+      accountLogin: body.accountLogin,
+      brokerServer: body.brokerServer,
+      company: body.company,
+      environment: body.environment,
+      currency: body.currency,
+      leverage: body.leverage,
+      marginMode: body.marginMode,
+      terminalConnected: body.terminalConnected,
+      terminalTradeAllowed: body.terminalTradeAllowed,
+      accountTradeAllowed: body.accountTradeAllowed,
+      eaTradingAllowed: body.eaTradingAllowed,
+      observedAt: new Date(),
+    });
+    return result;
   }
 
   @Public()

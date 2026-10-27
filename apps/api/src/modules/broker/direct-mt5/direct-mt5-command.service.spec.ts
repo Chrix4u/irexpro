@@ -100,6 +100,32 @@ describe('DirectMt5CommandService', () => {
     await expect(service.leaseNext('connector-1')).resolves.toBeNull();
   });
 
+  it('returns an authoritative completed outcome to the waiting bridge session', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ state: 'SUCCEEDED', result: { ticket: '1001' }, error: null }]);
+    const service = new DirectMt5CommandService({ query } as unknown as DataSource);
+
+    await expect(service.waitForOutcome('cmd-1', 0)).resolves.toEqual({
+      state: 'SUCCEEDED',
+      result: { ticket: '1001' },
+      error: null,
+    });
+    expect(String(query.mock.calls[0]![0])).toContain('FROM broker.direct_mt5_commands');
+    expect(query.mock.calls[0]![1]).toEqual(['cmd-1']);
+  });
+
+  it('returns the current leased state at the wait deadline so mutation certainty stays conservative', async () => {
+    const query = jest.fn().mockResolvedValueOnce([{ state: 'LEASED', result: null, error: null }]);
+    const service = new DirectMt5CommandService({ query } as unknown as DataSource);
+
+    await expect(service.waitForOutcome('cmd-2', 0)).resolves.toEqual({
+      state: 'LEASED',
+      result: null,
+      error: null,
+    });
+  });
+
   it('accepts terminal results only for the exact connector and command', async () => {
     const query = jest.fn().mockResolvedValueOnce([{ id: 'cmd-1', state: 'SUCCEEDED' }]);
     const service = new DirectMt5CommandService({ query } as unknown as DataSource);

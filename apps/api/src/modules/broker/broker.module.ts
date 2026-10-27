@@ -21,6 +21,8 @@ import { BrokerOAuthFlow } from './entities/broker-oauth-flow.entity';
 import { BrokerLinkOutbox } from './entities/broker-link-outbox.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { MetaTraderAdapter } from './adapters/metatrader.adapter';
+import { NativeMetaTrader5Adapter } from './adapters/metatrader-native/native-metatrader5.adapter';
+import { Mt5BridgeSessionRegistry } from './adapters/metatrader-native/mt5-bridge-session-registry.service';
 import { PaperBrokerAdapter } from './adapters/paper-broker.adapter';
 import { OandaAdapter } from './adapters/oanda/oanda.adapter';
 import { CTraderAdapter } from './adapters/ctrader/ctrader.adapter';
@@ -141,6 +143,8 @@ import { DirectMt5CommandService } from './direct-mt5/direct-mt5-command.service
     BrokerAdapterRegistry,
     BrokerProviderRegistryService,
     MetaTraderAdapter,
+    Mt5BridgeSessionRegistry,
+    NativeMetaTrader5Adapter,
     PaperBrokerAdapter,
     OandaAdapter,
     CTraderAdapter,
@@ -176,6 +180,8 @@ export class BrokerModule implements OnModuleInit {
   constructor(
     private registry: BrokerAdapterRegistry,
     private metaTraderAdapter: MetaTraderAdapter,
+    private nativeMetaTrader5Adapter: NativeMetaTrader5Adapter,
+    private mt5BridgeSessions: Mt5BridgeSessionRegistry,
     private paperBrokerAdapter: PaperBrokerAdapter,
     private oandaAdapter: OandaAdapter,
     private cTraderAdapter: CTraderAdapter,
@@ -193,6 +199,11 @@ export class BrokerModule implements OnModuleInit {
     // provider infrastructure (the MetaAPI connection pool, the cTrader
     // environment-connection pool) remains shared underneath by design.
     this.registry.register(this.metaTraderAdapter, () => new MetaTraderAdapter(this.metaApiClient));
+    this.registry.register(
+      this.nativeMetaTrader5Adapter,
+      (_requestedBrokerId, connectionId) =>
+        new NativeMetaTrader5Adapter(this.mt5BridgeSessions, connectionId),
+    );
     this.registry.register(
       this.paperBrokerAdapter,
       (_requestedBrokerId, connectionId) =>
