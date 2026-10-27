@@ -59,6 +59,27 @@ describe('buildM1TacticalFeatures', () => {
     expect(withIncomplete.momentum1Atr).toBeCloseTo(baseline.momentum1Atr, 10);
   });
 
+  it('treats a flat latest broker minute as neutral candle geometry instead of dropping feature context', () => {
+    const input = baseInput();
+    const m1 = [...input.m1];
+    const last = m1[m1.length - 1]!;
+    m1[m1.length - 1] = {
+      ...last,
+      open: '1.105000',
+      high: '1.105000',
+      low: '1.105000',
+      close: '1.105000',
+    };
+
+    const result = buildM1TacticalFeatures({ ...input, m1 });
+
+    expect(result).not.toBeNull();
+    expect(result!.bodyRangeRatio).toBe(0);
+    expect(result!.upperWickRatio).toBe(0);
+    expect(result!.lowerWickRatio).toBe(0);
+    expect(result!.closeLocation).toBe(0.5);
+  });
+
   it('computes body, wick and close-location geometry from the latest closed M1 candle', () => {
     const input = baseInput();
     const m1 = [...input.m1];
@@ -125,11 +146,32 @@ describe('buildM1TacticalFeatures', () => {
     expect(failed.failedBreakoutUp).toBe(true);
   });
 
-  it('returns null when the completed M1 sequence contains a one-minute gap', () => {
+  it('normalizes bounded cTrader no-tick M1 gaps inside feature calculation without changing the latest broker bar', () => {
     const input = baseInput();
+    const baseline = buildM1TacticalFeatures(input)!;
     const m1 = [...input.m1];
     m1.splice(m1.length - 12, 1);
+
+    const result = buildM1TacticalFeatures({ ...input, m1 });
+
+    expect(result).not.toBeNull();
+    expect(result!.latestM1OpenTime.toISOString()).toBe(baseline.latestM1OpenTime.toISOString());
+    expect(result!.price).toBeCloseTo(baseline.price, 10);
+    expect(Number.isFinite(result!.atr14)).toBe(true);
+  });
+
+  it('fails closed when a recent cTrader M1 outage exceeds the bounded no-tick gap allowance', () => {
+    const input = baseInput();
+    const m1 = [...input.m1];
+    m1.splice(m1.length - 12, 4);
     expect(buildM1TacticalFeatures({ ...input, m1 })).toBeNull();
+  });
+
+  it('discards an old large M1 outage once at least 30 recent normalized bars exist after it', () => {
+    const input = baseInput();
+    const m1 = [...input.m1];
+    m1.splice(10, 4);
+    expect(buildM1TacticalFeatures({ ...input, m1 })).not.toBeNull();
   });
 
   it('returns null for non-monotonic or non-finite required price evidence', () => {

@@ -437,6 +437,80 @@ describe("production trade-readiness presentation", () => {
     expect(result.direction).toBe("BUY");
   });
 
+  it("prefers the active M1 cTrader decision over a stale legacy scanner decision", () => {
+    const staleStatus = JSON.parse(JSON.stringify(VALID_STATUS));
+    staleStatus.lastEnsembleDecision.instrument = "USDJPY";
+    staleStatus.lastEnsembleDecision.direction = "SELL";
+    staleStatus.lastEnsembleDecision.candidateConfidence = 0.36;
+
+    const m1Status = {
+      enabled: true,
+      phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+      lastRunAt: "2026-10-27T20:30:09.000Z",
+      lastError: null,
+      latestDecision: {
+        instrument: "EURUSD",
+        direction: "SELL",
+        route: "M1_TREND_CONTINUATION",
+        barTime: "2026-10-27T20:29:00.000Z",
+        confidence: 0.738,
+        netExpectedR: 0.2794,
+        executionAuthority: "NONE",
+        blockers: ["DRIFT_OUT_OF_DISTRIBUTION", "M1_PHASE_ROUTE_SHADOW"],
+        outcomeState: null,
+      },
+    };
+
+    const result = derive({
+      automationOn: true,
+      scannerStatus: staleStatus,
+      m1TacticalStatus: m1Status,
+      fastMarkState: "UNAVAILABLE",
+    });
+
+    expect(result).toMatchObject({
+      score: 49,
+      band: "FORMING",
+      tradeExpected: false,
+      instrument: "EURUSD",
+      direction: "SELL",
+    });
+    expect(result.detail).toMatch(/drift/i);
+  });
+
+  it("shows M1 broker-native execution eligibility as ready without legacy fast-mark capping", () => {
+    const m1Status = {
+      enabled: true,
+      phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+      lastRunAt: "2026-10-27T20:31:09.000Z",
+      lastError: null,
+      latestDecision: {
+        instrument: "USDJPY",
+        direction: "SELL",
+        route: "M1_EARLY_TRANSITION",
+        barTime: "2026-10-27T20:30:00.000Z",
+        confidence: 0.738,
+        netExpectedR: 0.24,
+        executionAuthority: "PAPER_ONLY_RESEARCH",
+        blockers: [],
+        outcomeState: null,
+      },
+    };
+
+    const result = derive({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: m1Status,
+      fastMarkState: "UNAVAILABLE",
+    });
+
+    expect(result.band).toBe("READY");
+    expect(result.tradeExpected).toBe(true);
+    expect(result.score).toBeGreaterThanOrEqual(78);
+    expect(result.instrument).toBe("USDJPY");
+    expect(result.direction).toBe("SELL");
+  });
+
   it("shows a waiting state while the authoritative market schedule is paused", () => {
     const status = JSON.parse(JSON.stringify(VALID_STATUS));
     status.marketSchedule.paused = true;

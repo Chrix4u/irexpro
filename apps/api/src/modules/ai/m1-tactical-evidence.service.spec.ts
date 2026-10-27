@@ -77,6 +77,40 @@ describe('M1 tactical decision migration contract', () => {
 });
 
 describe('M1TacticalEvidenceService', () => {
+  it('loads the latest user-scoped M1 decision state for the trading cockpit', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        route: 'M1_TREND_CONTINUATION',
+        bar_time: '2026-10-27T20:29:00.000Z',
+        candidate: { confidence: 0.738 },
+        governance: { netExpectedR: 0.2794 },
+        blockers: ['DRIFT_OUT_OF_DISTRIBUTION', 'M1_PHASE_ROUTE_SHADOW'],
+        execution_authority: 'NONE',
+        outcome_state: null,
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    await expect(service.loadLatestDecisionStateForUser(input().userId)).resolves.toEqual({
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      route: 'M1_TREND_CONTINUATION',
+      barTime: '2026-10-27T20:29:00.000Z',
+      confidence: 0.738,
+      netExpectedR: 0.2794,
+      executionAuthority: 'NONE',
+      blockers: ['DRIFT_OUT_OF_DISTRIBUTION', 'M1_PHASE_ROUTE_SHADOW'],
+      outcomeState: null,
+    });
+    const [sql, params] = query.mock.calls[0]!;
+    expect(String(sql)).toContain('WHERE user_id = $1');
+    expect(String(sql).replace(/\s+/g, ' ')).toContain('ORDER BY bar_time DESC');
+    expect(String(sql)).toContain("execution_authority <> 'NONE'");
+    expect(params).toEqual([input().userId]);
+  });
+
   it('records an immutable decision identity using parameterized SQL and no semantic overwrite on conflict', async () => {
     const row = {
       id: '33333333-3333-4333-8333-333333333333',
@@ -536,7 +570,7 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
       "blocker.value !~ '^M1_(SHADOW_|MEANINGFUL_SCOUT_|TIERED_SCOUT_)?RELIABILITY_'",
     );
     expect(normalized).toMatch(
-      /blocker\.value NOT IN\s*\(\s*'DRIFT_OUT_OF_DISTRIBUTION', 'DRIFT_STRESSED', 'M1_PHASE_SHADOW'\s*\)/,
+      /blocker\.value NOT IN\s*\(\s*'DRIFT_OUT_OF_DISTRIBUTION', 'DRIFT_STRESSED', 'M1_PHASE_SHADOW', 'M1_PHASE_ROUTE_SHADOW'\s*\)/,
     );
     expect(normalized).toContain(
       'blockers @> \'["DRIFT_OUT_OF_DISTRIBUTION"]\'::jsonb OR blockers @> \'["DRIFT_STRESSED"]\'::jsonb',

@@ -4,6 +4,8 @@ import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 import { VpsForexSignalCollectorService } from './vps-forex-signal-collector.service';
 import { BrokerParityV7Service } from './broker-parity-v7.service';
 import { V8DedicatedPaperReadinessService } from './v8-dedicated-paper-readiness.service';
+import { M1TacticalSchedulerService } from './m1-tactical-scheduler.service';
+import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
 
 @ApiTags('AI External Providers')
 @Controller('ai/external/vps-forex')
@@ -12,6 +14,8 @@ export class VpsForexSignalCollectorController {
     private readonly collector: VpsForexSignalCollectorService,
     private readonly brokerParity: BrokerParityV7Service,
     private readonly v8DedicatedPaper: V8DedicatedPaperReadinessService,
+    private readonly m1Tactical: M1TacticalSchedulerService,
+    private readonly m1Evidence: M1TacticalEvidenceService,
   ) {}
 
   @Get('status')
@@ -22,6 +26,21 @@ export class VpsForexSignalCollectorController {
   })
   getStatus(@CurrentUserId() userId: string) {
     return this.collector.getStatus(userId);
+  }
+
+  @Get('m1-tactical/status')
+  @ApiOperation({
+    summary: 'Read the active M1 tactical execution runtime and latest decision',
+    description:
+      'User-scoped cockpit status for the promoted M1 broker-native engine. Returns no broker identifiers or credentials.',
+  })
+  async getM1TacticalStatus(@CurrentUserId() userId: string) {
+    const runtime = this.m1Tactical.getStatus();
+    const latestDecision = await this.m1Evidence.loadLatestDecisionStateForUser(userId);
+    return {
+      ...runtime,
+      latestDecision,
+    };
   }
 
   @Get('broker-parity/status')

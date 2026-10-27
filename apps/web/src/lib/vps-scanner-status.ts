@@ -117,9 +117,53 @@ export interface TradeReadinessUiState {
   direction: "BUY" | "SELL" | null;
 }
 
+export interface M1TacticalStatusView {
+  enabled: boolean;
+  phase: string;
+  lastRunAt: string | null;
+  lastError: string | null;
+  latestDecision: {
+    instrument: string;
+    direction: "BUY" | "SELL";
+    route: string;
+    barTime: string;
+    confidence: number;
+    netExpectedR: number;
+    executionAuthority: "NONE" | "PAPER_ONLY_RESEARCH";
+    blockers: string[];
+    outcomeState: string | null;
+  } | null;
+}
+
+export function hasM1TacticalStatusUiShape(value: unknown): value is M1TacticalStatusView {
+  if (!isRecord(value) || typeof value.enabled !== "boolean" || typeof value.phase !== "string") {
+    return false;
+  }
+  if (!isNullableTimestamp(value.lastRunAt) || !(value.lastError === null || typeof value.lastError === "string")) {
+    return false;
+  }
+  if (value.latestDecision === null) return true;
+  if (!isRecord(value.latestDecision)) return false;
+  const decision = value.latestDecision;
+  return (
+    typeof decision.instrument === "string" &&
+    (decision.direction === "BUY" || decision.direction === "SELL") &&
+    typeof decision.route === "string" &&
+    typeof decision.barTime === "string" &&
+    typeof decision.confidence === "number" &&
+    Number.isFinite(decision.confidence) &&
+    typeof decision.netExpectedR === "number" &&
+    Number.isFinite(decision.netExpectedR) &&
+    (decision.executionAuthority === "NONE" || decision.executionAuthority === "PAPER_ONLY_RESEARCH") &&
+    isStringArray(decision.blockers) &&
+    (decision.outcomeState === null || typeof decision.outcomeState === "string")
+  );
+}
+
 export interface TradeReadinessUiInput {
   automationOn: boolean;
   scannerStatus: unknown;
+  m1TacticalStatus?: unknown;
   fastMarkState?: FastMarkFeedUiState["state"] | null;
   fallbackConfidence?: number | null;
   fallbackThreshold?: number | null;
@@ -166,6 +210,65 @@ export function deriveTradeReadinessUiState(
       "AI Trading is stopped",
       "Start AI Trading when you want iRexPro to evaluate and execute qualified opportunities.",
     );
+  }
+
+  const m1Status = hasM1TacticalStatusUiShape(input.m1TacticalStatus)
+    ? input.m1TacticalStatus
+    : null;
+  const m1Decision = m1Status?.enabled === true ? m1Status.latestDecision : null;
+  if (m1Decision) {
+    const blockers = m1Decision.blockers;
+    const executionEligible =
+      m1Decision.executionAuthority !== "NONE" &&
+      blockers.length === 0 &&
+      m1Decision.outcomeState !== "EXECUTION_FAILED";
+    let score = Math.max(0, Math.min(100, m1Decision.confidence * 100));
+    if (executionEligible) {
+      score = Math.max(score, 78);
+    } else {
+      score = Math.min(score, MAX_BLOCKED_READINESS_SCORE);
+    }
+
+    const driftBlocked = blockers.includes("DRIFT_OUT_OF_DISTRIBUTION");
+    const routeShadow = blockers.includes("M1_PHASE_ROUTE_SHADOW");
+    const reliabilityBlocked = blockers.some((blocker) => blocker.includes("RELIABILITY"));
+    if (driftBlocked) score = Math.min(score, 49);
+    else if (reliabilityBlocked) score = Math.min(score, 58);
+    if (routeShadow) score = Math.min(score, 59);
+
+    const rounded = Math.round(score);
+    if (executionEligible) {
+      return {
+        score: rounded,
+        band: "READY",
+        headline: "Trade conditions ready",
+        detail: "The active M1 broker-native setup has passed its model, market, risk and execution gates.",
+        tradeExpected: true,
+        instrument: m1Decision.instrument,
+        direction: m1Decision.direction,
+      };
+    }
+
+    let detail = "The active M1 engine is evaluating fresh broker-native data, but this setup still has execution blockers.";
+    if (driftBlocked && routeShadow) {
+      detail = "The current M1 setup is active, but drift is outside the execution distribution and this route remains shadow-only.";
+    } else if (driftBlocked) {
+      detail = "The current M1 setup is active, but drift is outside the execution distribution, so execution remains blocked.";
+    } else if (reliabilityBlocked) {
+      detail = "The current M1 setup is active, but pair/side reliability evidence is not yet strong enough for execution.";
+    } else if (routeShadow) {
+      detail = "The current M1 setup is active, but this route is still shadow-only in the present rollout phase.";
+    }
+
+    return {
+      score: rounded,
+      band: rounded >= 40 ? "FORMING" : "WAITING",
+      headline: rounded >= 40 ? "Setup forming" : "Waiting for a stronger setup",
+      detail,
+      tradeExpected: false,
+      instrument: m1Decision.instrument,
+      direction: m1Decision.direction,
+    };
   }
 
   const status = isRecord(input.scannerStatus) ? input.scannerStatus : null;

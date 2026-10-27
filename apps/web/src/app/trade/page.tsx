@@ -36,7 +36,9 @@ import {
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
   hasExternalProviderPerformanceUiShape,
+  hasM1TacticalStatusUiShape,
   hasVpsScannerUiShape,
+  type M1TacticalStatusView,
 } from "@/lib/vps-scanner-status";
 import {
   loadTraderExecutionSnapshot,
@@ -1616,6 +1618,8 @@ export default function AiTradingPage() {
     useState<ExternalProviderPerformanceView | null>(null);
   const [vpsScannerStatus, setVpsScannerStatus] =
     useState<VpsForexScannerStatusView | null>(null);
+  const [m1TacticalStatus, setM1TacticalStatus] =
+    useState<M1TacticalStatusView | null>(null);
   const [brokerParityRuntime, setBrokerParityRuntime] =
     useState<BrokerParityRuntimeStatusView | null>(null);
   const [v8DedicatedPaperStatus, setV8DedicatedPaperStatus] =
@@ -1821,6 +1825,17 @@ export default function AiTradingPage() {
           setVpsScannerStatus(scannerStatus as VpsForexScannerStatusView);
         } catch {
           setVpsScannerStatus(null);
+        }
+        try {
+          const tacticalStatus = await api.request<unknown>(
+            "/ai/external/vps-forex/m1-tactical/status",
+          );
+          if (!hasM1TacticalStatusUiShape(tacticalStatus)) {
+            throw new Error("M1 tactical status contract mismatch");
+          }
+          setM1TacticalStatus(tacticalStatus);
+        } catch {
+          setM1TacticalStatus(null);
         }
         try {
           const [parityStatus, v8Status] = await Promise.all([
@@ -2384,6 +2399,7 @@ export default function AiTradingPage() {
   const tradeReadiness = deriveTradeReadinessUiState({
     automationOn,
     scannerStatus: vpsScannerStatus,
+    m1TacticalStatus,
     fastMarkState: fastMarkFeed.state,
     fallbackConfidence: displayedConfidence,
     fallbackThreshold: displayedConfidenceThreshold,

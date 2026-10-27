@@ -54,6 +54,8 @@ const MIN_M1_BARS = 30;
 const MIN_CONTEXT_BARS = 22;
 const BREAKOUT_LOOKBACK = 20;
 const MINUTE_MS = 60_000;
+const MAX_DERIVED_NO_TICK_MINUTES = 3;
+const M1_FEATURE_HISTORY_BARS = 60;
 
 function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value));
@@ -95,13 +97,51 @@ function completed(
   return rows.filter((row) => new Date(row.timestamp).getTime() + durationMs <= decisionMs);
 }
 
-function contiguousM1(rows: LivePaperCandleInput[]): boolean {
+/**
+ * cTrader only creates a trend bar when at least one tick arrived in that
+ * period. Small timestamp gaps are therefore legitimate no-tick intervals,
+ * not necessarily missing provider data. For feature calculation only, carry
+ * the last observed broker close across at most three missing minutes so the
+ * one-minute feature grid remains time-consistent. These derived bars are
+ * never persisted as broker evidence and never provide spread evidence.
+ *
+ * A larger gap is treated as a data outage/session discontinuity. Evidence
+ * before that gap is discarded; at least MIN_M1_BARS must exist after the
+ * discontinuity before the model can become ready again.
+ */
+function normalizeM1NoTickGaps(rows: LivePaperCandleInput[]): LivePaperCandleInput[] | null {
+  if (rows.length === 0) return [];
+  const normalized: LivePaperCandleInput[] = [{ ...rows[0]!, timestamp: new Date(rows[0]!.timestamp) }];
+
   for (let index = 1; index < rows.length; index += 1) {
-    const current = new Date(rows[index]!.timestamp).getTime();
-    const previous = new Date(rows[index - 1]!.timestamp).getTime();
-    if (current - previous !== MINUTE_MS) return false;
+    const current = rows[index]!;
+    const previousRaw = rows[index - 1]!;
+    const currentMs = new Date(current.timestamp).getTime();
+    const previousMs = new Date(previousRaw.timestamp).getTime();
+    const deltaMs = currentMs - previousMs;
+    if (!Number.isFinite(deltaMs) || deltaMs <= 0 || deltaMs % MINUTE_MS !== 0) return null;
+
+    const missingMinutes = deltaMs / MINUTE_MS - 1;
+    if (missingMinutes > MAX_DERIVED_NO_TICK_MINUTES) {
+      normalized.length = 0;
+      normalized.push({ ...current, timestamp: new Date(current.timestamp) });
+      continue;
+    }
+
+    const previousClose = previousRaw.close;
+    for (let minute = 1; minute <= missingMinutes; minute += 1) {
+      normalized.push({
+        timestamp: new Date(previousMs + minute * MINUTE_MS),
+        open: previousClose,
+        high: previousClose,
+        low: previousClose,
+        close: previousClose,
+      });
+    }
+    normalized.push({ ...current, timestamp: new Date(current.timestamp) });
   }
-  return true;
+
+  return normalized.slice(-M1_FEATURE_HISTORY_BARS);
 }
 
 function emaSeries(values: number[], period: number): number[] {
@@ -178,7 +218,8 @@ export function buildM1TacticalFeatures(
   const instrument = input.instrument.trim().toUpperCase();
   if (!instrument || !Number.isFinite(input.decisionTime.getTime())) return null;
 
-  const m1 = completed(input.m1, 1, input.decisionTime);
+  const completedM1 = completed(input.m1, 1, input.decisionTime);
+  const m1 = completedM1 ? normalizeM1NoTickGaps(completedM1) : null;
   const m5 = completed(input.m5, 5, input.decisionTime);
   const m15 = completed(input.m15, 15, input.decisionTime);
   const h1 = completed(input.h1, 60, input.decisionTime);
@@ -189,8 +230,7 @@ export function buildM1TacticalFeatures(
     m5.length < MIN_CONTEXT_BARS ||
     m15.length < MIN_CONTEXT_BARS ||
     h1.length < MIN_CONTEXT_BARS ||
-    h4.length < MIN_CONTEXT_BARS ||
-    !contiguousM1(m1)
+    h4.length < MIN_CONTEXT_BARS
   ) {
     return null;
   }
@@ -207,7 +247,7 @@ export function buildM1TacticalFeatures(
   const latest = m1.at(-1)!;
   const [open, high, low, close] = numbers(latest);
   const range = high - low;
-  if (!Number.isFinite(range) || range <= 0) return null;
+  if (!Number.isFinite(range) || range < 0) return null;
 
   const previousTwenty = m1.slice(-(BREAKOUT_LOOKBACK + 1), -1);
   if (previousTwenty.length < BREAKOUT_LOOKBACK) return null;
@@ -245,6 +285,7 @@ export function buildM1TacticalFeatures(
 
   const upperWick = high - Math.max(open, close);
   const lowerWick = Math.min(open, close) - low;
+  const flatLatestBar = range === 0;
   const emaSlopeAtr = (ema9Series.at(-1)! - ema9Series.at(-2)!) / localAtr;
   const emaSeparationAtr = (ema9 - ema21) / localAtr;
   const higherTimeframeAgreement = clamp(
@@ -273,10 +314,10 @@ export function buildM1TacticalFeatures(
     price: close,
     atr14: localAtr,
     rsi14: localRsi,
-    bodyRangeRatio: Math.abs(close - open) / range,
-    upperWickRatio: Math.max(0, upperWick) / range,
-    lowerWickRatio: Math.max(0, lowerWick) / range,
-    closeLocation: clamp((close - low) / range, 0, 1),
+    bodyRangeRatio: flatLatestBar ? 0 : Math.abs(close - open) / range,
+    upperWickRatio: flatLatestBar ? 0 : Math.max(0, upperWick) / range,
+    lowerWickRatio: flatLatestBar ? 0 : Math.max(0, lowerWick) / range,
+    closeLocation: flatLatestBar ? 0.5 : clamp((close - low) / range, 0, 1),
     ema9,
     ema21,
     emaSeparationAtr,

@@ -24,6 +24,18 @@ export interface M1TacticalDecisionInput {
   blockers: string[];
 }
 
+export interface M1TacticalLatestDecisionState {
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  route: M1TacticalDecisionRoute;
+  barTime: string;
+  confidence: number;
+  netExpectedR: number;
+  executionAuthority: M1TacticalDecisionAuthority;
+  blockers: string[];
+  outcomeState: string | null;
+}
+
 export interface M1TacticalDecisionRecord {
   id: string;
   userId: string;
@@ -322,6 +334,57 @@ function blockers(value: unknown): string[] {
 @Injectable()
 export class M1TacticalEvidenceService {
   constructor(private readonly dataSource: DataSource) {}
+
+  async loadLatestDecisionStateForUser(
+    userId: string,
+  ): Promise<M1TacticalLatestDecisionState | null> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          instrument, direction, route, bar_time, candidate, governance, blockers,
+          execution_authority, outcome_state
+        FROM trading.m1_tactical_decisions
+        WHERE user_id = $1
+        ORDER BY
+          bar_time DESC,
+          CASE
+            WHEN execution_authority <> 'NONE' THEN 0
+            WHEN route <> 'ABSTAIN' THEN 1
+            ELSE 2
+          END ASC,
+          COALESCE((candidate ->> 'confidence')::numeric, 0) DESC,
+          COALESCE((governance ->> 'netExpectedR')::numeric, -999999) DESC,
+          created_at DESC
+        LIMIT 1
+      `,
+      [userId],
+    )) as Array<{
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      route: M1TacticalDecisionRoute;
+      bar_time: string | Date;
+      candidate: unknown;
+      governance: unknown;
+      blockers: unknown;
+      execution_authority: M1TacticalDecisionAuthority;
+      outcome_state: string | null;
+    }>;
+    const row = rows[0];
+    if (!row) return null;
+    const candidate = jsonObject(row.candidate);
+    const governance = jsonObject(row.governance);
+    return {
+      instrument: String(row.instrument).trim().toUpperCase(),
+      direction: row.direction,
+      route: row.route,
+      barTime: date(row.bar_time).toISOString(),
+      confidence: number(candidate.confidence),
+      netExpectedR: number(governance.netExpectedR),
+      executionAuthority: row.execution_authority,
+      blockers: blockers(row.blockers),
+      outcomeState: row.outcome_state ?? null,
+    };
+  }
 
   async recordDecision(input: M1TacticalDecisionInput): Promise<M1TacticalDecisionRecord> {
     const instrument = input.instrument.trim().toUpperCase();
@@ -895,7 +958,8 @@ export class M1TacticalEvidenceService {
             WHERE blocker.value NOT IN (
               'DRIFT_OUT_OF_DISTRIBUTION',
               'DRIFT_STRESSED',
-              'M1_PHASE_SHADOW'
+              'M1_PHASE_SHADOW',
+              'M1_PHASE_ROUTE_SHADOW'
             )
               AND blocker.value !~ '^M1_(SHADOW_|MEANINGFUL_SCOUT_|TIERED_SCOUT_)?RELIABILITY_'
           )

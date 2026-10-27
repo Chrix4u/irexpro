@@ -321,6 +321,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
 
   getStatus() {
     return {
+      enabled: this.enabled(),
       policyVersion: this.rolloutPolicy.version,
       modelPolicyVersion: M1_TACTICAL_POLICY_V1.version,
       phase: this.rolloutPolicy.phase,
