@@ -145,12 +145,14 @@ export interface M1OpenPaperRiskPositionSnapshot {
   riskAtStop: number | null;
 }
 
-export interface M1ActiveOppositeIntentQuery {
+export interface M1ActiveIntentQuery {
   userId: string;
   brokerConnectionId: string;
   instrument: string;
   direction: 'BUY' | 'SELL';
 }
+
+export type M1ActiveOppositeIntentQuery = M1ActiveIntentQuery;
 
 export interface M1OpenPaperPositionSnapshot {
   tradeId: string;
@@ -637,7 +639,7 @@ export class M1TacticalEvidenceService {
     });
   }
 
-  async hasActiveOppositeM1Intent(input: M1ActiveOppositeIntentQuery): Promise<boolean> {
+  async hasActiveM1Intent(input: M1ActiveIntentQuery): Promise<boolean> {
     const instrument = input.instrument.trim().toUpperCase();
     const rows = (await this.dataSource.query(
       `
@@ -663,6 +665,10 @@ export class M1TacticalEvidenceService {
       [input.userId, input.brokerConnectionId, instrument, input.direction],
     )) as Array<{ exists: boolean }>;
     return rows[0]?.exists === true;
+  }
+
+  async hasActiveOppositeM1Intent(input: M1ActiveOppositeIntentQuery): Promise<boolean> {
+    return this.hasActiveM1Intent(input);
   }
 
   async loadShadowPairSideOutcomes(

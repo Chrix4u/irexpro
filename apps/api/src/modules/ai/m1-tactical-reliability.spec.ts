@@ -65,6 +65,35 @@ describe('evaluateM1RoutePairSideReliability', () => {
     expect(result.reason).toBe('EARLY_LOSS_STREAK');
   });
 
+  it('brakes provisional early-transition after two consecutive realised losses', () => {
+    const evidence = [
+      row(-1, { route: 'M1_EARLY_TRANSITION', closedAt: new Date(NOW.getTime() - 60_000) }),
+      row(-0.6, { route: 'M1_EARLY_TRANSITION', closedAt: new Date(NOW.getTime() - 2 * 60_000) }),
+    ];
+    const result = evaluate(evidence, { route: 'M1_EARLY_TRANSITION' });
+    expect(result).toMatchObject({
+      eligible: false,
+      samples: 2,
+      wins: 0,
+      losses: 2,
+      reason: 'EARLY_LOSS_STREAK',
+    });
+  });
+
+  it('keeps trend-continuation collecting after only two consecutive realised losses', () => {
+    const result = evaluate([
+      row(-1, { closedAt: new Date(NOW.getTime() - 60_000) }),
+      row(-0.6, { closedAt: new Date(NOW.getTime() - 2 * 60_000) }),
+    ]);
+    expect(result).toMatchObject({
+      eligible: true,
+      samples: 2,
+      wins: 0,
+      losses: 2,
+      reason: 'INSUFFICIENT_EVIDENCE',
+    });
+  });
+
   it('brakes a fresh three-loss streak even when older wins still dominate the sample', () => {
     const recentLosses = [-1, -1, -1].map((pnl, index) =>
       row(pnl, { closedAt: new Date(NOW.getTime() - (index + 1) * 60_000) }),

@@ -422,6 +422,25 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(params).toEqual([input().userId, input().brokerConnectionId]);
   });
 
+  it('checks active same-side M1 intent identity before another execution is submitted', async () => {
+    const query = jest.fn().mockResolvedValue([{ exists: true }]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const exists = await service.hasActiveM1Intent({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'eurusd',
+      direction: 'BUY',
+    });
+
+    expect(exists).toBe(true);
+    const [sql, params] = query.mock.calls[0]!;
+    const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain("ti.status = 'CREATED'");
+    expect(normalized).toContain("ti.status = 'EXECUTED' AND t.status = 'OPEN'");
+    expect(params).toEqual([input().userId, input().brokerConnectionId, 'EURUSD', 'BUY']);
+  });
+
   it('checks active opposite M1 intent identity without treating historical closed intents as duplicates', async () => {
     const query = jest.fn().mockResolvedValue([{ exists: true }]);
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
