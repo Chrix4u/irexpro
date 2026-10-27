@@ -1475,9 +1475,9 @@ export class BrokerService {
   async getAllConnectedConnectionIds(): Promise<string[]> {
     const connections = await this.connectionRepo.find({
       where: { status: BrokerConnectionStatus.CONNECTED },
-      select: ['id'],
+      select: ['id', 'brokerId'],
     });
-    return connections.map((c) => c.id);
+    return connections.filter((c) => c.brokerId !== 'direct-mt5').map((c) => c.id);
   }
 
   /**
@@ -2083,22 +2083,29 @@ export class BrokerService {
       throw new ForbiddenException('Broker connection is not active');
     }
 
-    if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
+    const directMt5 = connection.brokerId === 'direct-mt5';
+    if (
+      !directMt5 &&
+      (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)
+    ) {
       throw new ForbiddenException('Broker connection credentials unavailable');
     }
 
-    this.assertCredentialsUsable(connection, 'getSupportedInstrumentsForConnection');
+    if (!directMt5)
+      this.assertCredentialsUsable(connection, 'getSupportedInstrumentsForConnection');
 
     const adapter = this.adapterRegistry.getAdapterForConnection(
       connection.id,
       connection.brokerId,
     );
-    const credentials = this.encryptionService.decrypt({
-      ciphertext: connection.encryptedCredentials,
-      iv: connection.credentialIv,
-      tag: connection.credentialTag,
-      keyId: connection.encryptionKeyId ?? 'env-key-v1',
-    });
+    const credentials = directMt5
+      ? { accountId: connection.accountId ?? connection.id }
+      : this.encryptionService.decrypt({
+          ciphertext: connection.encryptedCredentials!,
+          iv: connection.credentialIv!,
+          tag: connection.credentialTag!,
+          keyId: connection.encryptionKeyId ?? 'env-key-v1',
+        });
 
     adapter.setMode(connection.accountType);
 
@@ -2151,24 +2158,30 @@ export class BrokerService {
       throw new ForbiddenException('Broker connection is not active');
     }
 
-    if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
+    const directMt5 = connection.brokerId === 'direct-mt5';
+    if (
+      !directMt5 &&
+      (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)
+    ) {
       throw new ForbiddenException('Broker connection credentials unavailable');
     }
 
-    // A3: lifecycle gate before decrypt — unusable credentials never reach the
-    // provider adapter.
-    this.assertCredentialsUsable(connection, 'getInstrumentSpecForConnection');
+    // Direct MT5 authenticates with the paired, short-lived terminal connector;
+    // cloud providers retain the encrypted credential lifecycle below.
+    if (!directMt5) this.assertCredentialsUsable(connection, 'getInstrumentSpecForConnection');
 
     const adapter = this.adapterRegistry.getAdapterForConnection(
       connection.id,
       connection.brokerId,
     );
-    const credentials = this.encryptionService.decrypt({
-      ciphertext: connection.encryptedCredentials,
-      iv: connection.credentialIv,
-      tag: connection.credentialTag,
-      keyId: connection.encryptionKeyId ?? 'env-key-v1',
-    });
+    const credentials = directMt5
+      ? { accountId: connection.accountId ?? connection.id }
+      : this.encryptionService.decrypt({
+          ciphertext: connection.encryptedCredentials!,
+          iv: connection.credentialIv!,
+          tag: connection.credentialTag!,
+          keyId: connection.encryptionKeyId ?? 'env-key-v1',
+        });
 
     adapter.setMode(connection.accountType);
 
@@ -2227,22 +2240,28 @@ export class BrokerService {
       throw new ForbiddenException('Broker connection is not active');
     }
 
-    if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
+    const directMt5 = connection.brokerId === 'direct-mt5';
+    if (
+      !directMt5 &&
+      (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)
+    ) {
       throw new ForbiddenException('Broker connection credentials unavailable');
     }
 
-    this.assertCredentialsUsable(connection, 'getCurrentPriceForConnection');
+    if (!directMt5) this.assertCredentialsUsable(connection, 'getCurrentPriceForConnection');
 
     const adapter = this.adapterRegistry.getAdapterForConnection(
       connection.id,
       connection.brokerId,
     );
-    const credentials = this.encryptionService.decrypt({
-      ciphertext: connection.encryptedCredentials,
-      iv: connection.credentialIv,
-      tag: connection.credentialTag,
-      keyId: connection.encryptionKeyId ?? 'env-key-v1',
-    });
+    const credentials = directMt5
+      ? { accountId: connection.accountId ?? connection.id }
+      : this.encryptionService.decrypt({
+          ciphertext: connection.encryptedCredentials!,
+          iv: connection.credentialIv!,
+          tag: connection.credentialTag!,
+          keyId: connection.encryptionKeyId ?? 'env-key-v1',
+        });
 
     adapter.setMode(connection.accountType);
 
@@ -2302,7 +2321,8 @@ export class BrokerService {
     // Fail closed for non-CONNECTED connections and unusable credentials —
     // the adapter is never contacted.
     if (connection.status !== BrokerConnectionStatus.CONNECTED) return null;
-    if (!BrokerCredentialLifecycle.isUsable(connection.credentialStatus)) return null;
+    const directMt5 = connection.brokerId === 'direct-mt5';
+    if (!directMt5 && !BrokerCredentialLifecycle.isUsable(connection.credentialStatus)) return null;
 
     const adapter = this.adapterRegistry.getAdapterForConnection(
       connection.id,

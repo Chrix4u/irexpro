@@ -28,6 +28,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V5,
   M1_TACTICAL_ROLLOUT_POLICY_V6,
   M1_TACTICAL_ROLLOUT_POLICY_V7,
+  M1_TACTICAL_ROLLOUT_POLICY_V8,
   m1RiskMarketRegime,
   m1RouteExecutableInPhase,
   m1ShadowOutcomeEligible,
@@ -783,6 +784,7 @@ function phase2Harness(
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
     findBySignal,
+    loadSnapshot: (marketData as any).loadSnapshot as jest.Mock,
   };
 }
 
@@ -1117,13 +1119,14 @@ async function driveFeatures(
   options: {
     eventRisk?: 'CLEAR' | 'HIGH_IMPACT_BLOCK' | 'UNVERIFIED';
     spreadEvidence?: any;
+    brokerConnectionId?: string;
   } = {},
 ) {
   const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
   const route = classifyM1TacticalRoute(buy, sell, features, M1_TACTICAL_POLICY_V1);
   await (h.service as any).persistCandidate(
     'user-1',
-    'conn-1',
+    options.brokerConnectionId ?? 'conn-1',
     buy,
     sell,
     features,
@@ -1700,10 +1703,14 @@ describe('M1 early-transition tiered v7 PAPER scout', () => {
     );
   });
 
-  it('binds AiModule to the tiered v7 rollout', () => {
+  it('keeps the tiered v7 rollout immutable but no longer binds it once v8 is active', () => {
     const moduleSource = fs.readFileSync(path.resolve(__dirname, './ai.module.ts'), 'utf8');
-    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V7');
-    expect(moduleSource).toMatch(
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V7).toMatchObject({
+      version: 'm1-tactical-rollout-v7-early-transition-tiered-scout',
+      phase: 'PAPER_EARLY_TRANSITION_SCOUT_TIERED',
+      paperVolumeCap: 0.1,
+    });
+    expect(moduleSource).not.toMatch(
       /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V7/,
     );
   });
@@ -1728,6 +1735,93 @@ describe('M1 early-transition tiered v7 PAPER scout', () => {
     expect(h.receiveSignal).not.toHaveBeenCalled();
     expect(h.recordDecision.mock.calls[0]![0].blockers).toEqual(
       expect.arrayContaining([expect.stringContaining('M1_TIERED_SCOUT_RELIABILITY_')]),
+    );
+  });
+});
+
+describe('M1 professional v8 DEMO promotion', () => {
+  const matureHealthyOutcomes = [
+    { observedAt: new Date('2026-10-15T10:29:00.000Z'), netR: 0.74 },
+    { observedAt: new Date('2026-10-15T10:19:00.000Z'), netR: 0.44 },
+    { observedAt: new Date('2026-10-15T10:09:00.000Z'), netR: -0.2 },
+    { observedAt: new Date('2026-10-15T09:59:00.000Z'), netR: -0.08 },
+    { observedAt: new Date('2026-10-15T09:49:00.000Z'), netR: 0.46 },
+    { observedAt: new Date('2026-10-15T09:39:00.000Z'), netR: -0.06 },
+  ];
+
+  it('keeps the validated early-transition route but replaces the scout cap with a 4.00 professional ceiling', () => {
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V8).toMatchObject({
+      version: 'm1-tactical-rollout-v8-demo-professional',
+      phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+      paperVolumeCap: 4,
+    });
+    expect(
+      m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V8.phase, 'M1_EARLY_TRANSITION'),
+    ).toBe(true);
+    expect(
+      m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V8.phase, 'M1_TREND_CONTINUATION'),
+    ).toBe(false);
+    expect(
+      m1RouteExecutableInPhase(M1_TACTICAL_ROLLOUT_POLICY_V8.phase, 'M1_CONFIRMED_REVERSAL'),
+    ).toBe(false);
+  });
+
+  it('binds AiModule to v8 and leaves v7 immutable for historical evidence', () => {
+    const moduleSource = fs.readFileSync(path.resolve(__dirname, './ai.module.ts'), 'utf8');
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V7).toMatchObject({
+      version: 'm1-tactical-rollout-v7-early-transition-tiered-scout',
+      paperVolumeCap: 0.1,
+    });
+    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V8');
+    expect(moduleSource).toMatch(
+      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V8/,
+    );
+  });
+
+  it('uses the active FULL_AUTO session connection for V8 market-data routing instead of the configured paper connection', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: {
+        id: 'session-demo-1',
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'demo-conn-2',
+      },
+    });
+    h.loadSnapshot.mockResolvedValue(null);
+
+    await h.service.runOnce(new Date('2026-10-15T10:30:00.000Z'));
+
+    expect(h.loadSnapshot).toHaveBeenCalledWith(
+      'demo-conn-2',
+      'EURUSD',
+      new Date('2026-10-15T10:30:00.000Z'),
+    );
+  });
+
+  it('follows the exact active FULL_AUTO DEMO session connection and emits a professional-sized M1 candidate', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: {
+        id: 'session-demo-1',
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'demo-conn-2',
+      },
+      shadowPairSideOutcomes: matureHealthyOutcomes,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+
+    await driveFeatures(h, transitionFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    const signal = h.receiveSignal.mock.calls[0]![0];
+    expect(signal.brokerConnectionId).toBe('demo-conn-2');
+    expect(signal.suggestedVolume).toBeGreaterThanOrEqual(0.2);
+    expect(signal.suggestedVolume).toBeLessThanOrEqual(4);
+    expect(signal.metadata).toEqual(
+      expect.objectContaining({
+        m1_rollout_phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+        position_sizing_tier: expect.stringMatching(/^(BASE|STRONG|VERY_STRONG|ELITE)$/),
+      }),
     );
   });
 });

@@ -82,7 +82,8 @@ export type M1TacticalExecutionPhase =
   | 'PAPER_ALL_ROUTES'
   | 'PAPER_EARLY_TRANSITION_MICRO'
   | 'PAPER_EARLY_TRANSITION_SCOUT_010'
-  | 'PAPER_EARLY_TRANSITION_SCOUT_TIERED';
+  | 'PAPER_EARLY_TRANSITION_SCOUT_TIERED'
+  | 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
 
 export interface M1TacticalRolloutPolicy {
   version: string;
@@ -162,6 +163,20 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V7: Readonly<M1TacticalRolloutPolicy> = 
   paperVolumeCap: 0.1,
 });
 
+/**
+ * V8 is the first real-provider DEMO rollout. It preserves the V7 validated
+ * early-transition route/evidence gates but removes the scout micro-lot cap.
+ * 4.00 is only an upper ceiling: PositionSizingService still derives the
+ * actual volume from allocation, stop distance, durable risk %, broker
+ * min/max/step and margin evidence, with a 0.20 promoted execution floor.
+ */
+export const M1_TACTICAL_ROLLOUT_POLICY_V8: Readonly<M1TacticalRolloutPolicy> = Object.freeze({
+  ...M1_TACTICAL_ROLLOUT_POLICY_V1,
+  version: 'm1-tactical-rollout-v8-demo-professional',
+  phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+  paperVolumeCap: 4,
+});
+
 export function m1RiskMarketRegime(
   route: M1TacticalRoute,
 ): 'TREND_HEALTHY' | 'REVERSAL' | 'TRANSITION' | undefined {
@@ -187,7 +202,8 @@ export function m1RouteExecutableInPhase(
   if (
     phase === 'PAPER_EARLY_TRANSITION_MICRO' ||
     phase === 'PAPER_EARLY_TRANSITION_SCOUT_010' ||
-    phase === 'PAPER_EARLY_TRANSITION_SCOUT_TIERED'
+    phase === 'PAPER_EARLY_TRANSITION_SCOUT_TIERED' ||
+    phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
   )
     return route === 'M1_EARLY_TRANSITION';
   return (
@@ -195,6 +211,15 @@ export function m1RouteExecutableInPhase(
     route === 'M1_CONFIRMED_REVERSAL' ||
     route === 'M1_EARLY_TRANSITION'
   );
+}
+
+export function m1ProfessionalSizingTier(
+  confidence: number,
+): 'BASE' | 'STRONG' | 'VERY_STRONG' | 'ELITE' {
+  if (confidence >= 0.88) return 'ELITE';
+  if (confidence >= 0.8) return 'VERY_STRONG';
+  if (confidence >= 0.72) return 'STRONG';
+  return 'BASE';
 }
 
 export function m1ShadowOutcomeEligible(input: {
@@ -315,7 +340,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     this.running = true;
     try {
       const userId = this.userId();
-      const brokerConnectionId = this.connectionId();
+      let brokerConnectionId = this.connectionId();
+      if (
+        this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&
+        this.executionService
+      ) {
+        const active = await this.executionService.getActiveSession(userId);
+        if (active?.executionMode === ExecutionMode.FULL_AUTO) {
+          brokerConnectionId = active.brokerConnectionId;
+        }
+      }
+      if (!brokerConnectionId) return;
       for (const instrument of this.rolloutPolicy.instruments) {
         try {
           await this.processInstrument(userId, brokerConnectionId, instrument, decisionTime);
@@ -616,7 +651,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_010' &&
       routeDecision.route === 'M1_EARLY_TRANSITION';
     const earlyTransitionTieredScout =
-      this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_TIERED' &&
+      (this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_TIERED' ||
+        this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL') &&
       routeDecision.route === 'M1_EARLY_TRANSITION';
     const evidenceQualifiedScout = earlyTransitionMeaningfulScout || earlyTransitionTieredScout;
     const scoutReliabilityArtifact = shadowPairSideReliability
@@ -647,9 +683,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         : earlyTransitionMicro
           ? 'MICRO'
           : 'NONE';
-    const executionVolumeCap = provisionalScoutReliability
-      ? Math.min(this.rolloutPolicy.paperVolumeCap, provisionalScoutReliability.lotCap)
-      : this.rolloutPolicy.paperVolumeCap;
+    const executionVolumeCap =
+      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
+        ? this.rolloutPolicy.paperVolumeCap
+        : provisionalScoutReliability
+          ? Math.min(this.rolloutPolicy.paperVolumeCap, provisionalScoutReliability.lotCap)
+          : this.rolloutPolicy.paperVolumeCap;
     const microDriftOnlyRescue =
       earlyTransitionMicro &&
       shadowPairSideReliability?.eligible === true &&
@@ -895,16 +934,22 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
       : null;
+    const professionalDemoPhase = this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
+    const requiredExecutionMode = professionalDemoPhase
+      ? ExecutionMode.FULL_AUTO
+      : ExecutionMode.PAPER_ONLY;
     if (
       !session ||
-      session.executionMode !== ExecutionMode.PAPER_ONLY ||
+      session.executionMode !== requiredExecutionMode ||
       session.brokerConnectionId !== brokerConnectionId
     ) {
       await this.evidence.markOutcomeState(
         decisionId,
         'SESSION_INACTIVE',
         new Date(),
-        'M1 requires the exact active PAPER session bound to this broker connection',
+        professionalDemoPhase
+          ? 'M1 V8 requires the exact active FULL_AUTO DEMO session bound to this broker connection'
+          : 'M1 requires the exact active PAPER session bound to this broker connection',
       );
       return;
     }
@@ -982,7 +1027,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         metadata: {
           external_provider_paper_only: true,
           production_eligible: false,
-          position_sizing_tier: 'RESEARCH',
+          position_sizing_tier:
+            this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
+              ? m1ProfessionalSizingTier(candidate.confidence)
+              : 'RESEARCH',
           m1_tactical_route: routeDecision.route,
           m1_policy_version: candidate.policyVersion,
           m1_rollout_policy_version: this.rolloutPolicy.version,
@@ -1039,7 +1087,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             this.rolloutPolicy.routeNetExpectedRFloors[
               routeDecision.route as Exclude<M1TacticalRoute, 'ABSTAIN'>
             ],
-          m1_execution_authority: 'PAPER_ONLY_RESEARCH',
+          m1_execution_authority:
+            this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
+              ? 'DEMO_FULL_AUTO_PROMOTED'
+              : 'PAPER_ONLY_RESEARCH',
         },
       });
       if (this.tradeIntentService) {
@@ -1133,7 +1184,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const earlyTransitionScoutPhase =
       this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_MICRO' ||
       this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_010' ||
-      this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_TIERED';
+      this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_TIERED' ||
+      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
     if (
       !earlyTransitionScoutPhase ||
       !routeDecision.eligible ||
@@ -1158,7 +1210,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         outcomes,
       });
     }
-    if (this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_TIERED') {
+    if (
+      this.rolloutPolicy.phase === 'PAPER_EARLY_TRANSITION_SCOUT_TIERED' ||
+      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
+    ) {
       const meaningful = evaluateM1MeaningfulScoutReliability({
         route: 'M1_EARLY_TRANSITION',
         evaluatedAt,

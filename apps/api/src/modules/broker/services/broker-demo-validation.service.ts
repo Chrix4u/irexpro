@@ -18,6 +18,27 @@ import {
   sanitizeVerificationDetail,
 } from '../verification/provider-verification-harness';
 
+interface AdapterWithDemoValidationExposureCleanup {
+  cleanupDemoValidationExposure(): Promise<{
+    positionsClosed: number;
+    ordersCancelled: number;
+    remainingPositions: number;
+    remainingOrders: number;
+  }>;
+}
+
+function hasDemoValidationExposureCleanup(
+  adapter: unknown,
+): adapter is AdapterWithDemoValidationExposureCleanup {
+  return (
+    typeof adapter === 'object' &&
+    adapter !== null &&
+    'cleanupDemoValidationExposure' in adapter &&
+    typeof (adapter as { cleanupDemoValidationExposure?: unknown })
+      .cleanupDemoValidationExposure === 'function'
+  );
+}
+
 /**
  * BrokerDemoValidationService — the EVIDENCE-BASED write path for
  * BrokerConnection.demoValidated.
@@ -143,11 +164,50 @@ export class BrokerDemoValidationService {
       connection.id,
       connection.brokerId,
     );
+
+    // Provider-specific preflight: cTrader DEMO validation orders carry a
+    // server-generated `harness-` client reference. A previous interrupted or
+    // pre-fix validation may therefore have left broker-side exposure that is
+    // not represented as an iRexPro Trade row. Clean ONLY that validator-owned
+    // exposure before submitting another validation order. The cleanup result
+    // is recorded as its own safety preflight step; a FAIL blocks every broker-
+    // mutating checklist step without falsifying the successful connect step.
+    const preflightSteps: ProviderVerificationStep[] = [];
+    if (connectStep.status === 'PASS' && hasDemoValidationExposureCleanup(adapter)) {
+      try {
+        const cleanup = await adapter.cleanupDemoValidationExposure();
+        if (cleanup.remainingPositions > 0 || cleanup.remainingOrders > 0) {
+          throw new Error(
+            `cleanup incomplete (positions=${cleanup.remainingPositions}, ` +
+              `orders=${cleanup.remainingOrders})`,
+          );
+        }
+        preflightSteps.push({
+          name: 'legacy-validation-cleanup',
+          status: 'PASS',
+          detail:
+            `validator-owned exposure flat; cleaned positions=${cleanup.positionsClosed} ` +
+            `orders=${cleanup.ordersCancelled}`,
+        });
+      } catch (err) {
+        preflightSteps.push({
+          name: 'legacy-validation-cleanup',
+          status: 'FAIL',
+          detail: sanitizeVerificationDetail(
+            `validation exposure cleanup failed: ${
+              err instanceof Error ? err.message : 'unknown cleanup failure'
+            }`,
+          ),
+        });
+      }
+    }
+
     const evidence = await runVerificationChecklist(adapter, {
       brokerId: connection.brokerId,
       mode: 'DEMO',
       steps: DEMO_VALIDATION_STEPS,
       connectStep,
+      preflightSteps,
       connectionId,
     });
 

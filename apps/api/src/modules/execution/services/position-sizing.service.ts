@@ -119,10 +119,9 @@ export interface SizedPosition {
 
 /** Decimal scale for lot math (lot steps are 0.01/0.001 — 8 digits is exact). */
 const LOT_SCALE = 8;
-export const PAPER_PRODUCT_ABSOLUTE_MIN_LOT = '0.1';
-const PAPER_PRODUCT_PROVISIONAL_SCOUT_MIN_LOT = '0.05';
+export const PAPER_PRODUCT_ABSOLUTE_MIN_LOT = '0.2';
 const PAPER_PRODUCT_DEFAULT_MIN_LOT = '0.2';
-const PAPER_PRODUCT_MAX_LOT = '2';
+const PAPER_PRODUCT_MAX_LOT = '4';
 
 /**
  * PositionSizingService (Round 6 live-execution completion §4) — the
@@ -259,11 +258,24 @@ export class PositionSizingService {
     let removeProfileLotCeiling = false;
 
     if (params.paperAllocationSizing) {
+      let brokerAccountType: string | null = null;
+      try {
+        const connection = await this.brokerService.findConnectionById(
+          params.brokerConnectionId,
+          userId,
+        );
+        brokerAccountType = connection.accountType;
+      } catch {
+        // Environment is authorization evidence. If it cannot be proven, the
+        // allocation-aware override stays disabled and legacy risk ceilings remain.
+        brokerAccountType = null;
+      }
       const allocatedCapital = ExactDecimal.tryParse(
         params.paperAllocationSizing.allocatedCapital ?? '',
       );
       const policy = paperAllocationSizingPolicy({
         executionMode: params.paperAllocationSizing.executionMode,
+        brokerAccountType,
         allocatedCapital: allocatedCapital ? Number(allocatedCapital.toString()) : null,
         brokerEquity: Number(equity.toString()),
         confidenceTier: params.paperAllocationSizing.confidenceTier,
@@ -507,16 +519,12 @@ export class PositionSizingService {
       );
     }
 
-    const requestedPaperPolicyMinimumLot = ExactDecimal.tryParse(
-      params.paperAllocationSizing?.minimumExecutableLot ?? '',
-    );
-    const provisionalScoutProductMinimum = ExactDecimal.parse(
-      PAPER_PRODUCT_PROVISIONAL_SCOUT_MIN_LOT,
-    );
+    // Promoted non-LIVE execution has one professional product floor. Research
+    // and scout callers may request a smaller cap for evidence collection, but
+    // that micro-volume is no longer executable: the hard floor below causes
+    // those requests to abstain instead of dispatching 0.05/0.10 lots.
     const paperProductMinimumLot = allocationAwarePaper
-      ? requestedPaperPolicyMinimumLot?.eq(provisionalScoutProductMinimum)
-        ? provisionalScoutProductMinimum
-        : ExactDecimal.parse(PAPER_PRODUCT_ABSOLUTE_MIN_LOT)
+      ? ExactDecimal.parse(PAPER_PRODUCT_ABSOLUTE_MIN_LOT)
       : null;
     const paperProductMaximumLot = allocationAwarePaper
       ? ExactDecimal.parse(PAPER_PRODUCT_MAX_LOT)

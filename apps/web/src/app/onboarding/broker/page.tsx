@@ -299,7 +299,7 @@ export default function OnboardingBrokerPage() {
     setAction('pairing');
     try {
       const created = await api.createBrokerConnection({
-        brokerId: 'metatrader5',
+        brokerId: 'direct-mt5',
         accountType: 'DEMO',
         accountId: accountId.trim(),
         displayName: displayName.trim() || undefined,
@@ -498,7 +498,7 @@ export default function OnboardingBrokerPage() {
   const selectedRegistryEntry = registryEntries.find((e) => e.id === selectedBrokerId);
   const selectedIsOAuth = selectedRegistryEntry?.authenticationType === 'OAUTH';
   const selectedIsMt5 = selectedBrokerId === 'metatrader5';
-  const selectedIsDirectMt5 = selectedIsMt5 && mt5ConnectionMethod === 'DIRECT';
+  const selectedIsDirectMt5 = selectedBrokerId === 'direct-mt5' || (selectedIsMt5 && mt5ConnectionMethod === 'DIRECT');
   const selectedConnectionReadiness = selectedRegistryEntry?.connectionReadiness;
   const selectedConnectionReady = isBrokerConnectionRuntimeReady(selectedRegistryEntry);
 

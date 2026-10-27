@@ -542,7 +542,12 @@ describe('BrokerProviderRegistryService', () => {
       const mtEntries = catalog.filter((e) =>
         e.connectionRoutes.includes(BrokerConnectionRoute.METATRADER),
       );
-      expect(mtEntries).toHaveLength(1);
+      expect(mtEntries.map((e) => e.id).sort()).toEqual(['direct-mt5', 'metatrader5']);
+      const directMt5 = mtEntries.find((e) => e.id === 'direct-mt5');
+      expect(directMt5).toMatchObject({
+        environments: ['DEMO'],
+        authenticationType: 'SESSION_AUTH',
+      });
 
       const ctrader = catalog.find((e) => e.id === 'ctrader');
       expect(ctrader?.connectionRoutes).toEqual([BrokerConnectionRoute.CTRADER]);

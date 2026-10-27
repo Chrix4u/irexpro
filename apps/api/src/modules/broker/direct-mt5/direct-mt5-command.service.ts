@@ -35,6 +35,13 @@ export interface DirectMt5CommandResultInput {
 }
 
 @Injectable()
+export class DirectMt5CommandUncertainError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DirectMt5CommandUncertainError';
+  }
+}
+
 export class DirectMt5CommandService {
   constructor(private readonly dataSource: DataSource) {}
 
@@ -237,5 +244,85 @@ export class DirectMt5CommandService {
       throw new NotFoundException('Direct MT5 command is not leased by this connector');
     }
     return command;
+  }
+
+  async getActiveConnectorForConnection(brokerConnectionId: string): Promise<{
+    connectorId: string;
+    accountLogin: string;
+    brokerServer: string;
+    currency: string | null;
+    tradeAllowed: boolean;
+  }> {
+    const rows = (await this.dataSource.query(
+      `SELECT id, account_login, broker_server, currency, trade_allowed
+       FROM broker.direct_mt5_connectors
+       WHERE broker_connection_id = $1
+         AND state = 'ACTIVE'
+         AND last_heartbeat_at >= now() - interval '15 seconds'
+       LIMIT 1`,
+      [brokerConnectionId],
+    )) as Array<{
+      id: string;
+      account_login: string;
+      broker_server: string;
+      currency: string | null;
+      trade_allowed: boolean;
+    }>;
+    const row = rows[0];
+    if (!row)
+      throw new NotFoundException('Direct MT5 connector is not active or heartbeat is stale');
+    return {
+      connectorId: row.id,
+      accountLogin: row.account_login,
+      brokerServer: row.broker_server,
+      currency: row.currency,
+      tradeAllowed: Boolean(row.trade_allowed),
+    };
+  }
+
+  async request(input: {
+    brokerConnectionId: string;
+    idempotencyKey: string;
+    commandType: DirectMt5CommandType;
+    payload: Record<string, unknown>;
+    timeoutMs?: number;
+  }): Promise<Record<string, unknown>> {
+    const connector = await this.getActiveConnectorForConnection(input.brokerConnectionId);
+    const command = await this.enqueue({
+      connectorId: connector.connectorId,
+      brokerConnectionId: input.brokerConnectionId,
+      idempotencyKey: input.idempotencyKey,
+      commandType: input.commandType,
+      payload: input.payload,
+    });
+    const deadline = Date.now() + Math.max(500, Math.min(input.timeoutMs ?? 9_000, 25_000));
+    while (Date.now() < deadline) {
+      const rows = (await this.dataSource.query(
+        `SELECT state, result, error FROM broker.direct_mt5_commands WHERE id = $1 LIMIT 1`,
+        [command.id],
+      )) as Array<{ state: string; result: Record<string, unknown> | null; error: string | null }>;
+      const row = rows[0];
+      if (!row) throw new NotFoundException('Direct MT5 command disappeared before completion');
+      if (row.state === 'SUCCEEDED') return row.result ?? {};
+      if (row.state === 'FAILED')
+        throw new ConflictException(row.error ?? 'Direct MT5 terminal command failed');
+      if (row.state === 'UNCERTAIN')
+        throw new DirectMt5CommandUncertainError(
+          row.error ?? 'Direct MT5 command outcome is uncertain',
+        );
+      if (row.state === 'CANCELLED')
+        throw new ConflictException(row.error ?? 'Direct MT5 command was cancelled');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const mutation = ['PLACE_ORDER', 'MODIFY_ORDER', 'CLOSE_ORDER', 'CLOSE_ALL'].includes(
+      input.commandType,
+    );
+    if (mutation)
+      throw new DirectMt5CommandUncertainError(
+        'Direct MT5 command timed out after enqueue; reconcile terminal state before any retry',
+      );
+    throw new ConflictException(
+      'Direct MT5 terminal did not answer the read command before timeout',
+    );
   }
 }

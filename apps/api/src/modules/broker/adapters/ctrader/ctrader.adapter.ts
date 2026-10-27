@@ -476,6 +476,123 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     }
   }
 
+  /**
+   * Resolve an OPEN cTrader position by the iRexPro client reference carried
+   * in ProtoOA tradeData.label/comment. This is intentionally provider-specific
+   * and is used by DEMO validation cleanup when a MARKET dispatch outcome is
+   * uncertain and no provider order/position id was returned.
+   */
+  async findPositionByClientReference(clientReference: string): Promise<BrokerPosition | null> {
+    const session = this.requireCurrentSession();
+    const reference = String(clientReference ?? '');
+    if (!reference) return null;
+    try {
+      const positions = await this.fetchReconcilePositions(session);
+      const label = reference.slice(0, 100);
+      const comment = reference.slice(0, 512);
+      const matches = positions.filter(
+        (position) => position.tradeData.label === label || position.tradeData.comment === comment,
+      );
+      if (matches.length > 1) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          `cTrader returned ${matches.length} open positions for one client reference; refusing ambiguous cleanup.`,
+        );
+      }
+      if (matches.length === 0) return null;
+      const [mapped] = await this.enrichPositions(session, [matches[0]!]);
+      return mapped ?? null;
+    } catch (err) {
+      throw this.mapError(err);
+    }
+  }
+
+  /**
+   * Removes only stale exposure created by the DEMO validation harness.
+   * Validation orders carry an idempotency reference beginning `harness-` in
+   * cTrader tradeData.label/comment. Ordinary AI/user exposure is never
+   * selected by this cleanup surface.
+   */
+  async cleanupDemoValidationExposure(): Promise<{
+    positionsClosed: number;
+    ordersCancelled: number;
+    remainingPositions: number;
+    remainingOrders: number;
+  }> {
+    if (this.mode !== BrokerMode.DEMO) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        'Validation-exposure cleanup is restricted to cTrader DEMO mode.',
+      );
+    }
+    const session = this.requireCurrentSession();
+    try {
+      const before = await this.fetchReconcile(session);
+      const stalePositions = before.positions.filter(
+        (position) =>
+          position.positionStatus === CtraderPositionStatus.POSITION_STATUS_OPEN &&
+          this.isDemoValidationReference(position.tradeData),
+      );
+      const staleOrders = before.orders.filter(
+        (order) =>
+          order.orderStatus === CtraderOrderStatus.ORDER_STATUS_ACCEPTED &&
+          this.mapProtoOrderKind(order.orderType) !== null &&
+          this.isDemoValidationReference(order.tradeData),
+      );
+
+      let positionsClosed = 0;
+      for (const position of stalePositions) {
+        const positionId = String(position.positionId);
+        const result = await this.closeOrder(positionId);
+        if (!result.success || result.status !== 'FILLED') {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.BROKER_SERVER_ERROR,
+            `Validation position "${positionId}" could not be closed safely.`,
+          );
+        }
+        positionsClosed += 1;
+      }
+
+      let ordersCancelled = 0;
+      for (const order of staleOrders) {
+        const orderId = String(order.orderId);
+        const result = await this.cancelOrder(orderId);
+        if (!result.success || result.status !== 'FILLED') {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.BROKER_SERVER_ERROR,
+            `Validation working order "${orderId}" could not be cancelled safely.`,
+          );
+        }
+        ordersCancelled += 1;
+      }
+
+      const after = await this.fetchReconcile(session);
+      const remainingPositions = after.positions.filter(
+        (position) =>
+          position.positionStatus === CtraderPositionStatus.POSITION_STATUS_OPEN &&
+          this.isDemoValidationReference(position.tradeData),
+      ).length;
+      const remainingOrders = after.orders.filter(
+        (order) =>
+          order.orderStatus === CtraderOrderStatus.ORDER_STATUS_ACCEPTED &&
+          this.mapProtoOrderKind(order.orderType) !== null &&
+          this.isDemoValidationReference(order.tradeData),
+      ).length;
+
+      if (remainingPositions > 0 || remainingOrders > 0) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          `Stale DEMO validation exposure is still present after cleanup ` +
+            `(positions=${remainingPositions}, orders=${remainingOrders}).`,
+        );
+      }
+
+      return { positionsClosed, ordersCancelled, remainingPositions, remainingOrders };
+    } catch (err) {
+      throw this.mapError(err);
+    }
+  }
+
   async getRequiredMargin(params: RequiredMarginParams): Promise<string | null> {
     // Sprint 32 Gate 2 contract: null whenever the margin cannot be safely
     // computed — the Risk Engine then fails closed.
@@ -810,11 +927,45 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           ),
         );
       } else {
-        // Amend working order (2109) — SL/TP fields only.
+        // Amend working order (2109). cTrader treats omitted execution fields
+        // on some pending-order amendments as zero/default values, so preserve
+        // the existing volume + trigger price while changing protection only.
+        const workingOrder = asOrder!;
+        const orderKind = this.mapProtoOrderKind(workingOrder.orderType);
+        if (!orderKind) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_ORDER_TYPE,
+            `Provider order "${externalOrderId}" is not a modifiable pending order.`,
+          );
+        }
         const payload: Record<string, unknown> = {
           ctidTraderAccountId: ctid,
-          orderId: parseCtraderId(asOrder!.orderId, 'orderId'),
+          orderId: parseCtraderId(workingOrder.orderId, 'orderId'),
+          volume: workingOrder.tradeData.volume,
         };
+        if (orderKind === 'LIMIT' || orderKind === 'STOP_LIMIT') {
+          if (workingOrder.limitPrice === undefined) {
+            throw new BrokerAdapterError(
+              BrokerErrorCode.INVALID_PRICE,
+              `Working ${orderKind} order "${externalOrderId}" has no limitPrice to preserve.`,
+            );
+          }
+          payload.limitPrice = workingOrder.limitPrice;
+        }
+        if (orderKind === 'STOP' || orderKind === 'STOP_LIMIT') {
+          if (workingOrder.stopPrice === undefined) {
+            throw new BrokerAdapterError(
+              BrokerErrorCode.INVALID_PRICE,
+              `Working ${orderKind} order "${externalOrderId}" has no stopPrice to preserve.`,
+            );
+          }
+          payload.stopPrice = workingOrder.stopPrice;
+        }
+        if (workingOrder.expirationTimestamp !== undefined) {
+          payload.expirationTimestamp = workingOrder.expirationTimestamp;
+        }
+        if (workingOrder.stopLoss !== undefined) payload.stopLoss = workingOrder.stopLoss;
+        if (workingOrder.takeProfit !== undefined) payload.takeProfit = workingOrder.takeProfit;
         this.applyProtectionPrices(
           payload,
           modifications.newStopLoss ?? '',
@@ -1709,6 +1860,13 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     const trimmed = value.trim();
     if (!/^\d+(\.\d+)?$/.test(trimmed)) return false;
     return parseFloat(trimmed) > 0;
+  }
+
+  private isDemoValidationReference(tradeData: { label?: string; comment?: string }): boolean {
+    return (
+      (typeof tradeData.label === 'string' && tradeData.label.startsWith('harness-')) ||
+      (typeof tradeData.comment === 'string' && tradeData.comment.startsWith('harness-'))
+    );
   }
 
   /** End of the current UTC trading day, in Unix ms (for DAY/GOOD_TILL_DATE). */

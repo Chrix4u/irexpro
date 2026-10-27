@@ -258,7 +258,8 @@ export class ExecutionOrchestrator {
     // the downstream boundary): persisted credentials may only be decrypted
     // when the lifecycle state is usable AND the ciphertext is present.
     // INVALID / EXPIRED / REVOKED / missing states never reach the provider. ─
-    if (!BrokerCredentialLifecycle.isUsable(connection.credentialStatus)) {
+    const directMt5Terminal = connection.brokerId === 'direct-mt5';
+    if (!directMt5Terminal && !BrokerCredentialLifecycle.isUsable(connection.credentialStatus)) {
       this.logger.warn(
         `Dispatch blocked: connection ${ctx.connection.id} credential status is ` +
           `${connection.credentialStatus ?? 'MISSING'} — refusing to decrypt (fail-closed)`,
@@ -282,7 +283,10 @@ export class ExecutionOrchestrator {
         'Broker credentials are not usable for execution (credential lifecycle is not active).',
       );
     }
-    if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
+    if (
+      !directMt5Terminal &&
+      (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)
+    ) {
       this.logger.warn(
         `Dispatch blocked: connection ${ctx.connection.id} has no stored credential ` +
           'ciphertext — refusing provider dispatch (fail-closed)',
@@ -751,12 +755,15 @@ export class ExecutionOrchestrator {
     intent: ExecutionIntent,
     connection: BrokerConnection,
   ): Promise<BrokerOrderResult> {
-    const credentials = this.encryptionService.decrypt({
-      ciphertext: connection.encryptedCredentials!,
-      iv: connection.credentialIv!,
-      tag: connection.credentialTag!,
-      keyId: connection.encryptionKeyId!,
-    });
+    const credentials =
+      connection.brokerId === 'direct-mt5'
+        ? { accountId: connection.accountId ?? connection.id }
+        : this.encryptionService.decrypt({
+            ciphertext: connection.encryptedCredentials!,
+            iv: connection.credentialIv!,
+            tag: connection.credentialTag!,
+            keyId: connection.encryptionKeyId!,
+          });
 
     // #291 / correction round 3: dispatch uses the connection-scoped adapter
     // context — the same mutable context connectBroker/healthCheck operate on,
