@@ -247,6 +247,14 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
    * `sessionOwnerKey` (finding 4).
    */
   private readonly sessions = new Map<string, AdapterSession>();
+  /**
+   * One in-flight request/response spot subscription per account+symbol.
+   * Quote collection, reconciliation and protective checks can all request the
+   * same price concurrently. cTrader rejects duplicate 2127 subscriptions, so
+   * concurrent callers share one provider subscription until its 2129
+   * unsubscribe has been acknowledged.
+   */
+  private readonly spotQuoteFlights = new Map<string, Promise<CtraderSpotEventPayload>>();
   private currentAccountId: string | null = null;
   /**
    * Unique lease-owner key for the client's account-session refcounting
@@ -1556,7 +1564,25 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
   }
 
   /** Subscribe→await one full spot event→unsubscribe (request/response pricing). */
-  private async fetchSpotQuote(
+  private fetchSpotQuote(
+    session: AdapterSession,
+    symbolId: number,
+  ): Promise<CtraderSpotEventPayload> {
+    const flightKey = `${session.env}:${session.accountId}:${symbolId}`;
+    const existing = this.spotQuoteFlights.get(flightKey);
+    if (existing) return existing;
+
+    const flight = this.fetchSpotQuoteOnce(session, symbolId);
+    this.spotQuoteFlights.set(flightKey, flight);
+    void flight.finally(() => {
+      if (this.spotQuoteFlights.get(flightKey) === flight) {
+        this.spotQuoteFlights.delete(flightKey);
+      }
+    }).catch(() => undefined);
+    return flight;
+  }
+
+  private async fetchSpotQuoteOnce(
     session: AdapterSession,
     symbolId: number,
   ): Promise<CtraderSpotEventPayload> {
@@ -1587,8 +1613,10 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       const event = await eventPromise;
       return event.payload as unknown as CtraderSpotEventPayload;
     } finally {
-      // Best-effort unsubscribe (traffic hygiene; failures are not fatal).
-      void this.client
+      // Keep the single-flight alive until cTrader acknowledges 2129. Clearing
+      // it before unsubscribe completes lets the next scan send a duplicate
+      // 2127 while the provider still considers this symbol subscribed.
+      await this.client
         .request(session.env, CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ, {
           ctidTraderAccountId: ctid,
           symbolId: [symbolId],

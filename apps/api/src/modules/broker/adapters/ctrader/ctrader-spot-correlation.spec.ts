@@ -286,6 +286,33 @@ describe('cTrader SPOT event correlation (finding 3 — two accounts, one connec
       );
     }
 
+    it('coalesces concurrent same-account same-symbol quote requests into one provider subscription', async () => {
+      scriptTwoAccountDiscovery();
+      scriptAckOnlySpots();
+
+      const adapterA = new CTraderAdapter(client);
+      await adapterA.connect({ apiKey: ACCESS_TOKEN, accountId: ACCOUNT_A });
+      const transport = client.createdTransports[0];
+
+      const first = adapterA.getCurrentPrice('EUR/USD');
+      const second = adapterA.getCurrentPrice('EUR/USD');
+      await waitFor(() => subscribeSentFor(CTID_A));
+
+      transport.receive(spotEvent(CTID_A, SYMBOL_ID, 109_000, 109_500));
+      const [firstPrice, secondPrice] = await Promise.all([first, second]);
+
+      expect(firstPrice).toMatchObject({ bid: '1.09000', ask: '1.09500' });
+      expect(secondPrice).toMatchObject({ bid: '1.09000', ask: '1.09500' });
+      const subscriptions = server.requests.filter(
+        (request) =>
+          request.payloadType === CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ &&
+          request.payload?.ctidTraderAccountId === CTID_A &&
+          Array.isArray(request.payload?.symbolId) &&
+          request.payload.symbolId.includes(SYMBOL_ID),
+      );
+      expect(subscriptions).toHaveLength(1);
+    });
+
     it("A's getCurrentPrice never returns B's price when B's event lands first (shared client)", async () => {
       scriptTwoAccountDiscovery();
       scriptAckOnlySpots();
