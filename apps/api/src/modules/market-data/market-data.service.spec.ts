@@ -196,6 +196,7 @@ describe('MarketDataService', () => {
       low: '1.09900',
       close: '1.10050',
       volume: '20',
+      spreadClose: index === 0 ? '0.0000100000' : '0.0000200000',
     }));
     providerQuoteStore.getCandles.mockResolvedValueOnce(localM1);
     providerQuoteStore.getLatestPositiveSpreadQuote.mockResolvedValueOnce({
@@ -223,6 +224,59 @@ describe('MarketDataService', () => {
     );
     expect(result.source).toBe('broker');
     expect(result.count).toBe(25);
+    expect(result.candles[0]).toMatchObject({
+      source: 'broker',
+      spreadPoints: '100000',
+      priceDigits: 10,
+    });
+    expect(result.candles[1]).toMatchObject({
+      source: 'broker',
+      spreadPoints: '200000',
+      priceDigits: 10,
+    });
+    expect(result.candles.at(-1)).toMatchObject({
+      source: 'broker',
+      spreadPoints: '1000000',
+      priceDigits: 10,
+    });
+  });
+
+  it('does not fabricate historical cTrader spread metadata for provider-native backfill rows', async () => {
+    (brokerService.findConnectionById as jest.Mock).mockResolvedValueOnce({
+      id: query.brokerConnectionId,
+      brokerId: 'ctrader',
+    });
+    const localM1 = Array.from({ length: 25 }, (_, index) => ({
+      timestamp: new Date(Date.UTC(2026, 9, 27, 21, index, 0)),
+      open: '1.10000',
+      high: '1.10100',
+      low: '1.09900',
+      close: '1.10050',
+      volume: '20',
+      spreadClose: null,
+    }));
+    providerQuoteStore.getCandles.mockResolvedValueOnce(localM1);
+    providerQuoteStore.getLatestPositiveSpreadQuote.mockResolvedValueOnce({
+      instrument: 'EURUSD',
+      bid: '1.10045',
+      ask: '1.10055',
+      spread: '0.00010',
+      timestamp: new Date('2026-10-27T21:25:00.000Z'),
+      positiveSampleCount: 20,
+      latestPositiveSampleAt: new Date('2026-10-27T21:24:55.000Z'),
+    });
+
+    const result = await service.getInternalOhlcv({
+      ...query,
+      timeframe: 'M1',
+      limit: 100,
+    });
+
+    expect(result.candles[0]).toMatchObject({
+      source: 'broker',
+      spreadPoints: undefined,
+      priceDigits: undefined,
+    });
     expect(result.candles.at(-1)).toMatchObject({
       source: 'broker',
       spreadPoints: '1000000',

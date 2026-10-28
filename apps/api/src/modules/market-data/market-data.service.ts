@@ -97,11 +97,30 @@ export class MarketDataService {
           }
           const priceDigits = 10;
           const spreadPoints = (spread * 10 ** priceDigits).toFixed(0);
-          rawCandles = local.map((candle, index) =>
-            index === local.length - 1
-              ? { ...candle, spreadPoints, priceDigits }
-              : candle,
-          );
+          rawCandles = local.map((candle, index) => {
+            // Persisted cTrader M1 buckets carry the broker-observed spread at
+            // that minute as `spreadClose`. Preserve that causal friction
+            // evidence for historical checkpoints instead of attaching spread
+            // metadata only to the newest candle. Provider-native backfill rows
+            // deliberately have no spreadClose and remain fail-closed.
+            const persistedSpread = Number(
+              (candle as OHLCV & { spreadClose?: string | null }).spreadClose,
+            );
+            const hasPersistedSpread =
+              Number.isFinite(persistedSpread) && persistedSpread > 0;
+            const historicalSpreadPoints = hasPersistedSpread
+              ? (persistedSpread * 10 ** priceDigits).toFixed(0)
+              : undefined;
+
+            // The newest candle keeps the existing conservative P90/live
+            // spread evidence used by current execution scoring.
+            if (index === local.length - 1) {
+              return { ...candle, spreadPoints, priceDigits };
+            }
+            return hasPersistedSpread
+              ? { ...candle, spreadPoints: historicalSpreadPoints, priceDigits }
+              : candle;
+          });
         } else {
           rawCandles = local;
         }
