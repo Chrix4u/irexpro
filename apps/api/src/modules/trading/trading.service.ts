@@ -14,6 +14,7 @@ import { RiskService } from '../risk/risk.service';
 import { RiskRejectionCode } from '../risk/interfaces/risk.interface';
 import { ExecutionService } from '../execution/execution.service';
 import { AllocationService } from '../execution/services/allocation.service';
+import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
@@ -105,6 +106,7 @@ export class TradingService {
     @Inject(forwardRef(() => ExecutionService))
     private readonly executionService: ExecutionService,
     private readonly allocationService: AllocationService,
+    private readonly dailyRiskPeriodService: DailyRiskPeriodService,
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
     private readonly aiEngineClient: AiEngineClient,
@@ -243,11 +245,6 @@ export class TradingService {
       throw new TradingNotReadyException(readiness.missingSteps);
     }
 
-    // A DAILY loss breach is a UTC-day budget, not a button state. Ending a
-    // suspended session must never let Start reset that budget during the same
-    // risk day. The next UTC day clears this specific cooldown naturally.
-    await this.assertDailyRiskCooldownAllowsStart(userId);
-
     // ── Gate 2: EXACT broker connection (Round 5 — no discovery fallback) ────
     // The connection that will execute this session's new exposure is chosen
     // HERE, by id, and bound into the session row. findConnectionById scopes
@@ -267,6 +264,16 @@ export class TradingService {
     if (!allocation.hasAllocation || !allocation.allocatedCapital) {
       throw new ForbiddenException('Allocate capital to AI Trading before turning automation on.');
     }
+
+    // A DAILY loss breach remains a UTC-day budget unless the user explicitly
+    // confirmed a durable reset for THIS logical account + currency. Stop/Start
+    // alone still cannot bypass it.
+    await this.assertDailyRiskCooldownAllowsStart(
+      userId,
+      connection.id,
+      allocation.logicalAccountKey,
+      allocation.accountCurrency,
+    );
 
     // Risk policy is server-managed. The profile still exists because the
     // execution engine snapshots and enforces its conservative limits.
@@ -449,11 +456,20 @@ export class TradingService {
     return this.executionService.changeExecutionMode(userId, sessionId, newMode);
   }
 
-  private async assertDailyRiskCooldownAllowsStart(userId: string): Promise<void> {
+  private async assertDailyRiskCooldownAllowsStart(
+    userId: string,
+    brokerConnectionId: string,
+    logicalAccountKey: string,
+    accountCurrency: string,
+  ): Promise<void> {
     const violations = await this.riskService.getViolations(userId, 20);
-    const dailyLoss = violations.find(
-      (violation) => violation.rejectionCode === RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
-    );
+    const dailyLoss = violations.find((violation) => {
+      if (violation.rejectionCode !== RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED) return false;
+      const context = (violation.riskContext ?? {}) as Record<string, unknown>;
+      const scopedBroker =
+        typeof context.brokerConnectionId === 'string' ? context.brokerConnectionId : null;
+      return scopedBroker === null || scopedBroker === brokerConnectionId;
+    });
     if (!dailyLoss) return;
 
     const evaluatedAt = new Date(dailyLoss.evaluatedAt);
@@ -465,6 +481,14 @@ export class TradingService {
       evaluatedAt.getUTCDate() === now.getUTCDate();
     if (!sameUtcRiskDay) return;
 
+    const resetAt = await this.dailyRiskPeriodService.getDailyLossResetAt({
+      userId,
+      logicalAccountKey,
+      accountCurrency,
+      now,
+    });
+    if (resetAt && resetAt.getTime() >= evaluatedAt.getTime()) return;
+
     const resumeAt = new Date(
       Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
     );
@@ -472,13 +496,132 @@ export class TradingService {
       statusCode: 403,
       code: 'DAILY_RISK_COOLDOWN_ACTIVE',
       message:
-        'AI Trading is paused by daily-loss protection for the rest of this UTC risk day. ' +
-        'Starting or reallocating capital cannot reset the loss budget.',
+        'AI Trading is paused by daily-loss protection. You may keep it paused until the next UTC risk day, or explicitly reset the daily-loss counter and continue.',
       rejectionCode: dailyLoss.rejectionCode,
       rejectionReason: dailyLoss.rejectionReason,
       evaluatedAt: evaluatedAt.toISOString(),
       resumeAt: resumeAt.toISOString(),
+      resetAllowed: true,
     });
+  }
+
+  async resetDailyLossProtection(
+    userId: string,
+    sessionId: string,
+  ): Promise<{
+    session: TradingSession;
+    resetAt: string;
+    resetCount: number;
+    message: string;
+  }> {
+    const session = await this.executionService.getActiveSessionForClient(userId);
+    if (!session || session.id !== sessionId) {
+      throw new NotFoundException('The trading session is not available for daily-loss reset.');
+    }
+    if (session.status !== TradingSessionStatus.SUSPENDED_RISK_LIMIT) {
+      throw new ForbiddenException(
+        'Daily-loss reset is available only while risk protection is suspended.',
+      );
+    }
+
+    const violations = await this.riskService.getViolations(userId, 20);
+    const suspensionViolation = violations.find((violation) => {
+      if (
+        violation.rejectionCode !== RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED &&
+        violation.rejectionCode !== RiskRejectionCode.MAX_DRAWDOWN_REACHED
+      ) {
+        return false;
+      }
+      const context = (violation.riskContext ?? {}) as Record<string, unknown>;
+      const scopedSession = typeof context.sessionId === 'string' ? context.sessionId : null;
+      const scopedBroker =
+        typeof context.brokerConnectionId === 'string' ? context.brokerConnectionId : null;
+      return (
+        (scopedSession === null || scopedSession === session.id) &&
+        (scopedBroker === null || scopedBroker === session.brokerConnectionId)
+      );
+    });
+    if (
+      !suspensionViolation ||
+      suspensionViolation.rejectionCode !== RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED
+    ) {
+      throw new ForbiddenException(
+        'This risk suspension is not a daily-loss suspension. Drawdown and other risk suspensions cannot be reset from this control.',
+      );
+    }
+
+    const evaluatedAt = new Date(suspensionViolation.evaluatedAt);
+    const now = new Date();
+    if (
+      !Number.isFinite(evaluatedAt.getTime()) ||
+      evaluatedAt.getUTCFullYear() !== now.getUTCFullYear() ||
+      evaluatedAt.getUTCMonth() !== now.getUTCMonth() ||
+      evaluatedAt.getUTCDate() !== now.getUTCDate()
+    ) {
+      throw new ForbiddenException(
+        'The daily-loss suspension is not from the current UTC risk day.',
+      );
+    }
+
+    const allocation = await this.allocationService.getUserCapitalAllocationState(
+      userId,
+      session.brokerConnectionId,
+    );
+    if (!allocation.logicalAccountKey || !allocation.accountCurrency) {
+      throw new ForbiddenException(
+        'The broker account risk scope could not be verified for reset.',
+      );
+    }
+
+    // Safety ordering: persist the new loss-window cutoff BEFORE reactivating
+    // execution authority. A persistence failure can never accidentally resume.
+    const reset = await this.dailyRiskPeriodService.recordDailyLossReset({
+      userId,
+      brokerConnectionId: session.brokerConnectionId,
+      logicalAccountKey: allocation.logicalAccountKey,
+      accountCurrency: allocation.accountCurrency,
+      sessionId: session.id,
+      now,
+    });
+    const resumed = await this.executionService.resumeRiskSuspendedSession(userId, session.id);
+
+    await this.auditService.log({
+      actorUserId: userId,
+      action: AuditAction.RISK_DAILY_LOSS_RESET_CONFIRMED,
+      severity: AuditSeverity.WARNING,
+      resourceType: 'TradingSession',
+      resourceId: session.id,
+      metadata: {
+        brokerConnectionId: session.brokerConnectionId,
+        logicalAccountKey: allocation.logicalAccountKey,
+        accountCurrency: allocation.accountCurrency,
+        violationEvaluatedAt: evaluatedAt.toISOString(),
+        resetAt: reset.resetAt.toISOString(),
+        resetCount: reset.resetCount,
+        previousAuthorityGeneration: session.authorityGeneration,
+        newAuthorityGeneration: resumed.authorityGeneration,
+        historicalPnlPreserved: true,
+      },
+    });
+
+    this.eventBus.publish(DomainEventType.TRADING_SESSION_STARTED, userId, {
+      sessionId: resumed.id,
+      userId,
+      brokerConnectionId: resumed.brokerConnectionId,
+      executionMode: resumed.executionMode,
+      authorityGeneration: resumed.authorityGeneration,
+      status: resumed.status,
+      startedAt: resumed.startedAt,
+      resumedFromDailyLossReset: true,
+    });
+
+    return {
+      session: resumed,
+      resetAt: reset.resetAt.toISOString(),
+      resetCount: reset.resetCount,
+      message:
+        'Daily-loss protection was reset from this moment and AI Trading resumed. Historical P&L was not changed.',
+    };
   }
 
   /**

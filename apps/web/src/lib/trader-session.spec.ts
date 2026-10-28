@@ -8,6 +8,7 @@ import {
   formatExpiryCountdown,
   loadPendingExecutionConfirmations,
   prepareBrokerForAutomationStart,
+  resetDailyLossProtection,
 } from './trader-session';
 
 /**
@@ -177,6 +178,49 @@ describe('changeSessionExecutionMode', () => {
 
     await expect(changeSessionExecutionMode(SESSION.id, 'FULL_AUTO')).rejects.toThrow(
       'Trading session mode-change contract mismatch',
+    );
+  });
+});
+
+describe('resetDailyLossProtection', () => {
+  beforeEach(() => {
+    requestMock.mockReset();
+  });
+
+  it('posts the explicit daily-loss reset and trusts only the returned server session', async () => {
+    requestMock.mockResolvedValue({
+      session: {
+        ...SESSION,
+        status: 'ACTIVE',
+        authorityGeneration: 4,
+      },
+      resetAt: '2026-10-28T15:00:00.000Z',
+      resetCount: 1,
+      message:
+        'Daily-loss protection was reset from this moment and AI Trading resumed. Historical P&L was not changed.',
+    });
+
+    const result = await resetDailyLossProtection(SESSION.id);
+
+    expect(requestMock).toHaveBeenCalledWith(
+      `/trading/sessions/${encodeURIComponent(SESSION.id)}/reset-daily-loss`,
+      { method: 'POST' },
+    );
+    expect(result.session.status).toBe('ACTIVE');
+    expect(result.session.authorityGeneration).toBe(4);
+    expect(result.resetCount).toBe(1);
+  });
+
+  it('fails closed when the reset response does not contain a valid resumed session', async () => {
+    requestMock.mockResolvedValue({
+      session: { id: SESSION.id, status: 'ACTIVE' },
+      resetAt: '2026-10-28T15:00:00.000Z',
+      resetCount: 1,
+      message: 'reset',
+    });
+
+    await expect(resetDailyLossProtection(SESSION.id)).rejects.toThrow(
+      'Daily-loss reset response contract mismatch',
     );
   });
 });

@@ -200,6 +200,36 @@ export class TradingController {
   }
 
   /**
+   * Explicit user override for a DAILY-loss suspension only.
+   * Historical trade P&L remains unchanged; the server records a new durable
+   * account/day loss-window cutoff before reactivating session authority.
+   * Drawdown suspensions remain non-overridable here.
+   */
+  @Post(':id/reset-daily-loss')
+  @ApiOperation({
+    summary: 'Reset today’s daily-loss protection and resume the suspended session',
+    description:
+      'Requires an explicit user request on the current SUSPENDED_RISK_LIMIT session and ' +
+      'verifies that the suspension was caused by DAILY_LOSS_LIMIT_REACHED. Historical P&L ' +
+      'is preserved; only the daily-loss measurement window resets from confirmation time.',
+  })
+  async resetDailyLoss(
+    @CurrentUserId() userId: string,
+    @Param('id', ParseUUIDPipe) sessionId: string,
+  ): Promise<{
+    session: TradingSessionResponseDto;
+    resetAt: string;
+    resetCount: number;
+    message: string;
+  }> {
+    const result = await this.tradingService.resetDailyLossProtection(userId, sessionId);
+    return {
+      ...result,
+      session: toTradingSessionResponse(result.session),
+    };
+  }
+
+  /**
    * Explicit + audited execution-mode change (Round 5, issue #298).
    *
    * Bumps the session authorityGeneration via CAS, INVALIDATES outstanding

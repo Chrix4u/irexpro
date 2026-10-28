@@ -5,6 +5,7 @@ import { TradingController } from './trading.controller';
 import { BrokerModule } from '../broker/broker.module';
 import { RiskModule } from '../risk/risk.module';
 import { ExecutionModule } from '../execution/execution.module';
+import { DailyRiskPeriodModule } from '../execution/daily-risk-period.module';
 import { AuditModule } from '../audit/audit.module';
 import { UsersModule } from '../users/users.module';
 import { AuthModule } from '../auth/auth.module';
@@ -39,6 +40,7 @@ import { AiEngineClientModule } from '../ai-engine-client/ai-engine-client.modul
     RiskModule,
     UsersModule,
     forwardRef(() => ExecutionModule),
+    DailyRiskPeriodModule,
     AuditModule,
     AiEngineClientModule,
   ],

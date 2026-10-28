@@ -1728,6 +1728,70 @@ export class ExecutionService {
   }
 
   /**
+   * Explicitly reactivate a session suspended by the risk engine after the
+   * higher-level TradingService has durably recorded the user's DAILY-loss
+   * reset. This method does not decide whether an override is allowed; it owns
+   * only the session-authority transition and generation fencing.
+   */
+  async resumeRiskSuspendedSession(userId: string, sessionId: string): Promise<TradingSession> {
+    const session = await this.sessionRepo.findOne({ where: { id: sessionId, userId } });
+    if (!session) {
+      throw new NotFoundException(`Trading session ${sessionId} not found`);
+    }
+    if (session.status !== TradingSessionStatus.SUSPENDED_RISK_LIMIT) {
+      throw new ConflictException(
+        `Trading session ${sessionId} is ${session.status}; only SUSPENDED_RISK_LIMIT may be resumed by this action.`,
+      );
+    }
+
+    TradingSessionStateMachine.assertTransition(session.status, TradingSessionStatus.ACTIVE);
+    const observedGeneration = session.authorityGeneration;
+    const resumed = await this.sessionRepo
+      .createQueryBuilder()
+      .update()
+      .set({
+        status: TradingSessionStatus.ACTIVE,
+        authorityGeneration: () => 'authority_generation + 1',
+        updatedAt: new Date(),
+      })
+      .where(
+        'id = :id AND user_id = :userId AND status = :status AND authority_generation = :observed',
+        {
+          id: sessionId,
+          userId,
+          status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+          observed: observedGeneration,
+        },
+      )
+      .execute();
+
+    if (!resumed.affected) {
+      const current = await this.sessionRepo.findOne({ where: { id: sessionId, userId } });
+      throw new SessionAuthorityGenerationConflictException({
+        sessionId,
+        observedGeneration,
+        currentGeneration: current?.authorityGeneration ?? null,
+        currentExecutionMode: current?.executionMode ?? null,
+        currentStatus: current?.status ?? null,
+      });
+    }
+
+    // The suspension path already invalidates the prior ACTIVE generation.
+    // Repeat the bounded invalidation at the suspended generation so no
+    // authority created by an unexpected concurrent path can survive resume.
+    await this.invalidateOutstandingAuthority(
+      sessionId,
+      observedGeneration,
+      SESSION_AUTHORITY_GENERATION_CHANGED,
+    );
+
+    const reloaded = await this.sessionRepo.findOne({ where: { id: sessionId, userId } });
+    if (!reloaded)
+      throw new NotFoundException(`Trading session ${sessionId} not found after resume`);
+    return reloaded;
+  }
+
+  /**
    * End the user's current non-ended session. A risk/broker suspension is
    * still a live control-plane session and may be explicitly ended by the user.
    * The transition is CAS-guarded on the exact observed status + authority

@@ -6,6 +6,7 @@ import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
 import { AllocationService } from '../execution/services/allocation.service';
+import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { AiEngineClient } from '../ai-engine-client/ai-engine-client.service';
@@ -150,6 +151,10 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
               availableCapital: '2500',
             }),
           },
+        },
+        {
+          provide: DailyRiskPeriodService,
+          useValue: { getDailyLossResetAt: jest.fn().mockResolvedValue(null) },
         },
         { provide: AuditService, useValue: { log: jest.fn() } },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },

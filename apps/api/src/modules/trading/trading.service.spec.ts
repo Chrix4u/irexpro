@@ -24,6 +24,7 @@ import { AiRuntimePreference } from './entities/ai-runtime-preference.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { RiskRejectionCode } from '../risk/interfaces/risk.interface';
+import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
 
 /**
  * TradingService tests — Sprint 29 amendment + free-access regression +
@@ -105,6 +106,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
   let authService: Record<string, jest.Mock>;
   let aiRuntimePreferenceRepo: Record<string, jest.Mock>;
   let configService: { get: jest.Mock };
+  let dailyRiskPeriodService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -161,6 +163,14 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       getViolations: jest.fn().mockResolvedValue([]),
     };
 
+    dailyRiskPeriodService = {
+      getDailyLossResetAt: jest.fn().mockResolvedValue(null),
+      recordDailyLossReset: jest.fn().mockResolvedValue({
+        resetAt: new Date('2026-10-28T15:00:00.000Z'),
+        resetCount: 1,
+      }),
+    };
+
     allocationService = {
       getUserCapitalAllocationState: jest.fn().mockResolvedValue({
         brokerConnectionId: 'conn-1',
@@ -186,6 +196,11 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           mockSession({ executionMode: ExecutionMode.SEMI_AUTO, authorityGeneration: 2 }),
         ),
       closeAllAiOpenPositions: jest.fn().mockResolvedValue([]),
+      resumeRiskSuspendedSession: jest
+        .fn()
+        .mockResolvedValue(
+          mockSession({ status: TradingSessionStatus.ACTIVE, authorityGeneration: 3 }),
+        ),
     };
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -245,6 +260,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         { provide: RiskService, useValue: riskService },
         { provide: ExecutionService, useValue: executionService },
         { provide: AllocationService, useValue: allocationService },
+        { provide: DailyRiskPeriodService, useValue: dailyRiskPeriodService },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
         { provide: AiEngineClient, useValue: aiEngineClient },
@@ -377,8 +393,45 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           resumeAt: '2026-10-29T00:00:00.000Z',
         }),
       });
-      expect(brokerService.findConnectionById).not.toHaveBeenCalled();
+      expect(brokerService.findConnectionById).toHaveBeenCalledWith('conn-1', 'user-1');
+      expect(allocationService.getUserCapitalAllocationState).toHaveBeenCalledWith(
+        'user-1',
+        'conn-1',
+      );
+      expect(dailyRiskPeriodService.getDailyLossResetAt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          logicalAccountKey: 'paper-broker|demo|account-1',
+          accountCurrency: 'USD',
+        }),
+      );
       expect(executionService.startSession).not.toHaveBeenCalled();
+    });
+
+    it('allows a fresh session after the user explicitly reset today’s daily-loss window', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T15:30:00.000Z'));
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          rejectionReason: 'Daily loss limit reached',
+          evaluatedAt: new Date('2026-10-28T13:43:13.000Z'),
+          riskContext: { brokerConnectionId: 'conn-1' },
+        },
+      ]);
+      dailyRiskPeriodService.getDailyLossResetAt.mockResolvedValue(
+        new Date('2026-10-28T15:00:00.000Z'),
+      );
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({ lastHealthCheckAt: new Date() }),
+      );
+      brokerService.findConnectionsByIds.mockResolvedValue([
+        buildHealthyConnection({ lastHealthCheckAt: new Date() }),
+      ]);
+
+      await expect(service.startTradingSession('user-1', 'conn-1')).resolves.toEqual(
+        expect.objectContaining({ id: 'session-1' }),
+      );
+      expect(executionService.startSession).toHaveBeenCalled();
     });
 
     it('does not carry a DAILY loss cooldown into the next UTC risk day', async () => {
@@ -1028,6 +1081,78 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         'session-1',
         ExecutionMode.FULL_AUTO,
       );
+    });
+  });
+
+  describe('resetDailyLossProtection()', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('records a durable account/day reset before resuming a DAILY-loss suspended session', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T15:00:00.000Z'));
+      executionService.getActiveSessionForClient.mockResolvedValue(
+        mockSession({
+          status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+          authorityGeneration: 2,
+        }),
+      );
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          rejectionReason: 'Daily loss limit reached',
+          evaluatedAt: new Date('2026-10-28T13:43:13.000Z'),
+          riskContext: { sessionId: 'session-1', brokerConnectionId: 'conn-1' },
+        },
+      ]);
+
+      const result = await service.resetDailyLossProtection('user-1', 'session-1');
+
+      expect(dailyRiskPeriodService.recordDailyLossReset).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          brokerConnectionId: 'conn-1',
+          logicalAccountKey: 'paper-broker|demo|account-1',
+          accountCurrency: 'USD',
+          sessionId: 'session-1',
+          now: new Date('2026-10-28T15:00:00.000Z'),
+        }),
+      );
+      expect(executionService.resumeRiskSuspendedSession).toHaveBeenCalledWith(
+        'user-1',
+        'session-1',
+      );
+      expect(dailyRiskPeriodService.recordDailyLossReset.mock.invocationCallOrder[0]).toBeLessThan(
+        executionService.resumeRiskSuspendedSession.mock.invocationCallOrder[0],
+      );
+      expect(result.session.status).toBe(TradingSessionStatus.ACTIVE);
+      expect(result.resetCount).toBe(1);
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'RISK_DAILY_LOSS_RESET_CONFIRMED',
+          resourceId: 'session-1',
+        }),
+      );
+    });
+
+    it('refuses the override when the current risk suspension is drawdown rather than daily loss', async () => {
+      executionService.getActiveSessionForClient.mockResolvedValue(
+        mockSession({ status: TradingSessionStatus.SUSPENDED_RISK_LIMIT }),
+      );
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.MAX_DRAWDOWN_REACHED,
+          rejectionReason: 'Maximum drawdown reached',
+          evaluatedAt: new Date(),
+          riskContext: { sessionId: 'session-1', brokerConnectionId: 'conn-1' },
+        },
+      ]);
+
+      await expect(service.resetDailyLossProtection('user-1', 'session-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(dailyRiskPeriodService.recordDailyLossReset).not.toHaveBeenCalled();
+      expect(executionService.resumeRiskSuspendedSession).not.toHaveBeenCalled();
     });
   });
 

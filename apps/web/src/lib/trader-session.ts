@@ -220,6 +220,45 @@ export async function startTradingSessionForConnection(
   return payload;
 }
 
+export interface DailyLossResetResult {
+  session: TradingSessionView;
+  resetAt: string;
+  resetCount: number;
+  message: string;
+}
+
+/**
+ * Explicit user-confirmed override for a DAILY-loss suspension. The server is
+ * authoritative: it verifies the suspension cause, persists the new loss-window
+ * cutoff, bumps session authority, and returns the resumed session.
+ */
+export async function resetDailyLossProtection(
+  sessionId: string,
+): Promise<DailyLossResetResult> {
+  const payload = await api.request<unknown>(
+    `/trading/sessions/${encodeURIComponent(sessionId)}/reset-daily-loss`,
+    { method: 'POST' },
+  );
+  if (
+    !isRecord(payload) ||
+    !isSessionPayload(payload.session) ||
+    typeof payload.resetAt !== 'string' ||
+    Number.isNaN(new Date(payload.resetAt).getTime()) ||
+    typeof payload.resetCount !== 'number' ||
+    !Number.isInteger(payload.resetCount) ||
+    payload.resetCount < 1 ||
+    typeof payload.message !== 'string'
+  ) {
+    throw new Error('Daily-loss reset response contract mismatch');
+  }
+  return {
+    session: payload.session,
+    resetAt: payload.resetAt,
+    resetCount: payload.resetCount,
+    message: payload.message,
+  };
+}
+
 // ── SEMI_AUTO confirmation inbox ────────────────────────────────────────────
 
 function isDirection(value: unknown): value is ExecutionConfirmationView['direction'] {

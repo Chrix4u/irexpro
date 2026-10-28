@@ -181,7 +181,8 @@ export class DailyRiskPeriodService {
 
   /**
    * Today's realised loss for (userId, logicalAccountKey, accountCurrency) —
-   * NET realised P&L of CLOSED losing trades since UTC day start, as a RAW
+   * NET realised P&L of CLOSED losing trades since the active UTC risk-window
+   * start (UTC midnight, or the latest explicit same-day user reset), as a RAW
    * decimal string (never a float). `complete=false` reports that legacy
    * NULL-provenance losing trades exist today for the user (rows without an
    * immutable logical_account_key/account_currency): they are excluded from
@@ -194,9 +195,10 @@ export class DailyRiskPeriodService {
     now?: Date;
   }): Promise<{ total: string; complete: boolean }> {
     const now = input.now ?? new Date();
-    const dayStartIso = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-    ).toISOString();
+    const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const resetAt = await this.getDailyLossResetAt({ ...input, now });
+    const windowStart = resetAt && resetAt >= dayStart && resetAt <= now ? resetAt : dayStart;
+    const windowStartIso = windowStart.toISOString();
 
     const sumRows: Array<{ total: string | number | null }> = await this.dataSource.query(
       `SELECT COALESCE(SUM(realised_pnl), 0) AS total
@@ -207,7 +209,7 @@ export class DailyRiskPeriodService {
          AND status = 'CLOSED'
          AND closed_at >= $4
          AND realised_pnl < 0`,
-      [input.userId, input.logicalAccountKey, input.accountCurrency, dayStartIso],
+      [input.userId, input.logicalAccountKey, input.accountCurrency, windowStartIso],
     );
     const rawTotal = sumRows[0]?.total;
     const total =
@@ -226,11 +228,106 @@ export class DailyRiskPeriodService {
          AND closed_at >= $2
          AND realised_pnl < 0
          AND (logical_account_key IS NULL OR account_currency IS NULL)`,
-      [input.userId, dayStartIso],
+      [input.userId, windowStartIso],
     );
     const complete = Number(legacyRows[0]?.n ?? 0) === 0;
 
     return { total, complete };
+  }
+
+  /** Latest user-confirmed daily-loss reset for this account/currency/UTC day. */
+  async getDailyLossResetAt(input: {
+    userId: string;
+    logicalAccountKey: string;
+    accountCurrency: string;
+    now?: Date;
+  }): Promise<Date | null> {
+    const now = input.now ?? new Date();
+    const rows: Array<{ reset_at: Date | string | null }> = await this.dataSource.query(
+      `SELECT reset_at
+       FROM ${this.dailyLossResetsTableName()}
+       WHERE user_id = $1
+         AND logical_account_key = $2
+         AND account_currency = $3
+         AND risk_period_date = $4
+       LIMIT 1`,
+      [input.userId, input.logicalAccountKey, input.accountCurrency, this.utcDayKey(now)],
+    );
+    const raw = rows[0]?.reset_at;
+    if (!raw) return null;
+    const resetAt = raw instanceof Date ? raw : new Date(raw);
+    return Number.isFinite(resetAt.getTime()) ? resetAt : null;
+  }
+
+  /**
+   * Explicit user override of the DAILY-loss suspension only. Historical P&L
+   * is never changed; this durable account/day marker simply moves the loss
+   * measurement window forward from the confirmation timestamp.
+   */
+  async recordDailyLossReset(input: {
+    userId: string;
+    brokerConnectionId: string;
+    logicalAccountKey: string;
+    accountCurrency: string;
+    sessionId: string;
+    now?: Date;
+  }): Promise<{ resetAt: Date; resetCount: number }> {
+    const now = input.now ?? new Date();
+    if (
+      !input.userId ||
+      !input.brokerConnectionId ||
+      !input.logicalAccountKey ||
+      !input.sessionId
+    ) {
+      throw new Error(
+        'Daily-loss reset requires user, broker connection, logical account and session',
+      );
+    }
+    if (!/^[A-Z]{3}$/.test(input.accountCurrency)) {
+      throw new Error('Daily-loss reset requires a 3-letter uppercase account currency');
+    }
+    const day = this.utcDayKey(now);
+    const row = await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `INSERT INTO ${this.dailyLossResetsTableName()} AS current_reset
+           (user_id, broker_connection_id, logical_account_key, account_currency,
+            risk_period_date, reset_at, reset_count, last_session_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 1, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT (user_id, logical_account_key, account_currency, risk_period_date)
+         DO UPDATE SET
+           broker_connection_id = excluded.broker_connection_id,
+           reset_at = excluded.reset_at,
+           reset_count = current_reset.reset_count + 1,
+           last_session_id = excluded.last_session_id,
+           updated_at = CURRENT_TIMESTAMP`,
+        [
+          input.userId,
+          input.brokerConnectionId,
+          input.logicalAccountKey,
+          input.accountCurrency,
+          day,
+          now.toISOString(),
+          input.sessionId,
+        ],
+      );
+      const rows: Array<{ reset_at: Date | string; reset_count: number | string }> =
+        await manager.query(
+          `SELECT reset_at, reset_count
+           FROM ${this.dailyLossResetsTableName()}
+           WHERE user_id = $1
+             AND logical_account_key = $2
+             AND account_currency = $3
+             AND risk_period_date = $4
+           LIMIT 1`,
+          [input.userId, input.logicalAccountKey, input.accountCurrency, day],
+        );
+      return rows[0];
+    });
+    if (!row) throw new Error('Daily-loss reset write returned no row');
+    const resetAt = row.reset_at instanceof Date ? row.reset_at : new Date(row.reset_at);
+    if (!Number.isFinite(resetAt.getTime()))
+      throw new Error('Daily-loss reset timestamp is invalid');
+    return { resetAt, resetCount: Number(row.reset_count) };
   }
 
   // ─── Protected seams (test override points) ────────────────────────────────
@@ -242,6 +339,10 @@ export class DailyRiskPeriodService {
    */
   protected tradesTableName(): string {
     return 'trading.trades';
+  }
+
+  protected dailyLossResetsTableName(): string {
+    return 'trading.daily_loss_resets';
   }
 
   // ─── Internals ─────────────────────────────────────────────────────────────
