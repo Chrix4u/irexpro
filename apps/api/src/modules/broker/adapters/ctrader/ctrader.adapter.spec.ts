@@ -1286,6 +1286,26 @@ describe('CTraderAdapter', () => {
       });
     });
 
+    it('normalizes position SL/TP to the cTrader symbol precision before amendment', async () => {
+      scriptReconcile([SAMPLE_POSITION], []);
+      await connectDemo();
+
+      const result = await adapter.modifyOrder('7654321', {
+        newStopLoss: '0.702765',
+        newTakeProfit: '0.704065',
+      });
+
+      expect(result.success).toBe(true);
+      expect(
+        findRequest(server, CTRADER_PAYLOAD_TYPE.AMEND_POSITION_SLTP_REQ)!.payload,
+      ).toMatchObject({
+        ctidTraderAccountId: 1234567,
+        positionId: 7654321,
+        stopLoss: 0.70277,
+        takeProfit: 0.70407,
+      });
+    });
+
     it('amends a WORKING ORDER via ProtoOAAmendOrderReq (SL/TP fields)', async () => {
       scriptReconcile(
         [],

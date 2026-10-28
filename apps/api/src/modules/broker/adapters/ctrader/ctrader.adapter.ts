@@ -856,7 +856,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       // Absolute SL/TP are NOT supported for MARKET orders on the wire (proto
       // comment) — they are attached to the filled position below instead.
       if (protoOrderType !== CtraderOrderType.MARKET) {
-        this.applyProtectionPrices(payload, order.stopLoss, order.takeProfit);
+        this.applyProtectionPrices(payload, order.stopLoss, order.takeProfit, symbol.digits ?? 5);
       }
 
       const response = await this.client.request(
@@ -888,7 +888,12 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         result.externalOrderId &&
         this.hasProtection(order)
       ) {
-        await this.amendPositionProtection(session, result.externalOrderId, order);
+        await this.amendPositionProtection(
+          session,
+          result.externalOrderId,
+          order,
+          symbol.digits ?? 5,
+        );
       }
       return result;
     } catch (err) {
@@ -913,6 +918,11 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           `No open position or working order "${externalOrderId}" on the cTrader account.`,
         );
       }
+      const protectionSymbol = await this.resolveSymbolDetails(
+        session,
+        (asPosition ?? asOrder!).tradeData.symbolId,
+      );
+      const protectionDigits = protectionSymbol?.digits ?? 5;
 
       let response: CtraderMessageEnvelope;
       if (asPosition) {
@@ -924,6 +934,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
             ctid,
             parseCtraderId(asPosition.positionId, 'positionId'),
             modifications,
+            protectionDigits,
           ),
         );
       } else {
@@ -970,6 +981,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           payload,
           modifications.newStopLoss ?? '',
           modifications.newTakeProfit ?? '',
+          protectionDigits,
         );
         if (modifications.newTrailingStop !== undefined && modifications.newTrailingStop !== '0') {
           payload.trailingStopLoss = true;
@@ -1916,16 +1928,28 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
   }
 
+  private protectionPriceForSymbol(
+    value: string,
+    field: string,
+    digits: number,
+  ): number {
+    const wirePrice = decimalStringToWirePrice(value, field);
+    const normalizedDigits = Number.isInteger(digits) && digits >= 0 ? Math.min(digits, 10) : 5;
+    const factor = 10 ** normalizedDigits;
+    return Math.round((wirePrice + Number.EPSILON) * factor) / factor;
+  }
+
   private applyProtectionPrices(
     payload: Record<string, unknown>,
     stopLoss: string | undefined,
     takeProfit: string | undefined,
+    digits: number,
   ): void {
     if (this.isNonZeroPrice(stopLoss)) {
-      payload.stopLoss = decimalStringToWirePrice(stopLoss!, 'stopLoss');
+      payload.stopLoss = this.protectionPriceForSymbol(stopLoss!, 'stopLoss', digits);
     }
     if (this.isNonZeroPrice(takeProfit)) {
-      payload.takeProfit = decimalStringToWirePrice(takeProfit!, 'takeProfit');
+      payload.takeProfit = this.protectionPriceForSymbol(takeProfit!, 'takeProfit', digits);
     }
   }
 
@@ -1933,13 +1957,22 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     ctid: number,
     positionId: number,
     modifications: BrokerOrderModification,
+    digits: number,
   ): Record<string, unknown> {
     const payload: Record<string, unknown> = { ctidTraderAccountId: ctid, positionId };
     if (this.isNonZeroPrice(modifications.newStopLoss)) {
-      payload.stopLoss = decimalStringToWirePrice(modifications.newStopLoss!, 'newStopLoss');
+      payload.stopLoss = this.protectionPriceForSymbol(
+        modifications.newStopLoss!,
+        'newStopLoss',
+        digits,
+      );
     }
     if (this.isNonZeroPrice(modifications.newTakeProfit)) {
-      payload.takeProfit = decimalStringToWirePrice(modifications.newTakeProfit!, 'newTakeProfit');
+      payload.takeProfit = this.protectionPriceForSymbol(
+        modifications.newTakeProfit!,
+        'newTakeProfit',
+        digits,
+      );
     }
     if (modifications.newTrailingStop !== undefined && modifications.newTrailingStop !== '0') {
       payload.trailingStopLoss = true;
@@ -1952,6 +1985,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     session: AdapterSession,
     positionId: string,
     order: BrokerOrderRequest,
+    digits: number,
   ): Promise<void> {
     const response = await this.client.request(
       session.env,
@@ -1960,6 +1994,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         parseCtraderId(session.accountId, 'ctidTraderAccountId'),
         parseCtraderId(positionId, 'positionId'),
         { newStopLoss: order.stopLoss, newTakeProfit: order.takeProfit },
+        digits,
       ),
     );
     if (response.payloadType === CTRADER_PAYLOAD_TYPE.ORDER_ERROR_EVENT) {
