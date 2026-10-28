@@ -102,6 +102,11 @@ export interface PositionSizingInputs {
   maxLot: string;
   lotStep: string;
   profileMaxPositionSizeLot: string;
+  maxLeverageAllowed: string;
+  lotsByLeverageCeiling: string;
+  notionalPerLotAccountCurrency: string;
+  finalNotionalAccountCurrency: string;
+  finalEffectiveLeverage: string;
   requestedLotUpperBound: string;
   effectiveRequestedLotUpperBound?: string;
   paperProductMinimumLot?: string | null;
@@ -253,6 +258,14 @@ export class PositionSizingService {
       throw new PositionSizingError(
         'RISK_BUDGET_UNPARSEABLE',
         `profile maxPositionSizeLot is not a provable positive decimal: ${profile.maxPositionSizeLot}`,
+      );
+    }
+
+    const maxLeverageAllowed = ExactDecimal.tryParse(String(profile.maxLeverageAllowed));
+    if (!maxLeverageAllowed || !maxLeverageAllowed.isPositive()) {
+      throw new PositionSizingError(
+        'RISK_BUDGET_UNPARSEABLE',
+        `profile maxLeverageAllowed is not a provable positive decimal: ${profile.maxLeverageAllowed}`,
       );
     }
 
@@ -562,6 +575,53 @@ export class PositionSizingService {
       );
     }
 
+    // Pre-size against the SAME effective-leverage ceiling enforced by the
+    // final RiskService. This prevents a qualified setup from being discarded
+    // simply because its initial requested volume is slightly too large.
+    //
+    // entry * contractSize is quote-currency notional per lot. Dividing by the
+    // already-proven quote-per-account-currency rate yields account-currency
+    // notional per lot for all three supported FX cases:
+    //   account==quote -> divide by 1
+    //   account==base  -> divide by entry
+    //   third currency -> divide by fresh ACCOUNT/QUOTE broker BID
+    const notionalPerLotAccountCurrency = entry
+      .mul(contractSize)
+      .divUp(quotePerAccountCurrency, 12);
+    if (!notionalPerLotAccountCurrency.isPositive()) {
+      throw new PositionSizingError(
+        'RISK_BUDGET_UNPARSEABLE',
+        `account-currency notional per lot is not positive for ${instrument}`,
+      );
+    }
+    const maxNotionalAtLeverageLimit = equity.mul(maxLeverageAllowed);
+    const rawLotsByLeverageCeiling = maxNotionalAtLeverageLimit.divDown(
+      notionalPerLotAccountCurrency,
+      LOT_SCALE,
+    );
+    const leverageSteps = rawLotsByLeverageCeiling.divDown(lotStep, 0);
+    let lotsByLeverageCeiling = leverageSteps.mul(lotStep);
+
+    // RiskService rejects leverage >= maxLeverageAllowed. If the normalized
+    // volume lands exactly on that boundary, step down once so the sizing
+    // result is strictly below the durable limit rather than guaranteed to be
+    // rejected downstream.
+    if (lotsByLeverageCeiling.isPositive()) {
+      const boundaryLeverage = lotsByLeverageCeiling
+        .mul(notionalPerLotAccountCurrency)
+        .divUp(equity, LOT_SCALE);
+      if (boundaryLeverage.gte(maxLeverageAllowed)) {
+        lotsByLeverageCeiling = lotsByLeverageCeiling.sub(lotStep);
+      }
+    }
+    if (!lotsByLeverageCeiling.isPositive()) {
+      throw new PositionSizingError(
+        'POSITION_SIZE_ZERO',
+        `max leverage ${maxLeverageAllowed.toString()}x cannot safely admit one volume step ` +
+          `(${lotStep.toString()} lots) of ${instrument} at equity ${equity.toString()}`,
+      );
+    }
+
     // Promoted non-LIVE execution has one professional product floor. Research
     // and scout callers may request a smaller cap for evidence collection, but
     // that micro-volume is no longer executable: the hard floor below causes
@@ -584,7 +644,10 @@ export class PositionSizingService {
       );
     }
 
-    let lotsBeforeStep = ExactDecimal.min(lotsByRiskBudget, maxLot);
+    let lotsBeforeStep = ExactDecimal.min(
+      ExactDecimal.min(lotsByRiskBudget, maxLot),
+      lotsByLeverageCeiling,
+    );
     if (paperProductMaximumLot) {
       lotsBeforeStep = ExactDecimal.min(lotsBeforeStep, paperProductMaximumLot);
     }
@@ -642,6 +705,7 @@ export class PositionSizingService {
       const floorFitsLotCeilings =
         normalizedFloor.eq(policyMinimumExecutableLot) &&
         policyMinimumExecutableLot.lte(maxLot) &&
+        policyMinimumExecutableLot.lte(lotsByLeverageCeiling) &&
         (removeProfileLotCeiling || policyMinimumExecutableLot.lte(profileMaxLots)) &&
         (removeAiLotCeiling || policyMinimumExecutableLot.lte(effectiveRequestedLotUpperBound));
 
@@ -673,6 +737,16 @@ export class PositionSizingService {
     const finalRiskAtStopPercentOfCapital = finalRiskAtStop
       .divDown(riskCapitalBase, LOT_SCALE)
       .mulByPowerOfTen(2);
+
+    const finalNotionalAccountCurrency = lots.mul(notionalPerLotAccountCurrency);
+    const finalEffectiveLeverage = finalNotionalAccountCurrency.divUp(equity, LOT_SCALE);
+    if (finalEffectiveLeverage.gte(maxLeverageAllowed)) {
+      throw new PositionSizingError(
+        'POSITION_SIZE_ZERO',
+        `sized leverage ${finalEffectiveLeverage.toString()}x is not strictly below ` +
+          `${maxLeverageAllowed.toString()}x for ${instrument}`,
+      );
+    }
 
     // ── 8. Capital commitment = broker-required margin, not gross notional. ──
     // A leveraged FX position's notional can be many times larger than the
@@ -741,6 +815,11 @@ export class PositionSizingService {
       maxLot: maxLot.toString(),
       lotStep: lotStep.toString(),
       profileMaxPositionSizeLot: profileMaxLots.toString(),
+      maxLeverageAllowed: maxLeverageAllowed.toString(),
+      lotsByLeverageCeiling: lotsByLeverageCeiling.toString(),
+      notionalPerLotAccountCurrency: notionalPerLotAccountCurrency.toString(),
+      finalNotionalAccountCurrency: finalNotionalAccountCurrency.toString(),
+      finalEffectiveLeverage: finalEffectiveLeverage.toString(),
       requestedLotUpperBound: requestedLotUpperBound.toString(),
       effectiveRequestedLotUpperBound: effectiveRequestedLotUpperBound.toString(),
       paperProductMinimumLot: paperProductMinimumLot?.toString() ?? null,

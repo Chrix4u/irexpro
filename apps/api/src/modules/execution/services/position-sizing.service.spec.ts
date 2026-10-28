@@ -58,6 +58,7 @@ const profileRow = (overrides: Partial<RiskProfile> = {}): RiskProfile =>
     userId: USER,
     maxTradeRiskPercent: '2.00',
     maxPositionSizeLot: '1.0000',
+    maxLeverageAllowed: 30,
     ...overrides,
   }) as RiskProfile;
 
@@ -221,6 +222,45 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       expect(sized.inputs.requestedLotUpperBound).toBe('0.01');
       expect(sized.lots).toBe('0.01');
       expect(sized.allocatedCapital).toBe('10.85');
+    });
+
+    it('steps a qualified EURUSD size down to the largest lot strictly below the leverage ceiling', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue(
+        accountState({ currency: 'EUR', equity: '953.38', balance: '953.38', freeMargin: '953.38' }),
+      );
+      brokerService.getRequiredMargin.mockResolvedValue('735.00');
+
+      const sized = await service.sizePosition(
+        baseParams({
+          direction: 'SELL',
+          stopLoss: '1.08550',
+          requestedLotUpperBound: '0.30',
+        }),
+      );
+
+      expect(sized.lots).toBe('0.28');
+      expect(sized.inputs.maxLeverageAllowed).toBe('30');
+      expect(sized.inputs.lotsByLeverageCeiling).toBe('0.28');
+      expect(ExactDecimal.parse(sized.inputs.finalEffectiveLeverage).lt(ExactDecimal.parse('30'))).toBe(true);
+    });
+
+    it('steps down one lot increment when the requested size lands exactly on the leverage limit', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue(
+        accountState({ currency: 'EUR', equity: '1000.00', balance: '1000.00', freeMargin: '1000.00' }),
+      );
+      brokerService.getRequiredMargin.mockResolvedValue('725.00');
+
+      const sized = await service.sizePosition(
+        baseParams({
+          direction: 'SELL',
+          stopLoss: '1.08550',
+          requestedLotUpperBound: '0.30',
+        }),
+      );
+
+      expect(sized.lots).toBe('0.29');
+      expect(sized.inputs.lotsByLeverageCeiling).toBe('0.29');
+      expect(ExactDecimal.parse(sized.inputs.finalEffectiveLeverage).lt(ExactDecimal.parse('30'))).toBe(true);
     });
 
     it('uses the REQUESTED price for LIMIT entries', async () => {
