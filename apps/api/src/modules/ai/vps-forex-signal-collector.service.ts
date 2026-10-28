@@ -1662,6 +1662,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       const initialAdaptivePortfolio = paperSession
         ? await this.loadAdaptiveOpenRiskPositions(userId, connectionId)
         : { available: false, positions: [] as AdaptiveCurrencyRiskPosition[] };
+      // Plan B shadow portfolio truth is independent from the PAPER evidence
+      // connection. Prefer the configured broker-native source (cTrader/MT)
+      // and reuse one snapshot across the whole six-pair scan. An actually
+      // active PAPER session remains a fallback when no broker-native source
+      // is configured or that source is temporarily unavailable.
+      const planBPortfolioSnapshot = await this.loadPlanBPortfolioSnapshot(
+        userId,
+        paperSession?.brokerConnectionId ?? null,
+      );
       const adaptiveScanWinners: Array<{
         chosen: ExecutableCounterfactual;
         selection: CounterfactualExecutionSelection;
@@ -1729,28 +1738,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             shortHorizonMomentumAtr: rawMarketMomentumAtr,
             scanTime: new Date(best.barTime.getTime() + BAR_MS),
           });
-          const portfolioPositions: PlanBPortfolioPosition[] = [];
-          let portfolioSnapshotAvailable = false;
-          try {
-            const getPositions = this.brokerService.getOpenPositionsForConnection?.bind(
-              this.brokerService,
-            );
-            if (getPositions) {
-              const snapshot = await getPositions(connectionId, userId);
-              portfolioPositions.push(
-                ...snapshot.positions.map((position) => ({
-                  instrument: position.instrument,
-                  direction: position.direction,
-                  lotSize: position.lotSize,
-                })),
-              );
-              portfolioSnapshotAvailable = true;
-            }
-          } catch (error) {
-            this.logger.warn(
-              `Plan B portfolio shadow snapshot unavailable: ${(error as Error).message}`,
-            );
-          }
+          const portfolioPositions = planBPortfolioSnapshot.positions;
+          const portfolioSnapshotAvailable = planBPortfolioSnapshot.available;
           const planBEnsemble = scorePlanBMultimodelShadow(
             {
               instrument: best.instrument,
@@ -3565,6 +3554,56 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     } finally {
       this.running = false;
     }
+  }
+
+  private async loadPlanBPortfolioSnapshot(
+    userId: string,
+    activePaperConnectionId: string | null,
+  ): Promise<{
+    available: boolean;
+    connectionId: string | null;
+    positions: PlanBPortfolioPosition[];
+  }> {
+    const getPositions = this.brokerService.getOpenPositionsForConnection?.bind(
+      this.brokerService,
+    );
+    if (!getPositions) {
+      return { available: false, connectionId: null, positions: [] };
+    }
+
+    const brokerNativeConnectionId = this.brokerExpertEnabled()
+      ? this.brokerExpertSourceConnectionId()
+      : '';
+    const connectionIds = [brokerNativeConnectionId, activePaperConnectionId ?? '']
+      .map((value) => value.trim())
+      .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index);
+    if (connectionIds.length === 0) {
+      return { available: false, connectionId: null, positions: [] };
+    }
+
+    let lastError: unknown = null;
+    for (const connectionId of connectionIds) {
+      try {
+        const snapshot = await getPositions(connectionId, userId);
+        return {
+          available: true,
+          connectionId,
+          positions: snapshot.positions.map((position) => ({
+            instrument: position.instrument,
+            direction: position.direction,
+            lotSize: position.lotSize,
+          })),
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    this.logger.warn(
+      `Plan B portfolio shadow snapshot unavailable source=${connectionIds.join('->')}: ` +
+        `${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    );
+    return { available: false, connectionId: null, positions: [] };
   }
 
   private async loadAdaptiveOpenRiskPositions(

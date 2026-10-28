@@ -1542,6 +1542,7 @@ describe('VpsForexSignalCollectorService', () => {
         executionSpreadEvidenceValid: true,
         paperExecutionCostUsable: true,
       }));
+    const getOpenPositionsForConnection = jest.fn().mockResolvedValue({ positions: [] });
     const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
@@ -1559,7 +1560,7 @@ describe('VpsForexSignalCollectorService', () => {
       } as unknown as ExecutionService,
       {
         getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
-        getOpenPositionsForConnection: jest.fn().mockResolvedValue({ positions: [] }),
+        getOpenPositionsForConnection,
       } as unknown as BrokerService,
       new LivePaperMarketDataService(),
       aiEngineClientMock(),
@@ -1573,6 +1574,12 @@ describe('VpsForexSignalCollectorService', () => {
           json: async () => allTrendPayload(),
         }) as unknown as typeof fetch,
       );
+      // One read feeds adaptive PAPER risk truth; one independent read feeds
+      // the scan-level Plan B portfolio snapshot. The old implementation did
+      // another Plan B read for every candidate (13 total in this fixture).
+      expect(getOpenPositionsForConnection).toHaveBeenCalledTimes(2);
+      expect(getOpenPositionsForConnection).toHaveBeenNthCalledWith(1, 'conn-1', 'user-1');
+      expect(getOpenPositionsForConnection).toHaveBeenNthCalledWith(2, 'conn-1', 'user-1');
       expect(scoutAuthoritySpy).toHaveBeenCalled();
       expect(receiveSignal).not.toHaveBeenCalled();
       expect(postLossGuardSpy).toHaveBeenCalledWith(
@@ -4652,6 +4659,36 @@ describe('VpsForexSignalCollectorService', () => {
     expect(series.size).toBe(6);
     expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
     expect(peak).toBeLessThanOrEqual(3);
+  });
+
+  it('uses the configured broker-native source for Plan B portfolio truth instead of the PAPER evidence connection', async () => {
+    const getOpenPositionsForConnection = jest.fn().mockResolvedValue({
+      positions: [{ instrument: 'EURUSD', direction: 'BUY', lotSize: '0.20' }],
+    });
+    const collector = createCollector(
+      config({
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'ctrader-1',
+      }),
+      {} as AiSignalService,
+      {} as ExecutionService,
+      { getOpenPositionsForConnection } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+
+    const snapshot = await (collector as any).loadPlanBPortfolioSnapshot(
+      'user-1',
+      'paper-1',
+    );
+
+    expect(getOpenPositionsForConnection).toHaveBeenCalledTimes(1);
+    expect(getOpenPositionsForConnection).toHaveBeenCalledWith('ctrader-1', 'user-1');
+    expect(snapshot).toEqual({
+      available: true,
+      connectionId: 'ctrader-1',
+      positions: [{ instrument: 'EURUSD', direction: 'BUY', lotSize: '0.20' }],
+    });
   });
 
   it('retries a background broker-history read after a bounded RATE_LIMITED refill delay', async () => {
