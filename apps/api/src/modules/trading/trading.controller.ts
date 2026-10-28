@@ -238,12 +238,12 @@ export class TradingController {
   }
 
   /**
-   * Get the current active session for the authenticated user.
+   * Get the current non-ended control session for the authenticated user.
    *
    * GET /api/v1/trading/sessions/active
    */
   @Get('active')
-  @ApiOperation({ summary: 'Get the current active trading session' })
+  @ApiOperation({ summary: 'Get the current non-ended trading control session' })
   @ApiResponse({ status: 200, type: ActiveTradingSessionResponseDto })
   async getActive(@CurrentUserId() userId: string): Promise<ActiveTradingSessionResponseDto> {
     const session = await this.tradingService.getActiveSession(userId);

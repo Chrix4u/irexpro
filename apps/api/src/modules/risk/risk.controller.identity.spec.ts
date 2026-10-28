@@ -80,6 +80,33 @@ describe('RiskController (Hotfix — UUID identity regression)', () => {
     });
   });
 
+  it('includes the latest sanitized risk violation in status for plain-language suspension UX', async () => {
+    const violation = {
+      id: 'v-1',
+      rejectionCode: 'DAILY_LOSS_LIMIT_REACHED',
+      rejectionReason: 'Daily loss 54.68 has reached limit (5.00% = 49.41 of opening balance 988.13)',
+      evaluatedAt: new Date('2026-10-28T13:43:13.000Z'),
+    };
+    const newer = {
+      id: 'v-2',
+      rejectionCode: 'INSUFFICIENT_MARGIN',
+      rejectionReason: 'Insufficient margin',
+      evaluatedAt: new Date('2026-10-28T13:44:00.000Z'),
+    };
+    riskService.getViolations.mockResolvedValue([newer, violation]);
+
+    const result = await controller.getRiskStatus(USER_ID);
+
+    expect(riskService.getViolations).toHaveBeenCalledWith(USER_ID, 20);
+    expect((result as { latestViolation?: unknown }).latestViolation).toEqual(newer);
+    expect((result as { latestDailyLossViolation?: unknown }).latestDailyLossViolation).toEqual(
+      violation,
+    );
+    expect(
+      (result as { latestRiskSuspensionViolation?: unknown }).latestRiskSuspensionViolation,
+    ).toEqual(violation);
+  });
+
   // ── Complete principal object never supplied ─────────────────────────────
 
   describe('never receives the complete AuthenticatedPrincipal', () => {

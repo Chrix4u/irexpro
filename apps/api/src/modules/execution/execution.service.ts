@@ -10,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, QueryDeepPartialEntity, Repository } from 'typeorm';
 import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from './entities/trade.entity';
 import { TradingSession, TradingSessionStatus } from './entities/trading-session.entity';
+import { TradingSessionStateMachine } from './entities/trading-session-state-machine';
 import { RiskGrant } from './entities/risk-grant.entity';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
 import {
@@ -26,6 +27,7 @@ import {
   ExecutionSessionResolutionService,
   SessionAuthorityGenerationConflictException,
   SessionAuthorityNotActiveException,
+  TradingSessionSuspendedException,
 } from './execution-session.resolution';
 import { RiskDecision, ValidatedOrder } from '../risk/interfaces/risk.interface';
 import { BrokerService } from '../broker/broker.service';
@@ -1583,8 +1585,11 @@ export class ExecutionService {
     }
 
     // ── 3+4: idempotency / typed conflict against an existing ACTIVE session ─
-    const existing = await this.findActiveSessionOrdered(userId);
+    const existing = await this.findCurrentSessionOrdered(userId);
     if (existing) {
+      if (existing.status !== TradingSessionStatus.ACTIVE) {
+        throw new TradingSessionSuspendedException(existing);
+      }
       this.assertStartMatchesExistingAuthority(existing, brokerConnectionId, executionMode);
       return existing;
     }
@@ -1723,10 +1728,11 @@ export class ExecutionService {
   }
 
   /**
-   * End (or suspend) the user's ACTIVE session. The status transition is a
-   * CAS on (id, status='ACTIVE', authority_generation = observed) and bumps
-   * the generation; outstanding ACTIVE RiskGrants / PENDING confirmations for
-   * the session are invalidated/revoked in the same CAS style (issue #298).
+   * End the user's current non-ended session. A risk/broker suspension is
+   * still a live control-plane session and may be explicitly ended by the user.
+   * The transition is CAS-guarded on the exact observed status + authority
+   * generation, and every successful transition bumps generation before
+   * invalidating outstanding authority.
    */
   async endSession(
     userId: string,
@@ -1739,12 +1745,12 @@ export class ExecutionService {
     const maxAttempts = 4;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const session = await this.findActiveSessionOrdered(userId);
+      const session = await this.findCurrentSessionOrdered(userId);
       if (!session) {
-        // A concurrent suspension/end can win after TradingService has already
-        // read the exact session the user confirmed stopping. Preserve the
-        // durable flatten intent on that exact owned session even though no
-        // ACTIVE row remains.
+        // A concurrent end can win after TradingService has already read the
+        // exact session the user confirmed stopping. Preserve the durable
+        // flatten intent on that exact owned session even though no non-ended
+        // row remains.
         if (options.closeAiPositionsOnStop === true && options.expectedSessionId) {
           await this.sessionRepo.update(
             { id: options.expectedSessionId, userId },
@@ -1754,24 +1760,32 @@ export class ExecutionService {
         return;
       }
 
-      const observed = session.authorityGeneration;
+      if (options.expectedSessionId && session.id !== options.expectedSessionId) {
+        throw new ConflictException(
+          'Trading session changed while stopping. Refresh the page and retry Stop AI Trading.',
+        );
+      }
+
+      TradingSessionStateMachine.assertTransition(session.status, status);
+      const observedGeneration = session.authorityGeneration;
+      const observedStatus = session.status;
       const ended = await this.sessionRepo
         .createQueryBuilder()
         .update()
         .set({
           status,
-          endedAt: new Date(),
+          endedAt: status === TradingSessionStatus.ENDED ? new Date() : session.endedAt,
           ...(options.closeAiPositionsOnStop === true ? { closeAiPositionsOnStop: true } : {}),
           authorityGeneration: () => 'authority_generation + 1',
           updatedAt: new Date(),
         })
         .where(
-          'id = :id AND user_id = :userId AND status = :active AND authority_generation = :observed',
+          'id = :id AND user_id = :userId AND status = :observedStatus AND authority_generation = :observedGeneration',
           {
             id: session.id,
             userId,
-            active: TradingSessionStatus.ACTIVE,
-            observed,
+            observedStatus,
+            observedGeneration,
           },
         )
         .execute();
@@ -1779,25 +1793,20 @@ export class ExecutionService {
       if (ended.affected) {
         await this.invalidateOutstandingAuthority(
           session.id,
-          observed,
+          observedGeneration,
           SESSION_AUTHORITY_GENERATION_CHANGED,
         );
         return;
       }
 
-      // A concurrent mode change may have advanced the generation while
-      // leaving the session ACTIVE. Re-read and retry against the winner's
-      // generation instead of falsely reporting Stop success.
+      // A concurrent mode/status change may have won. Re-read and retry only
+      // while the same session remains non-ended; never silently target a new
+      // session that appeared after the user's confirmation.
       const current = await this.sessionRepo.findOne({
         where: { id: session.id, userId },
       });
-      if (!current) return;
-
-      if (current.status !== TradingSessionStatus.ACTIVE) {
-        // Another end/suspension already revoked new exposure. Preserve the
-        // explicit user Stop intent so reconciliation still flattens any late
-        // AI fill associated with this session.
-        if (options.closeAiPositionsOnStop === true) {
+      if (!current || current.status === TradingSessionStatus.ENDED) {
+        if (options.closeAiPositionsOnStop === true && current) {
           await this.sessionRepo.update(
             { id: current.id, userId },
             { closeAiPositionsOnStop: true },
@@ -1841,7 +1850,7 @@ export class ExecutionService {
         'session.updatedAt',
       ])
       .where('session.userId = :userId', { userId })
-      .andWhere('session.status = :status', { status: TradingSessionStatus.ACTIVE })
+      .andWhere('session.status != :ended', { ended: TradingSessionStatus.ENDED })
       .orderBy('session.authorityGeneration', 'DESC')
       .addOrderBy('session.startedAt', 'DESC')
       .getOne();
@@ -1852,6 +1861,20 @@ export class ExecutionService {
   }
 
   // ─── Internal helpers (session authority) ───────────────────────────────
+
+  /** Latest non-ended control session. A suspended/paused session remains visible
+   * to the browser and blocks creation of a fresh authority baseline. */
+  private async findCurrentSessionOrdered(userId: string): Promise<TradingSession | null> {
+    return this.sessionRepo.findOne({
+      where: [
+        { userId, status: TradingSessionStatus.ACTIVE },
+        { userId, status: TradingSessionStatus.PAUSED },
+        { userId, status: TradingSessionStatus.SUSPENDED_RISK_LIMIT },
+        { userId, status: TradingSessionStatus.SUSPENDED_BROKER },
+      ],
+      order: { authorityGeneration: 'DESC', startedAt: 'DESC' },
+    });
+  }
 
   /**
    * The user's ACTIVE session ordered by authorityGeneration/startedAt desc

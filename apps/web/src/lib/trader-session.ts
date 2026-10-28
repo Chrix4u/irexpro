@@ -333,6 +333,8 @@ export interface ExecutionAuthorityFacts {
   sessionAuthorizationStatus: BrokerConnectionView['authorizationStatus'] | null;
   /** Server-computed fail-closed executable gate for that connection (null if unknown). */
   sessionConnectionExecutable: boolean | null;
+  /** Latest sanitized server risk violation; used only when the session is risk-suspended. */
+  latestRiskViolationReason?: string | null;
 }
 
 /**
@@ -366,7 +368,12 @@ export function executionBlockedReasons(facts: ExecutionAuthorityFacts): string[
   } else if (facts.session.status === 'PAUSED') {
     reasons.push('The trading session is PAUSED.');
   } else if (facts.session.status === 'SUSPENDED_RISK_LIMIT') {
-    reasons.push('The trading session is SUSPENDED by a risk limit.');
+    const detail = facts.latestRiskViolationReason?.trim();
+    reasons.push(
+      detail
+        ? `Risk protection paused AI Trading: ${detail}`
+        : 'Risk protection paused AI Trading because a daily-loss or drawdown limit was reached.',
+    );
   } else if (facts.session.status === 'SUSPENDED_BROKER') {
     reasons.push('The trading session is SUSPENDED by the broker.');
   }
@@ -376,6 +383,48 @@ export function executionBlockedReasons(facts: ExecutionAuthorityFacts): string[
   }
 
   return reasons;
+}
+
+export interface DailyRiskCooldownState {
+  active: boolean;
+  resumeAt: string | null;
+  reason: string | null;
+}
+
+/**
+ * The daily-loss budget is scoped to a UTC risk day server-side. Keep the
+ * Start control blocked through that same boundary even after the user
+ * explicitly ends the suspended session, so Stop/Start cannot reset the day.
+ */
+export function dailyRiskCooldownFromViolation(
+  violation:
+    | {
+        rejectionCode: string;
+        rejectionReason: string;
+        evaluatedAt: string;
+      }
+    | null
+    | undefined,
+  now = new Date(),
+): DailyRiskCooldownState {
+  const inactive: DailyRiskCooldownState = { active: false, resumeAt: null, reason: null };
+  if (!violation || violation.rejectionCode !== 'DAILY_LOSS_LIMIT_REACHED') return inactive;
+
+  const evaluatedAt = new Date(violation.evaluatedAt);
+  if (!Number.isFinite(evaluatedAt.getTime()) || !Number.isFinite(now.getTime())) return inactive;
+  const sameUtcRiskDay =
+    evaluatedAt.getUTCFullYear() === now.getUTCFullYear() &&
+    evaluatedAt.getUTCMonth() === now.getUTCMonth() &&
+    evaluatedAt.getUTCDate() === now.getUTCDate();
+  if (!sameUtcRiskDay) return inactive;
+
+  return {
+    active: true,
+    resumeAt: new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+    ).toISOString(),
+    reason: violation.rejectionReason,
+  };
 }
 
 // ── Provider verification label (fixed taxonomy) ────────────────────────────

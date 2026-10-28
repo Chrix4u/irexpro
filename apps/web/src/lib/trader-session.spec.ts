@@ -3,6 +3,7 @@ import {
   changeSessionExecutionMode,
   confirmPendingConfirmation,
   connectionVerificationLabel,
+  dailyRiskCooldownFromViolation,
   executionBlockedReasons,
   formatExpiryCountdown,
   loadPendingExecutionConfirmations,
@@ -276,6 +277,53 @@ describe('formatExpiryCountdown', () => {
   });
 });
 
+describe('dailyRiskCooldownFromViolation', () => {
+  it('blocks Start through UTC midnight after a same-day daily-loss violation', () => {
+    expect(
+      dailyRiskCooldownFromViolation(
+        {
+          rejectionCode: 'DAILY_LOSS_LIMIT_REACHED',
+          rejectionReason:
+            'Daily loss 54.68 has reached limit (5.00% = 49.41 of opening balance 988.13)',
+          evaluatedAt: '2026-10-28T13:43:13.000Z',
+        },
+        new Date('2026-10-28T20:00:00.000Z'),
+      ),
+    ).toEqual({
+      active: true,
+      resumeAt: '2026-10-29T00:00:00.000Z',
+      reason:
+        'Daily loss 54.68 has reached limit (5.00% = 49.41 of opening balance 988.13)',
+    });
+  });
+
+  it('expires naturally on the next UTC risk day', () => {
+    expect(
+      dailyRiskCooldownFromViolation(
+        {
+          rejectionCode: 'DAILY_LOSS_LIMIT_REACHED',
+          rejectionReason: 'Daily loss limit reached',
+          evaluatedAt: '2026-10-28T23:59:00.000Z',
+        },
+        new Date('2026-10-29T00:00:01.000Z'),
+      ).active,
+    ).toBe(false);
+  });
+
+  it('ignores non-daily-loss violations', () => {
+    expect(
+      dailyRiskCooldownFromViolation(
+        {
+          rejectionCode: 'INSUFFICIENT_MARGIN',
+          rejectionReason: 'Insufficient margin',
+          evaluatedAt: '2026-10-28T13:43:13.000Z',
+        },
+        new Date('2026-10-28T20:00:00.000Z'),
+      ).active,
+    ).toBe(false);
+  });
+});
+
 describe('executionBlockedReasons', () => {
   it('reports no reasons when every server fact is clear', () => {
     expect(
@@ -315,9 +363,26 @@ describe('executionBlockedReasons', () => {
 
     expect(reasons.some((reason) => reason.includes('Kill switch'))).toBe(true);
     expect(reasons.some((reason) => reason.includes('Risk gate'))).toBe(true);
-    expect(reasons.some((reason) => reason.includes('SUSPENDED by a risk limit'))).toBe(true);
+    expect(reasons.some((reason) => reason.includes('Risk protection paused AI Trading'))).toBe(true);
     expect(reasons.some((reason) => reason.includes('not executable'))).toBe(true);
     expect(reasons.some((reason) => reason.includes('Broker authorization'))).toBe(false);
+  });
+
+  it('surfaces the latest server risk violation in plain language for a risk-suspended session', () => {
+    const reasons = executionBlockedReasons({
+      session: { ...SESSION, status: 'SUSPENDED_RISK_LIMIT' },
+      killSwitchActive: false,
+      canTrade: false,
+      brokerConnected: true,
+      sessionAuthorizationStatus: 'SUSPENDED',
+      sessionConnectionExecutable: false,
+      latestRiskViolationReason:
+        'Daily loss 54.68 has reached limit (5.00% = 49.41 of the session opening balance 988.13)',
+    } as Parameters<typeof executionBlockedReasons>[0] & { latestRiskViolationReason: string });
+
+    expect(reasons).toContain(
+      'Risk protection paused AI Trading: Daily loss 54.68 has reached limit (5.00% = 49.41 of the session opening balance 988.13)',
+    );
   });
 
   it('reports the missing session first when no session is active', () => {

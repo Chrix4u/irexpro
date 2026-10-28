@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { BrokerService } from '../broker/broker.service';
 import { RiskService } from '../risk/risk.service';
+import { RiskRejectionCode } from '../risk/interfaces/risk.interface';
 import { ExecutionService } from '../execution/execution.service';
 import { AllocationService } from '../execution/services/allocation.service';
 import { AuditService } from '../audit/audit.service';
@@ -242,6 +243,11 @@ export class TradingService {
       throw new TradingNotReadyException(readiness.missingSteps);
     }
 
+    // A DAILY loss breach is a UTC-day budget, not a button state. Ending a
+    // suspended session must never let Start reset that budget during the same
+    // risk day. The next UTC day clears this specific cooldown naturally.
+    await this.assertDailyRiskCooldownAllowsStart(userId);
+
     // ── Gate 2: EXACT broker connection (Round 5 — no discovery fallback) ────
     // The connection that will execute this session's new exposure is chosen
     // HERE, by id, and bound into the session row. findConnectionById scopes
@@ -443,6 +449,38 @@ export class TradingService {
     return this.executionService.changeExecutionMode(userId, sessionId, newMode);
   }
 
+  private async assertDailyRiskCooldownAllowsStart(userId: string): Promise<void> {
+    const violations = await this.riskService.getViolations(userId, 20);
+    const dailyLoss = violations.find(
+      (violation) => violation.rejectionCode === RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+    );
+    if (!dailyLoss) return;
+
+    const evaluatedAt = new Date(dailyLoss.evaluatedAt);
+    if (!Number.isFinite(evaluatedAt.getTime())) return;
+    const now = new Date();
+    const sameUtcRiskDay =
+      evaluatedAt.getUTCFullYear() === now.getUTCFullYear() &&
+      evaluatedAt.getUTCMonth() === now.getUTCMonth() &&
+      evaluatedAt.getUTCDate() === now.getUTCDate();
+    if (!sameUtcRiskDay) return;
+
+    const resumeAt = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+    );
+    throw new ForbiddenException({
+      statusCode: 403,
+      code: 'DAILY_RISK_COOLDOWN_ACTIVE',
+      message:
+        'AI Trading is paused by daily-loss protection for the rest of this UTC risk day. ' +
+        'Starting or reallocating capital cannot reset the loss budget.',
+      rejectionCode: dailyLoss.rejectionCode,
+      rejectionReason: dailyLoss.rejectionReason,
+      evaluatedAt: evaluatedAt.toISOString(),
+      resumeAt: resumeAt.toISOString(),
+    });
+  }
+
   /**
    * Stop the user's active AI trading session AND flatten AI-opened positions.
    *
@@ -456,14 +494,14 @@ export class TradingService {
    * while unresolved broker truth remains visible for reconciliation.
    */
   async stopTradingSession(userId: string, sessionId: string): Promise<StopTradingSessionResult> {
-    const session = await this.executionService.getActiveSession(userId);
+    const session = await this.executionService.getActiveSessionForClient(userId);
 
     if (!session) {
-      throw new NotFoundException('No active trading session found.');
+      throw new NotFoundException('No current trading session found.');
     }
 
     if (session.id !== sessionId) {
-      throw new ForbiddenException('Session ID does not match your active session.');
+      throw new ForbiddenException('Session ID does not match your current session.');
     }
 
     // Stop NEW exposure first and durably mark this session for late-fill

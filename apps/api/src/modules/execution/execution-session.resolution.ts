@@ -51,6 +51,29 @@ export class SessionAuthorityNotActiveException extends HttpException {
   }
 }
 
+/** A non-ended session exists but is intentionally not ACTIVE. */
+export class TradingSessionSuspendedException extends HttpException {
+  constructor(session: Pick<TradingSession, 'id' | 'status'>) {
+    const riskSuspended = session.status === TradingSessionStatus.SUSPENDED_RISK_LIMIT;
+    const brokerSuspended = session.status === TradingSessionStatus.SUSPENDED_BROKER;
+    const message = riskSuspended
+      ? 'AI Trading is paused by risk protection because a daily-loss or drawdown limit was reached. Starting a fresh session is blocked so the safety limit cannot be reset or bypassed.'
+      : brokerSuspended
+        ? 'AI Trading is paused because the broker connection is suspended. Starting a fresh session is blocked until the existing session is safely resumed or ended.'
+        : 'AI Trading is paused. Resume or end the existing session explicitly before starting another session.';
+    super(
+      {
+        statusCode: HttpStatus.CONFLICT,
+        code: 'SESSION_SUSPENDED',
+        message,
+        sessionId: session.id,
+        sessionStatus: session.status,
+      },
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 /**
  * An ACTIVE session exists but does not match the requested authority target
  * (different broker connection or execution mode). Switching accounts or modes

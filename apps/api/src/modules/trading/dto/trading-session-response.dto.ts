@@ -81,7 +81,7 @@ export class ActiveTradingSessionResponseDto {
   @ApiPropertyOptional({
     type: TradingSessionResponseDto,
     nullable: true,
-    description: 'Authoritative active trading session, or null when AI Trading is stopped.',
+    description: 'Authoritative current non-ended trading session, including paused/suspended states, or null when no session remains open.',
   })
   session: TradingSessionResponseDto | null;
 }

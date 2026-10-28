@@ -23,6 +23,7 @@ import { AuthService } from '../auth/auth.service';
 import { AiRuntimePreference } from './entities/ai-runtime-preference.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
+import { RiskRejectionCode } from '../risk/interfaces/risk.interface';
 
 /**
  * TradingService tests — Sprint 29 amendment + free-access regression +
@@ -157,6 +158,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         snapshotVersion: 1,
         snapshotCreatedAt: new Date().toISOString(),
       })),
+      getViolations: jest.fn().mockResolvedValue([]),
     };
 
     allocationService = {
@@ -349,6 +351,56 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       });
       await expect(service.startTradingSession('user-1')).rejects.toThrow();
       expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('startTradingSession — daily risk cooldown', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('blocks a fresh session for the rest of the UTC day after DAILY_LOSS_LIMIT_REACHED', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T14:30:00.000Z'));
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          rejectionReason:
+            'Daily loss 54.68 has reached limit (5.00% = 49.41 of opening balance 988.13)',
+          evaluatedAt: new Date('2026-10-28T13:43:13.000Z'),
+        },
+      ]);
+
+      await expect(service.startTradingSession('user-1', 'conn-1')).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'DAILY_RISK_COOLDOWN_ACTIVE',
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          resumeAt: '2026-10-29T00:00:00.000Z',
+        }),
+      });
+      expect(brokerService.findConnectionById).not.toHaveBeenCalled();
+      expect(executionService.startSession).not.toHaveBeenCalled();
+    });
+
+    it('does not carry a DAILY loss cooldown into the next UTC risk day', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-29T00:05:00.000Z'));
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          rejectionReason: 'Daily loss limit reached',
+          evaluatedAt: new Date('2026-10-28T23:55:00.000Z'),
+        },
+      ]);
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({ lastHealthCheckAt: new Date() }),
+      );
+      brokerService.findConnectionsByIds.mockResolvedValue([
+        buildHealthyConnection({ lastHealthCheckAt: new Date() }),
+      ]);
+
+      await expect(service.startTradingSession('user-1', 'conn-1')).resolves.toEqual(
+        expect.objectContaining({ id: 'session-1' }),
+      );
+      expect(executionService.startSession).toHaveBeenCalled();
     });
   });
 
@@ -1050,8 +1102,26 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(executionService.endSession).toHaveBeenCalledTimes(1);
     });
 
-    it('throws NotFoundException when no active session', async () => {
+    it('can explicitly end and flatten a risk-suspended current session', async () => {
       executionService.getActiveSession.mockResolvedValue(null);
+      executionService.getActiveSessionForClient.mockResolvedValue(
+        mockSession({ status: TradingSessionStatus.SUSPENDED_RISK_LIMIT }),
+      );
+
+      const result = await service.stopTradingSession('user-1', 'session-1');
+
+      expect(executionService.endSession).toHaveBeenCalledWith(
+        'user-1',
+        TradingSessionStatus.ENDED,
+        expect.objectContaining({ expectedSessionId: 'session-1' }),
+      );
+      expect(executionService.closeAllAiOpenPositions).toHaveBeenCalled();
+      expect(result.sessionId).toBe('session-1');
+    });
+
+    it('throws NotFoundException when no current non-ended session exists', async () => {
+      executionService.getActiveSession.mockResolvedValue(null);
+      executionService.getActiveSessionForClient.mockResolvedValue(null);
       await expect(service.stopTradingSession('user-1', 'session-1')).rejects.toThrow(
         NotFoundException,
       );

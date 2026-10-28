@@ -219,7 +219,7 @@ export interface AiAutomationRuntimeStatusView {
   downstream_rejected_total?: number;
 }
 
-/** GET /trading/sessions/active → 200 `{ session }`; session is null when stopped. */
+/** GET /trading/sessions/active → 200 `{ session }`; session includes active/paused/suspended control states and is null only when no non-ended session remains. */
 export interface ActiveTradingSessionResponse {
   session: TradingSessionView | null;
 }

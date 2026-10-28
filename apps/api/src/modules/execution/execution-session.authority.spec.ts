@@ -573,6 +573,22 @@ describe('ExecutionService — session authority (Round 5, issues #295/#298)', (
       expect(confirmationAfter?.status).toBe(ExecutionConfirmationStatus.REVOKED);
     });
 
+    it('allows an explicit END transition from SUSPENDED_RISK_LIMIT', async () => {
+      const session = await start(USER, CONN_A, ExecutionMode.PAPER_ONLY);
+      await sessionRepo.update(
+        { id: session.id },
+        { status: TradingSessionStatus.SUSPENDED_RISK_LIMIT },
+      );
+
+      await service.endSession(USER, TradingSessionStatus.ENDED, {
+        expectedSessionId: session.id,
+      });
+
+      const after = await sessionRepo.findOne({ where: { id: session.id } });
+      expect(after?.status).toBe(TradingSessionStatus.ENDED);
+      expect(after?.endedAt).toBeInstanceOf(Date);
+    });
+
     it('invalidates only grants bound to the OBSERVED generation (new-generation grants survive)', async () => {
       const session = await start(USER, CONN_A, ExecutionMode.PAPER_ONLY);
       await service.changeExecutionMode(USER, session.id, ExecutionMode.SEMI_AUTO); // generation 2

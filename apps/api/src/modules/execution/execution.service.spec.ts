@@ -1294,8 +1294,8 @@ describe('ExecutionService', () => {
         'session.updatedAt',
       ]);
       expect(qb.where).toHaveBeenCalledWith('session.userId = :userId', { userId: 'user-1' });
-      expect(qb.andWhere).toHaveBeenCalledWith('session.status = :status', {
-        status: TradingSessionStatus.ACTIVE,
+      expect(qb.andWhere).toHaveBeenCalledWith('session.status != :ended', {
+        ended: TradingSessionStatus.ENDED,
       });
       expect(qb.orderBy).toHaveBeenCalledWith('session.authorityGeneration', 'DESC');
       expect(qb.addOrderBy).toHaveBeenCalledWith('session.startedAt', 'DESC');
@@ -1385,6 +1385,26 @@ describe('ExecutionService', () => {
       await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
         BrokerConnectionNotExecutableException,
       );
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('blocks a fresh start when the latest session is suspended by a risk limit', async () => {
+      const suspended = {
+        id: 'sess-risk',
+        userId: 'user-1',
+        brokerConnectionId: 'conn-1',
+        executionMode: ExecutionMode.PAPER_ONLY,
+        authorityGeneration: 2,
+        status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+      };
+      sessionRepo.findOne.mockResolvedValue(suspended);
+
+      await expect(service.startSession('user-1', 'conn-1', '9500.00')).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'SESSION_SUSPENDED',
+          sessionStatus: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+        }),
+      });
       expect(sessionRepo.insert).not.toHaveBeenCalled();
     });
 
