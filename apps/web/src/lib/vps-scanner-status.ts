@@ -223,10 +223,10 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
   const directionalVotes = direction === "BUY" ? longVotes : direction === "SELL" ? shortVotes : null;
   const trainedExpertLabel =
     direction && directionalVotes != null && totalVotes > 0
-      ? `${directionalVotes}/${totalVotes} ${direction} votes · ${percentLabel(decision?.trainedExpertConfidence)}`
+      ? `Shadow challenger · ${directionalVotes}/${totalVotes} ${direction} votes · ${percentLabel(decision?.trainedExpertConfidence)}`
       : decision?.trainedExpertState
-        ? `Trained expert · ${decision.trainedExpertState.replaceAll("_", " ")}`
-        : "Trained expert · awaiting score";
+        ? `Shadow challenger · ${decision.trainedExpertState.replaceAll("_", " ")}`
+        : "Shadow challenger · awaiting score";
   const m1TimingLabel = `M1 timing · ${routeLabel(decision?.m1TimingRoute ?? decision?.route)}`;
   const executable =
     decision?.multimodelExecutable === true ||
@@ -332,7 +332,7 @@ export function deriveTradeReadinessUiState(
         band: "READY",
         headline: "Trade conditions ready",
         detail: multimodelPrimary
-          ? "The active multi-model ensemble has consensus from Plan-B, the trained expert, market governance, risk and execution gates; M1 is supplying timing and trade geometry."
+          ? "The promoted PAPER champion has passed its original Plan-B admission and governance gates; M1 is supplying timing and trade geometry, while the trained XGBoost challenger remains shadow-only evidence."
           : "The active M1 broker-native setup has passed its model, market, risk and execution gates.",
         tradeExpected: true,
         instrument: m1Decision.instrument,

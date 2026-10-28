@@ -582,7 +582,7 @@ describe("active multi-model execution presentation", () => {
       engineCode: "irexpro-multimodel-ensemble-v1",
       authorityLabel: "DEMO FULL AUTO",
       planBLabel: "Trend continuation · 70%",
-      trainedExpertLabel: "3/3 SELL votes · 81%",
+      trainedExpertLabel: "Shadow challenger · 3/3 SELL votes · 81%",
       m1TimingLabel: "M1 timing · Trend continuation",
       executable: true,
     });
@@ -598,6 +598,7 @@ describe("active multi-model execution presentation", () => {
     expect(result.band).toBe("READY");
     expect(result.tradeExpected).toBe(true);
     expect(result.score).toBe(78);
-    expect(result.detail).toMatch(/multi-model/i);
+    expect(result.detail).toMatch(/promoted PAPER champion/i);
+    expect(result.detail).toMatch(/shadow/i);
   });
 });

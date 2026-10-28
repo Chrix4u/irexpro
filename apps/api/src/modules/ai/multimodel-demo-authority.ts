@@ -43,16 +43,6 @@ export function evaluateMultimodelDemoAuthority(
     blockers.push('MULTIMODEL_GOVERNANCE_BLOCKED', ...input.governance.paperExecutionBlockers);
   }
 
-  if (input.trainedExpert.state !== 'CONFIRM') {
-    blockers.push(`MULTIMODEL_TRAINED_EXPERT_${input.trainedExpert.state}`);
-  }
-  if (
-    input.trainedExpert.state === 'CONFIRM' &&
-    input.trainedExpert.direction !== input.candidateDirection
-  ) {
-    blockers.push('MULTIMODEL_TRAINED_EXPERT_DIRECTION_MISMATCH');
-  }
-
   const finalBlockers = unique(blockers);
   return {
     executable: finalBlockers.length === 0,

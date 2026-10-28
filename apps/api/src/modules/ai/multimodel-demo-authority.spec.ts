@@ -59,23 +59,22 @@ describe('evaluateMultimodelDemoAuthority', () => {
     },
   );
 
-  it.each([
-    ['CONFLICT', 'MULTIMODEL_TRAINED_EXPERT_CONFLICT'],
-    ['ABSTAIN', 'MULTIMODEL_TRAINED_EXPERT_ABSTAIN'],
-    ['STALE', 'MULTIMODEL_TRAINED_EXPERT_STALE'],
-    ['UNAVAILABLE', 'MULTIMODEL_TRAINED_EXPERT_UNAVAILABLE'],
-  ] as const)('fails closed when trained expert state is %s', (state, blocker) => {
-    const result = evaluateMultimodelDemoAuthority({
-      ensemble: ensemble(true),
-      governance: governance(true),
-      trainedExpert: overlay(state),
-      candidateDirection: 'BUY',
-      m1TimingRoute: 'M1_TREND_CONTINUATION',
-    });
+  it.each(['CONFLICT', 'ABSTAIN', 'STALE', 'UNAVAILABLE'] as const)(
+    'keeps trained expert state %s observational when the promoted PAPER champion qualifies',
+    (state) => {
+      const result = evaluateMultimodelDemoAuthority({
+        ensemble: ensemble(true),
+        governance: governance(true),
+        trainedExpert: overlay(state),
+        candidateDirection: 'BUY',
+        m1TimingRoute: 'M1_TREND_CONTINUATION',
+      });
 
-    expect(result.executable).toBe(false);
-    expect(result.blockers).toContain(blocker);
-  });
+      expect(result.executable).toBe(true);
+      expect(result.blockers).toEqual([]);
+      expect(result.trainedExpertConfirmed).toBe(false);
+    },
+  );
 
   it('blocks when Plan-B does not admit the candidate', () => {
     const result = evaluateMultimodelDemoAuthority({
@@ -104,7 +103,7 @@ describe('evaluateMultimodelDemoAuthority', () => {
     expect(result.blockers).toContain('DRIFT_OUT_OF_DISTRIBUTION');
   });
 
-  it('blocks a trained-model direction mismatch even if its state is malformed as CONFIRM', () => {
+  it('records a trained-model direction mismatch without overriding the promoted PAPER champion', () => {
     const trainedExpert = { ...overlay('CONFIRM'), direction: 'SELL' as const };
     const result = evaluateMultimodelDemoAuthority({
       ensemble: ensemble(true),
@@ -114,8 +113,9 @@ describe('evaluateMultimodelDemoAuthority', () => {
       m1TimingRoute: 'M1_CONFIRMED_REVERSAL',
     });
 
-    expect(result.executable).toBe(false);
-    expect(result.blockers).toContain('MULTIMODEL_TRAINED_EXPERT_DIRECTION_MISMATCH');
+    expect(result.executable).toBe(true);
+    expect(result.trainedExpertConfirmed).toBe(false);
+    expect(result.blockers).toEqual([]);
   });
 });
 

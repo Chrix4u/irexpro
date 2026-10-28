@@ -2034,7 +2034,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
   });
 
   it.each(['CONFLICT', 'UNAVAILABLE'] as const)(
-    'fails closed when the trained expert is %s',
+    'keeps trained expert state %s observational when the promoted PAPER champion qualifies',
     async (trainedExpertState) => {
       const h = phase2Harness({
         rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
@@ -2048,12 +2048,24 @@ describe('M1 V8 multi-model DEMO authority', () => {
       });
 
       expect(h.trainedExpertEvaluate).toHaveBeenCalled();
-      expect(h.receiveSignal).not.toHaveBeenCalled();
+      expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+      expect(h.receiveSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            multimodel_trained_expert_state: trainedExpertState,
+          }),
+        }),
+      );
       const recorded = h.recordDecision.mock.calls.find(
         ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
       )?.[0];
-      expect(recorded?.blockers).toContain(
+      expect(recorded?.blockers ?? []).not.toContain(
         `MULTIMODEL_TRAINED_EXPERT_${trainedExpertState}`,
+      );
+      expect(recorded?.governance).toEqual(
+        expect.objectContaining({
+          multimodelAuthority: expect.objectContaining({ executable: true }),
+        }),
       );
     },
   );
