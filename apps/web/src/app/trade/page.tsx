@@ -30,6 +30,7 @@ import { formatAgeSeconds } from "@/lib/duration";
 import { mapApiError } from "@/lib/error-mapping";
 import { loadLiveAccountPositions } from "@/lib/live-account";
 import { resolveAiOpenPositionRows } from "@/lib/ai-open-positions";
+import { executionPathDiagnostics } from "@/lib/trade-path-diagnostics";
 import { loadMarketIntelligence } from "@/lib/market-intelligence";
 import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
 import {
@@ -1215,6 +1216,7 @@ function PositionTable({
 function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
   const realized = trade.status === "CLOSED" ? trade.realisedPnl : null;
   const executionReason = executionReasonLabel(trade.executionReasonCode);
+  const pathDiagnostics = executionPathDiagnostics(trade);
   return (
     <article className="ai-activity-row">
       <div className="ai-activity-row__symbol">
@@ -1259,6 +1261,34 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
               : money(trade.realisedPnl, trade.accountCurrency)}
           </strong>
         </div>
+        {pathDiagnostics ? (
+          <>
+            <div>
+              <span>Peak P&amp;L</span>
+              <strong>{signedMoney(pathDiagnostics.maxFavorablePnl, trade.accountCurrency)}</strong>
+            </div>
+            <div>
+              <span>Profit give-back</span>
+              <strong>{money(pathDiagnostics.profitGiveback, trade.accountCurrency)}</strong>
+            </div>
+            <div>
+              <span>Worst excursion</span>
+              <strong>{signedMoney(pathDiagnostics.maxAdversePnl, trade.accountCurrency)}</strong>
+            </div>
+            <div>
+              <span>Path observations</span>
+              <strong>{pathDiagnostics.observationCount?.toLocaleString() ?? "—"}</strong>
+            </div>
+            <div>
+              <span>Peak observed</span>
+              <strong>
+                {pathDiagnostics.peakObservedAt
+                  ? formatTimestamp(pathDiagnostics.peakObservedAt)
+                  : "—"}
+              </strong>
+            </div>
+          </>
+        ) : null}
         <div>
           <span>Commission</span>
           <strong>{money(trade.commission, trade.accountCurrency)}</strong>

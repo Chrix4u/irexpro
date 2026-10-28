@@ -66,6 +66,16 @@ export interface TradeExecutionView {
   trailingStopPips: string | null;
   status: TradeExecutionStatus;
   exitPrice: string | null;
+  /** Best observed P&L while the position was open, in account currency. */
+  maxFavorablePnl?: string | null;
+  /** Worst observed P&L while the position was open, in account currency. */
+  maxAdversePnl?: string | null;
+  /** Amount surrendered from the observed peak before the latest/final state. */
+  profitGiveback?: string | null;
+  /** Number of durable path observations captured for the position. */
+  pathObservationCount?: number | null;
+  pathPeakObservedAt?: string | null;
+  pathLastObservedAt?: string | null;
   /** Account currency for monetary execution economics, when proven. */
   accountCurrency: string | null;
   /** Server/provider-recorded realized P&L in account currency. */
