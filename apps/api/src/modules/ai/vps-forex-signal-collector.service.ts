@@ -14,6 +14,7 @@ import {
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
 import { PAPER_MARKET_SPECS } from '../broker/services/paper-market-spec';
+import { ProviderQuoteCandleStoreService } from '../market-data/services/provider-quote-candle-store.service';
 import {
   PLAN_B_SHADOW_ADMISSION_THRESHOLD,
   scorePlanBShadowMeta,
@@ -1120,6 +1121,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     @Optional() private readonly allocationService?: AllocationService,
     @Optional()
     private readonly adaptivePredictionCalibration?: AdaptivePredictionCalibrationService,
+    @Optional() private readonly providerQuoteCandleStore?: ProviderQuoteCandleStoreService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -6960,6 +6962,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
 
     const now = Date.now();
+    const cached = await this.fetchPersistedBrokerNativeFallbackSeries(sourceConnectionId, now);
+    if (cached) {
+      this.lastProviderFetchMinute = new Date(now).toISOString().slice(0, 16);
+      this.lastProviderSeries = cached;
+      this.lastMarketDataAuthority = 'METAAPI_BROKER_FALLBACK';
+      this.logger.warn(
+        `Broker-native persisted M5 cache active for 6/6 pairs source=${source.brokerId} reason=${reason}; execution authority remains PAPER_ONLY`,
+      );
+      return cached;
+    }
+
     try {
       const rows: Array<readonly [string, LivePaperCandleInput[]]> = [];
       // Broker providers can enforce per-account historical-data concurrency ceilings.
@@ -7024,6 +7037,59 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       throw new Error(
         `Twelve Data unavailable (${reason}) and broker-native fallback failed: ${(error as Error).message}`,
       );
+    }
+  }
+
+  private async fetchPersistedBrokerNativeFallbackSeries(
+    sourceConnectionId: string,
+    now: number,
+  ): Promise<Map<string, LivePaperCandleInput[]> | null> {
+    if (!this.providerQuoteCandleStore) return null;
+
+    try {
+      const evaluatedAt = new Date(now);
+      const rows = await Promise.all(
+        SYMBOLS.map(async ([instrument]) => {
+          const raw = await this.providerQuoteCandleStore!.getCandles(
+            sourceConnectionId,
+            instrument,
+            'M5',
+            500,
+            evaluatedAt,
+          );
+          const candles = raw
+            .map((candle) => ({
+              timestamp:
+                candle.timestamp instanceof Date
+                  ? new Date(candle.timestamp)
+                  : new Date(candle.timestamp),
+              open: candle.open,
+              high: candle.high,
+              low: candle.low,
+              close: candle.close,
+            }))
+            .filter(
+              (candle) =>
+                Number.isFinite(candle.timestamp.getTime()) &&
+                candle.timestamp.getTime() + BAR_MS <= now,
+            )
+            .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+          if (candles.length < 55) return null;
+          const latest = candles[candles.length - 1]!;
+          const latestClose = latest.timestamp.getTime() + BAR_MS;
+          if (now - latestClose > 20 * 60_000) return null;
+          return [instrument, candles] as const;
+        }),
+      );
+
+      if (rows.some((row) => row === null)) return null;
+      return new Map(rows as Array<readonly [string, LivePaperCandleInput[]]>);
+    } catch (error) {
+      this.logger.warn(
+        `Broker-native persisted M5 cache unavailable; falling back to provider history: ${(error as Error).message}`,
+      );
+      return null;
     }
   }
 

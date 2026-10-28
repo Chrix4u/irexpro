@@ -4686,6 +4686,59 @@ describe('VpsForexSignalCollectorService', () => {
     expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
   });
 
+  it('uses fresh persisted broker-native M5 cache before spending cTrader historical requests', async () => {
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({
+        brokerId: 'ctrader',
+        status: 'CONNECTED',
+      }),
+      getOhlcvForConnection: jest.fn().mockRejectedValue(new Error('provider history should not be called')),
+    } as unknown as BrokerService;
+    const store = {
+      getCandles: jest.fn().mockImplementation(async (_connectionId, instrument) => {
+        const base = instrument === 'USDJPY' ? 157 : 1.1;
+        const digits = instrument === 'USDJPY' ? 3 : 5;
+        return trendCandles(base, digits, undefined, undefined, 60).map((row) => ({
+          ...row,
+          volume: '0',
+        }));
+      }),
+    };
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'ctrader-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    (collector as any).providerQuoteCandleStore = store;
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({
+        status: 'error',
+        message: 'You have run out of API credits for the day.',
+      }),
+    });
+
+    const series = await (collector as any).fetchSixPairSeries(
+      'real-key-123456',
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(series.size).toBe(6);
+    expect(store.getCandles).toHaveBeenCalledTimes(6);
+    expect((broker as any).getOhlcvForConnection).not.toHaveBeenCalled();
+  });
+
   it('lets the legacy high-conviction overlay score a connected cTrader source', async () => {
     const broker = {
       findConnectionById: jest.fn().mockResolvedValue({
