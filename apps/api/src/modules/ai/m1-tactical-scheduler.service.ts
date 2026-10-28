@@ -924,7 +924,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       barTime: candidate.latestM1OpenTime,
       evaluatedAt: decisionTime,
       policyVersion: candidate.policyVersion,
-      executionAuthority: canExecute ? 'PAPER_ONLY_RESEARCH' : 'NONE',
+      executionAuthority: canExecute ? (professionalDemoPhase ? 'BROKER_NATIVE' : 'PAPER_ONLY_RESEARCH') : 'NONE',
       candidate: { ...candidate },
       governance: {
         ...governance,
@@ -1302,7 +1302,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
               routeDecision.route as Exclude<M1TacticalRoute, 'ABSTAIN'>
             ],
           m1_execution_authority: professionalDemoPhase
-            ? 'TIMING_SPECIALIST_NO_PRIMARY_AUTHORITY'
+            ? 'DEMO_FULL_AUTO_PROMOTED'
             : 'PAPER_ONLY_RESEARCH',
         },
       });

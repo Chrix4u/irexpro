@@ -2091,6 +2091,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
       ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
     )?.[0];
     expect(recorded?.blockers ?? []).not.toContain('M1_PHASE_ROUTE_SHADOW');
+    expect(recorded?.executionAuthority).toBe('BROKER_NATIVE');
     expect(recorded?.governance).toEqual(
       expect.objectContaining({
         primaryEngineCode: 'irexpro-multimodel-ensemble-v1',

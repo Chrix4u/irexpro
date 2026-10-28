@@ -479,6 +479,38 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
       ).rejects.toMatchObject({ code: 'ALLOCATION_INSUFFICIENT_CAPITAL' });
     });
 
+    it('validated DEMO FULL_AUTO may bypass concentration percentages while preserving the shared capital ceiling', async () => {
+      store.budgets[0].max_instrument_concentration = '50.00';
+      store.budgets[0].max_strategy_concentration = '60.00';
+      store.aggregateRows = [];
+
+      const alloc = await service.resolveOrAllocate({
+        intent: intent('intent-demo-promoted'),
+        logicalAccountKey: KEY,
+        sized: sized({ allocatedCapital: '30000' }),
+        executionMode: ExecutionMode.FULL_AUTO,
+        enforceConcentrationCaps: false,
+      });
+
+      expect(alloc.status).toBe(CapitalAllocationStatus.ACTIVE);
+    });
+
+    it('validated DEMO concentration bypass still rejects when the shared capital pool is exhausted', async () => {
+      store.budgets[0].max_instrument_concentration = '50.00';
+      store.budgets[0].max_strategy_concentration = '60.00';
+      store.aggregateRows = [joinRow({ allocated_capital: '45000', trade_status: 'OPEN' })];
+
+      await expect(
+        service.resolveOrAllocate({
+          intent: intent('intent-demo-exhausted'),
+          logicalAccountKey: KEY,
+          sized: sized({ allocatedCapital: '10000' }),
+          executionMode: ExecutionMode.FULL_AUTO,
+          enforceConcentrationCaps: false,
+        }),
+      ).rejects.toMatchObject({ code: 'ALLOCATION_INSUFFICIENT_CAPITAL' });
+    });
+
     it('non-PAPER execution continues to enforce the instrument concentration cap', async () => {
       store.budgets[0].max_instrument_concentration = '50.00';
       store.aggregateRows = [

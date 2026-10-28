@@ -7,7 +7,7 @@ import type { M1ShadowPairSideOutcome } from './m1-shadow-pair-side-reliability'
 import { m1UsdRiskAtStop } from './m1-tactical-currency-exposure';
 
 export type M1TacticalDecisionRoute = M1ReliabilityRoute | 'ABSTAIN';
-export type M1TacticalDecisionAuthority = 'NONE' | 'PAPER_ONLY_RESEARCH';
+export type M1TacticalDecisionAuthority = 'NONE' | 'PAPER_ONLY_RESEARCH' | 'BROKER_NATIVE';
 
 export interface M1TacticalDecisionInput {
   userId: string;

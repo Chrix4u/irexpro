@@ -648,6 +648,12 @@ describe('StrategyOrchestratorService', () => {
           }),
         }),
       );
+      expect(allocationMock.resolveOrAllocate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionMode: ExecutionMode.FULL_AUTO,
+          enforceConcentrationCaps: false,
+        }),
+      );
       expect(riskService.validateProposedTrade).toHaveBeenCalled();
       expect(executionService.executeTrade).toHaveBeenCalled();
     });

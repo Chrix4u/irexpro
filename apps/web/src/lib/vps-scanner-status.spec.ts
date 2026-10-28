@@ -508,9 +508,44 @@ describe("production trade-readiness presentation", () => {
 
     expect(result.band).toBe("READY");
     expect(result.tradeExpected).toBe(true);
-    expect(result.score).toBeGreaterThanOrEqual(78);
+    expect(result.score).toBe(74);
     expect(result.instrument).toBe("USDJPY");
     expect(result.direction).toBe("SELL");
+  });
+
+  it("does not stay green after the final risk engine rejects an otherwise executable setup", () => {
+    const m1Status = {
+      enabled: true,
+      phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+      primaryEngineCode: "irexpro-multimodel-ensemble-v1",
+      lastRunAt: "2026-10-28T11:54:09.000Z",
+      lastError: null,
+      latestDecision: {
+        instrument: "AUDUSD",
+        direction: "BUY",
+        route: "M1_TREND_CONTINUATION",
+        barTime: "2026-10-28T11:53:00.000Z",
+        confidence: 0.738,
+        primaryConfidence: 0.746,
+        netExpectedR: 0.519,
+        executionAuthority: "PAPER_ONLY_RESEARCH",
+        blockers: [],
+        multimodelExecutable: true,
+        outcomeState: "RISK_REJECTED",
+      },
+    };
+
+    const result = derive({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: m1Status,
+      fastMarkState: "LIVE",
+    });
+
+    expect(result.band).not.toBe("READY");
+    expect(result.tradeExpected).toBe(false);
+    expect(result.score).toBeLessThan(70);
+    expect(result.headline).toMatch(/risk|blocked/i);
   });
 
   it("shows a waiting state while the authoritative market schedule is paused", () => {
@@ -597,7 +632,7 @@ describe("active multi-model execution presentation", () => {
     });
     expect(result.band).toBe("READY");
     expect(result.tradeExpected).toBe(true);
-    expect(result.score).toBe(78);
+    expect(result.score).toBe(70);
     expect(result.detail).toMatch(/promoted PAPER champion/i);
     expect(result.detail).toMatch(/shadow/i);
   });

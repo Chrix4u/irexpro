@@ -133,7 +133,7 @@ export interface M1TacticalStatusView {
     barTime: string;
     confidence: number;
     netExpectedR: number;
-    executionAuthority: "NONE" | "PAPER_ONLY_RESEARCH";
+    executionAuthority: "NONE" | "PAPER_ONLY_RESEARCH" | "BROKER_NATIVE";
     blockers: string[];
     outcomeState: string | null;
     primaryEngineCode?: string | null;
@@ -171,7 +171,9 @@ export function hasM1TacticalStatusUiShape(value: unknown): value is M1TacticalS
     Number.isFinite(decision.confidence) &&
     typeof decision.netExpectedR === "number" &&
     Number.isFinite(decision.netExpectedR) &&
-    (decision.executionAuthority === "NONE" || decision.executionAuthority === "PAPER_ONLY_RESEARCH") &&
+    (decision.executionAuthority === "NONE" ||
+      decision.executionAuthority === "PAPER_ONLY_RESEARCH" ||
+      decision.executionAuthority === "BROKER_NATIVE") &&
     isStringArray(decision.blockers) &&
     (decision.outcomeState === null || typeof decision.outcomeState === "string")
   );
@@ -306,15 +308,15 @@ export function deriveTradeReadinessUiState(
     const multimodelPrimary =
       m1Decision.primaryEngineCode === "irexpro-multimodel-ensemble-v1" ||
       m1Status?.primaryEngineCode === "irexpro-multimodel-ensemble-v1";
+    const finalExecutionBlocked =
+      m1Decision.outcomeState != null && m1Decision.outcomeState !== "EXECUTION_SUCCEEDED";
     const executionEligible =
       (m1Decision.multimodelExecutable ?? (m1Decision.executionAuthority !== "NONE")) === true &&
       blockers.length === 0 &&
-      m1Decision.outcomeState !== "EXECUTION_FAILED";
+      !finalExecutionBlocked;
     const primaryConfidence = finite(m1Decision.primaryConfidence) ?? m1Decision.confidence;
     let score = Math.max(0, Math.min(100, primaryConfidence * 100));
-    if (executionEligible) {
-      score = Math.max(score, 78);
-    } else {
+    if (!executionEligible) {
       score = Math.min(score, MAX_BLOCKED_READINESS_SCORE);
     }
 
@@ -331,6 +333,20 @@ export function deriveTradeReadinessUiState(
     if (routeShadow) score = Math.min(score, 59);
 
     const rounded = Math.round(score);
+    if (finalExecutionBlocked) {
+      return {
+        score: Math.min(rounded, 59),
+        band: "FORMING",
+        headline: "Final risk check blocked this setup",
+        detail:
+          m1Decision.outcomeState === "RISK_REJECTED"
+            ? "The model setup qualified, but the final account-risk check rejected dispatch. iRexPro will keep scanning for the next executable setup."
+            : "The model setup qualified, but the final execution path did not complete. iRexPro will keep scanning for the next executable setup.",
+        tradeExpected: false,
+        instrument: m1Decision.instrument,
+        direction: m1Decision.direction,
+      };
+    }
     if (executionEligible) {
       return {
         score: rounded,
@@ -436,9 +452,7 @@ export function deriveTradeReadinessUiState(
   score += governance?.paperExecutionEligible === true ? 5 : 0;
 
   const executionEligible = governance?.paperExecutionEligible === true;
-  if (executionEligible) {
-    score = Math.max(score, 78);
-  } else {
+  if (!executionEligible) {
     // Preserve the full 0–69 forming range instead of pinning every strong-but-
     // blocked setup at 69. The blocked score is normalized against the maximum
     // points available before execution eligibility (95). Green remains reserved

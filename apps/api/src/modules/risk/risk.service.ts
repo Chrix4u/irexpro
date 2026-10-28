@@ -1498,22 +1498,53 @@ export class RiskService {
       const notionalQuote = entry.mul(quantity).mul(contractSize);
       notional = notionalQuote.divUp(entry, 12);
     } else {
-      appliedRules.push('MAX_TRADE_RISK:CURRENCY_UNVERIFIED');
-      return {
-        rejection: await this.rejectAndRecord(
+      // Match the position sizer's currency-honesty rule: use only a fresh
+      // direct ACCOUNT/QUOTE cross from this exact broker connection. A BID
+      // gives quote-currency units per one account-currency unit, so quote
+      // risk/notional are divided by it conservatively (divUp). No synthetic
+      // cross or stale fallback is allowed.
+      const conversionInstrument = `${accountCurrency}${quoteCurrency}`;
+      let conversionQuote: Awaited<ReturnType<BrokerService['getCurrentPriceForConnection']>> = null;
+      try {
+        conversionQuote = await this.brokerService.getCurrentPriceForConnection(
           userId,
-          trade,
-          RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
-          'Account currency ' +
-            accountCurrency +
-            ' matches neither leg of ' +
-            normalizedInstrument +
-            '; a trusted third-currency FX conversion is unavailable — rejecting (fail-closed)',
-          contextSnapshot,
-          evaluatedAt,
-        ),
-        quoteRef: geometry.quoteRef,
-      };
+          session.brokerConnectionId,
+          conversionInstrument,
+          { propagateProviderError: true },
+        );
+      } catch {
+        conversionQuote = null;
+      }
+      const conversionBid = ExactDecimal.tryParse(conversionQuote?.bid ?? '');
+      const conversionTimestamp = conversionQuote?.timestamp
+        ? new Date(conversionQuote.timestamp).getTime()
+        : Number.NaN;
+      const conversionAgeMs = Date.now() - conversionTimestamp;
+      if (
+        !conversionBid ||
+        !conversionBid.isPositive() ||
+        !Number.isFinite(conversionTimestamp) ||
+        conversionAgeMs < -5_000 ||
+        conversionAgeMs > 60_000
+      ) {
+        appliedRules.push('MAX_TRADE_RISK:CURRENCY_UNVERIFIED');
+        return {
+          rejection: await this.rejectAndRecord(
+            userId,
+            trade,
+            RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
+            `Account currency ${accountCurrency} matches neither leg of ${normalizedInstrument}; ` +
+              `fresh broker conversion ${conversionInstrument} is unavailable — rejecting (fail-closed)`,
+            contextSnapshot,
+            evaluatedAt,
+          ),
+          quoteRef: geometry.quoteRef,
+        };
+      }
+      riskAtStop = riskAtStopQuote.divUp(conversionBid, 12);
+      const notionalQuote = entry.mul(quantity).mul(contractSize);
+      notional = notionalQuote.divUp(conversionBid, 12);
+      appliedRules.push(`MAX_TRADE_RISK:CURRENCY_CONVERTED:${conversionInstrument}`);
     }
     const maxTradeRiskPercent = this.parseProfileDecimal(
       profile.maxTradeRiskPercent,

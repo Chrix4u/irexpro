@@ -170,6 +170,7 @@ const mockBrokerService = () => ({
     freeMargin: '9800.00',
     currency: 'USD',
   }),
+  getCurrentPriceForConnection: jest.fn().mockResolvedValue(null),
   // Sprint 32 Gate 2: mock required margin calculation
   getRequiredMargin: jest.fn().mockResolvedValue('100.00'),
   // Round 7 (P1): the on-demand LIVE snapshot observation seam.
@@ -1392,13 +1393,44 @@ describe('RiskService', () => {
       expect(result.decision).toBe('APPROVED');
     });
 
-    it('fails closed when the account currency matches neither FX leg', async () => {
+    it('uses a fresh direct broker FX cross when the account currency matches neither instrument leg', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue({
         balance: '10000.00',
         equity: '10000.00',
         freeMargin: '9900.00',
         currency: 'USD',
       });
+      brokerService.getCurrentPriceForConnection.mockResolvedValue({
+        bid: '156.50',
+        ask: '156.52',
+        timestamp: new Date().toISOString(),
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({
+          instrument: 'GBPJPY',
+          requestedLotSize: '0.05',
+          entryPrice: '200.000',
+          stopLoss: '199.500',
+          takeProfit: '201.000',
+        }),
+      );
+
+      expect(brokerService.getCurrentPriceForConnection).toHaveBeenCalledWith(
+        'user-1', 'conn-1', 'USDJPY', { propagateProviderError: true },
+      );
+      expect(result.decision).toBe('APPROVED');
+    });
+
+    it('still fails closed when the required third-currency broker cross is unavailable', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: '10000.00',
+        freeMargin: '9900.00',
+        currency: 'USD',
+      });
+      brokerService.getCurrentPriceForConnection.mockResolvedValue(null);
 
       const result = await service.validateProposedTrade(
         'user-1',
@@ -1414,7 +1446,7 @@ describe('RiskService', () => {
       expect(result.decision).toBe('REJECTED');
       if (result.decision === 'REJECTED') {
         expect(result.rejectionCode).toBe(RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE);
-        expect(result.rejectionReason).toContain('matches neither leg');
+        expect(result.rejectionReason).toContain('USDJPY');
       }
     });
 

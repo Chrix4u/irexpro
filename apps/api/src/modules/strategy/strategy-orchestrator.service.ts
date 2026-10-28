@@ -662,6 +662,11 @@ export class StrategyOrchestratorService {
         // the downstream Risk Engine, not arbitrary per-strategy/instrument
         // concentration percentages. Non-PAPER modes keep those caps.
         executionMode: session.executionMode,
+        // The server-promoted, validated provider DEMO model already remains
+        // bounded by the explicit shared capital pool and the final Risk
+        // Engine. Do not let 50%/60% concentration bookkeeping veto the first
+        // professional 0.20-lot DEMO position. LIVE behavior is unchanged.
+        ...(externalProviderDemoPromoted ? { enforceConcentrationCaps: false } : {}),
       });
     } catch (err) {
       // Round 7.1 (P1 — sizing input freshness): a LIVE freshness rejection
