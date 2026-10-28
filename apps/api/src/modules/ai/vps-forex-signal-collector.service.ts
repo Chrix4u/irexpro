@@ -353,16 +353,23 @@ export function dynamicPaperLotUpperBound(
 const MIN_STOP_LOSS_PIPS = 5;
 const STOP_FLOOR_BUFFER_PIPS = 0.1;
 const BAR_MS = 5 * 60_000;
-const BROKER_NATIVE_SOURCE_IDS = new Set([
-  'metatrader4',
-  'metatrader5',
+const CTRADER_BROKER_NATIVE_SOURCE_IDS = new Set([
   'ctrader',
   'pepperstone-ctrader',
   'icmarkets-ctrader',
 ]);
+const BROKER_NATIVE_SOURCE_IDS = new Set([
+  'metatrader4',
+  'metatrader5',
+  ...CTRADER_BROKER_NATIVE_SOURCE_IDS,
+]);
 
 function isBrokerNativeSource(brokerId: string): boolean {
   return BROKER_NATIVE_SOURCE_IDS.has(brokerId.trim().toLowerCase());
+}
+
+function isCtraderBrokerNativeSource(brokerId: string): boolean {
+  return CTRADER_BROKER_NATIVE_SOURCE_IDS.has(brokerId.trim().toLowerCase());
 }
 const COLLECTION_CADENCE_MINUTES = 5;
 const PAPER_PRE_INTENT_RETRY_SAFE_CODE = 'PAPER_PRE_INTENT_RETRY_SAFE';
@@ -7023,9 +7030,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     try {
       const rows: Array<readonly [string, LivePaperCandleInput[]]> = [];
       // Broker providers can enforce per-account historical-data concurrency ceilings.
-      // Keep provider capacity in reserve for other readers/quote recovery instead
-      // of issuing all six symbols at once.
-      const historyConcurrency = 3;
+      // cTrader shares a strict 5 historical requests/second budget across the
+      // M1 context collector and this M5 fallback. Pace this low-priority lane
+      // at one request every 250ms so it leaves capacity for the M1 reader and
+      // avoids synchronized minute-boundary bursts. MetaTrader keeps the proven
+      // three-wide concurrency because it has a different provider budget.
+      const ctraderHistory = isCtraderBrokerNativeSource(source.brokerId);
+      const historyConcurrency = ctraderHistory ? 1 : 3;
+      const historyPaceMs = ctraderHistory ? 250 : 0;
       for (let offset = 0; offset < SYMBOLS.length; offset += historyConcurrency) {
         const batch = await Promise.all(
           SYMBOLS.slice(offset, offset + historyConcurrency).map(async ([instrument]) => {
@@ -7070,6 +7082,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           }),
         );
         rows.push(...batch);
+        if (historyPaceMs > 0 && offset + historyConcurrency < SYMBOLS.length) {
+          await new Promise<void>((resolve) => setTimeout(resolve, historyPaceMs));
+        }
       }
       const result = new Map<string, LivePaperCandleInput[]>(rows);
       this.lastProviderFetchMinute = new Date(now).toISOString().slice(0, 16);

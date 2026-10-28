@@ -4661,6 +4661,52 @@ describe('VpsForexSignalCollectorService', () => {
     expect(peak).toBeLessThanOrEqual(3);
   });
 
+  it('paces cTrader six-pair background history below the shared 5-per-second budget', async () => {
+    let active = 0;
+    let peak = 0;
+    const startedAt: number[] = [];
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'ctrader', status: 'CONNECTED' }),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
+          startedAt.push(Date.now());
+          active += 1;
+          peak = Math.max(peak, active);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          active -= 1;
+          const base = instrument === 'USDJPY' ? 157 : 1.1;
+          const digits = instrument === 'USDJPY' ? 3 : 5;
+          return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
+        }),
+    } as unknown as BrokerService;
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'ctrader-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+
+    const series = await (collector as any).fetchBrokerNativeFallbackSeries('TEST_CTRADER_PACING');
+
+    expect(series.size).toBe(6);
+    expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
+    expect(peak).toBe(1);
+    expect(startedAt).toHaveLength(6);
+    for (let i = 1; i < startedAt.length; i += 1) {
+      expect(startedAt[i]! - startedAt[i - 1]!).toBeGreaterThanOrEqual(200);
+    }
+  });
+
   it('uses the configured broker-native source for Plan B portfolio truth instead of the PAPER evidence connection', async () => {
     const getOpenPositionsForConnection = jest.fn().mockResolvedValue({
       positions: [{ instrument: 'EURUSD', direction: 'BUY', lotSize: '0.20' }],
