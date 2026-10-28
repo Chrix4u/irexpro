@@ -1177,7 +1177,7 @@ describe('ExecutionService', () => {
       );
     });
 
-    it('unresolved close outcome (UNKNOWN) flags the trade for reconciliation', async () => {
+    it('unresolved close outcome (UNKNOWN) flags the trade for reconciliation and preserves the requested close reason', async () => {
       tradeRepo.findOne.mockResolvedValue(openTrade());
       orchestrator.dispatchOrder.mockResolvedValueOnce({
         outcome: 'UNKNOWN',
@@ -1190,7 +1190,10 @@ describe('ExecutionService', () => {
 
       expect(tradeRepo.update).toHaveBeenCalledWith(
         'trade-1',
-        expect.objectContaining({ status: TradeStatus.RECONCILIATION_PENDING }),
+        expect.objectContaining({
+          status: TradeStatus.RECONCILIATION_PENDING,
+          closeReason: TradeCloseReason.MANUAL_CLOSE,
+        }),
       );
     });
 

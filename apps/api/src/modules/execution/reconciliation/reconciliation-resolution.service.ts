@@ -80,8 +80,50 @@ export class ReconciliationResolutionService {
     const commission = closedTrade?.commission ?? null;
     const swap = closedTrade?.swap ?? null;
     const closedAt = closedTrade?.closedAt ?? new Date();
-    const closeReason = this.mapProviderCloseReason(closedTrade?.closeReason);
-    const pathDiagnostics = closedTrade?.pathDiagnostics ?? null;
+    const providerCloseReason = closedTrade?.closeReason;
+    const providerReasonSpecific =
+      providerCloseReason === 'TP' ||
+      providerCloseReason === 'SL' ||
+      providerCloseReason === 'PROFIT_LOCK' ||
+      providerCloseReason === 'TIME_TO_WORK';
+    const mappedProviderCloseReason = this.mapProviderCloseReason(providerCloseReason);
+    const appCloseIntentFallback =
+      !providerReasonSpecific &&
+      trade.status === TradeStatus.RECONCILIATION_PENDING &&
+      trade.closeReason
+        ? trade.closeReason
+        : null;
+    const closeReason = appCloseIntentFallback ?? mappedProviderCloseReason;
+    const closeReasonSource = providerReasonSpecific
+      ? 'PROVIDER_CLOSE_REASON'
+      : appCloseIntentFallback
+        ? 'APP_CLOSE_INTENT_FALLBACK'
+        : 'PROVIDER_GENERIC';
+
+    const providerPathDiagnostics = closedTrade?.pathDiagnostics ?? null;
+    const durablePathDiagnostics =
+      !providerPathDiagnostics &&
+      (trade.pathObservationCount ?? 0) > 0 &&
+      trade.maxFavorablePnl != null &&
+      trade.maxAdversePnl != null &&
+      trade.profitGiveback != null
+        ? {
+            maxFavorablePnl: trade.maxFavorablePnl,
+            maxAdversePnl: trade.maxAdversePnl,
+            profitGiveback: trade.profitGiveback,
+            observationCount: trade.pathObservationCount ?? 0,
+            sameBarProtectionAmbiguityCount: trade.sameBarProtectionAmbiguityCount ?? 0,
+            lastSameBarProtectionAmbiguityAt: trade.lastSameBarProtectionAmbiguityAt ?? null,
+            peakObservedAt: trade.pathPeakObservedAt ?? null,
+            lastObservedAt: trade.pathLastObservedAt ?? null,
+          }
+        : null;
+    const pathDiagnostics = providerPathDiagnostics ?? durablePathDiagnostics;
+    const pathDiagnosticsSource = providerPathDiagnostics
+      ? 'PROVIDER'
+      : durablePathDiagnostics
+        ? 'DURABLE_TRADE_TELEMETRY'
+        : null;
 
     const result = await this.tradeRepo.update({ id: trade.id, status: trade.status }, {
       status: TradeStatus.CLOSED,
@@ -120,12 +162,14 @@ export class ReconciliationResolutionService {
       metadata: {
         closeReason,
         providerCloseReason: closedTrade?.closeReason ?? null,
+        closeReasonSource,
         exitPrice,
         realisedPnl,
         commission,
         swap,
         providerClosedAt: closedAt.toISOString(),
         externalOrderId: trade.externalOrderId,
+        pathDiagnosticsSource,
         pathDiagnostics: pathDiagnostics
           ? {
               maxFavorablePnl: pathDiagnostics.maxFavorablePnl,
@@ -184,7 +228,17 @@ export class ReconciliationResolutionService {
     // the observed from-state (a concurrently-moved trade is never touched).
     TradeStateMachine.assertTransition(trade.status, TradeStatus.OPEN);
 
-    const patch: Partial<Trade> = { status: TradeStatus.OPEN };
+    const patch: Partial<Trade> = {
+      status: TradeStatus.OPEN,
+      ...(trade.status === TradeStatus.RECONCILIATION_PENDING
+        ? {
+            // The provider still holds the position, so any provisional
+            // app-close attribution from an ambiguous close attempt is stale.
+            closeReason: null,
+            brokerRejectionReason: null,
+          }
+        : {}),
+    };
     if (providerPosition) {
       patch.externalPositionId = providerPosition.externalOrderId;
       patch.fillPrice = providerPosition.openPrice;

@@ -106,6 +106,43 @@ describe('evaluateM1RoutePairSideReliability', () => {
     expect(result.reason).toBe('EARLY_LOSS_STREAK');
   });
 
+  it('keeps the existing early-transition two-loss hard brake above the single giveback caution', () => {
+    const result = evaluate([
+      row(-9, {
+        route: 'M1_EARLY_TRANSITION',
+        riskAtStop: 9,
+        maxFavorablePnl: 6,
+        profitGiveback: 15,
+        closedAt: new Date(NOW.getTime() - 60_000),
+      }),
+      row(-4, {
+        route: 'M1_EARLY_TRANSITION',
+        riskAtStop: 9,
+        maxFavorablePnl: 1,
+        profitGiveback: 1,
+        closedAt: new Date(NOW.getTime() - 120_000),
+      }),
+    ], { route: 'M1_EARLY_TRANSITION' });
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('EARLY_LOSS_STREAK');
+  });
+
+  it('marks the first meaningful winner-to-loser giveback as a soft caution without overfitting a hard veto', () => {
+    const result = evaluate([
+      row(-9, {
+        route: 'M1_EARLY_TRANSITION',
+        riskAtStop: 9,
+        maxFavorablePnl: 6,
+        profitGiveback: 15,
+        closedAt: new Date(NOW.getTime() - 60_000),
+      }),
+    ], { route: 'M1_EARLY_TRANSITION' });
+
+    expect(result.eligible).toBe(true);
+    expect(result.reason).toBe('PROFIT_GIVEBACK_CAUTION');
+  });
+
   it('brakes an exact pair/side/route after two recent losses that first reached at least 0.40R favorable excursion', () => {
     const result = evaluate([
       row(-9, { route: 'M1_EARLY_TRANSITION', riskAtStop: 9, maxFavorablePnl: 10, profitGiveback: 19, closedAt: new Date(NOW.getTime() - 60_000) }),

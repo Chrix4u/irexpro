@@ -223,6 +223,83 @@ describe('ReconciliationResolutionService', () => {
       );
     });
 
+    it('preserves an app-initiated PROFIT_PROTECTION close across asynchronous provider reconciliation and reuses durable path telemetry', async () => {
+      const peakAt = new Date('2026-10-28T10:36:08.871Z');
+      const lastAt = new Date('2026-10-28T10:37:24.733Z');
+      const pending = baseTrade({
+        status: TradeStatus.RECONCILIATION_PENDING,
+        closeReason: TradeCloseReason.PROFIT_PROTECTION,
+        maxFavorablePnl: '10.60000000',
+        maxAdversePnl: '0.00000000',
+        profitGiveback: '2.15000000',
+        pathObservationCount: 54,
+        pathPeakObservedAt: peakAt,
+        pathLastObservedAt: lastAt,
+      });
+
+      await service.closeTradeFromProvider(pending, {
+        externalOrderId: 'pos-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '0.2000',
+        openPrice: '1.11180',
+        closePrice: '1.11283',
+        stopLoss: '1.11180',
+        takeProfit: '1.11310',
+        realisedPnl: '9.53',
+        openedAt: new Date('2026-10-28T01:10:17.589Z'),
+        closedAt: new Date('2026-10-28T10:37:26.675Z'),
+        commission: '-1.80',
+        swap: '0.00',
+        closeReason: 'UNKNOWN',
+      });
+
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        { id: 'trade-1', status: TradeStatus.RECONCILIATION_PENDING },
+        expect.objectContaining({
+          closeReason: TradeCloseReason.PROFIT_PROTECTION,
+          maxFavorablePnl: '10.60000000',
+          maxAdversePnl: '0.00000000',
+          profitGiveback: '2.15000000',
+          pathObservationCount: 54,
+          pathPeakObservedAt: peakAt,
+          pathLastObservedAt: lastAt,
+        }),
+      );
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.TRADE_CLOSED,
+          metadata: expect.objectContaining({
+            closeReason: TradeCloseReason.PROFIT_PROTECTION,
+            providerCloseReason: 'UNKNOWN',
+            closeReasonSource: 'APP_CLOSE_INTENT_FALLBACK',
+            pathDiagnostics: expect.objectContaining({
+              maxFavorablePnl: '10.60000000',
+              profitGiveback: '2.15000000',
+              observationCount: 54,
+            }),
+          }),
+        }),
+      );
+    });
+
+    it('lets explicit provider SL evidence override a pending app close intent', async () => {
+      const pending = baseTrade({
+        status: TradeStatus.RECONCILIATION_PENDING,
+        closeReason: TradeCloseReason.PROFIT_PROTECTION,
+      });
+      await service.closeTradeFromProvider(pending, {
+        externalOrderId: 'pos-1', instrument: 'EURUSD', direction: 'BUY', lotSize: '0.2000',
+        openPrice: '1.10000', closePrice: '1.09000', stopLoss: '1.09000', takeProfit: '1.12000',
+        realisedPnl: '-10.00', openedAt: new Date(), closedAt: new Date(), commission: '0.00', swap: '0.00',
+        closeReason: 'SL',
+      });
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        { id: 'trade-1', status: TradeStatus.RECONCILIATION_PENDING },
+        expect.objectContaining({ closeReason: TradeCloseReason.STOP_LOSS_HIT }),
+      );
+    });
+
     it('closes with NULL economics when the provider close is unknown', async () => {
       await service.closeTradeFromProvider(baseTrade(), null);
       expect(tradeRepo.update).toHaveBeenCalledWith(
@@ -283,7 +360,30 @@ describe('ReconciliationResolutionService', () => {
       expect(recovered).toBe(true);
       expect(tradeRepo.update).toHaveBeenCalledWith(
         { id: 'trade-1', status: TradeStatus.RECONCILIATION_PENDING },
-        { status: TradeStatus.OPEN },
+        {
+          status: TradeStatus.OPEN,
+          closeReason: null,
+          brokerRejectionReason: null,
+        },
+      );
+    });
+
+    it('clears a provisional app close intent when reconciliation proves the provider position is still open', async () => {
+      const pending = baseTrade({
+        status: TradeStatus.RECONCILIATION_PENDING,
+        closeReason: TradeCloseReason.PROFIT_PROTECTION,
+        brokerRejectionReason: 'Close outcome unresolved: timeout',
+      });
+
+      await service.recoverTradeToOpen(pending);
+
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        { id: 'trade-1', status: TradeStatus.RECONCILIATION_PENDING },
+        expect.objectContaining({
+          status: TradeStatus.OPEN,
+          closeReason: null,
+          brokerRejectionReason: null,
+        }),
       );
     });
 

@@ -1224,6 +1224,11 @@ export class ExecutionService {
       target: TradeStatus.RECONCILIATION_PENDING,
       patch: {
         status: TradeStatus.RECONCILIATION_PENDING,
+        // Durable provenance for an app-initiated close whose provider result
+        // is not yet provable. Reconciliation may use this ONLY as a fallback
+        // when the provider later reports a generic/unknown close reason.
+        // If the position is still open, recoverTradeToOpen clears it.
+        closeReason: reason,
         brokerRejectionReason: `Close outcome unresolved: ${reasonText}`,
         dispatchCertainty: closeCertainty,
       },
@@ -1244,6 +1249,7 @@ export class ExecutionService {
         error: `Close outcome unresolved: ${reasonText}`,
         status: 'RECONCILIATION_PENDING',
         closeOrderId: dispatch.orderId,
+        requestedCloseReason: reason,
         casOutcome: outcome.outcome,
         dispatchCertainty: closeCertainty,
       },

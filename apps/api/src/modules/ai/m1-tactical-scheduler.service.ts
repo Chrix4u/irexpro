@@ -972,6 +972,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         candidate,
         routeDecision,
         governance,
+        reliability,
         features,
         decisionTime,
         shadowPairSideReliability,
@@ -1066,6 +1067,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     candidate: M1TacticalCandidate,
     routeDecision: M1TacticalRouteDecision,
     governance: ReturnType<typeof evaluateM1TacticalGovernance>,
+    routeReliability: ReturnType<typeof evaluateM1RoutePairSideReliability> | null,
     features: NonNullable<ReturnType<typeof buildM1TacticalFeatures>>,
     decisionTime: Date,
     shadowPairSideReliability: M1ScoutPairSideReliabilityDecision | null,
@@ -1209,6 +1211,16 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             : null,
           external_provider_paper_only: true,
           production_eligible: false,
+          m1_route_reliability_reason: routeReliability?.reason ?? null,
+          ...(routeReliability?.reason === 'PROFIT_GIVEBACK_CAUTION'
+            ? {
+                // First verified winner→loser giveback is a soft brake, not an
+                // overfit hard veto. The authoritative position sizer applies
+                // this 0.5x multiplier to the risk budget; a repeated recent
+                // giveback is blocked earlier by PROFIT_GIVEBACK_LOSS_STREAK.
+                adaptive_risk_multiplier: 0.5,
+              }
+            : {}),
           // Immutable entry snapshot consumed by the v8.5 post-entry learner.
           // Keep the same feature scale used by the historical Plan-B/v7
           // training stream: candidate score + direction-aligned EMA/MTF

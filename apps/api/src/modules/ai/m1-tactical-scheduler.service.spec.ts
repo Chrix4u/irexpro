@@ -1971,6 +1971,43 @@ describe('M1 professional v8 DEMO promotion', () => {
     );
   });
 
+  it('halves adaptive risk after the first exact pair/side winner-to-loser giveback while keeping the setup eligible', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: {
+        id: 'session-demo-1',
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'demo-conn-2',
+      },
+      shadowPairSideOutcomes: [
+        { observedAt: new Date('2026-10-15T10:20:00.000Z'), netR: 0.74 },
+        { observedAt: new Date('2026-10-15T10:10:00.000Z'), netR: 0.44 },
+        { observedAt: new Date('2026-10-15T10:00:00.000Z'), netR: -0.1 },
+        { observedAt: new Date('2026-10-15T09:50:00.000Z'), netR: 0.3 },
+        { observedAt: new Date('2026-10-15T09:40:00.000Z'), netR: -0.05 },
+        { observedAt: new Date('2026-10-15T09:30:00.000Z'), netR: 0.2 },
+      ],
+      evidenceByRoute: {
+        M1_EARLY_TRANSITION: [{
+          route: 'M1_EARLY_TRANSITION', instrument: 'EURUSD', direction: 'BUY',
+          policyVersion: 'm1-tactical-v1', realisedPnl: -9, riskAtStop: 9,
+          maxFavorablePnl: 6, profitGiveback: 15,
+          closedAt: new Date('2026-10-15T10:25:00.000Z'),
+        }],
+      },
+    });
+
+    await driveFeatures(h, transitionFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0].metadata).toEqual(
+      expect.objectContaining({
+        adaptive_risk_multiplier: 0.5,
+        m1_route_reliability_reason: 'PROFIT_GIVEBACK_CAUTION',
+      }),
+    );
+  });
+
   it('follows the exact active FULL_AUTO DEMO session connection and emits a professional-sized M1 candidate', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
