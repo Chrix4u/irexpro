@@ -305,6 +305,35 @@ describe('ReconciliationResolutionService', () => {
       );
     });
 
+    it('persists provider position identity and fill economics when an async fill is recovered', async () => {
+      const working = baseTrade({ status: TradeStatus.PENDING, externalOrderId: 'order-777' });
+      const recovered = await service.recoverTradeToOpen(working, {
+        externalOrderId: 'position-7001',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '1.0000',
+        openPrice: '1.08651',
+        currentPrice: '1.08700',
+        stopLoss: '1.08000',
+        takeProfit: '1.09500',
+        unrealisedPnl: '4.50',
+        openedAt: new Date('2026-10-28T00:25:17.324Z'),
+        commission: '-0.90',
+        swap: '0.00',
+      });
+
+      expect(recovered).toBe(true);
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        { id: 'trade-1', status: TradeStatus.PENDING },
+        expect.objectContaining({
+          status: TradeStatus.OPEN,
+          externalPositionId: 'position-7001',
+          fillPrice: '1.08651',
+          openedAt: new Date('2026-10-28T00:25:17.324Z'),
+        }),
+      );
+    });
+
     it('Round 7.1 (P0-5): refuses recovery from a state with no legal OPEN transition (fail-closed)', async () => {
       const rejected = baseTrade({ status: TradeStatus.REJECTED });
       await expect(service.recoverTradeToOpen(rejected)).rejects.toThrow();

@@ -228,6 +228,7 @@ describe('StateReconciliationService', () => {
     getPositionById: jest.Mock;
     getClosedTrades: jest.Mock;
     getOrderById: jest.Mock;
+    modifyOrder: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -249,6 +250,7 @@ describe('StateReconciliationService', () => {
       getPositionById: jest.fn().mockResolvedValue(null),
       getClosedTrades: jest.fn().mockResolvedValue([]),
       getOrderById: jest.fn().mockResolvedValue(null),
+      modifyOrder: jest.fn().mockResolvedValue({ success: true, status: 'FILLED' }),
     };
 
     tradeRepo = {
@@ -671,7 +673,93 @@ describe('StateReconciliationService', () => {
 
       expect(resolution.recoverTradeToOpen).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'trade-1', status: TradeStatus.RECONCILIATION_PENDING }),
+        expect.objectContaining({ externalOrderId: 'pos-1' }),
       );
+    });
+
+    it('recovers a cTrader async market fill by resolving order id to provider position id and attaches protections', async () => {
+      const pending = {
+        ...openTrade(),
+        status: TradeStatus.PENDING,
+        externalOrderId: 'order-777',
+        externalPositionId: null,
+        stopLoss: '1.08000',
+        takeProfit: '1.09500',
+      } as Trade;
+      tradeRepo.find.mockResolvedValue([pending]);
+      adapter.brokerId = 'ctrader';
+      adapter.getOrderById.mockResolvedValue({
+        providerOrderId: 'order-777',
+        providerPositionId: 'position-7001',
+        status: 'FILLED',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        requestedQuantity: '1.0000',
+        filledQuantity: '1.0000',
+        avgFillPrice: '1.08651',
+      });
+      const providerPosition = {
+        externalOrderId: 'position-7001',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '1.0000',
+        openPrice: '1.08651',
+        currentPrice: '1.08700',
+        stopLoss: '0',
+        takeProfit: '0',
+        unrealisedPnl: '4.50',
+        openedAt: new Date('2026-10-28T00:25:17.324Z'),
+        commission: '-0.90',
+        swap: '0.00',
+      };
+      adapter.getPositionById.mockImplementation(async (id: string) =>
+        id === 'position-7001' ? providerPosition : null,
+      );
+      persistence.resolveDiscrepanciesByRef.mockResolvedValue([]);
+
+      await service.runForConnection({ ...connection(), brokerId: 'ctrader' } as BrokerConnection);
+
+      expect(adapter.getOrderById).toHaveBeenCalledWith('order-777');
+      expect(adapter.getPositionById).toHaveBeenCalledWith('position-7001');
+      expect(resolution.recoverTradeToOpen).toHaveBeenCalledWith(pending, providerPosition);
+      expect(adapter.modifyOrder).toHaveBeenCalledWith('position-7001', {
+        newStopLoss: '1.08000',
+        newTakeProfit: '1.09500',
+      });
+      expect(resolution.closeTradeFromProvider).not.toHaveBeenCalled();
+    });
+
+    it('retries missing cTrader SL/TP protection on an already OPEN provider position', async () => {
+      const open = {
+        ...openTrade(),
+        externalPositionId: 'position-7001',
+        stopLoss: '1.08000',
+        takeProfit: '1.09500',
+      } as Trade;
+      tradeRepo.find.mockResolvedValue([open]);
+      adapter.brokerId = 'ctrader';
+      adapter.getPositionById.mockResolvedValue({
+        externalOrderId: 'position-7001',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '1.0000',
+        openPrice: '1.08651',
+        currentPrice: '1.08700',
+        stopLoss: '0',
+        takeProfit: '0',
+        unrealisedPnl: '4.50',
+        openedAt: new Date('2026-10-28T00:25:17.324Z'),
+        commission: '-0.90',
+        swap: '0.00',
+      });
+
+      await service.runForConnection({ ...connection(), brokerId: 'ctrader' } as BrokerConnection);
+
+      expect(resolution.recoverTradeToOpen).not.toHaveBeenCalled();
+      expect(adapter.modifyOrder).toHaveBeenCalledWith('position-7001', {
+        newStopLoss: '1.08000',
+        newTakeProfit: '1.09500',
+      });
     });
 
     it('resolves orders by stable identifier via getOrderById (Directive §26)', async () => {

@@ -403,18 +403,39 @@ export class StateReconciliationService {
       let errors = 0;
       let autoResolvedCount = 0;
 
-      // 7a. Positions: externally-closed + RECONCILIATION_PENDING recovery.
+      // 7a. Positions: externally-closed + async-fill recovery.
       for (const trade of internalTrades) {
         try {
-          // Providers may use a position identifier that differs from the
-          // originating order identifier. Prefer the durable position id when
-          // execution captured one; fall back to the legacy order id.
-          const providerPositionRef = trade.externalPositionId ?? trade.externalOrderId;
+          // Providers such as cTrader assign a working ORDER id first and a
+          // distinct POSITION id when the market order fills asynchronously.
+          // Resolve that mapping before asking for the live position; treating
+          // the order id as a position id leaves real exposure invisible.
+          let providerPositionRef = trade.externalPositionId ?? null;
+          if (!providerPositionRef && trade.status === TradeStatus.PENDING && trade.externalOrderId) {
+            const providerOrder = await adapter.getOrderById(trade.externalOrderId);
+            if (
+              providerOrder &&
+              (providerOrder.status === 'FILLED' || providerOrder.status === 'PARTIALLY_FILLED') &&
+              providerOrder.providerPositionId
+            ) {
+              providerPositionRef = providerOrder.providerPositionId;
+            }
+          }
+          // Legacy providers historically stored the provider position id in
+          // externalOrderId. Keep that compatibility path for non-async/open
+          // rows and for adapters where order and position identifiers match.
+          if (!providerPositionRef) providerPositionRef = trade.externalOrderId;
+
           const position = providerPositionRef
             ? await adapter.getPositionById(providerPositionRef)
             : null;
 
           if (position === null && providerPositionRef) {
+            // A PENDING trade whose provider order has not yet yielded a live
+            // position is still unresolved, NOT proven closed. Never attempt
+            // the illegal PENDING→CLOSED transition from mere absence.
+            if (trade.status === TradeStatus.PENDING) continue;
+
             // Closed-trade adapters normalize their stable trade/position id
             // into externalOrderId. Match the same provider reference we used
             // for the position lookup, with a legacy order-id fallback.
@@ -435,20 +456,40 @@ export class StateReconciliationService {
           } else if (
             position !== null &&
             (trade.status === TradeStatus.RECONCILIATION_PENDING ||
-              // Round 7.1 (P0-5): a WORKING dispatch outcome leaves the trade
-              // PENDING with the position live at the provider — the provider
-              // truth recovers it to OPEN (PENDING→OPEN is state-machine
-              // legal; previously this case had NO convergence branch).
               trade.status === TradeStatus.PENDING)
           ) {
-            const recovered = await this.resolution.recoverTradeToOpen(trade);
+            const recovered = await this.resolution.recoverTradeToOpen(trade, position);
             if (recovered) {
               resolutionRefs.push({
                 type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
                 internalRefId: trade.id,
-                providerRef: trade.externalOrderId,
+                providerRef: providerPositionRef,
                 resolution: 'Provider-observed position open — trade recovered to OPEN',
               });
+            }
+          }
+
+          // cTrader MARKET orders cannot carry absolute SL/TP on the new-order
+          // request. Immediate fills attach them synchronously in the adapter;
+          // async fills (and transient failed amendments) are repaired from
+          // provider truth here. OPEN rows remain eligible so a transient
+          // protection failure is retried on the next reconciliation cycle.
+          if (
+            position !== null &&
+            connection.brokerId === 'ctrader' &&
+            (trade.status === TradeStatus.PENDING ||
+              trade.status === TradeStatus.RECONCILIATION_PENDING ||
+              trade.status === TradeStatus.OPEN)
+          ) {
+            const modifications: { newStopLoss?: string; newTakeProfit?: string } = {};
+            if (trade.stopLoss && trade.stopLoss !== '0' && position.stopLoss === '0') {
+              modifications.newStopLoss = trade.stopLoss;
+            }
+            if (trade.takeProfit && trade.takeProfit !== '0' && position.takeProfit === '0') {
+              modifications.newTakeProfit = trade.takeProfit;
+            }
+            if (modifications.newStopLoss || modifications.newTakeProfit) {
+              await adapter.modifyOrder(position.externalOrderId, modifications);
             }
           }
         } catch (err) {

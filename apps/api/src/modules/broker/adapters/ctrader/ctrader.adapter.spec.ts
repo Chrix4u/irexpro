@@ -1089,7 +1089,19 @@ describe('CTraderAdapter', () => {
               executionPrice: 1.08651,
               executedVolume: 1_000_000,
             },
-            deal: [],
+            deal: [{
+              dealId: 9001,
+              orderId: 777,
+              positionId: 7001,
+              volume: 1_000_000,
+              filledVolume: 1_000_000,
+              symbolId: 101,
+              createTimestamp: 1757000001000,
+              executionTimestamp: 1757000002000,
+              executionPrice: 1.08651,
+              tradeSide: 1,
+              dealStatus: 1,
+            }],
           },
           envelope,
         ),
@@ -1099,6 +1111,7 @@ describe('CTraderAdapter', () => {
       const order = await adapter.getOrderById('777');
       expect(order).toMatchObject({
         providerOrderId: '777',
+        providerPositionId: '7001',
         status: 'FILLED',
         orderKind: 'MARKET',
         requestedQuantity: '0.1',

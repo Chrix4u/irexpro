@@ -1285,7 +1285,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           `Provider order "${providerOrderId}" is a protection order — outside the normalized order contract.`,
         );
       }
-      return this.mapOrderToState(session, payload.order, symbol.lotSize);
+      return this.mapOrderToState(session, payload.order, symbol.lotSize, payload.deal ?? []);
     } catch (err) {
       const mapped = this.mapError(err);
       // null is ONLY allowed for a legitimate provider not-found — never
@@ -1828,14 +1828,17 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     session: AdapterSession,
     order: CtraderOrder,
     symbolLotSizeCents: number,
+    relatedDeals: CtraderDeal[] = [],
   ): BrokerOrderState {
     const status = this.mapOrderStateStatus(order);
+    const providerPositionId = relatedDeals.find((deal) => deal.positionId > 0)?.positionId;
     const orderKind = this.mapProtoOrderKind(order.orderType);
     const requestedQuantity = volumeCentsToLotString(order.tradeData.volume, symbolLotSizeCents);
     const filledQuantity = volumeCentsToLotString(order.executedVolume ?? 0, symbolLotSizeCents);
     const hasFill = status === 'FILLED' || status === 'PARTIALLY_FILLED';
     return {
       providerOrderId: String(order.orderId),
+      providerPositionId: providerPositionId !== undefined ? String(providerPositionId) : null,
       clientOrderId: order.clientOrderId ?? null,
       status,
       instrument: this.symbolName(session, order.tradeData.symbolId),

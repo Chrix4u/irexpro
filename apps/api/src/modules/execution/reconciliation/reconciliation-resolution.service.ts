@@ -14,6 +14,7 @@ import { DomainEventType } from '../../events/enums/domain-event-type.enum';
 import {
   BrokerClosedTrade,
   BrokerOrderState,
+  BrokerPosition,
 } from '../../broker/interfaces/broker-adapter.interface';
 import { compareDecimal } from './reconciliation-comparator';
 
@@ -176,16 +177,24 @@ export class ReconciliationResolutionService {
    * RECONCILIATION_PENDING trade whose position the provider still holds —
    * recover to OPEN. Guarded; returns true when this call transitioned.
    */
-  async recoverTradeToOpen(trade: Trade): Promise<boolean> {
+  async recoverTradeToOpen(trade: Trade, providerPosition?: BrokerPosition): Promise<boolean> {
     // Round 7.1 (P0-5): recovery is legal from BOTH uncertain holding states
     // (RECONCILIATION_PENDING and the WORKING-outcome PENDING) — the state
     // machine is the single authority on legality, and the guarded CAS pins
     // the observed from-state (a concurrently-moved trade is never touched).
     TradeStateMachine.assertTransition(trade.status, TradeStatus.OPEN);
 
-    const result = await this.tradeRepo.update({ id: trade.id, status: trade.status }, {
-      status: TradeStatus.OPEN,
-    } as never);
+    const patch: Partial<Trade> = { status: TradeStatus.OPEN };
+    if (providerPosition) {
+      patch.externalPositionId = providerPosition.externalOrderId;
+      patch.fillPrice = providerPosition.openPrice;
+      patch.openedAt = providerPosition.openedAt;
+    }
+
+    const result = await this.tradeRepo.update(
+      { id: trade.id, status: trade.status },
+      patch as never,
+    );
 
     if (!result.affected) {
       this.logger.log(`Trade ${trade.id} no longer ${trade.status} — recovery skipped`);
