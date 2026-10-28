@@ -1,9 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
 import { RiskProfile } from '../../risk/entities/risk-profile.entity';
 import { BrokerService } from '../../broker/broker.service';
+import { BrokerFxConversionService } from '../../market-data/services/broker-fx-conversion.service';
 import { RiskOrderGeometryService } from '../../risk/risk-order-geometry.service';
 import {
   paperAllocationSizingPolicy,
@@ -85,7 +87,8 @@ export interface PositionSizingInputs {
   riskCurrencyConversion:
     | 'ACCOUNT_IS_QUOTE'
     | 'ACCOUNT_IS_BASE_USING_ENTRY'
-    | 'ACCOUNT_TO_QUOTE_USING_BROKER_BID';
+    | 'ACCOUNT_TO_QUOTE_USING_BROKER_BID'
+    | 'ACCOUNT_TO_QUOTE_USING_BROKER_NATIVE_EVIDENCE';
   /** Exact FX pair/rate used when a third-currency account needs conversion evidence. */
   riskCurrencyConversionInstrument?: string | null;
   riskCurrencyConversionRate?: string | null;
@@ -172,7 +175,17 @@ export class PositionSizingService {
     private readonly orderGeometry: RiskOrderGeometryService,
     @InjectRepository(RiskProfile)
     private readonly profileRepo: Repository<RiskProfile>,
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
+
+  private get brokerFxConversion(): BrokerFxConversionService | null {
+    if (!this.moduleRef) return null;
+    try {
+      return this.moduleRef.get(BrokerFxConversionService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * Size ONE trade decision.
@@ -498,7 +511,8 @@ export class PositionSizingService {
     let riskCurrencyConversion:
       | 'ACCOUNT_IS_QUOTE'
       | 'ACCOUNT_IS_BASE_USING_ENTRY'
-      | 'ACCOUNT_TO_QUOTE_USING_BROKER_BID';
+      | 'ACCOUNT_TO_QUOTE_USING_BROKER_BID'
+      | 'ACCOUNT_TO_QUOTE_USING_BROKER_NATIVE_EVIDENCE';
     let quotePerAccountCurrency = ExactDecimal.ONE;
     let riskCurrencyConversionInstrument: string | null = null;
     let riskCurrencyConversionRate: string | null = null;
@@ -513,40 +527,57 @@ export class PositionSizingService {
       riskCurrencyConversionRate = quotePerAccountCurrency.toString();
     } else {
       const conversionInstrument = `${accountCurrency}${quoteCurrency}`;
-      let conversionQuote: Awaited<ReturnType<BrokerService['getCurrentPriceForConnection']>> = null;
-      try {
-        conversionQuote = await this.brokerService.getCurrentPriceForConnection(
-          userId,
-          brokerConnectionId,
-          conversionInstrument,
-          { propagateProviderError: true },
-        );
-      } catch {
-        conversionQuote = null;
+      const cachedConversion = this.brokerFxConversion
+        ? await this.brokerFxConversion.resolveCachedBid(
+            brokerConnectionId,
+            accountCurrency,
+            quoteCurrency,
+            new Date(),
+          )
+        : null;
+      const cachedBid = ExactDecimal.tryParse(cachedConversion?.rate ?? '');
+      if (cachedConversion && cachedBid?.isPositive()) {
+        quotePerAccountCurrency = cachedBid;
+        riskAmountInQuoteCurrency = riskAmount.mul(quotePerAccountCurrency);
+        riskCurrencyConversion = 'ACCOUNT_TO_QUOTE_USING_BROKER_NATIVE_EVIDENCE';
+        riskCurrencyConversionInstrument = cachedConversion.path.join('>');
+        riskCurrencyConversionRate = quotePerAccountCurrency.toString();
+      } else {
+        let conversionQuote: Awaited<ReturnType<BrokerService['getCurrentPriceForConnection']>> = null;
+        try {
+          conversionQuote = await this.brokerService.getCurrentPriceForConnection(
+            userId,
+            brokerConnectionId,
+            conversionInstrument,
+            { propagateProviderError: true },
+          );
+        } catch {
+          conversionQuote = null;
+        }
+        const conversionBid = ExactDecimal.tryParse(conversionQuote?.bid ?? '');
+        const conversionTimestamp = conversionQuote?.timestamp
+          ? new Date(conversionQuote.timestamp).getTime()
+          : Number.NaN;
+        const conversionAgeMs = Date.now() - conversionTimestamp;
+        if (
+          !conversionBid ||
+          !conversionBid.isPositive() ||
+          !Number.isFinite(conversionTimestamp) ||
+          conversionAgeMs < -5_000 ||
+          conversionAgeMs > 60_000
+        ) {
+          throw new PositionSizingError(
+            'CURRENCY_MISMATCH',
+            `instrument ${instrument} is ${baseCurrency}/${quoteCurrency} but account currency is ` +
+              `${accountCurrency} — fresh broker conversion ${conversionInstrument} could not be proven`,
+          );
+        }
+        quotePerAccountCurrency = conversionBid;
+        riskAmountInQuoteCurrency = riskAmount.mul(quotePerAccountCurrency);
+        riskCurrencyConversion = 'ACCOUNT_TO_QUOTE_USING_BROKER_BID';
+        riskCurrencyConversionInstrument = conversionInstrument;
+        riskCurrencyConversionRate = quotePerAccountCurrency.toString();
       }
-      const conversionBid = ExactDecimal.tryParse(conversionQuote?.bid ?? '');
-      const conversionTimestamp = conversionQuote?.timestamp
-        ? new Date(conversionQuote.timestamp).getTime()
-        : Number.NaN;
-      const conversionAgeMs = Date.now() - conversionTimestamp;
-      if (
-        !conversionBid ||
-        !conversionBid.isPositive() ||
-        !Number.isFinite(conversionTimestamp) ||
-        conversionAgeMs < -5_000 ||
-        conversionAgeMs > 60_000
-      ) {
-        throw new PositionSizingError(
-          'CURRENCY_MISMATCH',
-          `instrument ${instrument} is ${baseCurrency}/${quoteCurrency} but account currency is ` +
-            `${accountCurrency} — fresh broker conversion ${conversionInstrument} could not be proven`,
-        );
-      }
-      quotePerAccountCurrency = conversionBid;
-      riskAmountInQuoteCurrency = riskAmount.mul(quotePerAccountCurrency);
-      riskCurrencyConversion = 'ACCOUNT_TO_QUOTE_USING_BROKER_BID';
-      riskCurrencyConversionInstrument = conversionInstrument;
-      riskCurrencyConversionRate = quotePerAccountCurrency.toString();
     }
 
     // Durable PAPER floor authority uses the profile's maximum trade risk as

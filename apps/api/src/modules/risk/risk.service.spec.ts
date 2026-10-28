@@ -1423,6 +1423,47 @@ describe('RiskService', () => {
       expect(result.decision).toBe('APPROVED');
     });
 
+    it('uses fresh cached broker-native FX evidence before requesting another provider conversion quote', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: '10000.00',
+        freeMargin: '9900.00',
+        currency: 'EUR',
+      });
+      brokerService.getCurrentPriceForConnection.mockResolvedValue(null);
+      const fxConversion = {
+        resolveCachedBid: jest.fn().mockResolvedValue({
+          rate: '165',
+          path: ['EURUSD', 'USDJPY'],
+          source: 'BROKER_NATIVE_CACHE_USD_BRIDGE',
+          observedAt: new Date(),
+        }),
+      };
+      (module.get(ModuleRef).get as jest.Mock).mockImplementation((token: unknown) =>
+        (token as { name?: string })?.name === 'BrokerFxConversionService' ? fxConversion : undefined,
+      );
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({
+          instrument: 'USDJPY',
+          requestedLotSize: '0.05',
+          entryPrice: '150.000',
+          stopLoss: '149.500',
+          takeProfit: '151.000',
+        }),
+      );
+
+      expect(fxConversion.resolveCachedBid).toHaveBeenCalledWith(
+        'conn-1',
+        'EUR',
+        'JPY',
+        expect.any(Date),
+      );
+      expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
+      expect(result.decision).toBe('APPROVED');
+    });
+
     it('still fails closed when the required third-currency broker cross is unavailable', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue({
         balance: '10000.00',

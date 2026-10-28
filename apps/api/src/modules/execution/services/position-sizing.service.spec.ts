@@ -509,6 +509,47 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       expect(result.inputs.riskCurrencyConversionRate).toBe('162');
     });
 
+    it('uses fresh cached broker-native conversion evidence before requesting another provider quote', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue(
+        accountState({ currency: 'EUR', equity: '10000.00', balance: '10000.00' }),
+      );
+      orderGeometry.resolveOrderGeometry.mockResolvedValue(
+        geometry({
+          contractSize: ExactDecimal.parse('100000'),
+          freshQuote: ExactDecimal.parse('150.000'),
+          instrumentSpec: USDJPY_SPEC,
+        }),
+      );
+      brokerService.getCurrentPriceForConnection.mockResolvedValue(null);
+      const fxConversion = {
+        resolveCachedBid: jest.fn().mockResolvedValue({
+          rate: '165',
+          path: ['EURUSD', 'USDJPY'],
+          source: 'BROKER_NATIVE_CACHE_USD_BRIDGE',
+          observedAt: new Date(),
+        }),
+      };
+      const cachedService = new PositionSizingService(
+        brokerService as unknown as BrokerService,
+        orderGeometry as unknown as RiskOrderGeometryService,
+        profileRepo as never,
+        { get: jest.fn().mockReturnValue(fxConversion) } as never,
+      );
+
+      const result = await cachedService.sizePosition(
+        baseParams({ instrument: 'USDJPY', stopLoss: '149.500' }),
+      );
+
+      expect(fxConversion.resolveCachedBid).toHaveBeenCalledWith(CONN, 'EUR', 'JPY', expect.any(Date));
+      expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
+      expect(result.lots).toBe('0.66');
+      expect(result.inputs.riskCurrencyConversion).toBe(
+        'ACCOUNT_TO_QUOTE_USING_BROKER_NATIVE_EVIDENCE',
+      );
+      expect(result.inputs.riskCurrencyConversionInstrument).toBe('EURUSD>USDJPY');
+      expect(result.inputs.riskCurrencyConversionRate).toBe('165');
+    });
+
     it('CURRENCY_MISMATCH when a third-currency conversion quote cannot be proven', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue(accountState({ currency: 'EUR' }));
       brokerService.getCurrentPriceForConnection.mockResolvedValue(null);

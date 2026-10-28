@@ -18,6 +18,7 @@ import {
   ValidatedOrder,
 } from './interfaces/risk.interface';
 import { BrokerService } from '../broker/broker.service';
+import { BrokerFxConversionService } from '../market-data/services/broker-fx-conversion.service';
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { AuditService } from '../audit/audit.service';
@@ -160,6 +161,14 @@ export class RiskService {
   private get metrics(): MetricsService | null {
     try {
       return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
+
+  private get brokerFxConversion(): BrokerFxConversionService | null {
+    try {
+      return this.moduleRef.get(BrokerFxConversionService, { strict: false });
     } catch {
       return null;
     }
@@ -1498,53 +1507,73 @@ export class RiskService {
       const notionalQuote = entry.mul(quantity).mul(contractSize);
       notional = notionalQuote.divUp(entry, 12);
     } else {
-      // Match the position sizer's currency-honesty rule: use only a fresh
-      // direct ACCOUNT/QUOTE cross from this exact broker connection. A BID
-      // gives quote-currency units per one account-currency unit, so quote
-      // risk/notional are divided by it conservatively (divUp). No synthetic
-      // cross or stale fallback is allowed.
-      const conversionInstrument = `${accountCurrency}${quoteCurrency}`;
-      let conversionQuote: Awaited<ReturnType<BrokerService['getCurrentPriceForConnection']>> = null;
-      try {
-        conversionQuote = await this.brokerService.getCurrentPriceForConnection(
-          userId,
-          session.brokerConnectionId,
-          conversionInstrument,
-          { propagateProviderError: true },
+      // First reuse fresh same-broker evidence already persisted by the market
+      // data collector. This avoids opening another cTrader spot subscription
+      // in the critical pre-trade path. The resolver remains fail-closed: it
+      // accepts only fresh direct/inverse or same-connection USD-bridge quotes.
+      const cachedConversion = this.brokerFxConversion
+        ? await this.brokerFxConversion.resolveCachedBid(
+            session.brokerConnectionId,
+            accountCurrency,
+            quoteCurrency,
+            new Date(evaluatedAt),
+          )
+        : null;
+      const cachedBid = ExactDecimal.tryParse(cachedConversion?.rate ?? '');
+      if (cachedConversion && cachedBid?.isPositive()) {
+        riskAtStop = riskAtStopQuote.divUp(cachedBid, 12);
+        const notionalQuote = entry.mul(quantity).mul(contractSize);
+        notional = notionalQuote.divUp(cachedBid, 12);
+        appliedRules.push(
+          `MAX_TRADE_RISK:CURRENCY_CONVERTED:${cachedConversion.path.join('>')}:BROKER_NATIVE_CACHE`,
         );
-      } catch {
-        conversionQuote = null;
-      }
-      const conversionBid = ExactDecimal.tryParse(conversionQuote?.bid ?? '');
-      const conversionTimestamp = conversionQuote?.timestamp
-        ? new Date(conversionQuote.timestamp).getTime()
-        : Number.NaN;
-      const conversionAgeMs = Date.now() - conversionTimestamp;
-      if (
-        !conversionBid ||
-        !conversionBid.isPositive() ||
-        !Number.isFinite(conversionTimestamp) ||
-        conversionAgeMs < -5_000 ||
-        conversionAgeMs > 60_000
-      ) {
-        appliedRules.push('MAX_TRADE_RISK:CURRENCY_UNVERIFIED');
-        return {
-          rejection: await this.rejectAndRecord(
+      } else {
+        // Existing direct broker quote remains the fallback authority. A BID
+        // gives quote-currency units per one account-currency unit, so quote
+        // risk/notional are divided by it conservatively (divUp).
+        const conversionInstrument = `${accountCurrency}${quoteCurrency}`;
+        let conversionQuote: Awaited<ReturnType<BrokerService['getCurrentPriceForConnection']>> = null;
+        try {
+          conversionQuote = await this.brokerService.getCurrentPriceForConnection(
             userId,
-            trade,
-            RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
-            `Account currency ${accountCurrency} matches neither leg of ${normalizedInstrument}; ` +
-              `fresh broker conversion ${conversionInstrument} is unavailable — rejecting (fail-closed)`,
-            contextSnapshot,
-            evaluatedAt,
-          ),
-          quoteRef: geometry.quoteRef,
-        };
+            session.brokerConnectionId,
+            conversionInstrument,
+            { propagateProviderError: true },
+          );
+        } catch {
+          conversionQuote = null;
+        }
+        const conversionBid = ExactDecimal.tryParse(conversionQuote?.bid ?? '');
+        const conversionTimestamp = conversionQuote?.timestamp
+          ? new Date(conversionQuote.timestamp).getTime()
+          : Number.NaN;
+        const conversionAgeMs = Date.now() - conversionTimestamp;
+        if (
+          !conversionBid ||
+          !conversionBid.isPositive() ||
+          !Number.isFinite(conversionTimestamp) ||
+          conversionAgeMs < -5_000 ||
+          conversionAgeMs > 60_000
+        ) {
+          appliedRules.push('MAX_TRADE_RISK:CURRENCY_UNVERIFIED');
+          return {
+            rejection: await this.rejectAndRecord(
+              userId,
+              trade,
+              RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
+              `Account currency ${accountCurrency} matches neither leg of ${normalizedInstrument}; ` +
+                `fresh broker conversion ${conversionInstrument} is unavailable — rejecting (fail-closed)`,
+              contextSnapshot,
+              evaluatedAt,
+            ),
+            quoteRef: geometry.quoteRef,
+          };
+        }
+        riskAtStop = riskAtStopQuote.divUp(conversionBid, 12);
+        const notionalQuote = entry.mul(quantity).mul(contractSize);
+        notional = notionalQuote.divUp(conversionBid, 12);
+        appliedRules.push(`MAX_TRADE_RISK:CURRENCY_CONVERTED:${conversionInstrument}`);
       }
-      riskAtStop = riskAtStopQuote.divUp(conversionBid, 12);
-      const notionalQuote = entry.mul(quantity).mul(contractSize);
-      notional = notionalQuote.divUp(conversionBid, 12);
-      appliedRules.push(`MAX_TRADE_RISK:CURRENCY_CONVERTED:${conversionInstrument}`);
     }
     const maxTradeRiskPercent = this.parseProfileDecimal(
       profile.maxTradeRiskPercent,

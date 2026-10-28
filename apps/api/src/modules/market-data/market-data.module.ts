@@ -10,6 +10,7 @@ import { ProviderQuoteCandleStoreService } from './services/provider-quote-candl
 import { MetaApiQuoteCollectorService } from './services/metaapi-quote-collector.service';
 import { CTraderQuoteCollectorService } from './services/ctrader-quote-collector.service';
 import { PaperPositionMarkBridgeService } from './services/paper-position-mark-bridge.service';
+import { BrokerFxConversionService } from './services/broker-fx-conversion.service';
 
 @Module({
   imports: [BrokerModule, AuditModule],
@@ -23,7 +24,13 @@ import { PaperPositionMarkBridgeService } from './services/paper-position-mark-b
     MetaApiQuoteCollectorService,
     CTraderQuoteCollectorService,
     PaperPositionMarkBridgeService,
+    BrokerFxConversionService,
   ],
-  exports: [MarketDataService, MarketIntelligenceService, ProviderQuoteCandleStoreService],
+  exports: [
+    MarketDataService,
+    MarketIntelligenceService,
+    ProviderQuoteCandleStoreService,
+    BrokerFxConversionService,
+  ],
 })
 export class MarketDataModule {}
