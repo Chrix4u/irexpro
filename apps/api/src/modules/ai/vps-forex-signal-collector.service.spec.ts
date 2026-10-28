@@ -4639,6 +4639,91 @@ describe('VpsForexSignalCollectorService', () => {
     expect(status.providerFallbackActive).toBe(true);
   });
 
+  it('uses connected cTrader candles as broker-native fallback after Twelve Data exhausts the daily quota', async () => {
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({
+        brokerId: 'ctrader',
+        status: 'CONNECTED',
+      }),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
+          const base = instrument === 'USDJPY' ? 157 : 1.1;
+          const digits = instrument === 'USDJPY' ? 3 : 5;
+          return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
+        }),
+    } as unknown as BrokerService;
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'ctrader-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({
+        status: 'error',
+        message: 'You have run out of API credits for the day.',
+      }),
+    });
+
+    const series = await (collector as any).fetchSixPairSeries(
+      'real-key-123456',
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(series.size).toBe(6);
+    expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
+  });
+
+  it('lets the legacy high-conviction overlay score a connected cTrader source', async () => {
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({
+        brokerId: 'ctrader',
+        status: 'CONNECTED',
+      }),
+    } as unknown as BrokerService;
+    const aiEngine = {
+      ...aiEngineClientMock(),
+      scorePlanBV4ChallengerBroker: jest.fn().mockResolvedValue({
+        state: 'UNAVAILABLE',
+        reason: 'SCORER_PROBE_UNAVAILABLE',
+        decision_time: null,
+        market_data_sources: {},
+        score: null,
+      }),
+    } as any;
+    const collector = createCollector(
+      config({
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'ctrader-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngine,
+    );
+
+    const result = await (collector as any).evaluateHighConvictionOverlay('user-1', {
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      barTime: new Date('2026-10-28T19:40:00.000Z'),
+    });
+
+    expect(result.reason).toBe('SCORER_PROBE_UNAVAILABLE');
+  });
+
   it('reuses broker-native fallback within the minute while daily cooldown is active', async () => {
     const broker = {
       findConnectionById: jest

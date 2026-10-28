@@ -352,6 +352,17 @@ export function dynamicPaperLotUpperBound(
 const MIN_STOP_LOSS_PIPS = 5;
 const STOP_FLOOR_BUFFER_PIPS = 0.1;
 const BAR_MS = 5 * 60_000;
+const BROKER_NATIVE_SOURCE_IDS = new Set([
+  'metatrader4',
+  'metatrader5',
+  'ctrader',
+  'pepperstone-ctrader',
+  'icmarkets-ctrader',
+]);
+
+function isBrokerNativeSource(brokerId: string): boolean {
+  return BROKER_NATIVE_SOURCE_IDS.has(brokerId.trim().toLowerCase());
+}
 const COLLECTION_CADENCE_MINUTES = 5;
 const PAPER_PRE_INTENT_RETRY_SAFE_CODE = 'PAPER_PRE_INTENT_RETRY_SAFE';
 const BROKER_FALLBACK_SOURCE_UNAVAILABLE_CODE = 'BROKER_FALLBACK_SOURCE_UNAVAILABLE';
@@ -6648,8 +6659,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
     try {
       const source = await this.brokerService.findConnectionById(sourceConnectionId, userId);
-      if (!['metatrader4', 'metatrader5'].includes(source.brokerId)) {
-        return this.highConvictionUnavailable('BROKER_SOURCE_NOT_METATRADER');
+      if (!isBrokerNativeSource(source.brokerId)) {
+        return this.highConvictionUnavailable('BROKER_SOURCE_NOT_BROKER_NATIVE');
       }
       const response = await this.aiEngineClient.scorePlanBV4ChallengerBroker({
         userId,
@@ -6764,7 +6775,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         this.providerCooldownUntil = reset;
         this.providerCooldownReason = 'DAILY_CREDIT_LIMIT';
         this.logger.warn(
-          `Twelve Data daily credit limit reached; switching scanner to broker-native MetaTrader fallback until ${reset.toISOString()}`,
+          `Twelve Data daily credit limit reached; switching scanner to configured broker-native fallback until ${reset.toISOString()}`,
         );
         return this.fetchBrokerNativeFallbackSeries('TWELVE_DATA_DAILY_CREDIT_LIMIT');
       }
@@ -6932,17 +6943,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
 
     const source = await this.brokerService.findConnectionById(sourceConnectionId, userId);
-    if (!['metatrader4', 'metatrader5'].includes(source.brokerId)) {
+    if (!isBrokerNativeSource(source.brokerId)) {
       this.lastMarketDataAuthority = 'NONE';
       throw new Error(
-        `Twelve Data unavailable (${reason}) and configured fallback is not MetaTrader`,
+        `Twelve Data unavailable (${reason}) and configured fallback is not a supported broker-native source`,
       );
     }
     if (source.status !== BrokerConnectionStatus.CONNECTED) {
       this.lastMarketDataAuthority = 'NONE';
       throw Object.assign(
         new Error(
-          `Twelve Data unavailable (${reason}) and MetaTrader fallback source is ${source.status}`,
+          `Twelve Data unavailable (${reason}) and broker-native fallback source is ${source.status}`,
         ),
         { code: BROKER_FALLBACK_SOURCE_UNAVAILABLE_CODE },
       );
@@ -6951,9 +6962,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const now = Date.now();
     try {
       const rows: Array<readonly [string, LivePaperCandleInput[]]> = [];
-      // MetaApi enforces a per-account historical-data concurrency ceiling.
-      // Keep two provider slots in reserve for other readers/quote recovery
-      // instead of issuing all six symbols at once.
+      // Broker providers can enforce per-account historical-data concurrency ceilings.
+      // Keep provider capacity in reserve for other readers/quote recovery instead
+      // of issuing all six symbols at once.
       const historyConcurrency = 3;
       for (let offset = 0; offset < SYMBOLS.length; offset += historyConcurrency) {
         const batch = await Promise.all(
@@ -6985,14 +6996,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
             if (candles.length < 55) {
               throw new Error(
-                `MetaTrader fallback returned only ${candles.length} ${instrument} fully closed M5 bars`,
+                `Broker-native fallback returned only ${candles.length} ${instrument} fully closed M5 bars`,
               );
             }
             const latest = candles[candles.length - 1]!;
             const latestClose = latest.timestamp.getTime() + BAR_MS;
             if (now - latestClose > 20 * 60_000) {
               throw new Error(
-                `MetaTrader fallback ${instrument} latest fully closed M5 bar is stale`,
+                `Broker-native fallback ${instrument} latest fully closed M5 bar is stale`,
               );
             }
             return [instrument, candles] as const;
@@ -7005,7 +7016,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       this.lastProviderSeries = result;
       this.lastMarketDataAuthority = 'METAAPI_BROKER_FALLBACK';
       this.logger.warn(
-        `Broker-native MetaTrader M5 fallback active for 6/6 pairs reason=${reason}; execution authority remains PAPER_ONLY`,
+        `Broker-native ${source.brokerId} M5 fallback active for 6/6 pairs reason=${reason}; execution authority remains PAPER_ONLY`,
       );
       return result;
     } catch (error) {
