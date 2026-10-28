@@ -1,5 +1,6 @@
 import {
   evaluateM1TacticalCurrencyExposure,
+  findLargestClearM1Volume,
   m1UsdRiskAtStop,
 } from './m1-tactical-currency-exposure';
 
@@ -61,6 +62,50 @@ describe('M1 tactical currency exposure', () => {
         candidate: { instrument: 'EURUSD', direction: 'BUY', riskAtStop: 5 },
       }),
     ).toMatchObject({ capacity: 'REDUCED', projectedAlignedRiskPercent: 2.5 });
+  });
+
+
+
+  it('finds the largest clear intermediate lot instead of collapsing a blocked professional cap to the 0.20 floor', () => {
+    const result = findLargestClearM1Volume({
+      allocatedCapital: 900,
+      positions: [],
+      candidate: {
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        entryPrice: 1.1123,
+        stopLoss: 1.1118,
+      },
+      requestedVolumeCap: 4,
+      productFloor: 0.2,
+      volumeStep: 0.01,
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(result.volumeCap).toBeCloseTo(0.35, 8);
+    expect(result.volumeCap).toBeGreaterThan(0.2);
+    expect(result.decision.capacity).toBe('CLEAR');
+    expect(result.productFloorBlocked).toBe(false);
+  });
+
+  it('still fails closed when even the product floor breaches aligned-currency capacity', () => {
+    const result = findLargestClearM1Volume({
+      allocatedCapital: 900,
+      positions: [{ instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 30 }],
+      candidate: {
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        entryPrice: 1.1123,
+        stopLoss: 1.1118,
+      },
+      requestedVolumeCap: 4,
+      productFloor: 0.2,
+      volumeStep: 0.01,
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.volumeCap).toBe(0);
+    expect(result.productFloorBlocked).toBe(true);
   });
 
   it('fails closed when allocation or risk evidence is unusable', () => {

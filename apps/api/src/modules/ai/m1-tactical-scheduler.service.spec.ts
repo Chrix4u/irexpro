@@ -261,6 +261,30 @@ describe('M1 tactical aligned-currency exposure guard', () => {
     stopLoss: 1.1227,
   } as any;
 
+  it('finds the largest clear professional intermediate cap instead of falling straight from 4.0 to 0.20', async () => {
+    const { service } = guardHarness(900, []);
+    const professionalCandidate = {
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      entry: 1.1123,
+      stopLoss: 1.1118,
+    } as any;
+
+    await expect(
+      (service as any).resolveM1CurrencyExposureGuard(
+        'user-1',
+        'conn-1',
+        professionalCandidate,
+        4,
+      ),
+    ).resolves.toMatchObject({
+      allowed: true,
+      volumeCap: 0.35,
+      decision: { capacity: 'CLEAR' },
+      productFloorBlocked: false,
+    });
+  });
+
   it('keeps full M1 scout size while aligned stop-risk stays below two percent', async () => {
     const { service } = guardHarness(1000, [
       { instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 5 },

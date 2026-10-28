@@ -78,7 +78,7 @@ import {
 } from './m1-provisional-scout-reliability';
 import {
   evaluateM1TacticalCurrencyExposure,
-  m1UsdRiskAtStop,
+  findLargestClearM1Volume,
   type M1CurrencyExposureDecision,
 } from './m1-tactical-currency-exposure';
 
@@ -1040,61 +1040,23 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       return { allowed: false, volumeCap: 0, decision, productFloorBlocked: false };
     }
 
-    const evaluateAtVolume = (volume: number) => {
-      const riskAtStop = m1UsdRiskAtStop({
+    return findLargestClearM1Volume({
+      allocatedCapital,
+      positions,
+      candidate: {
         instrument: candidate.instrument,
-        lotSize: volume,
+        direction: candidate.direction,
         entryPrice: candidate.entry,
         stopLoss: candidate.stopLoss,
-      });
-      return evaluateM1TacticalCurrencyExposure({
-        allocatedCapital,
-        positions,
-        candidate: {
-          instrument: candidate.instrument,
-          direction: candidate.direction,
-          riskAtStop: riskAtStop ?? 0,
-        },
-      });
-    };
-
-    const productFloor = Number(PAPER_PRODUCT_ABSOLUTE_MIN_LOT);
-    if (!Number.isFinite(productFloor) || productFloor <= 0) {
-      return { allowed: false, volumeCap: 0, decision: unavailable, productFloorBlocked: false };
-    }
-
-    let volumeCap = requestedVolumeCap;
-    let decision = evaluateAtVolume(volumeCap);
-
-    if (!Number.isFinite(volumeCap) || volumeCap <= 0) {
-      return { allowed: false, volumeCap: 0, decision, productFloorBlocked: false };
-    }
-
-    if (decision.capacity !== 'CLEAR') {
-      if (volumeCap <= productFloor) {
-        return { allowed: false, volumeCap: 0, decision, productFloorBlocked: true };
-      }
-
-      const floorDecision = evaluateAtVolume(productFloor);
-      if (floorDecision.capacity !== 'CLEAR') {
-        return {
-          allowed: false,
-          volumeCap: 0,
-          decision: floorDecision,
-          productFloorBlocked: true,
-        };
-      }
-
-      volumeCap = productFloor;
-      decision = floorDecision;
-    }
-
-    return {
-      allowed: true,
-      volumeCap,
-      decision,
-      productFloorBlocked: false,
-    };
+      },
+      requestedVolumeCap,
+      productFloor: Number(PAPER_PRODUCT_ABSOLUTE_MIN_LOT),
+      // The downstream PositionSizingService still applies the broker's exact
+      // min/max/step. This 0.01 search granularity only prevents the M1
+      // exposure governor from collapsing a professional cap straight to the
+      // 0.20 product floor when a larger safe intermediate size exists.
+      volumeStep: 0.01,
+    });
   }
 
   private async submitPaperDecision(
