@@ -48,6 +48,7 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
         maxTradeRiskPercent: '2.00',
         maxDrawdownPercent: '10.00',
         maxPositionSizeLot: '0.1000',
+        maxLeverageAllowed: 30,
         ...profileOverrides,
       } as RiskProfile),
     };

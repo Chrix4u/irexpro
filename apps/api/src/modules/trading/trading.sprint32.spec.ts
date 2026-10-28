@@ -58,6 +58,7 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
 
     riskService = {
       isKillSwitchActive: jest.fn().mockResolvedValue(false),
+      getViolations: jest.fn().mockResolvedValue([]),
       getOrCreateProfile: jest.fn().mockResolvedValue({
         id: 'profile-1',
         userId: 'user-1',

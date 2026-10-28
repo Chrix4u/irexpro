@@ -13,6 +13,8 @@ describe('Direct MT5 protocol v1', () => {
       'ACCOUNT_SNAPSHOT',
       'GET_PRICE',
       'GET_OHLCV',
+      'LIST_SYMBOLS',
+      'GET_SYMBOL_INFO',
       'CALCULATE_MARGIN',
       'PLACE_ORDER',
       'MODIFY_ORDER',
