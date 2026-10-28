@@ -6852,17 +6852,25 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       const rows = await Promise.all(
         batch.map(async (instrument) => {
           try {
-            // The active PAPER adapter is already fed by the six-pair provider
-            // M1 cache. Pull only the recent M1 tail and causally aggregate five
-            // fully closed M1 bars into M5. This preserves the long Twelve Data
-            // history while eliminating the 15-minute rotating-cache blind spot.
-            const rawM1 = await this.brokerService.getOhlcvForConnection(
-              userId,
-              executionConnectionId,
-              instrument,
-              'M1',
-              30,
-            );
+            // The scanner-owned PAPER adapter is already fed by the six-pair
+            // provider M1 cache. Read that cache directly so a deliberately
+            // disconnected database PAPER connection is not sent back through
+            // BrokerService just to recover scanner-owned evidence. Non-scanner
+            // connections retain the broker-backed path.
+            const rawM1 = this.livePaperMarket.isLiveConnection(executionConnectionId)
+              ? this.livePaperMarket.getReadOnlyOHLCV(
+                  instrument,
+                  'M1',
+                  30,
+                  executionConnectionId,
+                )
+              : await this.brokerService.getOhlcvForConnection(
+                  userId,
+                  executionConnectionId,
+                  instrument,
+                  'M1',
+                  30,
+                );
             const m1Candles: LivePaperCandleInput[] = rawM1
               .map((candle) => ({
                 timestamp:

@@ -4532,6 +4532,86 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
+  it('reads scanner-owned live PAPER M1 directly instead of querying a disconnected execution broker', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-26T11:00:20.000Z'));
+    try {
+      const baseFor = (instrument: string) =>
+        instrument === 'USDJPY'
+          ? 157
+          : instrument === 'GBPUSD'
+            ? 1.34
+            : instrument === 'USDCAD'
+              ? 1.37
+              : instrument === 'USDCHF'
+                ? 0.8
+                : instrument === 'AUDUSD'
+                  ? 0.66
+                  : 1.1;
+      const digitsFor = (instrument: string) => (instrument === 'USDJPY' ? 3 : 5);
+      const staleSeries = new Map(
+        PAIRS.map(([instrument]) => [
+          instrument,
+          trendCandles(baseFor(instrument), digitsFor(instrument)).map((row) => ({
+            ...row,
+            timestamp: new Date(row.timestamp.getTime() - 300_000),
+          })),
+        ]),
+      );
+      const freshM1 = (instrument: string) => {
+        const base = baseFor(instrument);
+        const digits = digitsFor(instrument);
+        const latestOpen = Math.floor(Date.now() / 60_000) * 60_000 - 60_000;
+        return Array.from({ length: 30 }, (_, index) => {
+          const openTime = latestOpen - (29 - index) * 60_000;
+          const close = base + index * (base > 10 ? 0.001 : 0.00001);
+          const range = base > 10 ? 0.01 : 0.00008;
+          return {
+            timestamp: new Date(openTime),
+            open: close.toFixed(digits),
+            high: (close + range).toFixed(digits),
+            low: (close - range).toFixed(digits),
+            close: close.toFixed(digits),
+          };
+        });
+      };
+      const liveMarket = new LivePaperMarketDataService();
+      liveMarket.registerLiveConnection('conn-1');
+      for (const [instrument] of PAIRS) {
+        liveMarket.updateClosedM1Candles(instrument, freshM1(instrument), 'conn-1');
+      }
+      const broker = {
+        getOhlcvForConnection: jest
+          .fn()
+          .mockRejectedValue(new Error('disconnected execution broker must not be queried')),
+      } as unknown as BrokerService;
+      const collector = createCollector(
+        config({
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.userId': 'user-1',
+          'vpsForexScanner.brokerConnectionId': 'conn-1',
+        }),
+        { receiveSignal: jest.fn() } as unknown as AiSignalService,
+        { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+        broker,
+        liveMarket,
+        aiEngineClientMock(),
+      );
+
+      const refreshed = await (collector as any).refreshStalePaperProviderM5Tails(
+        staleSeries,
+        Date.now(),
+      );
+
+      expect((broker as any).getOhlcvForConnection).not.toHaveBeenCalled();
+      const expectedLatestOpen = new Date('2026-10-26T10:55:00.000Z').getTime();
+      for (const candles of refreshed.values()) {
+        expect(candles.at(-1)?.timestamp.getTime()).toBe(expectedLatestOpen);
+      }
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('bounds broker-native six-pair history concurrency below the MetaApi per-account limit', async () => {
     let active = 0;
     let peak = 0;
