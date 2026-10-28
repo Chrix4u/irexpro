@@ -1131,7 +1131,7 @@ export class ExecutionService {
       stopLoss: '0',
       takeProfit: '0',
       providerAction: 'CLOSE_POSITION',
-      providerReferenceId: trade.externalOrderId,
+      providerReferenceId: trade.externalPositionId ?? trade.externalOrderId,
     };
 
     const dispatch = await this.orchestrator.dispatchOrder(closeIntent, connection);

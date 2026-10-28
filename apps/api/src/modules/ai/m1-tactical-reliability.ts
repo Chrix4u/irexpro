@@ -25,8 +25,12 @@ export interface M1RoutePairSideEvidenceRow {
   direction: 'BUY' | 'SELL';
   policyVersion: string;
   realisedPnl: number;
-  /** USD risk to the original stop for this executed PAPER trade. */
+  /** Account-currency risk to the original stop for this executed trade. */
   riskAtStop?: number | null;
+  /** Highest observed unrealized P&L before close, in the account currency. */
+  maxFavorablePnl?: number | null;
+  /** Amount surrendered from the observed peak by the latest/final observation. */
+  profitGiveback?: number | null;
   closedAt: Date;
 }
 
@@ -44,6 +48,7 @@ export type M1RoutePairSideReliabilityReason =
   | 'POSITIVE_EXPECTANCY'
   | 'NEGATIVE_EXPECTANCY'
   | 'RECENT_NEGATIVE_PAYOFF'
+  | 'PROFIT_GIVEBACK_LOSS_STREAK'
   | 'PAYOFF_EVIDENCE_INCOMPLETE'
   | 'EARLY_LOSS_STREAK'
   | 'INVALID_EVIDENCE';
@@ -191,6 +196,42 @@ export function evaluateM1RoutePairSideReliability(
   const recentLossStreak =
     selected.length >= earlyLossBrakeSamples &&
     selected.slice(0, earlyLossBrakeSamples).every((row) => row.realisedPnl < 0);
+  const givebackLossStreak =
+    selected.length >= 2 &&
+    selected.slice(0, 2).every((row) => {
+      const riskAtStop = Number(row.riskAtStop);
+      const maxFavorablePnl = Number(row.maxFavorablePnl);
+      const profitGiveback = Number(row.profitGiveback);
+      return (
+        row.realisedPnl < 0 &&
+        Number.isFinite(riskAtStop) &&
+        riskAtStop > 0 &&
+        Number.isFinite(maxFavorablePnl) &&
+        maxFavorablePnl / riskAtStop >= 0.4 &&
+        Number.isFinite(profitGiveback) &&
+        profitGiveback >= maxFavorablePnl
+      );
+    });
+
+  if (givebackLossStreak) {
+    return {
+      eligible: false,
+      samples,
+      currentPolicySamples: current.length,
+      carriedSamples,
+      wins,
+      losses,
+      smoothedWinRate,
+      smoothedExpectedR,
+      realizedRSamples,
+      averageRealizedR,
+      recentRealizedR,
+      recentPayoffRSamples,
+      recentPayoffAverageR,
+      reason: 'PROFIT_GIVEBACK_LOSS_STREAK',
+      consideredPolicyVersions: [...consideredPolicyVersions],
+    };
+  }
 
   if (recentLossStreak) {
     return {

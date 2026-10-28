@@ -106,6 +106,17 @@ describe('evaluateM1RoutePairSideReliability', () => {
     expect(result.reason).toBe('EARLY_LOSS_STREAK');
   });
 
+  it('brakes an exact pair/side/route after two recent losses that first reached at least 0.40R favorable excursion', () => {
+    const result = evaluate([
+      row(-9, { route: 'M1_EARLY_TRANSITION', riskAtStop: 9, maxFavorablePnl: 10, profitGiveback: 19, closedAt: new Date(NOW.getTime() - 60_000) }),
+      row(-8, { route: 'M1_EARLY_TRANSITION', riskAtStop: 9, maxFavorablePnl: 6, profitGiveback: 14, closedAt: new Date(NOW.getTime() - 120_000) }),
+      row(5, { route: 'M1_EARLY_TRANSITION', riskAtStop: 9, maxFavorablePnl: 6, profitGiveback: 1, closedAt: new Date(NOW.getTime() - 180_000) }),
+    ], { route: 'M1_EARLY_TRANSITION' });
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('PROFIT_GIVEBACK_LOSS_STREAK');
+  });
+
   it('brakes recent payoff decay before a mixed sequence becomes a three-loss streak', () => {
     const recent = [-1, -1, 0.5, 0.4, 0.4].map((realisedR, index) =>
       row(realisedR, { riskAtStop: 1, closedAt: new Date(NOW.getTime() - (index + 1) * 60_000) }),

@@ -1101,6 +1101,32 @@ describe('ExecutionService', () => {
       );
     });
 
+    it('prefers the durable provider position id when cTrader order and position ids differ', async () => {
+      tradeRepo.findOne.mockResolvedValue({
+        ...openTrade(),
+        externalOrderId: 'order-777',
+        externalPositionId: 'position-7001',
+      });
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'FILLED',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        providerOrderId: 'close-ext-1',
+        filledQuantity: '0.05',
+        avgFillPrice: '1.09000',
+      });
+
+      await service.closeTrade('trade-1', 'user-1', TradeCloseReason.PROFIT_PROTECTION);
+
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerAction: 'CLOSE_POSITION',
+          providerReferenceId: 'position-7001',
+        }),
+        expect.anything(),
+      );
+    });
+
     it('persists broker-reported realised P&L and costs in the same CLOSED transition', async () => {
       tradeRepo.findOne.mockResolvedValue(openTrade());
       orchestrator.dispatchOrder.mockResolvedValueOnce({

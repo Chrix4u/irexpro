@@ -489,6 +489,15 @@ export class M1TacticalEvidenceService {
           t.lot_size,
           t.fill_price,
           t.stop_loss,
+          COALESCE(
+            t.max_favorable_pnl,
+            NULLIF(ti.metadata->'reconstructed_path_v1'->>'maxFavorablePnl', '')::numeric
+          ) AS max_favorable_pnl,
+          COALESCE(
+            t.profit_giveback,
+            NULLIF(ti.metadata->'reconstructed_path_v1'->>'profitGiveback', '')::numeric
+          ) AS profit_giveback,
+          NULLIF(ca.sizing_inputs->>'finalRiskAtStop', '') AS risk_at_stop_account,
           t.closed_at
         FROM trading.m1_tactical_decisions d
         JOIN trading.trade_intents ti
@@ -502,6 +511,13 @@ export class M1TacticalEvidenceService {
           ON t.trade_intent_id = ti.id
          AND t.user_id = d.user_id
          AND t.broker_connection_id = d.broker_connection_id
+        LEFT JOIN LATERAL (
+          SELECT ca0.sizing_inputs
+          FROM trading.capital_allocations ca0
+          WHERE ca0.trade_intent_id = t.trade_intent_id
+          ORDER BY ca0.created_at DESC
+          LIMIT 1
+        ) ca ON true
         WHERE d.user_id = $1
           AND d.broker_connection_id = $2
           AND d.route = $3
@@ -536,6 +552,9 @@ export class M1TacticalEvidenceService {
       lot_size: string | number | null;
       fill_price: string | number | null;
       stop_loss: string | number | null;
+      max_favorable_pnl: string | number | null;
+      profit_giveback: string | number | null;
+      risk_at_stop_account: string | number | null;
       closed_at: string | Date;
     }>;
     return rows.map((row) => ({
@@ -544,12 +563,16 @@ export class M1TacticalEvidenceService {
       direction: row.direction,
       policyVersion: row.policy_version,
       realisedPnl: number(row.realised_pnl),
-      riskAtStop: m1UsdRiskAtStop({
-        instrument: row.instrument,
-        lotSize: number(row.lot_size),
-        entryPrice: number(row.fill_price),
-        stopLoss: number(row.stop_loss),
-      }),
+      riskAtStop:
+        number(row.risk_at_stop_account) ??
+        m1UsdRiskAtStop({
+          instrument: row.instrument,
+          lotSize: number(row.lot_size),
+          entryPrice: number(row.fill_price),
+          stopLoss: number(row.stop_loss),
+        }),
+      maxFavorablePnl: number(row.max_favorable_pnl),
+      profitGiveback: number(row.profit_giveback),
       closedAt: date(row.closed_at),
     }));
   }

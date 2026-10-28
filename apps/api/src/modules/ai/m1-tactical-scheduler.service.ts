@@ -1209,6 +1209,19 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             : null,
           external_provider_paper_only: true,
           production_eligible: false,
+          // Immutable entry snapshot consumed by the v8.5 post-entry learner.
+          // Keep the same feature scale used by the historical Plan-B/v7
+          // training stream: candidate score + direction-aligned EMA/MTF
+          // strength, raw RSI, extension and volatility.
+          feature_candidate_score: candidate.score,
+          feature_extension_atr: features.extensionAtr,
+          feature_volatility_score: features.volatilityScore,
+          feature_ema_separation: Math.max(
+            0,
+            Math.min(1, candidate.alignedEmaSeparationAtr / 2),
+          ),
+          feature_mtf_strength: Math.max(0, Math.min(1, candidate.alignedM15)),
+          feature_rsi14: features.rsi14,
           position_sizing_tier:
             this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
               ? m1ProfessionalSizingTier(candidate.confidence)

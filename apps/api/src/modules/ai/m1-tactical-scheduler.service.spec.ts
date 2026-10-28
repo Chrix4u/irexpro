@@ -1994,6 +1994,12 @@ describe('M1 professional v8 DEMO promotion', () => {
       expect.objectContaining({
         m1_rollout_phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
         position_sizing_tier: expect.stringMatching(/^(BASE|STRONG|VERY_STRONG|ELITE)$/),
+        feature_candidate_score: expect.any(Number),
+        feature_extension_atr: expect.any(Number),
+        feature_volatility_score: expect.any(Number),
+        feature_ema_separation: expect.any(Number),
+        feature_mtf_strength: expect.any(Number),
+        feature_rsi14: expect.any(Number),
       }),
     );
   });

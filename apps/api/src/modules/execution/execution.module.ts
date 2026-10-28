@@ -56,6 +56,7 @@ import { PositionSizingService } from './services/position-sizing.service';
 // Round 6 live-execution completion (§8): the protective-order
 // reconciliation loop (per-trade SL/TP verify/repair).
 import { ProtectiveOrderReconciliationService } from './reconciliation/protective-order-reconciliation.service';
+import { LiveDemoProfitProtectionService } from './reconciliation/live-demo-profit-protection.service';
 
 /**
  * ExecutionModule — Live trade execution, lifecycle management, and
@@ -166,6 +167,7 @@ import { ProtectiveOrderReconciliationService } from './reconciliation/protectiv
     // Round 6 §8: the protective-order reconciliation loop runs after every
     // per-connection state sweep (same sequential adapter model).
     ProtectiveOrderReconciliationService,
+    LiveDemoProfitProtectionService,
     TradeReconciliationJob,
     TradeReconciliationProducer,
     // Round 7 (P1): the expiry-hygiene sweeper (stale intents/confirmations

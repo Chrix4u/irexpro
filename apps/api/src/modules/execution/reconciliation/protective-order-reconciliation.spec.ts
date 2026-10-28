@@ -144,6 +144,26 @@ describe('ProtectiveOrderReconciliationService — the §8 protective-order loop
     expect(adapter.modifyOrder).not.toHaveBeenCalled();
   });
 
+  it('matches and repairs cTrader protection using the provider position id rather than the originating order id', async () => {
+    tradeRepo.rows = [
+      openTrade('trade-1', {
+        externalOrderId: 'order-777',
+        externalPositionId: 'position-7001',
+      }),
+    ];
+    adapter.getOpenPositions.mockResolvedValue([
+      position('position-7001', { stopLoss: '0', takeProfit: '1.09500' }),
+    ]);
+
+    const outcome = await service.reconcileProtectiveOrders(connection({ brokerId: 'ctrader' }));
+
+    expect(outcome).toMatchObject({ repairedCount: 1, status: 'OK' });
+    expect(adapter.modifyOrder).toHaveBeenCalledWith('position-7001', {
+      newStopLoss: '1.07500',
+      newTakeProfit: '1.09500',
+    });
+  });
+
   it('PROTECTED when the provider rounds within the 0.05% tolerance', async () => {
     tradeRepo.rows = [openTrade('trade-1')];
     // 1.07500 → provider rounds to 1.07504 (~0.0037% deviation) — rounding,

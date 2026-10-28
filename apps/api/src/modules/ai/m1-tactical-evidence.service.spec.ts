@@ -194,6 +194,9 @@ describe('M1TacticalEvidenceService', () => {
         lot_size: '0.10',
         fill_price: '1.1000',
         stop_loss: '1.0990',
+        risk_at_stop_account: '9.25',
+        max_favorable_pnl: '8.00',
+        profit_giveback: '11.50',
         closed_at: '2026-10-18T12:20:00.000Z',
       },
     ]);
@@ -214,7 +217,9 @@ describe('M1TacticalEvidenceService', () => {
     expect(result).toEqual([
       expect.objectContaining({
         realisedPnl: 3.5,
-        riskAtStop: expect.closeTo(10, 8),
+        riskAtStop: 9.25,
+        maxFavorablePnl: 8,
+        profitGiveback: 11.5,
         policyVersion: 'm1-tactical-v1',
       }),
     ]);
@@ -225,6 +230,9 @@ describe('M1TacticalEvidenceService', () => {
     expect(normalized).toContain('d.route = $3');
     expect(normalized).toContain('d.instrument = $4');
     expect(normalized).toContain('d.direction = $5');
+    expect(normalized).toContain("COALESCE(");
+    expect(normalized).toContain("t.max_favorable_pnl");
+    expect(normalized).toContain("reconstructed_path_v1");
     expect(normalized).toContain("t.status = 'CLOSED'");
     expect(normalized).toContain('t.realised_pnl <> 0');
     expect(normalized).toContain("t.closed_at > ($7::timestamptz - interval '7 days')");
