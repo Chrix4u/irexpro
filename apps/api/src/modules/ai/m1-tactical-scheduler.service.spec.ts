@@ -675,6 +675,19 @@ function phase2Harness(
       cooldownMinutes: number;
       maxStopDurationMinutes: number;
     };
+    multimodelLossStreakBrake?: {
+      artifact: 'm1-multimodel-loss-streak-brake-v1';
+      active: boolean;
+      reason: 'CLEAR' | 'RECENT_MULTIMODEL_LOSS_STREAK';
+      strategyRoute: 'TREND_CONTINUATION' | 'CONFIRMED_REVERSAL' | 'EARLY_TRANSITION';
+      recentClosedTrades: number;
+      recentLosses: number;
+      recentWins: number;
+      cumulativeRealisedPnl: number;
+      latestClosedAt: Date | null;
+      cooldownHours: number;
+      cooldownRemainingSeconds: number;
+    };
     trainedExpertState?: 'CONFIRM' | 'CONFLICT' | 'ABSTAIN' | 'STALE' | 'UNAVAILABLE';
     trainedExpertDirection?: 'BUY' | 'SELL';
     existingDecision?: {
@@ -744,6 +757,9 @@ function phase2Harness(
       maxStopDurationMinutes: 2,
     },
   );
+  const loadMultimodelLossStreakBrake = jest.fn().mockResolvedValue(
+    options.multimodelLossStreakBrake ?? { artifact: 'm1-multimodel-loss-streak-brake-v1', active: false, reason: 'CLEAR', strategyRoute: 'TREND_CONTINUATION', recentClosedTrades: 0, recentLosses: 0, recentWins: 0, cumulativeRealisedPnl: 0, latestClosedAt: null, cooldownHours: 12, cooldownRemainingSeconds: 0 },
+  );
   const hasActiveM1Intent = jest
     .fn()
     .mockResolvedValue(options.duplicateSameDirectionIntent ?? false);
@@ -762,6 +778,7 @@ function phase2Harness(
     loadOpenPaperPositions,
     loadOpenPaperRiskPositions,
     loadFastStopRegimeBrake,
+    loadMultimodelLossStreakBrake,
     hasActiveM1Intent,
     hasActiveOppositeM1Intent,
     markRescueObservation,
@@ -846,6 +863,7 @@ function phase2Harness(
     loadOpenPaperPositions,
     loadOpenPaperRiskPositions,
     loadFastStopRegimeBrake,
+    loadMultimodelLossStreakBrake,
     hasActiveM1Intent,
     hasActiveOppositeM1Intent,
     markRescueObservation,
@@ -2099,6 +2117,15 @@ describe('M1 V8 multi-model DEMO authority', () => {
         multimodelAuthority: expect.objectContaining({ executable: true }),
       }),
     );
+  });
+
+  it('blocks V8 execution after three recent losses on the same Plan-B pair-side-route while retaining telemetry', async () => {
+    const h = phase2Harness({ rollout: M1_TACTICAL_ROLLOUT_POLICY_V8, session: fullAutoSession, trainedExpertState: 'CONFIRM', multimodelLossStreakBrake: { artifact: 'm1-multimodel-loss-streak-brake-v1', active: true, reason: 'RECENT_MULTIMODEL_LOSS_STREAK', strategyRoute: 'TREND_CONTINUATION', recentClosedTrades: 3, recentLosses: 3, recentWins: 0, cumulativeRealisedPnl: -31.2, latestClosedAt: new Date('2026-10-15T10:25:00.000Z'), cooldownHours: 12, cooldownRemainingSeconds: 42900 } });
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    expect(h.loadMultimodelLossStreakBrake).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', brokerConnectionId: 'demo-conn-2', instrument: 'EURUSD', direction: 'BUY', strategyRoute: 'TREND_CONTINUATION' }));
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION')?.[0];
+    expect(recorded).toEqual(expect.objectContaining({ executionAuthority: 'NONE', blockers: expect.arrayContaining(['M1_MULTIMODEL_LOSS_STREAK_BRAKE']), governance: expect.objectContaining({ multimodelLossStreakBrake: expect.objectContaining({ active: true, reason: 'RECENT_MULTIMODEL_LOSS_STREAK', recentLosses: 3 }) }) }));
   });
 
   it.each(['CONFLICT', 'UNAVAILABLE'] as const)(

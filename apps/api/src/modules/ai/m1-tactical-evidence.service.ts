@@ -124,6 +124,39 @@ export interface M1ShadowOutcome15mV1 {
 export const M1_FAST_STOP_REGIME_BRAKE_ARTIFACT = 'm1-fast-stop-regime-brake-v1' as const;
 export const M1_FAST_STOP_MAX_DURATION_MINUTES = 2;
 export const M1_FAST_STOP_COOLDOWN_MINUTES = 5;
+export const M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT =
+  'm1-multimodel-loss-streak-brake-v1' as const;
+export const M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES = 3;
+export const M1_MULTIMODEL_LOSS_STREAK_WINDOW_HOURS = 24;
+export const M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS = 12;
+
+export type M1MultimodelStrategyRoute =
+  | 'TREND_CONTINUATION'
+  | 'CONFIRMED_REVERSAL'
+  | 'EARLY_TRANSITION';
+
+export interface M1MultimodelLossStreakBrakeQuery {
+  userId: string;
+  brokerConnectionId: string;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  strategyRoute: M1MultimodelStrategyRoute;
+  evaluatedAt: Date;
+}
+
+export interface M1MultimodelLossStreakBrakeDecision {
+  artifact: typeof M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT;
+  active: boolean;
+  reason: 'CLEAR' | 'RECENT_MULTIMODEL_LOSS_STREAK';
+  strategyRoute: M1MultimodelStrategyRoute;
+  recentClosedTrades: number;
+  recentLosses: number;
+  recentWins: number;
+  cumulativeRealisedPnl: number;
+  latestClosedAt: Date | null;
+  cooldownHours: number;
+  cooldownRemainingSeconds: number;
+}
 
 export interface M1FastStopRegimeBrakeQuery {
   userId: string;
@@ -579,6 +612,80 @@ export class M1TacticalEvidenceService {
       profitGiveback: number(row.profit_giveback),
       closedAt: date(row.closed_at),
     }));
+  }
+
+  async loadMultimodelLossStreakBrake(
+    input: M1MultimodelLossStreakBrakeQuery,
+  ): Promise<M1MultimodelLossStreakBrakeDecision> {
+    const instrument = input.instrument.trim().toUpperCase();
+    const rows = (await this.dataSource.query(
+      `
+        SELECT t.realised_pnl, t.closed_at
+        FROM trading.trades t
+        JOIN trading.trade_intents ti
+          ON ti.id = t.trade_intent_id
+         AND ti.user_id = t.user_id
+         AND ti.broker_connection_id = t.broker_connection_id
+        JOIN trading.m1_tactical_decisions d
+          ON d.trade_intent_id = ti.id
+         AND d.user_id = t.user_id
+         AND d.broker_connection_id = t.broker_connection_id
+        WHERE t.user_id = $1
+          AND t.broker_connection_id = $2
+          AND t.instrument = $3
+          AND t.direction = $4
+          AND d.governance -> 'multimodelEnsemble' ->> 'strategyRoute' = $5
+          AND ti.strategy_code = 'external-irexpro-multimodel-ensemble'
+          AND ti.timeframe = 'M1'
+          AND ti.metadata ->> 'external_provider_paper_only' = 'true'
+          AND t.status = 'CLOSED'
+          AND t.realised_pnl IS NOT NULL
+          AND t.closed_at IS NOT NULL
+          AND t.closed_at <= $6::timestamptz
+          AND t.closed_at > ($6::timestamptz - interval '24 hours')
+        ORDER BY t.closed_at DESC
+        LIMIT 3
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        instrument,
+        input.direction,
+        input.strategyRoute,
+        input.evaluatedAt.toISOString(),
+      ],
+    )) as Array<{ realised_pnl: string | number; closed_at: string | Date }>;
+
+    const pnlValues = rows.map((row) => number(row.realised_pnl));
+    const recentLosses = pnlValues.filter((value) => value < 0).length;
+    const recentWins = pnlValues.filter((value) => value > 0).length;
+    const cumulativeRealisedPnl =
+      Math.round(pnlValues.reduce((sum, value) => sum + value, 0) * 100) / 100;
+    const latestClosedAt = rows[0] ? date(rows[0].closed_at) : null;
+    const cooldownUntilMs = latestClosedAt
+      ? latestClosedAt.getTime() + M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS * 60 * 60_000
+      : 0;
+    const cooldownRemainingSeconds = latestClosedAt
+      ? Math.max(0, Math.ceil((cooldownUntilMs - input.evaluatedAt.getTime()) / 1000))
+      : 0;
+    const lossStreak =
+      rows.length === M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES &&
+      recentLosses === M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES;
+    const active = lossStreak && cooldownRemainingSeconds > 0;
+
+    return {
+      artifact: M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT,
+      active,
+      reason: active ? 'RECENT_MULTIMODEL_LOSS_STREAK' : 'CLEAR',
+      strategyRoute: input.strategyRoute,
+      recentClosedTrades: rows.length,
+      recentLosses,
+      recentWins,
+      cumulativeRealisedPnl,
+      latestClosedAt,
+      cooldownHours: M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS,
+      cooldownRemainingSeconds,
+    };
   }
 
   async loadFastStopRegimeBrake(

@@ -888,7 +888,21 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           evaluatedAt: decisionTime,
         })
       : null;
-    const canExecute = preliminaryCanExecute && fastStopRegimeBrake?.active !== true;
+    const multimodelLossStreakBrake =
+      preliminaryCanExecute && professionalDemoPhase && multimodelDemo
+        ? await this.evidence.loadMultimodelLossStreakBrake({
+            userId,
+            brokerConnectionId,
+            instrument: candidate.instrument,
+            direction: candidate.direction,
+            strategyRoute: multimodelDemo.ensemble.strategyRoute,
+            evaluatedAt: decisionTime,
+          })
+        : null;
+    const canExecute =
+      preliminaryCanExecute &&
+      fastStopRegimeBrake?.active !== true &&
+      multimodelLossStreakBrake?.active !== true;
     const effectiveGovernanceBlockers =
       microDriftOnlyRescue || localImpulseDriftOnlyRescue ? [] : governance.blockers;
     const researchBlockers = unique([
@@ -912,6 +926,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       ? unique([
           ...(multimodelDemo?.authority.blockers ?? ['MULTIMODEL_AUTHORITY_UNAVAILABLE']),
           ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
+          ...(multimodelLossStreakBrake?.active === true
+            ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
+            : []),
         ])
       : unique([
           ...researchBlockers,
@@ -952,6 +969,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         rolloutPhase: this.rolloutPolicy.phase,
         routeNetExpectedRFloor,
         fastStopRegimeBrake: fastStopRegimeBrake ? { ...fastStopRegimeBrake } : null,
+        multimodelLossStreakBrake: multimodelLossStreakBrake
+          ? { ...multimodelLossStreakBrake }
+          : null,
         primaryEngineCode: professionalDemoPhase ? MULTIMODEL_DEMO_ENGINE_CODE : 'irexpro-m1-tactical',
         m1TacticalRole: professionalDemoPhase ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE',
         multimodelEnsemble: multimodelDemo?.ensemble ?? null,

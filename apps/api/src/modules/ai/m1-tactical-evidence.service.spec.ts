@@ -332,6 +332,22 @@ describe('M1TacticalEvidenceService', () => {
     });
   });
 
+  it('activates an exact Plan-B pair-side-route loss-streak brake after three recent closed losses', async () => {
+    const query = jest.fn().mockResolvedValue([
+      { realised_pnl: '-12.10', closed_at: '2026-10-28T23:17:12.746Z' },
+      { realised_pnl: '-12.35', closed_at: '2026-10-28T13:41:46.604Z' },
+      { realised_pnl: '-8.98', closed_at: '2026-10-28T12:04:30.666Z' },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const evaluatedAt = new Date('2026-10-28T23:23:00.000Z');
+    const result = (await (service as any).loadMultimodelLossStreakBrake?.({ userId: input().userId, brokerConnectionId: input().brokerConnectionId, instrument: 'eurusd', direction: 'SELL', strategyRoute: 'CONFIRMED_REVERSAL', evaluatedAt })) ?? null;
+    expect(result).toMatchObject({ artifact: 'm1-multimodel-loss-streak-brake-v1', active: true, reason: 'RECENT_MULTIMODEL_LOSS_STREAK', strategyRoute: 'CONFIRMED_REVERSAL', recentClosedTrades: 3, recentLosses: 3, recentWins: 0, cumulativeRealisedPnl: -33.43, cooldownHours: 12 });
+    const [sql, params] = query.mock.calls[0]!; const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain('t.user_id = $1'); expect(normalized).toContain('t.broker_connection_id = $2'); expect(normalized).toContain('t.instrument = $3'); expect(normalized).toContain('t.direction = $4');
+    expect(normalized).toContain("d.governance -> 'multimodelEnsemble' ->> 'strategyRoute' = $5"); expect(normalized).toContain("ti.strategy_code = 'external-irexpro-multimodel-ensemble'"); expect(normalized).toContain("ti.timeframe = 'M1'"); expect(normalized).toContain("t.status = 'CLOSED'"); expect(normalized).toContain("t.closed_at > ($6::timestamptz - interval '24 hours')"); expect(normalized).toContain('ORDER BY t.closed_at DESC'); expect(normalized).toContain('LIMIT 3');
+    expect(params).toEqual([input().userId, input().brokerConnectionId, 'EURUSD', 'SELL', 'CONFIRMED_REVERSAL', evaluatedAt.toISOString()]);
+  });
+
   it('marks signal/trade-intent linkage without changing decision identity', async () => {
     const query = jest.fn().mockResolvedValue([{ id: 'decision-1' }]);
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
