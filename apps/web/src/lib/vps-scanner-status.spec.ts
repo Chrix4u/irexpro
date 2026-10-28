@@ -471,7 +471,7 @@ describe("production trade-readiness presentation", () => {
     });
 
     expect(result).toMatchObject({
-      score: 49,
+      score: 41,
       band: "FORMING",
       tradeExpected: false,
       instrument: "EURUSD",
@@ -600,5 +600,35 @@ describe("active multi-model execution presentation", () => {
     expect(result.score).toBe(78);
     expect(result.detail).toMatch(/promoted PAPER champion/i);
     expect(result.detail).toMatch(/shadow/i);
+  });
+
+  it("keeps drift-blocked multi-model readiness moving instead of pinning every setup at 49", () => {
+    const weaker = JSON.parse(JSON.stringify(status));
+    weaker.latestDecision.primaryConfidence = 0.55;
+    weaker.latestDecision.multimodelExecutable = false;
+    weaker.latestDecision.blockers = ["DRIFT_OUT_OF_DISTRIBUTION"];
+
+    const stronger = JSON.parse(JSON.stringify(status));
+    stronger.latestDecision.primaryConfidence = 0.85;
+    stronger.latestDecision.multimodelExecutable = false;
+    stronger.latestDecision.blockers = ["DRIFT_OUT_OF_DISTRIBUTION"];
+
+    const weakerResult = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: weaker,
+      fastMarkState: "LIVE",
+    });
+    const strongerResult = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: stronger,
+      fastMarkState: "LIVE",
+    });
+
+    expect(weakerResult.score).toBeLessThanOrEqual(49);
+    expect(strongerResult.score).toBeLessThanOrEqual(49);
+    expect(strongerResult.score).toBeGreaterThan(weakerResult.score);
+    expect(strongerResult.score).not.toBe(49);
   });
 });

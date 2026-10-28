@@ -321,8 +321,13 @@ export function deriveTradeReadinessUiState(
     const driftBlocked = blockers.includes("DRIFT_OUT_OF_DISTRIBUTION");
     const routeShadow = blockers.includes("M1_PHASE_ROUTE_SHADOW");
     const reliabilityBlocked = blockers.some((blocker) => blocker.includes("RELIABILITY"));
-    if (driftBlocked) score = Math.min(score, 49);
-    else if (reliabilityBlocked) score = Math.min(score, 58);
+    if (driftBlocked) {
+      // Drift is an execution veto, not a reason to pin every setup to the same
+      // presentation score. Keep the meter below the ready zone while allowing
+      // fresh ensemble confidence to remain visibly distinct between scans.
+      const driftReadiness = 20 + primaryConfidence * 28;
+      score = Math.min(score, driftReadiness);
+    } else if (reliabilityBlocked) score = Math.min(score, 58);
     if (routeShadow) score = Math.min(score, 59);
 
     const rounded = Math.round(score);
