@@ -624,6 +624,100 @@ export class TradingService {
     };
   }
 
+  async resetDailyLossProtectionForBroker(
+    userId: string,
+    brokerConnectionId: string,
+  ): Promise<{ resetAt: string; resetCount: number; message: string }> {
+    await this.brokerService.findConnectionById(brokerConnectionId, userId);
+
+    const currentSession = await this.executionService.getActiveSessionForClient(userId);
+    if (currentSession) {
+      throw new ForbiddenException(
+        'A current AI trading session still exists. Review that session’s risk suspension instead.',
+      );
+    }
+
+    const violations = await this.riskService.getViolations(userId, 20);
+    const suspensionViolation = violations.find((violation) => {
+      if (
+        violation.rejectionCode !== RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED &&
+        violation.rejectionCode !== RiskRejectionCode.MAX_DRAWDOWN_REACHED
+      ) {
+        return false;
+      }
+      const context = (violation.riskContext ?? {}) as Record<string, unknown>;
+      const scopedBroker =
+        typeof context.brokerConnectionId === 'string' ? context.brokerConnectionId : null;
+      return scopedBroker === null || scopedBroker === brokerConnectionId;
+    });
+
+    if (
+      !suspensionViolation ||
+      suspensionViolation.rejectionCode !== RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED
+    ) {
+      throw new ForbiddenException(
+        'Daily-loss reset is not available. Drawdown and other risk suspensions cannot be reset from this control.',
+      );
+    }
+
+    const evaluatedAt = new Date(suspensionViolation.evaluatedAt);
+    const now = new Date();
+    if (
+      !Number.isFinite(evaluatedAt.getTime()) ||
+      evaluatedAt.getUTCFullYear() !== now.getUTCFullYear() ||
+      evaluatedAt.getUTCMonth() !== now.getUTCMonth() ||
+      evaluatedAt.getUTCDate() !== now.getUTCDate()
+    ) {
+      throw new ForbiddenException(
+        'The daily-loss suspension is not from the current UTC risk day.',
+      );
+    }
+
+    const allocation = await this.allocationService.getUserCapitalAllocationState(
+      userId,
+      brokerConnectionId,
+    );
+    if (!allocation.logicalAccountKey || !allocation.accountCurrency) {
+      throw new ForbiddenException(
+        'The broker account risk scope could not be verified for reset.',
+      );
+    }
+
+    const reset = await this.dailyRiskPeriodService.recordDailyLossReset({
+      userId,
+      brokerConnectionId,
+      logicalAccountKey: allocation.logicalAccountKey,
+      accountCurrency: allocation.accountCurrency,
+      sessionId: null,
+      now,
+    });
+
+    await this.auditService.log({
+      actorUserId: userId,
+      action: AuditAction.RISK_DAILY_LOSS_RESET_CONFIRMED,
+      severity: AuditSeverity.WARNING,
+      resourceType: 'BrokerConnection',
+      resourceId: brokerConnectionId,
+      metadata: {
+        brokerConnectionId,
+        logicalAccountKey: allocation.logicalAccountKey,
+        accountCurrency: allocation.accountCurrency,
+        violationEvaluatedAt: evaluatedAt.toISOString(),
+        resetAt: reset.resetAt.toISOString(),
+        resetCount: reset.resetCount,
+        historicalPnlPreserved: true,
+        sessionResumed: false,
+      },
+    });
+
+    return {
+      resetAt: reset.resetAt.toISOString(),
+      resetCount: reset.resetCount,
+      message:
+        'Daily-loss protection was reset from this moment. Historical P&L was not changed. AI Trading remains stopped until a new session starts.',
+    };
+  }
+
   /**
    * Stop the user's active AI trading session AND flatten AI-opened positions.
    *

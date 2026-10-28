@@ -1156,6 +1156,80 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
     });
   });
 
+  describe('resetDailyLossProtectionForBroker()', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('records a durable current-day DAILY-loss reset when the old suspended session is already gone', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T16:30:00.000Z'));
+      executionService.getActiveSessionForClient.mockResolvedValue(null);
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          rejectionReason: 'Daily loss limit reached',
+          evaluatedAt: new Date('2026-10-28T13:43:13.000Z'),
+          riskContext: { brokerConnectionId: 'conn-1' },
+        },
+      ]);
+
+      const result = await (
+        service as unknown as {
+          resetDailyLossProtectionForBroker: (
+            userId: string,
+            brokerConnectionId: string,
+          ) => Promise<{ resetAt: string; resetCount: number; message: string }>;
+        }
+      ).resetDailyLossProtectionForBroker('user-1', 'conn-1');
+
+      expect(dailyRiskPeriodService.recordDailyLossReset).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          brokerConnectionId: 'conn-1',
+          logicalAccountKey: 'paper-broker|demo|account-1',
+          accountCurrency: 'USD',
+          sessionId: null,
+          now: new Date('2026-10-28T16:30:00.000Z'),
+        }),
+      );
+      expect(executionService.resumeRiskSuspendedSession).not.toHaveBeenCalled();
+      expect(result.resetCount).toBe(1);
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'RISK_DAILY_LOSS_RESET_CONFIRMED',
+          resourceType: 'BrokerConnection',
+          resourceId: 'conn-1',
+        }),
+      );
+    });
+
+    it('refuses broker-level reset when the latest relevant suspension is drawdown', async () => {
+      executionService.getActiveSessionForClient.mockResolvedValue(null);
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.MAX_DRAWDOWN_REACHED,
+          rejectionReason: 'Maximum drawdown reached',
+          evaluatedAt: new Date(),
+          riskContext: { brokerConnectionId: 'conn-1' },
+        },
+        {
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          rejectionReason: 'Earlier daily loss limit reached',
+          evaluatedAt: new Date(Date.now() - 60_000),
+          riskContext: { brokerConnectionId: 'conn-1' },
+        },
+      ]);
+
+      await expect(service.resetDailyLossProtectionForBroker('user-1', 'conn-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(dailyRiskPeriodService.recordDailyLossReset).not.toHaveBeenCalled();
+      expect(auditService.log).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'RISK_DAILY_LOSS_RESET_CONFIRMED' }),
+      );
+    });
+  });
+
   describe('stopTradingSession()', () => {
     it('ends execution authority BEFORE requesting AI-position closure', async () => {
       await service.stopTradingSession('user-1', 'session-1');

@@ -200,6 +200,26 @@ export class TradingController {
   }
 
   /**
+   * Explicit DAILY-loss reset for an account whose previous suspended session
+   * has already ended. This records only the durable loss-window cutoff; the
+   * caller must still pass the normal session-start gates afterward.
+   */
+  @Post('daily-loss/reset')
+  @ApiOperation({
+    summary: 'Reset today’s daily-loss protection for a broker account',
+    description:
+      'Used when no current AI session survives but a same-day DAILY_LOSS_LIMIT_REACHED ' +
+      'violation still blocks a fresh session. Historical P&L is preserved. Drawdown and ' +
+      'other risk suspensions cannot be reset from this control.',
+  })
+  async resetDailyLossForBroker(
+    @CurrentUserId() userId: string,
+    @Body('brokerConnectionId', ParseUUIDPipe) brokerConnectionId: string,
+  ): Promise<{ resetAt: string; resetCount: number; message: string }> {
+    return this.tradingService.resetDailyLossProtectionForBroker(userId, brokerConnectionId);
+  }
+
+  /**
    * Explicit user override for a DAILY-loss suspension only.
    * Historical trade P&L remains unchanged; the server records a new durable
    * account/day loss-window cutoff before reactivating session authority.

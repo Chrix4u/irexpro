@@ -506,7 +506,7 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
         brokerConnectionId: CONN,
         logicalAccountKey: KEY,
         accountCurrency: 'USD',
-        sessionId: 'session-1',
+        sessionId: null,
         now: new Date('2026-09-14T11:00:00.000Z'),
       });
 

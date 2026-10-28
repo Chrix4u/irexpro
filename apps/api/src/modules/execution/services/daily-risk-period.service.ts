@@ -269,19 +269,12 @@ export class DailyRiskPeriodService {
     brokerConnectionId: string;
     logicalAccountKey: string;
     accountCurrency: string;
-    sessionId: string;
+    sessionId: string | null;
     now?: Date;
   }): Promise<{ resetAt: Date; resetCount: number }> {
     const now = input.now ?? new Date();
-    if (
-      !input.userId ||
-      !input.brokerConnectionId ||
-      !input.logicalAccountKey ||
-      !input.sessionId
-    ) {
-      throw new Error(
-        'Daily-loss reset requires user, broker connection, logical account and session',
-      );
+    if (!input.userId || !input.brokerConnectionId || !input.logicalAccountKey) {
+      throw new Error('Daily-loss reset requires user, broker connection and logical account');
     }
     if (!/^[A-Z]{3}$/.test(input.accountCurrency)) {
       throw new Error('Daily-loss reset requires a 3-letter uppercase account currency');

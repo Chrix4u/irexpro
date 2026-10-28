@@ -9,6 +9,7 @@ import {
   loadPendingExecutionConfirmations,
   prepareBrokerForAutomationStart,
   resetDailyLossProtection,
+  resetDailyLossProtectionForBroker,
 } from './trader-session';
 
 /**
@@ -222,6 +223,29 @@ describe('resetDailyLossProtection', () => {
     await expect(resetDailyLossProtection(SESSION.id)).rejects.toThrow(
       'Daily-loss reset response contract mismatch',
     );
+  });
+});
+
+describe('resetDailyLossProtectionForBroker', () => {
+  beforeEach(() => {
+    requestMock.mockReset();
+  });
+
+  it('posts an explicit broker-level daily-loss reset when no suspended session survives', async () => {
+    requestMock.mockResolvedValue({
+      resetAt: '2026-10-28T16:30:00.000Z',
+      resetCount: 1,
+      message:
+        'Daily-loss protection was reset from this moment. Historical P&L was not changed. AI Trading remains stopped until a new session starts.',
+    });
+
+    const result = await resetDailyLossProtectionForBroker('bconn-demo-1');
+
+    expect(requestMock).toHaveBeenCalledWith('/trading/sessions/daily-loss/reset', {
+      method: 'POST',
+      body: JSON.stringify({ brokerConnectionId: 'bconn-demo-1' }),
+    });
+    expect(result.resetCount).toBe(1);
   });
 });
 

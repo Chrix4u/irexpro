@@ -259,6 +259,42 @@ export async function resetDailyLossProtection(
   };
 }
 
+export interface BrokerDailyLossResetResult {
+  resetAt: string;
+  resetCount: number;
+  message: string;
+}
+
+/**
+ * Explicit daily-loss reset for the case where the prior suspended session has
+ * already ended. This changes only the durable account/day loss-window cutoff;
+ * starting a new session remains a separate, server-validated action.
+ */
+export async function resetDailyLossProtectionForBroker(
+  brokerConnectionId: string,
+): Promise<BrokerDailyLossResetResult> {
+  const payload = await api.request<unknown>('/trading/sessions/daily-loss/reset', {
+    method: 'POST',
+    body: JSON.stringify({ brokerConnectionId }),
+  });
+  if (
+    !isRecord(payload) ||
+    typeof payload.resetAt !== 'string' ||
+    Number.isNaN(new Date(payload.resetAt).getTime()) ||
+    typeof payload.resetCount !== 'number' ||
+    !Number.isInteger(payload.resetCount) ||
+    payload.resetCount < 1 ||
+    typeof payload.message !== 'string'
+  ) {
+    throw new Error('Broker daily-loss reset response contract mismatch');
+  }
+  return {
+    resetAt: payload.resetAt,
+    resetCount: payload.resetCount,
+    message: payload.message,
+  };
+}
+
 // ── SEMI_AUTO confirmation inbox ────────────────────────────────────────────
 
 function isDirection(value: unknown): value is ExecutionConfirmationView['direction'] {
