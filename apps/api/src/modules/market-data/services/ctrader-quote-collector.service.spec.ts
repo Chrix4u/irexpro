@@ -100,6 +100,17 @@ describe('CTraderQuoteCollectorService', () => {
     }
   });
 
+  it('samples live spreads before historical refresh so a hung history request cannot starve quote freshness', async () => {
+    const h = harness();
+    h.getOhlcvForConnection.mockImplementation(() => new Promise(() => undefined));
+
+    void h.service.collectOnce(OPEN_NOW);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(6);
+    expect(h.upsertM1Sample).toHaveBeenCalledTimes(6);
+  });
+
   it('fails closed when the configured source is not a cTrader-family connection', async () => {
     const h = harness({ brokerId: 'metatrader5' });
 

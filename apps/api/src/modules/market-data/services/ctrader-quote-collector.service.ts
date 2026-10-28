@@ -87,8 +87,11 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
         return;
       }
 
-      await this.refreshHistoricalSlice(userId, connectionId, now);
+      // Execution-grade bid/ask evidence has priority over historical backfill.
+      // A slow/rate-limited OHLCV request must never starve fresh quote samples
+      // used by M1 readiness, cross-currency sizing and final risk validation.
       await this.sampleLiveSpreads(userId, connectionId);
+      await this.refreshHistoricalSlice(userId, connectionId, now);
     } catch (error) {
       this.warnThrottled(
         `${connectionId}:binding`,
