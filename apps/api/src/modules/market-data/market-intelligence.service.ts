@@ -14,6 +14,7 @@ import {
   MarketIntelligenceResponseDto,
 } from './dto/market-intelligence-response.dto';
 import { MetaTraderMarketDataReaderService } from './meta-trader-market-data-reader.service';
+import { ProviderQuoteCandleStoreService } from './services/provider-quote-candle-store.service';
 
 const QUOTE_FRESHNESS_MS = 60_000;
 const PROVIDER_BACKED_MARKET_BROKER_ID = 'metatrader5';
@@ -44,16 +45,16 @@ function freshness(timestamp: Date, thresholdMs: number, nowMs: number): MarketD
 /**
  * Authenticated, read-only market projection for trader-facing clients.
  *
- * Real-broker market intelligence remains deliberately provider-backed and is
- * currently restricted to MetaTrader. The built-in DEMO-only paper broker is
- * the single exception: it may expose its own authoritative deterministic
- * simulator quote/OHLCV through the same server-side broker-adapter seams used
- * by the paper execution engine. No browser market values are synthesized and
- * no real/live broker eligibility is widened. Scanner-owned PAPER charts use
- * the read-only live market cache; execution quotes remain on the stricter seam.
+ * Real-broker market intelligence is read-only and connection-scoped. MetaTrader
+ * reads remain provider-backed via the decrypted MetaAPI account reference.
+ * cTrader DEMO reads consume the persisted broker-native quote/candle store that
+ * the background collector already maintains, so browser polling never competes
+ * with execution infrastructure for provider quota. The built-in DEMO-only paper
+ * broker exposes either its deterministic simulator or scanner-owned read-only
+ * live cache. No browser market values are synthesized and no real/live broker
+ * eligibility is widened.
  *
- * MetaTrader reads are account-scoped by the decrypted MetaAPI account
- * reference. Credentials remain in memory only and are cleared in a finally
+ * MetaTrader credentials remain in memory only and are cleared in a finally
  * block. Paper reads delegate to BrokerService, which enforces tenant,
  * CONNECTED, credential-lifecycle, and adapter boundaries.
  */
@@ -67,6 +68,7 @@ export class MarketIntelligenceService {
     private readonly encryptionService: CredentialEncryptionService,
     private readonly auditService: AuditService,
     private readonly livePaperMarket: LivePaperMarketDataService,
+    private readonly providerQuoteStore: ProviderQuoteCandleStoreService,
   ) {}
 
   async getSnapshot(
@@ -197,23 +199,17 @@ export class MarketIntelligenceService {
       connection.accountType === 'DEMO'
     ) {
       try {
+        // cTrader is already sampled continuously by CTraderQuoteCollectorService.
+        // Trader-facing refreshes must consume that exact connection-scoped,
+        // broker-native store rather than issuing another quote + OHLCV request
+        // on every browser poll. The direct path caused UI reads to compete with
+        // the collector for provider quota and intermittently return 503s.
         const [quote, rawCandles] = await Promise.all([
-          this.brokerService.getCurrentPriceForConnection(
-            userId,
-            connection.id,
-            instrument,
-            { propagateProviderError: true },
-          ),
-          this.brokerService.getOhlcvForConnection(
-            userId,
-            connection.id,
-            instrument,
-            timeframe,
-            query.limit,
-          ),
+          this.providerQuoteStore.getLatestQuote(connection.id, instrument),
+          this.providerQuoteStore.getCandles(connection.id, instrument, timeframe, query.limit),
         ]);
         if (!quote) {
-          throw new Error('cTrader broker returned no verifiable quote');
+          throw new Error('Persisted cTrader broker quote is unavailable');
         }
         return await this.buildSnapshot(
           userId,
@@ -225,9 +221,15 @@ export class MarketIntelligenceService {
           rawCandles,
         );
       } catch {
-        await this.auditFailure(userId, connection.id, instrument, timeframe, 'provider-unavailable');
+        await this.auditFailure(
+          userId,
+          connection.id,
+          instrument,
+          timeframe,
+          'provider-unavailable',
+        );
         this.logger.warn(
-          `cTrader market-data request failed user=${userId} instrument=${instrument} timeframe=${timeframe}`,
+          `cTrader cached market-data request failed user=${userId} instrument=${instrument} timeframe=${timeframe}`,
         );
         throw new ServiceUnavailableException({
           code: 'MARKET_DATA_UNAVAILABLE',

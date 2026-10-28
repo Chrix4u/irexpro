@@ -33,6 +33,10 @@ describe('MarketIntelligenceService', () => {
     getPositionMarkQuote: jest.fn(),
     getReadOnlyOHLCV: jest.fn(),
   };
+  const providerQuoteStore = {
+    getLatestQuote: jest.fn(),
+    getCandles: jest.fn(),
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -52,6 +56,7 @@ describe('MarketIntelligenceService', () => {
       encryptionService as never,
       auditService as never,
       livePaperMarket as never,
+      providerQuoteStore as never,
     );
   }
 
@@ -440,7 +445,7 @@ describe('MarketIntelligenceService', () => {
     expect(encryptionService.decrypt).not.toHaveBeenCalled();
   });
 
-  it('serves cTrader DEMO market intelligence through the exact connection-scoped broker adapter', async () => {
+  it('serves cTrader DEMO market intelligence from the exact persisted broker-native store without bursting provider reads', async () => {
     jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-10-27T20:00:30.000Z').getTime());
     const ctraderConnection = {
       ...connection,
@@ -450,16 +455,16 @@ describe('MarketIntelligenceService', () => {
       status: 'CONNECTED',
     };
     brokerService.findConnectionById.mockResolvedValue(ctraderConnection);
-    brokerService.getCurrentPriceForConnection.mockResolvedValue({
+    providerQuoteStore.getLatestQuote.mockResolvedValue({
       instrument: 'EURUSD',
       bid: '1.11350',
       ask: '1.11353',
       spread: '0.00003',
       timestamp: new Date('2026-10-27T20:00:25.000Z'),
     });
-    brokerService.getOhlcvForConnection.mockResolvedValue([
+    providerQuoteStore.getCandles.mockResolvedValue([
       {
-        timestamp: new Date('2026-10-27T20:00:00.000Z'),
+        timestamp: new Date('2026-10-27T19:59:00.000Z'),
         open: '1.11340',
         high: '1.11360',
         low: '1.11330',
@@ -475,19 +480,15 @@ describe('MarketIntelligenceService', () => {
       brokerConnectionId: ctraderConnection.id,
     });
 
-    expect(brokerService.getCurrentPriceForConnection).toHaveBeenCalledWith(
-      userId,
-      ctraderConnection.id,
-      'EURUSD',
-      { propagateProviderError: true },
-    );
-    expect(brokerService.getOhlcvForConnection).toHaveBeenCalledWith(
-      userId,
+    expect(providerQuoteStore.getLatestQuote).toHaveBeenCalledWith(ctraderConnection.id, 'EURUSD');
+    expect(providerQuoteStore.getCandles).toHaveBeenCalledWith(
       ctraderConnection.id,
       'EURUSD',
       'M1',
       90,
     );
+    expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
+    expect(brokerService.getOhlcvForConnection).not.toHaveBeenCalled();
     expect(encryptionService.decrypt).not.toHaveBeenCalled();
     expect(marketDataReader.getOHLCV).not.toHaveBeenCalled();
     expect(result).toEqual(
@@ -499,6 +500,34 @@ describe('MarketIntelligenceService', () => {
       }),
     );
     expect(result.candles).toHaveLength(1);
+  });
+
+  it('keeps cTrader workspace reads fail-closed when the persisted broker-native store is unavailable instead of bursting the provider', async () => {
+    const ctraderConnection = {
+      ...connection,
+      id: '00000000-0000-0000-0000-000000000077',
+      brokerId: 'ctrader',
+      accountType: 'DEMO',
+      status: 'CONNECTED',
+    };
+    brokerService.findConnectionById.mockResolvedValue(ctraderConnection);
+    providerQuoteStore.getLatestQuote.mockResolvedValue(null);
+    providerQuoteStore.getCandles.mockResolvedValue([]);
+
+    await expect(
+      createService().getSnapshot(userId, {
+        instrument: 'USDJPY',
+        timeframe: 'M1',
+        limit: 90,
+        brokerConnectionId: ctraderConnection.id,
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'MARKET_DATA_UNAVAILABLE' }),
+    });
+
+    expect(providerQuoteStore.getLatestQuote).toHaveBeenCalledWith(ctraderConnection.id, 'USDJPY');
+    expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
+    expect(brokerService.getOhlcvForConnection).not.toHaveBeenCalled();
   });
 
   it('keeps unsupported real brokers fail-closed before decrypting credentials', async () => {
