@@ -66,6 +66,38 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
     });
   });
 
+
+  it('uses directly stored broker-native M5/M15 context instead of rebuilding sparse cTrader M1', async () => {
+    const service = new ProviderQuoteCandleStoreService({
+      query: jest.fn(),
+    } as unknown as DataSource);
+    const m15 = [
+      {
+        timestamp: new Date('2026-10-18T21:00:00.000Z'),
+        open: '1.1000',
+        high: '1.1050',
+        low: '1.0950',
+        close: '1.1020',
+        volume: '50',
+        tickVolume: '50',
+        source: 'ctrader-broker-native',
+        sampleCount: 50,
+        spreadClose: null,
+        firstSampleAt: new Date('2026-10-18T21:00:00.000Z'),
+        lastSampleAt: new Date('2026-10-18T21:14:59.000Z'),
+      },
+    ];
+    const direct = jest.spyOn(service, 'getStoredCandles').mockResolvedValue(m15);
+    const m1 = jest.spyOn(service, 'getM1Candles').mockResolvedValue([]);
+
+    await expect(
+      service.getCandles('ctrader-1', 'EURUSD', 'M15', 30, EVALUATED_AT),
+    ).resolves.toEqual(m15);
+
+    expect(direct).toHaveBeenCalledWith('ctrader-1', 'EURUSD', 'M15', 30, EVALUATED_AT);
+    expect(m1).not.toHaveBeenCalled();
+  });
+
   it('uses directly stored broker-native H1/H4 context when available', async () => {
     const service = new ProviderQuoteCandleStoreService({
       query: jest.fn(),

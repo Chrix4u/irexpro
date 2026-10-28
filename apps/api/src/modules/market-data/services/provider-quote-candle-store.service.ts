@@ -378,9 +378,10 @@ export class ProviderQuoteCandleStoreService {
     const bucketMinutes = TIMEFRAME_MINUTES[normalized];
     if (!bucketMinutes) return [];
 
-    // cTrader warms H1/H4 directly so the tactical model does not need days
-    // of sampled M1 history before higher-timeframe context becomes causal.
-    if (normalized === 'H1' || normalized === 'H4') {
+    // cTrader warms M5/M15/H1/H4 directly. Prefer those provider-native bars
+    // when present so legitimate no-tick M1 gaps do not make higher-timeframe
+    // feature context stale or force us to fabricate aggregate broker evidence.
+    if (['M5', 'M15', 'H1', 'H4'].includes(normalized)) {
       const direct = await this.getStoredCandles(
         connectionId,
         instrument,

@@ -160,17 +160,24 @@ describe('buildM1TacticalFeatures', () => {
     expect(Number.isFinite(result!.atr14)).toBe(true);
   });
 
-  it('fails closed when a recent cTrader M1 outage exceeds the bounded no-tick gap allowance', () => {
+  it('normalizes a broker-observed nine-minute cTrader no-tick gap without dropping M1 readiness', () => {
     const input = baseInput();
     const m1 = [...input.m1];
-    m1.splice(m1.length - 12, 4);
+    m1.splice(m1.length - 20, 9);
+    expect(buildM1TacticalFeatures({ ...input, m1 })).not.toBeNull();
+  });
+
+  it('fails closed when a recent cTrader M1 outage exceeds the ten-minute no-tick allowance', () => {
+    const input = baseInput();
+    const m1 = [...input.m1];
+    m1.splice(m1.length - 20, 11);
     expect(buildM1TacticalFeatures({ ...input, m1 })).toBeNull();
   });
 
   it('discards an old large M1 outage once at least 30 recent normalized bars exist after it', () => {
     const input = baseInput();
     const m1 = [...input.m1];
-    m1.splice(10, 4);
+    m1.splice(8, 11);
     expect(buildM1TacticalFeatures({ ...input, m1 })).not.toBeNull();
   });
 

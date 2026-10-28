@@ -12,19 +12,19 @@ const MIN_INTERVAL_MS = 10_000;
 const MAX_INTERVAL_MS = 300_000;
 const DEFAULT_INSTRUMENTS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'];
 const M1_WARM_TARGET = 600;
-const M1_REFRESH_COUNT = 5;
+const M1_REFRESH_COUNT = 60;
 const CONTEXT_REFRESH_COUNT = 40;
 const M1_REQUESTS_PER_CYCLE = 3;
-const CONTEXT_TIMEFRAMES = ['H1', 'H4'] as const;
+const CONTEXT_TIMEFRAMES = ['M5', 'M15', 'H1', 'H4'] as const;
 
 /**
  * Exact-binding cTrader market-data collector for the M1 tactical PAPER sleeve.
  *
  * Execution remains bound to the configured PAPER connection. This service is
  * read-only against the separately configured cTrader connection and writes
- * broker-native evidence under that source connection id. M1/M5/M15 are built
- * causally from cTrader M1 history; H1/H4 are warmed directly so the model does
- * not need days of sampled data before higher-timeframe context is available.
+ * broker-native evidence under that source connection id. M1 is retained at
+ * broker-native minute granularity while M5/M15/H1/H4 are also warmed directly;
+ * this preserves cTrader no-tick semantics without fabricating aggregate bars.
  *
  * Historical trendbars intentionally contain NO invented bid/ask spread. Live
  * cTrader quotes must independently build the positive-spread evidence required
@@ -124,8 +124,11 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       await this.refreshM1(userId, connectionId, instrument, now);
     }
 
-    const contextTasks = instruments.flatMap((instrument) =>
-      CONTEXT_TIMEFRAMES.map((timeframe) => ({ instrument, timeframe })),
+    // Warm the faster context across every pair before rotating into H1/H4.
+    // Native cTrader M5/M15 is authoritative for no-tick intervals and avoids
+    // rebuilding those timeframes from a sparse one-minute trendbar grid.
+    const contextTasks = CONTEXT_TIMEFRAMES.flatMap((timeframe) =>
+      instruments.map((instrument) => ({ instrument, timeframe })),
     );
     if (contextTasks.length === 0) return;
     const context = contextTasks[this.contextRotationOffset % contextTasks.length]!;
@@ -174,7 +177,8 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     timeframe: (typeof CONTEXT_TIMEFRAMES)[number],
     now: Date,
   ): Promise<void> {
-    const minutes = timeframe === 'H1' ? 60 : 240;
+    const minutes =
+      timeframe === 'M5' ? 5 : timeframe === 'M15' ? 15 : timeframe === 'H1' ? 60 : 240;
     try {
       const rows = await this.brokerService.getOhlcvForConnection(
         userId,

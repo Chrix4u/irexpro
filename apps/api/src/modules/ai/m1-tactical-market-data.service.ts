@@ -25,6 +25,8 @@ import {
 const M1_HISTORY_COUNT = 60;
 const CONTEXT_HISTORY_COUNT = 30;
 const M1_CLOSE_MAX_AGE_MS = 90_000;
+const M5_CONTEXT_MAX_AGE_MS = 10 * 60_000;
+const M15_CONTEXT_MAX_AGE_MS = 20 * 60_000;
 
 export type M1TacticalMarketDataAuthority = 'BROKER_NATIVE' | 'PAPER_PROVIDER_SIMULATION';
 
@@ -174,6 +176,25 @@ export class M1TacticalMarketDataService {
     const m1CloseAgeMs = latestCloseAgeMs(m1, 1, decisionTime);
     if (m1CloseAgeMs === null || m1CloseAgeMs < 0 || m1CloseAgeMs > M1_CLOSE_MAX_AGE_MS) {
       this.setReadiness(connectionId, instrument, 'BROKER_M1_STALE', null, decisionTime);
+      return null;
+    }
+    const m5CloseAgeMs = latestCloseAgeMs(m5, 5, decisionTime);
+    const m15CloseAgeMs = latestCloseAgeMs(m15, 15, decisionTime);
+    if (
+      m5CloseAgeMs === null ||
+      m5CloseAgeMs < 0 ||
+      m5CloseAgeMs > M5_CONTEXT_MAX_AGE_MS ||
+      m15CloseAgeMs === null ||
+      m15CloseAgeMs < 0 ||
+      m15CloseAgeMs > M15_CONTEXT_MAX_AGE_MS
+    ) {
+      this.setReadiness(
+        connectionId,
+        instrument,
+        'BROKER_FEATURE_CONTEXT_UNAVAILABLE',
+        null,
+        decisionTime,
+      );
       return null;
     }
     if (!spreadQuote) {

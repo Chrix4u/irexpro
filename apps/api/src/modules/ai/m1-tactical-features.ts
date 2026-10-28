@@ -54,7 +54,7 @@ const MIN_M1_BARS = 30;
 const MIN_CONTEXT_BARS = 22;
 const BREAKOUT_LOOKBACK = 20;
 const MINUTE_MS = 60_000;
-const MAX_DERIVED_NO_TICK_MINUTES = 3;
+const MAX_DERIVED_NO_TICK_MINUTES = 10;
 const M1_FEATURE_HISTORY_BARS = 60;
 
 function clamp(value: number, low: number, high: number): number {
@@ -101,7 +101,7 @@ function completed(
  * cTrader only creates a trend bar when at least one tick arrived in that
  * period. Small timestamp gaps are therefore legitimate no-tick intervals,
  * not necessarily missing provider data. For feature calculation only, carry
- * the last observed broker close across at most three missing minutes so the
+ * the last observed broker close across at most ten missing minutes so the
  * one-minute feature grid remains time-consistent. These derived bars are
  * never persisted as broker evidence and never provide spread evidence.
  *

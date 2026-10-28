@@ -80,7 +80,7 @@ describe('CTraderQuoteCollectorService', () => {
     expect(h.findConnectionById).toHaveBeenCalledWith('ctrader-1', 'user-1');
     expect(h.getOhlcvForConnection).toHaveBeenCalledTimes(4);
     expect(h.getOhlcvForConnection.mock.calls.filter((call) => call[3] === 'M1')).toHaveLength(3);
-    expect(h.getOhlcvForConnection.mock.calls[3]![3]).toBe('H1');
+    expect(h.getOhlcvForConnection.mock.calls[3]![3]).toBe('M5');
     for (const call of h.getOhlcvForConnection.mock.calls) {
       expect(call[0]).toBe('user-1');
       expect(call[1]).toBe('ctrader-1');
@@ -98,6 +98,33 @@ describe('CTraderQuoteCollectorService', () => {
       expect(call[0]).toBe('ctrader-1');
       expect(call[3]).toBe('ctrader-broker-native');
     }
+  });
+
+  it('refreshes sixty recent M1 broker bars after the durable store is warm', async () => {
+    const h = harness();
+    h.countM1Candles.mockResolvedValue(1_000);
+
+    await h.service.collectOnce(OPEN_NOW);
+
+    const m1Calls = h.getOhlcvForConnection.mock.calls.filter((call) => call[3] === 'M1');
+    expect(m1Calls).toHaveLength(3);
+    expect(m1Calls.every((call) => call[4] === 60)).toBe(true);
+  });
+
+  it('warms native M5 then M15 context across all six pairs before slower H1/H4 rotation', async () => {
+    const h = harness();
+
+    for (let index = 0; index < 12; index += 1) {
+      await h.service.collectOnce(new Date(OPEN_NOW.getTime() + index * 15_000));
+    }
+
+    const contextCalls = h.getOhlcvForConnection.mock.calls.filter((call) => call[3] !== 'M1');
+    expect(contextCalls).toHaveLength(12);
+    expect(contextCalls.slice(0, 6).every((call) => call[3] === 'M5')).toBe(true);
+    expect(contextCalls.slice(6, 12).every((call) => call[3] === 'M15')).toBe(true);
+    expect(new Set(contextCalls.slice(0, 6).map((call) => call[2]))).toEqual(
+      new Set(['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF']),
+    );
   });
 
   it('samples live spreads before historical refresh so a hung history request cannot starve quote freshness', async () => {
