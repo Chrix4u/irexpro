@@ -6990,7 +6990,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       for (let offset = 0; offset < SYMBOLS.length; offset += historyConcurrency) {
         const batch = await Promise.all(
           SYMBOLS.slice(offset, offset + historyConcurrency).map(async ([instrument]) => {
-            const raw = await this.brokerService.getOhlcvForConnection(
+            const raw = await this.readBrokerHistoryWithRateLimitRetry(
               userId,
               sourceConnectionId,
               instrument,
@@ -7044,6 +7044,43 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       this.lastMarketDataAuthority = 'NONE';
       throw new Error(
         `Twelve Data unavailable (${reason}) and broker-native fallback failed: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private async readBrokerHistoryWithRateLimitRetry(
+    userId: string,
+    connectionId: string,
+    instrument: string,
+    timeframe: string,
+    count: number,
+  ): Promise<Awaited<ReturnType<BrokerService['getOhlcvForConnection']>>> {
+    try {
+      return await this.brokerService.getOhlcvForConnection(
+        userId,
+        connectionId,
+        instrument,
+        timeframe,
+        count,
+      );
+    } catch (error) {
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: unknown }).code ?? '')
+          : '';
+      if (code !== 'RATE_LIMITED') throw error;
+
+      // The shared cTrader client deliberately fails fast at its historical
+      // 5 req/s boundary. This scanner is low-priority background work, so it
+      // may yield for one refill interval and retry once instead of competing
+      // with M1/history readers. The shared limiter itself remains unchanged.
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+      return this.brokerService.getOhlcvForConnection(
+        userId,
+        connectionId,
+        instrument,
+        timeframe,
+        count,
       );
     }
   }

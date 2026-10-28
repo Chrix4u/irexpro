@@ -4654,6 +4654,56 @@ describe('VpsForexSignalCollectorService', () => {
     expect(peak).toBeLessThanOrEqual(3);
   });
 
+  it('retries a background broker-history read after a bounded RATE_LIMITED refill delay', async () => {
+    jest.useFakeTimers();
+    try {
+      const rows = trendCandles(1.1, 5).map((row) => ({ ...row, volume: '0' }));
+      const getOhlcvForConnection = jest
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error('local history budget exhausted'), { code: 'RATE_LIMITED' }))
+        .mockResolvedValue(rows);
+      const collector = createCollector(
+        config({}),
+        { receiveSignal: jest.fn() } as unknown as AiSignalService,
+        { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+        { getOhlcvForConnection } as unknown as BrokerService,
+        new LivePaperMarketDataService(),
+        aiEngineClientMock(),
+      );
+
+      const pending = (collector as any).readBrokerHistoryWithRateLimitRetry(
+        'user-1', 'ctrader-1', 'EURUSD', 'M5', 500,
+      );
+      await Promise.resolve();
+      expect(getOhlcvForConnection).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(1_000);
+      await expect(pending).resolves.toEqual(rows);
+      expect(getOhlcvForConnection).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not retry a background broker-history read for non-rate-limit failures', async () => {
+    const getOhlcvForConnection = jest.fn().mockRejectedValue(new Error('provider candles unavailable'));
+    const collector = createCollector(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      { getOhlcvForConnection } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+
+    await expect(
+      (collector as any).readBrokerHistoryWithRateLimitRetry(
+        'user-1', 'ctrader-1', 'EURUSD', 'M5', 500,
+      ),
+    ).rejects.toThrow('provider candles unavailable');
+    expect(getOhlcvForConnection).toHaveBeenCalledTimes(1);
+  });
+
   it('fails over to broker-native MetaTrader candles after Twelve Data exhausts the daily quota', async () => {
     const live = new LivePaperMarketDataService();
     const broker = {
