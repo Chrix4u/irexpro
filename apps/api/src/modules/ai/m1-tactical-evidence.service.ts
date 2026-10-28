@@ -40,6 +40,8 @@ export interface M1TacticalLatestDecisionState {
   planBRoute: string | null;
   planBPaperAdmitted: boolean | null;
   multimodelExecutable: boolean | null;
+  multimodelAuthorityPath: string | null;
+  multimodelRescueVolumeCap: number | null;
   trainedExpertState: string | null;
   trainedExpertDirection: 'BUY' | 'SELL' | null;
   trainedExpertConfidence: number | null;
@@ -422,6 +424,8 @@ export class M1TacticalEvidenceService {
           : null,
       multimodelExecutable:
         typeof multimodelAuthority.executable === 'boolean' ? multimodelAuthority.executable : null,
+      multimodelAuthorityPath: nullableString(multimodelAuthority.authorityPath),
+      multimodelRescueVolumeCap: nullableNumber(multimodelAuthority.rescueVolumeCap),
       trainedExpertState: nullableString(trainedExpert.state),
       trainedExpertDirection:
         trainedDirection === 'BUY' || trainedDirection === 'SELL' ? trainedDirection : null,

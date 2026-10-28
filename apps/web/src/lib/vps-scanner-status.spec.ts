@@ -637,6 +637,31 @@ describe("active multi-model execution presentation", () => {
     expect(result.detail).toMatch(/shadow/i);
   });
 
+  it("explains when DEMO readiness comes from the high-conviction rescue path", () => {
+    const rescued = JSON.parse(JSON.stringify(status));
+    rescued.latestDecision.executionAuthority = "BROKER_NATIVE";
+    rescued.latestDecision.primaryConfidence = 0.714;
+    rescued.latestDecision.planBPaperAdmitted = false;
+    rescued.latestDecision.multimodelAuthorityPath = "HIGH_CONVICTION_RESCUE";
+    rescued.latestDecision.multimodelRescueVolumeCap = 0.2;
+
+    const result = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: rescued,
+      fastMarkState: "LIVE",
+    });
+
+    expect(result.band).toBe("READY");
+    expect(result.tradeExpected).toBe(true);
+    expect(result.score).toBe(71);
+    expect(result.detail).toMatch(/high-conviction/i);
+    expect(result.detail).toMatch(/0\.20 lot/i);
+    expect(deriveActiveModelUiState(rescued).trainedExpertLabel).toMatch(
+      /High-conviction authority · 3\/3 SELL votes · 81%/i,
+    );
+  });
+
   it("keeps drift-blocked multi-model readiness moving instead of pinning every setup at 49", () => {
     const weaker = JSON.parse(JSON.stringify(status));
     weaker.latestDecision.primaryConfidence = 0.55;

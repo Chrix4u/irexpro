@@ -12,23 +12,73 @@ export interface MultimodelDemoAuthorityInput {
   ensemble: Pick<PlanBEnsembleScore, 'paperAdmitted' | 'ensembleScore' | 'strategyRoute'>;
   governance: Pick<
     EnsembleGovernanceDecision,
-    'paperExecutionEligible' | 'paperExecutionBlockers' | 'netExpectedR'
+    | 'paperExecutionEligible'
+    | 'paperExecutionBlockers'
+    | 'netExpectedR'
+    | 'paperNetExpectedRPassed'
+    | 'paperExecutionCostUsable'
+    | 'eventRisk'
+    | 'sleeveState'
+    | 'driftState'
   >;
   trainedExpert: HighConvictionOverlay;
   candidateDirection: 'BUY' | 'SELL';
   m1TimingRoute: M1TacticalRoute;
 }
 
+export type MultimodelDemoAuthorityPath =
+  | 'PRIMARY_PLAN_B'
+  | 'HIGH_CONVICTION_RESCUE'
+  | 'BLOCKED';
+
 export interface MultimodelDemoAuthorityDecision {
   executable: boolean;
+  authorityPath: MultimodelDemoAuthorityPath;
+  rescueVolumeCap: number | null;
   primaryEngineCode: typeof MULTIMODEL_DEMO_ENGINE_CODE;
   trainedExpertConfirmed: boolean;
   m1TimingRoute: M1TacticalRoute;
   blockers: string[];
 }
 
+const HIGH_CONVICTION_RESCUE_CONFIDENCE_FLOOR = 0.7;
+const HIGH_CONVICTION_RESCUE_NET_EXPECTED_R_FLOOR = 0.2;
+const HIGH_CONVICTION_RESCUE_ALLOWED_BLOCKERS = new Set([
+  'ENSEMBLE_NOT_PAPER_ADMITTED',
+  'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+  'DRIFT_STRESSED',
+  'DRIFT_OUT_OF_DISTRIBUTION',
+]);
+
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function highConvictionRescueEligible(input: MultimodelDemoAuthorityInput): boolean {
+  const longVotes = input.trainedExpert.longVotes ?? 0;
+  const shortVotes = input.trainedExpert.shortVotes ?? 0;
+  const totalVotes = longVotes + shortVotes;
+  const directionalVotes = input.candidateDirection === 'BUY' ? longVotes : shortVotes;
+  const confidence = input.trainedExpert.ensembleConfidence ?? 0;
+  const onlyRelaxableBlockers = input.governance.paperExecutionBlockers.every((blocker) =>
+    HIGH_CONVICTION_RESCUE_ALLOWED_BLOCKERS.has(blocker),
+  );
+
+  return (
+    input.m1TimingRoute !== 'ABSTAIN' &&
+    input.trainedExpert.allBrokerNative === true &&
+    input.trainedExpert.direction === input.candidateDirection &&
+    totalVotes >= 3 &&
+    directionalVotes === totalVotes &&
+    confidence >= HIGH_CONVICTION_RESCUE_CONFIDENCE_FLOOR &&
+    Number.isFinite(input.governance.netExpectedR) &&
+    input.governance.netExpectedR >= HIGH_CONVICTION_RESCUE_NET_EXPECTED_R_FLOOR &&
+    input.governance.paperNetExpectedRPassed === true &&
+    input.governance.paperExecutionCostUsable === true &&
+    input.governance.eventRisk === 'CLEAR' &&
+    input.governance.sleeveState !== 'BLOCKED' &&
+    onlyRelaxableBlockers
+  );
 }
 
 export function evaluateMultimodelDemoAuthority(
@@ -44,15 +94,34 @@ export function evaluateMultimodelDemoAuthority(
   }
 
   const finalBlockers = unique(blockers);
+  const primaryPlanBExecutable = finalBlockers.length === 0;
+  const rescueExecutable = !primaryPlanBExecutable && highConvictionRescueEligible(input);
+  const executable = primaryPlanBExecutable || rescueExecutable;
+
   return {
-    executable: finalBlockers.length === 0,
+    executable,
+    authorityPath: primaryPlanBExecutable
+      ? 'PRIMARY_PLAN_B'
+      : rescueExecutable
+        ? 'HIGH_CONVICTION_RESCUE'
+        : 'BLOCKED',
+    rescueVolumeCap: rescueExecutable ? 0.2 : null,
     primaryEngineCode: MULTIMODEL_DEMO_ENGINE_CODE,
     trainedExpertConfirmed:
       input.trainedExpert.state === 'CONFIRM' &&
       input.trainedExpert.direction === input.candidateDirection,
     m1TimingRoute: input.m1TimingRoute,
-    blockers: finalBlockers,
+    blockers: executable ? [] : finalBlockers,
   };
+}
+
+export function multimodelDemoExecutionVolumeCap(
+  rolloutVolumeCap: number,
+  authority: MultimodelDemoAuthorityDecision,
+): number {
+  return authority.rescueVolumeCap == null
+    ? rolloutVolumeCap
+    : Math.min(rolloutVolumeCap, authority.rescueVolumeCap);
 }
 
 function clamp01(value: number): number {

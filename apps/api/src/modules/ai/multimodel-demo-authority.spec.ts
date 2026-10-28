@@ -1,5 +1,6 @@
 import {
   evaluateMultimodelDemoAuthority,
+  multimodelDemoExecutionVolumeCap,
   m1CandidateToPlanBInput,
 } from './multimodel-demo-authority';
 import type { M1TacticalCandidate } from './m1-tactical-candidate';
@@ -11,10 +12,19 @@ const ensemble = (paperAdmitted = true) => ({
   strategyRoute: 'TREND_CONTINUATION' as const,
 });
 
-const governance = (paperExecutionEligible = true) => ({
+const governance = (
+  paperExecutionEligible = true,
+  overrides: Record<string, unknown> = {},
+) => ({
   paperExecutionEligible,
   paperExecutionBlockers: paperExecutionEligible ? [] : ['DRIFT_OUT_OF_DISTRIBUTION'],
   netExpectedR: paperExecutionEligible ? 0.22 : -0.1,
+  paperNetExpectedRPassed: paperExecutionEligible,
+  paperExecutionCostUsable: true,
+  eventRisk: 'CLEAR' as const,
+  sleeveState: 'COLLECTING' as const,
+  driftState: paperExecutionEligible ? ('NORMAL' as const) : ('OUT_OF_DISTRIBUTION' as const),
+  ...overrides,
 });
 
 const overlay = (
@@ -76,16 +86,17 @@ describe('evaluateMultimodelDemoAuthority', () => {
     },
   );
 
-  it('blocks when Plan-B does not admit the candidate', () => {
+  it('blocks when Plan-B does not admit the candidate and high-conviction rescue is unavailable', () => {
     const result = evaluateMultimodelDemoAuthority({
       ensemble: ensemble(false),
       governance: governance(true),
-      trainedExpert: overlay('CONFIRM'),
+      trainedExpert: { ...overlay('CONFIRM'), longVotes: 2, shortVotes: 1 },
       candidateDirection: 'BUY',
       m1TimingRoute: 'M1_TREND_CONTINUATION',
     });
 
     expect(result.executable).toBe(false);
+    expect(result.authorityPath).toBe('BLOCKED');
     expect(result.blockers).toContain('MULTIMODEL_PLAN_B_NOT_ADMITTED');
   });
 
@@ -116,6 +127,169 @@ describe('evaluateMultimodelDemoAuthority', () => {
     expect(result.executable).toBe(true);
     expect(result.trainedExpertConfirmed).toBe(false);
     expect(result.blockers).toEqual([]);
+  });
+
+  it('rescues a DEMO setup when three trained experts unanimously match direction and only admission/drift block it', () => {
+    const result = evaluateMultimodelDemoAuthority({
+      ensemble: ensemble(false),
+      governance: governance(false, {
+        paperExecutionBlockers: [
+          'ENSEMBLE_NOT_PAPER_ADMITTED',
+          'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+          'DRIFT_OUT_OF_DISTRIBUTION',
+        ],
+        netExpectedR: 0.52,
+        paperNetExpectedRPassed: true,
+        driftState: 'OUT_OF_DISTRIBUTION',
+      }),
+      trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.714 },
+      candidateDirection: 'BUY',
+      m1TimingRoute: 'M1_TREND_CONTINUATION',
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        executable: true,
+        authorityPath: 'HIGH_CONVICTION_RESCUE',
+        rescueVolumeCap: 0.2,
+        blockers: [],
+      }),
+    );
+  });
+
+  it('does not rescue when the M1 timing specialist abstains', () => {
+    const result = evaluateMultimodelDemoAuthority({
+      ensemble: ensemble(false),
+      governance: governance(false, {
+        paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'DRIFT_OUT_OF_DISTRIBUTION'],
+        netExpectedR: 0.52,
+        paperNetExpectedRPassed: true,
+      }),
+      trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.78 },
+      candidateDirection: 'BUY',
+      m1TimingRoute: 'ABSTAIN',
+    });
+
+    expect(result.executable).toBe(false);
+    expect(result.authorityPath).toBe('BLOCKED');
+  });
+
+  it.each([
+    {
+      name: '2/3 votes',
+      trainedExpert: { ...overlay('ABSTAIN'), longVotes: 2, shortVotes: 1, ensembleConfidence: 0.78 },
+      governance: governance(false, {
+        paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'DRIFT_OUT_OF_DISTRIBUTION'],
+        netExpectedR: 0.52,
+        paperNetExpectedRPassed: true,
+      }),
+    },
+    {
+      name: 'opposite unanimous direction',
+      trainedExpert: { ...overlay('ABSTAIN'), direction: 'SELL' as const, longVotes: 0, shortVotes: 3, ensembleConfidence: 0.78 },
+      governance: governance(false, {
+        paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'DRIFT_OUT_OF_DISTRIBUTION'],
+        netExpectedR: 0.52,
+        paperNetExpectedRPassed: true,
+      }),
+    },
+    {
+      name: 'confidence below rescue floor',
+      trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.699 },
+      governance: governance(false, {
+        paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'DRIFT_OUT_OF_DISTRIBUTION'],
+        netExpectedR: 0.52,
+        paperNetExpectedRPassed: true,
+      }),
+    },
+    {
+      name: 'weak expected R',
+      trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.78 },
+      governance: governance(false, {
+        paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'DRIFT_OUT_OF_DISTRIBUTION'],
+        netExpectedR: 0.19,
+        paperNetExpectedRPassed: true,
+      }),
+    },
+    {
+      name: 'high event risk',
+      trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.78 },
+      governance: governance(false, {
+        paperExecutionBlockers: [
+          'ENSEMBLE_NOT_PAPER_ADMITTED',
+          'DRIFT_OUT_OF_DISTRIBUTION',
+          'EVENT_RISK_HIGH_IMPACT_BLOCK',
+        ],
+        netExpectedR: 0.52,
+        paperNetExpectedRPassed: true,
+        eventRisk: 'HIGH_IMPACT_BLOCK',
+      }),
+    },
+    {
+      name: 'unusable execution cost',
+      trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.78 },
+      governance: governance(false, {
+        paperExecutionBlockers: [
+          'ENSEMBLE_NOT_PAPER_ADMITTED',
+          'DRIFT_OUT_OF_DISTRIBUTION',
+          'EXECUTION_SPREAD_UNAVAILABLE',
+        ],
+        netExpectedR: 0.52,
+        paperNetExpectedRPassed: true,
+        paperExecutionCostUsable: false,
+      }),
+    },
+    {
+      name: 'blocked sleeve',
+      trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.78 },
+      governance: governance(false, {
+        paperExecutionBlockers: [
+          'ENSEMBLE_NOT_PAPER_ADMITTED',
+          'DRIFT_OUT_OF_DISTRIBUTION',
+          'SLEEVE_BLOCKED',
+        ],
+        netExpectedR: 0.52,
+        paperNetExpectedRPassed: true,
+        sleeveState: 'BLOCKED',
+      }),
+    },
+  ])('does not rescue $name', ({ trainedExpert, governance: blockedGovernance }) => {
+    const result = evaluateMultimodelDemoAuthority({
+      ensemble: ensemble(false),
+      governance: blockedGovernance,
+      trainedExpert,
+      candidateDirection: 'BUY',
+      m1TimingRoute: 'M1_TREND_CONTINUATION',
+    });
+
+    expect(result.executable).toBe(false);
+    expect(result.authorityPath).toBe('BLOCKED');
+  });
+});
+
+describe('multimodelDemoExecutionVolumeCap', () => {
+  it('caps a high-conviction rescue at 0.20 lot while leaving the primary path at the rollout cap', () => {
+    const rescued = evaluateMultimodelDemoAuthority({
+      ensemble: ensemble(false),
+      governance: governance(false, {
+        paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'DRIFT_OUT_OF_DISTRIBUTION'],
+        netExpectedR: 0.52,
+        paperNetExpectedRPassed: true,
+      }),
+      trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.78 },
+      candidateDirection: 'BUY',
+      m1TimingRoute: 'M1_TREND_CONTINUATION',
+    });
+    const primary = evaluateMultimodelDemoAuthority({
+      ensemble: ensemble(true),
+      governance: governance(true),
+      trainedExpert: overlay('CONFIRM'),
+      candidateDirection: 'BUY',
+      m1TimingRoute: 'M1_TREND_CONTINUATION',
+    });
+
+    expect(multimodelDemoExecutionVolumeCap(4, rescued)).toBe(0.2);
+    expect(multimodelDemoExecutionVolumeCap(4, primary)).toBe(4);
   });
 });
 

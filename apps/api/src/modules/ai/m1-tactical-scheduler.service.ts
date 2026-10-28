@@ -42,6 +42,7 @@ import { HighConvictionBrokerExpertService } from './high-conviction-broker-expe
 import type { HighConvictionOverlay } from './high-conviction-overlay';
 import {
   evaluateMultimodelDemoAuthority,
+  multimodelDemoExecutionVolumeCap,
   m1CandidateToPlanBInput,
   MULTIMODEL_DEMO_ENGINE_CODE,
   type MultimodelDemoAuthorityDecision,
@@ -849,7 +850,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           : 'NONE';
     const executionVolumeCap =
       this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
-        ? this.rolloutPolicy.paperVolumeCap
+        ? multimodelDemo
+          ? multimodelDemoExecutionVolumeCap(this.rolloutPolicy.paperVolumeCap, multimodelDemo.authority)
+          : this.rolloutPolicy.paperVolumeCap
         : provisionalScoutReliability
           ? Math.min(this.rolloutPolicy.paperVolumeCap, provisionalScoutReliability.lotCap)
           : this.rolloutPolicy.paperVolumeCap;
@@ -1209,6 +1212,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           multimodel_execution_authority: professionalDemoPhase
             ? 'DEMO_FULL_AUTO_PROMOTED'
             : null,
+          multimodel_execution_authority_path: multimodelDemo?.authority.authorityPath ?? null,
+          multimodel_rescue_volume_cap: multimodelDemo?.authority.rescueVolumeCap ?? null,
           external_provider_paper_only: true,
           production_eligible: false,
           m1_route_reliability_reason: routeReliability?.reason ?? null,

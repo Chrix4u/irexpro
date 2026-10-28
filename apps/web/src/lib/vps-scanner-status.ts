@@ -142,6 +142,8 @@ export interface M1TacticalStatusView {
     planBRoute?: string | null;
     planBPaperAdmitted?: boolean | null;
     multimodelExecutable?: boolean | null;
+    multimodelAuthorityPath?: string | null;
+    multimodelRescueVolumeCap?: number | null;
     trainedExpertState?: string | null;
     trainedExpertDirection?: "BUY" | "SELL" | null;
     trainedExpertConfidence?: number | null;
@@ -223,12 +225,16 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
   const shortVotes = finite(decision?.trainedExpertShortVotes);
   const totalVotes = (longVotes ?? 0) + (shortVotes ?? 0);
   const directionalVotes = direction === "BUY" ? longVotes : direction === "SELL" ? shortVotes : null;
+  const expertRoleLabel =
+    decision?.multimodelAuthorityPath === "HIGH_CONVICTION_RESCUE"
+      ? "High-conviction authority"
+      : "Shadow challenger";
   const trainedExpertLabel =
     direction && directionalVotes != null && totalVotes > 0
-      ? `Shadow challenger · ${directionalVotes}/${totalVotes} ${direction} votes · ${percentLabel(decision?.trainedExpertConfidence)}`
+      ? `${expertRoleLabel} · ${directionalVotes}/${totalVotes} ${direction} votes · ${percentLabel(decision?.trainedExpertConfidence)}`
       : decision?.trainedExpertState
-        ? `Shadow challenger · ${decision.trainedExpertState.replaceAll("_", " ")}`
-        : "Shadow challenger · awaiting score";
+        ? `${expertRoleLabel} · ${decision.trainedExpertState.replaceAll("_", " ")}`
+        : `${expertRoleLabel} · awaiting score`;
   const m1TimingLabel = `M1 timing · ${routeLabel(decision?.m1TimingRoute ?? decision?.route)}`;
   const executable =
     decision?.multimodelExecutable === true ||
@@ -348,13 +354,17 @@ export function deriveTradeReadinessUiState(
       };
     }
     if (executionEligible) {
+      const highConvictionRescue = m1Decision.multimodelAuthorityPath === "HIGH_CONVICTION_RESCUE";
+      const rescueCap = finite(m1Decision.multimodelRescueVolumeCap);
       return {
         score: rounded,
         band: "READY",
-        headline: "Trade conditions ready",
-        detail: multimodelPrimary
-          ? "The promoted PAPER champion has passed its original Plan-B admission and governance gates; M1 is supplying timing and trade geometry, while the trained XGBoost challenger remains shadow-only evidence."
-          : "The active M1 broker-native setup has passed its model, market, risk and execution gates.",
+        headline: highConvictionRescue ? "High-conviction DEMO setup ready" : "Trade conditions ready",
+        detail: highConvictionRescue
+          ? `The high-conviction DEMO rescue is active: three trained experts are unanimously aligned with this broker-native setup, expectancy and execution-cost checks are positive, and the older admission/drift veto has been simplified. This rescue path is capped at ${(rescueCap ?? 0.2).toFixed(2)} lot and still passes the final account-risk engine.`
+          : multimodelPrimary
+            ? "The promoted PAPER champion has passed its original Plan-B admission and governance gates; M1 is supplying timing and trade geometry, while the trained XGBoost challenger remains shadow-only evidence."
+            : "The active M1 broker-native setup has passed its model, market, risk and execution gates.",
         tradeExpected: true,
         instrument: m1Decision.instrument,
         direction: m1Decision.direction,
