@@ -446,6 +446,12 @@ export class StateReconciliationService {
             );
             const closed = await this.resolution.closeTradeFromProvider(trade, match ?? null);
             if (closed) {
+              if (trade.tradeIntentId) {
+                await this.allocationService.releaseAllocationForIntent(
+                  trade.tradeIntentId,
+                  'PROVIDER_POSITION_CLOSED',
+                );
+              }
               resolutionRefs.push({
                 type: ReconciliationDiscrepancyType.POSITION_CLOSED_EXTERNALLY,
                 internalRefId: trade.id,

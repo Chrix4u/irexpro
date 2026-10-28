@@ -46,6 +46,7 @@ const openTrade = (): Trade =>
     id: 'trade-1',
     userId: 'user-1',
     brokerConnectionId: 'conn-1',
+    tradeIntentId: 'intent-1',
     instrument: 'EURUSD',
     direction: 'BUY',
     lotSize: '1.0000',
@@ -218,6 +219,7 @@ describe('StateReconciliationService', () => {
   };
   let auditService: { log: jest.Mock };
   let eventBus: { publish: jest.Mock };
+  let allocationService: { releaseAllocationForIntent: jest.Mock };
   let adapter: {
     brokerId?: string;
     setMode: jest.Mock;
@@ -301,6 +303,7 @@ describe('StateReconciliationService', () => {
     };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
     eventBus = { publish: jest.fn() };
+    allocationService = { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -325,7 +328,7 @@ describe('StateReconciliationService', () => {
         },
         {
           provide: AllocationService,
-          useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) },
+          useValue: allocationService,
         },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
@@ -610,6 +613,10 @@ describe('StateReconciliationService', () => {
       expect(resolution.closeTradeFromProvider).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'trade-1' }),
         expect.objectContaining({ closePrice: '1.12000' }),
+      );
+      expect(allocationService.releaseAllocationForIntent).toHaveBeenCalledWith(
+        'intent-1',
+        'PROVIDER_POSITION_CLOSED',
       );
       expect(outcome.discrepanciesAutoResolved).toBe(1);
       expect(eventBus.publish).toHaveBeenCalledWith(
