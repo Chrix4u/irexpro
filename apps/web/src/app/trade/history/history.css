@@ -125,6 +125,11 @@
   letter-spacing: 0.055em;
 }
 
+.history-filter-grid input[type='date'],
+.history-filter-grid select {
+  cursor: pointer;
+}
+
 .history-filter-actions {
   margin-top: 0.8rem;
 }

@@ -34,6 +34,8 @@ const EMPTY_FILTERS: FilterState = {
   closeReason: '',
 };
 
+const INSTRUMENTS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'] as const;
+
 const CLOSE_REASONS: TradeExecutionCloseReason[] = [
   'STOP_LOSS_HIT',
   'TAKE_PROFIT_HIT',
@@ -357,6 +359,7 @@ export default function ClosedTradeHistoryPage() {
                 className="input"
                 type="date"
                 value={draft.fromDate}
+                onClick={(event) => event.currentTarget.showPicker?.()}
                 onChange={(event) => setDraft((current) => ({ ...current, fromDate: event.target.value }))}
               />
             </label>
@@ -366,18 +369,22 @@ export default function ClosedTradeHistoryPage() {
                 className="input"
                 type="date"
                 value={draft.toDate}
+                onClick={(event) => event.currentTarget.showPicker?.()}
                 onChange={(event) => setDraft((current) => ({ ...current, toDate: event.target.value }))}
               />
             </label>
             <label>
               <span>Instrument</span>
-              <input
+              <select
                 className="input"
-                type="text"
-                placeholder="e.g. USDJPY"
                 value={draft.instrument}
                 onChange={(event) => setDraft((current) => ({ ...current, instrument: event.target.value }))}
-              />
+              >
+                <option value="">All instruments</option>
+                {INSTRUMENTS.map((instrument) => (
+                  <option key={instrument} value={instrument}>{instrument}</option>
+                ))}
+              </select>
             </label>
             <label>
               <span>Side</span>
