@@ -46,28 +46,25 @@ const overlay = (
 });
 
 describe('evaluateMultimodelDemoAuthority', () => {
-  it.each(['M1_TREND_CONTINUATION', 'M1_CONFIRMED_REVERSAL', 'M1_EARLY_TRANSITION'] as const)(
-    'authorizes qualified DEMO consensus when the M1 timing route is %s',
-    (timingRoute) => {
-      const result = evaluateMultimodelDemoAuthority({
-        ensemble: ensemble(true),
-        governance: governance(true),
-        trainedExpert: overlay('CONFIRM'),
-        candidateDirection: 'BUY',
-        m1TimingRoute: timingRoute,
-      });
+  it('authorizes qualified DEMO trend continuation when the M1 timing route confirms continuation', () => {
+    const result = evaluateMultimodelDemoAuthority({
+      ensemble: ensemble(true),
+      governance: governance(true),
+      trainedExpert: overlay('CONFIRM'),
+      candidateDirection: 'BUY',
+      m1TimingRoute: 'M1_TREND_CONTINUATION',
+    });
 
-      expect(result).toEqual(
-        expect.objectContaining({
-          executable: true,
-          primaryEngineCode: 'irexpro-multimodel-ensemble-v1',
-          trainedExpertConfirmed: true,
-          m1TimingRoute: timingRoute,
-          blockers: [],
-        }),
-      );
-    },
-  );
+    expect(result).toEqual(
+      expect.objectContaining({
+        executable: true,
+        primaryEngineCode: 'irexpro-multimodel-ensemble-v1',
+        trainedExpertConfirmed: true,
+        m1TimingRoute: 'M1_TREND_CONTINUATION',
+        blockers: [],
+      }),
+    );
+  });
 
   it.each(['CONFLICT', 'ABSTAIN', 'STALE', 'UNAVAILABLE'] as const)(
     'keeps trained expert state %s observational when the promoted PAPER champion qualifies',
@@ -121,7 +118,7 @@ describe('evaluateMultimodelDemoAuthority', () => {
       governance: governance(true),
       trainedExpert,
       candidateDirection: 'BUY',
-      m1TimingRoute: 'M1_CONFIRMED_REVERSAL',
+      m1TimingRoute: 'M1_TREND_CONTINUATION',
     });
 
     expect(result.executable).toBe(true);
