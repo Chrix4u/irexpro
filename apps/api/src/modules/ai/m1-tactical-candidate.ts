@@ -58,6 +58,9 @@ export interface M1TacticalCandidate {
   alignedMomentum1Atr: number;
   alignedMomentum3Atr: number;
   alignedMomentum5Atr: number;
+  alignedM5BodyPressure3: number;
+  alignedM5Momentum1Atr: number;
+  alignedM5Momentum3Atr: number;
   alignedHigherTimeframeAgreement: number;
   alignedM5: number;
   alignedM15: number;
@@ -97,6 +100,9 @@ function buildCandidate(
   const alignedMomentum1Atr = sign * snapshot.momentum1Atr;
   const alignedMomentum3Atr = sign * snapshot.momentum3Atr;
   const alignedMomentum5Atr = sign * snapshot.momentum5Atr;
+  const alignedM5BodyPressure3 = sign * snapshot.m5BodyPressure3;
+  const alignedM5Momentum1Atr = sign * snapshot.m5Momentum1Atr;
+  const alignedM5Momentum3Atr = sign * snapshot.m5Momentum3Atr;
   const alignedHigherTimeframeAgreement = sign * snapshot.higherTimeframeAgreement;
   const alignedM5 = sign * snapshot.alignment.m5;
   const alignedM15 = sign * snapshot.alignment.m15;
@@ -158,6 +164,9 @@ function buildCandidate(
     alignedMomentum1Atr,
     alignedMomentum3Atr,
     alignedMomentum5Atr,
+    alignedM5BodyPressure3,
+    alignedM5Momentum1Atr,
+    alignedM5Momentum3Atr,
     alignedHigherTimeframeAgreement,
     alignedM5,
     alignedM15,
