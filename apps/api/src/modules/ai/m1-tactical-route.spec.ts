@@ -89,6 +89,58 @@ describe('classifyM1TacticalRoute', () => {
     expect(result.reason).toBe('FAILED_MOVE_WITH_MULTI_BAR_REVERSAL_IMPULSE');
   });
 
+  it('waits instead of selling when M1 turns down but completed M5 candles are still strongly bullish', () => {
+    const source = snapshot({
+      rsi14: 42,
+      failedBreakoutUp: true,
+      emaSeparationAtr: -0.22,
+      emaSlopeAtr: -0.35,
+      momentum1Atr: -0.55,
+      momentum3Atr: -0.72,
+      momentum5Atr: -0.48,
+      alignment: { m5: -0.08, m15: 0.08, h1: 0.18, h4: 0.22 },
+      higherTimeframeAgreement: 0.1,
+      closeLocation: 0.1,
+      lowerWickRatio: 0.05,
+      upperWickRatio: 0.55,
+      m5BodyPressure3: 0.65,
+      m5Momentum1Atr: 0.45,
+      m5Momentum3Atr: 0.9,
+    } as Partial<M1TacticalFeatureSnapshot>);
+    const [buy, sell] = pair(source);
+    const result = classifyM1TacticalRoute(sell, buy, source, M1_TACTICAL_POLICY_V1);
+
+    expect(result.route).toBe('ABSTAIN');
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('M5_REVERSAL_NOT_CONFIRMED');
+  });
+
+  it('confirms the same sell reversal once completed M5 structure turns bearish', () => {
+    const source = snapshot({
+      rsi14: 42,
+      failedBreakoutUp: true,
+      emaSeparationAtr: -0.22,
+      emaSlopeAtr: -0.35,
+      momentum1Atr: -0.55,
+      momentum3Atr: -0.72,
+      momentum5Atr: -0.48,
+      alignment: { m5: -0.08, m15: 0.08, h1: 0.18, h4: 0.22 },
+      higherTimeframeAgreement: 0.1,
+      closeLocation: 0.1,
+      lowerWickRatio: 0.05,
+      upperWickRatio: 0.55,
+      m5BodyPressure3: -0.45,
+      m5Momentum1Atr: -0.3,
+      m5Momentum3Atr: -0.55,
+    } as Partial<M1TacticalFeatureSnapshot>);
+    const [buy, sell] = pair(source);
+    const result = classifyM1TacticalRoute(sell, buy, source, M1_TACTICAL_POLICY_V1);
+
+    expect(result.route).toBe('M1_CONFIRMED_REVERSAL');
+    expect(result.direction).toBe('SELL');
+    expect(result.eligible).toBe(true);
+  });
+
   it('does not call one bullish candle a reversal when multi-bar impulse is absent', () => {
     const source = snapshot({
       failedBreakoutDown: true,
