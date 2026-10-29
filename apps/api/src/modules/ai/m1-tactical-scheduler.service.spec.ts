@@ -2524,6 +2524,44 @@ describe('M1 V8 multi-model DEMO authority', () => {
     );
   });
 
+  it('submits trained-expert confidence when HIGH_CONVICTION_RESCUE grants execution authority', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      trainedExpertState: 'CONFIRM',
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: { ...result.ensemble, ensembleScore: 0.579, paperAdmitted: false },
+        trainedExpert: { ...result.trainedExpert, ensembleConfidence: 0.738 },
+        authority: {
+          ...result.authority,
+          executable: true,
+          authorityPath: 'HIGH_CONVICTION_RESCUE',
+          rescueVolumeCap: 0.2,
+          blockers: [],
+        },
+      };
+    });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        confidenceScore: 0.738,
+        strategyCode: 'external-irexpro-multimodel-ensemble',
+        metadata: expect.objectContaining({
+          multimodel_execution_authority_path: 'HIGH_CONVICTION_RESCUE',
+          multimodel_trained_expert_confidence: 0.738,
+        }),
+      }),
+    );
+  });
+
   it('blocks V8 execution after three recent losses on the same Plan-B pair-side-route while retaining telemetry', async () => {
     const h = phase2Harness({ rollout: M1_TACTICAL_ROLLOUT_POLICY_V8, session: fullAutoSession, trainedExpertState: 'CONFIRM', multimodelLossStreakBrake: { artifact: 'm1-multimodel-loss-streak-brake-v1', active: true, reason: 'RECENT_MULTIMODEL_LOSS_STREAK', strategyRoute: 'TREND_CONTINUATION', recentClosedTrades: 3, recentLosses: 3, recentWins: 0, cumulativeRealisedPnl: -31.2, latestClosedAt: new Date('2026-10-15T10:25:00.000Z'), cooldownHours: 12, cooldownRemainingSeconds: 42900 } });
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });

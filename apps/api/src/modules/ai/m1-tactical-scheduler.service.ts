@@ -49,6 +49,7 @@ import {
   evaluateMultimodelDemoAuthority,
   multimodelDemoExecutionVolumeCap,
   m1CandidateToPlanBInput,
+  multimodelDemoSignalConfidence,
   MULTIMODEL_DEMO_ENGINE_CODE,
   type MultimodelDemoAuthorityDecision,
 } from './multimodel-demo-authority';
@@ -1384,7 +1385,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         direction: candidate.direction,
         confidenceScore:
           professionalDemoPhase && multimodelDemo && !useProfessionalM1Fallback
-            ? multimodelDemo.ensemble.ensembleScore
+            ? multimodelDemoSignalConfidence(
+                {
+                  ensemble: multimodelDemo.ensemble,
+                  trainedExpert: multimodelDemo.trainedExpert,
+                },
+                multimodelDemo.authority,
+              )
             : candidate.confidence,
         suggestedEntryPrice: candidate.entry,
         suggestedStopLoss: candidate.stopLoss,
