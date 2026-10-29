@@ -2080,6 +2080,169 @@ describe('M1 V8 multi-model DEMO authority', () => {
     brokerConnectionId: 'demo-conn-2',
   };
 
+  it('promotes a mature positive-expectancy M1 continuation at a conservative cap when Plan-B admission is the only upstream gap', async () => {
+    const maturePositiveContinuation = [
+      { realisedPnl: 8, riskAtStop: 10, closedAt: '2026-10-15T10:29:00.000Z' },
+      { realisedPnl: 6, riskAtStop: 10, closedAt: '2026-10-15T10:19:00.000Z' },
+      { realisedPnl: -2, riskAtStop: 10, closedAt: '2026-10-15T10:09:00.000Z' },
+      { realisedPnl: 5, riskAtStop: 10, closedAt: '2026-10-15T09:59:00.000Z' },
+      { realisedPnl: 4, riskAtStop: 10, closedAt: '2026-10-15T09:49:00.000Z' },
+      { realisedPnl: 3, riskAtStop: 10, closedAt: '2026-10-15T09:39:00.000Z' },
+    ].map((row) => ({
+      route: 'M1_TREND_CONTINUATION',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      policyVersion: 'm1-tactical-v1',
+      ...row,
+      closedAt: new Date(row.closedAt),
+    }));
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: maturePositiveContinuation },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: {
+          ...result.ensemble,
+          strategyRoute: 'TREND_CONTINUATION',
+          paperAdmitted: false,
+          admitted: false,
+        },
+        authority: {
+          ...result.authority,
+          executable: false,
+          authorityPath: 'BLOCKED',
+          rescueVolumeCap: null,
+          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED', 'MULTIMODEL_GOVERNANCE_BLOCKED'],
+        },
+      };
+    });
+
+    const route = await driveFeatures(h, cleanContinuationFeatures(), {
+      brokerConnectionId: 'demo-conn-2',
+    });
+
+    expect(route.route).toBe('M1_TREND_CONTINUATION');
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({
+        suggestedVolume: 0.2,
+        strategyCode: 'external-irexpro-m1-tactical',
+        metadata: expect.objectContaining({
+          m1_professional_fallback: true,
+          m1_professional_fallback_tier: 'QUALIFIED_CONTINUATION',
+          m1_tactical_route: 'M1_TREND_CONTINUATION',
+        }),
+      }),
+    );
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.executionAuthority).toBe('BROKER_NATIVE');
+    expect(recorded?.governance.professionalM1Fallback).toEqual(
+      expect.objectContaining({ eligible: true, tier: 'QUALIFIED_CONTINUATION', lotCap: 0.2 }),
+    );
+  });
+
+  it('keeps continuation fallback blocked when the exact M1 sleeve has a recent loss streak', async () => {
+    const lossStreakEvidence = [
+      { realisedPnl: -4, closedAt: '2026-10-15T10:29:00.000Z' },
+      { realisedPnl: -3, closedAt: '2026-10-15T10:19:00.000Z' },
+      { realisedPnl: -2, closedAt: '2026-10-15T10:09:00.000Z' },
+      { realisedPnl: 8, closedAt: '2026-10-15T09:59:00.000Z' },
+      { realisedPnl: 7, closedAt: '2026-10-15T09:49:00.000Z' },
+      { realisedPnl: 6, closedAt: '2026-10-15T09:39:00.000Z' },
+    ].map((row) => ({
+      route: 'M1_TREND_CONTINUATION',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      policyVersion: 'm1-tactical-v1',
+      riskAtStop: 10,
+      ...row,
+      closedAt: new Date(row.closedAt),
+    }));
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: lossStreakEvidence },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
+        authority: {
+          ...result.authority,
+          executable: false,
+          authorityPath: 'BLOCKED',
+          rescueVolumeCap: null,
+          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+        },
+      };
+    });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.governance.reliability.reason).toBe('EARLY_LOSS_STREAK');
+    expect(recorded?.governance.professionalM1Fallback).toEqual(
+      expect.objectContaining({ eligible: false }),
+    );
+  });
+
+  it('does not promote a mature continuation when M1 drift is out of distribution', async () => {
+    const maturePositiveContinuation = Array.from({ length: 6 }, (_, index) => ({
+      route: 'M1_TREND_CONTINUATION',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      policyVersion: 'm1-tactical-v1',
+      realisedPnl: index === 2 ? -2 : 5,
+      riskAtStop: 10,
+      closedAt: new Date(`2026-10-15T${String(10 - Math.floor(index / 3)).padStart(2, '0')}:${String(29 - (index % 3) * 10).padStart(2, '0')}:00.000Z`),
+    }));
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: maturePositiveContinuation },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
+        authority: {
+          ...result.authority,
+          executable: false,
+          authorityPath: 'BLOCKED',
+          rescueVolumeCap: null,
+          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+        },
+      };
+    });
+    const outOfDistribution = cleanContinuationFeatures();
+    outOfDistribution.extensionAtr = 1.8;
+
+    await driveFeatures(h, outOfDistribution, { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.governance.genericGovernance.driftState).toBe('OUT_OF_DISTRIBUTION');
+    expect(recorded?.governance.professionalM1Fallback).toEqual(
+      expect.objectContaining({ eligible: false }),
+    );
+  });
+
   it('falls back to a qualified M1 early transition when Plan-B still calls the move trend continuation', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
