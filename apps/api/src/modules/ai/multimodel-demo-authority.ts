@@ -61,6 +61,13 @@ function confirmedReversalTimingConsistent(input: MultimodelDemoAuthorityInput):
   );
 }
 
+function trendContinuationTimingConsistent(input: MultimodelDemoAuthorityInput): boolean {
+  return (
+    input.ensemble.strategyRoute !== 'TREND_CONTINUATION' ||
+    input.m1TimingRoute === 'M1_TREND_CONTINUATION'
+  );
+}
+
 function highConvictionRescueEligible(input: MultimodelDemoAuthorityInput): boolean {
   const longVotes = input.trainedExpert.longVotes ?? 0;
   const shortVotes = input.trainedExpert.shortVotes ?? 0;
@@ -73,6 +80,7 @@ function highConvictionRescueEligible(input: MultimodelDemoAuthorityInput): bool
 
   return (
     confirmedReversalTimingConsistent(input) &&
+    trendContinuationTimingConsistent(input) &&
     input.m1TimingRoute !== 'ABSTAIN' &&
     input.trainedExpert.allBrokerNative === true &&
     input.trainedExpert.direction === input.candidateDirection &&
@@ -102,6 +110,9 @@ export function evaluateMultimodelDemoAuthority(
   }
   if (!confirmedReversalTimingConsistent(input)) {
     blockers.push('MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED');
+  }
+  if (!trendContinuationTimingConsistent(input)) {
+    blockers.push('MULTIMODEL_CONTINUATION_TIMING_NOT_READY');
   }
 
   const finalBlockers = unique(blockers);
