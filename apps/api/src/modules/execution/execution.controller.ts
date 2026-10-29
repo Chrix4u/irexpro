@@ -140,6 +140,49 @@ export class ExecutionController {
     return toTradeExecutionResponse(trade);
   }
 
+  @Get('trades/closed/report')
+  @ApiOperation({
+    summary: 'Report closed trades with filters, pagination, and realized P&L totals',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'pageSize', required: false, type: Number, example: 25 })
+  @ApiQuery({ name: 'brokerConnectionId', required: false, type: String })
+  @ApiQuery({ name: 'from', required: false, type: String })
+  @ApiQuery({ name: 'to', required: false, type: String })
+  @ApiQuery({ name: 'instrument', required: false, type: String })
+  @ApiQuery({ name: 'direction', required: false, enum: ['BUY', 'SELL'] })
+  @ApiQuery({ name: 'outcome', required: false, enum: ['ALL', 'WIN', 'LOSS', 'FLAT'] })
+  @ApiQuery({ name: 'closeReason', required: false, enum: TradeCloseReason })
+  async getClosedTradeReport(
+    @CurrentUserId() userId: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('pageSize', new DefaultValuePipe(25), ParseIntPipe) pageSize: number,
+    @Query('brokerConnectionId') brokerConnectionId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('instrument') instrument?: string,
+    @Query('direction') direction?: string,
+    @Query('outcome') outcome?: string,
+    @Query('closeReason') closeReason?: string,
+  ) {
+    const report = await this.executionReadService.listClosedTradeReport(userId, {
+      page,
+      pageSize,
+      brokerConnectionId,
+      from,
+      to,
+      instrument,
+      direction,
+      outcome,
+      closeReason,
+    });
+
+    return {
+      ...report,
+      trades: report.trades.map((trade) => toTradeExecutionResponse(trade)),
+    };
+  }
+
   @Get('trades/closed')
   @ApiOperation({
     summary: 'List recent closed trades with realized P&L for the authenticated user',

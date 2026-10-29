@@ -1,5 +1,6 @@
 import {
   isTradeExecutionView,
+  loadClosedTradeReport,
   summarizeRealisedExecutionWindow,
   summarizeRecentExecutionActivity,
 } from './trader-execution';
@@ -81,6 +82,64 @@ describe('trader execution refresh resilience', () => {
     expect(request).toHaveBeenCalledWith(
       `/execution/trades/closed?limit=50&brokerConnectionId=${encodedBrokerId}`,
     );
+  });
+
+  it('requests the paginated closed-trade report with the selected filters', async () => {
+    const request = jest.spyOn(api, 'request').mockResolvedValue({
+      trades: [],
+      page: 2,
+      pageSize: 25,
+      total: 0,
+      totalPages: 0,
+      summary: {
+        totalTrades: 0,
+        pnlTradeCount: 0,
+        unresolvedPnlCount: 0,
+        wins: 0,
+        losses: 0,
+        flats: 0,
+        winRate: null,
+        accountCurrency: null,
+        grossProfit: null,
+        grossLoss: null,
+        netRealisedPnl: null,
+        averageWin: null,
+        averageLoss: null,
+        expectancyPerTrade: null,
+        profitFactor: null,
+        largestWin: null,
+        largestLoss: null,
+        totalCommission: null,
+        totalSwap: null,
+        averageHoldMinutes: null,
+        currencyBreakdown: [],
+      },
+    });
+
+    await loadClosedTradeReport({
+      page: 2,
+      pageSize: 25,
+      brokerConnectionId: 'ctrader/demo account',
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-29T23:59:59.999Z',
+      instrument: 'USDJPY',
+      direction: 'SELL',
+      outcome: 'LOSS',
+      closeReason: 'STOP_LOSS_HIT',
+    });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    const [path] = request.mock.calls[0];
+    expect(path).toContain('/execution/trades/closed/report?');
+    expect(path).toContain('page=2');
+    expect(path).toContain('pageSize=25');
+    expect(path).toContain('brokerConnectionId=ctrader%2Fdemo+account');
+    expect(path).toContain('from=2026-10-01T00%3A00%3A00.000Z');
+    expect(path).toContain('to=2026-10-29T23%3A59%3A59.999Z');
+    expect(path).toContain('instrument=USDJPY');
+    expect(path).toContain('direction=SELL');
+    expect(path).toContain('outcome=LOSS');
+    expect(path).toContain('closeReason=STOP_LOSS_HIT');
   });
 
   it('keeps recent and closed executions visible when the open-position read fails', async () => {

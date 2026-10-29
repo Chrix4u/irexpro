@@ -95,6 +95,75 @@ export interface TradeExecutionView {
 }
 
 /** Result for one AI-position close attempt returned by close-all. */
+export type ClosedTradeOutcomeFilter = 'ALL' | 'WIN' | 'LOSS' | 'FLAT';
+
+export interface ClosedTradeReportQuery {
+  page?: number;
+  pageSize?: number;
+  brokerConnectionId?: string;
+  from?: string;
+  to?: string;
+  instrument?: string;
+  direction?: TradeExecutionDirection;
+  outcome?: ClosedTradeOutcomeFilter;
+  closeReason?: TradeExecutionCloseReason;
+}
+
+export interface ClosedTradeCurrencySummaryView {
+  accountCurrency: string;
+  totalTrades: number;
+  pnlTradeCount: number;
+  wins: number;
+  losses: number;
+  flats: number;
+  winRate: number | null;
+  grossProfit: string;
+  grossLoss: string;
+  netRealisedPnl: string;
+  averageWin: string | null;
+  averageLoss: string | null;
+  expectancyPerTrade: string | null;
+  profitFactor: number | null;
+  largestWin: string | null;
+  largestLoss: string | null;
+  totalCommission: string;
+  totalSwap: string;
+  averageHoldMinutes: number | null;
+}
+
+export interface ClosedTradeReportSummaryView {
+  totalTrades: number;
+  pnlTradeCount: number;
+  unresolvedPnlCount: number;
+  wins: number;
+  losses: number;
+  flats: number;
+  winRate: number | null;
+  accountCurrency: string | null;
+  grossProfit: string | null;
+  grossLoss: string | null;
+  netRealisedPnl: string | null;
+  averageWin: string | null;
+  averageLoss: string | null;
+  expectancyPerTrade: string | null;
+  profitFactor: number | null;
+  largestWin: string | null;
+  largestLoss: string | null;
+  totalCommission: string | null;
+  totalSwap: string | null;
+  averageHoldMinutes: number | null;
+  currencyBreakdown: ClosedTradeCurrencySummaryView[];
+}
+
+export interface ClosedTradeReportView {
+  trades: TradeExecutionView[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  summary: ClosedTradeReportSummaryView;
+}
+
 export interface AiPositionCloseResultView {
   tradeId: string;
   closed: boolean;

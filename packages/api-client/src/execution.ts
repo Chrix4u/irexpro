@@ -1,10 +1,15 @@
-import type { TradeExecutionView } from '@irexpro/types/execution';
+import type {
+  ClosedTradeReportQuery,
+  ClosedTradeReportView,
+  TradeExecutionView,
+} from '@irexpro/types/execution';
 import type { ApiClient } from './index';
 
 export interface ExecutionApi {
   listOpenPositions(brokerConnectionId?: string): Promise<TradeExecutionView[]>;
   listRecentExecutions(limit?: number, brokerConnectionId?: string): Promise<TradeExecutionView[]>;
   listClosedExecutions(limit?: number, brokerConnectionId?: string): Promise<TradeExecutionView[]>;
+  getClosedTradeReport(query?: ClosedTradeReportQuery): Promise<ClosedTradeReportView>;
 }
 
 /**
@@ -41,6 +46,25 @@ export function createExecutionApi(
       const scope = brokerQuery(brokerConnectionId);
       return client.request<TradeExecutionView[]>(
         `/execution/trades/closed?limit=${safeLimit}${scope ? `&${scope}` : ''}`,
+      );
+    },
+
+    getClosedTradeReport: (query = {}) => {
+      const page = Math.max(1, Math.trunc(query.page ?? 1));
+      const pageSize = Math.min(100, Math.max(1, Math.trunc(query.pageSize ?? 25)));
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (query.brokerConnectionId) params.set('brokerConnectionId', query.brokerConnectionId);
+      if (query.from) params.set('from', query.from);
+      if (query.to) params.set('to', query.to);
+      if (query.instrument) params.set('instrument', query.instrument.trim().toUpperCase());
+      if (query.direction) params.set('direction', query.direction);
+      if (query.outcome && query.outcome !== 'ALL') params.set('outcome', query.outcome);
+      if (query.closeReason) params.set('closeReason', query.closeReason);
+      return client.request<ClosedTradeReportView>(
+        `/execution/trades/closed/report?${params.toString()}`,
       );
     },
   };

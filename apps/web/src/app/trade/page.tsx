@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   startExecutionModeForBroker,
+  type ClosedTradeReportSummaryView,
   type UserCapitalAllocationView,
   type TradeExecutionView,
 } from "@irexpro/types/execution";
@@ -56,6 +57,7 @@ import {
   type M1TacticalStatusView,
 } from "@/lib/vps-scanner-status";
 import {
+  loadClosedTradeReport,
   loadTraderExecutionSnapshot,
   summarizeRealisedExecutionWindow,
   summarizeRecentExecutionActivity,
@@ -1754,6 +1756,10 @@ export default function AiTradingPage() {
   const [execution, setExecution] = useState<TraderExecutionSnapshot | null>(
     null,
   );
+  const [realised24hReport, setRealised24hReport] = useState<{
+    brokerConnectionId: string;
+    summary: ClosedTradeReportSummaryView;
+  } | null>(null);
   const [livePositions, setLivePositions] = useState<LivePositionRowView[]>([]);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
   const [chartInstrument, setChartInstrument] = useState("USDJPY");
@@ -2120,10 +2126,25 @@ export default function AiTradingPage() {
           status.primaryBroker?.id ||
           "";
 
-        const [executionResult, positionsResult] = await Promise.allSettled([
-          loadTraderExecutionSnapshot(brokerId || undefined),
-          loadLiveAccountPositions(),
-        ]);
+        const realisedWindowEnd = new Date();
+        const realisedWindowStart = new Date(
+          realisedWindowEnd.getTime() - 24 * 60 * 60_000,
+        );
+        const realisedReportPromise = brokerId
+          ? loadClosedTradeReport({
+              page: 1,
+              pageSize: 1,
+              brokerConnectionId: brokerId,
+              from: realisedWindowStart.toISOString(),
+              to: realisedWindowEnd.toISOString(),
+            })
+          : Promise.resolve(null);
+        const [executionResult, positionsResult, realisedReportResult] =
+          await Promise.allSettled([
+            loadTraderExecutionSnapshot(brokerId || undefined),
+            loadLiveAccountPositions(),
+            realisedReportPromise,
+          ]);
 
         const snapshot =
           executionResult.status === "fulfilled" ? executionResult.value : null;
@@ -2131,12 +2152,24 @@ export default function AiTradingPage() {
           positionsResult.status === "fulfilled"
             ? positionsResult.value.positions
             : null;
+        const realisedReport =
+          realisedReportResult.status === "fulfilled"
+            ? realisedReportResult.value
+            : null;
 
         // Secondary read failures must never erase the last authoritative UI
         // snapshot. Keep the previous data on screen and let the existing
         // polling loops retry automatically.
         if (snapshot) setExecution(snapshot);
         if (positions) setLivePositions(positions);
+        if (brokerId && realisedReport) {
+          setRealised24hReport({
+            brokerConnectionId: brokerId,
+            summary: realisedReport.summary,
+          });
+        } else if (!brokerId) {
+          setRealised24hReport(null);
+        }
 
         if (snapshot && positions) {
           emitActivityToasts(positions, snapshot);
@@ -2772,20 +2805,52 @@ export default function AiTradingPage() {
     execution?.closedExecutions ?? [],
     20,
   );
-  const realisedCurrency =
-    recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency;
-  const recentWinRate =
-    recentExecutionActivity.realisedTradeCount > 0
-      ? recentExecutionActivity.wins / recentExecutionActivity.realisedTradeCount
+  const authoritative24hSummary =
+    realised24hReport && realised24hReport.brokerConnectionId === selectedBroker?.id
+      ? realised24hReport.summary
       : null;
+  const realisedCurrency =
+    authoritative24hSummary?.accountCurrency ??
+    recentExecutionActivity.accountCurrency ??
+    allocation?.accountCurrency;
+  const realised24hNetPnl =
+    authoritative24hSummary?.netRealisedPnl ?? recentExecutionActivity.netRealisedPnl;
+  const realised24hGrossProfit =
+    authoritative24hSummary?.grossProfit ?? recentExecutionActivity.grossProfit;
+  const realised24hGrossLoss =
+    authoritative24hSummary?.grossLoss ?? recentExecutionActivity.grossLoss;
+  const realised24hAverageWin =
+    authoritative24hSummary?.averageWin ?? recentExecutionActivity.averageWin;
+  const realised24hAverageLoss =
+    authoritative24hSummary?.averageLoss ?? recentExecutionActivity.averageLoss;
+  const realised24hExpectancy =
+    authoritative24hSummary?.expectancyPerTrade ?? recentExecutionActivity.expectancyPerTrade;
+  const realised24hWins = authoritative24hSummary?.wins ?? recentExecutionActivity.wins;
+  const realised24hLosses = authoritative24hSummary?.losses ?? recentExecutionActivity.losses;
+  const realised24hClosedCount =
+    authoritative24hSummary?.totalTrades ?? recentExecutionActivity.realisedTradeCount;
+  const closedTradeHistoryHref = selectedBroker?.id
+    ? `/trade/history?brokerConnectionId=${encodeURIComponent(selectedBroker.id)}`
+    : "/trade/history";
+  const recentWinRate =
+    authoritative24hSummary?.winRate ??
+    (recentExecutionActivity.realisedTradeCount > 0
+      ? recentExecutionActivity.wins / recentExecutionActivity.realisedTradeCount
+      : null);
+  const realised24hProfitFactor = authoritative24hSummary
+    ? Number(authoritative24hSummary.grossLoss) === 0 &&
+      Number(authoritative24hSummary.grossProfit) > 0
+      ? Number.POSITIVE_INFINITY
+      : authoritative24hSummary.profitFactor
+    : recentExecutionActivity.profitFactor;
   const profitFactorLabel =
-    recentExecutionActivity.profitFactor == null
+    realised24hProfitFactor == null
       ? "—"
-      : Number.isFinite(recentExecutionActivity.profitFactor)
-        ? recentExecutionActivity.profitFactor.toFixed(2)
+      : Number.isFinite(realised24hProfitFactor)
+        ? realised24hProfitFactor.toFixed(2)
         : "∞";
-  const averageLossDisplay = recentExecutionActivity.averageLoss
-    ? signedMoney(`-${recentExecutionActivity.averageLoss}`, realisedCurrency)
+  const averageLossDisplay = realised24hAverageLoss
+    ? signedMoney(`-${realised24hAverageLoss}`, realisedCurrency)
     : "—";
   const positionCurrencies = Array.from(
     new Set(
@@ -2821,11 +2886,11 @@ export default function AiTradingPage() {
       : Number(totalUnrealisedPnl) > 0
         ? "positive"
         : "neutral";
-  const netPnlTone = recentExecutionActivity.netRealisedPnl == null
+  const netPnlTone = realised24hNetPnl == null
     ? "neutral"
-    : Number(recentExecutionActivity.netRealisedPnl) < 0
+    : Number(realised24hNetPnl) < 0
       ? "negative"
-      : Number(recentExecutionActivity.netRealisedPnl) > 0
+      : Number(realised24hNetPnl) > 0
         ? "positive"
         : "neutral";
   const showDeveloperDiagnostics = false;
@@ -2994,8 +3059,8 @@ export default function AiTradingPage() {
               />
               <FinancialKpi
                 label="24h Net P&L"
-                value={signedMoney(recentExecutionActivity.netRealisedPnl, recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency)}
-                hint={`${recentExecutionActivity.wins} wins · ${recentExecutionActivity.losses} losses`}
+                value={signedMoney(realised24hNetPnl, realisedCurrency)}
+                hint={`${realised24hWins} wins · ${realised24hLosses} losses`}
                 tone={netPnlTone}
               />
               <FinancialKpi
@@ -3042,15 +3107,26 @@ export default function AiTradingPage() {
                     <h2 id="recent-performance-title">Recent Performance</h2>
                   </div>
                   <Badge variant={netPnlTone === "negative" ? "error" : netPnlTone === "positive" ? "success" : "info"}>
-                    {recentExecutionActivity.executionCount} trades · 24h
+                    {realised24hClosedCount} closed · 24h
                   </Badge>
                 </div>
                 <div className="ai-performance-panel__stats">
-                  <div>
-                    <span>Net P&amp;L · 24h</span>
-                    <strong className={netPnlTone === "negative" ? "is-negative" : netPnlTone === "positive" ? "is-positive" : ""}>
-                      {signedMoney(recentExecutionActivity.netRealisedPnl, recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency)}
+                  <div className="ai-performance-panel__money-stat">
+                    <span>Total loss · 24h</span>
+                    <strong className={Number(realised24hGrossLoss ?? 0) > 0 ? "is-negative" : ""}>
+                      {realised24hGrossLoss == null
+                        ? "—"
+                        : money(
+                            Number(realised24hGrossLoss) > 0
+                              ? `-${realised24hGrossLoss}`
+                              : realised24hGrossLoss,
+                            realisedCurrency,
+                          )}
                     </strong>
+                    <small>{realised24hLosses} losing trade{realised24hLosses === 1 ? "" : "s"}</small>
+                    <Link href={closedTradeHistoryHref} className="ai-performance-panel__stat-link">
+                      View all
+                    </Link>
                   </div>
                   <div className="ai-performance-panel__win-rate">
                     <span>24h win rate</span>
@@ -3069,10 +3145,19 @@ export default function AiTradingPage() {
                         {realisedExecutionWindow.wins}W / {realisedExecutionWindow.losses}L · counts trades, not P&amp;L amount
                       </small>
                     </div>
+                    <Link href={closedTradeHistoryHref} className="ai-performance-panel__stat-link">
+                      View all
+                    </Link>
                   </div>
-                  <div>
-                    <span>Open trades</span>
-                    <strong>{aiOpenPositions.length}</strong>
+                  <div className="ai-performance-panel__money-stat">
+                    <span>Total profit · 24h</span>
+                    <strong className={Number(realised24hGrossProfit ?? 0) > 0 ? "is-positive" : ""}>
+                      {signedMoney(realised24hGrossProfit, realisedCurrency)}
+                    </strong>
+                    <small>{realised24hWins} profitable trade{realised24hWins === 1 ? "" : "s"}</small>
+                    <Link href={closedTradeHistoryHref} className="ai-performance-panel__stat-link">
+                      View all
+                    </Link>
                   </div>
                 </div>
                 <RealisedPnlMiniChart
@@ -3085,7 +3170,7 @@ export default function AiTradingPage() {
                       <span>Profit quality</span>
                       <small>Trailing 24-hour realized trades</small>
                     </div>
-                    <b>{recentExecutionActivity.realisedTradeCount} closed</b>
+                    <b>{realised24hClosedCount} closed</b>
                   </div>
                   <div className="ai-performance-quality__grid">
                     <div>
@@ -3095,7 +3180,7 @@ export default function AiTradingPage() {
                     <div>
                       <span>Avg win</span>
                       <strong className="is-positive">
-                        {signedMoney(recentExecutionActivity.averageWin, realisedCurrency)}
+                        {signedMoney(realised24hAverageWin, realisedCurrency)}
                       </strong>
                     </div>
                     <div>
@@ -3106,16 +3191,16 @@ export default function AiTradingPage() {
                       <span>Expectancy / trade</span>
                       <strong
                         className={
-                          recentExecutionActivity.expectancyPerTrade == null
+                          realised24hExpectancy == null
                             ? ""
-                            : Number(recentExecutionActivity.expectancyPerTrade) < 0
+                            : Number(realised24hExpectancy) < 0
                               ? "is-negative"
-                              : Number(recentExecutionActivity.expectancyPerTrade) > 0
+                              : Number(realised24hExpectancy) > 0
                                 ? "is-positive"
                                 : ""
                         }
                       >
-                        {signedMoney(recentExecutionActivity.expectancyPerTrade, realisedCurrency)}
+                        {signedMoney(realised24hExpectancy, realisedCurrency)}
                       </strong>
                     </div>
                   </div>
@@ -5254,11 +5339,16 @@ export default function AiTradingPage() {
                       Closed Trades &amp; Realized P&amp;L
                     </h2>
                   </div>
-                  <Badge
-                    variant={recentClosedTrades.length ? "success" : "info"}
-                  >
-                    {recentClosedTrades.length} recent
-                  </Badge>
+                  <div className="ai-section__heading-actions">
+                    <Badge
+                      variant={recentClosedTrades.length ? "success" : "info"}
+                    >
+                      {recentClosedTrades.length} recent
+                    </Badge>
+                    <Link href={closedTradeHistoryHref} className="ai-text-link">
+                      View all
+                    </Link>
+                  </div>
                 </div>
                 {recentClosedTrades.length === 0 ? (
                   <Card className="ai-empty-card ai-empty-card--compact">

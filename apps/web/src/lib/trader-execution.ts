@@ -1,5 +1,7 @@
 import { createExecutionApi } from '@irexpro/api-client/execution';
 import type {
+  ClosedTradeReportQuery,
+  ClosedTradeReportView,
   TradeExecutionCloseReason,
   TradeExecutionDirection,
   TradeExecutionStatus,
@@ -21,6 +23,12 @@ export interface TraderExecutionSnapshot {
 }
 
 const executionApi = createExecutionApi(api);
+
+export async function loadClosedTradeReport(
+  query: ClosedTradeReportQuery = {},
+): Promise<ClosedTradeReportView> {
+  return executionApi.getClosedTradeReport(query);
+}
 
 export interface RecentExecutionActivitySummary {
   executionCount: number;

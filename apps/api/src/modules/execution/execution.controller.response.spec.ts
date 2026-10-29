@@ -67,6 +67,44 @@ describe('ExecutionController frontend-safe responses', () => {
           closedAt: new Date('2026-08-28T14:00:00.000Z'),
         }),
       ]),
+      listClosedTradeReport: jest.fn().mockResolvedValue({
+        trades: [
+          makeTrade({
+            status: TradeStatus.CLOSED,
+            exitPrice: '1.10800000',
+            realisedPnl: '80.25',
+            closeReason: TradeCloseReason.TAKE_PROFIT_HIT,
+            closedAt: new Date('2026-08-28T14:00:00.000Z'),
+          }),
+        ],
+        page: 1,
+        pageSize: 25,
+        total: 1,
+        totalPages: 1,
+        summary: {
+          totalTrades: 1,
+          pnlTradeCount: 1,
+          unresolvedPnlCount: 0,
+          wins: 1,
+          losses: 0,
+          flats: 0,
+          winRate: 1,
+          accountCurrency: 'USD',
+          grossProfit: '80.25',
+          grossLoss: '0',
+          netRealisedPnl: '80.25',
+          averageWin: '80.25',
+          averageLoss: null,
+          expectancyPerTrade: '80.25',
+          profitFactor: null,
+          largestWin: '80.25',
+          largestLoss: null,
+          totalCommission: '0.20',
+          totalSwap: '0',
+          averageHoldMinutes: 120,
+          currencyBreakdown: [],
+        },
+      }),
     };
     paperStateService = {
       loadOpenPositionTelemetry: jest.fn().mockResolvedValue([
@@ -131,6 +169,40 @@ describe('ExecutionController frontend-safe responses', () => {
   it('passes user UUID and requested limit into closed-trade reads', async () => {
     await controller.listClosedExecutions(USER_ID, 25);
     expect(readService.listClosedExecutions).toHaveBeenCalledWith(USER_ID, 25, undefined);
+  });
+
+  it('forwards closed-trade report filters and maps rows through the safe response DTO', async () => {
+    const response = await controller.getClosedTradeReport(
+      USER_ID,
+      2,
+      25,
+      '33333333-3333-4333-8333-333333333333',
+      '2026-10-01T00:00:00.000Z',
+      '2026-10-29T23:59:59.999Z',
+      'USDJPY',
+      'SELL',
+      'LOSS',
+      TradeCloseReason.STOP_LOSS_HIT,
+    );
+
+    expect(readService.listClosedTradeReport).toHaveBeenCalledWith(USER_ID, {
+      page: 2,
+      pageSize: 25,
+      brokerConnectionId: '33333333-3333-4333-8333-333333333333',
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-29T23:59:59.999Z',
+      instrument: 'USDJPY',
+      direction: 'SELL',
+      outcome: 'LOSS',
+      closeReason: TradeCloseReason.STOP_LOSS_HIT,
+    });
+    expect(response.trades[0]).toMatchObject({
+      instrument: 'EURUSD',
+      realisedPnl: '80.25',
+      accountCurrency: 'USD',
+    });
+    expect(Object.keys(response.trades[0])).not.toContain('brokerConnectionId');
+    expect(response.summary.netRealisedPnl).toBe('80.25');
   });
 
   it('does not expose internal execution entity identifiers', async () => {

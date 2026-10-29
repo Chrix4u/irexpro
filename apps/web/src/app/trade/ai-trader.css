@@ -466,6 +466,14 @@
   letter-spacing: -0.025em;
 }
 
+.ai-section__heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
 .ai-section__heading--positions {
   align-items: flex-end;
 }
@@ -2272,6 +2280,28 @@
   margin-top: 0.25rem;
   font-size: 1rem;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.ai-performance-panel__money-stat small {
+  display: block;
+  margin-top: 0.28rem;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+.ai-performance-panel__stat-link {
+  display: inline-flex !important;
+  width: fit-content;
+  margin-top: 0.48rem;
+  color: var(--brand-light) !important;
+  font-size: 0.72rem !important;
+  font-weight: 800;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  text-decoration: none;
+}
+.ai-performance-panel__stat-link:hover {
+  text-decoration: underline;
 }
 .ai-performance-panel__stat-divider {
   height: 1px;
