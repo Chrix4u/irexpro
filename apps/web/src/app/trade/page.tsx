@@ -3026,26 +3026,26 @@ export default function AiTradingPage() {
                 </div>
                 <div className="ai-performance-panel__stats">
                   <div>
-                    <span>Net P&amp;L</span>
+                    <span>Net P&amp;L · 24h</span>
                     <strong className={netPnlTone === "negative" ? "is-negative" : netPnlTone === "positive" ? "is-positive" : ""}>
                       {signedMoney(recentExecutionActivity.netRealisedPnl, recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency)}
                     </strong>
                   </div>
                   <div className="ai-performance-panel__win-rate">
-                    <span>Win rate</span>
+                    <span>24h win rate</span>
                     <strong>
                       {recentWinRate == null ? "—" : `${(recentWinRate * 100).toFixed(0)}%`}
                     </strong>
                     <div className="ai-performance-panel__stat-divider" aria-hidden="true" />
                     <div className="ai-performance-panel__secondary-stat">
-                      <span>Realized P&amp;L win rate</span>
+                      <span>Last 20 win rate</span>
                       <strong>
                         {realisedExecutionWindow.winRate == null
                           ? "—"
                           : `${(realisedExecutionWindow.winRate * 100).toFixed(0)}%`}
                       </strong>
                       <small>
-                        Last {realisedExecutionWindow.tradeCount} closed trade{realisedExecutionWindow.tradeCount === 1 ? "" : "s"}
+                        Same {realisedExecutionWindow.tradeCount} trade{realisedExecutionWindow.tradeCount === 1 ? "" : "s"} as chart
                       </small>
                     </div>
                   </div>

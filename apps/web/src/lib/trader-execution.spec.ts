@@ -151,6 +151,38 @@ describe('recent execution visibility summary', () => {
     expect(summary.profitFactor).toBeCloseTo(16.69 / 9.76, 8);
   });
 
+  it('uses close time for trailing 24-hour realised P&L even when the trade opened earlier', () => {
+    const referenceTime = new Date('2026-10-15T15:16:00.000Z');
+    const trades = [
+      {
+        ...CLOSED_TRADE,
+        id: 'long-running-loss',
+        realisedPnl: '-50.00',
+        openedAt: '2026-10-14T12:00:00.000Z',
+        closedAt: '2026-10-15T15:00:00.000Z',
+        createdAt: '2026-10-14T12:00:00.000Z',
+        updatedAt: '2026-10-15T15:00:00.000Z',
+      },
+      {
+        ...CLOSED_TRADE,
+        id: 'old-closed-win',
+        realisedPnl: '99.00',
+        openedAt: '2026-10-14T10:00:00.000Z',
+        closedAt: '2026-10-14T11:00:00.000Z',
+        createdAt: '2026-10-14T10:00:00.000Z',
+        updatedAt: '2026-10-14T11:00:00.000Z',
+      },
+    ];
+
+    const summary = summarizeRecentExecutionActivity(trades as any, referenceTime);
+
+    expect(summary.executionCount).toBe(0);
+    expect(summary.realisedTradeCount).toBe(1);
+    expect(summary.wins).toBe(0);
+    expect(summary.losses).toBe(1);
+    expect(summary.netRealisedPnl).toBe('-50');
+  });
+
   it('summarizes the same realised closed-trade window used by the profit chart', () => {
     const trades = [
       { ...CLOSED_TRADE, id: 'older-win', realisedPnl: '20.00', closedAt: '2026-10-15T11:00:00.000Z', updatedAt: '2026-10-15T11:00:00.000Z' },

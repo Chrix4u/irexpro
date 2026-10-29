@@ -92,7 +92,7 @@ function divideDecimalString(
   return `${negative ? '-' : ''}${whole.toString()}${fractionDigits ? `.${fraction}` : ''}`;
 }
 
-/** Summarize proven executions opened within the trailing 24 hours. */
+/** Summarize recent execution activity and realised trades closed within the trailing 24 hours. */
 export function summarizeRecentExecutionActivity(
   trades: TradeExecutionView[],
   referenceTime: Date = new Date(),
@@ -104,12 +104,18 @@ export function summarizeRecentExecutionActivity(
     const openedMs = Date.parse(trade.openedAt);
     return Number.isFinite(openedMs) && openedMs >= cutoffMs && openedMs <= referenceMs;
   });
-  const closedWithPnl = executions.filter(
-    (trade) => trade.status === 'CLOSED' && trade.realisedPnl !== null,
-  );
-  const realisedTrades = closedWithPnl.filter((trade) =>
-    Number.isFinite(Number(trade.realisedPnl)),
-  );
+  const realisedTrades = trades.filter((trade) => {
+    if (trade.status !== 'CLOSED' || trade.realisedPnl === null || !trade.closedAt) {
+      return false;
+    }
+    const closedMs = Date.parse(trade.closedAt);
+    return (
+      Number.isFinite(closedMs) &&
+      closedMs >= cutoffMs &&
+      closedMs <= referenceMs &&
+      Number.isFinite(Number(trade.realisedPnl))
+    );
+  });
   const wins = realisedTrades.filter((trade) => Number(trade.realisedPnl) > 0).length;
   const losses = realisedTrades.filter((trade) => Number(trade.realisedPnl) < 0).length;
   const flats = realisedTrades.length - wins - losses;
