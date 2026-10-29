@@ -5,6 +5,7 @@ import type { M1FailedMoveRescueDecision } from './m1-failed-move-rescue';
 import type { M1DriftCounterfactualResult } from './m1-drift-counterfactual';
 import type { M1ShadowPairSideOutcome } from './m1-shadow-pair-side-reliability';
 import { m1UsdRiskAtStop } from './m1-tactical-currency-exposure';
+import type { M5EarlyTransitionEvidence } from './m5-early-transition-handoff';
 
 export type M1TacticalDecisionRoute = M1ReliabilityRoute | 'ABSTAIN';
 export type M1TacticalDecisionAuthority = 'NONE' | 'PAPER_ONLY_RESEARCH' | 'BROKER_NATIVE';
@@ -393,6 +394,80 @@ function blockers(value: unknown): string[] {
 @Injectable()
 export class M1TacticalEvidenceService {
   constructor(private readonly dataSource: DataSource) {}
+
+  async loadLatestM5EarlyTransitionEvidence(input: {
+    userId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    asOf: Date;
+  }): Promise<M5EarlyTransitionEvidence | null> {
+    const instrument = input.instrument.trim().toUpperCase();
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          instrument, direction, market_bar_time, evaluated_at,
+          components ->> 'strategyRoute' AS strategy_route,
+          COALESCE((components ->> 'paperAdmitted')::boolean, false) AS paper_admitted,
+          COALESCE(
+            (components -> 'governance' ->> 'paperExecutionEligible')::boolean,
+            false
+          ) AS paper_execution_eligible,
+          COALESCE(components -> 'governance' ->> 'eventRisk', 'UNVERIFIED') AS event_risk,
+          COALESCE(components -> 'governance' ->> 'driftState', 'UNKNOWN') AS drift_state,
+          COALESCE(
+            NULLIF(components -> 'governance' ->> 'netExpectedR', '')::numeric,
+            expected_r
+          ) AS net_expected_r,
+          ensemble_score, consensus_passed, consensus_required
+        FROM trading.ensemble_shadow_decisions
+        WHERE user_id = $1
+          AND instrument = $2
+          AND direction = $3
+          AND components ->> 'strategyRoute' = 'EARLY_TRANSITION'
+          AND evaluated_at <= $4::timestamptz
+        ORDER BY evaluated_at DESC, created_at DESC
+        LIMIT 1
+      `,
+      [input.userId, instrument, input.direction, input.asOf.toISOString()],
+    )) as Array<{
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      market_bar_time: string | Date;
+      evaluated_at: string | Date;
+      strategy_route: string;
+      paper_admitted: boolean;
+      paper_execution_eligible: boolean;
+      event_risk: string;
+      drift_state: string;
+      net_expected_r: string | number;
+      ensemble_score: string | number;
+      consensus_passed: string | number;
+      consensus_required: string | number;
+    }>;
+    const row = rows[0];
+    if (!row) return null;
+    const eventRisk =
+      row.event_risk === 'CLEAR' ||
+      row.event_risk === 'HIGH_IMPACT_BLOCK' ||
+      row.event_risk === 'UNVERIFIED'
+        ? row.event_risk
+        : 'UNVERIFIED';
+    return {
+      instrument: String(row.instrument).trim().toUpperCase(),
+      direction: row.direction,
+      marketBarTime: date(row.market_bar_time),
+      evaluatedAt: date(row.evaluated_at),
+      strategyRoute: row.strategy_route,
+      paperAdmitted: row.paper_admitted === true,
+      paperExecutionEligible: row.paper_execution_eligible === true,
+      eventRisk,
+      driftState: row.drift_state,
+      netExpectedR: number(row.net_expected_r),
+      ensembleScore: number(row.ensemble_score),
+      consensusPassed: number(row.consensus_passed),
+      consensusRequired: number(row.consensus_required),
+    };
+  }
 
   async loadLatestDecisionStateForUser(
     userId: string,

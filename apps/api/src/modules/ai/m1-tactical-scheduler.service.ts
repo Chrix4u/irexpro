@@ -37,6 +37,11 @@ import {
   type M1TacticalRouteDecision,
 } from './m1-tactical-route';
 import { evaluateM1TacticalGovernance } from './m1-tactical-governance';
+import {
+  evaluateM5EarlyTransitionHandoff,
+  type M5EarlyTransitionEvidence,
+  type M5EarlyTransitionHandoffDecision,
+} from './m5-early-transition-handoff';
 import { evaluateEnsembleGovernance, type EnsembleGovernanceDecision } from './ensemble-governance';
 import {
   scorePlanBMultimodelShadow,
@@ -121,6 +126,10 @@ const M1_PROFESSIONAL_CONTINUATION_LOT_CAP = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_MIN_EXPECTED_R = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_MIN_SAMPLES = 5;
 const M1_PROFESSIONAL_RECOVERY_PROBE_LOT_CAP = 0.2;
+// Realized DEMO fallback cohorts are currently negative. Keep the fallback
+// evaluator live for telemetry/requalification, but do not grant direct order
+// authority until a later evidence review explicitly re-enables it.
+const M1_PROFESSIONAL_FALLBACK_EXECUTION_ENABLED = false;
 // Recovery probes need a 0.05R cushion above the normal 0.20 early-transition route floor.
 const M1_PROFESSIONAL_RECOVERY_MIN_EXPECTED_R = 0.25;
 const M1_PROFESSIONAL_RECOVERY_SHADOW_REASONS = new Set([
@@ -1012,9 +1021,47 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           routePayoffEligible,
         })
       : null;
-    const executionVolumeCap =
-      professionalM1Fallback?.eligible === true
-        ? professionalM1Fallback.lotCap
+    const professionalM1FallbackExecutable =
+      M1_PROFESSIONAL_FALLBACK_EXECUTION_ENABLED && professionalM1Fallback?.eligible === true;
+    const multimodelPrimaryExecutable =
+      professionalDemoPhase && multimodelDemo?.authority.executable === true;
+    let m5EarlyTransitionEvidence: M5EarlyTransitionEvidence | null = null;
+    let m5EarlyTransitionHandoff: M5EarlyTransitionHandoffDecision | null = null;
+    if (
+      professionalDemoPhase &&
+      !multimodelPrimaryExecutable &&
+      !professionalM1FallbackExecutable
+    ) {
+      try {
+        m5EarlyTransitionEvidence = await this.evidence.loadLatestM5EarlyTransitionEvidence({
+          userId,
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          asOf: decisionTime,
+        });
+        if (m5EarlyTransitionEvidence) {
+          m5EarlyTransitionHandoff = evaluateM5EarlyTransitionHandoff({
+            decisionTime,
+            m5Evidence: m5EarlyTransitionEvidence,
+            m1Route: routeDecision.route,
+            m1Reason: routeDecision.reason,
+            m1Confidence: candidate.confidence,
+            m1DirectionQuality: candidate.directionQuality,
+            m1ExecutionCostUsable: governance.genericGovernance.paperExecutionCostUsable === true,
+            m1EventRisk: eventRisk,
+          });
+        }
+      } catch (error) {
+        this.logger.warn(
+          `M5 early-transition handoff evidence unavailable ${candidate.instrument} ${candidate.direction}: ${(error as Error).message}`,
+        );
+      }
+    }
+    const m5EarlyTransitionHandoffEligible = m5EarlyTransitionHandoff?.eligible === true;
+    const executionVolumeCap = m5EarlyTransitionHandoffEligible
+      ? m5EarlyTransitionHandoff!.lotCap
+      : professionalM1FallbackExecutable
+        ? professionalM1Fallback!.lotCap
         : this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
           ? multimodelDemo
             ? multimodelDemoExecutionVolumeCap(
@@ -1045,10 +1092,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? shadowPairSideReliability?.eligible === true &&
           (standardGovernanceExecutable || localImpulseDriftOnlyRescue)
         : standardGovernanceExecutable;
-    const multimodelPrimaryExecutable =
-      professionalDemoPhase && multimodelDemo?.authority.executable === true;
     const preliminaryCanExecute = professionalDemoPhase
-      ? multimodelPrimaryExecutable || professionalM1Fallback?.eligible === true
+      ? multimodelPrimaryExecutable ||
+        m5EarlyTransitionHandoffEligible ||
+        professionalM1FallbackExecutable
       : routeExecutable && routePayoffEligible && governanceExecutable;
     const fastStopRegimeBrake = preliminaryCanExecute
       ? await this.evidence.loadFastStopRegimeBrake({
@@ -1059,14 +1106,19 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           evaluatedAt: decisionTime,
         })
       : null;
+    const executionStrategyRoute = m5EarlyTransitionHandoffEligible
+      ? ('EARLY_TRANSITION' as const)
+      : multimodelDemo?.ensemble.strategyRoute;
     const multimodelLossStreakBrake =
-      preliminaryCanExecute && multimodelPrimaryExecutable && multimodelDemo
+      preliminaryCanExecute &&
+      (multimodelPrimaryExecutable || m5EarlyTransitionHandoffEligible) &&
+      executionStrategyRoute
         ? await this.evidence.loadMultimodelLossStreakBrake({
             userId,
             brokerConnectionId,
             instrument: candidate.instrument,
             direction: candidate.direction,
-            strategyRoute: multimodelDemo.ensemble.strategyRoute,
+            strategyRoute: executionStrategyRoute,
             evaluatedAt: decisionTime,
           })
         : null;
@@ -1095,9 +1147,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     ]);
     const blockers = professionalDemoPhase
       ? unique([
-          ...(professionalM1Fallback?.eligible === true
+          ...(professionalM1FallbackExecutable || m5EarlyTransitionHandoffEligible
             ? []
             : (multimodelDemo?.authority.blockers ?? ['MULTIMODEL_AUTHORITY_UNAVAILABLE'])),
+          ...(professionalM1Fallback?.eligible === true &&
+          !professionalM1FallbackExecutable &&
+          !m5EarlyTransitionHandoffEligible
+            ? ['M1_PROFESSIONAL_FALLBACK_OBSERVATIONAL_ONLY']
+            : []),
           ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
           ...(multimodelLossStreakBrake?.active === true
             ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
@@ -1141,6 +1198,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         scoutReliabilityTier,
         executionVolumeCap,
         professionalM1Fallback,
+        professionalM1FallbackExecutionEnabled: M1_PROFESSIONAL_FALLBACK_EXECUTION_ENABLED,
         microDriftOnlyRescue,
         localImpulseDriftOnlyRescue,
         rolloutPolicyVersion: this.rolloutPolicy.version,
@@ -1159,6 +1217,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         multimodelTrainedExpert: multimodelDemo?.trainedExpert ?? null,
         multimodelAuthority: multimodelDemo?.authority ?? null,
         multimodelPortfolioSnapshotAvailable: multimodelDemo?.portfolioSnapshotAvailable ?? null,
+        m5EarlyTransitionEvidence: m5EarlyTransitionEvidence
+          ? { ...m5EarlyTransitionEvidence }
+          : null,
+        m5EarlyTransitionHandoff: m5EarlyTransitionHandoff ? { ...m5EarlyTransitionHandoff } : null,
         shadowOutcomeEligible,
       },
       blockers,
@@ -1186,6 +1248,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         executionVolumeCap,
         multimodelDemo,
         professionalM1Fallback,
+        m5EarlyTransitionEvidence,
+        m5EarlyTransitionHandoff,
       );
     }
   }
@@ -1282,6 +1346,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     executionVolumeCap: number,
     multimodelDemo: MultimodelDemoEvaluation | null = null,
     professionalM1Fallback: M1ProfessionalFallbackDecision | null = null,
+    m5EarlyTransitionEvidence: M5EarlyTransitionEvidence | null = null,
+    m5EarlyTransitionHandoff: M5EarlyTransitionHandoffDecision | null = null,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -1304,7 +1370,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       }
     }
     const useProfessionalM1Fallback =
-      professionalDemoPhase && professionalM1Fallback?.eligible === true;
+      professionalDemoPhase &&
+      M1_PROFESSIONAL_FALLBACK_EXECUTION_ENABLED &&
+      professionalM1Fallback?.eligible === true;
+    const useM5EarlyTransitionHandoff =
+      professionalDemoPhase &&
+      !useProfessionalM1Fallback &&
+      m5EarlyTransitionHandoff?.eligible === true &&
+      m5EarlyTransitionEvidence !== null;
     const requiredExecutionMode = professionalDemoPhase
       ? ExecutionMode.FULL_AUTO
       : ExecutionMode.PAPER_ONLY;
@@ -1383,8 +1456,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         brokerConnectionId,
         instrument: candidate.instrument,
         direction: candidate.direction,
-        confidenceScore:
-          professionalDemoPhase && multimodelDemo && !useProfessionalM1Fallback
+        confidenceScore: useM5EarlyTransitionHandoff
+          ? m5EarlyTransitionEvidence.ensembleScore
+          : professionalDemoPhase && multimodelDemo && !useProfessionalM1Fallback
             ? multimodelDemoSignalConfidence(
                 {
                   ensemble: multimodelDemo.ensemble,
@@ -1402,8 +1476,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           professionalDemoPhase && !useProfessionalM1Fallback
             ? 'external-irexpro-multimodel-ensemble'
             : 'external-irexpro-m1-tactical',
-        marketRegime:
-          professionalDemoPhase && multimodelDemo && !useProfessionalM1Fallback
+        marketRegime: useM5EarlyTransitionHandoff
+          ? 'TRANSITION'
+          : professionalDemoPhase && multimodelDemo && !useProfessionalM1Fallback
             ? multimodelDemo.ensemble.strategyRoute === 'TREND_CONTINUATION'
               ? 'TREND_HEALTHY'
               : multimodelDemo.ensemble.strategyRoute === 'CONFIRMED_REVERSAL'
@@ -1436,10 +1511,18 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_professional_fallback_reason: professionalM1Fallback?.reason ?? null,
           m1_professional_fallback_lot_cap:
             professionalM1Fallback?.eligible === true ? professionalM1Fallback.lotCap : null,
-          multimodel_plan_b_score: multimodelDemo?.ensemble.ensembleScore ?? null,
-          multimodel_plan_b_route: multimodelDemo?.ensemble.strategyRoute ?? null,
-          multimodel_plan_b_expected_r: multimodelDemo?.ensemble.expectedR ?? null,
-          multimodel_plan_b_paper_admitted: multimodelDemo?.ensemble.paperAdmitted ?? null,
+          multimodel_plan_b_score: useM5EarlyTransitionHandoff
+            ? m5EarlyTransitionEvidence.ensembleScore
+            : (multimodelDemo?.ensemble.ensembleScore ?? null),
+          multimodel_plan_b_route: useM5EarlyTransitionHandoff
+            ? m5EarlyTransitionEvidence.strategyRoute
+            : (multimodelDemo?.ensemble.strategyRoute ?? null),
+          multimodel_plan_b_expected_r: useM5EarlyTransitionHandoff
+            ? m5EarlyTransitionEvidence.netExpectedR
+            : (multimodelDemo?.ensemble.expectedR ?? null),
+          multimodel_plan_b_paper_admitted: useM5EarlyTransitionHandoff
+            ? m5EarlyTransitionEvidence.paperAdmitted
+            : (multimodelDemo?.ensemble.paperAdmitted ?? null),
           multimodel_governance_net_expected_r: multimodelDemo?.governance.netExpectedR ?? null,
           multimodel_trained_expert_state: multimodelDemo?.trainedExpert.state ?? null,
           multimodel_trained_expert_direction: multimodelDemo?.trainedExpert.direction ?? null,
@@ -1456,7 +1539,25 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             : null,
           multimodel_execution_authority_path: useProfessionalM1Fallback
             ? professionalM1Fallback?.tier
-            : (multimodelDemo?.authority.authorityPath ?? null),
+            : useM5EarlyTransitionHandoff
+              ? 'M5_EARLY_TRANSITION_HANDOFF'
+              : (multimodelDemo?.authority.authorityPath ?? null),
+          m5_early_transition_handoff: useM5EarlyTransitionHandoff,
+          m5_early_transition_handoff_reason: useM5EarlyTransitionHandoff
+            ? m5EarlyTransitionHandoff.reason
+            : null,
+          m5_early_transition_lot_cap: useM5EarlyTransitionHandoff
+            ? m5EarlyTransitionHandoff.lotCap
+            : null,
+          m5_early_transition_net_expected_r: useM5EarlyTransitionHandoff
+            ? m5EarlyTransitionEvidence.netExpectedR
+            : null,
+          m5_early_transition_ensemble_score: useM5EarlyTransitionHandoff
+            ? m5EarlyTransitionEvidence.ensembleScore
+            : null,
+          m5_early_transition_market_bar_time: useM5EarlyTransitionHandoff
+            ? m5EarlyTransitionEvidence.marketBarTime.toISOString()
+            : null,
           multimodel_rescue_volume_cap: multimodelDemo?.authority.rescueVolumeCap ?? null,
           external_provider_paper_only: true,
           production_eligible: false,

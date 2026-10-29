@@ -671,6 +671,21 @@ function phase2Harness(
     duplicateOppositeIntent?: boolean;
     duplicateSameDirectionIntent?: boolean;
     tradeIntentId?: string | null;
+    m5EarlyTransitionEvidence?: {
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      marketBarTime: Date;
+      evaluatedAt: Date;
+      strategyRoute: string;
+      paperAdmitted: boolean;
+      paperExecutionEligible: boolean;
+      eventRisk: 'CLEAR' | 'HIGH_IMPACT_BLOCK' | 'UNVERIFIED';
+      driftState: string;
+      netExpectedR: number;
+      ensembleScore: number;
+      consensusPassed: number;
+      consensusRequired: number;
+    } | null;
     fastStopBrake?: {
       active: boolean;
       reason: 'CLEAR' | 'RECENT_FAST_STOP';
@@ -751,6 +766,9 @@ function phase2Harness(
   const markOutcomeState = jest.fn().mockResolvedValue(undefined);
   const loadOpenPaperPositions = jest.fn().mockResolvedValue(options.openPositions ?? []);
   const loadOpenPaperRiskPositions = jest.fn().mockResolvedValue([]);
+  const loadLatestM5EarlyTransitionEvidence = jest
+    .fn()
+    .mockResolvedValue(options.m5EarlyTransitionEvidence ?? null);
   const loadFastStopRegimeBrake = jest.fn().mockResolvedValue(
     options.fastStopBrake ?? {
       active: false,
@@ -781,6 +799,7 @@ function phase2Harness(
     markOutcomeState,
     loadOpenPaperPositions,
     loadOpenPaperRiskPositions,
+    loadLatestM5EarlyTransitionEvidence,
     loadFastStopRegimeBrake,
     loadMultimodelLossStreakBrake,
     hasActiveM1Intent,
@@ -874,6 +893,7 @@ function phase2Harness(
     closeTrade,
     loadOpenPaperPositions,
     loadOpenPaperRiskPositions,
+    loadLatestM5EarlyTransitionEvidence,
     loadFastStopRegimeBrake,
     loadMultimodelLossStreakBrake,
     hasActiveM1Intent,
@@ -2080,7 +2100,138 @@ describe('M1 V8 multi-model DEMO authority', () => {
     brokerConnectionId: 'demo-conn-2',
   };
 
-  it('promotes a mature positive-expectancy M1 continuation at a conservative cap when Plan-B admission is the only upstream gap', async () => {
+  it('promotes a fresh durable M5 early transition as a 0.20 DEMO canary when cTrader M1 confirms continuation', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      m5EarlyTransitionEvidence: {
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        marketBarTime: new Date('2026-10-15T10:25:00.000Z'),
+        evaluatedAt: new Date('2026-10-15T10:29:00.000Z'),
+        strategyRoute: 'EARLY_TRANSITION',
+        paperAdmitted: true,
+        paperExecutionEligible: true,
+        eventRisk: 'CLEAR',
+        driftState: 'NORMAL',
+        netExpectedR: 0.31,
+        ensembleScore: 0.66,
+        consensusPassed: 7,
+        consensusRequired: 6,
+      },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
+        authority: {
+          ...result.authority,
+          executable: false,
+          authorityPath: 'BLOCKED',
+          rescueVolumeCap: null,
+          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+        },
+      };
+    });
+
+    const route = await driveFeatures(h, cleanContinuationFeatures(), {
+      brokerConnectionId: 'demo-conn-2',
+    });
+
+    expect(route.route).toBe('M1_TREND_CONTINUATION');
+    expect(h.loadLatestM5EarlyTransitionEvidence).toHaveBeenCalledWith({
+      userId: 'user-1',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      asOf: new Date('2026-10-15T10:30:00.000Z'),
+    });
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        brokerConnectionId: 'demo-conn-2',
+        suggestedVolume: 0.2,
+        strategyCode: 'external-irexpro-multimodel-ensemble',
+        metadata: expect.objectContaining({
+          multimodel_execution_authority_path: 'M5_EARLY_TRANSITION_HANDOFF',
+          m5_early_transition_handoff: true,
+          m5_early_transition_handoff_reason: 'M5_EARLY_TRANSITION_M1_CONFIRMED_PROBE',
+          m5_early_transition_net_expected_r: 0.31,
+        }),
+      }),
+    );
+  });
+
+  it('keeps the M5 early-transition canary blocked after three recent losses on the same demo pair-side-route', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      m5EarlyTransitionEvidence: {
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        marketBarTime: new Date('2026-10-15T10:25:00.000Z'),
+        evaluatedAt: new Date('2026-10-15T10:29:00.000Z'),
+        strategyRoute: 'EARLY_TRANSITION',
+        paperAdmitted: true,
+        paperExecutionEligible: true,
+        eventRisk: 'CLEAR',
+        driftState: 'NORMAL',
+        netExpectedR: 0.31,
+        ensembleScore: 0.66,
+        consensusPassed: 7,
+        consensusRequired: 6,
+      },
+      multimodelLossStreakBrake: {
+        artifact: 'm1-multimodel-loss-streak-brake-v1',
+        active: true,
+        reason: 'RECENT_MULTIMODEL_LOSS_STREAK',
+        strategyRoute: 'EARLY_TRANSITION',
+        recentClosedTrades: 3,
+        recentLosses: 3,
+        recentWins: 0,
+        cumulativeRealisedPnl: -24.37,
+        latestClosedAt: new Date('2026-10-15T10:27:00.000Z'),
+        cooldownHours: 12,
+        cooldownRemainingSeconds: 42_900,
+      },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
+        authority: {
+          ...result.authority,
+          executable: false,
+          authorityPath: 'BLOCKED',
+          rescueVolumeCap: null,
+          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+        },
+      };
+    });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.loadMultimodelLossStreakBrake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        brokerConnectionId: 'demo-conn-2',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        strategyRoute: 'EARLY_TRANSITION',
+      }),
+    );
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(recorded?.blockers).toContain('M1_MULTIMODEL_LOSS_STREAK_BRAKE');
+  });
+
+  it('keeps a mature M1 continuation fallback observational while direct M1 DEMO authority is paused', async () => {
     const maturePositiveContinuation = [
       { realisedPnl: 8, riskAtStop: 10, closedAt: '2026-10-15T10:29:00.000Z' },
       { realisedPnl: 6, riskAtStop: 10, closedAt: '2026-10-15T10:19:00.000Z' },
@@ -2127,25 +2278,15 @@ describe('M1 V8 multi-model DEMO authority', () => {
     });
 
     expect(route.route).toBe('M1_TREND_CONTINUATION');
-    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
-    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
-      expect.objectContaining({
-        suggestedVolume: 0.2,
-        strategyCode: 'external-irexpro-m1-tactical',
-        metadata: expect.objectContaining({
-          m1_professional_fallback: true,
-          m1_professional_fallback_tier: 'QUALIFIED_CONTINUATION',
-          m1_tactical_route: 'M1_TREND_CONTINUATION',
-        }),
-      }),
-    );
+    expect(h.receiveSignal).not.toHaveBeenCalled();
     const recorded = h.recordDecision.mock.calls.find(
       ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
     )?.[0];
-    expect(recorded?.executionAuthority).toBe('BROKER_NATIVE');
+    expect(recorded?.executionAuthority).toBe('NONE');
     expect(recorded?.governance.professionalM1Fallback).toEqual(
       expect.objectContaining({ eligible: true, tier: 'QUALIFIED_CONTINUATION', lotCap: 0.2 }),
     );
+    expect(recorded?.governance.professionalM1FallbackExecutionEnabled).toBe(false);
   });
 
   it('keeps continuation fallback blocked when the exact M1 sleeve has a recent loss streak', async () => {
@@ -2243,7 +2384,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
     );
   });
 
-  it('falls back to a qualified M1 early transition when Plan-B still calls the move trend continuation', async () => {
+  it('keeps a qualified M1 early-transition fallback observational while direct M1 DEMO authority is paused', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
       session: fullAutoSession,
@@ -2286,35 +2427,21 @@ describe('M1 V8 multi-model DEMO authority', () => {
     });
 
     expect(route.route).toBe('M1_EARLY_TRANSITION');
-    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
-    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
-      expect.objectContaining({
-        brokerConnectionId: 'demo-conn-2',
-        suggestedVolume: 0.2,
-        strategyCode: 'external-irexpro-m1-tactical',
-        metadata: expect.objectContaining({
-          primary_engine_code: 'irexpro-m1-tactical',
-          m1_professional_fallback: true,
-          m1_professional_fallback_tier: 'QUALIFIED',
-          multimodel_plan_b_route: 'TREND_CONTINUATION',
-          m1_tactical_route: 'M1_EARLY_TRANSITION',
-        }),
-      }),
-    );
+    expect(h.receiveSignal).not.toHaveBeenCalled();
     const recorded = h.recordDecision.mock.calls.find(
       ([value]) => value.route === 'M1_EARLY_TRANSITION',
     )?.[0];
-    expect(recorded?.executionAuthority).toBe('BROKER_NATIVE');
-    expect(recorded?.blockers).toEqual([]);
+    expect(recorded?.executionAuthority).toBe('NONE');
+    expect(recorded?.blockers).toContain('M1_PROFESSIONAL_FALLBACK_OBSERVATIONAL_ONLY');
     expect(recorded?.governance).toEqual(
       expect.objectContaining({
         professionalM1Fallback: expect.objectContaining({ eligible: true, tier: 'QUALIFIED' }),
-        executionVolumeCap: 0.2,
+        professionalM1FallbackExecutionEnabled: false,
       }),
     );
   });
 
-  it('uses the 0.20 product floor for a recovery probe when the current M1 impulse is strong but broad shadow evidence is still weak', async () => {
+  it('keeps a recovery-probe M1 fallback observational while direct M1 DEMO authority is paused', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
       session: fullAutoSession,
@@ -2373,17 +2500,10 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(recoveryRecorded?.governance.professionalM1Fallback).toEqual(
       expect.objectContaining({ eligible: true, tier: 'RECOVERY_PROBE' }),
     );
-    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
-    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
-      expect.objectContaining({
-        suggestedVolume: 0.2,
-        strategyCode: 'external-irexpro-m1-tactical',
-        metadata: expect.objectContaining({
-          m1_professional_fallback: true,
-          m1_professional_fallback_tier: 'RECOVERY_PROBE',
-        }),
-      }),
-    );
+    expect(recoveryRecorded?.governance.professionalM1FallbackExecutionEnabled).toBe(false);
+    expect(recoveryRecorded?.executionAuthority).toBe('NONE');
+    expect(recoveryRecorded?.blockers).toContain('M1_PROFESSIONAL_FALLBACK_OBSERVATIONAL_ONLY');
+    expect(h.receiveSignal).not.toHaveBeenCalled();
   });
 
   it('does not let the professional M1 fallback bypass a high-impact event block', async () => {
@@ -2524,7 +2644,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
     );
   });
 
-  it('submits trained-expert confidence when HIGH_CONVICTION_RESCUE grants execution authority', async () => {
+  it('submits trained-expert confidence for an EARLY_TRANSITION high-conviction rescue', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
       session: fullAutoSession,
@@ -2535,7 +2655,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
       const result = await original(...args);
       return {
         ...result,
-        ensemble: { ...result.ensemble, ensembleScore: 0.579, paperAdmitted: false },
+        ensemble: { ...result.ensemble, ensembleScore: 0.579, paperAdmitted: false, strategyRoute: 'EARLY_TRANSITION' as const },
         trainedExpert: { ...result.trainedExpert, ensembleConfidence: 0.738 },
         authority: {
           ...result.authority,

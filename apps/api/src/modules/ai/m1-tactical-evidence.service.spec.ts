@@ -76,6 +76,73 @@ describe('M1 tactical decision migration contract', () => {
   });
 });
 
+describe('M1 M5 early-transition handoff evidence', () => {
+  it('loads the latest durable M5 early-transition decision across the research source connection', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        instrument: 'USDCHF',
+        direction: 'BUY',
+        market_bar_time: '2026-10-29T17:05:00.000Z',
+        evaluated_at: '2026-10-29T17:09:00.000Z',
+        strategy_route: 'EARLY_TRANSITION',
+        paper_admitted: true,
+        paper_execution_eligible: true,
+        event_risk: 'CLEAR',
+        drift_state: 'NORMAL',
+        net_expected_r: '0.252',
+        ensemble_score: '0.61',
+        consensus_passed: 7,
+        consensus_required: 6,
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    await expect(
+      service.loadLatestM5EarlyTransitionEvidence({
+        userId: input().userId,
+        instrument: 'usdchf',
+        direction: 'BUY',
+        asOf: new Date('2026-10-29T17:10:00.000Z'),
+      }),
+    ).resolves.toEqual({
+      instrument: 'USDCHF',
+      direction: 'BUY',
+      marketBarTime: new Date('2026-10-29T17:05:00.000Z'),
+      evaluatedAt: new Date('2026-10-29T17:09:00.000Z'),
+      strategyRoute: 'EARLY_TRANSITION',
+      paperAdmitted: true,
+      paperExecutionEligible: true,
+      eventRisk: 'CLEAR',
+      driftState: 'NORMAL',
+      netExpectedR: 0.252,
+      ensembleScore: 0.61,
+      consensusPassed: 7,
+      consensusRequired: 6,
+    });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(String(sql)).toContain('FROM trading.ensemble_shadow_decisions');
+    expect(String(sql)).toContain('user_id = $1');
+    expect(String(sql)).not.toContain('broker_connection_id =');
+    expect(String(sql)).toContain('strategyRoute');
+    expect(params).toEqual([input().userId, 'USDCHF', 'BUY', '2026-10-29T17:10:00.000Z']);
+  });
+
+  it('returns null when no durable M5 early-transition decision exists', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    await expect(
+      service.loadLatestM5EarlyTransitionEvidence({
+        userId: input().userId,
+        instrument: 'USDCHF',
+        direction: 'BUY',
+        asOf: new Date('2026-10-29T17:10:00.000Z'),
+      }),
+    ).resolves.toBeNull();
+  });
+});
+
 describe('M1TacticalEvidenceService', () => {
   it('loads the latest user-scoped M1 decision state for the trading cockpit', async () => {
     const query = jest.fn().mockResolvedValue([
@@ -236,9 +303,9 @@ describe('M1TacticalEvidenceService', () => {
     expect(normalized).toContain('d.route = $3');
     expect(normalized).toContain('d.instrument = $4');
     expect(normalized).toContain('d.direction = $5');
-    expect(normalized).toContain("COALESCE(");
-    expect(normalized).toContain("t.max_favorable_pnl");
-    expect(normalized).toContain("reconstructed_path_v1");
+    expect(normalized).toContain('COALESCE(');
+    expect(normalized).toContain('t.max_favorable_pnl');
+    expect(normalized).toContain('reconstructed_path_v1');
     expect(normalized).toContain("t.status = 'CLOSED'");
     expect(normalized).toContain('t.realised_pnl <> 0');
     expect(normalized).toContain("t.closed_at > ($7::timestamptz - interval '7 days')");
@@ -340,12 +407,47 @@ describe('M1TacticalEvidenceService', () => {
     ]);
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
     const evaluatedAt = new Date('2026-10-28T23:23:00.000Z');
-    const result = (await (service as any).loadMultimodelLossStreakBrake?.({ userId: input().userId, brokerConnectionId: input().brokerConnectionId, instrument: 'eurusd', direction: 'SELL', strategyRoute: 'CONFIRMED_REVERSAL', evaluatedAt })) ?? null;
-    expect(result).toMatchObject({ artifact: 'm1-multimodel-loss-streak-brake-v1', active: true, reason: 'RECENT_MULTIMODEL_LOSS_STREAK', strategyRoute: 'CONFIRMED_REVERSAL', recentClosedTrades: 3, recentLosses: 3, recentWins: 0, cumulativeRealisedPnl: -33.43, cooldownHours: 12 });
-    const [sql, params] = query.mock.calls[0]!; const normalized = String(sql).replace(/\s+/g, ' ');
-    expect(normalized).toContain('t.user_id = $1'); expect(normalized).toContain('t.broker_connection_id = $2'); expect(normalized).toContain('t.instrument = $3'); expect(normalized).toContain('t.direction = $4');
-    expect(normalized).toContain("d.governance -> 'multimodelEnsemble' ->> 'strategyRoute' = $5"); expect(normalized).toContain("ti.strategy_code = 'external-irexpro-multimodel-ensemble'"); expect(normalized).toContain("ti.timeframe = 'M1'"); expect(normalized).toContain("t.status = 'CLOSED'"); expect(normalized).toContain("t.closed_at > ($6::timestamptz - interval '24 hours')"); expect(normalized).toContain('ORDER BY t.closed_at DESC'); expect(normalized).toContain('LIMIT 3');
-    expect(params).toEqual([input().userId, input().brokerConnectionId, 'EURUSD', 'SELL', 'CONFIRMED_REVERSAL', evaluatedAt.toISOString()]);
+    const result =
+      (await (service as any).loadMultimodelLossStreakBrake?.({
+        userId: input().userId,
+        brokerConnectionId: input().brokerConnectionId,
+        instrument: 'eurusd',
+        direction: 'SELL',
+        strategyRoute: 'CONFIRMED_REVERSAL',
+        evaluatedAt,
+      })) ?? null;
+    expect(result).toMatchObject({
+      artifact: 'm1-multimodel-loss-streak-brake-v1',
+      active: true,
+      reason: 'RECENT_MULTIMODEL_LOSS_STREAK',
+      strategyRoute: 'CONFIRMED_REVERSAL',
+      recentClosedTrades: 3,
+      recentLosses: 3,
+      recentWins: 0,
+      cumulativeRealisedPnl: -33.43,
+      cooldownHours: 12,
+    });
+    const [sql, params] = query.mock.calls[0]!;
+    const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain('t.user_id = $1');
+    expect(normalized).toContain('t.broker_connection_id = $2');
+    expect(normalized).toContain('t.instrument = $3');
+    expect(normalized).toContain('t.direction = $4');
+    expect(normalized).toContain("d.governance -> 'multimodelEnsemble' ->> 'strategyRoute' = $5");
+    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-multimodel-ensemble'");
+    expect(normalized).toContain("ti.timeframe = 'M1'");
+    expect(normalized).toContain("t.status = 'CLOSED'");
+    expect(normalized).toContain("t.closed_at > ($6::timestamptz - interval '24 hours')");
+    expect(normalized).toContain('ORDER BY t.closed_at DESC');
+    expect(normalized).toContain('LIMIT 3');
+    expect(params).toEqual([
+      input().userId,
+      input().brokerConnectionId,
+      'EURUSD',
+      'SELL',
+      'CONFIRMED_REVERSAL',
+      evaluatedAt.toISOString(),
+    ]);
   });
 
   it('marks signal/trade-intent linkage without changing decision identity', async () => {
@@ -509,7 +611,12 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
       }),
     ).resolves.toEqual([
       { instrument: 'EURUSD', direction: 'SELL', lotSize: 0.1, riskAtStop: expect.closeTo(5, 6) },
-      { instrument: 'USDJPY', direction: 'BUY', lotSize: 0.1, riskAtStop: expect.closeTo(3.184713, 5) },
+      {
+        instrument: 'USDJPY',
+        direction: 'BUY',
+        lotSize: 0.1,
+        riskAtStop: expect.closeTo(3.184713, 5),
+      },
     ]);
     const [sql, params] = query.mock.calls[0]!;
     const normalized = String(sql).replace(/\s+/g, ' ');

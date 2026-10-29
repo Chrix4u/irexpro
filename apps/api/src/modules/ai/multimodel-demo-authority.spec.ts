@@ -124,9 +124,9 @@ describe('evaluateMultimodelDemoAuthority', () => {
     expect(result.blockers).toEqual([]);
   });
 
-  it('rescues a DEMO setup when three trained experts unanimously match direction and only admission/drift block it', () => {
+  it('rescues only an EARLY_TRANSITION DEMO setup when trained experts unanimously match direction and only admission/drift block it', () => {
     const result = evaluateMultimodelDemoAuthority({
-      ensemble: ensemble(false),
+      ensemble: { ...ensemble(false), strategyRoute: 'EARLY_TRANSITION' as const },
       governance: governance(false, {
         paperExecutionBlockers: [
           'ENSEMBLE_NOT_PAPER_ADMITTED',
@@ -139,7 +139,7 @@ describe('evaluateMultimodelDemoAuthority', () => {
       }),
       trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.714 },
       candidateDirection: 'BUY',
-      m1TimingRoute: 'M1_TREND_CONTINUATION',
+      m1TimingRoute: 'M1_EARLY_TRANSITION',
     });
 
     expect(result).toEqual(
@@ -154,7 +154,11 @@ describe('evaluateMultimodelDemoAuthority', () => {
 
   it('uses trained-expert confidence for high-conviction rescue while primary Plan-B keeps its ensemble score', () => {
     const rescueInput = {
-      ensemble: { ...ensemble(false), ensembleScore: 0.579 },
+      ensemble: {
+        ...ensemble(false),
+        ensembleScore: 0.579,
+        strategyRoute: 'EARLY_TRANSITION' as const,
+      },
       governance: governance(false, {
         paperExecutionBlockers: [
           'ENSEMBLE_NOT_PAPER_ADMITTED',
@@ -166,7 +170,7 @@ describe('evaluateMultimodelDemoAuthority', () => {
       }),
       trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.738 },
       candidateDirection: 'BUY' as const,
-      m1TimingRoute: 'M1_TREND_CONTINUATION' as const,
+      m1TimingRoute: 'M1_EARLY_TRANSITION' as const,
     };
     const rescued = evaluateMultimodelDemoAuthority(rescueInput);
     expect(rescued.authorityPath).toBe('HIGH_CONVICTION_RESCUE');
@@ -182,6 +186,28 @@ describe('evaluateMultimodelDemoAuthority', () => {
     const primary = evaluateMultimodelDemoAuthority(primaryInput);
     expect(primary.authorityPath).toBe('PRIMARY_PLAN_B');
     expect(multimodelDemoSignalConfidence(primaryInput, primary)).toBeCloseTo(0.641, 10);
+  });
+
+  it('does not rescue TREND_CONTINUATION even with unanimous broker-native trained experts', () => {
+    const result = evaluateMultimodelDemoAuthority({
+      ensemble: ensemble(false),
+      governance: governance(false, {
+        paperExecutionBlockers: [
+          'ENSEMBLE_NOT_PAPER_ADMITTED',
+          'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+          'DRIFT_OUT_OF_DISTRIBUTION',
+        ],
+        netExpectedR: 0.52,
+        paperNetExpectedRPassed: true,
+      }),
+      trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.78 },
+      candidateDirection: 'BUY',
+      m1TimingRoute: 'M1_TREND_CONTINUATION',
+    });
+
+    expect(result.executable).toBe(false);
+    expect(result.authorityPath).toBe('BLOCKED');
+    expect(result.rescueVolumeCap).toBeNull();
   });
 
   it('does not rescue when the M1 timing specialist abstains', () => {
@@ -308,7 +334,7 @@ describe('evaluateMultimodelDemoAuthority', () => {
 describe('multimodelDemoExecutionVolumeCap', () => {
   it('caps a high-conviction rescue at 0.20 lot while leaving the primary path at the rollout cap', () => {
     const rescued = evaluateMultimodelDemoAuthority({
-      ensemble: ensemble(false),
+      ensemble: { ...ensemble(false), strategyRoute: 'EARLY_TRANSITION' as const },
       governance: governance(false, {
         paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'DRIFT_OUT_OF_DISTRIBUTION'],
         netExpectedR: 0.52,
@@ -316,7 +342,7 @@ describe('multimodelDemoExecutionVolumeCap', () => {
       }),
       trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.78 },
       candidateDirection: 'BUY',
-      m1TimingRoute: 'M1_TREND_CONTINUATION',
+      m1TimingRoute: 'M1_EARLY_TRANSITION',
     });
     const primary = evaluateMultimodelDemoAuthority({
       ensemble: ensemble(true),

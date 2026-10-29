@@ -66,6 +66,12 @@ function trendContinuationTimingConsistent(input: MultimodelDemoAuthorityInput):
 }
 
 function highConvictionRescueEligible(input: MultimodelDemoAuthorityInput): boolean {
+  // Realized DEMO + shadow evidence currently supports rescue only for the
+  // EARLY_TRANSITION sleeve. Trend-continuation and confirmed-reversal must
+  // qualify through the ordinary Plan-B + M1 timing path rather than using
+  // trained-expert unanimity to bypass failed admission/drift.
+  if (input.ensemble.strategyRoute !== 'EARLY_TRANSITION') return false;
+
   const longVotes = input.trainedExpert.longVotes ?? 0;
   const shortVotes = input.trainedExpert.shortVotes ?? 0;
   const totalVotes = longVotes + shortVotes;
