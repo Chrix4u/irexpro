@@ -380,11 +380,10 @@ export function deriveTradeReadinessUiState(
     const routeShadow = blockers.includes("M1_PHASE_ROUTE_SHADOW");
     const reliabilityBlocked = blockers.some((blocker) => blocker.includes("RELIABILITY"));
     if (driftBlocked) {
-      // Drift is an execution veto, not a reason to pin every setup to the same
-      // presentation score. Keep the meter below the ready zone while allowing
-      // fresh ensemble confidence to remain visibly distinct between scans.
-      const driftReadiness = 20 + primaryConfidence * 28;
-      score = Math.min(score, driftReadiness);
+      // Drift remains an execution veto, but the meter should still communicate
+      // the model's actual setup strength. The general blocked cap above keeps
+      // blocked setups out of the READY zone without compressing 55–69% setups
+      // back into WAITING.
     } else if (reliabilityBlocked) score = Math.min(score, 58);
     if (routeShadow) score = Math.min(score, 59);
 
@@ -445,7 +444,12 @@ export function deriveTradeReadinessUiState(
     return {
       score: rounded,
       band: rounded >= 40 ? "FORMING" : "WAITING",
-      headline: rounded >= 40 ? "Setup forming" : "Waiting for a stronger setup",
+      headline:
+        driftBlocked && rounded >= 40
+          ? "Strong setup — execution blocked"
+          : rounded >= 40
+            ? "Setup forming"
+            : "Waiting for a stronger setup",
       detail,
       tradeExpected: false,
       instrument: m1Decision.instrument,

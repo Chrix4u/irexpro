@@ -471,7 +471,7 @@ describe("production trade-readiness presentation", () => {
     });
 
     expect(result).toMatchObject({
-      score: 41,
+      score: 59,
       band: "FORMING",
       tradeExpected: false,
       instrument: "EURUSD",
@@ -776,9 +776,18 @@ describe("active multi-model execution presentation", () => {
       fastMarkState: "LIVE",
     });
 
-    expect(weakerResult.score).toBeLessThanOrEqual(49);
-    expect(strongerResult.score).toBeLessThanOrEqual(49);
+    expect(weakerResult).toMatchObject({
+      score: 55,
+      band: "FORMING",
+      tradeExpected: false,
+    });
+    expect(strongerResult).toMatchObject({
+      score: 69,
+      band: "FORMING",
+      tradeExpected: false,
+    });
+    expect(weakerResult.headline).toMatch(/execution blocked/i);
+    expect(weakerResult.detail).toMatch(/drift.*blocked|blocked.*drift/i);
     expect(strongerResult.score).toBeGreaterThan(weakerResult.score);
-    expect(strongerResult.score).not.toBe(49);
   });
 });
