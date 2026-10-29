@@ -54,6 +54,13 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
+function confirmedReversalTimingConsistent(input: MultimodelDemoAuthorityInput): boolean {
+  return (
+    input.ensemble.strategyRoute !== 'CONFIRMED_REVERSAL' ||
+    input.m1TimingRoute === 'M1_CONFIRMED_REVERSAL'
+  );
+}
+
 function highConvictionRescueEligible(input: MultimodelDemoAuthorityInput): boolean {
   const longVotes = input.trainedExpert.longVotes ?? 0;
   const shortVotes = input.trainedExpert.shortVotes ?? 0;
@@ -65,6 +72,7 @@ function highConvictionRescueEligible(input: MultimodelDemoAuthorityInput): bool
   );
 
   return (
+    confirmedReversalTimingConsistent(input) &&
     input.m1TimingRoute !== 'ABSTAIN' &&
     input.trainedExpert.allBrokerNative === true &&
     input.trainedExpert.direction === input.candidateDirection &&
@@ -91,6 +99,9 @@ export function evaluateMultimodelDemoAuthority(
   }
   if (!input.governance.paperExecutionEligible) {
     blockers.push('MULTIMODEL_GOVERNANCE_BLOCKED', ...input.governance.paperExecutionBlockers);
+  }
+  if (!confirmedReversalTimingConsistent(input)) {
+    blockers.push('MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED');
   }
 
   const finalBlockers = unique(blockers);
