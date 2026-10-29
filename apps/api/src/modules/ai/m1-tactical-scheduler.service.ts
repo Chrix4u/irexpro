@@ -126,10 +126,15 @@ const M1_PROFESSIONAL_CONTINUATION_LOT_CAP = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_MIN_EXPECTED_R = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_MIN_SAMPLES = 5;
 const M1_PROFESSIONAL_RECOVERY_PROBE_LOT_CAP = 0.2;
-// Realized DEMO fallback cohorts are currently negative. Keep the fallback
-// evaluator live for telemetry/requalification, but do not grant direct order
-// authority until a later evidence review explicitly re-enables it.
-const M1_PROFESSIONAL_FALLBACK_EXECUTION_ENABLED = false;
+// Realized early-transition fallback cohorts are currently negative, so QUALIFIED
+// and RECOVERY_PROBE remain observational. A QUALIFIED_CONTINUATION may execute
+// only after its exact pair/side continuation sleeve has earned positive realised
+// reliability and the current governance checks in evaluateM1ProfessionalFallback pass.
+function professionalM1FallbackExecutionEnabled(
+  fallback: M1ProfessionalFallbackDecision | null,
+): boolean {
+  return fallback?.eligible === true && fallback.tier === 'QUALIFIED_CONTINUATION';
+}
 // Recovery probes need a 0.05R cushion above the normal 0.20 early-transition route floor.
 const M1_PROFESSIONAL_RECOVERY_MIN_EXPECTED_R = 0.25;
 const M1_PROFESSIONAL_RECOVERY_SHADOW_REASONS = new Set([
@@ -1022,7 +1027,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         })
       : null;
     const professionalM1FallbackExecutable =
-      M1_PROFESSIONAL_FALLBACK_EXECUTION_ENABLED && professionalM1Fallback?.eligible === true;
+      professionalM1FallbackExecutionEnabled(professionalM1Fallback);
     const multimodelPrimaryExecutable =
       professionalDemoPhase && multimodelDemo?.authority.executable === true;
     let m5EarlyTransitionEvidence: M5EarlyTransitionEvidence | null = null;
@@ -1198,7 +1203,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         scoutReliabilityTier,
         executionVolumeCap,
         professionalM1Fallback,
-        professionalM1FallbackExecutionEnabled: M1_PROFESSIONAL_FALLBACK_EXECUTION_ENABLED,
+        professionalM1FallbackExecutionEnabled: professionalM1FallbackExecutable,
         microDriftOnlyRescue,
         localImpulseDriftOnlyRescue,
         rolloutPolicyVersion: this.rolloutPolicy.version,
@@ -1370,9 +1375,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       }
     }
     const useProfessionalM1Fallback =
-      professionalDemoPhase &&
-      M1_PROFESSIONAL_FALLBACK_EXECUTION_ENABLED &&
-      professionalM1Fallback?.eligible === true;
+      professionalDemoPhase && professionalM1FallbackExecutionEnabled(professionalM1Fallback);
     const useM5EarlyTransitionHandoff =
       professionalDemoPhase &&
       !useProfessionalM1Fallback &&

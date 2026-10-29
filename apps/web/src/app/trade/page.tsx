@@ -3059,14 +3059,14 @@ export default function AiTradingPage() {
                     </strong>
                     <div className="ai-performance-panel__stat-divider" aria-hidden="true" />
                     <div className="ai-performance-panel__secondary-stat">
-                      <span>Last 20 win rate</span>
+                      <span>Trade win rate · last 20</span>
                       <strong>
                         {realisedExecutionWindow.winRate == null
                           ? "—"
                           : `${(realisedExecutionWindow.winRate * 100).toFixed(0)}%`}
                       </strong>
                       <small>
-                        Same {realisedExecutionWindow.tradeCount} trade{realisedExecutionWindow.tradeCount === 1 ? "" : "s"} as chart
+                        {realisedExecutionWindow.wins}W / {realisedExecutionWindow.losses}L · counts trades, not P&amp;L amount
                       </small>
                     </div>
                   </div>

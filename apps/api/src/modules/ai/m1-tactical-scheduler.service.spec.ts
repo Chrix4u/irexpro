@@ -2231,7 +2231,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(recorded?.blockers).toContain('M1_MULTIMODEL_LOSS_STREAK_BRAKE');
   });
 
-  it('keeps a mature M1 continuation fallback observational while direct M1 DEMO authority is paused', async () => {
+  it('executes only a mature positive-expectancy M1 continuation fallback at the conservative cap', async () => {
     const maturePositiveContinuation = [
       { realisedPnl: 8, riskAtStop: 10, closedAt: '2026-10-15T10:29:00.000Z' },
       { realisedPnl: 6, riskAtStop: 10, closedAt: '2026-10-15T10:19:00.000Z' },
@@ -2278,15 +2278,26 @@ describe('M1 V8 multi-model DEMO authority', () => {
     });
 
     expect(route.route).toBe('M1_TREND_CONTINUATION');
-    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({
+        suggestedVolume: 0.2,
+        strategyCode: 'external-irexpro-m1-tactical',
+        metadata: expect.objectContaining({
+          m1_professional_fallback: true,
+          m1_professional_fallback_tier: 'QUALIFIED_CONTINUATION',
+          m1_tactical_route: 'M1_TREND_CONTINUATION',
+        }),
+      }),
+    );
     const recorded = h.recordDecision.mock.calls.find(
       ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
     )?.[0];
-    expect(recorded?.executionAuthority).toBe('NONE');
+    expect(recorded?.executionAuthority).toBe('BROKER_NATIVE');
     expect(recorded?.governance.professionalM1Fallback).toEqual(
       expect.objectContaining({ eligible: true, tier: 'QUALIFIED_CONTINUATION', lotCap: 0.2 }),
     );
-    expect(recorded?.governance.professionalM1FallbackExecutionEnabled).toBe(false);
+    expect(recorded?.governance.professionalM1FallbackExecutionEnabled).toBe(true);
   });
 
   it('keeps continuation fallback blocked when the exact M1 sleeve has a recent loss streak', async () => {
