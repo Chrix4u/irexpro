@@ -11,6 +11,7 @@ import {
   prepareBrokerForAutomationStart,
   resetDailyLossProtection,
   resetDailyLossProtectionForBroker,
+  shouldOfferDailyLossResetAfterEndedSession,
 } from './trader-session';
 
 /**
@@ -357,6 +358,35 @@ describe('dailyLossProtectionMessage', () => {
     ).toBe(
       'All new AI entries are blocked by daily-loss protection. Daily-loss limit: 5.00%. Daily loss 51.45 has reached limit (5.00% = 46.01 of the session opening balance 920.12)',
     );
+  });
+});
+
+describe('shouldOfferDailyLossResetAfterEndedSession', () => {
+  it('does not offer a daily-loss reset when the latest risk suspension was max drawdown', () => {
+    expect(
+      shouldOfferDailyLossResetAfterEndedSession({
+        dailyRiskCooldownActive: true,
+        latestRiskSuspensionCode: 'MAX_DRAWDOWN_REACHED',
+      }),
+    ).toBe(false);
+  });
+
+  it('offers the reset when the current persisted protection is genuinely daily loss', () => {
+    expect(
+      shouldOfferDailyLossResetAfterEndedSession({
+        dailyRiskCooldownActive: true,
+        latestRiskSuspensionCode: 'DAILY_LOSS_LIMIT_REACHED',
+      }),
+    ).toBe(true);
+  });
+
+  it('allows the daily-loss ledger to drive the control when no newer suspension code exists', () => {
+    expect(
+      shouldOfferDailyLossResetAfterEndedSession({
+        dailyRiskCooldownActive: true,
+        latestRiskSuspensionCode: null,
+      }),
+    ).toBe(true);
   });
 });
 

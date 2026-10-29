@@ -73,6 +73,7 @@ import {
   prepareBrokerForAutomationStart,
   resetDailyLossProtection,
   resetDailyLossProtectionForBroker,
+  shouldOfferDailyLossResetAfterEndedSession,
 } from "@/lib/trader-session";
 import "./ai-trader.css";
 
@@ -1825,7 +1826,12 @@ export default function AiTradingPage() {
     terminal?.risk?.latestDailyLossViolation ?? null,
   );
   const dailyRiskCooldownDisplayActive =
-    dailyRiskCooldown.active && !automationOn && !automationSuspended;
+    shouldOfferDailyLossResetAfterEndedSession({
+      dailyRiskCooldownActive: dailyRiskCooldown.active,
+      latestRiskSuspensionCode,
+    }) &&
+    !automationOn &&
+    !automationSuspended;
   const aiVisualState = automationSuspended || dailyRiskCooldownDisplayActive
     ? "blocked"
     : !automationOn

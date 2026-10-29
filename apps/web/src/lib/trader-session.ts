@@ -478,6 +478,23 @@ export interface DailyRiskCooldownState {
 }
 
 /**
+ * An ended session may still have a same-day daily-loss ledger entry, but a
+ * newer non-resettable suspension (for example max drawdown) must take
+ * precedence. Otherwise the UI offers a daily-loss reset that the server
+ * correctly rejects with 403.
+ */
+export function shouldOfferDailyLossResetAfterEndedSession(input: {
+  dailyRiskCooldownActive: boolean;
+  latestRiskSuspensionCode: string | null | undefined;
+}): boolean {
+  if (!input.dailyRiskCooldownActive) return false;
+  return (
+    input.latestRiskSuspensionCode == null ||
+    input.latestRiskSuspensionCode === 'DAILY_LOSS_LIMIT_REACHED'
+  );
+}
+
+/**
  * The daily-loss budget is scoped to a UTC risk day server-side. Keep the
  * Start control blocked through that same boundary even after the user
  * explicitly ends the suspended session, so Stop/Start cannot reset the day.
