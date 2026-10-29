@@ -100,6 +100,17 @@ describe('CTraderQuoteCollectorService', () => {
     }
   });
 
+  it('samples live quotes independently of the slower historical refresh cycle', async () => {
+    const h = harness();
+
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+
+    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(6);
+    expect(h.upsertM1Sample).toHaveBeenCalledTimes(6);
+    expect(h.getOhlcvForConnection).not.toHaveBeenCalled();
+    expect(h.upsertHistoricalCandles).not.toHaveBeenCalled();
+  });
+
   it('refreshes sixty recent M1 broker bars after the durable store is warm', async () => {
     const h = harness();
     h.countM1Candles.mockResolvedValue(1_000);

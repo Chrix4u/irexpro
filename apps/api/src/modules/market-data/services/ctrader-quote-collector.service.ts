@@ -10,6 +10,9 @@ import { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.s
 const DEFAULT_INTERVAL_MS = 15_000;
 const MIN_INTERVAL_MS = 10_000;
 const MAX_INTERVAL_MS = 300_000;
+const DEFAULT_LIVE_QUOTE_INTERVAL_MS = 1_000;
+const MIN_LIVE_QUOTE_INTERVAL_MS = 500;
+const MAX_LIVE_QUOTE_INTERVAL_MS = 10_000;
 const DEFAULT_INSTRUMENTS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'];
 const M1_WARM_TARGET = 600;
 const M1_REFRESH_COUNT = 60;
@@ -34,7 +37,9 @@ const CONTEXT_TIMEFRAMES = ['M5', 'M15', 'H1', 'H4'] as const;
 export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CTraderQuoteCollectorService.name);
   private timer: NodeJS.Timeout | null = null;
+  private liveQuoteTimer: NodeJS.Timeout | null = null;
   private running = false;
+  private liveQuoteRunning = false;
   private stopping = false;
   private m1RotationOffset = 0;
   private contextRotationOffset = 0;
@@ -49,18 +54,23 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   onModuleInit(): void {
     if (process.env.NODE_ENV === 'test' || !this.enabled()) return;
     const intervalMs = this.intervalMs();
+    const liveQuoteIntervalMs = this.liveQuoteIntervalMs();
     this.stopping = false;
     this.logger.log(
-      `cTrader broker-native M1 collection enabled interval=${intervalMs}ms ` +
-        `source=${this.sourceConnectionId()} instruments=${this.instruments().join(',')}`,
+      `cTrader broker-native M1 collection enabled historyInterval=${intervalMs}ms ` +
+        `liveQuoteInterval=${liveQuoteIntervalMs}ms source=${this.sourceConnectionId()} ` +
+        `instruments=${this.instruments().join(',')}`,
     );
     this.schedule(intervalMs, 3_000);
+    this.scheduleLiveQuotes(liveQuoteIntervalMs, 250);
   }
 
   onModuleDestroy(): void {
     this.stopping = true;
     if (this.timer) clearTimeout(this.timer);
+    if (this.liveQuoteTimer) clearTimeout(this.liveQuoteTimer);
     this.timer = null;
+    this.liveQuoteTimer = null;
   }
 
   async collectOnce(now = new Date()): Promise<void> {
@@ -99,6 +109,28 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       );
     } finally {
       this.running = false;
+    }
+  }
+
+  async collectLiveQuotesOnce(now = new Date()): Promise<void> {
+    if (this.liveQuoteRunning || !this.enabled() || !isFxWeeklySessionOpen(now)) return;
+    const userId = this.userId();
+    const connectionId = this.sourceConnectionId();
+    if (!userId || !connectionId) return;
+
+    this.liveQuoteRunning = true;
+    try {
+      const connection = await this.brokerService.findConnectionById(connectionId, userId);
+      if (!CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId)) return;
+      if (connection.status !== BrokerConnectionStatus.CONNECTED) return;
+      await this.sampleLiveSpreads(userId, connectionId);
+    } catch (error) {
+      this.warnThrottled(
+        `${connectionId}:live-quote`,
+        `cTrader live quote sampling deferred connection=${connectionId}: ${(error as Error).message}`,
+      );
+    } finally {
+      this.liveQuoteRunning = false;
     }
   }
 
@@ -270,6 +302,20 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     return Math.min(MAX_INTERVAL_MS, Math.max(MIN_INTERVAL_MS, Math.floor(raw)));
   }
 
+  private liveQuoteIntervalMs(): number {
+    const raw = Number(
+      this.config.get<number | string>(
+        'vpsForexScanner.m1CtraderLiveQuoteIntervalMs',
+        DEFAULT_LIVE_QUOTE_INTERVAL_MS,
+      ),
+    );
+    if (!Number.isFinite(raw)) return DEFAULT_LIVE_QUOTE_INTERVAL_MS;
+    return Math.min(
+      MAX_LIVE_QUOTE_INTERVAL_MS,
+      Math.max(MIN_LIVE_QUOTE_INTERVAL_MS, Math.floor(raw)),
+    );
+  }
+
   private instruments(): string[] {
     const raw = this.config.get<string>(
       'vpsForexScanner.m1CtraderCollectionInstruments',
@@ -298,6 +344,27 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       Math.max(0, delayMs),
     );
     this.timer.unref?.();
+  }
+
+  private scheduleLiveQuotes(intervalMs: number, delayMs: number): void {
+    if (this.stopping) return;
+    this.liveQuoteTimer = setTimeout(
+      async () => {
+        const startedAt = Date.now();
+        try {
+          await this.collectLiveQuotesOnce();
+        } finally {
+          if (!this.stopping) {
+            this.scheduleLiveQuotes(
+              intervalMs,
+              Math.max(100, intervalMs - (Date.now() - startedAt)),
+            );
+          }
+        }
+      },
+      Math.max(0, delayMs),
+    );
+    this.liveQuoteTimer.unref?.();
   }
 
   private warnThrottled(key: string, message: string): void {

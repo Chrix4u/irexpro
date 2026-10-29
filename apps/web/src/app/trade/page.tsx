@@ -31,11 +31,16 @@ import { mapApiError } from "@/lib/error-mapping";
 import { loadLiveAccountPositions } from "@/lib/live-account";
 import { resolveAiOpenPositionRows } from "@/lib/ai-open-positions";
 import { executionPathDiagnostics } from "@/lib/trade-path-diagnostics";
-import { loadMarketIntelligence } from "@/lib/market-intelligence";
+import {
+  loadLiveMarketQuote,
+  loadMarketIntelligence,
+} from "@/lib/market-intelligence";
 import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
 import {
   LIVE_SCAN_STAGES,
   deriveLiveScanFrame,
+  mergeLiveQuoteIntoCandles,
+  reconcileLiveCandles,
   selectChartWindow,
   shiftChartWindow,
   zoomChartWindow,
@@ -52,6 +57,7 @@ import {
 } from "@/lib/vps-scanner-status";
 import {
   loadTraderExecutionSnapshot,
+  summarizeRealisedExecutionWindow,
   summarizeRecentExecutionActivity,
   type TraderExecutionSnapshot,
 } from "@/lib/trader-execution";
@@ -2245,10 +2251,9 @@ export default function AiTradingPage() {
   useEffect(() => {
     if (!user || !selectedBrokerId) return;
 
-    // The PAPER scanner owns the authoritative market schedule. Do not hammer
-    // market intelligence every five seconds while the FX market is
-    // deliberately paused (weekend/rollover), or before that schedule status
-    // has loaded. Position polling remains independent for exposure safety.
+    // History is comparatively expensive and changes only when candles close.
+    // Keep it authoritative but refresh it separately from the forming candle,
+    // which is updated by the fast quote path below.
     if (
       selectedBroker?.brokerId === "paper-broker" &&
       (!vpsScannerStatus || vpsScannerStatus.marketSchedule.paused)
@@ -2259,7 +2264,7 @@ export default function AiTradingPage() {
 
     let cancelled = false;
     let firstLoad = true;
-    const refreshChart = async () => {
+    const refreshChartHistory = async () => {
       if (firstLoad) setChartLoading(true);
       try {
         const snapshot = await loadMarketIntelligence({
@@ -2268,9 +2273,21 @@ export default function AiTradingPage() {
           limit: 90,
           brokerConnectionId: selectedBrokerId,
         });
-        if (!cancelled) setMarket(snapshot);
+        if (!cancelled) {
+          setMarket((previous) => ({
+            ...snapshot,
+            candles: reconcileLiveCandles(
+              previous?.candles ?? [],
+              snapshot.candles,
+              snapshot.quote,
+              chartTimeframe,
+            ) as MarketCandleView[],
+          }));
+        }
       } catch {
-        if (!cancelled) setMarket(null);
+        // Preserve a previously rendered chart through a transient history read
+        // failure. Only the initial load should fall back to the empty state.
+        if (!cancelled && firstLoad) setMarket(null);
       } finally {
         if (!cancelled && firstLoad) {
           setChartLoading(false);
@@ -2278,9 +2295,72 @@ export default function AiTradingPage() {
         }
       }
     };
-    void refreshChart();
-    const refreshIntervalMs = chartTimeframe === "M1" ? 1000 : 5000;
-    const timer = window.setInterval(() => void refreshChart(), refreshIntervalMs);
+    void refreshChartHistory();
+    const timer = window.setInterval(() => void refreshChartHistory(), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    user,
+    selectedBrokerId,
+    selectedBroker?.brokerId,
+    chartInstrument,
+    chartTimeframe,
+    vpsScannerStatus,
+  ]);
+
+  useEffect(() => {
+    if (!user || !selectedBrokerId) return;
+    if (
+      selectedBroker?.brokerId === "paper-broker" &&
+      (!vpsScannerStatus || vpsScannerStatus.marketSchedule.paused)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    let inFlight = false;
+    const refreshLiveQuote = async () => {
+      if (inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
+      try {
+        const quote = await loadLiveMarketQuote({
+          instrument: chartInstrument,
+          timeframe: chartTimeframe,
+          brokerConnectionId: selectedBrokerId,
+        });
+        if (cancelled) return;
+        setMarket((previous) => {
+          if (
+            !previous ||
+            previous.instrument !== chartInstrument ||
+            previous.timeframe !== chartTimeframe
+          ) {
+            return previous;
+          }
+          return {
+            ...previous,
+            status: quote.freshness,
+            retrievedAt: new Date().toISOString(),
+            quote,
+            candles: mergeLiveQuoteIntoCandles(
+              previous.candles,
+              quote,
+              chartTimeframe,
+            ) as MarketCandleView[],
+          };
+        });
+      } catch {
+        // A missed quote must not erase valid history. The next 500 ms cycle
+        // retries while the slower authoritative history refresh remains alive.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void refreshLiveQuote();
+    const timer = window.setInterval(() => void refreshLiveQuote(), 500);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -2667,6 +2747,25 @@ export default function AiTradingPage() {
   const recentExecutionActivity = summarizeRecentExecutionActivity(
     execution?.recentExecutions ?? [],
   );
+  const realisedExecutionWindow = summarizeRealisedExecutionWindow(
+    execution?.closedExecutions ?? [],
+    20,
+  );
+  const realisedCurrency =
+    recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency;
+  const recentWinRate =
+    recentExecutionActivity.realisedTradeCount > 0
+      ? recentExecutionActivity.wins / recentExecutionActivity.realisedTradeCount
+      : null;
+  const profitFactorLabel =
+    recentExecutionActivity.profitFactor == null
+      ? "—"
+      : Number.isFinite(recentExecutionActivity.profitFactor)
+        ? recentExecutionActivity.profitFactor.toFixed(2)
+        : "∞";
+  const averageLossDisplay = recentExecutionActivity.averageLoss
+    ? signedMoney(`-${recentExecutionActivity.averageLoss}`, realisedCurrency)
+    : "—";
   const positionCurrencies = Array.from(
     new Set(
       aiOpenPositions
@@ -2932,13 +3031,23 @@ export default function AiTradingPage() {
                       {signedMoney(recentExecutionActivity.netRealisedPnl, recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency)}
                     </strong>
                   </div>
-                  <div>
+                  <div className="ai-performance-panel__win-rate">
                     <span>Win rate</span>
                     <strong>
-                      {recentExecutionActivity.wins + recentExecutionActivity.losses + recentExecutionActivity.flats > 0
-                        ? `${((recentExecutionActivity.wins / (recentExecutionActivity.wins + recentExecutionActivity.losses + recentExecutionActivity.flats)) * 100).toFixed(0)}%`
-                        : "—"}
+                      {recentWinRate == null ? "—" : `${(recentWinRate * 100).toFixed(0)}%`}
                     </strong>
+                    <div className="ai-performance-panel__stat-divider" aria-hidden="true" />
+                    <div className="ai-performance-panel__secondary-stat">
+                      <span>Realized P&amp;L win rate</span>
+                      <strong>
+                        {realisedExecutionWindow.winRate == null
+                          ? "—"
+                          : `${(realisedExecutionWindow.winRate * 100).toFixed(0)}%`}
+                      </strong>
+                      <small>
+                        Last {realisedExecutionWindow.tradeCount} closed trade{realisedExecutionWindow.tradeCount === 1 ? "" : "s"}
+                      </small>
+                    </div>
                   </div>
                   <div>
                     <span>Open trades</span>
@@ -2947,8 +3056,49 @@ export default function AiTradingPage() {
                 </div>
                 <RealisedPnlMiniChart
                   trades={execution?.closedExecutions ?? []}
-                  currency={recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency}
+                  currency={realisedCurrency}
                 />
+                <section className="ai-performance-quality" aria-label="Realized profit quality">
+                  <div className="ai-performance-quality__head">
+                    <div>
+                      <span>Profit quality</span>
+                      <small>Trailing 24-hour realized trades</small>
+                    </div>
+                    <b>{recentExecutionActivity.realisedTradeCount} closed</b>
+                  </div>
+                  <div className="ai-performance-quality__grid">
+                    <div>
+                      <span>Profit factor</span>
+                      <strong>{profitFactorLabel}</strong>
+                    </div>
+                    <div>
+                      <span>Avg win</span>
+                      <strong className="is-positive">
+                        {signedMoney(recentExecutionActivity.averageWin, realisedCurrency)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Avg loss</span>
+                      <strong className="is-negative">{averageLossDisplay}</strong>
+                    </div>
+                    <div>
+                      <span>Expectancy / trade</span>
+                      <strong
+                        className={
+                          recentExecutionActivity.expectancyPerTrade == null
+                            ? ""
+                            : Number(recentExecutionActivity.expectancyPerTrade) < 0
+                              ? "is-negative"
+                              : Number(recentExecutionActivity.expectancyPerTrade) > 0
+                                ? "is-positive"
+                                : ""
+                        }
+                      >
+                        {signedMoney(recentExecutionActivity.expectancyPerTrade, realisedCurrency)}
+                      </strong>
+                    </div>
+                  </div>
+                </section>
               </section>
             </section>
 

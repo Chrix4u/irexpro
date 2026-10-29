@@ -122,3 +122,19 @@ export async function loadMarketIntelligence(
     candles,
   };
 }
+
+
+/**
+ * Fetch only the newest broker quote projection. The API still returns one
+ * completed candle for contract compatibility, but this path deliberately does
+ * not touch the 90-bar live-candle cache used by the chart history refresh.
+ */
+export async function loadLiveMarketQuote(
+  request: Omit<MarketIntelligenceRequest, 'limit'>,
+): Promise<MarketQuoteView> {
+  const snapshot = await marketApi.getSnapshot({ ...request, limit: 1 });
+  if (!isRecord(snapshot) || !isQuote(snapshot.quote)) {
+    throw new Error('Live market quote contract mismatch');
+  }
+  return snapshot.quote;
+}

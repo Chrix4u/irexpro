@@ -1,4 +1,8 @@
-import { isTradeExecutionView, summarizeRecentExecutionActivity } from './trader-execution';
+import {
+  isTradeExecutionView,
+  summarizeRealisedExecutionWindow,
+  summarizeRecentExecutionActivity,
+} from './trader-execution';
 
 const CLOSED_TRADE = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -126,14 +130,41 @@ describe('recent execution visibility summary', () => {
       { ...CLOSED_TRADE, id: 'old', realisedPnl: '99.00', openedAt: '2026-10-14T14:00:00.000Z', closedAt: '2026-10-14T14:05:00.000Z', createdAt: '2026-10-14T14:00:00.000Z' },
     ];
 
-    expect(summarizeRecentExecutionActivity(trades as any, referenceTime)).toEqual({
+    const summary = summarizeRecentExecutionActivity(trades as any, referenceTime);
+
+    expect(summary).toEqual({
       executionCount: 2,
+      realisedTradeCount: 2,
       wins: 1,
       losses: 1,
       flats: 0,
       netRealisedPnl: '6.93',
+      grossProfit: '16.69',
+      grossLoss: '9.76',
+      averageWin: '16.69',
+      averageLoss: '9.76',
+      expectancyPerTrade: '3.47',
+      profitFactor: expect.any(Number),
       accountCurrency: 'USD',
       latestOpenedAt: '2026-10-15T13:50:08.000Z',
+    });
+    expect(summary.profitFactor).toBeCloseTo(16.69 / 9.76, 8);
+  });
+
+  it('summarizes the same realised closed-trade window used by the profit chart', () => {
+    const trades = [
+      { ...CLOSED_TRADE, id: 'older-win', realisedPnl: '20.00', closedAt: '2026-10-15T11:00:00.000Z', updatedAt: '2026-10-15T11:00:00.000Z' },
+      { ...CLOSED_TRADE, id: 'win-1', realisedPnl: '10.00', closedAt: '2026-10-15T12:10:00.000Z', updatedAt: '2026-10-15T12:10:00.000Z' },
+      { ...CLOSED_TRADE, id: 'loss-1', realisedPnl: '-5.00', closedAt: '2026-10-15T13:10:00.000Z', updatedAt: '2026-10-15T13:10:00.000Z' },
+      { ...CLOSED_TRADE, id: 'win-2', realisedPnl: '5.00', closedAt: '2026-10-15T14:10:00.000Z', updatedAt: '2026-10-15T14:10:00.000Z' },
+    ];
+
+    expect(summarizeRealisedExecutionWindow(trades as any, 3)).toEqual({
+      tradeCount: 3,
+      wins: 2,
+      losses: 1,
+      flats: 0,
+      winRate: 2 / 3,
     });
   });
 });

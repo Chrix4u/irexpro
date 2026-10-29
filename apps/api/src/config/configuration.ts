@@ -152,6 +152,10 @@ export default () => ({
       process.env.M1_TACTICAL_CTRADER_COLLECTION_INTERVAL_MS ?? '15000',
       10,
     ),
+    m1CtraderLiveQuoteIntervalMs: parseInt(
+      process.env.M1_TACTICAL_CTRADER_LIVE_QUOTE_INTERVAL_MS ?? '1000',
+      10,
+    ),
     m1CtraderCollectionInstruments:
       process.env.M1_TACTICAL_CTRADER_INSTRUMENTS ?? 'EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF',
     fastMarkStreamEnabled: process.env.TWELVEDATA_FAST_MARK_STREAM_ENABLED !== 'false',
