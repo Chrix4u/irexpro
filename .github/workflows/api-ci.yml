@@ -2,7 +2,7 @@ name: API CI
 
 on:
   push:
-    branches: [main, develop, feat/native-mobile-onboarding-20260930]
+    branches: [main, develop, feat/native-mobile-onboarding-20260930, fix/confirmed-reversal-m1-consistency-20261029]
     paths:
       - 'apps/api/**'
       - 'pnpm-lock.yaml'
@@ -200,7 +200,7 @@ jobs:
         run: pnpm api:build
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@b7c566a772e6b6f58ed0dc250532a479d7789f # v6
         with:
           name: api-dist
           path: apps/api/dist
