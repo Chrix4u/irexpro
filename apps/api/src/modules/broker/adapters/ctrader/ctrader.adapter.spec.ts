@@ -582,6 +582,78 @@ describe('CTraderAdapter', () => {
       expect(result).toMatchObject({ status: 'PENDING', success: true, externalOrderId: '888' });
     });
 
+    it('reconciles an accepted MARKET order to FILLED when cTrader already exposes the open position', async () => {
+      const reference = 'market-fill-key';
+      server.on(CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.EXECUTION_EVENT,
+          {
+            ctidTraderAccountId: payload.ctidTraderAccountId,
+            executionType: 2,
+            order: { orderId: 888, orderType: payload.orderType, orderStatus: 2 },
+          },
+          envelope,
+        ),
+      );
+      scriptReconcile(
+        [
+          {
+            ...SAMPLE_POSITION,
+            positionId: 999,
+            tradeData: {
+              ...SAMPLE_POSITION.tradeData,
+              volume: 100_000,
+              label: reference,
+              comment: reference,
+            },
+            price: 1.0865,
+          },
+        ],
+        [],
+      );
+      await connectDemo();
+
+      const result = await adapter.placeOrder({
+        idempotencyKey: reference,
+        instrument: 'EUR/USD',
+        direction: 'BUY',
+        lotSize: '0.01',
+        stopLoss: '0',
+        takeProfit: '0',
+        orderKind: 'MARKET',
+      });
+
+      expect(result).toMatchObject({
+        status: 'FILLED',
+        success: true,
+        externalOrderId: '999',
+        filledPrice: '1.0865',
+      });
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.RECONCILE_REQ)).toBeDefined();
+    });
+
+    it('keeps an accepted MARKET order PENDING when reconciliation cannot yet prove a position', async () => {
+      await scriptExecution(2);
+      scriptReconcile([], []);
+
+      const result = await adapter.placeOrder({
+        idempotencyKey: 'market-still-pending',
+        instrument: 'EUR/USD',
+        direction: 'BUY',
+        lotSize: '0.01',
+        stopLoss: '0',
+        takeProfit: '0',
+        orderKind: 'MARKET',
+      });
+
+      expect(result).toMatchObject({ status: 'PENDING', success: true, externalOrderId: '888' });
+      expect(
+        server.requests.filter(
+          (request) => request.payloadType === CTRADER_PAYLOAD_TYPE.RECONCILE_REQ,
+        ),
+      ).toHaveLength(3);
+    });
+
     it('maps ORDER_REJECTED (7) to a REJECTED result with the errorCode message', async () => {
       server.on(CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ, (payload, envelope) =>
         echo(

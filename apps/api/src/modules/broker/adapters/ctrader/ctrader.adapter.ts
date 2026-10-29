@@ -152,6 +152,8 @@ const MAX_DEAL_LIST_PAGES = 100;
 const DEAL_LIST_MAX_ROWS = 200;
 /** Trendbar lookback multiplier (headroom so `count` bars are returned). */
 const TRENDBAR_LOOKBACK_FACTOR = 2;
+/** Short bounded read-after-acceptance window for cTrader MARKET fills. */
+const MARKET_ACCEPTED_RECONCILE_DELAYS_MS = [0, 150, 350] as const;
 
 interface SymbolCache {
   /** normalized instrument name (e.g. "EURUSD") → symbolId */
@@ -888,7 +890,24 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         );
       }
 
-      const result = this.mapExecutionEventToOrderResult(response, symbol.lotSize);
+      let result = this.mapExecutionEventToOrderResult(response, symbol.lotSize);
+      // cTrader can acknowledge a MARKET order as ORDER_ACCEPTED before the
+      // fill event is visible to the request/response path. Do a short,
+      // read-only reconciliation by our exact idempotency label/comment so a
+      // fill that already exists becomes OPEN immediately. If the provider
+      // has not exposed the position yet (or the read fails), retain PENDING
+      // and let the normal reconciliation loop converge it later. Never
+      // resubmit and never invent a fill.
+      if (protoOrderType === CtraderOrderType.MARKET && result.status === 'PENDING') {
+        const reconciledFill = await this.reconcileAcceptedMarketFill(
+          session,
+          idem.label,
+          idem.comment,
+          symbol.lotSize,
+        );
+        if (reconciledFill) result = reconciledFill;
+      }
+
       // MARKET + SL/TP: attach the protection to the FILLED position (2110).
       if (
         protoOrderType === CtraderOrderType.MARKET &&
@@ -1438,6 +1457,54 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       positions: Array.isArray(payload.position) ? payload.position : [],
       orders: Array.isArray(payload.order) ? payload.order : [],
     };
+  }
+
+  private async reconcileAcceptedMarketFill(
+    session: AdapterSession,
+    label: string,
+    comment: string,
+    symbolLotSizeCents: number,
+  ): Promise<BrokerOrderResult | null> {
+    for (const delayMs of MARKET_ACCEPTED_RECONCILE_DELAYS_MS) {
+      if (delayMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      }
+      try {
+        const { positions } = await this.fetchReconcile(session);
+        const matches = positions.filter(
+          (position) =>
+            position.positionStatus === CtraderPositionStatus.POSITION_STATUS_OPEN &&
+            (position.tradeData.label === label || position.tradeData.comment === comment),
+        );
+        if (matches.length > 1) {
+          this.logger.warn(
+            `cTrader MARKET acceptance reconciliation found ${matches.length} positions for one client reference; retaining PENDING for authoritative reconciliation.`,
+          );
+          return null;
+        }
+        const position = matches[0];
+        if (!position) continue;
+        return {
+          success: true,
+          externalOrderId: String(position.positionId),
+          filledPrice:
+            position.price !== undefined ? wirePriceToDecimalString(position.price) : undefined,
+          filledQuantity: volumeCentsToLotString(position.tradeData.volume, symbolLotSizeCents),
+          filledAt: position.tradeData.openTimestamp
+            ? new Date(position.tradeData.openTimestamp)
+            : new Date(),
+          status: 'FILLED',
+          brokerMessage: 'Market order filled (reconciled after acceptance)',
+          rawResponse: position,
+        };
+      } catch (error) {
+        this.logger.warn(
+          `cTrader MARKET acceptance reconciliation deferred: ${(error as Error).message}`,
+        );
+        return null;
+      }
+    }
+    return null;
   }
 
   private async fetchReconcilePositions(session: AdapterSession): Promise<CtraderPosition[]> {
