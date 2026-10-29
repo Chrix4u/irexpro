@@ -94,7 +94,7 @@ jobs:
 
     steps:
       - name: Checkout exact candidate
-        uses: actions/checkout@fbc6f3992d24b796d5d8b3a19a8cae5388b55320 # v5.1.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           persist-credentials: false
@@ -130,7 +130,7 @@ jobs:
 
     steps:
       - name: Checkout exact candidate
-        uses: actions/checkout@fbc6f3992d24b796d5d8b3a19a8cae5388b55320 # v5.1.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           persist-credentials: false
@@ -173,7 +173,7 @@ jobs:
 
     steps:
       - name: Checkout exact candidate
-        uses: actions/checkout@fbc6f3992d24b796d5d8b3a19a8cae5388b55320 # v5.1.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           persist-credentials: false
@@ -200,7 +200,7 @@ jobs:
         run: pnpm api:build
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@b7c566a772e6b6f58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: api-dist
           path: apps/api/dist
