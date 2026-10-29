@@ -2071,6 +2071,236 @@ describe('M1 V8 multi-model DEMO authority', () => {
     brokerConnectionId: 'demo-conn-2',
   };
 
+  it('falls back to a qualified M1 early transition when Plan-B still calls the move trend continuation', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      shadowPairSideOutcomes: [
+        { observedAt: new Date('2026-10-15T10:29:00.000Z'), netR: 0.74 },
+        { observedAt: new Date('2026-10-15T10:19:00.000Z'), netR: 0.44 },
+        { observedAt: new Date('2026-10-15T10:09:00.000Z'), netR: -0.2 },
+        { observedAt: new Date('2026-10-15T09:59:00.000Z'), netR: -0.08 },
+        { observedAt: new Date('2026-10-15T09:49:00.000Z'), netR: 0.46 },
+        { observedAt: new Date('2026-10-15T09:39:00.000Z'), netR: -0.06 },
+      ],
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: {
+          ...result.ensemble,
+          strategyRoute: 'TREND_CONTINUATION',
+          paperAdmitted: false,
+          admitted: false,
+        },
+        authority: {
+          ...result.authority,
+          executable: false,
+          authorityPath: 'BLOCKED',
+          rescueVolumeCap: null,
+          blockers: [
+            'MULTIMODEL_PLAN_B_NOT_ADMITTED',
+            'MULTIMODEL_CONTINUATION_TIMING_NOT_READY',
+          ],
+        },
+      };
+    });
+
+    const route = await driveFeatures(h, transitionFeatures(), {
+      brokerConnectionId: 'demo-conn-2',
+    });
+
+    expect(route.route).toBe('M1_EARLY_TRANSITION');
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({
+        brokerConnectionId: 'demo-conn-2',
+        suggestedVolume: 0.2,
+        strategyCode: 'external-irexpro-m1-tactical',
+        metadata: expect.objectContaining({
+          primary_engine_code: 'irexpro-m1-tactical',
+          m1_professional_fallback: true,
+          m1_professional_fallback_tier: 'QUALIFIED',
+          multimodel_plan_b_route: 'TREND_CONTINUATION',
+          m1_tactical_route: 'M1_EARLY_TRANSITION',
+        }),
+      }),
+    );
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_EARLY_TRANSITION',
+    )?.[0];
+    expect(recorded?.executionAuthority).toBe('BROKER_NATIVE');
+    expect(recorded?.blockers).toEqual([]);
+    expect(recorded?.governance).toEqual(
+      expect.objectContaining({
+        professionalM1Fallback: expect.objectContaining({ eligible: true, tier: 'QUALIFIED' }),
+        executionVolumeCap: 0.2,
+      }),
+    );
+  });
+
+  it('uses a 0.10 recovery probe when the current M1 impulse is strong but broad shadow evidence is still weak', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      shadowPairSideOutcomes: [
+        { observedAt: new Date('2026-10-15T10:29:00.000Z'), netR: 0.35 },
+        { observedAt: new Date('2026-10-15T10:19:00.000Z'), netR: 0.25 },
+        { observedAt: new Date('2026-10-15T10:09:00.000Z'), netR: 0.15 },
+        { observedAt: new Date('2026-10-15T09:59:00.000Z'), netR: -0.6 },
+        { observedAt: new Date('2026-10-15T09:49:00.000Z'), netR: -0.5 },
+        { observedAt: new Date('2026-10-15T09:39:00.000Z'), netR: -0.4 },
+      ],
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+    const strongTransition = transitionFeatures();
+    strongTransition.emaSeparationAtr = 0.9;
+    strongTransition.emaSlopeAtr = 0.9;
+    strongTransition.momentum1Atr = 0.7;
+    strongTransition.momentum3Atr = 0.95;
+    strongTransition.momentum5Atr = 0.9;
+    strongTransition.closeLocation = 0.95;
+    strongTransition.lowerWickRatio = 0.8;
+    strongTransition.upperWickRatio = 0.05;
+    strongTransition.rsi14 = 70;
+    strongTransition.breakoutUpAtr = 0.5;
+    strongTransition.efficiency5 = 0.9;
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: {
+          ...result.ensemble,
+          strategyRoute: 'TREND_CONTINUATION',
+          paperAdmitted: false,
+          admitted: false,
+        },
+        authority: {
+          ...result.authority,
+          executable: false,
+          authorityPath: 'BLOCKED',
+          rescueVolumeCap: null,
+          blockers: [
+            'MULTIMODEL_PLAN_B_NOT_ADMITTED',
+            'MULTIMODEL_CONTINUATION_TIMING_NOT_READY',
+          ],
+        },
+      };
+    });
+
+    const route = await driveFeatures(h, strongTransition, { brokerConnectionId: 'demo-conn-2' });
+
+    expect(route.route).toBe('M1_EARLY_TRANSITION');
+    const recoveryRecorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_EARLY_TRANSITION',
+    )?.[0];
+    expect(recoveryRecorded?.governance.professionalM1Fallback).toEqual(
+      expect.objectContaining({ eligible: true, tier: 'RECOVERY_PROBE' }),
+    );
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({
+        suggestedVolume: 0.1,
+        strategyCode: 'external-irexpro-m1-tactical',
+        metadata: expect.objectContaining({
+          m1_professional_fallback: true,
+          m1_professional_fallback_tier: 'RECOVERY_PROBE',
+        }),
+      }),
+    );
+  });
+
+  it('does not let the professional M1 fallback bypass a high-impact event block', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      shadowPairSideOutcomes: [
+        { observedAt: new Date('2026-10-15T10:29:00.000Z'), netR: 0.74 },
+        { observedAt: new Date('2026-10-15T10:19:00.000Z'), netR: 0.44 },
+        { observedAt: new Date('2026-10-15T10:09:00.000Z'), netR: -0.2 },
+        { observedAt: new Date('2026-10-15T09:59:00.000Z'), netR: -0.08 },
+        { observedAt: new Date('2026-10-15T09:49:00.000Z'), netR: 0.46 },
+        { observedAt: new Date('2026-10-15T09:39:00.000Z'), netR: -0.06 },
+      ],
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
+        authority: {
+          ...result.authority,
+          executable: false,
+          authorityPath: 'BLOCKED',
+          rescueVolumeCap: null,
+          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+        },
+      };
+    });
+
+    await driveFeatures(h, transitionFeatures(), {
+      brokerConnectionId: 'demo-conn-2',
+      eventRisk: 'HIGH_IMPACT_BLOCK',
+    });
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
+
+  it('keeps a real M1 early-transition loss streak blocked even when Plan-B disagrees on the route', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      shadowPairSideOutcomes: [
+        { observedAt: new Date('2026-10-15T10:29:00.000Z'), netR: 0.4 },
+        { observedAt: new Date('2026-10-15T10:19:00.000Z'), netR: 0.3 },
+        { observedAt: new Date('2026-10-15T10:09:00.000Z'), netR: 0.2 },
+      ],
+      evidenceByRoute: {
+        M1_EARLY_TRANSITION: [
+          {
+            route: 'M1_EARLY_TRANSITION', instrument: 'EURUSD', direction: 'BUY',
+            policyVersion: 'm1-tactical-v1', realisedPnl: -10, riskAtStop: 10,
+            closedAt: new Date('2026-10-15T10:25:00.000Z'),
+          },
+          {
+            route: 'M1_EARLY_TRANSITION', instrument: 'EURUSD', direction: 'BUY',
+            policyVersion: 'm1-tactical-v1', realisedPnl: -9, riskAtStop: 9,
+            closedAt: new Date('2026-10-15T10:15:00.000Z'),
+          },
+        ],
+      },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
+        authority: {
+          ...result.authority,
+          executable: false,
+          authorityPath: 'BLOCKED',
+          rescueVolumeCap: null,
+          blockers: ['MULTIMODEL_CONTINUATION_TIMING_NOT_READY'],
+        },
+      };
+    });
+
+    await driveFeatures(h, transitionFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_EARLY_TRANSITION',
+    )?.[0];
+    expect(recorded?.governance.reliability.reason).toBe('EARLY_LOSS_STREAK');
+  });
+
   it('lets a Plan-B + trained-expert confirmed continuation execute even though the M1 rollout route was historically shadow-only', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,

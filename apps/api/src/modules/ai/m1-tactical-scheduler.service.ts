@@ -37,7 +37,11 @@ import {
 } from './m1-tactical-route';
 import { evaluateM1TacticalGovernance } from './m1-tactical-governance';
 import { evaluateEnsembleGovernance, type EnsembleGovernanceDecision } from './ensemble-governance';
-import { scorePlanBMultimodelShadow, type PlanBEnsembleScore, type PlanBPortfolioPosition } from './plan-b-multimodel-shadow';
+import {
+  scorePlanBMultimodelShadow,
+  type PlanBEnsembleScore,
+  type PlanBPortfolioPosition,
+} from './plan-b-multimodel-shadow';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import type { HighConvictionOverlay } from './high-conviction-overlay';
 import {
@@ -99,6 +103,115 @@ interface MultimodelDemoEvaluation {
   trainedExpert: HighConvictionOverlay;
   authority: MultimodelDemoAuthorityDecision;
   portfolioSnapshotAvailable: boolean;
+}
+
+type M1ProfessionalFallbackTier = 'QUALIFIED' | 'RECOVERY_PROBE';
+
+interface M1ProfessionalFallbackDecision {
+  eligible: boolean;
+  tier: M1ProfessionalFallbackTier | null;
+  reason: string;
+  lotCap: number;
+}
+
+const M1_PROFESSIONAL_FALLBACK_LOT_CAP = 0.2;
+const M1_PROFESSIONAL_RECOVERY_PROBE_LOT_CAP = 0.1;
+// Recovery probes need a 0.05R cushion above the normal 0.20 early-transition route floor.
+const M1_PROFESSIONAL_RECOVERY_MIN_EXPECTED_R = 0.25;
+const M1_PROFESSIONAL_RECOVERY_SHADOW_REASONS = new Set([
+  'WEAK_MEANINGFUL_EXPECTANCY',
+  'WEAK_PROVISIONAL_EXPECTANCY',
+]);
+
+function evaluateM1ProfessionalFallback(input: {
+  routeDecision: M1TacticalRouteDecision;
+  governance: ReturnType<typeof evaluateM1TacticalGovernance>;
+  reliability: ReturnType<typeof evaluateM1RoutePairSideReliability> | null;
+  shadowPairSideReliability: M1ScoutPairSideReliabilityDecision | null;
+  multimodelDemo: MultimodelDemoEvaluation | null;
+  routePayoffEligible: boolean;
+}): M1ProfessionalFallbackDecision {
+  const reject = (reason: string): M1ProfessionalFallbackDecision => ({
+    eligible: false,
+    tier: null,
+    reason,
+    lotCap: 0,
+  });
+
+  if (input.routeDecision.route !== 'M1_EARLY_TRANSITION' || !input.routeDecision.eligible) {
+    return reject('M1_ROUTE_NOT_EARLY_TRANSITION');
+  }
+  if (input.routeDecision.reason !== 'EARLY_TRANSITION_IMPULSE') {
+    return reject('M1_TRANSITION_NOT_IMPULSE');
+  }
+  if (!input.multimodelDemo) return reject('MULTIMODEL_EVIDENCE_UNAVAILABLE');
+  if (input.multimodelDemo.ensemble.strategyRoute !== 'TREND_CONTINUATION') {
+    return reject('PLAN_B_ROUTE_NOT_CONTINUATION');
+  }
+  if (input.multimodelDemo.authority.executable) {
+    return reject('MULTIMODEL_ALREADY_EXECUTABLE');
+  }
+  if (
+    !input.multimodelDemo.authority.blockers.includes('MULTIMODEL_CONTINUATION_TIMING_NOT_READY')
+  ) {
+    return reject('NO_ROUTE_TIMING_DISAGREEMENT');
+  }
+  if (!input.routePayoffEligible) return reject('M1_ROUTE_PAYOFF_TOO_LOW');
+  if (!input.reliability?.eligible) {
+    return reject(`M1_ACTUAL_RELIABILITY_${input.reliability?.reason ?? 'UNAVAILABLE'}`);
+  }
+
+  const genericBlockers = input.governance.genericGovernance.paperExecutionBlockers;
+  const onlyDriftBlockers = genericBlockers.every(
+    (blocker) => blocker === 'DRIFT_OUT_OF_DISTRIBUTION',
+  );
+  if (!onlyDriftBlockers) return reject('M1_HARD_GOVERNANCE_BLOCKER');
+  const m1SpecificHardBlockers = input.governance.blockers.filter(
+    (blocker) => blocker !== 'DRIFT_OUT_OF_DISTRIBUTION',
+  );
+  if (m1SpecificHardBlockers.length > 0) return reject('M1_ROUTE_GOVERNANCE_BLOCKED');
+
+  if (input.shadowPairSideReliability?.eligible === true) {
+    return {
+      eligible: true,
+      tier: 'QUALIFIED',
+      reason: 'M1_QUALIFIED_ROUTE_DISAGREEMENT',
+      lotCap: M1_PROFESSIONAL_FALLBACK_LOT_CAP,
+    };
+  }
+
+  if (input.reliability.reason !== 'INSUFFICIENT_EVIDENCE') {
+    return reject(`M1_RECOVERY_ACTUAL_RELIABILITY_${input.reliability.reason}`);
+  }
+  if ((input.reliability.recentRealizedR ?? 0) < 0) {
+    return reject('M1_RECOVERY_RECENT_ACTUAL_R_NEGATIVE');
+  }
+  if (
+    !Number.isFinite(input.governance.expectancy.statisticalExpectedR) ||
+    input.governance.expectancy.statisticalExpectedR < M1_PROFESSIONAL_RECOVERY_MIN_EXPECTED_R
+  ) {
+    return reject('M1_RECOVERY_EXPECTED_R_TOO_LOW');
+  }
+  if (
+    !input.shadowPairSideReliability ||
+    !M1_PROFESSIONAL_RECOVERY_SHADOW_REASONS.has(input.shadowPairSideReliability.reason)
+  ) {
+    return reject('M1_RECOVERY_SHADOW_STATE_NOT_ELIGIBLE');
+  }
+  const recentShadowNetR =
+    'recentNetR' in input.shadowPairSideReliability
+      ? input.shadowPairSideReliability.recentNetR
+      : null;
+  if (!Number.isFinite(recentShadowNetR) || recentShadowNetR! <= 0) {
+    return reject('M1_RECOVERY_RECENT_SHADOW_R_NOT_POSITIVE');
+  }
+
+  return {
+    eligible: true,
+    tier: 'RECOVERY_PROBE',
+    reason: 'M1_STRONG_IMPULSE_RECOVERY_PROBE',
+    lotCap: M1_PROFESSIONAL_RECOVERY_PROBE_LOT_CAP,
+  };
 }
 
 export type M1TacticalExecutionPhase =
@@ -340,8 +453,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
   }
 
   getStatus() {
-    const professionalDemoPhase =
-      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
+    const professionalDemoPhase = this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
     return {
       enabled: this.enabled(),
       primaryEngineCode: professionalDemoPhase
@@ -776,8 +888,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       routeDecision,
       decisionTime,
     );
-    const professionalDemoPhase =
-      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
+    const professionalDemoPhase = this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
     const multimodelDemo = professionalDemoPhase
       ? await this.evaluateDemoMultimodel(
           userId,
@@ -848,14 +959,29 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         : earlyTransitionMicro
           ? 'MICRO'
           : 'NONE';
+    const professionalM1Fallback = professionalDemoPhase
+      ? evaluateM1ProfessionalFallback({
+          routeDecision,
+          governance,
+          reliability,
+          shadowPairSideReliability,
+          multimodelDemo,
+          routePayoffEligible,
+        })
+      : null;
     const executionVolumeCap =
-      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
-        ? multimodelDemo
-          ? multimodelDemoExecutionVolumeCap(this.rolloutPolicy.paperVolumeCap, multimodelDemo.authority)
-          : this.rolloutPolicy.paperVolumeCap
-        : provisionalScoutReliability
-          ? Math.min(this.rolloutPolicy.paperVolumeCap, provisionalScoutReliability.lotCap)
-          : this.rolloutPolicy.paperVolumeCap;
+      professionalM1Fallback?.eligible === true
+        ? professionalM1Fallback.lotCap
+        : this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
+          ? multimodelDemo
+            ? multimodelDemoExecutionVolumeCap(
+                this.rolloutPolicy.paperVolumeCap,
+                multimodelDemo.authority,
+              )
+            : this.rolloutPolicy.paperVolumeCap
+          : provisionalScoutReliability
+            ? Math.min(this.rolloutPolicy.paperVolumeCap, provisionalScoutReliability.lotCap)
+            : this.rolloutPolicy.paperVolumeCap;
     const microDriftOnlyRescue =
       earlyTransitionMicro &&
       shadowPairSideReliability?.eligible === true &&
@@ -876,8 +1002,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? shadowPairSideReliability?.eligible === true &&
           (standardGovernanceExecutable || localImpulseDriftOnlyRescue)
         : standardGovernanceExecutable;
+    const multimodelPrimaryExecutable =
+      professionalDemoPhase && multimodelDemo?.authority.executable === true;
     const preliminaryCanExecute = professionalDemoPhase
-      ? multimodelDemo?.authority.executable === true
+      ? multimodelPrimaryExecutable || professionalM1Fallback?.eligible === true
       : routeExecutable && routePayoffEligible && governanceExecutable;
     const fastStopRegimeBrake = preliminaryCanExecute
       ? await this.evidence.loadFastStopRegimeBrake({
@@ -889,7 +1017,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         })
       : null;
     const multimodelLossStreakBrake =
-      preliminaryCanExecute && professionalDemoPhase && multimodelDemo
+      preliminaryCanExecute && multimodelPrimaryExecutable && multimodelDemo
         ? await this.evidence.loadMultimodelLossStreakBrake({
             userId,
             brokerConnectionId,
@@ -924,7 +1052,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     ]);
     const blockers = professionalDemoPhase
       ? unique([
-          ...(multimodelDemo?.authority.blockers ?? ['MULTIMODEL_AUTHORITY_UNAVAILABLE']),
+          ...(professionalM1Fallback?.eligible === true
+            ? []
+            : (multimodelDemo?.authority.blockers ?? ['MULTIMODEL_AUTHORITY_UNAVAILABLE'])),
           ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
           ...(multimodelLossStreakBrake?.active === true
             ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
@@ -944,7 +1074,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       barTime: candidate.latestM1OpenTime,
       evaluatedAt: decisionTime,
       policyVersion: candidate.policyVersion,
-      executionAuthority: canExecute ? (professionalDemoPhase ? 'BROKER_NATIVE' : 'PAPER_ONLY_RESEARCH') : 'NONE',
+      executionAuthority: canExecute
+        ? professionalDemoPhase
+          ? 'BROKER_NATIVE'
+          : 'PAPER_ONLY_RESEARCH'
+        : 'NONE',
       candidate: { ...candidate },
       governance: {
         ...governance,
@@ -963,6 +1097,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             : null,
         scoutReliabilityTier,
         executionVolumeCap,
+        professionalM1Fallback,
         microDriftOnlyRescue,
         localImpulseDriftOnlyRescue,
         rolloutPolicyVersion: this.rolloutPolicy.version,
@@ -972,7 +1107,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         multimodelLossStreakBrake: multimodelLossStreakBrake
           ? { ...multimodelLossStreakBrake }
           : null,
-        primaryEngineCode: professionalDemoPhase ? MULTIMODEL_DEMO_ENGINE_CODE : 'irexpro-m1-tactical',
+        primaryEngineCode: professionalDemoPhase
+          ? MULTIMODEL_DEMO_ENGINE_CODE
+          : 'irexpro-m1-tactical',
         m1TacticalRole: professionalDemoPhase ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE',
         multimodelEnsemble: multimodelDemo?.ensemble ?? null,
         multimodelGovernance: multimodelDemo?.governance ?? null,
@@ -1005,6 +1142,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         scoutReliabilityTier,
         executionVolumeCap,
         multimodelDemo,
+        professionalM1Fallback,
       );
     }
   }
@@ -1100,11 +1238,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     scoutReliabilityTier: 'NONE' | 'MICRO' | 'PROVISIONAL' | 'MATURE',
     executionVolumeCap: number,
     multimodelDemo: MultimodelDemoEvaluation | null = null,
+    professionalM1Fallback: M1ProfessionalFallbackDecision | null = null,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
       : null;
     const professionalDemoPhase = this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
+    const useProfessionalM1Fallback =
+      professionalDemoPhase && professionalM1Fallback?.eligible === true;
     const requiredExecutionMode = professionalDemoPhase
       ? ExecutionMode.FULL_AUTO
       : ExecutionMode.PAPER_ONLY;
@@ -1184,7 +1325,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         instrument: candidate.instrument,
         direction: candidate.direction,
         confidenceScore:
-          professionalDemoPhase && multimodelDemo
+          professionalDemoPhase && multimodelDemo && !useProfessionalM1Fallback
             ? multimodelDemo.ensemble.ensembleScore
             : candidate.confidence,
         suggestedEntryPrice: candidate.entry,
@@ -1192,30 +1333,44 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         suggestedTakeProfit: candidate.takeProfit,
         suggestedVolume: finalExecutionVolumeCap,
         timeframe: 'M1',
-        strategyCode: professionalDemoPhase
-          ? 'external-irexpro-multimodel-ensemble'
-          : 'external-irexpro-m1-tactical',
-        marketRegime: professionalDemoPhase && multimodelDemo
-          ? multimodelDemo.ensemble.strategyRoute === 'TREND_CONTINUATION'
-            ? 'TREND_HEALTHY'
-            : multimodelDemo.ensemble.strategyRoute === 'CONFIRMED_REVERSAL'
-              ? 'REVERSAL'
-              : 'TRANSITION'
-          : m1RiskMarketRegime(routeDecision.route),
+        strategyCode:
+          professionalDemoPhase && !useProfessionalM1Fallback
+            ? 'external-irexpro-multimodel-ensemble'
+            : 'external-irexpro-m1-tactical',
+        marketRegime:
+          professionalDemoPhase && multimodelDemo && !useProfessionalM1Fallback
+            ? multimodelDemo.ensemble.strategyRoute === 'TREND_CONTINUATION'
+              ? 'TREND_HEALTHY'
+              : multimodelDemo.ensemble.strategyRoute === 'CONFIRMED_REVERSAL'
+                ? 'REVERSAL'
+                : 'TRANSITION'
+            : m1RiskMarketRegime(routeDecision.route),
         volatilityScore: features.volatilityScore,
         generatedAt: new Date(decisionTime),
-        modelVersion: professionalDemoPhase
-          ? `external-provider/${MULTIMODEL_DEMO_ENGINE_CODE}/demo-v1`
-          : `external-provider/irexpro-m1-tactical/${candidate.policyVersion}`,
+        modelVersion:
+          professionalDemoPhase && !useProfessionalM1Fallback
+            ? `external-provider/${MULTIMODEL_DEMO_ENGINE_CODE}/demo-v1`
+            : `external-provider/irexpro-m1-tactical/${candidate.policyVersion}`,
         metadata: {
           signal_source: 'EXTERNAL_PROVIDER',
-          external_provider_code: professionalDemoPhase
-            ? MULTIMODEL_DEMO_ENGINE_CODE
-            : 'irexpro-m1-tactical',
-          primary_engine_code: professionalDemoPhase
-            ? MULTIMODEL_DEMO_ENGINE_CODE
-            : 'irexpro-m1-tactical',
-          m1_tactical_role: professionalDemoPhase ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE',
+          external_provider_code:
+            professionalDemoPhase && !useProfessionalM1Fallback
+              ? MULTIMODEL_DEMO_ENGINE_CODE
+              : 'irexpro-m1-tactical',
+          primary_engine_code:
+            professionalDemoPhase && !useProfessionalM1Fallback
+              ? MULTIMODEL_DEMO_ENGINE_CODE
+              : 'irexpro-m1-tactical',
+          m1_tactical_role: useProfessionalM1Fallback
+            ? 'PRIMARY_FALLBACK'
+            : professionalDemoPhase
+              ? 'TIMING_SPECIALIST'
+              : 'PRIMARY_RESEARCH_ROUTE',
+          m1_professional_fallback: useProfessionalM1Fallback,
+          m1_professional_fallback_tier: professionalM1Fallback?.tier ?? null,
+          m1_professional_fallback_reason: professionalM1Fallback?.reason ?? null,
+          m1_professional_fallback_lot_cap:
+            professionalM1Fallback?.eligible === true ? professionalM1Fallback.lotCap : null,
           multimodel_plan_b_score: multimodelDemo?.ensemble.ensembleScore ?? null,
           multimodel_plan_b_route: multimodelDemo?.ensemble.strategyRoute ?? null,
           multimodel_plan_b_expected_r: multimodelDemo?.ensemble.expectedR ?? null,
@@ -1230,9 +1385,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           multimodel_trained_expert_long_votes: multimodelDemo?.trainedExpert.longVotes ?? null,
           multimodel_trained_expert_short_votes: multimodelDemo?.trainedExpert.shortVotes ?? null,
           multimodel_execution_authority: professionalDemoPhase
-            ? 'DEMO_FULL_AUTO_PROMOTED'
+            ? useProfessionalM1Fallback
+              ? 'M1_PROFESSIONAL_FALLBACK'
+              : 'DEMO_FULL_AUTO_PROMOTED'
             : null,
-          multimodel_execution_authority_path: multimodelDemo?.authority.authorityPath ?? null,
+          multimodel_execution_authority_path: useProfessionalM1Fallback
+            ? professionalM1Fallback?.tier
+            : (multimodelDemo?.authority.authorityPath ?? null),
           multimodel_rescue_volume_cap: multimodelDemo?.authority.rescueVolumeCap ?? null,
           external_provider_paper_only: true,
           production_eligible: false,
@@ -1253,10 +1412,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           feature_candidate_score: candidate.score,
           feature_extension_atr: features.extensionAtr,
           feature_volatility_score: features.volatilityScore,
-          feature_ema_separation: Math.max(
-            0,
-            Math.min(1, candidate.alignedEmaSeparationAtr / 2),
-          ),
+          feature_ema_separation: Math.max(0, Math.min(1, candidate.alignedEmaSeparationAtr / 2)),
           feature_mtf_strength: Math.max(0, Math.min(1, candidate.alignedM15)),
           feature_rsi14: features.rsi14,
           position_sizing_tier:
@@ -1327,7 +1483,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
               routeDecision.route as Exclude<M1TacticalRoute, 'ABSTAIN'>
             ],
           m1_execution_authority: professionalDemoPhase
-            ? 'DEMO_FULL_AUTO_PROMOTED'
+            ? useProfessionalM1Fallback
+              ? 'DEMO_FULL_AUTO_M1_FALLBACK'
+              : 'DEMO_FULL_AUTO_PROMOTED'
             : 'PAPER_ONLY_RESEARCH',
         },
       });
