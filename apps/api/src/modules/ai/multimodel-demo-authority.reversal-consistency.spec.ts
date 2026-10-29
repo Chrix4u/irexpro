@@ -40,11 +40,15 @@ function reversalAuthorityInput(m1TimingRoute: M1TacticalRoute) {
 
 describe('Plan-B confirmed-reversal timing consistency', () => {
   it('blocks a Plan-B confirmed reversal when M1 timing abstains', () => {
-    const result = evaluateMultimodelDemoAuthority(reversalAuthorityInput('ABSTAIN'));
+    const result = evaluateMultimodelDemoAuthority(
+      reversalAuthorityInput('ABSTAIN'),
+    );
 
     expect(result.executable).toBe(false);
     expect(result.authorityPath).toBe('BLOCKED');
-    expect(result.blockers).toContain('MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED');
+    expect(result.blockers).toContain(
+      'MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED',
+    );
   });
 
   it('blocks a Plan-B confirmed reversal when M1 only sees an early transition', () => {
@@ -54,7 +58,9 @@ describe('Plan-B confirmed-reversal timing consistency', () => {
 
     expect(result.executable).toBe(false);
     expect(result.authorityPath).toBe('BLOCKED');
-    expect(result.blockers).toContain('MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED');
+    expect(result.blockers).toContain(
+      'MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED',
+    );
   });
 
   it('keeps a Plan-B confirmed reversal executable when M1 independently confirms reversal', () => {
