@@ -658,6 +658,7 @@ function cleanContinuationFeatures(): M1TacticalFeatureSnapshot {
 function phase2Harness(
   options: {
     session?: Record<string, unknown> | null;
+    currentSession?: Record<string, unknown> | null;
     macroState?: 'CLEAR' | 'HIGH_IMPACT_BLOCK' | 'UNVERIFIED';
     spreadUsable?: boolean;
     reliabilityLosses?: number;
@@ -803,8 +804,15 @@ function phase2Harness(
         ? { id: 'session-1', executionMode: ExecutionMode.PAPER_ONLY, brokerConnectionId: 'conn-1' }
         : options.session,
     );
+  const getActiveSessionForClient = jest
+    .fn()
+    .mockResolvedValue(options.currentSession === undefined ? null : options.currentSession);
   const closeTrade = jest.fn();
-  const execution = { getActiveSession, closeTrade } as unknown as ExecutionService;
+  const execution = {
+    getActiveSession,
+    getActiveSessionForClient,
+    closeTrade,
+  } as unknown as ExecutionService;
   const findBySignal = jest
     .fn()
     .mockResolvedValue(options.tradeIntentId ? { id: options.tradeIntentId } : null);
@@ -862,6 +870,7 @@ function phase2Harness(
     markOutcomeState,
     receiveSignal,
     getActiveSession,
+    getActiveSessionForClient,
     closeTrade,
     loadOpenPaperPositions,
     loadOpenPaperRiskPositions,
@@ -2397,6 +2406,37 @@ describe('M1 V8 multi-model DEMO authority', () => {
       );
     },
   );
+
+  it('reports a risk-suspended FULL_AUTO session as risk protection instead of session inactivity', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: null,
+      currentSession: {
+        ...fullAutoSession,
+        status: 'SUSPENDED_RISK_LIMIT',
+      },
+      trainedExpertState: 'CONFIRM',
+    });
+
+    await driveFeatures(h, cleanContinuationFeatures(), {
+      brokerConnectionId: 'demo-conn-2',
+    });
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.getActiveSessionForClient).toHaveBeenCalledWith('user-1');
+    expect(h.markOutcomeState).toHaveBeenCalledWith(
+      expect.any(String),
+      'RISK_REJECTED',
+      expect.any(Date),
+      expect.stringContaining('SUSPENDED_RISK_LIMIT'),
+    );
+    expect(h.markOutcomeState).not.toHaveBeenCalledWith(
+      expect.any(String),
+      'SESSION_INACTIVE',
+      expect.any(Date),
+      expect.any(String),
+    );
+  });
 
   it('still requires the exact active FULL_AUTO broker connection at final dispatch', async () => {
     const h = phase2Harness({

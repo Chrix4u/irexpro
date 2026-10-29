@@ -460,6 +460,17 @@ export function executionBlockedReasons(facts: ExecutionAuthorityFacts): string[
   return reasons;
 }
 
+export function dailyLossProtectionMessage(input: {
+  maxDailyLossPercent: string | null | undefined;
+  rejectionReason: string | null | undefined;
+}): string {
+  const limit = input.maxDailyLossPercent?.trim();
+  const reason = input.rejectionReason?.trim();
+  const limitText = limit ? ` Daily-loss limit: ${limit}%.` : '';
+  const reasonText = reason ? ` ${reason}` : '';
+  return `All new AI entries are blocked by daily-loss protection.${limitText}${reasonText}`;
+}
+
 export interface DailyRiskCooldownState {
   active: boolean;
   resumeAt: string | null;

@@ -3,6 +3,7 @@ import {
   changeSessionExecutionMode,
   confirmPendingConfirmation,
   connectionVerificationLabel,
+  dailyLossProtectionMessage,
   dailyRiskCooldownFromViolation,
   executionBlockedReasons,
   formatExpiryCountdown,
@@ -342,6 +343,20 @@ describe('formatExpiryCountdown', () => {
 
   it('reports Expired once the server-side window has passed', () => {
     expect(formatExpiryCountdown('2026-09-09T23:59:00.000Z', now)).toBe('Expired');
+  });
+});
+
+describe('dailyLossProtectionMessage', () => {
+  it('states explicitly that daily-loss protection blocks every new entry and preserves the server reason', () => {
+    expect(
+      dailyLossProtectionMessage({
+        maxDailyLossPercent: '5.00',
+        rejectionReason:
+          'Daily loss 51.45 has reached limit (5.00% = 46.01 of the session opening balance 920.12)',
+      }),
+    ).toBe(
+      'All new AI entries are blocked by daily-loss protection. Daily-loss limit: 5.00%. Daily loss 51.45 has reached limit (5.00% = 46.01 of the session opening balance 920.12)',
+    );
   });
 });
 

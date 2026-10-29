@@ -13,6 +13,7 @@ import { TradeIntentService } from '../execution/services/trade-intent.service';
 import { AllocationService } from '../execution/services/allocation.service';
 import { PAPER_PRODUCT_ABSOLUTE_MIN_LOT } from '../execution/services/position-sizing.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
+import { TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { AiSignalService } from './ai-signal.service';
 import { MacroEventRiskService } from './macro-event-risk.service';
 import {
@@ -1244,6 +1245,22 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       ? await this.executionService.getActiveSession(userId)
       : null;
     const professionalDemoPhase = this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
+    if (!session && professionalDemoPhase && this.executionService) {
+      const currentSession = await this.executionService.getActiveSessionForClient(userId);
+      if (
+        currentSession?.status === TradingSessionStatus.SUSPENDED_RISK_LIMIT &&
+        currentSession.executionMode === ExecutionMode.FULL_AUTO &&
+        currentSession.brokerConnectionId === brokerConnectionId
+      ) {
+        await this.evidence.markOutcomeState(
+          decisionId,
+          'RISK_REJECTED',
+          new Date(),
+          'M1 V8 execution blocked because the exact FULL_AUTO DEMO session is SUSPENDED_RISK_LIMIT',
+        );
+        return;
+      }
+    }
     const useProfessionalM1Fallback =
       professionalDemoPhase && professionalM1Fallback?.eligible === true;
     const requiredExecutionMode = professionalDemoPhase

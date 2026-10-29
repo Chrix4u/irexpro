@@ -67,6 +67,7 @@ import {
   type TerminalBrokerView,
 } from "@/lib/trader-terminal-status";
 import {
+  dailyLossProtectionMessage,
   dailyRiskCooldownFromViolation,
   executionBlockedReasons,
   prepareBrokerForAutomationStart,
@@ -1921,10 +1922,16 @@ export default function AiTradingPage() {
     latestRiskViolationReason:
       terminal?.risk?.latestRiskSuspensionViolation?.rejectionReason ?? null,
   });
+  const dailyLossProtectionDetail = dailyLossSuspension
+    ? dailyLossProtectionMessage({
+        maxDailyLossPercent: terminal?.risk?.limits.maxDailyLossPercent,
+        rejectionReason: terminal?.risk?.latestRiskSuspensionViolation?.rejectionReason,
+      })
+    : null;
   const automationSuspensionMessage = automationRiskSuspended
     ? dailyLossSuspension
-      ? (terminal?.risk?.latestRiskSuspensionViolation?.rejectionReason ??
-        "Daily-loss protection paused AI Trading. You can keep the session paused or explicitly reset today’s loss counter from this moment and continue.")
+      ? (dailyLossProtectionDetail ??
+        "All new AI entries are blocked by daily-loss protection.")
       : (automationBlockedReasons.find((reason) =>
           reason.startsWith("Risk protection paused AI Trading:"),
         ) ??
