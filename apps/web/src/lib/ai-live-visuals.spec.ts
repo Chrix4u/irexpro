@@ -2,6 +2,7 @@ import {
   LIVE_SCAN_STAGES,
   deriveLiveScanFrame,
   mergeLiveQuoteIntoCandles,
+  reconcileLiveCandles,
   selectChartWindow,
   shiftChartWindow,
   zoomChartWindow,
@@ -119,5 +120,78 @@ describe('ai live visuals', () => {
     }, 'M5');
 
     expect(next).toEqual(candles);
+  });
+
+  it('preserves the forming candle open and extremes across repeated broker snapshot polls', () => {
+    const previous = [
+      {
+        timestamp: '2026-10-29T01:35:00.000Z',
+        open: '1.16100',
+        high: '1.16200',
+        low: '1.16040',
+        close: '1.16160',
+        volume: '0',
+      },
+    ];
+    const authoritative = [
+      {
+        timestamp: '2026-10-29T01:30:00.000Z',
+        open: '1.16000',
+        high: '1.16080',
+        low: '1.15980',
+        close: '1.16050',
+        volume: '12',
+      },
+    ];
+
+    const next = reconcileLiveCandles(previous, authoritative, {
+      bid: '1.16080',
+      ask: '1.16100',
+      timestamp: '2026-10-29T01:37:20.000Z',
+    }, 'M5');
+
+    expect(next.at(-1)).toMatchObject({
+      timestamp: '2026-10-29T01:35:00.000Z',
+      open: '1.16100',
+      high: '1.16200',
+      low: '1.16040',
+      close: '1.16090',
+    });
+  });
+
+  it('lets authoritative history replace the cached candle after that M5 bucket closes', () => {
+    const previous = [
+      {
+        timestamp: '2026-10-29T01:35:00.000Z',
+        open: '1.16100',
+        high: '1.16200',
+        low: '1.16040',
+        close: '1.16160',
+        volume: '0',
+      },
+    ];
+    const authoritative = [
+      {
+        timestamp: '2026-10-29T01:35:00.000Z',
+        open: '1.16105',
+        high: '1.16210',
+        low: '1.16030',
+        close: '1.16140',
+        volume: '17',
+      },
+    ];
+
+    const next = reconcileLiveCandles(previous, authoritative, {
+      bid: '1.16180',
+      ask: '1.16200',
+      timestamp: '2026-10-29T01:40:01.000Z',
+    }, 'M5');
+
+    expect(next[0]).toEqual(authoritative[0]);
+    expect(next[1]).toMatchObject({
+      timestamp: '2026-10-29T01:40:00.000Z',
+      open: '1.16190',
+      close: '1.16190',
+    });
   });
 });
