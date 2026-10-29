@@ -106,15 +106,18 @@ function reversalImpulse(candidate: M1TacticalCandidate, policy: M1TacticalPolic
 }
 
 function m5ReversalConfirmed(candidate: M1TacticalCandidate): boolean {
-  // Reversal timing must be confirmed by completed M5 candles, not merely by
-  // a fast M1 turn. This prevents a correct eventual direction call from
-  // becoming an early entry while the prior M5 move is still extending.
+  // Reversal execution is based on completed M5 evidence only. A sustained
+  // three-bar turn remains valid, but one genuinely decisive completed M5
+  // candle can confirm sooner even while the older bars still dominate the
+  // three-candle average.
   const establishedTurn =
     candidate.alignedM5BodyPressure3 >= 0.08 &&
     candidate.alignedM5Momentum3Atr >= 0.08 &&
     candidate.alignedM5Momentum1Atr >= -0.1;
   const decisiveFreshTurn =
-    candidate.alignedM5BodyPressure3 >= 0.05 && candidate.alignedM5Momentum1Atr >= 0.3;
+    finiteOr(candidate.alignedM5LatestBodyPressure, 0) >= 0.6 &&
+    candidate.alignedM5Momentum1Atr >= 0.3 &&
+    candidate.alignedM5Momentum3Atr >= -0.1;
   return establishedTurn || decisiveFreshTurn;
 }
 
