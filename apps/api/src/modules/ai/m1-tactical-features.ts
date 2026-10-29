@@ -35,6 +35,16 @@ export interface M1TacticalFeatureSnapshot {
   m5BodyPressure3: number;
   m5Momentum1Atr: number;
   m5Momentum3Atr: number;
+  /** Signed body pressure of the latest completed M5 candle. */
+  m5LatestBodyPressure?: number;
+  /** Signed consecutive M5 candle run; positive bullish, negative bearish. */
+  m5DirectionalRun?: number;
+  /** Latest completed M5 body / mean absolute body of the prior three M5 candles. */
+  m5BodyExpansionRatio?: number;
+  /** Signed 30-minute M1 displacement normalized by M1 ATR. */
+  m30MomentumAtr?: number;
+  /** Signed path efficiency over the most recent ~30 completed M1 minutes. */
+  m30DirectionalEfficiency?: number;
   breakoutUpAtr: number;
   breakoutDownAtr: number;
   failedBreakoutUp: boolean;
@@ -59,6 +69,8 @@ const BREAKOUT_LOOKBACK = 20;
 const MINUTE_MS = 60_000;
 const MAX_DERIVED_NO_TICK_MINUTES = 10;
 const M1_FEATURE_HISTORY_BARS = 60;
+const M30_LOOKBACK_BARS = 30;
+const M5_DIRECTIONAL_BODY_THRESHOLD = 0.12;
 
 function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value));
@@ -215,14 +227,52 @@ function averageRange(rows: LivePaperCandleInput[]): number {
   );
 }
 
+function signedBodyPressure(row: LivePaperCandleInput): number {
+  const [open, high, low, close] = numbers(row);
+  const range = high - low;
+  return range > 0 ? clamp((close - open) / range, -1, 1) : 0;
+}
+
 function averageSignedBodyPressure(rows: LivePaperCandleInput[]): number {
   if (rows.length === 0) return 0;
-  const pressure = rows.reduce((sum, row) => {
-    const [open, high, low, close] = numbers(row);
-    const range = high - low;
-    return sum + (range > 0 ? clamp((close - open) / range, -1, 1) : 0);
-  }, 0);
+  const pressure = rows.reduce((sum, row) => sum + signedBodyPressure(row), 0);
   return clamp(pressure / rows.length, -1, 1);
+}
+
+function signedDirectionalRun(rows: LivePaperCandleInput[]): number {
+  if (rows.length === 0) return 0;
+  const latestPressure = signedBodyPressure(rows.at(-1)!);
+  if (Math.abs(latestPressure) < M5_DIRECTIONAL_BODY_THRESHOLD) return 0;
+  const sign = latestPressure > 0 ? 1 : -1;
+  let run = 0;
+  for (let index = rows.length - 1; index >= 0 && run < 6; index -= 1) {
+    const pressure = signedBodyPressure(rows[index]!);
+    if (Math.abs(pressure) < M5_DIRECTIONAL_BODY_THRESHOLD || Math.sign(pressure) !== sign) break;
+    run += 1;
+  }
+  return sign * run;
+}
+
+function bodyExpansionRatio(rows: LivePaperCandleInput[]): number {
+  if (rows.length < 2) return 1;
+  const latest = rows.at(-1)!;
+  const latestBody = Math.abs(Number(latest.close) - Number(latest.open));
+  const prior = rows.slice(-4, -1);
+  if (prior.length === 0) return 1;
+  const priorMean =
+    prior.reduce((sum, row) => sum + Math.abs(Number(row.close) - Number(row.open)), 0) /
+    prior.length;
+  if (priorMean <= 0) return latestBody > 0 ? 4 : 1;
+  return clamp(latestBody / priorMean, 0, 4);
+}
+
+function directionalEfficiency(values: number[]): number {
+  if (values.length < 2) return 0;
+  const path = values
+    .slice(1)
+    .reduce((sum, value, index) => sum + Math.abs(value - values[index]!), 0);
+  if (path <= 0) return 0;
+  return clamp((values.at(-1)! - values[0]!) / path, -1, 1);
 }
 
 export function buildM1TacticalFeatures(
@@ -277,6 +327,12 @@ export function buildM1TacticalFeatures(
   const momentum3Atr = momentum(3);
   const momentum5Atr = momentum(5);
 
+  const m30Lookback = Math.min(M30_LOOKBACK_BARS, closes.length - 1);
+  const m30Window = closes.slice(-(m30Lookback + 1));
+  const m30MomentumAtr =
+    m30Window.length >= 2 ? (m30Window.at(-1)! - m30Window[0]!) / localAtr : 0;
+  const m30DirectionalEfficiency = directionalEfficiency(m30Window);
+
   const m5Closes = m5.map((row) => Number(row.close));
   const m5Atr = atr(m5, 14);
   if (!Number.isFinite(m5Atr) || m5Atr <= 0) return null;
@@ -288,6 +344,9 @@ export function buildM1TacticalFeatures(
   const m5Momentum1Atr = m5Momentum(1);
   const m5Momentum3Atr = m5Momentum(3);
   const m5BodyPressure3 = averageSignedBodyPressure(m5.slice(-3));
+  const m5LatestBodyPressure = signedBodyPressure(m5.at(-1)!);
+  const m5DirectionalRun = signedDirectionalRun(m5);
+  const m5BodyExpansionRatio = bodyExpansionRatio(m5);
 
   const efficiencyCloses = closes.slice(-6);
   const path = efficiencyCloses
@@ -323,9 +382,14 @@ export function buildM1TacticalFeatures(
     momentum1Atr,
     momentum3Atr,
     momentum5Atr,
+    m30MomentumAtr,
+    m30DirectionalEfficiency,
     m5BodyPressure3,
     m5Momentum1Atr,
     m5Momentum3Atr,
+    m5LatestBodyPressure,
+    m5DirectionalRun,
+    m5BodyExpansionRatio,
     efficiency5,
     volatilityChange,
     emaSlopeAtr,
@@ -353,9 +417,14 @@ export function buildM1TacticalFeatures(
     momentum1Atr,
     momentum3Atr,
     momentum5Atr,
+    m30MomentumAtr,
+    m30DirectionalEfficiency,
     m5BodyPressure3,
     m5Momentum1Atr,
     m5Momentum3Atr,
+    m5LatestBodyPressure,
+    m5DirectionalRun,
+    m5BodyExpansionRatio,
     breakoutUpAtr,
     breakoutDownAtr,
     failedBreakoutUp: high > priorHigh && close < priorHigh,
