@@ -1,16 +1,7 @@
-import {
-  M1_TACTICAL_POLICY_V1,
-  buildM1TacticalCandidates,
-} from './m1-tactical-candidate';
+import { M1_TACTICAL_POLICY_V1, buildM1TacticalCandidates } from './m1-tactical-candidate';
 import type { M1TacticalCandidate } from './m1-tactical-candidate';
-import {
-  M1_TACTICAL_FEATURE_ARTIFACT,
-  buildM1TacticalFeatures,
-} from './m1-tactical-features';
-import type {
-  M1TacticalFeatureInput,
-  M1TacticalFeatureSnapshot,
-} from './m1-tactical-features';
+import { M1_TACTICAL_FEATURE_ARTIFACT, buildM1TacticalFeatures } from './m1-tactical-features';
+import type { M1TacticalFeatureInput, M1TacticalFeatureSnapshot } from './m1-tactical-features';
 import { classifyM1TacticalRoute } from './m1-tactical-route';
 import type { LivePaperCandleInput } from '../broker/services/live-paper-market-data.service';
 
@@ -86,7 +77,9 @@ function snapshot(overrides: Partial<M1TacticalFeatureSnapshot> = {}): M1Tactica
   };
 }
 
-function candidatePair(source: M1TacticalFeatureSnapshot): readonly [M1TacticalCandidate, M1TacticalCandidate] {
+function candidatePair(
+  source: M1TacticalFeatureSnapshot,
+): readonly [M1TacticalCandidate, M1TacticalCandidate] {
   return buildM1TacticalCandidates(source, M1_TACTICAL_POLICY_V1);
 }
 
