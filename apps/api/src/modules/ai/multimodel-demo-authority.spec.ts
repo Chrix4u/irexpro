@@ -1,6 +1,7 @@
 import {
   evaluateMultimodelDemoAuthority,
   multimodelDemoExecutionVolumeCap,
+  multimodelDemoSignalConfidence,
   m1CandidateToPlanBInput,
 } from './multimodel-demo-authority';
 import type { M1TacticalCandidate } from './m1-tactical-candidate';
@@ -12,10 +13,7 @@ const ensemble = (paperAdmitted = true) => ({
   strategyRoute: 'TREND_CONTINUATION' as const,
 });
 
-const governance = (
-  paperExecutionEligible = true,
-  overrides: Record<string, unknown> = {},
-) => ({
+const governance = (paperExecutionEligible = true, overrides: Record<string, unknown> = {}) => ({
   paperExecutionEligible,
   paperExecutionBlockers: paperExecutionEligible ? [] : ['DRIFT_OUT_OF_DISTRIBUTION'],
   netExpectedR: paperExecutionEligible ? 0.22 : -0.1,
@@ -154,6 +152,38 @@ describe('evaluateMultimodelDemoAuthority', () => {
     );
   });
 
+  it('uses trained-expert confidence for high-conviction rescue while primary Plan-B keeps its ensemble score', () => {
+    const rescueInput = {
+      ensemble: { ...ensemble(false), ensembleScore: 0.579 },
+      governance: governance(false, {
+        paperExecutionBlockers: [
+          'ENSEMBLE_NOT_PAPER_ADMITTED',
+          'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+          'DRIFT_OUT_OF_DISTRIBUTION',
+        ],
+        netExpectedR: 0.52,
+        paperNetExpectedRPassed: true,
+      }),
+      trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.738 },
+      candidateDirection: 'BUY' as const,
+      m1TimingRoute: 'M1_TREND_CONTINUATION' as const,
+    };
+    const rescued = evaluateMultimodelDemoAuthority(rescueInput);
+    expect(rescued.authorityPath).toBe('HIGH_CONVICTION_RESCUE');
+    expect(multimodelDemoSignalConfidence(rescueInput, rescued)).toBeCloseTo(0.738, 10);
+
+    const primaryInput = {
+      ensemble: { ...ensemble(true), ensembleScore: 0.641 },
+      governance: governance(true),
+      trainedExpert: { ...overlay('CONFIRM'), ensembleConfidence: 0.82 },
+      candidateDirection: 'BUY' as const,
+      m1TimingRoute: 'M1_TREND_CONTINUATION' as const,
+    };
+    const primary = evaluateMultimodelDemoAuthority(primaryInput);
+    expect(primary.authorityPath).toBe('PRIMARY_PLAN_B');
+    expect(multimodelDemoSignalConfidence(primaryInput, primary)).toBeCloseTo(0.641, 10);
+  });
+
   it('does not rescue when the M1 timing specialist abstains', () => {
     const result = evaluateMultimodelDemoAuthority({
       ensemble: ensemble(false),
@@ -174,7 +204,12 @@ describe('evaluateMultimodelDemoAuthority', () => {
   it.each([
     {
       name: '2/3 votes',
-      trainedExpert: { ...overlay('ABSTAIN'), longVotes: 2, shortVotes: 1, ensembleConfidence: 0.78 },
+      trainedExpert: {
+        ...overlay('ABSTAIN'),
+        longVotes: 2,
+        shortVotes: 1,
+        ensembleConfidence: 0.78,
+      },
       governance: governance(false, {
         paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'DRIFT_OUT_OF_DISTRIBUTION'],
         netExpectedR: 0.52,
@@ -183,7 +218,13 @@ describe('evaluateMultimodelDemoAuthority', () => {
     },
     {
       name: 'opposite unanimous direction',
-      trainedExpert: { ...overlay('ABSTAIN'), direction: 'SELL' as const, longVotes: 0, shortVotes: 3, ensembleConfidence: 0.78 },
+      trainedExpert: {
+        ...overlay('ABSTAIN'),
+        direction: 'SELL' as const,
+        longVotes: 0,
+        shortVotes: 3,
+        ensembleConfidence: 0.78,
+      },
       governance: governance(false, {
         paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'DRIFT_OUT_OF_DISTRIBUTION'],
         netExpectedR: 0.52,

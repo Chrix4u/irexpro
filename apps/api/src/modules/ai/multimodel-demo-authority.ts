@@ -26,10 +26,7 @@ export interface MultimodelDemoAuthorityInput {
   m1TimingRoute: M1TacticalRoute;
 }
 
-export type MultimodelDemoAuthorityPath =
-  | 'PRIMARY_PLAN_B'
-  | 'HIGH_CONVICTION_RESCUE'
-  | 'BLOCKED';
+export type MultimodelDemoAuthorityPath = 'PRIMARY_PLAN_B' | 'HIGH_CONVICTION_RESCUE' | 'BLOCKED';
 
 export interface MultimodelDemoAuthorityDecision {
   executable: boolean;
@@ -135,6 +132,21 @@ export function evaluateMultimodelDemoAuthority(
     m1TimingRoute: input.m1TimingRoute,
     blockers: executable ? [] : finalBlockers,
   };
+}
+
+export function multimodelDemoSignalConfidence(
+  input: Pick<MultimodelDemoAuthorityInput, 'ensemble' | 'trainedExpert'>,
+  authority: MultimodelDemoAuthorityDecision,
+): number {
+  const planBConfidence = Number.isFinite(input.ensemble.ensembleScore)
+    ? input.ensemble.ensembleScore
+    : 0;
+  if (authority.authorityPath !== 'HIGH_CONVICTION_RESCUE') return planBConfidence;
+
+  const rescueConfidence = input.trainedExpert.ensembleConfidence;
+  return rescueConfidence != null && Number.isFinite(rescueConfidence)
+    ? rescueConfidence
+    : planBConfidence;
 }
 
 export function multimodelDemoExecutionVolumeCap(
