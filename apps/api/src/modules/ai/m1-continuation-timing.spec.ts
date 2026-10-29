@@ -1,13 +1,15 @@
 import {
   M1_TACTICAL_POLICY_V1,
   buildM1TacticalCandidates,
-  type M1TacticalCandidate,
 } from './m1-tactical-candidate';
+import type { M1TacticalCandidate } from './m1-tactical-candidate';
 import {
   M1_TACTICAL_FEATURE_ARTIFACT,
   buildM1TacticalFeatures,
-  type M1TacticalFeatureInput,
-  type M1TacticalFeatureSnapshot,
+} from './m1-tactical-features';
+import type {
+  M1TacticalFeatureInput,
+  M1TacticalFeatureSnapshot,
 } from './m1-tactical-features';
 import { classifyM1TacticalRoute } from './m1-tactical-route';
 import type { LivePaperCandleInput } from '../broker/services/live-paper-market-data.service';
