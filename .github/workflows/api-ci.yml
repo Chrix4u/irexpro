@@ -2,7 +2,7 @@ name: API CI
 
 on:
   push:
-    branches: [main, develop, feat/native-mobile-onboarding-20260930, fix/m5-reversal-timing-20261029]
+    branches: [main, develop, feat/native-mobile-onboarding-20260930]
     paths:
       - 'apps/api/**'
       - 'pnpm-lock.yaml'
@@ -88,7 +88,7 @@ jobs:
   full-lint-audit:
     name: Full API lint audit
     if: github.event_name == 'push'
-    continue-on-error: ${{ github.ref_name == 'feat/native-mobile-onboarding-20260930' || github.ref_name == 'fix/m5-reversal-timing-20261029' }}
+    continue-on-error: ${{ github.ref_name == 'feat/native-mobile-onboarding-20260930' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
