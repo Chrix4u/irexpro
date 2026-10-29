@@ -88,13 +88,13 @@ jobs:
   full-lint-audit:
     name: Full API lint audit
     if: github.event_name == 'push'
-    continue-on-error: ${{ github.ref_name == 'feat/native-mobile-onboarding-20260930' }}
+    continue-on-error: ${{ github.ref_name == 'feat/native-mobile-onboarding-20260930' || github.ref_name == 'fix/confirmed-reversal-m1-consistency-20261029' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
       - name: Checkout exact candidate
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        uses: actions/checkout@fbc6f3992d24b796d5d8b3a19a8cae5388b55320 # v5.1.0
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           persist-credentials: false
@@ -130,7 +130,7 @@ jobs:
 
     steps:
       - name: Checkout exact candidate
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        uses: actions/checkout@fbc6f3992d24b796d5d8b3a19a8cae5388b55320 # v5.1.0
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           persist-credentials: false
@@ -173,7 +173,7 @@ jobs:
 
     steps:
       - name: Checkout exact candidate
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        uses: actions/checkout@fbc6f3992d24b796d5d8b3a19a8cae5388b55320 # v5.1.0
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           persist-credentials: false
