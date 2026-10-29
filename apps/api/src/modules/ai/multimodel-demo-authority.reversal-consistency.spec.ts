@@ -63,6 +63,26 @@ describe('Plan-B confirmed-reversal timing consistency', () => {
     );
   });
 
+  it('does not let high-conviction rescue bypass missing M1 reversal confirmation', () => {
+    const input = reversalAuthorityInput('M1_EARLY_TRANSITION');
+    const result = evaluateMultimodelDemoAuthority({
+      ...input,
+      trainedExpert: {
+        ...input.trainedExpert,
+        state: 'CONFIRM',
+        ensembleConfidence: 0.82,
+        longVotes: 0,
+        shortVotes: 3,
+      },
+    });
+
+    expect(result.executable).toBe(false);
+    expect(result.authorityPath).toBe('BLOCKED');
+    expect(result.blockers).toContain(
+      'MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED',
+    );
+  });
+
   it('keeps a Plan-B confirmed reversal executable when M1 independently confirms reversal', () => {
     const result = evaluateMultimodelDemoAuthority(
       reversalAuthorityInput('M1_CONFIRMED_REVERSAL'),
