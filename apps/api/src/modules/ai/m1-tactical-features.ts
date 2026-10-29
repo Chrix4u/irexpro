@@ -32,6 +32,9 @@ export interface M1TacticalFeatureSnapshot {
   momentum1Atr: number;
   momentum3Atr: number;
   momentum5Atr: number;
+  m5BodyPressure3: number;
+  m5Momentum1Atr: number;
+  m5Momentum3Atr: number;
   breakoutUpAtr: number;
   breakoutDownAtr: number;
   failedBreakoutUp: boolean;
@@ -212,6 +215,16 @@ function averageRange(rows: LivePaperCandleInput[]): number {
   );
 }
 
+function averageSignedBodyPressure(rows: LivePaperCandleInput[]): number {
+  if (rows.length === 0) return 0;
+  const pressure = rows.reduce((sum, row) => {
+    const [open, high, low, close] = numbers(row);
+    const range = high - low;
+    return sum + (range > 0 ? clamp((close - open) / range, -1, 1) : 0);
+  }, 0);
+  return clamp(pressure / rows.length, -1, 1);
+}
+
 export function buildM1TacticalFeatures(
   input: M1TacticalFeatureInput,
 ): M1TacticalFeatureSnapshot | null {
@@ -264,6 +277,18 @@ export function buildM1TacticalFeatures(
   const momentum3Atr = momentum(3);
   const momentum5Atr = momentum(5);
 
+  const m5Closes = m5.map((row) => Number(row.close));
+  const m5Atr = atr(m5, 14);
+  if (!Number.isFinite(m5Atr) || m5Atr <= 0) return null;
+  const m5Momentum = (bars: number): number => {
+    const current = m5Closes.at(-1);
+    const prior = m5Closes[m5Closes.length - 1 - bars];
+    return current == null || prior == null ? Number.NaN : (current - prior) / m5Atr;
+  };
+  const m5Momentum1Atr = m5Momentum(1);
+  const m5Momentum3Atr = m5Momentum(3);
+  const m5BodyPressure3 = averageSignedBodyPressure(m5.slice(-3));
+
   const efficiencyCloses = closes.slice(-6);
   const path = efficiencyCloses
     .slice(1)
@@ -298,6 +323,9 @@ export function buildM1TacticalFeatures(
     momentum1Atr,
     momentum3Atr,
     momentum5Atr,
+    m5BodyPressure3,
+    m5Momentum1Atr,
+    m5Momentum3Atr,
     efficiency5,
     volatilityChange,
     emaSlopeAtr,
@@ -325,6 +353,9 @@ export function buildM1TacticalFeatures(
     momentum1Atr,
     momentum3Atr,
     momentum5Atr,
+    m5BodyPressure3,
+    m5Momentum1Atr,
+    m5Momentum3Atr,
     breakoutUpAtr,
     breakoutDownAtr,
     failedBreakoutUp: high > priorHigh && close < priorHigh,
