@@ -638,29 +638,21 @@ export class TradingService {
     }
 
     const violations = await this.riskService.getViolations(userId, 20);
-    const suspensionViolation = violations.find((violation) => {
-      if (
-        violation.rejectionCode !== RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED &&
-        violation.rejectionCode !== RiskRejectionCode.MAX_DRAWDOWN_REACHED
-      ) {
-        return false;
-      }
+    const dailyLossViolation = violations.find((violation) => {
+      if (violation.rejectionCode !== RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED) return false;
       const context = (violation.riskContext ?? {}) as Record<string, unknown>;
       const scopedBroker =
         typeof context.brokerConnectionId === 'string' ? context.brokerConnectionId : null;
       return scopedBroker === null || scopedBroker === brokerConnectionId;
     });
 
-    if (
-      !suspensionViolation ||
-      suspensionViolation.rejectionCode !== RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED
-    ) {
+    if (!dailyLossViolation) {
       throw new ForbiddenException(
-        'Daily-loss reset is not available. Drawdown and other risk suspensions cannot be reset from this control.',
+        'Daily-loss reset is not available because no current-day daily-loss breach was found for this broker account.',
       );
     }
 
-    const evaluatedAt = new Date(suspensionViolation.evaluatedAt);
+    const evaluatedAt = new Date(dailyLossViolation.evaluatedAt);
     const now = new Date();
     if (
       !Number.isFinite(evaluatedAt.getTime()) ||

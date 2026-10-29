@@ -1203,28 +1203,36 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       );
     });
 
-    it('refuses broker-level reset when the latest relevant suspension is drawdown', async () => {
+    it('resets the current-day daily-loss window after an ended session even when a later drawdown violation exists', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-29T10:30:00.000Z'));
       executionService.getActiveSessionForClient.mockResolvedValue(null);
       riskService.getViolations.mockResolvedValue([
         {
           rejectionCode: RiskRejectionCode.MAX_DRAWDOWN_REACHED,
-          rejectionReason: 'Maximum drawdown reached',
-          evaluatedAt: new Date(),
-          riskContext: { brokerConnectionId: 'conn-1' },
+          rejectionReason: 'Maximum drawdown reached on the ended session',
+          evaluatedAt: new Date('2026-10-29T04:55:12.000Z'),
+          riskContext: { sessionId: 'ended-session-1', brokerConnectionId: 'conn-1' },
         },
         {
           rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
           rejectionReason: 'Earlier daily loss limit reached',
-          evaluatedAt: new Date(Date.now() - 60_000),
-          riskContext: { brokerConnectionId: 'conn-1' },
+          evaluatedAt: new Date('2026-10-29T02:21:13.000Z'),
+          riskContext: { sessionId: 'ended-session-1', brokerConnectionId: 'conn-1' },
         },
       ]);
 
-      await expect(service.resetDailyLossProtectionForBroker('user-1', 'conn-1')).rejects.toThrow(
-        ForbiddenException,
+      const result = await service.resetDailyLossProtectionForBroker('user-1', 'conn-1');
+
+      expect(dailyRiskPeriodService.recordDailyLossReset).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          brokerConnectionId: 'conn-1',
+          sessionId: null,
+          now: new Date('2026-10-29T10:30:00.000Z'),
+        }),
       );
-      expect(dailyRiskPeriodService.recordDailyLossReset).not.toHaveBeenCalled();
-      expect(auditService.log).not.toHaveBeenCalledWith(
+      expect(result.resetCount).toBe(1);
+      expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'RISK_DAILY_LOSS_RESET_CONFIRMED' }),
       );
     });
