@@ -61,6 +61,16 @@ export interface M1TacticalCandidate {
   alignedM5BodyPressure3: number;
   alignedM5Momentum1Atr: number;
   alignedM5Momentum3Atr: number;
+  /** Direction-aligned latest completed M5 candle body pressure. */
+  alignedM5LatestBodyPressure?: number;
+  /** Direction-aligned consecutive completed M5 candle run. */
+  alignedM5DirectionalRun?: number;
+  /** Direction-aligned recent ~30m path efficiency. */
+  alignedM30DirectionalEfficiency?: number;
+  /** Direction-aligned recent ~30m displacement in M1 ATR units. */
+  alignedM30MomentumAtr?: number;
+  /** Unsigned latest M5 body expansion/contraction ratio. */
+  m5BodyExpansionRatio?: number;
   alignedHigherTimeframeAgreement: number;
   alignedM5: number;
   alignedM15: number;
@@ -103,6 +113,11 @@ function buildCandidate(
   const alignedM5BodyPressure3 = sign * snapshot.m5BodyPressure3;
   const alignedM5Momentum1Atr = sign * snapshot.m5Momentum1Atr;
   const alignedM5Momentum3Atr = sign * snapshot.m5Momentum3Atr;
+  const alignedM5LatestBodyPressure = sign * (snapshot.m5LatestBodyPressure ?? 0);
+  const alignedM5DirectionalRun = sign * (snapshot.m5DirectionalRun ?? 0);
+  const alignedM30DirectionalEfficiency = sign * (snapshot.m30DirectionalEfficiency ?? 0);
+  const alignedM30MomentumAtr = sign * (snapshot.m30MomentumAtr ?? 0);
+  const m5BodyExpansionRatio = snapshot.m5BodyExpansionRatio ?? 1;
   const alignedHigherTimeframeAgreement = sign * snapshot.higherTimeframeAgreement;
   const alignedM5 = sign * snapshot.alignment.m5;
   const alignedM15 = sign * snapshot.alignment.m15;
@@ -167,6 +182,11 @@ function buildCandidate(
     alignedM5BodyPressure3,
     alignedM5Momentum1Atr,
     alignedM5Momentum3Atr,
+    alignedM5LatestBodyPressure,
+    alignedM5DirectionalRun,
+    alignedM30DirectionalEfficiency,
+    alignedM30MomentumAtr,
+    m5BodyExpansionRatio,
     alignedHigherTimeframeAgreement,
     alignedM5,
     alignedM15,
