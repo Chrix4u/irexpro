@@ -117,3 +117,116 @@ export function selectChartWindow<T>(
   const start = Math.max(0, end - safeVisible);
   return rows.slice(start, end);
 }
+
+export interface LiveChartCandle {
+  timestamp: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+}
+
+export interface LiveChartQuote {
+  bid: string;
+  ask: string;
+  timestamp: string;
+}
+
+const TIMEFRAME_MS: Readonly<Record<string, number>> = Object.freeze({
+  M1: 60_000,
+  M5: 5 * 60_000,
+  M15: 15 * 60_000,
+  H1: 60 * 60_000,
+  H4: 4 * 60 * 60_000,
+});
+
+function decimalPlaces(value: string): number {
+  const dot = value.indexOf('.');
+  return dot < 0 ? 0 : value.length - dot - 1;
+}
+
+function quoteMid(quote: LiveChartQuote): string | null {
+  const bid = Number(quote.bid);
+  const ask = Number(quote.ask);
+  if (!Number.isFinite(bid) || !Number.isFinite(ask) || ask < bid) return null;
+  const precision = Math.max(decimalPlaces(quote.bid), decimalPlaces(quote.ask));
+  return ((bid + ask) / 2).toFixed(precision);
+}
+
+function timeframeBucket(timestampMs: number, timeframe: string): number | null {
+  const interval = TIMEFRAME_MS[timeframe];
+  if (!interval || !Number.isFinite(timestampMs)) return null;
+  return Math.floor(timestampMs / interval) * interval;
+}
+
+/**
+ * Adds a presentation-only forming candle from the freshest broker quote.
+ *
+ * The AI execution engine continues to use its own completed-candle feature
+ * pipeline. This helper is deliberately confined to the web chart so a moving
+ * candle cannot be mistaken for authoritative M5 reversal confirmation.
+ */
+export function mergeLiveQuoteIntoCandles(
+  candles: readonly LiveChartCandle[],
+  quote: LiveChartQuote | null | undefined,
+  timeframe: string,
+): LiveChartCandle[] {
+  const rows = candles.map((candle) => ({ ...candle }));
+  if (!quote) return rows;
+
+  const quoteTimestamp = Date.parse(quote.timestamp);
+  const quoteBucket = timeframeBucket(quoteTimestamp, timeframe);
+  const mid = quoteMid(quote);
+  if (quoteBucket == null || mid == null) return rows;
+
+  const last = rows.at(-1);
+  if (!last) {
+    return [
+      {
+        timestamp: new Date(quoteBucket).toISOString(),
+        open: mid,
+        high: mid,
+        low: mid,
+        close: mid,
+        volume: '0',
+      },
+    ];
+  }
+
+  const lastTimestamp = Date.parse(last.timestamp);
+  const lastBucket = timeframeBucket(lastTimestamp, timeframe);
+  if (lastBucket == null || quoteBucket < lastBucket) return rows;
+
+  if (quoteBucket > lastBucket) {
+    rows.push({
+      timestamp: new Date(quoteBucket).toISOString(),
+      open: mid,
+      high: mid,
+      low: mid,
+      close: mid,
+      volume: '0',
+    });
+    return rows;
+  }
+
+  const open = Number(last.open);
+  const high = Number(last.high);
+  const low = Number(last.low);
+  const currentMid = Number(mid);
+  if (![open, high, low, currentMid].every(Number.isFinite)) return rows;
+
+  const precision = Math.max(
+    decimalPlaces(last.open),
+    decimalPlaces(last.high),
+    decimalPlaces(last.low),
+    decimalPlaces(mid),
+  );
+  rows[rows.length - 1] = {
+    ...last,
+    high: Math.max(high, currentMid).toFixed(precision),
+    low: Math.min(low, currentMid).toFixed(precision),
+    close: currentMid.toFixed(precision),
+  };
+  return rows;
+}
