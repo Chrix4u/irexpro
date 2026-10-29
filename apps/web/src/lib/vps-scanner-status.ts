@@ -320,11 +320,41 @@ export function deriveTradeReadinessUiState(
   const m1Decision = m1Status?.enabled === true ? m1Status.latestDecision : null;
   if (m1Decision) {
     const selectedReadiness = m1Status?.marketReadiness?.[m1Decision.instrument] ?? null;
-    if (selectedReadiness?.reason === "BROKER_M1_STALE") {
+    if (selectedReadiness?.ready === false && selectedReadiness.reason.startsWith("BROKER_")) {
+      if (selectedReadiness.reason === "BROKER_M1_STALE") {
+        return waiting(
+          8,
+          "Broker M1 feed stale — trading paused",
+          "The latest broker-native M1 candle is stale, so iRexPro has paused new entries rather than trade on old prices. Scanning and execution resume automatically when fresh broker candles return.",
+          m1Decision.instrument,
+          m1Decision.direction,
+        );
+      }
+      if (selectedReadiness.reason === "BROKER_FEATURE_CONTEXT_UNAVAILABLE") {
+        return waiting(
+          12,
+          "Broker context rebuilding — trading paused",
+          "Fresh M1 prices are arriving again, but the required M5/M15/H1/H4 broker context is still rebuilding after the market-data gap. New entries resume automatically when that context is fresh enough.",
+          m1Decision.instrument,
+          m1Decision.direction,
+        );
+      }
+      if (
+        selectedReadiness.reason === "BROKER_SPREAD_UNAVAILABLE" ||
+        selectedReadiness.reason === "BROKER_SPREAD_UNUSABLE"
+      ) {
+        return waiting(
+          15,
+          "Broker execution spread unavailable — trading paused",
+          "iRexPro cannot verify a usable live broker spread, so it is refusing new entries until execution-cost evidence recovers automatically.",
+          m1Decision.instrument,
+          m1Decision.direction,
+        );
+      }
       return waiting(
-        8,
-        "Broker M1 feed stale — trading paused",
-        "The latest broker-native M1 candle is stale, so iRexPro has paused new entries rather than trade on old prices. Scanning and execution resume automatically when fresh broker candles return.",
+        10,
+        "Broker market data unavailable — trading paused",
+        "The broker-native market-data path is not ready, so iRexPro is refusing new entries until fresh execution-grade data returns automatically.",
         m1Decision.instrument,
         m1Decision.direction,
       );

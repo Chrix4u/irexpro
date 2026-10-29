@@ -525,6 +525,51 @@ describe("production trade-readiness presentation", () => {
     expect(result.detail).toMatch(/resume automatically/i);
   });
 
+  it("shows broker context recovery as a data pause instead of reusing the old model score", () => {
+    const m1Status = {
+      enabled: true,
+      phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+      lastRunAt: "2026-10-29T21:01:15.000Z",
+      lastError: null,
+      marketReadiness: {
+        EURUSD: {
+          ready: false,
+          reason: "BROKER_FEATURE_CONTEXT_UNAVAILABLE",
+          authority: null,
+          observedAt: "2026-10-29T21:01:15.000Z",
+        },
+      },
+      latestDecision: {
+        instrument: "EURUSD",
+        direction: "BUY",
+        route: "ABSTAIN",
+        barTime: "2026-10-29T20:29:00.000Z",
+        confidence: 0.35,
+        netExpectedR: 0.12,
+        executionAuthority: "NONE",
+        blockers: ["MULTIMODEL_GOVERNANCE_BLOCKED"],
+        outcomeState: null,
+      },
+    };
+
+    const result = derive({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: m1Status,
+      fastMarkState: "LIVE",
+    });
+
+    expect(result).toMatchObject({
+      score: 12,
+      band: "WAITING",
+      tradeExpected: false,
+      instrument: "EURUSD",
+      direction: "BUY",
+      headline: "Broker context rebuilding — trading paused",
+    });
+    expect(result.detail).toMatch(/resume automatically/i);
+  });
+
   it("shows M1 broker-native execution eligibility as ready without legacy fast-mark capping", () => {
     const m1Status = {
       enabled: true,
