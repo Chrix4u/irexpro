@@ -160,13 +160,6 @@ function timeframeBucket(timestampMs: number, timeframe: string): number | null 
   return Math.floor(timestampMs / interval) * interval;
 }
 
-/**
- * Adds a presentation-only forming candle from the freshest broker quote.
- *
- * The AI execution engine continues to use its own completed-candle feature
- * pipeline. This helper is deliberately confined to the web chart so a moving
- * candle cannot be mistaken for authoritative M5 reversal confirmation.
- */
 export function mergeLiveQuoteIntoCandles(
   candles: readonly LiveChartCandle[],
   quote: LiveChartQuote | null | undefined,
@@ -182,16 +175,7 @@ export function mergeLiveQuoteIntoCandles(
 
   const last = rows.at(-1);
   if (!last) {
-    return [
-      {
-        timestamp: new Date(quoteBucket).toISOString(),
-        open: mid,
-        high: mid,
-        low: mid,
-        close: mid,
-        volume: '0',
-      },
-    ];
+    return [{ timestamp: new Date(quoteBucket).toISOString(), open: mid, high: mid, low: mid, close: mid, volume: '0' }];
   }
 
   const lastTimestamp = Date.parse(last.timestamp);
@@ -199,14 +183,7 @@ export function mergeLiveQuoteIntoCandles(
   if (lastBucket == null || quoteBucket < lastBucket) return rows;
 
   if (quoteBucket > lastBucket) {
-    rows.push({
-      timestamp: new Date(quoteBucket).toISOString(),
-      open: mid,
-      high: mid,
-      low: mid,
-      close: mid,
-      volume: '0',
-    });
+    rows.push({ timestamp: new Date(quoteBucket).toISOString(), open: mid, high: mid, low: mid, close: mid, volume: '0' });
     return rows;
   }
 
@@ -216,12 +193,7 @@ export function mergeLiveQuoteIntoCandles(
   const currentMid = Number(mid);
   if (![open, high, low, currentMid].every(Number.isFinite)) return rows;
 
-  const precision = Math.max(
-    decimalPlaces(last.open),
-    decimalPlaces(last.high),
-    decimalPlaces(last.low),
-    decimalPlaces(mid),
-  );
+  const precision = Math.max(decimalPlaces(last.open), decimalPlaces(last.high), decimalPlaces(last.low), decimalPlaces(mid));
   rows[rows.length - 1] = {
     ...last,
     high: Math.max(high, currentMid).toFixed(precision),
@@ -229,4 +201,53 @@ export function mergeLiveQuoteIntoCandles(
     close: currentMid.toFixed(precision),
   };
   return rows;
+}
+
+export function reconcileLiveCandles(
+  previous: readonly LiveChartCandle[],
+  authoritative: readonly LiveChartCandle[],
+  quote: LiveChartQuote | null | undefined,
+  timeframe: string,
+): LiveChartCandle[] {
+  const base = authoritative.map((candle) => ({ ...candle }));
+  if (!quote) return base;
+
+  const quoteBucket = timeframeBucket(Date.parse(quote.timestamp), timeframe);
+  if (quoteBucket == null) return base;
+
+  const lastAuthoritative = base.at(-1);
+  const lastPrevious = previous.at(-1);
+  const authoritativeBucket = lastAuthoritative
+    ? timeframeBucket(Date.parse(lastAuthoritative.timestamp), timeframe)
+    : null;
+  const previousBucket = lastPrevious
+    ? timeframeBucket(Date.parse(lastPrevious.timestamp), timeframe)
+    : null;
+
+  if (lastPrevious && previousBucket === quoteBucket && (authoritativeBucket == null || quoteBucket > authoritativeBucket)) {
+    base.push({ ...lastPrevious });
+  } else if (lastPrevious && lastAuthoritative && previousBucket === quoteBucket && authoritativeBucket === quoteBucket) {
+    const authoritativeOpen = Number(lastAuthoritative.open);
+    const authoritativeHigh = Number(lastAuthoritative.high);
+    const authoritativeLow = Number(lastAuthoritative.low);
+    const previousHigh = Number(lastPrevious.high);
+    const previousLow = Number(lastPrevious.low);
+    const precision = Math.max(
+      decimalPlaces(lastAuthoritative.open),
+      decimalPlaces(lastAuthoritative.high),
+      decimalPlaces(lastAuthoritative.low),
+      decimalPlaces(lastPrevious.high),
+      decimalPlaces(lastPrevious.low),
+    );
+    if ([authoritativeOpen, authoritativeHigh, authoritativeLow, previousHigh, previousLow].every(Number.isFinite)) {
+      base[base.length - 1] = {
+        ...lastAuthoritative,
+        open: authoritativeOpen.toFixed(precision),
+        high: Math.max(authoritativeHigh, previousHigh).toFixed(precision),
+        low: Math.min(authoritativeLow, previousLow).toFixed(precision),
+      };
+    }
+  }
+
+  return mergeLiveQuoteIntoCandles(base, quote, timeframe);
 }
