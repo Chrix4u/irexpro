@@ -110,6 +110,7 @@ describe('classifyM1TacticalRoute', () => {
       lowerWickRatio: 0.05,
       upperWickRatio: 0.55,
       m5BodyPressure3: 0.65,
+      m5LatestBodyPressure: 0.72,
       m5Momentum1Atr: 0.45,
       m5Momentum3Atr: 0.9,
     });
@@ -136,6 +137,7 @@ describe('classifyM1TacticalRoute', () => {
       lowerWickRatio: 0.05,
       upperWickRatio: 0.55,
       m5BodyPressure3: -0.45,
+      m5LatestBodyPressure: -0.62,
       m5Momentum1Atr: -0.3,
       m5Momentum3Atr: -0.55,
     });
@@ -147,7 +149,7 @@ describe('classifyM1TacticalRoute', () => {
     expect(result.eligible).toBe(true);
   });
 
-  it('accepts one decisive completed M5 reversal candle without waiting for an arbitrary candle count', () => {
+  it('accepts one decisive completed M5 reversal candle without waiting for the three-candle average to turn', () => {
     const source = snapshot({
       failedBreakoutDown: true,
       emaSeparationAtr: 0.22,
@@ -155,7 +157,10 @@ describe('classifyM1TacticalRoute', () => {
       momentum1Atr: 0.55,
       momentum3Atr: 0.72,
       momentum5Atr: 0.48,
-      m5BodyPressure3: 0.12,
+      // The prior two M5 candles still dominate the average. The latest
+      // completed candle itself is the decisive turn we want to react to.
+      m5BodyPressure3: -0.15,
+      m5LatestBodyPressure: 0.78,
       m5Momentum1Atr: 0.42,
       m5Momentum3Atr: -0.05,
       alignment: { m5: -0.05, m15: -0.08, h1: -0.18, h4: -0.22 },
