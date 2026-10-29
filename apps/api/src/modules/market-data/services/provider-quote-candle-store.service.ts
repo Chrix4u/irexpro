@@ -222,6 +222,8 @@ export class ProviderQuoteCandleStoreService {
         l.spread_close,
         l.last_sample_at,
         COUNT(p.*)::int AS positive_sample_count,
+        percentile_cont(0.50) WITHIN GROUP (ORDER BY p.spread_close::double precision) AS p50_spread,
+        percentile_cont(0.75) WITHIN GROUP (ORDER BY p.spread_close::double precision) AS p75_spread,
         percentile_cont(0.90) WITHIN GROUP (ORDER BY p.spread_close::double precision) AS p90_spread,
         MAX(p.last_sample_at) AS latest_positive_sample_at
       FROM latest l
@@ -234,9 +236,22 @@ export class ProviderQuoteCandleStoreService {
     if (!row) return null;
     const rawBid = Number(row.bid_close);
     const rawAsk = Number(row.ask_close);
-    const p90Spread = Number(row.p90_spread);
     const rawSpread = Math.max(0, rawAsk - rawBid);
-    const spread = Math.max(rawSpread, p90Spread);
+    const p50Spread = Number(row.p50_spread);
+    const p75Spread = Number(row.p75_spread);
+    const rawP90Spread = Number(row.p90_spread);
+    const p90Spread = Number.isFinite(rawP90Spread) && rawP90Spread > 0 ? rawP90Spread : rawSpread;
+    // The live spread remains authoritative. The rolling P90 is deliberately
+    // conservative, but a handful of transient quote spikes must not poison
+    // every setup for the next 30 minutes. Cap the historical tail against the
+    // central 50th/75th percentile envelope; a genuinely wide CURRENT quote
+    // still overrides this cap through rawSpread below.
+    const robustTailCap =
+      Number.isFinite(p50Spread) && p50Spread > 0 && Number.isFinite(p75Spread) && p75Spread > 0
+        ? Math.max(p50Spread * 4, p75Spread * 2)
+        : p90Spread;
+    const robustHistoricalSpread = Math.min(p90Spread, robustTailCap);
+    const spread = Math.max(rawSpread, robustHistoricalSpread);
     const timestamp = new Date(row.last_sample_at);
     const latestPositiveSampleAt = new Date(row.latest_positive_sample_at);
     const positiveSampleCount = Number(row.positive_sample_count);

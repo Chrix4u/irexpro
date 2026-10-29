@@ -2231,6 +2231,356 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(recorded?.blockers).toContain('M1_MULTIMODEL_LOSS_STREAK_BRAKE');
   });
 
+  it('bootstraps a strong cold-start M1 continuation at the conservative cap without Plan-B admission', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+            admitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED', 'MULTIMODEL_GOVERNANCE_BLOCKED'],
+          },
+        };
+      });
+
+    const route = await driveFeatures(h, cleanContinuationFeatures(), {
+      brokerConnectionId: 'demo-conn-2',
+    });
+
+    expect(route).toEqual(
+      expect.objectContaining({ route: 'M1_TREND_CONTINUATION', eligible: true }),
+    );
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({
+        suggestedVolume: 0.2,
+        strategyCode: 'external-irexpro-m1-tactical',
+        metadata: expect.objectContaining({
+          m1_professional_fallback: true,
+          m1_professional_fallback_tier: 'BOOTSTRAP_CONTINUATION',
+          m1_tactical_route: 'M1_TREND_CONTINUATION',
+        }),
+      }),
+    );
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.executionAuthority).toBe('BROKER_NATIVE');
+    expect(recorded?.governance.professionalM1Fallback).toEqual(
+      expect.objectContaining({
+        eligible: true,
+        tier: 'BOOTSTRAP_CONTINUATION',
+        reason: 'M1_COLD_START_CONTINUATION_BOOTSTRAP',
+        lotCap: 0.2,
+      }),
+    );
+  });
+
+  it('allows strong non-extended cold-start continuation through a drift-only OOD veto', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
+    const driftOnly = cleanContinuationFeatures();
+    driftOnly.rsi14 = 70;
+
+    await driveFeatures(h, driftOnly, { brokerConnectionId: 'demo-conn-2' });
+
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.governance.genericGovernance.driftState).toBe('OUT_OF_DISTRIBUTION');
+    expect(recorded?.governance.genericGovernance.paperExecutionBlockers).toEqual([
+      'DRIFT_OUT_OF_DISTRIBUTION',
+    ]);
+    expect(recorded?.governance.professionalM1Fallback).toEqual(
+      expect.objectContaining({ eligible: true, tier: 'BOOTSTRAP_CONTINUATION' }),
+    );
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it('bootstraps an early-stage continuation before M5 alignment fully turns', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
+    const earlyStage = cleanContinuationFeatures();
+    earlyStage.alignment.m5 = -0.13;
+    earlyStage.m5BodyPressure3 = 0.063;
+    earlyStage.m5Momentum1Atr = 0.171;
+    earlyStage.m5Momentum3Atr = 0.256;
+    earlyStage.extensionAtr = 1.256;
+
+    const route = await driveFeatures(h, earlyStage, { brokerConnectionId: 'demo-conn-2' });
+
+    expect(route).toEqual(
+      expect.objectContaining({ route: 'M1_TREND_CONTINUATION', eligible: true }),
+    );
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.governance.professionalM1Fallback).toEqual(
+      expect.objectContaining({
+        eligible: true,
+        tier: 'BOOTSTRAP_CONTINUATION',
+        reason: 'M1_COLD_START_CONTINUATION_BOOTSTRAP',
+      }),
+    );
+  });
+
+  it('does not stack a second bootstrap continuation on the same pair and direction', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      duplicateSameDirectionIntent: true,
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.hasActiveM1Intent).toHaveBeenCalledWith({
+      userId: 'user-1',
+      brokerConnectionId: 'demo-conn-2',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+    });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.blockers).toContain('M1_BOOTSTRAP_ACTIVE_SAME_SIDE_INTENT');
+  });
+
+  it('keeps cold-start continuation blocked after a recent realized loss', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: {
+        M1_TREND_CONTINUATION: [
+          {
+            route: 'M1_TREND_CONTINUATION',
+            instrument: 'EURUSD',
+            direction: 'BUY',
+            policyVersion: 'm1-tactical-v1',
+            realisedPnl: -4,
+            riskAtStop: 10,
+            closedAt: new Date('2026-10-15T10:19:00.000Z'),
+          },
+        ],
+      },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.governance.reliability).toEqual(
+      expect.objectContaining({ reason: 'INSUFFICIENT_EVIDENCE', recentRealizedR: -0.4 }),
+    );
+    expect(recorded?.governance.professionalM1Fallback).toEqual(
+      expect.objectContaining({ eligible: false }),
+    );
+  });
+
+  it('keeps cold-start continuation blocked when broker execution cost destroys expected R', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
+
+    await driveFeatures(h, cleanContinuationFeatures(), {
+      brokerConnectionId: 'demo-conn-2',
+      spreadEvidence: {
+        source: 'BROKER_OBSERVED_P90',
+        spreadPrice: 0.0006,
+        sampleCount: 30,
+        percentile: 0.9,
+        windowMinutes: 30,
+        latestSampleAt: cleanContinuationFeatures().decisionTime.toISOString(),
+      },
+    });
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.governance.genericGovernance.paperExecutionBlockers).toContain(
+      'PAPER_NET_EXPECTED_R',
+    );
+    expect(recorded?.governance.professionalM1Fallback).toEqual(
+      expect.objectContaining({ eligible: false }),
+    );
+  });
+
+  it('keeps a stretched cold-start continuation blocked even when Plan-B is unavailable', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
+    const stretched = cleanContinuationFeatures();
+    stretched.extensionAtr = 1.8;
+
+    await driveFeatures(h, stretched, { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.governance.professionalM1Fallback).toEqual(
+      expect.objectContaining({ eligible: false }),
+    );
+  });
+
   it('executes only a mature positive-expectancy M1 continuation fallback at the conservative cap', async () => {
     const maturePositiveContinuation = [
       { realisedPnl: 8, riskAtStop: 10, closedAt: '2026-10-15T10:29:00.000Z' },

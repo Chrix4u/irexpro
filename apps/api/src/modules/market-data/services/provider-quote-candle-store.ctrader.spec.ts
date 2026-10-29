@@ -66,6 +66,33 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
     });
   });
 
+  it('caps an outlier-heavy rolling P90 spread with the robust central spread envelope', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        bid_close: '1.10000',
+        ask_close: '1.10001',
+        spread_close: '0.00001',
+        last_sample_at: '2026-10-18T21:30:10.000Z',
+        positive_sample_count: 24,
+        p50_spread: 0.00001,
+        p75_spread: 0.00001,
+        p90_spread: 0.000659,
+        latest_positive_sample_at: '2026-10-18T21:30:10.000Z',
+      },
+    ]);
+    const service = new ProviderQuoteCandleStoreService({ query } as unknown as DataSource);
+
+    const quote = await service.getLatestPositiveSpreadQuote('ctrader-1', 'EURUSD', EVALUATED_AT);
+
+    const sql = String(query.mock.calls[0]![0]);
+    expect(sql).toContain('percentile_cont(0.50)');
+    expect(sql).toContain('percentile_cont(0.75)');
+    expect(quote).toMatchObject({
+      instrument: 'EURUSD',
+      positiveSampleCount: 24,
+      spread: '0.0000400000',
+    });
+  });
 
   it('uses directly stored broker-native M5/M15 context instead of rebuilding sparse cTrader M1', async () => {
     const service = new ProviderQuoteCandleStoreService({

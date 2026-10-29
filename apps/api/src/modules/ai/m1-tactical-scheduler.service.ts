@@ -30,7 +30,7 @@ import {
   M1_TACTICAL_POLICY_V1,
   type M1TacticalCandidate,
 } from './m1-tactical-candidate';
-import { buildM1TacticalFeatures } from './m1-tactical-features';
+import { buildM1TacticalFeatures, type M1TacticalFeatureSnapshot } from './m1-tactical-features';
 import {
   classifyM1TacticalRoute,
   type M1TacticalRoute,
@@ -112,7 +112,11 @@ interface MultimodelDemoEvaluation {
   portfolioSnapshotAvailable: boolean;
 }
 
-type M1ProfessionalFallbackTier = 'QUALIFIED' | 'QUALIFIED_CONTINUATION' | 'RECOVERY_PROBE';
+type M1ProfessionalFallbackTier =
+  | 'QUALIFIED'
+  | 'QUALIFIED_CONTINUATION'
+  | 'BOOTSTRAP_CONTINUATION'
+  | 'RECOVERY_PROBE';
 
 interface M1ProfessionalFallbackDecision {
   eligible: boolean;
@@ -125,6 +129,13 @@ const M1_PROFESSIONAL_FALLBACK_LOT_CAP = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_LOT_CAP = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_MIN_EXPECTED_R = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_MIN_SAMPLES = 5;
+const M1_PROFESSIONAL_BOOTSTRAP_MIN_CONFIDENCE = 0.72;
+const M1_PROFESSIONAL_BOOTSTRAP_MIN_DIRECTION_QUALITY = 0.72;
+const M1_PROFESSIONAL_BOOTSTRAP_MIN_M5_ALIGNMENT = -0.15;
+const M1_PROFESSIONAL_BOOTSTRAP_MIN_M5_BODY_PRESSURE = 0.05;
+const M1_PROFESSIONAL_BOOTSTRAP_MIN_M5_MOMENTUM_1_ATR = 0.15;
+const M1_PROFESSIONAL_BOOTSTRAP_MIN_M5_MOMENTUM_3_ATR = 0.25;
+const M1_PROFESSIONAL_BOOTSTRAP_MAX_EXTENSION_ATR = 1.4;
 const M1_PROFESSIONAL_RECOVERY_PROBE_LOT_CAP = 0.2;
 // Realized early-transition fallback cohorts are currently negative, so QUALIFIED
 // and RECOVERY_PROBE remain observational. A QUALIFIED_CONTINUATION may execute
@@ -133,7 +144,10 @@ const M1_PROFESSIONAL_RECOVERY_PROBE_LOT_CAP = 0.2;
 function professionalM1FallbackExecutionEnabled(
   fallback: M1ProfessionalFallbackDecision | null,
 ): boolean {
-  return fallback?.eligible === true && fallback.tier === 'QUALIFIED_CONTINUATION';
+  return (
+    fallback?.eligible === true &&
+    (fallback.tier === 'QUALIFIED_CONTINUATION' || fallback.tier === 'BOOTSTRAP_CONTINUATION')
+  );
 }
 // Recovery probes need a 0.05R cushion above the normal 0.20 early-transition route floor.
 const M1_PROFESSIONAL_RECOVERY_MIN_EXPECTED_R = 0.25;
@@ -143,12 +157,14 @@ const M1_PROFESSIONAL_RECOVERY_SHADOW_REASONS = new Set([
 ]);
 
 function evaluateM1ProfessionalFallback(input: {
+  candidate: M1TacticalCandidate;
   routeDecision: M1TacticalRouteDecision;
   governance: ReturnType<typeof evaluateM1TacticalGovernance>;
   reliability: ReturnType<typeof evaluateM1RoutePairSideReliability> | null;
   shadowPairSideReliability: M1ScoutPairSideReliabilityDecision | null;
   multimodelDemo: MultimodelDemoEvaluation | null;
   routePayoffEligible: boolean;
+  features: M1TacticalFeatureSnapshot;
 }): M1ProfessionalFallbackDecision {
   const reject = (reason: string): M1ProfessionalFallbackDecision => ({
     eligible: false,
@@ -172,6 +188,60 @@ function evaluateM1ProfessionalFallback(input: {
 
   if (input.routeDecision.route === 'M1_TREND_CONTINUATION') {
     const reliability = input.reliability;
+    if (reliability.reason === 'INSUFFICIENT_EVIDENCE') {
+      const recentRealizedR = reliability.recentRealizedR;
+      if (recentRealizedR !== null && recentRealizedR < 0) {
+        return reject('M1_BOOTSTRAP_RECENT_REALIZED_R_NEGATIVE');
+      }
+      if (input.candidate.confidence < M1_PROFESSIONAL_BOOTSTRAP_MIN_CONFIDENCE) {
+        return reject('M1_BOOTSTRAP_CONFIDENCE_TOO_LOW');
+      }
+      if (input.candidate.directionQuality < M1_PROFESSIONAL_BOOTSTRAP_MIN_DIRECTION_QUALITY) {
+        return reject('M1_BOOTSTRAP_DIRECTION_QUALITY_TOO_LOW');
+      }
+      if (
+        input.routeDecision.reason !== 'TREND_STRUCTURE_ALIGNED' &&
+        input.routeDecision.reason !== 'FRESH_M5_CONTINUATION'
+      ) {
+        return reject('M1_BOOTSTRAP_CONTINUATION_STRUCTURE_NOT_READY');
+      }
+      if (
+        input.candidate.alignedM5 < M1_PROFESSIONAL_BOOTSTRAP_MIN_M5_ALIGNMENT ||
+        input.candidate.alignedM5BodyPressure3 < M1_PROFESSIONAL_BOOTSTRAP_MIN_M5_BODY_PRESSURE ||
+        input.candidate.alignedM5Momentum1Atr < M1_PROFESSIONAL_BOOTSTRAP_MIN_M5_MOMENTUM_1_ATR ||
+        input.candidate.alignedM5Momentum3Atr < M1_PROFESSIONAL_BOOTSTRAP_MIN_M5_MOMENTUM_3_ATR
+      ) {
+        return reject('M1_BOOTSTRAP_M5_CONTINUATION_TOO_WEAK');
+      }
+      if (input.features.extensionAtr > M1_PROFESSIONAL_BOOTSTRAP_MAX_EXTENSION_ATR) {
+        return reject('M1_BOOTSTRAP_MOVE_TOO_EXTENDED');
+      }
+      if (
+        !input.governance.genericGovernance.paperExecutionCostUsable ||
+        !Number.isFinite(input.governance.netExpectedR) ||
+        input.governance.netExpectedR < M1_PROFESSIONAL_CONTINUATION_MIN_EXPECTED_R
+      ) {
+        return reject('M1_BOOTSTRAP_EXECUTION_ECONOMICS_TOO_LOW');
+      }
+      if (input.governance.genericGovernance.eventRisk !== 'CLEAR') {
+        return reject('M1_BOOTSTRAP_EVENT_RISK_BLOCKED');
+      }
+      const softDriftBlockers = new Set(['DRIFT_STRESSED', 'DRIFT_OUT_OF_DISTRIBUTION']);
+      if (
+        input.governance.genericGovernance.paperExecutionBlockers.some(
+          (blocker) => !softDriftBlockers.has(blocker),
+        ) ||
+        input.governance.blockers.some((blocker) => !softDriftBlockers.has(blocker))
+      ) {
+        return reject('M1_BOOTSTRAP_HARD_GOVERNANCE_BLOCKER');
+      }
+      return {
+        eligible: true,
+        tier: 'BOOTSTRAP_CONTINUATION',
+        reason: 'M1_COLD_START_CONTINUATION_BOOTSTRAP',
+        lotCap: M1_PROFESSIONAL_CONTINUATION_LOT_CAP,
+      };
+    }
     if (reliability.reason !== 'POSITIVE_EXPECTANCY') {
       return reject(`M1_CONTINUATION_RELIABILITY_${reliability.reason}`);
     }
@@ -1018,16 +1088,20 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           : 'NONE';
     const professionalM1Fallback = professionalDemoPhase
       ? evaluateM1ProfessionalFallback({
+          candidate,
           routeDecision,
           governance,
           reliability,
           shadowPairSideReliability,
           multimodelDemo,
           routePayoffEligible,
+          features,
         })
       : null;
     const professionalM1FallbackExecutable =
       professionalM1FallbackExecutionEnabled(professionalM1Fallback);
+    const professionalM1BootstrapExecutable =
+      professionalM1FallbackExecutable && professionalM1Fallback?.tier === 'BOOTSTRAP_CONTINUATION';
     const multimodelPrimaryExecutable =
       professionalDemoPhase && multimodelDemo?.authority.executable === true;
     let m5EarlyTransitionEvidence: M5EarlyTransitionEvidence | null = null;
@@ -1035,7 +1109,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     if (
       professionalDemoPhase &&
       !multimodelPrimaryExecutable &&
-      !professionalM1FallbackExecutable
+      (!professionalM1FallbackExecutable || professionalM1BootstrapExecutable)
     ) {
       try {
         m5EarlyTransitionEvidence = await this.evidence.loadLatestM5EarlyTransitionEvidence({
@@ -1102,6 +1176,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         m5EarlyTransitionHandoffEligible ||
         professionalM1FallbackExecutable
       : routeExecutable && routePayoffEligible && governanceExecutable;
+    const bootstrapExecutionSelected =
+      professionalM1BootstrapExecutable && !m5EarlyTransitionHandoffEligible;
+    const bootstrapActiveSameSideIntent =
+      preliminaryCanExecute && bootstrapExecutionSelected
+        ? await this.evidence.hasActiveM1Intent({
+            userId,
+            brokerConnectionId,
+            instrument: candidate.instrument,
+            direction: candidate.direction,
+          })
+        : false;
     const fastStopRegimeBrake = preliminaryCanExecute
       ? await this.evidence.loadFastStopRegimeBrake({
           userId,
@@ -1129,6 +1214,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         : null;
     const canExecute =
       preliminaryCanExecute &&
+      !bootstrapActiveSameSideIntent &&
       fastStopRegimeBrake?.active !== true &&
       multimodelLossStreakBrake?.active !== true;
     const effectiveGovernanceBlockers =
@@ -1160,6 +1246,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           !m5EarlyTransitionHandoffEligible
             ? ['M1_PROFESSIONAL_FALLBACK_OBSERVATIONAL_ONLY']
             : []),
+          ...(bootstrapActiveSameSideIntent ? ['M1_BOOTSTRAP_ACTIVE_SAME_SIDE_INTENT'] : []),
           ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
           ...(multimodelLossStreakBrake?.active === true
             ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
@@ -1374,13 +1461,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         return;
       }
     }
-    const useProfessionalM1Fallback =
-      professionalDemoPhase && professionalM1FallbackExecutionEnabled(professionalM1Fallback);
     const useM5EarlyTransitionHandoff =
       professionalDemoPhase &&
-      !useProfessionalM1Fallback &&
       m5EarlyTransitionHandoff?.eligible === true &&
       m5EarlyTransitionEvidence !== null;
+    const useProfessionalM1Fallback =
+      professionalDemoPhase &&
+      !useM5EarlyTransitionHandoff &&
+      professionalM1FallbackExecutionEnabled(professionalM1Fallback);
     const requiredExecutionMode = professionalDemoPhase
       ? ExecutionMode.FULL_AUTO
       : ExecutionMode.PAPER_ONLY;
