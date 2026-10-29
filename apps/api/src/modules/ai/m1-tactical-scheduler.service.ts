@@ -115,7 +115,7 @@ interface M1ProfessionalFallbackDecision {
 }
 
 const M1_PROFESSIONAL_FALLBACK_LOT_CAP = 0.2;
-const M1_PROFESSIONAL_RECOVERY_PROBE_LOT_CAP = 0.1;
+const M1_PROFESSIONAL_RECOVERY_PROBE_LOT_CAP = 0.2;
 // Recovery probes need a 0.05R cushion above the normal 0.20 early-transition route floor.
 const M1_PROFESSIONAL_RECOVERY_MIN_EXPECTED_R = 0.25;
 const M1_PROFESSIONAL_RECOVERY_SHADOW_REASONS = new Set([

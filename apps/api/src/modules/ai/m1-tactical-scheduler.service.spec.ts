@@ -2142,7 +2142,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
     );
   });
 
-  it('uses a 0.10 recovery probe when the current M1 impulse is strong but broad shadow evidence is still weak', async () => {
+  it('uses the 0.20 product floor for a recovery probe when the current M1 impulse is strong but broad shadow evidence is still weak', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
       session: fullAutoSession,
@@ -2204,7 +2204,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
     expect(h.receiveSignal.mock.calls[0]![0]).toEqual(
       expect.objectContaining({
-        suggestedVolume: 0.1,
+        suggestedVolume: 0.2,
         strategyCode: 'external-irexpro-m1-tactical',
         metadata: expect.objectContaining({
           m1_professional_fallback: true,
