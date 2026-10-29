@@ -106,7 +106,7 @@ interface MultimodelDemoEvaluation {
   portfolioSnapshotAvailable: boolean;
 }
 
-type M1ProfessionalFallbackTier = 'QUALIFIED' | 'RECOVERY_PROBE';
+type M1ProfessionalFallbackTier = 'QUALIFIED' | 'QUALIFIED_CONTINUATION' | 'RECOVERY_PROBE';
 
 interface M1ProfessionalFallbackDecision {
   eligible: boolean;
@@ -116,6 +116,9 @@ interface M1ProfessionalFallbackDecision {
 }
 
 const M1_PROFESSIONAL_FALLBACK_LOT_CAP = 0.2;
+const M1_PROFESSIONAL_CONTINUATION_LOT_CAP = 0.2;
+const M1_PROFESSIONAL_CONTINUATION_MIN_EXPECTED_R = 0.2;
+const M1_PROFESSIONAL_CONTINUATION_MIN_SAMPLES = 5;
 const M1_PROFESSIONAL_RECOVERY_PROBE_LOT_CAP = 0.2;
 // Recovery probes need a 0.05R cushion above the normal 0.20 early-transition route floor.
 const M1_PROFESSIONAL_RECOVERY_MIN_EXPECTED_R = 0.25;
@@ -139,12 +142,7 @@ function evaluateM1ProfessionalFallback(input: {
     lotCap: 0,
   });
 
-  if (input.routeDecision.route !== 'M1_EARLY_TRANSITION' || !input.routeDecision.eligible) {
-    return reject('M1_ROUTE_NOT_EARLY_TRANSITION');
-  }
-  if (input.routeDecision.reason !== 'EARLY_TRANSITION_IMPULSE') {
-    return reject('M1_TRANSITION_NOT_IMPULSE');
-  }
+  if (!input.routeDecision.eligible) return reject('M1_ROUTE_NOT_ELIGIBLE');
   if (!input.multimodelDemo) return reject('MULTIMODEL_EVIDENCE_UNAVAILABLE');
   if (input.multimodelDemo.ensemble.strategyRoute !== 'TREND_CONTINUATION') {
     return reject('PLAN_B_ROUTE_NOT_CONTINUATION');
@@ -152,14 +150,57 @@ function evaluateM1ProfessionalFallback(input: {
   if (input.multimodelDemo.authority.executable) {
     return reject('MULTIMODEL_ALREADY_EXECUTABLE');
   }
+  if (!input.routePayoffEligible) return reject('M1_ROUTE_PAYOFF_TOO_LOW');
+  if (!input.reliability?.eligible) {
+    return reject(`M1_ACTUAL_RELIABILITY_${input.reliability?.reason ?? 'UNAVAILABLE'}`);
+  }
+
+  if (input.routeDecision.route === 'M1_TREND_CONTINUATION') {
+    const reliability = input.reliability;
+    if (reliability.reason !== 'POSITIVE_EXPECTANCY') {
+      return reject(`M1_CONTINUATION_RELIABILITY_${reliability.reason}`);
+    }
+    if (reliability.samples < M1_PROFESSIONAL_CONTINUATION_MIN_SAMPLES) {
+      return reject('M1_CONTINUATION_EVIDENCE_TOO_THIN');
+    }
+    if ((reliability.averageRealizedR ?? 0) <= 0 || (reliability.recentRealizedR ?? 0) <= 0) {
+      return reject('M1_CONTINUATION_REALIZED_R_NOT_POSITIVE');
+    }
+    if (
+      !Number.isFinite(input.governance.netExpectedR) ||
+      input.governance.netExpectedR < M1_PROFESSIONAL_CONTINUATION_MIN_EXPECTED_R
+    ) {
+      return reject('M1_CONTINUATION_EXPECTED_R_TOO_LOW');
+    }
+    if (input.governance.genericGovernance.eventRisk !== 'CLEAR') {
+      return reject('M1_CONTINUATION_EVENT_RISK_BLOCKED');
+    }
+    const continuationPaperBlockers = input.governance.genericGovernance.paperExecutionBlockers;
+    if (continuationPaperBlockers.some((blocker) => blocker !== 'DRIFT_STRESSED')) {
+      return reject('M1_CONTINUATION_HARD_GOVERNANCE_BLOCKER');
+    }
+    const continuationRouteBlockers = input.governance.blockers;
+    if (continuationRouteBlockers.some((blocker) => blocker !== 'DRIFT_STRESSED')) {
+      return reject('M1_CONTINUATION_ROUTE_GOVERNANCE_BLOCKED');
+    }
+    return {
+      eligible: true,
+      tier: 'QUALIFIED_CONTINUATION',
+      reason: 'M1_MATURE_POSITIVE_CONTINUATION',
+      lotCap: M1_PROFESSIONAL_CONTINUATION_LOT_CAP,
+    };
+  }
+
+  if (input.routeDecision.route !== 'M1_EARLY_TRANSITION') {
+    return reject('M1_ROUTE_NOT_EARLY_TRANSITION');
+  }
+  if (input.routeDecision.reason !== 'EARLY_TRANSITION_IMPULSE') {
+    return reject('M1_TRANSITION_NOT_IMPULSE');
+  }
   if (
     !input.multimodelDemo.authority.blockers.includes('MULTIMODEL_CONTINUATION_TIMING_NOT_READY')
   ) {
     return reject('NO_ROUTE_TIMING_DISAGREEMENT');
-  }
-  if (!input.routePayoffEligible) return reject('M1_ROUTE_PAYOFF_TOO_LOW');
-  if (!input.reliability?.eligible) {
-    return reject(`M1_ACTUAL_RELIABILITY_${input.reliability?.reason ?? 'UNAVAILABLE'}`);
   }
 
   const genericBlockers = input.governance.genericGovernance.paperExecutionBlockers;
