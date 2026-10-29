@@ -1,6 +1,7 @@
 import {
   LIVE_SCAN_STAGES,
   deriveLiveScanFrame,
+  mergeLiveQuoteIntoCandles,
   selectChartWindow,
   shiftChartWindow,
   zoomChartWindow,
@@ -42,5 +43,81 @@ describe('ai live visuals', () => {
     const rows = Array.from({ length: 10 }, (_, index) => index);
     expect(selectChartWindow(rows, 4, 0)).toEqual([6, 7, 8, 9]);
     expect(selectChartWindow(rows, 4, 2)).toEqual([4, 5, 6, 7]);
+  });
+
+  it('updates the forming M5 candle from the latest broker quote', () => {
+    const candles = [
+      {
+        timestamp: '2026-10-29T01:30:00.000Z',
+        open: '1.16000',
+        high: '1.16040',
+        low: '1.15980',
+        close: '1.16020',
+        volume: '8',
+      },
+    ];
+    const next = mergeLiveQuoteIntoCandles(candles, {
+      bid: '1.16060',
+      ask: '1.16080',
+      timestamp: '2026-10-29T01:33:12.000Z',
+    }, 'M5');
+
+    expect(next).toHaveLength(1);
+    expect(next[0]).toMatchObject({
+      timestamp: '2026-10-29T01:30:00.000Z',
+      open: '1.16000',
+      high: '1.16070',
+      low: '1.15980',
+      close: '1.16070',
+    });
+  });
+
+  it('rolls the live chart into a new M5 bucket without mutating the completed candle', () => {
+    const candles = [
+      {
+        timestamp: '2026-10-29T01:30:00.000Z',
+        open: '1.16000',
+        high: '1.16080',
+        low: '1.15980',
+        close: '1.16050',
+        volume: '12',
+      },
+    ];
+    const next = mergeLiveQuoteIntoCandles(candles, {
+      bid: '1.16090',
+      ask: '1.16110',
+      timestamp: '2026-10-29T01:35:01.000Z',
+    }, 'M5');
+
+    expect(next).toHaveLength(2);
+    expect(next[0]).toEqual(candles[0]);
+    expect(next[1]).toMatchObject({
+      timestamp: '2026-10-29T01:35:00.000Z',
+      open: '1.16100',
+      high: '1.16100',
+      low: '1.16100',
+      close: '1.16100',
+      volume: '0',
+    });
+  });
+
+  it('ignores out-of-order quotes so a stale tick cannot rewrite the chart', () => {
+    const candles = [
+      {
+        timestamp: '2026-10-29T01:35:00.000Z',
+        open: '1.16100',
+        high: '1.16120',
+        low: '1.16090',
+        close: '1.16110',
+        volume: '2',
+      },
+    ];
+    const next = mergeLiveQuoteIntoCandles(candles, {
+      bid: '1.15900',
+      ask: '1.15920',
+      timestamp: '2026-10-29T01:34:59.000Z',
+    }, 'M5');
+
+    expect(next).toEqual(candles);
   });
 });
