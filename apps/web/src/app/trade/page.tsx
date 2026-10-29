@@ -73,7 +73,7 @@ import {
   prepareBrokerForAutomationStart,
   resetDailyLossProtection,
   resetDailyLossProtectionForBroker,
-  shouldOfferDailyLossResetAfterEndedSession,
+  shouldOfferRiskResetAfterEndedSession,
 } from "@/lib/trader-session";
 import "./ai-trader.css";
 
@@ -1770,7 +1770,7 @@ export default function AiTradingPage() {
   const [savingAllocation, setSavingAllocation] = useState(false);
   const [togglingAutomation, setTogglingAutomation] = useState(false);
   const [pendingAutomationAction, setPendingAutomationAction] = useState<
-    "START" | "STOP" | "RESET_DAILY_LOSS" | "RESET_DAILY_LOSS_AND_START" | null
+    "START" | "STOP" | "RESET_RISK_PROTECTION" | "RESET_RISK_PROTECTION_AND_START" | null
   >(null);
   const [error, setError] = useState<string | null>(null);
   const [allocationWarning, setAllocationWarning] = useState<string | null>(
@@ -1822,17 +1822,21 @@ export default function AiTradingPage() {
   const dailyLossSuspension =
     automationRiskSuspended &&
     latestRiskSuspensionCode === "DAILY_LOSS_LIMIT_REACHED";
+  const drawdownSuspension =
+    automationRiskSuspended &&
+    latestRiskSuspensionCode === "MAX_DRAWDOWN_REACHED";
+  const riskProtectionResettable = dailyLossSuspension || drawdownSuspension;
   const dailyRiskCooldown = dailyRiskCooldownFromViolation(
     terminal?.risk?.latestDailyLossViolation ?? null,
   );
-  const dailyRiskCooldownDisplayActive =
-    shouldOfferDailyLossResetAfterEndedSession({
+  const endedRiskResetAvailable =
+    shouldOfferRiskResetAfterEndedSession({
       dailyRiskCooldownActive: dailyRiskCooldown.active,
       latestRiskSuspensionCode,
     }) &&
     !automationOn &&
     !automationSuspended;
-  const aiVisualState = automationSuspended || dailyRiskCooldownDisplayActive
+  const aiVisualState = automationSuspended || endedRiskResetAvailable
     ? "blocked"
     : !automationOn
       ? "stopped"
@@ -1936,19 +1940,23 @@ export default function AiTradingPage() {
     : null;
   const automationSuspensionMessage = automationRiskSuspended
     ? dailyLossSuspension
-      ? (dailyLossProtectionDetail ??
-        "All new AI entries are blocked by daily-loss protection.")
-      : (automationBlockedReasons.find((reason) =>
-          reason.startsWith("Risk protection paused AI Trading:"),
-        ) ??
-        "Risk protection paused AI Trading because the drawdown limit was reached. This protection cannot be reset from the daily-loss control.")
+      ? `${dailyLossProtectionDetail ?? "All new AI entries are blocked by daily-loss protection."} You can explicitly reset risk protection and continue.`
+      : drawdownSuspension
+        ? `${automationBlockedReasons.find((reason) =>
+            reason.startsWith("Risk protection paused AI Trading:"),
+          ) ?? "Risk protection paused AI Trading because the maximum drawdown limit was reached."} You can explicitly reset risk protection and continue from current broker equity.`
+        : (automationBlockedReasons.find((reason) =>
+            reason.startsWith("Risk protection paused AI Trading:"),
+          ) ?? "Risk protection paused AI Trading. This suspension is not eligible for a user reset.")
     : automationBrokerSuspended
       ? "AI Trading is paused because the broker connection is suspended. New trades remain blocked until the connection recovers and the existing session is resumed safely."
       : null;
-  const dailyRiskCooldownMessage = dailyRiskCooldownDisplayActive
-    ? `Daily-loss protection was triggered today${dailyRiskCooldown.reason ? `: ${dailyRiskCooldown.reason}` : "."} The previous AI session is no longer active. You can keep protection active until ${formatTimestamp(dailyRiskCooldown.resumeAt)}, or explicitly reset today’s loss counter from now and start a new AI session.`
+  const endedRiskResetMessage = endedRiskResetAvailable
+    ? latestRiskSuspensionCode === "MAX_DRAWDOWN_REACHED"
+      ? `Maximum-drawdown protection was triggered on the previous AI session${terminal?.risk?.latestRiskSuspensionViolation?.rejectionReason ? `: ${terminal.risk.latestRiskSuspensionViolation.rejectionReason}` : "."} The session is no longer active. You can explicitly reset risk protection and start a new AI session from current broker equity.`
+      : `Daily-loss protection was triggered today${dailyRiskCooldown.reason ? `: ${dailyRiskCooldown.reason}` : "."} The previous AI session is no longer active. You can keep protection active until ${formatTimestamp(dailyRiskCooldown.resumeAt)}, or explicitly reset risk protection and start a new AI session.`
     : null;
-  const automationProtectionMessage = automationSuspensionMessage ?? dailyRiskCooldownMessage;
+  const automationProtectionMessage = automationSuspensionMessage ?? endedRiskResetMessage;
 
   const metaTraderBroker = useMemo(
     () => terminal?.brokers.find((broker) => broker.brokerId === "metatrader5") ?? null,
@@ -2495,16 +2503,16 @@ export default function AiTradingPage() {
       );
       return;
     }
-    if (dailyLossSuspension) {
-      setPendingAutomationAction("RESET_DAILY_LOSS");
+    if (riskProtectionResettable) {
+      setPendingAutomationAction("RESET_RISK_PROTECTION");
       return;
     }
     if (automationSuspended) {
       setPendingAutomationAction("STOP");
       return;
     }
-    if (dailyRiskCooldownDisplayActive) {
-      setPendingAutomationAction("RESET_DAILY_LOSS_AND_START");
+    if (endedRiskResetAvailable) {
+      setPendingAutomationAction("RESET_RISK_PROTECTION_AND_START");
       return;
     }
     if (
@@ -2524,7 +2532,7 @@ export default function AiTradingPage() {
     setTogglingAutomation(true);
     setError(null);
     try {
-      if (action === "RESET_DAILY_LOSS") {
+      if (action === "RESET_RISK_PROTECTION") {
         if (!terminal?.session) {
           notify.warning("The paused AI session is no longer available.");
           setPendingAutomationAction(null);
@@ -2533,9 +2541,9 @@ export default function AiTradingPage() {
 
         const result = await resetDailyLossProtection(terminal.session.id);
         notify.success(
-          `Daily-loss counter reset from ${formatTimestamp(result.resetAt)}. AI Trading resumed. Historical P&L remains unchanged.`,
+          `Risk protection reset from ${formatTimestamp(result.resetAt)}. AI Trading resumed with a fresh drawdown baseline. Historical P&L remains unchanged.`,
         );
-      } else if (action === "RESET_DAILY_LOSS_AND_START") {
+      } else if (action === "RESET_RISK_PROTECTION_AND_START") {
         if (!allocation?.hasAllocation || !allocation.allocatedCapital) {
           notify.warning("Allocate capital before resetting protection and starting AI Trading.");
           setPendingAutomationAction(null);
@@ -2557,7 +2565,7 @@ export default function AiTradingPage() {
           executionMode,
         });
         notify.success(
-          `Daily-loss counter reset from ${formatTimestamp(reset.resetAt)} and AI Trading started. Historical P&L remains unchanged.`,
+          `Risk protection reset from ${formatTimestamp(reset.resetAt)} and AI Trading started with a fresh drawdown baseline. Historical P&L remains unchanged.`,
         );
       } else if (action === "STOP") {
         if (!terminal?.session) {
@@ -2899,13 +2907,13 @@ export default function AiTradingPage() {
                           : "neutral"
               }
               active={automationOn}
-              label={`AI Trading ${automationSuspended ? "paused" : dailyRiskCooldownDisplayActive ? "protected by daily risk limit" : automationOn ? "running" : "stopped"}`}
+              label={`AI Trading ${automationSuspended ? "paused" : endedRiskResetAvailable ? "protected by risk limit" : automationOn ? "running" : "stopped"}`}
             />
             <Badge
               variant={
                 automationOn
                   ? "success"
-                  : automationSuspended || dailyRiskCooldownDisplayActive
+                  : automationSuspended || endedRiskResetAvailable
                     ? "warning"
                     : "info"
               }
@@ -2914,8 +2922,8 @@ export default function AiTradingPage() {
                 ? "PAUSED · RISK LIMIT"
                 : automationBrokerSuspended
                   ? "PAUSED · BROKER"
-                  : dailyRiskCooldownDisplayActive
-                    ? "PROTECTED · DAILY LIMIT"
+                  : endedRiskResetAvailable
+                    ? "PROTECTED · RISK LIMIT"
                     : automationOn
                       ? "RUNNING"
                       : "STOPPED"}
@@ -2935,13 +2943,13 @@ export default function AiTradingPage() {
         {automationProtectionMessage && (
           <Alert variant="warning">
             {automationProtectionMessage}{" "}
-            {dailyLossSuspension
-              ? "New AI entries are blocked. Use Review Daily-Loss Pause to choose Reset & Continue or Keep Session Paused."
+            {riskProtectionResettable
+              ? "New AI entries are blocked. Use Review Risk Protection to choose Reset & Continue or Keep Session Paused."
               : automationSuspended
-                ? "New AI entries are blocked. You may explicitly end this paused session and request closure of its AI-opened positions."
-                : dailyRiskCooldownDisplayActive
-                  ? "Use Review Daily-Loss Protection to choose Reset & Start AI Trading or Keep Protection Active."
-                  : "AI Trading remains protected unless the server confirms a valid daily-loss reset."}
+                ? "New AI entries are blocked. This suspension is not eligible for a risk reset; you may explicitly end the paused session and request closure of its AI-opened positions."
+                : endedRiskResetAvailable
+                  ? "Use Review Risk Protection to choose Reset & Start AI Trading or Keep Protection Active."
+                  : "AI Trading remains protected unless the server confirms a valid reset."}
           </Alert>
         )}
         {allocationWarning && (
@@ -3186,7 +3194,7 @@ export default function AiTradingPage() {
                       savingAllocation ||
                       automationOn ||
                       automationSuspended ||
-                      dailyRiskCooldownDisplayActive
+                      endedRiskResetAvailable
                     }
                   />
                   <Button
@@ -3197,7 +3205,7 @@ export default function AiTradingPage() {
                       !selectedBroker ||
                       automationOn ||
                       automationSuspended ||
-                      dailyRiskCooldownDisplayActive
+                      endedRiskResetAvailable
                     }
                     onClick={() => void saveAllocation()}
                   >
@@ -3210,7 +3218,7 @@ export default function AiTradingPage() {
                     allocation?.availableCapital,
                     allocation?.accountCurrency,
                   )}
-                  {automationSuspended || dailyRiskCooldownDisplayActive
+                  {automationSuspended || endedRiskResetAvailable
                     ? " · Allocation is locked by the current protection state; reallocation cannot clear or explain this stop."
                     : ""}
                 </span>
@@ -3223,7 +3231,7 @@ export default function AiTradingPage() {
                     variant={
                       automationOn
                         ? "success"
-                        : automationSuspended || dailyRiskCooldownDisplayActive
+                        : automationSuspended || endedRiskResetAvailable
                           ? "warning"
                           : "info"
                     }
@@ -3232,8 +3240,8 @@ export default function AiTradingPage() {
                       ? "Paused by risk protection"
                       : automationBrokerSuspended
                         ? "Paused by broker"
-                        : dailyRiskCooldownDisplayActive
-                          ? "Daily risk limit active"
+                        : endedRiskResetAvailable
+                          ? "Risk protection active"
                           : automationOn
                             ? "Running"
                             : "Stopped"}
@@ -3242,7 +3250,7 @@ export default function AiTradingPage() {
                 <Button
                   type="button"
                   variant={
-                    dailyLossSuspension || dailyRiskCooldownDisplayActive
+                    riskProtectionResettable || endedRiskResetAvailable
                       ? "primary"
                       : automationSuspended || automationOn
                         ? "danger"
@@ -3252,10 +3260,10 @@ export default function AiTradingPage() {
                   block
                   className="ai-automation-action"
                   aria-label={
-                    dailyLossSuspension
-                      ? "Review daily-loss pause and choose whether to reset and continue"
-                      : dailyRiskCooldownDisplayActive
-                        ? "Review daily-loss protection and choose whether to reset and start AI Trading"
+                    riskProtectionResettable
+                      ? "Review risk protection and choose whether to reset and continue"
+                      : endedRiskResetAvailable
+                        ? "Review risk protection and choose whether to reset and start AI Trading"
                         : automationSuspended
                           ? "End paused AI session and close AI positions"
                           : automationOn
@@ -3269,10 +3277,10 @@ export default function AiTradingPage() {
                   }
                   onClick={requestAutomationAction}
                 >
-                  {dailyLossSuspension
-                    ? "Review Daily-Loss Pause"
-                    : dailyRiskCooldownDisplayActive
-                      ? "Review Daily-Loss Protection"
+                  {riskProtectionResettable
+                    ? "Review Risk Protection"
+                    : endedRiskResetAvailable
+                      ? "Review Risk Protection"
                       : automationSuspended
                         ? "End AI Session & Close Positions"
                         : togglingAutomation
@@ -3284,12 +3292,12 @@ export default function AiTradingPage() {
                             : "Start AI Trading"}
                 </Button>
                 <span className="ai-control-card__hint">
-                  {dailyLossSuspension
-                    ? `${automationSuspensionMessage ?? "Daily-loss protection paused AI Trading."} No new positions will open until you choose to reset and continue or leave the session paused.`
+                  {riskProtectionResettable
+                    ? `${automationSuspensionMessage ?? "Risk protection paused AI Trading."} No new positions will open until you choose to reset and continue or leave the session paused.`
                     : automationSuspended
                       ? `${automationSuspensionMessage ?? "AI Trading is paused."} No new positions will open. Existing positions remain under their configured broker protections.`
-                      : dailyRiskCooldownDisplayActive
-                        ? `${dailyRiskCooldownMessage ?? "Daily-loss protection is active."} No new session will start unless you choose Reset & Start AI Trading.`
+                      : endedRiskResetAvailable
+                        ? `${endedRiskResetMessage ?? "Risk protection is active."} No new session will start unless you choose Reset & Start AI Trading.`
                         : automationOn
                           ? "AI Trading may open and manage positions within your allocation. Stop requires confirmation and closes AI-opened positions."
                           : "AI Trading cannot create new positions while stopped."}
@@ -5431,18 +5439,18 @@ export default function AiTradingPage() {
             >
               <div className="ai-confirm-dialog__header">
                 <span className="ai-control-card__label">
-                  {pendingAutomationAction === "RESET_DAILY_LOSS" ||
-                  pendingAutomationAction === "RESET_DAILY_LOSS_AND_START"
-                    ? "Daily-loss protection"
+                  {pendingAutomationAction === "RESET_RISK_PROTECTION" ||
+                  pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
+                    ? "Risk protection"
                     : pendingAutomationAction === "STOP"
                       ? "Confirmation required"
                       : "Ready to start"}
                 </span>
                 <h2 id="ai-confirm-title">
-                  {pendingAutomationAction === "RESET_DAILY_LOSS"
-                    ? "Reset today’s daily-loss protection and continue AI Trading?"
-                    : pendingAutomationAction === "RESET_DAILY_LOSS_AND_START"
-                      ? "Reset today’s daily-loss protection and start AI Trading?"
+                  {pendingAutomationAction === "RESET_RISK_PROTECTION"
+                    ? "Reset risk protection and continue AI Trading?"
+                    : pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
+                      ? "Reset risk protection and start AI Trading?"
                       : pendingAutomationAction === "STOP"
                         ? automationSuspended
                           ? "End paused AI session and close AI positions?"
@@ -5455,10 +5463,10 @@ export default function AiTradingPage() {
                 id="ai-confirm-description"
                 className="ai-confirm-dialog__description"
               >
-                {pendingAutomationAction === "RESET_DAILY_LOSS"
-                  ? "The daily-loss limit was reached, so new AI entries are paused. If you continue, iRexPro will keep every realised loss in your trading history and performance totals, reset only today’s daily-loss measurement window from this confirmation time, and resume this same AI session."
-                  : pendingAutomationAction === "RESET_DAILY_LOSS_AND_START"
-                    ? "The daily-loss limit was reached earlier today and the previous AI session has already ended. If you continue, iRexPro will keep every realised loss in your history and performance totals, reset only today’s daily-loss measurement window from this confirmation time, then request a new AI session through the normal broker, allocation and execution gates."
+                {pendingAutomationAction === "RESET_RISK_PROTECTION"
+                  ? "A hard risk limit was reached, so new AI entries are paused. If you continue, iRexPro will keep every realised profit and loss in your history, reset the daily-loss measurement window, rebase maximum drawdown to current verified broker equity, and resume this AI session only after fresh server checks pass."
+                  : pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
+                    ? "Risk protection stopped the previous AI session. If you continue, iRexPro will keep every realised profit and loss in your history, reset the current risk window, then request a new AI session through the normal broker, allocation and execution gates. The new session establishes its drawdown baseline from current verified broker equity."
                     : pendingAutomationAction === "STOP"
                       ? automationSuspended
                         ? "This session is already blocking new AI entries. Confirming will end the paused session and immediately request closure of every currently open position that iRexPro can prove was opened by the AI."
@@ -5489,14 +5497,14 @@ export default function AiTradingPage() {
                 </div>
               </div>
 
-              {pendingAutomationAction === "RESET_DAILY_LOSS" ||
-              pendingAutomationAction === "RESET_DAILY_LOSS_AND_START" ? (
+              {pendingAutomationAction === "RESET_RISK_PROTECTION" ||
+              pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START" ? (
                 <Alert variant="warning">
                   <strong>Continuing can create additional losses today.</strong>{" "}
-                  {pendingAutomationAction === "RESET_DAILY_LOSS"
-                    ? "Choose Keep Session Paused if you do not want iRexPro to take more trades before the UTC risk day resets."
-                    : "Choose Keep Protection Active if you do not want iRexPro to start a new AI session before the UTC risk day resets."}{" "}
-                  Maximum drawdown and all other server protections remain enforced.
+                  {pendingAutomationAction === "RESET_RISK_PROTECTION"
+                    ? "Choose Keep Session Paused if you do not want iRexPro to take more trades after this risk limit was reached."
+                    : "Choose Keep Protection Active if you do not want iRexPro to start a new AI session after this risk limit was reached."}{" "}
+                  Historical P&L is not changed. The daily-loss window and drawdown baseline restart from this confirmed reset; all other server risk and market checks remain enforced.
                 </Alert>
               ) : pendingAutomationAction === "STOP" ? (
                 <Alert variant="warning">
@@ -5521,9 +5529,9 @@ export default function AiTradingPage() {
                   disabled={togglingAutomation}
                   onClick={() => setPendingAutomationAction(null)}
                 >
-                  {pendingAutomationAction === "RESET_DAILY_LOSS"
+                  {pendingAutomationAction === "RESET_RISK_PROTECTION"
                     ? "Keep Session Paused"
-                    : pendingAutomationAction === "RESET_DAILY_LOSS_AND_START"
+                    : pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
                       ? "Keep Protection Active"
                       : pendingAutomationAction === "STOP"
                         ? automationSuspended
@@ -5540,9 +5548,9 @@ export default function AiTradingPage() {
                   autoFocus
                   onClick={() => void confirmAutomationAction()}
                 >
-                  {pendingAutomationAction === "RESET_DAILY_LOSS"
+                  {pendingAutomationAction === "RESET_RISK_PROTECTION"
                     ? "Reset & Continue AI Trading"
-                    : pendingAutomationAction === "RESET_DAILY_LOSS_AND_START"
+                    : pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
                       ? "Reset & Start AI Trading"
                       : pendingAutomationAction === "STOP"
                         ? automationSuspended

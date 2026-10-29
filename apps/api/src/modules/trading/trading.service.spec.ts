@@ -1106,7 +1106,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         },
       ]);
 
-      const result = await service.resetDailyLossProtection('user-1', 'session-1');
+      const result = await service.resetDailyLossProtection('user-1', 'session-1', true);
 
       expect(dailyRiskPeriodService.recordDailyLossReset).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1121,6 +1121,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(executionService.resumeRiskSuspendedSession).toHaveBeenCalledWith(
         'user-1',
         'session-1',
+        { resetPeakEquityTo: '10000.00' },
       );
       expect(dailyRiskPeriodService.recordDailyLossReset.mock.invocationCallOrder[0]).toBeLessThan(
         executionService.resumeRiskSuspendedSession.mock.invocationCallOrder[0],
@@ -1129,28 +1130,72 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(result.resetCount).toBe(1);
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
-          action: 'RISK_DAILY_LOSS_RESET_CONFIRMED',
+          action: 'RISK_PROTECTION_RESET_CONFIRMED',
           resourceId: 'session-1',
         }),
       );
     });
 
-    it('refuses the override when the current risk suspension is drawdown rather than daily loss', async () => {
+    it('resets drawdown protection to fresh broker equity after explicit user confirmation', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-29T12:00:00.000Z'));
       executionService.getActiveSessionForClient.mockResolvedValue(
-        mockSession({ status: TradingSessionStatus.SUSPENDED_RISK_LIMIT }),
+        mockSession({
+          status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+          peakEquity: '920.12',
+          authorityGeneration: 2,
+        }),
       );
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '880.00',
+        equity: '825.54',
+        freeMargin: '700.00',
+        currency: 'USD',
+      });
       riskService.getViolations.mockResolvedValue([
         {
           rejectionCode: RiskRejectionCode.MAX_DRAWDOWN_REACHED,
           rejectionReason: 'Maximum drawdown reached',
-          evaluatedAt: new Date(),
+          evaluatedAt: new Date('2026-10-29T04:55:12.000Z'),
           riskContext: { sessionId: 'session-1', brokerConnectionId: 'conn-1' },
         },
       ]);
 
-      await expect(service.resetDailyLossProtection('user-1', 'session-1')).rejects.toThrow(
+      const result = await service.resetDailyLossProtection('user-1', 'session-1', true);
+
+      expect(dailyRiskPeriodService.recordDailyLossReset).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          brokerConnectionId: 'conn-1',
+          sessionId: 'session-1',
+        }),
+      );
+      expect(executionService.resumeRiskSuspendedSession).toHaveBeenCalledWith(
+        'user-1',
+        'session-1',
+        { resetPeakEquityTo: '825.54' },
+      );
+      expect(result.session.status).toBe(TradingSessionStatus.ACTIVE);
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'RISK_PROTECTION_RESET_CONFIRMED',
+          metadata: expect.objectContaining({
+            triggeredBy: RiskRejectionCode.MAX_DRAWDOWN_REACHED,
+            previousPeakEquity: '920.12',
+            resetPeakEquityTo: '825.54',
+          }),
+        }),
+      );
+    });
+
+    it('fails closed unless the user explicitly confirms the risk reset', async () => {
+      executionService.getActiveSessionForClient.mockResolvedValue(
+        mockSession({ status: TradingSessionStatus.SUSPENDED_RISK_LIMIT }),
+      );
+
+      await expect(service.resetDailyLossProtection('user-1', 'session-1', false)).rejects.toThrow(
         ForbiddenException,
       );
+
       expect(dailyRiskPeriodService.recordDailyLossReset).not.toHaveBeenCalled();
       expect(executionService.resumeRiskSuspendedSession).not.toHaveBeenCalled();
     });
@@ -1178,9 +1223,10 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           resetDailyLossProtectionForBroker: (
             userId: string,
             brokerConnectionId: string,
+            confirmed: boolean,
           ) => Promise<{ resetAt: string; resetCount: number; message: string }>;
         }
-      ).resetDailyLossProtectionForBroker('user-1', 'conn-1');
+      ).resetDailyLossProtectionForBroker('user-1', 'conn-1', true);
 
       expect(dailyRiskPeriodService.recordDailyLossReset).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1196,7 +1242,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(result.resetCount).toBe(1);
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
-          action: 'RISK_DAILY_LOSS_RESET_CONFIRMED',
+          action: 'RISK_PROTECTION_RESET_CONFIRMED',
           resourceType: 'BrokerConnection',
           resourceId: 'conn-1',
         }),
@@ -1221,7 +1267,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         },
       ]);
 
-      const result = await service.resetDailyLossProtectionForBroker('user-1', 'conn-1');
+      const result = await service.resetDailyLossProtectionForBroker('user-1', 'conn-1', true);
 
       expect(dailyRiskPeriodService.recordDailyLossReset).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1233,7 +1279,12 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       );
       expect(result.resetCount).toBe(1);
       expect(auditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'RISK_DAILY_LOSS_RESET_CONFIRMED' }),
+        expect.objectContaining({
+          action: 'RISK_PROTECTION_RESET_CONFIRMED',
+          metadata: expect.objectContaining({
+            triggeredBy: RiskRejectionCode.MAX_DRAWDOWN_REACHED,
+          }),
+        }),
       );
     });
   });

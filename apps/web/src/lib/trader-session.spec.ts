@@ -11,7 +11,7 @@ import {
   prepareBrokerForAutomationStart,
   resetDailyLossProtection,
   resetDailyLossProtectionForBroker,
-  shouldOfferDailyLossResetAfterEndedSession,
+  shouldOfferRiskResetAfterEndedSession,
 } from './trader-session';
 
 /**
@@ -207,7 +207,10 @@ describe('resetDailyLossProtection', () => {
 
     expect(requestMock).toHaveBeenCalledWith(
       `/trading/sessions/${encodeURIComponent(SESSION.id)}/reset-daily-loss`,
-      { method: 'POST' },
+      {
+        method: 'POST',
+        body: JSON.stringify({ confirmed: true }),
+      },
     );
     expect(result.session.status).toBe('ACTIVE');
     expect(result.session.authorityGeneration).toBe(4);
@@ -245,7 +248,7 @@ describe('resetDailyLossProtectionForBroker', () => {
 
     expect(requestMock).toHaveBeenCalledWith('/trading/sessions/daily-loss/reset', {
       method: 'POST',
-      body: JSON.stringify({ brokerConnectionId: 'bconn-demo-1' }),
+      body: JSON.stringify({ brokerConnectionId: 'bconn-demo-1', confirmed: true }),
     });
     expect(result.resetCount).toBe(1);
   });
@@ -361,19 +364,19 @@ describe('dailyLossProtectionMessage', () => {
   });
 });
 
-describe('shouldOfferDailyLossResetAfterEndedSession', () => {
-  it('does not offer a daily-loss reset when the latest risk suspension was max drawdown', () => {
+describe('shouldOfferRiskResetAfterEndedSession', () => {
+  it('offers an explicit reset after an ended max-drawdown suspension', () => {
     expect(
-      shouldOfferDailyLossResetAfterEndedSession({
-        dailyRiskCooldownActive: true,
+      shouldOfferRiskResetAfterEndedSession({
+        dailyRiskCooldownActive: false,
         latestRiskSuspensionCode: 'MAX_DRAWDOWN_REACHED',
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it('offers the reset when the current persisted protection is genuinely daily loss', () => {
+  it('offers the reset when the current persisted protection is daily loss', () => {
     expect(
-      shouldOfferDailyLossResetAfterEndedSession({
+      shouldOfferRiskResetAfterEndedSession({
         dailyRiskCooldownActive: true,
         latestRiskSuspensionCode: 'DAILY_LOSS_LIMIT_REACHED',
       }),
@@ -382,11 +385,20 @@ describe('shouldOfferDailyLossResetAfterEndedSession', () => {
 
   it('allows the daily-loss ledger to drive the control when no newer suspension code exists', () => {
     expect(
-      shouldOfferDailyLossResetAfterEndedSession({
+      shouldOfferRiskResetAfterEndedSession({
         dailyRiskCooldownActive: true,
         latestRiskSuspensionCode: null,
       }),
     ).toBe(true);
+  });
+
+  it('does not offer a reset for unrelated risk rejection codes', () => {
+    expect(
+      shouldOfferRiskResetAfterEndedSession({
+        dailyRiskCooldownActive: false,
+        latestRiskSuspensionCode: 'INSUFFICIENT_MARGIN',
+      }),
+    ).toBe(false);
   });
 });
 

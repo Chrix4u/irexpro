@@ -508,12 +508,19 @@ export class TradingService {
   async resetDailyLossProtection(
     userId: string,
     sessionId: string,
+    confirmed: boolean,
   ): Promise<{
     session: TradingSession;
     resetAt: string;
     resetCount: number;
     message: string;
   }> {
+    if (confirmed !== true) {
+      throw new ForbiddenException(
+        'Explicit user confirmation is required before risk protection can be reset.',
+      );
+    }
+
     const session = await this.executionService.getActiveSessionForClient(userId);
     if (!session || session.id !== sessionId) {
       throw new NotFoundException('The trading session is not available for daily-loss reset.');
@@ -541,26 +548,16 @@ export class TradingService {
         (scopedBroker === null || scopedBroker === session.brokerConnectionId)
       );
     });
-    if (
-      !suspensionViolation ||
-      suspensionViolation.rejectionCode !== RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED
-    ) {
+    if (!suspensionViolation) {
       throw new ForbiddenException(
-        'This risk suspension is not a daily-loss suspension. Drawdown and other risk suspensions cannot be reset from this control.',
+        'Only daily-loss or maximum-drawdown risk suspensions can be reset from this control.',
       );
     }
 
     const evaluatedAt = new Date(suspensionViolation.evaluatedAt);
     const now = new Date();
-    if (
-      !Number.isFinite(evaluatedAt.getTime()) ||
-      evaluatedAt.getUTCFullYear() !== now.getUTCFullYear() ||
-      evaluatedAt.getUTCMonth() !== now.getUTCMonth() ||
-      evaluatedAt.getUTCDate() !== now.getUTCDate()
-    ) {
-      throw new ForbiddenException(
-        'The daily-loss suspension is not from the current UTC risk day.',
-      );
+    if (!Number.isFinite(evaluatedAt.getTime())) {
+      throw new ForbiddenException('The risk suspension timestamp could not be verified.');
     }
 
     const allocation = await this.allocationService.getUserCapitalAllocationState(
@@ -573,6 +570,19 @@ export class TradingService {
       );
     }
 
+    const accountState = await this.brokerService.getBrokerAccountState(session.brokerConnectionId);
+    const resetEquity = accountState ? ExactDecimal.tryParse(accountState.equity) : null;
+    if (
+      !accountState ||
+      !resetEquity?.isPositive() ||
+      accountState.currency.trim().toUpperCase() !== allocation.accountCurrency.trim().toUpperCase()
+    ) {
+      throw new ForbiddenException(
+        'Fresh broker equity could not be verified for the risk reset. AI Trading remains paused.',
+      );
+    }
+    const resetPeakEquityTo = accountState.equity;
+
     // Safety ordering: persist the new loss-window cutoff BEFORE reactivating
     // execution authority. A persistence failure can never accidentally resume.
     const reset = await this.dailyRiskPeriodService.recordDailyLossReset({
@@ -583,11 +593,13 @@ export class TradingService {
       sessionId: session.id,
       now,
     });
-    const resumed = await this.executionService.resumeRiskSuspendedSession(userId, session.id);
+    const resumed = await this.executionService.resumeRiskSuspendedSession(userId, session.id, {
+      resetPeakEquityTo,
+    });
 
     await this.auditService.log({
       actorUserId: userId,
-      action: AuditAction.RISK_DAILY_LOSS_RESET_CONFIRMED,
+      action: AuditAction.RISK_PROTECTION_RESET_CONFIRMED,
       severity: AuditSeverity.WARNING,
       resourceType: 'TradingSession',
       resourceId: session.id,
@@ -598,6 +610,9 @@ export class TradingService {
         violationEvaluatedAt: evaluatedAt.toISOString(),
         resetAt: reset.resetAt.toISOString(),
         resetCount: reset.resetCount,
+        triggeredBy: suspensionViolation.rejectionCode,
+        previousPeakEquity: session.peakEquity,
+        resetPeakEquityTo,
         previousAuthorityGeneration: session.authorityGeneration,
         newAuthorityGeneration: resumed.authorityGeneration,
         historicalPnlPreserved: true,
@@ -612,7 +627,8 @@ export class TradingService {
       authorityGeneration: resumed.authorityGeneration,
       status: resumed.status,
       startedAt: resumed.startedAt,
-      resumedFromDailyLossReset: true,
+      resumedFromRiskProtectionReset: true,
+      riskResetTriggeredBy: suspensionViolation.rejectionCode,
     });
 
     return {
@@ -620,14 +636,21 @@ export class TradingService {
       resetAt: reset.resetAt.toISOString(),
       resetCount: reset.resetCount,
       message:
-        'Daily-loss protection was reset from this moment and AI Trading resumed. Historical P&L was not changed.',
+        'Risk protection was reset from this moment and AI Trading resumed with a fresh drawdown baseline. Historical P&L was not changed.',
     };
   }
 
   async resetDailyLossProtectionForBroker(
     userId: string,
     brokerConnectionId: string,
+    confirmed: boolean,
   ): Promise<{ resetAt: string; resetCount: number; message: string }> {
+    if (confirmed !== true) {
+      throw new ForbiddenException(
+        'Explicit user confirmation is required before risk protection can be reset.',
+      );
+    }
+
     await this.brokerService.findConnectionById(brokerConnectionId, userId);
 
     const currentSession = await this.executionService.getActiveSessionForClient(userId);
@@ -638,27 +661,35 @@ export class TradingService {
     }
 
     const violations = await this.riskService.getViolations(userId, 20);
-    const dailyLossViolation = violations.find((violation) => {
-      if (violation.rejectionCode !== RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED) return false;
+    const riskViolation = violations.find((violation) => {
+      if (
+        violation.rejectionCode !== RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED &&
+        violation.rejectionCode !== RiskRejectionCode.MAX_DRAWDOWN_REACHED
+      ) {
+        return false;
+      }
       const context = (violation.riskContext ?? {}) as Record<string, unknown>;
       const scopedBroker =
         typeof context.brokerConnectionId === 'string' ? context.brokerConnectionId : null;
       return scopedBroker === null || scopedBroker === brokerConnectionId;
     });
 
-    if (!dailyLossViolation) {
+    if (!riskViolation) {
       throw new ForbiddenException(
-        'Daily-loss reset is not available because no current-day daily-loss breach was found for this broker account.',
+        'Risk reset is not available because no daily-loss or maximum-drawdown breach was found for this broker account.',
       );
     }
 
-    const evaluatedAt = new Date(dailyLossViolation.evaluatedAt);
+    const evaluatedAt = new Date(riskViolation.evaluatedAt);
     const now = new Date();
+    if (!Number.isFinite(evaluatedAt.getTime())) {
+      throw new ForbiddenException('The risk suspension timestamp could not be verified.');
+    }
     if (
-      !Number.isFinite(evaluatedAt.getTime()) ||
-      evaluatedAt.getUTCFullYear() !== now.getUTCFullYear() ||
-      evaluatedAt.getUTCMonth() !== now.getUTCMonth() ||
-      evaluatedAt.getUTCDate() !== now.getUTCDate()
+      riskViolation.rejectionCode === RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED &&
+      (evaluatedAt.getUTCFullYear() !== now.getUTCFullYear() ||
+        evaluatedAt.getUTCMonth() !== now.getUTCMonth() ||
+        evaluatedAt.getUTCDate() !== now.getUTCDate())
     ) {
       throw new ForbiddenException(
         'The daily-loss suspension is not from the current UTC risk day.',
@@ -686,7 +717,7 @@ export class TradingService {
 
     await this.auditService.log({
       actorUserId: userId,
-      action: AuditAction.RISK_DAILY_LOSS_RESET_CONFIRMED,
+      action: AuditAction.RISK_PROTECTION_RESET_CONFIRMED,
       severity: AuditSeverity.WARNING,
       resourceType: 'BrokerConnection',
       resourceId: brokerConnectionId,
@@ -697,6 +728,7 @@ export class TradingService {
         violationEvaluatedAt: evaluatedAt.toISOString(),
         resetAt: reset.resetAt.toISOString(),
         resetCount: reset.resetCount,
+        triggeredBy: riskViolation.rejectionCode,
         historicalPnlPreserved: true,
         sessionResumed: false,
       },
@@ -706,7 +738,7 @@ export class TradingService {
       resetAt: reset.resetAt.toISOString(),
       resetCount: reset.resetCount,
       message:
-        'Daily-loss protection was reset from this moment. Historical P&L was not changed. AI Trading remains stopped until a new session starts.',
+        'Risk protection was reset from this moment. Historical P&L was not changed. Starting AI Trading will establish a fresh drawdown baseline from current broker equity.',
     };
   }
 

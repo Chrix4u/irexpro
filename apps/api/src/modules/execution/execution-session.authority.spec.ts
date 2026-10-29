@@ -578,6 +578,26 @@ describe('ExecutionService — session authority (Round 5, issues #295/#298)', (
       expect(grantAfter?.invalidationReason).toBe('SESSION_AUTHORITY_GENERATION_CHANGED');
     });
 
+    it('rebases peak equity when the user explicitly resets drawdown protection', async () => {
+      const session = await start(USER, CONN_A, ExecutionMode.PAPER_ONLY);
+      await sessionRepo.update(
+        { id: session.id },
+        {
+          status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+          authorityGeneration: 2,
+          peakEquity: '920.12',
+        },
+      );
+
+      const resumed = await service.resumeRiskSuspendedSession(USER, session.id, {
+        resetPeakEquityTo: '825.54',
+      });
+
+      expect(resumed.status).toBe(TradingSessionStatus.ACTIVE);
+      expect(resumed.authorityGeneration).toBe(3);
+      expect(Number(resumed.peakEquity)).toBe(825.54);
+    });
+
     it('refuses to reactivate an ACTIVE session through the daily-loss resume seam', async () => {
       const session = await start(USER, CONN_A, ExecutionMode.PAPER_ONLY);
 

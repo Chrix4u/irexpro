@@ -208,41 +208,47 @@ export class TradingController {
   @ApiOperation({
     summary: 'Reset today’s daily-loss protection for a broker account',
     description:
-      'Used when no current AI session survives but a same-day DAILY_LOSS_LIMIT_REACHED ' +
-      'violation still blocks a fresh session. Historical P&L is preserved. Drawdown and ' +
-      'other risk suspensions cannot be reset from this control.',
+      'Used when no current AI session survives but a DAILY_LOSS_LIMIT_REACHED or ' +
+      'MAX_DRAWDOWN_REACHED protection must be explicitly reset by the user before ' +
+      'continuing. Historical P&L is preserved and confirmed=true is required.',
   })
   async resetDailyLossForBroker(
     @CurrentUserId() userId: string,
     @Body('brokerConnectionId', ParseUUIDPipe) brokerConnectionId: string,
+    @Body('confirmed') confirmed: boolean,
   ): Promise<{ resetAt: string; resetCount: number; message: string }> {
-    return this.tradingService.resetDailyLossProtectionForBroker(userId, brokerConnectionId);
+    return this.tradingService.resetDailyLossProtectionForBroker(
+      userId,
+      brokerConnectionId,
+      confirmed,
+    );
   }
 
   /**
-   * Explicit user override for a DAILY-loss suspension only.
+   * Explicit user override for a DAILY-loss or MAX-drawdown suspension.
    * Historical trade P&L remains unchanged; the server records a new durable
-   * account/day loss-window cutoff before reactivating session authority.
-   * Drawdown suspensions remain non-overridable here.
+   * loss-window cutoff and rebases drawdown to current verified broker equity
+   * before reactivating session authority.
    */
   @Post(':id/reset-daily-loss')
   @ApiOperation({
-    summary: 'Reset today’s daily-loss protection and resume the suspended session',
+    summary: 'Reset hard risk protection and resume the suspended session',
     description:
-      'Requires an explicit user request on the current SUSPENDED_RISK_LIMIT session and ' +
-      'verifies that the suspension was caused by DAILY_LOSS_LIMIT_REACHED. Historical P&L ' +
-      'is preserved; only the daily-loss measurement window resets from confirmation time.',
+      'Requires an explicit user request on the current SUSPENDED_RISK_LIMIT session, ' +
+      'accepts only DAILY_LOSS_LIMIT_REACHED or MAX_DRAWDOWN_REACHED, preserves historical ' +
+      'P&L, and requires confirmed=true before authority can resume.',
   })
   async resetDailyLoss(
     @CurrentUserId() userId: string,
     @Param('id', ParseUUIDPipe) sessionId: string,
+    @Body('confirmed') confirmed: boolean,
   ): Promise<{
     session: TradingSessionResponseDto;
     resetAt: string;
     resetCount: number;
     message: string;
   }> {
-    const result = await this.tradingService.resetDailyLossProtection(userId, sessionId);
+    const result = await this.tradingService.resetDailyLossProtection(userId, sessionId, confirmed);
     return {
       ...result,
       session: toTradingSessionResponse(result.session),

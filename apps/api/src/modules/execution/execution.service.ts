@@ -1733,7 +1733,11 @@ export class ExecutionService {
    * reset. This method does not decide whether an override is allowed; it owns
    * only the session-authority transition and generation fencing.
    */
-  async resumeRiskSuspendedSession(userId: string, sessionId: string): Promise<TradingSession> {
+  async resumeRiskSuspendedSession(
+    userId: string,
+    sessionId: string,
+    options: { resetPeakEquityTo?: string } = {},
+  ): Promise<TradingSession> {
     const session = await this.sessionRepo.findOne({ where: { id: sessionId, userId } });
     if (!session) {
       throw new NotFoundException(`Trading session ${sessionId} not found`);
@@ -1752,6 +1756,7 @@ export class ExecutionService {
       .set({
         status: TradingSessionStatus.ACTIVE,
         authorityGeneration: () => 'authority_generation + 1',
+        ...(options.resetPeakEquityTo ? { peakEquity: options.resetPeakEquityTo } : {}),
         updatedAt: new Date(),
       })
       .where(

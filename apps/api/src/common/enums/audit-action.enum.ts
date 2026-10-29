@@ -117,6 +117,7 @@ export enum AuditAction {
   RISK_DRAWDOWN_LIMIT_BREACHED = 'RISK_DRAWDOWN_LIMIT_BREACHED',
   RISK_SESSION_SUSPENDED = 'RISK_SESSION_SUSPENDED',
   RISK_DAILY_LOSS_RESET_CONFIRMED = 'RISK_DAILY_LOSS_RESET_CONFIRMED',
+  RISK_PROTECTION_RESET_CONFIRMED = 'RISK_PROTECTION_RESET_CONFIRMED',
   // Sprint 56 correction round 5 (#301): a durable RiskGrant was issued (or
   // idempotently reused) for an approved signal. Metadata carries ids/digests
   // ONLY — never order secrets (there are none) or account credentials.

@@ -237,7 +237,10 @@ export async function resetDailyLossProtection(
 ): Promise<DailyLossResetResult> {
   const payload = await api.request<unknown>(
     `/trading/sessions/${encodeURIComponent(sessionId)}/reset-daily-loss`,
-    { method: 'POST' },
+    {
+      method: 'POST',
+      body: JSON.stringify({ confirmed: true }),
+    },
   );
   if (
     !isRecord(payload) ||
@@ -275,7 +278,7 @@ export async function resetDailyLossProtectionForBroker(
 ): Promise<BrokerDailyLossResetResult> {
   const payload = await api.request<unknown>('/trading/sessions/daily-loss/reset', {
     method: 'POST',
-    body: JSON.stringify({ brokerConnectionId }),
+    body: JSON.stringify({ brokerConnectionId, confirmed: true }),
   });
   if (
     !isRecord(payload) ||
@@ -483,10 +486,11 @@ export interface DailyRiskCooldownState {
  * precedence. Otherwise the UI offers a daily-loss reset that the server
  * correctly rejects with 403.
  */
-export function shouldOfferDailyLossResetAfterEndedSession(input: {
+export function shouldOfferRiskResetAfterEndedSession(input: {
   dailyRiskCooldownActive: boolean;
   latestRiskSuspensionCode: string | null | undefined;
 }): boolean {
+  if (input.latestRiskSuspensionCode === 'MAX_DRAWDOWN_REACHED') return true;
   if (!input.dailyRiskCooldownActive) return false;
   return (
     input.latestRiskSuspensionCode == null ||
