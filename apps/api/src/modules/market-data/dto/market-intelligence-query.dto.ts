@@ -13,7 +13,7 @@ export class MarketIntelligenceQueryDto {
 
   @Type(() => Number)
   @IsInt()
-  @Min(20)
+  @Min(1)
   @Max(300)
   limit: number = 120;
 
