@@ -126,6 +126,15 @@ export interface M1TacticalStatusView {
   m1TacticalRole?: string;
   lastRunAt: string | null;
   lastError: string | null;
+  marketReadiness?: Record<
+    string,
+    {
+      ready: boolean;
+      reason: string;
+      authority: string | null;
+      observedAt: string;
+    }
+  >;
   latestDecision: {
     instrument: string;
     direction: "BUY" | "SELL";
@@ -310,6 +319,17 @@ export function deriveTradeReadinessUiState(
     : null;
   const m1Decision = m1Status?.enabled === true ? m1Status.latestDecision : null;
   if (m1Decision) {
+    const selectedReadiness = m1Status?.marketReadiness?.[m1Decision.instrument] ?? null;
+    if (selectedReadiness?.reason === "BROKER_M1_STALE") {
+      return waiting(
+        8,
+        "Broker M1 feed stale — trading paused",
+        "The latest broker-native M1 candle is stale, so iRexPro has paused new entries rather than trade on old prices. Scanning and execution resume automatically when fresh broker candles return.",
+        m1Decision.instrument,
+        m1Decision.direction,
+      );
+    }
+
     const blockers = m1Decision.blockers;
     const multimodelPrimary =
       m1Decision.primaryEngineCode === "irexpro-multimodel-ensemble-v1" ||
