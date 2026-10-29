@@ -6,10 +6,12 @@ import type {
   MarketQuoteView,
 } from '@irexpro/types/market-intelligence';
 import { api } from '@/lib/api';
+import { reconcileLiveCandles } from '@/lib/ai-live-visuals';
 
 const marketApi = createMarketIntelligenceApi(api);
 const FRESHNESS = new Set(['FRESH', 'STALE']);
 const DECIMAL = /^-?\d+(?:\.\d+)?$/;
+const liveCandleCache = new Map<string, MarketCandleView[]>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -93,6 +95,10 @@ export function isMarketIntelligenceView(value: unknown): value is MarketIntelli
   );
 }
 
+function cacheKey(request: MarketIntelligenceRequest): string {
+  return [request.brokerConnectionId ?? 'AUTO', request.instrument, request.timeframe].join('|');
+}
+
 export async function loadMarketIntelligence(
   request: MarketIntelligenceRequest,
 ): Promise<MarketIntelligenceView> {
@@ -100,5 +106,19 @@ export async function loadMarketIntelligence(
   if (!isMarketIntelligenceView(snapshot)) {
     throw new Error('Market Intelligence contract mismatch');
   }
-  return snapshot;
+
+  const key = cacheKey(request);
+  const previous = liveCandleCache.get(key) ?? [];
+  const candles = reconcileLiveCandles(
+    previous,
+    snapshot.candles,
+    snapshot.quote,
+    snapshot.timeframe,
+  ) as MarketCandleView[];
+  liveCandleCache.set(key, candles);
+
+  return {
+    ...snapshot,
+    candles,
+  };
 }
