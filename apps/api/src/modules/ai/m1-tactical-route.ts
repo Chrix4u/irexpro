@@ -15,6 +15,7 @@ export type M1TacticalRoute =
 export type M1TacticalRouteReason =
   | 'TREND_STRUCTURE_ALIGNED'
   | 'FAILED_MOVE_WITH_MULTI_BAR_REVERSAL_IMPULSE'
+  | 'M5_REVERSAL_NOT_CONFIRMED'
   | 'EARLY_TRANSITION_IMPULSE'
   | 'LOCAL_IMPULSE_AGAINST_HTF'
   | 'DIRECTION_EDGE_TOO_SMALL'
@@ -87,7 +88,7 @@ function localImpulseAgainstHtf(
   );
 }
 
-function confirmedReversal(candidate: M1TacticalCandidate, policy: M1TacticalPolicy): boolean {
+function reversalImpulse(candidate: M1TacticalCandidate, policy: M1TacticalPolicy): boolean {
   return (
     candidate.failedBreakoutAgainstDirection &&
     candidate.directionQuality >= policy.minReversalQuality &&
@@ -96,6 +97,19 @@ function confirmedReversal(candidate: M1TacticalCandidate, policy: M1TacticalPol
     candidate.alignedMomentum5Atr >= policy.minReversalImpulseAtr * 0.5 &&
     candidate.alignedEmaSlopeAtr > 0
   );
+}
+
+function m5ReversalConfirmed(candidate: M1TacticalCandidate): boolean {
+  // Reversal timing must be confirmed by completed M5 candles, not merely by
+  // a fast M1 turn. This prevents a correct eventual direction call from
+  // becoming an early entry while the prior M5 move is still extending.
+  const establishedTurn =
+    candidate.alignedM5BodyPressure3 >= 0.08 &&
+    candidate.alignedM5Momentum3Atr >= 0.08 &&
+    candidate.alignedM5Momentum1Atr >= -0.1;
+  const decisiveFreshTurn =
+    candidate.alignedM5BodyPressure3 >= 0.05 && candidate.alignedM5Momentum1Atr >= 0.3;
+  return establishedTurn || decisiveFreshTurn;
 }
 
 export function classifyM1TacticalRoute(
@@ -109,10 +123,11 @@ export function classifyM1TacticalRoute(
     return abstain('INVALID_COUNTERFACTUAL_PAIR', scoreEdge, policy.version);
   }
 
-  const reversal = confirmedReversal(candidate, policy);
-  const localImpulseScout = !reversal && localImpulseAgainstHtf(candidate, scoreEdge, policy);
+  const reversalSignal = reversalImpulse(candidate, policy);
+  const reversal = reversalSignal && m5ReversalConfirmed(candidate);
+  const localImpulseScout = !reversalSignal && localImpulseAgainstHtf(candidate, scoreEdge, policy);
   if (
-    !reversal &&
+    !reversalSignal &&
     !localImpulseScout &&
     candidate.alignedHigherTimeframeAgreement <= -policy.minContinuationHtfAgreement
   ) {
@@ -121,6 +136,10 @@ export function classifyM1TacticalRoute(
 
   if (!Number.isFinite(scoreEdge) || scoreEdge < policy.minDirectionalEdge) {
     return abstain('DIRECTION_EDGE_TOO_SMALL', scoreEdge, policy.version);
+  }
+
+  if (reversalSignal && !reversal) {
+    return abstain('M5_REVERSAL_NOT_CONFIRMED', scoreEdge, policy.version);
   }
 
   if (reversal) {
