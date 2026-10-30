@@ -64,8 +64,6 @@ describe('M1 tactical currency exposure', () => {
     ).toMatchObject({ capacity: 'REDUCED', projectedAlignedRiskPercent: 2.5 });
   });
 
-
-
   it('finds the largest clear intermediate lot instead of collapsing a blocked professional cap to the 0.20 floor', () => {
     const result = findLargestClearM1Volume({
       allocatedCapital: 900,
@@ -85,6 +83,27 @@ describe('M1 tactical currency exposure', () => {
     expect(result.volumeCap).toBeCloseTo(0.35, 8);
     expect(result.volumeCap).toBeGreaterThan(0.2);
     expect(result.decision.capacity).toBe('CLEAR');
+    expect(result.productFloorBlocked).toBe(false);
+  });
+
+  it('allows the preferred 0.20 floor to hand off to downstream risk sizing when it is reduced but still below the hard block threshold', () => {
+    const result = findLargestClearM1Volume({
+      allocatedCapital: 900,
+      positions: [],
+      candidate: {
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        entryPrice: 1.1123,
+        stopLoss: 1.1113,
+      },
+      requestedVolumeCap: 4,
+      productFloor: 0.2,
+      volumeStep: 0.01,
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(result.volumeCap).toBe(0.2);
+    expect(result.decision.capacity).toBe('REDUCED');
     expect(result.productFloorBlocked).toBe(false);
   });
 

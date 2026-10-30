@@ -64,7 +64,6 @@ function blocked(
   };
 }
 
-
 export function findLargestClearM1Volume(input: {
   allocatedCapital: number;
   positions: M1CurrencyRiskPosition[];
@@ -127,6 +126,10 @@ export function findLargestClearM1Volume(input: {
       productFloorBlocked: false,
     };
   }
+  // A caller that explicitly caps below the professional product floor is a
+  // scout/micro route, not a professional request that merely needs risk
+  // adjustment. Keep those routes fail-closed; only a larger professional cap
+  // may hand off a REDUCED 0.20 floor to downstream durable-risk sizing.
   if (input.requestedVolumeCap <= input.productFloor) {
     return {
       allowed: false,
@@ -137,12 +140,20 @@ export function findLargestClearM1Volume(input: {
   }
 
   const floorDecision = evaluateAtVolume(input.productFloor);
-  if (floorDecision.capacity !== 'CLEAR') {
+  if (floorDecision.capacity === 'BLOCKED') {
     return {
       allowed: false,
       volumeCap: 0,
       decision: floorDecision,
       productFloorBlocked: true,
+    };
+  }
+  if (floorDecision.capacity === 'REDUCED') {
+    return {
+      allowed: true,
+      volumeCap: input.productFloor,
+      decision: floorDecision,
+      productFloorBlocked: false,
     };
   }
 

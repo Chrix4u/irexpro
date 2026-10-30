@@ -409,20 +409,28 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.lots).toBe('0.2');
   });
 
-  it('rejects the 0.20 PAPER floor when its actual stop risk would exceed the durable profile ceiling', async () => {
+  it('steps below the preferred 0.20 professional size when the durable 2% ceiling safely supports at least 0.10 lot', async () => {
     const service = makeService();
 
-    await expect(
-      service.sizePosition({
-        ...params,
-        paperAllocationSizing: {
-          executionMode: 'PAPER_ONLY',
-          allocatedCapital: '800.00',
-          confidenceTier: 'RESEARCH',
-          minimumExecutableLot: '0.20',
-        },
-      }),
-    ).rejects.toMatchObject({ code: 'POSITION_SIZE_BELOW_POLICY_MINIMUM' });
+    const sized = await service.sizePosition({
+      ...params,
+      requestedLotUpperBound: '0.20',
+      paperAllocationSizing: {
+        executionMode: 'FULL_AUTO',
+        allocatedCapital: '900.00',
+        confidenceTier: 'VERY_STRONG',
+        minimumExecutableLot: '0.20',
+      },
+    });
+
+    // VERY_STRONG requests 2.5%, but the durable profile caps the trade at 2%.
+    // €/$900-equivalent risk capital with this 10-pip stop therefore supports
+    // 0.18 lot: below the preferred 0.20 size, but still a meaningful trade.
+    expect(sized.inputs.riskPercent).toBe('2');
+    expect(sized.inputs.lotsByRiskBudget).toBe('0.18');
+    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.2');
+    expect(sized.inputs.policyMinimumLotLifted).toBe(false);
+    expect(sized.lots).toBe('0.18');
   });
 
   it('rejects the 0.10 scout floor when its actual stop risk would exceed the durable risk ceiling', async () => {

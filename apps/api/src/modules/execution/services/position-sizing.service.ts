@@ -134,6 +134,7 @@ export interface SizedPosition {
 const LOT_SCALE = 8;
 export const PAPER_PRODUCT_ABSOLUTE_MIN_LOT = '0.2';
 const PAPER_PRODUCT_DEFAULT_MIN_LOT = '0.2';
+const PAPER_PRODUCT_RISK_ADJUSTED_MIN_LOT = '0.1';
 const PAPER_PRODUCT_MAX_LOT = '4';
 
 /**
@@ -543,7 +544,8 @@ export class PositionSizingService {
         riskCurrencyConversionInstrument = cachedConversion.path.join('>');
         riskCurrencyConversionRate = quotePerAccountCurrency.toString();
       } else {
-        let conversionQuote: Awaited<ReturnType<BrokerService['getCurrentPriceForConnection']>> = null;
+        let conversionQuote: Awaited<ReturnType<BrokerService['getCurrentPriceForConnection']>> =
+          null;
         try {
           conversionQuote = await this.brokerService.getCurrentPriceForConnection(
             userId,
@@ -746,17 +748,29 @@ export class PositionSizingService {
           profileRiskCeilingAmountInQuoteCurrency,
         );
 
-        if (!floorFitsLotCeilings || !floorFitsDurableRisk) {
+        if (!floorFitsLotCeilings) {
           throw new PositionSizingError(
             'POSITION_SIZE_BELOW_POLICY_MINIMUM',
             `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} is below the PAPER policy minimum ` +
               `${policyMinimumExecutableLot.toString()} and lifting to the floor would exceed a durable ` +
-              `lot/risk ceiling`,
+              `lot ceiling`,
           );
         }
 
-        lots = policyMinimumExecutableLot;
-        policyMinimumLotLifted = true;
+        if (floorFitsDurableRisk) {
+          lots = policyMinimumExecutableLot;
+          policyMinimumLotLifted = true;
+        } else {
+          const riskAdjustedMinimumLot = ExactDecimal.parse(PAPER_PRODUCT_RISK_ADJUSTED_MIN_LOT);
+          if (lots.lt(riskAdjustedMinimumLot)) {
+            throw new PositionSizingError(
+              'POSITION_SIZE_BELOW_POLICY_MINIMUM',
+              `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} cannot afford the preferred PAPER ` +
+                `${policyMinimumExecutableLot.toString()} lot size and is below the risk-adjusted minimum ` +
+                `${riskAdjustedMinimumLot.toString()}`,
+            );
+          }
+        }
       }
     }
 
