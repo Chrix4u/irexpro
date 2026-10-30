@@ -4005,7 +4005,7 @@ describe('VpsForexSignalCollectorService', () => {
   });
 
   it('loads pair-side research reliability only from the active episode-guarded research artifact', async () => {
-    const activePolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
+    const activePolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1';
     const query = jest.fn().mockResolvedValue([
       {
         policy_version: activePolicy,
@@ -4080,7 +4080,11 @@ describe('VpsForexSignalCollectorService', () => {
           'paper-research-throughput-v10-evidence-backed-acceleration',
           'paper-research-throughput-v11-momentum-confirmed-exploration',
         ],
-        ['planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1', activePolicy],
+        [
+          'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
+          'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1',
+          activePolicy,
+        ],
         activePolicy,
       ],
     );
@@ -4723,10 +4727,7 @@ describe('VpsForexSignalCollectorService', () => {
       aiEngineClientMock(),
     );
 
-    const snapshot = await (collector as any).loadPlanBPortfolioSnapshot(
-      'user-1',
-      'paper-1',
-    );
+    const snapshot = await (collector as any).loadPlanBPortfolioSnapshot('user-1', 'paper-1');
 
     expect(getOpenPositionsForConnection).toHaveBeenCalledTimes(1);
     expect(getOpenPositionsForConnection).toHaveBeenCalledWith('ctrader-1', 'user-1');
@@ -4743,7 +4744,9 @@ describe('VpsForexSignalCollectorService', () => {
       const rows = trendCandles(1.1, 5).map((row) => ({ ...row, volume: '0' }));
       const getOhlcvForConnection = jest
         .fn()
-        .mockRejectedValueOnce(Object.assign(new Error('local history budget exhausted'), { code: 'RATE_LIMITED' }))
+        .mockRejectedValueOnce(
+          Object.assign(new Error('local history budget exhausted'), { code: 'RATE_LIMITED' }),
+        )
         .mockResolvedValue(rows);
       const collector = createCollector(
         config({}),
@@ -4755,7 +4758,11 @@ describe('VpsForexSignalCollectorService', () => {
       );
 
       const pending = (collector as any).readBrokerHistoryWithRateLimitRetry(
-        'user-1', 'ctrader-1', 'EURUSD', 'M5', 500,
+        'user-1',
+        'ctrader-1',
+        'EURUSD',
+        'M5',
+        500,
       );
       await Promise.resolve();
       expect(getOhlcvForConnection).toHaveBeenCalledTimes(1);
@@ -4769,7 +4776,9 @@ describe('VpsForexSignalCollectorService', () => {
   });
 
   it('does not retry a background broker-history read for non-rate-limit failures', async () => {
-    const getOhlcvForConnection = jest.fn().mockRejectedValue(new Error('provider candles unavailable'));
+    const getOhlcvForConnection = jest
+      .fn()
+      .mockRejectedValue(new Error('provider candles unavailable'));
     const collector = createCollector(
       config({}),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
@@ -4781,7 +4790,11 @@ describe('VpsForexSignalCollectorService', () => {
 
     await expect(
       (collector as any).readBrokerHistoryWithRateLimitRetry(
-        'user-1', 'ctrader-1', 'EURUSD', 'M5', 500,
+        'user-1',
+        'ctrader-1',
+        'EURUSD',
+        'M5',
+        500,
       ),
     ).rejects.toThrow('provider candles unavailable');
     expect(getOhlcvForConnection).toHaveBeenCalledTimes(1);
@@ -4905,7 +4918,9 @@ describe('VpsForexSignalCollectorService', () => {
         brokerId: 'ctrader',
         status: 'CONNECTED',
       }),
-      getOhlcvForConnection: jest.fn().mockRejectedValue(new Error('provider history should not be called')),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockRejectedValue(new Error('provider history should not be called')),
     } as unknown as BrokerService;
     const store = {
       getCandles: jest.fn().mockImplementation(async (_connectionId, instrument) => {
@@ -5162,12 +5177,12 @@ describe('scheduled scan recovery', () => {
   it('carries forward only the missing recent compatible pair-side samples across a calibration policy bump', async () => {
     const query = jest.fn().mockResolvedValue([
       {
-        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1',
+        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1',
         realised_pnl: -1,
         closed_at: new Date('2026-10-12T09:55:00.000Z'),
       },
       {
-        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1',
+        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1',
         realised_pnl: -1,
         closed_at: new Date('2026-10-12T09:50:00.000Z'),
       },
@@ -5206,13 +5221,14 @@ describe('scheduled scan recovery', () => {
     expect(params[5]).toEqual([
       'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
       'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1',
+      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1',
     ]);
-    expect(params[6]).toBe('planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1');
+    expect(params[6]).toBe('planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1');
   });
 
   it('uses the current policy sample history once it is self-sufficient and ignores predecessor losses', async () => {
-    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
-    const previousPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1';
+    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1';
+    const previousPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
     const query = jest.fn().mockResolvedValue([
       {
         policy_version: currentPolicy,
@@ -5268,7 +5284,7 @@ describe('scheduled scan recovery', () => {
   });
 
   it('derives realised-R payoff from the selected pair-side trade geometry', async () => {
-    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
+    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1';
     const rows = [
       ...Array.from({ length: 3 }, (_, index) => ({
         policy_version: currentPolicy,
@@ -5321,7 +5337,7 @@ describe('scheduled scan recovery', () => {
   });
 
   it('caps self-sufficient current-policy pair-side evidence at twenty samples', async () => {
-    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
+    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1';
     const rows = Array.from({ length: 21 }, (_, index) => ({
       policy_version: currentPolicy,
       realised_pnl: 1,

@@ -11,10 +11,23 @@ export const PLAN_B_PRE_COMPACT_POLICY_VERSION = `${PLAN_B_PRE_PAIR_SIDE_RELIABI
 export const PLAN_B_PRE_RAW_MOMENTUM_POLICY_VERSION =
   'planb-v4-bi2-et2-nm2-hp3-dmw1-ts1-trr1-psrr1';
 export const PLAN_B_PRE_CALIBRATION_POLICY_VERSION = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1';
-export const PLAN_B_ACTIVE_MODEL_POLICY_VERSION =
+export const PLAN_B_PRE_M5_TIMING_POLICY_VERSION =
   'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
+export const PLAN_B_ACTIVE_MODEL_POLICY_VERSION =
+  'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1';
+// Entry authority changed materially when completed-M5 reversal confirmation and
+// fresh/exhausted continuation timing became authoritative. Prediction calibration
+// must therefore learn prospectively from this epoch instead of vetoing it with
+// outcomes generated under the pre-M5-timing execution semantics.
 export const PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS = Object.freeze([
+  PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+]);
+// Research-route payoff reliability remains deliberately conservative across the
+// timing-policy bump. This lineage is separate from prediction calibration so
+// resetting stale probability authority does not erase realised loss brakes.
+export const PLAN_B_RESEARCH_RELIABILITY_EVIDENCE_POLICY_VERSIONS = Object.freeze([
   PLAN_B_PRE_CALIBRATION_POLICY_VERSION,
+  PLAN_B_PRE_M5_TIMING_POLICY_VERSION,
   PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
 ]);
 export const PLAN_B_REVERSAL_RELIABILITY_EVIDENCE_POLICY_VERSIONS = Object.freeze([
@@ -30,6 +43,7 @@ export const PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS = Object.freeze([
   // scoring is unchanged by the raw reversal/transition momentum correction.
   PLAN_B_PRE_RAW_MOMENTUM_POLICY_VERSION,
   PLAN_B_PRE_CALIBRATION_POLICY_VERSION,
+  PLAN_B_PRE_M5_TIMING_POLICY_VERSION,
   PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
 ]);
 export const PLAN_B_ENSEMBLE_MODE = 'PROSPECTIVE_SHADOW_ONLY';

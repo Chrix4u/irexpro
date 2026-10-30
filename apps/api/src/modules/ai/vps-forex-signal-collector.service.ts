@@ -23,6 +23,7 @@ import {
 import {
   PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
   PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS,
+  PLAN_B_RESEARCH_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_REVERSAL_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_ENSEMBLE_ARTIFACT,
@@ -3571,9 +3572,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     connectionId: string | null;
     positions: PlanBPortfolioPosition[];
   }> {
-    const getPositions = this.brokerService.getOpenPositionsForConnection?.bind(
-      this.brokerService,
-    );
+    const getPositions = this.brokerService.getOpenPositionsForConnection?.bind(this.brokerService);
     if (!getPositions) {
       return { available: false, connectionId: null, positions: [] };
     }
@@ -5857,7 +5856,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         instrument.trim().toUpperCase(),
         direction,
         [...PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS],
-        [...PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS],
+        [...PLAN_B_RESEARCH_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
         ACTIVE_MODEL_POLICY_VERSION,
       ],
     )) as Array<{
@@ -6904,12 +6903,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             // BrokerService just to recover scanner-owned evidence. Non-scanner
             // connections retain the broker-backed path.
             const rawM1 = this.livePaperMarket.isLiveConnection(executionConnectionId)
-              ? this.livePaperMarket.getReadOnlyOHLCV(
-                  instrument,
-                  'M1',
-                  30,
-                  executionConnectionId,
-                )
+              ? this.livePaperMarket.getReadOnlyOHLCV(instrument, 'M1', 30, executionConnectionId)
               : await this.brokerService.getOhlcvForConnection(
                   userId,
                   executionConnectionId,
