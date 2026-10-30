@@ -1092,8 +1092,11 @@ export class ExecutionService {
     if (trade.status !== TradeStatus.OPEN) {
       throw new ForbiddenException(`Trade ${tradeId} is not OPEN (status: ${trade.status})`);
     }
-    if (!trade.externalOrderId) {
-      throw new ForbiddenException(`Trade ${tradeId} has no externalOrderId — cannot close`);
+    const providerReferenceId = trade.externalPositionId ?? trade.externalOrderId;
+    if (!providerReferenceId) {
+      throw new ForbiddenException(
+        `Trade ${tradeId} has no provider position reference — cannot close`,
+      );
     }
 
     // findConnectionById requires userId for ownership check
@@ -1133,7 +1136,7 @@ export class ExecutionService {
       stopLoss: '0',
       takeProfit: '0',
       providerAction: 'CLOSE_POSITION',
-      providerReferenceId: trade.externalPositionId ?? trade.externalOrderId,
+      providerReferenceId,
     };
 
     const dispatch = await this.orchestrator.dispatchOrder(closeIntent, connection);
