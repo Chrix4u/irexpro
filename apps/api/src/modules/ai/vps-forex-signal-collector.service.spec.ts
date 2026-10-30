@@ -127,6 +127,30 @@ describe('PAPER opportunity scout model identity', () => {
       'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v10-local-edge-shadow-quarantine-0.10-tier',
     );
   });
+
+  it('isolates confirmed-reversal scout payoff evidence from the older trend-scout cohort', () => {
+    expect(
+      paperOpportunityScoutModelVersion(
+        'irexpro-multimodel-ensemble-v1',
+        'CONFIRMED_REVERSAL_SCOUT',
+      ),
+    ).toBe(
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v11-confirmed-reversal-adaptive-0.20-0.10-tier',
+    );
+    expect(
+      paperOpportunityScoutModelVersion(
+        'irexpro-multimodel-ensemble-v1',
+        'CONFIRMED_REVERSAL_MICRO_SCOUT',
+      ),
+    ).toBe(
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v11-confirmed-reversal-adaptive-0.20-0.10-tier',
+    );
+    expect(
+      paperOpportunityScoutModelVersion('irexpro-multimodel-ensemble-v1', 'OPPORTUNITY_SCOUT'),
+    ).toBe(
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v10-local-edge-shadow-quarantine-0.10-tier',
+    );
+  });
 });
 
 describe('PAPER scout product sizing floor', () => {
@@ -149,6 +173,27 @@ describe('PAPER scout product sizing floor', () => {
         ensembleGovernance: {},
       }),
     ).toEqual({ upperBound: 0.1, tier: 'RESEARCH' });
+  });
+
+  it('honors the 0.20 research ceiling for a strong confirmed-reversal scout', () => {
+    const collector = Object.create(VpsForexSignalCollectorService.prototype) as any;
+    expect(
+      collector.adaptiveLotSizingFor({
+        paperExecutionRoute: 'NORMAL_PAPER',
+        paperOpportunityScout: {
+          eligible: true,
+          lotUpperBound: 0.2,
+          sizingTier: 'RESEARCH',
+          reason: 'CONFIRMED_REVERSAL_SCOUT',
+          mode: 'BASE',
+          targetWindowMinutes: 30,
+          idleMinutes: null,
+        },
+        candidate: {},
+        planBEnsemble: {},
+        ensembleGovernance: {},
+      }),
+    ).toEqual({ upperBound: 0.2, tier: 'RESEARCH' });
   });
 
   it('reduces only an eligible scout to 0.05 when its exact generation payoff is marginal', () => {

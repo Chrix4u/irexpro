@@ -23,6 +23,20 @@ describe('PAPER opportunity scout', () => {
     idleMinutes: null,
   };
 
+  const reversalBase = {
+    ...base,
+    strategyRoute: 'CONFIRMED_REVERSAL' as const,
+    regime: 'REVERSAL_CONFIRMED' as const,
+    confidence: 0.68,
+    consensusPassed: 5,
+    netExpectedR: 0.12,
+    directionQuality: 0.4,
+    tradeQuality: 0.4,
+    exitQuality: 0.4,
+    alignedMomentumAtr: 0.8,
+    driftState: 'STRESSED' as const,
+  };
+
   it('takes a reduced-risk positive-edge trend opportunity that misses two soft votes', () => {
     expect(evaluatePaperOpportunityScout(base)).toEqual({
       eligible: true,
@@ -190,17 +204,112 @@ describe('PAPER opportunity scout', () => {
     ).toMatchObject({ eligible: true, reason: 'OPPORTUNITY_SCOUT' });
   });
 
-  it('does not reopen the deteriorated confirmed-reversal route', () => {
+  it('admits a strong confirmed reversal at five-of-six consensus with a 0.20 research ceiling', () => {
+    expect(evaluatePaperOpportunityScout(reversalBase)).toEqual({
+      eligible: true,
+      reason: 'CONFIRMED_REVERSAL_SCOUT',
+      lotUpperBound: 0.2,
+      sizingTier: 'RESEARCH',
+      mode: 'BASE',
+      targetWindowMinutes: 30,
+      idleMinutes: null,
+    });
+  });
+
+  it('admits an exceptional four-of-six confirmed reversal only at the micro ceiling', () => {
     expect(
       evaluatePaperOpportunityScout({
-        ...base,
-        strategyRoute: 'CONFIRMED_REVERSAL',
-        regime: 'REVERSAL_CONFIRMED',
+        ...reversalBase,
         confidence: 0.72,
-        consensusPassed: 6,
-        netExpectedR: 0.3,
+        consensusPassed: 4,
+        netExpectedR: 0.2,
+        directionQuality: 0.45,
+        tradeQuality: 0.45,
+        exitQuality: 0.45,
+        alignedMomentumAtr: 0.9,
+        driftState: 'NORMAL',
       }),
-    ).toMatchObject({ eligible: false, reason: 'ROUTE_NOT_SCOUTABLE' });
+    ).toEqual({
+      eligible: true,
+      reason: 'CONFIRMED_REVERSAL_MICRO_SCOUT',
+      lotUpperBound: 0.1,
+      sizingTier: 'RESEARCH',
+      mode: 'BASE',
+      targetWindowMinutes: 30,
+      idleMinutes: null,
+    });
+  });
+
+  it('keeps weak confirmed reversals shadow-only when consensus falls below four', () => {
+    expect(
+      evaluatePaperOpportunityScout({ ...reversalBase, consensusPassed: 3 }),
+    ).toMatchObject({ eligible: false, reason: 'CONSENSUS_TOO_LOW' });
+  });
+
+  it('keeps out-of-distribution confirmed reversals shadow-only', () => {
+    expect(
+      evaluatePaperOpportunityScout({ ...reversalBase, driftState: 'OUT_OF_DISTRIBUTION' }),
+    ).toMatchObject({ eligible: false, reason: 'DRIFT_EVIDENCE_TOO_WEAK' });
+  });
+
+  it('requires confirmed-reversal momentum to remain inside the authoritative band', () => {
+    expect(
+      evaluatePaperOpportunityScout({ ...reversalBase, alignedMomentumAtr: 0.49 }),
+    ).toMatchObject({ eligible: false, reason: 'MOMENTUM_NOT_CONFIRMED' });
+    expect(
+      evaluatePaperOpportunityScout({ ...reversalBase, alignedMomentumAtr: 1.51 }),
+    ).toMatchObject({ eligible: false, reason: 'MOMENTUM_NOT_CONFIRMED' });
+  });
+
+  it('requires premium evidence for the four-vote reversal micro scout', () => {
+    const premium = {
+      ...reversalBase,
+      confidence: 0.72,
+      consensusPassed: 4,
+      netExpectedR: 0.2,
+      directionQuality: 0.45,
+      tradeQuality: 0.45,
+      exitQuality: 0.45,
+      alignedMomentumAtr: 0.9,
+      driftState: 'NORMAL' as const,
+    };
+
+    expect(evaluatePaperOpportunityScout({ ...premium, confidence: 0.69 })).toMatchObject({
+      eligible: false,
+      reason: 'CONFIDENCE_TOO_LOW',
+    });
+    expect(evaluatePaperOpportunityScout({ ...premium, netExpectedR: 0.17 })).toMatchObject({
+      eligible: false,
+      reason: 'NET_EXPECTED_R_TOO_LOW',
+    });
+    expect(evaluatePaperOpportunityScout({ ...premium, driftState: 'STRESSED' })).toMatchObject({
+      eligible: false,
+      reason: 'DRIFT_EVIDENCE_TOO_WEAK',
+    });
+    expect(evaluatePaperOpportunityScout({ ...premium, tradeQuality: 0.39 })).toMatchObject({
+      eligible: false,
+      reason: 'QUALITY_TOO_LOW',
+    });
+    expect(evaluatePaperOpportunityScout({ ...premium, alignedMomentumAtr: 0.59 })).toMatchObject({
+      eligible: false,
+      reason: 'MOMENTUM_NOT_CONFIRMED',
+    });
+    expect(evaluatePaperOpportunityScout({ ...premium, alignedMomentumAtr: 1.21 })).toMatchObject({
+      eligible: false,
+      reason: 'MOMENTUM_NOT_CONFIRMED',
+    });
+  });
+
+  it('preserves event, execution-cost and portfolio hard vetoes for reversal scouts', () => {
+    expect(
+      evaluatePaperOpportunityScout({ ...reversalBase, eventRisk: 'UNVERIFIED' }),
+    ).toMatchObject({ eligible: false, reason: 'EVENT_RISK_NOT_CLEAR' });
+    expect(
+      evaluatePaperOpportunityScout({ ...reversalBase, paperExecutionCostUsable: false }),
+    ).toMatchObject({ eligible: false, reason: 'EXECUTION_COST_UNUSABLE' });
+    expect(
+      evaluatePaperOpportunityScout({ ...reversalBase, portfolioQuality: 0.34 }),
+    ).toMatchObject({ eligible: false, reason: 'PORTFOLIO_QUALITY_TOO_LOW' });
   });
 
   it('requires real positive economics and hard safety evidence at every idle tier', () => {
@@ -465,8 +574,8 @@ describe('PAPER opportunity scout', () => {
       expect(
         evaluatePaperOpportunityScout({
           ...common,
-          strategyRoute: 'CONFIRMED_REVERSAL',
-          regime: 'REVERSAL_CONFIRMED',
+          strategyRoute: 'EARLY_TRANSITION',
+          regime: 'TRANSITION_EARLY',
         }),
       ).toMatchObject({ eligible: false, reason: 'ROUTE_NOT_SCOUTABLE' });
       expect(evaluatePaperOpportunityScout({ ...common, eventRisk: 'UNVERIFIED' })).toMatchObject({
@@ -595,8 +704,8 @@ describe('PAPER opportunity scout', () => {
         evaluatePaperOpportunityScout({
           ...base,
           direction: 'SELL',
-          strategyRoute: 'CONFIRMED_REVERSAL',
-          regime: 'REVERSAL_CONFIRMED',
+          strategyRoute: 'EARLY_TRANSITION',
+          regime: 'TRANSITION_EARLY',
           championDirectionPrior: supportedPrior,
         }),
       ).toMatchObject({ eligible: false, reason: 'ROUTE_NOT_SCOUTABLE', mode: 'BASE' });

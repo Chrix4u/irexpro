@@ -207,7 +207,16 @@ import {
 const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 
-export function paperOpportunityScoutModelVersion(engineCode: string): string {
+export function paperOpportunityScoutModelVersion(
+  engineCode: string,
+  reason?: PaperOpportunityScoutDecision['reason'] | null,
+): string {
+  if (
+    reason === 'CONFIRMED_REVERSAL_SCOUT' ||
+    reason === 'CONFIRMED_REVERSAL_MICRO_SCOUT'
+  ) {
+    return `external-provider/${engineCode}/paper-opportunity-scout-v11-confirmed-reversal-adaptive-0.20-0.10-tier`;
+  }
   return `external-provider/${engineCode}/paper-opportunity-scout-v10-local-edge-shadow-quarantine-0.10-tier`;
 }
 
@@ -3086,7 +3095,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         }
 
         const scoutModelVersion = paperOpportunityScout.eligible
-          ? paperOpportunityScoutModelVersion(ACTIVE_ENGINE_CODE)
+          ? paperOpportunityScoutModelVersion(ACTIVE_ENGINE_CODE, paperOpportunityScout.reason)
           : null;
         let paperScoutRealisedPayoff: PaperScoutRealisedPayoffDecision | null = null;
         if (scoutModelVersion) {

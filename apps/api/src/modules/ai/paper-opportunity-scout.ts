@@ -30,6 +30,20 @@ export const PAPER_SHADOW_PULSE_SCOUT_MIN_ALIGNED_MOMENTUM_ATR = 0.1;
 export const PAPER_SHADOW_PULSE_SCOUT_MIN_WEIGHTED_R = 0.25;
 export const PAPER_SHADOW_PULSE_SCOUT_MIN_ADVANTAGE_R = 0.75;
 export const PAPER_SHADOW_PULSE_SCOUT_MIN_PULSE_QUALITY = 0.68;
+export const PAPER_CONFIRMED_REVERSAL_SCOUT_LOT_CAP = 0.2;
+export const PAPER_CONFIRMED_REVERSAL_MICRO_SCOUT_LOT_CAP = 0.1;
+export const PAPER_CONFIRMED_REVERSAL_SCOUT_MIN_CONFIDENCE = 0.64;
+export const PAPER_CONFIRMED_REVERSAL_SCOUT_MIN_CONSENSUS = 5;
+export const PAPER_CONFIRMED_REVERSAL_SCOUT_MIN_NET_EXPECTED_R = 0.1;
+export const PAPER_CONFIRMED_REVERSAL_SCOUT_MIN_QUALITY = 0.35;
+export const PAPER_CONFIRMED_REVERSAL_SCOUT_MIN_MOMENTUM_ATR = 0.5;
+export const PAPER_CONFIRMED_REVERSAL_SCOUT_MAX_MOMENTUM_ATR = 1.5;
+export const PAPER_CONFIRMED_REVERSAL_MICRO_MIN_CONFIDENCE = 0.7;
+export const PAPER_CONFIRMED_REVERSAL_MICRO_MIN_CONSENSUS = 4;
+export const PAPER_CONFIRMED_REVERSAL_MICRO_MIN_NET_EXPECTED_R = 0.18;
+export const PAPER_CONFIRMED_REVERSAL_MICRO_MIN_QUALITY = 0.4;
+export const PAPER_CONFIRMED_REVERSAL_MICRO_MIN_MOMENTUM_ATR = 0.6;
+export const PAPER_CONFIRMED_REVERSAL_MICRO_MAX_MOMENTUM_ATR = 1.2;
 
 export type PaperOpportunityScoutMode = 'BASE' | 'ACTIVE' | 'RECOVERY' | 'CHAMPION_DIRECTION';
 
@@ -78,6 +92,8 @@ export interface PaperOpportunityScoutInput {
 
 export type PaperOpportunityScoutReason =
   | 'OPPORTUNITY_SCOUT'
+  | 'CONFIRMED_REVERSAL_SCOUT'
+  | 'CONFIRMED_REVERSAL_MICRO_SCOUT'
   | 'CALIBRATED_OOD_SCOUT'
   | 'SHADOW_PULSE_SCOUT'
   | 'CHAMPION_DIRECTION_SCOUT'
@@ -221,8 +237,20 @@ export function evaluatePaperOpportunityScout(
   const reject = (reason: PaperOpportunityScoutReason) => decision(policy, false, reason);
 
   if (input.normalPaperExecution) return reject('FULL_SIZE_ALREADY_ELIGIBLE');
-  if (input.strategyRoute !== 'TREND_CONTINUATION') return reject('ROUTE_NOT_SCOUTABLE');
-  if (!['TREND_HEALTHY', 'TREND_EXTENDED', 'TREND_WEAK'].includes(input.regime))
+  if (
+    input.strategyRoute !== 'TREND_CONTINUATION' &&
+    input.strategyRoute !== 'CONFIRMED_REVERSAL'
+  )
+    return reject('ROUTE_NOT_SCOUTABLE');
+  if (
+    input.strategyRoute === 'TREND_CONTINUATION' &&
+    !['TREND_HEALTHY', 'TREND_EXTENDED', 'TREND_WEAK'].includes(input.regime)
+  )
+    return reject('REGIME_NOT_SCOUTABLE');
+  if (
+    input.strategyRoute === 'CONFIRMED_REVERSAL' &&
+    input.regime !== 'REVERSAL_CONFIRMED'
+  )
     return reject('REGIME_NOT_SCOUTABLE');
   if (input.eventRisk !== 'CLEAR') return reject('EVENT_RISK_NOT_CLEAR');
   if (!input.paperExecutionCostUsable) return reject('EXECUTION_COST_UNUSABLE');
@@ -231,6 +259,75 @@ export function evaluatePaperOpportunityScout(
     input.portfolioQuality < PAPER_OPPORTUNITY_SCOUT_MIN_PORTFOLIO_QUALITY
   )
     return reject('PORTFOLIO_QUALITY_TOO_LOW');
+
+  if (input.strategyRoute === 'CONFIRMED_REVERSAL') {
+    if (input.driftState === 'OUT_OF_DISTRIBUTION') return reject('DRIFT_EVIDENCE_TOO_WEAK');
+    if (
+      !Number.isFinite(input.confidence) ||
+      input.confidence < PAPER_CONFIRMED_REVERSAL_SCOUT_MIN_CONFIDENCE
+    )
+      return reject('CONFIDENCE_TOO_LOW');
+    if (
+      !Number.isFinite(input.alignedMomentumAtr) ||
+      input.alignedMomentumAtr < PAPER_CONFIRMED_REVERSAL_SCOUT_MIN_MOMENTUM_ATR ||
+      input.alignedMomentumAtr > PAPER_CONFIRMED_REVERSAL_SCOUT_MAX_MOMENTUM_ATR
+    )
+      return reject('MOMENTUM_NOT_CONFIRMED');
+    if (
+      input.consensusRequired <= 0 ||
+      !Number.isFinite(input.consensusPassed) ||
+      input.consensusPassed < PAPER_CONFIRMED_REVERSAL_MICRO_MIN_CONSENSUS
+    )
+      return reject('CONSENSUS_TOO_LOW');
+
+    if (input.consensusPassed >= PAPER_CONFIRMED_REVERSAL_SCOUT_MIN_CONSENSUS) {
+      if (
+        !Number.isFinite(input.netExpectedR) ||
+        input.netExpectedR < PAPER_CONFIRMED_REVERSAL_SCOUT_MIN_NET_EXPECTED_R
+      )
+        return reject('NET_EXPECTED_R_TOO_LOW');
+      if (
+        [input.directionQuality, input.tradeQuality, input.exitQuality].some(
+          (value) => !Number.isFinite(value) || value < PAPER_CONFIRMED_REVERSAL_SCOUT_MIN_QUALITY,
+        )
+      )
+        return reject('QUALITY_TOO_LOW');
+      return decision(
+        policy,
+        true,
+        'CONFIRMED_REVERSAL_SCOUT',
+        PAPER_CONFIRMED_REVERSAL_SCOUT_LOT_CAP,
+      );
+    }
+
+    if (input.driftState !== 'NORMAL') return reject('DRIFT_EVIDENCE_TOO_WEAK');
+    if (
+      input.confidence < PAPER_CONFIRMED_REVERSAL_MICRO_MIN_CONFIDENCE
+    )
+      return reject('CONFIDENCE_TOO_LOW');
+    if (
+      !Number.isFinite(input.netExpectedR) ||
+      input.netExpectedR < PAPER_CONFIRMED_REVERSAL_MICRO_MIN_NET_EXPECTED_R
+    )
+      return reject('NET_EXPECTED_R_TOO_LOW');
+    if (
+      [input.directionQuality, input.tradeQuality, input.exitQuality].some(
+        (value) => !Number.isFinite(value) || value < PAPER_CONFIRMED_REVERSAL_MICRO_MIN_QUALITY,
+      )
+    )
+      return reject('QUALITY_TOO_LOW');
+    if (
+      input.alignedMomentumAtr < PAPER_CONFIRMED_REVERSAL_MICRO_MIN_MOMENTUM_ATR ||
+      input.alignedMomentumAtr > PAPER_CONFIRMED_REVERSAL_MICRO_MAX_MOMENTUM_ATR
+    )
+      return reject('MOMENTUM_NOT_CONFIRMED');
+    return decision(
+      policy,
+      true,
+      'CONFIRMED_REVERSAL_MICRO_SCOUT',
+      PAPER_CONFIRMED_REVERSAL_MICRO_SCOUT_LOT_CAP,
+    );
+  }
 
   const provisionalLocalPocket =
     input.shadowLocalEdgePocket != null &&
