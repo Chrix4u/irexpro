@@ -130,6 +130,9 @@ export const M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT =
 export const M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES = 3;
 export const M1_MULTIMODEL_LOSS_STREAK_WINDOW_HOURS = 24;
 export const M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS = 12;
+export const M1_MULTIMODEL_PAYOFF_WINDOW_TRADES = 8;
+export const M1_MULTIMODEL_NEGATIVE_PAYOFF_MIN_TRADES = 5;
+export const M1_MULTIMODEL_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR = 0.7;
 
 export type M1MultimodelStrategyRoute =
   | 'TREND_CONTINUATION'
@@ -148,12 +151,14 @@ export interface M1MultimodelLossStreakBrakeQuery {
 export interface M1MultimodelLossStreakBrakeDecision {
   artifact: typeof M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT;
   active: boolean;
-  reason: 'CLEAR' | 'RECENT_MULTIMODEL_LOSS_STREAK';
+  reason: 'CLEAR' | 'RECENT_MULTIMODEL_LOSS_STREAK' | 'RECENT_NEGATIVE_PAYOFF';
   strategyRoute: M1MultimodelStrategyRoute;
   recentClosedTrades: number;
   recentLosses: number;
   recentWins: number;
   cumulativeRealisedPnl: number;
+  profitFactor?: number | null;
+  negativePayoff?: boolean;
   latestClosedAt: Date | null;
   cooldownHours: number;
   cooldownRemainingSeconds: number;
@@ -719,7 +724,7 @@ export class M1TacticalEvidenceService {
           AND t.closed_at <= $6::timestamptz
           AND t.closed_at > ($6::timestamptz - interval '24 hours')
         ORDER BY t.closed_at DESC
-        LIMIT 3
+        LIMIT ${M1_MULTIMODEL_PAYOFF_WINDOW_TRADES}
       `,
       [
         input.userId,
@@ -736,6 +741,18 @@ export class M1TacticalEvidenceService {
     const recentWins = pnlValues.filter((value) => value > 0).length;
     const cumulativeRealisedPnl =
       Math.round(pnlValues.reduce((sum, value) => sum + value, 0) * 100) / 100;
+    const grossProfit = pnlValues
+      .filter((value) => value > 0)
+      .reduce((sum, value) => sum + value, 0);
+    const grossLoss = -pnlValues
+      .filter((value) => value < 0)
+      .reduce((sum, value) => sum + value, 0);
+    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? null : 0;
+    const negativePayoff =
+      rows.length >= M1_MULTIMODEL_NEGATIVE_PAYOFF_MIN_TRADES &&
+      cumulativeRealisedPnl < 0 &&
+      profitFactor !== null &&
+      profitFactor < M1_MULTIMODEL_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR;
     const latestClosedAt = rows[0] ? date(rows[0].closed_at) : null;
     const cooldownUntilMs = latestClosedAt
       ? latestClosedAt.getTime() + M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS * 60 * 60_000
@@ -743,20 +760,28 @@ export class M1TacticalEvidenceService {
     const cooldownRemainingSeconds = latestClosedAt
       ? Math.max(0, Math.ceil((cooldownUntilMs - input.evaluatedAt.getTime()) / 1000))
       : 0;
+    const latestThree = pnlValues.slice(0, M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES);
     const lossStreak =
-      rows.length === M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES &&
-      recentLosses === M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES;
-    const active = lossStreak && cooldownRemainingSeconds > 0;
+      latestThree.length === M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES &&
+      latestThree.every((value) => value < 0);
+    const active = (lossStreak || negativePayoff) && cooldownRemainingSeconds > 0;
+    const reason: M1MultimodelLossStreakBrakeDecision['reason'] = !active
+      ? 'CLEAR'
+      : lossStreak
+        ? 'RECENT_MULTIMODEL_LOSS_STREAK'
+        : 'RECENT_NEGATIVE_PAYOFF';
 
     return {
       artifact: M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT,
       active,
-      reason: active ? 'RECENT_MULTIMODEL_LOSS_STREAK' : 'CLEAR',
+      reason,
       strategyRoute: input.strategyRoute,
       recentClosedTrades: rows.length,
       recentLosses,
       recentWins,
       cumulativeRealisedPnl,
+      profitFactor,
+      negativePayoff,
       latestClosedAt,
       cooldownHours: M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS,
       cooldownRemainingSeconds,

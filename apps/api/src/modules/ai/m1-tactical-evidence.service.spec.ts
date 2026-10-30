@@ -439,7 +439,7 @@ describe('M1TacticalEvidenceService', () => {
     expect(normalized).toContain("t.status = 'CLOSED'");
     expect(normalized).toContain("t.closed_at > ($6::timestamptz - interval '24 hours')");
     expect(normalized).toContain('ORDER BY t.closed_at DESC');
-    expect(normalized).toContain('LIMIT 3');
+    expect(normalized).toContain('LIMIT 8');
     expect(params).toEqual([
       input().userId,
       input().brokerConnectionId,
@@ -448,6 +448,96 @@ describe('M1TacticalEvidenceService', () => {
       'CONFIRMED_REVERSAL',
       evaluatedAt.toISOString(),
     ]);
+  });
+
+  it('activates the exact pair-side-route brake when recent payoff is negative despite interspersed wins', async () => {
+    const query = jest.fn().mockResolvedValue([
+      { realised_pnl: '-8.00', closed_at: '2026-10-30T08:00:00.000Z' },
+      { realised_pnl: '2.00', closed_at: '2026-10-30T07:00:00.000Z' },
+      { realised_pnl: '-7.00', closed_at: '2026-10-30T06:00:00.000Z' },
+      { realised_pnl: '1.50', closed_at: '2026-10-30T05:00:00.000Z' },
+      { realised_pnl: '-6.00', closed_at: '2026-10-30T04:00:00.000Z' },
+      { realised_pnl: '2.50', closed_at: '2026-10-30T03:00:00.000Z' },
+      { realised_pnl: '-5.00', closed_at: '2026-10-30T02:00:00.000Z' },
+      { realised_pnl: '1.00', closed_at: '2026-10-30T01:00:00.000Z' },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const result = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      strategyRoute: 'TREND_CONTINUATION',
+      evaluatedAt: new Date('2026-10-30T08:05:00.000Z'),
+    });
+
+    expect(result).toMatchObject({
+      active: true,
+      reason: 'RECENT_NEGATIVE_PAYOFF',
+      recentClosedTrades: 8,
+      recentLosses: 4,
+      recentWins: 4,
+      cumulativeRealisedPnl: -19,
+      negativePayoff: true,
+    });
+    expect(result.profitFactor).toBeCloseTo(7 / 26, 8);
+    expect(String(query.mock.calls[0]![0]).replace(/\s+/g, ' ')).toContain('LIMIT 8');
+  });
+
+  it('keeps a mixed but profitable exact sleeve clear', async () => {
+    const query = jest.fn().mockResolvedValue([
+      { realised_pnl: '6.00', closed_at: '2026-10-30T08:00:00.000Z' },
+      { realised_pnl: '-3.00', closed_at: '2026-10-30T07:00:00.000Z' },
+      { realised_pnl: '5.00', closed_at: '2026-10-30T06:00:00.000Z' },
+      { realised_pnl: '-2.00', closed_at: '2026-10-30T05:00:00.000Z' },
+      { realised_pnl: '4.00', closed_at: '2026-10-30T04:00:00.000Z' },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    await expect(
+      service.loadMultimodelLossStreakBrake({
+        userId: input().userId,
+        brokerConnectionId: input().brokerConnectionId,
+        instrument: 'AUDUSD',
+        direction: 'BUY',
+        strategyRoute: 'TREND_CONTINUATION',
+        evaluatedAt: new Date('2026-10-30T08:05:00.000Z'),
+      }),
+    ).resolves.toMatchObject({ active: false, reason: 'CLEAR', negativePayoff: false });
+  });
+
+  it('requires at least five mixed outcomes and expires negative-payoff suspension after cooldown', async () => {
+    const rows = [
+      { realised_pnl: '-8.00', closed_at: '2026-10-29T18:00:00.000Z' },
+      { realised_pnl: '1.00', closed_at: '2026-10-29T17:00:00.000Z' },
+      { realised_pnl: '-7.00', closed_at: '2026-10-29T16:00:00.000Z' },
+      { realised_pnl: '1.00', closed_at: '2026-10-29T15:00:00.000Z' },
+      { realised_pnl: '-6.00', closed_at: '2026-10-29T14:00:00.000Z' },
+    ];
+    const query = jest.fn().mockResolvedValue(rows);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const expired = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      strategyRoute: 'TREND_CONTINUATION',
+      evaluatedAt: new Date('2026-10-30T07:00:01.000Z'),
+    });
+    expect(expired).toMatchObject({ active: false, reason: 'CLEAR', negativePayoff: true });
+
+    query.mockResolvedValue(rows.slice(0, 4));
+    const sparse = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      strategyRoute: 'TREND_CONTINUATION',
+      evaluatedAt: new Date('2026-10-29T18:05:00.000Z'),
+    });
+    expect(sparse).toMatchObject({ active: false, reason: 'CLEAR', negativePayoff: false });
   });
 
   it('marks signal/trade-intent linkage without changing decision identity', async () => {
