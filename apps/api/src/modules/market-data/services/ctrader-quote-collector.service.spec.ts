@@ -21,7 +21,13 @@ function config(overrides: Record<string, unknown> = {}) {
   } as unknown as ConfigService;
 }
 
-function harness(options: { brokerId?: string; status?: BrokerConnectionStatus } = {}) {
+function harness(
+  options: {
+    brokerId?: string;
+    status?: BrokerConnectionStatus;
+    quoteTimestamp?: Date;
+  } = {},
+) {
   const findConnectionById = jest.fn().mockResolvedValue({
     id: 'ctrader-1',
     userId: 'user-1',
@@ -43,7 +49,7 @@ function harness(options: { brokerId?: string; status?: BrokerConnectionStatus }
     bid: '1.10000',
     ask: '1.10008',
     spread: '0.00008',
-    timestamp: new Date('2026-10-18T21:30:10.000Z'),
+    timestamp: options.quoteTimestamp ?? new Date('2026-10-18T21:30:10.000Z'),
   }));
   const broker = {
     findConnectionById,
@@ -109,6 +115,33 @@ describe('CTraderQuoteCollectorService', () => {
     expect(h.upsertM1Sample).toHaveBeenCalledTimes(6);
     expect(h.getOhlcvForConnection).not.toHaveBeenCalled();
     expect(h.upsertHistoricalCandles).not.toHaveBeenCalled();
+  });
+
+  it('rejects stale provider spot timestamps instead of rewriting an old M1 spread bucket', async () => {
+    const h = harness({ quoteTimestamp: new Date(OPEN_NOW.getTime() - 6 * 60_000) });
+
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+
+    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(6);
+    expect(h.upsertM1Sample).not.toHaveBeenCalled();
+  });
+
+  it('accepts provider spot timestamps inside the execution-spread freshness window', async () => {
+    const h = harness({ quoteTimestamp: new Date(OPEN_NOW.getTime() - 4 * 60_000) });
+
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+
+    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(6);
+    expect(h.upsertM1Sample).toHaveBeenCalledTimes(6);
+  });
+
+  it('rejects provider spot timestamps materially ahead of the collector clock', async () => {
+    const h = harness({ quoteTimestamp: new Date(OPEN_NOW.getTime() + 6_000) });
+
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+
+    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(6);
+    expect(h.upsertM1Sample).not.toHaveBeenCalled();
   });
 
   it('refreshes sixty recent M1 broker bars after the durable store is warm', async () => {

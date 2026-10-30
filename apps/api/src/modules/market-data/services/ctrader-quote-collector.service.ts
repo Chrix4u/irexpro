@@ -13,6 +13,8 @@ const MAX_INTERVAL_MS = 300_000;
 const DEFAULT_LIVE_QUOTE_INTERVAL_MS = 1_000;
 const MIN_LIVE_QUOTE_INTERVAL_MS = 500;
 const MAX_LIVE_QUOTE_INTERVAL_MS = 10_000;
+const EXECUTION_SPREAD_MAX_AGE_MS = 5 * 60_000;
+const MAX_PROVIDER_CLOCK_AHEAD_MS = 5_000;
 const DEFAULT_INSTRUMENTS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'];
 const M1_WARM_TARGET = 600;
 const M1_REFRESH_COUNT = 60;
@@ -100,7 +102,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       // Execution-grade bid/ask evidence has priority over historical backfill.
       // A slow/rate-limited OHLCV request must never starve fresh quote samples
       // used by M1 readiness, cross-currency sizing and final risk validation.
-      await this.sampleLiveSpreads(userId, connectionId);
+      await this.sampleLiveSpreads(userId, connectionId, now);
       await this.refreshHistoricalSlice(userId, connectionId, now);
     } catch (error) {
       this.warnThrottled(
@@ -123,7 +125,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       const connection = await this.brokerService.findConnectionById(connectionId, userId);
       if (!CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId)) return;
       if (connection.status !== BrokerConnectionStatus.CONNECTED) return;
-      await this.sampleLiveSpreads(userId, connectionId);
+      await this.sampleLiveSpreads(userId, connectionId, now);
     } catch (error) {
       this.warnThrottled(
         `${connectionId}:live-quote`,
@@ -246,7 +248,12 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     });
   }
 
-  private async sampleLiveSpreads(userId: string, connectionId: string): Promise<void> {
+  private async sampleLiveSpreads(
+    userId: string,
+    connectionId: string,
+    now: Date,
+  ): Promise<void> {
+    const collectorNowMs = now.getTime();
     await Promise.all(
       this.instruments().map(async (instrument) => {
         try {
@@ -256,14 +263,32 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
             instrument,
             { propagateProviderError: true },
           );
-          if (quote) {
-            await this.store.upsertM1Sample(
-              connectionId,
-              instrument,
-              quote,
-              'ctrader-broker-native',
+          if (!quote) return;
+
+          const providerTimestampMs = new Date(quote.timestamp).getTime();
+          const ageMs = collectorNowMs - providerTimestampMs;
+          if (
+            !Number.isFinite(providerTimestampMs) ||
+            !Number.isFinite(collectorNowMs) ||
+            ageMs > EXECUTION_SPREAD_MAX_AGE_MS ||
+            ageMs < -MAX_PROVIDER_CLOCK_AHEAD_MS
+          ) {
+            const ageSeconds = Number.isFinite(ageMs) ? Math.round(ageMs / 1_000) : null;
+            this.warnThrottled(
+              `${connectionId}:${instrument}:stale-quote`,
+              `cTrader live quote rejected connection=${connectionId} instrument=${instrument} ` +
+                `providerTimestamp=${new Date(quote.timestamp).toISOString()} ` +
+                `ageSeconds=${ageSeconds ?? 'INVALID'}; execution spread remains fail-closed.`,
             );
+            return;
           }
+
+          await this.store.upsertM1Sample(
+            connectionId,
+            instrument,
+            quote,
+            'ctrader-broker-native',
+          );
         } catch (error) {
           this.warnThrottled(
             `${connectionId}:${instrument}:quote`,
