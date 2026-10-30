@@ -7,6 +7,90 @@ import { evaluatePaperProfitLock } from '../../broker/adapters/paper-broker.adap
 
 const LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS = 5_000;
 
+export interface LiveDemoM1AdverseEvidence {
+  completedBars: number;
+  adverseBars: number;
+  alignedLatestBodyPressure: number;
+  alignedMomentum3: number;
+  latestAgeSeconds: number;
+}
+
+export interface LiveDemoAdverseProtectionDecision {
+  shouldClose: boolean;
+  reason:
+    | 'TOO_EARLY'
+    | 'INVALID_RISK'
+    | 'PROFIT_PROTECTION_OWNS_TRADE'
+    | 'NOT_ADVERSE'
+    | 'M1_EVIDENCE_UNAVAILABLE'
+    | 'RECOVERY_FORMING'
+    | 'ADVERSE_THESIS_FAILED'
+    | 'EMERGENCY_ADVERSE_CUT'
+    | 'HOLD';
+  currentR: number | null;
+}
+
+/**
+ * DEMO-only adverse-thesis guard.
+ *
+ * Broker SL remains the hard backstop. This guard only acts after at least one
+ * completed broker-native M1 candle confirms that a materially losing trade is
+ * still moving against its entry thesis. A trade that already armed the
+ * profit-lock is owned by profit protection instead, preventing competing exit
+ * authorities.
+ */
+export function evaluateLiveDemoAdverseProtection(input: {
+  elapsedMinutes: number;
+  currentPnl: number;
+  initialRiskPnl: number;
+  maxFavorablePnl: number;
+  profitLockArmed: boolean;
+  m1Evidence: LiveDemoM1AdverseEvidence | null;
+}): LiveDemoAdverseProtectionDecision {
+  const hold = (
+    reason: LiveDemoAdverseProtectionDecision['reason'],
+    currentR: number | null,
+  ): LiveDemoAdverseProtectionDecision => ({ shouldClose: false, reason, currentR });
+  if (!Number.isFinite(input.initialRiskPnl) || input.initialRiskPnl <= 0) {
+    return hold('INVALID_RISK', null);
+  }
+  const currentR = input.currentPnl / input.initialRiskPnl;
+  if (!Number.isFinite(input.elapsedMinutes) || input.elapsedMinutes < 1) {
+    return hold('TOO_EARLY', currentR);
+  }
+  if (input.profitLockArmed) return hold('PROFIT_PROTECTION_OWNS_TRADE', currentR);
+  if (currentR >= 0) return hold('NOT_ADVERSE', currentR);
+
+  const evidence = input.m1Evidence;
+  if (
+    !evidence ||
+    evidence.completedBars < 1 ||
+    evidence.latestAgeSeconds < 0 ||
+    evidence.latestAgeSeconds > 90
+  ) {
+    return hold('M1_EVIDENCE_UNAVAILABLE', currentR);
+  }
+
+  if (evidence.alignedLatestBodyPressure > 0.2 && evidence.alignedMomentum3 >= 0) {
+    return hold('RECOVERY_FORMING', currentR);
+  }
+
+  const favorableR = Math.max(0, input.maxFavorablePnl) / input.initialRiskPnl;
+  const latestStillOpposing = evidence.alignedLatestBodyPressure <= -0.35;
+  const persistentOpposition =
+    evidence.completedBars >= 2 &&
+    evidence.adverseBars >= Math.min(2, evidence.completedBars) &&
+    evidence.alignedMomentum3 <= -0.15;
+
+  if (currentR <= -0.65 && favorableR < 0.15 && latestStillOpposing) {
+    return { shouldClose: true, reason: 'EMERGENCY_ADVERSE_CUT', currentR };
+  }
+  if (currentR <= -0.45 && favorableR < 0.15 && latestStillOpposing && persistentOpposition) {
+    return { shouldClose: true, reason: 'ADVERSE_THESIS_FAILED', currentR };
+  }
+  return hold('HOLD', currentR);
+}
+
 interface OpenAiTradeRow {
   trade_id: string;
   user_id: string;
@@ -21,6 +105,7 @@ interface OpenAiTradeRow {
   path_observation_count: string | number | null;
   path_peak_observed_at: Date | string | null;
   initial_risk_pnl: string | number | null;
+  opened_at: Date | string | null;
   is_m1_strategy: boolean;
 }
 
@@ -56,10 +141,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     if (process.env.NODE_ENV === 'test') return;
     const initial = setTimeout(() => void this.runOnce(), 2_000);
     initial.unref?.();
-    this.timer = setInterval(
-      () => void this.runOnce(),
-      LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS,
-    );
+    this.timer = setInterval(() => void this.runOnce(), LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS);
     this.timer.unref?.();
     this.logger.log(
       `cTrader DEMO profit protection enabled cadence=${LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS / 1000}s authority=PROFIT_PROTECTION LIVE=false`,
@@ -140,17 +222,43 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               initialRiskPnl: money(initialRisk),
               isM1Strategy: trade.is_m1_strategy,
             });
-            if (!decision.shouldClose) continue;
+            if (decision.shouldClose) {
+              this.logger.warn(
+                `cTrader DEMO PROFIT_PROTECTION trade=${trade.trade_id} ${trade.instrument} ${trade.direction} ` +
+                  `peak=${money(maxFavorablePnl)} current=${money(currentPnl)} risk=${money(initialRisk)} ` +
+                  `giveback=${money(profitGiveback)} floor=${decision.protectedFloorPnl} retain=${decision.retentionFraction}`,
+              );
+              await this.executionService.closeTrade(
+                trade.trade_id,
+                trade.user_id,
+                TradeCloseReason.PROFIT_PROTECTION,
+              );
+              continue;
+            }
+
+            if (currentPnl >= 0 || !trade.opened_at) continue;
+            const openedAt = new Date(trade.opened_at);
+            if (!Number.isFinite(openedAt.getTime())) continue;
+            const m1Evidence = await this.loadCausalM1Evidence(trade, observedAt);
+            const adverseDecision = evaluateLiveDemoAdverseProtection({
+              elapsedMinutes: Math.max(0, (observedAt.getTime() - openedAt.getTime()) / 60_000),
+              currentPnl,
+              initialRiskPnl: initialRisk,
+              maxFavorablePnl,
+              profitLockArmed: decision.armed,
+              m1Evidence,
+            });
+            if (!adverseDecision.shouldClose) continue;
 
             this.logger.warn(
-              `cTrader DEMO PROFIT_PROTECTION trade=${trade.trade_id} ${trade.instrument} ${trade.direction} ` +
-                `peak=${money(maxFavorablePnl)} current=${money(currentPnl)} risk=${money(initialRisk)} ` +
-                `giveback=${money(profitGiveback)} floor=${decision.protectedFloorPnl} retain=${decision.retentionFraction}`,
+              `cTrader DEMO AI_CLOSE_SIGNAL trade=${trade.trade_id} ${trade.instrument} ${trade.direction} ` +
+                `reason=${adverseDecision.reason} currentR=${adverseDecision.currentR?.toFixed(3) ?? 'n/a'} ` +
+                `peak=${money(maxFavorablePnl)} current=${money(currentPnl)} risk=${money(initialRisk)}`,
             );
             await this.executionService.closeTrade(
               trade.trade_id,
               trade.user_id,
-              TradeCloseReason.PROFIT_PROTECTION,
+              TradeCloseReason.AI_CLOSE_SIGNAL,
             );
           }
         } catch (error) {
@@ -179,6 +287,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         t.profit_giveback,
         t.path_observation_count,
         t.path_peak_observed_at,
+        t.opened_at,
         COALESCE(
           NULLIF(ca.sizing_inputs->>'finalRiskAtStop', '')::numeric,
           NULLIF(ca.sizing_inputs->>'riskAmount', '')::numeric
@@ -202,6 +311,82 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         AND (t.external_position_id IS NOT NULL OR t.external_order_id IS NOT NULL)
       ORDER BY t.opened_at ASC
     `)) as OpenAiTradeRow[];
+  }
+
+  private async loadCausalM1Evidence(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+  ): Promise<LiveDemoM1AdverseEvidence | null> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT bucket_time, open, high, low, close, sample_count, source
+        FROM market_data.provider_quote_candles
+        WHERE connection_id = $1
+          AND instrument = $2
+          AND timeframe = 'M1'
+          AND source = 'ctrader-broker-native'
+          AND bucket_time + interval '1 minute' <= $3::timestamptz
+        ORDER BY bucket_time DESC
+        LIMIT 3
+      `,
+      [trade.broker_connection_id, trade.instrument.toUpperCase(), observedAt.toISOString()],
+    )) as Array<{
+      bucket_time: Date | string;
+      open: string | number;
+      high: string | number;
+      low: string | number;
+      close: string | number;
+      sample_count: string | number;
+      source: string;
+    }>;
+    if (!rows.length) return null;
+    const sign = trade.direction === 'BUY' ? 1 : -1;
+    const parsed = rows.flatMap((row) => {
+      const open = finite(row.open);
+      const high = finite(row.high);
+      const low = finite(row.low);
+      const close = finite(row.close);
+      const samples = finite(row.sample_count);
+      const bucketTime = new Date(row.bucket_time);
+      if (
+        open === null ||
+        high === null ||
+        low === null ||
+        close === null ||
+        samples === null ||
+        samples <= 0 ||
+        row.source !== 'ctrader-broker-native' ||
+        !Number.isFinite(bucketTime.getTime())
+      ) {
+        return [];
+      }
+      const range = Math.max(high - low, Number.EPSILON);
+      return [
+        {
+          open,
+          high,
+          low,
+          close,
+          bucketTime,
+          alignedBodyPressure: sign * ((close - open) / range),
+          range,
+        },
+      ];
+    });
+    if (!parsed.length) return null;
+    const latest = parsed[0]!;
+    const oldest = parsed[parsed.length - 1]!;
+    const totalRange = parsed.reduce((sum, row) => sum + row.range, 0);
+    const alignedMomentum3 =
+      totalRange > 0 ? sign * ((latest.close - oldest.open) / totalRange) : 0;
+    const latestCloseAt = latest.bucketTime.getTime() + 60_000;
+    return {
+      completedBars: parsed.length,
+      adverseBars: parsed.filter((row) => row.alignedBodyPressure <= -0.15).length,
+      alignedLatestBodyPressure: latest.alignedBodyPressure,
+      alignedMomentum3,
+      latestAgeSeconds: (observedAt.getTime() - latestCloseAt) / 1000,
+    };
   }
 
   private async persistTelemetry(input: {
