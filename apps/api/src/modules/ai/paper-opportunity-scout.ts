@@ -334,7 +334,12 @@ export function evaluatePaperOpportunityScout(
     const idleWindowReached =
       policy.mode === 'CHAMPION_DIRECTION' ||
       (policy.idleMinutes !== null && policy.idleMinutes >= 30);
-    const hasHardMtfDisagreement = (input.driftDiagnostics ?? []).includes('mtfStrength:HARD_LOW');
+    const driftDiagnostics = input.driftDiagnostics ?? [];
+    const confidenceOnlyOod =
+      idleWindowReached &&
+      driftDiagnostics.length === 1 &&
+      driftDiagnostics[0] === 'confidence:HARD_LOW';
+    const hasHardMtfDisagreement = driftDiagnostics.includes('mtfStrength:HARD_LOW');
     const microStructureValid =
       idleWindowReached &&
       input.consensusRequired > 0 &&
@@ -350,7 +355,7 @@ export function evaluatePaperOpportunityScout(
     const momentumConfirmed =
       Number.isFinite(input.alignedMomentumAtr) && input.alignedMomentumAtr >= 0.05;
 
-    if (idleWindowReached && input.calibration && !localCalibration) {
+    if (idleWindowReached && input.calibration && !localCalibration && !confidenceOnlyOod) {
       return reject('DRIFT_EVIDENCE_TOO_WEAK');
     }
     if (localCalibration && microStructureValid && hasHardMtfDisagreement) {
@@ -391,10 +396,18 @@ export function evaluatePaperOpportunityScout(
     return reject('MOMENTUM_NOT_CONFIRMED');
 
   if (input.driftState === 'OUT_OF_DISTRIBUTION') {
-    const strongerConsensus =
-      input.consensusRequired > 0 && input.consensusPassed >= input.consensusRequired - 1;
-    if (input.confidence < 0.62 || input.netExpectedR < 0.12 || !strongerConsensus)
-      return reject('DRIFT_EVIDENCE_TOO_WEAK');
+    const driftDiagnostics = input.driftDiagnostics ?? [];
+    const confidenceOnlyIdleOod =
+      policy.idleMinutes !== null &&
+      policy.idleMinutes >= PAPER_OPPORTUNITY_SCOUT_TARGET_WINDOW_MINUTES &&
+      driftDiagnostics.length === 1 &&
+      driftDiagnostics[0] === 'confidence:HARD_LOW';
+    if (!confidenceOnlyIdleOod) {
+      const strongerConsensus =
+        input.consensusRequired > 0 && input.consensusPassed >= input.consensusRequired - 1;
+      if (input.confidence < 0.62 || input.netExpectedR < 0.12 || !strongerConsensus)
+        return reject('DRIFT_EVIDENCE_TOO_WEAK');
+    }
   }
 
   return decision(

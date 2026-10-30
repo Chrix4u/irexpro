@@ -126,6 +126,58 @@ describe('PAPER opportunity scout', () => {
     });
   });
 
+  it('lets the idle scout use its relaxed confidence floor when confidence is the only OOD diagnostic', () => {
+    expect(
+      evaluatePaperOpportunityScout({
+        ...base,
+        idleMinutes: 35,
+        driftState: 'OUT_OF_DISTRIBUTION',
+        driftDiagnostics: ['confidence:HARD_LOW'],
+        confidence: 0.59,
+        consensusPassed: 4,
+        netExpectedR: 0.07,
+        directionQuality: 0.27,
+        tradeQuality: 0.27,
+        exitQuality: 0.27,
+        alignedMomentumAtr: 0.18,
+        calibration: {
+          authoritative: false,
+          sourceLevel: 'GLOBAL',
+          maturity: 'COLLECTING',
+          samples: 4,
+          calibratedWinProbability: 0.52,
+          profitFactor: 0.9,
+          calibratedNetExpectedR: 0.01,
+          recentDegradation: false,
+          blockRecommended: false,
+        },
+      }),
+    ).toMatchObject({
+      eligible: true,
+      reason: 'OPPORTUNITY_SCOUT',
+      mode: 'ACTIVE',
+      lotUpperBound: 0.1,
+    });
+  });
+
+  it('keeps multi-feature hard OOD blocked even after the idle window', () => {
+    expect(
+      evaluatePaperOpportunityScout({
+        ...base,
+        idleMinutes: 35,
+        driftState: 'OUT_OF_DISTRIBUTION',
+        driftDiagnostics: ['confidence:HARD_LOW', 'mtfStrength:HARD_LOW'],
+        confidence: 0.59,
+        consensusPassed: 4,
+        netExpectedR: 0.07,
+        directionQuality: 0.27,
+        tradeQuality: 0.27,
+        exitQuality: 0.27,
+        alignedMomentumAtr: 0.18,
+      }),
+    ).toMatchObject({ eligible: false, reason: 'DRIFT_EVIDENCE_TOO_WEAK' });
+  });
+
   it('can scout a bounded out-of-distribution trend only with stronger evidence', () => {
     expect(
       evaluatePaperOpportunityScout({
