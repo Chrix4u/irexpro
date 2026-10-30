@@ -22,6 +22,7 @@ describe('LiveDemoProfitProtectionService', () => {
     path_observation_count: 5,
     path_peak_observed_at: new Date('2026-10-28T09:00:00.000Z'),
     initial_risk_pnl: '9.00',
+    stop_loss: '1.11250',
     opened_at: new Date('2026-10-28T09:01:00.000Z'),
     is_m1_strategy: true,
     ...overrides,
@@ -32,6 +33,7 @@ describe('LiveDemoProfitProtectionService', () => {
     currentPnl = '7.00',
     accountType = 'DEMO',
     m1Rows: Array<Record<string, unknown>> = [],
+    currentPrice = '1.11340',
   ) {
     const query = jest.fn().mockImplementation(async (sql: string) => {
       if (sql.includes('FROM trading.trades t')) return rows;
@@ -50,7 +52,7 @@ describe('LiveDemoProfitProtectionService', () => {
             direction: 'BUY',
             lotSize: '0.20',
             openPrice: '1.11300',
-            currentPrice: '1.11340',
+            currentPrice,
             stopLoss: '1.11250',
             takeProfit: '1.11380',
             unrealisedPnl: currentPnl,
@@ -146,6 +148,28 @@ describe('LiveDemoProfitProtectionService', () => {
       'trade-1',
       'user-1',
       TradeCloseReason.AI_CLOSE_SIGNAL,
+    );
+  });
+
+  it('closes a recovered DEMO position immediately when its authoritative stop was already crossed', async () => {
+    const h = harness(
+      [candidate({ max_favorable_pnl: '0.50', max_adverse_pnl: '-12.00' })],
+      '-12.00',
+      'DEMO',
+      [],
+      '1.11240',
+    );
+
+    await h.service.runOnce(new Date('2026-10-28T09:05:10.000Z'));
+
+    expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      'user-1',
+      TradeCloseReason.STOP_LOSS_HIT,
+    );
+    expect(h.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM market_data.provider_quote_candles'),
+      expect.anything(),
     );
   });
 

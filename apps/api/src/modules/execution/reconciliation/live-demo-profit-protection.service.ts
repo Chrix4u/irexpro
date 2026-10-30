@@ -105,6 +105,7 @@ interface OpenAiTradeRow {
   path_observation_count: string | number | null;
   path_peak_observed_at: Date | string | null;
   initial_risk_pnl: string | number | null;
+  stop_loss: string | number | null;
   opened_at: Date | string | null;
   is_m1_strategy: boolean;
 }
@@ -216,6 +217,27 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               observedAt,
             });
 
+            const authoritativeStop = finite(trade.stop_loss);
+            const currentPrice = finite(position.currentPrice);
+            const stopBreached =
+              authoritativeStop !== null &&
+              authoritativeStop > 0 &&
+              currentPrice !== null &&
+              ((trade.direction === 'BUY' && currentPrice <= authoritativeStop) ||
+                (trade.direction === 'SELL' && currentPrice >= authoritativeStop));
+            if (stopBreached) {
+              this.logger.warn(
+                `cTrader DEMO STOP_LOSS_CATCHUP trade=${trade.trade_id} ${trade.instrument} ${trade.direction} ` +
+                  `current=${currentPrice} authorityStop=${authoritativeStop}`,
+              );
+              await this.executionService.closeTrade(
+                trade.trade_id,
+                trade.user_id,
+                TradeCloseReason.STOP_LOSS_HIT,
+              );
+              continue;
+            }
+
             const decision = evaluatePaperProfitLock({
               maxFavorablePnl: money(maxFavorablePnl),
               currentPnl: money(currentPnl),
@@ -292,6 +314,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           NULLIF(ca.sizing_inputs->>'finalRiskAtStop', '')::numeric,
           NULLIF(ca.sizing_inputs->>'riskAmount', '')::numeric
         ) AS initial_risk_pnl,
+        t.stop_loss,
         (
           COALESCE(ti.metadata->>'m1_rollout_phase', '') <> ''
           OR COALESCE(ti.metadata->>'timeframe', '') = 'M1'
