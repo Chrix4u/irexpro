@@ -221,7 +221,32 @@ describe('PAPER profit-lock policy', () => {
     ).toMatchObject({ armed: false, shouldClose: false });
   });
 
-  it('adds a narrow M1-only rescue band at 0.40R without loosening the default 0.50R arm floor', () => {
+  it('arms the M1 rescue band at 0.395R to tolerate five-second sampling around the 0.40R boundary', () => {
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '3.95',
+        currentPnl: '1.57',
+        initialRiskPnl: '10.00',
+        isM1Strategy: true,
+      }),
+    ).toMatchObject({
+      armed: true,
+      shouldClose: true,
+      retentionFraction: '0.40',
+      protectedFloorPnl: '1.58',
+    });
+
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '3.94',
+        currentPnl: '-1.00',
+        initialRiskPnl: '10.00',
+        isM1Strategy: true,
+      }),
+    ).toMatchObject({ armed: false, shouldClose: false });
+  });
+
+  it('adds a narrow M1-only rescue band near 0.40R without loosening the default 0.50R arm floor', () => {
     expect(
       evaluatePaperProfitLock({
         maxFavorablePnl: '4.50',
@@ -232,7 +257,7 @@ describe('PAPER profit-lock policy', () => {
 
     expect(
       evaluatePaperProfitLock({
-        maxFavorablePnl: '3.99',
+        maxFavorablePnl: '3.94',
         currentPnl: '-1.00',
         initialRiskPnl: '10.00',
         isM1Strategy: true,

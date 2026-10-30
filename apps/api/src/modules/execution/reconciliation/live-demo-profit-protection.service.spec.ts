@@ -90,7 +90,7 @@ describe('LiveDemoProfitProtectionService', () => {
     );
   });
 
-  it('observes but does not close an M1 trade before the 0.40R rescue floor is armed', async () => {
+  it('observes but does not close an M1 trade before the 0.395R rescue floor is armed', async () => {
     const h = harness([candidate({ max_favorable_pnl: '3.00', max_adverse_pnl: '-1.00' })], '2.50');
 
     await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
@@ -100,6 +100,21 @@ describe('LiveDemoProfitProtectionService', () => {
       expect.arrayContaining(['trade-1', '3.00000000', '-1.00000000', '0.50000000', 6]),
     );
     expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+  });
+
+  it('profit-protects a DEMO M1 trade inside the 0.395R sampling-tolerance band', async () => {
+    const h = harness(
+      [candidate({ max_favorable_pnl: '3.56', max_adverse_pnl: '-1.00' })],
+      '1.42',
+    );
+
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+
+    expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      'user-1',
+      TradeCloseReason.PROFIT_PROTECTION,
+    );
   });
 
   it('closes a materially losing DEMO trade when completed broker-native M1 evidence confirms thesis failure', async () => {

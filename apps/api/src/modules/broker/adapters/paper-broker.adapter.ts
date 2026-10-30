@@ -664,7 +664,7 @@ export interface PaperProfitLockDecision {
  *
  * The standard lock arms only after a meaningful favorable excursion (0.50R).
  * M1 gets one deliberately loose rescue band below that standard threshold:
- *   M1 0.40R–<0.50R peak -> retain 40%
+ *   M1 0.395R–<0.50R peak -> retain 40%
  *   0.50R–<0.75R peak    -> retain 70%
  *   0.75R–<1.00R peak    -> retain 75%
  *   1.00R–<1.50R peak    -> retain 80%
@@ -673,8 +673,10 @@ export interface PaperProfitLockDecision {
  *
  * The M1 rescue band is intentionally much looser than the standard lock: it
  * only prevents a trade that already proved ~0.40R from turning into a full
- * loss. It does not restore the old 0.30R arm floor that harvested too many
- * tiny wins. Once +0.50R is proven, the existing stronger tiers are unchanged.
+ * loss. The 0.395R floor is a narrow 0.005R sampling tolerance for the 5-second
+ * DEMO/PAPER observation cadence; it does not restore the old 0.30R arm floor
+ * that harvested too many tiny wins. Once +0.50R is proven, the existing
+ * stronger tiers are unchanged.
  *
  * Invalid/unprovable risk fails closed: no automatic profit-lock exit.
  */
@@ -697,12 +699,12 @@ export function evaluatePaperProfitLock(input: {
     // Let small favorable excursions breathe. Forward PAPER evidence showed
     // that arming at 0.30R repeatedly harvested tiny wins while full SL losses
     // remained ~1R. The default floor therefore stays at +0.50R. M1 alone gets
-    // a loose +0.40R rescue band after the latest R-normalized audit showed
-    // repeated 0.40R–0.50R excursions subsequently closing red.
+    // a narrow +0.395R rescue floor: 0.40R remains the economic threshold, with
+    // 0.005R tolerance for five-second sampling around that boundary.
     const risk = input.initialRiskPnl;
     const peak = input.maxFavorablePnl;
     const standardArmFloor = multiplyDecimalStrings(risk, '0.50');
-    const m1RescueArmFloor = multiplyDecimalStrings(risk, '0.40');
+    const m1RescueArmFloor = multiplyDecimalStrings(risk, '0.395');
     const standardArmed = compareDecimalStrings(peak, standardArmFloor) >= 0;
     const m1RescueArmed =
       input.isM1Strategy === true &&
