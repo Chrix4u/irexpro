@@ -295,7 +295,7 @@ export default function ClosedTradeHistoryPage() {
     : '—';
 
   return (
-    <DashboardShell user={user} onLogout={logout} activeRoute="/trade" title="Closed Trade History">
+    <DashboardShell user={user} onLogout={logout} activeRoute="/trade/history" title="Reports">
       <main className="trade-history" data-testid="closed-trade-history">
         <section className="trade-history__hero">
           <div>
