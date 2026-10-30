@@ -2666,6 +2666,65 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(recorded?.governance.professionalM1FallbackExecutionEnabled).toBe(true);
   });
 
+  it('does not stack a mature qualified continuation on an active same pair-side M1 intent', async () => {
+    const maturePositiveContinuation = [
+      { realisedPnl: 8, riskAtStop: 10, closedAt: '2026-10-15T10:29:00.000Z' },
+      { realisedPnl: 6, riskAtStop: 10, closedAt: '2026-10-15T10:19:00.000Z' },
+      { realisedPnl: -2, riskAtStop: 10, closedAt: '2026-10-15T10:09:00.000Z' },
+      { realisedPnl: 5, riskAtStop: 10, closedAt: '2026-10-15T09:59:00.000Z' },
+      { realisedPnl: 4, riskAtStop: 10, closedAt: '2026-10-15T09:49:00.000Z' },
+      { realisedPnl: 3, riskAtStop: 10, closedAt: '2026-10-15T09:39:00.000Z' },
+    ].map((row) => ({
+      route: 'M1_TREND_CONTINUATION',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      policyVersion: 'm1-tactical-v2-m5-lifecycle',
+      ...row,
+      closedAt: new Date(row.closedAt),
+    }));
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: maturePositiveContinuation },
+      duplicateSameDirectionIntent: true,
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: {
+          ...result.ensemble,
+          strategyRoute: 'TREND_CONTINUATION',
+          paperAdmitted: false,
+          admitted: false,
+        },
+        authority: {
+          ...result.authority,
+          executable: false,
+          authorityPath: 'BLOCKED',
+          rescueVolumeCap: null,
+          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED', 'MULTIMODEL_GOVERNANCE_BLOCKED'],
+        },
+      };
+    });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.hasActiveM1Intent).toHaveBeenCalledWith({
+      userId: 'user-1',
+      brokerConnectionId: 'demo-conn-2',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+    });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.executionAuthority).toBe('NONE');
+    expect(recorded?.blockers).toContain('M1_PROFESSIONAL_ACTIVE_SAME_SIDE_INTENT');
+  });
+
   it('keeps continuation fallback blocked when the exact M1 sleeve has a recent loss streak', async () => {
     const lossStreakEvidence = [
       { realisedPnl: -4, closedAt: '2026-10-15T10:29:00.000Z' },

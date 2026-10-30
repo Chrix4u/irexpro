@@ -1178,8 +1178,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       : routeExecutable && routePayoffEligible && governanceExecutable;
     const bootstrapExecutionSelected =
       professionalM1BootstrapExecutable && !m5EarlyTransitionHandoffEligible;
-    const bootstrapActiveSameSideIntent =
-      preliminaryCanExecute && bootstrapExecutionSelected
+    const professionalM1ActiveSameSideIntent =
+      preliminaryCanExecute && professionalM1FallbackExecutable
         ? await this.evidence.hasActiveM1Intent({
             userId,
             brokerConnectionId,
@@ -1187,6 +1187,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             direction: candidate.direction,
           })
         : false;
+    const bootstrapActiveSameSideIntent =
+      professionalM1ActiveSameSideIntent && bootstrapExecutionSelected;
+    const qualifiedContinuationActiveSameSideIntent =
+      professionalM1ActiveSameSideIntent &&
+      professionalM1Fallback?.tier === 'QUALIFIED_CONTINUATION';
     const fastStopRegimeBrake = preliminaryCanExecute
       ? await this.evidence.loadFastStopRegimeBrake({
           userId,
@@ -1214,7 +1219,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         : null;
     const canExecute =
       preliminaryCanExecute &&
-      !bootstrapActiveSameSideIntent &&
+      !professionalM1ActiveSameSideIntent &&
       fastStopRegimeBrake?.active !== true &&
       multimodelLossStreakBrake?.active !== true;
     const effectiveGovernanceBlockers =
@@ -1247,6 +1252,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? ['M1_PROFESSIONAL_FALLBACK_OBSERVATIONAL_ONLY']
             : []),
           ...(bootstrapActiveSameSideIntent ? ['M1_BOOTSTRAP_ACTIVE_SAME_SIDE_INTENT'] : []),
+          ...(qualifiedContinuationActiveSameSideIntent
+            ? ['M1_PROFESSIONAL_ACTIVE_SAME_SIDE_INTENT']
+            : []),
           ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
           ...(multimodelLossStreakBrake?.active === true
             ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
