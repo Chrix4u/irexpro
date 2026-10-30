@@ -381,7 +381,7 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
   // ─── getTodayRealisedLossExact ─────────────────────────────────────────────
 
   describe('getTodayRealisedLossExact', () => {
-    it("returns today's CLOSED losers as an exact RAW string total (no floats)", async () => {
+    it("returns today's net CLOSED realised loss as an exact RAW string total (no floats)", async () => {
       await seedTrade(dataSource, { id: 't1', realisedPnl: '-100.50' });
       await seedTrade(dataSource, { id: 't2', realisedPnl: '-50.25' });
 
@@ -455,9 +455,9 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
       expect(result.complete).toBe(true);
     });
 
-    it('excludes OPEN trades and positive realised P&L (CLOSED losers only)', async () => {
+    it('nets CLOSED winners against losers and floors a profitable window at zero loss', async () => {
       await seedTrade(dataSource, { id: 't1', realisedPnl: '-25.25' });
-      await seedTrade(dataSource, { id: 't2', realisedPnl: '75.25' }); // winner
+      await seedTrade(dataSource, { id: 't2', realisedPnl: '75.25' });
       await seedTrade(dataSource, {
         id: 't3',
         realisedPnl: '-100.50',
@@ -466,7 +466,16 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
       });
 
       const result = await todayLoss();
-      expect(result.total).toBe('-25.25');
+      expect(result.total).toBe('0');
+      expect(result.complete).toBe(true);
+    });
+
+    it('returns only the remaining net loss when CLOSED winners partially offset losers', async () => {
+      await seedTrade(dataSource, { id: 'loss', realisedPnl: '-100.50' });
+      await seedTrade(dataSource, { id: 'win', realisedPnl: '40.25' });
+
+      const result = await todayLoss();
+      expect(result.total).toBe('-60.25');
       expect(result.complete).toBe(true);
     });
 
@@ -483,11 +492,11 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
       expect(result.complete).toBe(true);
     });
 
-    it('excludes legacy NULL-provenance losers from the total and reports complete=false', async () => {
+    it('excludes legacy NULL-provenance realised rows from the total and reports complete=false', async () => {
       await seedTrade(dataSource, { id: 't1', realisedPnl: '-100.50' }); // fully provenanced
-      // Legacy rows without immutable provenance (never guessed into a scope):
+      // Any unscoped realised P&L can change the net result, including winners.
       await seedTrade(dataSource, { id: 't2', realisedPnl: '-70.50', logicalAccountKey: null });
-      await seedTrade(dataSource, { id: 't3', realisedPnl: '-30.25', accountCurrency: null });
+      await seedTrade(dataSource, { id: 't3', realisedPnl: '30.25', accountCurrency: null });
 
       const result = await todayLoss();
       expect(result.total).toBe('-100.50'); // only the provable row

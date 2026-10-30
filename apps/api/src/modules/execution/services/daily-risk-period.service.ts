@@ -201,14 +201,17 @@ export class DailyRiskPeriodService {
     const windowStartIso = windowStart.toISOString();
 
     const sumRows: Array<{ total: string | number | null }> = await this.dataSource.query(
-      `SELECT COALESCE(SUM(realised_pnl), 0) AS total
+      `SELECT CASE
+                WHEN COALESCE(SUM(realised_pnl), 0) < 0 THEN COALESCE(SUM(realised_pnl), 0)
+                ELSE 0
+              END AS total
        FROM ${this.tradesTableName()}
        WHERE user_id = $1
          AND logical_account_key = $2
          AND account_currency = $3
          AND status = 'CLOSED'
          AND closed_at >= $4
-         AND realised_pnl < 0`,
+         AND realised_pnl IS NOT NULL`,
       [input.userId, input.logicalAccountKey, input.accountCurrency, windowStartIso],
     );
     const rawTotal = sumRows[0]?.total;
@@ -217,16 +220,17 @@ export class DailyRiskPeriodService {
         ? this.harnessNumberToExactString(rawTotal)
         : String(rawTotal ?? '0');
 
-    // Legacy NULL-provenance losers today (user-scoped only — the rows lack
-    // the logical account key by definition). Their existence makes the
-    // measurement incomplete: consumers must fail closed for LIVE decisions.
+    // Legacy NULL-provenance realised rows today (user-scoped only — the rows
+    // lack the logical account key by definition). Winners and losers both
+    // affect net daily P&L, so either makes the scoped measurement incomplete.
     const legacyRows: Array<{ n: number | string }> = await this.dataSource.query(
       `SELECT COUNT(*) AS n
        FROM ${this.tradesTableName()}
        WHERE user_id = $1
          AND status = 'CLOSED'
          AND closed_at >= $2
-         AND realised_pnl < 0
+         AND realised_pnl IS NOT NULL
+         AND realised_pnl <> 0
          AND (logical_account_key IS NULL OR account_currency IS NULL)`,
       [input.userId, windowStartIso],
     );
