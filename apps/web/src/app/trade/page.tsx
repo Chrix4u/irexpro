@@ -3106,9 +3106,14 @@ export default function AiTradingPage() {
                     <p className="workspace-hero__eyebrow">Realized results</p>
                     <h2 id="recent-performance-title">Recent Performance</h2>
                   </div>
-                  <Badge variant={netPnlTone === "negative" ? "error" : netPnlTone === "positive" ? "success" : "info"}>
-                    {realised24hClosedCount} closed · 24h
-                  </Badge>
+                  <div className="ai-performance-panel__head-actions">
+                    <Badge variant={netPnlTone === "negative" ? "error" : netPnlTone === "positive" ? "success" : "info"}>
+                      {realised24hClosedCount} closed · 24h
+                    </Badge>
+                    <Link href={closedTradeHistoryHref} className="ai-performance-panel__header-link">
+                      View all
+                    </Link>
+                  </div>
                 </div>
                 <div className="ai-performance-panel__stats">
                   <div className="ai-performance-panel__money-stat">
@@ -3124,9 +3129,6 @@ export default function AiTradingPage() {
                           )}
                     </strong>
                     <small>{realised24hLosses} losing trade{realised24hLosses === 1 ? "" : "s"}</small>
-                    <Link href={closedTradeHistoryHref} className="ai-performance-panel__stat-link">
-                      View all
-                    </Link>
                   </div>
                   <div className="ai-performance-panel__win-rate">
                     <span>24h win rate</span>
@@ -3145,9 +3147,6 @@ export default function AiTradingPage() {
                         {realisedExecutionWindow.wins}W / {realisedExecutionWindow.losses}L · counts trades, not P&amp;L amount
                       </small>
                     </div>
-                    <Link href={closedTradeHistoryHref} className="ai-performance-panel__stat-link">
-                      View all
-                    </Link>
                   </div>
                   <div className="ai-performance-panel__money-stat">
                     <span>Total profit · 24h</span>
@@ -3155,9 +3154,6 @@ export default function AiTradingPage() {
                       {signedMoney(realised24hGrossProfit, realisedCurrency)}
                     </strong>
                     <small>{realised24hWins} profitable trade{realised24hWins === 1 ? "" : "s"}</small>
-                    <Link href={closedTradeHistoryHref} className="ai-performance-panel__stat-link">
-                      View all
-                    </Link>
                   </div>
                 </div>
                 <RealisedPnlMiniChart
