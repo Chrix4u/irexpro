@@ -669,6 +669,109 @@ describe('StateReconciliationService', () => {
       );
     });
 
+    it('recovers a timed-out dispatch by uniquely correlating the provider position', async () => {
+      const pending = {
+        ...openTrade(),
+        id: 'trade-timeout',
+        instrument: 'AUDUSD',
+        direction: 'SELL',
+        lotSize: '0.2300',
+        status: TradeStatus.RECONCILIATION_PENDING,
+        externalOrderId: null,
+        externalPositionId: null,
+        dispatchCertainty: 'MAY_HAVE_REACHED_PROVIDER',
+        fillPrice: null,
+        openedAt: null,
+        createdAt: new Date('2026-10-30T12:14:21.429Z'),
+        stopLoss: '0.70318',
+        takeProfit: '0.70188',
+      } as Trade;
+      const providerPosition = {
+        externalOrderId: '300252443',
+        instrument: 'AUDUSD',
+        direction: 'SELL' as const,
+        lotSize: '0.23',
+        openPrice: '0.70267',
+        currentPrice: '0.70261',
+        stopLoss: '0',
+        takeProfit: '0',
+        unrealisedPnl: '1.20',
+        openedAt: new Date('2026-10-30T12:14:34.442Z'),
+        commission: '-0.50',
+        swap: '0.00',
+      };
+      tradeRepo.find.mockResolvedValue([pending]);
+      adapter.getOpenPositions.mockResolvedValue([providerPosition]);
+      adapter.getPositionById.mockImplementation(async (id: string) =>
+        id === '300252443' ? providerPosition : null,
+      );
+      persistence.resolveDiscrepanciesByRef.mockResolvedValue([]);
+
+      await service.runForConnection({ ...connection(), brokerId: 'ctrader' } as BrokerConnection);
+
+      expect(resolution.recoverTradeToOpen).toHaveBeenCalledWith(pending, providerPosition);
+      expect(adapter.getPositionById).toHaveBeenCalledWith('300252443');
+      expect(adapter.modifyOrder).toHaveBeenCalledWith('300252443', {
+        newStopLoss: '0.70318',
+        newTakeProfit: '0.70188',
+      });
+      expect(persistence.resolveDiscrepanciesByRef).toHaveBeenCalledWith(
+        'conn-1',
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+            internalRefId: 'trade-timeout',
+            providerRef: null,
+          }),
+          expect.objectContaining({
+            type: ReconciliationDiscrepancyType.UNKNOWN_PROVIDER_POSITION,
+            internalRefId: null,
+            providerRef: '300252443',
+          }),
+        ]),
+      );
+    });
+
+    it('does not guess when more than one provider position can match a timed-out dispatch', async () => {
+      const pending = {
+        ...openTrade(),
+        id: 'trade-timeout',
+        instrument: 'AUDUSD',
+        direction: 'SELL',
+        lotSize: '0.2300',
+        status: TradeStatus.RECONCILIATION_PENDING,
+        externalOrderId: null,
+        externalPositionId: null,
+        dispatchCertainty: 'MAY_HAVE_REACHED_PROVIDER',
+        fillPrice: null,
+        openedAt: null,
+        createdAt: new Date('2026-10-30T12:14:21.429Z'),
+      } as Trade;
+      const position = (id: string, openedAt: string) => ({
+        externalOrderId: id,
+        instrument: 'AUDUSD',
+        direction: 'SELL' as const,
+        lotSize: '0.23',
+        openPrice: '0.70267',
+        currentPrice: '0.70261',
+        stopLoss: '0.70318',
+        takeProfit: '0.70188',
+        unrealisedPnl: '1.20',
+        openedAt: new Date(openedAt),
+        commission: '-0.50',
+        swap: '0.00',
+      });
+      tradeRepo.find.mockResolvedValue([pending]);
+      adapter.getOpenPositions.mockResolvedValue([
+        position('300252443', '2026-10-30T12:14:34.442Z'),
+        position('300252444', '2026-10-30T12:14:36.000Z'),
+      ]);
+
+      await service.runForConnection({ ...connection(), brokerId: 'ctrader' } as BrokerConnection);
+
+      expect(resolution.recoverTradeToOpen).not.toHaveBeenCalled();
+    });
+
     it('resolves RECONCILIATION_PENDING trades whose provider position exists', async () => {
       tradeRepo.find.mockResolvedValue([
         { ...openTrade(), status: TradeStatus.RECONCILIATION_PENDING },

@@ -5,6 +5,7 @@ import { BrokerConnection } from '../../broker/entities/broker-connection.entity
 import { BrokerAccount } from '../../broker/entities/broker-account.entity';
 import { BrokerService } from '../../broker/broker.service';
 import { BrokerAdapterRegistry } from '../../broker/adapters/broker-adapter.registry';
+import { CTRADER_FAMILY_BROKER_IDS } from '../../broker/registry/broker-catalog';
 import { CredentialEncryptionService } from '../../broker/services/credential-encryption.service';
 import { BrokerCredentialLifecycle } from '../../broker/authorization/broker-credential-status';
 import { ConflictException } from '@nestjs/common';
@@ -80,6 +81,8 @@ const RECONCILABLE_ORDER_STATUSES = [
  * never a dispatch that is merely in flight.
  */
 const PRE_COMMITMENT_GRACE_MS = 5 * 60_000;
+const TIMED_OUT_POSITION_MATCH_WINDOW_MS = 2 * 60_000;
+const TIMED_OUT_POSITION_CLOCK_SKEW_MS = 5_000;
 
 /** Trade statuses holding (or possibly holding) provider positions.
  *
@@ -239,6 +242,105 @@ export class StateReconciliationService {
     private readonly allocationService: AllocationService,
   ) {}
 
+  private async recoverTimedOutProviderPositions(
+    connection: BrokerConnection,
+    internalTrades: Trade[],
+    providerPositions: import('../../broker/interfaces/broker-adapter.interface').BrokerPosition[],
+  ): Promise<
+    Array<{
+      type: string;
+      internalRefId: string | null;
+      providerRef: string | null;
+      resolution: string;
+    }>
+  > {
+    if (!CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId)) return [];
+
+    const claimedPositionIds = new Set<string>();
+    for (const trade of internalTrades) {
+      if (trade.externalOrderId) claimedPositionIds.add(trade.externalOrderId);
+      if (trade.externalPositionId) claimedPositionIds.add(trade.externalPositionId);
+    }
+
+    const unresolvedTrades = internalTrades.filter(
+      (trade) =>
+        (trade.status === TradeStatus.PENDING ||
+          trade.status === TradeStatus.RECONCILIATION_PENDING) &&
+        trade.dispatchCertainty === ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER &&
+        !trade.externalOrderId &&
+        !trade.externalPositionId &&
+        trade.createdAt instanceof Date,
+    );
+
+    const matchingPositions = (trade: Trade) =>
+      providerPositions.filter((position) => {
+        if (claimedPositionIds.has(position.externalOrderId)) return false;
+        if (position.instrument.toUpperCase() !== trade.instrument.toUpperCase()) return false;
+        if (position.direction !== trade.direction) return false;
+        if (compareDecimal(position.lotSize, trade.lotSize) !== 0) return false;
+        const deltaMs = position.openedAt.getTime() - trade.createdAt.getTime();
+        return (
+          deltaMs >= -TIMED_OUT_POSITION_CLOCK_SKEW_MS &&
+          deltaMs <= TIMED_OUT_POSITION_MATCH_WINDOW_MS
+        );
+      });
+
+    const resolutionRefs: Array<{
+      type: string;
+      internalRefId: string | null;
+      providerRef: string | null;
+      resolution: string;
+    }> = [];
+
+    for (const trade of unresolvedTrades) {
+      const candidates = matchingPositions(trade);
+      if (candidates.length !== 1) continue;
+      const position = candidates[0];
+
+      const competingTrades = unresolvedTrades.filter((other) =>
+        matchingPositions(other).some(
+          (candidate) => candidate.externalOrderId === position.externalOrderId,
+        ),
+      );
+      if (competingTrades.length !== 1) continue;
+
+      const recovered = await this.resolution.recoverTradeToOpen(trade, position);
+      if (!recovered) continue;
+
+      trade.status = TradeStatus.OPEN;
+      trade.externalPositionId = position.externalOrderId;
+      trade.fillPrice = position.openPrice;
+      trade.openedAt = position.openedAt;
+      trade.brokerRejectionReason = null;
+      trade.closeReason = null;
+      claimedPositionIds.add(position.externalOrderId);
+
+      resolutionRefs.push(
+        {
+          type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+          internalRefId: trade.id,
+          providerRef: null,
+          resolution:
+            'Timed-out cTrader dispatch uniquely matched provider position — trade recovered to OPEN',
+        },
+        {
+          type: ReconciliationDiscrepancyType.UNKNOWN_PROVIDER_POSITION,
+          internalRefId: null,
+          providerRef: position.externalOrderId,
+          resolution:
+            'Provider-only cTrader position uniquely correlated to timed-out internal dispatch',
+        },
+      );
+
+      this.logger.warn(
+        `Recovered timed-out cTrader trade ${trade.id}: provider position ${position.externalOrderId} ` +
+          `${position.instrument} ${position.direction} ${position.lotSize} lots`,
+      );
+    }
+
+    return resolutionRefs;
+  }
+
   getProviderQuotaCooldownUntil(connectionId: string, now = Date.now()): Date | null {
     const cooldownUntil = this.providerQuotaCooldownUntilByConnection.get(connectionId) ?? 0;
     if (cooldownUntil <= now) {
@@ -329,6 +431,12 @@ export class StateReconciliationService {
       const closedTrades =
         internalTrades.length > 0 ? await this.fetchClosedTrades(adapter, internalTrades) : [];
 
+      const preDiffResolutionRefs = await this.recoverTimedOutProviderPositions(
+        connection,
+        internalTrades,
+        providerPositions,
+      );
+
       const internalState = {
         orders: internalOrders.map((o) => this.toOrderSnapshot(o)),
         trades: internalTrades.map((t) => this.toTradeSnapshot(t)),
@@ -399,7 +507,7 @@ export class StateReconciliationService {
         internalRefId: string | null;
         providerRef: string | null;
         resolution: string;
-      }> = [];
+      }> = [...preDiffResolutionRefs];
       let errors = 0;
       let autoResolvedCount = 0;
 
@@ -411,7 +519,11 @@ export class StateReconciliationService {
           // Resolve that mapping before asking for the live position; treating
           // the order id as a position id leaves real exposure invisible.
           let providerPositionRef = trade.externalPositionId ?? null;
-          if (!providerPositionRef && trade.status === TradeStatus.PENDING && trade.externalOrderId) {
+          if (
+            !providerPositionRef &&
+            trade.status === TradeStatus.PENDING &&
+            trade.externalOrderId
+          ) {
             const providerOrder = await adapter.getOrderById(trade.externalOrderId);
             if (
               providerOrder &&
