@@ -256,6 +256,7 @@ describe('recent execution visibility summary', () => {
       losses: 1,
       flats: 0,
       winRate: 2 / 3,
+      netRealisedPnl: '10',
     });
   });
 });
