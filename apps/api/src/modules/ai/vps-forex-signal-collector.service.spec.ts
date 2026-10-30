@@ -1302,8 +1302,11 @@ describe('VpsForexSignalCollectorService', () => {
       windowMinutes: 30,
       latestSampleAt: '2026-10-07T11:59:00.000Z',
     });
-    expect(String(query.mock.calls[0][0])).toContain('percentile_cont(0.90)');
-    expect(String(query.mock.calls[0][0])).toContain('market_data.provider_quote_candles');
+    const sql = String(query.mock.calls[0][0]);
+    expect(sql).toContain('percentile_cont(0.90)');
+    expect(sql).toContain('market_data.provider_quote_candles');
+    expect(sql).toContain('SUM(positive.sample_count)');
+    expect(sql).not.toContain('COUNT(*)::int AS sample_count');
     expect(query).toHaveBeenCalledWith(expect.any(String), [
       'metaapi-source-1',
       'EURUSD',

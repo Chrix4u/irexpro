@@ -6209,7 +6209,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const rows = (await this.dataSource.query(
       `
         WITH positive AS (
-          SELECT spread_close, last_sample_at
+          SELECT spread_close, sample_count, last_sample_at
           FROM market_data.provider_quote_candles
           WHERE connection_id = $1
             AND instrument = $2
@@ -6228,7 +6228,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           LIMIT 1
         )
         SELECT
-          COUNT(*)::int AS sample_count,
+          COALESCE(SUM(positive.sample_count), 0)::int AS sample_count,
           GREATEST(
             percentile_cont(0.90) WITHIN GROUP (ORDER BY positive.spread_close::double precision),
             COALESCE((SELECT spread_close::double precision FROM latest), 0)
