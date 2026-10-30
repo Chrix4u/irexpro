@@ -8,7 +8,7 @@ import type { TradeIntentService } from '../execution/services/trade-intent.serv
 import type { AllocationService } from '../execution/services/allocation.service';
 import type { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
-import { M1_TACTICAL_POLICY_V1, buildM1TacticalCandidates } from './m1-tactical-candidate';
+import { M1_TACTICAL_POLICY_V2, buildM1TacticalCandidates } from './m1-tactical-candidate';
 import {
   M1_TACTICAL_FEATURE_ARTIFACT,
   type M1TacticalFeatureSnapshot,
@@ -400,7 +400,7 @@ describe('M1TacticalSchedulerService shadow phase', () => {
     for (const row of persisted) {
       expect(row.executionAuthority).toBe('NONE');
       expect(row.blockers).toContain('M1_PHASE_SHADOW');
-      expect(row.policyVersion).toBe('m1-tactical-v1');
+      expect(row.policyVersion).toBe('m1-tactical-v2-m5-lifecycle');
       expect(row.barTime).toBeInstanceOf(Date);
       expect(typeof row.governance.shadowOutcomeEligible).toBe('boolean');
       expect(row.governance.expectancy).toEqual(
@@ -443,7 +443,7 @@ describe('M1TacticalSchedulerService shadow phase', () => {
       brokerConnectionId: 'conn-1',
       instrument: 'EURUSD',
       asOf: new Date('2026-10-15T12:30:00.000Z'),
-      policyVersion: 'm1-tactical-v1',
+      policyVersion: 'm1-tactical-v2-m5-lifecycle',
     });
     expect(h.markDriftCounterfactual15m).toHaveBeenCalledTimes(1);
     expect(h.markDriftCounterfactual15m.mock.calls[0]![0]).toBe('decision-drift-1');
@@ -470,7 +470,7 @@ describe('M1TacticalSchedulerService shadow phase', () => {
               route: 'M1_EARLY_TRANSITION',
               barTime: new Date('2026-10-15T12:14:00.000Z'),
               evaluatedAt: new Date('2026-10-15T12:14:00.000Z'),
-              policyVersion: 'm1-tactical-v1',
+              policyVersion: 'm1-tactical-v2-m5-lifecycle',
               stopDistance: 0.0005,
               targetDistance: 0.0008,
               estimatedExecutionCostR: 0.0625,
@@ -487,7 +487,7 @@ describe('M1TacticalSchedulerService shadow phase', () => {
       userId: 'user-1',
       brokerConnectionId: 'conn-1',
       instrument: 'EURUSD',
-      policyVersion: 'm1-tactical-v1',
+      policyVersion: 'm1-tactical-v2-m5-lifecycle',
       asOf: new Date('2026-10-15T12:30:00.000Z'),
     });
     expect(h.markShadowOutcome15mV1).toHaveBeenCalledTimes(1);
@@ -500,7 +500,7 @@ describe('M1TacticalSchedulerService shadow phase', () => {
         route: 'M1_EARLY_TRANSITION',
         instrument: 'EURUSD',
         direction: 'BUY',
-        policyVersion: 'm1-tactical-v1',
+        policyVersion: 'm1-tactical-v2-m5-lifecycle',
         source: 'COMPLETED_M1_OHLC',
         outcome: 'TP',
       }),
@@ -521,7 +521,7 @@ describe('M1TacticalSchedulerService shadow phase', () => {
               route: 'M1_TREND_CONTINUATION',
               barTime: new Date('2026-10-15T12:20:00.000Z'),
               evaluatedAt: new Date('2026-10-15T12:20:00.000Z'),
-              policyVersion: 'm1-tactical-v1',
+              policyVersion: 'm1-tactical-v2-m5-lifecycle',
               stopDistance: 0.0005,
               targetDistance: 0.0008,
               estimatedExecutionCostR: 0.05,
@@ -550,7 +550,7 @@ describe('M1TacticalSchedulerService shadow phase', () => {
               route: 'M1_CONFIRMED_REVERSAL',
               barTime: new Date('2026-10-15T11:20:00.000Z'),
               evaluatedAt: new Date('2026-10-15T11:20:00.000Z'),
-              policyVersion: 'm1-tactical-v1',
+              policyVersion: 'm1-tactical-v2-m5-lifecycle',
               stopDistance: 0.0005,
               targetDistance: 0.0008,
               estimatedExecutionCostR: 0.07,
@@ -748,7 +748,7 @@ function phase2Harness(
     route: 'M1_TREND_CONTINUATION',
     instrument: 'EURUSD',
     direction: 'BUY',
-    policyVersion: 'm1-tactical-v1',
+    policyVersion: 'm1-tactical-v2-m5-lifecycle',
     realisedPnl: -1,
     closedAt: new Date(`2026-10-15T10:${20 + index}:00.000Z`),
   }));
@@ -936,8 +936,8 @@ async function driveCleanContinuation(
   options: { spreadUsable?: boolean } = {},
 ) {
   const features = cleanContinuationFeatures();
-  const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
-  const route = classifyM1TacticalRoute(buy, sell, features, M1_TACTICAL_POLICY_V1);
+  const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2);
+  const route = classifyM1TacticalRoute(buy, sell, features, M1_TACTICAL_POLICY_V2);
   expect(route.route).toBe('M1_TREND_CONTINUATION');
   expect(route.eligible).toBe(true);
   const spreadEvidence =
@@ -1033,14 +1033,14 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
       direction: 'BUY',
       timeframe: 'M1',
       strategyCode: 'external-irexpro-m1-tactical',
-      modelVersion: 'external-provider/irexpro-m1-tactical/m1-tactical-v1',
+      modelVersion: 'external-provider/irexpro-m1-tactical/m1-tactical-v2-m5-lifecycle',
       marketRegime: 'TREND_HEALTHY',
       metadata: expect.objectContaining({
         external_provider_paper_only: true,
         production_eligible: false,
         position_sizing_tier: 'RESEARCH',
         m1_tactical_route: 'M1_TREND_CONTINUATION',
-        m1_policy_version: 'm1-tactical-v1',
+        m1_policy_version: 'm1-tactical-v2-m5-lifecycle',
         m1_decision_id: 'decision-EURUSD-BUY-M1_TREND_CONTINUATION',
         m1_gross_expected_r: expect.any(Number),
         m1_execution_cost_r: expect.any(Number),
@@ -1101,7 +1101,7 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
   it('allows conservative PAPER simulation spread without upgrading it to production evidence', async () => {
     const h = phase2Harness();
     const features = { ...cleanContinuationFeatures(), closeLocation: 0.85 };
-    const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
+    const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2);
 
     await (h.service as any).persistCandidate(
       'user-1',
@@ -1136,7 +1136,7 @@ describe('M1TacticalSchedulerService PAPER continuation phase', () => {
   it('keeps event-risk, spread and reliability blockers ahead of signal submission', async () => {
     const eventBlocked = phase2Harness({ macroState: 'UNVERIFIED' });
     const features = cleanContinuationFeatures();
-    const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
+    const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2);
     await (eventBlocked.service as any).persistCandidate(
       'user-1',
       'conn-1',
@@ -1267,8 +1267,8 @@ async function driveFeatures(
     brokerConnectionId?: string;
   } = {},
 ) {
-  const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
-  const route = classifyM1TacticalRoute(buy, sell, features, M1_TACTICAL_POLICY_V1);
+  const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2);
+  const route = classifyM1TacticalRoute(buy, sell, features, M1_TACTICAL_POLICY_V2);
   await (h.service as any).persistCandidate(
     'user-1',
     options.brokerConnectionId ?? 'conn-1',
@@ -1300,6 +1300,22 @@ describe('M1TacticalSchedulerService PAPER all-routes phase', () => {
     expect(m1RouteExecutableInPhase('PAPER_ALL_ROUTES', 'ABSTAIN')).toBe(false);
   });
 
+  it('uses a distinct M5-lifecycle policy version so pre-lifecycle losses cannot veto fresh timing evidence', async () => {
+    const h = phase2Harness();
+
+    await driveCleanContinuation(h);
+
+    expect(h.loadRoutePairSideEvidence).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentPolicyVersion: 'm1-tactical-v2-m5-lifecycle',
+        compatiblePolicyVersions: ['m1-tactical-v2-m5-lifecycle'],
+      }),
+    );
+    expect(h.recordDecision).toHaveBeenCalledWith(
+      expect.objectContaining({ policyVersion: 'm1-tactical-v2-m5-lifecycle' }),
+    );
+  });
+
   it('qualifies reversal only from the reversal route evidence key and never borrows continuation losses', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V3,
@@ -1308,7 +1324,7 @@ describe('M1TacticalSchedulerService PAPER all-routes phase', () => {
           route: 'M1_TREND_CONTINUATION',
           instrument: 'EURUSD',
           direction: 'BUY',
-          policyVersion: 'm1-tactical-v1',
+          policyVersion: 'm1-tactical-v2-m5-lifecycle',
           realisedPnl: -1,
           closedAt: new Date('2026-10-15T10:20:00.000Z'),
         })),
@@ -1372,7 +1388,7 @@ describe('M1TacticalSchedulerService PAPER all-routes phase', () => {
           openedAt: new Date('2026-10-15T10:00:00.000Z'),
           decisionId: 'decision-old',
           route: 'M1_TREND_CONTINUATION',
-          policyVersion: 'm1-tactical-v1',
+          policyVersion: 'm1-tactical-v2-m5-lifecycle',
           originalNetExpectedR: 0.18,
         },
       ],
@@ -1495,7 +1511,7 @@ describe('M1 early-transition micro PAPER phase', () => {
       route: 'M1_EARLY_TRANSITION',
       instrument: 'EURUSD',
       direction: 'BUY',
-      policyVersion: 'm1-tactical-v1',
+      policyVersion: 'm1-tactical-v2-m5-lifecycle',
       evaluatedAt: new Date('2026-10-15T10:30:00.000Z'),
     });
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
@@ -1572,7 +1588,7 @@ describe('M1 early-transition micro PAPER phase', () => {
           route: 'M1_EARLY_TRANSITION',
           instrument: 'EURUSD',
           direction: 'BUY',
-          policyVersion: 'm1-tactical-v1',
+          policyVersion: 'm1-tactical-v2-m5-lifecycle',
           realisedPnl: -1,
           closedAt: new Date(`2026-10-15T10:${20 + index}:00.000Z`),
         })),
@@ -2040,7 +2056,7 @@ describe('M1 professional v8 DEMO promotion', () => {
       evidenceByRoute: {
         M1_EARLY_TRANSITION: [{
           route: 'M1_EARLY_TRANSITION', instrument: 'EURUSD', direction: 'BUY',
-          policyVersion: 'm1-tactical-v1', realisedPnl: -9, riskAtStop: 9,
+          policyVersion: 'm1-tactical-v2-m5-lifecycle', realisedPnl: -9, riskAtStop: 9,
           maxFavorablePnl: 6, profitGiveback: 15,
           closedAt: new Date('2026-10-15T10:25:00.000Z'),
         }],
@@ -2444,7 +2460,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
             route: 'M1_TREND_CONTINUATION',
             instrument: 'EURUSD',
             direction: 'BUY',
-            policyVersion: 'm1-tactical-v1',
+            policyVersion: 'm1-tactical-v2-m5-lifecycle',
             realisedPnl: -4,
             riskAtStop: 10,
             closedAt: new Date('2026-10-15T10:19:00.000Z'),
@@ -2593,7 +2609,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
       route: 'M1_TREND_CONTINUATION',
       instrument: 'EURUSD',
       direction: 'BUY',
-      policyVersion: 'm1-tactical-v1',
+      policyVersion: 'm1-tactical-v2-m5-lifecycle',
       ...row,
       closedAt: new Date(row.closedAt),
     }));
@@ -2662,7 +2678,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
       route: 'M1_TREND_CONTINUATION',
       instrument: 'EURUSD',
       direction: 'BUY',
-      policyVersion: 'm1-tactical-v1',
+      policyVersion: 'm1-tactical-v2-m5-lifecycle',
       riskAtStop: 10,
       ...row,
       closedAt: new Date(row.closedAt),
@@ -2705,7 +2721,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
       route: 'M1_TREND_CONTINUATION',
       instrument: 'EURUSD',
       direction: 'BUY',
-      policyVersion: 'm1-tactical-v1',
+      policyVersion: 'm1-tactical-v2-m5-lifecycle',
       realisedPnl: index === 2 ? -2 : 5,
       riskAtStop: 10,
       closedAt: new Date(`2026-10-15T${String(10 - Math.floor(index / 3)).padStart(2, '0')}:${String(29 - (index % 3) * 10).padStart(2, '0')}:00.000Z`),
@@ -2918,12 +2934,12 @@ describe('M1 V8 multi-model DEMO authority', () => {
         M1_EARLY_TRANSITION: [
           {
             route: 'M1_EARLY_TRANSITION', instrument: 'EURUSD', direction: 'BUY',
-            policyVersion: 'm1-tactical-v1', realisedPnl: -10, riskAtStop: 10,
+            policyVersion: 'm1-tactical-v2-m5-lifecycle', realisedPnl: -10, riskAtStop: 10,
             closedAt: new Date('2026-10-15T10:25:00.000Z'),
           },
           {
             route: 'M1_EARLY_TRANSITION', instrument: 'EURUSD', direction: 'BUY',
-            policyVersion: 'm1-tactical-v1', realisedPnl: -9, riskAtStop: 9,
+            policyVersion: 'm1-tactical-v2-m5-lifecycle', realisedPnl: -9, riskAtStop: 9,
             closedAt: new Date('2026-10-15T10:15:00.000Z'),
           },
         ],

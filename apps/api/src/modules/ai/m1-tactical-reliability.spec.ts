@@ -56,6 +56,41 @@ describe('evaluateM1RoutePairSideReliability', () => {
     });
   });
 
+  it('does not carry v1 losses into the v2 M5-lifecycle evidence epoch', () => {
+    const result = evaluate(
+      [row(-1), row(-0.8), row(-0.6)],
+      { currentPolicyVersion: 'm1-tactical-v2-m5-lifecycle' },
+    );
+
+    expect(result).toMatchObject({
+      eligible: true,
+      samples: 0,
+      currentPolicySamples: 0,
+      carriedSamples: 0,
+      recentRealizedR: null,
+      reason: 'INSUFFICIENT_EVIDENCE',
+    });
+    expect(result.consideredPolicyVersions).toEqual([]);
+  });
+
+  it('still brakes three current-v2 losses after the evidence reset', () => {
+    const result = evaluate(
+      [
+        row(-1, { policyVersion: 'm1-tactical-v2-m5-lifecycle' }),
+        row(-0.8, { policyVersion: 'm1-tactical-v2-m5-lifecycle' }),
+        row(-0.6, { policyVersion: 'm1-tactical-v2-m5-lifecycle' }),
+      ],
+      { currentPolicyVersion: 'm1-tactical-v2-m5-lifecycle' },
+    );
+
+    expect(result).toMatchObject({
+      eligible: false,
+      samples: 3,
+      currentPolicySamples: 3,
+      reason: 'EARLY_LOSS_STREAK',
+    });
+  });
+
   it('applies the early brake after three losses and no wins', () => {
     const result = evaluate([row(-1), row(-2), row(-0.5)]);
     expect(result.eligible).toBe(false);

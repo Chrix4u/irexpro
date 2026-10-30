@@ -27,7 +27,7 @@ import {
 } from './m1-tactical-market-data.service';
 import {
   buildM1TacticalCandidates,
-  M1_TACTICAL_POLICY_V1,
+  M1_TACTICAL_POLICY_V2,
   type M1TacticalCandidate,
 } from './m1-tactical-candidate';
 import { buildM1TacticalFeatures, type M1TacticalFeatureSnapshot } from './m1-tactical-features';
@@ -596,7 +596,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           : 'PAPER_RESEARCH',
       m1TacticalRole: professionalDemoPhase ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE',
       policyVersion: this.rolloutPolicy.version,
-      modelPolicyVersion: M1_TACTICAL_POLICY_V1.version,
+      modelPolicyVersion: M1_TACTICAL_POLICY_V2.version,
       phase: this.rolloutPolicy.phase,
       cadenceSeconds: this.rolloutPolicy.cadenceMs / 1000,
       instruments: [...this.rolloutPolicy.instruments],
@@ -690,7 +690,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     if (!features) return;
 
     const eventRisk = await this.macroEventRisk.assess(instrument, decisionTime);
-    const candidates = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
+    const candidates = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2);
     for (const [candidate, opposite] of [
       [candidates[0], candidates[1]],
       [candidates[1], candidates[0]],
@@ -738,7 +738,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         brokerConnectionId,
         instrument,
         asOf: decisionTime,
-        policyVersion: M1_TACTICAL_POLICY_V1.version,
+        policyVersion: M1_TACTICAL_POLICY_V2.version,
       });
     } catch (error) {
       this.logger.warn(
@@ -780,7 +780,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         userId,
         brokerConnectionId,
         instrument,
-        policyVersion: M1_TACTICAL_POLICY_V1.version,
+        policyVersion: M1_TACTICAL_POLICY_V2.version,
         asOf: decisionTime,
       });
     } catch (error) {
@@ -948,11 +948,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       candidateDirection: candidate.direction,
       m1TimingRoute: classifyM1TacticalRoute(
         candidate,
-        buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1).find(
+        buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2).find(
           (item) => item.direction !== candidate.direction,
         )!,
         features,
-        M1_TACTICAL_POLICY_V1,
+        M1_TACTICAL_POLICY_V2,
       ).route,
     });
     const portfolioBlocker = portfolioSnapshotAvailable
@@ -982,7 +982,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       candidate,
       opposite,
       features,
-      M1_TACTICAL_POLICY_V1,
+      M1_TACTICAL_POLICY_V2,
     );
     const reliability = await this.reliabilityFor(
       userId,

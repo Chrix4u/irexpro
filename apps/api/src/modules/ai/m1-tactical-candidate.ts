@@ -36,6 +36,16 @@ export const M1_TACTICAL_POLICY_V1: Readonly<M1TacticalPolicy> = Object.freeze({
   maxTransitionHtfAbs: 0.25,
 });
 
+/**
+ * M5-lifecycle timing policy. Numeric risk/quality geometry intentionally stays
+ * identical to v1; the version change isolates realised evidence collected
+ * before the completed-M5/fresh-continuation timing changes.
+ */
+export const M1_TACTICAL_POLICY_V2: Readonly<M1TacticalPolicy> = Object.freeze({
+  ...M1_TACTICAL_POLICY_V1,
+  version: 'm1-tactical-v2-m5-lifecycle',
+});
+
 export interface M1TacticalCandidate {
   instrument: string;
   direction: M1TacticalDirection;

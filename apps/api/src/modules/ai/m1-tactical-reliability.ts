@@ -14,6 +14,7 @@ export const M1_RELIABILITY_CARRY_FORWARD_DAYS = 7;
 const POLICY_LINEAGE: Readonly<Record<string, readonly string[]>> = Object.freeze({
   'm1-tactical-v1': Object.freeze(['m1-tactical-v1']),
   'm1-tactical-v1-cal1': Object.freeze(['m1-tactical-v1-cal1', 'm1-tactical-v1']),
+  'm1-tactical-v2-m5-lifecycle': Object.freeze(['m1-tactical-v2-m5-lifecycle']),
 });
 
 const PRIOR_WINS = 1;
