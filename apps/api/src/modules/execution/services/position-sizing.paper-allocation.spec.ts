@@ -433,6 +433,26 @@ describe('PositionSizingService — allocation-aware PAPER sizing', () => {
     expect(sized.lots).toBe('0.18');
   });
 
+  it('keeps the risk-safe 0.18 lot when the preferred 0.20 professional floor exceeds the durable leverage ceiling', async () => {
+    const service = makeService({ maxLeverageAllowed: 2 });
+
+    const sized = await service.sizePosition({
+      ...params,
+      requestedLotUpperBound: '0.36',
+      paperAllocationSizing: {
+        executionMode: 'FULL_AUTO',
+        allocatedCapital: '900.00',
+        confidenceTier: 'VERY_STRONG',
+        minimumExecutableLot: '0.20',
+      },
+    });
+
+    expect(sized.inputs.lotsByRiskBudget).toBe('0.18');
+    expect(sized.inputs.policyMinimumExecutableLot).toBe('0.2');
+    expect(sized.inputs.policyMinimumLotLifted).toBe(false);
+    expect(sized.lots).toBe('0.18');
+  });
+
   it('rejects the 0.10 scout floor when its actual stop risk would exceed the durable risk ceiling', async () => {
     const service = makeService();
 

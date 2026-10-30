@@ -128,9 +128,11 @@ export function findLargestClearM1Volume(input: {
   }
   // A caller that explicitly caps below the professional product floor is a
   // scout/micro route, not a professional request that merely needs risk
-  // adjustment. Keep those routes fail-closed; only a larger professional cap
-  // may hand off a REDUCED 0.20 floor to downstream durable-risk sizing.
-  if (input.requestedVolumeCap <= input.productFloor) {
+  // adjustment. Keep those routes fail-closed. A professional request capped
+  // exactly at the preferred floor may still step down when the floor itself
+  // breaches the hard aligned-currency block threshold; downstream durable
+  // sizing will then enforce the exact per-trade risk ceiling.
+  if (input.requestedVolumeCap < input.productFloor) {
     return {
       allowed: false,
       volumeCap: 0,
@@ -141,6 +143,36 @@ export function findLargestClearM1Volume(input: {
 
   const floorDecision = evaluateAtVolume(input.productFloor);
   if (floorDecision.capacity === 'BLOCKED') {
+    if (!Number.isFinite(input.volumeStep) || input.volumeStep <= 0) {
+      return {
+        allowed: false,
+        volumeCap: 0,
+        decision: floorDecision,
+        productFloorBlocked: true,
+      };
+    }
+
+    // 0.20 is a preferred professional size, not a reason to suppress a valid
+    // setup when the account can safely carry a smaller meaningful trade. The
+    // downstream position sizer already uses 0.10 as the risk-adjusted minimum.
+    const riskAdjustedFloor = Math.min(input.productFloor, 0.1);
+    const stepCount = Math.floor(
+      (input.productFloor - riskAdjustedFloor) / input.volumeStep + 1e-9,
+    );
+    for (let index = 1; index <= stepCount; index += 1) {
+      const volume = Number((input.productFloor - index * input.volumeStep).toFixed(8));
+      if (volume < riskAdjustedFloor - 1e-9) break;
+      const decision = evaluateAtVolume(volume);
+      if (decision.capacity !== 'BLOCKED') {
+        return {
+          allowed: true,
+          volumeCap: volume,
+          decision,
+          productFloorBlocked: false,
+        };
+      }
+    }
+
     return {
       allowed: false,
       volumeCap: 0,

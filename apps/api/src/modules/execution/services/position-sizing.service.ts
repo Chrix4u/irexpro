@@ -730,46 +730,56 @@ export class PositionSizingService {
         paperProductMinimumLot,
       );
 
-      // The product floor must itself be a broker-valid step and stay inside
-      // every hard lot ceiling. We never use the floor to bypass broker specs
-      // or an explicit model upper bound.
+      // The 0.20 product floor is a preferred professional size, not permission
+      // to violate broker/model limits or durable account ceilings. Broker step,
+      // broker max and an explicit model lot cap remain hard blockers. Account
+      // leverage/profile ceilings may conservatively step the trade down to the
+      // existing risk-adjusted minimum instead of suppressing an otherwise valid setup.
       const floorSteps = policyMinimumExecutableLot.divDown(lotStep, 0);
       const normalizedFloor = floorSteps.mul(lotStep);
-      const floorFitsLotCeilings =
+      const floorFitsBrokerAndModelCeilings =
         normalizedFloor.eq(policyMinimumExecutableLot) &&
         policyMinimumExecutableLot.lte(maxLot) &&
-        policyMinimumExecutableLot.lte(lotsByLeverageCeiling) &&
-        (removeProfileLotCeiling || policyMinimumExecutableLot.lte(profileMaxLots)) &&
         (removeAiLotCeiling || policyMinimumExecutableLot.lte(effectiveRequestedLotUpperBound));
+      const floorFitsAccountLotCeilings =
+        policyMinimumExecutableLot.lte(lotsByLeverageCeiling) &&
+        (removeProfileLotCeiling || policyMinimumExecutableLot.lte(profileMaxLots));
 
       if (lots.lt(policyMinimumExecutableLot)) {
+        const riskAdjustedMinimumLot = ExactDecimal.parse(PAPER_PRODUCT_RISK_ADJUSTED_MIN_LOT);
         const floorRiskInQuoteCurrency = policyMinimumExecutableLot.mul(riskPerLot);
         const floorFitsDurableRisk = floorRiskInQuoteCurrency.lte(
           profileRiskCeilingAmountInQuoteCurrency,
         );
 
-        if (!floorFitsLotCeilings) {
+        if (!floorFitsBrokerAndModelCeilings) {
           throw new PositionSizingError(
             'POSITION_SIZE_BELOW_POLICY_MINIMUM',
             `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} is below the PAPER policy minimum ` +
-              `${policyMinimumExecutableLot.toString()} and lifting to the floor would exceed a durable ` +
-              `lot ceiling`,
+              `${policyMinimumExecutableLot.toString()} and the preferred floor exceeds a broker or ` +
+              `model lot ceiling`,
           );
         }
 
-        if (floorFitsDurableRisk) {
-          lots = policyMinimumExecutableLot;
-          policyMinimumLotLifted = true;
-        } else {
-          const riskAdjustedMinimumLot = ExactDecimal.parse(PAPER_PRODUCT_RISK_ADJUSTED_MIN_LOT);
+        if (!floorFitsAccountLotCeilings) {
           if (lots.lt(riskAdjustedMinimumLot)) {
             throw new PositionSizingError(
               'POSITION_SIZE_BELOW_POLICY_MINIMUM',
               `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} cannot afford the preferred PAPER ` +
-                `${policyMinimumExecutableLot.toString()} lot size and is below the risk-adjusted minimum ` +
-                `${riskAdjustedMinimumLot.toString()}`,
+                `${policyMinimumExecutableLot.toString()} lot size under durable account ceilings and is ` +
+                `below the risk-adjusted minimum ${riskAdjustedMinimumLot.toString()}`,
             );
           }
+        } else if (floorFitsDurableRisk) {
+          lots = policyMinimumExecutableLot;
+          policyMinimumLotLifted = true;
+        } else if (lots.lt(riskAdjustedMinimumLot)) {
+          throw new PositionSizingError(
+            'POSITION_SIZE_BELOW_POLICY_MINIMUM',
+            `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} cannot afford the preferred PAPER ` +
+              `${policyMinimumExecutableLot.toString()} lot size and is below the risk-adjusted minimum ` +
+              `${riskAdjustedMinimumLot.toString()}`,
+          );
         }
       }
     }

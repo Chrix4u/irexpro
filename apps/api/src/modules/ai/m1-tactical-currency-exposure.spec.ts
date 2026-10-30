@@ -107,6 +107,28 @@ describe('M1 tactical currency exposure', () => {
     expect(result.productFloorBlocked).toBe(false);
   });
 
+  it('steps below the preferred 0.20 professional floor when a smaller lot stays under the hard aligned-currency cap', () => {
+    const result = findLargestClearM1Volume({
+      allocatedCapital: 836.75,
+      positions: [],
+      candidate: {
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        entryPrice: 1.1,
+        stopLoss: 1.1015,
+      },
+      requestedVolumeCap: 0.2,
+      productFloor: 0.2,
+      volumeStep: 0.01,
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(result.volumeCap).toBeCloseTo(0.16, 8);
+    expect(result.volumeCap).toBeLessThan(0.2);
+    expect(result.decision.capacity).toBe('REDUCED');
+    expect(result.productFloorBlocked).toBe(false);
+  });
+
   it('still fails closed when even the product floor breaches aligned-currency capacity', () => {
     const result = findLargestClearM1Volume({
       allocatedCapital: 900,
