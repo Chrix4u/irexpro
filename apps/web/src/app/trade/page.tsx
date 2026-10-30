@@ -3135,6 +3135,9 @@ export default function AiTradingPage() {
                     <strong>
                       {recentWinRate == null ? "—" : `${(recentWinRate * 100).toFixed(0)}%`}
                     </strong>
+                    <small>
+                      Net {signedMoney(realised24hNetPnl, realisedCurrency)} · trade-count rate
+                    </small>
                     <div className="ai-performance-panel__stat-divider" aria-hidden="true" />
                     <div className="ai-performance-panel__secondary-stat">
                       <span>Trade win rate · last 20</span>
@@ -3144,7 +3147,7 @@ export default function AiTradingPage() {
                           : `${(realisedExecutionWindow.winRate * 100).toFixed(0)}%`}
                       </strong>
                       <small>
-                        {realisedExecutionWindow.wins}W / {realisedExecutionWindow.losses}L · counts trades, not P&amp;L amount
+                        {realisedExecutionWindow.wins}W / {realisedExecutionWindow.losses}L · Net {signedMoney(realisedExecutionWindow.netRealisedPnl, realisedCurrency)}
                       </small>
                     </div>
                   </div>
@@ -3359,9 +3362,9 @@ export default function AiTradingPage() {
                   onClick={requestAutomationAction}
                 >
                   {riskProtectionResettable
-                    ? "Review Risk Protection"
+                    ? "Reset Risk Protection & Resume AI"
                     : endedRiskResetAvailable
-                      ? "Review Risk Protection"
+                      ? "Reset Risk Protection & Start AI"
                       : automationSuspended
                         ? "End AI Session & Close Positions"
                         : togglingAutomation

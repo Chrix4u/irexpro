@@ -185,6 +185,7 @@ export interface RealisedExecutionWindowSummary {
   losses: number;
   flats: number;
   winRate: number | null;
+  netRealisedPnl: string | null;
 }
 
 /** Summarize the most recent realised trades used by the cumulative P&L chart. */
@@ -209,6 +210,9 @@ export function summarizeRealisedExecutionWindow(
   const wins = realised.filter((trade) => Number(trade.realisedPnl) > 0).length;
   const losses = realised.filter((trade) => Number(trade.realisedPnl) < 0).length;
   const flats = realised.length - wins - losses;
+  const netRealisedPnl = sumExactDecimalStrings(
+    realised.map((trade) => trade.realisedPnl!).filter(Boolean),
+  );
 
   return {
     tradeCount: realised.length,
@@ -216,6 +220,7 @@ export function summarizeRealisedExecutionWindow(
     losses,
     flats,
     winRate: realised.length > 0 ? wins / realised.length : null,
+    netRealisedPnl,
   };
 }
 
