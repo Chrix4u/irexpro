@@ -37,6 +37,7 @@ class IrexProConnectorClient:
                 "brokerServer": identity.server,
                 "currency": identity.currency,
                 "tradeAllowed": identity.trade_allowed,
+                "accountType": identity.account_type,
             },
             timeout=self.timeout_seconds,
         )
@@ -53,6 +54,7 @@ class IrexProConnectorClient:
             broker_connection_id=broker_connection_id,
             account_login=identity.login,
             broker_server=identity.server,
+            account_type=identity.account_type,
         )
 
     def heartbeat(self, settings: ConnectorSettings, identity: AccountIdentity, sequence: int) -> None:
@@ -67,6 +69,7 @@ class IrexProConnectorClient:
                 "sequence": sequence,
                 "terminalConnected": True,
                 "tradingAllowed": identity.trade_allowed,
+                "accountType": identity.account_type,
             },
             timeout=self.timeout_seconds,
         )
@@ -120,7 +123,11 @@ class IrexProConnectorClient:
 
     @staticmethod
     def _assert_identity(settings: ConnectorSettings, identity: AccountIdentity) -> None:
-        if identity.login != settings.account_login or identity.server != settings.broker_server:
+        if (
+            identity.login != settings.account_login
+            or identity.server != settings.broker_server
+            or identity.account_type != settings.account_type
+        ):
             raise ConnectorApiError(
                 "MT5 terminal account changed after pairing; execution suspended until re-paired"
             )

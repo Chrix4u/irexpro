@@ -64,7 +64,7 @@ def pair(args: argparse.Namespace) -> int:
             **{**settings.__dict__, "terminal_path": args.terminal_path}
         )
         settings.save(args.config)
-        print(f"Paired MT5 account {identity.login} on {identity.server}.")
+        print(f"Paired MT5 {identity.account_type} account {identity.login} on {identity.server}.")
         print(f"Connector configuration saved to {args.config} (token stored in OS credential vault).")
         return 0
     finally:
@@ -92,6 +92,7 @@ def run(args: argparse.Namespace) -> int:
                     broker_connection_id=settings.broker_connection_id,
                     account_login=settings.account_login,
                     broker_server=settings.broker_server,
+                    account_type=settings.account_type,
                 )
                 # Re-read terminal identity immediately before any command.
                 # A user switching accounts between heartbeat and dispatch must

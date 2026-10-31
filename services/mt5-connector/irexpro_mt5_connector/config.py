@@ -13,6 +13,7 @@ class ConnectorSettings:
     broker_connection_id: str
     account_login: str
     broker_server: str
+    account_type: str
     terminal_path: str | None = None
     poll_seconds: float = 1.0
 

@@ -1,4 +1,4 @@
-export const DIRECT_MT5_PROTOCOL_VERSION = 'irexpro-direct-mt5-v1' as const;
+export const DIRECT_MT5_PROTOCOL_VERSION = 'irexpro-direct-mt5-v2' as const;
 
 export const DIRECT_MT5_COMMAND_TYPES = [
   'ACCOUNT_SNAPSHOT',
@@ -28,6 +28,7 @@ export const DIRECT_MT5_EVENT_TYPES = [
   'ERROR',
 ] as const;
 
+export type DirectMt5AccountType = 'DEMO' | 'LIVE';
 export type DirectMt5CommandType = (typeof DIRECT_MT5_COMMAND_TYPES)[number];
 export type DirectMt5EventType = (typeof DIRECT_MT5_EVENT_TYPES)[number];
 
@@ -39,6 +40,7 @@ export interface DirectMt5Command {
   brokerConnectionId: string;
   accountLogin: string;
   brokerServer: string;
+  accountType: DirectMt5AccountType;
   commandType: DirectMt5CommandType;
   createdAt: string;
   leaseExpiresAt: string;
@@ -52,6 +54,7 @@ export interface DirectMt5Event {
   brokerConnectionId: string;
   accountLogin: string;
   brokerServer: string;
+  accountType: DirectMt5AccountType;
   eventType: DirectMt5EventType;
   sequence: number;
   occurredAt: string;
@@ -68,6 +71,14 @@ function requiredString(record: Record<string, unknown>, key: string): string {
   const value = record[key];
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new Error(`${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requiredAccountType(record: Record<string, unknown>): DirectMt5AccountType {
+  const value = requiredString(record, 'accountType');
+  if (value !== 'DEMO' && value !== 'LIVE') {
+    throw new Error('accountType must be DEMO or LIVE');
   }
   return value;
 }
@@ -115,6 +126,7 @@ export function parseDirectMt5Command(value: unknown): DirectMt5Command {
     brokerConnectionId: requiredString(value, 'brokerConnectionId'),
     accountLogin: requiredString(value, 'accountLogin'),
     brokerServer: requiredString(value, 'brokerServer'),
+    accountType: requiredAccountType(value),
     commandType: commandType as DirectMt5CommandType,
     createdAt,
     leaseExpiresAt,
@@ -143,6 +155,7 @@ export function parseDirectMt5Event(value: unknown): DirectMt5Event {
     brokerConnectionId: requiredString(value, 'brokerConnectionId'),
     accountLogin: requiredString(value, 'accountLogin'),
     brokerServer: requiredString(value, 'brokerServer'),
+    accountType: requiredAccountType(value),
     eventType: eventType as DirectMt5EventType,
     sequence: sequence as number,
     occurredAt: requiredIsoTimestamp(value, 'occurredAt'),

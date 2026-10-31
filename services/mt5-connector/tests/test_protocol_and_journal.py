@@ -20,6 +20,7 @@ def command(command_id: str = "cmd-1", key: str = "intent-1") -> dict:
         "brokerConnectionId": "connection-1",
         "accountLogin": "113392789",
         "brokerServer": "Broker-Demo",
+        "accountType": "DEMO",
         "commandType": "PLACE_ORDER",
         "createdAt": "2026-10-24T18:00:00.000Z",
         "leaseExpiresAt": "2026-10-24T18:00:30.000Z",
@@ -36,6 +37,7 @@ def test_protocol_rejects_wrong_account_binding() -> None:
             broker_connection_id="connection-1",
             account_login="999",
             broker_server="Broker-Demo",
+            account_type="DEMO",
         )
 
 
@@ -96,3 +98,22 @@ def test_heartbeat_sequence_remains_monotonic_across_connector_restart(tmp_path:
         assert recovered.next_heartbeat_sequence() == 3
     finally:
         recovered.close()
+
+
+def test_protocol_v2_requires_bound_account_environment() -> None:
+    assert PROTOCOL_VERSION == "irexpro-direct-mt5-v2"
+    parsed = validate_command(command())
+    assert parsed["accountType"] == "DEMO"
+    bad = command()
+    bad["accountType"] = "CONTEST"
+    with pytest.raises(ProtocolError, match="accountType"):
+        validate_command(bad)
+    with pytest.raises(ProtocolError, match="accountType"):
+        assert_bound_identity(
+            parsed,
+            connector_id="connector-1",
+            broker_connection_id="connection-1",
+            account_login="113392789",
+            broker_server="Broker-Demo",
+            account_type="LIVE",
+        )

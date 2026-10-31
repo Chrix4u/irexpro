@@ -15,6 +15,7 @@ class AccountIdentity:
     server: str
     currency: str | None
     trade_allowed: bool
+    account_type: str
 
 
 class TerminalPort(Protocol):
@@ -81,11 +82,29 @@ class MetaQuotesMt5Terminal:
         terminal = mt5.terminal_info()
         if account is None or terminal is None:
             raise Mt5TerminalError("MT5 terminal is not logged into a trading account")
+        trade_mode = int(getattr(account, "trade_mode", -1))
+        demo_mode = int(getattr(mt5, "ACCOUNT_TRADE_MODE_DEMO", 0))
+        real_mode = int(getattr(mt5, "ACCOUNT_TRADE_MODE_REAL", 2))
+        contest_mode = int(getattr(mt5, "ACCOUNT_TRADE_MODE_CONTEST", 1))
+        if trade_mode == demo_mode:
+            account_type = "DEMO"
+        elif trade_mode == real_mode:
+            account_type = "LIVE"
+        elif trade_mode == contest_mode:
+            raise Mt5TerminalError("MT5 CONTEST accounts are not supported for iRexPro automated trading")
+        else:
+            raise Mt5TerminalError(f"MT5 reported an unknown account trade mode: {trade_mode}")
+        trade_allowed = bool(
+            getattr(terminal, "trade_allowed", False)
+            and getattr(account, "trade_allowed", False)
+            and getattr(account, "trade_expert", False)
+        )
         return AccountIdentity(
             login=str(account.login),
             server=str(account.server),
             currency=str(account.currency) if account.currency else None,
-            trade_allowed=bool(getattr(terminal, "trade_allowed", False)),
+            trade_allowed=trade_allowed,
+            account_type=account_type,
         )
 
     def shutdown(self) -> None:

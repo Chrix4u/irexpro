@@ -31,6 +31,7 @@ def test_settings_file_contains_no_password_or_connector_token(tmp_path: Path) -
         broker_connection_id="connection-1",
         account_login="113392789",
         broker_server="Broker-Demo",
+        account_type="DEMO",
     ).save(path)
     raw = path.read_text(encoding="utf-8")
     data = json.loads(raw)
@@ -71,12 +72,14 @@ def test_connector_rejects_terminal_account_switch() -> None:
         broker_connection_id="connection-1",
         account_login="113392789",
         broker_server="Broker-Demo",
+        account_type="DEMO",
     )
     changed = AccountIdentity(
         login="999999",
         server="Other-Server",
         currency="USD",
         trade_allowed=True,
+        account_type="LIVE",
     )
     try:
         IrexProConnectorClient._assert_identity(settings, changed)
@@ -84,3 +87,26 @@ def test_connector_rejects_terminal_account_switch() -> None:
         assert "changed after pairing" in str(exc)
     else:
         raise AssertionError("account switch must fail closed")
+
+
+def test_connector_rejects_environment_switch_even_when_login_and_server_match() -> None:
+    from irexpro_mt5_connector.client import ConnectorApiError, IrexProConnectorClient
+    from irexpro_mt5_connector.mt5_terminal import AccountIdentity
+
+    settings = ConnectorSettings(
+        server_url="https://irexpro.example",
+        connector_id="connector-1",
+        broker_connection_id="connection-1",
+        account_login="113392789",
+        broker_server="Broker",
+        account_type="DEMO",
+    )
+    changed = AccountIdentity(
+        login="113392789", server="Broker", currency="USD", trade_allowed=True, account_type="LIVE"
+    )
+    try:
+        IrexProConnectorClient._assert_identity(settings, changed)
+    except ConnectorApiError as exc:
+        assert "changed after pairing" in str(exc)
+    else:
+        raise AssertionError("account environment switch must fail closed")

@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Mapping
 
-PROTOCOL_VERSION = "irexpro-direct-mt5-v1"
+PROTOCOL_VERSION = "irexpro-direct-mt5-v2"
 
 COMMAND_TYPES = (
     "ACCOUNT_SNAPSHOT",
     "GET_PRICE",
     "GET_OHLCV",
+    "LIST_SYMBOLS",
+    "GET_SYMBOL_INFO",
     "CALCULATE_MARGIN",
     "PLACE_ORDER",
     "MODIFY_ORDER",
@@ -41,6 +43,13 @@ def _required_text(value: Mapping[str, Any], key: str) -> str:
     if not isinstance(item, str) or not item.strip():
         raise ProtocolError(f"{key} must be a non-empty string")
     return item
+
+
+def _required_account_type(value: Mapping[str, Any]) -> str:
+    account_type = _required_text(value, "accountType")
+    if account_type not in {"DEMO", "LIVE"}:
+        raise ProtocolError("accountType must be DEMO or LIVE")
+    return account_type
 
 
 def _required_timestamp(value: Mapping[str, Any], key: str) -> str:
@@ -78,6 +87,7 @@ def validate_command(value: Mapping[str, Any]) -> dict[str, Any]:
         "brokerConnectionId": _required_text(value, "brokerConnectionId"),
         "accountLogin": _required_text(value, "accountLogin"),
         "brokerServer": _required_text(value, "brokerServer"),
+        "accountType": _required_account_type(value),
         "commandType": command_type,
         "createdAt": created_at,
         "leaseExpiresAt": lease_expires_at,
@@ -92,12 +102,14 @@ def assert_bound_identity(
     broker_connection_id: str,
     account_login: str,
     broker_server: str,
+    account_type: str,
 ) -> None:
     expected = {
         "connectorId": connector_id,
         "brokerConnectionId": broker_connection_id,
         "accountLogin": account_login,
         "brokerServer": broker_server,
+        "accountType": account_type,
     }
     for key, expected_value in expected.items():
         if command.get(key) != expected_value:
