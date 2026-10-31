@@ -437,7 +437,7 @@ describe('M1TacticalEvidenceService', () => {
     expect(normalized).toContain("ti.strategy_code = 'external-irexpro-multimodel-ensemble'");
     expect(normalized).toContain("ti.timeframe = 'M1'");
     expect(normalized).toContain("t.status = 'CLOSED'");
-    expect(normalized).toContain("t.closed_at > ($6::timestamptz - interval '24 hours')");
+    expect(normalized).toContain("t.closed_at > ($6::timestamptz - interval '14 days')");
     expect(normalized).toContain('ORDER BY t.closed_at DESC');
     expect(normalized).toContain('LIMIT 8');
     expect(params).toEqual([
@@ -483,6 +483,108 @@ describe('M1TacticalEvidenceService', () => {
     });
     expect(result.profitFactor).toBeCloseTo(7 / 26, 8);
     expect(String(query.mock.calls[0]![0]).replace(/\s+/g, ' ')).toContain('LIMIT 8');
+  });
+
+  it('keeps a severe exact sleeve quarantined across the FX weekend', async () => {
+    const query = jest.fn().mockResolvedValue([
+      { realised_pnl: '-5.57', closed_at: '2026-10-30T12:14:51.962Z' },
+      { realised_pnl: '-6.68', closed_at: '2026-10-30T11:30:00.000Z' },
+      { realised_pnl: '-6.68', closed_at: '2026-10-30T10:45:00.000Z' },
+      { realised_pnl: '5.04', closed_at: '2026-10-30T10:00:00.000Z' },
+      { realised_pnl: '-7.52', closed_at: '2026-10-30T09:15:00.000Z' },
+      { realised_pnl: '6.81', closed_at: '2026-10-30T08:30:00.000Z' },
+      { realised_pnl: '2.70', closed_at: '2026-10-30T07:45:00.000Z' },
+      { realised_pnl: '-9.04', closed_at: '2026-10-30T07:00:00.000Z' },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const result = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'USDJPY',
+      direction: 'BUY',
+      strategyRoute: 'EARLY_TRANSITION',
+      evaluatedAt: new Date('2026-11-01T22:00:00.000Z'),
+    });
+
+    expect(result).toMatchObject({
+      active: true,
+      reason: 'PERSISTENT_NEGATIVE_PAYOFF',
+      recentClosedTrades: 0,
+      payoffClosedTrades: 8,
+      persistentNegativePayoff: true,
+    });
+    expect(result.profitFactor).toBeCloseTo(14.55 / 35.49, 8);
+  });
+
+  it('does not persistently quarantine a marginal sleeve above the severe payoff threshold', async () => {
+    const query = jest.fn().mockResolvedValue([
+      { realised_pnl: '-11.19', closed_at: '2026-10-30T13:53:03.021Z' },
+      { realised_pnl: '-10.50', closed_at: '2026-10-30T13:00:00.000Z' },
+      { realised_pnl: '-10.72', closed_at: '2026-10-30T12:00:00.000Z' },
+      { realised_pnl: '10.07', closed_at: '2026-10-30T11:00:00.000Z' },
+      { realised_pnl: '6.19', closed_at: '2026-10-30T10:00:00.000Z' },
+      { realised_pnl: '1.25', closed_at: '2026-10-30T09:00:00.000Z' },
+      { realised_pnl: '3.75', closed_at: '2026-10-30T08:00:00.000Z' },
+      { realised_pnl: '2.32', closed_at: '2026-10-30T07:00:00.000Z' },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const result = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'AUDUSD',
+      direction: 'BUY',
+      strategyRoute: 'EARLY_TRANSITION',
+      evaluatedAt: new Date('2026-11-01T22:00:00.000Z'),
+    });
+
+    expect(result).toMatchObject({
+      active: false,
+      reason: 'CLEAR',
+      recentClosedTrades: 0,
+      payoffClosedTrades: 8,
+      persistentNegativePayoff: false,
+    });
+    expect(result.profitFactor).toBeGreaterThanOrEqual(0.65);
+  });
+
+  it('requires eight fresh-enough observations for persistent payoff quarantine', async () => {
+    const seven = [
+      { realised_pnl: '-8.00', closed_at: '2026-10-30T12:00:00.000Z' },
+      { realised_pnl: '2.00', closed_at: '2026-10-30T11:00:00.000Z' },
+      { realised_pnl: '-7.00', closed_at: '2026-10-30T10:00:00.000Z' },
+      { realised_pnl: '1.00', closed_at: '2026-10-30T09:00:00.000Z' },
+      { realised_pnl: '-6.00', closed_at: '2026-10-30T08:00:00.000Z' },
+      { realised_pnl: '1.00', closed_at: '2026-10-30T07:00:00.000Z' },
+      { realised_pnl: '-5.00', closed_at: '2026-10-30T06:00:00.000Z' },
+    ];
+    const query = jest.fn().mockResolvedValue(seven);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const sparse = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'USDJPY',
+      direction: 'BUY',
+      strategyRoute: 'EARLY_TRANSITION',
+      evaluatedAt: new Date('2026-11-01T22:00:00.000Z'),
+    });
+    expect(sparse).toMatchObject({ active: false, persistentNegativePayoff: false });
+
+    query.mockResolvedValue([
+      ...seven,
+      { realised_pnl: '-9.00', closed_at: '2026-10-28T17:59:59.000Z' },
+    ]);
+    const stale = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'USDJPY',
+      direction: 'BUY',
+      strategyRoute: 'EARLY_TRANSITION',
+      evaluatedAt: new Date('2026-11-03T18:00:00.000Z'),
+    });
+    expect(stale).toMatchObject({ active: false, persistentNegativePayoff: false });
   });
 
   it('keeps a mixed but profitable exact sleeve clear', async () => {

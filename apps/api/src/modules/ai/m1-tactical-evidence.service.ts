@@ -133,6 +133,10 @@ export const M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS = 12;
 export const M1_MULTIMODEL_PAYOFF_WINDOW_TRADES = 8;
 export const M1_MULTIMODEL_NEGATIVE_PAYOFF_MIN_TRADES = 5;
 export const M1_MULTIMODEL_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR = 0.7;
+export const M1_MULTIMODEL_PAYOFF_LOOKBACK_DAYS = 14;
+export const M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES = 8;
+export const M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR = 0.65;
+export const M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_AGE_HOURS = 96;
 
 export type M1MultimodelStrategyRoute =
   | 'TREND_CONTINUATION'
@@ -151,14 +155,20 @@ export interface M1MultimodelLossStreakBrakeQuery {
 export interface M1MultimodelLossStreakBrakeDecision {
   artifact: typeof M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT;
   active: boolean;
-  reason: 'CLEAR' | 'RECENT_MULTIMODEL_LOSS_STREAK' | 'RECENT_NEGATIVE_PAYOFF';
+  reason:
+    | 'CLEAR'
+    | 'RECENT_MULTIMODEL_LOSS_STREAK'
+    | 'RECENT_NEGATIVE_PAYOFF'
+    | 'PERSISTENT_NEGATIVE_PAYOFF';
   strategyRoute: M1MultimodelStrategyRoute;
   recentClosedTrades: number;
+  payoffClosedTrades: number;
   recentLosses: number;
   recentWins: number;
   cumulativeRealisedPnl: number;
   profitFactor?: number | null;
   negativePayoff?: boolean;
+  persistentNegativePayoff: boolean;
   latestClosedAt: Date | null;
   cooldownHours: number;
   cooldownRemainingSeconds: number;
@@ -722,7 +732,7 @@ export class M1TacticalEvidenceService {
           AND t.realised_pnl IS NOT NULL
           AND t.closed_at IS NOT NULL
           AND t.closed_at <= $6::timestamptz
-          AND t.closed_at > ($6::timestamptz - interval '24 hours')
+          AND t.closed_at > ($6::timestamptz - interval '14 days')
         ORDER BY t.closed_at DESC
         LIMIT ${M1_MULTIMODEL_PAYOFF_WINDOW_TRADES}
       `,
@@ -736,52 +746,87 @@ export class M1TacticalEvidenceService {
       ],
     )) as Array<{ realised_pnl: string | number; closed_at: string | Date }>;
 
-    const pnlValues = rows.map((row) => number(row.realised_pnl));
-    const recentLosses = pnlValues.filter((value) => value < 0).length;
-    const recentWins = pnlValues.filter((value) => value > 0).length;
+    const payoffRows = rows.map((row) => ({
+      pnl: number(row.realised_pnl),
+      closedAt: date(row.closed_at),
+    }));
+    const recentCutoffMs =
+      input.evaluatedAt.getTime() - M1_MULTIMODEL_LOSS_STREAK_WINDOW_HOURS * 60 * 60_000;
+    const recentRows = payoffRows.filter((row) => row.closedAt.getTime() > recentCutoffMs);
+    const recentPnlValues = recentRows.map((row) => row.pnl);
+    const payoffPnlValues = payoffRows.map((row) => row.pnl);
+    const recentLosses = recentPnlValues.filter((value) => value < 0).length;
+    const recentWins = recentPnlValues.filter((value) => value > 0).length;
     const cumulativeRealisedPnl =
-      Math.round(pnlValues.reduce((sum, value) => sum + value, 0) * 100) / 100;
-    const grossProfit = pnlValues
+      Math.round(recentPnlValues.reduce((sum, value) => sum + value, 0) * 100) / 100;
+    const recentGrossProfit = recentPnlValues
       .filter((value) => value > 0)
       .reduce((sum, value) => sum + value, 0);
-    const grossLoss = -pnlValues
+    const recentGrossLoss = -recentPnlValues
       .filter((value) => value < 0)
       .reduce((sum, value) => sum + value, 0);
-    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? null : 0;
+    const recentProfitFactor =
+      recentGrossLoss > 0 ? recentGrossProfit / recentGrossLoss : recentGrossProfit > 0 ? null : 0;
     const negativePayoff =
-      rows.length >= M1_MULTIMODEL_NEGATIVE_PAYOFF_MIN_TRADES &&
+      recentRows.length >= M1_MULTIMODEL_NEGATIVE_PAYOFF_MIN_TRADES &&
       cumulativeRealisedPnl < 0 &&
+      recentProfitFactor !== null &&
+      recentProfitFactor < M1_MULTIMODEL_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR;
+
+    const payoffCumulativeRealisedPnl =
+      Math.round(payoffPnlValues.reduce((sum, value) => sum + value, 0) * 100) / 100;
+    const payoffGrossProfit = payoffPnlValues
+      .filter((value) => value > 0)
+      .reduce((sum, value) => sum + value, 0);
+    const payoffGrossLoss = -payoffPnlValues
+      .filter((value) => value < 0)
+      .reduce((sum, value) => sum + value, 0);
+    const profitFactor =
+      payoffGrossLoss > 0 ? payoffGrossProfit / payoffGrossLoss : payoffGrossProfit > 0 ? null : 0;
+    const latestClosedAt = payoffRows[0]?.closedAt ?? null;
+    const persistentEvidenceAgeHours = latestClosedAt
+      ? Math.max(0, (input.evaluatedAt.getTime() - latestClosedAt.getTime()) / (60 * 60_000))
+      : Number.POSITIVE_INFINITY;
+    const persistentNegativePayoff =
+      payoffRows.length >= M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES &&
+      payoffCumulativeRealisedPnl < 0 &&
       profitFactor !== null &&
-      profitFactor < M1_MULTIMODEL_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR;
-    const latestClosedAt = rows[0] ? date(rows[0].closed_at) : null;
+      profitFactor < M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR &&
+      persistentEvidenceAgeHours <= M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_AGE_HOURS;
+
     const cooldownUntilMs = latestClosedAt
       ? latestClosedAt.getTime() + M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS * 60 * 60_000
       : 0;
     const cooldownRemainingSeconds = latestClosedAt
       ? Math.max(0, Math.ceil((cooldownUntilMs - input.evaluatedAt.getTime()) / 1000))
       : 0;
-    const latestThree = pnlValues.slice(0, M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES);
+    const latestThree = recentPnlValues.slice(0, M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES);
     const lossStreak =
       latestThree.length === M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES &&
       latestThree.every((value) => value < 0);
-    const active = (lossStreak || negativePayoff) && cooldownRemainingSeconds > 0;
+    const recentBrakeActive = (lossStreak || negativePayoff) && cooldownRemainingSeconds > 0;
+    const active = recentBrakeActive || persistentNegativePayoff;
     const reason: M1MultimodelLossStreakBrakeDecision['reason'] = !active
       ? 'CLEAR'
-      : lossStreak
+      : recentBrakeActive && lossStreak
         ? 'RECENT_MULTIMODEL_LOSS_STREAK'
-        : 'RECENT_NEGATIVE_PAYOFF';
+        : recentBrakeActive && negativePayoff
+          ? 'RECENT_NEGATIVE_PAYOFF'
+          : 'PERSISTENT_NEGATIVE_PAYOFF';
 
     return {
       artifact: M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT,
       active,
       reason,
       strategyRoute: input.strategyRoute,
-      recentClosedTrades: rows.length,
+      recentClosedTrades: recentRows.length,
+      payoffClosedTrades: payoffRows.length,
       recentLosses,
       recentWins,
       cumulativeRealisedPnl,
       profitFactor,
       negativePayoff,
+      persistentNegativePayoff,
       latestClosedAt,
       cooldownHours: M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS,
       cooldownRemainingSeconds,
