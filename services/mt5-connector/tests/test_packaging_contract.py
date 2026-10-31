@@ -30,6 +30,7 @@ def test_windows_packaging_contract_is_releaseable() -> None:
     assert "pyinstaller" in workflow_text.lower()
     assert "Get-FileHash" in workflow_text
     assert "softprops/action-gh-release" in workflow_text
+    assert "irexpro-mt5-connector-windows-${{ github.run_id }}" in workflow_text
     assert "iRexPro-MT5-Connector-Setup.exe" in workflow_text
 
 
