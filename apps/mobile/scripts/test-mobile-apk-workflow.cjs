@@ -9,6 +9,14 @@ assert.match(workflow, /\n  pull_request:\n/, 'APK workflow must validate native
 assert.match(workflow, /  pull_request:[\s\S]*?paths:[\s\S]*?apps\/mobile\/\*\*/, 'APK PR validation must be scoped to mobile changes');
 assert.match(workflow, /push:[\s\S]*?branches:[\s\S]*?deploy\/daily-loss-reset-20261028/, 'APK preview workflow must build mobile changes pushed to the staging deployment branch');
 
+assert.match(workflow, /push:[\s\S]*?tags:[\s\S]*?irexpro-mobile-v\\*/, 'APK workflow must build durable mobile release tags');
+assert.match(workflow, /iRexPro-Android-Preview\.apk/, 'Tagged Android releases must use a stable APK asset name');
+assert.match(workflow, /SHA256SUMS\.txt/, 'Tagged Android releases must publish a stable checksum asset');
+assert.match(workflow, /release-android:[\s\S]*?if:.*refs\/tags\/irexpro-mobile-v/, 'GitHub Release publication must be tag-only');
+assert.match(workflow, /release-android:[\s\S]*?permissions:[\s\S]*?contents: write/, 'Only the release job should receive contents write permission');
+assert.match(workflow, /release-android:[\s\S]*?softprops\/action-gh-release/, 'Tagged Android builds must publish GitHub Release assets');
+assert.doesNotMatch(workflow, /permissions:\n  contents: write/, 'The whole workflow must not grant branch preview jobs repository write permission');
+
 const installMarker = '- name: Install pinned Android native toolchain';
 const buildMarker = '- name: Build standalone release APK';
 const installIndex = workflow.indexOf(installMarker);

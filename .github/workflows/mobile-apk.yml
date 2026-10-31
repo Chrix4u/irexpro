@@ -15,6 +15,8 @@ on:
     branches:
       - main
       - 'deploy/daily-loss-reset-20261028'
+    tags:
+      - 'irexpro-mobile-v*'
     paths:
       - 'apps/mobile/**'
       - 'packages/api-client/**'
@@ -146,12 +148,13 @@ jobs:
           set -Eeuo pipefail
           src='apps/mobile/android/app/build/outputs/apk/release/app-release.apk'
           test -s "$src"
-          short_sha="${GITHUB_SHA:0:7}"
-          out="apps/mobile/irexpro-android-preview-${short_sha}.apk"
+          out="apps/mobile/iRexPro-Android-Preview.apk"
+          checksum="apps/mobile/SHA256SUMS.txt"
           cp "$src" "$out"
-          sha256sum "$out" | tee "${out}.sha256"
+          (cd apps/mobile && sha256sum iRexPro-Android-Preview.apk > SHA256SUMS.txt)
+          cat "$checksum"
           echo "apk=$out" >> "$GITHUB_OUTPUT"
-          echo "checksum=${out}.sha256" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
 
       - name: Upload installable APK
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -162,3 +165,35 @@ jobs:
             ${{ steps.artifact.outputs.checksum }}
           if-no-files-found: error
           retention-days: 14
+
+  release-android:
+    name: Publish durable Android preview release
+    needs: build-apk
+    if: startsWith(github.ref, 'refs/tags/irexpro-mobile-v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download validated APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: irexpro-android-preview-${{ github.sha }}
+          path: release
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s release/iRexPro-Android-Preview.apk
+          test -s release/SHA256SUMS.txt
+          (cd release && sha256sum -c SHA256SUMS.txt)
+
+      - name: Publish GitHub prerelease assets
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            release/iRexPro-Android-Preview.apk
+            release/SHA256SUMS.txt
