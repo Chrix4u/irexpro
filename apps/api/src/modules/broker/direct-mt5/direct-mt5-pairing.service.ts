@@ -263,6 +263,7 @@ export class DirectMt5PairingService {
         WHERE c.id = $1
           AND c.state = 'ACTIVE'
           AND c.account_type = bc.account_type
+          AND c.account_login = bc.account_id
           AND token_hash IS NOT NULL
         LIMIT 1
       `,

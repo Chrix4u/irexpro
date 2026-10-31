@@ -158,6 +158,9 @@ describe('DirectMt5PairingService', () => {
       lastSequence: 7,
     });
     expect(query.mock.calls[0]![1]).toEqual(['connector-1']);
+    const authSql = String(query.mock.calls[0]![0]);
+    expect(authSql).toContain('c.account_type = bc.account_type');
+    expect(authSql).toContain('c.account_login = bc.account_id');
   });
 
   it('rejects a wrong connector token', async () => {

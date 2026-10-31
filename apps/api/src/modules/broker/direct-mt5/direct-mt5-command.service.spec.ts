@@ -29,6 +29,10 @@ describe('DirectMt5CommandService', () => {
 
     expect(result.id).toBe('cmd-existing');
     expect(query).toHaveBeenCalledTimes(2);
+    const enqueueSql = String(query.mock.calls[0]![0]);
+    expect(enqueueSql).toContain('broker.broker_connections');
+    expect(enqueueSql).toContain('c.account_type = bc.account_type');
+    expect(enqueueSql).toContain('c.account_login = bc.account_id');
   });
 
   it('rejects idempotency-key reuse with different command semantics', async () => {

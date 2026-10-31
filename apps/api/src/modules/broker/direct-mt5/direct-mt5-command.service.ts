@@ -66,6 +66,7 @@ export class DirectMt5CommandService {
             AND c.broker_connection_id = $3
             AND c.state = 'ACTIVE'
             AND c.account_type = bc.account_type
+            AND c.account_login = bc.account_id
         )
         ON CONFLICT (broker_connection_id, idempotency_key) DO NOTHING
         RETURNING id, connector_id, broker_connection_id, idempotency_key,
