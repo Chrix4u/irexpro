@@ -177,6 +177,21 @@ describe('Direct MT5 onboarding', () => {
     expect(screen.getByText(/Broker server: Broker-Demo/)).not.toBeNull();
   });
 
+  it('offers the durable Android phone app separately from the Windows MT5 execution bridge', async () => {
+    render(<OnboardingBrokerPage />);
+    await waitFor(() => expect(screen.getByText(/Direct Connector \(recommended\)/i)).not.toBeNull());
+
+    const android = screen.getByRole('link', { name: /Download iRexPro Android preview/i });
+    expect(android.getAttribute('href')).toContain(
+      'releases/download/irexpro-mobile-v0.1.5-preview.1/iRexPro-Android-Preview.apk',
+    );
+    expect(screen.getByText(/phone app is your iRexPro control surface/i)).not.toBeNull();
+    expect(screen.getByText(/Windows connector is still required as the MT5 execution bridge/i)).not.toBeNull();
+
+    const windows = screen.getByRole('link', { name: /Download Windows connector/i });
+    expect(windows.getAttribute('href')).toContain('mt5-connector-v0.2.0/iRexPro-MT5-Connector-Setup.exe');
+  });
+
   it('shows the Windows installer and keeps LIVE visibly certification-locked', async () => {
     render(<OnboardingBrokerPage />);
     await waitFor(() => expect(screen.getByText(/Direct Connector \(recommended\)/i)).not.toBeNull());

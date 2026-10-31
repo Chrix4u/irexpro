@@ -54,6 +54,9 @@ type DirectMt5BridgeSetup = 'READY' | 'NEED_WINDOWS';
 const DIRECT_MT5_WINDOWS_INSTALLER_URL =
   'https://github.com/Chrix4u/irexpro/releases/download/mt5-connector-v0.2.0/iRexPro-MT5-Connector-Setup.exe';
 
+const IREXPRO_ANDROID_PREVIEW_URL =
+  'https://github.com/Chrix4u/irexpro/releases/download/irexpro-mobile-v0.1.5-preview.1/iRexPro-Android-Preview.apk';
+
 /** Connectable statuses per the registry's status-honesty rules (§AB). */
 const REGISTRY_CONNECTABLE_STATUSES: readonly string[] = ['SUPPORTED', 'BETA'];
 
@@ -867,6 +870,31 @@ export default function OnboardingBrokerPage() {
                   The Windows PC or VPS is only the MT5 execution bridge, so you do not need to sit at that machine to manage trading.
                 </span>
               </Alert>
+
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 'var(--space-2)',
+                  padding: 'var(--space-4)',
+                  border: '1px solid var(--border-soft)',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--surface-tint)',
+                }}
+              >
+                <strong>Use iRexPro on Android</strong>
+                <Link
+                  href={IREXPRO_ANDROID_PREVIEW_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm"
+                >
+                  Download iRexPro Android preview
+                </Link>
+                <p className="helper-text" style={{ margin: 0 }}>
+                  This is the preview/staging phone build. The phone app is your iRexPro control surface. The Windows connector is still required as the MT5 execution bridge for Direct MT5, and it runs in the background on the Windows PC or VPS where MetaTrader 5 is logged in.
+                </p>
+              </div>
 
               <div>
                 <div className="input-label" style={{ marginBottom: 'var(--space-2)' }}>Where will MetaTrader 5 run?</div>
