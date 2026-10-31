@@ -10,7 +10,7 @@ import { useNotification } from '@/hooks/useNotification';
 import { mapApiError } from '@/lib/error-mapping';
 import { api } from '@/lib/api';
 import { IREXPRO_BROKER_OAUTH_FLOW_KEY } from '@/lib/broker-oauth-flow';
-import { formatEnumLabel, isBrokerConnectionRuntimeReady } from '@irexpro/types';
+import { deriveProviderCertificationState, formatEnumLabel, isBrokerConnectionRuntimeReady } from '@irexpro/types';
 import { connectionVerificationLabel } from '@/lib/trader-session';
 import type {
   SupportedBroker,
@@ -48,6 +48,10 @@ type BrokerAction =
   | 'deleting';
 
 type Mt5ConnectionMethod = 'DIRECT' | 'METAAPI';
+type DirectMt5Environment = 'DEMO' | 'LIVE';
+
+const DIRECT_MT5_WINDOWS_INSTALLER_URL =
+  'https://github.com/Chrix4u/irexpro/releases/download/mt5-connector-v0.2.0/iRexPro-MT5-Connector-Setup.exe';
 
 /** Connectable statuses per the registry's status-honesty rules (§AB). */
 const REGISTRY_CONNECTABLE_STATUSES: readonly string[] = ['SUPPORTED', 'BETA'];
@@ -55,6 +59,7 @@ const REGISTRY_CONNECTABLE_STATUSES: readonly string[] = ['SUPPORTED', 'BETA'];
 export default function OnboardingBrokerPage() {
   const router = useRouter();
   const { user, logout, restoring } = useAuth();
+  const userId = user?.id;
   const notify = useNotification();
   const [action, setAction] = useState<BrokerAction | null>(null);
   const [pendingConnectionId, setPendingConnectionId] = useState<string | null>(null);
@@ -88,12 +93,13 @@ export default function OnboardingBrokerPage() {
   const [displayName, setDisplayName] = useState('');
   const [testResult, setTestResult] = useState<BrokerTestResult | null>(null);
   const [mt5ConnectionMethod, setMt5ConnectionMethod] = useState<Mt5ConnectionMethod>('DIRECT');
+  const [directMt5Environment, setDirectMt5Environment] = useState<DirectMt5Environment>('DEMO');
   const [directMt5ConnectionId, setDirectMt5ConnectionId] = useState<string | null>(null);
   const [directMt5Pairing, setDirectMt5Pairing] = useState<DirectMt5PairingView | null>(null);
   const [directMt5Health, setDirectMt5Health] = useState<DirectMt5ConnectionHealthView | null>(null);
 
   useEffect(() => {
-    if (restoring || !user) return;
+    if (restoring || !userId) return;
 
     let cancelled = false;
     (async () => {
@@ -126,7 +132,7 @@ export default function OnboardingBrokerPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [notify, restoring, user]);
+  }, [notify, restoring, userId]);
 
   useEffect(() => {
     if (!user || !directMt5ConnectionId) return;
@@ -298,9 +304,19 @@ export default function OnboardingBrokerPage() {
 
     setAction('pairing');
     try {
+      const directEntry = registryEntries.find((entry) => entry.id === 'direct-mt5') ?? null;
+      const certificationState =
+        directEntry?.certificationState ?? deriveProviderCertificationState(directEntry?.productionLiveVerification);
+      if (directMt5Environment === 'LIVE' && certificationState !== 'CERTIFIED') {
+        const message =
+          'Direct MT5 LIVE certification is still pending. LIVE pairing remains locked until current certification evidence is approved.';
+        setError(message);
+        notify.warning(message);
+        return;
+      }
       const created = await api.createBrokerConnection({
         brokerId: 'direct-mt5',
-        accountType: 'DEMO',
+        accountType: directMt5Environment,
         accountId: accountId.trim(),
         displayName: displayName.trim() || undefined,
       });
@@ -496,11 +512,42 @@ export default function OnboardingBrokerPage() {
   // decides OAuth vs credentials. Fallback to the summary list when the
   // registry is unreachable (offline-tolerant, same as before).
   const selectedRegistryEntry = registryEntries.find((e) => e.id === selectedBrokerId);
+  const directMt5RegistryEntry = registryEntries.find((e) => e.id === 'direct-mt5') ?? null;
+  const directMt5CertificationState =
+    directMt5RegistryEntry?.certificationState ??
+    deriveProviderCertificationState(directMt5RegistryEntry?.productionLiveVerification);
+  const directMt5LiveCertified =
+    directMt5RegistryEntry?.adapterAvailable === true &&
+    directMt5RegistryEntry.environments.includes('LIVE') &&
+    directMt5CertificationState === 'CERTIFIED';
   const selectedIsOAuth = selectedRegistryEntry?.authenticationType === 'OAUTH';
   const selectedIsMt5 = selectedBrokerId === 'metatrader5';
   const selectedIsDirectMt5 = selectedBrokerId === 'direct-mt5' || (selectedIsMt5 && mt5ConnectionMethod === 'DIRECT');
   const selectedConnectionReadiness = selectedRegistryEntry?.connectionReadiness;
   const selectedConnectionReady = isBrokerConnectionRuntimeReady(selectedRegistryEntry);
+
+  function switchToDirectMt5() {
+    setMt5ConnectionMethod('DIRECT');
+    if (registryEntries.some((entry) => entry.id === 'direct-mt5' && entry.adapterAvailable)) {
+      setSelectedBrokerId('direct-mt5');
+    }
+    setDirectMt5Environment('DEMO');
+    setDirectMt5ConnectionId(null);
+    setDirectMt5Pairing(null);
+    setDirectMt5Health(null);
+    setTestResult(null);
+  }
+
+  function switchToMetaApi() {
+    setMt5ConnectionMethod('METAAPI');
+    if (registryEntries.some((entry) => entry.id === 'metatrader5' && entry.adapterAvailable)) {
+      setSelectedBrokerId('metatrader5');
+    }
+    setDirectMt5ConnectionId(null);
+    setDirectMt5Pairing(null);
+    setDirectMt5Health(null);
+    setTestResult(null);
+  }
 
   function registryEntryForConnection(connection: BrokerConnectionView): BrokerRegistryEntry | null {
     return registryEntries.find((entry) => entry.id === connection.brokerId) ?? null;
@@ -724,6 +771,7 @@ export default function OnboardingBrokerPage() {
               onChange={(e) => {
                 setSelectedBrokerId(e.target.value);
                 setMt5ConnectionMethod('DIRECT');
+                setDirectMt5Environment('DEMO');
                 setDirectMt5ConnectionId(null);
                 setDirectMt5Pairing(null);
                 setDirectMt5Health(null);
@@ -746,9 +794,11 @@ export default function OnboardingBrokerPage() {
             <p className="helper-text">
               {selectedIsOAuth
                 ? 'cTrader-family brokers connect through OAuth authorization — no API keys to paste.'
-                : selectedIsMt5
+                : selectedIsDirectMt5
                   ? 'Direct MT5 is recommended: pair an already logged-in Windows MT5 terminal without sharing its password.'
-                  : 'Paper Broker requires no API credentials — just an account ID.'}
+                  : selectedIsMt5
+                    ? 'Choose Direct Connector for the subscription-free native route or MetaApi for the optional hosted route.'
+                    : 'Paper Broker requires no API credentials — just an account ID.'}
             </p>
           </div>
 
@@ -800,10 +850,10 @@ export default function OnboardingBrokerPage() {
               <div>
                 <div className="input-label" style={{ marginBottom: 'var(--space-2)' }}>Connection method</div>
                 <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                  <Button type="button" variant="primary" onClick={() => setMt5ConnectionMethod('DIRECT')}>
+                  <Button type="button" variant="primary" onClick={switchToDirectMt5}>
                     Direct Connector (recommended)
                   </Button>
-                  <Button type="button" variant="secondary" onClick={() => setMt5ConnectionMethod('METAAPI')}>
+                  <Button type="button" variant="secondary" onClick={switchToMetaApi}>
                     MT5 via MetaApi (optional)
                   </Button>
                 </div>
@@ -815,6 +865,53 @@ export default function OnboardingBrokerPage() {
                   We never ask for your MT5 password, investor password, API key, or broker secret.
                 </span>
               </Alert>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                <Link
+                  href={DIRECT_MT5_WINDOWS_INSTALLER_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm"
+                >
+                  Download Windows connector
+                </Link>
+                <p className="helper-text" style={{ margin: 0 }}>
+                  Install Direct MT5 protocol v2 on the same Windows PC or VPS as MetaTrader 5.
+                  If you used an earlier connector, install this version and generate a new pairing code to re-pair.
+                </p>
+              </div>
+
+              <div className="input-group">
+                <label className="input-label" htmlFor="direct-mt5-environment">MT5 environment</label>
+                <select
+                  id="direct-mt5-environment"
+                  className="input"
+                  value={directMt5Environment}
+                  onChange={(event) => setDirectMt5Environment(event.target.value as DirectMt5Environment)}
+                  disabled={loading || Boolean(directMt5ConnectionId)}
+                >
+                  <option value="DEMO">DEMO — available</option>
+                  <option value="LIVE" disabled={!directMt5LiveCertified}>
+                    LIVE — {directMt5LiveCertified ? 'certified' : 'certification pending'}
+                  </option>
+                </select>
+              </div>
+
+              {!directMt5LiveCertified ? (
+                <Alert variant="warning">
+                  <span style={{ flex: 1 }}>
+                    LIVE certification pending — native LIVE capability is implemented, but new LIVE connections remain
+                    locked until the real-money canary produces current CERTIFIED evidence. DEMO remains available now.
+                  </span>
+                </Alert>
+              ) : (
+                <Alert variant="success">
+                  <span style={{ flex: 1 }}>
+                    Direct MT5 LIVE is currently certified by server-side evidence. LIVE pairing is available,
+                    but trading still remains subject to account authorization and risk controls.
+                  </span>
+                </Alert>
+              )}
 
               {!directMt5ConnectionId ? (
                 <div className="onboarding-form">
@@ -833,14 +930,16 @@ export default function OnboardingBrokerPage() {
                       value={displayName}
                       onChange={(e) => setDisplayName(e.target.value)}
                       disabled={loading}
-                      placeholder="My MT5 demo"
+                      placeholder={directMt5Environment === 'LIVE' ? 'My MT5 live' : 'My MT5 demo'}
                     />
                   </div>
                   <p className="helper-text">
                     Use the exact numeric login shown inside MT5. Pairing fails closed if the connector sees a different account.
                   </p>
                   <Button type="submit" variant="primary" disabled={loading} loading={action === 'pairing'}>
-                    {action === 'pairing' ? 'Creating pairing…' : 'Create DEMO connection & pairing code'}
+                    {action === 'pairing'
+                      ? 'Creating pairing…'
+                      : `Create ${directMt5Environment} connection & pairing code`}
                   </Button>
                 </div>
               ) : (
@@ -863,7 +962,7 @@ export default function OnboardingBrokerPage() {
                   )}
 
                   <ol className="text-sm" style={{ margin: 0, paddingLeft: '1.25rem', lineHeight: 1.8 }}>
-                    <li>Keep MetaTrader 5 open and logged into account {accountId} on Windows.</li>
+                    <li>Keep MetaTrader 5 open and logged into the {directMt5Environment} account {accountId} on Windows.</li>
                     <li>Run the iRexPro MT5 Connector on that same Windows PC or VPS.</li>
                     <li>Enter the pairing code above. The connector reads the MT5 login and broker server locally.</li>
                     <li>Wait for this page to show Ready. Pairing alone never enables LIVE trading.</li>
@@ -903,10 +1002,10 @@ export default function OnboardingBrokerPage() {
                 <div style={{ marginBottom: 'var(--space-4)' }}>
                   <div className="input-label" style={{ marginBottom: 'var(--space-2)' }}>Connection method</div>
                   <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                    <Button type="button" variant="secondary" onClick={() => setMt5ConnectionMethod('DIRECT')}>
+                    <Button type="button" variant="secondary" onClick={switchToDirectMt5}>
                       Direct Connector (recommended)
                     </Button>
-                    <Button type="button" variant="primary" onClick={() => setMt5ConnectionMethod('METAAPI')}>
+                    <Button type="button" variant="primary" onClick={switchToMetaApi}>
                       MT5 via MetaApi (optional)
                     </Button>
                   </div>

@@ -64,9 +64,10 @@ jest.mock('@/lib/api', () => ({
   },
 }));
 
-jest.mock('@/hooks/useNotification', () => ({
-  useNotification: () => ({ error: jest.fn(), warning: jest.fn(), info: jest.fn(), success: jest.fn() }),
-}));
+jest.mock('@/hooks/useNotification', () => {
+  const notification = { error: jest.fn(), warning: jest.fn(), info: jest.fn(), success: jest.fn() };
+  return { useNotification: () => notification };
+});
 
 jest.mock('next/navigation', () => ({ useRouter: () => ({ push: jest.fn() }) }));
 jest.mock('next/link', () => {
@@ -75,6 +76,25 @@ jest.mock('next/link', () => {
   );
   return MockLink;
 });
+
+
+const directMt5RegistryEntry = {
+  id: 'direct-mt5',
+  name: 'MetaTrader 5 — Direct Terminal',
+  description: 'Native Direct MT5 connector',
+  status: 'BETA',
+  connectionRoutes: ['METATRADER'],
+  capabilities: ['DEMO', 'LIVE', 'METATRADER'],
+  authenticationType: 'SESSION_AUTH',
+  environments: ['DEMO', 'LIVE'],
+  regions: [],
+  adapterAvailable: true,
+  productionLiveVerification: {
+    status: 'UNVERIFIED', verifiedAt: null, evidenceRef: null, certifiedVia: null, certificationRunRef: null,
+  },
+  certificationState: 'NOT_CERTIFIED',
+  connectionReadiness: { ready: true, code: 'READY', message: null },
+};
 
 const mt5RegistryEntry = {
   id: 'metatrader5',
@@ -97,7 +117,7 @@ describe('Direct MT5 onboarding', () => {
       { brokerId: 'metatrader5', brokerName: 'MetaTrader 5', supportsDemo: true, supportsLive: true },
     ]);
     listBrokerConnections.mockReset().mockResolvedValue([]);
-    listBrokerRegistry.mockReset().mockResolvedValue({ brokers: [mt5RegistryEntry] });
+    listBrokerRegistry.mockReset().mockResolvedValue({ brokers: [directMt5RegistryEntry, mt5RegistryEntry] });
     createBrokerConnection.mockReset();
     createDirectMt5Pairing.mockReset();
     getDirectMt5ConnectionHealth.mockReset();
@@ -157,12 +177,66 @@ describe('Direct MT5 onboarding', () => {
     expect(screen.getByText(/Broker server: Broker-Demo/)).not.toBeNull();
   });
 
+  it('shows the Windows installer and keeps LIVE visibly certification-locked', async () => {
+    render(<OnboardingBrokerPage />);
+    await waitFor(() => expect(screen.getByText(/Direct Connector \(recommended\)/i)).not.toBeNull());
+
+    const download = screen.getByRole('link', { name: /Download Windows connector/i });
+    expect(download.getAttribute('href')).toContain('mt5-connector-v0.2.0/iRexPro-MT5-Connector-Setup.exe');
+    expect(screen.getByText(/protocol v2/i)).not.toBeNull();
+    expect(screen.getByText(/re-pair/i)).not.toBeNull();
+
+    const environment = screen.getByLabelText('MT5 environment') as HTMLSelectElement;
+    const live = Array.from(environment.options).find((option) => option.value === 'LIVE');
+    expect(live?.disabled).toBe(true);
+    expect(screen.getByText(/LIVE certification pending/i)).not.toBeNull();
+  });
+
+  it('unlocks LIVE pairing only when the server registry reports current CERTIFIED evidence', async () => {
+    listBrokerRegistry.mockResolvedValue({
+      brokers: [
+        {
+          ...directMt5RegistryEntry,
+          productionLiveVerification: {
+            status: 'VERIFIED',
+            verifiedAt: '2026-10-31T12:00:00.000Z',
+            evidenceRef: 'live-certification-direct-mt5-run.json',
+            certifiedVia: 'HARNESS_CERTIFIED',
+            certificationRunRef: 'live-certification-direct-mt5-run.json',
+          },
+          certificationState: 'CERTIFIED',
+        },
+        mt5RegistryEntry,
+      ],
+    });
+    createBrokerConnection.mockResolvedValue({ id: 'connection-live', brokerName: 'MetaTrader 5 — Direct Terminal' });
+    createDirectMt5Pairing.mockResolvedValue({
+      connectorId: 'connector-live', brokerConnectionId: 'connection-live', pairingCode: 'ABCDEFGH23',
+      expiresAt: '2026-10-31T12:10:00.000Z',
+    });
+
+    render(<OnboardingBrokerPage />);
+    await waitFor(() => expect(screen.getByLabelText('MT5 environment')).not.toBeNull());
+    const environment = screen.getByLabelText('MT5 environment') as HTMLSelectElement;
+    const live = Array.from(environment.options).find((option) => option.value === 'LIVE');
+    expect(live?.disabled).toBe(false);
+
+    fireEvent.change(environment, { target: { value: 'LIVE' } });
+    fireEvent.change(screen.getByLabelText('MT5 account login'), { target: { value: '543210' } });
+    fireEvent.click(screen.getByText('Create LIVE connection & pairing code'));
+
+    await waitFor(() => expect(createBrokerConnection).toHaveBeenCalledWith(expect.objectContaining({
+      brokerId: 'direct-mt5', accountType: 'LIVE', accountId: '543210',
+    })));
+  });
+
   it('keeps MetaApi as an explicit optional path and restores credential inputs only when selected', async () => {
     const { container } = render(<OnboardingBrokerPage />);
     await waitFor(() => expect(screen.getByText(/Direct Connector \(recommended\)/i)).not.toBeNull());
 
     fireEvent.click(screen.getByText('MT5 via MetaApi (optional)'));
 
+    await waitFor(() => expect((container.querySelector('#broker-select') as HTMLSelectElement).value).toBe('metatrader5'));
     await waitFor(() => expect(container.querySelectorAll('input[type="password"]')).toHaveLength(2));
     expect(screen.getByText('Test credentials')).not.toBeNull();
     expect(screen.getByText(/separate MetaApi subscription/i)).not.toBeNull();
