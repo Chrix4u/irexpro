@@ -29,6 +29,7 @@ import { V8DedicatedPaperReadinessService } from './v8-dedicated-paper-readiness
 import { MacroEventRiskService } from './macro-event-risk.service';
 import { PostEntryProtectionShadowService } from './post-entry-protection-shadow.service';
 import { PostEntryMinute1TelemetryService } from './post-entry-minute1-telemetry.service';
+import { PostEntryDemoDrawdownGuardService } from './post-entry-demo-drawdown-guard.service';
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import { M1TacticalMarketDataService } from './m1-tactical-market-data.service';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
@@ -91,6 +92,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     MacroEventRiskService,
     PostEntryProtectionShadowService,
     PostEntryMinute1TelemetryService,
+    PostEntryDemoDrawdownGuardService,
     EnsemblePostEntryProtectionShadowService,
     M1TacticalMarketDataService,
     M1TacticalEvidenceService,
