@@ -92,6 +92,8 @@ jobs:
           root='/home/lightworld/webapps/irexpro-staging'
           api_pm2='irexpro-api-staging'
           health='http://127.0.0.1:3010/api/v1/health'
+          pm2_json_file="$(mktemp)"
+          trap 'rm -f "$pm2_json_file"' EXIT
 
           [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]
           [[ "$trigger_sha" =~ ^[0-9a-f]{40}$ ]]
@@ -117,7 +119,6 @@ jobs:
 
           cd apps/api
           pnpm build
-
           pm2 restart "$api_pm2" --update-env
 
           ok=0
@@ -136,8 +137,11 @@ jobs:
           done
           test "$ok" -eq 1
 
-          PM2_JSON="$(pm2 jlist)" node --input-type=module <<'NODE'
-          const rows = JSON.parse(process.env.PM2_JSON || '[]');
+          pm2 jlist > "$pm2_json_file"
+          node --input-type=module - "$pm2_json_file" <<'NODE'
+          import fs from 'node:fs';
+          const path = process.argv[2];
+          const rows = JSON.parse(fs.readFileSync(path, 'utf8'));
           const p = rows.find((row) => row.name === 'irexpro-api-staging');
           if (!p || p.pm2_env?.status !== 'online') process.exit(1);
           if ((p.pm2_env?.unstable_restarts ?? 0) > 0) process.exit(2);
