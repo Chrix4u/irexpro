@@ -23,6 +23,8 @@ def test_windows_packaging_contract_is_releaseable() -> None:
     assert "iRexPro-MT5-Connector-Setup" in installer_text
     assert "windows-latest" in workflow_text
     assert "mt5-connector-v*" in workflow_text
+    assert "deploy/daily-loss-reset-20261028" in workflow_text
+    assert "startsWith(github.ref, 'refs/tags/mt5-connector-v')" in workflow_text
     assert "pytest" in workflow_text
     assert "pyinstaller" in workflow_text.lower()
     assert "Get-FileHash" in workflow_text
