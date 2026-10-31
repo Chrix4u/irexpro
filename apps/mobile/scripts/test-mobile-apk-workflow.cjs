@@ -7,6 +7,7 @@ const workflow = fs.readFileSync(workflowPath, 'utf8');
 
 assert.match(workflow, /\n  pull_request:\n/, 'APK workflow must validate native builds on pull requests before merge');
 assert.match(workflow, /  pull_request:[\s\S]*?paths:[\s\S]*?apps\/mobile\/\*\*/, 'APK PR validation must be scoped to mobile changes');
+assert.match(workflow, /push:[\s\S]*?branches:[\s\S]*?deploy\/daily-loss-reset-20261028/, 'APK preview workflow must build mobile changes pushed to the staging deployment branch');
 
 const installMarker = '- name: Install pinned Android native toolchain';
 const buildMarker = '- name: Build standalone release APK';
