@@ -20,6 +20,12 @@ class ConnectorSettings:
     @classmethod
     def load(cls, path: str | Path) -> "ConnectorSettings":
         data = json.loads(Path(path).read_text(encoding="utf-8"))
+        account_type = data.get("account_type")
+        if account_type not in {"DEMO", "LIVE"}:
+            raise ValueError(
+                "This connector configuration predates Direct MT5 protocol v2; "
+                "upgrade the Windows connector and re-pair the MT5 account."
+            )
         return cls(**data)
 
     def save(self, path: str | Path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 import requests
 
@@ -24,6 +25,9 @@ class IrexProConnectorClient:
         self.server_url = server_url.rstrip("/")
         if not self.server_url.startswith("https://") and "localhost" not in self.server_url:
             raise ValueError("direct MT5 connector requires HTTPS")
+        parsed = urlparse(self.server_url)
+        if parsed.path in {"", "/"}:
+            self.server_url = f"{self.server_url}/api/v1"
         self.secret_store = secret_store
         self.session = session or requests.Session()
         self.timeout_seconds = timeout_seconds

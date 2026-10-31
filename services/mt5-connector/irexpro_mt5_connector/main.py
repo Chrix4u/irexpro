@@ -2,165 +2,30 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
-from pathlib import Path
-from typing import Any
 
-from .client import ConnectorApiError, IrexProConnectorClient
-from .config import ConnectorSettings, KeyringSecretStore
-from .journal import CommandJournal, JournalEntry
-from .mt5_terminal import MetaQuotesMt5Terminal, Mt5TerminalError, TerminalPort
-from .protocol import ProtocolError, assert_bound_identity
-
-
-def _dispatch(terminal: TerminalPort, command_type: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if command_type == "ACCOUNT_SNAPSHOT":
-        return terminal.account_snapshot()
-    if command_type == "GET_PRICE":
-        return terminal.current_price(str(payload.get("instrument", payload.get("symbol"))))
-    if command_type == "GET_OHLCV":
-        raw_before = payload.get("before")
-        before = None
-        if isinstance(raw_before, str) and raw_before:
-            from datetime import datetime
-            before = datetime.fromisoformat(raw_before.replace("Z", "+00:00"))
-        bars = terminal.get_ohlcv(
-            str(payload.get("instrument", payload.get("symbol"))),
-            str(payload["timeframe"]),
-            int(payload["count"]),
-            before,
-        )
-        return {"bars": bars}
-    if command_type == "LIST_SYMBOLS":
-        return {"instruments": terminal.list_symbols()}
-    if command_type == "GET_SYMBOL_INFO":
-        return {"instrument": terminal.symbol_info(str(payload.get("instrument", payload.get("symbol"))))}
-    if command_type == "CALCULATE_MARGIN":
-        return terminal.calculate_margin(
-            str(payload.get("instrument", payload.get("symbol"))),
-            str(payload.get("direction", payload.get("side"))),
-            str(payload.get("lotSize", payload.get("volume"))),
-        )
-    if command_type == "LIST_POSITIONS":
-        return {"positions": terminal.list_positions()}
-    if command_type == "LIST_ORDERS":
-        return {"orders": terminal.list_orders()}
-    if command_type == "GET_ORDER":
-        return {"order": terminal.get_order(str(payload["providerOrderId"]))}
-    if command_type == "GET_HISTORY":
-        from datetime import datetime
-        date_from = datetime.fromisoformat(str(payload["from"]).replace("Z", "+00:00"))
-        date_to = datetime.fromisoformat(str(payload["to"]).replace("Z", "+00:00"))
-        return {"trades": terminal.get_history(date_from, date_to)}
-    if command_type == "PLACE_ORDER":
-        idempotency = str(payload.get("idempotencyKey", payload.get("clientOrderId", "order")))
-        normalized = {
-            "symbol": str(payload.get("instrument", payload.get("symbol"))),
-            "side": str(payload.get("direction", payload.get("side"))),
-            "volume": str(payload.get("lotSize", payload.get("volume"))),
-            "stopLoss": payload.get("stopLoss"),
-            "takeProfit": payload.get("takeProfit"),
-            "comment": str(payload.get("comment") or f"irexpro:{idempotency}"),
-        }
-        return terminal.place_order(normalized)
-    if command_type == "MODIFY_ORDER":
-        return terminal.modify_order(payload)
-    if command_type == "CLOSE_ORDER":
-        return terminal.close_order(payload)
-    if command_type == "CLOSE_ALL":
-        return terminal.close_all()
-    raise Mt5TerminalError(f"unsupported connector command: {command_type}")
-
-
-def _report_existing(
-    client: IrexProConnectorClient,
-    settings: ConnectorSettings,
-    entry: JournalEntry,
-) -> None:
-    if entry.state == "SUCCEEDED":
-        client.submit_result(settings, entry.command_id, state="SUCCEEDED", result=entry.result)
-    elif entry.state == "FAILED":
-        client.submit_result(settings, entry.command_id, state="FAILED", result=entry.result)
-    else:
-        client.submit_result(
-            settings,
-            entry.command_id,
-            state="UNCERTAIN",
-            result=entry.result,
-            error="command dispatch outcome is uncertain; reconcile provider state before retry",
-        )
+from .client import ConnectorApiError
+from .mt5_terminal import Mt5TerminalError
+from .protocol import ProtocolError
+from .runtime import _dispatch, pair_connector, run_connector
 
 
 def pair(args: argparse.Namespace) -> int:
-    terminal = MetaQuotesMt5Terminal(args.terminal_path)
-    try:
-        identity = terminal.initialize()
-        client = IrexProConnectorClient(args.server_url, KeyringSecretStore())
-        settings = client.redeem_pairing(args.pairing_code, identity)
-        settings = ConnectorSettings(
-            **{**settings.__dict__, "terminal_path": args.terminal_path}
-        )
-        settings.save(args.config)
-        print(f"Paired MT5 {identity.account_type} account {identity.login} on {identity.server}.")
-        print(f"Connector configuration saved to {args.config} (token stored in OS credential vault).")
-        return 0
-    finally:
-        terminal.shutdown()
+    settings = pair_connector(
+        server_url=args.server_url,
+        pairing_code=args.pairing_code,
+        terminal_path=args.terminal_path,
+        config_path=args.config,
+    )
+    print(
+        f"Paired MT5 {settings.account_type} account {settings.account_login} "
+        f"on {settings.broker_server}."
+    )
+    print(f"Connector configuration saved to {args.config} (token stored in OS credential vault).")
+    return 0
 
 
 def run(args: argparse.Namespace) -> int:
-    settings = ConnectorSettings.load(args.config)
-    secret_store = KeyringSecretStore()
-    client = IrexProConnectorClient(settings.server_url, secret_store)
-    terminal = MetaQuotesMt5Terminal(settings.terminal_path)
-    journal = CommandJournal(args.journal)
-    try:
-        identity = terminal.initialize()
-        client._assert_identity(settings, identity)
-        while True:
-            identity = terminal.identity()
-            sequence = journal.next_heartbeat_sequence()
-            client.heartbeat(settings, identity, sequence)
-            command = client.lease_next_command(settings)
-            if command is not None:
-                assert_bound_identity(
-                    command,
-                    connector_id=settings.connector_id,
-                    broker_connection_id=settings.broker_connection_id,
-                    account_login=settings.account_login,
-                    broker_server=settings.broker_server,
-                    account_type=settings.account_type,
-                )
-                # Re-read terminal identity immediately before any command.
-                # A user switching accounts between heartbeat and dispatch must
-                # never move an iRexPro order to the newly-selected account.
-                identity = terminal.identity()
-                client._assert_identity(settings, identity)
-                entry = journal.begin(command)
-                if entry.state != "EXECUTING":
-                    _report_existing(client, settings, entry)
-                else:
-                    try:
-                        result = _dispatch(terminal, command["commandType"], command["payload"])
-                        done = journal.complete(command["commandId"], result)
-                        client.submit_result(
-                            settings, command["commandId"], state="SUCCEEDED", result=done.result
-                        )
-                    except Exception as exc:
-                        failed = journal.fail(command["commandId"], {"error": str(exc)})
-                        client.submit_result(
-                            settings,
-                            command["commandId"],
-                            state="FAILED",
-                            result=failed.result,
-                            error=str(exc),
-                        )
-            time.sleep(max(0.25, settings.poll_seconds))
-    except KeyboardInterrupt:
-        return 0
-    finally:
-        journal.close()
-        terminal.shutdown()
+    return run_connector(config_path=args.config, journal_path=args.journal)
 
 
 def build_parser() -> argparse.ArgumentParser:
