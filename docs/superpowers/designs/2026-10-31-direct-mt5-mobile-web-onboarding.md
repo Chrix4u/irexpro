@@ -14,4 +14,4 @@ Make iRexPro mobile/web the clearly primary control surface while explaining tha
 - Keep MetaAPI optional.
 
 ## Scope
-Modify the existing broker onboarding UI and its focused tests only. Do not change API broker execution, pairing protocol, certification logic, or connector runtime.
+Modify both the web broker onboarding and the native Expo mobile Broker screen so Android/iPhone users can create Direct MT5 connections and pairing codes themselves. Reuse the shared API client's existing Direct MT5 pairing/health/revoke endpoints. Do not change API broker execution, pairing protocol, certification logic, or connector runtime.

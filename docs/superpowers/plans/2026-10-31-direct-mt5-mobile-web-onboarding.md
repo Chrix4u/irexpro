@@ -4,9 +4,9 @@
 
 **Goal:** Make Direct MT5 onboarding clearly phone/web-first with two explicit Windows bridge paths.
 
-**Architecture:** Extend the existing `apps/web/src/app/onboarding/broker/page.tsx` Direct MT5 block. Keep all server-side LIVE certification and connector security behavior untouched. Pin behavior in `direct-mt5-onboarding.spec.tsx`.
+**Architecture:** Extend the existing web Direct MT5 block and add a specialized Direct MT5 branch to the native mobile `BrokerScreen`. Reuse the shared API client pairing/health/revoke endpoints and the same registry-backed LIVE gate. Keep all server-side LIVE certification and connector security behavior untouched.
 
-**Tech Stack:** Next.js 15, React, TypeScript, Jest, Testing Library.
+**Tech Stack:** Next.js 15, React, Expo/React Native, TypeScript, Jest, Testing Library.
 
 **Spec:** `docs/superpowers/designs/2026-10-31-direct-mt5-mobile-web-onboarding.md`
 
@@ -40,4 +40,23 @@
 - [ ] Implement responsive choice controls and setup guidance.
 - [ ] Run focused test and confirm GREEN.
 - [ ] Run full web tests, typecheck, and production build.
+- [ ] Commit.
+
+### Task 2: Native mobile Direct MT5 pairing
+
+**Files:**
+- Modify: `apps/mobile/src/screens/broker-screen.logic.ts`
+- Modify: `apps/mobile/src/screens/BrokerScreen.tsx`
+- Test: `apps/mobile/src/screens/__tests__/broker-screen.logic.test.ts`
+
+**Interfaces:**
+- Consumes: shared `ApiClient.createDirectMt5Pairing`, `getDirectMt5ConnectionHealth`, `revokeDirectMt5Connector`; server registry `CERTIFIED` state.
+- Produces: mobile Direct MT5 connection/pairing flow with the same two Windows bridge choices.
+
+- [ ] Add failing pure-logic tests for Direct MT5 request validation and fail-closed LIVE gating.
+- [ ] Run mobile focused test and confirm RED.
+- [ ] Implement the Direct MT5 request helper and use it from the native mobile flow.
+- [ ] Add mobile pairing, pairing-code, health, regenerate, revoke, installer guidance, and Windows/VPS setup views.
+- [ ] Run mobile tests and typecheck.
+- [ ] Re-run web regression/build and mobile regression/typecheck.
 - [ ] Commit.

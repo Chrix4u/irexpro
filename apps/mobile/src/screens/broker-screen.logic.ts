@@ -248,6 +248,41 @@ export function credentialFields(
   }
 }
 
+/** Native Direct MT5 is a passwordless terminal-pairing route, not generic SESSION_AUTH. */
+export function isDirectMt5Entry(entry: BrokerRegistryEntry): boolean {
+  return entry.id === "direct-mt5";
+}
+
+/**
+ * Build a Direct MT5 BrokerConnection request from the numeric terminal login.
+ * This deliberately carries no API token, password, or server URL. LIVE uses
+ * the same registry-backed certification gate as every other mobile route.
+ */
+export function buildDirectMt5ConnectionRequest(
+  entry: BrokerRegistryEntry,
+  environment: "DEMO" | "LIVE",
+  accountId: string,
+): CreateBrokerConnectionRequest | { error: string } {
+  if (!isDirectMt5Entry(entry)) {
+    return { error: "This broker is not the Direct MT5 terminal route" };
+  }
+  if (!entry.environments.includes(environment)) {
+    return { error: `${entry.name} does not support ${environment} accounts` };
+  }
+  if (environment === "LIVE" && !isLiveSelectable(entry)) {
+    return { error: `${entry.name} is not production-verified for LIVE accounts` };
+  }
+  const login = accountId.trim();
+  if (!/^\d+$/.test(login)) {
+    return { error: "Enter the numeric MT5 account login shown in your terminal" };
+  }
+  return {
+    brokerId: "direct-mt5",
+    accountType: environment,
+    accountId: login,
+  };
+}
+
 /**
  * Build the create/test request body from form state. The environment is
  * validated against the entry's supported environments and the independent

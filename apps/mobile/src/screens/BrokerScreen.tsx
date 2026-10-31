@@ -33,13 +33,17 @@ import type {
   BrokerOAuthAccountsResult,
   BrokerRegistryEntry,
   CreateBrokerConnectionRequest,
+  DirectMt5PairingView,
+  DirectMt5ConnectionHealthView,
 } from "@irexpro/types";
 import { isBrokerConnectionRuntimeReady } from "@irexpro/types";
 import { api } from "../lib/api";
 import {
   brokerConnectionAction,
   buildConnectionRequest,
+  buildDirectMt5ConnectionRequest,
   credentialFields,
+  isDirectMt5Entry,
   isConnectableEntry,
   isLiveSelectable,
   mobileConnectionReadiness,
@@ -65,6 +69,8 @@ import {
 } from "../lib/secure-storage";
 
 const ENVIRONMENT_OPTIONS: ReadonlyArray<"DEMO" | "LIVE"> = ["DEMO", "LIVE"];
+const DIRECT_MT5_WINDOWS_INSTALLER_URL =
+  "https://github.com/Chrix4u/irexpro/releases/download/mt5-connector-v0.2.0/iRexPro-MT5-Connector-Setup.exe";
 
 export default function BrokerScreen() {
   const [registry, setRegistry] = useState<BrokerRegistryEntry[]>([]);
@@ -593,6 +599,7 @@ export default function BrokerScreen() {
             setConnectTarget(null);
             setRestoredOAuth(null);
           }}
+          onConnectionChanged={load}
           onConnected={async () => {
             setConnectTarget(null);
             setRestoredOAuth(null);
@@ -609,14 +616,17 @@ function ConnectFlowModal({
   entry,
   restoredOAuthResult,
   onClose,
+  onConnectionChanged,
   onConnected,
 }: {
   entry: BrokerRegistryEntry;
   restoredOAuthResult?: BrokerOAuthAccountsResult | null;
   onClose: () => void;
+  onConnectionChanged: () => Promise<void>;
   onConnected: () => Promise<void>;
 }) {
   const isOAuthBroker = entry.authenticationType === "OAUTH";
+  const isDirectMt5 = isDirectMt5Entry(entry);
   const mobileReadiness = mobileConnectionReadiness(entry);
   const runtimeReady = mobileReadiness?.ready !== false;
   const fields = credentialFields(entry.authenticationType);
@@ -635,6 +645,11 @@ function ConnectFlowModal({
   const [accountId, setAccountId] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [serverUrl, setServerUrl] = useState("");
+  const [directBridgeSetup, setDirectBridgeSetup] = useState<"READY" | "NEED_WINDOWS">("READY");
+  const [directConnectionId, setDirectConnectionId] = useState<string | null>(null);
+  const [directPairing, setDirectPairing] = useState<DirectMt5PairingView | null>(null);
+  const [directHealth, setDirectHealth] = useState<DirectMt5ConnectionHealthView | null>(null);
+  const [directBusy, setDirectBusy] = useState<"pairing" | "health" | "revoke" | null>(null);
   const [busy, setBusy] = useState<"test" | "create" | "connect" | null>(null);
   const [feedback, setFeedback] = useState<{
     ok: boolean;
@@ -815,6 +830,96 @@ function ConnectFlowModal({
     },
     [oauthFlowId, onConnected],
   );
+
+  const createDirectPairing = async () => {
+    const requestOrError = buildDirectMt5ConnectionRequest(entry, environment, accountId);
+    if ("error" in requestOrError) {
+      setFeedback({ ok: false, message: requestOrError.error });
+      return;
+    }
+    setDirectBusy("pairing");
+    setFeedback(null);
+    try {
+      const created = await api.createBrokerConnection(requestOrError);
+      setDirectConnectionId(created.id);
+      await onConnectionChanged();
+      const pairing = await api.createDirectMt5Pairing(created.id);
+      setDirectPairing(pairing);
+      setDirectHealth(null);
+      setFeedback({
+        ok: true,
+        message: "Pairing code created. Enter it in the iRexPro MT5 Connector on Windows.",
+      });
+    } catch (err) {
+      setFeedback({
+        ok: false,
+        message: err instanceof Error ? err.message : "Direct MT5 pairing failed",
+      });
+    } finally {
+      setDirectBusy(null);
+    }
+  };
+
+  const regenerateDirectPairing = async () => {
+    if (!directConnectionId) return;
+    setDirectBusy("pairing");
+    setFeedback(null);
+    try {
+      const pairing = await api.createDirectMt5Pairing(directConnectionId);
+      setDirectPairing(pairing);
+      setDirectHealth(null);
+      setFeedback({ ok: true, message: "A new Direct MT5 pairing code was created." });
+    } catch (err) {
+      setFeedback({
+        ok: false,
+        message: err instanceof Error ? err.message : "Could not generate pairing code",
+      });
+    } finally {
+      setDirectBusy(null);
+    }
+  };
+
+  const refreshDirectHealth = async () => {
+    if (!directConnectionId) return;
+    setDirectBusy("health");
+    try {
+      const health = await api.getDirectMt5ConnectionHealth(directConnectionId);
+      setDirectHealth(health);
+      setFeedback({
+        ok: health.executionReady,
+        message: health.executionReady
+          ? "Direct MT5 is ready. You can manage iRexPro from this phone or the web portal."
+          : `Connector status: ${health.reason}`,
+      });
+      await onConnectionChanged();
+    } catch (err) {
+      setFeedback({
+        ok: false,
+        message: err instanceof Error ? err.message : "Could not refresh Direct MT5 status",
+      });
+    } finally {
+      setDirectBusy(null);
+    }
+  };
+
+  const revokeDirectConnector = async () => {
+    if (!directConnectionId) return;
+    setDirectBusy("revoke");
+    try {
+      await api.revokeDirectMt5Connector(directConnectionId);
+      setDirectPairing(null);
+      setDirectHealth(null);
+      setFeedback({ ok: true, message: "Direct MT5 connector revoked." });
+      await onConnectionChanged();
+    } catch (err) {
+      setFeedback({
+        ok: false,
+        message: err instanceof Error ? err.message : "Could not revoke Direct MT5 connector",
+      });
+    } finally {
+      setDirectBusy(null);
+    }
+  };
 
   const submit = async () => {
     const requestOrError = buildConnectionRequest(
@@ -1013,6 +1118,210 @@ function ConnectFlowModal({
               >
                 <Text style={styles.secondaryButtonText}>Cancel</Text>
               </Pressable>
+            </>
+          ) : isDirectMt5 ? (
+            <>
+              <Text style={styles.sectionHint}>
+                Connect from any device. Set up and control iRexPro from this phone or the web portal.
+                The Windows PC or VPS is only the MT5 execution bridge.
+              </Text>
+
+              <Text style={styles.label}>Where will MetaTrader 5 run?</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="I already have MT5 running on Windows"
+                style={[styles.secondaryButton, directBridgeSetup === "READY" ? styles.bridgeChoiceActive : null]}
+                onPress={() => setDirectBridgeSetup("READY")}
+              >
+                <Text style={styles.secondaryButtonText}>I already have MT5 running on Windows</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="I need a Windows PC or VPS for MT5"
+                style={[styles.secondaryButton, directBridgeSetup === "NEED_WINDOWS" ? styles.bridgeChoiceActive : null]}
+                onPress={() => setDirectBridgeSetup("NEED_WINDOWS")}
+              >
+                <Text style={styles.secondaryButtonText}>I need a Windows PC/VPS for MT5</Text>
+              </Pressable>
+
+              {directBridgeSetup === "NEED_WINDOWS" ? (
+                <View style={styles.directSetupCard}>
+                  <Text style={styles.accountOptionTitle}>Set up the MT5 execution bridge</Text>
+                  <Text style={styles.sectionHint}>
+                    Use a Windows 10/11 PC or Windows VPS that you control. Install your broker&apos;s MT5 desktop terminal,
+                    log in, enable automated/algo trading, and keep that Windows machine online while Direct MT5 trading is active.
+                    Your phone remains your normal iRexPro control surface.
+                  </Text>
+                  <Text style={styles.mutedText}>
+                    After MT5 is running, install the iRexPro connector on the same Windows machine, return here, and choose the first option to create a pairing code.
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Open Windows connector download"
+                    style={styles.primaryButton}
+                    onPress={() => void Linking.openURL(DIRECT_MT5_WINDOWS_INSTALLER_URL)}
+                  >
+                    <Text style={styles.primaryButtonText}>Open Windows connector download</Text>
+                  </Pressable>
+                  <Text style={styles.mutedText}>
+                    If you are using this phone, open or send the download link to the Windows PC/VPS where MT5 will run.
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  <Text style={styles.sectionHint}>
+                    Direct MT5 is passwordless: iRexPro pairs with the MT5 desktop terminal already logged in on Windows.
+                    Your MT5 password, investor password and broker secret are never requested here.
+                  </Text>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Open Windows connector download"
+                    style={styles.secondaryButton}
+                    onPress={() => void Linking.openURL(DIRECT_MT5_WINDOWS_INSTALLER_URL)}
+                  >
+                    <Text style={styles.secondaryButtonText}>Open Windows connector download</Text>
+                  </Pressable>
+
+                  {!directConnectionId ? (
+                    <>
+                      <Text style={styles.label}>Environment</Text>
+                      <View style={styles.rowWrap}>
+                        {supportedEnvs.map((env) => (
+                          <Pressable
+                            key={env}
+                            accessibilityRole="button"
+                            accessibilityLabel={`${env} environment`}
+                            style={[styles.envOption, environment === env && styles.envOptionActive]}
+                            onPress={() => setEnvironment(env)}
+                          >
+                            <Text style={[styles.envOptionText, environment === env && styles.envOptionTextActive]}>
+                              {env}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+
+                      {entry.environments.includes("LIVE") && !isLiveSelectable(entry) ? (
+                        <Text style={styles.errorText}>
+                          LIVE certification is still pending. DEMO pairing is available now; LIVE remains fail-closed.
+                        </Text>
+                      ) : null}
+
+                      <Text style={styles.label}>MT5 account login</Text>
+                      <TextInput
+                        accessibilityLabel="MT5 account login"
+                        style={styles.input}
+                        value={accountId}
+                        onChangeText={setAccountId}
+                        keyboardType="number-pad"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        placeholder="e.g. 113392789"
+                      />
+
+                      {feedback ? (
+                        <Text style={feedback.ok ? styles.successText : styles.errorText} accessibilityLiveRegion="polite">
+                          {feedback.message}
+                        </Text>
+                      ) : null}
+
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Create ${environment} Direct MT5 pairing code`}
+                        style={[styles.primaryButton, directBusy ? styles.buttonDisabled : null]}
+                        disabled={directBusy !== null}
+                        onPress={() => void createDirectPairing()}
+                      >
+                        {directBusy === "pairing" ? (
+                          <ActivityIndicator color="#ffffff" />
+                        ) : (
+                          <Text style={styles.primaryButtonText}>Create {environment} pairing code</Text>
+                        )}
+                      </Pressable>
+                    </>
+                  ) : (
+                    <>
+                      <View style={styles.directSetupCard}>
+                        <Text style={styles.accountOptionTitle}>Direct MT5 pairing</Text>
+                        {directPairing ? (
+                          <>
+                            <Text style={styles.mutedText}>Pairing code</Text>
+                            <Text selectable style={styles.pairingCode}>{directPairing.pairingCode}</Text>
+                            <Text style={styles.mutedText}>
+                              Expires {new Date(directPairing.expiresAt).toLocaleString()}
+                            </Text>
+                          </>
+                        ) : (
+                          <Text style={styles.mutedText}>No active pairing code. Generate a new one below.</Text>
+                        )}
+                        <Text style={styles.mutedText}>
+                          On the Windows PC/VPS: keep MT5 open on account {accountId}, run the iRexPro MT5 Connector, and enter this code.
+                        </Text>
+                      </View>
+
+                      {directHealth ? (
+                        <View style={styles.directSetupCard}>
+                          <Text style={styles.accountOptionTitle}>Connector status</Text>
+                          <Text style={styles.mutedText}>State: {directHealth.state}</Text>
+                          <Text style={styles.mutedText}>Reason: {directHealth.reason}</Text>
+                          {directHealth.accountLogin ? <Text style={styles.mutedText}>MT5 login: {directHealth.accountLogin}</Text> : null}
+                          {directHealth.brokerServer ? <Text style={styles.mutedText}>Broker server: {directHealth.brokerServer}</Text> : null}
+                          {directHealth.lastHeartbeatAt ? (
+                            <Text style={styles.mutedText}>Last heartbeat: {new Date(directHealth.lastHeartbeatAt).toLocaleString()}</Text>
+                          ) : null}
+                        </View>
+                      ) : null}
+
+                      {feedback ? (
+                        <Text style={feedback.ok ? styles.successText : styles.errorText} accessibilityLiveRegion="polite">
+                          {feedback.message}
+                        </Text>
+                      ) : null}
+
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Refresh Direct MT5 status"
+                        style={[styles.primaryButton, directBusy ? styles.buttonDisabled : null]}
+                        disabled={directBusy !== null}
+                        onPress={() => void refreshDirectHealth()}
+                      >
+                        {directBusy === "health" ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>Refresh status</Text>}
+                      </Pressable>
+                      {!directHealth?.executionReady ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Generate new Direct MT5 pairing code"
+                          style={[styles.secondaryButton, directBusy ? styles.buttonDisabled : null]}
+                          disabled={directBusy !== null}
+                          onPress={() => void regenerateDirectPairing()}
+                        >
+                          <Text style={styles.secondaryButtonText}>Generate new pairing code</Text>
+                        </Pressable>
+                      ) : null}
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Revoke Direct MT5 connector"
+                        style={[styles.dangerButton, directBusy ? styles.buttonDisabled : null]}
+                        disabled={directBusy !== null}
+                        onPress={() => void revokeDirectConnector()}
+                      >
+                        <Text style={styles.dangerButtonText}>Revoke connector</Text>
+                      </Pressable>
+                    </>
+                  )}
+
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Close Direct MT5 setup"
+                    style={styles.secondaryButton}
+                    onPress={closeFlow}
+                    disabled={directBusy !== null}
+                  >
+                    <Text style={styles.secondaryButtonText}>Close</Text>
+                  </Pressable>
+                </>
+              )}
             </>
           ) : (
             <>
@@ -1310,6 +1619,23 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   dangerButtonText: { color: palette.danger.text, fontSize: 13, fontWeight: "900" },
+  bridgeChoiceActive: { borderColor: palette.accent, backgroundColor: "#0d2928" },
+  directSetupCard: {
+    borderWidth: 1,
+    borderColor: palette.cardBorder,
+    borderRadius: 12,
+    backgroundColor: palette.input,
+    padding: 14,
+    gap: 8,
+    marginTop: 10,
+  },
+  pairingCode: {
+    color: palette.text,
+    fontSize: 28,
+    fontWeight: "900",
+    letterSpacing: 4,
+    marginVertical: 6,
+  },
   buttonDisabled: { opacity: 0.6 },
   // ── cTrader OAuth flow (Sprint 56 correction round 1 / audit point 6) ──
   sectionHint: { color: palette.muted, fontSize: 13, lineHeight: 19, marginBottom: 12 },

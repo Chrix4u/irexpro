@@ -5,6 +5,8 @@ import type { BrokerRegistryEntry } from "@irexpro/types";
 import {
   brokerConnectionAction,
   buildConnectionRequest,
+  buildDirectMt5ConnectionRequest,
+  isDirectMt5Entry,
   credentialFields,
   isConnectableEntry,
   isLiveSelectable,
@@ -250,6 +252,43 @@ describe("credentialFields", () => {
 
   it("SESSION_AUTH brokers need token + server URL", () => {
     expect(credentialFields("SESSION_AUTH").serverUrl).toBe(true);
+  });
+});
+
+describe("Direct MT5 mobile request validation", () => {
+  const directEntry = (overrides: Partial<BrokerRegistryEntry> = {}) =>
+    entry({
+      id: "direct-mt5",
+      name: "MetaTrader 5 — Direct Terminal",
+      authenticationType: "SESSION_AUTH",
+      connectionRoutes: ["METATRADER"],
+      ...overrides,
+    });
+
+  it("recognizes only the native Direct MT5 registry entry", () => {
+    expect(isDirectMt5Entry(directEntry())).toBe(true);
+    expect(isDirectMt5Entry(entry({ id: "metatrader5" }))).toBe(false);
+  });
+
+  it("builds a passwordless DEMO request from the numeric MT5 login", () => {
+    const result = buildDirectMt5ConnectionRequest(directEntry(), "DEMO", " 113392789 ");
+    expect(result).toEqual({
+      brokerId: "direct-mt5",
+      accountType: "DEMO",
+      accountId: "113392789",
+    });
+  });
+
+  it("rejects non-numeric MT5 logins", () => {
+    expect(buildDirectMt5ConnectionRequest(directEntry(), "DEMO", "abc-123")).toEqual({
+      error: "Enter the numeric MT5 account login shown in your terminal",
+    });
+  });
+
+  it("keeps LIVE fail-closed until current server certification exists", () => {
+    const result = buildDirectMt5ConnectionRequest(directEntry(), "LIVE", "543210");
+    expect("error" in result).toBe(true);
+    if ("error" in result) expect(result.error).toContain("not production-verified");
   });
 });
 
