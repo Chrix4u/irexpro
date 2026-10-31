@@ -136,6 +136,9 @@ export const M1_MULTIMODEL_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR = 0.7;
 export const M1_MULTIMODEL_PAYOFF_LOOKBACK_DAYS = 14;
 export const M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES = 8;
 export const M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR = 0.65;
+export const M1_MULTIMODEL_CONFIRMED_REVERSAL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES = 4;
+export const M1_MULTIMODEL_CONFIRMED_REVERSAL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR =
+  0.5;
 export const M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_AGE_HOURS = 96;
 
 export type M1MultimodelStrategyRoute =
@@ -787,11 +790,19 @@ export class M1TacticalEvidenceService {
     const persistentEvidenceAgeHours = latestClosedAt
       ? Math.max(0, (input.evaluatedAt.getTime() - latestClosedAt.getTime()) / (60 * 60_000))
       : Number.POSITIVE_INFINITY;
+    const persistentNegativePayoffMinTrades =
+      input.strategyRoute === 'CONFIRMED_REVERSAL'
+        ? M1_MULTIMODEL_CONFIRMED_REVERSAL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES
+        : M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES;
+    const persistentNegativePayoffMaxProfitFactor =
+      input.strategyRoute === 'CONFIRMED_REVERSAL'
+        ? M1_MULTIMODEL_CONFIRMED_REVERSAL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR
+        : M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR;
     const persistentNegativePayoff =
-      payoffRows.length >= M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES &&
+      payoffRows.length >= persistentNegativePayoffMinTrades &&
       payoffCumulativeRealisedPnl < 0 &&
       profitFactor !== null &&
-      profitFactor < M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR &&
+      profitFactor < persistentNegativePayoffMaxProfitFactor &&
       persistentEvidenceAgeHours <= M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_AGE_HOURS;
 
     const cooldownUntilMs = latestClosedAt
