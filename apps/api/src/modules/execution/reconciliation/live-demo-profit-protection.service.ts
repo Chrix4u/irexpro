@@ -108,6 +108,7 @@ interface OpenAiTradeRow {
   stop_loss: string | number | null;
   opened_at: Date | string | null;
   is_m1_strategy: boolean;
+  strategy_route: string | null;
 }
 
 function finite(value: unknown): number | null {
@@ -238,11 +239,18 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               continue;
             }
 
+            const strategyRoute =
+              trade.strategy_route === 'TREND_CONTINUATION' ||
+              trade.strategy_route === 'CONFIRMED_REVERSAL' ||
+              trade.strategy_route === 'EARLY_TRANSITION'
+                ? trade.strategy_route
+                : null;
             const decision = evaluatePaperProfitLock({
               maxFavorablePnl: money(maxFavorablePnl),
               currentPnl: money(currentPnl),
               initialRiskPnl: money(initialRisk),
               isM1Strategy: trade.is_m1_strategy,
+              strategyRoute,
             });
             if (decision.shouldClose) {
               this.logger.warn(
@@ -310,6 +318,15 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         t.path_observation_count,
         t.path_peak_observed_at,
         t.opened_at,
+        COALESCE(
+          NULLIF(ti.metadata->>'multimodel_plan_b_route', ''),
+          CASE NULLIF(ti.metadata->>'m1_tactical_route', '')
+            WHEN 'M1_TREND_CONTINUATION' THEN 'TREND_CONTINUATION'
+            WHEN 'M1_CONFIRMED_REVERSAL' THEN 'CONFIRMED_REVERSAL'
+            WHEN 'M1_EARLY_TRANSITION' THEN 'EARLY_TRANSITION'
+            ELSE NULLIF(ti.metadata->>'m1_tactical_route', '')
+          END
+        ) AS strategy_route,
         COALESCE(
           NULLIF(ca.sizing_inputs->>'finalRiskAtStop', '')::numeric,
           NULLIF(ca.sizing_inputs->>'riskAmount', '')::numeric

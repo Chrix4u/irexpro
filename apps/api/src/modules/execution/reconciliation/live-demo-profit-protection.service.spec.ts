@@ -25,6 +25,7 @@ describe('LiveDemoProfitProtectionService', () => {
     stop_loss: '1.11250',
     opened_at: new Date('2026-10-28T09:01:00.000Z'),
     is_m1_strategy: true,
+    strategy_route: 'TREND_CONTINUATION',
     ...overrides,
   });
 
@@ -115,6 +116,42 @@ describe('LiveDemoProfitProtectionService', () => {
       'user-1',
       TradeCloseReason.PROFIT_PROTECTION,
     );
+  });
+
+  it('defers sub-0.75R profit protection for confirmed reversal and early transition', async () => {
+    for (const route of ['CONFIRMED_REVERSAL', 'EARLY_TRANSITION']) {
+      const h = harness(
+        [candidate({ strategy_route: route, max_favorable_pnl: '5.00', max_adverse_pnl: '-1.00' })],
+        '3.49',
+      );
+
+      await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+    }
+  });
+
+  it('keeps sub-0.75R profit protection for trend continuation', async () => {
+    const h = harness(
+      [candidate({ strategy_route: 'TREND_CONTINUATION', max_favorable_pnl: '5.00' })],
+      '3.49',
+    );
+
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+
+    expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      'user-1',
+      TradeCloseReason.PROFIT_PROTECTION,
+    );
+  });
+
+  it('loads the originating Plan-B route for route-aware profit protection', async () => {
+    const h = harness([candidate()], '7.00');
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+    const tradeLoadSql = String(h.query.mock.calls.find((call: unknown[]) => String(call[0]).includes('FROM trading.trades t'))?.[0] ?? '');
+    expect(tradeLoadSql).toContain('strategy_route');
+    expect(tradeLoadSql).toContain("multimodel_plan_b_route");
   });
 
   it('closes a materially losing DEMO trade when completed broker-native M1 evidence confirms thesis failure', async () => {

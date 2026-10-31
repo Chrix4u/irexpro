@@ -685,6 +685,7 @@ export function evaluatePaperProfitLock(input: {
   currentPnl: string;
   initialRiskPnl: string;
   isM1Strategy?: boolean;
+  strategyRoute?: 'TREND_CONTINUATION' | 'CONFIRMED_REVERSAL' | 'EARLY_TRANSITION' | null;
 }): PaperProfitLockDecision {
   const disabled: PaperProfitLockDecision = {
     armed: false,
@@ -703,6 +704,12 @@ export function evaluatePaperProfitLock(input: {
     // 0.005R tolerance for five-second sampling around that boundary.
     const risk = input.initialRiskPnl;
     const peak = input.maxFavorablePnl;
+    const routeNeedsMoreRoom =
+      input.strategyRoute === 'EARLY_TRANSITION' ||
+      input.strategyRoute === 'CONFIRMED_REVERSAL';
+    const routeAwareArmFloor = multiplyDecimalStrings(risk, '0.75');
+    if (routeNeedsMoreRoom && compareDecimalStrings(peak, routeAwareArmFloor) < 0) return disabled;
+
     const standardArmFloor = multiplyDecimalStrings(risk, '0.50');
     const m1RescueArmFloor = multiplyDecimalStrings(risk, '0.395');
     const standardArmed = compareDecimalStrings(peak, standardArmFloor) >= 0;

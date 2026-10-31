@@ -293,6 +293,64 @@ describe('PAPER profit-lock policy', () => {
     });
   });
 
+  it('lets early-transition and confirmed-reversal M1 trades breathe until 0.75R', () => {
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '5.00',
+        currentPnl: '3.49',
+        initialRiskPnl: '10.00',
+        isM1Strategy: true,
+        strategyRoute: 'EARLY_TRANSITION',
+      } as any),
+    ).toMatchObject({ armed: false, shouldClose: false });
+
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '7.49',
+        currentPnl: '2.00',
+        initialRiskPnl: '10.00',
+        isM1Strategy: true,
+        strategyRoute: 'CONFIRMED_REVERSAL',
+      } as any),
+    ).toMatchObject({ armed: false, shouldClose: false });
+
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '8.00',
+        currentPnl: '5.99',
+        initialRiskPnl: '10.00',
+        isM1Strategy: true,
+        strategyRoute: 'EARLY_TRANSITION',
+      } as any),
+    ).toMatchObject({
+      armed: true,
+      shouldClose: true,
+      retentionFraction: '0.75',
+      protectedFloorPnl: '6.00',
+    });
+  });
+
+  it('keeps the current rescue and half-R protection for trend continuation and unknown routes', () => {
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '4.00',
+        currentPnl: '1.59',
+        initialRiskPnl: '10.00',
+        isM1Strategy: true,
+        strategyRoute: 'TREND_CONTINUATION',
+      } as any),
+    ).toMatchObject({ armed: true, shouldClose: true, retentionFraction: '0.40' });
+
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '5.00',
+        currentPnl: '3.49',
+        initialRiskPnl: '10.00',
+        isM1Strategy: true,
+      }),
+    ).toMatchObject({ armed: true, shouldClose: true, retentionFraction: '0.70' });
+  });
+
   it('protects progressively more of the peak only after meaningful R milestones', () => {
     expect(
       evaluatePaperProfitLock({
