@@ -17,22 +17,59 @@ def _dispatch(terminal: TerminalPort, command_type: str, payload: dict[str, Any]
     if command_type == "ACCOUNT_SNAPSHOT":
         return terminal.account_snapshot()
     if command_type == "GET_PRICE":
-        return terminal.current_price(str(payload["symbol"]))
+        return terminal.current_price(str(payload.get("instrument", payload.get("symbol"))))
+    if command_type == "GET_OHLCV":
+        raw_before = payload.get("before")
+        before = None
+        if isinstance(raw_before, str) and raw_before:
+            from datetime import datetime
+            before = datetime.fromisoformat(raw_before.replace("Z", "+00:00"))
+        bars = terminal.get_ohlcv(
+            str(payload.get("instrument", payload.get("symbol"))),
+            str(payload["timeframe"]),
+            int(payload["count"]),
+            before,
+        )
+        return {"bars": bars}
+    if command_type == "LIST_SYMBOLS":
+        return {"instruments": terminal.list_symbols()}
+    if command_type == "GET_SYMBOL_INFO":
+        return {"instrument": terminal.symbol_info(str(payload.get("instrument", payload.get("symbol"))))}
     if command_type == "CALCULATE_MARGIN":
         return terminal.calculate_margin(
-            str(payload["symbol"]), str(payload["side"]), str(payload["volume"])
+            str(payload.get("instrument", payload.get("symbol"))),
+            str(payload.get("direction", payload.get("side"))),
+            str(payload.get("lotSize", payload.get("volume"))),
         )
     if command_type == "LIST_POSITIONS":
         return {"positions": terminal.list_positions()}
     if command_type == "LIST_ORDERS":
         return {"orders": terminal.list_orders()}
+    if command_type == "GET_ORDER":
+        return {"order": terminal.get_order(str(payload["providerOrderId"]))}
+    if command_type == "GET_HISTORY":
+        from datetime import datetime
+        date_from = datetime.fromisoformat(str(payload["from"]).replace("Z", "+00:00"))
+        date_to = datetime.fromisoformat(str(payload["to"]).replace("Z", "+00:00"))
+        return {"trades": terminal.get_history(date_from, date_to)}
     if command_type == "PLACE_ORDER":
-        return terminal.place_order(payload)
+        idempotency = str(payload.get("idempotencyKey", payload.get("clientOrderId", "order")))
+        normalized = {
+            "symbol": str(payload.get("instrument", payload.get("symbol"))),
+            "side": str(payload.get("direction", payload.get("side"))),
+            "volume": str(payload.get("lotSize", payload.get("volume"))),
+            "stopLoss": payload.get("stopLoss"),
+            "takeProfit": payload.get("takeProfit"),
+            "comment": str(payload.get("comment") or f"irexpro:{idempotency}"),
+        }
+        return terminal.place_order(normalized)
     if command_type == "MODIFY_ORDER":
         return terminal.modify_order(payload)
     if command_type == "CLOSE_ORDER":
         return terminal.close_order(payload)
-    raise Mt5TerminalError(f"command not implemented by connector 0.1: {command_type}")
+    if command_type == "CLOSE_ALL":
+        return terminal.close_all()
+    raise Mt5TerminalError(f"unsupported connector command: {command_type}")
 
 
 def _report_existing(
