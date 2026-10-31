@@ -1,0 +1,81 @@
+name: Profit Protection Exit Quality Gate
+
+on:
+  push:
+    branches:
+      - feat/profit-protection-exit-quality-report-20261031
+    paths:
+      - 'apps/api/src/modules/trading/profit-protection-exit-quality.service.ts'
+      - 'apps/api/src/modules/trading/profit-protection-exit-quality.service.spec.ts'
+      - 'apps/api/src/modules/trading/trading-reports.controller.ts'
+      - 'apps/api/src/modules/trading/trading-reports.controller.spec.ts'
+      - 'apps/api/src/modules/trading/trading.module.ts'
+      - 'apps/web/src/lib/profit-protection-exit-quality.ts'
+      - 'apps/web/src/lib/profit-protection-exit-quality.spec.ts'
+      - 'apps/web/src/app/trade/history/profit-protection/**'
+      - 'apps/web/src/app/trade/history/page.tsx'
+      - '.github/workflows/profit-protection-exit-quality-gate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: '10.34.5'
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Backend focused tests
+        working-directory: apps/api
+        run: |
+          pnpm exec jest --runInBand \
+            src/modules/trading/profit-protection-exit-quality.service.spec.ts \
+            src/modules/trading/trading-reports.controller.spec.ts
+      - name: API TypeScript
+        if: ${{ success() }}
+        working-directory: apps/api
+        run: ./node_modules/.bin/tsc --noEmit
+      - name: API build
+        if: ${{ success() }}
+        working-directory: apps/api
+        run: pnpm build
+
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: '10.34.5'
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Web focused tests
+        working-directory: apps/web
+        run: |
+          pnpm exec jest --runInBand \
+            src/lib/profit-protection-exit-quality.spec.ts \
+            src/app/trade/history/profit-protection/page.spec.tsx
+      - name: Web TypeScript
+        if: ${{ success() }}
+        working-directory: apps/web
+        run: ./node_modules/.bin/tsc --noEmit
+      - name: Web build
+        if: ${{ success() }}
+        working-directory: apps/web
+        run: pnpm build
