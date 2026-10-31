@@ -1,0 +1,40 @@
+name: Confirmed Reversal v2 Gate
+
+on:
+  push:
+    branches:
+      - feat/confirmed-reversal-v2-github-20261031
+    paths:
+      - 'apps/api/src/modules/ai/m1-tactical-evidence.service.ts'
+      - 'apps/api/src/modules/ai/m1-tactical-evidence.confirmed-reversal-v2.spec.ts'
+      - '.github/workflows/confirmed-reversal-v2-gate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: '10.34.5'
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Focused reversal-v2 TDD gate
+        working-directory: apps/api
+        run: pnpm exec jest --runInBand src/modules/ai/m1-tactical-evidence.confirmed-reversal-v2.spec.ts
+      - name: TypeScript
+        working-directory: apps/api
+        run: ./node_modules/.bin/tsc --noEmit
+      - name: Build
+        working-directory: apps/api
+        run: pnpm build
