@@ -14,6 +14,18 @@ This Windows connector links an already logged-in MetaTrader 5 desktop terminal 
 
 If the user switches the local MT5 terminal to another account/server/environment, the connector fails closed and iRexPro suspends that binding until it is paired again. A connector whose heartbeat is stale is treated as disconnected for new exposure, but it can recover automatically when fresh heartbeats resume. The user can also revoke the connector from iRexPro; revocation invalidates its token, cancels queued commands, and marks already-leased commands uncertain for reconciliation rather than replaying them.
 
+## Windows desktop installer
+
+For end users, use the Windows installer published from tags named `mt5-connector-v*`. The release contains:
+
+- `iRexPro-MT5-Connector-Setup.exe` — normal Windows installer with Start-menu shortcut.
+- `iRexPro-MT5-Connector-Portable.exe` — standalone executable.
+- `SHA256SUMS.txt` — SHA-256 integrity hashes for both binaries.
+
+The desktop app defaults to `https://irexpro.lightworldtech.com/api/v1`, accepts the pairing code shown by iRexPro, stores the connector token in the Windows credential vault, and provides Start/Stop controls. A protocol-v1 configuration does not get guessed or migrated silently: install the current connector and generate a new pairing code.
+
+Current builds are unsigned until the Lightworld Windows code-signing certificate is provisioned in the release pipeline, so Windows SmartScreen may display a publisher warning. Verify the SHA-256 hash against the release file before installing.
+
 ## Development installation
 
 Requires Python 3.10+ on Windows and an installed MetaTrader 5 terminal.
@@ -28,7 +40,7 @@ Pair the terminal:
 
 ```powershell
 irexpro-mt5-connector pair `
-  --server-url https://irexpro.lightworldtech.com `
+  --server-url https://irexpro.lightworldtech.com/api/v1 `
   --pairing-code ABCDEFGH23
 ```
 

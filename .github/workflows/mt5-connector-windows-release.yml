@@ -1,0 +1,77 @@
+name: Direct MT5 Windows Connector Release
+
+on:
+  push:
+    tags:
+      - 'mt5-connector-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: services/mt5-connector/pyproject.toml
+
+      - name: Install connector and build tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "services/mt5-connector[test]" pyinstaller
+
+      - name: Run Direct MT5 connector tests
+        run: python -m pytest services/mt5-connector/tests -q
+
+      - name: Build desktop executable with PyInstaller
+        working-directory: services/mt5-connector
+        run: pyinstaller packaging/irexpro-mt5-connector.spec --noconfirm --clean
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows installer
+        working-directory: services/mt5-connector
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^mt5-connector-v', ''
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" "packaging\installer.iss"
+          Copy-Item "dist\iRexPro-MT5-Connector.exe" "packaging\output\iRexPro-MT5-Connector-Portable.exe"
+
+      - name: Generate SHA-256 checksums
+        working-directory: services/mt5-connector/packaging/output
+        run: |
+          $lines = Get-ChildItem -Filter *.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          }
+          $lines | Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: irexpro-mt5-connector-windows-${{ github.ref_name }}
+          path: |
+            services/mt5-connector/packaging/output/iRexPro-MT5-Connector-Setup.exe
+            services/mt5-connector/packaging/output/iRexPro-MT5-Connector-Portable.exe
+            services/mt5-connector/packaging/output/SHA256SUMS.txt
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            services/mt5-connector/packaging/output/iRexPro-MT5-Connector-Setup.exe
+            services/mt5-connector/packaging/output/iRexPro-MT5-Connector-Portable.exe
+            services/mt5-connector/packaging/output/SHA256SUMS.txt
