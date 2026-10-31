@@ -55,8 +55,8 @@ export const CTRADER_FAMILY_BROKER_IDS: readonly string[] = [
 export const BROKER_CATALOG: readonly BrokerDefinition[] = [
   {
     id: 'direct-mt5',
-    name: 'MetaTrader 5 — Direct Terminal (DEMO)',
-    description: 'Direct local-terminal bridge for an already logged-in Windows MetaTrader 5 DEMO account. No MetaAPI cloud account is required.',
+    name: 'MetaTrader 5 — Direct Terminal',
+    description: 'Native bridge for an already logged-in Windows MetaTrader 5 DEMO or LIVE account. No MetaAPI cloud account or broker password storage is required. LIVE remains fail-closed until the Direct MT5 production certification is attested.',
     adapterId: 'direct-mt5',
     status: BrokerAvailabilityStatus.BETA,
     productionLiveVerification: { status: 'UNVERIFIED' },
@@ -64,11 +64,11 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
     capabilities: [
       BrokerCapability.ACCOUNT_READ, BrokerCapability.BALANCE_READ, BrokerCapability.POSITION_READ,
       BrokerCapability.ORDER_READ, BrokerCapability.HISTORY_READ, BrokerCapability.MARKET_DATA,
-      BrokerCapability.DEMO, BrokerCapability.METATRADER, BrokerCapability.ORDER_PLACEMENT,
+      BrokerCapability.DEMO, BrokerCapability.LIVE, BrokerCapability.METATRADER, BrokerCapability.ORDER_PLACEMENT,
       BrokerCapability.ORDER_MODIFICATION, BrokerCapability.CLOSE_ALL, BrokerCapability.MARGIN_CALCULATION,
     ],
     authenticationType: 'SESSION_AUTH',
-    environments: ['DEMO'],
+    environments: ['DEMO', 'LIVE'],
     regions: [],
   },
   {

@@ -93,6 +93,7 @@ describe('DirectMt5CommandService', () => {
     expect(leaseSql).toContain('c.trade_allowed = true');
     expect(leaseSql).toContain('broker.broker_connections');
     expect(leaseSql).toContain('c.account_type = bc.account_type');
+    expect(leaseSql).toContain('c.account_login = bc.account_id');
     expect(leaseSql).toContain("bc.authorization_status = 'ACTIVE'");
     expect(leaseSql).toContain('bc.live_trading_enabled = true');
     expect(query.mock.calls[1]![1]).toEqual(['connector-1']);
@@ -133,4 +134,5 @@ describe('DirectMt5CommandService', () => {
     const sql = String(query.mock.calls[0]![0]);
     expect(sql).toContain('broker.broker_connections');
     expect(sql).toContain('c.account_type = bc.account_type');
+    expect(sql).toContain('c.account_login = bc.account_id');
   });

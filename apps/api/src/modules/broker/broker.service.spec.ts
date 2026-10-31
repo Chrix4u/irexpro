@@ -2051,4 +2051,57 @@ describe('BrokerService', () => {
       ).resolves.toBeNull();
     });
   });
+
+  describe('Direct MT5 credentialless broker-service read paths', () => {
+    const directConnection = () => connectedConnection({
+      brokerId: 'direct-mt5',
+      accountId: '12345',
+      encryptedCredentials: null,
+      credentialIv: null,
+      credentialTag: null,
+      encryptionKeyId: null,
+      credentialStatus: 'VERIFIED',
+    });
+
+    it('reads OHLCV through the paired terminal without cloud credentials', async () => {
+      const adapter = { setMode: jest.fn(), isConnected: jest.fn().mockReturnValue(false), connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }), getOHLCV: jest.fn().mockResolvedValue([]) };
+      connectionRepo.findOne.mockResolvedValue(directConnection());
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      await expect(service.getOhlcvForConnection('user-1', 'conn-1', 'EURUSD', 'M5', 10)).resolves.toEqual([]);
+      expect(adapter.connect).toHaveBeenCalledWith({ accountId: '12345' });
+      expect(encryption.decrypt).not.toHaveBeenCalled();
+    });
+
+    it('reads positions and closed history without cloud credentials', async () => {
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
+        getOpenPositions: jest.fn().mockResolvedValue([]),
+        getClosedTrades: jest.fn().mockResolvedValue([]),
+      };
+      connectionRepo.findOne.mockResolvedValue(directConnection());
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      await expect(service.getOpenPositionsForConnection('conn-1', 'user-1')).resolves.toMatchObject({ positions: [] });
+      await expect(service.getClosedTradesForConnection('conn-1', 'user-1', new Date('2026-10-31T00:00:00Z'), new Date('2026-11-01T00:00:00Z'))).resolves.toMatchObject({ trades: [] });
+      expect(adapter.connect).toHaveBeenCalledTimes(2);
+      expect(encryption.decrypt).not.toHaveBeenCalled();
+    });
+
+    it('refreshes the authoritative account snapshot from the paired terminal without OAuth/cloud credentials', async () => {
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({ success: true, accountId: '12345', accountType: BrokerMode.DEMO, currency: 'USD', serverTime: new Date() }),
+        getAccountInfo: jest.fn().mockResolvedValue({ accountId: '12345', balance: '10000', equity: '10010', margin: '100', freeMargin: '9910', marginLevel: '10010', leverage: 100, currency: 'USD' }),
+      };
+      connectionRepo.findOne.mockResolvedValue(directConnection());
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      const tokenLifecycle = module.get(BrokerOAuthTokenLifecycleService);
+      await expect(service.observeAccountSnapshotNow('user-1', 'conn-1')).resolves.toBeUndefined();
+      expect(adapter.connect).toHaveBeenCalledWith({ accountId: '12345' });
+      expect(encryption.decrypt).not.toHaveBeenCalled();
+      expect(tokenLifecycle.ensureFreshTokens).not.toHaveBeenCalled();
+      expect(snapshotService.acceptSnapshot).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'conn-1', freeMargin: '9910', currency: 'USD' }));
+    });
+  });
+
 });

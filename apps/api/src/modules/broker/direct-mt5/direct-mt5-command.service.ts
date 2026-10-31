@@ -164,6 +164,7 @@ export class DirectMt5CommandService {
             AND cmd.state = 'PENDING'
             AND c.state = 'ACTIVE'
             AND c.account_type = bc.account_type
+            AND c.account_login = bc.account_id
             AND c.last_heartbeat_at >= now() - interval '15 seconds'
             AND (
               cmd.command_type <> 'PLACE_ORDER'
@@ -270,6 +271,7 @@ export class DirectMt5CommandService {
        JOIN broker.broker_connections bc ON bc.id = c.broker_connection_id
        WHERE c.broker_connection_id = $1
          AND c.account_type = bc.account_type
+         AND c.account_login = bc.account_id
          AND state = 'ACTIVE'
          AND last_heartbeat_at >= now() - interval '15 seconds'
        LIMIT 1`,
