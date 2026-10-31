@@ -230,6 +230,36 @@ describe('Direct MT5 onboarding', () => {
     })));
   });
 
+  it('makes phone and web the primary Direct MT5 control surface and shows both Windows bridge choices', async () => {
+    render(<OnboardingBrokerPage />);
+    await waitFor(() => expect(screen.getByText(/Direct Connector \(recommended\)/i)).not.toBeNull());
+
+    expect(screen.getByText(/Connect from any device/i)).not.toBeNull();
+    expect(screen.getByText(/phone or web portal/i)).not.toBeNull();
+    expect(screen.getByText(/Windows PC or VPS is only the MT5 execution bridge/i)).not.toBeNull();
+    expect(screen.getByRole('button', { name: /I already have MT5 running on Windows/i })).not.toBeNull();
+    expect(screen.getByRole('button', { name: /I need a Windows PC\/VPS for MT5/i })).not.toBeNull();
+  });
+
+  it('shows Windows or VPS setup guidance without creating a broker connection', async () => {
+    render(<OnboardingBrokerPage />);
+    await waitFor(() => expect(screen.getByText(/Direct Connector \(recommended\)/i)).not.toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: /I need a Windows PC\/VPS for MT5/i }));
+
+    expect(screen.getByText(/Set up the MT5 execution bridge/i)).not.toBeNull();
+    expect(screen.getByText(/Windows 10\/11 PC or Windows VPS/i)).not.toBeNull();
+    expect(screen.getByText(/keep that Windows machine or VPS online/i)).not.toBeNull();
+    expect(screen.queryByLabelText('MT5 account login')).toBeNull();
+    expect(screen.queryByText('Create DEMO connection & pairing code')).toBeNull();
+    expect(createBrokerConnection).not.toHaveBeenCalled();
+    expect(screen.getByRole('link', { name: /Download Windows connector/i })).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /I already have MT5 running on Windows/i }));
+    expect(screen.getByLabelText('MT5 account login')).not.toBeNull();
+    expect(screen.getByText('Create DEMO connection & pairing code')).not.toBeNull();
+  });
+
   it('keeps MetaApi as an explicit optional path and restores credential inputs only when selected', async () => {
     const { container } = render(<OnboardingBrokerPage />);
     await waitFor(() => expect(screen.getByText(/Direct Connector \(recommended\)/i)).not.toBeNull());

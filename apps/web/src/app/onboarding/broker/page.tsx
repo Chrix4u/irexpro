@@ -49,6 +49,7 @@ type BrokerAction =
 
 type Mt5ConnectionMethod = 'DIRECT' | 'METAAPI';
 type DirectMt5Environment = 'DEMO' | 'LIVE';
+type DirectMt5BridgeSetup = 'READY' | 'NEED_WINDOWS';
 
 const DIRECT_MT5_WINDOWS_INSTALLER_URL =
   'https://github.com/Chrix4u/irexpro/releases/download/mt5-connector-v0.2.0/iRexPro-MT5-Connector-Setup.exe';
@@ -94,6 +95,7 @@ export default function OnboardingBrokerPage() {
   const [testResult, setTestResult] = useState<BrokerTestResult | null>(null);
   const [mt5ConnectionMethod, setMt5ConnectionMethod] = useState<Mt5ConnectionMethod>('DIRECT');
   const [directMt5Environment, setDirectMt5Environment] = useState<DirectMt5Environment>('DEMO');
+  const [directMt5BridgeSetup, setDirectMt5BridgeSetup] = useState<DirectMt5BridgeSetup>('READY');
   const [directMt5ConnectionId, setDirectMt5ConnectionId] = useState<string | null>(null);
   const [directMt5Pairing, setDirectMt5Pairing] = useState<DirectMt5PairingView | null>(null);
   const [directMt5Health, setDirectMt5Health] = useState<DirectMt5ConnectionHealthView | null>(null);
@@ -861,27 +863,93 @@ export default function OnboardingBrokerPage() {
 
               <Alert variant="info">
                 <span style={{ flex: 1 }}>
-                  🔐 Direct MT5 runs beside the MT5 terminal already logged in on your Windows PC or VPS.
-                  We never ask for your MT5 password, investor password, API key, or broker secret.
+                  <strong>Connect from any device.</strong> Set up and control iRexPro from your phone or web portal.
+                  The Windows PC or VPS is only the MT5 execution bridge, so you do not need to sit at that machine to manage trading.
                 </span>
               </Alert>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                <Link
-                  href={DIRECT_MT5_WINDOWS_INSTALLER_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sm"
-                >
-                  Download Windows connector
-                </Link>
-                <p className="helper-text" style={{ margin: 0 }}>
-                  Install Direct MT5 protocol v2 on the same Windows PC or VPS as MetaTrader 5.
-                  If you used an earlier connector, install this version and generate a new pairing code to re-pair.
-                </p>
+              <div>
+                <div className="input-label" style={{ marginBottom: 'var(--space-2)' }}>Where will MetaTrader 5 run?</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 'var(--space-2)' }}>
+                  <Button
+                    type="button"
+                    variant={directMt5BridgeSetup === 'READY' ? 'primary' : 'secondary'}
+                    aria-pressed={directMt5BridgeSetup === 'READY'}
+                    onClick={() => setDirectMt5BridgeSetup('READY')}
+                  >
+                    I already have MT5 running on Windows
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={directMt5BridgeSetup === 'NEED_WINDOWS' ? 'primary' : 'secondary'}
+                    aria-pressed={directMt5BridgeSetup === 'NEED_WINDOWS'}
+                    onClick={() => setDirectMt5BridgeSetup('NEED_WINDOWS')}
+                  >
+                    I need a Windows PC/VPS for MT5
+                  </Button>
+                </div>
               </div>
 
-              <div className="input-group">
+              {directMt5BridgeSetup === 'NEED_WINDOWS' ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 'var(--space-3)',
+                    padding: 'var(--space-4)',
+                    border: '1px solid var(--border-soft)',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--surface-tint)',
+                  }}
+                >
+                  <strong>Set up the MT5 execution bridge</strong>
+                  <p className="helper-text" style={{ margin: 0 }}>
+                    Use a Windows 10/11 PC or Windows VPS that you control. This machine hosts the MT5 desktop terminal only;
+                    your normal iRexPro controls remain on your phone or web browser.
+                  </p>
+                  <ol className="text-sm" style={{ margin: 0, paddingLeft: '1.25rem', lineHeight: 1.8 }}>
+                    <li>Install your broker&apos;s MetaTrader 5 desktop terminal and log into the account you want iRexPro to use.</li>
+                    <li>Enable automated/algo trading in MT5 and keep that Windows machine or VPS online whenever Direct MT5 trading is active.</li>
+                    <li>Install the iRexPro Direct MT5 Connector on the same Windows machine.</li>
+                    <li>Return here, choose “I already have MT5 running on Windows”, then create the pairing code.</li>
+                  </ol>
+                  <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <Link
+                      href={DIRECT_MT5_WINDOWS_INSTALLER_URL}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sm"
+                    >
+                      Download Windows connector
+                    </Link>
+                    <span className="helper-text">A Windows VPS is optional; a Windows PC that stays online also works.</span>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <Alert variant="info">
+                    <span style={{ flex: 1 }}>
+                      🔐 Direct MT5 runs beside the MT5 terminal already logged in on your Windows PC or VPS.
+                      We never ask for your MT5 password, investor password, API key, or broker secret.
+                    </span>
+                  </Alert>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                    <Link
+                      href={DIRECT_MT5_WINDOWS_INSTALLER_URL}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sm"
+                    >
+                      Download Windows connector
+                    </Link>
+                    <p className="helper-text" style={{ margin: 0 }}>
+                      Install Direct MT5 protocol v2 on the same Windows PC or VPS as MetaTrader 5.
+                      If you used an earlier connector, install this version and generate a new pairing code to re-pair.
+                    </p>
+                  </div>
+
+                  <div className="input-group">
                 <label className="input-label" htmlFor="direct-mt5-environment">MT5 environment</label>
                 <select
                   id="direct-mt5-environment"
@@ -994,6 +1062,8 @@ export default function OnboardingBrokerPage() {
                     </Button>
                   </div>
                 </div>
+              )}
+                </>
               )}
             </div>
           ) : (
