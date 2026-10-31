@@ -83,6 +83,7 @@ class IrexProConnectorClient:
                 "brokerConnectionId": settings.broker_connection_id,
                 "accountLogin": settings.account_login,
                 "brokerServer": settings.broker_server,
+                "accountType": settings.account_type,
             },
             timeout=self.timeout_seconds,
         )
@@ -107,6 +108,7 @@ class IrexProConnectorClient:
                 "brokerConnectionId": settings.broker_connection_id,
                 "accountLogin": settings.account_login,
                 "brokerServer": settings.broker_server,
+                "accountType": settings.account_type,
                 "state": state,
                 "result": dict(result) if result is not None else None,
                 "error": error,

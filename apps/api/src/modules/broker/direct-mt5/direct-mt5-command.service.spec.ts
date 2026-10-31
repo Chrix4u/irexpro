@@ -75,6 +75,7 @@ describe('DirectMt5CommandService', () => {
           lease_expires_at: new Date('2026-10-24T18:00:30.000Z'),
           account_login: '113392789',
           broker_server: 'Broker-Demo',
+          account_type: 'DEMO',
         },
       ]);
     const service = new DirectMt5CommandService({ query } as unknown as DataSource);
@@ -90,6 +91,10 @@ describe('DirectMt5CommandService', () => {
     expect(leaseSql).toContain("last_heartbeat_at >= now() - interval '15 seconds'");
     expect(leaseSql).toContain("cmd.command_type <> 'PLACE_ORDER'");
     expect(leaseSql).toContain('c.trade_allowed = true');
+    expect(leaseSql).toContain('broker.broker_connections');
+    expect(leaseSql).toContain('c.account_type = bc.account_type');
+    expect(leaseSql).toContain("bc.authorization_status = 'ACTIVE'");
+    expect(leaseSql).toContain('bc.live_trading_enabled = true');
     expect(query.mock.calls[1]![1]).toEqual(['connector-1']);
     expect(leased).toMatchObject({ commandId: 'cmd-1', connectorId: 'connector-1' });
   });
@@ -114,3 +119,18 @@ describe('DirectMt5CommandService', () => {
     expect(query.mock.calls[0]![1]?.slice(0, 2)).toEqual(['connector-1', 'cmd-1']);
   });
 });
+
+
+  it('returns the MT5-observed account environment only when it matches the BrokerConnection environment', async () => {
+    const query = jest.fn().mockResolvedValueOnce([{
+      id: 'connector-live', account_login: '12345', broker_server: 'Broker-Live', currency: 'USD',
+      trade_allowed: true, account_type: 'LIVE',
+    }]);
+    const service = new DirectMt5CommandService({ query } as unknown as DataSource);
+    await expect(service.getActiveConnectorForConnection('connection-live')).resolves.toMatchObject({
+      connectorId: 'connector-live', accountType: 'LIVE', tradeAllowed: true,
+    });
+    const sql = String(query.mock.calls[0]![0]);
+    expect(sql).toContain('broker.broker_connections');
+    expect(sql).toContain('c.account_type = bc.account_type');
+  });

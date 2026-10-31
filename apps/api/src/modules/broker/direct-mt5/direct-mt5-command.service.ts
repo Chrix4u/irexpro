@@ -61,9 +61,11 @@ export class DirectMt5CommandService {
         WHERE EXISTS (
           SELECT 1
           FROM broker.direct_mt5_connectors c
+          JOIN broker.broker_connections bc ON bc.id = c.broker_connection_id
           WHERE c.id = $2
             AND c.broker_connection_id = $3
             AND c.state = 'ACTIVE'
+            AND c.account_type = bc.account_type
         )
         ON CONFLICT (broker_connection_id, idempotency_key) DO NOTHING
         RETURNING id, connector_id, broker_connection_id, idempotency_key,
@@ -157,11 +159,20 @@ export class DirectMt5CommandService {
           SELECT cmd.id
           FROM broker.direct_mt5_commands cmd
           JOIN broker.direct_mt5_connectors c ON c.id = cmd.connector_id
+          JOIN broker.broker_connections bc ON bc.id = cmd.broker_connection_id
           WHERE cmd.connector_id = $1
             AND cmd.state = 'PENDING'
             AND c.state = 'ACTIVE'
+            AND c.account_type = bc.account_type
             AND c.last_heartbeat_at >= now() - interval '15 seconds'
-            AND (cmd.command_type <> 'PLACE_ORDER' OR c.trade_allowed = true)
+            AND (
+              cmd.command_type <> 'PLACE_ORDER'
+              OR (
+                c.trade_allowed = true
+                AND bc.authorization_status = 'ACTIVE'
+                AND (bc.account_type <> 'LIVE' OR bc.live_trading_enabled = true)
+              )
+            )
             AND (
               cmd.command_type NOT IN ('MODIFY_ORDER', 'CLOSE_ORDER', 'CLOSE_ALL')
               OR c.trade_allowed = true
@@ -181,7 +192,7 @@ export class DirectMt5CommandService {
         RETURNING cmd.id, cmd.connector_id, cmd.broker_connection_id,
                   cmd.idempotency_key, cmd.command_type, cmd.payload,
                   cmd.created_at, cmd.lease_expires_at,
-                  c.account_login, c.broker_server
+                  c.account_login, c.broker_server, c.account_type
       `,
       [connectorId],
     )) as Array<{
@@ -195,6 +206,7 @@ export class DirectMt5CommandService {
       lease_expires_at: string | Date;
       account_login: string;
       broker_server: string;
+      account_type: 'DEMO' | 'LIVE';
     }>;
     const row = rows[0];
     if (!row) return null;
@@ -207,6 +219,7 @@ export class DirectMt5CommandService {
       brokerConnectionId: row.broker_connection_id,
       accountLogin: row.account_login,
       brokerServer: row.broker_server,
+      accountType: row.account_type,
       commandType: row.command_type,
       createdAt: new Date(row.created_at).toISOString(),
       leaseExpiresAt: new Date(row.lease_expires_at).toISOString(),
@@ -249,19 +262,22 @@ export class DirectMt5CommandService {
     brokerServer: string;
     currency: string | null;
     tradeAllowed: boolean;
+    accountType: 'DEMO' | 'LIVE';
   }> {
     const rows = (await this.dataSource.query(
-      `SELECT id, account_login, broker_server, currency, trade_allowed
-       FROM broker.direct_mt5_connectors
-       WHERE broker_connection_id = $1
+      `SELECT c.id, c.account_login, c.broker_server, c.currency, c.trade_allowed, c.account_type
+       FROM broker.direct_mt5_connectors c
+       JOIN broker.broker_connections bc ON bc.id = c.broker_connection_id
+       WHERE c.broker_connection_id = $1
+         AND c.account_type = bc.account_type
          AND state = 'ACTIVE'
          AND last_heartbeat_at >= now() - interval '15 seconds'
        LIMIT 1`,
       [brokerConnectionId],
-    )) as Array<{id:string;account_login:string;broker_server:string;currency:string|null;trade_allowed:boolean}>;
+    )) as Array<{id:string;account_login:string;broker_server:string;currency:string|null;trade_allowed:boolean;account_type:'DEMO'|'LIVE'}>;
     const row = rows[0];
     if (!row) throw new NotFoundException('Direct MT5 connector is not active or heartbeat is stale');
-    return { connectorId: row.id, accountLogin: row.account_login, brokerServer: row.broker_server, currency: row.currency, tradeAllowed: Boolean(row.trade_allowed) };
+    return { connectorId: row.id, accountLogin: row.account_login, brokerServer: row.broker_server, currency: row.currency, tradeAllowed: Boolean(row.trade_allowed), accountType: row.account_type };
   }
 
   async request(input: {

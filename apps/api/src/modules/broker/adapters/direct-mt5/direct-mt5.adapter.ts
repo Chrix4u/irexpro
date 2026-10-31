@@ -28,7 +28,6 @@ export class DirectMt5Adapter implements IBrokerAdapter {
   constructor(private readonly commands: DirectMt5CommandService, @Optional() private readonly connectionId?: string) {}
 
   setMode(mode: BrokerMode): void {
-    if (mode !== BrokerMode.DEMO) throw new BrokerAdapterError(BrokerErrorCode.INVALID_REQUEST, 'Direct MT5 is DEMO-only until LIVE is separately certified');
     this.mode = mode;
   }
   private id(): string {
@@ -38,12 +37,19 @@ export class DirectMt5Adapter implements IBrokerAdapter {
   async connect(_credentials: DecryptedBrokerCredentials): Promise<BrokerConnectionResult> {
     this.setMode(this.mode);
     const c = await this.commands.getActiveConnectorForConnection(this.id());
+    const observedMode = c.accountType === 'LIVE' ? BrokerMode.LIVE : BrokerMode.DEMO;
+    if (observedMode !== this.mode) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.AUTHENTICATION_FAILED,
+        `Direct MT5 terminal environment mismatch: expected ${this.mode}, observed ${observedMode}`,
+      );
+    }
     this.connected = true;
-    return { success: true, accountId: c.accountLogin, accountType: BrokerMode.DEMO, currency: c.currency, serverTime: new Date() };
+    return { success: true, accountId: c.accountLogin, accountType: observedMode, currency: c.currency, serverTime: new Date() };
   }
   async disconnect(): Promise<void> { this.connected = false; }
   async testConnection(credentials: DecryptedBrokerCredentials): Promise<BrokerConnectionTestResult> {
-    try { const r = await this.connect(credentials); return { success: true, accountId: r.accountId, accountType: BrokerMode.DEMO, currency: r.currency ?? undefined }; }
+    try { const r = await this.connect(credentials); return { success: true, accountId: r.accountId, accountType: r.accountType, currency: r.currency ?? undefined }; }
     catch (e) { return { success: false, errorCode: 'DIRECT_MT5_NOT_READY', errorMessage: e instanceof Error ? e.message : 'Direct MT5 not ready' }; }
   }
   isConnected(): boolean { return this.connected; }
@@ -67,7 +73,7 @@ export class DirectMt5Adapter implements IBrokerAdapter {
   async getCurrentPrice(instrument: string): Promise<BrokerPrice> { return (await this.read('GET_PRICE', { instrument }, `price:${instrument}`)) as unknown as BrokerPrice; }
   async getOHLCV(instrument: string, timeframe: string, count: number, before?: Date): Promise<OHLCV[]> { const r = await this.read('GET_OHLCV', { instrument, timeframe, count, before: before?.toISOString() }, `ohlcv:${instrument}:${timeframe}`); return (r.bars ?? []) as OHLCV[]; }
   async placeOrder(order: BrokerOrderRequest): Promise<BrokerOrderResult> {
-    if ((order.orderKind ?? 'MARKET') !== 'MARKET') throw new BrokerAdapterError(BrokerErrorCode.INVALID_ORDER_TYPE, 'Direct MT5 DEMO currently supports MARKET orders only', undefined, false, ProviderDispatchCertainty.DEFINITELY_NOT_SENT);
+    if ((order.orderKind ?? 'MARKET') !== 'MARKET') throw new BrokerAdapterError(BrokerErrorCode.INVALID_ORDER_TYPE, 'Direct MT5 currently supports MARKET entry orders only', undefined, false, ProviderDispatchCertainty.DEFINITELY_NOT_SENT);
     const r = await this.mutate('PLACE_ORDER', order as unknown as Record<string, unknown>, order.idempotencyKey);
     const success = r.success === true;
     return { success, externalOrderId: r.ticket != null ? String(r.ticket) : undefined, filledPrice: r.filledPrice != null ? String(r.filledPrice) : undefined, filledQuantity: r.filledQuantity != null ? String(r.filledQuantity) : order.lotSize, filledAt: r.filledAt ? new Date(String(r.filledAt)) : new Date(), status: success ? 'FILLED' : 'FAILED', brokerMessage: typeof r.message === 'string' ? r.message : undefined, rawResponse: r };

@@ -9,19 +9,28 @@ describe('DirectMt5Adapter', () => {
 
   beforeEach(() => jest.resetAllMocks());
 
-  it('is DEMO-only and connects from fresh paired-terminal evidence without broker credentials', async () => {
+  it('supports DEMO and LIVE only when the paired terminal environment matches the requested mode', async () => {
     commandService.getActiveConnectorForConnection.mockResolvedValue({
-      connectorId: 'connector-1', accountLogin: '12345', brokerServer: 'Broker-Demo', currency: 'USD', tradeAllowed: true,
+      connectorId: 'connector-1', accountLogin: '12345', brokerServer: 'Broker-Demo', currency: 'USD', tradeAllowed: true, accountType: BrokerMode.DEMO,
     });
     const adapter = new DirectMt5Adapter(commandService, 'connection-1');
     adapter.setMode(BrokerMode.DEMO);
     await expect(adapter.connect({ accountId: '12345' })).resolves.toMatchObject({ success: true, accountId: '12345', accountType: BrokerMode.DEMO });
     expect(adapter.isConnected()).toBe(true);
-    expect(() => adapter.setMode(BrokerMode.LIVE)).toThrow(/DEMO-only/i);
+
+    commandService.getActiveConnectorForConnection.mockResolvedValue({ connectorId: 'connector-live', accountLogin: '54321', brokerServer: 'Broker-Live', currency: 'USD', tradeAllowed: true, accountType: BrokerMode.LIVE });
+    const live = new DirectMt5Adapter(commandService, 'connection-live');
+    live.setMode(BrokerMode.LIVE);
+    await expect(live.connect({ accountId: '54321' })).resolves.toMatchObject({ success: true, accountId: '54321', accountType: BrokerMode.LIVE });
+
+    commandService.getActiveConnectorForConnection.mockResolvedValue({ connectorId: 'connector-wrong', accountLogin: '54321', brokerServer: 'Broker-Live', currency: 'USD', tradeAllowed: true, accountType: BrokerMode.DEMO });
+    const fenced = new DirectMt5Adapter(commandService, 'connection-live');
+    fenced.setMode(BrokerMode.LIVE);
+    await expect(fenced.connect({ accountId: '54321' })).rejects.toThrow(/environment/i);
   });
 
   it('maps a MARKET order to one idempotent terminal command', async () => {
-    commandService.getActiveConnectorForConnection.mockResolvedValue({ connectorId: 'connector-1', accountLogin: '12345', brokerServer: 'Broker-Demo', currency: 'USD', tradeAllowed: true });
+    commandService.getActiveConnectorForConnection.mockResolvedValue({ connectorId: 'connector-1', accountLogin: '12345', brokerServer: 'Broker-Demo', currency: 'USD', tradeAllowed: true, accountType: BrokerMode.DEMO });
     commandService.request.mockResolvedValue({ success: true, ticket: '9001', filledPrice: '1.08420', filledAt: '2026-10-27T10:00:00.000Z' });
     const adapter = new DirectMt5Adapter(commandService, 'connection-1');
     adapter.setMode(BrokerMode.DEMO);

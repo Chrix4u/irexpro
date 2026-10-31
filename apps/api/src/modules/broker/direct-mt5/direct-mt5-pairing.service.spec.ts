@@ -46,16 +46,18 @@ describe('DirectMt5PairingService', () => {
     );
   });
 
-  it('rejects Direct MT5 pairing for a LIVE BrokerConnection', async () => {
+  it('creates a pairing for an existing LIVE Direct MT5 BrokerConnection and binds its expected environment', async () => {
     const query = jest
       .fn()
-      .mockResolvedValueOnce([
-        { id: 'connection-live', broker_id: 'direct-mt5', account_type: 'LIVE' },
-      ]);
+      .mockResolvedValueOnce([{ id: 'connection-live', broker_id: 'direct-mt5', account_type: 'LIVE' }])
+      .mockResolvedValueOnce([]);
     const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
 
-    await expect(service.createPairing('user-1', 'connection-live')).rejects.toThrow('DEMO');
-    expect(query).toHaveBeenCalledTimes(1);
+    await expect(service.createPairing('user-1', 'connection-live')).resolves.toMatchObject({ brokerConnectionId: 'connection-live' });
+    const sql = String(query.mock.calls[1]![0]);
+    const params = query.mock.calls[1]![1] as unknown[];
+    expect(sql).toContain('account_type');
+    expect(params).toContain('LIVE');
   });
 
   it('redeems a pairing code once and persists only a connector-token digest', async () => {
@@ -142,6 +144,7 @@ describe('DirectMt5PairingService', () => {
         token_hash: service.digestToken(token),
         account_login: '113392789',
         broker_server: 'Broker-Demo',
+        account_type: 'DEMO',
         last_sequence: '7',
       },
     ]);
@@ -151,6 +154,7 @@ describe('DirectMt5PairingService', () => {
       brokerConnectionId: 'connection-1',
       accountLogin: '113392789',
       brokerServer: 'Broker-Demo',
+      accountType: 'DEMO' as const,
       lastSequence: 7,
     });
     expect(query.mock.calls[0]![1]).toEqual(['connector-1']);
@@ -167,6 +171,7 @@ describe('DirectMt5PairingService', () => {
         token_hash: service.digestToken('right-token'),
         account_login: '113392789',
         broker_server: 'Broker-Demo',
+        account_type: 'DEMO',
         last_sequence: '0',
       },
     ]);
@@ -184,6 +189,7 @@ describe('DirectMt5PairingService', () => {
       brokerConnectionId: 'connection-1',
       accountLogin: '113392789',
       brokerServer: 'Broker-Demo',
+      accountType: 'DEMO' as const,
       lastSequence: 7,
     };
 
@@ -207,6 +213,7 @@ describe('DirectMt5PairingService', () => {
       brokerConnectionId: 'connection-1',
       accountLogin: '113392789',
       brokerServer: 'Broker-Demo',
+      accountType: 'DEMO' as const,
       lastSequence: 7,
     };
 
@@ -219,6 +226,39 @@ describe('DirectMt5PairingService', () => {
       accountType: 'DEMO',
       }),
     ).rejects.toThrow('identity changed');
+    expect(String(query.mock.calls[0]![0])).toContain("state = 'SUSPENDED'");
+  });
+
+
+  it('never auto-authorizes LIVE trading from a heartbeat', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ id: 'connector-live', last_sequence: '2' }])
+      .mockResolvedValueOnce([]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const binding = {
+      connectorId: 'connector-live', userId: 'user-1', brokerConnectionId: 'connection-live',
+      accountLogin: '54321', brokerServer: 'Broker-Live', accountType: 'LIVE' as const, lastSequence: 1,
+    };
+    await service.recordHeartbeat(binding, {
+      accountLogin: '54321', brokerServer: 'Broker-Live', accountType: 'LIVE', sequence: 2, tradeAllowed: true,
+    });
+    const brokerUpdateSql = String(query.mock.calls[1]![0]);
+    expect(brokerUpdateSql).toContain("account_type='LIVE'");
+    expect(brokerUpdateSql).not.toContain("authorization_status='ACTIVE'");
+    expect(brokerUpdateSql).not.toContain('live_trading_enabled=true');
+  });
+
+  it('suspends the connector when the terminal environment changes after pairing', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const binding = {
+      connectorId: 'connector-1', userId: 'user-1', brokerConnectionId: 'connection-1',
+      accountLogin: '113392789', brokerServer: 'Broker', accountType: 'DEMO' as const, lastSequence: 7,
+    };
+    await expect(service.recordHeartbeat(binding, {
+      accountLogin: '113392789', brokerServer: 'Broker', accountType: 'LIVE', sequence: 8, tradeAllowed: true,
+    })).rejects.toThrow(/identity changed|environment/i);
     expect(String(query.mock.calls[0]![0])).toContain("state = 'SUSPENDED'");
   });
 

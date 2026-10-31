@@ -56,8 +56,8 @@ class RedeemDirectMt5PairingDto {
   @IsBoolean()
   tradeAllowed!: boolean;
 
-  @IsIn(['DEMO'])
-  accountType!: 'DEMO';
+  @IsIn(['DEMO', 'LIVE'])
+  accountType!: 'DEMO' | 'LIVE';
 }
 
 class DirectMt5ConnectorIdentityDto {
@@ -70,11 +70,12 @@ class DirectMt5ConnectorIdentityDto {
   @IsString()
   @Length(1, 255)
   brokerServer!: string;
+
+  @IsIn(['DEMO', 'LIVE'])
+  accountType!: 'DEMO' | 'LIVE';
 }
 
 class DirectMt5HeartbeatDto extends DirectMt5ConnectorIdentityDto {
-  @IsIn(['DEMO'])
-  accountType!: 'DEMO';
   @IsInt()
   @Min(1)
   sequence!: number;
@@ -216,7 +217,8 @@ export class DirectMt5ConnectorController {
     if (
       identity.brokerConnectionId !== binding.brokerConnectionId ||
       identity.accountLogin !== binding.accountLogin ||
-      identity.brokerServer !== binding.brokerServer
+      identity.brokerServer !== binding.brokerServer ||
+      identity.accountType !== binding.accountType
     ) {
       throw new ConflictException('Connector identity does not match paired MT5 account');
     }
