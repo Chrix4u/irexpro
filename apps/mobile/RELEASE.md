@@ -101,3 +101,13 @@ The `production` profile uses remote platform version management and auto-increm
 - A missing EAS project ID is represented by absence, not an empty string.
 - A malformed or placeholder project ID fails validation.
 - Actual cloud build/signing remains impossible until an authorized operator links the project and configures EAS-managed platform credentials.
+
+## iOS TestFlight staging workflow
+
+The repository includes `.github/workflows/mobile-ios-testflight.yml` for intentional QA publication to TestFlight. It supports manual dispatch and exact `irexpro-ios-v*` release tags, and uses the `testflight` EAS profile: store-signed iOS distribution with the verified staging API.
+
+The workflow intentionally fails before any cloud build when the repository secret `EXPO_TOKEN` is absent. The token must belong to an authorized member of the Expo organization `lightworld-technologies-limited`; never commit it. Apple signing and App Store Connect submission credentials remain EAS-managed remote credentials for the linked project.
+
+Before the first successful TestFlight run, an authorized operator must ensure the iRexPro app exists in App Store Connect for bundle identifier `com.irexpro.mobile` and that EAS has usable iOS distribution/signing plus App Store Connect submission credentials. The workflow then validates source, requests the EAS iOS build, preserves the non-secret build JSON as a GitHub Actions artifact, and submits only after the build succeeds.
+
+TestFlight in this workflow is for staging/QA. It points to `https://irexpro.lightworldtech.com/api/v1`; production App Store distribution remains a separate release decision using the `production` profile and a distinct production API hostname.

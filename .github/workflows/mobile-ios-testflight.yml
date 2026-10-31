@@ -1,0 +1,98 @@
+name: Mobile iOS TestFlight
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'irexpro-ios-v*'
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '10.34.5'
+  EAS_CLI_VERSION: '25.2.0'
+  CI: '1'
+  EXPO_NO_TELEMETRY: '1'
+  EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+  EXPO_PUBLIC_API_BASE_URL: 'https://irexpro.lightworldtech.com/api/v1'
+  EAS_BUILD_PROFILE: 'testflight'
+
+jobs:
+  testflight:
+    name: Build and submit iOS staging app to TestFlight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact candidate checkout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Require authorized Expo authentication
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "${EXPO_TOKEN:-}" || {
+            echo 'EXPO_TOKEN is not configured. Add an authorized Expo access token before running TestFlight publication.' >&2
+            exit 1
+          }
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate mobile and TestFlight configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --filter @irexpro/mobile test
+          pnpm --filter @irexpro/mobile typecheck
+          node apps/mobile/scripts/validate-release-config.cjs --eas-build
+          pnpm --filter @irexpro/mobile exec expo install --check
+
+      - name: Install pinned EAS CLI
+        run: npm install --global "eas-cli@${EAS_CLI_VERSION}"
+
+      - name: Verify Expo identity
+        run: eas whoami
+
+      - name: Build store-signed iOS staging app with EAS
+        working-directory: apps/mobile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          eas build --platform ios --profile testflight --non-interactive --wait --json | tee testflight-build.json
+          test -s testflight-build.json
+          node -e "JSON.parse(require('node:fs').readFileSync('testflight-build.json','utf8')); console.log('EAS build evidence JSON: valid')"
+
+      - name: Upload non-secret EAS build evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: irexpro-ios-testflight-build-${{ github.sha }}
+          path: apps/mobile/testflight-build.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Submit latest validated iOS build to TestFlight
+        working-directory: apps/mobile
+        run: eas submit --platform ios --profile testflight --latest --non-interactive

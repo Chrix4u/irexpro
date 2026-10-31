@@ -140,7 +140,7 @@ for (const plugin of plugins) {
 expect(easJson.cli?.appVersionSource === 'remote', 'eas.json cli.appVersionSource must be remote');
 expect(easJson.cli?.requireCommit === true, 'eas.json cli.requireCommit must be true for reproducible release builds');
 
-for (const profileName of ['base', 'development', 'preview', 'production']) {
+for (const profileName of ['base', 'development', 'preview', 'testflight', 'production']) {
   expect(build[profileName] && typeof build[profileName] === 'object', `eas.json is missing build.${profileName}`);
 }
 
@@ -149,12 +149,16 @@ expect(build.base?.pnpm === '10.34.5', 'EAS base profile must pin pnpm 10.34.5 t
 expect(build.base?.credentialsSource === 'remote', 'EAS base profile must use remotely managed signing credentials');
 expect(build.development?.extends === 'base', 'development profile must extend base');
 expect(build.preview?.extends === 'base', 'preview profile must extend base');
+expect(build.testflight?.extends === 'base', 'testflight profile must extend base');
 expect(build.production?.extends === 'base', 'production profile must extend base');
 expect(build.development?.environment === 'development', 'development profile must use the EAS development environment');
 expect(build.preview?.environment === 'preview', 'preview profile must use the EAS preview environment');
+expect(build.testflight?.environment === 'preview', 'testflight profile must use the EAS preview environment');
 expect(build.production?.environment === 'production', 'production profile must use the EAS production environment');
 expect(build.development?.distribution === 'internal', 'development profile must use internal distribution');
 expect(build.preview?.distribution === 'internal', 'preview profile must use internal distribution');
+expect(build.testflight?.distribution === 'store', 'testflight profile must use store distribution');
+expect(build.testflight?.autoIncrement === true, 'testflight profile must auto-increment iOS build versions');
 expect(build.production?.distribution === 'store', 'production profile must use store distribution');
 expect(build.production?.autoIncrement === true, 'production profile must auto-increment remote platform build versions');
 expect(build.production?.android?.buildType === 'app-bundle', 'production Android build must produce an app bundle');
@@ -163,11 +167,14 @@ validatePublicEnv(build);
 
 const developmentEnv = resolveProfileEnv(build, 'development');
 const previewEnv = resolveProfileEnv(build, 'preview');
+const testflightEnv = resolveProfileEnv(build, 'testflight');
 const productionEnv = resolveProfileEnv(build, 'production');
 const expectedStagingApi = 'https://irexpro.lightworldtech.com/api/v1';
 
 expect(developmentEnv.EXPO_PUBLIC_APP_ENV === 'development', 'development profile must set EXPO_PUBLIC_APP_ENV=development');
 expect(previewEnv.EXPO_PUBLIC_APP_ENV === 'staging', 'preview profile must set EXPO_PUBLIC_APP_ENV=staging');
+expect(testflightEnv.EXPO_PUBLIC_APP_ENV === 'staging', 'testflight profile must set EXPO_PUBLIC_APP_ENV=staging');
+expect(testflightEnv.EXPO_PUBLIC_API_BASE_URL === expectedStagingApi, `testflight API base URL must remain the verified staging endpoint ${expectedStagingApi}`);
 expect(productionEnv.EXPO_PUBLIC_APP_ENV === 'production', 'production profile must set EXPO_PUBLIC_APP_ENV=production');
 expect(previewEnv.EXPO_PUBLIC_API_BASE_URL === expectedStagingApi, `preview API base URL must remain the verified staging endpoint ${expectedStagingApi}`);
 expect(
@@ -184,18 +191,18 @@ const stagingApi = parseHttpsApi(previewEnv.EXPO_PUBLIC_API_BASE_URL, 'preview/s
 const easBuildProfile = process.env.EAS_BUILD_PROFILE?.trim() || null;
 if (easBuildMode) {
   expect(
-    ['development', 'preview', 'production'].includes(easBuildProfile),
-    `EAS_BUILD_PROFILE must identify development, preview, or production (got ${easBuildProfile || 'missing'})`,
+    ['development', 'preview', 'testflight', 'production'].includes(easBuildProfile),
+    `EAS_BUILD_PROFILE must identify development, preview, testflight, or production (got ${easBuildProfile || 'missing'})`,
   );
 }
 
 const mustValidateRuntimeProductionApi =
   requireProductionApi || (easBuildMode && easBuildProfile === 'production');
 
-if (easBuildMode && easBuildProfile === 'preview') {
+if (easBuildMode && ['preview', 'testflight'].includes(easBuildProfile)) {
   const runtimePreviewApi = parseHttpsApi(
     process.env.EXPO_PUBLIC_API_BASE_URL,
-    'EAS preview runtime API base URL',
+    `EAS ${easBuildProfile} runtime API base URL`,
   );
   if (runtimePreviewApi && stagingApi) {
     expect(

@@ -2,7 +2,7 @@
   "name": "@irexpro/mobile",
   "version": "0.1.0",
   "private": true,
-  "description": "iRexPro — native mobile app foundation for iOS and Android (Expo + React Native + TypeScript).",
+  "description": "iRexPro \u2014 native mobile app foundation for iOS and Android (Expo + React Native + TypeScript).",
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
@@ -10,7 +10,7 @@
     "ios": "expo start --ios",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "test": "node scripts/test-account-security.cjs && node scripts/test-mobile-apk-workflow.cjs && jest",
+    "test": "node scripts/test-account-security.cjs && node scripts/test-mobile-apk-workflow.cjs && node scripts/test-mobile-ios-workflow.cjs && jest",
     "test:broker-mobile": "jest",
     "test:broker-mobile:watch": "jest --watch",
     "validate:release-config": "node ./scripts/validate-release-config.cjs",
