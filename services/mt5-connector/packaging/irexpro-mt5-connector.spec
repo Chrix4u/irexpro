@@ -5,8 +5,10 @@ from PyInstaller.utils.hooks import collect_submodules
 project_root = Path(SPECPATH).parent
 hiddenimports = ["MetaTrader5"] + collect_submodules("keyring.backends")
 
+entry_script = project_root / "irexpro_mt5_connector" / "gui.py"
+
 a = Analysis(
-    ["irexpro_mt5_connector/gui.py"],
+    [str(entry_script)],
     pathex=[str(project_root)],
     binaries=[],
     datas=[],

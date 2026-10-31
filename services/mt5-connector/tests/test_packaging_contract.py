@@ -17,7 +17,8 @@ def test_windows_packaging_contract_is_releaseable() -> None:
     installer_text = installer.read_text(encoding="utf-8")
     workflow_text = workflow.read_text(encoding="utf-8")
 
-    assert "irexpro_mt5_connector/gui.py" in spec_text.replace("\\", "/")
+    assert 'project_root / "irexpro_mt5_connector" / "gui.py"' in spec_text
+    assert "[str(entry_script)]" in spec_text
     assert "MetaTrader5" in spec_text
     assert "keyring" in spec_text
     assert "iRexPro-MT5-Connector-Setup" in installer_text
