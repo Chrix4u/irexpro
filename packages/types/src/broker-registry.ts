@@ -137,7 +137,9 @@ export type BrokerConnectionReadinessCode =
   | 'PROVIDER_APP_APPROVAL_REQUIRED'
   | 'OAUTH_REDIRECT_REQUIRED'
   | 'MOBILE_OAUTH_CALLBACK_REQUIRED'
-  | 'HOSTED_MT5_NOT_READY';
+  | 'HOSTED_MT5_NOT_READY'
+  | 'HOSTED_MT5_NO_WORKER'
+  | 'HOSTED_MT5_NO_CAPACITY';
 
 export interface BrokerConnectionChannelReadiness {
   ready: boolean;
