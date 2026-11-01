@@ -1,6 +1,6 @@
 name: Profit Protection Exit Quality Gate
 
-# integrated-release-pulse: 4
+# final-release-pulse: 5
 on:
   push:
     branches:
@@ -25,10 +25,11 @@ permissions:
 jobs:
   api:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
         with:
@@ -38,27 +39,35 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-      - name: Backend focused tests
+      - name: Backend report plus trading regression
         working-directory: apps/api
         run: |
           pnpm exec jest --runInBand \
             src/modules/trading/profit-protection-exit-quality.service.spec.ts \
-            src/modules/trading/trading-reports.controller.spec.ts
+            src/modules/trading/trading-reports.controller.spec.ts \
+            src/modules/ai/profit-protection-counterfactual.service.spec.ts \
+            src/modules/execution/reconciliation/live-demo-profit-protection.service.spec.ts \
+            src/modules/ai/post-entry-demo-drawdown-guard.service.spec.ts \
+            src/modules/ai/m1-tactical-evidence.service.spec.ts \
+            src/modules/ai/m1-tactical-scheduler.service.spec.ts
       - name: API TypeScript
-        if: ${{ success() }}
         working-directory: apps/api
         run: ./node_modules/.bin/tsc --noEmit
       - name: API build
-        if: ${{ success() }}
         working-directory: apps/api
         run: pnpm build
+      - name: API diff safety
+        run: git diff --check
 
   web:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_API_BASE_URL: https://irexpro.lightworldtech.com/api/v1
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
         with:
@@ -68,17 +77,17 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-      - name: Web focused tests
+      - name: Web report tests
         working-directory: apps/web
         run: |
           pnpm exec jest --runInBand \
             src/lib/profit-protection-exit-quality.spec.ts \
             src/app/trade/history/profit-protection/page.spec.tsx
       - name: Web TypeScript
-        if: ${{ success() }}
         working-directory: apps/web
         run: ./node_modules/.bin/tsc --noEmit
       - name: Web build
-        if: ${{ success() }}
         working-directory: apps/web
         run: pnpm build
+      - name: Web diff safety
+        run: git diff --check
