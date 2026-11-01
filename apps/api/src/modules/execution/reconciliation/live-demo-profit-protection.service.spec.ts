@@ -118,17 +118,61 @@ describe('LiveDemoProfitProtectionService', () => {
     );
   });
 
-  it('defers sub-0.75R profit protection for confirmed reversal and early transition', async () => {
-    for (const route of ['CONFIRMED_REVERSAL', 'EARLY_TRANSITION']) {
-      const h = harness(
-        [candidate({ strategy_route: route, max_favorable_pnl: '5.00', max_adverse_pnl: '-1.00' })],
-        '3.49',
-      );
+  it('defers confirmed-reversal profit protection below 1.00R but arms it at 1.00R', async () => {
+    const belowFloor = harness(
+      [
+        candidate({
+          strategy_route: 'CONFIRMED_REVERSAL',
+          max_favorable_pnl: '8.99',
+          max_adverse_pnl: '-1.00',
+        }),
+      ],
+      '6.73',
+    );
 
-      await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+    await belowFloor.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
 
-      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
-    }
+    expect(belowFloor.executionService.closeTrade).not.toHaveBeenCalled();
+
+    const atFloor = harness(
+      [
+        candidate({
+          strategy_route: 'CONFIRMED_REVERSAL',
+          max_favorable_pnl: '9.00',
+          max_adverse_pnl: '-1.00',
+        }),
+      ],
+      '7.19',
+    );
+
+    await atFloor.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+
+    expect(atFloor.executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      'user-1',
+      TradeCloseReason.PROFIT_PROTECTION,
+    );
+  });
+
+  it('still arms early-transition profit protection at 0.75R', async () => {
+    const h = harness(
+      [
+        candidate({
+          strategy_route: 'EARLY_TRANSITION',
+          max_favorable_pnl: '6.75',
+          max_adverse_pnl: '-1.00',
+        }),
+      ],
+      '5.05',
+    );
+
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+
+    expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      'user-1',
+      TradeCloseReason.PROFIT_PROTECTION,
+    );
   });
 
   it('keeps sub-0.75R profit protection for trend continuation', async () => {

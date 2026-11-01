@@ -663,7 +663,11 @@ export interface PaperProfitLockDecision {
  * PAPER-only dynamic profit lock expressed in initial-risk (R) terms.
  *
  * The standard lock arms only after a meaningful favorable excursion (0.50R).
- * M1 gets one deliberately loose rescue band below that standard threshold:
+ * Route-specific evidence can require more favorable excursion before arming:
+ *   CONFIRMED_REVERSAL -> 1.00R
+ *   EARLY_TRANSITION   -> 0.75R
+ *   TREND_CONTINUATION / unknown -> standard thresholds below
+ * M1 gets one deliberately loose rescue band below the standard threshold:
  *   M1 0.395R–<0.50R peak -> retain 40%
  *   0.50R–<0.75R peak    -> retain 70%
  *   0.75R–<1.00R peak    -> retain 75%
@@ -704,11 +708,16 @@ export function evaluatePaperProfitLock(input: {
     // 0.005R tolerance for five-second sampling around that boundary.
     const risk = input.initialRiskPnl;
     const peak = input.maxFavorablePnl;
-    const routeNeedsMoreRoom =
-      input.strategyRoute === 'EARLY_TRANSITION' ||
-      input.strategyRoute === 'CONFIRMED_REVERSAL';
-    const routeAwareArmFloor = multiplyDecimalStrings(risk, '0.75');
-    if (routeNeedsMoreRoom && compareDecimalStrings(peak, routeAwareArmFloor) < 0) return disabled;
+    if (
+      input.strategyRoute === 'CONFIRMED_REVERSAL' &&
+      compareDecimalStrings(peak, risk) < 0
+    )
+      return disabled;
+    if (
+      input.strategyRoute === 'EARLY_TRANSITION' &&
+      compareDecimalStrings(peak, multiplyDecimalStrings(risk, '0.75')) < 0
+    )
+      return disabled;
 
     const standardArmFloor = multiplyDecimalStrings(risk, '0.50');
     const m1RescueArmFloor = multiplyDecimalStrings(risk, '0.395');

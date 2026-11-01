@@ -293,40 +293,55 @@ describe('PAPER profit-lock policy', () => {
     });
   });
 
-  it('lets early-transition and confirmed-reversal M1 trades breathe until 0.75R', () => {
-    expect(
-      evaluatePaperProfitLock({
-        maxFavorablePnl: '5.00',
-        currentPnl: '3.49',
-        initialRiskPnl: '10.00',
-        isM1Strategy: true,
-        strategyRoute: 'EARLY_TRANSITION',
-      } as any),
-    ).toMatchObject({ armed: false, shouldClose: false });
-
+  it('uses a 0.75R arm floor for early transition and a 1.00R floor for confirmed reversal', () => {
     expect(
       evaluatePaperProfitLock({
         maxFavorablePnl: '7.49',
-        currentPnl: '2.00',
+        currentPnl: '3.00',
         initialRiskPnl: '10.00',
         isM1Strategy: true,
-        strategyRoute: 'CONFIRMED_REVERSAL',
-      } as any),
+        strategyRoute: 'EARLY_TRANSITION',
+      }),
     ).toMatchObject({ armed: false, shouldClose: false });
 
     expect(
       evaluatePaperProfitLock({
-        maxFavorablePnl: '8.00',
-        currentPnl: '5.99',
+        maxFavorablePnl: '7.50',
+        currentPnl: '5.62',
         initialRiskPnl: '10.00',
         isM1Strategy: true,
         strategyRoute: 'EARLY_TRANSITION',
-      } as any),
+      }),
     ).toMatchObject({
       armed: true,
       shouldClose: true,
       retentionFraction: '0.75',
-      protectedFloorPnl: '6.00',
+      protectedFloorPnl: '5.63',
+    });
+
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '9.90',
+        currentPnl: '7.00',
+        initialRiskPnl: '10.00',
+        isM1Strategy: true,
+        strategyRoute: 'CONFIRMED_REVERSAL',
+      }),
+    ).toMatchObject({ armed: false, shouldClose: false });
+
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '10.00',
+        currentPnl: '7.99',
+        initialRiskPnl: '10.00',
+        isM1Strategy: true,
+        strategyRoute: 'CONFIRMED_REVERSAL',
+      }),
+    ).toMatchObject({
+      armed: true,
+      shouldClose: true,
+      retentionFraction: '0.80',
+      protectedFloorPnl: '8.00',
     });
   });
 
