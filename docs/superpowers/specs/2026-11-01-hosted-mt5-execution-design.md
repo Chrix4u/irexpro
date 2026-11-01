@@ -1,6 +1,6 @@
 # iRexPro Hosted MT5 Execution Design
 
-**Date:** 2026-11-01  
+**Date:** 2026-11-01
 **Status:** Approved by product direction (“no MetaAPI; MT5 should behave like cTrader from the user's point of view”)
 
 ## Goal
