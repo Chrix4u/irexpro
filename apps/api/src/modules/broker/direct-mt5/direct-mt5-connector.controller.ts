@@ -35,6 +35,10 @@ import { DirectMt5ConnectorBinding, DirectMt5PairingService } from './direct-mt5
 class CreateDirectMt5PairingDto {
   @IsUUID()
   brokerConnectionId!: string;
+
+  @IsOptional()
+  @IsIn(['PERSONAL_PC', 'WINDOWS_VPS'])
+  hostMode?: 'PERSONAL_PC' | 'WINDOWS_VPS';
 }
 
 class RedeemDirectMt5PairingDto {
@@ -55,6 +59,9 @@ class RedeemDirectMt5PairingDto {
 
   @IsBoolean()
   tradeAllowed!: boolean;
+
+  @IsIn(['DEMO', 'LIVE'])
+  accountType!: 'DEMO' | 'LIVE';
 }
 
 class DirectMt5ConnectorIdentityDto {
@@ -67,6 +74,9 @@ class DirectMt5ConnectorIdentityDto {
   @IsString()
   @Length(1, 255)
   brokerServer!: string;
+
+  @IsIn(['DEMO', 'LIVE'])
+  accountType!: 'DEMO' | 'LIVE';
 }
 
 class DirectMt5HeartbeatDto extends DirectMt5ConnectorIdentityDto {
@@ -104,7 +114,11 @@ export class DirectMt5PairingController {
   @Post('pairings')
   @ApiOperation({ summary: 'Generate a short-lived pairing code for a MetaTrader 5 connection' })
   createPairing(@CurrentUserId() userId: string, @Body() body: CreateDirectMt5PairingDto) {
-    return this.pairingService.createPairing(userId, body.brokerConnectionId);
+    return this.pairingService.createPairing(
+      userId,
+      body.brokerConnectionId,
+      body.hostMode ?? 'PERSONAL_PC',
+    );
   }
 
   @Get('pairings/:brokerConnectionId/health')
@@ -137,6 +151,7 @@ export class DirectMt5ConnectorController {
       brokerServer: body.brokerServer,
       currency: body.currency ?? null,
       tradeAllowed: body.tradeAllowed,
+      accountType: body.accountType,
     });
   }
 
@@ -159,6 +174,7 @@ export class DirectMt5ConnectorController {
       brokerServer: body.brokerServer,
       sequence: body.sequence,
       tradeAllowed: body.tradingAllowed && body.terminalConnected,
+      accountType: body.accountType,
     });
   }
 
@@ -209,7 +225,8 @@ export class DirectMt5ConnectorController {
     if (
       identity.brokerConnectionId !== binding.brokerConnectionId ||
       identity.accountLogin !== binding.accountLogin ||
-      identity.brokerServer !== binding.brokerServer
+      identity.brokerServer !== binding.brokerServer ||
+      identity.accountType !== binding.accountType
     ) {
       throw new ConflictException('Connector identity does not match paired MT5 account');
     }

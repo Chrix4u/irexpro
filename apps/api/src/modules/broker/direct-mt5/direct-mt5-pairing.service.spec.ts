@@ -7,11 +7,69 @@ describe('DirectMt5PairingService', () => {
     get: jest.fn().mockReturnValue('0123456789abcdef0123456789abcdef'),
   } as unknown as ConfigService;
 
+  it('persists the selected WINDOWS_VPS execution host and returns it in pairing metadata', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([
+        { id: 'connection-1', broker_id: 'direct-mt5', account_type: 'DEMO' },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+
+    const result = await service.createPairing('user-1', 'connection-1', 'WINDOWS_VPS' as any);
+
+    expect(result.hostMode).toBe('WINDOWS_VPS');
+    const sql = String(query.mock.calls[1]![0]);
+    const params = query.mock.calls[1]![1] as unknown[];
+    expect(sql).toContain('host_mode');
+    expect(params).toContain('WINDOWS_VPS');
+  });
+
+  it('defaults new Direct MT5 pairings to PERSONAL_PC and rejects unknown host modes', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([
+        { id: 'connection-1', broker_id: 'direct-mt5', account_type: 'DEMO' },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+
+    await expect(service.createPairing('user-1', 'connection-1')).resolves.toMatchObject({
+      hostMode: 'PERSONAL_PC',
+    });
+    await expect(
+      service.createPairing('user-1', 'connection-1', 'LINUX_BOX' as any),
+    ).rejects.toThrow(/host mode/i);
+  });
+
+  it('returns the persisted execution host mode in connector health', async () => {
+    const now = new Date('2026-11-01T02:00:00.000Z');
+    const query = jest.fn().mockResolvedValueOnce([
+      {
+        id: 'connector-1',
+        state: 'ACTIVE',
+        host_mode: 'WINDOWS_VPS',
+        account_login: '113392789',
+        broker_server: 'Broker-Demo',
+        trade_allowed: true,
+        last_heartbeat_at: new Date(now.getTime() - 1_000),
+      },
+    ]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+
+    await expect(service.getConnectionHealth('user-1', 'connection-1', now)).resolves.toMatchObject(
+      {
+        hostMode: 'WINDOWS_VPS',
+        executionReady: true,
+      },
+    );
+  });
+
   it('creates a single-use pairing code without persisting the raw code', async () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([
-        { id: 'connection-1', broker_id: 'metatrader5', account_type: 'DEMO' },
+        { id: 'connection-1', broker_id: 'direct-mt5', account_type: 'DEMO' },
       ])
       .mockResolvedValueOnce([]);
     const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
@@ -42,20 +100,26 @@ describe('DirectMt5PairingService', () => {
       config,
     );
     await expect(wrongProvider.createPairing('user-1', 'connection-1')).rejects.toThrow(
-      'MetaTrader 5',
+      'Direct MT5 provider',
     );
   });
 
-  it('rejects Direct MT5 pairing for a LIVE BrokerConnection', async () => {
+  it('creates a pairing for an existing LIVE Direct MT5 BrokerConnection and binds its expected environment', async () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([
-        { id: 'connection-live', broker_id: 'metatrader5', account_type: 'LIVE' },
-      ]);
+        { id: 'connection-live', broker_id: 'direct-mt5', account_type: 'LIVE' },
+      ])
+      .mockResolvedValueOnce([]);
     const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
 
-    await expect(service.createPairing('user-1', 'connection-live')).rejects.toThrow('DEMO');
-    expect(query).toHaveBeenCalledTimes(1);
+    await expect(service.createPairing('user-1', 'connection-live')).resolves.toMatchObject({
+      brokerConnectionId: 'connection-live',
+    });
+    const sql = String(query.mock.calls[1]![0]);
+    const params = query.mock.calls[1]![1] as unknown[];
+    expect(sql).toContain('account_type');
+    expect(params).toContain('LIVE');
   });
 
   it('redeems a pairing code once and persists only a connector-token digest', async () => {
@@ -73,6 +137,7 @@ describe('DirectMt5PairingService', () => {
       brokerServer: 'Broker-Demo',
       currency: 'USD',
       tradeAllowed: true,
+      accountType: 'DEMO',
     });
 
     expect(result.connectorToken.length).toBeGreaterThan(40);
@@ -104,6 +169,7 @@ describe('DirectMt5PairingService', () => {
         brokerServer: 'Broker-Demo',
         currency: 'USD',
         tradeAllowed: true,
+        accountType: 'DEMO',
       }),
     ).rejects.toThrow('account');
 
@@ -123,6 +189,7 @@ describe('DirectMt5PairingService', () => {
         brokerServer: 'Demo',
         currency: 'USD',
         tradeAllowed: true,
+        accountType: 'DEMO',
       }),
     ).rejects.toThrow('invalid or expired');
   });
@@ -139,6 +206,7 @@ describe('DirectMt5PairingService', () => {
         token_hash: service.digestToken(token),
         account_login: '113392789',
         broker_server: 'Broker-Demo',
+        account_type: 'DEMO',
         last_sequence: '7',
       },
     ]);
@@ -148,9 +216,13 @@ describe('DirectMt5PairingService', () => {
       brokerConnectionId: 'connection-1',
       accountLogin: '113392789',
       brokerServer: 'Broker-Demo',
+      accountType: 'DEMO' as const,
       lastSequence: 7,
     });
     expect(query.mock.calls[0]![1]).toEqual(['connector-1']);
+    const authSql = String(query.mock.calls[0]![0]);
+    expect(authSql).toContain('c.account_type = bc.account_type');
+    expect(authSql).toContain('c.account_login = bc.account_id');
   });
 
   it('rejects a wrong connector token', async () => {
@@ -164,6 +236,7 @@ describe('DirectMt5PairingService', () => {
         token_hash: service.digestToken('right-token'),
         account_login: '113392789',
         broker_server: 'Broker-Demo',
+        account_type: 'DEMO',
         last_sequence: '0',
       },
     ]);
@@ -181,6 +254,7 @@ describe('DirectMt5PairingService', () => {
       brokerConnectionId: 'connection-1',
       accountLogin: '113392789',
       brokerServer: 'Broker-Demo',
+      accountType: 'DEMO' as const,
       lastSequence: 7,
     };
 
@@ -190,6 +264,7 @@ describe('DirectMt5PairingService', () => {
         brokerServer: 'Broker-Demo',
         sequence: 8,
         tradeAllowed: true,
+        accountType: 'DEMO',
       }),
     ).resolves.toMatchObject({ lastSequence: 8 });
   });
@@ -203,6 +278,7 @@ describe('DirectMt5PairingService', () => {
       brokerConnectionId: 'connection-1',
       accountLogin: '113392789',
       brokerServer: 'Broker-Demo',
+      accountType: 'DEMO' as const,
       lastSequence: 7,
     };
 
@@ -212,8 +288,61 @@ describe('DirectMt5PairingService', () => {
         brokerServer: 'Other-Server',
         sequence: 8,
         tradeAllowed: true,
+        accountType: 'DEMO',
       }),
     ).rejects.toThrow('identity changed');
+    expect(String(query.mock.calls[0]![0])).toContain("state = 'SUSPENDED'");
+  });
+
+  it('never auto-authorizes LIVE trading from a heartbeat', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ id: 'connector-live', last_sequence: '2' }])
+      .mockResolvedValueOnce([]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const binding = {
+      connectorId: 'connector-live',
+      userId: 'user-1',
+      brokerConnectionId: 'connection-live',
+      accountLogin: '54321',
+      brokerServer: 'Broker-Live',
+      accountType: 'LIVE' as const,
+      lastSequence: 1,
+    };
+    await service.recordHeartbeat(binding, {
+      accountLogin: '54321',
+      brokerServer: 'Broker-Live',
+      accountType: 'LIVE',
+      sequence: 2,
+      tradeAllowed: true,
+    });
+    const brokerUpdateSql = String(query.mock.calls[1]![0]);
+    expect(brokerUpdateSql).toContain("account_type='LIVE'");
+    expect(brokerUpdateSql).not.toContain("authorization_status='ACTIVE'");
+    expect(brokerUpdateSql).not.toContain('live_trading_enabled=true');
+  });
+
+  it('suspends the connector when the terminal environment changes after pairing', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const binding = {
+      connectorId: 'connector-1',
+      userId: 'user-1',
+      brokerConnectionId: 'connection-1',
+      accountLogin: '113392789',
+      brokerServer: 'Broker',
+      accountType: 'DEMO' as const,
+      lastSequence: 7,
+    };
+    await expect(
+      service.recordHeartbeat(binding, {
+        accountLogin: '113392789',
+        brokerServer: 'Broker',
+        accountType: 'LIVE',
+        sequence: 8,
+        tradeAllowed: true,
+      }),
+    ).rejects.toThrow(/identity changed|environment/i);
     expect(String(query.mock.calls[0]![0])).toContain("state = 'SUSPENDED'");
   });
 

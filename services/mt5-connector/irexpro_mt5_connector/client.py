@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 import requests
 
@@ -11,6 +12,10 @@ from .protocol import validate_command
 
 class ConnectorApiError(RuntimeError):
     pass
+
+
+class ConnectorTransientError(ConnectorApiError):
+    """A transport/server condition that is safe to retry without changing identity."""
 
 
 class IrexProConnectorClient:
@@ -24,6 +29,9 @@ class IrexProConnectorClient:
         self.server_url = server_url.rstrip("/")
         if not self.server_url.startswith("https://") and "localhost" not in self.server_url:
             raise ValueError("direct MT5 connector requires HTTPS")
+        parsed = urlparse(self.server_url)
+        if parsed.path in {"", "/"}:
+            self.server_url = f"{self.server_url}/api/v1"
         self.secret_store = secret_store
         self.session = session or requests.Session()
         self.timeout_seconds = timeout_seconds
@@ -37,6 +45,7 @@ class IrexProConnectorClient:
                 "brokerServer": identity.server,
                 "currency": identity.currency,
                 "tradeAllowed": identity.trade_allowed,
+                "accountType": identity.account_type,
             },
             timeout=self.timeout_seconds,
         )
@@ -53,6 +62,7 @@ class IrexProConnectorClient:
             broker_connection_id=broker_connection_id,
             account_login=identity.login,
             broker_server=identity.server,
+            account_type=identity.account_type,
         )
 
     def heartbeat(self, settings: ConnectorSettings, identity: AccountIdentity, sequence: int) -> None:
@@ -67,6 +77,7 @@ class IrexProConnectorClient:
                 "sequence": sequence,
                 "terminalConnected": True,
                 "tradingAllowed": identity.trade_allowed,
+                "accountType": identity.account_type,
             },
             timeout=self.timeout_seconds,
         )
@@ -80,6 +91,7 @@ class IrexProConnectorClient:
                 "brokerConnectionId": settings.broker_connection_id,
                 "accountLogin": settings.account_login,
                 "brokerServer": settings.broker_server,
+                "accountType": settings.account_type,
             },
             timeout=self.timeout_seconds,
         )
@@ -104,6 +116,7 @@ class IrexProConnectorClient:
                 "brokerConnectionId": settings.broker_connection_id,
                 "accountLogin": settings.account_login,
                 "brokerServer": settings.broker_server,
+                "accountType": settings.account_type,
                 "state": state,
                 "result": dict(result) if result is not None else None,
                 "error": error,
@@ -120,7 +133,11 @@ class IrexProConnectorClient:
 
     @staticmethod
     def _assert_identity(settings: ConnectorSettings, identity: AccountIdentity) -> None:
-        if identity.login != settings.account_login or identity.server != settings.broker_server:
+        if (
+            identity.login != settings.account_login
+            or identity.server != settings.broker_server
+            or identity.account_type != settings.account_type
+        ):
             raise ConnectorApiError(
                 "MT5 terminal account changed after pairing; execution suspended until re-paired"
             )
@@ -141,4 +158,7 @@ class IrexProConnectorClient:
             return
         # Never include Authorization/request headers in errors.
         body = response.text[:500]
-        raise ConnectorApiError(f"iRexPro API request failed ({response.status_code}): {body}")
+        message = f"iRexPro API request failed ({response.status_code}): {body}"
+        if response.status_code in {408, 425, 429} or response.status_code >= 500:
+            raise ConnectorTransientError(message)
+        raise ConnectorApiError(message)

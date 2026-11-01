@@ -31,6 +31,7 @@ def test_settings_file_contains_no_password_or_connector_token(tmp_path: Path) -
         broker_connection_id="connection-1",
         account_login="113392789",
         broker_server="Broker-Demo",
+        account_type="DEMO",
     ).save(path)
     raw = path.read_text(encoding="utf-8")
     data = json.loads(raw)
@@ -71,12 +72,14 @@ def test_connector_rejects_terminal_account_switch() -> None:
         broker_connection_id="connection-1",
         account_login="113392789",
         broker_server="Broker-Demo",
+        account_type="DEMO",
     )
     changed = AccountIdentity(
         login="999999",
         server="Other-Server",
         currency="USD",
         trade_allowed=True,
+        account_type="LIVE",
     )
     try:
         IrexProConnectorClient._assert_identity(settings, changed)
@@ -84,3 +87,91 @@ def test_connector_rejects_terminal_account_switch() -> None:
         assert "changed after pairing" in str(exc)
     else:
         raise AssertionError("account switch must fail closed")
+
+
+def test_connector_rejects_environment_switch_even_when_login_and_server_match() -> None:
+    from irexpro_mt5_connector.client import ConnectorApiError, IrexProConnectorClient
+    from irexpro_mt5_connector.mt5_terminal import AccountIdentity
+
+    settings = ConnectorSettings(
+        server_url="https://irexpro.example",
+        connector_id="connector-1",
+        broker_connection_id="connection-1",
+        account_login="113392789",
+        broker_server="Broker",
+        account_type="DEMO",
+    )
+    changed = AccountIdentity(
+        login="113392789", server="Broker", currency="USD", trade_allowed=True, account_type="LIVE"
+    )
+    try:
+        IrexProConnectorClient._assert_identity(settings, changed)
+    except ConnectorApiError as exc:
+        assert "changed after pairing" in str(exc)
+    else:
+        raise AssertionError("account environment switch must fail closed")
+
+
+def test_legacy_v1_settings_require_upgrade_and_repair(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "server_url": "https://irexpro.example",
+                "connector_id": "connector-1",
+                "broker_connection_id": "connection-1",
+                "account_login": "113392789",
+                "broker_server": "Broker-Demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        ConnectorSettings.load(path)
+    except ValueError as exc:
+        message = str(exc).lower()
+        assert "protocol v2" in message
+        assert "re-pair" in message
+    else:
+        raise AssertionError("legacy protocol-v1 settings must fail closed")
+
+
+def test_connector_client_normalizes_site_root_to_api_v1() -> None:
+    from irexpro_mt5_connector.client import IrexProConnectorClient
+
+    class Store:
+        def get(self, _connector_id): return None
+        def set(self, _connector_id, _token): return None
+        def delete(self, _connector_id): return None
+
+    root = IrexProConnectorClient("https://irexpro.lightworldtech.com", Store())
+    api = IrexProConnectorClient("https://irexpro.lightworldtech.com/api/v1", Store())
+
+    assert root.server_url == "https://irexpro.lightworldtech.com/api/v1"
+    assert api.server_url == "https://irexpro.lightworldtech.com/api/v1"
+
+
+def test_server_5xx_is_retryable_but_authentication_failure_is_fatal() -> None:
+    from irexpro_mt5_connector.client import ConnectorApiError, ConnectorTransientError, IrexProConnectorClient
+
+    class Response:
+        def __init__(self, status_code: int, text: str):
+            self.status_code = status_code
+            self.text = text
+
+    try:
+        IrexProConnectorClient._assert_ok(Response(503, "maintenance"))
+    except ConnectorTransientError as exc:
+        assert "503" in str(exc)
+    else:
+        raise AssertionError("server 5xx must be retryable")
+
+    try:
+        IrexProConnectorClient._assert_ok(Response(401, "revoked"))
+    except ConnectorTransientError:
+        raise AssertionError("authentication failures must not be retried")
+    except ConnectorApiError as exc:
+        assert "401" in str(exc)
+    else:
+        raise AssertionError("401 must fail closed")

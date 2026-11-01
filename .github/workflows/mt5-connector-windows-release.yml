@@ -1,0 +1,118 @@
+name: Direct MT5 Windows Connector Verification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/mt5-connector/**'
+      - '.github/workflows/mt5-connector-windows-release.yml'
+  push:
+    branches: [main]
+    tags:
+      - 'mt5-connector-v*'
+    paths:
+      - 'services/mt5-connector/**'
+      - '.github/workflows/mt5-connector-windows-release.yml'
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  build-windows:
+    name: Build and verify Windows connector
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact candidate checkout
+        run: |
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:CANDIDATE_SHA) {
+            throw "Expected exact candidate $env:CANDIDATE_SHA but checked out $actual"
+          }
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.0.0
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: services/mt5-connector/pyproject.toml
+
+      - name: Install connector and pinned build tools
+        run: |
+          python -m pip install -e "services/mt5-connector[test]" "pyinstaller==6.22.3"
+
+      - name: Run Direct MT5 connector tests
+        run: python -m pytest services/mt5-connector/tests -q
+
+      - name: Build desktop executable with PyInstaller
+        working-directory: services/mt5-connector
+        run: pyinstaller packaging/irexpro-mt5-connector.spec --noconfirm --clean
+
+      - name: Smoke-test frozen Windows executable
+        working-directory: services/mt5-connector
+        run: |
+          $process = Start-Process ".\dist\iRexPro-MT5-Connector.exe" -ArgumentList '--self-test' -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Frozen iRexPro MT5 Connector self-test failed with exit code $($process.ExitCode)"
+          }
+
+      - name: Resolve and validate connector version
+        id: connector_version
+        working-directory: services/mt5-connector
+        run: |
+          $line = Get-Content pyproject.toml | Where-Object { $_ -match '^version = "([^"]+)"$' } | Select-Object -First 1
+          if (-not $line) {
+            throw 'Connector version is missing from pyproject.toml'
+          }
+          $version = [regex]::Match($line, '^version = "([^"]+)"$').Groups[1].Value
+          if ($env:GITHUB_REF -like 'refs/tags/mt5-connector-v*') {
+            $tagVersion = $env:GITHUB_REF_NAME -replace '^mt5-connector-v', ''
+            if ($tagVersion -ne $version) {
+              throw "Tag version $tagVersion does not match connector version $version"
+            }
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows installer
+        working-directory: services/mt5-connector
+        run: |
+          $version = "${{ steps.connector_version.outputs.version }}"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" "packaging\installer.iss"
+          Copy-Item "dist\iRexPro-MT5-Connector.exe" "packaging\output\iRexPro-MT5-Connector-Portable.exe"
+
+      - name: Generate SHA-256 checksums
+        working-directory: services/mt5-connector/packaging/output
+        run: |
+          $lines = Get-ChildItem -Filter *.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          }
+          $lines | Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+
+      - name: Upload verified workflow artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: irexpro-mt5-connector-windows-${{ github.run_id }}
+          path: |
+            services/mt5-connector/packaging/output/iRexPro-MT5-Connector-Setup.exe
+            services/mt5-connector/packaging/output/iRexPro-MT5-Connector-Portable.exe
+            services/mt5-connector/packaging/output/SHA256SUMS.txt
+          retention-days: 30

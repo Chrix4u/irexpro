@@ -542,7 +542,16 @@ describe('BrokerProviderRegistryService', () => {
       const mtEntries = catalog.filter((e) =>
         e.connectionRoutes.includes(BrokerConnectionRoute.METATRADER),
       );
-      expect(mtEntries).toHaveLength(1);
+      expect(mtEntries.map((e) => e.id).sort()).toEqual(['direct-mt5', 'metatrader5']);
+      const directMt5 = mtEntries.find((e) => e.id === 'direct-mt5');
+      expect(directMt5).toMatchObject({
+        environments: ['DEMO', 'LIVE'],
+        authenticationType: 'SESSION_AUTH',
+      });
+
+      expect(service.supportsEnvironment('direct-mt5', 'LIVE')).toBe(true);
+      expect(service.isProductionLiveEligible('direct-mt5')).toBe(false);
+      expect(directMt5?.productionLiveVerification.status).toBe('UNVERIFIED');
 
       const ctrader = catalog.find((e) => e.id === 'ctrader');
       expect(ctrader?.connectionRoutes).toEqual([BrokerConnectionRoute.CTRADER]);

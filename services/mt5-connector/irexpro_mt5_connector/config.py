@@ -13,12 +13,21 @@ class ConnectorSettings:
     broker_connection_id: str
     account_login: str
     broker_server: str
+    account_type: str
     terminal_path: str | None = None
     poll_seconds: float = 1.0
+    auto_start: bool = True
+    start_minimized: bool = True
 
     @classmethod
     def load(cls, path: str | Path) -> "ConnectorSettings":
         data = json.loads(Path(path).read_text(encoding="utf-8"))
+        account_type = data.get("account_type")
+        if account_type not in {"DEMO", "LIVE"}:
+            raise ValueError(
+                "This connector configuration predates Direct MT5 protocol v2; "
+                "upgrade the Windows connector and re-pair the MT5 account."
+            )
         return cls(**data)
 
     def save(self, path: str | Path) -> None:
