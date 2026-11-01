@@ -63,6 +63,60 @@ describe('HostedMt5WorkerPresenceService', () => {
     expect(String(query.mock.calls[0]![0])).toContain('broker.hosted_mt5_workers');
   });
 
+  it('reports ready when a fresh available worker exists alongside a stale or full worker', async () => {
+    const now = Date.now();
+    const query = jest.fn().mockResolvedValue([
+      {
+        worker_id: 'mt5-win-stale',
+        worker_version: '0.4.0',
+        runtime_ready: true,
+        max_sessions: 4,
+        active_sessions: 4,
+        last_seen_at: new Date(now - 120_000),
+      },
+      {
+        worker_id: 'mt5-win-ready',
+        worker_version: '0.4.0',
+        runtime_ready: true,
+        max_sessions: 4,
+        active_sessions: 1,
+        last_seen_at: new Date(now - 5_000),
+      },
+    ]);
+    const service = new HostedMt5WorkerPresenceService({ query } as unknown as DataSource);
+
+    await service.refreshFromDatabase();
+
+    expect(service.getPoolReadiness(now)).toEqual({
+      ready: true,
+      reason: 'READY',
+      freshWorkers: 1,
+      readyWorkers: 1,
+      availableWorkers: 1,
+      totalSpareSessions: 3,
+    });
+  });
+
+  it('periodically refreshes durable presence so every API replica sees the worker pool', async () => {
+    jest.useFakeTimers();
+    try {
+      const query = jest.fn().mockResolvedValue([]);
+      const service = new HostedMt5WorkerPresenceService({ query } as unknown as DataSource);
+
+      await service.onModuleInit();
+      expect(query).toHaveBeenCalledTimes(1);
+
+      jest.advanceTimersByTime(10_000);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(query).toHaveBeenCalledTimes(2);
+      service.onModuleDestroy();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('rejects impossible capacity before touching the database', async () => {
     const query = jest.fn();
     const service = new HostedMt5WorkerPresenceService({ query } as unknown as DataSource);

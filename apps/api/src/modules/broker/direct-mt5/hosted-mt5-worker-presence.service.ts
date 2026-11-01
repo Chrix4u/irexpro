@@ -1,7 +1,13 @@
-import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
 const WORKER_FRESH_MS = 45_000;
+const WORKER_REFRESH_MS = 10_000;
 
 export interface HostedMt5WorkerPresenceInput {
   workerVersion: string;
@@ -40,8 +46,9 @@ type WorkerPresenceRow = {
 };
 
 @Injectable()
-export class HostedMt5WorkerPresenceService implements OnModuleInit {
+export class HostedMt5WorkerPresenceService implements OnModuleInit, OnModuleDestroy {
   private readonly workers = new Map<string, WorkerPresence>();
+  private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly dataSource: DataSource) {}
 
@@ -53,6 +60,19 @@ export class HostedMt5WorkerPresenceService implements OnModuleInit {
       // fails during API boot, stay fail-closed until a worker heartbeats again.
       this.workers.clear();
     }
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
+    this.refreshTimer = setInterval(() => {
+      void this.refreshFromDatabase().catch(() => {
+        // Preserve the last in-memory snapshot; freshness still expires it
+        // fail-closed if PostgreSQL remains unavailable.
+      });
+    }, WORKER_REFRESH_MS);
+    this.refreshTimer.unref?.();
+  }
+
+  onModuleDestroy(): void {
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
+    this.refreshTimer = null;
   }
 
   async heartbeat(

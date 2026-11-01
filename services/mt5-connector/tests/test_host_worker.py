@@ -18,6 +18,7 @@ from irexpro_mt5_connector.host_worker import (
     prepare_session_directory,
     run_session_child,
     validate_host_worker_runtime,
+    WorkerInstanceLock,
 )
 
 
@@ -468,6 +469,94 @@ def test_pilot_runtime_is_windows_only():
     with pytest.raises(RuntimeError, match="Windows"):
         validate_host_worker_runtime(platform_name="linux")
     validate_host_worker_runtime(platform_name="win32")
+
+
+def test_worker_instance_lock_fails_fast_when_same_windows_worker_is_already_running(tmp_path: Path):
+    class FakeMsvcrt:
+        LK_NBLCK = 1
+        LK_UNLCK = 2
+
+        def __init__(self):
+            self.locked = False
+            self.calls = []
+
+        def locking(self, fd, mode, count):
+            self.calls.append((mode, count))
+            if mode == self.LK_NBLCK:
+                if self.locked:
+                    raise OSError("already locked")
+                self.locked = True
+            elif mode == self.LK_UNLCK:
+                self.locked = False
+
+    fake = FakeMsvcrt()
+    first = WorkerInstanceLock(
+        tmp_path,
+        "worker-accra-1",
+        platform_name="win32",
+        msvcrt_module=fake,
+    )
+    second = WorkerInstanceLock(
+        tmp_path,
+        "worker-accra-1",
+        platform_name="win32",
+        msvcrt_module=fake,
+    )
+
+    with first:
+        with pytest.raises(RuntimeError, match="already running"):
+            second.acquire()
+
+    assert fake.locked is False
+    assert (tmp_path / ".worker-accra-1.lock").exists()
+
+
+def test_worker_main_holds_single_instance_lock_for_supervisor_lifetime(tmp_path: Path, monkeypatch):
+    from irexpro_mt5_connector import host_worker
+
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "terminal64.exe").write_bytes(b"fixture")
+    sessions = tmp_path / "sessions"
+    events = []
+
+    class FakeLock:
+        def __init__(self, session_root, worker_id):
+            events.append(("lock-init", Path(session_root), worker_id))
+
+        def __enter__(self):
+            events.append(("lock-enter",))
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            events.append(("lock-exit",))
+
+    class FakeSupervisor:
+        def __init__(self, config):
+            events.append(("supervisor-init", config.worker_id))
+
+        def run_forever(self):
+            events.append(("supervisor-run",))
+            return 0
+
+    monkeypatch.setattr(host_worker, "validate_host_worker_runtime", lambda: None)
+    monkeypatch.setattr(host_worker, "load_worker_token", lambda worker_id: "w" * 32)
+    monkeypatch.setattr(host_worker, "WorkerInstanceLock", FakeLock)
+    monkeypatch.setattr(host_worker, "HostedMt5WorkerSupervisor", FakeSupervisor)
+
+    result = host_worker.main([
+        "--server-url", "https://api.example.test/api/v1",
+        "--worker-id", "worker-accra-1",
+        "--mt5-template-dir", str(template),
+        "--session-root", str(sessions),
+    ])
+
+    assert result == 0
+    assert events[-3:] == [
+        ("lock-enter",),
+        ("supervisor-run",),
+        ("lock-exit",),
+    ]
 
 
 def test_session_child_writes_only_non_secret_connector_config_and_keeps_credentials_in_memory(tmp_path: Path, monkeypatch):

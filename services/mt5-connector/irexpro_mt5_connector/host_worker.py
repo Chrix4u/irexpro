@@ -65,6 +65,70 @@ def store_worker_token(
     keyring_module.set_password(WORKER_KEYRING_SERVICE, worker_id, normalized)
 
 
+class WorkerInstanceLock:
+    """Windows byte-range lock preventing duplicate supervisors for one worker id."""
+
+    def __init__(
+        self,
+        session_root: str | Path,
+        worker_id: str,
+        *,
+        platform_name: str | None = None,
+        msvcrt_module: Any | None = None,
+    ) -> None:
+        _validate_worker_id(worker_id)
+        self.session_root = Path(session_root)
+        self.worker_id = worker_id
+        self.platform_name = platform_name or sys.platform
+        self._msvcrt = msvcrt_module
+        self._file: Any | None = None
+        self.lock_path = self.session_root / f".{worker_id}.lock"
+
+    def acquire(self) -> None:
+        if self._file is not None:
+            return
+        if self.platform_name != "win32":
+            raise RuntimeError("Hosted MT5 worker instance locking requires Windows")
+        msvcrt_module = self._msvcrt
+        if msvcrt_module is None:
+            import msvcrt as msvcrt_module
+
+        self.session_root.mkdir(parents=True, exist_ok=True)
+        handle = self.lock_path.open("a+b")
+        try:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt_module.locking(handle.fileno(), msvcrt_module.LK_NBLCK, 1)
+        except OSError as exc:
+            handle.close()
+            raise RuntimeError(
+                f"Hosted MT5 worker {self.worker_id} is already running"
+            ) from exc
+        self._msvcrt = msvcrt_module
+        self._file = handle
+
+    def release(self) -> None:
+        handle = self._file
+        if handle is None:
+            return
+        self._file = None
+        try:
+            handle.seek(0)
+            self._msvcrt.locking(handle.fileno(), self._msvcrt.LK_UNLCK, 1)
+        finally:
+            handle.close()
+
+    def __enter__(self) -> "WorkerInstanceLock":
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self.release()
+
+
 def _normalize_api_base_url(server_url: str) -> str:
     raw = server_url.strip().rstrip("/")
     parsed = urlparse(raw)
@@ -745,7 +809,9 @@ def main(argv: list[str] | None = None) -> int:
     if not config.mt5_template_dir.is_dir():
         raise RuntimeError("HOSTED_MT5_TEMPLATE_DIR must point to a clean MT5 template directory")
     config.session_root.mkdir(parents=True, exist_ok=True)
-    return HostedMt5WorkerSupervisor(config).run_forever()
+    supervisor = HostedMt5WorkerSupervisor(config)
+    with WorkerInstanceLock(config.session_root, config.worker_id):
+        return supervisor.run_forever()
 
 
 if __name__ == "__main__":
