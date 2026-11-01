@@ -96,7 +96,7 @@ describe('ProfitProtectionExitQualityPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Profit Protection Exit Quality' })).toBeInTheDocument();
     expect(await screen.findByText('2 evaluated')).toBeInTheDocument();
-    expect(screen.getByText('50.0%')).toBeInTheDocument();
+    expect(screen.getAllByText('50.0%')).toHaveLength(2);
     expect(screen.getByText('1 of 1')).toBeInTheDocument();
     expect(screen.getByText('-0.05R')).toBeInTheDocument();
     expect(screen.getByText(/research evidence, not realised returns/i)).toBeInTheDocument();
