@@ -10,7 +10,8 @@ This Windows connector links an already logged-in MetaTrader 5 desktop terminal 
 4. Launch the iRexPro MT5 Connector on the same Windows machine and enter the pairing code.
 5. The connector reads the currently logged-in MT5 account login, broker server and MT5-reported account environment (DEMO or REAL/LIVE) from the local terminal. iRexPro binds the pairing to that exact login/server/environment.
 6. The one-time pairing code is exchanged for a revocable connector token. The token is stored in the Windows credential vault; it is not written to the JSON config.
-7. Run the connector continuously (later installer: Windows startup/service). It makes outbound HTTPS calls to iRexPro for heartbeat, command lease, and results. No inbound firewall port or router port-forward is needed.
+7. Run the connector continuously. The Windows installer enables start-at-sign-in by default, and the connector can stay in the system tray. It makes outbound HTTPS calls to iRexPro for heartbeat, command lease, and results. No inbound firewall port or router port-forward is needed.
+8. For 24/5 operation, use an always-on Windows VPS. Keep the Windows user session signed in, MT5 logged into the paired account, and Algo Trading enabled. Your personal PC can then be switched off; iRexPro remains controlled from the web/mobile app while the VPS hosts the execution bridge.
 
 If the user switches the local MT5 terminal to another account/server/environment, the connector fails closed and iRexPro suspends that binding until it is paired again. A connector whose heartbeat is stale is treated as disconnected for new exposure, but it can recover automatically when fresh heartbeats resume. The user can also revoke the connector from iRexPro; revocation invalidates its token, cancels queued commands, and marks already-leased commands uncertain for reconciliation rather than replaying them.
 
@@ -22,7 +23,7 @@ For end users, use the Windows installer published from tags named `mt5-connecto
 - `iRexPro-MT5-Connector-Portable.exe` — standalone executable.
 - `SHA256SUMS.txt` — SHA-256 integrity hashes for both binaries.
 
-The desktop app defaults to `https://irexpro.lightworldtech.com/api/v1`, accepts the pairing code shown by iRexPro, stores the connector token in the Windows credential vault, and provides Start/Stop controls. A protocol-v1 configuration does not get guessed or migrated silently: install the current connector and generate a new pairing code.
+The desktop app defaults to `https://irexpro.lightworldtech.com/api/v1`, accepts the pairing code shown by iRexPro, stores the connector token in the Windows credential vault, and provides Start/Stop controls. Version 0.3.0 is designed for unattended operation: the installer can start it automatically at Windows sign-in, a paired connector starts automatically, closing the window keeps it in the system tray, and transient network/MT5 outages reconnect with bounded backoff. A protocol-v1 configuration does not get guessed or migrated silently: install the current connector and generate a new pairing code.
 
 Current builds are unsigned until the Lightworld Windows code-signing certificate is provisioned in the release pipeline, so Windows SmartScreen may display a publisher warning. Verify the SHA-256 hash against the release file before installing.
 

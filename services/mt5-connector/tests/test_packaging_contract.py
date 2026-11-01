@@ -27,6 +27,15 @@ def test_windows_packaging_contract_is_releaseable() -> None:
     assert "from irexpro_mt5_connector.gui import main" in entry_text
     assert "MetaTrader5" in spec_text
     assert "keyring" in spec_text
+    pyproject_text = (CONNECTOR / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'version = "0.3.0"' in pyproject_text
+    assert "pystray" in pyproject_text
+    assert "Pillow" in pyproject_text
+    assert "pystray" in spec_text
+    assert '#define MyAppVersion "0.3.0"' in installer_text
+    assert 'Name: "autostart"' in installer_text
+    assert 'ValueName: "iRexPro MT5 Connector"' in installer_text
+    assert '--background' in installer_text
     assert "iRexPro-MT5-Connector-Setup" in installer_text
     assert "windows-latest" in workflow_text
     assert "mt5-connector-v*" in workflow_text
