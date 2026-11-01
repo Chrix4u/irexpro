@@ -24,6 +24,7 @@ import { MetaTraderAdapter } from './adapters/metatrader.adapter';
 import { PaperBrokerAdapter } from './adapters/paper-broker.adapter';
 import { OandaAdapter } from './adapters/oanda/oanda.adapter';
 import { CTraderAdapter } from './adapters/ctrader/ctrader.adapter';
+import { DirectMt5Adapter } from './adapters/direct-mt5/direct-mt5.adapter';
 import { CTraderClientService } from './adapters/ctrader/ctrader-client.service';
 import { CredentialEncryptionService } from './services/credential-encryption.service';
 import { MetaApiClientService } from './services/metaapi-client.service';
@@ -144,6 +145,7 @@ import { DirectMt5CommandService } from './direct-mt5/direct-mt5-command.service
     PaperBrokerAdapter,
     OandaAdapter,
     CTraderAdapter,
+    DirectMt5Adapter,
     BrokerHealthCheckJob,
     BrokerHealthCheckProducer,
   ],
@@ -179,6 +181,8 @@ export class BrokerModule implements OnModuleInit {
     private paperBrokerAdapter: PaperBrokerAdapter,
     private oandaAdapter: OandaAdapter,
     private cTraderAdapter: CTraderAdapter,
+    private directMt5Adapter: DirectMt5Adapter,
+    private directMt5Commands: DirectMt5CommandService,
     private metaApiClient: MetaApiClientService,
     private configService: ConfigService,
     private cTraderClient: CTraderClientService,
@@ -193,6 +197,11 @@ export class BrokerModule implements OnModuleInit {
     // provider infrastructure (the MetaAPI connection pool, the cTrader
     // environment-connection pool) remains shared underneath by design.
     this.registry.register(this.metaTraderAdapter, () => new MetaTraderAdapter(this.metaApiClient));
+    this.registry.register(
+      this.directMt5Adapter,
+      (_requestedBrokerId, connectionId) =>
+        new DirectMt5Adapter(this.directMt5Commands, connectionId),
+    );
     this.registry.register(
       this.paperBrokerAdapter,
       (_requestedBrokerId, connectionId) =>

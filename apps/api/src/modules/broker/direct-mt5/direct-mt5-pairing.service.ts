@@ -8,12 +8,14 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import { DataSource } from 'typeorm';
+import { DirectMt5AccountType } from './direct-mt5.protocol';
 
 const PAIRING_TTL_MS = 10 * 60_000;
 const PAIRING_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const DIRECT_MT5_HEARTBEAT_STALE_MS = 15_000;
 
 export type DirectMt5ConnectorState = 'UNPAIRED' | 'PAIRING' | 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
+export type DirectMt5ConnectorHostMode = 'PERSONAL_PC' | 'WINDOWS_VPS';
 export type DirectMt5ConnectorHealthReason =
   | 'READY'
   | 'NOT_PAIRED'
@@ -28,6 +30,7 @@ export type DirectMt5ConnectorHealthReason =
 export interface DirectMt5ConnectionHealth {
   connectorId: string | null;
   brokerConnectionId: string;
+  hostMode: DirectMt5ConnectorHostMode | null;
   state: DirectMt5ConnectorState;
   connected: boolean;
   executionReady: boolean;
@@ -44,11 +47,13 @@ export interface DirectMt5TerminalIdentity {
   brokerServer: string;
   currency: string | null;
   tradeAllowed: boolean;
+  accountType: DirectMt5AccountType;
 }
 
 export interface DirectMt5PairingResult {
   connectorId: string;
   brokerConnectionId: string;
+  hostMode: DirectMt5ConnectorHostMode;
   pairingCode: string;
   expiresAt: Date;
 }
@@ -65,6 +70,7 @@ export interface DirectMt5ConnectorBinding {
   brokerConnectionId: string;
   accountLogin: string;
   brokerServer: string;
+  accountType: DirectMt5AccountType;
   lastSequence: number;
 }
 
@@ -73,6 +79,7 @@ export interface DirectMt5HeartbeatInput {
   brokerServer: string;
   sequence: number;
   tradeAllowed: boolean;
+  accountType: DirectMt5AccountType;
 }
 
 @Injectable()
@@ -92,7 +99,14 @@ export class DirectMt5PairingService {
     this.pepper = pepper;
   }
 
-  async createPairing(userId: string, brokerConnectionId: string): Promise<DirectMt5PairingResult> {
+  async createPairing(
+    userId: string,
+    brokerConnectionId: string,
+    hostMode: DirectMt5ConnectorHostMode = 'PERSONAL_PC',
+  ): Promise<DirectMt5PairingResult> {
+    if (!['PERSONAL_PC', 'WINDOWS_VPS'].includes(hostMode)) {
+      throw new BadRequestException('Direct MT5 connector host mode is invalid');
+    }
     const rows = (await this.dataSource.query(
       `
         SELECT id, broker_id, account_type
@@ -108,15 +122,11 @@ export class DirectMt5PairingService {
     if (!connection) {
       throw new NotFoundException('Broker connection not found');
     }
-    if (connection.broker_id !== 'metatrader5') {
-      throw new BadRequestException('Direct connector pairing is available only for MetaTrader 5');
-    }
-    if (connection.account_type !== 'DEMO') {
+    if (connection.broker_id !== 'direct-mt5') {
       throw new BadRequestException(
-        'Direct MT5 onboarding is DEMO-only until LIVE is explicitly certified',
+        'Direct connector pairing is available only for the Direct MT5 provider',
       );
     }
-
     const connectorId = randomUUID();
     const pairingCode = this.generatePairingCode();
     const pairingHash = this.digest('pairing', pairingCode);
@@ -146,14 +156,16 @@ export class DirectMt5PairingService {
           RETURNING id
         ), paired AS (
           INSERT INTO broker.direct_mt5_connectors (
-            id, user_id, broker_connection_id, pairing_code_hash, pairing_expires_at,
+            id, user_id, broker_connection_id, account_type, host_mode, pairing_code_hash, pairing_expires_at,
             state, token_hash, account_login, broker_server, currency, trade_allowed,
             paired_at, last_heartbeat_at, last_sequence, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, 'PAIRING', NULL, NULL, NULL, NULL, false,
+          ) VALUES ($1, $2, $3, $6, $7, $4, $5, 'PAIRING', NULL, NULL, NULL, NULL, false,
                     NULL, NULL, 0, now(), now())
           ON CONFLICT (broker_connection_id) DO UPDATE SET
             id = EXCLUDED.id,
             user_id = EXCLUDED.user_id,
+            account_type = EXCLUDED.account_type,
+            host_mode = EXCLUDED.host_mode,
             pairing_code_hash = EXCLUDED.pairing_code_hash,
             pairing_expires_at = EXCLUDED.pairing_expires_at,
             state = 'PAIRING',
@@ -170,10 +182,18 @@ export class DirectMt5PairingService {
         )
         SELECT id FROM paired
       `,
-      [connectorId, userId, brokerConnectionId, pairingHash, expiresAt],
+      [
+        connectorId,
+        userId,
+        brokerConnectionId,
+        pairingHash,
+        expiresAt,
+        connection.account_type,
+        hostMode,
+      ],
     );
 
-    return { connectorId, brokerConnectionId, pairingCode, expiresAt };
+    return { connectorId, brokerConnectionId, hostMode, pairingCode, expiresAt };
   }
 
   async redeemPairing(
@@ -206,7 +226,9 @@ export class DirectMt5PairingService {
           AND c.pairing_expires_at > now()
           AND bc.id = c.broker_connection_id
           AND bc.deleted_at IS NULL
-          AND bc.broker_id = 'metatrader5'
+          AND bc.broker_id = 'direct-mt5'
+          AND c.account_type = $7
+          AND bc.account_type = c.account_type
           AND bc.account_id = $3
         RETURNING c.id, c.broker_connection_id, c.user_id
       `,
@@ -217,6 +239,7 @@ export class DirectMt5PairingService {
         identity.brokerServer,
         identity.currency,
         identity.tradeAllowed,
+        identity.accountType,
       ],
     )) as Array<{ id: string; broker_connection_id: string; user_id: string }>;
 
@@ -226,6 +249,17 @@ export class DirectMt5PairingService {
         'Pairing code is invalid or expired, or the MT5 account does not match this broker connection',
       );
     }
+    await this.dataSource.query(
+      `UPDATE broker.broker_connections
+       SET status = 'CONNECTED',
+           authorization_status = CASE WHEN account_type = 'DEMO' THEN 'CONNECTED' ELSE authorization_status END,
+           demo_validated = CASE WHEN account_type = 'DEMO' THEN true ELSE demo_validated END,
+           live_trading_enabled = false,
+           account_currency = COALESCE($2, account_currency),
+           credential_status = 'VERIFIED', updated_at = now()
+       WHERE id = $1 AND broker_id = 'direct-mt5' AND account_type = $3`,
+      [connector.broker_connection_id, identity.currency, identity.accountType],
+    );
 
     return {
       connectorId: connector.id,
@@ -243,11 +277,14 @@ export class DirectMt5PairingService {
     }
     const rows = (await this.dataSource.query(
       `
-        SELECT id, user_id, broker_connection_id, token_hash,
-               account_login, broker_server, last_sequence
-        FROM broker.direct_mt5_connectors
-        WHERE id = $1
-          AND state = 'ACTIVE'
+        SELECT c.id, c.user_id, c.broker_connection_id, c.token_hash,
+               c.account_login, c.broker_server, c.account_type, c.last_sequence
+        FROM broker.direct_mt5_connectors c
+        JOIN broker.broker_connections bc ON bc.id = c.broker_connection_id
+        WHERE c.id = $1
+          AND c.state = 'ACTIVE'
+          AND c.account_type = bc.account_type
+          AND c.account_login = bc.account_id
           AND token_hash IS NOT NULL
         LIMIT 1
       `,
@@ -259,6 +296,7 @@ export class DirectMt5PairingService {
       token_hash: string;
       account_login: string;
       broker_server: string;
+      account_type: DirectMt5AccountType;
       last_sequence: string | number;
     }>;
     const row = rows[0];
@@ -271,6 +309,7 @@ export class DirectMt5PairingService {
       brokerConnectionId: row.broker_connection_id,
       accountLogin: row.account_login,
       brokerServer: row.broker_server,
+      accountType: row.account_type,
       lastSequence: Number(row.last_sequence),
     };
   }
@@ -281,17 +320,27 @@ export class DirectMt5PairingService {
   ): Promise<{ lastSequence: number }> {
     if (
       heartbeat.accountLogin !== binding.accountLogin ||
-      heartbeat.brokerServer !== binding.brokerServer
+      heartbeat.brokerServer !== binding.brokerServer ||
+      heartbeat.accountType !== binding.accountType
     ) {
       await this.dataSource.query(
         `
           UPDATE broker.direct_mt5_connectors
-          SET state = 'SUSPENDED', updated_at = now()
+          SET state = 'SUSPENDED', trade_allowed = false, updated_at = now()
           WHERE id = $1 AND state = 'ACTIVE'
         `,
         [binding.connectorId],
       );
-      throw new ConflictException('MT5 terminal identity changed; connector suspended');
+      await this.dataSource.query(
+        `UPDATE broker.broker_connections
+         SET status='SUSPENDED', authorization_status=CASE WHEN authorization_status='ACTIVE' THEN 'SUSPENDED' ELSE authorization_status END,
+             live_trading_enabled=false, updated_at=now()
+         WHERE id=$1 AND broker_id='direct-mt5'`,
+        [binding.brokerConnectionId],
+      );
+      throw new ConflictException(
+        'MT5 terminal identity changed or account environment changed; connector suspended',
+      );
     }
     if (!Number.isSafeInteger(heartbeat.sequence) || heartbeat.sequence <= binding.lastSequence) {
       throw new BadRequestException('Heartbeat sequence is stale or invalid');
@@ -308,6 +357,7 @@ export class DirectMt5PairingService {
           AND state = 'ACTIVE'
           AND account_login = $4
           AND broker_server = $5
+          AND account_type = $6
           AND last_sequence < $2
         RETURNING id, last_sequence
       `,
@@ -317,12 +367,28 @@ export class DirectMt5PairingService {
         heartbeat.tradeAllowed,
         binding.accountLogin,
         binding.brokerServer,
+        binding.accountType,
       ],
     )) as Array<{ id: string; last_sequence: string | number }>;
     const row = rows[0];
     if (!row) {
       throw new ConflictException('Heartbeat replay or concurrent connector activity detected');
     }
+    const brokerHeartbeatSql = !heartbeat.tradeAllowed
+      ? `UPDATE broker.broker_connections
+         SET status='SUSPENDED', authorization_status=CASE WHEN authorization_status='ACTIVE' THEN 'SUSPENDED' ELSE authorization_status END,
+             live_trading_enabled=false, updated_at=now()
+         WHERE id=$1 AND broker_id='direct-mt5'`
+      : heartbeat.accountType === 'DEMO'
+        ? `UPDATE broker.broker_connections
+           SET status='CONNECTED', demo_validated=true, authorization_status='ACTIVE',
+               live_trading_enabled=false, updated_at=now()
+           WHERE id=$1 AND broker_id='direct-mt5' AND account_type='DEMO'
+             AND authorization_status IN ('CONNECTED','AUTHORIZED','READY','ACTIVE','SUSPENDED')`
+        : `UPDATE broker.broker_connections
+           SET status='CONNECTED', updated_at=now()
+           WHERE id=$1 AND broker_id='direct-mt5' AND account_type='LIVE'`;
+    await this.dataSource.query(brokerHeartbeatSql, [binding.brokerConnectionId]);
     return { lastSequence: Number(row.last_sequence) };
   }
 
@@ -333,7 +399,7 @@ export class DirectMt5PairingService {
   ): Promise<DirectMt5ConnectionHealth> {
     const rows = (await this.dataSource.query(
       `
-        SELECT id, state, account_login, broker_server, trade_allowed, last_heartbeat_at
+        SELECT id, state, host_mode, account_login, broker_server, trade_allowed, last_heartbeat_at
         FROM broker.direct_mt5_connectors
         WHERE user_id = $1
           AND broker_connection_id = $2
@@ -343,6 +409,7 @@ export class DirectMt5PairingService {
     )) as Array<{
       id: string;
       state: Exclude<DirectMt5ConnectorState, 'UNPAIRED'>;
+      host_mode: DirectMt5ConnectorHostMode;
       account_login: string | null;
       broker_server: string | null;
       trade_allowed: boolean;
@@ -353,6 +420,7 @@ export class DirectMt5PairingService {
       return {
         connectorId: null,
         brokerConnectionId,
+        hostMode: null,
         state: 'UNPAIRED',
         connected: false,
         executionReady: false,
@@ -373,6 +441,7 @@ export class DirectMt5PairingService {
     const base = {
       connectorId: row.id,
       brokerConnectionId,
+      hostMode: row.host_mode,
       state: row.state,
       tradeAllowed: Boolean(row.trade_allowed),
       lastHeartbeatAt,
@@ -451,6 +520,10 @@ export class DirectMt5PairingService {
     if (!row) {
       throw new NotFoundException('Direct MT5 connector not found');
     }
+    await this.dataSource.query(
+      `UPDATE broker.broker_connections SET status='DISCONNECTED', authorization_status='REVOKED', demo_validated=false, live_trading_enabled=false, updated_at=now() WHERE id=$1 AND user_id=$2`,
+      [brokerConnectionId, userId],
+    );
     return { connectorId: row.id, revoked: true };
   }
 
