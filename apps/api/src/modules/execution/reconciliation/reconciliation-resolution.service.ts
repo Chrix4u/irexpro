@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Trade, TradeCloseReason, TradeStatus } from '../entities/trade.entity';
+import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from '../entities/trade.entity';
 import { Order } from '../orders/order.entity';
 import { OrderStatus } from '../orders/order.enums';
 import { OrderService } from '../orders/order.service';
@@ -93,12 +93,18 @@ export class ReconciliationResolutionService {
       trade.closeReason
         ? trade.closeReason
         : null;
-    const closeReason = appCloseIntentFallback ?? mappedProviderCloseReason;
+    const inferredBarrierReason =
+      !providerReasonSpecific && !appCloseIntentFallback
+        ? this.inferBarrierCloseReason(trade, exitPrice)
+        : null;
+    const closeReason = appCloseIntentFallback ?? inferredBarrierReason ?? mappedProviderCloseReason;
     const closeReasonSource = providerReasonSpecific
       ? 'PROVIDER_CLOSE_REASON'
       : appCloseIntentFallback
         ? 'APP_CLOSE_INTENT_FALLBACK'
-        : 'PROVIDER_GENERIC';
+        : inferredBarrierReason
+          ? 'BARRIER_PRICE_INFERENCE'
+          : 'PROVIDER_GENERIC';
 
     const providerPathDiagnostics = closedTrade?.pathDiagnostics ?? null;
     const durablePathDiagnostics =
@@ -203,6 +209,53 @@ export class ReconciliationResolutionService {
     });
 
     return true;
+  }
+
+  private inferBarrierCloseReason(trade: Trade, exitPrice: string | null): TradeCloseReason | null {
+    if (!exitPrice) return null;
+    const entryPrice = trade.fillPrice ?? trade.requestedEntryPrice;
+    const stopLoss = trade.stopLoss;
+    const takeProfit = trade.takeProfit;
+    if (!entryPrice || !stopLoss || !takeProfit) return null;
+
+    try {
+      if (
+        compareDecimal(exitPrice, '0') <= 0 ||
+        compareDecimal(entryPrice, '0') <= 0 ||
+        compareDecimal(stopLoss, '0') <= 0 ||
+        compareDecimal(takeProfit, '0') <= 0
+      )
+        return null;
+
+      const tolerance = trade.instrument.toUpperCase().endsWith('JPY') ? '0.01' : '0.0001';
+      if (trade.direction === TradeDirection.BUY) {
+        if (!(compareDecimal(stopLoss, entryPrice) < 0 && compareDecimal(takeProfit, entryPrice) > 0)) {
+          return null;
+        }
+        if (compareDecimal(subtractDecimal(exitPrice, stopLoss), tolerance) <= 0) {
+          return TradeCloseReason.STOP_LOSS_HIT;
+        }
+        if (compareDecimal(subtractDecimal(takeProfit, exitPrice), tolerance) <= 0) {
+          return TradeCloseReason.TAKE_PROFIT_HIT;
+        }
+        return null;
+      }
+
+      if (trade.direction === TradeDirection.SELL) {
+        if (!(compareDecimal(stopLoss, entryPrice) > 0 && compareDecimal(takeProfit, entryPrice) < 0)) {
+          return null;
+        }
+        if (compareDecimal(subtractDecimal(stopLoss, exitPrice), tolerance) <= 0) {
+          return TradeCloseReason.STOP_LOSS_HIT;
+        }
+        if (compareDecimal(subtractDecimal(exitPrice, takeProfit), tolerance) <= 0) {
+          return TradeCloseReason.TAKE_PROFIT_HIT;
+        }
+      }
+    } catch {
+      return null;
+    }
+    return null;
   }
 
   private mapProviderCloseReason(

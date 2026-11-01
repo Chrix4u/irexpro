@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Trade, TradeCloseReason, TradeStatus } from '../entities/trade.entity';
+import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from '../entities/trade.entity';
 import { Order } from '../orders/order.entity';
 import { OrderStatus } from '../orders/order.enums';
 import { OrderService } from '../orders/order.service';
@@ -194,6 +194,82 @@ describe('ReconciliationResolutionService', () => {
         swap: '0.00',
         closeReason: 'SL',
       });
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        { id: 'trade-1', status: TradeStatus.OPEN },
+        expect.objectContaining({ closeReason: TradeCloseReason.STOP_LOSS_HIT }),
+      );
+    });
+
+    it.each([
+      ['BUY SL', 'BUY', '1.10000', '1.09000', '1.12000', '1.09005', TradeCloseReason.STOP_LOSS_HIT],
+      ['SELL SL', 'SELL', '1.10000', '1.11000', '1.08000', '1.10995', TradeCloseReason.STOP_LOSS_HIT],
+      ['BUY TP', 'BUY', '1.10000', '1.09000', '1.12000', '1.11995', TradeCloseReason.TAKE_PROFIT_HIT],
+      ['SELL TP', 'SELL', '1.10000', '1.11000', '1.08000', '1.08005', TradeCloseReason.TAKE_PROFIT_HIT],
+    ])('infers %s from generic provider close price and valid barriers', async (_label, direction, entry, stopLoss, takeProfit, closePrice, expectedReason) => {
+      await service.closeTradeFromProvider(
+        baseTrade({ direction: direction as TradeDirection, fillPrice: entry, stopLoss, takeProfit }),
+        {
+          externalOrderId: 'pos-1',
+          instrument: 'EURUSD',
+          direction: direction as 'BUY' | 'SELL',
+          lotSize: '1.0000',
+          openPrice: entry,
+          closePrice,
+          stopLoss,
+          takeProfit,
+          realisedPnl: expectedReason === TradeCloseReason.STOP_LOSS_HIT ? '-10.00' : '20.00',
+          openedAt: new Date(),
+          closedAt: new Date(),
+          commission: '0.00',
+          swap: '0.00',
+          closeReason: 'UNKNOWN',
+        },
+      );
+
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        { id: 'trade-1', status: TradeStatus.OPEN },
+        expect.objectContaining({ closeReason: expectedReason }),
+      );
+    });
+
+    it('keeps a generic provider reason when exit is between valid barriers or barrier geometry is invalid', async () => {
+      await service.closeTradeFromProvider(
+        baseTrade({ direction: TradeDirection.BUY, fillPrice: '1.10000', stopLoss: '1.09000', takeProfit: '1.12000' }),
+        {
+          externalOrderId: 'pos-1', instrument: 'EURUSD', direction: 'BUY', lotSize: '1.0000',
+          openPrice: '1.10000', closePrice: '1.10500', stopLoss: '1.09000', takeProfit: '1.12000',
+          realisedPnl: '5.00', openedAt: new Date(), closedAt: new Date(), commission: '0.00', swap: '0.00', closeReason: 'UNKNOWN',
+        },
+      );
+      expect(tradeRepo.update).toHaveBeenLastCalledWith(
+        { id: 'trade-1', status: TradeStatus.OPEN },
+        expect.objectContaining({ closeReason: TradeCloseReason.BROKER_CLOSE }),
+      );
+
+      tradeRepo.update.mockClear();
+      await service.closeTradeFromProvider(
+        baseTrade({ direction: TradeDirection.BUY, fillPrice: '1.10000', stopLoss: '1.11000', takeProfit: '1.12000' }),
+        {
+          externalOrderId: 'pos-1', instrument: 'EURUSD', direction: 'BUY', lotSize: '1.0000',
+          openPrice: '1.10000', closePrice: '1.11000', stopLoss: '1.11000', takeProfit: '1.12000',
+          realisedPnl: '-10.00', openedAt: new Date(), closedAt: new Date(), commission: '0.00', swap: '0.00', closeReason: 'UNKNOWN',
+        },
+      );
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        { id: 'trade-1', status: TradeStatus.OPEN },
+        expect.objectContaining({ closeReason: TradeCloseReason.BROKER_CLOSE }),
+      );
+    });
+
+    it('keeps an explicit provider close reason authoritative even when price geometry points elsewhere', async () => {
+      await service.closeTradeFromProvider(
+        baseTrade({ direction: TradeDirection.BUY, fillPrice: '1.10000', stopLoss: '1.09000', takeProfit: '1.12000' }),
+        {
+          externalOrderId: 'pos-1', instrument: 'EURUSD', direction: 'BUY', lotSize: '1.0000',
+          openPrice: '1.10000', closePrice: '1.12000', stopLoss: '1.09000', takeProfit: '1.12000',
+          realisedPnl: '20.00', openedAt: new Date(), closedAt: new Date(), commission: '0.00', swap: '0.00', closeReason: 'SL',
+        },
+      );
       expect(tradeRepo.update).toHaveBeenCalledWith(
         { id: 'trade-1', status: TradeStatus.OPEN },
         expect.objectContaining({ closeReason: TradeCloseReason.STOP_LOSS_HIT }),
