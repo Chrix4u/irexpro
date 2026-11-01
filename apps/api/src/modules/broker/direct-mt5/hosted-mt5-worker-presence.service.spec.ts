@@ -26,7 +26,9 @@ describe('HostedMt5WorkerPresenceService', () => {
   });
 
   it('distinguishes no fresh worker from a fresh but full pool', async () => {
-    const service = new HostedMt5WorkerPresenceService({ query: jest.fn().mockResolvedValue([]) } as any);
+    const service = new HostedMt5WorkerPresenceService({
+      query: jest.fn().mockResolvedValue([]),
+    } as any);
 
     expect(service.getPoolReadiness()).toMatchObject({ ready: false, reason: 'NO_FRESH_WORKER' });
 

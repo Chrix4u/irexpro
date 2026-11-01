@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
 const WORKER_FRESH_MS = 45_000;
@@ -125,7 +120,8 @@ export class HostedMt5WorkerPresenceService implements OnModuleInit, OnModuleDes
 
   getPoolReadiness(nowMs = Date.now()): HostedMt5WorkerPoolReadiness {
     const fresh = [...this.workers.values()].filter(
-      (worker) => nowMs - worker.lastSeenAtMs <= WORKER_FRESH_MS && nowMs >= worker.lastSeenAtMs - 5_000,
+      (worker) =>
+        nowMs - worker.lastSeenAtMs <= WORKER_FRESH_MS && nowMs >= worker.lastSeenAtMs - 5_000,
     );
     if (fresh.length === 0) {
       return this.snapshot(false, 'NO_FRESH_WORKER', fresh, []);
