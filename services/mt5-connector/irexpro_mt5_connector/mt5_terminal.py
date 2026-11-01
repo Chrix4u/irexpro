@@ -10,6 +10,11 @@ class Mt5TerminalError(RuntimeError):
     pass
 
 
+class Mt5TerminalFatalError(Mt5TerminalError):
+    """A local MT5/runtime condition that requires operator action."""
+
+
+
 @dataclass(frozen=True)
 class AccountIdentity:
     login: str
@@ -97,7 +102,7 @@ class MetaQuotesMt5Terminal:
             try:
                 import MetaTrader5 as mt5  # type: ignore[import-not-found]
             except ImportError as exc:
-                raise Mt5TerminalError(
+                raise Mt5TerminalFatalError(
                     "MetaTrader5 Python package is unavailable; run the connector on Windows with MT5 installed"
                 ) from exc
             self._mt5 = mt5
@@ -122,8 +127,8 @@ class MetaQuotesMt5Terminal:
         if trade_mode == int(getattr(mt5, "ACCOUNT_TRADE_MODE_REAL", 2)):
             return "LIVE"
         if trade_mode == int(getattr(mt5, "ACCOUNT_TRADE_MODE_CONTEST", 1)):
-            raise Mt5TerminalError("MT5 CONTEST accounts are not supported for iRexPro automated trading")
-        raise Mt5TerminalError(f"MT5 reported an unknown account trade mode: {trade_mode}")
+            raise Mt5TerminalFatalError("MT5 CONTEST accounts are not supported for iRexPro automated trading")
+        raise Mt5TerminalFatalError(f"MT5 reported an unknown account trade mode: {trade_mode}")
 
     def identity(self) -> AccountIdentity:
         mt5 = self._module()

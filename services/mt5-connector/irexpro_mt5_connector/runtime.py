@@ -11,7 +11,7 @@ import requests
 from .client import ConnectorApiError, ConnectorTransientError, IrexProConnectorClient
 from .config import ConnectorSettings, KeyringSecretStore
 from .journal import CommandJournal, JournalEntry
-from .mt5_terminal import MetaQuotesMt5Terminal, Mt5TerminalError, TerminalPort
+from .mt5_terminal import MetaQuotesMt5Terminal, Mt5TerminalError, Mt5TerminalFatalError, TerminalPort
 from .protocol import assert_bound_identity
 
 StatusCallback = Callable[[str], None]
@@ -245,6 +245,9 @@ def run_supervised_connector(
                 stop_event=stop,
                 on_status=status_bridge,
             )
+        except Mt5TerminalFatalError:
+            notify("FATAL")
+            raise
         except (ConnectorTransientError, requests.RequestException, Mt5TerminalError) as exc:
             if stop.is_set():
                 return 0

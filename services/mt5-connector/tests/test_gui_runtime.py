@@ -368,3 +368,28 @@ def test_supervisor_does_not_retry_ambiguous_local_os_errors(tmp_path: Path) -> 
             wait_fn=must_not_wait,
         )
     assert calls == 1
+
+
+def test_supervisor_does_not_retry_fatal_mt5_runtime_errors(tmp_path: Path) -> None:
+    import pytest
+    from irexpro_mt5_connector.mt5_terminal import Mt5TerminalFatalError
+
+    runtime = importlib.import_module("irexpro_mt5_connector.runtime")
+    calls = 0
+
+    def runner(**_kwargs):
+        nonlocal calls
+        calls += 1
+        raise Mt5TerminalFatalError("MT5 CONTEST accounts are not supported")
+
+    def must_not_wait(_event, _seconds):
+        raise AssertionError("fatal MT5 configuration errors must not retry")
+
+    with pytest.raises(Mt5TerminalFatalError, match="CONTEST"):
+        runtime.run_supervised_connector(
+            config_path=tmp_path / "connector.json",
+            journal_path=tmp_path / "journal.db",
+            runner=runner,
+            wait_fn=must_not_wait,
+        )
+    assert calls == 1
