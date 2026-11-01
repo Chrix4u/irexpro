@@ -12,9 +12,9 @@ const MAX_PROVIDER_MARK_AGE_MS = 90_000;
 /**
  * Fast valuation/protection-mark bridge for PAPER positions.
  *
- * The MetaApi quote collector already samples the configured broker-native
- * source account into market_data.provider_quote_candles. This service reuses
- * those persisted bid/ask samples for PAPER mark-to-market so the Live Account
+ * A broker-native quote collector samples the configured source account into
+ * market_data.provider_quote_candles. This service reuses those persisted
+ * bid/ask samples for PAPER mark-to-market so the Live Account
  * can refresh current price/P&L independently of the strategy scan.
  *
  * Safety boundary: these PROVIDER/STREAM marks may trigger SL/TP for already-open
@@ -51,7 +51,7 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
       this.timer = setInterval(() => void this.collectOnce(), DEFAULT_BRIDGE_INTERVAL_MS);
       this.timer.unref?.();
       this.logger.log(
-        'PAPER provider execution/mark bridge enabled source=STREAM/MetaApi sampled quotes cadence=5s',
+        'PAPER provider execution/mark bridge enabled source=configured broker-native sampled quotes cadence=5s',
       );
     }
 
@@ -197,7 +197,6 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
   private enabled(): boolean {
     return (
       this.config.get<boolean>('vpsForexScanner.enabled', false) === true &&
-      this.config.get<string>('METAAPI_QUOTE_COLLECTION_ENABLED', 'false') === 'true' &&
       Boolean(this.paperConnectionId()) &&
       Boolean(this.sourceConnectionId())
     );

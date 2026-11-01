@@ -75,6 +75,43 @@ describe('PaperPositionMarkBridgeService', () => {
     expect(getOpenPositions).not.toHaveBeenCalled();
   });
 
+  it('refreshes PAPER provider marks from the configured broker source when MetaAPI collection is disabled', async () => {
+    const now = new Date('2026-10-05T10:55:30.000Z');
+    const providerConfig = {
+      get: jest.fn((key: string, fallback?: unknown) => {
+        const values: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.brokerConnectionId': 'paper-1',
+          'multimodelBrokerExpert.sourceConnectionId': 'ctrader-1',
+          METAAPI_QUOTE_COLLECTION_ENABLED: 'false',
+        };
+        return key in values ? values[key] : fallback;
+      }),
+    } as unknown as ConfigService;
+    const paperState = {
+      load: jest.fn().mockResolvedValue({ positions: [] }),
+    } as unknown as PaperBrokerStateService;
+    const getLatestPositiveSpreadQuote = jest
+      .fn()
+      .mockImplementation(async (_connectionId: string, instrument: string) =>
+        executionQuote(instrument),
+      );
+    const updateProviderQuote = jest.fn();
+    const service = new PaperPositionMarkBridgeService(
+      providerConfig,
+      paperState,
+      { getLatestPositiveSpreadQuote } as unknown as ProviderQuoteCandleStoreService,
+      livePaper(updateProviderQuote),
+      brokerAdapters(),
+    );
+
+    await service.collectOnce(now);
+
+    expect(getLatestPositiveSpreadQuote).toHaveBeenCalledTimes(6);
+    expect(getLatestPositiveSpreadQuote).toHaveBeenCalledWith('ctrader-1', 'EURUSD', now);
+    expect(updateProviderQuote).toHaveBeenCalledTimes(6);
+  });
+
   it('deduplicates sampled provider timestamps while keeping protection heartbeat server-side', async () => {
     const now = new Date('2026-10-05T10:55:30.000Z');
     const paperState = {
