@@ -116,16 +116,7 @@ jobs:
           pm2_json="$(mktemp)"
           trap 'rm -f "$pm2_json"' EXIT
           pm2 jlist > "$pm2_json"
-          PM2_JSON_FILE="$pm2_json" node <<'NODE'
-          const fs = require('fs');
-          const rows = JSON.parse(fs.readFileSync(process.env.PM2_JSON_FILE, 'utf8'));
-          for (const name of ['irexpro-api-staging', 'irexpro-web-staging']) {
-            const proc = rows.find((row) => row.name === name);
-            if (!proc || proc.pm2_env?.status !== 'online') throw new Error(`${name} is not online`);
-            const unstable = Number(proc.pm2_env?.unstable_restarts ?? 0);
-            if (!Number.isFinite(unstable) || unstable !== 0) throw new Error(`${name} has unstable restarts=${unstable}`);
-          }
-NODE
+          PM2_JSON_FILE="$pm2_json" node -e "const fs=require('fs'); const rows=JSON.parse(fs.readFileSync(process.env.PM2_JSON_FILE,'utf8')); for (const name of ['irexpro-api-staging','irexpro-web-staging']) { const p=rows.find(r=>r.name===name); if(!p||p.pm2_env?.status!=='online') throw new Error(name+' is not online'); const u=Number(p.pm2_env?.unstable_restarts??0); if(!Number.isFinite(u)||u!==0) throw new Error(name+' has unstable restarts='+u); }"
           test "$(git rev-parse HEAD)" = "$candidate_sha"
           REMOTE
 
