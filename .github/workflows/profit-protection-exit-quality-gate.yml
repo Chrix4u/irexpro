@@ -1,6 +1,6 @@
 name: Profit Protection Exit Quality Gate
 
-# behavioral-red-pulse: 3
+# integrated-release-pulse: 4
 on:
   push:
     branches:
