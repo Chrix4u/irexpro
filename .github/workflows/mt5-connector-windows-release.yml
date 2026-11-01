@@ -46,9 +46,9 @@ jobs:
       - name: Smoke-test frozen Windows executable
         working-directory: services/mt5-connector
         run: |
-          & ".\dist\iRexPro-MT5-Connector.exe" --self-test
-          if ($LASTEXITCODE -ne 0) {
-            throw "Frozen iRexPro MT5 Connector self-test failed with exit code $LASTEXITCODE"
+          $process = Start-Process ".\dist\iRexPro-MT5-Connector.exe" -ArgumentList '--self-test' -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Frozen iRexPro MT5 Connector self-test failed with exit code $($process.ExitCode)"
           }
 
       - name: Install Inno Setup
