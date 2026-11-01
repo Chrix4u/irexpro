@@ -32,7 +32,7 @@ const adapterWith = (brokerId: string, supported: string[]) => ({
 describe('BrokerProviderRegistryService', () => {
   const buildService = async (
     supportedAdapters: string[],
-    config: Record<string, string | undefined> = {},
+    config: Record<string, string | boolean | undefined> = {},
   ) => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -99,6 +99,35 @@ describe('BrokerProviderRegistryService', () => {
       expect(pepperstone?.status).toBe(BrokerAvailabilityStatus.NOT_STARTED);
       expect(pepperstone?.adapterAvailable).toBe(false);
       expect(service.isConnectable('pepperstone-ctrader')).toBe(false);
+    });
+
+    it('reports hosted MT5 as unavailable until the operator explicitly enables it with a worker secret', async () => {
+      const disabled = await buildService(['direct-mt5']);
+      expect(disabled.getEntry('direct-mt5')?.hostedMt5Readiness).toEqual({
+        ready: false,
+        code: 'HOSTED_MT5_NOT_READY',
+        message: expect.stringMatching(/not enabled/i),
+      });
+
+      const missingSecret = await buildService(['direct-mt5'], {
+        'broker.hostedMt5Enabled': true,
+        'broker.hostedMt5WorkerToken': '',
+      });
+      expect(missingSecret.getEntry('direct-mt5')?.hostedMt5Readiness).toMatchObject({
+        ready: false,
+        code: 'HOSTED_MT5_NOT_READY',
+      });
+
+      const ready = await buildService(['direct-mt5'], {
+        'broker.hostedMt5Enabled': true,
+        'broker.hostedMt5WorkerToken': 'w'.repeat(32),
+      });
+      expect(ready.getEntry('direct-mt5')?.hostedMt5Readiness).toEqual({
+        ready: true,
+        code: 'READY',
+        message: null,
+      });
+      expect(ready.getEntry('direct-mt5')?.connectionReadiness.ready).toBe(true);
     });
 
     it('reports cTrader (and its broker aliases) as BETA + connectable when the shared engine is registered (Task 48-B)', async () => {

@@ -1,15 +1,23 @@
-import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { DataSource } from 'typeorm';
 import { HostedMt5Service } from './hosted-mt5.service';
 
 const WORKER_TOKEN = 'hosted-worker-token-0123456789abcdef';
 
-function config(): ConfigService {
+function config(options: { enabled?: boolean; workerToken?: string } = {}): ConfigService {
+  const enabled = options.enabled ?? true;
+  const workerToken = options.workerToken ?? WORKER_TOKEN;
   return {
-    get: jest.fn((key: string, fallback?: string) => {
+    get: jest.fn((key: string, fallback?: unknown) => {
+      if (key === 'broker.hostedMt5Enabled') return enabled;
       if (key === 'broker.hostedMt5WorkerToken' || key === 'HOSTED_MT5_WORKER_TOKEN') {
-        return WORKER_TOKEN;
+        return workerToken;
       }
       return fallback;
     }),
@@ -35,6 +43,26 @@ const decrypted = {
 };
 
 describe('HostedMt5Service', () => {
+  it('fails closed before database access when hosted execution is not explicitly enabled', async () => {
+    const query = jest.fn();
+    const dataSource = { query, transaction: jest.fn() } as unknown as DataSource;
+    const service = new HostedMt5Service(
+      dataSource,
+      { decrypt: jest.fn() } as any,
+      { digestToken: jest.fn() } as any,
+      config({ enabled: false }),
+    );
+
+    await expect(service.provision('user-1', 'connection-1')).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    await expect(service.leaseAssignment('worker-1', WORKER_TOKEN)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(query).not.toHaveBeenCalled();
+    expect((dataSource as any).transaction).not.toHaveBeenCalled();
+  });
+
   it('provisions an owned DEMO Direct MT5 connection without returning or persisting plaintext secrets', async () => {
     const query = jest
       .fn()
@@ -59,7 +87,9 @@ describe('HostedMt5Service', () => {
       state: 'PAIRING',
     });
     expect(JSON.stringify(result)).not.toContain('demo-trading-password');
-    const allSqlParams = query.mock.calls.flatMap((call) => (Array.isArray(call[1]) ? call[1] : []));
+    const allSqlParams = query.mock.calls.flatMap((call) =>
+      Array.isArray(call[1]) ? call[1] : [],
+    );
     expect(allSqlParams).not.toContain('demo-trading-password');
     expect(String(query.mock.calls[1]![0])).toContain("'IREXPRO_HOSTED'");
     expect(String(query.mock.calls[1]![0])).toContain("state = 'UNCERTAIN'");
@@ -67,12 +97,14 @@ describe('HostedMt5Service', () => {
   });
 
   it('is idempotent when the same hosted connection already has a healthy active worker session', async () => {
-    const query = jest.fn().mockResolvedValueOnce([{
-      ...demoConnection,
-      hosted_connector_id: 'connector-healthy',
-      hosted_state: 'ACTIVE',
-      hosted_healthy: true,
-    }]);
+    const query = jest.fn().mockResolvedValueOnce([
+      {
+        ...demoConnection,
+        hosted_connector_id: 'connector-healthy',
+        hosted_state: 'ACTIVE',
+        hosted_healthy: true,
+      },
+    ]);
     const encryption = { decrypt: jest.fn() } as any;
     const service = new HostedMt5Service(
       { query } as unknown as DataSource,
@@ -89,7 +121,9 @@ describe('HostedMt5Service', () => {
     });
     expect(query).toHaveBeenCalledTimes(1);
     expect(encryption.decrypt).not.toHaveBeenCalled();
-    expect(String(query.mock.calls[0]![0])).toContain("last_heartbeat_at >= now() - interval '15 seconds'");
+    expect(String(query.mock.calls[0]![0])).toContain(
+      "last_heartbeat_at >= now() - interval '15 seconds'",
+    );
   });
 
   it('rejects hosted LIVE during the pilot before creating a connector', async () => {
@@ -112,7 +146,9 @@ describe('HostedMt5Service', () => {
   it('fails closed when the encrypted hosted credentials do not contain both password and broker server', async () => {
     const query = jest.fn().mockResolvedValueOnce([demoConnection]);
     const encryption = {
-      decrypt: jest.fn().mockReturnValue({ accountId: '113392789', apiSecret: '', additionalParams: {} }),
+      decrypt: jest
+        .fn()
+        .mockReturnValue({ accountId: '113392789', apiSecret: '', additionalParams: {} }),
     } as any;
     const service = new HostedMt5Service(
       { query } as unknown as DataSource,

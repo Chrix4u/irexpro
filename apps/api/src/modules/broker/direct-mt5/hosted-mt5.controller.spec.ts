@@ -41,15 +41,14 @@ describe('Hosted MT5 controllers', () => {
     await expect(
       controller.lease('Bearer infrastructure-token', { workerId: 'worker-accra-1' } as any),
     ).resolves.toMatchObject({ connectorId: 'connector-1' });
-    expect(hosted.leaseAssignment).toHaveBeenCalledWith(
-      'worker-accra-1',
-      'infrastructure-token',
-    );
+    expect(hosted.leaseAssignment).toHaveBeenCalledWith('worker-accra-1', 'infrastructure-token');
   });
 
   it('renews the exact worker assignment with a bounded status code', async () => {
     const hosted = {
-      heartbeatAssignment: jest.fn().mockResolvedValue({ connectorId: 'connector-1', renewed: true }),
+      heartbeatAssignment: jest
+        .fn()
+        .mockResolvedValue({ connectorId: 'connector-1', renewed: true }),
     } as any;
     const controller = new HostedMt5WorkerController(hosted);
 

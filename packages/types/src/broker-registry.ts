@@ -136,7 +136,8 @@ export type BrokerConnectionReadinessCode =
   | 'PLATFORM_CREDENTIALS_REQUIRED'
   | 'PROVIDER_APP_APPROVAL_REQUIRED'
   | 'OAUTH_REDIRECT_REQUIRED'
-  | 'MOBILE_OAUTH_CALLBACK_REQUIRED';
+  | 'MOBILE_OAUTH_CALLBACK_REQUIRED'
+  | 'HOSTED_MT5_NOT_READY';
 
 export interface BrokerConnectionChannelReadiness {
   ready: boolean;
@@ -175,6 +176,8 @@ export interface BrokerRegistryEntry {
   adapterAvailable: boolean;
   /** Default/web prerequisites; OAuth clients use channel overrides when present. */
   connectionReadiness?: BrokerConnectionReadiness;
+  /** Server-authoritative availability of iRexPro-owned MT5 execution workers. */
+  hostedMt5Readiness?: BrokerConnectionChannelReadiness;
 }
 
 export interface BrokerRegistryCatalog {

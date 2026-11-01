@@ -105,3 +105,33 @@ def test_hosted_terminal_rejects_partial_explicit_login_configuration_before_mt5
     with pytest.raises(Mt5TerminalFatalError, match="server"):
         terminal.initialize()
     assert fake.initialize_calls == []
+
+
+def test_hosted_terminal_never_echoes_provider_error_text_after_explicit_login_failure() -> None:
+    secret = "super-secret-mt5-password"
+
+    class FailingExplicitLoginMt5(InitializingFakeMt5):
+        def initialize(self, *args, **kwargs):
+            self.initialize_calls.append((args, kwargs))
+            return False
+
+        def last_error(self):
+            return (401, f"login rejected password={secret}")
+
+    fake = FailingExplicitLoginMt5()
+    terminal = MetaQuotesMt5Terminal(
+        r"C:\\iRexPro\\sessions\\connector-1\\terminal64.exe",
+        login="113392789",
+        password=secret,
+        server="Broker-Demo",
+        portable=True,
+    )
+    terminal._mt5 = fake
+
+    with pytest.raises(Mt5TerminalError) as caught:
+        terminal.initialize()
+
+    message = str(caught.value)
+    assert "MT5 hosted login failed" in message
+    assert secret not in message
+    assert "password=" not in message

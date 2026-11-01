@@ -145,8 +145,15 @@ class MetaQuotesMt5Terminal:
         else:
             ok = mt5.initialize(self.terminal_path) if self.terminal_path else mt5.initialize()
         if not ok:
-            # MetaQuotes' last_error does not normally contain the password, and
-            # we never include our credential inputs in this message.
+            if explicit_login:
+                # Hosted login crosses a credential boundary. Treat provider error
+                # text as untrusted because a broker/runtime could echo submitted
+                # fields. Preserve only a numeric code when one is available.
+                raw_error = mt5.last_error()
+                code = raw_error[0] if isinstance(raw_error, (tuple, list)) and raw_error else None
+                safe_code = code if isinstance(code, int) else None
+                suffix = f" (code {safe_code})" if safe_code is not None else ""
+                raise Mt5TerminalError(f"MT5 hosted login failed{suffix}")
             raise Mt5TerminalError(f"MT5 initialize failed: {mt5.last_error()}")
         try:
             return self.identity()

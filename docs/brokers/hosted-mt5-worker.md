@@ -32,12 +32,13 @@ When upgrading a broker terminal, validate a new clean template first. Do not re
 
 ## Configuration
 
-The worker reads these values from environment/configuration:
+The hosted-MT5 deployment uses these API/worker environment values. `HOSTED_MT5_ENABLED` is read by the API; the remaining worker settings are consumed on the Windows host:
 
 | Setting | Purpose | Default |
 | --- | --- | --- |
 | `IREXPRO_API_URL` | iRexPro API base URL, normally `https://<host>/api/v1` | none |
 | `HOSTED_MT5_WORKER_ID` | Stable infrastructure worker identity | none |
+| `HOSTED_MT5_ENABLED` | API rollout gate. Keep `false` until the Windows worker passes readiness/UAT | `false` |
 | `HOSTED_MT5_WORKER_TOKEN` | 32+ character infrastructure bearer secret | none |
 | `HOSTED_MT5_TEMPLATE_DIR` | Clean MT5 template directory | none |
 | `HOSTED_MT5_SESSION_ROOT` | Per-account session root | none |
@@ -111,5 +112,7 @@ Re-provisioning an already healthy hosted connection is idempotent: iRexPro retu
 ## Capacity and rollout
 
 Start the pilot with a conservative `HOSTED_MT5_MAX_SESSIONS` and measure per-terminal CPU, working set, disk IO and broker connectivity before increasing density. Scale horizontally with additional Windows workers rather than assuming one VM can safely host an arbitrary number of MT5 terminals.
+
+Before setting `HOSTED_MT5_ENABLED=true`, perform Windows DEMO UAT that proves terminal startup, account identity, order/reconciliation, worker restart, child crash, and terminal-process cleanup. MetaQuotes documents `initialize()` as able to launch the terminal and `shutdown()` as closing the Python connection; it does not promise that `shutdown()` terminates the desktop terminal process. The rollout gate must therefore remain false until UAT confirms no orphan/duplicate terminal can survive a session replacement, worker shutdown, or crash. If the tested broker build leaves the terminal process running, add OS-level process ownership/cleanup for the exact per-session executable before enabling Hosted MT5.
 
 Before enabling customer LIVE accounts, complete a separate hosted-LIVE certification covering real broker identity, canary exposure, restart/takeover, stale-lease fencing, exactly-once mutation recovery, kill-switch behavior and post-trade reconciliation. The existing hosted code intentionally rejects LIVE provisioning until that evidence exists.

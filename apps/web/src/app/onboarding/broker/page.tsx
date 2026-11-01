@@ -96,7 +96,8 @@ export default function OnboardingBrokerPage() {
   const [apiSecret, setApiSecret] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [testResult, setTestResult] = useState<BrokerTestResult | null>(null);
-  const [mt5ConnectionMethod, setMt5ConnectionMethod] = useState<Mt5ConnectionMethod>('HOSTED');
+  // Fail closed until the server registry explicitly reports hosted-worker readiness.
+  const [mt5ConnectionMethod, setMt5ConnectionMethod] = useState<Mt5ConnectionMethod>('DIRECT');
   const [directMt5Environment, setDirectMt5Environment] = useState<DirectMt5Environment>('DEMO');
   const [hostedMt5BrokerServer, setHostedMt5BrokerServer] = useState('');
   const [hostedMt5Password, setHostedMt5Password] = useState('');
@@ -127,7 +128,14 @@ export default function OnboardingBrokerPage() {
             (e) => e.adapterAvailable && e.id !== 'metatrader5',
           );
           const preferred = selectable.find((e) => e.id === 'direct-mt5') ?? selectable[0];
-          if (preferred) setSelectedBrokerId(preferred.id);
+          if (preferred) {
+            setSelectedBrokerId(preferred.id);
+            if (preferred.id === 'direct-mt5') {
+              setMt5ConnectionMethod(
+                preferred.hostedMt5Readiness?.ready === true ? 'HOSTED' : 'DIRECT',
+              );
+            }
+          }
         } else if (brokers.length > 0) {
           setSelectedBrokerId(brokers[0].brokerId);
         }
@@ -313,6 +321,14 @@ export default function OnboardingBrokerPage() {
     }
 
     if (mt5ConnectionMethod === 'HOSTED') {
+      if (!hostedMt5Ready) {
+        const message =
+          hostedMt5Readiness?.message ??
+          'iRexPro Hosted MT5 is not available on this server yet. Use the passwordless Direct Connector.';
+        setError(message);
+        notify.warning(message);
+        return;
+      }
       if (directMt5Environment !== 'DEMO') {
         const message = 'iRexPro Hosted MT5 is DEMO-only until hosted execution certification is complete.';
         setError(message);
@@ -591,6 +607,8 @@ export default function OnboardingBrokerPage() {
     directMt5RegistryEntry?.adapterAvailable === true &&
     directMt5RegistryEntry.environments.includes('LIVE') &&
     directMt5CertificationState === 'CERTIFIED';
+  const hostedMt5Readiness = directMt5RegistryEntry?.hostedMt5Readiness ?? null;
+  const hostedMt5Ready = hostedMt5Readiness?.ready === true;
   const selectedIsOAuth = selectedRegistryEntry?.authenticationType === 'OAUTH';
   const selectedIsDirectMt5 = selectedBrokerId === 'direct-mt5';
   const selectedConnectionReadiness = selectedRegistryEntry?.connectionReadiness;
@@ -606,6 +624,14 @@ export default function OnboardingBrokerPage() {
   }
 
   function switchToHostedMt5() {
+    if (!hostedMt5Ready) {
+      const message =
+        hostedMt5Readiness?.message ??
+        'iRexPro Hosted MT5 is not available on this server yet. Use the passwordless Direct Connector.';
+      setError(message);
+      notify.warning(message);
+      return;
+    }
     setMt5ConnectionMethod('HOSTED');
     if (registryEntries.some((entry) => entry.id === 'direct-mt5' && entry.adapterAvailable)) {
       setSelectedBrokerId('direct-mt5');
@@ -842,8 +868,14 @@ export default function OnboardingBrokerPage() {
               className="input"
               value={selectedBrokerId}
               onChange={(e) => {
-                setSelectedBrokerId(e.target.value);
-                setMt5ConnectionMethod('HOSTED');
+                const nextBrokerId = e.target.value;
+                setSelectedBrokerId(nextBrokerId);
+                const directEntry = registryEntries.find((entry) => entry.id === 'direct-mt5');
+                setMt5ConnectionMethod(
+                  nextBrokerId === 'direct-mt5' && directEntry?.hostedMt5Readiness?.ready === true
+                    ? 'HOSTED'
+                    : 'DIRECT',
+                );
                 setDirectMt5Environment('DEMO');
                 setDirectMt5ConnectionId(null);
                 setDirectMt5Pairing(null);
@@ -926,8 +958,9 @@ export default function OnboardingBrokerPage() {
                     variant={mt5ConnectionMethod === 'HOSTED' ? 'primary' : 'secondary'}
                     aria-pressed={mt5ConnectionMethod === 'HOSTED'}
                     onClick={switchToHostedMt5}
+                    disabled={!hostedMt5Ready || loading}
                   >
-                    iRexPro Hosted — Recommended
+                    {hostedMt5Ready ? 'iRexPro Hosted — Recommended' : 'iRexPro Hosted — Not available yet'}
                   </Button>
                   <Button
                     type="button"
@@ -938,6 +971,11 @@ export default function OnboardingBrokerPage() {
                     Direct Connector — Passwordless
                   </Button>
                 </div>
+                {!hostedMt5Ready && hostedMt5Readiness?.message && (
+                  <p className="helper-text" style={{ marginTop: 'var(--space-2)' }}>
+                    {hostedMt5Readiness.message}
+                  </p>
+                )}
               </div>
 
               {mt5ConnectionMethod === 'HOSTED' ? (

@@ -20,7 +20,8 @@ export type BrokerConnectionReadinessCode =
   | 'PLATFORM_CREDENTIALS_REQUIRED'
   | 'PROVIDER_APP_APPROVAL_REQUIRED'
   | 'OAUTH_REDIRECT_REQUIRED'
-  | 'MOBILE_OAUTH_CALLBACK_REQUIRED';
+  | 'MOBILE_OAUTH_CALLBACK_REQUIRED'
+  | 'HOSTED_MT5_NOT_READY';
 
 export interface BrokerConnectionChannelReadiness {
   ready: boolean;
@@ -70,6 +71,8 @@ export interface BrokerRegistryEntry {
   adapterAvailable: boolean;
   /** Default/web prerequisites; OAuth clients use channel overrides when present. */
   connectionReadiness: BrokerConnectionReadiness;
+  /** Hosted-MT5 rollout readiness; absent for unrelated providers. */
+  hostedMt5Readiness?: BrokerConnectionChannelReadiness;
 }
 
 /**
@@ -128,8 +131,44 @@ export class BrokerProviderRegistryService {
         regions: [...entry.regions],
         adapterAvailable,
         connectionReadiness: this.connectionReadiness(entry.adapterId, adapterAvailable),
+        hostedMt5Readiness:
+          entry.id === 'direct-mt5' ? this.hostedMt5Readiness(adapterAvailable) : undefined,
       };
     });
+  }
+
+  private hostedMt5Readiness(adapterAvailable: boolean): BrokerConnectionChannelReadiness {
+    if (!adapterAvailable) {
+      return {
+        ready: false,
+        code: 'ADAPTER_UNAVAILABLE',
+        message: 'Hosted MT5 is unavailable because the Direct MT5 adapter is not active.',
+      };
+    }
+    const enabled =
+      this.configService?.get<boolean>('broker.hostedMt5Enabled') ??
+      process.env.HOSTED_MT5_ENABLED === 'true';
+    const workerToken =
+      this.configService?.get<string>('broker.hostedMt5WorkerToken') ??
+      process.env.HOSTED_MT5_WORKER_TOKEN ??
+      '';
+    if (!enabled) {
+      return {
+        ready: false,
+        code: 'HOSTED_MT5_NOT_READY',
+        message:
+          'iRexPro Hosted MT5 is not enabled on this server yet. Use the passwordless Direct Connector.',
+      };
+    }
+    if (workerToken.length < 32) {
+      return {
+        ready: false,
+        code: 'HOSTED_MT5_NOT_READY',
+        message:
+          'iRexPro Hosted MT5 is awaiting execution-worker configuration. Use the passwordless Direct Connector.',
+      };
+    }
+    return { ready: true, code: 'READY', message: null };
   }
 
   private connectionReadiness(

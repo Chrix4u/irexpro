@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -56,6 +57,7 @@ type HostedLeaseRow = HostedConnectionRow & {
 
 @Injectable()
 export class HostedMt5Service {
+  private readonly hostedEnabled: boolean;
   private readonly workerToken: string;
 
   constructor(
@@ -64,12 +66,19 @@ export class HostedMt5Service {
     private readonly pairingService: DirectMt5PairingService,
     configService: ConfigService,
   ) {
+    this.hostedEnabled =
+      configService.get<boolean>('broker.hostedMt5Enabled') ??
+      configService.get<string>('HOSTED_MT5_ENABLED', 'false') === 'true';
     this.workerToken =
       configService.get<string>('broker.hostedMt5WorkerToken') ??
       configService.get<string>('HOSTED_MT5_WORKER_TOKEN', '');
   }
 
-  async provision(userId: string, brokerConnectionId: string): Promise<HostedMt5ProvisioningResult> {
+  async provision(
+    userId: string,
+    brokerConnectionId: string,
+  ): Promise<HostedMt5ProvisioningResult> {
+    this.assertHostedEnabled();
     const rows = (await this.dataSource.query(
       `
         SELECT bc.id, bc.user_id, bc.broker_id, bc.account_id, bc.account_type,
@@ -94,7 +103,9 @@ export class HostedMt5Service {
     const connection = rows[0];
     if (!connection) throw new NotFoundException('Broker connection not found');
     if (connection.broker_id !== 'direct-mt5') {
-      throw new BadRequestException('Hosted execution is available only for Direct MT5 connections');
+      throw new BadRequestException(
+        'Hosted execution is available only for Direct MT5 connections',
+      );
     }
     if (connection.account_type !== 'DEMO') {
       throw new ForbiddenException(
@@ -196,6 +207,7 @@ export class HostedMt5Service {
     workerId: string,
     rawWorkerToken: string,
   ): Promise<HostedMt5WorkerAssignment | null> {
+    this.assertHostedEnabled();
     this.assertWorkerToken(rawWorkerToken);
     this.assertWorkerId(workerId);
 
@@ -234,7 +246,9 @@ export class HostedMt5Service {
       try {
         const { tradingPassword, brokerServer } = this.requireHostedCredentials(credentials);
         if (!row.broker_server || row.broker_server !== brokerServer) {
-          throw new ConflictException('Hosted MT5 broker server binding does not match stored credentials');
+          throw new ConflictException(
+            'Hosted MT5 broker server binding does not match stored credentials',
+          );
         }
         const connectorToken = randomBytes(32).toString('base64url');
         const tokenHash = this.pairingService.digestToken(connectorToken);
@@ -290,6 +304,7 @@ export class HostedMt5Service {
     rawWorkerToken: string,
     errorCode?: string | null,
   ): Promise<{ connectorId: string; renewed: true }> {
+    this.assertHostedEnabled();
     this.assertWorkerToken(rawWorkerToken);
     this.assertWorkerId(workerId);
     const normalizedError = errorCode?.trim() || null;
@@ -312,7 +327,8 @@ export class HostedMt5Service {
       `,
       [connectorId, workerId, normalizedError],
     )) as Array<{ id: string }>;
-    if (!rows[0]) throw new ConflictException('Hosted MT5 worker lease is not owned or has expired');
+    if (!rows[0])
+      throw new ConflictException('Hosted MT5 worker lease is not owned or has expired');
     return { connectorId: rows[0].id, renewed: true };
   }
 
@@ -344,6 +360,14 @@ export class HostedMt5Service {
       );
     }
     return { tradingPassword, brokerServer };
+  }
+
+  private assertHostedEnabled(): void {
+    if (!this.hostedEnabled || this.workerToken.length < 32) {
+      throw new ServiceUnavailableException(
+        'iRexPro Hosted MT5 is not enabled on this server; use the passwordless Direct Connector',
+      );
+    }
   }
 
   private assertWorkerToken(rawToken: string): void {

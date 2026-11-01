@@ -362,7 +362,13 @@ class HostedMt5WorkerSupervisor:
                 active.last_worker_heartbeat = now
 
         while len(self._active) < self.config.max_sessions:
-            assignment = self.api.lease_assignment()
+            try:
+                assignment = self.api.lease_assignment()
+            except (HostWorkerApiError, requests.RequestException):
+                # Losing the control plane must not tear down healthy MT5 children.
+                # Existing connector heartbeats continue independently and the
+                # server-side worker lease expires fail-closed if renewal is lost.
+                break
             if assignment is None:
                 break
             self._launch_assignment(assignment, now)
@@ -379,7 +385,7 @@ class HostedMt5WorkerSupervisor:
                 pass
             self._active.pop(connector_id, None)
 
-    def _launch_assignment(self, assignment: HostedAssignment, now: float) -> None:
+    def _launch_assignment(self, assignment: HostedAssignment, now: float) -> bool:
         connector_id = assignment.connector_id
         try:
             session_dir = prepare_session_directory(
@@ -403,12 +409,15 @@ class HostedMt5WorkerSupervisor:
                 session_dir=session_dir,
                 last_worker_heartbeat=now,
             )
+            return True
         except Exception:
             try:
                 self.api.heartbeat_assignment(connector_id, error_code="SESSION_LAUNCH_FAILED")
             except Exception:
                 pass
-            raise
+            # One malformed/broken assignment must not terminate unrelated
+            # healthy customer sessions on this execution worker.
+            return False
         finally:
             assignment.clear_secrets()
 

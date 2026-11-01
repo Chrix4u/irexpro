@@ -95,6 +95,7 @@ const directMt5RegistryEntry = {
   },
   certificationState: 'NOT_CERTIFIED',
   connectionReadiness: { ready: true, code: 'READY', message: null },
+  hostedMt5Readiness: { ready: true, code: 'READY', message: null },
 };
 
 const legacyMetaApiRegistryEntry = {
@@ -151,6 +152,34 @@ describe('MetaTrader 5 onboarding', () => {
     expect(screen.getByLabelText('MT5 trading password')).not.toBeNull();
     expect(screen.getByLabelText('Broker server')).not.toBeNull();
     expect(screen.queryByText(/MetaApi/i)).toBeNull();
+  });
+
+  it('fails closed to the passwordless Direct Connector when hosted workers are not enabled', async () => {
+    listBrokerRegistry.mockResolvedValue({
+      brokers: [
+        {
+          ...directMt5RegistryEntry,
+          hostedMt5Readiness: {
+            ready: false,
+            code: 'HOSTED_MT5_NOT_READY',
+            message: 'Hosted MT5 is not enabled on this server yet.',
+          },
+        },
+        legacyMetaApiRegistryEntry,
+      ],
+    });
+
+    render(<OnboardingBrokerPage />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /Direct Connector — Passwordless/i }).getAttribute('aria-pressed'),
+      ).toBe('true'),
+    );
+    expect(screen.queryByLabelText('MT5 trading password')).toBeNull();
+    const hostedButton = screen.getByRole('button', { name: /iRexPro Hosted/i }) as HTMLButtonElement;
+    expect(hostedButton.disabled).toBe(true);
+    expect(screen.getByText(/not enabled on this server yet/i)).not.toBeNull();
   });
 
   it('creates an encrypted hosted DEMO connection, provisions it, and clears the password field', async () => {

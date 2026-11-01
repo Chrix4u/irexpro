@@ -6,6 +6,7 @@ import pytest
 
 from irexpro_mt5_connector.host_worker import (
     HostWorkerApi,
+    HostWorkerApiError,
     HostWorkerConfig,
     HostedAssignment,
     HostedMt5WorkerSupervisor,
@@ -183,7 +184,10 @@ class FakeWorkerApi:
 
     def lease_assignment(self):
         self.lease_calls += 1
-        return self.assignments.pop(0) if self.assignments else None
+        item = self.assignments.pop(0) if self.assignments else None
+        if isinstance(item, Exception):
+            raise item
+        return item
 
     def heartbeat_assignment(self, connector_id, error_code=None):
         self.heartbeats.append((connector_id, error_code))
@@ -247,6 +251,65 @@ def test_supervisor_reports_child_exit_with_bounded_code_then_allows_replacement
 
     assert ("connector-1", "SESSION_EXITED:7") in fake_api.heartbeats
     assert "connector-2" in supervisor.active_connector_ids
+
+
+def test_supervisor_keeps_healthy_children_running_when_assignment_lease_api_is_temporarily_unavailable(tmp_path: Path):
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "terminal64.exe").write_bytes(b"fixture")
+    fake_api = FakeWorkerApi([assignment(), HostWorkerApiError("temporary control-plane outage")])
+    child = FakeChild()
+
+    config = HostWorkerConfig(
+        server_url="https://api.example.test/api/v1",
+        worker_id="worker-accra-1",
+        worker_token="w" * 32,
+        mt5_template_dir=template,
+        session_root=tmp_path / "sessions",
+        max_sessions=2,
+        heartbeat_seconds=60,
+    )
+    supervisor = HostedMt5WorkerSupervisor(config, api=fake_api, launcher=lambda _spec: child)
+
+    supervisor.tick()
+
+    assert supervisor.active_connector_ids == ("connector-1",)
+    assert child.terminated is False
+    assert fake_api.lease_calls == 2
+
+
+def test_supervisor_isolates_one_assignment_launch_failure_from_existing_sessions(tmp_path: Path):
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "terminal64.exe").write_bytes(b"fixture")
+    second = HostedAssignment.from_payload({**assignment_dict(), "connectorId": "connector-2"})
+    fake_api = FakeWorkerApi([assignment(), second, None])
+    healthy_child = FakeChild()
+    launch_calls = 0
+
+    def launcher(_spec):
+        nonlocal launch_calls
+        launch_calls += 1
+        if launch_calls == 1:
+            return healthy_child
+        raise RuntimeError("broken MT5 template")
+
+    config = HostWorkerConfig(
+        server_url="https://api.example.test/api/v1",
+        worker_id="worker-accra-1",
+        worker_token="w" * 32,
+        mt5_template_dir=template,
+        session_root=tmp_path / "sessions",
+        max_sessions=2,
+        heartbeat_seconds=60,
+    )
+    supervisor = HostedMt5WorkerSupervisor(config, api=fake_api, launcher=launcher)
+
+    supervisor.tick()
+
+    assert supervisor.active_connector_ids == ("connector-1",)
+    assert healthy_child.terminated is False
+    assert ("connector-2", "SESSION_LAUNCH_FAILED") in fake_api.heartbeats
 
 
 def test_pilot_runtime_is_windows_only():

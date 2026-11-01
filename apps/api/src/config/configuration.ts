@@ -87,6 +87,7 @@ export default () => ({
     encryptionKey: process.env.BROKER_ENCRYPTION_KEY,
     metaApiToken: process.env.METAAPI_TOKEN,
     directMt5ConnectorPepper: process.env.DIRECT_MT5_CONNECTOR_PEPPER,
+    hostedMt5Enabled: process.env.HOSTED_MT5_ENABLED === 'true',
     hostedMt5WorkerToken: process.env.HOSTED_MT5_WORKER_TOKEN,
     // Sprint 56 / Task 48-B — platform cTrader Open API app credentials.
     // OPTIONAL: without them the cTrader adapter still registers (the catalog
