@@ -80,6 +80,11 @@ jobs:
             throw "Frozen iRexPro MT5 Host Worker self-test failed with exit code $($process.ExitCode)"
           }
 
+      - name: Validate hosted worker bootstrap syntax
+        working-directory: services/mt5-connector
+        run: |
+          $null = [scriptblock]::Create((Get-Content -Raw "packaging\install-host-worker.ps1"))
+
       - name: Resolve and validate connector version
         id: connector_version
         working-directory: services/mt5-connector
@@ -126,5 +131,6 @@ jobs:
             services/mt5-connector/packaging/output/iRexPro-MT5-Connector-Setup.exe
             services/mt5-connector/packaging/output/iRexPro-MT5-Connector-Portable.exe
             services/mt5-connector/packaging/output/iRexPro-MT5-Host-Worker.exe
+            services/mt5-connector/packaging/install-host-worker.ps1
             services/mt5-connector/packaging/output/SHA256SUMS.txt
           retention-days: 30

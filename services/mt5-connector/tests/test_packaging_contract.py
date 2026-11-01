@@ -92,6 +92,31 @@ def test_windows_packaging_includes_dedicated_host_worker_executable_without_sec
     assert "--worker-token" not in host_worker_text
 
 
+def test_host_worker_bootstrap_keeps_worker_token_out_of_args_and_plaintext_files() -> None:
+    bootstrap = CONNECTOR / "packaging" / "install-host-worker.ps1"
+    workflow = ROOT / ".github" / "workflows" / "mt5-connector-windows-release.yml"
+
+    assert bootstrap.exists()
+    text = bootstrap.read_text(encoding="utf-8")
+    workflow_text = workflow.read_text(encoding="utf-8")
+
+    assert "Read-Host" in text
+    assert "-AsSecureString" in text
+    assert "--store-worker-token" in text
+    assert "--readiness-check" in text
+    assert "Register-ScheduledTask" in text
+    assert "New-ScheduledTaskTrigger" in text
+    assert "-AtLogOn" in text
+    assert "Start-ScheduledTask" in text
+    assert "icacls" in text
+    assert "HOSTED_MT5_WORKER_TOKEN=" not in text
+    assert "--worker-token" not in text
+    assert "Set-Content" not in text
+    assert "Out-File" not in text
+    assert "install-host-worker.ps1" in workflow_text
+    assert "Validate hosted worker bootstrap syntax" in workflow_text
+
+
 def test_project_exposes_windows_desktop_entry_point() -> None:
     pyproject = (CONNECTOR / "pyproject.toml").read_text(encoding="utf-8")
     assert '[project.gui-scripts]' in pyproject
