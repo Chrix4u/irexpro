@@ -179,9 +179,6 @@ def run_connector(
                     try:
                         result = _dispatch(terminal, command["commandType"], command["payload"])
                         done = journal.complete(command["commandId"], result)
-                        client.submit_result(
-                            settings, command["commandId"], state="SUCCEEDED", result=done.result
-                        )
                     except Exception as exc:
                         failed = journal.fail(command["commandId"], {"error": str(exc)})
                         client.submit_result(
@@ -190,6 +187,14 @@ def run_connector(
                             state="FAILED",
                             result=failed.result,
                             error=str(exc),
+                        )
+                    else:
+                        # Once MT5 succeeds and the journal is durably SUCCEEDED, a
+                        # network failure while reporting that success must bubble to
+                        # the supervisor. Never relabel a broker-successful mutation
+                        # as FAILED merely because the acknowledgement upload failed.
+                        client.submit_result(
+                            settings, command["commandId"], state="SUCCEEDED", result=done.result
                         )
             if not stop.is_set():
                 sleep_fn(max(0.25, settings.poll_seconds))

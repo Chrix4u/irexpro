@@ -270,3 +270,78 @@ def test_gui_background_launch_contract() -> None:
     gui = importlib.import_module("irexpro_mt5_connector.gui")
     assert gui.background_requested(["connector.exe", "--background"]) is True
     assert gui.background_requested(["connector.exe"]) is False
+
+
+def test_successful_mt5_mutation_is_never_relabelled_failed_when_result_upload_disconnects(tmp_path: Path) -> None:
+    import pytest
+    import requests
+    from irexpro_mt5_connector.journal import CommandJournal
+
+    runtime = importlib.import_module("irexpro_mt5_connector.runtime")
+    config_path = tmp_path / "connector.json"
+    journal_path = tmp_path / "journal.db"
+    ConnectorSettings(
+        server_url="https://irexpro.example",
+        connector_id="connector-1",
+        broker_connection_id="connection-1",
+        account_login="12345",
+        broker_server="Broker-Demo",
+        account_type="DEMO",
+    ).save(config_path)
+
+    class TradingTerminal(FakeTerminal):
+        def place_order(self, payload):
+            return {"ticket": "1001", "symbol": payload["symbol"]}
+
+    class DisconnectingResultClient:
+        def __init__(self):
+            self.leased = False
+            self.result_states: list[str] = []
+
+        def _assert_identity(self, _settings, _identity):
+            return None
+
+        def heartbeat(self, _settings, _identity, _sequence):
+            return None
+
+        def lease_next_command(self, _settings):
+            if self.leased:
+                return None
+            self.leased = True
+            return {
+                "commandId": "cmd-1",
+                "idempotencyKey": "intent-1",
+                "commandType": "PLACE_ORDER",
+                "connectorId": "connector-1",
+                "brokerConnectionId": "connection-1",
+                "accountLogin": "12345",
+                "brokerServer": "Broker-Demo",
+                "accountType": "DEMO",
+                "payload": {"symbol": "EURUSD", "side": "BUY", "volume": "0.20"},
+            }
+
+        def submit_result(self, _settings, _command_id, *, state, result, error=None):
+            self.result_states.append(state)
+            raise requests.ConnectionError("internet dropped while reporting result")
+
+    client = DisconnectingResultClient()
+    with pytest.raises(requests.ConnectionError, match="internet dropped"):
+        runtime.run_connector(
+            config_path=config_path,
+            journal_path=journal_path,
+            stop_event=threading.Event(),
+            terminal_factory=lambda _path: TradingTerminal(),
+            client_factory=lambda _url, _store: client,
+            secret_store_factory=lambda: object(),
+            sleep_fn=lambda _seconds: None,
+        )
+
+    journal = CommandJournal(journal_path)
+    try:
+        entry = journal.get_by_command_id("cmd-1")
+        assert entry is not None
+        assert entry.state == "SUCCEEDED"
+        assert entry.result == {"ticket": "1001", "symbol": "EURUSD"}
+    finally:
+        journal.close()
+    assert client.result_states == ["SUCCEEDED"]
