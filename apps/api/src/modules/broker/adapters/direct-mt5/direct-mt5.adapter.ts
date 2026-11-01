@@ -37,7 +37,7 @@ const req = {
 @Injectable()
 export class DirectMt5Adapter implements IBrokerAdapter {
   readonly brokerId = 'direct-mt5';
-  readonly brokerName = 'MetaTrader 5 — Direct Terminal';
+  readonly brokerName = 'MetaTrader 5 — Native Execution';
   readonly supportsDemo = true;
   private mode: BrokerMode = BrokerMode.DEMO;
   private connected = false;

@@ -1,6 +1,9 @@
 import { ConfigService } from '@nestjs/config';
 import type { DataSource } from 'typeorm';
-import { DirectMt5PairingService } from './direct-mt5-pairing.service';
+import {
+  DirectMt5PairingService,
+  type DirectMt5ConnectorHostMode,
+} from './direct-mt5-pairing.service';
 
 describe('DirectMt5PairingService', () => {
   const config = {
@@ -23,6 +26,18 @@ describe('DirectMt5PairingService', () => {
     const params = query.mock.calls[1]![1] as unknown[];
     expect(sql).toContain('host_mode');
     expect(params).toContain('WINDOWS_VPS');
+  });
+
+  it('recognizes IREXPRO_HOSTED as an internal host mode but rejects it on the customer pairing path', async () => {
+    const hostedMode: DirectMt5ConnectorHostMode = 'IREXPRO_HOSTED';
+    const service = new DirectMt5PairingService(
+      { query: jest.fn() } as unknown as DataSource,
+      config,
+    );
+
+    await expect(service.createPairing('user-1', 'connection-1', hostedMode)).rejects.toThrow(
+      /host mode/i,
+    );
   });
 
   it('defaults new Direct MT5 pairings to PERSONAL_PC and rejects unknown host modes', async () => {

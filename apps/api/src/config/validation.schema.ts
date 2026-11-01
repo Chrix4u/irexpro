@@ -73,6 +73,11 @@ export const validationSchema = Joi.object({
   // pairing/token operations fail closed unless a >=32 character secret is configured.
   DIRECT_MT5_CONNECTOR_PEPPER: Joi.string().min(32).optional().allow(''),
 
+  // Hosted MT5 is an operator-controlled rollout. It stays fail-closed until
+  // both the feature gate and a 32+ character worker bearer secret are set.
+  HOSTED_MT5_ENABLED: Joi.string().valid('true', 'false').default('false'),
+  HOSTED_MT5_WORKER_TOKEN: Joi.string().min(32).optional().allow(''),
+
   // Round 7 (R7-impl-harness) — operator-only PRODUCTION-LIVE certification
   // master gate (IREXPRO_ALLOW_LIVE_CERTIFICATION). OPTIONAL and FAIL-CLOSED:
   // the configuration maps ONLY the EXACT string 'true' to enabled; absent,

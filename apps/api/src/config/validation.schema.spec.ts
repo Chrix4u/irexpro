@@ -34,6 +34,33 @@ describe('production authentication configuration validation', () => {
     expect(error).toBeUndefined();
   });
 
+  it('rejects a configured hosted MT5 worker token shorter than 32 characters', () => {
+    const { error } = validationSchema.validate({
+      ...productionBase,
+      MFA_ENCRYPTION_KEY: 'm'.repeat(32),
+      HOSTED_MT5_WORKER_TOKEN: 'too-short',
+    });
+    expect(error?.message).toContain('HOSTED_MT5_WORKER_TOKEN');
+  });
+
+  it('accepts a configured 32+ character hosted MT5 worker token', () => {
+    const { error } = validationSchema.validate({
+      ...productionBase,
+      MFA_ENCRYPTION_KEY: 'm'.repeat(32),
+      HOSTED_MT5_WORKER_TOKEN: 'w'.repeat(32),
+    });
+    expect(error).toBeUndefined();
+  });
+
+  it('allows hosted MT5 worker mode to remain disabled with a blank token', () => {
+    const { error } = validationSchema.validate({
+      ...productionBase,
+      MFA_ENCRYPTION_KEY: 'm'.repeat(32),
+      HOSTED_MT5_WORKER_TOKEN: '',
+    });
+    expect(error).toBeUndefined();
+  });
+
   it('rejects production boot when AUTH_VERIFICATION_PEPPER is absent', () => {
     const { error } = validationSchema.validate({
       ...productionBase,

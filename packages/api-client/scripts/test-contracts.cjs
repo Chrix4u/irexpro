@@ -497,6 +497,47 @@ async function testExchangeBrokerOAuthHandoffContract() {
   assert.equal(init.headers["Content-Type"], "application/json");
 }
 
+async function testHostedMt5ProvisioningContract() {
+  const calls = [];
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({
+        brokerConnectionId: "conn/hosted 1",
+        connectorId: "connector-hosted-1",
+        hostMode: "IREXPRO_HOSTED",
+        state: "PAIRING",
+      }),
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: "https://api.example.test/api/v1",
+    getAccessToken: () => "fixture-access-token",
+  });
+
+  const result = await client.provisionHostedMt5("conn/hosted 1");
+  assert.deepEqual(result, {
+    brokerConnectionId: "conn/hosted 1",
+    connectorId: "connector-hosted-1",
+    hostMode: "IREXPRO_HOSTED",
+    state: "PAIRING",
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0].url,
+    "https://api.example.test/api/v1/broker/direct-mt5/hosted/conn%2Fhosted%201/provision",
+  );
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.headers.Authorization, "Bearer fixture-access-token");
+  assert.equal(JSON.stringify(result).includes("tradingPassword"), false);
+  assert.equal(JSON.stringify(result).includes("connectorToken"), false);
+}
+
 async function testDirectMt5OnboardingContracts() {
   const calls = [];
   const responses = [
@@ -1098,6 +1139,8 @@ async function main() {
   console.log("api-client oauth handoff contract test passed.");
   await testDirectMt5OnboardingContracts();
   console.log("api-client direct MT5 onboarding contracts test passed.");
+  await testHostedMt5ProvisioningContract();
+  console.log("api-client hosted MT5 provisioning contract test passed.");
   await testActiveTradingSessionContract();
   console.log("api-client active-trading-session contract test passed.");
   await testAutomationRuntimeStatusContract();

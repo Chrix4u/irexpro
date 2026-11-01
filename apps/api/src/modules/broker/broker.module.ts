@@ -45,6 +45,8 @@ import { TwelveDataFastMarkStreamService } from './services/twelve-data-fast-mar
 import { DerivPublicFxStreamService } from './services/deriv-public-fx-stream.service';
 import { DirectMt5PairingService } from './direct-mt5/direct-mt5-pairing.service';
 import { DirectMt5CommandService } from './direct-mt5/direct-mt5-command.service';
+import { HostedMt5Service } from './direct-mt5/hosted-mt5.service';
+import { HostedMt5Controller, HostedMt5WorkerController } from './direct-mt5/hosted-mt5.controller';
 
 /**
  * BrokerModule — Pluggable broker integration layer with health monitoring.
@@ -96,6 +98,8 @@ import { DirectMt5CommandService } from './direct-mt5/direct-mt5-command.service
     PortfolioController,
     DirectMt5PairingController,
     DirectMt5ConnectorController,
+    HostedMt5Controller,
+    HostedMt5WorkerController,
   ],
   providers: [
     { provide: BrokerService, useClass: ExecutionAwareBrokerService },
@@ -109,6 +113,7 @@ import { DirectMt5CommandService } from './direct-mt5/direct-mt5-command.service
     DerivPublicFxStreamService,
     DirectMt5PairingService,
     DirectMt5CommandService,
+    HostedMt5Service,
     PortfolioReadService,
     // Sprint 56 / Task 48-D — evidence-based write path for
     // BrokerConnection.demoValidated

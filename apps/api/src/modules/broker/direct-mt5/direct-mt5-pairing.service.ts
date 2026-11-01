@@ -15,7 +15,7 @@ const PAIRING_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const DIRECT_MT5_HEARTBEAT_STALE_MS = 15_000;
 
 export type DirectMt5ConnectorState = 'UNPAIRED' | 'PAIRING' | 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
-export type DirectMt5ConnectorHostMode = 'PERSONAL_PC' | 'WINDOWS_VPS';
+export type DirectMt5ConnectorHostMode = 'PERSONAL_PC' | 'WINDOWS_VPS' | 'IREXPRO_HOSTED';
 export type DirectMt5ConnectorHealthReason =
   | 'READY'
   | 'NOT_PAIRED'

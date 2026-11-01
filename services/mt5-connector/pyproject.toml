@@ -20,6 +20,7 @@ test = ["pytest>=8.3,<9"]
 
 [project.scripts]
 irexpro-mt5-connector = "irexpro_mt5_connector.main:main"
+irexpro-mt5-host-worker = "irexpro_mt5_connector.host_worker:main"
 
 [project.gui-scripts]
 irexpro-mt5-desktop = "irexpro_mt5_connector.gui:main"

@@ -55,9 +55,9 @@ export const CTRADER_FAMILY_BROKER_IDS: readonly string[] = [
 export const BROKER_CATALOG: readonly BrokerDefinition[] = [
   {
     id: 'direct-mt5',
-    name: 'MetaTrader 5 — Direct Terminal',
+    name: 'MetaTrader 5 — Native Execution',
     description:
-      'Native bridge for an already logged-in Windows MetaTrader 5 DEMO or LIVE account. No MetaAPI cloud account or broker password storage is required. LIVE remains fail-closed until the Direct MT5 production certification is attested.',
+      'Native MetaTrader 5 execution through either iRexPro-hosted infrastructure or the passwordless Direct Connector on a customer-controlled Windows host. Hosted execution is DEMO-only during certification; Direct LIVE remains fail-closed until current production evidence is attested.',
     adapterId: 'direct-mt5',
     status: BrokerAvailabilityStatus.BETA,
     productionLiveVerification: { status: 'UNVERIFIED' },

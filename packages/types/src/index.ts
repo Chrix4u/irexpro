@@ -686,6 +686,8 @@ export interface CreateBrokerConnectionRequest {
   apiSecret?: string;
   serverUrl?: string;
   displayName?: string;
+  /** Broker-specific write-only metadata stored inside the encrypted credential bundle. */
+  additionalParams?: Record<string, string>;
 }
 
 /** Result of POST /broker/connections/test (no persistence). */
@@ -695,7 +697,15 @@ export interface BrokerTestResult {
   errorMessage?: string;
 }
 
-export type DirectMt5ConnectorHostMode = "PERSONAL_PC" | "WINDOWS_VPS";
+export type DirectMt5ConnectorHostMode = "PERSONAL_PC" | "WINDOWS_VPS" | "IREXPRO_HOSTED";
+
+/** Frontend-safe result of provisioning MT5 on iRexPro-owned execution infrastructure. */
+export interface HostedMt5ProvisioningView {
+  brokerConnectionId: string;
+  connectorId: string;
+  hostMode: "IREXPRO_HOSTED";
+  state: "PAIRING";
+}
 
 /** Direct MT5 owner pairing code returned to authenticated onboarding clients. */
 export interface DirectMt5PairingView {
