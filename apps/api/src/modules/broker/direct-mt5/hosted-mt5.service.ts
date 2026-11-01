@@ -20,7 +20,7 @@ export interface HostedMt5ProvisioningResult {
   brokerConnectionId: string;
   connectorId: string;
   hostMode: 'IREXPRO_HOSTED';
-  state: 'PAIRING';
+  state: 'PAIRING' | 'ACTIVE';
 }
 
 export interface HostedMt5WorkerAssignment {
@@ -43,6 +43,9 @@ type HostedConnectionRow = {
   credential_iv: string | null;
   credential_tag: string | null;
   encryption_key_id: string | null;
+  hosted_connector_id?: string | null;
+  hosted_state?: string | null;
+  hosted_healthy?: boolean;
 };
 
 type HostedLeaseRow = HostedConnectionRow & {
@@ -69,12 +72,21 @@ export class HostedMt5Service {
   async provision(userId: string, brokerConnectionId: string): Promise<HostedMt5ProvisioningResult> {
     const rows = (await this.dataSource.query(
       `
-        SELECT id, user_id, broker_id, account_id, account_type,
-               encrypted_credentials, credential_iv, credential_tag, encryption_key_id
-        FROM broker.broker_connections
-        WHERE id = $1
-          AND user_id = $2
-          AND deleted_at IS NULL
+        SELECT bc.id, bc.user_id, bc.broker_id, bc.account_id, bc.account_type,
+               bc.encrypted_credentials, bc.credential_iv, bc.credential_tag, bc.encryption_key_id,
+               c.id AS hosted_connector_id, c.state AS hosted_state,
+               (
+                 c.host_mode = 'IREXPRO_HOSTED'
+                 AND c.state = 'ACTIVE'
+                 AND c.last_heartbeat_at >= now() - interval '15 seconds'
+                 AND c.host_lease_expires_at > now()
+               ) AS hosted_healthy
+        FROM broker.broker_connections bc
+        LEFT JOIN broker.direct_mt5_connectors c
+          ON c.broker_connection_id = bc.id
+        WHERE bc.id = $1
+          AND bc.user_id = $2
+          AND bc.deleted_at IS NULL
         LIMIT 1
       `,
       [brokerConnectionId, userId],
@@ -91,6 +103,14 @@ export class HostedMt5Service {
     }
     if (!connection.account_id || !/^\d+$/.test(connection.account_id)) {
       throw new BadRequestException('MT5 account login is invalid');
+    }
+    if (connection.hosted_healthy && connection.hosted_connector_id) {
+      return {
+        brokerConnectionId,
+        connectorId: connection.hosted_connector_id,
+        hostMode: 'IREXPRO_HOSTED',
+        state: 'ACTIVE',
+      };
     }
 
     const credentials = this.decryptCredentials(connection);

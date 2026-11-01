@@ -21,6 +21,23 @@ from .runtime import run_connector, run_supervised_connector
 from .mt5_terminal import MetaQuotesMt5Terminal
 
 
+
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _normalize_api_base_url(server_url: str) -> str:
+    raw = server_url.strip().rstrip("/")
+    parsed = urlparse(raw)
+    if not parsed.scheme or not parsed.hostname:
+        raise ValueError("Hosted MT5 worker API URL is invalid")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Hosted MT5 worker API URL is invalid")
+    if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in _LOOPBACK_HOSTS):
+        raise ValueError("Hosted MT5 worker API requires HTTPS except for true loopback development")
+    if parsed.path in {"", "/"}:
+        raw = f"{raw}/api/v1"
+    return raw
+
 class HostWorkerApiError(RuntimeError):
     """Hosted-worker control-plane error that never embeds request secrets."""
 
@@ -113,8 +130,7 @@ class HostWorkerConfig:
     terminal_relative_path: str = "terminal64.exe"
 
     def __post_init__(self) -> None:
-        if not self.server_url.startswith("https://") and "localhost" not in self.server_url:
-            raise ValueError("Hosted MT5 worker API requires HTTPS")
+        object.__setattr__(self, "server_url", _normalize_api_base_url(self.server_url))
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}", self.worker_id):
             raise ValueError("Hosted MT5 worker id is invalid")
         if len(self.worker_token) < 32:
@@ -137,16 +153,12 @@ class HostWorkerApi:
         session: requests.Session | None = None,
         timeout_seconds: float = 15.0,
     ) -> None:
-        if not server_url.startswith("https://") and "localhost" not in server_url:
-            raise ValueError("Hosted MT5 worker API requires HTTPS")
+        normalized_server_url = _normalize_api_base_url(server_url)
         if len(worker_token) < 32:
             raise ValueError("Hosted MT5 worker token must be at least 32 characters")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}", worker_id):
             raise ValueError("Hosted MT5 worker id is invalid")
-        self.server_url = server_url.rstrip("/")
-        parsed = urlparse(self.server_url)
-        if parsed.path in {"", "/"}:
-            self.server_url = f"{self.server_url}/api/v1"
+        self.server_url = normalized_server_url
         self.worker_id = worker_id
         self._worker_token = worker_token
         self.session = session or requests.Session()
@@ -165,7 +177,7 @@ class HostWorkerApi:
         return HostedAssignment.from_payload(payload)
 
     def heartbeat_assignment(self, connector_id: str, error_code: str | None = None) -> None:
-        if not re.fullmatch(r"[A-Za-z0-9._:-]+", connector_id):
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", connector_id):
             raise HostWorkerApiError("Hosted MT5 connector id is invalid")
         body: dict[str, str] = {"workerId": self.worker_id}
         if error_code:
@@ -219,7 +231,7 @@ def prepare_session_directory(
     connector_id: str,
     terminal_relative_path: str = "terminal64.exe",
 ) -> Path:
-    if not re.fullmatch(r"[A-Za-z0-9._:-]+", connector_id):
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", connector_id):
         raise ValueError("Hosted MT5 connector id is invalid")
     template = Path(template_dir)
     if not template.is_dir():
@@ -498,6 +510,59 @@ def validate_host_worker_runtime(platform_name: str | None = None) -> None:
         )
 
 
+def check_host_worker_readiness(
+    *,
+    server_url: str,
+    mt5_template_dir: str | Path,
+    session_root: str | Path,
+    terminal_relative_path: str = "terminal64.exe",
+    platform_name: str | None = None,
+    session: requests.Session | Any | None = None,
+    timeout_seconds: float = 10.0,
+) -> dict[str, Any]:
+    """Verify a hosted-worker host without leasing work or reading customer secrets."""
+    validate_host_worker_runtime(platform_name=platform_name)
+    api_base = _normalize_api_base_url(server_url)
+    template = Path(mt5_template_dir)
+    relative_terminal = _safe_relative_terminal_path(terminal_relative_path)
+    terminal = template / relative_terminal
+    if not template.is_dir() or not terminal.is_file():
+        raise RuntimeError("Hosted MT5 clean template or terminal executable is missing")
+
+    root = Path(session_root)
+    root.mkdir(parents=True, exist_ok=True)
+    probe = root / ".irexpro-readiness-probe"
+    try:
+        probe.write_text("ready", encoding="utf-8")
+        if probe.read_text(encoding="utf-8") != "ready":
+            raise RuntimeError("Hosted MT5 session root write verification failed")
+    finally:
+        try:
+            probe.unlink()
+        except FileNotFoundError:
+            pass
+
+    http = session or requests.Session()
+    response = http.get(
+        f"{api_base}/health/live",
+        headers={"User-Agent": "iRexPro-MT5-Host-Worker-Readiness/0.1"},
+        timeout=timeout_seconds,
+    )
+    status = int(getattr(response, "status_code", 0))
+    if not 200 <= status < 300:
+        raise HostWorkerApiError(f"Hosted MT5 API readiness failed with HTTP {status}")
+
+    return {
+        "status": "READY",
+        "apiReachable": True,
+        "terminalPresent": True,
+        "sessionRootWritable": True,
+        "apiBaseUrl": api_base,
+        "terminalPath": str(terminal),
+        "sessionRoot": str(root),
+    }
+
+
 def _read_child_assignment_from_stdin() -> dict[str, Any]:
     line = sys.stdin.readline()
     if not line:
@@ -514,9 +579,9 @@ def _read_child_assignment_from_stdin() -> dict[str, Any]:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="iRexPro hosted MT5 execution worker")
     parser.add_argument("--session-child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--readiness-check", action="store_true", help="verify this Windows MT5 worker host without leasing an account")
     parser.add_argument("--server-url", default=os.getenv("IREXPRO_API_URL", ""))
     parser.add_argument("--worker-id", default=os.getenv("HOSTED_MT5_WORKER_ID", ""))
-    parser.add_argument("--worker-token", default=os.getenv("HOSTED_MT5_WORKER_TOKEN", ""))
     parser.add_argument("--mt5-template-dir", default=os.getenv("HOSTED_MT5_TEMPLATE_DIR", ""))
     parser.add_argument("--session-root", default=os.getenv("HOSTED_MT5_SESSION_ROOT", ""))
     parser.add_argument("--max-sessions", type=int, default=int(os.getenv("HOSTED_MT5_MAX_SESSIONS", "4")))
@@ -535,6 +600,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    if args.readiness_check:
+        result = check_host_worker_readiness(
+            server_url=args.server_url,
+            mt5_template_dir=Path(args.mt5_template_dir),
+            session_root=Path(args.session_root),
+            terminal_relative_path=args.terminal_relative_path,
+        )
+        print(json.dumps(result, sort_keys=True))
+        return 0
+
     validate_host_worker_runtime()
     if args.session_child:
         if not args.server_url or not args.session_dir or not args.terminal_path:
@@ -549,7 +624,7 @@ def main(argv: list[str] | None = None) -> int:
     config = HostWorkerConfig(
         server_url=args.server_url,
         worker_id=args.worker_id,
-        worker_token=args.worker_token,
+        worker_token=os.getenv("HOSTED_MT5_WORKER_TOKEN", ""),
         mt5_template_dir=Path(args.mt5_template_dir),
         session_root=Path(args.session_root),
         max_sessions=args.max_sessions,

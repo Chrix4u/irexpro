@@ -11,6 +11,7 @@ from irexpro_mt5_connector.host_worker import (
     HostedMt5WorkerSupervisor,
     InMemorySecretStore,
     build_session_child_spec,
+    check_host_worker_readiness,
     prepare_session_directory,
     run_session_child,
     validate_host_worker_runtime,
@@ -32,6 +33,10 @@ class FakeHttpSession:
         self.calls = []
 
     def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self.responses.pop(0)
+
+    def get(self, url, **kwargs):
         self.calls.append((url, kwargs))
         return self.responses.pop(0)
 
@@ -299,3 +304,84 @@ def test_session_child_writes_only_non_secret_connector_config_and_keeps_credent
     assert captured["terminal_server"] == "Broker-Demo"
     assert captured["portable"] is True
     assert captured["settings"].account_type == "DEMO"
+
+
+def test_worker_url_validation_allows_only_https_or_true_loopback_http(tmp_path: Path):
+    with pytest.raises(ValueError, match="HTTPS"):
+        HostWorkerApi("http://evil.example.test/localhost/api/v1", "worker-1", "x" * 32)
+    with pytest.raises(ValueError, match="HTTPS"):
+        HostWorkerConfig(
+            server_url="http://localhost.evil.example.test/api/v1",
+            worker_id="worker-1",
+            worker_token="x" * 32,
+            mt5_template_dir=tmp_path,
+            session_root=tmp_path / "sessions",
+        )
+
+    api = HostWorkerApi(
+        "http://127.0.0.1:3001/api/v1",
+        "worker-1",
+        "x" * 32,
+        session=FakeHttpSession([]),
+    )
+    assert api.server_url == "http://127.0.0.1:3001/api/v1"
+
+
+def test_session_directory_rejects_windows_invalid_colon_in_connector_id(tmp_path: Path):
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "terminal64.exe").write_bytes(b"fixture")
+
+    with pytest.raises(ValueError, match="connector id"):
+        prepare_session_directory(template, tmp_path / "sessions", "connector:1")
+
+
+def test_worker_cli_does_not_accept_worker_token_on_command_line():
+    from irexpro_mt5_connector.host_worker import _build_parser
+
+    parser = _build_parser()
+    assert "--worker-token" not in parser.format_help()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--worker-token", "secret"])
+
+
+def test_readiness_check_uses_no_worker_secret_and_does_not_lease_work(tmp_path: Path):
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "terminal64.exe").write_bytes(b"fixture")
+    session = FakeHttpSession([FakeResponse(200, {"status": "alive"})])
+
+    result = check_host_worker_readiness(
+        server_url="https://api.example.test/api/v1",
+        mt5_template_dir=template,
+        session_root=tmp_path / "sessions",
+        platform_name="win32",
+        session=session,
+    )
+
+    assert result["status"] == "READY"
+    assert result["apiReachable"] is True
+    assert result["terminalPresent"] is True
+    assert result["sessionRootWritable"] is True
+    assert not (tmp_path / "sessions" / ".irexpro-readiness-probe").exists()
+    assert len(session.calls) == 1
+    url, request = session.calls[0]
+    assert url == "https://api.example.test/api/v1/health/live"
+    assert "Authorization" not in request.get("headers", {})
+    assert "assignments/lease" not in url
+
+
+def test_readiness_check_fails_closed_when_api_health_is_not_success(tmp_path: Path):
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "terminal64.exe").write_bytes(b"fixture")
+    session = FakeHttpSession([FakeResponse(503, {"status": "down"})])
+
+    with pytest.raises(Exception, match="HTTP 503"):
+        check_host_worker_readiness(
+            server_url="https://api.example.test/api/v1",
+            mt5_template_dir=template,
+            session_root=tmp_path / "sessions",
+            platform_name="win32",
+            session=session,
+        )

@@ -66,6 +66,32 @@ describe('HostedMt5Service', () => {
     expect(String(query.mock.calls[2]![0])).toContain("status='CONNECTING'");
   });
 
+  it('is idempotent when the same hosted connection already has a healthy active worker session', async () => {
+    const query = jest.fn().mockResolvedValueOnce([{
+      ...demoConnection,
+      hosted_connector_id: 'connector-healthy',
+      hosted_state: 'ACTIVE',
+      hosted_healthy: true,
+    }]);
+    const encryption = { decrypt: jest.fn() } as any;
+    const service = new HostedMt5Service(
+      { query } as unknown as DataSource,
+      encryption,
+      { digestToken: jest.fn() } as any,
+      config(),
+    );
+
+    await expect(service.provision('user-1', 'connection-1')).resolves.toEqual({
+      brokerConnectionId: 'connection-1',
+      connectorId: 'connector-healthy',
+      hostMode: 'IREXPRO_HOSTED',
+      state: 'ACTIVE',
+    });
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(encryption.decrypt).not.toHaveBeenCalled();
+    expect(String(query.mock.calls[0]![0])).toContain("last_heartbeat_at >= now() - interval '15 seconds'");
+  });
+
   it('rejects hosted LIVE during the pilot before creating a connector', async () => {
     const query = jest.fn().mockResolvedValueOnce([{ ...demoConnection, account_type: 'LIVE' }]);
     const encryption = { decrypt: jest.fn() } as any;
