@@ -14,6 +14,10 @@ class ConnectorApiError(RuntimeError):
     pass
 
 
+class ConnectorTransientError(ConnectorApiError):
+    """A transport/server condition that is safe to retry without changing identity."""
+
+
 class IrexProConnectorClient:
     def __init__(
         self,
@@ -154,4 +158,7 @@ class IrexProConnectorClient:
             return
         # Never include Authorization/request headers in errors.
         body = response.text[:500]
-        raise ConnectorApiError(f"iRexPro API request failed ({response.status_code}): {body}")
+        message = f"iRexPro API request failed ({response.status_code}): {body}"
+        if response.status_code in {408, 425, 429} or response.status_code >= 500:
+            raise ConnectorTransientError(message)
+        raise ConnectorApiError(message)

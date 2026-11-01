@@ -15,6 +15,7 @@ const PAIRING_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const DIRECT_MT5_HEARTBEAT_STALE_MS = 15_000;
 
 export type DirectMt5ConnectorState = 'UNPAIRED' | 'PAIRING' | 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
+export type DirectMt5ConnectorHostMode = 'PERSONAL_PC' | 'WINDOWS_VPS';
 export type DirectMt5ConnectorHealthReason =
   | 'READY'
   | 'NOT_PAIRED'
@@ -29,6 +30,7 @@ export type DirectMt5ConnectorHealthReason =
 export interface DirectMt5ConnectionHealth {
   connectorId: string | null;
   brokerConnectionId: string;
+  hostMode: DirectMt5ConnectorHostMode | null;
   state: DirectMt5ConnectorState;
   connected: boolean;
   executionReady: boolean;
@@ -51,6 +53,7 @@ export interface DirectMt5TerminalIdentity {
 export interface DirectMt5PairingResult {
   connectorId: string;
   brokerConnectionId: string;
+  hostMode: DirectMt5ConnectorHostMode;
   pairingCode: string;
   expiresAt: Date;
 }
@@ -96,7 +99,14 @@ export class DirectMt5PairingService {
     this.pepper = pepper;
   }
 
-  async createPairing(userId: string, brokerConnectionId: string): Promise<DirectMt5PairingResult> {
+  async createPairing(
+    userId: string,
+    brokerConnectionId: string,
+    hostMode: DirectMt5ConnectorHostMode = 'PERSONAL_PC',
+  ): Promise<DirectMt5PairingResult> {
+    if (!['PERSONAL_PC', 'WINDOWS_VPS'].includes(hostMode)) {
+      throw new BadRequestException('Direct MT5 connector host mode is invalid');
+    }
     const rows = (await this.dataSource.query(
       `
         SELECT id, broker_id, account_type
@@ -144,15 +154,16 @@ export class DirectMt5PairingService {
           RETURNING id
         ), paired AS (
           INSERT INTO broker.direct_mt5_connectors (
-            id, user_id, broker_connection_id, account_type, pairing_code_hash, pairing_expires_at,
+            id, user_id, broker_connection_id, account_type, host_mode, pairing_code_hash, pairing_expires_at,
             state, token_hash, account_login, broker_server, currency, trade_allowed,
             paired_at, last_heartbeat_at, last_sequence, created_at, updated_at
-          ) VALUES ($1, $2, $3, $6, $4, $5, 'PAIRING', NULL, NULL, NULL, NULL, false,
+          ) VALUES ($1, $2, $3, $6, $7, $4, $5, 'PAIRING', NULL, NULL, NULL, NULL, false,
                     NULL, NULL, 0, now(), now())
           ON CONFLICT (broker_connection_id) DO UPDATE SET
             id = EXCLUDED.id,
             user_id = EXCLUDED.user_id,
             account_type = EXCLUDED.account_type,
+            host_mode = EXCLUDED.host_mode,
             pairing_code_hash = EXCLUDED.pairing_code_hash,
             pairing_expires_at = EXCLUDED.pairing_expires_at,
             state = 'PAIRING',
@@ -169,10 +180,10 @@ export class DirectMt5PairingService {
         )
         SELECT id FROM paired
       `,
-      [connectorId, userId, brokerConnectionId, pairingHash, expiresAt, connection.account_type],
+      [connectorId, userId, brokerConnectionId, pairingHash, expiresAt, connection.account_type, hostMode],
     );
 
-    return { connectorId, brokerConnectionId, pairingCode, expiresAt };
+    return { connectorId, brokerConnectionId, hostMode, pairingCode, expiresAt };
   }
 
   async redeemPairing(
@@ -376,7 +387,7 @@ export class DirectMt5PairingService {
   ): Promise<DirectMt5ConnectionHealth> {
     const rows = (await this.dataSource.query(
       `
-        SELECT id, state, account_login, broker_server, trade_allowed, last_heartbeat_at
+        SELECT id, state, host_mode, account_login, broker_server, trade_allowed, last_heartbeat_at
         FROM broker.direct_mt5_connectors
         WHERE user_id = $1
           AND broker_connection_id = $2
@@ -386,6 +397,7 @@ export class DirectMt5PairingService {
     )) as Array<{
       id: string;
       state: Exclude<DirectMt5ConnectorState, 'UNPAIRED'>;
+      host_mode: DirectMt5ConnectorHostMode;
       account_login: string | null;
       broker_server: string | null;
       trade_allowed: boolean;
@@ -396,6 +408,7 @@ export class DirectMt5PairingService {
       return {
         connectorId: null,
         brokerConnectionId,
+        hostMode: null,
         state: 'UNPAIRED',
         connected: false,
         executionReady: false,
@@ -416,6 +429,7 @@ export class DirectMt5PairingService {
     const base = {
       connectorId: row.id,
       brokerConnectionId,
+      hostMode: row.host_mode,
       state: row.state,
       tradeAllowed: Boolean(row.trade_allowed),
       lastHeartbeatAt,

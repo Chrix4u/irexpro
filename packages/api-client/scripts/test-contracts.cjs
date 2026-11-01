@@ -503,12 +503,14 @@ async function testDirectMt5OnboardingContracts() {
     {
       connectorId: "connector-1",
       brokerConnectionId: "conn/1",
+      hostMode: "PERSONAL_PC",
       pairingCode: "ABCDEFGH23",
       expiresAt: "2026-10-24T23:00:00.000Z",
     },
     {
       connectorId: "connector-1",
       brokerConnectionId: "conn/1",
+      hostMode: "PERSONAL_PC",
       state: "ACTIVE",
       connected: true,
       executionReady: true,
@@ -553,6 +555,7 @@ async function testDirectMt5OnboardingContracts() {
   assert.equal(calls[0].init.method, "POST");
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     brokerConnectionId: "conn/1",
+    hostMode: "PERSONAL_PC",
   });
   assert.equal(
     calls[1].url,

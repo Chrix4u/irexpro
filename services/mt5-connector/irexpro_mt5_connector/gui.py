@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .config import ConnectorSettings
-from .runtime import pair_connector, run_connector
+from .runtime import pair_connector, run_supervised_connector
+from .windows import set_windows_autostart
 
 DEFAULT_SERVER_URL = "https://irexpro.lightworldtech.com/api/v1"
 _PAIRING_CODE = re.compile(r"^[A-Z2-9]{10}$")
+
+
+def background_requested(argv: list[str] | None = None) -> bool:
+    args = argv if argv is not None else sys.argv
+    return "--background" in args[1:]
 
 
 @dataclass(frozen=True)
@@ -34,7 +41,7 @@ def normalize_pairing_code(value: str) -> str:
 
 
 class ConnectorDesktopApp:
-    def __init__(self, root) -> None:
+    def __init__(self, root, *, background: bool = False) -> None:
         import tkinter as tk
         from tkinter import ttk
 
@@ -46,23 +53,35 @@ class ConnectorDesktopApp:
         self.stop_event = threading.Event()
         self.run_thread: threading.Thread | None = None
         self.closing = False
+        self.background = background
+        self.tray_icon = None
+        self.loaded_settings: ConnectorSettings | None = None
 
         self.server_var = tk.StringVar(value=DEFAULT_SERVER_URL)
         self.code_var = tk.StringVar()
         self.terminal_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Not paired")
         self.account_var = tk.StringVar(value="No MT5 account paired")
+        self.auto_start_var = tk.BooleanVar(value=True)
+        self.start_minimized_var = tk.BooleanVar(value=True)
 
         self._build()
         self._load_existing()
+        self._ensure_tray()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        if self.loaded_settings is not None:
+            if self.background and self.loaded_settings.start_minimized:
+                self.root.withdraw()
+            self.root.after(150, self._start)
+        elif self.background:
+            self.root.deiconify()
 
     def _build(self) -> None:
         from tkinter import filedialog
 
         self.root.title("iRexPro MT5 Connector")
-        self.root.geometry("620x500")
-        self.root.minsize(560, 450)
+        self.root.geometry("640x600")
+        self.root.minsize(580, 520)
 
         frame = self._ttk.Frame(self.root, padding=24)
         frame.pack(fill="both", expand=True)
@@ -91,6 +110,21 @@ class ConnectorDesktopApp:
             command=lambda: self._browse_terminal(filedialog),
         ).pack(side="left", padx=(8, 0))
 
+        preferences = self._ttk.Frame(frame)
+        preferences.pack(fill="x", pady=(0, 12))
+        self._ttk.Checkbutton(
+            preferences,
+            text="Start iRexPro MT5 Connector automatically when I sign in to Windows",
+            variable=self.auto_start_var,
+            command=self._save_preferences,
+        ).pack(anchor="w")
+        self._ttk.Checkbutton(
+            preferences,
+            text="Start minimized in the background",
+            variable=self.start_minimized_var,
+            command=self._save_preferences,
+        ).pack(anchor="w", pady=(4, 0))
+
         actions = self._ttk.Frame(frame)
         actions.pack(fill="x", pady=(6, 14))
         self.pair_button = self._ttk.Button(actions, text="Pair & Start", command=self._pair_and_start)
@@ -99,6 +133,8 @@ class ConnectorDesktopApp:
         self.start_button.pack(side="left", padx=(8, 0))
         self.stop_button = self._ttk.Button(actions, text="Stop", command=self._stop, state="disabled")
         self.stop_button.pack(side="left", padx=(8, 0))
+        self.exit_button = self._ttk.Button(actions, text="Exit Connector", command=self._exit)
+        self.exit_button.pack(side="right")
 
         status_box = self._ttk.LabelFrame(frame, text="Status", padding=14)
         status_box.pack(fill="x", pady=(4, 12))
@@ -108,7 +144,7 @@ class ConnectorDesktopApp:
         self._ttk.Label(
             frame,
             text="Protocol v2 safety: if the MT5 login, broker server, or DEMO/LIVE environment changes, "
-                 "the connector stops and must be paired again. Closing this window stops the connector safely.",
+                 "the connector stops and must be paired again. Closing this window keeps the connector running in the system tray; use Stop or Exit Connector to stop it.",
             wraplength=550,
         ).pack(anchor="w", pady=(10, 0))
 
@@ -134,12 +170,15 @@ class ConnectorDesktopApp:
         except Exception as exc:
             self.status_var.set(f"Upgrade/re-pair required: {exc}")
             return
+        self.loaded_settings = settings
         self.server_var.set(settings.server_url)
         self.terminal_var.set(settings.terminal_path or "")
+        self.auto_start_var.set(settings.auto_start)
+        self.start_minimized_var.set(settings.start_minimized)
         self.account_var.set(
             f"Paired {settings.account_type} account {settings.account_login} on {settings.broker_server}"
         )
-        self.status_var.set("Paired — press Start")
+        self.status_var.set("Paired — starting automatically…")
         self.start_button.configure(state="normal")
 
     def _pair_and_start(self) -> None:
@@ -150,6 +189,8 @@ class ConnectorDesktopApp:
             return
         server_url = self.server_var.get().strip() or DEFAULT_SERVER_URL
         terminal_path = self.terminal_var.get().strip() or None
+        auto_start = bool(self.auto_start_var.get())
+        start_minimized = bool(self.start_minimized_var.get())
         self._set_busy(True)
         self.status_var.set("Pairing with iRexPro…")
 
@@ -160,16 +201,20 @@ class ConnectorDesktopApp:
                     pairing_code=pairing_code,
                     terminal_path=terminal_path,
                     config_path=self.paths.config,
+                    auto_start=auto_start,
+                    start_minimized=start_minimized,
                 )
                 self._post(
                     lambda: self.account_var.set(
                         f"Paired {settings.account_type} account {settings.account_login} on {settings.broker_server}"
                     )
                 )
+                self.loaded_settings = settings
+                self._apply_autostart(settings)
                 self._post(lambda: self.code_var.set(""))
                 self._post(self._start)
             except Exception as exc:
-                self._post(lambda: self._show_error(f"Pairing failed safely: {exc}"))
+                self._post(lambda exc=exc: self._show_error(f"Pairing failed safely: {exc}"))
                 self._post(lambda: self._set_busy(False))
 
         threading.Thread(target=worker, name="irexpro-mt5-pair", daemon=True).start()
@@ -187,14 +232,14 @@ class ConnectorDesktopApp:
 
         def worker() -> None:
             try:
-                run_connector(
+                run_supervised_connector(
                     config_path=self.paths.config,
                     journal_path=self.paths.journal,
                     stop_event=self.stop_event,
                     on_status=self._worker_status,
                 )
             except Exception as exc:
-                self._post(lambda: self._show_error(f"Connector stopped safely: {exc}"))
+                self._post(lambda exc=exc: self._show_error(f"Connector stopped safely: {exc}"))
             finally:
                 self._post(self._run_finished)
 
@@ -206,8 +251,15 @@ class ConnectorDesktopApp:
             "STARTING": "Starting connector…",
             "READY": "Connected — iRexPro can reach this MT5 terminal",
             "STOPPED": "Stopped",
+            "FATAL": "Stopped — re-pairing or operator action is required",
         }
-        self._post(lambda: self.status_var.set(labels.get(status, status)))
+        if status.startswith("RECONNECTING:"):
+            parts = status.split(":", 2)
+            delay = parts[1] if len(parts) > 1 else "a few"
+            message = f"Connection interrupted — retrying automatically in {delay}s"
+        else:
+            message = labels.get(status, status)
+        self._post(lambda message=message: self.status_var.set(message))
 
     def _stop(self) -> None:
         self.status_var.set("Stopping safely…")
@@ -228,6 +280,74 @@ class ConnectorDesktopApp:
         elif self.paths.config.exists():
             self.start_button.configure(state="normal")
 
+
+    def _apply_autostart(self, settings: ConnectorSettings) -> None:
+        if os.name != "nt":
+            return
+        try:
+            set_windows_autostart(settings.auto_start)
+        except Exception as exc:
+            self._post(lambda exc=exc: self.status_var.set(f"Connected, but Windows startup setting could not be saved: {exc}"))
+
+    def _save_preferences(self) -> None:
+        if not self.paths.config.exists():
+            return
+        try:
+            current = ConnectorSettings.load(self.paths.config)
+            updated = replace(
+                current,
+                auto_start=bool(self.auto_start_var.get()),
+                start_minimized=bool(self.start_minimized_var.get()),
+            )
+            updated.save(self.paths.config)
+            self.loaded_settings = updated
+            self._apply_autostart(updated)
+        except Exception as exc:
+            self._show_error(f"Could not save connector preferences: {exc}")
+
+    def _ensure_tray(self) -> None:
+        if os.name != "nt":
+            return
+        try:
+            import pystray
+            from PIL import Image, ImageDraw
+
+            image = Image.new("RGB", (64, 64), "#0f172a")
+            draw = ImageDraw.Draw(image)
+            draw.ellipse((8, 8, 56, 56), fill="#14b8a6")
+            draw.text((21, 18), "iR", fill="white")
+            menu = pystray.Menu(
+                pystray.MenuItem("Show", lambda _icon, _item: self._post(self._show_window), default=True),
+                pystray.MenuItem("Start", lambda _icon, _item: self._post(self._start)),
+                pystray.MenuItem("Stop", lambda _icon, _item: self._post(self._stop)),
+                pystray.MenuItem("Exit Connector", lambda _icon, _item: self._post(self._exit)),
+            )
+            self.tray_icon = pystray.Icon("irexpro-mt5", image, "iRexPro MT5 Connector", menu)
+            self.tray_icon.run_detached()
+        except Exception:
+            self.tray_icon = None
+
+    def _show_window(self) -> None:
+        self.root.deiconify()
+        self.root.lift()
+        try:
+            self.root.focus_force()
+        except Exception:
+            pass
+
+    def _exit(self) -> None:
+        self.closing = True
+        if self.tray_icon is not None:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+        if self.run_thread and self.run_thread.is_alive():
+            self._stop()
+            self.status_var.set("Stopping safely before exit…")
+        else:
+            self.root.destroy()
+
     def _show_error(self, message: str) -> None:
         from tkinter import messagebox
 
@@ -241,19 +361,18 @@ class ConnectorDesktopApp:
             pass
 
     def _on_close(self) -> None:
-        self.closing = True
-        if self.run_thread and self.run_thread.is_alive():
-            self._stop()
-            self.status_var.set("Stopping safely before exit…")
+        if self.tray_icon is not None:
+            self.root.withdraw()
+            self.status_var.set("Running in background — use the tray icon to reopen")
         else:
-            self.root.destroy()
+            self.root.iconify()
 
 
 def main() -> None:
     import tkinter as tk
 
     root = tk.Tk()
-    ConnectorDesktopApp(root)
+    ConnectorDesktopApp(root, background=background_requested())
     root.mainloop()
 
 

@@ -49,10 +49,10 @@ type BrokerAction =
 
 type Mt5ConnectionMethod = 'DIRECT' | 'METAAPI';
 type DirectMt5Environment = 'DEMO' | 'LIVE';
-type DirectMt5BridgeSetup = 'READY' | 'NEED_WINDOWS';
+type DirectMt5BridgeSetup = 'PERSONAL_PC' | 'WINDOWS_VPS' | 'NEED_WINDOWS';
 
 const DIRECT_MT5_WINDOWS_INSTALLER_URL =
-  'https://github.com/Chrix4u/irexpro/releases/download/mt5-connector-v0.2.0/iRexPro-MT5-Connector-Setup.exe';
+  'https://github.com/Chrix4u/irexpro/releases/download/mt5-connector-v0.3.0/iRexPro-MT5-Connector-Setup.exe';
 
 const IREXPRO_ANDROID_PREVIEW_URL =
   'https://github.com/Chrix4u/irexpro/releases/download/irexpro-mobile-v0.1.5-preview.1/iRexPro-Android-Preview.apk';
@@ -98,7 +98,7 @@ export default function OnboardingBrokerPage() {
   const [testResult, setTestResult] = useState<BrokerTestResult | null>(null);
   const [mt5ConnectionMethod, setMt5ConnectionMethod] = useState<Mt5ConnectionMethod>('DIRECT');
   const [directMt5Environment, setDirectMt5Environment] = useState<DirectMt5Environment>('DEMO');
-  const [directMt5BridgeSetup, setDirectMt5BridgeSetup] = useState<DirectMt5BridgeSetup>('READY');
+  const [directMt5BridgeSetup, setDirectMt5BridgeSetup] = useState<DirectMt5BridgeSetup>('PERSONAL_PC');
   const [directMt5ConnectionId, setDirectMt5ConnectionId] = useState<string | null>(null);
   const [directMt5Pairing, setDirectMt5Pairing] = useState<DirectMt5PairingView | null>(null);
   const [directMt5Health, setDirectMt5Health] = useState<DirectMt5ConnectionHealthView | null>(null);
@@ -325,7 +325,10 @@ export default function OnboardingBrokerPage() {
         accountId: accountId.trim(),
         displayName: displayName.trim() || undefined,
       });
-      const pairing = await api.createDirectMt5Pairing(created.id);
+      const pairing = await api.createDirectMt5Pairing(
+        created.id,
+        directMt5BridgeSetup === 'WINDOWS_VPS' ? 'WINDOWS_VPS' : 'PERSONAL_PC',
+      );
       setDirectMt5ConnectionId(created.id);
       setDirectMt5Pairing(pairing);
       setDirectMt5Health(null);
@@ -347,7 +350,10 @@ export default function OnboardingBrokerPage() {
     if (!directMt5ConnectionId) return;
     setAction('pairing');
     try {
-      const pairing = await api.createDirectMt5Pairing(directMt5ConnectionId);
+      const pairing = await api.createDirectMt5Pairing(
+        directMt5ConnectionId,
+        directMt5Health?.hostMode ?? (directMt5BridgeSetup === 'WINDOWS_VPS' ? 'WINDOWS_VPS' : 'PERSONAL_PC'),
+      );
       setDirectMt5Pairing(pairing);
       setDirectMt5Health(null);
       setError(null);
@@ -901,11 +907,19 @@ export default function OnboardingBrokerPage() {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 'var(--space-2)' }}>
                   <Button
                     type="button"
-                    variant={directMt5BridgeSetup === 'READY' ? 'primary' : 'secondary'}
-                    aria-pressed={directMt5BridgeSetup === 'READY'}
-                    onClick={() => setDirectMt5BridgeSetup('READY')}
+                    variant={directMt5BridgeSetup === 'PERSONAL_PC' ? 'primary' : 'secondary'}
+                    aria-pressed={directMt5BridgeSetup === 'PERSONAL_PC'}
+                    onClick={() => setDirectMt5BridgeSetup('PERSONAL_PC')}
                   >
                     I already have MT5 running on Windows
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={directMt5BridgeSetup === 'WINDOWS_VPS' ? 'primary' : 'secondary'}
+                    aria-pressed={directMt5BridgeSetup === 'WINDOWS_VPS'}
+                    onClick={() => setDirectMt5BridgeSetup('WINDOWS_VPS')}
+                  >
+                    Always-on Windows VPS (recommended)
                   </Button>
                   <Button
                     type="button"
@@ -955,6 +969,14 @@ export default function OnboardingBrokerPage() {
                 </div>
               ) : (
                 <>
+                  {directMt5BridgeSetup === 'WINDOWS_VPS' && (
+                    <Alert variant="success">
+                      <span style={{ flex: 1 }}>
+                        <strong>24/5 execution host selected.</strong> Install MT5 and iRexPro MT5 Connector v0.3.0 on the Windows VPS and keep that VPS signed in. Once paired, your personal PC can be switched off while the VPS continues the execution bridge.
+                      </span>
+                    </Alert>
+                  )}
+
                   <Alert variant="info">
                     <span style={{ flex: 1 }}>
                       🔐 Direct MT5 runs beside the MT5 terminal already logged in on your Windows PC or VPS.
@@ -1067,6 +1089,7 @@ export default function OnboardingBrokerPage() {
                   {directMt5Health && (
                     <div className="text-sm" style={{ lineHeight: 1.7 }}>
                       <div>Connector: <strong>{formatEnumLabel(directMt5Health.state)}</strong></div>
+                      {directMt5Health.hostMode && <div>Execution host: <strong>{directMt5Health.hostMode === 'WINDOWS_VPS' ? 'Always-on Windows VPS' : 'Personal Windows PC'}</strong></div>}
                       <div>Reason: {formatEnumLabel(directMt5Health.reason)}</div>
                       {directMt5Health.accountLogin && <div>MT5 login: {directMt5Health.accountLogin}</div>}
                       {directMt5Health.brokerServer && <div>Broker server: {directMt5Health.brokerServer}</div>}

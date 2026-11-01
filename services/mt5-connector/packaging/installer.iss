@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-#define MyAppVersion "0.2.1"
+#define MyAppVersion "0.3.0"
 #endif
 
 [Setup]
@@ -30,6 +30,10 @@ Name: "{autodesktop}\iRexPro MT5 Connector"; Filename: "{app}\iRexPro-MT5-Connec
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+Name: "autostart"; Description: "Start iRexPro MT5 Connector automatically when I sign in to Windows"; GroupDescription: "Unattended trading:"; Flags: checkedonce
+
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "iRexPro MT5 Connector"; ValueData: """{app}\iRexPro-MT5-Connector.exe"" --background"; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
 Filename: "{app}\iRexPro-MT5-Connector.exe"; Description: "Launch iRexPro MT5 Connector"; Flags: nowait postinstall skipifsilent

@@ -7,6 +7,52 @@ describe('DirectMt5PairingService', () => {
     get: jest.fn().mockReturnValue('0123456789abcdef0123456789abcdef'),
   } as unknown as ConfigService;
 
+  it('persists the selected WINDOWS_VPS execution host and returns it in pairing metadata', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ id: 'connection-1', broker_id: 'direct-mt5', account_type: 'DEMO' }])
+      .mockResolvedValueOnce([]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+
+    const result = await service.createPairing('user-1', 'connection-1', 'WINDOWS_VPS' as any);
+
+    expect(result.hostMode).toBe('WINDOWS_VPS');
+    const sql = String(query.mock.calls[1]![0]);
+    const params = query.mock.calls[1]![1] as unknown[];
+    expect(sql).toContain('host_mode');
+    expect(params).toContain('WINDOWS_VPS');
+  });
+
+  it('defaults new Direct MT5 pairings to PERSONAL_PC and rejects unknown host modes', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ id: 'connection-1', broker_id: 'direct-mt5', account_type: 'DEMO' }])
+      .mockResolvedValueOnce([]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+
+    await expect(service.createPairing('user-1', 'connection-1')).resolves.toMatchObject({ hostMode: 'PERSONAL_PC' });
+    await expect(service.createPairing('user-1', 'connection-1', 'LINUX_BOX' as any)).rejects.toThrow(/host mode/i);
+  });
+
+  it('returns the persisted execution host mode in connector health', async () => {
+    const now = new Date('2026-11-01T02:00:00.000Z');
+    const query = jest.fn().mockResolvedValueOnce([{
+      id: 'connector-1',
+      state: 'ACTIVE',
+      host_mode: 'WINDOWS_VPS',
+      account_login: '113392789',
+      broker_server: 'Broker-Demo',
+      trade_allowed: true,
+      last_heartbeat_at: new Date(now.getTime() - 1_000),
+    }]);
+    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+
+    await expect(service.getConnectionHealth('user-1', 'connection-1', now)).resolves.toMatchObject({
+      hostMode: 'WINDOWS_VPS',
+      executionReady: true,
+    });
+  });
+
   it('creates a single-use pairing code without persisting the raw code', async () => {
     const query = jest
       .fn()

@@ -150,3 +150,28 @@ def test_connector_client_normalizes_site_root_to_api_v1() -> None:
 
     assert root.server_url == "https://irexpro.lightworldtech.com/api/v1"
     assert api.server_url == "https://irexpro.lightworldtech.com/api/v1"
+
+
+def test_server_5xx_is_retryable_but_authentication_failure_is_fatal() -> None:
+    from irexpro_mt5_connector.client import ConnectorApiError, ConnectorTransientError, IrexProConnectorClient
+
+    class Response:
+        def __init__(self, status_code: int, text: str):
+            self.status_code = status_code
+            self.text = text
+
+    try:
+        IrexProConnectorClient._assert_ok(Response(503, "maintenance"))
+    except ConnectorTransientError as exc:
+        assert "503" in str(exc)
+    else:
+        raise AssertionError("server 5xx must be retryable")
+
+    try:
+        IrexProConnectorClient._assert_ok(Response(401, "revoked"))
+    except ConnectorTransientError:
+        raise AssertionError("authentication failures must not be retried")
+    except ConnectorApiError as exc:
+        assert "401" in str(exc)
+    else:
+        raise AssertionError("401 must fail closed")

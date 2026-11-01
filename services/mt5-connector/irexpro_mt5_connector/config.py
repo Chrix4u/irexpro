@@ -16,6 +16,8 @@ class ConnectorSettings:
     account_type: str
     terminal_path: str | None = None
     poll_seconds: float = 1.0
+    auto_start: bool = True
+    start_minimized: bool = True
 
     @classmethod
     def load(cls, path: str | Path) -> "ConnectorSettings":

@@ -13,7 +13,16 @@ describe('Direct MT5 connector controllers', () => {
     ).resolves.toEqual({
       connectorId: 'c1',
     });
-    expect(pairing.createPairing).toHaveBeenCalledWith('user-1', 'conn-1');
+    expect(pairing.createPairing).toHaveBeenCalledWith('user-1', 'conn-1', 'PERSONAL_PC');
+  });
+
+  it('passes the selected Windows VPS host mode into pairing creation', async () => {
+    const pairing = { createPairing: jest.fn().mockResolvedValue({ connectorId: 'c1', hostMode: 'WINDOWS_VPS' }) } as any;
+    const controller = new DirectMt5PairingController(pairing);
+
+    await controller.createPairing('user-1', { brokerConnectionId: 'conn-1', hostMode: 'WINDOWS_VPS' } as any);
+
+    expect(pairing.createPairing).toHaveBeenCalledWith('user-1', 'conn-1', 'WINDOWS_VPS');
   });
 
   it('returns owner-facing direct MT5 connector health for onboarding', async () => {

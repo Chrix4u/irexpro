@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "irexpro-mt5-connector"
-version = "0.2.1"
+version = "0.3.0"
 description = "Local Windows bridge between iRexPro and a logged-in MetaTrader 5 terminal"
 requires-python = ">=3.10"
 dependencies = [
   "requests>=2.32,<3",
   "keyring>=25,<26",
   "MetaTrader5>=5.0.45; platform_system == 'Windows'",
+  "pystray>=0.19,<1; platform_system == 'Windows'",
+  "Pillow>=10,<13; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]

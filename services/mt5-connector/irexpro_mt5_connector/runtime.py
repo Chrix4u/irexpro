@@ -6,10 +6,12 @@ from pathlib import Path
 from threading import Event
 from typing import Any, Callable
 
-from .client import IrexProConnectorClient
+import requests
+
+from .client import ConnectorApiError, ConnectorTransientError, IrexProConnectorClient
 from .config import ConnectorSettings, KeyringSecretStore
 from .journal import CommandJournal, JournalEntry
-from .mt5_terminal import MetaQuotesMt5Terminal, Mt5TerminalError, TerminalPort
+from .mt5_terminal import MetaQuotesMt5Terminal, Mt5TerminalError, Mt5TerminalFatalError, TerminalPort
 from .protocol import assert_bound_identity
 
 StatusCallback = Callable[[str], None]
@@ -102,6 +104,8 @@ def pair_connector(
     pairing_code: str,
     terminal_path: str | None,
     config_path: str | Path,
+    auto_start: bool = True,
+    start_minimized: bool = True,
     terminal_factory=MetaQuotesMt5Terminal,
     client_factory=IrexProConnectorClient,
     secret_store_factory=KeyringSecretStore,
@@ -111,7 +115,14 @@ def pair_connector(
         identity = terminal.initialize()
         client = client_factory(server_url, secret_store_factory())
         settings = client.redeem_pairing(pairing_code, identity)
-        settings = ConnectorSettings(**{**settings.__dict__, "terminal_path": terminal_path})
+        settings = ConnectorSettings(
+            **{
+                **settings.__dict__,
+                "terminal_path": terminal_path,
+                "auto_start": bool(auto_start),
+                "start_minimized": bool(start_minimized),
+            }
+        )
         path = Path(config_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         settings.save(path)
@@ -168,9 +179,6 @@ def run_connector(
                     try:
                         result = _dispatch(terminal, command["commandType"], command["payload"])
                         done = journal.complete(command["commandId"], result)
-                        client.submit_result(
-                            settings, command["commandId"], state="SUCCEEDED", result=done.result
-                        )
                     except Exception as exc:
                         failed = journal.fail(command["commandId"], {"error": str(exc)})
                         client.submit_result(
@@ -180,6 +188,14 @@ def run_connector(
                             result=failed.result,
                             error=str(exc),
                         )
+                    else:
+                        # Once MT5 succeeds and the journal is durably SUCCEEDED, a
+                        # network failure while reporting that success must bubble to
+                        # the supervisor. Never relabel a broker-successful mutation
+                        # as FAILED merely because the acknowledgement upload failed.
+                        client.submit_result(
+                            settings, command["commandId"], state="SUCCEEDED", result=done.result
+                        )
             if not stop.is_set():
                 sleep_fn(max(0.25, settings.poll_seconds))
         return 0
@@ -187,3 +203,62 @@ def run_connector(
         journal.close()
         terminal.shutdown()
         notify("STOPPED")
+
+
+def run_supervised_connector(
+    *,
+    config_path: str | Path,
+    journal_path: str | Path,
+    stop_event: Event | None = None,
+    on_status: StatusCallback | None = None,
+    runner=run_connector,
+    wait_fn=None,
+    initial_backoff_seconds: float = 1.0,
+    max_backoff_seconds: float = 30.0,
+) -> int:
+    """Keep a paired connector alive across transient network/terminal outages.
+
+    Identity/authentication failures remain fatal. The existing command journal is
+    reopened on every attempt, preserving uncertain-command reconciliation rather
+    than replaying mutations after a crash or disconnect.
+    """
+    stop = stop_event or Event()
+    notify = on_status or (lambda _status: None)
+    waiter = wait_fn or (lambda event, seconds: event.wait(seconds))
+    backoff = max(0.1, float(initial_backoff_seconds))
+    max_backoff = max(backoff, float(max_backoff_seconds))
+
+    while not stop.is_set():
+        reached_ready = False
+
+        def status_bridge(status: str) -> None:
+            nonlocal reached_ready, backoff
+            if status == "READY":
+                reached_ready = True
+                backoff = max(0.1, float(initial_backoff_seconds))
+            notify(status)
+
+        try:
+            return runner(
+                config_path=config_path,
+                journal_path=journal_path,
+                stop_event=stop,
+                on_status=status_bridge,
+            )
+        except Mt5TerminalFatalError:
+            notify("FATAL")
+            raise
+        except (ConnectorTransientError, requests.RequestException, Mt5TerminalError) as exc:
+            if stop.is_set():
+                return 0
+            delay = backoff
+            notify(f"RECONNECTING:{delay:g}:{exc}")
+            if waiter(stop, delay):
+                return 0
+            if not reached_ready:
+                backoff = min(max_backoff, backoff * 2)
+        except ConnectorApiError:
+            notify("FATAL")
+            raise
+
+    return 0

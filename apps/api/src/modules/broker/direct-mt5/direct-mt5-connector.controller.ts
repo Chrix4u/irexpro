@@ -35,6 +35,10 @@ import { DirectMt5ConnectorBinding, DirectMt5PairingService } from './direct-mt5
 class CreateDirectMt5PairingDto {
   @IsUUID()
   brokerConnectionId!: string;
+
+  @IsOptional()
+  @IsIn(['PERSONAL_PC', 'WINDOWS_VPS'])
+  hostMode?: 'PERSONAL_PC' | 'WINDOWS_VPS';
 }
 
 class RedeemDirectMt5PairingDto {
@@ -110,7 +114,11 @@ export class DirectMt5PairingController {
   @Post('pairings')
   @ApiOperation({ summary: 'Generate a short-lived pairing code for a MetaTrader 5 connection' })
   createPairing(@CurrentUserId() userId: string, @Body() body: CreateDirectMt5PairingDto) {
-    return this.pairingService.createPairing(userId, body.brokerConnectionId);
+    return this.pairingService.createPairing(
+      userId,
+      body.brokerConnectionId,
+      body.hostMode ?? 'PERSONAL_PC',
+    );
   }
 
   @Get('pairings/:brokerConnectionId/health')
