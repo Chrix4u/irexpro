@@ -29,7 +29,10 @@ def test_windows_packaging_contract_is_releaseable() -> None:
     assert "import pystray" in entry_text
     assert "from PIL import Image" in entry_text
     assert "Smoke-test frozen Windows executable" in workflow_text
-    assert 'iRexPro-MT5-Connector.exe\" --self-test' in workflow_text
+    assert 'Start-Process' in workflow_text
+    assert "-ArgumentList '--self-test'" in workflow_text
+    assert '-Wait -PassThru' in workflow_text
+    assert '.ExitCode' in workflow_text
     assert "MetaTrader5" in spec_text
     assert "keyring" in spec_text
     pyproject_text = (CONNECTOR / "pyproject.toml").read_text(encoding="utf-8")
