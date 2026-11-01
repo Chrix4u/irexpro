@@ -3,7 +3,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
 
 project_root = Path(SPECPATH).parent
-hiddenimports = ["MetaTrader5"] + collect_submodules("keyring.backends")
+hiddenimports = ["MetaTrader5", "numpy"] + collect_submodules("keyring.backends")
 entry_script = project_root / "packaging" / "host_worker_entry.py"
 
 a = Analysis(

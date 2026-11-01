@@ -84,6 +84,7 @@ def test_windows_packaging_includes_dedicated_host_worker_executable_without_sec
     assert "irexpro_mt5_connector.host_worker" in entry_text
     assert 'name="iRexPro-MT5-Host-Worker"' in spec_text
     assert "MetaTrader5" in spec_text
+    assert '"numpy"' in spec_text
     assert "keyring" in spec_text
     assert "console=True" in spec_text
     assert "irexpro-mt5-host-worker.spec" in workflow_text
