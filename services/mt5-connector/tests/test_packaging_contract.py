@@ -45,14 +45,22 @@ def test_windows_packaging_contract_is_releaseable() -> None:
     assert 'ValueName: "iRexPro MT5 Connector"' in installer_text
     assert 'ValueData: """{app}\\iRexPro-MT5-Connector.exe"" --background"' in installer_text
     assert "iRexPro-MT5-Connector-Setup" in installer_text
-    assert "windows-latest" in workflow_text
+    assert "windows-2022" in workflow_text
+    assert "windows-latest" not in workflow_text
     assert "mt5-connector-v*" in workflow_text
-    assert "deploy/daily-loss-reset-20261028" in workflow_text
-    assert "startsWith(github.ref, 'refs/tags/mt5-connector-v')" in workflow_text
+    assert "branches: [main]" in workflow_text
+    assert "deploy/daily-loss-reset-20261028" not in workflow_text
+    assert "contents: read" in workflow_text
+    assert "contents: write" not in workflow_text
+    assert "persist-credentials: false" in workflow_text
+    assert "ref: ${{ env.CANDIDATE_SHA }}" in workflow_text
     assert "pytest" in workflow_text
     assert "pyinstaller" in workflow_text.lower()
     assert "Get-FileHash" in workflow_text
-    assert "softprops/action-gh-release" in workflow_text
+    assert "softprops/action-gh-release" not in workflow_text
+    assert "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09" in workflow_text
+    assert "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1" in workflow_text
+    assert "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f" in workflow_text
     assert "irexpro-mt5-connector-windows-${{ github.run_id }}" in workflow_text
     assert "iRexPro-MT5-Connector-Setup.exe" in workflow_text
 
