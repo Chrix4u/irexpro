@@ -65,4 +65,28 @@ describe('Hosted MT5 controllers', () => {
       'MT5_RECONNECTING',
     );
   });
+
+  it('accepts a non-secret worker presence heartbeat through infrastructure auth', async () => {
+    const hosted = {
+      heartbeatWorkerPresence: jest
+        .fn()
+        .mockResolvedValue({ workerId: 'mt5-win-01', accepted: true }),
+    } as any;
+    const controller = new HostedMt5WorkerController(hosted);
+
+    await expect(
+      controller.presence('Bearer infrastructure-token', {
+        workerId: 'mt5-win-01',
+        workerVersion: '0.4.0',
+        runtimeReady: true,
+        maxSessions: 4,
+        activeSessions: 1,
+      } as any),
+    ).resolves.toEqual({ workerId: 'mt5-win-01', accepted: true });
+    expect(hosted.heartbeatWorkerPresence).toHaveBeenCalledWith(
+      'mt5-win-01',
+      'infrastructure-token',
+      { workerVersion: '0.4.0', runtimeReady: true, maxSessions: 4, activeSessions: 1 },
+    );
+  });
 });
