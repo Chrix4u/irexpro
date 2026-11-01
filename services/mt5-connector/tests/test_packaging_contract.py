@@ -69,3 +69,4 @@ def test_project_exposes_windows_desktop_entry_point() -> None:
     pyproject = (CONNECTOR / "pyproject.toml").read_text(encoding="utf-8")
     assert '[project.gui-scripts]' in pyproject
     assert 'irexpro-mt5-desktop = "irexpro_mt5_connector.gui:main"' in pyproject
+    assert 'irexpro-mt5-host-worker = "irexpro_mt5_connector.host_worker:main"' in pyproject
