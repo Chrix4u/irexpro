@@ -95,25 +95,26 @@ describe('ProfitProtectionExitQualityPage', () => {
     render(<ProfitProtectionExitQualityPage />);
 
     expect(await screen.findByRole('heading', { name: 'Profit Protection Exit Quality' })).toBeInTheDocument();
-    expect(screen.getByText('2 evaluated')).toBeInTheDocument();
+    expect(await screen.findByText('2 evaluated')).toBeInTheDocument();
     expect(screen.getByText('50.0%')).toBeInTheDocument();
     expect(screen.getByText('1 of 1')).toBeInTheDocument();
     expect(screen.getByText('-0.05R')).toBeInTheDocument();
     expect(screen.getByText(/research evidence, not realised returns/i)).toBeInTheDocument();
-    expect(screen.getByText('Confirmed Reversal')).toBeInTheDocument();
-    expect(screen.getByText('EURUSD')).toBeInTheDocument();
-    expect(screen.getByText('TP first')).toBeInTheDocument();
+    expect(screen.getAllByText('Confirmed Reversal').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('EURUSD').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('TP first').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('+1.25R')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /closed trade history/i })).toHaveAttribute('href', '/trade/history');
   });
 
   it('applies the small-profit filter through the server adapter instead of recomputing rows locally', async () => {
     render(<ProfitProtectionExitQualityPage />);
-    await screen.findByText('EURUSD');
-    expect(loadReport).toHaveBeenCalledWith(expect.objectContaining({
-      smallProfitOnly: false,
-      page: 1,
-    }));
+    await waitFor(() => {
+      expect(loadReport).toHaveBeenCalledWith(expect.objectContaining({
+        smallProfitOnly: false,
+        page: 1,
+      }));
+    });
 
     fireEvent.click(screen.getByRole('checkbox', { name: /small profits only/i }));
     fireEvent.click(screen.getByRole('button', { name: /apply filters/i }));
