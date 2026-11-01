@@ -170,11 +170,35 @@ describe('Direct MT5 onboarding', () => {
         accountId: '113392789',
         displayName: 'My MT5 demo',
       });
-      expect(createDirectMt5Pairing).toHaveBeenCalledWith('connection-1');
+      expect(createDirectMt5Pairing).toHaveBeenCalledWith('connection-1', 'PERSONAL_PC');
     });
     await waitFor(() => expect(screen.getByTestId('direct-mt5-pairing-code').textContent).toContain('ABCDEFGH23'));
     await waitFor(() => expect(screen.getByText('Ready')).not.toBeNull());
     expect(screen.getByText(/Broker server: Broker-Demo/)).not.toBeNull();
+  });
+
+  it('offers an always-on Windows VPS profile and sends WINDOWS_VPS when pairing', async () => {
+    createBrokerConnection.mockResolvedValue({ id: 'connection-vps', brokerName: 'MetaTrader 5' });
+    createDirectMt5Pairing.mockResolvedValue({
+      connectorId: 'connector-vps',
+      brokerConnectionId: 'connection-vps',
+      hostMode: 'WINDOWS_VPS',
+      pairingCode: 'ABCDEFGH23',
+      expiresAt: '2026-11-01T02:10:00.000Z',
+    });
+
+    render(<OnboardingBrokerPage />);
+    await waitFor(() => expect(screen.getByText(/Direct Connector \(recommended\)/i)).not.toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: /Always-on Windows VPS/i }));
+    expect(screen.getByText(/personal PC can be switched off/i)).not.toBeNull();
+
+    fireEvent.change(screen.getByLabelText('MT5 account login'), { target: { value: '113392789' } });
+    fireEvent.click(screen.getByText('Create DEMO connection & pairing code'));
+
+    await waitFor(() => {
+      expect(createDirectMt5Pairing).toHaveBeenCalledWith('connection-vps', 'WINDOWS_VPS');
+    });
   });
 
   it('offers the durable Android phone app separately from the Windows MT5 execution bridge', async () => {
@@ -189,7 +213,7 @@ describe('Direct MT5 onboarding', () => {
     expect(screen.getByText(/Windows connector is still required as the MT5 execution bridge/i)).not.toBeNull();
 
     const windows = screen.getByRole('link', { name: /Download Windows connector/i });
-    expect(windows.getAttribute('href')).toContain('mt5-connector-v0.2.0/iRexPro-MT5-Connector-Setup.exe');
+    expect(windows.getAttribute('href')).toContain('mt5-connector-v0.3.0/iRexPro-MT5-Connector-Setup.exe');
   });
 
   it('shows the Windows installer and keeps LIVE visibly certification-locked', async () => {
@@ -197,7 +221,7 @@ describe('Direct MT5 onboarding', () => {
     await waitFor(() => expect(screen.getByText(/Direct Connector \(recommended\)/i)).not.toBeNull());
 
     const download = screen.getByRole('link', { name: /Download Windows connector/i });
-    expect(download.getAttribute('href')).toContain('mt5-connector-v0.2.0/iRexPro-MT5-Connector-Setup.exe');
+    expect(download.getAttribute('href')).toContain('mt5-connector-v0.3.0/iRexPro-MT5-Connector-Setup.exe');
     expect(screen.getByText(/protocol v2/i)).not.toBeNull();
     expect(screen.getByText(/re-pair/i)).not.toBeNull();
 
