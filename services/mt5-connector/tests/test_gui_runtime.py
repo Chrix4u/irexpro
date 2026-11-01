@@ -159,3 +159,114 @@ def test_gui_rejects_invalid_pairing_code() -> None:
         assert "10-character" in str(exc)
     else:
         raise AssertionError("invalid pairing code must be refused before network access")
+
+
+def test_supervisor_retries_transient_failures_and_resets_after_ready(tmp_path: Path) -> None:
+    import requests
+    runtime = importlib.import_module("irexpro_mt5_connector.runtime")
+    stop_event = threading.Event()
+    calls: list[int] = []
+    waits: list[float] = []
+    statuses: list[str] = []
+
+    def runner(**kwargs):
+        calls.append(len(calls) + 1)
+        if len(calls) == 1:
+            raise requests.ConnectionError("offline")
+        kwargs["on_status"]("READY")
+        return 0
+
+    result = runtime.run_supervised_connector(
+        config_path=tmp_path / "connector.json",
+        journal_path=tmp_path / "journal.db",
+        stop_event=stop_event,
+        on_status=statuses.append,
+        runner=runner,
+        wait_fn=lambda _event, seconds: waits.append(seconds) or False,
+    )
+
+    assert result == 0
+    assert calls == [1, 2]
+    assert waits == [1.0]
+    assert any(status.startswith("RECONNECTING") for status in statuses)
+    assert "READY" in statuses
+
+
+def test_supervisor_does_not_retry_fatal_connector_error(tmp_path: Path) -> None:
+    import pytest
+    from irexpro_mt5_connector.client import ConnectorApiError
+
+    runtime = importlib.import_module("irexpro_mt5_connector.runtime")
+    calls = 0
+
+    def runner(**_kwargs):
+        nonlocal calls
+        calls += 1
+        raise ConnectorApiError("connector token is unavailable; pair again")
+
+    with pytest.raises(ConnectorApiError, match="pair again"):
+        runtime.run_supervised_connector(
+            config_path=tmp_path / "connector.json",
+            journal_path=tmp_path / "journal.db",
+            runner=runner,
+            wait_fn=lambda _event, _seconds: False,
+        )
+
+    assert calls == 1
+
+
+def test_protocol_v2_settings_default_to_unattended_start_for_existing_configs(tmp_path: Path) -> None:
+    path = tmp_path / "connector.json"
+    path.write_text(
+        json.dumps(
+            {
+                "server_url": "https://irexpro.example/api/v1",
+                "connector_id": "connector-1",
+                "broker_connection_id": "connection-1",
+                "account_login": "12345",
+                "broker_server": "Broker-Demo",
+                "account_type": "DEMO",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = ConnectorSettings.load(path)
+    assert settings.auto_start is True
+    assert settings.start_minimized is True
+
+
+def test_windows_autostart_command_quotes_executable_and_uses_background_flag() -> None:
+    windows = importlib.import_module("irexpro_mt5_connector.windows")
+    command = windows.build_autostart_command(r"C:\Program Files\iRexPro MT5 Connector\iRexPro-MT5-Connector.exe")
+    assert command == '"C:\\Program Files\\iRexPro MT5 Connector\\iRexPro-MT5-Connector.exe" --background'
+
+
+def test_pair_connector_persists_unattended_windows_preferences(tmp_path: Path) -> None:
+    runtime = importlib.import_module("irexpro_mt5_connector.runtime")
+    config_path = tmp_path / "connector.json"
+    terminal = FakeTerminal()
+
+    settings = runtime.pair_connector(
+        server_url="https://irexpro.example",
+        pairing_code="ABCDEFGH23",
+        terminal_path=None,
+        config_path=config_path,
+        auto_start=False,
+        start_minimized=False,
+        terminal_factory=lambda _path: terminal,
+        client_factory=FakePairClient,
+        secret_store_factory=lambda: object(),
+    )
+
+    assert settings.auto_start is False
+    assert settings.start_minimized is False
+    reloaded = ConnectorSettings.load(config_path)
+    assert reloaded.auto_start is False
+    assert reloaded.start_minimized is False
+
+
+def test_gui_background_launch_contract() -> None:
+    gui = importlib.import_module("irexpro_mt5_connector.gui")
+    assert gui.background_requested(["connector.exe", "--background"]) is True
+    assert gui.background_requested(["connector.exe"]) is False
