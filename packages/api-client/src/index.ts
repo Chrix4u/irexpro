@@ -7,6 +7,7 @@ import type {
   BrokerTestResult,
   CreateBrokerConnectionRequest,
   DirectMt5PairingView,
+  DirectMt5ConnectorHostMode,
   DirectMt5ConnectionHealthView,
   DirectMt5RevokeResult,
   ForgotPasswordRequest,
@@ -277,6 +278,7 @@ export interface ApiClient {
   /** Generate a short-lived pairing code for an owned DEMO MT5 BrokerConnection. */
   createDirectMt5Pairing(
     brokerConnectionId: string,
+    hostMode?: DirectMt5ConnectorHostMode,
   ): Promise<DirectMt5PairingView>;
   /** Read the authenticated owner's Direct MT5 connector health. */
   getDirectMt5ConnectionHealth(
@@ -720,10 +722,10 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
         body: JSON.stringify(body),
       }),
 
-    createDirectMt5Pairing: (brokerConnectionId) =>
+    createDirectMt5Pairing: (brokerConnectionId, hostMode = "PERSONAL_PC") =>
       request<DirectMt5PairingView>("/broker/direct-mt5/pairings", {
         method: "POST",
-        body: JSON.stringify({ brokerConnectionId }),
+        body: JSON.stringify({ brokerConnectionId, hostMode }),
       }),
 
     getDirectMt5ConnectionHealth: (brokerConnectionId) =>
