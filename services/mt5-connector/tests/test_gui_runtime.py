@@ -393,3 +393,71 @@ def test_supervisor_does_not_retry_fatal_mt5_runtime_errors(tmp_path: Path) -> N
             wait_fn=must_not_wait,
         )
     assert calls == 1
+
+
+def test_pairing_captures_tk_preferences_before_worker_thread(monkeypatch, tmp_path: Path) -> None:
+    gui = importlib.import_module("irexpro_mt5_connector.gui")
+    main_thread = threading.current_thread()
+    errors: list[str] = []
+
+    class Var:
+        def __init__(self, value):
+            self.value = value
+        def get(self):
+            return self.value
+        def set(self, value):
+            self.value = value
+
+    class TkBoundBoolVar(Var):
+        def get(self):
+            if threading.current_thread() is not main_thread:
+                raise RuntimeError("Tk variable read outside UI thread")
+            return self.value
+
+    original_thread = threading.Thread
+
+    class JoiningThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+        def start(self):
+            thread = original_thread(target=self.target)
+            thread.start()
+            thread.join()
+
+    app = gui.ConnectorDesktopApp.__new__(gui.ConnectorDesktopApp)
+    app.code_var = Var("ABCDEFGH23")
+    app.server_var = Var("https://irexpro.example/api/v1")
+    app.terminal_var = Var("")
+    app.auto_start_var = TkBoundBoolVar(True)
+    app.start_minimized_var = TkBoundBoolVar(True)
+    app.status_var = Var("")
+    app.account_var = Var("")
+    app.paths = gui.ConnectorPaths(tmp_path, tmp_path / "connector.json", tmp_path / "journal.db")
+    app.loaded_settings = None
+    app._set_busy = lambda _busy: None
+    app._post = lambda callback: callback()
+    app._start = lambda: None
+    app._apply_autostart = lambda _settings: None
+    app._show_error = errors.append
+
+    def fake_pair_connector(**kwargs):
+        return ConnectorSettings(
+            server_url=kwargs["server_url"],
+            connector_id="c1",
+            broker_connection_id="b1",
+            account_login="12345",
+            broker_server="Broker-Demo",
+            account_type="DEMO",
+            auto_start=kwargs["auto_start"],
+            start_minimized=kwargs["start_minimized"],
+        )
+
+    monkeypatch.setattr(gui, "pair_connector", fake_pair_connector)
+    monkeypatch.setattr(gui.threading, "Thread", JoiningThread)
+
+    app._pair_and_start()
+
+    assert errors == []
+    assert app.loaded_settings is not None
+    assert app.loaded_settings.auto_start is True
+    assert app.loaded_settings.start_minimized is True

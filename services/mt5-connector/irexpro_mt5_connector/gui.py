@@ -189,6 +189,8 @@ class ConnectorDesktopApp:
             return
         server_url = self.server_var.get().strip() or DEFAULT_SERVER_URL
         terminal_path = self.terminal_var.get().strip() or None
+        auto_start = bool(self.auto_start_var.get())
+        start_minimized = bool(self.start_minimized_var.get())
         self._set_busy(True)
         self.status_var.set("Pairing with iRexPro…")
 
@@ -199,8 +201,8 @@ class ConnectorDesktopApp:
                     pairing_code=pairing_code,
                     terminal_path=terminal_path,
                     config_path=self.paths.config,
-                    auto_start=bool(self.auto_start_var.get()),
-                    start_minimized=bool(self.start_minimized_var.get()),
+                    auto_start=auto_start,
+                    start_minimized=start_minimized,
                 )
                 self._post(
                     lambda: self.account_var.set(
