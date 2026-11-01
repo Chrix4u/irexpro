@@ -23,6 +23,110 @@ from .mt5_terminal import MetaQuotesMt5Terminal
 
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+HOST_WORKER_VERSION = "0.4.0"
+WORKER_KEYRING_SERVICE = "irexpro.mt5.host-worker"
+
+
+def _validate_worker_id(worker_id: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}", worker_id):
+        raise ValueError("Hosted MT5 worker id is invalid")
+
+
+def load_worker_token(
+    worker_id: str,
+    *,
+    environ: Mapping[str, str] | None = None,
+    keyring_module: Any | None = None,
+) -> str:
+    _validate_worker_id(worker_id)
+    env = environ if environ is not None else os.environ
+    token = (env.get("HOSTED_MT5_WORKER_TOKEN") or "").strip()
+    if not token:
+        if keyring_module is None:
+            import keyring as keyring_module
+        token = (keyring_module.get_password(WORKER_KEYRING_SERVICE, worker_id) or "").strip()
+    if len(token) < 32:
+        raise ValueError("Hosted MT5 worker token must be at least 32 characters")
+    return token
+
+
+def store_worker_token(
+    worker_id: str,
+    token: str,
+    *,
+    keyring_module: Any | None = None,
+) -> None:
+    _validate_worker_id(worker_id)
+    normalized = token.strip()
+    if len(normalized) < 32:
+        raise ValueError("Hosted MT5 worker token must be at least 32 characters")
+    if keyring_module is None:
+        import keyring as keyring_module
+    keyring_module.set_password(WORKER_KEYRING_SERVICE, worker_id, normalized)
+
+
+class WorkerInstanceLock:
+    """Windows byte-range lock preventing duplicate supervisors for one worker id."""
+
+    def __init__(
+        self,
+        session_root: str | Path,
+        worker_id: str,
+        *,
+        platform_name: str | None = None,
+        msvcrt_module: Any | None = None,
+    ) -> None:
+        _validate_worker_id(worker_id)
+        self.session_root = Path(session_root)
+        self.worker_id = worker_id
+        self.platform_name = platform_name or sys.platform
+        self._msvcrt = msvcrt_module
+        self._file: Any | None = None
+        self.lock_path = self.session_root / f".{worker_id}.lock"
+
+    def acquire(self) -> None:
+        if self._file is not None:
+            return
+        if self.platform_name != "win32":
+            raise RuntimeError("Hosted MT5 worker instance locking requires Windows")
+        msvcrt_module = self._msvcrt
+        if msvcrt_module is None:
+            import msvcrt as msvcrt_module
+
+        self.session_root.mkdir(parents=True, exist_ok=True)
+        handle = self.lock_path.open("a+b")
+        try:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt_module.locking(handle.fileno(), msvcrt_module.LK_NBLCK, 1)
+        except OSError as exc:
+            handle.close()
+            raise RuntimeError(
+                f"Hosted MT5 worker {self.worker_id} is already running"
+            ) from exc
+        self._msvcrt = msvcrt_module
+        self._file = handle
+
+    def release(self) -> None:
+        handle = self._file
+        if handle is None:
+            return
+        self._file = None
+        try:
+            handle.seek(0)
+            self._msvcrt.locking(handle.fileno(), self._msvcrt.LK_UNLCK, 1)
+        finally:
+            handle.close()
+
+    def __enter__(self) -> "WorkerInstanceLock":
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self.release()
 
 
 def _normalize_api_base_url(server_url: str) -> str:
@@ -192,6 +296,28 @@ class HostWorkerApi:
         )
         self._assert_ok(response)
 
+    def heartbeat_worker_presence(
+        self,
+        *,
+        worker_version: str,
+        runtime_ready: bool,
+        max_sessions: int,
+        active_sessions: int,
+    ) -> None:
+        response = self.session.post(
+            f"{self.server_url}/broker/direct-mt5/hosted-worker/presence",
+            headers=self._headers(),
+            json={
+                "workerId": self.worker_id,
+                "workerVersion": worker_version,
+                "runtimeReady": runtime_ready,
+                "maxSessions": max_sessions,
+                "activeSessions": active_sessions,
+            },
+            timeout=self.timeout_seconds,
+        )
+        self._assert_ok(response)
+
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self._worker_token}",
@@ -275,12 +401,11 @@ def build_session_child_spec(
     session_dir: str | Path,
     terminal_path: str | Path,
     python_executable: str | None = None,
+    frozen_executable: bool | None = None,
 ) -> ChildProcessSpec:
     executable = python_executable or sys.executable
-    argv = (
-        executable,
-        "-m",
-        "irexpro_mt5_connector.host_worker",
+    is_frozen = bool(getattr(sys, "frozen", False)) if frozen_executable is None else frozen_executable
+    child_args = (
         "--session-child",
         "--server-url",
         server_url,
@@ -288,6 +413,12 @@ def build_session_child_spec(
         str(Path(session_dir)),
         "--terminal-path",
         str(Path(terminal_path)),
+    )
+    argv = (executable, *child_args) if is_frozen else (
+        executable,
+        "-m",
+        "irexpro_mt5_connector.host_worker",
+        *child_args,
     )
     return ChildProcessSpec(
         argv=argv,
@@ -342,6 +473,7 @@ class HostedMt5WorkerSupervisor:
         self.launcher = launcher
         self.monotonic = monotonic
         self._active: dict[str, ActiveHostedSession] = {}
+        self._last_presence_heartbeat: float | None = None
 
     @property
     def active_connector_ids(self) -> tuple[str, ...]:
@@ -372,6 +504,21 @@ class HostedMt5WorkerSupervisor:
             if assignment is None:
                 break
             self._launch_assignment(assignment, now)
+
+        if (
+            self._last_presence_heartbeat is None
+            or now - self._last_presence_heartbeat >= self.config.heartbeat_seconds
+        ):
+            try:
+                self.api.heartbeat_worker_presence(
+                    worker_version=HOST_WORKER_VERSION,
+                    runtime_ready=True,
+                    max_sessions=self.config.max_sessions,
+                    active_sessions=len(self._active),
+                )
+            except (HostWorkerApiError, requests.RequestException):
+                pass
+            self._last_presence_heartbeat = now
 
     def _reap_exited(self) -> None:
         for connector_id, active in list(self._active.items()):
@@ -588,6 +735,11 @@ def _read_child_assignment_from_stdin() -> dict[str, Any]:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="iRexPro hosted MT5 execution worker")
     parser.add_argument("--session-child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--store-worker-token",
+        action="store_true",
+        help="store the worker bearer token securely in Windows Credential Manager",
+    )
     parser.add_argument("--readiness-check", action="store_true", help="verify this Windows MT5 worker host without leasing an account")
     parser.add_argument("--server-url", default=os.getenv("IREXPRO_API_URL", ""))
     parser.add_argument("--worker-id", default=os.getenv("HOSTED_MT5_WORKER_ID", ""))
@@ -620,6 +772,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     validate_host_worker_runtime()
+    if args.store_worker_token:
+        if not args.worker_id:
+            raise RuntimeError("HOSTED_MT5_WORKER_ID is required to store the worker token")
+        if sys.stdin.isatty():
+            from getpass import getpass
+
+            token = getpass("Hosted MT5 worker token: ")
+        else:
+            token = sys.stdin.readline().strip()
+        store_worker_token(args.worker_id, token)
+        print("Hosted MT5 worker credential stored securely.")
+        return 0
+
     if args.session_child:
         if not args.server_url or not args.session_dir or not args.terminal_path:
             raise RuntimeError("Hosted MT5 session child is missing non-secret runtime paths")
@@ -633,7 +798,7 @@ def main(argv: list[str] | None = None) -> int:
     config = HostWorkerConfig(
         server_url=args.server_url,
         worker_id=args.worker_id,
-        worker_token=os.getenv("HOSTED_MT5_WORKER_TOKEN", ""),
+        worker_token=load_worker_token(args.worker_id),
         mt5_template_dir=Path(args.mt5_template_dir),
         session_root=Path(args.session_root),
         max_sessions=args.max_sessions,
@@ -644,7 +809,9 @@ def main(argv: list[str] | None = None) -> int:
     if not config.mt5_template_dir.is_dir():
         raise RuntimeError("HOSTED_MT5_TEMPLATE_DIR must point to a clean MT5 template directory")
     config.session_root.mkdir(parents=True, exist_ok=True)
-    return HostedMt5WorkerSupervisor(config).run_forever()
+    supervisor = HostedMt5WorkerSupervisor(config)
+    with WorkerInstanceLock(config.session_root, config.worker_id):
+        return supervisor.run_forever()
 
 
 if __name__ == "__main__":

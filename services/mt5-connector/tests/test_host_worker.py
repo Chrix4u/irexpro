@@ -12,10 +12,13 @@ from irexpro_mt5_connector.host_worker import (
     HostedMt5WorkerSupervisor,
     InMemorySecretStore,
     build_session_child_spec,
+    load_worker_token,
+    store_worker_token,
     check_host_worker_readiness,
     prepare_session_directory,
     run_session_child,
     validate_host_worker_runtime,
+    WorkerInstanceLock,
 )
 
 
@@ -103,6 +106,36 @@ def test_worker_api_treats_204_as_no_work_and_renews_exact_assignment():
     }
 
 
+def test_worker_api_reports_non_secret_presence_and_capacity():
+    session = FakeHttpSession([FakeResponse(200, {"workerId": "worker-accra-1", "accepted": True})])
+    api = HostWorkerApi(
+        "https://api.example.test/api/v1",
+        "worker-accra-1",
+        "w" * 32,
+        session=session,
+    )
+
+    api.heartbeat_worker_presence(
+        worker_version="0.4.0",
+        runtime_ready=True,
+        max_sessions=4,
+        active_sessions=1,
+    )
+
+    url, request = session.calls[0]
+    assert url.endswith("/broker/direct-mt5/hosted-worker/presence")
+    assert request["json"] == {
+        "workerId": "worker-accra-1",
+        "workerVersion": "0.4.0",
+        "runtimeReady": True,
+        "maxSessions": 4,
+        "activeSessions": 1,
+    }
+    assert "Authorization" in request["headers"]
+    assert "password" not in json.dumps(request["json"]).lower()
+    assert "token" not in json.dumps(request["json"]).lower()
+
+
 def test_prepare_session_directory_copies_clean_mt5_template_once(tmp_path: Path):
     template = tmp_path / "template"
     template.mkdir()
@@ -147,6 +180,27 @@ def test_child_process_spec_keeps_password_and_connector_token_out_of_argv_and_c
     assert "BROKER_ENCRYPTION_KEY" not in spec.env
 
 
+def test_frozen_host_worker_reenters_same_executable_for_session_child_without_python_module_flag(tmp_path: Path):
+    session_dir = tmp_path / "connector-1"
+    session_dir.mkdir()
+    terminal_path = session_dir / "terminal64.exe"
+    terminal_path.write_bytes(b"terminal")
+
+    spec = build_session_child_spec(
+        assignment(),
+        server_url="https://api.example.test/api/v1",
+        session_dir=session_dir,
+        terminal_path=terminal_path,
+        python_executable="iRexPro-MT5-Host-Worker.exe",
+        frozen_executable=True,
+    )
+
+    assert spec.argv[0] == "iRexPro-MT5-Host-Worker.exe"
+    assert spec.argv[1] == "--session-child"
+    assert "-m" not in spec.argv
+    assert "irexpro_mt5_connector.host_worker" not in spec.argv
+
+
 def test_in_memory_secret_store_never_needs_a_disk_backend():
     store = InMemorySecretStore("connector-1", "secret-token")
     assert store.get("connector-1") == "secret-token"
@@ -155,6 +209,47 @@ def test_in_memory_secret_store_never_needs_a_disk_backend():
     assert store.get("connector-1") is None
     store.set("connector-1", "rotated")
     assert store.get("connector-1") == "rotated"
+
+
+class FakeKeyring:
+    def __init__(self, stored=None):
+        self.stored = stored
+        self.get_calls = []
+        self.set_calls = []
+
+    def get_password(self, service, username):
+        self.get_calls.append((service, username))
+        return self.stored
+
+    def set_password(self, service, username, password):
+        self.set_calls.append((service, username, password))
+        self.stored = password
+
+
+def test_worker_token_loads_from_environment_or_windows_credential_store_without_argv():
+    keyring = FakeKeyring("k" * 32)
+    assert load_worker_token(
+        "worker-accra-1",
+        environ={"HOSTED_MT5_WORKER_TOKEN": "e" * 32},
+        keyring_module=keyring,
+    ) == "e" * 32
+    assert keyring.get_calls == []
+
+    assert load_worker_token(
+        "worker-accra-1",
+        environ={},
+        keyring_module=keyring,
+    ) == "k" * 32
+    assert keyring.get_calls == [("irexpro.mt5.host-worker", "worker-accra-1")]
+
+
+def test_worker_token_can_be_stored_in_credential_manager_without_a_cli_secret_argument():
+    keyring = FakeKeyring()
+    store_worker_token("worker-accra-1", "s" * 32, keyring_module=keyring)
+    assert keyring.set_calls == [("irexpro.mt5.host-worker", "worker-accra-1", "s" * 32)]
+
+    with pytest.raises(ValueError, match="at least 32"):
+        store_worker_token("worker-accra-1", "short", keyring_module=keyring)
 
 
 class FakeChild:
@@ -177,10 +272,17 @@ class FakeChild:
 
 
 class FakeWorkerApi:
-    def __init__(self, assignments):
+    def __init__(self, assignments, presence_error=None):
         self.assignments = list(assignments)
         self.lease_calls = 0
         self.heartbeats = []
+        self.presences = []
+        self.presence_error = presence_error
+
+    def heartbeat_worker_presence(self, **payload):
+        self.presences.append(payload)
+        if self.presence_error:
+            raise self.presence_error
 
     def lease_assignment(self):
         self.lease_calls += 1
@@ -191,6 +293,57 @@ class FakeWorkerApi:
 
     def heartbeat_assignment(self, connector_id, error_code=None):
         self.heartbeats.append((connector_id, error_code))
+
+
+def test_supervisor_reports_presence_even_with_zero_assignments(tmp_path: Path):
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "terminal64.exe").write_bytes(b"fixture")
+    fake_api = FakeWorkerApi([])
+    config = HostWorkerConfig(
+        server_url="https://api.example.test/api/v1",
+        worker_id="worker-accra-1",
+        worker_token="w" * 32,
+        mt5_template_dir=template,
+        session_root=tmp_path / "sessions",
+        max_sessions=4,
+        heartbeat_seconds=20,
+    )
+    supervisor = HostedMt5WorkerSupervisor(config, api=fake_api, monotonic=lambda: 100.0)
+
+    supervisor.tick()
+
+    assert fake_api.presences == [
+        {
+            "worker_version": "0.4.0",
+            "runtime_ready": True,
+            "max_sessions": 4,
+            "active_sessions": 0,
+        }
+    ]
+    assert fake_api.lease_calls == 1
+
+
+def test_supervisor_continues_leasing_when_presence_heartbeat_temporarily_fails(tmp_path: Path):
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "terminal64.exe").write_bytes(b"fixture")
+    fake_api = FakeWorkerApi([None], presence_error=HostWorkerApiError("presence unavailable"))
+    config = HostWorkerConfig(
+        server_url="https://api.example.test/api/v1",
+        worker_id="worker-accra-1",
+        worker_token="w" * 32,
+        mt5_template_dir=template,
+        session_root=tmp_path / "sessions",
+        max_sessions=4,
+        heartbeat_seconds=20,
+    )
+    supervisor = HostedMt5WorkerSupervisor(config, api=fake_api, monotonic=lambda: 100.0)
+
+    supervisor.tick()
+
+    assert len(fake_api.presences) == 1
+    assert fake_api.lease_calls == 1
 
 
 def test_supervisor_enforces_capacity_and_renews_active_worker_lease(tmp_path: Path):
@@ -316,6 +469,94 @@ def test_pilot_runtime_is_windows_only():
     with pytest.raises(RuntimeError, match="Windows"):
         validate_host_worker_runtime(platform_name="linux")
     validate_host_worker_runtime(platform_name="win32")
+
+
+def test_worker_instance_lock_fails_fast_when_same_windows_worker_is_already_running(tmp_path: Path):
+    class FakeMsvcrt:
+        LK_NBLCK = 1
+        LK_UNLCK = 2
+
+        def __init__(self):
+            self.locked = False
+            self.calls = []
+
+        def locking(self, fd, mode, count):
+            self.calls.append((mode, count))
+            if mode == self.LK_NBLCK:
+                if self.locked:
+                    raise OSError("already locked")
+                self.locked = True
+            elif mode == self.LK_UNLCK:
+                self.locked = False
+
+    fake = FakeMsvcrt()
+    first = WorkerInstanceLock(
+        tmp_path,
+        "worker-accra-1",
+        platform_name="win32",
+        msvcrt_module=fake,
+    )
+    second = WorkerInstanceLock(
+        tmp_path,
+        "worker-accra-1",
+        platform_name="win32",
+        msvcrt_module=fake,
+    )
+
+    with first:
+        with pytest.raises(RuntimeError, match="already running"):
+            second.acquire()
+
+    assert fake.locked is False
+    assert (tmp_path / ".worker-accra-1.lock").exists()
+
+
+def test_worker_main_holds_single_instance_lock_for_supervisor_lifetime(tmp_path: Path, monkeypatch):
+    from irexpro_mt5_connector import host_worker
+
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "terminal64.exe").write_bytes(b"fixture")
+    sessions = tmp_path / "sessions"
+    events = []
+
+    class FakeLock:
+        def __init__(self, session_root, worker_id):
+            events.append(("lock-init", Path(session_root), worker_id))
+
+        def __enter__(self):
+            events.append(("lock-enter",))
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            events.append(("lock-exit",))
+
+    class FakeSupervisor:
+        def __init__(self, config):
+            events.append(("supervisor-init", config.worker_id))
+
+        def run_forever(self):
+            events.append(("supervisor-run",))
+            return 0
+
+    monkeypatch.setattr(host_worker, "validate_host_worker_runtime", lambda: None)
+    monkeypatch.setattr(host_worker, "load_worker_token", lambda worker_id: "w" * 32)
+    monkeypatch.setattr(host_worker, "WorkerInstanceLock", FakeLock)
+    monkeypatch.setattr(host_worker, "HostedMt5WorkerSupervisor", FakeSupervisor)
+
+    result = host_worker.main([
+        "--server-url", "https://api.example.test/api/v1",
+        "--worker-id", "worker-accra-1",
+        "--mt5-template-dir", str(template),
+        "--session-root", str(sessions),
+    ])
+
+    assert result == 0
+    assert events[-3:] == [
+        ("lock-enter",),
+        ("supervisor-run",),
+        ("lock-exit",),
+    ]
 
 
 def test_session_child_writes_only_non_secret_connector_config_and_keeps_credentials_in_memory(tmp_path: Path, monkeypatch):

@@ -118,16 +118,16 @@ describe('BrokerProviderRegistryService', () => {
         code: 'HOSTED_MT5_NOT_READY',
       });
 
-      const ready = await buildService(['direct-mt5'], {
+      const configuredWithoutWorker = await buildService(['direct-mt5'], {
         'broker.hostedMt5Enabled': true,
         'broker.hostedMt5WorkerToken': 'w'.repeat(32),
       });
-      expect(ready.getEntry('direct-mt5')?.hostedMt5Readiness).toEqual({
-        ready: true,
-        code: 'READY',
-        message: null,
+      expect(configuredWithoutWorker.getEntry('direct-mt5')?.hostedMt5Readiness).toEqual({
+        ready: false,
+        code: 'HOSTED_MT5_NO_WORKER',
+        message: expect.stringMatching(/execution worker/i),
       });
-      expect(ready.getEntry('direct-mt5')?.connectionReadiness.ready).toBe(true);
+      expect(configuredWithoutWorker.getEntry('direct-mt5')?.connectionReadiness.ready).toBe(true);
     });
 
     it('reports cTrader (and its broker aliases) as BETA + connectable when the shared engine is registered (Task 48-B)', async () => {

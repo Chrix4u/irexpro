@@ -58,9 +58,11 @@ jobs:
       - name: Run Direct MT5 connector tests
         run: python -m pytest services/mt5-connector/tests -q
 
-      - name: Build desktop executable with PyInstaller
+      - name: Build Windows executables with PyInstaller
         working-directory: services/mt5-connector
-        run: pyinstaller packaging/irexpro-mt5-connector.spec --noconfirm --clean
+        run: |
+          pyinstaller packaging/irexpro-mt5-connector.spec --noconfirm --clean
+          pyinstaller packaging/irexpro-mt5-host-worker.spec --noconfirm --clean
 
       - name: Smoke-test frozen Windows executable
         working-directory: services/mt5-connector
@@ -69,6 +71,19 @@ jobs:
           if ($process.ExitCode -ne 0) {
             throw "Frozen iRexPro MT5 Connector self-test failed with exit code $($process.ExitCode)"
           }
+
+      - name: Smoke-test frozen Windows host worker
+        working-directory: services/mt5-connector
+        run: |
+          & ".\dist\iRexPro-MT5-Host-Worker.exe" --self-test
+          if ($LASTEXITCODE -ne 0) {
+            throw "Frozen iRexPro MT5 Host Worker self-test failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Validate hosted worker bootstrap syntax
+        working-directory: services/mt5-connector
+        run: |
+          $null = [scriptblock]::Create((Get-Content -Raw "packaging\install-host-worker.ps1"))
 
       - name: Resolve and validate connector version
         id: connector_version
@@ -96,6 +111,7 @@ jobs:
           $version = "${{ steps.connector_version.outputs.version }}"
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" "packaging\installer.iss"
           Copy-Item "dist\iRexPro-MT5-Connector.exe" "packaging\output\iRexPro-MT5-Connector-Portable.exe"
+          Copy-Item "dist\iRexPro-MT5-Host-Worker.exe" "packaging\output\iRexPro-MT5-Host-Worker.exe"
 
       - name: Generate SHA-256 checksums
         working-directory: services/mt5-connector/packaging/output
@@ -114,5 +130,7 @@ jobs:
           path: |
             services/mt5-connector/packaging/output/iRexPro-MT5-Connector-Setup.exe
             services/mt5-connector/packaging/output/iRexPro-MT5-Connector-Portable.exe
+            services/mt5-connector/packaging/output/iRexPro-MT5-Host-Worker.exe
+            services/mt5-connector/packaging/install-host-worker.ps1
             services/mt5-connector/packaging/output/SHA256SUMS.txt
           retention-days: 30

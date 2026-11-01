@@ -42,6 +42,17 @@ const decrypted = {
   additionalParams: { brokerServer: 'Broker-Demo', connectionMethod: 'IREXPRO_HOSTED' },
 };
 
+const readyPresence = {
+  getPoolReadiness: jest.fn().mockReturnValue({
+    ready: true,
+    reason: 'READY',
+    freshWorkers: 1,
+    readyWorkers: 1,
+    availableWorkers: 1,
+    totalSpareSessions: 3,
+  }),
+} as any;
+
 describe('HostedMt5Service', () => {
   it('fails closed before database access when hosted execution is not explicitly enabled', async () => {
     const query = jest.fn();
@@ -76,6 +87,7 @@ describe('HostedMt5Service', () => {
       encryption,
       pairing,
       config(),
+      readyPresence,
     );
 
     const result = await service.provision('user-1', 'connection-1');
@@ -126,6 +138,34 @@ describe('HostedMt5Service', () => {
     );
   });
 
+  it('fails closed before decrypting credentials when no hosted worker has spare capacity', async () => {
+    const query = jest.fn().mockResolvedValueOnce([demoConnection]);
+    const encryption = { decrypt: jest.fn() } as any;
+    const presence = {
+      getPoolReadiness: jest.fn().mockReturnValue({
+        ready: false,
+        reason: 'NO_CAPACITY',
+        freshWorkers: 1,
+        readyWorkers: 1,
+        availableWorkers: 0,
+        totalSpareSessions: 0,
+      }),
+    } as any;
+    const service = new HostedMt5Service(
+      { query } as unknown as DataSource,
+      encryption,
+      { digestToken: jest.fn() } as any,
+      config(),
+      presence,
+    );
+
+    await expect(service.provision('user-1', 'connection-1')).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(encryption.decrypt).not.toHaveBeenCalled();
+  });
+
   it('rejects hosted LIVE during the pilot before creating a connector', async () => {
     const query = jest.fn().mockResolvedValueOnce([{ ...demoConnection, account_type: 'LIVE' }]);
     const encryption = { decrypt: jest.fn() } as any;
@@ -155,6 +195,7 @@ describe('HostedMt5Service', () => {
       encryption,
       { digestToken: jest.fn() } as any,
       config(),
+      readyPresence,
     );
 
     await expect(service.provision('user-1', 'connection-1')).rejects.toBeInstanceOf(
@@ -239,5 +280,44 @@ describe('HostedMt5Service', () => {
     await expect(
       service.heartbeatAssignment('connector-1', 'worker-1', WORKER_TOKEN, 'password=oops'),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('authenticates worker presence without requiring rollout to be enabled', async () => {
+    const query = jest.fn();
+    const presence = {
+      heartbeat: jest.fn().mockResolvedValue({ workerId: 'mt5-win-01', accepted: true }),
+    } as any;
+    const service = new HostedMt5Service(
+      { query } as unknown as DataSource,
+      { decrypt: jest.fn() } as any,
+      { digestToken: jest.fn() } as any,
+      config({ enabled: false }),
+      presence,
+    );
+
+    await expect(
+      service.heartbeatWorkerPresence('mt5-win-01', WORKER_TOKEN, {
+        workerVersion: '0.4.0',
+        runtimeReady: true,
+        maxSessions: 4,
+        activeSessions: 0,
+      }),
+    ).resolves.toEqual({ workerId: 'mt5-win-01', accepted: true });
+    expect(presence.heartbeat).toHaveBeenCalledWith('mt5-win-01', {
+      workerVersion: '0.4.0',
+      runtimeReady: true,
+      maxSessions: 4,
+      activeSessions: 0,
+    });
+    expect(query).not.toHaveBeenCalled();
+
+    await expect(
+      service.heartbeatWorkerPresence('mt5-win-01', 'wrong-token', {
+        workerVersion: '0.4.0',
+        runtimeReady: true,
+        maxSessions: 4,
+        activeSessions: 0,
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 });

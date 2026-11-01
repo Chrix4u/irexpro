@@ -10,6 +10,7 @@ import {
 } from './broker-definition';
 import { BrokerCapability } from './broker-capability.enum';
 import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
+import { HostedMt5WorkerPresenceService } from '../direct-mt5/hosted-mt5-worker-presence.service';
 
 /** Materialized (always-present) production-LIVE verification status. */
 export type BrokerProductionLiveVerificationStatus = 'UNVERIFIED' | 'VERIFIED';
@@ -21,7 +22,9 @@ export type BrokerConnectionReadinessCode =
   | 'PROVIDER_APP_APPROVAL_REQUIRED'
   | 'OAUTH_REDIRECT_REQUIRED'
   | 'MOBILE_OAUTH_CALLBACK_REQUIRED'
-  | 'HOSTED_MT5_NOT_READY';
+  | 'HOSTED_MT5_NOT_READY'
+  | 'HOSTED_MT5_NO_WORKER'
+  | 'HOSTED_MT5_NO_CAPACITY';
 
 export interface BrokerConnectionChannelReadiness {
   ready: boolean;
@@ -93,6 +96,7 @@ export class BrokerProviderRegistryService {
   constructor(
     private readonly adapterRegistry: BrokerAdapterRegistry,
     @Optional() private readonly configService?: ConfigService,
+    @Optional() private readonly hostedWorkerPresence?: HostedMt5WorkerPresenceService,
   ) {}
 
   /** Full catalog with runtime adapter availability overlay. */
@@ -166,6 +170,24 @@ export class BrokerProviderRegistryService {
         code: 'HOSTED_MT5_NOT_READY',
         message:
           'iRexPro Hosted MT5 is awaiting execution-worker configuration. Use the passwordless Direct Connector.',
+      };
+    }
+
+    const pool = this.hostedWorkerPresence?.getPoolReadiness();
+    if (!pool || pool.reason === 'NO_FRESH_WORKER' || pool.reason === 'NO_READY_WORKER') {
+      return {
+        ready: false,
+        code: 'HOSTED_MT5_NO_WORKER',
+        message:
+          'iRexPro Hosted MT5 is waiting for an online execution worker. Use the passwordless Direct Connector for now.',
+      };
+    }
+    if (!pool.ready || pool.reason === 'NO_CAPACITY') {
+      return {
+        ready: false,
+        code: 'HOSTED_MT5_NO_CAPACITY',
+        message:
+          'iRexPro Hosted MT5 execution capacity is currently full. Try again after capacity becomes available.',
       };
     }
     return { ready: true, code: 'READY', message: null };

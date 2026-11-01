@@ -47,7 +47,24 @@ The hosted-MT5 deployment uses these API/worker environment values. `HOSTED_MT5_
 | `HOSTED_MT5_POLL_SECONDS` | Supervisor polling interval | `2` |
 | `HOSTED_MT5_TERMINAL_RELATIVE_PATH` | Terminal path inside each template/session | `terminal64.exe` |
 
-`HOSTED_MT5_WORKER_TOKEN` is intentionally not accepted as a command-line flag. Supply it to the process through the protected runtime environment or the Windows service/scheduled-task secret configuration. Do not place it in a shortcut, command history, process arguments, repository file, or log.
+`HOSTED_MT5_WORKER_TOKEN` is intentionally not accepted as a command-line flag. The packaged Host Worker first checks a protected process environment and otherwise reads the token from Windows Credential Manager under service `irexpro.mt5.host-worker` and the configured worker ID. Do not place it in a shortcut, command history, process arguments, repository file, scheduled-task argument, or log.
+
+## One-command Windows bootstrap
+
+The verified Windows artifact includes `iRexPro-MT5-Host-Worker.exe` and `install-host-worker.ps1`. Run the bootstrap from an elevated PowerShell session **while signed in as the dedicated iRexPro execution account**. The account belongs to iRexPro infrastructure; it is not the customer's Windows account.
+
+```powershell
+.\install-host-worker.ps1 `
+  -ApiUrl "https://irexpro.lightworldtech.com/api/v1" `
+  -WorkerId "mt5-win-01" `
+  -HostWorkerExe ".\iRexPro-MT5-Host-Worker.exe" `
+  -Mt5TemplateSource "D:\MT5-Clean-Template" `
+  -MaxSessions 4
+```
+
+The bootstrap creates an ACL-protected installation/session root under ProgramData, copies the clean MT5 template and Host Worker executable, runs the no-secret readiness probe, prompts for the infrastructure token as a `SecureString`, stores that token in Windows Credential Manager through the Host Worker, registers an at-logon scheduled task with restart-on-failure, and starts the task. The token is piped over stdin only during credential storage; it is not written to a configuration file and is not included in the task arguments.
+
+The DEMO pilot intentionally uses an interactive at-logon task because MT5 is a desktop terminal. Disconnecting RDP is acceptable, but the dedicated execution account must remain signed in. This is an iRexPro operations responsibility and does not create any customer-PC requirement.
 
 ## No-secret readiness check
 
@@ -64,7 +81,7 @@ A successful probe returns JSON containing `"status": "READY"`, `apiReachable`, 
 
 ## Starting the worker
 
-After the readiness check passes and the worker token has been supplied securely to the process environment, start:
+After the readiness check passes and the worker token is available either in Windows Credential Manager or a protected process environment, start:
 
 ```powershell
 irexpro-mt5-host-worker `

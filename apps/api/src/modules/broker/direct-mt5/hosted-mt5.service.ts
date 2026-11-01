@@ -13,6 +13,10 @@ import { DataSource } from 'typeorm';
 import type { DecryptedBrokerCredentials } from '../interfaces/broker-adapter.interface';
 import { CredentialEncryptionService } from '../services/credential-encryption.service';
 import { DirectMt5PairingService } from './direct-mt5-pairing.service';
+import {
+  HostedMt5WorkerPresenceInput,
+  HostedMt5WorkerPresenceService,
+} from './hosted-mt5-worker-presence.service';
 
 const HOSTED_WORKER_LEASE_SECONDS = 60;
 const HOSTED_RECLAIM_STALE_SECONDS = 30;
@@ -65,6 +69,7 @@ export class HostedMt5Service {
     private readonly encryptionService: CredentialEncryptionService,
     private readonly pairingService: DirectMt5PairingService,
     configService: ConfigService,
+    private readonly workerPresence?: HostedMt5WorkerPresenceService,
   ) {
     this.hostedEnabled =
       configService.get<boolean>('broker.hostedMt5Enabled') ??
@@ -124,6 +129,7 @@ export class HostedMt5Service {
       };
     }
 
+    this.assertHostedCapacity();
     const credentials = this.decryptCredentials(connection);
     try {
       const { brokerServer } = this.requireHostedCredentials(credentials);
@@ -201,6 +207,19 @@ export class HostedMt5Service {
     } finally {
       this.clearCredentials(credentials);
     }
+  }
+
+  async heartbeatWorkerPresence(
+    workerId: string,
+    rawWorkerToken: string,
+    input: HostedMt5WorkerPresenceInput,
+  ): Promise<{ workerId: string; accepted: true }> {
+    this.assertWorkerToken(rawWorkerToken);
+    this.assertWorkerId(workerId);
+    if (!this.workerPresence) {
+      throw new ServiceUnavailableException('Hosted MT5 worker presence service is unavailable');
+    }
+    return this.workerPresence.heartbeat(workerId, input);
   }
 
   async leaseAssignment(
@@ -367,6 +386,17 @@ export class HostedMt5Service {
       throw new ServiceUnavailableException(
         'iRexPro Hosted MT5 is not enabled on this server; use the passwordless Direct Connector',
       );
+    }
+  }
+
+  private assertHostedCapacity(): void {
+    const pool = this.workerPresence?.getPoolReadiness();
+    if (!pool?.ready) {
+      const message =
+        pool?.reason === 'NO_CAPACITY'
+          ? 'iRexPro Hosted MT5 execution capacity is currently full'
+          : 'iRexPro Hosted MT5 has no fresh execution worker available';
+      throw new ServiceUnavailableException(message);
     }
   }
 
