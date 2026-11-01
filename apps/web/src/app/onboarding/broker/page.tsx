@@ -47,7 +47,7 @@ type BrokerAction =
   | 'disconnecting'
   | 'deleting';
 
-type Mt5ConnectionMethod = 'DIRECT' | 'METAAPI';
+type Mt5ConnectionMethod = 'HOSTED' | 'DIRECT';
 type DirectMt5Environment = 'DEMO' | 'LIVE';
 type DirectMt5BridgeSetup = 'PERSONAL_PC' | 'WINDOWS_VPS' | 'NEED_WINDOWS';
 
@@ -96,8 +96,10 @@ export default function OnboardingBrokerPage() {
   const [apiSecret, setApiSecret] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [testResult, setTestResult] = useState<BrokerTestResult | null>(null);
-  const [mt5ConnectionMethod, setMt5ConnectionMethod] = useState<Mt5ConnectionMethod>('DIRECT');
+  const [mt5ConnectionMethod, setMt5ConnectionMethod] = useState<Mt5ConnectionMethod>('HOSTED');
   const [directMt5Environment, setDirectMt5Environment] = useState<DirectMt5Environment>('DEMO');
+  const [hostedMt5BrokerServer, setHostedMt5BrokerServer] = useState('');
+  const [hostedMt5Password, setHostedMt5Password] = useState('');
   const [directMt5BridgeSetup, setDirectMt5BridgeSetup] = useState<DirectMt5BridgeSetup>('PERSONAL_PC');
   const [directMt5ConnectionId, setDirectMt5ConnectionId] = useState<string | null>(null);
   const [directMt5Pairing, setDirectMt5Pairing] = useState<DirectMt5PairingView | null>(null);
@@ -121,8 +123,11 @@ export default function OnboardingBrokerPage() {
         setConnections(conns);
         if (registry) {
           setRegistryEntries(registry.brokers);
-          const selectable = registry.brokers.filter((e) => e.adapterAvailable);
-          if (selectable.length > 0) setSelectedBrokerId(selectable[0].id);
+          const selectable = registry.brokers.filter(
+            (e) => e.adapterAvailable && e.id !== 'metatrader5',
+          );
+          const preferred = selectable.find((e) => e.id === 'direct-mt5') ?? selectable[0];
+          if (preferred) setSelectedBrokerId(preferred.id);
         } else if (brokers.length > 0) {
           setSelectedBrokerId(brokers[0].brokerId);
         }
@@ -301,9 +306,63 @@ export default function OnboardingBrokerPage() {
     e.preventDefault();
     setError(null);
     if (!/^\d+$/.test(accountId.trim())) {
-      const message = 'Enter the numeric MT5 account login shown in your terminal.';
+      const message = 'Enter the numeric MT5 account login shown by your broker.';
       setError(message);
       notify.warning(message);
+      return;
+    }
+
+    if (mt5ConnectionMethod === 'HOSTED') {
+      if (directMt5Environment !== 'DEMO') {
+        const message = 'iRexPro Hosted MT5 is DEMO-only until hosted execution certification is complete.';
+        setError(message);
+        notify.warning(message);
+        return;
+      }
+      if (!hostedMt5BrokerServer.trim()) {
+        const message = 'Enter the exact MT5 broker server name.';
+        setError(message);
+        notify.warning(message);
+        return;
+      }
+      if (!hostedMt5Password) {
+        const message = 'Enter the MT5 trading password for this hosted DEMO account.';
+        setError(message);
+        notify.warning(message);
+        return;
+      }
+
+      setAction('pairing');
+      try {
+        const created = await api.createBrokerConnection({
+          brokerId: 'direct-mt5',
+          accountType: 'DEMO',
+          accountId: accountId.trim(),
+          apiSecret: hostedMt5Password,
+          displayName: displayName.trim() || undefined,
+          additionalParams: {
+            brokerServer: hostedMt5BrokerServer.trim(),
+            connectionMethod: 'IREXPRO_HOSTED',
+          },
+        });
+        await api.provisionHostedMt5(created.id);
+        setHostedMt5Password('');
+        setDirectMt5ConnectionId(created.id);
+        setDirectMt5Pairing(null);
+        setDirectMt5Health(null);
+        setApiKey('');
+        setApiSecret('');
+        setTestResult(null);
+        setConnections(await api.listBrokerConnections());
+        notify.success('Hosted MT5 provisioning started. iRexPro is starting your isolated DEMO terminal.');
+      } catch (err) {
+        setHostedMt5Password('');
+        const message = mapApiError(err).message;
+        setError(message);
+        notify.error(message);
+      } finally {
+        setAction(null);
+      }
       return;
     }
 
@@ -332,6 +391,7 @@ export default function OnboardingBrokerPage() {
       setDirectMt5ConnectionId(created.id);
       setDirectMt5Pairing(pairing);
       setDirectMt5Health(null);
+      setHostedMt5Password('');
       setApiKey('');
       setApiSecret('');
       setTestResult(null);
@@ -532,32 +592,33 @@ export default function OnboardingBrokerPage() {
     directMt5RegistryEntry.environments.includes('LIVE') &&
     directMt5CertificationState === 'CERTIFIED';
   const selectedIsOAuth = selectedRegistryEntry?.authenticationType === 'OAUTH';
-  const selectedIsMt5 = selectedBrokerId === 'metatrader5';
-  const selectedIsDirectMt5 = selectedBrokerId === 'direct-mt5' || (selectedIsMt5 && mt5ConnectionMethod === 'DIRECT');
+  const selectedIsDirectMt5 = selectedBrokerId === 'direct-mt5';
   const selectedConnectionReadiness = selectedRegistryEntry?.connectionReadiness;
   const selectedConnectionReady = isBrokerConnectionRuntimeReady(selectedRegistryEntry);
+
+  function resetMt5ConnectionState() {
+    setDirectMt5Environment('DEMO');
+    setDirectMt5ConnectionId(null);
+    setDirectMt5Pairing(null);
+    setDirectMt5Health(null);
+    setHostedMt5Password('');
+    setTestResult(null);
+  }
+
+  function switchToHostedMt5() {
+    setMt5ConnectionMethod('HOSTED');
+    if (registryEntries.some((entry) => entry.id === 'direct-mt5' && entry.adapterAvailable)) {
+      setSelectedBrokerId('direct-mt5');
+    }
+    resetMt5ConnectionState();
+  }
 
   function switchToDirectMt5() {
     setMt5ConnectionMethod('DIRECT');
     if (registryEntries.some((entry) => entry.id === 'direct-mt5' && entry.adapterAvailable)) {
       setSelectedBrokerId('direct-mt5');
     }
-    setDirectMt5Environment('DEMO');
-    setDirectMt5ConnectionId(null);
-    setDirectMt5Pairing(null);
-    setDirectMt5Health(null);
-    setTestResult(null);
-  }
-
-  function switchToMetaApi() {
-    setMt5ConnectionMethod('METAAPI');
-    if (registryEntries.some((entry) => entry.id === 'metatrader5' && entry.adapterAvailable)) {
-      setSelectedBrokerId('metatrader5');
-    }
-    setDirectMt5ConnectionId(null);
-    setDirectMt5Pairing(null);
-    setDirectMt5Health(null);
-    setTestResult(null);
+    resetMt5ConnectionState();
   }
 
   function registryEntryForConnection(connection: BrokerConnectionView): BrokerRegistryEntry | null {
@@ -585,6 +646,7 @@ export default function OnboardingBrokerPage() {
 
   const selectableEntries = registryEntries.filter(
     (e) =>
+      e.id !== 'metatrader5' &&
       e.adapterAvailable &&
       REGISTRY_CONNECTABLE_STATUSES.includes(e.status) &&
       e.environments.includes('DEMO'),
@@ -781,7 +843,7 @@ export default function OnboardingBrokerPage() {
               value={selectedBrokerId}
               onChange={(e) => {
                 setSelectedBrokerId(e.target.value);
-                setMt5ConnectionMethod('DIRECT');
+                setMt5ConnectionMethod('HOSTED');
                 setDirectMt5Environment('DEMO');
                 setDirectMt5ConnectionId(null);
                 setDirectMt5Pairing(null);
@@ -798,7 +860,7 @@ export default function OnboardingBrokerPage() {
                       {!isBrokerConnectionRuntimeReady(e) ? ' — Setup required' : ''}
                     </option>
                   ))
-                : supportedBrokers.map((b) => (
+                : supportedBrokers.filter((b) => b.brokerId !== 'metatrader5').map((b) => (
                     <option key={b.brokerId} value={b.brokerId}>{b.brokerName}</option>
                   ))}
             </select>
@@ -806,10 +868,8 @@ export default function OnboardingBrokerPage() {
               {selectedIsOAuth
                 ? 'cTrader-family brokers connect through OAuth authorization — no API keys to paste.'
                 : selectedIsDirectMt5
-                  ? 'Direct MT5 is recommended: pair an already logged-in Windows MT5 terminal without sharing its password.'
-                  : selectedIsMt5
-                    ? 'Choose Direct Connector for the subscription-free native route or MetaApi for the optional hosted route.'
-                    : 'Paper Broker requires no API credentials — just an account ID.'}
+                  ? 'MetaTrader 5 can run on iRexPro infrastructure or through your own passwordless Direct Connector.'
+                  : 'Paper Broker requires no API credentials — just an account ID.'}
             </p>
           </div>
 
@@ -861,280 +921,346 @@ export default function OnboardingBrokerPage() {
               <div>
                 <div className="input-label" style={{ marginBottom: 'var(--space-2)' }}>Connection method</div>
                 <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                  <Button type="button" variant="primary" onClick={switchToDirectMt5}>
-                    Direct Connector (recommended)
+                  <Button
+                    type="button"
+                    variant={mt5ConnectionMethod === 'HOSTED' ? 'primary' : 'secondary'}
+                    aria-pressed={mt5ConnectionMethod === 'HOSTED'}
+                    onClick={switchToHostedMt5}
+                  >
+                    iRexPro Hosted — Recommended
                   </Button>
-                  <Button type="button" variant="secondary" onClick={switchToMetaApi}>
-                    MT5 via MetaApi (optional)
+                  <Button
+                    type="button"
+                    variant={mt5ConnectionMethod === 'DIRECT' ? 'primary' : 'secondary'}
+                    aria-pressed={mt5ConnectionMethod === 'DIRECT'}
+                    onClick={switchToDirectMt5}
+                  >
+                    Direct Connector — Passwordless
                   </Button>
                 </div>
               </div>
 
-              <Alert variant="info">
-                <span style={{ flex: 1 }}>
-                  <strong>Connect from any device.</strong> Set up and control iRexPro from your phone or web portal.
-                  The Windows PC or VPS is only the MT5 execution bridge, so you do not need to sit at that machine to manage trading.
-                </span>
-              </Alert>
-
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 'var(--space-2)',
-                  padding: 'var(--space-4)',
-                  border: '1px solid var(--border-soft)',
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--surface-tint)',
-                }}
-              >
-                <strong>Use iRexPro on Android</strong>
-                <Link
-                  href={IREXPRO_ANDROID_PREVIEW_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sm"
-                >
-                  Download iRexPro Android preview
-                </Link>
-                <p className="helper-text" style={{ margin: 0 }}>
-                  This is the preview/staging phone build. The phone app is your iRexPro control surface. The Windows connector is still required as the MT5 execution bridge for Direct MT5, and it runs in the background on the Windows PC or VPS where MetaTrader 5 is logged in.
-                </p>
-              </div>
-
-              <div>
-                <div className="input-label" style={{ marginBottom: 'var(--space-2)' }}>Where will MetaTrader 5 run?</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 'var(--space-2)' }}>
-                  <Button
-                    type="button"
-                    variant={directMt5BridgeSetup === 'PERSONAL_PC' ? 'primary' : 'secondary'}
-                    aria-pressed={directMt5BridgeSetup === 'PERSONAL_PC'}
-                    onClick={() => setDirectMt5BridgeSetup('PERSONAL_PC')}
-                  >
-                    I already have MT5 running on Windows
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={directMt5BridgeSetup === 'WINDOWS_VPS' ? 'primary' : 'secondary'}
-                    aria-pressed={directMt5BridgeSetup === 'WINDOWS_VPS'}
-                    onClick={() => setDirectMt5BridgeSetup('WINDOWS_VPS')}
-                  >
-                    Always-on Windows VPS (recommended)
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={directMt5BridgeSetup === 'NEED_WINDOWS' ? 'primary' : 'secondary'}
-                    aria-pressed={directMt5BridgeSetup === 'NEED_WINDOWS'}
-                    onClick={() => setDirectMt5BridgeSetup('NEED_WINDOWS')}
-                  >
-                    I need a Windows PC/VPS for MT5
-                  </Button>
-                </div>
-              </div>
-
-              {directMt5BridgeSetup === 'NEED_WINDOWS' ? (
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 'var(--space-3)',
-                    padding: 'var(--space-4)',
-                    border: '1px solid var(--border-soft)',
-                    borderRadius: 'var(--radius-md)',
-                    background: 'var(--surface-tint)',
-                  }}
-                >
-                  <strong>Set up the MT5 execution bridge</strong>
-                  <p className="helper-text" style={{ margin: 0 }}>
-                    Use a Windows 10/11 PC or Windows VPS that you control. This machine hosts the MT5 desktop terminal only;
-                    your normal iRexPro controls remain on your phone or web browser.
-                  </p>
-                  <ol className="text-sm" style={{ margin: 0, paddingLeft: '1.25rem', lineHeight: 1.8 }}>
-                    <li>Install your broker&apos;s MetaTrader 5 desktop terminal and log into the account you want iRexPro to use.</li>
-                    <li>Enable automated/algo trading in MT5 and keep that Windows machine or VPS online whenever Direct MT5 trading is active.</li>
-                    <li>Install the iRexPro Direct MT5 Connector on the same Windows machine.</li>
-                    <li>Return here, choose “I already have MT5 running on Windows”, then create the pairing code.</li>
-                  </ol>
-                  <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'center' }}>
-                    <Link
-                      href={DIRECT_MT5_WINDOWS_INSTALLER_URL}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-sm"
-                    >
-                      Download Windows connector
-                    </Link>
-                    <span className="helper-text">A Windows VPS is optional; a Windows PC that stays online also works.</span>
-                  </div>
-                </div>
-              ) : (
+              {mt5ConnectionMethod === 'HOSTED' ? (
                 <>
-                  {directMt5BridgeSetup === 'WINDOWS_VPS' && (
-                    <Alert variant="success">
-                      <span style={{ flex: 1 }}>
-                        <strong>24/5 execution host selected.</strong> Install MT5 and iRexPro MT5 Connector v0.3.0 on the Windows VPS and keep that VPS signed in. Once paired, your personal PC can be switched off while the VPS continues the execution bridge.
-                      </span>
-                    </Alert>
-                  )}
-
+                  <Alert variant="success">
+                    <span style={{ flex: 1 }}>
+                      <strong>Always-on MT5 execution by iRexPro.</strong> After setup, your computer can be switched off and
+                      your phone or web browser can be closed. iRexPro keeps the isolated MT5 session running on our execution infrastructure.
+                    </span>
+                  </Alert>
                   <Alert variant="info">
                     <span style={{ flex: 1 }}>
-                      🔐 Direct MT5 runs beside the MT5 terminal already logged in on your Windows PC or VPS.
-                      We never ask for your MT5 password, investor password, API key, or broker secret.
+                      No Windows connector is required on your own computer. Your MT5 trading password is encrypted with AES-256-GCM
+                      and is released only to the leased iRexPro execution worker that starts your terminal session.
                     </span>
                   </Alert>
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                    <Link
-                      href={DIRECT_MT5_WINDOWS_INSTALLER_URL}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-sm"
+                  <div className="input-group">
+                    <label className="input-label" htmlFor="direct-mt5-environment">MT5 environment</label>
+                    <select
+                      id="direct-mt5-environment"
+                      className="input"
+                      value={directMt5Environment}
+                      onChange={(event) => setDirectMt5Environment(event.target.value as DirectMt5Environment)}
+                      disabled={loading || Boolean(directMt5ConnectionId)}
                     >
-                      Download Windows connector
+                      <option value="DEMO">DEMO — hosted pilot available</option>
+                      <option value="LIVE" disabled>LIVE — hosted certification pending</option>
+                    </select>
+                  </div>
+
+                  <Alert variant="warning">
+                    <span style={{ flex: 1 }}>
+                      Hosted LIVE is locked until hosted execution certification is complete. This pilot accepts DEMO accounts only.
+                    </span>
+                  </Alert>
+
+                  {!directMt5ConnectionId ? (
+                    <div className="onboarding-form">
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
+                        <Input
+                          label="MT5 account login"
+                          value={accountId}
+                          onChange={(e) => setAccountId(e.target.value)}
+                          disabled={loading}
+                          placeholder="e.g. 113392789"
+                          inputMode="numeric"
+                          required
+                        />
+                        <Input
+                          label="Broker server"
+                          value={hostedMt5BrokerServer}
+                          onChange={(e) => setHostedMt5BrokerServer(e.target.value)}
+                          disabled={loading}
+                          placeholder="Exact server shown by your broker"
+                          required
+                        />
+                        <Input
+                          label="MT5 trading password"
+                          type="password"
+                          value={hostedMt5Password}
+                          onChange={(e) => setHostedMt5Password(e.target.value)}
+                          disabled={loading}
+                          placeholder="Trading password"
+                          autoComplete="new-password"
+                          required
+                        />
+                        <Input
+                          label="Display name (optional)"
+                          value={displayName}
+                          onChange={(e) => setDisplayName(e.target.value)}
+                          disabled={loading}
+                          placeholder="My hosted MT5 demo"
+                        />
+                      </div>
+                      <p className="helper-text">
+                        Use the exact numeric login and broker server. The investor/read-only password cannot place trades; use the trading password for this DEMO pilot.
+                      </p>
+                      <Button type="submit" variant="primary" disabled={loading} loading={action === 'pairing'}>
+                        {action === 'pairing' ? 'Starting hosted MT5…' : 'Connect MT5 on iRexPro — DEMO'}
+                      </Button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                        <strong>Hosted MT5 status</strong>
+                        <Badge variant={directMt5Health?.executionReady ? 'success' : 'warning'}>
+                          {formatEnumLabel(directMt5UiState())}
+                        </Badge>
+                      </div>
+                      <p className="helper-text" style={{ margin: 0 }}>
+                        iRexPro is provisioning and supervising the terminal. You do not need to keep your own computer online.
+                      </p>
+                      {directMt5Health && (
+                        <div className="text-sm" style={{ lineHeight: 1.7 }}>
+                          <div>Connector: <strong>{formatEnumLabel(directMt5Health.state)}</strong></div>
+                          <div>Execution host: <strong>iRexPro hosted execution</strong></div>
+                          <div>Reason: {formatEnumLabel(directMt5Health.reason)}</div>
+                          {directMt5Health.accountLogin && <div>MT5 login: {directMt5Health.accountLogin}</div>}
+                          {directMt5Health.brokerServer && <div>Broker server: {directMt5Health.brokerServer}</div>}
+                          {directMt5Health.lastHeartbeatAt && (
+                            <div>Last heartbeat: {new Date(directMt5Health.lastHeartbeatAt).toLocaleString()}</div>
+                          )}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                        <Button type="button" variant="secondary" onClick={() => void refreshDirectMt5Health()} disabled={loading}>
+                          {action === 'refreshing-mt5' ? 'Refreshing…' : 'Refresh status'}
+                        </Button>
+                        <Button type="button" variant="ghost" onClick={() => void handleRevokeDirectMt5()} disabled={loading}>
+                          {action === 'revoking-mt5' ? 'Stopping…' : 'Stop hosted MT5'}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Alert variant="info">
+                    <span style={{ flex: 1 }}>
+                      🔐 <strong>Passwordless Direct Connector.</strong> MT5 runs on a Windows PC or VPS you control, and we never ask for your MT5 password.
+                      That Windows host must remain online while Direct MT5 trading is active.
+                    </span>
+                  </Alert>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 'var(--space-2)',
+                      padding: 'var(--space-4)',
+                      border: '1px solid var(--border-soft)',
+                      borderRadius: 'var(--radius-md)',
+                      background: 'var(--surface-tint)',
+                    }}
+                  >
+                    <strong>Use iRexPro from phone or web</strong>
+                    <Link href={IREXPRO_ANDROID_PREVIEW_URL} target="_blank" rel="noreferrer" className="text-sm">
+                      Download iRexPro Android preview
                     </Link>
                     <p className="helper-text" style={{ margin: 0 }}>
-                      Install Direct MT5 protocol v2 on the same Windows PC or VPS as MetaTrader 5.
-                      If you used an earlier connector, install this version and generate a new pairing code to re-pair.
+                      Your phone is only the control surface. In Direct mode, MT5 and the Windows connector run on the Windows PC or VPS you choose below.
                     </p>
                   </div>
 
-                  <div className="input-group">
-                <label className="input-label" htmlFor="direct-mt5-environment">MT5 environment</label>
-                <select
-                  id="direct-mt5-environment"
-                  className="input"
-                  value={directMt5Environment}
-                  onChange={(event) => setDirectMt5Environment(event.target.value as DirectMt5Environment)}
-                  disabled={loading || Boolean(directMt5ConnectionId)}
-                >
-                  <option value="DEMO">DEMO — available</option>
-                  <option value="LIVE" disabled={!directMt5LiveCertified}>
-                    LIVE — {directMt5LiveCertified ? 'certified' : 'certification pending'}
-                  </option>
-                </select>
-              </div>
-
-              {!directMt5LiveCertified ? (
-                <Alert variant="warning">
-                  <span style={{ flex: 1 }}>
-                    LIVE certification pending — native LIVE capability is implemented, but new LIVE connections remain
-                    locked until the real-money canary produces current CERTIFIED evidence. DEMO remains available now.
-                  </span>
-                </Alert>
-              ) : (
-                <Alert variant="success">
-                  <span style={{ flex: 1 }}>
-                    Direct MT5 LIVE is currently certified by server-side evidence. LIVE pairing is available,
-                    but trading still remains subject to account authorization and risk controls.
-                  </span>
-                </Alert>
-              )}
-
-              {!directMt5ConnectionId ? (
-                <div className="onboarding-form">
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
-                    <Input
-                      label="MT5 account login"
-                      value={accountId}
-                      onChange={(e) => setAccountId(e.target.value)}
-                      disabled={loading}
-                      placeholder="e.g. 113392789"
-                      inputMode="numeric"
-                      required
-                    />
-                    <Input
-                      label="Display name (optional)"
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      disabled={loading}
-                      placeholder={directMt5Environment === 'LIVE' ? 'My MT5 live' : 'My MT5 demo'}
-                    />
-                  </div>
-                  <p className="helper-text">
-                    Use the exact numeric login shown inside MT5. Pairing fails closed if the connector sees a different account.
-                  </p>
-                  <Button type="submit" variant="primary" disabled={loading} loading={action === 'pairing'}>
-                    {action === 'pairing'
-                      ? 'Creating pairing…'
-                      : `Create ${directMt5Environment} connection & pairing code`}
-                  </Button>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                    <strong>Direct MT5 status</strong>
-                    <Badge variant={directMt5Health?.executionReady ? 'success' : 'warning'}>
-                      {formatEnumLabel(directMt5UiState())}
-                    </Badge>
-                  </div>
-
-                  {directMt5Pairing && (
-                    <div style={{ padding: 'var(--space-4)', border: '1px solid var(--border-soft)', borderRadius: 'var(--radius-md)', background: 'var(--surface-tint)' }}>
-                      <div className="text-sm muted">Pairing code</div>
-                      <code data-testid="direct-mt5-pairing-code" style={{ display: 'block', fontSize: '1.8rem', fontWeight: 700, letterSpacing: '0.16em', margin: 'var(--space-2) 0' }}>
-                        {directMt5Pairing.pairingCode}
-                      </code>
-                      <div className="text-sm muted">Expires {new Date(directMt5Pairing.expiresAt).toLocaleString()}</div>
-                    </div>
-                  )}
-
-                  <ol className="text-sm" style={{ margin: 0, paddingLeft: '1.25rem', lineHeight: 1.8 }}>
-                    <li>Keep MetaTrader 5 open and logged into the {directMt5Environment} account {accountId} on Windows.</li>
-                    <li>Run the iRexPro MT5 Connector on that same Windows PC or VPS.</li>
-                    <li>Enter the pairing code above. The connector reads the MT5 login and broker server locally.</li>
-                    <li>Wait for this page to show Ready. Pairing alone never enables LIVE trading.</li>
-                  </ol>
-
-                  {directMt5Health && (
-                    <div className="text-sm" style={{ lineHeight: 1.7 }}>
-                      <div>Connector: <strong>{formatEnumLabel(directMt5Health.state)}</strong></div>
-                      {directMt5Health.hostMode && <div>Execution host: <strong>{directMt5Health.hostMode === 'WINDOWS_VPS' ? 'Always-on Windows VPS' : 'Personal Windows PC'}</strong></div>}
-                      <div>Reason: {formatEnumLabel(directMt5Health.reason)}</div>
-                      {directMt5Health.accountLogin && <div>MT5 login: {directMt5Health.accountLogin}</div>}
-                      {directMt5Health.brokerServer && <div>Broker server: {directMt5Health.brokerServer}</div>}
-                      {directMt5Health.lastHeartbeatAt && (
-                        <div>Last heartbeat: {new Date(directMt5Health.lastHeartbeatAt).toLocaleString()}</div>
-                      )}
-                    </div>
-                  )}
-
-                  <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                    <Button type="button" variant="secondary" onClick={() => void refreshDirectMt5Health()} disabled={loading}>
-                      {action === 'refreshing-mt5' ? 'Refreshing…' : 'Refresh status'}
-                    </Button>
-                    {!directMt5Health?.executionReady && (
-                      <Button type="button" variant="secondary" onClick={() => void handleRegenerateDirectMt5Pairing()} disabled={loading}>
-                        {action === 'pairing' ? 'Generating…' : 'Generate new pairing code'}
+                  <div>
+                    <div className="input-label" style={{ marginBottom: 'var(--space-2)' }}>Where will MetaTrader 5 run?</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 'var(--space-2)' }}>
+                      <Button
+                        type="button"
+                        variant={directMt5BridgeSetup === 'PERSONAL_PC' ? 'primary' : 'secondary'}
+                        aria-pressed={directMt5BridgeSetup === 'PERSONAL_PC'}
+                        onClick={() => setDirectMt5BridgeSetup('PERSONAL_PC')}
+                      >
+                        I already have MT5 running on Windows
                       </Button>
-                    )}
-                    <Button type="button" variant="ghost" onClick={() => void handleRevokeDirectMt5()} disabled={loading}>
-                      {action === 'revoking-mt5' ? 'Revoking…' : 'Revoke connector'}
-                    </Button>
+                      <Button
+                        type="button"
+                        variant={directMt5BridgeSetup === 'WINDOWS_VPS' ? 'primary' : 'secondary'}
+                        aria-pressed={directMt5BridgeSetup === 'WINDOWS_VPS'}
+                        onClick={() => setDirectMt5BridgeSetup('WINDOWS_VPS')}
+                      >
+                        Always-on Windows VPS
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={directMt5BridgeSetup === 'NEED_WINDOWS' ? 'primary' : 'secondary'}
+                        aria-pressed={directMt5BridgeSetup === 'NEED_WINDOWS'}
+                        onClick={() => setDirectMt5BridgeSetup('NEED_WINDOWS')}
+                      >
+                        I need a Windows PC/VPS for MT5
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              )}
+
+                  {directMt5BridgeSetup === 'NEED_WINDOWS' ? (
+                    <div style={{ padding: 'var(--space-4)', border: '1px solid var(--border-soft)', borderRadius: 'var(--radius-md)', background: 'var(--surface-tint)' }}>
+                      <strong>Set up the Direct MT5 execution bridge</strong>
+                      <ol className="text-sm" style={{ paddingLeft: '1.25rem', lineHeight: 1.8 }}>
+                        <li>Use a Windows 10/11 PC or Windows VPS you control.</li>
+                        <li>Install the broker&apos;s MT5 desktop terminal and log into the trading account.</li>
+                        <li>Install iRexPro MT5 Connector v0.3.0 on the same Windows host.</li>
+                        <li>Keep that Windows host signed in and online while Direct MT5 trading is active.</li>
+                      </ol>
+                      <Link href={DIRECT_MT5_WINDOWS_INSTALLER_URL} target="_blank" rel="noreferrer" className="text-sm">
+                        Download Windows connector
+                      </Link>
+                    </div>
+                  ) : (
+                    <>
+                      {directMt5BridgeSetup === 'WINDOWS_VPS' && (
+                        <Alert variant="success">
+                          <span style={{ flex: 1 }}>
+                            <strong>Always-on VPS selected.</strong> Once the connector is paired, your personal PC can be switched off while your Windows VPS remains signed in and online.
+                          </span>
+                        </Alert>
+                      )}
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                        <Link href={DIRECT_MT5_WINDOWS_INSTALLER_URL} target="_blank" rel="noreferrer" className="text-sm">
+                          Download Windows connector
+                        </Link>
+                        <p className="helper-text" style={{ margin: 0 }}>
+                          Install Direct MT5 protocol v2 on the same Windows host as MetaTrader 5. Existing v0.3.0 users can re-pair with a new code.
+                        </p>
+                      </div>
+
+                      <div className="input-group">
+                        <label className="input-label" htmlFor="direct-mt5-environment">MT5 environment</label>
+                        <select
+                          id="direct-mt5-environment"
+                          className="input"
+                          value={directMt5Environment}
+                          onChange={(event) => setDirectMt5Environment(event.target.value as DirectMt5Environment)}
+                          disabled={loading || Boolean(directMt5ConnectionId)}
+                        >
+                          <option value="DEMO">DEMO — available</option>
+                          <option value="LIVE" disabled={!directMt5LiveCertified}>
+                            LIVE — {directMt5LiveCertified ? 'certified' : 'certification pending'}
+                          </option>
+                        </select>
+                      </div>
+
+                      {!directMt5LiveCertified ? (
+                        <Alert variant="warning">
+                          <span style={{ flex: 1 }}>
+                            Direct MT5 LIVE certification pending. DEMO pairing remains available now.
+                          </span>
+                        </Alert>
+                      ) : (
+                        <Alert variant="success">
+                          <span style={{ flex: 1 }}>
+                            Direct MT5 LIVE is currently certified by server-side evidence; account authorization and risk controls still apply.
+                          </span>
+                        </Alert>
+                      )}
+
+                      {!directMt5ConnectionId ? (
+                        <div className="onboarding-form">
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
+                            <Input
+                              label="MT5 account login"
+                              value={accountId}
+                              onChange={(e) => setAccountId(e.target.value)}
+                              disabled={loading}
+                              placeholder="e.g. 113392789"
+                              inputMode="numeric"
+                              required
+                            />
+                            <Input
+                              label="Display name (optional)"
+                              value={displayName}
+                              onChange={(e) => setDisplayName(e.target.value)}
+                              disabled={loading}
+                              placeholder={directMt5Environment === 'LIVE' ? 'My MT5 live' : 'My MT5 demo'}
+                            />
+                          </div>
+                          <p className="helper-text">
+                            Use the exact numeric login shown inside MT5. Pairing fails closed if the connector observes a different account or broker server.
+                          </p>
+                          <Button type="submit" variant="primary" disabled={loading} loading={action === 'pairing'}>
+                            {action === 'pairing' ? 'Creating pairing…' : `Create ${directMt5Environment} connection & pairing code`}
+                          </Button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                            <strong>Direct MT5 status</strong>
+                            <Badge variant={directMt5Health?.executionReady ? 'success' : 'warning'}>
+                              {formatEnumLabel(directMt5UiState())}
+                            </Badge>
+                          </div>
+
+                          {directMt5Pairing && (
+                            <div style={{ padding: 'var(--space-4)', border: '1px solid var(--border-soft)', borderRadius: 'var(--radius-md)', background: 'var(--surface-tint)' }}>
+                              <div className="text-sm muted">Pairing code</div>
+                              <code data-testid="direct-mt5-pairing-code" style={{ display: 'block', fontSize: '1.8rem', fontWeight: 700, letterSpacing: '0.16em', margin: 'var(--space-2) 0' }}>
+                                {directMt5Pairing.pairingCode}
+                              </code>
+                              <div className="text-sm muted">Expires {new Date(directMt5Pairing.expiresAt).toLocaleString()}</div>
+                            </div>
+                          )}
+
+                          <ol className="text-sm" style={{ margin: 0, paddingLeft: '1.25rem', lineHeight: 1.8 }}>
+                            <li>Keep MT5 open and logged into account {accountId} on your chosen Windows host.</li>
+                            <li>Run iRexPro MT5 Connector there and enter the pairing code.</li>
+                            <li>Wait for this page to show Ready.</li>
+                          </ol>
+
+                          {directMt5Health && (
+                            <div className="text-sm" style={{ lineHeight: 1.7 }}>
+                              <div>Connector: <strong>{formatEnumLabel(directMt5Health.state)}</strong></div>
+                              {directMt5Health.hostMode && (
+                                <div>Execution host: <strong>{directMt5Health.hostMode === 'WINDOWS_VPS' ? 'Always-on Windows VPS' : 'Personal Windows PC'}</strong></div>
+                              )}
+                              <div>Reason: {formatEnumLabel(directMt5Health.reason)}</div>
+                              {directMt5Health.accountLogin && <div>MT5 login: {directMt5Health.accountLogin}</div>}
+                              {directMt5Health.brokerServer && <div>Broker server: {directMt5Health.brokerServer}</div>}
+                            </div>
+                          )}
+
+                          <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                            <Button type="button" variant="secondary" onClick={() => void refreshDirectMt5Health()} disabled={loading}>
+                              {action === 'refreshing-mt5' ? 'Refreshing…' : 'Refresh status'}
+                            </Button>
+                            {!directMt5Health?.executionReady && (
+                              <Button type="button" variant="secondary" onClick={() => void handleRegenerateDirectMt5Pairing()} disabled={loading}>
+                                {action === 'pairing' ? 'Generating…' : 'Generate new pairing code'}
+                              </Button>
+                            )}
+                            <Button type="button" variant="ghost" onClick={() => void handleRevokeDirectMt5()} disabled={loading}>
+                              {action === 'revoking-mt5' ? 'Revoking…' : 'Revoke connector'}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </>
               )}
             </div>
           ) : (
             <>
-              {selectedIsMt5 && (
-                <div style={{ marginBottom: 'var(--space-4)' }}>
-                  <div className="input-label" style={{ marginBottom: 'var(--space-2)' }}>Connection method</div>
-                  <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                    <Button type="button" variant="secondary" onClick={switchToDirectMt5}>
-                      Direct Connector (recommended)
-                    </Button>
-                    <Button type="button" variant="primary" onClick={switchToMetaApi}>
-                      MT5 via MetaApi (optional)
-                    </Button>
-                  </div>
-                  <Alert variant="warning">
-                    MetaApi is the optional hosted route and may require a separate MetaApi subscription. Direct Connector is the recommended subscription-free path.
-                  </Alert>
-                </div>
-              )}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
                 <Input label="Account ID" value={accountId} onChange={(e) => setAccountId(e.target.value)} disabled={loading} placeholder="Your broker account ID" required />
                 <Input label="Display name (optional)" value={displayName} onChange={(e) => setDisplayName(e.target.value)} disabled={loading} placeholder="My demo account" />
