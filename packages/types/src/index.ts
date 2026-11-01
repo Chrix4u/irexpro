@@ -695,7 +695,7 @@ export interface BrokerTestResult {
   errorMessage?: string;
 }
 
-export type DirectMt5ConnectorHostMode = "PERSONAL_PC" | "WINDOWS_VPS";
+export type DirectMt5ConnectorHostMode = "PERSONAL_PC" | "WINDOWS_VPS" | "IREXPRO_HOSTED";
 
 /** Direct MT5 owner pairing code returned to authenticated onboarding clients. */
 export interface DirectMt5PairingView {
