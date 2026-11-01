@@ -245,7 +245,7 @@ def run_supervised_connector(
                 stop_event=stop,
                 on_status=status_bridge,
             )
-        except (ConnectorTransientError, requests.RequestException, Mt5TerminalError, OSError) as exc:
+        except (ConnectorTransientError, requests.RequestException, Mt5TerminalError) as exc:
             if stop.is_set():
                 return 0
             delay = backoff

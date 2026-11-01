@@ -345,3 +345,26 @@ def test_successful_mt5_mutation_is_never_relabelled_failed_when_result_upload_d
     finally:
         journal.close()
     assert client.result_states == ["SUCCEEDED"]
+
+
+def test_supervisor_does_not_retry_ambiguous_local_os_errors(tmp_path: Path) -> None:
+    import pytest
+    runtime = importlib.import_module("irexpro_mt5_connector.runtime")
+    calls = 0
+
+    def runner(**_kwargs):
+        nonlocal calls
+        calls += 1
+        raise OSError("disk full")
+
+    def must_not_wait(_event, _seconds):
+        raise AssertionError("local OS errors must fail closed rather than enter retry backoff")
+
+    with pytest.raises(OSError, match="disk full"):
+        runtime.run_supervised_connector(
+            config_path=tmp_path / "connector.json",
+            journal_path=tmp_path / "journal.db",
+            runner=runner,
+            wait_fn=must_not_wait,
+        )
+    assert calls == 1
