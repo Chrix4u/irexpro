@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from irexpro_mt5_connector.mt5_terminal import MetaQuotesMt5Terminal, Mt5TerminalError
+from irexpro_mt5_connector.mt5_terminal import MetaQuotesMt5Terminal, Mt5TerminalError, Mt5TerminalFatalError
 
 
 class FakeMt5:
@@ -43,3 +43,65 @@ def test_trade_allowed_requires_terminal_account_and_expert_permissions() -> Non
     assert identity_for(2, account_trade_allowed=False).trade_allowed is False
     assert identity_for(2, trade_expert=False).trade_allowed is False
     assert identity_for(2, terminal_trade_allowed=False).trade_allowed is False
+
+
+class InitializingFakeMt5(FakeMt5):
+    def __init__(self):
+        super().__init__(self.ACCOUNT_TRADE_MODE_DEMO)
+        self.initialize_calls = []
+
+    def initialize(self, *args, **kwargs):
+        self.initialize_calls.append((args, kwargs))
+        return True
+
+    def last_error(self):
+        return (0, "ok")
+
+
+def test_direct_terminal_initialization_remains_passwordless_and_backward_compatible() -> None:
+    fake = InitializingFakeMt5()
+    terminal = MetaQuotesMt5Terminal(r"C:\\MT5\\terminal64.exe")
+    terminal._mt5 = fake
+
+    identity = terminal.initialize()
+
+    assert identity.login == "12345"
+    assert fake.initialize_calls == [((r"C:\\MT5\\terminal64.exe",), {})]
+
+
+def test_hosted_terminal_initializes_portable_mt5_with_explicit_login_credentials() -> None:
+    fake = InitializingFakeMt5()
+    terminal = MetaQuotesMt5Terminal(
+        r"C:\\iRexPro\\sessions\\connector-1\\terminal64.exe",
+        login="113392789",
+        password="demo-trading-password",
+        server="Broker-Demo",
+        portable=True,
+    )
+    terminal._mt5 = fake
+
+    terminal.initialize()
+
+    assert fake.initialize_calls == [(
+        (r"C:\\iRexPro\\sessions\\connector-1\\terminal64.exe",),
+        {
+            "login": 113392789,
+            "password": "demo-trading-password",
+            "server": "Broker-Demo",
+            "portable": True,
+        },
+    )]
+
+
+def test_hosted_terminal_rejects_partial_explicit_login_configuration_before_mt5_call() -> None:
+    fake = InitializingFakeMt5()
+    terminal = MetaQuotesMt5Terminal(
+        r"C:\\iRexPro\\sessions\\connector-1\\terminal64.exe",
+        login="113392789",
+        password="demo-trading-password",
+    )
+    terminal._mt5 = fake
+
+    with pytest.raises(Mt5TerminalFatalError, match="server"):
+        terminal.initialize()
+    assert fake.initialize_calls == []

@@ -86,15 +86,30 @@ def _iso_millis(value: Any) -> str:
 class MetaQuotesMt5Terminal:
     """Production terminal port using MetaQuotes' official MetaTrader5 package.
 
-    iRexPro never receives the broker password. The Windows MT5 terminal is
-    already logged in and this connector attaches to that local session.
+    Direct-Connector mode stays passwordless and attaches to an already logged-in
+    customer terminal. iRexPro-hosted workers may instead supply an explicit
+    login/password/server in process memory so an isolated portable terminal can
+    establish its own session. Credential values are never formatted into errors.
     """
 
     MAGIC = 9110506
 
-    def __init__(self, terminal_path: str | None = None, deviation_points: int = 20) -> None:
+    def __init__(
+        self,
+        terminal_path: str | None = None,
+        deviation_points: int = 20,
+        *,
+        login: str | None = None,
+        password: str | None = None,
+        server: str | None = None,
+        portable: bool = False,
+    ) -> None:
         self.terminal_path = terminal_path
         self.deviation_points = deviation_points
+        self._login = login
+        self._password = password
+        self._server = server
+        self._portable = bool(portable)
         self._mt5: Any | None = None
 
     def _module(self) -> Any:
@@ -110,8 +125,28 @@ class MetaQuotesMt5Terminal:
 
     def initialize(self) -> AccountIdentity:
         mt5 = self._module()
-        ok = mt5.initialize(self.terminal_path) if self.terminal_path else mt5.initialize()
+        explicit_login = any(value is not None for value in (self._login, self._password, self._server))
+        if explicit_login:
+            if not self.terminal_path:
+                raise Mt5TerminalFatalError("Hosted MT5 explicit login requires an explicit terminal path")
+            if not self._login or not str(self._login).isdigit():
+                raise Mt5TerminalFatalError("Hosted MT5 explicit login requires a numeric account login")
+            if not self._password:
+                raise Mt5TerminalFatalError("Hosted MT5 explicit login requires a trading password")
+            if not self._server:
+                raise Mt5TerminalFatalError("Hosted MT5 explicit login requires an exact broker server")
+            ok = mt5.initialize(
+                self.terminal_path,
+                login=int(self._login),
+                password=self._password,
+                server=self._server,
+                portable=self._portable,
+            )
+        else:
+            ok = mt5.initialize(self.terminal_path) if self.terminal_path else mt5.initialize()
         if not ok:
+            # MetaQuotes' last_error does not normally contain the password, and
+            # we never include our credential inputs in this message.
             raise Mt5TerminalError(f"MT5 initialize failed: {mt5.last_error()}")
         try:
             return self.identity()
