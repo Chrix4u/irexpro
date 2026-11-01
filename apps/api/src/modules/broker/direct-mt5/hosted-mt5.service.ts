@@ -129,6 +129,7 @@ export class HostedMt5Service {
       };
     }
 
+    this.assertHostedCapacity();
     const credentials = this.decryptCredentials(connection);
     try {
       const { brokerServer } = this.requireHostedCredentials(credentials);
@@ -385,6 +386,17 @@ export class HostedMt5Service {
       throw new ServiceUnavailableException(
         'iRexPro Hosted MT5 is not enabled on this server; use the passwordless Direct Connector',
       );
+    }
+  }
+
+  private assertHostedCapacity(): void {
+    const pool = this.workerPresence?.getPoolReadiness();
+    if (!pool?.ready) {
+      const message =
+        pool?.reason === 'NO_CAPACITY'
+          ? 'iRexPro Hosted MT5 execution capacity is currently full'
+          : 'iRexPro Hosted MT5 has no fresh execution worker available';
+      throw new ServiceUnavailableException(message);
     }
   }
 
