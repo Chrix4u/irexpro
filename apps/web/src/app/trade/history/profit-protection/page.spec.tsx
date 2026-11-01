@@ -8,6 +8,10 @@ jest.mock('next/link', () => ({
   ),
 }));
 
+jest.mock('@/context/auth-context', () => ({
+  useAuth: () => ({ user: { id: 'user-1' }, logout: jest.fn(), restoring: false }),
+}));
+
 jest.mock('@/components/ui', () => ({
   DashboardShell: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
   Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (

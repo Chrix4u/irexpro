@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, DashboardShell, LoadingSpinner } from '@/components/ui';
+import { useAuth } from '@/context/auth-context';
 import {
   loadProfitProtectionExitQuality,
   type ProfitProtectionExitQualityOutcome,
@@ -110,6 +111,7 @@ function minutes(value: number | null): string {
 }
 
 export default function ProfitProtectionExitQualityPage() {
+  const { user, logout, restoring } = useAuth();
   const [draft, setDraft] = useState<Filters>(EMPTY_FILTERS);
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
@@ -131,6 +133,7 @@ export default function ProfitProtectionExitQualityPage() {
   }), [filters, page, pageSize]);
 
   const load = useCallback(async () => {
+    if (!user) return;
     setLoading(true);
     setError(null);
     try {
@@ -141,7 +144,7 @@ export default function ProfitProtectionExitQualityPage() {
     } finally {
       setLoading(false);
     }
-  }, [query]);
+  }, [query, user]);
 
   useEffect(() => {
     void load();
@@ -159,10 +162,23 @@ export default function ProfitProtectionExitQualityPage() {
     setPage(1);
   };
 
+  if (restoring) {
+    return <div style={{ padding: '3rem' }}><LoadingSpinner text="Restoring exit-quality report…" /></div>;
+  }
+
+  if (!user) {
+    return (
+      <div style={{ padding: '3rem', maxWidth: 680, margin: '0 auto' }}>
+        <p>Sign in to view Profit Protection exit-quality research.</p>
+        <Link href="/login" className="btn btn--primary mt-4">Go to login</Link>
+      </div>
+    );
+  }
+
   const summary = report?.summary;
 
   return (
-    <DashboardShell>
+    <DashboardShell user={user} onLogout={logout} activeRoute="/trade/history" title="Reports">
       <div className="trade-history exit-quality-report">
         <section className="trade-history__hero">
           <div>
