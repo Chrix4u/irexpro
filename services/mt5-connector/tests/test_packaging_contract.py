@@ -35,7 +35,7 @@ def test_windows_packaging_contract_is_releaseable() -> None:
     assert '#define MyAppVersion "0.3.0"' in installer_text
     assert 'Name: "autostart"' in installer_text
     assert 'ValueName: "iRexPro MT5 Connector"' in installer_text
-    assert '--background' in installer_text
+    assert 'ValueData: """{app}\\iRexPro-MT5-Connector.exe"" --background"' in installer_text
     assert "iRexPro-MT5-Connector-Setup" in installer_text
     assert "windows-latest" in workflow_text
     assert "mt5-connector-v*" in workflow_text

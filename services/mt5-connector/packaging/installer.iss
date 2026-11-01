@@ -33,7 +33,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Name: "autostart"; Description: "Start iRexPro MT5 Connector automatically when I sign in to Windows"; GroupDescription: "Unattended trading:"; Flags: checkedonce
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "iRexPro MT5 Connector"; ValueData: "\"{app}\iRexPro-MT5-Connector.exe\" --background"; Flags: uninsdeletevalue; Tasks: autostart
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "iRexPro MT5 Connector"; ValueData: """{app}\iRexPro-MT5-Connector.exe"" --background"; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
 Filename: "{app}\iRexPro-MT5-Connector.exe"; Description: "Launch iRexPro MT5 Connector"; Flags: nowait postinstall skipifsilent
