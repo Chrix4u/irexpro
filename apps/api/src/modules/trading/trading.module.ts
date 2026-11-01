@@ -2,6 +2,8 @@ import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TradingService } from './trading.service';
 import { TradingController } from './trading.controller';
+import { TradingReportsController } from './trading-reports.controller';
+import { ProfitProtectionExitQualityService } from './profit-protection-exit-quality.service';
 import { BrokerModule } from '../broker/broker.module';
 import { RiskModule } from '../risk/risk.module';
 import { ExecutionModule } from '../execution/execution.module';
@@ -44,8 +46,8 @@ import { AiEngineClientModule } from '../ai-engine-client/ai-engine-client.modul
     AuditModule,
     AiEngineClientModule,
   ],
-  controllers: [TradingController],
-  providers: [TradingService],
+  controllers: [TradingController, TradingReportsController],
+  providers: [TradingService, ProfitProtectionExitQualityService],
   exports: [TradingService],
 })
 export class TradingModule {}
