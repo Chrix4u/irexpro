@@ -24,7 +24,12 @@ def test_windows_packaging_contract_is_releaseable() -> None:
     assert 'project_root / "packaging" / "windows_entry.py"' in spec_text
     assert 'project_root / "irexpro_mt5_connector" / "gui.py"' not in spec_text
     assert "[str(entry_script)]" in spec_text
-    assert "from irexpro_mt5_connector.gui import main" in entry_text
+    assert '"--self-test"' in entry_text
+    assert "import MetaTrader5" in entry_text
+    assert "import pystray" in entry_text
+    assert "from PIL import Image" in entry_text
+    assert "Smoke-test frozen Windows executable" in workflow_text
+    assert 'iRexPro-MT5-Connector.exe\" --self-test' in workflow_text
     assert "MetaTrader5" in spec_text
     assert "keyring" in spec_text
     pyproject_text = (CONNECTOR / "pyproject.toml").read_text(encoding="utf-8")

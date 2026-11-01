@@ -43,6 +43,14 @@ jobs:
         working-directory: services/mt5-connector
         run: pyinstaller packaging/irexpro-mt5-connector.spec --noconfirm --clean
 
+      - name: Smoke-test frozen Windows executable
+        working-directory: services/mt5-connector
+        run: |
+          & ".\dist\iRexPro-MT5-Connector.exe" --self-test
+          if ($LASTEXITCODE -ne 0) {
+            throw "Frozen iRexPro MT5 Connector self-test failed with exit code $LASTEXITCODE"
+          }
+
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
 
