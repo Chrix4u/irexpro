@@ -16,6 +16,11 @@ def frozen_self_test() -> int:
             main as host_worker_main,
         )
     except Exception:
+        # Import-only self-test: safe to expose the traceback so Windows CI can
+        # identify missing frozen dependencies without touching worker/customer secrets.
+        import traceback
+
+        traceback.print_exc()
         return 2
     return 0
 
