@@ -10,6 +10,7 @@ import type {
   DirectMt5ConnectorHostMode,
   DirectMt5ConnectionHealthView,
   DirectMt5RevokeResult,
+  HostedMt5ProvisioningView,
   ForgotPasswordRequest,
   ForgotPasswordResponse,
   HealthResponse,
@@ -275,6 +276,8 @@ export interface ApiClient {
   createBrokerConnection(
     body: CreateBrokerConnectionRequest,
   ): Promise<BrokerConnectionView>;
+  /** Provision an owned DEMO Direct MT5 connection on iRexPro execution infrastructure. */
+  provisionHostedMt5(brokerConnectionId: string): Promise<HostedMt5ProvisioningView>;
   /** Generate a short-lived pairing code for an owned DEMO MT5 BrokerConnection. */
   createDirectMt5Pairing(
     brokerConnectionId: string,
@@ -721,6 +724,12 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
         method: "POST",
         body: JSON.stringify(body),
       }),
+
+    provisionHostedMt5: (brokerConnectionId) =>
+      request<HostedMt5ProvisioningView>(
+        `/broker/direct-mt5/hosted/${encodeURIComponent(brokerConnectionId)}/provision`,
+        { method: "POST" },
+      ),
 
     createDirectMt5Pairing: (brokerConnectionId, hostMode = "PERSONAL_PC") =>
       request<DirectMt5PairingView>("/broker/direct-mt5/pairings", {
