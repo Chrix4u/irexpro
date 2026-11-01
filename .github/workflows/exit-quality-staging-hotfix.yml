@@ -92,6 +92,7 @@ jobs:
           node_major="$(node -p "process.versions.node.split('.')[0]")"
           test "$node_major" = '22'
           test "$(node -p "require('./package.json').packageManager || ''")" = "pnpm@${pnpm_version}"
+          export CI=true
           corepack pnpm@"$pnpm_version" install --frozen-lockfile
           corepack pnpm@"$pnpm_version" --filter @irexpro/api build
           corepack pnpm@"$pnpm_version" --filter @irexpro/web build
