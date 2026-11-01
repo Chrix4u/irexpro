@@ -103,6 +103,36 @@ def test_worker_api_treats_204_as_no_work_and_renews_exact_assignment():
     }
 
 
+def test_worker_api_reports_non_secret_presence_and_capacity():
+    session = FakeHttpSession([FakeResponse(200, {"workerId": "worker-accra-1", "accepted": True})])
+    api = HostWorkerApi(
+        "https://api.example.test/api/v1",
+        "worker-accra-1",
+        "w" * 32,
+        session=session,
+    )
+
+    api.heartbeat_worker_presence(
+        worker_version="0.4.0",
+        runtime_ready=True,
+        max_sessions=4,
+        active_sessions=1,
+    )
+
+    url, request = session.calls[0]
+    assert url.endswith("/broker/direct-mt5/hosted-worker/presence")
+    assert request["json"] == {
+        "workerId": "worker-accra-1",
+        "workerVersion": "0.4.0",
+        "runtimeReady": True,
+        "maxSessions": 4,
+        "activeSessions": 1,
+    }
+    assert "Authorization" in request["headers"]
+    assert "password" not in json.dumps(request["json"]).lower()
+    assert "token" not in json.dumps(request["json"]).lower()
+
+
 def test_prepare_session_directory_copies_clean_mt5_template_once(tmp_path: Path):
     template = tmp_path / "template"
     template.mkdir()
@@ -177,10 +207,17 @@ class FakeChild:
 
 
 class FakeWorkerApi:
-    def __init__(self, assignments):
+    def __init__(self, assignments, presence_error=None):
         self.assignments = list(assignments)
         self.lease_calls = 0
         self.heartbeats = []
+        self.presences = []
+        self.presence_error = presence_error
+
+    def heartbeat_worker_presence(self, **payload):
+        self.presences.append(payload)
+        if self.presence_error:
+            raise self.presence_error
 
     def lease_assignment(self):
         self.lease_calls += 1
@@ -191,6 +228,57 @@ class FakeWorkerApi:
 
     def heartbeat_assignment(self, connector_id, error_code=None):
         self.heartbeats.append((connector_id, error_code))
+
+
+def test_supervisor_reports_presence_even_with_zero_assignments(tmp_path: Path):
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "terminal64.exe").write_bytes(b"fixture")
+    fake_api = FakeWorkerApi([])
+    config = HostWorkerConfig(
+        server_url="https://api.example.test/api/v1",
+        worker_id="worker-accra-1",
+        worker_token="w" * 32,
+        mt5_template_dir=template,
+        session_root=tmp_path / "sessions",
+        max_sessions=4,
+        heartbeat_seconds=20,
+    )
+    supervisor = HostedMt5WorkerSupervisor(config, api=fake_api, monotonic=lambda: 100.0)
+
+    supervisor.tick()
+
+    assert fake_api.presences == [
+        {
+            "worker_version": "0.4.0",
+            "runtime_ready": True,
+            "max_sessions": 4,
+            "active_sessions": 0,
+        }
+    ]
+    assert fake_api.lease_calls == 1
+
+
+def test_supervisor_continues_leasing_when_presence_heartbeat_temporarily_fails(tmp_path: Path):
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "terminal64.exe").write_bytes(b"fixture")
+    fake_api = FakeWorkerApi([None], presence_error=HostWorkerApiError("presence unavailable"))
+    config = HostWorkerConfig(
+        server_url="https://api.example.test/api/v1",
+        worker_id="worker-accra-1",
+        worker_token="w" * 32,
+        mt5_template_dir=template,
+        session_root=tmp_path / "sessions",
+        max_sessions=4,
+        heartbeat_seconds=20,
+    )
+    supervisor = HostedMt5WorkerSupervisor(config, api=fake_api, monotonic=lambda: 100.0)
+
+    supervisor.tick()
+
+    assert len(fake_api.presences) == 1
+    assert fake_api.lease_calls == 1
 
 
 def test_supervisor_enforces_capacity_and_renews_active_worker_lease(tmp_path: Path):

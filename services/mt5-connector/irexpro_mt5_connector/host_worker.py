@@ -23,6 +23,7 @@ from .mt5_terminal import MetaQuotesMt5Terminal
 
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+HOST_WORKER_VERSION = "0.4.0"
 
 
 def _normalize_api_base_url(server_url: str) -> str:
@@ -192,6 +193,28 @@ class HostWorkerApi:
         )
         self._assert_ok(response)
 
+    def heartbeat_worker_presence(
+        self,
+        *,
+        worker_version: str,
+        runtime_ready: bool,
+        max_sessions: int,
+        active_sessions: int,
+    ) -> None:
+        response = self.session.post(
+            f"{self.server_url}/broker/direct-mt5/hosted-worker/presence",
+            headers=self._headers(),
+            json={
+                "workerId": self.worker_id,
+                "workerVersion": worker_version,
+                "runtimeReady": runtime_ready,
+                "maxSessions": max_sessions,
+                "activeSessions": active_sessions,
+            },
+            timeout=self.timeout_seconds,
+        )
+        self._assert_ok(response)
+
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self._worker_token}",
@@ -342,6 +365,7 @@ class HostedMt5WorkerSupervisor:
         self.launcher = launcher
         self.monotonic = monotonic
         self._active: dict[str, ActiveHostedSession] = {}
+        self._last_presence_heartbeat: float | None = None
 
     @property
     def active_connector_ids(self) -> tuple[str, ...]:
@@ -372,6 +396,21 @@ class HostedMt5WorkerSupervisor:
             if assignment is None:
                 break
             self._launch_assignment(assignment, now)
+
+        if (
+            self._last_presence_heartbeat is None
+            or now - self._last_presence_heartbeat >= self.config.heartbeat_seconds
+        ):
+            try:
+                self.api.heartbeat_worker_presence(
+                    worker_version=HOST_WORKER_VERSION,
+                    runtime_ready=True,
+                    max_sessions=self.config.max_sessions,
+                    active_sessions=len(self._active),
+                )
+            except (HostWorkerApiError, requests.RequestException):
+                pass
+            self._last_presence_heartbeat = now
 
     def _reap_exited(self) -> None:
         for connector_id, active in list(self._active.items()):
