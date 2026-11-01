@@ -75,9 +75,9 @@ jobs:
       - name: Smoke-test frozen Windows host worker
         working-directory: services/mt5-connector
         run: |
-          $process = Start-Process ".\dist\iRexPro-MT5-Host-Worker.exe" -ArgumentList '--self-test' -Wait -PassThru
-          if ($process.ExitCode -ne 0) {
-            throw "Frozen iRexPro MT5 Host Worker self-test failed with exit code $($process.ExitCode)"
+          & ".\dist\iRexPro-MT5-Host-Worker.exe" --self-test
+          if ($LASTEXITCODE -ne 0) {
+            throw "Frozen iRexPro MT5 Host Worker self-test failed with exit code $LASTEXITCODE"
           }
 
       - name: Validate hosted worker bootstrap syntax
