@@ -36,11 +36,11 @@ def test_windows_packaging_contract_is_releaseable() -> None:
     assert "MetaTrader5" in spec_text
     assert "keyring" in spec_text
     pyproject_text = (CONNECTOR / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'version = "0.3.0"' in pyproject_text
+    assert 'version = "0.4.0"' in pyproject_text
     assert "pystray" in pyproject_text
     assert "Pillow" in pyproject_text
     assert "pystray" in spec_text
-    assert '#define MyAppVersion "0.3.0"' in installer_text
+    assert '#define MyAppVersion "0.4.0"' in installer_text
     assert 'Name: "autostart"' in installer_text
     assert 'ValueName: "iRexPro MT5 Connector"' in installer_text
     assert 'ValueData: """{app}\\iRexPro-MT5-Connector.exe"" --background"' in installer_text
@@ -63,6 +63,33 @@ def test_windows_packaging_contract_is_releaseable() -> None:
     assert "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f" in workflow_text
     assert "irexpro-mt5-connector-windows-${{ github.run_id }}" in workflow_text
     assert "iRexPro-MT5-Connector-Setup.exe" in workflow_text
+
+
+def test_windows_packaging_includes_dedicated_host_worker_executable_without_secret_cli_flags() -> None:
+    entry = CONNECTOR / "packaging" / "host_worker_entry.py"
+    spec = CONNECTOR / "packaging" / "irexpro-mt5-host-worker.spec"
+    workflow = ROOT / ".github" / "workflows" / "mt5-connector-windows-release.yml"
+    host_worker = CONNECTOR / "irexpro_mt5_connector" / "host_worker.py"
+
+    assert entry.exists()
+    assert spec.exists()
+    entry_text = entry.read_text(encoding="utf-8")
+    spec_text = spec.read_text(encoding="utf-8")
+    workflow_text = workflow.read_text(encoding="utf-8")
+    host_worker_text = host_worker.read_text(encoding="utf-8")
+
+    assert '"--self-test"' in entry_text
+    assert "import MetaTrader5" in entry_text
+    assert "import keyring" in entry_text
+    assert "irexpro_mt5_connector.host_worker" in entry_text
+    assert 'name="iRexPro-MT5-Host-Worker"' in spec_text
+    assert "MetaTrader5" in spec_text
+    assert "keyring" in spec_text
+    assert "console=True" in spec_text
+    assert "irexpro-mt5-host-worker.spec" in workflow_text
+    assert "iRexPro-MT5-Host-Worker.exe" in workflow_text
+    assert "Smoke-test frozen Windows host worker" in workflow_text
+    assert "--worker-token" not in host_worker_text
 
 
 def test_project_exposes_windows_desktop_entry_point() -> None:

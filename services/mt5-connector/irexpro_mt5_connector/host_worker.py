@@ -24,6 +24,45 @@ from .mt5_terminal import MetaQuotesMt5Terminal
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 HOST_WORKER_VERSION = "0.4.0"
+WORKER_KEYRING_SERVICE = "irexpro.mt5.host-worker"
+
+
+def _validate_worker_id(worker_id: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}", worker_id):
+        raise ValueError("Hosted MT5 worker id is invalid")
+
+
+def load_worker_token(
+    worker_id: str,
+    *,
+    environ: Mapping[str, str] | None = None,
+    keyring_module: Any | None = None,
+) -> str:
+    _validate_worker_id(worker_id)
+    env = environ if environ is not None else os.environ
+    token = (env.get("HOSTED_MT5_WORKER_TOKEN") or "").strip()
+    if not token:
+        if keyring_module is None:
+            import keyring as keyring_module
+        token = (keyring_module.get_password(WORKER_KEYRING_SERVICE, worker_id) or "").strip()
+    if len(token) < 32:
+        raise ValueError("Hosted MT5 worker token must be at least 32 characters")
+    return token
+
+
+def store_worker_token(
+    worker_id: str,
+    token: str,
+    *,
+    keyring_module: Any | None = None,
+) -> None:
+    _validate_worker_id(worker_id)
+    normalized = token.strip()
+    if len(normalized) < 32:
+        raise ValueError("Hosted MT5 worker token must be at least 32 characters")
+    if keyring_module is None:
+        import keyring as keyring_module
+    keyring_module.set_password(WORKER_KEYRING_SERVICE, worker_id, normalized)
 
 
 def _normalize_api_base_url(server_url: str) -> str:
@@ -298,12 +337,11 @@ def build_session_child_spec(
     session_dir: str | Path,
     terminal_path: str | Path,
     python_executable: str | None = None,
+    frozen_executable: bool | None = None,
 ) -> ChildProcessSpec:
     executable = python_executable or sys.executable
-    argv = (
-        executable,
-        "-m",
-        "irexpro_mt5_connector.host_worker",
+    is_frozen = bool(getattr(sys, "frozen", False)) if frozen_executable is None else frozen_executable
+    child_args = (
         "--session-child",
         "--server-url",
         server_url,
@@ -311,6 +349,12 @@ def build_session_child_spec(
         str(Path(session_dir)),
         "--terminal-path",
         str(Path(terminal_path)),
+    )
+    argv = (executable, *child_args) if is_frozen else (
+        executable,
+        "-m",
+        "irexpro_mt5_connector.host_worker",
+        *child_args,
     )
     return ChildProcessSpec(
         argv=argv,
@@ -627,6 +671,11 @@ def _read_child_assignment_from_stdin() -> dict[str, Any]:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="iRexPro hosted MT5 execution worker")
     parser.add_argument("--session-child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--store-worker-token",
+        action="store_true",
+        help="store the worker bearer token securely in Windows Credential Manager",
+    )
     parser.add_argument("--readiness-check", action="store_true", help="verify this Windows MT5 worker host without leasing an account")
     parser.add_argument("--server-url", default=os.getenv("IREXPRO_API_URL", ""))
     parser.add_argument("--worker-id", default=os.getenv("HOSTED_MT5_WORKER_ID", ""))
@@ -659,6 +708,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     validate_host_worker_runtime()
+    if args.store_worker_token:
+        if not args.worker_id:
+            raise RuntimeError("HOSTED_MT5_WORKER_ID is required to store the worker token")
+        if sys.stdin.isatty():
+            from getpass import getpass
+
+            token = getpass("Hosted MT5 worker token: ")
+        else:
+            token = sys.stdin.readline().strip()
+        store_worker_token(args.worker_id, token)
+        print("Hosted MT5 worker credential stored securely.")
+        return 0
+
     if args.session_child:
         if not args.server_url or not args.session_dir or not args.terminal_path:
             raise RuntimeError("Hosted MT5 session child is missing non-secret runtime paths")
@@ -672,7 +734,7 @@ def main(argv: list[str] | None = None) -> int:
     config = HostWorkerConfig(
         server_url=args.server_url,
         worker_id=args.worker_id,
-        worker_token=os.getenv("HOSTED_MT5_WORKER_TOKEN", ""),
+        worker_token=load_worker_token(args.worker_id),
         mt5_template_dir=Path(args.mt5_template_dir),
         session_root=Path(args.session_root),
         max_sessions=args.max_sessions,

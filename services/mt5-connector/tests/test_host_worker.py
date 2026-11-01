@@ -12,6 +12,8 @@ from irexpro_mt5_connector.host_worker import (
     HostedMt5WorkerSupervisor,
     InMemorySecretStore,
     build_session_child_spec,
+    load_worker_token,
+    store_worker_token,
     check_host_worker_readiness,
     prepare_session_directory,
     run_session_child,
@@ -177,6 +179,27 @@ def test_child_process_spec_keeps_password_and_connector_token_out_of_argv_and_c
     assert "BROKER_ENCRYPTION_KEY" not in spec.env
 
 
+def test_frozen_host_worker_reenters_same_executable_for_session_child_without_python_module_flag(tmp_path: Path):
+    session_dir = tmp_path / "connector-1"
+    session_dir.mkdir()
+    terminal_path = session_dir / "terminal64.exe"
+    terminal_path.write_bytes(b"terminal")
+
+    spec = build_session_child_spec(
+        assignment(),
+        server_url="https://api.example.test/api/v1",
+        session_dir=session_dir,
+        terminal_path=terminal_path,
+        python_executable="iRexPro-MT5-Host-Worker.exe",
+        frozen_executable=True,
+    )
+
+    assert spec.argv[0] == "iRexPro-MT5-Host-Worker.exe"
+    assert spec.argv[1] == "--session-child"
+    assert "-m" not in spec.argv
+    assert "irexpro_mt5_connector.host_worker" not in spec.argv
+
+
 def test_in_memory_secret_store_never_needs_a_disk_backend():
     store = InMemorySecretStore("connector-1", "secret-token")
     assert store.get("connector-1") == "secret-token"
@@ -185,6 +208,47 @@ def test_in_memory_secret_store_never_needs_a_disk_backend():
     assert store.get("connector-1") is None
     store.set("connector-1", "rotated")
     assert store.get("connector-1") == "rotated"
+
+
+class FakeKeyring:
+    def __init__(self, stored=None):
+        self.stored = stored
+        self.get_calls = []
+        self.set_calls = []
+
+    def get_password(self, service, username):
+        self.get_calls.append((service, username))
+        return self.stored
+
+    def set_password(self, service, username, password):
+        self.set_calls.append((service, username, password))
+        self.stored = password
+
+
+def test_worker_token_loads_from_environment_or_windows_credential_store_without_argv():
+    keyring = FakeKeyring("k" * 32)
+    assert load_worker_token(
+        "worker-accra-1",
+        environ={"HOSTED_MT5_WORKER_TOKEN": "e" * 32},
+        keyring_module=keyring,
+    ) == "e" * 32
+    assert keyring.get_calls == []
+
+    assert load_worker_token(
+        "worker-accra-1",
+        environ={},
+        keyring_module=keyring,
+    ) == "k" * 32
+    assert keyring.get_calls == [("irexpro.mt5.host-worker", "worker-accra-1")]
+
+
+def test_worker_token_can_be_stored_in_credential_manager_without_a_cli_secret_argument():
+    keyring = FakeKeyring()
+    store_worker_token("worker-accra-1", "s" * 32, keyring_module=keyring)
+    assert keyring.set_calls == [("irexpro.mt5.host-worker", "worker-accra-1", "s" * 32)]
+
+    with pytest.raises(ValueError, match="at least 32"):
+        store_worker_token("worker-accra-1", "short", keyring_module=keyring)
 
 
 class FakeChild:
