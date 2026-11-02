@@ -35,7 +35,31 @@ interface FinanceCalendarPayload {
   };
 }
 
-export type MacroEventProvider = 'TRADING_ECONOMICS' | 'FINANCE_CALENDAR' | 'NONE';
+interface ShowMyTradesCalendarEvent {
+  ts?: number;
+  time?: string;
+  currency?: string;
+  impact?: string;
+  title?: string;
+  id?: string;
+  status?: string;
+}
+
+interface ShowMyTradesCalendarPayload {
+  server_time?: number;
+  server_time_iso?: string;
+  generated_at?: string;
+  from?: string;
+  to?: string;
+  count?: number;
+  events?: ShowMyTradesCalendarEvent[];
+}
+
+export type MacroEventProvider =
+  | 'TRADING_ECONOMICS'
+  | 'FINANCE_CALENDAR'
+  | 'SHOW_MY_TRADES'
+  | 'NONE';
 
 export interface MacroEventRiskAssessment {
   state: EnsembleEventRiskState;
@@ -92,6 +116,8 @@ const BLOCK_AFTER_MINUTES = 30;
 const CACHE_MS = 15 * 60_000;
 const FINANCE_CALENDAR_BASE_URL = 'https://www.financecalendar.com/wp-json/fc/v1/calendar';
 const FINANCE_CALENDAR_ATTRIBUTION_URL = 'https://www.financecalendar.com';
+const SHOW_MY_TRADES_BASE_URL = 'https://showmytrades.com/api/public/calendar/v1';
+const SHOW_MY_TRADES_ATTRIBUTION_URL = 'https://showmytrades.com';
 
 function dateOnly(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -127,11 +153,16 @@ export class MacroEventRiskService {
     string,
     { expiresAt: number; payload: FinanceCalendarPayload }
   >();
+  private showMyTradesCache: { expiresAt: number; payload: ShowMyTradesCalendarPayload } | null = null;
 
   constructor(private readonly config: ConfigService) {}
 
   isConfigured(): boolean {
-    return Boolean(this.apiKey()) || this.financeCalendarFallbackEnabled();
+    return (
+      Boolean(this.apiKey()) ||
+      this.financeCalendarFallbackEnabled() ||
+      this.showMyTradesFallbackEnabled()
+    );
   }
 
   async assess(
@@ -177,6 +208,7 @@ export class MacroEventRiskService {
       }
     }
 
+    let financeCalendarError: string | null = null;
     if (this.financeCalendarFallbackEnabled()) {
       try {
         return await this.assessFinanceCalendar(
@@ -187,28 +219,47 @@ export class MacroEventRiskService {
           fetchImpl,
         );
       } catch (error) {
-        const fallbackError = (error as Error).message;
-        return {
-          ...base,
-          provider: 'FINANCE_CALENDAR',
-          state: 'UNVERIFIED',
-          reason: primaryError
-            ? `PRIMARY_ERROR:${primaryError};FALLBACK_ERROR:${fallbackError}`
-            : `PROVIDER_ERROR:${fallbackError}`,
-          attribution: {
-            label: 'financecalendar.com',
-            url: FINANCE_CALENDAR_ATTRIBUTION_URL,
-          },
-        };
+        financeCalendarError = (error as Error).message;
       }
     }
 
+    let showMyTradesError: string | null = null;
+    if (this.showMyTradesFallbackEnabled()) {
+      try {
+        return await this.assessShowMyTrades(
+          normalizedInstrument,
+          currencies,
+          relevantCountries,
+          at,
+          fetchImpl,
+        );
+      } catch (error) {
+        showMyTradesError = (error as Error).message;
+      }
+    }
+
+    const errors = [
+      primaryError ? `PRIMARY_ERROR:${primaryError}` : null,
+      financeCalendarError ? `FINANCE_CALENDAR_ERROR:${financeCalendarError}` : null,
+      showMyTradesError ? `SHOW_MY_TRADES_ERROR:${showMyTradesError}` : null,
+    ].filter((value): value is string => Boolean(value));
+
     return {
       ...base,
-      provider: this.apiKey() ? 'TRADING_ECONOMICS' : 'NONE',
+      provider: showMyTradesError
+        ? 'SHOW_MY_TRADES'
+        : financeCalendarError
+          ? 'FINANCE_CALENDAR'
+          : this.apiKey()
+            ? 'TRADING_ECONOMICS'
+            : 'NONE',
       state: 'UNVERIFIED',
-      reason: primaryError ? `PROVIDER_ERROR:${primaryError}` : 'PROVIDER_NOT_CONFIGURED',
-      attribution: null,
+      reason: errors.length > 0 ? errors.join(';') : 'PROVIDER_NOT_CONFIGURED',
+      attribution: showMyTradesError
+        ? { label: 'showmytrades.com', url: SHOW_MY_TRADES_ATTRIBUTION_URL }
+        : financeCalendarError
+          ? { label: 'financecalendar.com', url: FINANCE_CALENDAR_ATTRIBUTION_URL }
+          : null,
     };
   }
 
@@ -335,6 +386,94 @@ export class MacroEventRiskService {
     };
   }
 
+  private async assessShowMyTrades(
+    instrument: string,
+    relevantCurrencies: string[],
+    relevantCountries: string[],
+    at: Date,
+    fetchImpl: typeof fetch,
+  ): Promise<MacroEventRiskAssessment> {
+    const payload = await this.showMyTradesEventsFor(fetchImpl);
+    const events = payload.events;
+    if (!Array.isArray(events)) throw new Error('INVALID_SHOW_MY_TRADES_PAYLOAD');
+
+    const beforeMs = BLOCK_BEFORE_MINUTES * 60_000;
+    const afterMs = BLOCK_AFTER_MINUTES * 60_000;
+    const blockingEvents: MacroEventRiskAssessment['blockingEvents'] = [];
+
+    for (const event of events) {
+      if ((event.impact ?? '').trim().toLowerCase() !== 'high') continue;
+      if ((event.status ?? '').trim().toLowerCase() === 'cancelled') continue;
+      if ((event.status ?? '').trim().toLowerCase() === 'canceled') continue;
+
+      const currency = (event.currency ?? '').trim().toUpperCase();
+      if (!relevantCurrencies.includes(currency)) continue;
+
+      const eventTime = event.time
+        ? parseProviderDate(event.time)
+        : Number.isFinite(event.ts)
+          ? new Date(Number(event.ts) * 1000)
+          : null;
+      if (!eventTime || !Number.isFinite(eventTime.getTime())) {
+        throw new Error('RELEVANT_SHOW_MY_TRADES_EVENT_INVALID_TIME');
+      }
+
+      const delta = at.getTime() - eventTime.getTime();
+      if (delta < -beforeMs || delta > afterMs) continue;
+      blockingEvents.push({
+        id: event.id ?? null,
+        date: eventTime.toISOString(),
+        country: currency || null,
+        category: null,
+        event: event.title ?? null,
+        importance: 3,
+        source: 'showmytrades.com',
+        url: null,
+        allDay: false,
+      });
+    }
+
+    return {
+      provider: 'SHOW_MY_TRADES',
+      configured: true,
+      checkedAt: new Date().toISOString(),
+      instrument,
+      relevantCountries,
+      blockWindowMinutesBefore: BLOCK_BEFORE_MINUTES,
+      blockWindowMinutesAfter: BLOCK_AFTER_MINUTES,
+      blockingEvents,
+      state: blockingEvents.length > 0 ? 'HIGH_IMPACT_BLOCK' : 'CLEAR',
+      reason:
+        blockingEvents.length > 0 ? 'HIGH_IMPACT_EVENT_WINDOW' : 'NO_HIGH_IMPACT_EVENT_WINDOW',
+      attribution: {
+        label: 'showmytrades.com',
+        url: SHOW_MY_TRADES_ATTRIBUTION_URL,
+      },
+    };
+  }
+
+  private async showMyTradesEventsFor(
+    fetchImpl: typeof fetch,
+  ): Promise<ShowMyTradesCalendarPayload> {
+    const cached = this.showMyTradesCache;
+    if (cached && cached.expiresAt > Date.now()) return cached.payload;
+
+    const response = await fetchImpl(SHOW_MY_TRADES_BASE_URL, {
+      headers: { 'User-Agent': 'iRexPro/1.0 macro-risk-guard' },
+    });
+    if (!response.ok) throw new Error(`HTTP_${response.status}`);
+    const payload = (await response.json()) as ShowMyTradesCalendarPayload;
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.events)) {
+      throw new Error('INVALID_SHOW_MY_TRADES_PAYLOAD');
+    }
+
+    this.showMyTradesCache = {
+      expiresAt: Date.now() + CACHE_MS,
+      payload,
+    };
+    return payload;
+  }
+
   private async tradingEconomicsEventsFor(
     countries: string[],
     at: Date,
@@ -405,6 +544,11 @@ export class MacroEventRiskService {
 
   private financeCalendarFallbackEnabled(): boolean {
     const configured = this.config.get<string>('FINANCE_CALENDAR_FALLBACK_ENABLED', 'true');
+    return String(configured).trim().toLowerCase() !== 'false';
+  }
+
+  private showMyTradesFallbackEnabled(): boolean {
+    const configured = this.config.get<string>('SHOW_MY_TRADES_FALLBACK_ENABLED', 'true');
     return String(configured).trim().toLowerCase() !== 'false';
   }
 }

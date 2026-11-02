@@ -1,11 +1,14 @@
 import { MacroEventRiskService } from './macro-event-risk.service';
 
-function service(apiKey?: string, fallbackEnabled = true) {
+function service(apiKey?: string, fallbackEnabled = true, showMyTradesEnabled = fallbackEnabled) {
   return new MacroEventRiskService({
     get: jest.fn((key: string, defaultValue?: unknown) => {
       if (key === 'TRADING_ECONOMICS_API_KEY') return apiKey;
       if (key === 'FINANCE_CALENDAR_FALLBACK_ENABLED') {
         return fallbackEnabled ? 'true' : 'false';
+      }
+      if (key === 'SHOW_MY_TRADES_FALLBACK_ENABLED') {
+        return showMyTradesEnabled ? 'true' : 'false';
       }
       return defaultValue;
     }),
@@ -195,7 +198,8 @@ describe('MacroEventRiskService', () => {
     const fetchMock = jest
       .fn()
       .mockResolvedValueOnce(response({}, false, 503))
-      .mockResolvedValueOnce(response({}, false, 502));
+      .mockResolvedValueOnce(response({}, false, 502))
+      .mockResolvedValueOnce(response({}, false, 504));
 
     const result = await service('key').assess(
       'GBPUSD',
@@ -203,10 +207,11 @@ describe('MacroEventRiskService', () => {
       fetchMock as any,
     );
 
-    expect(result.provider).toBe('FINANCE_CALENDAR');
+    expect(result.provider).toBe('SHOW_MY_TRADES');
     expect(result.state).toBe('UNVERIFIED');
     expect(result.reason).toContain('PRIMARY_ERROR:HTTP_503');
-    expect(result.reason).toContain('FALLBACK_ERROR:HTTP_502');
+    expect(result.reason).toContain('FINANCE_CALENDAR_ERROR:HTTP_502');
+    expect(result.reason).toContain('SHOW_MY_TRADES_ERROR:HTTP_504');
   });
 
   it('returns clear when a Trading Economics high-impact event is outside the protective window', async () => {
@@ -231,4 +236,59 @@ describe('MacroEventRiskService', () => {
     expect(result.state).toBe('CLEAR');
     expect(result.blockingEvents).toEqual([]);
   });
+
+  it('falls through a 401 Finance Calendar response to the keyless ShowMyTrades calendar', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(response({}, false, 401))
+      .mockResolvedValueOnce(
+        response({
+          server_time: 1793600488,
+          server_time_iso: '2026-11-02T06:21:28Z',
+          generated_at: '2026-11-02T06:21:28Z',
+          from: '2026-11-02T00:21:28Z',
+          to: '2026-11-03T06:21:28Z',
+          count: 2,
+          events: [
+            {
+              ts: 1793602800,
+              time: '2026-11-02T07:00:00Z',
+              currency: 'EUR',
+              impact: 'high',
+              title: 'Retail Sales YoY (DE)',
+              id: 'eur-retail-sales-yoy-de.20261102T0700',
+              status: 'scheduled',
+            },
+            {
+              ts: 1793606400,
+              time: '2026-11-02T08:00:00Z',
+              currency: 'GBP',
+              impact: 'high',
+              title: 'UK high impact later',
+              id: 'gbp-later.20261102T0800',
+              status: 'scheduled',
+            },
+          ],
+        }),
+      );
+
+    const result = await service().assess(
+      'EURUSD',
+      new Date('2026-11-02T06:40:00Z'),
+      fetchMock as any,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.provider).toBe('SHOW_MY_TRADES');
+    expect(result.state).toBe('HIGH_IMPACT_BLOCK');
+    expect(result.blockingEvents).toEqual([
+      expect.objectContaining({
+        id: 'eur-retail-sales-yoy-de.20261102T0700',
+        date: '2026-11-02T07:00:00.000Z',
+        country: 'EUR',
+        event: 'Retail Sales YoY (DE)',
+      }),
+    ]);
+  });
+
 });
