@@ -13,6 +13,7 @@ import { DataSource } from 'typeorm';
 import type { DecryptedBrokerCredentials } from '../interfaces/broker-adapter.interface';
 import { CredentialEncryptionService } from '../services/credential-encryption.service';
 import { DirectMt5PairingService } from './direct-mt5-pairing.service';
+import { unwrapPostgresMutationRows } from './direct-mt5-query-result';
 import {
   HostedMt5WorkerPresenceInput,
   HostedMt5WorkerPresenceService,
@@ -330,7 +331,7 @@ export class HostedMt5Service {
     if (normalizedError && !/^[A-Z0-9][A-Z0-9_:-]{0,63}$/.test(normalizedError)) {
       throw new BadRequestException('Hosted MT5 worker error code is invalid');
     }
-    const rows = (await this.dataSource.query(
+    const rawRows = await this.dataSource.query(
       `
         UPDATE broker.direct_mt5_connectors
         SET host_last_seen_at=now(),
@@ -345,7 +346,8 @@ export class HostedMt5Service {
         RETURNING id
       `,
       [connectorId, workerId, normalizedError],
-    )) as Array<{ id: string }>;
+    );
+    const rows = unwrapPostgresMutationRows<{ id: string }>(rawRows);
     if (!rows[0])
       throw new ConflictException('Hosted MT5 worker lease is not owned or has expired');
     return { connectorId: rows[0].id, renewed: true };

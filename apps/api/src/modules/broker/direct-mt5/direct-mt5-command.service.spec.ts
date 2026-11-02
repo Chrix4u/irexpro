@@ -126,6 +126,36 @@ describe('DirectMt5CommandService', () => {
     expect(leased).toMatchObject({ commandId: 'cmd-1', connectorId: 'connector-1' });
   });
 
+  it('unwraps TypeORM PostgreSQL UPDATE RETURNING rows when leasing a command', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        [
+          {
+            id: 'cmd-1',
+            connector_id: 'connector-1',
+            broker_connection_id: 'connection-1',
+            idempotency_key: 'intent-1',
+            command_type: 'GET_PRICE',
+            payload: { symbol: 'EURUSD' },
+            created_at: new Date('2026-10-24T18:00:00.000Z'),
+            lease_expires_at: new Date('2026-10-24T18:00:30.000Z'),
+            account_login: '113392789',
+            broker_server: 'Broker-Demo',
+            account_type: 'DEMO',
+          },
+        ],
+        1,
+      ]);
+    const service = new DirectMt5CommandService({ query } as unknown as DataSource);
+
+    await expect(service.leaseNext('connector-1')).resolves.toMatchObject({
+      commandId: 'cmd-1',
+      connectorId: 'connector-1',
+    });
+  });
+
   it('returns null rather than leasing another connector command', async () => {
     const query = jest.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const service = new DirectMt5CommandService({ query } as unknown as DataSource);
@@ -144,6 +174,19 @@ describe('DirectMt5CommandService', () => {
       }),
     ).resolves.toMatchObject({ id: 'cmd-1', state: 'SUCCEEDED' });
     expect(query.mock.calls[0]![1]?.slice(0, 2)).toEqual(['connector-1', 'cmd-1']);
+  });
+
+  it('unwraps TypeORM PostgreSQL UPDATE RETURNING rows when recording a command result', async () => {
+    const query = jest.fn().mockResolvedValueOnce([[{ id: 'cmd-1', state: 'SUCCEEDED' }], 1]);
+    const service = new DirectMt5CommandService({ query } as unknown as DataSource);
+
+    await expect(
+      service.recordResult('connector-1', 'cmd-1', {
+        state: 'SUCCEEDED',
+        result: { ticket: '1001' },
+        error: null,
+      }),
+    ).resolves.toEqual({ id: 'cmd-1', state: 'SUCCEEDED' });
   });
 });
 

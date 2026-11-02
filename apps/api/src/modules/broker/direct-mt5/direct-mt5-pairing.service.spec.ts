@@ -209,6 +209,52 @@ describe('DirectMt5PairingService', () => {
     expect(String(query.mock.calls[1]![0])).toContain('RETURNING id');
   });
 
+  it('unwraps TypeORM PostgreSQL UPDATE RETURNING results before building connector identity', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([
+        [
+          {
+            id: 'connector-1',
+            broker_connection_id: 'connection-1',
+            user_id: 'user-1',
+          },
+        ],
+        1,
+      ])
+      .mockResolvedValueOnce([[{ id: 'connection-1' }], 1]);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
+
+    await expect(
+      service.redeemPairing('ABCDEFGH23', {
+        accountLogin: '113392789',
+        brokerServer: 'Broker-Demo',
+        currency: 'USD',
+        tradeAllowed: true,
+        accountType: 'DEMO',
+      }),
+    ).resolves.toMatchObject({
+      connectorId: 'connector-1',
+      brokerConnectionId: 'connection-1',
+      connectorToken: expect.any(String),
+    });
+  });
+
+  it('fails closed when TypeORM reports zero rows for UPDATE RETURNING', async () => {
+    const query = jest.fn().mockResolvedValueOnce([[], 0]);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
+
+    await expect(
+      service.redeemPairing('ABCDEFGH23', {
+        accountLogin: '113392789',
+        brokerServer: 'Broker-Demo',
+        currency: 'USD',
+        tradeAllowed: true,
+        accountType: 'DEMO',
+      }),
+    ).rejects.toThrow('invalid or expired');
+  });
+
   it('does not activate a pairing when the terminal login differs from the BrokerConnection account', async () => {
     const query = jest.fn().mockImplementation(async (sql: string) => {
       // Current implementation updates the connector without consulting the
@@ -327,6 +373,33 @@ describe('DirectMt5PairingService', () => {
         accountType: 'DEMO',
       }),
     ).resolves.toMatchObject({ lastSequence: 8 });
+  });
+
+  it('unwraps TypeORM PostgreSQL UPDATE RETURNING rows for connector heartbeats', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([[{ id: 'connector-1', last_sequence: '8' }], 1])
+      .mockResolvedValueOnce([]);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
+    const binding = {
+      connectorId: 'connector-1',
+      userId: 'user-1',
+      brokerConnectionId: 'connection-1',
+      accountLogin: '113392789',
+      brokerServer: 'Broker-Demo',
+      accountType: 'DEMO' as const,
+      lastSequence: 7,
+    };
+
+    await expect(
+      service.recordHeartbeat(binding, {
+        accountLogin: '113392789',
+        brokerServer: 'Broker-Demo',
+        sequence: 8,
+        tradeAllowed: true,
+        accountType: 'DEMO',
+      }),
+    ).resolves.toEqual({ lastSequence: 8 });
   });
 
   it('suspends a connector when the terminal account identity changes', async () => {

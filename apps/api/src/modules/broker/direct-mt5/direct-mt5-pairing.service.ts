@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import { DataSource } from 'typeorm';
 import { DirectMt5AccountType } from './direct-mt5.protocol';
+import { unwrapPostgresMutationRows } from './direct-mt5-query-result';
 
 const PAIRING_TTL_MS = 10 * 60_000;
 const PAIRING_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -206,7 +207,7 @@ export class DirectMt5PairingService {
     const tokenHash = this.digest('token', connectorToken);
 
     const connector = await this.dataSource.transaction(async (manager) => {
-      const rows = (await manager.query(
+      const rawConnectorRows = await manager.query(
         `
           UPDATE broker.direct_mt5_connectors AS c
           SET state = 'ACTIVE',
@@ -242,7 +243,12 @@ export class DirectMt5PairingService {
           identity.tradeAllowed,
           identity.accountType,
         ],
-      )) as Array<{ id: string; broker_connection_id: string; user_id: string }>;
+      );
+      const rows = unwrapPostgresMutationRows<{
+        id: string;
+        broker_connection_id: string;
+        user_id: string;
+      }>(rawConnectorRows);
 
       const matchedConnector = rows[0];
       if (!matchedConnector) {
@@ -251,7 +257,7 @@ export class DirectMt5PairingService {
         );
       }
 
-      const brokerRows = (await manager.query(
+      const rawBrokerRows = await manager.query(
         `UPDATE broker.broker_connections
          SET status = 'CONNECTED',
              authorization_status = CASE WHEN account_type = 'DEMO' THEN 'CONNECTED' ELSE authorization_status END,
@@ -274,7 +280,8 @@ export class DirectMt5PairingService {
           identity.accountType,
           identity.accountLogin,
         ],
-      )) as Array<{ id: string }>;
+      );
+      const brokerRows = unwrapPostgresMutationRows<{ id: string }>(rawBrokerRows);
       if (!brokerRows[0]) {
         throw new BadRequestException(
           'Pairing broker state changed during redemption; generate a fresh pairing code',
@@ -369,7 +376,7 @@ export class DirectMt5PairingService {
       throw new BadRequestException('Heartbeat sequence is stale or invalid');
     }
 
-    const rows = (await this.dataSource.query(
+    const rawRows = await this.dataSource.query(
       `
         UPDATE broker.direct_mt5_connectors
         SET last_sequence = $2,
@@ -392,7 +399,10 @@ export class DirectMt5PairingService {
         binding.brokerServer,
         binding.accountType,
       ],
-    )) as Array<{ id: string; last_sequence: string | number }>;
+    );
+    const rows = unwrapPostgresMutationRows<{ id: string; last_sequence: string | number }>(
+      rawRows,
+    );
     const row = rows[0];
     if (!row) {
       throw new ConflictException('Heartbeat replay or concurrent connector activity detected');

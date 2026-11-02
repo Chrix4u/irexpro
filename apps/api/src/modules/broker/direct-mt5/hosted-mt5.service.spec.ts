@@ -282,6 +282,20 @@ describe('HostedMt5Service', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('unwraps TypeORM PostgreSQL UPDATE RETURNING rows when renewing a hosted worker lease', async () => {
+    const query = jest.fn().mockResolvedValueOnce([[{ id: 'connector-1' }], 1]);
+    const service = new HostedMt5Service(
+      { query } as unknown as DataSource,
+      { decrypt: jest.fn() } as any,
+      { digestToken: jest.fn() } as any,
+      config(),
+    );
+
+    await expect(
+      service.heartbeatAssignment('connector-1', 'worker-1', WORKER_TOKEN),
+    ).resolves.toEqual({ connectorId: 'connector-1', renewed: true });
+  });
+
   it('authenticates worker presence without requiring rollout to be enabled', async () => {
     const query = jest.fn();
     const presence = {

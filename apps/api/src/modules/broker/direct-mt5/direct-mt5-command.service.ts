@@ -9,6 +9,7 @@ import {
   DirectMt5CommandType,
   parseDirectMt5Command,
 } from './direct-mt5.protocol';
+import { unwrapPostgresMutationRows } from './direct-mt5-query-result';
 
 export interface EnqueueDirectMt5Command {
   connectorId: string;
@@ -158,7 +159,7 @@ export class DirectMt5CommandService {
       [connectorId],
     );
 
-    const rows = (await this.dataSource.query(
+    const rawRows = await this.dataSource.query(
       `
         WITH candidate AS (
           SELECT cmd.id
@@ -201,7 +202,8 @@ export class DirectMt5CommandService {
                   c.account_login, c.broker_server, c.account_type
       `,
       [connectorId],
-    )) as Array<{
+    );
+    const rows = unwrapPostgresMutationRows<{
       id: string;
       connector_id: string;
       broker_connection_id: string;
@@ -213,7 +215,7 @@ export class DirectMt5CommandService {
       account_login: string;
       broker_server: string;
       account_type: 'DEMO' | 'LIVE';
-    }>;
+    }>(rawRows);
     const row = rows[0];
     if (!row) return null;
 
@@ -238,7 +240,7 @@ export class DirectMt5CommandService {
     commandId: string,
     input: DirectMt5CommandResultInput,
   ): Promise<{ id: string; state: string }> {
-    const rows = (await this.dataSource.query(
+    const rawRows = await this.dataSource.query(
       `
         UPDATE broker.direct_mt5_commands
         SET state = $3,
@@ -254,7 +256,8 @@ export class DirectMt5CommandService {
         RETURNING id, state
       `,
       [connectorId, commandId, input.state, JSON.stringify(input.result), input.error],
-    )) as Array<{ id: string; state: string }>;
+    );
+    const rows = unwrapPostgresMutationRows<{ id: string; state: string }>(rawRows);
     const command = rows[0];
     if (!command) {
       throw new NotFoundException('Direct MT5 command is not leased by this connector');
