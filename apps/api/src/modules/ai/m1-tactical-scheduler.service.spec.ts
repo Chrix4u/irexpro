@@ -3385,19 +3385,25 @@ describe('M1 V8 multi-model DEMO authority', () => {
       evidenceByRoute: { M1_TREND_CONTINUATION: lossStreakEvidence },
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
-        authority: {
-          ...result.authority,
-          executable: true,
-          authorityPath: 'PRIMARY_PLAN_B',
-          blockers: [],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: true,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
+        };
+      });
 
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
 
@@ -3428,21 +3434,25 @@ describe('M1 V8 multi-model DEMO authority', () => {
       ],
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: { ...result.ensemble, strategyRoute: 'EARLY_TRANSITION', paperAdmitted: true },
-        authority: {
-          ...result.authority,
-          executable: true,
-          authorityPath: 'PRIMARY_PLAN_B',
-          blockers: [],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: { ...result.ensemble, strategyRoute: 'EARLY_TRANSITION', paperAdmitted: true },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
+        };
+      });
 
-    const route = await driveFeatures(h, transitionFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    const route = await driveFeatures(h, transitionFeatures(), {
+      brokerConnectionId: 'demo-conn-2',
+    });
 
     expect(route.route).toBe('M1_EARLY_TRANSITION');
     expect(h.receiveSignal).not.toHaveBeenCalled();
