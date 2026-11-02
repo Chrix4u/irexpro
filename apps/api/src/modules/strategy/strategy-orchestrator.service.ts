@@ -38,6 +38,7 @@ import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
  */
 const PROMOTED_EXTERNAL_DEMO_MODELS = new Set([
   'external-irexpro-m1-tactical|external-provider/irexpro-m1-tactical/m1-tactical-v1|M1',
+  'external-irexpro-m1-tactical|external-provider/irexpro-m1-tactical/m1-tactical-v2-m5-lifecycle|M1',
   'external-irexpro-multimodel-ensemble|external-provider/irexpro-multimodel-ensemble-v1/demo-v1|M1',
 ]);
 
@@ -217,7 +218,19 @@ export class StrategyOrchestratorService {
 
     // Internal workflow probes are test evidence only; they never become
     // production-eligible signals and remain separately authority-checked.
-    if (candidate.confidenceScore < effectiveConfidenceThreshold && !uatWorkflowProbeRequested) {
+    // Exact server-promoted external DEMO models already pass their model-specific
+    // admission/expectancy/timing governance before this generic orchestrator.
+    // Re-applying the legacy 0.60 scalar floor here can contradict that upstream
+    // authority (for example a 6/6 Plan-B continuation with ensemble score 0.57).
+    // This exemption cannot authorize an arbitrary external signal: Gate 3 below
+    // still requires the exact promoted tuple on the exact ACTIVE validated DEMO
+    // FULL_AUTO broker session, while LIVE remains fail-closed.
+    const serverPromotedExternalDemoModel = isServerPromotedExternalDemoModel(candidate);
+    if (
+      candidate.confidenceScore < effectiveConfidenceThreshold &&
+      !uatWorkflowProbeRequested &&
+      !serverPromotedExternalDemoModel
+    ) {
       const reason = `Confidence ${candidate.confidenceScore} below threshold ${effectiveConfidenceThreshold}`;
       this.logger.log(`Signal ${signalId} ignored: ${reason}`);
       await this.recordIgnored(

@@ -601,6 +601,84 @@ describe('StrategyOrchestratorService', () => {
       expect(executionService.executeTrade).toHaveBeenCalled();
     });
 
+    it('does not re-gate a server-promoted multi-model DEMO decision on the legacy generic 0.60 confidence floor', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.FULL_AUTO,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'ctrader',
+        accountType: BrokerMode.DEMO,
+        authorizationStatus: 'ACTIVE',
+        demoValidated: true,
+        liveTradingEnabled: false,
+        logicalAccountKey: 'ctrader::demo::acct-1',
+      });
+
+      const result = await service.processSignal(
+        validCandidate({
+          confidenceScore: 0.5712514133703761,
+          timeframe: 'M1',
+          strategyCode: 'external-irexpro-multimodel-ensemble',
+          modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+          suggestedVolume: 0.2,
+          metadata: {
+            signal_source: 'EXTERNAL_PROVIDER',
+            external_provider_code: 'irexpro-multimodel-ensemble-v1',
+            external_provider_paper_only: true,
+            position_sizing_tier: 'BASE',
+            production_eligible: false,
+            primary_engine_code: 'irexpro-multimodel-ensemble-v1',
+            multimodel_execution_authority: 'DEMO_FULL_AUTO_PROMOTED',
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(riskService.validateProposedTrade).toHaveBeenCalled();
+      expect(executionService.executeTrade).toHaveBeenCalled();
+    });
+
+    it('recognizes the current M1 tactical v2 lifecycle tuple on an activated real-provider DEMO FULL_AUTO session', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.FULL_AUTO,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'ctrader',
+        accountType: BrokerMode.DEMO,
+        authorizationStatus: 'ACTIVE',
+        demoValidated: true,
+        liveTradingEnabled: false,
+        logicalAccountKey: 'ctrader::demo::acct-1',
+      });
+
+      const result = await service.processSignal(
+        validCandidate({
+          confidenceScore: 0.738,
+          timeframe: 'M1',
+          strategyCode: 'external-irexpro-m1-tactical',
+          modelVersion: 'external-provider/irexpro-m1-tactical/m1-tactical-v2-m5-lifecycle',
+          suggestedVolume: 0.2,
+          metadata: {
+            signal_source: 'EXTERNAL_PROVIDER',
+            external_provider_code: 'irexpro-m1-tactical',
+            external_provider_paper_only: true,
+            position_sizing_tier: 'BASE',
+            production_eligible: false,
+          },
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(riskService.validateProposedTrade).toHaveBeenCalled();
+      expect(executionService.executeTrade).toHaveBeenCalled();
+    });
+
     it('allows only the server-promoted multi-model ensemble tuple on an activated real-provider DEMO FULL_AUTO session', async () => {
       (executionService.getActiveSession as jest.Mock).mockResolvedValue({
         ...activeSession(),
