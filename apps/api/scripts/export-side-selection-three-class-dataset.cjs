@@ -236,8 +236,10 @@ function featureRow(pair, candidate, opposite) {
   if (!label) return null;
 
   return {
+    episode_id: `${candidate.instrument}|${candidate.marketBarTime.toISOString()}|${candidate.policyVersion}`,
     decision_time: pair.decisionTime.toISOString(),
     market_bar_time: candidate.marketBarTime.toISOString(),
+    target_resolved_at: pair.resolvedAt.toISOString(),
     instrument: candidate.instrument,
     direction: candidate.direction,
     policy_version: candidate.policyVersion,
@@ -394,7 +396,7 @@ async function runSideSelectionDatasetExport({
       byPolicy: byPolicy(rows),
       categoricalFeatures: [...CATEGORICAL_FEATURES],
       numericFeatures: [...NUMERIC_FEATURES],
-      targetColumns: ['label', 'target_original_net_r', 'target_opposite_net_r'],
+      targetColumns: ['label', 'target_resolved_at', 'target_original_net_r', 'target_opposite_net_r'],
       executionAuthority: 'NONE',
       modifiesExecution: false,
       qualificationEvidence: false,

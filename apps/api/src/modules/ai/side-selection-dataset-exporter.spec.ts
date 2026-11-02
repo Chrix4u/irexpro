@@ -131,6 +131,8 @@ describe('side-selection three-class dataset exporter', () => {
     const report = await run(new FakeClient(rows));
     assert.equal(report.pairedEpisodes, 2);
     assert.equal(report.rows.length, 4);
+    assert.equal(report.rows[0].episode_id, report.rows[1].episode_id);
+    assert.equal(report.rows[0].target_resolved_at, '2026-11-02T10:15:00.000Z');
     assert.deepEqual(
       report.rows.map((x: any) => [x.direction, x.label]),
       [
