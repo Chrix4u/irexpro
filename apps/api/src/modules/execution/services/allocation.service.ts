@@ -215,6 +215,34 @@ export class AllocationService {
       return existing;
     }
 
+    const existingBudget = await this.budgetRepo.findOne({
+      where: { userId: intent.userId, logicalAccountKey },
+    });
+    if (!existingBudget) {
+      throw new AllocationError(
+        'ALLOCATION_BUDGET_UNPROVABLE',
+        `no explicit capital budget for account ${logicalAccountKey} — ` +
+          'the user must allocate capital before AI trading can create new exposure',
+      );
+    }
+
+    const account = await this.brokerService.getBrokerAccountState(intent.brokerConnectionId);
+    const currentEquity = account?.equity ? ExactDecimal.tryParse(account.equity) : null;
+    const currentCurrency = account?.currency?.toUpperCase() ?? null;
+    if (!currentEquity?.isPositive() || !currentCurrency || !/^[A-Z]{3}$/.test(currentCurrency)) {
+      throw new AllocationError(
+        'ALLOCATION_BUDGET_UNPROVABLE',
+        'The broker account does not currently provide authoritative equity and currency.',
+      );
+    }
+    if (currentCurrency !== sized.accountCurrency) {
+      throw new AllocationError(
+        'ALLOCATION_CURRENCY_MISMATCH',
+        `current broker currency ${currentCurrency} != sized currency ${sized.accountCurrency}` +
+          ' — cross-currency allocation is never attempted',
+      );
+    }
+
     const lockKey = this.computeAccountLockKey(intent.userId, logicalAccountKey);
 
     try {
@@ -257,7 +285,8 @@ export class AllocationService {
           logicalAccountKey,
         );
         const committed = ExactDecimal.parse(aggregate.committed);
-        const total = ExactDecimal.parse(budget.totalCapital);
+        const configuredTotal = ExactDecimal.parse(budget.totalCapital);
+        const total = ExactDecimal.min(configuredTotal, currentEquity);
         const requested = ExactDecimal.parse(sized.allocatedCapital);
 
         // 5. Sufficiency — the remaining allocatable capital (§3).
@@ -413,8 +442,10 @@ export class AllocationService {
     const aggregate = await this.dataSource.transaction((manager) =>
       this.aggregateActiveAllocations(manager, userId, connection.logicalAccountKey!),
     );
-    const allocated = ExactDecimal.parse(budget.totalCapital);
+    const configured = ExactDecimal.parse(budget.totalCapital);
+    const allocated = ExactDecimal.min(configured, equity);
     const committed = ExactDecimal.parse(aggregate.committed);
+    const remaining = ExactDecimal.max(allocated.sub(committed), ExactDecimal.ZERO);
 
     return {
       brokerConnectionId: connection.id,
@@ -427,7 +458,7 @@ export class AllocationService {
       inFlightCommitments: aggregate.inFlight,
       pendingOrderCommitments: aggregate.pendingOrders,
       openPositionCommitments: aggregate.openPositions,
-      availableCapital: allocated.sub(committed).toString(),
+      availableCapital: remaining.toString(),
     };
   }
 

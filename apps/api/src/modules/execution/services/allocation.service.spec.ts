@@ -284,7 +284,7 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
       ],
       aggregateRows: [],
       connections: [{ id: CONN, user_id: USER, logical_account_key: KEY }],
-      seedAccountState: { equity: '10000.00', currency: 'USD' },
+      seedAccountState: { equity: '50000.00', currency: 'USD' },
       nextUniqueViolation: false,
     };
     txRan = false;
@@ -344,6 +344,20 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
 
       expect(second.id).toBe(first.id);
       expect(store.allocations).toHaveLength(1);
+    });
+
+    it('fails closed against current broker equity when the configured budget is now larger than the account', async () => {
+      store.budgets[0].total_capital = '900';
+      store.seedAccountState = { equity: '653.50', currency: 'USD' };
+      store.aggregateRows = [joinRow({ allocated_capital: '190', trade_status: 'OPEN' })];
+
+      await expect(
+        service.resolveOrAllocate({
+          intent: intent('intent-equity-clamp'),
+          logicalAccountKey: KEY,
+          sized: sized({ allocatedCapital: '500' }),
+        }),
+      ).rejects.toMatchObject({ code: 'ALLOCATION_INSUFFICIENT_CAPITAL' });
     });
 
     it('rejects a RELEASED allocation — the same decision may not re-allocate (no resurrection)', async () => {
@@ -630,6 +644,18 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
         availableCapital: null,
       });
       expect(store.budgets).toHaveLength(0);
+    });
+
+    it('clamps usable allocation and available capital to current broker equity after drawdown', async () => {
+      store.budgets[0].total_capital = '900';
+      store.seedAccountState = { equity: '653.50', currency: 'USD' };
+      store.aggregateRows = [joinRow({ allocated_capital: '190', trade_status: 'OPEN' })];
+
+      const state = await service.getUserCapitalAllocationState(USER, CONN);
+
+      expect(state.allocatedCapital).toBe('653.5');
+      expect(state.committedCapital).toBe('190');
+      expect(state.availableCapital).toBe('463.5');
     });
 
     it('rejects setting an allocation above current authoritative broker equity', async () => {
