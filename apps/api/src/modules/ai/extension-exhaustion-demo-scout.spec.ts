@@ -64,6 +64,9 @@ describe('evaluateExtensionExhaustionDemoScout', () => {
 
   it.each([
     ['specialist not candidate', { specialist: { ...input().specialist, candidate: false } }, 'SPECIALIST_NOT_CANDIDATE'],
+    ['specialist wrong regime', { specialist: { ...input().specialist, regime: 'TREND_HEALTHY' } }, 'SPECIALIST_REGIME_NOT_EXTENDED'],
+    ['specialist drift not normal', { specialist: { ...input().specialist, driftState: 'OUT_OF_DISTRIBUTION' } }, 'SPECIALIST_DRIFT_NOT_NORMAL'],
+    ['specialist spread invalid', { specialist: { ...input().specialist, executionSpreadEvidenceValid: false } }, 'SPECIALIST_SPREAD_UNVERIFIED'],
     ['event risk not clear', { eventRisk: 'UNVERIFIED' }, 'EVENT_RISK_NOT_CLEAR'],
     ['wrong M1 route', { m1Route: 'M1_EARLY_TRANSITION' }, 'M1_TIMING_NOT_CONTINUATION'],
     ['weak M1 confidence', { m1Confidence: 0.699 }, 'M1_CONFIDENCE_TOO_LOW'],
