@@ -3365,6 +3365,110 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(h.receiveSignal).not.toHaveBeenCalled();
   });
 
+  it('vetoes an otherwise executable primary Plan-B continuation when M1 reliability is EARLY_LOSS_STREAK', async () => {
+    const lossStreakEvidence = [
+      { realisedPnl: -5, closedAt: '2026-10-15T10:29:00.000Z' },
+      { realisedPnl: -4, closedAt: '2026-10-15T10:19:00.000Z' },
+      { realisedPnl: -3, closedAt: '2026-10-15T10:09:00.000Z' },
+    ].map((row) => ({
+      route: 'M1_TREND_CONTINUATION',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      policyVersion: 'm1-tactical-v2-m5-lifecycle',
+      riskAtStop: 10,
+      ...row,
+      closedAt: new Date(row.closedAt),
+    }));
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: lossStreakEvidence },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: true,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
+        };
+      });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.governance.reliability.reason).toBe('EARLY_LOSS_STREAK');
+    expect(recorded?.executionAuthority).toBe('NONE');
+    expect(recorded?.blockers).toContain('M1_DEMO_RELIABILITY_EARLY_LOSS_STREAK');
+    expect(recorded?.governance.demoProfitabilityReliabilityGate).toEqual(
+      expect.objectContaining({ executable: false, lossStreakVeto: true }),
+    );
+  });
+
+  it('vetoes an otherwise executable primary Plan-B early transition when pair-side evidence is degraded', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+      shadowPairSideOutcomes: [
+        { observedAt: new Date('2026-10-15T10:29:00.000Z'), netR: -0.4 },
+        { observedAt: new Date('2026-10-15T10:19:00.000Z'), netR: -0.3 },
+        { observedAt: new Date('2026-10-15T10:09:00.000Z'), netR: -0.2 },
+        { observedAt: new Date('2026-10-15T09:59:00.000Z'), netR: 0.8 },
+        { observedAt: new Date('2026-10-15T09:49:00.000Z'), netR: 0.7 },
+        { observedAt: new Date('2026-10-15T09:39:00.000Z'), netR: 0.6 },
+      ],
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: { ...result.ensemble, strategyRoute: 'EARLY_TRANSITION', paperAdmitted: true },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
+        };
+      });
+
+    const route = await driveFeatures(h, transitionFeatures(), {
+      brokerConnectionId: 'demo-conn-2',
+    });
+
+    expect(route.route).toBe('M1_EARLY_TRANSITION');
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_EARLY_TRANSITION' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.governance.shadowPairSideReliability.reason).toBe(
+      'RECENT_MEANINGFUL_DEGRADATION',
+    );
+    expect(recorded?.executionAuthority).toBe('NONE');
+    expect(recorded?.blockers).toContain('M1_DEMO_EARLY_TRANSITION_PAIR_SIDE_DEGRADED');
+    expect(recorded?.governance.demoProfitabilityReliabilityGate).toEqual(
+      expect.objectContaining({ executable: false, degradedEarlyTransitionVeto: true }),
+    );
+  });
+
   it('keeps a real M1 early-transition loss streak blocked even when Plan-B disagrees on the route', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,

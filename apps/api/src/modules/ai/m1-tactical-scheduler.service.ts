@@ -65,6 +65,7 @@ import {
   type MultimodelDemoAuthorityDecision,
 } from './multimodel-demo-authority';
 import { evaluateM1TacticalExpectancy } from './m1-tactical-expectancy';
+import { evaluateDemoProfitabilityReliabilityGate } from './demo-profitability-reliability-gate';
 import {
   evaluateM1RoutePairSideReliability,
   type M1ReliabilityRoute,
@@ -1034,6 +1035,20 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           paperSimulationSpreadPrice,
         )
       : null;
+    const demoProfitabilityReliabilityGate = professionalDemoPhase
+      ? evaluateDemoProfitabilityReliabilityGate({
+          m1Route: routeDecision.route,
+          m1ReliabilityReason: reliability?.reason ?? null,
+          pairSideReliability: shadowPairSideReliability
+            ? {
+                eligible: shadowPairSideReliability.eligible,
+                reason: shadowPairSideReliability.reason,
+              }
+            : null,
+        })
+      : null;
+    const demoProfitabilityExecutionAllowed =
+      demoProfitabilityReliabilityGate?.executable !== false;
 
     const shadowOnly = this.rolloutPolicy.phase === 'SHADOW';
     const routeExecutable = m1RouteExecutableInPhase(this.rolloutPolicy.phase, routeDecision.route);
@@ -1109,7 +1124,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const professionalM1BootstrapExecutable =
       professionalM1FallbackExecutable && professionalM1Fallback?.tier === 'BOOTSTRAP_CONTINUATION';
     const multimodelPrimaryExecutable =
-      professionalDemoPhase && multimodelDemo?.authority.executable === true;
+      professionalDemoPhase &&
+      demoProfitabilityExecutionAllowed &&
+      multimodelDemo?.authority.executable === true;
     const multimodelDirectionConflict =
       professionalDemoPhase &&
       multimodelDemo?.authority.blockers.includes(
@@ -1233,7 +1250,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           (standardGovernanceExecutable || localImpulseDriftOnlyRescue)
         : standardGovernanceExecutable;
     const preliminaryCanExecute = professionalDemoPhase
-      ? !multimodelDirectionConflict &&
+      ? demoProfitabilityExecutionAllowed &&
+        !multimodelDirectionConflict &&
         (multimodelPrimaryExecutable ||
           m5EarlyTransitionHandoffEligible ||
           professionalM1FallbackExecutable ||
@@ -1365,6 +1383,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     ]);
     const blockers = professionalDemoPhase
       ? unique([
+          ...(demoProfitabilityReliabilityGate?.blockers ?? []),
           ...(multimodelDirectionConflict ? ['MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT'] : []),
           ...(professionalM1FallbackExecutable ||
           m5EarlyTransitionHandoffEligible ||
@@ -1453,6 +1472,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         multimodelTrainedExpert: multimodelDemo?.trainedExpert ?? null,
         multimodelAuthority: multimodelDemo?.authority ?? null,
         multimodelPortfolioSnapshotAvailable: multimodelDemo?.portfolioSnapshotAvailable ?? null,
+        demoProfitabilityReliabilityGate,
         directionFlipConflict: activeOppositePosition
           ? {
               candidateDirection: candidate.direction,
