@@ -5,6 +5,16 @@ const WORKFLOW_DIRECTORY = '.github/workflows';
 const LOCAL_ACTION_DIRECTORY = '.github/actions';
 const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/i;
 const ALLOWED_WRITE_PERMISSIONS = new Set(['security-events']);
+const SCOPED_WRITE_APPROVALS = new Map([
+  [
+    'mt5-connector-windows-release.yml',
+    {
+      job: 'publish-tag-release',
+      permission: 'contents',
+      requiredGuard: "if: startsWith(github.ref, 'refs/tags/mt5-connector-v')",
+    },
+  ],
+]);
 const FLOATING_GITHUB_RUNNER = /^(?:ubuntu|windows|macos)-latest$/i;
 
 function stripMatchingQuotes(value) {
@@ -32,6 +42,41 @@ function runnerLabelFromLine(line) {
 
 function isLocalReference(reference) {
   return reference.startsWith('./');
+}
+
+function jobBoundsForLine(lines, lineIndex) {
+  let start = -1;
+  let job = null;
+  for (let index = lineIndex; index >= 0; index -= 1) {
+    const match = lines[index].match(/^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$/);
+    if (match) {
+      start = index;
+      job = match[1];
+      break;
+    }
+  }
+  if (start < 0 || !job) return null;
+
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^  [A-Za-z0-9_-]+:\s*(?:#.*)?$/.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  return { job, start, end };
+}
+
+function isApprovedScopedWrite(workflowName, lines, lineIndex, permission) {
+  const approval = SCOPED_WRITE_APPROVALS.get(workflowName);
+  if (!approval || approval.permission !== permission) return false;
+
+  const bounds = jobBoundsForLine(lines, lineIndex);
+  if (!bounds || bounds.job !== approval.job) return false;
+
+  return lines
+    .slice(bounds.start, bounds.end)
+    .some((line) => line.trim() === approval.requiredGuard);
 }
 
 function validateExternalActionReference(reference) {
@@ -110,9 +155,13 @@ export function auditWorkflowText(workflowName, source) {
     failures.push(`${workflowName}: permissions: write-all is forbidden`);
   }
 
-  for (const line of lines) {
+  for (const [lineIndex, line] of lines.entries()) {
     const permission = line.match(/^\s+([A-Za-z0-9-]+):\s*write\s*(?:#.*)?$/i);
-    if (permission && !ALLOWED_WRITE_PERMISSIONS.has(permission[1])) {
+    if (
+      permission &&
+      !ALLOWED_WRITE_PERMISSIONS.has(permission[1]) &&
+      !isApprovedScopedWrite(workflowName, lines, lineIndex, permission[1])
+    ) {
       failures.push(
         `${workflowName}: unapproved token write permission ${permission[1]}: write`,
       );
@@ -147,6 +196,11 @@ function goodWorkflow(extra = '') {
 
 function goodCompositeAction(reference = 'actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444') {
   return `name: Composite Fixture\ndescription: Test fixture\nruns:\n  using: composite\n  steps:\n    - uses: ${reference}\n`;
+}
+
+function approvedMt5TagReleaseWorkflow({ guarded = true, releaseJob = 'publish-tag-release' } = {}) {
+  const guard = guarded ? "    if: startsWith(github.ref, 'refs/tags/mt5-connector-v')\n" : '';
+  return `name: MT5 release fixture\n\non:\n  push:\n    tags: ['mt5-connector-v*']\n\npermissions:\n  contents: read\n\njobs:\n  build-windows:\n    runs-on: windows-2022\n    steps:\n      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09\n        with:\n          persist-credentials: false\n  ${releaseJob}:\n${guard}    runs-on: ubuntu-24.04\n    permissions:\n      contents: write\n    steps:\n      - run: echo release\n`;
 }
 
 export function runSelfTests() {
@@ -232,6 +286,33 @@ export function runSelfTests() {
   assert(
     broadWrite.failures.some((failure) => failure.includes('contents: write')),
     'unapproved write permission must fail',
+  );
+
+  const scopedMt5ReleaseWrite = auditWorkflowText(
+    'mt5-connector-windows-release.yml',
+    approvedMt5TagReleaseWorkflow(),
+  );
+  assert(
+    scopedMt5ReleaseWrite.failures.length === 0,
+    `exact MT5 tagged release contents write should pass: ${scopedMt5ReleaseWrite.failures}`,
+  );
+
+  const unguardedMt5ReleaseWrite = auditWorkflowText(
+    'mt5-connector-windows-release.yml',
+    approvedMt5TagReleaseWorkflow({ guarded: false }),
+  );
+  assert(
+    unguardedMt5ReleaseWrite.failures.some((failure) => failure.includes('contents: write')),
+    'MT5 contents write without the exact tag guard must fail',
+  );
+
+  const wrongJobMt5ReleaseWrite = auditWorkflowText(
+    'mt5-connector-windows-release.yml',
+    approvedMt5TagReleaseWorkflow({ releaseJob: 'build-release' }),
+  );
+  assert(
+    wrongJobMt5ReleaseWrite.failures.some((failure) => failure.includes('contents: write')),
+    'MT5 contents write outside the approved publish-tag-release job must fail',
   );
 
   const codeqlWrite = auditWorkflowText(
