@@ -50,9 +50,13 @@ class IrexProConnectorClient:
             timeout=self.timeout_seconds,
         )
         data = self._json(response)
-        token = data.get("connectorToken")
-        connector_id = data.get("connectorId")
-        broker_connection_id = data.get("brokerConnectionId")
+        payload = data
+        nested = data.get("data")
+        if isinstance(nested, dict):
+            payload = nested
+        token = payload.get("connectorToken")
+        connector_id = payload.get("connectorId")
+        broker_connection_id = payload.get("brokerConnectionId")
         if not all(isinstance(item, str) and item for item in (token, connector_id, broker_connection_id)):
             raise ConnectorApiError("pairing response is missing connector identity")
         self.secret_store.set(connector_id, token)

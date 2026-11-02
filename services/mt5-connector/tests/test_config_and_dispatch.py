@@ -137,6 +137,89 @@ def test_legacy_v1_settings_require_upgrade_and_repair(tmp_path: Path) -> None:
         raise AssertionError("legacy protocol-v1 settings must fail closed")
 
 
+def test_pairing_accepts_single_data_envelope_and_persists_connector_secret() -> None:
+    from irexpro_mt5_connector.client import IrexProConnectorClient
+    from irexpro_mt5_connector.mt5_terminal import AccountIdentity
+
+    class Store:
+        def __init__(self):
+            self.values = {}
+        def get(self, connector_id): return self.values.get(connector_id)
+        def set(self, connector_id, token): self.values[connector_id] = token
+        def delete(self, connector_id): self.values.pop(connector_id, None)
+
+    class Response:
+        status_code = 201
+        text = ""
+        def json(self):
+            return {
+                "data": {
+                    "connectorId": "connector-1",
+                    "brokerConnectionId": "connection-1",
+                    "connectorToken": "connector-token-secret",
+                }
+            }
+
+    class Session:
+        def post(self, _url, **_kwargs): return Response()
+
+    store = Store()
+    client = IrexProConnectorClient(
+        "https://irexpro.lightworldtech.com/api/v1",
+        store,
+        session=Session(),
+    )
+    settings = client.redeem_pairing(
+        "ABCDEFGH23",
+        AccountIdentity(
+            login="113392789",
+            server="Broker-Demo",
+            currency="USD",
+            trade_allowed=True,
+            account_type="DEMO",
+        ),
+    )
+
+    assert settings.connector_id == "connector-1"
+    assert settings.broker_connection_id == "connection-1"
+    assert store.values == {"connector-1": "connector-token-secret"}
+
+
+def test_pairing_still_fails_closed_when_nested_identity_is_incomplete() -> None:
+    from irexpro_mt5_connector.client import ConnectorApiError, IrexProConnectorClient
+    from irexpro_mt5_connector.mt5_terminal import AccountIdentity
+
+    class Store:
+        def get(self, _connector_id): return None
+        def set(self, _connector_id, _token): raise AssertionError("secret must not be stored")
+        def delete(self, _connector_id): return None
+
+    class Response:
+        status_code = 201
+        text = ""
+        def json(self): return {"data": {"connectorId": "connector-1"}}
+
+    class Session:
+        def post(self, _url, **_kwargs): return Response()
+
+    client = IrexProConnectorClient("https://irexpro.example/api/v1", Store(), session=Session())
+    try:
+        client.redeem_pairing(
+            "ABCDEFGH23",
+            AccountIdentity(
+                login="113392789",
+                server="Broker-Demo",
+                currency="USD",
+                trade_allowed=True,
+                account_type="DEMO",
+            ),
+        )
+    except ConnectorApiError as exc:
+        assert "missing connector identity" in str(exc)
+    else:
+        raise AssertionError("incomplete pairing identity must fail closed")
+
+
 def test_connector_client_normalizes_site_root_to_api_v1() -> None:
     from irexpro_mt5_connector.client import IrexProConnectorClient
 
