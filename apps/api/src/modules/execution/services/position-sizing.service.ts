@@ -784,6 +784,85 @@ export class PositionSizingService {
       }
     }
 
+    // ── 8. Broker-margin affordability: preserve the signal, reduce only size. ──
+    // Risk geometry may admit a professional lot size whose broker-native initial
+    // margin no longer fits the account after equity/free-margin changes. Do not
+    // throw the whole qualified setup away: step down conservatively to the
+    // largest broker lot increment whose EXPECTED_MARGIN fits both current free
+    // margin and the AI risk-capital base. RiskService independently re-checks
+    // current broker free margin immediately before execution (defense in depth).
+    const marginCapacity = ExactDecimal.min(freeMargin, riskCapitalBase);
+    const minimumMarginAffordableLot = allocationAwarePaper
+      ? ExactDecimal.max(minLot, ExactDecimal.parse(PAPER_PRODUCT_RISK_ADJUSTED_MIN_LOT))
+      : minLot;
+
+    const requiredMarginForLots = async (candidateLots: ExactDecimal): Promise<ExactDecimal> => {
+      let raw: string | null = null;
+      try {
+        raw = await this.brokerService.getRequiredMargin(brokerConnectionId, {
+          instrument,
+          lotSize: candidateLots.toString(),
+          direction: params.direction,
+        });
+      } catch {
+        raw = null;
+      }
+      const parsed = ExactDecimal.tryParse(raw ?? '');
+      if (!parsed || !parsed.isPositive()) {
+        throw new PositionSizingError(
+          'REQUIRED_MARGIN_UNPROVABLE',
+          `broker could not prove required margin for ${candidateLots.toString()} lots of ${instrument}`,
+        );
+      }
+      return parsed;
+    };
+
+    let requiredMargin = await requiredMarginForLots(lots);
+    if (requiredMargin.gt(marginCapacity)) {
+      const minimumStepsDecimal = minimumMarginAffordableLot.divDown(lotStep, 0);
+      const maximumStepsDecimal = lots.divDown(lotStep, 0);
+      let low = BigInt(minimumStepsDecimal.toString());
+      let high = BigInt(maximumStepsDecimal.toString());
+      let bestLots: ExactDecimal | null = null;
+      let bestMargin: ExactDecimal | null = null;
+
+      while (low <= high) {
+        const middle = (low + high) / 2n;
+        const candidateLots = lotStep.mul(ExactDecimal.parse(middle.toString()));
+        if (candidateLots.lt(minimumMarginAffordableLot)) {
+          low = middle + 1n;
+          continue;
+        }
+        const candidateMargin = await requiredMarginForLots(candidateLots);
+        if (candidateMargin.lte(marginCapacity)) {
+          bestLots = candidateLots;
+          bestMargin = candidateMargin;
+          low = middle + 1n;
+        } else {
+          high = middle - 1n;
+        }
+      }
+
+      if (!bestLots || !bestMargin) {
+        const code: PositionSizingFailureCode = allocationAwarePaper
+          ? 'POSITION_SIZE_BELOW_POLICY_MINIMUM'
+          : 'POSITION_SIZE_ZERO';
+        throw new PositionSizingError(
+          code,
+          `broker margin capacity ${marginCapacity.toString()} ${accountCurrency} cannot afford ` +
+            `${minimumMarginAffordableLot.toString()} lots of ${instrument}`,
+        );
+      }
+
+      this.logger.log(
+        `Margin-cap step-down ${instrument} ${params.direction}: ${lots.toString()} -> ` +
+          `${bestLots.toString()} lots (requiredMargin ${requiredMargin.toString()} -> ` +
+          `${bestMargin.toString()} ${accountCurrency}, capacity ${marginCapacity.toString()})`,
+      );
+      lots = bestLots;
+      requiredMargin = bestMargin;
+    }
+
     const finalRiskAtStopInQuoteCurrency = lots.mul(riskPerLot);
     const finalRiskAtStop = finalRiskAtStopInQuoteCurrency.divDown(
       quotePerAccountCurrency,
@@ -803,32 +882,9 @@ export class PositionSizingService {
       );
     }
 
-    // ── 8. Capital commitment = broker-required margin, not gross notional. ──
-    // A leveraged FX position's notional can be many times larger than the
-    // actual account capital consumed. Comparing gross notional with the user's
-    // explicit AI allocation makes even minimum-lot trades impossible on a
-    // modest allocation (e.g. 0.01 EURUSD ≈ 1,000 EUR notional but only about
-    // 1% of that capital at 100:1 leverage). The broker adapter already owns
-    // the instrument/provider-specific margin formula, so reuse that authority.
+    // Capital commitment remains broker-required margin; the affordability
+    // step above has already reduced the final lot to a margin-feasible size.
     const grossNotional = lots.mul(contractSize).mul(entry);
-    let requiredMarginRaw: string | null = null;
-    try {
-      requiredMarginRaw = await this.brokerService.getRequiredMargin(brokerConnectionId, {
-        instrument,
-        lotSize: lots.toString(),
-        direction: params.direction,
-      });
-    } catch {
-      requiredMarginRaw = null;
-    }
-    const requiredMargin = ExactDecimal.tryParse(requiredMarginRaw ?? '');
-    if (!requiredMargin || !requiredMargin.isPositive()) {
-      throw new PositionSizingError(
-        'REQUIRED_MARGIN_UNPROVABLE',
-        `broker could not prove required margin for ${lots.toString()} lots of ${instrument}`,
-      );
-    }
-
     const allocatedCapital = requiredMargin;
 
     const inputs: PositionSizingInputs = {

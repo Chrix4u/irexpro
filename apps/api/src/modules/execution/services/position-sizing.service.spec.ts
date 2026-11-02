@@ -97,6 +97,7 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
     getBrokerAccountState: jest.Mock;
     getCurrentPriceForConnection: jest.Mock;
     getRequiredMargin: jest.Mock;
+    findConnectionById: jest.Mock;
   };
   let orderGeometry: { resolveOrderGeometry: jest.Mock };
   let profileRepo: { findOne: jest.Mock };
@@ -128,6 +129,7 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
     brokerService = {
       getBrokerAccountState: jest.fn().mockResolvedValue(accountState()),
       getCurrentPriceForConnection: jest.fn().mockResolvedValue(null),
+      findConnectionById: jest.fn().mockResolvedValue({ accountType: 'DEMO' }),
       getRequiredMargin: jest
         .fn()
         .mockImplementation(async (_connectionId: string, params: { lotSize: string }) => {
@@ -193,6 +195,56 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
         true,
       );
       expect(ExactDecimal.parse(sized.allocatedCapital).lt(ExactDecimal.parse('1000'))).toBe(true);
+    });
+
+
+    it('steps a qualified volume down to the largest broker-margin-affordable lot instead of rejecting the trade', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue(
+        accountState({ balance: '645.53', equity: '645.53', freeMargin: '645.53' }),
+      );
+      profileRepo.findOne.mockResolvedValue(
+        profileRow({ maxTradeRiskPercent: '2.00', maxLeverageAllowed: 50 }),
+      );
+      brokerService.getRequiredMargin.mockImplementation(
+        async (_connectionId: string, params: { lotSize: string }) =>
+          ExactDecimal.parse(params.lotSize).mul(ExactDecimal.parse('4475.35')).toFixed(2, 'UP'),
+      );
+
+      const sized = await service.sizePosition(
+        baseParams({ stopLoss: '1.08440', requestedLotUpperBound: '0.20' }),
+      );
+
+      expect(sized.lots).toBe('0.14');
+      expect(sized.allocatedCapital).toBe('626.55');
+      expect(ExactDecimal.parse(sized.allocatedCapital).lte(ExactDecimal.parse('645.53'))).toBe(
+        true,
+      );
+    });
+
+    it('allows promoted DEMO sizing to fall below the preferred 0.20 lot floor when broker margin requires it, but not below the 0.10 risk-adjusted floor', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue(
+        accountState({ balance: '645.53', equity: '645.53', freeMargin: '645.53' }),
+      );
+      profileRepo.findOne.mockResolvedValue(
+        profileRow({ maxTradeRiskPercent: '2.00', maxLeverageAllowed: 50 }),
+      );
+      brokerService.getRequiredMargin.mockImplementation(
+        async (_connectionId: string, params: { lotSize: string }) =>
+          ExactDecimal.parse(params.lotSize).mul(ExactDecimal.parse('4475.35')).toFixed(2, 'UP'),
+      );
+
+      const sized = await service.sizePosition({
+        ...baseParams({ stopLoss: '1.08440', requestedLotUpperBound: '0.20' }),
+        paperAllocationSizing: {
+          executionMode: 'FULL_AUTO',
+          allocatedCapital: '900',
+          confidenceTier: 'BASE',
+          minimumExecutableLot: '0.20',
+        },
+      });
+
+      expect(sized.lots).toBe('0.14');
+      expect(sized.allocatedCapital).toBe('626.55');
     });
 
     it('normalizes DOWN to the instrument volume step (0.2567 → 0.25 at step 0.01)', async () => {
