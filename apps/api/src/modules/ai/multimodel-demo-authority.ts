@@ -32,8 +32,10 @@ export interface MultimodelDemoAuthorityDecision {
   executable: boolean;
   authorityPath: MultimodelDemoAuthorityPath;
   rescueVolumeCap: number | null;
+  expertConflictVolumeCap: number | null;
   primaryEngineCode: typeof MULTIMODEL_DEMO_ENGINE_CODE;
   trainedExpertConfirmed: boolean;
+  trainedExpertOpposed: boolean;
   m1TimingRoute: M1TacticalRoute;
   blockers: string[];
 }
@@ -147,9 +149,7 @@ export function evaluateMultimodelDemoAuthority(
   if (!input.governance.paperExecutionEligible) {
     blockers.push('MULTIMODEL_GOVERNANCE_BLOCKED', ...input.governance.paperExecutionBlockers);
   }
-  if (trainedExpertStronglyOpposes(input)) {
-    blockers.push('MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT');
-  }
+  const trainedExpertOpposed = trainedExpertStronglyOpposes(input);
   if (!confirmedReversalTimingConsistent(input)) {
     blockers.push('MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED');
   }
@@ -170,10 +170,12 @@ export function evaluateMultimodelDemoAuthority(
         ? 'HIGH_CONVICTION_RESCUE'
         : 'BLOCKED',
     rescueVolumeCap: rescueExecutable ? 0.2 : null,
+    expertConflictVolumeCap: primaryPlanBExecutable && trainedExpertOpposed ? 0.2 : null,
     primaryEngineCode: MULTIMODEL_DEMO_ENGINE_CODE,
     trainedExpertConfirmed:
       input.trainedExpert.state === 'CONFIRM' &&
       input.trainedExpert.direction === input.candidateDirection,
+    trainedExpertOpposed,
     m1TimingRoute: input.m1TimingRoute,
     blockers: executable ? [] : finalBlockers,
   };
@@ -198,9 +200,12 @@ export function multimodelDemoExecutionVolumeCap(
   rolloutVolumeCap: number,
   authority: MultimodelDemoAuthorityDecision,
 ): number {
-  return authority.rescueVolumeCap == null
-    ? rolloutVolumeCap
-    : Math.min(rolloutVolumeCap, authority.rescueVolumeCap);
+  const caps = [
+    rolloutVolumeCap,
+    authority.rescueVolumeCap,
+    authority.expertConflictVolumeCap,
+  ].filter((value): value is number => value != null && Number.isFinite(value));
+  return Math.min(...caps);
 }
 
 function clamp01(value: number): number {

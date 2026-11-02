@@ -3242,7 +3242,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(recorded).toEqual(expect.objectContaining({ executionAuthority: 'NONE', blockers: expect.arrayContaining(['M1_MULTIMODEL_LOSS_STREAK_BRAKE']), governance: expect.objectContaining({ multimodelLossStreakBrake: expect.objectContaining({ active: true, reason: 'RECENT_MULTIMODEL_LOSS_STREAK', recentLosses: 3 }) }) }));
   });
 
-  it('blocks a promoted PAPER champion when broker-native trained experts unanimously conflict', async () => {
+  it('executes a promoted PAPER champion at reduced size when broker-native trained experts unanimously conflict', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
       session: fullAutoSession,
@@ -3253,17 +3253,28 @@ describe('M1 V8 multi-model DEMO authority', () => {
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
 
     expect(h.trainedExpertEvaluate).toHaveBeenCalled();
-    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        direction: 'BUY',
+        suggestedVolume: 0.2,
+        metadata: expect.objectContaining({
+          multimodel_trained_expert_state: 'CONFLICT',
+        }),
+      }),
+    );
     const recorded = h.recordDecision.mock.calls.find(
       ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
     )?.[0];
-    expect(recorded?.executionAuthority).toBe('NONE');
-    expect(recorded?.blockers).toContain('MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT');
+    expect(recorded?.executionAuthority).toBe('BROKER_NATIVE');
+    expect(recorded?.blockers).not.toContain('MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT');
     expect(recorded?.governance).toEqual(
       expect.objectContaining({
         multimodelAuthority: expect.objectContaining({
-          executable: false,
-          blockers: expect.arrayContaining(['MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT']),
+          executable: true,
+          trainedExpertOpposed: true,
+          expertConflictVolumeCap: 0.2,
+          blockers: [],
         }),
       }),
     );

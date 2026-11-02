@@ -81,7 +81,7 @@ describe('evaluateMultimodelDemoAuthority', () => {
     },
   );
 
-  it('blocks a primary Plan-B entry when three broker-native experts unanimously support the opposite direction at 70%+ confidence', () => {
+  it('keeps an admitted primary Plan-B entry executable but caps it at 0.20 lot when three broker-native experts unanimously oppose it', () => {
     const result = evaluateMultimodelDemoAuthority({
       ensemble: ensemble(true),
       governance: governance(true),
@@ -96,9 +96,12 @@ describe('evaluateMultimodelDemoAuthority', () => {
       m1TimingRoute: 'M1_TREND_CONTINUATION',
     });
 
-    expect(result.executable).toBe(false);
-    expect(result.authorityPath).toBe('BLOCKED');
-    expect(result.blockers).toContain('MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT');
+    expect(result.executable).toBe(true);
+    expect(result.authorityPath).toBe('PRIMARY_PLAN_B');
+    expect(result.blockers).toEqual([]);
+    expect(result.trainedExpertOpposed).toBe(true);
+    expect(result.expertConflictVolumeCap).toBe(0.2);
+    expect(multimodelDemoExecutionVolumeCap(4, result)).toBe(0.2);
   });
 
   it('blocks when Plan-B does not admit the candidate and high-conviction rescue is unavailable', () => {
