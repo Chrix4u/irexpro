@@ -122,6 +122,10 @@ import {
   evaluatePairedDirectionReversal,
 } from './paired-direction-reversal';
 import {
+  CalibrationBidirectionalConflictDecision,
+  evaluateCalibrationBidirectionalConflict,
+} from './calibration-bidirectional-conflict';
+import {
   PaperSpreadCalibrationDecision,
   PaperSpreadCalibrationHistory,
   classifyPaperSpreadSession,
@@ -2579,6 +2583,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             executionCostR: ensembleGovernance.estimatedExecutionCostR,
             targetRMultiple: TARGET_ATR_MULTIPLIER / STOP_ATR_MULTIPLIER,
           });
+          const calibrationBidirectionalConflict = evaluateCalibrationBidirectionalConflict({
+            candidateDirection: best.direction,
+            strategyRoute: planBEnsemble.strategyRoute,
+            adaptiveState: preliminaryAdaptive.marketState.state,
+            calibration: researchPredictionCalibration,
+            paired: pairedDirectionReversal,
+          });
+          await this.persistCalibrationBidirectionalConflictAnnotation(
+            userId,
+            eventId,
+            calibrationBidirectionalConflict,
+          );
           const pairedReversalGovernance =
             pairedDirectionReversal.reversalCandidate &&
             pairedDirectionReversal.preferredDirection === best.direction
@@ -4011,6 +4027,32 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       qualificationEvidence: executionRoute === 'NORMAL_PAPER',
       productionEligible: false,
     };
+  }
+
+  private async persistCalibrationBidirectionalConflictAnnotation(
+    userId: string,
+    opportunityKey: string,
+    decision: CalibrationBidirectionalConflictDecision,
+  ): Promise<void> {
+    if (!this.dataSource) return;
+    try {
+      await this.dataSource.query(
+        `
+          UPDATE trading.ensemble_shadow_decisions
+          SET components = COALESCE(components, '{}'::jsonb) || jsonb_build_object(
+            'calibrationBidirectionalConflict', $4::jsonb
+          )
+          WHERE user_id = $1
+            AND engine_code = $2
+            AND opportunity_key = $3
+        `,
+        [userId, ACTIVE_ENGINE_CODE, opportunityKey, JSON.stringify(decision)],
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Calibration bidirectional conflict telemetry unavailable for ${opportunityKey}: ${(error as Error).message}`,
+      );
+    }
   }
 
   private async persistAdaptiveDecisionAnnotation(

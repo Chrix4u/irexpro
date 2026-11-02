@@ -1932,7 +1932,12 @@ describe('VpsForexSignalCollectorService', () => {
     const live = new LivePaperMarketDataService();
     installAlignedFastMarkMirror(live);
     const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
-    const shadowQuery = jest.fn().mockResolvedValue([]);
+    const shadowQuery = jest.fn().mockImplementation(async (sql: unknown) => {
+      if (String(sql).includes('calibrationBidirectionalConflict')) {
+        throw new Error('shadow telemetry write unavailable');
+      }
+      return [];
+    });
     const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
     const planBSpy = jest
       .spyOn(PlanBEnsembleModule, 'scorePlanBMultimodelShadow')
@@ -2252,6 +2257,16 @@ describe('VpsForexSignalCollectorService', () => {
       );
       expect(riskSnapshotSpy).toHaveBeenCalledTimes(3);
       expect(receiveSignal).toHaveBeenCalledTimes(1);
+      const conflictAnnotationCall = shadowQuery.mock.calls.find(([sql]) =>
+        String(sql).includes('calibrationBidirectionalConflict'),
+      );
+      expect(conflictAnnotationCall).toBeDefined();
+      const conflictPayload = JSON.parse(String(conflictAnnotationCall?.[1]?.[3]));
+      expect(conflictPayload).toMatchObject({
+        artifact: 'calibration-bidirectional-conflict-shadow-v1',
+        executionAuthority: 'NONE',
+        modifiesExecution: false,
+      });
       expect(receiveSignal.mock.calls[0]![0]).toEqual(
         expect.objectContaining({
           instrument: 'GBPUSD',
