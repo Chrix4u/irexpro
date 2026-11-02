@@ -1,7 +1,29 @@
-import type { DataSource } from 'typeorm';
+import { Test } from '@nestjs/testing';
+import { DataSource } from 'typeorm';
 import { DirectMt5CommandService } from './direct-mt5-command.service';
 
 describe('DirectMt5CommandService', () => {
+  it('receives DataSource through Nest dependency injection in the production provider graph', async () => {
+    const query = jest.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        DirectMt5CommandService,
+        { provide: DataSource, useValue: { query } },
+      ],
+    }).compile();
+    const service = moduleRef.get(DirectMt5CommandService);
+
+    await expect(
+      service.enqueue({
+        connectorId: 'connector-1',
+        brokerConnectionId: 'connection-1',
+        idempotencyKey: 'di-contract',
+        commandType: 'GET_PRICE',
+        payload: { symbol: 'EURUSD' },
+      }),
+    ).rejects.toThrow('Direct MT5 connector is not active for this broker connection');
+    expect(query).toHaveBeenCalled();
+  });
   it('returns the existing command for a duplicate idempotency key', async () => {
     const query = jest
       .fn()

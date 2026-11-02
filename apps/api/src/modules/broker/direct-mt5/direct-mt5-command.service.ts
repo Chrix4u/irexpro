@@ -42,6 +42,7 @@ export class DirectMt5CommandUncertainError extends Error {
   }
 }
 
+@Injectable()
 export class DirectMt5CommandService {
   constructor(private readonly dataSource: DataSource) {}
 
