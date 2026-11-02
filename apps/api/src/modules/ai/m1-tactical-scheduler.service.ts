@@ -1195,8 +1195,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         reliability,
       });
     }
-    const extensionExhaustionDemoScoutExecutable =
-      extensionExhaustionDemoScout?.eligible === true;
+    const extensionExhaustionDemoScoutExecutable = extensionExhaustionDemoScout?.eligible === true;
     const executionVolumeCap = m5EarlyTransitionHandoffEligible
       ? m5EarlyTransitionHandoff!.lotCap
       : professionalM1FallbackExecutable
@@ -1204,15 +1203,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         : extensionExhaustionDemoScoutExecutable
           ? extensionExhaustionDemoScout!.lotCap
           : this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
-          ? multimodelDemo
-            ? multimodelDemoExecutionVolumeCap(
-                this.rolloutPolicy.paperVolumeCap,
-                multimodelDemo.authority,
-              )
-            : this.rolloutPolicy.paperVolumeCap
-          : provisionalScoutReliability
-            ? Math.min(this.rolloutPolicy.paperVolumeCap, provisionalScoutReliability.lotCap)
-            : this.rolloutPolicy.paperVolumeCap;
+            ? multimodelDemo
+              ? multimodelDemoExecutionVolumeCap(
+                  this.rolloutPolicy.paperVolumeCap,
+                  multimodelDemo.authority,
+                )
+              : this.rolloutPolicy.paperVolumeCap
+            : provisionalScoutReliability
+              ? Math.min(this.rolloutPolicy.paperVolumeCap, provisionalScoutReliability.lotCap)
+              : this.rolloutPolicy.paperVolumeCap;
     const microDriftOnlyRescue =
       earlyTransitionMicro &&
       shadowPairSideReliability?.eligible === true &&
@@ -1366,12 +1365,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     ]);
     const blockers = professionalDemoPhase
       ? unique([
-          ...(multimodelDirectionConflict
-            ? ['MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT']
-            : []),
+          ...(multimodelDirectionConflict ? ['MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT'] : []),
           ...(professionalM1FallbackExecutable ||
-              m5EarlyTransitionHandoffEligible ||
-              extensionExhaustionDemoScoutExecutable
+          m5EarlyTransitionHandoffEligible ||
+          extensionExhaustionDemoScoutExecutable
             ? []
             : (multimodelDemo?.authority.blockers ?? ['MULTIMODEL_AUTHORITY_UNAVAILABLE'])),
           ...(professionalM1Fallback?.eligible === true &&
@@ -1392,7 +1389,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             : []),
           ...(oppositePositionStateUnavailable ? ['M1_OPPOSITE_POSITION_STATE_UNAVAILABLE'] : []),
           ...(activeOppositePosition
-            ? [confirmedDirectionFlip ? 'M1_DIRECTION_FLIP_EXIT_PENDING' : 'M1_ACTIVE_OPPOSITE_POSITION']
+            ? [
+                confirmedDirectionFlip
+                  ? 'M1_DIRECTION_FLIP_EXIT_PENDING'
+                  : 'M1_ACTIVE_OPPOSITE_POSITION',
+              ]
             : []),
         ])
       : unique([
@@ -1814,10 +1815,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? m5EarlyTransitionEvidence.marketBarTime.toISOString()
             : null,
           extension_exhaustion_demo_scout: useExtensionExhaustionDemoScout,
-          extension_exhaustion_demo_scout_artifact:
-            extensionExhaustionDemoScout?.artifact ?? null,
-          extension_exhaustion_demo_scout_reason:
-            extensionExhaustionDemoScout?.reason ?? null,
+          extension_exhaustion_demo_scout_artifact: extensionExhaustionDemoScout?.artifact ?? null,
+          extension_exhaustion_demo_scout_reason: extensionExhaustionDemoScout?.reason ?? null,
           extension_exhaustion_demo_scout_lot_cap: useExtensionExhaustionDemoScout
             ? extensionExhaustionDemoScout!.lotCap
             : null,
