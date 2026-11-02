@@ -14,6 +14,7 @@ import { AllocationService } from '../execution/services/allocation.service';
 import { PAPER_PRODUCT_ABSOLUTE_MIN_LOT } from '../execution/services/position-sizing.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { TradingSessionStatus } from '../execution/entities/trading-session.entity';
+import { TradeCloseReason } from '../execution/entities/trade.entity';
 import { AiSignalService } from './ai-signal.service';
 import { MacroEventRiskService } from './macro-event-risk.service';
 import {
@@ -1104,6 +1105,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       professionalM1FallbackExecutable && professionalM1Fallback?.tier === 'BOOTSTRAP_CONTINUATION';
     const multimodelPrimaryExecutable =
       professionalDemoPhase && multimodelDemo?.authority.executable === true;
+    const multimodelDirectionConflict =
+      professionalDemoPhase &&
+      multimodelDemo?.authority.blockers.includes(
+        'MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT',
+      ) === true;
     let m5EarlyTransitionEvidence: M5EarlyTransitionEvidence | null = null;
     let m5EarlyTransitionHandoff: M5EarlyTransitionHandoffDecision | null = null;
     if (
@@ -1172,10 +1178,54 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           (standardGovernanceExecutable || localImpulseDriftOnlyRescue)
         : standardGovernanceExecutable;
     const preliminaryCanExecute = professionalDemoPhase
-      ? multimodelPrimaryExecutable ||
-        m5EarlyTransitionHandoffEligible ||
-        professionalM1FallbackExecutable
+      ? !multimodelDirectionConflict &&
+        (multimodelPrimaryExecutable ||
+          m5EarlyTransitionHandoffEligible ||
+          professionalM1FallbackExecutable)
       : routeExecutable && routePayoffEligible && governanceExecutable;
+    let activeOppositePositions: Awaited<
+      ReturnType<M1TacticalEvidenceService['loadOpenPaperPositions']>
+    > = [];
+    let oppositePositionStateUnavailable = false;
+    if (professionalDemoPhase && preliminaryCanExecute) {
+      try {
+        const openPositions = await this.evidence.loadOpenPaperPositions({
+          userId,
+          brokerConnectionId,
+          instrument: candidate.instrument,
+        });
+        activeOppositePositions = openPositions.filter(
+          (position) => position.direction !== candidate.direction,
+        );
+      } catch (error) {
+        oppositePositionStateUnavailable = true;
+        this.logger.warn(
+          `M1 direction-conflict state unavailable ${candidate.instrument} ${candidate.direction}: ${(error as Error).message}`,
+        );
+      }
+    }
+    const confirmedDirectionFlip =
+      activeOppositePositions.length > 0 &&
+      multimodelPrimaryExecutable &&
+      multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL';
+    if (confirmedDirectionFlip && this.executionService) {
+      for (const position of activeOppositePositions) {
+        try {
+          await this.executionService.closeTrade(
+            position.tradeId,
+            userId,
+            TradeCloseReason.AI_CLOSE_SIGNAL,
+          );
+        } catch (error) {
+          this.logger.warn(
+            `M1 confirmed direction flip exit deferred trade=${position.tradeId} ` +
+              `${candidate.instrument} ${position.direction}->${candidate.direction}: ${(error as Error).message}`,
+          );
+        }
+      }
+    }
+    const activeOppositePosition = activeOppositePositions.length > 0;
+
     const bootstrapExecutionSelected =
       professionalM1BootstrapExecutable && !m5EarlyTransitionHandoffEligible;
     const professionalM1ActiveSameSideIntent =
@@ -1219,6 +1269,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         : null;
     const canExecute =
       preliminaryCanExecute &&
+      !oppositePositionStateUnavailable &&
+      !activeOppositePosition &&
       !professionalM1ActiveSameSideIntent &&
       fastStopRegimeBrake?.active !== true &&
       multimodelLossStreakBrake?.active !== true;
@@ -1243,6 +1295,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     ]);
     const blockers = professionalDemoPhase
       ? unique([
+          ...(multimodelDirectionConflict
+            ? ['MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT']
+            : []),
           ...(professionalM1FallbackExecutable || m5EarlyTransitionHandoffEligible
             ? []
             : (multimodelDemo?.authority.blockers ?? ['MULTIMODEL_AUTHORITY_UNAVAILABLE'])),
@@ -1258,6 +1313,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
           ...(multimodelLossStreakBrake?.active === true
             ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
+            : []),
+          ...(oppositePositionStateUnavailable ? ['M1_OPPOSITE_POSITION_STATE_UNAVAILABLE'] : []),
+          ...(activeOppositePosition
+            ? [confirmedDirectionFlip ? 'M1_DIRECTION_FLIP_EXIT_PENDING' : 'M1_ACTIVE_OPPOSITE_POSITION']
             : []),
         ])
       : unique([
@@ -1317,6 +1376,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         multimodelTrainedExpert: multimodelDemo?.trainedExpert ?? null,
         multimodelAuthority: multimodelDemo?.authority ?? null,
         multimodelPortfolioSnapshotAvailable: multimodelDemo?.portfolioSnapshotAvailable ?? null,
+        directionFlipConflict: activeOppositePosition
+          ? {
+              candidateDirection: candidate.direction,
+              oppositeTradeIds: activeOppositePositions.map((position) => position.tradeId),
+              confirmedReversal: confirmedDirectionFlip,
+              exitRequested: confirmedDirectionFlip && Boolean(this.executionService),
+            }
+          : null,
+        oppositePositionStateUnavailable,
         m5EarlyTransitionEvidence: m5EarlyTransitionEvidence
           ? { ...m5EarlyTransitionEvidence }
           : null,

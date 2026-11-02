@@ -2116,6 +2116,121 @@ describe('M1 V8 multi-model DEMO authority', () => {
     brokerConnectionId: 'demo-conn-2',
   };
 
+  it('closes an older opposite DEMO thesis first and defers a fully qualified confirmed reversal entry', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      openPositions: [
+        {
+          tradeId: 'trade-old-sell',
+          tradeIntentId: 'intent-old-sell',
+          instrument: 'EURUSD',
+          direction: 'SELL',
+          openedAt: new Date('2026-10-15T10:27:00.000Z'),
+          decisionId: 'decision-old-sell',
+          route: 'M1_EARLY_TRANSITION',
+          policyVersion: 'm1-tactical-v2-m5-lifecycle',
+          originalNetExpectedR: 0.18,
+        },
+      ],
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: {
+          ...result.ensemble,
+          strategyRoute: 'CONFIRMED_REVERSAL',
+          paperAdmitted: true,
+        },
+        trainedExpert: {
+          ...result.trainedExpert,
+          allBrokerNative: true,
+          direction: 'BUY',
+          longVotes: 3,
+          shortVotes: 0,
+          ensembleConfidence: 0.76,
+        },
+        authority: {
+          ...result.authority,
+          executable: true,
+          authorityPath: 'PRIMARY_PLAN_B',
+          blockers: [],
+        },
+      };
+    });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.loadOpenPaperPositions).toHaveBeenCalledWith({
+      userId: 'user-1',
+      brokerConnectionId: 'demo-conn-2',
+      instrument: 'EURUSD',
+    });
+    expect(h.closeTrade).toHaveBeenCalledWith(
+      'trade-old-sell',
+      'user-1',
+      'AI_CLOSE_SIGNAL',
+    );
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.executionAuthority).toBe('NONE');
+    expect(recorded?.blockers).toContain('M1_DIRECTION_FLIP_EXIT_PENDING');
+  });
+
+  it('waits instead of hedging when an opposite open DEMO position exists without a confirmed reversal', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      openPositions: [
+        {
+          tradeId: 'trade-old-sell',
+          tradeIntentId: 'intent-old-sell',
+          instrument: 'EURUSD',
+          direction: 'SELL',
+          openedAt: new Date('2026-10-15T10:27:00.000Z'),
+          decisionId: 'decision-old-sell',
+          route: 'M1_EARLY_TRANSITION',
+          policyVersion: 'm1-tactical-v2-m5-lifecycle',
+          originalNetExpectedR: 0.18,
+        },
+      ],
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
+      const result = await original(...args);
+      return {
+        ...result,
+        ensemble: {
+          ...result.ensemble,
+          strategyRoute: 'EARLY_TRANSITION',
+          paperAdmitted: true,
+        },
+        authority: {
+          ...result.authority,
+          executable: true,
+          authorityPath: 'PRIMARY_PLAN_B',
+          blockers: [],
+        },
+      };
+    });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.closeTrade).not.toHaveBeenCalled();
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.direction === 'BUY',
+    )?.[0];
+    expect(recorded?.executionAuthority).toBe('NONE');
+    expect(recorded?.blockers).toContain('M1_ACTIVE_OPPOSITE_POSITION');
+  });
+
   it('promotes a fresh durable M5 early transition as a 0.20 DEMO canary when cTrader M1 confirms continuation', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
@@ -3127,42 +3242,49 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(recorded).toEqual(expect.objectContaining({ executionAuthority: 'NONE', blockers: expect.arrayContaining(['M1_MULTIMODEL_LOSS_STREAK_BRAKE']), governance: expect.objectContaining({ multimodelLossStreakBrake: expect.objectContaining({ active: true, reason: 'RECENT_MULTIMODEL_LOSS_STREAK', recentLosses: 3 }) }) }));
   });
 
-  it.each(['CONFLICT', 'UNAVAILABLE'] as const)(
-    'keeps trained expert state %s observational when the promoted PAPER champion qualifies',
-    async (trainedExpertState) => {
-      const h = phase2Harness({
-        rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
-        session: fullAutoSession,
-        trainedExpertState,
-        trainedExpertDirection: trainedExpertState === 'CONFLICT' ? 'SELL' : 'BUY',
-      });
+  it('blocks a promoted PAPER champion when broker-native trained experts unanimously conflict', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      trainedExpertState: 'CONFLICT',
+      trainedExpertDirection: 'SELL',
+    });
 
-      await driveFeatures(h, cleanContinuationFeatures(), {
-        brokerConnectionId: 'demo-conn-2',
-      });
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
 
-      expect(h.trainedExpertEvaluate).toHaveBeenCalled();
-      expect(h.receiveSignal).toHaveBeenCalledTimes(1);
-      expect(h.receiveSignal).toHaveBeenCalledWith(
-        expect.objectContaining({
-          metadata: expect.objectContaining({
-            multimodel_trained_expert_state: trainedExpertState,
-          }),
+    expect(h.trainedExpertEvaluate).toHaveBeenCalled();
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(recorded?.executionAuthority).toBe('NONE');
+    expect(recorded?.blockers).toContain('MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT');
+    expect(recorded?.governance).toEqual(
+      expect.objectContaining({
+        multimodelAuthority: expect.objectContaining({
+          executable: false,
+          blockers: expect.arrayContaining(['MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT']),
         }),
-      );
-      const recorded = h.recordDecision.mock.calls.find(
-        ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
-      )?.[0];
-      expect(recorded?.blockers ?? []).not.toContain(
-        `MULTIMODEL_TRAINED_EXPERT_${trainedExpertState}`,
-      );
-      expect(recorded?.governance).toEqual(
-        expect.objectContaining({
-          multimodelAuthority: expect.objectContaining({ executable: true }),
-        }),
-      );
-    },
-  );
+      }),
+    );
+  });
+
+  it('keeps an unavailable trained expert observational when the promoted PAPER champion qualifies', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      trainedExpertState: 'UNAVAILABLE',
+    });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ multimodel_trained_expert_state: 'UNAVAILABLE' }),
+      }),
+    );
+  });
 
   it('reports a risk-suspended FULL_AUTO session as risk protection instead of session inactivity', async () => {
     const h = phase2Harness({
