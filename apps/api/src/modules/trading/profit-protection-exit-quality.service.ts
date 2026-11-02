@@ -297,8 +297,7 @@ export class ProfitProtectionExitQualityService {
         direction: row.direction === 'SELL' ? 'SELL' : 'BUY',
         strategyRoute: this.coerceRoute(row.strategy_route),
         outcome: this.coerceOutcome(row.outcome),
-        accountCurrency:
-          typeof row.account_currency === 'string' ? row.account_currency : null,
+        accountCurrency: typeof row.account_currency === 'string' ? row.account_currency : null,
         realisedPnl: decimal(row.realised_pnl),
         actualExitR: numeric(row.actual_exit_r),
         originalTargetR: numeric(row.original_target_r),
@@ -345,9 +344,7 @@ export class ProfitProtectionExitQualityService {
     if (strategyRoute && !ROUTES.includes(strategyRoute)) {
       throw new BadRequestException('Invalid strategyRoute');
     }
-    const outcome = query.outcome?.toUpperCase() as
-      | ProfitProtectionExitQualityOutcome
-      | undefined;
+    const outcome = query.outcome?.toUpperCase() as ProfitProtectionExitQualityOutcome | undefined;
     if (outcome && !OUTCOMES.includes(outcome)) {
       throw new BadRequestException('Invalid outcome');
     }
@@ -391,7 +388,8 @@ export class ProfitProtectionExitQualityService {
       return `$${params.length}`;
     };
 
-    if (query.brokerConnectionId) clauses.push(`t.broker_connection_id = ${add(query.brokerConnectionId)}::uuid`);
+    if (query.brokerConnectionId)
+      clauses.push(`t.broker_connection_id = ${add(query.brokerConnectionId)}::uuid`);
     if (query.from) clauses.push(`t.closed_at >= ${add(query.from)}::timestamptz`);
     if (query.to) clauses.push(`t.closed_at <= ${add(query.to)}::timestamptz`);
     if (query.instrument) clauses.push(`UPPER(t.instrument) = ${add(query.instrument)}`);

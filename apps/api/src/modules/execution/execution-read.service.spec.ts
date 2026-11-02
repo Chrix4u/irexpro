@@ -132,9 +132,7 @@ describe('ExecutionReadService', () => {
     const baseQuery = {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
-      clone: jest.fn()
-        .mockReturnValueOnce(pageQuery)
-        .mockReturnValueOnce(summaryQuery),
+      clone: jest.fn().mockReturnValueOnce(pageQuery).mockReturnValueOnce(summaryQuery),
     };
     const reportRepo = {
       createQueryBuilder: jest.fn().mockReturnValue(baseQuery),
@@ -204,7 +202,7 @@ describe('ExecutionReadService', () => {
         averageHoldMinutes: 42.5,
       },
     });
-    expect(result.summary.profitFactor).toBeCloseTo(500.25 / 200.10, 8);
+    expect(result.summary.profitFactor).toBeCloseTo(500.25 / 200.1, 8);
     expect(result.summary.currencyBreakdown).toHaveLength(1);
   });
 

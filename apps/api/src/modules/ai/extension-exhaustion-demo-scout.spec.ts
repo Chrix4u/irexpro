@@ -63,20 +63,56 @@ describe('evaluateExtensionExhaustionDemoScout', () => {
   });
 
   it.each([
-    ['specialist not candidate', { specialist: { ...input().specialist, candidate: false } }, 'SPECIALIST_NOT_CANDIDATE'],
-    ['specialist wrong regime', { specialist: { ...input().specialist, regime: 'TREND_HEALTHY' } }, 'SPECIALIST_REGIME_NOT_EXTENDED'],
-    ['specialist drift not normal', { specialist: { ...input().specialist, driftState: 'OUT_OF_DISTRIBUTION' } }, 'SPECIALIST_DRIFT_NOT_NORMAL'],
-    ['specialist spread invalid', { specialist: { ...input().specialist, executionSpreadEvidenceValid: false } }, 'SPECIALIST_SPREAD_UNVERIFIED'],
+    [
+      'specialist not candidate',
+      { specialist: { ...input().specialist, candidate: false } },
+      'SPECIALIST_NOT_CANDIDATE',
+    ],
+    [
+      'specialist wrong regime',
+      { specialist: { ...input().specialist, regime: 'TREND_HEALTHY' } },
+      'SPECIALIST_REGIME_NOT_EXTENDED',
+    ],
+    [
+      'specialist drift not normal',
+      { specialist: { ...input().specialist, driftState: 'OUT_OF_DISTRIBUTION' } },
+      'SPECIALIST_DRIFT_NOT_NORMAL',
+    ],
+    [
+      'specialist spread invalid',
+      { specialist: { ...input().specialist, executionSpreadEvidenceValid: false } },
+      'SPECIALIST_SPREAD_UNVERIFIED',
+    ],
     ['event risk not clear', { eventRisk: 'UNVERIFIED' }, 'EVENT_RISK_NOT_CLEAR'],
     ['wrong M1 route', { m1Route: 'M1_EARLY_TRANSITION' }, 'M1_TIMING_NOT_CONTINUATION'],
     ['weak M1 confidence', { m1Confidence: 0.699 }, 'M1_CONFIDENCE_TOO_LOW'],
     ['weak M1 quality', { m1DirectionQuality: 0.649 }, 'M1_DIRECTION_QUALITY_TOO_LOW'],
     ['expert opposition', { trainedExpertOpposed: true }, 'TRAINED_EXPERT_OPPOSED'],
-    ['portfolio unavailable', { portfolioSnapshotAvailable: false }, 'PORTFOLIO_SNAPSHOT_UNAVAILABLE'],
-    ['too few samples', { reliability: { ...reliable, samples: 5 } }, 'RELIABILITY_INSUFFICIENT_SAMPLES'],
-    ['weak average R', { reliability: { ...reliable, averageNetR: 0.099 } }, 'RELIABILITY_AVERAGE_R_TOO_LOW'],
-    ['weak profit factor', { reliability: { ...reliable, profitFactor: 1.149 } }, 'RELIABILITY_PROFIT_FACTOR_TOO_LOW'],
-    ['negative recent payoff', { reliability: { ...reliable, recent3R: 0 } }, 'RELIABILITY_RECENT_R_NOT_POSITIVE'],
+    [
+      'portfolio unavailable',
+      { portfolioSnapshotAvailable: false },
+      'PORTFOLIO_SNAPSHOT_UNAVAILABLE',
+    ],
+    [
+      'too few samples',
+      { reliability: { ...reliable, samples: 5 } },
+      'RELIABILITY_INSUFFICIENT_SAMPLES',
+    ],
+    [
+      'weak average R',
+      { reliability: { ...reliable, averageNetR: 0.099 } },
+      'RELIABILITY_AVERAGE_R_TOO_LOW',
+    ],
+    [
+      'weak profit factor',
+      { reliability: { ...reliable, profitFactor: 1.149 } },
+      'RELIABILITY_PROFIT_FACTOR_TOO_LOW',
+    ],
+    [
+      'negative recent payoff',
+      { reliability: { ...reliable, recent3R: 0 } },
+      'RELIABILITY_RECENT_R_NOT_POSITIVE',
+    ],
   ])('blocks %s', (_label, overrides, reason) => {
     expect(evaluateExtensionExhaustionDemoScout(input(overrides as any) as any)).toMatchObject({
       eligible: false,

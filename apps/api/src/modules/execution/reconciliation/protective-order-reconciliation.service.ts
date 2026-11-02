@@ -176,7 +176,8 @@ export class ProtectiveOrderReconciliationService {
       const result = await this.verifyAndRepairOne(
         trade,
         adapter,
-        providerByExternalId.get((trade.externalPositionId ?? trade.externalOrderId) as string) ?? null,
+        providerByExternalId.get((trade.externalPositionId ?? trade.externalOrderId) as string) ??
+          null,
       );
       switch (result.outcome) {
         case 'PROTECTED':

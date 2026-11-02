@@ -1532,7 +1532,8 @@ export class RiskService {
         // gives quote-currency units per one account-currency unit, so quote
         // risk/notional are divided by it conservatively (divUp).
         const conversionInstrument = `${accountCurrency}${quoteCurrency}`;
-        let conversionQuote: Awaited<ReturnType<BrokerService['getCurrentPriceForConnection']>> = null;
+        let conversionQuote: Awaited<ReturnType<BrokerService['getCurrentPriceForConnection']>> =
+          null;
         try {
           conversionQuote = await this.brokerService.getCurrentPriceForConnection(
             userId,

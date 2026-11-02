@@ -248,11 +248,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     });
   }
 
-  private async sampleLiveSpreads(
-    userId: string,
-    connectionId: string,
-    now: Date,
-  ): Promise<void> {
+  private async sampleLiveSpreads(userId: string, connectionId: string, now: Date): Promise<void> {
     const collectorNowMs = now.getTime();
     await Promise.all(
       this.instruments().map(async (instrument) => {
@@ -283,12 +279,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
             return;
           }
 
-          await this.store.upsertM1Sample(
-            connectionId,
-            instrument,
-            quote,
-            'ctrader-broker-native',
-          );
+          await this.store.upsertM1Sample(connectionId, instrument, quote, 'ctrader-broker-native');
         } catch (error) {
           this.warnThrottled(
             `${connectionId}:${instrument}:quote`,

@@ -52,30 +52,16 @@ export class BrokerFxConversionService {
       return {
         rate: direct.rate.toString(),
         path: [direct.instrument],
-        source: direct.inverted
-          ? 'BROKER_NATIVE_CACHE_INVERSE'
-          : 'BROKER_NATIVE_CACHE_DIRECT',
+        source: direct.inverted ? 'BROKER_NATIVE_CACHE_INVERSE' : 'BROKER_NATIVE_CACHE_DIRECT',
         observedAt: direct.observedAt,
       };
     }
 
     if (account === 'USD' || quote === 'USD') return null;
 
-    const accountToUsd = await this.resolveLeg(
-      connectionId,
-      account,
-      'USD',
-      evaluatedAt,
-      maxAgeMs,
-    );
+    const accountToUsd = await this.resolveLeg(connectionId, account, 'USD', evaluatedAt, maxAgeMs);
     if (!accountToUsd) return null;
-    const usdToQuote = await this.resolveLeg(
-      connectionId,
-      'USD',
-      quote,
-      evaluatedAt,
-      maxAgeMs,
-    );
+    const usdToQuote = await this.resolveLeg(connectionId, 'USD', quote, evaluatedAt, maxAgeMs);
     if (!usdToQuote) return null;
 
     return {
@@ -133,13 +119,11 @@ export class BrokerFxConversionService {
   }
 
   private isFreshQuote(
-    quote:
-      | {
-          bid: string;
-          ask: string;
-          timestamp: Date;
-        }
-      | null,
+    quote: {
+      bid: string;
+      ask: string;
+      timestamp: Date;
+    } | null,
     evaluatedAt: Date,
     maxAgeMs: number,
   ): boolean {

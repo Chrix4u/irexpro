@@ -84,7 +84,8 @@ describe('RiskController (Hotfix — UUID identity regression)', () => {
     const violation = {
       id: 'v-1',
       rejectionCode: 'DAILY_LOSS_LIMIT_REACHED',
-      rejectionReason: 'Daily loss 54.68 has reached limit (5.00% = 49.41 of opening balance 988.13)',
+      rejectionReason:
+        'Daily loss 54.68 has reached limit (5.00% = 49.41 of opening balance 988.13)',
       evaluatedAt: new Date('2026-10-28T13:43:13.000Z'),
     };
     const newer = {

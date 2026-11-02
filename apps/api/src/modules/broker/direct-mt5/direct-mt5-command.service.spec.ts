@@ -6,10 +6,7 @@ describe('DirectMt5CommandService', () => {
   it('receives DataSource through Nest dependency injection in the production provider graph', async () => {
     const query = jest.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const moduleRef = await Test.createTestingModule({
-      providers: [
-        DirectMt5CommandService,
-        { provide: DataSource, useValue: { query } },
-      ],
+      providers: [DirectMt5CommandService, { provide: DataSource, useValue: { query } }],
     }).compile();
     const service = moduleRef.get(DirectMt5CommandService);
 

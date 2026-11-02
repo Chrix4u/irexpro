@@ -126,7 +126,9 @@ function completed(
  */
 function normalizeM1NoTickGaps(rows: LivePaperCandleInput[]): LivePaperCandleInput[] | null {
   if (rows.length === 0) return [];
-  const normalized: LivePaperCandleInput[] = [{ ...rows[0]!, timestamp: new Date(rows[0]!.timestamp) }];
+  const normalized: LivePaperCandleInput[] = [
+    { ...rows[0]!, timestamp: new Date(rows[0]!.timestamp) },
+  ];
 
   for (let index = 1; index < rows.length; index += 1) {
     const current = rows[index]!;
@@ -329,8 +331,7 @@ export function buildM1TacticalFeatures(
 
   const m30Lookback = Math.min(M30_LOOKBACK_BARS, closes.length - 1);
   const m30Window = closes.slice(-(m30Lookback + 1));
-  const m30MomentumAtr =
-    m30Window.length >= 2 ? (m30Window.at(-1)! - m30Window[0]!) / localAtr : 0;
+  const m30MomentumAtr = m30Window.length >= 2 ? (m30Window.at(-1)! - m30Window[0]!) / localAtr : 0;
   const m30DirectionalEfficiency = directionalEfficiency(m30Window);
 
   const m5Closes = m5.map((row) => Number(row.close));

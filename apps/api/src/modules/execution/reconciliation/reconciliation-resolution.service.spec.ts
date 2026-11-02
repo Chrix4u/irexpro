@@ -289,9 +289,19 @@ describe('ReconciliationResolutionService', () => {
         closeReason: TradeCloseReason.PROFIT_PROTECTION,
       });
       await service.closeTradeFromProvider(pending, {
-        externalOrderId: 'pos-1', instrument: 'EURUSD', direction: 'BUY', lotSize: '0.2000',
-        openPrice: '1.10000', closePrice: '1.09000', stopLoss: '1.09000', takeProfit: '1.12000',
-        realisedPnl: '-10.00', openedAt: new Date(), closedAt: new Date(), commission: '0.00', swap: '0.00',
+        externalOrderId: 'pos-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '0.2000',
+        openPrice: '1.10000',
+        closePrice: '1.09000',
+        stopLoss: '1.09000',
+        takeProfit: '1.12000',
+        realisedPnl: '-10.00',
+        openedAt: new Date(),
+        closedAt: new Date(),
+        commission: '0.00',
+        swap: '0.00',
         closeReason: 'SL',
       });
       expect(tradeRepo.update).toHaveBeenCalledWith(

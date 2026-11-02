@@ -107,10 +107,7 @@ describe('LiveDemoProfitProtectionService', () => {
   });
 
   it('profit-protects a DEMO M1 trade inside the 0.395R sampling-tolerance band', async () => {
-    const h = harness(
-      [candidate({ max_favorable_pnl: '3.56', max_adverse_pnl: '-1.00' })],
-      '1.42',
-    );
+    const h = harness([candidate({ max_favorable_pnl: '3.56', max_adverse_pnl: '-1.00' })], '1.42');
 
     await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
 
@@ -196,9 +193,13 @@ describe('LiveDemoProfitProtectionService', () => {
   it('loads the originating Plan-B route for route-aware profit protection', async () => {
     const h = harness([candidate()], '7.00');
     await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
-    const tradeLoadSql = String(h.query.mock.calls.find((call: unknown[]) => String(call[0]).includes('FROM trading.trades t'))?.[0] ?? '');
+    const tradeLoadSql = String(
+      h.query.mock.calls.find((call: unknown[]) =>
+        String(call[0]).includes('FROM trading.trades t'),
+      )?.[0] ?? '',
+    );
     expect(tradeLoadSql).toContain('strategy_route');
-    expect(tradeLoadSql).toContain("multimodel_plan_b_route");
+    expect(tradeLoadSql).toContain('multimodel_plan_b_route');
   });
 
   it('closes a materially losing DEMO trade when completed broker-native M1 evidence confirms thesis failure', async () => {
@@ -453,7 +454,6 @@ describe('evaluateLiveDemoAdverseProtection', () => {
     ).toMatchObject({ shouldClose: false, reason: 'M1_EVIDENCE_UNAVAILABLE' });
   });
 });
-
 
 describe('evaluateLiveDemoThesisProtection', () => {
   const confirmedOpposite = {

@@ -91,9 +91,9 @@ export function evaluateLiveDemoThesisProtection(input: {
 
   const expert = thesis.trainedExpert;
   const opposingExpertVotes =
-    input.tradeDirection === 'BUY' ? expert?.shortVotes ?? 0 : expert?.longVotes ?? 0;
+    input.tradeDirection === 'BUY' ? (expert?.shortVotes ?? 0) : (expert?.longVotes ?? 0);
   const sameDirectionExpertVotes =
-    input.tradeDirection === 'BUY' ? expert?.longVotes ?? 0 : expert?.shortVotes ?? 0;
+    input.tradeDirection === 'BUY' ? (expert?.longVotes ?? 0) : (expert?.shortVotes ?? 0);
   const unanimousFreshExpertOpposition =
     expert?.direction === thesis.direction &&
     expert.allBrokerNative === true &&
@@ -533,7 +533,12 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           created_at DESC
         LIMIT 1
       `,
-      [trade.user_id, trade.broker_connection_id, trade.instrument.toUpperCase(), observedAt.toISOString()],
+      [
+        trade.user_id,
+        trade.broker_connection_id,
+        trade.instrument.toUpperCase(),
+        observedAt.toISOString(),
+      ],
     )) as Array<{
       direction: string;
       evaluated_at: Date | string;
@@ -603,9 +608,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     const expertConfidence = finite(
       row.expert_ensemble_confidence ?? expertJson.ensembleConfidence,
     );
-    const expertFreshness = finite(
-      row.expert_freshness_seconds ?? expertJson.freshnessSeconds,
-    );
+    const expertFreshness = finite(row.expert_freshness_seconds ?? expertJson.freshnessSeconds);
     const longVotes = finite(row.expert_long_votes ?? expertJson.longVotes) ?? 0;
     const shortVotes = finite(row.expert_short_votes ?? expertJson.shortVotes) ?? 0;
     const bool = (value: unknown): boolean =>
@@ -621,9 +624,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       trainedExpert: expertDirection
         ? {
             direction: expertDirection,
-            allBrokerNative: bool(
-              row.expert_all_broker_native ?? expertJson.allBrokerNative,
-            ),
+            allBrokerNative: bool(row.expert_all_broker_native ?? expertJson.allBrokerNative),
             longVotes,
             shortVotes,
             ensembleConfidence: expertConfidence,

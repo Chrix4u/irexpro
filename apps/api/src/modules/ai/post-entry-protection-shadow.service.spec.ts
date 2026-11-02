@@ -41,7 +41,7 @@ describe('PostEntryProtectionShadowService', () => {
     expect(dueV85Checkpoints(openedAt, closedAt, new Set())).toEqual([5, 10]);
   });
 
-  it("scores a due checkpoint from the dedicated broker-native market-data connection while preserving execution identity", async () => {
+  it('scores a due checkpoint from the dedicated broker-native market-data connection while preserving execution identity', async () => {
     const now = new Date('2026-10-05T10:06:00Z');
     const query = jest
       .fn()

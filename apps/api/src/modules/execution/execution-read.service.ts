@@ -1,12 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import {
-  Trade,
-  TradeCloseReason,
-  TradeDirection,
-  TradeStatus,
-} from './entities/trade.entity';
+import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from './entities/trade.entity';
 
 export type ClosedTradeOutcomeFilter = 'ALL' | 'WIN' | 'LOSS' | 'FLAT';
 
@@ -240,10 +235,7 @@ export class ExecutionReadService {
       throw new BadRequestException('outcome must be ALL, WIN, LOSS, or FLAT');
     }
     const closeReason = filters.closeReason?.trim().toUpperCase();
-    if (
-      closeReason &&
-      !Object.values(TradeCloseReason).includes(closeReason as TradeCloseReason)
-    ) {
+    if (closeReason && !Object.values(TradeCloseReason).includes(closeReason as TradeCloseReason)) {
       throw new BadRequestException('closeReason is not a supported close reason');
     }
 
@@ -281,10 +273,7 @@ export class ExecutionReadService {
     const rawRows = (await summaryQuery
       .select('trade.accountCurrency', 'accountCurrency')
       .addSelect('COUNT(*)', 'totalTrades')
-      .addSelect(
-        'SUM(CASE WHEN trade.realisedPnl IS NOT NULL THEN 1 ELSE 0 END)',
-        'pnlTradeCount',
-      )
+      .addSelect('SUM(CASE WHEN trade.realisedPnl IS NOT NULL THEN 1 ELSE 0 END)', 'pnlTradeCount')
       .addSelect('SUM(CASE WHEN trade.realisedPnl > 0 THEN 1 ELSE 0 END)', 'wins')
       .addSelect('SUM(CASE WHEN trade.realisedPnl < 0 THEN 1 ELSE 0 END)', 'losses')
       .addSelect('SUM(CASE WHEN trade.realisedPnl = 0 THEN 1 ELSE 0 END)', 'flats')
@@ -297,23 +286,14 @@ export class ExecutionReadService {
         'grossLoss',
       )
       .addSelect('COALESCE(SUM(trade.realisedPnl), 0)', 'netRealisedPnl')
-      .addSelect(
-        'AVG(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)',
-        'averageWin',
-      )
+      .addSelect('AVG(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)', 'averageWin')
       .addSelect(
         'ABS(AVG(CASE WHEN trade.realisedPnl < 0 THEN trade.realisedPnl END))',
         'averageLoss',
       )
       .addSelect('AVG(trade.realisedPnl)', 'expectancyPerTrade')
-      .addSelect(
-        'MAX(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)',
-        'largestWin',
-      )
-      .addSelect(
-        'MIN(CASE WHEN trade.realisedPnl < 0 THEN trade.realisedPnl END)',
-        'largestLoss',
-      )
+      .addSelect('MAX(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)', 'largestWin')
+      .addSelect('MIN(CASE WHEN trade.realisedPnl < 0 THEN trade.realisedPnl END)', 'largestLoss')
       .addSelect('COALESCE(SUM(trade.commission), 0)', 'totalCommission')
       .addSelect('COALESCE(SUM(trade.swap), 0)', 'totalSwap')
       .addSelect(

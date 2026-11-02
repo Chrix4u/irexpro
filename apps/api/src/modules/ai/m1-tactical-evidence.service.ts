@@ -139,8 +139,7 @@ export const M1_MULTIMODEL_PAYOFF_LOOKBACK_DAYS = 14;
 export const M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES = 8;
 export const M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR = 0.65;
 export const M1_MULTIMODEL_CONFIRMED_REVERSAL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES = 4;
-export const M1_MULTIMODEL_CONFIRMED_REVERSAL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR =
-  0.5;
+export const M1_MULTIMODEL_CONFIRMED_REVERSAL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR = 0.5;
 export const M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_AGE_HOURS = 96;
 
 export type M1MultimodelStrategyRoute =
@@ -535,22 +534,14 @@ export class M1TacticalEvidenceService {
         FROM deduplicated
         ORDER BY evaluated_at DESC
       `,
-      [
-        input.userId,
-        instrument,
-        input.direction,
-        input.asOf,
-        EXTENSION_EXHAUSTION_SHADOW_ARTIFACT,
-      ],
+      [input.userId, instrument, input.direction, input.asOf, EXTENSION_EXHAUSTION_SHADOW_ARTIFACT],
     )) as Array<{
       evaluated_at: string | Date;
       status: 'WIN' | 'LOSS';
       net_r: string | number;
     }>;
 
-    const netRs = rows
-      .map((row) => Number(row.net_r))
-      .filter((value) => Number.isFinite(value));
+    const netRs = rows.map((row) => Number(row.net_r)).filter((value) => Number.isFinite(value));
     if (netRs.length === 0) {
       return {
         samples: 0,
@@ -563,8 +554,12 @@ export class M1TacticalEvidenceService {
       };
     }
     const round = (value: number) => Number(value.toFixed(12));
-    const wins = rows.filter((row) => row.status === 'WIN' && Number.isFinite(Number(row.net_r))).length;
-    const losses = rows.filter((row) => row.status === 'LOSS' && Number.isFinite(Number(row.net_r))).length;
+    const wins = rows.filter(
+      (row) => row.status === 'WIN' && Number.isFinite(Number(row.net_r)),
+    ).length;
+    const losses = rows.filter(
+      (row) => row.status === 'LOSS' && Number.isFinite(Number(row.net_r)),
+    ).length;
     const totalNetR = round(netRs.reduce((sum, value) => sum + value, 0));
     const grossProfitR = netRs.filter((value) => value > 0).reduce((sum, value) => sum + value, 0);
     const grossLossR = Math.abs(

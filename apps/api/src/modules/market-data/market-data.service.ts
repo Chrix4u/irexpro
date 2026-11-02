@@ -64,8 +64,7 @@ export class MarketDataService {
       }
 
       let rawCandles: OHLCV[];
-      const ctraderLocalFirst =
-        CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId) && !before;
+      const ctraderLocalFirst = CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId) && !before;
 
       if (ctraderLocalFirst) {
         const local = await this.providerQuoteStore.getCandles(
@@ -106,8 +105,7 @@ export class MarketDataService {
             const persistedSpread = Number(
               (candle as OHLCV & { spreadClose?: string | null }).spreadClose,
             );
-            const hasPersistedSpread =
-              Number.isFinite(persistedSpread) && persistedSpread > 0;
+            const hasPersistedSpread = Number.isFinite(persistedSpread) && persistedSpread > 0;
             const historicalSpreadPoints = hasPersistedSpread
               ? (persistedSpread * 10 ** priceDigits).toFixed(0)
               : undefined;

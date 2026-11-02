@@ -153,7 +153,8 @@ export class MacroEventRiskService {
     string,
     { expiresAt: number; payload: FinanceCalendarPayload }
   >();
-  private showMyTradesCache: { expiresAt: number; payload: ShowMyTradesCalendarPayload } | null = null;
+  private showMyTradesCache: { expiresAt: number; payload: ShowMyTradesCalendarPayload } | null =
+    null;
 
   constructor(private readonly config: ConfigService) {}
 

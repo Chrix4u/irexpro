@@ -47,8 +47,8 @@ const candidate = {
     feature_candidate_score: 0.64,
     feature_extension_atr: 0.54,
     feature_volatility_score: 0.15,
-    feature_ema_separation: 0.30,
-    feature_mtf_strength: 0.10,
+    feature_ema_separation: 0.3,
+    feature_mtf_strength: 0.1,
     feature_rsi14: 55,
   },
 };
@@ -79,7 +79,9 @@ function harness(score: unknown, closeResult: unknown = { status: TradeStatus.CL
   const query = jest.fn().mockResolvedValueOnce([candidate]).mockResolvedValue([]);
   const aiEngine = {
     scorePlanBV85PostEntryBrokerCheckpoint: jest.fn().mockResolvedValue(score),
-    getPlanBV85PostEntryStatus: jest.fn().mockResolvedValue({ loaded: true, execution_authority: 'NONE' }),
+    getPlanBV85PostEntryStatus: jest
+      .fn()
+      .mockResolvedValue({ loaded: true, execution_authority: 'NONE' }),
   } as unknown as AiEngineClient;
   const execution = {
     closeTrade: jest.fn().mockResolvedValue(closeResult),
@@ -102,10 +104,14 @@ describe('PostEntryDemoDrawdownGuardService', () => {
     const sql = String(query.mock.calls[0]?.[0]).replace(/\s+/g, ' ');
     expect(sql).toContain("t.status = 'OPEN'");
     expect(sql).toContain("bc.account_type = 'DEMO'");
-    expect(sql).toContain("bc.broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')");
+    expect(sql).toContain(
+      "bc.broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')",
+    );
     expect(sql).toContain("t.opened_at <= $1::timestamptz - interval '5 minutes'");
     expect(sql).toContain("t.opened_at >= $1::timestamptz - interval '7 minutes'");
-    expect(sql).toContain("ti.metadata->>'external_provider_code' = 'irexpro-multimodel-ensemble-v1'");
+    expect(sql).toContain(
+      "ti.metadata->>'external_provider_code' = 'irexpro-multimodel-ensemble-v1'",
+    );
     expect(sql).toContain('NOT EXISTS');
     expect(sql).not.toContain("bc.account_type = 'LIVE'");
   });
@@ -115,9 +121,13 @@ describe('PostEntryDemoDrawdownGuardService', () => {
     await service.runOnce(now);
 
     expect(execution.closeTrade).not.toHaveBeenCalled();
-    const persist = query.mock.calls.find((call: unknown[]) => String(call[0]).includes('INSERT INTO trading.post_entry_shadow_observations'));
+    const persist = query.mock.calls.find((call: unknown[]) =>
+      String(call[0]).includes('INSERT INTO trading.post_entry_shadow_observations'),
+    );
     expect(persist).toBeDefined();
-    expect(persist?.[1]).toEqual(expect.arrayContaining(['NO_ACTION', 'DRAWDOWN_NOT_SEVERE', -0.39, 'OBSERVE', false]));
+    expect(persist?.[1]).toEqual(
+      expect.arrayContaining(['NO_ACTION', 'DRAWDOWN_NOT_SEVERE', -0.39, 'OBSERVE', false]),
+    );
   });
 
   it('closes exactly once at -0.40R using the existing AI close path', async () => {
@@ -130,8 +140,12 @@ describe('PostEntryDemoDrawdownGuardService', () => {
       candidate.user_id,
       TradeCloseReason.AI_CLOSE_SIGNAL,
     );
-    const persist = query.mock.calls.find((call: unknown[]) => String(call[0]).includes('INSERT INTO trading.post_entry_shadow_observations'));
-    expect(persist?.[1]).toEqual(expect.arrayContaining(['CLOSED', 'DRAWDOWN_GUARD_CLOSED', -0.4, 'CLOSE_DEMO', true]));
+    const persist = query.mock.calls.find((call: unknown[]) =>
+      String(call[0]).includes('INSERT INTO trading.post_entry_shadow_observations'),
+    );
+    expect(persist?.[1]).toEqual(
+      expect.arrayContaining(['CLOSED', 'DRAWDOWN_GUARD_CLOSED', -0.4, 'CLOSE_DEMO', true]),
+    );
     expect(String(persist?.[0])).toContain("'DEMO_ONLY'");
   });
 
@@ -162,7 +176,11 @@ describe('PostEntryDemoDrawdownGuardService', () => {
     execution.closeTrade.mockRejectedValueOnce(new Error('provider refused'));
 
     await expect(service.runOnce(now)).resolves.toBeUndefined();
-    const persist = query.mock.calls.find((call: unknown[]) => String(call[0]).includes('INSERT INTO trading.post_entry_shadow_observations'));
-    expect(persist?.[1]).toEqual(expect.arrayContaining(['CLOSE_FAILED', 'EXECUTION_CLOSE_FAILED', -0.55, 'CLOSE_DEMO', true]));
+    const persist = query.mock.calls.find((call: unknown[]) =>
+      String(call[0]).includes('INSERT INTO trading.post_entry_shadow_observations'),
+    );
+    expect(persist?.[1]).toEqual(
+      expect.arrayContaining(['CLOSE_FAILED', 'EXECUTION_CLOSE_FAILED', -0.55, 'CLOSE_DEMO', true]),
+    );
   });
 });

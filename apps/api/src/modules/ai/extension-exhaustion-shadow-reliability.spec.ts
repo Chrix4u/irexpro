@@ -6,14 +6,16 @@ function row(status: 'WIN' | 'LOSS', netR: number, evaluatedAt: string) {
 
 describe('M1TacticalEvidenceService extension exhaustion reliability', () => {
   it('loads 7-day 15-minute-deduplicated settled shadow evidence and summarizes payoff', async () => {
-    const query = jest.fn().mockResolvedValue([
-      row('WIN', 1.5, '2026-11-02T06:00:00Z'),
-      row('LOSS', -1, '2026-11-02T05:45:00Z'),
-      row('WIN', 1.6, '2026-11-02T05:30:00Z'),
-      row('LOSS', -1.1, '2026-11-02T05:15:00Z'),
-      row('WIN', 1.4, '2026-11-02T05:00:00Z'),
-      row('WIN', 1.3, '2026-11-02T04:45:00Z'),
-    ]);
+    const query = jest
+      .fn()
+      .mockResolvedValue([
+        row('WIN', 1.5, '2026-11-02T06:00:00Z'),
+        row('LOSS', -1, '2026-11-02T05:45:00Z'),
+        row('WIN', 1.6, '2026-11-02T05:30:00Z'),
+        row('LOSS', -1.1, '2026-11-02T05:15:00Z'),
+        row('WIN', 1.4, '2026-11-02T05:00:00Z'),
+        row('WIN', 1.3, '2026-11-02T04:45:00Z'),
+      ]);
     const service = new M1TacticalEvidenceService({ query } as any);
     const asOf = new Date('2026-11-02T06:05:00Z');
 
@@ -40,17 +42,13 @@ describe('M1TacticalEvidenceService extension exhaustion reliability', () => {
     expect(String(sql)).toContain("INTERVAL '7 days'");
     expect(String(sql)).toMatch(/components\s*->\s*'extensionExhaustionShadow'\s*->>\s*'artifact'/);
     expect(String(sql)).toContain("components ? 'outcome'");
-    expect(params).toEqual([
-      'user-1',
-      'AUDUSD',
-      'SELL',
-      asOf,
-      'extension-exhaustion-shadow-v1',
-    ]);
+    expect(params).toEqual(['user-1', 'AUDUSD', 'SELL', asOf, 'extension-exhaustion-shadow-v1']);
   });
 
   it('returns an empty fail-closed evidence snapshot when no resolved episodes exist', async () => {
-    const service = new M1TacticalEvidenceService({ query: jest.fn().mockResolvedValue([]) } as any);
+    const service = new M1TacticalEvidenceService({
+      query: jest.fn().mockResolvedValue([]),
+    } as any);
     await expect(
       service.loadExtensionExhaustionShadowReliability({
         userId: 'user-1',

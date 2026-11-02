@@ -290,5 +290,4 @@ describe('MacroEventRiskService', () => {
       }),
     ]);
   });
-
 });

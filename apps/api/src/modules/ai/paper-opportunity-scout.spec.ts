@@ -241,9 +241,10 @@ describe('PAPER opportunity scout', () => {
   });
 
   it('keeps weak confirmed reversals shadow-only when consensus falls below four', () => {
-    expect(
-      evaluatePaperOpportunityScout({ ...reversalBase, consensusPassed: 3 }),
-    ).toMatchObject({ eligible: false, reason: 'CONSENSUS_TOO_LOW' });
+    expect(evaluatePaperOpportunityScout({ ...reversalBase, consensusPassed: 3 })).toMatchObject({
+      eligible: false,
+      reason: 'CONSENSUS_TOO_LOW',
+    });
   });
 
   it('keeps out-of-distribution confirmed reversals shadow-only', () => {
