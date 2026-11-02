@@ -52,9 +52,27 @@ function unique(values: string[]): string[] {
 }
 
 function confirmedReversalTimingConsistent(input: MultimodelDemoAuthorityInput): boolean {
+  if (input.ensemble.strategyRoute !== 'CONFIRMED_REVERSAL') return true;
+  if (input.m1TimingRoute === 'M1_CONFIRMED_REVERSAL') return true;
+  if (input.m1TimingRoute !== 'M1_EARLY_TRANSITION') return false;
+
+  // Plan-B and M1 intentionally use independent reversal definitions. When
+  // Plan-B has already passed full admission/governance, accept a same-side
+  // M1 early-transition label as reversal timing confirmation only when the
+  // broker-native trained experts are unanimously aligned at high confidence.
+  // This bridges a semantic label mismatch without weakening risk/economics.
+  const longVotes = input.trainedExpert.longVotes ?? 0;
+  const shortVotes = input.trainedExpert.shortVotes ?? 0;
+  const totalVotes = longVotes + shortVotes;
+  const directionalVotes = input.candidateDirection === 'BUY' ? longVotes : shortVotes;
+  const confidence = input.trainedExpert.ensembleConfidence ?? 0;
+
   return (
-    input.ensemble.strategyRoute !== 'CONFIRMED_REVERSAL' ||
-    input.m1TimingRoute === 'M1_CONFIRMED_REVERSAL'
+    input.trainedExpert.allBrokerNative === true &&
+    input.trainedExpert.direction === input.candidateDirection &&
+    totalVotes >= 3 &&
+    directionalVotes === totalVotes &&
+    confidence >= HIGH_CONVICTION_RESCUE_CONFIDENCE_FLOOR
   );
 }
 
