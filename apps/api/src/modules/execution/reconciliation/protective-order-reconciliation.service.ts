@@ -110,7 +110,7 @@ export class ProtectiveOrderReconciliationService {
     const openTrades = await this.tradeRepo.find({
       where: { brokerConnectionId: connection.id, status: TradeStatus.OPEN },
     });
-    const candidates = openTrades.filter((t) => !!t.externalOrderId);
+    const candidates = openTrades.filter((t) => !!(t.externalPositionId ?? t.externalOrderId));
     if (candidates.length === 0) {
       return {
         checked: 0,
@@ -176,7 +176,7 @@ export class ProtectiveOrderReconciliationService {
       const result = await this.verifyAndRepairOne(
         trade,
         adapter,
-        providerByExternalId.get(trade.externalOrderId as string) ?? null,
+        providerByExternalId.get((trade.externalPositionId ?? trade.externalOrderId) as string) ?? null,
       );
       switch (result.outcome) {
         case 'PROTECTED':
@@ -232,7 +232,7 @@ export class ProtectiveOrderReconciliationService {
     adapter: IBrokerAdapter,
     position: BrokerPosition | null,
   ): Promise<ProtectiveReconciliationResult> {
-    const externalOrderId = trade.externalOrderId as string;
+    const externalOrderId = (trade.externalPositionId ?? trade.externalOrderId) as string;
 
     if (!position) {
       // The STATE sweep owns position-presence discrepancies — never act.

@@ -17,11 +17,14 @@ import { BrokerConnectionRequiredException } from '../execution/execution-sessio
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
+import { BrokerAuthorizationStatus } from '../broker/authorization/broker-authorization-status';
 import { TradeCloseReason, TradeStatus } from '../execution/entities/trade.entity';
 import { AuthService } from '../auth/auth.service';
 import { AiRuntimePreference } from './entities/ai-runtime-preference.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
+import { RiskRejectionCode } from '../risk/interfaces/risk.interface';
+import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
 
 /**
  * TradingService tests — Sprint 29 amendment + free-access regression +
@@ -103,6 +106,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
   let authService: Record<string, jest.Mock>;
   let aiRuntimePreferenceRepo: Record<string, jest.Mock>;
   let configService: { get: jest.Mock };
+  let dailyRiskPeriodService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -156,6 +160,15 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         snapshotVersion: 1,
         snapshotCreatedAt: new Date().toISOString(),
       })),
+      getViolations: jest.fn().mockResolvedValue([]),
+    };
+
+    dailyRiskPeriodService = {
+      getDailyLossResetAt: jest.fn().mockResolvedValue(null),
+      recordDailyLossReset: jest.fn().mockResolvedValue({
+        resetAt: new Date('2026-10-28T15:00:00.000Z'),
+        resetCount: 1,
+      }),
     };
 
     allocationService = {
@@ -183,6 +196,11 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           mockSession({ executionMode: ExecutionMode.SEMI_AUTO, authorityGeneration: 2 }),
         ),
       closeAllAiOpenPositions: jest.fn().mockResolvedValue([]),
+      resumeRiskSuspendedSession: jest
+        .fn()
+        .mockResolvedValue(
+          mockSession({ status: TradingSessionStatus.ACTIVE, authorityGeneration: 3 }),
+        ),
     };
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -242,6 +260,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         { provide: RiskService, useValue: riskService },
         { provide: ExecutionService, useValue: executionService },
         { provide: AllocationService, useValue: allocationService },
+        { provide: DailyRiskPeriodService, useValue: dailyRiskPeriodService },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
         { provide: AiEngineClient, useValue: aiEngineClient },
@@ -351,6 +370,93 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
     });
   });
 
+  describe('startTradingSession — daily risk cooldown', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('blocks a fresh session for the rest of the UTC day after DAILY_LOSS_LIMIT_REACHED', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T14:30:00.000Z'));
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          rejectionReason:
+            'Daily loss 54.68 has reached limit (5.00% = 49.41 of opening balance 988.13)',
+          evaluatedAt: new Date('2026-10-28T13:43:13.000Z'),
+        },
+      ]);
+
+      await expect(service.startTradingSession('user-1', 'conn-1')).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'DAILY_RISK_COOLDOWN_ACTIVE',
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          resumeAt: '2026-10-29T00:00:00.000Z',
+        }),
+      });
+      expect(brokerService.findConnectionById).toHaveBeenCalledWith('conn-1', 'user-1');
+      expect(allocationService.getUserCapitalAllocationState).toHaveBeenCalledWith(
+        'user-1',
+        'conn-1',
+      );
+      expect(dailyRiskPeriodService.getDailyLossResetAt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          logicalAccountKey: 'paper-broker|demo|account-1',
+          accountCurrency: 'USD',
+        }),
+      );
+      expect(executionService.startSession).not.toHaveBeenCalled();
+    });
+
+    it('allows a fresh session after the user explicitly reset today’s daily-loss window', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T15:30:00.000Z'));
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          rejectionReason: 'Daily loss limit reached',
+          evaluatedAt: new Date('2026-10-28T13:43:13.000Z'),
+          riskContext: { brokerConnectionId: 'conn-1' },
+        },
+      ]);
+      dailyRiskPeriodService.getDailyLossResetAt.mockResolvedValue(
+        new Date('2026-10-28T15:00:00.000Z'),
+      );
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({ lastHealthCheckAt: new Date() }),
+      );
+      brokerService.findConnectionsByIds.mockResolvedValue([
+        buildHealthyConnection({ lastHealthCheckAt: new Date() }),
+      ]);
+
+      await expect(service.startTradingSession('user-1', 'conn-1')).resolves.toEqual(
+        expect.objectContaining({ id: 'session-1' }),
+      );
+      expect(executionService.startSession).toHaveBeenCalled();
+    });
+
+    it('does not carry a DAILY loss cooldown into the next UTC risk day', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-29T00:05:00.000Z'));
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          rejectionReason: 'Daily loss limit reached',
+          evaluatedAt: new Date('2026-10-28T23:55:00.000Z'),
+        },
+      ]);
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({ lastHealthCheckAt: new Date() }),
+      );
+      brokerService.findConnectionsByIds.mockResolvedValue([
+        buildHealthyConnection({ lastHealthCheckAt: new Date() }),
+      ]);
+
+      await expect(service.startTradingSession('user-1', 'conn-1')).resolves.toEqual(
+        expect.objectContaining({ id: 'session-1' }),
+      );
+      expect(executionService.startSession).toHaveBeenCalled();
+    });
+  });
+
   describe('startTradingSession — free access regression', () => {
     it('should not require or consult an active subscription', async () => {
       subscriptionsService.canUserStartAiAutoTrading.mockResolvedValue(false);
@@ -393,9 +499,16 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       brokerService.findConnectionById.mockResolvedValue(
         buildHealthyConnection({
           id: 'conn-1',
-          brokerId: 'metatrader5',
-          brokerName: 'MetaTrader 5',
+          brokerId: 'ctrader',
+          brokerName: 'cTrader (Open API)',
+          accountType: BrokerMode.DEMO,
+          demoValidated: true,
+          authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+          liveTradingEnabled: false,
         }),
+      );
+      executionService.startSession.mockResolvedValue(
+        mockSession({ brokerConnectionId: 'conn-1', executionMode: ExecutionMode.FULL_AUTO }),
       );
 
       const session = await service.startTradingSession(
@@ -405,8 +518,68 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       );
 
       expect(session.id).toBe('session-1');
-      expect(executionService.startSession).toHaveBeenCalled();
+      expect(executionService.startSession.mock.calls[0]?.[0]).toBe('user-1');
+      expect(executionService.startSession.mock.calls[0]?.[1]).toBe('conn-1');
+      expect(executionService.startSession.mock.calls[0]?.[4]).toBe(ExecutionMode.FULL_AUTO);
       expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+    });
+
+    it('rejects scanner-owned FULL_AUTO when the external DEMO has not passed validation', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({
+          id: 'conn-1',
+          brokerId: 'ctrader',
+          brokerName: 'cTrader (Open API)',
+          accountType: BrokerMode.DEMO,
+          demoValidated: false,
+          authorizationStatus: BrokerAuthorizationStatus.CONNECTED,
+          liveTradingEnabled: false,
+        }),
+      );
+
+      await expect(
+        service.startTradingSession('user-1', 'conn-1', ExecutionMode.FULL_AUTO),
+      ).rejects.toThrow(ForbiddenException);
+      expect(allocationService.getUserCapitalAllocationState).not.toHaveBeenCalled();
+      expect(executionService.startSession).not.toHaveBeenCalled();
+    });
+
+    it('rejects scanner-owned FULL_AUTO on LIVE even when live trading is separately enabled', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({
+          id: 'conn-1',
+          brokerId: 'ctrader',
+          brokerName: 'cTrader (Open API)',
+          accountType: BrokerMode.LIVE,
+          demoValidated: true,
+          authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+          liveTradingEnabled: true,
+        }),
+      );
+
+      await expect(
+        service.startTradingSession('user-1', 'conn-1', ExecutionMode.FULL_AUTO),
+      ).rejects.toThrow(ForbiddenException);
+      expect(allocationService.getUserCapitalAllocationState).not.toHaveBeenCalled();
+      expect(executionService.startSession).not.toHaveBeenCalled();
     });
 
     it('keeps PAPER execution bound while using a connected MT5 DEMO account for market data', async () => {
@@ -911,6 +1084,211 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
     });
   });
 
+  describe('resetDailyLossProtection()', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('records a durable account/day reset before resuming a DAILY-loss suspended session', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T15:00:00.000Z'));
+      executionService.getActiveSessionForClient.mockResolvedValue(
+        mockSession({
+          status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+          authorityGeneration: 2,
+        }),
+      );
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          rejectionReason: 'Daily loss limit reached',
+          evaluatedAt: new Date('2026-10-28T13:43:13.000Z'),
+          riskContext: { sessionId: 'session-1', brokerConnectionId: 'conn-1' },
+        },
+      ]);
+
+      const result = await service.resetDailyLossProtection('user-1', 'session-1', true);
+
+      expect(dailyRiskPeriodService.recordDailyLossReset).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          brokerConnectionId: 'conn-1',
+          logicalAccountKey: 'paper-broker|demo|account-1',
+          accountCurrency: 'USD',
+          sessionId: 'session-1',
+          now: new Date('2026-10-28T15:00:00.000Z'),
+        }),
+      );
+      expect(executionService.resumeRiskSuspendedSession).toHaveBeenCalledWith(
+        'user-1',
+        'session-1',
+        { resetPeakEquityTo: '10000.00' },
+      );
+      expect(dailyRiskPeriodService.recordDailyLossReset.mock.invocationCallOrder[0]).toBeLessThan(
+        executionService.resumeRiskSuspendedSession.mock.invocationCallOrder[0],
+      );
+      expect(result.session.status).toBe(TradingSessionStatus.ACTIVE);
+      expect(result.resetCount).toBe(1);
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'RISK_PROTECTION_RESET_CONFIRMED',
+          resourceId: 'session-1',
+        }),
+      );
+    });
+
+    it('resets drawdown protection to fresh broker equity after explicit user confirmation', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-29T12:00:00.000Z'));
+      executionService.getActiveSessionForClient.mockResolvedValue(
+        mockSession({
+          status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+          peakEquity: '920.12',
+          authorityGeneration: 2,
+        }),
+      );
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '880.00',
+        equity: '825.54',
+        freeMargin: '700.00',
+        currency: 'USD',
+      });
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.MAX_DRAWDOWN_REACHED,
+          rejectionReason: 'Maximum drawdown reached',
+          evaluatedAt: new Date('2026-10-29T04:55:12.000Z'),
+          riskContext: { sessionId: 'session-1', brokerConnectionId: 'conn-1' },
+        },
+      ]);
+
+      const result = await service.resetDailyLossProtection('user-1', 'session-1', true);
+
+      expect(dailyRiskPeriodService.recordDailyLossReset).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          brokerConnectionId: 'conn-1',
+          sessionId: 'session-1',
+        }),
+      );
+      expect(executionService.resumeRiskSuspendedSession).toHaveBeenCalledWith(
+        'user-1',
+        'session-1',
+        { resetPeakEquityTo: '825.54' },
+      );
+      expect(result.session.status).toBe(TradingSessionStatus.ACTIVE);
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'RISK_PROTECTION_RESET_CONFIRMED',
+          metadata: expect.objectContaining({
+            triggeredBy: RiskRejectionCode.MAX_DRAWDOWN_REACHED,
+            previousPeakEquity: '920.12',
+            resetPeakEquityTo: '825.54',
+          }),
+        }),
+      );
+    });
+
+    it('fails closed unless the user explicitly confirms the risk reset', async () => {
+      executionService.getActiveSessionForClient.mockResolvedValue(
+        mockSession({ status: TradingSessionStatus.SUSPENDED_RISK_LIMIT }),
+      );
+
+      await expect(service.resetDailyLossProtection('user-1', 'session-1', false)).rejects.toThrow(
+        ForbiddenException,
+      );
+
+      expect(dailyRiskPeriodService.recordDailyLossReset).not.toHaveBeenCalled();
+      expect(executionService.resumeRiskSuspendedSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resetDailyLossProtectionForBroker()', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('records a durable current-day DAILY-loss reset when the old suspended session is already gone', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T16:30:00.000Z'));
+      executionService.getActiveSessionForClient.mockResolvedValue(null);
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          rejectionReason: 'Daily loss limit reached',
+          evaluatedAt: new Date('2026-10-28T13:43:13.000Z'),
+          riskContext: { brokerConnectionId: 'conn-1' },
+        },
+      ]);
+
+      const result = await (
+        service as unknown as {
+          resetDailyLossProtectionForBroker: (
+            userId: string,
+            brokerConnectionId: string,
+            confirmed: boolean,
+          ) => Promise<{ resetAt: string; resetCount: number; message: string }>;
+        }
+      ).resetDailyLossProtectionForBroker('user-1', 'conn-1', true);
+
+      expect(dailyRiskPeriodService.recordDailyLossReset).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          brokerConnectionId: 'conn-1',
+          logicalAccountKey: 'paper-broker|demo|account-1',
+          accountCurrency: 'USD',
+          sessionId: null,
+          now: new Date('2026-10-28T16:30:00.000Z'),
+        }),
+      );
+      expect(executionService.resumeRiskSuspendedSession).not.toHaveBeenCalled();
+      expect(result.resetCount).toBe(1);
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'RISK_PROTECTION_RESET_CONFIRMED',
+          resourceType: 'BrokerConnection',
+          resourceId: 'conn-1',
+        }),
+      );
+    });
+
+    it('resets the current-day daily-loss window after an ended session even when a later drawdown violation exists', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-29T10:30:00.000Z'));
+      executionService.getActiveSessionForClient.mockResolvedValue(null);
+      riskService.getViolations.mockResolvedValue([
+        {
+          rejectionCode: RiskRejectionCode.MAX_DRAWDOWN_REACHED,
+          rejectionReason: 'Maximum drawdown reached on the ended session',
+          evaluatedAt: new Date('2026-10-29T04:55:12.000Z'),
+          riskContext: { sessionId: 'ended-session-1', brokerConnectionId: 'conn-1' },
+        },
+        {
+          rejectionCode: RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+          rejectionReason: 'Earlier daily loss limit reached',
+          evaluatedAt: new Date('2026-10-29T02:21:13.000Z'),
+          riskContext: { sessionId: 'ended-session-1', brokerConnectionId: 'conn-1' },
+        },
+      ]);
+
+      const result = await service.resetDailyLossProtectionForBroker('user-1', 'conn-1', true);
+
+      expect(dailyRiskPeriodService.recordDailyLossReset).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          brokerConnectionId: 'conn-1',
+          sessionId: null,
+          now: new Date('2026-10-29T10:30:00.000Z'),
+        }),
+      );
+      expect(result.resetCount).toBe(1);
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'RISK_PROTECTION_RESET_CONFIRMED',
+          metadata: expect.objectContaining({
+            triggeredBy: RiskRejectionCode.MAX_DRAWDOWN_REACHED,
+          }),
+        }),
+      );
+    });
+  });
+
   describe('stopTradingSession()', () => {
     it('ends execution authority BEFORE requesting AI-position closure', async () => {
       await service.stopTradingSession('user-1', 'session-1');
@@ -982,8 +1360,26 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(executionService.endSession).toHaveBeenCalledTimes(1);
     });
 
-    it('throws NotFoundException when no active session', async () => {
+    it('can explicitly end and flatten a risk-suspended current session', async () => {
       executionService.getActiveSession.mockResolvedValue(null);
+      executionService.getActiveSessionForClient.mockResolvedValue(
+        mockSession({ status: TradingSessionStatus.SUSPENDED_RISK_LIMIT }),
+      );
+
+      const result = await service.stopTradingSession('user-1', 'session-1');
+
+      expect(executionService.endSession).toHaveBeenCalledWith(
+        'user-1',
+        TradingSessionStatus.ENDED,
+        expect.objectContaining({ expectedSessionId: 'session-1' }),
+      );
+      expect(executionService.closeAllAiOpenPositions).toHaveBeenCalled();
+      expect(result.sessionId).toBe('session-1');
+    });
+
+    it('throws NotFoundException when no current non-ended session exists', async () => {
+      executionService.getActiveSession.mockResolvedValue(null);
+      executionService.getActiveSessionForClient.mockResolvedValue(null);
       await expect(service.stopTradingSession('user-1', 'session-1')).rejects.toThrow(
         NotFoundException,
       );

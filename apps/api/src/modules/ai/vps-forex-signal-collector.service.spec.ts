@@ -127,6 +127,30 @@ describe('PAPER opportunity scout model identity', () => {
       'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v10-local-edge-shadow-quarantine-0.10-tier',
     );
   });
+
+  it('isolates confirmed-reversal scout payoff evidence from the older trend-scout cohort', () => {
+    expect(
+      paperOpportunityScoutModelVersion(
+        'irexpro-multimodel-ensemble-v1',
+        'CONFIRMED_REVERSAL_SCOUT',
+      ),
+    ).toBe(
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v11-confirmed-reversal-adaptive-0.20-0.10-tier',
+    );
+    expect(
+      paperOpportunityScoutModelVersion(
+        'irexpro-multimodel-ensemble-v1',
+        'CONFIRMED_REVERSAL_MICRO_SCOUT',
+      ),
+    ).toBe(
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v11-confirmed-reversal-adaptive-0.20-0.10-tier',
+    );
+    expect(
+      paperOpportunityScoutModelVersion('irexpro-multimodel-ensemble-v1', 'OPPORTUNITY_SCOUT'),
+    ).toBe(
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-opportunity-scout-v10-local-edge-shadow-quarantine-0.10-tier',
+    );
+  });
 });
 
 describe('PAPER scout product sizing floor', () => {
@@ -149,6 +173,27 @@ describe('PAPER scout product sizing floor', () => {
         ensembleGovernance: {},
       }),
     ).toEqual({ upperBound: 0.1, tier: 'RESEARCH' });
+  });
+
+  it('honors the 0.20 research ceiling for a strong confirmed-reversal scout', () => {
+    const collector = Object.create(VpsForexSignalCollectorService.prototype) as any;
+    expect(
+      collector.adaptiveLotSizingFor({
+        paperExecutionRoute: 'NORMAL_PAPER',
+        paperOpportunityScout: {
+          eligible: true,
+          lotUpperBound: 0.2,
+          sizingTier: 'RESEARCH',
+          reason: 'CONFIRMED_REVERSAL_SCOUT',
+          mode: 'BASE',
+          targetWindowMinutes: 30,
+          idleMinutes: null,
+        },
+        candidate: {},
+        planBEnsemble: {},
+        ensembleGovernance: {},
+      }),
+    ).toEqual({ upperBound: 0.2, tier: 'RESEARCH' });
   });
 
   it('reduces only an eligible scout to 0.05 when its exact generation payoff is marginal', () => {
@@ -1257,8 +1302,11 @@ describe('VpsForexSignalCollectorService', () => {
       windowMinutes: 30,
       latestSampleAt: '2026-10-07T11:59:00.000Z',
     });
-    expect(String(query.mock.calls[0][0])).toContain('percentile_cont(0.90)');
-    expect(String(query.mock.calls[0][0])).toContain('market_data.provider_quote_candles');
+    const sql = String(query.mock.calls[0][0]);
+    expect(sql).toContain('percentile_cont(0.90)');
+    expect(sql).toContain('market_data.provider_quote_candles');
+    expect(sql).toContain('SUM(positive.sample_count)');
+    expect(sql).not.toContain('COUNT(*)::int AS sample_count');
     expect(query).toHaveBeenCalledWith(expect.any(String), [
       'metaapi-source-1',
       'EURUSD',
@@ -1542,6 +1590,7 @@ describe('VpsForexSignalCollectorService', () => {
         executionSpreadEvidenceValid: true,
         paperExecutionCostUsable: true,
       }));
+    const getOpenPositionsForConnection = jest.fn().mockResolvedValue({ positions: [] });
     const collector = createCollector(
       config({
         'vpsForexScanner.enabled': true,
@@ -1559,7 +1608,7 @@ describe('VpsForexSignalCollectorService', () => {
       } as unknown as ExecutionService,
       {
         getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
-        getOpenPositionsForConnection: jest.fn().mockResolvedValue({ positions: [] }),
+        getOpenPositionsForConnection,
       } as unknown as BrokerService,
       new LivePaperMarketDataService(),
       aiEngineClientMock(),
@@ -1573,6 +1622,12 @@ describe('VpsForexSignalCollectorService', () => {
           json: async () => allTrendPayload(),
         }) as unknown as typeof fetch,
       );
+      // One read feeds adaptive PAPER risk truth; one independent read feeds
+      // the scan-level Plan B portfolio snapshot. The old implementation did
+      // another Plan B read for every candidate (13 total in this fixture).
+      expect(getOpenPositionsForConnection).toHaveBeenCalledTimes(2);
+      expect(getOpenPositionsForConnection).toHaveBeenNthCalledWith(1, 'conn-1', 'user-1');
+      expect(getOpenPositionsForConnection).toHaveBeenNthCalledWith(2, 'conn-1', 'user-1');
       expect(scoutAuthoritySpy).toHaveBeenCalled();
       expect(receiveSignal).not.toHaveBeenCalled();
       expect(postLossGuardSpy).toHaveBeenCalledWith(
@@ -3998,7 +4053,7 @@ describe('VpsForexSignalCollectorService', () => {
   });
 
   it('loads pair-side research reliability only from the active episode-guarded research artifact', async () => {
-    const activePolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
+    const activePolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1';
     const query = jest.fn().mockResolvedValue([
       {
         policy_version: activePolicy,
@@ -4073,7 +4128,11 @@ describe('VpsForexSignalCollectorService', () => {
           'paper-research-throughput-v10-evidence-backed-acceleration',
           'paper-research-throughput-v11-momentum-confirmed-exploration',
         ],
-        ['planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1', activePolicy],
+        [
+          'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
+          'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1',
+          activePolicy,
+        ],
         activePolicy,
       ],
     );
@@ -4532,6 +4591,86 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
+  it('reads scanner-owned live PAPER M1 directly instead of querying a disconnected execution broker', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-26T11:00:20.000Z'));
+    try {
+      const baseFor = (instrument: string) =>
+        instrument === 'USDJPY'
+          ? 157
+          : instrument === 'GBPUSD'
+            ? 1.34
+            : instrument === 'USDCAD'
+              ? 1.37
+              : instrument === 'USDCHF'
+                ? 0.8
+                : instrument === 'AUDUSD'
+                  ? 0.66
+                  : 1.1;
+      const digitsFor = (instrument: string) => (instrument === 'USDJPY' ? 3 : 5);
+      const staleSeries = new Map(
+        PAIRS.map(([instrument]) => [
+          instrument,
+          trendCandles(baseFor(instrument), digitsFor(instrument)).map((row) => ({
+            ...row,
+            timestamp: new Date(row.timestamp.getTime() - 300_000),
+          })),
+        ]),
+      );
+      const freshM1 = (instrument: string) => {
+        const base = baseFor(instrument);
+        const digits = digitsFor(instrument);
+        const latestOpen = Math.floor(Date.now() / 60_000) * 60_000 - 60_000;
+        return Array.from({ length: 30 }, (_, index) => {
+          const openTime = latestOpen - (29 - index) * 60_000;
+          const close = base + index * (base > 10 ? 0.001 : 0.00001);
+          const range = base > 10 ? 0.01 : 0.00008;
+          return {
+            timestamp: new Date(openTime),
+            open: close.toFixed(digits),
+            high: (close + range).toFixed(digits),
+            low: (close - range).toFixed(digits),
+            close: close.toFixed(digits),
+          };
+        });
+      };
+      const liveMarket = new LivePaperMarketDataService();
+      liveMarket.registerLiveConnection('conn-1');
+      for (const [instrument] of PAIRS) {
+        liveMarket.updateClosedM1Candles(instrument, freshM1(instrument), 'conn-1');
+      }
+      const broker = {
+        getOhlcvForConnection: jest
+          .fn()
+          .mockRejectedValue(new Error('disconnected execution broker must not be queried')),
+      } as unknown as BrokerService;
+      const collector = createCollector(
+        config({
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.userId': 'user-1',
+          'vpsForexScanner.brokerConnectionId': 'conn-1',
+        }),
+        { receiveSignal: jest.fn() } as unknown as AiSignalService,
+        { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+        broker,
+        liveMarket,
+        aiEngineClientMock(),
+      );
+
+      const refreshed = await (collector as any).refreshStalePaperProviderM5Tails(
+        staleSeries,
+        Date.now(),
+      );
+
+      expect((broker as any).getOhlcvForConnection).not.toHaveBeenCalled();
+      const expectedLatestOpen = new Date('2026-10-26T10:55:00.000Z').getTime();
+      for (const candles of refreshed.values()) {
+        expect(candles.at(-1)?.timestamp.getTime()).toBe(expectedLatestOpen);
+      }
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('bounds broker-native six-pair history concurrency below the MetaApi per-account limit', async () => {
     let active = 0;
     let peak = 0;
@@ -4572,6 +4711,141 @@ describe('VpsForexSignalCollectorService', () => {
     expect(series.size).toBe(6);
     expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
     expect(peak).toBeLessThanOrEqual(3);
+  });
+
+  it('paces cTrader six-pair background history below the shared 5-per-second budget', async () => {
+    let active = 0;
+    let peak = 0;
+    const startedAt: number[] = [];
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'ctrader', status: 'CONNECTED' }),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
+          startedAt.push(Date.now());
+          active += 1;
+          peak = Math.max(peak, active);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          active -= 1;
+          const base = instrument === 'USDJPY' ? 157 : 1.1;
+          const digits = instrument === 'USDJPY' ? 3 : 5;
+          return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
+        }),
+    } as unknown as BrokerService;
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'ctrader-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+
+    const series = await (collector as any).fetchBrokerNativeFallbackSeries('TEST_CTRADER_PACING');
+
+    expect(series.size).toBe(6);
+    expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
+    expect(peak).toBe(1);
+    expect(startedAt).toHaveLength(6);
+    for (let i = 1; i < startedAt.length; i += 1) {
+      expect(startedAt[i]! - startedAt[i - 1]!).toBeGreaterThanOrEqual(200);
+    }
+  });
+
+  it('uses the configured broker-native source for Plan B portfolio truth instead of the PAPER evidence connection', async () => {
+    const getOpenPositionsForConnection = jest.fn().mockResolvedValue({
+      positions: [{ instrument: 'EURUSD', direction: 'BUY', lotSize: '0.20' }],
+    });
+    const collector = createCollector(
+      config({
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'ctrader-1',
+      }),
+      {} as AiSignalService,
+      {} as ExecutionService,
+      { getOpenPositionsForConnection } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+
+    const snapshot = await (collector as any).loadPlanBPortfolioSnapshot('user-1', 'paper-1');
+
+    expect(getOpenPositionsForConnection).toHaveBeenCalledTimes(1);
+    expect(getOpenPositionsForConnection).toHaveBeenCalledWith('ctrader-1', 'user-1');
+    expect(snapshot).toEqual({
+      available: true,
+      connectionId: 'ctrader-1',
+      positions: [{ instrument: 'EURUSD', direction: 'BUY', lotSize: '0.20' }],
+    });
+  });
+
+  it('retries a background broker-history read after a bounded RATE_LIMITED refill delay', async () => {
+    jest.useFakeTimers();
+    try {
+      const rows = trendCandles(1.1, 5).map((row) => ({ ...row, volume: '0' }));
+      const getOhlcvForConnection = jest
+        .fn()
+        .mockRejectedValueOnce(
+          Object.assign(new Error('local history budget exhausted'), { code: 'RATE_LIMITED' }),
+        )
+        .mockResolvedValue(rows);
+      const collector = createCollector(
+        config({}),
+        { receiveSignal: jest.fn() } as unknown as AiSignalService,
+        { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+        { getOhlcvForConnection } as unknown as BrokerService,
+        new LivePaperMarketDataService(),
+        aiEngineClientMock(),
+      );
+
+      const pending = (collector as any).readBrokerHistoryWithRateLimitRetry(
+        'user-1',
+        'ctrader-1',
+        'EURUSD',
+        'M5',
+        500,
+      );
+      await Promise.resolve();
+      expect(getOhlcvForConnection).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(1_000);
+      await expect(pending).resolves.toEqual(rows);
+      expect(getOhlcvForConnection).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not retry a background broker-history read for non-rate-limit failures', async () => {
+    const getOhlcvForConnection = jest
+      .fn()
+      .mockRejectedValue(new Error('provider candles unavailable'));
+    const collector = createCollector(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      { getOhlcvForConnection } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+
+    await expect(
+      (collector as any).readBrokerHistoryWithRateLimitRetry(
+        'user-1',
+        'ctrader-1',
+        'EURUSD',
+        'M5',
+        500,
+      ),
+    ).rejects.toThrow('provider candles unavailable');
+    expect(getOhlcvForConnection).toHaveBeenCalledTimes(1);
   });
 
   it('fails over to broker-native MetaTrader candles after Twelve Data exhausts the daily quota', async () => {
@@ -4637,6 +4911,146 @@ describe('VpsForexSignalCollectorService', () => {
     expect(status.providerCooldownUntil).toBeTruthy();
     expect(status.marketDataAuthority).toBe('METAAPI_BROKER_FALLBACK');
     expect(status.providerFallbackActive).toBe(true);
+  });
+
+  it('uses connected cTrader candles as broker-native fallback after Twelve Data exhausts the daily quota', async () => {
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({
+        brokerId: 'ctrader',
+        status: 'CONNECTED',
+      }),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
+          const base = instrument === 'USDJPY' ? 157 : 1.1;
+          const digits = instrument === 'USDJPY' ? 3 : 5;
+          return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
+        }),
+    } as unknown as BrokerService;
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'ctrader-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({
+        status: 'error',
+        message: 'You have run out of API credits for the day.',
+      }),
+    });
+
+    const series = await (collector as any).fetchSixPairSeries(
+      'real-key-123456',
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(series.size).toBe(6);
+    expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
+  });
+
+  it('uses fresh persisted broker-native M5 cache before spending cTrader historical requests', async () => {
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({
+        brokerId: 'ctrader',
+        status: 'CONNECTED',
+      }),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockRejectedValue(new Error('provider history should not be called')),
+    } as unknown as BrokerService;
+    const store = {
+      getCandles: jest.fn().mockImplementation(async (_connectionId, instrument) => {
+        const base = instrument === 'USDJPY' ? 157 : 1.1;
+        const digits = instrument === 'USDJPY' ? 3 : 5;
+        return trendCandles(base, digits, undefined, undefined, 60).map((row) => ({
+          ...row,
+          volume: '0',
+        }));
+      }),
+    };
+    const collector = createCollector(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'ctrader-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    (collector as any).providerQuoteCandleStore = store;
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({
+        status: 'error',
+        message: 'You have run out of API credits for the day.',
+      }),
+    });
+
+    const series = await (collector as any).fetchSixPairSeries(
+      'real-key-123456',
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(series.size).toBe(6);
+    expect(store.getCandles).toHaveBeenCalledTimes(6);
+    expect((broker as any).getOhlcvForConnection).not.toHaveBeenCalled();
+  });
+
+  it('lets the legacy high-conviction overlay score a connected cTrader source', async () => {
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({
+        brokerId: 'ctrader',
+        status: 'CONNECTED',
+      }),
+    } as unknown as BrokerService;
+    const aiEngine = {
+      ...aiEngineClientMock(),
+      scorePlanBV4ChallengerBroker: jest.fn().mockResolvedValue({
+        state: 'UNAVAILABLE',
+        reason: 'SCORER_PROBE_UNAVAILABLE',
+        decision_time: null,
+        market_data_sources: {},
+        score: null,
+      }),
+    } as any;
+    const collector = createCollector(
+      config({
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'ctrader-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngine,
+    );
+
+    const result = await (collector as any).evaluateHighConvictionOverlay('user-1', {
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      barTime: new Date('2026-10-28T19:40:00.000Z'),
+    });
+
+    expect(result.reason).toBe('SCORER_PROBE_UNAVAILABLE');
   });
 
   it('reuses broker-native fallback within the minute while daily cooldown is active', async () => {
@@ -4811,12 +5225,12 @@ describe('scheduled scan recovery', () => {
   it('carries forward only the missing recent compatible pair-side samples across a calibration policy bump', async () => {
     const query = jest.fn().mockResolvedValue([
       {
-        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1',
+        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1',
         realised_pnl: -1,
         closed_at: new Date('2026-10-12T09:55:00.000Z'),
       },
       {
-        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1',
+        policy_version: 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1',
         realised_pnl: -1,
         closed_at: new Date('2026-10-12T09:50:00.000Z'),
       },
@@ -4855,13 +5269,14 @@ describe('scheduled scan recovery', () => {
     expect(params[5]).toEqual([
       'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1',
       'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1',
+      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1',
     ]);
-    expect(params[6]).toBe('planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1');
+    expect(params[6]).toBe('planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1');
   });
 
   it('uses the current policy sample history once it is self-sufficient and ignores predecessor losses', async () => {
-    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
-    const previousPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1';
+    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1';
+    const previousPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
     const query = jest.fn().mockResolvedValue([
       {
         policy_version: currentPolicy,
@@ -4917,7 +5332,7 @@ describe('scheduled scan recovery', () => {
   });
 
   it('derives realised-R payoff from the selected pair-side trade geometry', async () => {
-    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
+    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1';
     const rows = [
       ...Array.from({ length: 3 }, (_, index) => ({
         policy_version: currentPolicy,
@@ -4970,7 +5385,7 @@ describe('scheduled scan recovery', () => {
   });
 
   it('caps self-sufficient current-policy pair-side evidence at twenty samples', async () => {
-    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1';
+    const currentPolicy = 'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1';
     const rows = Array.from({ length: 21 }, (_, index) => ({
       policy_version: currentPolicy,
       realised_pnl: 1,

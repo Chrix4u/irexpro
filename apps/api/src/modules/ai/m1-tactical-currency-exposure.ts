@@ -64,6 +64,163 @@ function blocked(
   };
 }
 
+export function findLargestClearM1Volume(input: {
+  allocatedCapital: number;
+  positions: M1CurrencyRiskPosition[];
+  candidate: {
+    instrument: string;
+    direction: ForexDirection;
+    entryPrice: number;
+    stopLoss: number;
+  };
+  requestedVolumeCap: number;
+  productFloor: number;
+  volumeStep: number;
+}): {
+  allowed: boolean;
+  volumeCap: number;
+  decision: M1CurrencyExposureDecision;
+  productFloorBlocked: boolean;
+} {
+  const evaluateAtVolume = (volume: number) => {
+    const riskAtStop = m1UsdRiskAtStop({
+      instrument: input.candidate.instrument,
+      lotSize: volume,
+      entryPrice: input.candidate.entryPrice,
+      stopLoss: input.candidate.stopLoss,
+    });
+    return evaluateM1TacticalCurrencyExposure({
+      allocatedCapital: input.allocatedCapital,
+      positions: input.positions,
+      candidate: {
+        instrument: input.candidate.instrument,
+        direction: input.candidate.direction,
+        riskAtStop: riskAtStop ?? 0,
+      },
+    });
+  };
+
+  const requestedDecision = evaluateAtVolume(input.requestedVolumeCap);
+  if (!Number.isFinite(input.requestedVolumeCap) || input.requestedVolumeCap <= 0) {
+    return {
+      allowed: false,
+      volumeCap: 0,
+      decision: requestedDecision,
+      productFloorBlocked: false,
+    };
+  }
+  if (requestedDecision.capacity === 'CLEAR') {
+    return {
+      allowed: true,
+      volumeCap: input.requestedVolumeCap,
+      decision: requestedDecision,
+      productFloorBlocked: false,
+    };
+  }
+
+  if (!Number.isFinite(input.productFloor) || input.productFloor <= 0) {
+    return {
+      allowed: false,
+      volumeCap: 0,
+      decision: requestedDecision,
+      productFloorBlocked: false,
+    };
+  }
+  // A caller that explicitly caps below the professional product floor is a
+  // scout/micro route, not a professional request that merely needs risk
+  // adjustment. Keep those routes fail-closed. A professional request capped
+  // exactly at the preferred floor may still step down when the floor itself
+  // breaches the hard aligned-currency block threshold; downstream durable
+  // sizing will then enforce the exact per-trade risk ceiling.
+  if (input.requestedVolumeCap < input.productFloor) {
+    return {
+      allowed: false,
+      volumeCap: 0,
+      decision: requestedDecision,
+      productFloorBlocked: true,
+    };
+  }
+
+  const floorDecision = evaluateAtVolume(input.productFloor);
+  if (floorDecision.capacity === 'BLOCKED') {
+    if (!Number.isFinite(input.volumeStep) || input.volumeStep <= 0) {
+      return {
+        allowed: false,
+        volumeCap: 0,
+        decision: floorDecision,
+        productFloorBlocked: true,
+      };
+    }
+
+    // 0.20 is a preferred professional size, not a reason to suppress a valid
+    // setup when the account can safely carry a smaller meaningful trade. The
+    // downstream position sizer already uses 0.10 as the risk-adjusted minimum.
+    const riskAdjustedFloor = Math.min(input.productFloor, 0.1);
+    const stepCount = Math.floor(
+      (input.productFloor - riskAdjustedFloor) / input.volumeStep + 1e-9,
+    );
+    for (let index = 1; index <= stepCount; index += 1) {
+      const volume = Number((input.productFloor - index * input.volumeStep).toFixed(8));
+      if (volume < riskAdjustedFloor - 1e-9) break;
+      const decision = evaluateAtVolume(volume);
+      if (decision.capacity !== 'BLOCKED') {
+        return {
+          allowed: true,
+          volumeCap: volume,
+          decision,
+          productFloorBlocked: false,
+        };
+      }
+    }
+
+    return {
+      allowed: false,
+      volumeCap: 0,
+      decision: floorDecision,
+      productFloorBlocked: true,
+    };
+  }
+  if (floorDecision.capacity === 'REDUCED') {
+    return {
+      allowed: true,
+      volumeCap: input.productFloor,
+      decision: floorDecision,
+      productFloorBlocked: false,
+    };
+  }
+
+  if (!Number.isFinite(input.volumeStep) || input.volumeStep <= 0) {
+    return {
+      allowed: false,
+      volumeCap: 0,
+      decision: floorDecision,
+      productFloorBlocked: false,
+    };
+  }
+
+  let bestVolume = input.productFloor;
+  let bestDecision = floorDecision;
+  const stepCount = Math.floor(
+    (input.requestedVolumeCap - input.productFloor) / input.volumeStep + 1e-9,
+  );
+  for (let index = 1; index <= stepCount; index += 1) {
+    const volume = Number((input.productFloor + index * input.volumeStep).toFixed(8));
+    if (volume >= input.requestedVolumeCap - 1e-9) break;
+    const decision = evaluateAtVolume(volume);
+    if (decision.capacity === 'CLEAR') {
+      bestVolume = volume;
+      bestDecision = decision;
+    }
+  }
+
+  return {
+    allowed: true,
+    volumeCap: bestVolume,
+    decision: bestDecision,
+    productFloorBlocked: false,
+  };
+}
+
 /**
  * PAPER-only M1 portfolio governor. It preserves unlimited trade COUNT while
  * bounding the capital actually at risk in one aligned currency thesis.

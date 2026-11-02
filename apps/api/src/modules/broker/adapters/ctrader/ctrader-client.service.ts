@@ -160,6 +160,13 @@ class EnvironmentConnection {
    */
   readonly accountTokens = new Map<number, string>();
   /**
+   * Single-flight account authorization per provider account. Several iRexPro
+   * services can need the same cTrader account concurrently (quotes,
+   * reconciliation, protection checks). Until 2102 resolves, authorizedAccounts
+   * is still false; without this fence every caller can send a duplicate 2102.
+   */
+  readonly accountAuthorizations = new Map<number, Promise<void>>();
+  /**
    * Session LEASE owners per account (Sprint 56 correction round 3,
    * architect finding 4): every adapter context — one per persisted
    * BrokerConnection.id, or an ephemeral credential-test context — holds a
@@ -238,6 +245,29 @@ export class CTraderClientService implements OnModuleDestroy {
     if (conn.authorizedAccounts.has(accountId)) {
       return;
     }
+
+    const existingAuthorization = conn.accountAuthorizations.get(accountId);
+    if (existingAuthorization) {
+      await existingAuthorization;
+      return;
+    }
+
+    const authorization = this.authorizeAccount(conn, accountId, accessToken);
+    conn.accountAuthorizations.set(accountId, authorization);
+    try {
+      await authorization;
+    } finally {
+      if (conn.accountAuthorizations.get(accountId) === authorization) {
+        conn.accountAuthorizations.delete(accountId);
+      }
+    }
+  }
+
+  private async authorizeAccount(
+    conn: EnvironmentConnection,
+    accountId: number,
+    accessToken: string,
+  ): Promise<void> {
     const response = await this.rawRequest(conn, CTRADER_PAYLOAD_TYPE.ACCOUNT_AUTH_REQ, {
       ctidTraderAccountId: accountId,
       accessToken,
@@ -249,7 +279,7 @@ export class CTraderClientService implements OnModuleDestroy {
     // ALREADY_LOGGED_IN resolves through rawRequest as a benign envelope.
     if (
       response.payloadType === CTRADER_PAYLOAD_TYPE.OA_ERROR_RES &&
-      this.errorName(response) === 'ALREADY_LOGGED_IN'
+      isAlreadyAuthorizedError(this.errorName(response))
     ) {
       conn.authorizedAccounts.add(accountId);
       return;

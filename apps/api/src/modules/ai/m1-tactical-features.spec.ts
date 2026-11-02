@@ -59,6 +59,72 @@ describe('buildM1TacticalFeatures', () => {
     expect(withIncomplete.momentum1Atr).toBeCloseTo(baseline.momentum1Atr, 10);
   });
 
+  it('uses only completed M5 candles for reversal timing evidence', () => {
+    const input = baseInput();
+    const baseline = buildM1TacticalFeatures(input)!;
+    const incompleteM5 = {
+      timestamp: new Date(input.decisionTime),
+      open: '1.5000',
+      high: '1.9000',
+      low: '1.1000',
+      close: '1.1500',
+    };
+
+    const withIncomplete = buildM1TacticalFeatures({
+      ...input,
+      m5: [...input.m5, incompleteM5],
+    })!;
+
+    expect(withIncomplete.m5BodyPressure3).toBeCloseTo(baseline.m5BodyPressure3, 10);
+    expect(withIncomplete.m5Momentum1Atr).toBeCloseTo(baseline.m5Momentum1Atr, 10);
+    expect(withIncomplete.m5Momentum3Atr).toBeCloseTo(baseline.m5Momentum3Atr, 10);
+  });
+
+  it('detects bearish strength and persistence in the last completed M5 candles', () => {
+    const input = baseInput();
+    const m5 = [...input.m5];
+    const anchor = Number(m5[m5.length - 4]!.close);
+    for (let offset = 0; offset < 3; offset += 1) {
+      const index = m5.length - 3 + offset;
+      const open = anchor - offset * 0.00035;
+      const close = open - 0.0003;
+      m5[index] = {
+        ...m5[index]!,
+        open: open.toFixed(6),
+        high: (open + 0.00008).toFixed(6),
+        low: (close - 0.00008).toFixed(6),
+        close: close.toFixed(6),
+      };
+    }
+
+    const result = buildM1TacticalFeatures({ ...input, m5 })!;
+
+    expect(result.m5BodyPressure3).toBeLessThan(0);
+    expect(result.m5Momentum1Atr).toBeLessThan(0);
+    expect(result.m5Momentum3Atr).toBeLessThan(0);
+  });
+
+  it('treats a flat latest broker minute as neutral candle geometry instead of dropping feature context', () => {
+    const input = baseInput();
+    const m1 = [...input.m1];
+    const last = m1[m1.length - 1]!;
+    m1[m1.length - 1] = {
+      ...last,
+      open: '1.105000',
+      high: '1.105000',
+      low: '1.105000',
+      close: '1.105000',
+    };
+
+    const result = buildM1TacticalFeatures({ ...input, m1 });
+
+    expect(result).not.toBeNull();
+    expect(result!.bodyRangeRatio).toBe(0);
+    expect(result!.upperWickRatio).toBe(0);
+    expect(result!.lowerWickRatio).toBe(0);
+    expect(result!.closeLocation).toBe(0.5);
+  });
+
   it('computes body, wick and close-location geometry from the latest closed M1 candle', () => {
     const input = baseInput();
     const m1 = [...input.m1];
@@ -77,7 +143,7 @@ describe('buildM1TacticalFeatures', () => {
     expect(result.closeLocation).toBeCloseTo(0.75, 8);
   });
 
-  it('produces finite EMA, momentum, efficiency, volatility and context features', () => {
+  it('produces finite EMA, momentum, M5 timing, efficiency, volatility and context features', () => {
     const result = buildM1TacticalFeatures(baseInput())!;
 
     expect(result.session).toBe('LONDON');
@@ -88,6 +154,9 @@ describe('buildM1TacticalFeatures', () => {
     expect(result.momentum1Atr).toBeGreaterThan(0);
     expect(result.momentum3Atr).toBeGreaterThan(0);
     expect(result.momentum5Atr).toBeGreaterThan(0);
+    expect(result.m5BodyPressure3).toBeGreaterThan(0);
+    expect(result.m5Momentum1Atr).toBeGreaterThan(0);
+    expect(result.m5Momentum3Atr).toBeGreaterThan(0);
     expect(result.efficiency5).toBeGreaterThan(0);
     expect(result.efficiency5).toBeLessThanOrEqual(1);
     expect(Number.isFinite(result.volatilityChange)).toBe(true);
@@ -125,11 +194,39 @@ describe('buildM1TacticalFeatures', () => {
     expect(failed.failedBreakoutUp).toBe(true);
   });
 
-  it('returns null when the completed M1 sequence contains a one-minute gap', () => {
+  it('normalizes bounded cTrader no-tick M1 gaps inside feature calculation without changing the latest broker bar', () => {
     const input = baseInput();
+    const baseline = buildM1TacticalFeatures(input)!;
     const m1 = [...input.m1];
     m1.splice(m1.length - 12, 1);
+
+    const result = buildM1TacticalFeatures({ ...input, m1 });
+
+    expect(result).not.toBeNull();
+    expect(result!.latestM1OpenTime.toISOString()).toBe(baseline.latestM1OpenTime.toISOString());
+    expect(result!.price).toBeCloseTo(baseline.price, 10);
+    expect(Number.isFinite(result!.atr14)).toBe(true);
+  });
+
+  it('normalizes a broker-observed nine-minute cTrader no-tick gap without dropping M1 readiness', () => {
+    const input = baseInput();
+    const m1 = [...input.m1];
+    m1.splice(m1.length - 20, 9);
+    expect(buildM1TacticalFeatures({ ...input, m1 })).not.toBeNull();
+  });
+
+  it('fails closed when a recent cTrader M1 outage exceeds the ten-minute no-tick allowance', () => {
+    const input = baseInput();
+    const m1 = [...input.m1];
+    m1.splice(m1.length - 20, 11);
     expect(buildM1TacticalFeatures({ ...input, m1 })).toBeNull();
+  });
+
+  it('discards an old large M1 outage once at least 30 recent normalized bars exist after it', () => {
+    const input = baseInput();
+    const m1 = [...input.m1];
+    m1.splice(8, 11);
+    expect(buildM1TacticalFeatures({ ...input, m1 })).not.toBeNull();
   });
 
   it('returns null for non-monotonic or non-finite required price evidence', () => {

@@ -56,6 +56,41 @@ describe('evaluateM1RoutePairSideReliability', () => {
     });
   });
 
+  it('does not carry v1 losses into the v2 M5-lifecycle evidence epoch', () => {
+    const result = evaluate(
+      [row(-1), row(-0.8), row(-0.6)],
+      { currentPolicyVersion: 'm1-tactical-v2-m5-lifecycle' },
+    );
+
+    expect(result).toMatchObject({
+      eligible: true,
+      samples: 0,
+      currentPolicySamples: 0,
+      carriedSamples: 0,
+      recentRealizedR: null,
+      reason: 'INSUFFICIENT_EVIDENCE',
+    });
+    expect(result.consideredPolicyVersions).toEqual([]);
+  });
+
+  it('still brakes three current-v2 losses after the evidence reset', () => {
+    const result = evaluate(
+      [
+        row(-1, { policyVersion: 'm1-tactical-v2-m5-lifecycle' }),
+        row(-0.8, { policyVersion: 'm1-tactical-v2-m5-lifecycle' }),
+        row(-0.6, { policyVersion: 'm1-tactical-v2-m5-lifecycle' }),
+      ],
+      { currentPolicyVersion: 'm1-tactical-v2-m5-lifecycle' },
+    );
+
+    expect(result).toMatchObject({
+      eligible: false,
+      samples: 3,
+      currentPolicySamples: 3,
+      reason: 'EARLY_LOSS_STREAK',
+    });
+  });
+
   it('applies the early brake after three losses and no wins', () => {
     const result = evaluate([row(-1), row(-2), row(-0.5)]);
     expect(result.eligible).toBe(false);
@@ -104,6 +139,54 @@ describe('evaluateM1RoutePairSideReliability', () => {
     const result = evaluate([...olderWins, ...recentLosses]);
     expect(result.eligible).toBe(false);
     expect(result.reason).toBe('EARLY_LOSS_STREAK');
+  });
+
+  it('keeps the existing early-transition two-loss hard brake above the single giveback caution', () => {
+    const result = evaluate([
+      row(-9, {
+        route: 'M1_EARLY_TRANSITION',
+        riskAtStop: 9,
+        maxFavorablePnl: 6,
+        profitGiveback: 15,
+        closedAt: new Date(NOW.getTime() - 60_000),
+      }),
+      row(-4, {
+        route: 'M1_EARLY_TRANSITION',
+        riskAtStop: 9,
+        maxFavorablePnl: 1,
+        profitGiveback: 1,
+        closedAt: new Date(NOW.getTime() - 120_000),
+      }),
+    ], { route: 'M1_EARLY_TRANSITION' });
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('EARLY_LOSS_STREAK');
+  });
+
+  it('marks the first meaningful winner-to-loser giveback as a soft caution without overfitting a hard veto', () => {
+    const result = evaluate([
+      row(-9, {
+        route: 'M1_EARLY_TRANSITION',
+        riskAtStop: 9,
+        maxFavorablePnl: 6,
+        profitGiveback: 15,
+        closedAt: new Date(NOW.getTime() - 60_000),
+      }),
+    ], { route: 'M1_EARLY_TRANSITION' });
+
+    expect(result.eligible).toBe(true);
+    expect(result.reason).toBe('PROFIT_GIVEBACK_CAUTION');
+  });
+
+  it('brakes an exact pair/side/route after two recent losses that first reached at least 0.40R favorable excursion', () => {
+    const result = evaluate([
+      row(-9, { route: 'M1_EARLY_TRANSITION', riskAtStop: 9, maxFavorablePnl: 10, profitGiveback: 19, closedAt: new Date(NOW.getTime() - 60_000) }),
+      row(-8, { route: 'M1_EARLY_TRANSITION', riskAtStop: 9, maxFavorablePnl: 6, profitGiveback: 14, closedAt: new Date(NOW.getTime() - 120_000) }),
+      row(5, { route: 'M1_EARLY_TRANSITION', riskAtStop: 9, maxFavorablePnl: 6, profitGiveback: 1, closedAt: new Date(NOW.getTime() - 180_000) }),
+    ], { route: 'M1_EARLY_TRANSITION' });
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('PROFIT_GIVEBACK_LOSS_STREAK');
   });
 
   it('brakes recent payoff decay before a mixed sequence becomes a three-loss streak', () => {

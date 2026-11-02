@@ -14,6 +14,7 @@ export const M1_RELIABILITY_CARRY_FORWARD_DAYS = 7;
 const POLICY_LINEAGE: Readonly<Record<string, readonly string[]>> = Object.freeze({
   'm1-tactical-v1': Object.freeze(['m1-tactical-v1']),
   'm1-tactical-v1-cal1': Object.freeze(['m1-tactical-v1-cal1', 'm1-tactical-v1']),
+  'm1-tactical-v2-m5-lifecycle': Object.freeze(['m1-tactical-v2-m5-lifecycle']),
 });
 
 const PRIOR_WINS = 1;
@@ -25,8 +26,12 @@ export interface M1RoutePairSideEvidenceRow {
   direction: 'BUY' | 'SELL';
   policyVersion: string;
   realisedPnl: number;
-  /** USD risk to the original stop for this executed PAPER trade. */
+  /** Account-currency risk to the original stop for this executed trade. */
   riskAtStop?: number | null;
+  /** Highest observed unrealized P&L before close, in the account currency. */
+  maxFavorablePnl?: number | null;
+  /** Amount surrendered from the observed peak by the latest/final observation. */
+  profitGiveback?: number | null;
   closedAt: Date;
 }
 
@@ -44,6 +49,8 @@ export type M1RoutePairSideReliabilityReason =
   | 'POSITIVE_EXPECTANCY'
   | 'NEGATIVE_EXPECTANCY'
   | 'RECENT_NEGATIVE_PAYOFF'
+  | 'PROFIT_GIVEBACK_CAUTION'
+  | 'PROFIT_GIVEBACK_LOSS_STREAK'
   | 'PAYOFF_EVIDENCE_INCOMPLETE'
   | 'EARLY_LOSS_STREAK'
   | 'INVALID_EVIDENCE';
@@ -191,6 +198,43 @@ export function evaluateM1RoutePairSideReliability(
   const recentLossStreak =
     selected.length >= earlyLossBrakeSamples &&
     selected.slice(0, earlyLossBrakeSamples).every((row) => row.realisedPnl < 0);
+  const isMeaningfulGivebackLoss = (row: M1RoutePairSideEvidenceRow): boolean => {
+    const riskAtStop = Number(row.riskAtStop);
+    const maxFavorablePnl = Number(row.maxFavorablePnl);
+    const profitGiveback = Number(row.profitGiveback);
+    return (
+      row.realisedPnl < 0 &&
+      Number.isFinite(riskAtStop) &&
+      riskAtStop > 0 &&
+      Number.isFinite(maxFavorablePnl) &&
+      maxFavorablePnl / riskAtStop >= 0.4 &&
+      Number.isFinite(profitGiveback) &&
+      profitGiveback >= maxFavorablePnl
+    );
+  };
+  const givebackLossStreak =
+    selected.length >= 2 && selected.slice(0, 2).every(isMeaningfulGivebackLoss);
+  const givebackCaution = selected.length >= 1 && isMeaningfulGivebackLoss(selected[0]!);
+
+  if (givebackLossStreak) {
+    return {
+      eligible: false,
+      samples,
+      currentPolicySamples: current.length,
+      carriedSamples,
+      wins,
+      losses,
+      smoothedWinRate,
+      smoothedExpectedR,
+      realizedRSamples,
+      averageRealizedR,
+      recentRealizedR,
+      recentPayoffRSamples,
+      recentPayoffAverageR,
+      reason: 'PROFIT_GIVEBACK_LOSS_STREAK',
+      consideredPolicyVersions: [...consideredPolicyVersions],
+    };
+  }
 
   if (recentLossStreak) {
     return {
@@ -208,6 +252,26 @@ export function evaluateM1RoutePairSideReliability(
       recentPayoffRSamples,
       recentPayoffAverageR,
       reason: 'EARLY_LOSS_STREAK',
+      consideredPolicyVersions: [...consideredPolicyVersions],
+    };
+  }
+
+  if (givebackCaution) {
+    return {
+      eligible: true,
+      samples,
+      currentPolicySamples: current.length,
+      carriedSamples,
+      wins,
+      losses,
+      smoothedWinRate,
+      smoothedExpectedR,
+      realizedRSamples,
+      averageRealizedR,
+      recentRealizedR,
+      recentPayoffRSamples,
+      recentPayoffAverageR,
+      reason: 'PROFIT_GIVEBACK_CAUTION',
       consideredPolicyVersions: [...consideredPolicyVersions],
     };
   }

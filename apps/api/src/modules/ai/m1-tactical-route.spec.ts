@@ -29,6 +29,9 @@ function snapshot(overrides: Partial<M1TacticalFeatureSnapshot> = {}): M1Tactica
     momentum1Atr: 0.22,
     momentum3Atr: 0.55,
     momentum5Atr: 0.72,
+    m5BodyPressure3: 0.35,
+    m5Momentum1Atr: 0.22,
+    m5Momentum3Atr: 0.48,
     breakoutUpAtr: 0.18,
     breakoutDownAtr: 0,
     failedBreakoutUp: false,
@@ -74,6 +77,9 @@ describe('classifyM1TacticalRoute', () => {
       momentum1Atr: 0.55,
       momentum3Atr: 0.72,
       momentum5Atr: 0.48,
+      m5BodyPressure3: 0.3,
+      m5Momentum1Atr: 0.2,
+      m5Momentum3Atr: 0.35,
       alignment: { m5: 0.08, m15: -0.08, h1: -0.18, h4: -0.22 },
       higherTimeframeAgreement: -0.1,
       closeLocation: 0.9,
@@ -89,7 +95,88 @@ describe('classifyM1TacticalRoute', () => {
     expect(result.reason).toBe('FAILED_MOVE_WITH_MULTI_BAR_REVERSAL_IMPULSE');
   });
 
-  it('does not call one bullish candle a reversal when multi-bar impulse is absent', () => {
+  it('waits instead of selling when M1 turns down but completed M5 candles are still strongly bullish', () => {
+    const source = snapshot({
+      rsi14: 42,
+      failedBreakoutUp: true,
+      emaSeparationAtr: -0.22,
+      emaSlopeAtr: -0.35,
+      momentum1Atr: -0.55,
+      momentum3Atr: -0.72,
+      momentum5Atr: -0.48,
+      alignment: { m5: -0.08, m15: 0.08, h1: 0.18, h4: 0.22 },
+      higherTimeframeAgreement: 0.1,
+      closeLocation: 0.1,
+      lowerWickRatio: 0.05,
+      upperWickRatio: 0.55,
+      m5BodyPressure3: 0.65,
+      m5LatestBodyPressure: 0.72,
+      m5Momentum1Atr: 0.45,
+      m5Momentum3Atr: 0.9,
+    });
+    const [buy, sell] = pair(source);
+    const result = classifyM1TacticalRoute(sell, buy, source, M1_TACTICAL_POLICY_V1);
+
+    expect(result.route).toBe('ABSTAIN');
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('M5_REVERSAL_NOT_CONFIRMED');
+  });
+
+  it('confirms the same sell reversal once completed M5 structure turns bearish', () => {
+    const source = snapshot({
+      rsi14: 42,
+      failedBreakoutUp: true,
+      emaSeparationAtr: -0.22,
+      emaSlopeAtr: -0.35,
+      momentum1Atr: -0.55,
+      momentum3Atr: -0.72,
+      momentum5Atr: -0.48,
+      alignment: { m5: -0.08, m15: 0.08, h1: 0.18, h4: 0.22 },
+      higherTimeframeAgreement: 0.1,
+      closeLocation: 0.1,
+      lowerWickRatio: 0.05,
+      upperWickRatio: 0.55,
+      m5BodyPressure3: -0.45,
+      m5LatestBodyPressure: -0.62,
+      m5Momentum1Atr: -0.3,
+      m5Momentum3Atr: -0.55,
+    });
+    const [buy, sell] = pair(source);
+    const result = classifyM1TacticalRoute(sell, buy, source, M1_TACTICAL_POLICY_V1);
+
+    expect(result.route).toBe('M1_CONFIRMED_REVERSAL');
+    expect(result.direction).toBe('SELL');
+    expect(result.eligible).toBe(true);
+  });
+
+  it('accepts one decisive completed M5 reversal candle without waiting for the three-candle average to turn', () => {
+    const source = snapshot({
+      failedBreakoutDown: true,
+      emaSeparationAtr: 0.22,
+      emaSlopeAtr: 0.35,
+      momentum1Atr: 0.55,
+      momentum3Atr: 0.72,
+      momentum5Atr: 0.48,
+      // The prior two M5 candles still dominate the average. The latest
+      // completed candle itself is the decisive turn we want to react to.
+      m5BodyPressure3: -0.15,
+      m5LatestBodyPressure: 0.78,
+      m5Momentum1Atr: 0.42,
+      m5Momentum3Atr: -0.05,
+      alignment: { m5: -0.05, m15: -0.08, h1: -0.18, h4: -0.22 },
+      higherTimeframeAgreement: -0.13,
+      closeLocation: 0.9,
+      lowerWickRatio: 0.55,
+      upperWickRatio: 0.05,
+    });
+    const [buy, sell] = pair(source);
+    const result = classifyM1TacticalRoute(buy, sell, source, M1_TACTICAL_POLICY_V1);
+
+    expect(result.route).toBe('M1_CONFIRMED_REVERSAL');
+    expect(result.eligible).toBe(true);
+  });
+
+  it('does not call one bullish M1 candle a reversal when multi-bar impulse is absent', () => {
     const source = snapshot({
       failedBreakoutDown: true,
       emaSeparationAtr: -0.08,
@@ -183,6 +270,9 @@ describe('classifyM1TacticalRoute', () => {
       momentum1Atr: 0,
       momentum3Atr: 0,
       momentum5Atr: 0,
+      m5BodyPressure3: 0,
+      m5Momentum1Atr: 0,
+      m5Momentum3Atr: 0,
       breakoutUpAtr: 0,
       breakoutDownAtr: 0,
       efficiency5: 0,

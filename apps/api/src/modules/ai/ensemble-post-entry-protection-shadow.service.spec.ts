@@ -122,7 +122,7 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
 
     expect(aiEngineClient.scorePlanBV85PostEntryBrokerCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
-        brokerConnectionId: '00000000-0000-0000-0000-000000000077',
+        brokerConnectionId: '00000000-0000-0000-0000-000000000088',
         instrument: 'EURUSD',
         direction: 'BUY',
         checkpointMinutes: 5,

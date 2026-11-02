@@ -76,7 +76,148 @@ describe('M1 tactical decision migration contract', () => {
   });
 });
 
+describe('M1 M5 early-transition handoff evidence', () => {
+  it('loads the latest durable M5 early-transition decision across the research source connection', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        instrument: 'USDCHF',
+        direction: 'BUY',
+        market_bar_time: '2026-10-29T17:05:00.000Z',
+        evaluated_at: '2026-10-29T17:09:00.000Z',
+        strategy_route: 'EARLY_TRANSITION',
+        paper_admitted: true,
+        paper_execution_eligible: true,
+        event_risk: 'CLEAR',
+        drift_state: 'NORMAL',
+        net_expected_r: '0.252',
+        ensemble_score: '0.61',
+        consensus_passed: 7,
+        consensus_required: 6,
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    await expect(
+      service.loadLatestM5EarlyTransitionEvidence({
+        userId: input().userId,
+        instrument: 'usdchf',
+        direction: 'BUY',
+        asOf: new Date('2026-10-29T17:10:00.000Z'),
+      }),
+    ).resolves.toEqual({
+      instrument: 'USDCHF',
+      direction: 'BUY',
+      marketBarTime: new Date('2026-10-29T17:05:00.000Z'),
+      evaluatedAt: new Date('2026-10-29T17:09:00.000Z'),
+      strategyRoute: 'EARLY_TRANSITION',
+      paperAdmitted: true,
+      paperExecutionEligible: true,
+      eventRisk: 'CLEAR',
+      driftState: 'NORMAL',
+      netExpectedR: 0.252,
+      ensembleScore: 0.61,
+      consensusPassed: 7,
+      consensusRequired: 6,
+    });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(String(sql)).toContain('FROM trading.ensemble_shadow_decisions');
+    expect(String(sql)).toContain('user_id = $1');
+    expect(String(sql)).not.toContain('broker_connection_id =');
+    expect(String(sql)).toContain('strategyRoute');
+    expect(params).toEqual([input().userId, 'USDCHF', 'BUY', '2026-10-29T17:10:00.000Z']);
+  });
+
+  it('returns null when no durable M5 early-transition decision exists', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    await expect(
+      service.loadLatestM5EarlyTransitionEvidence({
+        userId: input().userId,
+        instrument: 'USDCHF',
+        direction: 'BUY',
+        asOf: new Date('2026-10-29T17:10:00.000Z'),
+      }),
+    ).resolves.toBeNull();
+  });
+});
+
 describe('M1TacticalEvidenceService', () => {
+  it('loads the latest user-scoped M1 decision state for the trading cockpit', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        route: 'M1_TREND_CONTINUATION',
+        bar_time: '2026-10-27T20:29:00.000Z',
+        candidate: { confidence: 0.738 },
+        governance: {
+          netExpectedR: 0.2794,
+          primaryEngineCode: 'irexpro-multimodel-ensemble-v1',
+          m1TacticalRole: 'TIMING_SPECIALIST',
+          multimodelEnsemble: {
+            ensembleScore: 0.6979,
+            strategyRoute: 'EARLY_TRANSITION',
+            paperAdmitted: true,
+          },
+          multimodelGovernance: {
+            netExpectedR: 0.318,
+            paperExecutionEligible: true,
+          },
+          multimodelTrainedExpert: {
+            state: 'CONFIRM',
+            direction: 'SELL',
+            ensembleConfidence: 0.79,
+            longVotes: 0,
+            shortVotes: 3,
+          },
+          multimodelAuthority: {
+            executable: true,
+            authorityPath: 'HIGH_CONVICTION_RESCUE',
+            rescueVolumeCap: 0.2,
+          },
+        },
+        blockers: ['DRIFT_OUT_OF_DISTRIBUTION', 'M1_PHASE_ROUTE_SHADOW'],
+        execution_authority: 'NONE',
+        outcome_state: null,
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    await expect(service.loadLatestDecisionStateForUser(input().userId)).resolves.toEqual({
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      route: 'M1_TREND_CONTINUATION',
+      barTime: '2026-10-27T20:29:00.000Z',
+      confidence: 0.738,
+      netExpectedR: 0.2794,
+      executionAuthority: 'NONE',
+      blockers: ['DRIFT_OUT_OF_DISTRIBUTION', 'M1_PHASE_ROUTE_SHADOW'],
+      outcomeState: null,
+      primaryEngineCode: 'irexpro-multimodel-ensemble-v1',
+      primaryConfidence: 0.6979,
+      primaryNetExpectedR: 0.318,
+      planBRoute: 'EARLY_TRANSITION',
+      planBPaperAdmitted: true,
+      multimodelExecutable: true,
+      multimodelAuthorityPath: 'HIGH_CONVICTION_RESCUE',
+      multimodelRescueVolumeCap: 0.2,
+      trainedExpertState: 'CONFIRM',
+      trainedExpertDirection: 'SELL',
+      trainedExpertConfidence: 0.79,
+      trainedExpertLongVotes: 0,
+      trainedExpertShortVotes: 3,
+      m1TacticalRole: 'TIMING_SPECIALIST',
+      m1TimingRoute: 'M1_TREND_CONTINUATION',
+    });
+    const [sql, params] = query.mock.calls[0]!;
+    expect(String(sql)).toContain('WHERE user_id = $1');
+    expect(String(sql).replace(/\s+/g, ' ')).toContain('ORDER BY bar_time DESC');
+    expect(String(sql)).toContain("execution_authority <> 'NONE'");
+    expect(params).toEqual([input().userId]);
+  });
+
   it('records an immutable decision identity using parameterized SQL and no semantic overwrite on conflict', async () => {
     const row = {
       id: '33333333-3333-4333-8333-333333333333',
@@ -126,6 +267,9 @@ describe('M1TacticalEvidenceService', () => {
         lot_size: '0.10',
         fill_price: '1.1000',
         stop_loss: '1.0990',
+        risk_at_stop_account: '9.25',
+        max_favorable_pnl: '8.00',
+        profit_giveback: '11.50',
         closed_at: '2026-10-18T12:20:00.000Z',
       },
     ]);
@@ -146,7 +290,9 @@ describe('M1TacticalEvidenceService', () => {
     expect(result).toEqual([
       expect.objectContaining({
         realisedPnl: 3.5,
-        riskAtStop: expect.closeTo(10, 8),
+        riskAtStop: 9.25,
+        maxFavorablePnl: 8,
+        profitGiveback: 11.5,
         policyVersion: 'm1-tactical-v1',
       }),
     ]);
@@ -157,6 +303,9 @@ describe('M1TacticalEvidenceService', () => {
     expect(normalized).toContain('d.route = $3');
     expect(normalized).toContain('d.instrument = $4');
     expect(normalized).toContain('d.direction = $5');
+    expect(normalized).toContain('COALESCE(');
+    expect(normalized).toContain('t.max_favorable_pnl');
+    expect(normalized).toContain('reconstructed_path_v1');
     expect(normalized).toContain("t.status = 'CLOSED'");
     expect(normalized).toContain('t.realised_pnl <> 0');
     expect(normalized).toContain("t.closed_at > ($7::timestamptz - interval '7 days')");
@@ -207,7 +356,9 @@ describe('M1TacticalEvidenceService', () => {
     expect(normalized).toContain('t.broker_connection_id = $2');
     expect(normalized).toContain('t.instrument = $3');
     expect(normalized).toContain('t.direction = $4');
-    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-m1-tactical'");
+    expect(normalized).toContain(
+      "ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')",
+    );
     expect(normalized).toContain("ti.timeframe = 'M1'");
     expect(normalized).toContain("ti.metadata ->> 'external_provider_paper_only' = 'true'");
     expect(normalized).toContain("t.close_reason = 'STOP_LOSS_HIT'");
@@ -246,6 +397,249 @@ describe('M1TacticalEvidenceService', () => {
       latestFastStopClosedAt: null,
       latestFastStopDurationMinutes: null,
     });
+  });
+
+  it('activates an exact Plan-B pair-side-route loss-streak brake after three recent closed losses', async () => {
+    const query = jest.fn().mockResolvedValue([
+      { realised_pnl: '-12.10', closed_at: '2026-10-28T23:17:12.746Z' },
+      { realised_pnl: '-12.35', closed_at: '2026-10-28T13:41:46.604Z' },
+      { realised_pnl: '-8.98', closed_at: '2026-10-28T12:04:30.666Z' },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const evaluatedAt = new Date('2026-10-28T23:23:00.000Z');
+    const result =
+      (await (service as any).loadMultimodelLossStreakBrake?.({
+        userId: input().userId,
+        brokerConnectionId: input().brokerConnectionId,
+        instrument: 'eurusd',
+        direction: 'SELL',
+        strategyRoute: 'CONFIRMED_REVERSAL',
+        evaluatedAt,
+      })) ?? null;
+    expect(result).toMatchObject({
+      artifact: 'm1-multimodel-loss-streak-brake-v1',
+      active: true,
+      reason: 'RECENT_MULTIMODEL_LOSS_STREAK',
+      strategyRoute: 'CONFIRMED_REVERSAL',
+      recentClosedTrades: 3,
+      recentLosses: 3,
+      recentWins: 0,
+      cumulativeRealisedPnl: -33.43,
+      cooldownHours: 12,
+    });
+    const [sql, params] = query.mock.calls[0]!;
+    const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain('t.user_id = $1');
+    expect(normalized).toContain('t.broker_connection_id = $2');
+    expect(normalized).toContain('t.instrument = $3');
+    expect(normalized).toContain('t.direction = $4');
+    expect(normalized).toContain("d.governance -> 'multimodelEnsemble' ->> 'strategyRoute' = $5");
+    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-multimodel-ensemble'");
+    expect(normalized).toContain("ti.timeframe = 'M1'");
+    expect(normalized).toContain("t.status = 'CLOSED'");
+    expect(normalized).toContain("t.closed_at > ($6::timestamptz - interval '14 days')");
+    expect(normalized).toContain('ORDER BY t.closed_at DESC');
+    expect(normalized).toContain('LIMIT 8');
+    expect(params).toEqual([
+      input().userId,
+      input().brokerConnectionId,
+      'EURUSD',
+      'SELL',
+      'CONFIRMED_REVERSAL',
+      evaluatedAt.toISOString(),
+    ]);
+  });
+
+  it('activates the exact pair-side-route brake when recent payoff is negative despite interspersed wins', async () => {
+    const query = jest.fn().mockResolvedValue([
+      { realised_pnl: '-8.00', closed_at: '2026-10-30T08:00:00.000Z' },
+      { realised_pnl: '2.00', closed_at: '2026-10-30T07:00:00.000Z' },
+      { realised_pnl: '-7.00', closed_at: '2026-10-30T06:00:00.000Z' },
+      { realised_pnl: '1.50', closed_at: '2026-10-30T05:00:00.000Z' },
+      { realised_pnl: '-6.00', closed_at: '2026-10-30T04:00:00.000Z' },
+      { realised_pnl: '2.50', closed_at: '2026-10-30T03:00:00.000Z' },
+      { realised_pnl: '-5.00', closed_at: '2026-10-30T02:00:00.000Z' },
+      { realised_pnl: '1.00', closed_at: '2026-10-30T01:00:00.000Z' },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const result = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      strategyRoute: 'TREND_CONTINUATION',
+      evaluatedAt: new Date('2026-10-30T08:05:00.000Z'),
+    });
+
+    expect(result).toMatchObject({
+      active: true,
+      reason: 'RECENT_NEGATIVE_PAYOFF',
+      recentClosedTrades: 8,
+      recentLosses: 4,
+      recentWins: 4,
+      cumulativeRealisedPnl: -19,
+      negativePayoff: true,
+    });
+    expect(result.profitFactor).toBeCloseTo(7 / 26, 8);
+    expect(String(query.mock.calls[0]![0]).replace(/\s+/g, ' ')).toContain('LIMIT 8');
+  });
+
+  it('keeps a severe exact sleeve quarantined across the FX weekend', async () => {
+    const query = jest.fn().mockResolvedValue([
+      { realised_pnl: '-5.57', closed_at: '2026-10-30T12:14:51.962Z' },
+      { realised_pnl: '-6.68', closed_at: '2026-10-30T11:30:00.000Z' },
+      { realised_pnl: '-6.68', closed_at: '2026-10-30T10:45:00.000Z' },
+      { realised_pnl: '5.04', closed_at: '2026-10-30T10:00:00.000Z' },
+      { realised_pnl: '-7.52', closed_at: '2026-10-30T09:15:00.000Z' },
+      { realised_pnl: '6.81', closed_at: '2026-10-30T08:30:00.000Z' },
+      { realised_pnl: '2.70', closed_at: '2026-10-30T07:45:00.000Z' },
+      { realised_pnl: '-9.04', closed_at: '2026-10-30T07:00:00.000Z' },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const result = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'USDJPY',
+      direction: 'BUY',
+      strategyRoute: 'EARLY_TRANSITION',
+      evaluatedAt: new Date('2026-11-01T22:00:00.000Z'),
+    });
+
+    expect(result).toMatchObject({
+      active: true,
+      reason: 'PERSISTENT_NEGATIVE_PAYOFF',
+      recentClosedTrades: 0,
+      payoffClosedTrades: 8,
+      persistentNegativePayoff: true,
+    });
+    expect(result.profitFactor).toBeCloseTo(14.55 / 35.49, 8);
+  });
+
+  it('does not persistently quarantine a marginal sleeve above the severe payoff threshold', async () => {
+    const query = jest.fn().mockResolvedValue([
+      { realised_pnl: '-11.19', closed_at: '2026-10-30T13:53:03.021Z' },
+      { realised_pnl: '-10.50', closed_at: '2026-10-30T13:00:00.000Z' },
+      { realised_pnl: '-10.72', closed_at: '2026-10-30T12:00:00.000Z' },
+      { realised_pnl: '10.07', closed_at: '2026-10-30T11:00:00.000Z' },
+      { realised_pnl: '6.19', closed_at: '2026-10-30T10:00:00.000Z' },
+      { realised_pnl: '1.25', closed_at: '2026-10-30T09:00:00.000Z' },
+      { realised_pnl: '3.75', closed_at: '2026-10-30T08:00:00.000Z' },
+      { realised_pnl: '2.32', closed_at: '2026-10-30T07:00:00.000Z' },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const result = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'AUDUSD',
+      direction: 'BUY',
+      strategyRoute: 'EARLY_TRANSITION',
+      evaluatedAt: new Date('2026-11-01T22:00:00.000Z'),
+    });
+
+    expect(result).toMatchObject({
+      active: false,
+      reason: 'CLEAR',
+      recentClosedTrades: 0,
+      payoffClosedTrades: 8,
+      persistentNegativePayoff: false,
+    });
+    expect(result.profitFactor).toBeGreaterThanOrEqual(0.65);
+  });
+
+  it('requires eight fresh-enough observations for persistent payoff quarantine', async () => {
+    const seven = [
+      { realised_pnl: '-8.00', closed_at: '2026-10-30T12:00:00.000Z' },
+      { realised_pnl: '2.00', closed_at: '2026-10-30T11:00:00.000Z' },
+      { realised_pnl: '-7.00', closed_at: '2026-10-30T10:00:00.000Z' },
+      { realised_pnl: '1.00', closed_at: '2026-10-30T09:00:00.000Z' },
+      { realised_pnl: '-6.00', closed_at: '2026-10-30T08:00:00.000Z' },
+      { realised_pnl: '1.00', closed_at: '2026-10-30T07:00:00.000Z' },
+      { realised_pnl: '-5.00', closed_at: '2026-10-30T06:00:00.000Z' },
+    ];
+    const query = jest.fn().mockResolvedValue(seven);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const sparse = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'USDJPY',
+      direction: 'BUY',
+      strategyRoute: 'EARLY_TRANSITION',
+      evaluatedAt: new Date('2026-11-01T22:00:00.000Z'),
+    });
+    expect(sparse).toMatchObject({ active: false, persistentNegativePayoff: false });
+
+    query.mockResolvedValue([
+      ...seven,
+      { realised_pnl: '-9.00', closed_at: '2026-10-28T17:59:59.000Z' },
+    ]);
+    const stale = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'USDJPY',
+      direction: 'BUY',
+      strategyRoute: 'EARLY_TRANSITION',
+      evaluatedAt: new Date('2026-11-03T18:00:00.000Z'),
+    });
+    expect(stale).toMatchObject({ active: false, persistentNegativePayoff: false });
+  });
+
+  it('keeps a mixed but profitable exact sleeve clear', async () => {
+    const query = jest.fn().mockResolvedValue([
+      { realised_pnl: '6.00', closed_at: '2026-10-30T08:00:00.000Z' },
+      { realised_pnl: '-3.00', closed_at: '2026-10-30T07:00:00.000Z' },
+      { realised_pnl: '5.00', closed_at: '2026-10-30T06:00:00.000Z' },
+      { realised_pnl: '-2.00', closed_at: '2026-10-30T05:00:00.000Z' },
+      { realised_pnl: '4.00', closed_at: '2026-10-30T04:00:00.000Z' },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    await expect(
+      service.loadMultimodelLossStreakBrake({
+        userId: input().userId,
+        brokerConnectionId: input().brokerConnectionId,
+        instrument: 'AUDUSD',
+        direction: 'BUY',
+        strategyRoute: 'TREND_CONTINUATION',
+        evaluatedAt: new Date('2026-10-30T08:05:00.000Z'),
+      }),
+    ).resolves.toMatchObject({ active: false, reason: 'CLEAR', negativePayoff: false });
+  });
+
+  it('requires at least five mixed outcomes and expires negative-payoff suspension after cooldown', async () => {
+    const rows = [
+      { realised_pnl: '-8.00', closed_at: '2026-10-29T18:00:00.000Z' },
+      { realised_pnl: '1.00', closed_at: '2026-10-29T17:00:00.000Z' },
+      { realised_pnl: '-7.00', closed_at: '2026-10-29T16:00:00.000Z' },
+      { realised_pnl: '1.00', closed_at: '2026-10-29T15:00:00.000Z' },
+      { realised_pnl: '-6.00', closed_at: '2026-10-29T14:00:00.000Z' },
+    ];
+    const query = jest.fn().mockResolvedValue(rows);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+
+    const expired = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      strategyRoute: 'TREND_CONTINUATION',
+      evaluatedAt: new Date('2026-10-30T07:00:01.000Z'),
+    });
+    expect(expired).toMatchObject({ active: false, reason: 'CLEAR', negativePayoff: true });
+
+    query.mockResolvedValue(rows.slice(0, 4));
+    const sparse = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      strategyRoute: 'TREND_CONTINUATION',
+      evaluatedAt: new Date('2026-10-29T18:05:00.000Z'),
+    });
+    expect(sparse).toMatchObject({ active: false, reason: 'CLEAR', negativePayoff: false });
   });
 
   it('marks signal/trade-intent linkage without changing decision identity', async () => {
@@ -375,7 +769,9 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(normalized).toContain('t.broker_connection_id = $2');
     expect(normalized).toContain('t.instrument = $3');
     expect(normalized).toContain("t.status = 'OPEN'");
-    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-m1-tactical'");
+    expect(normalized).toContain(
+      "ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')",
+    );
     expect(normalized).toContain("ti.timeframe = 'M1'");
     expect(normalized).toContain("ti.metadata ->> 'external_provider_paper_only' = 'true'");
     expect(params).toEqual([input().userId, input().brokerConnectionId, 'EURUSD']);
@@ -406,8 +802,13 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
         brokerConnectionId: input().brokerConnectionId,
       }),
     ).resolves.toEqual([
-      { instrument: 'EURUSD', direction: 'SELL', riskAtStop: expect.closeTo(5, 6) },
-      { instrument: 'USDJPY', direction: 'BUY', riskAtStop: expect.closeTo(3.184713, 5) },
+      { instrument: 'EURUSD', direction: 'SELL', lotSize: 0.1, riskAtStop: expect.closeTo(5, 6) },
+      {
+        instrument: 'USDJPY',
+        direction: 'BUY',
+        lotSize: 0.1,
+        riskAtStop: expect.closeTo(3.184713, 5),
+      },
     ]);
     const [sql, params] = query.mock.calls[0]!;
     const normalized = String(sql).replace(/\s+/g, ' ');
@@ -436,6 +837,9 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(exists).toBe(true);
     const [sql, params] = query.mock.calls[0]!;
     const normalized = String(sql).replace(/\s+/g, ' ');
+    expect(normalized).toContain(
+      "ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')",
+    );
     expect(normalized).toContain("ti.status = 'CREATED'");
     expect(normalized).toContain("ti.status = 'EXECUTED' AND t.status = 'OPEN'");
     expect(params).toEqual([input().userId, input().brokerConnectionId, 'EURUSD', 'BUY']);
@@ -459,7 +863,9 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(normalized).toContain('ti.broker_connection_id = $2');
     expect(normalized).toContain('ti.instrument = $3');
     expect(normalized).toContain('ti.direction = $4');
-    expect(normalized).toContain("ti.strategy_code = 'external-irexpro-m1-tactical'");
+    expect(normalized).toContain(
+      "ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')",
+    );
     expect(normalized).toContain("ti.timeframe = 'M1'");
     expect(normalized).toContain("ti.status = 'CREATED'");
     expect(normalized).toContain("ti.status = 'EXECUTED' AND t.status = 'OPEN'");
@@ -498,7 +904,7 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     });
   });
 
-  it('loads mature drift-only shadow decisions while excluding substantive non-drift blockers', async () => {
+  it('loads mature drift counterfactuals with reliability-only blockers while excluding substantive hard blockers', async () => {
     const query = jest.fn().mockResolvedValue([
       {
         id: 'decision-drift-1',
@@ -531,9 +937,12 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     const normalized = String(sql).replace(/\s+/g, ' ');
     expect(normalized).toContain("route <> 'ABSTAIN'");
     expect(normalized).toContain("execution_authority = 'NONE'");
-    expect(normalized).toContain('jsonb_array_length(blockers) <= 2');
+    expect(normalized).toContain('jsonb_array_elements_text(blockers)');
     expect(normalized).toContain(
-      'blockers <@ \'["DRIFT_OUT_OF_DISTRIBUTION","DRIFT_STRESSED","M1_PHASE_SHADOW"]\'::jsonb',
+      "blocker.value !~ '^M1_(SHADOW_|MEANINGFUL_SCOUT_|TIERED_SCOUT_)?RELIABILITY_'",
+    );
+    expect(normalized).toMatch(
+      /blocker\.value NOT IN\s*\(\s*'DRIFT_OUT_OF_DISTRIBUTION', 'DRIFT_STRESSED', 'M1_PHASE_SHADOW', 'M1_PHASE_ROUTE_SHADOW'\s*\)/,
     );
     expect(normalized).toContain(
       'blockers @> \'["DRIFT_OUT_OF_DISTRIBUTION"]\'::jsonb OR blockers @> \'["DRIFT_STRESSED"]\'::jsonb',

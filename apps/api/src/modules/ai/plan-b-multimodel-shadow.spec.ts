@@ -3,6 +3,9 @@ import {
   PLAN_B_ENSEMBLE_ARTIFACT,
   PLAN_B_PRE_COMPACT_POLICY_VERSION,
   PLAN_B_PRE_CALIBRATION_POLICY_VERSION,
+  PLAN_B_PRE_M5_TIMING_POLICY_VERSION,
+  PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS,
+  PLAN_B_RESEARCH_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_REVERSAL_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_ENSEMBLE_MODE,
   scorePlanBMultimodelShadow,
@@ -15,6 +18,23 @@ describe('Plan B multimodel prospective shadow', () => {
     );
   });
 
+  it('starts a fresh prediction-calibration epoch after the M5 timing authority change', () => {
+    expect([...PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS]).toEqual([
+      PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+    ]);
+    expect(PLAN_B_ACTIVE_MODEL_POLICY_VERSION).toBe(
+      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1',
+    );
+  });
+
+  it('keeps realised research reliability across the timing bump while calibration resets', () => {
+    expect([...PLAN_B_RESEARCH_RELIABILITY_EVIDENCE_POLICY_VERSIONS]).toEqual([
+      PLAN_B_PRE_CALIBRATION_POLICY_VERSION,
+      PLAN_B_PRE_M5_TIMING_POLICY_VERSION,
+      PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+    ]);
+  });
+
   it('keeps reversal reliability evidence on momentum-compatible policy versions only', () => {
     expect([...PLAN_B_REVERSAL_RELIABILITY_EVIDENCE_POLICY_VERSIONS]).toEqual([
       PLAN_B_PRE_CALIBRATION_POLICY_VERSION,
@@ -24,7 +44,7 @@ describe('Plan B multimodel prospective shadow', () => {
 
   it('keeps the persisted active policy version within the decision-store varchar(160) contract', () => {
     expect(PLAN_B_ACTIVE_MODEL_POLICY_VERSION).toBe(
-      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal1',
+      'planb-v4-bi2-et2-nm2-hp3-dmw2-ts1-trr1-psrr1-cal2-m5tim1',
     );
     expect(PLAN_B_ACTIVE_MODEL_POLICY_VERSION.length).toBeLessThanOrEqual(160);
   });

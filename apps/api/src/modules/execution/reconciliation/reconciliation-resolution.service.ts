@@ -14,6 +14,7 @@ import { DomainEventType } from '../../events/enums/domain-event-type.enum';
 import {
   BrokerClosedTrade,
   BrokerOrderState,
+  BrokerPosition,
 } from '../../broker/interfaces/broker-adapter.interface';
 import { compareDecimal } from './reconciliation-comparator';
 
@@ -79,8 +80,50 @@ export class ReconciliationResolutionService {
     const commission = closedTrade?.commission ?? null;
     const swap = closedTrade?.swap ?? null;
     const closedAt = closedTrade?.closedAt ?? new Date();
-    const closeReason = this.mapProviderCloseReason(closedTrade?.closeReason);
-    const pathDiagnostics = closedTrade?.pathDiagnostics ?? null;
+    const providerCloseReason = closedTrade?.closeReason;
+    const providerReasonSpecific =
+      providerCloseReason === 'TP' ||
+      providerCloseReason === 'SL' ||
+      providerCloseReason === 'PROFIT_LOCK' ||
+      providerCloseReason === 'TIME_TO_WORK';
+    const mappedProviderCloseReason = this.mapProviderCloseReason(providerCloseReason);
+    const appCloseIntentFallback =
+      !providerReasonSpecific &&
+      trade.status === TradeStatus.RECONCILIATION_PENDING &&
+      trade.closeReason
+        ? trade.closeReason
+        : null;
+    const closeReason = appCloseIntentFallback ?? mappedProviderCloseReason;
+    const closeReasonSource = providerReasonSpecific
+      ? 'PROVIDER_CLOSE_REASON'
+      : appCloseIntentFallback
+        ? 'APP_CLOSE_INTENT_FALLBACK'
+        : 'PROVIDER_GENERIC';
+
+    const providerPathDiagnostics = closedTrade?.pathDiagnostics ?? null;
+    const durablePathDiagnostics =
+      !providerPathDiagnostics &&
+      (trade.pathObservationCount ?? 0) > 0 &&
+      trade.maxFavorablePnl != null &&
+      trade.maxAdversePnl != null &&
+      trade.profitGiveback != null
+        ? {
+            maxFavorablePnl: trade.maxFavorablePnl,
+            maxAdversePnl: trade.maxAdversePnl,
+            profitGiveback: trade.profitGiveback,
+            observationCount: trade.pathObservationCount ?? 0,
+            sameBarProtectionAmbiguityCount: trade.sameBarProtectionAmbiguityCount ?? 0,
+            lastSameBarProtectionAmbiguityAt: trade.lastSameBarProtectionAmbiguityAt ?? null,
+            peakObservedAt: trade.pathPeakObservedAt ?? null,
+            lastObservedAt: trade.pathLastObservedAt ?? null,
+          }
+        : null;
+    const pathDiagnostics = providerPathDiagnostics ?? durablePathDiagnostics;
+    const pathDiagnosticsSource = providerPathDiagnostics
+      ? 'PROVIDER'
+      : durablePathDiagnostics
+        ? 'DURABLE_TRADE_TELEMETRY'
+        : null;
 
     const result = await this.tradeRepo.update({ id: trade.id, status: trade.status }, {
       status: TradeStatus.CLOSED,
@@ -119,12 +162,14 @@ export class ReconciliationResolutionService {
       metadata: {
         closeReason,
         providerCloseReason: closedTrade?.closeReason ?? null,
+        closeReasonSource,
         exitPrice,
         realisedPnl,
         commission,
         swap,
         providerClosedAt: closedAt.toISOString(),
         externalOrderId: trade.externalOrderId,
+        pathDiagnosticsSource,
         pathDiagnostics: pathDiagnostics
           ? {
               maxFavorablePnl: pathDiagnostics.maxFavorablePnl,
@@ -176,16 +221,34 @@ export class ReconciliationResolutionService {
    * RECONCILIATION_PENDING trade whose position the provider still holds —
    * recover to OPEN. Guarded; returns true when this call transitioned.
    */
-  async recoverTradeToOpen(trade: Trade): Promise<boolean> {
+  async recoverTradeToOpen(trade: Trade, providerPosition?: BrokerPosition): Promise<boolean> {
     // Round 7.1 (P0-5): recovery is legal from BOTH uncertain holding states
     // (RECONCILIATION_PENDING and the WORKING-outcome PENDING) — the state
     // machine is the single authority on legality, and the guarded CAS pins
     // the observed from-state (a concurrently-moved trade is never touched).
     TradeStateMachine.assertTransition(trade.status, TradeStatus.OPEN);
 
-    const result = await this.tradeRepo.update({ id: trade.id, status: trade.status }, {
+    const patch: Partial<Trade> = {
       status: TradeStatus.OPEN,
-    } as never);
+      ...(trade.status === TradeStatus.RECONCILIATION_PENDING
+        ? {
+            // The provider still holds the position, so any provisional
+            // app-close attribution from an ambiguous close attempt is stale.
+            closeReason: null,
+            brokerRejectionReason: null,
+          }
+        : {}),
+    };
+    if (providerPosition) {
+      patch.externalPositionId = providerPosition.externalOrderId;
+      patch.fillPrice = providerPosition.openPrice;
+      patch.openedAt = providerPosition.openedAt;
+    }
+
+    const result = await this.tradeRepo.update(
+      { id: trade.id, status: trade.status },
+      patch as never,
+    );
 
     if (!result.affected) {
       this.logger.log(`Trade ${trade.id} no longer ${trade.status} — recovery skipped`);

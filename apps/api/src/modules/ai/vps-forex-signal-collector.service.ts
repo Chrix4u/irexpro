@@ -14,6 +14,7 @@ import {
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
 import { PAPER_MARKET_SPECS } from '../broker/services/paper-market-spec';
+import { ProviderQuoteCandleStoreService } from '../market-data/services/provider-quote-candle-store.service';
 import {
   PLAN_B_SHADOW_ADMISSION_THRESHOLD,
   scorePlanBShadowMeta,
@@ -22,6 +23,7 @@ import {
 import {
   PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
   PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS,
+  PLAN_B_RESEARCH_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_REVERSAL_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_ENSEMBLE_ARTIFACT,
@@ -205,7 +207,16 @@ import {
 const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 
-export function paperOpportunityScoutModelVersion(engineCode: string): string {
+export function paperOpportunityScoutModelVersion(
+  engineCode: string,
+  reason?: PaperOpportunityScoutDecision['reason'] | null,
+): string {
+  if (
+    reason === 'CONFIRMED_REVERSAL_SCOUT' ||
+    reason === 'CONFIRMED_REVERSAL_MICRO_SCOUT'
+  ) {
+    return `external-provider/${engineCode}/paper-opportunity-scout-v11-confirmed-reversal-adaptive-0.20-0.10-tier`;
+  }
   return `external-provider/${engineCode}/paper-opportunity-scout-v10-local-edge-shadow-quarantine-0.10-tier`;
 }
 
@@ -352,6 +363,24 @@ export function dynamicPaperLotUpperBound(
 const MIN_STOP_LOSS_PIPS = 5;
 const STOP_FLOOR_BUFFER_PIPS = 0.1;
 const BAR_MS = 5 * 60_000;
+const CTRADER_BROKER_NATIVE_SOURCE_IDS = new Set([
+  'ctrader',
+  'pepperstone-ctrader',
+  'icmarkets-ctrader',
+]);
+const BROKER_NATIVE_SOURCE_IDS = new Set([
+  'metatrader4',
+  'metatrader5',
+  ...CTRADER_BROKER_NATIVE_SOURCE_IDS,
+]);
+
+function isBrokerNativeSource(brokerId: string): boolean {
+  return BROKER_NATIVE_SOURCE_IDS.has(brokerId.trim().toLowerCase());
+}
+
+function isCtraderBrokerNativeSource(brokerId: string): boolean {
+  return CTRADER_BROKER_NATIVE_SOURCE_IDS.has(brokerId.trim().toLowerCase());
+}
 const COLLECTION_CADENCE_MINUTES = 5;
 const PAPER_PRE_INTENT_RETRY_SAFE_CODE = 'PAPER_PRE_INTENT_RETRY_SAFE';
 const BROKER_FALLBACK_SOURCE_UNAVAILABLE_CODE = 'BROKER_FALLBACK_SOURCE_UNAVAILABLE';
@@ -1109,6 +1138,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     @Optional() private readonly allocationService?: AllocationService,
     @Optional()
     private readonly adaptivePredictionCalibration?: AdaptivePredictionCalibrationService,
+    @Optional() private readonly providerQuoteCandleStore?: ProviderQuoteCandleStoreService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -1649,6 +1679,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       const initialAdaptivePortfolio = paperSession
         ? await this.loadAdaptiveOpenRiskPositions(userId, connectionId)
         : { available: false, positions: [] as AdaptiveCurrencyRiskPosition[] };
+      // Plan B shadow portfolio truth is independent from the PAPER evidence
+      // connection. Prefer the configured broker-native source (cTrader/MT)
+      // and reuse one snapshot across the whole six-pair scan. An actually
+      // active PAPER session remains a fallback when no broker-native source
+      // is configured or that source is temporarily unavailable.
+      const planBPortfolioSnapshot = await this.loadPlanBPortfolioSnapshot(
+        userId,
+        paperSession?.brokerConnectionId ?? null,
+      );
       const adaptiveScanWinners: Array<{
         chosen: ExecutableCounterfactual;
         selection: CounterfactualExecutionSelection;
@@ -1716,28 +1755,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             shortHorizonMomentumAtr: rawMarketMomentumAtr,
             scanTime: new Date(best.barTime.getTime() + BAR_MS),
           });
-          const portfolioPositions: PlanBPortfolioPosition[] = [];
-          let portfolioSnapshotAvailable = false;
-          try {
-            const getPositions = this.brokerService.getOpenPositionsForConnection?.bind(
-              this.brokerService,
-            );
-            if (getPositions) {
-              const snapshot = await getPositions(connectionId, userId);
-              portfolioPositions.push(
-                ...snapshot.positions.map((position) => ({
-                  instrument: position.instrument,
-                  direction: position.direction,
-                  lotSize: position.lotSize,
-                })),
-              );
-              portfolioSnapshotAvailable = true;
-            }
-          } catch (error) {
-            this.logger.warn(
-              `Plan B portfolio shadow snapshot unavailable: ${(error as Error).message}`,
-            );
-          }
+          const portfolioPositions = planBPortfolioSnapshot.positions;
+          const portfolioSnapshotAvailable = planBPortfolioSnapshot.available;
           const planBEnsemble = scorePlanBMultimodelShadow(
             {
               instrument: best.instrument,
@@ -3076,7 +3095,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         }
 
         const scoutModelVersion = paperOpportunityScout.eligible
-          ? paperOpportunityScoutModelVersion(ACTIVE_ENGINE_CODE)
+          ? paperOpportunityScoutModelVersion(ACTIVE_ENGINE_CODE, paperOpportunityScout.reason)
           : null;
         let paperScoutRealisedPayoff: PaperScoutRealisedPayoffDecision | null = null;
         if (scoutModelVersion) {
@@ -3552,6 +3571,54 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     } finally {
       this.running = false;
     }
+  }
+
+  private async loadPlanBPortfolioSnapshot(
+    userId: string,
+    activePaperConnectionId: string | null,
+  ): Promise<{
+    available: boolean;
+    connectionId: string | null;
+    positions: PlanBPortfolioPosition[];
+  }> {
+    const getPositions = this.brokerService.getOpenPositionsForConnection?.bind(this.brokerService);
+    if (!getPositions) {
+      return { available: false, connectionId: null, positions: [] };
+    }
+
+    const brokerNativeConnectionId = this.brokerExpertEnabled()
+      ? this.brokerExpertSourceConnectionId()
+      : '';
+    const connectionIds = [brokerNativeConnectionId, activePaperConnectionId ?? '']
+      .map((value) => value.trim())
+      .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index);
+    if (connectionIds.length === 0) {
+      return { available: false, connectionId: null, positions: [] };
+    }
+
+    let lastError: unknown = null;
+    for (const connectionId of connectionIds) {
+      try {
+        const snapshot = await getPositions(connectionId, userId);
+        return {
+          available: true,
+          connectionId,
+          positions: snapshot.positions.map((position) => ({
+            instrument: position.instrument,
+            direction: position.direction,
+            lotSize: position.lotSize,
+          })),
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    this.logger.warn(
+      `Plan B portfolio shadow snapshot unavailable source=${connectionIds.join('->')}: ` +
+        `${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    );
+    return { available: false, connectionId: null, positions: [] };
   }
 
   private async loadAdaptiveOpenRiskPositions(
@@ -5798,7 +5865,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         instrument.trim().toUpperCase(),
         direction,
         [...PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS],
-        [...PLAN_B_PREDICTION_CALIBRATION_EVIDENCE_POLICY_VERSIONS],
+        [...PLAN_B_RESEARCH_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
         ACTIVE_MODEL_POLICY_VERSION,
       ],
     )) as Array<{
@@ -6142,7 +6209,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const rows = (await this.dataSource.query(
       `
         WITH positive AS (
-          SELECT spread_close, last_sample_at
+          SELECT spread_close, sample_count, last_sample_at
           FROM market_data.provider_quote_candles
           WHERE connection_id = $1
             AND instrument = $2
@@ -6161,7 +6228,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           LIMIT 1
         )
         SELECT
-          COUNT(*)::int AS sample_count,
+          COALESCE(SUM(positive.sample_count), 0)::int AS sample_count,
           GREATEST(
             percentile_cont(0.90) WITHIN GROUP (ORDER BY positive.spread_close::double precision),
             COALESCE((SELECT spread_close::double precision FROM latest), 0)
@@ -6648,8 +6715,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
     try {
       const source = await this.brokerService.findConnectionById(sourceConnectionId, userId);
-      if (!['metatrader4', 'metatrader5'].includes(source.brokerId)) {
-        return this.highConvictionUnavailable('BROKER_SOURCE_NOT_METATRADER');
+      if (!isBrokerNativeSource(source.brokerId)) {
+        return this.highConvictionUnavailable('BROKER_SOURCE_NOT_BROKER_NATIVE');
       }
       const response = await this.aiEngineClient.scorePlanBV4ChallengerBroker({
         userId,
@@ -6764,7 +6831,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         this.providerCooldownUntil = reset;
         this.providerCooldownReason = 'DAILY_CREDIT_LIMIT';
         this.logger.warn(
-          `Twelve Data daily credit limit reached; switching scanner to broker-native MetaTrader fallback until ${reset.toISOString()}`,
+          `Twelve Data daily credit limit reached; switching scanner to configured broker-native fallback until ${reset.toISOString()}`,
         );
         return this.fetchBrokerNativeFallbackSeries('TWELVE_DATA_DAILY_CREDIT_LIMIT');
       }
@@ -6839,17 +6906,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       const rows = await Promise.all(
         batch.map(async (instrument) => {
           try {
-            // The active PAPER adapter is already fed by the six-pair provider
-            // M1 cache. Pull only the recent M1 tail and causally aggregate five
-            // fully closed M1 bars into M5. This preserves the long Twelve Data
-            // history while eliminating the 15-minute rotating-cache blind spot.
-            const rawM1 = await this.brokerService.getOhlcvForConnection(
-              userId,
-              executionConnectionId,
-              instrument,
-              'M1',
-              30,
-            );
+            // The scanner-owned PAPER adapter is already fed by the six-pair
+            // provider M1 cache. Read that cache directly so a deliberately
+            // disconnected database PAPER connection is not sent back through
+            // BrokerService just to recover scanner-owned evidence. Non-scanner
+            // connections retain the broker-backed path.
+            const rawM1 = this.livePaperMarket.isLiveConnection(executionConnectionId)
+              ? this.livePaperMarket.getReadOnlyOHLCV(instrument, 'M1', 30, executionConnectionId)
+              : await this.brokerService.getOhlcvForConnection(
+                  userId,
+                  executionConnectionId,
+                  instrument,
+                  'M1',
+                  30,
+                );
             const m1Candles: LivePaperCandleInput[] = rawM1
               .map((candle) => ({
                 timestamp:
@@ -6932,33 +7002,49 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
 
     const source = await this.brokerService.findConnectionById(sourceConnectionId, userId);
-    if (!['metatrader4', 'metatrader5'].includes(source.brokerId)) {
+    if (!isBrokerNativeSource(source.brokerId)) {
       this.lastMarketDataAuthority = 'NONE';
       throw new Error(
-        `Twelve Data unavailable (${reason}) and configured fallback is not MetaTrader`,
+        `Twelve Data unavailable (${reason}) and configured fallback is not a supported broker-native source`,
       );
     }
     if (source.status !== BrokerConnectionStatus.CONNECTED) {
       this.lastMarketDataAuthority = 'NONE';
       throw Object.assign(
         new Error(
-          `Twelve Data unavailable (${reason}) and MetaTrader fallback source is ${source.status}`,
+          `Twelve Data unavailable (${reason}) and broker-native fallback source is ${source.status}`,
         ),
         { code: BROKER_FALLBACK_SOURCE_UNAVAILABLE_CODE },
       );
     }
 
     const now = Date.now();
+    const cached = await this.fetchPersistedBrokerNativeFallbackSeries(sourceConnectionId, now);
+    if (cached) {
+      this.lastProviderFetchMinute = new Date(now).toISOString().slice(0, 16);
+      this.lastProviderSeries = cached;
+      this.lastMarketDataAuthority = 'METAAPI_BROKER_FALLBACK';
+      this.logger.warn(
+        `Broker-native persisted M5 cache active for 6/6 pairs source=${source.brokerId} reason=${reason}; execution authority remains PAPER_ONLY`,
+      );
+      return cached;
+    }
+
     try {
       const rows: Array<readonly [string, LivePaperCandleInput[]]> = [];
-      // MetaApi enforces a per-account historical-data concurrency ceiling.
-      // Keep two provider slots in reserve for other readers/quote recovery
-      // instead of issuing all six symbols at once.
-      const historyConcurrency = 3;
+      // Broker providers can enforce per-account historical-data concurrency ceilings.
+      // cTrader shares a strict 5 historical requests/second budget across the
+      // M1 context collector and this M5 fallback. Pace this low-priority lane
+      // at one request every 250ms so it leaves capacity for the M1 reader and
+      // avoids synchronized minute-boundary bursts. MetaTrader keeps the proven
+      // three-wide concurrency because it has a different provider budget.
+      const ctraderHistory = isCtraderBrokerNativeSource(source.brokerId);
+      const historyConcurrency = ctraderHistory ? 1 : 3;
+      const historyPaceMs = ctraderHistory ? 250 : 0;
       for (let offset = 0; offset < SYMBOLS.length; offset += historyConcurrency) {
         const batch = await Promise.all(
           SYMBOLS.slice(offset, offset + historyConcurrency).map(async ([instrument]) => {
-            const raw = await this.brokerService.getOhlcvForConnection(
+            const raw = await this.readBrokerHistoryWithRateLimitRetry(
               userId,
               sourceConnectionId,
               instrument,
@@ -6985,27 +7071,30 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
             if (candles.length < 55) {
               throw new Error(
-                `MetaTrader fallback returned only ${candles.length} ${instrument} fully closed M5 bars`,
+                `Broker-native fallback returned only ${candles.length} ${instrument} fully closed M5 bars`,
               );
             }
             const latest = candles[candles.length - 1]!;
             const latestClose = latest.timestamp.getTime() + BAR_MS;
             if (now - latestClose > 20 * 60_000) {
               throw new Error(
-                `MetaTrader fallback ${instrument} latest fully closed M5 bar is stale`,
+                `Broker-native fallback ${instrument} latest fully closed M5 bar is stale`,
               );
             }
             return [instrument, candles] as const;
           }),
         );
         rows.push(...batch);
+        if (historyPaceMs > 0 && offset + historyConcurrency < SYMBOLS.length) {
+          await new Promise<void>((resolve) => setTimeout(resolve, historyPaceMs));
+        }
       }
       const result = new Map<string, LivePaperCandleInput[]>(rows);
       this.lastProviderFetchMinute = new Date(now).toISOString().slice(0, 16);
       this.lastProviderSeries = result;
       this.lastMarketDataAuthority = 'METAAPI_BROKER_FALLBACK';
       this.logger.warn(
-        `Broker-native MetaTrader M5 fallback active for 6/6 pairs reason=${reason}; execution authority remains PAPER_ONLY`,
+        `Broker-native ${source.brokerId} M5 fallback active for 6/6 pairs reason=${reason}; execution authority remains PAPER_ONLY`,
       );
       return result;
     } catch (error) {
@@ -7013,6 +7102,96 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       throw new Error(
         `Twelve Data unavailable (${reason}) and broker-native fallback failed: ${(error as Error).message}`,
       );
+    }
+  }
+
+  private async readBrokerHistoryWithRateLimitRetry(
+    userId: string,
+    connectionId: string,
+    instrument: string,
+    timeframe: string,
+    count: number,
+  ): Promise<Awaited<ReturnType<BrokerService['getOhlcvForConnection']>>> {
+    try {
+      return await this.brokerService.getOhlcvForConnection(
+        userId,
+        connectionId,
+        instrument,
+        timeframe,
+        count,
+      );
+    } catch (error) {
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: unknown }).code ?? '')
+          : '';
+      if (code !== 'RATE_LIMITED') throw error;
+
+      // The shared cTrader client deliberately fails fast at its historical
+      // 5 req/s boundary. This scanner is low-priority background work, so it
+      // may yield for one refill interval and retry once instead of competing
+      // with M1/history readers. The shared limiter itself remains unchanged.
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+      return this.brokerService.getOhlcvForConnection(
+        userId,
+        connectionId,
+        instrument,
+        timeframe,
+        count,
+      );
+    }
+  }
+
+  private async fetchPersistedBrokerNativeFallbackSeries(
+    sourceConnectionId: string,
+    now: number,
+  ): Promise<Map<string, LivePaperCandleInput[]> | null> {
+    if (!this.providerQuoteCandleStore) return null;
+
+    try {
+      const evaluatedAt = new Date(now);
+      const rows = await Promise.all(
+        SYMBOLS.map(async ([instrument]) => {
+          const raw = await this.providerQuoteCandleStore!.getCandles(
+            sourceConnectionId,
+            instrument,
+            'M5',
+            500,
+            evaluatedAt,
+          );
+          const candles = raw
+            .map((candle) => ({
+              timestamp:
+                candle.timestamp instanceof Date
+                  ? new Date(candle.timestamp)
+                  : new Date(candle.timestamp),
+              open: candle.open,
+              high: candle.high,
+              low: candle.low,
+              close: candle.close,
+            }))
+            .filter(
+              (candle) =>
+                Number.isFinite(candle.timestamp.getTime()) &&
+                candle.timestamp.getTime() + BAR_MS <= now,
+            )
+            .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+          if (candles.length < 55) return null;
+          const latest = candles[candles.length - 1]!;
+          const latestClose = latest.timestamp.getTime() + BAR_MS;
+          if (now - latestClose > 20 * 60_000) return null;
+          return [instrument, candles] as const;
+        }),
+      );
+
+      if (rows.some((row) => row === null)) return null;
+      return new Map(rows as Array<readonly [string, LivePaperCandleInput[]]>);
+    } catch (error) {
+      this.logger.warn(
+        `Broker-native persisted M5 cache unavailable; falling back to provider history: ${(error as Error).message}`,
+      );
+      return null;
     }
   }
 

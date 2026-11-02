@@ -586,6 +586,60 @@ describe('BrokerDemoValidationService', () => {
     });
   });
 
+  describe('validateDemoConnection — stale validation exposure preflight', () => {
+    it('cleans stale harness exposure before placing a new validation order', async () => {
+      const cleanup = jest.fn().mockResolvedValue({
+        positionsClosed: 7,
+        ordersCancelled: 0,
+        remainingPositions: 0,
+        remainingOrders: 0,
+      });
+      (
+        paperAdapter as PaperBrokerAdapter & { cleanupDemoValidationExposure: typeof cleanup }
+      ).cleanupDemoValidationExposure = cleanup;
+      jest.spyOn(registry, 'getAdapterForConnection').mockReturnValue(paperAdapter);
+      const placeOrder = jest.spyOn(paperAdapter, 'placeOrder');
+
+      const result = await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      expect(result.overall).toBe('PASS');
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      expect(placeOrder).toHaveBeenCalled();
+      expect(cleanup.mock.invocationCallOrder[0]).toBeLessThan(
+        placeOrder.mock.invocationCallOrder[0]!,
+      );
+      expect(result.steps.find((step) => step.name === 'connect')).toMatchObject({
+        status: 'PASS',
+      });
+      expect(result.steps.find((step) => step.name === 'legacy-validation-cleanup')).toMatchObject({
+        status: 'PASS',
+        detail: expect.stringContaining('cleaned positions=7 orders=0'),
+      });
+    });
+
+    it('fails closed and places no validation order when stale exposure cleanup fails', async () => {
+      const cleanup = jest.fn().mockRejectedValue(new Error('stale validation exposure remains'));
+      (
+        paperAdapter as PaperBrokerAdapter & { cleanupDemoValidationExposure: typeof cleanup }
+      ).cleanupDemoValidationExposure = cleanup;
+      jest.spyOn(registry, 'getAdapterForConnection').mockReturnValue(paperAdapter);
+      const placeOrder = jest.spyOn(paperAdapter, 'placeOrder');
+
+      const result = await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      expect(result.overall).toBe('FAIL');
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      expect(placeOrder).not.toHaveBeenCalled();
+      expect(result.steps.find((step) => step.name === 'connect')).toMatchObject({
+        status: 'PASS',
+      });
+      expect(result.steps.find((step) => step.name === 'legacy-validation-cleanup')).toMatchObject({
+        status: 'FAIL',
+        detail: expect.stringContaining('validation exposure cleanup failed'),
+      });
+    });
+  });
+
   // ─── Runtime capability awareness (stub adapter without pending orders) ────
 
   describe('validateDemoConnection — runtime capability awareness', () => {

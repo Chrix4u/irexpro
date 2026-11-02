@@ -582,6 +582,78 @@ describe('CTraderAdapter', () => {
       expect(result).toMatchObject({ status: 'PENDING', success: true, externalOrderId: '888' });
     });
 
+    it('reconciles an accepted MARKET order to FILLED when cTrader already exposes the open position', async () => {
+      const reference = 'market-fill-key';
+      server.on(CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.EXECUTION_EVENT,
+          {
+            ctidTraderAccountId: payload.ctidTraderAccountId,
+            executionType: 2,
+            order: { orderId: 888, orderType: payload.orderType, orderStatus: 2 },
+          },
+          envelope,
+        ),
+      );
+      scriptReconcile(
+        [
+          {
+            ...SAMPLE_POSITION,
+            positionId: 999,
+            tradeData: {
+              ...SAMPLE_POSITION.tradeData,
+              volume: 100_000,
+              label: reference,
+              comment: reference,
+            },
+            price: 1.0865,
+          },
+        ],
+        [],
+      );
+      await connectDemo();
+
+      const result = await adapter.placeOrder({
+        idempotencyKey: reference,
+        instrument: 'EUR/USD',
+        direction: 'BUY',
+        lotSize: '0.01',
+        stopLoss: '0',
+        takeProfit: '0',
+        orderKind: 'MARKET',
+      });
+
+      expect(result).toMatchObject({
+        status: 'FILLED',
+        success: true,
+        externalOrderId: '999',
+        filledPrice: '1.0865',
+      });
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.RECONCILE_REQ)).toBeDefined();
+    });
+
+    it('keeps an accepted MARKET order PENDING when reconciliation cannot yet prove a position', async () => {
+      await scriptExecution(2);
+      scriptReconcile([], []);
+
+      const result = await adapter.placeOrder({
+        idempotencyKey: 'market-still-pending',
+        instrument: 'EUR/USD',
+        direction: 'BUY',
+        lotSize: '0.01',
+        stopLoss: '0',
+        takeProfit: '0',
+        orderKind: 'MARKET',
+      });
+
+      expect(result).toMatchObject({ status: 'PENDING', success: true, externalOrderId: '888' });
+      expect(
+        server.requests.filter(
+          (request) => request.payloadType === CTRADER_PAYLOAD_TYPE.RECONCILE_REQ,
+        ),
+      ).toHaveLength(3);
+    });
+
     it('maps ORDER_REJECTED (7) to a REJECTED result with the errorCode message', async () => {
       server.on(CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ, (payload, envelope) =>
         echo(
@@ -837,6 +909,44 @@ describe('CTraderAdapter', () => {
       });
     });
 
+    it('finds an open position by the exact iRexPro client reference carried in label/comment', async () => {
+      const reference = 'harness-exact-correlation-123';
+      scriptReconcile(
+        [
+          {
+            ...SAMPLE_POSITION,
+            tradeData: {
+              ...SAMPLE_POSITION.tradeData,
+              label: reference,
+              comment: reference,
+            },
+          },
+        ],
+        [],
+      );
+      server.on(CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_RES,
+          {
+            ctidTraderAccountId: payload.ctidTraderAccountId,
+            positionUnrealizedPnL: [],
+            moneyDigits: 2,
+          },
+          envelope,
+        ),
+      );
+      await connectDemo();
+
+      await expect(adapter.findPositionByClientReference(reference)).resolves.toMatchObject({
+        externalOrderId: '7654321',
+        instrument: 'EUR/USD',
+        direction: 'BUY',
+      });
+      await expect(
+        adapter.findPositionByClientReference('different-reference'),
+      ).resolves.toBeNull();
+    });
+
     it('ignores non-OPEN positions (CLOSED/CREATED) and returns null for unknown ids', async () => {
       scriptReconcile(
         [
@@ -1051,7 +1161,19 @@ describe('CTraderAdapter', () => {
               executionPrice: 1.08651,
               executedVolume: 1_000_000,
             },
-            deal: [],
+            deal: [{
+              dealId: 9001,
+              orderId: 777,
+              positionId: 7001,
+              volume: 1_000_000,
+              filledVolume: 1_000_000,
+              symbolId: 101,
+              createTimestamp: 1757000001000,
+              executionTimestamp: 1757000002000,
+              executionPrice: 1.08651,
+              tradeSide: 1,
+              dealStatus: 1,
+            }],
           },
           envelope,
         ),
@@ -1061,6 +1183,7 @@ describe('CTraderAdapter', () => {
       const order = await adapter.getOrderById('777');
       expect(order).toMatchObject({
         providerOrderId: '777',
+        providerPositionId: '7001',
         status: 'FILLED',
         orderKind: 'MARKET',
         requestedQuantity: '0.1',
@@ -1123,6 +1246,43 @@ describe('CTraderAdapter', () => {
         positionId: 7654321,
         volume: 1_000_000,
       });
+    });
+
+    it('confirms an ORDER_ACCEPTED close through reconciliation before reporting FILLED', async () => {
+      let positions = [SAMPLE_POSITION];
+      server.on(CTRADER_PAYLOAD_TYPE.RECONCILE_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.RECONCILE_RES,
+          { ctidTraderAccountId: payload.ctidTraderAccountId, position: positions, order: [] },
+          envelope,
+        ),
+      );
+      server.on(CTRADER_PAYLOAD_TYPE.CLOSE_POSITION_REQ, (payload, envelope) => {
+        positions = [];
+        return echo(
+          CTRADER_PAYLOAD_TYPE.EXECUTION_EVENT,
+          {
+            ctidTraderAccountId: payload.ctidTraderAccountId,
+            executionType: 2, // ORDER_ACCEPTED: successful close acknowledgement
+            position: { positionId: payload.positionId },
+          },
+          envelope,
+        );
+      });
+      await connectDemo();
+
+      const result = await adapter.closeOrder('7654321');
+
+      expect(result).toMatchObject({
+        success: true,
+        externalOrderId: '7654321',
+        status: 'FILLED',
+      });
+      expect(
+        server.requests.filter(
+          (request) => request.payloadType === CTRADER_PAYLOAD_TYPE.RECONCILE_REQ,
+        ),
+      ).toHaveLength(2);
     });
 
     it('converts partial close lot sizes into cents', async () => {
@@ -1198,6 +1358,26 @@ describe('CTraderAdapter', () => {
       });
     });
 
+    it('normalizes position SL/TP to the cTrader symbol precision before amendment', async () => {
+      scriptReconcile([SAMPLE_POSITION], []);
+      await connectDemo();
+
+      const result = await adapter.modifyOrder('7654321', {
+        newStopLoss: '0.702765',
+        newTakeProfit: '0.704065',
+      });
+
+      expect(result.success).toBe(true);
+      expect(
+        findRequest(server, CTRADER_PAYLOAD_TYPE.AMEND_POSITION_SLTP_REQ)!.payload,
+      ).toMatchObject({
+        ctidTraderAccountId: 1234567,
+        positionId: 7654321,
+        stopLoss: 0.70277,
+        takeProfit: 0.70407,
+      });
+    });
+
     it('amends a WORKING ORDER via ProtoOAAmendOrderReq (SL/TP fields)', async () => {
       scriptReconcile(
         [],
@@ -1212,6 +1392,7 @@ describe('CTraderAdapter', () => {
             },
             orderType: 2,
             orderStatus: 1,
+            limitPrice: 1.00324,
           },
         ],
       );
@@ -1222,6 +1403,8 @@ describe('CTraderAdapter', () => {
       expect(findRequest(server, CTRADER_PAYLOAD_TYPE.AMEND_ORDER_REQ)!.payload).toMatchObject({
         ctidTraderAccountId: 1234567,
         orderId: 555,
+        volume: 1_000_000,
+        limitPrice: 1.00324,
         stopLoss: 1.07,
       });
     });
@@ -1283,6 +1466,124 @@ describe('CTraderAdapter', () => {
 
       const result = await adapter.cancelOrder('555');
       expect(result).toMatchObject({ success: false, status: 'REJECTED' });
+    });
+  });
+
+  describe('cleanupDemoValidationExposure', () => {
+    it('closes and cancels only stale harness-labelled DEMO exposure', async () => {
+      await connectDemo();
+
+      const harnessPosition = {
+        ...SAMPLE_POSITION,
+        positionId: 7001,
+        tradeData: {
+          ...SAMPLE_POSITION.tradeData,
+          label: 'harness-old-validation-position',
+          comment: 'harness-old-validation-position',
+        },
+      };
+      const unrelatedPosition = {
+        ...SAMPLE_POSITION,
+        positionId: 7002,
+        tradeData: {
+          ...SAMPLE_POSITION.tradeData,
+          label: 'irexpro-ai-position',
+          comment: 'normal-user-exposure',
+        },
+      };
+      const harnessOrder = {
+        orderId: 8001,
+        tradeData: {
+          symbolId: 101,
+          volume: 1_000_000,
+          tradeSide: 1,
+          openTimestamp: 1757000000000,
+          label: 'harness-old-validation-order',
+          comment: 'harness-old-validation-order',
+        },
+        orderType: 2,
+        orderStatus: 1,
+        limitPrice: 1.00324,
+      };
+      const unrelatedOrder = {
+        ...harnessOrder,
+        orderId: 8002,
+        tradeData: {
+          ...harnessOrder.tradeData,
+          label: 'irexpro-ai-order',
+          comment: 'normal-user-order',
+        },
+      };
+
+      const fetchReconcile = jest
+        .fn()
+        .mockResolvedValueOnce({
+          positions: [harnessPosition, unrelatedPosition],
+          orders: [harnessOrder, unrelatedOrder],
+        })
+        .mockResolvedValueOnce({
+          positions: [unrelatedPosition],
+          orders: [unrelatedOrder],
+        });
+      Object.defineProperty(adapter, 'fetchReconcile', { value: fetchReconcile });
+      const closeSpy = jest.spyOn(adapter, 'closeOrder').mockResolvedValue({
+        success: true,
+        externalOrderId: '7001',
+        status: 'FILLED',
+      });
+      const cancelSpy = jest.spyOn(adapter, 'cancelOrder').mockResolvedValue({
+        success: true,
+        externalOrderId: '8001',
+        status: 'FILLED',
+      });
+
+      await expect(adapter.cleanupDemoValidationExposure()).resolves.toEqual({
+        positionsClosed: 1,
+        ordersCancelled: 1,
+        remainingPositions: 0,
+        remainingOrders: 0,
+      });
+      expect(fetchReconcile).toHaveBeenCalledTimes(2);
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect(closeSpy).toHaveBeenCalledWith('7001');
+      expect(cancelSpy).toHaveBeenCalledTimes(1);
+      expect(cancelSpy).toHaveBeenCalledWith('8001');
+      expect(closeSpy).not.toHaveBeenCalledWith('7002');
+      expect(cancelSpy).not.toHaveBeenCalledWith('8002');
+    });
+
+    it('fails closed outside DEMO mode', async () => {
+      adapter.setMode(BrokerMode.LIVE);
+      await expect(adapter.cleanupDemoValidationExposure()).rejects.toMatchObject({
+        code: BrokerErrorCode.INVALID_REQUEST,
+      });
+    });
+
+    it('fails when tagged validation exposure remains after cleanup', async () => {
+      await connectDemo();
+      const harnessPosition = {
+        ...SAMPLE_POSITION,
+        positionId: 7003,
+        tradeData: {
+          ...SAMPLE_POSITION.tradeData,
+          label: 'harness-still-open',
+          comment: 'harness-still-open',
+        },
+      };
+      const fetchReconcile = jest
+        .fn()
+        .mockResolvedValue({ positions: [harnessPosition], orders: [] });
+      Object.defineProperty(adapter, 'fetchReconcile', { value: fetchReconcile });
+      jest.spyOn(adapter, 'closeOrder').mockResolvedValue({
+        success: true,
+        externalOrderId: '7003',
+        status: 'FILLED',
+      });
+
+      await expect(adapter.cleanupDemoValidationExposure()).rejects.toMatchObject({
+        code: BrokerErrorCode.BROKER_SERVER_ERROR,
+        message: expect.stringContaining('still present'),
+      });
     });
   });
 

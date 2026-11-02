@@ -52,15 +52,16 @@ describe('M1 currency exposure respects the executable PAPER product floor', () 
       decision: { capacity: 'REDUCED' },
     });
   });
-  it('reduces a larger scout only to the real 0.10 PAPER floor when that clears exposure', async () => {
+  it('hands a reduced 0.20 professional cap to downstream durable-risk sizing instead of blocking the setup', async () => {
     const service = serviceFor(1000, [{ instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 14 }]);
 
     await expect(
       (service as any).resolveM1CurrencyExposureGuard('user-1', 'conn-1', candidate, 0.2),
     ).resolves.toMatchObject({
       allowed: true,
-      volumeCap: 0.1,
-      decision: { capacity: 'CLEAR' },
+      volumeCap: 0.2,
+      decision: { capacity: 'REDUCED' },
+      productFloorBlocked: false,
     });
   });
 });

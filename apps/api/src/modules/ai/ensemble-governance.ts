@@ -2,7 +2,7 @@ import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 
 export const ENSEMBLE_GOVERNANCE_VERSION = 'ensemble-governance-v3';
 export const ENSEMBLE_COST_MODEL_VERSION =
-  'broker-observed-p90-or-current-spread-plus-25pct-slippage-v4';
+  'broker-observed-robust-tail-or-current-spread-plus-25pct-slippage-v5';
 export const ENSEMBLE_DRIFT_MODEL_VERSION = 'triple-route-direction-aligned-momentum-v4';
 export const ENSEMBLE_NET_EXPECTED_R_FLOOR = 0.08;
 export const ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR = ENSEMBLE_NET_EXPECTED_R_FLOOR;
@@ -388,7 +388,7 @@ function executionCostR(input: EnsembleGovernanceInput): {
       paperFallbackUsed: !evidenceValid && simulationSpreadValid,
     };
   }
-  // Broker-observed P90 remains the only promotion-grade cost evidence. When it
+  // Robust broker-observed tail evidence remains the only promotion-grade cost evidence. When it
   // is unavailable, PAPER may continue evidence collection using the same
   // conservative per-pair spread assumption as the PAPER broker. The fallback
   // remains explicitly non-promotable because evidenceValid stays false.

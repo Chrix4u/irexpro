@@ -88,7 +88,7 @@ describe('ProviderQuoteCandleStoreService completed-bar reads', () => {
 
   it('does not aggregate a completed higher-timeframe bar across a hidden M1 timestamp gap', async () => {
     const service = new ProviderQuoteCandleStoreService({
-      query: jest.fn(),
+      query: jest.fn().mockResolvedValue([]),
     } as unknown as DataSource);
     jest
       .spyOn(service, 'getM1Candles')
@@ -113,7 +113,7 @@ describe('ProviderQuoteCandleStoreService completed-bar reads', () => {
 
   it('does not expose the currently forming aggregate bucket', async () => {
     const service = new ProviderQuoteCandleStoreService({
-      query: jest.fn(),
+      query: jest.fn().mockResolvedValue([]),
     } as unknown as DataSource);
     jest
       .spyOn(service, 'getM1Candles')

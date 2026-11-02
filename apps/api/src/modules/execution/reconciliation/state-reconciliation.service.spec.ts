@@ -46,6 +46,7 @@ const openTrade = (): Trade =>
     id: 'trade-1',
     userId: 'user-1',
     brokerConnectionId: 'conn-1',
+    tradeIntentId: 'intent-1',
     instrument: 'EURUSD',
     direction: 'BUY',
     lotSize: '1.0000',
@@ -218,6 +219,7 @@ describe('StateReconciliationService', () => {
   };
   let auditService: { log: jest.Mock };
   let eventBus: { publish: jest.Mock };
+  let allocationService: { releaseAllocationForIntent: jest.Mock };
   let adapter: {
     brokerId?: string;
     setMode: jest.Mock;
@@ -228,6 +230,7 @@ describe('StateReconciliationService', () => {
     getPositionById: jest.Mock;
     getClosedTrades: jest.Mock;
     getOrderById: jest.Mock;
+    modifyOrder: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -249,6 +252,7 @@ describe('StateReconciliationService', () => {
       getPositionById: jest.fn().mockResolvedValue(null),
       getClosedTrades: jest.fn().mockResolvedValue([]),
       getOrderById: jest.fn().mockResolvedValue(null),
+      modifyOrder: jest.fn().mockResolvedValue({ success: true, status: 'FILLED' }),
     };
 
     tradeRepo = {
@@ -299,6 +303,7 @@ describe('StateReconciliationService', () => {
     };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
     eventBus = { publish: jest.fn() };
+    allocationService = { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -323,7 +328,7 @@ describe('StateReconciliationService', () => {
         },
         {
           provide: AllocationService,
-          useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) },
+          useValue: allocationService,
         },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
@@ -609,6 +614,10 @@ describe('StateReconciliationService', () => {
         expect.objectContaining({ id: 'trade-1' }),
         expect.objectContaining({ closePrice: '1.12000' }),
       );
+      expect(allocationService.releaseAllocationForIntent).toHaveBeenCalledWith(
+        'intent-1',
+        'PROVIDER_POSITION_CLOSED',
+      );
       expect(outcome.discrepanciesAutoResolved).toBe(1);
       expect(eventBus.publish).toHaveBeenCalledWith(
         DomainEventType.RECONCILIATION_DISCREPANCY_RESOLVED,
@@ -660,6 +669,109 @@ describe('StateReconciliationService', () => {
       );
     });
 
+    it('recovers a timed-out dispatch by uniquely correlating the provider position', async () => {
+      const pending = {
+        ...openTrade(),
+        id: 'trade-timeout',
+        instrument: 'AUDUSD',
+        direction: 'SELL',
+        lotSize: '0.2300',
+        status: TradeStatus.RECONCILIATION_PENDING,
+        externalOrderId: null,
+        externalPositionId: null,
+        dispatchCertainty: 'MAY_HAVE_REACHED_PROVIDER',
+        fillPrice: null,
+        openedAt: null,
+        createdAt: new Date('2026-10-30T12:14:21.429Z'),
+        stopLoss: '0.70318',
+        takeProfit: '0.70188',
+      } as Trade;
+      const providerPosition = {
+        externalOrderId: '300252443',
+        instrument: 'AUDUSD',
+        direction: 'SELL' as const,
+        lotSize: '0.23',
+        openPrice: '0.70267',
+        currentPrice: '0.70261',
+        stopLoss: '0',
+        takeProfit: '0',
+        unrealisedPnl: '1.20',
+        openedAt: new Date('2026-10-30T12:14:34.442Z'),
+        commission: '-0.50',
+        swap: '0.00',
+      };
+      tradeRepo.find.mockResolvedValue([pending]);
+      adapter.getOpenPositions.mockResolvedValue([providerPosition]);
+      adapter.getPositionById.mockImplementation(async (id: string) =>
+        id === '300252443' ? providerPosition : null,
+      );
+      persistence.resolveDiscrepanciesByRef.mockResolvedValue([]);
+
+      await service.runForConnection({ ...connection(), brokerId: 'ctrader' } as BrokerConnection);
+
+      expect(resolution.recoverTradeToOpen).toHaveBeenCalledWith(pending, providerPosition);
+      expect(adapter.getPositionById).toHaveBeenCalledWith('300252443');
+      expect(adapter.modifyOrder).toHaveBeenCalledWith('300252443', {
+        newStopLoss: '0.70318',
+        newTakeProfit: '0.70188',
+      });
+      expect(persistence.resolveDiscrepanciesByRef).toHaveBeenCalledWith(
+        'conn-1',
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+            internalRefId: 'trade-timeout',
+            providerRef: null,
+          }),
+          expect.objectContaining({
+            type: ReconciliationDiscrepancyType.UNKNOWN_PROVIDER_POSITION,
+            internalRefId: null,
+            providerRef: '300252443',
+          }),
+        ]),
+      );
+    });
+
+    it('does not guess when more than one provider position can match a timed-out dispatch', async () => {
+      const pending = {
+        ...openTrade(),
+        id: 'trade-timeout',
+        instrument: 'AUDUSD',
+        direction: 'SELL',
+        lotSize: '0.2300',
+        status: TradeStatus.RECONCILIATION_PENDING,
+        externalOrderId: null,
+        externalPositionId: null,
+        dispatchCertainty: 'MAY_HAVE_REACHED_PROVIDER',
+        fillPrice: null,
+        openedAt: null,
+        createdAt: new Date('2026-10-30T12:14:21.429Z'),
+      } as Trade;
+      const position = (id: string, openedAt: string) => ({
+        externalOrderId: id,
+        instrument: 'AUDUSD',
+        direction: 'SELL' as const,
+        lotSize: '0.23',
+        openPrice: '0.70267',
+        currentPrice: '0.70261',
+        stopLoss: '0.70318',
+        takeProfit: '0.70188',
+        unrealisedPnl: '1.20',
+        openedAt: new Date(openedAt),
+        commission: '-0.50',
+        swap: '0.00',
+      });
+      tradeRepo.find.mockResolvedValue([pending]);
+      adapter.getOpenPositions.mockResolvedValue([
+        position('300252443', '2026-10-30T12:14:34.442Z'),
+        position('300252444', '2026-10-30T12:14:36.000Z'),
+      ]);
+
+      await service.runForConnection({ ...connection(), brokerId: 'ctrader' } as BrokerConnection);
+
+      expect(resolution.recoverTradeToOpen).not.toHaveBeenCalled();
+    });
+
     it('resolves RECONCILIATION_PENDING trades whose provider position exists', async () => {
       tradeRepo.find.mockResolvedValue([
         { ...openTrade(), status: TradeStatus.RECONCILIATION_PENDING },
@@ -671,7 +783,93 @@ describe('StateReconciliationService', () => {
 
       expect(resolution.recoverTradeToOpen).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'trade-1', status: TradeStatus.RECONCILIATION_PENDING }),
+        expect.objectContaining({ externalOrderId: 'pos-1' }),
       );
+    });
+
+    it('recovers a cTrader async market fill by resolving order id to provider position id and attaches protections', async () => {
+      const pending = {
+        ...openTrade(),
+        status: TradeStatus.PENDING,
+        externalOrderId: 'order-777',
+        externalPositionId: null,
+        stopLoss: '1.08000',
+        takeProfit: '1.09500',
+      } as Trade;
+      tradeRepo.find.mockResolvedValue([pending]);
+      adapter.brokerId = 'ctrader';
+      adapter.getOrderById.mockResolvedValue({
+        providerOrderId: 'order-777',
+        providerPositionId: 'position-7001',
+        status: 'FILLED',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        requestedQuantity: '1.0000',
+        filledQuantity: '1.0000',
+        avgFillPrice: '1.08651',
+      });
+      const providerPosition = {
+        externalOrderId: 'position-7001',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '1.0000',
+        openPrice: '1.08651',
+        currentPrice: '1.08700',
+        stopLoss: '0',
+        takeProfit: '0',
+        unrealisedPnl: '4.50',
+        openedAt: new Date('2026-10-28T00:25:17.324Z'),
+        commission: '-0.90',
+        swap: '0.00',
+      };
+      adapter.getPositionById.mockImplementation(async (id: string) =>
+        id === 'position-7001' ? providerPosition : null,
+      );
+      persistence.resolveDiscrepanciesByRef.mockResolvedValue([]);
+
+      await service.runForConnection({ ...connection(), brokerId: 'ctrader' } as BrokerConnection);
+
+      expect(adapter.getOrderById).toHaveBeenCalledWith('order-777');
+      expect(adapter.getPositionById).toHaveBeenCalledWith('position-7001');
+      expect(resolution.recoverTradeToOpen).toHaveBeenCalledWith(pending, providerPosition);
+      expect(adapter.modifyOrder).toHaveBeenCalledWith('position-7001', {
+        newStopLoss: '1.08000',
+        newTakeProfit: '1.09500',
+      });
+      expect(resolution.closeTradeFromProvider).not.toHaveBeenCalled();
+    });
+
+    it('retries missing cTrader SL/TP protection on an already OPEN provider position', async () => {
+      const open = {
+        ...openTrade(),
+        externalPositionId: 'position-7001',
+        stopLoss: '1.08000',
+        takeProfit: '1.09500',
+      } as Trade;
+      tradeRepo.find.mockResolvedValue([open]);
+      adapter.brokerId = 'ctrader';
+      adapter.getPositionById.mockResolvedValue({
+        externalOrderId: 'position-7001',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '1.0000',
+        openPrice: '1.08651',
+        currentPrice: '1.08700',
+        stopLoss: '0',
+        takeProfit: '0',
+        unrealisedPnl: '4.50',
+        openedAt: new Date('2026-10-28T00:25:17.324Z'),
+        commission: '-0.90',
+        swap: '0.00',
+      });
+
+      await service.runForConnection({ ...connection(), brokerId: 'ctrader' } as BrokerConnection);
+
+      expect(resolution.recoverTradeToOpen).not.toHaveBeenCalled();
+      expect(adapter.modifyOrder).toHaveBeenCalledWith('position-7001', {
+        newStopLoss: '1.08000',
+        newTakeProfit: '1.09500',
+      });
     });
 
     it('resolves orders by stable identifier via getOrderById (Directive §26)', async () => {

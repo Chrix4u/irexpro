@@ -32,6 +32,19 @@ export interface M1TacticalFeatureSnapshot {
   momentum1Atr: number;
   momentum3Atr: number;
   momentum5Atr: number;
+  m5BodyPressure3: number;
+  m5Momentum1Atr: number;
+  m5Momentum3Atr: number;
+  /** Signed body pressure of the latest completed M5 candle. */
+  m5LatestBodyPressure?: number;
+  /** Signed consecutive M5 candle run; positive bullish, negative bearish. */
+  m5DirectionalRun?: number;
+  /** Latest completed M5 body / mean absolute body of the prior three M5 candles. */
+  m5BodyExpansionRatio?: number;
+  /** Signed 30-minute M1 displacement normalized by M1 ATR. */
+  m30MomentumAtr?: number;
+  /** Signed path efficiency over the most recent ~30 completed M1 minutes. */
+  m30DirectionalEfficiency?: number;
   breakoutUpAtr: number;
   breakoutDownAtr: number;
   failedBreakoutUp: boolean;
@@ -54,6 +67,10 @@ const MIN_M1_BARS = 30;
 const MIN_CONTEXT_BARS = 22;
 const BREAKOUT_LOOKBACK = 20;
 const MINUTE_MS = 60_000;
+const MAX_DERIVED_NO_TICK_MINUTES = 10;
+const M1_FEATURE_HISTORY_BARS = 60;
+const M30_LOOKBACK_BARS = 30;
+const M5_DIRECTIONAL_BODY_THRESHOLD = 0.12;
 
 function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value));
@@ -95,13 +112,51 @@ function completed(
   return rows.filter((row) => new Date(row.timestamp).getTime() + durationMs <= decisionMs);
 }
 
-function contiguousM1(rows: LivePaperCandleInput[]): boolean {
+/**
+ * cTrader only creates a trend bar when at least one tick arrived in that
+ * period. Small timestamp gaps are therefore legitimate no-tick intervals,
+ * not necessarily missing provider data. For feature calculation only, carry
+ * the last observed broker close across at most ten missing minutes so the
+ * one-minute feature grid remains time-consistent. These derived bars are
+ * never persisted as broker evidence and never provide spread evidence.
+ *
+ * A larger gap is treated as a data outage/session discontinuity. Evidence
+ * before that gap is discarded; at least MIN_M1_BARS must exist after the
+ * discontinuity before the model can become ready again.
+ */
+function normalizeM1NoTickGaps(rows: LivePaperCandleInput[]): LivePaperCandleInput[] | null {
+  if (rows.length === 0) return [];
+  const normalized: LivePaperCandleInput[] = [{ ...rows[0]!, timestamp: new Date(rows[0]!.timestamp) }];
+
   for (let index = 1; index < rows.length; index += 1) {
-    const current = new Date(rows[index]!.timestamp).getTime();
-    const previous = new Date(rows[index - 1]!.timestamp).getTime();
-    if (current - previous !== MINUTE_MS) return false;
+    const current = rows[index]!;
+    const previousRaw = rows[index - 1]!;
+    const currentMs = new Date(current.timestamp).getTime();
+    const previousMs = new Date(previousRaw.timestamp).getTime();
+    const deltaMs = currentMs - previousMs;
+    if (!Number.isFinite(deltaMs) || deltaMs <= 0 || deltaMs % MINUTE_MS !== 0) return null;
+
+    const missingMinutes = deltaMs / MINUTE_MS - 1;
+    if (missingMinutes > MAX_DERIVED_NO_TICK_MINUTES) {
+      normalized.length = 0;
+      normalized.push({ ...current, timestamp: new Date(current.timestamp) });
+      continue;
+    }
+
+    const previousClose = previousRaw.close;
+    for (let minute = 1; minute <= missingMinutes; minute += 1) {
+      normalized.push({
+        timestamp: new Date(previousMs + minute * MINUTE_MS),
+        open: previousClose,
+        high: previousClose,
+        low: previousClose,
+        close: previousClose,
+      });
+    }
+    normalized.push({ ...current, timestamp: new Date(current.timestamp) });
   }
-  return true;
+
+  return normalized.slice(-M1_FEATURE_HISTORY_BARS);
 }
 
 function emaSeries(values: number[], period: number): number[] {
@@ -172,13 +227,62 @@ function averageRange(rows: LivePaperCandleInput[]): number {
   );
 }
 
+function signedBodyPressure(row: LivePaperCandleInput): number {
+  const [open, high, low, close] = numbers(row);
+  const range = high - low;
+  return range > 0 ? clamp((close - open) / range, -1, 1) : 0;
+}
+
+function averageSignedBodyPressure(rows: LivePaperCandleInput[]): number {
+  if (rows.length === 0) return 0;
+  const pressure = rows.reduce((sum, row) => sum + signedBodyPressure(row), 0);
+  return clamp(pressure / rows.length, -1, 1);
+}
+
+function signedDirectionalRun(rows: LivePaperCandleInput[]): number {
+  if (rows.length === 0) return 0;
+  const latestPressure = signedBodyPressure(rows.at(-1)!);
+  if (Math.abs(latestPressure) < M5_DIRECTIONAL_BODY_THRESHOLD) return 0;
+  const sign = latestPressure > 0 ? 1 : -1;
+  let run = 0;
+  for (let index = rows.length - 1; index >= 0 && run < 6; index -= 1) {
+    const pressure = signedBodyPressure(rows[index]!);
+    if (Math.abs(pressure) < M5_DIRECTIONAL_BODY_THRESHOLD || Math.sign(pressure) !== sign) break;
+    run += 1;
+  }
+  return sign * run;
+}
+
+function bodyExpansionRatio(rows: LivePaperCandleInput[]): number {
+  if (rows.length < 2) return 1;
+  const latest = rows.at(-1)!;
+  const latestBody = Math.abs(Number(latest.close) - Number(latest.open));
+  const prior = rows.slice(-4, -1);
+  if (prior.length === 0) return 1;
+  const priorMean =
+    prior.reduce((sum, row) => sum + Math.abs(Number(row.close) - Number(row.open)), 0) /
+    prior.length;
+  if (priorMean <= 0) return latestBody > 0 ? 4 : 1;
+  return clamp(latestBody / priorMean, 0, 4);
+}
+
+function directionalEfficiency(values: number[]): number {
+  if (values.length < 2) return 0;
+  const path = values
+    .slice(1)
+    .reduce((sum, value, index) => sum + Math.abs(value - values[index]!), 0);
+  if (path <= 0) return 0;
+  return clamp((values.at(-1)! - values[0]!) / path, -1, 1);
+}
+
 export function buildM1TacticalFeatures(
   input: M1TacticalFeatureInput,
 ): M1TacticalFeatureSnapshot | null {
   const instrument = input.instrument.trim().toUpperCase();
   if (!instrument || !Number.isFinite(input.decisionTime.getTime())) return null;
 
-  const m1 = completed(input.m1, 1, input.decisionTime);
+  const completedM1 = completed(input.m1, 1, input.decisionTime);
+  const m1 = completedM1 ? normalizeM1NoTickGaps(completedM1) : null;
   const m5 = completed(input.m5, 5, input.decisionTime);
   const m15 = completed(input.m15, 15, input.decisionTime);
   const h1 = completed(input.h1, 60, input.decisionTime);
@@ -189,8 +293,7 @@ export function buildM1TacticalFeatures(
     m5.length < MIN_CONTEXT_BARS ||
     m15.length < MIN_CONTEXT_BARS ||
     h1.length < MIN_CONTEXT_BARS ||
-    h4.length < MIN_CONTEXT_BARS ||
-    !contiguousM1(m1)
+    h4.length < MIN_CONTEXT_BARS
   ) {
     return null;
   }
@@ -207,7 +310,7 @@ export function buildM1TacticalFeatures(
   const latest = m1.at(-1)!;
   const [open, high, low, close] = numbers(latest);
   const range = high - low;
-  if (!Number.isFinite(range) || range <= 0) return null;
+  if (!Number.isFinite(range) || range < 0) return null;
 
   const previousTwenty = m1.slice(-(BREAKOUT_LOOKBACK + 1), -1);
   if (previousTwenty.length < BREAKOUT_LOOKBACK) return null;
@@ -223,6 +326,27 @@ export function buildM1TacticalFeatures(
   const momentum1Atr = momentum(1);
   const momentum3Atr = momentum(3);
   const momentum5Atr = momentum(5);
+
+  const m30Lookback = Math.min(M30_LOOKBACK_BARS, closes.length - 1);
+  const m30Window = closes.slice(-(m30Lookback + 1));
+  const m30MomentumAtr =
+    m30Window.length >= 2 ? (m30Window.at(-1)! - m30Window[0]!) / localAtr : 0;
+  const m30DirectionalEfficiency = directionalEfficiency(m30Window);
+
+  const m5Closes = m5.map((row) => Number(row.close));
+  const m5Atr = atr(m5, 14);
+  if (!Number.isFinite(m5Atr) || m5Atr <= 0) return null;
+  const m5Momentum = (bars: number): number => {
+    const current = m5Closes.at(-1);
+    const prior = m5Closes[m5Closes.length - 1 - bars];
+    return current == null || prior == null ? Number.NaN : (current - prior) / m5Atr;
+  };
+  const m5Momentum1Atr = m5Momentum(1);
+  const m5Momentum3Atr = m5Momentum(3);
+  const m5BodyPressure3 = averageSignedBodyPressure(m5.slice(-3));
+  const m5LatestBodyPressure = signedBodyPressure(m5.at(-1)!);
+  const m5DirectionalRun = signedDirectionalRun(m5);
+  const m5BodyExpansionRatio = bodyExpansionRatio(m5);
 
   const efficiencyCloses = closes.slice(-6);
   const path = efficiencyCloses
@@ -245,6 +369,7 @@ export function buildM1TacticalFeatures(
 
   const upperWick = high - Math.max(open, close);
   const lowerWick = Math.min(open, close) - low;
+  const flatLatestBar = range === 0;
   const emaSlopeAtr = (ema9Series.at(-1)! - ema9Series.at(-2)!) / localAtr;
   const emaSeparationAtr = (ema9 - ema21) / localAtr;
   const higherTimeframeAgreement = clamp(
@@ -257,6 +382,14 @@ export function buildM1TacticalFeatures(
     momentum1Atr,
     momentum3Atr,
     momentum5Atr,
+    m30MomentumAtr,
+    m30DirectionalEfficiency,
+    m5BodyPressure3,
+    m5Momentum1Atr,
+    m5Momentum3Atr,
+    m5LatestBodyPressure,
+    m5DirectionalRun,
+    m5BodyExpansionRatio,
     efficiency5,
     volatilityChange,
     emaSlopeAtr,
@@ -273,10 +406,10 @@ export function buildM1TacticalFeatures(
     price: close,
     atr14: localAtr,
     rsi14: localRsi,
-    bodyRangeRatio: Math.abs(close - open) / range,
-    upperWickRatio: Math.max(0, upperWick) / range,
-    lowerWickRatio: Math.max(0, lowerWick) / range,
-    closeLocation: clamp((close - low) / range, 0, 1),
+    bodyRangeRatio: flatLatestBar ? 0 : Math.abs(close - open) / range,
+    upperWickRatio: flatLatestBar ? 0 : Math.max(0, upperWick) / range,
+    lowerWickRatio: flatLatestBar ? 0 : Math.max(0, lowerWick) / range,
+    closeLocation: flatLatestBar ? 0.5 : clamp((close - low) / range, 0, 1),
     ema9,
     ema21,
     emaSeparationAtr,
@@ -284,6 +417,14 @@ export function buildM1TacticalFeatures(
     momentum1Atr,
     momentum3Atr,
     momentum5Atr,
+    m30MomentumAtr,
+    m30DirectionalEfficiency,
+    m5BodyPressure3,
+    m5Momentum1Atr,
+    m5Momentum3Atr,
+    m5LatestBodyPressure,
+    m5DirectionalRun,
+    m5BodyExpansionRatio,
     breakoutUpAtr,
     breakoutDownAtr,
     failedBreakoutUp: high > priorHigh && close < priorHigh,

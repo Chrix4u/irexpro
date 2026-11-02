@@ -18,6 +18,7 @@ import {
   ValidatedOrder,
 } from './interfaces/risk.interface';
 import { BrokerService } from '../broker/broker.service';
+import { BrokerFxConversionService } from '../market-data/services/broker-fx-conversion.service';
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { AuditService } from '../audit/audit.service';
@@ -160,6 +161,14 @@ export class RiskService {
   private get metrics(): MetricsService | null {
     try {
       return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
+
+  private get brokerFxConversion(): BrokerFxConversionService | null {
+    try {
+      return this.moduleRef.get(BrokerFxConversionService, { strict: false });
     } catch {
       return null;
     }
@@ -862,10 +871,14 @@ export class RiskService {
     const requestedLots = this.parseOrderDecimal(trade.requestedLotSize, 'requestedLotSize');
     const maxLots = this.parseProfileDecimal(profile.maxPositionSizeLot, 'maxPositionSizeLot');
     let effectiveLotSize = trade.requestedLotSize;
-    const allocationAwarePaperSizing =
-      trade.executionMode === ExecutionMode.PAPER_ONLY && trade.allocationAwarePaperSizing === true;
+    const allocationAwareDemoSizing =
+      trade.allocationAwarePaperSizing === true &&
+      connection.accountType === BrokerMode.DEMO &&
+      [ExecutionMode.PAPER_ONLY, ExecutionMode.SEMI_AUTO, ExecutionMode.FULL_AUTO].includes(
+        session.executionMode,
+      );
 
-    if (requestedLots.gt(maxLots) && !allocationAwarePaperSizing) {
+    if (requestedLots.gt(maxLots) && !allocationAwareDemoSizing) {
       // Soft reduction: cap to max, don't reject outright. Allocation-aware
       // PAPER is the one exception: its lot was already derived from the
       // explicit allocation + stop distance under the durable risk-% ceiling.
@@ -888,11 +901,15 @@ export class RiskService {
           instrument: trade.instrument,
         },
       });
-    } else if (allocationAwarePaperSizing) {
-      appliedRules.push('POSITION_SIZE:ALLOCATION_AWARE_PAPER');
+    } else if (allocationAwareDemoSizing) {
+      const allocationRule =
+        session.executionMode === ExecutionMode.PAPER_ONLY
+          ? 'POSITION_SIZE:ALLOCATION_AWARE_PAPER'
+          : 'POSITION_SIZE:ALLOCATION_AWARE_DEMO';
+      appliedRules.push(allocationRule);
       this.logger.log(
-        `Signal ${trade.signalId}: allocation-aware PAPER sizing retained ${requestedLots.toString()} lots; ` +
-          `legacy maxPositionSizeLot=${maxLots.toString()} is not an independent PAPER cap`,
+        `Signal ${trade.signalId}: allocation-aware DEMO sizing retained ${requestedLots.toString()} lots; ` +
+          `legacy maxPositionSizeLot=${maxLots.toString()} is not an independent promoted-DEMO cap`,
       );
     } else {
       appliedRules.push('POSITION_SIZE:OK');
@@ -1347,7 +1364,7 @@ export class RiskService {
     if (
       marketEntry &&
       entry &&
-      session.executionMode === ExecutionMode.PAPER_ONLY &&
+      connection.accountType === BrokerMode.DEMO &&
       trade.allocationAwarePaperSizing === true &&
       trade.paperMarketReferenceEntryPrice
     ) {
@@ -1374,7 +1391,11 @@ export class RiskService {
             trade.direction === 'BUY'
               ? entry.add(targetDistance).toString()
               : entry.sub(targetDistance).toString();
-          appliedRules.push('PAPER_MARKET_GEOMETRY:REBASED');
+          appliedRules.push(
+            session.executionMode === ExecutionMode.PAPER_ONLY
+              ? 'PAPER_MARKET_GEOMETRY:REBASED'
+              : 'DEMO_MARKET_GEOMETRY:REBASED',
+          );
         }
       }
     }
@@ -1486,22 +1507,73 @@ export class RiskService {
       const notionalQuote = entry.mul(quantity).mul(contractSize);
       notional = notionalQuote.divUp(entry, 12);
     } else {
-      appliedRules.push('MAX_TRADE_RISK:CURRENCY_UNVERIFIED');
-      return {
-        rejection: await this.rejectAndRecord(
-          userId,
-          trade,
-          RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
-          'Account currency ' +
-            accountCurrency +
-            ' matches neither leg of ' +
-            normalizedInstrument +
-            '; a trusted third-currency FX conversion is unavailable — rejecting (fail-closed)',
-          contextSnapshot,
-          evaluatedAt,
-        ),
-        quoteRef: geometry.quoteRef,
-      };
+      // First reuse fresh same-broker evidence already persisted by the market
+      // data collector. This avoids opening another cTrader spot subscription
+      // in the critical pre-trade path. The resolver remains fail-closed: it
+      // accepts only fresh direct/inverse or same-connection USD-bridge quotes.
+      const cachedConversion = this.brokerFxConversion
+        ? await this.brokerFxConversion.resolveCachedBid(
+            session.brokerConnectionId,
+            accountCurrency,
+            quoteCurrency,
+            new Date(evaluatedAt),
+          )
+        : null;
+      const cachedBid = ExactDecimal.tryParse(cachedConversion?.rate ?? '');
+      if (cachedConversion && cachedBid?.isPositive()) {
+        riskAtStop = riskAtStopQuote.divUp(cachedBid, 12);
+        const notionalQuote = entry.mul(quantity).mul(contractSize);
+        notional = notionalQuote.divUp(cachedBid, 12);
+        appliedRules.push(
+          `MAX_TRADE_RISK:CURRENCY_CONVERTED:${cachedConversion.path.join('>')}:BROKER_NATIVE_CACHE`,
+        );
+      } else {
+        // Existing direct broker quote remains the fallback authority. A BID
+        // gives quote-currency units per one account-currency unit, so quote
+        // risk/notional are divided by it conservatively (divUp).
+        const conversionInstrument = `${accountCurrency}${quoteCurrency}`;
+        let conversionQuote: Awaited<ReturnType<BrokerService['getCurrentPriceForConnection']>> = null;
+        try {
+          conversionQuote = await this.brokerService.getCurrentPriceForConnection(
+            userId,
+            session.brokerConnectionId,
+            conversionInstrument,
+            { propagateProviderError: true },
+          );
+        } catch {
+          conversionQuote = null;
+        }
+        const conversionBid = ExactDecimal.tryParse(conversionQuote?.bid ?? '');
+        const conversionTimestamp = conversionQuote?.timestamp
+          ? new Date(conversionQuote.timestamp).getTime()
+          : Number.NaN;
+        const conversionAgeMs = Date.now() - conversionTimestamp;
+        if (
+          !conversionBid ||
+          !conversionBid.isPositive() ||
+          !Number.isFinite(conversionTimestamp) ||
+          conversionAgeMs < -5_000 ||
+          conversionAgeMs > 60_000
+        ) {
+          appliedRules.push('MAX_TRADE_RISK:CURRENCY_UNVERIFIED');
+          return {
+            rejection: await this.rejectAndRecord(
+              userId,
+              trade,
+              RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
+              `Account currency ${accountCurrency} matches neither leg of ${normalizedInstrument}; ` +
+                `fresh broker conversion ${conversionInstrument} is unavailable — rejecting (fail-closed)`,
+              contextSnapshot,
+              evaluatedAt,
+            ),
+            quoteRef: geometry.quoteRef,
+          };
+        }
+        riskAtStop = riskAtStopQuote.divUp(conversionBid, 12);
+        const notionalQuote = entry.mul(quantity).mul(contractSize);
+        notional = notionalQuote.divUp(conversionBid, 12);
+        appliedRules.push(`MAX_TRADE_RISK:CURRENCY_CONVERTED:${conversionInstrument}`);
+      }
     }
     const maxTradeRiskPercent = this.parseProfileDecimal(
       profile.maxTradeRiskPercent,

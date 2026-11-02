@@ -76,6 +76,10 @@ import {
   IBrokerAdapter,
 } from '../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
+import {
+  defaultCertaintyForCode,
+  ProviderDispatchCertainty,
+} from '../interfaces/provider-dispatch-certainty';
 import { redactString } from '../../../common/utils/redact-sensitive.util';
 import { PaperBrokerAdapter } from '../adapters/paper-broker.adapter';
 import { OandaAdapter } from '../adapters/oanda/oanda.adapter';
@@ -316,6 +320,20 @@ interface AdapterWithCancelOrder {
   cancelOrder(externalOrderId: string): Promise<BrokerOrderResult>;
 }
 
+interface AdapterWithPositionClientReferenceLookup {
+  findPositionByClientReference(clientReference: string): Promise<BrokerPosition | null>;
+}
+
+function hasPositionClientReferenceLookup(
+  adapter: IBrokerAdapter,
+): adapter is IBrokerAdapter & AdapterWithPositionClientReferenceLookup {
+  return (
+    'findPositionByClientReference' in adapter &&
+    typeof (adapter as { findPositionByClientReference?: unknown })
+      .findPositionByClientReference === 'function'
+  );
+}
+
 export function hasCancelOrder(
   adapter: IBrokerAdapter,
 ): adapter is IBrokerAdapter & AdapterWithCancelOrder {
@@ -336,6 +354,12 @@ export interface ProviderVerificationChecklistOptions {
    * Defaults to the full canonical list.
    */
   steps?: readonly string[];
+  /**
+   * Optional provider-specific safety preflights already executed by the
+   * application service after connection and before this checklist may mutate
+   * broker state. Any FAIL blocks every remaining validation step.
+   */
+  preflightSteps?: readonly ProviderVerificationStep[];
   /**
    * Pre-computed connect step result. When provided the engine does NOT call
    * adapter.connect() itself — BrokerDemoValidationService injects the result
@@ -363,6 +387,19 @@ interface ChecklistContext {
   digits: number;
   partialLot: string;
   marketLot: string;
+  baselinePositionIds: Set<string>;
+  baselineWorkingOrderIds: Set<string>;
+  /** Unique idempotency/client reference placed on the MARKET validation order. */
+  marketClientReference?: string;
+  /** True once the MARKET mutation is invoked. */
+  marketOrderAttempted: boolean;
+  /** True when the dispatch may have reached the provider and therefore needs reconciliation. */
+  marketDispatchNeedsReconciliation: boolean;
+  /** Provider order id from the initial MARKET acknowledgement (may differ from position id). */
+  marketProviderOrderId?: string;
+  /** True only when the provider initially acknowledged MARKET as accepted/PENDING. */
+  marketOrderWasPending?: boolean;
+  /** Actual open-position id used for position reads/closes/history. */
   marketOrderId?: string;
   pendingOrderId?: string;
 }
@@ -454,6 +491,10 @@ export async function runVerificationChecklist(
     // close. Exact decimal math — never floats.
     partialLot: '0.01',
     marketLot: '0.02',
+    baselinePositionIds: new Set<string>(),
+    baselineWorkingOrderIds: new Set<string>(),
+    marketOrderAttempted: false,
+    marketDispatchNeedsReconciliation: false,
   };
 
   const pushStep = (name: string, status: VerificationStepStatus, outcome?: StepOutcome): void => {
@@ -523,6 +564,338 @@ export async function runVerificationChecklist(
     return violations;
   };
 
+  /**
+   * cTrader (and other asynchronous providers) may acknowledge a MARKET order
+   * with PENDING/accepted before the execution event is observable. Validation
+   * must reconcile that accepted provider order by its stable id instead of
+   * treating the intermediate acknowledgement as a failed trade.
+   */
+  const awaitAcceptedMarketFill = async (result: BrokerOrderResult): Promise<BrokerOrderResult> => {
+    if (result.status !== 'PENDING' || !result.success || !result.externalOrderId) {
+      return result;
+    }
+
+    const providerOrderId = result.externalOrderId;
+    const timeoutMs = 5_000;
+    const pollMs = 100;
+    const deadline = Date.now() + timeoutMs;
+    let lastStatus: BrokerOrderState['status'] | 'NOT_FOUND' = 'NOT_FOUND';
+
+    while (Date.now() <= deadline) {
+      const state = await adapter.getOrderById(providerOrderId);
+      if (state) {
+        lastStatus = state.status;
+        const stateViolations = orderStateViolations(`marketOrderState[${providerOrderId}]`, state);
+        if (stateViolations.length > 0) {
+          return {
+            ...result,
+            success: false,
+            status: 'FAILED',
+            brokerMessage: stateViolations.join('; '),
+          };
+        }
+
+        if (state.status === 'FILLED') {
+          // cTrader's accepted acknowledgement exposes an ORDER id, while
+          // closeOrder()/getOpenPositions operate on the resulting POSITION id.
+          // ORDER_DETAILS includes positionId in raw ProtoOAOrder when filled.
+          const raw =
+            state.raw && typeof state.raw === 'object'
+              ? (state.raw as Record<string, unknown>)
+              : null;
+          const filledPositionId =
+            raw?.positionId !== undefined && raw.positionId !== null
+              ? String(raw.positionId)
+              : undefined;
+          return {
+            ...result,
+            success: true,
+            externalOrderId: filledPositionId ?? result.externalOrderId,
+            status: 'FILLED',
+            filledPrice: state.avgFillPrice ?? result.filledPrice,
+            filledQuantity: state.filledQuantity || result.filledQuantity,
+            filledAt: state.updatedAt ?? result.filledAt,
+            brokerMessage: result.brokerMessage
+              ? `${result.brokerMessage}; observed FILLED after provider acceptance`
+              : 'Observed FILLED after provider acceptance',
+          };
+        }
+
+        if (
+          state.status === 'REJECTED' ||
+          state.status === 'CANCELLED' ||
+          state.status === 'EXPIRED'
+        ) {
+          return {
+            ...result,
+            success: false,
+            status: state.status === 'REJECTED' ? 'REJECTED' : 'FAILED',
+            brokerMessage: `Accepted market order became ${state.status}`,
+          };
+        }
+      }
+
+      if (Date.now() >= deadline) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+    }
+
+    return {
+      ...result,
+      success: false,
+      status: 'FAILED',
+      brokerMessage:
+        `Accepted market order did not reach FILLED within ${timeoutMs}ms ` +
+        `(last provider state ${lastStatus})`,
+    };
+  };
+
+  const equalDecimalStrings = (left: string, right: string): boolean => {
+    const a = parseDecimalString(left);
+    const b = parseDecimalString(right);
+    if (!a || !b) return false;
+    const scale = Math.max(a.scale, b.scale);
+    return rescale(a, scale).digits === rescale(b, scale).digits;
+  };
+
+  /**
+   * Resolve positions created by this validation run only. Pre-existing
+   * positions are protected by the baseline snapshot and are never touched.
+   */
+  const validationPositionCandidates = (positions: BrokerPosition[]): BrokerPosition[] => {
+    if (!passed('positions-snapshot') || !ctx.instrumentSymbol) return [];
+    return positions.filter(
+      (position) =>
+        !ctx.baselinePositionIds.has(position.externalOrderId) &&
+        position.instrument === ctx.instrumentSymbol &&
+        position.direction === 'BUY' &&
+        (equalDecimalStrings(position.lotSize, ctx.marketLot) ||
+          equalDecimalStrings(position.lotSize, ctx.partialLot)),
+    );
+  };
+
+  const orderCarriesClientReference = (order: BrokerOrderState): boolean => {
+    if (!ctx.marketClientReference || !order.raw || typeof order.raw !== 'object') return false;
+    const raw = order.raw as Record<string, unknown>;
+    const tradeData =
+      raw.tradeData && typeof raw.tradeData === 'object'
+        ? (raw.tradeData as Record<string, unknown>)
+        : null;
+    const reference = ctx.marketClientReference;
+    return (
+      raw.clientOrderId === reference.slice(0, 50) ||
+      tradeData?.label === reference.slice(0, 100) ||
+      tradeData?.comment === reference.slice(0, 512)
+    );
+  };
+
+  const validationWorkingOrderCandidates = (orders: BrokerOrderState[]): BrokerOrderState[] => {
+    if (!passed('positions-snapshot') || !ctx.instrumentSymbol) return [];
+    const newOrders = orders.filter(
+      (order) => !ctx.baselineWorkingOrderIds.has(order.providerOrderId),
+    );
+    const exactTagged = newOrders.filter(orderCarriesClientReference);
+    if (exactTagged.length > 0) return exactTagged;
+
+    // cTrader exposes exact client-reference correlation. If it found no tag,
+    // do not fall back to pair/lot matching and risk cancelling a user's own
+    // concurrent order. Adapters without this capability retain the bounded
+    // delta fallback used by the paper/contract harnesses.
+    if (hasPositionClientReferenceLookup(adapter)) return [];
+
+    return newOrders.filter(
+      (order) =>
+        order.instrument === ctx.instrumentSymbol &&
+        order.direction === 'BUY' &&
+        equalDecimalStrings(order.requestedQuantity, ctx.marketLot),
+    );
+  };
+
+  /**
+   * Last-resort DEMO cleanup. It never closes a position that existed before
+   * validation. If provider order state is uncertain we still close an
+   * unambiguous new validation position, but return FAIL unless the accepted
+   * provider order itself can also be proven terminal/cancelled.
+   */
+  const cleanupValidationExposure = async (): Promise<StepOutcome> => {
+    let unresolvedAcceptedMarketOrder = false;
+
+    if (ctx.marketOrderWasPending && ctx.marketProviderOrderId && !passed('full-close')) {
+      try {
+        const state = await adapter.getOrderById(ctx.marketProviderOrderId);
+        if (state?.status === 'FILLED' && !ctx.marketOrderId) {
+          const raw =
+            state.raw && typeof state.raw === 'object'
+              ? (state.raw as Record<string, unknown>)
+              : null;
+          if (raw?.positionId !== undefined && raw.positionId !== null) {
+            ctx.marketOrderId = String(raw.positionId);
+          }
+        } else if (state && (state.status === 'WORKING' || state.status === 'PARTIALLY_FILLED')) {
+          if (hasCancelOrder(adapter)) {
+            try {
+              await adapter.cancelOrder(ctx.marketProviderOrderId);
+            } catch {
+              unresolvedAcceptedMarketOrder = true;
+            }
+          } else {
+            unresolvedAcceptedMarketOrder = true;
+          }
+        } else if (state?.status === 'UNKNOWN') {
+          unresolvedAcceptedMarketOrder = true;
+        }
+      } catch {
+        // The provider may already have filled the order even when order-details
+        // is unavailable. Continue with position-delta cleanup, then keep the
+        // cleanup result FAIL because a future fill cannot be ruled out.
+        unresolvedAcceptedMarketOrder = true;
+        if (hasCancelOrder(adapter)) {
+          try {
+            await adapter.cancelOrder(ctx.marketProviderOrderId);
+            unresolvedAcceptedMarketOrder = false;
+          } catch {
+            // Best effort only; the position delta below is still authoritative
+            // for any fill already visible on the account.
+          }
+        }
+      }
+    }
+
+    let positions = await adapter.getOpenPositions();
+    let target = ctx.marketOrderId
+      ? positions.find((position) => position.externalOrderId === ctx.marketOrderId)
+      : undefined;
+
+    if (
+      !target &&
+      !passed('full-close') &&
+      ctx.marketClientReference &&
+      hasPositionClientReferenceLookup(adapter)
+    ) {
+      const exact = await adapter.findPositionByClientReference(ctx.marketClientReference);
+      if (exact && !ctx.baselinePositionIds.has(exact.externalOrderId)) {
+        target = exact;
+        ctx.marketOrderId = exact.externalOrderId;
+      }
+    }
+
+    if (!target && !passed('full-close') && !hasPositionClientReferenceLookup(adapter)) {
+      const candidates = validationPositionCandidates(positions);
+      if (candidates.length > 1) {
+        return {
+          status: 'FAIL',
+          detail:
+            `validation cleanup found ${candidates.length} new matching positions; ` +
+            'refusing to guess which one belongs to the harness',
+        };
+      }
+      target = candidates[0];
+      if (target) ctx.marketOrderId = target.externalOrderId;
+    }
+
+    if (target) {
+      try {
+        await adapter.closeOrder(target.externalOrderId);
+      } catch (err) {
+        return {
+          status: 'FAIL',
+          detail: `validation position ${target.externalOrderId} cleanup close failed: ${describeError(err)}`,
+          providerOrderId: target.externalOrderId,
+        };
+      }
+      positions = await adapter.getOpenPositions();
+      if (positions.some((position) => position.externalOrderId === target!.externalOrderId)) {
+        return {
+          status: 'FAIL',
+          detail: `validation position ${target.externalOrderId} still open after cleanup close`,
+          providerOrderId: target.externalOrderId,
+        };
+      }
+    }
+
+    // An uncertain dispatch may not return any provider order id. Reconcile
+    // working orders by delta against the baseline captured before mutation.
+    // This never cancels a pre-existing user/broker order.
+    let uncertainMarketOrderLeak = false;
+    if (ctx.marketDispatchNeedsReconciliation && !passed('full-close')) {
+      let working: BrokerOrderState[] = [];
+      try {
+        working = await adapter.listOrders();
+      } catch {
+        uncertainMarketOrderLeak = true;
+      }
+      const newMarketOrders = validationWorkingOrderCandidates(working);
+      if (newMarketOrders.length > 1) {
+        return {
+          status: 'FAIL',
+          detail:
+            `validation cleanup found ${newMarketOrders.length} new matching working orders; ` +
+            'refusing to guess which one belongs to the harness',
+        };
+      }
+      const leakedMarketOrder = newMarketOrders[0];
+      if (leakedMarketOrder) {
+        if (!hasCancelOrder(adapter)) {
+          uncertainMarketOrderLeak = true;
+        } else {
+          try {
+            await adapter.cancelOrder(leakedMarketOrder.providerOrderId);
+            const after = await adapter.listOrders();
+            uncertainMarketOrderLeak = after.some(
+              (order) => order.providerOrderId === leakedMarketOrder.providerOrderId,
+            );
+          } catch {
+            uncertainMarketOrderLeak = true;
+          }
+        }
+      }
+
+      // If dispatch certainty was unknown and neither a position nor a working
+      // order was visible, do not claim a clean PASS. The connection remains
+      // unvalidated/fail-closed so a late provider event cannot start AI.
+      if (!target && newMarketOrders.length === 0 && !ctx.marketProviderOrderId) {
+        uncertainMarketOrderLeak = true;
+      }
+    }
+
+    let pendingOrderLeak = false;
+    if (ctx.pendingOrderId && !passed('pending-cancel')) {
+      try {
+        const working = await adapter.listOrders();
+        if (working.some((order) => order.providerOrderId === ctx.pendingOrderId)) {
+          if (!hasCancelOrder(adapter)) {
+            pendingOrderLeak = true;
+          } else {
+            await adapter.cancelOrder(ctx.pendingOrderId);
+            const after = await adapter.listOrders();
+            pendingOrderLeak = after.some((order) => order.providerOrderId === ctx.pendingOrderId);
+          }
+        }
+      } catch {
+        pendingOrderLeak = true;
+      }
+    }
+
+    if (unresolvedAcceptedMarketOrder || uncertainMarketOrderLeak || pendingOrderLeak) {
+      return {
+        status: 'FAIL',
+        detail: unresolvedAcceptedMarketOrder
+          ? 'validation position was cleaned where visible, but accepted MARKET order state remains uncertain'
+          : uncertainMarketOrderLeak
+            ? 'validation MARKET dispatch remains uncertain after position/order reconciliation; connection stays unvalidated'
+            : 'validation pending order could not be proven cancelled',
+        ...(ctx.marketOrderId ? { providerOrderId: ctx.marketOrderId } : {}),
+      };
+    }
+
+    return {
+      status: 'PASS',
+      detail: target
+        ? `emergency cleanup closed validation position ${target.externalOrderId}; no residual validation exposure remains`
+        : 'no residual validation position or working order remains',
+      ...(target ? { providerOrderId: target.externalOrderId } : {}),
+    };
+  };
+
   // ── Step: connect ─────────────────────────────────────────────────────────
   if (selected.has('connect')) {
     if (options.connectStep) {
@@ -556,21 +929,32 @@ export async function runVerificationChecklist(
     }
   }
 
-  const connectFailed = statuses.get('connect') === 'FAIL';
+  const connectionFailed = statuses.get('connect') === 'FAIL';
+  let preflightFailed = false;
+  if (!connectionFailed) {
+    for (const step of options.preflightSteps ?? []) {
+      pushStep(step.name, step.status, step);
+      if (step.status === 'FAIL') preflightFailed = true;
+    }
+  }
+  const prerequisiteFailed = connectionFailed || preflightFailed;
 
-  // Fail-closed cascade: without a connection nothing else can be verified.
+  // Fail-closed cascade: without a connection or a passing safety preflight,
+  // nothing that can mutate broker state may be attempted.
   for (const name of PROVIDER_VERIFICATION_STEPS) {
     if (!selected.has(name) || name === 'connect') continue;
-    if (connectFailed && statuses.get(name) === undefined) {
+    if (prerequisiteFailed && statuses.get(name) === undefined) {
       pushStep(name, 'SKIPPED', {
         status: 'SKIPPED',
-        detail: 'connect failed — step not attempted',
+        detail: connectionFailed
+          ? 'connect failed — step not attempted'
+          : 'validation safety preflight failed — step not attempted',
       });
     }
   }
 
   // ── Step: account-info ────────────────────────────────────────────────────
-  if (selected.has('account-info') && !connectFailed) {
+  if (selected.has('account-info') && !prerequisiteFailed) {
     await runStep('account-info', async () => {
       const info = await adapter.getAccountInfo();
       const violations = decimalStringViolations(
@@ -589,7 +973,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: market-data (instrument catalog + current price) ─────────────────
-  if (selected.has('market-data') && !connectFailed) {
+  if (selected.has('market-data') && !prerequisiteFailed) {
     await runStep('market-data', async () => {
       const instruments = await adapter.getInstrumentList();
       if (!Array.isArray(instruments) || instruments.length === 0) {
@@ -628,9 +1012,12 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: positions-snapshot ──────────────────────────────────────────────
-  if (selected.has('positions-snapshot') && !connectFailed) {
+  if (selected.has('positions-snapshot') && !prerequisiteFailed) {
     await runStep('positions-snapshot', async () => {
-      const positions = await adapter.getOpenPositions();
+      const [positions, workingOrders] = await Promise.all([
+        adapter.getOpenPositions(),
+        adapter.listOrders(),
+      ]);
       for (const [index, position] of positions.entries()) {
         const violations = decimalStringViolations(
           `position[${position.externalOrderId ?? index}]`,
@@ -641,18 +1028,26 @@ export async function runVerificationChecklist(
           return { status: 'FAIL', detail: violations.join('; ') };
         }
       }
-      return { status: 'PASS', detail: `snapshot resolved (${positions.length} open position(s))` };
+      ctx.baselinePositionIds = new Set(positions.map((position) => position.externalOrderId));
+      ctx.baselineWorkingOrderIds = new Set(workingOrders.map((order) => order.providerOrderId));
+      return {
+        status: 'PASS',
+        detail:
+          `snapshot resolved (${positions.length} open position(s), ` +
+          `${workingOrders.length} working order(s))`,
+      };
     });
   }
 
   // ── Step: market-order (small DEMO market order) ──────────────────────────
-  if (selected.has('market-order') && !connectFailed) {
+  if (selected.has('market-order') && !prerequisiteFailed) {
     await runStep('market-order', async () => {
       if (!passed('market-data')) {
         return skipped('market-data did not pass — no instrument/lot context');
       }
+      ctx.marketClientReference = `harness-${randomUUID()}`;
       const request: BrokerOrderRequest = {
-        idempotencyKey: `harness-${randomUUID()}`,
+        idempotencyKey: ctx.marketClientReference,
         instrument: ctx.instrumentSymbol!,
         direction: 'BUY',
         lotSize: ctx.marketLot,
@@ -664,13 +1059,48 @@ export async function runVerificationChecklist(
         connectionReference: ctx.connectionReference,
       };
       let result: BrokerOrderResult;
+      ctx.marketOrderAttempted = true;
       try {
         result = await adapter.placeOrder(request);
       } catch (err) {
         const na = notApplicable(err);
         if (na) return na;
+        if (err instanceof BrokerAdapterError) {
+          const certainty = err.dispatchCertainty ?? defaultCertaintyForCode(err.code);
+          ctx.marketDispatchNeedsReconciliation =
+            certainty === ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER;
+        } else {
+          // Untyped mutation failures are conservatively uncertain.
+          ctx.marketDispatchNeedsReconciliation = true;
+        }
         throw err;
       }
+      ctx.marketProviderOrderId = result.externalOrderId;
+      ctx.marketOrderWasPending = result.status === 'PENDING';
+      ctx.marketDispatchNeedsReconciliation = result.success && result.status === 'PENDING';
+      result = await awaitAcceptedMarketFill(result);
+
+      // Generic provider fallback: if an accepted order id differs from the
+      // filled position id, resolve the one new validation position against
+      // the pre-order snapshot instead of using an order id for closeOrder().
+      if (result.success && result.status === 'FILLED' && passed('positions-snapshot')) {
+        const positions = await adapter.getOpenPositions();
+        const exact = result.externalOrderId
+          ? positions.find((position) => position.externalOrderId === result.externalOrderId)
+          : undefined;
+        if (!exact && ctx.marketClientReference && hasPositionClientReferenceLookup(adapter)) {
+          const referenced = await adapter.findPositionByClientReference(ctx.marketClientReference);
+          if (referenced && !ctx.baselinePositionIds.has(referenced.externalOrderId)) {
+            result = { ...result, externalOrderId: referenced.externalOrderId };
+          }
+        } else if (!exact && !hasPositionClientReferenceLookup(adapter)) {
+          const candidates = validationPositionCandidates(positions);
+          if (candidates.length === 1) {
+            result = { ...result, externalOrderId: candidates[0]!.externalOrderId };
+          }
+        }
+      }
+
       const violations = assertOrderResult('marketOrder', result, 'FILLED', true);
       if (violations.length > 0) {
         return { status: 'FAIL', detail: violations.join('; ') };
@@ -685,7 +1115,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: position-verify (the order reached the open positions) ───────────
-  if (selected.has('position-verify') && !connectFailed) {
+  if (selected.has('position-verify') && !prerequisiteFailed) {
     await runStep('position-verify', async () => {
       if (!passed('market-order')) {
         return skipped('market-order did not pass — no position to verify');
@@ -715,7 +1145,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: modify-sl-tp (SL/TP modification where supported) ────────────────
-  if (selected.has('modify-sl-tp') && !connectFailed) {
+  if (selected.has('modify-sl-tp') && !prerequisiteFailed) {
     await runStep('modify-sl-tp', async () => {
       if (!passed('position-verify')) {
         return skipped('position-verify did not pass — no position to modify');
@@ -753,7 +1183,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: partial-close ───────────────────────────────────────────────────
-  if (selected.has('partial-close') && !connectFailed) {
+  if (selected.has('partial-close') && !prerequisiteFailed) {
     await runStep('partial-close', async () => {
       if (!passed('market-order')) {
         return skipped('market-order did not pass — no position to partially close');
@@ -772,7 +1202,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: full-close ──────────────────────────────────────────────────────
-  if (selected.has('full-close') && !connectFailed) {
+  if (selected.has('full-close') && !prerequisiteFailed) {
     await runStep('full-close', async () => {
       if (!passed('market-order')) {
         return skipped('market-order did not pass — no position to close');
@@ -791,7 +1221,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: trade-history (closed-trade history contains the trade) ──────────
-  if (selected.has('trade-history') && !connectFailed) {
+  if (selected.has('trade-history') && !prerequisiteFailed) {
     await runStep('trade-history', async () => {
       if (!passed('full-close')) {
         return skipped('full-close did not pass — trade not closed');
@@ -825,7 +1255,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: pending-limit-order (far-from-market, stays WORKING) ─────────────
-  if (selected.has('pending-limit-order') && !connectFailed) {
+  if (selected.has('pending-limit-order') && !prerequisiteFailed) {
     await runStep('pending-limit-order', async () => {
       if (!passed('market-data')) {
         return skipped('market-data did not pass — no instrument/price context');
@@ -869,7 +1299,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: pending-modify (modify SL/TP of the working order) ───────────────
-  if (selected.has('pending-modify') && !connectFailed) {
+  if (selected.has('pending-modify') && !prerequisiteFailed) {
     await runStep('pending-modify', async () => {
       if (!passed('pending-limit-order')) {
         return skipped('pending-limit-order did not pass — no working order to modify');
@@ -912,7 +1342,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: pending-cancel ──────────────────────────────────────────────────
-  if (selected.has('pending-cancel') && !connectFailed) {
+  if (selected.has('pending-cancel') && !prerequisiteFailed) {
     await runStep('pending-cancel', async () => {
       if (!passed('pending-limit-order')) {
         return skipped('pending-limit-order did not pass — no working order to cancel');
@@ -937,7 +1367,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: order-history (working-order listing; cancelled order gone) ──────
-  if (selected.has('order-history') && !connectFailed) {
+  if (selected.has('order-history') && !prerequisiteFailed) {
     await runStep('order-history', async () => {
       // listOrders() is a REQUIRED interface member (BrokerOrderState
       // reconciliation surface) — no capability gate, it must resolve.
@@ -969,7 +1399,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: margin-info (getRequiredMargin sanity; null is acceptable) ───────
-  if (selected.has('margin-info') && !connectFailed) {
+  if (selected.has('margin-info') && !prerequisiteFailed) {
     await runStep('margin-info', async () => {
       if (!passed('market-data')) {
         return skipped('market-data did not pass — no instrument context');
@@ -995,7 +1425,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: reconciliation (positions + working orders consistent) ───────────
-  if (selected.has('reconciliation') && !connectFailed) {
+  if (selected.has('reconciliation') && !prerequisiteFailed) {
     await runStep('reconciliation', async () => {
       const positions: BrokerPosition[] = await adapter.getOpenPositions();
       const workingOrders: BrokerOrderState[] = await adapter.listOrders();
@@ -1018,7 +1448,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: reconnect (disconnect → connect → account read) ──────────────────
-  if (selected.has('reconnect') && !connectFailed) {
+  if (selected.has('reconnect') && !prerequisiteFailed) {
     await runStep('reconnect', async () => {
       if (!options.credentials) {
         return skipped('no credentials supplied — reconnect cannot re-authenticate');
@@ -1036,7 +1466,7 @@ export async function runVerificationChecklist(
   }
 
   // ── Step: provider-error-path (typed error, never a crash) ─────────────────
-  if (selected.has('provider-error-path') && !connectFailed) {
+  if (selected.has('provider-error-path') && !prerequisiteFailed) {
     await runStep('provider-error-path', async () => {
       try {
         const price = await adapter.getCurrentPrice(HARNESS_INVALID_INSTRUMENT);
@@ -1057,6 +1487,17 @@ export async function runVerificationChecklist(
         };
       }
     });
+  }
+
+  const cleanupNeeded =
+    !prerequisiteFailed &&
+    ((Boolean(ctx.marketOrderId || ctx.marketProviderOrderId) && !passed('full-close')) ||
+      (ctx.marketOrderAttempted &&
+        ctx.marketDispatchNeedsReconciliation &&
+        !passed('full-close')) ||
+      (Boolean(ctx.pendingOrderId) && !passed('pending-cancel')));
+  if (cleanupNeeded) {
+    await runStep('validation-exposure-cleanup', cleanupValidationExposure);
   }
 
   const finishedAt = new Date();

@@ -102,6 +102,21 @@ describe('CTraderClientService', () => {
     expect(accountAuths).toHaveLength(1);
   });
 
+  it('coalesces concurrent account-session authorization so only one 2102 reaches cTrader', async () => {
+    await Promise.all([
+      client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, 'owner-A'),
+      client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, 'owner-B'),
+      client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, 'owner-C'),
+    ]);
+
+    const accountAuths = server.requests.filter(
+      (r) => r.payloadType === CTRADER_PAYLOAD_TYPE.ACCOUNT_AUTH_REQ,
+    );
+    expect(accountAuths).toHaveLength(1);
+    expect(client.accountSessionOwnerCount('DEMO', ACCOUNT_ID)).toBe(3);
+    expect(client.hasAccountSession('DEMO', ACCOUNT_ID)).toBe(true);
+  });
+
   it('fails closed with AUTHENTICATION_FAILED when the platform cTrader app credentials are unconfigured', async () => {
     const unconfigured = new TestableCtraderClient(server, fakeConfigService());
     await expect(

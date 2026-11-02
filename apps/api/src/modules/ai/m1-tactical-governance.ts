@@ -1,5 +1,5 @@
 import type { M1TacticalCandidate } from './m1-tactical-candidate';
-import { M1_TACTICAL_POLICY_V1 } from './m1-tactical-candidate';
+import { M1_TACTICAL_POLICY_V1, M1_TACTICAL_POLICY_V2 } from './m1-tactical-candidate';
 import type { M1TacticalExpectancyDecision } from './m1-tactical-expectancy';
 import type { M1TacticalFeatureSnapshot } from './m1-tactical-features';
 import type { M1TacticalRoute, M1TacticalRouteDecision } from './m1-tactical-route';
@@ -135,9 +135,13 @@ export function evaluateM1TacticalGovernance(
   ) {
     blockers.push('M1_ROUTE_NOT_ELIGIBLE');
   }
+  const supportedPolicyVersions = new Set([
+    M1_TACTICAL_POLICY_V1.version,
+    M1_TACTICAL_POLICY_V2.version,
+  ]);
   if (
     input.routeDecision.policyVersion !== input.candidate.policyVersion ||
-    input.candidate.policyVersion !== M1_TACTICAL_POLICY_V1.version
+    !supportedPolicyVersions.has(input.candidate.policyVersion)
   ) {
     blockers.push('M1_POLICY_MISMATCH');
   }

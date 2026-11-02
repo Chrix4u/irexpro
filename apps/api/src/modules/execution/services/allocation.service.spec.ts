@@ -85,6 +85,11 @@ const sizingInputsFixture = (): PositionSizingInputs => ({
   maxLot: '10.00',
   lotStep: '0.01',
   profileMaxPositionSizeLot: '1.0',
+  maxLeverageAllowed: '30',
+  lotsByLeverageCeiling: '2.76',
+  notionalPerLotAccountCurrency: '108500',
+  finalNotionalAccountCurrency: '21700',
+  finalEffectiveLeverage: '2.17',
   requestedLotUpperBound: '1.0',
   lotsByRiskBudget: '0.2',
   lotsBeforeStepNormalization: '0.2',
@@ -475,6 +480,38 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
           logicalAccountKey: KEY,
           sized: sized({ allocatedCapital: '10000' }),
           executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      ).rejects.toMatchObject({ code: 'ALLOCATION_INSUFFICIENT_CAPITAL' });
+    });
+
+    it('validated DEMO FULL_AUTO may bypass concentration percentages while preserving the shared capital ceiling', async () => {
+      store.budgets[0].max_instrument_concentration = '50.00';
+      store.budgets[0].max_strategy_concentration = '60.00';
+      store.aggregateRows = [];
+
+      const alloc = await service.resolveOrAllocate({
+        intent: intent('intent-demo-promoted'),
+        logicalAccountKey: KEY,
+        sized: sized({ allocatedCapital: '30000' }),
+        executionMode: ExecutionMode.FULL_AUTO,
+        enforceConcentrationCaps: false,
+      });
+
+      expect(alloc.status).toBe(CapitalAllocationStatus.ACTIVE);
+    });
+
+    it('validated DEMO concentration bypass still rejects when the shared capital pool is exhausted', async () => {
+      store.budgets[0].max_instrument_concentration = '50.00';
+      store.budgets[0].max_strategy_concentration = '60.00';
+      store.aggregateRows = [joinRow({ allocated_capital: '45000', trade_status: 'OPEN' })];
+
+      await expect(
+        service.resolveOrAllocate({
+          intent: intent('intent-demo-exhausted'),
+          logicalAccountKey: KEY,
+          sized: sized({ allocatedCapital: '10000' }),
+          executionMode: ExecutionMode.FULL_AUTO,
+          enforceConcentrationCaps: false,
         }),
       ).rejects.toMatchObject({ code: 'ALLOCATION_INSUFFICIENT_CAPITAL' });
     });

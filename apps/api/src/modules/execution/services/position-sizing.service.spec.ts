@@ -58,6 +58,7 @@ const profileRow = (overrides: Partial<RiskProfile> = {}): RiskProfile =>
     userId: USER,
     maxTradeRiskPercent: '2.00',
     maxPositionSizeLot: '1.0000',
+    maxLeverageAllowed: 30,
     ...overrides,
   }) as RiskProfile;
 
@@ -92,7 +93,11 @@ const geometry = (
 
 describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §4)', () => {
   let service: PositionSizingService;
-  let brokerService: { getBrokerAccountState: jest.Mock; getRequiredMargin: jest.Mock };
+  let brokerService: {
+    getBrokerAccountState: jest.Mock;
+    getCurrentPriceForConnection: jest.Mock;
+    getRequiredMargin: jest.Mock;
+  };
   let orderGeometry: { resolveOrderGeometry: jest.Mock };
   let profileRepo: { findOne: jest.Mock };
 
@@ -122,6 +127,7 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
   beforeEach(() => {
     brokerService = {
       getBrokerAccountState: jest.fn().mockResolvedValue(accountState()),
+      getCurrentPriceForConnection: jest.fn().mockResolvedValue(null),
       getRequiredMargin: jest
         .fn()
         .mockImplementation(async (_connectionId: string, params: { lotSize: string }) => {
@@ -216,6 +222,45 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       expect(sized.inputs.requestedLotUpperBound).toBe('0.01');
       expect(sized.lots).toBe('0.01');
       expect(sized.allocatedCapital).toBe('10.85');
+    });
+
+    it('steps a qualified EURUSD size down to the largest lot strictly below the leverage ceiling', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue(
+        accountState({ currency: 'EUR', equity: '953.38', balance: '953.38', freeMargin: '953.38' }),
+      );
+      brokerService.getRequiredMargin.mockResolvedValue('735.00');
+
+      const sized = await service.sizePosition(
+        baseParams({
+          direction: 'SELL',
+          stopLoss: '1.08550',
+          requestedLotUpperBound: '0.30',
+        }),
+      );
+
+      expect(sized.lots).toBe('0.28');
+      expect(sized.inputs.maxLeverageAllowed).toBe('30');
+      expect(sized.inputs.lotsByLeverageCeiling).toBe('0.28');
+      expect(ExactDecimal.parse(sized.inputs.finalEffectiveLeverage).lt(ExactDecimal.parse('30'))).toBe(true);
+    });
+
+    it('steps down one lot increment when the requested size lands exactly on the leverage limit', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue(
+        accountState({ currency: 'EUR', equity: '1000.00', balance: '1000.00', freeMargin: '1000.00' }),
+      );
+      brokerService.getRequiredMargin.mockResolvedValue('725.00');
+
+      const sized = await service.sizePosition(
+        baseParams({
+          direction: 'SELL',
+          stopLoss: '1.08550',
+          requestedLotUpperBound: '0.30',
+        }),
+      );
+
+      expect(sized.lots).toBe('0.29');
+      expect(sized.inputs.lotsByLeverageCeiling).toBe('0.29');
+      expect(ExactDecimal.parse(sized.inputs.finalEffectiveLeverage).lt(ExactDecimal.parse('30'))).toBe(true);
     });
 
     it('uses the REQUESTED price for LIMIT entries', async () => {
@@ -427,7 +472,87 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       expect(result.inputs.requiredMargin).toBe('600');
     });
 
-    it('CURRENCY_MISMATCH when neither FX leg matches the account currency', async () => {
+    it('sizes a third-currency FX pair using a fresh direct broker conversion quote', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue(
+        accountState({ currency: 'EUR', equity: '10000.00', balance: '10000.00' }),
+      );
+      orderGeometry.resolveOrderGeometry.mockResolvedValue(
+        geometry({
+          contractSize: ExactDecimal.parse('100000'),
+          freshQuote: ExactDecimal.parse('150.000'),
+          instrumentSpec: USDJPY_SPEC,
+        }),
+      );
+      brokerService.getCurrentPriceForConnection.mockResolvedValue({
+        instrument: 'EURJPY',
+        bid: '162.000',
+        ask: '162.020',
+        spread: '0.020',
+        timestamp: new Date(),
+      });
+
+      const result = await service.sizePosition(
+        baseParams({ instrument: 'USDJPY', stopLoss: '149.500' }),
+      );
+
+      expect(brokerService.getCurrentPriceForConnection).toHaveBeenCalledWith(
+        USER,
+        CONN,
+        'EURJPY',
+        { propagateProviderError: true },
+      );
+      expect(result.lots).toBe('0.64');
+      expect(result.inputs.riskAmount).toBe('200');
+      expect(result.inputs.riskAmountInQuoteCurrency).toBe('32400');
+      expect(result.inputs.riskCurrencyConversion).toBe('ACCOUNT_TO_QUOTE_USING_BROKER_BID');
+      expect(result.inputs.riskCurrencyConversionInstrument).toBe('EURJPY');
+      expect(result.inputs.riskCurrencyConversionRate).toBe('162');
+    });
+
+    it('uses fresh cached broker-native conversion evidence before requesting another provider quote', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue(
+        accountState({ currency: 'EUR', equity: '10000.00', balance: '10000.00' }),
+      );
+      orderGeometry.resolveOrderGeometry.mockResolvedValue(
+        geometry({
+          contractSize: ExactDecimal.parse('100000'),
+          freshQuote: ExactDecimal.parse('150.000'),
+          instrumentSpec: USDJPY_SPEC,
+        }),
+      );
+      brokerService.getCurrentPriceForConnection.mockResolvedValue(null);
+      const fxConversion = {
+        resolveCachedBid: jest.fn().mockResolvedValue({
+          rate: '165',
+          path: ['EURUSD', 'USDJPY'],
+          source: 'BROKER_NATIVE_CACHE_USD_BRIDGE',
+          observedAt: new Date(),
+        }),
+      };
+      const cachedService = new PositionSizingService(
+        brokerService as unknown as BrokerService,
+        orderGeometry as unknown as RiskOrderGeometryService,
+        profileRepo as never,
+        { get: jest.fn().mockReturnValue(fxConversion) } as never,
+      );
+
+      const result = await cachedService.sizePosition(
+        baseParams({ instrument: 'USDJPY', stopLoss: '149.500' }),
+      );
+
+      expect(fxConversion.resolveCachedBid).toHaveBeenCalledWith(CONN, 'EUR', 'JPY', expect.any(Date));
+      expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
+      expect(result.lots).toBe('0.66');
+      expect(result.inputs.riskCurrencyConversion).toBe(
+        'ACCOUNT_TO_QUOTE_USING_BROKER_NATIVE_EVIDENCE',
+      );
+      expect(result.inputs.riskCurrencyConversionInstrument).toBe('EURUSD>USDJPY');
+      expect(result.inputs.riskCurrencyConversionRate).toBe('165');
+    });
+
+    it('CURRENCY_MISMATCH when a third-currency conversion quote cannot be proven', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue(accountState({ currency: 'EUR' }));
+      brokerService.getCurrentPriceForConnection.mockResolvedValue(null);
       await expect(
         service.sizePosition(baseParams({ instrument: 'GBPJPY' })),
       ).rejects.toMatchObject({ code: 'CURRENCY_MISMATCH' });

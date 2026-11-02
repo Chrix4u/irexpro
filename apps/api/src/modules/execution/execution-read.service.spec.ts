@@ -34,6 +34,37 @@ describe('ExecutionReadService', () => {
     });
   });
 
+  it('scopes all trader reads to the selected broker connection when supplied', async () => {
+    await service.listOpenPositions(USER_ID, BROKER_CONNECTION_ID);
+    expect(tradeRepo.find).toHaveBeenLastCalledWith({
+      where: {
+        userId: USER_ID,
+        brokerConnectionId: BROKER_CONNECTION_ID,
+        status: TradeStatus.OPEN,
+      },
+      order: { openedAt: 'DESC', createdAt: 'DESC' },
+      take: 100,
+    });
+
+    await service.listRecentExecutions(USER_ID, 25, BROKER_CONNECTION_ID);
+    expect(tradeRepo.find).toHaveBeenLastCalledWith({
+      where: { userId: USER_ID, brokerConnectionId: BROKER_CONNECTION_ID },
+      order: { createdAt: 'DESC' },
+      take: 25,
+    });
+
+    await service.listClosedExecutions(USER_ID, 25, BROKER_CONNECTION_ID);
+    expect(tradeRepo.find).toHaveBeenLastCalledWith({
+      where: {
+        userId: USER_ID,
+        brokerConnectionId: BROKER_CONNECTION_ID,
+        status: TradeStatus.CLOSED,
+      },
+      order: { closedAt: 'DESC', createdAt: 'DESC' },
+      take: 25,
+    });
+  });
+
   it('clamps recent execution limits to 1..100', async () => {
     await service.listRecentExecutions(USER_ID, 999);
     expect(tradeRepo.find).toHaveBeenLastCalledWith(expect.objectContaining({ take: 100 }));

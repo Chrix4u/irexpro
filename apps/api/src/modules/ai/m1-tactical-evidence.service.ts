@@ -5,9 +5,10 @@ import type { M1FailedMoveRescueDecision } from './m1-failed-move-rescue';
 import type { M1DriftCounterfactualResult } from './m1-drift-counterfactual';
 import type { M1ShadowPairSideOutcome } from './m1-shadow-pair-side-reliability';
 import { m1UsdRiskAtStop } from './m1-tactical-currency-exposure';
+import type { M5EarlyTransitionEvidence } from './m5-early-transition-handoff';
 
 export type M1TacticalDecisionRoute = M1ReliabilityRoute | 'ABSTAIN';
-export type M1TacticalDecisionAuthority = 'NONE' | 'PAPER_ONLY_RESEARCH';
+export type M1TacticalDecisionAuthority = 'NONE' | 'PAPER_ONLY_RESEARCH' | 'BROKER_NATIVE';
 
 export interface M1TacticalDecisionInput {
   userId: string;
@@ -22,6 +23,33 @@ export interface M1TacticalDecisionInput {
   candidate: Record<string, unknown>;
   governance: Record<string, unknown>;
   blockers: string[];
+}
+
+export interface M1TacticalLatestDecisionState {
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  route: M1TacticalDecisionRoute;
+  barTime: string;
+  confidence: number;
+  netExpectedR: number;
+  executionAuthority: M1TacticalDecisionAuthority;
+  blockers: string[];
+  outcomeState: string | null;
+  primaryEngineCode: string | null;
+  primaryConfidence: number | null;
+  primaryNetExpectedR: number | null;
+  planBRoute: string | null;
+  planBPaperAdmitted: boolean | null;
+  multimodelExecutable: boolean | null;
+  multimodelAuthorityPath: string | null;
+  multimodelRescueVolumeCap: number | null;
+  trainedExpertState: string | null;
+  trainedExpertDirection: 'BUY' | 'SELL' | null;
+  trainedExpertConfidence: number | null;
+  trainedExpertLongVotes: number | null;
+  trainedExpertShortVotes: number | null;
+  m1TacticalRole: string | null;
+  m1TimingRoute: M1TacticalDecisionRoute;
 }
 
 export interface M1TacticalDecisionRecord {
@@ -97,6 +125,57 @@ export interface M1ShadowOutcome15mV1 {
 export const M1_FAST_STOP_REGIME_BRAKE_ARTIFACT = 'm1-fast-stop-regime-brake-v1' as const;
 export const M1_FAST_STOP_MAX_DURATION_MINUTES = 2;
 export const M1_FAST_STOP_COOLDOWN_MINUTES = 5;
+export const M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT =
+  'm1-multimodel-loss-streak-brake-v1' as const;
+export const M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES = 3;
+export const M1_MULTIMODEL_LOSS_STREAK_WINDOW_HOURS = 24;
+export const M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS = 12;
+export const M1_MULTIMODEL_PAYOFF_WINDOW_TRADES = 8;
+export const M1_MULTIMODEL_NEGATIVE_PAYOFF_MIN_TRADES = 5;
+export const M1_MULTIMODEL_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR = 0.7;
+export const M1_MULTIMODEL_PAYOFF_LOOKBACK_DAYS = 14;
+export const M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES = 8;
+export const M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR = 0.65;
+export const M1_MULTIMODEL_CONFIRMED_REVERSAL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES = 4;
+export const M1_MULTIMODEL_CONFIRMED_REVERSAL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR =
+  0.5;
+export const M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_AGE_HOURS = 96;
+
+export type M1MultimodelStrategyRoute =
+  | 'TREND_CONTINUATION'
+  | 'CONFIRMED_REVERSAL'
+  | 'EARLY_TRANSITION';
+
+export interface M1MultimodelLossStreakBrakeQuery {
+  userId: string;
+  brokerConnectionId: string;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  strategyRoute: M1MultimodelStrategyRoute;
+  evaluatedAt: Date;
+}
+
+export interface M1MultimodelLossStreakBrakeDecision {
+  artifact: typeof M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT;
+  active: boolean;
+  reason:
+    | 'CLEAR'
+    | 'RECENT_MULTIMODEL_LOSS_STREAK'
+    | 'RECENT_NEGATIVE_PAYOFF'
+    | 'PERSISTENT_NEGATIVE_PAYOFF';
+  strategyRoute: M1MultimodelStrategyRoute;
+  recentClosedTrades: number;
+  payoffClosedTrades: number;
+  recentLosses: number;
+  recentWins: number;
+  cumulativeRealisedPnl: number;
+  profitFactor?: number | null;
+  negativePayoff?: boolean;
+  persistentNegativePayoff: boolean;
+  latestClosedAt: Date | null;
+  cooldownHours: number;
+  cooldownRemainingSeconds: number;
+}
 
 export interface M1FastStopRegimeBrakeQuery {
   userId: string;
@@ -142,6 +221,7 @@ export interface M1OpenPaperRiskPositionQuery {
 export interface M1OpenPaperRiskPositionSnapshot {
   instrument: string;
   direction: 'BUY' | 'SELL';
+  lotSize: number;
   riskAtStop: number | null;
 }
 
@@ -277,6 +357,16 @@ function number(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function nullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 function date(value: string | Date): Date {
   return value instanceof Date ? new Date(value) : new Date(value);
 }
@@ -322,6 +412,156 @@ function blockers(value: unknown): string[] {
 @Injectable()
 export class M1TacticalEvidenceService {
   constructor(private readonly dataSource: DataSource) {}
+
+  async loadLatestM5EarlyTransitionEvidence(input: {
+    userId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    asOf: Date;
+  }): Promise<M5EarlyTransitionEvidence | null> {
+    const instrument = input.instrument.trim().toUpperCase();
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          instrument, direction, market_bar_time, evaluated_at,
+          components ->> 'strategyRoute' AS strategy_route,
+          COALESCE((components ->> 'paperAdmitted')::boolean, false) AS paper_admitted,
+          COALESCE(
+            (components -> 'governance' ->> 'paperExecutionEligible')::boolean,
+            false
+          ) AS paper_execution_eligible,
+          COALESCE(components -> 'governance' ->> 'eventRisk', 'UNVERIFIED') AS event_risk,
+          COALESCE(components -> 'governance' ->> 'driftState', 'UNKNOWN') AS drift_state,
+          COALESCE(
+            NULLIF(components -> 'governance' ->> 'netExpectedR', '')::numeric,
+            expected_r
+          ) AS net_expected_r,
+          ensemble_score, consensus_passed, consensus_required
+        FROM trading.ensemble_shadow_decisions
+        WHERE user_id = $1
+          AND instrument = $2
+          AND direction = $3
+          AND components ->> 'strategyRoute' = 'EARLY_TRANSITION'
+          AND evaluated_at <= $4::timestamptz
+        ORDER BY evaluated_at DESC, created_at DESC
+        LIMIT 1
+      `,
+      [input.userId, instrument, input.direction, input.asOf.toISOString()],
+    )) as Array<{
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      market_bar_time: string | Date;
+      evaluated_at: string | Date;
+      strategy_route: string;
+      paper_admitted: boolean;
+      paper_execution_eligible: boolean;
+      event_risk: string;
+      drift_state: string;
+      net_expected_r: string | number;
+      ensemble_score: string | number;
+      consensus_passed: string | number;
+      consensus_required: string | number;
+    }>;
+    const row = rows[0];
+    if (!row) return null;
+    const eventRisk =
+      row.event_risk === 'CLEAR' ||
+      row.event_risk === 'HIGH_IMPACT_BLOCK' ||
+      row.event_risk === 'UNVERIFIED'
+        ? row.event_risk
+        : 'UNVERIFIED';
+    return {
+      instrument: String(row.instrument).trim().toUpperCase(),
+      direction: row.direction,
+      marketBarTime: date(row.market_bar_time),
+      evaluatedAt: date(row.evaluated_at),
+      strategyRoute: row.strategy_route,
+      paperAdmitted: row.paper_admitted === true,
+      paperExecutionEligible: row.paper_execution_eligible === true,
+      eventRisk,
+      driftState: row.drift_state,
+      netExpectedR: number(row.net_expected_r),
+      ensembleScore: number(row.ensemble_score),
+      consensusPassed: number(row.consensus_passed),
+      consensusRequired: number(row.consensus_required),
+    };
+  }
+
+  async loadLatestDecisionStateForUser(
+    userId: string,
+  ): Promise<M1TacticalLatestDecisionState | null> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          instrument, direction, route, bar_time, candidate, governance, blockers,
+          execution_authority, outcome_state
+        FROM trading.m1_tactical_decisions
+        WHERE user_id = $1
+        ORDER BY
+          bar_time DESC,
+          CASE
+            WHEN execution_authority <> 'NONE' THEN 0
+            WHEN route <> 'ABSTAIN' THEN 1
+            ELSE 2
+          END ASC,
+          COALESCE((candidate ->> 'confidence')::numeric, 0) DESC,
+          COALESCE((governance ->> 'netExpectedR')::numeric, -999999) DESC,
+          created_at DESC
+        LIMIT 1
+      `,
+      [userId],
+    )) as Array<{
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      route: M1TacticalDecisionRoute;
+      bar_time: string | Date;
+      candidate: unknown;
+      governance: unknown;
+      blockers: unknown;
+      execution_authority: M1TacticalDecisionAuthority;
+      outcome_state: string | null;
+    }>;
+    const row = rows[0];
+    if (!row) return null;
+    const candidate = jsonObject(row.candidate);
+    const governance = jsonObject(row.governance);
+    const multimodelEnsemble = jsonObject(governance.multimodelEnsemble);
+    const multimodelGovernance = jsonObject(governance.multimodelGovernance);
+    const trainedExpert = jsonObject(governance.multimodelTrainedExpert);
+    const multimodelAuthority = jsonObject(governance.multimodelAuthority);
+    const trainedDirection = nullableString(trainedExpert.direction);
+    return {
+      instrument: String(row.instrument).trim().toUpperCase(),
+      direction: row.direction,
+      route: row.route,
+      barTime: date(row.bar_time).toISOString(),
+      confidence: number(candidate.confidence),
+      netExpectedR: number(governance.netExpectedR),
+      executionAuthority: row.execution_authority,
+      blockers: blockers(row.blockers),
+      outcomeState: row.outcome_state ?? null,
+      primaryEngineCode: nullableString(governance.primaryEngineCode),
+      primaryConfidence: nullableNumber(multimodelEnsemble.ensembleScore),
+      primaryNetExpectedR: nullableNumber(multimodelGovernance.netExpectedR),
+      planBRoute: nullableString(multimodelEnsemble.strategyRoute),
+      planBPaperAdmitted:
+        typeof multimodelEnsemble.paperAdmitted === 'boolean'
+          ? multimodelEnsemble.paperAdmitted
+          : null,
+      multimodelExecutable:
+        typeof multimodelAuthority.executable === 'boolean' ? multimodelAuthority.executable : null,
+      multimodelAuthorityPath: nullableString(multimodelAuthority.authorityPath),
+      multimodelRescueVolumeCap: nullableNumber(multimodelAuthority.rescueVolumeCap),
+      trainedExpertState: nullableString(trainedExpert.state),
+      trainedExpertDirection:
+        trainedDirection === 'BUY' || trainedDirection === 'SELL' ? trainedDirection : null,
+      trainedExpertConfidence: nullableNumber(trainedExpert.ensembleConfidence),
+      trainedExpertLongVotes: nullableNumber(trainedExpert.longVotes),
+      trainedExpertShortVotes: nullableNumber(trainedExpert.shortVotes),
+      m1TacticalRole: nullableString(governance.m1TacticalRole),
+      m1TimingRoute: row.route,
+    };
+  }
 
   async recordDecision(input: M1TacticalDecisionInput): Promise<M1TacticalDecisionRecord> {
     const instrument = input.instrument.trim().toUpperCase();
@@ -379,6 +619,15 @@ export class M1TacticalEvidenceService {
           t.lot_size,
           t.fill_price,
           t.stop_loss,
+          COALESCE(
+            t.max_favorable_pnl,
+            NULLIF(ti.metadata->'reconstructed_path_v1'->>'maxFavorablePnl', '')::numeric
+          ) AS max_favorable_pnl,
+          COALESCE(
+            t.profit_giveback,
+            NULLIF(ti.metadata->'reconstructed_path_v1'->>'profitGiveback', '')::numeric
+          ) AS profit_giveback,
+          NULLIF(ca.sizing_inputs->>'finalRiskAtStop', '') AS risk_at_stop_account,
           t.closed_at
         FROM trading.m1_tactical_decisions d
         JOIN trading.trade_intents ti
@@ -392,6 +641,13 @@ export class M1TacticalEvidenceService {
           ON t.trade_intent_id = ti.id
          AND t.user_id = d.user_id
          AND t.broker_connection_id = d.broker_connection_id
+        LEFT JOIN LATERAL (
+          SELECT ca0.sizing_inputs
+          FROM trading.capital_allocations ca0
+          WHERE ca0.trade_intent_id = t.trade_intent_id
+          ORDER BY ca0.created_at DESC
+          LIMIT 1
+        ) ca ON true
         WHERE d.user_id = $1
           AND d.broker_connection_id = $2
           AND d.route = $3
@@ -426,6 +682,9 @@ export class M1TacticalEvidenceService {
       lot_size: string | number | null;
       fill_price: string | number | null;
       stop_loss: string | number | null;
+      max_favorable_pnl: string | number | null;
+      profit_giveback: string | number | null;
+      risk_at_stop_account: string | number | null;
       closed_at: string | Date;
     }>;
     return rows.map((row) => ({
@@ -434,14 +693,155 @@ export class M1TacticalEvidenceService {
       direction: row.direction,
       policyVersion: row.policy_version,
       realisedPnl: number(row.realised_pnl),
-      riskAtStop: m1UsdRiskAtStop({
-        instrument: row.instrument,
-        lotSize: number(row.lot_size),
-        entryPrice: number(row.fill_price),
-        stopLoss: number(row.stop_loss),
-      }),
+      riskAtStop:
+        number(row.risk_at_stop_account) ??
+        m1UsdRiskAtStop({
+          instrument: row.instrument,
+          lotSize: number(row.lot_size),
+          entryPrice: number(row.fill_price),
+          stopLoss: number(row.stop_loss),
+        }),
+      maxFavorablePnl: number(row.max_favorable_pnl),
+      profitGiveback: number(row.profit_giveback),
       closedAt: date(row.closed_at),
     }));
+  }
+
+  async loadMultimodelLossStreakBrake(
+    input: M1MultimodelLossStreakBrakeQuery,
+  ): Promise<M1MultimodelLossStreakBrakeDecision> {
+    const instrument = input.instrument.trim().toUpperCase();
+    const rows = (await this.dataSource.query(
+      `
+        SELECT t.realised_pnl, t.closed_at
+        FROM trading.trades t
+        JOIN trading.trade_intents ti
+          ON ti.id = t.trade_intent_id
+         AND ti.user_id = t.user_id
+         AND ti.broker_connection_id = t.broker_connection_id
+        JOIN trading.m1_tactical_decisions d
+          ON d.trade_intent_id = ti.id
+         AND d.user_id = t.user_id
+         AND d.broker_connection_id = t.broker_connection_id
+        WHERE t.user_id = $1
+          AND t.broker_connection_id = $2
+          AND t.instrument = $3
+          AND t.direction = $4
+          AND d.governance -> 'multimodelEnsemble' ->> 'strategyRoute' = $5
+          AND ti.strategy_code = 'external-irexpro-multimodel-ensemble'
+          AND ti.timeframe = 'M1'
+          AND ti.metadata ->> 'external_provider_paper_only' = 'true'
+          AND t.status = 'CLOSED'
+          AND t.realised_pnl IS NOT NULL
+          AND t.closed_at IS NOT NULL
+          AND t.closed_at <= $6::timestamptz
+          AND t.closed_at > ($6::timestamptz - interval '14 days')
+        ORDER BY t.closed_at DESC
+        LIMIT ${M1_MULTIMODEL_PAYOFF_WINDOW_TRADES}
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        instrument,
+        input.direction,
+        input.strategyRoute,
+        input.evaluatedAt.toISOString(),
+      ],
+    )) as Array<{ realised_pnl: string | number; closed_at: string | Date }>;
+
+    const payoffRows = rows.map((row) => ({
+      pnl: number(row.realised_pnl),
+      closedAt: date(row.closed_at),
+    }));
+    const recentCutoffMs =
+      input.evaluatedAt.getTime() - M1_MULTIMODEL_LOSS_STREAK_WINDOW_HOURS * 60 * 60_000;
+    const recentRows = payoffRows.filter((row) => row.closedAt.getTime() > recentCutoffMs);
+    const recentPnlValues = recentRows.map((row) => row.pnl);
+    const payoffPnlValues = payoffRows.map((row) => row.pnl);
+    const recentLosses = recentPnlValues.filter((value) => value < 0).length;
+    const recentWins = recentPnlValues.filter((value) => value > 0).length;
+    const cumulativeRealisedPnl =
+      Math.round(recentPnlValues.reduce((sum, value) => sum + value, 0) * 100) / 100;
+    const recentGrossProfit = recentPnlValues
+      .filter((value) => value > 0)
+      .reduce((sum, value) => sum + value, 0);
+    const recentGrossLoss = -recentPnlValues
+      .filter((value) => value < 0)
+      .reduce((sum, value) => sum + value, 0);
+    const recentProfitFactor =
+      recentGrossLoss > 0 ? recentGrossProfit / recentGrossLoss : recentGrossProfit > 0 ? null : 0;
+    const negativePayoff =
+      recentRows.length >= M1_MULTIMODEL_NEGATIVE_PAYOFF_MIN_TRADES &&
+      cumulativeRealisedPnl < 0 &&
+      recentProfitFactor !== null &&
+      recentProfitFactor < M1_MULTIMODEL_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR;
+
+    const payoffCumulativeRealisedPnl =
+      Math.round(payoffPnlValues.reduce((sum, value) => sum + value, 0) * 100) / 100;
+    const payoffGrossProfit = payoffPnlValues
+      .filter((value) => value > 0)
+      .reduce((sum, value) => sum + value, 0);
+    const payoffGrossLoss = -payoffPnlValues
+      .filter((value) => value < 0)
+      .reduce((sum, value) => sum + value, 0);
+    const profitFactor =
+      payoffGrossLoss > 0 ? payoffGrossProfit / payoffGrossLoss : payoffGrossProfit > 0 ? null : 0;
+    const latestClosedAt = payoffRows[0]?.closedAt ?? null;
+    const persistentEvidenceAgeHours = latestClosedAt
+      ? Math.max(0, (input.evaluatedAt.getTime() - latestClosedAt.getTime()) / (60 * 60_000))
+      : Number.POSITIVE_INFINITY;
+    const persistentNegativePayoffMinTrades =
+      input.strategyRoute === 'CONFIRMED_REVERSAL'
+        ? M1_MULTIMODEL_CONFIRMED_REVERSAL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES
+        : M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MIN_TRADES;
+    const persistentNegativePayoffMaxProfitFactor =
+      input.strategyRoute === 'CONFIRMED_REVERSAL'
+        ? M1_MULTIMODEL_CONFIRMED_REVERSAL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR
+        : M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_PROFIT_FACTOR;
+    const persistentNegativePayoff =
+      payoffRows.length >= persistentNegativePayoffMinTrades &&
+      payoffCumulativeRealisedPnl < 0 &&
+      profitFactor !== null &&
+      profitFactor < persistentNegativePayoffMaxProfitFactor &&
+      persistentEvidenceAgeHours <= M1_MULTIMODEL_PERSISTENT_NEGATIVE_PAYOFF_MAX_AGE_HOURS;
+
+    const cooldownUntilMs = latestClosedAt
+      ? latestClosedAt.getTime() + M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS * 60 * 60_000
+      : 0;
+    const cooldownRemainingSeconds = latestClosedAt
+      ? Math.max(0, Math.ceil((cooldownUntilMs - input.evaluatedAt.getTime()) / 1000))
+      : 0;
+    const latestThree = recentPnlValues.slice(0, M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES);
+    const lossStreak =
+      latestThree.length === M1_MULTIMODEL_LOSS_STREAK_MIN_CLOSED_TRADES &&
+      latestThree.every((value) => value < 0);
+    const recentBrakeActive = (lossStreak || negativePayoff) && cooldownRemainingSeconds > 0;
+    const active = recentBrakeActive || persistentNegativePayoff;
+    const reason: M1MultimodelLossStreakBrakeDecision['reason'] = !active
+      ? 'CLEAR'
+      : recentBrakeActive && lossStreak
+        ? 'RECENT_MULTIMODEL_LOSS_STREAK'
+        : recentBrakeActive && negativePayoff
+          ? 'RECENT_NEGATIVE_PAYOFF'
+          : 'PERSISTENT_NEGATIVE_PAYOFF';
+
+    return {
+      artifact: M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT,
+      active,
+      reason,
+      strategyRoute: input.strategyRoute,
+      recentClosedTrades: recentRows.length,
+      payoffClosedTrades: payoffRows.length,
+      recentLosses,
+      recentWins,
+      cumulativeRealisedPnl,
+      profitFactor,
+      negativePayoff,
+      persistentNegativePayoff,
+      latestClosedAt,
+      cooldownHours: M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS,
+      cooldownRemainingSeconds,
+    };
   }
 
   async loadFastStopRegimeBrake(
@@ -464,7 +864,7 @@ export class M1TacticalEvidenceService {
           AND t.broker_connection_id = $2
           AND t.instrument = $3
           AND t.direction = $4
-          AND ti.strategy_code = 'external-irexpro-m1-tactical'
+          AND ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')
           AND ti.timeframe = 'M1'
           AND ti.metadata ->> 'external_provider_paper_only' = 'true'
           AND t.status = 'CLOSED'
@@ -561,7 +961,7 @@ export class M1TacticalEvidenceService {
       const riskAtStop = ['BUY', 'SELL'].includes(direction)
         ? m1UsdRiskAtStop({ instrument, lotSize, entryPrice, stopLoss })
         : null;
-      return { instrument, direction, riskAtStop };
+      return { instrument, direction, lotSize, riskAtStop };
     });
   }
 
@@ -590,7 +990,7 @@ export class M1TacticalEvidenceService {
           AND t.broker_connection_id = $2
           AND t.instrument = $3
           AND t.status = 'OPEN'
-          AND ti.strategy_code = 'external-irexpro-m1-tactical'
+          AND ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')
           AND ti.timeframe = 'M1'
           AND ti.metadata ->> 'external_provider_paper_only' = 'true'
         ORDER BY t.opened_at ASC
@@ -654,7 +1054,7 @@ export class M1TacticalEvidenceService {
             AND ti.broker_connection_id = $2
             AND ti.instrument = $3
             AND ti.direction = $4
-            AND ti.strategy_code = 'external-irexpro-m1-tactical'
+            AND ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')
             AND ti.timeframe = 'M1'
             AND (
               ti.status = 'CREATED'
@@ -885,11 +1285,20 @@ export class M1TacticalEvidenceService {
           AND instrument = $3
           AND route <> 'ABSTAIN'
           AND execution_authority = 'NONE'
-          AND jsonb_array_length(blockers) <= 2
-          AND blockers <@ '["DRIFT_OUT_OF_DISTRIBUTION","DRIFT_STRESSED","M1_PHASE_SHADOW"]'::jsonb
           AND (
             blockers @> '["DRIFT_OUT_OF_DISTRIBUTION"]'::jsonb
             OR blockers @> '["DRIFT_STRESSED"]'::jsonb
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(blockers) AS blocker(value)
+            WHERE blocker.value NOT IN (
+              'DRIFT_OUT_OF_DISTRIBUTION',
+              'DRIFT_STRESSED',
+              'M1_PHASE_SHADOW',
+              'M1_PHASE_ROUTE_SHADOW'
+            )
+              AND blocker.value !~ '^M1_(SHADOW_|MEANINGFUL_SCOUT_|TIERED_SCOUT_)?RELIABILITY_'
           )
           AND governance -> 'driftCounterfactual15m' IS NULL
           AND evaluated_at <= ($4::timestamptz - interval '16 minutes')

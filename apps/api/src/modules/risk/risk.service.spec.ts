@@ -170,6 +170,7 @@ const mockBrokerService = () => ({
     freeMargin: '9800.00',
     currency: 'USD',
   }),
+  getCurrentPriceForConnection: jest.fn().mockResolvedValue(null),
   // Sprint 32 Gate 2: mock required margin calculation
   getRequiredMargin: jest.fn().mockResolvedValue('100.00'),
   // Round 7 (P1): the on-demand LIVE snapshot observation seam.
@@ -1008,6 +1009,32 @@ describe('RiskService', () => {
       }
     });
 
+    it('does not re-cap allocation-aware FULL_AUTO DEMO sizing to the legacy fixed lot ceiling', async () => {
+      sessionRepo.findOne.mockResolvedValue(
+        defaultSession({ executionMode: ExecutionMode.FULL_AUTO }),
+      );
+      sessionResolution.resolveActiveSessionAuthority.mockResolvedValue({
+        sessionId: 'session-1',
+        sessionGeneration: 1,
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'conn-1',
+      });
+      const trade = validTrade({
+        executionMode: ExecutionMode.FULL_AUTO,
+        requestedLotSize: '0.50',
+        stopLoss: '1.08400',
+        allocationAwarePaperSizing: true,
+      });
+
+      const result = await service.validateProposedTrade('user-1', trade);
+
+      expect(result.decision).toBe('APPROVED');
+      if (result.decision === 'APPROVED') {
+        expect(result.validatedOrder.lotSize).toBe('0.50');
+        expect(result.appliedRules).toContain('POSITION_SIZE:ALLOCATION_AWARE_DEMO');
+      }
+    });
+
     it('does not modify lot size when within allowed limit', async () => {
       const result = await service.validateProposedTrade('user-1', validTrade()); // 0.05 < max 0.10
 
@@ -1366,13 +1393,85 @@ describe('RiskService', () => {
       expect(result.decision).toBe('APPROVED');
     });
 
-    it('fails closed when the account currency matches neither FX leg', async () => {
+    it('uses a fresh direct broker FX cross when the account currency matches neither instrument leg', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue({
         balance: '10000.00',
         equity: '10000.00',
         freeMargin: '9900.00',
         currency: 'USD',
       });
+      brokerService.getCurrentPriceForConnection.mockResolvedValue({
+        bid: '156.50',
+        ask: '156.52',
+        timestamp: new Date().toISOString(),
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({
+          instrument: 'GBPJPY',
+          requestedLotSize: '0.05',
+          entryPrice: '200.000',
+          stopLoss: '199.500',
+          takeProfit: '201.000',
+        }),
+      );
+
+      expect(brokerService.getCurrentPriceForConnection).toHaveBeenCalledWith(
+        'user-1', 'conn-1', 'USDJPY', { propagateProviderError: true },
+      );
+      expect(result.decision).toBe('APPROVED');
+    });
+
+    it('uses fresh cached broker-native FX evidence before requesting another provider conversion quote', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: '10000.00',
+        freeMargin: '9900.00',
+        currency: 'EUR',
+      });
+      brokerService.getCurrentPriceForConnection.mockResolvedValue(null);
+      const fxConversion = {
+        resolveCachedBid: jest.fn().mockResolvedValue({
+          rate: '165',
+          path: ['EURUSD', 'USDJPY'],
+          source: 'BROKER_NATIVE_CACHE_USD_BRIDGE',
+          observedAt: new Date(),
+        }),
+      };
+      (module.get(ModuleRef).get as jest.Mock).mockImplementation((token: unknown) =>
+        (token as { name?: string })?.name === 'BrokerFxConversionService' ? fxConversion : undefined,
+      );
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({
+          instrument: 'USDJPY',
+          requestedLotSize: '0.05',
+          entryPrice: '150.000',
+          stopLoss: '149.500',
+          takeProfit: '151.000',
+        }),
+      );
+
+      expect(fxConversion.resolveCachedBid).toHaveBeenCalledWith(
+        'conn-1',
+        'EUR',
+        'JPY',
+        expect.any(Date),
+      );
+      expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
+      expect(result.decision).toBe('APPROVED');
+    });
+
+    it('still fails closed when the required third-currency broker cross is unavailable', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: '10000.00',
+        freeMargin: '9900.00',
+        currency: 'USD',
+      });
+      brokerService.getCurrentPriceForConnection.mockResolvedValue(null);
 
       const result = await service.validateProposedTrade(
         'user-1',
@@ -1388,7 +1487,7 @@ describe('RiskService', () => {
       expect(result.decision).toBe('REJECTED');
       if (result.decision === 'REJECTED') {
         expect(result.rejectionCode).toBe(RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE);
-        expect(result.rejectionReason).toContain('matches neither leg');
+        expect(result.rejectionReason).toContain('USDJPY');
       }
     });
 

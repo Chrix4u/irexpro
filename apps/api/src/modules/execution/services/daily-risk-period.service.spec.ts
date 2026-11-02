@@ -121,6 +121,10 @@ class TestDailyRiskPeriodService extends DailyRiskPeriodService {
   protected tradesTableName(): string {
     return 'trades';
   }
+
+  protected dailyLossResetsTableName(): string {
+    return 'daily_loss_resets';
+  }
 }
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -202,6 +206,21 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
       entities: [DailyRiskPeriodMirror, TradeMirror],
     });
     await dataSource.initialize();
+    await dataSource.query(`
+      CREATE TABLE daily_loss_resets (
+        user_id varchar NOT NULL,
+        broker_connection_id varchar NOT NULL,
+        logical_account_key varchar NOT NULL,
+        account_currency varchar NOT NULL,
+        risk_period_date date NOT NULL,
+        reset_at datetime NOT NULL,
+        reset_count integer NOT NULL DEFAULT 1,
+        last_session_id varchar NULL,
+        created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (user_id, logical_account_key, account_currency, risk_period_date)
+      )
+    `);
     periodRepo = dataSource.getRepository(DailyRiskPeriodMirror);
   });
 
@@ -211,6 +230,7 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
 
   beforeEach(async () => {
     await dataSource.query('DELETE FROM daily_risk_periods');
+    await dataSource.query('DELETE FROM daily_loss_resets');
     await dataSource.query('DELETE FROM trades');
     service = new TestDailyRiskPeriodService(
       periodRepo as unknown as Repository<DailyRiskPeriod>,
@@ -361,7 +381,7 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
   // ─── getTodayRealisedLossExact ─────────────────────────────────────────────
 
   describe('getTodayRealisedLossExact', () => {
-    it("returns today's CLOSED losers as an exact RAW string total (no floats)", async () => {
+    it("returns today's net CLOSED realised loss as an exact RAW string total (no floats)", async () => {
       await seedTrade(dataSource, { id: 't1', realisedPnl: '-100.50' });
       await seedTrade(dataSource, { id: 't2', realisedPnl: '-50.25' });
 
@@ -435,9 +455,9 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
       expect(result.complete).toBe(true);
     });
 
-    it('excludes OPEN trades and positive realised P&L (CLOSED losers only)', async () => {
+    it('nets CLOSED winners against losers and floors a profitable window at zero loss', async () => {
       await seedTrade(dataSource, { id: 't1', realisedPnl: '-25.25' });
-      await seedTrade(dataSource, { id: 't2', realisedPnl: '75.25' }); // winner
+      await seedTrade(dataSource, { id: 't2', realisedPnl: '75.25' });
       await seedTrade(dataSource, {
         id: 't3',
         realisedPnl: '-100.50',
@@ -446,7 +466,16 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
       });
 
       const result = await todayLoss();
-      expect(result.total).toBe('-25.25');
+      expect(result.total).toBe('0');
+      expect(result.complete).toBe(true);
+    });
+
+    it('returns only the remaining net loss when CLOSED winners partially offset losers', async () => {
+      await seedTrade(dataSource, { id: 'loss', realisedPnl: '-100.50' });
+      await seedTrade(dataSource, { id: 'win', realisedPnl: '40.25' });
+
+      const result = await todayLoss();
+      expect(result.total).toBe('-60.25');
       expect(result.complete).toBe(true);
     });
 
@@ -463,15 +492,73 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
       expect(result.complete).toBe(true);
     });
 
-    it('excludes legacy NULL-provenance losers from the total and reports complete=false', async () => {
+    it('excludes legacy NULL-provenance realised rows from the total and reports complete=false', async () => {
       await seedTrade(dataSource, { id: 't1', realisedPnl: '-100.50' }); // fully provenanced
-      // Legacy rows without immutable provenance (never guessed into a scope):
+      // Any unscoped realised P&L can change the net result, including winners.
       await seedTrade(dataSource, { id: 't2', realisedPnl: '-70.50', logicalAccountKey: null });
-      await seedTrade(dataSource, { id: 't3', realisedPnl: '-30.25', accountCurrency: null });
+      await seedTrade(dataSource, { id: 't3', realisedPnl: '30.25', accountCurrency: null });
 
       const result = await todayLoss();
       expect(result.total).toBe('-100.50'); // only the provable row
       expect(result.complete).toBe(false); // LIVE decisions must fail closed
+    });
+
+    it('resets the daily-loss window from an explicit user-confirmed cutoff without changing historical trade P&L', async () => {
+      await seedTrade(dataSource, {
+        id: 'before-reset',
+        realisedPnl: '-100.50',
+        closedAt: new Date('2026-09-14T10:00:00.000Z'),
+      });
+
+      const reset = await service.recordDailyLossReset({
+        userId: USER,
+        brokerConnectionId: CONN,
+        logicalAccountKey: KEY,
+        accountCurrency: 'USD',
+        sessionId: null,
+        now: new Date('2026-09-14T11:00:00.000Z'),
+      });
+
+      await seedTrade(dataSource, {
+        id: 'after-reset',
+        realisedPnl: '-25.25',
+        closedAt: new Date('2026-09-14T11:30:00.000Z'),
+      });
+
+      expect(reset.resetCount).toBe(1);
+      expect(reset.resetAt.toISOString()).toBe('2026-09-14T11:00:00.000Z');
+      expect(await todayLoss()).toEqual({ total: '-25.25', complete: true });
+    });
+
+    it('moves the reset cutoff forward on each explicit confirmation and increments the durable reset count', async () => {
+      const first = await service.recordDailyLossReset({
+        userId: USER,
+        brokerConnectionId: CONN,
+        logicalAccountKey: KEY,
+        accountCurrency: 'USD',
+        sessionId: 'session-1',
+        now: new Date('2026-09-14T10:00:00.000Z'),
+      });
+      const second = await service.recordDailyLossReset({
+        userId: USER,
+        brokerConnectionId: CONN,
+        logicalAccountKey: KEY,
+        accountCurrency: 'USD',
+        sessionId: 'session-1',
+        now: new Date('2026-09-14T12:00:00.000Z'),
+      });
+
+      expect(first.resetCount).toBe(1);
+      expect(second.resetCount).toBe(2);
+      expect(second.resetAt.toISOString()).toBe('2026-09-14T12:00:00.000Z');
+      await expect(
+        service.getDailyLossResetAt({
+          userId: USER,
+          logicalAccountKey: KEY,
+          accountCurrency: 'USD',
+          now: NOW,
+        }),
+      ).resolves.toEqual(new Date('2026-09-14T12:00:00.000Z'));
     });
 
     it("returns '0' and complete=true when no trades exist today", async () => {

@@ -330,6 +330,8 @@ export interface BrokerCloseAllResult {
 export interface BrokerOrderState {
   /** Provider-assigned order identifier (ticket number). */
   providerOrderId: string;
+  /** Provider position identifier created by this order, when the provider exposes it. */
+  providerPositionId?: string | null;
   /** Caller-supplied stable identifier, when the provider echoes it. */
   clientOrderId?: string | null;
   /** Normalized provider order state. UNKNOWN = unrecognized provider value

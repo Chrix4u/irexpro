@@ -550,6 +550,65 @@ describe('ExecutionService — session authority (Round 5, issues #295/#298)', (
     });
   });
 
+  // ─── explicit risk-suspension resume ────────────────────────────────────
+
+  describe('resumeRiskSuspendedSession', () => {
+    it('reactivates only a risk-suspended session, bumps authority generation and fences suspended-generation grants', async () => {
+      const session = await start(USER, CONN_A, ExecutionMode.PAPER_ONLY);
+      await sessionRepo.update(
+        { id: session.id },
+        {
+          status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+          authorityGeneration: 2,
+        },
+      );
+      const suspendedGenerationGrant = await seedGrant(session, {
+        sessionGeneration: 2,
+        status: RiskGrantStatus.ACTIVE,
+      });
+
+      const resumed = await service.resumeRiskSuspendedSession(USER, session.id);
+
+      expect(resumed.status).toBe(TradingSessionStatus.ACTIVE);
+      expect(resumed.authorityGeneration).toBe(3);
+      const grantAfter = await riskGrantRepo.findOne({
+        where: { id: suspendedGenerationGrant.id },
+      });
+      expect(grantAfter?.status).toBe(RiskGrantStatus.INVALIDATED);
+      expect(grantAfter?.invalidationReason).toBe('SESSION_AUTHORITY_GENERATION_CHANGED');
+    });
+
+    it('rebases peak equity when the user explicitly resets drawdown protection', async () => {
+      const session = await start(USER, CONN_A, ExecutionMode.PAPER_ONLY);
+      await sessionRepo.update(
+        { id: session.id },
+        {
+          status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+          authorityGeneration: 2,
+          peakEquity: '920.12',
+        },
+      );
+
+      const resumed = await service.resumeRiskSuspendedSession(USER, session.id, {
+        resetPeakEquityTo: '825.54',
+      });
+
+      expect(resumed.status).toBe(TradingSessionStatus.ACTIVE);
+      expect(resumed.authorityGeneration).toBe(3);
+      expect(Number(resumed.peakEquity)).toBe(825.54);
+    });
+
+    it('refuses to reactivate an ACTIVE session through the daily-loss resume seam', async () => {
+      const session = await start(USER, CONN_A, ExecutionMode.PAPER_ONLY);
+
+      await expect(service.resumeRiskSuspendedSession(USER, session.id)).rejects.toThrow();
+
+      const after = await sessionRepo.findOne({ where: { id: session.id } });
+      expect(after?.status).toBe(TradingSessionStatus.ACTIVE);
+      expect(after?.authorityGeneration).toBe(1);
+    });
+  });
+
   // ─── endSession invalidates outstanding authority ────────────────────────
 
   describe('endSession', () => {
@@ -571,6 +630,22 @@ describe('ExecutionService — session authority (Round 5, issues #295/#298)', (
 
       const confirmationAfter = await confirmationRepo.findOne({ where: { id: confirmation.id } });
       expect(confirmationAfter?.status).toBe(ExecutionConfirmationStatus.REVOKED);
+    });
+
+    it('allows an explicit END transition from SUSPENDED_RISK_LIMIT', async () => {
+      const session = await start(USER, CONN_A, ExecutionMode.PAPER_ONLY);
+      await sessionRepo.update(
+        { id: session.id },
+        { status: TradingSessionStatus.SUSPENDED_RISK_LIMIT },
+      );
+
+      await service.endSession(USER, TradingSessionStatus.ENDED, {
+        expectedSessionId: session.id,
+      });
+
+      const after = await sessionRepo.findOne({ where: { id: session.id } });
+      expect(after?.status).toBe(TradingSessionStatus.ENDED);
+      expect(after?.endedAt).toBeInstanceOf(Date);
     });
 
     it('invalidates only grants bound to the OBSERVED generation (new-generation grants survive)', async () => {

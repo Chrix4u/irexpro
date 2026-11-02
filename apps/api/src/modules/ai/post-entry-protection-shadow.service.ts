@@ -338,12 +338,16 @@ export class PostEntryProtectionShadowService implements OnModuleInit, OnModuleD
   }
 
   private marketDataConnectionId(executionBrokerConnectionId?: string): string {
-    const executionSource = (executionBrokerConnectionId ?? '').trim();
-    if (executionSource) return executionSource;
-
     const m1Source = this.config.get<string>('vpsForexScanner.m1MarketDataConnectionId', '').trim();
     if (m1Source) return m1Source;
-    if (!this.config.get<boolean>('multimodelBrokerExpert.enabled', false)) return '';
-    return this.config.get<string>('multimodelBrokerExpert.sourceConnectionId', '').trim();
+
+    if (this.config.get<boolean>('multimodelBrokerExpert.enabled', false)) {
+      const brokerNativeSource = this.config
+        .get<string>('multimodelBrokerExpert.sourceConnectionId', '')
+        .trim();
+      if (brokerNativeSource) return brokerNativeSource;
+    }
+
+    return (executionBrokerConnectionId ?? '').trim();
   }
 }

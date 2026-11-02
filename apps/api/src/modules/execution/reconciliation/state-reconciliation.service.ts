@@ -5,6 +5,7 @@ import { BrokerConnection } from '../../broker/entities/broker-connection.entity
 import { BrokerAccount } from '../../broker/entities/broker-account.entity';
 import { BrokerService } from '../../broker/broker.service';
 import { BrokerAdapterRegistry } from '../../broker/adapters/broker-adapter.registry';
+import { CTRADER_FAMILY_BROKER_IDS } from '../../broker/registry/broker-catalog';
 import { CredentialEncryptionService } from '../../broker/services/credential-encryption.service';
 import { BrokerCredentialLifecycle } from '../../broker/authorization/broker-credential-status';
 import { ConflictException } from '@nestjs/common';
@@ -80,6 +81,8 @@ const RECONCILABLE_ORDER_STATUSES = [
  * never a dispatch that is merely in flight.
  */
 const PRE_COMMITMENT_GRACE_MS = 5 * 60_000;
+const TIMED_OUT_POSITION_MATCH_WINDOW_MS = 2 * 60_000;
+const TIMED_OUT_POSITION_CLOCK_SKEW_MS = 5_000;
 
 /** Trade statuses holding (or possibly holding) provider positions.
  *
@@ -239,6 +242,105 @@ export class StateReconciliationService {
     private readonly allocationService: AllocationService,
   ) {}
 
+  private async recoverTimedOutProviderPositions(
+    connection: BrokerConnection,
+    internalTrades: Trade[],
+    providerPositions: import('../../broker/interfaces/broker-adapter.interface').BrokerPosition[],
+  ): Promise<
+    Array<{
+      type: string;
+      internalRefId: string | null;
+      providerRef: string | null;
+      resolution: string;
+    }>
+  > {
+    if (!CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId)) return [];
+
+    const claimedPositionIds = new Set<string>();
+    for (const trade of internalTrades) {
+      if (trade.externalOrderId) claimedPositionIds.add(trade.externalOrderId);
+      if (trade.externalPositionId) claimedPositionIds.add(trade.externalPositionId);
+    }
+
+    const unresolvedTrades = internalTrades.filter(
+      (trade) =>
+        (trade.status === TradeStatus.PENDING ||
+          trade.status === TradeStatus.RECONCILIATION_PENDING) &&
+        trade.dispatchCertainty === ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER &&
+        !trade.externalOrderId &&
+        !trade.externalPositionId &&
+        trade.createdAt instanceof Date,
+    );
+
+    const matchingPositions = (trade: Trade) =>
+      providerPositions.filter((position) => {
+        if (claimedPositionIds.has(position.externalOrderId)) return false;
+        if (position.instrument.toUpperCase() !== trade.instrument.toUpperCase()) return false;
+        if (position.direction !== trade.direction) return false;
+        if (compareDecimal(position.lotSize, trade.lotSize) !== 0) return false;
+        const deltaMs = position.openedAt.getTime() - trade.createdAt.getTime();
+        return (
+          deltaMs >= -TIMED_OUT_POSITION_CLOCK_SKEW_MS &&
+          deltaMs <= TIMED_OUT_POSITION_MATCH_WINDOW_MS
+        );
+      });
+
+    const resolutionRefs: Array<{
+      type: string;
+      internalRefId: string | null;
+      providerRef: string | null;
+      resolution: string;
+    }> = [];
+
+    for (const trade of unresolvedTrades) {
+      const candidates = matchingPositions(trade);
+      if (candidates.length !== 1) continue;
+      const position = candidates[0];
+
+      const competingTrades = unresolvedTrades.filter((other) =>
+        matchingPositions(other).some(
+          (candidate) => candidate.externalOrderId === position.externalOrderId,
+        ),
+      );
+      if (competingTrades.length !== 1) continue;
+
+      const recovered = await this.resolution.recoverTradeToOpen(trade, position);
+      if (!recovered) continue;
+
+      trade.status = TradeStatus.OPEN;
+      trade.externalPositionId = position.externalOrderId;
+      trade.fillPrice = position.openPrice;
+      trade.openedAt = position.openedAt;
+      trade.brokerRejectionReason = null;
+      trade.closeReason = null;
+      claimedPositionIds.add(position.externalOrderId);
+
+      resolutionRefs.push(
+        {
+          type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+          internalRefId: trade.id,
+          providerRef: null,
+          resolution:
+            'Timed-out cTrader dispatch uniquely matched provider position — trade recovered to OPEN',
+        },
+        {
+          type: ReconciliationDiscrepancyType.UNKNOWN_PROVIDER_POSITION,
+          internalRefId: null,
+          providerRef: position.externalOrderId,
+          resolution:
+            'Provider-only cTrader position uniquely correlated to timed-out internal dispatch',
+        },
+      );
+
+      this.logger.warn(
+        `Recovered timed-out cTrader trade ${trade.id}: provider position ${position.externalOrderId} ` +
+          `${position.instrument} ${position.direction} ${position.lotSize} lots`,
+      );
+    }
+
+    return resolutionRefs;
+  }
+
   getProviderQuotaCooldownUntil(connectionId: string, now = Date.now()): Date | null {
     const cooldownUntil = this.providerQuotaCooldownUntilByConnection.get(connectionId) ?? 0;
     if (cooldownUntil <= now) {
@@ -329,6 +431,12 @@ export class StateReconciliationService {
       const closedTrades =
         internalTrades.length > 0 ? await this.fetchClosedTrades(adapter, internalTrades) : [];
 
+      const preDiffResolutionRefs = await this.recoverTimedOutProviderPositions(
+        connection,
+        internalTrades,
+        providerPositions,
+      );
+
       const internalState = {
         orders: internalOrders.map((o) => this.toOrderSnapshot(o)),
         trades: internalTrades.map((t) => this.toTradeSnapshot(t)),
@@ -399,22 +507,47 @@ export class StateReconciliationService {
         internalRefId: string | null;
         providerRef: string | null;
         resolution: string;
-      }> = [];
+      }> = [...preDiffResolutionRefs];
       let errors = 0;
       let autoResolvedCount = 0;
 
-      // 7a. Positions: externally-closed + RECONCILIATION_PENDING recovery.
+      // 7a. Positions: externally-closed + async-fill recovery.
       for (const trade of internalTrades) {
         try {
-          // Providers may use a position identifier that differs from the
-          // originating order identifier. Prefer the durable position id when
-          // execution captured one; fall back to the legacy order id.
-          const providerPositionRef = trade.externalPositionId ?? trade.externalOrderId;
+          // Providers such as cTrader assign a working ORDER id first and a
+          // distinct POSITION id when the market order fills asynchronously.
+          // Resolve that mapping before asking for the live position; treating
+          // the order id as a position id leaves real exposure invisible.
+          let providerPositionRef = trade.externalPositionId ?? null;
+          if (
+            !providerPositionRef &&
+            trade.status === TradeStatus.PENDING &&
+            trade.externalOrderId
+          ) {
+            const providerOrder = await adapter.getOrderById(trade.externalOrderId);
+            if (
+              providerOrder &&
+              (providerOrder.status === 'FILLED' || providerOrder.status === 'PARTIALLY_FILLED') &&
+              providerOrder.providerPositionId
+            ) {
+              providerPositionRef = providerOrder.providerPositionId;
+            }
+          }
+          // Legacy providers historically stored the provider position id in
+          // externalOrderId. Keep that compatibility path for non-async/open
+          // rows and for adapters where order and position identifiers match.
+          if (!providerPositionRef) providerPositionRef = trade.externalOrderId;
+
           const position = providerPositionRef
             ? await adapter.getPositionById(providerPositionRef)
             : null;
 
           if (position === null && providerPositionRef) {
+            // A PENDING trade whose provider order has not yet yielded a live
+            // position is still unresolved, NOT proven closed. Never attempt
+            // the illegal PENDING→CLOSED transition from mere absence.
+            if (trade.status === TradeStatus.PENDING) continue;
+
             // Closed-trade adapters normalize their stable trade/position id
             // into externalOrderId. Match the same provider reference we used
             // for the position lookup, with a legacy order-id fallback.
@@ -425,6 +558,12 @@ export class StateReconciliationService {
             );
             const closed = await this.resolution.closeTradeFromProvider(trade, match ?? null);
             if (closed) {
+              if (trade.tradeIntentId) {
+                await this.allocationService.releaseAllocationForIntent(
+                  trade.tradeIntentId,
+                  'PROVIDER_POSITION_CLOSED',
+                );
+              }
               resolutionRefs.push({
                 type: ReconciliationDiscrepancyType.POSITION_CLOSED_EXTERNALLY,
                 internalRefId: trade.id,
@@ -435,20 +574,40 @@ export class StateReconciliationService {
           } else if (
             position !== null &&
             (trade.status === TradeStatus.RECONCILIATION_PENDING ||
-              // Round 7.1 (P0-5): a WORKING dispatch outcome leaves the trade
-              // PENDING with the position live at the provider — the provider
-              // truth recovers it to OPEN (PENDING→OPEN is state-machine
-              // legal; previously this case had NO convergence branch).
               trade.status === TradeStatus.PENDING)
           ) {
-            const recovered = await this.resolution.recoverTradeToOpen(trade);
+            const recovered = await this.resolution.recoverTradeToOpen(trade, position);
             if (recovered) {
               resolutionRefs.push({
                 type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
                 internalRefId: trade.id,
-                providerRef: trade.externalOrderId,
+                providerRef: providerPositionRef,
                 resolution: 'Provider-observed position open — trade recovered to OPEN',
               });
+            }
+          }
+
+          // cTrader MARKET orders cannot carry absolute SL/TP on the new-order
+          // request. Immediate fills attach them synchronously in the adapter;
+          // async fills (and transient failed amendments) are repaired from
+          // provider truth here. OPEN rows remain eligible so a transient
+          // protection failure is retried on the next reconciliation cycle.
+          if (
+            position !== null &&
+            connection.brokerId === 'ctrader' &&
+            (trade.status === TradeStatus.PENDING ||
+              trade.status === TradeStatus.RECONCILIATION_PENDING ||
+              trade.status === TradeStatus.OPEN)
+          ) {
+            const modifications: { newStopLoss?: string; newTakeProfit?: string } = {};
+            if (trade.stopLoss && trade.stopLoss !== '0' && position.stopLoss === '0') {
+              modifications.newStopLoss = trade.stopLoss;
+            }
+            if (trade.takeProfit && trade.takeProfit !== '0' && position.takeProfit === '0') {
+              modifications.newTakeProfit = trade.takeProfit;
+            }
+            if (modifications.newStopLoss || modifications.newTakeProfit) {
+              await adapter.modifyOrder(position.externalOrderId, modifications);
             }
           }
         } catch (err) {

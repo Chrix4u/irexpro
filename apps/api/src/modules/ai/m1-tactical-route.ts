@@ -14,7 +14,10 @@ export type M1TacticalRoute =
 
 export type M1TacticalRouteReason =
   | 'TREND_STRUCTURE_ALIGNED'
+  | 'FRESH_M5_CONTINUATION'
+  | 'M5_CONTINUATION_EXHAUSTED'
   | 'FAILED_MOVE_WITH_MULTI_BAR_REVERSAL_IMPULSE'
+  | 'M5_REVERSAL_NOT_CONFIRMED'
   | 'EARLY_TRANSITION_IMPULSE'
   | 'LOCAL_IMPULSE_AGAINST_HTF'
   | 'DIRECTION_EDGE_TOO_SMALL'
@@ -67,6 +70,10 @@ function abstain(
   };
 }
 
+function finiteOr(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) ? value! : fallback;
+}
+
 function localImpulseAgainstHtf(
   candidate: M1TacticalCandidate,
   scoreEdge: number,
@@ -87,7 +94,7 @@ function localImpulseAgainstHtf(
   );
 }
 
-function confirmedReversal(candidate: M1TacticalCandidate, policy: M1TacticalPolicy): boolean {
+function reversalImpulse(candidate: M1TacticalCandidate, policy: M1TacticalPolicy): boolean {
   return (
     candidate.failedBreakoutAgainstDirection &&
     candidate.directionQuality >= policy.minReversalQuality &&
@@ -96,6 +103,79 @@ function confirmedReversal(candidate: M1TacticalCandidate, policy: M1TacticalPol
     candidate.alignedMomentum5Atr >= policy.minReversalImpulseAtr * 0.5 &&
     candidate.alignedEmaSlopeAtr > 0
   );
+}
+
+function m5ReversalConfirmed(candidate: M1TacticalCandidate): boolean {
+  // Reversal execution is based on completed M5 evidence only. A sustained
+  // three-bar turn remains valid, but one genuinely decisive completed M5
+  // candle can confirm sooner even while the older bars still dominate the
+  // three-candle average.
+  const establishedTurn =
+    candidate.alignedM5BodyPressure3 >= 0.08 &&
+    candidate.alignedM5Momentum3Atr >= 0.08 &&
+    candidate.alignedM5Momentum1Atr >= -0.1;
+  const decisiveFreshTurn =
+    finiteOr(candidate.alignedM5LatestBodyPressure, 0) >= 0.6 &&
+    candidate.alignedM5Momentum1Atr >= 0.3 &&
+    candidate.alignedM5Momentum3Atr >= -0.1;
+  return establishedTurn || decisiveFreshTurn;
+}
+
+function continuationShape(candidate: M1TacticalCandidate, policy: M1TacticalPolicy): boolean {
+  return (
+    candidate.directionQuality >= policy.minContinuationQuality &&
+    candidate.alignedMomentum3Atr >= policy.minContinuationMomentumAtr &&
+    candidate.alignedEmaSeparationAtr > 0 &&
+    !candidate.failedBreakoutWithDirection
+  );
+}
+
+function freshM5Continuation(
+  candidate: M1TacticalCandidate,
+  snapshot: M1TacticalFeatureSnapshot,
+  policy: M1TacticalPolicy,
+): boolean {
+  if (!continuationShape(candidate, policy)) return false;
+
+  const latestBodyPressure = finiteOr(candidate.alignedM5LatestBodyPressure, 0);
+  const directionalRun = finiteOr(candidate.alignedM5DirectionalRun, 0);
+  const m30Efficiency = finiteOr(candidate.alignedM30DirectionalEfficiency, 0);
+  const m30MomentumAtr = finiteOr(candidate.alignedM30MomentumAtr, 0);
+  const bodyExpansion = finiteOr(candidate.m5BodyExpansionRatio, 1);
+
+  return (
+    latestBodyPressure >= 0.55 &&
+    directionalRun >= 1 &&
+    candidate.alignedM5BodyPressure3 >= 0.2 &&
+    candidate.alignedM5Momentum1Atr >= 0.18 &&
+    candidate.alignedM5Momentum3Atr >= 0.35 &&
+    candidate.alignedM5 >= 0.1 &&
+    candidate.alignedHigherTimeframeAgreement >= -0.08 &&
+    m30Efficiency >= 0.35 &&
+    m30MomentumAtr >= 0.8 &&
+    bodyExpansion >= 0.75 &&
+    snapshot.extensionAtr <= 1.4
+  );
+}
+
+function m5ContinuationExhausted(
+  candidate: M1TacticalCandidate,
+  snapshot: M1TacticalFeatureSnapshot,
+  policy: M1TacticalPolicy,
+): boolean {
+  if (!continuationShape(candidate, policy)) return false;
+
+  const latestBodyPressure = finiteOr(candidate.alignedM5LatestBodyPressure, 1);
+  const directionalRun = finiteOr(candidate.alignedM5DirectionalRun, 0);
+  const m30MomentumAtr = finiteOr(candidate.alignedM30MomentumAtr, 0);
+  const bodyExpansion = finiteOr(candidate.m5BodyExpansionRatio, 1);
+  const matureRun = directionalRun >= 4;
+  const bodyContracting = latestBodyPressure < 0.32 && bodyExpansion < 0.65;
+  const stretched = snapshot.extensionAtr >= 1.1 || m30MomentumAtr >= 3;
+  const recentImpulseSlowing =
+    candidate.alignedM5Momentum1Atr < Math.max(0.2, candidate.alignedM5Momentum3Atr * 0.35);
+
+  return matureRun && bodyContracting && stretched && recentImpulseSlowing;
 }
 
 export function classifyM1TacticalRoute(
@@ -109,10 +189,11 @@ export function classifyM1TacticalRoute(
     return abstain('INVALID_COUNTERFACTUAL_PAIR', scoreEdge, policy.version);
   }
 
-  const reversal = confirmedReversal(candidate, policy);
-  const localImpulseScout = !reversal && localImpulseAgainstHtf(candidate, scoreEdge, policy);
+  const reversalSignal = reversalImpulse(candidate, policy);
+  const reversal = reversalSignal && m5ReversalConfirmed(candidate);
+  const localImpulseScout = !reversalSignal && localImpulseAgainstHtf(candidate, scoreEdge, policy);
   if (
-    !reversal &&
+    !reversalSignal &&
     !localImpulseScout &&
     candidate.alignedHigherTimeframeAgreement <= -policy.minContinuationHtfAgreement
   ) {
@@ -121,6 +202,10 @@ export function classifyM1TacticalRoute(
 
   if (!Number.isFinite(scoreEdge) || scoreEdge < policy.minDirectionalEdge) {
     return abstain('DIRECTION_EDGE_TOO_SMALL', scoreEdge, policy.version);
+  }
+
+  if (reversalSignal && !reversal) {
+    return abstain('M5_REVERSAL_NOT_CONFIRMED', scoreEdge, policy.version);
   }
 
   if (reversal) {
@@ -145,12 +230,24 @@ export function classifyM1TacticalRoute(
     };
   }
 
+  if (m5ContinuationExhausted(candidate, snapshot, policy)) {
+    return abstain('M5_CONTINUATION_EXHAUSTED', scoreEdge, policy.version);
+  }
+
+  if (freshM5Continuation(candidate, snapshot, policy)) {
+    return {
+      route: 'M1_TREND_CONTINUATION',
+      direction: candidate.direction,
+      eligible: true,
+      reason: 'FRESH_M5_CONTINUATION',
+      scoreEdge,
+      policyVersion: policy.version,
+    };
+  }
+
   const continuation =
-    candidate.directionQuality >= policy.minContinuationQuality &&
-    candidate.alignedMomentum3Atr >= policy.minContinuationMomentumAtr &&
-    candidate.alignedEmaSeparationAtr > 0 &&
-    candidate.alignedHigherTimeframeAgreement >= policy.minContinuationHtfAgreement &&
-    !candidate.failedBreakoutWithDirection;
+    continuationShape(candidate, policy) &&
+    candidate.alignedHigherTimeframeAgreement >= policy.minContinuationHtfAgreement;
   if (continuation) {
     return {
       route: 'M1_TREND_CONTINUATION',

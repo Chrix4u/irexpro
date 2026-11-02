@@ -121,8 +121,6 @@ export class TradingController {
     @Body() dto: StartSessionDto,
   ): Promise<TradingSessionResponseDto> {
     const executionMode = this.resolveExecutionMode(dto);
-    this.assertVpsScannerPaperAuthority(userId, dto.brokerConnectionId, executionMode);
-
     const session = await this.tradingService.startTradingSession(
       userId,
       dto.brokerConnectionId,
@@ -157,44 +155,10 @@ export class TradingController {
   }
 
   /**
-   * Research authority lock for the VPS-native multi-model campaign.
-   *
-   * A real-provider DEMO connection may stay connected for broker-native MTF
-   * market data and parity validation, but it must not become an execution
-   * target merely because a user selects it in the generic trading UI. While
-   * the configured research user is owned by vpsForexScanner, session starts
-   * are fail-closed to the exact configured PAPER connection in PAPER_ONLY.
-   * DEMO/LIVE promotion therefore requires an explicit future promotion
-   * change rather than an accidental generic Start or mode-change request.
+   * Mode changes remain locked to PAPER_ONLY for the scanner-owned research user.
+   * New-session V8 DEMO authority is enforced in TradingService where the exact
+   * broker environment and validation state are available.
    */
-  private assertVpsScannerPaperAuthority(
-    userId: string,
-    brokerConnectionId: string | undefined,
-    executionMode: ExecutionMode,
-  ): void {
-    if (this.configService.get<boolean>('vpsForexScanner.enabled', false) !== true) return;
-
-    const configuredUserId = this.configService.get<string>('vpsForexScanner.userId', '').trim();
-    const apiKey = this.configService.get<string>('vpsForexScanner.apiKey', '').trim();
-    if (!apiKey || apiKey.toLowerCase() === 'demo' || configuredUserId !== userId) return;
-
-    const configuredPaperConnectionId = this.configService
-      .get<string>('vpsForexScanner.brokerConnectionId', '')
-      .trim();
-    const exactPaperAuthority =
-      Boolean(configuredPaperConnectionId) &&
-      brokerConnectionId === configuredPaperConnectionId &&
-      executionMode === ExecutionMode.PAPER_ONLY;
-
-    if (exactPaperAuthority) return;
-
-    throw new ForbiddenException(
-      'The iRexPro multi-model research campaign is PAPER-only. Keep MetaApi connected ' +
-        'for broker-native data and parity validation; DEMO/LIVE execution remains locked ' +
-        'until an explicit strategy promotion.',
-    );
-  }
-
   private assertVpsScannerPaperMode(userId: string, executionMode: ExecutionMode): void {
     if (this.configService.get<boolean>('vpsForexScanner.enabled', false) !== true) return;
 
@@ -236,6 +200,62 @@ export class TradingController {
   }
 
   /**
+   * Explicit DAILY-loss reset for an account whose previous suspended session
+   * has already ended. This records only the durable loss-window cutoff; the
+   * caller must still pass the normal session-start gates afterward.
+   */
+  @Post('daily-loss/reset')
+  @ApiOperation({
+    summary: 'Reset today’s daily-loss protection for a broker account',
+    description:
+      'Used when no current AI session survives but a DAILY_LOSS_LIMIT_REACHED or ' +
+      'MAX_DRAWDOWN_REACHED protection must be explicitly reset by the user before ' +
+      'continuing. Historical P&L is preserved and confirmed=true is required.',
+  })
+  async resetDailyLossForBroker(
+    @CurrentUserId() userId: string,
+    @Body('brokerConnectionId', ParseUUIDPipe) brokerConnectionId: string,
+    @Body('confirmed') confirmed: boolean,
+  ): Promise<{ resetAt: string; resetCount: number; message: string }> {
+    return this.tradingService.resetDailyLossProtectionForBroker(
+      userId,
+      brokerConnectionId,
+      confirmed,
+    );
+  }
+
+  /**
+   * Explicit user override for a DAILY-loss or MAX-drawdown suspension.
+   * Historical trade P&L remains unchanged; the server records a new durable
+   * loss-window cutoff and rebases drawdown to current verified broker equity
+   * before reactivating session authority.
+   */
+  @Post(':id/reset-daily-loss')
+  @ApiOperation({
+    summary: 'Reset hard risk protection and resume the suspended session',
+    description:
+      'Requires an explicit user request on the current SUSPENDED_RISK_LIMIT session, ' +
+      'accepts only DAILY_LOSS_LIMIT_REACHED or MAX_DRAWDOWN_REACHED, preserves historical ' +
+      'P&L, and requires confirmed=true before authority can resume.',
+  })
+  async resetDailyLoss(
+    @CurrentUserId() userId: string,
+    @Param('id', ParseUUIDPipe) sessionId: string,
+    @Body('confirmed') confirmed: boolean,
+  ): Promise<{
+    session: TradingSessionResponseDto;
+    resetAt: string;
+    resetCount: number;
+    message: string;
+  }> {
+    const result = await this.tradingService.resetDailyLossProtection(userId, sessionId, confirmed);
+    return {
+      ...result,
+      session: toTradingSessionResponse(result.session),
+    };
+  }
+
+  /**
    * Explicit + audited execution-mode change (Round 5, issue #298).
    *
    * Bumps the session authorityGeneration via CAS, INVALIDATES outstanding
@@ -274,12 +294,12 @@ export class TradingController {
   }
 
   /**
-   * Get the current active session for the authenticated user.
+   * Get the current non-ended control session for the authenticated user.
    *
    * GET /api/v1/trading/sessions/active
    */
   @Get('active')
-  @ApiOperation({ summary: 'Get the current active trading session' })
+  @ApiOperation({ summary: 'Get the current non-ended trading control session' })
   @ApiResponse({ status: 200, type: ActiveTradingSessionResponseDto })
   async getActive(@CurrentUserId() userId: string): Promise<ActiveTradingSessionResponseDto> {
     const session = await this.tradingService.getActiveSession(userId);

@@ -129,6 +129,20 @@ describe('M1TacticalMarketDataService', () => {
     await expect(service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
   });
 
+  it('fails closed when broker-native M5 or M15 context is stale even with fresh M1 and spread', async () => {
+    const staleM5 = fixture({ M5: rows(30, 5, new Date('2026-10-15T12:10:00.000Z')) });
+    await expect(staleM5.service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
+    expect(staleM5.service.getLastReadiness('conn-1', 'EURUSD')).toEqual(
+      expect.objectContaining({ ready: false, reason: 'BROKER_FEATURE_CONTEXT_UNAVAILABLE' }),
+    );
+
+    const staleM15 = fixture({ M15: rows(30, 15, new Date('2026-10-15T11:45:00.000Z')) });
+    await expect(staleM15.service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
+    expect(staleM15.service.getLastReadiness('conn-1', 'EURUSD')).toEqual(
+      expect.objectContaining({ ready: false, reason: 'BROKER_FEATURE_CONTEXT_UNAVAILABLE' }),
+    );
+  });
+
   it('records why a stale M1 snapshot was unavailable', async () => {
     const { service } = fixture({ M1: rows(60, 1, new Date('2026-10-15T12:20:00.000Z')) });
 

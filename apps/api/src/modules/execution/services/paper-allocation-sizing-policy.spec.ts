@@ -8,6 +8,7 @@ describe('paper allocation sizing policy', () => {
     expect(
       paperAllocationSizingPolicy({
         executionMode: 'PAPER_ONLY',
+        brokerAccountType: 'DEMO',
         allocatedCapital: 1_000,
         brokerEquity: 10_000,
         confidenceTier: 'BASE',
@@ -27,6 +28,7 @@ describe('paper allocation sizing policy', () => {
     expect(
       paperAllocationSizingPolicy({
         executionMode: 'PAPER_ONLY',
+        brokerAccountType: 'DEMO',
         allocatedCapital: 1_000,
         brokerEquity: 10_000,
         confidenceTier: 'RESEARCH',
@@ -50,27 +52,38 @@ describe('paper allocation sizing policy', () => {
     expect(paperAllocationRiskTargetPercent('RESEARCH')).toBe(1);
   });
 
-  it('never enables allocation-aware overrides outside PAPER', () => {
+  it('enables promoted FULL_AUTO sizing only on a DEMO broker account', () => {
     expect(
       paperAllocationSizingPolicy({
         executionMode: 'FULL_AUTO',
+        brokerAccountType: 'DEMO',
         allocatedCapital: 1_000,
         brokerEquity: 10_000,
         confidenceTier: 'EXCEPTIONAL',
       }),
     ).toEqual(
       expect.objectContaining({
-        enabled: false,
-        removeAiLotCeiling: false,
-        removeProfileLotCeiling: false,
+        enabled: true,
+        riskCapitalBase: 1_000,
+        requestedRiskPercent: 2.5,
       }),
     );
+    expect(
+      paperAllocationSizingPolicy({
+        executionMode: 'FULL_AUTO',
+        brokerAccountType: 'LIVE',
+        allocatedCapital: 1_000,
+        brokerEquity: 10_000,
+        confidenceTier: 'EXCEPTIONAL',
+      }).enabled,
+    ).toBe(false);
   });
 
   it('fails closed when PAPER allocation is missing or invalid', () => {
     expect(
       paperAllocationSizingPolicy({
         executionMode: 'PAPER_ONLY',
+        brokerAccountType: 'DEMO',
         allocatedCapital: null,
         brokerEquity: 10_000,
         confidenceTier: 'BASE',
@@ -79,6 +92,7 @@ describe('paper allocation sizing policy', () => {
     expect(
       paperAllocationSizingPolicy({
         executionMode: 'PAPER_ONLY',
+        brokerAccountType: 'DEMO',
         allocatedCapital: 0,
         brokerEquity: 10_000,
         confidenceTier: 'BASE',

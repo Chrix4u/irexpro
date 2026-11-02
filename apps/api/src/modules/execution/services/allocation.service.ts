@@ -173,9 +173,16 @@ export class AllocationService {
     sized: SizedPosition;
     /** Authoritative trading-session mode. Missing mode fails safe by enforcing caps. */
     executionMode?: ExecutionMode;
+    /**
+     * Explicit server-side override for a validated provider DEMO promotion.
+     * It may relax percentage concentration bookkeeping, but never the shared
+     * capital ceiling. LIVE callers must not set this false.
+     */
+    enforceConcentrationCaps?: boolean;
   }): Promise<CapitalAllocation> {
     const { intent, sized } = params;
-    const enforceConcentrationCaps = params.executionMode !== ExecutionMode.PAPER_ONLY;
+    const enforceConcentrationCaps =
+      params.enforceConcentrationCaps ?? params.executionMode !== ExecutionMode.PAPER_ONLY;
     // Round 7 (P0 allocation-scope fix): the REAL per-account scope only.
     // Callers pass the intent's durable logical account key; when absent the
     // intent's own captured key is the fallback. A null key is a TYPED

@@ -199,7 +199,7 @@ export class Trade {
   @Index()
   status: TradeStatus;
 
-  // ─── Closure data (populated on CLOSED) ──────────────────────────────────
+  // ─── Closure data (terminal on CLOSED; closeReason may be provisional during close reconciliation) ───
 
   @Column({ name: 'exit_price', type: 'numeric', precision: 18, scale: 8, nullable: true })
   exitPrice: string | null;
@@ -240,6 +240,12 @@ export class Trade {
   @Column({ name: 'last_same_bar_protection_ambiguity_at', type: 'timestamptz', nullable: true })
   lastSameBarProtectionAmbiguityAt: Date | null;
 
+  /**
+   * Terminal close cause on CLOSED. While RECONCILIATION_PENDING after an
+   * app-initiated ambiguous CLOSE_POSITION, this may temporarily hold the
+   * requested close intent so provider reconciliation can preserve provenance.
+   * It is cleared if reconciliation proves the position remained open.
+   */
   @Column({
     name: 'close_reason',
     type: 'enum',

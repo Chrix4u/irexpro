@@ -1,9 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
 import { RiskProfile } from '../../risk/entities/risk-profile.entity';
 import { BrokerService } from '../../broker/broker.service';
+import { BrokerFxConversionService } from '../../market-data/services/broker-fx-conversion.service';
 import { RiskOrderGeometryService } from '../../risk/risk-order-geometry.service';
 import {
   paperAllocationSizingPolicy,
@@ -35,9 +37,8 @@ export type PositionSizingFailureCode =
   | 'RISK_BUDGET_UNPARSEABLE'
   /** The broker cannot prove the capital/margin required by the final sized volume. */
   | 'REQUIRED_MARGIN_UNPROVABLE'
-  /** The instrument's quote currency is not the account currency — no
-   * implicit FX conversion is ever invented (trusted-FX authority required
-   * for cross-currency sizing, deliberately out of scope). */
+  /** The account-to-quote conversion cannot be proven. Cross-currency sizing
+   * is allowed only with a fresh quote from the exact connected broker. */
   | 'CURRENCY_MISMATCH'
   /** The risk budget cannot afford the instrument's minimum volume —
    * rounding UP to minLot would EXCEED the risk budget, so it is a
@@ -83,7 +84,14 @@ export interface PositionSizingInputs {
   baseCurrency: string;
   quoteCurrency: string;
   riskAmountInQuoteCurrency: string;
-  riskCurrencyConversion: 'ACCOUNT_IS_QUOTE' | 'ACCOUNT_IS_BASE_USING_ENTRY';
+  riskCurrencyConversion:
+    | 'ACCOUNT_IS_QUOTE'
+    | 'ACCOUNT_IS_BASE_USING_ENTRY'
+    | 'ACCOUNT_TO_QUOTE_USING_BROKER_BID'
+    | 'ACCOUNT_TO_QUOTE_USING_BROKER_NATIVE_EVIDENCE';
+  /** Exact FX pair/rate used when a third-currency account needs conversion evidence. */
+  riskCurrencyConversionInstrument?: string | null;
+  riskCurrencyConversionRate?: string | null;
   entryPrice: string;
   entryPriceSource: 'MARKET_QUOTE' | 'REQUESTED_LIMIT';
   stopLoss: string;
@@ -97,6 +105,11 @@ export interface PositionSizingInputs {
   maxLot: string;
   lotStep: string;
   profileMaxPositionSizeLot: string;
+  maxLeverageAllowed: string;
+  lotsByLeverageCeiling: string;
+  notionalPerLotAccountCurrency: string;
+  finalNotionalAccountCurrency: string;
+  finalEffectiveLeverage: string;
   requestedLotUpperBound: string;
   effectiveRequestedLotUpperBound?: string;
   paperProductMinimumLot?: string | null;
@@ -119,10 +132,10 @@ export interface SizedPosition {
 
 /** Decimal scale for lot math (lot steps are 0.01/0.001 — 8 digits is exact). */
 const LOT_SCALE = 8;
-export const PAPER_PRODUCT_ABSOLUTE_MIN_LOT = '0.1';
-const PAPER_PRODUCT_PROVISIONAL_SCOUT_MIN_LOT = '0.05';
+export const PAPER_PRODUCT_ABSOLUTE_MIN_LOT = '0.2';
 const PAPER_PRODUCT_DEFAULT_MIN_LOT = '0.2';
-const PAPER_PRODUCT_MAX_LOT = '2';
+const PAPER_PRODUCT_RISK_ADJUSTED_MIN_LOT = '0.1';
+const PAPER_PRODUCT_MAX_LOT = '4';
 
 /**
  * PositionSizingService (Round 6 live-execution completion §4) — the
@@ -142,9 +155,10 @@ const PAPER_PRODUCT_MAX_LOT = '2';
  *    lot), normalized DOWN to the instrument's volume step. Rounding DOWN
  *    is the conservative direction for risk; rounding UP to minLot would
  *    exceed the risk budget, so a below-minimum result is a typed rejection.
- *  - Currency honesty: the notional is computed in the instrument's QUOTE
- *    currency; when that is not the account currency the sizing fails with
- *    CURRENCY_MISMATCH — no implicit FX conversion is ever invented.
+ *  - Currency honesty: stop risk is computed in the instrument's QUOTE
+ *    currency. If the account uses a third currency, conversion is permitted
+ *    only from a fresh quote on the exact connected broker; otherwise sizing
+ *    fails closed with CURRENCY_MISMATCH.
  *  - The AI capital-allocation ledger reserves broker-required margin/capital
  *    consumption, NOT gross leveraged FX notional. The broker adapter is the
  *    authority for required margin because leverage/margin rules vary by
@@ -162,7 +176,17 @@ export class PositionSizingService {
     private readonly orderGeometry: RiskOrderGeometryService,
     @InjectRepository(RiskProfile)
     private readonly profileRepo: Repository<RiskProfile>,
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
+
+  private get brokerFxConversion(): BrokerFxConversionService | null {
+    if (!this.moduleRef) return null;
+    try {
+      return this.moduleRef.get(BrokerFxConversionService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * Size ONE trade decision.
@@ -251,6 +275,14 @@ export class PositionSizingService {
       );
     }
 
+    const maxLeverageAllowed = ExactDecimal.tryParse(String(profile.maxLeverageAllowed));
+    if (!maxLeverageAllowed || !maxLeverageAllowed.isPositive()) {
+      throw new PositionSizingError(
+        'RISK_BUDGET_UNPARSEABLE',
+        `profile maxLeverageAllowed is not a provable positive decimal: ${profile.maxLeverageAllowed}`,
+      );
+    }
+
     let effectiveRiskPercent = riskPercent;
     let requestedRiskPercent = riskPercent;
     let riskCapitalBase = equity;
@@ -259,11 +291,24 @@ export class PositionSizingService {
     let removeProfileLotCeiling = false;
 
     if (params.paperAllocationSizing) {
+      let brokerAccountType: string | null = null;
+      try {
+        const connection = await this.brokerService.findConnectionById(
+          params.brokerConnectionId,
+          userId,
+        );
+        brokerAccountType = connection.accountType;
+      } catch {
+        // Environment is authorization evidence. If it cannot be proven, the
+        // allocation-aware override stays disabled and legacy risk ceilings remain.
+        brokerAccountType = null;
+      }
       const allocatedCapital = ExactDecimal.tryParse(
         params.paperAllocationSizing.allocatedCapital ?? '',
       );
       const policy = paperAllocationSizingPolicy({
         executionMode: params.paperAllocationSizing.executionMode,
+        brokerAccountType,
         allocatedCapital: allocatedCapital ? Number(allocatedCapital.toString()) : null,
         brokerEquity: Number(equity.toString()),
         confidenceTier: params.paperAllocationSizing.confidenceTier,
@@ -448,9 +493,9 @@ export class PositionSizingService {
     // currency is the quote currency, no conversion is needed. When the
     // account currency is the base currency (e.g. USD account trading
     // USDJPY), the already-proven entry quote is the authoritative
-    // quote-currency-per-account-currency conversion rate. A third-currency
-    // account still fails closed because that would require another trusted
-    // FX conversion authority.
+    // quote-currency-per-account-currency conversion rate. For a third-currency
+    // account, use only a fresh direct account/quote cross from this exact
+    // broker and use its bid conservatively; otherwise fail closed.
     const normalizedInstrument = instrument.toUpperCase();
     if (!/^[A-Z]{6}$/.test(normalizedInstrument)) {
       throw new PositionSizingError(
@@ -464,19 +509,77 @@ export class PositionSizingService {
     const baseRiskAmount = riskCapitalBase.mul(baseRiskPercent).divByPowerOfTen(2);
     const riskAmount = riskCapitalBase.mul(drawdownAdjustedRiskPercent).divByPowerOfTen(2); // account currency
     let riskAmountInQuoteCurrency: ExactDecimal;
-    let riskCurrencyConversion: 'ACCOUNT_IS_QUOTE' | 'ACCOUNT_IS_BASE_USING_ENTRY';
+    let riskCurrencyConversion:
+      | 'ACCOUNT_IS_QUOTE'
+      | 'ACCOUNT_IS_BASE_USING_ENTRY'
+      | 'ACCOUNT_TO_QUOTE_USING_BROKER_BID'
+      | 'ACCOUNT_TO_QUOTE_USING_BROKER_NATIVE_EVIDENCE';
+    let quotePerAccountCurrency = ExactDecimal.ONE;
+    let riskCurrencyConversionInstrument: string | null = null;
+    let riskCurrencyConversionRate: string | null = null;
     if (quoteCurrency === accountCurrency) {
       riskAmountInQuoteCurrency = riskAmount;
       riskCurrencyConversion = 'ACCOUNT_IS_QUOTE';
     } else if (baseCurrency === accountCurrency) {
-      riskAmountInQuoteCurrency = riskAmount.mul(entry);
+      quotePerAccountCurrency = entry;
+      riskAmountInQuoteCurrency = riskAmount.mul(quotePerAccountCurrency);
       riskCurrencyConversion = 'ACCOUNT_IS_BASE_USING_ENTRY';
+      riskCurrencyConversionInstrument = normalizedInstrument;
+      riskCurrencyConversionRate = quotePerAccountCurrency.toString();
     } else {
-      throw new PositionSizingError(
-        'CURRENCY_MISMATCH',
-        `instrument ${instrument} is ${baseCurrency}/${quoteCurrency} but account currency is ` +
-          `${accountCurrency} — neither FX leg matches the account currency`,
-      );
+      const conversionInstrument = `${accountCurrency}${quoteCurrency}`;
+      const cachedConversion = this.brokerFxConversion
+        ? await this.brokerFxConversion.resolveCachedBid(
+            brokerConnectionId,
+            accountCurrency,
+            quoteCurrency,
+            new Date(),
+          )
+        : null;
+      const cachedBid = ExactDecimal.tryParse(cachedConversion?.rate ?? '');
+      if (cachedConversion && cachedBid?.isPositive()) {
+        quotePerAccountCurrency = cachedBid;
+        riskAmountInQuoteCurrency = riskAmount.mul(quotePerAccountCurrency);
+        riskCurrencyConversion = 'ACCOUNT_TO_QUOTE_USING_BROKER_NATIVE_EVIDENCE';
+        riskCurrencyConversionInstrument = cachedConversion.path.join('>');
+        riskCurrencyConversionRate = quotePerAccountCurrency.toString();
+      } else {
+        let conversionQuote: Awaited<ReturnType<BrokerService['getCurrentPriceForConnection']>> =
+          null;
+        try {
+          conversionQuote = await this.brokerService.getCurrentPriceForConnection(
+            userId,
+            brokerConnectionId,
+            conversionInstrument,
+            { propagateProviderError: true },
+          );
+        } catch {
+          conversionQuote = null;
+        }
+        const conversionBid = ExactDecimal.tryParse(conversionQuote?.bid ?? '');
+        const conversionTimestamp = conversionQuote?.timestamp
+          ? new Date(conversionQuote.timestamp).getTime()
+          : Number.NaN;
+        const conversionAgeMs = Date.now() - conversionTimestamp;
+        if (
+          !conversionBid ||
+          !conversionBid.isPositive() ||
+          !Number.isFinite(conversionTimestamp) ||
+          conversionAgeMs < -5_000 ||
+          conversionAgeMs > 60_000
+        ) {
+          throw new PositionSizingError(
+            'CURRENCY_MISMATCH',
+            `instrument ${instrument} is ${baseCurrency}/${quoteCurrency} but account currency is ` +
+              `${accountCurrency} — fresh broker conversion ${conversionInstrument} could not be proven`,
+          );
+        }
+        quotePerAccountCurrency = conversionBid;
+        riskAmountInQuoteCurrency = riskAmount.mul(quotePerAccountCurrency);
+        riskCurrencyConversion = 'ACCOUNT_TO_QUOTE_USING_BROKER_BID';
+        riskCurrencyConversionInstrument = conversionInstrument;
+        riskCurrencyConversionRate = quotePerAccountCurrency.toString();
+      }
     }
 
     // Durable PAPER floor authority uses the profile's maximum trade risk as
@@ -485,9 +588,7 @@ export class PositionSizingService {
     // actual stop risk is still inside this durable ceiling.
     const profileRiskCeilingAmount = riskCapitalBase.mul(riskPercent).divByPowerOfTen(2);
     const profileRiskCeilingAmountInQuoteCurrency =
-      riskCurrencyConversion === 'ACCOUNT_IS_QUOTE'
-        ? profileRiskCeilingAmount
-        : profileRiskCeilingAmount.mul(entry);
+      profileRiskCeilingAmount.mul(quotePerAccountCurrency);
 
     // ── 7. The sizing math (ExactDecimal only). ───────────────────────────
     const riskPerLot = slDistance.mul(contractSize);
@@ -507,16 +608,59 @@ export class PositionSizingService {
       );
     }
 
-    const requestedPaperPolicyMinimumLot = ExactDecimal.tryParse(
-      params.paperAllocationSizing?.minimumExecutableLot ?? '',
+    // Pre-size against the SAME effective-leverage ceiling enforced by the
+    // final RiskService. This prevents a qualified setup from being discarded
+    // simply because its initial requested volume is slightly too large.
+    //
+    // entry * contractSize is quote-currency notional per lot. Dividing by the
+    // already-proven quote-per-account-currency rate yields account-currency
+    // notional per lot for all three supported FX cases:
+    //   account==quote -> divide by 1
+    //   account==base  -> divide by entry
+    //   third currency -> divide by fresh ACCOUNT/QUOTE broker BID
+    const notionalPerLotAccountCurrency = entry
+      .mul(contractSize)
+      .divUp(quotePerAccountCurrency, 12);
+    if (!notionalPerLotAccountCurrency.isPositive()) {
+      throw new PositionSizingError(
+        'RISK_BUDGET_UNPARSEABLE',
+        `account-currency notional per lot is not positive for ${instrument}`,
+      );
+    }
+    const maxNotionalAtLeverageLimit = equity.mul(maxLeverageAllowed);
+    const rawLotsByLeverageCeiling = maxNotionalAtLeverageLimit.divDown(
+      notionalPerLotAccountCurrency,
+      LOT_SCALE,
     );
-    const provisionalScoutProductMinimum = ExactDecimal.parse(
-      PAPER_PRODUCT_PROVISIONAL_SCOUT_MIN_LOT,
-    );
+    const leverageSteps = rawLotsByLeverageCeiling.divDown(lotStep, 0);
+    let lotsByLeverageCeiling = leverageSteps.mul(lotStep);
+
+    // RiskService rejects leverage >= maxLeverageAllowed. If the normalized
+    // volume lands exactly on that boundary, step down once so the sizing
+    // result is strictly below the durable limit rather than guaranteed to be
+    // rejected downstream.
+    if (lotsByLeverageCeiling.isPositive()) {
+      const boundaryLeverage = lotsByLeverageCeiling
+        .mul(notionalPerLotAccountCurrency)
+        .divUp(equity, LOT_SCALE);
+      if (boundaryLeverage.gte(maxLeverageAllowed)) {
+        lotsByLeverageCeiling = lotsByLeverageCeiling.sub(lotStep);
+      }
+    }
+    if (!lotsByLeverageCeiling.isPositive()) {
+      throw new PositionSizingError(
+        'POSITION_SIZE_ZERO',
+        `max leverage ${maxLeverageAllowed.toString()}x cannot safely admit one volume step ` +
+          `(${lotStep.toString()} lots) of ${instrument} at equity ${equity.toString()}`,
+      );
+    }
+
+    // Promoted non-LIVE execution has one professional product floor. Research
+    // and scout callers may request a smaller cap for evidence collection, but
+    // that micro-volume is no longer executable: the hard floor below causes
+    // those requests to abstain instead of dispatching 0.05/0.10 lots.
     const paperProductMinimumLot = allocationAwarePaper
-      ? requestedPaperPolicyMinimumLot?.eq(provisionalScoutProductMinimum)
-        ? provisionalScoutProductMinimum
-        : ExactDecimal.parse(PAPER_PRODUCT_ABSOLUTE_MIN_LOT)
+      ? ExactDecimal.parse(PAPER_PRODUCT_ABSOLUTE_MIN_LOT)
       : null;
     const paperProductMaximumLot = allocationAwarePaper
       ? ExactDecimal.parse(PAPER_PRODUCT_MAX_LOT)
@@ -533,7 +677,10 @@ export class PositionSizingService {
       );
     }
 
-    let lotsBeforeStep = ExactDecimal.min(lotsByRiskBudget, maxLot);
+    let lotsBeforeStep = ExactDecimal.min(
+      ExactDecimal.min(lotsByRiskBudget, maxLot),
+      lotsByLeverageCeiling,
+    );
     if (paperProductMaximumLot) {
       lotsBeforeStep = ExactDecimal.min(lotsBeforeStep, paperProductMaximumLot);
     }
@@ -583,45 +730,78 @@ export class PositionSizingService {
         paperProductMinimumLot,
       );
 
-      // The product floor must itself be a broker-valid step and stay inside
-      // every hard lot ceiling. We never use the floor to bypass broker specs
-      // or an explicit model upper bound.
+      // The 0.20 product floor is a preferred professional size, not permission
+      // to violate broker/model limits or durable account ceilings. Broker step,
+      // broker max and an explicit model lot cap remain hard blockers. Account
+      // leverage/profile ceilings may conservatively step the trade down to the
+      // existing risk-adjusted minimum instead of suppressing an otherwise valid setup.
       const floorSteps = policyMinimumExecutableLot.divDown(lotStep, 0);
       const normalizedFloor = floorSteps.mul(lotStep);
-      const floorFitsLotCeilings =
+      const floorFitsBrokerAndModelCeilings =
         normalizedFloor.eq(policyMinimumExecutableLot) &&
         policyMinimumExecutableLot.lte(maxLot) &&
-        (removeProfileLotCeiling || policyMinimumExecutableLot.lte(profileMaxLots)) &&
         (removeAiLotCeiling || policyMinimumExecutableLot.lte(effectiveRequestedLotUpperBound));
+      const floorFitsAccountLotCeilings =
+        policyMinimumExecutableLot.lte(lotsByLeverageCeiling) &&
+        (removeProfileLotCeiling || policyMinimumExecutableLot.lte(profileMaxLots));
 
       if (lots.lt(policyMinimumExecutableLot)) {
+        const riskAdjustedMinimumLot = ExactDecimal.parse(PAPER_PRODUCT_RISK_ADJUSTED_MIN_LOT);
         const floorRiskInQuoteCurrency = policyMinimumExecutableLot.mul(riskPerLot);
         const floorFitsDurableRisk = floorRiskInQuoteCurrency.lte(
           profileRiskCeilingAmountInQuoteCurrency,
         );
 
-        if (!floorFitsLotCeilings || !floorFitsDurableRisk) {
+        if (!floorFitsBrokerAndModelCeilings) {
           throw new PositionSizingError(
             'POSITION_SIZE_BELOW_POLICY_MINIMUM',
             `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} is below the PAPER policy minimum ` +
-              `${policyMinimumExecutableLot.toString()} and lifting to the floor would exceed a durable ` +
-              `lot/risk ceiling`,
+              `${policyMinimumExecutableLot.toString()} and the preferred floor exceeds a broker or ` +
+              `model lot ceiling`,
           );
         }
 
-        lots = policyMinimumExecutableLot;
-        policyMinimumLotLifted = true;
+        if (!floorFitsAccountLotCeilings) {
+          if (lots.lt(riskAdjustedMinimumLot)) {
+            throw new PositionSizingError(
+              'POSITION_SIZE_BELOW_POLICY_MINIMUM',
+              `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} cannot afford the preferred PAPER ` +
+                `${policyMinimumExecutableLot.toString()} lot size under durable account ceilings and is ` +
+                `below the risk-adjusted minimum ${riskAdjustedMinimumLot.toString()}`,
+            );
+          }
+        } else if (floorFitsDurableRisk) {
+          lots = policyMinimumExecutableLot;
+          policyMinimumLotLifted = true;
+        } else if (lots.lt(riskAdjustedMinimumLot)) {
+          throw new PositionSizingError(
+            'POSITION_SIZE_BELOW_POLICY_MINIMUM',
+            `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} cannot afford the preferred PAPER ` +
+              `${policyMinimumExecutableLot.toString()} lot size and is below the risk-adjusted minimum ` +
+              `${riskAdjustedMinimumLot.toString()}`,
+          );
+        }
       }
     }
 
     const finalRiskAtStopInQuoteCurrency = lots.mul(riskPerLot);
-    const finalRiskAtStop =
-      riskCurrencyConversion === 'ACCOUNT_IS_QUOTE'
-        ? finalRiskAtStopInQuoteCurrency
-        : finalRiskAtStopInQuoteCurrency.divDown(entry, LOT_SCALE);
+    const finalRiskAtStop = finalRiskAtStopInQuoteCurrency.divDown(
+      quotePerAccountCurrency,
+      LOT_SCALE,
+    );
     const finalRiskAtStopPercentOfCapital = finalRiskAtStop
       .divDown(riskCapitalBase, LOT_SCALE)
       .mulByPowerOfTen(2);
+
+    const finalNotionalAccountCurrency = lots.mul(notionalPerLotAccountCurrency);
+    const finalEffectiveLeverage = finalNotionalAccountCurrency.divUp(equity, LOT_SCALE);
+    if (finalEffectiveLeverage.gte(maxLeverageAllowed)) {
+      throw new PositionSizingError(
+        'POSITION_SIZE_ZERO',
+        `sized leverage ${finalEffectiveLeverage.toString()}x is not strictly below ` +
+          `${maxLeverageAllowed.toString()}x for ${instrument}`,
+      );
+    }
 
     // ── 8. Capital commitment = broker-required margin, not gross notional. ──
     // A leveraged FX position's notional can be many times larger than the
@@ -675,6 +855,8 @@ export class PositionSizingService {
       quoteCurrency,
       riskAmountInQuoteCurrency: riskAmountInQuoteCurrency.toString(),
       riskCurrencyConversion,
+      riskCurrencyConversionInstrument,
+      riskCurrencyConversionRate,
       entryPrice: entry.toString(),
       entryPriceSource,
       stopLoss: stopLoss.toString(),
@@ -688,6 +870,11 @@ export class PositionSizingService {
       maxLot: maxLot.toString(),
       lotStep: lotStep.toString(),
       profileMaxPositionSizeLot: profileMaxLots.toString(),
+      maxLeverageAllowed: maxLeverageAllowed.toString(),
+      lotsByLeverageCeiling: lotsByLeverageCeiling.toString(),
+      notionalPerLotAccountCurrency: notionalPerLotAccountCurrency.toString(),
+      finalNotionalAccountCurrency: finalNotionalAccountCurrency.toString(),
+      finalEffectiveLeverage: finalEffectiveLeverage.toString(),
       requestedLotUpperBound: requestedLotUpperBound.toString(),
       effectiveRequestedLotUpperBound: effectiveRequestedLotUpperBound.toString(),
       paperProductMinimumLot: paperProductMinimumLot?.toString() ?? null,

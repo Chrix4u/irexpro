@@ -10,21 +10,26 @@ import { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.s
 const DEFAULT_INTERVAL_MS = 15_000;
 const MIN_INTERVAL_MS = 10_000;
 const MAX_INTERVAL_MS = 300_000;
+const DEFAULT_LIVE_QUOTE_INTERVAL_MS = 1_000;
+const MIN_LIVE_QUOTE_INTERVAL_MS = 500;
+const MAX_LIVE_QUOTE_INTERVAL_MS = 10_000;
+const EXECUTION_SPREAD_MAX_AGE_MS = 5 * 60_000;
+const MAX_PROVIDER_CLOCK_AHEAD_MS = 5_000;
 const DEFAULT_INSTRUMENTS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'];
 const M1_WARM_TARGET = 600;
-const M1_REFRESH_COUNT = 5;
+const M1_REFRESH_COUNT = 60;
 const CONTEXT_REFRESH_COUNT = 40;
 const M1_REQUESTS_PER_CYCLE = 3;
-const CONTEXT_TIMEFRAMES = ['H1', 'H4'] as const;
+const CONTEXT_TIMEFRAMES = ['M5', 'M15', 'H1', 'H4'] as const;
 
 /**
  * Exact-binding cTrader market-data collector for the M1 tactical PAPER sleeve.
  *
  * Execution remains bound to the configured PAPER connection. This service is
  * read-only against the separately configured cTrader connection and writes
- * broker-native evidence under that source connection id. M1/M5/M15 are built
- * causally from cTrader M1 history; H1/H4 are warmed directly so the model does
- * not need days of sampled data before higher-timeframe context is available.
+ * broker-native evidence under that source connection id. M1 is retained at
+ * broker-native minute granularity while M5/M15/H1/H4 are also warmed directly;
+ * this preserves cTrader no-tick semantics without fabricating aggregate bars.
  *
  * Historical trendbars intentionally contain NO invented bid/ask spread. Live
  * cTrader quotes must independently build the positive-spread evidence required
@@ -34,7 +39,9 @@ const CONTEXT_TIMEFRAMES = ['H1', 'H4'] as const;
 export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CTraderQuoteCollectorService.name);
   private timer: NodeJS.Timeout | null = null;
+  private liveQuoteTimer: NodeJS.Timeout | null = null;
   private running = false;
+  private liveQuoteRunning = false;
   private stopping = false;
   private m1RotationOffset = 0;
   private contextRotationOffset = 0;
@@ -49,18 +56,23 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   onModuleInit(): void {
     if (process.env.NODE_ENV === 'test' || !this.enabled()) return;
     const intervalMs = this.intervalMs();
+    const liveQuoteIntervalMs = this.liveQuoteIntervalMs();
     this.stopping = false;
     this.logger.log(
-      `cTrader broker-native M1 collection enabled interval=${intervalMs}ms ` +
-        `source=${this.sourceConnectionId()} instruments=${this.instruments().join(',')}`,
+      `cTrader broker-native M1 collection enabled historyInterval=${intervalMs}ms ` +
+        `liveQuoteInterval=${liveQuoteIntervalMs}ms source=${this.sourceConnectionId()} ` +
+        `instruments=${this.instruments().join(',')}`,
     );
     this.schedule(intervalMs, 3_000);
+    this.scheduleLiveQuotes(liveQuoteIntervalMs, 250);
   }
 
   onModuleDestroy(): void {
     this.stopping = true;
     if (this.timer) clearTimeout(this.timer);
+    if (this.liveQuoteTimer) clearTimeout(this.liveQuoteTimer);
     this.timer = null;
+    this.liveQuoteTimer = null;
   }
 
   async collectOnce(now = new Date()): Promise<void> {
@@ -87,8 +99,11 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
         return;
       }
 
+      // Execution-grade bid/ask evidence has priority over historical backfill.
+      // A slow/rate-limited OHLCV request must never starve fresh quote samples
+      // used by M1 readiness, cross-currency sizing and final risk validation.
+      await this.sampleLiveSpreads(userId, connectionId, now);
       await this.refreshHistoricalSlice(userId, connectionId, now);
-      await this.sampleLiveSpreads(userId, connectionId);
     } catch (error) {
       this.warnThrottled(
         `${connectionId}:binding`,
@@ -96,6 +111,28 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       );
     } finally {
       this.running = false;
+    }
+  }
+
+  async collectLiveQuotesOnce(now = new Date()): Promise<void> {
+    if (this.liveQuoteRunning || !this.enabled() || !isFxWeeklySessionOpen(now)) return;
+    const userId = this.userId();
+    const connectionId = this.sourceConnectionId();
+    if (!userId || !connectionId) return;
+
+    this.liveQuoteRunning = true;
+    try {
+      const connection = await this.brokerService.findConnectionById(connectionId, userId);
+      if (!CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId)) return;
+      if (connection.status !== BrokerConnectionStatus.CONNECTED) return;
+      await this.sampleLiveSpreads(userId, connectionId, now);
+    } catch (error) {
+      this.warnThrottled(
+        `${connectionId}:live-quote`,
+        `cTrader live quote sampling deferred connection=${connectionId}: ${(error as Error).message}`,
+      );
+    } finally {
+      this.liveQuoteRunning = false;
     }
   }
 
@@ -121,8 +158,11 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       await this.refreshM1(userId, connectionId, instrument, now);
     }
 
-    const contextTasks = instruments.flatMap((instrument) =>
-      CONTEXT_TIMEFRAMES.map((timeframe) => ({ instrument, timeframe })),
+    // Warm the faster context across every pair before rotating into H1/H4.
+    // Native cTrader M5/M15 is authoritative for no-tick intervals and avoids
+    // rebuilding those timeframes from a sparse one-minute trendbar grid.
+    const contextTasks = CONTEXT_TIMEFRAMES.flatMap((timeframe) =>
+      instruments.map((instrument) => ({ instrument, timeframe })),
     );
     if (contextTasks.length === 0) return;
     const context = contextTasks[this.contextRotationOffset % contextTasks.length]!;
@@ -171,7 +211,8 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     timeframe: (typeof CONTEXT_TIMEFRAMES)[number],
     now: Date,
   ): Promise<void> {
-    const minutes = timeframe === 'H1' ? 60 : 240;
+    const minutes =
+      timeframe === 'M5' ? 5 : timeframe === 'M15' ? 15 : timeframe === 'H1' ? 60 : 240;
     try {
       const rows = await this.brokerService.getOhlcvForConnection(
         userId,
@@ -207,7 +248,12 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     });
   }
 
-  private async sampleLiveSpreads(userId: string, connectionId: string): Promise<void> {
+  private async sampleLiveSpreads(
+    userId: string,
+    connectionId: string,
+    now: Date,
+  ): Promise<void> {
+    const collectorNowMs = now.getTime();
     await Promise.all(
       this.instruments().map(async (instrument) => {
         try {
@@ -217,14 +263,32 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
             instrument,
             { propagateProviderError: true },
           );
-          if (quote) {
-            await this.store.upsertM1Sample(
-              connectionId,
-              instrument,
-              quote,
-              'ctrader-broker-native',
+          if (!quote) return;
+
+          const providerTimestampMs = new Date(quote.timestamp).getTime();
+          const ageMs = collectorNowMs - providerTimestampMs;
+          if (
+            !Number.isFinite(providerTimestampMs) ||
+            !Number.isFinite(collectorNowMs) ||
+            ageMs > EXECUTION_SPREAD_MAX_AGE_MS ||
+            ageMs < -MAX_PROVIDER_CLOCK_AHEAD_MS
+          ) {
+            const ageSeconds = Number.isFinite(ageMs) ? Math.round(ageMs / 1_000) : null;
+            this.warnThrottled(
+              `${connectionId}:${instrument}:stale-quote`,
+              `cTrader live quote rejected connection=${connectionId} instrument=${instrument} ` +
+                `providerTimestamp=${new Date(quote.timestamp).toISOString()} ` +
+                `ageSeconds=${ageSeconds ?? 'INVALID'}; execution spread remains fail-closed.`,
             );
+            return;
           }
+
+          await this.store.upsertM1Sample(
+            connectionId,
+            instrument,
+            quote,
+            'ctrader-broker-native',
+          );
         } catch (error) {
           this.warnThrottled(
             `${connectionId}:${instrument}:quote`,
@@ -263,6 +327,20 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     return Math.min(MAX_INTERVAL_MS, Math.max(MIN_INTERVAL_MS, Math.floor(raw)));
   }
 
+  private liveQuoteIntervalMs(): number {
+    const raw = Number(
+      this.config.get<number | string>(
+        'vpsForexScanner.m1CtraderLiveQuoteIntervalMs',
+        DEFAULT_LIVE_QUOTE_INTERVAL_MS,
+      ),
+    );
+    if (!Number.isFinite(raw)) return DEFAULT_LIVE_QUOTE_INTERVAL_MS;
+    return Math.min(
+      MAX_LIVE_QUOTE_INTERVAL_MS,
+      Math.max(MIN_LIVE_QUOTE_INTERVAL_MS, Math.floor(raw)),
+    );
+  }
+
   private instruments(): string[] {
     const raw = this.config.get<string>(
       'vpsForexScanner.m1CtraderCollectionInstruments',
@@ -291,6 +369,27 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       Math.max(0, delayMs),
     );
     this.timer.unref?.();
+  }
+
+  private scheduleLiveQuotes(intervalMs: number, delayMs: number): void {
+    if (this.stopping) return;
+    this.liveQuoteTimer = setTimeout(
+      async () => {
+        const startedAt = Date.now();
+        try {
+          await this.collectLiveQuotesOnce();
+        } finally {
+          if (!this.stopping) {
+            this.scheduleLiveQuotes(
+              intervalMs,
+              Math.max(100, intervalMs - (Date.now() - startedAt)),
+            );
+          }
+        }
+      },
+      Math.max(0, delayMs),
+    );
+    this.liveQuoteTimer.unref?.();
   }
 
   private warnThrottled(key: string, message: string): void {

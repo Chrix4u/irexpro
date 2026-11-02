@@ -1101,6 +1101,58 @@ describe('ExecutionService', () => {
       );
     });
 
+    it('prefers the durable provider position id when cTrader order and position ids differ', async () => {
+      tradeRepo.findOne.mockResolvedValue({
+        ...openTrade(),
+        externalOrderId: 'order-777',
+        externalPositionId: 'position-7001',
+      });
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'FILLED',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        providerOrderId: 'close-ext-1',
+        filledQuantity: '0.05',
+        avgFillPrice: '1.09000',
+      });
+
+      await service.closeTrade('trade-1', 'user-1', TradeCloseReason.PROFIT_PROTECTION);
+
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerAction: 'CLOSE_POSITION',
+          providerReferenceId: 'position-7001',
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('closes a recovered provider position even when the original external order id is unavailable', async () => {
+      tradeRepo.findOne.mockResolvedValue({
+        ...openTrade(),
+        externalOrderId: null,
+        externalPositionId: 'position-7001',
+      });
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'FILLED',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        providerOrderId: 'close-ext-1',
+        filledQuantity: '0.05',
+        avgFillPrice: '1.09000',
+      });
+
+      await service.closeTrade('trade-1', 'user-1', TradeCloseReason.AI_CLOSE_SIGNAL);
+
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerAction: 'CLOSE_POSITION',
+          providerReferenceId: 'position-7001',
+        }),
+        expect.anything(),
+      );
+    });
+
     it('persists broker-reported realised P&L and costs in the same CLOSED transition', async () => {
       tradeRepo.findOne.mockResolvedValue(openTrade());
       orchestrator.dispatchOrder.mockResolvedValueOnce({
@@ -1151,7 +1203,7 @@ describe('ExecutionService', () => {
       );
     });
 
-    it('unresolved close outcome (UNKNOWN) flags the trade for reconciliation', async () => {
+    it('unresolved close outcome (UNKNOWN) flags the trade for reconciliation and preserves the requested close reason', async () => {
       tradeRepo.findOne.mockResolvedValue(openTrade());
       orchestrator.dispatchOrder.mockResolvedValueOnce({
         outcome: 'UNKNOWN',
@@ -1164,7 +1216,10 @@ describe('ExecutionService', () => {
 
       expect(tradeRepo.update).toHaveBeenCalledWith(
         'trade-1',
-        expect.objectContaining({ status: TradeStatus.RECONCILIATION_PENDING }),
+        expect.objectContaining({
+          status: TradeStatus.RECONCILIATION_PENDING,
+          closeReason: TradeCloseReason.MANUAL_CLOSE,
+        }),
       );
     });
 
@@ -1265,8 +1320,8 @@ describe('ExecutionService', () => {
         'session.updatedAt',
       ]);
       expect(qb.where).toHaveBeenCalledWith('session.userId = :userId', { userId: 'user-1' });
-      expect(qb.andWhere).toHaveBeenCalledWith('session.status = :status', {
-        status: TradingSessionStatus.ACTIVE,
+      expect(qb.andWhere).toHaveBeenCalledWith('session.status != :ended', {
+        ended: TradingSessionStatus.ENDED,
       });
       expect(qb.orderBy).toHaveBeenCalledWith('session.authorityGeneration', 'DESC');
       expect(qb.addOrderBy).toHaveBeenCalledWith('session.startedAt', 'DESC');
@@ -1356,6 +1411,26 @@ describe('ExecutionService', () => {
       await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
         BrokerConnectionNotExecutableException,
       );
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('blocks a fresh start when the latest session is suspended by a risk limit', async () => {
+      const suspended = {
+        id: 'sess-risk',
+        userId: 'user-1',
+        brokerConnectionId: 'conn-1',
+        executionMode: ExecutionMode.PAPER_ONLY,
+        authorityGeneration: 2,
+        status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+      };
+      sessionRepo.findOne.mockResolvedValue(suspended);
+
+      await expect(service.startSession('user-1', 'conn-1', '9500.00')).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'SESSION_SUSPENDED',
+          sessionStatus: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+        }),
+      });
       expect(sessionRepo.insert).not.toHaveBeenCalled();
     });
 

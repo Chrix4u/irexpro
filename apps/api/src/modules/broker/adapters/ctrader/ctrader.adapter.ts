@@ -152,6 +152,8 @@ const MAX_DEAL_LIST_PAGES = 100;
 const DEAL_LIST_MAX_ROWS = 200;
 /** Trendbar lookback multiplier (headroom so `count` bars are returned). */
 const TRENDBAR_LOOKBACK_FACTOR = 2;
+/** Short bounded read-after-acceptance window for cTrader MARKET fills. */
+const MARKET_ACCEPTED_RECONCILE_DELAYS_MS = [0, 150, 350] as const;
 
 interface SymbolCache {
   /** normalized instrument name (e.g. "EURUSD") → symbolId */
@@ -247,6 +249,14 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
    * `sessionOwnerKey` (finding 4).
    */
   private readonly sessions = new Map<string, AdapterSession>();
+  /**
+   * One in-flight request/response spot subscription per account+symbol.
+   * Quote collection, reconciliation and protective checks can all request the
+   * same price concurrently. cTrader rejects duplicate 2127 subscriptions, so
+   * concurrent callers share one provider subscription until its 2129
+   * unsubscribe has been acknowledged.
+   */
+  private readonly spotQuoteFlights = new Map<string, Promise<CtraderSpotEventPayload>>();
   private currentAccountId: string | null = null;
   /**
    * Unique lease-owner key for the client's account-session refcounting
@@ -471,6 +481,123 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       if (!match) return null;
       const [position] = await this.enrichPositions(session, [match]);
       return position ?? null;
+    } catch (err) {
+      throw this.mapError(err);
+    }
+  }
+
+  /**
+   * Resolve an OPEN cTrader position by the iRexPro client reference carried
+   * in ProtoOA tradeData.label/comment. This is intentionally provider-specific
+   * and is used by DEMO validation cleanup when a MARKET dispatch outcome is
+   * uncertain and no provider order/position id was returned.
+   */
+  async findPositionByClientReference(clientReference: string): Promise<BrokerPosition | null> {
+    const session = this.requireCurrentSession();
+    const reference = String(clientReference ?? '');
+    if (!reference) return null;
+    try {
+      const positions = await this.fetchReconcilePositions(session);
+      const label = reference.slice(0, 100);
+      const comment = reference.slice(0, 512);
+      const matches = positions.filter(
+        (position) => position.tradeData.label === label || position.tradeData.comment === comment,
+      );
+      if (matches.length > 1) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          `cTrader returned ${matches.length} open positions for one client reference; refusing ambiguous cleanup.`,
+        );
+      }
+      if (matches.length === 0) return null;
+      const [mapped] = await this.enrichPositions(session, [matches[0]!]);
+      return mapped ?? null;
+    } catch (err) {
+      throw this.mapError(err);
+    }
+  }
+
+  /**
+   * Removes only stale exposure created by the DEMO validation harness.
+   * Validation orders carry an idempotency reference beginning `harness-` in
+   * cTrader tradeData.label/comment. Ordinary AI/user exposure is never
+   * selected by this cleanup surface.
+   */
+  async cleanupDemoValidationExposure(): Promise<{
+    positionsClosed: number;
+    ordersCancelled: number;
+    remainingPositions: number;
+    remainingOrders: number;
+  }> {
+    if (this.mode !== BrokerMode.DEMO) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        'Validation-exposure cleanup is restricted to cTrader DEMO mode.',
+      );
+    }
+    const session = this.requireCurrentSession();
+    try {
+      const before = await this.fetchReconcile(session);
+      const stalePositions = before.positions.filter(
+        (position) =>
+          position.positionStatus === CtraderPositionStatus.POSITION_STATUS_OPEN &&
+          this.isDemoValidationReference(position.tradeData),
+      );
+      const staleOrders = before.orders.filter(
+        (order) =>
+          order.orderStatus === CtraderOrderStatus.ORDER_STATUS_ACCEPTED &&
+          this.mapProtoOrderKind(order.orderType) !== null &&
+          this.isDemoValidationReference(order.tradeData),
+      );
+
+      let positionsClosed = 0;
+      for (const position of stalePositions) {
+        const positionId = String(position.positionId);
+        const result = await this.closeOrder(positionId);
+        if (!result.success || result.status !== 'FILLED') {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.BROKER_SERVER_ERROR,
+            `Validation position "${positionId}" could not be closed safely.`,
+          );
+        }
+        positionsClosed += 1;
+      }
+
+      let ordersCancelled = 0;
+      for (const order of staleOrders) {
+        const orderId = String(order.orderId);
+        const result = await this.cancelOrder(orderId);
+        if (!result.success || result.status !== 'FILLED') {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.BROKER_SERVER_ERROR,
+            `Validation working order "${orderId}" could not be cancelled safely.`,
+          );
+        }
+        ordersCancelled += 1;
+      }
+
+      const after = await this.fetchReconcile(session);
+      const remainingPositions = after.positions.filter(
+        (position) =>
+          position.positionStatus === CtraderPositionStatus.POSITION_STATUS_OPEN &&
+          this.isDemoValidationReference(position.tradeData),
+      ).length;
+      const remainingOrders = after.orders.filter(
+        (order) =>
+          order.orderStatus === CtraderOrderStatus.ORDER_STATUS_ACCEPTED &&
+          this.mapProtoOrderKind(order.orderType) !== null &&
+          this.isDemoValidationReference(order.tradeData),
+      ).length;
+
+      if (remainingPositions > 0 || remainingOrders > 0) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          `Stale DEMO validation exposure is still present after cleanup ` +
+            `(positions=${remainingPositions}, orders=${remainingOrders}).`,
+        );
+      }
+
+      return { positionsClosed, ordersCancelled, remainingPositions, remainingOrders };
     } catch (err) {
       throw this.mapError(err);
     }
@@ -739,7 +866,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       // Absolute SL/TP are NOT supported for MARKET orders on the wire (proto
       // comment) — they are attached to the filled position below instead.
       if (protoOrderType !== CtraderOrderType.MARKET) {
-        this.applyProtectionPrices(payload, order.stopLoss, order.takeProfit);
+        this.applyProtectionPrices(payload, order.stopLoss, order.takeProfit, symbol.digits ?? 5);
       }
 
       const response = await this.client.request(
@@ -763,7 +890,24 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         );
       }
 
-      const result = this.mapExecutionEventToOrderResult(response, symbol.lotSize);
+      let result = this.mapExecutionEventToOrderResult(response, symbol.lotSize);
+      // cTrader can acknowledge a MARKET order as ORDER_ACCEPTED before the
+      // fill event is visible to the request/response path. Do a short,
+      // read-only reconciliation by our exact idempotency label/comment so a
+      // fill that already exists becomes OPEN immediately. If the provider
+      // has not exposed the position yet (or the read fails), retain PENDING
+      // and let the normal reconciliation loop converge it later. Never
+      // resubmit and never invent a fill.
+      if (protoOrderType === CtraderOrderType.MARKET && result.status === 'PENDING') {
+        const reconciledFill = await this.reconcileAcceptedMarketFill(
+          session,
+          idem.label,
+          idem.comment,
+          symbol.lotSize,
+        );
+        if (reconciledFill) result = reconciledFill;
+      }
+
       // MARKET + SL/TP: attach the protection to the FILLED position (2110).
       if (
         protoOrderType === CtraderOrderType.MARKET &&
@@ -771,7 +915,12 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         result.externalOrderId &&
         this.hasProtection(order)
       ) {
-        await this.amendPositionProtection(session, result.externalOrderId, order);
+        await this.amendPositionProtection(
+          session,
+          result.externalOrderId,
+          order,
+          symbol.digits ?? 5,
+        );
       }
       return result;
     } catch (err) {
@@ -796,6 +945,11 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           `No open position or working order "${externalOrderId}" on the cTrader account.`,
         );
       }
+      const protectionSymbol = await this.resolveSymbolDetails(
+        session,
+        (asPosition ?? asOrder!).tradeData.symbolId,
+      );
+      const protectionDigits = protectionSymbol?.digits ?? 5;
 
       let response: CtraderMessageEnvelope;
       if (asPosition) {
@@ -807,18 +961,54 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
             ctid,
             parseCtraderId(asPosition.positionId, 'positionId'),
             modifications,
+            protectionDigits,
           ),
         );
       } else {
-        // Amend working order (2109) — SL/TP fields only.
+        // Amend working order (2109). cTrader treats omitted execution fields
+        // on some pending-order amendments as zero/default values, so preserve
+        // the existing volume + trigger price while changing protection only.
+        const workingOrder = asOrder!;
+        const orderKind = this.mapProtoOrderKind(workingOrder.orderType);
+        if (!orderKind) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_ORDER_TYPE,
+            `Provider order "${externalOrderId}" is not a modifiable pending order.`,
+          );
+        }
         const payload: Record<string, unknown> = {
           ctidTraderAccountId: ctid,
-          orderId: parseCtraderId(asOrder!.orderId, 'orderId'),
+          orderId: parseCtraderId(workingOrder.orderId, 'orderId'),
+          volume: workingOrder.tradeData.volume,
         };
+        if (orderKind === 'LIMIT' || orderKind === 'STOP_LIMIT') {
+          if (workingOrder.limitPrice === undefined) {
+            throw new BrokerAdapterError(
+              BrokerErrorCode.INVALID_PRICE,
+              `Working ${orderKind} order "${externalOrderId}" has no limitPrice to preserve.`,
+            );
+          }
+          payload.limitPrice = workingOrder.limitPrice;
+        }
+        if (orderKind === 'STOP' || orderKind === 'STOP_LIMIT') {
+          if (workingOrder.stopPrice === undefined) {
+            throw new BrokerAdapterError(
+              BrokerErrorCode.INVALID_PRICE,
+              `Working ${orderKind} order "${externalOrderId}" has no stopPrice to preserve.`,
+            );
+          }
+          payload.stopPrice = workingOrder.stopPrice;
+        }
+        if (workingOrder.expirationTimestamp !== undefined) {
+          payload.expirationTimestamp = workingOrder.expirationTimestamp;
+        }
+        if (workingOrder.stopLoss !== undefined) payload.stopLoss = workingOrder.stopLoss;
+        if (workingOrder.takeProfit !== undefined) payload.takeProfit = workingOrder.takeProfit;
         this.applyProtectionPrices(
           payload,
           modifications.newStopLoss ?? '',
           modifications.newTakeProfit ?? '',
+          protectionDigits,
         );
         if (modifications.newTrailingStop !== undefined && modifications.newTrailingStop !== '0') {
           payload.trailingStopLoss = true;
@@ -1134,7 +1324,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           `Provider order "${providerOrderId}" is a protection order — outside the normalized order contract.`,
         );
       }
-      return this.mapOrderToState(session, payload.order, symbol.lotSize);
+      return this.mapOrderToState(session, payload.order, symbol.lotSize, payload.deal ?? []);
     } catch (err) {
       const mapped = this.mapError(err);
       // null is ONLY allowed for a legitimate provider not-found — never
@@ -1269,6 +1459,54 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     };
   }
 
+  private async reconcileAcceptedMarketFill(
+    session: AdapterSession,
+    label: string,
+    comment: string,
+    symbolLotSizeCents: number,
+  ): Promise<BrokerOrderResult | null> {
+    for (const delayMs of MARKET_ACCEPTED_RECONCILE_DELAYS_MS) {
+      if (delayMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      }
+      try {
+        const { positions } = await this.fetchReconcile(session);
+        const matches = positions.filter(
+          (position) =>
+            position.positionStatus === CtraderPositionStatus.POSITION_STATUS_OPEN &&
+            (position.tradeData.label === label || position.tradeData.comment === comment),
+        );
+        if (matches.length > 1) {
+          this.logger.warn(
+            `cTrader MARKET acceptance reconciliation found ${matches.length} positions for one client reference; retaining PENDING for authoritative reconciliation.`,
+          );
+          return null;
+        }
+        const position = matches[0];
+        if (!position) continue;
+        return {
+          success: true,
+          externalOrderId: String(position.positionId),
+          filledPrice:
+            position.price !== undefined ? wirePriceToDecimalString(position.price) : undefined,
+          filledQuantity: volumeCentsToLotString(position.tradeData.volume, symbolLotSizeCents),
+          filledAt: position.tradeData.openTimestamp
+            ? new Date(position.tradeData.openTimestamp)
+            : new Date(),
+          status: 'FILLED',
+          brokerMessage: 'Market order filled (reconciled after acceptance)',
+          rawResponse: position,
+        };
+      } catch (error) {
+        this.logger.warn(
+          `cTrader MARKET acceptance reconciliation deferred: ${(error as Error).message}`,
+        );
+        return null;
+      }
+    }
+    return null;
+  }
+
   private async fetchReconcilePositions(session: AdapterSession): Promise<CtraderPosition[]> {
     const { positions } = await this.fetchReconcile(session);
     // Only genuinely OPEN positions (POSITION_STATUS_CREATED is an empty shell
@@ -1393,7 +1631,25 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
   }
 
   /** Subscribe→await one full spot event→unsubscribe (request/response pricing). */
-  private async fetchSpotQuote(
+  private fetchSpotQuote(
+    session: AdapterSession,
+    symbolId: number,
+  ): Promise<CtraderSpotEventPayload> {
+    const flightKey = `${session.env}:${session.accountId}:${symbolId}`;
+    const existing = this.spotQuoteFlights.get(flightKey);
+    if (existing) return existing;
+
+    const flight = this.fetchSpotQuoteOnce(session, symbolId);
+    this.spotQuoteFlights.set(flightKey, flight);
+    void flight.finally(() => {
+      if (this.spotQuoteFlights.get(flightKey) === flight) {
+        this.spotQuoteFlights.delete(flightKey);
+      }
+    }).catch(() => undefined);
+    return flight;
+  }
+
+  private async fetchSpotQuoteOnce(
     session: AdapterSession,
     symbolId: number,
   ): Promise<CtraderSpotEventPayload> {
@@ -1424,8 +1680,10 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       const event = await eventPromise;
       return event.payload as unknown as CtraderSpotEventPayload;
     } finally {
-      // Best-effort unsubscribe (traffic hygiene; failures are not fatal).
-      void this.client
+      // Keep the single-flight alive until cTrader acknowledges 2129. Clearing
+      // it before unsubscribe completes lets the next scan send a duplicate
+      // 2127 while the provider still considers this symbol subscribed.
+      await this.client
         .request(session.env, CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ, {
           ctidTraderAccountId: ctid,
           symbolId: [symbolId],
@@ -1548,6 +1806,44 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         rawResponse: response.payload,
       };
     }
+    if (event.executionType === CtraderExecutionType.ORDER_ACCEPTED) {
+      const originalVolume = position.tradeData.volume;
+      const expectedRemainingVolume = Math.max(0, originalVolume - volumeCents);
+      const deadline = Date.now() + 5_000;
+      let remainingVolume = originalVolume;
+
+      while (Date.now() <= deadline) {
+        const positions = await this.fetchReconcilePositions(session);
+        const current = positions.find((candidate) => candidate.positionId === position.positionId);
+        remainingVolume = current?.tradeData.volume ?? 0;
+        if (!current || remainingVolume <= expectedRemainingVolume) {
+          return {
+            success: true,
+            externalOrderId: String(position.positionId),
+            filledQuantity:
+              symbolLotSizeCents !== undefined
+                ? volumeCentsToLotString(volumeCents, symbolLotSizeCents)
+                : undefined,
+            filledAt: new Date(),
+            status: 'FILLED',
+            brokerMessage: 'Close accepted and confirmed by provider reconciliation',
+            rawResponse: response.payload,
+          };
+        }
+        if (Date.now() >= deadline) break;
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+
+      return {
+        success: false,
+        externalOrderId: String(position.positionId),
+        status: 'FAILED',
+        brokerMessage:
+          `Close was accepted but provider reconciliation did not confirm the requested volume reduction ` +
+          `within 5000ms (remainingVolume=${remainingVolume}, expected<=${expectedRemainingVolume})`,
+        rawResponse: response.payload,
+      };
+    }
     const filled =
       event.executionType === CtraderExecutionType.ORDER_FILLED ||
       event.executionType === CtraderExecutionType.ORDER_PARTIAL_FILL;
@@ -1639,14 +1935,17 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     session: AdapterSession,
     order: CtraderOrder,
     symbolLotSizeCents: number,
+    relatedDeals: CtraderDeal[] = [],
   ): BrokerOrderState {
     const status = this.mapOrderStateStatus(order);
+    const providerPositionId = relatedDeals.find((deal) => deal.positionId > 0)?.positionId;
     const orderKind = this.mapProtoOrderKind(order.orderType);
     const requestedQuantity = volumeCentsToLotString(order.tradeData.volume, symbolLotSizeCents);
     const filledQuantity = volumeCentsToLotString(order.executedVolume ?? 0, symbolLotSizeCents);
     const hasFill = status === 'FILLED' || status === 'PARTIALLY_FILLED';
     return {
       providerOrderId: String(order.orderId),
+      providerPositionId: providerPositionId !== undefined ? String(providerPositionId) : null,
       clientOrderId: order.clientOrderId ?? null,
       status,
       instrument: this.symbolName(session, order.tradeData.symbolId),
@@ -1711,22 +2010,41 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     return parseFloat(trimmed) > 0;
   }
 
+  private isDemoValidationReference(tradeData: { label?: string; comment?: string }): boolean {
+    return (
+      (typeof tradeData.label === 'string' && tradeData.label.startsWith('harness-')) ||
+      (typeof tradeData.comment === 'string' && tradeData.comment.startsWith('harness-'))
+    );
+  }
+
   /** End of the current UTC trading day, in Unix ms (for DAY/GOOD_TILL_DATE). */
   private nextUtcMidnightMs(): number {
     const now = new Date();
     return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
   }
 
+  private protectionPriceForSymbol(
+    value: string,
+    field: string,
+    digits: number,
+  ): number {
+    const wirePrice = decimalStringToWirePrice(value, field);
+    const normalizedDigits = Number.isInteger(digits) && digits >= 0 ? Math.min(digits, 10) : 5;
+    const factor = 10 ** normalizedDigits;
+    return Math.round((wirePrice + Number.EPSILON) * factor) / factor;
+  }
+
   private applyProtectionPrices(
     payload: Record<string, unknown>,
     stopLoss: string | undefined,
     takeProfit: string | undefined,
+    digits: number,
   ): void {
     if (this.isNonZeroPrice(stopLoss)) {
-      payload.stopLoss = decimalStringToWirePrice(stopLoss!, 'stopLoss');
+      payload.stopLoss = this.protectionPriceForSymbol(stopLoss!, 'stopLoss', digits);
     }
     if (this.isNonZeroPrice(takeProfit)) {
-      payload.takeProfit = decimalStringToWirePrice(takeProfit!, 'takeProfit');
+      payload.takeProfit = this.protectionPriceForSymbol(takeProfit!, 'takeProfit', digits);
     }
   }
 
@@ -1734,13 +2052,22 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     ctid: number,
     positionId: number,
     modifications: BrokerOrderModification,
+    digits: number,
   ): Record<string, unknown> {
     const payload: Record<string, unknown> = { ctidTraderAccountId: ctid, positionId };
     if (this.isNonZeroPrice(modifications.newStopLoss)) {
-      payload.stopLoss = decimalStringToWirePrice(modifications.newStopLoss!, 'newStopLoss');
+      payload.stopLoss = this.protectionPriceForSymbol(
+        modifications.newStopLoss!,
+        'newStopLoss',
+        digits,
+      );
     }
     if (this.isNonZeroPrice(modifications.newTakeProfit)) {
-      payload.takeProfit = decimalStringToWirePrice(modifications.newTakeProfit!, 'newTakeProfit');
+      payload.takeProfit = this.protectionPriceForSymbol(
+        modifications.newTakeProfit!,
+        'newTakeProfit',
+        digits,
+      );
     }
     if (modifications.newTrailingStop !== undefined && modifications.newTrailingStop !== '0') {
       payload.trailingStopLoss = true;
@@ -1753,6 +2080,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     session: AdapterSession,
     positionId: string,
     order: BrokerOrderRequest,
+    digits: number,
   ): Promise<void> {
     const response = await this.client.request(
       session.env,
@@ -1761,6 +2089,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         parseCtraderId(session.accountId, 'ctidTraderAccountId'),
         parseCtraderId(positionId, 'positionId'),
         { newStopLoss: order.stopLoss, newTakeProfit: order.takeProfit },
+        digits,
       ),
     );
     if (response.payloadType === CTRADER_PAYLOAD_TYPE.ORDER_ERROR_EVENT) {

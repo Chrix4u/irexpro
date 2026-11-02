@@ -574,6 +574,7 @@ describe('Round 7.1 (P0-5): crash/restart recovery — pre-commitment convergenc
     // trade through the same recovery seam as RECONCILIATION_PENDING.
     expect(resolutionRecover).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'trade-working-1', status: TradeStatus.PENDING }),
+      expect.objectContaining({ externalOrderId: 'pos-9' }),
     );
   });
 

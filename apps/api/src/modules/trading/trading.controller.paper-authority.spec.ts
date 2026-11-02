@@ -75,21 +75,34 @@ describe('TradingController multi-model PAPER authority lock', () => {
     expect(result.executionMode).toBe(ExecutionMode.PAPER_ONLY);
   });
 
-  it('rejects an accidental MetaApi DEMO/FULL_AUTO start for the scanner-owned user', async () => {
+  it('delegates the promoted real-provider DEMO/FULL_AUTO start to TradingService', async () => {
     const { controller, tradingService } = buildController();
-
-    await expect(
-      controller.startSession(RESEARCH_USER_ID, {
+    (tradingService.startTradingSession as jest.Mock).mockResolvedValue(
+      session({
         brokerConnectionId: METAAPI_CONNECTION_ID,
         executionMode: ExecutionMode.FULL_AUTO,
-      } as StartSessionDto),
-    ).rejects.toThrow(ForbiddenException);
+      }),
+    );
 
-    expect(tradingService.startTradingSession).not.toHaveBeenCalled();
+    const result = await controller.startSession(RESEARCH_USER_ID, {
+      brokerConnectionId: METAAPI_CONNECTION_ID,
+      executionMode: ExecutionMode.FULL_AUTO,
+    } as StartSessionDto);
+
+    expect(tradingService.startTradingSession).toHaveBeenCalledWith(
+      RESEARCH_USER_ID,
+      METAAPI_CONNECTION_ID,
+      ExecutionMode.FULL_AUTO,
+    );
+    expect(result.brokerConnectionId).toBe(METAAPI_CONNECTION_ID);
+    expect(result.executionMode).toBe(ExecutionMode.FULL_AUTO);
   });
 
-  it('rejects another connection even when the request says PAPER_ONLY', async () => {
+  it('propagates TradingService authority rejection for an invalid PAPER_ONLY binding', async () => {
     const { controller, tradingService } = buildController();
+    (tradingService.startTradingSession as jest.Mock).mockRejectedValueOnce(
+      new ForbiddenException('invalid scanner authority'),
+    );
 
     await expect(
       controller.startSession(RESEARCH_USER_ID, {
@@ -98,7 +111,11 @@ describe('TradingController multi-model PAPER authority lock', () => {
       } as StartSessionDto),
     ).rejects.toThrow(ForbiddenException);
 
-    expect(tradingService.startTradingSession).not.toHaveBeenCalled();
+    expect(tradingService.startTradingSession).toHaveBeenCalledWith(
+      RESEARCH_USER_ID,
+      METAAPI_CONNECTION_ID,
+      ExecutionMode.PAPER_ONLY,
+    );
   });
 
   it('rejects execution-mode promotion while the research campaign owns the user', async () => {

@@ -16,6 +16,7 @@ import { UpdateRiskProfileDto } from './dto/update-risk-profile.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 import { toRiskProfileResponse, toRiskViolationSummary } from './risk-response.mapper';
+import { RiskRejectionCode } from './interfaces/risk.interface';
 
 /**
  * RiskController — User-facing risk management endpoints.
@@ -106,16 +107,32 @@ export class RiskController {
   })
   @ApiResponse({ status: 200, description: 'Risk status summary' })
   async getRiskStatus(@CurrentUserId() userId: string) {
-    const [profile, hasBroker, killSwitchActive] = await Promise.all([
+    const [profile, hasBroker, killSwitchActive, violations] = await Promise.all([
       this.riskService.getOrCreateProfile(userId),
       this.riskService.hasBrokerConnection(userId),
       this.riskService.isKillSwitchActive(userId),
+      this.riskService.getViolations(userId, 20),
     ]);
+    const latestDailyLossViolation = violations.find(
+      (violation) => violation.rejectionCode === RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED,
+    );
+    const latestRiskSuspensionViolation = violations.find(
+      (violation) =>
+        violation.rejectionCode === RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED ||
+        violation.rejectionCode === RiskRejectionCode.MAX_DRAWDOWN_REACHED,
+    );
 
     return {
       killSwitchActive,
       brokerConnected: hasBroker,
       canTrade: !killSwitchActive && hasBroker,
+      latestViolation: violations[0] ? toRiskViolationSummary(violations[0]) : null,
+      latestDailyLossViolation: latestDailyLossViolation
+        ? toRiskViolationSummary(latestDailyLossViolation)
+        : null,
+      latestRiskSuspensionViolation: latestRiskSuspensionViolation
+        ? toRiskViolationSummary(latestRiskSuspensionViolation)
+        : null,
       limits: {
         maxDailyLossPercent: profile.maxDailyLossPercent,
         maxDrawdownPercent: profile.maxDrawdownPercent,
