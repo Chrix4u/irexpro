@@ -76,6 +76,24 @@ function confirmedReversalTimingConsistent(input: MultimodelDemoAuthorityInput):
   );
 }
 
+function trainedExpertStronglyOpposes(input: MultimodelDemoAuthorityInput): boolean {
+  const direction = input.trainedExpert.direction;
+  if (!direction || direction === input.candidateDirection) return false;
+
+  const longVotes = input.trainedExpert.longVotes ?? 0;
+  const shortVotes = input.trainedExpert.shortVotes ?? 0;
+  const totalVotes = longVotes + shortVotes;
+  const expertDirectionalVotes = direction === 'BUY' ? longVotes : shortVotes;
+  const confidence = input.trainedExpert.ensembleConfidence ?? 0;
+
+  return (
+    input.trainedExpert.allBrokerNative === true &&
+    totalVotes >= 3 &&
+    expertDirectionalVotes === totalVotes &&
+    confidence >= HIGH_CONVICTION_RESCUE_CONFIDENCE_FLOOR
+  );
+}
+
 function trendContinuationTimingConsistent(input: MultimodelDemoAuthorityInput): boolean {
   return (
     input.ensemble.strategyRoute !== 'TREND_CONTINUATION' ||
@@ -128,6 +146,9 @@ export function evaluateMultimodelDemoAuthority(
   }
   if (!input.governance.paperExecutionEligible) {
     blockers.push('MULTIMODEL_GOVERNANCE_BLOCKED', ...input.governance.paperExecutionBlockers);
+  }
+  if (trainedExpertStronglyOpposes(input)) {
+    blockers.push('MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT');
   }
   if (!confirmedReversalTimingConsistent(input)) {
     blockers.push('MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED');

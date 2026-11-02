@@ -64,7 +64,7 @@ describe('evaluateMultimodelDemoAuthority', () => {
     );
   });
 
-  it.each(['CONFLICT', 'ABSTAIN', 'STALE', 'UNAVAILABLE'] as const)(
+  it.each(['ABSTAIN', 'STALE', 'UNAVAILABLE'] as const)(
     'keeps trained expert state %s observational when the promoted PAPER champion qualifies',
     (state) => {
       const result = evaluateMultimodelDemoAuthority({
@@ -80,6 +80,26 @@ describe('evaluateMultimodelDemoAuthority', () => {
       expect(result.trainedExpertConfirmed).toBe(false);
     },
   );
+
+  it('blocks a primary Plan-B entry when three broker-native experts unanimously support the opposite direction at 70%+ confidence', () => {
+    const result = evaluateMultimodelDemoAuthority({
+      ensemble: ensemble(true),
+      governance: governance(true),
+      trainedExpert: {
+        ...overlay('ABSTAIN'),
+        direction: 'SELL',
+        longVotes: 0,
+        shortVotes: 3,
+        ensembleConfidence: 0.709,
+      },
+      candidateDirection: 'BUY',
+      m1TimingRoute: 'M1_TREND_CONTINUATION',
+    });
+
+    expect(result.executable).toBe(false);
+    expect(result.authorityPath).toBe('BLOCKED');
+    expect(result.blockers).toContain('MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT');
+  });
 
   it('blocks when Plan-B does not admit the candidate and high-conviction rescue is unavailable', () => {
     const result = evaluateMultimodelDemoAuthority({
