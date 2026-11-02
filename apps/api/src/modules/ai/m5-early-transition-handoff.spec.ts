@@ -39,6 +39,25 @@ describe('evaluateM5EarlyTransitionHandoff', () => {
     });
   });
 
+  it('treats a freshly completed M5 bar as fresh after its close boundary, not from its open time', () => {
+    expect(
+      evaluateM5EarlyTransitionHandoff(
+        input({
+          decisionTime: new Date('2026-11-02T05:51:00.000Z'),
+          m5Evidence: {
+            ...input().m5Evidence,
+            marketBarTime: new Date('2026-11-02T05:45:00.000Z'),
+            evaluatedAt: new Date('2026-11-02T05:50:39.000Z'),
+          },
+        }) as any,
+      ),
+    ).toEqual({
+      eligible: true,
+      reason: 'M5_EARLY_TRANSITION_M1_CONFIRMED_PROBE',
+      lotCap: 0.2,
+    });
+  });
+
   it('admits a strong non-opposed M1 abstain as a capped probe instead of requiring identical route labels', () => {
     expect(
       evaluateM5EarlyTransitionHandoff(
@@ -60,7 +79,7 @@ describe('evaluateM5EarlyTransitionHandoff', () => {
     [
       'stale M5 evidence',
       {
-        m5Evidence: { ...input().m5Evidence, marketBarTime: new Date('2026-10-29T17:00:00.000Z') },
+        m5Evidence: { ...input().m5Evidence, marketBarTime: new Date('2026-10-29T16:55:00.000Z') },
       },
     ],
     [

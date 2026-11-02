@@ -33,7 +33,8 @@ export interface M5EarlyTransitionHandoffDecision {
   lotCap: number;
 }
 
-const MAX_M5_BAR_AGE_MS = 5 * 60_000;
+const M5_BAR_DURATION_MS = 5 * 60_000;
+const MAX_M5_BAR_CLOSE_AGE_MS = 5 * 60_000;
 const MAX_M5_EVALUATION_AGE_MS = 2 * 60_000;
 const MIN_M5_NET_EXPECTED_R = 0.2;
 const MIN_M5_ENSEMBLE_SCORE = 0.6;
@@ -72,7 +73,11 @@ export function evaluateM5EarlyTransitionHandoff(
   const m5 = input.m5Evidence;
 
   if (m5.strategyRoute !== 'EARLY_TRANSITION') return reject('M5_ROUTE_NOT_EARLY_TRANSITION');
-  if (!freshAge(input.decisionTime, m5.marketBarTime, MAX_M5_BAR_AGE_MS)) {
+  // marketBarTime is the opening timestamp of the completed M5 candle.
+  // Measure freshness from that candle's close boundary, otherwise evidence
+  // evaluated just after the bar closes is already stale before the next M1 slot.
+  const m5BarCloseTime = new Date(m5.marketBarTime.getTime() + M5_BAR_DURATION_MS);
+  if (!freshAge(input.decisionTime, m5BarCloseTime, MAX_M5_BAR_CLOSE_AGE_MS)) {
     return reject('M5_EVIDENCE_STALE');
   }
   if (!freshAge(input.decisionTime, m5.evaluatedAt, MAX_M5_EVALUATION_AGE_MS)) {
