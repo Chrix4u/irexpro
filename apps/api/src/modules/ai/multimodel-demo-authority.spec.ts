@@ -147,6 +147,34 @@ describe('evaluateMultimodelDemoAuthority', () => {
     expect(result.blockers).toEqual([]);
   });
 
+  it('blocks a primary EARLY_TRANSITION setup when the M1 timing specialist abstains', () => {
+    const result = evaluateMultimodelDemoAuthority({
+      ensemble: { ...ensemble(true), strategyRoute: 'EARLY_TRANSITION' as const },
+      governance: governance(true),
+      trainedExpert: overlay('CONFIRM'),
+      candidateDirection: 'SELL',
+      m1TimingRoute: 'ABSTAIN',
+    });
+
+    expect(result.executable).toBe(false);
+    expect(result.authorityPath).toBe('BLOCKED');
+    expect(result.blockers).toContain('MULTIMODEL_EARLY_TRANSITION_NOT_M1_CONFIRMED');
+  });
+
+  it('keeps a primary EARLY_TRANSITION setup executable when M1 timing confirms the transition', () => {
+    const result = evaluateMultimodelDemoAuthority({
+      ensemble: { ...ensemble(true), strategyRoute: 'EARLY_TRANSITION' as const },
+      governance: governance(true),
+      trainedExpert: overlay('CONFIRM'),
+      candidateDirection: 'SELL',
+      m1TimingRoute: 'M1_EARLY_TRANSITION',
+    });
+
+    expect(result.executable).toBe(true);
+    expect(result.authorityPath).toBe('PRIMARY_PLAN_B');
+    expect(result.blockers).toEqual([]);
+  });
+
   it('rescues only an EARLY_TRANSITION DEMO setup when trained experts unanimously match direction and only admission/drift block it', () => {
     const result = evaluateMultimodelDemoAuthority({
       ensemble: { ...ensemble(false), strategyRoute: 'EARLY_TRANSITION' as const },
