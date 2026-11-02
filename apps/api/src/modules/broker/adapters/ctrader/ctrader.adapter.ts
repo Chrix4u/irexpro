@@ -1641,11 +1641,13 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
 
     const flight = this.fetchSpotQuoteOnce(session, symbolId);
     this.spotQuoteFlights.set(flightKey, flight);
-    void flight.finally(() => {
-      if (this.spotQuoteFlights.get(flightKey) === flight) {
-        this.spotQuoteFlights.delete(flightKey);
-      }
-    }).catch(() => undefined);
+    void flight
+      .finally(() => {
+        if (this.spotQuoteFlights.get(flightKey) === flight) {
+          this.spotQuoteFlights.delete(flightKey);
+        }
+      })
+      .catch(() => undefined);
     return flight;
   }
 
@@ -2034,11 +2036,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
   }
 
-  private protectionPriceForSymbol(
-    value: string,
-    field: string,
-    digits: number,
-  ): number {
+  private protectionPriceForSymbol(value: string, field: string, digits: number): number {
     const wirePrice = decimalStringToWirePrice(value, field);
     const normalizedDigits = Number.isInteger(digits) && digits >= 0 ? Math.min(digits, 10) : 5;
     const factor = 10 ** normalizedDigits;
