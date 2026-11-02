@@ -30,6 +30,104 @@ export interface LiveDemoAdverseProtectionDecision {
   currentR: number | null;
 }
 
+export interface LiveDemoTrainedExpertThesis {
+  direction: 'BUY' | 'SELL' | null;
+  allBrokerNative: boolean;
+  longVotes: number;
+  shortVotes: number;
+  ensembleConfidence: number | null;
+  freshnessSeconds: number | null;
+}
+
+export interface LiveDemoAuthoritativeThesis {
+  direction: 'BUY' | 'SELL';
+  evaluatedAt: Date;
+  executionAuthority: string;
+  blockers: string[];
+  planBStrategyRoute: 'TREND_CONTINUATION' | 'CONFIRMED_REVERSAL' | 'EARLY_TRANSITION' | null;
+  authorityExecutable: boolean;
+  trainedExpert: LiveDemoTrainedExpertThesis | null;
+}
+
+export interface LiveDemoThesisProtectionDecision {
+  shouldClose: boolean;
+  reason:
+    | 'INVALID_RISK'
+    | 'NO_THESIS'
+    | 'THESIS_STALE'
+    | 'SAME_DIRECTION'
+    | 'OPPOSITE_EXPERT_PROFIT_HARVEST'
+    | 'OPPOSITE_NOT_CONFIRMED_REVERSAL'
+    | 'CONFIRMED_REVERSAL_NEAR_BREAKEVEN'
+    | 'CONFIRMED_REVERSAL_HARD_CUT'
+    | 'CONFIRMED_REVERSAL_RECOVERY_WINDOW'
+    | 'CONFIRMED_REVERSAL_GRACE_EXPIRED';
+  currentR: number | null;
+}
+
+export function evaluateLiveDemoThesisProtection(input: {
+  tradeDirection: 'BUY' | 'SELL';
+  currentPnl: number;
+  initialRiskPnl: number;
+  observedAt: Date;
+  latestThesis: LiveDemoAuthoritativeThesis | null;
+}): LiveDemoThesisProtectionDecision {
+  const hold = (
+    reason: LiveDemoThesisProtectionDecision['reason'],
+    currentR: number | null,
+  ): LiveDemoThesisProtectionDecision => ({ shouldClose: false, reason, currentR });
+  if (!Number.isFinite(input.initialRiskPnl) || input.initialRiskPnl <= 0) {
+    return hold('INVALID_RISK', null);
+  }
+  const currentR = input.currentPnl / input.initialRiskPnl;
+  const thesis = input.latestThesis;
+  if (!thesis) return hold('NO_THESIS', currentR);
+
+  const thesisAgeSeconds = (input.observedAt.getTime() - thesis.evaluatedAt.getTime()) / 1000;
+  if (!Number.isFinite(thesisAgeSeconds) || thesisAgeSeconds < 0 || thesisAgeSeconds > 150) {
+    return hold('THESIS_STALE', currentR);
+  }
+  if (thesis.direction === input.tradeDirection) return hold('SAME_DIRECTION', currentR);
+
+  const expert = thesis.trainedExpert;
+  const opposingExpertVotes =
+    input.tradeDirection === 'BUY' ? expert?.shortVotes ?? 0 : expert?.longVotes ?? 0;
+  const sameDirectionExpertVotes =
+    input.tradeDirection === 'BUY' ? expert?.longVotes ?? 0 : expert?.shortVotes ?? 0;
+  const unanimousFreshExpertOpposition =
+    expert?.direction === thesis.direction &&
+    expert.allBrokerNative === true &&
+    opposingExpertVotes >= 3 &&
+    sameDirectionExpertVotes === 0 &&
+    expert.ensembleConfidence !== null &&
+    expert.ensembleConfidence >= 0.7 &&
+    expert.freshnessSeconds !== null &&
+    expert.freshnessSeconds >= 0 &&
+    expert.freshnessSeconds <= 120;
+
+  if (currentR >= 0.15 && unanimousFreshExpertOpposition) {
+    return { shouldClose: true, reason: 'OPPOSITE_EXPERT_PROFIT_HARVEST', currentR };
+  }
+
+  const confirmedReversal =
+    thesis.executionAuthority === 'BROKER_NATIVE' &&
+    thesis.blockers.length === 0 &&
+    thesis.authorityExecutable === true &&
+    thesis.planBStrategyRoute === 'CONFIRMED_REVERSAL';
+  if (!confirmedReversal) return hold('OPPOSITE_NOT_CONFIRMED_REVERSAL', currentR);
+
+  if (currentR >= -0.12) {
+    return { shouldClose: true, reason: 'CONFIRMED_REVERSAL_NEAR_BREAKEVEN', currentR };
+  }
+  if (currentR <= -0.35) {
+    return { shouldClose: true, reason: 'CONFIRMED_REVERSAL_HARD_CUT', currentR };
+  }
+  if (thesisAgeSeconds >= 45) {
+    return { shouldClose: true, reason: 'CONFIRMED_REVERSAL_GRACE_EXPIRED', currentR };
+  }
+  return hold('CONFIRMED_REVERSAL_RECOVERY_WINDOW', currentR);
+}
+
 /**
  * DEMO-only adverse-thesis guard.
  *
@@ -266,6 +364,28 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               continue;
             }
 
+            const latestThesis = await this.loadLatestAiThesis(trade, observedAt);
+            const thesisDecision = evaluateLiveDemoThesisProtection({
+              tradeDirection: trade.direction,
+              currentPnl,
+              initialRiskPnl: initialRisk,
+              observedAt,
+              latestThesis,
+            });
+            if (thesisDecision.shouldClose) {
+              this.logger.warn(
+                `cTrader DEMO AI_CLOSE_SIGNAL trade=${trade.trade_id} ${trade.instrument} ${trade.direction} ` +
+                  `reason=${thesisDecision.reason} currentR=${thesisDecision.currentR?.toFixed(3) ?? 'n/a'} ` +
+                  `peak=${money(maxFavorablePnl)} current=${money(currentPnl)} risk=${money(initialRisk)}`,
+              );
+              await this.executionService.closeTrade(
+                trade.trade_id,
+                trade.user_id,
+                TradeCloseReason.AI_CLOSE_SIGNAL,
+              );
+              continue;
+            }
+
             if (currentPnl >= 0 || !trade.opened_at) continue;
             const openedAt = new Date(trade.opened_at);
             if (!Number.isFinite(openedAt.getTime())) continue;
@@ -351,6 +471,166 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         AND (t.external_position_id IS NOT NULL OR t.external_order_id IS NOT NULL)
       ORDER BY t.opened_at ASC
     `)) as OpenAiTradeRow[];
+  }
+
+  private async loadLatestAiThesis(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+  ): Promise<LiveDemoAuthoritativeThesis | null> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          direction,
+          evaluated_at,
+          execution_authority,
+          blockers,
+          governance,
+          COALESCE(
+            NULLIF(governance->'multimodelEnsemble'->>'strategyRoute', ''),
+            CASE route
+              WHEN 'M1_TREND_CONTINUATION' THEN 'TREND_CONTINUATION'
+              WHEN 'M1_CONFIRMED_REVERSAL' THEN 'CONFIRMED_REVERSAL'
+              WHEN 'M1_EARLY_TRANSITION' THEN 'EARLY_TRANSITION'
+              ELSE NULL
+            END
+          ) AS plan_b_strategy_route,
+          COALESCE(
+            NULLIF(governance->'multimodelAuthority'->>'executable', '')::boolean,
+            false
+          ) AS authority_executable,
+          NULLIF(governance->'multimodelTrainedExpert'->>'direction', '') AS expert_direction,
+          COALESCE(
+            NULLIF(governance->'multimodelTrainedExpert'->>'allBrokerNative', '')::boolean,
+            false
+          ) AS expert_all_broker_native,
+          COALESCE(
+            NULLIF(governance->'multimodelTrainedExpert'->>'longVotes', '')::int,
+            0
+          ) AS expert_long_votes,
+          COALESCE(
+            NULLIF(governance->'multimodelTrainedExpert'->>'shortVotes', '')::int,
+            0
+          ) AS expert_short_votes,
+          NULLIF(
+            governance->'multimodelTrainedExpert'->>'ensembleConfidence',
+            ''
+          )::numeric AS expert_ensemble_confidence,
+          NULLIF(
+            governance->'multimodelTrainedExpert'->>'freshnessSeconds',
+            ''
+          )::numeric AS expert_freshness_seconds
+        FROM trading.m1_tactical_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND instrument = $3
+          AND evaluated_at <= $4::timestamptz
+          AND evaluated_at >= $4::timestamptz - interval '150 seconds'
+        ORDER BY
+          evaluated_at DESC,
+          CASE WHEN execution_authority = 'BROKER_NATIVE' THEN 0 ELSE 1 END,
+          CASE WHEN COALESCE(governance->'routeDecision'->>'eligible', 'false') = 'true' THEN 0 ELSE 1 END,
+          CASE WHEN route <> 'ABSTAIN' THEN 0 ELSE 1 END,
+          created_at DESC
+        LIMIT 1
+      `,
+      [trade.user_id, trade.broker_connection_id, trade.instrument.toUpperCase(), observedAt.toISOString()],
+    )) as Array<{
+      direction: string;
+      evaluated_at: Date | string;
+      execution_authority: string;
+      blockers: unknown;
+      governance: unknown;
+      plan_b_strategy_route: string | null;
+      authority_executable: boolean | string | number | null;
+      expert_direction: string | null;
+      expert_all_broker_native: boolean | string | number | null;
+      expert_long_votes: number | string | null;
+      expert_short_votes: number | string | null;
+      expert_ensemble_confidence: number | string | null;
+      expert_freshness_seconds: number | string | null;
+    }>;
+    const row = rows[0];
+    if (!row || (row.direction !== 'BUY' && row.direction !== 'SELL')) return null;
+    const evaluatedAt = new Date(row.evaluated_at);
+    if (!Number.isFinite(evaluatedAt.getTime())) return null;
+
+    let blockers: string[] = [];
+    if (Array.isArray(row.blockers)) {
+      blockers = row.blockers.filter((value): value is string => typeof value === 'string');
+    } else if (typeof row.blockers === 'string') {
+      try {
+        const parsed = JSON.parse(row.blockers) as unknown;
+        if (Array.isArray(parsed)) {
+          blockers = parsed.filter((value): value is string => typeof value === 'string');
+        }
+      } catch {
+        blockers = [];
+      }
+    }
+
+    let governance: Record<string, unknown> = {};
+    if (row.governance && typeof row.governance === 'object' && !Array.isArray(row.governance)) {
+      governance = row.governance as Record<string, unknown>;
+    } else if (typeof row.governance === 'string') {
+      try {
+        const parsed = JSON.parse(row.governance) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          governance = parsed as Record<string, unknown>;
+        }
+      } catch {
+        governance = {};
+      }
+    }
+    const record = (value: unknown): Record<string, unknown> =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
+    const ensemble = record(governance.multimodelEnsemble);
+    const authority = record(governance.multimodelAuthority);
+    const expertJson = record(governance.multimodelTrainedExpert);
+    const routeValue = row.plan_b_strategy_route ?? ensemble.strategyRoute;
+    const route =
+      routeValue === 'TREND_CONTINUATION' ||
+      routeValue === 'CONFIRMED_REVERSAL' ||
+      routeValue === 'EARLY_TRANSITION'
+        ? routeValue
+        : null;
+    const expertDirectionValue = row.expert_direction ?? expertJson.direction;
+    const expertDirection =
+      expertDirectionValue === 'BUY' || expertDirectionValue === 'SELL'
+        ? expertDirectionValue
+        : null;
+    const expertConfidence = finite(
+      row.expert_ensemble_confidence ?? expertJson.ensembleConfidence,
+    );
+    const expertFreshness = finite(
+      row.expert_freshness_seconds ?? expertJson.freshnessSeconds,
+    );
+    const longVotes = finite(row.expert_long_votes ?? expertJson.longVotes) ?? 0;
+    const shortVotes = finite(row.expert_short_votes ?? expertJson.shortVotes) ?? 0;
+    const bool = (value: unknown): boolean =>
+      value === true || value === 'true' || value === 1 || value === '1';
+
+    return {
+      direction: row.direction,
+      evaluatedAt,
+      executionAuthority: String(row.execution_authority ?? ''),
+      blockers,
+      planBStrategyRoute: route,
+      authorityExecutable: bool(row.authority_executable ?? authority.executable),
+      trainedExpert: expertDirection
+        ? {
+            direction: expertDirection,
+            allBrokerNative: bool(
+              row.expert_all_broker_native ?? expertJson.allBrokerNative,
+            ),
+            longVotes,
+            shortVotes,
+            ensembleConfidence: expertConfidence,
+            freshnessSeconds: expertFreshness,
+          }
+        : null,
+    };
   }
 
   private async loadCausalM1Evidence(

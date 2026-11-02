@@ -2,6 +2,7 @@ import { DataSource } from 'typeorm';
 import {
   LiveDemoProfitProtectionService,
   evaluateLiveDemoAdverseProtection,
+  evaluateLiveDemoThesisProtection,
 } from './live-demo-profit-protection.service';
 import { BrokerService } from '../../broker/broker.service';
 import { ExecutionService } from '../execution.service';
@@ -35,9 +36,11 @@ describe('LiveDemoProfitProtectionService', () => {
     accountType = 'DEMO',
     m1Rows: Array<Record<string, unknown>> = [],
     currentPrice = '1.11340',
+    thesisRows: Array<Record<string, unknown>> = [],
   ) {
     const query = jest.fn().mockImplementation(async (sql: string) => {
       if (sql.includes('FROM trading.trades t')) return rows;
+      if (sql.includes('FROM trading.m1_tactical_decisions')) return thesisRows;
       if (sql.includes('FROM market_data.provider_quote_candles')) return m1Rows;
       if (sql.includes('UPDATE trading.trades')) return [];
       return [];
@@ -269,6 +272,90 @@ describe('LiveDemoProfitProtectionService', () => {
     );
   });
 
+  it('harvests a positive DEMO trade when the latest fresh broker-native expert vote is unanimously opposite', async () => {
+    const h = harness(
+      [candidate({ max_favorable_pnl: '1.50', max_adverse_pnl: '-1.00' })],
+      '1.50',
+      'DEMO',
+      [],
+      '1.11340',
+      [
+        {
+          direction: 'SELL',
+          evaluated_at: new Date('2026-10-28T09:04:30.000Z'),
+          execution_authority: 'NONE',
+          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          governance: {
+            multimodelEnsemble: { strategyRoute: 'EARLY_TRANSITION' },
+            multimodelAuthority: { executable: false },
+            multimodelTrainedExpert: {
+              direction: 'SELL',
+              allBrokerNative: true,
+              longVotes: 0,
+              shortVotes: 3,
+              ensembleConfidence: 0.74,
+              freshnessSeconds: 30,
+            },
+          },
+        },
+      ],
+    );
+
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+
+    expect(h.query).toHaveBeenCalledWith(
+      expect.stringContaining('FROM trading.m1_tactical_decisions'),
+      ['user-1', 'conn-1', 'EURUSD', expect.any(String)],
+    );
+    expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      'user-1',
+      TradeCloseReason.AI_CLOSE_SIGNAL,
+    );
+  });
+
+  it('cuts a mid-loss DEMO trade after the confirmed-reversal recovery window expires', async () => {
+    const h = harness(
+      [candidate({ max_favorable_pnl: '0.50', max_adverse_pnl: '-2.50' })],
+      '-2.50',
+      'DEMO',
+      [],
+      '1.11340',
+      [
+        {
+          direction: 'SELL',
+          evaluated_at: new Date('2026-10-28T09:04:10.000Z'),
+          execution_authority: 'BROKER_NATIVE',
+          blockers: [],
+          governance: {
+            multimodelEnsemble: { strategyRoute: 'CONFIRMED_REVERSAL' },
+            multimodelAuthority: { executable: true },
+            multimodelTrainedExpert: {
+              direction: 'SELL',
+              allBrokerNative: true,
+              longVotes: 0,
+              shortVotes: 3,
+              ensembleConfidence: 0.72,
+              freshnessSeconds: 50,
+            },
+          },
+        },
+      ],
+    );
+
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+
+    expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      'user-1',
+      TradeCloseReason.AI_CLOSE_SIGNAL,
+    );
+    expect(h.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM market_data.provider_quote_candles'),
+      expect.anything(),
+    );
+  });
+
   it('never applies automatic profit protection to a real-money LIVE connection', async () => {
     const h = harness([candidate()], '7.00', 'LIVE');
 
@@ -364,5 +451,135 @@ describe('evaluateLiveDemoAdverseProtection', () => {
         m1Evidence: { ...base.m1Evidence, latestAgeSeconds: 150 },
       }),
     ).toMatchObject({ shouldClose: false, reason: 'M1_EVIDENCE_UNAVAILABLE' });
+  });
+});
+
+
+describe('evaluateLiveDemoThesisProtection', () => {
+  const confirmedOpposite = {
+    direction: 'SELL' as const,
+    evaluatedAt: new Date('2026-11-02T01:45:00.000Z'),
+    executionAuthority: 'BROKER_NATIVE',
+    blockers: [] as string[],
+    planBStrategyRoute: 'CONFIRMED_REVERSAL' as const,
+    authorityExecutable: true,
+    trainedExpert: {
+      direction: 'SELL' as const,
+      allBrokerNative: true,
+      longVotes: 0,
+      shortVotes: 3,
+      ensembleConfidence: 0.74,
+      freshnessSeconds: 30,
+    },
+  };
+
+  it('harvests a positive old thesis when all three fresh broker-native experts unanimously oppose it', () => {
+    expect(
+      evaluateLiveDemoThesisProtection({
+        tradeDirection: 'BUY',
+        currentPnl: 2,
+        initialRiskPnl: 10,
+        observedAt: new Date('2026-11-02T01:45:30.000Z'),
+        latestThesis: {
+          ...confirmedOpposite,
+          executionAuthority: 'NONE',
+          planBStrategyRoute: 'EARLY_TRANSITION',
+          authorityExecutable: false,
+        },
+      }),
+    ).toMatchObject({
+      shouldClose: true,
+      reason: 'OPPOSITE_EXPERT_PROFIT_HARVEST',
+      currentR: 0.2,
+    });
+  });
+
+  it('does not let advisory expert opposition close a losing trade', () => {
+    expect(
+      evaluateLiveDemoThesisProtection({
+        tradeDirection: 'BUY',
+        currentPnl: -2.5,
+        initialRiskPnl: 10,
+        observedAt: new Date('2026-11-02T01:45:30.000Z'),
+        latestThesis: {
+          ...confirmedOpposite,
+          executionAuthority: 'NONE',
+          planBStrategyRoute: 'EARLY_TRANSITION',
+          authorityExecutable: false,
+        },
+      }),
+    ).toMatchObject({ shouldClose: false, reason: 'OPPOSITE_NOT_CONFIRMED_REVERSAL' });
+  });
+
+  it('closes a near-break-even losing old thesis when a broker-authorized confirmed reversal arrives', () => {
+    expect(
+      evaluateLiveDemoThesisProtection({
+        tradeDirection: 'BUY',
+        currentPnl: -1,
+        initialRiskPnl: 10,
+        observedAt: new Date('2026-11-02T01:45:20.000Z'),
+        latestThesis: confirmedOpposite,
+      }),
+    ).toMatchObject({
+      shouldClose: true,
+      reason: 'CONFIRMED_REVERSAL_NEAR_BREAKEVEN',
+      currentR: -0.1,
+    });
+  });
+
+  it('gives a mid-loss old thesis only a short recovery window after a confirmed reversal', () => {
+    expect(
+      evaluateLiveDemoThesisProtection({
+        tradeDirection: 'BUY',
+        currentPnl: -2.5,
+        initialRiskPnl: 10,
+        observedAt: new Date('2026-11-02T01:45:30.000Z'),
+        latestThesis: confirmedOpposite,
+      }),
+    ).toMatchObject({ shouldClose: false, reason: 'CONFIRMED_REVERSAL_RECOVERY_WINDOW' });
+
+    expect(
+      evaluateLiveDemoThesisProtection({
+        tradeDirection: 'BUY',
+        currentPnl: -2.5,
+        initialRiskPnl: 10,
+        observedAt: new Date('2026-11-02T01:45:50.000Z'),
+        latestThesis: confirmedOpposite,
+      }),
+    ).toMatchObject({ shouldClose: true, reason: 'CONFIRMED_REVERSAL_GRACE_EXPIRED' });
+  });
+
+  it('cuts a deeply losing old thesis immediately when the confirmed reversal agrees', () => {
+    expect(
+      evaluateLiveDemoThesisProtection({
+        tradeDirection: 'BUY',
+        currentPnl: -4,
+        initialRiskPnl: 10,
+        observedAt: new Date('2026-11-02T01:45:15.000Z'),
+        latestThesis: confirmedOpposite,
+      }),
+    ).toMatchObject({ shouldClose: true, reason: 'CONFIRMED_REVERSAL_HARD_CUT' });
+  });
+
+  it('ignores stale or same-direction thesis evidence', () => {
+    expect(
+      evaluateLiveDemoThesisProtection({
+        tradeDirection: 'BUY',
+        currentPnl: 3,
+        initialRiskPnl: 10,
+        observedAt: new Date('2026-11-02T01:48:30.000Z'),
+        latestThesis: confirmedOpposite,
+      }),
+    ).toMatchObject({ shouldClose: false, reason: 'THESIS_STALE' });
+
+    expect(
+      evaluateLiveDemoThesisProtection({
+        tradeDirection: 'BUY',
+        currentPnl: 3,
+        initialRiskPnl: 10,
+        observedAt: new Date('2026-11-02T01:45:30.000Z'),
+        latestThesis: { ...confirmedOpposite, direction: 'BUY' },
+      }),
+    ).toMatchObject({ shouldClose: false, reason: 'SAME_DIRECTION' });
   });
 });
