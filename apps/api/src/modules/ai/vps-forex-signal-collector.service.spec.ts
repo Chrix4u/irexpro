@@ -1714,6 +1714,25 @@ describe('VpsForexSignalCollectorService', () => {
         executionAuthority: 'NONE',
         modifiesExecution: false,
       });
+      expect(components.sideSelectionPatternTelemetry).toMatchObject({
+        artifact: 'side-selection-pattern-telemetry-v1',
+        available: true,
+        executionAuthority: 'NONE',
+        modifiesExecution: false,
+      });
+      expect(components.sideSelectionPatternTelemetry.raw).toEqual(
+        expect.objectContaining({
+          momentum1Atr: expect.any(Number),
+          momentum3Atr: expect.any(Number),
+          pathEfficiency6: expect.any(Number),
+        }),
+      );
+      expect(components.sideSelectionPatternTelemetry.aligned).toEqual(
+        expect.objectContaining({
+          momentum3Atr: expect.any(Number),
+          directionalRun: expect.any(Number),
+        }),
+      );
     }
     const adaptiveAnnotationCalls = shadowQuery.mock.calls.filter(
       ([sql]) =>

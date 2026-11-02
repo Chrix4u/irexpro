@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 'use strict';
 
 const fs = require('node:fs');
@@ -137,6 +138,38 @@ const NUMERIC_FEATURES = Object.freeze([
   'exposure_correlated_exposure_score',
   'exposure_largest_aligned_currency_concentration',
   'exposure_same_instrument_directional_risk',
+  'pattern_available',
+  'pattern_raw_momentum1_atr',
+  'pattern_raw_momentum3_atr',
+  'pattern_raw_momentum6_atr',
+  'pattern_raw_ema_separation_atr',
+  'pattern_raw_ema9_slope_atr',
+  'pattern_raw_latest_body_atr',
+  'pattern_raw_latest_range_atr',
+  'pattern_raw_close_location',
+  'pattern_raw_upper_wick_ratio',
+  'pattern_raw_lower_wick_ratio',
+  'pattern_raw_body_pressure3',
+  'pattern_raw_body_pressure6',
+  'pattern_raw_directional_run',
+  'pattern_raw_path_efficiency6',
+  'pattern_raw_range_expansion_ratio',
+  'pattern_raw_breakout_up_atr',
+  'pattern_raw_breakout_down_atr',
+  'pattern_aligned_momentum1_atr',
+  'pattern_aligned_momentum3_atr',
+  'pattern_aligned_momentum6_atr',
+  'pattern_aligned_ema_separation_atr',
+  'pattern_aligned_ema9_slope_atr',
+  'pattern_aligned_body_pressure3',
+  'pattern_aligned_body_pressure6',
+  'pattern_aligned_directional_run',
+  'pattern_aligned_path_efficiency6',
+  'pattern_aligned_close_pressure',
+  'pattern_aligned_wick_support',
+  'pattern_aligned_breakout_atr',
+  'pattern_h1_alignment',
+  'pattern_h4_alignment',
 ]);
 
 function validUuid(value) {
@@ -285,6 +318,10 @@ function featureRow(pair, candidate, opposite) {
   const exposure = parseObject(adaptive.exposure) ?? {};
   const trained = nestedObject(c, 'highConvictionOverlay') ?? {};
   const calibration = nestedObject(c, 'calibrationBidirectionalConflict') ?? {};
+  const pattern = nestedObject(c, 'sideSelectionPatternTelemetry') ?? {};
+  const patternRaw = parseObject(pattern.raw) ?? {};
+  const patternAligned = parseObject(pattern.aligned) ?? {};
+  const patternContext = parseObject(pattern.context) ?? {};
   const label = labelFor(candidate, opposite);
   if (!label) return null;
 
@@ -398,6 +435,38 @@ function featureRow(pair, candidate, opposite) {
     exposure_correlated_exposure_score: finiteNumber(exposure.correlatedExposureScore),
     exposure_largest_aligned_currency_concentration: finiteNumber(exposure.largestAlignedCurrencyConcentration),
     exposure_same_instrument_directional_risk: finiteNumber(exposure.sameInstrumentDirectionalRisk),
+    pattern_available: pattern.available === true,
+    pattern_raw_momentum1_atr: finiteNumber(patternRaw.momentum1Atr),
+    pattern_raw_momentum3_atr: finiteNumber(patternRaw.momentum3Atr),
+    pattern_raw_momentum6_atr: finiteNumber(patternRaw.momentum6Atr),
+    pattern_raw_ema_separation_atr: finiteNumber(patternRaw.emaSeparationAtr),
+    pattern_raw_ema9_slope_atr: finiteNumber(patternRaw.ema9SlopeAtr),
+    pattern_raw_latest_body_atr: finiteNumber(patternRaw.latestBodyAtr),
+    pattern_raw_latest_range_atr: finiteNumber(patternRaw.latestRangeAtr),
+    pattern_raw_close_location: finiteNumber(patternRaw.closeLocation),
+    pattern_raw_upper_wick_ratio: finiteNumber(patternRaw.upperWickRatio),
+    pattern_raw_lower_wick_ratio: finiteNumber(patternRaw.lowerWickRatio),
+    pattern_raw_body_pressure3: finiteNumber(patternRaw.bodyPressure3),
+    pattern_raw_body_pressure6: finiteNumber(patternRaw.bodyPressure6),
+    pattern_raw_directional_run: finiteNumber(patternRaw.directionalRun),
+    pattern_raw_path_efficiency6: finiteNumber(patternRaw.pathEfficiency6),
+    pattern_raw_range_expansion_ratio: finiteNumber(patternRaw.rangeExpansionRatio),
+    pattern_raw_breakout_up_atr: finiteNumber(patternRaw.breakoutUpAtr),
+    pattern_raw_breakout_down_atr: finiteNumber(patternRaw.breakoutDownAtr),
+    pattern_aligned_momentum1_atr: finiteNumber(patternAligned.momentum1Atr),
+    pattern_aligned_momentum3_atr: finiteNumber(patternAligned.momentum3Atr),
+    pattern_aligned_momentum6_atr: finiteNumber(patternAligned.momentum6Atr),
+    pattern_aligned_ema_separation_atr: finiteNumber(patternAligned.emaSeparationAtr),
+    pattern_aligned_ema9_slope_atr: finiteNumber(patternAligned.ema9SlopeAtr),
+    pattern_aligned_body_pressure3: finiteNumber(patternAligned.bodyPressure3),
+    pattern_aligned_body_pressure6: finiteNumber(patternAligned.bodyPressure6),
+    pattern_aligned_directional_run: finiteNumber(patternAligned.directionalRun),
+    pattern_aligned_path_efficiency6: finiteNumber(patternAligned.pathEfficiency6),
+    pattern_aligned_close_pressure: finiteNumber(patternAligned.closePressure),
+    pattern_aligned_wick_support: finiteNumber(patternAligned.wickSupport),
+    pattern_aligned_breakout_atr: finiteNumber(patternAligned.breakoutAtr),
+    pattern_h1_alignment: finiteNumber(patternContext.h1Alignment),
+    pattern_h4_alignment: finiteNumber(patternContext.h4Alignment),
   };
 }
 

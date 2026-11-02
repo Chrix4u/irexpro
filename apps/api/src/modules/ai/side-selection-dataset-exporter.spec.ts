@@ -14,7 +14,11 @@ const engineCode = 'irexpro-multimodel-ensemble-v1';
 const outcomeVersion = 'm5-first-hit-72bar-side-aware-v4';
 const snapshotAt = '2026-11-02T20:00:00.000Z';
 
-function outcome(status: 'WIN' | 'LOSS' | 'EXPIRED' | 'AMBIGUOUS', resolvedAt: string, netR: number | null) {
+function outcome(
+  status: 'WIN' | 'LOSS' | 'EXPIRED' | 'AMBIGUOUS',
+  resolvedAt: string,
+  netR: number | null,
+) {
   return {
     version: outcomeVersion,
     status,
@@ -74,6 +78,38 @@ function row(input: {
         candidateDirectionalProbability: 0.61,
         oppositeDirectionalProbability: 0.39,
         directionalEdge: 0.22,
+      },
+      sideSelectionPatternTelemetry: {
+        artifact: 'side-selection-pattern-telemetry-v1',
+        available: true,
+        reason: 'OK',
+        executionAuthority: 'NONE',
+        modifiesExecution: false,
+        raw: {
+          momentum1Atr: 0.11,
+          momentum3Atr: 0.28,
+          momentum6Atr: 0.42,
+          ema9SlopeAtr: 0.07,
+          bodyPressure3: 0.13,
+          bodyPressure6: 0.19,
+          directionalRun: 3,
+          pathEfficiency6: 0.74,
+          rangeExpansionRatio: 1.17,
+        },
+        aligned: {
+          momentum1Atr: 0.11,
+          momentum3Atr: 0.28,
+          momentum6Atr: 0.42,
+          ema9SlopeAtr: 0.07,
+          bodyPressure3: 0.13,
+          bodyPressure6: 0.19,
+          directionalRun: 3,
+          pathEfficiency6: 0.74,
+          closePressure: 0.52,
+          wickSupport: 0.21,
+          breakoutAtr: 0.08,
+        },
+        context: { mtfStrength: 0.24, h1Alignment: 0.31, h4Alignment: 0.44 },
       },
       adaptiveMarketIntelligence: {
         marketState: {
@@ -165,19 +201,31 @@ describe('side-selection three-class dataset exporter', () => {
   it('pairs simultaneous BUY/SELL shadows and labels KEEP, FLIP and ABSTAIN', async () => {
     const rows = [
       row({
-        id: 'a-buy', direction: 'BUY', bar: '2026-11-02T10:00:00Z', evaluatedAt: '2026-11-02T10:00:03Z',
+        id: 'a-buy',
+        direction: 'BUY',
+        bar: '2026-11-02T10:00:00Z',
+        evaluatedAt: '2026-11-02T10:00:03Z',
         result: outcome('WIN', '2026-11-02T10:15:00Z', 1.55),
       }),
       row({
-        id: 'a-sell', direction: 'SELL', bar: '2026-11-02T10:00:00Z', evaluatedAt: '2026-11-02T10:00:06Z',
+        id: 'a-sell',
+        direction: 'SELL',
+        bar: '2026-11-02T10:00:00Z',
+        evaluatedAt: '2026-11-02T10:00:06Z',
         result: outcome('LOSS', '2026-11-02T10:10:00Z', -1.05),
       }),
       row({
-        id: 'b-buy', direction: 'BUY', bar: '2026-11-02T10:20:00Z', evaluatedAt: '2026-11-02T10:20:02Z',
+        id: 'b-buy',
+        direction: 'BUY',
+        bar: '2026-11-02T10:20:00Z',
+        evaluatedAt: '2026-11-02T10:20:02Z',
         result: outcome('LOSS', '2026-11-02T10:30:00Z', -1.03),
       }),
       row({
-        id: 'b-sell', direction: 'SELL', bar: '2026-11-02T10:20:00Z', evaluatedAt: '2026-11-02T10:20:04Z',
+        id: 'b-sell',
+        direction: 'SELL',
+        bar: '2026-11-02T10:20:00Z',
+        evaluatedAt: '2026-11-02T10:20:04Z',
         result: outcome('LOSS', '2026-11-02T10:31:00Z', -1.04),
       }),
     ];
@@ -204,13 +252,55 @@ describe('side-selection three-class dataset exporter', () => {
 
   it('keeps only the earliest side observation and de-overlaps paired episodes per instrument', async () => {
     const rows = [
-      row({ id: 'a-buy-late', direction: 'BUY', bar: '2026-11-02T10:00:00Z', evaluatedAt: '2026-11-02T10:00:09Z', result: outcome('LOSS', '2026-11-02T10:20:00Z', -1) }),
-      row({ id: 'a-buy-first', direction: 'BUY', bar: '2026-11-02T10:00:00Z', evaluatedAt: '2026-11-02T10:00:02Z', result: outcome('WIN', '2026-11-02T10:18:00Z', 1.5) }),
-      row({ id: 'a-sell', direction: 'SELL', bar: '2026-11-02T10:00:00Z', evaluatedAt: '2026-11-02T10:00:05Z', result: outcome('LOSS', '2026-11-02T10:20:00Z', -1) }),
-      row({ id: 'overlap-buy', direction: 'BUY', bar: '2026-11-02T10:05:00Z', evaluatedAt: '2026-11-02T10:05:02Z', result: outcome('LOSS', '2026-11-02T10:15:00Z', -1) }),
-      row({ id: 'overlap-sell', direction: 'SELL', bar: '2026-11-02T10:05:00Z', evaluatedAt: '2026-11-02T10:05:04Z', result: outcome('WIN', '2026-11-02T10:15:00Z', 1.5) }),
-      row({ id: 'next-buy', direction: 'BUY', bar: '2026-11-02T10:25:00Z', evaluatedAt: '2026-11-02T10:25:02Z', result: outcome('LOSS', '2026-11-02T10:35:00Z', -1) }),
-      row({ id: 'next-sell', direction: 'SELL', bar: '2026-11-02T10:25:00Z', evaluatedAt: '2026-11-02T10:25:05Z', result: outcome('WIN', '2026-11-02T10:35:00Z', 1.5) }),
+      row({
+        id: 'a-buy-late',
+        direction: 'BUY',
+        bar: '2026-11-02T10:00:00Z',
+        evaluatedAt: '2026-11-02T10:00:09Z',
+        result: outcome('LOSS', '2026-11-02T10:20:00Z', -1),
+      }),
+      row({
+        id: 'a-buy-first',
+        direction: 'BUY',
+        bar: '2026-11-02T10:00:00Z',
+        evaluatedAt: '2026-11-02T10:00:02Z',
+        result: outcome('WIN', '2026-11-02T10:18:00Z', 1.5),
+      }),
+      row({
+        id: 'a-sell',
+        direction: 'SELL',
+        bar: '2026-11-02T10:00:00Z',
+        evaluatedAt: '2026-11-02T10:00:05Z',
+        result: outcome('LOSS', '2026-11-02T10:20:00Z', -1),
+      }),
+      row({
+        id: 'overlap-buy',
+        direction: 'BUY',
+        bar: '2026-11-02T10:05:00Z',
+        evaluatedAt: '2026-11-02T10:05:02Z',
+        result: outcome('LOSS', '2026-11-02T10:15:00Z', -1),
+      }),
+      row({
+        id: 'overlap-sell',
+        direction: 'SELL',
+        bar: '2026-11-02T10:05:00Z',
+        evaluatedAt: '2026-11-02T10:05:04Z',
+        result: outcome('WIN', '2026-11-02T10:15:00Z', 1.5),
+      }),
+      row({
+        id: 'next-buy',
+        direction: 'BUY',
+        bar: '2026-11-02T10:25:00Z',
+        evaluatedAt: '2026-11-02T10:25:02Z',
+        result: outcome('LOSS', '2026-11-02T10:35:00Z', -1),
+      }),
+      row({
+        id: 'next-sell',
+        direction: 'SELL',
+        bar: '2026-11-02T10:25:00Z',
+        evaluatedAt: '2026-11-02T10:25:05Z',
+        result: outcome('WIN', '2026-11-02T10:35:00Z', 1.5),
+      }),
     ];
 
     const report = await run(new FakeClient(rows));
@@ -223,12 +313,50 @@ describe('side-selection three-class dataset exporter', () => {
 
   it('rejects loose pairing, unresolved outcomes and prevents post-entry fields from entering features', async () => {
     const rows = [
-      row({ id: 'gap-buy', direction: 'BUY', bar: '2026-11-02T11:00:00Z', evaluatedAt: '2026-11-02T11:00:01Z', result: outcome('WIN', '2026-11-02T11:10:00Z', 1.5), components: { postEntryTelemetry: { mfe: 9 }, realisedPnl: 100 } }),
-      row({ id: 'gap-sell', direction: 'SELL', bar: '2026-11-02T11:00:00Z', evaluatedAt: '2026-11-02T11:00:45Z', result: outcome('LOSS', '2026-11-02T11:10:00Z', -1) }),
-      row({ id: 'expired-buy', direction: 'BUY', bar: '2026-11-02T12:00:00Z', evaluatedAt: '2026-11-02T12:00:01Z', result: outcome('EXPIRED', '2026-11-02T13:00:00Z', 0.2) }),
-      row({ id: 'expired-sell', direction: 'SELL', bar: '2026-11-02T12:00:00Z', evaluatedAt: '2026-11-02T12:00:03Z', result: outcome('LOSS', '2026-11-02T12:20:00Z', -1) }),
-      row({ id: 'clean-buy', direction: 'BUY', bar: '2026-11-02T14:00:00Z', evaluatedAt: '2026-11-02T14:00:01Z', result: outcome('WIN', '2026-11-02T14:10:00Z', 1.5), components: { postEntryTelemetry: { mfe: 9 }, realisedPnl: 100 } }),
-      row({ id: 'clean-sell', direction: 'SELL', bar: '2026-11-02T14:00:00Z', evaluatedAt: '2026-11-02T14:00:03Z', result: outcome('LOSS', '2026-11-02T14:10:00Z', -1) }),
+      row({
+        id: 'gap-buy',
+        direction: 'BUY',
+        bar: '2026-11-02T11:00:00Z',
+        evaluatedAt: '2026-11-02T11:00:01Z',
+        result: outcome('WIN', '2026-11-02T11:10:00Z', 1.5),
+        components: { postEntryTelemetry: { mfe: 9 }, realisedPnl: 100 },
+      }),
+      row({
+        id: 'gap-sell',
+        direction: 'SELL',
+        bar: '2026-11-02T11:00:00Z',
+        evaluatedAt: '2026-11-02T11:00:45Z',
+        result: outcome('LOSS', '2026-11-02T11:10:00Z', -1),
+      }),
+      row({
+        id: 'expired-buy',
+        direction: 'BUY',
+        bar: '2026-11-02T12:00:00Z',
+        evaluatedAt: '2026-11-02T12:00:01Z',
+        result: outcome('EXPIRED', '2026-11-02T13:00:00Z', 0.2),
+      }),
+      row({
+        id: 'expired-sell',
+        direction: 'SELL',
+        bar: '2026-11-02T12:00:00Z',
+        evaluatedAt: '2026-11-02T12:00:03Z',
+        result: outcome('LOSS', '2026-11-02T12:20:00Z', -1),
+      }),
+      row({
+        id: 'clean-buy',
+        direction: 'BUY',
+        bar: '2026-11-02T14:00:00Z',
+        evaluatedAt: '2026-11-02T14:00:01Z',
+        result: outcome('WIN', '2026-11-02T14:10:00Z', 1.5),
+        components: { postEntryTelemetry: { mfe: 9 }, realisedPnl: 100 },
+      }),
+      row({
+        id: 'clean-sell',
+        direction: 'SELL',
+        bar: '2026-11-02T14:00:00Z',
+        evaluatedAt: '2026-11-02T14:00:03Z',
+        result: outcome('LOSS', '2026-11-02T14:10:00Z', -1),
+      }),
     ];
 
     const report = await run(new FakeClient(rows));
@@ -250,6 +378,12 @@ describe('side-selection three-class dataset exporter', () => {
     assert.equal(report.rows[0].shadow_pulse_advantage_r, 0.19);
     assert.equal(report.rows[0].prediction_calibrated_win_probability, 0.56);
     assert.equal(report.rows[0].exposure_diversification_quality, 0.77);
+    assert.equal(report.rows[0].pattern_available, true);
+    assert.equal(report.rows[0].pattern_raw_momentum3_atr, 0.28);
+    assert.equal(report.rows[0].pattern_raw_path_efficiency6, 0.74);
+    assert.equal(report.rows[0].pattern_aligned_momentum3_atr, 0.28);
+    assert.equal(report.rows[0].pattern_aligned_directional_run, 3);
+    assert.equal(report.rows[0].pattern_h1_alignment, 0.31);
   });
 
   it('uses exact read-only scope and rolls back when unavailable', async () => {

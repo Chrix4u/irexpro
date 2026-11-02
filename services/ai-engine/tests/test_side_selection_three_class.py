@@ -45,6 +45,10 @@ def direction_rows() -> pd.DataFrame:
                 "strategy_route": "EARLY_TRANSITION" if direction == "BUY" else "TREND_CONTINUATION",
                 "candidate_score": score,
                 "short_horizon_momentum_atr": 0.3 if direction == "BUY" else -0.2,
+                "pattern_available": True,
+                "pattern_aligned_momentum3_atr": 0.4 if direction == "BUY" else -0.1,
+                "pattern_raw_path_efficiency6": 0.7,
+                "pattern_h1_alignment": 0.35 if direction == "BUY" else 0.05,
             }
             for name in BASE_CATEGORICAL_FEATURES:
                 row.setdefault(name, "UNKNOWN")
@@ -80,6 +84,9 @@ def test_episode_dataset_uses_higher_score_primary_and_pairwise_deltas():
     assert episodes["opposite__candidate_score"].tolist() == pytest.approx([0.6, 0.6, 0.6])
     assert episodes["delta__candidate_score"].tolist() == pytest.approx([0.2, 0.2, 0.2])
     assert episodes["delta__short_horizon_momentum_atr"].tolist() == pytest.approx([0.5, 0.5, 0.5])
+    assert episodes["primary__pattern_available"].tolist() == pytest.approx([1.0, 1.0, 1.0])
+    assert episodes["delta__pattern_aligned_momentum3_atr"].tolist() == pytest.approx([0.5, 0.5, 0.5])
+    assert episodes["delta__pattern_h1_alignment"].tolist() == pytest.approx([0.3, 0.3, 0.3])
     assert episodes["primary__strategy_route"].tolist() == ["EARLY_TRANSITION"] * 3
     assert episodes["opposite__strategy_route"].tolist() == ["TREND_CONTINUATION"] * 3
 
@@ -131,7 +138,27 @@ def test_preprocessor_handles_unseen_categories_and_excludes_targets():
     assert transformed_valid.shape[0] == len(valid)
 
 
-def test_holdout_split_fails_closed_when_future_evidence_is_too_small():
+def test_holdout_split_expands_beyond_fraction_to_preserve_minimum_future_evidence():
+    base = build_episode_dataset(direction_rows())
+    copies = []
+    for index in range(3):
+        copy = base.copy()
+        copy["episode_id"] = copy["episode_id"].map(lambda value: f"{value}-{index}")
+        copy["decision_time"] = copy["decision_time"] + pd.Timedelta(hours=index * 2)
+        copy["market_bar_time"] = copy["market_bar_time"] + pd.Timedelta(hours=index * 2)
+        copy["target_resolved_at"] = copy["target_resolved_at"] + pd.Timedelta(hours=index * 2)
+        copies.append(copy)
+    episodes = pd.concat(copies, ignore_index=True).sort_values("decision_time").reset_index(drop=True)
+
+    research, holdout, _ = split_research_holdout(
+        episodes, holdout_fraction=0.20, min_holdout_rows=3
+    )
+
+    assert len(holdout) == 3
+    assert len(research) >= 3
+
+
+def test_holdout_split_fails_closed_when_total_evidence_cannot_preserve_minimum_future_set():
     episodes = build_episode_dataset(direction_rows())
-    with pytest.raises(ValueError, match="future holdout requires at least 2 episodes"):
-        split_research_holdout(episodes, holdout_fraction=1 / 3, min_holdout_rows=2)
+    with pytest.raises(ValueError, match="future holdout requires at least 4 episodes"):
+        split_research_holdout(episodes, holdout_fraction=1 / 3, min_holdout_rows=4)

@@ -132,6 +132,38 @@ BASE_NUMERIC_FEATURES = (
     "exposure_correlated_exposure_score",
     "exposure_largest_aligned_currency_concentration",
     "exposure_same_instrument_directional_risk",
+    "pattern_available",
+    "pattern_raw_momentum1_atr",
+    "pattern_raw_momentum3_atr",
+    "pattern_raw_momentum6_atr",
+    "pattern_raw_ema_separation_atr",
+    "pattern_raw_ema9_slope_atr",
+    "pattern_raw_latest_body_atr",
+    "pattern_raw_latest_range_atr",
+    "pattern_raw_close_location",
+    "pattern_raw_upper_wick_ratio",
+    "pattern_raw_lower_wick_ratio",
+    "pattern_raw_body_pressure3",
+    "pattern_raw_body_pressure6",
+    "pattern_raw_directional_run",
+    "pattern_raw_path_efficiency6",
+    "pattern_raw_range_expansion_ratio",
+    "pattern_raw_breakout_up_atr",
+    "pattern_raw_breakout_down_atr",
+    "pattern_aligned_momentum1_atr",
+    "pattern_aligned_momentum3_atr",
+    "pattern_aligned_momentum6_atr",
+    "pattern_aligned_ema_separation_atr",
+    "pattern_aligned_ema9_slope_atr",
+    "pattern_aligned_body_pressure3",
+    "pattern_aligned_body_pressure6",
+    "pattern_aligned_directional_run",
+    "pattern_aligned_path_efficiency6",
+    "pattern_aligned_close_pressure",
+    "pattern_aligned_wick_support",
+    "pattern_aligned_breakout_atr",
+    "pattern_h1_alignment",
+    "pattern_h4_alignment",
 )
 
 _PAIR_CATEGORICAL_BASE = tuple(
@@ -386,8 +418,14 @@ def split_research_holdout(
     times = np.asarray(sorted(pd.unique(normalized["decision_time"])))
     if len(times) < 3:
         raise ValueError("side-selection dataset requires at least three decision periods")
-    split_index = max(1, min(int(math.floor(len(times) * (1 - holdout_fraction))), len(times) - 1))
-    boundary = pd.Timestamp(times[split_index])
+    desired_holdout = max(
+        int(math.ceil(len(normalized) * holdout_fraction)),
+        min_holdout_rows,
+    )
+    if desired_holdout >= len(normalized):
+        raise ValueError(f"future holdout requires at least {min_holdout_rows} episodes")
+    ordered = normalized.sort_values(["decision_time", "episode_id"]).reset_index(drop=True)
+    boundary = pd.Timestamp(ordered.iloc[len(ordered) - desired_holdout]["decision_time"])
     holdout = normalized.loc[normalized["decision_time"] >= boundary].copy()
     if len(holdout) < min_holdout_rows:
         raise ValueError(f"future holdout requires at least {min_holdout_rows} episodes")
