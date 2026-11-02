@@ -134,3 +134,38 @@ jobs:
             services/mt5-connector/packaging/install-host-worker.ps1
             services/mt5-connector/packaging/output/SHA256SUMS.txt
           retention-days: 30
+
+  publish-tag-release:
+    name: Publish verified tagged release
+    if: startsWith(github.ref, 'refs/tags/mt5-connector-v')
+    needs: build-windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download exact verified Windows artifacts
+        run: |
+          mkdir -p release
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "irexpro-mt5-connector-windows-$GITHUB_RUN_ID" \
+            --dir release
+
+      - name: Re-verify published binary checksums
+        run: |
+          tr -d '\r' < release/output/SHA256SUMS.txt | (cd release/output && sha256sum -c -)
+
+      - name: Publish GitHub release from verified artifacts
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            release/output/iRexPro-MT5-Connector-Setup.exe \
+            release/output/iRexPro-MT5-Connector-Portable.exe \
+            release/output/iRexPro-MT5-Host-Worker.exe \
+            release/install-host-worker.ps1 \
+            release/output/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "iRexPro Direct MT5 Connector ${GITHUB_REF_NAME#mt5-connector-v}" \
+            --notes "Verified Windows release for Direct MT5 testing. Built from $GITHUB_SHA; connector tests, frozen executable self-test, host-worker self-test, installer build, and SHA-256 verification all passed before publication."
