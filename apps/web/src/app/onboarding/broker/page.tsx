@@ -52,7 +52,7 @@ type DirectMt5Environment = 'DEMO' | 'LIVE';
 type DirectMt5BridgeSetup = 'PERSONAL_PC' | 'WINDOWS_VPS' | 'NEED_WINDOWS';
 
 const DIRECT_MT5_WINDOWS_INSTALLER_URL =
-  'https://github.com/Chrix4u/irexpro/releases/download/mt5-connector-v0.4.2/iRexPro-MT5-Connector-Setup.exe';
+  'https://github.com/Chrix4u/irexpro/releases/download/mt5-connector-v0.4.3/iRexPro-MT5-Connector-Setup.exe';
 
 const IREXPRO_ANDROID_PREVIEW_URL =
   'https://github.com/Chrix4u/irexpro/releases/download/irexpro-mobile-v0.1.5-preview.1/iRexPro-Android-Preview.apk';
@@ -1157,7 +1157,7 @@ export default function OnboardingBrokerPage() {
                       <ol className="text-sm" style={{ paddingLeft: '1.25rem', lineHeight: 1.8 }}>
                         <li>Use a Windows 10/11 PC or Windows VPS you control.</li>
                         <li>Install the broker&apos;s MT5 desktop terminal and log into the trading account.</li>
-                        <li>Install iRexPro MT5 Connector v0.4.2 on the same Windows host.</li>
+                        <li>Install iRexPro MT5 Connector v0.4.3 on the same Windows host.</li>
                         <li>Keep that Windows host signed in and online while Direct MT5 trading is active.</li>
                       </ol>
                       <Link href={DIRECT_MT5_WINDOWS_INSTALLER_URL} target="_blank" rel="noreferrer" className="text-sm">

@@ -52,7 +52,9 @@ class IrexProConnectorClient:
         data = self._json(response)
         payload = self._find_connector_identity_payload(data)
         if payload is None:
-            raise ConnectorApiError("pairing response is missing connector identity")
+            observed = self._observed_payload_keys(data)
+            suffix = f" (observed keys: {observed})" if observed else ""
+            raise ConnectorApiError(f"pairing response is missing connector identity{suffix}")
         token = payload["connectorToken"]
         connector_id = payload["connectorId"]
         broker_connection_id = payload["brokerConnectionId"]
@@ -145,7 +147,11 @@ class IrexProConnectorClient:
 
     @staticmethod
     def _find_connector_identity_payload(data: dict[str, Any]) -> dict[str, str] | None:
-        required = ("connectorToken", "connectorId", "brokerConnectionId")
+        aliases = {
+            "connectorToken": ("connectorToken", "connector_token"),
+            "connectorId": ("connectorId", "connector_id"),
+            "brokerConnectionId": ("brokerConnectionId", "broker_connection_id"),
+        }
         queue: list[tuple[dict[str, Any], int]] = [(data, 0)]
         seen: set[int] = set()
         while queue:
@@ -154,15 +160,43 @@ class IrexProConnectorClient:
             if identity in seen:
                 continue
             seen.add(identity)
-            if all(isinstance(payload.get(key), str) and payload.get(key) for key in required):
-                return {key: payload[key] for key in required}
-            if depth >= 4:
+
+            normalized: dict[str, str] = {}
+            for canonical, names in aliases.items():
+                for name in names:
+                    value = payload.get(name)
+                    if isinstance(value, str) and value:
+                        normalized[canonical] = value
+                        break
+            if len(normalized) == len(aliases):
+                return normalized
+
+            if depth >= 6:
                 continue
-            for key in ("data", "result", "payload"):
-                nested = payload.get(key)
+            for nested in payload.values():
                 if isinstance(nested, dict):
                     queue.append((nested, depth + 1))
         return None
+
+    @staticmethod
+    def _observed_payload_keys(data: dict[str, Any]) -> str:
+        """Return bounded key names only; never include response values or secrets."""
+        queue: list[tuple[dict[str, Any], int]] = [(data, 0)]
+        seen: set[int] = set()
+        keys: set[str] = set()
+        while queue and len(keys) < 20:
+            payload, depth = queue.pop(0)
+            identity = id(payload)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            keys.update(str(key)[:64] for key in payload.keys())
+            if depth >= 3:
+                continue
+            for nested in payload.values():
+                if isinstance(nested, dict):
+                    queue.append((nested, depth + 1))
+        return ", ".join(sorted(keys)[:20])
 
     def _json(self, response: requests.Response) -> dict[str, Any]:
         self._assert_ok(response)

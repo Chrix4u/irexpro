@@ -315,7 +315,7 @@ def test_supervisor_reports_presence_even_with_zero_assignments(tmp_path: Path):
 
     assert fake_api.presences == [
         {
-            "worker_version": "0.4.2",
+            "worker_version": "0.4.3",
             "runtime_ready": True,
             "max_sessions": 4,
             "active_sessions": 0,
