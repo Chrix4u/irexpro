@@ -10,6 +10,14 @@ describe('DirectMt5PairingService', () => {
     get: jest.fn().mockReturnValue('0123456789abcdef0123456789abcdef'),
   } as unknown as ConfigService;
 
+  const transactionalDataSource = (query: jest.Mock) =>
+    ({
+      query,
+      transaction: jest.fn(async (work: (manager: { query: jest.Mock }) => unknown) =>
+        work({ query }),
+      ),
+    }) as unknown as DataSource;
+
   it('persists the selected WINDOWS_VPS execution host and returns it in pairing metadata', async () => {
     const query = jest
       .fn()
@@ -17,7 +25,7 @@ describe('DirectMt5PairingService', () => {
         { id: 'connection-1', broker_id: 'direct-mt5', account_type: 'DEMO' },
       ])
       .mockResolvedValueOnce([]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
 
     const result = await service.createPairing('user-1', 'connection-1', 'WINDOWS_VPS' as any);
 
@@ -47,7 +55,7 @@ describe('DirectMt5PairingService', () => {
         { id: 'connection-1', broker_id: 'direct-mt5', account_type: 'DEMO' },
       ])
       .mockResolvedValueOnce([]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
 
     await expect(service.createPairing('user-1', 'connection-1')).resolves.toMatchObject({
       hostMode: 'PERSONAL_PC',
@@ -70,7 +78,7 @@ describe('DirectMt5PairingService', () => {
         last_heartbeat_at: new Date(now.getTime() - 1_000),
       },
     ]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
 
     await expect(service.getConnectionHealth('user-1', 'connection-1', now)).resolves.toMatchObject(
       {
@@ -87,7 +95,7 @@ describe('DirectMt5PairingService', () => {
         { id: 'connection-1', broker_id: 'direct-mt5', account_type: 'DEMO' },
       ])
       .mockResolvedValueOnce([]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
 
     const result = await service.createPairing('user-1', 'connection-1');
 
@@ -126,7 +134,7 @@ describe('DirectMt5PairingService', () => {
         { id: 'connection-live', broker_id: 'direct-mt5', account_type: 'LIVE' },
       ])
       .mockResolvedValueOnce([]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
 
     await expect(service.createPairing('user-1', 'connection-live')).resolves.toMatchObject({
       brokerConnectionId: 'connection-live',
@@ -138,14 +146,17 @@ describe('DirectMt5PairingService', () => {
   });
 
   it('redeems a pairing code once and persists only a connector-token digest', async () => {
-    const query = jest.fn().mockResolvedValueOnce([
-      {
-        id: 'connector-1',
-        broker_connection_id: 'connection-1',
-        user_id: 'user-1',
-      },
-    ]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          id: 'connector-1',
+          broker_connection_id: 'connection-1',
+          user_id: 'user-1',
+        },
+      ])
+      .mockResolvedValueOnce([{ id: 'connection-1' }]);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
 
     const result = await service.redeemPairing('ABCDEFGH23', {
       accountLogin: '113392789',
@@ -162,6 +173,42 @@ describe('DirectMt5PairingService', () => {
     expect(String(params[1])).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('redeems connector identity and broker state inside one database transaction', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          id: 'connector-1',
+          broker_connection_id: 'connection-1',
+          user_id: 'user-1',
+        },
+      ])
+      .mockResolvedValueOnce([{ id: 'connection-1' }]);
+    const transaction = jest.fn(async (work: (manager: { query: typeof query }) => unknown) =>
+      work({ query }),
+    );
+    const dataSource = { query: jest.fn(), transaction } as unknown as DataSource;
+    const service = new DirectMt5PairingService(dataSource, config);
+
+    await expect(
+      service.redeemPairing('ABCDEFGH23', {
+        accountLogin: '113392789',
+        brokerServer: 'Broker-Demo',
+        currency: 'USD',
+        tradeAllowed: true,
+        accountType: 'DEMO',
+      }),
+    ).resolves.toMatchObject({
+      connectorId: 'connector-1',
+      brokerConnectionId: 'connection-1',
+      connectorToken: expect.any(String),
+    });
+
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(String(query.mock.calls[1]![0])).toContain('RETURNING id');
+  });
+
   it('does not activate a pairing when the terminal login differs from the BrokerConnection account', async () => {
     const query = jest.fn().mockImplementation(async (sql: string) => {
       // Current implementation updates the connector without consulting the
@@ -176,7 +223,7 @@ describe('DirectMt5PairingService', () => {
         },
       ];
     });
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
 
     await expect(
       service.redeemPairing('ABCDEFGH23', {
@@ -194,10 +241,8 @@ describe('DirectMt5PairingService', () => {
   });
 
   it('fails closed when a pairing code is expired, consumed, or unknown', async () => {
-    const service = new DirectMt5PairingService(
-      { query: jest.fn().mockResolvedValue([]) } as unknown as DataSource,
-      config,
-    );
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
     await expect(
       service.redeemPairing('ABCDEFGH23', {
         accountLogin: '1',
@@ -211,7 +256,7 @@ describe('DirectMt5PairingService', () => {
 
   it('authenticates a connector token without comparing raw secrets in SQL', async () => {
     const query = jest.fn();
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
     const token = 'connector-secret-token';
     query.mockResolvedValueOnce([
       {
@@ -242,7 +287,7 @@ describe('DirectMt5PairingService', () => {
 
   it('rejects a wrong connector token', async () => {
     const query = jest.fn();
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
     query.mockResolvedValueOnce([
       {
         id: 'connector-1',
@@ -262,7 +307,7 @@ describe('DirectMt5PairingService', () => {
 
   it('accepts only monotonic heartbeats from the paired MT5 account', async () => {
     const query = jest.fn().mockResolvedValueOnce([{ id: 'connector-1', last_sequence: '8' }]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
     const binding = {
       connectorId: 'connector-1',
       userId: 'user-1',
@@ -286,7 +331,7 @@ describe('DirectMt5PairingService', () => {
 
   it('suspends a connector when the terminal account identity changes', async () => {
     const query = jest.fn().mockResolvedValueOnce([]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
     const binding = {
       connectorId: 'connector-1',
       userId: 'user-1',
@@ -314,7 +359,7 @@ describe('DirectMt5PairingService', () => {
       .fn()
       .mockResolvedValueOnce([{ id: 'connector-live', last_sequence: '2' }])
       .mockResolvedValueOnce([]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
     const binding = {
       connectorId: 'connector-live',
       userId: 'user-1',
@@ -339,7 +384,7 @@ describe('DirectMt5PairingService', () => {
 
   it('suspends the connector when the terminal environment changes after pairing', async () => {
     const query = jest.fn().mockResolvedValue([]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
     const binding = {
       connectorId: 'connector-1',
       userId: 'user-1',
@@ -373,7 +418,7 @@ describe('DirectMt5PairingService', () => {
         last_heartbeat_at: new Date(now.getTime() - 16_000),
       },
     ]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
 
     await expect(service.getConnectionHealth('user-1', 'connection-1', now)).resolves.toMatchObject(
       {
@@ -398,7 +443,7 @@ describe('DirectMt5PairingService', () => {
         last_heartbeat_at: new Date(now.getTime() - 2_000),
       },
     ]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
 
     await expect(service.getConnectionHealth('user-1', 'connection-1', now)).resolves.toMatchObject(
       {
@@ -411,7 +456,7 @@ describe('DirectMt5PairingService', () => {
 
   it('revokes the connector token and neutralizes pending or leased commands', async () => {
     const query = jest.fn().mockResolvedValueOnce([{ id: 'connector-1' }]);
-    const service = new DirectMt5PairingService({ query } as unknown as DataSource, config);
+    const service = new DirectMt5PairingService(transactionalDataSource(query), config);
 
     await expect(service.revokeConnector('user-1', 'connection-1')).resolves.toEqual({
       connectorId: 'connector-1',

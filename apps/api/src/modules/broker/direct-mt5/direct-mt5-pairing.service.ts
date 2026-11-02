@@ -205,61 +205,84 @@ export class DirectMt5PairingService {
     const connectorToken = randomBytes(32).toString('base64url');
     const tokenHash = this.digest('token', connectorToken);
 
-    const rows = (await this.dataSource.query(
-      `
-        UPDATE broker.direct_mt5_connectors AS c
-        SET state = 'ACTIVE',
-            token_hash = $2,
-            pairing_code_hash = NULL,
-            pairing_expires_at = NULL,
-            account_login = $3,
-            broker_server = $4,
-            currency = $5,
-            trade_allowed = $6,
-            paired_at = now(),
-            last_heartbeat_at = now(),
-            last_sequence = 0,
-            updated_at = now()
-        FROM broker.broker_connections AS bc
-        WHERE c.pairing_code_hash = $1
-          AND c.state = 'PAIRING'
-          AND c.pairing_expires_at > now()
-          AND bc.id = c.broker_connection_id
-          AND bc.deleted_at IS NULL
-          AND bc.broker_id = 'direct-mt5'
-          AND c.account_type = $7
-          AND bc.account_type = c.account_type
-          AND bc.account_id = $3
-        RETURNING c.id, c.broker_connection_id, c.user_id
-      `,
-      [
-        pairingHash,
-        tokenHash,
-        identity.accountLogin,
-        identity.brokerServer,
-        identity.currency,
-        identity.tradeAllowed,
-        identity.accountType,
-      ],
-    )) as Array<{ id: string; broker_connection_id: string; user_id: string }>;
+    const connector = await this.dataSource.transaction(async (manager) => {
+      const rows = (await manager.query(
+        `
+          UPDATE broker.direct_mt5_connectors AS c
+          SET state = 'ACTIVE',
+              token_hash = $2,
+              pairing_code_hash = NULL,
+              pairing_expires_at = NULL,
+              account_login = $3,
+              broker_server = $4,
+              currency = $5,
+              trade_allowed = $6,
+              paired_at = now(),
+              last_heartbeat_at = now(),
+              last_sequence = 0,
+              updated_at = now()
+          FROM broker.broker_connections AS bc
+          WHERE c.pairing_code_hash = $1
+            AND c.state = 'PAIRING'
+            AND c.pairing_expires_at > now()
+            AND bc.id = c.broker_connection_id
+            AND bc.deleted_at IS NULL
+            AND bc.broker_id = 'direct-mt5'
+            AND c.account_type = $7
+            AND bc.account_type = c.account_type
+            AND bc.account_id = $3
+          RETURNING c.id, c.broker_connection_id, c.user_id
+        `,
+        [
+          pairingHash,
+          tokenHash,
+          identity.accountLogin,
+          identity.brokerServer,
+          identity.currency,
+          identity.tradeAllowed,
+          identity.accountType,
+        ],
+      )) as Array<{ id: string; broker_connection_id: string; user_id: string }>;
 
-    const connector = rows[0];
-    if (!connector) {
-      throw new BadRequestException(
-        'Pairing code is invalid or expired, or the MT5 account does not match this broker connection',
-      );
-    }
-    await this.dataSource.query(
-      `UPDATE broker.broker_connections
-       SET status = 'CONNECTED',
-           authorization_status = CASE WHEN account_type = 'DEMO' THEN 'CONNECTED' ELSE authorization_status END,
-           demo_validated = CASE WHEN account_type = 'DEMO' THEN true ELSE demo_validated END,
-           live_trading_enabled = false,
-           account_currency = COALESCE($2, account_currency),
-           credential_status = 'VERIFIED', updated_at = now()
-       WHERE id = $1 AND broker_id = 'direct-mt5' AND account_type = $3`,
-      [connector.broker_connection_id, identity.currency, identity.accountType],
-    );
+      const matchedConnector = rows[0];
+      if (!matchedConnector) {
+        throw new BadRequestException(
+          'Pairing code is invalid or expired, or the MT5 account does not match this broker connection',
+        );
+      }
+
+      const brokerRows = (await manager.query(
+        `UPDATE broker.broker_connections
+         SET status = 'CONNECTED',
+             authorization_status = CASE WHEN account_type = 'DEMO' THEN 'CONNECTED' ELSE authorization_status END,
+             demo_validated = CASE WHEN account_type = 'DEMO' THEN true ELSE demo_validated END,
+             live_trading_enabled = false,
+             account_currency = COALESCE($2, account_currency),
+             credential_status = 'VERIFIED',
+             last_error_message = NULL,
+             consecutive_failure_count = 0,
+             updated_at = now()
+         WHERE id = $1
+           AND broker_id = 'direct-mt5'
+           AND account_type = $3
+           AND account_id = $4
+           AND deleted_at IS NULL
+         RETURNING id`,
+        [
+          matchedConnector.broker_connection_id,
+          identity.currency,
+          identity.accountType,
+          identity.accountLogin,
+        ],
+      )) as Array<{ id: string }>;
+      if (!brokerRows[0]) {
+        throw new BadRequestException(
+          'Pairing broker state changed during redemption; generate a fresh pairing code',
+        );
+      }
+
+      return matchedConnector;
+    });
 
     return {
       connectorId: connector.id,
