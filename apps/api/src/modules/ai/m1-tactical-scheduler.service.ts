@@ -43,6 +43,11 @@ import {
   type M5EarlyTransitionEvidence,
   type M5EarlyTransitionHandoffDecision,
 } from './m5-early-transition-handoff';
+import { scoreExtensionExhaustionShadow } from './extension-exhaustion-shadow';
+import {
+  evaluateExtensionExhaustionDemoScout,
+  type ExtensionExhaustionDemoScoutDecision,
+} from './extension-exhaustion-demo-scout';
 import { evaluateEnsembleGovernance, type EnsembleGovernanceDecision } from './ensemble-governance';
 import {
   scorePlanBMultimodelShadow,
@@ -1143,11 +1148,62 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       }
     }
     const m5EarlyTransitionHandoffEligible = m5EarlyTransitionHandoff?.eligible === true;
+    let extensionExhaustionDemoScout: ExtensionExhaustionDemoScoutDecision | null = null;
+    if (
+      professionalDemoPhase &&
+      !multimodelPrimaryExecutable &&
+      !m5EarlyTransitionHandoffEligible &&
+      !professionalM1FallbackExecutable &&
+      multimodelDemo
+    ) {
+      const extensionExhaustionShadow = scoreExtensionExhaustionShadow({
+        regime: multimodelDemo.ensemble.regime,
+        driftState: multimodelDemo.governance.driftState,
+        confidence: candidate.confidence,
+        netExpectedR: multimodelDemo.governance.netExpectedR,
+        directionQuality: multimodelDemo.ensemble.directionQuality,
+        tradeQuality: multimodelDemo.ensemble.tradeQuality,
+        exitQuality: multimodelDemo.ensemble.exitQuality,
+        extensionAtr: features.extensionAtr,
+        executionSpreadEvidenceValid: multimodelDemo.governance.executionSpreadEvidenceValid,
+      });
+      const reliability = extensionExhaustionShadow.candidate
+        ? await this.evidence.loadExtensionExhaustionShadowReliability({
+            userId,
+            instrument: candidate.instrument,
+            direction: candidate.direction,
+            asOf: decisionTime,
+          })
+        : null;
+      extensionExhaustionDemoScout = evaluateExtensionExhaustionDemoScout({
+        specialist: {
+          candidate: extensionExhaustionShadow.candidate,
+          reason: extensionExhaustionShadow.reason,
+          regime: multimodelDemo.ensemble.regime,
+          driftState: multimodelDemo.governance.driftState,
+          confidence: extensionExhaustionShadow.confidence,
+          netExpectedR: extensionExhaustionShadow.netExpectedR,
+          directionQuality: extensionExhaustionShadow.directionQuality,
+          executionSpreadEvidenceValid: multimodelDemo.governance.executionSpreadEvidenceValid,
+        },
+        eventRisk,
+        m1Route: routeDecision.route,
+        m1Confidence: candidate.confidence,
+        m1DirectionQuality: candidate.directionQuality,
+        trainedExpertOpposed: multimodelDemo.authority.trainedExpertOpposed,
+        portfolioSnapshotAvailable: multimodelDemo.portfolioSnapshotAvailable,
+        reliability,
+      });
+    }
+    const extensionExhaustionDemoScoutExecutable =
+      extensionExhaustionDemoScout?.eligible === true;
     const executionVolumeCap = m5EarlyTransitionHandoffEligible
       ? m5EarlyTransitionHandoff!.lotCap
       : professionalM1FallbackExecutable
         ? professionalM1Fallback!.lotCap
-        : this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
+        : extensionExhaustionDemoScoutExecutable
+          ? extensionExhaustionDemoScout!.lotCap
+          : this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
           ? multimodelDemo
             ? multimodelDemoExecutionVolumeCap(
                 this.rolloutPolicy.paperVolumeCap,
@@ -1181,7 +1237,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       ? !multimodelDirectionConflict &&
         (multimodelPrimaryExecutable ||
           m5EarlyTransitionHandoffEligible ||
-          professionalM1FallbackExecutable)
+          professionalM1FallbackExecutable ||
+          extensionExhaustionDemoScoutExecutable)
       : routeExecutable && routePayoffEligible && governanceExecutable;
     let activeOppositePositions: Awaited<
       ReturnType<M1TacticalEvidenceService['loadOpenPaperPositions']>
@@ -1237,6 +1294,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             direction: candidate.direction,
           })
         : false;
+    const extensionExhaustionActiveSameSideIntent =
+      preliminaryCanExecute && extensionExhaustionDemoScoutExecutable
+        ? await this.evidence.hasActiveM1Intent({
+            userId,
+            brokerConnectionId,
+            instrument: candidate.instrument,
+            direction: candidate.direction,
+          })
+        : false;
     const bootstrapActiveSameSideIntent =
       professionalM1ActiveSameSideIntent && bootstrapExecutionSelected;
     const qualifiedContinuationActiveSameSideIntent =
@@ -1253,10 +1319,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       : null;
     const executionStrategyRoute = m5EarlyTransitionHandoffEligible
       ? ('EARLY_TRANSITION' as const)
-      : multimodelDemo?.ensemble.strategyRoute;
+      : extensionExhaustionDemoScoutExecutable
+        ? ('TREND_CONTINUATION' as const)
+        : multimodelDemo?.ensemble.strategyRoute;
     const multimodelLossStreakBrake =
       preliminaryCanExecute &&
-      (multimodelPrimaryExecutable || m5EarlyTransitionHandoffEligible) &&
+      (multimodelPrimaryExecutable ||
+        m5EarlyTransitionHandoffEligible ||
+        extensionExhaustionDemoScoutExecutable) &&
       executionStrategyRoute
         ? await this.evidence.loadMultimodelLossStreakBrake({
             userId,
@@ -1272,6 +1342,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       !oppositePositionStateUnavailable &&
       !activeOppositePosition &&
       !professionalM1ActiveSameSideIntent &&
+      !extensionExhaustionActiveSameSideIntent &&
       fastStopRegimeBrake?.active !== true &&
       multimodelLossStreakBrake?.active !== true;
     const effectiveGovernanceBlockers =
@@ -1298,7 +1369,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(multimodelDirectionConflict
             ? ['MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT']
             : []),
-          ...(professionalM1FallbackExecutable || m5EarlyTransitionHandoffEligible
+          ...(professionalM1FallbackExecutable ||
+              m5EarlyTransitionHandoffEligible ||
+              extensionExhaustionDemoScoutExecutable
             ? []
             : (multimodelDemo?.authority.blockers ?? ['MULTIMODEL_AUTHORITY_UNAVAILABLE'])),
           ...(professionalM1Fallback?.eligible === true &&
@@ -1309,6 +1382,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(bootstrapActiveSameSideIntent ? ['M1_BOOTSTRAP_ACTIVE_SAME_SIDE_INTENT'] : []),
           ...(qualifiedContinuationActiveSameSideIntent
             ? ['M1_PROFESSIONAL_ACTIVE_SAME_SIDE_INTENT']
+            : []),
+          ...(extensionExhaustionActiveSameSideIntent
+            ? ['M1_EXTENSION_EXHAUSTION_ACTIVE_SAME_SIDE_INTENT']
             : []),
           ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
           ...(multimodelLossStreakBrake?.active === true
@@ -1389,6 +1465,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ? { ...m5EarlyTransitionEvidence }
           : null,
         m5EarlyTransitionHandoff: m5EarlyTransitionHandoff ? { ...m5EarlyTransitionHandoff } : null,
+        extensionExhaustionDemoScout: extensionExhaustionDemoScout
+          ? { ...extensionExhaustionDemoScout }
+          : null,
         shadowOutcomeEligible,
       },
       blockers,
@@ -1418,6 +1497,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         professionalM1Fallback,
         m5EarlyTransitionEvidence,
         m5EarlyTransitionHandoff,
+        extensionExhaustionDemoScout,
       );
     }
   }
@@ -1516,6 +1596,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     professionalM1Fallback: M1ProfessionalFallbackDecision | null = null,
     m5EarlyTransitionEvidence: M5EarlyTransitionEvidence | null = null,
     m5EarlyTransitionHandoff: M5EarlyTransitionHandoffDecision | null = null,
+    extensionExhaustionDemoScout: ExtensionExhaustionDemoScoutDecision | null = null,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -1545,6 +1626,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       professionalDemoPhase &&
       !useM5EarlyTransitionHandoff &&
       professionalM1FallbackExecutionEnabled(professionalM1Fallback);
+    const useExtensionExhaustionDemoScout =
+      professionalDemoPhase &&
+      !useM5EarlyTransitionHandoff &&
+      !useProfessionalM1Fallback &&
+      extensionExhaustionDemoScout?.eligible === true;
     const requiredExecutionMode = professionalDemoPhase
       ? ExecutionMode.FULL_AUTO
       : ExecutionMode.PAPER_ONLY;
@@ -1708,7 +1794,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? professionalM1Fallback?.tier
             : useM5EarlyTransitionHandoff
               ? 'M5_EARLY_TRANSITION_HANDOFF'
-              : (multimodelDemo?.authority.authorityPath ?? null),
+              : useExtensionExhaustionDemoScout
+                ? 'EXTENSION_EXHAUSTION_DEMO_SCOUT'
+                : (multimodelDemo?.authority.authorityPath ?? null),
           m5_early_transition_handoff: useM5EarlyTransitionHandoff,
           m5_early_transition_handoff_reason: useM5EarlyTransitionHandoff
             ? m5EarlyTransitionHandoff.reason
@@ -1725,6 +1813,22 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m5_early_transition_market_bar_time: useM5EarlyTransitionHandoff
             ? m5EarlyTransitionEvidence.marketBarTime.toISOString()
             : null,
+          extension_exhaustion_demo_scout: useExtensionExhaustionDemoScout,
+          extension_exhaustion_demo_scout_artifact:
+            extensionExhaustionDemoScout?.artifact ?? null,
+          extension_exhaustion_demo_scout_reason:
+            extensionExhaustionDemoScout?.reason ?? null,
+          extension_exhaustion_demo_scout_lot_cap: useExtensionExhaustionDemoScout
+            ? extensionExhaustionDemoScout!.lotCap
+            : null,
+          extension_exhaustion_demo_scout_samples:
+            extensionExhaustionDemoScout?.reliability?.samples ?? 0,
+          extension_exhaustion_demo_scout_average_r:
+            extensionExhaustionDemoScout?.reliability?.averageNetR ?? null,
+          extension_exhaustion_demo_scout_profit_factor:
+            extensionExhaustionDemoScout?.reliability?.profitFactor ?? null,
+          extension_exhaustion_demo_scout_recent3_r:
+            extensionExhaustionDemoScout?.reliability?.recent3R ?? null,
           multimodel_rescue_volume_cap: multimodelDemo?.authority.rescueVolumeCap ?? null,
           external_provider_paper_only: true,
           production_eligible: false,
@@ -1818,7 +1922,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_execution_authority: professionalDemoPhase
             ? useProfessionalM1Fallback
               ? 'DEMO_FULL_AUTO_M1_FALLBACK'
-              : 'DEMO_FULL_AUTO_PROMOTED'
+              : useExtensionExhaustionDemoScout
+                ? 'DEMO_EXTENSION_EXHAUSTION_SCOUT'
+                : 'DEMO_FULL_AUTO_PROMOTED'
             : 'PAPER_ONLY_RESEARCH',
         },
       });

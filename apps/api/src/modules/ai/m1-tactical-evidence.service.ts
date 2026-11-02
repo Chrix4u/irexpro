@@ -489,7 +489,6 @@ export class M1TacticalEvidenceService {
     };
   }
 
-
   async loadExtensionExhaustionShadowReliability(input: {
     userId: string;
     instrument: string;

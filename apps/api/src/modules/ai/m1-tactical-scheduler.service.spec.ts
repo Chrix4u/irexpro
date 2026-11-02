@@ -671,6 +671,15 @@ function phase2Harness(
     duplicateOppositeIntent?: boolean;
     duplicateSameDirectionIntent?: boolean;
     tradeIntentId?: string | null;
+    extensionExhaustionReliability?: {
+      samples: number;
+      wins: number;
+      losses: number;
+      totalNetR: number;
+      averageNetR: number;
+      profitFactor: number | null;
+      recent3R: number;
+    };
     m5EarlyTransitionEvidence?: {
       instrument: string;
       direction: 'BUY' | 'SELL';
@@ -769,6 +778,17 @@ function phase2Harness(
   const loadLatestM5EarlyTransitionEvidence = jest
     .fn()
     .mockResolvedValue(options.m5EarlyTransitionEvidence ?? null);
+  const loadExtensionExhaustionShadowReliability = jest.fn().mockResolvedValue(
+    options.extensionExhaustionReliability ?? {
+      samples: 0,
+      wins: 0,
+      losses: 0,
+      totalNetR: 0,
+      averageNetR: 0,
+      profitFactor: null,
+      recent3R: 0,
+    },
+  );
   const loadFastStopRegimeBrake = jest.fn().mockResolvedValue(
     options.fastStopBrake ?? {
       active: false,
@@ -800,6 +820,7 @@ function phase2Harness(
     loadOpenPaperPositions,
     loadOpenPaperRiskPositions,
     loadLatestM5EarlyTransitionEvidence,
+    loadExtensionExhaustionShadowReliability,
     loadFastStopRegimeBrake,
     loadMultimodelLossStreakBrake,
     hasActiveM1Intent,
@@ -894,6 +915,7 @@ function phase2Harness(
     loadOpenPaperPositions,
     loadOpenPaperRiskPositions,
     loadLatestM5EarlyTransitionEvidence,
+    loadExtensionExhaustionShadowReliability,
     loadFastStopRegimeBrake,
     loadMultimodelLossStreakBrake,
     hasActiveM1Intent,
@@ -2229,6 +2251,131 @@ describe('M1 V8 multi-model DEMO authority', () => {
     )?.[0];
     expect(recorded?.executionAuthority).toBe('NONE');
     expect(recorded?.blockers).toContain('M1_ACTIVE_OPPOSITE_POSITION');
+  });
+
+  it('promotes an evidence-qualified extension-exhaustion DEMO scout at no more than 0.10 lot', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      extensionExhaustionReliability: {
+        samples: 9,
+        wins: 4,
+        losses: 5,
+        totalNetR: 1.233,
+        averageNetR: 0.137,
+        profitFactor: 1.235,
+        recent3R: 2.186,
+      },
+    });
+    const features = { ...cleanContinuationFeatures(), extensionAtr: 1.2, m5Momentum1Atr: 0.14, m5Momentum3Atr: 0.24 };
+
+    const route = await driveFeatures(h, features, { brokerConnectionId: 'demo-conn-2' });
+
+    expect(route.route).toBe('M1_TREND_CONTINUATION');
+    expect(h.loadExtensionExhaustionShadowReliability).toHaveBeenCalled();
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        suggestedVolume: expect.any(Number),
+        metadata: expect.objectContaining({
+          extension_exhaustion_demo_scout: true,
+          multimodel_execution_authority_path: 'EXTENSION_EXHAUSTION_DEMO_SCOUT',
+        }),
+      }),
+    );
+    const signal = h.receiveSignal.mock.calls[0][0];
+    expect(signal.suggestedVolume).toBeLessThanOrEqual(0.1);
+    const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
+    expect(recorded?.executionAuthority).toBe('BROKER_NATIVE');
+    expect(recorded?.governance.extensionExhaustionDemoScout).toMatchObject({
+      eligible: true,
+      lotCap: 0.1,
+    });
+  });
+
+  it('keeps extension-exhaustion shadow-only when recent pair-side payoff deteriorates', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      extensionExhaustionReliability: {
+        samples: 9, wins: 4, losses: 5, totalNetR: 1.0, averageNetR: 0.12, profitFactor: 1.2, recent3R: -0.4,
+      },
+    });
+    await driveFeatures(h, { ...cleanContinuationFeatures(), extensionAtr: 1.2, m5Momentum1Atr: 0.14, m5Momentum3Atr: 0.24 }, { brokerConnectionId: 'demo-conn-2' });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
+    expect(recorded?.governance.extensionExhaustionDemoScout).toMatchObject({
+      eligible: false,
+      reason: 'RELIABILITY_RECENT_R_NOT_POSITIVE',
+    });
+  });
+
+  it('keeps extension-exhaustion shadow-only when trained experts unanimously oppose the candidate', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      trainedExpertState: 'CONFLICT',
+      trainedExpertDirection: 'SELL',
+      extensionExhaustionReliability: {
+        samples: 9, wins: 4, losses: 5, totalNetR: 1.233, averageNetR: 0.137, profitFactor: 1.235, recent3R: 2.186,
+      },
+    });
+    await driveFeatures(h, { ...cleanContinuationFeatures(), extensionAtr: 1.2, m5Momentum1Atr: 0.14, m5Momentum3Atr: 0.24 }, { brokerConnectionId: 'demo-conn-2' });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
+    expect(recorded?.governance.extensionExhaustionDemoScout).toMatchObject({
+      eligible: false,
+      reason: 'TRAINED_EXPERT_OPPOSED',
+    });
+  });
+
+  it('does not stack a second extension-exhaustion scout on an active same-side intent', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      duplicateSameDirectionIntent: true,
+      extensionExhaustionReliability: {
+        samples: 9, wins: 4, losses: 5, totalNetR: 1.233, averageNetR: 0.137, profitFactor: 1.235, recent3R: 2.186,
+      },
+    });
+    await driveFeatures(h, { ...cleanContinuationFeatures(), extensionAtr: 1.2, m5Momentum1Atr: 0.14, m5Momentum3Atr: 0.24 }, { brokerConnectionId: 'demo-conn-2' });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
+    expect(recorded?.blockers).toContain('M1_EXTENSION_EXHAUSTION_ACTIVE_SAME_SIDE_INTENT');
+  });
+
+  it('keeps a qualified M5 handoff ahead of the extension-exhaustion scout', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      extensionExhaustionReliability: {
+        samples: 9, wins: 4, losses: 5, totalNetR: 1.233, averageNetR: 0.137, profitFactor: 1.235, recent3R: 2.186,
+      },
+      m5EarlyTransitionEvidence: {
+        instrument: 'EURUSD', direction: 'BUY',
+        marketBarTime: new Date('2026-10-15T10:25:00.000Z'),
+        evaluatedAt: new Date('2026-10-15T10:29:00.000Z'),
+        strategyRoute: 'EARLY_TRANSITION', paperAdmitted: true, paperExecutionEligible: true,
+        eventRisk: 'CLEAR', driftState: 'NORMAL', netExpectedR: 0.30, ensembleScore: 0.72,
+        consensusPassed: 6, consensusRequired: 6,
+      },
+    });
+    await driveFeatures(h, { ...cleanContinuationFeatures(), extensionAtr: 1.2, m5Momentum1Atr: 0.14, m5Momentum3Atr: 0.24 }, { brokerConnectionId: 'demo-conn-2' });
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    expect(h.receiveSignal).toHaveBeenCalledWith(expect.objectContaining({
+      suggestedVolume: 0.2,
+      metadata: expect.objectContaining({
+        m5_early_transition_handoff: true,
+        multimodel_execution_authority_path: 'M5_EARLY_TRANSITION_HANDOFF',
+        extension_exhaustion_demo_scout: false,
+      }),
+    }));
+    expect(h.loadExtensionExhaustionShadowReliability).not.toHaveBeenCalled();
   });
 
   it('promotes a fresh durable M5 early transition as a 0.20 DEMO canary when cTrader M1 confirms continuation', async () => {

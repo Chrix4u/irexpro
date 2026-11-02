@@ -40,6 +40,9 @@ export interface ExtensionExhaustionDemoScoutInput {
 export type ExtensionExhaustionDemoScoutReason =
   | 'EXTENSION_EXHAUSTION_DEMO_SCOUT'
   | 'SPECIALIST_NOT_CANDIDATE'
+  | 'SPECIALIST_REGIME_NOT_EXTENDED'
+  | 'SPECIALIST_DRIFT_NOT_NORMAL'
+  | 'SPECIALIST_SPREAD_UNVERIFIED'
   | 'EVENT_RISK_NOT_CLEAR'
   | 'M1_TIMING_NOT_CONTINUATION'
   | 'M1_CONFIDENCE_TOO_LOW'
@@ -80,6 +83,15 @@ export function evaluateExtensionExhaustionDemoScout(
   input: ExtensionExhaustionDemoScoutInput,
 ): ExtensionExhaustionDemoScoutDecision {
   if (!input.specialist.candidate) return decision(input, 'SPECIALIST_NOT_CANDIDATE');
+  if (input.specialist.regime !== 'TREND_EXTENDED') {
+    return decision(input, 'SPECIALIST_REGIME_NOT_EXTENDED');
+  }
+  if (input.specialist.driftState !== 'NORMAL') {
+    return decision(input, 'SPECIALIST_DRIFT_NOT_NORMAL');
+  }
+  if (!input.specialist.executionSpreadEvidenceValid) {
+    return decision(input, 'SPECIALIST_SPREAD_UNVERIFIED');
+  }
   if (input.eventRisk !== 'CLEAR') return decision(input, 'EVENT_RISK_NOT_CLEAR');
   if (input.m1Route !== 'M1_TREND_CONTINUATION') {
     return decision(input, 'M1_TIMING_NOT_CONTINUATION');

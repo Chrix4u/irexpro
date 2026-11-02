@@ -34,10 +34,10 @@
 **Interfaces:**
 - Produces `evaluateExtensionExhaustionDemoScout(input)` returning eligibility, reason, lotCap and evidence snapshot.
 
-- [ ] Write RED tests for all numeric thresholds, event risk, M1 route/timing, specialist candidate, expert opposition, and 0.10 lot cap.
-- [ ] Run focused Jest and confirm RED.
-- [ ] Implement minimal pure evaluator.
-- [ ] Run focused Jest and confirm GREEN.
+- [x] Write RED tests for all numeric thresholds, event risk, M1 route/timing, specialist candidate, expert opposition, and 0.10 lot cap.
+- [x] Run focused Jest and confirm RED.
+- [x] Implement minimal pure evaluator.
+- [x] Run focused Jest and confirm GREEN.
 
 ### Task 2: Shadow reliability loader
 **Files:**
@@ -47,9 +47,9 @@
 **Interfaces:**
 - Produces `loadExtensionExhaustionShadowReliability({ userId, instrument, direction, asOf })`.
 
-- [ ] Write RED SQL-contract/aggregation tests: compatible policy family, 7-day window, 15-minute dedupe, settled outcome only, recent-three R.
-- [ ] Implement loader and safe PF calculation.
-- [ ] Run focused tests GREEN.
+- [x] Write RED SQL-contract/aggregation tests: compatible policy family, 7-day window, 15-minute dedupe, settled outcome only, recent-three R.
+- [x] Implement loader and safe PF calculation.
+- [x] Run focused tests GREEN.
 
 ### Task 3: Scheduler authority integration
 **Files:**
@@ -60,14 +60,14 @@
 - Consumes Task 1 evaluator and Task 2 reliability.
 - Records `extensionExhaustionDemoScout` in governance and may grant `BROKER_NATIVE` when higher-priority paths are unavailable.
 
-- [ ] Write RED scheduler tests: eligible scout executes at <=0.10; negative recent evidence blocks; opposite expert blocks; existing Plan-B/M5 path wins priority; active same-side intent prevents duplicate.
-- [ ] Implement minimal integration while reusing existing downstream brakes/position conflict logic.
-- [ ] Run scheduler tests GREEN.
+- [x] Write RED scheduler tests: eligible scout executes at <=0.10; negative recent evidence blocks; opposite expert blocks; existing Plan-B/M5 path wins priority; active same-side intent prevents duplicate.
+- [x] Implement minimal integration while reusing existing downstream brakes/position conflict logic.
+- [x] Run scheduler tests GREEN.
 
 ### Task 4: Verification and deployment
-- [ ] Run scout/evidence/scheduler/authority/execution regression suites.
-- [ ] Run `pnpm --filter @irexpro/api build`.
-- [ ] Run `git diff --check`.
+- [x] Run scout/evidence/scheduler/authority/execution regression suites.
+- [x] Run `pnpm --filter @irexpro/api build`.
+- [x] Run `git diff --check`.
 - [ ] Commit and push main.
 - [ ] Deploy exact SHA; restart API.
 - [ ] Verify PM2 online/unstable=0 and inspect fresh decisions for explicit scout artifact/authority; do not claim a trade opened unless one actually does.
