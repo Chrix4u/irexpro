@@ -58,6 +58,10 @@ import {
 } from './extension-exhaustion-shadow';
 import { scoreTrendPersistenceShadow } from './trend-persistence-shadow';
 import {
+  SideSelectionPatternTelemetry,
+  buildSideSelectionPatternTelemetry,
+} from './side-selection-pattern-telemetry';
+import {
   PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
   PAPER_CALIBRATED_IDLE_RECOVERY_LOT_CAP,
   PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R,
@@ -591,6 +595,8 @@ export interface Candidate {
   extensionAtr: number;
   emaSeparation: number;
   mtfStrength: number;
+  /** Direction-aligned trend support from fully closed H1 candles only. */
+  h1Alignment?: number;
   /** Direction-aligned trend support from fully closed H4 candles only. */
   h4Alignment?: number;
   h4ContextAvailable?: boolean;
@@ -1013,6 +1019,7 @@ export function buildDirectionalCandidates(
       extensionAtr,
       emaSeparation,
       mtfStrength,
+      h1Alignment,
       h4Alignment,
       h4ContextAvailable,
       h4ClosedBarCount: h4.length,
@@ -2056,6 +2063,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `recentR=${paperShadowLocalEdgePocket.recentNetR.toFixed(3)}`,
             );
           }
+          const sideSelectionPatternTelemetry = buildSideSelectionPatternTelemetry({
+            candles: seriesByInstrument.get(best.instrument) ?? [],
+            direction: best.direction,
+            atr: best.atr,
+            decisionBarTime: best.barTime,
+            mtfStrength: best.mtfStrength,
+            h1Alignment: best.h1Alignment ?? 0,
+            h4Alignment: best.h4Alignment ?? 0,
+          });
           await this.persistEnsembleShadowDecision(
             userId,
             paperSession?.id ?? null,
@@ -2069,6 +2085,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             highConvictionOverlay,
             paperPostLossEntryGuard,
             paperSpreadCalibrationShadow,
+            sideSelectionPatternTelemetry,
           );
           const preliminaryRank = preAdaptiveCandidateRanks.get(best) ?? rankedCandidates.length;
           const diagnosticCandidate: AdaptiveScanDiagnosticCandidate = {
@@ -6414,6 +6431,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     highConvictionOverlay: HighConvictionOverlay,
     paperPostLossEntryGuard: PaperPostLossEntryDecision,
     paperSpreadCalibrationShadow: PaperSpreadCalibrationDecision,
+    sideSelectionPatternTelemetry: SideSelectionPatternTelemetry,
   ): Promise<void> {
     if (!this.dataSource) return;
 
@@ -6549,6 +6567,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           },
           macroEventRisk: macroEventAssessment,
           highConvictionOverlay,
+          sideSelectionPatternTelemetry,
           extensionExhaustionShadow,
           trendPersistenceShadow,
         }),
