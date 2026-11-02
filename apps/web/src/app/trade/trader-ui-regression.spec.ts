@@ -32,4 +32,9 @@ describe('AI Trader production UI regression contract', () => {
       fs.existsSync(path.join(tradeDir, 'history/profit-protection/page.tsx')),
     ).toBe(true);
   });
+
+  it('binds chart polling to the effective session broker, not stale selection state', () => {
+    expect(pageSource).toContain('const marketBrokerConnectionId = selectedBroker?.id ?? "";');
+    expect(pageSource).not.toContain('brokerConnectionId: selectedBrokerId');
+  });
 });

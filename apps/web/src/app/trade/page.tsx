@@ -1928,6 +1928,7 @@ export default function AiTradingPage() {
       null,
     [terminal, selectedBrokerId],
   );
+  const marketBrokerConnectionId = selectedBroker?.id ?? "";
   const automationBlockedReasons = executionBlockedReasons({
     session: terminal?.session ?? null,
     killSwitchActive: terminal?.risk?.killSwitchActive ?? false,
@@ -2303,7 +2304,7 @@ export default function AiTradingPage() {
   }, [automationRuntime?.instruments, chartInstrument]);
 
   useEffect(() => {
-    if (!user || !selectedBrokerId) return;
+    if (!user || !marketBrokerConnectionId) return;
 
     // History is comparatively expensive and changes only when candles close.
     // Keep it authoritative but refresh it separately from the forming candle,
@@ -2325,7 +2326,7 @@ export default function AiTradingPage() {
           instrument: chartInstrument,
           timeframe: chartTimeframe,
           limit: 90,
-          brokerConnectionId: selectedBrokerId,
+          brokerConnectionId: marketBrokerConnectionId,
         });
         if (!cancelled) {
           setMarket((previous) => ({
@@ -2357,7 +2358,7 @@ export default function AiTradingPage() {
     };
   }, [
     user,
-    selectedBrokerId,
+    marketBrokerConnectionId,
     selectedBroker?.brokerId,
     chartInstrument,
     chartTimeframe,
@@ -2365,7 +2366,7 @@ export default function AiTradingPage() {
   ]);
 
   useEffect(() => {
-    if (!user || !selectedBrokerId) return;
+    if (!user || !marketBrokerConnectionId) return;
     if (
       selectedBroker?.brokerId === "paper-broker" &&
       (!vpsScannerStatus || vpsScannerStatus.marketSchedule.paused)
@@ -2382,7 +2383,7 @@ export default function AiTradingPage() {
         const quote = await loadLiveMarketQuote({
           instrument: chartInstrument,
           timeframe: chartTimeframe,
-          brokerConnectionId: selectedBrokerId,
+          brokerConnectionId: marketBrokerConnectionId,
         });
         if (cancelled) return;
         setMarket((previous) => {
@@ -2421,7 +2422,7 @@ export default function AiTradingPage() {
     };
   }, [
     user,
-    selectedBrokerId,
+    marketBrokerConnectionId,
     selectedBroker?.brokerId,
     chartInstrument,
     chartTimeframe,
