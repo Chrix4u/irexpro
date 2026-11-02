@@ -1,7 +1,9 @@
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import type { PlanBV4BrokerScoreResponse } from '../ai-engine-client/ai-engine-client.service';
 
-function readyResponse(overrides: Partial<PlanBV4BrokerScoreResponse> = {}): PlanBV4BrokerScoreResponse {
+function readyResponse(
+  overrides: Partial<PlanBV4BrokerScoreResponse> = {},
+): PlanBV4BrokerScoreResponse {
   return {
     state: 'READY',
     reason: null,
@@ -98,7 +100,13 @@ describe('HighConvictionBrokerExpertService', () => {
   it('fails closed when the trained scorer reports mixed/non-broker provenance', async () => {
     const client = new FakeAiEngineClient();
     client.response = readyResponse({
-      market_data_sources: { M1: 'paper-broker', M5: 'broker', M15: 'broker', H1: 'broker', H4: 'broker' },
+      market_data_sources: {
+        M1: 'paper-broker',
+        M5: 'broker',
+        M15: 'broker',
+        H1: 'broker',
+        H4: 'broker',
+      },
     });
     const service = new HighConvictionBrokerExpertService(client as never);
 

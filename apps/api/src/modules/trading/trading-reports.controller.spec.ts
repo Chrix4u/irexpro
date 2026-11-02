@@ -7,7 +7,9 @@ const USER_ID = '11111111-1111-4111-8111-111111111111';
 describe('TradingReportsController', () => {
   it('uses the dedicated trading/reports route and forwards the authenticated user id', async () => {
     const getReport = jest.fn().mockResolvedValue({ total: 0 });
-    const controller = new TradingReportsController({ getReport } as unknown as ProfitProtectionExitQualityService);
+    const controller = new TradingReportsController({
+      getReport,
+    } as unknown as ProfitProtectionExitQualityService);
 
     const result = await controller.getProfitProtectionExitQuality(USER_ID, {
       brokerConnectionId: '22222222-2222-4222-8222-222222222222',
@@ -39,7 +41,9 @@ describe('TradingReportsController', () => {
 
   it('does not treat arbitrary strings as truthy booleans and leaves invalid numbers for service defaults', async () => {
     const getReport = jest.fn().mockResolvedValue({ total: 0 });
-    const controller = new TradingReportsController({ getReport } as unknown as ProfitProtectionExitQualityService);
+    const controller = new TradingReportsController({
+      getReport,
+    } as unknown as ProfitProtectionExitQualityService);
 
     await controller.getProfitProtectionExitQuality(USER_ID, {
       smallProfitOnly: 'false',
@@ -47,10 +51,13 @@ describe('TradingReportsController', () => {
       pageSize: '',
     });
 
-    expect(getReport).toHaveBeenCalledWith(USER_ID, expect.objectContaining({
-      smallProfitOnly: false,
-      page: undefined,
-      pageSize: undefined,
-    }));
+    expect(getReport).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({
+        smallProfitOnly: false,
+        page: undefined,
+        pageSize: undefined,
+      }),
+    );
   });
 });

@@ -237,20 +237,14 @@ export function evaluatePaperOpportunityScout(
   const reject = (reason: PaperOpportunityScoutReason) => decision(policy, false, reason);
 
   if (input.normalPaperExecution) return reject('FULL_SIZE_ALREADY_ELIGIBLE');
-  if (
-    input.strategyRoute !== 'TREND_CONTINUATION' &&
-    input.strategyRoute !== 'CONFIRMED_REVERSAL'
-  )
+  if (input.strategyRoute !== 'TREND_CONTINUATION' && input.strategyRoute !== 'CONFIRMED_REVERSAL')
     return reject('ROUTE_NOT_SCOUTABLE');
   if (
     input.strategyRoute === 'TREND_CONTINUATION' &&
     !['TREND_HEALTHY', 'TREND_EXTENDED', 'TREND_WEAK'].includes(input.regime)
   )
     return reject('REGIME_NOT_SCOUTABLE');
-  if (
-    input.strategyRoute === 'CONFIRMED_REVERSAL' &&
-    input.regime !== 'REVERSAL_CONFIRMED'
-  )
+  if (input.strategyRoute === 'CONFIRMED_REVERSAL' && input.regime !== 'REVERSAL_CONFIRMED')
     return reject('REGIME_NOT_SCOUTABLE');
   if (input.eventRisk !== 'CLEAR') return reject('EVENT_RISK_NOT_CLEAR');
   if (!input.paperExecutionCostUsable) return reject('EXECUTION_COST_UNUSABLE');
@@ -301,9 +295,7 @@ export function evaluatePaperOpportunityScout(
     }
 
     if (input.driftState !== 'NORMAL') return reject('DRIFT_EVIDENCE_TOO_WEAK');
-    if (
-      input.confidence < PAPER_CONFIRMED_REVERSAL_MICRO_MIN_CONFIDENCE
-    )
+    if (input.confidence < PAPER_CONFIRMED_REVERSAL_MICRO_MIN_CONFIDENCE)
       return reject('CONFIDENCE_TOO_LOW');
     if (
       !Number.isFinite(input.netExpectedR) ||

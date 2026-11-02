@@ -184,7 +184,9 @@ export function toLivePositionRowView(
           peakObservedAt: toIsoString(providerPosition.pathDiagnostics.peakObservedAt),
           lastObservedAt: toIsoString(providerPosition.pathDiagnostics.lastObservedAt),
         }
-      : trade.maxFavorablePnl != null || trade.maxAdversePnl != null || trade.pathObservationCount != null
+      : trade.maxFavorablePnl != null ||
+          trade.maxAdversePnl != null ||
+          trade.pathObservationCount != null
         ? {
             maxFavorablePnl: trade.maxFavorablePnl ?? '0',
             maxAdversePnl: trade.maxAdversePnl ?? '0',
@@ -192,9 +194,7 @@ export function toLivePositionRowView(
             profitGiveback: trade.profitGiveback ?? '0',
             observationCount: trade.pathObservationCount ?? 0,
             sameBarProtectionAmbiguityCount: trade.sameBarProtectionAmbiguityCount ?? 0,
-            lastSameBarProtectionAmbiguityAt: toIsoString(
-              trade.lastSameBarProtectionAmbiguityAt,
-            ),
+            lastSameBarProtectionAmbiguityAt: toIsoString(trade.lastSameBarProtectionAmbiguityAt),
             peakObservedAt: toIsoString(trade.pathPeakObservedAt),
             lastObservedAt: toIsoString(trade.pathLastObservedAt),
           }

@@ -197,7 +197,6 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       expect(ExactDecimal.parse(sized.allocatedCapital).lt(ExactDecimal.parse('1000'))).toBe(true);
     });
 
-
     it('steps a qualified volume down to the largest broker-margin-affordable lot instead of rejecting the trade', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue(
         accountState({ balance: '645.53', equity: '645.53', freeMargin: '645.53' }),
@@ -278,7 +277,12 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
 
     it('steps a qualified EURUSD size down to the largest lot strictly below the leverage ceiling', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue(
-        accountState({ currency: 'EUR', equity: '953.38', balance: '953.38', freeMargin: '953.38' }),
+        accountState({
+          currency: 'EUR',
+          equity: '953.38',
+          balance: '953.38',
+          freeMargin: '953.38',
+        }),
       );
       brokerService.getRequiredMargin.mockResolvedValue('735.00');
 
@@ -293,12 +297,19 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       expect(sized.lots).toBe('0.28');
       expect(sized.inputs.maxLeverageAllowed).toBe('30');
       expect(sized.inputs.lotsByLeverageCeiling).toBe('0.28');
-      expect(ExactDecimal.parse(sized.inputs.finalEffectiveLeverage).lt(ExactDecimal.parse('30'))).toBe(true);
+      expect(
+        ExactDecimal.parse(sized.inputs.finalEffectiveLeverage).lt(ExactDecimal.parse('30')),
+      ).toBe(true);
     });
 
     it('steps down one lot increment when the requested size lands exactly on the leverage limit', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue(
-        accountState({ currency: 'EUR', equity: '1000.00', balance: '1000.00', freeMargin: '1000.00' }),
+        accountState({
+          currency: 'EUR',
+          equity: '1000.00',
+          balance: '1000.00',
+          freeMargin: '1000.00',
+        }),
       );
       brokerService.getRequiredMargin.mockResolvedValue('725.00');
 
@@ -312,7 +323,9 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
 
       expect(sized.lots).toBe('0.29');
       expect(sized.inputs.lotsByLeverageCeiling).toBe('0.29');
-      expect(ExactDecimal.parse(sized.inputs.finalEffectiveLeverage).lt(ExactDecimal.parse('30'))).toBe(true);
+      expect(
+        ExactDecimal.parse(sized.inputs.finalEffectiveLeverage).lt(ExactDecimal.parse('30')),
+      ).toBe(true);
     });
 
     it('uses the REQUESTED price for LIMIT entries', async () => {
@@ -592,7 +605,12 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
         baseParams({ instrument: 'USDJPY', stopLoss: '149.500' }),
       );
 
-      expect(fxConversion.resolveCachedBid).toHaveBeenCalledWith(CONN, 'EUR', 'JPY', expect.any(Date));
+      expect(fxConversion.resolveCachedBid).toHaveBeenCalledWith(
+        CONN,
+        'EUR',
+        'JPY',
+        expect.any(Date),
+      );
       expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
       expect(result.lots).toBe('0.66');
       expect(result.inputs.riskCurrencyConversion).toBe(

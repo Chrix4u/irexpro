@@ -708,10 +708,7 @@ export function evaluatePaperProfitLock(input: {
     // 0.005R tolerance for five-second sampling around that boundary.
     const risk = input.initialRiskPnl;
     const peak = input.maxFavorablePnl;
-    if (
-      input.strategyRoute === 'CONFIRMED_REVERSAL' &&
-      compareDecimalStrings(peak, risk) < 0
-    )
+    if (input.strategyRoute === 'CONFIRMED_REVERSAL' && compareDecimalStrings(peak, risk) < 0)
       return disabled;
     if (
       input.strategyRoute === 'EARLY_TRANSITION' &&

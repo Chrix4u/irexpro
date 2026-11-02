@@ -5,17 +5,10 @@ import {
   PlanBV85BrokerCheckpointResponse,
 } from '../ai-engine-client/ai-engine-client.service';
 import { ExecutionService } from '../execution/execution.service';
-import {
-  TradeCloseReason,
-  TradeStatus,
-} from '../execution/entities/trade.entity';
-import {
-  parseV85EntryFeatures,
-  PLAN_B_V85_ARTIFACT,
-} from './post-entry-protection-shadow.service';
+import { TradeCloseReason, TradeStatus } from '../execution/entities/trade.entity';
+import { parseV85EntryFeatures, PLAN_B_V85_ARTIFACT } from './post-entry-protection-shadow.service';
 
-export const PLAN_B_V89_DEMO_DRAWDOWN_GUARD_ARTIFACT =
-  'plan-b-v89-demo-5m-drawdown-guard-v1';
+export const PLAN_B_V89_DEMO_DRAWDOWN_GUARD_ARTIFACT = 'plan-b-v89-demo-5m-drawdown-guard-v1';
 export const PLAN_B_V89_DEMO_DRAWDOWN_CHECKPOINT_MINUTES = 5;
 export const PLAN_B_V89_DEMO_DRAWDOWN_DEADLINE_MINUTES = 7;
 export const PLAN_B_V89_DEMO_DRAWDOWN_CLOSE_R = -0.4;
@@ -85,7 +78,9 @@ export class PostEntryDemoDrawdownGuardService implements OnModuleInit, OnModule
       const status = await this.aiEngineClient.getPlanBV85PostEntryStatus();
       this.artifactReady = status.loaded && status.execution_authority === 'NONE';
       if (!this.artifactReady) {
-        this.logger.warn('v8.9 DEMO drawdown guard disabled: v8.5 broker checkpoint artifact unavailable');
+        this.logger.warn(
+          'v8.9 DEMO drawdown guard disabled: v8.5 broker checkpoint artifact unavailable',
+        );
         return;
       }
     } catch (error) {
@@ -203,12 +198,21 @@ export class PostEntryDemoDrawdownGuardService implements OnModuleInit, OnModule
       openedAt.getTime() + PLAN_B_V89_DEMO_DRAWDOWN_CHECKPOINT_MINUTES * 60_000,
     );
     if (!features) {
-      await this.persistObservation(row, null, 'ERROR', 'ENTRY_FEATURES_INCOMPLETE', null, 'OBSERVE', false, {
-        state: 'ERROR',
-        reason: 'ENTRY_FEATURES_INCOMPLETE',
-        checkpoint_at: checkpointAt.toISOString(),
-        score: null,
-      } as PlanBV85BrokerCheckpointResponse);
+      await this.persistObservation(
+        row,
+        null,
+        'ERROR',
+        'ENTRY_FEATURES_INCOMPLETE',
+        null,
+        'OBSERVE',
+        false,
+        {
+          state: 'ERROR',
+          reason: 'ENTRY_FEATURES_INCOMPLETE',
+          checkpoint_at: checkpointAt.toISOString(),
+          score: null,
+        } as PlanBV85BrokerCheckpointResponse,
+      );
       return;
     }
 
@@ -335,8 +339,7 @@ export class PostEntryDemoDrawdownGuardService implements OnModuleInit, OnModule
     sourceResponse: PlanBV85BrokerCheckpointResponse,
   ): Promise<void> {
     const checkpointAt = new Date(
-      new Date(row.opened_at).getTime() +
-        PLAN_B_V89_DEMO_DRAWDOWN_CHECKPOINT_MINUTES * 60_000,
+      new Date(row.opened_at).getTime() + PLAN_B_V89_DEMO_DRAWDOWN_CHECKPOINT_MINUTES * 60_000,
     );
     const response = {
       artifact: PLAN_B_V89_DEMO_DRAWDOWN_GUARD_ARTIFACT,

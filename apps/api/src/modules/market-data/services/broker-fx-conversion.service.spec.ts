@@ -18,9 +18,11 @@ function quote(instrument: string, bid: string, ask: string, ageMs = 5_000) {
 
 describe('BrokerFxConversionService', () => {
   function fixture(rows: Record<string, ReturnType<typeof quote> | null>) {
-    const getLatestPositiveSpreadQuote = jest.fn().mockImplementation(
-      async (_connectionId: string, instrument: string) => rows[instrument] ?? null,
-    );
+    const getLatestPositiveSpreadQuote = jest
+      .fn()
+      .mockImplementation(
+        async (_connectionId: string, instrument: string) => rows[instrument] ?? null,
+      );
     return {
       service: new BrokerFxConversionService({
         getLatestPositiveSpreadQuote,

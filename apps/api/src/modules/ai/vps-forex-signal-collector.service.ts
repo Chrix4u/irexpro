@@ -211,10 +211,7 @@ export function paperOpportunityScoutModelVersion(
   engineCode: string,
   reason?: PaperOpportunityScoutDecision['reason'] | null,
 ): string {
-  if (
-    reason === 'CONFIRMED_REVERSAL_SCOUT' ||
-    reason === 'CONFIRMED_REVERSAL_MICRO_SCOUT'
-  ) {
+  if (reason === 'CONFIRMED_REVERSAL_SCOUT' || reason === 'CONFIRMED_REVERSAL_MICRO_SCOUT') {
     return `external-provider/${engineCode}/paper-opportunity-scout-v11-confirmed-reversal-adaptive-0.20-0.10-tier`;
   }
   return `external-provider/${engineCode}/paper-opportunity-scout-v10-local-edge-shadow-quarantine-0.10-tier`;

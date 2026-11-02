@@ -52,8 +52,12 @@ describe('VpsForexSignalCollectorController', () => {
       {} as VpsForexSignalCollectorService,
       {} as BrokerParityV7Service,
       {} as V8DedicatedPaperReadinessService,
-      { getStatus: jest.fn().mockReturnValue(schedulerStatus) } as unknown as M1TacticalSchedulerService,
-      { loadLatestDecisionStateForUser: jest.fn().mockResolvedValue(latestDecision) } as unknown as M1TacticalEvidenceService,
+      {
+        getStatus: jest.fn().mockReturnValue(schedulerStatus),
+      } as unknown as M1TacticalSchedulerService,
+      {
+        loadLatestDecisionStateForUser: jest.fn().mockResolvedValue(latestDecision),
+      } as unknown as M1TacticalEvidenceService,
     );
 
     await expect(controller.getM1TacticalStatus('user-1')).resolves.toEqual({
@@ -61,5 +65,4 @@ describe('VpsForexSignalCollectorController', () => {
       latestDecision,
     });
   });
-
 });

@@ -41,7 +41,12 @@ export function classifyProfitProtectionCounterfactual(input: {
   stopLoss: number;
   candles: ProfitProtectionReplayCandle[];
 }): ProfitProtectionCounterfactualResult {
-  const disabled = (outcome: ProfitProtectionCounterfactualOutcome, eventAt: Date | null = null, candleCount = 0, maxGapSeconds: number | null = null): ProfitProtectionCounterfactualResult => ({
+  const disabled = (
+    outcome: ProfitProtectionCounterfactualOutcome,
+    eventAt: Date | null = null,
+    candleCount = 0,
+    maxGapSeconds: number | null = null,
+  ): ProfitProtectionCounterfactualResult => ({
     outcome,
     eventAt,
     minutesAfterClose: eventAt
@@ -56,7 +61,8 @@ export function classifyProfitProtectionCounterfactual(input: {
     !Number.isFinite(input.stopLoss) ||
     input.takeProfit <= 0 ||
     input.stopLoss <= 0
-  ) return disabled('DATA_GAP');
+  )
+    return disabled('DATA_GAP');
 
   const rows = input.candles
     .flatMap((row) => {
@@ -65,9 +71,15 @@ export function classifyProfitProtectionCounterfactual(input: {
       const low = finite(row.low);
       const samples = finite(row.sample_count);
       if (
-        !Number.isFinite(at.getTime()) || high === null || low === null || high < low ||
-        samples === null || samples <= 0 || row.source !== 'ctrader-broker-native'
-      ) return [];
+        !Number.isFinite(at.getTime()) ||
+        high === null ||
+        low === null ||
+        high < low ||
+        samples === null ||
+        samples <= 0 ||
+        row.source !== 'ctrader-broker-native'
+      )
+        return [];
       return [{ at, high, low }];
     })
     .sort((a, b) => a.at.getTime() - b.at.getTime());
@@ -88,19 +100,18 @@ export function classifyProfitProtectionCounterfactual(input: {
     }
     previousAt = row.at;
 
-    const tpHit = input.direction === 'BUY'
-      ? row.high >= input.takeProfit
-      : row.low <= input.takeProfit;
-    const slHit = input.direction === 'BUY'
-      ? row.low <= input.stopLoss
-      : row.high >= input.stopLoss;
+    const tpHit =
+      input.direction === 'BUY' ? row.high >= input.takeProfit : row.low <= input.takeProfit;
+    const slHit =
+      input.direction === 'BUY' ? row.low <= input.stopLoss : row.high >= input.stopLoss;
     if (!tpHit && !slHit) continue;
     if (gapBeforeCurrent) return disabled('DATA_GAP', null, rows.length, maxGapSeconds);
     if (tpHit && slHit) return disabled('AMBIGUOUS_SAME_M1', row.at, rows.length, maxGapSeconds);
     return disabled(tpHit ? 'TP_FIRST' : 'SL_FIRST', row.at, rows.length, maxGapSeconds);
   }
 
-  const horizonEnd = input.closeAt.getTime() + PROFIT_PROTECTION_COUNTERFACTUAL_CHECKPOINT_MINUTES * 60_000;
+  const horizonEnd =
+    input.closeAt.getTime() + PROFIT_PROTECTION_COUNTERFACTUAL_CHECKPOINT_MINUTES * 60_000;
   const lastCoverageEnd = rows[rows.length - 1]!.at.getTime() + 60_000;
   if (gapBeforeCurrent || lastCoverageEnd < horizonEnd) {
     return disabled('DATA_GAP', null, rows.length, maxGapSeconds);
@@ -135,9 +146,14 @@ export class ProfitProtectionCounterfactualService implements OnModuleInit, OnMo
     if (process.env.NODE_ENV === 'test') return;
     const initial = setTimeout(() => void this.runOnce(), 20_000);
     initial.unref?.();
-    this.timer = setInterval(() => void this.runOnce(), PROFIT_PROTECTION_COUNTERFACTUAL_INTERVAL_MS);
+    this.timer = setInterval(
+      () => void this.runOnce(),
+      PROFIT_PROTECTION_COUNTERFACTUAL_INTERVAL_MS,
+    );
     this.timer.unref?.();
-    this.logger.log('profit-protection counterfactual tracer enabled checkpoint=240m authority=NONE modifiesExecution=false');
+    this.logger.log(
+      'profit-protection counterfactual tracer enabled checkpoint=240m authority=NONE modifiesExecution=false',
+    );
   }
 
   onModuleDestroy(): void {
@@ -166,7 +182,9 @@ export class ProfitProtectionCounterfactualService implements OnModuleInit, OnMo
         await this.persist(row, closeAt, result);
       }
     } catch (error) {
-      this.logger.warn(`profit-protection counterfactual cycle deferred: ${(error as Error).message}`);
+      this.logger.warn(
+        `profit-protection counterfactual cycle deferred: ${(error as Error).message}`,
+      );
     } finally {
       this.running = false;
     }
@@ -213,7 +231,10 @@ export class ProfitProtectionCounterfactualService implements OnModuleInit, OnMo
     )) as CandidateRow[];
   }
 
-  private async loadCandles(row: CandidateRow, closeAt: Date): Promise<ProfitProtectionReplayCandle[]> {
+  private async loadCandles(
+    row: CandidateRow,
+    closeAt: Date,
+  ): Promise<ProfitProtectionReplayCandle[]> {
     return (await this.dataSource.query(
       `
         SELECT bucket_time, high, low, sample_count, source
@@ -230,7 +251,11 @@ export class ProfitProtectionCounterfactualService implements OnModuleInit, OnMo
     )) as ProfitProtectionReplayCandle[];
   }
 
-  private async persist(row: CandidateRow, closeAt: Date, result: ProfitProtectionCounterfactualResult): Promise<void> {
+  private async persist(
+    row: CandidateRow,
+    closeAt: Date,
+    result: ProfitProtectionCounterfactualResult,
+  ): Promise<void> {
     const risk = finite(row.initial_risk_pnl);
     const pnl = finite(row.realised_pnl);
     const actualExitR = risk && risk > 0 && pnl !== null ? pnl / risk : null;
@@ -264,10 +289,15 @@ export class ProfitProtectionCounterfactualService implements OnModuleInit, OnMo
         ON CONFLICT (trade_id, artifact, checkpoint_minutes) DO NOTHING
       `,
       [
-        row.user_id, row.trade_id, row.trade_intent_id, row.broker_connection_id,
+        row.user_id,
+        row.trade_id,
+        row.trade_intent_id,
+        row.broker_connection_id,
         PROFIT_PROTECTION_COUNTERFACTUAL_ARTIFACT,
         PROFIT_PROTECTION_COUNTERFACTUAL_CHECKPOINT_MINUTES,
-        new Date(closeAt.getTime() + PROFIT_PROTECTION_COUNTERFACTUAL_CHECKPOINT_MINUTES * 60_000).toISOString(),
+        new Date(
+          closeAt.getTime() + PROFIT_PROTECTION_COUNTERFACTUAL_CHECKPOINT_MINUTES * 60_000,
+        ).toISOString(),
         result.outcome,
         actualExitR,
         'OBSERVE',

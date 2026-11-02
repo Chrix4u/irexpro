@@ -1418,7 +1418,10 @@ describe('RiskService', () => {
       );
 
       expect(brokerService.getCurrentPriceForConnection).toHaveBeenCalledWith(
-        'user-1', 'conn-1', 'USDJPY', { propagateProviderError: true },
+        'user-1',
+        'conn-1',
+        'USDJPY',
+        { propagateProviderError: true },
       );
       expect(result.decision).toBe('APPROVED');
     });
@@ -1440,7 +1443,9 @@ describe('RiskService', () => {
         }),
       };
       (module.get(ModuleRef).get as jest.Mock).mockImplementation((token: unknown) =>
-        (token as { name?: string })?.name === 'BrokerFxConversionService' ? fxConversion : undefined,
+        (token as { name?: string })?.name === 'BrokerFxConversionService'
+          ? fxConversion
+          : undefined,
       );
 
       const result = await service.validateProposedTrade(

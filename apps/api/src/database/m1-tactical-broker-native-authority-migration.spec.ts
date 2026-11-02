@@ -13,6 +13,8 @@ describe('AllowBrokerNativeM1Authority migration', () => {
 
     const sql = queries.join(' ');
     expect(sql).toContain('DROP CONSTRAINT IF EXISTS chk_m1_tactical_authority');
-    expect(sql).toContain("execution_authority IN ('NONE', 'PAPER_ONLY_RESEARCH', 'BROKER_NATIVE')");
+    expect(sql).toContain(
+      "execution_authority IN ('NONE', 'PAPER_ONLY_RESEARCH', 'BROKER_NATIVE')",
+    );
   });
 });

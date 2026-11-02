@@ -8,7 +8,9 @@ describe('AllowDemoPostEntryExecutionGuard1793600000000', () => {
 
     await migration.up({ query } as unknown as QueryRunner);
 
-    const sql = query.mock.calls.map(([statement]) => String(statement).replace(/\s+/g, ' ')).join(' ');
+    const sql = query.mock.calls
+      .map(([statement]) => String(statement).replace(/\s+/g, ' '))
+      .join(' ');
     expect(sql).toContain('DROP CONSTRAINT IF EXISTS chk_post_entry_shadow_authority');
     expect(sql).toContain('DROP CONSTRAINT IF EXISTS chk_post_entry_shadow_no_execution');
     expect(sql).toContain("execution_authority IN ('NONE', 'DEMO_ONLY')");
