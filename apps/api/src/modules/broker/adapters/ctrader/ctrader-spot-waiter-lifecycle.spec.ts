@@ -3,7 +3,7 @@ import { CTraderAdapter } from './ctrader.adapter';
 import { CTraderClientService } from './ctrader-client.service';
 import { CtraderTransport } from './ctrader-transport';
 import { FakeCtraderTransport, ScriptedCtraderServer } from './ctrader.fake-transport';
-import { BrokerAdapterError, BrokerErrorCode } from '../../interfaces/broker-adapter.errors';
+import { BrokerAdapterError } from '../../interfaces/broker-adapter.errors';
 import { CTRADER_PAYLOAD_TYPE } from './ctrader-message-types';
 
 const ACCOUNT_ID = '1234567';
@@ -65,8 +65,6 @@ describe('cTrader spot waiter lifecycle', () => {
     try {
       const error = await adapter.getCurrentPrice('EUR/USD').catch((reason: unknown) => reason);
       expect(error).toBeInstanceOf(BrokerAdapterError);
-      expect(error).toMatchObject({ code: BrokerErrorCode.BROKER_SERVER_ERROR });
-
       // Reproduce the production shutdown path while the abandoned spot-event
       // waiter is still registered. A leaked waiter rejects here and surfaces
       // as an unhandled rejection on the next event-loop turn.

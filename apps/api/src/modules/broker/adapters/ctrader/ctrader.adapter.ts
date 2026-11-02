@@ -1672,23 +1672,34 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       },
       10_000,
     );
-    await this.client.request(session.env, CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ, {
-      ctidTraderAccountId: ctid,
-      symbolId: [symbolId],
-    });
+    // The waiter exists before the subscribe request so we cannot miss an
+    // immediate spot event. Observe its rejection immediately as well: if the
+    // subscribe request fails (or shutdown happens while it is in flight), the
+    // waiter otherwise becomes an abandoned promise that can later surface as
+    // an unhandled rejection when the client tears down the connection.
+    void eventPromise.catch(() => undefined);
+
+    let subscribed = false;
     try {
+      await this.client.request(session.env, CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ, {
+        ctidTraderAccountId: ctid,
+        symbolId: [symbolId],
+      });
+      subscribed = true;
       const event = await eventPromise;
       return event.payload as unknown as CtraderSpotEventPayload;
     } finally {
-      // Keep the single-flight alive until cTrader acknowledges 2129. Clearing
-      // it before unsubscribe completes lets the next scan send a duplicate
-      // 2127 while the provider still considers this symbol subscribed.
-      await this.client
-        .request(session.env, CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ, {
-          ctidTraderAccountId: ctid,
-          symbolId: [symbolId],
-        })
-        .catch(() => undefined);
+      // Only send 2129 after cTrader acknowledged 2127. This preserves the
+      // existing single-flight lifecycle while avoiding a phantom unsubscribe
+      // when the subscription itself was rejected.
+      if (subscribed) {
+        await this.client
+          .request(session.env, CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ, {
+            ctidTraderAccountId: ctid,
+            symbolId: [symbolId],
+          })
+          .catch(() => undefined);
+      }
     }
   }
 
