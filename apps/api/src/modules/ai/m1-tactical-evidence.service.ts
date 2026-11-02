@@ -6,6 +6,8 @@ import type { M1DriftCounterfactualResult } from './m1-drift-counterfactual';
 import type { M1ShadowPairSideOutcome } from './m1-shadow-pair-side-reliability';
 import { m1UsdRiskAtStop } from './m1-tactical-currency-exposure';
 import type { M5EarlyTransitionEvidence } from './m5-early-transition-handoff';
+import { EXTENSION_EXHAUSTION_SHADOW_ARTIFACT } from './extension-exhaustion-shadow';
+import type { ExtensionExhaustionShadowReliability } from './extension-exhaustion-demo-scout';
 
 export type M1TacticalDecisionRoute = M1ReliabilityRoute | 'ABSTAIN';
 export type M1TacticalDecisionAuthority = 'NONE' | 'PAPER_ONLY_RESEARCH' | 'BROKER_NATIVE';
@@ -484,6 +486,99 @@ export class M1TacticalEvidenceService {
       ensembleScore: number(row.ensemble_score),
       consensusPassed: number(row.consensus_passed),
       consensusRequired: number(row.consensus_required),
+    };
+  }
+
+
+  async loadExtensionExhaustionShadowReliability(input: {
+    userId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    asOf: Date;
+  }): Promise<ExtensionExhaustionShadowReliability> {
+    const instrument = input.instrument.trim().toUpperCase();
+    const rows = (await this.dataSource.query(
+      `
+        WITH candidates AS (
+          SELECT
+            evaluated_at,
+            components -> 'outcome' ->> 'status' AS status,
+            NULLIF(components -> 'outcome' ->> 'netR', '')::numeric AS net_r,
+            FLOOR(EXTRACT(EPOCH FROM evaluated_at) / 900)::bigint AS episode_15m
+          FROM trading.ensemble_shadow_decisions
+          WHERE user_id = $1
+            AND instrument = $2
+            AND direction = $3
+            AND evaluated_at <= $4::timestamptz
+            AND evaluated_at >= $4::timestamptz - INTERVAL '7 days'
+            AND components -> 'extensionExhaustionShadow' ->> 'artifact' = $5
+            AND COALESCE(
+              (components -> 'extensionExhaustionShadow' ->> 'candidate')::boolean,
+              false
+            ) = true
+            AND components ? 'outcome'
+            AND components -> 'outcome' ->> 'status' IN ('WIN', 'LOSS')
+            AND NULLIF(components -> 'outcome' ->> 'netR', '') IS NOT NULL
+        ), deduplicated AS (
+          SELECT evaluated_at, status, net_r
+          FROM (
+            SELECT
+              candidates.*,
+              ROW_NUMBER() OVER (
+                PARTITION BY episode_15m
+                ORDER BY evaluated_at ASC
+              ) AS episode_rank
+            FROM candidates
+          ) ranked
+          WHERE episode_rank = 1
+        )
+        SELECT evaluated_at, status, net_r
+        FROM deduplicated
+        ORDER BY evaluated_at DESC
+      `,
+      [
+        input.userId,
+        instrument,
+        input.direction,
+        input.asOf,
+        EXTENSION_EXHAUSTION_SHADOW_ARTIFACT,
+      ],
+    )) as Array<{
+      evaluated_at: string | Date;
+      status: 'WIN' | 'LOSS';
+      net_r: string | number;
+    }>;
+
+    const netRs = rows
+      .map((row) => Number(row.net_r))
+      .filter((value) => Number.isFinite(value));
+    if (netRs.length === 0) {
+      return {
+        samples: 0,
+        wins: 0,
+        losses: 0,
+        totalNetR: 0,
+        averageNetR: 0,
+        profitFactor: null,
+        recent3R: 0,
+      };
+    }
+    const round = (value: number) => Number(value.toFixed(12));
+    const wins = rows.filter((row) => row.status === 'WIN' && Number.isFinite(Number(row.net_r))).length;
+    const losses = rows.filter((row) => row.status === 'LOSS' && Number.isFinite(Number(row.net_r))).length;
+    const totalNetR = round(netRs.reduce((sum, value) => sum + value, 0));
+    const grossProfitR = netRs.filter((value) => value > 0).reduce((sum, value) => sum + value, 0);
+    const grossLossR = Math.abs(
+      netRs.filter((value) => value < 0).reduce((sum, value) => sum + value, 0),
+    );
+    return {
+      samples: netRs.length,
+      wins,
+      losses,
+      totalNetR,
+      averageNetR: round(totalNetR / netRs.length),
+      profitFactor: grossLossR > 0 ? round(grossProfitR / grossLossR) : null,
+      recent3R: round(netRs.slice(0, 3).reduce((sum, value) => sum + value, 0)),
     };
   }
 
