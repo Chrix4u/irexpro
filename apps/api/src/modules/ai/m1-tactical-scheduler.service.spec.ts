@@ -271,12 +271,7 @@ describe('M1 tactical aligned-currency exposure guard', () => {
     } as any;
 
     await expect(
-      (service as any).resolveM1CurrencyExposureGuard(
-        'user-1',
-        'conn-1',
-        professionalCandidate,
-        4,
-      ),
+      (service as any).resolveM1CurrencyExposureGuard('user-1', 'conn-1', professionalCandidate, 4),
     ).resolves.toMatchObject({
       allowed: true,
       volumeCap: 0.35,
@@ -800,7 +795,19 @@ function phase2Harness(
     },
   );
   const loadMultimodelLossStreakBrake = jest.fn().mockResolvedValue(
-    options.multimodelLossStreakBrake ?? { artifact: 'm1-multimodel-loss-streak-brake-v1', active: false, reason: 'CLEAR', strategyRoute: 'TREND_CONTINUATION', recentClosedTrades: 0, recentLosses: 0, recentWins: 0, cumulativeRealisedPnl: 0, latestClosedAt: null, cooldownHours: 12, cooldownRemainingSeconds: 0 },
+    options.multimodelLossStreakBrake ?? {
+      artifact: 'm1-multimodel-loss-streak-brake-v1',
+      active: false,
+      reason: 'CLEAR',
+      strategyRoute: 'TREND_CONTINUATION',
+      recentClosedTrades: 0,
+      recentLosses: 0,
+      recentWins: 0,
+      cumulativeRealisedPnl: 0,
+      latestClosedAt: null,
+      cooldownHours: 12,
+      cooldownRemainingSeconds: 0,
+    },
   );
   const hasActiveM1Intent = jest
     .fn()
@@ -2076,12 +2083,19 @@ describe('M1 professional v8 DEMO promotion', () => {
         { observedAt: new Date('2026-10-15T09:30:00.000Z'), netR: 0.2 },
       ],
       evidenceByRoute: {
-        M1_EARLY_TRANSITION: [{
-          route: 'M1_EARLY_TRANSITION', instrument: 'EURUSD', direction: 'BUY',
-          policyVersion: 'm1-tactical-v2-m5-lifecycle', realisedPnl: -9, riskAtStop: 9,
-          maxFavorablePnl: 6, profitGiveback: 15,
-          closedAt: new Date('2026-10-15T10:25:00.000Z'),
-        }],
+        M1_EARLY_TRANSITION: [
+          {
+            route: 'M1_EARLY_TRANSITION',
+            instrument: 'EURUSD',
+            direction: 'BUY',
+            policyVersion: 'm1-tactical-v2-m5-lifecycle',
+            realisedPnl: -9,
+            riskAtStop: 9,
+            maxFavorablePnl: 6,
+            profitGiveback: 15,
+            closedAt: new Date('2026-10-15T10:25:00.000Z'),
+          },
+        ],
       },
     });
 
@@ -2130,7 +2144,6 @@ describe('M1 professional v8 DEMO promotion', () => {
   });
 });
 
-
 describe('M1 V8 multi-model DEMO authority', () => {
   const fullAutoSession = {
     id: 'session-demo-1',
@@ -2158,31 +2171,33 @@ describe('M1 V8 multi-model DEMO authority', () => {
       ],
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: {
-          ...result.ensemble,
-          strategyRoute: 'CONFIRMED_REVERSAL',
-          paperAdmitted: true,
-        },
-        trainedExpert: {
-          ...result.trainedExpert,
-          allBrokerNative: true,
-          direction: 'BUY',
-          longVotes: 3,
-          shortVotes: 0,
-          ensembleConfidence: 0.76,
-        },
-        authority: {
-          ...result.authority,
-          executable: true,
-          authorityPath: 'PRIMARY_PLAN_B',
-          blockers: [],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'CONFIRMED_REVERSAL',
+            paperAdmitted: true,
+          },
+          trainedExpert: {
+            ...result.trainedExpert,
+            allBrokerNative: true,
+            direction: 'BUY',
+            longVotes: 3,
+            shortVotes: 0,
+            ensembleConfidence: 0.76,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
+        };
+      });
 
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
 
@@ -2191,15 +2206,9 @@ describe('M1 V8 multi-model DEMO authority', () => {
       brokerConnectionId: 'demo-conn-2',
       instrument: 'EURUSD',
     });
-    expect(h.closeTrade).toHaveBeenCalledWith(
-      'trade-old-sell',
-      'user-1',
-      'AI_CLOSE_SIGNAL',
-    );
+    expect(h.closeTrade).toHaveBeenCalledWith('trade-old-sell', 'user-1', 'AI_CLOSE_SIGNAL');
     expect(h.receiveSignal).not.toHaveBeenCalled();
-    const recorded = h.recordDecision.mock.calls.find(
-      ([value]) => value.direction === 'BUY',
-    )?.[0];
+    const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
     expect(recorded?.executionAuthority).toBe('NONE');
     expect(recorded?.blockers).toContain('M1_DIRECTION_FLIP_EXIT_PENDING');
   });
@@ -2224,31 +2233,31 @@ describe('M1 V8 multi-model DEMO authority', () => {
       ],
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: {
-          ...result.ensemble,
-          strategyRoute: 'EARLY_TRANSITION',
-          paperAdmitted: true,
-        },
-        authority: {
-          ...result.authority,
-          executable: true,
-          authorityPath: 'PRIMARY_PLAN_B',
-          blockers: [],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'EARLY_TRANSITION',
+            paperAdmitted: true,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
+        };
+      });
 
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
 
     expect(h.closeTrade).not.toHaveBeenCalled();
     expect(h.receiveSignal).not.toHaveBeenCalled();
-    const recorded = h.recordDecision.mock.calls.find(
-      ([value]) => value.direction === 'BUY',
-    )?.[0];
+    const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
     expect(recorded?.executionAuthority).toBe('NONE');
     expect(recorded?.blockers).toContain('M1_ACTIVE_OPPOSITE_POSITION');
   });
@@ -2268,7 +2277,12 @@ describe('M1 V8 multi-model DEMO authority', () => {
         recent3R: 2.186,
       },
     });
-    const features = { ...cleanContinuationFeatures(), extensionAtr: 1.2, m5Momentum1Atr: 0.14, m5Momentum3Atr: 0.24 };
+    const features = {
+      ...cleanContinuationFeatures(),
+      extensionAtr: 1.2,
+      m5Momentum1Atr: 0.14,
+      m5Momentum3Atr: 0.24,
+    };
 
     const route = await driveFeatures(h, features, { brokerConnectionId: 'demo-conn-2' });
 
@@ -2300,10 +2314,25 @@ describe('M1 V8 multi-model DEMO authority', () => {
       session: fullAutoSession,
       evidenceByRoute: { M1_TREND_CONTINUATION: [] },
       extensionExhaustionReliability: {
-        samples: 9, wins: 4, losses: 5, totalNetR: 1.0, averageNetR: 0.12, profitFactor: 1.2, recent3R: -0.4,
+        samples: 9,
+        wins: 4,
+        losses: 5,
+        totalNetR: 1.0,
+        averageNetR: 0.12,
+        profitFactor: 1.2,
+        recent3R: -0.4,
       },
     });
-    await driveFeatures(h, { ...cleanContinuationFeatures(), extensionAtr: 1.2, m5Momentum1Atr: 0.14, m5Momentum3Atr: 0.24 }, { brokerConnectionId: 'demo-conn-2' });
+    await driveFeatures(
+      h,
+      {
+        ...cleanContinuationFeatures(),
+        extensionAtr: 1.2,
+        m5Momentum1Atr: 0.14,
+        m5Momentum3Atr: 0.24,
+      },
+      { brokerConnectionId: 'demo-conn-2' },
+    );
     expect(h.receiveSignal).not.toHaveBeenCalled();
     const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
     expect(recorded?.governance.extensionExhaustionDemoScout).toMatchObject({
@@ -2320,10 +2349,25 @@ describe('M1 V8 multi-model DEMO authority', () => {
       trainedExpertState: 'CONFLICT',
       trainedExpertDirection: 'SELL',
       extensionExhaustionReliability: {
-        samples: 9, wins: 4, losses: 5, totalNetR: 1.233, averageNetR: 0.137, profitFactor: 1.235, recent3R: 2.186,
+        samples: 9,
+        wins: 4,
+        losses: 5,
+        totalNetR: 1.233,
+        averageNetR: 0.137,
+        profitFactor: 1.235,
+        recent3R: 2.186,
       },
     });
-    await driveFeatures(h, { ...cleanContinuationFeatures(), extensionAtr: 1.2, m5Momentum1Atr: 0.14, m5Momentum3Atr: 0.24 }, { brokerConnectionId: 'demo-conn-2' });
+    await driveFeatures(
+      h,
+      {
+        ...cleanContinuationFeatures(),
+        extensionAtr: 1.2,
+        m5Momentum1Atr: 0.14,
+        m5Momentum3Atr: 0.24,
+      },
+      { brokerConnectionId: 'demo-conn-2' },
+    );
     expect(h.receiveSignal).not.toHaveBeenCalled();
     const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
     expect(recorded?.governance.extensionExhaustionDemoScout).toMatchObject({
@@ -2339,10 +2383,25 @@ describe('M1 V8 multi-model DEMO authority', () => {
       evidenceByRoute: { M1_TREND_CONTINUATION: [] },
       duplicateSameDirectionIntent: true,
       extensionExhaustionReliability: {
-        samples: 9, wins: 4, losses: 5, totalNetR: 1.233, averageNetR: 0.137, profitFactor: 1.235, recent3R: 2.186,
+        samples: 9,
+        wins: 4,
+        losses: 5,
+        totalNetR: 1.233,
+        averageNetR: 0.137,
+        profitFactor: 1.235,
+        recent3R: 2.186,
       },
     });
-    await driveFeatures(h, { ...cleanContinuationFeatures(), extensionAtr: 1.2, m5Momentum1Atr: 0.14, m5Momentum3Atr: 0.24 }, { brokerConnectionId: 'demo-conn-2' });
+    await driveFeatures(
+      h,
+      {
+        ...cleanContinuationFeatures(),
+        extensionAtr: 1.2,
+        m5Momentum1Atr: 0.14,
+        m5Momentum3Atr: 0.24,
+      },
+      { brokerConnectionId: 'demo-conn-2' },
+    );
     expect(h.receiveSignal).not.toHaveBeenCalled();
     const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
     expect(recorded?.blockers).toContain('M1_EXTENSION_EXHAUSTION_ACTIVE_SAME_SIDE_INTENT');
@@ -2354,27 +2413,51 @@ describe('M1 V8 multi-model DEMO authority', () => {
       session: fullAutoSession,
       evidenceByRoute: { M1_TREND_CONTINUATION: [] },
       extensionExhaustionReliability: {
-        samples: 9, wins: 4, losses: 5, totalNetR: 1.233, averageNetR: 0.137, profitFactor: 1.235, recent3R: 2.186,
+        samples: 9,
+        wins: 4,
+        losses: 5,
+        totalNetR: 1.233,
+        averageNetR: 0.137,
+        profitFactor: 1.235,
+        recent3R: 2.186,
       },
       m5EarlyTransitionEvidence: {
-        instrument: 'EURUSD', direction: 'BUY',
+        instrument: 'EURUSD',
+        direction: 'BUY',
         marketBarTime: new Date('2026-10-15T10:25:00.000Z'),
         evaluatedAt: new Date('2026-10-15T10:29:00.000Z'),
-        strategyRoute: 'EARLY_TRANSITION', paperAdmitted: true, paperExecutionEligible: true,
-        eventRisk: 'CLEAR', driftState: 'NORMAL', netExpectedR: 0.30, ensembleScore: 0.72,
-        consensusPassed: 6, consensusRequired: 6,
+        strategyRoute: 'EARLY_TRANSITION',
+        paperAdmitted: true,
+        paperExecutionEligible: true,
+        eventRisk: 'CLEAR',
+        driftState: 'NORMAL',
+        netExpectedR: 0.3,
+        ensembleScore: 0.72,
+        consensusPassed: 6,
+        consensusRequired: 6,
       },
     });
-    await driveFeatures(h, { ...cleanContinuationFeatures(), extensionAtr: 1.2, m5Momentum1Atr: 0.14, m5Momentum3Atr: 0.24 }, { brokerConnectionId: 'demo-conn-2' });
+    await driveFeatures(
+      h,
+      {
+        ...cleanContinuationFeatures(),
+        extensionAtr: 1.2,
+        m5Momentum1Atr: 0.14,
+        m5Momentum3Atr: 0.24,
+      },
+      { brokerConnectionId: 'demo-conn-2' },
+    );
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
-    expect(h.receiveSignal).toHaveBeenCalledWith(expect.objectContaining({
-      suggestedVolume: 0.2,
-      metadata: expect.objectContaining({
-        m5_early_transition_handoff: true,
-        multimodel_execution_authority_path: 'M5_EARLY_TRANSITION_HANDOFF',
-        extension_exhaustion_demo_scout: false,
+    expect(h.receiveSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        suggestedVolume: 0.2,
+        metadata: expect.objectContaining({
+          m5_early_transition_handoff: true,
+          multimodel_execution_authority_path: 'M5_EARLY_TRANSITION_HANDOFF',
+          extension_exhaustion_demo_scout: false,
+        }),
       }),
-    }));
+    );
     expect(h.loadExtensionExhaustionShadowReliability).not.toHaveBeenCalled();
   });
 
@@ -2400,20 +2483,26 @@ describe('M1 V8 multi-model DEMO authority', () => {
       },
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
-        authority: {
-          ...result.authority,
-          executable: false,
-          authorityPath: 'BLOCKED',
-          rescueVolumeCap: null,
-          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
 
     const route = await driveFeatures(h, cleanContinuationFeatures(), {
       brokerConnectionId: 'demo-conn-2',
@@ -2477,20 +2566,26 @@ describe('M1 V8 multi-model DEMO authority', () => {
       },
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
-        authority: {
-          ...result.authority,
-          executable: false,
-          authorityPath: 'BLOCKED',
-          rescueVolumeCap: null,
-          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
 
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
 
@@ -2881,25 +2976,27 @@ describe('M1 V8 multi-model DEMO authority', () => {
       evidenceByRoute: { M1_TREND_CONTINUATION: maturePositiveContinuation },
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: {
-          ...result.ensemble,
-          strategyRoute: 'TREND_CONTINUATION',
-          paperAdmitted: false,
-          admitted: false,
-        },
-        authority: {
-          ...result.authority,
-          executable: false,
-          authorityPath: 'BLOCKED',
-          rescueVolumeCap: null,
-          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED', 'MULTIMODEL_GOVERNANCE_BLOCKED'],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+            admitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED', 'MULTIMODEL_GOVERNANCE_BLOCKED'],
+          },
+        };
+      });
 
     const route = await driveFeatures(h, cleanContinuationFeatures(), {
       brokerConnectionId: 'demo-conn-2',
@@ -2951,25 +3048,27 @@ describe('M1 V8 multi-model DEMO authority', () => {
       duplicateSameDirectionIntent: true,
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: {
-          ...result.ensemble,
-          strategyRoute: 'TREND_CONTINUATION',
-          paperAdmitted: false,
-          admitted: false,
-        },
-        authority: {
-          ...result.authority,
-          executable: false,
-          authorityPath: 'BLOCKED',
-          rescueVolumeCap: null,
-          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED', 'MULTIMODEL_GOVERNANCE_BLOCKED'],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+            admitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED', 'MULTIMODEL_GOVERNANCE_BLOCKED'],
+          },
+        };
+      });
 
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
 
@@ -3010,20 +3109,26 @@ describe('M1 V8 multi-model DEMO authority', () => {
       evidenceByRoute: { M1_TREND_CONTINUATION: lossStreakEvidence },
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
-        authority: {
-          ...result.authority,
-          executable: false,
-          authorityPath: 'BLOCKED',
-          rescueVolumeCap: null,
-          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
 
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
 
@@ -3045,7 +3150,9 @@ describe('M1 V8 multi-model DEMO authority', () => {
       policyVersion: 'm1-tactical-v2-m5-lifecycle',
       realisedPnl: index === 2 ? -2 : 5,
       riskAtStop: 10,
-      closedAt: new Date(`2026-10-15T${String(10 - Math.floor(index / 3)).padStart(2, '0')}:${String(29 - (index % 3) * 10).padStart(2, '0')}:00.000Z`),
+      closedAt: new Date(
+        `2026-10-15T${String(10 - Math.floor(index / 3)).padStart(2, '0')}:${String(29 - (index % 3) * 10).padStart(2, '0')}:00.000Z`,
+      ),
     }));
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
@@ -3053,20 +3160,26 @@ describe('M1 V8 multi-model DEMO authority', () => {
       evidenceByRoute: { M1_TREND_CONTINUATION: maturePositiveContinuation },
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
-        authority: {
-          ...result.authority,
-          executable: false,
-          authorityPath: 'BLOCKED',
-          rescueVolumeCap: null,
-          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
     const outOfDistribution = cleanContinuationFeatures();
     outOfDistribution.extensionAtr = 1.8;
 
@@ -3097,28 +3210,30 @@ describe('M1 V8 multi-model DEMO authority', () => {
       evidenceByRoute: { M1_EARLY_TRANSITION: [] },
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: {
-          ...result.ensemble,
-          strategyRoute: 'TREND_CONTINUATION',
-          paperAdmitted: false,
-          admitted: false,
-        },
-        authority: {
-          ...result.authority,
-          executable: false,
-          authorityPath: 'BLOCKED',
-          rescueVolumeCap: null,
-          blockers: [
-            'MULTIMODEL_PLAN_B_NOT_ADMITTED',
-            'MULTIMODEL_CONTINUATION_TIMING_NOT_READY',
-          ],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+            admitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: [
+              'MULTIMODEL_PLAN_B_NOT_ADMITTED',
+              'MULTIMODEL_CONTINUATION_TIMING_NOT_READY',
+            ],
+          },
+        };
+      });
 
     const route = await driveFeatures(h, transitionFeatures(), {
       brokerConnectionId: 'demo-conn-2',
@@ -3166,28 +3281,30 @@ describe('M1 V8 multi-model DEMO authority', () => {
     strongTransition.breakoutUpAtr = 0.5;
     strongTransition.efficiency5 = 0.9;
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: {
-          ...result.ensemble,
-          strategyRoute: 'TREND_CONTINUATION',
-          paperAdmitted: false,
-          admitted: false,
-        },
-        authority: {
-          ...result.authority,
-          executable: false,
-          authorityPath: 'BLOCKED',
-          rescueVolumeCap: null,
-          blockers: [
-            'MULTIMODEL_PLAN_B_NOT_ADMITTED',
-            'MULTIMODEL_CONTINUATION_TIMING_NOT_READY',
-          ],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+            admitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: [
+              'MULTIMODEL_PLAN_B_NOT_ADMITTED',
+              'MULTIMODEL_CONTINUATION_TIMING_NOT_READY',
+            ],
+          },
+        };
+      });
 
     const route = await driveFeatures(h, strongTransition, { brokerConnectionId: 'demo-conn-2' });
 
@@ -3219,20 +3336,26 @@ describe('M1 V8 multi-model DEMO authority', () => {
       evidenceByRoute: { M1_EARLY_TRANSITION: [] },
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
-        authority: {
-          ...result.authority,
-          executable: false,
-          authorityPath: 'BLOCKED',
-          rescueVolumeCap: null,
-          blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
 
     await driveFeatures(h, transitionFeatures(), {
       brokerConnectionId: 'demo-conn-2',
@@ -3254,33 +3377,47 @@ describe('M1 V8 multi-model DEMO authority', () => {
       evidenceByRoute: {
         M1_EARLY_TRANSITION: [
           {
-            route: 'M1_EARLY_TRANSITION', instrument: 'EURUSD', direction: 'BUY',
-            policyVersion: 'm1-tactical-v2-m5-lifecycle', realisedPnl: -10, riskAtStop: 10,
+            route: 'M1_EARLY_TRANSITION',
+            instrument: 'EURUSD',
+            direction: 'BUY',
+            policyVersion: 'm1-tactical-v2-m5-lifecycle',
+            realisedPnl: -10,
+            riskAtStop: 10,
             closedAt: new Date('2026-10-15T10:25:00.000Z'),
           },
           {
-            route: 'M1_EARLY_TRANSITION', instrument: 'EURUSD', direction: 'BUY',
-            policyVersion: 'm1-tactical-v2-m5-lifecycle', realisedPnl: -9, riskAtStop: 9,
+            route: 'M1_EARLY_TRANSITION',
+            instrument: 'EURUSD',
+            direction: 'BUY',
+            policyVersion: 'm1-tactical-v2-m5-lifecycle',
+            realisedPnl: -9,
+            riskAtStop: 9,
             closedAt: new Date('2026-10-15T10:15:00.000Z'),
           },
         ],
       },
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
-        authority: {
-          ...result.authority,
-          executable: false,
-          authorityPath: 'BLOCKED',
-          rescueVolumeCap: null,
-          blockers: ['MULTIMODEL_CONTINUATION_TIMING_NOT_READY'],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_CONTINUATION_TIMING_NOT_READY'],
+          },
+        };
+      });
 
     await driveFeatures(h, transitionFeatures(), { brokerConnectionId: 'demo-conn-2' });
 
@@ -3349,21 +3486,28 @@ describe('M1 V8 multi-model DEMO authority', () => {
       trainedExpertState: 'CONFIRM',
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(async (...args: any[]) => {
-      const result = await original(...args);
-      return {
-        ...result,
-        ensemble: { ...result.ensemble, ensembleScore: 0.579, paperAdmitted: false, strategyRoute: 'EARLY_TRANSITION' as const },
-        trainedExpert: { ...result.trainedExpert, ensembleConfidence: 0.738 },
-        authority: {
-          ...result.authority,
-          executable: true,
-          authorityPath: 'HIGH_CONVICTION_RESCUE',
-          rescueVolumeCap: 0.2,
-          blockers: [],
-        },
-      };
-    });
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            ensembleScore: 0.579,
+            paperAdmitted: false,
+            strategyRoute: 'EARLY_TRANSITION' as const,
+          },
+          trainedExpert: { ...result.trainedExpert, ensembleConfidence: 0.738 },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'HIGH_CONVICTION_RESCUE',
+            rescueVolumeCap: 0.2,
+            blockers: [],
+          },
+        };
+      });
 
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
 
@@ -3381,12 +3525,51 @@ describe('M1 V8 multi-model DEMO authority', () => {
   });
 
   it('blocks V8 execution after three recent losses on the same Plan-B pair-side-route while retaining telemetry', async () => {
-    const h = phase2Harness({ rollout: M1_TACTICAL_ROLLOUT_POLICY_V8, session: fullAutoSession, trainedExpertState: 'CONFIRM', multimodelLossStreakBrake: { artifact: 'm1-multimodel-loss-streak-brake-v1', active: true, reason: 'RECENT_MULTIMODEL_LOSS_STREAK', strategyRoute: 'TREND_CONTINUATION', recentClosedTrades: 3, recentLosses: 3, recentWins: 0, cumulativeRealisedPnl: -31.2, latestClosedAt: new Date('2026-10-15T10:25:00.000Z'), cooldownHours: 12, cooldownRemainingSeconds: 42900 } });
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      trainedExpertState: 'CONFIRM',
+      multimodelLossStreakBrake: {
+        artifact: 'm1-multimodel-loss-streak-brake-v1',
+        active: true,
+        reason: 'RECENT_MULTIMODEL_LOSS_STREAK',
+        strategyRoute: 'TREND_CONTINUATION',
+        recentClosedTrades: 3,
+        recentLosses: 3,
+        recentWins: 0,
+        cumulativeRealisedPnl: -31.2,
+        latestClosedAt: new Date('2026-10-15T10:25:00.000Z'),
+        cooldownHours: 12,
+        cooldownRemainingSeconds: 42900,
+      },
+    });
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
-    expect(h.loadMultimodelLossStreakBrake).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', brokerConnectionId: 'demo-conn-2', instrument: 'EURUSD', direction: 'BUY', strategyRoute: 'TREND_CONTINUATION' }));
+    expect(h.loadMultimodelLossStreakBrake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        brokerConnectionId: 'demo-conn-2',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        strategyRoute: 'TREND_CONTINUATION',
+      }),
+    );
     expect(h.receiveSignal).not.toHaveBeenCalled();
-    const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION')?.[0];
-    expect(recorded).toEqual(expect.objectContaining({ executionAuthority: 'NONE', blockers: expect.arrayContaining(['M1_MULTIMODEL_LOSS_STREAK_BRAKE']), governance: expect.objectContaining({ multimodelLossStreakBrake: expect.objectContaining({ active: true, reason: 'RECENT_MULTIMODEL_LOSS_STREAK', recentLosses: 3 }) }) }));
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(recorded).toEqual(
+      expect.objectContaining({
+        executionAuthority: 'NONE',
+        blockers: expect.arrayContaining(['M1_MULTIMODEL_LOSS_STREAK_BRAKE']),
+        governance: expect.objectContaining({
+          multimodelLossStreakBrake: expect.objectContaining({
+            active: true,
+            reason: 'RECENT_MULTIMODEL_LOSS_STREAK',
+            recentLosses: 3,
+          }),
+        }),
+      }),
+    );
   });
 
   it('executes a promoted PAPER champion at reduced size when broker-native trained experts unanimously conflict', async () => {
