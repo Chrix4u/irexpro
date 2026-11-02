@@ -75,6 +75,60 @@ function row(input: {
         oppositeDirectionalProbability: 0.39,
         directionalEdge: 0.22,
       },
+      adaptiveMarketIntelligence: {
+        marketState: {
+          state: 'TRENDING',
+          session: 'LONDON',
+          volatilityState: 'NORMAL',
+          higherTimeframeAgreement: 0.31,
+          h4Alignment: 0.44,
+          reversalScore: 0.18,
+          transitionScore: 0.36,
+          trendStrength: 0.67,
+          stateConfidence: 0.72,
+          tradingConfidence: 0.69,
+        },
+        opportunity: { score: 0.73 },
+        edge: {
+          evidenceClass: 'MATURE',
+          maturity: 'MATURE',
+          recentStatus: 'STABLE',
+          smoothedExpectedR: 0.14,
+          smoothedWinRate: 0.57,
+          profitFactor: 1.22,
+          sharpe: 1.1,
+          averageRealizedR: 0.09,
+          averageMfeR: 0.51,
+          averageMaeR: -0.33,
+        },
+        shadowDirectionalPulse: {
+          status: 'SUPPORTED',
+          quality: 'MATURE',
+          advantageR: 0.19,
+          candidateWeightedR: 0.24,
+          oppositeWeightedR: 0.05,
+          candidateSamples: 12,
+          oppositeSamples: 10,
+        },
+        predictionCalibration: {
+          maturity: 'MATURE',
+          reason: 'CALIBRATED',
+          calibratedNetExpectedR: 0.12,
+          calibratedWinProbability: 0.56,
+          confidenceCorrection: -0.03,
+          empiricalWinRate: 0.55,
+          profitFactor: 1.18,
+          rawConfidence: 0.68,
+          rawNetExpectedR: 0.16,
+          samples: 18,
+        },
+        exposure: {
+          diversificationQuality: 0.77,
+          correlatedExposureScore: 0.21,
+          largestAlignedCurrencyConcentration: 0.34,
+          sameInstrumentDirectionalRisk: 0.08,
+        },
+      },
       outcome: input.result,
       ...(input.components ?? {}),
     },
@@ -181,12 +235,21 @@ describe('side-selection three-class dataset exporter', () => {
     assert.equal(report.pairedEpisodes, 1);
     assert.equal(report.rows.length, 2);
     const serialized = JSON.stringify(report.rows[0]).toLowerCase();
-    for (const forbidden of ['realisedpnl', 'mfe', 'mae', 'close_reason', 'postentrytelemetry']) {
+    for (const forbidden of ['realisedpnl', 'close_reason', 'postentrytelemetry']) {
       assert.ok(!serialized.includes(forbidden), forbidden);
+    }
+    const exportedKeys = new Set(Object.keys(report.rows[0]).map((key) => key.toLowerCase()));
+    for (const forbiddenKey of ['mfe', 'mae', 'realised_pnl', 'post_entry_telemetry']) {
+      assert.ok(!exportedKeys.has(forbiddenKey), forbiddenKey);
     }
     assert.equal(report.rows[0].strategy_route, 'EARLY_TRANSITION');
     assert.equal(report.rows[0].governance_net_expected_r, 0.16);
     assert.equal(report.rows[0].calibration_directional_edge, 0.22);
+    assert.equal(report.rows[0].market_state_higher_timeframe_agreement, 0.31);
+    assert.equal(report.rows[0].edge_smoothed_expected_r, 0.14);
+    assert.equal(report.rows[0].shadow_pulse_advantage_r, 0.19);
+    assert.equal(report.rows[0].prediction_calibrated_win_probability, 0.56);
+    assert.equal(report.rows[0].exposure_diversification_quality, 0.77);
   });
 
   it('uses exact read-only scope and rolls back when unavailable', async () => {

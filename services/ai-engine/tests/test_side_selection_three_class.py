@@ -5,38 +5,54 @@ import pandas as pd
 import pytest
 
 from app.domain.training.side_selection_three_class import (
-    CATEGORICAL_FEATURES,
-    NUMERIC_FEATURES,
+    BASE_CATEGORICAL_FEATURES,
+    BASE_NUMERIC_FEATURES,
+    build_episode_dataset,
     build_preprocessor,
-    operational_labels,
-    episode_policy_actions,
     model_feature_columns,
+    operational_labels,
+    policy_actions,
     split_research_holdout,
 )
 
 
-def base_rows() -> pd.DataFrame:
+def direction_rows() -> pd.DataFrame:
     rows = []
-    for episode, minute in (("e1", 0), ("e2", 20), ("e3", 40)):
+    specs = [
+        # episode, minute, BUY label/R, SELL label/R
+        ("e1", 0, "KEEP", 1.5, "FLIP", -1.0),
+        ("e2", 20, "FLIP", -1.0, "KEEP", 1.5),
+        ("e3", 40, "ABSTAIN", -1.0, "ABSTAIN", -1.0),
+    ]
+    for episode, minute, buy_label, buy_r, sell_label, sell_r in specs:
         decision = pd.Timestamp("2026-11-01T10:00:00Z") + pd.Timedelta(minutes=minute)
         resolved = decision + pd.Timedelta(minutes=10)
-        for direction in ("BUY", "SELL"):
-            rows.append(
-                {
-                    "episode_id": episode,
-                    "decision_time": decision,
-                    "market_bar_time": decision,
-                    "target_resolved_at": resolved,
-                    "instrument": "EURUSD",
-                    "direction": direction,
-                    "policy_version": "p1",
-                    "label": "KEEP",
-                    "target_original_net_r": 1.5 if direction == "BUY" else -1.0,
-                    "target_opposite_net_r": -1.0 if direction == "BUY" else 1.5,
-                    "strategy_route": "EARLY_TRANSITION",
-                    "candidate_score": 0.7,
-                }
-            )
+        for direction, label, own_r, opposite_r, score in (
+            ("BUY", buy_label, buy_r, sell_r, 0.80),
+            ("SELL", sell_label, sell_r, buy_r, 0.60),
+        ):
+            row = {
+                "episode_id": episode,
+                "decision_time": decision,
+                "market_bar_time": decision,
+                "target_resolved_at": resolved,
+                "instrument": "EURUSD",
+                "direction": direction,
+                "policy_version": "p1",
+                "label": label,
+                "target_original_net_r": own_r,
+                "target_opposite_net_r": opposite_r,
+                "strategy_route": "EARLY_TRANSITION" if direction == "BUY" else "TREND_CONTINUATION",
+                "candidate_score": score,
+                "short_horizon_momentum_atr": 0.3 if direction == "BUY" else -0.2,
+            }
+            for name in BASE_CATEGORICAL_FEATURES:
+                row.setdefault(name, "UNKNOWN")
+            for name in BASE_NUMERIC_FEATURES:
+                row.setdefault(name, np.nan)
+            row["candidate_score"] = score
+            row["short_horizon_momentum_atr"] = 0.3 if direction == "BUY" else -0.2
+            rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -55,32 +71,40 @@ def test_operational_labels_force_low_confidence_to_abstain():
     assert result.confidence.tolist() == pytest.approx([0.72, 0.65, 0.40, 0.75])
 
 
-def test_episode_policy_combines_relative_keep_flip_into_one_absolute_side():
-    frame = base_rows().iloc[:4].copy()
-    predicted = np.asarray(["KEEP", "FLIP", "KEEP", "KEEP"], dtype=object)
-    confidence = np.asarray([0.8, 0.7, 0.9, 0.85], dtype=float)
+def test_episode_dataset_uses_higher_score_primary_and_pairwise_deltas():
+    episodes = build_episode_dataset(direction_rows())
 
-    actions = episode_policy_actions(frame, predicted, confidence)
-
-    first = actions.loc[actions["episode_id"] == "e1"].iloc[0]
-    assert first["action"] == "BUY"
-    assert first["realized_r"] == pytest.approx(1.5)
-    second = actions.loc[actions["episode_id"] == "e2"].iloc[0]
-    assert second["action"] == "ABSTAIN"
-    assert second["realized_r"] == pytest.approx(0.0)
+    assert episodes["label"].tolist() == ["KEEP", "FLIP", "ABSTAIN"]
+    assert episodes["primary_direction"].tolist() == ["BUY", "BUY", "BUY"]
+    assert episodes["primary__candidate_score"].tolist() == pytest.approx([0.8, 0.8, 0.8])
+    assert episodes["opposite__candidate_score"].tolist() == pytest.approx([0.6, 0.6, 0.6])
+    assert episodes["delta__candidate_score"].tolist() == pytest.approx([0.2, 0.2, 0.2])
+    assert episodes["delta__short_horizon_momentum_atr"].tolist() == pytest.approx([0.5, 0.5, 0.5])
+    assert episodes["primary__strategy_route"].tolist() == ["EARLY_TRANSITION"] * 3
+    assert episodes["opposite__strategy_route"].tolist() == ["TREND_CONTINUATION"] * 3
 
 
-def test_holdout_split_keeps_episode_rows_together_and_purges_labels_resolving_after_boundary():
-    frame = base_rows()
-    # Make e1's target resolve after the future boundary so it cannot remain in training.
-    frame.loc[frame["episode_id"] == "e1", "target_resolved_at"] = pd.Timestamp(
+def test_policy_actions_score_keep_flip_and_abstain_once_per_episode():
+    episodes = build_episode_dataset(direction_rows())
+    predicted = np.asarray(["KEEP", "FLIP", "ABSTAIN"], dtype=object)
+    confidence = np.asarray([0.8, 0.75, 0.9], dtype=float)
+
+    actions = policy_actions(episodes, predicted, confidence)
+
+    assert actions["action"].tolist() == ["KEEP", "FLIP", "ABSTAIN"]
+    assert actions["realized_r"].tolist() == pytest.approx([1.5, 1.5, 0.0])
+
+
+def test_holdout_split_keeps_episode_atomic_and_purges_labels_resolving_after_boundary():
+    episodes = build_episode_dataset(direction_rows())
+    episodes.loc[episodes["episode_id"] == "e1", "target_resolved_at"] = pd.Timestamp(
         "2026-11-01T10:45:00Z"
     )
 
     research, holdout, boundary = split_research_holdout(
-        frame,
+        episodes,
         holdout_fraction=1 / 3,
-        min_holdout_rows=2,
+        min_holdout_rows=1,
     )
 
     assert boundary == pd.Timestamp("2026-11-01T10:40:00Z")
@@ -89,25 +113,17 @@ def test_holdout_split_keeps_episode_rows_together_and_purges_labels_resolving_a
     assert set(research["episode_id"]) == {"e2"}
 
 
-def test_preprocessor_handles_unseen_categories_and_model_features_exclude_targets():
-    frame = base_rows()
-    for name in CATEGORICAL_FEATURES:
-        if name not in frame:
-            frame[name] = "UNKNOWN"
-    for name in NUMERIC_FEATURES:
-        if name not in frame:
-            frame[name] = np.nan
-    frame["strategy_route"] = ["EARLY_TRANSITION"] * len(frame)
-
-    features = model_feature_columns(frame)
+def test_preprocessor_handles_unseen_categories_and_excludes_targets():
+    episodes = build_episode_dataset(direction_rows())
+    features = model_feature_columns(episodes)
     assert "label" not in features
-    assert "target_original_net_r" not in features
-    assert "target_opposite_net_r" not in features
+    assert "target_keep_r" not in features
+    assert "target_flip_r" not in features
     assert "target_resolved_at" not in features
 
-    train = frame.iloc[:4].copy()
-    valid = frame.iloc[4:].copy()
-    valid.loc[:, "strategy_route"] = "NEVER_SEEN_ROUTE"
+    train = episodes.iloc[:2].copy()
+    valid = episodes.iloc[2:].copy()
+    valid.loc[:, "primary__strategy_route"] = "NEVER_SEEN_ROUTE"
     preprocessor = build_preprocessor()
     transformed_train = preprocessor.fit_transform(train[features])
     transformed_valid = preprocessor.transform(valid[features])
@@ -116,6 +132,6 @@ def test_preprocessor_handles_unseen_categories_and_model_features_exclude_targe
 
 
 def test_holdout_split_fails_closed_when_future_evidence_is_too_small():
-    frame = base_rows()
-    with pytest.raises(ValueError, match="future holdout requires at least 4 rows"):
-        split_research_holdout(frame, holdout_fraction=1 / 3, min_holdout_rows=4)
+    episodes = build_episode_dataset(direction_rows())
+    with pytest.raises(ValueError, match="future holdout requires at least 2 episodes"):
+        split_research_holdout(episodes, holdout_fraction=1 / 3, min_holdout_rows=2)
