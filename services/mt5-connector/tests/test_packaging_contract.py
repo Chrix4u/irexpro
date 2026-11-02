@@ -50,8 +50,12 @@ def test_windows_packaging_contract_is_releaseable() -> None:
     assert "mt5-connector-v*" in workflow_text
     assert "branches: [main]" in workflow_text
     assert "deploy/daily-loss-reset-20261028" not in workflow_text
-    assert "contents: read" in workflow_text
-    assert "contents: write" not in workflow_text
+    build_section, publish_section = workflow_text.split("  publish-tag-release:", 1)
+    assert "contents: read" in build_section
+    assert "contents: write" not in build_section
+    assert "contents: write" in publish_section
+    assert "if: startsWith(github.ref, 'refs/tags/mt5-connector-v')" in publish_section
+    assert "needs: build-windows" in publish_section
     assert "persist-credentials: false" in workflow_text
     assert "ref: ${{ env.CANDIDATE_SHA }}" in workflow_text
     assert "pytest" in workflow_text
