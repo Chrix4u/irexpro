@@ -1,10 +1,15 @@
-import type { TradeExecutionView } from '@irexpro/types/execution';
+import type {
+  ClosedTradeReportQuery,
+  ClosedTradeReportView,
+  TradeExecutionView,
+} from '@irexpro/types/execution';
 import type { ApiClient } from './index';
 
 export interface ExecutionApi {
-  listOpenPositions(): Promise<TradeExecutionView[]>;
-  listRecentExecutions(limit?: number): Promise<TradeExecutionView[]>;
-  listClosedExecutions(limit?: number): Promise<TradeExecutionView[]>;
+  listOpenPositions(brokerConnectionId?: string): Promise<TradeExecutionView[]>;
+  listRecentExecutions(limit?: number, brokerConnectionId?: string): Promise<TradeExecutionView[]>;
+  listClosedExecutions(limit?: number, brokerConnectionId?: string): Promise<TradeExecutionView[]>;
+  getClosedTradeReport(query?: ClosedTradeReportQuery): Promise<ClosedTradeReportView>;
 }
 
 /**
@@ -17,21 +22,49 @@ export interface ExecutionApi {
 export function createExecutionApi(
   client: Pick<ApiClient, 'request'>,
 ): ExecutionApi {
-  return {
-    listOpenPositions: () =>
-      client.request<TradeExecutionView[]>('/execution/positions/open'),
+  const brokerQuery = (brokerConnectionId?: string) =>
+    brokerConnectionId ? `brokerConnectionId=${encodeURIComponent(brokerConnectionId)}` : '';
 
-    listRecentExecutions: (limit = 50) => {
-      const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
+  return {
+    listOpenPositions: (brokerConnectionId) => {
+      const scope = brokerQuery(brokerConnectionId);
       return client.request<TradeExecutionView[]>(
-        `/execution/trades/recent?limit=${safeLimit}`,
+        `/execution/positions/open${scope ? `?${scope}` : ''}`,
       );
     },
 
-    listClosedExecutions: (limit = 50) => {
+    listRecentExecutions: (limit = 50, brokerConnectionId) => {
       const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
+      const scope = brokerQuery(brokerConnectionId);
       return client.request<TradeExecutionView[]>(
-        `/execution/trades/closed?limit=${safeLimit}`,
+        `/execution/trades/recent?limit=${safeLimit}${scope ? `&${scope}` : ''}`,
+      );
+    },
+
+    listClosedExecutions: (limit = 50, brokerConnectionId) => {
+      const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
+      const scope = brokerQuery(brokerConnectionId);
+      return client.request<TradeExecutionView[]>(
+        `/execution/trades/closed?limit=${safeLimit}${scope ? `&${scope}` : ''}`,
+      );
+    },
+
+    getClosedTradeReport: (query = {}) => {
+      const page = Math.max(1, Math.trunc(query.page ?? 1));
+      const pageSize = Math.min(100, Math.max(1, Math.trunc(query.pageSize ?? 25)));
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (query.brokerConnectionId) params.set('brokerConnectionId', query.brokerConnectionId);
+      if (query.from) params.set('from', query.from);
+      if (query.to) params.set('to', query.to);
+      if (query.instrument) params.set('instrument', query.instrument.trim().toUpperCase());
+      if (query.direction) params.set('direction', query.direction);
+      if (query.outcome && query.outcome !== 'ALL') params.set('outcome', query.outcome);
+      if (query.closeReason) params.set('closeReason', query.closeReason);
+      return client.request<ClosedTradeReportView>(
+        `/execution/trades/closed/report?${params.toString()}`,
       );
     },
   };

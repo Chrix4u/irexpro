@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   startExecutionModeForBroker,
+  type ClosedTradeReportSummaryView,
   type UserCapitalAllocationView,
   type TradeExecutionView,
 } from "@irexpro/types/execution";
@@ -30,16 +31,35 @@ import { formatAgeSeconds } from "@/lib/duration";
 import { mapApiError } from "@/lib/error-mapping";
 import { loadLiveAccountPositions } from "@/lib/live-account";
 import { resolveAiOpenPositionRows } from "@/lib/ai-open-positions";
-import { loadMarketIntelligence } from "@/lib/market-intelligence";
+import { executionPathDiagnostics } from "@/lib/trade-path-diagnostics";
+import {
+  loadLiveMarketQuote,
+  loadMarketIntelligence,
+} from "@/lib/market-intelligence";
 import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
 import {
+  LIVE_SCAN_STAGES,
+  deriveLiveScanFrame,
+  mergeLiveQuoteIntoCandles,
+  reconcileLiveCandles,
+  selectChartWindow,
+  shiftChartWindow,
+  zoomChartWindow,
+  type LiveScanFrame,
+} from "@/lib/ai-live-visuals";
+import {
+  deriveActiveModelUiState,
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
   hasExternalProviderPerformanceUiShape,
+  hasM1TacticalStatusUiShape,
   hasVpsScannerUiShape,
+  type M1TacticalStatusView,
 } from "@/lib/vps-scanner-status";
 import {
+  loadClosedTradeReport,
   loadTraderExecutionSnapshot,
+  summarizeRealisedExecutionWindow,
   summarizeRecentExecutionActivity,
   type TraderExecutionSnapshot,
 } from "@/lib/trader-execution";
@@ -48,7 +68,15 @@ import {
   type TraderTerminalStatus,
   type TerminalBrokerView,
 } from "@/lib/trader-terminal-status";
-import { prepareBrokerForAutomationStart } from "@/lib/trader-session";
+import {
+  dailyLossProtectionMessage,
+  dailyRiskCooldownFromViolation,
+  executionBlockedReasons,
+  prepareBrokerForAutomationStart,
+  resetDailyLossProtection,
+  resetDailyLossProtectionForBroker,
+  shouldOfferRiskResetAfterEndedSession,
+} from "@/lib/trader-session";
 import "./ai-trader.css";
 
 function formatTimestamp(value: string | null | undefined): string {
@@ -1204,6 +1232,7 @@ function PositionTable({
 function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
   const realized = trade.status === "CLOSED" ? trade.realisedPnl : null;
   const executionReason = executionReasonLabel(trade.executionReasonCode);
+  const pathDiagnostics = executionPathDiagnostics(trade);
   return (
     <article className="ai-activity-row">
       <div className="ai-activity-row__symbol">
@@ -1248,6 +1277,34 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
               : money(trade.realisedPnl, trade.accountCurrency)}
           </strong>
         </div>
+        {pathDiagnostics ? (
+          <>
+            <div>
+              <span>Peak P&amp;L</span>
+              <strong>{signedMoney(pathDiagnostics.maxFavorablePnl, trade.accountCurrency)}</strong>
+            </div>
+            <div>
+              <span>Profit give-back</span>
+              <strong>{money(pathDiagnostics.profitGiveback, trade.accountCurrency)}</strong>
+            </div>
+            <div>
+              <span>Worst excursion</span>
+              <strong>{signedMoney(pathDiagnostics.maxAdversePnl, trade.accountCurrency)}</strong>
+            </div>
+            <div>
+              <span>Path observations</span>
+              <strong>{pathDiagnostics.observationCount?.toLocaleString() ?? "—"}</strong>
+            </div>
+            <div>
+              <span>Peak observed</span>
+              <strong>
+                {pathDiagnostics.peakObservedAt
+                  ? formatTimestamp(pathDiagnostics.peakObservedAt)
+                  : "—"}
+              </strong>
+            </div>
+          </>
+        ) : null}
         <div>
           <span>Commission</span>
           <strong>{money(trade.commission, trade.accountCurrency)}</strong>
@@ -1323,6 +1380,8 @@ function TradeReadinessGauge({
   tradeExpected,
   instrument,
   direction,
+  scanFrame,
+  lastRunAt,
 }: {
   score: number;
   band: "WAITING" | "FORMING" | "READY";
@@ -1331,9 +1390,16 @@ function TradeReadinessGauge({
   tradeExpected: boolean;
   instrument: string | null;
   direction: "BUY" | "SELL" | null;
+  scanFrame: LiveScanFrame;
+  lastRunAt: string | null;
 }) {
   const angle = -180 + Math.max(0, Math.min(100, score)) * 1.8;
+  const scanAngle = -180 + scanFrame.sweepPercent * 1.8;
   const tone = band === "READY" ? "ready" : band === "FORMING" ? "forming" : "waiting";
+  const lastRunAge = lastRunAt
+    ? Math.max(0, Math.floor((Date.now() - new Date(lastRunAt).getTime()) / 1000))
+    : null;
+
   return (
     <section className={`ai-readiness ai-readiness--${tone}`} aria-labelledby="trade-readiness-title">
       <div className="ai-readiness__head">
@@ -1355,11 +1421,37 @@ function TradeReadinessGauge({
         aria-valuetext={`${headline}, ${score} percent`}
       >
         <div className="ai-readiness__arc" aria-hidden="true">
+          <span className="ai-readiness__scan-needle" style={{ transform: `rotate(${scanAngle}deg)` }} />
           <span className="ai-readiness__needle" style={{ transform: `rotate(${angle}deg)` }} />
           <span className="ai-readiness__hub" />
         </div>
         <strong className="ai-readiness__score">{score}</strong>
         <span className="ai-readiness__score-label">/ 100</span>
+      </div>
+      <div className="ai-readiness__scan-live">
+        <span className="ai-readiness__scan-pulse" aria-hidden="true" />
+        <div>
+          <span>Scanning now</span>
+          <strong>{scanFrame.stage.label}</strong>
+          <small>
+            {scanFrame.stage.detail}
+            {lastRunAge != null && Number.isFinite(lastRunAge)
+              ? ` · Last model decision ${lastRunAge}s ago`
+              : ""}
+          </small>
+        </div>
+      </div>
+      <div className="ai-readiness__pipeline" aria-label="Live AI scanning pipeline">
+        {LIVE_SCAN_STAGES.map((stage, index) => (
+          <div
+            key={stage.id}
+            className={index === scanFrame.stageIndex ? "is-active" : ""}
+            title={stage.detail}
+          >
+            <i aria-hidden="true" />
+            <span>{stage.label}</span>
+          </div>
+        ))}
       </div>
       <div className="ai-readiness__copy">
         <strong>{headline}</strong>
@@ -1378,7 +1470,7 @@ function TradeReadinessGauge({
       <p className="ai-readiness__disclaimer">
         {tradeExpected
           ? "Green means the current setup is eligible. Final dispatch checks can still prevent an order if conditions change."
-          : "The AI stays out until the required model, market, risk and execution conditions align."}
+          : "The white needle is the real readiness score. The moving teal sweep shows continuous scanning activity; it does not change the model score."}
       </p>
     </section>
   );
@@ -1438,10 +1530,12 @@ function RealisedPnlMiniChart({
 
 function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [chartType, setChartType] = useState<"CANDLES" | "LINE" | "AREA">("CANDLES");
+  const [visibleCount, setVisibleCount] = useState(50);
+  const [windowOffset, setWindowOffset] = useState(0);
+
   if (!candles.length) {
-    return (
-      <div className="ai-market-chart__empty">Waiting for market candles…</div>
-    );
+    return <div className="ai-market-chart__empty">Waiting for market candles…</div>;
   }
 
   const parsed = candles
@@ -1454,63 +1548,135 @@ function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
       volumeN: Number(candle.volume),
     }))
     .filter((candle) =>
-      [candle.openN, candle.highN, candle.lowN, candle.closeN].every(
-        Number.isFinite,
-      ),
+      [candle.openN, candle.highN, candle.lowN, candle.closeN].every(Number.isFinite),
     );
-  if (!parsed.length)
-    return <div className="ai-market-chart__empty">Chart unavailable</div>;
+  if (!parsed.length) return <div className="ai-market-chart__empty">Chart unavailable</div>;
 
+  const visible = selectChartWindow(parsed, visibleCount, windowOffset);
   const width = 820;
   const height = 320;
   const priceBottom = 245;
   const volumeTop = 262;
   const padX = 26;
-  const min = Math.min(...parsed.map((candle) => candle.lowN));
-  const max = Math.max(...parsed.map((candle) => candle.highN));
+  const min = Math.min(...visible.map((candle) => candle.lowN));
+  const max = Math.max(...visible.map((candle) => candle.highN));
   const range = Math.max(max - min, Math.abs(max) * 0.0001, 0.00001);
-  const maxVolume = Math.max(...parsed.map((candle) => candle.volumeN), 1);
-  const slot = (width - padX * 2) / Math.max(parsed.length, 1);
-  const bodyWidth = Math.max(2.2, Math.min(8, slot * 0.58));
-  const y = (value: number) =>
-    14 + ((max - value) / range) * (priceBottom - 28);
-  const activeIndex = hoveredIndex == null ? parsed.length - 1 : hoveredIndex;
-  const active = parsed[Math.max(0, Math.min(activeIndex, parsed.length - 1))];
+  const maxVolume = Math.max(...visible.map((candle) => candle.volumeN), 1);
+  const slot = (width - padX * 2) / Math.max(visible.length, 1);
+  const bodyWidth = Math.max(2.2, Math.min(10, slot * 0.58));
+  const y = (value: number) => 14 + ((max - value) / range) * (priceBottom - 28);
+  const xAt = (index: number) => padX + slot * index + slot / 2;
+  const activeIndex = hoveredIndex == null ? visible.length - 1 : hoveredIndex;
+  const active = visible[Math.max(0, Math.min(activeIndex, visible.length - 1))]!;
+  const linePath = visible
+    .map((candle, index) => `${index === 0 ? "M" : "L"} ${xAt(index)} ${y(candle.closeN)}`)
+    .join(" ");
+  const areaPath = visible.length
+    ? `${linePath} L ${xAt(visible.length - 1)} ${priceBottom} L ${xAt(0)} ${priceBottom} Z`
+    : "";
+  const maxOffset = Math.max(0, parsed.length - Math.min(parsed.length, visibleCount));
+  const atLatest = windowOffset === 0;
 
-  const onMove = (event: React.MouseEvent<SVGSVGElement>) => {
+  const onMove = (event: React.PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const x = ((event.clientX - rect.left) / rect.width) * width;
     const index = Math.round((x - padX - slot / 2) / slot);
-    setHoveredIndex(Math.max(0, Math.min(parsed.length - 1, index)));
+    setHoveredIndex(Math.max(0, Math.min(visible.length - 1, index)));
+  };
+
+  const resetView = () => {
+    setVisibleCount(Math.min(50, Math.max(20, parsed.length)));
+    setWindowOffset(0);
+    setHoveredIndex(null);
   };
 
   return (
     <div className="ai-market-chart">
+      <div className="ai-market-chart__toolbar">
+        <div className="ai-market-chart__type" aria-label="Chart type">
+          {(["CANDLES", "LINE", "AREA"] as const).map((type) => (
+            <button
+              key={type}
+              type="button"
+              className={chartType === type ? "is-active" : ""}
+              onClick={() => setChartType(type)}
+              aria-pressed={chartType === type}
+            >
+              {type === "CANDLES" ? "Candles" : type === "LINE" ? "Line" : "Area"}
+            </button>
+          ))}
+        </div>
+        <div className="ai-market-chart__nav" aria-label="Chart navigation">
+          <button
+            type="button"
+            onClick={() => setWindowOffset((value) => shiftChartWindow(value, "BACK", visibleCount, parsed.length))}
+            disabled={windowOffset >= maxOffset}
+            aria-label="Pan chart backward"
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            onClick={() => setWindowOffset((value) => shiftChartWindow(value, "FORWARD", visibleCount, parsed.length))}
+            disabled={windowOffset <= 0}
+            aria-label="Pan chart forward"
+          >
+            →
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setVisibleCount((value) => zoomChartWindow(value, "OUT", parsed.length));
+              setWindowOffset(0);
+            }}
+            disabled={visibleCount >= parsed.length}
+            aria-label="Zoom chart out"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setVisibleCount((value) => zoomChartWindow(value, "IN", parsed.length));
+              setWindowOffset(0);
+            }}
+            disabled={visibleCount <= 20}
+            aria-label="Zoom chart in"
+          >
+            +
+          </button>
+          <button type="button" onClick={resetView} aria-label="Reset chart view">
+            Reset
+          </button>
+        </div>
+      </div>
+      <div className="ai-market-chart__status">
+        <span className={atLatest ? "is-live" : ""}>{atLatest ? "LIVE" : "HISTORY"}</span>
+        <span>{visible.length} of {parsed.length} bars</span>
+        <span>{chartType === "CANDLES" ? "OHLC + volume" : `${chartType.toLowerCase()} close-price view`}</span>
+      </div>
       <div className="ai-market-chart__ohlc">
         <span>{new Date(active.timestamp).toLocaleString()}</span>
-        <span>
-          O <strong>{active.open}</strong>
-        </span>
-        <span>
-          H <strong>{active.high}</strong>
-        </span>
-        <span>
-          L <strong>{active.low}</strong>
-        </span>
-        <span>
-          C <strong>{active.close}</strong>
-        </span>
-        <span>
-          Vol <strong>{active.volume}</strong>
-        </span>
+        <span>O <strong>{active.open}</strong></span>
+        <span>H <strong>{active.high}</strong></span>
+        <span>L <strong>{active.low}</strong></span>
+        <span>C <strong>{active.close}</strong></span>
+        <span>Vol <strong>{active.volume}</strong></span>
       </div>
       <svg
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label="Interactive candlestick chart"
-        onMouseMove={onMove}
-        onMouseLeave={() => setHoveredIndex(null)}
+        aria-label={`Interactive ${chartType.toLowerCase()} market chart`}
+        onPointerMove={onMove}
+        onPointerLeave={() => setHoveredIndex(null)}
+        onDoubleClick={resetView}
       >
+        <defs>
+          <linearGradient id="irex-market-area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="currentColor" stopOpacity="0.24" />
+            <stop offset="100%" stopColor="currentColor" stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
         {[0.2, 0.4, 0.6, 0.8].map((fraction) => (
           <line
             key={fraction}
@@ -1521,60 +1687,62 @@ function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
             y2={14 + (priceBottom - 28) * fraction}
           />
         ))}
-        {parsed.map((candle, index) => {
-          const x = padX + slot * index + slot / 2;
+        {visible.map((candle, index) => {
+          const x = xAt(index);
           const isUp = candle.closeN >= candle.openN;
-          const top = y(Math.max(candle.openN, candle.closeN));
-          const bottom = y(Math.min(candle.openN, candle.closeN));
           const volumeHeight = Math.max(2, (candle.volumeN / maxVolume) * 42);
           return (
-            <g
-              key={`${candle.timestamp}-${index}`}
-              className={isUp ? "is-up" : "is-down"}
-            >
-              <line
-                className="ai-market-chart__wick"
-                x1={x}
-                x2={x}
-                y1={y(candle.highN)}
-                y2={y(candle.lowN)}
-              />
-              <rect
-                className="ai-market-chart__candle"
-                x={x - bodyWidth / 2}
-                y={Math.min(top, bottom)}
-                width={bodyWidth}
-                height={Math.max(1.8, Math.abs(bottom - top))}
-                rx="1.2"
-              />
-              <rect
-                className="ai-market-chart__volume"
-                x={x - bodyWidth / 2}
-                y={volumeTop + 42 - volumeHeight}
-                width={bodyWidth}
-                height={volumeHeight}
-                rx="1"
-              />
-            </g>
+            <rect
+              key={`vol-${candle.timestamp}-${index}`}
+              className={`ai-market-chart__volume ${isUp ? "is-up" : "is-down"}`}
+              x={x - Math.max(1.5, bodyWidth / 2)}
+              y={volumeTop + 42 - volumeHeight}
+              width={Math.max(3, bodyWidth)}
+              height={volumeHeight}
+              rx="1"
+            />
           );
         })}
-        {hoveredIndex != null &&
-          (() => {
-            const x = padX + slot * activeIndex + slot / 2;
+        {chartType === "CANDLES" ? (
+          visible.map((candle, index) => {
+            const x = xAt(index);
+            const isUp = candle.closeN >= candle.openN;
+            const top = y(Math.max(candle.openN, candle.closeN));
+            const bottom = y(Math.min(candle.openN, candle.closeN));
             return (
-              <line
-                className="ai-market-chart__crosshair"
-                x1={x}
-                x2={x}
-                y1="8"
-                y2={height - 10}
-              />
+              <g key={`${candle.timestamp}-${index}`} className={isUp ? "is-up" : "is-down"}>
+                <line className="ai-market-chart__wick" x1={x} x2={x} y1={y(candle.highN)} y2={y(candle.lowN)} />
+                <rect
+                  className="ai-market-chart__candle"
+                  x={x - bodyWidth / 2}
+                  y={Math.min(top, bottom)}
+                  width={bodyWidth}
+                  height={Math.max(1.8, Math.abs(bottom - top))}
+                  rx="1.2"
+                />
+              </g>
             );
-          })()}
+          })
+        ) : (
+          <>
+            {chartType === "AREA" ? <path className="ai-market-chart__area-price" d={areaPath} /> : null}
+            <path className="ai-market-chart__price-line" d={linePath} />
+          </>
+        )}
+        {hoveredIndex != null ? (
+          <line
+            className="ai-market-chart__crosshair"
+            x1={xAt(activeIndex)}
+            x2={xAt(activeIndex)}
+            y1="8"
+            y2={height - 10}
+          />
+        ) : null}
       </svg>
       <div className="ai-market-chart__range">
-        <span>{min.toFixed(3)}</span>
-        <span>{max.toFixed(3)}</span>
+        <span>{min.toFixed(5)}</span>
+        <span>Double-tap/click chart to reset</span>
+        <span>{max.toFixed(5)}</span>
       </div>
     </div>
   );
@@ -1588,13 +1756,18 @@ export default function AiTradingPage() {
   const [execution, setExecution] = useState<TraderExecutionSnapshot | null>(
     null,
   );
+  const [realised24hReport, setRealised24hReport] = useState<{
+    brokerConnectionId: string;
+    summary: ClosedTradeReportSummaryView;
+  } | null>(null);
   const [livePositions, setLivePositions] = useState<LivePositionRowView[]>([]);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
   const [chartInstrument, setChartInstrument] = useState("USDJPY");
   const [chartTimeframe, setChartTimeframe] = useState<
     "M1" | "M5" | "M15" | "H1" | "H4"
-  >("M5");
+  >("M1");
   const [chartLoading, setChartLoading] = useState(false);
+  const [liveScanTick, setLiveScanTick] = useState(0);
   const [allocation, setAllocation] =
     useState<UserCapitalAllocationView | null>(null);
   const [selectedBrokerId, setSelectedBrokerId] = useState<string>("");
@@ -1603,7 +1776,7 @@ export default function AiTradingPage() {
   const [savingAllocation, setSavingAllocation] = useState(false);
   const [togglingAutomation, setTogglingAutomation] = useState(false);
   const [pendingAutomationAction, setPendingAutomationAction] = useState<
-    "START" | "STOP" | null
+    "START" | "STOP" | "RESET_RISK_PROTECTION" | "RESET_RISK_PROTECTION_AND_START" | null
   >(null);
   const [error, setError] = useState<string | null>(null);
   const [allocationWarning, setAllocationWarning] = useState<string | null>(
@@ -1616,6 +1789,8 @@ export default function AiTradingPage() {
     useState<ExternalProviderPerformanceView | null>(null);
   const [vpsScannerStatus, setVpsScannerStatus] =
     useState<VpsForexScannerStatusView | null>(null);
+  const [m1TacticalStatus, setM1TacticalStatus] =
+    useState<M1TacticalStatusView | null>(null);
   const [brokerParityRuntime, setBrokerParityRuntime] =
     useState<BrokerParityRuntimeStatusView | null>(null);
   const [v8DedicatedPaperStatus, setV8DedicatedPaperStatus] =
@@ -1632,6 +1807,7 @@ export default function AiTradingPage() {
   const seenExecutionStates = useRef<Map<string, string>>(new Map());
   const tradingRefreshInFlight = useRef(false);
   const positionsRefreshInFlight = useRef(false);
+  const tacticalRefreshInFlight = useRef(false);
 
   const controlStateReady = Boolean(
     terminal?.risk && terminal?.sessionStateKnown,
@@ -1640,8 +1816,36 @@ export default function AiTradingPage() {
     terminal?.sessionStateKnown === true &&
     (terminal.session?.status === "ACTIVE" ||
       terminal.session?.status === "PAUSED");
-  const aiVisualState = !automationOn
-    ? "stopped"
+  const automationRiskSuspended =
+    terminal?.sessionStateKnown === true &&
+    terminal.session?.status === "SUSPENDED_RISK_LIMIT";
+  const automationBrokerSuspended =
+    terminal?.sessionStateKnown === true &&
+    terminal.session?.status === "SUSPENDED_BROKER";
+  const automationSuspended = automationRiskSuspended || automationBrokerSuspended;
+  const latestRiskSuspensionCode =
+    terminal?.risk?.latestRiskSuspensionViolation?.rejectionCode ?? null;
+  const dailyLossSuspension =
+    automationRiskSuspended &&
+    latestRiskSuspensionCode === "DAILY_LOSS_LIMIT_REACHED";
+  const drawdownSuspension =
+    automationRiskSuspended &&
+    latestRiskSuspensionCode === "MAX_DRAWDOWN_REACHED";
+  const riskProtectionResettable = dailyLossSuspension || drawdownSuspension;
+  const dailyRiskCooldown = dailyRiskCooldownFromViolation(
+    terminal?.risk?.latestDailyLossViolation ?? null,
+  );
+  const endedRiskResetAvailable =
+    shouldOfferRiskResetAfterEndedSession({
+      dailyRiskCooldownActive: dailyRiskCooldown.active,
+      latestRiskSuspensionCode,
+    }) &&
+    !automationOn &&
+    !automationSuspended;
+  const aiVisualState = automationSuspended || endedRiskResetAvailable
+    ? "blocked"
+    : !automationOn
+      ? "stopped"
     : automationRuntime?.last_decision === "ERROR"
       ? "error"
       : automationRuntime?.last_decision === "BLOCKED"
@@ -1653,6 +1857,11 @@ export default function AiTradingPage() {
               automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
             ? "scanning"
             : "running";
+  const liveScanFrame = deriveLiveScanFrame({
+    tick: liveScanTick,
+    automationOn,
+  });
+
 
   const vpsConfidenceActive = vpsScannerStatus?.enabled === true;
   const fastMarkFeed = deriveFastMarkFeedUiState(
@@ -1719,6 +1928,41 @@ export default function AiTradingPage() {
       null,
     [terminal, selectedBrokerId],
   );
+  const automationBlockedReasons = executionBlockedReasons({
+    session: terminal?.session ?? null,
+    killSwitchActive: terminal?.risk?.killSwitchActive ?? false,
+    canTrade: terminal?.risk?.canTrade ?? false,
+    brokerConnected: terminal?.risk?.brokerConnected ?? false,
+    sessionAuthorizationStatus: selectedBroker?.authorizationStatus ?? null,
+    sessionConnectionExecutable: null,
+    latestRiskViolationReason:
+      terminal?.risk?.latestRiskSuspensionViolation?.rejectionReason ?? null,
+  });
+  const dailyLossProtectionDetail = dailyLossSuspension
+    ? dailyLossProtectionMessage({
+        maxDailyLossPercent: terminal?.risk?.limits.maxDailyLossPercent,
+        rejectionReason: terminal?.risk?.latestRiskSuspensionViolation?.rejectionReason,
+      })
+    : null;
+  const automationSuspensionMessage = automationRiskSuspended
+    ? dailyLossSuspension
+      ? `${dailyLossProtectionDetail ?? "All new AI entries are blocked by daily-loss protection."} You can explicitly reset risk protection and continue.`
+      : drawdownSuspension
+        ? `${automationBlockedReasons.find((reason) =>
+            reason.startsWith("Risk protection paused AI Trading:"),
+          ) ?? "Risk protection paused AI Trading because the maximum drawdown limit was reached."} You can explicitly reset risk protection and continue from current broker equity.`
+        : (automationBlockedReasons.find((reason) =>
+            reason.startsWith("Risk protection paused AI Trading:"),
+          ) ?? "Risk protection paused AI Trading. This suspension is not eligible for a user reset.")
+    : automationBrokerSuspended
+      ? "AI Trading is paused because the broker connection is suspended. New trades remain blocked until the connection recovers and the existing session is resumed safely."
+      : null;
+  const endedRiskResetMessage = endedRiskResetAvailable
+    ? latestRiskSuspensionCode === "MAX_DRAWDOWN_REACHED"
+      ? `Maximum-drawdown protection was triggered on the previous AI session${terminal?.risk?.latestRiskSuspensionViolation?.rejectionReason ? `: ${terminal.risk.latestRiskSuspensionViolation.rejectionReason}` : "."} The session is no longer active. You can explicitly reset risk protection and start a new AI session from current broker equity.`
+      : `Daily-loss protection was triggered today${dailyRiskCooldown.reason ? `: ${dailyRiskCooldown.reason}` : "."} The previous AI session is no longer active. You can keep protection active until ${formatTimestamp(dailyRiskCooldown.resumeAt)}, or explicitly reset risk protection and start a new AI session.`
+    : null;
+  const automationProtectionMessage = automationSuspensionMessage ?? endedRiskResetMessage;
 
   const metaTraderBroker = useMemo(
     () => terminal?.brokers.find((broker) => broker.brokerId === "metatrader5") ?? null,
@@ -1823,6 +2067,17 @@ export default function AiTradingPage() {
           setVpsScannerStatus(null);
         }
         try {
+          const tacticalStatus = await api.request<unknown>(
+            "/ai/external/vps-forex/m1-tactical/status",
+          );
+          if (!hasM1TacticalStatusUiShape(tacticalStatus)) {
+            throw new Error("M1 tactical status contract mismatch");
+          }
+          setM1TacticalStatus(tacticalStatus);
+        } catch {
+          setM1TacticalStatus(null);
+        }
+        try {
           const [parityStatus, v8Status] = await Promise.all([
             api.request<BrokerParityRuntimeStatusView>(
               "/ai/external/vps-forex/broker-parity/status",
@@ -1865,10 +2120,31 @@ export default function AiTradingPage() {
           setAutomationRuntimeWarning(null);
         }
 
-        const [executionResult, positionsResult] = await Promise.allSettled([
-          loadTraderExecutionSnapshot(),
-          loadLiveAccountPositions(),
-        ]);
+        const brokerId =
+          status.sessionBroker?.id ||
+          selectedBrokerId ||
+          status.primaryBroker?.id ||
+          "";
+
+        const realisedWindowEnd = new Date();
+        const realisedWindowStart = new Date(
+          realisedWindowEnd.getTime() - 24 * 60 * 60_000,
+        );
+        const realisedReportPromise = brokerId
+          ? loadClosedTradeReport({
+              page: 1,
+              pageSize: 1,
+              brokerConnectionId: brokerId,
+              from: realisedWindowStart.toISOString(),
+              to: realisedWindowEnd.toISOString(),
+            })
+          : Promise.resolve(null);
+        const [executionResult, positionsResult, realisedReportResult] =
+          await Promise.allSettled([
+            loadTraderExecutionSnapshot(brokerId || undefined),
+            loadLiveAccountPositions(),
+            realisedReportPromise,
+          ]);
 
         const snapshot =
           executionResult.status === "fulfilled" ? executionResult.value : null;
@@ -1876,12 +2152,24 @@ export default function AiTradingPage() {
           positionsResult.status === "fulfilled"
             ? positionsResult.value.positions
             : null;
+        const realisedReport =
+          realisedReportResult.status === "fulfilled"
+            ? realisedReportResult.value
+            : null;
 
         // Secondary read failures must never erase the last authoritative UI
         // snapshot. Keep the previous data on screen and let the existing
         // polling loops retry automatically.
         if (snapshot) setExecution(snapshot);
         if (positions) setLivePositions(positions);
+        if (brokerId && realisedReport) {
+          setRealised24hReport({
+            brokerConnectionId: brokerId,
+            summary: realisedReport.summary,
+          });
+        } else if (!brokerId) {
+          setRealised24hReport(null);
+        }
 
         if (snapshot && positions) {
           emitActivityToasts(positions, snapshot);
@@ -1908,11 +2196,6 @@ export default function AiTradingPage() {
           setActivityWarning(null);
         }
 
-        const brokerId =
-          status.sessionBroker?.id ||
-          selectedBrokerId ||
-          status.primaryBroker?.id ||
-          "";
         if (brokerId) {
           setSelectedBrokerId(
             (current) => status.sessionBroker?.id || current || brokerId,
@@ -1957,6 +2240,46 @@ export default function AiTradingPage() {
   }, [user, refreshTradingData]);
 
   useEffect(() => {
+    if (!automationOn) {
+      setLiveScanTick(0);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setLiveScanTick((value) => value + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [automationOn]);
+
+  useEffect(() => {
+    if (!user || !automationOn) return;
+    let disposed = false;
+
+    const refreshTacticalStatus = async () => {
+      if (tacticalRefreshInFlight.current) return;
+      tacticalRefreshInFlight.current = true;
+      try {
+        const tacticalStatus = await api.request<unknown>(
+          "/ai/external/vps-forex/m1-tactical/status",
+        );
+        if (!disposed && hasM1TacticalStatusUiShape(tacticalStatus)) {
+          setM1TacticalStatus(tacticalStatus);
+        }
+      } catch {
+        // Keep the latest valid tactical snapshot; the broader 4s refresh owns warnings.
+      } finally {
+        tacticalRefreshInFlight.current = false;
+      }
+    };
+
+    void refreshTacticalStatus();
+    const timer = window.setInterval(() => void refreshTacticalStatus(), 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [user, automationOn]);
+
+  useEffect(() => {
     if (!user) return;
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") {
@@ -1973,12 +2296,6 @@ export default function AiTradingPage() {
   }, [user, refreshTradingData]);
 
   useEffect(() => {
-    if (vpsScannerStatus?.enabled && chartTimeframe === "M1") {
-      setChartTimeframe("M5");
-    }
-  }, [vpsScannerStatus?.enabled, chartTimeframe]);
-
-  useEffect(() => {
     const watched = automationRuntime?.instruments ?? [];
     if (watched.length && !watched.includes(chartInstrument)) {
       setChartInstrument(watched[0]);
@@ -1988,10 +2305,9 @@ export default function AiTradingPage() {
   useEffect(() => {
     if (!user || !selectedBrokerId) return;
 
-    // The PAPER scanner owns the authoritative market schedule. Do not hammer
-    // market intelligence every five seconds while the FX market is
-    // deliberately paused (weekend/rollover), or before that schedule status
-    // has loaded. Position polling remains independent for exposure safety.
+    // History is comparatively expensive and changes only when candles close.
+    // Keep it authoritative but refresh it separately from the forming candle,
+    // which is updated by the fast quote path below.
     if (
       selectedBroker?.brokerId === "paper-broker" &&
       (!vpsScannerStatus || vpsScannerStatus.marketSchedule.paused)
@@ -2002,7 +2318,7 @@ export default function AiTradingPage() {
 
     let cancelled = false;
     let firstLoad = true;
-    const refreshChart = async () => {
+    const refreshChartHistory = async () => {
       if (firstLoad) setChartLoading(true);
       try {
         const snapshot = await loadMarketIntelligence({
@@ -2011,9 +2327,21 @@ export default function AiTradingPage() {
           limit: 90,
           brokerConnectionId: selectedBrokerId,
         });
-        if (!cancelled) setMarket(snapshot);
+        if (!cancelled) {
+          setMarket((previous) => ({
+            ...snapshot,
+            candles: reconcileLiveCandles(
+              previous?.candles ?? [],
+              snapshot.candles,
+              snapshot.quote,
+              chartTimeframe,
+            ) as MarketCandleView[],
+          }));
+        }
       } catch {
-        if (!cancelled) setMarket(null);
+        // Preserve a previously rendered chart through a transient history read
+        // failure. Only the initial load should fall back to the empty state.
+        if (!cancelled && firstLoad) setMarket(null);
       } finally {
         if (!cancelled && firstLoad) {
           setChartLoading(false);
@@ -2021,8 +2349,72 @@ export default function AiTradingPage() {
         }
       }
     };
-    void refreshChart();
-    const timer = window.setInterval(() => void refreshChart(), 5000);
+    void refreshChartHistory();
+    const timer = window.setInterval(() => void refreshChartHistory(), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    user,
+    selectedBrokerId,
+    selectedBroker?.brokerId,
+    chartInstrument,
+    chartTimeframe,
+    vpsScannerStatus,
+  ]);
+
+  useEffect(() => {
+    if (!user || !selectedBrokerId) return;
+    if (
+      selectedBroker?.brokerId === "paper-broker" &&
+      (!vpsScannerStatus || vpsScannerStatus.marketSchedule.paused)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    let inFlight = false;
+    const refreshLiveQuote = async () => {
+      if (inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
+      try {
+        const quote = await loadLiveMarketQuote({
+          instrument: chartInstrument,
+          timeframe: chartTimeframe,
+          brokerConnectionId: selectedBrokerId,
+        });
+        if (cancelled) return;
+        setMarket((previous) => {
+          if (
+            !previous ||
+            previous.instrument !== chartInstrument ||
+            previous.timeframe !== chartTimeframe
+          ) {
+            return previous;
+          }
+          return {
+            ...previous,
+            status: quote.freshness,
+            retrievedAt: new Date().toISOString(),
+            quote,
+            candles: mergeLiveQuoteIntoCandles(
+              previous.candles,
+              quote,
+              chartTimeframe,
+            ) as MarketCandleView[],
+          };
+        });
+      } catch {
+        // A missed quote must not erase valid history. The next 500 ms cycle
+        // retries while the slower authoritative history refresh remains alive.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void refreshLiveQuote();
+    const timer = window.setInterval(() => void refreshLiveQuote(), 500);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -2144,6 +2536,18 @@ export default function AiTradingPage() {
       );
       return;
     }
+    if (riskProtectionResettable) {
+      setPendingAutomationAction("RESET_RISK_PROTECTION");
+      return;
+    }
+    if (automationSuspended) {
+      setPendingAutomationAction("STOP");
+      return;
+    }
+    if (endedRiskResetAvailable) {
+      setPendingAutomationAction("RESET_RISK_PROTECTION_AND_START");
+      return;
+    }
     if (
       !automationOn &&
       (!allocation?.hasAllocation || !allocation.allocatedCapital)
@@ -2161,7 +2565,42 @@ export default function AiTradingPage() {
     setTogglingAutomation(true);
     setError(null);
     try {
-      if (action === "STOP") {
+      if (action === "RESET_RISK_PROTECTION") {
+        if (!terminal?.session) {
+          notify.warning("The paused AI session is no longer available.");
+          setPendingAutomationAction(null);
+          return;
+        }
+
+        const result = await resetDailyLossProtection(terminal.session.id);
+        notify.success(
+          `Risk protection reset from ${formatTimestamp(result.resetAt)}. AI Trading resumed with a fresh drawdown baseline. Historical P&L remains unchanged.`,
+        );
+      } else if (action === "RESET_RISK_PROTECTION_AND_START") {
+        if (!allocation?.hasAllocation || !allocation.allocatedCapital) {
+          notify.warning("Allocate capital before resetting protection and starting AI Trading.");
+          setPendingAutomationAction(null);
+          return;
+        }
+
+        const executionMode = startExecutionModeForBroker(selectedBroker);
+        const preparation = await prepareBrokerForAutomationStart(selectedBroker);
+        if (!preparation.ready) {
+          setError(preparation.message);
+          notify.error(preparation.message);
+          setPendingAutomationAction(null);
+          return;
+        }
+
+        const reset = await resetDailyLossProtectionForBroker(selectedBroker.id);
+        await api.startTradingSession({
+          brokerConnectionId: selectedBroker.id,
+          executionMode,
+        });
+        notify.success(
+          `Risk protection reset from ${formatTimestamp(reset.resetAt)} and AI Trading started with a fresh drawdown baseline. Historical P&L remains unchanged.`,
+        );
+      } else if (action === "STOP") {
         if (!terminal?.session) {
           notify.warning("AI Trading is already stopped.");
           setPendingAutomationAction(null);
@@ -2362,6 +2801,57 @@ export default function AiTradingPage() {
   const recentExecutionActivity = summarizeRecentExecutionActivity(
     execution?.recentExecutions ?? [],
   );
+  const realisedExecutionWindow = summarizeRealisedExecutionWindow(
+    execution?.closedExecutions ?? [],
+    20,
+  );
+  const authoritative24hSummary =
+    realised24hReport && realised24hReport.brokerConnectionId === selectedBroker?.id
+      ? realised24hReport.summary
+      : null;
+  const realisedCurrency =
+    authoritative24hSummary?.accountCurrency ??
+    recentExecutionActivity.accountCurrency ??
+    allocation?.accountCurrency;
+  const realised24hNetPnl =
+    authoritative24hSummary?.netRealisedPnl ?? recentExecutionActivity.netRealisedPnl;
+  const realised24hGrossProfit =
+    authoritative24hSummary?.grossProfit ?? recentExecutionActivity.grossProfit;
+  const realised24hGrossLoss =
+    authoritative24hSummary?.grossLoss ?? recentExecutionActivity.grossLoss;
+  const realised24hAverageWin =
+    authoritative24hSummary?.averageWin ?? recentExecutionActivity.averageWin;
+  const realised24hAverageLoss =
+    authoritative24hSummary?.averageLoss ?? recentExecutionActivity.averageLoss;
+  const realised24hExpectancy =
+    authoritative24hSummary?.expectancyPerTrade ?? recentExecutionActivity.expectancyPerTrade;
+  const realised24hWins = authoritative24hSummary?.wins ?? recentExecutionActivity.wins;
+  const realised24hLosses = authoritative24hSummary?.losses ?? recentExecutionActivity.losses;
+  const realised24hClosedCount =
+    authoritative24hSummary?.totalTrades ?? recentExecutionActivity.realisedTradeCount;
+  const closedTradeHistoryHref = selectedBroker?.id
+    ? `/trade/history?brokerConnectionId=${encodeURIComponent(selectedBroker.id)}`
+    : "/trade/history";
+  const recentWinRate =
+    authoritative24hSummary?.winRate ??
+    (recentExecutionActivity.realisedTradeCount > 0
+      ? recentExecutionActivity.wins / recentExecutionActivity.realisedTradeCount
+      : null);
+  const realised24hProfitFactor = authoritative24hSummary
+    ? Number(authoritative24hSummary.grossLoss) === 0 &&
+      Number(authoritative24hSummary.grossProfit) > 0
+      ? Number.POSITIVE_INFINITY
+      : authoritative24hSummary.profitFactor
+    : recentExecutionActivity.profitFactor;
+  const profitFactorLabel =
+    realised24hProfitFactor == null
+      ? "—"
+      : Number.isFinite(realised24hProfitFactor)
+        ? realised24hProfitFactor.toFixed(2)
+        : "∞";
+  const averageLossDisplay = realised24hAverageLoss
+    ? signedMoney(`-${realised24hAverageLoss}`, realisedCurrency)
+    : "—";
   const positionCurrencies = Array.from(
     new Set(
       aiOpenPositions
@@ -2383,10 +2873,12 @@ export default function AiTradingPage() {
   const tradeReadiness = deriveTradeReadinessUiState({
     automationOn,
     scannerStatus: vpsScannerStatus,
+    m1TacticalStatus,
     fastMarkState: fastMarkFeed.state,
     fallbackConfidence: displayedConfidence,
     fallbackThreshold: displayedConfidenceThreshold,
   });
+  const activeModelUi = deriveActiveModelUiState(m1TacticalStatus);
   const openPnlTone = totalUnrealisedPnlUnavailable || totalUnrealisedPnl == null
     ? "neutral"
     : Number(totalUnrealisedPnl) < 0
@@ -2394,11 +2886,11 @@ export default function AiTradingPage() {
       : Number(totalUnrealisedPnl) > 0
         ? "positive"
         : "neutral";
-  const netPnlTone = recentExecutionActivity.netRealisedPnl == null
+  const netPnlTone = realised24hNetPnl == null
     ? "neutral"
-    : Number(recentExecutionActivity.netRealisedPnl) < 0
+    : Number(realised24hNetPnl) < 0
       ? "negative"
-      : Number(recentExecutionActivity.netRealisedPnl) > 0
+      : Number(realised24hNetPnl) > 0
         ? "positive"
         : "neutral";
   const showDeveloperDiagnostics = false;
@@ -2473,15 +2965,33 @@ export default function AiTradingPage() {
                     ? "warning"
                     : aiVisualState === "signal"
                       ? "info"
-                      : automationOn
-                        ? "success"
-                        : "neutral"
+                      : automationSuspended
+                        ? "warning"
+                        : automationOn
+                          ? "success"
+                          : "neutral"
               }
               active={automationOn}
-              label={`AI Trading ${automationOn ? "running" : "stopped"}`}
+              label={`AI Trading ${automationSuspended ? "paused" : endedRiskResetAvailable ? "protected by risk limit" : automationOn ? "running" : "stopped"}`}
             />
-            <Badge variant={automationOn ? "success" : "info"}>
-              {automationOn ? "RUNNING" : "STOPPED"}
+            <Badge
+              variant={
+                automationOn
+                  ? "success"
+                  : automationSuspended || endedRiskResetAvailable
+                    ? "warning"
+                    : "info"
+              }
+            >
+              {automationRiskSuspended
+                ? "PAUSED · RISK LIMIT"
+                : automationBrokerSuspended
+                  ? "PAUSED · BROKER"
+                  : endedRiskResetAvailable
+                    ? "PROTECTED · RISK LIMIT"
+                    : automationOn
+                      ? "RUNNING"
+                      : "STOPPED"}
             </Badge>
             {selectedBroker?.brokerId === "paper-broker" && (
               <Badge variant="warning">PAPER</Badge>
@@ -2495,6 +3005,18 @@ export default function AiTradingPage() {
             {warning}
           </Alert>
         ))}
+        {automationProtectionMessage && (
+          <Alert variant="warning">
+            {automationProtectionMessage}{" "}
+            {riskProtectionResettable
+              ? "New AI entries are blocked. Use Review Risk Protection to choose Reset & Continue or Keep Session Paused."
+              : automationSuspended
+                ? "New AI entries are blocked. This suspension is not eligible for a risk reset; you may explicitly end the paused session and request closure of its AI-opened positions."
+                : endedRiskResetAvailable
+                  ? "Use Review Risk Protection to choose Reset & Start AI Trading or Keep Protection Active."
+                  : "AI Trading remains protected unless the server confirms a valid reset."}
+          </Alert>
+        )}
         {allocationWarning && (
           <Alert variant="warning">{allocationWarning}</Alert>
         )}
@@ -2537,8 +3059,8 @@ export default function AiTradingPage() {
               />
               <FinancialKpi
                 label="24h Net P&L"
-                value={signedMoney(recentExecutionActivity.netRealisedPnl, recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency)}
-                hint={`${recentExecutionActivity.wins} wins · ${recentExecutionActivity.losses} losses`}
+                value={signedMoney(realised24hNetPnl, realisedCurrency)}
+                hint={`${realised24hWins} wins · ${realised24hLosses} losses`}
                 tone={netPnlTone}
               />
               <FinancialKpi
@@ -2555,42 +3077,133 @@ export default function AiTradingPage() {
               />
             </section>
 
+            <section className="ai-active-model-strip" aria-label="Active AI decision engine">
+              <div className="ai-active-model-strip__identity">
+                <span>Active decision engine</span>
+                <strong>{activeModelUi.label}</strong>
+                <small>{activeModelUi.engineCode}</small>
+              </div>
+              <div className="ai-active-model-strip__signals">
+                <span>{activeModelUi.authorityLabel}</span>
+                <span>{activeModelUi.planBLabel}</span>
+                <span>{activeModelUi.trainedExpertLabel}</span>
+                <span>{activeModelUi.m1TimingLabel}</span>
+              </div>
+              <Badge variant={activeModelUi.executable ? "success" : "info"}>
+                {activeModelUi.executable ? "QUORUM READY" : "SCANNING"}
+              </Badge>
+            </section>
+
             <section className="ai-production-overview" aria-label="AI trading at a glance">
-              <TradeReadinessGauge {...tradeReadiness} />
+              <TradeReadinessGauge
+                {...tradeReadiness}
+                scanFrame={liveScanFrame}
+                lastRunAt={m1TacticalStatus?.lastRunAt ?? null}
+              />
               <section className="ai-performance-panel" aria-labelledby="recent-performance-title">
                 <div className="ai-performance-panel__head">
                   <div>
                     <p className="workspace-hero__eyebrow">Realized results</p>
                     <h2 id="recent-performance-title">Recent Performance</h2>
                   </div>
-                  <Badge variant={netPnlTone === "negative" ? "error" : netPnlTone === "positive" ? "success" : "info"}>
-                    {recentExecutionActivity.executionCount} trades · 24h
-                  </Badge>
+                  <div className="ai-performance-panel__head-actions">
+                    <Badge variant={netPnlTone === "negative" ? "error" : netPnlTone === "positive" ? "success" : "info"}>
+                      {realised24hClosedCount} closed · 24h
+                    </Badge>
+                    <Link href={closedTradeHistoryHref} className="ai-performance-panel__header-link">
+                      View all
+                    </Link>
+                  </div>
                 </div>
                 <div className="ai-performance-panel__stats">
-                  <div>
-                    <span>Net P&amp;L</span>
-                    <strong className={netPnlTone === "negative" ? "is-negative" : netPnlTone === "positive" ? "is-positive" : ""}>
-                      {signedMoney(recentExecutionActivity.netRealisedPnl, recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency)}
+                  <div className="ai-performance-panel__money-stat">
+                    <span>Total loss · 24h</span>
+                    <strong className={Number(realised24hGrossLoss ?? 0) > 0 ? "is-negative" : ""}>
+                      {realised24hGrossLoss == null
+                        ? "—"
+                        : money(
+                            Number(realised24hGrossLoss) > 0
+                              ? `-${realised24hGrossLoss}`
+                              : realised24hGrossLoss,
+                            realisedCurrency,
+                          )}
                     </strong>
+                    <small>{realised24hLosses} losing trade{realised24hLosses === 1 ? "" : "s"}</small>
                   </div>
-                  <div>
-                    <span>Win rate</span>
+                  <div className="ai-performance-panel__win-rate">
+                    <span>24h win rate</span>
                     <strong>
-                      {recentExecutionActivity.wins + recentExecutionActivity.losses + recentExecutionActivity.flats > 0
-                        ? `${((recentExecutionActivity.wins / (recentExecutionActivity.wins + recentExecutionActivity.losses + recentExecutionActivity.flats)) * 100).toFixed(0)}%`
-                        : "—"}
+                      {recentWinRate == null ? "—" : `${(recentWinRate * 100).toFixed(0)}%`}
                     </strong>
+                    <small>
+                      Net {signedMoney(realised24hNetPnl, realisedCurrency)} · trade-count rate
+                    </small>
+                    <div className="ai-performance-panel__stat-divider" aria-hidden="true" />
+                    <div className="ai-performance-panel__secondary-stat">
+                      <span>Trade win rate · last 20</span>
+                      <strong>
+                        {realisedExecutionWindow.winRate == null
+                          ? "—"
+                          : `${(realisedExecutionWindow.winRate * 100).toFixed(0)}%`}
+                      </strong>
+                      <small>
+                        {realisedExecutionWindow.wins}W / {realisedExecutionWindow.losses}L · Net {signedMoney(realisedExecutionWindow.netRealisedPnl, realisedCurrency)}
+                      </small>
+                    </div>
                   </div>
-                  <div>
-                    <span>Open trades</span>
-                    <strong>{aiOpenPositions.length}</strong>
+                  <div className="ai-performance-panel__money-stat">
+                    <span>Total profit · 24h</span>
+                    <strong className={Number(realised24hGrossProfit ?? 0) > 0 ? "is-positive" : ""}>
+                      {signedMoney(realised24hGrossProfit, realisedCurrency)}
+                    </strong>
+                    <small>{realised24hWins} profitable trade{realised24hWins === 1 ? "" : "s"}</small>
                   </div>
                 </div>
                 <RealisedPnlMiniChart
                   trades={execution?.closedExecutions ?? []}
-                  currency={recentExecutionActivity.accountCurrency ?? allocation?.accountCurrency}
+                  currency={realisedCurrency}
                 />
+                <section className="ai-performance-quality" aria-label="Realized profit quality">
+                  <div className="ai-performance-quality__head">
+                    <div>
+                      <span>Profit quality</span>
+                      <small>Trailing 24-hour realized trades</small>
+                    </div>
+                    <b>{realised24hClosedCount} closed</b>
+                  </div>
+                  <div className="ai-performance-quality__grid">
+                    <div>
+                      <span>Profit factor</span>
+                      <strong>{profitFactorLabel}</strong>
+                    </div>
+                    <div>
+                      <span>Avg win</span>
+                      <strong className="is-positive">
+                        {signedMoney(realised24hAverageWin, realisedCurrency)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Avg loss</span>
+                      <strong className="is-negative">{averageLossDisplay}</strong>
+                    </div>
+                    <div>
+                      <span>Expectancy / trade</span>
+                      <strong
+                        className={
+                          realised24hExpectancy == null
+                            ? ""
+                            : Number(realised24hExpectancy) < 0
+                              ? "is-negative"
+                              : Number(realised24hExpectancy) > 0
+                                ? "is-positive"
+                                : ""
+                        }
+                      >
+                        {signedMoney(realised24hExpectancy, realisedCurrency)}
+                      </strong>
+                    </div>
+                  </div>
+                </section>
               </section>
             </section>
 
@@ -2661,14 +3274,23 @@ export default function AiTradingPage() {
                       2,
                     )}
                     disabled={
-                      !selectedBroker || savingAllocation || automationOn
+                      !selectedBroker ||
+                      savingAllocation ||
+                      automationOn ||
+                      automationSuspended ||
+                      endedRiskResetAvailable
                     }
                   />
                   <Button
                     type="button"
                     size="sm"
                     loading={savingAllocation}
-                    disabled={!selectedBroker || automationOn}
+                    disabled={
+                      !selectedBroker ||
+                      automationOn ||
+                      automationSuspended ||
+                      endedRiskResetAvailable
+                    }
                     onClick={() => void saveAllocation()}
                   >
                     Allocate
@@ -2680,42 +3302,89 @@ export default function AiTradingPage() {
                     allocation?.availableCapital,
                     allocation?.accountCurrency,
                   )}
+                  {automationSuspended || endedRiskResetAvailable
+                    ? " · Allocation is locked by the current protection state; reallocation cannot clear or explain this stop."
+                    : ""}
                 </span>
               </Card>
 
               <Card className="ai-control-card ai-control-card--automation">
                 <div className="ai-control-card__status-row">
                   <span className="ai-control-card__label">AI Trading</span>
-                  <Badge variant={automationOn ? "success" : "info"}>
-                    {automationOn ? "Running" : "Stopped"}
+                  <Badge
+                    variant={
+                      automationOn
+                        ? "success"
+                        : automationSuspended || endedRiskResetAvailable
+                          ? "warning"
+                          : "info"
+                    }
+                  >
+                    {automationRiskSuspended
+                      ? "Paused by risk protection"
+                      : automationBrokerSuspended
+                        ? "Paused by broker"
+                        : endedRiskResetAvailable
+                          ? "Risk protection active"
+                          : automationOn
+                            ? "Running"
+                            : "Stopped"}
                   </Badge>
                 </div>
                 <Button
                   type="button"
-                  variant={automationOn ? "danger" : "primary"}
+                  variant={
+                    riskProtectionResettable || endedRiskResetAvailable
+                      ? "primary"
+                      : automationSuspended || automationOn
+                        ? "danger"
+                        : "primary"
+                  }
                   size="lg"
                   block
                   className="ai-automation-action"
                   aria-label={
-                    automationOn ? "Stop AI Trading" : "Start AI Trading"
+                    riskProtectionResettable
+                      ? "Review risk protection and choose whether to reset and continue"
+                      : endedRiskResetAvailable
+                        ? "Review risk protection and choose whether to reset and start AI Trading"
+                        : automationSuspended
+                          ? "End paused AI session and close AI positions"
+                          : automationOn
+                            ? "Stop AI Trading"
+                            : "Start AI Trading"
                   }
                   disabled={
-                    !selectedBroker || !controlStateReady || togglingAutomation
+                    !selectedBroker ||
+                    !controlStateReady ||
+                    togglingAutomation
                   }
                   onClick={requestAutomationAction}
                 >
-                  {togglingAutomation
-                    ? automationOn
-                      ? "Stopping…"
-                      : "Starting…"
-                    : automationOn
-                      ? "Stop AI Trading"
-                      : "Start AI Trading"}
+                  {riskProtectionResettable
+                    ? "Reset Risk Protection & Resume AI"
+                    : endedRiskResetAvailable
+                      ? "Reset Risk Protection & Start AI"
+                      : automationSuspended
+                        ? "End AI Session & Close Positions"
+                        : togglingAutomation
+                          ? automationOn
+                            ? "Stopping…"
+                            : "Starting…"
+                          : automationOn
+                            ? "Stop AI Trading"
+                            : "Start AI Trading"}
                 </Button>
                 <span className="ai-control-card__hint">
-                  {automationOn
-                    ? "AI Trading may open and manage positions within your allocation. Stop requires confirmation and closes AI-opened positions."
-                    : "AI Trading cannot create new positions while stopped."}
+                  {riskProtectionResettable
+                    ? `${automationSuspensionMessage ?? "Risk protection paused AI Trading."} No new positions will open until you choose to reset and continue or leave the session paused.`
+                    : automationSuspended
+                      ? `${automationSuspensionMessage ?? "AI Trading is paused."} No new positions will open. Existing positions remain under their configured broker protections.`
+                      : endedRiskResetAvailable
+                        ? `${endedRiskResetMessage ?? "Risk protection is active."} No new session will start unless you choose Reset & Start AI Trading.`
+                        : automationOn
+                          ? "AI Trading may open and manage positions within your allocation. Stop requires confirmation and closes AI-opened positions."
+                          : "AI Trading cannot create new positions while stopped."}
                 </span>
               </Card>
             </section>
@@ -4327,10 +4996,7 @@ export default function AiTradingPage() {
                         </small>
                       </div>
                       <div className="ai-cockpit__timeframes">
-                        {(vpsScannerStatus?.enabled
-                          ? (["M5", "M15", "H1", "H4"] as const)
-                          : (["M1", "M5", "M15", "H1", "H4"] as const)
-                        ).map((timeframe) => (
+                        {(["M1", "M5", "M15", "H1", "H4"] as const).map((timeframe) => (
                           <button
                             key={timeframe}
                             type="button"
@@ -4376,7 +5042,10 @@ export default function AiTradingPage() {
                         </strong>
                       </div>
                     </div>
-                    <MarketPriceChart candles={market?.candles ?? []} />
+                    <MarketPriceChart
+                      key={`${chartInstrument}-${chartTimeframe}`}
+                      candles={market?.candles ?? []}
+                    />
                   </div>
 
                   <aside className={`ai-market-readiness ai-market-readiness--${tradeReadiness.band.toLowerCase()}`}>
@@ -4669,11 +5338,16 @@ export default function AiTradingPage() {
                       Closed Trades &amp; Realized P&amp;L
                     </h2>
                   </div>
-                  <Badge
-                    variant={recentClosedTrades.length ? "success" : "info"}
-                  >
-                    {recentClosedTrades.length} recent
-                  </Badge>
+                  <div className="ai-section__heading-actions">
+                    <Badge
+                      variant={recentClosedTrades.length ? "success" : "info"}
+                    >
+                      {recentClosedTrades.length} recent
+                    </Badge>
+                    <Link href={closedTradeHistoryHref} className="ai-text-link">
+                      View all
+                    </Link>
+                  </div>
                 </div>
                 {recentClosedTrades.length === 0 ? (
                   <Card className="ai-empty-card ai-empty-card--compact">
@@ -4854,14 +5528,23 @@ export default function AiTradingPage() {
             >
               <div className="ai-confirm-dialog__header">
                 <span className="ai-control-card__label">
-                  {pendingAutomationAction === "STOP"
-                    ? "Confirmation required"
-                    : "Ready to start"}
+                  {pendingAutomationAction === "RESET_RISK_PROTECTION" ||
+                  pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
+                    ? "Risk protection"
+                    : pendingAutomationAction === "STOP"
+                      ? "Confirmation required"
+                      : "Ready to start"}
                 </span>
                 <h2 id="ai-confirm-title">
-                  {pendingAutomationAction === "STOP"
-                    ? "Stop AI Trading and close AI positions?"
-                    : "Start AI Trading?"}
+                  {pendingAutomationAction === "RESET_RISK_PROTECTION"
+                    ? "Reset risk protection and continue AI Trading?"
+                    : pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
+                      ? "Reset risk protection and start AI Trading?"
+                      : pendingAutomationAction === "STOP"
+                        ? automationSuspended
+                          ? "End paused AI session and close AI positions?"
+                          : "Stop AI Trading and close AI positions?"
+                        : "Start AI Trading?"}
                 </h2>
               </div>
 
@@ -4869,9 +5552,15 @@ export default function AiTradingPage() {
                 id="ai-confirm-description"
                 className="ai-confirm-dialog__description"
               >
-                {pendingAutomationAction === "STOP"
-                  ? "Confirming will stop new AI trading first, then immediately request closure of every currently open position that iRexPro can prove was opened by the AI."
-                  : "Confirm that you want iRexPro AI to begin trading this broker account automatically using the capital you allocated."}
+                {pendingAutomationAction === "RESET_RISK_PROTECTION"
+                  ? "A hard risk limit was reached, so new AI entries are paused. If you continue, iRexPro will keep every realised profit and loss in your history, reset the daily-loss measurement window, rebase maximum drawdown to current verified broker equity, and resume this AI session only after fresh server checks pass."
+                  : pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
+                    ? "Risk protection stopped the previous AI session. If you continue, iRexPro will keep every realised profit and loss in your history, reset the current risk window, then request a new AI session through the normal broker, allocation and execution gates. The new session establishes its drawdown baseline from current verified broker equity."
+                    : pendingAutomationAction === "STOP"
+                      ? automationSuspended
+                        ? "This session is already blocking new AI entries. Confirming will end the paused session and immediately request closure of every currently open position that iRexPro can prove was opened by the AI."
+                        : "Confirming will stop new AI trading first, then immediately request closure of every currently open position that iRexPro can prove was opened by the AI."
+                      : "Confirm that you want iRexPro AI to begin trading this broker account automatically using the capital you allocated."}
               </p>
 
               <div
@@ -4897,7 +5586,16 @@ export default function AiTradingPage() {
                 </div>
               </div>
 
-              {pendingAutomationAction === "STOP" ? (
+              {pendingAutomationAction === "RESET_RISK_PROTECTION" ||
+              pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START" ? (
+                <Alert variant="warning">
+                  <strong>Continuing can create additional losses today.</strong>{" "}
+                  {pendingAutomationAction === "RESET_RISK_PROTECTION"
+                    ? "Choose Keep Session Paused if you do not want iRexPro to take more trades after this risk limit was reached."
+                    : "Choose Keep Protection Active if you do not want iRexPro to start a new AI session after this risk limit was reached."}{" "}
+                  Historical P&L is not changed. The daily-loss window and drawdown baseline restart from this confirmed reset; all other server risk and market checks remain enforced.
+                </Alert>
+              ) : pendingAutomationAction === "STOP" ? (
                 <Alert variant="warning">
                   <strong>Stopping also closes AI-opened positions.</strong>{" "}
                   Broker market conditions determine the actual exit price. If a
@@ -4920,9 +5618,15 @@ export default function AiTradingPage() {
                   disabled={togglingAutomation}
                   onClick={() => setPendingAutomationAction(null)}
                 >
-                  {pendingAutomationAction === "STOP"
-                    ? "Keep AI Trading Running"
-                    : "Cancel"}
+                  {pendingAutomationAction === "RESET_RISK_PROTECTION"
+                    ? "Keep Session Paused"
+                    : pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
+                      ? "Keep Protection Active"
+                      : pendingAutomationAction === "STOP"
+                        ? automationSuspended
+                          ? "Keep Session Paused"
+                          : "Keep AI Trading Running"
+                        : "Cancel"}
                 </Button>
                 <Button
                   type="button"
@@ -4933,9 +5637,15 @@ export default function AiTradingPage() {
                   autoFocus
                   onClick={() => void confirmAutomationAction()}
                 >
-                  {pendingAutomationAction === "STOP"
-                    ? "Stop & Close AI Positions"
-                    : "Start AI Trading"}
+                  {pendingAutomationAction === "RESET_RISK_PROTECTION"
+                    ? "Reset & Continue AI Trading"
+                    : pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
+                      ? "Reset & Start AI Trading"
+                      : pendingAutomationAction === "STOP"
+                        ? automationSuspended
+                          ? "End Session & Close AI Positions"
+                          : "Stop & Close AI Positions"
+                        : "Start AI Trading"}
                 </Button>
               </div>
             </section>

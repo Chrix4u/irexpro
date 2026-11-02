@@ -117,9 +117,155 @@ export interface TradeReadinessUiState {
   direction: "BUY" | "SELL" | null;
 }
 
+export interface M1TacticalStatusView {
+  enabled: boolean;
+  phase: string;
+  primaryEngineCode?: string;
+  primaryEngineDisplayName?: string;
+  authorityMode?: "DEMO_FULL_AUTO" | "PAPER_RESEARCH" | "SHADOW" | string;
+  m1TacticalRole?: string;
+  lastRunAt: string | null;
+  lastError: string | null;
+  marketReadiness?: Record<
+    string,
+    {
+      ready: boolean;
+      reason: string;
+      authority: string | null;
+      observedAt: string;
+    }
+  >;
+  latestDecision: {
+    instrument: string;
+    direction: "BUY" | "SELL";
+    route: string;
+    barTime: string;
+    confidence: number;
+    netExpectedR: number;
+    executionAuthority: "NONE" | "PAPER_ONLY_RESEARCH" | "BROKER_NATIVE";
+    blockers: string[];
+    outcomeState: string | null;
+    primaryEngineCode?: string | null;
+    primaryConfidence?: number | null;
+    primaryNetExpectedR?: number | null;
+    planBRoute?: string | null;
+    planBPaperAdmitted?: boolean | null;
+    multimodelExecutable?: boolean | null;
+    multimodelAuthorityPath?: string | null;
+    multimodelRescueVolumeCap?: number | null;
+    trainedExpertState?: string | null;
+    trainedExpertDirection?: "BUY" | "SELL" | null;
+    trainedExpertConfidence?: number | null;
+    trainedExpertLongVotes?: number | null;
+    trainedExpertShortVotes?: number | null;
+    m1TacticalRole?: string | null;
+    m1TimingRoute?: string;
+  } | null;
+}
+
+export function hasM1TacticalStatusUiShape(value: unknown): value is M1TacticalStatusView {
+  if (!isRecord(value) || typeof value.enabled !== "boolean" || typeof value.phase !== "string") {
+    return false;
+  }
+  if (!isNullableTimestamp(value.lastRunAt) || !(value.lastError === null || typeof value.lastError === "string")) {
+    return false;
+  }
+  if (value.latestDecision === null) return true;
+  if (!isRecord(value.latestDecision)) return false;
+  const decision = value.latestDecision;
+  return (
+    typeof decision.instrument === "string" &&
+    (decision.direction === "BUY" || decision.direction === "SELL") &&
+    typeof decision.route === "string" &&
+    typeof decision.barTime === "string" &&
+    typeof decision.confidence === "number" &&
+    Number.isFinite(decision.confidence) &&
+    typeof decision.netExpectedR === "number" &&
+    Number.isFinite(decision.netExpectedR) &&
+    (decision.executionAuthority === "NONE" ||
+      decision.executionAuthority === "PAPER_ONLY_RESEARCH" ||
+      decision.executionAuthority === "BROKER_NATIVE") &&
+    isStringArray(decision.blockers) &&
+    (decision.outcomeState === null || typeof decision.outcomeState === "string")
+  );
+}
+
+export interface ActiveModelUiState {
+  label: string;
+  engineCode: string;
+  authorityLabel: string;
+  planBLabel: string;
+  trainedExpertLabel: string;
+  m1TimingLabel: string;
+  executable: boolean;
+}
+
+function routeLabel(value: string | null | undefined): string {
+  if (!value) return "Awaiting route";
+  const phrase = value
+    .replace(/^M1_/, "")
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.toLowerCase())
+    .join(" ");
+  return phrase ? phrase.charAt(0).toUpperCase() + phrase.slice(1) : "Awaiting route";
+}
+
+function percentLabel(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`
+    : "—";
+}
+
+export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
+  const status = hasM1TacticalStatusUiShape(value) ? value : null;
+  const decision = status?.latestDecision ?? null;
+  const engineCode =
+    status?.primaryEngineCode ?? decision?.primaryEngineCode ?? "irexpro-m1-tactical";
+  const multimodel = engineCode === "irexpro-multimodel-ensemble-v1";
+  const authorityLabel = status?.authorityMode
+    ? status.authorityMode.replaceAll("_", " ")
+    : "RESEARCH";
+  const planBLabel = decision?.planBRoute
+    ? `${routeLabel(decision.planBRoute)} · ${percentLabel(decision.primaryConfidence)}`
+    : "Plan-B · awaiting consensus";
+  const direction = decision?.trainedExpertDirection ?? null;
+  const longVotes = finite(decision?.trainedExpertLongVotes);
+  const shortVotes = finite(decision?.trainedExpertShortVotes);
+  const totalVotes = (longVotes ?? 0) + (shortVotes ?? 0);
+  const directionalVotes = direction === "BUY" ? longVotes : direction === "SELL" ? shortVotes : null;
+  const expertRoleLabel =
+    decision?.multimodelAuthorityPath === "HIGH_CONVICTION_RESCUE"
+      ? "High-conviction authority"
+      : "Shadow challenger";
+  const trainedExpertLabel =
+    direction && directionalVotes != null && totalVotes > 0
+      ? `${expertRoleLabel} · ${directionalVotes}/${totalVotes} ${direction} votes · ${percentLabel(decision?.trainedExpertConfidence)}`
+      : decision?.trainedExpertState
+        ? `${expertRoleLabel} · ${decision.trainedExpertState.replaceAll("_", " ")}`
+        : `${expertRoleLabel} · awaiting score`;
+  const m1TimingLabel = `M1 timing · ${routeLabel(decision?.m1TimingRoute ?? decision?.route)}`;
+  const executable =
+    decision?.multimodelExecutable === true ||
+    (decision?.multimodelExecutable == null &&
+      decision?.executionAuthority !== "NONE" &&
+      (decision?.blockers?.length ?? 0) === 0);
+
+  return {
+    label: multimodel ? "Multi-model ensemble · ACTIVE" : "M1 tactical · ACTIVE",
+    engineCode,
+    authorityLabel,
+    planBLabel,
+    trainedExpertLabel,
+    m1TimingLabel,
+    executable,
+  };
+}
+
 export interface TradeReadinessUiInput {
   automationOn: boolean;
   scannerStatus: unknown;
+  m1TacticalStatus?: unknown;
   fastMarkState?: FastMarkFeedUiState["state"] | null;
   fallbackConfidence?: number | null;
   fallbackThreshold?: number | null;
@@ -166,6 +312,149 @@ export function deriveTradeReadinessUiState(
       "AI Trading is stopped",
       "Start AI Trading when you want iRexPro to evaluate and execute qualified opportunities.",
     );
+  }
+
+  const m1Status = hasM1TacticalStatusUiShape(input.m1TacticalStatus)
+    ? input.m1TacticalStatus
+    : null;
+  const m1Decision = m1Status?.enabled === true ? m1Status.latestDecision : null;
+  if (m1Decision) {
+    const selectedReadiness = m1Status?.marketReadiness?.[m1Decision.instrument] ?? null;
+    if (selectedReadiness?.ready === false && selectedReadiness.reason.startsWith("BROKER_")) {
+      if (selectedReadiness.reason === "BROKER_M1_STALE") {
+        return waiting(
+          8,
+          "Broker M1 feed stale — trading paused",
+          "The latest broker-native M1 candle is stale, so iRexPro has paused new entries rather than trade on old prices. Scanning and execution resume automatically when fresh broker candles return.",
+          m1Decision.instrument,
+          m1Decision.direction,
+        );
+      }
+      if (selectedReadiness.reason === "BROKER_FEATURE_CONTEXT_UNAVAILABLE") {
+        return waiting(
+          12,
+          "Broker context rebuilding — trading paused",
+          "Fresh M1 prices are arriving again, but the required M5/M15/H1/H4 broker context is still rebuilding after the market-data gap. New entries resume automatically when that context is fresh enough.",
+          m1Decision.instrument,
+          m1Decision.direction,
+        );
+      }
+      if (
+        selectedReadiness.reason === "BROKER_SPREAD_UNAVAILABLE" ||
+        selectedReadiness.reason === "BROKER_SPREAD_UNUSABLE"
+      ) {
+        return waiting(
+          15,
+          "Broker execution spread unavailable — trading paused",
+          "iRexPro cannot verify a usable live broker spread, so it is refusing new entries until execution-cost evidence recovers automatically.",
+          m1Decision.instrument,
+          m1Decision.direction,
+        );
+      }
+      return waiting(
+        10,
+        "Broker market data unavailable — trading paused",
+        "The broker-native market-data path is not ready, so iRexPro is refusing new entries until fresh execution-grade data returns automatically.",
+        m1Decision.instrument,
+        m1Decision.direction,
+      );
+    }
+
+    const blockers = m1Decision.blockers;
+    const multimodelPrimary =
+      m1Decision.primaryEngineCode === "irexpro-multimodel-ensemble-v1" ||
+      m1Status?.primaryEngineCode === "irexpro-multimodel-ensemble-v1";
+    const finalExecutionBlocked =
+      m1Decision.outcomeState != null && m1Decision.outcomeState !== "EXECUTION_SUCCEEDED";
+    const executionEligible =
+      (m1Decision.multimodelExecutable ?? (m1Decision.executionAuthority !== "NONE")) === true &&
+      blockers.length === 0 &&
+      !finalExecutionBlocked;
+    const primaryConfidence = finite(m1Decision.primaryConfidence) ?? m1Decision.confidence;
+    let score = Math.max(0, Math.min(100, primaryConfidence * 100));
+    if (!executionEligible) {
+      score = Math.min(score, MAX_BLOCKED_READINESS_SCORE);
+    }
+
+    const driftBlocked = blockers.includes("DRIFT_OUT_OF_DISTRIBUTION");
+    const routeShadow = blockers.includes("M1_PHASE_ROUTE_SHADOW");
+    const reliabilityBlocked = blockers.some((blocker) => blocker.includes("RELIABILITY"));
+    if (driftBlocked) {
+      // Drift remains an execution veto, but the meter should still communicate
+      // the model's actual setup strength. The general blocked cap above keeps
+      // blocked setups out of the READY zone without compressing 55–69% setups
+      // back into WAITING.
+    } else if (reliabilityBlocked) score = Math.min(score, 58);
+    if (routeShadow) score = Math.min(score, 59);
+
+    const rounded = Math.round(score);
+    if (finalExecutionBlocked) {
+      return {
+        score: Math.min(rounded, 59),
+        band: "FORMING",
+        headline: "Final risk check blocked this setup",
+        detail:
+          m1Decision.outcomeState === "RISK_REJECTED"
+            ? "The model setup qualified, but the final account-risk check rejected dispatch. iRexPro will keep scanning for the next executable setup."
+            : "The model setup qualified, but the final execution path did not complete. iRexPro will keep scanning for the next executable setup.",
+        tradeExpected: false,
+        instrument: m1Decision.instrument,
+        direction: m1Decision.direction,
+      };
+    }
+    if (executionEligible) {
+      const highConvictionRescue = m1Decision.multimodelAuthorityPath === "HIGH_CONVICTION_RESCUE";
+      const rescueCap = finite(m1Decision.multimodelRescueVolumeCap);
+      return {
+        score: rounded,
+        band: "READY",
+        headline: highConvictionRescue ? "High-conviction DEMO setup ready" : "Trade conditions ready",
+        detail: highConvictionRescue
+          ? `The high-conviction DEMO rescue is active: three trained experts are unanimously aligned with this broker-native setup, expectancy and execution-cost checks are positive, and the older admission/drift veto has been simplified. This rescue path is capped at ${(rescueCap ?? 0.2).toFixed(2)} lot and still passes the final account-risk engine.`
+          : multimodelPrimary
+            ? "The promoted PAPER champion has passed its original Plan-B admission and governance gates; M1 is supplying timing and trade geometry, while the trained XGBoost challenger remains shadow-only evidence."
+            : "The active M1 broker-native setup has passed its model, market, risk and execution gates.",
+        tradeExpected: true,
+        instrument: m1Decision.instrument,
+        direction: m1Decision.direction,
+      };
+    }
+
+    const trainedExpertBlocked = blockers.some((blocker) =>
+      blocker.startsWith("MULTIMODEL_TRAINED_EXPERT_"),
+    );
+    const planBBlocked = blockers.includes("MULTIMODEL_PLAN_B_NOT_ADMITTED");
+    let detail = multimodelPrimary
+      ? "The multi-model ensemble is evaluating fresh broker-native data, but the current quorum still has execution blockers."
+      : "The active M1 engine is evaluating fresh broker-native data, but this setup still has execution blockers.";
+    if (trainedExpertBlocked) {
+      detail = "The multi-model ensemble is active, but the trained three-expert model has not confirmed this direction yet.";
+    } else if (planBBlocked) {
+      detail = "The multi-model ensemble is active, but the current setup has not passed Plan-B admission yet.";
+    } else if (driftBlocked && routeShadow) {
+      detail = "The current M1 setup is active, but drift is outside the execution distribution and this route remains shadow-only.";
+    } else if (driftBlocked) {
+      detail = "The current M1 setup is active, but drift is outside the execution distribution, so execution remains blocked.";
+    } else if (reliabilityBlocked) {
+      detail = "The current M1 setup is active, but pair/side reliability evidence is not yet strong enough for execution.";
+    } else if (routeShadow) {
+      detail = "The current M1 setup is active, but this route is still shadow-only in the present rollout phase.";
+    }
+
+    return {
+      score: rounded,
+      band: rounded >= 40 ? "FORMING" : "WAITING",
+      headline:
+        driftBlocked && rounded >= 40
+          ? "Strong setup — execution blocked"
+          : rounded >= 40
+            ? "Setup forming"
+            : "Waiting for a stronger setup",
+      detail,
+      tradeExpected: false,
+      instrument: m1Decision.instrument,
+      direction: m1Decision.direction,
+    };
   }
 
   const status = isRecord(input.scannerStatus) ? input.scannerStatus : null;
@@ -227,9 +516,7 @@ export function deriveTradeReadinessUiState(
   score += governance?.paperExecutionEligible === true ? 5 : 0;
 
   const executionEligible = governance?.paperExecutionEligible === true;
-  if (executionEligible) {
-    score = Math.max(score, 78);
-  } else {
+  if (!executionEligible) {
     // Preserve the full 0–69 forming range instead of pinning every strong-but-
     // blocked setup at 69. The blocked score is normalized against the maximum
     // points available before execution eligibility (95). Green remains reserved

@@ -3,10 +3,15 @@ import {
   changeSessionExecutionMode,
   confirmPendingConfirmation,
   connectionVerificationLabel,
+  dailyLossProtectionMessage,
+  dailyRiskCooldownFromViolation,
   executionBlockedReasons,
   formatExpiryCountdown,
   loadPendingExecutionConfirmations,
   prepareBrokerForAutomationStart,
+  resetDailyLossProtection,
+  resetDailyLossProtectionForBroker,
+  shouldOfferRiskResetAfterEndedSession,
 } from './trader-session';
 
 /**
@@ -180,6 +185,75 @@ describe('changeSessionExecutionMode', () => {
   });
 });
 
+describe('resetDailyLossProtection', () => {
+  beforeEach(() => {
+    requestMock.mockReset();
+  });
+
+  it('posts the explicit daily-loss reset and trusts only the returned server session', async () => {
+    requestMock.mockResolvedValue({
+      session: {
+        ...SESSION,
+        status: 'ACTIVE',
+        authorityGeneration: 4,
+      },
+      resetAt: '2026-10-28T15:00:00.000Z',
+      resetCount: 1,
+      message:
+        'Daily-loss protection was reset from this moment and AI Trading resumed. Historical P&L was not changed.',
+    });
+
+    const result = await resetDailyLossProtection(SESSION.id);
+
+    expect(requestMock).toHaveBeenCalledWith(
+      `/trading/sessions/${encodeURIComponent(SESSION.id)}/reset-daily-loss`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ confirmed: true }),
+      },
+    );
+    expect(result.session.status).toBe('ACTIVE');
+    expect(result.session.authorityGeneration).toBe(4);
+    expect(result.resetCount).toBe(1);
+  });
+
+  it('fails closed when the reset response does not contain a valid resumed session', async () => {
+    requestMock.mockResolvedValue({
+      session: { id: SESSION.id, status: 'ACTIVE' },
+      resetAt: '2026-10-28T15:00:00.000Z',
+      resetCount: 1,
+      message: 'reset',
+    });
+
+    await expect(resetDailyLossProtection(SESSION.id)).rejects.toThrow(
+      'Daily-loss reset response contract mismatch',
+    );
+  });
+});
+
+describe('resetDailyLossProtectionForBroker', () => {
+  beforeEach(() => {
+    requestMock.mockReset();
+  });
+
+  it('posts an explicit broker-level daily-loss reset when no suspended session survives', async () => {
+    requestMock.mockResolvedValue({
+      resetAt: '2026-10-28T16:30:00.000Z',
+      resetCount: 1,
+      message:
+        'Daily-loss protection was reset from this moment. Historical P&L was not changed. AI Trading remains stopped until a new session starts.',
+    });
+
+    const result = await resetDailyLossProtectionForBroker('bconn-demo-1');
+
+    expect(requestMock).toHaveBeenCalledWith('/trading/sessions/daily-loss/reset', {
+      method: 'POST',
+      body: JSON.stringify({ brokerConnectionId: 'bconn-demo-1', confirmed: true }),
+    });
+    expect(result.resetCount).toBe(1);
+  });
+});
+
 describe('loadPendingExecutionConfirmations', () => {
   beforeEach(() => {
     pendingMock.mockReset();
@@ -276,6 +350,105 @@ describe('formatExpiryCountdown', () => {
   });
 });
 
+describe('dailyLossProtectionMessage', () => {
+  it('states explicitly that daily-loss protection blocks every new entry and preserves the server reason', () => {
+    expect(
+      dailyLossProtectionMessage({
+        maxDailyLossPercent: '5.00',
+        rejectionReason:
+          'Daily loss 51.45 has reached limit (5.00% = 46.01 of the session opening balance 920.12)',
+      }),
+    ).toBe(
+      'All new AI entries are blocked by daily-loss protection. Daily-loss limit: 5.00%. Daily loss 51.45 has reached limit (5.00% = 46.01 of the session opening balance 920.12)',
+    );
+  });
+});
+
+describe('shouldOfferRiskResetAfterEndedSession', () => {
+  it('offers an explicit reset after an ended max-drawdown suspension', () => {
+    expect(
+      shouldOfferRiskResetAfterEndedSession({
+        dailyRiskCooldownActive: false,
+        latestRiskSuspensionCode: 'MAX_DRAWDOWN_REACHED',
+      }),
+    ).toBe(true);
+  });
+
+  it('offers the reset when the current persisted protection is daily loss', () => {
+    expect(
+      shouldOfferRiskResetAfterEndedSession({
+        dailyRiskCooldownActive: true,
+        latestRiskSuspensionCode: 'DAILY_LOSS_LIMIT_REACHED',
+      }),
+    ).toBe(true);
+  });
+
+  it('allows the daily-loss ledger to drive the control when no newer suspension code exists', () => {
+    expect(
+      shouldOfferRiskResetAfterEndedSession({
+        dailyRiskCooldownActive: true,
+        latestRiskSuspensionCode: null,
+      }),
+    ).toBe(true);
+  });
+
+  it('does not offer a reset for unrelated risk rejection codes', () => {
+    expect(
+      shouldOfferRiskResetAfterEndedSession({
+        dailyRiskCooldownActive: false,
+        latestRiskSuspensionCode: 'INSUFFICIENT_MARGIN',
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('dailyRiskCooldownFromViolation', () => {
+  it('blocks Start through UTC midnight after a same-day daily-loss violation', () => {
+    expect(
+      dailyRiskCooldownFromViolation(
+        {
+          rejectionCode: 'DAILY_LOSS_LIMIT_REACHED',
+          rejectionReason:
+            'Daily loss 54.68 has reached limit (5.00% = 49.41 of opening balance 988.13)',
+          evaluatedAt: '2026-10-28T13:43:13.000Z',
+        },
+        new Date('2026-10-28T20:00:00.000Z'),
+      ),
+    ).toEqual({
+      active: true,
+      resumeAt: '2026-10-29T00:00:00.000Z',
+      reason:
+        'Daily loss 54.68 has reached limit (5.00% = 49.41 of opening balance 988.13)',
+    });
+  });
+
+  it('expires naturally on the next UTC risk day', () => {
+    expect(
+      dailyRiskCooldownFromViolation(
+        {
+          rejectionCode: 'DAILY_LOSS_LIMIT_REACHED',
+          rejectionReason: 'Daily loss limit reached',
+          evaluatedAt: '2026-10-28T23:59:00.000Z',
+        },
+        new Date('2026-10-29T00:00:01.000Z'),
+      ).active,
+    ).toBe(false);
+  });
+
+  it('ignores non-daily-loss violations', () => {
+    expect(
+      dailyRiskCooldownFromViolation(
+        {
+          rejectionCode: 'INSUFFICIENT_MARGIN',
+          rejectionReason: 'Insufficient margin',
+          evaluatedAt: '2026-10-28T13:43:13.000Z',
+        },
+        new Date('2026-10-28T20:00:00.000Z'),
+      ).active,
+    ).toBe(false);
+  });
+});
+
 describe('executionBlockedReasons', () => {
   it('reports no reasons when every server fact is clear', () => {
     expect(
@@ -315,9 +488,26 @@ describe('executionBlockedReasons', () => {
 
     expect(reasons.some((reason) => reason.includes('Kill switch'))).toBe(true);
     expect(reasons.some((reason) => reason.includes('Risk gate'))).toBe(true);
-    expect(reasons.some((reason) => reason.includes('SUSPENDED by a risk limit'))).toBe(true);
+    expect(reasons.some((reason) => reason.includes('Risk protection paused AI Trading'))).toBe(true);
     expect(reasons.some((reason) => reason.includes('not executable'))).toBe(true);
     expect(reasons.some((reason) => reason.includes('Broker authorization'))).toBe(false);
+  });
+
+  it('surfaces the latest server risk violation in plain language for a risk-suspended session', () => {
+    const reasons = executionBlockedReasons({
+      session: { ...SESSION, status: 'SUSPENDED_RISK_LIMIT' },
+      killSwitchActive: false,
+      canTrade: false,
+      brokerConnected: true,
+      sessionAuthorizationStatus: 'SUSPENDED',
+      sessionConnectionExecutable: false,
+      latestRiskViolationReason:
+        'Daily loss 54.68 has reached limit (5.00% = 49.41 of the session opening balance 988.13)',
+    } as Parameters<typeof executionBlockedReasons>[0] & { latestRiskViolationReason: string });
+
+    expect(reasons).toContain(
+      'Risk protection paused AI Trading: Daily loss 54.68 has reached limit (5.00% = 49.41 of the session opening balance 988.13)',
+    );
   });
 
   it('reports the missing session first when no session is active', () => {

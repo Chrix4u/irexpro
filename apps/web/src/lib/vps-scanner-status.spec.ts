@@ -1,5 +1,7 @@
 import {
+  deriveActiveModelUiState,
   deriveFastMarkFeedUiState,
+  deriveTradeReadinessUiState,
   hasExternalProviderPerformanceUiShape,
   hasVpsScannerUiShape,
 } from "./vps-scanner-status";
@@ -437,6 +439,205 @@ describe("production trade-readiness presentation", () => {
     expect(result.direction).toBe("BUY");
   });
 
+  it("prefers the active M1 cTrader decision over a stale legacy scanner decision", () => {
+    const staleStatus = JSON.parse(JSON.stringify(VALID_STATUS));
+    staleStatus.lastEnsembleDecision.instrument = "USDJPY";
+    staleStatus.lastEnsembleDecision.direction = "SELL";
+    staleStatus.lastEnsembleDecision.candidateConfidence = 0.36;
+
+    const m1Status = {
+      enabled: true,
+      phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+      lastRunAt: "2026-10-27T20:30:09.000Z",
+      lastError: null,
+      latestDecision: {
+        instrument: "EURUSD",
+        direction: "SELL",
+        route: "M1_TREND_CONTINUATION",
+        barTime: "2026-10-27T20:29:00.000Z",
+        confidence: 0.738,
+        netExpectedR: 0.2794,
+        executionAuthority: "NONE",
+        blockers: ["DRIFT_OUT_OF_DISTRIBUTION", "M1_PHASE_ROUTE_SHADOW"],
+        outcomeState: null,
+      },
+    };
+
+    const result = derive({
+      automationOn: true,
+      scannerStatus: staleStatus,
+      m1TacticalStatus: m1Status,
+      fastMarkState: "UNAVAILABLE",
+    });
+
+    expect(result).toMatchObject({
+      score: 59,
+      band: "FORMING",
+      tradeExpected: false,
+      instrument: "EURUSD",
+      direction: "SELL",
+    });
+    expect(result.detail).toMatch(/drift/i);
+  });
+
+  it("shows stale broker-native M1 as a feed pause instead of a frozen model score", () => {
+    const m1Status = {
+      enabled: true,
+      phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+      lastRunAt: "2026-10-29T20:45:00.000Z",
+      lastError: null,
+      marketReadiness: {
+        EURUSD: {
+          ready: false,
+          reason: "BROKER_M1_STALE",
+          authority: null,
+          observedAt: "2026-10-29T20:45:00.000Z",
+        },
+      },
+      latestDecision: {
+        instrument: "EURUSD",
+        direction: "BUY",
+        route: "ABSTAIN",
+        barTime: "2026-10-29T20:29:00.000Z",
+        confidence: 0.35,
+        netExpectedR: 0.12,
+        executionAuthority: "NONE",
+        blockers: ["MULTIMODEL_GOVERNANCE_BLOCKED"],
+        outcomeState: null,
+      },
+    };
+
+    const result = derive({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: m1Status,
+      fastMarkState: "LIVE",
+    });
+
+    expect(result).toMatchObject({
+      score: 8,
+      band: "WAITING",
+      tradeExpected: false,
+      instrument: "EURUSD",
+      direction: "BUY",
+      headline: "Broker M1 feed stale — trading paused",
+    });
+    expect(result.detail).toMatch(/resume automatically/i);
+  });
+
+  it("shows broker context recovery as a data pause instead of reusing the old model score", () => {
+    const m1Status = {
+      enabled: true,
+      phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+      lastRunAt: "2026-10-29T21:01:15.000Z",
+      lastError: null,
+      marketReadiness: {
+        EURUSD: {
+          ready: false,
+          reason: "BROKER_FEATURE_CONTEXT_UNAVAILABLE",
+          authority: null,
+          observedAt: "2026-10-29T21:01:15.000Z",
+        },
+      },
+      latestDecision: {
+        instrument: "EURUSD",
+        direction: "BUY",
+        route: "ABSTAIN",
+        barTime: "2026-10-29T20:29:00.000Z",
+        confidence: 0.35,
+        netExpectedR: 0.12,
+        executionAuthority: "NONE",
+        blockers: ["MULTIMODEL_GOVERNANCE_BLOCKED"],
+        outcomeState: null,
+      },
+    };
+
+    const result = derive({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: m1Status,
+      fastMarkState: "LIVE",
+    });
+
+    expect(result).toMatchObject({
+      score: 12,
+      band: "WAITING",
+      tradeExpected: false,
+      instrument: "EURUSD",
+      direction: "BUY",
+      headline: "Broker context rebuilding — trading paused",
+    });
+    expect(result.detail).toMatch(/resume automatically/i);
+  });
+
+  it("shows M1 broker-native execution eligibility as ready without legacy fast-mark capping", () => {
+    const m1Status = {
+      enabled: true,
+      phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+      lastRunAt: "2026-10-27T20:31:09.000Z",
+      lastError: null,
+      latestDecision: {
+        instrument: "USDJPY",
+        direction: "SELL",
+        route: "M1_EARLY_TRANSITION",
+        barTime: "2026-10-27T20:30:00.000Z",
+        confidence: 0.738,
+        netExpectedR: 0.24,
+        executionAuthority: "PAPER_ONLY_RESEARCH",
+        blockers: [],
+        outcomeState: null,
+      },
+    };
+
+    const result = derive({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: m1Status,
+      fastMarkState: "UNAVAILABLE",
+    });
+
+    expect(result.band).toBe("READY");
+    expect(result.tradeExpected).toBe(true);
+    expect(result.score).toBe(74);
+    expect(result.instrument).toBe("USDJPY");
+    expect(result.direction).toBe("SELL");
+  });
+
+  it("does not stay green after the final risk engine rejects an otherwise executable setup", () => {
+    const m1Status = {
+      enabled: true,
+      phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+      primaryEngineCode: "irexpro-multimodel-ensemble-v1",
+      lastRunAt: "2026-10-28T11:54:09.000Z",
+      lastError: null,
+      latestDecision: {
+        instrument: "AUDUSD",
+        direction: "BUY",
+        route: "M1_TREND_CONTINUATION",
+        barTime: "2026-10-28T11:53:00.000Z",
+        confidence: 0.738,
+        primaryConfidence: 0.746,
+        netExpectedR: 0.519,
+        executionAuthority: "PAPER_ONLY_RESEARCH",
+        blockers: [],
+        multimodelExecutable: true,
+        outcomeState: "RISK_REJECTED",
+      },
+    };
+
+    const result = derive({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: m1Status,
+      fastMarkState: "LIVE",
+    });
+
+    expect(result.band).not.toBe("READY");
+    expect(result.tradeExpected).toBe(false);
+    expect(result.score).toBeLessThan(70);
+    expect(result.headline).toMatch(/risk|blocked/i);
+  });
+
   it("shows a waiting state while the authoritative market schedule is paused", () => {
     const status = JSON.parse(JSON.stringify(VALID_STATUS));
     status.marketSchedule.paused = true;
@@ -460,5 +661,133 @@ describe("production trade-readiness presentation", () => {
       tradeExpected: false,
       headline: "AI Trading is stopped",
     });
+  });
+});
+
+
+describe("active multi-model execution presentation", () => {
+  const status = {
+    enabled: true,
+    phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+    primaryEngineCode: "irexpro-multimodel-ensemble-v1",
+    primaryEngineDisplayName: "iRexPro Multi-Model Ensemble",
+    authorityMode: "DEMO_FULL_AUTO",
+    m1TacticalRole: "TIMING_SPECIALIST",
+    lastRunAt: "2026-10-27T20:31:09.000Z",
+    lastError: null,
+    latestDecision: {
+      instrument: "USDJPY",
+      direction: "SELL",
+      route: "M1_TREND_CONTINUATION",
+      barTime: "2026-10-27T20:30:00.000Z",
+      confidence: 0.738,
+      netExpectedR: 0.24,
+      executionAuthority: "PAPER_ONLY_RESEARCH",
+      blockers: [],
+      outcomeState: null,
+      primaryEngineCode: "irexpro-multimodel-ensemble-v1",
+      primaryConfidence: 0.704,
+      primaryNetExpectedR: 0.19,
+      planBRoute: "TREND_CONTINUATION",
+      planBPaperAdmitted: true,
+      multimodelExecutable: true,
+      trainedExpertState: "CONFIRM",
+      trainedExpertDirection: "SELL",
+      trainedExpertConfidence: 0.81,
+      trainedExpertLongVotes: 0,
+      trainedExpertShortVotes: 3,
+      m1TacticalRole: "TIMING_SPECIALIST",
+      m1TimingRoute: "M1_TREND_CONTINUATION",
+    },
+  };
+
+  it("labels the multi-model ensemble as active and M1 as the timing specialist", () => {
+    expect(deriveActiveModelUiState(status)).toEqual({
+      label: "Multi-model ensemble · ACTIVE",
+      engineCode: "irexpro-multimodel-ensemble-v1",
+      authorityLabel: "DEMO FULL AUTO",
+      planBLabel: "Trend continuation · 70%",
+      trainedExpertLabel: "Shadow challenger · 3/3 SELL votes · 81%",
+      m1TimingLabel: "M1 timing · Trend continuation",
+      executable: true,
+    });
+  });
+
+  it("uses primary ensemble confidence and blockers for readiness, not the M1 candidate confidence", () => {
+    const result = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: status,
+      fastMarkState: "UNAVAILABLE",
+    });
+    expect(result.band).toBe("READY");
+    expect(result.tradeExpected).toBe(true);
+    expect(result.score).toBe(70);
+    expect(result.detail).toMatch(/promoted PAPER champion/i);
+    expect(result.detail).toMatch(/shadow/i);
+  });
+
+  it("explains when DEMO readiness comes from the high-conviction rescue path", () => {
+    const rescued = JSON.parse(JSON.stringify(status));
+    rescued.latestDecision.executionAuthority = "BROKER_NATIVE";
+    rescued.latestDecision.primaryConfidence = 0.714;
+    rescued.latestDecision.planBPaperAdmitted = false;
+    rescued.latestDecision.multimodelAuthorityPath = "HIGH_CONVICTION_RESCUE";
+    rescued.latestDecision.multimodelRescueVolumeCap = 0.2;
+
+    const result = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: rescued,
+      fastMarkState: "LIVE",
+    });
+
+    expect(result.band).toBe("READY");
+    expect(result.tradeExpected).toBe(true);
+    expect(result.score).toBe(71);
+    expect(result.detail).toMatch(/high-conviction/i);
+    expect(result.detail).toMatch(/0\.20 lot/i);
+    expect(deriveActiveModelUiState(rescued).trainedExpertLabel).toMatch(
+      /High-conviction authority · 3\/3 SELL votes · 81%/i,
+    );
+  });
+
+  it("keeps drift-blocked multi-model readiness moving instead of pinning every setup at 49", () => {
+    const weaker = JSON.parse(JSON.stringify(status));
+    weaker.latestDecision.primaryConfidence = 0.55;
+    weaker.latestDecision.multimodelExecutable = false;
+    weaker.latestDecision.blockers = ["DRIFT_OUT_OF_DISTRIBUTION"];
+
+    const stronger = JSON.parse(JSON.stringify(status));
+    stronger.latestDecision.primaryConfidence = 0.85;
+    stronger.latestDecision.multimodelExecutable = false;
+    stronger.latestDecision.blockers = ["DRIFT_OUT_OF_DISTRIBUTION"];
+
+    const weakerResult = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: weaker,
+      fastMarkState: "LIVE",
+    });
+    const strongerResult = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: stronger,
+      fastMarkState: "LIVE",
+    });
+
+    expect(weakerResult).toMatchObject({
+      score: 55,
+      band: "FORMING",
+      tradeExpected: false,
+    });
+    expect(strongerResult).toMatchObject({
+      score: 69,
+      band: "FORMING",
+      tradeExpected: false,
+    });
+    expect(weakerResult.headline).toMatch(/execution blocked/i);
+    expect(weakerResult.detail).toMatch(/drift.*blocked|blocked.*drift/i);
+    expect(strongerResult.score).toBeGreaterThan(weakerResult.score);
   });
 });

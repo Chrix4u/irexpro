@@ -66,6 +66,16 @@ export interface TradeExecutionView {
   trailingStopPips: string | null;
   status: TradeExecutionStatus;
   exitPrice: string | null;
+  /** Best observed P&L while the position was open, in account currency. */
+  maxFavorablePnl?: string | null;
+  /** Worst observed P&L while the position was open, in account currency. */
+  maxAdversePnl?: string | null;
+  /** Amount surrendered from the observed peak before the latest/final state. */
+  profitGiveback?: string | null;
+  /** Number of durable path observations captured for the position. */
+  pathObservationCount?: number | null;
+  pathPeakObservedAt?: string | null;
+  pathLastObservedAt?: string | null;
   /** Account currency for monetary execution economics, when proven. */
   accountCurrency: string | null;
   /** Server/provider-recorded realized P&L in account currency. */
@@ -85,6 +95,75 @@ export interface TradeExecutionView {
 }
 
 /** Result for one AI-position close attempt returned by close-all. */
+export type ClosedTradeOutcomeFilter = 'ALL' | 'WIN' | 'LOSS' | 'FLAT';
+
+export interface ClosedTradeReportQuery {
+  page?: number;
+  pageSize?: number;
+  brokerConnectionId?: string;
+  from?: string;
+  to?: string;
+  instrument?: string;
+  direction?: TradeExecutionDirection;
+  outcome?: ClosedTradeOutcomeFilter;
+  closeReason?: TradeExecutionCloseReason;
+}
+
+export interface ClosedTradeCurrencySummaryView {
+  accountCurrency: string;
+  totalTrades: number;
+  pnlTradeCount: number;
+  wins: number;
+  losses: number;
+  flats: number;
+  winRate: number | null;
+  grossProfit: string;
+  grossLoss: string;
+  netRealisedPnl: string;
+  averageWin: string | null;
+  averageLoss: string | null;
+  expectancyPerTrade: string | null;
+  profitFactor: number | null;
+  largestWin: string | null;
+  largestLoss: string | null;
+  totalCommission: string;
+  totalSwap: string;
+  averageHoldMinutes: number | null;
+}
+
+export interface ClosedTradeReportSummaryView {
+  totalTrades: number;
+  pnlTradeCount: number;
+  unresolvedPnlCount: number;
+  wins: number;
+  losses: number;
+  flats: number;
+  winRate: number | null;
+  accountCurrency: string | null;
+  grossProfit: string | null;
+  grossLoss: string | null;
+  netRealisedPnl: string | null;
+  averageWin: string | null;
+  averageLoss: string | null;
+  expectancyPerTrade: string | null;
+  profitFactor: number | null;
+  largestWin: string | null;
+  largestLoss: string | null;
+  totalCommission: string | null;
+  totalSwap: string | null;
+  averageHoldMinutes: number | null;
+  currencyBreakdown: ClosedTradeCurrencySummaryView[];
+}
+
+export interface ClosedTradeReportView {
+  trades: TradeExecutionView[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  summary: ClosedTradeReportSummaryView;
+}
+
 export interface AiPositionCloseResultView {
   tradeId: string;
   closed: boolean;
@@ -209,7 +288,7 @@ export interface AiAutomationRuntimeStatusView {
   downstream_rejected_total?: number;
 }
 
-/** GET /trading/sessions/active → 200 `{ session }`; session is null when stopped. */
+/** GET /trading/sessions/active → 200 `{ session }`; session includes active/paused/suspended control states and is null only when no non-ended session remains. */
 export interface ActiveTradingSessionResponse {
   session: TradingSessionView | null;
 }

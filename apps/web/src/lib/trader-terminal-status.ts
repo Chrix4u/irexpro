@@ -20,6 +20,21 @@ export interface RiskStatusView {
   killSwitchActive: boolean;
   brokerConnected: boolean;
   canTrade: boolean;
+  latestViolation?: {
+    rejectionCode: string;
+    rejectionReason: string;
+    evaluatedAt: string;
+  } | null;
+  latestDailyLossViolation?: {
+    rejectionCode: string;
+    rejectionReason: string;
+    evaluatedAt: string;
+  } | null;
+  latestRiskSuspensionViolation?: {
+    rejectionCode: string;
+    rejectionReason: string;
+    evaluatedAt: string;
+  } | null;
   limits: {
     maxDailyLossPercent: string;
     maxDrawdownPercent: string;
@@ -143,11 +158,38 @@ function isRiskStatus(value: unknown): value is RiskStatusView {
     allowed === "ALL" ||
     (Array.isArray(allowed) &&
       allowed.every((instrument) => typeof instrument === "string"));
+  const latestViolation = value.latestViolation;
+  const latestViolationIsValid =
+    latestViolation === undefined ||
+    latestViolation === null ||
+    (isRecord(latestViolation) &&
+      typeof latestViolation.rejectionCode === "string" &&
+      typeof latestViolation.rejectionReason === "string" &&
+      typeof latestViolation.evaluatedAt === "string");
+  const latestDailyLossViolation = value.latestDailyLossViolation;
+  const latestDailyLossViolationIsValid =
+    latestDailyLossViolation === undefined ||
+    latestDailyLossViolation === null ||
+    (isRecord(latestDailyLossViolation) &&
+      typeof latestDailyLossViolation.rejectionCode === "string" &&
+      typeof latestDailyLossViolation.rejectionReason === "string" &&
+      typeof latestDailyLossViolation.evaluatedAt === "string");
+  const latestRiskSuspensionViolation = value.latestRiskSuspensionViolation;
+  const latestRiskSuspensionViolationIsValid =
+    latestRiskSuspensionViolation === undefined ||
+    latestRiskSuspensionViolation === null ||
+    (isRecord(latestRiskSuspensionViolation) &&
+      typeof latestRiskSuspensionViolation.rejectionCode === "string" &&
+      typeof latestRiskSuspensionViolation.rejectionReason === "string" &&
+      typeof latestRiskSuspensionViolation.evaluatedAt === "string");
 
   return (
     typeof value.killSwitchActive === "boolean" &&
     typeof value.brokerConnected === "boolean" &&
     typeof value.canTrade === "boolean" &&
+    latestViolationIsValid &&
+    latestDailyLossViolationIsValid &&
+    latestRiskSuspensionViolationIsValid &&
     typeof limits.maxDailyLossPercent === "string" &&
     typeof limits.maxDrawdownPercent === "string" &&
     limits.positionCountPolicy === "UNBOUNDED" &&
