@@ -185,6 +185,45 @@ def test_pairing_accepts_single_data_envelope_and_persists_connector_secret() ->
     assert store.values == {"connector-1": "connector-token-secret"}
 
 
+def test_pairing_accepts_repeated_data_envelopes_without_losing_connector_identity() -> None:
+    from irexpro_mt5_connector.client import IrexProConnectorClient
+    from irexpro_mt5_connector.mt5_terminal import AccountIdentity
+
+    class Store:
+        def __init__(self): self.values = {}
+        def get(self, connector_id): return self.values.get(connector_id)
+        def set(self, connector_id, token): self.values[connector_id] = token
+        def delete(self, connector_id): self.values.pop(connector_id, None)
+
+    class Response:
+        status_code = 201
+        text = ""
+        def json(self):
+            return {
+                "data": {
+                    "data": {
+                        "connectorId": "connector-2",
+                        "brokerConnectionId": "connection-2",
+                        "connectorToken": "connector-token-secret-2",
+                    }
+                }
+            }
+
+    class Session:
+        def post(self, _url, **_kwargs): return Response()
+
+    store = Store()
+    client = IrexProConnectorClient("https://irexpro.lightworldtech.com/api/v1", store, session=Session())
+    settings = client.redeem_pairing(
+        "ABCDEFGH23",
+        AccountIdentity(login="113392789", server="Broker-Demo", currency="USD", trade_allowed=True, account_type="DEMO"),
+    )
+
+    assert settings.connector_id == "connector-2"
+    assert settings.broker_connection_id == "connection-2"
+    assert store.values == {"connector-2": "connector-token-secret-2"}
+
+
 def test_pairing_still_fails_closed_when_nested_identity_is_incomplete() -> None:
     from irexpro_mt5_connector.client import ConnectorApiError, IrexProConnectorClient
     from irexpro_mt5_connector.mt5_terminal import AccountIdentity

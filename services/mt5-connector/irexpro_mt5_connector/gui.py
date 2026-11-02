@@ -7,6 +7,7 @@ import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from . import __version__
 from .config import ConnectorSettings
 from .runtime import pair_connector, run_supervised_connector
 from .windows import set_windows_autostart
@@ -79,14 +80,14 @@ class ConnectorDesktopApp:
     def _build(self) -> None:
         from tkinter import filedialog
 
-        self.root.title("iRexPro MT5 Connector")
+        self.root.title(f"iRexPro MT5 Connector v{__version__}")
         self.root.geometry("640x600")
         self.root.minsize(580, 520)
 
         frame = self._ttk.Frame(self.root, padding=24)
         frame.pack(fill="both", expand=True)
 
-        title = self._ttk.Label(frame, text="iRexPro Direct MT5 Connector", font=("Segoe UI", 18, "bold"))
+        title = self._ttk.Label(frame, text=f"iRexPro Direct MT5 Connector · v{__version__}", font=("Segoe UI", 18, "bold"))
         title.pack(anchor="w")
         self._ttk.Label(
             frame,

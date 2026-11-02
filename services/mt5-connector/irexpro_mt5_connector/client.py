@@ -50,15 +50,12 @@ class IrexProConnectorClient:
             timeout=self.timeout_seconds,
         )
         data = self._json(response)
-        payload = data
-        nested = data.get("data")
-        if isinstance(nested, dict):
-            payload = nested
-        token = payload.get("connectorToken")
-        connector_id = payload.get("connectorId")
-        broker_connection_id = payload.get("brokerConnectionId")
-        if not all(isinstance(item, str) and item for item in (token, connector_id, broker_connection_id)):
+        payload = self._find_connector_identity_payload(data)
+        if payload is None:
             raise ConnectorApiError("pairing response is missing connector identity")
+        token = payload["connectorToken"]
+        connector_id = payload["connectorId"]
+        broker_connection_id = payload["brokerConnectionId"]
         self.secret_store.set(connector_id, token)
         return ConnectorSettings(
             server_url=self.server_url,
@@ -145,6 +142,27 @@ class IrexProConnectorClient:
             raise ConnectorApiError(
                 "MT5 terminal account changed after pairing; execution suspended until re-paired"
             )
+
+    @staticmethod
+    def _find_connector_identity_payload(data: dict[str, Any]) -> dict[str, str] | None:
+        required = ("connectorToken", "connectorId", "brokerConnectionId")
+        queue: list[tuple[dict[str, Any], int]] = [(data, 0)]
+        seen: set[int] = set()
+        while queue:
+            payload, depth = queue.pop(0)
+            identity = id(payload)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if all(isinstance(payload.get(key), str) and payload.get(key) for key in required):
+                return {key: payload[key] for key in required}
+            if depth >= 4:
+                continue
+            for key in ("data", "result", "payload"):
+                nested = payload.get(key)
+                if isinstance(nested, dict):
+                    queue.append((nested, depth + 1))
+        return None
 
     def _json(self, response: requests.Response) -> dict[str, Any]:
         self._assert_ok(response)

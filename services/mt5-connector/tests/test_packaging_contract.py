@@ -36,11 +36,11 @@ def test_windows_packaging_contract_is_releaseable() -> None:
     assert "MetaTrader5" in spec_text
     assert "keyring" in spec_text
     pyproject_text = (CONNECTOR / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'version = "0.4.1"' in pyproject_text
+    assert 'version = "0.4.2"' in pyproject_text
     assert "pystray" in pyproject_text
     assert "Pillow" in pyproject_text
     assert "pystray" in spec_text
-    assert '#define MyAppVersion "0.4.1"' in installer_text
+    assert '#define MyAppVersion "0.4.2"' in installer_text
     assert 'Name: "autostart"' in installer_text
     assert 'ValueName: "iRexPro MT5 Connector"' in installer_text
     assert 'ValueData: """{app}\\iRexPro-MT5-Connector.exe"" --background"' in installer_text
@@ -133,6 +133,18 @@ def test_onboarding_download_matches_current_connector_version() -> None:
     onboarding = ROOT / "apps" / "web" / "src" / "app" / "onboarding" / "broker" / "page.tsx"
     text = onboarding.read_text(encoding="utf-8")
 
-    assert "mt5-connector-v0.4.1/iRexPro-MT5-Connector-Setup.exe" in text
-    assert "Install iRexPro MT5 Connector v0.4.1" in text
+    assert "mt5-connector-v0.4.2/iRexPro-MT5-Connector-Setup.exe" in text
+    assert "Install iRexPro MT5 Connector v0.4.2" in text
     assert "mt5-connector-v0.3.0" not in text
+
+
+def test_desktop_window_displays_current_connector_version() -> None:
+    init_text = (CONNECTOR / "irexpro_mt5_connector" / "__init__.py").read_text(encoding="utf-8")
+    gui_text = (CONNECTOR / "irexpro_mt5_connector" / "gui.py").read_text(encoding="utf-8")
+    host_worker_text = (CONNECTOR / "irexpro_mt5_connector" / "host_worker.py").read_text(encoding="utf-8")
+
+    assert '__version__ = "0.4.2"' in init_text
+    assert "from . import __version__" in gui_text
+    assert 'self.root.title(f"iRexPro MT5 Connector v{__version__}")' in gui_text
+    assert 'text=f"iRexPro Direct MT5 Connector · v{__version__}"' in gui_text
+    assert 'HOST_WORKER_VERSION = "0.4.2"' in host_worker_text

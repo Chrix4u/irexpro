@@ -23,7 +23,7 @@ from .mt5_terminal import MetaQuotesMt5Terminal
 
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
-HOST_WORKER_VERSION = "0.4.1"
+HOST_WORKER_VERSION = "0.4.2"
 WORKER_KEYRING_SERVICE = "irexpro.mt5.host-worker"
 
 
