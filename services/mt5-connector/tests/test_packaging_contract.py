@@ -123,3 +123,12 @@ def test_project_exposes_windows_desktop_entry_point() -> None:
     assert '[project.gui-scripts]' in pyproject
     assert 'irexpro-mt5-desktop = "irexpro_mt5_connector.gui:main"' in pyproject
     assert 'irexpro-mt5-host-worker = "irexpro_mt5_connector.host_worker:main"' in pyproject
+
+
+def test_onboarding_download_matches_current_connector_version() -> None:
+    onboarding = ROOT / "apps" / "web" / "src" / "app" / "onboarding" / "broker" / "page.tsx"
+    text = onboarding.read_text(encoding="utf-8")
+
+    assert "mt5-connector-v0.4.0/iRexPro-MT5-Connector-Setup.exe" in text
+    assert "Install iRexPro MT5 Connector v0.4.0" in text
+    assert "mt5-connector-v0.3.0" not in text

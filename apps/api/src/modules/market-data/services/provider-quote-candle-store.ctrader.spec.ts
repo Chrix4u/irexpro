@@ -33,6 +33,8 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
     expect(params[2]).toBe('H4');
     expect(params[3]).toBe(240);
     expect(params[4]).toBe('ctrader-broker-native');
+    const payload = JSON.parse(params[5]);
+    expect(payload).toEqual([expect.objectContaining({ sample_count: 120 })]);
   });
 
   it('requires a live bid/ask row for the latest positive-spread quote', async () => {
