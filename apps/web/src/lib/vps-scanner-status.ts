@@ -160,14 +160,27 @@ export interface M1TacticalStatusView {
     trainedExpertShortVotes?: number | null;
     m1TacticalRole?: string | null;
     m1TimingRoute?: string;
+    primaryBlockerGroup?: string | null;
+    primaryBlockerCode?: string | null;
+    demoCostBreakEvenStopPrice?: number | null;
+    demoAlternativeCostR?: number | null;
   } | null;
 }
 
-export function hasM1TacticalStatusUiShape(value: unknown): value is M1TacticalStatusView {
-  if (!isRecord(value) || typeof value.enabled !== "boolean" || typeof value.phase !== "string") {
+export function hasM1TacticalStatusUiShape(
+  value: unknown,
+): value is M1TacticalStatusView {
+  if (
+    !isRecord(value) ||
+    typeof value.enabled !== "boolean" ||
+    typeof value.phase !== "string"
+  ) {
     return false;
   }
-  if (!isNullableTimestamp(value.lastRunAt) || !(value.lastError === null || typeof value.lastError === "string")) {
+  if (
+    !isNullableTimestamp(value.lastRunAt) ||
+    !(value.lastError === null || typeof value.lastError === "string")
+  ) {
     return false;
   }
   if (value.latestDecision === null) return true;
@@ -186,7 +199,8 @@ export function hasM1TacticalStatusUiShape(value: unknown): value is M1TacticalS
       decision.executionAuthority === "PAPER_ONLY_RESEARCH" ||
       decision.executionAuthority === "BROKER_NATIVE") &&
     isStringArray(decision.blockers) &&
-    (decision.outcomeState === null || typeof decision.outcomeState === "string")
+    (decision.outcomeState === null ||
+      typeof decision.outcomeState === "string")
   );
 }
 
@@ -208,7 +222,9 @@ function routeLabel(value: string | null | undefined): string {
     .filter(Boolean)
     .map((part) => part.toLowerCase())
     .join(" ");
-  return phrase ? phrase.charAt(0).toUpperCase() + phrase.slice(1) : "Awaiting route";
+  return phrase
+    ? phrase.charAt(0).toUpperCase() + phrase.slice(1)
+    : "Awaiting route";
 }
 
 function percentLabel(value: number | null | undefined): string {
@@ -221,7 +237,9 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
   const status = hasM1TacticalStatusUiShape(value) ? value : null;
   const decision = status?.latestDecision ?? null;
   const engineCode =
-    status?.primaryEngineCode ?? decision?.primaryEngineCode ?? "irexpro-m1-tactical";
+    status?.primaryEngineCode ??
+    decision?.primaryEngineCode ??
+    "irexpro-m1-tactical";
   const multimodel = engineCode === "irexpro-multimodel-ensemble-v1";
   const authorityLabel = status?.authorityMode
     ? status.authorityMode.replaceAll("_", " ")
@@ -233,7 +251,8 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
   const longVotes = finite(decision?.trainedExpertLongVotes);
   const shortVotes = finite(decision?.trainedExpertShortVotes);
   const totalVotes = (longVotes ?? 0) + (shortVotes ?? 0);
-  const directionalVotes = direction === "BUY" ? longVotes : direction === "SELL" ? shortVotes : null;
+  const directionalVotes =
+    direction === "BUY" ? longVotes : direction === "SELL" ? shortVotes : null;
   const expertRoleLabel =
     decision?.multimodelAuthorityPath === "HIGH_CONVICTION_RESCUE"
       ? "High-conviction authority"
@@ -252,7 +271,9 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
       (decision?.blockers?.length ?? 0) === 0);
 
   return {
-    label: multimodel ? "Multi-model ensemble · ACTIVE" : "M1 tactical · ACTIVE",
+    label: multimodel
+      ? "Multi-model ensemble · ACTIVE"
+      : "M1 tactical · ACTIVE",
     engineCode,
     authorityLabel,
     planBLabel,
@@ -275,7 +296,10 @@ function finite(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function normalizedProgress(value: number | null, target: number | null): number {
+function normalizedProgress(
+  value: number | null,
+  target: number | null,
+): number {
   if (value == null || target == null || target <= 0) return 0;
   return Math.max(0, Math.min(1, value / target));
 }
@@ -317,10 +341,15 @@ export function deriveTradeReadinessUiState(
   const m1Status = hasM1TacticalStatusUiShape(input.m1TacticalStatus)
     ? input.m1TacticalStatus
     : null;
-  const m1Decision = m1Status?.enabled === true ? m1Status.latestDecision : null;
+  const m1Decision =
+    m1Status?.enabled === true ? m1Status.latestDecision : null;
   if (m1Decision) {
-    const selectedReadiness = m1Status?.marketReadiness?.[m1Decision.instrument] ?? null;
-    if (selectedReadiness?.ready === false && selectedReadiness.reason.startsWith("BROKER_")) {
+    const selectedReadiness =
+      m1Status?.marketReadiness?.[m1Decision.instrument] ?? null;
+    if (
+      selectedReadiness?.ready === false &&
+      selectedReadiness.reason.startsWith("BROKER_")
+    ) {
       if (selectedReadiness.reason === "BROKER_M1_STALE") {
         return waiting(
           8,
@@ -365,12 +394,15 @@ export function deriveTradeReadinessUiState(
       m1Decision.primaryEngineCode === "irexpro-multimodel-ensemble-v1" ||
       m1Status?.primaryEngineCode === "irexpro-multimodel-ensemble-v1";
     const finalExecutionBlocked =
-      m1Decision.outcomeState != null && m1Decision.outcomeState !== "EXECUTION_SUCCEEDED";
+      m1Decision.outcomeState != null &&
+      m1Decision.outcomeState !== "EXECUTION_SUCCEEDED";
     const executionEligible =
-      (m1Decision.multimodelExecutable ?? (m1Decision.executionAuthority !== "NONE")) === true &&
+      (m1Decision.multimodelExecutable ??
+        m1Decision.executionAuthority !== "NONE") === true &&
       blockers.length === 0 &&
       !finalExecutionBlocked;
-    const primaryConfidence = finite(m1Decision.primaryConfidence) ?? m1Decision.confidence;
+    const primaryConfidence =
+      finite(m1Decision.primaryConfidence) ?? m1Decision.confidence;
     let score = Math.max(0, Math.min(100, primaryConfidence * 100));
     if (!executionEligible) {
       score = Math.min(score, MAX_BLOCKED_READINESS_SCORE);
@@ -378,7 +410,9 @@ export function deriveTradeReadinessUiState(
 
     const driftBlocked = blockers.includes("DRIFT_OUT_OF_DISTRIBUTION");
     const routeShadow = blockers.includes("M1_PHASE_ROUTE_SHADOW");
-    const reliabilityBlocked = blockers.some((blocker) => blocker.includes("RELIABILITY"));
+    const reliabilityBlocked = blockers.some((blocker) =>
+      blocker.includes("RELIABILITY"),
+    );
     if (driftBlocked) {
       // Drift remains an execution veto, but the meter should still communicate
       // the model's actual setup strength. The general blocked cap above keeps
@@ -403,12 +437,15 @@ export function deriveTradeReadinessUiState(
       };
     }
     if (executionEligible) {
-      const highConvictionRescue = m1Decision.multimodelAuthorityPath === "HIGH_CONVICTION_RESCUE";
+      const highConvictionRescue =
+        m1Decision.multimodelAuthorityPath === "HIGH_CONVICTION_RESCUE";
       const rescueCap = finite(m1Decision.multimodelRescueVolumeCap);
       return {
         score: rounded,
         band: "READY",
-        headline: highConvictionRescue ? "High-conviction DEMO setup ready" : "Trade conditions ready",
+        headline: highConvictionRescue
+          ? "High-conviction DEMO setup ready"
+          : "Trade conditions ready",
         detail: highConvictionRescue
           ? `The high-conviction DEMO rescue is active: three trained experts are unanimously aligned with this broker-native setup, expectancy and execution-cost checks are positive, and the older admission/drift veto has been simplified. This rescue path is capped at ${(rescueCap ?? 0.2).toFixed(2)} lot and still passes the final account-risk engine.`
           : multimodelPrimary
@@ -428,17 +465,42 @@ export function deriveTradeReadinessUiState(
       ? "The multi-model ensemble is evaluating fresh broker-native data, but the current quorum still has execution blockers."
       : "The active M1 engine is evaluating fresh broker-native data, but this setup still has execution blockers.";
     if (trainedExpertBlocked) {
-      detail = "The multi-model ensemble is active, but the trained three-expert model has not confirmed this direction yet.";
+      detail =
+        "The multi-model ensemble is active, but the trained three-expert model has not confirmed this direction yet.";
     } else if (planBBlocked) {
-      detail = "The multi-model ensemble is active, but the current setup has not passed Plan-B admission yet.";
+      detail =
+        "The multi-model ensemble is active, but the current setup has not passed Plan-B admission yet.";
     } else if (driftBlocked && routeShadow) {
-      detail = "The current M1 setup is active, but drift is outside the execution distribution and this route remains shadow-only.";
+      detail =
+        "The current M1 setup is active, but drift is outside the execution distribution and this route remains shadow-only.";
     } else if (driftBlocked) {
-      detail = "The current M1 setup is active, but drift is outside the execution distribution, so execution remains blocked.";
+      detail =
+        "The current M1 setup is active, but drift is outside the execution distribution, so execution remains blocked.";
     } else if (reliabilityBlocked) {
-      detail = "The current M1 setup is active, but pair/side reliability evidence is not yet strong enough for execution.";
+      detail =
+        "The current M1 setup is active, but pair/side reliability evidence is not yet strong enough for execution.";
     } else if (routeShadow) {
-      detail = "The current M1 setup is active, but this route is still shadow-only in the present rollout phase.";
+      detail =
+        "The current M1 setup is active, but this route is still shadow-only in the present rollout phase.";
+    }
+
+    // Separate the underlying economic/model/entry cause from wrapper veto
+    // strings. This is informational only; all original vetoes still apply.
+    if (m1Decision.primaryBlockerGroup === "MODEL_EXPECTANCY") {
+      detail =
+        "After estimated execution costs, the expected return is below the required floor. The AI will not open an economically weak trade merely to increase activity.";
+    } else if (m1Decision.primaryBlockerGroup === "MODEL_DRIFT") {
+      detail =
+        "The model classifies this market as outside its validated distribution. It is collecting evidence without dispatching an unqualified order.";
+    } else if (m1Decision.primaryBlockerGroup === "ENTRY_TIMING") {
+      detail =
+        "The higher-timeframe trade hypothesis has not received the required confirmed M1 entry timing.";
+    } else if (m1Decision.primaryBlockerGroup === "MODEL_ADMISSION") {
+      detail =
+        "The multi-model entry has not passed its calibrated model-confidence and signal-quality checks.";
+    } else if (m1Decision.primaryBlockerGroup === "RISK_OR_ACCOUNT") {
+      detail =
+        "An account-risk, exposure, loss-streak, or session guard is preventing this entry.";
     }
 
     return {
@@ -458,7 +520,8 @@ export function deriveTradeReadinessUiState(
   }
 
   const status = isRecord(input.scannerStatus) ? input.scannerStatus : null;
-  const schedule = status && isRecord(status.marketSchedule) ? status.marketSchedule : null;
+  const schedule =
+    status && isRecord(status.marketSchedule) ? status.marketSchedule : null;
   if (schedule?.paused === true) {
     return waiting(
       8,
@@ -467,19 +530,24 @@ export function deriveTradeReadinessUiState(
     );
   }
 
-  const decision = status && isRecord(status.lastEnsembleDecision)
-    ? status.lastEnsembleDecision
-    : null;
-  const governance = decision && isRecord(decision.governance) ? decision.governance : null;
-  const thresholds = status && isRecord(status.ensembleThresholds)
-    ? status.ensembleThresholds
-    : null;
-  const instrument = decision && typeof decision.instrument === "string"
-    ? decision.instrument
-    : null;
-  const direction = decision?.direction === "BUY" || decision?.direction === "SELL"
-    ? decision.direction
-    : null;
+  const decision =
+    status && isRecord(status.lastEnsembleDecision)
+      ? status.lastEnsembleDecision
+      : null;
+  const governance =
+    decision && isRecord(decision.governance) ? decision.governance : null;
+  const thresholds =
+    status && isRecord(status.ensembleThresholds)
+      ? status.ensembleThresholds
+      : null;
+  const instrument =
+    decision && typeof decision.instrument === "string"
+      ? decision.instrument
+      : null;
+  const direction =
+    decision?.direction === "BUY" || decision?.direction === "SELL"
+      ? decision.direction
+      : null;
 
   if (!decision || !thresholds) {
     const confidence = finite(input.fallbackConfidence);
@@ -512,7 +580,8 @@ export function deriveTradeReadinessUiState(
   score += governance?.paperNetExpectedRPassed === true ? 10 : 0;
   score += governance?.paperDriftPassed === true ? 8 : 0;
   score += governance?.eventRisk === "CLEAR" ? 7 : 0;
-  score += decision.paperAdmitted === true || decision.admitted === true ? 5 : 0;
+  score +=
+    decision.paperAdmitted === true || decision.admitted === true ? 5 : 0;
   score += governance?.paperExecutionEligible === true ? 5 : 0;
 
   const executionEligible = governance?.paperExecutionEligible === true;
@@ -527,7 +596,10 @@ export function deriveTradeReadinessUiState(
     );
   }
 
-  if (governance?.eventRisk === "HIGH_IMPACT_BLOCK" || governance?.eventRisk === "UNVERIFIED") {
+  if (
+    governance?.eventRisk === "HIGH_IMPACT_BLOCK" ||
+    governance?.eventRisk === "UNVERIFIED"
+  ) {
     score = Math.min(score, 49);
   }
 
@@ -536,15 +608,20 @@ export function deriveTradeReadinessUiState(
   if (input.fastMarkState === "UNAVAILABLE") score = Math.min(score, 49);
 
   const rounded = Math.max(0, Math.min(100, Math.round(score)));
-  const tradeExpected = executionEligible && rounded >= 70 && input.fastMarkState !== "DEGRADED" &&
-    input.fastMarkState !== "M5_FALLBACK" && input.fastMarkState !== "UNAVAILABLE";
+  const tradeExpected =
+    executionEligible &&
+    rounded >= 70 &&
+    input.fastMarkState !== "DEGRADED" &&
+    input.fastMarkState !== "M5_FALLBACK" &&
+    input.fastMarkState !== "UNAVAILABLE";
 
   if (tradeExpected) {
     return {
       score: rounded,
       band: "READY",
       headline: "Trade conditions ready",
-      detail: "The current setup has passed the active model, risk and execution checks. An order may open when final dispatch conditions remain valid.",
+      detail:
+        "The current setup has passed the active model, risk and execution checks. An order may open when final dispatch conditions remain valid.",
       tradeExpected: true,
       instrument,
       direction,
@@ -555,8 +632,12 @@ export function deriveTradeReadinessUiState(
     return {
       score: rounded,
       band: "FORMING",
-      headline: decision.paperAdmitted === true ? "Final checks in progress" : "Setup forming",
-      detail: "Several conditions are aligned, but at least one required trade check is still holding the setup back.",
+      headline:
+        decision.paperAdmitted === true
+          ? "Final checks in progress"
+          : "Setup forming",
+      detail:
+        "Several conditions are aligned, but at least one required trade check is still holding the setup back.",
       tradeExpected: false,
       instrument,
       direction,
@@ -567,13 +648,13 @@ export function deriveTradeReadinessUiState(
     score: rounded,
     band: "WAITING",
     headline: "Waiting for a stronger setup",
-    detail: "The AI is monitoring the market and will stay out until enough conditions align.",
+    detail:
+      "The AI is monitoring the market and will stay out until enough conditions align.",
     tradeExpected: false,
     instrument,
     direction,
   };
 }
-
 
 /**
  * Converts optional scanner market-cache telemetry into one fail-closed UI state.

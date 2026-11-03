@@ -20,6 +20,8 @@ export interface M1TacticalFeatureSnapshot {
   latestM1OpenTime: Date;
   price: number;
   atr14: number;
+  /** ATR14 of completed broker-native M5 bars, for cost geometry diagnostics. */
+  m5Atr14?: number;
   rsi14: number;
   bodyRangeRatio: number;
   upperWickRatio: number;
@@ -406,6 +408,7 @@ export function buildM1TacticalFeatures(
     latestM1OpenTime: new Date(latest.timestamp),
     price: close,
     atr14: localAtr,
+    m5Atr14: m5Atr,
     rsi14: localRsi,
     bodyRangeRatio: flatLatestBar ? 0 : Math.abs(close - open) / range,
     upperWickRatio: flatLatestBar ? 0 : Math.max(0, upperWick) / range,

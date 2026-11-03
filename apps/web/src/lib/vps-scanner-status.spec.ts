@@ -752,6 +752,30 @@ describe("active multi-model execution presentation", () => {
     );
   });
 
+  it("explains the primary economic blocker rather than only the wrapper admission failure", () => {
+    const blocked = JSON.parse(JSON.stringify(status));
+    blocked.latestDecision.primaryConfidence = 0.7;
+    blocked.latestDecision.multimodelExecutable = false;
+    blocked.latestDecision.executionAuthority = "NONE";
+    blocked.latestDecision.blockers = [
+      "MULTIMODEL_PLAN_B_NOT_ADMITTED",
+      "MULTIMODEL_GOVERNANCE_BLOCKED",
+      "PAPER_NET_EXPECTED_R",
+    ];
+    blocked.latestDecision.primaryBlockerGroup = "MODEL_EXPECTANCY";
+    blocked.latestDecision.primaryBlockerCode = "PAPER_NET_EXPECTED_R";
+    const result = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: blocked,
+      fastMarkState: "LIVE",
+    });
+    expect(result.tradeExpected).toBe(false);
+    expect(result.band).not.toBe("READY");
+    expect(result.detail).toMatch(/expected return is below/i);
+    expect(result.detail).toMatch(/estimated execution costs/i);
+  });
+
   it("keeps drift-blocked multi-model readiness moving instead of pinning every setup at 49", () => {
     const weaker = JSON.parse(JSON.stringify(status));
     weaker.latestDecision.primaryConfidence = 0.55;
