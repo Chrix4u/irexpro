@@ -49,10 +49,12 @@ import { TradeIntentService } from './services/trade-intent.service';
 // Round 6 live-execution completion (§3/§4): the portfolio allocation
 // engine + the deterministic fail-closed position-sizing engine.
 import { MarketSafetyGateService } from './orchestration/market-safety-gate.service';
-// Round 6 live-execution completion (§14): the per-account dispatch lease.
+// Round 6 §14: the per-account dispatch lease.
 import { AccountDispatchLeaseService } from './orchestration/account-dispatch-lease.service';
 import { AllocationService } from './services/allocation.service';
 import { PositionSizingService } from './services/position-sizing.service';
+import { TradeSpreadTelemetryService } from './services/trade-spread-telemetry.service';
+import { MarketDataModule } from '../market-data/market-data.module';
 // Round 6 live-execution completion (§8): the protective-order
 // reconciliation loop (per-trade SL/TP verify/repair).
 import { ProtectiveOrderReconciliationService } from './reconciliation/protective-order-reconciliation.service';
@@ -110,6 +112,7 @@ import { LiveDemoProfitProtectionService } from './reconciliation/live-demo-prof
     ),
     forwardRef(() => RiskModule),
     BrokerModule,
+    MarketDataModule,
     AuditModule,
     ExecutionControlModule,
     // Round 6: PLAIN leaf imports — the unified execution-authority services
@@ -132,6 +135,9 @@ import { LiveDemoProfitProtectionService } from './reconciliation/live-demo-prof
     // + position sizing (deterministic, fail-closed, ExactDecimal-only).
     AllocationService,
     PositionSizingService,
+    // Prospective quote-at-fill spread attribution. Reporting only: this
+    // service does not participate in admission, sizing, SL/TP, or exits.
+    TradeSpreadTelemetryService,
     // Round 6 §5/§18: the final market-safety gate (pre-commitment) —
     // proven fresh quote + spread sanity + entry deviation, before the
     // provider-dispatch commitment, NEW-EXPOSURE PLACE only.
@@ -184,6 +190,7 @@ import { LiveDemoProfitProtectionService } from './reconciliation/live-demo-prof
     TradeIntentService,
     AllocationService,
     PositionSizingService,
+    TradeSpreadTelemetryService,
     ExecutionSessionResolutionService,
     ExecutionOrchestrator,
     FinalDispatchBoundary,
