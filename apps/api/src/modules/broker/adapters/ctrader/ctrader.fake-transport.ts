@@ -542,7 +542,7 @@ export class ScriptedCtraderServer {
             symbolId: symbolIds[0] ?? 0,
             bid: 108650,
             ask: 108700,
-            timestamp: 1757000000123,
+            timestamp: Date.now(),
           },
         },
       ];

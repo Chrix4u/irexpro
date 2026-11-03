@@ -72,7 +72,7 @@ function spotEvent(
   symbolId: number,
   bid: number,
   ask: number,
-  timestamp = 1757000000123,
+  timestamp = Date.now(),
 ): CtraderMessageEnvelope {
   return {
     payloadType: CTRADER_PAYLOAD_TYPE.SPOT_EVENT,

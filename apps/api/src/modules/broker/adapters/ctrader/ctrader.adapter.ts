@@ -154,6 +154,10 @@ const DEAL_LIST_MAX_ROWS = 200;
 const TRENDBAR_LOOKBACK_FACTOR = 2;
 /** Short bounded read-after-acceptance window for cTrader MARKET fills. */
 const MARKET_ACCEPTED_RECONCILE_DELAYS_MS = [0, 150, 350] as const;
+/** Reject provider spot snapshots too old to be execution-grade current-price evidence. */
+const SPOT_EVENT_MAX_AGE_MS = 5 * 60_000;
+/** Allow only a small provider/local clock skew before treating a quote timestamp as invalid. */
+const SPOT_EVENT_MAX_CLOCK_AHEAD_MS = 5_000;
 
 interface SymbolCache {
   /** normalized instrument name (e.g. "EURUSD") → symbolId */
@@ -1665,11 +1669,17 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         // to the REQUESTING account AND symbol, with a complete bid/ask
         // quote. A 2131 event for a DIFFERENT account on the same shared
         // environment connection can never satisfy this waiter.
+        const providerTimestampMs = Number(payload?.timestamp);
+        const ageMs = Date.now() - providerTimestampMs;
         return (
           payload?.ctidTraderAccountId === ctid &&
           payload?.symbolId === symbolId &&
           payload.bid != null &&
-          payload.ask != null
+          payload.ask != null &&
+          Number.isFinite(providerTimestampMs) &&
+          providerTimestampMs > 0 &&
+          ageMs >= -SPOT_EVENT_MAX_CLOCK_AHEAD_MS &&
+          ageMs <= SPOT_EVENT_MAX_AGE_MS
         );
       },
       10_000,
