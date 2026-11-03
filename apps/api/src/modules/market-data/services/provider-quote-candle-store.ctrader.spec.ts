@@ -52,7 +52,11 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
     const sql = String(query.mock.calls[0]![0]);
     expect(sql).toContain('positive_quote_sample_count');
     expect(sql).toContain('last_quote_sample_at');
-    expect(sql).toContain('positive_quote_sample_count + EXCLUDED.positive_quote_sample_count');
+    expect(sql).toContain('positive_quote_sample_count +');
+    // Same cached provider tick may be read by both collector loops. It must
+    // contribute at most one positive observation.
+    expect(sql).toContain('EXCLUDED.last_quote_sample_at >');
+    expect(sql).toContain('COALESCE(market_data.provider_quote_candles.last_quote_sample_at');
   });
 
   it('aggregates positive live observation counts and uses quote timestamps for readiness', async () => {
@@ -100,6 +104,20 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
       positiveSampleCount: 10,
       spread: '0.0000900000',
     });
+  });
+
+  it('reads the actual quote timestamp rather than a candle history refresh timestamp', async () => {
+    const query = jest.fn().mockResolvedValue([{
+      bid_close: '1.10000',
+      ask_close: '1.10008',
+      spread_close: '0.00008',
+      last_sample_at: EVALUATED_AT.toISOString(),
+    }]);
+    const service = new ProviderQuoteCandleStoreService({ query } as unknown as DataSource);
+    await service.getLatestQuote('ctrader-1', 'EURUSD');
+    const sql = String(query.mock.calls[0]![0]);
+    expect(sql).toContain('last_quote_sample_at AS last_sample_at');
+    expect(sql).toContain('ORDER BY last_quote_sample_at DESC');
   });
 
   it('uses directly stored broker-native H1/H4 context when available', async () => {
