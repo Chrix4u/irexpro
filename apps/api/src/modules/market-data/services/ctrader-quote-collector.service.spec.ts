@@ -106,6 +106,41 @@ describe('CTraderQuoteCollectorService', () => {
     }
   });
 
+  it('does not let a stalled M1 fetch prevent other broker-native history and context requests from starting', async () => {
+    const h = harness();
+    let releaseFirstM1: (() => void) | undefined;
+    const historicalBar = {
+      timestamp: new Date('2026-10-18T20:00:00.000Z'),
+      open: '1.10000',
+      high: '1.10100',
+      low: '1.09900',
+      close: '1.10050',
+      volume: '50',
+    };
+    h.getOhlcvForConnection.mockImplementation(async (_userId, _connectionId, instrument, timeframe) => {
+      if (instrument === 'EURUSD' && timeframe === 'M1') {
+        await new Promise<void>((resolve) => {
+          releaseFirstM1 = resolve;
+        });
+      }
+      return [historicalBar];
+    });
+
+    const cycle = h.service.collectOnce(OPEN_NOW);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const allRequestsStartedBeforeRelease = h.getOhlcvForConnection.mock.calls.length === 4;
+    const contextStartedBeforeRelease = h.getOhlcvForConnection.mock.calls.some(
+      (call) => call[3] === 'M5',
+    );
+    releaseFirstM1?.();
+    await cycle;
+
+    expect(allRequestsStartedBeforeRelease).toBe(true);
+    expect(contextStartedBeforeRelease).toBe(true);
+    expect(h.upsertHistoricalCandles).toHaveBeenCalledTimes(4);
+  });
+
   it('samples live quotes independently of the slower historical refresh cycle', async () => {
     const h = harness();
 
