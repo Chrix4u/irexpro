@@ -571,51 +571,62 @@ describe("production trade-readiness presentation", () => {
   });
 
   it.each([
-    ["BROKER_M5_CONTEXT_STALE", "Broker M5 candles stale — trading paused", "10-minute"],
-    ["BROKER_M15_CONTEXT_STALE", "Broker M15 candles stale — trading paused", "20-minute"],
-  ])("shows the exact %s data blocker without implying an authorized trade", (reason, headline, limit) => {
-    const m1Status = {
-      enabled: true,
-      phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
-      lastRunAt: "2026-11-03T22:45:00.000Z",
-      lastError: null,
-      marketReadiness: {
-        GBPUSD: {
-          ready: false,
-          reason,
-          authority: null,
-          observedAt: "2026-11-03T22:45:00.000Z",
+    [
+      "BROKER_M5_CONTEXT_STALE",
+      "Broker M5 candles stale — trading paused",
+      "10-minute",
+    ],
+    [
+      "BROKER_M15_CONTEXT_STALE",
+      "Broker M15 candles stale — trading paused",
+      "20-minute",
+    ],
+  ])(
+    "shows the exact %s data blocker without implying an authorized trade",
+    (reason, headline, limit) => {
+      const m1Status = {
+        enabled: true,
+        phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+        lastRunAt: "2026-11-03T22:45:00.000Z",
+        lastError: null,
+        marketReadiness: {
+          GBPUSD: {
+            ready: false,
+            reason,
+            authority: null,
+            observedAt: "2026-11-03T22:45:00.000Z",
+          },
         },
-      },
-      latestDecision: {
-        instrument: "GBPUSD",
-        direction: "BUY" as const,
-        route: "ABSTAIN",
-        barTime: "2026-11-03T22:44:00.000Z",
-        confidence: 0.72,
-        netExpectedR: -0.15,
-        executionAuthority: "NONE" as const,
-        blockers: ["MULTIMODEL_GOVERNANCE_BLOCKED"],
-        outcomeState: null,
-      },
-    };
-    const result = derive({
-      automationOn: true,
-      scannerStatus: VALID_STATUS,
-      m1TacticalStatus: m1Status,
-      fastMarkState: "LIVE",
-    });
+        latestDecision: {
+          instrument: "GBPUSD",
+          direction: "BUY" as const,
+          route: "ABSTAIN",
+          barTime: "2026-11-03T22:44:00.000Z",
+          confidence: 0.72,
+          netExpectedR: -0.15,
+          executionAuthority: "NONE" as const,
+          blockers: ["MULTIMODEL_GOVERNANCE_BLOCKED"],
+          outcomeState: null,
+        },
+      };
+      const result = derive({
+        automationOn: true,
+        scannerStatus: VALID_STATUS,
+        m1TacticalStatus: m1Status,
+        fastMarkState: "LIVE",
+      });
 
-    expect(result).toMatchObject({
-      score: 12,
-      band: "WAITING",
-      tradeExpected: false,
-      instrument: "GBPUSD",
-      direction: "BUY",
-      headline,
-    });
-    expect(result.detail).toContain(limit);
-  });
+      expect(result).toMatchObject({
+        score: 12,
+        band: "WAITING",
+        tradeExpected: false,
+        instrument: "GBPUSD",
+        direction: "BUY",
+        headline,
+      });
+      expect(result.detail).toContain(limit);
+    },
+  );
 
   it("shows M1 broker-native execution eligibility as ready without legacy fast-mark capping", () => {
     const m1Status = {
