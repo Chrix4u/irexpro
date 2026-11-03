@@ -18,7 +18,7 @@ FAIL src/lib/trader-execution.spec.ts
 Test Suites: 1 failed, 1 total
 Tests:       0 total
 Snapshots:   0 total
-Time:        1.074 s
+Time:        0.568 s
 Ran all test suites matching /src\/lib\/trader-execution.spec.ts/i.
 undefined
 /home/runner/work/irexpro/irexpro/apps/web:
