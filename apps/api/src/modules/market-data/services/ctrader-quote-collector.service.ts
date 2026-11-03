@@ -48,7 +48,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   private stopping = false;
   private m1RotationOffset = 0;
   private contextRotationOffset = 0;
-  private readonly contextInstrumentOffsets: Record<(typeof CONTEXT_REFRESH_ROTATION)[number], number> = {
+  private readonly contextInstrumentOffsets = {
     M5: 0,
     M15: 0,
     H1: 0,
