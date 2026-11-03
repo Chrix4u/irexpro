@@ -18,6 +18,7 @@ describe('ProfitProtectionExitQualityService', () => {
           neither_count: '0',
           data_gap_count: '0',
           small_profit_count: '1',
+          small_profit_resolved_count: '1',
           small_profit_tp_first_count: '1',
           account_currency: 'EUR',
           actual_realised_pnl: '5.25',
@@ -35,6 +36,12 @@ describe('ProfitProtectionExitQualityService', () => {
           total: '2',
           tp_first_count: '1',
           sl_first_count: '1',
+          small_profit_count: '1',
+          small_profit_resolved_count: '1',
+          small_profit_comparable_count: '1',
+          small_profit_tp_first_count: '1',
+          small_profit_sl_first_count: '0',
+          small_profit_avg_delta_r: '1.2500',
         },
       ])
       .mockResolvedValueOnce([
@@ -96,6 +103,7 @@ describe('ProfitProtectionExitQualityService', () => {
         tpFirstRate: 0.5,
         slFirstRate: 0.5,
         smallProfitCount: 1,
+        smallProfitResolvedCount: 1,
         smallProfitTpFirstCount: 1,
         smallProfitTpFirstRate: 1,
         accountCurrency: 'EUR',
@@ -105,6 +113,20 @@ describe('ProfitProtectionExitQualityService', () => {
         averageRDelta: 0.13,
       },
     });
+    expect(result.routes[0]).toMatchObject({
+      strategyRoute: 'CONFIRMED_REVERSAL',
+      smallProfitCount: 1,
+      smallProfitResolvedCount: 1,
+      smallProfitComparableCount: 1,
+      smallProfitTpFirstCount: 1,
+      smallProfitSlFirstCount: 0,
+      smallProfitTpFirstRate: 1,
+      smallProfitAverageRDelta: 1.25,
+    });
+    const routeSql = String(query.mock.calls[2]![0]);
+    expect(routeSql).toContain('small_profit_resolved_count');
+    expect(routeSql).toContain('small_profit_comparable_count');
+    expect(routeSql).toContain('AVG(f.r_delta)');
     expect(result.items[0]).toMatchObject({
       tradeId: 'trade-1',
       instrument: 'EURUSD',
@@ -254,6 +276,56 @@ describe('ProfitProtectionExitQualityService', () => {
     expect(String(query.mock.calls[3]![0])).toContain(
       "WHEN b.outcome = 'TP_FIRST' THEN b.original_target_r",
     );
+  });
+
+  it('excludes data gaps from the resolved small-profit TP-first denominator', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          total: '3',
+          resolved_count: '1',
+          tp_first_count: '1',
+          sl_first_count: '0',
+          ambiguous_count: '0',
+          neither_count: '0',
+          data_gap_count: '2',
+          small_profit_count: '3',
+          small_profit_resolved_count: '1',
+          small_profit_tp_first_count: '1',
+          account_currency: 'EUR',
+          actual_realised_pnl: '7.50',
+        },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          strategy_route: 'EARLY_TRANSITION',
+          total: '3',
+          tp_first_count: '1',
+          sl_first_count: '0',
+          small_profit_count: '3',
+          small_profit_resolved_count: '1',
+          small_profit_comparable_count: '1',
+          small_profit_tp_first_count: '1',
+          small_profit_sl_first_count: '0',
+          small_profit_avg_delta_r: '0.25',
+        },
+      ])
+      .mockResolvedValueOnce([]);
+
+    const service = new ProfitProtectionExitQualityService({ query } as unknown as DataSource);
+    const result = await service.getReport(USER_ID, {});
+    expect(result.summary.smallProfitCount).toBe(3);
+    expect(result.summary.smallProfitResolvedCount).toBe(1);
+    expect(result.summary.smallProfitTpFirstRate).toBe(1);
+    expect(result.routes[0]).toMatchObject({
+      smallProfitCount: 3,
+      smallProfitResolvedCount: 1,
+      smallProfitComparableCount: 1,
+      smallProfitTpFirstRate: 1,
+      smallProfitAverageRDelta: 0.25,
+    });
   });
 
   it('caps page size at 100 and rejects invalid enum/date filters fail closed', async () => {
