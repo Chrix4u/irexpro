@@ -40,7 +40,7 @@
 - Produces: `assertMarketSafeForDispatch(...): Promise<BrokerPrice>` for successful NEW_EXPOSURE checks.
 - Produces: optional `executionQuote: BrokerPrice` on FILLED provider outcomes.
 
-- [ ] Write tests that a fresh gate returns the exact quote and a FILLED new-exposure outcome carries that same quote.
+- [x] Write tests that a fresh gate returns the exact quote and a FILLED new-exposure outcome carries that same quote.
 - [ ] Run focused tests and observe RED.
 - [ ] Implement quote return/propagation with zero additional broker reads.
 - [ ] Run focused tests GREEN.
@@ -60,10 +60,10 @@
 - Consumes: `executionQuote` from Task 1.
 - Produces: best-effort raw entry quote persistence plus estimated account-currency spread cost.
 
-- [ ] Test USD-quote direct cost: EURUSD spread 0.00020 × 100000 × 0.20 = 4.00 USD.
-- [ ] Test base-currency conversion by entry midpoint and third-currency cached conversion.
-- [ ] Test missing/invalid evidence returns null rather than throwing.
-- [ ] Run estimator tests RED.
+- [x] Test USD-quote direct cost: EURUSD spread 0.00020 × 100000 × 0.20 = 4.00 USD.
+- [x] Test base-currency conversion by entry midpoint and third-currency cached conversion.
+- [x] Test missing/invalid evidence returns null rather than throwing.
+- [x] Run estimator tests RED.
 - [ ] Add nullable schema/entity fields and implement estimator with ExactDecimal.
 - [ ] Persist raw quote at PENDING→OPEN and perform estimate enrichment only after OPEN is durable.
 - [ ] Run estimator and execution focused tests GREEN.
