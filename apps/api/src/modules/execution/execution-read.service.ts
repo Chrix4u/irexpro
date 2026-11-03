@@ -298,14 +298,14 @@ export class ExecutionReadService {
         'grossLoss',
       )
       .addSelect('COALESCE(SUM(trade.realisedPnl), 0)', 'grossRealisedPnl')
-      .addSelect('COALESCE(SUM(trade.commission), 0)', 'totalCommission')
+      .addSelect('COALESCE(SUM(ABS(trade.commission)), 0)', 'totalCommission')
       .addSelect('COALESCE(SUM(trade.swap), 0)', 'totalSwap')
       .addSelect(
-        'COALESCE(SUM(trade.realisedPnl), 0) - COALESCE(SUM(trade.commission), 0) + COALESCE(SUM(trade.swap), 0)',
+        'COALESCE(SUM(trade.realisedPnl), 0) - COALESCE(SUM(ABS(trade.commission)), 0) + COALESCE(SUM(trade.swap), 0)',
         'netRealisedPnl',
       )
       .addSelect(
-        'COALESCE(SUM(trade.commission), 0) - COALESCE(SUM(trade.swap), 0)',
+        'COALESCE(SUM(ABS(trade.commission)), 0) - COALESCE(SUM(trade.swap), 0)',
         'totalExplicitCosts',
       )
       .addSelect('AVG(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)', 'averageWin')
@@ -314,7 +314,7 @@ export class ExecutionReadService {
         'averageLoss',
       )
       .addSelect(
-        '(COALESCE(SUM(trade.realisedPnl), 0) - COALESCE(SUM(trade.commission), 0) + COALESCE(SUM(trade.swap), 0)) / NULLIF(SUM(CASE WHEN trade.realisedPnl IS NOT NULL THEN 1 ELSE 0 END), 0)',
+        '(COALESCE(SUM(trade.realisedPnl), 0) - COALESCE(SUM(ABS(trade.commission)), 0) + COALESCE(SUM(trade.swap), 0)) / NULLIF(SUM(CASE WHEN trade.realisedPnl IS NOT NULL THEN 1 ELSE 0 END), 0)',
         'expectancyPerTrade',
       )
       .addSelect('MAX(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)', 'largestWin')
