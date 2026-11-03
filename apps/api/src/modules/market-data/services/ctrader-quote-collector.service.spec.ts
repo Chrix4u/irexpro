@@ -235,11 +235,21 @@ describe('CTraderQuoteCollectorService', () => {
     expect(allCalls).toHaveLength(48 * 4);
     expect(contextCalls).toHaveLength(48);
     expect(contextCalls.slice(0, 8).map((call) => call[3])).toEqual([
-      'M5', 'M15', 'M5', 'H1', 'M5', 'M15', 'M5', 'H4',
+      'M5',
+      'M15',
+      'M5',
+      'H1',
+      'M5',
+      'M15',
+      'M5',
+      'H4',
     ]);
 
     for (const [timeframe, expectedCallsPerInstrument] of [
-      ['M5', 4], ['M15', 2], ['H1', 1], ['H4', 1],
+      ['M5', 4],
+      ['M15', 2],
+      ['H1', 1],
+      ['H4', 1],
     ] as const) {
       const calls = contextCalls.filter((call) => call[3] === timeframe);
       expect(calls).toHaveLength(expectedCallsPerInstrument * instruments.length);
