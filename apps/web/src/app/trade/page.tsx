@@ -1941,6 +1941,14 @@ export default function AiTradingPage() {
     selectedBroker?.brokerId !== "paper-broker" &&
     selectedBroker?.status === "CONNECTED" &&
     selectedBroker?.authorizationStatus !== "ACTIVE";
+  // Revoked and suspended authorizations cannot be reopened by this recovery
+  // UI; they require their separate server-controlled remediation paths.
+  const demoAutomationCanActivate =
+    demoAutomationNeedsActivation &&
+    selectedBroker?.demoValidated === true &&
+    ["CONNECTED", "AUTHORIZED", "READY"].includes(
+      selectedBroker?.authorizationStatus ?? "",
+    );
   const automationBlockedReasons = executionBlockedReasons({
     session: terminal?.session ?? null,
     killSwitchActive: terminal?.risk?.killSwitchActive ?? false,
@@ -2579,7 +2587,7 @@ export default function AiTradingPage() {
     setError(null);
     try {
       if (action === "ENABLE_DEMO_AUTHORIZATION") {
-        if (!demoAutomationNeedsActivation || !selectedBroker.demoValidated) {
+        if (!demoAutomationCanActivate) {
           notify.warning(
             "DEMO broker automation can only be activated after the broker is connected and validated.",
           );
@@ -3344,14 +3352,18 @@ export default function AiTradingPage() {
                   <span className="ai-control-card__label">AI Trading</span>
                   <Badge
                     variant={
-                      automationOn
-                        ? "success"
-                        : automationSuspended || endedRiskResetAvailable
-                          ? "warning"
-                          : "info"
+                      demoAutomationNeedsActivation
+                        ? "warning"
+                        : automationOn
+                          ? "success"
+                          : automationSuspended || endedRiskResetAvailable
+                            ? "warning"
+                            : "info"
                     }
                   >
-                    {automationRiskSuspended
+                    {demoAutomationNeedsActivation
+                      ? "Broker authorization required"
+                      : automationRiskSuspended
                       ? "Paused by risk protection"
                       : automationBrokerSuspended
                         ? "Paused by broker"
@@ -3368,14 +3380,22 @@ export default function AiTradingPage() {
                     The broker is connected but has not granted ACTIVE automation
                     authority. New positions cannot open until you explicitly
                     authorize this validated DEMO connection.
-                    <Button
-                      type="button"
-                      size="sm"
-                      disabled={togglingAutomation || !controlStateReady || !selectedBroker?.demoValidated}
-                      onClick={() => setPendingAutomationAction("ENABLE_DEMO_AUTHORIZATION")}
-                    >
-                      Enable DEMO automation
-                    </Button>
+                    {demoAutomationCanActivate ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={togglingAutomation || !controlStateReady}
+                        onClick={() => setPendingAutomationAction("ENABLE_DEMO_AUTHORIZATION")}
+                      >
+                        Enable DEMO automation
+                      </Button>
+                    ) : (
+                      <span>
+                        The broker's current authorization requires separate
+                        validation or reconnection before a new DEMO activation
+                        request can be made.
+                      </span>
+                    )}
                   </Alert>
                 ) : null}
                 <Button
