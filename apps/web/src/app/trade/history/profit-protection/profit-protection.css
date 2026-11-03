@@ -39,7 +39,14 @@
 }
 
 .exit-quality-report__route-table {
-  min-width: 760px;
+  min-width: 1120px;
+}
+
+.exit-quality-report__route-disclaimer {
+  margin: 0.5rem 1rem 1.1rem;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  line-height: 1.5;
 }
 
 @media (max-width: 1280px) {
