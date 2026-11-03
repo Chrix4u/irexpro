@@ -60,6 +60,7 @@ export type ProfitProtectionExitQualityReport = {
     neitherCount: number;
     dataGapCount: number;
     smallProfitCount: number;
+    smallProfitResolvedCount: number;
     smallProfitTpFirstCount: number;
     smallProfitTpFirstRate: number | null;
     accountCurrency: string | null;
@@ -79,6 +80,13 @@ export type ProfitProtectionExitQualityReport = {
     tpFirstCount: number;
     slFirstCount: number;
     tpFirstRate: number | null;
+    smallProfitCount: number;
+    smallProfitResolvedCount: number;
+    smallProfitComparableCount: number;
+    smallProfitTpFirstCount: number;
+    smallProfitSlFirstCount: number;
+    smallProfitTpFirstRate: number | null;
+    smallProfitAverageRDelta: number | null;
   }>;
   items: ProfitProtectionExitQualityItem[];
 };
