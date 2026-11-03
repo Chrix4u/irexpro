@@ -1,0 +1,58 @@
+name: Cleanup Cost Reporting Style Once
+
+on:
+  push:
+    branches:
+      - feature/cost-aware-trade-reporting-20261103
+    paths:
+      - .github/workflows/cleanup-cost-reporting-style-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/cost-aware-trade-reporting-20261103
+          fetch-depth: 0
+
+      - name: Restore repository quote style without changing feature behavior
+        run: |
+          npx --yes prettier@3.6.2 --single-quote --write \
+            apps/web/src/app/trade/history/page.tsx \
+            apps/web/src/lib/trader-execution.ts \
+            apps/web/src/lib/trader-execution.spec.ts \
+            packages/types/src/execution.ts
+
+      - name: Check patch integrity
+        run: |
+          git diff --check
+          git fetch origin main
+          echo 'Diff stat after style cleanup:'
+          git diff --stat origin/main...HEAD -- \
+            apps/web/src/app/trade/history/page.tsx \
+            apps/web/src/lib/trader-execution.ts \
+            apps/web/src/lib/trader-execution.spec.ts \
+            packages/types/src/execution.ts
+
+      - name: Commit cleanup and remove one-shot workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm .github/workflows/cleanup-cost-reporting-style-once.yml
+          git add apps/web/src/app/trade/history/page.tsx \
+            apps/web/src/lib/trader-execution.ts \
+            apps/web/src/lib/trader-execution.spec.ts \
+            packages/types/src/execution.ts \
+            .github/workflows/cleanup-cost-reporting-style-once.yml
+          if git diff --cached --quiet; then
+            echo 'No cleanup changes needed.'
+            exit 0
+          fi
+          git commit -m 'style: minimize cost-reporting frontend diff'
+          git push origin HEAD:feature/cost-aware-trade-reporting-20261103
