@@ -102,8 +102,12 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       // Execution-grade bid/ask evidence has priority over historical backfill.
       // A slow/rate-limited OHLCV request must never starve fresh quote samples
       // used by M1 readiness, cross-currency sizing and final risk validation.
-      await this.sampleLiveSpreads(userId, connectionId, now);
-      await this.refreshHistoricalSlice(userId, connectionId, now);
+      // Quote and history lanes must not block each other's progress. The
+      // dedicated live-quote loop remains independently active as well.
+      await Promise.all([
+        this.sampleLiveSpreads(userId, connectionId, now),
+        this.refreshHistoricalSlice(userId, connectionId, now),
+      ]);
     } catch (error) {
       this.warnThrottled(
         `${connectionId}:binding`,
@@ -153,10 +157,12 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       instruments.length;
 
     // Keep the cTrader historical request burst at four or fewer per cycle.
-    // The provider documents a 5 requests/second historical limit per connection.
-    for (const instrument of m1Batch) {
-      await this.refreshM1(userId, connectionId, instrument, now);
-    }
+    // The client enforces its documented 5 requests/second provider limit.
+    // Start all requests concurrently so one delayed M1 response does not
+    // prevent the other pairs or the context timeframe from refreshing.
+    const m1Tasks = m1Batch.map((instrument) =>
+      this.refreshM1(userId, connectionId, instrument, now),
+    );
 
     // Warm the faster context across every pair before rotating into H1/H4.
     // Native cTrader M5/M15 is authoritative for no-tick intervals and avoids
@@ -167,7 +173,10 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     if (contextTasks.length === 0) return;
     const context = contextTasks[this.contextRotationOffset % contextTasks.length]!;
     this.contextRotationOffset = (this.contextRotationOffset + 1) % contextTasks.length;
-    await this.refreshContext(userId, connectionId, context.instrument, context.timeframe, now);
+    await Promise.all([
+      ...m1Tasks,
+      this.refreshContext(userId, connectionId, context.instrument, context.timeframe, now),
+    ]);
   }
 
   private async refreshM1(

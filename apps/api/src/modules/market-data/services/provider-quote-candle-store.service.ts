@@ -48,17 +48,33 @@ export class ProviderQuoteCandleStoreService {
       INSERT INTO market_data.provider_quote_candles (
         connection_id, instrument, timeframe, bucket_time,
         open, high, low, close, bid_close, ask_close, spread_close,
-        sample_count, source, first_sample_at, last_sample_at
-      ) VALUES ($1, $2, 'M1', $3, $4, $4, $4, $4, $5, $6, $7, 1, $9, $8, $8)
+        sample_count, positive_quote_sample_count, source,
+        first_sample_at, last_sample_at, last_quote_sample_at
+      ) VALUES (
+        $1, $2, 'M1', $3, $4, $4, $4, $4, $5, $6, $7, 1,
+        CASE WHEN $7::numeric > 0 THEN 1 ELSE 0 END, $9, $8, $8, $8
+      )
       ON CONFLICT (connection_id, instrument, timeframe, bucket_time)
       DO UPDATE SET
         high = GREATEST(market_data.provider_quote_candles.high, EXCLUDED.high),
         low = LEAST(market_data.provider_quote_candles.low, EXCLUDED.low),
-        close = EXCLUDED.close,
-        bid_close = EXCLUDED.bid_close,
-        ask_close = EXCLUDED.ask_close,
-        spread_close = EXCLUDED.spread_close,
-        sample_count = market_data.provider_quote_candles.sample_count + 1,
+        close = CASE WHEN EXCLUDED.last_quote_sample_at > COALESCE(market_data.provider_quote_candles.last_quote_sample_at, '-infinity'::timestamptz)
+          THEN EXCLUDED.close ELSE market_data.provider_quote_candles.close END,
+        bid_close = CASE WHEN EXCLUDED.last_quote_sample_at > COALESCE(market_data.provider_quote_candles.last_quote_sample_at, '-infinity'::timestamptz)
+          THEN EXCLUDED.bid_close ELSE market_data.provider_quote_candles.bid_close END,
+        ask_close = CASE WHEN EXCLUDED.last_quote_sample_at > COALESCE(market_data.provider_quote_candles.last_quote_sample_at, '-infinity'::timestamptz)
+          THEN EXCLUDED.ask_close ELSE market_data.provider_quote_candles.ask_close END,
+        spread_close = CASE WHEN EXCLUDED.last_quote_sample_at > COALESCE(market_data.provider_quote_candles.last_quote_sample_at, '-infinity'::timestamptz)
+          THEN EXCLUDED.spread_close ELSE market_data.provider_quote_candles.spread_close END,
+        sample_count = market_data.provider_quote_candles.sample_count +
+          CASE WHEN EXCLUDED.last_quote_sample_at > COALESCE(market_data.provider_quote_candles.last_quote_sample_at, '-infinity'::timestamptz) THEN 1 ELSE 0 END,
+        positive_quote_sample_count = market_data.provider_quote_candles.positive_quote_sample_count +
+          CASE WHEN EXCLUDED.last_quote_sample_at > COALESCE(market_data.provider_quote_candles.last_quote_sample_at, '-infinity'::timestamptz)
+            THEN EXCLUDED.positive_quote_sample_count ELSE 0 END,
+        last_quote_sample_at = GREATEST(
+          market_data.provider_quote_candles.last_quote_sample_at,
+          EXCLUDED.last_quote_sample_at
+        ),
         source = EXCLUDED.source,
         last_sample_at = GREATEST(
           market_data.provider_quote_candles.last_sample_at,
@@ -195,7 +211,8 @@ export class ProviderQuoteCandleStoreService {
     const rows = await this.dataSource.query(
       `
       WITH latest AS (
-        SELECT bid_close, ask_close, spread_close, last_sample_at
+        SELECT bid_close, ask_close, spread_close,
+               last_quote_sample_at AS last_sample_at
         FROM market_data.provider_quote_candles
         WHERE connection_id = $1
           AND instrument = $2
@@ -203,29 +220,31 @@ export class ProviderQuoteCandleStoreService {
           AND bid_close IS NOT NULL
           AND ask_close IS NOT NULL
           AND spread_close IS NOT NULL
-          AND last_sample_at <= $3::timestamptz
-        ORDER BY last_sample_at DESC
+          AND last_quote_sample_at IS NOT NULL
+          AND last_quote_sample_at <= $3::timestamptz
+        ORDER BY last_quote_sample_at DESC
         LIMIT 1
       ), positive AS (
-        SELECT spread_close, last_sample_at
+        SELECT spread_close, last_quote_sample_at, positive_quote_sample_count
         FROM market_data.provider_quote_candles
         WHERE connection_id = $1
           AND instrument = $2
           AND timeframe = 'M1'
           AND spread_close > 0
-          AND last_sample_at > ($3::timestamptz - interval '30 minutes')
-          AND last_sample_at <= $3::timestamptz
+          AND positive_quote_sample_count > 0
+          AND last_quote_sample_at > ($3::timestamptz - interval '30 minutes')
+          AND last_quote_sample_at <= $3::timestamptz
       )
       SELECT
         l.bid_close,
         l.ask_close,
         l.spread_close,
         l.last_sample_at,
-        COUNT(p.*)::int AS positive_sample_count,
+        COALESCE(SUM(p.positive_quote_sample_count), 0)::int AS positive_sample_count,
         percentile_cont(0.50) WITHIN GROUP (ORDER BY p.spread_close::double precision) AS p50_spread,
         percentile_cont(0.75) WITHIN GROUP (ORDER BY p.spread_close::double precision) AS p75_spread,
         percentile_cont(0.90) WITHIN GROUP (ORDER BY p.spread_close::double precision) AS p90_spread,
-        MAX(p.last_sample_at) AS latest_positive_sample_at
+        MAX(p.last_quote_sample_at) AS latest_positive_sample_at
       FROM latest l
       LEFT JOIN positive p ON true
       GROUP BY l.bid_close, l.ask_close, l.spread_close, l.last_sample_at
@@ -287,12 +306,14 @@ export class ProviderQuoteCandleStoreService {
   async getLatestQuote(connectionId: string, instrument: string): Promise<BrokerPrice | null> {
     const rows = await this.dataSource.query(
       `
-      SELECT bid_close, ask_close, spread_close, last_sample_at
+      SELECT bid_close, ask_close, spread_close,
+             last_quote_sample_at AS last_sample_at
       FROM market_data.provider_quote_candles
       WHERE connection_id = $1 AND instrument = $2 AND timeframe = 'M1'
         AND bid_close IS NOT NULL
         AND ask_close IS NOT NULL
-      ORDER BY last_sample_at DESC
+        AND last_quote_sample_at IS NOT NULL
+      ORDER BY last_quote_sample_at DESC
       LIMIT 1
       `,
       [connectionId, instrument],

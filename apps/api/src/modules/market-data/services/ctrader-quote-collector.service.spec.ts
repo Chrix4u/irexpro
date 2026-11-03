@@ -86,7 +86,7 @@ describe('CTraderQuoteCollectorService', () => {
     expect(h.findConnectionById).toHaveBeenCalledWith('ctrader-1', 'user-1');
     expect(h.getOhlcvForConnection).toHaveBeenCalledTimes(4);
     expect(h.getOhlcvForConnection.mock.calls.filter((call) => call[3] === 'M1')).toHaveLength(3);
-    expect(h.getOhlcvForConnection.mock.calls[3]![3]).toBe('M5');
+    expect(h.getOhlcvForConnection.mock.calls.filter((call) => call[3] === 'M5')).toHaveLength(1);
     for (const call of h.getOhlcvForConnection.mock.calls) {
       expect(call[0]).toBe('user-1');
       expect(call[1]).toBe('ctrader-1');
@@ -104,6 +104,73 @@ describe('CTraderQuoteCollectorService', () => {
       expect(call[0]).toBe('ctrader-1');
       expect(call[3]).toBe('ctrader-broker-native');
     }
+  });
+
+  it('does not let a stalled M1 fetch prevent other broker-native history and context requests from starting', async () => {
+    const h = harness();
+    let releaseFirstM1: (() => void) | undefined;
+    const historicalBar = {
+      timestamp: new Date('2026-10-18T20:00:00.000Z'),
+      open: '1.10000',
+      high: '1.10100',
+      low: '1.09900',
+      close: '1.10050',
+      volume: '50',
+    };
+    h.getOhlcvForConnection.mockImplementation(
+      async (_userId, _connectionId, instrument, timeframe) => {
+        if (instrument === 'EURUSD' && timeframe === 'M1') {
+          await new Promise<void>((resolve) => {
+            releaseFirstM1 = resolve;
+          });
+        }
+        return [historicalBar];
+      },
+    );
+
+    const cycle = h.service.collectOnce(OPEN_NOW);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const allRequestsStartedBeforeRelease = h.getOhlcvForConnection.mock.calls.length === 4;
+    const contextStartedBeforeRelease = h.getOhlcvForConnection.mock.calls.some(
+      (call) => call[3] === 'M5',
+    );
+    releaseFirstM1?.();
+    await cycle;
+
+    expect(allRequestsStartedBeforeRelease).toBe(true);
+    expect(contextStartedBeforeRelease).toBe(true);
+    expect(h.upsertHistoricalCandles).toHaveBeenCalledTimes(4);
+  });
+
+  it('starts broker-native history refresh without waiting for a slow live spot response', async () => {
+    const h = harness();
+    let releaseQuote: (() => void) | undefined;
+    const normalQuote = {
+      instrument: 'EURUSD',
+      bid: '1.10000',
+      ask: '1.10008',
+      spread: '0.00008',
+      timestamp: new Date('2026-10-18T21:30:10.000Z'),
+    };
+    h.getCurrentPriceForConnection.mockImplementation(
+      async (_userId, _connectionId, instrument) => {
+        if (instrument === 'EURUSD') {
+          await new Promise<void>((resolve) => {
+            releaseQuote = resolve;
+          });
+        }
+        return { ...normalQuote, instrument };
+      },
+    );
+
+    const cycle = h.service.collectOnce(OPEN_NOW);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const historyStartedBeforeRelease = h.getOhlcvForConnection.mock.calls.length > 0;
+    releaseQuote?.();
+    await cycle;
+
+    expect(historyStartedBeforeRelease).toBe(true);
   });
 
   it('samples live quotes independently of the slower historical refresh cycle', async () => {
