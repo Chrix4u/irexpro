@@ -285,6 +285,11 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
 
 export interface TradeReadinessUiInput {
   automationOn: boolean;
+  // The exact selected session broker's server-reported automation authority.
+  // A RUNNING UI session is not sufficient when provider authorization is CONNECTED.
+  brokerAccountType?: string | null;
+  brokerId?: string | null;
+  brokerAuthorizationStatus?: string | null;
   scannerStatus: unknown;
   m1TacticalStatus?: unknown;
   fastMarkState?: FastMarkFeedUiState["state"] | null;
@@ -343,6 +348,20 @@ export function deriveTradeReadinessUiState(
     : null;
   const m1Decision =
     m1Status?.enabled === true ? m1Status.latestDecision : null;
+  if (
+    input.brokerAccountType === "DEMO" &&
+    input.brokerId !== "paper-broker" &&
+    typeof input.brokerAuthorizationStatus === "string" &&
+    input.brokerAuthorizationStatus !== "ACTIVE"
+  ) {
+    return waiting(
+      9,
+      "DEMO broker automation inactive — new trades paused",
+      `Your DEMO broker authorization is ${input.brokerAuthorizationStatus}, not ACTIVE. The AI session can be running while the broker refuses new orders. Use Enable DEMO automation to request activation through the existing validated broker endpoint; model and risk gates remain enforced.`,
+      m1Decision?.instrument ?? null,
+      m1Decision?.direction ?? null,
+    );
+  }
   if (m1Decision) {
     const selectedReadiness =
       m1Status?.marketReadiness?.[m1Decision.instrument] ?? null;
@@ -521,15 +540,24 @@ export function deriveTradeReadinessUiState(
         "An account-risk, exposure, loss-streak, or session guard is preventing this entry.";
     }
 
+    const afterCostRejected =
+      blockers.includes("PAPER_NET_EXPECTED_R") &&
+      m1Decision.netExpectedR <= 0;
+    if (afterCostRejected) {
+      detail = `The estimated net return is ${m1Decision.netExpectedR.toFixed(2)}R after costs; the entry does not have positive expected value. Directional confidence and the meter score are not evidence of profitability. Other model and timing vetoes may also apply.`;
+    }
     return {
       score: rounded,
       band: rounded >= 40 ? "FORMING" : "WAITING",
-      headline:
-        driftBlocked && rounded >= 40
-          ? "Strong setup — execution blocked"
-          : rounded >= 40
-            ? "Setup forming"
-            : "Waiting for a stronger setup",
+      headline: afterCostRejected
+        ? "Negative after-cost expectancy — trade rejected"
+        : m1Decision.primaryBlockerGroup === "RISK_OR_ACCOUNT"
+          ? "Account risk guard blocked this trade"
+          : driftBlocked
+            ? "Model drift — entry not qualified"
+            : rounded >= 40
+              ? "Setup forming — not yet executable"
+              : "Waiting for a stronger setup",
       detail,
       tradeExpected: false,
       instrument: m1Decision.instrument,
