@@ -8,6 +8,7 @@ import { AuditSeverity } from '../../audit/entities/audit-log.entity';
 import { OrderService } from '../orders/order.service';
 import type { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import type { ExecutionIntent } from './execution-intent.interface';
+import { rememberProvenExecutionQuote } from '../services/execution-quote-registry';
 
 /**
  * Round 6 live-execution completion (§5/§18) — typed failure codes for the
@@ -174,6 +175,11 @@ export class MarketSafetyGateService {
         );
       }
     }
+
+    // Telemetry-only handoff: keep the exact already-proven quote for the
+    // Trade CAS that follows a successful provider fill. This does not make
+    // another quote request and cannot change trading authority.
+    rememberProvenExecutionQuote(intent.tradeId, quote);
 
     return quote;
   }
