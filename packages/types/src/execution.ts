@@ -119,6 +119,9 @@ export interface ClosedTradeCurrencySummaryView {
   winRate: number | null;
   grossProfit: string;
   grossLoss: string;
+  /** Gross realised P&L before explicit broker costs. */
+  grossRealisedPnl: string;
+  /** Net realised P&L after commission and signed swap / financing. */
   netRealisedPnl: string;
   averageWin: string | null;
   averageLoss: string | null;
@@ -128,6 +131,8 @@ export interface ClosedTradeCurrencySummaryView {
   largestLoss: string | null;
   totalCommission: string;
   totalSwap: string;
+  /** Commission magnitude minus signed swap / financing. */
+  totalExplicitCosts: string;
   averageHoldMinutes: number | null;
 }
 
@@ -142,6 +147,9 @@ export interface ClosedTradeReportSummaryView {
   accountCurrency: string | null;
   grossProfit: string | null;
   grossLoss: string | null;
+  /** Gross realised P&L before explicit broker costs. */
+  grossRealisedPnl: string | null;
+  /** Net realised P&L after commission and signed swap / financing. */
   netRealisedPnl: string | null;
   averageWin: string | null;
   averageLoss: string | null;
@@ -151,6 +159,8 @@ export interface ClosedTradeReportSummaryView {
   largestLoss: string | null;
   totalCommission: string | null;
   totalSwap: string | null;
+  /** Commission magnitude minus signed swap / financing. */
+  totalExplicitCosts: string | null;
   averageHoldMinutes: number | null;
   currencyBreakdown: ClosedTradeCurrencySummaryView[];
 }
@@ -419,13 +429,11 @@ export function describeExecutionConfirmationFailure(failure: {
 }): ExecutionConfirmationFailure {
   const message = typeof failure.message === 'string' ? failure.message : '';
   const haystack = `${failure.code ?? ''} ${message}`.toLowerCase();
-  if (
-    haystack.includes('expired') ||
-    failure.code === 'CONFIRMATION_EXPIRED'
-  ) {
+  if (haystack.includes('expired') || failure.code === 'CONFIRMATION_EXPIRED') {
     return {
       kind: 'expired',
-      message: message || 'The confirmation expired before it reached the server.',
+      message:
+        message || 'The confirmation expired before it reached the server.',
     };
   }
   if (

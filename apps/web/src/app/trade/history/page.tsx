@@ -10,7 +10,14 @@ import type {
   TradeExecutionDirection,
   TradeExecutionView,
 } from '@irexpro/types/execution';
-import { Alert, Badge, Button, Card, DashboardShell, LoadingSpinner } from '@/components/ui';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  DashboardShell,
+  LoadingSpinner,
+} from '@/components/ui';
 import { useAuth } from '@/context/auth-context';
 import { mapApiError } from '@/lib/error-mapping';
 import { loadClosedTradeReport } from '@/lib/trader-execution';
@@ -34,7 +41,14 @@ const EMPTY_FILTERS: FilterState = {
   closeReason: '',
 };
 
-const INSTRUMENTS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'] as const;
+const INSTRUMENTS = [
+  'EURUSD',
+  'GBPUSD',
+  'USDJPY',
+  'AUDUSD',
+  'USDCAD',
+  'USDCHF',
+] as const;
 
 const CLOSE_REASONS: TradeExecutionCloseReason[] = [
   'STOP_LOSS_HIT',
@@ -55,7 +69,10 @@ function localDateInputValue(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function localDayBoundaryIso(value: string, endOfDay = false): string | undefined {
+function localDayBoundaryIso(
+  value: string,
+  endOfDay = false,
+): string | undefined {
   if (!value) return undefined;
   const suffix = endOfDay ? 'T23:59:59.999' : 'T00:00:00.000';
   const parsed = new Date(`${value}${suffix}`);
@@ -83,9 +100,10 @@ function formatFixedDecimal(
   if ((paddedFraction[fractionDigits] ?? '0') >= '5') scaled += 1n;
 
   const whole = scaled / scale;
-  const fraction = fractionDigits > 0
-    ? (scaled % scale).toString().padStart(fractionDigits, '0')
-    : '';
+  const fraction =
+    fractionDigits > 0
+      ? (scaled % scale).toString().padStart(fractionDigits, '0')
+      : '';
   const groupedWhole = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const sign = negative && scaled !== 0n ? '-' : '';
   return fractionDigits > 0
@@ -93,26 +111,41 @@ function formatFixedDecimal(
     : `${sign}${groupedWhole}`;
 }
 
-function money(value: string | null | undefined, currency: string | null | undefined): string {
+function money(
+  value: string | null | undefined,
+  currency: string | null | undefined,
+): string {
   const formatted = formatFixedDecimal(value, 2);
   if (formatted === '—') return formatted;
   return currency ? `${formatted} ${currency}` : formatted;
 }
 
-function signedMoney(value: string | null | undefined, currency: string | null | undefined): string {
+function signedMoney(
+  value: string | null | undefined,
+  currency: string | null | undefined,
+): string {
   if (value == null) return '—';
   const formatted = money(value, currency);
   const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0 || formatted === '—') return formatted;
+  if (!Number.isFinite(numeric) || numeric <= 0 || formatted === '—')
+    return formatted;
   return `+${formatted}`;
 }
 
-function lossMoney(value: string | null | undefined, currency: string | null | undefined): string {
+function lossMoney(
+  value: string | null | undefined,
+  currency: string | null | undefined,
+): string {
   if (value == null) return '—';
   const normalized = value.trim();
   if (!/^[+-]?\d+(?:\.\d+)?$/.test(normalized)) return money(value, currency);
   if (/^[+-]?0(?:\.0+)?$/.test(normalized)) return money('0', currency);
-  return money(normalized.startsWith('-') ? normalized : `-${normalized.replace(/^\+/, '')}`, currency);
+  return money(
+    normalized.startsWith('-')
+      ? normalized
+      : `-${normalized.replace(/^\+/, '')}`,
+    currency,
+  );
 }
 
 function formatTimestamp(value: string | null | undefined): string {
@@ -129,7 +162,8 @@ function formatHoldTime(trade: TradeExecutionView): string {
   if (!trade.openedAt || !trade.closedAt) return '—';
   const start = Date.parse(trade.openedAt);
   const end = Date.parse(trade.closedAt);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return '—';
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start)
+    return '—';
   const totalMinutes = Math.round((end - start) / 60_000);
   if (totalMinutes < 60) return `${totalMinutes}m`;
   const hours = Math.floor(totalMinutes / 60);
@@ -150,7 +184,9 @@ function labelize(value: string | null | undefined): string {
   return value.replaceAll('_', ' ').toLowerCase();
 }
 
-function pnlTone(value: string | null | undefined): 'positive' | 'negative' | 'neutral' {
+function pnlTone(
+  value: string | null | undefined,
+): 'positive' | 'negative' | 'neutral' {
   if (value == null) return 'neutral';
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric === 0) return 'neutral';
@@ -207,33 +243,39 @@ export default function ClosedTradeHistoryPage() {
     setQueryReady(true);
   }, []);
 
-  const query = useMemo<ClosedTradeReportQuery>(() => ({
-    page,
-    pageSize,
-    brokerConnectionId: brokerConnectionId || undefined,
-    from: localDayBoundaryIso(applied.fromDate, false),
-    to: localDayBoundaryIso(applied.toDate, true),
-    instrument: applied.instrument.trim() || undefined,
-    direction: applied.direction || undefined,
-    outcome: applied.outcome,
-    closeReason: applied.closeReason || undefined,
-  }), [applied, brokerConnectionId, page, pageSize]);
+  const query = useMemo<ClosedTradeReportQuery>(
+    () => ({
+      page,
+      pageSize,
+      brokerConnectionId: brokerConnectionId || undefined,
+      from: localDayBoundaryIso(applied.fromDate, false),
+      to: localDayBoundaryIso(applied.toDate, true),
+      instrument: applied.instrument.trim() || undefined,
+      direction: applied.direction || undefined,
+      outcome: applied.outcome,
+      closeReason: applied.closeReason || undefined,
+    }),
+    [applied, brokerConnectionId, page, pageSize],
+  );
 
-  const refresh = useCallback(async (initial = false) => {
-    if (!user || !queryReady) return;
-    if (initial) setLoading(true);
-    else setRefreshing(true);
-    setError(null);
-    try {
-      setReport(await loadClosedTradeReport(query));
-    } catch (requestError) {
-      setError(mapApiError(requestError).message);
-      setReport(null);
-    } finally {
-      if (initial) setLoading(false);
-      else setRefreshing(false);
-    }
-  }, [query, queryReady, user]);
+  const refresh = useCallback(
+    async (initial = false) => {
+      if (!user || !queryReady) return;
+      if (initial) setLoading(true);
+      else setRefreshing(true);
+      setError(null);
+      try {
+        setReport(await loadClosedTradeReport(query));
+      } catch (requestError) {
+        setError(mapApiError(requestError).message);
+        setReport(null);
+      } finally {
+        if (initial) setLoading(false);
+        else setRefreshing(false);
+      }
+    },
+    [query, queryReady, user],
+  );
 
   useEffect(() => {
     if (!user || !queryReady) return;
@@ -266,15 +308,23 @@ export default function ClosedTradeHistoryPage() {
   }
 
   if (restoring) {
-    return <div style={{ padding: '3rem' }}><LoadingSpinner text="Restoring closed-trade history…" /></div>;
+    return (
+      <div style={{ padding: '3rem' }}>
+        <LoadingSpinner text="Restoring closed-trade history…" />
+      </div>
+    );
   }
 
   if (!user) {
     return (
       <div style={{ padding: '3rem', maxWidth: 680, margin: '0 auto' }}>
         <Card title="Not signed in">
-          <p className="muted">Sign in to view closed-trade history and realized results.</p>
-          <Link href="/login" className="btn btn--primary mt-4">Go to login</Link>
+          <p className="muted">
+            Sign in to view closed-trade history and realized results.
+          </p>
+          <Link href="/login" className="btn btn--primary mt-4">
+            Go to login
+          </Link>
         </Card>
       </div>
     );
@@ -283,8 +333,11 @@ export default function ClosedTradeHistoryPage() {
   const summary = report?.summary ?? null;
   const currency = summary?.accountCurrency ?? null;
   const netTone = pnlTone(summary?.netRealisedPnl);
-  const firstRow = report && report.total > 0 ? (report.page - 1) * report.pageSize + 1 : 0;
-  const lastRow = report ? Math.min(report.page * report.pageSize, report.total) : 0;
+  const firstRow =
+    report && report.total > 0 ? (report.page - 1) * report.pageSize + 1 : 0;
+  const lastRow = report
+    ? Math.min(report.page * report.pageSize, report.total)
+    : 0;
   const hasMixedCurrencies = (summary?.currencyBreakdown.length ?? 0) > 1;
   const profitFactorLabel = summary
     ? Number(summary.grossLoss) === 0 && Number(summary.grossProfit) > 0
@@ -295,19 +348,28 @@ export default function ClosedTradeHistoryPage() {
     : '—';
 
   return (
-    <DashboardShell user={user} onLogout={logout} activeRoute="/trade/history" title="Reports">
+    <DashboardShell
+      user={user}
+      onLogout={logout}
+      activeRoute="/trade/history"
+      title="Reports"
+    >
       <main className="trade-history" data-testid="closed-trade-history">
         <section className="trade-history__hero">
           <div>
             <p className="workspace-hero__eyebrow">Realized results</p>
             <h1>Closed Trade History</h1>
             <p>
-              Audit every completed AI trade and analyze realized profit, loss, costs and trade
-              quality across the exact filters you select.
+              Audit every completed AI trade and analyze realized profit, loss,
+              costs and trade quality across the exact filters you select.
             </p>
           </div>
           <div className="trade-history__hero-actions">
-            {brokerConnectionId ? <Badge variant="info">Selected broker account</Badge> : <Badge variant="info">All broker accounts</Badge>}
+            {brokerConnectionId ? (
+              <Badge variant="info">Selected broker account</Badge>
+            ) : (
+              <Badge variant="info">All broker accounts</Badge>
+            )}
             <Button
               type="button"
               variant="secondary"
@@ -318,16 +380,22 @@ export default function ClosedTradeHistoryPage() {
             >
               Refresh
             </Button>
-            <Link href="/trade/history/profit-protection" className="btn btn--secondary btn--sm">
+            <Link
+              href="/trade/history/profit-protection"
+              className="btn btn--secondary btn--sm"
+            >
               Profit Protection Exit Quality
             </Link>
-            <Link href="/trade" className="btn btn--ghost btn--sm">Back to AI Trading</Link>
+            <Link href="/trade" className="btn btn--ghost btn--sm">
+              Back to AI Trading
+            </Link>
           </div>
         </section>
 
         {brokerConnectionId && (
           <Alert variant="info">
-            This report is scoped to the broker account selected on the AI Trading page.{' '}
+            This report is scoped to the broker account selected on the AI
+            Trading page.{' '}
             <button
               type="button"
               className="history-inline-action"
@@ -343,16 +411,27 @@ export default function ClosedTradeHistoryPage() {
 
         {error && <Alert variant="error">{error}</Alert>}
 
-        <section className="history-filter-panel" aria-label="Closed trade filters">
+        <section
+          className="history-filter-panel"
+          aria-label="Closed trade filters"
+        >
           <div className="history-filter-panel__head">
             <div>
               <span>Filters</span>
-              <small>Totals below always cover the entire filtered result.</small>
+              <small>
+                Totals below always cover the entire filtered result.
+              </small>
             </div>
             <div className="history-preset-actions">
-              <button type="button" onClick={() => applyRecentDays(7)}>7 days</button>
-              <button type="button" onClick={() => applyRecentDays(30)}>30 days</button>
-              <button type="button" onClick={clearFilters}>All time</button>
+              <button type="button" onClick={() => applyRecentDays(7)}>
+                7 days
+              </button>
+              <button type="button" onClick={() => applyRecentDays(30)}>
+                30 days
+              </button>
+              <button type="button" onClick={clearFilters}>
+                All time
+              </button>
             </div>
           </div>
           <div className="history-filter-grid">
@@ -363,7 +442,12 @@ export default function ClosedTradeHistoryPage() {
                 type="date"
                 value={draft.fromDate}
                 onClick={(event) => event.currentTarget.showPicker?.()}
-                onChange={(event) => setDraft((current) => ({ ...current, fromDate: event.target.value }))}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    fromDate: event.target.value,
+                  }))
+                }
               />
             </label>
             <label>
@@ -373,7 +457,12 @@ export default function ClosedTradeHistoryPage() {
                 type="date"
                 value={draft.toDate}
                 onClick={(event) => event.currentTarget.showPicker?.()}
-                onChange={(event) => setDraft((current) => ({ ...current, toDate: event.target.value }))}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    toDate: event.target.value,
+                  }))
+                }
               />
             </label>
             <label>
@@ -381,11 +470,18 @@ export default function ClosedTradeHistoryPage() {
               <select
                 className="input"
                 value={draft.instrument}
-                onChange={(event) => setDraft((current) => ({ ...current, instrument: event.target.value }))}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    instrument: event.target.value,
+                  }))
+                }
               >
                 <option value="">All instruments</option>
                 {INSTRUMENTS.map((instrument) => (
-                  <option key={instrument} value={instrument}>{instrument}</option>
+                  <option key={instrument} value={instrument}>
+                    {instrument}
+                  </option>
                 ))}
               </select>
             </label>
@@ -394,10 +490,12 @@ export default function ClosedTradeHistoryPage() {
               <select
                 className="input"
                 value={draft.direction}
-                onChange={(event) => setDraft((current) => ({
-                  ...current,
-                  direction: event.target.value as FilterState['direction'],
-                }))}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    direction: event.target.value as FilterState['direction'],
+                  }))
+                }
               >
                 <option value="">All sides</option>
                 <option value="BUY">Buy</option>
@@ -409,10 +507,12 @@ export default function ClosedTradeHistoryPage() {
               <select
                 className="input"
                 value={draft.outcome}
-                onChange={(event) => setDraft((current) => ({
-                  ...current,
-                  outcome: event.target.value as ClosedTradeOutcomeFilter,
-                }))}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    outcome: event.target.value as ClosedTradeOutcomeFilter,
+                  }))
+                }
               >
                 <option value="ALL">All outcomes</option>
                 <option value="WIN">Profit only</option>
@@ -425,21 +525,40 @@ export default function ClosedTradeHistoryPage() {
               <select
                 className="input"
                 value={draft.closeReason}
-                onChange={(event) => setDraft((current) => ({
-                  ...current,
-                  closeReason: event.target.value as FilterState['closeReason'],
-                }))}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    closeReason: event.target
+                      .value as FilterState['closeReason'],
+                  }))
+                }
               >
                 <option value="">All close reasons</option>
                 {CLOSE_REASONS.map((reason) => (
-                  <option key={reason} value={reason}>{labelize(reason)}</option>
+                  <option key={reason} value={reason}>
+                    {labelize(reason)}
+                  </option>
                 ))}
               </select>
             </label>
           </div>
           <div className="history-filter-actions">
-            <Button type="button" variant="primary" size="sm" onClick={applyFilters}>Apply filters</Button>
-            <Button type="button" variant="secondary" size="sm" onClick={clearFilters}>Clear</Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={applyFilters}
+            >
+              Apply filters
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={clearFilters}
+            >
+              Clear
+            </Button>
           </div>
         </section>
 
@@ -451,28 +570,77 @@ export default function ClosedTradeHistoryPage() {
           <>
             {summary?.unresolvedPnlCount ? (
               <Alert variant="warning">
-                {summary.unresolvedPnlCount} closed trade{summary.unresolvedPnlCount === 1 ? '' : 's'} in this result do not have complete currency-bound realized P&amp;L yet. Money totals show only authoritative currency-bound values.
+                {summary.unresolvedPnlCount} closed trade
+                {summary.unresolvedPnlCount === 1 ? '' : 's'} in this result do
+                not have complete currency-bound realized P&amp;L yet. Money
+                totals show only authoritative currency-bound values.
               </Alert>
             ) : null}
 
-            <section className="history-summary-grid" aria-label="Filtered realized results">
+            <section
+              className="history-summary-grid"
+              aria-label="Filtered realized results"
+            >
               <SummaryCard
-                label={summary?.unresolvedPnlCount ? 'Known gross profit' : 'Gross profit'}
+                label={
+                  summary?.unresolvedPnlCount
+                    ? 'Known gross profit'
+                    : 'Gross profit'
+                }
                 value={signedMoney(summary?.grossProfit, currency)}
                 detail={`${summary?.wins ?? 0} profitable trade${summary?.wins === 1 ? '' : 's'}`}
                 tone="positive"
               />
               <SummaryCard
-                label={summary?.unresolvedPnlCount ? 'Known gross loss' : 'Gross loss'}
+                label={
+                  summary?.unresolvedPnlCount
+                    ? 'Known gross loss'
+                    : 'Gross loss'
+                }
                 value={lossMoney(summary?.grossLoss, currency)}
                 detail={`${summary?.losses ?? 0} losing trade${summary?.losses === 1 ? '' : 's'}`}
                 tone="negative"
               />
               <SummaryCard
-                label={summary?.unresolvedPnlCount ? 'Known net P&L' : 'Net P&L'}
+                label={
+                  summary?.unresolvedPnlCount ? 'Known net P&L' : 'Net P&L'
+                }
                 value={signedMoney(summary?.netRealisedPnl, currency)}
-                detail={hasMixedCurrencies ? 'See currency breakdown below' : 'Profit minus realized losses'}
+                detail={
+                  hasMixedCurrencies
+                    ? 'See currency breakdown below'
+                    : 'After commission and swap / financing'
+                }
                 tone={netTone}
+              />
+              <SummaryCard
+                label="Commission paid"
+                value={money(summary?.totalCommission, currency)}
+                detail={
+                  hasMixedCurrencies
+                    ? 'See currency breakdown below'
+                    : 'Accumulated broker commission'
+                }
+                tone="negative"
+              />
+              <SummaryCard
+                label="Explicit broker costs"
+                value={signedMoney(summary?.totalExplicitCosts, currency)}
+                detail={
+                  hasMixedCurrencies
+                    ? 'See currency breakdown below'
+                    : 'Commission minus signed financing credits'
+                }
+                tone={
+                  pnlTone(summary?.totalExplicitCosts) === 'negative'
+                    ? 'positive'
+                    : 'negative'
+                }
+              />
+              <SummaryCard
+                label="Spread impact"
+                value="Included in P&L"
+                detail="Bid/ask spread is already embedded in executed trading P&L; separate cash attribution requires quote-at-fill capture"
               />
               <SummaryCard
                 label="Closed trades"
@@ -482,43 +650,140 @@ export default function ClosedTradeHistoryPage() {
             </section>
 
             {hasMixedCurrencies && summary && (
-              <section className="history-currency-breakdown" aria-label="Currency breakdown">
+              <section
+                className="history-currency-breakdown"
+                aria-label="Currency breakdown"
+              >
                 <div>
                   <strong>Currency breakdown</strong>
-                  <span>Money totals are intentionally separated rather than mixing currencies.</span>
+                  <span>
+                    Money totals are intentionally separated rather than mixing
+                    currencies.
+                  </span>
                 </div>
                 <div className="history-currency-breakdown__grid">
                   {summary.currencyBreakdown.map((item) => (
                     <article key={item.accountCurrency}>
                       <b>{item.accountCurrency}</b>
-                      <span>Profit {signedMoney(item.grossProfit, item.accountCurrency)}</span>
-                      <span>Loss {lossMoney(item.grossLoss, item.accountCurrency)}</span>
-                      <span>Net {signedMoney(item.netRealisedPnl, item.accountCurrency)}</span>
+                      <span>
+                        Profit{' '}
+                        {signedMoney(item.grossProfit, item.accountCurrency)}
+                      </span>
+                      <span>
+                        Loss {lossMoney(item.grossLoss, item.accountCurrency)}
+                      </span>
+                      <span>
+                        Gross net{' '}
+                        {signedMoney(
+                          item.grossRealisedPnl,
+                          item.accountCurrency,
+                        )}
+                      </span>
+                      <span>
+                        Commission{' '}
+                        {money(item.totalCommission, item.accountCurrency)}
+                      </span>
+                      <span>
+                        Net after costs{' '}
+                        {signedMoney(item.netRealisedPnl, item.accountCurrency)}
+                      </span>
                     </article>
                   ))}
                 </div>
               </section>
             )}
 
-            <section className="history-quality-grid" aria-label="Trade quality report">
-              <div><span>Win rate</span><strong>{summary?.winRate == null ? '—' : `${(summary.winRate * 100).toFixed(1)}%`}</strong></div>
-              <div><span>Profit factor</span><strong>{profitFactorLabel}</strong></div>
-              <div><span>Average win</span><strong className="is-positive">{signedMoney(summary?.averageWin, currency)}</strong></div>
-              <div><span>Average loss</span><strong className="is-negative">{lossMoney(summary?.averageLoss, currency)}</strong></div>
-              <div><span>Expectancy / trade</span><strong className={pnlTone(summary?.expectancyPerTrade) === 'negative' ? 'is-negative' : pnlTone(summary?.expectancyPerTrade) === 'positive' ? 'is-positive' : ''}>{signedMoney(summary?.expectancyPerTrade, currency)}</strong></div>
-              <div><span>Largest win</span><strong className="is-positive">{signedMoney(summary?.largestWin, currency)}</strong></div>
-              <div><span>Largest loss</span><strong className="is-negative">{signedMoney(summary?.largestLoss, currency)}</strong></div>
-              <div><span>Commission</span><strong>{money(summary?.totalCommission, currency)}</strong></div>
-              <div><span>Swap / financing</span><strong>{signedMoney(summary?.totalSwap, currency)}</strong></div>
-              <div><span>Average hold</span><strong>{formatAverageHold(summary?.averageHoldMinutes ?? null)}</strong></div>
+            <section
+              className="history-quality-grid"
+              aria-label="Trade quality report"
+            >
+              <div>
+                <span>Win rate</span>
+                <strong>
+                  {summary?.winRate == null
+                    ? '—'
+                    : `${(summary.winRate * 100).toFixed(1)}%`}
+                </strong>
+              </div>
+              <div>
+                <span>Profit factor</span>
+                <strong>{profitFactorLabel}</strong>
+              </div>
+              <div>
+                <span>Average win</span>
+                <strong className="is-positive">
+                  {signedMoney(summary?.averageWin, currency)}
+                </strong>
+              </div>
+              <div>
+                <span>Average loss</span>
+                <strong className="is-negative">
+                  {lossMoney(summary?.averageLoss, currency)}
+                </strong>
+              </div>
+              <div>
+                <span>Expectancy / trade</span>
+                <strong
+                  className={
+                    pnlTone(summary?.expectancyPerTrade) === 'negative'
+                      ? 'is-negative'
+                      : pnlTone(summary?.expectancyPerTrade) === 'positive'
+                        ? 'is-positive'
+                        : ''
+                  }
+                >
+                  {signedMoney(summary?.expectancyPerTrade, currency)}
+                </strong>
+              </div>
+              <div>
+                <span>Largest win</span>
+                <strong className="is-positive">
+                  {signedMoney(summary?.largestWin, currency)}
+                </strong>
+              </div>
+              <div>
+                <span>Largest loss</span>
+                <strong className="is-negative">
+                  {signedMoney(summary?.largestLoss, currency)}
+                </strong>
+              </div>
+              <div>
+                <span>Commission paid</span>
+                <strong>{money(summary?.totalCommission, currency)}</strong>
+              </div>
+              <div>
+                <span>Swap / financing</span>
+                <strong>{signedMoney(summary?.totalSwap, currency)}</strong>
+              </div>
+              <div>
+                <span>Explicit broker costs</span>
+                <strong>
+                  {signedMoney(summary?.totalExplicitCosts, currency)}
+                </strong>
+              </div>
+              <div>
+                <span>Spread impact</span>
+                <strong>Included in executed P&amp;L</strong>
+              </div>
+              <div>
+                <span>Average hold</span>
+                <strong>
+                  {formatAverageHold(summary?.averageHoldMinutes ?? null)}
+                </strong>
+              </div>
             </section>
 
-            <section className="history-table-card" aria-labelledby="closed-trade-table-title">
+            <section
+              className="history-table-card"
+              aria-labelledby="closed-trade-table-title"
+            >
               <div className="history-table-card__head">
                 <div>
                   <p className="workspace-hero__eyebrow">Completed positions</p>
                   <h2 id="closed-trade-table-title">Closed Trades</h2>
-                  <span>{firstRow}-{lastRow} of {report.total}</span>
+                  <span>
+                    {firstRow}-{lastRow} of {report.total}
+                  </span>
                 </div>
                 <label className="history-page-size">
                   <span>Rows</span>
@@ -540,7 +805,9 @@ export default function ClosedTradeHistoryPage() {
               {report.trades.length === 0 ? (
                 <Card className="history-empty">
                   <strong>No closed trades match these filters</strong>
-                  <p className="muted">Change the date range or filters to widen the report.</p>
+                  <p className="muted">
+                    Change the date range or filters to widen the report.
+                  </p>
                 </Card>
               ) : (
                 <div className="history-table-wrap">
@@ -564,15 +831,40 @@ export default function ClosedTradeHistoryPage() {
                       {report.trades.map((trade) => (
                         <tr key={trade.id}>
                           <td>{formatTimestamp(trade.closedAt)}</td>
-                          <td><strong>{trade.instrument}</strong></td>
-                          <td><Badge variant={trade.direction === 'BUY' ? 'success' : 'warning'}>{trade.direction}</Badge></td>
+                          <td>
+                            <strong>{trade.instrument}</strong>
+                          </td>
+                          <td>
+                            <Badge
+                              variant={
+                                trade.direction === 'BUY'
+                                  ? 'success'
+                                  : 'warning'
+                              }
+                            >
+                              {trade.direction}
+                            </Badge>
+                          </td>
                           <td>{formatFixedDecimal(trade.lotSize, 2)}</td>
-                          <td>{formatFixedDecimal(trade.fillPrice ?? trade.requestedEntryPrice, 5)}</td>
+                          <td>
+                            {formatFixedDecimal(
+                              trade.fillPrice ?? trade.requestedEntryPrice,
+                              5,
+                            )}
+                          </td>
                           <td>{formatFixedDecimal(trade.exitPrice, 5)}</td>
-                          <td><TradePnl trade={trade} /></td>
-                          <td>{money(trade.commission, trade.accountCurrency)}</td>
-                          <td>{signedMoney(trade.swap, trade.accountCurrency)}</td>
-                          <td className="history-table__reason">{labelize(trade.closeReason)}</td>
+                          <td>
+                            <TradePnl trade={trade} />
+                          </td>
+                          <td>
+                            {money(trade.commission, trade.accountCurrency)}
+                          </td>
+                          <td>
+                            {signedMoney(trade.swap, trade.accountCurrency)}
+                          </td>
+                          <td className="history-table__reason">
+                            {labelize(trade.closeReason)}
+                          </td>
                           <td>{formatHoldTime(trade)}</td>
                         </tr>
                       ))}
@@ -591,12 +883,18 @@ export default function ClosedTradeHistoryPage() {
                 >
                   Previous
                 </Button>
-                <span>Page {report.page} of {Math.max(report.totalPages, 1)}</span>
+                <span>
+                  Page {report.page} of {Math.max(report.totalPages, 1)}
+                </span>
                 <Button
                   type="button"
                   variant="secondary"
                   size="sm"
-                  disabled={report.totalPages === 0 || report.page >= report.totalPages || loading}
+                  disabled={
+                    report.totalPages === 0 ||
+                    report.page >= report.totalPages ||
+                    loading
+                  }
                   onClick={() => setPage((current) => current + 1)}
                 >
                   Next

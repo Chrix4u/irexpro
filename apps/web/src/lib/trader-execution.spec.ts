@@ -102,6 +102,7 @@ describe('trader execution refresh resilience', () => {
         accountCurrency: null,
         grossProfit: null,
         grossLoss: null,
+        grossRealisedPnl: null,
         netRealisedPnl: null,
         averageWin: null,
         averageLoss: null,
@@ -111,6 +112,7 @@ describe('trader execution refresh resilience', () => {
         largestLoss: null,
         totalCommission: null,
         totalSwap: null,
+        totalExplicitCosts: null,
         averageHoldMinutes: null,
         currencyBreakdown: [],
       },
@@ -143,14 +145,17 @@ describe('trader execution refresh resilience', () => {
   });
 
   it('keeps recent and closed executions visible when the open-position read fails', async () => {
-    const request = jest.spyOn(api, 'request').mockImplementation(async (path: string) => {
-      if (path === '/execution/positions/open') {
-        throw new Error('temporary open-position read failure');
-      }
-      if (path === '/execution/trades/recent?limit=100') return [CLOSED_TRADE];
-      if (path === '/execution/trades/closed?limit=50') return [CLOSED_TRADE];
-      throw new Error(`unexpected path ${path}`);
-    });
+    const request = jest
+      .spyOn(api, 'request')
+      .mockImplementation(async (path: string) => {
+        if (path === '/execution/positions/open') {
+          throw new Error('temporary open-position read failure');
+        }
+        if (path === '/execution/trades/recent?limit=100')
+          return [CLOSED_TRADE];
+        if (path === '/execution/trades/closed?limit=50') return [CLOSED_TRADE];
+        throw new Error(`unexpected path ${path}`);
+      });
 
     const snapshot = await loadTraderExecutionSnapshot();
 
@@ -179,17 +184,40 @@ describe('trader execution refresh resilience', () => {
   });
 });
 
-
 describe('recent execution visibility summary', () => {
   it('summarizes the last 24 hours so a flat account is not mistaken for an idle engine', () => {
     const referenceTime = new Date('2026-10-15T15:16:00.000Z');
     const trades = [
-      { ...CLOSED_TRADE, id: 'a', realisedPnl: '16.69', openedAt: '2026-10-15T13:50:08.000Z', closedAt: '2026-10-15T14:05:00.000Z', createdAt: '2026-10-15T13:50:08.000Z' },
-      { ...CLOSED_TRADE, id: 'b', realisedPnl: '-9.76', openedAt: '2026-10-15T13:07:25.000Z', closedAt: '2026-10-15T13:55:00.000Z', createdAt: '2026-10-15T13:07:25.000Z' },
-      { ...CLOSED_TRADE, id: 'old', realisedPnl: '99.00', openedAt: '2026-10-14T14:00:00.000Z', closedAt: '2026-10-14T14:05:00.000Z', createdAt: '2026-10-14T14:00:00.000Z' },
+      {
+        ...CLOSED_TRADE,
+        id: 'a',
+        realisedPnl: '16.69',
+        openedAt: '2026-10-15T13:50:08.000Z',
+        closedAt: '2026-10-15T14:05:00.000Z',
+        createdAt: '2026-10-15T13:50:08.000Z',
+      },
+      {
+        ...CLOSED_TRADE,
+        id: 'b',
+        realisedPnl: '-9.76',
+        openedAt: '2026-10-15T13:07:25.000Z',
+        closedAt: '2026-10-15T13:55:00.000Z',
+        createdAt: '2026-10-15T13:07:25.000Z',
+      },
+      {
+        ...CLOSED_TRADE,
+        id: 'old',
+        realisedPnl: '99.00',
+        openedAt: '2026-10-14T14:00:00.000Z',
+        closedAt: '2026-10-14T14:05:00.000Z',
+        createdAt: '2026-10-14T14:00:00.000Z',
+      },
     ];
 
-    const summary = summarizeRecentExecutionActivity(trades as any, referenceTime);
+    const summary = summarizeRecentExecutionActivity(
+      trades as any,
+      referenceTime,
+    );
 
     expect(summary).toEqual({
       executionCount: 2,
@@ -208,6 +236,42 @@ describe('recent execution visibility summary', () => {
       latestOpenedAt: '2026-10-15T13:50:08.000Z',
     });
     expect(summary.profitFactor).toBeCloseTo(16.69 / 9.76, 8);
+  });
+
+  it('reports fallback net P&L after commission magnitude and signed financing costs', () => {
+    const referenceTime = new Date('2026-10-15T15:16:00.000Z');
+    const trades = [
+      {
+        ...CLOSED_TRADE,
+        id: 'ctrader-costs',
+        realisedPnl: '10.00',
+        commission: '1.00',
+        swap: '-0.50',
+        openedAt: '2026-10-15T13:00:00.000Z',
+        closedAt: '2026-10-15T14:00:00.000Z',
+        createdAt: '2026-10-15T13:00:00.000Z',
+      },
+      {
+        ...CLOSED_TRADE,
+        id: 'mt5-signed-commission',
+        realisedPnl: '5.00',
+        commission: '-1.00',
+        swap: '0.25',
+        openedAt: '2026-10-15T13:30:00.000Z',
+        closedAt: '2026-10-15T14:30:00.000Z',
+        createdAt: '2026-10-15T13:30:00.000Z',
+      },
+    ];
+    const summary = summarizeRecentExecutionActivity(
+      trades as any,
+      referenceTime,
+    );
+    expect(summary.grossProfit).toBe('15');
+    expect(summary.netRealisedPnl).toBe('12.75');
+    expect(summary.expectancyPerTrade).toBe('6.38');
+    expect(
+      summarizeRealisedExecutionWindow(trades as any, 20).netRealisedPnl,
+    ).toBe('12.75');
   });
 
   it('uses close time for trailing 24-hour realised P&L even when the trade opened earlier', () => {
@@ -233,7 +297,10 @@ describe('recent execution visibility summary', () => {
       },
     ];
 
-    const summary = summarizeRecentExecutionActivity(trades as any, referenceTime);
+    const summary = summarizeRecentExecutionActivity(
+      trades as any,
+      referenceTime,
+    );
 
     expect(summary.executionCount).toBe(0);
     expect(summary.realisedTradeCount).toBe(1);
@@ -244,10 +311,34 @@ describe('recent execution visibility summary', () => {
 
   it('summarizes the same realised closed-trade window used by the profit chart', () => {
     const trades = [
-      { ...CLOSED_TRADE, id: 'older-win', realisedPnl: '20.00', closedAt: '2026-10-15T11:00:00.000Z', updatedAt: '2026-10-15T11:00:00.000Z' },
-      { ...CLOSED_TRADE, id: 'win-1', realisedPnl: '10.00', closedAt: '2026-10-15T12:10:00.000Z', updatedAt: '2026-10-15T12:10:00.000Z' },
-      { ...CLOSED_TRADE, id: 'loss-1', realisedPnl: '-5.00', closedAt: '2026-10-15T13:10:00.000Z', updatedAt: '2026-10-15T13:10:00.000Z' },
-      { ...CLOSED_TRADE, id: 'win-2', realisedPnl: '5.00', closedAt: '2026-10-15T14:10:00.000Z', updatedAt: '2026-10-15T14:10:00.000Z' },
+      {
+        ...CLOSED_TRADE,
+        id: 'older-win',
+        realisedPnl: '20.00',
+        closedAt: '2026-10-15T11:00:00.000Z',
+        updatedAt: '2026-10-15T11:00:00.000Z',
+      },
+      {
+        ...CLOSED_TRADE,
+        id: 'win-1',
+        realisedPnl: '10.00',
+        closedAt: '2026-10-15T12:10:00.000Z',
+        updatedAt: '2026-10-15T12:10:00.000Z',
+      },
+      {
+        ...CLOSED_TRADE,
+        id: 'loss-1',
+        realisedPnl: '-5.00',
+        closedAt: '2026-10-15T13:10:00.000Z',
+        updatedAt: '2026-10-15T13:10:00.000Z',
+      },
+      {
+        ...CLOSED_TRADE,
+        id: 'win-2',
+        realisedPnl: '5.00',
+        closedAt: '2026-10-15T14:10:00.000Z',
+        updatedAt: '2026-10-15T14:10:00.000Z',
+      },
     ];
 
     expect(summarizeRealisedExecutionWindow(trades as any, 3)).toEqual({

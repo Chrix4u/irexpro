@@ -27,15 +27,21 @@ export interface ClosedTradeCurrencySummary {
   winRate: number | null;
   grossProfit: string;
   grossLoss: string;
+  /** Gross realised P&L before explicit broker costs. */
+  grossRealisedPnl: string;
+  /** Net realised P&L after commission and signed swap/financing. */
   netRealisedPnl: string;
   averageWin: string | null;
   averageLoss: string | null;
+  /** Net-after-cost expectancy per realised trade. */
   expectancyPerTrade: string | null;
   profitFactor: number | null;
   largestWin: string | null;
   largestLoss: string | null;
   totalCommission: string;
   totalSwap: string;
+  /** Commission minus signed swap; positive means an explicit net cost. */
+  totalExplicitCosts: string;
   averageHoldMinutes: number | null;
 }
 
@@ -50,6 +56,7 @@ export interface ClosedTradeReportSummary {
   accountCurrency: string | null;
   grossProfit: string | null;
   grossLoss: string | null;
+  grossRealisedPnl: string | null;
   netRealisedPnl: string | null;
   averageWin: string | null;
   averageLoss: string | null;
@@ -59,6 +66,7 @@ export interface ClosedTradeReportSummary {
   largestLoss: string | null;
   totalCommission: string | null;
   totalSwap: string | null;
+  totalExplicitCosts: string | null;
   averageHoldMinutes: number | null;
   currencyBreakdown: ClosedTradeCurrencySummary[];
 }
@@ -81,6 +89,7 @@ type ClosedTradeAggregateRow = {
   flats: string | number;
   grossProfit: string | number | null;
   grossLoss: string | number | null;
+  grossRealisedPnl: string | number | null;
   netRealisedPnl: string | number | null;
   averageWin: string | number | null;
   averageLoss: string | number | null;
@@ -89,6 +98,7 @@ type ClosedTradeAggregateRow = {
   largestLoss: string | number | null;
   totalCommission: string | number | null;
   totalSwap: string | number | null;
+  totalExplicitCosts: string | number | null;
   averageHoldMinutes: string | number | null;
 };
 
@@ -145,6 +155,7 @@ function currencySummary(row: ClosedTradeAggregateRow): ClosedTradeCurrencySumma
     winRate: outcomeCount > 0 ? wins / outcomeCount : null,
     grossProfit,
     grossLoss,
+    grossRealisedPnl: numericString(row.grossRealisedPnl),
     netRealisedPnl: numericString(row.netRealisedPnl),
     averageWin: nullableNumericString(row.averageWin),
     averageLoss: nullableNumericString(row.averageLoss),
@@ -154,6 +165,7 @@ function currencySummary(row: ClosedTradeAggregateRow): ClosedTradeCurrencySumma
     largestLoss: nullableNumericString(row.largestLoss),
     totalCommission: numericString(row.totalCommission),
     totalSwap: numericString(row.totalSwap),
+    totalExplicitCosts: numericString(row.totalExplicitCosts),
     averageHoldMinutes: finiteNumber(row.averageHoldMinutes),
   };
 }
@@ -285,17 +297,28 @@ export class ExecutionReadService {
         'COALESCE(ABS(SUM(CASE WHEN trade.realisedPnl < 0 THEN trade.realisedPnl ELSE 0 END)), 0)',
         'grossLoss',
       )
-      .addSelect('COALESCE(SUM(trade.realisedPnl), 0)', 'netRealisedPnl')
+      .addSelect('COALESCE(SUM(trade.realisedPnl), 0)', 'grossRealisedPnl')
+      .addSelect('COALESCE(SUM(ABS(trade.commission)), 0)', 'totalCommission')
+      .addSelect('COALESCE(SUM(trade.swap), 0)', 'totalSwap')
+      .addSelect(
+        'COALESCE(SUM(trade.realisedPnl), 0) - COALESCE(SUM(ABS(trade.commission)), 0) + COALESCE(SUM(trade.swap), 0)',
+        'netRealisedPnl',
+      )
+      .addSelect(
+        'COALESCE(SUM(ABS(trade.commission)), 0) - COALESCE(SUM(trade.swap), 0)',
+        'totalExplicitCosts',
+      )
       .addSelect('AVG(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)', 'averageWin')
       .addSelect(
         'ABS(AVG(CASE WHEN trade.realisedPnl < 0 THEN trade.realisedPnl END))',
         'averageLoss',
       )
-      .addSelect('AVG(trade.realisedPnl)', 'expectancyPerTrade')
+      .addSelect(
+        '(COALESCE(SUM(trade.realisedPnl), 0) - COALESCE(SUM(ABS(trade.commission)), 0) + COALESCE(SUM(trade.swap), 0)) / NULLIF(SUM(CASE WHEN trade.realisedPnl IS NOT NULL THEN 1 ELSE 0 END), 0)',
+        'expectancyPerTrade',
+      )
       .addSelect('MAX(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)', 'largestWin')
       .addSelect('MIN(CASE WHEN trade.realisedPnl < 0 THEN trade.realisedPnl END)', 'largestLoss')
-      .addSelect('COALESCE(SUM(trade.commission), 0)', 'totalCommission')
-      .addSelect('COALESCE(SUM(trade.swap), 0)', 'totalSwap')
       .addSelect(
         'AVG(EXTRACT(EPOCH FROM (trade.closedAt - trade.openedAt)) / 60.0)',
         'averageHoldMinutes',
@@ -331,6 +354,7 @@ export class ExecutionReadService {
         accountCurrency: singleCurrency?.accountCurrency ?? null,
         grossProfit: singleCurrency?.grossProfit ?? null,
         grossLoss: singleCurrency?.grossLoss ?? null,
+        grossRealisedPnl: singleCurrency?.grossRealisedPnl ?? null,
         netRealisedPnl: singleCurrency?.netRealisedPnl ?? null,
         averageWin: singleCurrency?.averageWin ?? null,
         averageLoss: singleCurrency?.averageLoss ?? null,
@@ -340,6 +364,7 @@ export class ExecutionReadService {
         largestLoss: singleCurrency?.largestLoss ?? null,
         totalCommission: singleCurrency?.totalCommission ?? null,
         totalSwap: singleCurrency?.totalSwap ?? null,
+        totalExplicitCosts: singleCurrency?.totalExplicitCosts ?? null,
         averageHoldMinutes: singleCurrency?.averageHoldMinutes ?? null,
         currencyBreakdown,
       },
