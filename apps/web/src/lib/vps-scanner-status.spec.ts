@@ -332,6 +332,78 @@ describe("production trade-readiness presentation", () => {
     return (statusModule.deriveTradeReadinessUiState as (value: Record<string, unknown>) => any)(input);
   }
 
+  it("shows the connected but unauthorized DEMO broker as the primary 9/100 blocker", () => {
+    const state = derive({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      brokerAccountType: "DEMO",
+      brokerId: "ctrader",
+      brokerAuthorizationStatus: "CONNECTED",
+      m1TacticalStatus: {
+        enabled: true,
+        phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+        lastRunAt: "2026-11-03T23:00:00.000Z",
+        lastError: null,
+        latestDecision: {
+          instrument: "EURUSD",
+          direction: "BUY",
+          route: "M1_EARLY_TRANSITION",
+          barTime: "2026-11-03T22:59:00.000Z",
+          confidence: 0.738,
+          netExpectedR: -1.48,
+          executionAuthority: "NONE",
+          blockers: ["PAPER_NET_EXPECTED_R", "DRIFT_OUT_OF_DISTRIBUTION"],
+          outcomeState: null,
+          primaryConfidence: 0.74,
+        },
+      },
+    });
+    expect(state).toMatchObject({
+      score: 9,
+      band: "WAITING",
+      headline: "DEMO broker automation inactive — new trades paused",
+      tradeExpected: false,
+      instrument: "EURUSD",
+      direction: "BUY",
+    });
+    expect(state.detail).toMatch(/not ACTIVE/i);
+  });
+
+  it("does not call a negative expectancy and drift-rejected signal a strong setup", () => {
+    const state = derive({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      brokerAccountType: "DEMO",
+      brokerId: "ctrader",
+      brokerAuthorizationStatus: "ACTIVE",
+      m1TacticalStatus: {
+        enabled: true,
+        phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+        lastRunAt: "2026-11-03T23:00:00.000Z",
+        lastError: null,
+        latestDecision: {
+          instrument: "EURUSD",
+          direction: "BUY",
+          route: "M1_EARLY_TRANSITION",
+          barTime: "2026-11-03T22:59:00.000Z",
+          confidence: 0.738,
+          netExpectedR: -1.48,
+          executionAuthority: "NONE",
+          blockers: ["PAPER_NET_EXPECTED_R", "DRIFT_OUT_OF_DISTRIBUTION"],
+          outcomeState: null,
+          primaryConfidence: 0.74,
+          primaryBlockerGroup: "MODEL_EXPECTANCY",
+        },
+      },
+    });
+    expect(state).toMatchObject({
+      headline: "Negative after-cost expectancy — trade rejected",
+      tradeExpected: false,
+    });
+    expect(state.score).toBeLessThan(70);
+    expect(state.detail).toContain("-1.48R");
+  });
+
   it("never enters the green zone when backend PAPER execution is blocked", () => {
     const status = JSON.parse(JSON.stringify(VALID_STATUS));
     status.lastEnsembleDecision.candidateConfidence = 0.91;
