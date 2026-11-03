@@ -2,17 +2,13 @@ name: Apply spread telemetry core once
 
 on:
   push:
-    branches: [feature/execution-spread-telemetry-20261103]
+    branches:
+      - feature/execution-spread-telemetry-20261103
     paths:
       - '.github/workflows/apply-spread-core-once.yml'
 
 permissions:
   contents: write
-
-env:
-  BRANCH: feature/execution-spread-telemetry-20261103
-  NODE_VERSION: '22'
-  PNPM_VERSION: '10.34.5'
 
 jobs:
   apply-core:
@@ -21,204 +17,97 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ env.BRANCH }}
+          ref: feature/execution-spread-telemetry-20261103
           fetch-depth: 0
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
         with:
-          version: ${{ env.PNPM_VERSION }}
+          version: '10.34.5'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '22'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Implement quote provenance and estimator
+      - name: Patch quote provenance
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          def replace_once(path, old, new):
-              p = Path(path)
-              s = p.read_text()
-              if new in s:
-                  return
-              if old not in s:
-                  raise SystemExit(f'anchor missing in {path}: {old[:80]!r}')
-              p.write_text(s.replace(old, new, 1))
-
-          # Market-safety gate returns the exact already-fetched quote.
-          p = Path('apps/api/src/modules/execution/orchestration/market-safety-gate.service.ts')
-          s = p.read_text()
+          gate = Path('apps/api/src/modules/execution/orchestration/market-safety-gate.service.ts')
+          s = gate.read_text()
           imp = "import type { BrokerPrice } from '../../broker/interfaces/broker-adapter.interface';\n"
           if imp not in s:
               anchor = "import { BrokerService } from '../../broker/broker.service';\n"
-              if anchor not in s: raise SystemExit('market gate import anchor missing')
+              if anchor not in s:
+                  raise SystemExit('market gate import anchor missing')
               s = s.replace(anchor, anchor + imp, 1)
-          s = s.replace(
-              "  ): Promise<void> {\n    // 1. The provable current quote (§18 — no invention on gaps).\n",
-              "  ): Promise<BrokerPrice> {\n    // 1. The provable current quote (§18 — no invention on gaps).\n",
-              1,
-          )
-          end_anchor = "    }\n  }\n\n  /** Terminally reject the order + audit, then surface the typed error. */\n"
-          if "    return quote;\n  }\n\n  /** Terminally reject" not in s:
-              if end_anchor not in s: raise SystemExit('market gate return anchor missing')
-              s = s.replace(
-                  end_anchor,
-                  "    }\n\n    return quote;\n  }\n\n  /** Terminally reject the order + audit, then surface the typed error. */\n",
-                  1,
-              )
-          p.write_text(s)
+          old = "): Promise<void> {\n    // 1. The provable current quote (§18 — no invention on gaps)."
+          new = "): Promise<BrokerPrice> {\n    // 1. The provable current quote (§18 — no invention on gaps)."
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('market gate return type anchor missing')
+          marker = "\n  /** Terminally reject the order + audit, then surface the typed error. */"
+          if "\n    return quote;\n  }\n" not in s:
+              idx = s.find(marker)
+              if idx < 0:
+                  raise SystemExit('market gate method end marker missing')
+              before = s[:idx]
+              pos = before.rfind("\n  }\n")
+              if pos < 0:
+                  raise SystemExit('market gate closing brace missing')
+              before = before[:pos] + "\n\n    return quote;" + before[pos:]
+              s = before + s[idx:]
+          gate.write_text(s)
 
-          # Existing successful gate tests now assert returned quote evidence.
-          p = Path('apps/api/src/modules/execution/orchestration/market-safety-gate.spec.ts')
-          s = p.read_text()
+          spec = Path('apps/api/src/modules/execution/orchestration/market-safety-gate.spec.ts')
+          s = spec.read_text()
           s = s.replace(
               ").resolves.toBeUndefined();",
               ").resolves.toEqual(expect.objectContaining({ instrument: 'EURUSD' }));",
           )
-          p.write_text(s)
+          spec.write_text(s)
 
-          # FILLED outcome contract carries the market-safety-proven quote.
-          p = Path('apps/api/src/modules/execution/orchestration/execution-intent.interface.ts')
-          s = p.read_text()
+          contract = Path('apps/api/src/modules/execution/orchestration/execution-intent.interface.ts')
+          s = contract.read_text()
           imp = "import type { BrokerPrice } from '../../broker/interfaces/broker-adapter.interface';\n"
           if imp not in s:
               anchor = "import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';\n"
-              if anchor not in s: raise SystemExit('execution intent import anchor missing')
+              if anchor not in s:
+                  raise SystemExit('outcome contract import anchor missing')
               s = s.replace(anchor, anchor + imp, 1)
-          old = "      swap?: string;\n    }\n"
-          new = "      swap?: string;\n      /** Exact fresh quote already proven by the final market-safety gate. */\n      executionQuote?: BrokerPrice;\n    }\n"
           if 'executionQuote?: BrokerPrice;' not in s:
-              if old not in s: raise SystemExit('FILLED outcome anchor missing')
-              s = s.replace(old, new, 1)
-          p.write_text(s)
+              anchor = "      swap?: string;\n"
+              if anchor not in s:
+                  raise SystemExit('FILLED contract anchor missing')
+              s = s.replace(
+                  anchor,
+                  anchor + "      /** Exact fresh quote already proven by the final market-safety gate. */\n      executionQuote?: BrokerPrice;\n",
+                  1,
+              )
+          contract.write_text(s)
 
-          # Orchestrator captures the quote before commitment and only carries it forward.
-          p = Path('apps/api/src/modules/execution/orchestration/execution-orchestrator.service.ts')
-          s = p.read_text()
-          old = "  BrokerMode,\n  BrokerOrderRequest,\n  BrokerOrderResult,\n} from '../../broker/interfaces/broker-adapter.interface';\n"
-          new = "  BrokerMode,\n  BrokerOrderRequest,\n  BrokerOrderResult,\n  BrokerPrice,\n} from '../../broker/interfaces/broker-adapter.interface';\n"
+          orch = Path('apps/api/src/modules/execution/orchestration/execution-orchestrator.service.ts')
+          s = orch.read_text()
           if '  BrokerPrice,\n' not in s:
-              if old not in s: raise SystemExit('orchestrator broker import anchor missing')
+              anchor = "  BrokerOrderResult,\n"
+              if anchor not in s:
+                  raise SystemExit('orchestrator import anchor missing')
+              s = s.replace(anchor, anchor + "  BrokerPrice,\n", 1)
+          old = "    if (\n      operationClass === ProviderOperationClass.NEW_EXPOSURE &&\n      intent.providerAction === 'PLACE'\n    ) {\n      await this.marketSafetyGate.assertMarketSafeForDispatch(intent, connection, order.id);\n    }"
+          new = "    let executionQuote: BrokerPrice | undefined;\n    if (\n      operationClass === ProviderOperationClass.NEW_EXPOSURE &&\n      intent.providerAction === 'PLACE'\n    ) {\n      executionQuote = await this.marketSafetyGate.assertMarketSafeForDispatch(\n        intent,\n        connection,\n        order.id,\n      );\n    }"
+          if old in s:
               s = s.replace(old, new, 1)
-          old = "    if (\n      operationClass === ProviderOperationClass.NEW_EXPOSURE &&\n      intent.providerAction === 'PLACE'\n    ) {\n      await this.marketSafetyGate.assertMarketSafeForDispatch(intent, connection, order.id);\n    }\n"
-          new = "    let executionQuote: BrokerPrice | undefined;\n    if (\n      operationClass === ProviderOperationClass.NEW_EXPOSURE &&\n      intent.providerAction === 'PLACE'\n    ) {\n      executionQuote = await this.marketSafetyGate.assertMarketSafeForDispatch(\n        intent,\n        connection,\n        order.id,\n      );\n    }\n"
-          if 'let executionQuote: BrokerPrice | undefined;' not in s:
-              if old not in s: raise SystemExit('orchestrator market gate anchor missing')
-              s = s.replace(old, new, 1)
-          old = "            swap: action.swap,\n          };\n"
-          new = "            swap: action.swap,\n            executionQuote,\n          };\n"
+          elif new not in s:
+              raise SystemExit('orchestrator market-safety anchor missing')
           if '            executionQuote,\n' not in s:
-              if old not in s: raise SystemExit('orchestrator FILLED return anchor missing')
-              s = s.replace(old, new, 1)
-          p.write_text(s)
-
-          # Best-effort spread estimator. No execution authority or state mutation here.
-          p = Path('apps/api/src/modules/execution/services/trade-spread-telemetry.service.ts')
-          p.parent.mkdir(parents=True, exist_ok=True)
-          p.write_text("""import { Injectable } from '@nestjs/common';
-import { ExactDecimal } from '../../../common/utils/exact-decimal';
-import type { BrokerPrice } from '../../broker/interfaces/broker-adapter.interface';
-import { BrokerService } from '../../broker/broker.service';
-import { BrokerFxConversionService } from '../../market-data/services/broker-fx-conversion.service';
-
-export const ENTRY_SPREAD_ROUND_TRIP_PROXY = 'ENTRY_SPREAD_ROUND_TRIP_PROXY' as const;
-
-export interface TradeSpreadCostEstimate {
-  estimatedSpreadCost: string;
-  spreadCostEstimateMethod: typeof ENTRY_SPREAD_ROUND_TRIP_PROXY;
-  spreadCostContractSize: string;
-  spreadCostQuoteCurrency: string;
-  spreadCostConversionRate: string;
-  spreadCostConversionInstrument: string | null;
-}
-
-@Injectable()
-export class TradeSpreadTelemetryService {
-  constructor(
-    private readonly brokerService: BrokerService,
-    private readonly fxConversion: BrokerFxConversionService,
-  ) {}
-
-  async estimateEntrySpreadCost(input: {
-    userId: string;
-    brokerConnectionId: string;
-    instrument: string;
-    lotSize: string;
-    accountCurrency: string;
-    quote: BrokerPrice;
-  }): Promise<TradeSpreadCostEstimate | null> {
-    try {
-      const instrument = input.instrument.trim().toUpperCase();
-      const accountCurrency = input.accountCurrency.trim().toUpperCase();
-      if (!/^[A-Z]{6}$/.test(instrument) || !/^[A-Z]{3}$/.test(accountCurrency)) return null;
-      if (input.quote.instrument.trim().toUpperCase() !== instrument) return null;
-
-      const bid = ExactDecimal.tryParse(input.quote.bid);
-      const ask = ExactDecimal.tryParse(input.quote.ask);
-      const lotSize = ExactDecimal.tryParse(input.lotSize);
-      if (!bid?.isPositive() || !ask?.isPositive() || ask.lt(bid) || !lotSize?.isPositive()) {
-        return null;
-      }
-      const spread = ask.sub(bid);
-      if (spread.isNegative()) return null;
-
-      const spec = await this.brokerService.getInstrumentSpecForConnection(
-        input.userId,
-        input.brokerConnectionId,
-        instrument,
-      );
-      const contractSize = ExactDecimal.tryParse(spec?.contractSize ?? '');
-      if (!contractSize?.isPositive()) return null;
-
-      const quoteCurrency = instrument.slice(3, 6);
-      const baseCurrency = instrument.slice(0, 3);
-      const quoteCost = spread.mul(contractSize).mul(lotSize);
-
-      let conversionRate = ExactDecimal.ONE;
-      let conversionInstrument: string | null = null;
-      if (accountCurrency === baseCurrency) {
-        conversionRate = bid.add(ask).div(ExactDecimal.parse('2'), {
-          scale: 12,
-          mode: 'HALF_UP',
-        });
-        conversionInstrument = instrument;
-      } else if (accountCurrency !== quoteCurrency) {
-        const conversion = await this.fxConversion.resolveCachedBid(
-          input.brokerConnectionId,
-          accountCurrency,
-          quoteCurrency,
-          new Date(input.quote.timestamp),
-        );
-        if (!conversion) return null;
-        const parsedRate = ExactDecimal.tryParse(conversion.rate);
-        if (!parsedRate?.isPositive()) return null;
-        conversionRate = parsedRate;
-        conversionInstrument = conversion.path[0] ?? null;
-      }
-
-      const estimatedSpreadCost =
-        accountCurrency === quoteCurrency
-          ? quoteCost
-          : quoteCost.divDown(conversionRate, 8);
-
-      return {
-        estimatedSpreadCost: estimatedSpreadCost.toString(),
-        spreadCostEstimateMethod: ENTRY_SPREAD_ROUND_TRIP_PROXY,
-        spreadCostContractSize: contractSize.toString(),
-        spreadCostQuoteCurrency: quoteCurrency,
-        spreadCostConversionRate: conversionRate.toString(),
-        spreadCostConversionInstrument: conversionInstrument,
-      };
-    } catch {
-      return null;
-    }
-  }
-}
-""")
+              anchor = "            swap: action.swap,\n"
+              if anchor not in s:
+                  raise SystemExit('FILLED outcome return anchor missing')
+              s = s.replace(anchor, anchor + "            executionQuote,\n", 1)
+          orch.write_text(s)
           PY
-
       - name: Focused GREEN tests
         env:
           NODE_ENV: test
@@ -237,7 +126,7 @@ export class TradeSpreadTelemetryService {
             src/modules/execution/services/trade-spread-telemetry.service.spec.ts
       - name: API build
         run: pnpm --filter @irexpro/api build
-      - name: Commit verified core implementation
+      - name: Commit verified quote propagation
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -248,7 +137,6 @@ export class TradeSpreadTelemetryService {
                   apps/api/src/modules/execution/orchestration/market-safety-gate.spec.ts \
                   apps/api/src/modules/execution/orchestration/execution-intent.interface.ts \
                   apps/api/src/modules/execution/orchestration/execution-orchestrator.service.ts \
-                  apps/api/src/modules/execution/services/trade-spread-telemetry.service.ts \
                   .github/workflows/apply-spread-core-once.yml
           git commit -m 'feat(execution): carry proven quote into spread telemetry'
-          git push origin HEAD:${BRANCH}
+          git push origin HEAD:feature/execution-spread-telemetry-20261103
