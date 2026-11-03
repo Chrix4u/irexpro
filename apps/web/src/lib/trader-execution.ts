@@ -302,6 +302,7 @@ function isCloseReason(
     value === 'TAKE_PROFIT_HIT' ||
     value === 'MANUAL_CLOSE' ||
     value === 'AI_CLOSE_SIGNAL' ||
+    value === 'TIME_TO_WORK' ||
     value === 'PROFIT_PROTECTION' ||
     value === 'KILL_SWITCH_FORCE_CLOSE' ||
     value === 'BROKER_CLOSE' ||

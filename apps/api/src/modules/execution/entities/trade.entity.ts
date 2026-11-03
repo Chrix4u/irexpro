@@ -26,6 +26,8 @@ export enum TradeCloseReason {
   TAKE_PROFIT_HIT = 'TAKE_PROFIT_HIT',
   MANUAL_CLOSE = 'MANUAL_CLOSE',
   AI_CLOSE_SIGNAL = 'AI_CLOSE_SIGNAL',
+  /** Provider explicitly reports this PAPER time-to-work exit; never coerce it to a generic AI close. */
+  TIME_TO_WORK = 'TIME_TO_WORK',
   PROFIT_PROTECTION = 'PROFIT_PROTECTION',
   KILL_SWITCH_FORCE_CLOSE = 'KILL_SWITCH_FORCE_CLOSE',
   BROKER_CLOSE = 'BROKER_CLOSE',

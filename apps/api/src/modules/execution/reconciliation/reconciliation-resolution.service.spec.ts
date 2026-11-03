@@ -200,6 +200,38 @@ describe('ReconciliationResolutionService', () => {
       );
     });
 
+    it('preserves provider TIME_TO_WORK as its own research close reason, not AI_CLOSE_SIGNAL', async () => {
+      await service.closeTradeFromProvider(baseTrade(), {
+        externalOrderId: 'pos-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '0.2000',
+        openPrice: '1.10000',
+        closePrice: '1.10020',
+        stopLoss: '1.09000',
+        takeProfit: '1.12000',
+        realisedPnl: '0.20',
+        openedAt: new Date('2026-11-03T10:00:00Z'),
+        closedAt: new Date('2026-11-03T10:12:00Z'),
+        commission: '0.05',
+        swap: '0.00',
+        closeReason: 'TIME_TO_WORK',
+      });
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        { id: 'trade-1', status: TradeStatus.OPEN },
+        expect.objectContaining({ closeReason: TradeCloseReason.TIME_TO_WORK }),
+      );
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            closeReason: TradeCloseReason.TIME_TO_WORK,
+            providerCloseReason: 'TIME_TO_WORK',
+            closeReasonSource: 'PROVIDER_CLOSE_REASON',
+          }),
+        }),
+      );
+    });
+
     it('preserves PAPER profit-lock provenance as PROFIT_PROTECTION', async () => {
       await service.closeTradeFromProvider(baseTrade(), {
         externalOrderId: 'pos-1',
