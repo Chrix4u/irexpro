@@ -63,13 +63,17 @@ describe('ExecutionReadService trading-cost accounting', () => {
       'grossRealisedPnl',
     );
     expect(summaryQuery.addSelect).toHaveBeenCalledWith(
+      expect.stringMatching(/SUM\(ABS\(trade\.commission\)\)/),
+      'totalCommission',
+    );
+    expect(summaryQuery.addSelect).toHaveBeenCalledWith(
       expect.stringMatching(
-        /SUM\(trade\.realisedPnl\).*SUM\(trade\.commission\).*SUM\(trade\.swap\)/,
+        /SUM\(trade\.realisedPnl\).*SUM\(ABS\(trade\.commission\)\).*SUM\(trade\.swap\)/,
       ),
       'netRealisedPnl',
     );
     expect(summaryQuery.addSelect).toHaveBeenCalledWith(
-      expect.stringMatching(/SUM\(trade\.commission\).*SUM\(trade\.swap\)/),
+      expect.stringMatching(/SUM\(ABS\(trade\.commission\)\).*SUM\(trade\.swap\)/),
       'totalExplicitCosts',
     );
 
