@@ -133,13 +133,13 @@ describe('M1TacticalMarketDataService', () => {
     const staleM5 = fixture({ M5: rows(30, 5, new Date('2026-10-15T12:10:00.000Z')) });
     await expect(staleM5.service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
     expect(staleM5.service.getLastReadiness('conn-1', 'EURUSD')).toEqual(
-      expect.objectContaining({ ready: false, reason: 'BROKER_FEATURE_CONTEXT_UNAVAILABLE' }),
+      expect.objectContaining({ ready: false, reason: 'BROKER_M5_CONTEXT_STALE' }),
     );
 
     const staleM15 = fixture({ M15: rows(30, 15, new Date('2026-10-15T11:45:00.000Z')) });
     await expect(staleM15.service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
     expect(staleM15.service.getLastReadiness('conn-1', 'EURUSD')).toEqual(
-      expect.objectContaining({ ready: false, reason: 'BROKER_FEATURE_CONTEXT_UNAVAILABLE' }),
+      expect.objectContaining({ ready: false, reason: 'BROKER_M15_CONTEXT_STALE' }),
     );
   });
 
