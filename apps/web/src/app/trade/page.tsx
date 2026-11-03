@@ -1776,7 +1776,12 @@ export default function AiTradingPage() {
   const [savingAllocation, setSavingAllocation] = useState(false);
   const [togglingAutomation, setTogglingAutomation] = useState(false);
   const [pendingAutomationAction, setPendingAutomationAction] = useState<
-    "START" | "STOP" | "RESET_RISK_PROTECTION" | "RESET_RISK_PROTECTION_AND_START" | null
+    | "START"
+    | "STOP"
+    | "RESET_RISK_PROTECTION"
+    | "RESET_RISK_PROTECTION_AND_START"
+    | "ENABLE_DEMO_AUTHORIZATION"
+    | null
   >(null);
   const [error, setError] = useState<string | null>(null);
   const [allocationWarning, setAllocationWarning] = useState<string | null>(
@@ -1929,6 +1934,13 @@ export default function AiTradingPage() {
     [terminal, selectedBrokerId],
   );
   const marketBrokerConnectionId = selectedBroker?.id ?? "";
+  const demoAutomationNeedsActivation =
+    automationOn &&
+    terminal?.session?.executionMode === "FULL_AUTO" &&
+    selectedBroker?.accountType === "DEMO" &&
+    selectedBroker?.brokerId !== "paper-broker" &&
+    selectedBroker?.status === "CONNECTED" &&
+    selectedBroker?.authorizationStatus !== "ACTIVE";
   const automationBlockedReasons = executionBlockedReasons({
     session: terminal?.session ?? null,
     killSwitchActive: terminal?.risk?.killSwitchActive ?? false,
@@ -2566,7 +2578,22 @@ export default function AiTradingPage() {
     setTogglingAutomation(true);
     setError(null);
     try {
-      if (action === "RESET_RISK_PROTECTION") {
+      if (action === "ENABLE_DEMO_AUTHORIZATION") {
+        if (!demoAutomationNeedsActivation || !selectedBroker.demoValidated) {
+          notify.warning(
+            "DEMO broker automation can only be activated after the broker is connected and validated.",
+          );
+          setPendingAutomationAction(null);
+          return;
+        }
+        const preparation = await prepareBrokerForAutomationStart(selectedBroker);
+        if (!preparation.ready) {
+          throw new Error(preparation.message);
+        }
+        notify.success(
+          "Validated DEMO broker automation is ACTIVE. The existing AI session remains bound to this account; all model, economic and risk gates still apply.",
+        );
+      } else if (action === "RESET_RISK_PROTECTION") {
         if (!terminal?.session) {
           notify.warning("The paused AI session is no longer available.");
           setPendingAutomationAction(null);
@@ -2873,6 +2900,9 @@ export default function AiTradingPage() {
     (positionCurrencies.length !== 1 || totalUnrealisedPnl === null);
   const tradeReadiness = deriveTradeReadinessUiState({
     automationOn,
+    brokerAccountType: selectedBroker?.accountType ?? null,
+    brokerId: selectedBroker?.brokerId ?? null,
+    brokerAuthorizationStatus: selectedBroker?.authorizationStatus ?? null,
     scannerStatus: vpsScannerStatus,
     m1TacticalStatus,
     fastMarkState: fastMarkFeed.state,
@@ -3332,6 +3362,22 @@ export default function AiTradingPage() {
                             : "Stopped"}
                   </Badge>
                 </div>
+                {demoAutomationNeedsActivation ? (
+                  <Alert variant="warning">
+                    <strong>AI session running, but DEMO broker authorization is inactive.</strong>{" "}
+                    The broker is connected but has not granted ACTIVE automation
+                    authority. New positions cannot open until you explicitly
+                    authorize this validated DEMO connection.
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={togglingAutomation || !controlStateReady || !selectedBroker?.demoValidated}
+                      onClick={() => setPendingAutomationAction("ENABLE_DEMO_AUTHORIZATION")}
+                    >
+                      Enable DEMO automation
+                    </Button>
+                  </Alert>
+                ) : null}
                 <Button
                   type="button"
                   variant={
@@ -5537,8 +5583,10 @@ export default function AiTradingPage() {
                       : "Ready to start"}
                 </span>
                 <h2 id="ai-confirm-title">
-                  {pendingAutomationAction === "RESET_RISK_PROTECTION"
-                    ? "Reset risk protection and continue AI Trading?"
+                  {pendingAutomationAction === "ENABLE_DEMO_AUTHORIZATION"
+                    ? "Enable automated trading on this validated DEMO account?"
+                    : pendingAutomationAction === "RESET_RISK_PROTECTION"
+                      ? "Reset risk protection and continue AI Trading?"
                     : pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
                       ? "Reset risk protection and start AI Trading?"
                       : pendingAutomationAction === "STOP"
@@ -5553,8 +5601,10 @@ export default function AiTradingPage() {
                 id="ai-confirm-description"
                 className="ai-confirm-dialog__description"
               >
-                {pendingAutomationAction === "RESET_RISK_PROTECTION"
-                  ? "A hard risk limit was reached, so new AI entries are paused. If you continue, iRexPro will keep every realised profit and loss in your history, reset the daily-loss measurement window, rebase maximum drawdown to current verified broker equity, and resume this AI session only after fresh server checks pass."
+                {pendingAutomationAction === "ENABLE_DEMO_AUTHORIZATION"
+                  ? "The existing FULL_AUTO session is running, but its selected DEMO broker authorization is not ACTIVE. Confirming requests DEMO-only broker activation through the server's existing validated authorization endpoint. LIVE funds are never enabled; the AI still has to pass all model, profitability, risk and dispatch checks."
+                  : pendingAutomationAction === "RESET_RISK_PROTECTION"
+                    ? "A hard risk limit was reached, so new AI entries are paused. If you continue, iRexPro will keep every realised profit and loss in your history, reset the daily-loss measurement window, rebase maximum drawdown to current verified broker equity, and resume this AI session only after fresh server checks pass."
                   : pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
                     ? "Risk protection stopped the previous AI session. If you continue, iRexPro will keep every realised profit and loss in your history, reset the current risk window, then request a new AI session through the normal broker, allocation and execution gates. The new session establishes its drawdown baseline from current verified broker equity."
                     : pendingAutomationAction === "STOP"
@@ -5587,7 +5637,14 @@ export default function AiTradingPage() {
                 </div>
               </div>
 
-              {pendingAutomationAction === "RESET_RISK_PROTECTION" ||
+              {pendingAutomationAction === "ENABLE_DEMO_AUTHORIZATION" ? (
+                <Alert variant="warning">
+                  Only the selected, previously validated DEMO broker can be
+                  activated. This can permit new DEMO orders under existing
+                  server-enforced protections; it does not override negative
+                  expectancy, model-admission or loss limits.
+                </Alert>
+              ) : pendingAutomationAction === "RESET_RISK_PROTECTION" ||
               pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START" ? (
                 <Alert variant="warning">
                   <strong>Continuing can create additional losses today.</strong>{" "}
@@ -5638,8 +5695,10 @@ export default function AiTradingPage() {
                   autoFocus
                   onClick={() => void confirmAutomationAction()}
                 >
-                  {pendingAutomationAction === "RESET_RISK_PROTECTION"
-                    ? "Reset & Continue AI Trading"
+                  {pendingAutomationAction === "ENABLE_DEMO_AUTHORIZATION"
+                    ? "Activate DEMO automation"
+                    : pendingAutomationAction === "RESET_RISK_PROTECTION"
+                      ? "Reset & Continue AI Trading"
                     : pendingAutomationAction === "RESET_RISK_PROTECTION_AND_START"
                       ? "Reset & Start AI Trading"
                       : pendingAutomationAction === "STOP"
