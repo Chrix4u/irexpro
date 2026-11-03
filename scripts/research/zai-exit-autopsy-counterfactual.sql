@@ -1,119 +1,103 @@
--- ============================================================================
--- zai-exit-autopsy-counterfactual.sql
--- Part of the z.ai independent model/productivity review (2026-11-03).
--- Branch: zai/model-productivity-review-20261102
---
--- Purpose: answer the review brief's workstream — "Analyze profit-protection
--- exits: after an early protected close, replay whether price later reached
--- the original TP, the original SL, or neither."
---
--- Source tables:
---   trading.trades                          (close_reason, original SL/TP, P&L, MAE/MFE)
---   trading.post_entry_shadow_observations  (artifact 'profit-protection-counterfactual-v1',
---     written by apps/api/src/modules/ai/profit-protection-counterfactual.service.ts:
---     state = outcome, reason ∈ {TP_FIRST, SL_FIRST, NEITHER_4H, AMBIGUOUS_SAME_M1, DATA_GAP},
---     response JSONB carries original_take_profit, original_stop_loss,
---     realised_pnl, actual_exit_r, strategy_route, checkpoint_minutes = 240)
---
--- READ-ONLY.
--- ============================================================================
+-- z.ai exit autopsy — corrected to actual staging observation schema, 2026-11-03.
+-- READ ONLY. Outcomes are stored in o.state, NOT in o.reason. The latter is
+-- 'ORIGINAL_BARRIER_REPLAY'; no row has state='outcome'.
+-- Replay follows ORIGINAL TP/SL for 240 minutes after protected exit.
+-- It is a hindsight barrier counterfactual, NOT a simulated partial-exit or
+-- trailing-stop policy and NOT evidence to promote execution behavior.
+-- Ambiguous bars and data gaps are excluded from payoff comparisons.
+-- All R estimates are within-trade normalized. Costs, slippage, swap,
+-- latency and execution of hypothetical hold are not fully represented.
 
--- ---------------------------------------------------------------------------
--- §1. Counterfactual outcome distribution for profit-protected closes
--- ---------------------------------------------------------------------------
-SELECT
-  o.reason                                   AS counterfactual_outcome,  -- TP_FIRST / SL_FIRST / NEITHER_4H / AMBIGUOUS_SAME_M1 / DATA_GAP
-  COUNT(*)                                   AS n,
-  ROUND(AVG((o.response->>'realised_pnl')::numeric), 4)     AS avg_realised_pnl,
-  ROUND(AVG((o.response->>'actual_exit_r')::numeric), 4)    AS avg_actual_exit_r,
-  ROUND(AVG(((o.response->>'original_take_profit')::numeric
-           - (o.response->>'original_stop_loss')::numeric) / NULLIF(ABS(
-               (o.response->>'original_take_profit')::numeric
-             - (o.response->>'original_stop_loss')::numeric), 0)), 4) AS sanity_ratio
+-- 1. Outcome distribution, by account currency. No USD/EUR mixing.
+SELECT t.account_currency AS currency,o.state AS counterfactual_outcome,
+ COUNT(*) AS n,
+ ROUND(AVG((o.response->>'realised_pnl')::numeric),4) AS avg_protected_exit_pnl,
+ ROUND(AVG((o.response->>'actual_exit_r')::numeric),4) AS avg_protected_exit_r
 FROM trading.post_entry_shadow_observations o
-WHERE o.artifact = 'profit-protection-counterfactual-v1'
-  AND o.state = 'outcome'
-GROUP BY o.reason
-ORDER BY n DESC;
+JOIN trading.trades t ON t.id=o.trade_id
+WHERE o.artifact='profit-protection-counterfactual-v1'
+  AND o.checkpoint_minutes=240
+  AND t.status='CLOSED' AND t.close_reason='PROFIT_PROTECTION'
+GROUP BY t.account_currency,o.state ORDER BY currency,n DESC;
 
--- ---------------------------------------------------------------------------
--- §2. Counterfactual joined back to the trade (route/instrument/side cohorts)
---     Sanity: the trade's realised P&L at the protected exit vs what the
---     original TP would have delivered (needs the TP fill assumption: exact
---     TP price, i.e. optimistic boundary) and the original SL (pessimistic).
--- ---------------------------------------------------------------------------
+-- 2. Route and outcome breakdown: compare the original TP/SL barrier with
+-- the actual protected close. A positive delta describes idealized full
+-- hold-to-first-barrier upside; NOT a trade-management strategy result.
 WITH pp AS (
-  SELECT o.trade_id,
-         o.reason,
-         (o.response->>'original_take_profit')::numeric AS orig_tp,
-         (o.response->>'original_stop_loss')::numeric   AS orig_sl,
-         (o.response->>'realised_pnl')::numeric         AS realised_at_protect,
-         (o.response->>'actual_exit_r')::numeric        AS actual_exit_r,
-         o.response->>'strategy_route'                  AS strategy_route
-  FROM trading.post_entry_shadow_observations o
-  WHERE o.artifact = 'profit-protection-counterfactual-v1'
-    AND o.state = 'outcome'
+ SELECT o.state,o.response->>'strategy_route' AS route,
+  t.account_currency AS currency,t.instrument,t.direction,
+  (o.response->>'realised_pnl')::numeric AS actual_pnl,
+  (o.response->>'actual_exit_r')::numeric AS actual_r,
+  ABS((o.response->>'original_take_profit')::numeric-t.fill_price) /
+    NULLIF(ABS(t.fill_price-(o.response->>'original_stop_loss')::numeric),0)
+    AS original_target_r
+ FROM trading.post_entry_shadow_observations o
+ JOIN trading.trades t ON t.id=o.trade_id
+ WHERE o.artifact='profit-protection-counterfactual-v1'
+  AND o.checkpoint_minutes=240 AND t.status='CLOSED'
+  AND t.close_reason='PROFIT_PROTECTION'
 )
-SELECT
-  t.instrument,
-  t.direction,
-  pp.strategy_route,
-  pp.reason                                  AS counterfactual_outcome,
-  COUNT(*)                                   AS n,
-  ROUND(AVG(pp.realised_at_protect), 4)      AS avg_realised_at_protect,
-  ROUND(AVG(t.realised_pnl::numeric), 4)     AS avg_trade_realised_pnl,
-  ROUND(AVG(t.max_favorable_pnl::numeric), 4) AS avg_mfe_at_protect,
-  ROUND(AVG(t.max_adverse_pnl::numeric), 4)  AS avg_mae_at_protect,
-  ROUND(AVG(t.profit_giveback::numeric), 4)  AS avg_giveback_at_protect
-FROM trading.trades t
-JOIN pp ON pp.trade_id = t.id
-WHERE t.status = 'CLOSED'
-GROUP BY t.instrument, t.direction, pp.strategy_route, pp.reason
-ORDER BY t.instrument, pp.strategy_route, pp.reason;
+SELECT currency,route,state,COUNT(*) AS n,
+ ROUND(AVG(actual_pnl),3) AS avg_actual_pnl,
+ ROUND(AVG(actual_r),4) AS avg_actual_exit_r,
+ ROUND(AVG(original_target_r),4) AS avg_original_tp_r,
+ ROUND(AVG(CASE WHEN state='TP_FIRST' THEN original_target_r-actual_r
+   WHEN state='SL_FIRST' THEN -1-actual_r ELSE NULL END),4)
+   AS hypothetical_hold_delta_r
+FROM pp GROUP BY currency,route,state
+ORDER BY currency,route,state;
 
--- ---------------------------------------------------------------------------
--- §3. "Gave back too early?" — the P1 evidence query.
---     For TP_FIRST outcomes: the original TP was reached AFTER the protected
---     close, i.e. the retention ladder harvested a winner that would have paid
---     in full. Report the distribution of (TP distance − protected exit) in R
---     to size the opportunity that P1's partial-scale-out + ATR-trail recovers.
--- ---------------------------------------------------------------------------
+-- 3. The SMALL PROFIT review cohort (positive gross exit <= 6 currency units).
+-- Route-specific sign differences are essential: do not aggregate these into
+-- a single universal profit-lock policy.
 WITH pp AS (
-  SELECT o.trade_id,
-         o.reason,
-         (o.response->>'realised_pnl')::numeric AS realised_at_protect,
-         (o.response->>'actual_exit_r')::numeric AS actual_exit_r
-  FROM trading.post_entry_shadow_observations o
-  WHERE o.artifact = 'profit-protection-counterfactual-v1' AND o.state = 'outcome'
-),
-tp_first AS (
-  SELECT pp.*, t.stop_loss::numeric AS sl, t.fill_price::numeric AS entry, t.direction
-  FROM pp
-  JOIN trading.trades t ON t.id = pp.trade_id
-  WHERE pp.reason = 'TP_FIRST'
+ SELECT o.state,o.response->>'strategy_route' AS route,
+  t.account_currency AS currency,
+  (o.response->>'realised_pnl')::numeric AS actual_pnl,
+  (o.response->>'actual_exit_r')::numeric AS actual_r,
+  ABS((o.response->>'original_take_profit')::numeric-t.fill_price) /
+    NULLIF(ABS(t.fill_price-(o.response->>'original_stop_loss')::numeric),0)
+    AS original_target_r
+ FROM trading.post_entry_shadow_observations o
+ JOIN trading.trades t ON t.id=o.trade_id
+ WHERE o.artifact='profit-protection-counterfactual-v1'
+  AND o.checkpoint_minutes=240 AND t.close_reason='PROFIT_PROTECTION'
 )
-SELECT
-  COUNT(*)                                                     AS n_tp_first,
-  ROUND(AVG(tp_first.actual_exit_r), 4)                        AS avg_r_harvested,
-  -- R actually captured at the protected exit vs 1.6R design (M1) / 1.667R (M5)
-  ROUND(AVG(1.6 - tp_first.actual_exit_r), 4)                  AS avg_r_left_on_table_vs_m1_design,
-  -- How far the protected exit sat below the peak it saw:
-  ROUND(AVG(t.max_favorable_pnl::numeric /
-        NULLIF(ABS(t.fill_price::numeric - t.stop_loss::numeric) * 10 * t.lot_size::numeric, 0)
-        - tp_first.actual_exit_r), 4)                          AS avg_giveback_r
-FROM tp_first tp
-JOIN trading.trades t ON t.id = tp.trade_id;
+SELECT currency,route,COUNT(*) AS n,
+ COUNT(*) FILTER(WHERE state='TP_FIRST') AS n_tp_first,
+ COUNT(*) FILTER(WHERE state='SL_FIRST') AS n_sl_first,
+ COUNT(*) FILTER(WHERE state NOT IN ('TP_FIRST','SL_FIRST')) AS n_unresolved,
+ ROUND(AVG(actual_r),4) AS avg_actual_exit_r,
+ ROUND(AVG(CASE WHEN state='TP_FIRST' THEN original_target_r-actual_r
+   WHEN state='SL_FIRST' THEN -1-actual_r ELSE NULL END),4)
+   AS hypothetical_hold_delta_r
+FROM pp WHERE actual_pnl>0 AND actual_pnl<=6
+GROUP BY currency,route ORDER BY currency,route;
 
--- ---------------------------------------------------------------------------
--- §4. SL_FIRST / NEITHER_4H: was the early close also loss-avoiding?
---     If SL_FIRST dominates, protection exits are paying for themselves;
---     if NEITHER_4H dominates, the ladder is mostly noise-trading winners.
--- ---------------------------------------------------------------------------
-SELECT
-  o.reason,
-  COUNT(*)                                                     AS n,
-  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1)           AS pct
-FROM trading.post_entry_shadow_observations o
-WHERE o.artifact = 'profit-protection-counterfactual-v1' AND o.state = 'outcome'
-GROUP BY o.reason
-ORDER BY pct DESC;
+-- 4. Exit-R conditional diagnostic (not a true MFE conditional trajectory).
+-- A policy-grid backtest must replay intra-trade OHLC + position state before
+-- any partial scale-out, fixed plateau or ATR trail can be parameterized.
+WITH pp AS (
+ SELECT o.state,o.response->>'strategy_route' AS route,
+ (o.response->>'actual_exit_r')::numeric AS actual_r,
+ ABS((o.response->>'original_take_profit')::numeric-t.fill_price) /
+   NULLIF(ABS(t.fill_price-(o.response->>'original_stop_loss')::numeric),0)
+   AS original_target_r
+ FROM trading.post_entry_shadow_observations o
+ JOIN trading.trades t ON t.id=o.trade_id
+ WHERE o.artifact='profit-protection-counterfactual-v1'
+   AND o.checkpoint_minutes=240 AND t.close_reason='PROFIT_PROTECTION'
+), bucketed AS (
+ SELECT *,CASE WHEN actual_r<0.25 THEN 1
+  WHEN actual_r<0.5 THEN 2 WHEN actual_r<0.75 THEN 3
+  WHEN actual_r<1 THEN 4 WHEN actual_r<1.5 THEN 5 ELSE 6 END AS exit_r_bin
+ FROM pp
+)
+SELECT route,exit_r_bin,COUNT(*) AS n,
+ COUNT(*) FILTER(WHERE state='TP_FIRST') AS tp_first,
+ COUNT(*) FILTER(WHERE state='SL_FIRST') AS sl_first,
+ COUNT(*) FILTER(WHERE state NOT IN ('TP_FIRST','SL_FIRST')) AS unresolved,
+ ROUND(AVG(CASE WHEN state='TP_FIRST' THEN original_target_r-actual_r
+   WHEN state='SL_FIRST' THEN -1-actual_r ELSE NULL END),4)
+   AS hypothetical_hold_delta_r
+FROM bucketed GROUP BY route,exit_r_bin ORDER BY route,exit_r_bin;
