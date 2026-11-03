@@ -65,6 +65,7 @@ import {
   type MultimodelDemoAuthorityDecision,
 } from './multimodel-demo-authority';
 import { evaluateM1TacticalExpectancy } from './m1-tactical-expectancy';
+import { attributeZaiDemoBlockers, diagnoseZaiDemoCostGeometry } from './zai-demo-diagnostics';
 import { evaluateDemoProfitabilityReliabilityGate } from './demo-profitability-reliability-gate';
 import {
   evaluateM1RoutePairSideReliability,
@@ -1420,6 +1421,23 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
         ]);
 
+    // Observation on the connected DEMO engine; no admission, volume or execution modification.
+    const zaiDemoDiagnostics = professionalDemoPhase
+      ? {
+          blockerAttribution: attributeZaiDemoBlockers(blockers),
+          costGeometry: diagnoseZaiDemoCostGeometry({
+            candidate,
+            features,
+            route: routeDecision.route,
+            governance: governance.genericGovernance,
+          }),
+          candidateConfidence: candidate.confidence,
+          planBEnsembleScore: multimodelDemo?.ensemble.ensembleScore ?? null,
+          trainedExpertConfidence: multimodelDemo?.trainedExpert.ensembleConfidence ?? null,
+          executionAuthorityUnchanged: true as const,
+        }
+      : null;
+
     const decision = await this.evidence.recordDecision({
       userId,
       brokerConnectionId,
@@ -1473,6 +1491,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         multimodelAuthority: multimodelDemo?.authority ?? null,
         multimodelPortfolioSnapshotAvailable: multimodelDemo?.portfolioSnapshotAvailable ?? null,
         demoProfitabilityReliabilityGate,
+        zaiDemoDiagnostics,
         directionFlipConflict: activeOppositePosition
           ? {
               candidateDirection: candidate.direction,

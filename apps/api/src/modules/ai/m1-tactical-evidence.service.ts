@@ -52,6 +52,11 @@ export interface M1TacticalLatestDecisionState {
   trainedExpertShortVotes: number | null;
   m1TacticalRole: string | null;
   m1TimingRoute: M1TacticalDecisionRoute;
+  /** DEMO-only explanatory telemetry; never grants execution. */
+  primaryBlockerGroup?: string | null;
+  primaryBlockerCode?: string | null;
+  demoCostBreakEvenStopPrice?: number | null;
+  demoAlternativeCostR?: number | null;
 }
 
 export interface M1TacticalDecisionRecord {
@@ -618,6 +623,9 @@ export class M1TacticalEvidenceService {
     const multimodelGovernance = jsonObject(governance.multimodelGovernance);
     const trainedExpert = jsonObject(governance.multimodelTrainedExpert);
     const multimodelAuthority = jsonObject(governance.multimodelAuthority);
+    const zaiDemoDiagnostics = jsonObject(governance.zaiDemoDiagnostics);
+    const blockerAttribution = jsonObject(zaiDemoDiagnostics.blockerAttribution);
+    const costGeometry = jsonObject(zaiDemoDiagnostics.costGeometry);
     const trainedDirection = nullableString(trainedExpert.direction);
     return {
       instrument: String(row.instrument).trim().toUpperCase(),
@@ -649,6 +657,10 @@ export class M1TacticalEvidenceService {
       trainedExpertShortVotes: nullableNumber(trainedExpert.shortVotes),
       m1TacticalRole: nullableString(governance.m1TacticalRole),
       m1TimingRoute: row.route,
+      primaryBlockerGroup: nullableString(blockerAttribution.primaryGroup),
+      primaryBlockerCode: nullableString(blockerAttribution.primaryCode),
+      demoCostBreakEvenStopPrice: nullableNumber(costGeometry.costBreakEvenStopPriceAt010R),
+      demoAlternativeCostR: nullableNumber(costGeometry.hypotheticalCostR),
     };
   }
 

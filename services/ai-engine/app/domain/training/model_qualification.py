@@ -44,6 +44,7 @@ from app.domain.training.validation import (
     compute_classification_metrics,
     iter_purged_walk_forward_time_splits,
 )
+from app.domain.training.zai_economics_first_gate import assess_economics_first_candidate
 
 CONFIDENCE_FLOOR = 0.60
 ACTIONABLE_TARGET_COLUMN = "actionable_target"
@@ -3064,6 +3065,7 @@ def _broad_improvement_flag(
     )
     return {
         "interesting_for_follow_up": interesting,
+        "economics_first_research_gate": assess_economics_first_candidate(baseline, candidate),
         "balanced_accuracy_uplift": balanced_uplift,
         "brier_score_delta": brier_delta,
         "positive_fold_fraction_not_worse": fold_not_worse,

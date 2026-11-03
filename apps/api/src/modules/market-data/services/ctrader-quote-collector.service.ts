@@ -46,6 +46,30 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   private m1RotationOffset = 0;
   private contextRotationOffset = 0;
   private readonly warnedAt = new Map<string, number>();
+  /** Last completed broker-native history persistence, not just request initiation. */
+  private readonly lastSuccessfulCollectAt = new Map<string, string>();
+  private readonly historicalRefreshFailures = new Map<string, number>();
+
+  getHistoricalCollectionStatus(): {
+    lastSuccessfulCollectAt: Record<string, string>;
+    historicalRefreshFailures: Record<string, number>;
+  } {
+    return {
+      lastSuccessfulCollectAt: Object.fromEntries(this.lastSuccessfulCollectAt),
+      historicalRefreshFailures: Object.fromEntries(this.historicalRefreshFailures),
+    };
+  }
+
+  private collectHistorySucceeded(instrument: string, timeframe: string, now: Date): void {
+    const key = `${instrument}:${timeframe}`;
+    this.lastSuccessfulCollectAt.set(key, now.toISOString());
+    this.historicalRefreshFailures.delete(key);
+  }
+
+  private collectHistoryFailed(instrument: string, timeframe: string): void {
+    const key = `${instrument}:${timeframe}`;
+    this.historicalRefreshFailures.set(key, (this.historicalRefreshFailures.get(key) ?? 0) + 1);
+  }
 
   constructor(
     private readonly config: ConfigService,
@@ -204,8 +228,10 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
           closed,
           'ctrader-broker-native',
         );
+        this.collectHistorySucceeded(instrument, 'M1', now);
       }
     } catch (error) {
+      this.collectHistoryFailed(instrument, 'M1');
       this.warnThrottled(
         `${connectionId}:${instrument}:M1`,
         `cTrader M1 refresh deferred connection=${connectionId} instrument=${instrument}: ${(error as Error).message}`,
@@ -222,30 +248,40 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   ): Promise<void> {
     const minutes =
       timeframe === 'M5' ? 5 : timeframe === 'M15' ? 15 : timeframe === 'H1' ? 60 : 240;
-    try {
-      const rows = await this.brokerService.getOhlcvForConnection(
-        userId,
-        connectionId,
-        instrument,
-        timeframe,
-        CONTEXT_REFRESH_COUNT,
-      );
-      const closed = this.closedRows(rows, minutes, now);
-      if (closed.length > 0) {
-        await this.store.upsertHistoricalCandles(
+    let lastError: unknown = null;
+    // Single bounded retry for a failed historical context request. Only
+    // historical OHLCV is retried; independent live quotes remain unaffected.
+    // The broker adapter enforces the 5-requests/second historical rate limit.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const rows = await this.brokerService.getOhlcvForConnection(
+          userId,
           connectionId,
           instrument,
           timeframe,
-          closed,
-          'ctrader-broker-native',
+          CONTEXT_REFRESH_COUNT,
         );
+        const closed = this.closedRows(rows, minutes, now);
+        if (closed.length > 0) {
+          await this.store.upsertHistoricalCandles(
+            connectionId,
+            instrument,
+            timeframe,
+            closed,
+            'ctrader-broker-native',
+          );
+          this.collectHistorySucceeded(instrument, timeframe, now);
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        this.collectHistoryFailed(instrument, timeframe);
       }
-    } catch (error) {
-      this.warnThrottled(
-        `${connectionId}:${instrument}:${timeframe}`,
-        `cTrader ${timeframe} refresh deferred connection=${connectionId} instrument=${instrument}: ${(error as Error).message}`,
-      );
     }
+    this.warnThrottled(
+      `${connectionId}:${instrument}:${timeframe}`,
+      `cTrader ${timeframe} refresh deferred after one retry connection=${connectionId} instrument=${instrument}: ${(lastError as Error).message}`,
+    );
   }
 
   private closedRows(rows: OHLCV[], minutes: number, now: Date): OHLCV[] {

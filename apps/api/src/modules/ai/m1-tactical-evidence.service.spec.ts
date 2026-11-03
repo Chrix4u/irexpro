@@ -210,6 +210,10 @@ describe('M1TacticalEvidenceService', () => {
       trainedExpertShortVotes: 3,
       m1TacticalRole: 'TIMING_SPECIALIST',
       m1TimingRoute: 'M1_TREND_CONTINUATION',
+      primaryBlockerGroup: null,
+      primaryBlockerCode: null,
+      demoCostBreakEvenStopPrice: null,
+      demoAlternativeCostR: null,
     });
     const [sql, params] = query.mock.calls[0]!;
     expect(String(sql)).toContain('WHERE user_id = $1');

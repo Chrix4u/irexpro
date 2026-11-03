@@ -279,3 +279,52 @@ describe('CTraderQuoteCollectorService', () => {
     expect(h.getCurrentPriceForConnection).not.toHaveBeenCalled();
   });
 });
+
+describe('z.ai P9 cTrader historical failure telemetry', () => {
+  it('records last successful broker-native collection for each timeframe without altering quote collection', async () => {
+    const h = harness();
+    await h.service.collectOnce(OPEN_NOW);
+    const status = h.service.getHistoricalCollectionStatus();
+    expect(status.lastSuccessfulCollectAt['EURUSD:M1']).toBe(OPEN_NOW.toISOString());
+    expect(status.lastSuccessfulCollectAt['EURUSD:M5']).toBe(OPEN_NOW.toISOString());
+    expect(status.lastSuccessfulCollectAt['AUDUSD:M1']).toBeUndefined();
+    expect(status.historicalRefreshFailures).toEqual({});
+    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(6);
+  });
+
+  it('retries failed context once, never counts failure as collection success', async () => {
+    const h = harness();
+    const original = h.getOhlcvForConnection.getMockImplementation();
+    let failOnce = true;
+    h.getOhlcvForConnection.mockImplementation(async (...args) => {
+      if (args[3] === 'M5' && failOnce) {
+        failOnce = false;
+        throw new Error('temporary history timeout');
+      }
+      return original?.(...args);
+    });
+    await h.service.collectOnce(OPEN_NOW);
+    const calls = h.getOhlcvForConnection.mock.calls.filter((call) => call[3] === 'M5');
+    expect(calls).toHaveLength(2);
+    expect(h.service.getHistoricalCollectionStatus().lastSuccessfulCollectAt['EURUSD:M5']).toBe(
+      OPEN_NOW.toISOString(),
+    );
+    expect(
+      h.service.getHistoricalCollectionStatus().historicalRefreshFailures['EURUSD:M5'],
+    ).toBeUndefined();
+  });
+
+  it('keeps collecting quotes if both context attempts fail, and logs the failed refresh counter', async () => {
+    const h = harness();
+    const original = h.getOhlcvForConnection.getMockImplementation();
+    h.getOhlcvForConnection.mockImplementation(async (...args) => {
+      if (args[3] === 'M5') throw new Error('context unavailable');
+      return original?.(...args);
+    });
+    await h.service.collectOnce(OPEN_NOW);
+    const status = h.service.getHistoricalCollectionStatus();
+    expect(status.lastSuccessfulCollectAt['EURUSD:M5']).toBeUndefined();
+    expect(status.historicalRefreshFailures['EURUSD:M5']).toBe(2);
+    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(6);
+  });
+});
