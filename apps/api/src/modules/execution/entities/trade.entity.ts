@@ -179,22 +179,45 @@ export class Trade {
    * spread is already embedded in broker execution P&L and is never deducted
    * again from realised P&L.
    */
-  @Column({ name: 'estimated_spread_cost', type: 'numeric', precision: 20, scale: 8, nullable: true })
+  @Column({
+    name: 'estimated_spread_cost',
+    type: 'numeric',
+    precision: 20,
+    scale: 8,
+    nullable: true,
+  })
   estimatedSpreadCost: string | null;
 
   @Column({ name: 'spread_cost_estimate_method', type: 'varchar', length: 64, nullable: true })
   spreadCostEstimateMethod: string | null;
 
-  @Column({ name: 'spread_cost_contract_size', type: 'numeric', precision: 20, scale: 10, nullable: true })
+  @Column({
+    name: 'spread_cost_contract_size',
+    type: 'numeric',
+    precision: 20,
+    scale: 10,
+    nullable: true,
+  })
   spreadCostContractSize: string | null;
 
   @Column({ name: 'spread_cost_quote_currency', type: 'varchar', length: 3, nullable: true })
   spreadCostQuoteCurrency: string | null;
 
-  @Column({ name: 'spread_cost_conversion_rate', type: 'numeric', precision: 20, scale: 12, nullable: true })
+  @Column({
+    name: 'spread_cost_conversion_rate',
+    type: 'numeric',
+    precision: 20,
+    scale: 12,
+    nullable: true,
+  })
   spreadCostConversionRate: string | null;
 
-  @Column({ name: 'spread_cost_conversion_instrument', type: 'varchar', length: 20, nullable: true })
+  @Column({
+    name: 'spread_cost_conversion_instrument',
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
   spreadCostConversionInstrument: string | null;
 
   @Column({ name: 'stop_loss', type: 'numeric', precision: 18, scale: 8 })
