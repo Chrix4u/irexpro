@@ -3391,7 +3391,7 @@ export default function AiTradingPage() {
                       </Button>
                     ) : (
                       <span>
-                        The broker's current authorization requires separate
+                        The broker&apos;s current authorization requires separate
                         validation or reconnection before a new DEMO activation
                         request can be made.
                       </span>
