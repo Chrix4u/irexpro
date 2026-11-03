@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryDeepPartialEntity, Repository } from 'typeorm';
 import { Trade, TradeStatus } from '../entities/trade.entity';
@@ -6,6 +6,13 @@ import { TradeStateMachine } from './trade-state-machine';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
+import { ExactDecimal } from '../../../common/utils/exact-decimal';
+import type { BrokerPrice } from '../../broker/interfaces/broker-adapter.interface';
+import { TradeSpreadTelemetryService } from '../services/trade-spread-telemetry.service';
+import {
+  discardProvenExecutionQuote,
+  peekProvenExecutionQuote,
+} from '../services/execution-quote-registry';
 
 /**
  * The CAS outcome of one provider-bound Trade lifecycle transition
@@ -32,6 +39,36 @@ export type TradeCasOutcome =
       expected: TradeStatus[];
       target: TradeStatus;
     };
+
+/**
+ * Convert a proven provider quote into the raw telemetry fields that belong
+ * to the PENDING → OPEN transition. The broker-supplied `spread` field is not
+ * trusted for persistence: spread is re-derived from ASK - BID.
+ */
+export function buildEntryQuoteTelemetryPatch(
+  quote: BrokerPrice | null | undefined,
+): QueryDeepPartialEntity<Trade> | null {
+  if (!quote) return null;
+  const bid = ExactDecimal.tryParse(quote.bid);
+  const ask = ExactDecimal.tryParse(quote.ask);
+  const observedAtMs = new Date(quote.timestamp).getTime();
+  if (
+    !bid?.isPositive() ||
+    !ask?.isPositive() ||
+    ask.lt(bid) ||
+    !Number.isFinite(observedAtMs) ||
+    observedAtMs <= 0
+  ) {
+    return null;
+  }
+
+  return {
+    entryQuoteBid: bid.toString(),
+    entryQuoteAsk: ask.toString(),
+    entrySpread: ask.sub(bid).toString(),
+    entryQuoteObservedAt: new Date(observedAtMs),
+  };
+}
 
 /**
  * TradeLifecycleCasService — EVERY provider-bound Trade state transition is a
@@ -66,6 +103,11 @@ export class TradeLifecycleCasService {
     @InjectRepository(Trade)
     private readonly tradeRepo: Repository<Trade>,
     private readonly auditService: AuditService,
+    // Optional preserves the established isolated CAS unit-test shape. In the
+    // production ExecutionModule this provider is present. Telemetry is never
+    // execution authority, so an unavailable estimator must degrade to null.
+    @Optional()
+    private readonly spreadTelemetry?: TradeSpreadTelemetryService,
   ) {}
 
   /**
@@ -89,6 +131,16 @@ export class TradeLifecycleCasService {
       : [params.expectedFrom as TradeStatus];
     const target = params.target;
 
+    // The final market-safety quote is an ephemeral telemetry handoff. Only
+    // OPEN transitions may consume it; terminal non-OPEN transitions discard
+    // it because no entry was established.
+    const executionQuote =
+      target === TradeStatus.OPEN ? peekProvenExecutionQuote(params.tradeId) : null;
+    const entryQuotePatch = buildEntryQuoteTelemetryPatch(executionQuote);
+    const effectivePatch = entryQuotePatch
+      ? ({ ...params.patch, ...entryQuotePatch } as QueryDeepPartialEntity<Trade>)
+      : params.patch;
+
     // ── 1. State-machine validation (fail-loud on illegal transitions) ────
     const legal = expected.filter((from) => TradeStateMachine.canTransition(from, target));
     if (legal.length === 0) {
@@ -101,12 +153,13 @@ export class TradeLifecycleCasService {
     const applied = await this.tradeRepo
       .createQueryBuilder()
       .update()
-      .set(params.patch as never)
+      .set(effectivePatch as never)
       .where('id = :id AND status IN (:...expected)', { id: params.tradeId, expected: legal })
       .execute();
     if (applied.affected) {
       const trade = await this.tradeRepo.findOne({ where: { id: params.tradeId } });
       if (trade) {
+        this.afterTransitionTelemetry(trade, target, executionQuote, entryQuotePatch);
         return { outcome: 'APPLIED', trade };
       }
       // Applied but unreadable — treat as conflict (fail closed).
@@ -120,13 +173,17 @@ export class TradeLifecycleCasService {
     }
 
     if (authoritative.status === target) {
-      // Idempotent: another writer already reached the target state.
+      // Idempotent: another writer already reached the target state. The raw
+      // quote may not have been written by that writer, so telemetry fills it
+      // best-effort without changing lifecycle truth.
+      this.afterTransitionTelemetry(authoritative, target, executionQuote, entryQuotePatch, true);
       return { outcome: 'ALREADY_AT_TARGET', trade: authoritative };
     }
 
     if (TradeStateMachine.isTerminal(authoritative.status)) {
       // NEWER TERMINAL TRUTH — never regress it (a late UNKNOWN provider
       // response may not overwrite a reconciliation-proved CLOSED trade).
+      discardProvenExecutionQuote(params.tradeId);
       await this.recordDiscrepancy(params, expected, target, authoritative.status);
       return { outcome: 'PRESERVED_NEWER_TRUTH', trade: authoritative };
     }
@@ -138,7 +195,7 @@ export class TradeLifecycleCasService {
       const converged = await this.tradeRepo
         .createQueryBuilder()
         .update()
-        .set(params.patch as never)
+        .set(effectivePatch as never)
         .where('id = :id AND status = :status', {
           id: params.tradeId,
           status: authoritative.status,
@@ -146,18 +203,91 @@ export class TradeLifecycleCasService {
         .execute();
       if (converged.affected) {
         const trade = await this.tradeRepo.findOne({ where: { id: params.tradeId } });
-        return trade
-          ? { outcome: 'APPLIED', trade }
-          : { outcome: 'STATE_CONFLICT', trade: null, expected, target };
+        if (trade) {
+          this.afterTransitionTelemetry(trade, target, executionQuote, entryQuotePatch);
+          return { outcome: 'APPLIED', trade };
+        }
+        return { outcome: 'STATE_CONFLICT', trade: null, expected, target };
       }
       // The row moved again — reload + conflict (never loop).
       const reloaded = await this.tradeRepo.findOne({ where: { id: params.tradeId } });
+      if (reloaded && TradeStateMachine.isTerminal(reloaded.status)) {
+        discardProvenExecutionQuote(params.tradeId);
+      }
       await this.recordDiscrepancy(params, expected, target, reloaded?.status ?? null);
       return { outcome: 'STATE_CONFLICT', trade: reloaded, expected, target };
     }
 
     await this.recordDiscrepancy(params, expected, target, authoritative.status);
     return { outcome: 'STATE_CONFLICT', trade: authoritative, expected, target };
+  }
+
+  /**
+   * Runs only after lifecycle truth is durable. It must never be awaited by
+   * the execution path: spread attribution is reporting telemetry and cannot
+   * delay, block, or regress an OPEN position.
+   */
+  private afterTransitionTelemetry(
+    trade: Trade,
+    target: TradeStatus,
+    quote: BrokerPrice | null,
+    rawPatch: QueryDeepPartialEntity<Trade> | null,
+    alreadyAtTarget = false,
+  ): void {
+    if (target !== TradeStatus.OPEN) {
+      if (TradeStateMachine.isTerminal(target)) discardProvenExecutionQuote(trade.id);
+      return;
+    }
+
+    if (!quote || !rawPatch) {
+      discardProvenExecutionQuote(trade.id);
+      return;
+    }
+
+    // If another writer already reached OPEN, preserve lifecycle truth and
+    // fill missing raw telemetry best-effort. On the normal APPLIED path the
+    // exact same fields were part of the atomic OPEN CAS above.
+    if (alreadyAtTarget && !trade.entryQuoteBid) {
+      void this.tradeRepo
+        .update(trade.id, rawPatch as never)
+        .catch((err) =>
+          this.logger.warn(
+            `Trade ${trade.id} quote telemetry backfill failed after idempotent OPEN: ${(err as Error).message}`,
+          ),
+        );
+    }
+
+    discardProvenExecutionQuote(trade.id);
+    void this.persistSpreadEstimateBestEffort(trade, quote);
+  }
+
+  /** Persist account-currency spread proxy after OPEN is durable. */
+  private async persistSpreadEstimateBestEffort(trade: Trade, quote: BrokerPrice): Promise<void> {
+    try {
+      if (!this.spreadTelemetry || !trade.accountCurrency) return;
+      const estimate = await this.spreadTelemetry.estimateEntrySpreadCost({
+        userId: trade.userId,
+        brokerConnectionId: trade.brokerConnectionId,
+        instrument: trade.instrument,
+        lotSize: trade.lotSize,
+        accountCurrency: trade.accountCurrency,
+        quote,
+      });
+      if (!estimate) return;
+
+      await this.tradeRepo.update(trade.id, {
+        estimatedSpreadCost: estimate.estimatedSpreadCost,
+        spreadCostEstimateMethod: estimate.spreadCostEstimateMethod,
+        spreadCostContractSize: estimate.spreadCostContractSize,
+        spreadCostQuoteCurrency: estimate.spreadCostQuoteCurrency,
+        spreadCostConversionRate: estimate.spreadCostConversionRate,
+        spreadCostConversionInstrument: estimate.spreadCostConversionInstrument,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Trade ${trade.id} spread-cost estimation failed after OPEN: ${(err as Error).message}`,
+      );
+    }
   }
 
   /**

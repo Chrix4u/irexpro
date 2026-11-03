@@ -42,6 +42,10 @@ export interface ClosedTradeCurrencySummary {
   totalSwap: string;
   /** Commission minus signed swap; positive means an explicit net cost. */
   totalExplicitCosts: string;
+  /** Reporting-only entry spread proxy; already embedded in broker P&L. */
+  totalEstimatedSpreadCost: string;
+  /** Closed trades in this currency with a quote-at-fill spread estimate. */
+  spreadCostEstimatedTradeCount: number;
   averageHoldMinutes: number | null;
 }
 
@@ -67,6 +71,9 @@ export interface ClosedTradeReportSummary {
   totalCommission: string | null;
   totalSwap: string | null;
   totalExplicitCosts: string | null;
+  /** Null for mixed account currencies; use currencyBreakdown in that case. */
+  totalEstimatedSpreadCost: string | null;
+  spreadCostEstimatedTradeCount: number;
   averageHoldMinutes: number | null;
   currencyBreakdown: ClosedTradeCurrencySummary[];
 }
@@ -99,6 +106,8 @@ type ClosedTradeAggregateRow = {
   totalCommission: string | number | null;
   totalSwap: string | number | null;
   totalExplicitCosts: string | number | null;
+  totalEstimatedSpreadCost: string | number | null;
+  spreadCostEstimatedTradeCount: string | number;
   averageHoldMinutes: string | number | null;
 };
 
@@ -166,6 +175,8 @@ function currencySummary(row: ClosedTradeAggregateRow): ClosedTradeCurrencySumma
     totalCommission: numericString(row.totalCommission),
     totalSwap: numericString(row.totalSwap),
     totalExplicitCosts: numericString(row.totalExplicitCosts),
+    totalEstimatedSpreadCost: numericString(row.totalEstimatedSpreadCost),
+    spreadCostEstimatedTradeCount: Number(row.spreadCostEstimatedTradeCount) || 0,
     averageHoldMinutes: finiteNumber(row.averageHoldMinutes),
   };
 }
@@ -308,6 +319,11 @@ export class ExecutionReadService {
         'COALESCE(SUM(ABS(trade.commission)), 0) - COALESCE(SUM(trade.swap), 0)',
         'totalExplicitCosts',
       )
+      .addSelect('COALESCE(SUM(trade.estimatedSpreadCost), 0)', 'totalEstimatedSpreadCost')
+      .addSelect(
+        'SUM(CASE WHEN trade.estimatedSpreadCost IS NOT NULL THEN 1 ELSE 0 END)',
+        'spreadCostEstimatedTradeCount',
+      )
       .addSelect('AVG(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)', 'averageWin')
       .addSelect(
         'ABS(AVG(CASE WHEN trade.realisedPnl < 0 THEN trade.realisedPnl END))',
@@ -331,6 +347,10 @@ export class ExecutionReadService {
       .map((row) => currencySummary(row))
       .filter((row): row is ClosedTradeCurrencySummary => row !== null);
     const pnlTradeCount = currencyBreakdown.reduce((sum, row) => sum + row.pnlTradeCount, 0);
+    const spreadCostEstimatedTradeCount = currencyBreakdown.reduce(
+      (sum, row) => sum + row.spreadCostEstimatedTradeCount,
+      0,
+    );
     const wins = rawRows.reduce((sum, row) => sum + (Number(row.wins) || 0), 0);
     const losses = rawRows.reduce((sum, row) => sum + (Number(row.losses) || 0), 0);
     const flats = rawRows.reduce((sum, row) => sum + (Number(row.flats) || 0), 0);
@@ -365,6 +385,8 @@ export class ExecutionReadService {
         totalCommission: singleCurrency?.totalCommission ?? null,
         totalSwap: singleCurrency?.totalSwap ?? null,
         totalExplicitCosts: singleCurrency?.totalExplicitCosts ?? null,
+        totalEstimatedSpreadCost: singleCurrency?.totalEstimatedSpreadCost ?? null,
+        spreadCostEstimatedTradeCount,
         averageHoldMinutes: singleCurrency?.averageHoldMinutes ?? null,
         currencyBreakdown,
       },

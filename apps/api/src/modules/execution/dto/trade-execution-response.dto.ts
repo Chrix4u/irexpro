@@ -70,6 +70,40 @@ export class TradeExecutionResponseDto {
   @ApiPropertyOptional({ nullable: true, description: 'Authoritative broker fill price.' })
   fillPrice: string | null;
 
+  @ApiPropertyOptional({ nullable: true, description: 'Proven broker BID at entry dispatch.' })
+  entryQuoteBid: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Proven broker ASK at entry dispatch.' })
+  entryQuoteAsk: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Entry ASK minus BID.' })
+  entrySpread: string | null;
+
+  @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
+  entryQuoteObservedAt: Date | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Reporting-only spread-cost proxy in account currency. Already embedded in broker P&L; never deducted again.',
+  })
+  estimatedSpreadCost: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  spreadCostEstimateMethod: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  spreadCostContractSize: string | null;
+
+  @ApiPropertyOptional({ nullable: true, example: 'USD' })
+  spreadCostQuoteCurrency: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  spreadCostConversionRate: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  spreadCostConversionInstrument: string | null;
+
   @ApiProperty({ description: 'Validated stop-loss price as a decimal string.' })
   stopLoss: string;
 
@@ -174,6 +208,16 @@ export function toTradeExecutionResponse(
     lotSize: trade.lotSize,
     requestedEntryPrice: trade.requestedEntryPrice,
     fillPrice: trade.fillPrice,
+    entryQuoteBid: trade.entryQuoteBid ?? null,
+    entryQuoteAsk: trade.entryQuoteAsk ?? null,
+    entrySpread: trade.entrySpread ?? null,
+    entryQuoteObservedAt: trade.entryQuoteObservedAt ?? null,
+    estimatedSpreadCost: exposeMoney ? (trade.estimatedSpreadCost ?? null) : null,
+    spreadCostEstimateMethod: trade.spreadCostEstimateMethod ?? null,
+    spreadCostContractSize: trade.spreadCostContractSize ?? null,
+    spreadCostQuoteCurrency: trade.spreadCostQuoteCurrency ?? null,
+    spreadCostConversionRate: trade.spreadCostConversionRate ?? null,
+    spreadCostConversionInstrument: trade.spreadCostConversionInstrument ?? null,
     stopLoss: trade.stopLoss,
     takeProfit: trade.takeProfit,
     trailingStopPips: trade.trailingStopPips,
