@@ -21,6 +21,10 @@ const M1_REFRESH_COUNT = 60;
 const CONTEXT_REFRESH_COUNT = 40;
 const M1_REQUESTS_PER_CYCLE = 3;
 const CONTEXT_TIMEFRAMES = ['M5', 'M15', 'H1', 'H4'] as const;
+// Keep the same 3 M1 + 1 context historical calls per cycle. Prioritize
+// M5 to prevent the previous 24-slot round robin from exceeding the
+// ten-minute closed-M5 readiness limit when requests run slowly.
+const CONTEXT_REFRESH_ROTATION = ['M5', 'M15', 'M5', 'H1', 'M5', 'M15', 'M5', 'H4'] as const;
 
 /**
  * Exact-binding cTrader market-data collector for the M1 tactical PAPER sleeve.
@@ -45,6 +49,12 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   private stopping = false;
   private m1RotationOffset = 0;
   private contextRotationOffset = 0;
+  private readonly contextInstrumentOffsets: Record<(typeof CONTEXT_TIMEFRAMES)[number], number> = {
+    M5: 0,
+    M15: 0,
+    H1: 0,
+    H4: 0,
+  };
   private readonly warnedAt = new Map<string, number>();
   /** Last completed broker-native history persistence, not just request initiation. */
   private readonly lastSuccessfulCollectAt = new Map<string, string>();
@@ -188,15 +198,16 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       this.refreshM1(userId, connectionId, instrument, now),
     );
 
-    // Warm the faster context across every pair before rotating into H1/H4.
-    // Native cTrader M5/M15 is authoritative for no-tick intervals and avoids
-    // rebuilding those timeframes from a sparse one-minute trendbar grid.
-    const contextTasks = CONTEXT_TIMEFRAMES.flatMap((timeframe) =>
-      instruments.map((instrument) => ({ instrument, timeframe })),
-    );
-    if (contextTasks.length === 0) return;
-    const context = contextTasks[this.contextRotationOffset % contextTasks.length]!;
-    this.contextRotationOffset = (this.contextRotationOffset + 1) % contextTasks.length;
+    // Preserve one context request per cycle while spending scarce history
+    // slots on the fast timeframes: M5 50%, M15 25%, H1/H4 12.5% each.
+    // Independent pair cursors ensure all six pairs get every timeframe.
+    // Broker-native candles remain mandatory; no no-tick bars are invented.
+    const timeframe =
+      CONTEXT_REFRESH_ROTATION[this.contextRotationOffset % CONTEXT_REFRESH_ROTATION.length]!;
+    this.contextRotationOffset = (this.contextRotationOffset + 1) % CONTEXT_REFRESH_ROTATION.length;
+    const instrumentOffset = this.contextInstrumentOffsets[timeframe] % instruments.length;
+    const context = { instrument: instruments[instrumentOffset]!, timeframe };
+    this.contextInstrumentOffsets[timeframe] = (instrumentOffset + 1) % instruments.length;
     await Promise.all([
       ...m1Tasks,
       this.refreshContext(userId, connectionId, context.instrument, context.timeframe, now),
