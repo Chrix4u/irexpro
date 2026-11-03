@@ -1,0 +1,57 @@
+name: Temporary Cost Reporting Formatter
+
+on:
+  push:
+    branches:
+      - feature/cost-aware-trade-reporting-20261103
+
+permissions:
+  contents: write
+
+jobs:
+  normalize-and-format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: true
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: '10.34.5'
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Normalize commission sign for cross-broker reports
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('apps/api/src/modules/execution/execution-read.service.ts')
+          text = path.read_text()
+          text = text.replace(
+              "COALESCE(SUM(trade.commission), 0)",
+              "COALESCE(SUM(ABS(trade.commission)), 0)",
+          )
+          path.write_text(text)
+      - name: Format changed API files
+        run: >-
+          pnpm exec prettier --write
+          apps/api/src/modules/execution/execution-read.service.ts
+          apps/api/src/modules/execution/execution-read.trading-costs.spec.ts
+      - name: Commit formatter result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if git diff --quiet; then
+            echo 'No formatter changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/api/src/modules/execution/execution-read.service.ts apps/api/src/modules/execution/execution-read.trading-costs.spec.ts
+          git commit -m 'style: normalize and format cost reporting'
+          git push
