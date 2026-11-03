@@ -281,33 +281,37 @@ describe('ProfitProtectionExitQualityService', () => {
   it('excludes data gaps from the resolved small-profit TP-first denominator', async () => {
     const query = jest
       .fn()
-      .mockResolvedValueOnce([{
-        total: '3',
-        resolved_count: '1',
-        tp_first_count: '1',
-        sl_first_count: '0',
-        ambiguous_count: '0',
-        neither_count: '0',
-        data_gap_count: '2',
-        small_profit_count: '3',
-        small_profit_resolved_count: '1',
-        small_profit_tp_first_count: '1',
-        account_currency: 'EUR',
-        actual_realised_pnl: '7.50',
-      }])
+      .mockResolvedValueOnce([
+        {
+          total: '3',
+          resolved_count: '1',
+          tp_first_count: '1',
+          sl_first_count: '0',
+          ambiguous_count: '0',
+          neither_count: '0',
+          data_gap_count: '2',
+          small_profit_count: '3',
+          small_profit_resolved_count: '1',
+          small_profit_tp_first_count: '1',
+          account_currency: 'EUR',
+          actual_realised_pnl: '7.50',
+        },
+      ])
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{
-        strategy_route: 'EARLY_TRANSITION',
-        total: '3',
-        tp_first_count: '1',
-        sl_first_count: '0',
-        small_profit_count: '3',
-        small_profit_resolved_count: '1',
-        small_profit_comparable_count: '1',
-        small_profit_tp_first_count: '1',
-        small_profit_sl_first_count: '0',
-        small_profit_avg_delta_r: '0.25',
-      }])
+      .mockResolvedValueOnce([
+        {
+          strategy_route: 'EARLY_TRANSITION',
+          total: '3',
+          tp_first_count: '1',
+          sl_first_count: '0',
+          small_profit_count: '3',
+          small_profit_resolved_count: '1',
+          small_profit_comparable_count: '1',
+          small_profit_tp_first_count: '1',
+          small_profit_sl_first_count: '0',
+          small_profit_avg_delta_r: '0.25',
+        },
+      ])
       .mockResolvedValueOnce([]);
 
     const service = new ProfitProtectionExitQualityService({ query } as unknown as DataSource);
