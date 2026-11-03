@@ -359,11 +359,29 @@ export function deriveTradeReadinessUiState(
           m1Decision.direction,
         );
       }
+      if (selectedReadiness.reason === "BROKER_M5_CONTEXT_STALE") {
+        return waiting(
+          12,
+          "Broker M5 candles stale — trading paused",
+          "The latest completed broker-native M5 candle is missing or older than the required 10-minute freshness limit. iRexPro is refreshing M5 context and will reevaluate the setup automatically; other trade gates still apply.",
+          m1Decision.instrument,
+          m1Decision.direction,
+        );
+      }
+      if (selectedReadiness.reason === "BROKER_M15_CONTEXT_STALE") {
+        return waiting(
+          12,
+          "Broker M15 candles stale — trading paused",
+          "The latest completed broker-native M15 candle is missing or older than the required 20-minute freshness limit. New entries remain paused until context is valid, after which all model and risk gates are evaluated again.",
+          m1Decision.instrument,
+          m1Decision.direction,
+        );
+      }
       if (selectedReadiness.reason === "BROKER_FEATURE_CONTEXT_UNAVAILABLE") {
         return waiting(
           12,
-          "Broker context rebuilding — trading paused",
-          "Fresh M1 prices are arriving again, but the required M5/M15/H1/H4 broker context is still rebuilding after the market-data gap. New entries resume automatically when that context is fresh enough.",
+          "Broker feature history incomplete — trading paused",
+          "The broker-native M1/M5/M15/H1/H4 history is not sufficient to calculate the required tactical features. A market-data connection alone does not make the setup executable; collection and risk checks remain fail-closed.",
           m1Decision.instrument,
           m1Decision.direction,
         );
