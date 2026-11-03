@@ -126,7 +126,7 @@ describe('isAiDecisionExplorerView Agent Council contract', () => {
     ).toBe(false);
   });
 
-  it.each(['PROFIT_PROTECTION', 'STRATEGY_CUTOVER'])(
+  it.each(['PROFIT_PROTECTION', 'STRATEGY_CUTOVER', 'TIME_TO_WORK'])(
     'accepts %s execution close reasons emitted by the API',
     (closeReason) => {
       expect(

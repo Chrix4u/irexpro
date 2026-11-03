@@ -48,6 +48,15 @@ describe('trader execution runtime contract', () => {
     ).toBe(true);
   });
 
+  it('accepts provider TIME_TO_WORK as its own closed-trade taxonomy', () => {
+    expect(
+      isTradeExecutionView({
+        ...CLOSED_TRADE,
+        closeReason: 'TIME_TO_WORK',
+      }),
+    ).toBe(true);
+  });
+
   it('still rejects unknown close reasons', () => {
     expect(
       isTradeExecutionView({
