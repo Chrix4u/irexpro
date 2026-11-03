@@ -1,168 +1,112 @@
--- ============================================================================
--- zai-expectancy-decomposition.sql
--- Part of the z.ai independent model/productivity review (2026-11-03).
--- Branch: zai/model-productivity-review-20261102
---
--- Purpose: reproduce every quantitative claim in ZAI_REVIEW_REPORT.md §2.1/§2.2
--- and the companion scenario model directly from the staging database.
--- READ-ONLY. Run with psql against the staging DB as a superadmin/read user.
---
--- Conventions:
---   * trading.trades realised_pnl / commission / swap are decimal strings.
---   * Per-trade risk-at-stop: exact value when sizing inputs were persisted
---     (capital_allocations.sizing_inputs -> finalRiskAtStop); otherwise a
---     documented pip-value approximation is used (see §0 note). Treat
---     approximation-backed R values as estimates.
---   * PAPER rows have commission = 0 and swap = 0 by construction
---     (paper-broker.adapter.ts:2746-2747) — do NOT interpret their
---     realised_pnl as net of real-world costs.
--- ============================================================================
+-- z.ai expectancy decomposition — independently corrected against staging 2026-11-03.
+-- READ ONLY. Run only against an explicitly selected staging database.
+-- Monetary aggregates MUST remain separate by account_currency.
+-- realised_pnl is the recorded P&L before the separately recorded commission.
+-- Reconciled net = realised_pnl - ABS(commission) + swap, consistent with
+-- execution-read.service.ts. Never subtract an assumed spread a second time.
+-- WARNING: these cohorts mix PAPER/DEMO policies and are not model attribution.
+-- No identifiers, account rows or execution operations are returned.
 
--- ---------------------------------------------------------------------------
--- §0. Cohort definition (matches the brief's aggregate: 588 closed trades)
--- ---------------------------------------------------------------------------
--- WITH cohort AS (
---   SELECT t.*
---   FROM trading.trades t
---   WHERE t.status = 'CLOSED'
---     AND t.realised_pnl IS NOT NULL
---     -- scope to the same staging user / cTrader family connection under review:
---     -- AND t.user_id = $1
--- )
--- Approximation note (used in R-normalized sections):
---   pip_size   = 0.0001 for EURUSD/GBPUSD/AUDUSD/USDCHF, 0.01 for USDJPY/USDCAD
---   pip_value  = pip_size * contract_size(100k) per lot, quote-converted; for a
---   review-grade decomposition the stop-distance R proxy below is sufficient:
---   risk_units ≈ |fill_price - stop_loss| / pip_size  (stop distance in pips)
---   R          = realised_pnl / (stop_pips * pip_value_per_lot * lot_size)
--- When capital_allocations.sizing_inputs.finalRiskAtStop is present, prefer it.
-
--- ---------------------------------------------------------------------------
--- §1. Headline aggregate (expectancy decomposition)
--- ---------------------------------------------------------------------------
+-- 1. Reproducible currency-isolated headline, including economic net after fees.
 WITH cohort AS (
-  SELECT t.*
-  FROM trading.trades t
-  WHERE t.status = 'CLOSED' AND t.realised_pnl IS NOT NULL
-),
-seg AS (
-  SELECT
-    COUNT(*)                                                        AS n_closed,
-    COUNT(*) FILTER (WHERE realised_pnl::numeric > 0)               AS wins,
-    COUNT(*) FILTER (WHERE realised_pnl::numeric < 0)               AS losses,
-    COUNT(*) FILTER (WHERE realised_pnl::numeric = 0)               AS flats,
-    SUM(realised_pnl::numeric) FILTER (WHERE realised_pnl::numeric > 0)  AS gross_win,
-    SUM(realised_pnl::numeric) FILTER (WHERE realised_pnl::numeric < 0)  AS gross_loss,
-    SUM(realised_pnl::numeric)                                      AS net,
-    SUM(commission::numeric)                                        AS commission_total,
-    SUM(swap::numeric)                                              AS swap_total
-  FROM cohort
+  SELECT account_currency, realised_pnl::numeric AS gross_pnl,
+    ABS(COALESCE(commission,0)::numeric) AS commission_cost,
+    COALESCE(swap,0)::numeric AS swap_credit,
+    realised_pnl::numeric - ABS(COALESCE(commission,0)::numeric)
+      + COALESCE(swap,0)::numeric AS net_pnl
+  FROM trading.trades
+  WHERE status='CLOSED' AND realised_pnl IS NOT NULL
+), summary AS (
+  SELECT account_currency,COUNT(*) AS n_closed,
+    COUNT(*) FILTER(WHERE gross_pnl>0) AS wins,
+    COUNT(*) FILTER(WHERE gross_pnl<0) AS losses,
+    COUNT(*) FILTER(WHERE gross_pnl=0) AS flats,
+    SUM(gross_pnl) FILTER(WHERE gross_pnl>0) AS gross_win,
+    SUM(gross_pnl) FILTER(WHERE gross_pnl<0) AS gross_loss,
+    SUM(gross_pnl) AS recorded_realised,
+    SUM(commission_cost) AS commission_cost,
+    SUM(swap_credit) AS swap_credit,
+    SUM(net_pnl) AS net_after_fees,
+    SUM(net_pnl) FILTER(WHERE net_pnl>0) AS net_winnings,
+    SUM(net_pnl) FILTER(WHERE net_pnl<0) AS net_losses
+  FROM cohort GROUP BY account_currency
 )
-SELECT
-  n_closed, wins, losses, flats,
-  ROUND(gross_win, 2)                                        AS gross_win,
-  ROUND(gross_loss, 2)                                       AS gross_loss,
-  ROUND(net, 2)                                              AS net,
-  ROUND(wins::numeric / NULLIF(wins + losses, 0), 4)         AS win_rate_resolved,
-  ROUND(gross_win / NULLIF(gross_loss, 0), 4)                AS profit_factor,
-  ROUND(gross_win / NULLIF(wins, 0), 4)                      AS avg_win,
-  ROUND(ABS(gross_loss) / NULLIF(losses, 0), 4)              AS avg_loss,
-  ROUND((gross_win / NULLIF(wins, 0)) /
-        NULLIF(ABS(gross_loss) / NULLIF(losses, 0), 0), 4)   AS realized_payoff,
-  ROUND(net / NULLIF(wins + losses, 0), 4)                   AS expectancy_per_trade,
-  ROUND(1 / (1 + (gross_win / NULLIF(wins, 0)) /
-        NULLIF(ABS(gross_loss) / NULLIF(losses, 0), 0)), 4)  AS breakeven_win_rate,
-  commission_total, swap_total
-FROM seg;
+SELECT account_currency,n_closed,wins,losses,flats,
+  ROUND(COALESCE(gross_win,0),2) AS gross_wins,
+  ROUND(COALESCE(gross_loss,0),2) AS gross_losses,
+  ROUND(recorded_realised,2) AS recorded_realised,
+  ROUND(commission_cost,2) AS commission_cost,
+  ROUND(swap_credit,2) AS swap_credit,
+  ROUND(net_after_fees,2) AS net_after_fees,
+  ROUND(wins::numeric/NULLIF(n_closed,0),4) AS win_rate_all,
+  ROUND(wins::numeric/NULLIF(wins+losses,0),4) AS win_rate_resolved,
+  ROUND(gross_win/NULLIF(ABS(gross_loss),0),4) AS realised_profit_factor_before_fees,
+  ROUND(net_winnings/NULLIF(ABS(net_losses),0),4) AS economic_profit_factor_after_fees,
+  ROUND(gross_win/NULLIF(wins,0),4) AS avg_gross_win,
+  ROUND(ABS(gross_loss)/NULLIF(losses,0),4) AS avg_gross_loss,
+  ROUND(net_after_fees/NULLIF(n_closed,0),4) AS economic_expectancy_per_trade
+FROM summary ORDER BY account_currency;
 
--- Expected staging result (from the brief): 588 / 271 / 313 / 4,
--- +1420.85 / -1761.82 / -340.97, PF ~0.81, avg_win ~5.2430, avg_loss ~5.6288.
+-- 2. Exit reasons by currency, with gross and commission-aware net separate.
+SELECT account_currency,close_reason,
+  COUNT(*) AS trades,
+  COUNT(*) FILTER(WHERE realised_pnl>0) AS gross_wins,
+  COUNT(*) FILTER(WHERE realised_pnl<0) AS gross_losses,
+  ROUND(SUM(realised_pnl),2) AS realised_before_fees,
+  ROUND(SUM(ABS(COALESCE(commission,0))),2) AS commission_cost,
+  ROUND(SUM(COALESCE(swap,0)),2) AS swap_credit,
+  ROUND(SUM(realised_pnl-ABS(COALESCE(commission,0))+COALESCE(swap,0)),2) AS net_after_fees,
+  ROUND(AVG(max_favorable_pnl),2) AS avg_mfe_account_units,
+  ROUND(AVG(max_adverse_pnl),2) AS avg_mae_account_units,
+  ROUND(AVG(profit_giveback),2) AS avg_giveback_account_units
+FROM trading.trades WHERE status='CLOSED' AND realised_pnl IS NOT NULL
+GROUP BY account_currency,close_reason ORDER BY account_currency,net_after_fees;
 
--- ---------------------------------------------------------------------------
--- §2. Segmentation by close reason (exit autopsy foundation)
---     close_reason enum: STOP_LOSS_HIT | TAKE_PROFIT_HIT | MANUAL_CLOSE |
---     AI_CLOSE_SIGNAL | PROFIT_PROTECTION | KILL_SWITCH_FORCE_CLOSE |
---     BROKER_CLOSE | STRATEGY_CUTOVER | RECONCILIATION  (trade.entity.ts:24-34)
---     Known lossiness: DEMO time-stop closes arrive as AI_CLOSE_SIGNAL
---     (reconciliation-resolution.service.ts:214) and provider MANUAL/SYSTEM as
---     BROKER_CLOSE — segment with that in mind.
--- ---------------------------------------------------------------------------
-WITH cohort AS (
-  SELECT * FROM trading.trades
-  WHERE status = 'CLOSED' AND realised_pnl IS NOT NULL
+-- 3. Instrument × side × close-reason segmentation; no currency mixing.
+SELECT account_currency,instrument,direction,close_reason,
+  COUNT(*) AS trades,
+  COUNT(*) FILTER(WHERE realised_pnl>0) AS gross_wins,
+  COUNT(*) FILTER(WHERE realised_pnl<0) AS gross_losses,
+  ROUND(SUM(realised_pnl-ABS(COALESCE(commission,0))+COALESCE(swap,0)),2) AS net_after_fees
+FROM trading.trades WHERE status='CLOSED' AND realised_pnl IS NOT NULL
+GROUP BY account_currency,instrument,direction,close_reason
+ORDER BY account_currency,net_after_fees ASC;
+
+-- 4. Stop/spread GEOMETRY ONLY, a rough pip-space cost sensitivity.
+-- Not broker P90 execution cost, not R-based performance and not qualification.
+-- Crucial correction: USDCAD pip = 0.0001 (only JPY here uses 0.01).
+-- The trade stop may reflect later management; do not treat as an entry snapshot.
+WITH stops AS (
+ SELECT account_currency,instrument,
+  ABS(fill_price-stop_loss) /
+    CASE WHEN instrument='USDJPY' THEN 0.01 ELSE 0.0001 END AS stop_pips
+ FROM trading.trades WHERE status='CLOSED' AND realised_pnl IS NOT NULL
+ AND fill_price IS NOT NULL AND stop_loss IS NOT NULL
+), sample AS (
+ SELECT account_currency,instrument,stop_pips,
+ CASE WHEN instrument IN ('GBPUSD','USDCAD','USDCHF') THEN 1.2 ELSE 1.0 END
+   AS paper_assumed_spread_pips
+ FROM stops WHERE stop_pips>0
 )
-SELECT
-  close_reason,
-  COUNT(*)                                                      AS n,
-  ROUND(SUM(realised_pnl::numeric), 2)                          AS net,
-  ROUND(AVG(realised_pnl::numeric) FILTER (WHERE realised_pnl::numeric > 0), 4) AS avg_win,
-  ROUND(AVG(realised_pnl::numeric) FILTER (WHERE realised_pnl::numeric < 0), 4) AS avg_loss,
-  ROUND(AVG(NULLIF(max_favorable_pnl::numeric, 0)), 4)          AS avg_mfe,
-  ROUND(AVG(NULLIF(max_adverse_pnl::numeric, 0)), 4)            AS avg_mae,
-  ROUND(AVG(NULLIF(profit_giveback::numeric, 0)), 4)            AS avg_giveback,
-  ROUND(SUM(commission::numeric), 2)                            AS commission,
-  ROUND(SUM(swap::numeric), 2)                                  AS swap
-FROM cohort
-GROUP BY close_reason
-ORDER BY net ASC;
+SELECT account_currency,instrument,COUNT(*) AS n,
+ ROUND(AVG(stop_pips),2) AS avg_stop_pips,
+ ROUND((percentile_cont(0.5) WITHIN GROUP(ORDER BY stop_pips))::numeric,2)
+   AS median_stop_pips,
+ ROUND(AVG(1.25*paper_assumed_spread_pips/NULLIF(stop_pips,0)),4)
+   AS avg_assumed_cost_r,
+ ROUND((percentile_cont(0.9) WITHIN GROUP
+   (ORDER BY 1.25*paper_assumed_spread_pips/NULLIF(stop_pips,0)))::numeric,4)
+   AS p90_assumed_cost_r
+FROM sample GROUP BY account_currency,instrument
+ORDER BY account_currency,instrument;
 
--- ---------------------------------------------------------------------------
--- §3. MAE/MFE-based win-truncation audit
---     How much right tail is being harvested by protection exits?
---     MFE is in account units; normalize by the trade's stop distance (pips)
---     times pip value per lot to get MFE-in-R. Uses the approximation above;
---     prefer sizing_inputs where available.
--- ---------------------------------------------------------------------------
-WITH cohort AS (
-  SELECT
-    t.*,
-    ABS(t.fill_price::numeric - t.stop_loss::numeric)
-      / CASE t.instrument
-          WHEN 'USDJPY' THEN 0.01 WHEN 'USDCAD' THEN 0.01
-          ELSE 0.0001 END                                            AS stop_pips
-  FROM trading.trades t
-  WHERE t.status = 'CLOSED' AND t.realised_pnl IS NOT NULL
-),
-r AS (
-  SELECT *,
-    max_favorable_pnl::numeric / NULLIF(stop_pips * 10 * lot_size::numeric, 0) AS mfe_r
-  FROM cohort
-)
-SELECT
-  width_bucket(mfe_r, ARRAY[0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.6, 2.0, 4.0, 100.0]) AS mfe_bucket,
-  COUNT(*)                                                          AS n,
-  ROUND(AVG(realised_pnl::numeric), 4)                              AS avg_realised,
-  ROUND(AVG(mfe_r), 4)                                              AS avg_mfe_r,
-  ROUND(AVG(profit_giveback::numeric / NULLIF(stop_pips * 10 * lot_size::numeric, 0)), 4) AS avg_giveback_r,
-  COUNT(*) FILTER (WHERE close_reason = 'PROFIT_PROTECTION')        AS n_profit_protected
-FROM r
-WHERE mfe_r IS NOT NULL
-GROUP BY 1
-ORDER BY 1;
-
--- ---------------------------------------------------------------------------
--- §4. Cost-drag distribution (validates report §2.2 / P2)
---     costR proxy = 1.25 * spread_at_entry_pips / stop_pips
---     (spread evidence per decision lives in the ensemble ledger; for executed
---     trades use the session's P90 spread via provider_quote_candles if joined
---     by (instrument, opened_at), else the paper fixed spec.)
--- ---------------------------------------------------------------------------
-WITH cohort AS (
-  SELECT
-    t.*,
-    ABS(t.fill_price::numeric - t.stop_loss::numeric)
-      / CASE t.instrument WHEN 'USDJPY' THEN 0.01 WHEN 'USDCAD' THEN 0.01
-          ELSE 0.0001 END                                              AS stop_pips
-  FROM trading.trades t
-  WHERE t.status = 'CLOSED' AND t.realised_pnl IS NOT NULL
-)
-SELECT
-  instrument,
-  COUNT(*)                                                   AS n,
-  ROUND(AVG(stop_pips), 2)                                   AS avg_stop_pips,
-  ROUND((1.25 * 1.0) / NULLIF(AVG(stop_pips), 0), 4)         AS cost_r_at_1pip_spread,
-  ROUND((1.25 * 1.2) / NULLIF(AVG(stop_pips), 0), 4)         AS cost_r_at_1_2pip_spread,
-  ROUND(AVG(realised_pnl::numeric), 4)                       AS avg_realised
-FROM cohort
-GROUP BY instrument
-ORDER BY cost_r_at_1pip_spread DESC;
+-- 5. Actual MFE/MAE per exit reason in the SAME account currency units.
+-- Avoid converting account P&L to R via unverified per-pip dollar assumptions.
+SELECT account_currency,close_reason,COUNT(*) AS n,
+ ROUND(AVG(max_favorable_pnl),2) AS avg_mfe,
+ ROUND(AVG(max_adverse_pnl),2) AS avg_mae,
+ ROUND(AVG(profit_giveback),2) AS avg_giveback
+FROM trading.trades
+WHERE status='CLOSED' AND realised_pnl IS NOT NULL
+GROUP BY account_currency,close_reason
+ORDER BY account_currency,close_reason;
