@@ -289,8 +289,8 @@ export default function ProfitProtectionExitQualityPage() {
               </article>
               <article className="history-summary-card history-summary-card--positive">
                 <span>Small wins → TP</span>
-                <strong>{summary.smallProfitTpFirstCount} of {summary.smallProfitCount}</strong>
-                <small>{rate(summary.smallProfitTpFirstRate)} of small protected wins later hit TP first.</small>
+                <strong>{summary.smallProfitTpFirstCount} of {summary.smallProfitResolvedCount} resolved</strong>
+                <small>{rate(summary.smallProfitTpFirstRate)} reached TP first; {summary.smallProfitCount - summary.smallProfitResolvedCount} unresolved small exits excluded.</small>
               </article>
               <article className="history-summary-card">
                 <span>Average R delta</span>
@@ -328,12 +328,12 @@ export default function ProfitProtectionExitQualityPage() {
               <div className="history-table-card__head">
                 <div>
                   <h2>Route evidence</h2>
-                  <span>Resolved barrier outcomes grouped by originating strategy route.</span>
+                  <span>Route comparisons for protected profits (0–6 account-currency units); unresolved paths are excluded from TP/SL rates and theoretical R comparisons.</span>
                 </div>
               </div>
               <div className="history-table-wrap">
                 <table className="history-table exit-quality-report__route-table">
-                  <thead><tr><th>Route</th><th>Evaluated</th><th>TP first</th><th>SL first</th><th>TP-first share</th></tr></thead>
+                  <thead><tr><th>Route</th><th>Evaluated</th><th>TP first</th><th>SL first</th><th>TP-first share</th><th>Small exits resolved</th><th>Small TP / SL</th><th>Small theoretical ΔR</th></tr></thead>
                   <tbody>
                     {report.routes.map((route) => (
                       <tr key={route.strategyRoute}>
@@ -342,11 +342,21 @@ export default function ProfitProtectionExitQualityPage() {
                         <td>{route.tpFirstCount}</td>
                         <td>{route.slFirstCount}</td>
                         <td>{route.tpFirstRate == null ? '—' : `${Math.round(route.tpFirstRate * 100)}% TP-first`}</td>
+                        <td>{route.smallProfitResolvedCount} / {route.smallProfitCount}</td>
+                        <td>{route.smallProfitTpFirstCount} / {route.smallProfitSlFirstCount}</td>
+                        <td title={`Based on ${route.smallProfitComparableCount} comparable resolved replays; no execution authority`}>
+                          {rValue(route.smallProfitAverageRDelta, true)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              <p className="exit-quality-report__route-disclaimer">
+                Small theoretical ΔR compares original-barrier replay with the actual protected exit.
+                It is not realised money, excludes future slippage, and must not control trading without
+                prospective validation.
+              </p>
             </section>
 
             <section className="history-table-card">
