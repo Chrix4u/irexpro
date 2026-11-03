@@ -38,10 +38,11 @@ jobs:
           )
           path.write_text(text)
       - name: Format changed API files
+        working-directory: apps/api
         run: >-
           pnpm exec prettier --write
-          apps/api/src/modules/execution/execution-read.service.ts
-          apps/api/src/modules/execution/execution-read.trading-costs.spec.ts
+          src/modules/execution/execution-read.service.ts
+          src/modules/execution/execution-read.trading-costs.spec.ts
       - name: Commit formatter result
         shell: bash
         run: |
