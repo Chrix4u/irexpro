@@ -86,7 +86,7 @@ describe('CTraderQuoteCollectorService', () => {
     expect(h.findConnectionById).toHaveBeenCalledWith('ctrader-1', 'user-1');
     expect(h.getOhlcvForConnection).toHaveBeenCalledTimes(4);
     expect(h.getOhlcvForConnection.mock.calls.filter((call) => call[3] === 'M1')).toHaveLength(3);
-    expect(h.getOhlcvForConnection.mock.calls[3]![3]).toBe('M5');
+    expect(h.getOhlcvForConnection.mock.calls.filter((call) => call[3] === 'M5')).toHaveLength(1);
     for (const call of h.getOhlcvForConnection.mock.calls) {
       expect(call[0]).toBe('user-1');
       expect(call[1]).toBe('ctrader-1');
