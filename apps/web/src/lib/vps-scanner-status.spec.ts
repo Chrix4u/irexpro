@@ -325,11 +325,18 @@ describe("external provider performance runtime guard", () => {
 });
 
 describe("production trade-readiness presentation", () => {
-  const statusModule = require("./vps-scanner-status") as Record<string, unknown>;
+  const statusModule = require("./vps-scanner-status") as Record<
+    string,
+    unknown
+  >;
 
   function derive(input: Record<string, unknown>) {
     expect(typeof statusModule.deriveTradeReadinessUiState).toBe("function");
-    return (statusModule.deriveTradeReadinessUiState as (value: Record<string, unknown>) => any)(input);
+    return (
+      statusModule.deriveTradeReadinessUiState as (
+        value: Record<string, unknown>,
+      ) => any
+    )(input);
   }
 
   it("shows the connected but unauthorized DEMO broker as the primary 9/100 blocker", () => {
@@ -425,13 +432,21 @@ describe("production trade-readiness presentation", () => {
     };
 
     expect(
-      derive({ automationOn: true, scannerStatus: status, fastMarkState: "LIVE" }),
+      derive({
+        automationOn: true,
+        scannerStatus: status,
+        fastMarkState: "LIVE",
+      }),
     ).toMatchObject({
       band: "FORMING",
       tradeExpected: false,
     });
     expect(
-      derive({ automationOn: true, scannerStatus: status, fastMarkState: "LIVE" }).score,
+      derive({
+        automationOn: true,
+        scannerStatus: status,
+        fastMarkState: "LIVE",
+      }).score,
     ).toBeLessThan(70);
   });
 
@@ -774,7 +789,11 @@ describe("production trade-readiness presentation", () => {
     status.marketSchedule.reason = "WEEKEND";
 
     expect(
-      derive({ automationOn: true, scannerStatus: status, fastMarkState: "LIVE" }),
+      derive({
+        automationOn: true,
+        scannerStatus: status,
+        fastMarkState: "LIVE",
+      }),
     ).toMatchObject({
       band: "WAITING",
       tradeExpected: false,
@@ -784,7 +803,11 @@ describe("production trade-readiness presentation", () => {
 
   it("shows AI stopped instead of implying a setup can execute", () => {
     expect(
-      derive({ automationOn: false, scannerStatus: VALID_STATUS, fastMarkState: "LIVE" }),
+      derive({
+        automationOn: false,
+        scannerStatus: VALID_STATUS,
+        fastMarkState: "LIVE",
+      }),
     ).toMatchObject({
       score: 0,
       band: "WAITING",
@@ -793,7 +816,6 @@ describe("production trade-readiness presentation", () => {
     });
   });
 });
-
 
 describe("active multi-model execution presentation", () => {
   const status = {

@@ -541,8 +541,7 @@ export function deriveTradeReadinessUiState(
     }
 
     const afterCostRejected =
-      blockers.includes("PAPER_NET_EXPECTED_R") &&
-      m1Decision.netExpectedR <= 0;
+      blockers.includes("PAPER_NET_EXPECTED_R") && m1Decision.netExpectedR <= 0;
     if (afterCostRejected) {
       detail = `The estimated net return is ${m1Decision.netExpectedR.toFixed(2)}R after costs; the entry does not have positive expected value. Directional confidence and the meter score are not evidence of profitability. Other model and timing vetoes may also apply.`;
     }
@@ -554,7 +553,7 @@ export function deriveTradeReadinessUiState(
         : m1Decision.primaryBlockerGroup === "RISK_OR_ACCOUNT"
           ? "Account risk guard blocked this trade"
           : driftBlocked
-            ? "Model drift — entry not qualified"
+            ? "Model drift — execution blocked"
             : rounded >= 40
               ? "Setup forming — not yet executable"
               : "Waiting for a stronger setup",
