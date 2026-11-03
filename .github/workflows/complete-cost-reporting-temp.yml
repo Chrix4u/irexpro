@@ -13,6 +13,10 @@ jobs:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:3010/api/v1
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3005
+      NEXT_PUBLIC_APP_ENV: test
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
