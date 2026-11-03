@@ -91,23 +91,31 @@ SELECT COUNT(*) AS n,
 FROM trading.ensemble_shadow_decisions
 WHERE engine_code='irexpro-multimodel-ensemble-v1';
 
--- 5. Real drift prevalence from nested governance, NOT the reasons array.
--- This is a veto prevalence report, not a DRIFT-only resolved payoff study.
+-- 5. Correct shadow outcome linkage and drift state. WIN/LOSS shadow netR
+-- are simulated 72-bar results, NOT observed broker fills. These episodes
+-- massively overlap before de-overlap and must not drive promotion.
 WITH d AS (
  SELECT COALESCE(components->'governance'->>'driftState','MISSING')
-    AS drift_state,
- components->'governance'->>'netExpectedR' AS predicted_net_r,
- (components ? 'outcome') AS has_linked_outcome
+   AS drift_state,
+ (components ? 'outcome') AS has_linked_outcome,
+ components->'outcome'->>'status' AS outcome_status,
+ CASE WHEN jsonb_typeof(components->'governance'->'netExpectedR')='number'
+   THEN (components->'governance'->>'netExpectedR')::numeric END AS predicted_net_r,
+ CASE WHEN jsonb_typeof(components->'outcome'->'netR')='number'
+   THEN (components->'outcome'->>'netR')::numeric END AS shadow_net_r
  FROM trading.ensemble_shadow_decisions
  WHERE engine_code='irexpro-multimodel-ensemble-v1'
  AND evaluated_at>=now()-interval '30 days'
 )
-SELECT drift_state,COUNT(*) AS n,
- COUNT(*) FILTER(WHERE has_linked_outcome) AS rows_with_linked_outcome,
- ROUND(AVG(CASE WHEN predicted_net_r ~ '^[-+]?[0-9]+(\\.[0-9]+)?$'
-   THEN predicted_net_r::numeric ELSE NULL END),4)
-   AS predicted_not_realised_avg_net_r
-FROM d GROUP BY drift_state ORDER BY n DESC;
+SELECT drift_state,COUNT(*) AS all_decisions,
+ COUNT(*) FILTER(WHERE has_linked_outcome) AS linked_outcomes,
+ COUNT(*) FILTER(WHERE outcome_status IN ('WIN','LOSS')) AS resolved_wins_losses,
+ ROUND(AVG(predicted_net_r),4) AS avg_predicted_net_r,
+ ROUND(AVG(shadow_net_r) FILTER(WHERE outcome_status IN ('WIN','LOSS')),4)
+   AS naive_overlap_shadow_net_r,
+ ROUND(SUM(shadow_net_r) FILTER(WHERE outcome_status IN ('WIN','LOSS')),3)
+   AS naive_overlap_sum_net_r
+FROM d GROUP BY drift_state ORDER BY all_decisions DESC;
 
 -- 6. Actual current M1 execution blockers (one decision can have many).
 SELECT b.blocker,COUNT(DISTINCT d.id) AS decisions
@@ -118,3 +126,32 @@ CROSS JOIN LATERAL jsonb_array_elements_text(
 ) b(blocker)
 WHERE d.evaluated_at>=now()-interval '20 minutes'
 GROUP BY b.blocker ORDER BY decisions DESC LIMIT 35;
+
+-- 7. First observation per fixed 72-minute instrument/side bin, a coarse
+-- independent-episode sensitivity check only; NOT the proper purged 6-fold
+-- research validation or a true 'drift-only' veto counterfactual. Including
+-- contemporaneous multi-policy episodes may still exaggerate sample size.
+WITH d AS (
+ SELECT instrument,direction,evaluated_at,
+ COALESCE(components->'governance'->>'driftState','MISSING') AS drift_state,
+ components->'outcome'->>'status' AS outcome_status,
+ (components->'outcome'->>'netR')::numeric AS shadow_net_r,
+ ROW_NUMBER() OVER (
+   PARTITION BY instrument,direction,
+     FLOOR(EXTRACT(EPOCH FROM evaluated_at)/4320)
+   ORDER BY evaluated_at ASC
+ ) AS episode_rank
+ FROM trading.ensemble_shadow_decisions
+ WHERE engine_code='irexpro-multimodel-ensemble-v1'
+ AND components->'outcome'->>'status' IN ('WIN','LOSS')
+)
+SELECT drift_state,COUNT(*) AS approximate_nonoverlap_episodes,
+ COUNT(*) FILTER(WHERE outcome_status='WIN') AS wins,
+ COUNT(*) FILTER(WHERE outcome_status='LOSS') AS losses,
+ ROUND(AVG(shadow_net_r),4) AS avg_net_r,
+ ROUND(SUM(shadow_net_r),3) AS sum_net_r,
+ ROUND(SUM(shadow_net_r) FILTER(WHERE shadow_net_r>0) /
+   NULLIF(ABS(SUM(shadow_net_r) FILTER(WHERE shadow_net_r<0)),0),4)
+   AS shadow_profit_factor_r
+FROM d WHERE episode_rank=1
+GROUP BY drift_state ORDER BY approximate_nonoverlap_episodes DESC;
