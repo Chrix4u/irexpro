@@ -101,6 +101,7 @@ describe('ExecutionOrchestrator', () => {
   // Round 7 (P1): the provider-dispatch commitment seam — mockable so the
   // commitment-block matrix can drive it.
   let boundaryMock: { commitProviderDispatch: jest.Mock };
+  let marketSafetyGate: { assertMarketSafeForDispatch: jest.Mock };
 
   beforeEach(() => {
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
@@ -192,6 +193,10 @@ describe('ExecutionOrchestrator', () => {
       }),
     };
 
+    marketSafetyGate = {
+      assertMarketSafeForDispatch: jest.fn().mockResolvedValue(undefined),
+    };
+
     orchestrator = new ExecutionOrchestrator(
       orderService as unknown as OrderService,
       brokerService as unknown as BrokerService,
@@ -208,9 +213,7 @@ describe('ExecutionOrchestrator', () => {
       // Round 6 §5/§18: the market-safety gate is exercised at the SEAM
       // (its own matrix lives in market-safety-gate.spec.ts) — passes by
       // default; per-test overrides make it fail closed.
-      {
-        assertMarketSafeForDispatch: jest.fn().mockResolvedValue(undefined),
-      } as unknown as MarketSafetyGateService,
+      marketSafetyGate as unknown as MarketSafetyGateService,
       // Round 6 §14: the per-account dispatch lease (real implementation —
       // its own matrix lives in account-dispatch-lease.spec.ts).
       new AccountDispatchLeaseService(),
@@ -567,6 +570,29 @@ describe('ExecutionOrchestrator', () => {
       // untouched here (executeTrade's uncertain path converges it).
       expect(orderService.rejectOrder).not.toHaveBeenCalled();
       expect(adapter.placeOrder).not.toHaveBeenCalled();
+    });
+
+    it('carries the exact market-safety quote on a FILLED new-exposure outcome without another quote read', async () => {
+      const executionQuote = {
+        instrument: 'EURUSD',
+        bid: '1.08490',
+        ask: '1.08510',
+        spread: '0.00020',
+        timestamp: new Date('2026-11-03T10:00:00.000Z'),
+      };
+      marketSafetyGate.assertMarketSafeForDispatch.mockResolvedValueOnce(executionQuote);
+
+      const outcome = await orchestrator.dispatchOrder(intent, connection, {
+        grantId: 'grant-spread-quote',
+        origin: 'PIPELINE',
+      });
+
+      expect(marketSafetyGate.assertMarketSafeForDispatch).toHaveBeenCalledTimes(1);
+      expect(outcome.outcome).toBe('FILLED');
+      if (outcome.outcome === 'FILLED') {
+        expect(outcome.executionQuote).toBe(executionQuote);
+      }
+      expect(adapter.placeOrder).toHaveBeenCalledTimes(1);
     });
 
     it('a SUCCESSFUL commitment proceeds to the provider dispatch as before', async () => {
