@@ -105,7 +105,7 @@ describe('cTrader current-price freshness', () => {
     await client.onModuleDestroy();
   });
 
-  it('ignores a stale cached spot event and waits for a fresh provider tick', async () => {
+  it('opts in to provider timestamps, rejecting missing and stale spot timestamps', async () => {
     const adapter = new CTraderAdapter(client);
     await adapter.connect({ apiKey: ACCESS_TOKEN, accountId: ACCOUNT_ID });
     const transport = client.createdTransports[0];
@@ -118,6 +118,24 @@ describe('cTrader current-price freshness', () => {
           request.payload?.ctidTraderAccountId === CTID,
       ),
     );
+
+    const subscription = server.requests.find(
+      (request) => request.payloadType === CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ,
+    );
+    // Without the opt-in, Spotware may omit timestamp; our freshness waiter
+    // would never accept any event, resulting in repeated ten-second timeouts.
+    expect(subscription?.payload).toMatchObject({ subscribeToSpotTimestamp: true });
+
+    transport.receive({
+      payloadType: CTRADER_PAYLOAD_TYPE.SPOT_EVENT,
+      payload: {
+        ctidTraderAccountId: CTID,
+        symbolId: SYMBOL_ID,
+        bid: 107_000,
+        ask: 107_500,
+      },
+    });
+    expect(await pendingAfter(pricePromise, 50)).toBe(true);
 
     transport.receive(spotEvent(Date.now() - 10 * 60_000, 107_000, 107_500));
     expect(await pendingAfter(pricePromise, 150)).toBe(true);
