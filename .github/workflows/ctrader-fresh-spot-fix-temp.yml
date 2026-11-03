@@ -1,0 +1,105 @@
+name: Temporary cTrader Fresh Spot Fix
+
+on:
+  push:
+    branches:
+      - fix/ctrader-fresh-spot-event-20261103
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: true
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: '10.34.5'
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply cTrader provider-timestamp freshness guard
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path_str, old, new):
+              path = Path(path_str)
+              text = path.read_text()
+              if new in text:
+                  return
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path_str}: expected one replacement target, found {count}')
+              path.write_text(text.replace(old, new, 1))
+
+          adapter = 'apps/api/src/modules/broker/adapters/ctrader/ctrader.adapter.ts'
+          replace_once(
+              adapter,
+              "const MARKET_ACCEPTED_RECONCILE_DELAYS_MS = [0, 150, 350] as const;\n",
+              "const MARKET_ACCEPTED_RECONCILE_DELAYS_MS = [0, 150, 350] as const;\n/** Reject provider spot snapshots too old to be execution-grade current-price evidence. */\nconst SPOT_EVENT_MAX_AGE_MS = 5 * 60_000;\n/** Allow only a small provider/local clock skew before treating a quote timestamp as invalid. */\nconst SPOT_EVENT_MAX_CLOCK_AHEAD_MS = 5_000;\n",
+          )
+          replace_once(
+              adapter,
+              "        return (\n          payload?.ctidTraderAccountId === ctid &&\n          payload?.symbolId === symbolId &&\n          payload.bid != null &&\n          payload.ask != null\n        );",
+              "        const providerTimestampMs = Number(payload?.timestamp);\n        const ageMs = Date.now() - providerTimestampMs;\n        return (\n          payload?.ctidTraderAccountId === ctid &&\n          payload?.symbolId === symbolId &&\n          payload.bid != null &&\n          payload.ask != null &&\n          Number.isFinite(providerTimestampMs) &&\n          providerTimestampMs > 0 &&\n          ageMs >= -SPOT_EVENT_MAX_CLOCK_AHEAD_MS &&\n          ageMs <= SPOT_EVENT_MAX_AGE_MS\n        );",
+          )
+
+          correlation = 'apps/api/src/modules/broker/adapters/ctrader/ctrader-spot-correlation.spec.ts'
+          replace_once(correlation, '  timestamp = 1757000000123,\n', '  timestamp = Date.now(),\n')
+
+          fake = 'apps/api/src/modules/broker/adapters/ctrader/ctrader.fake-transport.ts'
+          replace_once(
+              fake,
+              "            bid: 108650,\n            ask: 108700,\n            timestamp: 1757000000123,\n",
+              "            bid: 108650,\n            ask: 108700,\n            timestamp: Date.now(),\n",
+          )
+
+          spec = 'apps/api/src/modules/broker/adapters/ctrader/ctrader.adapter.spec.ts'
+          replace_once(
+              spec,
+              '        timestamp: new Date(1757000000123),\n',
+              '        timestamp: expect.any(Date),\n',
+          )
+
+      - name: Format touched API files
+        working-directory: apps/api
+        run: >-
+          pnpm exec prettier --write
+          src/modules/broker/adapters/ctrader/ctrader.adapter.ts
+          src/modules/broker/adapters/ctrader/ctrader-spot-freshness.spec.ts
+          src/modules/broker/adapters/ctrader/ctrader-spot-correlation.spec.ts
+          src/modules/broker/adapters/ctrader/ctrader.fake-transport.ts
+          src/modules/broker/adapters/ctrader/ctrader.adapter.spec.ts
+
+      - name: Verify focused cTrader freshness and adapter suites
+        run: >-
+          pnpm --filter @irexpro/api exec jest --runInBand
+          src/modules/broker/adapters/ctrader/ctrader-spot-freshness.spec.ts
+          src/modules/broker/adapters/ctrader/ctrader-spot-correlation.spec.ts
+          src/modules/broker/adapters/ctrader/ctrader.adapter.spec.ts
+
+      - name: Verify API build
+        run: pnpm --filter @irexpro/api build
+
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if git diff --quiet; then
+            echo 'No changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/api/src/modules/broker/adapters/ctrader/ctrader.adapter.ts apps/api/src/modules/broker/adapters/ctrader/ctrader-spot-freshness.spec.ts apps/api/src/modules/broker/adapters/ctrader/ctrader-spot-correlation.spec.ts apps/api/src/modules/broker/adapters/ctrader/ctrader.fake-transport.ts apps/api/src/modules/broker/adapters/ctrader/ctrader.adapter.spec.ts
+          git commit -m 'fix(broker): ignore stale cTrader spot snapshots'
+          git push
