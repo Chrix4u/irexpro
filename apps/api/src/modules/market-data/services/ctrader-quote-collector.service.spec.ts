@@ -141,6 +141,34 @@ describe('CTraderQuoteCollectorService', () => {
     expect(h.upsertHistoricalCandles).toHaveBeenCalledTimes(4);
   });
 
+  it('starts broker-native history refresh without waiting for a slow live spot response', async () => {
+    const h = harness();
+    let releaseQuote: (() => void) | undefined;
+    const normalQuote = {
+      instrument: 'EURUSD',
+      bid: '1.10000',
+      ask: '1.10008',
+      spread: '0.00008',
+      timestamp: new Date('2026-10-18T21:30:10.000Z'),
+    };
+    h.getCurrentPriceForConnection.mockImplementation(async (_userId, _connectionId, instrument) => {
+      if (instrument === 'EURUSD') {
+        await new Promise<void>((resolve) => {
+          releaseQuote = resolve;
+        });
+      }
+      return { ...normalQuote, instrument };
+    });
+
+    const cycle = h.service.collectOnce(OPEN_NOW);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const historyStartedBeforeRelease = h.getOhlcvForConnection.mock.calls.length > 0;
+    releaseQuote?.();
+    await cycle;
+
+    expect(historyStartedBeforeRelease).toBe(true);
+  });
+
   it('samples live quotes independently of the slower historical refresh cycle', async () => {
     const h = harness();
 
