@@ -6,8 +6,8 @@ Classification metrics alone cannot qualify a challenger.
 """
 from __future__ import annotations
 
-from typing import Any
 import math
+from typing import Any
 
 VERSION = "zai-economics-first-v1"
 
@@ -30,7 +30,6 @@ def assess_economics_first_candidate(
     produced; never infer it from a classification score or staging aggregate.
     """
     evidence = candidate.get("economic_validation") or {}
-    baseline_trade = (baseline.get("overall") or {}).get("trading") or {}
     candidate_trade = (candidate.get("overall") or {}).get("trading") or {}
     candidate_observed = (candidate.get("research_gate") or {}).get("observed") or {}
 

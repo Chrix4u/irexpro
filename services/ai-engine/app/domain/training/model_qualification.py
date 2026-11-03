@@ -40,11 +40,11 @@ from app.domain.training.train_multitimeframe import (
     _split_internal_early_stopping_tail,
     load_and_prepare_corpora,
 )
-from app.domain.training.zai_economics_first_gate import assess_economics_first_candidate
 from app.domain.training.validation import (
     compute_classification_metrics,
     iter_purged_walk_forward_time_splits,
 )
+from app.domain.training.zai_economics_first_gate import assess_economics_first_candidate
 
 CONFIDENCE_FLOOR = 0.60
 ACTIONABLE_TARGET_COLUMN = "actionable_target"
