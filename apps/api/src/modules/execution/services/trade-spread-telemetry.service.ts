@@ -80,9 +80,7 @@ export class TradeSpreadTelemetryService {
       }
 
       const estimatedSpreadCost =
-        accountCurrency === quoteCurrency
-          ? quoteCost
-          : quoteCost.divDown(conversionRate, 8);
+        accountCurrency === quoteCurrency ? quoteCost : quoteCost.divDown(conversionRate, 8);
 
       return {
         estimatedSpreadCost: estimatedSpreadCost.toString(),
