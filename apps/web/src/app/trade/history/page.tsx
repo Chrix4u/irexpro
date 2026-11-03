@@ -21,6 +21,7 @@ import {
 import { useAuth } from '@/context/auth-context';
 import { mapApiError } from '@/lib/error-mapping';
 import { loadClosedTradeReport } from '@/lib/trader-execution';
+import { summarizeSpreadCostReporting } from '@/lib/spread-cost-reporting';
 import './history.css';
 
 type FilterState = {
@@ -30,6 +31,17 @@ type FilterState = {
   direction: '' | TradeExecutionDirection;
   outcome: ClosedTradeOutcomeFilter;
   closeReason: '' | TradeExecutionCloseReason;
+};
+
+type SpreadCurrencySummaryView = ClosedTradeReportView['summary']['currencyBreakdown'][number] & {
+  totalEstimatedSpreadCost?: string | null;
+  spreadCostEstimatedTradeCount?: number;
+};
+
+type SpreadReportSummaryView = Omit<ClosedTradeReportView['summary'], 'currencyBreakdown'> & {
+  totalEstimatedSpreadCost?: string | null;
+  spreadCostEstimatedTradeCount?: number;
+  currencyBreakdown: SpreadCurrencySummaryView[];
 };
 
 const EMPTY_FILTERS: FilterState = {
@@ -330,7 +342,8 @@ export default function ClosedTradeHistoryPage() {
     );
   }
 
-  const summary = report?.summary ?? null;
+  const summary = (report?.summary as SpreadReportSummaryView | undefined) ?? null;
+  const spreadReporting = summary ? summarizeSpreadCostReporting(summary) : null;
   const currency = summary?.accountCurrency ?? null;
   const netTone = pnlTone(summary?.netRealisedPnl);
   const firstRow =
@@ -338,7 +351,7 @@ export default function ClosedTradeHistoryPage() {
   const lastRow = report
     ? Math.min(report.page * report.pageSize, report.total)
     : 0;
-  const hasMixedCurrencies = (summary?.currencyBreakdown.length ?? 0) > 1;
+  const hasMixedCurrencies = spreadReporting?.hasMixedCurrencies ?? false;
   const profitFactorLabel = summary
     ? Number(summary.grossLoss) === 0 && Number(summary.grossProfit) > 0
       ? '∞'
@@ -346,6 +359,17 @@ export default function ClosedTradeHistoryPage() {
         ? '—'
         : summary.profitFactor.toFixed(2)
     : '—';
+  const estimatedSpreadValue = !spreadReporting?.hasMeasurements
+    ? 'Not measured'
+    : spreadReporting.hasMixedCurrencies
+      ? 'See currency breakdown'
+      : money(
+          spreadReporting.totalEstimatedSpreadCost,
+          spreadReporting.accountCurrency,
+        );
+  const estimatedSpreadDetail = !spreadReporting?.hasMeasurements
+    ? 'No quote-at-fill measurements yet'
+    : `${spreadReporting.coverageLabel}. Already embedded in broker P&L; not deducted again.`;
 
   return (
     <DashboardShell
@@ -638,9 +662,9 @@ export default function ClosedTradeHistoryPage() {
                 }
               />
               <SummaryCard
-                label="Spread impact"
-                value="Included in P&L"
-                detail="Bid/ask spread is already embedded in executed trading P&L; separate cash attribution requires quote-at-fill capture"
+                label="Estimated spread cost"
+                value={estimatedSpreadValue}
+                detail={estimatedSpreadDetail}
               />
               <SummaryCard
                 label="Closed trades"
@@ -686,6 +710,19 @@ export default function ClosedTradeHistoryPage() {
                       <span>
                         Net after costs{' '}
                         {signedMoney(item.netRealisedPnl, item.accountCurrency)}
+                      </span>
+                      <span>
+                        Estimated spread{' '}
+                        {item.spreadCostEstimatedTradeCount
+                          ? money(
+                              item.totalEstimatedSpreadCost,
+                              item.accountCurrency,
+                            )
+                          : 'Not measured'}
+                      </span>
+                      <span>
+                        Spread coverage {item.spreadCostEstimatedTradeCount ?? 0}{' '}
+                        of {item.totalTrades} trades
                       </span>
                     </article>
                   ))}
@@ -744,7 +781,7 @@ export default function ClosedTradeHistoryPage() {
               <div>
                 <span>Largest loss</span>
                 <strong className="is-negative">
-                  {signedMoney(summary?.largestLoss, currency)}
+                  {lossMoney(summary?.largestLoss, currency)}
                 </strong>
               </div>
               <div>
@@ -762,8 +799,12 @@ export default function ClosedTradeHistoryPage() {
                 </strong>
               </div>
               <div>
-                <span>Spread impact</span>
-                <strong>Included in executed P&amp;L</strong>
+                <span>Estimated spread cost</span>
+                <strong>{estimatedSpreadValue}</strong>
+              </div>
+              <div>
+                <span>Spread measurement</span>
+                <strong>{spreadReporting?.coverageLabel ?? 'Not available'}</strong>
               </div>
               <div>
                 <span>Average hold</span>
