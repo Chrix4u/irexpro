@@ -41,13 +41,18 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
     const query = jest.fn().mockResolvedValue([]);
     const service = new ProviderQuoteCandleStoreService({ query } as unknown as DataSource);
 
-    await service.upsertM1Sample('ctrader-1', 'EURUSD', {
-      instrument: 'EURUSD',
-      bid: '1.10000',
-      ask: '1.10008',
-      spread: '0.00008',
-      timestamp: EVALUATED_AT,
-    }, 'ctrader-broker-native');
+    await service.upsertM1Sample(
+      'ctrader-1',
+      'EURUSD',
+      {
+        instrument: 'EURUSD',
+        bid: '1.10000',
+        ask: '1.10008',
+        spread: '0.00008',
+        timestamp: EVALUATED_AT,
+      },
+      'ctrader-broker-native',
+    );
 
     const sql = String(query.mock.calls[0]![0]);
     expect(sql).toContain('positive_quote_sample_count');
@@ -60,15 +65,17 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
   });
 
   it('aggregates positive live observation counts and uses quote timestamps for readiness', async () => {
-    const query = jest.fn().mockResolvedValue([{
-      bid_close: '1.10000',
-      ask_close: '1.10008',
-      spread_close: '0.00008',
-      last_sample_at: EVALUATED_AT.toISOString(),
-      positive_sample_count: 10,
-      p90_spread: 0.00009,
-      latest_positive_sample_at: EVALUATED_AT.toISOString(),
-    }]);
+    const query = jest.fn().mockResolvedValue([
+      {
+        bid_close: '1.10000',
+        ask_close: '1.10008',
+        spread_close: '0.00008',
+        last_sample_at: EVALUATED_AT.toISOString(),
+        positive_sample_count: 10,
+        p90_spread: 0.00009,
+        latest_positive_sample_at: EVALUATED_AT.toISOString(),
+      },
+    ]);
     const service = new ProviderQuoteCandleStoreService({ query } as unknown as DataSource);
 
     await service.getLatestPositiveSpreadQuote('ctrader-1', 'EURUSD', EVALUATED_AT);
@@ -107,12 +114,14 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
   });
 
   it('reads the actual quote timestamp rather than a candle history refresh timestamp', async () => {
-    const query = jest.fn().mockResolvedValue([{
-      bid_close: '1.10000',
-      ask_close: '1.10008',
-      spread_close: '0.00008',
-      last_sample_at: EVALUATED_AT.toISOString(),
-    }]);
+    const query = jest.fn().mockResolvedValue([
+      {
+        bid_close: '1.10000',
+        ask_close: '1.10008',
+        spread_close: '0.00008',
+        last_sample_at: EVALUATED_AT.toISOString(),
+      },
+    ]);
     const service = new ProviderQuoteCandleStoreService({ query } as unknown as DataSource);
     await service.getLatestQuote('ctrader-1', 'EURUSD');
     const sql = String(query.mock.calls[0]![0]);
