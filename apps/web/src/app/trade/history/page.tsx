@@ -1,7 +1,7 @@
-"use client";
+'use client';
 
-import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   ClosedTradeOutcomeFilter,
   ClosedTradeReportQuery,
@@ -9,7 +9,7 @@ import type {
   TradeExecutionCloseReason,
   TradeExecutionDirection,
   TradeExecutionView,
-} from "@irexpro/types/execution";
+} from '@irexpro/types/execution';
 import {
   Alert,
   Badge,
@@ -17,55 +17,55 @@ import {
   Card,
   DashboardShell,
   LoadingSpinner,
-} from "@/components/ui";
-import { useAuth } from "@/context/auth-context";
-import { mapApiError } from "@/lib/error-mapping";
-import { loadClosedTradeReport } from "@/lib/trader-execution";
-import "./history.css";
+} from '@/components/ui';
+import { useAuth } from '@/context/auth-context';
+import { mapApiError } from '@/lib/error-mapping';
+import { loadClosedTradeReport } from '@/lib/trader-execution';
+import './history.css';
 
 type FilterState = {
   fromDate: string;
   toDate: string;
   instrument: string;
-  direction: "" | TradeExecutionDirection;
+  direction: '' | TradeExecutionDirection;
   outcome: ClosedTradeOutcomeFilter;
-  closeReason: "" | TradeExecutionCloseReason;
+  closeReason: '' | TradeExecutionCloseReason;
 };
 
 const EMPTY_FILTERS: FilterState = {
-  fromDate: "",
-  toDate: "",
-  instrument: "",
-  direction: "",
-  outcome: "ALL",
-  closeReason: "",
+  fromDate: '',
+  toDate: '',
+  instrument: '',
+  direction: '',
+  outcome: 'ALL',
+  closeReason: '',
 };
 
 const INSTRUMENTS = [
-  "EURUSD",
-  "GBPUSD",
-  "USDJPY",
-  "AUDUSD",
-  "USDCAD",
-  "USDCHF",
+  'EURUSD',
+  'GBPUSD',
+  'USDJPY',
+  'AUDUSD',
+  'USDCAD',
+  'USDCHF',
 ] as const;
 
 const CLOSE_REASONS: TradeExecutionCloseReason[] = [
-  "STOP_LOSS_HIT",
-  "TAKE_PROFIT_HIT",
-  "MANUAL_CLOSE",
-  "AI_CLOSE_SIGNAL",
-  "PROFIT_PROTECTION",
-  "KILL_SWITCH_FORCE_CLOSE",
-  "BROKER_CLOSE",
-  "STRATEGY_CUTOVER",
-  "RECONCILIATION",
+  'STOP_LOSS_HIT',
+  'TAKE_PROFIT_HIT',
+  'MANUAL_CLOSE',
+  'AI_CLOSE_SIGNAL',
+  'PROFIT_PROTECTION',
+  'KILL_SWITCH_FORCE_CLOSE',
+  'BROKER_CLOSE',
+  'STRATEGY_CUTOVER',
+  'RECONCILIATION',
 ];
 
 function localDateInputValue(date: Date): string {
   const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
@@ -74,7 +74,7 @@ function localDayBoundaryIso(
   endOfDay = false,
 ): string | undefined {
   if (!value) return undefined;
-  const suffix = endOfDay ? "T23:59:59.999" : "T00:00:00.000";
+  const suffix = endOfDay ? 'T23:59:59.999' : 'T00:00:00.000';
   const parsed = new Date(`${value}${suffix}`);
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : undefined;
 }
@@ -83,29 +83,29 @@ function formatFixedDecimal(
   value: string | null | undefined,
   fractionDigits = 2,
 ): string {
-  if (value == null || value === "") return "—";
+  if (value == null || value === '') return '—';
   const normalized = value.trim();
   const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(normalized);
   if (!match) return normalized;
 
-  const negative = match[1] === "-";
+  const negative = match[1] === '-';
   const integerPart = match[2];
-  const fractionalPart = match[3] ?? "";
+  const fractionalPart = match[3] ?? '';
   const scale = 10n ** BigInt(fractionDigits);
-  const paddedFraction = fractionalPart.padEnd(fractionDigits + 1, "0");
-  const keptFraction = paddedFraction.slice(0, fractionDigits) || "0";
+  const paddedFraction = fractionalPart.padEnd(fractionDigits + 1, '0');
+  const keptFraction = paddedFraction.slice(0, fractionDigits) || '0';
   let scaled =
     BigInt(integerPart) * scale +
     (fractionDigits > 0 ? BigInt(keptFraction) : 0n);
-  if ((paddedFraction[fractionDigits] ?? "0") >= "5") scaled += 1n;
+  if ((paddedFraction[fractionDigits] ?? '0') >= '5') scaled += 1n;
 
   const whole = scaled / scale;
   const fraction =
     fractionDigits > 0
-      ? (scaled % scale).toString().padStart(fractionDigits, "0")
-      : "";
-  const groupedWhole = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  const sign = negative && scaled !== 0n ? "-" : "";
+      ? (scaled % scale).toString().padStart(fractionDigits, '0')
+      : '';
+  const groupedWhole = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const sign = negative && scaled !== 0n ? '-' : '';
   return fractionDigits > 0
     ? `${sign}${groupedWhole}.${fraction}`
     : `${sign}${groupedWhole}`;
@@ -116,7 +116,7 @@ function money(
   currency: string | null | undefined,
 ): string {
   const formatted = formatFixedDecimal(value, 2);
-  if (formatted === "—") return formatted;
+  if (formatted === '—') return formatted;
   return currency ? `${formatted} ${currency}` : formatted;
 }
 
@@ -124,10 +124,10 @@ function signedMoney(
   value: string | null | undefined,
   currency: string | null | undefined,
 ): string {
-  if (value == null) return "—";
+  if (value == null) return '—';
   const formatted = money(value, currency);
   const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0 || formatted === "—")
+  if (!Number.isFinite(numeric) || numeric <= 0 || formatted === '—')
     return formatted;
   return `+${formatted}`;
 }
@@ -136,34 +136,34 @@ function lossMoney(
   value: string | null | undefined,
   currency: string | null | undefined,
 ): string {
-  if (value == null) return "—";
+  if (value == null) return '—';
   const normalized = value.trim();
   if (!/^[+-]?\d+(?:\.\d+)?$/.test(normalized)) return money(value, currency);
-  if (/^[+-]?0(?:\.0+)?$/.test(normalized)) return money("0", currency);
+  if (/^[+-]?0(?:\.0+)?$/.test(normalized)) return money('0', currency);
   return money(
-    normalized.startsWith("-")
+    normalized.startsWith('-')
       ? normalized
-      : `-${normalized.replace(/^\+/, "")}`,
+      : `-${normalized.replace(/^\+/, '')}`,
     currency,
   );
 }
 
 function formatTimestamp(value: string | null | undefined): string {
-  if (!value) return "Not available";
+  if (!value) return 'Not available';
   const parsed = new Date(value);
-  if (!Number.isFinite(parsed.getTime())) return "Not available";
+  if (!Number.isFinite(parsed.getTime())) return 'Not available';
   return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
+    dateStyle: 'medium',
+    timeStyle: 'short',
   }).format(parsed);
 }
 
 function formatHoldTime(trade: TradeExecutionView): string {
-  if (!trade.openedAt || !trade.closedAt) return "—";
+  if (!trade.openedAt || !trade.closedAt) return '—';
   const start = Date.parse(trade.openedAt);
   const end = Date.parse(trade.closedAt);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start)
-    return "—";
+    return '—';
   const totalMinutes = Math.round((end - start) / 60_000);
   if (totalMinutes < 60) return `${totalMinutes}m`;
   const hours = Math.floor(totalMinutes / 60);
@@ -172,7 +172,7 @@ function formatHoldTime(trade: TradeExecutionView): string {
 }
 
 function formatAverageHold(minutes: number | null): string {
-  if (minutes == null || !Number.isFinite(minutes)) return "—";
+  if (minutes == null || !Number.isFinite(minutes)) return '—';
   if (minutes < 60) return `${Math.round(minutes)}m`;
   const hours = Math.floor(minutes / 60);
   const remainder = Math.round(minutes % 60);
@@ -180,17 +180,17 @@ function formatAverageHold(minutes: number | null): string {
 }
 
 function labelize(value: string | null | undefined): string {
-  if (!value) return "Not reported";
-  return value.replaceAll("_", " ").toLowerCase();
+  if (!value) return 'Not reported';
+  return value.replaceAll('_', ' ').toLowerCase();
 }
 
 function pnlTone(
   value: string | null | undefined,
-): "positive" | "negative" | "neutral" {
-  if (value == null) return "neutral";
+): 'positive' | 'negative' | 'neutral' {
+  if (value == null) return 'neutral';
   const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric === 0) return "neutral";
-  return numeric > 0 ? "positive" : "negative";
+  if (!Number.isFinite(numeric) || numeric === 0) return 'neutral';
+  return numeric > 0 ? 'positive' : 'negative';
 }
 
 function TradePnl({ trade }: { trade: TradeExecutionView }) {
@@ -198,7 +198,7 @@ function TradePnl({ trade }: { trade: TradeExecutionView }) {
   return (
     <strong className={`history-pnl history-pnl--${tone}`}>
       {trade.realisedPnl == null
-        ? "Unavailable"
+        ? 'Unavailable'
         : signedMoney(trade.realisedPnl, trade.accountCurrency)}
     </strong>
   );
@@ -208,12 +208,12 @@ function SummaryCard({
   label,
   value,
   detail,
-  tone = "neutral",
+  tone = 'neutral',
 }: {
   label: string;
   value: string;
   detail: string;
-  tone?: "positive" | "negative" | "neutral";
+  tone?: 'positive' | 'negative' | 'neutral';
 }) {
   return (
     <article className={`history-summary-card history-summary-card--${tone}`}>
@@ -227,7 +227,7 @@ function SummaryCard({
 export default function ClosedTradeHistoryPage() {
   const { user, logout, restoring } = useAuth();
   const [queryReady, setQueryReady] = useState(false);
-  const [brokerConnectionId, setBrokerConnectionId] = useState("");
+  const [brokerConnectionId, setBrokerConnectionId] = useState('');
   const [draft, setDraft] = useState<FilterState>(EMPTY_FILTERS);
   const [applied, setApplied] = useState<FilterState>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
@@ -239,7 +239,7 @@ export default function ClosedTradeHistoryPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setBrokerConnectionId(params.get("brokerConnectionId") ?? "");
+    setBrokerConnectionId(params.get('brokerConnectionId') ?? '');
     setQueryReady(true);
   }, []);
 
@@ -309,7 +309,7 @@ export default function ClosedTradeHistoryPage() {
 
   if (restoring) {
     return (
-      <div style={{ padding: "3rem" }}>
+      <div style={{ padding: '3rem' }}>
         <LoadingSpinner text="Restoring closed-trade history…" />
       </div>
     );
@@ -317,7 +317,7 @@ export default function ClosedTradeHistoryPage() {
 
   if (!user) {
     return (
-      <div style={{ padding: "3rem", maxWidth: 680, margin: "0 auto" }}>
+      <div style={{ padding: '3rem', maxWidth: 680, margin: '0 auto' }}>
         <Card title="Not signed in">
           <p className="muted">
             Sign in to view closed-trade history and realized results.
@@ -341,11 +341,11 @@ export default function ClosedTradeHistoryPage() {
   const hasMixedCurrencies = (summary?.currencyBreakdown.length ?? 0) > 1;
   const profitFactorLabel = summary
     ? Number(summary.grossLoss) === 0 && Number(summary.grossProfit) > 0
-      ? "∞"
+      ? '∞'
       : summary.profitFactor == null
-        ? "—"
+        ? '—'
         : summary.profitFactor.toFixed(2)
-    : "—";
+    : '—';
 
   return (
     <DashboardShell
@@ -395,12 +395,12 @@ export default function ClosedTradeHistoryPage() {
         {brokerConnectionId && (
           <Alert variant="info">
             This report is scoped to the broker account selected on the AI
-            Trading page.{" "}
+            Trading page.{' '}
             <button
               type="button"
               className="history-inline-action"
               onClick={() => {
-                setBrokerConnectionId("");
+                setBrokerConnectionId('');
                 setPage(1);
               }}
             >
@@ -493,7 +493,7 @@ export default function ClosedTradeHistoryPage() {
                 onChange={(event) =>
                   setDraft((current) => ({
                     ...current,
-                    direction: event.target.value as FilterState["direction"],
+                    direction: event.target.value as FilterState['direction'],
                   }))
                 }
               >
@@ -529,7 +529,7 @@ export default function ClosedTradeHistoryPage() {
                   setDraft((current) => ({
                     ...current,
                     closeReason: event.target
-                      .value as FilterState["closeReason"],
+                      .value as FilterState['closeReason'],
                   }))
                 }
               >
@@ -571,7 +571,7 @@ export default function ClosedTradeHistoryPage() {
             {summary?.unresolvedPnlCount ? (
               <Alert variant="warning">
                 {summary.unresolvedPnlCount} closed trade
-                {summary.unresolvedPnlCount === 1 ? "" : "s"} in this result do
+                {summary.unresolvedPnlCount === 1 ? '' : 's'} in this result do
                 not have complete currency-bound realized P&amp;L yet. Money
                 totals show only authoritative currency-bound values.
               </Alert>
@@ -584,32 +584,32 @@ export default function ClosedTradeHistoryPage() {
               <SummaryCard
                 label={
                   summary?.unresolvedPnlCount
-                    ? "Known gross profit"
-                    : "Gross profit"
+                    ? 'Known gross profit'
+                    : 'Gross profit'
                 }
                 value={signedMoney(summary?.grossProfit, currency)}
-                detail={`${summary?.wins ?? 0} profitable trade${summary?.wins === 1 ? "" : "s"}`}
+                detail={`${summary?.wins ?? 0} profitable trade${summary?.wins === 1 ? '' : 's'}`}
                 tone="positive"
               />
               <SummaryCard
                 label={
                   summary?.unresolvedPnlCount
-                    ? "Known gross loss"
-                    : "Gross loss"
+                    ? 'Known gross loss'
+                    : 'Gross loss'
                 }
                 value={lossMoney(summary?.grossLoss, currency)}
-                detail={`${summary?.losses ?? 0} losing trade${summary?.losses === 1 ? "" : "s"}`}
+                detail={`${summary?.losses ?? 0} losing trade${summary?.losses === 1 ? '' : 's'}`}
                 tone="negative"
               />
               <SummaryCard
                 label={
-                  summary?.unresolvedPnlCount ? "Known net P&L" : "Net P&L"
+                  summary?.unresolvedPnlCount ? 'Known net P&L' : 'Net P&L'
                 }
                 value={signedMoney(summary?.netRealisedPnl, currency)}
                 detail={
                   hasMixedCurrencies
-                    ? "See currency breakdown below"
-                    : "After commission and swap / financing"
+                    ? 'See currency breakdown below'
+                    : 'After commission and swap / financing'
                 }
                 tone={netTone}
               />
@@ -618,8 +618,8 @@ export default function ClosedTradeHistoryPage() {
                 value={money(summary?.totalCommission, currency)}
                 detail={
                   hasMixedCurrencies
-                    ? "See currency breakdown below"
-                    : "Accumulated broker commission"
+                    ? 'See currency breakdown below'
+                    : 'Accumulated broker commission'
                 }
                 tone="negative"
               />
@@ -628,13 +628,13 @@ export default function ClosedTradeHistoryPage() {
                 value={signedMoney(summary?.totalExplicitCosts, currency)}
                 detail={
                   hasMixedCurrencies
-                    ? "See currency breakdown below"
-                    : "Commission minus signed financing credits"
+                    ? 'See currency breakdown below'
+                    : 'Commission minus signed financing credits'
                 }
                 tone={
-                  pnlTone(summary?.totalExplicitCosts) === "negative"
-                    ? "positive"
-                    : "negative"
+                  pnlTone(summary?.totalExplicitCosts) === 'negative'
+                    ? 'positive'
+                    : 'negative'
                 }
               />
               <SummaryCard
@@ -666,25 +666,25 @@ export default function ClosedTradeHistoryPage() {
                     <article key={item.accountCurrency}>
                       <b>{item.accountCurrency}</b>
                       <span>
-                        Profit{" "}
+                        Profit{' '}
                         {signedMoney(item.grossProfit, item.accountCurrency)}
                       </span>
                       <span>
                         Loss {lossMoney(item.grossLoss, item.accountCurrency)}
                       </span>
                       <span>
-                        Gross net{" "}
+                        Gross net{' '}
                         {signedMoney(
                           item.grossRealisedPnl,
                           item.accountCurrency,
                         )}
                       </span>
                       <span>
-                        Commission{" "}
+                        Commission{' '}
                         {money(item.totalCommission, item.accountCurrency)}
                       </span>
                       <span>
-                        Net after costs{" "}
+                        Net after costs{' '}
                         {signedMoney(item.netRealisedPnl, item.accountCurrency)}
                       </span>
                     </article>
@@ -701,7 +701,7 @@ export default function ClosedTradeHistoryPage() {
                 <span>Win rate</span>
                 <strong>
                   {summary?.winRate == null
-                    ? "—"
+                    ? '—'
                     : `${(summary.winRate * 100).toFixed(1)}%`}
                 </strong>
               </div>
@@ -725,11 +725,11 @@ export default function ClosedTradeHistoryPage() {
                 <span>Expectancy / trade</span>
                 <strong
                   className={
-                    pnlTone(summary?.expectancyPerTrade) === "negative"
-                      ? "is-negative"
-                      : pnlTone(summary?.expectancyPerTrade) === "positive"
-                        ? "is-positive"
-                        : ""
+                    pnlTone(summary?.expectancyPerTrade) === 'negative'
+                      ? 'is-negative'
+                      : pnlTone(summary?.expectancyPerTrade) === 'positive'
+                        ? 'is-positive'
+                        : ''
                   }
                 >
                   {signedMoney(summary?.expectancyPerTrade, currency)}
@@ -837,9 +837,9 @@ export default function ClosedTradeHistoryPage() {
                           <td>
                             <Badge
                               variant={
-                                trade.direction === "BUY"
-                                  ? "success"
-                                  : "warning"
+                                trade.direction === 'BUY'
+                                  ? 'success'
+                                  : 'warning'
                               }
                             >
                               {trade.direction}

@@ -1,4 +1,4 @@
-import { createExecutionApi } from "@irexpro/api-client/execution";
+import { createExecutionApi } from '@irexpro/api-client/execution';
 import type {
   ClosedTradeReportQuery,
   ClosedTradeReportView,
@@ -6,13 +6,13 @@ import type {
   TradeExecutionDirection,
   TradeExecutionStatus,
   TradeExecutionView,
-} from "@irexpro/types/execution";
-import { api } from "@/lib/api";
+} from '@irexpro/types/execution';
+import { api } from '@/lib/api';
 
 export type TraderExecutionDegradedFeed =
-  | "OPEN_POSITIONS"
-  | "RECENT_EXECUTIONS"
-  | "CLOSED_EXECUTIONS";
+  | 'OPEN_POSITIONS'
+  | 'RECENT_EXECUTIONS'
+  | 'CLOSED_EXECUTIONS';
 
 export interface TraderExecutionSnapshot {
   openPositions: TradeExecutionView[];
@@ -48,14 +48,14 @@ export interface RecentExecutionActivitySummary {
 }
 
 function sumExactDecimalStrings(values: string[]): string | null {
-  if (values.length === 0) return "0";
+  if (values.length === 0) return '0';
   const parsed = values.map((value) => {
     const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
     if (!match) return null;
     return {
-      negative: match[1] === "-",
+      negative: match[1] === '-',
       whole: match[2],
-      fraction: match[3] ?? "",
+      fraction: match[3] ?? '',
     };
   });
   if (parsed.some((value) => value === null)) return null;
@@ -67,7 +67,7 @@ function sumExactDecimalStrings(values: string[]): string | null {
   const scale = Math.max(...decimals.map((value) => value.fraction.length), 0);
   const factor = 10n ** BigInt(scale);
   const total = decimals.reduce((acc, value) => {
-    const fraction = value.fraction.padEnd(scale, "0") || "0";
+    const fraction = value.fraction.padEnd(scale, '0') || '0';
     const scaled =
       BigInt(value.whole) * factor + (scale ? BigInt(fraction) : 0n);
     return acc + (value.negative ? -scaled : scaled);
@@ -76,18 +76,18 @@ function sumExactDecimalStrings(values: string[]): string | null {
   const absolute = negative ? -total : total;
   const whole = absolute / factor;
   const fraction = scale
-    ? (absolute % factor).toString().padStart(scale, "0").replace(/0+$/, "")
-    : "";
-  return `${negative ? "-" : ""}${whole.toString()}${fraction ? `.${fraction}` : ""}`;
+    ? (absolute % factor).toString().padStart(scale, '0').replace(/0+$/, '')
+    : '';
+  return `${negative ? '-' : ''}${whole.toString()}${fraction ? `.${fraction}` : ''}`;
 }
 
 function costAdjustedRealisedPnl(trade: TradeExecutionView): string | null {
   if (trade.realisedPnl === null) return null;
-  const rawCommission = trade.commission?.trim() || "0";
-  const rawSwap = trade.swap?.trim() || "0";
-  const commissionMagnitude = rawCommission.replace(/^[+-]/, "");
+  const rawCommission = trade.commission?.trim() || '0';
+  const rawSwap = trade.swap?.trim() || '0';
+  const commissionMagnitude = rawCommission.replace(/^[+-]/, '');
   const commissionDebit = /^0(?:\.0+)?$/.test(commissionMagnitude)
-    ? "0"
+    ? '0'
     : `-${commissionMagnitude}`;
   return sumExactDecimalStrings([trade.realisedPnl, commissionDebit, rawSwap]);
 }
@@ -101,23 +101,23 @@ function divideDecimalString(
   const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
   if (!match) return null;
 
-  const sourceFraction = match[3] ?? "";
+  const sourceFraction = match[3] ?? '';
   const sourceScale = 10n ** BigInt(sourceFraction.length);
   const sourceAbsolute =
-    BigInt(match[2]) * sourceScale + BigInt(sourceFraction || "0");
+    BigInt(match[2]) * sourceScale + BigInt(sourceFraction || '0');
   const targetScale = 10n ** BigInt(fractionDigits);
   const denominator = sourceScale * BigInt(divisor);
   const numerator = sourceAbsolute * targetScale;
   let rounded = numerator / denominator;
   if ((numerator % denominator) * 2n >= denominator) rounded += 1n;
 
-  const negative = match[1] === "-" && rounded !== 0n;
+  const negative = match[1] === '-' && rounded !== 0n;
   const whole = rounded / targetScale;
   const fraction =
     fractionDigits > 0
-      ? (rounded % targetScale).toString().padStart(fractionDigits, "0")
-      : "";
-  return `${negative ? "-" : ""}${whole.toString()}${fractionDigits ? `.${fraction}` : ""}`;
+      ? (rounded % targetScale).toString().padStart(fractionDigits, '0')
+      : '';
+  return `${negative ? '-' : ''}${whole.toString()}${fractionDigits ? `.${fraction}` : ''}`;
 }
 
 /** Summarize recent execution activity and realised trades closed within the trailing 24 hours. */
@@ -138,7 +138,7 @@ export function summarizeRecentExecutionActivity(
   });
   const realisedTrades = trades.filter((trade) => {
     if (
-      trade.status !== "CLOSED" ||
+      trade.status !== 'CLOSED' ||
       trade.realisedPnl === null ||
       !trade.closedAt
     ) {
@@ -170,7 +170,7 @@ export function summarizeRecentExecutionActivity(
   );
   const netRealisedPnl =
     realisedTrades.length === 0
-      ? "0"
+      ? '0'
       : accountCurrency && netPnlValues.every((value) => value !== null)
         ? sumExactDecimalStrings(netPnlValues as string[])
         : null;
@@ -179,7 +179,7 @@ export function summarizeRecentExecutionActivity(
     .map((trade) => trade.realisedPnl!);
   const losingPnlValues = realisedTrades
     .filter((trade) => Number(trade.realisedPnl) < 0)
-    .map((trade) => trade.realisedPnl!.replace(/^-/, ""));
+    .map((trade) => trade.realisedPnl!.replace(/^-/, ''));
   const grossProfit = sumExactDecimalStrings(winningPnlValues);
   const grossLoss = sumExactDecimalStrings(losingPnlValues);
   const averageWin = wins > 0 ? divideDecimalString(grossProfit, wins) : null;
@@ -243,7 +243,7 @@ export function summarizeRealisedExecutionWindow(
   const realised = [...trades]
     .filter(
       (trade) =>
-        trade.status === "CLOSED" &&
+        trade.status === 'CLOSED' &&
         trade.realisedPnl !== null &&
         Number.isFinite(Number(trade.realisedPnl)),
     )
@@ -275,21 +275,21 @@ export function summarizeRealisedExecutionWindow(
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isDirection(value: unknown): value is TradeExecutionDirection {
-  return value === "BUY" || value === "SELL";
+  return value === 'BUY' || value === 'SELL';
 }
 
 function isStatus(value: unknown): value is TradeExecutionStatus {
   return (
-    value === "PENDING" ||
-    value === "OPEN" ||
-    value === "CLOSED" ||
-    value === "REJECTED" ||
-    value === "CANCELLED" ||
-    value === "RECONCILIATION_PENDING"
+    value === 'PENDING' ||
+    value === 'OPEN' ||
+    value === 'CLOSED' ||
+    value === 'REJECTED' ||
+    value === 'CANCELLED' ||
+    value === 'RECONCILIATION_PENDING'
   );
 }
 
@@ -298,20 +298,20 @@ function isCloseReason(
 ): value is TradeExecutionCloseReason | null {
   return (
     value === null ||
-    value === "STOP_LOSS_HIT" ||
-    value === "TAKE_PROFIT_HIT" ||
-    value === "MANUAL_CLOSE" ||
-    value === "AI_CLOSE_SIGNAL" ||
-    value === "PROFIT_PROTECTION" ||
-    value === "KILL_SWITCH_FORCE_CLOSE" ||
-    value === "BROKER_CLOSE" ||
-    value === "STRATEGY_CUTOVER" ||
-    value === "RECONCILIATION"
+    value === 'STOP_LOSS_HIT' ||
+    value === 'TAKE_PROFIT_HIT' ||
+    value === 'MANUAL_CLOSE' ||
+    value === 'AI_CLOSE_SIGNAL' ||
+    value === 'PROFIT_PROTECTION' ||
+    value === 'KILL_SWITCH_FORCE_CLOSE' ||
+    value === 'BROKER_CLOSE' ||
+    value === 'STRATEGY_CUTOVER' ||
+    value === 'RECONCILIATION'
   );
 }
 
 function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
+  return value === null || typeof value === 'string';
 }
 
 export function isTradeExecutionView(
@@ -320,14 +320,14 @@ export function isTradeExecutionView(
   if (!isRecord(value)) return false;
 
   return (
-    typeof value.id === "string" &&
-    typeof value.instrument === "string" &&
+    typeof value.id === 'string' &&
+    typeof value.instrument === 'string' &&
     isDirection(value.direction) &&
-    typeof value.lotSize === "string" &&
-    typeof value.requestedEntryPrice === "string" &&
+    typeof value.lotSize === 'string' &&
+    typeof value.requestedEntryPrice === 'string' &&
     isNullableString(value.fillPrice) &&
-    typeof value.stopLoss === "string" &&
-    typeof value.takeProfit === "string" &&
+    typeof value.stopLoss === 'string' &&
+    typeof value.takeProfit === 'string' &&
     isNullableString(value.trailingStopPips) &&
     isStatus(value.status) &&
     isNullableString(value.exitPrice) &&
@@ -340,14 +340,14 @@ export function isTradeExecutionView(
     isCloseReason(value.closeReason) &&
     isNullableString(value.openedAt) &&
     isNullableString(value.closedAt) &&
-    typeof value.createdAt === "string" &&
-    typeof value.updatedAt === "string" &&
-    !("userId" in value) &&
-    !("brokerConnectionId" in value) &&
-    !("signalId" in value) &&
-    !("idempotencyKey" in value) &&
-    !("externalOrderId" in value) &&
-    !("brokerRejectionReason" in value)
+    typeof value.createdAt === 'string' &&
+    typeof value.updatedAt === 'string' &&
+    !('userId' in value) &&
+    !('brokerConnectionId' in value) &&
+    !('signalId' in value) &&
+    !('idempotencyKey' in value) &&
+    !('externalOrderId' in value) &&
+    !('brokerRejectionReason' in value)
   );
 }
 
@@ -368,33 +368,33 @@ export async function loadTraderExecutionSnapshot(
   const degradedFeeds: TraderExecutionDegradedFeed[] = [];
 
   const openPositions =
-    openResult.status === "fulfilled" &&
+    openResult.status === 'fulfilled' &&
     Array.isArray(openResult.value) &&
     openResult.value.every(isTradeExecutionView) &&
-    openResult.value.every((trade) => trade.status === "OPEN")
+    openResult.value.every((trade) => trade.status === 'OPEN')
       ? openResult.value
       : null;
-  if (!openPositions) degradedFeeds.push("OPEN_POSITIONS");
+  if (!openPositions) degradedFeeds.push('OPEN_POSITIONS');
 
   const recentExecutions =
-    recentResult.status === "fulfilled" &&
+    recentResult.status === 'fulfilled' &&
     Array.isArray(recentResult.value) &&
     recentResult.value.every(isTradeExecutionView)
       ? recentResult.value
       : null;
-  if (!recentExecutions) degradedFeeds.push("RECENT_EXECUTIONS");
+  if (!recentExecutions) degradedFeeds.push('RECENT_EXECUTIONS');
 
   const closedExecutions =
-    closedResult.status === "fulfilled" &&
+    closedResult.status === 'fulfilled' &&
     Array.isArray(closedResult.value) &&
     closedResult.value.every(isTradeExecutionView) &&
-    closedResult.value.every((trade) => trade.status === "CLOSED")
+    closedResult.value.every((trade) => trade.status === 'CLOSED')
       ? closedResult.value
       : null;
-  if (!closedExecutions) degradedFeeds.push("CLOSED_EXECUTIONS");
+  if (!closedExecutions) degradedFeeds.push('CLOSED_EXECUTIONS');
 
   if (!openPositions && !recentExecutions && !closedExecutions) {
-    throw new Error("Execution reads unavailable");
+    throw new Error('Execution reads unavailable');
   }
 
   const mergeFallbackExecutions = (
@@ -413,10 +413,10 @@ export async function loadTraderExecutionSnapshot(
     recentExecutions ??
     mergeFallbackExecutions([openPositions, closedExecutions]);
   const resolvedOpen =
-    openPositions ?? resolvedRecent.filter((trade) => trade.status === "OPEN");
+    openPositions ?? resolvedRecent.filter((trade) => trade.status === 'OPEN');
   const resolvedClosed =
     closedExecutions ??
-    resolvedRecent.filter((trade) => trade.status === "CLOSED");
+    resolvedRecent.filter((trade) => trade.status === 'CLOSED');
 
   return {
     openPositions: resolvedOpen,
