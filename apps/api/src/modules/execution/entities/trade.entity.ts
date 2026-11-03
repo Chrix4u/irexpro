@@ -156,6 +156,47 @@ export class Trade {
   @Column({ name: 'fill_price', type: 'numeric', precision: 18, scale: 8, nullable: true })
   fillPrice: string | null;
 
+  // ─── Quote-at-fill / spread-cost telemetry (reporting only) ──────────────
+
+  /** Fresh broker BID proven by the final market-safety gate for this entry. */
+  @Column({ name: 'entry_quote_bid', type: 'numeric', precision: 20, scale: 10, nullable: true })
+  entryQuoteBid: string | null;
+
+  /** Fresh broker ASK proven by the final market-safety gate for this entry. */
+  @Column({ name: 'entry_quote_ask', type: 'numeric', precision: 20, scale: 10, nullable: true })
+  entryQuoteAsk: string | null;
+
+  /** ASK - BID derived from the persisted quote evidence. */
+  @Column({ name: 'entry_spread', type: 'numeric', precision: 20, scale: 10, nullable: true })
+  entrySpread: string | null;
+
+  /** Broker timestamp associated with the quote evidence used for the entry. */
+  @Column({ name: 'entry_quote_observed_at', type: 'timestamptz', nullable: true })
+  entryQuoteObservedAt: Date | null;
+
+  /**
+   * Estimated round-trip spread proxy in account currency. Reporting only:
+   * spread is already embedded in broker execution P&L and is never deducted
+   * again from realised P&L.
+   */
+  @Column({ name: 'estimated_spread_cost', type: 'numeric', precision: 20, scale: 8, nullable: true })
+  estimatedSpreadCost: string | null;
+
+  @Column({ name: 'spread_cost_estimate_method', type: 'varchar', length: 64, nullable: true })
+  spreadCostEstimateMethod: string | null;
+
+  @Column({ name: 'spread_cost_contract_size', type: 'numeric', precision: 20, scale: 10, nullable: true })
+  spreadCostContractSize: string | null;
+
+  @Column({ name: 'spread_cost_quote_currency', type: 'varchar', length: 3, nullable: true })
+  spreadCostQuoteCurrency: string | null;
+
+  @Column({ name: 'spread_cost_conversion_rate', type: 'numeric', precision: 20, scale: 12, nullable: true })
+  spreadCostConversionRate: string | null;
+
+  @Column({ name: 'spread_cost_conversion_instrument', type: 'varchar', length: 20, nullable: true })
+  spreadCostConversionInstrument: string | null;
+
   @Column({ name: 'stop_loss', type: 'numeric', precision: 18, scale: 8 })
   stopLoss: string;
 
