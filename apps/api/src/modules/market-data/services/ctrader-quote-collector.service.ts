@@ -20,7 +20,6 @@ const M1_WARM_TARGET = 600;
 const M1_REFRESH_COUNT = 60;
 const CONTEXT_REFRESH_COUNT = 40;
 const M1_REQUESTS_PER_CYCLE = 3;
-const CONTEXT_TIMEFRAMES = ['M5', 'M15', 'H1', 'H4'] as const;
 // Keep the same 3 M1 + 1 context historical calls per cycle. Prioritize
 // M5 to prevent the previous 24-slot round robin from exceeding the
 // ten-minute closed-M5 readiness limit when requests run slowly.
@@ -49,7 +48,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   private stopping = false;
   private m1RotationOffset = 0;
   private contextRotationOffset = 0;
-  private readonly contextInstrumentOffsets: Record<(typeof CONTEXT_TIMEFRAMES)[number], number> = {
+  private readonly contextInstrumentOffsets: Record<(typeof CONTEXT_REFRESH_ROTATION)[number], number> = {
     M5: 0,
     M15: 0,
     H1: 0,
@@ -254,7 +253,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     userId: string,
     connectionId: string,
     instrument: string,
-    timeframe: (typeof CONTEXT_TIMEFRAMES)[number],
+    timeframe: (typeof CONTEXT_REFRESH_ROTATION)[number],
     now: Date,
   ): Promise<void> {
     const minutes =
