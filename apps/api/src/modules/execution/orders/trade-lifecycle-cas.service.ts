@@ -134,7 +134,8 @@ export class TradeLifecycleCasService {
     // The final market-safety quote is an ephemeral telemetry handoff. Only
     // OPEN transitions may consume it; terminal non-OPEN transitions discard
     // it because no entry was established.
-    const executionQuote = target === TradeStatus.OPEN ? peekProvenExecutionQuote(params.tradeId) : null;
+    const executionQuote =
+      target === TradeStatus.OPEN ? peekProvenExecutionQuote(params.tradeId) : null;
     const entryQuotePatch = buildEntryQuoteTelemetryPatch(executionQuote);
     const effectivePatch = entryQuotePatch
       ? ({ ...params.patch, ...entryQuotePatch } as QueryDeepPartialEntity<Trade>)
@@ -247,11 +248,13 @@ export class TradeLifecycleCasService {
     // fill missing raw telemetry best-effort. On the normal APPLIED path the
     // exact same fields were part of the atomic OPEN CAS above.
     if (alreadyAtTarget && !trade.entryQuoteBid) {
-      void this.tradeRepo.update(trade.id, rawPatch as never).catch((err) =>
-        this.logger.warn(
-          `Trade ${trade.id} quote telemetry backfill failed after idempotent OPEN: ${(err as Error).message}`,
-        ),
-      );
+      void this.tradeRepo
+        .update(trade.id, rawPatch as never)
+        .catch((err) =>
+          this.logger.warn(
+            `Trade ${trade.id} quote telemetry backfill failed after idempotent OPEN: ${(err as Error).message}`,
+          ),
+        );
     }
 
     discardProvenExecutionQuote(trade.id);
