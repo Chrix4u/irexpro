@@ -51,11 +51,7 @@ function createHarness(options?: { estimatorRejects?: boolean }) {
   const spreadTelemetry = {
     estimateEntrySpreadCost,
   } as unknown as TradeSpreadTelemetryService;
-  const service = new TradeLifecycleCasService(
-    tradeRepo,
-    auditService as never,
-    spreadTelemetry,
-  );
+  const service = new TradeLifecycleCasService(tradeRepo, auditService as never, spreadTelemetry);
   return { service, tradeRepo, set, estimateEntrySpreadCost };
 }
 
