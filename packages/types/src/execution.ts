@@ -6,25 +6,25 @@
  * internals, and monetary P&L values that lack an authoritative currency.
  */
 export type TradeExecutionStatus =
-  | 'PENDING'
-  | 'OPEN'
-  | 'CLOSED'
-  | 'REJECTED'
-  | 'CANCELLED'
-  | 'RECONCILIATION_PENDING';
+  | "PENDING"
+  | "OPEN"
+  | "CLOSED"
+  | "REJECTED"
+  | "CANCELLED"
+  | "RECONCILIATION_PENDING";
 
-export type TradeExecutionDirection = 'BUY' | 'SELL';
+export type TradeExecutionDirection = "BUY" | "SELL";
 
 export type TradeExecutionCloseReason =
-  | 'STOP_LOSS_HIT'
-  | 'TAKE_PROFIT_HIT'
-  | 'MANUAL_CLOSE'
-  | 'AI_CLOSE_SIGNAL'
-  | 'PROFIT_PROTECTION'
-  | 'KILL_SWITCH_FORCE_CLOSE'
-  | 'BROKER_CLOSE'
-  | 'STRATEGY_CUTOVER'
-  | 'RECONCILIATION';
+  | "STOP_LOSS_HIT"
+  | "TAKE_PROFIT_HIT"
+  | "MANUAL_CLOSE"
+  | "AI_CLOSE_SIGNAL"
+  | "PROFIT_PROTECTION"
+  | "KILL_SWITCH_FORCE_CLOSE"
+  | "BROKER_CLOSE"
+  | "STRATEGY_CUTOVER"
+  | "RECONCILIATION";
 
 export interface UserCapitalAllocationView {
   brokerConnectionId: string;
@@ -95,7 +95,7 @@ export interface TradeExecutionView {
 }
 
 /** Result for one AI-position close attempt returned by close-all. */
-export type ClosedTradeOutcomeFilter = 'ALL' | 'WIN' | 'LOSS' | 'FLAT';
+export type ClosedTradeOutcomeFilter = "ALL" | "WIN" | "LOSS" | "FLAT";
 
 export interface ClosedTradeReportQuery {
   page?: number;
@@ -119,6 +119,9 @@ export interface ClosedTradeCurrencySummaryView {
   winRate: number | null;
   grossProfit: string;
   grossLoss: string;
+  /** Gross realised P&L before explicit broker costs. */
+  grossRealisedPnl: string;
+  /** Net realised P&L after commission and signed swap / financing. */
   netRealisedPnl: string;
   averageWin: string | null;
   averageLoss: string | null;
@@ -128,6 +131,8 @@ export interface ClosedTradeCurrencySummaryView {
   largestLoss: string | null;
   totalCommission: string;
   totalSwap: string;
+  /** Commission magnitude minus signed swap / financing. */
+  totalExplicitCosts: string;
   averageHoldMinutes: number | null;
 }
 
@@ -142,6 +147,9 @@ export interface ClosedTradeReportSummaryView {
   accountCurrency: string | null;
   grossProfit: string | null;
   grossLoss: string | null;
+  /** Gross realised P&L before explicit broker costs. */
+  grossRealisedPnl: string | null;
+  /** Net realised P&L after commission and signed swap / financing. */
   netRealisedPnl: string | null;
   averageWin: string | null;
   averageLoss: string | null;
@@ -151,6 +159,8 @@ export interface ClosedTradeReportSummaryView {
   largestLoss: string | null;
   totalCommission: string | null;
   totalSwap: string | null;
+  /** Commission magnitude minus signed swap / financing. */
+  totalExplicitCosts: string | null;
   averageHoldMinutes: number | null;
   currencyBreakdown: ClosedTradeCurrencySummaryView[];
 }
@@ -190,27 +200,27 @@ export interface AiPositionCloseResultView {
  * - FULL_AUTO: automatic new exposure permitted only while ALL current
  *   authority conditions hold at the final dispatch boundary.
  */
-export type ExecutionMode = 'PAPER_ONLY' | 'SEMI_AUTO' | 'FULL_AUTO';
+export type ExecutionMode = "PAPER_ONLY" | "SEMI_AUTO" | "FULL_AUTO";
 
 /** Trading session lifecycle (mirrors the backend enum). */
 export type TradingSessionStatus =
-  | 'ACTIVE'
-  | 'PAUSED'
-  | 'SUSPENDED_RISK_LIMIT'
-  | 'SUSPENDED_BROKER'
-  | 'ENDED';
+  | "ACTIVE"
+  | "PAUSED"
+  | "SUSPENDED_RISK_LIMIT"
+  | "SUSPENDED_BROKER"
+  | "ENDED";
 
 /** All execution-mode selector values, in risk-ascending order. */
 export const EXECUTION_MODES: readonly ExecutionMode[] = [
-  'PAPER_ONLY',
-  'SEMI_AUTO',
-  'FULL_AUTO',
+  "PAPER_ONLY",
+  "SEMI_AUTO",
+  "FULL_AUTO",
 ];
 
 /** Minimal broker identity needed to choose the requested session mode. */
 export interface BrokerExecutionEnvironment {
   brokerId: string;
-  accountType: 'DEMO' | 'LIVE';
+  accountType: "DEMO" | "LIVE";
 }
 
 /**
@@ -221,8 +231,8 @@ export interface BrokerExecutionEnvironment {
  */
 export function startExecutionModeForBroker(
   connection: BrokerExecutionEnvironment,
-): 'PAPER_ONLY' | 'FULL_AUTO' {
-  return connection.brokerId === 'paper-broker' ? 'PAPER_ONLY' : 'FULL_AUTO';
+): "PAPER_ONLY" | "FULL_AUTO" {
+  return connection.brokerId === "paper-broker" ? "PAPER_ONLY" : "FULL_AUTO";
 }
 
 /**
@@ -303,7 +313,7 @@ export interface StartTradingSessionRequest {
 /** POST /trading/sessions/start → 201 bare session. */
 export type StartTradingSessionResponse = TradingSessionView;
 
-export type AiStopPositionCloseState = 'COMPLETE' | 'PARTIAL' | 'UNKNOWN';
+export type AiStopPositionCloseState = "COMPLETE" | "PARTIAL" | "UNKNOWN";
 
 /**
  * POST /trading/sessions/:id/stop response.
@@ -371,7 +381,7 @@ export interface PendingExecutionConfirmationsResponse {
  * result. `CONSUMED` is the ONLY success value — the frontend never marks a
  * confirmation approved on its own.
  */
-export type ExecutionConfirmationOutcome = 'CONSUMED';
+export type ExecutionConfirmationOutcome = "CONSUMED";
 
 /** POST /execution/confirmations/:id/confirm success body. */
 export interface ConfirmExecutionConfirmationResponse {
@@ -385,11 +395,11 @@ export interface ConfirmExecutionConfirmationResponse {
  * authority generation.
  */
 export type ExecutionConfirmationFailureKind =
-  | 'expired'
-  | 'consumed'
-  | 'revoked'
-  | 'mismatched-generation'
-  | 'unknown';
+  | "expired"
+  | "consumed"
+  | "revoked"
+  | "mismatched-generation"
+  | "unknown";
 
 /**
  * Structured server failure surface for a rejected confirm attempt.
@@ -417,47 +427,45 @@ export function describeExecutionConfirmationFailure(failure: {
   message?: string;
   code?: string;
 }): ExecutionConfirmationFailure {
-  const message = typeof failure.message === 'string' ? failure.message : '';
-  const haystack = `${failure.code ?? ''} ${message}`.toLowerCase();
-  if (
-    haystack.includes('expired') ||
-    failure.code === 'CONFIRMATION_EXPIRED'
-  ) {
+  const message = typeof failure.message === "string" ? failure.message : "";
+  const haystack = `${failure.code ?? ""} ${message}`.toLowerCase();
+  if (haystack.includes("expired") || failure.code === "CONFIRMATION_EXPIRED") {
     return {
-      kind: 'expired',
-      message: message || 'The confirmation expired before it reached the server.',
+      kind: "expired",
+      message:
+        message || "The confirmation expired before it reached the server.",
     };
   }
   if (
-    haystack.includes('consumed') ||
-    haystack.includes('already used') ||
-    failure.code === 'CONFIRMATION_ALREADY_CONSUMED'
+    haystack.includes("consumed") ||
+    haystack.includes("already used") ||
+    failure.code === "CONFIRMATION_ALREADY_CONSUMED"
   ) {
     return {
-      kind: 'consumed',
-      message: message || 'The confirmation was already used exactly once.',
+      kind: "consumed",
+      message: message || "The confirmation was already used exactly once.",
     };
   }
-  if (haystack.includes('revoked') || failure.code === 'CONFIRMATION_REVOKED') {
+  if (haystack.includes("revoked") || failure.code === "CONFIRMATION_REVOKED") {
     return {
-      kind: 'revoked',
-      message: message || 'The confirmation was revoked server-side.',
+      kind: "revoked",
+      message: message || "The confirmation was revoked server-side.",
     };
   }
   if (
-    haystack.includes('generation') ||
-    haystack.includes('mismatch') ||
-    failure.code === 'AUTHORITY_GENERATION_MISMATCH'
+    haystack.includes("generation") ||
+    haystack.includes("mismatch") ||
+    failure.code === "AUTHORITY_GENERATION_MISMATCH"
   ) {
     return {
-      kind: 'mismatched-generation',
+      kind: "mismatched-generation",
       message:
         message ||
-        'The session authority changed — this confirmation is no longer bound to the current generation.',
+        "The session authority changed — this confirmation is no longer bound to the current generation.",
     };
   }
   return {
-    kind: 'unknown',
-    message: message || 'The server rejected this confirmation.',
+    kind: "unknown",
+    message: message || "The server rejected this confirmation.",
   };
 }
