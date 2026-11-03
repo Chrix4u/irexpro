@@ -48,6 +48,7 @@ const REPORT = {
     neitherCount: 0,
     dataGapCount: 0,
     smallProfitCount: 1,
+    smallProfitResolvedCount: 1,
     smallProfitTpFirstCount: 1,
     smallProfitTpFirstRate: 1,
     accountCurrency: 'EUR',
@@ -66,6 +67,13 @@ const REPORT = {
       tpFirstCount: 1,
       slFirstCount: 1,
       tpFirstRate: 0.5,
+      smallProfitCount: 1,
+      smallProfitResolvedCount: 1,
+      smallProfitComparableCount: 1,
+      smallProfitTpFirstCount: 1,
+      smallProfitSlFirstCount: 0,
+      smallProfitTpFirstRate: 1,
+      smallProfitAverageRDelta: 0.75,
     },
   ],
   items: [
@@ -101,7 +109,9 @@ describe('ProfitProtectionExitQualityPage', () => {
     expect(await screen.findByRole('heading', { name: 'Profit Protection Exit Quality' })).toBeInTheDocument();
     expect(await screen.findByText('2 evaluated')).toBeInTheDocument();
     expect(screen.getAllByText('50.0%')).toHaveLength(2);
-    expect(screen.getByText('1 of 1')).toBeInTheDocument();
+    expect(screen.getByText('1 of 1 resolved')).toBeInTheDocument();
+    expect(screen.getByText('1 / 0')).toBeInTheDocument();
+    expect(screen.getByText('+0.75R')).toBeInTheDocument();
     expect(screen.getByText('-0.05R')).toBeInTheDocument();
     expect(screen.getByText(/research evidence, not realised returns/i)).toBeInTheDocument();
     expect(screen.getAllByText('Confirmed Reversal').length).toBeGreaterThanOrEqual(2);
