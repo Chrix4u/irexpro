@@ -61,6 +61,8 @@ export interface ProfitProtectionExitQualityReport {
     neitherCount: number;
     dataGapCount: number;
     smallProfitCount: number;
+    /** Resolved first-barrier outcomes; excludes gaps and ambiguous M1 bars. */
+    smallProfitResolvedCount: number;
     smallProfitTpFirstCount: number;
     smallProfitTpFirstRate: number | null;
     accountCurrency: string | null;
@@ -80,6 +82,15 @@ export interface ProfitProtectionExitQualityReport {
     tpFirstCount: number;
     slFirstCount: number;
     tpFirstRate: number | null;
+    smallProfitCount: number;
+    smallProfitResolvedCount: number;
+    /** Resolved outcomes with both a measurable actual and hypothetical R. */
+    smallProfitComparableCount: number;
+    smallProfitTpFirstCount: number;
+    smallProfitSlFirstCount: number;
+    smallProfitTpFirstRate: number | null;
+    /** Research-only four-hour barrier R minus realised exit R; not earned P&L. */
+    smallProfitAverageRDelta: number | null;
   }>;
   items: ProfitProtectionExitQualityItem[];
 }
@@ -165,6 +176,10 @@ export class ProfitProtectionExitQualityService {
          COUNT(*) FILTER (WHERE f.outcome = 'NEITHER_4H')::text AS neither_count,
          COUNT(*) FILTER (WHERE f.outcome = 'DATA_GAP')::text AS data_gap_count,
          COUNT(*) FILTER (WHERE f.realised_pnl > 0 AND f.realised_pnl <= 6)::text AS small_profit_count,
+         COUNT(*) FILTER (
+           WHERE f.realised_pnl > 0 AND f.realised_pnl <= 6
+             AND f.outcome IN ('TP_FIRST','SL_FIRST')
+         )::text AS small_profit_resolved_count,
          COUNT(*) FILTER (WHERE f.realised_pnl > 0 AND f.realised_pnl <= 6 AND f.outcome = 'TP_FIRST')::text AS small_profit_tp_first_count,
          CASE
            WHEN COUNT(DISTINCT f.account_currency) FILTER (WHERE f.realised_pnl IS NOT NULL) = 1
@@ -204,7 +219,30 @@ export class ProfitProtectionExitQualityService {
          f.strategy_route,
          COUNT(*)::text AS total,
          COUNT(*) FILTER (WHERE f.outcome = 'TP_FIRST')::text AS tp_first_count,
-         COUNT(*) FILTER (WHERE f.outcome = 'SL_FIRST')::text AS sl_first_count
+         COUNT(*) FILTER (WHERE f.outcome = 'SL_FIRST')::text AS sl_first_count,
+         COUNT(*) FILTER (
+           WHERE f.realised_pnl > 0 AND f.realised_pnl <= 6
+         )::text AS small_profit_count,
+         COUNT(*) FILTER (
+           WHERE f.realised_pnl > 0 AND f.realised_pnl <= 6
+             AND f.outcome IN ('TP_FIRST','SL_FIRST')
+         )::text AS small_profit_resolved_count,
+         COUNT(*) FILTER (
+           WHERE f.realised_pnl > 0 AND f.realised_pnl <= 6
+             AND f.outcome IN ('TP_FIRST','SL_FIRST') AND f.r_delta IS NOT NULL
+         )::text AS small_profit_comparable_count,
+         COUNT(*) FILTER (
+           WHERE f.realised_pnl > 0 AND f.realised_pnl <= 6
+             AND f.outcome = 'TP_FIRST'
+         )::text AS small_profit_tp_first_count,
+         COUNT(*) FILTER (
+           WHERE f.realised_pnl > 0 AND f.realised_pnl <= 6
+             AND f.outcome = 'SL_FIRST'
+         )::text AS small_profit_sl_first_count,
+         AVG(f.r_delta) FILTER (
+           WHERE f.realised_pnl > 0 AND f.realised_pnl <= 6
+             AND f.outcome IN ('TP_FIRST','SL_FIRST')
+         )::text AS small_profit_avg_delta_r
        FROM final_rows f
        GROUP BY f.strategy_route
        ORDER BY COUNT(*) DESC, f.strategy_route ASC`,
@@ -244,6 +282,7 @@ export class ProfitProtectionExitQualityService {
     const tpFirstCount = integer(summaryRow.tp_first_count);
     const slFirstCount = integer(summaryRow.sl_first_count);
     const smallProfitCount = integer(summaryRow.small_profit_count);
+    const smallProfitResolvedCount = integer(summaryRow.small_profit_resolved_count);
     const smallProfitTpFirstCount = integer(summaryRow.small_profit_tp_first_count);
 
     return {
@@ -262,9 +301,12 @@ export class ProfitProtectionExitQualityService {
         neitherCount: integer(summaryRow.neither_count),
         dataGapCount: integer(summaryRow.data_gap_count),
         smallProfitCount,
+        smallProfitResolvedCount,
         smallProfitTpFirstCount,
         smallProfitTpFirstRate:
-          smallProfitCount > 0 ? smallProfitTpFirstCount / smallProfitCount : null,
+          smallProfitResolvedCount > 0
+            ? smallProfitTpFirstCount / smallProfitResolvedCount
+            : null,
         accountCurrency:
           typeof summaryRow.account_currency === 'string' ? summaryRow.account_currency : null,
         actualRealisedPnl: decimal(summaryRow.actual_realised_pnl),
@@ -282,12 +324,24 @@ export class ProfitProtectionExitQualityService {
         const routeTp = integer(row.tp_first_count);
         const routeSl = integer(row.sl_first_count);
         const routeResolved = routeTp + routeSl;
+        const smallProfitResolvedCount = integer(row.small_profit_resolved_count);
+        const smallProfitTpFirstCount = integer(row.small_profit_tp_first_count);
         return {
           strategyRoute: this.coerceRoute(row.strategy_route),
           total: routeTotal,
           tpFirstCount: routeTp,
           slFirstCount: routeSl,
           tpFirstRate: routeResolved > 0 ? routeTp / routeResolved : null,
+          smallProfitCount: integer(row.small_profit_count),
+          smallProfitResolvedCount,
+          smallProfitComparableCount: integer(row.small_profit_comparable_count),
+          smallProfitTpFirstCount,
+          smallProfitSlFirstCount: integer(row.small_profit_sl_first_count),
+          smallProfitTpFirstRate:
+            smallProfitResolvedCount > 0
+              ? smallProfitTpFirstCount / smallProfitResolvedCount
+              : null,
+          smallProfitAverageRDelta: numeric(row.small_profit_avg_delta_r),
         };
       }),
       items: (itemRows ?? []).map((row) => ({
