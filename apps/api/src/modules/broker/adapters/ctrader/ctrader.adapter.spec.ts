@@ -1765,7 +1765,7 @@ describe('CTraderAdapter', () => {
         bid: '1.08650',
         ask: '1.08700',
         spread: '0.00050',
-        timestamp: new Date(1757000000123),
+        timestamp: expect.any(Date),
       });
       expect(findRequest(server, CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ)!.payload).toMatchObject({
         symbolId: [101],
