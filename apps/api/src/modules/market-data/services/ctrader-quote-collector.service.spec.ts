@@ -117,14 +117,16 @@ describe('CTraderQuoteCollectorService', () => {
       close: '1.10050',
       volume: '50',
     };
-    h.getOhlcvForConnection.mockImplementation(async (_userId, _connectionId, instrument, timeframe) => {
-      if (instrument === 'EURUSD' && timeframe === 'M1') {
-        await new Promise<void>((resolve) => {
-          releaseFirstM1 = resolve;
-        });
-      }
-      return [historicalBar];
-    });
+    h.getOhlcvForConnection.mockImplementation(
+      async (_userId, _connectionId, instrument, timeframe) => {
+        if (instrument === 'EURUSD' && timeframe === 'M1') {
+          await new Promise<void>((resolve) => {
+            releaseFirstM1 = resolve;
+          });
+        }
+        return [historicalBar];
+      },
+    );
 
     const cycle = h.service.collectOnce(OPEN_NOW);
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -151,14 +153,16 @@ describe('CTraderQuoteCollectorService', () => {
       spread: '0.00008',
       timestamp: new Date('2026-10-18T21:30:10.000Z'),
     };
-    h.getCurrentPriceForConnection.mockImplementation(async (_userId, _connectionId, instrument) => {
-      if (instrument === 'EURUSD') {
-        await new Promise<void>((resolve) => {
-          releaseQuote = resolve;
-        });
-      }
-      return { ...normalQuote, instrument };
-    });
+    h.getCurrentPriceForConnection.mockImplementation(
+      async (_userId, _connectionId, instrument) => {
+        if (instrument === 'EURUSD') {
+          await new Promise<void>((resolve) => {
+            releaseQuote = resolve;
+          });
+        }
+        return { ...normalQuote, instrument };
+      },
+    );
 
     const cycle = h.service.collectOnce(OPEN_NOW);
     await new Promise<void>((resolve) => setImmediate(resolve));
