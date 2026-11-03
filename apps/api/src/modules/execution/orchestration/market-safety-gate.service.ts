@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
 import { BrokerService } from '../../broker/broker.service';
+import type { BrokerPrice } from '../../broker/interfaces/broker-adapter.interface';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
@@ -91,7 +92,7 @@ export class MarketSafetyGateService {
     intent: ExecutionIntent,
     connection: BrokerConnection,
     orderId: string,
-  ): Promise<void> {
+  ): Promise<BrokerPrice> {
     // 1. The provable current quote (§18 — no invention on gaps).
     const quote = await this.brokerService.getCurrentPriceForConnection(
       intent.userId,
@@ -173,6 +174,8 @@ export class MarketSafetyGateService {
         );
       }
     }
+
+    return quote;
   }
 
   /** Terminally reject the order + audit, then surface the typed error. */

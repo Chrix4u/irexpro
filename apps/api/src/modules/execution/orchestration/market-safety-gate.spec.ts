@@ -79,7 +79,7 @@ describe('MarketSafetyGateService — the final pre-commitment gate (Round 6 §5
   it('passes a fresh, sane quote within deviation bounds', async () => {
     await expect(
       service.assertMarketSafeForDispatch(intent(), {} as never, 'order-1'),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(expect.objectContaining({ instrument: 'EURUSD' }));
     expect(orderService.rejectOrder).not.toHaveBeenCalled();
   });
 
@@ -131,7 +131,7 @@ describe('MarketSafetyGateService — the final pre-commitment gate (Round 6 §5
         { brokerId: 'paper-broker' } as never,
         'order-1',
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(expect.objectContaining({ instrument: 'EURUSD' }));
     expect(orderService.rejectOrder).not.toHaveBeenCalled();
   });
 
@@ -187,7 +187,7 @@ describe('MarketSafetyGateService — the final pre-commitment gate (Round 6 §5
         {} as never,
         'order-1',
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(expect.objectContaining({ instrument: 'EURUSD' }));
   });
 
   it('skips the deviation check when the intent carries no provable reference', async () => {
@@ -198,7 +198,7 @@ describe('MarketSafetyGateService — the final pre-commitment gate (Round 6 §5
     );
     await expect(
       service.assertMarketSafeForDispatch(intent({ referencePrice: null }), {} as never, 'order-1'),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(expect.objectContaining({ instrument: 'EURUSD' }));
   });
 
   it('rejects the order even when the order-store rejection itself fails (fail-closed either way)', async () => {
