@@ -182,19 +182,11 @@ export class M1TacticalMarketDataService {
     }
     const m5CloseAgeMs = latestCloseAgeMs(m5, 5, decisionTime);
     const m15CloseAgeMs = latestCloseAgeMs(m15, 15, decisionTime);
-    if (
-      m5CloseAgeMs === null ||
-      m5CloseAgeMs < 0 ||
-      m5CloseAgeMs > M5_CONTEXT_MAX_AGE_MS
-    ) {
+    if (m5CloseAgeMs === null || m5CloseAgeMs < 0 || m5CloseAgeMs > M5_CONTEXT_MAX_AGE_MS) {
       this.setReadiness(connectionId, instrument, 'BROKER_M5_CONTEXT_STALE', null, decisionTime);
       return null;
     }
-    if (
-      m15CloseAgeMs === null ||
-      m15CloseAgeMs < 0 ||
-      m15CloseAgeMs > M15_CONTEXT_MAX_AGE_MS
-    ) {
+    if (m15CloseAgeMs === null || m15CloseAgeMs < 0 || m15CloseAgeMs > M15_CONTEXT_MAX_AGE_MS) {
       this.setReadiness(connectionId, instrument, 'BROKER_M15_CONTEXT_STALE', null, decisionTime);
       return null;
     }
