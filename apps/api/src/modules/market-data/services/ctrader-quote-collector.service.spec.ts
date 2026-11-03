@@ -222,20 +222,48 @@ describe('CTraderQuoteCollectorService', () => {
     expect(m1Calls.every((call) => call[4] === 60)).toBe(true);
   });
 
-  it('warms native M5 then M15 context across all six pairs before slower H1/H4 rotation', async () => {
+  it('prioritizes fast M5/M15 context without increasing the four-request historical budget', async () => {
     const h = harness();
+    const instruments = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'];
 
-    for (let index = 0; index < 12; index += 1) {
+    for (let index = 0; index < 48; index += 1) {
       await h.service.collectOnce(new Date(OPEN_NOW.getTime() + index * 15_000));
     }
 
-    const contextCalls = h.getOhlcvForConnection.mock.calls.filter((call) => call[3] !== 'M1');
-    expect(contextCalls).toHaveLength(12);
-    expect(contextCalls.slice(0, 6).every((call) => call[3] === 'M5')).toBe(true);
-    expect(contextCalls.slice(6, 12).every((call) => call[3] === 'M15')).toBe(true);
-    expect(new Set(contextCalls.slice(0, 6).map((call) => call[2]))).toEqual(
-      new Set(['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF']),
-    );
+    const allCalls = h.getOhlcvForConnection.mock.calls;
+    const contextCalls = allCalls.filter((call) => call[3] !== 'M1');
+    expect(allCalls).toHaveLength(48 * 4);
+    expect(contextCalls).toHaveLength(48);
+    expect(contextCalls.slice(0, 8).map((call) => call[3])).toEqual([
+      'M5', 'M15', 'M5', 'H1', 'M5', 'M15', 'M5', 'H4',
+    ]);
+
+    for (const [timeframe, expectedCallsPerInstrument] of [
+      ['M5', 4], ['M15', 2], ['H1', 1], ['H4', 1],
+    ] as const) {
+      const calls = contextCalls.filter((call) => call[3] === timeframe);
+      expect(calls).toHaveLength(expectedCallsPerInstrument * instruments.length);
+      for (const instrument of instruments) {
+        expect(calls.filter((call) => call[2] === instrument)).toHaveLength(
+          expectedCallsPerInstrument,
+        );
+      }
+    }
+
+    // Six M5 pairs complete a full sweep within 12 slots (3 minutes at 15s).
+    // The old flat 24-slot schedule needed approximately 6 minutes per sweep,
+    // often exhausting M5's 10-minute completed-bar freshness budget.
+    for (const instrument of instruments) {
+      const slots = contextCalls.flatMap((call, index) =>
+        call[2] === instrument && call[3] === 'M5' ? [index] : [],
+      );
+      expect(slots).toHaveLength(4);
+      for (let index = 1; index < slots.length; index += 1) {
+        expect(slots[index]! - slots[index - 1]!).toBeLessThanOrEqual(12);
+      }
+    }
+
+    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(48 * instruments.length);
   });
 
   it('samples live spreads before historical refresh so a hung history request cannot starve quote freshness', async () => {
