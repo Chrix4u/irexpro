@@ -1696,6 +1696,10 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       await this.client.request(session.env, CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ, {
         ctidTraderAccountId: ctid,
         symbolId: [symbolId],
+        // Spotware only includes SPOT_EVENT.timestamp when explicitly requested.
+        // The freshness waiter below requires that provider timestamp to
+        // reject stale cached prices; without opt-in even valid quotes time out.
+        subscribeToSpotTimestamp: true,
       });
       subscribed = true;
       const event = await eventPromise;
