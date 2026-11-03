@@ -304,9 +304,7 @@ export class ProfitProtectionExitQualityService {
         smallProfitResolvedCount,
         smallProfitTpFirstCount,
         smallProfitTpFirstRate:
-          smallProfitResolvedCount > 0
-            ? smallProfitTpFirstCount / smallProfitResolvedCount
-            : null,
+          smallProfitResolvedCount > 0 ? smallProfitTpFirstCount / smallProfitResolvedCount : null,
         accountCurrency:
           typeof summaryRow.account_currency === 'string' ? summaryRow.account_currency : null,
         actualRealisedPnl: decimal(summaryRow.actual_realised_pnl),
@@ -338,7 +336,9 @@ export class ProfitProtectionExitQualityService {
           smallProfitTpFirstCount,
           smallProfitSlFirstCount: integer(row.small_profit_sl_first_count),
           smallProfitTpFirstRate:
-            smallProfitResolvedCount > 0 ? smallProfitTpFirstCount / smallProfitResolvedCount : null,
+            smallProfitResolvedCount > 0
+              ? smallProfitTpFirstCount / smallProfitResolvedCount
+              : null,
           smallProfitAverageRDelta: numeric(row.small_profit_avg_delta_r),
         };
       }),
