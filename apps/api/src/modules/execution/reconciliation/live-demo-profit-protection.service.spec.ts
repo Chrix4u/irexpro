@@ -2,11 +2,14 @@ import { DataSource } from 'typeorm';
 import {
   LiveDemoProfitProtectionService,
   evaluateLiveDemoAdverseProtection,
+  evaluateLiveDemoProfitLockTrendRecheck,
   evaluateLiveDemoThesisProtection,
 } from './live-demo-profit-protection.service';
 import { BrokerService } from '../../broker/broker.service';
 import { ExecutionService } from '../execution.service';
 import { TradeCloseReason } from '../entities/trade.entity';
+import { AuditService } from '../../audit/audit.service';
+import { AuditAction } from '../../../common/enums/audit-action.enum';
 
 describe('LiveDemoProfitProtectionService', () => {
   const candidate = (overrides: Record<string, unknown> = {}) => ({
@@ -37,6 +40,7 @@ describe('LiveDemoProfitProtectionService', () => {
     m1Rows: Array<Record<string, unknown>> = [],
     currentPrice = '1.11340',
     thesisRows: Array<Record<string, unknown>> = [],
+    auditService?: AuditService,
   ) {
     const query = jest.fn().mockImplementation(async (sql: string) => {
       if (sql.includes('FROM trading.trades t')) return rows;
@@ -71,7 +75,12 @@ describe('LiveDemoProfitProtectionService', () => {
       closeTrade: jest.fn().mockResolvedValue({ status: 'CLOSED' }),
     } as unknown as ExecutionService;
     return {
-      service: new LiveDemoProfitProtectionService(dataSource, brokerService, executionService),
+      service: new LiveDemoProfitProtectionService(
+        dataSource,
+        brokerService,
+        executionService,
+        auditService,
+      ),
       query,
       brokerService: brokerService as any,
       executionService: executionService as any,
@@ -92,6 +101,151 @@ describe('LiveDemoProfitProtectionService', () => {
       'user-1',
       TradeCloseReason.PROFIT_PROTECTION,
     );
+  });
+
+  it('records a causal DEMO profit-lock trend check without delaying or overriding the close', async () => {
+    const auditService = { log: jest.fn().mockResolvedValue(undefined) };
+    const m1Rows = [
+      {
+        bucket_time: new Date('2026-10-28T09:04:00.000Z'),
+        open: '1.11320',
+        high: '1.11330',
+        low: '1.11319',
+        close: '1.11329',
+        sample_count: 30,
+        positive_quote_sample_count: 30,
+        source: 'ctrader-broker-native',
+      },
+      {
+        bucket_time: new Date('2026-10-28T09:03:00.000Z'),
+        open: '1.11315',
+        high: '1.11321',
+        low: '1.11314',
+        close: '1.11320',
+        sample_count: 32,
+        positive_quote_sample_count: 32,
+        source: 'ctrader-broker-native',
+      },
+      {
+        bucket_time: new Date('2026-10-28T09:02:00.000Z'),
+        open: '1.11310',
+        high: '1.11316',
+        low: '1.11309',
+        close: '1.11315',
+        sample_count: 26,
+        positive_quote_sample_count: 26,
+        source: 'ctrader-broker-native',
+      },
+    ];
+    const thesisRows = [
+      {
+        direction: 'BUY',
+        evaluated_at: new Date('2026-10-28T09:04:40.000Z'),
+        execution_authority: 'BROKER_NATIVE',
+        blockers: [],
+        governance: {},
+        plan_b_strategy_route: 'TREND_CONTINUATION',
+        authority_executable: true,
+        expert_direction: 'BUY',
+        expert_all_broker_native: true,
+        expert_long_votes: 3,
+        expert_short_votes: 0,
+        expert_ensemble_confidence: 0.81,
+        expert_freshness_seconds: 9,
+      },
+    ];
+    const h = harness(
+      [candidate()],
+      '7.00',
+      'DEMO',
+      m1Rows,
+      '1.11340',
+      thesisRows,
+      auditService as unknown as AuditService,
+    );
+
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+
+    expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      'user-1',
+      TradeCloseReason.PROFIT_PROTECTION,
+    );
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditAction.DEMO_PROFIT_LOCK_TREND_RECHECK,
+        resourceId: 'trade-1',
+        metadata: expect.objectContaining({
+          mode: 'SHADOW_ONLY',
+          recommendation: 'HOLD_CANDIDATE',
+          reason: 'CONTINUATION_CANDIDATE',
+          originalCloseReason: TradeCloseReason.PROFIT_PROTECTION,
+          noTradeAuthority: true,
+        }),
+      }),
+    );
+    expect(
+      h.executionService.closeTrade.mock.invocationCallOrder[0],
+    ).toBeLessThan(auditService.log.mock.invocationCallOrder[0]!);
+    expect(h.query).toHaveBeenCalledWith(
+      expect.stringContaining('positive_quote_sample_count'),
+      expect.any(Array),
+    );
+  });
+
+  it('does not propose continuation on stale or backfilled-only trend evidence', () => {
+    const observedAt = new Date('2026-10-28T09:05:00.000Z');
+    const thesis = {
+      direction: 'BUY' as const,
+      evaluatedAt: new Date('2026-10-28T09:04:40.000Z'),
+      executionAuthority: 'BROKER_NATIVE',
+      blockers: [],
+      planBStrategyRoute: 'TREND_CONTINUATION' as const,
+      authorityExecutable: true,
+      trainedExpert: {
+        direction: 'BUY' as const,
+        allBrokerNative: true,
+        longVotes: 3,
+        shortVotes: 0,
+        ensembleConfidence: 0.81,
+        freshnessSeconds: 9,
+      },
+    };
+    const m1Evidence = {
+      completedBars: 3,
+      adverseBars: 0,
+      alignedLatestBodyPressure: 0.8,
+      alignedMomentum3: 0.35,
+      latestAgeSeconds: 0,
+      liveQuoteBars: 0,
+    };
+    expect(
+      evaluateLiveDemoProfitLockTrendRecheck({
+        tradeDirection: 'BUY',
+        observedAt,
+        latestThesis: thesis,
+        m1Evidence,
+      }),
+    ).toMatchObject({
+      wouldHoldIfEnabled: false,
+      reason: 'M1_LIVE_EVIDENCE_MISSING',
+    });
+    expect(
+      evaluateLiveDemoProfitLockTrendRecheck({
+        tradeDirection: 'BUY',
+        observedAt,
+        latestThesis: { ...thesis, evaluatedAt: new Date('2026-10-28T09:02:00.000Z') },
+        m1Evidence: { ...m1Evidence, liveQuoteBars: 3 },
+      }),
+    ).toMatchObject({ wouldHoldIfEnabled: false, reason: 'THESIS_STALE' });
+    expect(
+      evaluateLiveDemoProfitLockTrendRecheck({
+        tradeDirection: 'BUY',
+        observedAt,
+        latestThesis: { ...thesis, direction: 'SELL' },
+        m1Evidence: { ...m1Evidence, liveQuoteBars: 3 },
+      }),
+    ).toMatchObject({ wouldHoldIfEnabled: false, reason: 'THESIS_OPPOSES_TRADE' });
   });
 
   it('observes but does not close an M1 trade before the 0.395R rescue floor is armed', async () => {
