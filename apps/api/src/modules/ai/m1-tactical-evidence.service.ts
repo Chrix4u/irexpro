@@ -62,6 +62,12 @@ export interface M1TacticalLatestDecisionState {
   /** Read-only model drift provenance; never overrides hard risk vetoes. */
   modelDriftState?: string | null;
   modelDriftDiagnostics?: string[];
+  /** As-of broker commission research on already blocked DEMO decisions. */
+  brokerCommissionResearchReason?: string | null;
+  brokerCommissionSampleCount?: number | null;
+  brokerCommissionP90CostR?: number | null;
+  m1EstimatedNetAfterCommissionR?: number | null;
+  planBEstimatedNetAfterCommissionR?: number | null;
   demoCostBreakEvenStopPrice?: number | null;
   demoAlternativeCostR?: number | null;
 }
@@ -689,6 +695,29 @@ export class M1TacticalEvidenceService {
     const zaiDemoDiagnostics = jsonObject(governance.zaiDemoDiagnostics);
     const blockerAttribution = jsonObject(zaiDemoDiagnostics.blockerAttribution);
     const costGeometry = jsonObject(zaiDemoDiagnostics.costGeometry);
+    const costResearch = jsonObject(zaiDemoDiagnostics.historicalCommissionCostShadow);
+    const m1Commission = jsonObject(costResearch.m1);
+    const planBCommission = jsonObject(costResearch.planB);
+    // Only accept the immutable blocked-DEMO shadow result; it cannot grant
+    // execution authority and is never generated for an executable order.
+    const trustedCostResearch =
+      row.execution_authority === 'NONE' &&
+      m1Commission.mode === 'SHADOW_ONLY' &&
+      m1Commission.noTradeAuthority === true &&
+      m1Commission.modifiesExecution === false;
+    const validCostReason = new Set([
+      'CAUSAL_FEE_EVIDENCE_READY',
+      'INSUFFICIENT_PRIOR_CLOSED_TRADES',
+      'INVALID_FEE_EVIDENCE',
+      'FEE_LOOKUP_UNAVAILABLE',
+      'INVALID_SPREAD_ONLY_EXPECTANCY',
+    ]);
+    const commissionReason = trustedCostResearch
+      ? nullableString(m1Commission.reason)
+      : null;
+    const commissionReady =
+      commissionReason === 'CAUSAL_FEE_EVIDENCE_READY';
+    const commissionCount = nullableNumber(m1Commission.sampleCount);
     const trainedDirection = nullableString(trainedExpert.direction);
     return {
       instrument: String(row.instrument).trim().toUpperCase(),
@@ -736,6 +765,30 @@ export class M1TacticalEvidenceService {
           ),
         )
         .slice(0, 8),
+      brokerCommissionResearchReason:
+        commissionReason && validCostReason.has(commissionReason) ? commissionReason : null,
+      brokerCommissionSampleCount:
+        trustedCostResearch &&
+        commissionCount !== null &&
+        Number.isInteger(commissionCount) &&
+        commissionCount >= 0 &&
+        commissionCount <= 40
+          ? commissionCount
+          : null,
+      brokerCommissionP90CostR: commissionReady
+        ? nullableNumber(m1Commission.p90AdditionalCommissionAndAdverseFinancingR)
+        : null,
+      m1EstimatedNetAfterCommissionR: commissionReady
+        ? nullableNumber(m1Commission.estimatedNetAfterFeeR)
+        : null,
+      planBEstimatedNetAfterCommissionR:
+        commissionReady &&
+        planBCommission.mode === 'SHADOW_ONLY' &&
+        planBCommission.noTradeAuthority === true &&
+        planBCommission.modifiesExecution === false &&
+        planBCommission.reason === 'CAUSAL_FEE_EVIDENCE_READY'
+          ? nullableNumber(planBCommission.estimatedNetAfterFeeR)
+          : null,
       demoCostBreakEvenStopPrice: nullableNumber(costGeometry.costBreakEvenStopPriceAt010R),
       demoAlternativeCostR: nullableNumber(costGeometry.hypotheticalCostR),
     };
