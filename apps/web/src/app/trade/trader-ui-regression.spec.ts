@@ -30,6 +30,21 @@ describe('AI Trader production UI regression contract', () => {
     expect(pageSource).toContain('View all');
   });
 
+  it('renders recorded costs as a red debit without changing the middle win-rate card', () => {
+    const costsSection = pageSource.split('<span>Total costs · 24h</span>')[1]?.split('</div>')[0];
+    expect(costsSection).toContain(
+      'className={Number(realised24hExplicitCosts ?? 0) > 0 ? "is-negative" : ""}',
+    );
+    expect(costsSection).toContain('`-${realised24hExplicitCosts}`');
+    expect(costsSection).toContain('realisedCurrency');
+
+    const middleCard = pageSource
+      .split('className="ai-performance-panel__win-rate"')[1]
+      ?.split('className="ai-performance-panel__money-stat"')[0];
+    expect(middleCard).toContain('<span>24h win rate</span>');
+    expect(middleCard).toContain('<span>Trade win rate · last 20</span>');
+  });
+
   it('keeps reports discoverable and the history/report pages present', () => {
     expect(sidebarSource).toContain("label: 'Reports'");
     expect(fs.existsSync(path.join(tradeDir, 'history/page.tsx'))).toBe(true);
