@@ -54,6 +54,18 @@ describe('M1 as-of commission shadow evaluator', () => {
     }
   });
 
+  it('distinguishes a failed broker-fee lookup from an actually immature sample', () => {
+    const result = evaluateM1CausalCommissionShadow({
+      ...input,
+      evidence: null,
+      lookupFailed: true,
+    });
+    expect(result.reason).toBe('FEE_LOOKUP_UNAVAILABLE');
+    expect(result.estimatedNetAfterFeeR).toBeNull();
+    expect(result.hypotheticalNetFloorPassed).toBeNull();
+    expect(result.noTradeAuthority).toBe(true);
+  });
+
   it('rejects invalid or negative commission estimates without optimistic substitution', () => {
     for (const fee of [-0.2, Number.NaN, Number.POSITIVE_INFINITY]) {
       const result = evaluateM1CausalCommissionShadow({
