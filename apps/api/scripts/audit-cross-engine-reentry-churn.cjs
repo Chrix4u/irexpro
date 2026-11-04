@@ -24,8 +24,13 @@ const TRADES_SQL = `
   JOIN trading.trade_intents ti ON ti.id = t.trade_intent_id
     AND ti.user_id = $1 AND ti.broker_connection_id = $2
   WHERE t.user_id = $1 AND t.broker_connection_id = $2
-    AND t.opened_at >= ($3::timestamptz - interval '60 minutes')
-    AND t.opened_at <= $4::timestamptz
+    AND (
+      t.opened_at BETWEEN ($3::timestamptz - interval '60 minutes') AND $4::timestamptz
+      OR (
+        t.status = 'CLOSED'
+        AND t.closed_at BETWEEN ($3::timestamptz - interval '60 minutes') AND $4::timestamptz
+      )
+    )
     AND t.status IN ('CLOSED','OPEN')
     AND ti.strategy_code IN ('external-irexpro-m1-tactical',
                              'external-irexpro-multimodel-ensemble')
