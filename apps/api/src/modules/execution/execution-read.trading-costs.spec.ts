@@ -67,7 +67,11 @@ describe('ExecutionReadService trading-cost accounting', () => {
     const baseQuery = {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
-      clone: jest.fn().mockReturnValueOnce(pageQuery).mockReturnValueOnce(summaryQuery).mockReturnValueOnce(reasonQuery),
+      clone: jest
+        .fn()
+        .mockReturnValueOnce(pageQuery)
+        .mockReturnValueOnce(summaryQuery)
+        .mockReturnValueOnce(reasonQuery),
     };
     const repo = {
       createQueryBuilder: jest.fn().mockReturnValue(baseQuery),
