@@ -35,6 +35,8 @@ function trade(overrides: Record<string, unknown> = {}) {
     currency: 'EUR',
     originalTakeProfit: '158.2625',
     originalStopLoss: '158.1325',
+    recordedTradeTakeProfit: '158.2625',
+    recordedTradeStopLoss: '158.1325',
     entryPrice: '158.1750',
     realisedPnl: '2.14',
     commission: '-1.60',
@@ -72,7 +74,7 @@ class FakeClient {
 }
 
 describe('short-horizon profit-protection after-exit counterfactual', () => {
-  it('classifies original TP reached after early exit without assuming a broker fill', () => {
+  it('classifies closed trade target touched after early exit without assuming a broker fill', () => {
     const result = runner.classifyAfterExit({
       trade: trade(),
       snapshotAt: now,
@@ -86,15 +88,43 @@ describe('short-horizon profit-protection after-exit counterfactual', () => {
     });
   });
 
-  it('rejects invalid original stop/target geometry', () => {
+  it('rejects invalid closed-trade stop/target geometry', () => {
     expect(
       runner.classifyAfterExit({
-        trade: trade({ originalTakeProfit: '158.10' }),
+        trade: trade({ recordedTradeTakeProfit: '158.10' }),
         snapshotAt: now,
         quoteCandles: m1Quotes(15, 1),
         horizonMinutes: 15,
       }).outcome,
     ).toBe('DATA_GAP');
+  });
+
+  it('does not falsely credit an intent target if the closed trade target was not touched', () => {
+    const record = trade({ originalTakeProfit: '158.20' });
+    const result = runner.classifyAfterExit({
+      trade: record,
+      snapshotAt: now,
+      quoteCandles: m1Quotes(15),
+      horizonMinutes: 15,
+    });
+    expect(result.outcome).toBe('NEITHER');
+  });
+
+  it('reports recorded versus requested prices separately and scores the closed-trade price', async () => {
+    const client = new FakeClient([trade({ originalTakeProfit: '158.20' })], m1Quotes(15));
+    const report = await runner.runProfitProtectionShortHorizonAudit({
+      client,
+      userId,
+      connectionId,
+      since: '2026-11-04T08:00:00.000Z',
+    });
+    expect(report.items.find((x) => x.horizonMinutes === 15)).toMatchObject({
+      outcome: 'NEITHER',
+      barrierGeometrySource: 'CLOSED_TRADE_SNAPSHOT',
+      recordedTradeTakeProfit: 158.2625,
+      requestedIntentTakeProfit: 158.2,
+      differsFromRequestedIntent: true,
+    });
   });
 
   it('preserves SL first and same-candle ambiguity', () => {
@@ -162,6 +192,10 @@ describe('short-horizon profit-protection after-exit counterfactual', () => {
     expect(report.items.find((x) => x.horizonMinutes === 15)).toMatchObject({
       outcome: 'TP_FIRST',
       netAfterRecordedCosts: 0.54,
+      barrierGeometrySource: 'CLOSED_TRADE_SNAPSHOT',
+      differsFromRequestedIntent: false,
+      recordedTradeTakeProfit: 158.2625,
+      requestedIntentTakeProfit: 158.2625,
     });
     expect(report.items.find((x) => x.horizonMinutes === 30)).toMatchObject({
       outcome: 'TP_FIRST',
@@ -175,6 +209,8 @@ describe('short-horizon profit-protection after-exit counterfactual', () => {
     );
     expect(client.calls.at(-1)?.sql).toBe('COMMIT');
     expect(runner.TRADES_SQL).toContain("t.close_reason = 'PROFIT_PROTECTION'");
+    expect(runner.TRADES_SQL).toContain('t.take_profit AS "recordedTradeTakeProfit"');
+    expect(runner.TRADES_SQL).toContain('ti.take_profit AS "originalTakeProfit"');
     expect(runner.CANDLES_SQL).toContain('positive_quote_sample_count > 0');
     expect(runner.CANDLES_SQL).toContain("source = 'ctrader-broker-native'");
   });
