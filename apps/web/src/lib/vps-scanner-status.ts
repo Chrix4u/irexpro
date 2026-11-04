@@ -167,6 +167,11 @@ export interface M1TacticalStatusView {
     primaryBlockerCode?: string | null;
     modelDriftState?: string | null;
     modelDriftDiagnostics?: string[];
+    brokerCommissionResearchReason?: string | null;
+    brokerCommissionSampleCount?: number | null;
+    brokerCommissionP90CostR?: number | null;
+    m1EstimatedNetAfterCommissionR?: number | null;
+    planBEstimatedNetAfterCommissionR?: number | null;
     demoCostBreakEvenStopPrice?: number | null;
     demoAlternativeCostR?: number | null;
   } | null;
@@ -191,6 +196,23 @@ export function hasM1TacticalStatusUiShape(
   if (value.latestDecision === null) return true;
   if (!isRecord(value.latestDecision)) return false;
   const decision = value.latestDecision;
+  const commissionNumbers = [
+    "brokerCommissionSampleCount",
+    "brokerCommissionP90CostR",
+    "m1EstimatedNetAfterCommissionR",
+    "planBEstimatedNetAfterCommissionR",
+  ];
+  if (
+    commissionNumbers.some(
+      (key) =>
+        decision[key] !== undefined &&
+        decision[key] !== null &&
+        (typeof decision[key] !== "number" || !Number.isFinite(decision[key])),
+    ) ||
+    (decision.brokerCommissionResearchReason !== undefined &&
+      decision.brokerCommissionResearchReason !== null &&
+      typeof decision.brokerCommissionResearchReason !== "string")
+  ) return false;
   if (
     (decision.modelDriftState !== undefined &&
       decision.modelDriftState !== null &&
@@ -615,6 +637,28 @@ export function deriveTradeReadinessUiState(
     }
     if (driftEvidence) {
       detail += ` Drift evidence: ${driftEvidence}. This does not grant permission to trade.`;
+    }
+    const historicalCommissionR = m1Decision.brokerCommissionP90CostR;
+    const afterCommissionR = m1Decision.m1EstimatedNetAfterCommissionR;
+    if (
+      m1Decision.brokerCommissionResearchReason === "CAUSAL_FEE_EVIDENCE_READY" &&
+      typeof historicalCommissionR === "number" &&
+      Number.isFinite(historicalCommissionR) &&
+      historicalCommissionR >= 0 &&
+      typeof afterCommissionR === "number" &&
+      Number.isFinite(afterCommissionR)
+    ) {
+      const planB = m1Decision.planBEstimatedNetAfterCommissionR;
+      const planBExplanation =
+        typeof planB === "number" && Number.isFinite(planB)
+          ? ` Plan-B after commission: ${planB.toFixed(2)}R.`
+          : "";
+      detail += ` Broker-fee research: historical p90 commission/financing adds ${historicalCommissionR.toFixed(2)}R; M1 estimated net after fees is ${afterCommissionR.toFixed(2)}R.${planBExplanation} Shadow-only evidence, not trade authorization.`;
+    } else if (
+      m1Decision.brokerCommissionResearchReason === "INSUFFICIENT_PRIOR_CLOSED_TRADES" ||
+      m1Decision.brokerCommissionResearchReason === "FEE_LOOKUP_UNAVAILABLE"
+    ) {
+      detail += " Historical broker commission evidence is not yet sufficient for a reliable after-fee estimate.";
     }
     return {
       score: rounded,
