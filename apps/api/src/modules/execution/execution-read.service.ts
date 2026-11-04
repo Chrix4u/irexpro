@@ -369,7 +369,10 @@ export class ExecutionReadService {
         .select('trade.accountCurrency', 'accountCurrency')
         .addSelect('trade.closeReason', 'closeReason')
         .addSelect('COUNT(*)', 'totalTrades')
-        .addSelect('SUM(CASE WHEN trade.realisedPnl IS NOT NULL THEN 1 ELSE 0 END)', 'pnlTradeCount')
+        .addSelect(
+          'SUM(CASE WHEN trade.realisedPnl IS NOT NULL THEN 1 ELSE 0 END)',
+          'pnlTradeCount',
+        )
         .addSelect('SUM(CASE WHEN trade.realisedPnl > 0 THEN 1 ELSE 0 END)', 'wins')
         .addSelect('SUM(CASE WHEN trade.realisedPnl < 0 THEN 1 ELSE 0 END)', 'losses')
         .addSelect('SUM(CASE WHEN trade.realisedPnl = 0 THEN 1 ELSE 0 END)', 'flats')
@@ -387,7 +390,7 @@ export class ExecutionReadService {
         .orderBy('trade.accountCurrency', 'ASC')
         .addOrderBy('trade.closeReason', 'ASC')
         .getRawMany()) as ClosedTradeReasonAggregateRow[];
-  
+
       reasonBreakdown = reasonRows.map((row) => ({
         accountCurrency: row.accountCurrency,
         closeReason: row.closeReason,
