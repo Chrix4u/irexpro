@@ -54,6 +54,8 @@ export interface M1TacticalLatestDecisionState {
   trainedExpertShortVotes: number | null;
   m1TacticalRole: string | null;
   m1TimingRoute: M1TacticalDecisionRoute;
+  /** Exact persisted M1 route-classifier cause; display-only and non-authoritative. */
+  m1TimingReason: string | null;
   /** DEMO-only explanatory telemetry; never grants execution. */
   primaryBlockerGroup?: string | null;
   primaryBlockerCode?: string | null;
@@ -664,6 +666,7 @@ export class M1TacticalEvidenceService {
       trainedExpertShortVotes: nullableNumber(trainedExpert.shortVotes),
       m1TacticalRole: nullableString(governance.m1TacticalRole),
       m1TimingRoute: row.route,
+      m1TimingReason: nullableString(jsonObject(governance.routeDecision).reason),
       primaryBlockerGroup: nullableString(blockerAttribution.primaryGroup),
       primaryBlockerCode: nullableString(blockerAttribution.primaryCode),
       demoCostBreakEvenStopPrice: nullableNumber(costGeometry.costBreakEvenStopPriceAt010R),
