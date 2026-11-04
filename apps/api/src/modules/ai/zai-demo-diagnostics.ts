@@ -37,6 +37,14 @@ export function classifyZaiBlocker(code: string): ZaiBlockerGroup {
     )
   )
     return 'MARKET_DATA';
+  // Strategy-scoped loss-streak and pair/side reliability signals are NOT
+  // evidence of an account-level loss limit or exposure rejection.
+  if (
+    /M1_DEMO_RELIABILITY_|M1_MULTIMODEL_LOSS_STREAK_BRAKE|M1_DEMO_EARLY_TRANSITION_PAIR_SIDE_DEGRADED/.test(
+      code,
+    )
+  )
+    return 'RELIABILITY';
   if (
     /RISK_|EXPOSURE|KILL_SWITCH|SESSION_INACTIVE|LOSS_STREAK|POSITION|ACTIVE_SAME_SIDE/.test(code)
   )

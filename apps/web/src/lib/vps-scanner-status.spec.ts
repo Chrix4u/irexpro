@@ -325,12 +325,91 @@ describe("external provider performance runtime guard", () => {
 });
 
 describe("production trade-readiness presentation", () => {
-  const statusModule = require("./vps-scanner-status") as Record<string, unknown>;
+  const statusModule = require("./vps-scanner-status") as Record<
+    string,
+    unknown
+  >;
 
   function derive(input: Record<string, unknown>) {
     expect(typeof statusModule.deriveTradeReadinessUiState).toBe("function");
-    return (statusModule.deriveTradeReadinessUiState as (value: Record<string, unknown>) => any)(input);
+    return (
+      statusModule.deriveTradeReadinessUiState as (
+        value: Record<string, unknown>,
+      ) => any
+    )(input);
   }
+
+  it("shows the connected but unauthorized DEMO broker as the primary 9/100 blocker", () => {
+    const state = derive({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      brokerAccountType: "DEMO",
+      brokerId: "ctrader",
+      brokerAuthorizationStatus: "CONNECTED",
+      m1TacticalStatus: {
+        enabled: true,
+        phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+        lastRunAt: "2026-11-03T23:00:00.000Z",
+        lastError: null,
+        latestDecision: {
+          instrument: "EURUSD",
+          direction: "BUY",
+          route: "M1_EARLY_TRANSITION",
+          barTime: "2026-11-03T22:59:00.000Z",
+          confidence: 0.738,
+          netExpectedR: -1.48,
+          executionAuthority: "NONE",
+          blockers: ["PAPER_NET_EXPECTED_R", "DRIFT_OUT_OF_DISTRIBUTION"],
+          outcomeState: null,
+          primaryConfidence: 0.74,
+        },
+      },
+    });
+    expect(state).toMatchObject({
+      score: 9,
+      band: "WAITING",
+      headline: "DEMO broker automation inactive — new trades paused",
+      tradeExpected: false,
+      instrument: "EURUSD",
+      direction: "BUY",
+    });
+    expect(state.detail).toMatch(/not ACTIVE/i);
+  });
+
+  it("does not call a negative expectancy and drift-rejected signal a strong setup", () => {
+    const state = derive({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      brokerAccountType: "DEMO",
+      brokerId: "ctrader",
+      brokerAuthorizationStatus: "ACTIVE",
+      m1TacticalStatus: {
+        enabled: true,
+        phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+        lastRunAt: "2026-11-03T23:00:00.000Z",
+        lastError: null,
+        latestDecision: {
+          instrument: "EURUSD",
+          direction: "BUY",
+          route: "M1_EARLY_TRANSITION",
+          barTime: "2026-11-03T22:59:00.000Z",
+          confidence: 0.738,
+          netExpectedR: -1.48,
+          executionAuthority: "NONE",
+          blockers: ["PAPER_NET_EXPECTED_R", "DRIFT_OUT_OF_DISTRIBUTION"],
+          outcomeState: null,
+          primaryConfidence: 0.74,
+          primaryBlockerGroup: "MODEL_EXPECTANCY",
+        },
+      },
+    });
+    expect(state).toMatchObject({
+      headline: "Negative after-cost expectancy — trade rejected",
+      tradeExpected: false,
+    });
+    expect(state.score).toBeLessThan(70);
+    expect(state.detail).toContain("-1.48R");
+  });
 
   it("never enters the green zone when backend PAPER execution is blocked", () => {
     const status = JSON.parse(JSON.stringify(VALID_STATUS));
@@ -353,13 +432,21 @@ describe("production trade-readiness presentation", () => {
     };
 
     expect(
-      derive({ automationOn: true, scannerStatus: status, fastMarkState: "LIVE" }),
+      derive({
+        automationOn: true,
+        scannerStatus: status,
+        fastMarkState: "LIVE",
+      }),
     ).toMatchObject({
       band: "FORMING",
       tradeExpected: false,
     });
     expect(
-      derive({ automationOn: true, scannerStatus: status, fastMarkState: "LIVE" }).score,
+      derive({
+        automationOn: true,
+        scannerStatus: status,
+        fastMarkState: "LIVE",
+      }).score,
     ).toBeLessThan(70);
   });
 
@@ -702,7 +789,11 @@ describe("production trade-readiness presentation", () => {
     status.marketSchedule.reason = "WEEKEND";
 
     expect(
-      derive({ automationOn: true, scannerStatus: status, fastMarkState: "LIVE" }),
+      derive({
+        automationOn: true,
+        scannerStatus: status,
+        fastMarkState: "LIVE",
+      }),
     ).toMatchObject({
       band: "WAITING",
       tradeExpected: false,
@@ -712,7 +803,11 @@ describe("production trade-readiness presentation", () => {
 
   it("shows AI stopped instead of implying a setup can execute", () => {
     expect(
-      derive({ automationOn: false, scannerStatus: VALID_STATUS, fastMarkState: "LIVE" }),
+      derive({
+        automationOn: false,
+        scannerStatus: VALID_STATUS,
+        fastMarkState: "LIVE",
+      }),
     ).toMatchObject({
       score: 0,
       band: "WAITING",
@@ -721,7 +816,6 @@ describe("production trade-readiness presentation", () => {
     });
   });
 });
-
 
 describe("active multi-model execution presentation", () => {
   const status = {

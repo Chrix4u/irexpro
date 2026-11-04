@@ -52,8 +52,26 @@ describe('z.ai DEMO diagnostic telemetry (never changes execution)', () => {
 
   it('separates actual market, account, and timing blockers', () => {
     expect(classifyZaiBlocker('BROKER_M1_STALE')).toBe('MARKET_DATA');
-    expect(classifyZaiBlocker('M1_MULTIMODEL_LOSS_STREAK_BRAKE')).toBe('RISK_OR_ACCOUNT');
+    expect(classifyZaiBlocker('M1_MULTIMODEL_LOSS_STREAK_BRAKE')).toBe('RELIABILITY');
+    expect(classifyZaiBlocker('M1_DEMO_RELIABILITY_EARLY_LOSS_STREAK')).toBe('RELIABILITY');
+    expect(classifyZaiBlocker('ACCOUNT_RISK_EXPOSURE')).toBe('RISK_OR_ACCOUNT');
     expect(classifyZaiBlocker('MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED')).toBe('ENTRY_TIMING');
+  });
+
+  it('does not let route-specific loss streak hide genuinely negative after-cost expectancy', () => {
+    const blockers = [
+      'M1_DEMO_RELIABILITY_EARLY_LOSS_STREAK',
+      'MULTIMODEL_PLAN_B_NOT_ADMITTED',
+      'PAPER_NET_EXPECTED_R',
+      'DRIFT_OUT_OF_DISTRIBUTION',
+      'MULTIMODEL_CONTINUATION_TIMING_NOT_READY',
+    ];
+    const attribution = attributeZaiDemoBlockers(blockers);
+    expect(attribution.primaryGroup).toBe('MODEL_EXPECTANCY');
+    expect(attribution.primaryCode).toBe('PAPER_NET_EXPECTED_R');
+    expect(attribution.groups.some((group) => group.group === 'RISK_OR_ACCOUNT')).toBe(false);
+    expect(attribution.groups.some((group) => group.group === 'RELIABILITY')).toBe(true);
+    expect(attribution.modifiesExecution).toBe(false);
   });
 
   it('uses completed M5 ATR and broker P90, never exceeds a 0.10R estimated spread cost', () => {
