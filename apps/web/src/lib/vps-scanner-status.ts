@@ -212,7 +212,8 @@ export function hasM1TacticalStatusUiShape(
     (decision.brokerCommissionResearchReason !== undefined &&
       decision.brokerCommissionResearchReason !== null &&
       typeof decision.brokerCommissionResearchReason !== "string")
-  ) return false;
+  )
+    return false;
   if (
     (decision.modelDriftState !== undefined &&
       decision.modelDriftState !== null &&
@@ -641,7 +642,8 @@ export function deriveTradeReadinessUiState(
     const historicalCommissionR = m1Decision.brokerCommissionP90CostR;
     const afterCommissionR = m1Decision.m1EstimatedNetAfterCommissionR;
     if (
-      m1Decision.brokerCommissionResearchReason === "CAUSAL_FEE_EVIDENCE_READY" &&
+      m1Decision.brokerCommissionResearchReason ===
+        "CAUSAL_FEE_EVIDENCE_READY" &&
       typeof historicalCommissionR === "number" &&
       Number.isFinite(historicalCommissionR) &&
       historicalCommissionR >= 0 &&
@@ -655,10 +657,12 @@ export function deriveTradeReadinessUiState(
           : "";
       detail += ` Broker-fee research: historical p90 commission/financing adds ${historicalCommissionR.toFixed(2)}R; M1 estimated net after fees is ${afterCommissionR.toFixed(2)}R.${planBExplanation} Shadow-only evidence, not trade authorization.`;
     } else if (
-      m1Decision.brokerCommissionResearchReason === "INSUFFICIENT_PRIOR_CLOSED_TRADES" ||
+      m1Decision.brokerCommissionResearchReason ===
+        "INSUFFICIENT_PRIOR_CLOSED_TRADES" ||
       m1Decision.brokerCommissionResearchReason === "FEE_LOOKUP_UNAVAILABLE"
     ) {
-      detail += " Historical broker commission evidence is not yet sufficient for a reliable after-fee estimate.";
+      detail +=
+        " Historical broker commission evidence is not yet sufficient for a reliable after-fee estimate.";
     }
     return {
       score: rounded,
