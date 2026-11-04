@@ -571,11 +571,11 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         estimatedBrokerCosts: fees?.estimatedCost ?? null,
         feeSampleCount: fees?.sampleCount ?? 0,
         entryPrice: positionPrices.entryPrice == null ? null : finite(positionPrices.entryPrice),
-        currentPrice: positionPrices.currentPrice == null ? null : finite(positionPrices.currentPrice),
+        currentPrice:
+          positionPrices.currentPrice == null ? null : finite(positionPrices.currentPrice),
         originalStopPrice: trade.stop_loss == null ? null : finite(trade.stop_loss),
-        takeProfitPrice: positionPrices.takeProfitPrice == null
-          ? null
-          : finite(positionPrices.takeProfitPrice),
+        takeProfitPrice:
+          positionPrices.takeProfitPrice == null ? null : finite(positionPrices.takeProfitPrice),
         latestLiveSpreadPrice: m1Evidence?.latestLiveSpreadPrice ?? null,
       });
       await this.auditService.log({
