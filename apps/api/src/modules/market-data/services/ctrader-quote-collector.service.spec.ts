@@ -78,6 +78,16 @@ function harness(
 }
 
 describe('CTraderQuoteCollectorService', () => {
+  beforeEach(() => {
+    // The collector validates real receipt time. Anchor the wall clock to
+    // deterministic broker timestamps without faking timers/setImmediate.
+    jest.spyOn(Date, 'now').mockReturnValue(OPEN_NOW.getTime());
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it('warms a bounded broker-native history slice and samples live spreads for all six majors', async () => {
     const h = harness();
 
@@ -208,6 +218,35 @@ describe('CTraderQuoteCollectorService', () => {
     await h.service.collectLiveQuotesOnce(OPEN_NOW);
 
     expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(6);
+    expect(h.upsertM1Sample).not.toHaveBeenCalled();
+  });
+
+  it('accepts a broker quote received after a delayed request even when newer than the collection start', async () => {
+    const quoteTimestamp = new Date(OPEN_NOW.getTime() + 10_000);
+    const h = harness({ quoteTimestamp });
+    jest.spyOn(Date, 'now').mockReturnValue(OPEN_NOW.getTime() + 12_000);
+
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+
+    expect(h.upsertM1Sample).toHaveBeenCalledTimes(6);
+    expect(h.upsertM1Sample.mock.calls[0]?.[2].timestamp).toEqual(quoteTimestamp);
+  });
+
+  it('still rejects broker quotes ahead of their actual receipt time', async () => {
+    const h = harness({ quoteTimestamp: new Date(OPEN_NOW.getTime() + 20_000) });
+    jest.spyOn(Date, 'now').mockReturnValue(OPEN_NOW.getTime() + 12_000);
+
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+
+    expect(h.upsertM1Sample).not.toHaveBeenCalled();
+  });
+
+  it('rejects quotes that expire while the provider request is pending', async () => {
+    const h = harness({ quoteTimestamp: new Date(OPEN_NOW.getTime() - 1_000) });
+    jest.spyOn(Date, 'now').mockReturnValue(OPEN_NOW.getTime() + 6 * 60_000);
+
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+
     expect(h.upsertM1Sample).not.toHaveBeenCalled();
   });
 

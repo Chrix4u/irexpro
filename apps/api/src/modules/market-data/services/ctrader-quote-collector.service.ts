@@ -176,7 +176,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       // Quote and history lanes must not block each other's progress. The
       // dedicated live-quote loop remains independently active as well.
       await Promise.all([
-        this.sampleLiveSpreads(userId, connectionId, now),
+        this.sampleLiveSpreads(userId, connectionId),
         this.refreshHistoricalSlice(userId, connectionId, now),
       ]);
     } catch (error) {
@@ -200,7 +200,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       const connection = await this.brokerService.findConnectionById(connectionId, userId);
       if (!CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId)) return;
       if (connection.status !== BrokerConnectionStatus.CONNECTED) return;
-      await this.sampleLiveSpreads(userId, connectionId, now);
+      await this.sampleLiveSpreads(userId, connectionId);
     } catch (error) {
       this.warnThrottled(
         `${connectionId}:live-quote`,
@@ -342,8 +342,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     });
   }
 
-  private async sampleLiveSpreads(userId: string, connectionId: string, now: Date): Promise<void> {
-    const collectorNowMs = now.getTime();
+  private async sampleLiveSpreads(userId: string, connectionId: string): Promise<void> {
     await Promise.all(
       this.instruments().map(async (instrument) => {
         try {
@@ -355,11 +354,17 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
           );
           if (!quote) return;
 
+          // Compare against receipt time, not the collection-cycle start.
+          // Spotware can return a newer broker timestamp after a delayed
+          // subscription response; rejecting it against the start clock
+          // incorrectly labels valid quotes as future-dated. This does not
+          // extend the allowed age or future-clock tolerance.
+          const receivedAtMs = Date.now();
           const providerTimestampMs = new Date(quote.timestamp).getTime();
-          const ageMs = collectorNowMs - providerTimestampMs;
+          const ageMs = receivedAtMs - providerTimestampMs;
           if (
             !Number.isFinite(providerTimestampMs) ||
-            !Number.isFinite(collectorNowMs) ||
+            !Number.isFinite(receivedAtMs) ||
             ageMs > EXECUTION_SPREAD_MAX_AGE_MS ||
             ageMs < -MAX_PROVIDER_CLOCK_AHEAD_MS
           ) {
