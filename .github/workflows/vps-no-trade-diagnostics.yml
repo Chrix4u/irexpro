@@ -377,6 +377,18 @@ jobs:
           ORDER BY opened_at DESC
           LIMIT 20;
           SQL
+            # Grade mature blocked M1 candidates as research only; never place
+            # orders or bypass the financial/risk admission pipeline.
+            if [[ -f "$staging/apps/api/scripts/audit-m1-near-miss-cohort.sql" ]]; then
+              printf '%s\n' 'm1_near_miss_quote_verified_6h:'
+              PGPASSWORD="$DB_PASSWORD" psql \
+                -X -h "$DB_HOST" -p "$db_port" -U "$DB_USER" -d "$db_name" \
+                -v ON_ERROR_STOP=1 -P pager=off -AtF '|' \
+                -f "$staging/apps/api/scripts/audit-m1-near-miss-cohort.sql" \
+                2>/dev/null || printf '%s\n' 'm1_near_miss_query_status=FAILED'
+            else
+              printf '%s\n' 'm1_near_miss_query_status=SKIPPED_NOT_DEPLOYED'
+            fi
             else
               printf '%s\n' 'm1_database_query_status=SKIPPED_MISSING_DB_ENV'
             fi
