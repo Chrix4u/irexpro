@@ -129,6 +129,9 @@ export enum AuditAction {
   TRADE_OPENED = 'TRADE_OPENED',
   TRADE_MODIFIED = 'TRADE_MODIFIED',
   TRADE_CLOSED = 'TRADE_CLOSED',
+  // Read-only DEMO profit-lock trend check, evaluated as of the close decision.
+  // A shadow HOLD recommendation never overrides an existing protective close.
+  DEMO_PROFIT_LOCK_TREND_RECHECK = 'DEMO_PROFIT_LOCK_TREND_RECHECK',
   TRADE_REJECTED = 'TRADE_REJECTED',
   TRADE_RECONCILED = 'TRADE_RECONCILED',
   // Sprint 32: idempotency — a duplicate trade intent was suppressed
