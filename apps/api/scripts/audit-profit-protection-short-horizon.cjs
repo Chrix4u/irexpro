@@ -15,6 +15,7 @@ const SCOPE_SQL = `
 const TRADES_SQL = `
   SELECT t.instrument, t.direction, t.opened_at AS "openedAt",
     t.closed_at AS "closedAt", t.fill_price AS "entryPrice",
+    t.stop_loss AS "recordedTradeStopLoss", t.take_profit AS "recordedTradeTakeProfit",
     t.exit_price AS "exitPrice",
     t.realised_pnl AS "realisedPnl", t.commission, t.swap, t.account_currency AS "currency",
     ti.stop_loss AS "originalStopLoss", ti.take_profit AS "originalTakeProfit",
@@ -58,8 +59,10 @@ function nextFullMinute(time) {
 function classifyAfterExit({ trade, quoteCandles, snapshotAt, horizonMinutes }) {
   if (!HORIZONS.includes(horizonMinutes)) throw new Error('INVALID_HORIZON');
   const nextMinute = nextFullMinute(trade.closedAt);
-  const tp = numberOrNull(trade.originalTakeProfit);
-  const sl = numberOrNull(trade.originalStopLoss);
+  // Use the same closed-trade snapshot barriers as the existing 4h tracer.
+  // Requested intent prices can differ from the broker-reconciled trade record.
+  const tp = numberOrNull(trade.recordedTradeTakeProfit);
+  const sl = numberOrNull(trade.recordedTradeStopLoss);
   const entry = numberOrNull(trade.entryPrice);
   const closeTime = new Date(trade.closedAt).getTime();
   const now = new Date(snapshotAt).getTime();
@@ -225,8 +228,18 @@ async function runProfitProtectionShortHorizonAudit({
           recordedCommission: commission,
           recordedSwap: swap,
           netAfterRecordedCosts,
-          originalTakeProfit: numberOrNull(trade.originalTakeProfit),
-          originalStopLoss: numberOrNull(trade.originalStopLoss),
+          // Preserve BOTH price geometries for auditable provenance.
+          // The primary first-barrier result uses the closed-trade record,
+          // NOT the originally requested intent price levels.
+          barrierGeometrySource: 'CLOSED_TRADE_SNAPSHOT',
+          recordedTradeTakeProfit: numberOrNull(trade.recordedTradeTakeProfit),
+          recordedTradeStopLoss: numberOrNull(trade.recordedTradeStopLoss),
+          requestedIntentTakeProfit: numberOrNull(trade.originalTakeProfit),
+          requestedIntentStopLoss: numberOrNull(trade.originalStopLoss),
+          differsFromRequestedIntent:
+            numberOrNull(trade.recordedTradeTakeProfit) !==
+              numberOrNull(trade.originalTakeProfit) ||
+            numberOrNull(trade.recordedTradeStopLoss) !== numberOrNull(trade.originalStopLoss),
           ...classifyAfterExit({
             trade,
             quoteCandles: byInstrument.get(trade.instrument) || [],
@@ -243,9 +256,9 @@ async function runProfitProtectionShortHorizonAudit({
       executionAuthority: 'NONE',
       modifiesExecution: false,
       promotionEligible: false,
-      methodology: 'NEXT_COMPLETED_BROKER_NATIVE_M1_FIRST_ORIGINAL_TP_SL_TOUCH',
+      methodology: 'NEXT_COMPLETED_BROKER_NATIVE_M1_FIRST_CLOSED_TRADE_SNAPSHOT_BARRIER',
       warning:
-        'Research only: M1 quote highs/lows not guaranteed executable bid/ask fills; partial coverage remains PENDING or DATA_GAP. Never infer actual realised P&L from hypothetical target touches.',
+        'Research only: first barriers are CLOSED TRADE SNAPSHOT levels, which may differ from the requested intent or levels at initial fill. M1 quote highs/lows are not guaranteed executable bid/ask fills; partial coverage remains PENDING or DATA_GAP. Never infer actual realised P&L from hypothetical target touches.',
       trades: trades.length,
       truncatedTrades: trades.length === maxTrades,
       quoteCandles: quoteCandles.length,
