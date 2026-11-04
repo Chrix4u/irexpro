@@ -78,7 +78,7 @@ describe('ExecutionReadService trading-cost accounting', () => {
     } as unknown as Repository<Trade>;
     const service = new ExecutionReadService(repo);
 
-    const report = await service.listClosedTradeReport(USER_ID);
+    const report = await service.listClosedTradeReport(USER_ID, { includeReasonBreakdown: true });
     const summary = report.summary as typeof report.summary & {
       grossRealisedPnl?: string | null;
       totalExplicitCosts?: string | null;
