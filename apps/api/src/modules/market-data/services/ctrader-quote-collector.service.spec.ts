@@ -238,16 +238,16 @@ describe('CTraderQuoteCollectorService', () => {
       'M5',
       'M15',
       'M5',
-      'H1',
-      'M5',
       'M15',
       'M5',
+      'M15',
+      'H1',
       'H4',
     ]);
 
     for (const [timeframe, expectedCallsPerInstrument] of [
-      ['M5', 4],
-      ['M15', 2],
+      ['M5', 3],
+      ['M15', 3],
       ['H1', 1],
       ['H4', 1],
     ] as const) {
@@ -260,16 +260,18 @@ describe('CTraderQuoteCollectorService', () => {
       }
     }
 
-    // Six M5 pairs complete a full sweep within 12 slots (3 minutes at 15s).
-    // The old flat 24-slot schedule needed approximately 6 minutes per sweep,
-    // often exhausting M5's 10-minute completed-bar freshness budget.
-    for (const instrument of instruments) {
-      const slots = contextCalls.flatMap((call, index) =>
-        call[2] === instrument && call[3] === 'M5' ? [index] : [],
-      );
-      expect(slots).toHaveLength(4);
-      for (let index = 1; index < slots.length; index += 1) {
-        expect(slots[index]! - slots[index - 1]!).toBeLessThanOrEqual(12);
+    // Both fast contexts complete a six-pair sweep within 16 historical
+    // slots (four minutes at the nominal cadence), without starving H1/H4.
+    // This reduces the old M15 24-slot sweep and stays within the M5 gate.
+    for (const timeframe of ['M5', 'M15']) {
+      for (const instrument of instruments) {
+        const slots = contextCalls.flatMap((call, index) =>
+          call[2] === instrument && call[3] === timeframe ? [index] : [],
+        );
+        expect(slots).toHaveLength(3);
+        for (let index = 1; index < slots.length; index += 1) {
+          expect(slots[index]! - slots[index - 1]!).toBeLessThanOrEqual(16);
+        }
       }
     }
 
@@ -328,6 +330,39 @@ describe('z.ai P9 cTrader historical failure telemetry', () => {
     expect(status.lastSuccessfulCollectAt['AUDUSD:M1']).toBeUndefined();
     expect(status.historicalRefreshFailures).toEqual({});
     expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(6);
+  });
+
+  it('records stale broker-native history without treating an old M5 bar as current', async () => {
+    const h = harness();
+    await h.service.collectOnce(OPEN_NOW);
+    const status = h.service.getHistoricalCollectionStatus();
+    expect(status.latestBrokerClosedBarAt['EURUSD:M5']).toBe('2026-10-18T20:00:00.000Z');
+    expect(status.staleHistoricalResponses['EURUSD:M5']).toBe(1);
+    expect(status.lastSuccessfulCollectAt['EURUSD:M5']).toBe(OPEN_NOW.toISOString());
+    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(6);
+  });
+
+  it('clears stale-response telemetry once the broker supplies a recent closed candle', async () => {
+    const h = harness();
+    await h.service.collectOnce(OPEN_NOW);
+    const recentClosedM5 = {
+      timestamp: new Date(OPEN_NOW.getTime() - 6 * 60_000),
+      open: '1.10000',
+      high: '1.10100',
+      low: '1.09900',
+      close: '1.10050',
+      volume: '50',
+    };
+    h.getOhlcvForConnection.mockResolvedValue([recentClosedM5]);
+    // The rotation returns to EURUSD:M5 after the first fast-context sweep.
+    for (let index = 1; index <= 16; index += 1) {
+      await h.service.collectOnce(new Date(OPEN_NOW.getTime() + index * 15_000));
+    }
+    const status = h.service.getHistoricalCollectionStatus();
+    expect(status.latestBrokerClosedBarAt['EURUSD:M5']).toBe(
+      recentClosedM5.timestamp.toISOString(),
+    );
+    expect(status.staleHistoricalResponses['EURUSD:M5']).toBeUndefined();
   });
 
   it('retries failed context once, never counts failure as collection success', async () => {
