@@ -186,6 +186,26 @@ describe('M1TacticalEvidenceService', () => {
             authorityPath: 'HIGH_CONVICTION_RESCUE',
             rescueVolumeCap: 0.2,
           },
+          zaiDemoDiagnostics: {
+            historicalCommissionCostShadow: {
+              m1: {
+                mode: 'SHADOW_ONLY',
+                noTradeAuthority: true,
+                modifiesExecution: false,
+                reason: 'CAUSAL_FEE_EVIDENCE_READY',
+                sampleCount: 27,
+                p90AdditionalCommissionAndAdverseFinancingR: 0.285,
+                estimatedNetAfterFeeR: -0.0056,
+              },
+              planB: {
+                mode: 'SHADOW_ONLY',
+                noTradeAuthority: true,
+                modifiesExecution: false,
+                reason: 'CAUSAL_FEE_EVIDENCE_READY',
+                estimatedNetAfterFeeR: 0.033,
+              },
+            },
+          },
         },
         blockers: ['DRIFT_OUT_OF_DISTRIBUTION', 'M1_PHASE_ROUTE_SHADOW'],
         execution_authority: 'NONE',
@@ -226,6 +246,11 @@ describe('M1TacticalEvidenceService', () => {
       primaryBlockerCode: null,
       modelDriftState: 'OUT_OF_DISTRIBUTION',
       modelDriftDiagnostics: ['confidence:HARD_HIGH', 'extensionAtr:STRESSED_LOW'],
+      brokerCommissionResearchReason: 'CAUSAL_FEE_EVIDENCE_READY',
+      brokerCommissionSampleCount: 27,
+      brokerCommissionP90CostR: 0.285,
+      m1EstimatedNetAfterCommissionR: -0.0056,
+      planBEstimatedNetAfterCommissionR: 0.033,
       demoCostBreakEvenStopPrice: null,
       demoAlternativeCostR: null,
     });

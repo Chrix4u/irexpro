@@ -3,6 +3,7 @@ import {
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
   hasExternalProviderPerformanceUiShape,
+  hasM1TacticalStatusUiShape,
   hasVpsScannerUiShape,
 } from "./vps-scanner-status";
 
@@ -1015,6 +1016,39 @@ describe("active multi-model execution presentation", () => {
     expect(result.band).not.toBe("READY");
     expect(result.detail).toMatch(/expected return is below/i);
     expect(result.detail).toMatch(/estimated execution costs/i);
+  });
+
+  it("shows historical commission impact without presenting it as trade permission", () => {
+    const blocked = JSON.parse(JSON.stringify(status));
+    blocked.latestDecision.executionAuthority = "NONE";
+    blocked.latestDecision.multimodelExecutable = false;
+    blocked.latestDecision.blockers = ["PAPER_NET_EXPECTED_R"];
+    blocked.latestDecision.primaryBlockerGroup = "MODEL_EXPECTANCY";
+    blocked.latestDecision.brokerCommissionResearchReason =
+      "CAUSAL_FEE_EVIDENCE_READY";
+    blocked.latestDecision.brokerCommissionSampleCount = 27;
+    blocked.latestDecision.brokerCommissionP90CostR = 0.285;
+    blocked.latestDecision.m1EstimatedNetAfterCommissionR = -0.115;
+    blocked.latestDecision.planBEstimatedNetAfterCommissionR = 0.033;
+    expect(hasM1TacticalStatusUiShape(blocked)).toBe(true);
+    const result = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: blocked,
+      fastMarkState: "LIVE",
+    });
+    expect(result.tradeExpected).toBe(false);
+    expect(result.band).not.toBe("READY");
+    expect(result.detail).toContain(
+      "historical p90 commission/financing adds 0.28R",
+    );
+    expect(result.detail).toContain("M1 estimated net after fees is -0.12R");
+    expect(result.detail).toContain("Plan-B after commission: 0.03R");
+    expect(result.detail).toContain(
+      "Shadow-only evidence, not trade authorization",
+    );
+    blocked.latestDecision.brokerCommissionP90CostR = Number.POSITIVE_INFINITY;
+    expect(hasM1TacticalStatusUiShape(blocked)).toBe(false);
   });
 
   it("keeps drift-blocked multi-model readiness moving instead of pinning every setup at 49", () => {
