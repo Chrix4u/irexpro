@@ -152,6 +152,18 @@ describe('cross-engine commission-aware re-entry churn audit (research-only)', (
     });
   });
 
+  it('finds a recent close even when the prior position opened before the history buffer', () => {
+    const history = [
+      trade('old', '2026-10-31T09:00:00Z', '2026-11-04T07:59:00Z'),
+      trade('new', '2026-11-04T08:02:00Z', '2026-11-04T08:05:00Z', {
+        strategyCode: ensemble,
+      }),
+    ];
+    const report = audit.analyzeReentries(history, from, asOf);
+    expect(report.cumulativeReentryWindows['5m'].byCurrency['EUR | ALL'].entries).toBe(1);
+    expect(audit.TRADES_SQL).toContain('t.closed_at BETWEEN');
+  });
+
   it('does not treat missing commission as zero-profit evidence', () => {
     const rows = [sequence()[0], { ...sequence()[1], commission: null }];
     const r = audit.analyzeReentries(rows, from, asOf);
