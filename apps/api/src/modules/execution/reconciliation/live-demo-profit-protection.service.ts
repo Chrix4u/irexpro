@@ -229,8 +229,7 @@ export function evaluateLiveDemoProfitLockTrendRecheck(input: {
   const thesis = input.latestThesis;
   if (!thesis) return reject('NO_THESIS', null);
 
-  const thesisAgeSeconds =
-    (input.observedAt.getTime() - thesis.evaluatedAt.getTime()) / 1_000;
+  const thesisAgeSeconds = (input.observedAt.getTime() - thesis.evaluatedAt.getTime()) / 1_000;
   if (!Number.isFinite(thesisAgeSeconds) || thesisAgeSeconds < 0 || thesisAgeSeconds > 90) {
     return reject('THESIS_STALE', thesisAgeSeconds);
   }
@@ -275,11 +274,7 @@ export function evaluateLiveDemoProfitLockTrendRecheck(input: {
   ) {
     return reject('M1_LIVE_EVIDENCE_MISSING', thesisAgeSeconds);
   }
-  if (
-    m1.alignedLatestBodyPressure < 0.15 ||
-    m1.alignedMomentum3 < 0.1 ||
-    m1.adverseBars > 1
-  ) {
+  if (m1.alignedLatestBodyPressure < 0.15 || m1.alignedMomentum3 < 0.1 || m1.adverseBars > 1) {
     return reject('M1_MOMENTUM_NOT_SUPPORTIVE', thesisAgeSeconds);
   }
   return { wouldHoldIfEnabled: true, reason: 'CONTINUATION_CANDIDATE', thesisAgeSeconds };
