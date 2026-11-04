@@ -9,6 +9,8 @@ type Cohort = {
   meanNetR: number | null;
   meanGrossR: number | null;
   meanCommissionR: number | null;
+  meanHoldingMinutes: number | null;
+  earlyCloseNetLosersUnder5m: number;
 };
 type Segments = {
   byRoute: Record<string, Cohort>;
@@ -17,6 +19,7 @@ type Segments = {
   byRouteExtension: Record<string, Cohort>;
   byRouteRegime: Record<string, Cohort>;
   byRouteExitReason: Record<string, Cohort>;
+  byRouteHoldingBin: Record<string, Cohort>;
 };
 type Audit = {
   artifact: string;
@@ -100,6 +103,24 @@ describe('research-only entry-stopout calibration', () => {
     expect(Object.keys(x.train.byRoute)).not.toContain('USD | TREND_CONTINUATION');
     expect(Object.keys(x.holdout.byPairSide).every((k) => k.includes(' | '))).toBe(true);
   });
+  it('quantifies rapid after-fee losing exits without treating them as full stop losses', () => {
+    const x = research.analyze([
+      trade(0, {
+        closeReason: 'AI_CLOSE_SIGNAL',
+        closedAt: new Date(Date.parse('2026-11-02T00:00:00Z') + 3 * 60000).toISOString(),
+        realisedPnl: '-2',
+      }),
+      trade(1, { closeReason: 'PROFIT_PROTECTION' }),
+      trade(2, { closeReason: 'AI_CLOSE_SIGNAL', realisedPnl: '-3' }),
+    ]);
+    expect(x.entireCohort).toMatchObject({
+      matched: 3,
+      earlyCloseNetLosersUnder5m: 1,
+      stopouts: 0,
+    });
+    expect(x.train.byRouteHoldingBin).toBeDefined();
+  });
+
   it('excludes missing fee and invalid risk from performance estimates', () => {
     const x = research.analyze([
       trade(0, { commission: null }),
