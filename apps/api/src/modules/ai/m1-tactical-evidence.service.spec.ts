@@ -168,7 +168,11 @@ describe('M1TacticalEvidenceService', () => {
             netExpectedR: 0.318,
             paperExecutionEligible: true,
             driftState: 'OUT_OF_DISTRIBUTION',
-            driftDiagnostics: ['confidence:HARD_HIGH', 'extensionAtr:STRESSED_LOW', 'secret:INVALID'],
+            driftDiagnostics: [
+              'confidence:HARD_HIGH',
+              'extensionAtr:STRESSED_LOW',
+              'secret:INVALID',
+            ],
           },
           multimodelTrainedExpert: {
             state: 'CONFIRM',
