@@ -712,11 +712,8 @@ export class M1TacticalEvidenceService {
       'FEE_LOOKUP_UNAVAILABLE',
       'INVALID_SPREAD_ONLY_EXPECTANCY',
     ]);
-    const commissionReason = trustedCostResearch
-      ? nullableString(m1Commission.reason)
-      : null;
-    const commissionReady =
-      commissionReason === 'CAUSAL_FEE_EVIDENCE_READY';
+    const commissionReason = trustedCostResearch ? nullableString(m1Commission.reason) : null;
+    const commissionReady = commissionReason === 'CAUSAL_FEE_EVIDENCE_READY';
     const commissionCount = nullableNumber(m1Commission.sampleCount);
     const trainedDirection = nullableString(trainedExpert.direction);
     return {
