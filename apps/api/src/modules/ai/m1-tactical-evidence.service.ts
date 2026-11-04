@@ -41,6 +41,8 @@ export interface M1TacticalLatestDecisionState {
   primaryConfidence: number | null;
   primaryNetExpectedR: number | null;
   planBRoute: string | null;
+  planBRegime: string | null;
+  planBRegimeAllowed: boolean | null;
   planBPaperAdmitted: boolean | null;
   multimodelExecutable: boolean | null;
   multimodelAuthorityPath: string | null;
@@ -641,6 +643,11 @@ export class M1TacticalEvidenceService {
       primaryConfidence: nullableNumber(multimodelEnsemble.ensembleScore),
       primaryNetExpectedR: nullableNumber(multimodelGovernance.netExpectedR),
       planBRoute: nullableString(multimodelEnsemble.strategyRoute),
+      planBRegime: nullableString(multimodelEnsemble.regime),
+      planBRegimeAllowed:
+        typeof multimodelEnsemble.regimeAllowed === 'boolean'
+          ? multimodelEnsemble.regimeAllowed
+          : null,
       planBPaperAdmitted:
         typeof multimodelEnsemble.paperAdmitted === 'boolean'
           ? multimodelEnsemble.paperAdmitted
