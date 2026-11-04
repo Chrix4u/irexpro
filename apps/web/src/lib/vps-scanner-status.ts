@@ -165,6 +165,8 @@ export interface M1TacticalStatusView {
     m1TimingReason?: string | null;
     primaryBlockerGroup?: string | null;
     primaryBlockerCode?: string | null;
+    modelDriftState?: string | null;
+    modelDriftDiagnostics?: string[];
     demoCostBreakEvenStopPrice?: number | null;
     demoAlternativeCostR?: number | null;
   } | null;
@@ -189,6 +191,14 @@ export function hasM1TacticalStatusUiShape(
   if (value.latestDecision === null) return true;
   if (!isRecord(value.latestDecision)) return false;
   const decision = value.latestDecision;
+  if (
+    (decision.modelDriftState !== undefined &&
+      decision.modelDriftState !== null &&
+      typeof decision.modelDriftState !== "string") ||
+    (decision.modelDriftDiagnostics !== undefined &&
+      (!isStringArray(decision.modelDriftDiagnostics) ||
+        decision.modelDriftDiagnostics.length > 8))
+  ) return false;
   return (
     typeof decision.instrument === "string" &&
     (decision.direction === "BUY" || decision.direction === "SELL") &&
@@ -228,6 +238,34 @@ function routeLabel(value: string | null | undefined): string {
   return phrase
     ? phrase.charAt(0).toUpperCase() + phrase.slice(1)
     : "Awaiting route";
+}
+
+/** Explain persisted model-feature deviations without treating confidence as execution approval. */
+function driftEvidenceLabel(diagnostics: string[] | undefined): string | null {
+  if (!Array.isArray(diagnostics) || diagnostics.length === 0) return null;
+  const features: Record<string, string> = {
+    confidence: "model confidence",
+    extensionAtr: "price extension versus ATR",
+    volatilityScore: "market volatility",
+    emaSeparation: "moving-average separation",
+    mtfStrength: "higher-timeframe strength",
+    rsi14: "RSI",
+    directionalMomentumAtr: "directional momentum versus ATR",
+  };
+  const reasons: Record<string, string> = {
+    HARD_HIGH: "above the hard validation range",
+    HARD_LOW: "below the hard validation range",
+    STRESSED_HIGH: "above the usual validation range",
+    STRESSED_LOW: "below the usual validation range",
+    INVALID: "not a valid numeric observation",
+  };
+  const labels = diagnostics.slice(0, 3).flatMap((diagnostic) => {
+    const [feature, reason] = diagnostic.split(":");
+    return features[feature] && reasons[reason]
+      ? [`${features[feature]} ${reasons[reason]}`]
+      : [];
+  });
+  return labels.length ? labels.join("; ") : null;
 }
 
 function percentLabel(value: number | null | undefined): string {
@@ -566,10 +604,16 @@ export function deriveTradeReadinessUiState(
         "An account-risk, exposure, loss-streak, or session guard is preventing this entry.";
     }
 
+    const driftEvidence = driftBlocked
+      ? driftEvidenceLabel(m1Decision.modelDriftDiagnostics)
+      : null;
     const afterCostRejected =
       blockers.includes("PAPER_NET_EXPECTED_R") && m1Decision.netExpectedR <= 0;
     if (afterCostRejected) {
       detail = `The estimated net return is ${m1Decision.netExpectedR.toFixed(2)}R after costs; the entry does not have positive expected value. Directional confidence and the meter score are not evidence of profitability. Other model and timing vetoes may also apply.`;
+    }
+    if (driftEvidence) {
+      detail += ` Drift evidence: ${driftEvidence}. This does not grant permission to trade.`;
     }
     return {
       score: rounded,
