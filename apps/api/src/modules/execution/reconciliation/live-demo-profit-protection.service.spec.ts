@@ -212,12 +212,7 @@ describe('LiveDemoProfitProtectionService', () => {
       String(call[0]).includes('past_fees'),
     );
     expect(String(feeSql?.[0])).toContain('t.closed_at < $4::timestamptz');
-    expect(feeSql?.[1]).toEqual([
-      'conn-1',
-      'EURUSD',
-      'EUR',
-      '2026-10-28T09:05:00.000Z',
-    ]);
+    expect(feeSql?.[1]).toEqual(['conn-1', 'EURUSD', 'EUR', '2026-10-28T09:05:00.000Z']);
   });
 
   it('does not propose continuation on stale or backfilled-only trend evidence', () => {
