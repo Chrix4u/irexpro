@@ -326,6 +326,68 @@ export default function ProfitProtectionExitQualityPage() {
               </section>
             ) : null}
 
+            <section className="history-table-card" aria-labelledby="exit-alternatives-title">
+              <div className="history-table-card__head">
+                <div>
+                  <h2 id="exit-alternatives-title">Protected runner vs partial profit</h2>
+                  <span>
+                    Prospective DEMO-only research. Compare closing immediately with a
+                    protected runner and a 50% partial exit. Monetary comparisons
+                    remain separate by account currency.
+                  </span>
+                </div>
+              </div>
+              {summary.alternativesByCurrency?.length ? (
+                <div className="history-table-wrap">
+                  <table className="history-table">
+                    <thead>
+                      <tr>
+                        <th>Currency</th>
+                        <th>Graded exits</th>
+                        <th>Runner eligible</th>
+                        <th>Runner better / comparable</th>
+                        <th>Runner avg net Δ</th>
+                        <th>Half partial better / comparable</th>
+                        <th>Half partial avg net Δ</th>
+                        <th>Runner / partial gaps</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {summary.alternativesByCurrency.map((item) => (
+                        <tr key={item.accountCurrency}>
+                          <td>{item.accountCurrency}</td>
+                          <td>{item.gradedTrades}</td>
+                          <td>{item.runnerCandidates}</td>
+                          <td>{item.runnerBetter} / {item.runnerComparable}</td>
+                          <td className={item.runnerAverageNetDelta != null && Number(item.runnerAverageNetDelta) > 0 ? 'history-pnl--positive' : item.runnerAverageNetDelta != null && Number(item.runnerAverageNetDelta) < 0 ? 'history-pnl--negative' : ''}>
+                            {item.runnerAverageNetDelta != null && Number(item.runnerAverageNetDelta) > 0 ? '+' : ''}
+                            {money(item.runnerAverageNetDelta, item.accountCurrency)}
+                          </td>
+                          <td>{item.partialBetter} / {item.partialComparable}</td>
+                          <td className={item.partialAverageNetDelta != null && Number(item.partialAverageNetDelta) > 0 ? 'history-pnl--positive' : item.partialAverageNetDelta != null && Number(item.partialAverageNetDelta) < 0 ? 'history-pnl--negative' : ''}>
+                            {item.partialAverageNetDelta != null && Number(item.partialAverageNetDelta) > 0 ? '+' : ''}
+                            {money(item.partialAverageNetDelta, item.accountCurrency)}
+                          </td>
+                          <td>{item.runnerDataGaps} / {item.partialDataGaps}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="exit-quality-report__route-disclaimer">
+                  No fully graded alternative-exit research is available for these filters.
+                  This does not mean the strategies have passed or failed.
+                </p>
+              )}
+              <p className="exit-quality-report__route-disclaimer">
+                Net Δ values are hypothetical, account-currency price-path estimates after
+                recorded costs and an additional partial-close allowance. Only resolved
+                TP/SL-first scenarios are compared. They are not realised returns or
+                proof that broker-side stop modification or partial accounting is safe.
+              </p>
+            </section>
+
             <section className="history-table-card">
               <div className="history-table-card__head">
                 <div>
