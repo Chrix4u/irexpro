@@ -2072,6 +2072,8 @@ describe('M1 professional v8 DEMO promotion', () => {
       expect.objectContaining({ brokerConnectionId: 'conn-1' }),
     );
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    // Commission research cannot delay or gate an already-executable DEMO trade.
+    expect(h.loadPriorClosedCommissionRiskR).not.toHaveBeenCalled();
     expect(h.receiveSignal.mock.calls[0]![0].metadata).toEqual(
       expect.objectContaining({
         m1_scout_broker_native_reliability_samples: 0,
