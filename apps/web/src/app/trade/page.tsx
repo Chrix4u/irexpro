@@ -2864,6 +2864,15 @@ export default function AiTradingPage() {
   // Explicit costs are authoritative only when the account-scoped 24h report
   // is available; execution rows cannot reliably reconstruct all broker fees.
   const realised24hExplicitCosts = authoritative24hSummary?.totalExplicitCosts ?? null;
+  // All-in loss is the gross losing-trade P&L plus the explicit broker costs
+  // across ALL closed trades. Compute with exact decimal strings, using only
+  // the same authoritative 24h report to avoid mixing inconsistent windows.
+  const realised24hAllInLoss = authoritative24hSummary
+    ? sumDecimalStrings([
+        authoritative24hSummary.grossLoss,
+        authoritative24hSummary.totalExplicitCosts,
+      ])
+    : null;
   const realised24hAverageWin =
     authoritative24hSummary?.averageWin ?? recentExecutionActivity.averageWin;
   const realised24hAverageLoss =
@@ -3180,7 +3189,16 @@ export default function AiTradingPage() {
                     <div className="ai-performance-panel__stat-divider" aria-hidden="true" />
                     <div className="ai-performance-panel__secondary-stat">
                       <span>Total costs · 24h</span>
-                      <strong>{money(realised24hExplicitCosts, realisedCurrency)}</strong>
+                      <strong className={Number(realised24hExplicitCosts ?? 0) > 0 ? "is-negative" : ""}>
+                        {realised24hExplicitCosts == null
+                          ? "—"
+                          : money(
+                              Number(realised24hExplicitCosts) > 0
+                                ? `-${realised24hExplicitCosts}`
+                                : realised24hExplicitCosts,
+                              realisedCurrency,
+                            )}
+                      </strong>
                       <small>
                         {authoritative24hSummary
                           ? "Commission and financing; spread is already included in trade P&L"
@@ -3198,15 +3216,20 @@ export default function AiTradingPage() {
                     </small>
                     <div className="ai-performance-panel__stat-divider" aria-hidden="true" />
                     <div className="ai-performance-panel__secondary-stat">
-                      <span>Trade win rate · last 20</span>
-                      <strong>
-                        {realisedExecutionWindow.winRate == null
+                      <span>Total loss including costs · 24h</span>
+                      <strong className={`ai-performance-panel__all-in-loss ${Number(realised24hAllInLoss ?? 0) > 0 ? "is-negative" : Number(realised24hAllInLoss ?? 0) < 0 ? "is-positive" : ""}`}>
+                        {realised24hAllInLoss == null
                           ? "—"
-                          : `${(realisedExecutionWindow.winRate * 100).toFixed(0)}%`}
+                          : money(
+                              Number(realised24hAllInLoss) > 0
+                                ? `-${realised24hAllInLoss}`
+                                : Number(realised24hAllInLoss) < 0
+                                  ? realised24hAllInLoss.replace(/^-/, "")
+                                  : realised24hAllInLoss,
+                              realisedCurrency,
+                            )}
                       </strong>
-                      <small>
-                        {realisedExecutionWindow.wins}W / {realisedExecutionWindow.losses}L · Net {signedMoney(realisedExecutionWindow.netRealisedPnl, realisedCurrency)}
-                      </small>
+                      <small>Gross trading losses plus commission and financing; no double-counting</small>
                     </div>
                   </div>
                   <div className="ai-performance-panel__money-stat">
