@@ -144,6 +144,41 @@ describe('cTrader current-price freshness', () => {
     expect(unsubscribed).toHaveLength(1);
   });
 
+  it('accepts safe decimal-string account and symbol IDs without weakening price freshness', async () => {
+    const adapter = new CTraderAdapter(client);
+    await adapter.connect({ apiKey: ACCESS_TOKEN, accountId: ACCOUNT_ID });
+    const pending = adapter.getCurrentPrice('EUR/USD');
+    await waitFor(() =>
+      server.requests.some(
+        (request) => request.payloadType === CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ,
+      ),
+    );
+    const transport = client.createdTransports[0]!;
+    // Another account with a string-encoded int64 must not satisfy our waiter.
+    transport.receive({
+      payloadType: CTRADER_PAYLOAD_TYPE.SPOT_EVENT,
+      payload: {
+        ctidTraderAccountId: String(CTID + 1),
+        symbolId: String(SYMBOL_ID),
+        bid: 109_000,
+        ask: 109_500,
+        timestamp: Date.now(),
+      },
+    });
+    expect(await pendingAfter(pending, 40)).toBe(true);
+    transport.receive({
+      payloadType: CTRADER_PAYLOAD_TYPE.SPOT_EVENT,
+      payload: {
+        ctidTraderAccountId: String(CTID),
+        symbolId: String(SYMBOL_ID),
+        bid: 109_000,
+        ask: 109_500,
+        timestamp: Date.now(),
+      },
+    });
+    await expect(pending).resolves.toMatchObject({ bid: '1.09000', ask: '1.09500' });
+  });
+
   it('distinguishes a silent acknowledged spot subscription from unusable events', async () => {
     const adapter = new CTraderAdapter(client);
     await adapter.connect({ apiKey: ACCESS_TOKEN, accountId: ACCOUNT_ID });

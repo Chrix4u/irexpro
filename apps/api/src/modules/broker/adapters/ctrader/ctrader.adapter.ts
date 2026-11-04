@@ -1675,8 +1675,19 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       (message) => {
         if (message.payloadType !== CTRADER_PAYLOAD_TYPE.SPOT_EVENT) return false;
         const payload = message.payload as Partial<CtraderSpotEventPayload> | undefined | null;
-        // Cross-account and cross-symbol spot events remain non-authoritative.
-        if (payload?.ctidTraderAccountId !== ctid || payload?.symbolId !== symbolId) {
+        if (!payload) return false;
+        // cTrader JSON may encode int64 account/symbol IDs as decimal strings.
+        // Parse exactly as we do for account authentication; unsafe, malformed
+        // or cross-account IDs never satisfy the waiter.
+        let eventAccountId: number;
+        let eventSymbolId: number;
+        try {
+          eventAccountId = parseCtraderId(payload?.ctidTraderAccountId, 'ctidTraderAccountId');
+          eventSymbolId = parseCtraderId(payload?.symbolId, 'symbolId');
+        } catch {
+          return false;
+        }
+        if (eventAccountId !== ctid || eventSymbolId !== symbolId) {
           return false;
         }
         rejectedSpotEvents.matching += 1;
