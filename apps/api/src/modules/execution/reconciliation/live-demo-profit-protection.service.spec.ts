@@ -184,9 +184,9 @@ describe('LiveDemoProfitProtectionService', () => {
         }),
       }),
     );
-    expect(
-      h.executionService.closeTrade.mock.invocationCallOrder[0],
-    ).toBeLessThan(auditService.log.mock.invocationCallOrder[0]!);
+    expect(h.executionService.closeTrade.mock.invocationCallOrder[0]).toBeLessThan(
+      auditService.log.mock.invocationCallOrder[0]!,
+    );
     expect(h.query).toHaveBeenCalledWith(
       expect.stringContaining('positive_quote_sample_count'),
       expect.any(Array),
