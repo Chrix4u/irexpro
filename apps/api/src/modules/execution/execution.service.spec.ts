@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException, ForbiddenException, Logger } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { AuditAction } from '../../common/enums/audit-action.enum';
 import { ExecutionService } from './execution.service';
 import { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
@@ -1180,6 +1181,38 @@ describe('ExecutionService', () => {
             realisedPnl: '30.00',
             commission: '0.00',
             swap: '0.00',
+          }),
+        }),
+      );
+    });
+
+    it.each([
+      ['FILLED', AuditAction.TRADE_CLOSED],
+      ['WORKING', AuditAction.TRADE_SUBMITTED],
+      ['UNKNOWN', AuditAction.TRADE_SUBMITTED],
+    ] as const)('records the AI close trigger in the %s order audit', async (outcome, action) => {
+      tradeRepo.findOne.mockResolvedValue(openTrade());
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome,
+        orderId: mockOrder.id,
+        avgFillPrice: '1.09000',
+        reason: 'close request timeout',
+        certainty: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+      });
+      const trigger = {
+        source: 'BROKER_ADVERSE_PROTECTION',
+        reasonCode: 'ADVERSE_THESIS_FAILED',
+      } as const;
+
+      await service.closeTrade('trade-1', 'user-1', TradeCloseReason.AI_CLOSE_SIGNAL, trigger);
+
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action,
+          resourceId: 'trade-1',
+          metadata: expect.objectContaining({
+            closeOrderId: mockOrder.id,
+            aiCloseTrigger: trigger,
           }),
         }),
       );

@@ -61,6 +61,16 @@ export interface AiPositionCloseResult {
   detail?: string;
 }
 
+interface AiCloseTrigger {
+  source:
+    | 'AI_EXIT_ORCHESTRATOR'
+    | 'BROKER_ADVERSE_PROTECTION'
+    | 'BROKER_THESIS_PROTECTION'
+    | 'DEMO_DRAWDOWN_GUARD'
+    | 'M1_CONFIRMED_DIRECTION_FLIP';
+  reasonCode?: string;
+}
+
 /**
  * ExecutionService — Live trade execution engine (position aggregate owner).
  *
@@ -1084,7 +1094,12 @@ export class ExecutionService {
    *   the reconciliation job to resolve (previously the error propagated and
    *   the trade silently stayed OPEN with a possibly-closed provider side).
    */
-  async closeTrade(tradeId: string, userId: string, reason: TradeCloseReason): Promise<Trade> {
+  async closeTrade(
+    tradeId: string,
+    userId: string,
+    reason: TradeCloseReason,
+    aiCloseTrigger?: AiCloseTrigger,
+  ): Promise<Trade> {
     const trade = await this.tradeRepo.findOne({ where: { id: tradeId, userId } });
     if (!trade) {
       throw new ForbiddenException(`Trade ${tradeId} not found or does not belong to user`);
@@ -1140,6 +1155,8 @@ export class ExecutionService {
     };
 
     const dispatch = await this.orchestrator.dispatchOrder(closeIntent, connection);
+    const triggerMetadata =
+      reason === TradeCloseReason.AI_CLOSE_SIGNAL && aiCloseTrigger ? { aiCloseTrigger } : {};
 
     if (dispatch.outcome === 'FILLED') {
       // Persist every close economic the provider can prove AT the CLOSED
@@ -1182,6 +1199,7 @@ export class ExecutionService {
           externalOrderId: trade.externalOrderId,
           closeOrderId: dispatch.orderId,
           casOutcome: outcome.outcome,
+          ...triggerMetadata,
         },
       });
 
@@ -1257,6 +1275,7 @@ export class ExecutionService {
         requestedCloseReason: reason,
         casOutcome: outcome.outcome,
         dispatchCertainty: closeCertainty,
+        ...triggerMetadata,
       },
       severity: AuditSeverity.CRITICAL,
     });

@@ -2206,7 +2206,9 @@ describe('M1 V8 multi-model DEMO authority', () => {
       brokerConnectionId: 'demo-conn-2',
       instrument: 'EURUSD',
     });
-    expect(h.closeTrade).toHaveBeenCalledWith('trade-old-sell', 'user-1', 'AI_CLOSE_SIGNAL');
+    expect(h.closeTrade).toHaveBeenCalledWith('trade-old-sell', 'user-1', 'AI_CLOSE_SIGNAL', {
+      source: 'M1_CONFIRMED_DIRECTION_FLIP',
+    });
     expect(h.receiveSignal).not.toHaveBeenCalled();
     const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
     expect(recorded?.executionAuthority).toBe('NONE');
