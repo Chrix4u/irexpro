@@ -10,6 +10,7 @@ describe('closed-trade exit contribution reporting', () => {
 
   it('renders close-reason net results for the entire filtered set', () => {
     expect(pageSource).toContain('Contribution by close reason');
+    expect(pageSource).toContain('includeReasonBreakdown: true');
     expect(pageSource).toContain('summary?.reasonBreakdown?.map');
     expect(pageSource).toContain('item.totalExplicitCosts');
     expect(pageSource).toContain('item.netRealisedPnl');
