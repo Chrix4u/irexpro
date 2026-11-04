@@ -1058,8 +1058,12 @@ describe("active multi-model execution presentation", () => {
     });
     expect(weakerResult.headline).toMatch(/execution blocked/i);
     expect(weakerResult.detail).toMatch(/drift.*blocked|blocked.*drift/i);
-    expect(weakerResult.detail).toContain("model confidence above the hard validation range");
-    expect(weakerResult.detail).toContain("price extension versus ATR below the usual validation range");
+    expect(weakerResult.detail).toContain(
+      "model confidence above the hard validation range",
+    );
+    expect(weakerResult.detail).toContain(
+      "price extension versus ATR below the usual validation range",
+    );
     expect(weakerResult.tradeExpected).toBe(false);
     expect(strongerResult.score).toBeGreaterThan(weakerResult.score);
   });
