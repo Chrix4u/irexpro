@@ -63,12 +63,14 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
           const observedAt = new Date(row.observed_at);
           if (!Number.isFinite(observedAt.getTime())) continue;
           const candles = await this.loadVerifiedCandles(row, observedAt);
-          const shadow = typeof row.runner_shadow === 'string'
-            ? JSON.parse(row.runner_shadow) as unknown
-            : row.runner_shadow;
-          const runner = shadow && typeof shadow === 'object' && !Array.isArray(shadow)
-            ? shadow as Record<string, unknown>
-            : {};
+          const shadow =
+            typeof row.runner_shadow === 'string'
+              ? (JSON.parse(row.runner_shadow) as unknown)
+              : row.runner_shadow;
+          const runner =
+            shadow && typeof shadow === 'object' && !Array.isArray(shadow)
+              ? (shadow as Record<string, unknown>)
+              : {};
           const price = Number(runner.indicativeProtectedStopPrice);
           const result = compareExitAlternatives({
             direction: row.direction,
@@ -77,8 +79,10 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
             exitPrice: Number(row.exit_price),
             stopPrice: Number(row.stop_loss),
             takeProfitPrice: Number(row.take_profit),
-            runnerStopPrice: runner.eligibleForFurtherResearch === true &&
-              Number.isFinite(price) && price > 0 ? price : null,
+            runnerStopPrice:
+              runner.eligibleForFurtherResearch === true && Number.isFinite(price) && price > 0
+                ? price
+                : null,
             runnerEligible: runner.eligibleForFurtherResearch === true,
             grossPnl: Number(row.realised_pnl),
             commission: Number(row.commission),
@@ -93,9 +97,7 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
         }
       }
     } catch (error) {
-      this.logger.warn(
-        `DEMO exit-alternatives cycle deferred: ${(error as Error).message}`,
-      );
+      this.logger.warn(`DEMO exit-alternatives cycle deferred: ${(error as Error).message}`);
     } finally {
       this.running = false;
     }
