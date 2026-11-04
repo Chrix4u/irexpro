@@ -774,6 +774,51 @@ export default function ClosedTradeHistoryPage() {
               </div>
             </section>
 
+            {(summary?.reasonBreakdown?.length ?? 0) > 0 && (
+              <section className="history-reason-breakdown" aria-labelledby="history-exit-contribution-title">
+                <div className="history-reason-breakdown__head">
+                  <div>
+                    <p className="workspace-hero__eyebrow">Exit performance</p>
+                    <h2 id="history-exit-contribution-title">Contribution by close reason</h2>
+                    <span>Totals cover every trade matching your filters, not only this page. Currencies remain separate.</span>
+                  </div>
+                </div>
+                <div className="history-reason-breakdown__scroll">
+                  <table className="history-reason-breakdown__table">
+                    <thead>
+                      <tr>
+                        <th>Close reason</th>
+                        <th>Currency</th>
+                        <th>Trades</th>
+                        <th>Wins / losses</th>
+                        <th>Gross P&L</th>
+                        <th>Broker costs</th>
+                        <th>Net after costs</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {summary?.reasonBreakdown?.map((item, index) => (
+                        <tr key={`${item.accountCurrency ?? 'unknown'}-${item.closeReason ?? 'unknown'}-${index}`}>
+                          <td>{labelize(item.closeReason)}</td>
+                          <td>{item.accountCurrency ?? 'Unknown'}</td>
+                          <td>{item.totalTrades}</td>
+                          <td>{item.wins}W / {item.losses}L</td>
+                          <td>{signedMoney(item.grossRealisedPnl, item.accountCurrency)}</td>
+                          <td>{signedMoney(item.totalExplicitCosts, item.accountCurrency)}</td>
+                          <td className={pnlTone(item.netRealisedPnl) === 'positive' ? 'is-positive' : pnlTone(item.netRealisedPnl) === 'negative' ? 'is-negative' : ''}>
+                            <strong>{signedMoney(item.netRealisedPnl, item.accountCurrency)}</strong>
+                            {item.pnlTradeCount < item.totalTrades && (
+                              <small>Known only · {item.totalTrades - item.pnlTradeCount} unresolved</small>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+
             <section
               className="history-table-card"
               aria-labelledby="closed-trade-table-title"
