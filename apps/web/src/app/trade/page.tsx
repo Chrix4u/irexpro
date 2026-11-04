@@ -3217,7 +3217,7 @@ export default function AiTradingPage() {
                     <div className="ai-performance-panel__stat-divider" aria-hidden="true" />
                     <div className="ai-performance-panel__secondary-stat">
                       <span>Total loss including costs · 24h</span>
-                      <strong className={Number(realised24hAllInLoss ?? 0) > 0 ? "is-negative" : Number(realised24hAllInLoss ?? 0) < 0 ? "is-positive" : ""}>
+                      <strong className={`ai-performance-panel__all-in-loss ${Number(realised24hAllInLoss ?? 0) > 0 ? "is-negative" : Number(realised24hAllInLoss ?? 0) < 0 ? "is-positive" : ""}`}>
                         {realised24hAllInLoss == null
                           ? "—"
                           : money(
