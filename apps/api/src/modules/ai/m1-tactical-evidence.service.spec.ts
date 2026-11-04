@@ -167,6 +167,8 @@ describe('M1TacticalEvidenceService', () => {
           multimodelGovernance: {
             netExpectedR: 0.318,
             paperExecutionEligible: true,
+            driftState: 'OUT_OF_DISTRIBUTION',
+            driftDiagnostics: ['confidence:HARD_HIGH', 'extensionAtr:STRESSED_LOW', 'secret:INVALID'],
           },
           multimodelTrainedExpert: {
             state: 'CONFIRM',
@@ -218,6 +220,8 @@ describe('M1TacticalEvidenceService', () => {
       m1TimingReason: 'TREND_STRUCTURE_ALIGNED',
       primaryBlockerGroup: null,
       primaryBlockerCode: null,
+      modelDriftState: 'OUT_OF_DISTRIBUTION',
+      modelDriftDiagnostics: ['confidence:HARD_HIGH', 'extensionAtr:STRESSED_LOW'],
       demoCostBreakEvenStopPrice: null,
       demoAlternativeCostR: null,
     });
