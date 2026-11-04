@@ -192,8 +192,8 @@ SELECT
   round(avg(planb_model_net_r), 3) AS mean_predicted_planb_net_r,
   round(avg(spread_adjusted_r_proxy), 3) AS mean_spread_adjusted_proxy_r,
   count(*) FILTER (WHERE prior_fee_samples >= 5 AND prior_p90_fee_r IS NOT NULL) AS episodes_with_causal_fee_evidence,
-  round(avg(prior_p90_fee_r), 3) AS mean_causal_p90_fee_r,
-  round(avg(spread_adjusted_r_proxy - prior_p90_fee_r), 3) AS mean_with_causal_p90_fees,
+  round(avg(prior_p90_fee_r)::numeric, 3) AS mean_causal_p90_fee_r,
+  round(avg(spread_adjusted_r_proxy - prior_p90_fee_r)::numeric, 3) AS mean_with_causal_p90_fees,
   -- Additional hypothetical transaction costs are explicitly stress assumptions.
   round(avg(spread_adjusted_r_proxy - 0.10), 3) AS mean_with_extra_010r_cost,
   round(avg(spread_adjusted_r_proxy - 0.20), 3) AS mean_with_extra_020r_cost,
