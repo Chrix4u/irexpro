@@ -1357,9 +1357,7 @@ describe('M1TacticalEvidenceService causal shadow pair-side outcomes', () => {
 
 describe('M1 causal cTrader commission evidence', () => {
   it('uses only prior closed DEMO trades from the same user, connection, pair and currency', async () => {
-    const query = jest.fn().mockResolvedValue([
-      { sample_count: '27', p90_fee_r: '0.285' },
-    ]);
+    const query = jest.fn().mockResolvedValue([{ sample_count: '27', p90_fee_r: '0.285' }]);
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
     const observedAt = new Date('2026-11-04T20:00:00.000Z');
     const result = await service.loadPriorClosedCommissionRiskR({
@@ -1371,9 +1369,9 @@ describe('M1 causal cTrader commission evidence', () => {
     expect(result).toEqual({ sampleCount: 27, p90FeeR: 0.285 });
     expect(query).toHaveBeenCalledTimes(1);
     const [sql, params] = query.mock.calls[0];
-    expect(sql).toContain("b.user_id = $1 AND b.id = $2");
+    expect(sql).toContain('b.user_id = $1 AND b.id = $2');
     expect(sql).toContain("b.account_type = 'DEMO'");
-    expect(sql).toContain("b.account_currency = t.account_currency");
+    expect(sql).toContain('b.account_currency = t.account_currency');
     expect(sql).toContain("t.status = 'CLOSED'");
     expect(sql).toContain('t.closed_at < $4::timestamptz');
     expect(sql).toContain("t.closed_at >= $4::timestamptz - interval '21 days'");
@@ -1390,11 +1388,13 @@ describe('M1 causal cTrader commission evidence', () => {
       { instrument: 'USDJPY\u0027;DROP', asOf: new Date('2026-11-04T20:00:00Z') },
       { instrument: 'EURUSD', asOf: new Date('invalid') },
     ]) {
-      await expect(service.loadPriorClosedCommissionRiskR({
-        userId: 'user-1',
-        brokerConnectionId: 'conn-1',
-        ...input,
-      })).resolves.toEqual({ sampleCount: 0, p90FeeR: null });
+      await expect(
+        service.loadPriorClosedCommissionRiskR({
+          userId: 'user-1',
+          brokerConnectionId: 'conn-1',
+          ...input,
+        }),
+      ).resolves.toEqual({ sampleCount: 0, p90FeeR: null });
     }
     expect(query).not.toHaveBeenCalled();
   });
@@ -1402,11 +1402,13 @@ describe('M1 causal cTrader commission evidence', () => {
   it('returns unknown rather than a zero-fee estimate when prior trade risk evidence is absent', async () => {
     const query = jest.fn().mockResolvedValue([{ sample_count: '0', p90_fee_r: null }]);
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
-    await expect(service.loadPriorClosedCommissionRiskR({
-      userId: 'user-1',
-      brokerConnectionId: 'conn-1',
-      instrument: 'EURUSD',
-      asOf: new Date('2026-11-04T20:00:00.000Z'),
-    })).resolves.toEqual({ sampleCount: 0, p90FeeR: null });
+    await expect(
+      service.loadPriorClosedCommissionRiskR({
+        userId: 'user-1',
+        brokerConnectionId: 'conn-1',
+        instrument: 'EURUSD',
+        asOf: new Date('2026-11-04T20:00:00.000Z'),
+      }),
+    ).resolves.toEqual({ sampleCount: 0, p90FeeR: null });
   });
 });
