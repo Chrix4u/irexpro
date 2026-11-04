@@ -306,13 +306,14 @@ describe('BrokerOAuthTokenLifecycleService concurrent refresh — real PostgreSQ
     expect(leasedRow?.credentialRefreshLeaseOwner).toBeTruthy();
     expect(leasedRow?.credentialGeneration).toBe(0);
     // Simulate actual expiry in PG, not a guessed elapsed wall-clock interval.
-    const expiry = await connectionRepo.createQueryBuilder()
+    const expiry = await connectionRepo
+      .createQueryBuilder()
       .update(BrokerConnection)
       .set({ credentialRefreshLeaseExpiresAt: new Date(Date.now() - 1000) })
-      .where(
-        'id = :id AND credential_refresh_lease_owner = :owner',
-        { id: CONN, owner: leasedRow!.credentialRefreshLeaseOwner },
-      )
+      .where('id = :id AND credential_refresh_lease_owner = :owner', {
+        id: CONN,
+        owner: leasedRow!.credentialRefreshLeaseOwner,
+      })
       .execute();
     expect(expiry.affected).toBe(1);
 
