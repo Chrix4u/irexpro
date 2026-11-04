@@ -816,6 +816,10 @@ function phase2Harness(
     .fn()
     .mockResolvedValue(options.duplicateOppositeIntent ?? false);
   const markRescueObservation = jest.fn().mockResolvedValue(undefined);
+  const loadPriorClosedCommissionRiskR = jest.fn().mockResolvedValue({
+    sampleCount: 27,
+    p90FeeR: 0.285,
+  });
   const loadPendingDriftCounterfactuals = jest.fn().mockResolvedValue([]);
   const markDriftCounterfactual15m = jest.fn().mockResolvedValue(undefined);
   const evidence = {
@@ -833,6 +837,7 @@ function phase2Harness(
     hasActiveM1Intent,
     hasActiveOppositeM1Intent,
     markRescueObservation,
+    loadPriorClosedCommissionRiskR,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
   } as unknown as M1TacticalEvidenceService;
@@ -928,6 +933,7 @@ function phase2Harness(
     hasActiveM1Intent,
     hasActiveOppositeM1Intent,
     markRescueObservation,
+    loadPriorClosedCommissionRiskR,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
     findBySignal,
@@ -1965,6 +1971,48 @@ describe('M1 professional v8 DEMO promotion', () => {
     expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V8');
     expect(moduleSource).toMatch(
       /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V8/,
+    );
+  });
+
+  it('records causal commission-adjusted M1 and Plan-B economics only after DEMO admission has been denied', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      macroState: 'HIGH_IMPACT_BLOCK',
+      session: {
+        id: 'demo-1',
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'demo-conn-2',
+      },
+    });
+    await driveFeatures(h, transitionFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.map((call) => call[0]);
+    const nonAbstain = recorded.filter((item) => item.route !== 'ABSTAIN');
+    expect(nonAbstain.length).toBeGreaterThan(0);
+    const withCosts = nonAbstain.find(
+      (item) => item.governance.zaiDemoDiagnostics?.historicalCommissionCostShadow?.m1,
+    );
+    expect(withCosts).toBeDefined();
+    expect(withCosts.executionAuthority).toBe('NONE');
+    expect(withCosts.governance.zaiDemoDiagnostics.historicalCommissionCostShadow).toEqual(
+      expect.objectContaining({
+        m1: expect.objectContaining({
+          mode: 'SHADOW_ONLY',
+          modifiesExecution: false,
+          sampleCount: 27,
+          p90AdditionalCommissionAndAdverseFinancingR: 0.285,
+          noTradeAuthority: true,
+        }),
+        planB: expect.objectContaining({ noTradeAuthority: true }),
+      }),
+    );
+    expect(h.loadPriorClosedCommissionRiskR).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        brokerConnectionId: 'demo-conn-2',
+        instrument: 'EURUSD',
+        asOf: expect.any(Date),
+      }),
     );
   });
 
