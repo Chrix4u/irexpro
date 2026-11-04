@@ -108,6 +108,8 @@ export interface ClosedTradeReportQuery {
   direction?: TradeExecutionDirection;
   outcome?: ClosedTradeOutcomeFilter;
   closeReason?: TradeExecutionCloseReason;
+  /** Opt in only when the full filtered exit contribution report is needed. */
+  includeReasonBreakdown?: boolean;
 }
 
 export interface ClosedTradeCurrencySummaryView {
