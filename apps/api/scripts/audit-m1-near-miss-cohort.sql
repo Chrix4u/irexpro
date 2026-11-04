@@ -9,6 +9,9 @@
 -- costR is an estimated spread cost and may omit commission, financing,
 -- stop slippage, exchange-rate conversion, and partial-fill costs.
 -- Stress rows show how easily that assumption can change the conclusion.
+-- Prior p90 broker fees use at most the 40 most recent CLOSED trades before
+-- each decision: same DEMO connection, instrument, and account currency.
+-- Under five original risk-allocation samples means UNKNOWN, not zero cost.
 BEGIN TRANSACTION READ ONLY;
 SET LOCAL statement_timeout = '30s';
 
@@ -16,6 +19,7 @@ WITH eligible AS (
   SELECT
     t.id,
     t.broker_connection_id,
+    b.account_currency AS account_currency,
     t.instrument,
     t.direction,
     t.route,
@@ -57,7 +61,8 @@ leaders AS (
 ),
 paths AS (
   SELECT d.*, q.bars_observed, q.first_bar_time, q.last_bar_time,
-    q.distinct_bars_observed, q.first_open, q.last_close, q.first_target_time, q.first_stop_time
+    q.distinct_bars_observed, q.first_open, q.last_close, q.first_target_time, q.first_stop_time,
+    fees.prior_fee_samples, fees.prior_p90_fee_r
   FROM leaders d
   LEFT JOIN LATERAL (
     WITH candles AS (
@@ -98,6 +103,34 @@ paths AS (
       ) AS first_stop_time
     FROM candles
   ) q ON true
+  LEFT JOIN LATERAL (
+    SELECT count(*) AS prior_fee_samples,
+      percentile_cont(0.9) WITHIN GROUP (ORDER BY fee_r) AS prior_p90_fee_r
+    FROM (
+      SELECT (abs(h.commission) + greatest(0, -coalesce(h.swap, 0))) /
+        nullif(coalesce(
+          CASE WHEN a.sizing_inputs ->> 'finalRiskAtStop' ~ '^[0-9]+([.][0-9]+)?$'
+            THEN (a.sizing_inputs ->> 'finalRiskAtStop')::numeric END,
+          CASE WHEN a.sizing_inputs ->> 'riskAmount' ~ '^[0-9]+([.][0-9]+)?$'
+            THEN (a.sizing_inputs ->> 'riskAmount')::numeric END
+        ), 0) AS fee_r
+      FROM trading.trades h
+      LEFT JOIN LATERAL (
+        SELECT sizing_inputs FROM trading.capital_allocations ca
+        WHERE ca.trade_intent_id = h.trade_intent_id
+        ORDER BY ca.created_at DESC LIMIT 1
+      ) a ON true
+      WHERE h.broker_connection_id = d.broker_connection_id
+        AND h.instrument = d.instrument
+        AND h.account_currency = d.account_currency
+        AND h.status = 'CLOSED'
+        AND h.commission IS NOT NULL
+        AND h.closed_at < d.evaluated_at
+        AND h.closed_at >= d.evaluated_at - interval '21 days'
+      ORDER BY h.closed_at DESC LIMIT 40
+    ) historic
+    WHERE fee_r IS NOT NULL AND fee_r >= 0
+  ) fees ON true
 ),
 graded AS (
   SELECT
@@ -105,6 +138,8 @@ graded AS (
     m1_model_net_r,
     planb_model_net_r,
     planb_admitted,
+    prior_fee_samples,
+    CASE WHEN prior_fee_samples >= 5 THEN prior_p90_fee_r ELSE NULL END AS prior_p90_fee_r,
     CASE
       WHEN bars_observed <> 15
         OR distinct_bars_observed <> 15
@@ -156,6 +191,9 @@ SELECT
   round(avg(m1_model_net_r), 3) AS mean_predicted_m1_net_r,
   round(avg(planb_model_net_r), 3) AS mean_predicted_planb_net_r,
   round(avg(spread_adjusted_r_proxy), 3) AS mean_spread_adjusted_proxy_r,
+  count(*) FILTER (WHERE prior_fee_samples >= 5 AND prior_p90_fee_r IS NOT NULL) AS episodes_with_causal_fee_evidence,
+  round(avg(prior_p90_fee_r), 3) AS mean_causal_p90_fee_r,
+  round(avg(spread_adjusted_r_proxy - prior_p90_fee_r), 3) AS mean_with_causal_p90_fees,
   -- Additional hypothetical transaction costs are explicitly stress assumptions.
   round(avg(spread_adjusted_r_proxy - 0.10), 3) AS mean_with_extra_010r_cost,
   round(avg(spread_adjusted_r_proxy - 0.20), 3) AS mean_with_extra_020r_cost,
