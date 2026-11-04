@@ -175,6 +175,7 @@ describe('ExecutionReadService', () => {
       direction: 'SELL',
       outcome: 'LOSS',
       closeReason: 'STOP_LOSS_HIT',
+      includeReasonBreakdown: true,
     });
 
     expect(baseQuery.where).toHaveBeenCalledWith('trade.userId = :userId', { userId: USER_ID });
