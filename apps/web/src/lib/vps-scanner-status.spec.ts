@@ -865,6 +865,27 @@ describe("active multi-model execution presentation", () => {
     });
   });
 
+  it("does not call a regime-rejected fallback a qualified trend-continuation route", () => {
+    const rejected = {
+      ...status,
+      latestDecision: {
+        ...status.latestDecision,
+        planBRoute: "TREND_CONTINUATION",
+        planBRegime: "TREND_WEAK",
+        planBRegimeAllowed: false,
+        planBPaperAdmitted: false,
+        multimodelExecutable: false,
+        executionAuthority: "NONE" as const,
+        blockers: ["MULTIMODEL_PLAN_B_NOT_ADMITTED"],
+      },
+    };
+    expect(deriveActiveModelUiState(rejected)).toMatchObject({
+      planBLabel: "No qualified strategy route · Trend weak",
+      executable: false,
+    });
+    expect(deriveActiveModelUiState(status).planBLabel).toBe("Trend continuation · 70%");
+  });
+
   it("uses primary ensemble confidence and blockers for readiness, not the M1 candidate confidence", () => {
     const result = deriveTradeReadinessUiState({
       automationOn: true,
