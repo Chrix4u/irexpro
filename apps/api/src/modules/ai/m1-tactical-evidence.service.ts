@@ -59,6 +59,9 @@ export interface M1TacticalLatestDecisionState {
   /** DEMO-only explanatory telemetry; never grants execution. */
   primaryBlockerGroup?: string | null;
   primaryBlockerCode?: string | null;
+  /** Read-only model drift provenance; never overrides hard risk vetoes. */
+  modelDriftState?: string | null;
+  modelDriftDiagnostics?: string[];
   demoCostBreakEvenStopPrice?: number | null;
   demoAlternativeCostR?: number | null;
 }
@@ -669,6 +672,10 @@ export class M1TacticalEvidenceService {
       m1TimingReason: nullableString(jsonObject(governance.routeDecision).reason),
       primaryBlockerGroup: nullableString(blockerAttribution.primaryGroup),
       primaryBlockerCode: nullableString(blockerAttribution.primaryCode),
+      modelDriftState: nullableString(multimodelGovernance.driftState),
+      modelDriftDiagnostics: blockers(multimodelGovernance.driftDiagnostics)
+        .filter((item) => /^(confidence|extensionAtr|volatilityScore|emaSeparation|mtfStrength|rsi14|directionalMomentumAtr):(INVALID|HARD_LOW|HARD_HIGH|STRESSED_LOW|STRESSED_HIGH)$/.test(item))
+        .slice(0, 8),
       demoCostBreakEvenStopPrice: nullableNumber(costGeometry.costBreakEvenStopPriceAt010R),
       demoAlternativeCostR: nullableNumber(costGeometry.hypotheticalCostR),
     };
