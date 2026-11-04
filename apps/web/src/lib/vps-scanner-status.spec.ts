@@ -883,6 +883,18 @@ describe("active multi-model execution presentation", () => {
       planBLabel: "No qualified strategy route · Trend weak",
       executable: false,
     });
+    const eligibleRegimeButRejected = {
+      ...rejected,
+      latestDecision: {
+        ...rejected.latestDecision,
+        planBRegime: "TREND_HEALTHY",
+        planBRegimeAllowed: true,
+      },
+    };
+    expect(deriveActiveModelUiState(eligibleRegimeButRejected)).toMatchObject({
+      planBLabel: "Plan-B not admitted · Trend continuation",
+      executable: false,
+    });
     expect(deriveActiveModelUiState(status).planBLabel).toBe(
       "Trend continuation · 70%",
     );

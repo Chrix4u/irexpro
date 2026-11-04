@@ -251,9 +251,11 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
   const planBLabel =
     decision?.planBRegimeAllowed === false
       ? `No qualified strategy route · ${routeLabel(decision.planBRegime)}`
-      : decision?.planBRoute
-        ? `${routeLabel(decision.planBRoute)} · ${percentLabel(decision.primaryConfidence)}`
-        : "Plan-B · awaiting consensus";
+      : decision?.planBPaperAdmitted === false
+        ? `Plan-B not admitted · ${routeLabel(decision.planBRoute)}`
+        : decision?.planBRoute
+          ? `${routeLabel(decision.planBRoute)} · ${percentLabel(decision.primaryConfidence)}`
+          : "Plan-B · awaiting consensus";
   const direction = decision?.trainedExpertDirection ?? null;
   const longVotes = finite(decision?.trainedExpertLongVotes);
   const shortVotes = finite(decision?.trainedExpertShortVotes);
