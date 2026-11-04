@@ -49,6 +49,8 @@ function normalize(row) {
   const extension = numberOrNull(row.extensionAtr);
   const m1ExpectedR = numberOrNull(row.preEntryExpectedR);
   const stop = String(row.closeReason || '') === 'STOP_LOSS_HIT';
+  const holdingMinutes =
+    opened !== null && closed !== null && closed >= opened ? (closed - opened) / 60000 : null;
   const valid =
     opened !== null &&
     closed !== null &&
@@ -73,6 +75,15 @@ function normalize(row) {
     engine: String(row.engine || 'UNKNOWN'),
     closeReason: String(row.closeReason || 'UNKNOWN'),
     stop,
+    holdingMinutes,
+    holdingBin:
+      holdingMinutes === null
+        ? 'UNKNOWN'
+        : holdingMinutes <= 5
+          ? 'UP_TO_5_MIN'
+          : holdingMinutes <= 15
+            ? '5_TO_15_MIN'
+            : 'OVER_15_MIN',
     netR: valid ? (gross - Math.abs(commission) + swap) / risk : null,
     grossR: valid ? gross / risk : null,
     feeR: valid ? Math.abs(commission) / risk : null,
@@ -101,6 +112,10 @@ function report(rows) {
     meanNetR: netR === null ? null : +netR.toFixed(4),
     meanGrossR: grossR === null ? null : +grossR.toFixed(4),
     meanCommissionR: feeR === null ? null : +feeR.toFixed(4),
+    meanHoldingMinutes: n
+      ? +(valid.reduce((sum, x) => sum + x.holdingMinutes, 0) / n).toFixed(2)
+      : null,
+    earlyCloseNetLosersUnder5m: valid.filter((x) => x.netR < 0 && x.holdingMinutes <= 5).length,
     netWinners: valid.filter((x) => x.netR > 0).length,
     netLosers: valid.filter((x) => x.netR < 0).length,
     meanPreEntryExpectedR: (() => {
@@ -151,6 +166,10 @@ function analyze(rows, options = {}) {
     byRouteExitReason: group(
       slice,
       (x) => x.accountCurrency + ' | ' + x.route + '/' + x.closeReason,
+    ),
+    byRouteHoldingBin: group(
+      slice,
+      (x) => x.accountCurrency + ' | ' + x.route + '/' + x.holdingBin,
     ),
   });
   const trainGroups = grouped(train),
