@@ -19,8 +19,13 @@ describe('AI Trader production UI regression contract', () => {
   it('keeps the enriched 24h realized-results cards and history entry point', () => {
     expect(pageSource).toContain('Realized results');
     expect(pageSource).toContain('Total loss · 24h');
+    expect(pageSource).toContain('Total costs · 24h');
+    expect(pageSource).toContain('authoritative24hSummary?.totalExplicitCosts');
     expect(pageSource).toContain('24h win rate');
+    expect(pageSource).toContain('Trade win rate · last 20');
     expect(pageSource).toContain('Total profit · 24h');
+    expect(pageSource).toContain('Actual net P&L · 24h');
+    expect(pageSource).toContain('signedMoney(realised24hNetPnl, realisedCurrency)');
     expect(pageSource).toContain('Profit factor');
     expect(pageSource).toContain('View all');
   });
