@@ -2062,54 +2062,60 @@ export default function AiTradingPage() {
         const status = await loadTraderTerminalStatus();
         setTerminal(status);
 
-        // External strategy evidence is deliberately secondary: scorecard/status
-        // reads can never disable Start/Stop or broker controls. The VPS feed
-        // has its own versioned evidence stream.
-        try {
-          const evidence = await api.request<unknown>(
-            "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v7",
-          );
-          if (!hasExternalProviderPerformanceUiShape(evidence)) {
-            throw new Error("Provider performance contract mismatch");
-          }
-          setProviderEvidence(evidence as ExternalProviderPerformanceView);
-        } catch {
-          setProviderEvidence(null);
-        }
-        try {
-          const scannerStatus = await api.request<unknown>(
-            "/ai/external/vps-forex/status",
-          );
-          if (!hasVpsScannerUiShape(scannerStatus)) {
-            throw new Error("VPS scanner status contract mismatch");
-          }
-          setVpsScannerStatus(scannerStatus as VpsForexScannerStatusView);
-        } catch {
-          setVpsScannerStatus(null);
-        }
-        try {
-          const tacticalStatus = await api.request<unknown>(
-            "/ai/external/vps-forex/m1-tactical/status",
-          );
-          if (!hasM1TacticalStatusUiShape(tacticalStatus)) {
-            throw new Error("M1 tactical status contract mismatch");
-          }
-          setM1TacticalStatus(tacticalStatus);
-        } catch {
-          setM1TacticalStatus(null);
-        }
-        try {
-          const [parityStatus, v8Status] = await Promise.all([
+        // Secondary status feeds are independent of trading controls and of
+        // one another. Fetch them concurrently to avoid a serial HTTP waterfall
+        // extending the intended four-second workspace refresh interval.
+        const [
+          providerResult,
+          scannerResult,
+          tacticalResult,
+          brokerParityResult,
+        ] = await Promise.allSettled([
+          (async () => {
+            const evidence = await api.request<unknown>(
+              "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v7",
+            );
+            if (!hasExternalProviderPerformanceUiShape(evidence)) {
+              throw new Error("Provider performance contract mismatch");
+            }
+            return evidence as ExternalProviderPerformanceView;
+          })(),
+          (async () => {
+            const scannerStatus = await api.request<unknown>(
+              "/ai/external/vps-forex/status",
+            );
+            if (!hasVpsScannerUiShape(scannerStatus)) {
+              throw new Error("VPS scanner status contract mismatch");
+            }
+            return scannerStatus as VpsForexScannerStatusView;
+          })(),
+          (async () => {
+            const tacticalStatus = await api.request<unknown>(
+              "/ai/external/vps-forex/m1-tactical/status",
+            );
+            if (!hasM1TacticalStatusUiShape(tacticalStatus)) {
+              throw new Error("M1 tactical status contract mismatch");
+            }
+            return tacticalStatus;
+          })(),
+          Promise.all([
             api.request<BrokerParityRuntimeStatusView>(
               "/ai/external/vps-forex/broker-parity/status",
             ),
             api.request<V8DedicatedPaperStatusView>(
               "/ai/external/vps-forex/v8-dedicated-paper/status",
             ),
-          ]);
+          ]),
+        ]);
+
+        setProviderEvidence(providerResult.status === "fulfilled" ? providerResult.value : null);
+        setVpsScannerStatus(scannerResult.status === "fulfilled" ? scannerResult.value : null);
+        setM1TacticalStatus(tacticalResult.status === "fulfilled" ? tacticalResult.value : null);
+        if (brokerParityResult.status === "fulfilled") {
+          const [parityStatus, v8Status] = brokerParityResult.value;
           setBrokerParityRuntime(parityStatus);
           setV8DedicatedPaperStatus(v8Status);
-        } catch {
+        } else {
           setBrokerParityRuntime(null);
           setV8DedicatedPaperStatus(null);
         }

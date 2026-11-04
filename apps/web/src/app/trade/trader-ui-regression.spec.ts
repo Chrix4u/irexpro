@@ -38,6 +38,15 @@ describe('AI Trader production UI regression contract', () => {
     ).toBe(true);
   });
 
+  it('fetches independent AI status feeds without serially blocking the four-second refresh', () => {
+    expect(pageSource).toContain('Fetch them concurrently to avoid a serial HTTP waterfall');
+    expect(pageSource).toContain('await Promise.allSettled([');
+    expect(pageSource).toContain('providerResult.status === "fulfilled"');
+    expect(pageSource).toContain('scannerResult.status === "fulfilled"');
+    expect(pageSource).toContain('tacticalResult.status === "fulfilled"');
+    expect(pageSource).toContain('brokerParityResult.status === "fulfilled"');
+  });
+
   it('binds chart polling to the effective session broker, not stale selection state', () => {
     expect(pageSource).toContain('const marketBrokerConnectionId = selectedBroker?.id ?? "";');
     expect(pageSource).not.toContain('brokerConnectionId: selectedBrokerId');
