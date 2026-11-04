@@ -156,6 +156,7 @@ describe('M1TacticalEvidenceService', () => {
           netExpectedR: 0.2794,
           primaryEngineCode: 'irexpro-multimodel-ensemble-v1',
           m1TacticalRole: 'TIMING_SPECIALIST',
+          routeDecision: { route: 'M1_TREND_CONTINUATION', reason: 'TREND_STRUCTURE_ALIGNED' },
           multimodelEnsemble: {
             ensembleScore: 0.6979,
             strategyRoute: 'EARLY_TRANSITION',
@@ -214,6 +215,7 @@ describe('M1TacticalEvidenceService', () => {
       trainedExpertShortVotes: 3,
       m1TacticalRole: 'TIMING_SPECIALIST',
       m1TimingRoute: 'M1_TREND_CONTINUATION',
+      m1TimingReason: 'TREND_STRUCTURE_ALIGNED',
       primaryBlockerGroup: null,
       primaryBlockerCode: null,
       demoCostBreakEvenStopPrice: null,

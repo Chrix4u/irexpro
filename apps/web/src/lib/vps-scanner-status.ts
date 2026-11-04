@@ -162,6 +162,7 @@ export interface M1TacticalStatusView {
     trainedExpertShortVotes?: number | null;
     m1TacticalRole?: string | null;
     m1TimingRoute?: string;
+    m1TimingReason?: string | null;
     primaryBlockerGroup?: string | null;
     primaryBlockerCode?: string | null;
     demoCostBreakEvenStopPrice?: number | null;
@@ -272,7 +273,21 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
       : decision?.trainedExpertState
         ? `${expertRoleLabel} · ${decision.trainedExpertState.replaceAll("_", " ")}`
         : `${expertRoleLabel} · awaiting score`;
-  const m1TimingLabel = `M1 timing · ${routeLabel(decision?.m1TimingRoute ?? decision?.route)}`;
+  const m1Route = decision?.m1TimingRoute ?? decision?.route;
+  const m1Reason = decision?.m1TimingReason;
+  const waitingForM1 =
+    m1Route === "ABSTAIN" &&
+    typeof m1Reason === "string" &&
+    m1Reason.length > 0;
+  const reversalMismatch =
+    decision?.planBPaperAdmitted === true &&
+    decision?.planBRoute === "CONFIRMED_REVERSAL" &&
+    m1Route === "M1_TREND_CONTINUATION";
+  const m1TimingLabel = waitingForM1
+    ? `M1 timing · Wait: ${routeLabel(m1Reason)}`
+    : reversalMismatch
+      ? "M1 timing · Trend continuation (reversal not confirmed)"
+      : `M1 timing · ${routeLabel(m1Route)}`;
   const executable =
     decision?.multimodelExecutable === true ||
     (decision?.multimodelExecutable == null &&
@@ -540,7 +555,9 @@ export function deriveTradeReadinessUiState(
         "The model classifies this market as outside its validated distribution. It is collecting evidence without dispatching an unqualified order.";
     } else if (m1Decision.primaryBlockerGroup === "ENTRY_TIMING") {
       detail =
-        "The higher-timeframe trade hypothesis has not received the required confirmed M1 entry timing.";
+        m1Decision.planBPaperAdmitted === true && m1Decision.m1TimingReason
+          ? `Plan-B admitted this setup, but the M1 entry specialist rejected its timing: ${routeLabel(m1Decision.m1TimingReason)}. The entry remains paused until a valid, aligned signal appears; model admission does not guarantee a profitable trade.`
+          : "The higher-timeframe trade hypothesis has not received the required confirmed M1 entry timing.";
     } else if (m1Decision.primaryBlockerGroup === "MODEL_ADMISSION") {
       detail =
         "The multi-model entry has not passed its calibrated model-confidence and signal-quality checks.";

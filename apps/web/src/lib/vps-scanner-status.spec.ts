@@ -900,6 +900,60 @@ describe("active multi-model execution presentation", () => {
     );
   });
 
+  it("explains an M1 timing rejection without turning Plan-B admission into execution approval", () => {
+    const waiting = {
+      ...status,
+      latestDecision: {
+        ...status.latestDecision,
+        route: "ABSTAIN",
+        m1TimingRoute: "ABSTAIN",
+        m1TimingReason: "HIGHER_TIMEFRAME_CONFLICT",
+        planBRoute: "TREND_CONTINUATION",
+        planBPaperAdmitted: true,
+        multimodelExecutable: false,
+        executionAuthority: "NONE" as const,
+        blockers: ["MULTIMODEL_CONTINUATION_TIMING_NOT_READY"],
+        primaryBlockerGroup: "ENTRY_TIMING",
+      },
+    };
+    expect(deriveActiveModelUiState(waiting)).toMatchObject({
+      m1TimingLabel: "M1 timing · Wait: Higher timeframe conflict",
+      executable: false,
+    });
+    const readiness = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: waiting,
+    });
+    expect(readiness.tradeExpected).toBe(false);
+    expect(readiness.band).not.toBe("READY");
+    expect(readiness.detail).toMatch(/Plan-B admitted/i);
+    expect(readiness.detail).toMatch(/Higher timeframe conflict/i);
+  });
+
+  it("does not label M1 continuation as reversal confirmation", () => {
+    const mismatch = {
+      ...status,
+      latestDecision: {
+        ...status.latestDecision,
+        planBRoute: "CONFIRMED_REVERSAL",
+        planBPaperAdmitted: true,
+        m1TimingRoute: "M1_TREND_CONTINUATION",
+        m1TimingReason: "TREND_STRUCTURE_ALIGNED",
+        multimodelExecutable: false,
+        executionAuthority: "NONE" as const,
+        blockers: ["MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED"],
+      },
+    };
+    expect(deriveActiveModelUiState(mismatch)).toMatchObject({
+      m1TimingLabel: "M1 timing · Trend continuation (reversal not confirmed)",
+      executable: false,
+    });
+    expect(deriveActiveModelUiState(status).m1TimingLabel).toBe(
+      "M1 timing · Trend continuation",
+    );
+  });
+
   it("uses primary ensemble confidence and blockers for readiness, not the M1 candidate confidence", () => {
     const result = deriveTradeReadinessUiState({
       automationOn: true,
