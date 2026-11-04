@@ -4,6 +4,7 @@ import { CTraderClientService } from './ctrader-client.service';
 import { CtraderTransport } from './ctrader-transport';
 import { FakeCtraderTransport, ScriptedCtraderServer } from './ctrader.fake-transport';
 import { CTRADER_PAYLOAD_TYPE, CtraderMessageEnvelope } from './ctrader-message-types';
+import { BrokerAdapterError, BrokerErrorCode } from '../../interfaces/broker-adapter.errors';
 
 const ACCOUNT_ID = '1234567';
 const CTID = 1234567;
@@ -103,6 +104,62 @@ describe('cTrader current-price freshness', () => {
 
   afterEach(async () => {
     await client.onModuleDestroy();
+  });
+
+  it('diagnoses account-scoped missing and stale spot evidence without admitting prices', async () => {
+    const adapter = new CTraderAdapter(client);
+    await adapter.connect({ apiKey: ACCESS_TOKEN, accountId: ACCOUNT_ID });
+    jest.spyOn(client, 'awaitEvent').mockImplementation((_env, predicate) => {
+      // Same environment, unrelated account: must not disclose its activity.
+      predicate({
+        payloadType: CTRADER_PAYLOAD_TYPE.SPOT_EVENT,
+        payload: { ctidTraderAccountId: CTID + 1, symbolId: SYMBOL_ID, bid: 100, ask: 200 },
+      });
+      predicate({
+        payloadType: CTRADER_PAYLOAD_TYPE.SPOT_EVENT,
+        payload: { ctidTraderAccountId: CTID, symbolId: SYMBOL_ID, bid: 100 },
+      });
+      predicate({
+        payloadType: CTRADER_PAYLOAD_TYPE.SPOT_EVENT,
+        payload: { ctidTraderAccountId: CTID, symbolId: SYMBOL_ID, bid: 100, ask: 200 },
+      });
+      predicate(spotEvent(Date.now() - 10 * 60_000, 100, 200));
+      predicate(spotEvent(Date.now() + 10 * 60_000, 100, 200));
+      return Promise.reject(
+        new BrokerAdapterError(
+          BrokerErrorCode.CONNECTION_TIMEOUT,
+          'Timed out waiting for a cTrader DEMO event.',
+          undefined,
+          true,
+        ),
+      );
+    });
+
+    await expect(adapter.getCurrentPrice('EUR/USD')).rejects.toThrow(
+      /matching=4, partial=1, invalidTimestamp=1, staleTimestamp=1, futureTimestamp=1/,
+    );
+    const unsubscribed = server.requests.filter(
+      (request) => request.payloadType === CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ,
+    );
+    expect(unsubscribed).toHaveLength(1);
+  });
+
+  it('distinguishes a silent acknowledged spot subscription from unusable events', async () => {
+    const adapter = new CTraderAdapter(client);
+    await adapter.connect({ apiKey: ACCESS_TOKEN, accountId: ACCOUNT_ID });
+    jest
+      .spyOn(client, 'awaitEvent')
+      .mockRejectedValue(
+        new BrokerAdapterError(
+          BrokerErrorCode.CONNECTION_TIMEOUT,
+          'Timed out waiting for a cTrader DEMO event.',
+          undefined,
+          true,
+        ),
+      );
+    await expect(adapter.getCurrentPrice('EUR/USD')).rejects.toThrow(
+      /matching=0, partial=0, invalidTimestamp=0, staleTimestamp=0, futureTimestamp=0/,
+    );
   });
 
   it('recovers a duplicate provider spot subscription with one scoped unsubscribe and retry', async () => {

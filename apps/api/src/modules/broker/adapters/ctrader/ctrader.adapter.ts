@@ -1660,27 +1660,45 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     symbolId: number,
   ): Promise<CtraderSpotEventPayload> {
     const ctid = parseCtraderId(session.accountId, 'ctidTraderAccountId');
+    // Only count events for THIS account and symbol. A shared cTrader socket
+    // may carry other tenants' events; their presence is never disclosed.
+    // These counters are observational only and cannot make a quote admissible.
+    const rejectedSpotEvents = {
+      matching: 0,
+      partial: 0,
+      invalidTimestamp: 0,
+      staleTimestamp: 0,
+      futureTimestamp: 0,
+    };
     const eventPromise = this.client.awaitEvent(
       session.env,
       (message) => {
         if (message.payloadType !== CTRADER_PAYLOAD_TYPE.SPOT_EVENT) return false;
         const payload = message.payload as Partial<CtraderSpotEventPayload> | undefined | null;
-        // Event correlation (architect finding 3): the spot event must belong
-        // to the REQUESTING account AND symbol, with a complete bid/ask
-        // quote. A 2131 event for a DIFFERENT account on the same shared
-        // environment connection can never satisfy this waiter.
-        const providerTimestampMs = Number(payload?.timestamp);
+        // Cross-account and cross-symbol spot events remain non-authoritative.
+        if (payload?.ctidTraderAccountId !== ctid || payload?.symbolId !== symbolId) {
+          return false;
+        }
+        rejectedSpotEvents.matching += 1;
+        if (payload.bid == null || payload.ask == null) {
+          rejectedSpotEvents.partial += 1;
+          return false;
+        }
+        const providerTimestampMs = Number(payload.timestamp);
+        if (!Number.isFinite(providerTimestampMs) || providerTimestampMs <= 0) {
+          rejectedSpotEvents.invalidTimestamp += 1;
+          return false;
+        }
         const ageMs = Date.now() - providerTimestampMs;
-        return (
-          payload?.ctidTraderAccountId === ctid &&
-          payload?.symbolId === symbolId &&
-          payload.bid != null &&
-          payload.ask != null &&
-          Number.isFinite(providerTimestampMs) &&
-          providerTimestampMs > 0 &&
-          ageMs >= -SPOT_EVENT_MAX_CLOCK_AHEAD_MS &&
-          ageMs <= SPOT_EVENT_MAX_AGE_MS
-        );
+        if (ageMs < -SPOT_EVENT_MAX_CLOCK_AHEAD_MS) {
+          rejectedSpotEvents.futureTimestamp += 1;
+          return false;
+        }
+        if (ageMs > SPOT_EVENT_MAX_AGE_MS) {
+          rejectedSpotEvents.staleTimestamp += 1;
+          return false;
+        }
+        return true;
       },
       10_000,
     );
@@ -1738,6 +1756,36 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       subscribed = true;
       const event = await eventPromise;
       return event.payload as unknown as CtraderSpotEventPayload;
+    } catch (error) {
+      // A provider acknowledgement alone does not establish a usable price.
+      // Preserve the fail-closed timeout, but identify whether no quote arrived
+      // for this account/symbol, or events arrived with unusable provenance.
+      // Do not include account IDs, prices, tokens, or other tenants' activity.
+      if (
+        subscribed &&
+        error instanceof BrokerAdapterError &&
+        error.code === BrokerErrorCode.CONNECTION_TIMEOUT &&
+        /Timed out waiting for a cTrader (DEMO|LIVE) event\./.test(error.message)
+      ) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.CONNECTION_TIMEOUT,
+          'cTrader spot event timed out after subscription acknowledgement ' +
+            '(matching=' +
+            rejectedSpotEvents.matching +
+            ', partial=' +
+            rejectedSpotEvents.partial +
+            ', invalidTimestamp=' +
+            rejectedSpotEvents.invalidTimestamp +
+            ', staleTimestamp=' +
+            rejectedSpotEvents.staleTimestamp +
+            ', futureTimestamp=' +
+            rejectedSpotEvents.futureTimestamp +
+            '); market quote remains unavailable.',
+          undefined,
+          true,
+        );
+      }
+      throw error;
     } finally {
       // Only send 2129 after cTrader acknowledged 2127. This preserves the
       // existing single-flight lifecycle while avoiding a phantom unsubscribe
