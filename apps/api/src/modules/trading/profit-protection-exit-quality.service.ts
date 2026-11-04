@@ -430,7 +430,7 @@ export class ProfitProtectionExitQualityService {
       't.user_id = $1',
       "t.status = 'CLOSED'",
       "t.close_reason = 'PROFIT_PROTECTION'",
-      "o.artifact = 'profit-protection-counterfactual-v1'",
+      "o.artifact = 'profit-protection-counterfactual-v2-quote-verified'",
       'o.checkpoint_minutes = 240',
       "o.execution_authority = 'NONE'",
       'o.modifies_execution = false',

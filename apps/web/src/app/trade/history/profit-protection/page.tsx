@@ -187,6 +187,8 @@ export default function ProfitProtectionExitQualityPage() {
             <p>
               See what happened after the AI protected profit: whether the original target or stop
               was reached first, how long it took, and the theoretical R opportunity left behind.
+              Outcomes require contiguous independently observed live cTrader M1 quotes; earlier
+              backfilled or unverified observations are excluded and may show as data gaps.
             </p>
           </div>
           <div className="trade-history__hero-actions">
