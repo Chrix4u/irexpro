@@ -681,7 +681,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       if (previous?.reason !== readiness.reason || previous?.ready !== readiness.ready) {
         this.logger.log(
           `M1 tactical readiness instrument=${instrument} ready=${readiness.ready} ` +
-            `reason=${readiness.reason} authority=${readiness.authority ?? 'NONE'}`,
+            `reason=${readiness.reason} authority=${readiness.authority ?? 'NONE'}` +
+            (readiness.detail ? ` detail=${readiness.detail}` : ''),
         );
       }
     }
