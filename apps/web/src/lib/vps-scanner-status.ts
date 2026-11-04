@@ -149,6 +149,8 @@ export interface M1TacticalStatusView {
     primaryConfidence?: number | null;
     primaryNetExpectedR?: number | null;
     planBRoute?: string | null;
+    planBRegime?: string | null;
+    planBRegimeAllowed?: boolean | null;
     planBPaperAdmitted?: boolean | null;
     multimodelExecutable?: boolean | null;
     multimodelAuthorityPath?: string | null;
@@ -244,9 +246,14 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
   const authorityLabel = status?.authorityMode
     ? status.authorityMode.replaceAll("_", " ")
     : "RESEARCH";
-  const planBLabel = decision?.planBRoute
-    ? `${routeLabel(decision.planBRoute)} · ${percentLabel(decision.primaryConfidence)}`
-    : "Plan-B · awaiting consensus";
+  // Plan-B keeps a legacy strategyRoute even when the current market regime
+  // is rejected. Never describe that fallback label as a qualified setup.
+  const planBLabel =
+    decision?.planBRegimeAllowed === false
+      ? `No qualified strategy route · ${routeLabel(decision.planBRegime)}`
+      : decision?.planBRoute
+        ? `${routeLabel(decision.planBRoute)} · ${percentLabel(decision.primaryConfidence)}`
+        : "Plan-B · awaiting consensus";
   const direction = decision?.trainedExpertDirection ?? null;
   const longVotes = finite(decision?.trainedExpertLongVotes);
   const shortVotes = finite(decision?.trainedExpertShortVotes);
