@@ -159,6 +159,8 @@ describe('M1TacticalEvidenceService', () => {
           multimodelEnsemble: {
             ensembleScore: 0.6979,
             strategyRoute: 'EARLY_TRANSITION',
+            regime: 'TREND_WEAK',
+            regimeAllowed: false,
             paperAdmitted: true,
           },
           multimodelGovernance: {
@@ -199,6 +201,8 @@ describe('M1TacticalEvidenceService', () => {
       primaryConfidence: 0.6979,
       primaryNetExpectedR: 0.318,
       planBRoute: 'EARLY_TRANSITION',
+      planBRegime: 'TREND_WEAK',
+      planBRegimeAllowed: false,
       planBPaperAdmitted: true,
       multimodelExecutable: true,
       multimodelAuthorityPath: 'HIGH_CONVICTION_RESCUE',
