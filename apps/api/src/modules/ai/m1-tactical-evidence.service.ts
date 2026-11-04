@@ -59,6 +59,11 @@ export interface M1TacticalLatestDecisionState {
   /** DEMO-only explanatory telemetry; never grants execution. */
   primaryBlockerGroup?: string | null;
   primaryBlockerCode?: string | null;
+  /** Concrete frozen-model feature envelope violations, separate from wrapper veto strings. */
+  modelDriftDiagnostics?: string[];
+  modelDriftState?: string | null;
+  modelEventRisk?: string | null;
+  modelExecutionCostSource?: string | null;
   demoCostBreakEvenStopPrice?: number | null;
   demoAlternativeCostR?: number | null;
 }
@@ -625,6 +630,7 @@ export class M1TacticalEvidenceService {
     const governance = jsonObject(row.governance);
     const multimodelEnsemble = jsonObject(governance.multimodelEnsemble);
     const multimodelGovernance = jsonObject(governance.multimodelGovernance);
+    const genericGovernance = jsonObject(governance.genericGovernance);
     const trainedExpert = jsonObject(governance.multimodelTrainedExpert);
     const multimodelAuthority = jsonObject(governance.multimodelAuthority);
     const zaiDemoDiagnostics = jsonObject(governance.zaiDemoDiagnostics);
@@ -669,6 +675,17 @@ export class M1TacticalEvidenceService {
       m1TimingReason: nullableString(jsonObject(governance.routeDecision).reason),
       primaryBlockerGroup: nullableString(blockerAttribution.primaryGroup),
       primaryBlockerCode: nullableString(blockerAttribution.primaryCode),
+      modelDriftDiagnostics: (Array.isArray(multimodelGovernance.driftDiagnostics)
+        ? multimodelGovernance.driftDiagnostics
+        : Array.isArray(genericGovernance.driftDiagnostics)
+          ? genericGovernance.driftDiagnostics
+          : []
+      ).filter((item): item is string => typeof item === 'string').slice(0, 8),
+      modelDriftState:
+        nullableString(multimodelGovernance.driftState) ??
+        nullableString(genericGovernance.driftState),
+      modelEventRisk: nullableString(multimodelGovernance.eventRisk),
+      modelExecutionCostSource: nullableString(multimodelGovernance.executionCostSource),
       demoCostBreakEvenStopPrice: nullableNumber(costGeometry.costBreakEvenStopPriceAt010R),
       demoAlternativeCostR: nullableNumber(costGeometry.hypotheticalCostR),
     };
