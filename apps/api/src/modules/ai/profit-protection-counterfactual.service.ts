@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { DataSource } from 'typeorm';
 
 export const PROFIT_PROTECTION_COUNTERFACTUAL_ARTIFACT =
-  'profit-protection-counterfactual-v1' as const;
+  'profit-protection-counterfactual-v2-quote-verified' as const;
 export const PROFIT_PROTECTION_COUNTERFACTUAL_CHECKPOINT_MINUTES = 240;
 const PROFIT_PROTECTION_COUNTERFACTUAL_INTERVAL_MS = 60_000;
 
@@ -18,6 +18,8 @@ export interface ProfitProtectionReplayCandle {
   high: number | string;
   low: number | string;
   sample_count: number | string;
+  positive_quote_sample_count: number | string;
+  last_quote_sample_at: Date | string | null;
   source: string;
 }
 
@@ -70,6 +72,8 @@ export function classifyProfitProtectionCounterfactual(input: {
       const high = finite(row.high);
       const low = finite(row.low);
       const samples = finite(row.sample_count);
+      const positiveQuotes = finite(row.positive_quote_sample_count);
+      const liveQuoteAt = row.last_quote_sample_at ? new Date(row.last_quote_sample_at) : null;
       if (
         !Number.isFinite(at.getTime()) ||
         high === null ||
@@ -77,6 +81,13 @@ export function classifyProfitProtectionCounterfactual(input: {
         high < low ||
         samples === null ||
         samples <= 0 ||
+        positiveQuotes === null ||
+        positiveQuotes <= 0 ||
+        positiveQuotes > samples ||
+        !liveQuoteAt ||
+        !Number.isFinite(liveQuoteAt.getTime()) ||
+        liveQuoteAt.getTime() < at.getTime() ||
+        liveQuoteAt.getTime() >= at.getTime() + 60_000 ||
         row.source !== 'ctrader-broker-native'
       )
         return [];
@@ -237,12 +248,15 @@ export class ProfitProtectionCounterfactualService implements OnModuleInit, OnMo
   ): Promise<ProfitProtectionReplayCandle[]> {
     return (await this.dataSource.query(
       `
-        SELECT bucket_time, high, low, sample_count, source
+        SELECT bucket_time, high, low, sample_count, positive_quote_sample_count, last_quote_sample_at, source
         FROM market_data.provider_quote_candles
         WHERE connection_id = $1
           AND instrument = $2
           AND timeframe = 'M1'
           AND source = 'ctrader-broker-native'
+          AND positive_quote_sample_count > 0
+          AND last_quote_sample_at >= bucket_time
+          AND last_quote_sample_at < bucket_time + interval '1 minute'
           AND bucket_time >= date_trunc('minute', $3::timestamptz) + interval '1 minute'
           AND bucket_time <= $3::timestamptz + interval '4 hours'
         ORDER BY bucket_time ASC
@@ -271,7 +285,9 @@ export class ProfitProtectionCounterfactualService implements OnModuleInit, OnMo
       minutes_after_close: result.minutesAfterClose,
       candle_count: result.candleCount,
       max_gap_seconds: result.maxGapSeconds,
-      methodology: 'NEXT_FULL_M1_FIRST_ORIGINAL_BARRIER_WITHIN_4H',
+      methodology: 'QUOTE_VERIFIED_CONTIGUOUS_NEXT_FULL_M1_FIRST_BARRIER_WITHIN_4H',
+      provenance: 'CTRADER_POSITIVE_LIVE_QUOTES_WITHIN_CANDLE_BUCKET',
+      disallowBackfill: true,
       execution_authority: 'NONE',
       modifies_execution: false,
     };
