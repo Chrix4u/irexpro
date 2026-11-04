@@ -6,6 +6,7 @@ import { BrokerService } from '../../broker/broker.service';
 import { ExecutionService } from '../execution.service';
 import { TradeCloseReason } from '../entities/trade.entity';
 import { evaluatePaperProfitLock } from '../../broker/adapters/paper-broker.adapter';
+import { evaluateProtectedRunnerShadow } from './protected-runner-shadow';
 
 const LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS = 5_000;
 
@@ -17,6 +18,7 @@ export interface LiveDemoM1AdverseEvidence {
   latestAgeSeconds: number;
   /** Independently observed cTrader quotes, never inferred from trendbar tick volume. */
   liveQuoteBars?: number;
+  latestLiveSpreadPrice?: number | null;
 }
 
 export interface LiveDemoAdverseProtectionDecision {
@@ -295,6 +297,8 @@ interface OpenAiTradeRow {
   path_peak_observed_at: Date | string | null;
   initial_risk_pnl: string | number | null;
   stop_loss: string | number | null;
+  lot_size: string | number | null;
+  account_currency: string | null;
   opened_at: Date | string | null;
   is_m1_strategy: boolean;
   strategy_route: string | null;
@@ -456,7 +460,11 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                 trade.user_id,
                 TradeCloseReason.PROFIT_PROTECTION,
               );
-              await this.recordProfitLockTrendRecheck(trade, observedAt, currentPnl, initialRisk);
+              await this.recordProfitLockTrendRecheck(trade, observedAt, currentPnl, initialRisk, {
+                entryPrice: position.openPrice,
+                currentPrice: position.currentPrice,
+                takeProfitPrice: position.takeProfit,
+              });
               continue;
             }
 
@@ -531,6 +539,11 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     observedAt: Date,
     currentPnl: number,
     initialRiskPnl: number,
+    positionPrices: {
+      entryPrice: string | number | null;
+      currentPrice: string | number | null;
+      takeProfitPrice: string | number | null;
+    },
   ): Promise<void> {
     if (!this.auditService) return;
     try {
@@ -543,6 +556,27 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         observedAt,
         latestThesis,
         m1Evidence,
+      });
+      // Historical fees are scoped by account, symbol and currency, and every
+      // sample must have closed BEFORE the observed decision time.
+      const fees = recheck.wouldHoldIfEnabled
+        ? await this.loadCausalRunnerCostEstimate(trade, observedAt)
+        : null;
+      const runner = evaluateProtectedRunnerShadow({
+        trendWouldHold: recheck.wouldHoldIfEnabled,
+        instrument: trade.instrument,
+        direction: trade.direction,
+        grossUnrealisedPnl: currentPnl,
+        initialRiskPnl,
+        estimatedBrokerCosts: fees?.estimatedCost ?? null,
+        feeSampleCount: fees?.sampleCount ?? 0,
+        entryPrice: positionPrices.entryPrice == null ? null : finite(positionPrices.entryPrice),
+        currentPrice: positionPrices.currentPrice == null ? null : finite(positionPrices.currentPrice),
+        originalStopPrice: trade.stop_loss == null ? null : finite(trade.stop_loss),
+        takeProfitPrice: positionPrices.takeProfitPrice == null
+          ? null
+          : finite(positionPrices.takeProfitPrice),
+        latestLiveSpreadPrice: m1Evidence?.latestLiveSpreadPrice ?? null,
       });
       await this.auditService.log({
         actorUserId: trade.user_id,
@@ -561,6 +595,8 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           m1LiveQuoteBars: m1Evidence?.liveQuoteBars ?? 0,
           m1AlignedMomentum3: m1Evidence?.alignedMomentum3 ?? null,
           m1LatestAgeSeconds: m1Evidence?.latestAgeSeconds ?? null,
+          runnerShadow: runner,
+          runnerCostEvidence: fees ? 'RECENT_CLOSED_TRADES_BEFORE_DECISION' : 'INSUFFICIENT',
           noTradeAuthority: true,
         },
       });
@@ -573,6 +609,59 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     }
   }
 
+  /**
+   * Conservative p90 of positive historical commission/financing cost per
+   * lot. A minimum of five past, same-account/symbol/currency samples is
+   * required; no future closes can influence a proposed runner.
+   */
+  private async loadCausalRunnerCostEstimate(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+  ): Promise<{ estimatedCost: number; sampleCount: number } | null> {
+    const lotSize = trade.lot_size == null ? null : finite(trade.lot_size);
+    if (!lotSize || lotSize <= 0 || !trade.account_currency) return null;
+    const rows = (await this.dataSource.query(
+      `
+        SELECT COUNT(*)::int AS sample_count,
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY fee_per_lot) AS p90_cost_per_lot
+        FROM (
+          SELECT (
+            ABS(t.commission) + GREATEST(0, -COALESCE(t.swap, 0))
+          ) / NULLIF(t.lot_size, 0) AS fee_per_lot
+          FROM trading.trades t
+          WHERE t.broker_connection_id = $1
+            AND t.instrument = $2
+            AND t.account_currency = $3
+            AND t.status = 'CLOSED'
+            AND t.closed_at < $4::timestamptz
+            AND t.closed_at >= $4::timestamptz - interval '21 days'
+            AND t.lot_size > 0
+            AND t.commission IS NOT NULL
+          ORDER BY t.closed_at DESC
+          LIMIT 40
+        ) past_fees
+      `,
+      [
+        trade.broker_connection_id,
+        trade.instrument.toUpperCase(),
+        trade.account_currency,
+        observedAt.toISOString(),
+      ],
+    )) as Array<{ sample_count: string | number; p90_cost_per_lot: string | number | null }>;
+    const row = rows[0];
+    const sampleCount = Number(row?.sample_count ?? 0);
+    const costPerLot = row?.p90_cost_per_lot == null ? null : finite(row.p90_cost_per_lot);
+    if (
+      !Number.isInteger(sampleCount) ||
+      sampleCount < 5 ||
+      costPerLot === null ||
+      costPerLot <= 0
+    ) {
+      return null;
+    }
+    return { estimatedCost: costPerLot * lotSize, sampleCount };
+  }
+
   private async loadOpenAiTrades(): Promise<OpenAiTradeRow[]> {
     return (await this.dataSource.query(`
       SELECT
@@ -583,6 +672,8 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         t.external_position_id,
         t.instrument,
         t.direction,
+        t.lot_size,
+        t.account_currency,
         t.max_favorable_pnl,
         t.max_adverse_pnl,
         t.profit_giveback,
@@ -791,7 +882,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
   ): Promise<LiveDemoM1AdverseEvidence | null> {
     const rows = (await this.dataSource.query(
       `
-        SELECT bucket_time, open, high, low, close, sample_count, positive_quote_sample_count, source
+        SELECT bucket_time, open, high, low, close, spread_close, sample_count, positive_quote_sample_count, source
         FROM market_data.provider_quote_candles
         WHERE connection_id = $1
           AND instrument = $2
@@ -810,6 +901,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       close: string | number;
       sample_count: string | number;
       positive_quote_sample_count?: string | number;
+      spread_close?: string | number | null;
       source: string;
     }>;
     if (!rows.length) return null;
@@ -843,6 +935,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           bucketTime,
           alignedBodyPressure: sign * ((close - open) / range),
           hasLiveQuote: (finite(row.positive_quote_sample_count) ?? 0) > 0,
+          spreadPrice: row.spread_close == null ? null : finite(row.spread_close),
           range,
         },
       ];
@@ -858,6 +951,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       completedBars: parsed.length,
       adverseBars: parsed.filter((row) => row.alignedBodyPressure <= -0.15).length,
       liveQuoteBars: parsed.filter((row) => row.hasLiveQuote).length,
+      latestLiveSpreadPrice: latest.hasLiveQuote ? latest.spreadPrice : null,
       alignedLatestBodyPressure: latest.alignedBodyPressure,
       alignedMomentum3,
       latestAgeSeconds: (observedAt.getTime() - latestCloseAt) / 1000,
