@@ -2,7 +2,13 @@
  * No broker order is created or modified by this module.
  */
 export const EXIT_ALTERNATIVES_ARTIFACT = 'exit-alternatives-verified-m1-v1';
-export type ExitOutcome = 'TP_FIRST' | 'STOP_FIRST' | 'AMBIGUOUS' | 'DATA_GAP' | 'UNRESOLVED' | 'INELIGIBLE';
+export type ExitOutcome =
+  | 'TP_FIRST'
+  | 'STOP_FIRST'
+  | 'AMBIGUOUS'
+  | 'DATA_GAP'
+  | 'UNRESOLVED'
+  | 'INELIGIBLE';
 
 export interface ExitCandle {
   bucket_time: Date | string;
@@ -55,9 +61,7 @@ const rounded = (value: number): number => Number(value.toFixed(4));
 
 function eligibleBar(raw: ExitCandle): { at: number; high: number; low: number } | null {
   const at = new Date(raw.bucket_time).getTime();
-  const observed = raw.last_quote_sample_at
-    ? new Date(raw.last_quote_sample_at).getTime()
-    : NaN;
+  const observed = raw.last_quote_sample_at ? new Date(raw.last_quote_sample_at).getTime() : NaN;
   const high = numeric(raw.high);
   const low = numeric(raw.low);
   const sampled = numeric(raw.sample_count);
@@ -76,13 +80,18 @@ function eligibleBar(raw: ExitCandle): { at: number; high: number; low: number }
     live <= 0 ||
     live > sampled ||
     raw.source !== 'ctrader-broker-native'
-  ) return null;
+  )
+    return null;
   return { at, high, low };
 }
 
 function firstBarrier(input: ExitScenarioInput, stopPrice: number): ExitScenario {
   const empty = (outcome: ExitOutcome, observedBars: number): ExitScenario => ({
-    outcome, eventAt: null, observedBars, netPnlProxy: null, deltaVsOriginal: null,
+    outcome,
+    eventAt: null,
+    observedBars,
+    netPnlProxy: null,
+    deltaVsOriginal: null,
   });
   const bars = new Map<number, ReturnType<typeof eligibleBar>>();
   for (const row of input.candles) {
@@ -101,12 +110,11 @@ function firstBarrier(input: ExitScenarioInput, stopPrice: number): ExitScenario
     const bar = bars.get(at);
     if (!bar) return empty('DATA_GAP', observedBars);
     observedBars++;
-    const tp = input.direction === 'BUY'
-      ? bar.high >= input.takeProfitPrice
-      : bar.low <= input.takeProfitPrice;
-    const stop = input.direction === 'BUY'
-      ? bar.low <= stopPrice
-      : bar.high >= stopPrice;
+    const tp =
+      input.direction === 'BUY'
+        ? bar.high >= input.takeProfitPrice
+        : bar.low <= input.takeProfitPrice;
+    const stop = input.direction === 'BUY' ? bar.low <= stopPrice : bar.high >= stopPrice;
     if (tp && stop) return empty('AMBIGUOUS', observedBars);
     if (!tp && !stop) continue;
     return {
@@ -150,8 +158,13 @@ export function compareExitAlternatives(input: ExitScenarioInput): ExitAlternati
   if (
     !Number.isFinite(input.closeAt.getTime()) ||
     ![
-      input.entryPrice, input.exitPrice, input.stopPrice, input.takeProfitPrice,
-      input.grossPnl, input.commission, input.swap,
+      input.entryPrice,
+      input.exitPrice,
+      input.stopPrice,
+      input.takeProfitPrice,
+      input.grossPnl,
+      input.commission,
+      input.swap,
     ].every(Number.isFinite) ||
     input.entryPrice <= 0 ||
     input.exitPrice <= 0 ||
@@ -161,16 +174,15 @@ export function compareExitAlternatives(input: ExitScenarioInput): ExitAlternati
     sign * (input.exitPrice - input.entryPrice) <= 0 ||
     sign * (input.takeProfitPrice - input.exitPrice) <= 0 ||
     sign * (input.entryPrice - input.stopPrice) <= 0
-  ) return out;
+  )
+    return out;
   const pnlAt = (price: number): number =>
-    input.grossPnl * (price - input.entryPrice) / (input.exitPrice - input.entryPrice);
+    (input.grossPnl * (price - input.entryPrice)) / (input.exitPrice - input.entryPrice);
   const grade = (stopPrice: number, partial: boolean): ExitScenario => {
     const first = firstBarrier(input, stopPrice);
     if (first.outcome !== 'TP_FIRST' && first.outcome !== 'STOP_FIRST') return first;
     const price = first.outcome === 'TP_FIRST' ? input.takeProfitPrice : stopPrice;
-    const gross = partial
-      ? 0.5 * input.grossPnl + 0.5 * pnlAt(price)
-      : pnlAt(price);
+    const gross = partial ? 0.5 * input.grossPnl + 0.5 * pnlAt(price) : pnlAt(price);
     const net = gross - costs - (partial ? extraPartialCost : 0);
     return {
       ...first,
