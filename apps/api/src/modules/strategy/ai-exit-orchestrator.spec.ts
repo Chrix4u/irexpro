@@ -315,11 +315,13 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
       'trade-1',
       USER,
       TradeCloseReason.AI_CLOSE_SIGNAL,
+      { source: 'AI_EXIT_ORCHESTRATOR' },
     );
     expect(executionService.closeTrade).toHaveBeenCalledWith(
       'trade-2',
       USER,
       TradeCloseReason.AI_CLOSE_SIGNAL,
+      { source: 'AI_EXIT_ORCHESTRATOR' },
     );
     expect(result.trades.map((t) => t.tradeId).sort()).toEqual(['trade-1', 'trade-2']);
   });
@@ -340,6 +342,7 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
       'trade-2',
       USER,
       TradeCloseReason.AI_CLOSE_SIGNAL,
+      { source: 'AI_EXIT_ORCHESTRATOR' },
     );
   });
 
@@ -453,11 +456,13 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
       'trade-1',
       USER,
       TradeCloseReason.AI_CLOSE_SIGNAL,
+      { source: 'AI_EXIT_ORCHESTRATOR' },
     );
     expect(executionService.closeTrade).toHaveBeenCalledWith(
       'trade-2',
       USER,
       TradeCloseReason.AI_CLOSE_SIGNAL,
+      { source: 'AI_EXIT_ORCHESTRATOR' },
     );
   });
 

@@ -248,6 +248,7 @@ describe('LiveDemoProfitProtectionService', () => {
       'trade-1',
       'user-1',
       TradeCloseReason.AI_CLOSE_SIGNAL,
+      { source: 'BROKER_ADVERSE_PROTECTION', reasonCode: 'ADVERSE_THESIS_FAILED' },
     );
   });
 
@@ -312,6 +313,7 @@ describe('LiveDemoProfitProtectionService', () => {
       'trade-1',
       'user-1',
       TradeCloseReason.AI_CLOSE_SIGNAL,
+      { source: 'BROKER_THESIS_PROTECTION', reasonCode: 'OPPOSITE_EXPERT_PROFIT_HARVEST' },
     );
   });
 
@@ -350,6 +352,7 @@ describe('LiveDemoProfitProtectionService', () => {
       'trade-1',
       'user-1',
       TradeCloseReason.AI_CLOSE_SIGNAL,
+      { source: 'BROKER_THESIS_PROTECTION', reasonCode: 'CONFIRMED_REVERSAL_GRACE_EXPIRED' },
     );
     expect(h.query).not.toHaveBeenCalledWith(
       expect.stringContaining('FROM market_data.provider_quote_candles'),

@@ -382,6 +382,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                 trade.trade_id,
                 trade.user_id,
                 TradeCloseReason.AI_CLOSE_SIGNAL,
+                { source: 'BROKER_THESIS_PROTECTION', reasonCode: thesisDecision.reason },
               );
               continue;
             }
@@ -409,6 +410,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               trade.trade_id,
               trade.user_id,
               TradeCloseReason.AI_CLOSE_SIGNAL,
+              { source: 'BROKER_ADVERSE_PROTECTION', reasonCode: adverseDecision.reason },
             );
           }
         } catch (error) {

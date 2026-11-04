@@ -291,6 +291,7 @@ export class AiExitOrchestratorService {
           target.id,
           signal.userId,
           TradeCloseReason.AI_CLOSE_SIGNAL,
+          { source: 'AI_EXIT_ORCHESTRATOR' },
         );
         trades.push({
           tradeId: target.id,

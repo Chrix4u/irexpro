@@ -1290,6 +1290,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             position.tradeId,
             userId,
             TradeCloseReason.AI_CLOSE_SIGNAL,
+            { source: 'M1_CONFIRMED_DIRECTION_FLIP' },
           );
         } catch (error) {
           this.logger.warn(
