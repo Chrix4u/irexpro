@@ -10,7 +10,7 @@ The reproducible, read-only query is [`apps/api/scripts/audit-m1-near-miss-cohor
 psql -X -v ON_ERROR_STOP=1 -f apps/api/scripts/audit-m1-near-miss-cohort.sql
 ```
 
-It does not create orders, modify risk parameters, update trading state, or write research observations.
+It does not create orders, modify risk parameters, update trading state, or write research observations. The existing **VPS No-Trade Diagnostics** workflow also runs the SQL after a successful, gated staging deploy, against the exact checked-out staging script. Its output reports only aggregate route counts and hypothetical R metrics, not user/account identifiers. Missing scripts or unavailable DB access are reported as skipped/failed diagnostic observations, never used to bypass deployment risk gates.
 
 ## Cohort and as-of integrity
 
