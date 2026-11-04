@@ -198,7 +198,8 @@ export function hasM1TacticalStatusUiShape(
     (decision.modelDriftDiagnostics !== undefined &&
       (!isStringArray(decision.modelDriftDiagnostics) ||
         decision.modelDriftDiagnostics.length > 8))
-  ) return false;
+  )
+    return false;
   return (
     typeof decision.instrument === "string" &&
     (decision.direction === "BUY" || decision.direction === "SELL") &&
