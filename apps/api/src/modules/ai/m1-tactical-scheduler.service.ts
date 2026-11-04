@@ -1434,6 +1434,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       let feeEvidence: Awaited<
         ReturnType<M1TacticalEvidenceService['loadPriorClosedCommissionRiskR']>
       > | null = null;
+      let feeLookupFailed = false;
       try {
         feeEvidence = await this.evidence.loadPriorClosedCommissionRiskR({
           userId,
@@ -1442,6 +1443,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           asOf: decisionTime,
         });
       } catch (error) {
+        feeLookupFailed = true;
         this.logger.warn(
           `M1 commission shadow unavailable instrument=${candidate.instrument}: ${(error as Error).message}`,
         );
@@ -1454,6 +1456,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           spreadOnlyCostR: governance.genericGovernance.estimatedExecutionCostR,
           minimumRequiredNetR: minimumNetR,
           evidence: feeEvidence,
+          lookupFailed: feeLookupFailed,
         }),
         planB: multimodelDemo
           ? evaluateM1CausalCommissionShadow({
@@ -1462,6 +1465,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
               spreadOnlyCostR: multimodelDemo.governance.estimatedExecutionCostR,
               minimumRequiredNetR: minimumNetR,
               evidence: feeEvidence,
+              lookupFailed: feeLookupFailed,
             })
           : null,
       };
