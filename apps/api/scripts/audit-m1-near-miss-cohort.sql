@@ -57,7 +57,7 @@ leaders AS (
 ),
 paths AS (
   SELECT d.*, q.bars_observed, q.first_bar_time, q.last_bar_time,
-    q.first_open, q.last_close, q.first_target_time, q.first_stop_time
+    q.distinct_bars_observed, q.first_open, q.last_close, q.first_target_time, q.first_stop_time
   FROM leaders d
   LEFT JOIN LATERAL (
     WITH candles AS (
@@ -79,6 +79,7 @@ paths AS (
     )
     SELECT
       count(*) AS bars_observed,
+      count(DISTINCT bucket_time) AS distinct_bars_observed,
       min(bucket_time) AS first_bar_time,
       max(bucket_time) AS last_bar_time,
       (array_agg(open ORDER BY bucket_time))[1] AS first_open,
@@ -106,6 +107,7 @@ graded AS (
     planb_admitted,
     CASE
       WHEN bars_observed <> 15
+        OR distinct_bars_observed <> 15
         OR first_bar_time <> evaluated_at + interval '1 minute'
         OR last_bar_time <> evaluated_at + interval '15 minutes'
         OR first_open IS NULL
@@ -120,6 +122,7 @@ graded AS (
     END AS outcome,
     CASE
       WHEN bars_observed <> 15
+        OR distinct_bars_observed <> 15
         OR first_bar_time <> evaluated_at + interval '1 minute'
         OR last_bar_time <> evaluated_at + interval '15 minutes'
         OR first_open IS NULL
@@ -139,6 +142,10 @@ graded AS (
 )
 SELECT
   route,
+  CASE WHEN grouping(planb_admitted) = 1
+    THEN 'ALL'
+    ELSE coalesce(planb_admitted, 'UNKNOWN')
+  END AS planb_admission_at_decision,
   count(*) AS binned_near_misses,
   count(*) FILTER (WHERE outcome = 'TP_FIRST') AS tp_first,
   count(*) FILTER (WHERE outcome = 'SL_FIRST') AS sl_first,
@@ -154,7 +161,7 @@ SELECT
   round(avg(spread_adjusted_r_proxy - 0.20), 3) AS mean_with_extra_020r_cost,
   count(*) FILTER (WHERE spread_adjusted_r_proxy > 0) AS positive_proxy_outcomes
 FROM graded
-GROUP BY route
-ORDER BY binned_near_misses DESC;
+GROUP BY GROUPING SETS ((route), (route, planb_admitted))
+ORDER BY route, grouping(planb_admitted) DESC, binned_near_misses DESC;
 
 COMMIT;
