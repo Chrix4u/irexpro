@@ -914,16 +914,14 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       const close = finite(row.close);
       const samples = finite(row.sample_count);
       const bucketTime = new Date(row.bucket_time);
-      const liveQuoteAt = row.last_quote_sample_at
-        ? new Date(row.last_quote_sample_at)
-        : null;
+      const liveQuoteAt = row.last_quote_sample_at ? new Date(row.last_quote_sample_at) : null;
       const hasLiveQuote = Boolean(
         (finite(row.positive_quote_sample_count) ?? 0) > 0 &&
-          liveQuoteAt &&
-          Number.isFinite(liveQuoteAt.getTime()) &&
-          liveQuoteAt.getTime() >= bucketTime.getTime() &&
-          liveQuoteAt.getTime() < bucketTime.getTime() + 60_000 &&
-          liveQuoteAt.getTime() <= observedAt.getTime(),
+        liveQuoteAt &&
+        Number.isFinite(liveQuoteAt.getTime()) &&
+        liveQuoteAt.getTime() >= bucketTime.getTime() &&
+        liveQuoteAt.getTime() < bucketTime.getTime() + 60_000 &&
+        liveQuoteAt.getTime() <= observedAt.getTime(),
       );
       if (
         open === null ||
