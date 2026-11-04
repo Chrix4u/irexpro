@@ -22,6 +22,7 @@ export interface M1CausalCommissionShadow {
     | 'CAUSAL_FEE_EVIDENCE_READY'
     | 'INSUFFICIENT_PRIOR_CLOSED_TRADES'
     | 'INVALID_FEE_EVIDENCE'
+    | 'FEE_LOOKUP_UNAVAILABLE'
     | 'INVALID_SPREAD_ONLY_EXPECTANCY';
   sampleCount: number;
   percentile: typeof M1_CAUSAL_COMMISSION_PERCENTILE;
@@ -58,6 +59,7 @@ export function evaluateM1CausalCommissionShadow(input: {
   spreadOnlyCostR: number;
   minimumRequiredNetR: number;
   evidence: M1CausalCommissionEvidence | null;
+  lookupFailed?: boolean;
 }): M1CausalCommissionShadow {
   const baseline = finite(input.originalNetExpectedR);
   const spread = finite(input.spreadOnlyCostR);
@@ -73,7 +75,9 @@ export function evaluateM1CausalCommissionShadow(input: {
     minimumNet >= 0;
   const reason: M1CausalCommissionShadow['reason'] = !validInputs
     ? 'INVALID_SPREAD_ONLY_EXPECTANCY'
-    : count < M1_CAUSAL_COMMISSION_MIN_PRIOR_TRADES
+    : input.lookupFailed
+      ? 'FEE_LOOKUP_UNAVAILABLE'
+      : count < M1_CAUSAL_COMMISSION_MIN_PRIOR_TRADES
       ? 'INSUFFICIENT_PRIOR_CLOSED_TRADES'
       : p90 === null || p90 < 0
         ? 'INVALID_FEE_EVIDENCE'
