@@ -882,7 +882,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
   ): Promise<LiveDemoM1AdverseEvidence | null> {
     const rows = (await this.dataSource.query(
       `
-        SELECT bucket_time, open, high, low, close, spread_close, sample_count, positive_quote_sample_count, source
+        SELECT bucket_time, open, high, low, close, spread_close, sample_count, positive_quote_sample_count, last_quote_sample_at, source
         FROM market_data.provider_quote_candles
         WHERE connection_id = $1
           AND instrument = $2
@@ -901,6 +901,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       close: string | number;
       sample_count: string | number;
       positive_quote_sample_count?: string | number;
+      last_quote_sample_at?: Date | string | null;
       spread_close?: string | number | null;
       source: string;
     }>;
@@ -913,6 +914,15 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       const close = finite(row.close);
       const samples = finite(row.sample_count);
       const bucketTime = new Date(row.bucket_time);
+      const liveQuoteAt = row.last_quote_sample_at ? new Date(row.last_quote_sample_at) : null;
+      const hasLiveQuote = Boolean(
+        (finite(row.positive_quote_sample_count) ?? 0) > 0 &&
+        liveQuoteAt &&
+        Number.isFinite(liveQuoteAt.getTime()) &&
+        liveQuoteAt.getTime() >= bucketTime.getTime() &&
+        liveQuoteAt.getTime() < bucketTime.getTime() + 60_000 &&
+        liveQuoteAt.getTime() <= observedAt.getTime(),
+      );
       if (
         open === null ||
         high === null ||
@@ -934,7 +944,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           close,
           bucketTime,
           alignedBodyPressure: sign * ((close - open) / range),
-          hasLiveQuote: (finite(row.positive_quote_sample_count) ?? 0) > 0,
+          hasLiveQuote,
           spreadPrice: row.spread_close == null ? null : finite(row.spread_close),
           range,
         },

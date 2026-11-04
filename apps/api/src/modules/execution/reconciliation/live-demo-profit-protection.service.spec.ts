@@ -118,6 +118,7 @@ describe('LiveDemoProfitProtectionService', () => {
         close: '1.11329',
         sample_count: 30,
         positive_quote_sample_count: 30,
+        last_quote_sample_at: new Date('2026-10-28T09:04:20.000Z'),
         spread_close: '0.00002',
         source: 'ctrader-broker-native',
       },
@@ -129,6 +130,7 @@ describe('LiveDemoProfitProtectionService', () => {
         close: '1.11320',
         sample_count: 32,
         positive_quote_sample_count: 32,
+        last_quote_sample_at: new Date('2026-10-28T09:03:20.000Z'),
         spread_close: '0.00002',
         source: 'ctrader-broker-native',
       },
@@ -140,6 +142,7 @@ describe('LiveDemoProfitProtectionService', () => {
         close: '1.11315',
         sample_count: 26,
         positive_quote_sample_count: 26,
+        last_quote_sample_at: new Date('2026-10-28T09:02:20.000Z'),
         spread_close: '0.00002',
         source: 'ctrader-broker-native',
       },
@@ -208,11 +211,55 @@ describe('LiveDemoProfitProtectionService', () => {
       expect.stringContaining('positive_quote_sample_count'),
       expect.any(Array),
     );
+    expect(h.query).toHaveBeenCalledWith(
+      expect.stringContaining('last_quote_sample_at'),
+      expect.any(Array),
+    );
     const feeSql = h.query.mock.calls.find((call: unknown[]) =>
       String(call[0]).includes('past_fees'),
     );
     expect(String(feeSql?.[0])).toContain('t.closed_at < $4::timestamptz');
     expect(feeSql?.[1]).toEqual(['conn-1', 'EURUSD', 'EUR', '2026-10-28T09:05:00.000Z']);
+  });
+
+  it('rejects shadow HOLD when quote samples were recorded after the decision', async () => {
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const h = harness(
+      [candidate()],
+      '7.00',
+      'DEMO',
+      [
+        {
+          bucket_time: new Date('2026-10-28T09:04:00.000Z'),
+          open: '1.11320',
+          high: '1.11330',
+          low: '1.11319',
+          close: '1.11329',
+          sample_count: 20,
+          positive_quote_sample_count: 20,
+          last_quote_sample_at: new Date('2026-10-28T09:05:20.000Z'),
+          source: 'ctrader-broker-native',
+        },
+      ],
+      '1.11340',
+      [],
+      audit as unknown as AuditService,
+    );
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+    expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      'user-1',
+      TradeCloseReason.PROFIT_PROTECTION,
+    );
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          recommendation: 'CLOSE_CANDIDATE',
+          noTradeAuthority: true,
+          m1LiveQuoteBars: 0,
+        }),
+      }),
+    );
   });
 
   it('does not propose continuation on stale or backfilled-only trend evidence', () => {
