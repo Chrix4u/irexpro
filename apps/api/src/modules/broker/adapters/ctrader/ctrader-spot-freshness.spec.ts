@@ -105,6 +105,84 @@ describe('cTrader current-price freshness', () => {
     await client.onModuleDestroy();
   });
 
+  it('recovers a duplicate provider spot subscription with one scoped unsubscribe and retry', async () => {
+    const adapter = new CTraderAdapter(client);
+    await adapter.connect({ apiKey: ACCESS_TOKEN, accountId: ACCOUNT_ID });
+    let active = true;
+    server.on(CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ, (payload, envelope) => {
+      if (active)
+        return {
+          clientMsgId: envelope.clientMsgId,
+          payloadType: CTRADER_PAYLOAD_TYPE.OA_ERROR_RES,
+          payload: {
+            errorCode: 'ALREADY_SUBSCRIBED',
+            description: 'An attempt to subscribe twice',
+          },
+        };
+      active = true;
+      return {
+        clientMsgId: envelope.clientMsgId,
+        payloadType: CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_RES,
+        payload: { ctidTraderAccountId: payload.ctidTraderAccountId },
+      };
+    });
+    server.on(CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ, (payload, envelope) => {
+      active = false;
+      return {
+        clientMsgId: envelope.clientMsgId,
+        payloadType: CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_RES,
+        payload: { ctidTraderAccountId: payload.ctidTraderAccountId },
+      };
+    });
+    const pending = adapter.getCurrentPrice('EUR/USD');
+    await waitFor(
+      () =>
+        server.requests.filter((r) => r.payloadType === CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ)
+          .length === 2,
+    );
+    expect(
+      server.requests.filter((r) => r.payloadType === CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ),
+    ).toHaveLength(1);
+    expect(
+      server.requests
+        .filter((r) => r.payloadType === CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ)
+        .every((r) => r.payload?.subscribeToSpotTimestamp === true),
+    ).toBe(true);
+    expect(await pendingAfter(pending, 50)).toBe(true);
+    client.createdTransports[0]!.receive(spotEvent(Date.now() - 12 * 60_000, 109_000, 109_500));
+    expect(await pendingAfter(pending, 50)).toBe(true);
+    client.createdTransports[0]!.receive(spotEvent(Date.now(), 109_000, 109_500));
+    await expect(pending).resolves.toMatchObject({ bid: '1.09000', ask: '1.09500' });
+    await waitFor(
+      () =>
+        server.requests.filter((r) => r.payloadType === CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ)
+          .length === 2,
+    );
+    expect(active).toBe(false);
+  });
+
+  it('fails closed if the duplicate subscription cleanup is rejected', async () => {
+    const adapter = new CTraderAdapter(client);
+    await adapter.connect({ apiKey: ACCESS_TOKEN, accountId: ACCOUNT_ID });
+    server.on(CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ, (_p, envelope) => ({
+      clientMsgId: envelope.clientMsgId,
+      payloadType: CTRADER_PAYLOAD_TYPE.OA_ERROR_RES,
+      payload: { errorCode: 'ALREADY_SUBSCRIBED', description: 'An attempt to subscribe twice' },
+    }));
+    server.on(CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ, (_p, envelope) => ({
+      clientMsgId: envelope.clientMsgId,
+      payloadType: CTRADER_PAYLOAD_TYPE.OA_ERROR_RES,
+      payload: { errorCode: 'UNSUBSCRIBE_FAILED', description: 'Provider refused cleanup' },
+    }));
+    await expect(adapter.getCurrentPrice('EUR/USD')).rejects.toThrow(/Provider refused cleanup/);
+    expect(
+      server.requests.filter((r) => r.payloadType === CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ),
+    ).toHaveLength(1);
+    expect(
+      server.requests.filter((r) => r.payloadType === CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ),
+    ).toHaveLength(1);
+  });
+
   it('opts in to provider timestamps, rejecting missing and stale spot timestamps', async () => {
     const adapter = new CTraderAdapter(client);
     await adapter.connect({ apiKey: ACCESS_TOKEN, accountId: ACCOUNT_ID });

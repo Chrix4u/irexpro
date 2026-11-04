@@ -1691,16 +1691,50 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     // an unhandled rejection when the client tears down the connection.
     void eventPromise.catch(() => undefined);
 
+    const subscription = {
+      ctidTraderAccountId: ctid,
+      symbolId: [symbolId],
+      // Spotware only includes SPOT_EVENT.timestamp when explicitly requested.
+      // The freshness waiter below requires the provider timestamp.
+      subscribeToSpotTimestamp: true,
+    };
+    const unsubscription = { ctidTraderAccountId: ctid, symbolId: [symbolId] };
     let subscribed = false;
     try {
-      await this.client.request(session.env, CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ, {
-        ctidTraderAccountId: ctid,
-        symbolId: [symbolId],
-        // Spotware only includes SPOT_EVENT.timestamp when explicitly requested.
-        // The freshness waiter below requires that provider timestamp to
-        // reject stale cached prices; without opt-in even valid quotes time out.
-        subscribeToSpotTimestamp: true,
-      });
+      try {
+        await this.client.request(
+          session.env,
+          CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ,
+          subscription,
+        );
+      } catch (error) {
+        if (
+          !(error instanceof BrokerAdapterError) ||
+          !/an attempt to subscribe twice/i.test(error.message)
+        ) {
+          throw error;
+        }
+        // A previous one-shot waiter may have timed out while the provider
+        // kept its spot subscription (e.g. lost UNSUBSCRIBE acknowledgement).
+        // Reconcile this ONE account/symbol only, with one bounded retry.
+        // Never treat the duplicate response as fresh price evidence.
+        const cleanup = await this.client.request(
+          session.env,
+          CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ,
+          unsubscription,
+        );
+        if (cleanup.payloadType !== CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_RES) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.BROKER_SERVER_ERROR,
+            'cTrader spot subscription cleanup was not acknowledged; no quote will be accepted.',
+          );
+        }
+        await this.client.request(
+          session.env,
+          CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ,
+          subscription,
+        );
+      }
       subscribed = true;
       const event = await eventPromise;
       return event.payload as unknown as CtraderSpotEventPayload;
@@ -1710,10 +1744,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       // when the subscription itself was rejected.
       if (subscribed) {
         await this.client
-          .request(session.env, CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ, {
-            ctidTraderAccountId: ctid,
-            symbolId: [symbolId],
-          })
+          .request(session.env, CTRADER_PAYLOAD_TYPE.UNSUBSCRIBE_SPOTS_REQ, unsubscription)
           .catch(() => undefined);
       }
     }
