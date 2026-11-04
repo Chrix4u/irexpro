@@ -2855,6 +2855,9 @@ export default function AiTradingPage() {
     authoritative24hSummary?.grossProfit ?? recentExecutionActivity.grossProfit;
   const realised24hGrossLoss =
     authoritative24hSummary?.grossLoss ?? recentExecutionActivity.grossLoss;
+  // Explicit costs are authoritative only when the account-scoped 24h report
+  // is available; execution rows cannot reliably reconstruct all broker fees.
+  const realised24hExplicitCosts = authoritative24hSummary?.totalExplicitCosts ?? null;
   const realised24hAverageWin =
     authoritative24hSummary?.averageWin ?? recentExecutionActivity.averageWin;
   const realised24hAverageLoss =
@@ -3168,6 +3171,16 @@ export default function AiTradingPage() {
                           )}
                     </strong>
                     <small>{realised24hLosses} losing trade{realised24hLosses === 1 ? "" : "s"}</small>
+                    <div className="ai-performance-panel__stat-divider" aria-hidden="true" />
+                    <div className="ai-performance-panel__secondary-stat">
+                      <span>Total costs · 24h</span>
+                      <strong>{money(realised24hExplicitCosts, realisedCurrency)}</strong>
+                      <small>
+                        {authoritative24hSummary
+                          ? "Commission and financing; spread is already included in trade P&L"
+                          : "Cost detail awaits the authoritative 24h trade report"}
+                      </small>
+                    </div>
                   </div>
                   <div className="ai-performance-panel__win-rate">
                     <span>24h win rate</span>
@@ -3196,6 +3209,14 @@ export default function AiTradingPage() {
                       {signedMoney(realised24hGrossProfit, realisedCurrency)}
                     </strong>
                     <small>{realised24hWins} profitable trade{realised24hWins === 1 ? "" : "s"}</small>
+                    <div className="ai-performance-panel__stat-divider" aria-hidden="true" />
+                    <div className="ai-performance-panel__secondary-stat">
+                      <span>Actual net P&L · 24h</span>
+                      <strong className={netPnlTone === "negative" ? "is-negative" : netPnlTone === "positive" ? "is-positive" : ""}>
+                        {signedMoney(realised24hNetPnl, realisedCurrency)}
+                      </strong>
+                      <small>Gross profit less losses and recorded broker costs</small>
+                    </div>
                   </div>
                 </div>
                 <RealisedPnlMiniChart
