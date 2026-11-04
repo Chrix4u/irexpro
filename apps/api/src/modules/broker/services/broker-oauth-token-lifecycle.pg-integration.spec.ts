@@ -269,10 +269,22 @@ describe('BrokerOAuthTokenLifecycleService concurrent refresh — real PostgreSQ
   // owners can never invalidate a newer generation, proven on real PostgreSQL.
 
   it('STALE OWNER (expired lease, takeover persisted N+1, late AUTHENTICATION_FAILED) can never poison the newer generation', async () => {
-    const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+    // A wall-clock 60ms lease / 80ms delay is not deterministic under CI
+    // scheduler load. Use a provider-call barrier and expire the REAL PG
+    // lease row explicitly, preserving its owner fencing token. B must
+    // persist generation N+1 before A receives its stale rejection.
+    let signalProviderStarted!: () => void;
+    const providerStarted = new Promise<void>((resolve) => {
+      signalProviderStarted = resolve;
+    });
+    let releaseStaleProvider!: () => void;
+    const staleProviderBarrier = new Promise<void>((resolve) => {
+      releaseStaleProvider = resolve;
+    });
     ctraderClient.refreshAccessToken
       .mockImplementationOnce(async (): Promise<CtraderOAuthTokens> => {
-        await delay(150);
+        signalProviderStarted();
+        await staleProviderBarrier;
         throw new BrokerAdapterError(
           BrokerErrorCode.AUTHENTICATION_FAILED,
           'CH_ACCESS_TOKEN_INVALID: the refresh token is dead',
@@ -285,12 +297,31 @@ describe('BrokerOAuthTokenLifecycleService concurrent refresh — real PostgreSQ
           expiresIn: 2_628_000,
         }),
       );
-    const instanceA = makeInstance({ leaseMs: 60 });
+    const instanceA = makeInstance({ leaseMs: 5_000 });
     const instanceB = makeInstance();
 
     const promiseA = instanceA.ensureFreshTokens(connectionFixture(), staleCredentials());
-    await delay(80); // A's 60ms lease EXPIRED; A's provider call still in flight
-    const resultB = await instanceB.ensureFreshTokens(connectionFixture(), staleCredentials());
+    await providerStarted; // A has acquired its PG lease and entered provider refresh
+    const leasedRow = await connectionRepo.findOne({ where: { id: CONN } });
+    expect(leasedRow?.credentialRefreshLeaseOwner).toBeTruthy();
+    expect(leasedRow?.credentialGeneration).toBe(0);
+    // Simulate actual expiry in PG, not a guessed elapsed wall-clock interval.
+    const expiry = await connectionRepo.createQueryBuilder()
+      .update(BrokerConnection)
+      .set({ credentialRefreshLeaseExpiresAt: new Date(Date.now() - 1000) })
+      .where(
+        'id = :id AND credential_refresh_lease_owner = :owner',
+        { id: CONN, owner: leasedRow!.credentialRefreshLeaseOwner },
+      )
+      .execute();
+    expect(expiry.affected).toBe(1);
+
+    let resultB: DecryptedBrokerCredentials;
+    try {
+      resultB = await instanceB.ensureFreshTokens(connectionFixture(), staleCredentials());
+    } finally {
+      releaseStaleProvider();
+    }
     const resultA = await promiseA;
 
     // B's takeover pair persisted at generation 1 and stays usable.
