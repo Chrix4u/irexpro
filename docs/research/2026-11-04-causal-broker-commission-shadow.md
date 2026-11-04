@@ -1,6 +1,6 @@
 # iRexPro causal commission-per-lot estimator (research only)
 
-**Version:** `causal-commission-per-lot-shadow-v1`  
+**Version:** `causal-commission-per-lot-shadow-v1`
 **Verified against:** cTrader DEMO, 2026-11-04 11:33 UTC.
 
 ## Objective
