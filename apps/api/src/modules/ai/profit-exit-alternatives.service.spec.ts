@@ -13,7 +13,7 @@ describe('ProfitExitAlternativesService', () => {
     const sql = String(query.mock.calls[0]?.[0] ?? '');
     expect(sql).toContain("bc.account_type = 'DEMO'");
     expect(sql).toContain("t.close_reason = 'PROFIT_PROTECTION'");
-    expect(sql).toContain("a.metadata->>'mode' = 'SHADOW_ONLY'");
+    expect(sql).toContain("audit0.metadata->>'mode' = 'SHADOW_ONLY'");
     expect(sql).toContain('NOT EXISTS');
     expect(query.mock.calls[0]?.[1]).toEqual([
       '2026-11-04T10:10:00.000Z',
