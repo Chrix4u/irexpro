@@ -19,6 +19,7 @@ interface TimingResearchReport {
   evaluatedDecisionRows: number;
   observedQuoteCandles: number;
   timingRejectedEpisodes: number;
+  byGateExclusivity: Record<string, TimingResearchGroup>;
   byM1Reason: Record<string, TimingResearchGroup>;
 }
 
@@ -143,6 +144,7 @@ describe('Plan-B-admitted / M1-timing-rejected missed-entry research audit', () 
       promotionEligible: false,
       qualificationEvidence: false,
       timingRejectedEpisodes: 1,
+      byGateExclusivity: { TIMING_ONLY: { episodes: 1, observed: 1, netR: 0.05 } },
       byM1Reason: {
         NO_VALID_ROUTE: {
           episodes: 1,
@@ -162,6 +164,35 @@ describe('Plan-B-admitted / M1-timing-rejected missed-entry research audit', () 
     expect(runner.CANDLES_SQL).toContain('positive_quote_sample_count > 0');
     expect(runner.CANDLES_SQL).toContain("source = 'ctrader-broker-native'");
     expect(runner.DECISIONS_SQL).toContain('policy_version = $3');
+  });
+
+  it('separates sole M1 timing vetoes from cases still blocked by governance', async () => {
+    const client = new FakeClient(
+      [
+        decision('2026-11-04T08:31:00.000Z'),
+        decision('2026-11-04T08:31:00.000Z', {
+          planBRoute: 'EARLY_TRANSITION',
+          planBRegime: 'TRANSITION_EARLY',
+          authorityBlockers: [
+            'MULTIMODEL_EARLY_TRANSITION_NOT_M1_CONFIRMED',
+            'DRIFT_OUT_OF_DISTRIBUTION',
+          ],
+        }),
+      ],
+      quoteBars('2026-11-04T08:32:00.000Z', 15),
+    );
+    const report = await audit(client);
+    expect(report.timingRejectedEpisodes).toBe(2);
+    expect(report.byGateExclusivity.TIMING_ONLY).toMatchObject({
+      episodes: 1,
+      observed: 1,
+      timingOnly: 1,
+    });
+    expect(report.byGateExclusivity.TIMING_AND_OTHER_GATES).toMatchObject({
+      episodes: 1,
+      observed: 1,
+      timingOnly: 0,
+    });
   });
 
   it('marks missing contiguous broker candles as unobservable, not losses or wins', async () => {

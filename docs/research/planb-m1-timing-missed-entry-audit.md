@@ -29,6 +29,15 @@ This is a **single, selected, retrospective research window**, not a validated r
 | M1 continuation vs Plan-B strategy | 3 | 3 | 1 | 2 | +0.17 |
 | Direction edge too small | 2 | 2 | 1 | 1 | −0.35 |
 
+A later **09:02 UTC** read, with a slightly shifted six-hour window and two additional episode leaders, explicitly separated other vetoes from the timing veto:
+
+| Other governance blockers | Episode leaders | Observable | Positive | Negative | Simulated net R |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **M1 timing was the only multi-model authority blocker** | 62 | 50 | 13 | 37 | −13.60 |
+| M1 timing **and** another authority blocker | 6 | 5 | 4 | 1 | +2.62 |
+
+This second split is important: **do not credit a timing-gate change with outcomes from rows still failing drift, event-risk, economic, or other governance checks**. The stronger negative pure-timing subgroup reinforces the need to keep the current gate while researching alternatives, but neither sample establishes out-of-sample performance.
+
 Thirteen episodes had no complete causal quote evidence and were **unobservable**, not zero-profit trades. Most of the negative aggregate came from conflict episodes; this supports keeping M1 timing as a safety gate pending stronger evidence. It does **not** justify changing the gate or claiming out-of-sample profit from the smaller positive subgroups.
 
 ## Research acceptance before modifying trading authority

@@ -227,6 +227,9 @@ async function runPlanBTimingCounterfactualAudit({
       truncatedDecisionWindow: rows.length === maxDecisions,
       observedQuoteCandles: candles.length,
       timingRejectedEpisodes: leaders.length,
+      byGateExclusivity: summarize(outcomes, (x) =>
+        x.timingOnly ? 'TIMING_ONLY' : 'TIMING_AND_OTHER_GATES',
+      ),
       byM1Reason: summarize(outcomes, (x) => x.m1Reason),
       byPlanBRoute: summarize(outcomes, (x) => x.planBRoute),
       byMarketRegime: summarize(outcomes, (x) => x.regime),
