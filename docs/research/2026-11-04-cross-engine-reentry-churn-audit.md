@@ -10,7 +10,7 @@ iRexPro can open a M1 tactical entry soon after a Plan-B/ensemble exit, or the r
 ## Definition and safeguards
 
 - Only the user's own cTrader DEMO connection. The manually invoked tool uses a bounded `REPEATABLE READ READ ONLY` transaction and never writes, places orders, restarts services, modifies settings, or attaches to an execution scheduler.
-- Allowed engines: M1 tactical and Plan-B/ensemble. Each trade must have valid open and **completed close**. A one-hour history buffer precedes the window. Maximum 14 days, 2,000 rows; exceeding this fails rather than silently truncating.
+- Allowed engines: M1 tactical and Plan-B/ensemble. Each trade must have valid open and **completed close**. A one-hour close-history buffer precedes the window, including positions opened earlier but closed within the buffer. Maximum 14 days, 2,000 rows; exceeding this fails rather than silently truncating.
 - A re-entry is a closed trade opened within N minutes **after the most recent earlier closure** in the **same pair and direction**. The previous close may belong to either engine, any strategy route. Match closes by actual **close timestamp**; do not assume opening order is closing order (overlapping positions).
 - Compute net after *separately recorded* costs as `realised_pnl - abs(commission) + swap` only when **all three amounts** are populated; otherwise report an incomplete-cost trade, never assume a zero commission. Group currencies separately; no FX conversion or cross-currency summation.
 - Report mutually exclusive 0–5, 5–10, 10–15 and 15–30 minute bands, as well as cumulative horizons 5/10/15/30, sliced by current route, pair/side, previous close reason, engine transition, and intersections of those dimensions.
