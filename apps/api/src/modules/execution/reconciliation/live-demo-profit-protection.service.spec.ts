@@ -231,8 +231,12 @@ describe('LiveDemoProfitProtectionService', () => {
       [
         {
           bucket_time: new Date('2026-10-28T09:04:00.000Z'),
-          open: '1.11320', high: '1.11330', low: '1.11319', close: '1.11329',
-          sample_count: 20, positive_quote_sample_count: 20,
+          open: '1.11320',
+          high: '1.11330',
+          low: '1.11319',
+          close: '1.11329',
+          sample_count: 20,
+          positive_quote_sample_count: 20,
           last_quote_sample_at: new Date('2026-10-28T09:05:20.000Z'),
           source: 'ctrader-broker-native',
         },
@@ -243,14 +247,19 @@ describe('LiveDemoProfitProtectionService', () => {
     );
     await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
     expect(h.executionService.closeTrade).toHaveBeenCalledWith(
-      'trade-1', 'user-1', TradeCloseReason.PROFIT_PROTECTION,
+      'trade-1',
+      'user-1',
+      TradeCloseReason.PROFIT_PROTECTION,
     );
-    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
-      metadata: expect.objectContaining({
-        recommendation: 'CLOSE_CANDIDATE', noTradeAuthority: true,
-        m1LiveQuoteBars: 0,
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          recommendation: 'CLOSE_CANDIDATE',
+          noTradeAuthority: true,
+          m1LiveQuoteBars: 0,
+        }),
       }),
-    }));
+    );
   });
 
   it('does not propose continuation on stale or backfilled-only trend evidence', () => {
