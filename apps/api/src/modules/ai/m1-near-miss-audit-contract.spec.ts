@@ -53,6 +53,8 @@ describe('cTrader M1 near-miss SQL audit contract', () => {
     expect(script).toContain('ELSE NULL');
     expect(script).toContain('mean_with_causal_p90_fees');
     expect(script).toContain('episodes_with_causal_fee_evidence');
+    expect(script).toContain('mean_spread_proxy_on_fee_evaluable_subset');
+    expect(script).toContain('positive_with_causal_p90_fees');
   });
 
   it('separates Plan-B admission cohorts and exposes cost sensitivity', () => {
