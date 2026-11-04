@@ -42,17 +42,43 @@ describe('ExecutionReadService trading-cost accounting', () => {
         },
       ]),
     };
+    const reasonQuery = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      addGroupBy: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([
+        {
+          accountCurrency: 'USD',
+          closeReason: 'TAKE_PROFIT_HIT',
+          totalTrades: '2',
+          pnlTradeCount: '2',
+          wins: '1',
+          losses: '1',
+          flats: '0',
+          grossRealisedPnl: '300.15',
+          netRealisedPnl: '274.40',
+          totalExplicitCosts: '25.75',
+        },
+      ]),
+    };
     const baseQuery = {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
-      clone: jest.fn().mockReturnValueOnce(pageQuery).mockReturnValueOnce(summaryQuery),
+      clone: jest
+        .fn()
+        .mockReturnValueOnce(pageQuery)
+        .mockReturnValueOnce(summaryQuery)
+        .mockReturnValueOnce(reasonQuery),
     };
     const repo = {
       createQueryBuilder: jest.fn().mockReturnValue(baseQuery),
     } as unknown as Repository<Trade>;
     const service = new ExecutionReadService(repo);
 
-    const report = await service.listClosedTradeReport(USER_ID);
+    const report = await service.listClosedTradeReport(USER_ID, { includeReasonBreakdown: true });
     const summary = report.summary as typeof report.summary & {
       grossRealisedPnl?: string | null;
       totalExplicitCosts?: string | null;
@@ -85,5 +111,13 @@ describe('ExecutionReadService trading-cost accounting', () => {
     expect(summary.totalExplicitCosts).toBe('25.75');
     expect(summary.netRealisedPnl).toBe('274.40');
     expect(summary.expectancyPerTrade).toBe('137.20');
+    expect(summary.reasonBreakdown).toEqual([
+      expect.objectContaining({
+        accountCurrency: 'USD',
+        closeReason: 'TAKE_PROFIT_HIT',
+        netRealisedPnl: '274.40',
+        totalExplicitCosts: '25.75',
+      }),
+    ]);
   });
 });
