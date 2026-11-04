@@ -66,6 +66,7 @@ import {
 } from './multimodel-demo-authority';
 import { evaluateM1TacticalExpectancy } from './m1-tactical-expectancy';
 import { attributeZaiDemoBlockers, diagnoseZaiDemoCostGeometry } from './zai-demo-diagnostics';
+import { evaluateM1CausalCommissionShadow } from './m1-causal-commission-shadow';
 import { evaluateDemoProfitabilityReliabilityGate } from './demo-profitability-reliability-gate';
 import {
   evaluateM1RoutePairSideReliability,
@@ -1422,6 +1423,50 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
         ]);
 
+    // Commission research is evaluated only for already-blocked DEMO
+    // candidates. It never delays a previously eligible order, changes the
+    // derived canExecute flag or reopens a broker-risk veto.
+    let historicalCommissionCostShadow: {
+      m1: ReturnType<typeof evaluateM1CausalCommissionShadow>;
+      planB: ReturnType<typeof evaluateM1CausalCommissionShadow> | null;
+    } | null = null;
+    if (professionalDemoPhase && !canExecute && routeDecision.route !== 'ABSTAIN') {
+      let feeEvidence: Awaited<
+        ReturnType<M1TacticalEvidenceService['loadPriorClosedCommissionRiskR']>
+      > | null = null;
+      try {
+        feeEvidence = await this.evidence.loadPriorClosedCommissionRiskR({
+          userId,
+          brokerConnectionId,
+          instrument: candidate.instrument,
+          asOf: decisionTime,
+        });
+      } catch (error) {
+        this.logger.warn(
+          `M1 commission shadow unavailable instrument=${candidate.instrument}: ${(error as Error).message}`,
+        );
+      }
+      const minimumNetR = Math.max(0.08, routeNetExpectedRFloor);
+      historicalCommissionCostShadow = {
+        m1: evaluateM1CausalCommissionShadow({
+          observedAt: decisionTime,
+          originalNetExpectedR: governance.genericGovernance.netExpectedR,
+          spreadOnlyCostR: governance.genericGovernance.estimatedExecutionCostR,
+          minimumRequiredNetR: minimumNetR,
+          evidence: feeEvidence,
+        }),
+        planB: multimodelDemo
+          ? evaluateM1CausalCommissionShadow({
+              observedAt: decisionTime,
+              originalNetExpectedR: multimodelDemo.governance.netExpectedR,
+              spreadOnlyCostR: multimodelDemo.governance.estimatedExecutionCostR,
+              minimumRequiredNetR: minimumNetR,
+              evidence: feeEvidence,
+            })
+          : null,
+      };
+    }
+
     // Observation on the connected DEMO engine; no admission, volume or execution modification.
     const zaiDemoDiagnostics = professionalDemoPhase
       ? {
@@ -1432,6 +1477,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             route: routeDecision.route,
             governance: governance.genericGovernance,
           }),
+          historicalCommissionCostShadow,
           candidateConfidence: candidate.confidence,
           planBEnsembleScore: multimodelDemo?.ensemble.ensembleScore ?? null,
           trainedExpertConfidence: multimodelDemo?.trainedExpert.ensembleConfidence ?? null,
