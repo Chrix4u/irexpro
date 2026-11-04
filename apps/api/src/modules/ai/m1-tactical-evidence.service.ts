@@ -674,7 +674,11 @@ export class M1TacticalEvidenceService {
       primaryBlockerCode: nullableString(blockerAttribution.primaryCode),
       modelDriftState: nullableString(multimodelGovernance.driftState),
       modelDriftDiagnostics: blockers(multimodelGovernance.driftDiagnostics)
-        .filter((item) => /^(confidence|extensionAtr|volatilityScore|emaSeparation|mtfStrength|rsi14|directionalMomentumAtr):(INVALID|HARD_LOW|HARD_HIGH|STRESSED_LOW|STRESSED_HIGH)$/.test(item))
+        .filter((item) =>
+          /^(confidence|extensionAtr|volatilityScore|emaSeparation|mtfStrength|rsi14|directionalMomentumAtr):(INVALID|HARD_LOW|HARD_HIGH|STRESSED_LOW|STRESSED_HIGH)$/.test(
+            item,
+          ),
+        )
         .slice(0, 8),
       demoCostBreakEvenStopPrice: nullableNumber(costGeometry.costBreakEvenStopPriceAt010R),
       demoAlternativeCostR: nullableNumber(costGeometry.hypotheticalCostR),
