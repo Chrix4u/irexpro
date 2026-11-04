@@ -3180,7 +3180,16 @@ export default function AiTradingPage() {
                     <div className="ai-performance-panel__stat-divider" aria-hidden="true" />
                     <div className="ai-performance-panel__secondary-stat">
                       <span>Total costs · 24h</span>
-                      <strong>{money(realised24hExplicitCosts, realisedCurrency)}</strong>
+                      <strong className={Number(realised24hExplicitCosts ?? 0) > 0 ? "is-negative" : ""}>
+                        {realised24hExplicitCosts == null
+                          ? "—"
+                          : money(
+                              Number(realised24hExplicitCosts) > 0
+                                ? `-${realised24hExplicitCosts}`
+                                : realised24hExplicitCosts,
+                              realisedCurrency,
+                            )}
+                      </strong>
                       <small>
                         {authoritative24hSummary
                           ? "Commission and financing; spread is already included in trade P&L"
