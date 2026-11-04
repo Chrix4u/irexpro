@@ -11,6 +11,8 @@ const candle = (minute: number, high: number, low: number) => ({
   high,
   low,
   sample_count: 10,
+  positive_quote_sample_count: 10,
+  last_quote_sample_at: new Date(`2026-10-30T10:${String(minute).padStart(2, '0')}:20.000Z`),
   source: 'ctrader-broker-native',
 });
 
@@ -61,6 +63,29 @@ describe('profit-protection counterfactual classifier', () => {
     ).toMatchObject({ outcome: 'DATA_GAP' });
   });
 
+  it('does not trust a backfilled native-labeled candle without independent live quotes', () => {
+    const native = candle(1, 1.1012, 1.0998);
+    const unverified = { ...native, positive_quote_sample_count: 0 };
+    expect(
+      classifyProfitProtectionCounterfactual({
+        direction: 'BUY',
+        closeAt,
+        takeProfit: 1.101,
+        stopLoss: 1.099,
+        candles: [unverified],
+      }),
+    ).toMatchObject({ outcome: 'DATA_GAP' });
+    expect(
+      classifyProfitProtectionCounterfactual({
+        direction: 'BUY',
+        closeAt,
+        takeProfit: 1.101,
+        stopLoss: 1.099,
+        candles: [{ ...native, last_quote_sample_at: new Date('2026-10-30T10:02:20.000Z') }],
+      }),
+    ).toMatchObject({ outcome: 'DATA_GAP' });
+  });
+
   it('returns NEITHER_4H only when the full four-hour path is continuously observed', () => {
     const candles = Array.from({ length: 240 }, (_, i) => {
       const d = new Date(Date.UTC(2026, 9, 30, 10, 1 + i, 0));
@@ -69,6 +94,8 @@ describe('profit-protection counterfactual classifier', () => {
         high: 1.1005,
         low: 1.0995,
         sample_count: 5,
+        positive_quote_sample_count: 5,
+        last_quote_sample_at: new Date(d.getTime() + 20_000),
         source: 'ctrader-broker-native',
       };
     });
@@ -117,7 +144,13 @@ describe('ProfitProtectionCounterfactualService', () => {
     );
     expect(loadSql).toContain("t.closed_at <= $1::timestamptz - interval '4 hours'");
     expect(loadSql).toContain('NOT EXISTS');
+    expect(PROFIT_PROTECTION_COUNTERFACTUAL_ARTIFACT).toBe(
+      'profit-protection-counterfactual-v2-quote-verified',
+    );
 
+    const candleSql = String(query.mock.calls[1]?.[0] ?? '');
+    expect(candleSql).toContain('positive_quote_sample_count > 0');
+    expect(candleSql).toContain("last_quote_sample_at < bucket_time + interval '1 minute'");
     const persist = query.mock.calls.find((call: unknown[]) =>
       String(call[0]).includes('INSERT INTO trading.post_entry_shadow_observations'),
     );
