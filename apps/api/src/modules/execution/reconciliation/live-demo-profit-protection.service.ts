@@ -1,4 +1,6 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
+import { AuditAction } from '../../../common/enums/audit-action.enum';
+import { AuditService } from '../../audit/audit.service';
 import { DataSource } from 'typeorm';
 import { BrokerService } from '../../broker/broker.service';
 import { ExecutionService } from '../execution.service';
@@ -13,6 +15,8 @@ export interface LiveDemoM1AdverseEvidence {
   alignedLatestBodyPressure: number;
   alignedMomentum3: number;
   latestAgeSeconds: number;
+  /** Independently observed cTrader quotes, never inferred from trendbar tick volume. */
+  liveQuoteBars?: number;
 }
 
 export interface LiveDemoAdverseProtectionDecision {
@@ -189,6 +193,98 @@ export function evaluateLiveDemoAdverseProtection(input: {
   return hold('HOLD', currentR);
 }
 
+/**
+ * Prospective pre-exit trend recheck run in SHADOW mode as-of the moment
+ * an existing DEMO profit lock asks to close. A proposed HOLD is research
+ * evidence only; it cannot delay, cancel or replace the protective close.
+ */
+export interface LiveDemoProfitLockTrendRecheckDecision {
+  wouldHoldIfEnabled: boolean;
+  reason:
+    | 'NO_THESIS'
+    | 'THESIS_STALE'
+    | 'THESIS_NOT_EXECUTABLE'
+    | 'THESIS_OPPOSES_TRADE'
+    | 'EXPERT_NOT_ALIGNED'
+    | 'M1_LIVE_EVIDENCE_MISSING'
+    | 'M1_MOMENTUM_NOT_SUPPORTIVE'
+    | 'CONTINUATION_CANDIDATE';
+  thesisAgeSeconds: number | null;
+}
+
+export function evaluateLiveDemoProfitLockTrendRecheck(input: {
+  tradeDirection: 'BUY' | 'SELL';
+  observedAt: Date;
+  latestThesis: LiveDemoAuthoritativeThesis | null;
+  m1Evidence: LiveDemoM1AdverseEvidence | null;
+}): LiveDemoProfitLockTrendRecheckDecision {
+  const reject = (
+    reason: LiveDemoProfitLockTrendRecheckDecision['reason'],
+    thesisAgeSeconds: number | null,
+  ): LiveDemoProfitLockTrendRecheckDecision => ({
+    wouldHoldIfEnabled: false,
+    reason,
+    thesisAgeSeconds,
+  });
+  const thesis = input.latestThesis;
+  if (!thesis) return reject('NO_THESIS', null);
+
+  const thesisAgeSeconds =
+    (input.observedAt.getTime() - thesis.evaluatedAt.getTime()) / 1_000;
+  if (!Number.isFinite(thesisAgeSeconds) || thesisAgeSeconds < 0 || thesisAgeSeconds > 90) {
+    return reject('THESIS_STALE', thesisAgeSeconds);
+  }
+  if (
+    thesis.executionAuthority !== 'BROKER_NATIVE' ||
+    !thesis.authorityExecutable ||
+    thesis.blockers.length > 0
+  ) {
+    return reject('THESIS_NOT_EXECUTABLE', thesisAgeSeconds);
+  }
+  if (thesis.direction !== input.tradeDirection) {
+    return reject('THESIS_OPPOSES_TRADE', thesisAgeSeconds);
+  }
+
+  const expert = thesis.trainedExpert;
+  const supportingVotes =
+    input.tradeDirection === 'BUY' ? (expert?.longVotes ?? 0) : (expert?.shortVotes ?? 0);
+  const opposingVotes =
+    input.tradeDirection === 'BUY' ? (expert?.shortVotes ?? 0) : (expert?.longVotes ?? 0);
+  if (
+    !expert ||
+    !expert.allBrokerNative ||
+    expert.direction !== input.tradeDirection ||
+    supportingVotes < 2 ||
+    opposingVotes > 0 ||
+    expert.ensembleConfidence === null ||
+    expert.ensembleConfidence < 0.7 ||
+    expert.freshnessSeconds === null ||
+    expert.freshnessSeconds < 0 ||
+    expert.freshnessSeconds > 60
+  ) {
+    return reject('EXPERT_NOT_ALIGNED', thesisAgeSeconds);
+  }
+
+  const m1 = input.m1Evidence;
+  if (
+    !m1 ||
+    m1.completedBars < 2 ||
+    (m1.liveQuoteBars ?? 0) < 2 ||
+    m1.latestAgeSeconds < 0 ||
+    m1.latestAgeSeconds > 90
+  ) {
+    return reject('M1_LIVE_EVIDENCE_MISSING', thesisAgeSeconds);
+  }
+  if (
+    m1.alignedLatestBodyPressure < 0.15 ||
+    m1.alignedMomentum3 < 0.1 ||
+    m1.adverseBars > 1
+  ) {
+    return reject('M1_MOMENTUM_NOT_SUPPORTIVE', thesisAgeSeconds);
+  }
+  return { wouldHoldIfEnabled: true, reason: 'CONTINUATION_CANDIDATE', thesisAgeSeconds };
+}
+
 interface OpenAiTradeRow {
   trade_id: string;
   user_id: string;
@@ -235,6 +331,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     private readonly dataSource: DataSource,
     private readonly brokerService: BrokerService,
     private readonly executionService: ExecutionService,
+    @Optional() private readonly auditService?: AuditService,
   ) {}
 
   onModuleInit(): void {
@@ -356,11 +453,15 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                   `peak=${money(maxFavorablePnl)} current=${money(currentPnl)} risk=${money(initialRisk)} ` +
                   `giveback=${money(profitGiveback)} floor=${decision.protectedFloorPnl} retain=${decision.retentionFraction}`,
               );
+              // The real profit lock still closes immediately. Reconstruct
+              // a causal as-of-decision trend check AFTER dispatch for
+              // prospective research; a shadow HOLD never creates exposure.
               await this.executionService.closeTrade(
                 trade.trade_id,
                 trade.user_id,
                 TradeCloseReason.PROFIT_PROTECTION,
               );
+              await this.recordProfitLockTrendRecheck(trade, observedAt, currentPnl, initialRisk);
               continue;
             }
 
@@ -421,6 +522,59 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       }
     } finally {
       this.running = false;
+    }
+  }
+
+  /**
+   * Shadow-only audit, intentionally performed AFTER the protective close
+   * request so database reads cannot delay the broker close. Both input
+   * readers are constrained to evidence available at observedAt, never the
+   * subsequent movement used to evaluate their hypothetical HOLD decisions.
+   */
+  private async recordProfitLockTrendRecheck(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+    currentPnl: number,
+    initialRiskPnl: number,
+  ): Promise<void> {
+    if (!this.auditService) return;
+    try {
+      const [latestThesis, m1Evidence] = await Promise.all([
+        this.loadLatestAiThesis(trade, observedAt),
+        this.loadCausalM1Evidence(trade, observedAt),
+      ]);
+      const recheck = evaluateLiveDemoProfitLockTrendRecheck({
+        tradeDirection: trade.direction,
+        observedAt,
+        latestThesis,
+        m1Evidence,
+      });
+      await this.auditService.log({
+        actorUserId: trade.user_id,
+        action: AuditAction.DEMO_PROFIT_LOCK_TREND_RECHECK,
+        resourceType: 'Trade',
+        resourceId: trade.trade_id,
+        metadata: {
+          mode: 'SHADOW_ONLY',
+          observedAt: observedAt.toISOString(),
+          recommendation: recheck.wouldHoldIfEnabled ? 'HOLD_CANDIDATE' : 'CLOSE_CANDIDATE',
+          reason: recheck.reason,
+          thesisAgeSeconds: recheck.thesisAgeSeconds,
+          currentR: currentPnl / initialRiskPnl,
+          strategyRoute: trade.strategy_route,
+          originalCloseReason: TradeCloseReason.PROFIT_PROTECTION,
+          m1LiveQuoteBars: m1Evidence?.liveQuoteBars ?? 0,
+          m1AlignedMomentum3: m1Evidence?.alignedMomentum3 ?? null,
+          m1LatestAgeSeconds: m1Evidence?.latestAgeSeconds ?? null,
+          noTradeAuthority: true,
+        },
+      });
+    } catch (error) {
+      // A research observation must never impede execution, even if its
+      // historical read, adapter, audit repository or serialization fails.
+      this.logger.warn(
+        `cTrader DEMO shadow trend recheck unavailable trade=${trade.trade_id}: ${(error as Error).message}`,
+      );
     }
   }
 
@@ -642,7 +796,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
   ): Promise<LiveDemoM1AdverseEvidence | null> {
     const rows = (await this.dataSource.query(
       `
-        SELECT bucket_time, open, high, low, close, sample_count, source
+        SELECT bucket_time, open, high, low, close, sample_count, positive_quote_sample_count, source
         FROM market_data.provider_quote_candles
         WHERE connection_id = $1
           AND instrument = $2
@@ -660,6 +814,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       low: string | number;
       close: string | number;
       sample_count: string | number;
+      positive_quote_sample_count?: string | number;
       source: string;
     }>;
     if (!rows.length) return null;
@@ -692,6 +847,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           close,
           bucketTime,
           alignedBodyPressure: sign * ((close - open) / range),
+          hasLiveQuote: (finite(row.positive_quote_sample_count) ?? 0) > 0,
           range,
         },
       ];
@@ -706,6 +862,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     return {
       completedBars: parsed.length,
       adverseBars: parsed.filter((row) => row.alignedBodyPressure <= -0.15).length,
+      liveQuoteBars: parsed.filter((row) => row.hasLiveQuote).length,
       alignedLatestBodyPressure: latest.alignedBodyPressure,
       alignedMomentum3,
       latestAgeSeconds: (observedAt.getTime() - latestCloseAt) / 1000,
