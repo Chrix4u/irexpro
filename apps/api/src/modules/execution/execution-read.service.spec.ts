@@ -154,7 +154,11 @@ describe('ExecutionReadService', () => {
     const baseQuery = {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
-      clone: jest.fn().mockReturnValueOnce(pageQuery).mockReturnValueOnce(summaryQuery).mockReturnValueOnce(reasonQuery),
+      clone: jest
+        .fn()
+        .mockReturnValueOnce(pageQuery)
+        .mockReturnValueOnce(summaryQuery)
+        .mockReturnValueOnce(reasonQuery),
     };
     const reportRepo = {
       createQueryBuilder: jest.fn().mockReturnValue(baseQuery),
