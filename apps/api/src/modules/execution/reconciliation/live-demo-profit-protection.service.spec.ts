@@ -20,6 +20,8 @@ describe('LiveDemoProfitProtectionService', () => {
     external_position_id: 'position-7001',
     instrument: 'EURUSD',
     direction: 'BUY',
+    lot_size: '0.20',
+    account_currency: 'EUR',
     max_favorable_pnl: '10.00',
     max_adverse_pnl: '-2.00',
     profit_giveback: '0.00',
@@ -41,8 +43,10 @@ describe('LiveDemoProfitProtectionService', () => {
     currentPrice = '1.11340',
     thesisRows: Array<Record<string, unknown>> = [],
     auditService?: AuditService,
+    feeRows: Array<Record<string, unknown>> = [],
   ) {
     const query = jest.fn().mockImplementation(async (sql: string) => {
+      if (sql.includes('past_fees')) return feeRows;
       if (sql.includes('FROM trading.trades t')) return rows;
       if (sql.includes('FROM trading.m1_tactical_decisions')) return thesisRows;
       if (sql.includes('FROM market_data.provider_quote_candles')) return m1Rows;
@@ -114,6 +118,7 @@ describe('LiveDemoProfitProtectionService', () => {
         close: '1.11329',
         sample_count: 30,
         positive_quote_sample_count: 30,
+        spread_close: '0.00002',
         source: 'ctrader-broker-native',
       },
       {
@@ -124,6 +129,7 @@ describe('LiveDemoProfitProtectionService', () => {
         close: '1.11320',
         sample_count: 32,
         positive_quote_sample_count: 32,
+        spread_close: '0.00002',
         source: 'ctrader-broker-native',
       },
       {
@@ -134,6 +140,7 @@ describe('LiveDemoProfitProtectionService', () => {
         close: '1.11315',
         sample_count: 26,
         positive_quote_sample_count: 26,
+        spread_close: '0.00002',
         source: 'ctrader-broker-native',
       },
     ];
@@ -162,6 +169,7 @@ describe('LiveDemoProfitProtectionService', () => {
       '1.11340',
       thesisRows,
       auditService as unknown as AuditService,
+      [{ sample_count: '12', p90_cost_per_lot: '8.00' }],
     );
 
     await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
@@ -179,6 +187,15 @@ describe('LiveDemoProfitProtectionService', () => {
           mode: 'SHADOW_ONLY',
           recommendation: 'HOLD_CANDIDATE',
           reason: 'CONTINUATION_CANDIDATE',
+          runnerShadow: expect.objectContaining({
+            mode: 'SHADOW_ONLY',
+            eligibleForFurtherResearch: true,
+            reason: 'BROKER_VALIDATION_REQUIRED',
+            estimatedBrokerCosts: 1.6,
+            feeSampleCount: 12,
+            noTradeAuthority: true,
+          }),
+          runnerCostEvidence: 'RECENT_CLOSED_TRADES_BEFORE_DECISION',
           originalCloseReason: TradeCloseReason.PROFIT_PROTECTION,
           noTradeAuthority: true,
         }),
@@ -191,6 +208,16 @@ describe('LiveDemoProfitProtectionService', () => {
       expect.stringContaining('positive_quote_sample_count'),
       expect.any(Array),
     );
+    const feeSql = h.query.mock.calls.find((call: unknown[]) =>
+      String(call[0]).includes('past_fees'),
+    );
+    expect(String(feeSql?.[0])).toContain('t.closed_at < $4::timestamptz');
+    expect(feeSql?.[1]).toEqual([
+      'conn-1',
+      'EURUSD',
+      'EUR',
+      '2026-10-28T09:05:00.000Z',
+    ]);
   });
 
   it('does not propose continuation on stale or backfilled-only trend evidence', () => {
