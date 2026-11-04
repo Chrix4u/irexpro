@@ -118,6 +118,7 @@ describe('LiveDemoProfitProtectionService', () => {
         close: '1.11329',
         sample_count: 30,
         positive_quote_sample_count: 30,
+        last_quote_sample_at: new Date('2026-10-28T09:04:20.000Z'),
         spread_close: '0.00002',
         source: 'ctrader-broker-native',
       },
@@ -129,6 +130,7 @@ describe('LiveDemoProfitProtectionService', () => {
         close: '1.11320',
         sample_count: 32,
         positive_quote_sample_count: 32,
+        last_quote_sample_at: new Date('2026-10-28T09:03:20.000Z'),
         spread_close: '0.00002',
         source: 'ctrader-broker-native',
       },
@@ -140,6 +142,7 @@ describe('LiveDemoProfitProtectionService', () => {
         close: '1.11315',
         sample_count: 26,
         positive_quote_sample_count: 26,
+        last_quote_sample_at: new Date('2026-10-28T09:02:20.000Z'),
         spread_close: '0.00002',
         source: 'ctrader-broker-native',
       },
@@ -206,6 +209,10 @@ describe('LiveDemoProfitProtectionService', () => {
     );
     expect(h.query).toHaveBeenCalledWith(
       expect.stringContaining('positive_quote_sample_count'),
+      expect.any(Array),
+    );
+    expect(h.query).toHaveBeenCalledWith(
+      expect.stringContaining('last_quote_sample_at'),
       expect.any(Array),
     );
     const feeSql = h.query.mock.calls.find((call: unknown[]) =>
