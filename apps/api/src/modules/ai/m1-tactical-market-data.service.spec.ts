@@ -124,6 +124,62 @@ describe('M1TacticalMarketDataService', () => {
     await expect(service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
   });
 
+  it('explains which completed timeframe prevents feature readiness without admitting execution', async () => {
+    const { service } = fixture({ H4: rows(10, 240, new Date('2026-10-15T08:00:00.000Z')) });
+    await expect(service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
+    expect(service.getLastReadiness('conn-1', 'EURUSD')).toEqual(
+      expect.objectContaining({
+        ready: false,
+        reason: 'BROKER_FEATURE_CONTEXT_UNAVAILABLE',
+        authority: null,
+        detail: expect.stringContaining('INSUFFICIENT_COMPLETED_HISTORY'),
+      }),
+    );
+    expect(service.getLastReadiness('conn-1', 'EURUSD')?.detail).toContain('H4=10/22');
+  });
+
+  it('identifies nonpositive H4 volatility without overriding the feature rejection', async () => {
+    const flatH4 = rows(30, 240, new Date('2026-10-15T08:00:00.000Z')).map((bar) => ({
+      ...bar,
+      open: '1.00000',
+      high: '1.00000',
+      low: '1.00000',
+      close: '1.00000',
+    }));
+    const { service } = fixture({ H4: flatH4 });
+    await expect(service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
+    expect(service.getLastReadiness('conn-1', 'EURUSD')).toEqual(
+      expect.objectContaining({
+        ready: false,
+        reason: 'BROKER_FEATURE_CONTEXT_UNAVAILABLE',
+        detail: expect.stringContaining('NON_POSITIVE_H4_ATR'),
+      }),
+    );
+  });
+
+  it('does not leak stale failure detail into a recovered ready snapshot', async () => {
+    const base = baseSeries();
+    const series: Record<string, OHLCV[]> = { ...base, H4: base.H4!.slice(-10) };
+    const getCandles = jest.fn(
+      async (_id: string, _instrument: string, timeframe: string) => series[timeframe] ?? [],
+    );
+    const store = {
+      getCandles,
+      getLatestPositiveSpreadQuote: jest.fn().mockResolvedValue(spread()),
+    } as unknown as ProviderQuoteCandleStoreService;
+    const service = new M1TacticalMarketDataService(store);
+    await expect(service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
+    expect(service.getLastReadiness('conn-1', 'EURUSD')?.detail).toContain('H4=10/22');
+    series.H4 = base.H4!;
+    await expect(service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.not.toBeNull();
+    expect(service.getLastReadiness('conn-1', 'EURUSD')).toMatchObject({
+      ready: true,
+      reason: 'READY',
+      authority: 'BROKER_NATIVE',
+    });
+    expect(service.getLastReadiness('conn-1', 'EURUSD')?.detail).toBeUndefined();
+  });
+
   it('fails closed when the latest completed M1 bar is stale', async () => {
     const { service } = fixture({ M1: rows(60, 1, new Date('2026-10-15T12:20:00.000Z')) });
     await expect(service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();

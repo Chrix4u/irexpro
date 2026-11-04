@@ -279,6 +279,64 @@ function directionalEfficiency(values: number[]): number {
   return clamp((values.at(-1)! - values[0]!) / path, -1, 1);
 }
 
+/**
+ * Explain a rejected feature snapshot without relaxing the feature contract.
+ * Called only after buildM1TacticalFeatures returns null. Counts are based
+ * on completed broker-native candles, with the existing M1 no-tick feature
+ * normalization applied only in memory (never persisted as provider facts).
+ */
+export function diagnoseM1TacticalFeatureFailure(input: M1TacticalFeatureInput): string {
+  if (!input.instrument.trim() || !Number.isFinite(input.decisionTime.getTime())) {
+    return 'INVALID_INSTRUMENT_OR_DECISION_TIME';
+  }
+
+  const timeframes = [
+    ['M1', input.m1, 1],
+    ['M5', input.m5, 5],
+    ['M15', input.m15, 15],
+    ['H1', input.h1, 60],
+    ['H4', input.h4, 240],
+  ] as const;
+  const completedSeries: Record<string, LivePaperCandleInput[]> = {};
+  for (const [name, rows, minutes] of timeframes) {
+    const eligible = completed(rows, minutes, input.decisionTime);
+    if (!eligible) return `INVALID_${name}_CANDLE_SERIES raw=${rows.length}`;
+    completedSeries[name] = eligible;
+  }
+
+  const m1 = normalizeM1NoTickGaps(completedSeries.M1!);
+  if (!m1) return `M1_NOT_ON_MINUTE_GRID raw=${input.m1.length}`;
+  completedSeries.M1 = m1;
+  const counts = timeframes
+    .map(
+      ([name]) =>
+        `${name}=${completedSeries[name]!.length}/${name === 'M1' ? MIN_M1_BARS : MIN_CONTEXT_BARS}`,
+    )
+    .join(' ');
+  const insufficient = timeframes.some(
+    ([name]) => completedSeries[name]!.length < (name === 'M1' ? MIN_M1_BARS : MIN_CONTEXT_BARS),
+  );
+  if (insufficient) return `INSUFFICIENT_COMPLETED_HISTORY ${counts}`;
+
+  for (const name of ['M1', 'M5', 'M15', 'H1', 'H4'] as const) {
+    const localAtr = atr(completedSeries[name]!, 14);
+    if (!Number.isFinite(localAtr) || localAtr <= 0) {
+      return `NON_POSITIVE_${name}_ATR ${counts}`;
+    }
+  }
+  if (
+    !Number.isFinite(
+      rsi(
+        m1.map((row) => Number(row.close)),
+        14,
+      ),
+    )
+  ) {
+    return `INVALID_M1_RSI ${counts}`;
+  }
+  return `NON_FINITE_OR_UNSUPPORTED_FEATURE ${counts}`;
+}
+
 export function buildM1TacticalFeatures(
   input: M1TacticalFeatureInput,
 ): M1TacticalFeatureSnapshot | null {

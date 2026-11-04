@@ -14,7 +14,11 @@ import {
   ENSEMBLE_EXECUTION_SPREAD_MIN_SAMPLES,
   type ExecutionSpreadEvidence,
 } from './ensemble-governance';
-import { buildM1TacticalFeatures, type M1TacticalFeatureInput } from './m1-tactical-features';
+import {
+  buildM1TacticalFeatures,
+  diagnoseM1TacticalFeatureFailure,
+  type M1TacticalFeatureInput,
+} from './m1-tactical-features';
 import { loadPaperSpreadCalibrationHistory } from './paper-spread-calibration-history';
 import {
   classifyPaperSpreadSession,
@@ -50,6 +54,8 @@ export interface M1TacticalMarketReadiness {
   reason: M1TacticalMarketReadinessReason;
   authority: M1TacticalMarketDataAuthority | null;
   observedAt: string;
+  /** Read-only failed feature evidence; no execution gate uses this field. */
+  detail?: string;
 }
 
 export interface M1TacticalMarketSnapshot extends M1TacticalFeatureInput {
@@ -99,12 +105,14 @@ export class M1TacticalMarketDataService {
     reason: M1TacticalMarketReadinessReason,
     authority: M1TacticalMarketDataAuthority | null,
     observedAt: Date,
+    detail?: string,
   ): void {
     this.readiness.set(this.readinessKey(connectionId, instrument), {
       ready: reason === 'READY',
       reason,
       authority,
       observedAt: observedAt.toISOString(),
+      ...(detail ? { detail } : {}),
     });
   }
 
@@ -227,6 +235,7 @@ export class M1TacticalMarketDataService {
         'BROKER_FEATURE_CONTEXT_UNAVAILABLE',
         null,
         decisionTime,
+        diagnoseM1TacticalFeatureFailure(featureInput),
       );
       return null;
     }
@@ -302,6 +311,7 @@ export class M1TacticalMarketDataService {
         'PAPER_FEATURE_CONTEXT_UNAVAILABLE',
         null,
         decisionTime,
+        diagnoseM1TacticalFeatureFailure(featureInput),
       );
       return null;
     }
