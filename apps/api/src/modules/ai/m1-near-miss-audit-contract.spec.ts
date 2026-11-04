@@ -42,11 +42,9 @@ describe('cTrader M1 near-miss SQL audit contract', () => {
   });
 
   it('separates Plan-B admission cohorts and exposes cost sensitivity', () => {
-    expect(script).toContain(
-      'GROUP BY GROUPING SETS ((route), (route, planb_admitted))',
-    );
+    expect(script).toContain('GROUP BY GROUPING SETS ((route), (route, planb_admitted))');
     expect(script).toContain("'ALL'");
-    expect(script).toContain('count(*) FILTER (WHERE planb_admitted = \'true\')');
+    expect(script).toContain("count(*) FILTER (WHERE planb_admitted = 'true')");
     expect(script).toContain('mean_with_extra_010r_cost');
     expect(script).toContain('mean_with_extra_020r_cost');
     expect(script).toContain('mean_predicted_planb_net_r');
