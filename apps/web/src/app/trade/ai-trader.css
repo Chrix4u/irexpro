@@ -2331,6 +2331,11 @@
   margin-top: 0.2rem;
   font-size: 0.92rem;
 }
+.ai-performance-panel__secondary-stat strong.ai-performance-panel__all-in-loss {
+  font-size: 1.16rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
 .ai-performance-panel__secondary-stat small {
   display: block;
   margin-top: 0.18rem;
