@@ -246,6 +246,42 @@ describe('ExecutionReadService', () => {
     expect(baseQuery.clone).toHaveBeenCalledTimes(3);
   });
 
+  it('skips the extra reason aggregation for ordinary 24h dashboard polling', async () => {
+    const pageQuery = {
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+    };
+    const summaryQuery = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    };
+    const baseQuery = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      clone: jest
+        .fn()
+        .mockReturnValueOnce(pageQuery)
+        .mockReturnValueOnce(summaryQuery),
+    };
+    const repo = {
+      createQueryBuilder: jest.fn().mockReturnValue(baseQuery),
+    } as unknown as Repository<Trade>;
+
+    const result = await new ExecutionReadService(repo).listClosedTradeReport(USER_ID, {
+      page: 1,
+      pageSize: 1,
+    });
+
+    expect(result.summary.reasonBreakdown).toEqual([]);
+    expect(baseQuery.clone).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects an inverted closed-trade report date range', async () => {
     await expect(
       service.listClosedTradeReport(USER_ID, {
