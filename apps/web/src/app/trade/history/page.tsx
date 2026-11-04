@@ -255,6 +255,7 @@ export default function ClosedTradeHistoryPage() {
       direction: applied.direction || undefined,
       outcome: applied.outcome,
       closeReason: applied.closeReason || undefined,
+      includeReasonBreakdown: true,
     }),
     [applied, brokerConnectionId, page, pageSize],
   );
