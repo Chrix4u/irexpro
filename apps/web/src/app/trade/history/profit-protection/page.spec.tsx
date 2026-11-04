@@ -59,6 +59,21 @@ const REPORT = {
     currencyBreakdown: [
       { accountCurrency: 'EUR', tradeCount: 2, actualRealisedPnl: '8.25' },
     ],
+    alternativesByCurrency: [
+      {
+        accountCurrency: 'EUR',
+        gradedTrades: 2,
+        runnerCandidates: 1,
+        runnerComparable: 1,
+        runnerBetter: 0,
+        runnerDataGaps: 1,
+        runnerAverageNetDelta: '-2.25',
+        partialComparable: 1,
+        partialBetter: 1,
+        partialDataGaps: 1,
+        partialAverageNetDelta: '1.75',
+      },
+    ],
   },
   routes: [
     {
@@ -118,6 +133,10 @@ describe('ProfitProtectionExitQualityPage', () => {
     expect(screen.getAllByText('EURUSD').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('TP first').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('+1.25R')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /protected runner vs partial profit/i })).toBeInTheDocument();
+    expect(screen.getByText('-2.25 EUR')).toBeInTheDocument();
+    expect(screen.getByText('+1.75 EUR')).toBeInTheDocument();
+    expect(screen.getByText(/not realised returns or/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /closed trade history/i })).toHaveAttribute('href', '/trade/history');
   });
 

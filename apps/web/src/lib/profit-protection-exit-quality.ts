@@ -73,6 +73,19 @@ export type ProfitProtectionExitQualityReport = {
       tradeCount: number;
       actualRealisedPnl: string;
     }>;
+    alternativesByCurrency: Array<{
+      accountCurrency: string;
+      gradedTrades: number;
+      runnerCandidates: number;
+      runnerComparable: number;
+      runnerBetter: number;
+      runnerDataGaps: number;
+      runnerAverageNetDelta: string | null;
+      partialComparable: number;
+      partialBetter: number;
+      partialDataGaps: number;
+      partialAverageNetDelta: string | null;
+    }>;
   };
   routes: Array<{
     strategyRoute: ProfitProtectionStrategyRoute;
