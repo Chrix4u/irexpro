@@ -78,10 +78,10 @@ export function evaluateM1CausalCommissionShadow(input: {
     : input.lookupFailed
       ? 'FEE_LOOKUP_UNAVAILABLE'
       : count < M1_CAUSAL_COMMISSION_MIN_PRIOR_TRADES
-      ? 'INSUFFICIENT_PRIOR_CLOSED_TRADES'
-      : p90 === null || p90 < 0
-        ? 'INVALID_FEE_EVIDENCE'
-        : 'CAUSAL_FEE_EVIDENCE_READY';
+        ? 'INSUFFICIENT_PRIOR_CLOSED_TRADES'
+        : p90 === null || p90 < 0
+          ? 'INVALID_FEE_EVIDENCE'
+          : 'CAUSAL_FEE_EVIDENCE_READY';
   const ready = reason === 'CAUSAL_FEE_EVIDENCE_READY';
   const adjustedNet = ready ? rounded(baseline! - p90!) : null;
   return {
