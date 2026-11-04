@@ -883,7 +883,9 @@ describe("active multi-model execution presentation", () => {
       planBLabel: "No qualified strategy route · Trend weak",
       executable: false,
     });
-    expect(deriveActiveModelUiState(status).planBLabel).toBe("Trend continuation · 70%");
+    expect(deriveActiveModelUiState(status).planBLabel).toBe(
+      "Trend continuation · 70%",
+    );
   });
 
   it("uses primary ensemble confidence and blockers for readiness, not the M1 candidate confidence", () => {
