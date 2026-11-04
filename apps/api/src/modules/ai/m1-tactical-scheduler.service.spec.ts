@@ -816,6 +816,10 @@ function phase2Harness(
     .fn()
     .mockResolvedValue(options.duplicateOppositeIntent ?? false);
   const markRescueObservation = jest.fn().mockResolvedValue(undefined);
+  const loadPriorClosedCommissionRiskR = jest.fn().mockResolvedValue({
+    sampleCount: 27,
+    p90FeeR: 0.285,
+  });
   const loadPendingDriftCounterfactuals = jest.fn().mockResolvedValue([]);
   const markDriftCounterfactual15m = jest.fn().mockResolvedValue(undefined);
   const evidence = {
@@ -833,6 +837,7 @@ function phase2Harness(
     hasActiveM1Intent,
     hasActiveOppositeM1Intent,
     markRescueObservation,
+    loadPriorClosedCommissionRiskR,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
   } as unknown as M1TacticalEvidenceService;
@@ -928,6 +933,7 @@ function phase2Harness(
     hasActiveM1Intent,
     hasActiveOppositeM1Intent,
     markRescueObservation,
+    loadPriorClosedCommissionRiskR,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
     findBySignal,
@@ -1968,6 +1974,55 @@ describe('M1 professional v8 DEMO promotion', () => {
     );
   });
 
+  it('records causal commission-adjusted M1 and Plan-B economics only after DEMO admission has been denied', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      fastStopBrake: {
+        active: true,
+        reason: 'RECENT_FAST_STOP',
+        latestFastStopClosedAt: new Date('2026-10-15T10:29:00.000Z'),
+        latestFastStopDurationMinutes: 1,
+        cooldownMinutes: 5,
+        maxStopDurationMinutes: 2,
+      },
+      session: {
+        id: 'demo-1',
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'demo-conn-2',
+      },
+    });
+    await driveFeatures(h, transitionFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.map((call) => call[0]);
+    const nonAbstain = recorded.filter((item) => item.route !== 'ABSTAIN');
+    expect(nonAbstain.length).toBeGreaterThan(0);
+    const withCosts = nonAbstain.find(
+      (item) => item.governance.zaiDemoDiagnostics?.historicalCommissionCostShadow?.m1,
+    );
+    expect(withCosts).toBeDefined();
+    expect(withCosts.executionAuthority).toBe('NONE');
+    expect(withCosts.governance.zaiDemoDiagnostics.historicalCommissionCostShadow).toEqual(
+      expect.objectContaining({
+        m1: expect.objectContaining({
+          mode: 'SHADOW_ONLY',
+          modifiesExecution: false,
+          sampleCount: 27,
+          p90AdditionalCommissionAndAdverseFinancingR: 0.285,
+          noTradeAuthority: true,
+        }),
+        planB: expect.objectContaining({ noTradeAuthority: true }),
+      }),
+    );
+    expect(h.loadPriorClosedCommissionRiskR).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        brokerConnectionId: 'demo-conn-2',
+        instrument: 'EURUSD',
+        asOf: expect.any(Date),
+      }),
+    );
+  });
+
   it('uses the active FULL_AUTO session connection for V8 market-data routing instead of the configured paper connection', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
@@ -2017,6 +2072,8 @@ describe('M1 professional v8 DEMO promotion', () => {
       expect.objectContaining({ brokerConnectionId: 'conn-1' }),
     );
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+    // Commission research cannot delay or gate an already-executable DEMO trade.
+    expect(h.loadPriorClosedCommissionRiskR).not.toHaveBeenCalled();
     expect(h.receiveSignal.mock.calls[0]![0].metadata).toEqual(
       expect.objectContaining({
         m1_scout_broker_native_reliability_samples: 0,

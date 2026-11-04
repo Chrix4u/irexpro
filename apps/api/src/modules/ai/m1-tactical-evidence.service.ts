@@ -426,6 +426,62 @@ function blockers(value: unknown): string[] {
 export class M1TacticalEvidenceService {
   constructor(private readonly dataSource: DataSource) {}
 
+  /**
+   * Research-only as-of fee evidence. The current M1/Plan-B governance cost
+   * includes spread/slippage, but not broker commission. Nothing returned here
+   * may grant execution authority.
+   */
+  async loadPriorClosedCommissionRiskR(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    asOf: Date;
+  }): Promise<{ sampleCount: number; p90FeeR: number | null }> {
+    const instrument = input.instrument.trim().toUpperCase();
+    if (!/^[A-Z]{6}$/.test(instrument) || !Number.isFinite(input.asOf.getTime())) {
+      return { sampleCount: 0, p90FeeR: null };
+    }
+    const rows = (await this.dataSource.query(
+      `
+        SELECT count(*)::int AS sample_count,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY fee_r) AS p90_fee_r
+        FROM (
+          SELECT (abs(t.commission) + greatest(0, -coalesce(t.swap, 0))) /
+            nullif(coalesce(
+              CASE WHEN a.sizing_inputs->>'finalRiskAtStop' ~ '^[0-9]+([.][0-9]+)?$'
+                THEN (a.sizing_inputs->>'finalRiskAtStop')::numeric END,
+              CASE WHEN a.sizing_inputs->>'riskAmount' ~ '^[0-9]+([.][0-9]+)?$'
+                THEN (a.sizing_inputs->>'riskAmount')::numeric END
+            ), 0) AS fee_r
+          FROM trading.trades t
+          JOIN broker.broker_connections b ON b.id = t.broker_connection_id
+            AND b.user_id = $1 AND b.id = $2
+            AND b.broker_id = 'ctrader' AND b.account_type = 'DEMO'
+            AND b.account_currency = t.account_currency
+          LEFT JOIN LATERAL (
+            SELECT sizing_inputs FROM trading.capital_allocations ca
+            WHERE ca.trade_intent_id = t.trade_intent_id
+            ORDER BY ca.created_at DESC LIMIT 1
+          ) a ON true
+          WHERE t.user_id = $1 AND t.broker_connection_id = $2
+            AND t.instrument = $3 AND t.status = 'CLOSED'
+            AND t.commission IS NOT NULL
+            AND t.closed_at < $4::timestamptz
+            AND t.closed_at >= $4::timestamptz - interval '21 days'
+          ORDER BY t.closed_at DESC, t.id DESC LIMIT 40
+        ) historical
+        WHERE fee_r IS NOT NULL AND fee_r >= 0
+      `,
+      [input.userId, input.brokerConnectionId, instrument, input.asOf.toISOString()],
+    )) as Array<{ sample_count: number | string; p90_fee_r: number | string | null }>;
+    const count = Number(rows[0]?.sample_count ?? 0);
+    const p90 = nullableNumber(rows[0]?.p90_fee_r);
+    return {
+      sampleCount: Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0,
+      p90FeeR: p90 !== null && p90 >= 0 ? p90 : null,
+    };
+  }
+
   async loadLatestM5EarlyTransitionEvidence(input: {
     userId: string;
     instrument: string;
