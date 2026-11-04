@@ -38,6 +38,8 @@ Three records around the chronological boundary were excluded as crossing the tr
 
 **Key discovery:** All **10 later early-transition trades lost money after recorded costs**, although **none closed via a full stop-loss**. This is evidence that early-transition deterioration also involves earlier exit decisions and payoff geometry; a stop-out-only label cannot detect all unprofitable positions.
 
+**Closing-reason verification (read-only DB, 2026-11-04 12:29 UTC):** Of those same ten later early-transition losses, **eight were `AI_CLOSE_SIGNAL` exits** (−€38.95 total net, average holding time **3.8 minutes**), and **two were `BROKER_CLOSE` exits** (−€24.86 net, average holding time 38.6 minutes). A short-horizon entry-stability research test should investigate whether the signal was premature; this does **not** prove that disabling early AI closures would avoid losses. The module also reports hold-duration bins and counts rapid losses without falsely labeling them stop-loss hits.
+
 Another important finding is **strong distribution shift**: training stop-loss frequencies are much higher than those in the later period. A threshold fitted on earlier stop-out data could badly misclassify later signals. The later samples are too small and too close in time to prove the effectiveness of any new entry filter.
 
 ### Confidence stratification is not a promotion policy
