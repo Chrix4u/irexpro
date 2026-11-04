@@ -64,6 +64,21 @@ describe('ProfitProtectionExitQualityService', () => {
           total_count: '2',
         },
       ]);
+    query.mockResolvedValueOnce([
+      {
+        account_currency: 'EUR',
+        graded_trades: '2',
+        runner_candidates: '1',
+        runner_comparable: '1',
+        runner_better: '0',
+        runner_data_gaps: '1',
+        runner_average_net_delta: '-2.25',
+        partial_comparable: '1',
+        partial_better: '1',
+        partial_data_gaps: '1',
+        partial_average_net_delta: '1.75',
+      },
+    ]);
     const service = new ProfitProtectionExitQualityService({ query } as unknown as DataSource);
 
     const result = await service.getReport(USER_ID, {
@@ -79,7 +94,7 @@ describe('ProfitProtectionExitQualityService', () => {
       pageSize: 1,
     });
 
-    expect(query).toHaveBeenCalledTimes(4);
+    expect(query).toHaveBeenCalledTimes(5);
     for (const call of query.mock.calls) {
       expect(String(call[0])).toContain('t.user_id = $1');
       expect(call[1][0]).toBe(USER_ID);
@@ -123,6 +138,23 @@ describe('ProfitProtectionExitQualityService', () => {
       smallProfitTpFirstRate: 1,
       smallProfitAverageRDelta: 1.25,
     });
+    const alternativesSql = String(query.mock.calls[4]![0]);
+    expect(alternativesSql).toContain("a.artifact = 'exit-alternatives-verified-m1-v1'");
+    expect(alternativesSql).toContain("a.execution_authority = 'NONE'");
+    expect(alternativesSql).toContain('GROUP BY f.account_currency');
+    expect(result.summary.alternativesByCurrency).toEqual([
+      expect.objectContaining({
+        accountCurrency: 'EUR',
+        gradedTrades: 2,
+        runnerCandidates: 1,
+        runnerComparable: 1,
+        runnerBetter: 0,
+        runnerAverageNetDelta: '-2.25',
+        partialComparable: 1,
+        partialBetter: 1,
+        partialAverageNetDelta: '1.75',
+      }),
+    ]);
     const routeSql = String(query.mock.calls[2]![0]);
     expect(routeSql).toContain('small_profit_resolved_count');
     expect(routeSql).toContain('small_profit_comparable_count');
