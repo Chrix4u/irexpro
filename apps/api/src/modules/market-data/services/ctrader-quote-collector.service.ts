@@ -20,10 +20,11 @@ const M1_WARM_TARGET = 600;
 const M1_REFRESH_COUNT = 60;
 const CONTEXT_REFRESH_COUNT = 40;
 const M1_REQUESTS_PER_CYCLE = 3;
-// Keep the same 3 M1 + 1 context historical calls per cycle. Prioritize
-// M5 to prevent the previous 24-slot round robin from exceeding the
-// ten-minute closed-M5 readiness limit when requests run slowly.
-const CONTEXT_REFRESH_ROTATION = ['M5', 'M15', 'M5', 'H1', 'M5', 'M15', 'M5', 'H4'] as const;
+// Keep the same 3 M1 + 1 context historical calls per cycle. Give M5 and
+// M15 equal priority: six pairs now have a complete M15 sweep every 16
+// context slots rather than 24. A slower history cycle must not starve the
+// completed M15 broker context required by the tactical admission gate.
+const CONTEXT_REFRESH_ROTATION = ['M5', 'M15', 'M5', 'M15', 'M5', 'M15', 'H1', 'H4'] as const;
 
 /**
  * Exact-binding cTrader market-data collector for the M1 tactical PAPER sleeve.
@@ -58,15 +59,52 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   /** Last completed broker-native history persistence, not just request initiation. */
   private readonly lastSuccessfulCollectAt = new Map<string, string>();
   private readonly historicalRefreshFailures = new Map<string, number>();
+  /** Read-only provenance: a successful request can still return old candles. */
+  private readonly latestBrokerClosedBarAt = new Map<string, string>();
+  private readonly staleHistoricalResponses = new Map<string, number>();
 
   getHistoricalCollectionStatus(): {
     lastSuccessfulCollectAt: Record<string, string>;
     historicalRefreshFailures: Record<string, number>;
+    latestBrokerClosedBarAt: Record<string, string>;
+    staleHistoricalResponses: Record<string, number>;
   } {
     return {
       lastSuccessfulCollectAt: Object.fromEntries(this.lastSuccessfulCollectAt),
       historicalRefreshFailures: Object.fromEntries(this.historicalRefreshFailures),
+      latestBrokerClosedBarAt: Object.fromEntries(this.latestBrokerClosedBarAt),
+      staleHistoricalResponses: Object.fromEntries(this.staleHistoricalResponses),
     };
+  }
+
+  private recordContextFreshness(
+    connectionId: string,
+    instrument: string,
+    timeframe: (typeof CONTEXT_REFRESH_ROTATION)[number],
+    rows: OHLCV[],
+    now: Date,
+    timeframeMinutes: number,
+  ): void {
+    const key = `${instrument}:${timeframe}`;
+    const newestMs = Math.max(...rows.map((row) => new Date(row.timestamp).getTime()));
+    if (!Number.isFinite(newestMs)) return;
+    this.latestBrokerClosedBarAt.set(key, new Date(newestMs).toISOString());
+    // No synthetic candles or bypass: old provider history remains old even
+    // when the HTTP/OpenAPI request itself successfully completed.
+    const stale = now.getTime() - newestMs > 2 * timeframeMinutes * 60_000;
+    if (!stale) {
+      this.staleHistoricalResponses.delete(key);
+      return;
+    }
+    this.staleHistoricalResponses.set(key, (this.staleHistoricalResponses.get(key) ?? 0) + 1);
+    this.warnThrottled(
+      `${connectionId}:${key}:stale-provider-history`,
+      `cTrader broker-native ${timeframe} returned stale closed history ` +
+        `connection=${connectionId} instrument=${instrument} ` +
+        `latestClosedBar=${new Date(newestMs).toISOString()} ` +
+        `ageMinutes=${Math.floor((now.getTime() - newestMs) / 60_000)}; ` +
+        'M1/M15 readiness remains fail-closed.',
+    );
   }
 
   private collectHistorySucceeded(instrument: string, timeframe: string, now: Date): void {
@@ -197,8 +235,8 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       this.refreshM1(userId, connectionId, instrument, now),
     );
 
-    // Preserve one context request per cycle while spending scarce history
-    // slots on the fast timeframes: M5 50%, M15 25%, H1/H4 12.5% each.
+    // Preserve one context request per cycle while giving M5 and M15 37.5%
+    // each and H1/H4 12.5% each; no increase in provider request budget.
     // Independent pair cursors ensure all six pairs get every timeframe.
     // Broker-native candles remain mandatory; no no-tick bars are invented.
     const timeframe =
@@ -281,6 +319,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
             'ctrader-broker-native',
           );
           this.collectHistorySucceeded(instrument, timeframe, now);
+          this.recordContextFreshness(connectionId, instrument, timeframe, closed, now, minutes);
         }
         return;
       } catch (error) {
