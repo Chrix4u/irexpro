@@ -75,6 +75,20 @@ export interface ProfitProtectionExitQualityReport {
       tradeCount: number;
       actualRealisedPnl: string;
     }>;
+    /** Prospective shadow-only alternatives, never combined across currencies. */
+    alternativesByCurrency: Array<{
+      accountCurrency: string;
+      gradedTrades: number;
+      runnerCandidates: number;
+      runnerComparable: number;
+      runnerBetter: number;
+      runnerDataGaps: number;
+      runnerAverageNetDelta: string | null;
+      partialComparable: number;
+      partialBetter: number;
+      partialDataGaps: number;
+      partialAverageNetDelta: string | null;
+    }>;
   };
   routes: Array<{
     strategyRoute: ProfitProtectionStrategyRoute;
@@ -276,6 +290,54 @@ export class ProfitProtectionExitQualityService {
       [...filters.params, normalized.pageSize, (normalized.page - 1) * normalized.pageSize],
     )) as Array<Record<string, unknown>> | undefined;
 
+    // User, account, date, instrument and route filters are inherited from
+    // the authenticated quote-verified report CTE. Count only shadow rows with
+    // no execution authority, and never sum money across account currencies.
+    const alternativeRows = (await this.dataSource.query(
+      `${cte}
+       SELECT f.account_currency,
+         COUNT(*)::text AS graded_trades,
+         COUNT(*) FILTER (
+           WHERE a.response->'runner'->>'outcome' <> 'INELIGIBLE'
+         )::text AS runner_candidates,
+         COUNT(*) FILTER (
+           WHERE a.response->'runner'->>'outcome' IN ('TP_FIRST', 'STOP_FIRST')
+         )::text AS runner_comparable,
+         COUNT(*) FILTER (
+           WHERE a.response->'runner'->>'outcome' IN ('TP_FIRST', 'STOP_FIRST')
+             AND (a.response->'runner'->>'deltaVsOriginal')::numeric > 0
+         )::text AS runner_better,
+         COUNT(*) FILTER (
+           WHERE a.response->'runner'->>'outcome' = 'DATA_GAP'
+         )::text AS runner_data_gaps,
+         AVG((a.response->'runner'->>'deltaVsOriginal')::numeric) FILTER (
+           WHERE a.response->'runner'->>'outcome' IN ('TP_FIRST', 'STOP_FIRST')
+         )::text AS runner_average_net_delta,
+         COUNT(*) FILTER (
+           WHERE a.response->'halfPartial'->>'outcome' IN ('TP_FIRST', 'STOP_FIRST')
+         )::text AS partial_comparable,
+         COUNT(*) FILTER (
+           WHERE a.response->'halfPartial'->>'outcome' IN ('TP_FIRST', 'STOP_FIRST')
+             AND (a.response->'halfPartial'->>'deltaVsOriginal')::numeric > 0
+         )::text AS partial_better,
+         COUNT(*) FILTER (
+           WHERE a.response->'halfPartial'->>'outcome' = 'DATA_GAP'
+         )::text AS partial_data_gaps,
+         AVG((a.response->'halfPartial'->>'deltaVsOriginal')::numeric) FILTER (
+           WHERE a.response->'halfPartial'->>'outcome' IN ('TP_FIRST', 'STOP_FIRST')
+         )::text AS partial_average_net_delta
+       FROM final_rows f
+       INNER JOIN trading.post_entry_shadow_observations a ON a.trade_id = f.trade_id
+         AND a.artifact = 'exit-alternatives-verified-m1-v1'
+         AND a.checkpoint_minutes = 60
+         AND a.execution_authority = 'NONE'
+         AND a.modifies_execution = false
+         AND a.response->>'mode' = 'SHADOW_ONLY'
+       WHERE f.account_currency IS NOT NULL
+       GROUP BY f.account_currency ORDER BY f.account_currency`,
+      filters.params,
+    )) as Array<Record<string, unknown>> | undefined;
+
     const summaryRow = summaryRows?.[0] ?? {};
     const total = integer(summaryRow.total);
     const resolvedCount = integer(summaryRow.resolved_count);
@@ -315,6 +377,19 @@ export class ProfitProtectionExitQualityService {
           accountCurrency: String(row.account_currency),
           tradeCount: integer(row.trade_count),
           actualRealisedPnl: decimal(row.actual_realised_pnl) ?? '0',
+        })),
+        alternativesByCurrency: (alternativeRows ?? []).map((row) => ({
+          accountCurrency: String(row.account_currency),
+          gradedTrades: integer(row.graded_trades),
+          runnerCandidates: integer(row.runner_candidates),
+          runnerComparable: integer(row.runner_comparable),
+          runnerBetter: integer(row.runner_better),
+          runnerDataGaps: integer(row.runner_data_gaps),
+          runnerAverageNetDelta: decimal(row.runner_average_net_delta),
+          partialComparable: integer(row.partial_comparable),
+          partialBetter: integer(row.partial_better),
+          partialDataGaps: integer(row.partial_data_gaps),
+          partialAverageNetDelta: decimal(row.partial_average_net_delta),
         })),
       },
       routes: (routeRows ?? []).map((row) => {
