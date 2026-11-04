@@ -1,4 +1,7 @@
-import { evaluateProtectedRunnerShadow, ProtectedRunnerShadowInput } from './protected-runner-shadow';
+import {
+  evaluateProtectedRunnerShadow,
+  ProtectedRunnerShadowInput,
+} from './protected-runner-shadow';
 
 describe('protected runner DEMO shadow evaluator', () => {
   const input: ProtectedRunnerShadowInput = {
