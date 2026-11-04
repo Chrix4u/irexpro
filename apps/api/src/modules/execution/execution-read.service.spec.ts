@@ -129,10 +129,32 @@ describe('ExecutionReadService', () => {
         },
       ]),
     };
+    const reasonQuery = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      addGroupBy: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([
+        {
+          accountCurrency: 'USD',
+          closeReason: 'STOP_LOSS_HIT',
+          totalTrades: '51',
+          pnlTradeCount: '50',
+          wins: '30',
+          losses: '19',
+          flats: '1',
+          grossRealisedPnl: '300.15',
+          netRealisedPnl: '274.40',
+          totalExplicitCosts: '25.75',
+        },
+      ]),
+    };
     const baseQuery = {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
-      clone: jest.fn().mockReturnValueOnce(pageQuery).mockReturnValueOnce(summaryQuery),
+      clone: jest.fn().mockReturnValueOnce(pageQuery).mockReturnValueOnce(summaryQuery).mockReturnValueOnce(reasonQuery),
     };
     const reportRepo = {
       createQueryBuilder: jest.fn().mockReturnValue(baseQuery),
@@ -204,6 +226,19 @@ describe('ExecutionReadService', () => {
     });
     expect(result.summary.profitFactor).toBeCloseTo(500.25 / 200.1, 8);
     expect(result.summary.currencyBreakdown).toHaveLength(1);
+    expect(result.summary.reasonBreakdown).toEqual([
+      expect.objectContaining({
+        accountCurrency: 'USD',
+        closeReason: 'STOP_LOSS_HIT',
+        totalTrades: 51,
+        pnlTradeCount: 50,
+        netRealisedPnl: '274.40',
+        totalExplicitCosts: '25.75',
+      }),
+    ]);
+    expect(reasonQuery.addGroupBy).toHaveBeenCalledWith('trade.closeReason');
+    // Attribution is computed over the same user/broker/filter scope, not page 2 alone.
+    expect(baseQuery.clone).toHaveBeenCalledTimes(3);
   });
 
   it('rejects an inverted closed-trade report date range', async () => {
