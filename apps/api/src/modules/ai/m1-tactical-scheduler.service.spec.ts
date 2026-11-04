@@ -1977,7 +1977,14 @@ describe('M1 professional v8 DEMO promotion', () => {
   it('records causal commission-adjusted M1 and Plan-B economics only after DEMO admission has been denied', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
-      macroState: 'HIGH_IMPACT_BLOCK',
+      fastStopBrake: {
+        active: true,
+        reason: 'RECENT_FAST_STOP',
+        latestFastStopClosedAt: new Date('2026-10-15T10:29:00.000Z'),
+        latestFastStopDurationMinutes: 1,
+        cooldownMinutes: 5,
+        maxStopDurationMinutes: 2,
+      },
       session: {
         id: 'demo-1',
         executionMode: ExecutionMode.FULL_AUTO,
