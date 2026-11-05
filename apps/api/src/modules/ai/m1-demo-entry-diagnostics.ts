@@ -94,9 +94,7 @@ export function toDemoFocusedEntryDiagnostic(
 ): DemoFocusedEntryDiagnostic {
   const active = safeCount(row?.active_session_count) === 1;
   const reasons = Array.isArray(row?.leading_blockers) ? row.leading_blockers : [];
-  const modelReasons = Array.isArray(row?.leading_model_reasons)
-    ? row.leading_model_reasons
-    : [];
+  const modelReasons = Array.isArray(row?.leading_model_reasons) ? row.leading_model_reasons : [];
   const evaluated = active ? safeCount(row?.evaluated_decisions) : 0;
   const candidates = active ? safeCount(row?.candidate_decisions) : 0;
   const approved = active ? safeCount(row?.broker_authorized_decisions) : 0;
@@ -150,9 +148,7 @@ export function toDemoFocusedEntryDiagnostic(
               item !== null && typeof item === 'object' && !Array.isArray(item),
           )
           .filter(
-            (item) =>
-              typeof item.code === 'string' &&
-              item.code in DEMO_ENTRY_MODEL_REASON_LABELS,
+            (item) => typeof item.code === 'string' && item.code in DEMO_ENTRY_MODEL_REASON_LABELS,
           )
           .map((item) => ({
             code: String(item.code),
