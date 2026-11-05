@@ -8,8 +8,9 @@ api_env="$repo/apps/api/.env"
 research_root="/home/lightworld/webapps/irexpro-research/ood-shadow"
 python_bin="$repo/services/ai-engine/.venv/bin/python"
 sql="$repo/services/ai-engine/app/domain/training/ood_shadow_cohort_readonly.sql"
+near_sql="$repo/services/ai-engine/app/domain/training/demo_entry_near_miss_readonly.sql"
 
-[[ -f "$api_env" && -f "$sql" && -x "$python_bin" ]] || {
+[[ -f "$api_env" && -f "$sql" && -f "$near_sql" && -x "$python_bin" ]] || {
   echo "OOD research prerequisites missing; fail closed" >&2
   exit 1
 }
@@ -48,7 +49,9 @@ db_name="${DB_NAME:-${DB_DATABASE:-}}"
 install -d -m 700 "$research_root"
 tmp_cohort="$(mktemp "$research_root/cohort.XXXXXXXX.csv")"
 tmp_report="$(mktemp "$research_root/report.XXXXXXXX.json")"
-trap 'rm -f "$tmp_cohort" "$tmp_report"' EXIT
+tmp_near_cohort="$(mktemp "$research_root/near-miss.XXXXXXXX.csv")"
+tmp_near_report="$(mktemp "$research_root/near-miss-report.XXXXXXXX.json")"
+trap 'rm -f "$tmp_cohort" "$tmp_report" "$tmp_near_cohort" "$tmp_near_report"' EXIT
 
 # psql CSV contains only sanitized model features and two observed quote pairs,
 # not users, session keys, connector IDs, broker credentials, or raw trade logs.
@@ -60,6 +63,24 @@ PGPASSWORD="$DB_PASSWORD" psql -X --csv \
 PYTHONPATH="$repo/services/ai-engine" "$python_bin" \
   -m app.domain.training.ood_shadow_candidate \
   --cohort-csv "$tmp_cohort" --report-json "$tmp_report"
+
+# Independently research *non-ABSTAIN*, Plan-B-admitted DEMO entries that
+# were still denied broker authority. Never re-run this cohort as orders.
+# Keep the exact previous OOD collector intact and account-scoped.
+PGPASSWORD="$DB_PASSWORD" psql -X --csv \
+  -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$db_name" \
+  -v ON_ERROR_STOP=1 -v scanner_user="$VPS_FOREX_SCANNER_USER_ID" \
+  -f "$near_sql" > "$tmp_near_cohort"
+
+PYTHONPATH="$repo/services/ai-engine" "$python_bin" \
+  -m app.domain.training.demo_entry_near_miss_shadow \
+  --cohort-csv "$tmp_near_cohort" --report-json "$tmp_near_report"
+
+# The two private CSV+JSON datasets atomically replace prior snapshots;
+# no unbounded daily retained copies or broker/user identifiers.
+chmod 600 "$tmp_cohort" "$tmp_report" "$tmp_near_cohort" "$tmp_near_report"
+mv -f "$tmp_near_cohort" "$research_root/latest-near-miss-cohort.csv"
+mv -f "$tmp_near_report" "$research_root/latest-near-miss-report.json"
 
 # Atomically replace the one private snapshot; avoids unbounded disk growth.
 chmod 600 "$tmp_cohort" "$tmp_report"
@@ -76,4 +97,9 @@ print("OOD_SHADOW_VERIFIED_ROWS="+str(quality.get("causally_verified_records",0)
 print("OOD_SHADOW_DISTINCT_DAYS="+str(quality.get("distinct_utc_days",0)))
 print("OOD_SHADOW_FITTED="+str(report.get("model_fitted",False)).lower())
 print("OOD_SHADOW_PRODUCTION_PROMOTION=FALSE")
+near=json.load(open(sys.argv[1].replace('latest-report.json','latest-near-miss-report.json'),encoding="utf-8"))
+print("NEAR_MISS_READ_ONLY=TRUE")
+print("NEAR_MISS_INDEPENDENT_COUNT="+str(near['data_quality']['independent_opportunities']))
+print("NEAR_MISS_INDEPENDENT_DAYS="+str(near['data_quality']['distinct_utc_days']))
+print("NEAR_MISS_PRODUCTION_PROMOTION=FALSE")
 PY
