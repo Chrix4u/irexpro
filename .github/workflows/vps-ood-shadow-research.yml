@@ -1,0 +1,61 @@
+name: VPS OOD Shadow Research
+
+# Research exports ONLY. Does not place orders, replace production models,
+# change trading sessions, or alter any broker/risk protection.
+on:
+  schedule:
+    - cron: '20 16 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irexpro-vps-ood-shadow-research
+  cancel-in-progress: true
+
+jobs:
+  research:
+    if: github.repository == 'Chrix4u/irexpro' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment:
+      name: staging
+    env:
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+    steps:
+      - name: Check pinned read-only SSH target
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$STAGING_SSH_HOST" && -n "$STAGING_SSH_USER" ]]
+          [[ "$STAGING_SSH_PORT" =~ ^[0-9]+$ ]]
+          [[ -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+
+      - name: Install pinned SSH key and known hosts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_ood_research"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_ood_research" "$HOME/.ssh/known_hosts"
+
+      - name: Export bounded OOD evidence and evaluate shadow readiness
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -i "$HOME/.ssh/irexpro_ood_research" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            'bash /home/lightworld/webapps/irexpro-staging/scripts/research/run_ood_shadow_training.sh'
