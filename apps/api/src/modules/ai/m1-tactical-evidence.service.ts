@@ -942,9 +942,10 @@ export class M1TacticalEvidenceService {
 
   /**
    * Additional FULL_AUTO DEMO entry protection: net results after broker
-   * costs across *all instruments/routes*, but only within the exact current
-   * user, broker connection and immutable session. No portfolio aggregation
-   * across different account currencies or historical sessions is allowed.
+   * costs across *all instruments/routes* and recent FULL_AUTO sessions of
+   * the exact same user, DEMO broker connection and account currency.
+   * The current ACTIVE session is required as authority; a Stop/Start must
+   * NOT reset a still-recent losing streak. Never mix different accounts.
    */
   async loadPortfolioNetLossStreakBrake(input: {
     userId: string;
@@ -959,18 +960,28 @@ export class M1TacticalEvidenceService {
           t.commission,
           t.swap,
           t.account_currency,
-          s.account_currency AS session_currency,
+          active.account_currency AS session_currency,
           t.closed_at
         FROM trading.trades t
         JOIN trading.trading_sessions s
           ON s.id = t.trading_session_id
          AND s.user_id = t.user_id
          AND s.broker_connection_id = t.broker_connection_id
+        JOIN trading.trading_sessions active
+          ON active.id = $3
+         AND active.user_id = t.user_id
+         AND active.broker_connection_id = t.broker_connection_id
+         AND active.status = 'ACTIVE'
+         AND active.execution_mode = 'FULL_AUTO'
+        JOIN broker.broker_connections bc
+          ON bc.id = t.broker_connection_id
+         AND bc.user_id = t.user_id
+         AND bc.account_type = 'DEMO'
+         AND bc.account_currency = active.account_currency
         WHERE t.user_id = $1
           AND t.broker_connection_id = $2
-          AND t.trading_session_id = $3
-          AND s.status = 'ACTIVE'
           AND s.execution_mode = 'FULL_AUTO'
+          AND s.account_currency = active.account_currency
           AND t.status = 'CLOSED'
           AND t.closed_at IS NOT NULL
           AND t.closed_at <= $4::timestamptz

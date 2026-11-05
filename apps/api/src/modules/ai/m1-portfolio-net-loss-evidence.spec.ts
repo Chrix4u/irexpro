@@ -2,7 +2,7 @@ import type { DataSource } from 'typeorm';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
 
 describe('portfolio net loss brake database scope', () => {
-  it('reads only the exact active FULL_AUTO session and prior broker closes', async () => {
+  it('keeps the exact current ACTIVE authority while reading prior same-account FULL_AUTO closes across Stop/Start', async () => {
     const query = jest.fn().mockResolvedValue([
       {
         realised_pnl: '-2.00',
@@ -37,7 +37,7 @@ describe('portfolio net loss brake database scope', () => {
       tradingSessionId: 'session-c',
       evaluatedAt,
     });
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('AND t.trading_session_id = $3'), [
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('ON active.id = $3'), [
       'user-a',
       'broker-b',
       'session-c',
@@ -45,7 +45,13 @@ describe('portfolio net loss brake database scope', () => {
     ]);
     const sql = query.mock.calls[0][0] as string;
     expect(sql).toContain("s.execution_mode = 'FULL_AUTO'");
-    expect(sql).toContain("s.status = 'ACTIVE'");
+    expect(sql).toContain("active.status = 'ACTIVE'");
+    expect(sql).toContain("active.execution_mode = 'FULL_AUTO'");
+    expect(sql).toContain('s.account_currency = active.account_currency');
+    expect(sql).toContain('bc.account_currency = active.account_currency');
+    expect(sql).toContain("bc.account_type = 'DEMO'");
+    expect(sql).not.toContain('t.trading_session_id = $3');
+    expect(sql).not.toContain("s.status = 'ACTIVE'");
     expect(sql).toContain('t.closed_at <= $4::timestamptz');
     expect(sql).toContain('t.broker_connection_id = $2');
     expect(sql).toContain('ORDER BY t.closed_at DESC, t.id DESC');
