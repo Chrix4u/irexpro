@@ -4,6 +4,7 @@ import type { OHLCV } from '../../broker/interfaces/broker-adapter.interface';
 import { BrokerService } from '../../broker/broker.service';
 import { BrokerConnectionStatus } from '../../broker/interfaces/broker-adapter.interface';
 import { CTRADER_FAMILY_BROKER_IDS } from '../../broker/registry/broker-catalog';
+import { DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1 } from '../../ai/demo-focused-instruments';
 import { isFxWeeklySessionOpen } from '../utils/fx-weekly-session';
 import { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.service';
 
@@ -69,6 +70,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   private liveQuoteRunning = false;
   private stopping = false;
   private m1RotationOffset = 0;
+  private historyCycleCount = 0;
   private contextRotationOffset = 0;
   private readonly contextInstrumentOffsets = {
     M5: 0,
@@ -76,6 +78,13 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     H1: 0,
     H4: 0,
   };
+  // Dedicated per-timeframe fair-share cursors: prioritize the three DEMO
+  // entry pairs but never starve the other three broker-native research pairs.
+  // Only active for the exact 3+3 instrument cohort, not arbitrary broker
+  // configurations or another user's custom instrument set.
+  private readonly contextGroupCount = { M5: 0, M15: 0, H1: 0, H4: 0 };
+  private readonly focusedContextOffsets = { M5: 0, M15: 0, H1: 0, H4: 0 };
+  private readonly researchContextOffsets = { M5: 0, M15: 0, H1: 0, H4: 0 };
   private readonly warnedAt = new Map<string, number>();
   /** Last completed broker-native history persistence, not just request initiation. */
   private readonly lastSuccessfulCollectAt = new Map<string, string>();
@@ -239,33 +248,58 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   ): Promise<void> {
     const instruments = this.instruments();
     if (instruments.length === 0) return;
-
+    const focused = instruments.filter((instrument) =>
+      DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1.includes(instrument),
+    );
+    const research = instruments.filter(
+      (instrument) => !DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1.includes(instrument),
+    );
+    // Only the exact 3+3 six-pair scanner is optimized. All other
+    // configurations retain the original round-robin behavior.
+    const prioritize = focused.length === 3 && research.length === 3;
+    const groupCycle = this.historyCycleCount++;
+    // Three cycles favor focused entry pairs, one cycle refreshes all three
+    // research-only pairs. Historical M1 broker backfill preserves full minute
+    // bars; the independent live bid/ask loop still covers *all six* every
+    // second. Never suppress a broker quote or synthesize missing bars.
+    const m1Instruments = prioritize ? (groupCycle % 4 === 3 ? research : focused) : instruments;
+    const m1Count = Math.min(M1_REQUESTS_PER_CYCLE, m1Instruments.length);
     const m1Batch = Array.from(
-      { length: Math.min(M1_REQUESTS_PER_CYCLE, instruments.length) },
-      (_, index) => instruments[(this.m1RotationOffset + index) % instruments.length]!,
+      { length: m1Count },
+      (_, index) => m1Instruments[(this.m1RotationOffset + index) % m1Instruments.length]!,
     );
-    this.m1RotationOffset =
-      (this.m1RotationOffset + Math.min(M1_REQUESTS_PER_CYCLE, instruments.length)) %
-      instruments.length;
+    // For 3+3, both pools are exactly three, so the offset is immaterial.
+    // For all other configurations retain the original round-robin cursor.
+    this.m1RotationOffset = (this.m1RotationOffset + m1Count) % m1Instruments.length;
 
-    // Keep the cTrader historical request burst at four or fewer per cycle.
-    // The client enforces its documented 5 requests/second provider limit.
-    // Start all requests concurrently so one delayed M1 response does not
-    // prevent the other pairs or the context timeframe from refreshing.
-    const m1Tasks = m1Batch.map((instrument) =>
-      this.refreshM1(userId, connectionId, instrument, now),
-    );
-
-    // Preserve exactly one context request per cycle. M5/M15 each get 37.5%,
-    // H1 gets 18.75%, and slower H4 gets 6.25%; no increase in provider budget.
-    // Independent pair cursors ensure all six pairs get each timeframe.
-    // Broker-native bars remain mandatory; no no-tick bars are invented.
+    // Keep the same three M1 + one context historical calls per cycle. The
+    // existing H1/M5/M15/H4 rotation is untouched. Every fourth request
+    // *for a given timeframe* goes to research-only, with independent
+    // round-robin cursors: M5/M15 research bars stay under their strict
+    // 10/20-minute freshness windows on the 15-second six-pair deployment.
     const timeframe =
       CONTEXT_REFRESH_ROTATION[this.contextRotationOffset % CONTEXT_REFRESH_ROTATION.length]!;
     this.contextRotationOffset = (this.contextRotationOffset + 1) % CONTEXT_REFRESH_ROTATION.length;
-    const instrumentOffset = this.contextInstrumentOffsets[timeframe] % instruments.length;
-    const context = { instrument: instruments[instrumentOffset]!, timeframe };
-    this.contextInstrumentOffsets[timeframe] = (instrumentOffset + 1) % instruments.length;
+    const contextResearchTurn = prioritize && this.contextGroupCount[timeframe]++ % 4 === 3;
+    const contextInstruments = prioritize
+      ? contextResearchTurn
+        ? research
+        : focused
+      : instruments;
+    const offsets = prioritize
+      ? contextResearchTurn
+        ? this.researchContextOffsets
+        : this.focusedContextOffsets
+      : this.contextInstrumentOffsets;
+    const instrumentOffset = offsets[timeframe] % contextInstruments.length;
+    const context = { instrument: contextInstruments[instrumentOffset]!, timeframe };
+    offsets[timeframe] = (instrumentOffset + 1) % contextInstruments.length;
+
+    // All provider requests are independent; slow research history must not
+    // block the cTrader live quote lane or postpone the focused M1 refresh.
+    const m1Tasks = m1Batch.map((instrument) =>
+      this.refreshM1(userId, connectionId, instrument, now),
+    );
     await Promise.all([
       ...m1Tasks,
       this.refreshContext(userId, connectionId, context.instrument, context.timeframe, now),
