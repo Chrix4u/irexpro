@@ -1,4 +1,11 @@
 import { Injectable } from '@nestjs/common';
+import { DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1 } from './demo-focused-instruments';
+import {
+  toDemoFocusedEntryDiagnostic,
+  type DemoFocusedEntryDiagnostic,
+  type DemoFocusedEntryDiagnosticRow,
+} from './m1-demo-entry-diagnostics';
+
 import { DataSource } from 'typeorm';
 import type { M1ReliabilityRoute, M1RoutePairSideEvidenceRow } from './m1-tactical-reliability';
 import type { M1FailedMoveRescueDecision } from './m1-failed-move-rescue';
@@ -436,6 +443,74 @@ function blockers(value: unknown): string[] {
 @Injectable()
 export class M1TacticalEvidenceService {
   constructor(private readonly dataSource: DataSource) {}
+
+  /**
+   * Bounded, read-only, account-scoped explanation of why the three focused
+   * DEMO pairs are not opening trades. A currently ACTIVE, exact-user cTrader
+   * DEMO FULL_AUTO session is required; historical/suspended sessions never
+   * inherit newer decisions. Never changes execution authority or risk.
+   *
+   * The most common reasons are overlapping reasons PER DECISION (not trades).
+   * No account IDs, raw trade data, or session IDs leave this service.
+   * Called by a separately polled 30-second diagnostic endpoint, not the
+   * four-second core trading control/status refresh.
+   */
+  async loadFocusedDemoEntryDiagnostic(userId: string): Promise<DemoFocusedEntryDiagnostic> {
+    const rows = (await this.dataSource.query(
+      `
+      WITH active_scope AS (
+        SELECT s.broker_connection_id,
+          GREATEST(s.started_at, NOW() - interval '60 minutes') AS from_time
+        FROM trading.trading_sessions s
+        JOIN broker.broker_connections b
+          ON b.id = s.broker_connection_id AND b.user_id = s.user_id
+          AND b.broker_id = 'ctrader' AND b.account_type = 'DEMO'
+        WHERE s.user_id = $1
+          AND s.execution_mode = 'FULL_AUTO'
+          AND s.status = 'ACTIVE'
+        ORDER BY s.authority_generation DESC, s.started_at DESC
+        LIMIT 1
+      ), cohort AS (
+        SELECT d.route, d.execution_authority, d.outcome_state, d.blockers
+        FROM trading.m1_tactical_decisions d
+        JOIN active_scope s ON s.broker_connection_id = d.broker_connection_id
+        WHERE d.user_id = $1
+          AND d.instrument = ANY($2::text[])
+          AND d.evaluated_at >= s.from_time
+          AND d.evaluated_at <= NOW()
+      ), top_reasons AS (
+        SELECT b.value AS code, COUNT(*) AS frequency
+        FROM cohort c
+        CROSS JOIN LATERAL jsonb_array_elements_text(c.blockers) AS b(value)
+        WHERE b.value IN (
+          'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+          'MULTIMODEL_CONTINUATION_TIMING_NOT_READY',
+          'DRIFT_OUT_OF_DISTRIBUTION',
+          'PAPER_NET_EXPECTED_R',
+          'MULTIMODEL_PLAN_B_NOT_ADMITTED',
+          'M1_DEMO_BROKER_COMMISSION_NET_EDGE_BELOW_FLOOR'
+        )
+        GROUP BY b.value ORDER BY frequency DESC, code ASC LIMIT 3
+      )
+      SELECT
+        (SELECT COUNT(*) FROM active_scope) AS active_session_count,
+        (SELECT COUNT(*) FROM cohort) AS evaluated_decisions,
+        (SELECT COUNT(*) FROM cohort WHERE route <> 'ABSTAIN') AS candidate_decisions,
+        (SELECT COUNT(*) FROM cohort WHERE execution_authority = 'BROKER_NATIVE')
+          AS broker_authorized_decisions,
+        (SELECT COUNT(*) FROM cohort WHERE outcome_state = 'EXECUTION_SUCCEEDED')
+          AS execution_succeeded,
+        (SELECT COUNT(*) FROM cohort WHERE outcome_state = 'SESSION_INACTIVE')
+          AS session_inactive_decisions,
+        COALESCE((
+          SELECT jsonb_agg(jsonb_build_object('code', code, 'count', frequency))
+          FROM top_reasons
+        ), '[]'::jsonb) AS leading_blockers
+      `,
+      [userId, [...DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1]],
+    )) as DemoFocusedEntryDiagnosticRow[];
+    return toDemoFocusedEntryDiagnostic(rows[0]);
+  }
 
   /**
    * Research-only as-of fee evidence. The current M1/Plan-B governance cost

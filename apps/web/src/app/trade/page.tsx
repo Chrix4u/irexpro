@@ -53,8 +53,10 @@ import {
   deriveTradeReadinessUiState,
   hasExternalProviderPerformanceUiShape,
   hasM1TacticalStatusUiShape,
+  hasDemoFocusedEntryDiagnosticUiShape,
   hasVpsScannerUiShape,
   type M1TacticalStatusView,
+  type DemoFocusedEntryDiagnosticView,
 } from "@/lib/vps-scanner-status";
 import {
   loadClosedTradeReport,
@@ -1796,6 +1798,8 @@ export default function AiTradingPage() {
     useState<VpsForexScannerStatusView | null>(null);
   const [m1TacticalStatus, setM1TacticalStatus] =
     useState<M1TacticalStatusView | null>(null);
+  const [demoEntryDiagnostic, setDemoEntryDiagnostic] =
+    useState<DemoFocusedEntryDiagnosticView | null>(null);
   const [brokerParityRuntime, setBrokerParityRuntime] =
     useState<BrokerParityRuntimeStatusView | null>(null);
   const [v8DedicatedPaperStatus, setV8DedicatedPaperStatus] =
@@ -2305,6 +2309,42 @@ export default function AiTradingPage() {
       window.clearInterval(timer);
     };
   }, [user, automationOn]);
+
+  // This user/account-scoped investigation is separate from core Start/Stop
+  // and the fast 4-second status feed. Refresh every 30s; its failure must
+  // neither disable trading controls nor retain stale "last hour" evidence.
+  useEffect(() => {
+    if (!user || !automationOn || m1TacticalStatus?.authorityMode !== "DEMO_FULL_AUTO") {
+      setDemoEntryDiagnostic(null);
+      return;
+    }
+    let disposed = false;
+    let inFlight = false;
+    const refresh = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const evidence = await api.request<unknown>(
+          "/ai/external/vps-forex/m1-tactical/entry-diagnostics",
+        );
+        if (!disposed) {
+          setDemoEntryDiagnostic(
+            hasDemoFocusedEntryDiagnosticUiShape(evidence) ? evidence : null,
+          );
+        }
+      } catch {
+        if (!disposed) setDemoEntryDiagnostic(null);
+      } finally {
+        inFlight = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 30_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [user, automationOn, m1TacticalStatus?.authorityMode, terminal?.session?.id]);
 
   useEffect(() => {
     if (!user) return;
@@ -3504,6 +3544,35 @@ export default function AiTradingPage() {
                     ) : null}
                   </div>
                 ) : null}
+                {automationOn && demoEntryDiagnostic?.scope === "ACTIVE_CTRADER_DEMO" && (
+                  <div className="ai-control-card__diagnosis" aria-label="Why no new DEMO trades">
+                    <strong>Why no new trades? · Last 60 minutes</strong>
+                    <small>
+                      {demoEntryDiagnostic.evaluatedDecisions} M1 decisions ·{" "}
+                      {demoEntryDiagnostic.candidateDecisions} non-abstain ·{" "}
+                      {demoEntryDiagnostic.brokerAuthorizedDecisions} broker-authorized ·{" "}
+                      {demoEntryDiagnostic.executionSucceeded} executed
+                    </small>
+                    {demoEntryDiagnostic.leadingBlockers.length ? (
+                      <small>
+                        Frequent reasons:{" "}
+                        {demoEntryDiagnostic.leadingBlockers
+                          .map((reason) => `${reason.label} (${reason.count})`)
+                          .join(" · ")}
+                      </small>
+                    ) : (
+                      <small>
+                        {demoEntryDiagnostic.evaluatedDecisions === 0
+                          ? "No M1 decisions have been recorded for this account in the current period."
+                          : "No leading model admission blocker is available for this period."}
+                      </small>
+                    )}
+                    <small>
+                      Counts cover the current DEMO session and the three entry pairs only.
+                      Reasons may overlap. No risk or commission check is bypassed.
+                    </small>
+                  </div>
+                )}
                 <span className="ai-control-card__hint">
                   {riskProtectionResettable
                     ? `${automationSuspensionMessage ?? "Risk protection paused AI Trading."} No new positions will open until you choose to reset and continue or leave the session paused.`

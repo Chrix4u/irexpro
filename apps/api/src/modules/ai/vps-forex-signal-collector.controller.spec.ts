@@ -29,6 +29,36 @@ describe('VpsForexSignalCollectorController', () => {
     expect(result).not.toHaveProperty('userId');
     expect(result).not.toHaveProperty('brokerConnectionId');
   });
+  it('returns a user-scoped read-only focused DEMO diagnostic independently of the fast status poll', async () => {
+    const diagnostic = {
+      scope: 'ACTIVE_CTRADER_DEMO',
+      windowMinutes: 60,
+      evaluatedDecisions: 18,
+      candidateDecisions: 5,
+      brokerAuthorizedDecisions: 0,
+      executionSucceeded: 0,
+      sessionInactiveDecisions: 0,
+      leadingBlockers: [
+        {
+          code: 'DRIFT_OUT_OF_DISTRIBUTION',
+          label: 'Market outside validated model conditions',
+          count: 4,
+        },
+      ],
+      onlyCurrentSession: true,
+    };
+    const loadFocusedDemoEntryDiagnostic = jest.fn().mockResolvedValue(diagnostic);
+    const controller = new VpsForexSignalCollectorController(
+      {} as VpsForexSignalCollectorService,
+      {} as BrokerParityV7Service,
+      {} as V8DedicatedPaperReadinessService,
+      { getStatus: jest.fn() } as unknown as M1TacticalSchedulerService,
+      { loadFocusedDemoEntryDiagnostic } as unknown as M1TacticalEvidenceService,
+    );
+    await expect(controller.getM1EntryDiagnostics('user-1')).resolves.toEqual(diagnostic);
+    expect(loadFocusedDemoEntryDiagnostic).toHaveBeenCalledWith('user-1');
+  });
+
   it('returns the authenticated user latest M1 tactical decision with scheduler runtime', async () => {
     const schedulerStatus = {
       enabled: true,
