@@ -663,6 +663,28 @@ describe('StrategyOrchestratorService', () => {
       },
     );
 
+    it('does not permit a research-only promoted DEMO signal by omitting external provider metadata', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.FULL_AUTO,
+      });
+      const result = await service.processSignal(
+        validCandidate({
+          instrument: 'USDJPY',
+          confidenceScore: 0.72,
+          timeframe: 'M1',
+          strategyCode: 'external-irexpro-multimodel-ensemble',
+          modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+          suggestedVolume: 0.2,
+          metadata: {},
+        }),
+      );
+      expect(result.outcome).toBe('SIGNAL_INVALID');
+      expect(result.reason).toContain('DEMO_INSTRUMENT_RESEARCH_ONLY');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+
     it('does not re-gate a server-promoted multi-model DEMO decision on the legacy generic 0.60 confidence floor', async () => {
       (executionService.getActiveSession as jest.Mock).mockResolvedValue({
         ...activeSession(),

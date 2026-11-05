@@ -331,9 +331,14 @@ export class StrategyOrchestratorService {
     // ── Gate 3.6: Reversible focused-three DEMO entry authority ──────────────
     // The scheduler also applies this rule, but the central orchestrator must
     // independently refuse delayed/replayed/externally injected promoted DEMO
-    // signals for research-only symbols. This does NOT change PAPER_ONLY, LIVE,
-    // manual close, or any existing account risk/kill controls.
-    if (externalProviderDemoPromoted && !isFocusedDemoEntryInstrument(candidate.instrument)) {
+    // signals for research-only symbols. Test the exact promoted model tuple,
+    // not caller-controlled EXTERNAL_PROVIDER metadata, which may be omitted.
+    // This does NOT promote LIVE or PAPER signals, or bypass any risk controls.
+    if (
+      session.executionMode === ExecutionMode.FULL_AUTO &&
+      serverPromotedExternalDemoModel &&
+      !isFocusedDemoEntryInstrument(candidate.instrument)
+    ) {
       const reason =
         'DEMO_INSTRUMENT_RESEARCH_ONLY: new promoted DEMO AI entries are limited to AUDUSD, GBPUSD and EURUSD; this instrument remains under research';
       this.logger.warn(`Signal ${signalId} rejected: ${reason}`);
