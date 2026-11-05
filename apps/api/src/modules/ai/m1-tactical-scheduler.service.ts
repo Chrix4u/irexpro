@@ -11,7 +11,7 @@ import { v5 as uuidv5 } from 'uuid';
 import { ExecutionService } from '../execution/execution.service';
 import { TradeIntentService } from '../execution/services/trade-intent.service';
 import { AllocationService } from '../execution/services/allocation.service';
-import { PAPER_PRODUCT_ABSOLUTE_MIN_LOT } from '../execution/services/position-sizing.service';
+import { PAPER_BROKER_AWARE_EXPOSURE_SEARCH_FLOOR } from '../execution/services/position-sizing.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { TradeCloseReason } from '../execution/entities/trade.entity';
@@ -453,7 +453,7 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V7: Readonly<M1TacticalRolloutPolicy> = 
  * early-transition route/evidence gates but removes the scout micro-lot cap.
  * 4.00 is only an upper ceiling: PositionSizingService still derives the
  * actual volume from allocation, stop distance, durable risk %, broker
- * min/max/step and margin evidence, with a 0.20 promoted execution floor.
+ * min/max/step and margin evidence, with a preferred 0.20 size and a dynamic broker-supported lower bound.
  */
 export const M1_TACTICAL_ROLLOUT_POLICY_V8: Readonly<M1TacticalRolloutPolicy> = Object.freeze({
   ...M1_TACTICAL_ROLLOUT_POLICY_V1,
@@ -1781,12 +1781,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         stopLoss: candidate.stopLoss,
       },
       requestedVolumeCap,
-      productFloor: Number(PAPER_PRODUCT_ABSOLUTE_MIN_LOT),
-      // The downstream PositionSizingService still applies the broker's exact
-      // min/max/step. This 0.01 search granularity only prevents the M1
-      // exposure governor from collapsing a professional cap straight to the
-      // 0.20 product floor when a larger safe intermediate size exists.
-      volumeStep: 0.01,
+      // Screening floor only, not permission to execute a 0.001-lot trade.
+      productFloor: Number(PAPER_BROKER_AWARE_EXPOSURE_SEARCH_FLOOR),
+      // This is a pre-screen, NOT executable broker sizing. Broker spec,
+      // leverage, margin, risk-at-stop and all model evidence remain enforced
+      // later. 0.001 search precision permits genuinely supported micro lots.
+      volumeStep: 0.001,
     });
   }
 
@@ -1873,7 +1873,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     if (!currencyExposureGuard.allowed) {
       const reason = currencyExposureGuard.productFloorBlocked
         ? `M1_CURRENCY_EXPOSURE_PRODUCT_FLOOR_BLOCKED requestedCap=${executionVolumeCap} ` +
-          `productFloor=${PAPER_PRODUCT_ABSOLUTE_MIN_LOT} capacity=${currencyExposureGuard.decision.capacity} ` +
+          `productFloor=${PAPER_BROKER_AWARE_EXPOSURE_SEARCH_FLOOR} capacity=${currencyExposureGuard.decision.capacity} ` +
           `alignedRiskPercent=${currencyExposureGuard.decision.projectedAlignedRiskPercent}`
         : `M1_CURRENCY_EXPOSURE_BLOCKED capacity=${currencyExposureGuard.decision.capacity} ` +
           `alignedRiskPercent=${currencyExposureGuard.decision.projectedAlignedRiskPercent}`;

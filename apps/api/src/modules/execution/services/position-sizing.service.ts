@@ -45,6 +45,7 @@ export type PositionSizingFailureCode =
    * rejection, never a round-up. */
   | 'POSITION_SIZE_BELOW_MINIMUM'
   | 'POSITION_SIZE_BELOW_POLICY_MINIMUM'
+  | 'BROKER_MINIMUM_MARGIN_UNAFFORDABLE'
   | 'POLICY_MINIMUM_LOT_UNPROVABLE'
   | 'POSITION_SIZE_ZERO';
 
@@ -100,6 +101,15 @@ export interface PositionSizingInputs {
   minLot: string;
   policyMinimumExecutableLot?: string | null;
   policyMinimumLotLifted?: boolean;
+  /** 0.20 lot is a target, NOT a product minimum. */
+  preferredLotTarget?: string | null;
+  /** Audit why the actual lot is lower than the requested preferred target. */
+  lotSelectionReason?:
+    | 'PREFERRED_LOT_ACHIEVED'
+    | 'BROKER_RISK_SCALED_DOWN'
+    | 'STANDARD_RISK_SIZING';
+  /** Portion of proven margin capacity reserved for micro accounts. */
+  microAccountMarginReservePercent?: string | null;
   finalRiskAtStop?: string;
   finalRiskAtStopPercentOfCapital?: string;
   maxLot: string;
@@ -132,9 +142,16 @@ export interface SizedPosition {
 
 /** Decimal scale for lot math (lot steps are 0.01/0.001 — 8 digits is exact). */
 const LOT_SCALE = 8;
-export const PAPER_PRODUCT_ABSOLUTE_MIN_LOT = '0.2';
+/** Preferred professional DEMO trade size when independently affordable. */
+export const PAPER_PRODUCT_PREFERRED_LOT = '0.2';
+/** Compatibility alias; historically a hard minimum, now preference only. */
+export const PAPER_PRODUCT_ABSOLUTE_MIN_LOT = PAPER_PRODUCT_PREFERRED_LOT;
 const PAPER_PRODUCT_DEFAULT_MIN_LOT = '0.2';
-const PAPER_PRODUCT_RISK_ADJUSTED_MIN_LOT = '0.1';
+/** Only an exposure pre-screen floor; the instrument's real min/step remains authoritative. */
+export const PAPER_BROKER_AWARE_EXPOSURE_SEARCH_FLOOR = '0.001';
+/** Reserve headroom for slippage/commission on a tiny broker account. */
+const MICRO_EQUITY_THRESHOLD = ExactDecimal.parse('50');
+const MICRO_MARGIN_CAPACITY_MULTIPLIER = ExactDecimal.parse('0.8');
 const PAPER_PRODUCT_MAX_LOT = '4';
 
 /**
@@ -216,7 +233,7 @@ export class PositionSizingService {
       adaptiveRiskMultiplier?: string | null;
       /** Session peak equity used only to reduce risk before the hard drawdown boundary. */
       sessionPeakEquity?: string | null;
-      /** PAPER-only product floor. May lift soft-budget sizing up to this floor when the final stop risk remains inside the durable profile ceiling. */
+      /** PAPER-only preferred lot. Never a hard floor; broker min/step and account risk/margin govern. */
       minimumExecutableLot?: string | null;
     };
   }): Promise<SizedPosition> {
@@ -648,10 +665,14 @@ export class PositionSizingService {
       }
     }
     if (!lotsByLeverageCeiling.isPositive()) {
+      const belowBrokerMin =
+        rawLotsByLeverageCeiling.isPositive() && rawLotsByLeverageCeiling.lt(minLot);
       throw new PositionSizingError(
-        'POSITION_SIZE_ZERO',
-        `max leverage ${maxLeverageAllowed.toString()}x cannot safely admit one volume step ` +
-          `(${lotStep.toString()} lots) of ${instrument} at equity ${equity.toString()}`,
+        belowBrokerMin ? 'POSITION_SIZE_BELOW_MINIMUM' : 'POSITION_SIZE_ZERO',
+        `max leverage ${maxLeverageAllowed.toString()}x supports at most ` +
+          `${rawLotsByLeverageCeiling.toString()} lots of ${instrument} ` +
+          `at equity ${equity.toString()}, below the broker minimum/step ` +
+          `${minLot.toString()}/${lotStep.toString()}; no trade is affordable`,
       );
     }
 
@@ -659,18 +680,18 @@ export class PositionSizingService {
     // and scout callers may request a smaller cap for evidence collection, but
     // that micro-volume is no longer executable: the hard floor below causes
     // those requests to abstain instead of dispatching 0.05/0.10 lots.
-    const paperProductMinimumLot = allocationAwarePaper
-      ? ExactDecimal.parse(PAPER_PRODUCT_ABSOLUTE_MIN_LOT)
+    const paperProductMinimumLot = allocationAwarePaper ? minLot : null;
+    const paperPreferredLot = allocationAwarePaper
+      ? ExactDecimal.parse(PAPER_PRODUCT_PREFERRED_LOT)
       : null;
     const paperProductMaximumLot = allocationAwarePaper
       ? ExactDecimal.parse(PAPER_PRODUCT_MAX_LOT)
       : null;
     let effectiveRequestedLotUpperBound = requestedLotUpperBound;
     if (paperProductMinimumLot && paperProductMaximumLot) {
-      // PAPER may cap an oversized caller request at the product maximum, but an
-      // explicit model/research upper bound is authoritative and must never be
-      // raised to a product floor. The floor check below fails closed when a
-      // requested cap is smaller than the applicable executable minimum.
+      // PAPER may cap an oversized caller request at the product maximum.
+      // Never raise the explicit model/research upper bound to a preferred
+      // lot size; the broker minimum is the sole hard executable floor.
       effectiveRequestedLotUpperBound = ExactDecimal.min(
         requestedLotUpperBound,
         paperProductMaximumLot,
@@ -696,6 +717,14 @@ export class PositionSizingService {
     let lots = steps.mul(lotStep);
 
     if (!lots.isPositive()) {
+      if (lotsBeforeStep.isPositive() && lotsBeforeStep.lt(minLot)) {
+        throw new PositionSizingError(
+          'POSITION_SIZE_BELOW_MINIMUM',
+          `account risk/leverage can support only ${lotsBeforeStep.toString()} lots ` +
+            `of ${instrument}, below the broker instrument minimum ${minLot.toString()}; ` +
+            'choose a broker/symbol with a lower minimum or a smaller contract, not higher risk',
+        );
+      }
       throw new PositionSizingError(
         'POSITION_SIZE_ZERO',
         `step normalization collapsed the volume to zero (raw ${lotsBeforeStep.toString()}, step ${lotStep.toString()})`,
@@ -711,7 +740,7 @@ export class PositionSizingService {
 
     let policyMinimumExecutableLot: ExactDecimal | null = null;
     let policyMinimumLotLifted = false;
-    if (allocationAwarePaper && paperProductMinimumLot) {
+    if (allocationAwarePaper && paperPreferredLot) {
       let requestedPolicyMinimumLot = ExactDecimal.parse(PAPER_PRODUCT_DEFAULT_MIN_LOT);
       if (params.paperAllocationSizing?.minimumExecutableLot != null) {
         const parsedRequestedMinimum = ExactDecimal.tryParse(
@@ -725,16 +754,12 @@ export class PositionSizingService {
         }
         requestedPolicyMinimumLot = parsedRequestedMinimum;
       }
-      policyMinimumExecutableLot = ExactDecimal.max(
-        requestedPolicyMinimumLot,
-        paperProductMinimumLot,
-      );
+      policyMinimumExecutableLot = ExactDecimal.max(requestedPolicyMinimumLot, paperPreferredLot);
 
-      // The 0.20 product floor is a preferred professional size, not permission
-      // to violate broker/model limits or durable account ceilings. Broker step,
-      // broker max and an explicit model lot cap remain hard blockers. Account
-      // leverage/profile ceilings may conservatively step the trade down to the
-      // existing risk-adjusted minimum instead of suppressing an otherwise valid setup.
+      // 0.20 lot is a PREFERRED size, not an executable minimum. The
+      // actual minimum is ALWAYS the instrument's proven minLot/lotStep.
+      // Never promote a proposed volume above the model's cap, broker max,
+      // leverage ceiling, or the durable full-risk stop ceiling.
       const floorSteps = policyMinimumExecutableLot.divDown(lotStep, 0);
       const normalizedFloor = floorSteps.mul(lotStep);
       const floorFitsBrokerAndModelCeilings =
@@ -746,40 +771,22 @@ export class PositionSizingService {
         (removeProfileLotCeiling || policyMinimumExecutableLot.lte(profileMaxLots));
 
       if (lots.lt(policyMinimumExecutableLot)) {
-        const riskAdjustedMinimumLot = ExactDecimal.parse(PAPER_PRODUCT_RISK_ADJUSTED_MIN_LOT);
         const floorRiskInQuoteCurrency = policyMinimumExecutableLot.mul(riskPerLot);
         const floorFitsDurableRisk = floorRiskInQuoteCurrency.lte(
           profileRiskCeilingAmountInQuoteCurrency,
         );
-
-        if (!floorFitsBrokerAndModelCeilings) {
-          throw new PositionSizingError(
-            'POSITION_SIZE_BELOW_POLICY_MINIMUM',
-            `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} is below the PAPER policy minimum ` +
-              `${policyMinimumExecutableLot.toString()} and the preferred floor exceeds a broker or ` +
-              `model lot ceiling`,
-          );
-        }
-
-        if (!floorFitsAccountLotCeilings) {
-          if (lots.lt(riskAdjustedMinimumLot)) {
-            throw new PositionSizingError(
-              'POSITION_SIZE_BELOW_POLICY_MINIMUM',
-              `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} cannot afford the preferred PAPER ` +
-                `${policyMinimumExecutableLot.toString()} lot size under durable account ceilings and is ` +
-                `below the risk-adjusted minimum ${riskAdjustedMinimumLot.toString()}`,
-            );
-          }
-        } else if (floorFitsDurableRisk) {
+        // Preserve the original risk-safe preference promotion on a funded
+        // account, but an unaffordable floor must NEVER veto a smaller
+        // otherwise-authorized broker volume. Micro-volumes still require
+        // every execution/risk/commission gate downstream.
+        if (
+          floorFitsBrokerAndModelCeilings &&
+          floorFitsAccountLotCeilings &&
+          floorFitsDurableRisk &&
+          policyMinimumExecutableLot.gte(minLot)
+        ) {
           lots = policyMinimumExecutableLot;
           policyMinimumLotLifted = true;
-        } else if (lots.lt(riskAdjustedMinimumLot)) {
-          throw new PositionSizingError(
-            'POSITION_SIZE_BELOW_POLICY_MINIMUM',
-            `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} cannot afford the preferred PAPER ` +
-              `${policyMinimumExecutableLot.toString()} lot size and is below the risk-adjusted minimum ` +
-              `${riskAdjustedMinimumLot.toString()}`,
-          );
         }
       }
     }
@@ -791,10 +798,18 @@ export class PositionSizingService {
     // largest broker lot increment whose EXPECTED_MARGIN fits both current free
     // margin and the AI risk-capital base. RiskService independently re-checks
     // current broker free margin immediately before execution (defense in depth).
-    const marginCapacity = ExactDecimal.min(freeMargin, riskCapitalBase);
-    const minimumMarginAffordableLot = allocationAwarePaper
-      ? ExactDecimal.max(minLot, ExactDecimal.parse(PAPER_PRODUCT_RISK_ADJUSTED_MIN_LOT))
-      : minLot;
+    // Under $50 equivalent equity, retain at least 20% of both allocation
+    // and free margin as a buffer. Fees, spreads, and adverse movement can
+    // exhaust a $5 account especially quickly. This buffer is separate from
+    // the hard per-trade risk and effective leverage limits.
+    const microAccountMarginReservePercent =
+      allocationAwarePaper && equity.lte(MICRO_EQUITY_THRESHOLD) ? '20' : null;
+    const marginCapacity = ExactDecimal.min(freeMargin, riskCapitalBase).mul(
+      microAccountMarginReservePercent ? MICRO_MARGIN_CAPACITY_MULTIPLIER : ExactDecimal.ONE,
+    );
+    // Broker minimum is the only hard volume floor. No 0.10/0.20 product floor
+    // may prevent a duly risk-sized micro trade.
+    const minimumMarginAffordableLot = minLot;
 
     const requiredMarginForLots = async (candidateLots: ExactDecimal): Promise<ExactDecimal> => {
       let raw: string | null = null;
@@ -844,13 +859,12 @@ export class PositionSizingService {
       }
 
       if (!bestLots || !bestMargin) {
-        const code: PositionSizingFailureCode = allocationAwarePaper
-          ? 'POSITION_SIZE_BELOW_POLICY_MINIMUM'
-          : 'POSITION_SIZE_ZERO';
         throw new PositionSizingError(
-          code,
-          `broker margin capacity ${marginCapacity.toString()} ${accountCurrency} cannot afford ` +
-            `${minimumMarginAffordableLot.toString()} lots of ${instrument}`,
+          'BROKER_MINIMUM_MARGIN_UNAFFORDABLE',
+          `broker margin capacity ${marginCapacity.toString()} ${accountCurrency} after ` +
+            `micro-account reserve cannot afford the instrument minimum ` +
+            `${minimumMarginAffordableLot.toString()} lots of ${instrument}; ` +
+            'smaller trades require a broker-supported lower volume/contract size',
         );
       }
 
@@ -921,6 +935,14 @@ export class PositionSizingService {
       minLot: minLot.toString(),
       policyMinimumExecutableLot: policyMinimumExecutableLot?.toString() ?? null,
       policyMinimumLotLifted,
+      preferredLotTarget: policyMinimumExecutableLot?.toString() ?? null,
+      lotSelectionReason:
+        allocationAwarePaper && policyMinimumExecutableLot
+          ? lots.gte(policyMinimumExecutableLot)
+            ? 'PREFERRED_LOT_ACHIEVED'
+            : 'BROKER_RISK_SCALED_DOWN'
+          : 'STANDARD_RISK_SIZING',
+      microAccountMarginReservePercent,
       finalRiskAtStop: finalRiskAtStop.toString(),
       finalRiskAtStopPercentOfCapital: finalRiskAtStopPercentOfCapital.toString(),
       maxLot: maxLot.toString(),

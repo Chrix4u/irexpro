@@ -220,7 +220,7 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       );
     });
 
-    it('allows promoted DEMO sizing to fall below the preferred 0.20 lot floor when broker margin requires it, but not below the 0.10 risk-adjusted floor', async () => {
+    it('allows promoted DEMO sizing to fall below preferred 0.20 when broker margin requires it', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue(
         accountState({ balance: '645.53', equity: '645.53', freeMargin: '645.53' }),
       );
@@ -649,12 +649,12 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       });
     });
 
-    it('POSITION_SIZE_ZERO when the risk budget affords nothing', async () => {
+    it('rejects below the broker minimum when the account cannot afford a volume step', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue(
         accountState({ equity: '0.50', balance: '0.50' }),
       );
       await expect(service.sizePosition(baseParams())).rejects.toMatchObject({
-        code: 'POSITION_SIZE_ZERO',
+        code: 'POSITION_SIZE_BELOW_MINIMUM',
       });
     });
   });
