@@ -26,6 +26,10 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
     leadingBlockers: [
       { code: "ENSEMBLE_NOT_PROMOTABLE_ADMISSION", label: "Primary model admission not met", count: 211 },
     ],
+    leadingModelReasons: [
+      { code: "REGIME_ROLLOVER_RISK", label: "New York rollover: unreliable liquidity/spreads", count: 20 },
+    ],
+    rolloverRiskDecisions: 20,
     onlyCurrentSession: true,
   };
   it("accepts only complete bounded current-session diagnostic evidence", () => {
@@ -40,6 +44,8 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
       eligibleFallbackProbationVetoDecisions: 0,
       operatingState: "NO_ACTIVE_SESSION",
       leadingBlockers: [],
+      leadingModelReasons: [],
+      rolloverRiskDecisions: 0,
     })).toBe(true);
   });
   it("rejects malformed counts, unscoped evidence or unbounded reasons", () => {
@@ -49,6 +55,11 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, primaryPathDecisions: 23 })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, primaryReliabilityVetoDecisions: 7 })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, onlyCurrentSession: false })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, rolloverRiskDecisions: 23 })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, rolloverRiskDecisions: -1 })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingModelReasons: [] })).toBe(true);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingModelReasons: new Array(4).fill(evidence.leadingModelReasons[0]) })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingModelReasons: [{ code: "REGIME_ROLLOVER_RISK", label: "x", count: 23 }] })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingBlockers: new Array(9).fill(evidence.leadingBlockers[0]) })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingBlockers: [{ code: 4, label: "bad", count: 1 }] })).toBe(false);
   });

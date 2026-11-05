@@ -514,6 +514,29 @@ export class M1TacticalEvidenceService {
         )
         GROUP BY b.value ORDER BY frequency DESC, code ASC LIMIT 3
       )
+      , top_model_reasons AS (
+        SELECT b.value AS code, COUNT(*) AS frequency
+        FROM cohort c
+        CROSS JOIN LATERAL (
+          SELECT DISTINCT value FROM jsonb_array_elements_text(
+            CASE
+              WHEN jsonb_typeof(c.governance->'multimodelEnsemble'->'reasons') = 'array'
+                THEN c.governance->'multimodelEnsemble'->'reasons'
+              ELSE '[]'::jsonb
+            END
+          )
+        ) AS b(value)
+        WHERE c.route <> 'ABSTAIN'
+          AND b.value IN (
+            'REGIME_ROLLOVER_RISK', 'REGIME_TREND_EXTENDED',
+            'REGIME_TREND_WEAK', 'REGIME_VOLATILE',
+            'EXIT_FEASIBILITY', 'TRADE_QUALITY', 'DIRECTION_QUALITY',
+            'META_EXPECTED_VALUE', 'EXPECTED_R', 'SESSION_QUALITY',
+            'CONFIDENCE_FLOOR', 'PORTFOLIO_CONCENTRATION'
+          )
+        GROUP BY b.value
+        ORDER BY frequency DESC, code ASC LIMIT 3
+      )
       SELECT
         (SELECT COUNT(*) FROM active_scope) AS active_session_count,
         COALESCE((
@@ -548,6 +571,14 @@ export class M1TacticalEvidenceService {
               governance->'demoPrimaryOnlyProbation'->>'chosenAuthorityPath', 'UNKNOWN'
             ) NOT IN ('BLOCKED', 'UNKNOWN')
         ) AS eligible_fallback_probation_veto_decisions,
+        (SELECT COUNT(*) FROM cohort
+          WHERE route <> 'ABSTAIN'
+            AND governance->'multimodelEnsemble'->>'regime' = 'ROLLOVER_RISK'
+        ) AS rollover_risk_decisions,
+        COALESCE((
+          SELECT jsonb_agg(jsonb_build_object('code', code, 'count', frequency))
+          FROM top_model_reasons
+        ), '[]'::jsonb) AS leading_model_reasons,
         COALESCE((
           SELECT jsonb_agg(jsonb_build_object('code', code, 'count', frequency))
           FROM top_reasons

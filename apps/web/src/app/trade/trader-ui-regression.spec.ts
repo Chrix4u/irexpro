@@ -36,6 +36,8 @@ describe('AI Trader production UI regression contract', () => {
   it("explains no-trade conditions without touching Start/Stop or the 4s control feed", () => {
     expect(pageSource).toContain('/ai/external/vps-forex/m1-tactical/entry-diagnostics');
     expect(pageSource).toContain('hasDemoFocusedEntryDiagnosticUiShape(evidence)');
+    expect(pageSource).toContain('New York rollover safety:');
+    expect(pageSource).toContain('Underlying AI model reasons:');
     expect(pageSource).toContain('window.setInterval(() => void refresh(), 30_000)');
     expect(pageSource).toContain('demoEntryDiagnostic?.scope === "ACTIVE_CTRADER_DEMO"');
     expect(pageSource).toContain('Why no new trades? · Last 60 minutes');

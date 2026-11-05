@@ -3598,6 +3598,22 @@ export default function AiTradingPage() {
                           : "No leading model admission blocker is available for this period."}
                       </small>
                     )}
+                    {demoEntryDiagnostic.rolloverRiskDecisions > 0 && (
+                      <small className="ai-control-card__diagnosis-alert" role="status">
+                        New York rollover safety: {demoEntryDiagnostic.rolloverRiskDecisions} of{" "}
+                        {demoEntryDiagnostic.candidateDecisions} proposed entries in the last
+                        60 minutes encountered the daily rollover market regime. This is a
+                        historical classification, not proof of current feed readiness.
+                      </small>
+                    )}
+                    {demoEntryDiagnostic.leadingModelReasons.length > 0 && (
+                      <small>
+                        Underlying AI model reasons:{" "}
+                        {demoEntryDiagnostic.leadingModelReasons
+                          .map((reason) => `${reason.label} (${reason.count})`)
+                          .join(" · ")}
+                      </small>
+                    )}
                     <small>
                       Counts cover the current DEMO session and the three entry pairs only.
                       Reasons may overlap. No risk or commission check is bypassed.
