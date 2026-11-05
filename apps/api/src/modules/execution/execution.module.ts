@@ -58,6 +58,7 @@ import { PositionSizingService } from './services/position-sizing.service';
 import { ProtectiveOrderReconciliationService } from './reconciliation/protective-order-reconciliation.service';
 import { LiveDemoProfitProtectionService } from './reconciliation/live-demo-profit-protection.service';
 import { DemoPartialCloseLedgerService } from './reconciliation/demo-partial-close-ledger.service';
+import { DemoPartialCloseReconciliationService } from './reconciliation/demo-partial-close-reconciliation.service';
 
 /**
  * ExecutionModule — Live trade execution, lifecycle management, and
@@ -171,6 +172,8 @@ import { DemoPartialCloseLedgerService } from './reconciliation/demo-partial-clo
     LiveDemoProfitProtectionService,
     // Reserved-only P1 DEMO partial-close ledger: no broker dispatch call path.
     DemoPartialCloseLedgerService,
+    // Internal-only provider evidence persistence; broker dispatch stays disabled.
+    DemoPartialCloseReconciliationService,
     TradeReconciliationJob,
     TradeReconciliationProducer,
     // Round 7 (P1): the expiry-hygiene sweeper (stale intents/confirmations
