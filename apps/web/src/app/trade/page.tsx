@@ -3555,7 +3555,7 @@ export default function AiTradingPage() {
                     </small>
                     {demoEntryDiagnostic.leadingBlockers.length ? (
                       <small>
-                        Frequent reasons:{" "}
+                        Frequent reasons among proposed entries:{" "}
                         {demoEntryDiagnostic.leadingBlockers
                           .map((reason) => `${reason.label} (${reason.count})`)
                           .join(" · ")}
