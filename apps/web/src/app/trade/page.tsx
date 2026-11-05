@@ -3561,6 +3561,15 @@ export default function AiTradingPage() {
                         {demoEntryDiagnostic.sessionAgeMinutes % 60}m.
                       </small>
                     )}
+                    {demoEntryDiagnostic.operatingState === "STALE_SCAN_EVIDENCE" && (
+                      <small className="ai-control-card__diagnosis-alert" role="status">
+                        No fresh M1 trading decisions for{" "}
+                        {Math.floor((demoEntryDiagnostic.lastDecisionAgeSeconds ?? 0) / 60)} minutes.
+                        cTrader quotes or the scanner may be delayed. The setup counts above are
+                        from earlier in the hour, not proof of a live signal. New entries require
+                        fresh broker prices and normal model and risk approval.
+                      </small>
+                    )}
                     {demoEntryDiagnostic.operatingState === "NO_RECENT_SCANS" && (
                       <small className="ai-control-card__diagnosis-alert" role="status">
                         The session is active, but no recent market decisions were recorded.

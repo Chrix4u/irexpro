@@ -41,6 +41,8 @@ describe('AI Trader production UI regression contract', () => {
     expect(pageSource).toContain('Why no new trades? · Last 60 minutes');
     expect(pageSource).toContain('Frequent reasons among proposed entries:');
     expect(pageSource).toContain('SCANNING_NO_APPROVED_ENTRY');
+    expect(pageSource).toContain('STALE_SCAN_EVIDENCE');
+    expect(pageSource).toContain('No fresh M1 trading decisions for');
     expect(pageSource).toContain('NO_RECENT_SCANS');
     expect(pageSource).toContain('Entry qualification:');
     expect(pageSource).toContain('eligibleFallbackProbationVetoDecisions');

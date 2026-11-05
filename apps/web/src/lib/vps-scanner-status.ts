@@ -126,6 +126,7 @@ export interface DemoFocusedEntryDiagnosticView {
   executionSucceeded: number;
   sessionInactiveDecisions: number;
   sessionAgeMinutes: number;
+  lastDecisionAgeSeconds: number | null;
   planBAdmittedDecisions: number;
   primaryPathDecisions: number;
   primaryReliabilityVetoDecisions: number;
@@ -133,6 +134,7 @@ export interface DemoFocusedEntryDiagnosticView {
   operatingState:
     | "NO_ACTIVE_SESSION"
     | "NO_RECENT_SCANS"
+    | "STALE_SCAN_EVIDENCE"
     | "NO_RECENT_CANDIDATES"
     | "SCANNING_NO_APPROVED_ENTRY"
     | "RECENT_ENTRY_AUTHORIZATION";
@@ -167,10 +169,24 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
   if (![
     "NO_ACTIVE_SESSION",
     "NO_RECENT_SCANS",
+    "STALE_SCAN_EVIDENCE",
     "NO_RECENT_CANDIDATES",
     "SCANNING_NO_APPROVED_ENTRY",
     "RECENT_ENTRY_AUTHORIZATION",
   ].includes(String(value.operatingState))) return false;
+  if (value.lastDecisionAgeSeconds !== null && (
+    typeof value.lastDecisionAgeSeconds !== "number" ||
+    !Number.isSafeInteger(value.lastDecisionAgeSeconds) ||
+    value.lastDecisionAgeSeconds < 0
+  )) return false;
+  if (value.scope === "ACTIVE_CTRADER_DEMO" &&
+      (value.evaluatedDecisions as number) > 0 &&
+      value.lastDecisionAgeSeconds === null) return false;
+  if (value.operatingState === "STALE_SCAN_EVIDENCE" && (
+      (value.evaluatedDecisions as number) === 0 ||
+      value.lastDecisionAgeSeconds === null ||
+      value.lastDecisionAgeSeconds < 240
+  )) return false;
   const candidateCount = value.candidateDecisions as number;
   const primaryCount = value.primaryPathDecisions as number;
   if (primaryCount > candidateCount ||
@@ -179,7 +195,8 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
     (value.eligibleFallbackProbationVetoDecisions as number) > candidateCount)
     return false;
   if (value.scope === "NO_ACTIVE_CTRADER_DEMO_SESSION" && (
-      value.operatingState !== "NO_ACTIVE_SESSION" || value.sessionAgeMinutes !== 0
+      value.operatingState !== "NO_ACTIVE_SESSION" || value.sessionAgeMinutes !== 0 ||
+      value.lastDecisionAgeSeconds !== null
     )) return false;
   return value.leadingBlockers.every((reason) =>
     isRecord(reason) &&

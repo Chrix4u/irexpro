@@ -520,6 +520,10 @@ export class M1TacticalEvidenceService {
           SELECT GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - started_at)) / 60))
           FROM active_scope
         ), 0) AS session_age_minutes,
+        -- An active session with old decisions is not an actively scanning engine.
+        -- This is observation-only and cannot grant broker entry authority.
+        (SELECT GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - MAX(evaluated_at)))))
+           FROM cohort) AS last_decision_age_seconds,
         (SELECT COUNT(*) FROM cohort) AS evaluated_decisions,
         (SELECT COUNT(*) FROM cohort WHERE route <> 'ABSTAIN') AS candidate_decisions,
         (SELECT COUNT(*) FROM cohort WHERE execution_authority = 'BROKER_NATIVE')
