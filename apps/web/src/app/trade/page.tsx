@@ -3344,9 +3344,7 @@ export default function AiTradingPage() {
                     </Link>
                   </>
                 )}
-              </Card>
-
-              <Card className="ai-control-card ai-control-card--allocation">
+                <div className="ai-control-card__allocation-section" role="group" aria-label="Capital allocation for selected broker">
                 <span className="ai-control-card__label">
                   AI capital allocation
                 </span>
@@ -3395,6 +3393,7 @@ export default function AiTradingPage() {
                     ? " · Allocation is locked by the current protection state; reallocation cannot clear or explain this stop."
                     : ""}
                 </span>
+                </div>
               </Card>
 
               <Card className="ai-control-card ai-control-card--automation">
@@ -3492,6 +3491,19 @@ export default function AiTradingPage() {
                             ? "Stop AI Trading"
                             : "Start AI Trading"}
                 </Button>
+                {m1TacticalStatus?.demoEntryInstruments?.length ? (
+                  <div className="ai-control-card__focus" role="status">
+                    <strong>Focused DEMO trading:</strong>{" "}
+                    {m1TacticalStatus.demoEntryInstruments.join(" · ")}
+                    {m1TacticalStatus.researchOnlyInstruments?.length ? (
+                      <small>
+                        Research only:{" "}
+                        {m1TacticalStatus.researchOnlyInstruments.join(" · ")}.
+                        No new DEMO entries on these pairs.
+                      </small>
+                    ) : null}
+                  </div>
+                ) : null}
                 <span className="ai-control-card__hint">
                   {riskProtectionResettable
                     ? `${automationSuspensionMessage ?? "Risk protection paused AI Trading."} No new positions will open until you choose to reset and continue or leave the session paused.`

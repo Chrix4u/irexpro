@@ -1,3 +1,6 @@
+import { DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1 } from './demo-focused-instruments';
+export { DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1 } from './demo-focused-instruments';
+
 import {
   Inject,
   Injectable,
@@ -376,6 +379,8 @@ export interface M1TacticalRolloutPolicy {
   demoPrimaryOnlyProbation?: boolean;
   /** Broker-native DEMO primary entry requires observed after-fee expectancy. */
   demoBrokerCommissionFloor?: boolean;
+  /** Explicit DEMO-only new-entry allowlist; all other instruments remain research-only. */
+  demoEntryInstruments?: readonly string[];
   routeNetExpectedRFloors: Readonly<Record<Exclude<M1TacticalRoute, 'ABSTAIN'>, number>>;
 }
 
@@ -474,12 +479,35 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION: Readonly<M1Ta
     demoPrimaryOnlyProbation: true,
   });
 
+/**
+ * Reversible DEMO focus from independently queried broker-native FULL_AUTO
+ * closed trades, 2026-11-05. All six sleeves have negative AFTER-FEE net P&L.
+ * AUDUSD (60 closures), GBPUSD (13), EURUSD (32, one incomplete fee) are a
+ * controlled research shortlist, NOT historically profitable winners.
+ * USDJPY (-124.18 EUR/27), USDCAD (-87.15 EUR/39), and USDCHF (only 5)
+ * retain observational scoring but can never open NEW positions here.
+ * No changes to LIVE, PAPER, existing broker positions or risk suspensions.
+ */
+
+/** A missing allowlist preserves older V8 policy semantics; an empty list blocks all DEMO entries. */
+export function demoInstrumentEntryAllowed(
+  policy: Readonly<M1TacticalRolloutPolicy>,
+  instrument: string,
+): boolean {
+  return (
+    policy.phase !== 'DEMO_EARLY_TRANSITION_PROFESSIONAL' ||
+    policy.demoEntryInstruments === undefined ||
+    (policy.demoEntryInstruments.includes(instrument) && policy.instruments.includes(instrument))
+  );
+}
+
 /** Reversible commission-aware DEMO policy; historical rollout policies remain immutable. */
 export const M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION: Readonly<M1TacticalRolloutPolicy> =
   Object.freeze({
     ...M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
-    version: 'm1-tactical-v8-demo-primary-only-commission-v1',
+    version: 'm1-tactical-v8-demo-primary-only-commission-focused3-v1',
     demoBrokerCommissionFloor: true,
+    demoEntryInstruments: DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
   });
 
 export function m1RiskMarketRegime(
@@ -640,6 +668,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       phase: this.rolloutPolicy.phase,
       cadenceSeconds: this.rolloutPolicy.cadenceMs / 1000,
       instruments: [...this.rolloutPolicy.instruments],
+      ...(professionalDemoPhase && this.rolloutPolicy.demoEntryInstruments
+        ? {
+            demoEntryInstruments: [...this.rolloutPolicy.demoEntryInstruments],
+            researchOnlyInstruments: this.rolloutPolicy.instruments.filter(
+              (instrument) => !this.rolloutPolicy.demoEntryInstruments!.includes(instrument),
+            ),
+          }
+        : {}),
       running: this.running,
       lastSlotKey: this.lastSlotKey,
       lastRunAt: this.lastRunAt?.toISOString() ?? null,
@@ -679,7 +715,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         }
       }
       if (!brokerConnectionId) return;
-      for (const instrument of this.rolloutPolicy.instruments) {
+      // Evaluate the three DEMO entry candidates FIRST each minute, then
+      // continue gathering research on excluded pairs. This changes priority,
+      // not model math, and never gives a research pair execution permission.
+      const focused = this.rolloutPolicy.demoEntryInstruments;
+      const scanOrder = focused
+        ? [
+            ...focused.filter((instrument) => this.rolloutPolicy.instruments.includes(instrument)),
+            ...this.rolloutPolicy.instruments.filter((instrument) => !focused.includes(instrument)),
+          ]
+        : this.rolloutPolicy.instruments;
+      for (const instrument of scanOrder) {
         try {
           await this.processInstrument(userId, brokerConnectionId, instrument, decisionTime);
         } catch (error) {
@@ -1292,8 +1338,16 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         : null,
       extensionScoutExecutable: extensionExhaustionDemoScoutExecutable,
     });
+    // Authoritative DEMO new-entry scope, after all research predictions
+    // have been scored. A research-only pair MUST NOT reach a broker write,
+    // including direction-flip closures triggered by a new entry candidate.
+    const demoInstrumentAllowed = demoInstrumentEntryAllowed(
+      this.rolloutPolicy,
+      candidate.instrument,
+    );
     const preliminaryCanExecute = professionalDemoPhase
-      ? demoProfitabilityExecutionAllowed &&
+      ? demoInstrumentAllowed &&
+        demoProfitabilityExecutionAllowed &&
         !multimodelDirectionConflict &&
         (multimodelPrimaryExecutable ||
           m5EarlyTransitionHandoffEligible ||
@@ -1501,6 +1555,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     ]);
     const blockers = professionalDemoPhase
       ? unique([
+          ...(!demoInstrumentAllowed ? ['M1_DEMO_INSTRUMENT_RESEARCH_ONLY'] : []),
           ...(demoProfitabilityReliabilityGate?.blockers ?? []),
           ...(multimodelDirectionConflict ? ['MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT'] : []),
           ...(professionalM1FallbackExecutable ||

@@ -2774,6 +2774,47 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(recorded?.blockers).toContain('M1_MULTIMODEL_LOSS_STREAK_BRAKE');
   });
 
+  it('persists USDJPY as research-only even when primary Plan B would otherwise approve it', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: true,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+            rescueVolumeCap: null,
+          },
+        };
+      });
+    await driveFeatures(
+      h,
+      { ...cleanContinuationFeatures(), instrument: 'USDJPY' },
+      { brokerConnectionId: 'demo-conn-2' },
+    );
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.instrument === 'USDJPY' && value.direction === 'BUY',
+    )?.[0];
+    expect(recorded).toBeDefined();
+    expect(recorded.blockers).toContain('M1_DEMO_INSTRUMENT_RESEARCH_ONLY');
+    expect(recorded.executionAuthority).toBe('NONE');
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
+
   it('keeps formerly executable bootstrap continuation observational in DEMO primary-only probation', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,

@@ -28,6 +28,7 @@ import {
   SnapshotNotFreshError,
 } from '../broker/services/broker-account-snapshot.service';
 import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
+import { isFocusedDemoEntryInstrument } from '../ai/demo-focused-instruments';
 
 /**
  * Server-side DEMO promotion allowlist. Transport metadata can never grant
@@ -325,6 +326,24 @@ export class StrategyOrchestratorService {
         );
         return { outcome: 'SIGNAL_INVALID', signalId, reason };
       }
+    }
+
+    // ── Gate 3.6: Reversible focused-three DEMO entry authority ──────────────
+    // The scheduler also applies this rule, but the central orchestrator must
+    // independently refuse delayed/replayed/externally injected promoted DEMO
+    // signals for research-only symbols. This does NOT change PAPER_ONLY, LIVE,
+    // manual close, or any existing account risk/kill controls.
+    if (externalProviderDemoPromoted && !isFocusedDemoEntryInstrument(candidate.instrument)) {
+      const reason =
+        'DEMO_INSTRUMENT_RESEARCH_ONLY: new promoted DEMO AI entries are limited to AUDUSD, GBPUSD and EURUSD; this instrument remains under research';
+      this.logger.warn(`Signal ${signalId} rejected: ${reason}`);
+      await this.recordIgnored(
+        candidate,
+        'SIGNAL_INVALID',
+        'DEMO_INSTRUMENT_RESEARCH_ONLY',
+        reason,
+      );
+      return { outcome: 'SIGNAL_INVALID', signalId, reason };
     }
 
     // ── Gate 4: Broker connection active ──────────────────────────────────────

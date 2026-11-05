@@ -601,6 +601,68 @@ describe('StrategyOrchestratorService', () => {
       expect(executionService.executeTrade).toHaveBeenCalled();
     });
 
+    it.each([
+      [
+        'USDJPY',
+        'external-irexpro-multimodel-ensemble',
+        'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+      ],
+      [
+        'USDCAD',
+        'external-irexpro-multimodel-ensemble',
+        'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+      ],
+      [
+        'USDCHF',
+        'external-irexpro-multimodel-ensemble',
+        'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+      ],
+      [
+        'USDJPY',
+        'external-irexpro-m1-tactical',
+        'external-provider/irexpro-m1-tactical/m1-tactical-v2-m5-lifecycle',
+      ],
+    ])(
+      'rejects a promoted DEMO %s signal from %s before risk evaluation and broker dispatch',
+      async (instrument, strategyCode, modelVersion) => {
+        (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+          ...activeSession(),
+          executionMode: ExecutionMode.FULL_AUTO,
+        });
+        (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+          id: 'conn-1',
+          userId: 'user-1',
+          brokerId: 'ctrader',
+          accountType: BrokerMode.DEMO,
+          authorizationStatus: 'ACTIVE',
+          demoValidated: true,
+          liveTradingEnabled: false,
+          logicalAccountKey: 'ctrader::demo::acct-1',
+        });
+
+        const result = await service.processSignal(
+          validCandidate({
+            instrument,
+            confidenceScore: 0.72,
+            timeframe: 'M1',
+            strategyCode,
+            modelVersion,
+            suggestedVolume: 0.2,
+            metadata: {
+              signal_source: 'EXTERNAL_PROVIDER',
+              external_provider_paper_only: true,
+              external_provider_code: 'irexpro',
+              production_eligible: false,
+            },
+          }),
+        );
+        expect(result.outcome).toBe('SIGNAL_INVALID');
+        expect(result.reason).toContain('DEMO_INSTRUMENT_RESEARCH_ONLY');
+        expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+        expect(executionService.executeTrade).not.toHaveBeenCalled();
+      },
+    );
+
     it('does not re-gate a server-promoted multi-model DEMO decision on the legacy generic 0.60 confidence floor', async () => {
       (executionService.getActiveSession as jest.Mock).mockResolvedValue({
         ...activeSession(),

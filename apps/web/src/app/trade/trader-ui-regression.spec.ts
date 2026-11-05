@@ -9,6 +9,30 @@ describe('AI Trader production UI regression contract', () => {
     'utf8',
   );
 
+  it('groups broker selection and allocation into one card and gives AI Trading the second wide card', () => {
+    const deck = pageSource.split('className="ai-control-deck"')[1]
+      ?.split('className="ai-overview-grid"')[0];
+    expect(deck).toBeDefined();
+    expect(deck!.match(/<Card className="ai-control-card/g)).toHaveLength(2);
+    const broker = deck!.split('className="ai-control-card ai-control-card--broker"')[1]
+      ?.split('className="ai-control-card ai-control-card--automation"')[0];
+    expect(broker).toContain('aria-label="Broker account"');
+    expect(broker).toContain('ai-control-card__allocation-section');
+    expect(broker).toContain('AI capital allocation');
+    expect(broker).toContain('aria-label="AI capital allocation amount"');
+    expect(broker).toContain('Allocate');
+    expect(broker).toContain('endedRiskResetAvailable');
+    expect(broker).toContain('Allocation is locked by the current protection state');
+    expect(deck).not.toContain('ai-control-card--allocation');
+    expect(deck).toContain('Reset Risk Protection & Start AI');
+    expect(deck).toContain('ai-control-card__focus');
+    expect(deck).toContain('m1TacticalStatus.demoEntryInstruments.join');
+    const css = fs.readFileSync(path.join(tradeDir, 'ai-trader.css'), 'utf8');
+    expect(css).toContain('grid-template-columns: minmax(270px, 0.95fr) minmax(0, 1.55fr)');
+    expect(css).toContain('.ai-control-card--automation .ai-automation-action');
+    expect(css).toContain('white-space: normal');
+  });
+
   it('keeps the live scanning market cockpit visible in the trade surface', () => {
     expect(pageSource).toContain('SCANNING');
     expect(pageSource).toContain('Last move');
