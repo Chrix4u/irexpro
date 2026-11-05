@@ -212,6 +212,77 @@ def input_features(frame: pd.DataFrame) -> pd.DataFrame:
     return features.astype(float)
 
 
+
+def summarize_independent_ood_conditions(frame: pd.DataFrame) -> dict:
+    """Describe OOD regimes without overlapping same-pair forward labels.
+
+    Keep the earliest preselected observation across both routes and directions,
+    per pair, over each 15-minute outcome horizon. Label values never influence
+    which rows are selected. This is a provider price proxy, not broker P&L,
+    statistically independent pairs, an approved model, or a trading signal.
+    """
+    latest_by_pair = {}
+    selected_indices = []
+    ordered = frame.sort_values(
+        ["decision_time_utc", "instrument", "route", "direction"], kind="stable"
+    )
+    for index, observation in ordered.iterrows():
+        pair = observation["instrument"]
+        observed_at = observation["decision_time_utc"]
+        previous = latest_by_pair.get(pair)
+        if previous is not None and (
+            observed_at <= previous + timedelta(minutes=HORIZON_MINUTES)
+        ):
+            continue
+        selected_indices.append(index)
+        latest_by_pair[pair] = observed_at
+
+    independent = frame.loc[selected_indices]
+    condition_rows = []
+    for dimension in KNOWN_DIAGNOSTICS:
+        subset = independent.loc[
+            independent["diagnostic_set"].map(lambda codes: dimension in codes)
+        ]
+        if subset.empty:
+            continue
+        condition_rows.append(
+            {
+                "dimension": dimension,
+                "observations": int(len(subset)),
+                "distinct_utc_days": int(subset["utc_day"].nunique()),
+                "pair_counts": {
+                    pair: int(count)
+                    for pair, count in sorted(
+                        subset["instrument"].value_counts().to_dict().items()
+                    )
+                },
+                **proxy_metrics(subset),
+            }
+        )
+    condition_rows.sort(key=lambda item: (-item["observations"], item["dimension"]))
+
+    return {
+        "authority": "RESEARCH_ONLY_NO_EXECUTION",
+        "sample_selection": "EARLIEST_PER_PAIR_PER_15M_ACROSS_ROUTES_AND_SIDES",
+        "horizon_minutes": HORIZON_MINUTES,
+        "labels_are_real_broker_net_pnl": False,
+        "causal_provider_quote_proxy_only": True,
+        "independent_opportunities": int(len(independent)),
+        "distinct_utc_days": int(independent["utc_day"].nunique()),
+        "overall": proxy_metrics(independent),
+        "route_outcomes": {
+            route: proxy_metrics(group)
+            for route, group in independent.groupby("route", sort=True)
+        },
+        "condition_outcomes": condition_rows,
+        "interpretation": (
+            "Exploratory 15m bid/ask proxy with estimated extra friction; "
+            "not a broker-fill simulation, statistically independent "
+            "evidence across pairs, model promotion or an entry signal"
+        ),
+    }
+
+
 def chronological_split(
     frame: pd.DataFrame,
     *,
@@ -336,6 +407,7 @@ def study_from_csv(source: Path) -> dict:
         "label": "15m post-decision provider-bidask price proxy minus 1 extra pip",
         "label_is_verified_broker_net_pnl": False,
         "data_quality": quality,
+        "independent_ood_condition_outcomes": summarize_independent_ood_conditions(records),
         "dominant_ood_dimensions": [
             {"route": route, "dimension": code, "decisions": count}
             for (route, code), count in reasons.most_common(18)
