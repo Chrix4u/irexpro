@@ -110,7 +110,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   private recordContextFreshness(
     connectionId: string,
     instrument: string,
-    timeframe: (typeof CONTEXT_REFRESH_ROTATION)[number],
+    timeframe: 'M1' | (typeof CONTEXT_REFRESH_ROTATION)[number],
     rows: OHLCV[],
     now: Date,
     timeframeMinutes: number,
@@ -133,7 +133,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
         `connection=${connectionId} instrument=${instrument} ` +
         `latestClosedBar=${new Date(newestMs).toISOString()} ` +
         `ageMinutes=${Math.floor((now.getTime() - newestMs) / 60_000)}; ` +
-        'M1/M15 readiness remains fail-closed.',
+        'M1/M5/M15 readiness remains fail-closed.',
     );
   }
 
@@ -332,6 +332,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
           'ctrader-broker-native',
         );
         this.collectHistorySucceeded(instrument, 'M1', now);
+        this.recordContextFreshness(connectionId, instrument, 'M1', closed, now, 1);
       }
     } catch (error) {
       this.collectHistoryFailed(instrument, 'M1');
@@ -398,7 +399,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   }
 
   private async sampleLiveSpreads(userId: string, connectionId: string): Promise<void> {
-    await Promise.all(
+    const quoteStatuses = await Promise.all(
       this.instruments().map(async (instrument) => {
         try {
           const quote = await this.brokerService.getCurrentPriceForConnection(
@@ -407,7 +408,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
             instrument,
             { propagateProviderError: true },
           );
-          if (!quote) return;
+          if (!quote) return false;
 
           // Compare against receipt time, not the collection-cycle start.
           // Spotware can return a newer broker timestamp after a delayed
@@ -430,18 +431,29 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
                 `providerTimestamp=${new Date(quote.timestamp).toISOString()} ` +
                 `ageSeconds=${ageSeconds ?? 'INVALID'}; execution spread remains fail-closed.`,
             );
-            return;
+            return false;
           }
 
           await this.store.upsertM1Sample(connectionId, instrument, quote, 'ctrader-broker-native');
+          return true;
         } catch (error) {
           this.warnThrottled(
             `${connectionId}:${instrument}:quote`,
             `cTrader quote collection failed connection=${connectionId} instrument=${instrument}: ${(error as Error).message}`,
           );
+          return false;
         }
       }),
     );
+    // Broker APIs can return no usable quote across all symbols without throwing.
+    // Report this provider gap, but never synthesize a candle or relax readiness.
+    if (quoteStatuses.length > 0 && quoteStatuses.every((accepted) => accepted === false)) {
+      this.warnThrottled(
+        `${connectionId}:no-usable-live-quotes`,
+        `cTrader provided no usable fresh live quotes for ${quoteStatuses.length} configured pairs; ` +
+          'broker-native execution spread and M1 readiness remain fail-closed.',
+      );
+    }
   }
 
   private enabled(): boolean {
