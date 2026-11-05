@@ -107,6 +107,10 @@ import { redactString } from '../../../../common/utils/redact-sensitive.util';
 import { CTraderClientService } from './ctrader-client.service';
 import { assertDiscoveredBrokerIdentity } from './ctrader-broker-identity';
 import {
+  CtraderDemoPartialBrokerRead,
+  mapCtraderDemoPartialBrokerRead,
+} from './ctrader-demo-partial-evidence';
+import {
   addDecimalStrings,
   buildIdempotencyFields,
   contractTimeInForceToProto,
@@ -1237,6 +1241,127 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       return trades;
     } catch (err) {
       throw this.mapError(err);
+    }
+  }
+
+  // ─── z.ai P1: independent cTrader DEMO partial-exit provider read ────────
+
+  /**
+   * READ-ONLY concrete adapter seam (NOT part of IBrokerAdapter). An isolated
+   * service can use it after authenticating the exact broker connection.
+   * This does not dispatch, reserve or confirm a partial close.
+   *
+   * DealList is capped at 200 rows. A truncated response FAILS CLOSED:
+   * timestamp-based pagination is not proven lossless at identical ms.
+   * The returned observation deliberately leaves brokerLotsBefore NULL and
+   * fee signs unverified. The accounting writer must not accept this alone.
+   */
+  async readDemoPartialCloseProviderEvidence(input: {
+    accountId: string;
+    positionId: string;
+    dealId: string;
+    from: Date;
+    to: Date;
+  }): Promise<CtraderDemoPartialBrokerRead | null> {
+    const session = this.requireCurrentSession();
+    if (this.mode !== BrokerMode.DEMO || session.env !== 'DEMO') {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.ENVIRONMENT_MISMATCH,
+        'cTrader partial-close evidence is DEMO-only; LIVE is not eligible.',
+      );
+    }
+    const accountId = parseCtraderId(input.accountId, 'accountId');
+    const positionId = parseCtraderId(input.positionId, 'positionId');
+    const dealId = parseCtraderId(input.dealId, 'dealId');
+    if (
+      accountId <= 0 ||
+      positionId <= 0 ||
+      dealId <= 0 ||
+      accountId !== parseCtraderId(session.accountId, 'ctidTraderAccountId')
+    ) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        'cTrader partial-close evidence account or provider ids do not match the active session.',
+      );
+    }
+    const fromMs = input.from instanceof Date ? input.from.getTime() : NaN;
+    const toMs = input.to instanceof Date ? input.to.getTime() : NaN;
+    if (
+      !Number.isSafeInteger(fromMs) ||
+      !Number.isSafeInteger(toMs) ||
+      fromMs <= 0 ||
+      toMs <= fromMs ||
+      toMs - fromMs > 7 * 86_400_000
+    ) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        'cTrader partial-close deal window must be a positive interval of at most seven days.',
+      );
+    }
+    try {
+      const response = await this.client.request(session.env, CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ, {
+        ctidTraderAccountId: accountId,
+        fromTimestamp: fromMs,
+        toTimestamp: toMs,
+        maxRows: DEAL_LIST_MAX_ROWS,
+      });
+      const payload = expectCtraderPayload<{ deal?: CtraderDeal[]; hasMore?: boolean }>(
+        response,
+        CTRADER_PAYLOAD_TYPE.DEAL_LIST_RES,
+      );
+      if (payload.hasMore !== false || !Array.isArray(payload.deal)) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          'cTrader deal page is incomplete or truncated; no partial-close proof accepted.',
+        );
+      }
+      const found = payload.deal.filter((deal) => deal?.dealId === dealId);
+      if (found.length === 0) return null;
+      if (found.length !== 1) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          'Duplicate broker deal identity in cTrader partial-close history.',
+        );
+      }
+      const deal = found[0];
+      if (
+        deal.positionId !== positionId ||
+        !Number.isSafeInteger(deal.executionTimestamp) ||
+        deal.executionTimestamp < fromMs ||
+        deal.executionTimestamp > toMs
+      ) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          'Broker deal identity, position or execution timestamp is inconsistent.',
+        );
+      }
+      const symbol = await this.resolveSymbolDetails(session, deal.symbolId);
+      if (!symbol?.lotSize) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.INVALID_INSTRUMENT,
+          'cTrader symbol lot size unavailable for partial-close reconciliation.',
+        );
+      }
+      const positions = await this.fetchReconcilePositions(session);
+      const residuals = positions.filter((position) => position.positionId === positionId);
+      if (residuals.length > 1) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          'Duplicate residual positions in cTrader reconciliation snapshot.',
+        );
+      }
+      const currency = await this.resolveCurrency(session, await this.fetchTrader(session));
+      return mapCtraderDemoPartialBrokerRead({
+        accountId: session.accountId,
+        accountCurrency: currency,
+        expectedPositionId: positionId,
+        expectedDealId: dealId,
+        deal,
+        openPosition: residuals[0] ?? null,
+        symbolLotSizeCents: symbol.lotSize,
+      });
+    } catch (error) {
+      throw this.mapError(error);
     }
   }
 

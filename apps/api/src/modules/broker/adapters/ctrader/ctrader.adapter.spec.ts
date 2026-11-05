@@ -1808,6 +1808,163 @@ describe('CTraderAdapter', () => {
     });
   });
 
+  // ─── z.ai P1 DEMO: read-only deal + current position evidence ────────────
+
+  describe('readDemoPartialCloseProviderEvidence', () => {
+    const from = new Date(1_800_000_000_000);
+    const to = new Date(1_800_000_060_000);
+    const target = {
+      accountId: ACCOUNT_ID,
+      positionId: '7654321',
+      dealId: '99221',
+      from,
+      to,
+    };
+
+    function closingDeal(): Record<string, unknown> {
+      return {
+        dealId: 99221,
+        orderId: 99220,
+        positionId: 7654321,
+        volume: 100_000,
+        filledVolume: 100_000,
+        symbolId: 101,
+        createTimestamp: 1_800_000_000_200,
+        executionTimestamp: 1_800_000_000_500,
+        executionPrice: 1.1,
+        tradeSide: 2,
+        dealStatus: 2,
+        closePositionDetail: {
+          entryPrice: 1.09,
+          grossProfit: 850,
+          swap: -10,
+          commission: 30,
+          balance: 10_000,
+          closedVolume: 100_000,
+          moneyDigits: 2,
+        },
+      };
+    }
+
+    function scriptDealPage(deals: Record<string, unknown>[], hasMore = false): void {
+      server.on(CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.DEAL_LIST_RES,
+          {
+            ctidTraderAccountId: payload.ctidTraderAccountId,
+            deal: deals,
+            hasMore,
+          },
+          envelope,
+        ),
+      );
+    }
+
+    it('reads independent deal and remaining snapshot without granting fill proof or dispatch', async () => {
+      scriptDealPage([closingDeal()]);
+      scriptReconcile(
+        [{ ...SAMPLE_POSITION, tradeData: { ...SAMPLE_POSITION.tradeData, volume: 100_000 } }],
+        [],
+      );
+      await connectDemo();
+
+      const observed = await adapter.readDemoPartialCloseProviderEvidence(target);
+      expect(observed).toMatchObject({
+        source: 'DEAL_LIST_AND_RECONCILE',
+        accountId: ACCOUNT_ID,
+        accountCurrency: 'USD',
+        brokerPositionId: '7654321',
+        providerDealId: '99221',
+        providerOrderId: '99220',
+        brokerFilledLots: '0.01',
+        brokerLotsAfter: '0.01',
+        brokerLotsBefore: null,
+        grossRealisedPnlRaw: '8.50',
+        commissionRaw: '0.30',
+        swapRaw: '-0.10',
+        feesSignVerified: false,
+        canConfirm: false,
+        canDispatchOrder: false,
+      });
+      const deals = server.requests.filter(
+        (req) => req.payloadType === CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ,
+      );
+      expect(deals).toHaveLength(1);
+      expect(deals[0].payload).toMatchObject({
+        ctidTraderAccountId: Number(ACCOUNT_ID),
+        maxRows: 200,
+        fromTimestamp: from.getTime(),
+        toTimestamp: to.getTime(),
+      });
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.RECONCILE_REQ)).toBeDefined();
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.CLOSE_POSITION_REQ)).toBeUndefined();
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+    });
+
+    it('rejects any LIVE account before requesting history', async () => {
+      adapter.setMode(BrokerMode.LIVE);
+      await connectDemo();
+      await expect(adapter.readDemoPartialCloseProviderEvidence(target)).rejects.toMatchObject({
+        code: BrokerErrorCode.ENVIRONMENT_MISMATCH,
+      });
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ)).toBeUndefined();
+    });
+
+    it('rejects mismatched account identity before requesting history', async () => {
+      await connectDemo();
+      await expect(
+        adapter.readDemoPartialCloseProviderEvidence({ ...target, accountId: SECOND_ACCOUNT_ID }),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.INVALID_REQUEST });
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ)).toBeUndefined();
+    });
+
+    it('rejects windows exceeding seven days', async () => {
+      await connectDemo();
+      await expect(
+        adapter.readDemoPartialCloseProviderEvidence({
+          ...target,
+          to: new Date(from.getTime() + 8 * 86_400_000),
+        }),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.INVALID_REQUEST });
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ)).toBeUndefined();
+    });
+
+    it('refuses truncated provider history rather than skipping equal-ms deals', async () => {
+      scriptDealPage([closingDeal()], true);
+      await connectDemo();
+      await expect(adapter.readDemoPartialCloseProviderEvidence(target)).rejects.toMatchObject({
+        code: BrokerErrorCode.BROKER_SERVER_ERROR,
+      });
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.RECONCILE_REQ)).toBeUndefined();
+    });
+
+    it('reports missing deal as null, never a successful reconciliation', async () => {
+      scriptDealPage([]);
+      await connectDemo();
+      await expect(adapter.readDemoPartialCloseProviderEvidence(target)).resolves.toBeNull();
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.RECONCILE_REQ)).toBeUndefined();
+    });
+
+    it('rejects duplicate or wrong-position deal identity', async () => {
+      scriptDealPage([closingDeal(), closingDeal()]);
+      await connectDemo();
+      await expect(adapter.readDemoPartialCloseProviderEvidence(target)).rejects.toMatchObject({
+        code: BrokerErrorCode.BROKER_SERVER_ERROR,
+      });
+    });
+
+    it('keeps remaining volume unknown if cTrader no longer reports an open position', async () => {
+      scriptDealPage([closingDeal()]);
+      scriptReconcile([], []);
+      await connectDemo();
+      await expect(adapter.readDemoPartialCloseProviderEvidence(target)).resolves.toMatchObject({
+        brokerLotsAfter: null,
+        brokerLotsBefore: null,
+        canConfirm: false,
+      });
+    });
+  });
+
   // ─── Trade history (2133, hasMore pagination) ──────────────────────────────
 
   describe('getClosedTrades', () => {
