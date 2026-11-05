@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { BrokerService } from '../../broker/broker.service';
 import { BrokerConnectionStatus } from '../../broker/interfaces/broker-adapter.interface';
@@ -414,6 +415,68 @@ describe('CTraderQuoteCollectorService', () => {
     expect(h.findConnectionById).not.toHaveBeenCalled();
     expect(h.getOhlcvForConnection).not.toHaveBeenCalled();
     expect(h.getCurrentPriceForConnection).not.toHaveBeenCalled();
+  });
+});
+
+describe('broker-native feed interruption diagnostics remain fail closed', () => {
+  beforeEach(() => {
+    jest.spyOn(Date, 'now').mockReturnValue(OPEN_NOW.getTime());
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('records stale one-minute broker history instead of treating successful old responses as fresh', async () => {
+    const h = harness();
+    await h.service.collectOnce(OPEN_NOW);
+    let status = h.service.getHistoricalCollectionStatus();
+    expect(status.latestBrokerClosedBarAt['EURUSD:M1']).toBe('2026-10-18T20:00:00.000Z');
+    expect(status.staleHistoricalResponses['EURUSD:M1']).toBe(1);
+    // A successful request can persist old candles, but never makes them fresh.
+    expect(status.lastSuccessfulCollectAt['EURUSD:M1']).toBe(OPEN_NOW.toISOString());
+
+    const recent = {
+      timestamp: new Date(OPEN_NOW.getTime() - 90_000),
+      open: '1.10000',
+      high: '1.10100',
+      low: '1.09900',
+      close: '1.10050',
+      volume: '50',
+    };
+    h.getOhlcvForConnection.mockResolvedValue([recent]);
+    await h.service.collectOnce(new Date(OPEN_NOW.getTime() + 15_000));
+    status = h.service.getHistoricalCollectionStatus();
+    expect(status.latestBrokerClosedBarAt['EURUSD:M1']).toBe(recent.timestamp.toISOString());
+    expect(status.staleHistoricalResponses['EURUSD:M1']).toBeUndefined();
+  });
+
+  it('warns once for an entire broker quote cycle with no usable quotes, without fabricating prices', async () => {
+    const h = harness();
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    h.getCurrentPriceForConnection.mockResolvedValue(null);
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+    await h.service.collectLiveQuotesOnce(new Date(OPEN_NOW.getTime() + 1_000));
+    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(12);
+    expect(h.upsertM1Sample).not.toHaveBeenCalled();
+    const feedWarnings = warn.mock.calls.filter((call) =>
+      String(call[0]).includes('no usable fresh live quotes'),
+    );
+    expect(feedWarnings).toHaveLength(1);
+  });
+
+  it('does not report a complete quote-feed failure if even one pair has fresh broker quotes', async () => {
+    const h = harness();
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const getPrice = h.getCurrentPriceForConnection.getMockImplementation();
+    h.getCurrentPriceForConnection.mockImplementation(async (...args) =>
+      args[2] === 'EURUSD' ? getPrice?.(...args) : null,
+    );
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+    expect(h.upsertM1Sample).toHaveBeenCalledTimes(1);
+    expect(
+      warn.mock.calls.some((call) => String(call[0]).includes('no usable fresh live quotes')),
+    ).toBe(false);
   });
 });
 
