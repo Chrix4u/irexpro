@@ -18,6 +18,7 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
     executionSucceeded: 0,
     sessionInactiveDecisions: 0,
     sessionAgeMinutes: 396,
+    lastDecisionAgeSeconds: 35,
     planBAdmittedDecisions: 2,
     primaryPathDecisions: 1,
     primaryReliabilityVetoDecisions: 1,
@@ -34,6 +35,7 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
       ...evidence, scope: "NO_ACTIVE_CTRADER_DEMO_SESSION",
       evaluatedDecisions: 0, candidateDecisions: 0,
       sessionAgeMinutes: 0,
+      lastDecisionAgeSeconds: null,
       planBAdmittedDecisions: 0,
       primaryPathDecisions: 0,
       primaryReliabilityVetoDecisions: 0,
@@ -45,6 +47,15 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
   it("rejects malformed counts, unscoped evidence or unbounded reasons", () => {
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, evaluatedDecisions: -1 })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, sessionAgeMinutes: -5 })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, lastDecisionAgeSeconds: -5 })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, lastDecisionAgeSeconds: undefined })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, lastDecisionAgeSeconds: null })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({
+      ...evidence, operatingState: "STALE_SCAN_EVIDENCE", lastDecisionAgeSeconds: 600,
+    })).toBe(true);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({
+      ...evidence, operatingState: "STALE_SCAN_EVIDENCE", lastDecisionAgeSeconds: 40,
+    })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, operatingState: "BROKER_READY" })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, primaryPathDecisions: 23 })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, primaryReliabilityVetoDecisions: 7 })).toBe(false);

@@ -12,6 +12,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       execution_succeeded: '11',
       session_inactive_decisions: '4',
       session_age_minutes: '396',
+      last_decision_age_seconds: '15',
       planb_admitted_decisions: '2',
       primary_path_decisions: '1',
       primary_reliability_veto_decisions: '1',
@@ -27,6 +28,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       executionSucceeded: 0,
       sessionInactiveDecisions: 0,
       sessionAgeMinutes: 0,
+      lastDecisionAgeSeconds: null,
       planBAdmittedDecisions: 0,
       primaryPathDecisions: 0,
       primaryReliabilityVetoDecisions: 0,
@@ -47,6 +49,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
         execution_succeeded: '0',
         session_inactive_decisions: '0',
         session_age_minutes: '396',
+        last_decision_age_seconds: '15',
         planb_admitted_decisions: '8',
         primary_path_decisions: '2',
         primary_reliability_veto_decisions: '2',
@@ -66,6 +69,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       executionSucceeded: 0,
       sessionInactiveDecisions: 0,
       sessionAgeMinutes: 396,
+      lastDecisionAgeSeconds: 15,
       planBAdmittedDecisions: 8,
       primaryPathDecisions: 2,
       primaryReliabilityVetoDecisions: 2,
@@ -101,6 +105,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       execution_succeeded: null as unknown as number,
       session_inactive_decisions: '2',
       session_age_minutes: 'NaN',
+      last_decision_age_seconds: '15',
       planb_admitted_decisions: '-3',
       primary_path_decisions: Infinity,
       primary_reliability_veto_decisions: null as unknown as number,
@@ -122,6 +127,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       execution_succeeded: 0,
       session_inactive_decisions: 0,
       session_age_minutes: 400,
+      last_decision_age_seconds: '15',
       planb_admitted_decisions: 1,
       primary_path_decisions: 1,
       primary_reliability_veto_decisions: 1,
@@ -141,6 +147,39 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
     ).toBe('RECENT_ENTRY_AUTHORIZATION');
   });
 
+  it('reports stale scanner evidence even when old candidates or broker approvals exist', () => {
+    const row = {
+      active_session_count: 1,
+      evaluated_decisions: 150,
+      candidate_decisions: 18,
+      broker_authorized_decisions: 1,
+      execution_succeeded: 1,
+      session_inactive_decisions: 0,
+      session_age_minutes: 520,
+      last_decision_age_seconds: '601',
+      planb_admitted_decisions: 4,
+      primary_path_decisions: 1,
+      primary_reliability_veto_decisions: 0,
+      eligible_fallback_probation_veto_decisions: 0,
+      leading_blockers: [],
+    };
+    expect(toDemoFocusedEntryDiagnostic(row)).toMatchObject({
+      operatingState: 'STALE_SCAN_EVIDENCE',
+      lastDecisionAgeSeconds: 601,
+      brokerAuthorizedDecisions: 1,
+    });
+    expect(
+      toDemoFocusedEntryDiagnostic({ ...row, last_decision_age_seconds: '239' }).operatingState,
+    ).toBe('RECENT_ENTRY_AUTHORIZATION');
+    expect(
+      toDemoFocusedEntryDiagnostic({ ...row, last_decision_age_seconds: 'broken' })
+        .lastDecisionAgeSeconds,
+    ).toBeNull();
+    expect(toDemoFocusedEntryDiagnostic({ ...row, evaluated_decisions: 0 }).operatingState).toBe(
+      'NO_RECENT_SCANS',
+    );
+  });
+
   it('queries only the exact current user, active validated cTrader DEMO session and three allowed pairs', async () => {
     const query = jest.fn().mockResolvedValue([
       {
@@ -151,6 +190,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
         execution_succeeded: '0',
         session_inactive_decisions: '0',
         session_age_minutes: '32',
+        last_decision_age_seconds: '15',
         planb_admitted_decisions: '2',
         primary_path_decisions: '1',
         primary_reliability_veto_decisions: '1',
@@ -180,6 +220,8 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
     expect(sql).toContain('d.instrument = ANY($2::text[])');
     expect(sql).toContain("WHERE c.route <> 'ABSTAIN'");
     expect(sql).toContain('AS session_age_minutes');
+    expect(sql).toContain('AS last_decision_age_seconds');
+    expect(sql).toContain('MAX(evaluated_at)');
     expect(sql).toContain('AS planb_admitted_decisions');
     expect(sql).toContain('AS primary_path_decisions');
     expect(sql).toContain('AS primary_reliability_veto_decisions');

@@ -32,6 +32,8 @@ export interface DemoFocusedEntryDiagnostic {
   sessionInactiveDecisions: number;
   /** Minutes since the exact active session began (not since app startup). */
   sessionAgeMinutes: number;
+  /** Null when no current-session focused-pair decision was recorded. */
+  lastDecisionAgeSeconds: number | null;
   /** Observed execution funnel; counts can overlap, never confer authority. */
   planBAdmittedDecisions: number;
   primaryPathDecisions: number;
@@ -40,6 +42,7 @@ export interface DemoFocusedEntryDiagnostic {
   operatingState:
     | 'NO_ACTIVE_SESSION'
     | 'NO_RECENT_SCANS'
+    | 'STALE_SCAN_EVIDENCE'
     | 'NO_RECENT_CANDIDATES'
     | 'SCANNING_NO_APPROVED_ENTRY'
     | 'RECENT_ENTRY_AUTHORIZATION';
@@ -56,6 +59,7 @@ export interface DemoFocusedEntryDiagnosticRow {
   execution_succeeded: number | string;
   session_inactive_decisions: number | string;
   session_age_minutes: number | string;
+  last_decision_age_seconds: number | string | null;
   planb_admitted_decisions: number | string;
   primary_path_decisions: number | string;
   primary_reliability_veto_decisions: number | string;
@@ -68,6 +72,12 @@ function safeCount(raw: unknown): number {
   return Number.isSafeInteger(n) && n >= 0 ? n : 0;
 }
 
+function safeAgeSeconds(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+
 export function toDemoFocusedEntryDiagnostic(
   row: DemoFocusedEntryDiagnosticRow | undefined,
 ): DemoFocusedEntryDiagnostic {
@@ -76,15 +86,18 @@ export function toDemoFocusedEntryDiagnostic(
   const evaluated = active ? safeCount(row?.evaluated_decisions) : 0;
   const candidates = active ? safeCount(row?.candidate_decisions) : 0;
   const approved = active ? safeCount(row?.broker_authorized_decisions) : 0;
+  const lastDecisionAgeSeconds = active ? safeAgeSeconds(row?.last_decision_age_seconds) : null;
   const operatingState: DemoFocusedEntryDiagnostic['operatingState'] = !active
     ? 'NO_ACTIVE_SESSION'
     : evaluated === 0
       ? 'NO_RECENT_SCANS'
-      : candidates === 0
-        ? 'NO_RECENT_CANDIDATES'
-        : approved > 0
-          ? 'RECENT_ENTRY_AUTHORIZATION'
-          : 'SCANNING_NO_APPROVED_ENTRY';
+      : lastDecisionAgeSeconds !== null && lastDecisionAgeSeconds >= 240
+        ? 'STALE_SCAN_EVIDENCE'
+        : candidates === 0
+          ? 'NO_RECENT_CANDIDATES'
+          : approved > 0
+            ? 'RECENT_ENTRY_AUTHORIZATION'
+            : 'SCANNING_NO_APPROVED_ENTRY';
   return {
     scope: active ? 'ACTIVE_CTRADER_DEMO' : 'NO_ACTIVE_CTRADER_DEMO_SESSION',
     windowMinutes: 60,
@@ -94,6 +107,7 @@ export function toDemoFocusedEntryDiagnostic(
     executionSucceeded: active ? safeCount(row?.execution_succeeded) : 0,
     sessionInactiveDecisions: active ? safeCount(row?.session_inactive_decisions) : 0,
     sessionAgeMinutes: active ? safeCount(row?.session_age_minutes) : 0,
+    lastDecisionAgeSeconds,
     planBAdmittedDecisions: active ? safeCount(row?.planb_admitted_decisions) : 0,
     primaryPathDecisions: active ? safeCount(row?.primary_path_decisions) : 0,
     primaryReliabilityVetoDecisions: active
