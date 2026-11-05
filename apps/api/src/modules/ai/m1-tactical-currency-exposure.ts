@@ -126,12 +126,10 @@ export function findLargestClearM1Volume(input: {
       productFloorBlocked: false,
     };
   }
-  // A caller that explicitly caps below the professional product floor is a
-  // scout/micro route, not a professional request that merely needs risk
-  // adjustment. Keep those routes fail-closed. A professional request capped
-  // exactly at the preferred floor may still step down when the floor itself
-  // breaches the hard aligned-currency block threshold; downstream durable
-  // sizing will then enforce the exact per-trade risk ceiling.
+  // This caller-supplied floor is a pre-screen search precision boundary.
+  // It is NOT an executable minimum. The authoritative broker min/step,
+  // stop-risk, allowed leverage and provider margin are applied downstream.
+  // A request below even the search precision must not be rounded UP.
   if (input.requestedVolumeCap < input.productFloor) {
     return {
       allowed: false,
@@ -152,9 +150,8 @@ export function findLargestClearM1Volume(input: {
       };
     }
 
-    // 0.20 is a preferred professional size, not a reason to suppress a valid
-    // setup when the account can safely carry a smaller meaningful trade. The
-    // downstream position sizer already uses 0.10 as the risk-adjusted minimum.
+    // Respect the pre-screen lower bound; do not invent an executable
+    // micro lot or bypass the later authoritative broker and risk checks.
     const riskAdjustedFloor = Math.min(input.productFloor, 0.1);
     const stepCount = Math.floor(
       (input.productFloor - riskAdjustedFloor) / input.volumeStep + 1e-9,

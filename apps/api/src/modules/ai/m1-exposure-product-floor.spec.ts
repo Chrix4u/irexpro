@@ -40,27 +40,27 @@ const candidate = {
   stopLoss: 1.1227,
 } as any;
 
-describe('M1 currency exposure respects the executable PAPER product floor', () => {
-  it('blocks a 0.10 scout when exposure requires a sub-minimum reduction', async () => {
+describe('M1 currency exposure uses small-account pre-screen; broker/risk gate remains authoritative', () => {
+  it('allows a reduced 0.04 scout into downstream independent broker/stop-risk sizing', async () => {
     const service = serviceFor(1000, [{ instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 18 }]);
 
     await expect(
       (service as any).resolveM1CurrencyExposureGuard('user-1', 'conn-1', candidate, 0.1),
     ).resolves.toMatchObject({
-      allowed: false,
-      volumeCap: 0,
-      decision: { capacity: 'REDUCED' },
+      allowed: true,
+      volumeCap: 0.04,
+      decision: { capacity: 'CLEAR' },
     });
   });
-  it('hands a reduced 0.20 professional cap to downstream durable-risk sizing instead of blocking the setup', async () => {
+  it('reduces 0.20 preferred size to a 0.12 currency-clear upper cap before broker-risk sizing', async () => {
     const service = serviceFor(1000, [{ instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 14 }]);
 
     await expect(
       (service as any).resolveM1CurrencyExposureGuard('user-1', 'conn-1', candidate, 0.2),
     ).resolves.toMatchObject({
       allowed: true,
-      volumeCap: 0.2,
-      decision: { capacity: 'REDUCED' },
+      volumeCap: 0.12,
+      decision: { capacity: 'CLEAR' },
       productFloorBlocked: false,
     });
   });

@@ -263,7 +263,7 @@ describe('M1 tactical aligned-currency exposure guard', () => {
     stopLoss: 1.1227,
   } as any;
 
-  it('finds the largest clear professional intermediate cap instead of falling straight from 4.0 to 0.20', async () => {
+  it('finds the largest clear 0.001-step pre-screen cap without exceeding the model ceiling', async () => {
     const { service } = guardHarness(900, []);
     const professionalCandidate = {
       instrument: 'EURUSD',
@@ -276,7 +276,7 @@ describe('M1 tactical aligned-currency exposure guard', () => {
       (service as any).resolveM1CurrencyExposureGuard('user-1', 'conn-1', professionalCandidate, 4),
     ).resolves.toMatchObject({
       allowed: true,
-      volumeCap: 0.35,
+      volumeCap: 0.359,
       decision: { capacity: 'CLEAR' },
       productFloorBlocked: false,
     });
@@ -295,15 +295,15 @@ describe('M1 tactical aligned-currency exposure guard', () => {
     });
   });
 
-  it('blocks when a 0.10 scout would require a sub-floor exposure reduction', async () => {
+  it('passes a reduced micro scout cap to the final broker/risk gate rather than imposing a 0.20 floor', async () => {
     const { service } = guardHarness(1000, [
       { instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 25 },
     ]);
     await expect(
       (service as any).resolveM1CurrencyExposureGuard('user-1', 'conn-1', candidate, 0.1),
     ).resolves.toMatchObject({
-      allowed: false,
-      volumeCap: 0,
+      allowed: true,
+      volumeCap: 0.001,
       decision: { capacity: 'REDUCED' },
     });
   });
