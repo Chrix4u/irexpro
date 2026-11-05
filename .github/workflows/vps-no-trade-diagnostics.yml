@@ -241,6 +241,72 @@ jobs:
           GROUP BY route, execution_authority, COALESCE(outcome_state, 'PENDING')
           ORDER BY route, execution_authority, COALESCE(outcome_state, 'PENDING');
 
+          -- Distinguish a model block from lack of user-authorised execution.
+          -- No user, account, or connection identifiers leave this diagnostic.
+          SELECT
+            'active_full_auto_sessions',
+            COUNT(*)
+          FROM trading.trading_sessions
+          WHERE execution_mode = 'FULL_AUTO' AND status::text = 'ACTIVE';
+
+          SELECT
+            'session_authority_24h',
+            execution_mode,
+            status::text,
+            COUNT(*),
+            COUNT(*) FILTER (WHERE ended_at IS NULL)
+          FROM trading.trading_sessions
+          WHERE status::text <> 'ENDED' OR ended_at >= NOW() - interval '24 hours'
+          GROUP BY execution_mode, status::text
+          ORDER BY execution_mode, status::text;
+
+          SELECT
+            'm1_decision_6h',
+            route,
+            execution_authority,
+            COALESCE(outcome_state, 'PENDING'),
+            COUNT(*)
+          FROM trading.m1_tactical_decisions
+          WHERE evaluated_at >= NOW() - interval '6 hours'
+          GROUP BY route, execution_authority, COALESCE(outcome_state, 'PENDING')
+          ORDER BY route, execution_authority, COALESCE(outcome_state, 'PENDING');
+
+          -- Closed-at window, not opened-at: amounts are realised only after
+          -- closure. Group by immutable trade currency and session authority;
+          -- never sum different account currencies or infer legacy mode.
+          -- realised_pnl is gross; broker commission is a charge in either
+          -- sign convention and swap is signed (a credit or a debit).
+          -- Null costs are reported explicitly: this is net AFTER RECORDED
+          -- costs, never an assertion that missing broker fees were zero.
+          WITH windows AS (
+            SELECT '6h'::text AS window_label, interval '6 hours' AS lookback
+            UNION ALL
+            SELECT '24h'::text, interval '24 hours'
+          )
+          SELECT
+            'realised_economics',
+            w.window_label,
+            COALESCE(s.execution_mode, 'UNKNOWN_LEGACY'),
+            COALESCE(t.account_currency, 'UNKNOWN_CURRENCY'),
+            COUNT(*),
+            COUNT(*) FILTER (WHERE t.realised_pnl > 0),
+            COUNT(*) FILTER (WHERE t.realised_pnl < 0),
+            ROUND(SUM(GREATEST(COALESCE(t.realised_pnl, 0), 0))::numeric, 2),
+            ROUND(SUM(LEAST(COALESCE(t.realised_pnl, 0), 0))::numeric, 2),
+            ROUND(SUM(ABS(COALESCE(t.commission, 0)))::numeric, 2),
+            ROUND(SUM(GREATEST(-COALESCE(t.swap, 0), 0))::numeric, 2),
+            ROUND(SUM(GREATEST(COALESCE(t.swap, 0), 0))::numeric, 2),
+            ROUND(SUM(COALESCE(t.realised_pnl, 0) - ABS(COALESCE(t.commission, 0)) + COALESCE(t.swap, 0))::numeric, 2),
+            COUNT(*) FILTER (WHERE t.realised_pnl IS NULL OR t.commission IS NULL OR t.swap IS NULL),
+            to_char(MAX(t.closed_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+          FROM windows w
+          JOIN trading.trades t
+            ON t.status::text = 'CLOSED'
+           AND t.closed_at >= NOW() - w.lookback
+          LEFT JOIN trading.trading_sessions s ON s.id = t.trading_session_id
+          GROUP BY w.window_label, COALESCE(s.execution_mode, 'UNKNOWN_LEGACY'), COALESCE(t.account_currency, 'UNKNOWN_CURRENCY')
+          ORDER BY w.window_label, COALESCE(s.execution_mode, 'UNKNOWN_LEGACY'), COALESCE(t.account_currency, 'UNKNOWN_CURRENCY');
+
           WITH linked AS (
             SELECT DISTINCT ON (t.id)
               t.id,
