@@ -413,7 +413,7 @@ jobs:
              AND s.broker_connection_id = t.broker_connection_id
             JOIN broker.broker_connections bc
               ON bc.id = t.broker_connection_id AND bc.user_id = t.user_id
-            JOIN LATERAL (
+            LEFT JOIN LATERAL (
               SELECT audit0.metadata FROM audit.audit_logs audit0
               WHERE audit0.action = 'TRADE_CLOSED'
                 AND audit0.resource_type = 'Trade'
@@ -431,6 +431,7 @@ jobs:
              AND o.execution_authority = 'NONE'
              AND o.modifies_execution = false
             WHERE t.close_reason = 'AI_CLOSE_SIGNAL'
+              AND t.realised_pnl < 0
               AND t.status::text = 'CLOSED'
               AND t.closed_at >= NOW() - interval '24 hours'
               AND s.execution_mode = 'FULL_AUTO'
@@ -463,7 +464,9 @@ jobs:
             o.response->'originalSlTpHold'->>'eventAt',
             o.response->>'originalNetPnl',
             o.response->'originalSlTpHold'->>'netPnlProxy',
-            o.response->'originalSlTpHold'->>'deltaVsOriginal'
+            o.response->'originalSlTpHold'->>'deltaVsOriginal',
+            o.response->>'brokerAdverseReason',
+            o.response->>'brokerAdverseTriggerAudited'
           FROM trading.post_entry_shadow_observations o
           JOIN trading.trades t ON t.id = o.trade_id
           WHERE o.artifact = 'adverse-thesis-exit-verified-m1-v1'

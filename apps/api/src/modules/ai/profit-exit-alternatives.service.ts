@@ -46,7 +46,7 @@ interface AdverseCandidate extends Pick<
   | 'commission'
   | 'swap'
 > {
-  trigger_reason: 'ADVERSE_THESIS_FAILED' | 'EMERGENCY_ADVERSE_CUT';
+  trigger_reason: 'ADVERSE_THESIS_FAILED' | 'EMERGENCY_ADVERSE_CUT' | 'UNVERIFIED_IN_TRADE_AUDIT';
 }
 
 /** Read-only prospective 60-minute exit comparison, 60s background audit.
@@ -206,13 +206,14 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
           t.broker_connection_id, t.instrument, t.account_currency,
           t.direction, t.closed_at, t.fill_price, t.exit_price,
           t.stop_loss, t.take_profit, t.realised_pnl, t.commission, t.swap,
-          closure.metadata #>> '{aiCloseTrigger,reasonCode}' AS trigger_reason
+          COALESCE(closure.metadata #>> '{aiCloseTrigger,reasonCode}',
+            'UNVERIFIED_IN_TRADE_AUDIT') AS trigger_reason
         FROM trading.trades t
         JOIN trading.trade_intents ti ON ti.id = t.trade_intent_id
           AND ti.user_id = t.user_id AND ti.broker_connection_id = t.broker_connection_id
         JOIN broker.broker_connections bc ON bc.id = t.broker_connection_id
           AND bc.user_id = t.user_id
-        JOIN LATERAL (
+        LEFT JOIN LATERAL (
           SELECT metadata FROM audit.audit_logs audit0
           WHERE audit0.action = 'TRADE_CLOSED'
             AND audit0.resource_type = 'Trade'
@@ -279,6 +280,7 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
       snapshotAt: closeAt.toISOString(),
       originalTradeCurrency: row.account_currency,
       brokerAdverseReason: row.trigger_reason,
+      brokerAdverseTriggerAudited: row.trigger_reason !== 'UNVERIFIED_IN_TRADE_AUDIT',
       ...result,
       quoteProvenance: 'CTRADER_POSITIVE_LIVE_QUOTES_WITHIN_M1_BUCKET',
       limitations: 'MIDPOINT_BAR_TOUCH_NOT_BROKER_FILL;SLIPPAGE_SWAP_AND_FUTURE_FEES_UNKNOWN',

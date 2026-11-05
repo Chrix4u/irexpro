@@ -32,6 +32,7 @@ describe('DEMO adverse-exit retrospective worker', () => {
     expect(sql).toContain("t.close_reason = 'AI_CLOSE_SIGNAL'");
     expect(sql).toContain("bc.account_type = 'DEMO'");
     expect(sql).toContain("audit0.action = 'TRADE_CLOSED'");
+    expect(sql).toContain('LEFT JOIN LATERAL');
     expect(sql).toContain(
       "audit0.metadata #>> '{aiCloseTrigger,source}' = 'BROKER_ADVERSE_PROTECTION'",
     );
@@ -84,6 +85,26 @@ describe('DEMO adverse-exit retrospective worker', () => {
       originalNetPnl: -5.03,
       brokerAdverseReason: 'ADVERSE_THESIS_FAILED',
       originalSlTpHold: { outcome: 'STOP_FIRST', netPnlProxy: expect.any(Number) },
+    });
+  });
+
+  it('does not silently drop broker-closed AI losses when optional close-trigger audit is unavailable', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ ...candidate, trigger_reason: 'UNVERIFIED_IN_TRADE_AUDIT' }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    await new ProfitExitAlternativesService({ query } as unknown as DataSource).runOnce(
+      new Date('2026-11-05T06:00:00.000Z'),
+    );
+    const stored = query.mock.calls[3];
+    const response = JSON.parse(String(stored[1][8]));
+    expect(response).toMatchObject({
+      brokerAdverseReason: 'UNVERIFIED_IN_TRADE_AUDIT',
+      brokerAdverseTriggerAudited: false,
+      originalSlTpHold: { outcome: 'DATA_GAP', netPnlProxy: null },
+      modifiesExecution: false,
     });
   });
 
