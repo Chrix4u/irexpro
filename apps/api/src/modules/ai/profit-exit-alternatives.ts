@@ -209,3 +209,99 @@ export function compareExitAlternatives(input: ExitScenarioInput): ExitAlternati
   }
   return out;
 }
+
+/**
+ * Causal research of DEMO adverse-thesis AI exits after the actual provider
+ * CLOSE has been confirmed. The continuation path always begins with the
+ * *next completed* broker-native M1 bucket, never a quote from before exit.
+ * A midpoint candle touch is NOT a certifiable broker bid/ask TP/SL fill.
+ */
+export const ADVERSE_EXIT_COUNTERFACTUAL_ARTIFACT = 'adverse-thesis-exit-verified-m1-v1' as const;
+
+export type AdverseExitCounterfactualInput = Omit<
+  ExitScenarioInput,
+  'runnerStopPrice' | 'runnerEligible'
+>;
+export interface AdverseExitCounterfactualReport {
+  mode: 'SHADOW_ONLY';
+  modifiesExecution: false;
+  methodology: 'CONTIGUOUS_LIVE_QUOTE_M1_MIDPOINT_PROXY';
+  originalNetPnl: number | null;
+  recordedCommission: number | null;
+  originalNetCostsComplete: boolean;
+  originalSlTpHold: ExitScenario;
+  brokerFillCertified: false;
+  forecastAtEntry: false;
+}
+
+export function compareAdverseExitCounterfactual(
+  input: AdverseExitCounterfactualInput,
+): AdverseExitCounterfactualReport {
+  const invalid = (): ExitScenario => ({
+    outcome: 'INELIGIBLE',
+    eventAt: null,
+    observedBars: 0,
+    netPnlProxy: null,
+    deltaVsOriginal: null,
+  });
+  const sign = input.direction === 'BUY' ? 1 : -1;
+  const finite = [
+    input.entryPrice,
+    input.exitPrice,
+    input.stopPrice,
+    input.takeProfitPrice,
+    input.grossPnl,
+    input.commission,
+    input.swap,
+  ].every(Number.isFinite);
+  const valid =
+    finite &&
+    Number.isFinite(input.closeAt.getTime()) &&
+    input.entryPrice > 0 &&
+    input.exitPrice > 0 &&
+    input.stopPrice > 0 &&
+    input.takeProfitPrice > 0 &&
+    input.grossPnl < 0 &&
+    sign * (input.exitPrice - input.entryPrice) < 0 &&
+    sign * (input.entryPrice - input.stopPrice) > 0 &&
+    sign * (input.takeProfitPrice - input.entryPrice) > 0;
+  const originalNet = finite
+    ? rounded(input.grossPnl - Math.abs(input.commission) + input.swap)
+    : null;
+  const report: AdverseExitCounterfactualReport = {
+    mode: 'SHADOW_ONLY',
+    modifiesExecution: false,
+    methodology: 'CONTIGUOUS_LIVE_QUOTE_M1_MIDPOINT_PROXY',
+    originalNetPnl: originalNet,
+    recordedCommission: Number.isFinite(input.commission)
+      ? rounded(Math.abs(input.commission))
+      : null,
+    originalNetCostsComplete: finite,
+    originalSlTpHold: invalid(),
+    brokerFillCertified: false,
+    forecastAtEntry: false,
+  };
+  if (!valid) return report;
+
+  const first = firstBarrier(
+    { ...input, runnerStopPrice: null, runnerEligible: false },
+    input.stopPrice,
+  );
+  if (first.outcome !== 'TP_FIRST' && first.outcome !== 'STOP_FIRST') {
+    report.originalSlTpHold = first;
+    return report;
+  }
+  // Only an indicative linear market-price-to-P&L scenario. Same notional,
+  // recorded commission/swap held fixed; extra slippage, financing, gaps,
+  // future bid/ask and provider actual fills are UNKNOWN, not implied.
+  const eventPrice = first.outcome === 'TP_FIRST' ? input.takeProfitPrice : input.stopPrice;
+  const grossProxy =
+    (input.grossPnl * (eventPrice - input.entryPrice)) / (input.exitPrice - input.entryPrice);
+  const netProxy = grossProxy - Math.abs(input.commission) + input.swap;
+  report.originalSlTpHold = {
+    ...first,
+    netPnlProxy: rounded(netProxy),
+    deltaVsOriginal: rounded(netProxy - (originalNet ?? 0)),
+  };
+  return report;
+}

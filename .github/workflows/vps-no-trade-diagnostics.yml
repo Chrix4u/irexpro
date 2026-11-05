@@ -392,6 +392,89 @@ jobs:
           ORDER BY t.closed_at DESC, t.id DESC
           LIMIT 16;
 
+          -- Exactly the same DEMO adverse-exit provenance as the prospective
+          -- post-exit worker, but aggregated without user/order/session IDs.
+          -- Differentiate pending maturation, quote gaps and real first-barrier
+          -- outcomes; midpoint touches do not certify broker TP/SL fills.
+          WITH adverse AS (
+            SELECT
+              t.id,
+              t.instrument,
+              t.direction,
+              t.closed_at,
+              COALESCE(t.account_currency, 'UNKNOWN_CURRENCY') AS account_currency,
+              o.state AS shadow_state,
+              o.response,
+              o.trade_id IS NOT NULL AS studied
+            FROM trading.trades t
+            JOIN trading.trading_sessions s
+              ON s.id = t.trading_session_id
+             AND s.user_id = t.user_id
+             AND s.broker_connection_id = t.broker_connection_id
+            JOIN broker.broker_connections bc
+              ON bc.id = t.broker_connection_id AND bc.user_id = t.user_id
+            JOIN LATERAL (
+              SELECT audit0.metadata FROM audit.audit_logs audit0
+              WHERE audit0.action = 'TRADE_CLOSED'
+                AND audit0.resource_type = 'Trade'
+                AND audit0.resource_id = t.id::text
+                AND audit0.actor_user_id = t.user_id
+                AND audit0.metadata #>> '{aiCloseTrigger,source}' = 'BROKER_ADVERSE_PROTECTION'
+                AND audit0.metadata #>> '{aiCloseTrigger,reasonCode}'
+                  IN ('ADVERSE_THESIS_FAILED', 'EMERGENCY_ADVERSE_CUT')
+              ORDER BY audit0.created_at DESC LIMIT 1
+            ) audit0 ON true
+            LEFT JOIN trading.post_entry_shadow_observations o
+              ON o.trade_id = t.id
+             AND o.artifact = 'adverse-thesis-exit-verified-m1-v1'
+             AND o.checkpoint_minutes = 60
+             AND o.execution_authority = 'NONE'
+             AND o.modifies_execution = false
+            WHERE t.close_reason = 'AI_CLOSE_SIGNAL'
+              AND t.status::text = 'CLOSED'
+              AND t.closed_at >= NOW() - interval '24 hours'
+              AND s.execution_mode = 'FULL_AUTO'
+              AND bc.account_type = 'DEMO'
+          )
+          SELECT
+            'adverse_exit_cohort_24h',
+            account_currency,
+            COUNT(*),
+            COUNT(*) FILTER (WHERE closed_at > NOW() - interval '65 minutes'),
+            COUNT(*) FILTER (WHERE closed_at <= NOW() - interval '65 minutes' AND NOT studied),
+            COUNT(*) FILTER (WHERE shadow_state = 'TP_FIRST'),
+            COUNT(*) FILTER (WHERE shadow_state = 'STOP_FIRST'),
+            COUNT(*) FILTER (WHERE shadow_state = 'AMBIGUOUS'),
+            COUNT(*) FILTER (WHERE shadow_state = 'DATA_GAP'),
+            COUNT(*) FILTER (WHERE shadow_state = 'UNRESOLVED'),
+            COUNT(*) FILTER (WHERE shadow_state = 'INELIGIBLE')
+          FROM adverse
+          GROUP BY account_currency
+          ORDER BY account_currency;
+
+          SELECT
+            'adverse_exit_counterfactual_24h',
+            COALESCE(t.account_currency, 'UNKNOWN_CURRENCY'),
+            t.instrument,
+            t.direction,
+            to_char(t.closed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+            o.state,
+            o.response->'originalSlTpHold'->>'observedBars',
+            o.response->'originalSlTpHold'->>'eventAt',
+            o.response->>'originalNetPnl',
+            o.response->'originalSlTpHold'->>'netPnlProxy',
+            o.response->'originalSlTpHold'->>'deltaVsOriginal'
+          FROM trading.post_entry_shadow_observations o
+          JOIN trading.trades t ON t.id = o.trade_id
+          WHERE o.artifact = 'adverse-thesis-exit-verified-m1-v1'
+            AND o.checkpoint_minutes = 60
+            AND o.execution_authority = 'NONE'
+            AND o.modifies_execution = false
+            AND t.close_reason = 'AI_CLOSE_SIGNAL'
+            AND t.closed_at >= NOW() - interval '24 hours'
+          ORDER BY t.closed_at DESC, t.id DESC
+          LIMIT 16;
+
           -- Keep model calibration research separate from real broker trades.
           -- These prospective SHADOW outcomes are synthetic, cost-adjusted R;
           -- they are NOT account P&L or permission to admit a trade. Group by
