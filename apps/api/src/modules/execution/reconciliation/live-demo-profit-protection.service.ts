@@ -7,6 +7,7 @@ import { ExecutionService } from '../execution.service';
 import { TradeCloseReason } from '../entities/trade.entity';
 import { evaluatePaperProfitLock } from '../../broker/adapters/paper-broker.adapter';
 import { evaluateProtectedRunnerShadow } from './protected-runner-shadow';
+import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
 
 const LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS = 5_000;
 
@@ -578,6 +579,26 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           positionPrices.takeProfitPrice == null ? null : finite(positionPrices.takeProfitPrice),
         latestLiveSpreadPrice: m1Evidence?.latestLiveSpreadPrice ?? null,
       });
+      const zaiP1Canary = evaluateZaiP1ReversalDemoPreflight({
+        // The caller has already verified this exact adapter connection is
+        // cTrader DEMO; no new provider authorization is inferred here.
+        brokerId: 'ctrader',
+        accountType: 'DEMO',
+        strategyRoute: trade.strategy_route,
+        confirmedFreshTrend: recheck.wouldHoldIfEnabled,
+        direction: trade.direction,
+        initialLot: trade.lot_size,
+        initialRiskPnl,
+        currentGrossPnl: currentPnl,
+        estimateRoundTripFee: fees?.estimatedCost ?? null,
+        historicalFeeSamples: fees?.sampleCount ?? 0,
+        entryPrice: positionPrices.entryPrice == null ? null : finite(positionPrices.entryPrice),
+        currentPrice:
+          positionPrices.currentPrice == null ? null : finite(positionPrices.currentPrice),
+        originalStopPrice: trade.stop_loss == null ? null : finite(trade.stop_loss),
+        originalTakeProfitPrice:
+          positionPrices.takeProfitPrice == null ? null : finite(positionPrices.takeProfitPrice),
+      });
       await this.auditService.log({
         actorUserId: trade.user_id,
         action: AuditAction.DEMO_PROFIT_LOCK_TREND_RECHECK,
@@ -596,6 +617,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           m1AlignedMomentum3: m1Evidence?.alignedMomentum3 ?? null,
           m1LatestAgeSeconds: m1Evidence?.latestAgeSeconds ?? null,
           runnerShadow: runner,
+          zaiP1Canary,
           runnerCostEvidence: fees ? 'RECENT_CLOSED_TRADES_BEFORE_DECISION' : 'INSUFFICIENT',
           noTradeAuthority: true,
         },
