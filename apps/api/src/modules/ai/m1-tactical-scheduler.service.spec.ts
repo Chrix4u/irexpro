@@ -30,6 +30,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V6,
   M1_TACTICAL_ROLLOUT_POLICY_V7,
   M1_TACTICAL_ROLLOUT_POLICY_V8,
+  M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
   m1RiskMarketRegime,
   m1RouteExecutableInPhase,
   m1ShadowOutcomeEligible,
@@ -1986,15 +1987,20 @@ describe('M1 professional v8 DEMO promotion', () => {
     ).toBe(false);
   });
 
-  it('binds AiModule to v8 and leaves v7 immutable for historical evidence', () => {
+  it('binds AiModule to explicit reversible DEMO primary-only probation and preserves v7/v8 historical policies', () => {
     const moduleSource = fs.readFileSync(path.resolve(__dirname, './ai.module.ts'), 'utf8');
     expect(M1_TACTICAL_ROLLOUT_POLICY_V7).toMatchObject({
       version: 'm1-tactical-rollout-v7-early-transition-tiered-scout',
       paperVolumeCap: 0.1,
     });
-    expect(moduleSource).toContain('M1_TACTICAL_ROLLOUT_POLICY_V8');
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V8.demoPrimaryOnlyProbation).toBeUndefined();
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION).toMatchObject({
+      phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+      demoPrimaryOnlyProbation: true,
+      paperVolumeCap: 4,
+    });
     expect(moduleSource).toMatch(
-      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V8/,
+      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION/,
     );
   });
 
@@ -2756,6 +2762,89 @@ describe('M1 V8 multi-model DEMO authority', () => {
       ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
     )?.[0];
     expect(recorded?.blockers).toContain('M1_MULTIMODEL_LOSS_STREAK_BRAKE');
+  });
+
+  it('keeps formerly executable bootstrap continuation observational in DEMO primary-only probation', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(recorded?.governance.professionalM1Fallback).toMatchObject({
+      eligible: true,
+      tier: 'BOOTSTRAP_CONTINUATION',
+    });
+    expect(recorded?.blockers).toContain('M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION');
+    expect(recorded?.governance.demoPrimaryOnlyProbation).toMatchObject({
+      enabled: true,
+      blocked: true,
+      chosenAuthorityPath: 'BOOTSTRAP_CONTINUATION',
+    });
+  });
+
+  it('keeps explicitly qualified primary Plan B executable during DEMO probation', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: true,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
+        };
+      });
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(recorded?.governance.demoPrimaryOnlyProbation).toMatchObject({
+      enabled: true,
+      blocked: false,
+      chosenAuthorityPath: 'PRIMARY_PLAN_B',
+    });
+    expect(recorded?.blockers ?? []).not.toContain('M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION');
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
   });
 
   it('bootstraps a strong cold-start M1 continuation at the conservative cap without Plan-B admission', async () => {

@@ -73,6 +73,7 @@ import {
   type M1PortfolioNetLossBrakeDecision,
 } from './m1-portfolio-net-loss-brake';
 import { evaluateDemoProfitabilityReliabilityGate } from './demo-profitability-reliability-gate';
+import { evaluateDemoPrimaryOnlyProbation } from './demo-primary-only-route-probation';
 import {
   evaluateM1RoutePairSideReliability,
   type M1ReliabilityRoute,
@@ -370,6 +371,8 @@ export interface M1TacticalRolloutPolicy {
   cadenceMs: number;
   instruments: readonly string[];
   paperVolumeCap: number;
+  /** DEMO-only narrowing of execution; never modifies LIVE or PAPER. */
+  demoPrimaryOnlyProbation?: boolean;
   routeNetExpectedRFloors: Readonly<Record<Exclude<M1TacticalRoute, 'ABSTAIN'>, number>>;
 }
 
@@ -455,6 +458,18 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V8: Readonly<M1TacticalRolloutPolicy> = 
   phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
   paperVolumeCap: 4,
 });
+
+/** TEMPORARY DEMO research probation — primary ensemble is the only
+ * executable path; fallbacks continue shadow scoring. Revert this specific
+ * module policy binding when independently verified after-cost evidence
+ * supports promoting a fallback. This creates NO additional trade authority.
+ */
+export const M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION: Readonly<M1TacticalRolloutPolicy> =
+  Object.freeze({
+    ...M1_TACTICAL_ROLLOUT_POLICY_V8,
+    version: 'm1-tactical-v8-demo-primary-only-probation',
+    demoPrimaryOnlyProbation: true,
+  });
 
 export function m1RiskMarketRegime(
   route: M1TacticalRoute,
@@ -1257,6 +1272,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? shadowPairSideReliability?.eligible === true &&
           (standardGovernanceExecutable || localImpulseDriftOnlyRescue)
         : standardGovernanceExecutable;
+    const demoPrimaryOnlyProbation = evaluateDemoPrimaryOnlyProbation({
+      enabled: professionalDemoPhase && this.rolloutPolicy.demoPrimaryOnlyProbation === true,
+      primaryAuthorityPath: multimodelDemo?.authority.authorityPath ?? null,
+      m5HandoffEligible: m5EarlyTransitionHandoffEligible,
+      executableFallbackTier: professionalM1FallbackExecutable
+        ? (professionalM1Fallback?.tier ?? null)
+        : null,
+      extensionScoutExecutable: extensionExhaustionDemoScoutExecutable,
+    });
     const preliminaryCanExecute = professionalDemoPhase
       ? demoProfitabilityExecutionAllowed &&
         !multimodelDirectionConflict &&
@@ -1408,7 +1432,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       !extensionExhaustionActiveSameSideIntent &&
       fastStopRegimeBrake?.active !== true &&
       multimodelLossStreakBrake?.active !== true &&
-      portfolioNetLossBrake?.active !== true;
+      portfolioNetLossBrake?.active !== true &&
+      !demoPrimaryOnlyProbation.blocked;
     const effectiveGovernanceBlockers =
       microDriftOnlyRescue || localImpulseDriftOnlyRescue ? [] : governance.blockers;
     const researchBlockers = unique([
@@ -1454,6 +1479,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
             : []),
           ...(portfolioNetLossBrake?.active === true ? ['M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE'] : []),
+          ...(demoPrimaryOnlyProbation.blocked ? ['M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION'] : []),
           ...(oppositePositionStateUnavailable ? ['M1_OPPOSITE_POSITION_STATE_UNAVAILABLE'] : []),
           ...(activeOppositePosition
             ? [
@@ -1575,6 +1601,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         routeNetExpectedRFloor,
         fastStopRegimeBrake: fastStopRegimeBrake ? { ...fastStopRegimeBrake } : null,
         portfolioNetLossBrake: portfolioNetLossBrake ? { ...portfolioNetLossBrake } : null,
+        demoPrimaryOnlyProbation: { ...demoPrimaryOnlyProbation },
         multimodelLossStreakBrake: multimodelLossStreakBrake
           ? { ...multimodelLossStreakBrake }
           : null,
