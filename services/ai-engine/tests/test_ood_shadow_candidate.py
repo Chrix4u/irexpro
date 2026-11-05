@@ -14,8 +14,8 @@ from app.domain.training.ood_shadow_candidate import (
     chronological_split,
     input_features,
     prepare_cohort,
-    summarize_independent_ood_conditions,
     study_from_csv,
+    summarize_independent_ood_conditions,
 )
 
 
