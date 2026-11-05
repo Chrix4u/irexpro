@@ -9,7 +9,15 @@ export const DEMO_ENTRY_BLOCKER_LABELS: Readonly<Record<string, string>> = Objec
   DRIFT_OUT_OF_DISTRIBUTION: 'Market outside validated model conditions',
   PAPER_NET_EXPECTED_R: 'Modeled expectancy below required floor',
   MULTIMODEL_PLAN_B_NOT_ADMITTED: 'Primary Plan B not admitted',
-  M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION: 'Experimental routes remain observational',
+  M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION: 'Eligible fallback entries held in probation',
+  M1_DEMO_EARLY_TRANSITION_PAIR_SIDE_DEGRADED: 'Recent early-transition results too weak',
+  M1_DEMO_RELIABILITY_EARLY_LOSS_STREAK: 'Recent consecutive losing trades',
+  MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED: 'M1 timing has not confirmed reversal',
+  M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE: 'Account-wide recent net losses',
+  M1_MULTIMODEL_LOSS_STREAK_BRAKE: 'Model loss-streak protection',
+  M1_FAST_STOP_REGIME_BRAKE: 'Fast stop-loss pattern protection',
+  EVENT_RISK_HIGH_IMPACT_BLOCK: 'High-impact news risk',
+
   M1_DEMO_INSTRUMENT_RESEARCH_ONLY: 'Pair is research-only',
   M1_DEMO_BROKER_COMMISSION_NET_EDGE_BELOW_FLOOR: 'Broker costs exceed expected edge',
 });

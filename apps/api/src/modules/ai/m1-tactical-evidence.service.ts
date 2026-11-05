@@ -471,7 +471,8 @@ export class M1TacticalEvidenceService {
         ORDER BY s.authority_generation DESC, s.started_at DESC
         LIMIT 1
       ), cohort AS (
-        SELECT d.route, d.execution_authority, d.outcome_state, d.blockers
+        SELECT d.route, d.execution_authority, d.outcome_state,
+          d.blockers, d.governance
         FROM trading.m1_tactical_decisions d
         JOIN active_scope s ON s.broker_connection_id = d.broker_connection_id
         WHERE d.user_id = $1
@@ -482,13 +483,34 @@ export class M1TacticalEvidenceService {
         SELECT b.value AS code, COUNT(*) AS frequency
         FROM cohort c
         CROSS JOIN LATERAL jsonb_array_elements_text(c.blockers) AS b(value)
-        WHERE b.value IN (
+        -- Do not count ABSTAIN scans as rejected order proposals. This
+        -- reveals the actual reason distribution among potential M1 entries.
+        WHERE c.route <> 'ABSTAIN'
+          AND b.value IN (
           'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
           'MULTIMODEL_CONTINUATION_TIMING_NOT_READY',
           'DRIFT_OUT_OF_DISTRIBUTION',
           'PAPER_NET_EXPECTED_R',
           'MULTIMODEL_PLAN_B_NOT_ADMITTED',
+          'M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION',
+          'M1_DEMO_EARLY_TRANSITION_PAIR_SIDE_DEGRADED',
+          'M1_DEMO_RELIABILITY_EARLY_LOSS_STREAK',
+          'MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED',
+          'M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE',
+          'M1_MULTIMODEL_LOSS_STREAK_BRAKE',
+          'M1_FAST_STOP_REGIME_BRAKE',
+          'EVENT_RISK_HIGH_IMPACT_BLOCK',
           'M1_DEMO_BROKER_COMMISSION_NET_EDGE_BELOW_FLOOR'
+        )
+        -- Previous revisions attached the probation blocker even when
+        -- Plan-B itself was BLOCKED and there was no fallback to veto.
+        -- Retrospectively exclude those misleading historical observations.
+        AND NOT (
+          b.value = 'M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION'
+          AND COALESCE(
+            c.governance->'demoPrimaryOnlyProbation'->>'chosenAuthorityPath',
+            'UNKNOWN'
+          ) IN ('BLOCKED', 'UNKNOWN')
         )
         GROUP BY b.value ORDER BY frequency DESC, code ASC LIMIT 3
       )

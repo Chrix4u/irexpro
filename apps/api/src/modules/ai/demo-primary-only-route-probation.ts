@@ -11,7 +11,7 @@ export interface DemoPrimaryOnlyProbationDecision {
   enabled: boolean;
   blocked: boolean;
   chosenAuthorityPath: string;
-  reason: 'NOT_ENFORCED' | 'PRIMARY_PLAN_B' | 'FALLBACK_ROUTE_IN_PROBATION';
+  reason: 'NOT_ENFORCED' | 'NO_EXECUTABLE_PATH' | 'PRIMARY_PLAN_B' | 'FALLBACK_ROUTE_IN_PROBATION';
   modifiesOpenPositions: false;
 }
 
@@ -31,7 +31,14 @@ export function evaluateDemoPrimaryOnlyProbation(input: {
       : input.extensionScoutExecutable
         ? 'EXTENSION_EXHAUSTION_DEMO_SCOUT'
         : (input.primaryAuthorityPath ?? 'UNKNOWN');
-  const blocked = input.enabled && chosenAuthorityPath !== 'PRIMARY_PLAN_B';
+  // A failed Plan-B admission is not an otherwise executable fallback.
+  // Otherwise this diagnostic marks every declined primary setup as a
+  // 'probation veto' even when removing probation would NOT create a trade.
+  // This does not grant authority: every real alternate executable path
+  // (M5 handoff, fallback, scout or rescued primary) remains vetoed.
+  const executionPathExists =
+    chosenAuthorityPath !== 'BLOCKED' && chosenAuthorityPath !== 'UNKNOWN';
+  const blocked = input.enabled && executionPathExists && chosenAuthorityPath !== 'PRIMARY_PLAN_B';
   return {
     artifact: DEMO_PRIMARY_ONLY_PROBATION_ARTIFACT,
     enabled: input.enabled,
@@ -39,9 +46,11 @@ export function evaluateDemoPrimaryOnlyProbation(input: {
     chosenAuthorityPath,
     reason: !input.enabled
       ? 'NOT_ENFORCED'
-      : blocked
-        ? 'FALLBACK_ROUTE_IN_PROBATION'
-        : 'PRIMARY_PLAN_B',
+      : !executionPathExists
+        ? 'NO_EXECUTABLE_PATH'
+        : blocked
+          ? 'FALLBACK_ROUTE_IN_PROBATION'
+          : 'PRIMARY_PLAN_B',
     modifiesOpenPositions: false,
   };
 }

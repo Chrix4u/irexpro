@@ -118,6 +118,14 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
     expect(sql).toContain('d.broker_connection_id');
     expect(sql).toContain("GREATEST(s.started_at, NOW() - interval '60 minutes')");
     expect(sql).toContain('d.instrument = ANY($2::text[])');
+    expect(sql).toContain("WHERE c.route <> 'ABSTAIN'");
+    expect(sql).toContain("'M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION'");
+    expect(sql).toContain("'chosenAuthorityPath'");
+    expect(sql).toContain("IN ('BLOCKED', 'UNKNOWN')");
+    expect(sql).toContain("'M1_DEMO_EARLY_TRANSITION_PAIR_SIDE_DEGRADED'");
+    expect(sql).toContain("'M1_DEMO_RELIABILITY_EARLY_LOSS_STREAK'");
+    expect(sql).toContain("'MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED'");
+    expect(sql).toContain("'EVENT_RISK_HIGH_IMPACT_BLOCK'");
     expect(sql).not.toMatch(/\bUPDATE\b|\bINSERT\b|\bDELETE\b|\bEXECUTE\b/i);
   });
 });

@@ -46,10 +46,38 @@ describe('reversible DEMO-only entry-authority probation', () => {
     expect(
       evaluateDemoPrimaryOnlyProbation({ ...primary, extensionScoutExecutable: true }).blocked,
     ).toBe(true);
+    // Blocked primary admission is already non-executable, so probation
+    // must not be reported as the veto that stopped that decision.
     expect(
-      evaluateDemoPrimaryOnlyProbation({ ...primary, primaryAuthorityPath: 'BLOCKED' }).blocked,
-    ).toBe(true);
+      evaluateDemoPrimaryOnlyProbation({ ...primary, primaryAuthorityPath: 'BLOCKED' }),
+    ).toMatchObject({
+      enabled: true,
+      blocked: false,
+      reason: 'NO_EXECUTABLE_PATH',
+      chosenAuthorityPath: 'BLOCKED',
+    });
   });
+  it('reports missing executable authority accurately, without changing fallback vetoes', () => {
+    expect(
+      evaluateDemoPrimaryOnlyProbation({ ...primary, primaryAuthorityPath: null }),
+    ).toMatchObject({
+      blocked: false,
+      chosenAuthorityPath: 'UNKNOWN',
+      reason: 'NO_EXECUTABLE_PATH',
+    });
+    expect(
+      evaluateDemoPrimaryOnlyProbation({
+        ...primary,
+        primaryAuthorityPath: 'BLOCKED',
+        extensionScoutExecutable: true,
+      }),
+    ).toMatchObject({
+      blocked: true,
+      chosenAuthorityPath: 'EXTENSION_EXHAUSTION_DEMO_SCOUT',
+      reason: 'FALLBACK_ROUTE_IN_PROBATION',
+    });
+  });
+
   it('is fully inactive for prior rollout policies and never modifies open positions', () => {
     expect(
       evaluateDemoPrimaryOnlyProbation({ ...primary, enabled: false, m5HandoffEligible: true }),
