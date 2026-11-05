@@ -20,11 +20,32 @@ const M1_WARM_TARGET = 600;
 const M1_REFRESH_COUNT = 60;
 const CONTEXT_REFRESH_COUNT = 40;
 const M1_REQUESTS_PER_CYCLE = 3;
-// Keep the same 3 M1 + 1 context historical calls per cycle. Give M5 and
-// M15 equal priority: six pairs now have a complete M15 sweep every 16
-// context slots rather than 24. A slower history cycle must not starve the
-// completed M15 broker context required by the tactical admission gate.
-const CONTEXT_REFRESH_ROTATION = ['M5', 'M15', 'M5', 'M15', 'M5', 'M15', 'H1', 'H4'] as const;
+// Keep the exact 3 M1 + 1 provider-native context history requests per
+// 15-second cycle. Maintain M5 and M15's existing 6/16 share each, but
+// prioritize H1's newly completed hourly context: three H1 slots and one H4
+// slot in 16 cycles (previously two H1 and two H4). With six pairs this
+// refreshes every pair's H1 at most every 32 slots (~8m by default) instead
+// of 48 (~12m), while H4 still refreshes every 96 slots (~24m), well inside
+// its four-hour completed-bar horizon. Never synthesize missing broker bars.
+// The one-context-request limit still protects cTrader Open API rate limits.
+const CONTEXT_REFRESH_ROTATION = [
+  'M5',
+  'M15',
+  'M5',
+  'M15',
+  'M5',
+  'M15',
+  'H1',
+  'H1',
+  'M5',
+  'M15',
+  'M5',
+  'M15',
+  'M5',
+  'M15',
+  'H1',
+  'H4',
+] as const;
 
 /**
  * Exact-binding cTrader market-data collector for the M1 tactical PAPER sleeve.
@@ -235,10 +256,10 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       this.refreshM1(userId, connectionId, instrument, now),
     );
 
-    // Preserve one context request per cycle while giving M5 and M15 37.5%
-    // each and H1/H4 12.5% each; no increase in provider request budget.
-    // Independent pair cursors ensure all six pairs get every timeframe.
-    // Broker-native candles remain mandatory; no no-tick bars are invented.
+    // Preserve exactly one context request per cycle. M5/M15 each get 37.5%,
+    // H1 gets 18.75%, and slower H4 gets 6.25%; no increase in provider budget.
+    // Independent pair cursors ensure all six pairs get each timeframe.
+    // Broker-native bars remain mandatory; no no-tick bars are invented.
     const timeframe =
       CONTEXT_REFRESH_ROTATION[this.contextRotationOffset % CONTEXT_REFRESH_ROTATION.length]!;
     this.contextRotationOffset = (this.contextRotationOffset + 1) % CONTEXT_REFRESH_ROTATION.length;

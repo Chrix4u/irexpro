@@ -261,19 +261,29 @@ describe('CTraderQuoteCollectorService', () => {
     expect(m1Calls.every((call) => call[4] === 60)).toBe(true);
   });
 
-  it('prioritizes fast M5/M15 context without increasing the four-request historical budget', async () => {
+  it('keeps M5/M15 cadence, boosts H1 and bounds H4 without more broker requests', async () => {
     const h = harness();
     const instruments = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'];
 
-    for (let index = 0; index < 48; index += 1) {
+    // A full supercycle: each of the six instruments has received every
+    // rotation slot exactly once, even on the slower H4 timeframe.
+    for (let index = 0; index < 96; index += 1) {
       await h.service.collectOnce(new Date(OPEN_NOW.getTime() + index * 15_000));
     }
 
     const allCalls = h.getOhlcvForConnection.mock.calls;
     const contextCalls = allCalls.filter((call) => call[3] !== 'M1');
-    expect(allCalls).toHaveLength(48 * 4);
-    expect(contextCalls).toHaveLength(48);
-    expect(contextCalls.slice(0, 8).map((call) => call[3])).toEqual([
+    expect(allCalls).toHaveLength(96 * 4);
+    expect(contextCalls).toHaveLength(96);
+    expect(contextCalls.slice(0, 16).map((call) => call[3])).toEqual([
+      'M5',
+      'M15',
+      'M5',
+      'M15',
+      'M5',
+      'M15',
+      'H1',
+      'H1',
       'M5',
       'M15',
       'M5',
@@ -285,9 +295,9 @@ describe('CTraderQuoteCollectorService', () => {
     ]);
 
     for (const [timeframe, expectedCallsPerInstrument] of [
-      ['M5', 3],
-      ['M15', 3],
-      ['H1', 1],
+      ['M5', 6],
+      ['M15', 6],
+      ['H1', 3],
       ['H4', 1],
     ] as const) {
       const calls = contextCalls.filter((call) => call[3] === timeframe);
@@ -299,22 +309,32 @@ describe('CTraderQuoteCollectorService', () => {
       }
     }
 
-    // Both fast contexts complete a six-pair sweep within 16 historical
-    // slots (four minutes at the nominal cadence), without starving H1/H4.
-    // This reduces the old M15 24-slot sweep and stays within the M5 gate.
-    for (const timeframe of ['M5', 'M15']) {
-      for (const instrument of instruments) {
-        const slots = contextCalls.flatMap((call, index) =>
-          call[2] === instrument && call[3] === timeframe ? [index] : [],
-        );
-        expect(slots).toHaveLength(3);
+    // M1 cadence and positive-price quote lane remain completely unchanged.
+    expect(allCalls.filter((call) => call[3] === 'M1')).toHaveLength(96 * 3);
+    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(96 * instruments.length);
+
+    const slotsFor = (instrument: string, timeframe: string): number[] =>
+      contextCalls.flatMap((call, index) =>
+        call[2] === instrument && call[3] === timeframe ? [index] : [],
+      );
+
+    for (const instrument of instruments) {
+      for (const timeframe of ['M5', 'M15']) {
+        const slots = slotsFor(instrument, timeframe);
+        expect(slots).toHaveLength(6);
         for (let index = 1; index < slots.length; index += 1) {
           expect(slots[index]! - slots[index - 1]!).toBeLessThanOrEqual(16);
         }
       }
+      const h1Slots = slotsFor(instrument, 'H1');
+      expect(h1Slots).toHaveLength(3);
+      for (let index = 1; index < h1Slots.length; index += 1) {
+        expect(h1Slots[index]! - h1Slots[index - 1]!).toBeLessThanOrEqual(32);
+      }
+      // H4 remains broker-native, one provider request/pair every 24 minutes
+      // at the configured staging 15s cycle (well inside 4h horizon).
+      expect(slotsFor(instrument, 'H4')).toHaveLength(1);
     }
-
-    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(48 * instruments.length);
   });
 
   it('samples live spreads before historical refresh so a hung history request cannot starve quote freshness', async () => {
