@@ -640,6 +640,36 @@ jobs:
           ORDER BY t.closed_at DESC, t.id DESC
           LIMIT 16;
 
+          -- z.ai P1 reversal partial-exit DEMO canary preflight.
+          -- This counter intentionally reports ONLY read-only preflight audit
+          -- judgments recorded AFTER an existing full profit-protection exit;
+          -- there is no partial-close execution authority or untracked P&L.
+          SELECT
+            'zai_p1_reversal_demo_preflight_24h',
+            COALESCE(t.account_currency, 'UNKNOWN_CURRENCY'),
+            COALESCE(a.metadata->'zaiP1Canary'->>'reason', 'PREEXISTING_NO_CANARY'),
+            COUNT(*),
+            COUNT(*) FILTER (
+              WHERE a.metadata->'zaiP1Canary'->>'researchEligible' = 'true'
+            ),
+            COUNT(*) FILTER (
+              WHERE a.metadata->'zaiP1Canary'->>'canSendPartialClose' = 'true'
+            )
+          FROM audit.audit_logs a
+          JOIN trading.trades t
+            ON a.resource_type = 'Trade'
+            AND a.resource_id = t.id::text
+            AND a.actor_user_id = t.user_id
+          JOIN broker.broker_connections b
+            ON b.id = t.broker_connection_id
+            AND b.user_id = t.user_id
+            AND b.account_type = 'DEMO'
+            AND b.broker_id = 'ctrader'
+          WHERE a.action = 'DEMO_PROFIT_LOCK_TREND_RECHECK'
+            AND a.created_at >= NOW() - interval '24 hours'
+          GROUP BY t.account_currency, a.metadata->'zaiP1Canary'->>'reason'
+          ORDER BY t.account_currency, 3;
+
           -- Keep model calibration research separate from real broker trades.
           -- These prospective SHADOW outcomes are synthetic, cost-adjusted R;
           -- they are NOT account P&L or permission to admit a trade. Group by
