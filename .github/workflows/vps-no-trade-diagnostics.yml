@@ -307,6 +307,58 @@ jobs:
           GROUP BY w.window_label, COALESCE(s.execution_mode, 'UNKNOWN_LEGACY'), COALESCE(t.account_currency, 'UNKNOWN_CURRENCY')
           ORDER BY w.window_label, COALESCE(s.execution_mode, 'UNKNOWN_LEGACY'), COALESCE(t.account_currency, 'UNKNOWN_CURRENCY');
 
+          -- An M1 ABSTAIN classification is not necessarily a veto in the
+          -- professional DEMO architecture: M1 is the timing specialist and
+          -- an independently qualified primary engine may authorise an order.
+          -- Audit the *actual* intent provenance before concluding otherwise.
+          -- No trade, user, account, session or connection identifiers leave
+          -- this report. Do not mistake these groups for a risk-gate bypass.
+          WITH abstain_execution AS (
+            SELECT DISTINCT ON (t.id)
+              t.id,
+              t.status::text AS status,
+              t.realised_pnl,
+              t.commission,
+              t.swap,
+              COALESCE(t.account_currency, 'UNKNOWN_CURRENCY') AS account_currency,
+              COALESCE(ti.metadata->>'primary_engine_code', 'UNKNOWN') AS primary_engine,
+              COALESCE(ti.metadata->>'m1_tactical_role', 'UNKNOWN') AS m1_role,
+              COALESCE(ti.metadata->>'multimodel_execution_authority_path', 'UNKNOWN') AS authority_path,
+              COALESCE(ti.metadata->>'m1_professional_fallback_tier', 'NONE') AS fallback_tier,
+              COALESCE(ti.metadata->>'m5_early_transition_handoff', 'UNKNOWN') AS m5_handoff
+            FROM trading.m1_tactical_decisions d
+            JOIN trading.trade_intents ti
+              ON ti.user_id = d.user_id
+             AND ti.broker_connection_id = d.broker_connection_id
+             AND (
+               ti.id = d.trade_intent_id
+               OR (d.trade_intent_id IS NULL AND d.signal_id IS NOT NULL AND ti.signal_id = d.signal_id)
+             )
+            JOIN trading.trades t
+              ON t.trade_intent_id = ti.id
+             AND t.user_id = d.user_id
+             AND t.broker_connection_id = d.broker_connection_id
+            WHERE d.evaluated_at >= NOW() - interval '24 hours'
+              AND d.route = 'ABSTAIN'
+            ORDER BY t.id, d.evaluated_at DESC
+          )
+          SELECT
+            'm1_abstain_execution_provenance_24h',
+            account_currency,
+            primary_engine,
+            m1_role,
+            authority_path,
+            fallback_tier,
+            m5_handoff,
+            status,
+            COUNT(*),
+            ROUND(SUM(COALESCE(realised_pnl, 0))::numeric, 2),
+            ROUND(SUM(COALESCE(realised_pnl, 0) - ABS(COALESCE(commission, 0)) + COALESCE(swap, 0))::numeric, 2),
+            COUNT(*) FILTER (WHERE realised_pnl IS NULL OR commission IS NULL OR swap IS NULL)
+          FROM abstain_execution
+          GROUP BY account_currency, primary_engine, m1_role, authority_path, fallback_tier, m5_handoff, status
+          ORDER BY account_currency, primary_engine, m1_role, authority_path, fallback_tier, m5_handoff, status;
+
           -- Keep model calibration research separate from real broker trades.
           -- These prospective SHADOW outcomes are synthetic, cost-adjusted R;
           -- they are NOT account P&L or permission to admit a trade. Group by
