@@ -124,6 +124,10 @@ export interface M1TacticalStatusView {
   primaryEngineDisplayName?: string;
   authorityMode?: "DEMO_FULL_AUTO" | "PAPER_RESEARCH" | "SHADOW" | string;
   m1TacticalRole?: string;
+  /** Broker-native DEMO pairs allowed to submit new positions (server-authoritative). */
+  demoEntryInstruments?: string[];
+  /** Watched pairs that only generate research decisions, never new entries. */
+  researchOnlyInstruments?: string[];
   lastRunAt: string | null;
   lastError: string | null;
   marketReadiness?: Record<
@@ -193,6 +197,12 @@ export function hasM1TacticalStatusUiShape(
   ) {
     return false;
   }
+  if (
+    (value.demoEntryInstruments !== undefined &&
+      !isStringArray(value.demoEntryInstruments)) ||
+    (value.researchOnlyInstruments !== undefined &&
+      !isStringArray(value.researchOnlyInstruments))
+  ) return false;
   if (value.latestDecision === null) return true;
   if (!isRecord(value.latestDecision)) return false;
   const decision = value.latestDecision;

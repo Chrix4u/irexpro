@@ -75,6 +75,25 @@ const VALID_STATUS = {
   ],
 };
 
+describe('server-authoritative DEMO focused-pair status contract', () => {
+  const base = { enabled: true, phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+    lastRunAt: null, lastError: null, latestDecision: null };
+
+  it('accepts the explicit server-reported entry and research-only pairs', () => {
+    expect(hasM1TacticalStatusUiShape({
+      ...base,
+      demoEntryInstruments: ['AUDUSD', 'GBPUSD', 'EURUSD'],
+      researchOnlyInstruments: ['USDJPY', 'USDCAD', 'USDCHF'],
+    })).toBe(true);
+  });
+
+  it('rejects an invalid server pair list instead of displaying invented authority', () => {
+    expect(hasM1TacticalStatusUiShape({
+      ...base, demoEntryInstruments: ['AUDUSD', 4],
+    })).toBe(false);
+  });
+});
+
 describe("VPS scanner UI status runtime guard", () => {
   it("accepts the nested containers the Trade cockpit safely consumes", () => {
     expect(hasVpsScannerUiShape(VALID_STATUS)).toBe(true);
