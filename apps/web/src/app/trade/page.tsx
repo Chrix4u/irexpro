@@ -3553,6 +3553,37 @@ export default function AiTradingPage() {
                       {demoEntryDiagnostic.brokerAuthorizedDecisions} broker-authorized ·{" "}
                       {demoEntryDiagnostic.executionSucceeded} executed
                     </small>
+                    {demoEntryDiagnostic.operatingState === "SCANNING_NO_APPROVED_ENTRY" && (
+                      <small className="ai-control-card__diagnosis-alert" role="status">
+                        Scanning is active, but no proposed entry earned broker permission in
+                        the last 60 minutes. Session active{" "}
+                        {Math.floor(demoEntryDiagnostic.sessionAgeMinutes / 60)}h{" "}
+                        {demoEntryDiagnostic.sessionAgeMinutes % 60}m.
+                      </small>
+                    )}
+                    {demoEntryDiagnostic.operatingState === "NO_RECENT_SCANS" && (
+                      <small className="ai-control-card__diagnosis-alert" role="status">
+                        The session is active, but no recent market decisions were recorded.
+                        Check the scanner and market-feed diagnostics.
+                      </small>
+                    )}
+                    {demoEntryDiagnostic.operatingState === "NO_RECENT_CANDIDATES" && (
+                      <small>
+                        Markets are being scanned, but no trade-shaped setups formed in this
+                        period.
+                      </small>
+                    )}
+                    {demoEntryDiagnostic.candidateDecisions > 0 && (
+                      <small>
+                        Entry qualification: {demoEntryDiagnostic.planBAdmittedDecisions}{" "}
+                        passed Plan B admission · {demoEntryDiagnostic.primaryPathDecisions}{" "}
+                        reached the primary path ·{" "}
+                        {demoEntryDiagnostic.primaryReliabilityVetoDecisions} primary
+                        entries held by weak recent performance ·{" "}
+                        {demoEntryDiagnostic.eligibleFallbackProbationVetoDecisions}{" "}
+                        otherwise eligible fallback entries held in probation.
+                      </small>
+                    )}
                     {demoEntryDiagnostic.leadingBlockers.length ? (
                       <small>
                         Frequent reasons among proposed entries:{" "}

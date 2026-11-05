@@ -40,6 +40,11 @@ describe('AI Trader production UI regression contract', () => {
     expect(pageSource).toContain('demoEntryDiagnostic?.scope === "ACTIVE_CTRADER_DEMO"');
     expect(pageSource).toContain('Why no new trades? · Last 60 minutes');
     expect(pageSource).toContain('Frequent reasons among proposed entries:');
+    expect(pageSource).toContain('SCANNING_NO_APPROVED_ENTRY');
+    expect(pageSource).toContain('NO_RECENT_SCANS');
+    expect(pageSource).toContain('Entry qualification:');
+    expect(pageSource).toContain('eligibleFallbackProbationVetoDecisions');
+    expect(pageSource).toContain('primaryReliabilityVetoDecisions');
     expect(pageSource).toContain('Reasons may overlap. No risk or commission check is bypassed.');
     expect(pageSource).toContain('setDemoEntryDiagnostic(null)');
     expect(pageSource).toContain('riskProtectionResettable');
