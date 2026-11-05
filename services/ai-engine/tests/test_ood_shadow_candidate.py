@@ -15,6 +15,7 @@ from app.domain.training.ood_shadow_candidate import (
     input_features,
     prepare_cohort,
     study_from_csv,
+    summarize_independent_ood_conditions,
 )
 
 
@@ -219,3 +220,60 @@ def test_scheduled_ood_research_cannot_dispatch_or_auto_publish_models() -> None
     assert "run_ood_shadow_training.sh" in workflow
     assert "INTERVAL '35 days'" in query
     assert "d.user_id::text = :'scanner_user'" in query
+
+
+def test_ood_condition_outcomes_exclude_overlapping_pair_side_and_route() -> None:
+    def at(minute: int, *, pair: str, direction: str, route: str) -> dict:
+        row = example(direction=direction)
+        decision = datetime(2026, 11, 5, 12, 0, tzinfo=UTC) + timedelta(minutes=minute)
+        row["instrument"] = pair
+        row["route"] = route
+        row["decision_time_utc"] = decision.isoformat()
+        row["signal_bar_time_utc"] = (decision - timedelta(minutes=1)).isoformat()
+        row["entry_observed_at_utc"] = (decision - timedelta(seconds=15)).isoformat()
+        row["future_observed_at_utc"] = (
+            decision + timedelta(minutes=15, seconds=30)
+        ).isoformat()
+        return row
+
+    candidates = [
+        at(0, pair="EURUSD", direction="BUY", route="M1_TREND_CONTINUATION"),
+        at(1, pair="EURUSD", direction="SELL", route="M1_EARLY_TRANSITION"),
+        at(2, pair="GBPUSD", direction="BUY", route="M1_TREND_CONTINUATION"),
+        at(15, pair="EURUSD", direction="BUY", route="M1_TREND_CONTINUATION"),
+        at(16, pair="EURUSD", direction="BUY", route="M1_EARLY_TRANSITION"),
+    ]
+    records, quality = prepare_cohort(pd.DataFrame(candidates))
+    assert quality["causally_verified_records"] == 5
+    outcomes = summarize_independent_ood_conditions(records)
+    assert outcomes["independent_opportunities"] == 3
+    assert outcomes["distinct_utc_days"] == 1
+    assert outcomes["overall"]["observations"] == 3
+    assert outcomes["overall"]["mean_proxy_pips"] == pytest.approx(3.0)
+    assert outcomes["condition_outcomes"][0] == {
+        "dimension": "extensionAtr:HARD_HIGH",
+        "observations": 3,
+        "distinct_utc_days": 1,
+        "pair_counts": {"EURUSD": 2, "GBPUSD": 1},
+        "mean_proxy_pips": 3.0,
+        "positive_proxy_fraction": 1.0,
+        "proxy_profit_factor": None,
+    }
+    assert outcomes["labels_are_real_broker_net_pnl"] is False
+    assert outcomes["authority"] == "RESEARCH_ONLY_NO_EXECUTION"
+
+
+def test_ood_condition_report_excludes_unrecognized_input_tags(tmp_path) -> None:
+    row = example()
+    row["diagnostics_json"] = json.dumps(["extensionAtr:HARD_HIGH", "UNTRUSTED_RAW_TAG"])
+    source = tmp_path / "ood.csv"
+    pd.DataFrame([row]).to_csv(source, index=False)
+    report = study_from_csv(source)
+    audit = report["independent_ood_condition_outcomes"]
+    assert [c["dimension"] for c in audit["condition_outcomes"]] == [
+        "extensionAtr:HARD_HIGH"
+    ]
+    assert audit["independent_opportunities"] == 1
+    assert report["model_fitted"] is False
+    assert report["promotion_allowed"] is False
+    assert report["auto_promotion"] is False
