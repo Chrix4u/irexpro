@@ -67,6 +67,7 @@ import {
 import { evaluateM1TacticalExpectancy } from './m1-tactical-expectancy';
 import { attributeZaiDemoBlockers, diagnoseZaiDemoCostGeometry } from './zai-demo-diagnostics';
 import { evaluateM1CausalCommissionShadow } from './m1-causal-commission-shadow';
+import { evaluateDemoBrokerCommissionEntryGate } from './demo-broker-commission-entry-gate';
 import {
   M1_PORTFOLIO_NET_LOSS_BRAKE_ARTIFACT,
   M1_PORTFOLIO_NET_LOSS_BRAKE_COOLDOWN_MINUTES,
@@ -373,6 +374,8 @@ export interface M1TacticalRolloutPolicy {
   paperVolumeCap: number;
   /** DEMO-only narrowing of execution; never modifies LIVE or PAPER. */
   demoPrimaryOnlyProbation?: boolean;
+  /** Broker-native DEMO primary entry requires observed after-fee expectancy. */
+  demoBrokerCommissionFloor?: boolean;
   routeNetExpectedRFloors: Readonly<Record<Exclude<M1TacticalRoute, 'ABSTAIN'>, number>>;
 }
 
@@ -469,6 +472,14 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION: Readonly<M1Ta
     ...M1_TACTICAL_ROLLOUT_POLICY_V8,
     version: 'm1-tactical-v8-demo-primary-only-probation',
     demoPrimaryOnlyProbation: true,
+  });
+
+/** Reversible commission-aware DEMO policy; historical rollout policies remain immutable. */
+export const M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION: Readonly<M1TacticalRolloutPolicy> =
+  Object.freeze({
+    ...M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+    version: 'm1-tactical-v8-demo-primary-only-commission-v1',
+    demoBrokerCommissionFloor: true,
   });
 
 export function m1RiskMarketRegime(
@@ -1424,6 +1435,40 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             evaluatedAt: decisionTime,
           })
         : null;
+    const selectedPrimaryForCommission =
+      professionalDemoPhase &&
+      multimodelPrimaryExecutable &&
+      demoPrimaryOnlyProbation.chosenAuthorityPath === 'PRIMARY_PLAN_B' &&
+      !demoPrimaryOnlyProbation.blocked;
+    const commissionFloorEnabled =
+      professionalDemoPhase && this.rolloutPolicy.demoBrokerCommissionFloor === true;
+    let feeEvidenceForDecision: Awaited<
+      ReturnType<M1TacticalEvidenceService['loadPriorClosedCommissionRiskR']>
+    > | null = null;
+    let brokerFeeLookupFailed = false;
+    if (commissionFloorEnabled && preliminaryCanExecute && selectedPrimaryForCommission) {
+      try {
+        feeEvidenceForDecision = await this.evidence.loadPriorClosedCommissionRiskR({
+          userId,
+          brokerConnectionId,
+          instrument: candidate.instrument,
+          asOf: decisionTime,
+        });
+      } catch (error) {
+        brokerFeeLookupFailed = true;
+        this.logger.warn(
+          `M1 broker commission admission evidence unavailable instrument=${candidate.instrument}: ${(error as Error).message}`,
+        );
+      }
+    }
+    const demoBrokerCommissionGate = evaluateDemoBrokerCommissionEntryGate({
+      enabled: commissionFloorEnabled && preliminaryCanExecute,
+      selectedPrimary: selectedPrimaryForCommission,
+      preFeeNetExpectedR: multimodelDemo?.governance.netExpectedR ?? null,
+      strategyRoute: multimodelDemo?.ensemble.strategyRoute ?? null,
+      evidence: feeEvidenceForDecision,
+      lookupFailed: brokerFeeLookupFailed,
+    });
     const canExecute =
       preliminaryCanExecute &&
       !oppositePositionStateUnavailable &&
@@ -1433,7 +1478,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       fastStopRegimeBrake?.active !== true &&
       multimodelLossStreakBrake?.active !== true &&
       portfolioNetLossBrake?.active !== true &&
-      !demoPrimaryOnlyProbation.blocked;
+      !demoPrimaryOnlyProbation.blocked &&
+      !demoBrokerCommissionGate.blocked;
     const effectiveGovernanceBlockers =
       microDriftOnlyRescue || localImpulseDriftOnlyRescue ? [] : governance.blockers;
     const researchBlockers = unique([
@@ -1480,6 +1526,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             : []),
           ...(portfolioNetLossBrake?.active === true ? ['M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE'] : []),
           ...(demoPrimaryOnlyProbation.blocked ? ['M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION'] : []),
+          ...(demoBrokerCommissionGate.blocked
+            ? [`M1_DEMO_BROKER_COMMISSION_${demoBrokerCommissionGate.reason}`]
+            : []),
           ...(oppositePositionStateUnavailable ? ['M1_OPPOSITE_POSITION_STATE_UNAVAILABLE'] : []),
           ...(activeOppositePosition
             ? [
@@ -1502,22 +1551,22 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       planB: ReturnType<typeof evaluateM1CausalCommissionShadow> | null;
     } | null = null;
     if (professionalDemoPhase && !canExecute && routeDecision.route !== 'ABSTAIN') {
-      let feeEvidence: Awaited<
-        ReturnType<M1TacticalEvidenceService['loadPriorClosedCommissionRiskR']>
-      > | null = null;
-      let feeLookupFailed = false;
-      try {
-        feeEvidence = await this.evidence.loadPriorClosedCommissionRiskR({
-          userId,
-          brokerConnectionId,
-          instrument: candidate.instrument,
-          asOf: decisionTime,
-        });
-      } catch (error) {
-        feeLookupFailed = true;
-        this.logger.warn(
-          `M1 commission shadow unavailable instrument=${candidate.instrument}: ${(error as Error).message}`,
-        );
+      let feeEvidence = feeEvidenceForDecision;
+      let feeLookupFailed = brokerFeeLookupFailed;
+      if (!selectedPrimaryForCommission || !commissionFloorEnabled) {
+        try {
+          feeEvidence = await this.evidence.loadPriorClosedCommissionRiskR({
+            userId,
+            brokerConnectionId,
+            instrument: candidate.instrument,
+            asOf: decisionTime,
+          });
+        } catch (error) {
+          feeLookupFailed = true;
+          this.logger.warn(
+            `M1 commission shadow unavailable instrument=${candidate.instrument}: ${(error as Error).message}`,
+          );
+        }
       }
       const minimumNetR = Math.max(0.08, routeNetExpectedRFloor);
       historicalCommissionCostShadow = {
@@ -1602,6 +1651,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         fastStopRegimeBrake: fastStopRegimeBrake ? { ...fastStopRegimeBrake } : null,
         portfolioNetLossBrake: portfolioNetLossBrake ? { ...portfolioNetLossBrake } : null,
         demoPrimaryOnlyProbation: { ...demoPrimaryOnlyProbation },
+        demoBrokerCommissionGate: { ...demoBrokerCommissionGate },
         multimodelLossStreakBrake: multimodelLossStreakBrake
           ? { ...multimodelLossStreakBrake }
           : null,

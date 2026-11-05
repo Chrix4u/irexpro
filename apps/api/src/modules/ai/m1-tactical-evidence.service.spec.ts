@@ -1397,6 +1397,11 @@ describe('M1 causal cTrader commission evidence', () => {
     expect(sql).toContain('b.user_id = $1 AND b.id = $2');
     expect(sql).toContain("b.account_type = 'DEMO'");
     expect(sql).toContain('b.account_currency = t.account_currency');
+    expect(sql).toContain("s.execution_mode = 'FULL_AUTO'");
+    expect(sql).toContain('s.user_id = t.user_id');
+    expect(sql).toContain('s.broker_connection_id = t.broker_connection_id');
+    expect(sql).toContain('s.account_currency = t.account_currency');
+    expect(sql).toContain('t.swap IS NOT NULL');
     expect(sql).toContain("t.status = 'CLOSED'");
     expect(sql).toContain('t.closed_at < $4::timestamptz');
     expect(sql).toContain("t.closed_at >= $4::timestamptz - interval '21 days'");

@@ -31,6 +31,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V7,
   M1_TACTICAL_ROLLOUT_POLICY_V8,
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+  M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION,
   m1RiskMarketRegime,
   m1RouteExecutableInPhase,
   m1ShadowOutcomeEligible,
@@ -1999,8 +2000,17 @@ describe('M1 professional v8 DEMO promotion', () => {
       demoPrimaryOnlyProbation: true,
       paperVolumeCap: 4,
     });
+    expect(
+      M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION.demoBrokerCommissionFloor,
+    ).toBeUndefined();
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION).toMatchObject({
+      phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+      demoPrimaryOnlyProbation: true,
+      demoBrokerCommissionFloor: true,
+      paperVolumeCap: 4,
+    });
     expect(moduleSource).toMatch(
-      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION/,
+      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION/,
     );
   });
 
@@ -2845,6 +2855,98 @@ describe('M1 V8 multi-model DEMO authority', () => {
     });
     expect(recorded?.blockers ?? []).not.toContain('M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION');
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+  });
+
+  async function commissionGuardHarness(
+    fee: { sampleCount: number; p90FeeR: number | null } | Error,
+  ) {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+    });
+    if (fee instanceof Error) {
+      h.loadPriorClosedCommissionRiskR.mockRejectedValue(fee);
+    } else {
+      h.loadPriorClosedCommissionRiskR.mockResolvedValue(fee);
+    }
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: true,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
+        };
+      });
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    return { ...h, recorded };
+  }
+
+  it('keeps a primary Plan B DEMO order eligible when broker p90 commission is small enough', async () => {
+    const h = await commissionGuardHarness({ sampleCount: 9, p90FeeR: 0.001 });
+    expect(h.loadPriorClosedCommissionRiskR).toHaveBeenCalledWith({
+      userId: 'user-1',
+      brokerConnectionId: 'demo-conn-2',
+      instrument: 'EURUSD',
+      asOf: expect.any(Date),
+    });
+    expect(h.recorded?.governance.demoBrokerCommissionGate).toMatchObject({
+      enabled: true,
+      selectedPrimary: true,
+      blocked: false,
+      reason: 'AFTER_BROKER_FEES_ELIGIBLE',
+      brokerFeeP90R: 0.001,
+    });
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks a primary Plan B order when observed commission exceeds pre-fee expected R', async () => {
+    const h = await commissionGuardHarness({ sampleCount: 9, p90FeeR: 9 });
+    expect(h.recorded?.governance.demoBrokerCommissionGate).toMatchObject({
+      enabled: true,
+      selectedPrimary: true,
+      blocked: true,
+      reason: 'AFTER_BROKER_FEES_BELOW_FLOOR',
+      brokerFeeP90R: 9,
+    });
+    expect(h.recorded?.blockers).toContain(
+      'M1_DEMO_BROKER_COMMISSION_AFTER_BROKER_FEES_BELOW_FLOOR',
+    );
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
+
+  it('does not assume commission is free when the exact DEMO pair lacks enough closed trades', async () => {
+    const h = await commissionGuardHarness({ sampleCount: 3, p90FeeR: 0.01 });
+    expect(h.recorded?.governance.demoBrokerCommissionGate).toMatchObject({
+      blocked: true,
+      reason: 'INSUFFICIENT_SAME_ACCOUNT_PRIOR_FILLS',
+      afterFeeExpectedR: null,
+    });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when broker commission history cannot be retrieved', async () => {
+    const h = await commissionGuardHarness(new Error('broker fee evidence offline'));
+    expect(h.recorded?.governance.demoBrokerCommissionGate).toMatchObject({
+      blocked: true,
+      reason: 'FEE_LOOKUP_UNAVAILABLE',
+    });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
   });
 
   it('bootstraps a strong cold-start M1 continuation at the conservative cap without Plan-B admission', async () => {
