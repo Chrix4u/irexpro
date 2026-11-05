@@ -2564,6 +2564,29 @@
   color: var(--text-muted);
 }
 
+.ai-control-card__diagnosis {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.05);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.ai-control-card__diagnosis strong {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.ai-control-card__diagnosis small {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+.ai-control-card__diagnosis small:last-child {
+  color: var(--text-muted);
+}
+
 /* Live scan activity: the white readiness needle remains authoritative; this teal sweep is activity only. */
 .ai-readiness__scan-needle {
   position: absolute;

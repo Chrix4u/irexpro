@@ -117,6 +117,46 @@ export interface TradeReadinessUiState {
   direction: "BUY" | "SELL" | null;
 }
 
+export interface DemoFocusedEntryDiagnosticView {
+  scope: "ACTIVE_CTRADER_DEMO" | "NO_ACTIVE_CTRADER_DEMO_SESSION";
+  windowMinutes: 60;
+  evaluatedDecisions: number;
+  candidateDecisions: number;
+  brokerAuthorizedDecisions: number;
+  executionSucceeded: number;
+  sessionInactiveDecisions: number;
+  leadingBlockers: Array<{ code: string; label: string; count: number }>;
+  onlyCurrentSession: true;
+}
+
+/** Validate server evidence; a client cannot construct execution authority. */
+export function hasDemoFocusedEntryDiagnosticUiShape(
+  value: unknown,
+): value is DemoFocusedEntryDiagnosticView {
+  if (!isRecord(value) ||
+    !["ACTIVE_CTRADER_DEMO", "NO_ACTIVE_CTRADER_DEMO_SESSION"].includes(String(value.scope)) ||
+    value.windowMinutes !== 60 ||
+    value.onlyCurrentSession !== true ||
+    !Array.isArray(value.leadingBlockers) ||
+    value.leadingBlockers.length > 3) return false;
+  const numbers = [
+    value.evaluatedDecisions,
+    value.candidateDecisions,
+    value.brokerAuthorizedDecisions,
+    value.executionSucceeded,
+    value.sessionInactiveDecisions,
+  ];
+  if (!numbers.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0))
+    return false;
+  return value.leadingBlockers.every((reason) =>
+    isRecord(reason) &&
+    typeof reason.code === "string" && reason.code.length < 100 &&
+    typeof reason.label === "string" && reason.label.length < 120 &&
+    typeof reason.count === "number" &&
+    Number.isSafeInteger(reason.count) && reason.count > 0,
+  );
+}
+
 export interface M1TacticalStatusView {
   enabled: boolean;
   phase: string;

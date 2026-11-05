@@ -3,9 +3,40 @@ import {
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
   hasExternalProviderPerformanceUiShape,
+  hasDemoFocusedEntryDiagnosticUiShape,
   hasM1TacticalStatusUiShape,
   hasVpsScannerUiShape,
 } from "./vps-scanner-status";
+
+describe("user-scoped recent DEMO entry decision evidence", () => {
+  const evidence = {
+    scope: "ACTIVE_CTRADER_DEMO",
+    windowMinutes: 60,
+    evaluatedDecisions: 281,
+    candidateDecisions: 22,
+    brokerAuthorizedDecisions: 0,
+    executionSucceeded: 0,
+    sessionInactiveDecisions: 0,
+    leadingBlockers: [
+      { code: "ENSEMBLE_NOT_PROMOTABLE_ADMISSION", label: "Primary model admission not met", count: 211 },
+    ],
+    onlyCurrentSession: true,
+  };
+  it("accepts only complete bounded current-session diagnostic evidence", () => {
+    expect(hasDemoFocusedEntryDiagnosticUiShape(evidence)).toBe(true);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({
+      ...evidence, scope: "NO_ACTIVE_CTRADER_DEMO_SESSION",
+      evaluatedDecisions: 0, candidateDecisions: 0,
+      leadingBlockers: [],
+    })).toBe(true);
+  });
+  it("rejects malformed counts, unscoped evidence or unbounded reasons", () => {
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, evaluatedDecisions: -1 })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, onlyCurrentSession: false })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingBlockers: new Array(9).fill(evidence.leadingBlockers[0]) })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingBlockers: [{ code: 4, label: "bad", count: 1 }] })).toBe(false);
+  });
+});
 
 const VALID_STATUS = {
   enabled: true,

@@ -1,0 +1,75 @@
+/**
+ * Read-only DEMO entry-diagnostic presentation contract.
+ * Counts are persisted M1 decisions, not distinct trades or profitable setups.
+ * No function in this module can submit or approve an order.
+ */
+export const DEMO_ENTRY_BLOCKER_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  ENSEMBLE_NOT_PROMOTABLE_ADMISSION: 'Primary model admission not met',
+  MULTIMODEL_CONTINUATION_TIMING_NOT_READY: 'M1 continuation timing not ready',
+  DRIFT_OUT_OF_DISTRIBUTION: 'Market outside validated model conditions',
+  PAPER_NET_EXPECTED_R: 'Modeled expectancy below required floor',
+  MULTIMODEL_PLAN_B_NOT_ADMITTED: 'Primary Plan B not admitted',
+  M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION: 'Experimental routes remain observational',
+  M1_DEMO_INSTRUMENT_RESEARCH_ONLY: 'Pair is research-only',
+  M1_DEMO_BROKER_COMMISSION_NET_EDGE_BELOW_FLOOR: 'Broker costs exceed expected edge',
+});
+
+export interface DemoFocusedEntryDiagnostic {
+  scope: 'ACTIVE_CTRADER_DEMO' | 'NO_ACTIVE_CTRADER_DEMO_SESSION';
+  windowMinutes: 60;
+  evaluatedDecisions: number;
+  candidateDecisions: number;
+  brokerAuthorizedDecisions: number;
+  executionSucceeded: number;
+  sessionInactiveDecisions: number;
+  leadingBlockers: Array<{ code: string; label: string; count: number }>;
+  /** True if the count window is bounded by the current session start. */
+  onlyCurrentSession: true;
+}
+
+export interface DemoFocusedEntryDiagnosticRow {
+  active_session_count: number | string;
+  evaluated_decisions: number | string;
+  candidate_decisions: number | string;
+  broker_authorized_decisions: number | string;
+  execution_succeeded: number | string;
+  session_inactive_decisions: number | string;
+  leading_blockers: unknown;
+}
+
+function safeCount(raw: unknown): number {
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n >= 0 ? n : 0;
+}
+
+export function toDemoFocusedEntryDiagnostic(
+  row: DemoFocusedEntryDiagnosticRow | undefined,
+): DemoFocusedEntryDiagnostic {
+  const active = safeCount(row?.active_session_count) === 1;
+  const reasons = Array.isArray(row?.leading_blockers) ? row.leading_blockers : [];
+  return {
+    scope: active ? 'ACTIVE_CTRADER_DEMO' : 'NO_ACTIVE_CTRADER_DEMO_SESSION',
+    windowMinutes: 60,
+    evaluatedDecisions: active ? safeCount(row?.evaluated_decisions) : 0,
+    candidateDecisions: active ? safeCount(row?.candidate_decisions) : 0,
+    brokerAuthorizedDecisions: active ? safeCount(row?.broker_authorized_decisions) : 0,
+    executionSucceeded: active ? safeCount(row?.execution_succeeded) : 0,
+    sessionInactiveDecisions: active ? safeCount(row?.session_inactive_decisions) : 0,
+    leadingBlockers: active
+      ? reasons
+          .filter(
+            (item): item is Record<string, unknown> =>
+              item !== null && typeof item === 'object' && !Array.isArray(item),
+          )
+          .filter((item) => typeof item.code === 'string' && item.code in DEMO_ENTRY_BLOCKER_LABELS)
+          .map((item) => ({
+            code: String(item.code),
+            label: DEMO_ENTRY_BLOCKER_LABELS[String(item.code)],
+            count: safeCount(item.count),
+          }))
+          .filter((item) => item.count > 0)
+          .slice(0, 3)
+      : [],
+    onlyCurrentSession: true,
+  };
+}

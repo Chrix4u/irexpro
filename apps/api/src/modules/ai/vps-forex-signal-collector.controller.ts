@@ -43,6 +43,16 @@ export class VpsForexSignalCollectorController {
     };
   }
 
+  @Get('m1-tactical/entry-diagnostics')
+  @ApiOperation({
+    summary: 'Explain focused three-pair DEMO entry decisions over the recent hour',
+    description:
+      'Read-only authenticated user/active cTrader DEMO session diagnosis. Counts are model decisions, not orders. No broker identifiers or user identifiers are returned.',
+  })
+  async getM1EntryDiagnostics(@CurrentUserId() userId: string) {
+    return this.m1Evidence.loadFocusedDemoEntryDiagnostic(userId);
+  }
+
   @Get('broker-parity/status')
   @ApiOperation({
     summary: 'Read Broker-Parity v7 preparation/runtime status',

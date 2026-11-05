@@ -33,6 +33,20 @@ describe('AI Trader production UI regression contract', () => {
     expect(css).toContain('white-space: normal');
   });
 
+  it("explains no-trade conditions without touching Start/Stop or the 4s control feed", () => {
+    expect(pageSource).toContain('/ai/external/vps-forex/m1-tactical/entry-diagnostics');
+    expect(pageSource).toContain('hasDemoFocusedEntryDiagnosticUiShape(evidence)');
+    expect(pageSource).toContain('window.setInterval(() => void refresh(), 30_000)');
+    expect(pageSource).toContain('demoEntryDiagnostic?.scope === "ACTIVE_CTRADER_DEMO"');
+    expect(pageSource).toContain('Why no new trades? · Last 60 minutes');
+    expect(pageSource).toContain('Reasons may overlap. No risk or commission check is bypassed.');
+    expect(pageSource).toContain('setDemoEntryDiagnostic(null)');
+    expect(pageSource).toContain('riskProtectionResettable');
+    expect(
+      fs.readFileSync(path.join(tradeDir, "ai-trader.css"), "utf8"),
+    ).toContain(".ai-control-card__diagnosis");
+  });
+
   it('keeps the live scanning market cockpit visible in the trade surface', () => {
     expect(pageSource).toContain('SCANNING');
     expect(pageSource).toContain('Last move');
