@@ -199,6 +199,30 @@ describe('M1TacticalMarketDataService', () => {
     );
   });
 
+  it('exposes only the latest observed broker closed-bar time, lag and limit for M5/M15', async () => {
+    const staleM5 = fixture({ M5: rows(30, 5, new Date('2026-10-15T12:10:00.000Z')) });
+    await expect(staleM5.service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
+    expect(staleM5.service.getLastReadiness('conn-1', 'EURUSD')?.detail).toBe(
+      'lastClosedAt=2026-10-15T12:15:00.000Z ageMinutes=15 maxAgeMinutes=10',
+    );
+
+    const staleM15 = fixture({ M15: rows(30, 15, new Date('2026-10-15T11:45:00.000Z')) });
+    await expect(staleM15.service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
+    expect(staleM15.service.getLastReadiness('conn-1', 'EURUSD')?.detail).toBe(
+      'lastClosedAt=2026-10-15T12:00:00.000Z ageMinutes=30 maxAgeMinutes=20',
+    );
+  });
+
+  it('explains missing broker-native M5 history without inventing a timestamp', async () => {
+    const h = fixture({ M5: [] });
+    await expect(h.service.loadSnapshot('conn-1', 'EURUSD', DECISION)).resolves.toBeNull();
+    expect(h.service.getLastReadiness('conn-1', 'EURUSD')).toMatchObject({
+      reason: 'BROKER_M5_CONTEXT_STALE',
+      detail: 'lastClosedAt=UNAVAILABLE maxAgeMinutes=10',
+      ready: false,
+    });
+  });
+
   it('records why a stale M1 snapshot was unavailable', async () => {
     const { service } = fixture({ M1: rows(60, 1, new Date('2026-10-15T12:20:00.000Z')) });
 
@@ -209,6 +233,9 @@ describe('M1TacticalMarketDataService', () => {
         reason: 'BROKER_M1_STALE',
         authority: null,
       }),
+    );
+    expect(service.getLastReadiness('conn-1', 'EURUSD')?.detail).toContain(
+      'lastClosedAt=2026-10-15T12:21:00.000Z',
     );
   });
 

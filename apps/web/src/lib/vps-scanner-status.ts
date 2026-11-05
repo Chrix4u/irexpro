@@ -210,6 +210,8 @@ export interface M1TacticalStatusView {
       reason: string;
       authority: string | null;
       observedAt: string;
+      /** UTC broker candle age evidence, never an execution override. */
+      detail?: string;
     }
   >;
   latestDecision: {
@@ -538,11 +540,21 @@ export function deriveTradeReadinessUiState(
       selectedReadiness?.ready === false &&
       selectedReadiness.reason.startsWith("BROKER_")
     ) {
+      // Server-generated historical bar provenance, displayed as UTC only.
+      // Missing/malformed detail never changes readiness or execution status.
+      const lastClosedRaw =
+        typeof selectedReadiness.detail === "string"
+          ? selectedReadiness.detail.split("lastClosedAt=")[1]?.split(" ")[0]
+          : undefined;
+      const closedAtMs = lastClosedRaw ? Date.parse(lastClosedRaw) : NaN;
+      const lastClosedNote = Number.isFinite(closedAtMs)
+        ? ` Last verified broker candle closed at ${new Date(closedAtMs).toISOString().slice(0, 16).replace("T", " ")} UTC.`
+        : "";
       if (selectedReadiness.reason === "BROKER_M1_STALE") {
         return waiting(
           8,
           "Broker M1 feed stale — trading paused",
-          "The latest broker-native M1 candle is stale, so iRexPro has paused new entries rather than trade on old prices. Scanning and execution resume automatically when fresh broker candles return.",
+          `The latest broker-native M1 candle is stale, so iRexPro has paused new entries rather than trade on old prices. Scanning and execution resume automatically when fresh broker candles return.${lastClosedNote}`,
           m1Decision.instrument,
           m1Decision.direction,
         );
@@ -551,7 +563,7 @@ export function deriveTradeReadinessUiState(
         return waiting(
           12,
           "Broker M5 candles stale — trading paused",
-          "The latest completed broker-native M5 candle is missing or older than the required 10-minute freshness limit. iRexPro is refreshing M5 context and will reevaluate the setup automatically; other trade gates still apply.",
+          `The latest completed broker-native M5 candle is missing or older than the required 10-minute freshness limit. iRexPro is refreshing M5 context and will reevaluate the setup automatically; other trade gates still apply.${lastClosedNote}`,
           m1Decision.instrument,
           m1Decision.direction,
         );
@@ -560,7 +572,7 @@ export function deriveTradeReadinessUiState(
         return waiting(
           12,
           "Broker M15 candles stale — trading paused",
-          "The latest completed broker-native M15 candle is missing or older than the required 20-minute freshness limit. New entries remain paused until context is valid, after which all model and risk gates are evaluated again.",
+          `The latest completed broker-native M15 candle is missing or older than the required 20-minute freshness limit. New entries remain paused until context is valid, after which all model and risk gates are evaluated again.${lastClosedNote}`,
           m1Decision.instrument,
           m1Decision.direction,
         );

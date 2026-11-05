@@ -75,6 +75,25 @@ function latestCloseAgeMs(rows: OHLCV[], minutes: number, decisionTime: Date): n
   return decisionMs - (openedAt + minutes * 60_000);
 }
 
+/** Read-only UTC provenance; stale broker bars never become eligible by reporting them. */
+function staleClosedCandleDetail(
+  rows: OHLCV[],
+  timeframeMinutes: number,
+  decisionTime: Date,
+  maxAgeMs: number,
+): string {
+  const latest = rows.at(-1);
+  const openedMs = latest ? new Date(latest.timestamp).getTime() : NaN;
+  const closedMs = openedMs + timeframeMinutes * 60_000;
+  const closedAt = new Date(closedMs);
+  const maxAgeMinutes = Math.floor(maxAgeMs / 60_000);
+  if (!Number.isFinite(closedMs) || !Number.isFinite(closedAt.getTime())) {
+    return `lastClosedAt=UNAVAILABLE maxAgeMinutes=${maxAgeMinutes}`;
+  }
+  const ageMinutes = Math.floor((decisionTime.getTime() - closedMs) / 60_000);
+  return `lastClosedAt=${closedAt.toISOString()} ageMinutes=${ageMinutes} maxAgeMinutes=${maxAgeMinutes}`;
+}
+
 function singleM1Source(rows: OHLCV[]): string | null {
   if (rows.length === 0) return null;
   const sources = new Set(
@@ -185,17 +204,38 @@ export class M1TacticalMarketDataService {
     }
     const m1CloseAgeMs = latestCloseAgeMs(m1, 1, decisionTime);
     if (m1CloseAgeMs === null || m1CloseAgeMs < 0 || m1CloseAgeMs > M1_CLOSE_MAX_AGE_MS) {
-      this.setReadiness(connectionId, instrument, 'BROKER_M1_STALE', null, decisionTime);
+      this.setReadiness(
+        connectionId,
+        instrument,
+        'BROKER_M1_STALE',
+        null,
+        decisionTime,
+        staleClosedCandleDetail(m1, 1, decisionTime, M1_CLOSE_MAX_AGE_MS),
+      );
       return null;
     }
     const m5CloseAgeMs = latestCloseAgeMs(m5, 5, decisionTime);
     const m15CloseAgeMs = latestCloseAgeMs(m15, 15, decisionTime);
     if (m5CloseAgeMs === null || m5CloseAgeMs < 0 || m5CloseAgeMs > M5_CONTEXT_MAX_AGE_MS) {
-      this.setReadiness(connectionId, instrument, 'BROKER_M5_CONTEXT_STALE', null, decisionTime);
+      this.setReadiness(
+        connectionId,
+        instrument,
+        'BROKER_M5_CONTEXT_STALE',
+        null,
+        decisionTime,
+        staleClosedCandleDetail(m5, 5, decisionTime, M5_CONTEXT_MAX_AGE_MS),
+      );
       return null;
     }
     if (m15CloseAgeMs === null || m15CloseAgeMs < 0 || m15CloseAgeMs > M15_CONTEXT_MAX_AGE_MS) {
-      this.setReadiness(connectionId, instrument, 'BROKER_M15_CONTEXT_STALE', null, decisionTime);
+      this.setReadiness(
+        connectionId,
+        instrument,
+        'BROKER_M15_CONTEXT_STALE',
+        null,
+        decisionTime,
+        staleClosedCandleDetail(m15, 15, decisionTime, M15_CONTEXT_MAX_AGE_MS),
+      );
       return null;
     }
     if (!spreadQuote) {

@@ -782,6 +782,44 @@ describe("production trade-readiness presentation", () => {
     },
   );
 
+  it("shows the broker's verified M15 close time without treating stale data as ready", () => {
+    const result = derive({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      fastMarkState: "LIVE",
+      m1TacticalStatus: {
+        enabled: true,
+        phase: "DEMO_EARLY_TRANSITION_PROFESSIONAL",
+        lastRunAt: "2026-11-05T22:04:00.000Z",
+        lastError: null,
+        marketReadiness: {
+          EURUSD: {
+            ready: false,
+            reason: "BROKER_M15_CONTEXT_STALE",
+            authority: null,
+            observedAt: "2026-11-05T22:04:00.000Z",
+            detail: "lastClosedAt=2026-11-05T21:30:00.000Z ageMinutes=34 maxAgeMinutes=20",
+          },
+        },
+        latestDecision: {
+          instrument: "EURUSD",
+          direction: "BUY" as const,
+          route: "ABSTAIN",
+          barTime: "2026-11-05T22:03:00.000Z",
+          confidence: 0.8,
+          netExpectedR: 0.0,
+          executionAuthority: "NONE" as const,
+          blockers: ["MULTIMODEL_GOVERNANCE_BLOCKED"],
+          outcomeState: null,
+        },
+      },
+    });
+    expect(result.tradeExpected).toBe(false);
+    expect(result.headline).toBe("Broker M15 candles stale — trading paused");
+    expect(result.detail).toContain("21:30 UTC");
+    expect(result.detail).toContain("20-minute freshness limit");
+  });
+
   it("shows M1 broker-native execution eligibility as ready without legacy fast-mark capping", () => {
     const m1Status = {
       enabled: true,
