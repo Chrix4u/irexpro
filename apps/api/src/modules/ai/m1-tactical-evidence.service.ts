@@ -465,6 +465,12 @@ export class M1TacticalEvidenceService {
                 THEN (a.sizing_inputs->>'riskAmount')::numeric END
             ), 0) AS fee_r
           FROM trading.trades t
+          JOIN trading.trading_sessions s
+            ON s.id = t.trading_session_id
+            AND s.user_id = t.user_id
+            AND s.broker_connection_id = t.broker_connection_id
+            AND s.execution_mode = 'FULL_AUTO'
+            AND s.account_currency = t.account_currency
           JOIN broker.broker_connections b ON b.id = t.broker_connection_id
             AND b.user_id = $1 AND b.id = $2
             AND b.broker_id = 'ctrader' AND b.account_type = 'DEMO'
@@ -477,6 +483,7 @@ export class M1TacticalEvidenceService {
           WHERE t.user_id = $1 AND t.broker_connection_id = $2
             AND t.instrument = $3 AND t.status = 'CLOSED'
             AND t.commission IS NOT NULL
+            AND t.swap IS NOT NULL
             AND t.closed_at < $4::timestamptz
             AND t.closed_at >= $4::timestamptz - interval '21 days'
           ORDER BY t.closed_at DESC, t.id DESC LIMIT 40

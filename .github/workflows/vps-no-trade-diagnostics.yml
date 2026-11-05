@@ -456,6 +456,71 @@ jobs:
           GROUP BY currency, instrument, direction, authority_path
           ORDER BY currency, instrument, direction, authority_path;
 
+          -- Observability for the new DEMO primary-only commission floor.
+          -- Group by account/connection internally but expose only anonymous
+          -- per-currency, per-pair readiness counts; never print identifiers.
+          -- This exactly mirrors the broker-native as-of 21-day p90 fee-R
+          -- provenance used by loadPriorClosedCommissionRiskR. No fee imputation.
+          WITH fees AS (
+            SELECT
+              b.id AS connection_id,
+              t.account_currency AS currency,
+              t.instrument,
+              ROW_NUMBER() OVER (
+                PARTITION BY b.id, t.instrument
+                ORDER BY t.closed_at DESC, t.id DESC
+              ) AS newest_rank,
+              (abs(t.commission) + greatest(0, -t.swap)) /
+                nullif(coalesce(
+                  CASE WHEN a.sizing_inputs->>'finalRiskAtStop' ~ '^[0-9]+([.][0-9]+)?$'
+                    THEN (a.sizing_inputs->>'finalRiskAtStop')::numeric END,
+                  CASE WHEN a.sizing_inputs->>'riskAmount' ~ '^[0-9]+([.][0-9]+)?$'
+                    THEN (a.sizing_inputs->>'riskAmount')::numeric END
+                ), 0) AS fee_r
+            FROM trading.trades t
+            JOIN trading.trading_sessions s
+              ON s.id = t.trading_session_id
+             AND s.user_id = t.user_id
+             AND s.broker_connection_id = t.broker_connection_id
+             AND s.execution_mode = 'FULL_AUTO'
+             AND s.account_currency = t.account_currency
+            JOIN broker.broker_connections b
+              ON b.id = t.broker_connection_id
+             AND b.user_id = t.user_id
+             AND b.broker_id = 'ctrader'
+             AND b.account_type = 'DEMO'
+             AND b.account_currency = t.account_currency
+            LEFT JOIN LATERAL (
+              SELECT ca.sizing_inputs
+              FROM trading.capital_allocations ca
+              WHERE ca.trade_intent_id = t.trade_intent_id
+              ORDER BY ca.created_at DESC LIMIT 1
+            ) a ON true
+            WHERE t.status = 'CLOSED'
+              AND t.commission IS NOT NULL
+              AND t.swap IS NOT NULL
+              AND t.closed_at < NOW()
+              AND t.closed_at >= NOW() - interval '21 days'
+          ), per_connection AS (
+            SELECT connection_id, currency, instrument,
+              COUNT(*) FILTER (WHERE fee_r IS NOT NULL AND fee_r >= 0) AS valid_samples,
+              percentile_cont(0.9) WITHIN GROUP (ORDER BY fee_r)
+                FILTER (WHERE fee_r IS NOT NULL AND fee_r >= 0) AS p90_fee_r
+            FROM fees WHERE newest_rank <= 40
+            GROUP BY connection_id, currency, instrument
+          )
+          SELECT
+            'demo_broker_commission_evidence_21d',
+            currency, instrument,
+            COUNT(*) AS anonymous_connection_cohorts,
+            COUNT(*) FILTER (WHERE valid_samples >= 5) AS qualifying_cohorts,
+            MIN(valid_samples), MAX(valid_samples),
+            ROUND(MIN(p90_fee_r)::numeric, 4),
+            ROUND(MAX(p90_fee_r)::numeric, 4)
+          FROM per_connection
+          GROUP BY currency, instrument
+          ORDER BY currency, instrument;
+
           -- Recent order lifecycle audit, all currencies kept separate.
           -- Broker close_reason and recorded commission, MFE/giveback are
           -- needed to tell stop-outs from premature profit-protection exits.
