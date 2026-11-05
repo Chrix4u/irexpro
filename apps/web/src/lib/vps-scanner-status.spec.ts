@@ -17,6 +17,12 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
     brokerAuthorizedDecisions: 0,
     executionSucceeded: 0,
     sessionInactiveDecisions: 0,
+    sessionAgeMinutes: 396,
+    planBAdmittedDecisions: 2,
+    primaryPathDecisions: 1,
+    primaryReliabilityVetoDecisions: 1,
+    eligibleFallbackProbationVetoDecisions: 0,
+    operatingState: "SCANNING_NO_APPROVED_ENTRY",
     leadingBlockers: [
       { code: "ENSEMBLE_NOT_PROMOTABLE_ADMISSION", label: "Primary model admission not met", count: 211 },
     ],
@@ -27,11 +33,21 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
     expect(hasDemoFocusedEntryDiagnosticUiShape({
       ...evidence, scope: "NO_ACTIVE_CTRADER_DEMO_SESSION",
       evaluatedDecisions: 0, candidateDecisions: 0,
+      sessionAgeMinutes: 0,
+      planBAdmittedDecisions: 0,
+      primaryPathDecisions: 0,
+      primaryReliabilityVetoDecisions: 0,
+      eligibleFallbackProbationVetoDecisions: 0,
+      operatingState: "NO_ACTIVE_SESSION",
       leadingBlockers: [],
     })).toBe(true);
   });
   it("rejects malformed counts, unscoped evidence or unbounded reasons", () => {
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, evaluatedDecisions: -1 })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, sessionAgeMinutes: -5 })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, operatingState: "BROKER_READY" })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, primaryPathDecisions: 23 })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, primaryReliabilityVetoDecisions: 7 })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, onlyCurrentSession: false })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingBlockers: new Array(9).fill(evidence.leadingBlockers[0]) })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingBlockers: [{ code: 4, label: "bad", count: 1 }] })).toBe(false);

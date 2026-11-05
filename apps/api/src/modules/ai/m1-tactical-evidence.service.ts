@@ -459,7 +459,7 @@ export class M1TacticalEvidenceService {
     const rows = (await this.dataSource.query(
       `
       WITH active_scope AS (
-        SELECT s.broker_connection_id,
+        SELECT s.broker_connection_id, s.started_at,
           GREATEST(s.started_at, NOW() - interval '60 minutes') AS from_time
         FROM trading.trading_sessions s
         JOIN broker.broker_connections b
@@ -516,6 +516,10 @@ export class M1TacticalEvidenceService {
       )
       SELECT
         (SELECT COUNT(*) FROM active_scope) AS active_session_count,
+        COALESCE((
+          SELECT GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - started_at)) / 60))
+          FROM active_scope
+        ), 0) AS session_age_minutes,
         (SELECT COUNT(*) FROM cohort) AS evaluated_decisions,
         (SELECT COUNT(*) FROM cohort WHERE route <> 'ABSTAIN') AS candidate_decisions,
         (SELECT COUNT(*) FROM cohort WHERE execution_authority = 'BROKER_NATIVE')
@@ -524,6 +528,26 @@ export class M1TacticalEvidenceService {
           AS execution_succeeded,
         (SELECT COUNT(*) FROM cohort WHERE outcome_state = 'SESSION_INACTIVE')
           AS session_inactive_decisions,
+        (SELECT COUNT(*) FROM cohort
+          WHERE route <> 'ABSTAIN'
+            AND governance->'multimodelEnsemble'->>'paperAdmitted' = 'true'
+        ) AS planb_admitted_decisions,
+        (SELECT COUNT(*) FROM cohort
+          WHERE route <> 'ABSTAIN'
+            AND governance->'multimodelAuthority'->>'authorityPath' = 'PRIMARY_PLAN_B'
+        ) AS primary_path_decisions,
+        (SELECT COUNT(*) FROM cohort
+          WHERE route <> 'ABSTAIN'
+            AND governance->'multimodelAuthority'->>'authorityPath' = 'PRIMARY_PLAN_B'
+            AND blockers ? 'M1_DEMO_EARLY_TRANSITION_PAIR_SIDE_DEGRADED'
+        ) AS primary_reliability_veto_decisions,
+        (SELECT COUNT(*) FROM cohort
+          WHERE route <> 'ABSTAIN'
+            AND blockers ? 'M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION'
+            AND COALESCE(
+              governance->'demoPrimaryOnlyProbation'->>'chosenAuthorityPath', 'UNKNOWN'
+            ) NOT IN ('BLOCKED', 'UNKNOWN')
+        ) AS eligible_fallback_probation_veto_decisions,
         COALESCE((
           SELECT jsonb_agg(jsonb_build_object('code', code, 'count', frequency))
           FROM top_reasons

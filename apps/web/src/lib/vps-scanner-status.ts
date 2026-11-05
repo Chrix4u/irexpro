@@ -125,6 +125,17 @@ export interface DemoFocusedEntryDiagnosticView {
   brokerAuthorizedDecisions: number;
   executionSucceeded: number;
   sessionInactiveDecisions: number;
+  sessionAgeMinutes: number;
+  planBAdmittedDecisions: number;
+  primaryPathDecisions: number;
+  primaryReliabilityVetoDecisions: number;
+  eligibleFallbackProbationVetoDecisions: number;
+  operatingState:
+    | "NO_ACTIVE_SESSION"
+    | "NO_RECENT_SCANS"
+    | "NO_RECENT_CANDIDATES"
+    | "SCANNING_NO_APPROVED_ENTRY"
+    | "RECENT_ENTRY_AUTHORIZATION";
   leadingBlockers: Array<{ code: string; label: string; count: number }>;
   onlyCurrentSession: true;
 }
@@ -145,9 +156,31 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
     value.brokerAuthorizedDecisions,
     value.executionSucceeded,
     value.sessionInactiveDecisions,
+    value.sessionAgeMinutes,
+    value.planBAdmittedDecisions,
+    value.primaryPathDecisions,
+    value.primaryReliabilityVetoDecisions,
+    value.eligibleFallbackProbationVetoDecisions,
   ];
   if (!numbers.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0))
     return false;
+  if (![
+    "NO_ACTIVE_SESSION",
+    "NO_RECENT_SCANS",
+    "NO_RECENT_CANDIDATES",
+    "SCANNING_NO_APPROVED_ENTRY",
+    "RECENT_ENTRY_AUTHORIZATION",
+  ].includes(String(value.operatingState))) return false;
+  const candidateCount = value.candidateDecisions as number;
+  const primaryCount = value.primaryPathDecisions as number;
+  if (primaryCount > candidateCount ||
+    (value.planBAdmittedDecisions as number) > candidateCount ||
+    (value.primaryReliabilityVetoDecisions as number) > primaryCount ||
+    (value.eligibleFallbackProbationVetoDecisions as number) > candidateCount)
+    return false;
+  if (value.scope === "NO_ACTIVE_CTRADER_DEMO_SESSION" && (
+      value.operatingState !== "NO_ACTIVE_SESSION" || value.sessionAgeMinutes !== 0
+    )) return false;
   return value.leadingBlockers.every((reason) =>
     isRecord(reason) &&
     typeof reason.code === "string" && reason.code.length < 100 &&

@@ -2882,3 +2882,12 @@
 @media (max-width: 760px) {
   .ai-active-model-strip { grid-template-columns: 1fr; align-items: start; }
 }
+
+
+/* Read-only entry liveness: clear inactivity without implying broker failure. */
+.ai-control-card__diagnosis .ai-control-card__diagnosis-alert {
+  font-size: 0.82rem;
+  font-weight: 650;
+  line-height: 1.5;
+  color: var(--color-warning, #a65a08);
+}
