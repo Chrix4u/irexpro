@@ -359,6 +359,39 @@ jobs:
           GROUP BY account_currency, primary_engine, m1_role, authority_path, fallback_tier, m5_handoff, status
           ORDER BY account_currency, primary_engine, m1_role, authority_path, fallback_tier, m5_handoff, status;
 
+          -- Recent order lifecycle audit, all currencies kept separate.
+          -- Broker close_reason and recorded commission, MFE/giveback are
+          -- needed to tell stop-outs from premature profit-protection exits.
+          -- No customer, account, order, position or session IDs are output.
+          SELECT
+            'recent_closed_trade_forensics',
+            COALESCE(t.account_currency, 'UNKNOWN_CURRENCY'),
+            t.instrument,
+            t.direction,
+            COALESCE(t.close_reason::text, 'UNKNOWN_CLOSE_REASON'),
+            to_char(t.opened_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+            to_char(t.closed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+            ROUND(t.realised_pnl::numeric, 2),
+            ROUND(ABS(t.commission)::numeric, 2),
+            ROUND(t.swap::numeric, 2),
+            CASE WHEN t.realised_pnl IS NOT NULL AND t.commission IS NOT NULL AND t.swap IS NOT NULL
+              THEN ROUND((t.realised_pnl - ABS(t.commission) + t.swap)::numeric, 2)
+              ELSE NULL END,
+            ROUND(t.max_favorable_pnl::numeric, 2),
+            ROUND(t.max_adverse_pnl::numeric, 2),
+            ROUND(t.profit_giveback::numeric, 2),
+            t.path_observation_count
+          FROM trading.trades t
+          JOIN trading.trading_sessions s
+            ON s.id = t.trading_session_id
+           AND s.user_id = t.user_id
+           AND s.broker_connection_id = t.broker_connection_id
+          WHERE t.status::text = 'CLOSED'
+            AND s.execution_mode = 'FULL_AUTO'
+            AND t.closed_at >= NOW() - interval '24 hours'
+          ORDER BY t.closed_at DESC, t.id DESC
+          LIMIT 16;
+
           -- Keep model calibration research separate from real broker trades.
           -- These prospective SHADOW outcomes are synthetic, cost-adjusted R;
           -- they are NOT account P&L or permission to admit a trade. Group by

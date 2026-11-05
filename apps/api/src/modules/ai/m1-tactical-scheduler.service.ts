@@ -67,6 +67,11 @@ import {
 import { evaluateM1TacticalExpectancy } from './m1-tactical-expectancy';
 import { attributeZaiDemoBlockers, diagnoseZaiDemoCostGeometry } from './zai-demo-diagnostics';
 import { evaluateM1CausalCommissionShadow } from './m1-causal-commission-shadow';
+import {
+  M1_PORTFOLIO_NET_LOSS_BRAKE_ARTIFACT,
+  M1_PORTFOLIO_NET_LOSS_BRAKE_COOLDOWN_MINUTES,
+  type M1PortfolioNetLossBrakeDecision,
+} from './m1-portfolio-net-loss-brake';
 import { evaluateDemoProfitabilityReliabilityGate } from './demo-profitability-reliability-gate';
 import {
   evaluateM1RoutePairSideReliability,
@@ -1260,6 +1265,43 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           professionalM1FallbackExecutable ||
           extensionExhaustionDemoScoutExecutable)
       : routeExecutable && routePayoffEligible && governanceExecutable;
+    // An isolated pair/side/route can have a clean local streak while the
+    // DEMO portfolio loses repeatedly across several instruments. Require
+    // same-session broker-account net economics before ANY new primary-engine
+    // DEMO entry; never alter existing positions or weaken session authority.
+    let portfolioNetLossBrake: M1PortfolioNetLossBrakeDecision | null = null;
+    if (professionalDemoPhase && preliminaryCanExecute && this.executionService) {
+      try {
+        const active = await this.executionService.getActiveSession(userId);
+        if (
+          active?.executionMode === ExecutionMode.FULL_AUTO &&
+          active.brokerConnectionId === brokerConnectionId
+        ) {
+          portfolioNetLossBrake = await this.evidence.loadPortfolioNetLossStreakBrake({
+            userId,
+            brokerConnectionId,
+            tradingSessionId: active.id,
+            evaluatedAt: decisionTime,
+          });
+        }
+      } catch (error) {
+        // A failed read cannot justify NEW exposure. Do not close or change
+        // any already-open broker position, and retain explicit diagnostics.
+        this.logger.warn(
+          `M1 portfolio net-loss brake evidence unavailable: ${(error as Error).message}`,
+        );
+        portfolioNetLossBrake = {
+          artifact: M1_PORTFOLIO_NET_LOSS_BRAKE_ARTIFACT,
+          active: true,
+          reason: 'EVIDENCE_UNAVAILABLE',
+          recentClosedTrades: 0,
+          consecutiveNetLosses: 0,
+          latestClosedAt: null,
+          cooldownMinutes: M1_PORTFOLIO_NET_LOSS_BRAKE_COOLDOWN_MINUTES,
+          cooldownRemainingSeconds: 0,
+        };
+      }
+    }
     let activeOppositePositions: Awaited<
       ReturnType<M1TacticalEvidenceService['loadOpenPaperPositions']>
     > = [];
@@ -1365,7 +1407,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       !professionalM1ActiveSameSideIntent &&
       !extensionExhaustionActiveSameSideIntent &&
       fastStopRegimeBrake?.active !== true &&
-      multimodelLossStreakBrake?.active !== true;
+      multimodelLossStreakBrake?.active !== true &&
+      portfolioNetLossBrake?.active !== true;
     const effectiveGovernanceBlockers =
       microDriftOnlyRescue || localImpulseDriftOnlyRescue ? [] : governance.blockers;
     const researchBlockers = unique([
@@ -1410,6 +1453,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(multimodelLossStreakBrake?.active === true
             ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
             : []),
+          ...(portfolioNetLossBrake?.active === true ? ['M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE'] : []),
           ...(oppositePositionStateUnavailable ? ['M1_OPPOSITE_POSITION_STATE_UNAVAILABLE'] : []),
           ...(activeOppositePosition
             ? [
@@ -1530,6 +1574,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         rolloutPhase: this.rolloutPolicy.phase,
         routeNetExpectedRFloor,
         fastStopRegimeBrake: fastStopRegimeBrake ? { ...fastStopRegimeBrake } : null,
+        portfolioNetLossBrake: portfolioNetLossBrake ? { ...portfolioNetLossBrake } : null,
         multimodelLossStreakBrake: multimodelLossStreakBrake
           ? { ...multimodelLossStreakBrake }
           : null,
