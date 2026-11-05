@@ -359,6 +359,103 @@ jobs:
           GROUP BY account_currency, primary_engine, m1_role, authority_path, fallback_tier, m5_handoff, status
           ORDER BY account_currency, primary_engine, m1_role, authority_path, fallback_tier, m5_handoff, status;
 
+          -- Actual entry-authority attribution for closed DEMO positions.
+          -- This is real broker P&L, NOT M1 classifier labels, paper R,
+          -- or a causal attribution to the authority path. Prioritize rows
+          -- with fully recorded broker costs; never impute missing fees.
+          -- Aggregate across accounts only within same immutable currency,
+          -- never print user, broker connection, session, position or order IDs.
+          WITH windows AS (
+            SELECT '6h'::text AS window_label, interval '6 hours' AS lookback
+            UNION ALL
+            SELECT '24h'::text AS window_label, interval '24 hours' AS lookback
+          ), closed AS (
+            SELECT
+              w.window_label,
+              COALESCE(t.account_currency, 'UNKNOWN_CURRENCY') AS currency,
+              COALESCE(ti.metadata->>'primary_engine_code', 'UNKNOWN_ENGINE') AS engine,
+              COALESCE(ti.metadata->>'multimodel_execution_authority_path', 'UNKNOWN_AUTHORITY') AS authority_path,
+              COALESCE(ti.metadata->>'m5_early_transition_handoff', 'UNKNOWN') AS m5_handoff,
+              t.instrument, t.direction,
+              t.opened_at, t.closed_at,
+              t.realised_pnl, t.commission, t.swap,
+              CASE WHEN t.realised_pnl IS NOT NULL AND t.commission IS NOT NULL AND t.swap IS NOT NULL
+                THEN t.realised_pnl - ABS(t.commission) + t.swap ELSE NULL END AS net_pnl
+            FROM windows w
+            JOIN trading.trades t
+              ON t.status::text = 'CLOSED'
+             AND t.closed_at >= NOW() - w.lookback
+            JOIN trading.trade_intents ti
+              ON ti.id = t.trade_intent_id
+             AND ti.user_id = t.user_id
+             AND ti.broker_connection_id = t.broker_connection_id
+            JOIN trading.trading_sessions s
+              ON s.id = t.trading_session_id
+             AND s.user_id = t.user_id
+             AND s.broker_connection_id = t.broker_connection_id
+             AND s.execution_mode = 'FULL_AUTO'
+            JOIN broker.broker_connections bc
+              ON bc.id = t.broker_connection_id
+             AND bc.user_id = t.user_id
+             AND bc.account_type = 'DEMO'
+          )
+          SELECT
+            'demo_entry_authority_net_economics',
+            window_label,
+            currency, engine, authority_path, m5_handoff,
+            COUNT(*),
+            COUNT(*) FILTER (WHERE net_pnl > 0),
+            COUNT(*) FILTER (WHERE net_pnl < 0),
+            COUNT(*) FILTER (WHERE net_pnl IS NULL),
+            ROUND(SUM(GREATEST(realised_pnl, 0))::numeric, 2),
+            ROUND(SUM(LEAST(realised_pnl, 0))::numeric, 2),
+            ROUND(SUM(ABS(commission))::numeric, 2),
+            ROUND(SUM(swap)::numeric, 2),
+            ROUND(SUM(net_pnl)::numeric, 2),
+            ROUND(AVG(EXTRACT(EPOCH FROM (closed_at - opened_at)) / 60)::numeric, 2)
+          FROM closed
+          GROUP BY window_label, currency, engine, authority_path, m5_handoff
+          ORDER BY window_label, currency, engine, authority_path, m5_handoff;
+
+          WITH closed AS (
+            SELECT
+              COALESCE(t.account_currency, 'UNKNOWN_CURRENCY') AS currency,
+              t.instrument, t.direction,
+              COALESCE(ti.metadata->>'multimodel_execution_authority_path', 'UNKNOWN_AUTHORITY') AS authority_path,
+              t.realised_pnl, t.commission, t.swap,
+              CASE WHEN t.realised_pnl IS NOT NULL AND t.commission IS NOT NULL AND t.swap IS NOT NULL
+                THEN t.realised_pnl - ABS(t.commission) + t.swap ELSE NULL END AS net_pnl
+            FROM trading.trades t
+            JOIN trading.trade_intents ti
+              ON ti.id = t.trade_intent_id
+             AND ti.user_id = t.user_id
+             AND ti.broker_connection_id = t.broker_connection_id
+            JOIN trading.trading_sessions s
+              ON s.id = t.trading_session_id
+             AND s.user_id = t.user_id
+             AND s.broker_connection_id = t.broker_connection_id
+             AND s.execution_mode = 'FULL_AUTO'
+            JOIN broker.broker_connections bc
+              ON bc.id = t.broker_connection_id
+             AND bc.user_id = t.user_id
+             AND bc.account_type = 'DEMO'
+            WHERE t.status::text = 'CLOSED'
+              AND t.closed_at >= NOW() - interval '24 hours'
+          )
+          SELECT
+            'demo_pair_side_authority_net_24h',
+            currency, instrument, direction, authority_path,
+            COUNT(*),
+            COUNT(*) FILTER (WHERE net_pnl > 0),
+            COUNT(*) FILTER (WHERE net_pnl < 0),
+            COUNT(*) FILTER (WHERE net_pnl IS NULL),
+            ROUND(SUM(realised_pnl)::numeric, 2),
+            ROUND(SUM(ABS(commission))::numeric, 2),
+            ROUND(SUM(net_pnl)::numeric, 2)
+          FROM closed
+          GROUP BY currency, instrument, direction, authority_path
+          ORDER BY currency, instrument, direction, authority_path;
+
           -- Recent order lifecycle audit, all currencies kept separate.
           -- Broker close_reason and recorded commission, MFE/giveback are
           -- needed to tell stop-outs from premature profit-protection exits.
