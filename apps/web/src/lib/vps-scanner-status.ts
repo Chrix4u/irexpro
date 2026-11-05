@@ -137,6 +137,8 @@ export interface DemoFocusedEntryDiagnosticView {
     | "SCANNING_NO_APPROVED_ENTRY"
     | "RECENT_ENTRY_AUTHORIZATION";
   leadingBlockers: Array<{ code: string; label: string; count: number }>;
+  leadingModelReasons: Array<{ code: string; label: string; count: number }>;
+  rolloverRiskDecisions: number;
   onlyCurrentSession: true;
 }
 
@@ -149,7 +151,9 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
     value.windowMinutes !== 60 ||
     value.onlyCurrentSession !== true ||
     !Array.isArray(value.leadingBlockers) ||
-    value.leadingBlockers.length > 3) return false;
+    value.leadingBlockers.length > 3 ||
+    !Array.isArray(value.leadingModelReasons) ||
+    value.leadingModelReasons.length > 3) return false;
   const numbers = [
     value.evaluatedDecisions,
     value.candidateDecisions,
@@ -161,6 +165,7 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
     value.primaryPathDecisions,
     value.primaryReliabilityVetoDecisions,
     value.eligibleFallbackProbationVetoDecisions,
+    value.rolloverRiskDecisions,
   ];
   if (!numbers.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0))
     return false;
@@ -176,18 +181,24 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
   if (primaryCount > candidateCount ||
     (value.planBAdmittedDecisions as number) > candidateCount ||
     (value.primaryReliabilityVetoDecisions as number) > primaryCount ||
-    (value.eligibleFallbackProbationVetoDecisions as number) > candidateCount)
+    (value.eligibleFallbackProbationVetoDecisions as number) > candidateCount ||
+    (value.rolloverRiskDecisions as number) > candidateCount)
     return false;
   if (value.scope === "NO_ACTIVE_CTRADER_DEMO_SESSION" && (
       value.operatingState !== "NO_ACTIVE_SESSION" || value.sessionAgeMinutes !== 0
     )) return false;
-  return value.leadingBlockers.every((reason) =>
+  const validReason = (reason: unknown): boolean =>
     isRecord(reason) &&
     typeof reason.code === "string" && reason.code.length < 100 &&
     typeof reason.label === "string" && reason.label.length < 120 &&
     typeof reason.count === "number" &&
-    Number.isSafeInteger(reason.count) && reason.count > 0,
-  );
+    Number.isSafeInteger(reason.count) && reason.count > 0;
+  // Legacy raw blocker arrays may contain the same code more than once per
+  // proposed entry. New Plan-B reasons are deduplicated per decision in SQL.
+  return value.leadingBlockers.every(validReason) &&
+    value.leadingModelReasons.every(
+      (reason) => validReason(reason) && reason.count <= candidateCount,
+    );
 }
 
 export interface M1TacticalStatusView {

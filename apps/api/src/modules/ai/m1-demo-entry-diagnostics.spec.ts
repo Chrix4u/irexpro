@@ -33,6 +33,8 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       eligibleFallbackProbationVetoDecisions: 0,
       operatingState: 'NO_ACTIVE_SESSION',
       leadingBlockers: [],
+      leadingModelReasons: [],
+      rolloverRiskDecisions: 0,
       onlyCurrentSession: true,
     });
   });
@@ -90,6 +92,51 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
         },
       ],
     });
+  });
+
+  it('shows the true model-level rollover cause with bounded counts, without order approval', () => {
+    const output = toDemoFocusedEntryDiagnostic({
+      active_session_count: 1,
+      evaluated_decisions: 78,
+      candidate_decisions: 14,
+      broker_authorized_decisions: 0,
+      execution_succeeded: 0,
+      session_inactive_decisions: 0,
+      session_age_minutes: 579,
+      planb_admitted_decisions: 0,
+      primary_path_decisions: 0,
+      primary_reliability_veto_decisions: 0,
+      eligible_fallback_probation_veto_decisions: 0,
+      leading_blockers: [{ code: 'PAPER_NET_EXPECTED_R', count: 14 }],
+      rollover_risk_decisions: 14,
+      leading_model_reasons: [
+        { code: 'REGIME_ROLLOVER_RISK', count: 14 },
+        { code: 'SESSION_QUALITY', count: '14' },
+        { code: 'DIRECTION_QUALITY', count: 8 },
+        { code: 'UNKNOWN_INJECTION', count: 14 },
+        { code: 'TRADE_QUALITY', count: 1000 },
+      ],
+    });
+    expect(output.rolloverRiskDecisions).toBe(14);
+    expect(output.leadingModelReasons).toEqual([
+      {
+        code: 'REGIME_ROLLOVER_RISK',
+        label: 'New York rollover: unreliable liquidity/spreads',
+        count: 14,
+      },
+      {
+        code: 'SESSION_QUALITY',
+        label: 'Trading-session quality is too weak',
+        count: 14,
+      },
+      {
+        code: 'DIRECTION_QUALITY',
+        label: 'Buy/sell directional evidence too weak',
+        count: 8,
+      },
+    ]);
+    expect(output.brokerAuthorizedDecisions).toBe(0);
+    expect(output.operatingState).toBe('SCANNING_NO_APPROVED_ENTRY');
   });
 
   it('rejects non-finite and negative counts instead of showing distorted evidence', () => {
@@ -184,6 +231,10 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
     expect(sql).toContain('AS primary_path_decisions');
     expect(sql).toContain('AS primary_reliability_veto_decisions');
     expect(sql).toContain('AS eligible_fallback_probation_veto_decisions');
+    expect(sql).toContain('AS rollover_risk_decisions');
+    expect(sql).toContain('AS leading_model_reasons');
+    expect(sql).toContain("c.governance->'multimodelEnsemble'->'reasons'");
+    expect(sql).toContain("governance->'multimodelEnsemble'->>'regime' = 'ROLLOVER_RISK'");
     expect(sql).toContain("governance->'multimodelAuthority'->>'authorityPath' = 'PRIMARY_PLAN_B'");
     expect(sql).toContain("blockers ? 'M1_DEMO_EARLY_TRANSITION_PAIR_SIDE_DEGRADED'");
     expect(sql).toContain("'M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION'");
