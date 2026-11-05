@@ -698,6 +698,16 @@ function phase2Harness(
       cooldownMinutes: number;
       maxStopDurationMinutes: number;
     };
+    portfolioNetLossBrake?: {
+      artifact: 'm1-portfolio-net-loss-brake-v1';
+      active: boolean;
+      reason: 'CLEAR' | 'RECENT_PORTFOLIO_NET_LOSS_STREAK';
+      recentClosedTrades: number;
+      consecutiveNetLosses: number;
+      latestClosedAt: Date | null;
+      cooldownMinutes: number;
+      cooldownRemainingSeconds: number;
+    };
     multimodelLossStreakBrake?: {
       artifact: 'm1-multimodel-loss-streak-brake-v1';
       active: boolean;
@@ -794,6 +804,18 @@ function phase2Harness(
       maxStopDurationMinutes: 2,
     },
   );
+  const loadPortfolioNetLossStreakBrake = jest.fn().mockResolvedValue(
+    options.portfolioNetLossBrake ?? {
+      artifact: 'm1-portfolio-net-loss-brake-v1',
+      active: false,
+      reason: 'CLEAR',
+      recentClosedTrades: 0,
+      consecutiveNetLosses: 0,
+      latestClosedAt: null,
+      cooldownMinutes: 120,
+      cooldownRemainingSeconds: 0,
+    },
+  );
   const loadMultimodelLossStreakBrake = jest.fn().mockResolvedValue(
     options.multimodelLossStreakBrake ?? {
       artifact: 'm1-multimodel-loss-streak-brake-v1',
@@ -833,6 +855,7 @@ function phase2Harness(
     loadLatestM5EarlyTransitionEvidence,
     loadExtensionExhaustionShadowReliability,
     loadFastStopRegimeBrake,
+    loadPortfolioNetLossStreakBrake,
     loadMultimodelLossStreakBrake,
     hasActiveM1Intent,
     hasActiveOppositeM1Intent,
@@ -929,6 +952,7 @@ function phase2Harness(
     loadLatestM5EarlyTransitionEvidence,
     loadExtensionExhaustionShadowReliability,
     loadFastStopRegimeBrake,
+    loadPortfolioNetLossStreakBrake,
     loadMultimodelLossStreakBrake,
     hasActiveM1Intent,
     hasActiveOppositeM1Intent,
@@ -2588,6 +2612,77 @@ describe('M1 V8 multi-model DEMO authority', () => {
         }),
       }),
     );
+  });
+
+  it('blocks independently admitted M5 handoff after three net losses anywhere in the same DEMO session', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      m5EarlyTransitionEvidence: {
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        marketBarTime: new Date('2026-10-15T10:25:00.000Z'),
+        evaluatedAt: new Date('2026-10-15T10:29:00.000Z'),
+        strategyRoute: 'EARLY_TRANSITION',
+        paperAdmitted: true,
+        paperExecutionEligible: true,
+        eventRisk: 'CLEAR',
+        driftState: 'NORMAL',
+        netExpectedR: 0.31,
+        ensembleScore: 0.66,
+        consensusPassed: 7,
+        consensusRequired: 6,
+      },
+      portfolioNetLossBrake: {
+        artifact: 'm1-portfolio-net-loss-brake-v1',
+        active: true,
+        reason: 'RECENT_PORTFOLIO_NET_LOSS_STREAK',
+        recentClosedTrades: 3,
+        consecutiveNetLosses: 3,
+        latestClosedAt: new Date('2026-10-15T10:27:00.000Z'),
+        cooldownMinutes: 120,
+        cooldownRemainingSeconds: 7020,
+      },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    expect(h.loadPortfolioNetLossStreakBrake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        brokerConnectionId: 'demo-conn-2',
+        tradingSessionId: fullAutoSession.id,
+      }),
+    );
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(recorded?.blockers).toContain('M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE');
+    expect(recorded?.governance.portfolioNetLossBrake).toMatchObject({
+      active: true,
+      consecutiveNetLosses: 3,
+    });
   });
 
   it('keeps the M5 early-transition canary blocked after three recent losses on the same demo pair-side-route', async () => {

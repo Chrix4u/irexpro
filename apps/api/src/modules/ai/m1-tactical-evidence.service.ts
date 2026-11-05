@@ -8,6 +8,11 @@ import { m1UsdRiskAtStop } from './m1-tactical-currency-exposure';
 import type { M5EarlyTransitionEvidence } from './m5-early-transition-handoff';
 import { EXTENSION_EXHAUSTION_SHADOW_ARTIFACT } from './extension-exhaustion-shadow';
 import type { ExtensionExhaustionShadowReliability } from './extension-exhaustion-demo-scout';
+import {
+  evaluateM1PortfolioNetLossBrake,
+  M1_PORTFOLIO_NET_LOSS_BRAKE_LOOKBACK_HOURS,
+  M1_PORTFOLIO_NET_LOSS_BRAKE_REQUIRED_LOSSES,
+} from './m1-portfolio-net-loss-brake';
 
 export type M1TacticalDecisionRoute = M1ReliabilityRoute | 'ABSTAIN';
 export type M1TacticalDecisionAuthority = 'NONE' | 'PAPER_ONLY_RESEARCH' | 'BROKER_NATIVE';
@@ -933,6 +938,71 @@ export class M1TacticalEvidenceService {
       profitGiveback: number(row.profit_giveback),
       closedAt: date(row.closed_at),
     }));
+  }
+
+  /**
+   * Additional FULL_AUTO DEMO entry protection: net results after broker
+   * costs across *all instruments/routes*, but only within the exact current
+   * user, broker connection and immutable session. No portfolio aggregation
+   * across different account currencies or historical sessions is allowed.
+   */
+  async loadPortfolioNetLossStreakBrake(input: {
+    userId: string;
+    brokerConnectionId: string;
+    tradingSessionId: string;
+    evaluatedAt: Date;
+  }) {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          t.realised_pnl,
+          t.commission,
+          t.swap,
+          t.account_currency,
+          s.account_currency AS session_currency,
+          t.closed_at
+        FROM trading.trades t
+        JOIN trading.trading_sessions s
+          ON s.id = t.trading_session_id
+         AND s.user_id = t.user_id
+         AND s.broker_connection_id = t.broker_connection_id
+        WHERE t.user_id = $1
+          AND t.broker_connection_id = $2
+          AND t.trading_session_id = $3
+          AND s.status = 'ACTIVE'
+          AND s.execution_mode = 'FULL_AUTO'
+          AND t.status = 'CLOSED'
+          AND t.closed_at IS NOT NULL
+          AND t.closed_at <= $4::timestamptz
+          AND t.closed_at > ($4::timestamptz - interval '${M1_PORTFOLIO_NET_LOSS_BRAKE_LOOKBACK_HOURS} hours')
+        ORDER BY t.closed_at DESC, t.id DESC
+        LIMIT ${M1_PORTFOLIO_NET_LOSS_BRAKE_REQUIRED_LOSSES}
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.tradingSessionId,
+        input.evaluatedAt.toISOString(),
+      ],
+    )) as Array<{
+      realised_pnl: string | null;
+      commission: string | null;
+      swap: string | null;
+      account_currency: string | null;
+      session_currency: string | null;
+      closed_at: Date | string;
+    }>;
+    return evaluateM1PortfolioNetLossBrake({
+      evaluatedAt: input.evaluatedAt,
+      rows: rows.map((row) => ({
+        realisedPnl: row.realised_pnl,
+        commission: row.commission,
+        swap: row.swap,
+        accountCurrency: row.account_currency,
+        sessionCurrency: row.session_currency,
+        closedAt: new Date(row.closed_at),
+      })),
+    });
   }
 
   async loadMultimodelLossStreakBrake(
