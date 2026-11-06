@@ -7,6 +7,7 @@ import { ExecutionService } from '../execution.service';
 import { TradeCloseReason } from '../entities/trade.entity';
 import { evaluatePaperProfitLock } from '../../broker/adapters/paper-broker.adapter';
 import { evaluateProtectedRunnerShadow } from './protected-runner-shadow';
+import { evaluateProfitLockPatienceShadow } from './profit-lock-patience-shadow';
 import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
 
 const LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS = 5_000;
