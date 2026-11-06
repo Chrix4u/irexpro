@@ -1090,6 +1090,42 @@ describe("active multi-model execution presentation", () => {
     expect(state.detail).toContain("shadow-only");
   });
 
+  it("shows exact OOD measurements and recovery requirements without authorizing an entry", () => {
+    const blocked = {
+      ...status,
+      latestDecision: {
+        ...status.latestDecision,
+        instrument: "GBPUSD",
+        direction: "SELL" as const,
+        primaryConfidence: 0.64,
+        primaryBlockerGroup: "MODEL_DRIFT",
+        planBPaperAdmitted: false,
+        executionAuthority: "NONE" as const,
+        multimodelExecutable: false,
+        blockers: ["MULTIMODEL_PLAN_B_NOT_ADMITTED", "DRIFT_OUT_OF_DISTRIBUTION"],
+        modelDriftDiagnostics: ["extensionAtr:HARD_HIGH", "emaSeparation:HARD_HIGH", "rsi14:HARD_LOW"],
+        modelDriftNumericEvidence: { extensionAtr: 3.0259, emaSeparation: 0.8204, rsi14: 29.4223 },
+      },
+    };
+    expect(hasM1TacticalStatusUiShape(blocked)).toBe(true);
+    const readiness = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: blocked,
+      fastMarkState: "LIVE",
+    });
+    expect(readiness.tradeExpected).toBe(false);
+    expect(readiness.band).not.toBe("READY");
+    expect(readiness.detail).toContain("3.03× ATR");
+    expect(readiness.detail).toContain("0.82");
+    expect(readiness.detail).toContain("29.4");
+    expect(readiness.detail).toContain("separate Plan-B admission");
+    expect(hasM1TacticalStatusUiShape({
+      ...blocked,
+      latestDecision: { ...blocked.latestDecision, modelDriftNumericEvidence: { extensionAtr: Infinity, emaSeparation: 0.82, rsi14: 29.4 } },
+    })).toBe(false);
+  });
+
   it("explains an M1 timing rejection without turning Plan-B admission into execution approval", () => {
     const waiting = {
       ...status,
