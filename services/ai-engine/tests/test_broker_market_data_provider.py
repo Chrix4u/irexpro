@@ -207,6 +207,133 @@ async def test_handles_timeout_safely():
             await provider.get_ohlcv("EURUSD", "H1", user_id="u1", broker_connection_id="c1")
 
 
+@pytest.mark.asyncio
+async def test_read_only_503_retries_once_and_uses_fresh_received_bars():
+    provider = BrokerMarketDataProvider(settings=TEST_SETTINGS)
+    rejected = MagicMock(status_code=503)
+    recovered = MagicMock(status_code=200)
+    recovered.json.return_value = {"candles": [{
+        "timestamp": "2026-11-06T09:30:00Z",
+        "open": 1.10, "high": 1.11, "low": 1.09, "close": 1.10,
+        "volume": 120, "tickVolume": 100, "spreadPoints": 2,
+        "priceDigits": 5, "instrument": "EURUSD", "timeframe": "M5",
+    }]}
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=[rejected, recovered])
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "app.domain.market_data.providers.broker_provider.httpx.AsyncClient",
+            return_value=client,
+        ),
+        patch("app.domain.market_data.providers.broker_provider.asyncio.sleep",
+              new_callable=AsyncMock) as sleep,
+    ):
+        candles = await provider.get_ohlcv(
+            "EURUSD", "M5", user_id="u1", broker_connection_id="c1"
+        )
+
+    assert len(candles) == 1
+    assert candles[0].source == "broker"
+    assert client.get.await_count == 2
+    assert client.get.await_args_list[0].kwargs["timeout"] == 15.0
+    assert client.get.await_args_list[1].kwargs["timeout"] == 3.0
+    sleep.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_read_only_timeout_can_recover_on_second_attempt():
+    provider = BrokerMarketDataProvider(settings=TEST_SETTINGS)
+    good = MagicMock(status_code=200)
+    good.json.return_value = {"candles": []}
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=[
+        httpx.TimeoutException("secret=must-not-be-exposed"), good,
+    ])
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "app.domain.market_data.providers.broker_provider.httpx.AsyncClient",
+            return_value=client,
+        ),
+        patch("app.domain.market_data.providers.broker_provider.asyncio.sleep",
+              new_callable=AsyncMock),
+    ):
+        assert await provider.get_ohlcv(
+            "GBPUSD", "H1", user_id="u1", broker_connection_id="c1"
+        ) == []
+    assert client.get.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_read_only_retry_exhaustion_stays_unavailable():
+    provider = BrokerMarketDataProvider(settings=TEST_SETTINGS)
+    denied = MagicMock(status_code=503)
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=denied)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    with (
+        patch(
+            "app.domain.market_data.providers.broker_provider.httpx.AsyncClient",
+            return_value=client,
+        ),
+        patch("app.domain.market_data.providers.broker_provider.asyncio.sleep",
+              new_callable=AsyncMock),
+    ):
+        with pytest.raises(MarketDataError, match="HTTP 503"):
+            await provider.get_ohlcv(
+                "AUDUSD", "M15", user_id="u1", broker_connection_id="c1"
+            )
+    assert client.get.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 429])
+async def test_non_retryable_errors_fail_closed_without_second_request(status):
+    provider = BrokerMarketDataProvider(settings=TEST_SETTINGS)
+    response = MagicMock(status_code=status)
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=response)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "app.domain.market_data.providers.broker_provider.httpx.AsyncClient",
+        return_value=client,
+    ):
+        with pytest.raises(MarketDataError):
+            await provider.get_ohlcv(
+                "EURUSD", "M1", user_id="u1", broker_connection_id="c1"
+            )
+    client.get.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_never_retries_paper_simulation_advance():
+    provider = BrokerMarketDataProvider(settings=TEST_SETTINGS)
+    response = MagicMock(status_code=503)
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=response)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    with patch(
+        "app.domain.market_data.providers.broker_provider.httpx.AsyncClient",
+        return_value=client,
+    ):
+        with pytest.raises(MarketDataError, match="HTTP 503"):
+            await provider.get_ohlcv(
+                "EURUSD", "M1", user_id="u1", broker_connection_id="c1",
+                advance_simulation=True,
+            )
+    client.get.assert_awaited_once()
+    assert client.get.await_args.kwargs["params"]["advanceSimulation"] == "true"
+
+
 def test_does_not_expose_secrets_in_exceptions():
     try:
         raise MarketDataError("Market data access denied")
