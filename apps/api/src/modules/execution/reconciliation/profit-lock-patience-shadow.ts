@@ -50,15 +50,10 @@ export function evaluateProfitLockPatienceShadow(
   input: ProfitLockPatienceShadowInput,
 ): ProfitLockPatienceShadowDecision {
   const time = input.latestSameSideM1ContinuationAt;
-  const age = time
-    ? (input.observedAt.getTime() - time.getTime()) / 1_000
-    : null;
-  const decision = (
-    reason: ProfitLockPatienceShadowReason,
-  ): ProfitLockPatienceShadowDecision => ({
+  const age = time ? (input.observedAt.getTime() - time.getTime()) / 1_000 : null;
+  const decision = (reason: ProfitLockPatienceShadowReason): ProfitLockPatienceShadowDecision => ({
     mode: 'SHADOW_ONLY',
-    wouldConsiderBrokerProtectedGrace:
-      reason === 'PROTECTED_GRACE_RESEARCH_CANDIDATE',
+    wouldConsiderBrokerProtectedGrace: reason === 'PROTECTED_GRACE_RESEARCH_CANDIDATE',
     reason,
     continuationAgeSeconds: age !== null && Number.isFinite(age) ? age : null,
     maxGraceSeconds: 180,
