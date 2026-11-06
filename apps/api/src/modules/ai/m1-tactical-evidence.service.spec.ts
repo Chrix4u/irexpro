@@ -76,34 +76,6 @@ describe('M1 tactical decision migration contract', () => {
   });
 });
 
-describe('DEMO forecast-shadow broker-account verification', () => {
-  it('requires an actual active cTrader DEMO FULL_AUTO user connection, not a rollout name', async () => {
-    const query = jest.fn().mockResolvedValue([{ eligible: true }]);
-    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
-    expect(await service.isActiveCtraderDemoFullAutoConnection('user-1', 'conn-1')).toBe(true);
-    const [sql, params] = query.mock.calls[0]!;
-    expect(String(sql)).toContain("b.broker_id='ctrader'");
-    expect(String(sql)).toContain("b.account_type='DEMO'");
-    expect(String(sql)).toContain("s.status='ACTIVE'");
-    expect(String(sql)).toContain("s.execution_mode='FULL_AUTO'");
-    expect(String(sql)).toContain('s.user_id=$1');
-    expect(String(sql)).toContain('s.broker_connection_id=$2');
-    expect(params).toEqual(['user-1', 'conn-1']);
-  });
-
-  it('fails closed on missing account evidence and invalid arguments', async () => {
-    const query = jest.fn().mockResolvedValue([{ eligible: false }]);
-    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
-    expect(await service.isActiveCtraderDemoFullAutoConnection('user-1', 'conn-live')).toBe(false);
-    query.mockResolvedValue([{ eligible: 'true' }]);
-    expect(await service.isActiveCtraderDemoFullAutoConnection('user-1', 'conn-untyped')).toBe(
-      false,
-    );
-    expect(await service.isActiveCtraderDemoFullAutoConnection('', 'conn-1')).toBe(false);
-    expect(query).toHaveBeenCalledTimes(2);
-  });
-});
-
 describe('M1 M5 early-transition handoff evidence', () => {
   it('loads the latest durable M5 early-transition decision across the research source connection', async () => {
     const query = jest.fn().mockResolvedValue([

@@ -5,6 +5,16 @@ export const ENSEMBLE_COST_MODEL_VERSION =
   'broker-observed-robust-tail-or-current-spread-plus-25pct-slippage-v5';
 export const ENSEMBLE_DRIFT_MODEL_VERSION = 'triple-route-direction-aligned-momentum-v4';
 export const ENSEMBLE_NET_EXPECTED_R_FLOOR = 0.08;
+/**
+ * Shared research policy (DEMO/PAPER/LIVE): a predicted after-cost return
+ * can be scored and compared with realised fills, but is not an admission
+ * veto until prospectively validated and explicitly promoted.
+ * Broker spread availability, stale quote, margin, SL and account guards
+ * remain executable and must NOT be relaxed by this policy.
+ */
+export const ENSEMBLE_PREDICTED_COST_ADMISSION_MODE = 'SHADOW_ONLY' as const;
+export const ENSEMBLE_PREDICTED_COST_SHADOW_ARTIFACT =
+  'ensemble-predicted-after-cost-shadow-v1' as const;
 export const ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR = ENSEMBLE_NET_EXPECTED_R_FLOOR;
 export const ENSEMBLE_EARLY_TRANSITION_PAPER_NET_EXPECTED_R_FLOOR = 0.2;
 export const ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES = 100;
@@ -88,6 +98,16 @@ export interface EnsembleGovernanceDecision {
   netExpectedR: number;
   paperNetExpectedRPassed: boolean;
   netExpectedRPassed: boolean;
+  /** Immutable, decision-time comparison; no execution or promotion authority. */
+  predictedCostShadow?: {
+    artifact: typeof ENSEMBLE_PREDICTED_COST_SHADOW_ARTIFACT;
+    mode: typeof ENSEMBLE_PREDICTED_COST_ADMISSION_MODE;
+    paperRequiredNetR: number;
+    promotionRequiredNetR: number;
+    paperWouldHaveBlocked: boolean;
+    promotionWouldHaveBlocked: boolean;
+    modifiesExecution: false;
+  };
   driftState: EnsembleDriftState;
   driftQuality: number;
   /** Additive diagnostics for why the active drift envelope classified this vector. */
@@ -440,15 +460,19 @@ export function evaluateEnsembleGovernance(
   if (!input.ensemble.admitted && input.ensemble.strategyRoute !== 'EARLY_TRANSITION')
     paperExecutionBlockers.push('ENSEMBLE_NOT_PROMOTABLE_ADMISSION');
   if (!executionCost.paperCostUsable) paperExecutionBlockers.push('EXECUTION_SPREAD_UNAVAILABLE');
-  if (!paperNetExpectedRPassed) paperExecutionBlockers.push('PAPER_NET_EXPECTED_R');
+  // Forecast-only veto is SHADOW: historical commission, estimated slippage
+  // and projected after-cost profit never authorize or reject an order.
+  // Retain paperNetExpectedRPassed and the counterfactual below for analysis.
   if (!paperDriftPassed) paperExecutionBlockers.push(`DRIFT_${drift.state}`);
   if (sleeveState === 'BLOCKED') paperExecutionBlockers.push('SLEEVE_BLOCKED');
   if (eventRisk !== 'CLEAR') paperExecutionBlockers.push(`EVENT_RISK_${eventRisk}`);
 
   const blockers: string[] = [];
   if (!input.ensemble.admitted) blockers.push('ENSEMBLE_NOT_ADMITTED');
-  if (!executionCost.evidenceValid) blockers.push('EXECUTION_SPREAD_UNAVAILABLE');
-  if (!netExpectedRPassed) blockers.push('NET_EXPECTED_R');
+  if (!executionCost.evidenceValid || !executionCost.paperCostUsable)
+    blockers.push('EXECUTION_SPREAD_UNAVAILABLE');
+  // The promotion path also uses the same shadow-only forecast rule.
+  // No DEMO-only bypass, and no hidden LIVE-only predicted-profit veto.
   if (!driftPassed) blockers.push(`DRIFT_${drift.state}`);
   if (sleeveState !== 'CORE') blockers.push(`SLEEVE_${sleeveState}`);
   if (eventRisk !== 'CLEAR') blockers.push(`EVENT_RISK_${eventRisk}`);
@@ -469,6 +493,15 @@ export function evaluateEnsembleGovernance(
     netExpectedR,
     paperNetExpectedRPassed,
     netExpectedRPassed,
+    predictedCostShadow: {
+      artifact: ENSEMBLE_PREDICTED_COST_SHADOW_ARTIFACT,
+      mode: ENSEMBLE_PREDICTED_COST_ADMISSION_MODE,
+      paperRequiredNetR: paperNetExpectedRFloor,
+      promotionRequiredNetR: ENSEMBLE_NET_EXPECTED_R_FLOOR,
+      paperWouldHaveBlocked: !paperNetExpectedRPassed,
+      promotionWouldHaveBlocked: !netExpectedRPassed,
+      modifiesExecution: false,
+    },
     driftState: drift.state,
     driftQuality: drift.quality,
     driftDiagnostics,

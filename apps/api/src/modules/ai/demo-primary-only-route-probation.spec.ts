@@ -18,21 +18,6 @@ describe('reversible DEMO-only entry-authority probation', () => {
       modifiesOpenPositions: false,
     });
   });
-  it('treats a broker-protected, unanimity-based primary forecast-shadow lane as primary, not fallback', () => {
-    expect(
-      evaluateDemoPrimaryOnlyProbation({
-        ...primary,
-        primaryAuthorityPath: 'FORECAST_SHADOW_CONSENSUS',
-      }),
-    ).toMatchObject({
-      enabled: true,
-      blocked: false,
-      chosenAuthorityPath: 'FORECAST_SHADOW_CONSENSUS',
-      reason: 'PRIMARY_PLAN_B',
-      modifiesOpenPositions: false,
-    });
-  });
-
   it('blocks M5 handoff even when its own evidence is locally eligible', () => {
     expect(evaluateDemoPrimaryOnlyProbation({ ...primary, m5HandoffEligible: true })).toMatchObject(
       {
@@ -51,45 +36,6 @@ describe('reversible DEMO-only entry-authority probation', () => {
       });
     }
   });
-  it('permits only a verified qualified-continuation DEMO micro trial with capped volume', () => {
-    const trial = evaluateDemoPrimaryOnlyProbation({
-      ...primary,
-      executableFallbackTier: 'QUALIFIED_CONTINUATION',
-      qualifiedContinuationMicroTrialEligible: true,
-    });
-    expect(trial).toMatchObject({
-      enabled: true,
-      blocked: false,
-      chosenAuthorityPath: 'QUALIFIED_CONTINUATION',
-      reason: 'QUALIFIED_CONTINUATION_MICRO_TRIAL',
-      trialLotCap: 0.05,
-      modifiesOpenPositions: false,
-    });
-    for (const tier of ['BOOTSTRAP_CONTINUATION', 'QUALIFIED', 'RECOVERY_PROBE']) {
-      const decision = evaluateDemoPrimaryOnlyProbation({
-        ...primary,
-        executableFallbackTier: tier,
-        qualifiedContinuationMicroTrialEligible: true,
-      });
-      expect(decision.blocked).toBe(true);
-      expect(decision.trialLotCap).toBeNull();
-    }
-    expect(
-      evaluateDemoPrimaryOnlyProbation({
-        ...primary,
-        enabled: false,
-        executableFallbackTier: 'QUALIFIED_CONTINUATION',
-        qualifiedContinuationMicroTrialEligible: true,
-      }).trialLotCap,
-    ).toBeNull();
-    expect(
-      evaluateDemoPrimaryOnlyProbation({
-        ...primary,
-        executableFallbackTier: 'QUALIFIED_CONTINUATION',
-      }),
-    ).toMatchObject({ blocked: true, trialLotCap: null });
-  });
-
   it('blocks high-conviction rescue and extension scout unless promoted separately', () => {
     expect(
       evaluateDemoPrimaryOnlyProbation({

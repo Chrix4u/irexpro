@@ -3389,9 +3389,15 @@ describe('M1 V8 multi-model DEMO authority', () => {
     const recorded = h.recordDecision.mock.calls.find(
       ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
     )?.[0];
-    expect(recorded?.governance.genericGovernance.paperExecutionBlockers).toContain(
+    expect(recorded?.governance.genericGovernance.paperExecutionBlockers).not.toContain(
       'PAPER_NET_EXPECTED_R',
     );
+    expect(recorded?.governance.genericGovernance.predictedCostShadow).toMatchObject({
+      mode: 'SHADOW_ONLY',
+      paperWouldHaveBlocked: true,
+      modifiesExecution: false,
+    });
+    // This fallback must still pass its independent route-quality admission.
     expect(recorded?.governance.professionalM1Fallback).toEqual(
       expect.objectContaining({ eligible: false }),
     );

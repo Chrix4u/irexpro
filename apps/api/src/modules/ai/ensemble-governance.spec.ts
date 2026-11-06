@@ -132,7 +132,7 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.paperExecutionBlockers).not.toContain('PAPER_NET_EXPECTED_R');
   });
 
-  it('still rejects a USDCAD setup when the broker-native spread itself is genuinely wide', () => {
+  it('records a wide-spread predicted net loss in shadow without creating a forecast veto', () => {
     const result = evaluateEnsembleGovernance({
       ...base,
       instrument: 'USDCAD',
@@ -145,8 +145,14 @@ describe('evaluateEnsembleGovernance', () => {
     });
     expect(result.estimatedExecutionCostR).toBeCloseTo(0.29411764705882354, 8);
     expect(result.netExpectedR).toBeLessThan(0);
-    expect(result.paperExecutionEligible).toBe(false);
-    expect(result.paperExecutionBlockers).toContain('PAPER_NET_EXPECTED_R');
+    expect(result.paperNetExpectedRPassed).toBe(false);
+    expect(result.predictedCostShadow).toMatchObject({
+      mode: 'SHADOW_ONLY',
+      paperWouldHaveBlocked: true,
+      modifiesExecution: false,
+    });
+    expect(result.paperExecutionEligible).toBe(true);
+    expect(result.paperExecutionBlockers).not.toContain('PAPER_NET_EXPECTED_R');
   });
 
   it('keeps shadow admission separate from PAPER promotion governance', () => {
@@ -173,7 +179,7 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.blockers).toContain('SLEEVE_COLLECTING');
   });
 
-  it('requires the same net expected-R floor for PAPER execution and promotion', () => {
+  it('scores the same forecast floor for PAPER and promotion but applies no cost-only veto', () => {
     const result = evaluateEnsembleGovernance({
       ...base,
       ensemble: { ...ensemble, expectedR: 0.1 },
@@ -182,10 +188,18 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.netExpectedR).toBeCloseTo(0.0375, 6);
     expect(result.paperNetExpectedRPassed).toBe(false);
     expect(result.netExpectedRPassed).toBe(false);
-    expect(result.paperExecutionEligible).toBe(false);
-    expect(result.paperPromotionEligible).toBe(false);
-    expect(result.paperExecutionBlockers).toContain('PAPER_NET_EXPECTED_R');
-    expect(result.blockers).toContain('NET_EXPECTED_R');
+    expect(result.predictedCostShadow).toMatchObject({
+      mode: 'SHADOW_ONLY',
+      paperRequiredNetR: 0.08,
+      promotionRequiredNetR: 0.08,
+      paperWouldHaveBlocked: true,
+      promotionWouldHaveBlocked: true,
+      modifiesExecution: false,
+    });
+    expect(result.paperExecutionEligible).toBe(true);
+    expect(result.paperPromotionEligible).toBe(false); // sleeve evidence still COLLECTING
+    expect(result.paperExecutionBlockers).not.toContain('PAPER_NET_EXPECTED_R');
+    expect(result.blockers).not.toContain('NET_EXPECTED_R');
   });
 
   it('keeps a strong extended/stressed setup shadow-only because it is not promotable', () => {
@@ -371,7 +385,7 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.blockers).toContain('ENSEMBLE_NOT_ADMITTED');
   });
 
-  it('keeps early-transition PAPER execution blocked below its stronger 0.20R net floor', () => {
+  it('records the stronger early-transition predicted-cost requirement in shadow', () => {
     const result = evaluateEnsembleGovernance({
       ...base,
       ensemble: {
@@ -398,8 +412,12 @@ describe('evaluateEnsembleGovernance', () => {
       executionSpreadEvidence: { ...base.executionSpreadEvidence, spreadPrice: 0.00003 },
     });
     expect(result.netExpectedR).toBeLessThan(0.2);
-    expect(result.paperExecutionEligible).toBe(false);
-    expect(result.paperExecutionBlockers).toContain('PAPER_NET_EXPECTED_R');
+    expect(result.predictedCostShadow).toMatchObject({
+      mode: 'SHADOW_ONLY',
+      paperRequiredNetR: 0.2,
+      paperWouldHaveBlocked: true,
+    });
+    expect(result.paperExecutionBlockers).not.toContain('PAPER_NET_EXPECTED_R');
   });
 
   it('supports an explicit caller-scoped PAPER net-R floor without changing the early-transition default', () => {
@@ -480,15 +498,32 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.paperExecutionBlockers).toContain('EXECUTION_SPREAD_UNAVAILABLE');
   });
 
-  it('fails cost governance when the stop geometry is too tight', () => {
+  it('keeps a tight-stop predicted cost veto shadow-only while preserving stop geometry evidence', () => {
     const result = evaluateEnsembleGovernance({
       ...base,
       stopLoss: 1.09965,
     });
     expect(result.paperNetExpectedRPassed).toBe(false);
     expect(result.netExpectedRPassed).toBe(false);
-    expect(result.paperExecutionBlockers).toContain('PAPER_NET_EXPECTED_R');
-    expect(result.blockers).toContain('NET_EXPECTED_R');
+    expect(result.predictedCostShadow).toMatchObject({
+      paperWouldHaveBlocked: true,
+      promotionWouldHaveBlocked: true,
+      modifiesExecution: false,
+    });
+    expect(result.paperExecutionBlockers).not.toContain('PAPER_NET_EXPECTED_R');
+    expect(result.blockers).not.toContain('NET_EXPECTED_R');
+  });
+
+  it('continues to reject impossible stop-loss geometry and stale/unverified broker costs', () => {
+    const invalidStop = evaluateEnsembleGovernance({
+      ...base,
+      stopLoss: base.entryPrice,
+      eventRisk: 'CLEAR',
+    });
+    expect(invalidStop.predictedCostShadow?.mode).toBe('SHADOW_ONLY');
+    expect(invalidStop.paperExecutionEligible).toBe(false);
+    expect(invalidStop.paperExecutionBlockers).toContain('EXECUTION_SPREAD_UNAVAILABLE');
+    expect(invalidStop.blockers).toContain('EXECUTION_SPREAD_UNAVAILABLE');
   });
 
   it('fails closed when the current feature vector is outside the frozen envelope', () => {
