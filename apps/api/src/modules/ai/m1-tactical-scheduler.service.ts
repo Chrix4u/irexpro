@@ -59,6 +59,7 @@ import {
 } from './plan-b-multimodel-shadow';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import type { HighConvictionOverlay } from './high-conviction-overlay';
+import { evaluateProductionQualificationShadow } from './production-qualification-shadow';
 import {
   evaluateMultimodelDemoAuthority,
   multimodelDemoExecutionVolumeCap,
@@ -1719,6 +1720,27 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         }
       : null;
 
+    // Non-executable evidence for a common PAPER/DEMO/LIVE qualification
+    // contract. Do NOT feed this research counterfactual into canExecute.
+    const productionQualificationShadow = multimodelDemo
+      ? evaluateProductionQualificationShadow({
+          candidateDirection: candidate.direction,
+          planBAdmitted: multimodelDemo.ensemble.paperAdmitted,
+          planBGovernanceEligible: multimodelDemo.governance.paperExecutionEligible,
+          planBSpreadEvidenceValid: multimodelDemo.governance.executionSpreadEvidenceValid,
+          m1RouteEligible: routeDecision.eligible,
+          m1GovernanceEligible: governance.paperEligible,
+          m1SpreadEvidenceValid: governance.genericGovernance.executionSpreadEvidenceValid,
+          m1DriftState: governance.genericGovernance.driftState,
+          trainedExpert: multimodelDemo.trainedExpert,
+          planBForecastCostWouldReject:
+            multimodelDemo.governance.predictedCostShadow?.paperWouldHaveBlocked ?? null,
+          m1ForecastCostWouldReject:
+            governance.genericGovernance.predictedCostShadow?.paperWouldHaveBlocked ?? null,
+          commissionForecastWouldReject: commissionGateAudit.shadowWouldHaveBlocked,
+        })
+      : null;
+
     const decision = await this.evidence.recordDecision({
       userId,
       brokerConnectionId,
@@ -1775,6 +1797,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         portfolioNetLossBrake: portfolioNetLossBrake ? { ...portfolioNetLossBrake } : null,
         demoPrimaryOnlyProbation: { ...demoPrimaryOnlyProbation },
         demoBrokerCommissionGate: commissionGateAudit,
+        productionQualificationShadow,
         multimodelLossStreakBrake: multimodelLossStreakBrake
           ? { ...multimodelLossStreakBrake }
           : null,
