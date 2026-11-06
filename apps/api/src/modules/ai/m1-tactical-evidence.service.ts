@@ -1772,7 +1772,14 @@ export class M1TacticalEvidenceService {
               blockers @> '["DRIFT_OUT_OF_DISTRIBUTION"]'::jsonb
               OR blockers @> '["DRIFT_STRESSED"]'::jsonb
             )
-            AND evaluated_at > ($4::timestamptz - interval '48 minutes')
+            -- Rank across the COMPLETE oldest fixed UTC bucket, not a
+            -- sliding 48-minute cutoff. Otherwise the first episode
+            -- ages out each minute and a second candidate from its
+            -- original bucket becomes an artificial new leader.
+            AND evaluated_at >= TO_TIMESTAMP(
+              FLOOR(EXTRACT(EPOCH FROM ($4::timestamptz - interval '48 minutes')) / 960)
+              * 960
+            )
             AND evaluated_at <= ($4::timestamptz - interval '16 minutes')
             AND policy_version = $5
         )
@@ -1780,6 +1787,9 @@ export class M1TacticalEvidenceService {
                candidate, governance, blockers
         FROM candidates
         WHERE episode_rank = 1
+          -- Maturity window applies AFTER bucket leaders are selected:
+          -- a leader that ages out cannot be replaced within its bin.
+          AND evaluated_at > ($4::timestamptz - interval '48 minutes')
           AND governance -> 'driftCounterfactual15m' IS NULL
         ORDER BY evaluated_at DESC
         LIMIT 8
