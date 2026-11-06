@@ -30,7 +30,7 @@ from .demo_rejected_first_hit_shadow import (
     valid_decision,
 )
 
-VERSION = "demo-first-hit-temporal-selector-shadow-v3"
+VERSION = "demo-first-hit-temporal-selector-shadow-v4"
 SAFE_REASONS = frozenset((
     "DIRECTION_QUALITY", "EXIT_FEASIBILITY", "TRADE_QUALITY",
     "REGIME_TREND_EXTENDED", "REGIME_TREND_WEAK",
@@ -52,6 +52,9 @@ MIN_HOLDOUT_CANDIDATES = 30
 MIN_HOLDOUT_RESOLVED = 15
 EMBARGO_MINUTES = 35
 C = 0.25
+MIN_PRIOR_FEES = 5
+FX_STANDARD_LOT_UNITS = 100_000.0
+SLIPPAGE_SPREAD_FRACTION_SCENARIO = 0.25
 
 # Fixed before inspecting any enriched-model outcome. All are persisted
 # candidate/ensemble values computed AS OF the decision, never future bars.
@@ -150,6 +153,52 @@ def enriched_asof_features(row: dict) -> dict[str, float]:
     return features
 
 
+def causal_eur_broker_cost_r(row: dict) -> dict | None:
+    """A strictly prior closed-trade EUR P90 fee plus illustrative slippage.
+
+    Research only. SQL verifies same user, DEMO connection, instrument,
+    EUR account currency and closed_at < decision time within seven days.
+    The EURUSD conversion must be an AS-OF completed candle or quote.
+    USD-quoted majors only: 1 standard lot = 100,000 base units.
+    The entry bid/ask already includes spread; only an *additional*
+    quarter-spread slippage scenario is charged here.
+    """
+    if row.get("instrument") not in ("AUDUSD", "EURUSD", "GBPUSD"):
+        return None
+    try:
+        n = int(row.get("fee_prior_closed_samples"))
+        fee_per_lot_eur = float(row.get("fee_p90_eur_per_lot"))
+        eurusd_bid = float(row.get("eurusd_bid_asof"))
+        eurusd_ask = float(row.get("eurusd_ask_asof"))
+        bid = float(row["entry_bid"])
+        ask = float(row["entry_ask"])
+        stop = float(row["stop_distance"])
+        if (
+            n < MIN_PRIOR_FEES
+            or not all(math.isfinite(v) for v in (
+                fee_per_lot_eur, eurusd_bid, eurusd_ask, bid, ask, stop
+            ))
+            or not (0 <= fee_per_lot_eur <= 100)
+            or not (0.7 < eurusd_bid <= eurusd_ask < 2)
+            or not (0 < bid <= ask)
+            or not (0 < stop <= 0.02)
+            or not (0 <= ask - bid <= 0.002)
+        ):
+            return None
+    except (ValueError, TypeError, OverflowError):
+        return None
+    fx_mid = (eurusd_bid + eurusd_ask) / 2
+    commission_r = fee_per_lot_eur * fx_mid / (FX_STANDARD_LOT_UNITS * stop)
+    slippage_r = SLIPPAGE_SPREAD_FRACTION_SCENARIO * (ask - bid) / stop
+    return {
+        "prior_closed_samples": n,
+        "p90_eur_per_lot": fee_per_lot_eur,
+        "commission_r": commission_r,
+        "slippage_r": slippage_r,
+        "total_cost_r": commission_r + slippage_r,
+    }
+
+
 def prepare(path: Path) -> tuple[list[dict], dict]:
     df = pd.read_csv(path, dtype=str)
     expected = {
@@ -159,6 +208,8 @@ def prepare(path: Path) -> tuple[list[dict], dict]:
         "predicted_net_r", "regime_asof", "drift_state_asof",
         "estimated_cost_r_asof", "admission_reasons_json", "blockers_json",
         "entry_quote_timestamp_basis",
+        "fee_prior_closed_samples", "fee_p90_eur_per_lot",
+        "eurusd_bid_asof", "eurusd_ask_asof",
         "atr_raw",
         *(field for field, _, _ in MARKET_ASOF_BOUNDS),
     }
@@ -212,6 +263,7 @@ def prepare(path: Path) -> tuple[list[dict], dict]:
             continue
         selected.append({
             "price_path_timing_tier": path_basis,
+            "causal_fee_scenario": causal_eur_broker_cost_r(record),
             "decision_at": at,
             "asof": record,
             "status": verdict["status"],
@@ -228,6 +280,9 @@ def prepare(path: Path) -> tuple[list[dict], dict]:
         "price_path_timing_tiers": dict(sorted(Counter(
             x["price_path_timing_tier"] for x in selected
         ).items())),
+        "causal_fee_samples_available": sum(
+            x["causal_fee_scenario"] is not None for x in selected
+        ),
     }
 
 
@@ -241,9 +296,12 @@ def rank_holdout(
 
     BASELINE keeps prior semantics unchanged. ENRICHED adds as-of technical
     features with a scaler trained only on earlier resolved outcomes.
-    Both variants are research-only and cannot be promoted.
+    CAUSAL_FEE uses the SAME enriched model but ranks by strictly prior
+    same-account EUR broker commission plus an additional 25%-spread
+    slippage scenario. No broker fee evidence => never rank eligible.
+    All variants are research-only and cannot be promoted.
     """
-    if variant not in ("BASELINE", "ENRICHED"):
+    if variant not in ("BASELINE", "ENRICHED", "CAUSAL_FEE"):
         raise ValueError("Unknown non-executing candidate model variant")
     resolved_train = [x for x in training if x["status"] in (TP, SL)]
     if not resolved_train or not holdout:
@@ -251,11 +309,14 @@ def rank_holdout(
     y = np.asarray([int(x["status"] == TP) for x in resolved_train], dtype=int)
     if len(set(y.tolist())) < 2:
         raise ValueError("Train needs both TP and SL observed outcomes")
-    feature_fn = enriched_asof_features if variant == "ENRICHED" else asof_features
+    feature_fn = (
+        enriched_asof_features if variant in ("ENRICHED", "CAUSAL_FEE")
+        else asof_features
+    )
     vectorizer = DictVectorizer(sparse=False)
     train_x = vectorizer.fit_transform([feature_fn(x["asof"]) for x in resolved_train])
     hold_x = vectorizer.transform([feature_fn(x["asof"]) for x in holdout])
-    if variant == "ENRICHED":
+    if variant in ("ENRICHED", "CAUSAL_FEE"):
         train_only_scaler = StandardScaler()
         train_x = train_only_scaler.fit_transform(train_x)
         hold_x = train_only_scaler.transform(hold_x)
@@ -264,8 +325,18 @@ def rank_holdout(
     )
     classifier.fit(train_x, y)
     p_tp = classifier.predict_proba(hold_x)[:, 1]
-    # Original stop/target geometry and estimated extra one-pip friction.
+    # Side-correct original stop/target geometry. Historical commission
+    # is closed *before* entry, not harvested from a future broker fill.
+    # Insufficient fee evidence has -infinity rank (never an eligible entry).
     expected_r = np.asarray([
+        (
+            p_tp[i] * x["reward_r"] - (1.0 - p_tp[i]) -
+            (
+                x["causal_fee_scenario"]["total_cost_r"]
+                if x.get("causal_fee_scenario") is not None
+                else float("inf")
+            )
+        ) if variant == "CAUSAL_FEE" else
         p_tp[i] * x["reward_r"] - (1.0 - p_tp[i]) - x["cost_r"]
         for i, x in enumerate(holdout)
     ])
@@ -294,8 +365,44 @@ def summarize(cohort: list[dict]) -> dict:
         for x in cohort
     )
     n = len(cohort)
+    historical_fee_covered = [
+        x for x in cohort if x.get("causal_fee_scenario") is not None
+    ]
+    fee_covered_resolved = [
+        x for x in historical_fee_covered if x["status"] in (TP, SL)
+    ]
+    fee_covered_estimated_net_r = sum(
+        (x["reward_r"] if x["status"] == TP else -1.0)
+        - x["causal_fee_scenario"]["total_cost_r"]
+        for x in fee_covered_resolved
+    )
+    p90_fee_estimate_eur_by_pair = {}
+    for instrument in ("AUDUSD", "EURUSD", "GBPUSD"):
+        values = [
+            x["causal_fee_scenario"]["p90_eur_per_lot"]
+            for x in historical_fee_covered
+            if x["asof"]["instrument"] == instrument
+        ]
+        if values:
+            p90_fee_estimate_eur_by_pair[instrument] = round(
+                float(np.median(values)), 3
+            )
     return {
         "candidates": n,
+        "broker_fee_cost_scenario": {
+            "source": "STRICTLY_PRIOR_SAME_DEMO_ACCOUNT_EUR_CLOSED_TRADES_P90",
+            "prior_trades_required": MIN_PRIOR_FEES,
+            "quote_price_includes_spread": True,
+            "additional_slippage": "25_PERCENT_OF_QUOTED_SPREAD",
+            "historical_fee_coverage": len(historical_fee_covered),
+            "resolved_fee_covered": len(fee_covered_resolved),
+            "estimated_net_r_on_resolved_fee_covered_only": (
+                round(fee_covered_estimated_net_r / len(fee_covered_resolved), 4)
+                if fee_covered_resolved else None
+            ),
+            "median_historical_p90_eur_per_lot_by_pair": p90_fee_estimate_eur_by_pair,
+            "broker_realized_candidate_pnl": False,
+        },
         "quote_close_tp_first": tp,
         "quote_close_sl_first": sl,
         "censored_or_ambiguous": n - tp - sl,
@@ -322,6 +429,7 @@ def walk_forward_completed_days(episodes: list[dict], days: list) -> dict:
     pooled_admitted: list[dict] = []
     pooled_selected: list[dict] = []
     pooled_enriched: list[dict] = []
+    pooled_fee_selected: list[dict] = []
     for day in days[MIN_TRAIN_DAYS:]:
         cutoff = pd.Timestamp(day, tz="UTC")
         training = [
@@ -343,6 +451,12 @@ def walk_forward_completed_days(episodes: list[dict], days: list) -> dict:
         chosen = [holdout[i] for i in rankings[:selected_n]]
         enriched_ranking, _ = rank_holdout(training, holdout, variant="ENRICHED")
         enriched_chosen = [holdout[i] for i in enriched_ranking[:selected_n]]
+        fee_ranking, _ = rank_holdout(training, holdout, variant="CAUSAL_FEE")
+        eligible_fee_indices = [
+            i for i in fee_ranking
+            if holdout[i].get("causal_fee_scenario") is not None
+        ]
+        fee_chosen = [holdout[i] for i in eligible_fee_indices[:selected_n]]
         admitted = [
             item for item in holdout
             if item["asof"]["paper_admitted"] in (True, "true")
@@ -358,11 +472,14 @@ def walk_forward_completed_days(episodes: list[dict], days: list) -> dict:
             "holdout_planb_admitted": summarize(admitted),
             "holdout_challenger": summarize(chosen),
             "holdout_enriched_challenger": summarize(enriched_chosen),
+            "holdout_causal_fee_challenger": summarize(fee_chosen),
+            "fee_eligible_holdout": len(eligible_fee_indices),
         })
         pooled_all.extend(holdout)
         pooled_admitted.extend(admitted)
         pooled_selected.extend(chosen)
         pooled_enriched.extend(enriched_chosen)
+        pooled_fee_selected.extend(fee_chosen)
 
     return {
         "selection_is_outcome_blind": True,
@@ -373,6 +490,7 @@ def walk_forward_completed_days(episodes: list[dict], days: list) -> dict:
         "pooled_planb_admitted": summarize(pooled_admitted),
         "pooled_challenger": summarize(pooled_selected),
         "pooled_enriched_challenger": summarize(pooled_enriched),
+        "pooled_causal_fee_challenger": summarize(pooled_fee_selected),
         "promotion_allowed": False,
         "broker_orders": 0,
     }
@@ -409,6 +527,7 @@ def evaluate(episodes: list[dict], *, as_of: datetime, quality: dict) -> dict:
         "holdout_planb_admitted": summarize([]),
         "holdout_challenger": summarize([]),
         "holdout_enriched_challenger": summarize([]),
+        "holdout_causal_fee_challenger": summarize([]),
         "walk_forward": walk_forward_completed_days(episodes, days),
     }
     if len(days) < MIN_TRAIN_DAYS + 1:
@@ -447,6 +566,11 @@ def evaluate(episodes: list[dict], *, as_of: datetime, quality: dict) -> dict:
     report["holdout_enriched_challenger"] = summarize([
         holdout[i] for i in ranked_enriched[:top]
     ])
+    ranked_fee, _ = rank_holdout(train, holdout, variant="CAUSAL_FEE")
+    report["holdout_causal_fee_challenger"] = summarize([
+        holdout[i] for i in ranked_fee
+        if holdout[i].get("causal_fee_scenario") is not None
+    ][:top])
     report["model_fitted"] = True
     report["readiness"] = "EXPLORATORY_ONLY_INSUFFICIENT_MARKET_DAYS"
     return report
@@ -473,12 +597,14 @@ def main() -> None:
         "train_resolved": report["train_resolved"],
         "challenger": report["holdout_challenger"],
         "enriched_challenger": report["holdout_enriched_challenger"],
+        "causal_fee_challenger": report["holdout_causal_fee_challenger"],
         "baseline_all": report["holdout_all"],
         "baseline_planb_admitted": report["holdout_planb_admitted"],
         "model_fitted": report["model_fitted"],
         "walk_forward_folds": report["walk_forward"]["fold_utc_days_evaluated"],
         "walk_forward_pooled_challenger": report["walk_forward"]["pooled_challenger"],
         "walk_forward_pooled_enriched": report["walk_forward"]["pooled_enriched_challenger"],
+        "walk_forward_pooled_fee": report["walk_forward"]["pooled_causal_fee_challenger"],
         "promotion_allowed": False,
         "broker_orders": 0,
     }, sort_keys=True))
