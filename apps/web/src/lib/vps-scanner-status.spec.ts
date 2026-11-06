@@ -1159,6 +1159,32 @@ describe("active multi-model execution presentation", () => {
     expect(result.detail).toMatch(/shadow/i);
   });
 
+  it("identifies a qualified forecast-shadow DEMO entry without claiming original economic admission", () => {
+    const rescued = JSON.parse(JSON.stringify(status));
+    rescued.latestDecision.executionAuthority = "BROKER_NATIVE";
+    rescued.latestDecision.blockers = [];
+    rescued.latestDecision.outcomeState = null;
+    rescued.latestDecision.planBPaperAdmitted = false;
+    rescued.latestDecision.multimodelExecutable = true;
+    rescued.latestDecision.multimodelAuthorityPath = "FORECAST_SHADOW_CONSENSUS";
+    rescued.latestDecision.trainedExpertDirection = "SELL";
+    rescued.latestDecision.trainedExpertShortVotes = 3;
+    rescued.latestDecision.trainedExpertLongVotes = 0;
+    const active = deriveActiveModelUiState(rescued);
+    expect(active.planBLabel).toContain("predicted economics in shadow");
+    expect(active.trainedExpertLabel).toContain("DEMO unanimous forecast-shadow authority");
+    const view = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: rescued,
+      fastMarkState: "LIVE",
+    });
+    expect(view.tradeExpected).toBe(true);
+    expect(view.headline).toBe("Qualified DEMO consensus — forecasts shadow-only");
+    expect(view.detail).toContain("0.20-lot DEMO");
+    expect(view.detail).toContain("economic-news");
+  });
+
   it("explains when DEMO readiness comes from the high-conviction rescue path", () => {
     const rescued = JSON.parse(JSON.stringify(status));
     rescued.latestDecision.executionAuthority = "BROKER_NATIVE";
