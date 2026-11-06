@@ -259,21 +259,25 @@ describe('LiveDemoProfitProtectionService', () => {
       'DEMO',
       m1Rows,
       '1.11340',
-      [{
-        direction: 'BUY',
-        evaluated_at: new Date('2026-10-28T09:04:45.000Z'),
-        execution_authority: 'NONE',
-        blockers: ['DRIFT_OUT_OF_DISTRIBUTION', 'MULTIMODEL_PLAN_B_NOT_ADMITTED'],
-        governance: {},
-        plan_b_strategy_route: 'TREND_CONTINUATION',
-        authority_executable: false,
-      }],
+      [
+        {
+          direction: 'BUY',
+          evaluated_at: new Date('2026-10-28T09:04:45.000Z'),
+          execution_authority: 'NONE',
+          blockers: ['DRIFT_OUT_OF_DISTRIBUTION', 'MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          governance: {},
+          plan_b_strategy_route: 'TREND_CONTINUATION',
+          authority_executable: false,
+        },
+      ],
       auditService as unknown as AuditService,
       [{ sample_count: '12', p90_cost_per_lot: '8.00' }],
-      [{
-        same_side_continuation_at: new Date('2026-10-28T09:03:00.000Z'),
-        opposite_executable_reversal: false,
-      }],
+      [
+        {
+          same_side_continuation_at: new Date('2026-10-28T09:03:00.000Z'),
+          opposite_executable_reversal: false,
+        },
+      ],
     );
 
     await h.service.runOnce(observedAt);
@@ -283,26 +287,28 @@ describe('LiveDemoProfitProtectionService', () => {
       'user-1',
       TradeCloseReason.PROFIT_PROTECTION,
     );
-    expect(auditService.log).toHaveBeenCalledWith(expect.objectContaining({
-      metadata: expect.objectContaining({
-        recommendation: 'CLOSE_CANDIDATE',
-        reason: 'THESIS_NOT_EXECUTABLE',
-        protectedGraceShadow: expect.objectContaining({
-          mode: 'SHADOW_ONLY',
-          wouldConsiderBrokerProtectedGrace: true,
-          requiresVerifiedBrokerProfitStop: true,
-          maxGraceSeconds: 180,
-          noTradeAuthority: true,
-          modifiesExecution: false,
-        }),
-        protectedGraceRunnerShadow: expect.objectContaining({
-          mode: 'SHADOW_ONLY',
-          reason: 'BROKER_VALIDATION_REQUIRED',
-          eligibleForFurtherResearch: true,
-          noTradeAuthority: true,
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          recommendation: 'CLOSE_CANDIDATE',
+          reason: 'THESIS_NOT_EXECUTABLE',
+          protectedGraceShadow: expect.objectContaining({
+            mode: 'SHADOW_ONLY',
+            wouldConsiderBrokerProtectedGrace: true,
+            requiresVerifiedBrokerProfitStop: true,
+            maxGraceSeconds: 180,
+            noTradeAuthority: true,
+            modifiesExecution: false,
+          }),
+          protectedGraceRunnerShadow: expect.objectContaining({
+            mode: 'SHADOW_ONLY',
+            reason: 'BROKER_VALIDATION_REQUIRED',
+            eligibleForFurtherResearch: true,
+            noTradeAuthority: true,
+          }),
         }),
       }),
-    }));
+    );
     expect(h.executionService.closeTrade.mock.invocationCallOrder[0]).toBeLessThan(
       auditService.log.mock.invocationCallOrder[0]!,
     );
@@ -310,9 +316,7 @@ describe('LiveDemoProfitProtectionService', () => {
       String(call[0]).includes('AS same_side_continuation_at'),
     );
     expect(String(sqlCall?.[0])).toContain('evaluated_at <= $5::timestamptz');
-    expect(sqlCall?.[1]).toEqual([
-      'user-1', 'conn-1', 'EURUSD', 'BUY', observedAt.toISOString(),
-    ]);
+    expect(sqlCall?.[1]).toEqual(['user-1', 'conn-1', 'EURUSD', 'BUY', observedAt.toISOString()]);
   });
 
   it('rejects shadow HOLD when quote samples were recorded after the decision', async () => {
