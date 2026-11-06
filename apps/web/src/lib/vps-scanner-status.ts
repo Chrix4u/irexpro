@@ -818,13 +818,13 @@ export function deriveTradeReadinessUiState(
     if (afterCostRejected) {
       detail = `The model estimates ${m1Decision.netExpectedR.toFixed(2)}R after baseline spread/slippage; this is below the expected-return floor. This is separate from the additional historical p90 commission gate, now shadow-only on cTrader DEMO. Other model and timing vetoes may also apply.`;
     }
-    if (driftEvidence) {
-      detail += ` Drift evidence: ${driftEvidence}. This does not grant permission to trade.`;
-    }
-    // Explain observed severity; never create authority from research numbers.
+    // Show numerical severity INSTEAD of repeating a long qualitative warning.
+    // Persisted as-of-bar features are explanatory and never grant orders.
     const ood = driftBlocked ? m1Decision.modelDriftNumericEvidence : null;
     if (ood) {
-      detail += ` At-decision M1 measurements: extension ${ood.extensionAtr.toFixed(2)}× ATR, normalized EMA separation ${ood.emaSeparation.toFixed(2)}, RSI ${ood.rsi14.toFixed(1)}. Recovery needs future validated market conditions, separate Plan-B admission, M1 timing and costs; no automatic order is approved by these numbers.`;
+      detail += ` Drift measurements: extension ${ood.extensionAtr.toFixed(2)}× ATR, EMA separation ${ood.emaSeparation.toFixed(2)}, RSI ${ood.rsi14.toFixed(1)}. A later eligible setup still requires validated model conditions, separate Plan-B admission, M1 timing and acceptable costs. These values do not grant execution.`;
+    } else if (driftEvidence) {
+      detail += ` Drift evidence: ${driftEvidence}. This does not grant permission to trade.`;
     }
     const historicalCommissionR = m1Decision.brokerCommissionP90CostR;
     const afterCommissionR = m1Decision.m1EstimatedNetAfterCommissionR;
