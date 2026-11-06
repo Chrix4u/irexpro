@@ -19,10 +19,12 @@ describe('reversible DEMO-only entry-authority probation', () => {
     });
   });
   it('treats a broker-protected, unanimity-based primary forecast-shadow lane as primary, not fallback', () => {
-    expect(evaluateDemoPrimaryOnlyProbation({
-      ...primary,
-      primaryAuthorityPath: 'FORECAST_SHADOW_CONSENSUS',
-    })).toMatchObject({
+    expect(
+      evaluateDemoPrimaryOnlyProbation({
+        ...primary,
+        primaryAuthorityPath: 'FORECAST_SHADOW_CONSENSUS',
+      }),
+    ).toMatchObject({
       enabled: true,
       blocked: false,
       chosenAuthorityPath: 'FORECAST_SHADOW_CONSENSUS',
