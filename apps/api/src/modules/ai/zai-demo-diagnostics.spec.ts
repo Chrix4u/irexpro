@@ -55,7 +55,20 @@ describe('z.ai DEMO diagnostic telemetry (never changes execution)', () => {
     expect(classifyZaiBlocker('M1_MULTIMODEL_LOSS_STREAK_BRAKE')).toBe('RELIABILITY');
     expect(classifyZaiBlocker('M1_DEMO_RELIABILITY_EARLY_LOSS_STREAK')).toBe('RELIABILITY');
     expect(classifyZaiBlocker('ACCOUNT_RISK_EXPOSURE')).toBe('RISK_OR_ACCOUNT');
+    expect(classifyZaiBlocker('EVENT_RISK_HIGH_IMPACT_BLOCK')).toBe('NEWS_EVENT');
     expect(classifyZaiBlocker('MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED')).toBe('ENTRY_TIMING');
+  });
+
+  it('does not mislabel news-calendar safety as an account-risk restriction', () => {
+    const reasons = attributeZaiDemoBlockers([
+      'MULTIMODEL_PLAN_B_NOT_ADMITTED',
+      'EVENT_RISK_HIGH_IMPACT_BLOCK',
+      'DRIFT_OUT_OF_DISTRIBUTION',
+    ]);
+    expect(reasons.primaryGroup).toBe('NEWS_EVENT');
+    expect(reasons.primaryCode).toBe('EVENT_RISK_HIGH_IMPACT_BLOCK');
+    expect(reasons.groups.some((reason) => reason.group === 'RISK_OR_ACCOUNT')).toBe(false);
+    expect(reasons.modifiesExecution).toBe(false);
   });
 
   it('does not let route-specific loss streak hide genuinely negative after-cost expectancy', () => {
