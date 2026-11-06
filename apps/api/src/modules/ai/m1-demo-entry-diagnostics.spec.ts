@@ -35,6 +35,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       eligibleFallbackProbationVetoDecisions: 0,
       operatingState: 'NO_ACTIVE_SESSION',
       leadingBlockers: [],
+      leadingPlanBReasons: [],
       onlyCurrentSession: true,
     });
   });
@@ -54,6 +55,12 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
         primary_path_decisions: '2',
         primary_reliability_veto_decisions: '2',
         eligible_fallback_probation_veto_decisions: '3',
+        leading_planb_reasons: [
+          { code: 'DIRECTION_QUALITY', count: 31 },
+          { code: 'EXIT_FEASIBILITY', count: '28' },
+          { code: 'UNKNOWN', count: 500 },
+          { code: 'TRADE_QUALITY', count: 50 },
+        ],
         leading_blockers: [
           { code: 'ENSEMBLE_NOT_PROMOTABLE_ADMISSION', count: 240 },
           { code: 'MULTIMODEL_CONTINUATION_TIMING_NOT_READY', count: '200' },
@@ -76,6 +83,10 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       eligibleFallbackProbationVetoDecisions: 3,
       operatingState: 'SCANNING_NO_APPROVED_ENTRY',
       onlyCurrentSession: true,
+      leadingPlanBReasons: [
+        { code: 'DIRECTION_QUALITY', label: 'Direction quality below threshold', count: 31 },
+        { code: 'EXIT_FEASIBILITY', label: 'Exit feasibility check failed', count: 28 },
+      ],
       leadingBlockers: [
         {
           code: 'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
@@ -201,6 +212,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
     const evidence = await service.loadFocusedDemoEntryDiagnostic('user-12');
     expect(evidence.evaluatedDecisions).toBe(42);
+    expect(evidence.leadingPlanBReasons).toEqual([]);
     expect(evidence.leadingBlockers[0]).toEqual({
       code: 'PAPER_NET_EXPECTED_R',
       label: 'Modeled expectancy below required floor',
@@ -221,6 +233,12 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
     expect(sql).toContain("WHERE c.route <> 'ABSTAIN'");
     expect(sql).toContain('AS session_age_minutes');
     expect(sql).toContain('AS last_decision_age_seconds');
+    expect(sql).toContain('top_planb_reasons AS');
+    expect(sql).toContain("jsonb_typeof(c.governance->'multimodelEnsemble'->'reasons')");
+    expect(sql).toContain(
+      "COALESCE(c.governance->'multimodelEnsemble'->>'paperAdmitted', 'false')",
+    );
+    expect(sql).toContain('AS leading_planb_reasons');
     // The age expression is evaluated from the bounded cohort, not directly
     // from the decision table. This column must be included in that CTE.
     expect(sql).toMatch(/cohort AS \(\s*SELECT d\.evaluated_at, d\.route/);

@@ -40,6 +40,8 @@ describe('AI Trader production UI regression contract', () => {
     expect(pageSource).toContain('demoEntryDiagnostic?.scope === "ACTIVE_CTRADER_DEMO"');
     expect(pageSource).toContain('Why no new trades? · Last 60 minutes');
     expect(pageSource).toContain('Frequent reasons among proposed entries:');
+    expect(pageSource).toContain('Plan B admission checks missed:');
+    expect(pageSource).toContain('demoEntryDiagnostic.leadingPlanBReasons');
     expect(pageSource).toContain('SCANNING_NO_APPROVED_ENTRY');
     expect(pageSource).toContain('STALE_SCAN_EVIDENCE');
     expect(pageSource).toContain('No fresh M1 trading decisions for');

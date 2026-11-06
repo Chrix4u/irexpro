@@ -22,6 +22,19 @@ export const DEMO_ENTRY_BLOCKER_LABELS: Readonly<Record<string, string>> = Objec
   M1_DEMO_BROKER_COMMISSION_NET_EDGE_BELOW_FLOOR: 'Broker costs exceed expected edge',
 });
 
+/** Plan B rejection causes are overlapping per-candidate checks, not risk overrides. */
+export const DEMO_PLANB_REASON_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  DIRECTION_QUALITY: 'Direction quality below threshold',
+  EXIT_FEASIBILITY: 'Exit feasibility check failed',
+  TRADE_QUALITY: 'Trade-quality score below threshold',
+  REGIME_TREND_EXTENDED: 'Trend extended beyond permitted regime',
+  REGIME_TREND_WEAK: 'Trend too weak for this route',
+  META_EXPECTED_VALUE: 'Meta-model expected value too low',
+  EXPECTED_R: 'Expected reward-to-risk too low',
+  REGIME_ROLLOVER_RISK: 'Rollover regime unsuitable',
+  SESSION_QUALITY: 'Session quality below requirement',
+});
+
 export interface DemoFocusedEntryDiagnostic {
   scope: 'ACTIVE_CTRADER_DEMO' | 'NO_ACTIVE_CTRADER_DEMO_SESSION';
   windowMinutes: 60;
@@ -47,6 +60,8 @@ export interface DemoFocusedEntryDiagnostic {
     | 'SCANNING_NO_APPROVED_ENTRY'
     | 'RECENT_ENTRY_AUTHORIZATION';
   leadingBlockers: Array<{ code: string; label: string; count: number }>;
+  /** Reasons from rejected Plan B model admissions; overlaps are possible. */
+  leadingPlanBReasons: Array<{ code: string; label: string; count: number }>;
   /** True if the count window is bounded by the current session start. */
   onlyCurrentSession: true;
 }
@@ -65,6 +80,7 @@ export interface DemoFocusedEntryDiagnosticRow {
   primary_reliability_veto_decisions: number | string;
   eligible_fallback_probation_veto_decisions: number | string;
   leading_blockers: unknown;
+  leading_planb_reasons?: unknown;
 }
 
 function safeCount(raw: unknown): number {
@@ -83,6 +99,7 @@ export function toDemoFocusedEntryDiagnostic(
 ): DemoFocusedEntryDiagnostic {
   const active = safeCount(row?.active_session_count) === 1;
   const reasons = Array.isArray(row?.leading_blockers) ? row.leading_blockers : [];
+  const planBReasons = Array.isArray(row?.leading_planb_reasons) ? row.leading_planb_reasons : [];
   const evaluated = active ? safeCount(row?.evaluated_decisions) : 0;
   const candidates = active ? safeCount(row?.candidate_decisions) : 0;
   const approved = active ? safeCount(row?.broker_authorized_decisions) : 0;
@@ -130,6 +147,21 @@ export function toDemoFocusedEntryDiagnostic(
             count: safeCount(item.count),
           }))
           .filter((item) => item.count > 0)
+          .slice(0, 3)
+      : [],
+    leadingPlanBReasons: active
+      ? planBReasons
+          .filter(
+            (item): item is Record<string, unknown> =>
+              item !== null && typeof item === 'object' && !Array.isArray(item),
+          )
+          .filter((item) => typeof item.code === 'string' && item.code in DEMO_PLANB_REASON_LABELS)
+          .map((item) => ({
+            code: String(item.code),
+            label: DEMO_PLANB_REASON_LABELS[String(item.code)],
+            count: safeCount(item.count),
+          }))
+          .filter((item) => item.count > 0 && item.count <= candidates)
           .slice(0, 3)
       : [],
     onlyCurrentSession: true,
