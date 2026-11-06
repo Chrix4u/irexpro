@@ -9,7 +9,19 @@ import type { V8ShadowMetaInput } from './v8-shadow-meta-scorer';
 export const MULTIMODEL_DEMO_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 
 export interface MultimodelDemoAuthorityInput {
-  ensemble: Pick<PlanBEnsembleScore, 'paperAdmitted' | 'ensembleScore' | 'strategyRoute'> & Partial<Pick<PlanBEnsembleScore, 'regimeAllowed' | 'reasons' | 'directionQuality' | 'tradeQuality' | 'exitQuality' | 'sessionQuality' | 'portfolioQuality'>>;
+  ensemble: Pick<PlanBEnsembleScore, 'paperAdmitted' | 'ensembleScore' | 'strategyRoute'> &
+    Partial<
+      Pick<
+        PlanBEnsembleScore,
+        | 'regimeAllowed'
+        | 'reasons'
+        | 'directionQuality'
+        | 'tradeQuality'
+        | 'exitQuality'
+        | 'sessionQuality'
+        | 'portfolioQuality'
+      >
+    >;
   governance: Pick<
     EnsembleGovernanceDecision,
     | 'paperExecutionEligible'
@@ -20,7 +32,8 @@ export interface MultimodelDemoAuthorityInput {
     | 'eventRisk'
     | 'sleeveState'
     | 'driftState'
-  > & Partial<Pick<EnsembleGovernanceDecision, 'executionSpreadEvidenceValid'>>;
+  > &
+    Partial<Pick<EnsembleGovernanceDecision, 'executionSpreadEvidenceValid'>>;
   trainedExpert: HighConvictionOverlay;
   candidateDirection: 'BUY' | 'SELL';
   m1TimingRoute: M1TacticalRoute;
@@ -28,7 +41,11 @@ export interface MultimodelDemoAuthorityInput {
   candidateConfidence?: number;
 }
 
-export type MultimodelDemoAuthorityPath = 'PRIMARY_PLAN_B' | 'FORECAST_SHADOW_CONSENSUS' | 'HIGH_CONVICTION_RESCUE' | 'BLOCKED';
+export type MultimodelDemoAuthorityPath =
+  | 'PRIMARY_PLAN_B'
+  | 'FORECAST_SHADOW_CONSENSUS'
+  | 'HIGH_CONVICTION_RESCUE'
+  | 'BLOCKED';
 
 export interface MultimodelDemoAuthorityDecision {
   executable: boolean;
@@ -168,38 +185,60 @@ function forecastShadowConsensusEligible(input: MultimodelDemoAuthorityInput): b
   const g = input.governance;
   const m = input.trainedExpert;
   const reasons = e.reasons ?? [];
-  const forecastVeto = reasons.some((reason) => FORECAST_REASONS.has(reason)) ||
+  const forecastVeto =
+    reasons.some((reason) => FORECAST_REASONS.has(reason)) ||
     g.paperExecutionBlockers.includes('PAPER_NET_EXPECTED_R');
-  const economicalOnly = (e.paperAdmitted ||
-    (reasons.length > 0 && reasons.every((reason) => FORECAST_REASONS.has(reason)))) &&
+  const economicalOnly =
+    (e.paperAdmitted ||
+      (reasons.length > 0 && reasons.every((reason) => FORECAST_REASONS.has(reason)))) &&
     g.paperExecutionBlockers.length > 0 &&
     g.paperExecutionBlockers.every((reason) => FORECAST_GOVERNANCE_BLOCKERS.has(reason));
-  const quality = e.regimeAllowed === true &&
-    Number.isFinite(input.candidateConfidence) && input.candidateConfidence! >= 0.64 &&
-    Number.isFinite(e.directionQuality) && e.directionQuality! >= 0.55 &&
-    Number.isFinite(e.tradeQuality) && e.tradeQuality! >= 0.48 &&
-    Number.isFinite(e.exitQuality) && e.exitQuality! >= 0.48 &&
-    Number.isFinite(e.sessionQuality) && e.sessionQuality! >= 0.5 &&
-    Number.isFinite(e.portfolioQuality) && e.portfolioQuality! >= 0.35;
+  const quality =
+    e.regimeAllowed === true &&
+    Number.isFinite(input.candidateConfidence) &&
+    input.candidateConfidence! >= 0.64 &&
+    Number.isFinite(e.directionQuality) &&
+    e.directionQuality! >= 0.55 &&
+    Number.isFinite(e.tradeQuality) &&
+    e.tradeQuality! >= 0.48 &&
+    Number.isFinite(e.exitQuality) &&
+    e.exitQuality! >= 0.48 &&
+    Number.isFinite(e.sessionQuality) &&
+    e.sessionQuality! >= 0.5 &&
+    Number.isFinite(e.portfolioQuality) &&
+    e.portfolioQuality! >= 0.35;
   const allVotes = (m.longVotes ?? 0) + (m.shortVotes ?? 0);
   const sameVotes = input.candidateDirection === 'BUY' ? m.longVotes : m.shortVotes;
-  const agrees = m.allBrokerNative === true &&
-    m.state !== 'UNAVAILABLE' && m.state !== 'STALE' &&
+  const agrees =
+    m.allBrokerNative === true &&
+    m.state !== 'UNAVAILABLE' &&
+    m.state !== 'STALE' &&
     m.direction === input.candidateDirection &&
-    Number.isFinite(m.freshnessSeconds) && m.freshnessSeconds! >= 0 &&
+    Number.isFinite(m.freshnessSeconds) &&
+    m.freshnessSeconds! >= 0 &&
     m.freshnessSeconds! <= 90 &&
-    Number.isFinite(m.ensembleConfidence) && m.ensembleConfidence! >= 0.7 &&
-    allVotes >= 3 && sameVotes === allVotes;
-  const independentSafety = g.executionSpreadEvidenceValid === true &&
+    Number.isFinite(m.ensembleConfidence) &&
+    m.ensembleConfidence! >= 0.7 &&
+    allVotes >= 3 &&
+    sameVotes === allVotes;
+  const independentSafety =
+    g.executionSpreadEvidenceValid === true &&
     g.paperExecutionCostUsable === true &&
-    g.eventRisk === 'CLEAR' && g.driftState === 'NORMAL' &&
+    g.eventRisk === 'CLEAR' &&
+    g.driftState === 'NORMAL' &&
     g.sleeveState !== 'BLOCKED' &&
     e.strategyRoute !== 'EARLY_TRANSITION' &&
     input.m1TimingRoute !== 'ABSTAIN' &&
     confirmedReversalTimingConsistent(input) &&
     trendContinuationTimingConsistent(input);
-  return input.forecastEconomicsShadowOnlyDemo === true &&
-    forecastVeto && economicalOnly && quality && agrees && independentSafety;
+  return (
+    input.forecastEconomicsShadowOnlyDemo === true &&
+    forecastVeto &&
+    economicalOnly &&
+    quality &&
+    agrees &&
+    independentSafety
+  );
 }
 
 export function evaluateMultimodelDemoAuthority(
@@ -229,8 +268,7 @@ export function evaluateMultimodelDemoAuthority(
   const shadowConsensusExecutable =
     !primaryPlanBExecutable && forecastShadowConsensusEligible(input);
   const rescueExecutable =
-    !primaryPlanBExecutable && !shadowConsensusExecutable &&
-    highConvictionRescueEligible(input);
+    !primaryPlanBExecutable && !shadowConsensusExecutable && highConvictionRescueEligible(input);
   const executable = primaryPlanBExecutable || shadowConsensusExecutable || rescueExecutable;
 
   return {
