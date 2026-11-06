@@ -679,6 +679,58 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
   }
 
   /**
+   * Research-only as-of M1 continuation observations for the held position.
+   * A separate NEW entry may still be OOD, unprofitable or unadmitted.
+   * This query cannot grant any broker authority.
+   */
+  private async loadProfitLockPatienceSignal(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+  ): Promise<{ sameSideContinuationAt: Date | null; oppositeExecutableReversal: boolean }> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          MAX(evaluated_at) FILTER (
+            WHERE direction = $4 AND route = 'M1_TREND_CONTINUATION'
+          ) AS same_side_continuation_at,
+          COALESCE(BOOL_OR(
+            direction <> $4
+            AND route = 'M1_CONFIRMED_REVERSAL'
+            AND execution_authority = 'BROKER_NATIVE'
+            AND blockers = '[]'::jsonb
+            AND evaluated_at >= $5::timestamptz - interval '90 seconds'
+          ), false) AS opposite_executable_reversal
+        FROM trading.m1_tactical_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND instrument = $3
+          AND evaluated_at <= $5::timestamptz
+          AND evaluated_at >= $5::timestamptz - interval '180 seconds'
+      `,
+      [
+        trade.user_id,
+        trade.broker_connection_id,
+        trade.instrument.toUpperCase(),
+        trade.direction,
+        observedAt.toISOString(),
+      ],
+    )) as Array<{
+      same_side_continuation_at: Date | string | null;
+      opposite_executable_reversal: boolean | string | null;
+    }>;
+    const row = rows[0];
+    const time = row?.same_side_continuation_at
+      ? new Date(row.same_side_continuation_at)
+      : null;
+    return {
+      sameSideContinuationAt: time && Number.isFinite(time.getTime()) ? time : null,
+      oppositeExecutableReversal:
+        row?.opposite_executable_reversal === true ||
+        row?.opposite_executable_reversal === 'true',
+    };
+  }
+
+  /**
    * Conservative p90 of positive historical commission/financing cost per
    * lot. A minimum of five past, same-account/symbol/currency samples is
    * required; no future closes can influence a proposed runner.
