@@ -38,7 +38,12 @@ export function evaluateDemoPrimaryOnlyProbation(input: {
   // (M5 handoff, fallback, scout or rescued primary) remains vetoed.
   const executionPathExists =
     chosenAuthorityPath !== 'BLOCKED' && chosenAuthorityPath !== 'UNKNOWN';
-  const blocked = input.enabled && executionPathExists && chosenAuthorityPath !== 'PRIMARY_PLAN_B';
+  // The unanimity-based, forecast-shadow route remains the primary Plan-B
+  // model with only predictive economic admission in research mode.
+  // It is not a lower-quality fallback; all broker, drift and risk vetoes remain.
+  const primaryRoute =
+    chosenAuthorityPath === 'PRIMARY_PLAN_B' || chosenAuthorityPath === 'FORECAST_SHADOW_CONSENSUS';
+  const blocked = input.enabled && executionPathExists && !primaryRoute;
   return {
     artifact: DEMO_PRIMARY_ONLY_PROBATION_ARTIFACT,
     enabled: input.enabled,

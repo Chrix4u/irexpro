@@ -18,6 +18,21 @@ describe('reversible DEMO-only entry-authority probation', () => {
       modifiesOpenPositions: false,
     });
   });
+  it('treats a broker-protected, unanimity-based primary forecast-shadow lane as primary, not fallback', () => {
+    expect(
+      evaluateDemoPrimaryOnlyProbation({
+        ...primary,
+        primaryAuthorityPath: 'FORECAST_SHADOW_CONSENSUS',
+      }),
+    ).toMatchObject({
+      enabled: true,
+      blocked: false,
+      chosenAuthorityPath: 'FORECAST_SHADOW_CONSENSUS',
+      reason: 'PRIMARY_PLAN_B',
+      modifiesOpenPositions: false,
+    });
+  });
+
   it('blocks M5 handoff even when its own evidence is locally eligible', () => {
     expect(evaluateDemoPrimaryOnlyProbation({ ...primary, m5HandoffEligible: true })).toMatchObject(
       {
