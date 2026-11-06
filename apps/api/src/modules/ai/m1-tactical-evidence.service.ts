@@ -902,9 +902,15 @@ export class M1TacticalEvidenceService {
     const rsi14 = nullableNumber(oodResearchFeatures.rsi14);
     const trustedOodNumbers =
       oodResearchFeatures.version === 'm1-ood-asof-envelope-v1' &&
-      extensionAtr !== null && extensionAtr >= 0 && extensionAtr <= 100 &&
-      emaSeparation !== null && emaSeparation >= 0 && emaSeparation <= 1 &&
-      rsi14 !== null && rsi14 >= 0 && rsi14 <= 100;
+      extensionAtr !== null &&
+      extensionAtr >= 0 &&
+      extensionAtr <= 100 &&
+      emaSeparation !== null &&
+      emaSeparation >= 0 &&
+      emaSeparation <= 1 &&
+      rsi14 !== null &&
+      rsi14 >= 0 &&
+      rsi14 <= 100;
     return {
       instrument: String(row.instrument).trim().toUpperCase(),
       direction: row.direction,
