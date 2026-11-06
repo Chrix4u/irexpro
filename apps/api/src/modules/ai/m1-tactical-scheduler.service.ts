@@ -129,7 +129,6 @@ interface MultimodelDemoEvaluation {
   trainedExpert: HighConvictionOverlay;
   authority: MultimodelDemoAuthorityDecision;
   portfolioSnapshotAvailable: boolean;
-  verifiedCtraderDemo: boolean;
 }
 
 type M1ProfessionalFallbackTier =
@@ -1057,33 +1056,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           modifiesExecution: false,
         };
 
-    // Do not infer a DEMO account from the global rollout name or a user's
-    // UI selection. An actual active cTrader DEMO Full Auto connection is
-    // required before predicted economics become non-veto research.
-    let verifiedCtraderDemo = false;
-    if (
-      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&
-      this.rolloutPolicy.demoBrokerCommissionShadow === true &&
-      this.rolloutPolicy.demoBrokerCommissionFloor === false
-    ) {
-      try {
-        verifiedCtraderDemo = await this.evidence.isActiveCtraderDemoFullAutoConnection(
-          userId,
-          brokerConnectionId,
-        );
-      } catch (error) {
-        this.logger.warn(
-          `DEMO forecast research account verification unavailable: ${(error as Error).message}`,
-        );
-      }
-    }
     const baseAuthority = evaluateMultimodelDemoAuthority({
       ensemble,
       governance,
       trainedExpert,
       candidateDirection: candidate.direction,
-      candidateConfidence: candidate.confidence,
-      forecastEconomicsShadowOnlyDemo: verifiedCtraderDemo,
       m1TimingRoute: classifyM1TacticalRoute(
         candidate,
         buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2).find(
@@ -1101,14 +1078,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       executable: baseAuthority.executable && portfolioSnapshotAvailable,
       blockers: unique([...baseAuthority.blockers, ...portfolioBlocker]),
     };
-    return {
-      ensemble,
-      governance,
-      trainedExpert,
-      authority,
-      portfolioSnapshotAvailable,
-      verifiedCtraderDemo,
-    };
+    return { ensemble, governance, trainedExpert, authority, portfolioSnapshotAvailable };
   }
 
   private async persistCandidate(
@@ -1387,39 +1357,6 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? shadowPairSideReliability?.eligible === true &&
           (standardGovernanceExecutable || localImpulseDriftOnlyRescue)
         : standardGovernanceExecutable;
-    const trialExpert = multimodelDemo?.trainedExpert;
-    const trialVotesTotal = (trialExpert?.longVotes ?? 0) + (trialExpert?.shortVotes ?? 0);
-    const trialDirectionVotes =
-      candidate.direction === 'BUY' ? trialExpert?.longVotes : trialExpert?.shortVotes;
-    // Opt-in exception to PRIMARY_ONLY probation: the existing M1 continuation
-    // fallback has already established positive actual pair-side reliability,
-    // M1 timing and sound broker risk geometry. A cTrader DEMO probe can be
-    // tested at micro size when all three broker-native experts agree.
-    const qualifiedContinuationMicroTrialEligible =
-      professionalDemoPhase &&
-      multimodelDemo?.verifiedCtraderDemo === true &&
-      this.rolloutPolicy.demoPrimaryOnlyProbation === true &&
-      this.rolloutPolicy.demoBrokerCommissionFloor === false &&
-      this.rolloutPolicy.demoBrokerCommissionShadow === true &&
-      professionalM1FallbackExecutable &&
-      professionalM1Fallback?.tier === 'QUALIFIED_CONTINUATION' &&
-      routeDecision.route === 'M1_TREND_CONTINUATION' &&
-      candidate.confidence >= 0.7 &&
-      candidate.directionQuality >= 0.68 &&
-      multimodelDemo.governance.eventRisk === 'CLEAR' &&
-      multimodelDemo.governance.driftState !== 'OUT_OF_DISTRIBUTION' &&
-      multimodelDemo.governance.executionSpreadEvidenceValid === true &&
-      multimodelDemo.portfolioSnapshotAvailable === true &&
-      trialExpert?.allBrokerNative === true &&
-      trialExpert.direction === candidate.direction &&
-      trialVotesTotal >= 3 &&
-      trialDirectionVotes === trialVotesTotal &&
-      Number.isFinite(trialExpert.ensembleConfidence) &&
-      trialExpert.ensembleConfidence! >= 0.7 &&
-      Number.isFinite(trialExpert.freshnessSeconds) &&
-      trialExpert.freshnessSeconds! >= 0 &&
-      trialExpert.freshnessSeconds! <= 180;
-
     const demoPrimaryOnlyProbation = evaluateDemoPrimaryOnlyProbation({
       enabled: professionalDemoPhase && this.rolloutPolicy.demoPrimaryOnlyProbation === true,
       primaryAuthorityPath: multimodelDemo?.authority.authorityPath ?? null,
@@ -1428,12 +1365,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? (professionalM1Fallback?.tier ?? null)
         : null,
       extensionScoutExecutable: extensionExhaustionDemoScoutExecutable,
-      qualifiedContinuationMicroTrialEligible,
     });
-    const cappedExecutionVolumeCap =
-      demoPrimaryOnlyProbation.trialLotCap != null
-        ? Math.min(executionVolumeCap, demoPrimaryOnlyProbation.trialLotCap)
-        : executionVolumeCap;
     // Authoritative DEMO new-entry scope, after all research predictions
     // have been scored. A research-only pair MUST NOT reach a broker write,
     // including direction-flip closures triggered by a new entry candidate.
@@ -1508,14 +1440,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         );
       }
     }
-    // A forecast-shadow consensus may authorize a *new* DEMO candidate, but
-    // must never inherit the older primary route's authority to close a
-    // different, already-open position. Only the original fully admitted
-    // Plan-B confirmed-reversal route can request a direction-flip close.
     const confirmedDirectionFlip =
       activeOppositePositions.length > 0 &&
       multimodelPrimaryExecutable &&
-      multimodelDemo?.authority.authorityPath === 'PRIMARY_PLAN_B' &&
       multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL';
     if (confirmedDirectionFlip && this.executionService) {
       for (const position of activeOppositePositions) {
@@ -1593,8 +1520,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const selectedPrimaryForCommission =
       professionalDemoPhase &&
       multimodelPrimaryExecutable &&
-      (demoPrimaryOnlyProbation.chosenAuthorityPath === 'PRIMARY_PLAN_B' ||
-        demoPrimaryOnlyProbation.chosenAuthorityPath === 'FORECAST_SHADOW_CONSENSUS') &&
+      demoPrimaryOnlyProbation.chosenAuthorityPath === 'PRIMARY_PLAN_B' &&
       !demoPrimaryOnlyProbation.blocked;
     const commissionFloorEnabled =
       professionalDemoPhase && this.rolloutPolicy.demoBrokerCommissionFloor === true;
@@ -1837,7 +1763,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? { ...provisionalScoutReliability }
             : null,
         scoutReliabilityTier,
-        executionVolumeCap: cappedExecutionVolumeCap,
+        executionVolumeCap,
         professionalM1Fallback,
         professionalM1FallbackExecutionEnabled: professionalM1FallbackExecutable,
         microDriftOnlyRescue,
@@ -1903,7 +1829,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         localImpulseDriftOnlyRescue,
         evidenceQualifiedScout,
         scoutReliabilityTier,
-        cappedExecutionVolumeCap,
+        executionVolumeCap,
         multimodelDemo,
         professionalM1Fallback,
         m5EarlyTransitionEvidence,

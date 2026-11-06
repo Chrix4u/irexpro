@@ -428,9 +428,7 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
   // Plan-B keeps a legacy strategyRoute even when the current market regime
   // is rejected. Never describe that fallback label as a qualified setup.
   const planBLabel =
-    decision?.multimodelAuthorityPath === "FORECAST_SHADOW_CONSENSUS"
-      ? "DEMO model consensus · predicted economics in shadow"
-      : decision?.planBRegimeAllowed === false
+    decision?.planBRegimeAllowed === false
       ? `No qualified strategy route · ${routeLabel(decision.planBRegime)}`
       : decision?.planBPaperAdmitted === false
         ? `Plan-B not admitted · ${routeLabel(decision.planBRoute)}`
@@ -444,11 +442,9 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
   const directionalVotes =
     direction === "BUY" ? longVotes : direction === "SELL" ? shortVotes : null;
   const expertRoleLabel =
-    decision?.multimodelAuthorityPath === "FORECAST_SHADOW_CONSENSUS"
-      ? "DEMO unanimous forecast-shadow authority"
-      : decision?.multimodelAuthorityPath === "HIGH_CONVICTION_RESCUE"
-        ? "High-conviction authority"
-        : "Shadow challenger";
+    decision?.multimodelAuthorityPath === "HIGH_CONVICTION_RESCUE"
+      ? "High-conviction authority"
+      : "Shadow challenger";
   const trainedExpertLabel =
     direction && directionalVotes != null && totalVotes > 0
       ? `${expertRoleLabel} · ${directionalVotes}/${totalVotes} ${direction} votes · ${percentLabel(decision?.trainedExpertConfidence)}`
@@ -736,22 +732,16 @@ export function deriveTradeReadinessUiState(
     }
 
     if (executionEligible) {
-      const forecastShadowConsensus =
-        m1Decision.multimodelAuthorityPath === "FORECAST_SHADOW_CONSENSUS";
       const highConvictionRescue =
         m1Decision.multimodelAuthorityPath === "HIGH_CONVICTION_RESCUE";
       const rescueCap = finite(m1Decision.multimodelRescueVolumeCap);
       return {
         score: rounded,
         band: "READY",
-        headline: forecastShadowConsensus
-          ? "Qualified DEMO consensus — forecasts shadow-only"
-          : highConvictionRescue
-            ? "High-conviction DEMO setup ready"
-            : "Trade conditions ready",
-        detail: forecastShadowConsensus
-          ? "The direction, entry timing and three fresh broker-native trained experts agree. Forecast profit and historical commission estimates are collected for research, not used as vetoes for this capped 0.20-lot DEMO route. Actual broker spread validity, stop-loss, model drift, economic-news, account, portfolio and risk checks remain mandatory."
-          : highConvictionRescue
+        headline: highConvictionRescue
+          ? "High-conviction DEMO setup ready"
+          : "Trade conditions ready",
+        detail: highConvictionRescue
           ? `The high-conviction DEMO rescue is active: three trained experts are unanimously aligned with this broker-native setup, expectancy and execution-cost checks are positive, and the older admission/drift veto has been simplified. This rescue path is capped at ${(rescueCap ?? 0.2).toFixed(2)} lot and still passes the final account-risk engine.`
           : multimodelPrimary
             ? "The promoted PAPER champion has passed its original Plan-B admission and governance gates; M1 is supplying timing and trade geometry, while the trained XGBoost challenger remains shadow-only evidence."

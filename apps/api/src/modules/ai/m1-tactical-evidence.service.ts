@@ -448,29 +448,6 @@ function blockers(value: unknown): string[] {
 export class M1TacticalEvidenceService {
   constructor(private readonly dataSource: DataSource) {}
 
-  /** A DEMO-only forecast experiment must never inherit authority from LIVE. */
-  async isActiveCtraderDemoFullAutoConnection(
-    userId: string,
-    brokerConnectionId: string,
-  ): Promise<boolean> {
-    if (!userId || !brokerConnectionId) return false;
-    const rows = (await this.dataSource.query(
-      `
-        SELECT EXISTS (
-          SELECT 1
-          FROM trading.trading_sessions s
-          JOIN broker.broker_connections b ON b.id=s.broker_connection_id
-            AND b.user_id=s.user_id
-          WHERE s.user_id=$1 AND s.broker_connection_id=$2
-            AND s.status='ACTIVE' AND s.execution_mode='FULL_AUTO'
-            AND b.broker_id='ctrader' AND b.account_type='DEMO'
-        ) AS eligible
-      `,
-      [userId, brokerConnectionId],
-    )) as Array<{ eligible: boolean | string | null }>;
-    return rows[0]?.eligible === true;
-  }
-
   /**
    * Bounded, read-only, account-scoped explanation of why the three focused
    * DEMO pairs are not opening trades. A currently ACTIVE, exact-user cTrader

@@ -11,14 +11,7 @@ export interface DemoPrimaryOnlyProbationDecision {
   enabled: boolean;
   blocked: boolean;
   chosenAuthorityPath: string;
-  reason:
-    | 'NOT_ENFORCED'
-    | 'NO_EXECUTABLE_PATH'
-    | 'PRIMARY_PLAN_B'
-    | 'QUALIFIED_CONTINUATION_MICRO_TRIAL'
-    | 'FALLBACK_ROUTE_IN_PROBATION';
-  /** Maximum executable volume for an independently verified DEMO micro trial. */
-  trialLotCap: number | null;
+  reason: 'NOT_ENFORCED' | 'NO_EXECUTABLE_PATH' | 'PRIMARY_PLAN_B' | 'FALLBACK_ROUTE_IN_PROBATION';
   modifiesOpenPositions: false;
 }
 
@@ -28,8 +21,6 @@ export function evaluateDemoPrimaryOnlyProbation(input: {
   m5HandoffEligible: boolean;
   executableFallbackTier: string | null;
   extensionScoutExecutable: boolean;
-  /** Verified cTrader DEMO account with positive local reliability and fresh agreement. */
-  qualifiedContinuationMicroTrialEligible?: boolean;
 }): DemoPrimaryOnlyProbationDecision {
   // This exactly matches the order-routing precedence in submitPaperDecision.
   // A fallback that has no primary permission stays observational only.
@@ -47,31 +38,19 @@ export function evaluateDemoPrimaryOnlyProbation(input: {
   // (M5 handoff, fallback, scout or rescued primary) remains vetoed.
   const executionPathExists =
     chosenAuthorityPath !== 'BLOCKED' && chosenAuthorityPath !== 'UNKNOWN';
-  // The unanimity-based, forecast-shadow route remains the primary Plan-B
-  // model with only predictive economic admission in research mode.
-  // It is not a lower-quality fallback; all broker, drift and risk vetoes remain.
-  const primaryRoute =
-    chosenAuthorityPath === 'PRIMARY_PLAN_B' || chosenAuthorityPath === 'FORECAST_SHADOW_CONSENSUS';
-  const qualifiedMicroTrial =
-    input.enabled &&
-    input.qualifiedContinuationMicroTrialEligible === true &&
-    chosenAuthorityPath === 'QUALIFIED_CONTINUATION';
-  const blocked = input.enabled && executionPathExists && !primaryRoute && !qualifiedMicroTrial;
+  const blocked = input.enabled && executionPathExists && chosenAuthorityPath !== 'PRIMARY_PLAN_B';
   return {
     artifact: DEMO_PRIMARY_ONLY_PROBATION_ARTIFACT,
     enabled: input.enabled,
     blocked,
     chosenAuthorityPath,
-    trialLotCap: qualifiedMicroTrial ? 0.05 : null,
     reason: !input.enabled
       ? 'NOT_ENFORCED'
       : !executionPathExists
         ? 'NO_EXECUTABLE_PATH'
         : blocked
           ? 'FALLBACK_ROUTE_IN_PROBATION'
-          : qualifiedMicroTrial
-            ? 'QUALIFIED_CONTINUATION_MICRO_TRIAL'
-            : 'PRIMARY_PLAN_B',
+          : 'PRIMARY_PLAN_B',
     modifiesOpenPositions: false,
   };
 }
