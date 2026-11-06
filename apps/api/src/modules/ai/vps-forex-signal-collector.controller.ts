@@ -36,7 +36,12 @@ export class VpsForexSignalCollectorController {
   })
   async getM1TacticalStatus(@CurrentUserId() userId: string) {
     const runtime = this.m1Tactical.getStatus();
-    const latestDecision = await this.m1Evidence.loadLatestDecisionStateForUser(userId);
+    const preferredPairs =
+      runtime.authorityMode === 'DEMO_FULL_AUTO' ? (runtime.demoEntryInstruments ?? []) : [];
+    const latestDecision = await this.m1Evidence.loadLatestDecisionStateForUser(
+      userId,
+      preferredPairs,
+    );
     return {
       ...runtime,
       latestDecision,
