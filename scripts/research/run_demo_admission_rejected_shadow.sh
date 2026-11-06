@@ -83,6 +83,15 @@ PYTHONPATH="$repo/services/ai-engine" "$python_bin" \
   --cohort-csv "$first_hit_csv" --report-json "$first_hit_json"
 chmod 600 "$first_hit_json"
 mv -f "$first_hit_json" "$research_dir/latest-first-hit-report.json"
+# Predict prospective FIRST-BARRIER outcomes from as-of features only.
+# This classifier is held entirely in memory and can never promote itself.
+selector_tmp="$(mktemp "$research_dir/selector.XXXXXXXX.json")"
+trap 'rm -f "$tmp_csv" "$tmp_json" "$challenger_tmp" "$first_hit_csv" "$first_hit_json" "$selector_tmp"' EXIT
+PYTHONPATH="$repo/services/ai-engine" "$python_bin" \
+  -m app.domain.training.demo_first_hit_temporal_selector \
+  --cohort-csv "$first_hit_csv" --report-json "$selector_tmp"
+chmod 600 "$selector_tmp"
+mv -f "$selector_tmp" "$research_dir/latest-first-hit-selector-report.json"
 rm -f "$first_hit_csv"
 
 printf '%s\n' 'REJECTED_ENTRY_SHADOW_READONLY=TRUE' 'REJECTED_ENTRY_BROKER_ORDER_WRITES=0' 'REJECTED_ENTRY_PROMOTION_ALLOWED=FALSE'
