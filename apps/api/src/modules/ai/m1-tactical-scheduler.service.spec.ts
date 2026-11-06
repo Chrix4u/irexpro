@@ -4069,6 +4069,14 @@ describe('M1 V8 multi-model DEMO authority', () => {
         primaryEngineCode: 'irexpro-multimodel-ensemble-v1',
         m1TacticalRole: 'TIMING_SPECIALIST',
         multimodelAuthority: expect.objectContaining({ executable: true }),
+        productionQualificationShadow: expect.objectContaining({
+          artifact: 'production-qualification-decision-audit-v1',
+          mode: 'SHADOW_ONLY',
+          modifiesExecution: false,
+          grantsExecution: false,
+          trainedExpertConfirmed: true,
+          expertChecks: [],
+        }),
       }),
     );
   });
@@ -4219,6 +4227,20 @@ describe('M1 V8 multi-model DEMO authority', () => {
         metadata: expect.objectContaining({ multimodel_trained_expert_state: 'UNAVAILABLE' }),
       }),
     );
+    const recorded = h.recordDecision.mock.calls.find(
+      ([value]) => value.route === 'M1_TREND_CONTINUATION' && value.direction === 'BUY',
+    )?.[0];
+    // Research-only comparison must explain the missing expert without
+    // silently changing the existing broker admission.
+    expect(recorded?.executionAuthority).toBe('BROKER_NATIVE');
+    expect(recorded?.governance.productionQualificationShadow).toMatchObject({
+      mode: 'SHADOW_ONLY',
+      grantsExecution: false,
+      modifiesExecution: false,
+      trainedExpertConfirmed: false,
+      strictAgreementCounterfactual: false,
+      expertChecks: expect.arrayContaining(['EXPERT_NOT_CONFIRMED']),
+    });
   });
 
   it('reports a risk-suspended FULL_AUTO session as risk protection instead of session inactivity', async () => {
