@@ -158,6 +158,15 @@ describe('evaluateMultimodelDemoAuthority', () => {
       },
     });
     expect(multimodelDemoExecutionVolumeCap(4, result)).toBe(0.2);
+    expect(
+      multimodelDemoSignalConfidence(
+        {
+          ensemble: { ...ensemble(false), ensembleScore: 0.49 },
+          trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.74 },
+        },
+        result,
+      ),
+    ).toBeCloseTo(0.74, 10);
   });
 
   it('keeps an otherwise identical predicted-forecast veto when the DEMO shadow option is not selected', () => {
