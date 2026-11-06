@@ -129,6 +129,7 @@ interface MultimodelDemoEvaluation {
   trainedExpert: HighConvictionOverlay;
   authority: MultimodelDemoAuthorityDecision;
   portfolioSnapshotAvailable: boolean;
+  verifiedCtraderDemo: boolean;
 }
 
 type M1ProfessionalFallbackTier =
@@ -1100,7 +1101,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       executable: baseAuthority.executable && portfolioSnapshotAvailable,
       blockers: unique([...baseAuthority.blockers, ...portfolioBlocker]),
     };
-    return { ensemble, governance, trainedExpert, authority, portfolioSnapshotAvailable };
+    return {
+      ensemble,
+      governance,
+      trainedExpert,
+      authority,
+      portfolioSnapshotAvailable,
+      verifiedCtraderDemo,
+    };
   }
 
   private async persistCandidate(
@@ -1379,6 +1387,42 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? shadowPairSideReliability?.eligible === true &&
           (standardGovernanceExecutable || localImpulseDriftOnlyRescue)
         : standardGovernanceExecutable;
+    const trialExpert = multimodelDemo?.trainedExpert;
+    const trialVotesTotal =
+      (trialExpert?.longVotes ?? 0) + (trialExpert?.shortVotes ?? 0);
+    const trialDirectionVotes =
+      candidate.direction === 'BUY'
+        ? trialExpert?.longVotes
+        : trialExpert?.shortVotes;
+    // Opt-in exception to PRIMARY_ONLY probation: the existing M1 continuation
+    // fallback has already established positive actual pair-side reliability,
+    // M1 timing and sound broker risk geometry. A cTrader DEMO probe can be
+    // tested at micro size when all three broker-native experts agree.
+    const qualifiedContinuationMicroTrialEligible =
+      professionalDemoPhase &&
+      multimodelDemo?.verifiedCtraderDemo === true &&
+      this.rolloutPolicy.demoPrimaryOnlyProbation === true &&
+      this.rolloutPolicy.demoBrokerCommissionFloor === false &&
+      this.rolloutPolicy.demoBrokerCommissionShadow === true &&
+      professionalM1FallbackExecutable &&
+      professionalM1Fallback?.tier === 'QUALIFIED_CONTINUATION' &&
+      routeDecision.route === 'M1_TREND_CONTINUATION' &&
+      candidate.confidence >= 0.7 &&
+      candidate.directionQuality >= 0.68 &&
+      multimodelDemo.governance.eventRisk === 'CLEAR' &&
+      multimodelDemo.governance.driftState !== 'OUT_OF_DISTRIBUTION' &&
+      multimodelDemo.governance.executionSpreadEvidenceValid === true &&
+      multimodelDemo.portfolioSnapshotAvailable === true &&
+      trialExpert?.allBrokerNative === true &&
+      trialExpert.direction === candidate.direction &&
+      trialVotesTotal >= 3 &&
+      trialDirectionVotes === trialVotesTotal &&
+      Number.isFinite(trialExpert.ensembleConfidence) &&
+      trialExpert.ensembleConfidence! >= 0.7 &&
+      Number.isFinite(trialExpert.freshnessSeconds) &&
+      trialExpert.freshnessSeconds! >= 0 &&
+      trialExpert.freshnessSeconds! <= 180;
+
     const demoPrimaryOnlyProbation = evaluateDemoPrimaryOnlyProbation({
       enabled: professionalDemoPhase && this.rolloutPolicy.demoPrimaryOnlyProbation === true,
       primaryAuthorityPath: multimodelDemo?.authority.authorityPath ?? null,
@@ -1387,7 +1431,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? (professionalM1Fallback?.tier ?? null)
         : null,
       extensionScoutExecutable: extensionExhaustionDemoScoutExecutable,
+      qualifiedContinuationMicroTrialEligible,
     });
+    const cappedExecutionVolumeCap =
+      demoPrimaryOnlyProbation.trialLotCap != null
+        ? Math.min(executionVolumeCap, demoPrimaryOnlyProbation.trialLotCap)
+        : executionVolumeCap;
     // Authoritative DEMO new-entry scope, after all research predictions
     // have been scored. A research-only pair MUST NOT reach a broker write,
     // including direction-flip closures triggered by a new entry candidate.
@@ -1791,7 +1840,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? { ...provisionalScoutReliability }
             : null,
         scoutReliabilityTier,
-        executionVolumeCap,
+        executionVolumeCap: cappedExecutionVolumeCap,
         professionalM1Fallback,
         professionalM1FallbackExecutionEnabled: professionalM1FallbackExecutable,
         microDriftOnlyRescue,
@@ -1857,7 +1906,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         localImpulseDriftOnlyRescue,
         evidenceQualifiedScout,
         scoutReliabilityTier,
-        executionVolumeCap,
+        cappedExecutionVolumeCap,
         multimodelDemo,
         professionalM1Fallback,
         m5EarlyTransitionEvidence,
