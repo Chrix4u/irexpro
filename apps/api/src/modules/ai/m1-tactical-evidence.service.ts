@@ -75,6 +75,12 @@ export interface M1TacticalLatestDecisionState {
   /** Read-only model drift provenance; never overrides hard risk vetoes. */
   modelDriftState?: string | null;
   modelDriftDiagnostics?: string[];
+  /** Exact as-of numeric OOD measurements for explanation, never execution. */
+  modelDriftNumericEvidence?: {
+    extensionAtr: number;
+    emaSeparation: number;
+    rsi14: number;
+  } | null;
   /** As-of broker commission research on already blocked DEMO decisions. */
   brokerCommissionResearchReason?: string | null;
   brokerCommissionSampleCount?: number | null;
@@ -864,6 +870,7 @@ export class M1TacticalEvidenceService {
     const governance = jsonObject(row.governance);
     const multimodelEnsemble = jsonObject(governance.multimodelEnsemble);
     const multimodelGovernance = jsonObject(governance.multimodelGovernance);
+    const oodResearchFeatures = jsonObject(governance.oodResearchFeatures);
     const trainedExpert = jsonObject(governance.multimodelTrainedExpert);
     const multimodelAuthority = jsonObject(governance.multimodelAuthority);
     const zaiDemoDiagnostics = jsonObject(governance.zaiDemoDiagnostics);
@@ -890,6 +897,20 @@ export class M1TacticalEvidenceService {
     const commissionReady = commissionReason === 'CAUSAL_FEE_EVIDENCE_READY';
     const commissionCount = nullableNumber(m1Commission.sampleCount);
     const trainedDirection = nullableString(trainedExpert.direction);
+    const extensionAtr = nullableNumber(oodResearchFeatures.extensionAtr);
+    const emaSeparation = nullableNumber(oodResearchFeatures.emaSeparation);
+    const rsi14 = nullableNumber(oodResearchFeatures.rsi14);
+    const trustedOodNumbers =
+      oodResearchFeatures.version === 'm1-ood-asof-envelope-v1' &&
+      extensionAtr !== null &&
+      extensionAtr >= 0 &&
+      extensionAtr <= 100 &&
+      emaSeparation !== null &&
+      emaSeparation >= 0 &&
+      emaSeparation <= 1 &&
+      rsi14 !== null &&
+      rsi14 >= 0 &&
+      rsi14 <= 100;
     return {
       instrument: String(row.instrument).trim().toUpperCase(),
       direction: row.direction,
@@ -937,6 +958,9 @@ export class M1TacticalEvidenceService {
           ),
         )
         .slice(0, 8),
+      modelDriftNumericEvidence: trustedOodNumbers
+        ? { extensionAtr: extensionAtr!, emaSeparation: emaSeparation!, rsi14: rsi14! }
+        : null,
       brokerCommissionResearchReason:
         commissionReason && validCostReason.has(commissionReason) ? commissionReason : null,
       brokerCommissionSampleCount:

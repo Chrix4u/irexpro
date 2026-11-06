@@ -269,6 +269,11 @@ export interface M1TacticalStatusView {
     primaryBlockerCode?: string | null;
     modelDriftState?: string | null;
     modelDriftDiagnostics?: string[];
+    modelDriftNumericEvidence?: {
+      extensionAtr: number;
+      emaSeparation: number;
+      rsi14: number;
+    } | null;
     brokerCommissionResearchReason?: string | null;
     brokerCommissionSampleCount?: number | null;
     brokerCommissionP90CostR?: number | null;
@@ -335,6 +340,13 @@ export function hasM1TacticalStatusUiShape(
         decision.modelDriftDiagnostics.length > 8))
   )
     return false;
+  const evidence = decision.modelDriftNumericEvidence;
+  if (evidence !== undefined && evidence !== null) {
+    if (!isRecord(evidence) ||
+      typeof evidence.extensionAtr !== "number" || !Number.isFinite(evidence.extensionAtr) || evidence.extensionAtr < 0 || evidence.extensionAtr > 100 ||
+      typeof evidence.emaSeparation !== "number" || !Number.isFinite(evidence.emaSeparation) || evidence.emaSeparation < 0 || evidence.emaSeparation > 1 ||
+      typeof evidence.rsi14 !== "number" || !Number.isFinite(evidence.rsi14) || evidence.rsi14 < 0 || evidence.rsi14 > 100) return false;
+  }
   return (
     typeof decision.instrument === "string" &&
     (decision.direction === "BUY" || decision.direction === "SELL") &&
@@ -806,7 +818,12 @@ export function deriveTradeReadinessUiState(
     if (afterCostRejected) {
       detail = `The model estimates ${m1Decision.netExpectedR.toFixed(2)}R after baseline spread/slippage; this is below the expected-return floor. This is separate from the additional historical p90 commission gate, now shadow-only on cTrader DEMO. Other model and timing vetoes may also apply.`;
     }
-    if (driftEvidence) {
+    // Show numerical severity INSTEAD of repeating a long qualitative warning.
+    // Persisted as-of-bar features are explanatory and never grant orders.
+    const ood = driftBlocked ? m1Decision.modelDriftNumericEvidence : null;
+    if (ood) {
+      detail += ` Drift measurements: extension ${ood.extensionAtr.toFixed(2)}× ATR, EMA separation ${ood.emaSeparation.toFixed(2)}, RSI ${ood.rsi14.toFixed(1)}. A later eligible setup still requires validated model conditions, separate Plan-B admission, M1 timing and acceptable costs. These values do not grant execution.`;
+    } else if (driftEvidence) {
       detail += ` Drift evidence: ${driftEvidence}. This does not grant permission to trade.`;
     }
     const historicalCommissionR = m1Decision.brokerCommissionP90CostR;
