@@ -269,6 +269,11 @@ export interface M1TacticalStatusView {
     primaryBlockerCode?: string | null;
     modelDriftState?: string | null;
     modelDriftDiagnostics?: string[];
+    modelDriftNumericEvidence?: {
+      extensionAtr: number;
+      emaSeparation: number;
+      rsi14: number;
+    } | null;
     brokerCommissionResearchReason?: string | null;
     brokerCommissionSampleCount?: number | null;
     brokerCommissionP90CostR?: number | null;
@@ -335,6 +340,13 @@ export function hasM1TacticalStatusUiShape(
         decision.modelDriftDiagnostics.length > 8))
   )
     return false;
+  const evidence = decision.modelDriftNumericEvidence;
+  if (evidence !== undefined && evidence !== null) {
+    if (!isRecord(evidence) ||
+      typeof evidence.extensionAtr !== "number" || !Number.isFinite(evidence.extensionAtr) || evidence.extensionAtr < 0 || evidence.extensionAtr > 100 ||
+      typeof evidence.emaSeparation !== "number" || !Number.isFinite(evidence.emaSeparation) || evidence.emaSeparation < 0 || evidence.emaSeparation > 1 ||
+      typeof evidence.rsi14 !== "number" || !Number.isFinite(evidence.rsi14) || evidence.rsi14 < 0 || evidence.rsi14 > 100) return false;
+  }
   return (
     typeof decision.instrument === "string" &&
     (decision.direction === "BUY" || decision.direction === "SELL") &&
@@ -808,6 +820,11 @@ export function deriveTradeReadinessUiState(
     }
     if (driftEvidence) {
       detail += ` Drift evidence: ${driftEvidence}. This does not grant permission to trade.`;
+    }
+    // Explain observed severity; never create authority from research numbers.
+    const ood = driftBlocked ? m1Decision.modelDriftNumericEvidence : null;
+    if (ood) {
+      detail += ` At-decision M1 measurements: extension ${ood.extensionAtr.toFixed(2)}× ATR, normalized EMA separation ${ood.emaSeparation.toFixed(2)}, RSI ${ood.rsi14.toFixed(1)}. Recovery needs future validated market conditions, separate Plan-B admission, M1 timing and costs; no automatic order is approved by these numbers.`;
     }
     const historicalCommissionR = m1Decision.brokerCommissionP90CostR;
     const afterCommissionR = m1Decision.m1EstimatedNetAfterCommissionR;
