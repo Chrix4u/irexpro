@@ -766,6 +766,15 @@ export function deriveTradeReadinessUiState(
       blocker.startsWith("MULTIMODEL_TRAINED_EXPERT_"),
     );
     const planBBlocked = blockers.includes("MULTIMODEL_PLAN_B_NOT_ADMITTED");
+    // Forecast-shadow only waives forecast-only vetoes on a fully qualified
+    // independent DEMO route. When Plan B rejects the market regime, don't
+    // present an additional predicted-return failure as the sole cause.
+    const noQualifiedRegime =
+      planBBlocked &&
+      m1Decision.planBRegimeAllowed === false &&
+      !newsPrimary &&
+      !accountRiskPrimary;
+    const predictedReturnFailed = blockers.includes("PAPER_NET_EXPECTED_R");
     let detail = multimodelPrimary
       ? "The multi-model ensemble is evaluating fresh broker-native data, but the current quorum still has execution blockers."
       : "The active M1 engine is evaluating fresh broker-native data, but this setup still has execution blockers.";
@@ -794,9 +803,12 @@ export function deriveTradeReadinessUiState(
     if (newsPrimary) {
       detail =
         "A high-impact economic event is inside its restricted trading window. New entries are paused automatically and will be checked again when the window ends. Other model checks can still prevent an entry afterward.";
+    } else if (noQualifiedRegime) {
+      detail =
+        "Plan B has not admitted this market regime. The forecast-shadow DEMO route is evaluated, but it does not override extended-trend or model-quality restrictions. Forecasted return and execution costs are recorded separately; model drift may also prevent this trade.";
     } else if (m1Decision.primaryBlockerGroup === "MODEL_EXPECTANCY") {
       detail =
-        "After estimated execution costs, the expected return is below the required floor. The AI will not open an economically weak trade merely to increase activity.";
+        "The original Plan-B forecast return is below its admission floor. Forecast-only vetoes can be shadowed on the capped DEMO consensus route only after all independent model, market and account checks qualify.";
     } else if (m1Decision.primaryBlockerGroup === "MODEL_DRIFT") {
       detail =
         "The model classifies this market as outside its validated distribution. It is collecting evidence without dispatching an unqualified order.";
@@ -818,7 +830,7 @@ export function deriveTradeReadinessUiState(
     // setup that was never admitted is not the sole cause of no trading.
     if (
       planBBlocked &&
-      m1Decision.primaryBlockerGroup !== "MODEL_EXPECTANCY" &&
+      (noQualifiedRegime || m1Decision.primaryBlockerGroup !== "MODEL_EXPECTANCY") &&
       m1Decision.primaryBlockerGroup !== "RISK_OR_ACCOUNT" &&
       !newsPrimary
     ) {
@@ -835,13 +847,17 @@ export function deriveTradeReadinessUiState(
       typeof m1Decision.netExpectedR === "number" &&
       Number.isFinite(m1Decision.netExpectedR) &&
       m1Decision.netExpectedR <= 0;
-    if (afterCostRejected && !newsPrimary && !accountRiskPrimary) {
+    if (afterCostRejected && !newsPrimary && !accountRiskPrimary && !noQualifiedRegime) {
       detail = `The model estimates ${m1Decision.netExpectedR.toFixed(2)}R after baseline spread/slippage; this is below the expected-return floor. This is separate from the additional historical p90 commission gate, now shadow-only on cTrader DEMO. Other model and timing vetoes may also apply.`;
     }
     if (driftEvidence && !newsPrimary && !accountRiskPrimary) {
       detail += ` Drift evidence: ${driftEvidence}. This does not grant permission to trade.`;
     }
-    const planBPrimary = !accountRiskPrimary && !newsPrimary && !afterCostRejected && planBBlocked;
+    const planBPrimary =
+      !accountRiskPrimary &&
+      !newsPrimary &&
+      (noQualifiedRegime || !afterCostRejected) &&
+      planBBlocked;
     const driftPrimary = !accountRiskPrimary && !newsPrimary && !afterCostRejected && !planBPrimary && driftBlocked;
     const timingPrimary =
       !accountRiskPrimary && !newsPrimary && !planBPrimary &&
@@ -857,8 +873,8 @@ export function deriveTradeReadinessUiState(
       ...(blockers.includes("MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED")
         ? ["M1 reversal is not confirmed"]
         : []),
-      ...(afterCostRejected && (newsPrimary || accountRiskPrimary)
-        ? ["Baseline after-cost expectation is too low"]
+      ...(predictedReturnFailed && (newsPrimary || accountRiskPrimary || noQualifiedRegime)
+        ? ["Original Plan-B predicted-return floor also failed"]
         : []),
     ].slice(0, 4);
     let researchNote: string | undefined;
@@ -898,6 +914,8 @@ export function deriveTradeReadinessUiState(
         ? "Account safety limit — entry blocked"
         : newsPrimary
           ? "High-impact news — new entries paused"
+          : noQualifiedRegime
+          ? "No qualified strategy route — trade blocked"
           : afterCostRejected
             ? "Negative after-cost expectancy — trade rejected"
             : m1Decision.primaryBlockerGroup === "MODEL_EXPECTANCY"
