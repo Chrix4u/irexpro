@@ -12,6 +12,7 @@ from app.domain.training.demo_first_hit_temporal_selector import (
     SL,
     TP,
     asof_features,
+    causal_eur_broker_cost_r,
     enriched_asof_features,
     evaluate,
     prepare,
@@ -44,6 +45,10 @@ def episode(day: int, k: int, status: str) -> dict:
         "entry_ask": "1.10002",
         "entry_quote_timestamp_basis": "OBSERVED_LAST_QUOTE",
         "atr_raw": "0.00035",
+        "fee_prior_closed_samples": "5",
+        "fee_p90_eur_per_lot": "5.70",
+        "eurusd_bid_asof": "1.10000",
+        "eurusd_ask_asof": "1.10002",
     }
     return {
         "decision_at": when,
@@ -86,6 +91,57 @@ class TemporalSelectorTests(unittest.TestCase):
         })
         self.assertEqual(features, asof_features(changed))
         self.assertEqual(enriched_asof_features(row), enriched_asof_features(changed))
+
+    def test_closed_trade_cost_conversion_is_in_r_not_arbitrary_pips(self):
+        row = dict(episode(0, 1, TP)["asof"])
+        row["instrument"] = "AUDUSD"
+        scenario = causal_eur_broker_cost_r(row)
+        self.assertIsNotNone(scenario)
+        self.assertEqual(scenario["prior_closed_samples"], 5)
+        # 1 standard lot * stop of 0.0005 = $50 at risk.
+        # Broker fee €5.70 converted using as-of EURUSD 1.10001.
+        self.assertAlmostEqual(scenario["commission_r"], 0.12540114, places=6)
+        self.assertAlmostEqual(scenario["slippage_r"], 0.01, places=7)
+        self.assertAlmostEqual(scenario["total_cost_r"], 0.13540114, places=6)
+
+    def test_insufficient_or_invalid_asof_broker_fee_fails_closed(self):
+        row = dict(episode(0, 1, TP)["asof"])
+        for changes in (
+            {"fee_prior_closed_samples": "4"},
+            {"fee_p90_eur_per_lot": ""},
+            {"fee_p90_eur_per_lot": "nan"},
+            {"eurusd_ask_asof": ""},
+            {"eurusd_bid_asof": "1.2", "eurusd_ask_asof": "1.1"},
+            {"instrument": "USDJPY"},
+            {"stop_distance": "0"},
+        ):
+            self.assertIsNone(causal_eur_broker_cost_r({**row, **changes}))
+
+    def test_asof_fee_ranking_never_looks_at_holdout_outcomes(self):
+        train = [episode(0, k, (TP, SL)[k % 2]) for k in range(100)]
+        holdout = [episode(1, k, (TP, SL)[k % 2]) for k in range(40)]
+        for i, item in enumerate(holdout):
+            fee = causal_eur_broker_cost_r(item["asof"])
+            item["causal_fee_scenario"] = fee if i % 4 else None
+        original_rank, original_expected = rank_holdout(
+            train, holdout, variant="CAUSAL_FEE"
+        )
+        revised = [
+            {**x, "status": TP if x["status"] == SL else SL} for x in holdout
+        ]
+        later_rank, later_expected = rank_holdout(
+            train, revised, variant="CAUSAL_FEE"
+        )
+        self.assertEqual(original_rank.tolist(), later_rank.tolist())
+        self.assertEqual(original_expected.tolist(), later_expected.tolist())
+        eligible = [
+            i for i in original_rank if holdout[i]["causal_fee_scenario"] is not None
+        ]
+        self.assertEqual(len(eligible), 30)
+        self.assertTrue(all(
+            holdout[i]["causal_fee_scenario"] is not None
+            for i in original_rank[:len(eligible)]
+        ))
 
     def test_enriched_market_features_use_only_whitelisted_asof_values(self):
         row = dict(episode(0, 1, TP)["asof"])
@@ -263,6 +319,12 @@ class TemporalSelectorTests(unittest.TestCase):
             "q.sample_count>0",
             "d.broker_connection_id::text=:'source_id'",
             "d.execution_authority='NONE'",
+            "t.closed_at < c.evaluated_at",
+            "t.closed_at >= c.evaluated_at-INTERVAL '7 days'",
+            "t.broker_connection_id::text=:'source_id'",
+            "t.account_currency='EUR'",
+            "eurusd_reference",
+            "fee_observed.prior_closed_samples",
         ):
             self.assertIn(requirement, sql)
         self.assertIn("demo_rejected_first_hit_extended_readonly.sql", runner)

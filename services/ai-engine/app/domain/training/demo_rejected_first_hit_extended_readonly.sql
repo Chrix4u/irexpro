@@ -8,6 +8,9 @@
 -- Preserve this provenance in every sample; cannot infer exact fills.
 -- Extended candidate technical features are whitelisted as-of-decision
 -- numeric fields; no future price/path field is a predictive input.
+-- Fee P90 is recorded commission plus adverse swap from earlier CLOSED
+-- trades only, same EUR DEMO connection, pair, and 7-day window. Missing
+-- history or missing prior EURUSD FX rate remains UNKNOWN, not zero.
 -- READ ONLY. Exactly one private scanner user and source-bound cTrader DEMO account.
 -- No IDs/credentials are exported. Preserves original candidate SL and TP distances.
 -- Does not assume mid-price OHLC is a side-specific broker high/low.
@@ -110,6 +113,10 @@ SELECT
  entry.ask_close AS entry_ask,
  entry.effective_quote_timestamp AT TIME ZONE 'UTC' AS entry_seen_utc,
  entry.entry_quote_timestamp_basis,
+ fee_observed.prior_closed_samples AS fee_prior_closed_samples,
+ fee_observed.p90_cost_eur_per_lot AS fee_p90_eur_per_lot,
+ eurusd_reference.bid_close AS eurusd_bid_asof,
+ eurusd_reference.ask_close AS eurusd_ask_asof,
  COALESCE(path.path,'[]'::jsonb)::text AS minute_path_json
 FROM candidates c
 JOIN LATERAL (
@@ -139,6 +146,50 @@ JOIN LATERAL (
  ORDER BY q.bucket_time DESC
  LIMIT 1
 ) entry ON TRUE
+-- Historical broker commission from the SAME DEMO connection, pair and
+-- EUR account: strictly earlier closed trades, never the current candidate.
+-- This is an entirely non-executing research cost scenario.
+LEFT JOIN LATERAL (
+ SELECT COUNT(*) AS prior_closed_samples,
+        percentile_cont(0.9) WITHIN GROUP (
+          ORDER BY (
+            ABS(t.commission) + GREATEST(0, -t.swap)
+          ) / t.lot_size
+        ) AS p90_cost_eur_per_lot
+ FROM trading.trades t
+ WHERE t.user_id::text=:'scanner_user'
+   AND t.broker_connection_id::text=:'source_id'
+   AND t.instrument=c.instrument
+   AND t.account_currency='EUR'
+   AND t.status='CLOSED'
+   AND t.commission IS NOT NULL AND t.swap IS NOT NULL
+   AND t.lot_size>0 AND t.opened_at<=t.closed_at
+   AND t.closed_at < c.evaluated_at
+   AND t.closed_at >= c.evaluated_at-INTERVAL '7 days'
+) fee_observed ON TRUE
+-- All three focused pairs quote USD. One standard FX lot is 100k base
+-- currency units. FX conversion EURUSD also must be as-of-decision.
+LEFT JOIN LATERAL (
+ SELECT q.bid_close,q.ask_close
+ FROM market_data.provider_quote_candles q
+ WHERE q.connection_id::text=:'source_id'
+   AND q.instrument='EURUSD' AND q.timeframe='M1'
+   AND q.source='ctrader-broker-native'
+   AND q.bucket_time < date_trunc('minute',c.evaluated_at)
+   AND q.bucket_time >= date_trunc('minute',c.evaluated_at)-INTERVAL '5 minutes'
+   AND q.bid_close>0 AND q.ask_close>=q.bid_close
+   AND (
+     (q.last_quote_sample_at IS NOT NULL
+      AND q.last_quote_sample_at<=c.evaluated_at)
+     OR
+     (q.last_quote_sample_at IS NULL
+      AND q.bucket_time+INTERVAL '1 minute'<=c.evaluated_at
+      AND q.first_sample_at>=q.bucket_time
+      AND q.first_sample_at<q.bucket_time+INTERVAL '1 minute'
+      AND q.sample_count>0)
+   )
+ ORDER BY q.bucket_time DESC LIMIT 1
+) eurusd_reference ON TRUE
 LEFT JOIN LATERAL (
  SELECT jsonb_agg(jsonb_build_object(
    'minute',q.bucket_time AT TIME ZONE 'UTC',
