@@ -831,12 +831,17 @@ export function deriveTradeReadinessUiState(
     if (driftEvidence && !newsPrimary && !accountRiskPrimary) {
       detail += ` Drift evidence: ${driftEvidence}. This does not grant permission to trade.`;
     }
+    const planBPrimary = !accountRiskPrimary && !newsPrimary && !afterCostRejected && planBBlocked;
+    const driftPrimary = !accountRiskPrimary && !newsPrimary && !afterCostRejected && !planBPrimary && driftBlocked;
+    const timingPrimary =
+      !accountRiskPrimary && !newsPrimary && !planBPrimary &&
+      m1Decision.primaryBlockerGroup === "ENTRY_TIMING";
     const secondaryChecks = [
       ...(newsBlocked && !newsPrimary ? ["High-impact economic-news restriction"] : []),
       ...(actualAccountGuard && !accountRiskPrimary ? ["Account/exposure safety limit"] : []),
-      ...(planBBlocked ? ["Plan B model has not admitted this setup"] : []),
-      ...(driftBlocked ? ["Market outside the validated model range"] : []),
-      ...(blockers.includes("MULTIMODEL_CONTINUATION_TIMING_NOT_READY")
+      ...(planBBlocked && !planBPrimary ? ["Plan B model has not admitted this setup"] : []),
+      ...(driftBlocked && !driftPrimary ? ["Market outside the validated model range"] : []),
+      ...(blockers.includes("MULTIMODEL_CONTINUATION_TIMING_NOT_READY") && !timingPrimary
         ? ["M1 entry timing is not confirmed"]
         : []),
       ...(blockers.includes("MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED")
