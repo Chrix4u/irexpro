@@ -56,4 +56,13 @@ PYTHONPATH="$repo/services/ai-engine" "$python_bin" \
 chmod 600 "$tmp_csv" "$tmp_json"
 mv -f "$tmp_csv" "$research_dir/latest-cohort.csv"
 mv -f "$tmp_json" "$research_dir/latest-report.json"
+# Train/score an *in-memory*, research-only challenger on earlier days;
+# never write model weights, publish promotions, or send a broker order.
+challenger_tmp="$(mktemp "$research_dir/challenger.XXXXXXXX.json")"
+trap 'rm -f "$tmp_csv" "$tmp_json" "$challenger_tmp"' EXIT
+PYTHONPATH="$repo/services/ai-engine" "$python_bin" \\
+  -m app.domain.training.demo_planb_temporal_challenger \\
+  --cohort-csv "$research_dir/latest-cohort.csv" --report-json "$challenger_tmp"
+chmod 600 "$challenger_tmp"
+mv -f "$challenger_tmp" "$research_dir/latest-challenger-report.json"
 printf '%s\n' 'REJECTED_ENTRY_SHADOW_READONLY=TRUE' 'REJECTED_ENTRY_BROKER_ORDER_WRITES=0' 'REJECTED_ENTRY_PROMOTION_ALLOWED=FALSE'
