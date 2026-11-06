@@ -44,9 +44,11 @@ describe('LiveDemoProfitProtectionService', () => {
     thesisRows: Array<Record<string, unknown>> = [],
     auditService?: AuditService,
     feeRows: Array<Record<string, unknown>> = [],
+    patienceRows: Array<Record<string, unknown>> = [],
   ) {
     const query = jest.fn().mockImplementation(async (sql: string) => {
       if (sql.includes('past_fees')) return feeRows;
+      if (sql.includes('AS same_side_continuation_at')) return patienceRows;
       if (sql.includes('FROM trading.trades t')) return rows;
       if (sql.includes('FROM trading.m1_tactical_decisions')) return thesisRows;
       if (sql.includes('FROM market_data.provider_quote_candles')) return m1Rows;
