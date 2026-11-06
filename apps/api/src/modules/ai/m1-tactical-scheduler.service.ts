@@ -1388,8 +1388,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           (standardGovernanceExecutable || localImpulseDriftOnlyRescue)
         : standardGovernanceExecutable;
     const trialExpert = multimodelDemo?.trainedExpert;
-    const trialVotesTotal =
-      (trialExpert?.longVotes ?? 0) + (trialExpert?.shortVotes ?? 0);
+    const trialVotesTotal = (trialExpert?.longVotes ?? 0) + (trialExpert?.shortVotes ?? 0);
     const trialDirectionVotes =
       candidate.direction === 'BUY' ? trialExpert?.longVotes : trialExpert?.shortVotes;
     // Opt-in exception to PRIMARY_ONLY probation: the existing M1 continuation
