@@ -7,6 +7,7 @@ import { ExecutionService } from '../execution.service';
 import { TradeCloseReason } from '../entities/trade.entity';
 import { evaluatePaperProfitLock } from '../../broker/adapters/paper-broker.adapter';
 import { evaluateProtectedRunnerShadow } from './protected-runner-shadow';
+import { evaluateProfitLockPatienceShadow } from './profit-lock-patience-shadow';
 import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
 
 const LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS = 5_000;
@@ -548,9 +549,10 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
   ): Promise<void> {
     if (!this.auditService) return;
     try {
-      const [latestThesis, m1Evidence] = await Promise.all([
+      const [latestThesis, m1Evidence, patienceSignal] = await Promise.all([
         this.loadLatestAiThesis(trade, observedAt),
         this.loadCausalM1Evidence(trade, observedAt),
+        this.loadProfitLockPatienceSignal(trade, observedAt),
       ]);
       const recheck = evaluateLiveDemoProfitLockTrendRecheck({
         tradeDirection: trade.direction,
@@ -558,13 +560,51 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         latestThesis,
         m1Evidence,
       });
+      // This research asks whether a protected, short in-position wait was
+      // reasonable; it never grants a new order or suppresses the real close.
+      const patience = evaluateProfitLockPatienceShadow({
+        direction: trade.direction,
+        observedAt,
+        currentGrossPnl: currentPnl,
+        initialRiskPnl,
+        maxFavorablePnl: Math.max(currentPnl, finite(trade.max_favorable_pnl) ?? 0),
+        latestSameSideM1ContinuationAt: patienceSignal.sameSideContinuationAt,
+        oppositeExecutableReversal: patienceSignal.oppositeExecutableReversal,
+        m1Evidence: m1Evidence
+          ? {
+              completedBars: m1Evidence.completedBars,
+              liveQuoteBars: m1Evidence.liveQuoteBars ?? 0,
+              latestAgeSeconds: m1Evidence.latestAgeSeconds,
+              adverseBars: m1Evidence.adverseBars,
+              alignedLatestBodyPressure: m1Evidence.alignedLatestBodyPressure,
+              alignedMomentum3: m1Evidence.alignedMomentum3,
+            }
+          : null,
+      });
       // Historical fees are scoped by account, symbol and currency, and every
       // sample must have closed BEFORE the observed decision time.
-      const fees = recheck.wouldHoldIfEnabled
-        ? await this.loadCausalRunnerCostEstimate(trade, observedAt)
-        : null;
+      const fees =
+        recheck.wouldHoldIfEnabled || patience.wouldConsiderBrokerProtectedGrace
+          ? await this.loadCausalRunnerCostEstimate(trade, observedAt)
+          : null;
       const runner = evaluateProtectedRunnerShadow({
         trendWouldHold: recheck.wouldHoldIfEnabled,
+        instrument: trade.instrument,
+        direction: trade.direction,
+        grossUnrealisedPnl: currentPnl,
+        initialRiskPnl,
+        estimatedBrokerCosts: fees?.estimatedCost ?? null,
+        feeSampleCount: fees?.sampleCount ?? 0,
+        entryPrice: positionPrices.entryPrice == null ? null : finite(positionPrices.entryPrice),
+        currentPrice:
+          positionPrices.currentPrice == null ? null : finite(positionPrices.currentPrice),
+        originalStopPrice: trade.stop_loss == null ? null : finite(trade.stop_loss),
+        takeProfitPrice:
+          positionPrices.takeProfitPrice == null ? null : finite(positionPrices.takeProfitPrice),
+        latestLiveSpreadPrice: m1Evidence?.latestLiveSpreadPrice ?? null,
+      });
+      const patienceRunner = evaluateProtectedRunnerShadow({
+        trendWouldHold: patience.wouldConsiderBrokerProtectedGrace,
         instrument: trade.instrument,
         direction: trade.direction,
         grossUnrealisedPnl: currentPnl,
@@ -617,6 +657,11 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           m1AlignedMomentum3: m1Evidence?.alignedMomentum3 ?? null,
           m1LatestAgeSeconds: m1Evidence?.latestAgeSeconds ?? null,
           runnerShadow: runner,
+          protectedGraceShadow: patience,
+          protectedGraceRunnerShadow: patienceRunner,
+          protectedGraceOppositeExecutableReversal: patienceSignal.oppositeExecutableReversal,
+          m1AlignedLatestBodyPressure: m1Evidence?.alignedLatestBodyPressure ?? null,
+          m1AdverseBars: m1Evidence?.adverseBars ?? null,
           zaiP1Canary,
           runnerCostEvidence: fees ? 'RECENT_CLOSED_TRADES_BEFORE_DECISION' : 'INSUFFICIENT',
           noTradeAuthority: true,
@@ -629,6 +674,55 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         `cTrader DEMO shadow trend recheck unavailable trade=${trade.trade_id}: ${(error as Error).message}`,
       );
     }
+  }
+
+  /**
+   * Research-only as-of M1 continuation observations for the held position.
+   * A separate NEW entry may still be OOD, unprofitable or unadmitted.
+   * This query cannot grant any broker authority.
+   */
+  private async loadProfitLockPatienceSignal(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+  ): Promise<{ sameSideContinuationAt: Date | null; oppositeExecutableReversal: boolean }> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          MAX(evaluated_at) FILTER (
+            WHERE direction = $4 AND route = 'M1_TREND_CONTINUATION'
+          ) AS same_side_continuation_at,
+          COALESCE(BOOL_OR(
+            direction <> $4
+            AND route = 'M1_CONFIRMED_REVERSAL'
+            AND execution_authority = 'BROKER_NATIVE'
+            AND blockers = '[]'::jsonb
+            AND evaluated_at >= $5::timestamptz - interval '90 seconds'
+          ), false) AS opposite_executable_reversal
+        FROM trading.m1_tactical_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND instrument = $3
+          AND evaluated_at <= $5::timestamptz
+          AND evaluated_at >= $5::timestamptz - interval '180 seconds'
+      `,
+      [
+        trade.user_id,
+        trade.broker_connection_id,
+        trade.instrument.toUpperCase(),
+        trade.direction,
+        observedAt.toISOString(),
+      ],
+    )) as Array<{
+      same_side_continuation_at: Date | string | null;
+      opposite_executable_reversal: boolean | string | null;
+    }>;
+    const row = rows[0];
+    const time = row?.same_side_continuation_at ? new Date(row.same_side_continuation_at) : null;
+    return {
+      sameSideContinuationAt: time && Number.isFinite(time.getTime()) ? time : null,
+      oppositeExecutableReversal:
+        row?.opposite_executable_reversal === true || row?.opposite_executable_reversal === 'true',
+    };
   }
 
   /**
