@@ -471,7 +471,7 @@ export class M1TacticalEvidenceService {
         ORDER BY s.authority_generation DESC, s.started_at DESC
         LIMIT 1
       ), cohort AS (
-        SELECT d.route, d.execution_authority, d.outcome_state,
+        SELECT d.evaluated_at, d.route, d.execution_authority, d.outcome_state,
           d.blockers, d.governance
         FROM trading.m1_tactical_decisions d
         JOIN active_scope s ON s.broker_connection_id = d.broker_connection_id

@@ -221,6 +221,9 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
     expect(sql).toContain("WHERE c.route <> 'ABSTAIN'");
     expect(sql).toContain('AS session_age_minutes');
     expect(sql).toContain('AS last_decision_age_seconds');
+    // The age expression is evaluated from the bounded cohort, not directly
+    // from the decision table. This column must be included in that CTE.
+    expect(sql).toMatch(/cohort AS \(\s*SELECT d\.evaluated_at, d\.route/);
     expect(sql).toContain('MAX(evaluated_at)');
     expect(sql).toContain('AS planb_admitted_decisions');
     expect(sql).toContain('AS primary_path_decisions');
