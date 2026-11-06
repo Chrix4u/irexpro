@@ -583,9 +583,10 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       });
       // Historical fees are scoped by account, symbol and currency, and every
       // sample must have closed BEFORE the observed decision time.
-      const fees = recheck.wouldHoldIfEnabled || patience.wouldConsiderBrokerProtectedGrace
-        ? await this.loadCausalRunnerCostEstimate(trade, observedAt)
-        : null;
+      const fees =
+        recheck.wouldHoldIfEnabled || patience.wouldConsiderBrokerProtectedGrace
+          ? await this.loadCausalRunnerCostEstimate(trade, observedAt)
+          : null;
       const runner = evaluateProtectedRunnerShadow({
         trendWouldHold: recheck.wouldHoldIfEnabled,
         instrument: trade.instrument,
@@ -615,9 +616,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           positionPrices.currentPrice == null ? null : finite(positionPrices.currentPrice),
         originalStopPrice: trade.stop_loss == null ? null : finite(trade.stop_loss),
         takeProfitPrice:
-          positionPrices.takeProfitPrice == null
-            ? null
-            : finite(positionPrices.takeProfitPrice),
+          positionPrices.takeProfitPrice == null ? null : finite(positionPrices.takeProfitPrice),
         latestLiveSpreadPrice: m1Evidence?.latestLiveSpreadPrice ?? null,
       });
       const zaiP1Canary = evaluateZaiP1ReversalDemoPreflight({
@@ -660,8 +659,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           runnerShadow: runner,
           protectedGraceShadow: patience,
           protectedGraceRunnerShadow: patienceRunner,
-          protectedGraceOppositeExecutableReversal:
-            patienceSignal.oppositeExecutableReversal,
+          protectedGraceOppositeExecutableReversal: patienceSignal.oppositeExecutableReversal,
           m1AlignedLatestBodyPressure: m1Evidence?.alignedLatestBodyPressure ?? null,
           m1AdverseBars: m1Evidence?.adverseBars ?? null,
           zaiP1Canary,
@@ -719,14 +717,11 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       opposite_executable_reversal: boolean | string | null;
     }>;
     const row = rows[0];
-    const time = row?.same_side_continuation_at
-      ? new Date(row.same_side_continuation_at)
-      : null;
+    const time = row?.same_side_continuation_at ? new Date(row.same_side_continuation_at) : null;
     return {
       sameSideContinuationAt: time && Number.isFinite(time.getTime()) ? time : null,
       oppositeExecutableReversal:
-        row?.opposite_executable_reversal === true ||
-        row?.opposite_executable_reversal === 'true',
+        row?.opposite_executable_reversal === true || row?.opposite_executable_reversal === 'true',
     };
   }
 
