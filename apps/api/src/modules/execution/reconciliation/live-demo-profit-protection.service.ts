@@ -560,9 +560,30 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         latestThesis,
         m1Evidence,
       });
+      // This research asks whether a protected, short in-position wait was
+      // reasonable; it never grants a new order or suppresses the real close.
+      const patience = evaluateProfitLockPatienceShadow({
+        direction: trade.direction,
+        observedAt,
+        currentGrossPnl: currentPnl,
+        initialRiskPnl,
+        maxFavorablePnl: Math.max(currentPnl, finite(trade.max_favorable_pnl) ?? 0),
+        latestSameSideM1ContinuationAt: patienceSignal.sameSideContinuationAt,
+        oppositeExecutableReversal: patienceSignal.oppositeExecutableReversal,
+        m1Evidence: m1Evidence
+          ? {
+              completedBars: m1Evidence.completedBars,
+              liveQuoteBars: m1Evidence.liveQuoteBars ?? 0,
+              latestAgeSeconds: m1Evidence.latestAgeSeconds,
+              adverseBars: m1Evidence.adverseBars,
+              alignedLatestBodyPressure: m1Evidence.alignedLatestBodyPressure,
+              alignedMomentum3: m1Evidence.alignedMomentum3,
+            }
+          : null,
+      });
       // Historical fees are scoped by account, symbol and currency, and every
       // sample must have closed BEFORE the observed decision time.
-      const fees = recheck.wouldHoldIfEnabled
+      const fees = recheck.wouldHoldIfEnabled || patience.wouldConsiderBrokerProtectedGrace
         ? await this.loadCausalRunnerCostEstimate(trade, observedAt)
         : null;
       const runner = evaluateProtectedRunnerShadow({
