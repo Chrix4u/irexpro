@@ -1210,6 +1210,41 @@ describe("active multi-model execution presentation", () => {
     );
   });
 
+  it("explains an extended EURUSD SELL rejection even when the original forecast floor also fails", () => {
+    const blocked = JSON.parse(JSON.stringify(status));
+    blocked.latestDecision.instrument = "EURUSD";
+    blocked.latestDecision.direction = "SELL";
+    blocked.latestDecision.primaryConfidence = 0.62;
+    blocked.latestDecision.executionAuthority = "NONE";
+    blocked.latestDecision.multimodelExecutable = false;
+    blocked.latestDecision.planBPaperAdmitted = false;
+    blocked.latestDecision.planBRegimeAllowed = false;
+    blocked.latestDecision.primaryBlockerGroup = "MODEL_EXPECTANCY";
+    blocked.latestDecision.primaryBlockerCode = "PAPER_NET_EXPECTED_R";
+    blocked.latestDecision.netExpectedR = 0.066;
+    blocked.latestDecision.blockers = [
+      "MULTIMODEL_PLAN_B_NOT_ADMITTED",
+      "MULTIMODEL_GOVERNANCE_BLOCKED",
+      "ENSEMBLE_NOT_PAPER_ADMITTED",
+      "ENSEMBLE_NOT_PROMOTABLE_ADMISSION",
+      "PAPER_NET_EXPECTED_R",
+      "DRIFT_STRESSED",
+    ];
+    const view = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: blocked,
+      fastMarkState: "LIVE",
+    });
+    expect(view.tradeExpected).toBe(false);
+    expect(view.headline).toBe("No qualified strategy route — trade blocked");
+    expect(view.detail).toContain("Plan B has not admitted this market regime");
+    expect(view.detail).toContain("does not override extended-trend");
+    expect(view.secondaryChecks).toContain(
+      "Original Plan-B predicted-return floor also failed",
+    );
+  });
+
   it("explains the primary economic blocker rather than only the wrapper admission failure", () => {
     const blocked = JSON.parse(JSON.stringify(status));
     blocked.latestDecision.primaryConfidence = 0.7;
