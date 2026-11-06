@@ -3,6 +3,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V1,
   M1_TACTICAL_ROLLOUT_POLICY_V8,
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION,
+  M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW,
   demoInstrumentEntryAllowed,
 } from './m1-tactical-scheduler.service';
 
@@ -24,6 +25,22 @@ describe('2026-11-05 reversible DEMO focused-three entry permission', () => {
     expect(policy.paperVolumeCap).toBe(4);
     expect(policy.demoPrimaryOnlyProbation).toBe(true);
     expect(policy.demoBrokerCommissionFloor).toBe(true);
+  });
+
+  it('keeps all noncommission DEMO protections while cost eligibility becomes research-only', () => {
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION.demoBrokerCommissionFloor).toBe(
+      true,
+    );
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW).toMatchObject({
+      demoBrokerCommissionFloor: false,
+      demoBrokerCommissionShadow: true,
+      demoPrimaryOnlyProbation: true,
+      demoEntryInstruments: ['AUDUSD', 'GBPUSD', 'EURUSD'],
+      paperVolumeCap: 4,
+    });
+    expect(
+      demoInstrumentEntryAllowed(M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW, 'USDJPY'),
+    ).toBe(false);
   });
 
   it.each(['AUDUSD', 'GBPUSD', 'EURUSD'])(

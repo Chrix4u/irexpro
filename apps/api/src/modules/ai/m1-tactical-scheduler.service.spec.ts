@@ -32,6 +32,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V8,
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION,
+  M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW,
   m1RiskMarketRegime,
   m1RouteExecutableInPhase,
   m1ShadowOutcomeEligible,
@@ -2016,8 +2017,16 @@ describe('M1 professional v8 DEMO promotion', () => {
       demoBrokerCommissionFloor: true,
       paperVolumeCap: 4,
     });
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW).toMatchObject({
+      phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+      demoPrimaryOnlyProbation: true,
+      demoBrokerCommissionFloor: false,
+      demoBrokerCommissionShadow: true,
+      demoEntryInstruments: ['AUDUSD', 'GBPUSD', 'EURUSD'],
+      paperVolumeCap: 4,
+    });
     expect(moduleSource).toMatch(
-      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION/,
+      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW/,
     );
   });
 
@@ -2230,6 +2239,18 @@ describe('M1 professional v8 DEMO promotion', () => {
 
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
     const signal = h.receiveSignal.mock.calls[0]![0];
+    const historicalOodDecision = h.recordDecision.mock.calls.find(
+      ([entry]) => entry.route !== 'ABSTAIN' && entry.instrument === signal.instrument,
+    )?.[0];
+    expect(historicalOodDecision?.governance.oodResearchFeatures).toMatchObject({
+      version: 'm1-ood-asof-envelope-v1',
+      extensionAtr: expect.any(Number),
+      volatilityScore: expect.any(Number),
+      emaSeparation: expect.any(Number),
+      mtfStrength: expect.any(Number),
+      rsi14: expect.any(Number),
+      shortHorizonMomentumAtr: expect.any(Number),
+    });
     expect(signal.brokerConnectionId).toBe('demo-conn-2');
     expect(signal.suggestedVolume).toBeGreaterThanOrEqual(0.2);
     expect(signal.suggestedVolume).toBeLessThanOrEqual(4);
@@ -2944,6 +2965,76 @@ describe('M1 V8 multi-model DEMO authority', () => {
     )?.[0];
     return { ...h, recorded };
   }
+
+  it('allows a previously fee-vetoed qualified DEMO primary entry while recording the old fee rejection as SHADOW', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+    });
+    h.loadPriorClosedCommissionRiskR.mockResolvedValue({ sampleCount: 9, p90FeeR: 9 });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: true,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
+        };
+      });
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    const recorded = h.recordDecision.mock.calls.find(
+      ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(h.loadPriorClosedCommissionRiskR).toHaveBeenCalledTimes(1);
+    expect(recorded?.governance.demoBrokerCommissionGate).toMatchObject({
+      enabled: false,
+      blocked: false,
+      reason: 'NOT_ENABLED',
+      shadowOnly: true,
+      shadowWouldHaveBlocked: true,
+      shadowReason: 'AFTER_BROKER_FEES_BELOW_FLOOR',
+      shadowBrokerFeeP90R: 9,
+      grantsExecution: false,
+    });
+    expect(recorded?.blockers ?? []).not.toContain(
+      'M1_DEMO_BROKER_COMMISSION_AFTER_BROKER_FEES_BELOW_FLOOR',
+    );
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it('never allows shadow fees to override an independent active risk or Plan B veto', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW,
+      session: fullAutoSession,
+      fastStopBrake: {
+        active: true,
+        reason: 'RECENT_FAST_STOP',
+        latestFastStopClosedAt: new Date('2026-10-15T10:29:00.000Z'),
+        latestFastStopDurationMinutes: 1,
+        cooldownMinutes: 5,
+        maxStopDurationMinutes: 2,
+      },
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+    });
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const recorded = h.recordDecision.mock.calls.find(
+      ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(recorded?.blockers).toContain('M1_FAST_STOP_REGIME_BRAKE');
+  });
 
   it('keeps a primary Plan B DEMO order eligible when broker p90 commission is small enough', async () => {
     const h = await commissionGuardHarness({ sampleCount: 9, p90FeeR: 0.001 });
