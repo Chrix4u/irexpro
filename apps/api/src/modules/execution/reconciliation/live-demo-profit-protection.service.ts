@@ -549,9 +549,10 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
   ): Promise<void> {
     if (!this.auditService) return;
     try {
-      const [latestThesis, m1Evidence] = await Promise.all([
+      const [latestThesis, m1Evidence, patienceSignal] = await Promise.all([
         this.loadLatestAiThesis(trade, observedAt),
         this.loadCausalM1Evidence(trade, observedAt),
+        this.loadProfitLockPatienceSignal(trade, observedAt),
       ]);
       const recheck = evaluateLiveDemoProfitLockTrendRecheck({
         tradeDirection: trade.direction,
