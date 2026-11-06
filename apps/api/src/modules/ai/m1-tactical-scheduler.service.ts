@@ -1462,9 +1462,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         );
       }
     }
+    // A forecast-shadow consensus may authorize a *new* DEMO candidate, but
+    // must never inherit the older primary route's authority to close a
+    // different, already-open position. Only the original fully admitted
+    // Plan-B confirmed-reversal route can request a direction-flip close.
     const confirmedDirectionFlip =
       activeOppositePositions.length > 0 &&
       multimodelPrimaryExecutable &&
+      multimodelDemo?.authority.authorityPath === 'PRIMARY_PLAN_B' &&
       multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL';
     if (confirmedDirectionFlip && this.executionService) {
       for (const position of activeOppositePositions) {
