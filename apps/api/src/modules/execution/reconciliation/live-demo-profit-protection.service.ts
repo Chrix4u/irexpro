@@ -658,6 +658,12 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           m1AlignedMomentum3: m1Evidence?.alignedMomentum3 ?? null,
           m1LatestAgeSeconds: m1Evidence?.latestAgeSeconds ?? null,
           runnerShadow: runner,
+          protectedGraceShadow: patience,
+          protectedGraceRunnerShadow: patienceRunner,
+          protectedGraceOppositeExecutableReversal:
+            patienceSignal.oppositeExecutableReversal,
+          m1AlignedLatestBodyPressure: m1Evidence?.alignedLatestBodyPressure ?? null,
+          m1AdverseBars: m1Evidence?.adverseBars ?? null,
           zaiP1Canary,
           runnerCostEvidence: fees ? 'RECENT_CLOSED_TRADES_BEFORE_DECISION' : 'INSUFFICIENT',
           noTradeAuthority: true,
