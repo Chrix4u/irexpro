@@ -188,7 +188,11 @@ describe('evaluateMultimodelDemoAuthority', () => {
   it.each([
     {
       reason: 'model drift',
-      governanceBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'PAPER_NET_EXPECTED_R', 'DRIFT_OUT_OF_DISTRIBUTION'],
+      governanceBlockers: [
+        'ENSEMBLE_NOT_PAPER_ADMITTED',
+        'PAPER_NET_EXPECTED_R',
+        'DRIFT_OUT_OF_DISTRIBUTION',
+      ],
       governanceState: { driftState: 'OUT_OF_DISTRIBUTION' },
       planBReasons: ['EXPECTED_R'],
       expert: {},
@@ -196,7 +200,11 @@ describe('evaluateMultimodelDemoAuthority', () => {
     },
     {
       reason: 'high-impact economic news',
-      governanceBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'PAPER_NET_EXPECTED_R', 'EVENT_RISK_HIGH_IMPACT_BLOCK'],
+      governanceBlockers: [
+        'ENSEMBLE_NOT_PAPER_ADMITTED',
+        'PAPER_NET_EXPECTED_R',
+        'EVENT_RISK_HIGH_IMPACT_BLOCK',
+      ],
       governanceState: { eventRisk: 'HIGH_IMPACT_BLOCK' },
       planBReasons: ['EXPECTED_R'],
       expert: {},
@@ -204,7 +212,11 @@ describe('evaluateMultimodelDemoAuthority', () => {
     },
     {
       reason: 'missing broker spread evidence',
-      governanceBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'PAPER_NET_EXPECTED_R', 'EXECUTION_SPREAD_UNAVAILABLE'],
+      governanceBlockers: [
+        'ENSEMBLE_NOT_PAPER_ADMITTED',
+        'PAPER_NET_EXPECTED_R',
+        'EXECUTION_SPREAD_UNAVAILABLE',
+      ],
       governanceState: { executionSpreadEvidenceValid: false },
       planBReasons: ['EXPECTED_R'],
       expert: {},
@@ -234,36 +246,37 @@ describe('evaluateMultimodelDemoAuthority', () => {
       expert: {},
       timing: 'ABSTAIN' as const,
     },
-  ])('keeps %s as an immutable veto instead of treating it as a forecast', ({
-    governanceBlockers, governanceState, planBReasons, expert, timing,
-  }) => {
-    const result = evaluateMultimodelDemoAuthority({
-      ensemble: {
-        ...ensemble(false),
-        regimeAllowed: !planBReasons.includes('REGIME_TREND_EXTENDED'),
-        reasons: planBReasons,
-        directionQuality: 0.7,
-        tradeQuality: 0.63,
-        exitQuality: 0.6,
-        sessionQuality: 0.9,
-        portfolioQuality: 0.82,
-      },
-      governance: governance(false, {
-        paperExecutionBlockers: governanceBlockers,
-        driftState: 'NORMAL',
-        executionSpreadEvidenceValid: true,
-        ...governanceState,
-      }),
-      trainedExpert: { ...overlay('CONFIRM'), ...expert },
-      candidateDirection: 'BUY',
-      candidateConfidence: 0.73,
-      m1TimingRoute: timing,
-      forecastEconomicsShadowOnlyDemo: true,
-    });
-    expect(result.executable).toBe(false);
-    expect(result.authorityPath).toBe('BLOCKED');
-    expect(result.forecastEconomicsShadow.activated).toBe(false);
-  });
+  ])(
+    'keeps %s as an immutable veto instead of treating it as a forecast',
+    ({ governanceBlockers, governanceState, planBReasons, expert, timing }) => {
+      const result = evaluateMultimodelDemoAuthority({
+        ensemble: {
+          ...ensemble(false),
+          regimeAllowed: !planBReasons.includes('REGIME_TREND_EXTENDED'),
+          reasons: planBReasons,
+          directionQuality: 0.7,
+          tradeQuality: 0.63,
+          exitQuality: 0.6,
+          sessionQuality: 0.9,
+          portfolioQuality: 0.82,
+        },
+        governance: governance(false, {
+          paperExecutionBlockers: governanceBlockers,
+          driftState: 'NORMAL',
+          executionSpreadEvidenceValid: true,
+          ...governanceState,
+        }),
+        trainedExpert: { ...overlay('CONFIRM'), ...expert },
+        candidateDirection: 'BUY',
+        candidateConfidence: 0.73,
+        m1TimingRoute: timing,
+        forecastEconomicsShadowOnlyDemo: true,
+      });
+      expect(result.executable).toBe(false);
+      expect(result.authorityPath).toBe('BLOCKED');
+      expect(result.forecastEconomicsShadow.activated).toBe(false);
+    },
+  );
 
   it('blocks when generic governance rejects the candidate', () => {
     const result = evaluateMultimodelDemoAuthority({
