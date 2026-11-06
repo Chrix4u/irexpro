@@ -206,15 +206,20 @@ describe('evaluateM1TacticalGovernance', () => {
     expectNoElevatedAuthority(result);
   });
 
-  it('blocks when execution cost makes net expected R non-positive', () => {
+  it('keeps estimated negative after-cost R in research without vetoing valid M1 timing', () => {
     const result = evaluateM1TacticalGovernance({
       ...baseInput(),
       executionSpreadEvidence: spread({ spreadPrice: 0.001 }),
       paperSimulationSpreadPrice: undefined,
     });
     expect(result.netExpectedR).toBeLessThanOrEqual(0);
-    expect(result.paperEligible).toBe(false);
-    expect(result.blockers).toContain('PAPER_NET_EXPECTED_R');
+    expect(result.genericGovernance.predictedCostShadow).toMatchObject({
+      mode: 'SHADOW_ONLY',
+      paperWouldHaveBlocked: true,
+      modifiesExecution: false,
+    });
+    expect(result.paperEligible).toBe(true);
+    expect(result.blockers).not.toContain('PAPER_NET_EXPECTED_R');
     expectNoElevatedAuthority(result);
   });
 
