@@ -42,8 +42,7 @@ export function evaluateDemoPrimaryOnlyProbation(input: {
   // model with only predictive economic admission in research mode.
   // It is not a lower-quality fallback; all broker, drift and risk vetoes remain.
   const primaryRoute =
-    chosenAuthorityPath === 'PRIMARY_PLAN_B' ||
-    chosenAuthorityPath === 'FORECAST_SHADOW_CONSENSUS';
+    chosenAuthorityPath === 'PRIMARY_PLAN_B' || chosenAuthorityPath === 'FORECAST_SHADOW_CONSENSUS';
   const blocked = input.enabled && executionPathExists && !primaryRoute;
   return {
     artifact: DEMO_PRIMARY_ONLY_PROBATION_ARTIFACT,
