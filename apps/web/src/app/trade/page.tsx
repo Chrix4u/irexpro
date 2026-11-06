@@ -3607,6 +3607,14 @@ export default function AiTradingPage() {
                           : "No leading model admission blocker is available for this period."}
                       </small>
                     )}
+                    {demoEntryDiagnostic.leadingPlanBReasons.length > 0 && (
+                      <small>
+                        Plan B admission checks missed:{" "}
+                        {demoEntryDiagnostic.leadingPlanBReasons
+                          .map((reason) => `${reason.label} (${reason.count})`)
+                          .join(" · ")}
+                      </small>
+                    )}
                     <small>
                       Counts cover the current DEMO session and the three entry pairs only.
                       Reasons may overlap. No risk or commission check is bypassed.

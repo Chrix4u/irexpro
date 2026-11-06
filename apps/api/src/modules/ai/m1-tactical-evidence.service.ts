@@ -513,6 +513,29 @@ export class M1TacticalEvidenceService {
           ) IN ('BLOCKED', 'UNKNOWN')
         )
         GROUP BY b.value ORDER BY frequency DESC, code ASC LIMIT 3
+      ), top_planb_reasons AS (
+        SELECT r.value AS code, COUNT(*) AS frequency
+        FROM cohort c
+        CROSS JOIN LATERAL (
+          SELECT DISTINCT item.value
+          FROM jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(c.governance->'multimodelEnsemble'->'reasons') = 'array'
+              THEN c.governance->'multimodelEnsemble'->'reasons'
+              ELSE '[]'::jsonb
+            END
+          ) AS item(value)
+        ) AS r(value)
+        WHERE c.route <> 'ABSTAIN'
+          AND COALESCE(c.governance->'multimodelEnsemble'->>'paperAdmitted', 'false') <> 'true'
+          AND r.value IN (
+            'DIRECTION_QUALITY', 'EXIT_FEASIBILITY', 'TRADE_QUALITY',
+            'REGIME_TREND_EXTENDED', 'REGIME_TREND_WEAK',
+            'META_EXPECTED_VALUE', 'EXPECTED_R',
+            'REGIME_ROLLOVER_RISK', 'SESSION_QUALITY'
+          )
+        -- DISTINCT in the lateral block ensures each reason counts
+        -- at most once per candidate, even if the source repeats a code.
+        GROUP BY r.value ORDER BY frequency DESC, code ASC LIMIT 3
       )
       SELECT
         (SELECT COUNT(*) FROM active_scope) AS active_session_count,
@@ -555,7 +578,11 @@ export class M1TacticalEvidenceService {
         COALESCE((
           SELECT jsonb_agg(jsonb_build_object('code', code, 'count', frequency))
           FROM top_reasons
-        ), '[]'::jsonb) AS leading_blockers
+        ), '[]'::jsonb) AS leading_blockers,
+        COALESCE((
+          SELECT jsonb_agg(jsonb_build_object('code', code, 'count', frequency))
+          FROM top_planb_reasons
+        ), '[]'::jsonb) AS leading_planb_reasons
       `,
       [userId, [...DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1]],
     )) as DemoFocusedEntryDiagnosticRow[];

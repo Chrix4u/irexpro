@@ -27,6 +27,9 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
     leadingBlockers: [
       { code: "ENSEMBLE_NOT_PROMOTABLE_ADMISSION", label: "Primary model admission not met", count: 211 },
     ],
+    leadingPlanBReasons: [
+      { code: "DIRECTION_QUALITY", label: "Direction quality below threshold", count: 12 },
+    ],
     onlyCurrentSession: true,
   };
   it("accepts only complete bounded current-session diagnostic evidence", () => {
@@ -42,6 +45,7 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
       eligibleFallbackProbationVetoDecisions: 0,
       operatingState: "NO_ACTIVE_SESSION",
       leadingBlockers: [],
+      leadingPlanBReasons: [],
     })).toBe(true);
   });
   it("rejects malformed counts, unscoped evidence or unbounded reasons", () => {
@@ -60,6 +64,10 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, primaryPathDecisions: 23 })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, primaryReliabilityVetoDecisions: 7 })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, onlyCurrentSession: false })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingPlanBReasons: undefined })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingPlanBReasons: [{ code: "DIRECTION_QUALITY", label: "bad", count: 23 }] })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingPlanBReasons: [{ code: 5, label: "bad", count: 3 }] })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingPlanBReasons: new Array(4).fill(evidence.leadingPlanBReasons[0]) })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingBlockers: new Array(9).fill(evidence.leadingBlockers[0]) })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingBlockers: [{ code: 4, label: "bad", count: 1 }] })).toBe(false);
   });

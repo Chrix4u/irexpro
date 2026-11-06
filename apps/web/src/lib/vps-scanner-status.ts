@@ -139,6 +139,7 @@ export interface DemoFocusedEntryDiagnosticView {
     | "SCANNING_NO_APPROVED_ENTRY"
     | "RECENT_ENTRY_AUTHORIZATION";
   leadingBlockers: Array<{ code: string; label: string; count: number }>;
+  leadingPlanBReasons: Array<{ code: string; label: string; count: number }>;
   onlyCurrentSession: true;
 }
 
@@ -151,7 +152,9 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
     value.windowMinutes !== 60 ||
     value.onlyCurrentSession !== true ||
     !Array.isArray(value.leadingBlockers) ||
-    value.leadingBlockers.length > 3) return false;
+    value.leadingBlockers.length > 3 ||
+    !Array.isArray(value.leadingPlanBReasons) ||
+    value.leadingPlanBReasons.length > 3) return false;
   const numbers = [
     value.evaluatedDecisions,
     value.candidateDecisions,
@@ -198,13 +201,15 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
       value.operatingState !== "NO_ACTIVE_SESSION" || value.sessionAgeMinutes !== 0 ||
       value.lastDecisionAgeSeconds !== null
     )) return false;
-  return value.leadingBlockers.every((reason) =>
+  const validReason = (reason: unknown): boolean =>
     isRecord(reason) &&
     typeof reason.code === "string" && reason.code.length < 100 &&
     typeof reason.label === "string" && reason.label.length < 120 &&
     typeof reason.count === "number" &&
-    Number.isSafeInteger(reason.count) && reason.count > 0,
-  );
+    Number.isSafeInteger(reason.count) && reason.count > 0;
+  return value.leadingBlockers.every(validReason) &&
+    value.leadingPlanBReasons.every((reason) =>
+      validReason(reason) && (reason.count as number) <= candidateCount);
 }
 
 export interface M1TacticalStatusView {
