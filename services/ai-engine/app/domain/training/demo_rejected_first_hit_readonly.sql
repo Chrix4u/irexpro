@@ -32,6 +32,9 @@ candidates AS (
    governance->'multimodelEnsemble'->>'strategyRoute' AS planb_route,
    governance->'multimodelEnsemble'->>'paperAdmitted' AS paper_admitted,
    governance->'multimodelGovernance'->>'netExpectedR' AS predicted_net_r,
+   governance->'multimodelEnsemble'->>'regime' AS regime_asof,
+   governance->'genericGovernance'->>'driftState' AS drift_state_asof,
+   governance->'genericGovernance'->>'estimatedExecutionCostR' AS estimated_cost_r_asof,
    COALESCE(governance->'multimodelEnsemble'->'reasons','[]'::jsonb) AS admission_reasons,
    blockers
  FROM candidate_ranked
@@ -47,6 +50,7 @@ SELECT
  c.stop_distance_text AS stop_distance,
  c.target_distance_text AS target_distance,
  c.predicted_net_r,
+ c.regime_asof,c.drift_state_asof,c.estimated_cost_r_asof,
  c.admission_reasons::text AS admission_reasons_json,
  c.blockers::text AS blockers_json,
  entry.bid_close AS entry_bid,
