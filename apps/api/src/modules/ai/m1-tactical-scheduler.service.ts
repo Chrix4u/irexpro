@@ -845,7 +845,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       });
       if (!observation) continue;
       try {
-        await this.evidence.markDriftCounterfactual15m(decision.id, observation);
+        // Preserve other vetoes: a later positive price move cannot prove
+        // this entry was eligible for trading at decision time.
+        await this.evidence.markDriftCounterfactual15m(decision.id, {
+          ...observation,
+          selectionPolicy: 'FIXED_UTC_16M_EPISODE_RESEARCH',
+          driftEvidenceSource: decision.driftEvidenceSource,
+          driftStateAtDecision: decision.driftState,
+          driftDiagnosticsAtDecision: decision.driftDiagnostics,
+          nonDriftBlockersAtDecision: decision.nonDriftBlockers,
+          driftWasOnlySubstantiveBlocker: decision.nonDriftBlockers.length === 0,
+        });
       } catch (error) {
         this.logger.warn(
           `M1 drift counterfactual settlement deferred decision=${decision.id}: ${(error as Error).message}`,

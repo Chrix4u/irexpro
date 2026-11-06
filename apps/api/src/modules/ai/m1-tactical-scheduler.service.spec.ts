@@ -428,6 +428,8 @@ describe('M1TacticalSchedulerService shadow phase', () => {
               estimatedExecutionCostR: 0.0625,
               driftState: 'OUT_OF_DISTRIBUTION',
               driftDiagnostics: ['extensionAtr:HARD_HIGH'],
+              driftEvidenceSource: 'MULTIMODEL',
+              nonDriftBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'PAPER_NET_EXPECTED_R'],
             },
           ]
         : [],
@@ -450,6 +452,11 @@ describe('M1TacticalSchedulerService shadow phase', () => {
         modifiesExecution: false,
         source: 'COMPLETED_M1_OHLC',
         horizonBars: 15,
+        selectionPolicy: 'FIXED_UTC_16M_EPISODE_RESEARCH',
+        driftEvidenceSource: 'MULTIMODEL',
+        driftStateAtDecision: 'OUT_OF_DISTRIBUTION',
+        driftWasOnlySubstantiveBlocker: false,
+        nonDriftBlockersAtDecision: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'PAPER_NET_EXPECTED_R'],
       }),
     );
     expect(h.receiveSignal).not.toHaveBeenCalled();

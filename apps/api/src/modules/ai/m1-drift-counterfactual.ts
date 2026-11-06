@@ -34,6 +34,13 @@ export interface M1DriftCounterfactualResult {
   estimatedExecutionCostR: number;
   grossRMultiple: number | null;
   netRMultiple: number | null;
+  /** Optional V2 research provenance. Never used for trade authorization. */
+  selectionPolicy?: 'FIXED_UTC_16M_EPISODE_RESEARCH';
+  driftEvidenceSource?: 'MULTIMODEL' | 'GENERIC';
+  driftStateAtDecision?: string | null;
+  driftDiagnosticsAtDecision?: string[];
+  nonDriftBlockersAtDecision?: string[];
+  driftWasOnlySubstantiveBlocker?: boolean;
 }
 
 export function evaluateM1DriftCounterfactual15m(

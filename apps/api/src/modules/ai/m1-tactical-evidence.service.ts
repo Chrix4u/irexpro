@@ -60,6 +60,7 @@ export interface M1TacticalLatestDecisionState {
   multimodelAuthorityPath: string | null;
   multimodelRescueVolumeCap: number | null;
   trainedExpertState: string | null;
+  trainedExpertReason: string | null;
   trainedExpertDirection: 'BUY' | 'SELL' | null;
   trainedExpertConfidence: number | null;
   trainedExpertLongVotes: number | null;
@@ -303,6 +304,9 @@ export interface M1PendingDriftCounterfactual {
   estimatedExecutionCostR: number;
   driftState: string | null;
   driftDiagnostics: string[];
+  /** Other vetoes persist independently of the drift counterfactual. */
+  nonDriftBlockers: string[];
+  driftEvidenceSource: 'MULTIMODEL' | 'GENERIC';
 }
 
 export interface M1TacticalOutcomeMetricsFilter {
@@ -908,6 +912,7 @@ export class M1TacticalEvidenceService {
       multimodelAuthorityPath: nullableString(multimodelAuthority.authorityPath),
       multimodelRescueVolumeCap: nullableNumber(multimodelAuthority.rescueVolumeCap),
       trainedExpertState: nullableString(trainedExpert.state),
+      trainedExpertReason: nullableString(trainedExpert.reason),
       trainedExpertDirection:
         trainedDirection === 'BUY' || trainedDirection === 'SELL' ? trainedDirection : null,
       trainedExpertConfidence: nullableNumber(trainedExpert.ensembleConfidence),
@@ -1746,33 +1751,38 @@ export class M1TacticalEvidenceService {
   ): Promise<M1PendingDriftCounterfactual[]> {
     const rows = (await this.dataSource.query(
       `
-        SELECT id, instrument, direction, route, evaluated_at, candidate, governance
-        FROM trading.m1_tactical_decisions
-        WHERE user_id = $1
-          AND broker_connection_id = $2
-          AND instrument = $3
-          AND route <> 'ABSTAIN'
-          AND execution_authority = 'NONE'
-          AND (
-            blockers @> '["DRIFT_OUT_OF_DISTRIBUTION"]'::jsonb
-            OR blockers @> '["DRIFT_STRESSED"]'::jsonb
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM jsonb_array_elements_text(blockers) AS blocker(value)
-            WHERE blocker.value NOT IN (
-              'DRIFT_OUT_OF_DISTRIBUTION',
-              'DRIFT_STRESSED',
-              'M1_PHASE_SHADOW',
-              'M1_PHASE_ROUTE_SHADOW'
+        -- Research-only: sample earliest drift evaluation in each fixed
+        -- UTC 16-minute bucket. Previously only "drift-only" rows were
+        -- admitted, excluding the real OOD cases with other blockers.
+        -- No changes to order authority or any gate.
+        WITH candidates AS (
+          SELECT id, instrument, direction, route, evaluated_at,
+                 candidate, governance, blockers,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY FLOOR(EXTRACT(EPOCH FROM evaluated_at) / 960)::bigint
+                   ORDER BY evaluated_at ASC, id ASC
+                 ) AS episode_rank
+          FROM trading.m1_tactical_decisions
+          WHERE user_id = $1
+            AND broker_connection_id = $2
+            AND instrument = $3
+            AND route <> 'ABSTAIN'
+            AND execution_authority = 'NONE'
+            AND (
+              blockers @> '["DRIFT_OUT_OF_DISTRIBUTION"]'::jsonb
+              OR blockers @> '["DRIFT_STRESSED"]'::jsonb
             )
-              AND blocker.value !~ '^M1_(SHADOW_|MEANINGFUL_SCOUT_|TIERED_SCOUT_)?RELIABILITY_'
-          )
+            AND evaluated_at > ($4::timestamptz - interval '48 minutes')
+            AND evaluated_at <= ($4::timestamptz - interval '16 minutes')
+            AND policy_version = $5
+        )
+        SELECT id, instrument, direction, route, evaluated_at,
+               candidate, governance, blockers
+        FROM candidates
+        WHERE episode_rank = 1
           AND governance -> 'driftCounterfactual15m' IS NULL
-          AND evaluated_at <= ($4::timestamptz - interval '16 minutes')
-          AND policy_version = $5
         ORDER BY evaluated_at DESC
-        LIMIT 50
+        LIMIT 8
       `,
       [
         input.userId,
@@ -1789,13 +1799,28 @@ export class M1TacticalEvidenceService {
       evaluated_at: string | Date;
       candidate: unknown;
       governance: unknown;
+      blockers?: unknown;
     }>;
 
     return rows.map((row) => {
       const candidate = jsonObject(row.candidate);
       const governance = jsonObject(row.governance);
       const genericGovernance = jsonObject(governance.genericGovernance);
-      const diagnostics = genericGovernance.driftDiagnostics;
+      const multimodelGovernance = jsonObject(governance.multimodelGovernance);
+      const useMultimodel =
+        multimodelGovernance.driftState === 'OUT_OF_DISTRIBUTION' ||
+        multimodelGovernance.driftState === 'STRESSED';
+      const driftEvidence = useMultimodel ? multimodelGovernance : genericGovernance;
+      const diagnostics = driftEvidence.driftDiagnostics;
+      const allBlockers = Array.isArray(row.blockers)
+        ? row.blockers.filter((item): item is string => typeof item === 'string')
+        : [];
+      const nonDriftBlockers = allBlockers.filter(
+        (item) =>
+          item !== 'DRIFT_OUT_OF_DISTRIBUTION' &&
+          item !== 'DRIFT_STRESSED' &&
+          item !== 'MULTIMODEL_GOVERNANCE_BLOCKED',
+      );
       return {
         id: row.id,
         instrument: row.instrument.trim().toUpperCase(),
@@ -1804,12 +1829,15 @@ export class M1TacticalEvidenceService {
         evaluatedAt: date(row.evaluated_at),
         stopDistance: number(candidate.stopDistance),
         targetDistance: number(candidate.targetDistance),
-        estimatedExecutionCostR: number(genericGovernance.estimatedExecutionCostR),
-        driftState:
-          typeof genericGovernance.driftState === 'string' ? genericGovernance.driftState : null,
+        estimatedExecutionCostR: number(
+          driftEvidence.estimatedExecutionCostR ?? genericGovernance.estimatedExecutionCostR,
+        ),
+        driftState: typeof driftEvidence.driftState === 'string' ? driftEvidence.driftState : null,
         driftDiagnostics: Array.isArray(diagnostics)
           ? diagnostics.filter((item): item is string => typeof item === 'string')
           : [],
+        nonDriftBlockers: [...new Set(nonDriftBlockers)].slice(0, 18),
+        driftEvidenceSource: useMultimodel ? 'MULTIMODEL' : 'GENERIC',
       };
     });
   }

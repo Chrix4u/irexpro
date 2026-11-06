@@ -989,6 +989,29 @@ describe("active multi-model execution presentation", () => {
     });
   });
 
+  it("explains the shadow broker-history gap without suggesting trade authority", () => {
+    const unavailable = {
+      ...status,
+      latestDecision: {
+        ...status.latestDecision,
+        trainedExpertState: "UNAVAILABLE",
+        trainedExpertReason: "BROKER_MARKET_DATA_UNAVAILABLE",
+        trainedExpertDirection: null,
+        trainedExpertConfidence: null,
+        trainedExpertLongVotes: null,
+        trainedExpertShortVotes: null,
+        multimodelExecutable: false,
+      },
+    };
+    expect(hasM1TacticalStatusUiShape(unavailable)).toBe(true);
+    expect(deriveActiveModelUiState(unavailable)).toMatchObject({
+      trainedExpertLabel: "Shadow challenger · waiting for broker MTF history",
+      executable: false,
+    });
+    unavailable.latestDecision.trainedExpertReason = "UNVERIFIED_CAUSE".repeat(12);
+    expect(hasM1TacticalStatusUiShape(unavailable)).toBe(false);
+  });
+
   it("does not call a regime-rejected fallback a qualified trend-continuation route", () => {
     const rejected = {
       ...status,
@@ -1172,6 +1195,40 @@ describe("active multi-model execution presentation", () => {
     );
     blocked.latestDecision.brokerCommissionP90CostR = Number.POSITIVE_INFINITY;
     expect(hasM1TacticalStatusUiShape(blocked)).toBe(false);
+  });
+
+  it("identifies the real no-trade chain when Plan B is not admitted and drift also fails", () => {
+    const rejected = JSON.parse(JSON.stringify(status));
+    rejected.latestDecision.primaryConfidence = 0.64;
+    rejected.latestDecision.planBPaperAdmitted = false;
+    rejected.latestDecision.planBRegime = "TREND_EXTENDED";
+    rejected.latestDecision.planBRegimeAllowed = false;
+    rejected.latestDecision.multimodelExecutable = false;
+    rejected.latestDecision.blockers = [
+      "MULTIMODEL_PLAN_B_NOT_ADMITTED",
+      "ENSEMBLE_NOT_PAPER_ADMITTED",
+      "MULTIMODEL_GOVERNANCE_BLOCKED",
+      "DRIFT_OUT_OF_DISTRIBUTION",
+    ];
+    rejected.latestDecision.primaryBlockerGroup = "MODEL_DRIFT";
+    rejected.latestDecision.modelDriftDiagnostics = ["extensionAtr:HARD_HIGH"];
+    const result = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: rejected,
+      fastMarkState: "LIVE",
+    });
+    expect(result).toMatchObject({
+      score: 64,
+      band: "FORMING",
+      headline: "No qualified strategy route — trade blocked",
+      tradeExpected: false,
+    });
+    expect(result.detail).toContain("Plan B has not admitted an entry");
+    expect(result.detail).toContain("price extension versus ATR above the hard validation range");
+    expect(deriveActiveModelUiState(rejected).planBLabel).toBe(
+      "No qualified strategy route · Trend extended",
+    );
   });
 
   it("keeps drift-blocked multi-model readiness moving instead of pinning every setup at 49", () => {

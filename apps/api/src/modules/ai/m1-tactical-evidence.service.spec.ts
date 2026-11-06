@@ -235,6 +235,7 @@ describe('M1TacticalEvidenceService', () => {
       multimodelAuthorityPath: 'HIGH_CONVICTION_RESCUE',
       multimodelRescueVolumeCap: 0.2,
       trainedExpertState: 'CONFIRM',
+      trainedExpertReason: null,
       trainedExpertDirection: 'SELL',
       trainedExpertConfidence: 0.79,
       trainedExpertLongVotes: 0,
@@ -947,7 +948,7 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     });
   });
 
-  it('loads mature drift counterfactuals with reliability-only blockers while excluding substantive hard blockers', async () => {
+  it('samples multi-blocked drift decisions with causal provenance and no execution permission', async () => {
     const query = jest.fn().mockResolvedValue([
       {
         id: 'decision-drift-1',
@@ -956,8 +957,19 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
         route: 'M1_TREND_CONTINUATION',
         evaluated_at: '2026-10-19T10:55:00.000Z',
         candidate: { stopDistance: 0.0005, targetDistance: 0.0008 },
+        blockers: [
+          'MULTIMODEL_GOVERNANCE_BLOCKED',
+          'DRIFT_OUT_OF_DISTRIBUTION',
+          'ENSEMBLE_NOT_PAPER_ADMITTED',
+          'PAPER_NET_EXPECTED_R',
+        ],
         governance: {
           genericGovernance: {
+            driftState: 'NORMAL',
+            estimatedExecutionCostR: 0.12,
+            driftDiagnostics: [],
+          },
+          multimodelGovernance: {
             driftState: 'OUT_OF_DISTRIBUTION',
             estimatedExecutionCostR: 0.0625,
             driftDiagnostics: ['extensionAtr:HARD_HIGH'],
@@ -980,13 +992,18 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     const normalized = String(sql).replace(/\s+/g, ' ');
     expect(normalized).toContain("route <> 'ABSTAIN'");
     expect(normalized).toContain("execution_authority = 'NONE'");
-    expect(normalized).toContain('jsonb_array_elements_text(blockers)');
-    expect(normalized).toContain(
-      "blocker.value !~ '^M1_(SHADOW_|MEANINGFUL_SCOUT_|TIERED_SCOUT_)?RELIABILITY_'",
-    );
-    expect(normalized).toMatch(
-      /blocker\.value NOT IN\s*\(\s*'DRIFT_OUT_OF_DISTRIBUTION', 'DRIFT_STRESSED', 'M1_PHASE_SHADOW', 'M1_PHASE_ROUTE_SHADOW'\s*\)/,
-    );
+    expect(normalized).not.toContain('jsonb_array_elements_text(blockers)');
+    expect(normalized).not.toContain('AND NOT EXISTS');
+    expect(normalized).toContain('ROW_NUMBER() OVER');
+    expect(normalized).toContain('PARTITION BY FLOOR(EXTRACT(EPOCH FROM evaluated_at) / 960)');
+    expect(normalized).toContain('WHERE episode_rank = 1');
+    // Rank across already-settled rows first: never select a second
+    // observation from the same fixed UTC bucket on the next minute.
+    expect(
+      normalized.indexOf("AND governance -> 'driftCounterfactual15m' IS NULL"),
+    ).toBeGreaterThan(normalized.indexOf('WHERE episode_rank = 1'));
+    expect(normalized).toContain("evaluated_at > ($4::timestamptz - interval '48 minutes')");
+    expect(normalized).toContain('LIMIT 8');
     expect(normalized).toContain(
       'blockers @> \'["DRIFT_OUT_OF_DISTRIBUTION"]\'::jsonb OR blockers @> \'["DRIFT_STRESSED"]\'::jsonb',
     );
@@ -1013,6 +1030,8 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
         estimatedExecutionCostR: 0.0625,
         driftState: 'OUT_OF_DISTRIBUTION',
         driftDiagnostics: ['extensionAtr:HARD_HIGH'],
+        driftEvidenceSource: 'MULTIMODEL',
+        nonDriftBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'PAPER_NET_EXPECTED_R'],
       }),
     ]);
   });
