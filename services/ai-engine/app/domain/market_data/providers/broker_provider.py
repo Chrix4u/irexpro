@@ -8,6 +8,7 @@ IMPORTANT:
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 
 import httpx
@@ -22,6 +23,12 @@ logger = get_logger(__name__)
 
 INTERNAL_API_KEY_HEADER = "x-irexpro-internal-api-key"
 HTTP_TIMEOUT_SECONDS = 15.0
+# Strictly one additional attempt for idempotent read-only broker-native
+# OHLCV fetches. Never repeat a simulated heartbeat / advancing request.
+BROKER_READONLY_MAX_ATTEMPTS = 2
+BROKER_RETRY_TIMEOUT_SECONDS = 3.0
+BROKER_RETRY_DELAY_SECONDS = 0.1
+BROKER_RETRYABLE_HTTP_STATUSES = frozenset((502, 503, 504))
 
 
 class BrokerMarketDataProvider(MarketDataProvider):
@@ -84,28 +91,72 @@ class BrokerMarketDataProvider(MarketDataProvider):
         if advance_simulation:
             request_params["advanceSimulation"] = "true"
 
+        max_attempts = (
+            1 if advance_simulation else BROKER_READONLY_MAX_ATTEMPTS
+        )
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-                response = await client.get(
-                    request_url,
-                    params=request_params,
-                    headers=self._get_headers(),
-                )
+                for attempt in range(max_attempts):
+                    try:
+                        response = await client.get(
+                            request_url,
+                            params=request_params,
+                            headers=self._get_headers(),
+                            timeout=(
+                                HTTP_TIMEOUT_SECONDS
+                                if attempt == 0
+                                else BROKER_RETRY_TIMEOUT_SECONDS
+                            ),
+                        )
+                    except (httpx.TimeoutException, httpx.TransportError) as error:
+                        if attempt + 1 < max_attempts:
+                            logger.warning(
+                                "broker_history_transient_retry",
+                                instrument=instrument.upper(),
+                                timeframe=timeframe.upper(),
+                                reason=(
+                                    "timeout"
+                                    if isinstance(error, httpx.TimeoutException)
+                                    else "transport"
+                                ),
+                            )
+                            await asyncio.sleep(BROKER_RETRY_DELAY_SECONDS)
+                            continue
+                        if isinstance(error, httpx.TimeoutException):
+                            raise MarketDataError("Market data request timed out") from error
+                        raise MarketDataError("Unable to fetch broker market data") from error
 
-            if response.status_code in (401, 403):
-                raise MarketDataError("Market data access denied")
+                    if response.status_code in (401, 403):
+                        raise MarketDataError("Market data access denied")
+                    if (
+                        response.status_code in BROKER_RETRYABLE_HTTP_STATUSES
+                        and attempt + 1 < max_attempts
+                    ):
+                        logger.warning(
+                            "broker_history_transient_retry",
+                            instrument=instrument.upper(),
+                            timeframe=timeframe.upper(),
+                            reason=f"http_{response.status_code}",
+                        )
+                        await asyncio.sleep(BROKER_RETRY_DELAY_SECONDS)
+                        continue
+                    if response.status_code >= 400:
+                        raise MarketDataError(
+                            f"Market data request failed with HTTP {response.status_code}"
+                        )
 
-            if response.status_code >= 400:
-                raise MarketDataError(f"Market data request failed with HTTP {response.status_code}")
-
-            data = response.json()
-            return self._parse_response(data, instrument, timeframe)
+                    # Exact received response only. Candle validation, broker
+                    # provenance and freshness remain in OHLCVService.
+                    return self._parse_response(
+                        response.json(), instrument, timeframe
+                    )
+            raise MarketDataError("Broker market data retry attempts exhausted")
         except MarketDataError:
             raise
-        except httpx.TimeoutException as e:
-            raise MarketDataError("Market data request timed out") from e
-        except Exception as e:
-            raise MarketDataError("Unable to fetch broker market data") from e
+        except (ValueError, KeyError, TypeError) as error:
+            raise MarketDataError("Invalid broker market data response") from error
+        except Exception as error:
+            raise MarketDataError("Unable to fetch broker market data") from error
 
     def _parse_response(self, data: dict, instrument: str, timeframe: str) -> list[OHLCVCandle]:
         candles: list[OHLCVCandle] = []
