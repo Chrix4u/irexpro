@@ -154,6 +154,12 @@ describe('M1TacticalEvidenceService', () => {
         candidate: { confidence: 0.738 },
         governance: {
           netExpectedR: 0.2794,
+          oodResearchFeatures: {
+            version: 'm1-ood-asof-envelope-v1',
+            extensionAtr: 3.0259,
+            emaSeparation: 0.8204,
+            rsi14: 29.4223,
+          },
           primaryEngineCode: 'irexpro-multimodel-ensemble-v1',
           m1TacticalRole: 'TIMING_SPECIALIST',
           routeDecision: { route: 'M1_TREND_CONTINUATION', reason: 'TREND_STRUCTURE_ALIGNED' },
@@ -249,6 +255,11 @@ describe('M1TacticalEvidenceService', () => {
       primaryBlockerCode: null,
       modelDriftState: 'OUT_OF_DISTRIBUTION',
       modelDriftDiagnostics: ['confidence:HARD_HIGH', 'extensionAtr:STRESSED_LOW'],
+      modelDriftNumericEvidence: {
+        extensionAtr: 3.0259,
+        emaSeparation: 0.8204,
+        rsi14: 29.4223,
+      },
       brokerCommissionResearchReason: 'CAUSAL_FEE_EVIDENCE_READY',
       brokerCommissionSampleCount: 27,
       brokerCommissionP90CostR: 0.285,
