@@ -83,15 +83,24 @@ PYTHONPATH="$repo/services/ai-engine" "$python_bin" \
   --cohort-csv "$first_hit_csv" --report-json "$first_hit_json"
 chmod 600 "$first_hit_json"
 mv -f "$first_hit_json" "$research_dir/latest-first-hit-report.json"
-# Predict prospective FIRST-BARRIER outcomes from as-of features only.
-# This classifier is held entirely in memory and can never promote itself.
+# Extend training ONLY with completed broker-native M1 candles, including
+# historically missing last-quote timestamps as explicit lower-confidence
+# completed-candle-end proxies. The original recent exact-quote report above
+# is preserved separately and is never silently pooled with this research.
+extended_sql="$repo/services/ai-engine/app/domain/training/demo_rejected_first_hit_extended_readonly.sql"
+[[ -r "$extended_sql" ]] || { echo 'Extended first-hit SQL missing' >&2; exit 1; }
+extended_csv="$(mktemp "$research_dir/extended.XXXXXXXX.csv")"
 selector_tmp="$(mktemp "$research_dir/selector.XXXXXXXX.json")"
-trap 'rm -f "$tmp_csv" "$tmp_json" "$challenger_tmp" "$first_hit_csv" "$first_hit_json" "$selector_tmp"' EXIT
+trap 'rm -f "$tmp_csv" "$tmp_json" "$challenger_tmp" "$first_hit_csv" "$first_hit_json" "$extended_csv" "$selector_tmp"' EXIT
+PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=80000 -c work_mem=8MB' PGPASSWORD="$DB_PASSWORD" psql -X --csv \
+  -h "$DB_HOST" -p "$db_port" -U "$DB_USER" -d "$db_name" \
+  -v ON_ERROR_STOP=1 -v scanner_user="$VPS_FOREX_SCANNER_USER_ID" \
+  -v source_id="$M1_TACTICAL_MARKET_DATA_CONNECTION_ID" -f "$extended_sql" > "$extended_csv"
 PYTHONPATH="$repo/services/ai-engine" "$python_bin" \
   -m app.domain.training.demo_first_hit_temporal_selector \
-  --cohort-csv "$first_hit_csv" --report-json "$selector_tmp"
+  --cohort-csv "$extended_csv" --report-json "$selector_tmp"
 chmod 600 "$selector_tmp"
 mv -f "$selector_tmp" "$research_dir/latest-first-hit-selector-report.json"
-rm -f "$first_hit_csv"
+rm -f "$first_hit_csv" "$extended_csv"
 
 printf '%s\n' 'REJECTED_ENTRY_SHADOW_READONLY=TRUE' 'REJECTED_ENTRY_BROKER_ORDER_WRITES=0' 'REJECTED_ENTRY_PROMOTION_ALLOWED=FALSE'
