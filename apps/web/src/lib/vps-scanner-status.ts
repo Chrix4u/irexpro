@@ -257,6 +257,7 @@ export interface M1TacticalStatusView {
     multimodelAuthorityPath?: string | null;
     multimodelRescueVolumeCap?: number | null;
     trainedExpertState?: string | null;
+    trainedExpertReason?: string | null;
     trainedExpertDirection?: "BUY" | "SELL" | null;
     trainedExpertConfidence?: number | null;
     trainedExpertLongVotes?: number | null;
@@ -318,7 +319,11 @@ export function hasM1TacticalStatusUiShape(
     ) ||
     (decision.brokerCommissionResearchReason !== undefined &&
       decision.brokerCommissionResearchReason !== null &&
-      typeof decision.brokerCommissionResearchReason !== "string")
+      typeof decision.brokerCommissionResearchReason !== "string") ||
+    (decision.trainedExpertReason !== undefined &&
+      decision.trainedExpertReason !== null &&
+      (typeof decision.trainedExpertReason !== "string" ||
+        decision.trainedExpertReason.length > 100))
   )
     return false;
   if (
@@ -439,8 +444,11 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
   const trainedExpertLabel =
     direction && directionalVotes != null && totalVotes > 0
       ? `${expertRoleLabel} · ${directionalVotes}/${totalVotes} ${direction} votes · ${percentLabel(decision?.trainedExpertConfidence)}`
-      : decision?.trainedExpertState
-        ? `${expertRoleLabel} · ${decision.trainedExpertState.replaceAll("_", " ")}`
+      : decision?.trainedExpertState === "UNAVAILABLE" &&
+          decision?.trainedExpertReason === "BROKER_MARKET_DATA_UNAVAILABLE"
+        ? "Shadow challenger · waiting for broker MTF history"
+        : decision?.trainedExpertState
+          ? `${expertRoleLabel} · ${decision.trainedExpertState.replaceAll("_", " ")}`
         : `${expertRoleLabel} · awaiting score`;
   const m1Route = decision?.m1TimingRoute ?? decision?.route;
   const m1Reason = decision?.m1TimingReason;
@@ -745,11 +753,26 @@ export function deriveTradeReadinessUiState(
         "An account-risk, exposure, loss-streak, or session guard is preventing this entry.";
     }
 
+    // Plan B admission is an independent prerequisite. An OOD flag on a
+    // setup that was never admitted is not the sole cause of no trading.
+    if (
+      planBBlocked &&
+      m1Decision.primaryBlockerGroup !== "MODEL_EXPECTANCY" &&
+      m1Decision.primaryBlockerGroup !== "RISK_OR_ACCOUNT"
+    ) {
+      detail =
+        m1Decision.planBRegimeAllowed === false
+          ? "This market is outside the currently qualified strategy regimes. Plan B has not admitted an entry; drift and after-cost checks may also reject it. The AI is evaluating unusual conditions for research, not dispatching a trade."
+          : "Plan B has not admitted this entry. A confidence score or green-looking meter is not an execution instruction; other drift, expectancy and account vetoes remain active.";
+    }
     const driftEvidence = driftBlocked
       ? driftEvidenceLabel(m1Decision.modelDriftDiagnostics)
       : null;
     const afterCostRejected =
-      blockers.includes("PAPER_NET_EXPECTED_R") && m1Decision.netExpectedR <= 0;
+      blockers.includes("PAPER_NET_EXPECTED_R") &&
+      typeof m1Decision.netExpectedR === "number" &&
+      Number.isFinite(m1Decision.netExpectedR) &&
+      m1Decision.netExpectedR <= 0;
     if (afterCostRejected) {
       detail = `The estimated net return is ${m1Decision.netExpectedR.toFixed(2)}R after costs; the entry does not have positive expected value. Directional confidence and the meter score are not evidence of profitability. Other model and timing vetoes may also apply.`;
     }
@@ -788,11 +811,17 @@ export function deriveTradeReadinessUiState(
         ? "Negative after-cost expectancy — trade rejected"
         : m1Decision.primaryBlockerGroup === "RISK_OR_ACCOUNT"
           ? "Account risk guard blocked this trade"
-          : driftBlocked
-            ? "Model drift — execution blocked"
-            : rounded >= 40
-              ? "Setup forming — not yet executable"
-              : "Waiting for a stronger setup",
+          : m1Decision.primaryBlockerGroup === "MODEL_EXPECTANCY"
+            ? "After-cost expectancy below floor — trade blocked"
+            : planBBlocked
+            ? m1Decision.planBRegimeAllowed === false
+              ? "No qualified strategy route — trade blocked"
+              : "Plan-B admission not met — trade blocked"
+            : driftBlocked
+              ? "Model drift — execution blocked"
+              : rounded >= 40
+                ? "Setup forming — not yet executable"
+                : "Waiting for a stronger setup",
       detail,
       tradeExpected: false,
       instrument: m1Decision.instrument,
