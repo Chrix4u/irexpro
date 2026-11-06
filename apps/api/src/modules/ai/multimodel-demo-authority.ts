@@ -307,7 +307,15 @@ export function multimodelDemoSignalConfidence(
   const planBConfidence = Number.isFinite(input.ensemble.ensembleScore)
     ? input.ensemble.ensembleScore
     : 0;
-  if (authority.authorityPath !== 'HIGH_CONVICTION_RESCUE') return planBConfidence;
+  // Both exceptional routes explicitly require all 3 broker-native trained
+  // experts to agree. Use their qualifying confidence, not the legacy Plan-B
+  // score (which still embeds the forecast economics under investigation).
+  if (
+    authority.authorityPath !== 'HIGH_CONVICTION_RESCUE' &&
+    authority.authorityPath !== 'FORECAST_SHADOW_CONSENSUS'
+  ) {
+    return planBConfidence;
+  }
 
   const rescueConfidence = input.trainedExpert.ensembleConfidence;
   return rescueConfidence != null && Number.isFinite(rescueConfidence)
