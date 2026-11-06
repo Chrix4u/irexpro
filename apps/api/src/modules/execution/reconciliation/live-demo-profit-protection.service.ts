@@ -602,6 +602,24 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           positionPrices.takeProfitPrice == null ? null : finite(positionPrices.takeProfitPrice),
         latestLiveSpreadPrice: m1Evidence?.latestLiveSpreadPrice ?? null,
       });
+      const patienceRunner = evaluateProtectedRunnerShadow({
+        trendWouldHold: patience.wouldConsiderBrokerProtectedGrace,
+        instrument: trade.instrument,
+        direction: trade.direction,
+        grossUnrealisedPnl: currentPnl,
+        initialRiskPnl,
+        estimatedBrokerCosts: fees?.estimatedCost ?? null,
+        feeSampleCount: fees?.sampleCount ?? 0,
+        entryPrice: positionPrices.entryPrice == null ? null : finite(positionPrices.entryPrice),
+        currentPrice:
+          positionPrices.currentPrice == null ? null : finite(positionPrices.currentPrice),
+        originalStopPrice: trade.stop_loss == null ? null : finite(trade.stop_loss),
+        takeProfitPrice:
+          positionPrices.takeProfitPrice == null
+            ? null
+            : finite(positionPrices.takeProfitPrice),
+        latestLiveSpreadPrice: m1Evidence?.latestLiveSpreadPrice ?? null,
+      });
       const zaiP1Canary = evaluateZaiP1ReversalDemoPreflight({
         // The caller has already verified this exact adapter connection is
         // cTrader DEMO; no new provider authorization is inferred here.
