@@ -148,6 +148,52 @@ function highConvictionRescueEligible(input: MultimodelDemoAuthorityInput): bool
   );
 }
 
+const FORECAST_REASONS = new Set(['EXPECTED_R', 'META_EXPECTED_VALUE']);
+const FORECAST_GOVERNANCE_BLOCKERS = new Set([
+  'PAPER_NET_EXPECTED_R',
+  'ENSEMBLE_NOT_PAPER_ADMITTED',
+  'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+]);
+
+function forecastShadowConsensusEligible(input: MultimodelDemoAuthorityInput): boolean {
+  const e = input.ensemble;
+  const g = input.governance;
+  const m = input.trainedExpert;
+  const reasons = e.reasons ?? [];
+  const forecastVeto = reasons.some((reason) => FORECAST_REASONS.has(reason)) ||
+    g.paperExecutionBlockers.includes('PAPER_NET_EXPECTED_R');
+  const economicalOnly = (e.paperAdmitted ||
+    (reasons.length > 0 && reasons.every((reason) => FORECAST_REASONS.has(reason)))) &&
+    g.paperExecutionBlockers.length > 0 &&
+    g.paperExecutionBlockers.every((reason) => FORECAST_GOVERNANCE_BLOCKERS.has(reason));
+  const quality = e.regimeAllowed === true &&
+    Number.isFinite(input.candidateConfidence) && input.candidateConfidence! >= 0.64 &&
+    Number.isFinite(e.directionQuality) && e.directionQuality! >= 0.55 &&
+    Number.isFinite(e.tradeQuality) && e.tradeQuality! >= 0.48 &&
+    Number.isFinite(e.exitQuality) && e.exitQuality! >= 0.48 &&
+    Number.isFinite(e.sessionQuality) && e.sessionQuality! >= 0.5 &&
+    Number.isFinite(e.portfolioQuality) && e.portfolioQuality! >= 0.35;
+  const allVotes = (m.longVotes ?? 0) + (m.shortVotes ?? 0);
+  const sameVotes = input.candidateDirection === 'BUY' ? m.longVotes : m.shortVotes;
+  const agrees = m.allBrokerNative === true &&
+    m.state !== 'UNAVAILABLE' && m.state !== 'STALE' &&
+    m.direction === input.candidateDirection &&
+    Number.isFinite(m.freshnessSeconds) && m.freshnessSeconds! >= 0 &&
+    m.freshnessSeconds! <= 90 &&
+    Number.isFinite(m.ensembleConfidence) && m.ensembleConfidence! >= 0.7 &&
+    allVotes >= 3 && sameVotes === allVotes;
+  const independentSafety = g.executionSpreadEvidenceValid === true &&
+    g.paperExecutionCostUsable === true &&
+    g.eventRisk === 'CLEAR' && g.driftState === 'NORMAL' &&
+    g.sleeveState !== 'BLOCKED' &&
+    e.strategyRoute !== 'EARLY_TRANSITION' &&
+    input.m1TimingRoute !== 'ABSTAIN' &&
+    confirmedReversalTimingConsistent(input) &&
+    trendContinuationTimingConsistent(input);
+  return input.forecastEconomicsShadowOnlyDemo === true &&
+    forecastVeto && economicalOnly && quality && agrees && independentSafety;
+}
+
 export function evaluateMultimodelDemoAuthority(
   input: MultimodelDemoAuthorityInput,
 ): MultimodelDemoAuthorityDecision {
