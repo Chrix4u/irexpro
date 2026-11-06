@@ -1061,6 +1061,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       governance,
       trainedExpert,
       candidateDirection: candidate.direction,
+      candidateConfidence: candidate.confidence,
+      forecastEconomicsShadowOnlyDemo:
+        this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&
+        this.rolloutPolicy.demoBrokerCommissionShadow === true &&
+        this.rolloutPolicy.demoBrokerCommissionFloor === false,
       m1TimingRoute: classifyM1TacticalRoute(
         candidate,
         buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2).find(
@@ -1520,7 +1525,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const selectedPrimaryForCommission =
       professionalDemoPhase &&
       multimodelPrimaryExecutable &&
-      demoPrimaryOnlyProbation.chosenAuthorityPath === 'PRIMARY_PLAN_B' &&
+      (demoPrimaryOnlyProbation.chosenAuthorityPath === 'PRIMARY_PLAN_B' ||
+        demoPrimaryOnlyProbation.chosenAuthorityPath === 'FORECAST_SHADOW_CONSENSUS') &&
       !demoPrimaryOnlyProbation.blocked;
     const commissionFloorEnabled =
       professionalDemoPhase && this.rolloutPolicy.demoBrokerCommissionFloor === true;
