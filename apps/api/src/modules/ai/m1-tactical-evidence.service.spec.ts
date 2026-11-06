@@ -96,7 +96,9 @@ describe('DEMO forecast-shadow broker-account verification', () => {
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
     expect(await service.isActiveCtraderDemoFullAutoConnection('user-1', 'conn-live')).toBe(false);
     query.mockResolvedValue([{ eligible: 'true' }]);
-    expect(await service.isActiveCtraderDemoFullAutoConnection('user-1', 'conn-untyped')).toBe(false);
+    expect(await service.isActiveCtraderDemoFullAutoConnection('user-1', 'conn-untyped')).toBe(
+      false,
+    );
     expect(await service.isActiveCtraderDemoFullAutoConnection('', 'conn-1')).toBe(false);
     expect(query).toHaveBeenCalledTimes(2);
   });
