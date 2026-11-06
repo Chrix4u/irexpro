@@ -5298,6 +5298,30 @@ export default function AiTradingPage() {
                     <span className="ai-cockpit__label">Current AI view</span>
                     <strong>{tradeReadiness.headline}</strong>
                     <p>{tradeReadiness.detail}</p>
+                    {tradeReadiness.secondaryChecks?.length ? (
+                      <div
+                        className="ai-market-readiness__extra-checks"
+                        aria-label="Other active trade restrictions"
+                      >
+                        <span>Other active restrictions</span>
+                        <ul>
+                          {tradeReadiness.secondaryChecks.map((check) => (
+                            <li key={check}>{check}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    {tradeReadiness.researchNote ? (
+                      <details className="ai-market-readiness__research">
+                        <summary>Commission research · not blocking</summary>
+                        <p>{tradeReadiness.researchNote}</p>
+                      </details>
+                    ) : null}
+                    {!tradeReadiness.tradeExpected ? (
+                      <small className="ai-market-readiness__score-explainer">
+                        Readiness measures setup strength, not permission to open a trade.
+                      </small>
+                    ) : null}
                     <div className="ai-market-readiness__score">
                       <span>Readiness</span>
                       <b>{tradeReadiness.score}/100</b>

@@ -1229,16 +1229,83 @@ describe("active multi-model execution presentation", () => {
     });
     expect(result.tradeExpected).toBe(false);
     expect(result.band).not.toBe("READY");
-    expect(result.detail).toContain(
-      "historical p90 commission/financing adds 0.28R",
-    );
-    expect(result.detail).toContain("M1 estimated net after fees is -0.12R");
-    expect(result.detail).toContain("Plan-B after commission: 0.03R");
-    expect(result.detail).toContain(
-      "Shadow-only evidence, not trade authorization",
-    );
+    expect(result.detail).not.toContain("historical p90 commission");
+    expect(result.researchNote).toContain("Historical p90 commission/financing estimate: 0.28R");
+    expect(result.researchNote).toContain("M1 estimated net after those fees: -0.12R");
+    expect(result.researchNote).toContain("Plan-B after commission: 0.03R");
+    expect(result.researchNote).toContain("NOT an active trading blocker or approval");
     blocked.latestDecision.brokerCommissionP90CostR = Number.POSITIVE_INFINITY;
     expect(hasM1TacticalStatusUiShape(blocked)).toBe(false);
+  });
+
+  it("identifies the screenshot's news restriction instead of inventing an account-risk or commission veto", () => {
+    const blocked = JSON.parse(JSON.stringify(status));
+    blocked.latestDecision.instrument = "AUDUSD";
+    blocked.latestDecision.direction = "SELL";
+    blocked.latestDecision.primaryConfidence = 0.69;
+    blocked.latestDecision.multimodelExecutable = false;
+    blocked.latestDecision.executionAuthority = "NONE";
+    blocked.latestDecision.outcomeState = null;
+    blocked.latestDecision.primaryBlockerGroup = "RISK_OR_ACCOUNT";
+    blocked.latestDecision.primaryBlockerCode = "EVENT_RISK_HIGH_IMPACT_BLOCK";
+    blocked.latestDecision.planBPaperAdmitted = false;
+    blocked.latestDecision.blockers = [
+      "MULTIMODEL_GOVERNANCE_BLOCKED",
+      "EVENT_RISK_HIGH_IMPACT_BLOCK",
+      "MULTIMODEL_PLAN_B_NOT_ADMITTED",
+      "DRIFT_OUT_OF_DISTRIBUTION",
+      "MULTIMODEL_CONTINUATION_TIMING_NOT_READY",
+    ];
+    blocked.latestDecision.brokerCommissionResearchReason = "CAUSAL_FEE_EVIDENCE_READY";
+    blocked.latestDecision.brokerCommissionP90CostR = 0.13;
+    blocked.latestDecision.m1EstimatedNetAfterCommissionR = 0.08;
+    blocked.latestDecision.planBEstimatedNetAfterCommissionR = 0.21;
+    const view = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: blocked,
+      fastMarkState: "LIVE",
+    });
+    expect(view).toMatchObject({
+      score: 69,
+      band: "FORMING",
+      headline: "High-impact news — new entries paused",
+      instrument: "AUDUSD",
+      direction: "SELL",
+      tradeExpected: false,
+    });
+    expect(view.detail).toContain("high-impact economic event");
+    expect(view.detail).not.toContain("commission");
+    expect(view.detail).not.toContain("account-risk");
+    expect(view.secondaryChecks).toEqual([
+      "Plan B model has not admitted this setup",
+      "Market outside the validated model range",
+      "M1 entry timing is not confirmed",
+    ]);
+    expect(view.researchNote).toContain("0.13R");
+    expect(view.researchNote).toContain("0.08R");
+    expect(view.researchNote).toContain("0.21R");
+    expect(view.researchNote).toContain("NOT an active trading blocker");
+  });
+
+  it("still reports a real account exposure veto when news is also active", () => {
+    const blocked = JSON.parse(JSON.stringify(status));
+    blocked.latestDecision.executionAuthority = "NONE";
+    blocked.latestDecision.multimodelExecutable = false;
+    blocked.latestDecision.primaryBlockerGroup = "RISK_OR_ACCOUNT";
+    blocked.latestDecision.primaryBlockerCode = "ACCOUNT_RISK_EXPOSURE";
+    blocked.latestDecision.blockers = [
+      "ACCOUNT_RISK_EXPOSURE",
+      "EVENT_RISK_HIGH_IMPACT_BLOCK",
+    ];
+    const view = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: blocked,
+      fastMarkState: "LIVE",
+    });
+    expect(view.headline).toBe("Account safety limit — entry blocked");
+    expect(view.secondaryChecks).toContain("High-impact economic-news restriction");
   });
 
   it("identifies the real no-trade chain when Plan B is not admitted and drift also fails", () => {

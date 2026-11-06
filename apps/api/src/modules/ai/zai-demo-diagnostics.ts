@@ -7,6 +7,7 @@ export const ZAI_DEMO_DIAGNOSTICS_VERSION = 'zai-demo-diagnostics-v1';
 
 export type ZaiBlockerGroup =
   | 'MARKET_DATA'
+  | 'NEWS_EVENT'
   | 'RISK_OR_ACCOUNT'
   | 'MODEL_EXPECTANCY'
   | 'MODEL_DRIFT'
@@ -19,6 +20,7 @@ export type ZaiBlockerGroup =
 
 const order: readonly ZaiBlockerGroup[] = [
   'MARKET_DATA',
+  'NEWS_EVENT',
   'RISK_OR_ACCOUNT',
   'MODEL_EXPECTANCY',
   'MODEL_DRIFT',
@@ -37,6 +39,8 @@ export function classifyZaiBlocker(code: string): ZaiBlockerGroup {
     )
   )
     return 'MARKET_DATA';
+  // A calendar embargo is NOT an account balance or exposure rejection.
+  if (code === 'EVENT_RISK_HIGH_IMPACT_BLOCK') return 'NEWS_EVENT';
   // Strategy-scoped loss-streak and pair/side reliability signals are NOT
   // evidence of an account-level loss limit or exposure rejection.
   if (
