@@ -9,7 +9,7 @@ import type { V8ShadowMetaInput } from './v8-shadow-meta-scorer';
 export const MULTIMODEL_DEMO_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 
 export interface MultimodelDemoAuthorityInput {
-  ensemble: Pick<PlanBEnsembleScore, 'paperAdmitted' | 'ensembleScore' | 'strategyRoute'>;
+  ensemble: Pick<PlanBEnsembleScore, 'paperAdmitted' | 'ensembleScore' | 'strategyRoute'> & Partial<Pick<PlanBEnsembleScore, 'regimeAllowed' | 'reasons' | 'directionQuality' | 'tradeQuality' | 'exitQuality' | 'sessionQuality' | 'portfolioQuality'>>;
   governance: Pick<
     EnsembleGovernanceDecision,
     | 'paperExecutionEligible'
@@ -20,13 +20,15 @@ export interface MultimodelDemoAuthorityInput {
     | 'eventRisk'
     | 'sleeveState'
     | 'driftState'
-  >;
+  > & Partial<Pick<EnsembleGovernanceDecision, 'executionSpreadEvidenceValid'>>;
   trainedExpert: HighConvictionOverlay;
   candidateDirection: 'BUY' | 'SELL';
   m1TimingRoute: M1TacticalRoute;
+  forecastEconomicsShadowOnlyDemo?: boolean;
+  candidateConfidence?: number;
 }
 
-export type MultimodelDemoAuthorityPath = 'PRIMARY_PLAN_B' | 'HIGH_CONVICTION_RESCUE' | 'BLOCKED';
+export type MultimodelDemoAuthorityPath = 'PRIMARY_PLAN_B' | 'FORECAST_SHADOW_CONSENSUS' | 'HIGH_CONVICTION_RESCUE' | 'BLOCKED';
 
 export interface MultimodelDemoAuthorityDecision {
   executable: boolean;
