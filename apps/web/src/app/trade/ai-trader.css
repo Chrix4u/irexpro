@@ -2461,6 +2461,43 @@
 }
 .ai-market-readiness > strong { font-size: 1.05rem; }
 .ai-market-readiness > p { color: var(--text-secondary); font-size: 0.82rem; line-height: 1.5; }
+.ai-market-readiness__extra-checks {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft, var(--border));
+  background: rgba(255, 255, 255, 0.025);
+}
+.ai-market-readiness__extra-checks > span {
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--text);
+}
+.ai-market-readiness__extra-checks ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.22rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+.ai-market-readiness__research {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+.ai-market-readiness__research summary {
+  cursor: pointer;
+  font-weight: 650;
+  color: var(--text);
+}
+.ai-market-readiness__research p { margin: 0.45rem 0 0; line-height: 1.5; }
+.ai-market-readiness__score-explainer {
+  font-size: 0.73rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
 .ai-market-readiness__score,
 .ai-market-readiness__focus {
   display: flex;
