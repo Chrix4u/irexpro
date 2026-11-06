@@ -1391,9 +1391,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const trialVotesTotal =
       (trialExpert?.longVotes ?? 0) + (trialExpert?.shortVotes ?? 0);
     const trialDirectionVotes =
-      candidate.direction === 'BUY'
-        ? trialExpert?.longVotes
-        : trialExpert?.shortVotes;
+      candidate.direction === 'BUY' ? trialExpert?.longVotes : trialExpert?.shortVotes;
     // Opt-in exception to PRIMARY_ONLY probation: the existing M1 continuation
     // fallback has already established positive actual pair-side reliability,
     // M1 timing and sound broker risk geometry. A cTrader DEMO probe can be
