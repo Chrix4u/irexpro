@@ -1002,7 +1002,15 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(
       normalized.indexOf("AND governance -> 'driftCounterfactual15m' IS NULL"),
     ).toBeGreaterThan(normalized.indexOf('WHERE episode_rank = 1'));
+    expect(normalized).toContain(
+      "evaluated_at >= TO_TIMESTAMP( FLOOR(EXTRACT(EPOCH FROM ($4::timestamptz - interval '48 minutes')) / 960) * 960 )",
+    );
     expect(normalized).toContain("evaluated_at > ($4::timestamptz - interval '48 minutes')");
+    // Critical: the cutoff is applied after ROW_NUMBER, so expiry of
+    // the first episode never produces a second sample in that bin.
+    expect(
+      normalized.indexOf("evaluated_at > ($4::timestamptz - interval '48 minutes')"),
+    ).toBeGreaterThan(normalized.indexOf('WHERE episode_rank = 1'));
     expect(normalized).toContain('LIMIT 8');
     expect(normalized).toContain(
       'blockers @> \'["DRIFT_OUT_OF_DISTRIBUTION"]\'::jsonb OR blockers @> \'["DRIFT_STRESSED"]\'::jsonb',
