@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 from .demo_rejected_first_hit_shadow import (
     DEOVERLAP_MINUTES,
@@ -29,7 +30,7 @@ from .demo_rejected_first_hit_shadow import (
     valid_decision,
 )
 
-VERSION = "demo-first-hit-temporal-selector-shadow-v1"
+VERSION = "demo-first-hit-temporal-selector-shadow-v3"
 SAFE_REASONS = frozenset((
     "DIRECTION_QUALITY", "EXIT_FEASIBILITY", "TRADE_QUALITY",
     "REGIME_TREND_EXTENDED", "REGIME_TREND_WEAK",
@@ -51,6 +52,31 @@ MIN_HOLDOUT_CANDIDATES = 30
 MIN_HOLDOUT_RESOLVED = 15
 EMBARGO_MINUTES = 35
 C = 0.25
+
+# Fixed before inspecting any enriched-model outcome. All are persisted
+# candidate/ensemble values computed AS OF the decision, never future bars.
+MARKET_ASOF_BOUNDS = (
+    ("aligned_ema_sep_atr", -10.0, 10.0),
+    ("aligned_ema_slope_atr", -10.0, 10.0),
+    ("aligned_m5_momentum3_atr", -10.0, 10.0),
+    ("aligned_momentum3_atr", -10.0, 10.0),
+    ("aligned_m30_efficiency", -2.0, 2.0),
+    ("aligned_higher_timeframe_agreement", -2.0, 2.0),
+    ("aligned_m5_directional_run", -20.0, 20.0),
+    ("m5_body_expansion_ratio", 0.0, 15.0),
+    ("candidate_score", -100.0, 100.0),
+    ("candidate_confidence", 0.0, 100.0),
+    ("candidate_direction_quality", 0.0, 1.0),
+    ("breakout_atr", -10.0, 10.0),
+    ("gross_expected_r", -5.0, 5.0),
+    ("ensemble_direction_quality", 0.0, 1.0),
+    ("ensemble_trade_quality", 0.0, 1.0),
+    ("ensemble_exit_quality", 0.0, 1.0),
+    ("ensemble_meta_probability", 0.0, 1.0),
+    ("ensemble_score", -10.0, 10.0),
+    ("ensemble_session_quality", 0.0, 1.0),
+    ("ensemble_pair_side_quality", 0.0, 1.0),
+)
 
 
 def parse_codes(value: object) -> set[str]:
@@ -96,6 +122,34 @@ def asof_features(row: dict) -> dict[str, float]:
     return features
 
 
+def enriched_asof_features(row: dict) -> dict[str, float]:
+    """Technical and ensemble features already persisted before decision time.
+
+    Missingness is explicit. The standardizer in training is fit only on
+    the earlier time period; neither raw future prices nor realized
+    stop/target paths are ever accessed here.
+    """
+    features = asof_features(row)
+    for field, minimum, maximum in MARKET_ASOF_BOUNDS:
+        raw = row.get(field)
+        try:
+            value = float(raw)
+            observed = math.isfinite(value)
+        except (TypeError, ValueError):
+            value, observed = 0.0, False
+        features[f"market_{field}"] = (
+            max(minimum, min(maximum, value)) if observed else 0.0
+        )
+        features[f"market_{field}_missing"] = 0.0 if observed else 1.0
+    atr = bounded_number(row.get("atr_raw"), 0.0, 0.01)
+    features["market_atr_pips"] = atr / PIP
+    spread = bounded_number(
+        float(row["entry_ask"]) - float(row["entry_bid"]), 0.0, 0.001
+    )
+    features["market_entry_spread_pips"] = spread / PIP
+    return features
+
+
 def prepare(path: Path) -> tuple[list[dict], dict]:
     df = pd.read_csv(path, dtype=str)
     expected = {
@@ -104,6 +158,9 @@ def prepare(path: Path) -> tuple[list[dict], dict]:
         "entry_bid", "entry_ask", "entry_seen_utc", "minute_path_json",
         "predicted_net_r", "regime_asof", "drift_state_asof",
         "estimated_cost_r_asof", "admission_reasons_json", "blockers_json",
+        "entry_quote_timestamp_basis",
+        "atr_raw",
+        *(field for field, _, _ in MARKET_ASOF_BOUNDS),
     }
     if not expected.issubset(df.columns):
         raise ValueError("Missing required as-of DEMO first-hit columns")
@@ -129,11 +186,32 @@ def prepare(path: Path) -> tuple[list[dict], dict]:
             continue
         previous[record["instrument"]] = at
         try:
+            source_basis = record.get("entry_quote_timestamp_basis")
+            if source_basis not in ("OBSERVED_LAST_QUOTE", "COMPLETED_CANDLE_END_PROXY"):
+                raise ValueError("Unknown entry timestamp quality")
+            bars = json.loads(record.get("minute_path_json", "[]"))
+            if not isinstance(bars, list):
+                raise ValueError("Malformed M1 path")
+            bar_bases = {
+                bar.get("quote_timestamp_basis")
+                for bar in bars if isinstance(bar, dict)
+            }
+            if not bar_bases.issubset({
+                "OBSERVED_LAST_QUOTE", "COMPLETED_CANDLE_END_PROXY"
+            }):
+                raise ValueError("Unknown source candle timestamp quality")
+            path_basis = (
+                "COMPLETED_CANDLE_END_PROXY"
+                if source_basis == "COMPLETED_CANDLE_END_PROXY"
+                or "COMPLETED_CANDLE_END_PROXY" in bar_bases
+                else "OBSERVED_LAST_QUOTE"
+            )
             verdict = evaluate_decision(record)
         except (KeyError, ValueError, TypeError, OverflowError):
             invalid += 1
             continue
         selected.append({
+            "price_path_timing_tier": path_basis,
             "decision_at": at,
             "asof": record,
             "status": verdict["status"],
@@ -147,20 +225,40 @@ def prepare(path: Path) -> tuple[list[dict], dict]:
         "invalid_rows": invalid,
         "independent_episodes": len(selected),
         "source_utc_days": len({x["decision_at"].date() for x in selected}),
+        "price_path_timing_tiers": dict(sorted(Counter(
+            x["price_path_timing_tier"] for x in selected
+        ).items())),
     }
 
 
-def rank_holdout(training: list[dict], holdout: list[dict]) -> tuple[np.ndarray, np.ndarray]:
-    """Fit on older observed outcomes only; predict for ALL holdout candidates."""
+def rank_holdout(
+    training: list[dict],
+    holdout: list[dict],
+    *,
+    variant: str = "BASELINE",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Fit earlier resolved outcomes; rank ALL held-out candidates.
+
+    BASELINE keeps prior semantics unchanged. ENRICHED adds as-of technical
+    features with a scaler trained only on earlier resolved outcomes.
+    Both variants are research-only and cannot be promoted.
+    """
+    if variant not in ("BASELINE", "ENRICHED"):
+        raise ValueError("Unknown non-executing candidate model variant")
     resolved_train = [x for x in training if x["status"] in (TP, SL)]
     if not resolved_train or not holdout:
         raise ValueError("Missing train or holdout")
     y = np.asarray([int(x["status"] == TP) for x in resolved_train], dtype=int)
     if len(set(y.tolist())) < 2:
         raise ValueError("Train needs both TP and SL observed outcomes")
+    feature_fn = enriched_asof_features if variant == "ENRICHED" else asof_features
     vectorizer = DictVectorizer(sparse=False)
-    train_x = vectorizer.fit_transform([asof_features(x["asof"]) for x in resolved_train])
-    hold_x = vectorizer.transform([asof_features(x["asof"]) for x in holdout])
+    train_x = vectorizer.fit_transform([feature_fn(x["asof"]) for x in resolved_train])
+    hold_x = vectorizer.transform([feature_fn(x["asof"]) for x in holdout])
+    if variant == "ENRICHED":
+        train_only_scaler = StandardScaler()
+        train_x = train_only_scaler.fit_transform(train_x)
+        hold_x = train_only_scaler.transform(hold_x)
     classifier = LogisticRegression(
         C=C, max_iter=500, solver="liblinear", random_state=19
     )
@@ -201,11 +299,82 @@ def summarize(cohort: list[dict]) -> dict:
         "quote_close_tp_first": tp,
         "quote_close_sl_first": sl,
         "censored_or_ambiguous": n - tp - sl,
+        "price_path_timing_tiers": dict(sorted(Counter(
+            x.get("price_path_timing_tier", "UNKNOWN") for x in cohort
+        ).items())),
         "resolved_fraction": round((tp + sl) / n, 4) if n else None,
         "tp_fraction_of_resolved_only": round(tp / (tp + sl), 4) if tp + sl else None,
         "estimated_net_r_on_resolved_only": round(total_r / len(resolved), 4) if resolved else None,
         "pessimistic_mean_r_if_all_censored_sl": round(pessimistic_r / n, 4) if n else None,
         "optimistic_mean_r_if_all_censored_tp": round(optimistic_r / n, 4) if n else None,
+    }
+
+
+def walk_forward_completed_days(episodes: list[dict], days: list) -> dict:
+    """Precommitted rolling next-day tests; never optimize model/cutoff on future days.
+
+    Each fold uses only earlier resolved outcomes and a fixed 35-minute
+    purge ahead of the next completed UTC trading day. Every candidate
+    in the test date is ranked *before* its label is inspected.
+    """
+    folds = []
+    pooled_all: list[dict] = []
+    pooled_admitted: list[dict] = []
+    pooled_selected: list[dict] = []
+    pooled_enriched: list[dict] = []
+    for day in days[MIN_TRAIN_DAYS:]:
+        cutoff = pd.Timestamp(day, tz="UTC")
+        training = [
+            item for item in episodes
+            if item["decision_at"] < cutoff - timedelta(minutes=EMBARGO_MINUTES)
+        ]
+        holdout = [item for item in episodes if item["decision_at"].date() == day]
+        train_resolved = [item for item in training if item["status"] in (TP, SL)]
+        if (
+            len({x["decision_at"].date() for x in training}) < MIN_TRAIN_DAYS
+            or len(train_resolved) < MIN_TRAIN_RESOLVED
+            or len({item["status"] for item in train_resolved}) < 2
+            or len(holdout) < MIN_HOLDOUT_CANDIDATES
+            or sum(item["status"] in (TP, SL) for item in holdout) < MIN_HOLDOUT_RESOLVED
+        ):
+            continue
+        rankings, _expected = rank_holdout(training, holdout)
+        selected_n = max(1, math.floor(len(holdout) * TOP_FRACTION))
+        chosen = [holdout[i] for i in rankings[:selected_n]]
+        enriched_ranking, _ = rank_holdout(training, holdout, variant="ENRICHED")
+        enriched_chosen = [holdout[i] for i in enriched_ranking[:selected_n]]
+        admitted = [
+            item for item in holdout
+            if item["asof"]["paper_admitted"] in (True, "true")
+        ]
+        folds.append({
+            "holdout_utc_day": day.isoformat(),
+            "train_utc_days": len({x["decision_at"].date() for x in training}),
+            "train_resolved": len(train_resolved),
+            "train_price_timing_quality": dict(sorted(Counter(
+                x.get("price_path_timing_tier", "UNKNOWN") for x in training
+            ).items())),
+            "holdout_all": summarize(holdout),
+            "holdout_planb_admitted": summarize(admitted),
+            "holdout_challenger": summarize(chosen),
+            "holdout_enriched_challenger": summarize(enriched_chosen),
+        })
+        pooled_all.extend(holdout)
+        pooled_admitted.extend(admitted)
+        pooled_selected.extend(chosen)
+        pooled_enriched.extend(enriched_chosen)
+
+    return {
+        "selection_is_outcome_blind": True,
+        "fold_utc_days_evaluated": len(folds),
+        "complete_source_utc_days": len(days),
+        "folds": folds,
+        "pooled_holdout_all": summarize(pooled_all),
+        "pooled_planb_admitted": summarize(pooled_admitted),
+        "pooled_challenger": summarize(pooled_selected),
+        "pooled_enriched_challenger": summarize(pooled_enriched),
+        "promotion_allowed": False,
+        "broker_orders": 0,
     }
 
 
@@ -239,6 +408,8 @@ def evaluate(episodes: list[dict], *, as_of: datetime, quality: dict) -> dict:
         "holdout_all": summarize([]),
         "holdout_planb_admitted": summarize([]),
         "holdout_challenger": summarize([]),
+        "holdout_enriched_challenger": summarize([]),
+        "walk_forward": walk_forward_completed_days(episodes, days),
     }
     if len(days) < MIN_TRAIN_DAYS + 1:
         return report
@@ -272,6 +443,10 @@ def evaluate(episodes: list[dict], *, as_of: datetime, quality: dict) -> dict:
     ranked, _ = rank_holdout(train, holdout)
     top = max(1, math.floor(len(holdout) * TOP_FRACTION))
     report["holdout_challenger"] = summarize([holdout[i] for i in ranked[:top]])
+    ranked_enriched, _ = rank_holdout(train, holdout, variant="ENRICHED")
+    report["holdout_enriched_challenger"] = summarize([
+        holdout[i] for i in ranked_enriched[:top]
+    ])
     report["model_fitted"] = True
     report["readiness"] = "EXPLORATORY_ONLY_INSUFFICIENT_MARKET_DAYS"
     return report
@@ -297,9 +472,13 @@ def main() -> None:
         "holdout_day": report["holdout_utc_day"],
         "train_resolved": report["train_resolved"],
         "challenger": report["holdout_challenger"],
+        "enriched_challenger": report["holdout_enriched_challenger"],
         "baseline_all": report["holdout_all"],
         "baseline_planb_admitted": report["holdout_planb_admitted"],
         "model_fitted": report["model_fitted"],
+        "walk_forward_folds": report["walk_forward"]["fold_utc_days_evaluated"],
+        "walk_forward_pooled_challenger": report["walk_forward"]["pooled_challenger"],
+        "walk_forward_pooled_enriched": report["walk_forward"]["pooled_enriched_challenger"],
         "promotion_allowed": False,
         "broker_orders": 0,
     }, sort_keys=True))
