@@ -1047,6 +1047,49 @@ describe("active multi-model execution presentation", () => {
     );
   });
 
+  it("labels research-only USDJPY before a model expectancy or shadow commission warning", () => {
+    const research = {
+      ...status,
+      demoEntryInstruments: ["AUDUSD", "EURUSD", "GBPUSD"],
+      researchOnlyInstruments: ["USDJPY", "USDCAD", "USDCHF"],
+      latestDecision: {
+        ...status.latestDecision,
+        instrument: "USDJPY",
+        direction: "BUY" as const,
+        netExpectedR: -0.01,
+        route: "M1_TREND_CONTINUATION",
+        planBPaperAdmitted: false,
+        multimodelExecutable: false,
+        executionAuthority: "NONE" as const,
+        primaryConfidence: 0.58,
+        primaryBlockerGroup: "MODEL_EXPECTANCY",
+        blockers: [
+          "M1_DEMO_INSTRUMENT_RESEARCH_ONLY",
+          "PAPER_NET_EXPECTED_R",
+          "MULTIMODEL_PLAN_B_NOT_ADMITTED",
+        ],
+      },
+    };
+    expect(hasM1TacticalStatusUiShape(research)).toBe(true);
+    const state = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: research,
+      fastMarkState: "LIVE",
+    });
+    expect(state).toMatchObject({
+      score: 58,
+      band: "WAITING",
+      headline: "Research-only pair — no DEMO entry",
+      instrument: "USDJPY",
+      direction: "BUY",
+      tradeExpected: false,
+    });
+    expect(state.detail).toContain("AUDUSD, EURUSD, GBPUSD");
+    expect(state.detail).toContain("-0.01R");
+    expect(state.detail).toContain("shadow-only");
+  });
+
   it("explains an M1 timing rejection without turning Plan-B admission into execution approval", () => {
     const waiting = {
       ...status,
@@ -1076,6 +1119,7 @@ describe("active multi-model execution presentation", () => {
     expect(readiness.band).not.toBe("READY");
     expect(readiness.detail).toMatch(/Plan-B admitted/i);
     expect(readiness.detail).toMatch(/Higher timeframe conflict/i);
+    expect(readiness.headline).toBe("Plan-B admitted — M1 timing conflict");
   });
 
   it("does not label M1 continuation as reversal confirmation", () => {

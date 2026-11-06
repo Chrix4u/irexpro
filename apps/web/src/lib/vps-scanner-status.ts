@@ -684,6 +684,36 @@ export function deriveTradeReadinessUiState(
         direction: m1Decision.direction,
       };
     }
+    // Scanning six pairs does not make the three research-only pairs
+    // executable. Surface the true instrument scope before quality warnings.
+    const researchOnlyDecision =
+      blockers.includes("M1_DEMO_INSTRUMENT_RESEARCH_ONLY") ||
+      (m1Status?.authorityMode === "DEMO_FULL_AUTO" &&
+        m1Status.researchOnlyInstruments?.includes(m1Decision.instrument) ===
+          true);
+    if (researchOnlyDecision) {
+      const entryPairs = m1Status?.demoEntryInstruments?.length
+        ? m1Status.demoEntryInstruments.join(", ")
+        : "the approved DEMO entry pairs";
+      const expectedR =
+        typeof m1Decision.netExpectedR === "number" &&
+        Number.isFinite(m1Decision.netExpectedR)
+          ? ` This baseline signal estimate is ${m1Decision.netExpectedR.toFixed(2)}R after estimated spread/slippage; it is distinct from the shadow-only historical commission estimate.`
+          : "";
+      return {
+        score: Math.min(rounded, 59),
+        band: "WAITING",
+        headline: "Research-only pair — no DEMO entry",
+        detail:
+          `${m1Decision.instrument} is scanned for research, not broker execution. Only ${entryPairs} are eligible to open trades under the current cTrader DEMO policy.` +
+          expectedR +
+          " The separate historical commission gate is shadow-only and cannot change this pair's status.",
+        tradeExpected: false,
+        instrument: m1Decision.instrument,
+        direction: m1Decision.direction,
+      };
+    }
+
     if (executionEligible) {
       const highConvictionRescue =
         m1Decision.multimodelAuthorityPath === "HIGH_CONVICTION_RESCUE";
@@ -774,7 +804,7 @@ export function deriveTradeReadinessUiState(
       Number.isFinite(m1Decision.netExpectedR) &&
       m1Decision.netExpectedR <= 0;
     if (afterCostRejected) {
-      detail = `The estimated net return is ${m1Decision.netExpectedR.toFixed(2)}R after costs; the entry does not have positive expected value. Directional confidence and the meter score are not evidence of profitability. Other model and timing vetoes may also apply.`;
+      detail = `The model estimates ${m1Decision.netExpectedR.toFixed(2)}R after baseline spread/slippage; this is below the expected-return floor. This is separate from the additional historical p90 commission gate, now shadow-only on cTrader DEMO. Other model and timing vetoes may also apply.`;
     }
     if (driftEvidence) {
       detail += ` Drift evidence: ${driftEvidence}. This does not grant permission to trade.`;
@@ -804,6 +834,10 @@ export function deriveTradeReadinessUiState(
       detail +=
         " Historical broker commission evidence is not yet sufficient for a reliable after-fee estimate.";
     }
+    const planBAdmittedM1HtfConflict =
+      m1Decision.planBPaperAdmitted === true &&
+      m1Decision.m1TimingRoute === "ABSTAIN" &&
+      m1Decision.m1TimingReason === "HIGHER_TIMEFRAME_CONFLICT";
     return {
       score: rounded,
       band: rounded >= 40 ? "FORMING" : "WAITING",
@@ -819,9 +853,11 @@ export function deriveTradeReadinessUiState(
               : "Plan-B admission not met — trade blocked"
             : driftBlocked
               ? "Model drift — execution blocked"
-              : rounded >= 40
-                ? "Setup forming — not yet executable"
-                : "Waiting for a stronger setup",
+              : planBAdmittedM1HtfConflict
+                ? "Plan-B admitted — M1 timing conflict"
+                : rounded >= 40
+                  ? "Setup forming — not yet executable"
+                  : "Waiting for a stronger setup",
       detail,
       tradeExpected: false,
       instrument: m1Decision.instrument,

@@ -63,6 +63,9 @@ describe('VpsForexSignalCollectorController', () => {
     const schedulerStatus = {
       enabled: true,
       phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+      authorityMode: 'DEMO_FULL_AUTO',
+      demoEntryInstruments: ['AUDUSD', 'EURUSD', 'GBPUSD'],
+      researchOnlyInstruments: ['USDJPY', 'USDCAD', 'USDCHF'],
       lastRunAt: '2026-10-27T20:30:09.000Z',
       lastError: null,
       marketReadiness: { EURUSD: { ready: true, reason: 'READY' } },
@@ -78,6 +81,7 @@ describe('VpsForexSignalCollectorController', () => {
       blockers: ['DRIFT_OUT_OF_DISTRIBUTION', 'M1_PHASE_ROUTE_SHADOW'],
       outcomeState: null,
     };
+    const loadLatestDecisionStateForUser = jest.fn().mockResolvedValue(latestDecision);
     const controller = new VpsForexSignalCollectorController(
       {} as VpsForexSignalCollectorService,
       {} as BrokerParityV7Service,
@@ -85,14 +89,17 @@ describe('VpsForexSignalCollectorController', () => {
       {
         getStatus: jest.fn().mockReturnValue(schedulerStatus),
       } as unknown as M1TacticalSchedulerService,
-      {
-        loadLatestDecisionStateForUser: jest.fn().mockResolvedValue(latestDecision),
-      } as unknown as M1TacticalEvidenceService,
+      { loadLatestDecisionStateForUser } as unknown as M1TacticalEvidenceService,
     );
 
     await expect(controller.getM1TacticalStatus('user-1')).resolves.toEqual({
       ...schedulerStatus,
       latestDecision,
     });
+    expect(loadLatestDecisionStateForUser).toHaveBeenCalledWith('user-1', [
+      'AUDUSD',
+      'EURUSD',
+      'GBPUSD',
+    ]);
   });
 });

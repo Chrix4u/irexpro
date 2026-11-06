@@ -820,6 +820,7 @@ export class M1TacticalEvidenceService {
 
   async loadLatestDecisionStateForUser(
     userId: string,
+    demoEntryInstruments: readonly string[] = [],
   ): Promise<M1TacticalLatestDecisionState | null> {
     const rows = (await this.dataSource.query(
       `
@@ -830,17 +831,22 @@ export class M1TacticalEvidenceService {
         WHERE user_id = $1
         ORDER BY
           bar_time DESC,
+          -- Always show real authorization first. Among same-bar
+          -- nonexecuted decisions, prefer entry-eligible DEMO pairs.
+          -- Research-only USDJPY/USDCAD/USDCHF must not displace an
+          -- actionable same-minute AUDUSD/EURUSD/GBPUSD diagnosis.
+          CASE WHEN execution_authority <> 'NONE' THEN 0 ELSE 1 END ASC,
           CASE
-            WHEN execution_authority <> 'NONE' THEN 0
-            WHEN route <> 'ABSTAIN' THEN 1
-            ELSE 2
+            WHEN CARDINALITY($2::text[]) > 0 AND NOT (instrument = ANY($2::text[]))
+              THEN 1 ELSE 0
           END ASC,
+          CASE WHEN route <> 'ABSTAIN' THEN 0 ELSE 1 END ASC,
           COALESCE((candidate ->> 'confidence')::numeric, 0) DESC,
           COALESCE((governance ->> 'netExpectedR')::numeric, -999999) DESC,
           created_at DESC
         LIMIT 1
       `,
-      [userId],
+      [userId, [...demoEntryInstruments]],
     )) as Array<{
       instrument: string;
       direction: 'BUY' | 'SELL';

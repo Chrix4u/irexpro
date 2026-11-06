@@ -214,7 +214,9 @@ describe('M1TacticalEvidenceService', () => {
     ]);
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
 
-    await expect(service.loadLatestDecisionStateForUser(input().userId)).resolves.toEqual({
+    await expect(
+      service.loadLatestDecisionStateForUser(input().userId, ['AUDUSD', 'EURUSD', 'GBPUSD']),
+    ).resolves.toEqual({
       instrument: 'EURUSD',
       direction: 'SELL',
       route: 'M1_TREND_CONTINUATION',
@@ -259,7 +261,9 @@ describe('M1TacticalEvidenceService', () => {
     expect(String(sql)).toContain('WHERE user_id = $1');
     expect(String(sql).replace(/\s+/g, ' ')).toContain('ORDER BY bar_time DESC');
     expect(String(sql)).toContain("execution_authority <> 'NONE'");
-    expect(params).toEqual([input().userId]);
+    expect(String(sql)).toContain('CARDINALITY($2::text[])');
+    expect(String(sql)).toContain('instrument = ANY($2::text[])');
+    expect(params).toEqual([input().userId, ['AUDUSD', 'EURUSD', 'GBPUSD']]);
   });
 
   it('records an immutable decision identity using parameterized SQL and no semantic overwrite on conflict', async () => {
