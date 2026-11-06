@@ -112,6 +112,10 @@ export interface TradeReadinessUiState {
   band: TradeReadinessBand;
   headline: string;
   detail: string;
+  /** Additional currently failing gates, distinct from the primary reason. */
+  secondaryChecks?: string[];
+  /** Scenario calculation only: cannot block or authorize execution. */
+  researchNote?: string;
   tradeExpected: boolean;
   instrument: string | null;
   direction: "BUY" | "SELL" | null;
@@ -656,6 +660,19 @@ export function deriveTradeReadinessUiState(
       score = Math.min(score, MAX_BLOCKED_READINESS_SCORE);
     }
 
+    const newsBlocked = blockers.includes("EVENT_RISK_HIGH_IMPACT_BLOCK");
+    // A news-calendar embargo is not an account balance or exposure rejection.
+    // This fallback also handles older API servers that classified EVENT_RISK
+    // as the generic RISK_OR_ACCOUNT group.
+    const actualAccountGuard = blockers.some((blocker) =>
+      /^(ACCOUNT_|M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE|M1_FAST_STOP_REGIME_BRAKE|M1_DEMO_ACCOUNT_|M1_SESSION_INACTIVE)/.test(blocker),
+    );
+    const accountRiskPrimary =
+      actualAccountGuard ||
+      (m1Decision.primaryBlockerGroup === "RISK_OR_ACCOUNT" &&
+        m1Decision.primaryBlockerCode !== "EVENT_RISK_HIGH_IMPACT_BLOCK" &&
+        !newsBlocked);
+    const newsPrimary = newsBlocked && !accountRiskPrimary;
     const driftBlocked = blockers.includes("DRIFT_OUT_OF_DISTRIBUTION");
     const routeShadow = blockers.includes("M1_PHASE_ROUTE_SHADOW");
     const reliabilityBlocked = blockers.some((blocker) =>
@@ -764,7 +781,10 @@ export function deriveTradeReadinessUiState(
 
     // Separate the underlying economic/model/entry cause from wrapper veto
     // strings. This is informational only; all original vetoes still apply.
-    if (m1Decision.primaryBlockerGroup === "MODEL_EXPECTANCY") {
+    if (newsPrimary) {
+      detail =
+        "A high-impact economic event is inside its restricted trading window. New entries are paused automatically and will be checked again when the window ends. Other model checks can still prevent an entry afterward.";
+    } else if (m1Decision.primaryBlockerGroup === "MODEL_EXPECTANCY") {
       detail =
         "After estimated execution costs, the expected return is below the required floor. The AI will not open an economically weak trade merely to increase activity.";
     } else if (m1Decision.primaryBlockerGroup === "MODEL_DRIFT") {
@@ -779,8 +799,9 @@ export function deriveTradeReadinessUiState(
       detail =
         "The multi-model entry has not passed its calibrated model-confidence and signal-quality checks.";
     } else if (m1Decision.primaryBlockerGroup === "RISK_OR_ACCOUNT") {
-      detail =
-        "An account-risk, exposure, loss-streak, or session guard is preventing this entry.";
+      detail = actualAccountGuard
+        ? "A specific account-exposure or account safety limit is blocking this entry. The AI will not override the broker or account protection."
+        : "A risk or session rule is preventing this entry. Other model checks may also be active.";
     }
 
     // Plan B admission is an independent prerequisite. An OOD flag on a
@@ -788,7 +809,8 @@ export function deriveTradeReadinessUiState(
     if (
       planBBlocked &&
       m1Decision.primaryBlockerGroup !== "MODEL_EXPECTANCY" &&
-      m1Decision.primaryBlockerGroup !== "RISK_OR_ACCOUNT"
+      m1Decision.primaryBlockerGroup !== "RISK_OR_ACCOUNT" &&
+      !newsPrimary
     ) {
       detail =
         m1Decision.planBRegimeAllowed === false
@@ -803,12 +825,28 @@ export function deriveTradeReadinessUiState(
       typeof m1Decision.netExpectedR === "number" &&
       Number.isFinite(m1Decision.netExpectedR) &&
       m1Decision.netExpectedR <= 0;
-    if (afterCostRejected) {
+    if (afterCostRejected && !newsPrimary && !accountRiskPrimary) {
       detail = `The model estimates ${m1Decision.netExpectedR.toFixed(2)}R after baseline spread/slippage; this is below the expected-return floor. This is separate from the additional historical p90 commission gate, now shadow-only on cTrader DEMO. Other model and timing vetoes may also apply.`;
     }
-    if (driftEvidence) {
+    if (driftEvidence && !newsPrimary && !accountRiskPrimary) {
       detail += ` Drift evidence: ${driftEvidence}. This does not grant permission to trade.`;
     }
+    const secondaryChecks = [
+      ...(newsBlocked && !newsPrimary ? ["High-impact economic-news restriction"] : []),
+      ...(actualAccountGuard && !accountRiskPrimary ? ["Account/exposure safety limit"] : []),
+      ...(planBBlocked ? ["Plan B model has not admitted this setup"] : []),
+      ...(driftBlocked ? ["Market outside the validated model range"] : []),
+      ...(blockers.includes("MULTIMODEL_CONTINUATION_TIMING_NOT_READY")
+        ? ["M1 entry timing is not confirmed"]
+        : []),
+      ...(blockers.includes("MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED")
+        ? ["M1 reversal is not confirmed"]
+        : []),
+      ...(afterCostRejected && (newsPrimary || accountRiskPrimary)
+        ? ["Baseline after-cost expectation is too low"]
+        : []),
+    ].slice(0, 4);
+    let researchNote: string | undefined;
     const historicalCommissionR = m1Decision.brokerCommissionP90CostR;
     const afterCommissionR = m1Decision.m1EstimatedNetAfterCommissionR;
     if (
@@ -825,14 +863,14 @@ export function deriveTradeReadinessUiState(
         typeof planB === "number" && Number.isFinite(planB)
           ? ` Plan-B after commission: ${planB.toFixed(2)}R.`
           : "";
-      detail += ` Broker-fee research: historical p90 commission/financing adds ${historicalCommissionR.toFixed(2)}R; M1 estimated net after fees is ${afterCommissionR.toFixed(2)}R.${planBExplanation} Shadow-only evidence, not trade authorization.`;
+      researchNote = `Historical p90 commission/financing estimate: ${historicalCommissionR.toFixed(2)}R. M1 estimated net after those fees: ${afterCommissionR.toFixed(2)}R.${planBExplanation} This is a shadow-only scenario, NOT an active trading blocker or approval.`;
     } else if (
       m1Decision.brokerCommissionResearchReason ===
         "INSUFFICIENT_PRIOR_CLOSED_TRADES" ||
       m1Decision.brokerCommissionResearchReason === "FEE_LOOKUP_UNAVAILABLE"
     ) {
-      detail +=
-        " Historical broker commission evidence is not yet sufficient for a reliable after-fee estimate.";
+      researchNote =
+        "Historical broker-fee research does not yet have sufficient verified evidence. This does not block the entry.";
     }
     const planBAdmittedM1HtfConflict =
       m1Decision.planBPaperAdmitted === true &&
@@ -841,11 +879,13 @@ export function deriveTradeReadinessUiState(
     return {
       score: rounded,
       band: rounded >= 40 ? "FORMING" : "WAITING",
-      headline: afterCostRejected
-        ? "Negative after-cost expectancy — trade rejected"
-        : m1Decision.primaryBlockerGroup === "RISK_OR_ACCOUNT"
-          ? "Account risk guard blocked this trade"
-          : m1Decision.primaryBlockerGroup === "MODEL_EXPECTANCY"
+      headline: accountRiskPrimary
+        ? "Account safety limit — entry blocked"
+        : newsPrimary
+          ? "High-impact news — new entries paused"
+          : afterCostRejected
+            ? "Negative after-cost expectancy — trade rejected"
+            : m1Decision.primaryBlockerGroup === "MODEL_EXPECTANCY"
             ? "After-cost expectancy below floor — trade blocked"
             : planBBlocked
             ? m1Decision.planBRegimeAllowed === false
@@ -859,6 +899,8 @@ export function deriveTradeReadinessUiState(
                   ? "Setup forming — not yet executable"
                   : "Waiting for a stronger setup",
       detail,
+      secondaryChecks,
+      researchNote,
       tradeExpected: false,
       instrument: m1Decision.instrument,
       direction: m1Decision.direction,
