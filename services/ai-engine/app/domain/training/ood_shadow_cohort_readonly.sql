@@ -10,11 +10,16 @@
 -- No write statements or new trade authority are possible.
 
 WITH observed AS (
-  SELECT d.user_id, d.instrument, d.route, d.direction, d.bar_time,
+  SELECT d.user_id, d.broker_connection_id, d.instrument, d.route, d.direction, d.bar_time,
          d.evaluated_at, d.candidate,
-         d.governance->'genericGovernance'->'driftDiagnostics' AS diagnostics,
+         CASE
+           WHEN d.governance->'multimodelGovernance'->>'driftState' = 'OUT_OF_DISTRIBUTION'
+             THEN d.governance->'multimodelGovernance'->'driftDiagnostics'
+           ELSE d.governance->'genericGovernance'->'driftDiagnostics'
+         END AS diagnostics,
+         d.governance->'oodResearchFeatures' AS asof_envelope,
          ROW_NUMBER() OVER (
-           PARTITION BY d.user_id, d.instrument, d.route, d.direction, d.bar_time
+           PARTITION BY d.user_id, d.broker_connection_id, d.instrument, d.route, d.direction, d.bar_time
            ORDER BY d.evaluated_at ASC, d.id ASC
          ) AS observation_rank
   FROM trading.m1_tactical_decisions d
@@ -26,7 +31,10 @@ WITH observed AS (
     AND d.evaluated_at < NOW() - INTERVAL '20 minutes'
     AND d.route IN ('M1_TREND_CONTINUATION', 'M1_EARLY_TRANSITION')
     AND d.instrument IN ('AUDUSD', 'GBPUSD', 'EURUSD')
-    AND d.governance->'genericGovernance'->>'driftState' = 'OUT_OF_DISTRIBUTION'
+    AND (
+      d.governance->'multimodelGovernance'->>'driftState' = 'OUT_OF_DISTRIBUTION'
+      OR d.governance->'genericGovernance'->>'driftState' = 'OUT_OF_DISTRIBUTION'
+    )
     AND d.candidate->>'entry' IS NOT NULL
     AND d.candidate->>'stopDistance' IS NOT NULL
     AND d.candidate->>'confidence' IS NOT NULL
@@ -57,6 +65,14 @@ SELECT
   d.candidate->>'alignedM5BodyPressure3' AS m5_body_pressure,
   d.candidate->>'m5BodyExpansionRatio' AS m5_body_expansion,
   d.candidate->>'stopDistance' AS stop_distance,
+  -- Historical decisions preceding this provenance patch remain NULL;
+  -- never fabricate an approximate envelope feature from a HARD_HIGH label.
+  d.asof_envelope->>'extensionAtr' AS envelope_extension_atr,
+  d.asof_envelope->>'volatilityScore' AS envelope_volatility_score,
+  d.asof_envelope->>'emaSeparation' AS envelope_ema_separation,
+  d.asof_envelope->>'mtfStrength' AS envelope_mtf_strength,
+  d.asof_envelope->>'rsi14' AS envelope_rsi14,
+  d.asof_envelope->>'shortHorizonMomentumAtr' AS envelope_short_momentum_atr,
   COALESCE(d.diagnostics, '[]'::jsonb)::text AS diagnostics_json,
   start_quote.bid_close::text AS entry_bid,
   start_quote.ask_close::text AS entry_ask,
@@ -70,7 +86,8 @@ FROM unique_decisions d
 JOIN LATERAL (
   SELECT c.bid_close, c.ask_close, c.last_quote_sample_at, c.source
   FROM market_data.provider_quote_candles c
-  WHERE c.instrument = d.instrument AND c.timeframe = 'M1'
+  WHERE c.connection_id = d.broker_connection_id
+    AND c.instrument = d.instrument AND c.timeframe = 'M1'
     AND c.bucket_time < date_trunc('minute', d.evaluated_at)
     AND c.bucket_time >= date_trunc('minute', d.evaluated_at) - INTERVAL '3 minutes'
     AND c.last_quote_sample_at <= d.evaluated_at
@@ -82,7 +99,8 @@ JOIN LATERAL (
 JOIN LATERAL (
   SELECT c.bid_close, c.ask_close, c.last_quote_sample_at, c.source
   FROM market_data.provider_quote_candles c
-  WHERE c.instrument = d.instrument AND c.timeframe = 'M1'
+  WHERE c.connection_id = d.broker_connection_id
+    AND c.instrument = d.instrument AND c.timeframe = 'M1'
     AND c.bucket_time >= d.evaluated_at + INTERVAL '15 minutes'
     AND c.bucket_time <= d.evaluated_at + INTERVAL '18 minutes'
     AND c.bid_close > 0 AND c.ask_close >= c.bid_close

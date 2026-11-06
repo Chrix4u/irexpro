@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-SHADOW_VERSION = "ood-price-15m-research-shadow-v1"
+SHADOW_VERSION = "ood-price-15m-precise-envelope-shadow-v2"
 APPROVED_PAIRS = ("AUDUSD", "EURUSD", "GBPUSD")
 APPROVED_ROUTES = ("M1_TREND_CONTINUATION", "M1_EARLY_TRANSITION")
 NUMERIC_FEATURES = (
@@ -44,6 +44,18 @@ NUMERIC_FEATURES = (
     "m5_body_pressure",
     "m5_body_expansion",
     "stop_distance",
+)
+# All six numeric values are copied from the exact at-decision Plan-B
+# input transformation, NOT inferred from model labels or future bars.
+# Old historical decisions predate the snapshot and remain NULL: a model
+# requiring these magnitudes must never silently impute missing as zero.
+ENVELOPE_NUMERIC_FEATURES = (
+    "envelope_extension_atr",
+    "envelope_volatility_score",
+    "envelope_ema_separation",
+    "envelope_mtf_strength",
+    "envelope_rsi14",
+    "envelope_short_momentum_atr",
 )
 CATEGORICAL_FEATURES = ("instrument", "route", "direction")
 REQUIRED = (
@@ -95,6 +107,9 @@ def prepare_cohort(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         raise ValueError("No OOD decisions to inspect")
     records = raw.copy()
     total = len(records)
+    for name in ENVELOPE_NUMERIC_FEATURES:
+        if name not in records.columns:
+            records[name] = np.nan
     for name in (
         "decision_time_utc",
         "signal_bar_time_utc",
@@ -102,7 +117,11 @@ def prepare_cohort(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         "future_observed_at_utc",
     ):
         records[name] = pd.to_datetime(records[name], utc=True, errors="coerce")
-    for name in (*NUMERIC_FEATURES, "entry_bid", "entry_ask", "future_bid_15m", "future_ask_15m"):
+    for name in (
+        *NUMERIC_FEATURES,
+        *ENVELOPE_NUMERIC_FEATURES,
+        "entry_bid", "entry_ask", "future_bid_15m", "future_ask_15m"
+    ):
         records[name] = pd.to_numeric(records[name], errors="coerce")
     records = records.replace([np.inf, -np.inf], np.nan)
     valid = (
@@ -153,6 +172,18 @@ def prepare_cohort(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     records["spread_inclusive_pips"] = raw_return / pip
     records["proxy_pips"] = records["spread_inclusive_pips"] - EXTRA_FRICTION_PIPS
     records["label"] = (records["proxy_pips"] > 0).astype(int)
+    # These range checks serve data-quality validation only; they do NOT
+    # restrict which abnormal regime may ultimately be studied.
+    envelope = records[list(ENVELOPE_NUMERIC_FEATURES)]
+    records["precise_envelope_complete"] = (
+        envelope.notna().all(axis=1)
+        & envelope["envelope_extension_atr"].between(0, 12)
+        & envelope["envelope_volatility_score"].between(0, 1)
+        & envelope["envelope_ema_separation"].between(0, 1)
+        & envelope["envelope_mtf_strength"].between(0, 1)
+        & envelope["envelope_rsi14"].between(0, 100)
+        & envelope["envelope_short_momentum_atr"].between(-12, 12)
+    )
     records["utc_day"] = records["decision_time_utc"].dt.date
     records["utc_hour"] = records["decision_time_utc"].dt.hour
     records["utc_weekday"] = records["decision_time_utc"].dt.dayofweek
@@ -175,6 +206,11 @@ def prepare_cohort(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         "causally_verified_records": int(len(records)),
         "rejected_records": int(total - len(records)),
         "distinct_utc_days": int(records["utc_day"].nunique()),
+        "precise_envelope_records": int(records["precise_envelope_complete"].sum()),
+        "precise_envelope_utc_days": int(
+            records.loc[records["precise_envelope_complete"], "utc_day"].nunique()
+        ),
+        "precise_envelope_feature_source": "M1_DECISION_TIME_BROKER_NATIVE_V1",
         "pair_counts": {
             k: int(v) for k, v in records["instrument"].value_counts().to_dict().items()
         },
@@ -190,7 +226,11 @@ def prepare_cohort(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
 def input_features(frame: pd.DataFrame) -> pd.DataFrame:
     """All columns were known at decision time; labels and future quotes excluded."""
-    features = frame[list(NUMERIC_FEATURES)].copy()
+    features = frame[list((*NUMERIC_FEATURES, *ENVELOPE_NUMERIC_FEATURES))].copy()
+    if not frame["precise_envelope_complete"].all():
+        raise ValueError(
+            "Missing exact at-decision OOD envelope features; refusing to train"
+        )
     features["utc_hour"] = frame["utc_hour"].astype(float)
     features["utc_weekday"] = frame["utc_weekday"].astype(float)
     for col in CATEGORICAL_FEATURES:
@@ -342,6 +382,8 @@ def run_study(frame: pd.DataFrame) -> dict:
     from sklearn.metrics import balanced_accuracy_score, brier_score_loss, roc_auc_score
     from xgboost import XGBClassifier
 
+    if not frame["precise_envelope_complete"].all():
+        raise ValueError("Training requires real at-decision OOD envelope snapshots")
     for pair in APPROVED_PAIRS:
         if int((frame["instrument"] == pair).sum()) < MIN_ROWS_PER_PAIR:
             raise ValueError(f"Insufficient independent OOD labels for {pair}")
@@ -425,15 +467,36 @@ def study_from_csv(source: Path) -> dict:
         and group["instrument"].nunique() == len(APPROVED_PAIRS)
     ]
     qualified_records = records.loc[records["utc_day"].isin(qualified_days)]
+    # Preserve older label-only evidence for descriptive outcome reports, but
+    # never use it to fit the six-dimensional OOD envelope challenger.
+    envelope_records = qualified_records.loc[qualified_records["precise_envelope_complete"]]
+    envelope_qualified_days = [
+        day
+        for day, group in envelope_records.groupby("utc_day", sort=True)
+        if len(group) >= MIN_ROWS_PER_QUALIFIED_DAY
+        and group["instrument"].nunique() == len(APPROVED_PAIRS)
+    ]
+    trainable_records = envelope_records.loc[
+        envelope_records["utc_day"].isin(envelope_qualified_days)
+    ]
     quality["qualified_multi_pair_utc_days"] = len(qualified_days)
+    quality["qualified_precise_envelope_utc_days"] = len(envelope_qualified_days)
+    quality["qualified_precise_envelope_records"] = int(len(trainable_records))
     blockers = []
     if len(qualified_days) < MIN_TRADING_DAYS:
         blockers.append(
             f"Only {len(qualified_days)} multi-pair quoted UTC days; require {MIN_TRADING_DAYS}"
         )
+    if len(envelope_qualified_days) < MIN_TRADING_DAYS:
+        blockers.append(
+            f"Only {len(envelope_qualified_days)} complete-envelope UTC days; "
+            f"require {MIN_TRADING_DAYS}; legacy label-only rows cannot train this model"
+        )
     for pair in APPROVED_PAIRS:
-        if int((qualified_records["instrument"] == pair).sum()) < MIN_ROWS_PER_PAIR:
-            blockers.append(f"Insufficient qualified-day quoted examples for {pair}")
+        if int((trainable_records["instrument"] == pair).sum()) < MIN_ROWS_PER_PAIR:
+            blockers.append(
+                f"Insufficient exact-envelope qualified-day examples for {pair}"
+            )
     if blockers:
         report.update(
             {
@@ -445,7 +508,7 @@ def study_from_csv(source: Path) -> dict:
         )
         return report
     try:
-        report["shadow_training"] = run_study(qualified_records)
+        report["shadow_training"] = run_study(trainable_records)
         report["readiness"] = "EXPLORATORY_SHADOW_FIT_ONLY"
         report["model_fitted"] = True
     except ValueError as exc:

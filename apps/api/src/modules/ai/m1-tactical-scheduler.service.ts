@@ -379,6 +379,8 @@ export interface M1TacticalRolloutPolicy {
   demoPrimaryOnlyProbation?: boolean;
   /** Broker-native DEMO primary entry requires observed after-fee expectancy. */
   demoBrokerCommissionFloor?: boolean;
+  /** DEMO-only: measure the historical fee veto but never use it to authorize/deny an order. */
+  demoBrokerCommissionShadow?: boolean;
   /** Explicit DEMO-only new-entry allowlist; all other instruments remain research-only. */
   demoEntryInstruments?: readonly string[];
   routeNetExpectedRFloors: Readonly<Record<Exclude<M1TacticalRoute, 'ABSTAIN'>, number>>;
@@ -508,6 +510,22 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION: Readonly<M1T
     version: 'm1-tactical-v8-demo-primary-only-commission-focused3-v1',
     demoBrokerCommissionFloor: true,
     demoEntryInstruments: DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
+  });
+
+/**
+ * Reversible and DEMO-only operator-requested fee shadow trial.
+ *
+ * Primary ensemble, OOD, session, macro news, spread, position, lot,
+ * stop-loss and account-risk controls remain untouched. A counterfactual
+ * fee veto is persisted on the very same decision linked to the broker trade.
+ * Rebind AiModule to the immutable _COMMISSION policy to restore the veto.
+ */
+export const M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW: Readonly<M1TacticalRolloutPolicy> =
+  Object.freeze({
+    ...M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION,
+    version: 'm1-tactical-v8-demo-primary-fee-shadow-focused3-v1',
+    demoBrokerCommissionFloor: false,
+    demoBrokerCommissionShadow: true,
   });
 
 export function m1RiskMarketRegime(
@@ -1506,11 +1524,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       !demoPrimaryOnlyProbation.blocked;
     const commissionFloorEnabled =
       professionalDemoPhase && this.rolloutPolicy.demoBrokerCommissionFloor === true;
+    const commissionShadowEnabled =
+      professionalDemoPhase && this.rolloutPolicy.demoBrokerCommissionShadow === true;
     let feeEvidenceForDecision: Awaited<
       ReturnType<M1TacticalEvidenceService['loadPriorClosedCommissionRiskR']>
     > | null = null;
     let brokerFeeLookupFailed = false;
-    if (commissionFloorEnabled && preliminaryCanExecute && selectedPrimaryForCommission) {
+    if (
+      (commissionFloorEnabled || commissionShadowEnabled) &&
+      preliminaryCanExecute &&
+      selectedPrimaryForCommission
+    ) {
       try {
         feeEvidenceForDecision = await this.evidence.loadPriorClosedCommissionRiskR({
           userId,
@@ -1533,6 +1557,27 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       evidence: feeEvidenceForDecision,
       lookupFailed: brokerFeeLookupFailed,
     });
+    // Counterfactual, never a veto: same historical-fill p90 calculation,
+    // evaluated with the old gate on solely for research labels. This is
+    // saved on the decision and joined by trade_intent_id to actual net P&L.
+    const demoBrokerCommissionShadowGate = commissionShadowEnabled
+      ? evaluateDemoBrokerCommissionEntryGate({
+          enabled: preliminaryCanExecute,
+          selectedPrimary: selectedPrimaryForCommission,
+          preFeeNetExpectedR: multimodelDemo?.governance.netExpectedR ?? null,
+          strategyRoute: multimodelDemo?.ensemble.strategyRoute ?? null,
+          evidence: feeEvidenceForDecision,
+          lookupFailed: brokerFeeLookupFailed,
+        })
+      : null;
+    const commissionGateAudit = {
+      ...demoBrokerCommissionGate,
+      shadowOnly: commissionShadowEnabled,
+      shadowWouldHaveBlocked: demoBrokerCommissionShadowGate?.blocked ?? false,
+      shadowReason: demoBrokerCommissionShadowGate?.reason ?? null,
+      shadowBrokerFeeP90R: demoBrokerCommissionShadowGate?.brokerFeeP90R ?? null,
+      shadowAfterFeeExpectedR: demoBrokerCommissionShadowGate?.afterFeeExpectedR ?? null,
+    };
     const canExecute =
       preliminaryCanExecute &&
       !oppositePositionStateUnavailable &&
@@ -1691,6 +1736,19 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       candidate: { ...candidate },
       governance: {
         ...governance,
+        // Strictly decision-time, broker-native computed features. The OOD
+        // research learner must see the actual extension/RSI/volatility
+        // magnitudes rather than only the binary HARD_HIGH/HARD_LOW labels.
+        // Never consumed by the execution or promotion path.
+        oodResearchFeatures: {
+          version: 'm1-ood-asof-envelope-v1',
+          extensionAtr: features.extensionAtr,
+          volatilityScore: features.volatilityScore,
+          emaSeparation: Math.max(0, Math.min(1, candidate.alignedEmaSeparationAtr / 2)),
+          mtfStrength: Math.max(0, Math.min(1, candidate.alignedM15)),
+          rsi14: features.rsi14,
+          shortHorizonMomentumAtr: features.momentum1Atr,
+        },
         routeDecision: { ...routeDecision },
         reliability: reliability ? { ...reliability } : null,
         shadowPairSideReliability: shadowPairSideReliability
@@ -1716,7 +1774,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         fastStopRegimeBrake: fastStopRegimeBrake ? { ...fastStopRegimeBrake } : null,
         portfolioNetLossBrake: portfolioNetLossBrake ? { ...portfolioNetLossBrake } : null,
         demoPrimaryOnlyProbation: { ...demoPrimaryOnlyProbation },
-        demoBrokerCommissionGate: { ...demoBrokerCommissionGate },
+        demoBrokerCommissionGate: commissionGateAudit,
         multimodelLossStreakBrake: multimodelLossStreakBrake
           ? { ...multimodelLossStreakBrake }
           : null,

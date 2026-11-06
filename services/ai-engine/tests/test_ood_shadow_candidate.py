@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from app.domain.training.ood_shadow_candidate import (
+    ENVELOPE_NUMERIC_FEATURES,
     MIN_TRADING_DAYS,
     NUMERIC_FEATURES,
     chronological_split,
@@ -36,6 +37,14 @@ def example(*, direction: str = "BUY") -> dict:
         "future_ask_15m": 1.1008,
     }
     record.update({name: 0.32 for name in NUMERIC_FEATURES})
+    record.update({
+        "envelope_extension_atr": 2.2,
+        "envelope_volatility_score": 0.4,
+        "envelope_ema_separation": 0.25,
+        "envelope_mtf_strength": 0.65,
+        "envelope_rsi14": 44.0,
+        "envelope_short_momentum_atr": -0.15,
+    })
     record["stop_distance"] = 0.001
     return record
 
@@ -55,6 +64,31 @@ def test_asof_quotes_and_future_labels_never_enter_model_features() -> None:
     assert "proxy_pips" not in features
     assert "ood_extensionAtr:HARD_HIGH" in features
     assert features.iloc[0]["ood_extensionAtr:HARD_HIGH"] == 1
+    assert features.iloc[0]["envelope_extension_atr"] == pytest.approx(2.2)
+    assert features.iloc[0]["envelope_rsi14"] == pytest.approx(44)
+    assert records.iloc[0]["precise_envelope_complete"]
+    assert quality["precise_envelope_records"] == 1
+
+
+def test_legacy_ood_labels_remain_for_research_but_cannot_fit_without_magnitudes() -> None:
+    legacy = example()
+    for key in ENVELOPE_NUMERIC_FEATURES:
+        legacy.pop(key)
+    rows, quality = prepare_cohort(pd.DataFrame([legacy]))
+    assert quality["causally_verified_records"] == 1
+    assert quality["precise_envelope_records"] == 0
+    assert quality["precise_envelope_utc_days"] == 0
+    with pytest.raises(ValueError, match="Missing exact at-decision OOD envelope"):
+        input_features(rows)
+
+
+def test_invalid_or_future_fabricated_ood_envelope_fails_closed() -> None:
+    invalid = example()
+    invalid["envelope_extension_atr"] = float("inf")
+    rows, quality = prepare_cohort(pd.DataFrame([invalid]))
+    assert quality["precise_envelope_records"] == 0
+    with pytest.raises(ValueError, match="Missing exact at-decision OOD envelope"):
+        input_features(rows)
 
 
 def test_sells_use_bid_entry_and_ask_future_then_deduct_friction() -> None:
@@ -196,6 +230,11 @@ def test_readonly_query_does_not_export_identifiers_or_use_future_quotes_as_feat
     assert "d.user_id::text = :'scanner_user'" in query
     assert "d.evaluated_at + INTERVAL '15 minutes'" in query
     assert CATEGORICAL_FEATURES == ("instrument", "route", "direction")
+    assert "c.connection_id = d.broker_connection_id" in query
+    assert "d.governance->'oodResearchFeatures'" in query
+    assert "d.governance->'multimodelGovernance'->>'driftState'" in query
+    for feature in ("extensionAtr", "volatilityScore", "emaSeparation", "mtfStrength", "rsi14"):
+        assert f"d.asof_envelope->>'{feature}'" in query
 
 
 def test_scheduled_ood_research_cannot_dispatch_or_auto_publish_models() -> None:
