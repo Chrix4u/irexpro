@@ -51,6 +51,45 @@ describe('reversible DEMO-only entry-authority probation', () => {
       });
     }
   });
+  it('permits only a verified qualified-continuation DEMO micro trial with capped volume', () => {
+    const trial = evaluateDemoPrimaryOnlyProbation({
+      ...primary,
+      executableFallbackTier: 'QUALIFIED_CONTINUATION',
+      qualifiedContinuationMicroTrialEligible: true,
+    });
+    expect(trial).toMatchObject({
+      enabled: true,
+      blocked: false,
+      chosenAuthorityPath: 'QUALIFIED_CONTINUATION',
+      reason: 'QUALIFIED_CONTINUATION_MICRO_TRIAL',
+      trialLotCap: 0.05,
+      modifiesOpenPositions: false,
+    });
+    for (const tier of ['BOOTSTRAP_CONTINUATION', 'QUALIFIED', 'RECOVERY_PROBE']) {
+      const decision = evaluateDemoPrimaryOnlyProbation({
+        ...primary,
+        executableFallbackTier: tier,
+        qualifiedContinuationMicroTrialEligible: true,
+      });
+      expect(decision.blocked).toBe(true);
+      expect(decision.trialLotCap).toBeNull();
+    }
+    expect(
+      evaluateDemoPrimaryOnlyProbation({
+        ...primary,
+        enabled: false,
+        executableFallbackTier: 'QUALIFIED_CONTINUATION',
+        qualifiedContinuationMicroTrialEligible: true,
+      }).trialLotCap,
+    ).toBeNull();
+    expect(
+      evaluateDemoPrimaryOnlyProbation({
+        ...primary,
+        executableFallbackTier: 'QUALIFIED_CONTINUATION',
+      }),
+    ).toMatchObject({ blocked: true, trialLotCap: null });
+  });
+
   it('blocks high-conviction rescue and extension scout unless promoted separately', () => {
     expect(
       evaluateDemoPrimaryOnlyProbation({
