@@ -1056,16 +1056,33 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           modifiesExecution: false,
         };
 
+    // Do not infer a DEMO account from the global rollout name or a user's
+    // UI selection. An actual active cTrader DEMO Full Auto connection is
+    // required before predicted economics become non-veto research.
+    let verifiedCtraderDemo = false;
+    if (
+      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&
+      this.rolloutPolicy.demoBrokerCommissionShadow === true &&
+      this.rolloutPolicy.demoBrokerCommissionFloor === false
+    ) {
+      try {
+        verifiedCtraderDemo = await this.evidence.isActiveCtraderDemoFullAutoConnection(
+          userId,
+          brokerConnectionId,
+        );
+      } catch (error) {
+        this.logger.warn(
+          `DEMO forecast research account verification unavailable: ${(error as Error).message}`,
+        );
+      }
+    }
     const baseAuthority = evaluateMultimodelDemoAuthority({
       ensemble,
       governance,
       trainedExpert,
       candidateDirection: candidate.direction,
       candidateConfidence: candidate.confidence,
-      forecastEconomicsShadowOnlyDemo:
-        this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&
-        this.rolloutPolicy.demoBrokerCommissionShadow === true &&
-        this.rolloutPolicy.demoBrokerCommissionFloor === false,
+      forecastEconomicsShadowOnlyDemo: verifiedCtraderDemo,
       m1TimingRoute: classifyM1TacticalRoute(
         candidate,
         buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2).find(
