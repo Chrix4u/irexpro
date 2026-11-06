@@ -224,6 +224,97 @@ describe('LiveDemoProfitProtectionService', () => {
     expect(feeSql?.[1]).toEqual(['conn-1', 'EURUSD', 'EUR', '2026-10-28T09:05:00.000Z']);
   });
 
+  it('audits protected patience despite a blocked new-entry thesis without postponing the real close', async () => {
+    const observedAt = new Date('2026-10-28T09:05:00.000Z');
+    const m1Rows = [
+      {
+        bucket_time: new Date('2026-10-28T09:04:00.000Z'),
+        open: '1.11320',
+        high: '1.11331',
+        low: '1.11318',
+        close: '1.11330',
+        sample_count: 30,
+        positive_quote_sample_count: 12,
+        last_quote_sample_at: new Date('2026-10-28T09:04:55.000Z'),
+        spread_close: '0.00002',
+        source: 'ctrader-broker-native',
+      },
+      {
+        bucket_time: new Date('2026-10-28T09:03:00.000Z'),
+        open: '1.11310',
+        high: '1.11321',
+        low: '1.11309',
+        close: '1.11320',
+        sample_count: 31,
+        positive_quote_sample_count: 15,
+        last_quote_sample_at: new Date('2026-10-28T09:03:54.000Z'),
+        spread_close: '0.00002',
+        source: 'ctrader-broker-native',
+      },
+    ];
+    const auditService = { log: jest.fn().mockResolvedValue(undefined) };
+    const h = harness(
+      [candidate()],
+      '7.00',
+      'DEMO',
+      m1Rows,
+      '1.11340',
+      [{
+        direction: 'BUY',
+        evaluated_at: new Date('2026-10-28T09:04:45.000Z'),
+        execution_authority: 'NONE',
+        blockers: ['DRIFT_OUT_OF_DISTRIBUTION', 'MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+        governance: {},
+        plan_b_strategy_route: 'TREND_CONTINUATION',
+        authority_executable: false,
+      }],
+      auditService as unknown as AuditService,
+      [{ sample_count: '12', p90_cost_per_lot: '8.00' }],
+      [{
+        same_side_continuation_at: new Date('2026-10-28T09:03:00.000Z'),
+        opposite_executable_reversal: false,
+      }],
+    );
+
+    await h.service.runOnce(observedAt);
+
+    expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      'user-1',
+      TradeCloseReason.PROFIT_PROTECTION,
+    );
+    expect(auditService.log).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({
+        recommendation: 'CLOSE_CANDIDATE',
+        reason: 'THESIS_NOT_EXECUTABLE',
+        protectedGraceShadow: expect.objectContaining({
+          mode: 'SHADOW_ONLY',
+          wouldConsiderBrokerProtectedGrace: true,
+          requiresVerifiedBrokerProfitStop: true,
+          maxGraceSeconds: 180,
+          noTradeAuthority: true,
+          modifiesExecution: false,
+        }),
+        protectedGraceRunnerShadow: expect.objectContaining({
+          mode: 'SHADOW_ONLY',
+          reason: 'BROKER_VALIDATION_REQUIRED',
+          eligibleForFurtherResearch: true,
+          noTradeAuthority: true,
+        }),
+      }),
+    }));
+    expect(h.executionService.closeTrade.mock.invocationCallOrder[0]).toBeLessThan(
+      auditService.log.mock.invocationCallOrder[0]!,
+    );
+    const sqlCall = h.query.mock.calls.find((call: unknown[]) =>
+      String(call[0]).includes('AS same_side_continuation_at'),
+    );
+    expect(String(sqlCall?.[0])).toContain('evaluated_at <= $5::timestamptz');
+    expect(sqlCall?.[1]).toEqual([
+      'user-1', 'conn-1', 'EURUSD', 'BUY', observedAt.toISOString(),
+    ]);
+  });
+
   it('rejects shadow HOLD when quote samples were recorded after the decision', async () => {
     const audit = { log: jest.fn().mockResolvedValue(undefined) };
     const h = harness(
