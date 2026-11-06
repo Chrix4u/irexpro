@@ -40,6 +40,14 @@ export interface MultimodelDemoAuthorityDecision {
   trainedExpertOpposed: boolean;
   m1TimingRoute: M1TacticalRoute;
   blockers: string[];
+  forecastEconomicsShadow: {
+    enabled: boolean;
+    activated: boolean;
+    originalPlanBReasons: string[];
+    originalGovernanceBlockers: string[];
+    historicalForecastsRemainObservable: true;
+    requiresFreshUnanimousExpertAgreement: true;
+  };
 }
 
 const HIGH_CONVICTION_RESCUE_CONFIDENCE_FLOOR = 0.7;
@@ -218,17 +226,23 @@ export function evaluateMultimodelDemoAuthority(
 
   const finalBlockers = unique(blockers);
   const primaryPlanBExecutable = finalBlockers.length === 0;
-  const rescueExecutable = !primaryPlanBExecutable && highConvictionRescueEligible(input);
-  const executable = primaryPlanBExecutable || rescueExecutable;
+  const shadowConsensusExecutable =
+    !primaryPlanBExecutable && forecastShadowConsensusEligible(input);
+  const rescueExecutable =
+    !primaryPlanBExecutable && !shadowConsensusExecutable &&
+    highConvictionRescueEligible(input);
+  const executable = primaryPlanBExecutable || shadowConsensusExecutable || rescueExecutable;
 
   return {
     executable,
     authorityPath: primaryPlanBExecutable
       ? 'PRIMARY_PLAN_B'
-      : rescueExecutable
-        ? 'HIGH_CONVICTION_RESCUE'
-        : 'BLOCKED',
-    rescueVolumeCap: rescueExecutable ? 0.2 : null,
+      : shadowConsensusExecutable
+        ? 'FORECAST_SHADOW_CONSENSUS'
+        : rescueExecutable
+          ? 'HIGH_CONVICTION_RESCUE'
+          : 'BLOCKED',
+    rescueVolumeCap: rescueExecutable || shadowConsensusExecutable ? 0.2 : null,
     expertConflictVolumeCap: primaryPlanBExecutable && trainedExpertOpposed ? 0.2 : null,
     primaryEngineCode: MULTIMODEL_DEMO_ENGINE_CODE,
     trainedExpertConfirmed:
@@ -237,6 +251,14 @@ export function evaluateMultimodelDemoAuthority(
     trainedExpertOpposed,
     m1TimingRoute: input.m1TimingRoute,
     blockers: executable ? [] : finalBlockers,
+    forecastEconomicsShadow: {
+      enabled: input.forecastEconomicsShadowOnlyDemo === true,
+      activated: shadowConsensusExecutable,
+      originalPlanBReasons: [...(input.ensemble.reasons ?? [])],
+      originalGovernanceBlockers: [...input.governance.paperExecutionBlockers],
+      historicalForecastsRemainObservable: true,
+      requiresFreshUnanimousExpertAgreement: true,
+    },
   };
 }
 
