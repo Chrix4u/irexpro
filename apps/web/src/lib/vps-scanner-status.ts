@@ -796,7 +796,7 @@ export function deriveTradeReadinessUiState(
         "A high-impact economic event is inside its restricted trading window. New entries are paused automatically and will be checked again when the window ends. Other model checks can still prevent an entry afterward.";
     } else if (m1Decision.primaryBlockerGroup === "MODEL_EXPECTANCY") {
       detail =
-        "After estimated execution costs, the expected return is below the required floor. The AI will not open an economically weak trade merely to increase activity.";
+        "Plan B has not met its own signal-quality admission requirements, which can include its gross expected-return and meta-model criteria. Estimated after-cost and historical commission thresholds run in shadow research; neither independently rejects a qualified trade.";
     } else if (m1Decision.primaryBlockerGroup === "MODEL_DRIFT") {
       detail =
         "The model classifies this market as outside its validated distribution. It is collecting evidence without dispatching an unqualified order.";
@@ -824,8 +824,10 @@ export function deriveTradeReadinessUiState(
     ) {
       detail =
         m1Decision.planBRegimeAllowed === false
-          ? "This market is outside the currently qualified strategy regimes. Plan B has not admitted an entry; drift and after-cost checks may also reject it. The AI is evaluating unusual conditions for research, not dispatching a trade."
-          : "Plan B has not admitted this entry. A confidence score or green-looking meter is not an execution instruction; other drift, expectancy and account vetoes remain active.";
+          ? m1Decision.planBRegime === "ROLLOVER_RISK"
+            ? "The Sunday reopening or New York rollover market is not a qualified Plan B trading regime. Session quality, model drift and M1 entry timing may also prevent a trade. Predicted after-cost and historical commission thresholds are shadow-only research and do not independently veto orders."
+            : "This market is outside the currently qualified Plan B strategy regimes. Plan B has not admitted an entry; drift and signal-quality checks may also reject it. Predicted after-cost and historical commission thresholds remain shadow-only research."
+          : "Plan B has not admitted this entry. The meter is not an execution instruction; independent model quality, drift and account-risk restrictions may still be active. Predicted after-cost and historical commission thresholds are research-only.";
     }
     const driftEvidence = driftBlocked
       ? driftEvidenceLabel(m1Decision.modelDriftDiagnostics)
@@ -901,7 +903,7 @@ export function deriveTradeReadinessUiState(
           : afterCostRejected
             ? "Negative after-cost expectancy — trade rejected"
             : m1Decision.primaryBlockerGroup === "MODEL_EXPECTANCY"
-            ? "After-cost expectancy below floor — trade blocked"
+            ? "Plan-B signal quality not met — trade blocked"
             : planBBlocked
             ? m1Decision.planBRegimeAllowed === false
               ? "No qualified strategy route — trade blocked"

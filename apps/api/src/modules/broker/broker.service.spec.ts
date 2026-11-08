@@ -24,6 +24,7 @@ import { BrokerEnvironmentMismatchError } from './interfaces/broker-environment-
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { BrokerConnectionStatus, BrokerMode } from './interfaces/broker-adapter.interface';
 import { BrokerAuthorizationStatus } from './authorization/broker-authorization-status';
+import { BrokerCredentialStatus } from './authorization/broker-credential-status';
 import { DomainEventBus } from '../events/event-bus.service';
 import { BrokerAdapterError, BrokerErrorCode } from './interfaces/broker-adapter.errors';
 
@@ -1142,6 +1143,82 @@ describe('BrokerService', () => {
       // Status must NOT be set to SUSPENDED on success
       const updateCall = (connectionRepo.update as jest.Mock).mock.calls[0][1];
       expect(updateCall.status).toBeUndefined();
+    });
+
+    it('keeps prior cTrader DEMO authority intact during the exact Saturday routing outage, without reporting healthy', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-11-07T06:27:00.000Z'));
+      try {
+        const adapter = {
+          setMode: jest.fn(),
+          connect: jest.fn().mockRejectedValue(new Error('Cannot route request')),
+          getAccountInfo: jest.fn(),
+        };
+        registry.getAdapter.mockReturnValue(adapter);
+        connectionRepo.findOne.mockResolvedValue(
+          connectedConnection({
+            brokerId: 'ctrader',
+            accountType: BrokerMode.DEMO,
+            authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+            credentialStatus: BrokerCredentialStatus.VERIFIED,
+            demoValidated: true,
+            consecutiveFailureCount: 2,
+          }),
+        );
+
+        expect(await service.healthCheck('conn-1')).toBe(false);
+        expect(connectionRepo.update).toHaveBeenCalledTimes(1);
+        expect(connectionRepo.update).toHaveBeenCalledWith(
+          'conn-1',
+          expect.objectContaining({
+            consecutiveFailureCount: 0,
+            lastErrorMessage: expect.stringContaining('weekend routing unavailable'),
+          }),
+        );
+        expect(connectionRepo.update.mock.calls[0][1]).not.toHaveProperty('authorizationStatus');
+        expect(connectionRepo.update.mock.calls[0][1]).not.toHaveProperty('lastHealthCheckAt');
+        expect(registry.releaseAdapterForConnection).not.toHaveBeenCalled();
+        expect(auditService.log).not.toHaveBeenCalledWith(
+          expect.objectContaining({ action: AuditAction.BROKER_SUSPENDED_HEALTH_FAILURE }),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('still suspends a previously active DEMO account for an explicit Saturday authorization failure', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-11-07T09:13:00.000Z'));
+      try {
+        const adapter = {
+          setMode: jest.fn(),
+          connect: jest.fn().mockRejectedValue(new Error('Trading account is not authorized')),
+          getAccountInfo: jest.fn(),
+        };
+        registry.getAdapter.mockReturnValue(adapter);
+        connectionRepo.findOne.mockResolvedValue(
+          connectedConnection({
+            brokerId: 'ctrader',
+            accountType: BrokerMode.DEMO,
+            authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+            credentialStatus: BrokerCredentialStatus.VERIFIED,
+            demoValidated: true,
+            consecutiveFailureCount: 2,
+          }),
+        );
+
+        expect(await service.healthCheck('conn-1')).toBe(false);
+        expect(connectionRepo.update).toHaveBeenCalledWith(
+          { id: 'conn-1', authorizationStatus: BrokerAuthorizationStatus.ACTIVE },
+          expect.objectContaining({
+            authorizationStatus: BrokerAuthorizationStatus.SUSPENDED,
+            status: BrokerConnectionStatus.SUSPENDED,
+          }),
+        );
+        expect(auditService.log).toHaveBeenCalledWith(
+          expect.objectContaining({ action: AuditAction.BROKER_SUSPENDED_HEALTH_FAILURE }),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('treats a PAPER quote gap as healthy while the authoritative FX weekly session is closed', async () => {

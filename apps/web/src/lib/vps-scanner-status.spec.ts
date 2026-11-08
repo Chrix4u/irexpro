@@ -1210,7 +1210,7 @@ describe("active multi-model execution presentation", () => {
     );
   });
 
-  it("explains the primary economic blocker rather than only the wrapper admission failure", () => {
+  it("explains the original Plan B model expectancy threshold without blaming shadow costs", () => {
     const blocked = JSON.parse(JSON.stringify(status));
     blocked.latestDecision.primaryConfidence = 0.7;
     blocked.latestDecision.multimodelExecutable = false;
@@ -1218,10 +1218,10 @@ describe("active multi-model execution presentation", () => {
     blocked.latestDecision.blockers = [
       "MULTIMODEL_PLAN_B_NOT_ADMITTED",
       "MULTIMODEL_GOVERNANCE_BLOCKED",
-      "PAPER_NET_EXPECTED_R",
+      "EXPECTED_R",
     ];
     blocked.latestDecision.primaryBlockerGroup = "MODEL_EXPECTANCY";
-    blocked.latestDecision.primaryBlockerCode = "PAPER_NET_EXPECTED_R";
+    blocked.latestDecision.primaryBlockerCode = "EXPECTED_R";
     const result = deriveTradeReadinessUiState({
       automationOn: true,
       scannerStatus: VALID_STATUS,
@@ -1230,8 +1230,12 @@ describe("active multi-model execution presentation", () => {
     });
     expect(result.tradeExpected).toBe(false);
     expect(result.band).not.toBe("READY");
-    expect(result.detail).toMatch(/expected return is below/i);
-    expect(result.detail).toMatch(/estimated execution costs/i);
+    expect(result.headline).toBe(
+      "Plan-B signal quality not met — trade blocked",
+    );
+    expect(result.detail).toMatch(/signal-quality admission/i);
+    expect(result.detail).toMatch(/shadow research/i);
+    expect(result.detail).not.toMatch(/after-cost checks may also reject/i);
   });
 
   it("shows historical commission impact without presenting it as trade permission", () => {
@@ -1366,6 +1370,52 @@ describe("active multi-model execution presentation", () => {
     expect(deriveActiveModelUiState(rejected).planBLabel).toBe(
       "No qualified strategy route · Trend extended",
     );
+  });
+
+  it("labels Sunday rollover as unqualified rather than claiming shadow costs can block execution", () => {
+    const rejected = JSON.parse(JSON.stringify(status));
+    rejected.latestDecision.instrument = "GBPUSD";
+    rejected.latestDecision.direction = "BUY";
+    rejected.latestDecision.planBRegime = "ROLLOVER_RISK";
+    rejected.latestDecision.planBRegimeAllowed = false;
+    rejected.latestDecision.planBPaperAdmitted = false;
+    rejected.latestDecision.multimodelExecutable = false;
+    rejected.latestDecision.executionAuthority = "NONE";
+    rejected.latestDecision.primaryBlockerGroup = "MODEL_DRIFT";
+    rejected.latestDecision.blockers = [
+      "MULTIMODEL_PLAN_B_NOT_ADMITTED",
+      "MULTIMODEL_GOVERNANCE_BLOCKED",
+      "DRIFT_OUT_OF_DISTRIBUTION",
+    ];
+    const view = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: rejected,
+      fastMarkState: "LIVE",
+    });
+    expect(view.headline).toBe("No qualified strategy route — trade blocked");
+    expect(view.detail).toContain("rollover market");
+    expect(view.detail).toContain("shadow-only research");
+    expect(view.detail).not.toContain("after-cost checks may also reject");
+    expect(view.tradeExpected).toBe(false);
+  });
+
+  it("does not present a core Plan-B expectancy failure as a commission veto", () => {
+    const rejected = JSON.parse(JSON.stringify(status));
+    rejected.latestDecision.planBPaperAdmitted = false;
+    rejected.latestDecision.multimodelExecutable = false;
+    rejected.latestDecision.executionAuthority = "NONE";
+    rejected.latestDecision.primaryBlockerGroup = "MODEL_EXPECTANCY";
+    rejected.latestDecision.blockers = ["MULTIMODEL_PLAN_B_NOT_ADMITTED"];
+    const view = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: rejected,
+      fastMarkState: "LIVE",
+    });
+    expect(view.headline).toBe("Plan-B signal quality not met — trade blocked");
+    expect(view.detail).toContain("signal-quality admission");
+    expect(view.detail).toContain("shadow research");
   });
 
   it("keeps drift-blocked multi-model readiness moving instead of pinning every setup at 49", () => {

@@ -60,6 +60,7 @@ import { ConnectBrokerDto } from './dto/connect-broker.dto';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import { isFxWeeklySessionOpen as isFxWeeklySessionOpenAt } from '../market-data/utils/fx-weekly-session';
+import { isDeferredCtraderWeekendRouteFailure } from './authorization/ctrader-weekend-route-health.policy';
 
 /**
  * BrokerService — Core broker connection lifecycle management.
@@ -1537,8 +1538,13 @@ export class BrokerService {
         connection,
         credentials,
       );
-      // connect() reuses the MetaAPI connection pool — only reconnects if stale
+      // connect() reuses an existing broker context where safe. A failed
+      // provider handshake is NOT a healthy connection, even if an adapter
+      // could return an older cached account snapshot.
       const connectResult = await adapter.connect(healthCredentials);
+      if (!connectResult.success) {
+        throw new Error(connectResult.error ?? 'Broker health handshake failed');
+      }
 
       // Round 7 (P0 — declared-vs-observed environment enforcement, the same
       // rule as connectBroker): a post-connect provider-side environment
@@ -1669,6 +1675,23 @@ export class BrokerService {
         this.logger.warn(
           `PAPER connection ${connectionId} market data temporarily unavailable; ` +
             'retaining CONNECTED status while exposure remains fail-closed until quotes recover',
+        );
+        return false;
+      }
+
+      // Saturday cTrader DEMO route maintenance is not proof of a lost token
+      // or revoked user authorization. Preserve only an EXISTING, validated
+      // ACTIVE state; do not silently re-enable suspended connections.
+      // Returning false keeps health degraded. No successful check timestamp
+      // is advanced; the weekly session gate independently prevents orders.
+      if (isDeferredCtraderWeekendRouteFailure(connection, err, new Date())) {
+        await this.connectionRepo.update(connectionId, {
+          consecutiveFailureCount: 0,
+          lastErrorMessage: 'cTrader weekend routing unavailable; retrying provider health',
+        });
+        this.logger.warn(
+          `cTrader DEMO connection ${connectionId} routing unavailable outside the FX week; ` +
+            'retaining existing ACTIVE authority, but broker health remains degraded',
         );
         return false;
       }
