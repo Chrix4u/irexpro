@@ -4077,6 +4077,15 @@ describe('M1 V8 multi-model DEMO authority', () => {
           trainedExpertConfirmed: true,
           expertChecks: [],
         }),
+        secondaryPredictedCostShadow: expect.objectContaining({
+          mode: 'SHADOW_ONLY',
+          modifiesExecution: false,
+          m1Continuation: expect.objectContaining({
+            mode: 'SHADOW_ONLY',
+            oldRequiredNetR: 0.2,
+            modifiesExecution: false,
+          }),
+        }),
       }),
     );
   });

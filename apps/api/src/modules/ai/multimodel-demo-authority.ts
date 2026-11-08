@@ -41,7 +41,6 @@ export interface MultimodelDemoAuthorityDecision {
 }
 
 const HIGH_CONVICTION_RESCUE_CONFIDENCE_FLOOR = 0.7;
-const HIGH_CONVICTION_RESCUE_NET_EXPECTED_R_FLOOR = 0.2;
 const HIGH_CONVICTION_RESCUE_ALLOWED_BLOCKERS = new Set([
   'ENSEMBLE_NOT_PAPER_ADMITTED',
   'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
@@ -136,9 +135,9 @@ function highConvictionRescueEligible(input: MultimodelDemoAuthorityInput): bool
     totalVotes >= 3 &&
     directionalVotes === totalVotes &&
     confidence >= HIGH_CONVICTION_RESCUE_CONFIDENCE_FLOOR &&
+    // Broker cost geometry must be provable, but the forecasted return
+    // magnitude is research-only, even for the existing capped rescue path.
     Number.isFinite(input.governance.netExpectedR) &&
-    input.governance.netExpectedR >= HIGH_CONVICTION_RESCUE_NET_EXPECTED_R_FLOOR &&
-    input.governance.paperNetExpectedRPassed === true &&
     input.governance.paperExecutionCostUsable === true &&
     input.governance.eventRisk === 'CLEAR' &&
     input.governance.sleeveState !== 'BLOCKED' &&
