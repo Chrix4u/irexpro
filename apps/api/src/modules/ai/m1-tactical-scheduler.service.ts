@@ -60,6 +60,7 @@ import {
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import type { HighConvictionOverlay } from './high-conviction-overlay';
 import { evaluateProductionQualificationShadow } from './production-qualification-shadow';
+import { observeSecondaryPredictedCostFloor } from './secondary-predicted-cost-shadow';
 import {
   evaluateMultimodelDemoAuthority,
   multimodelDemoExecutionVolumeCap,
@@ -148,6 +149,10 @@ interface M1ProfessionalFallbackDecision {
 const M1_PROFESSIONAL_FALLBACK_LOT_CAP = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_LOT_CAP = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_MIN_EXPECTED_R = 0.2;
+// Structural broker spread/stop geometry, NOT a modelled profit floor.
+// A grossly wide observed spread relative to the executable stop is unsafe
+// regardless of AI confidence or predicted profitability.
+const M1_BROKER_OBSERVED_SPREAD_STOP_MAX_R = 0.5;
 const M1_PROFESSIONAL_CONTINUATION_MIN_SAMPLES = 5;
 const M1_PROFESSIONAL_BOOTSTRAP_MIN_CONFIDENCE = 0.72;
 const M1_PROFESSIONAL_BOOTSTRAP_MIN_DIRECTION_QUALITY = 0.72;
@@ -238,10 +243,18 @@ function evaluateM1ProfessionalFallback(input: {
       }
       if (
         !input.governance.genericGovernance.paperExecutionCostUsable ||
-        !Number.isFinite(input.governance.netExpectedR) ||
-        input.governance.netExpectedR < M1_PROFESSIONAL_CONTINUATION_MIN_EXPECTED_R
+        !Number.isFinite(input.governance.netExpectedR)
       ) {
-        return reject('M1_BOOTSTRAP_EXECUTION_ECONOMICS_TOO_LOW');
+        // Missing/invalid market-price evidence remains a hard veto. Only
+        // the unvalidated *predicted net-return threshold* is shadow-only.
+        return reject('M1_BOOTSTRAP_EXECUTION_EVIDENCE_UNAVAILABLE');
+      }
+      if (
+        !input.governance.genericGovernance.executionSpreadEvidenceValid ||
+        input.governance.genericGovernance.estimatedExecutionCostR >
+          M1_BROKER_OBSERVED_SPREAD_STOP_MAX_R
+      ) {
+        return reject('M1_BOOTSTRAP_BROKER_SPREAD_STOP_GEOMETRY_UNSAFE');
       }
       if (input.governance.genericGovernance.eventRisk !== 'CLEAR') {
         return reject('M1_BOOTSTRAP_EVENT_RISK_BLOCKED');
@@ -272,11 +285,20 @@ function evaluateM1ProfessionalFallback(input: {
       return reject('M1_CONTINUATION_REALIZED_R_NOT_POSITIVE');
     }
     if (
-      !Number.isFinite(input.governance.netExpectedR) ||
-      input.governance.netExpectedR < M1_PROFESSIONAL_CONTINUATION_MIN_EXPECTED_R
+      !input.governance.genericGovernance.paperExecutionCostUsable ||
+      !Number.isFinite(input.governance.netExpectedR)
     ) {
-      return reject('M1_CONTINUATION_EXPECTED_R_TOO_LOW');
+      return reject('M1_CONTINUATION_EXECUTION_EVIDENCE_UNAVAILABLE');
     }
+    if (
+      !input.governance.genericGovernance.executionSpreadEvidenceValid ||
+      input.governance.genericGovernance.estimatedExecutionCostR >
+        M1_BROKER_OBSERVED_SPREAD_STOP_MAX_R
+    ) {
+      return reject('M1_CONTINUATION_BROKER_SPREAD_STOP_GEOMETRY_UNSAFE');
+    }
+    // The previous 0.20R forecast hurdle is recorded in shadow below.
+    // Positive observed pair-side R and independent M1 governance stay hard.
     if (input.governance.genericGovernance.eventRisk !== 'CLEAR') {
       return reject('M1_CONTINUATION_EVENT_RISK_BLOCKED');
     }
@@ -1722,6 +1744,21 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
 
     // Non-executable evidence for a common PAPER/DEMO/LIVE qualification
     // contract. Do NOT feed this research counterfactual into canExecute.
+    const secondaryPredictedCostShadow = {
+      artifact: 'secondary-route-cost-research-v1' as const,
+      mode: 'SHADOW_ONLY' as const,
+      modifiesExecution: false as const,
+      m1Continuation: observeSecondaryPredictedCostFloor(
+        governance.netExpectedR,
+        M1_PROFESSIONAL_CONTINUATION_MIN_EXPECTED_R,
+      ),
+      m5Handoff: m5EarlyTransitionEvidence
+        ? observeSecondaryPredictedCostFloor(m5EarlyTransitionEvidence.netExpectedR, 0.2)
+        : null,
+      highConvictionRescue: multimodelDemo
+        ? observeSecondaryPredictedCostFloor(multimodelDemo.governance.netExpectedR, 0.2)
+        : null,
+    };
     const productionQualificationShadow = multimodelDemo
       ? evaluateProductionQualificationShadow({
           candidateDirection: candidate.direction,
@@ -1798,6 +1835,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         demoPrimaryOnlyProbation: { ...demoPrimaryOnlyProbation },
         demoBrokerCommissionGate: commissionGateAudit,
         productionQualificationShadow,
+        secondaryPredictedCostShadow,
         multimodelLossStreakBrake: multimodelLossStreakBrake
           ? { ...multimodelLossStreakBrake }
           : null,

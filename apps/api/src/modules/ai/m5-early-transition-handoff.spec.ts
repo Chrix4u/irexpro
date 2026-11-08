@@ -75,6 +75,28 @@ describe('evaluateM5EarlyTransitionHandoff', () => {
     });
   });
 
+  it('records sub-floor projected net return as research and still requires qualified M5/M1 evidence', () => {
+    const weakForecast = input({
+      m5Evidence: { ...input().m5Evidence, netExpectedR: -0.05 },
+    }) as any;
+    expect(evaluateM5EarlyTransitionHandoff(weakForecast)).toMatchObject({
+      eligible: true,
+      lotCap: 0.2,
+    });
+    expect(
+      evaluateM5EarlyTransitionHandoff({
+        ...weakForecast,
+        m5Evidence: { ...weakForecast.m5Evidence, driftState: 'STRESSED' },
+      }).eligible,
+    ).toBe(false);
+    expect(
+      evaluateM5EarlyTransitionHandoff({
+        ...weakForecast,
+        m5Evidence: { ...weakForecast.m5Evidence, netExpectedR: Number.NaN },
+      }).eligible,
+    ).toBe(false);
+  });
+
   it.each([
     [
       'stale M5 evidence',
@@ -90,7 +112,6 @@ describe('evaluateM5EarlyTransitionHandoff', () => {
       'M5 non-normal drift',
       { m5Evidence: { ...input().m5Evidence, driftState: 'OUT_OF_DISTRIBUTION' } },
     ],
-    ['M5 low expectancy', { m5Evidence: { ...input().m5Evidence, netExpectedR: 0.19 } }],
     ['M5 paper admission failure', { m5Evidence: { ...input().m5Evidence, paperAdmitted: false } }],
     [
       'M5 governance failure',

@@ -203,6 +203,40 @@ describe('evaluateMultimodelDemoAuthority', () => {
     );
   });
 
+  it('retains unanimous expert and real broker-risk requirements when old rescue cost estimate is below floor', () => {
+    const candidate = {
+      ensemble: { ...ensemble(false), strategyRoute: 'EARLY_TRANSITION' as const },
+      governance: governance(false, {
+        paperExecutionBlockers: [
+          'ENSEMBLE_NOT_PAPER_ADMITTED',
+          'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+          'DRIFT_OUT_OF_DISTRIBUTION',
+        ],
+        netExpectedR: 0.04,
+        paperNetExpectedRPassed: false,
+      }),
+      trainedExpert: { ...overlay('ABSTAIN'), ensembleConfidence: 0.714 },
+      candidateDirection: 'BUY' as const,
+      m1TimingRoute: 'M1_EARLY_TRANSITION' as const,
+    };
+    expect(evaluateMultimodelDemoAuthority(candidate).authorityPath).toBe('HIGH_CONVICTION_RESCUE');
+    expect(
+      evaluateMultimodelDemoAuthority({
+        ...candidate,
+        trainedExpert: { ...candidate.trainedExpert, allBrokerNative: false },
+      }).authorityPath,
+    ).toBe('BLOCKED');
+    expect(
+      evaluateMultimodelDemoAuthority({
+        ...candidate,
+        governance: governance(false, {
+          ...candidate.governance,
+          paperExecutionCostUsable: false,
+        }),
+      }).authorityPath,
+    ).toBe('BLOCKED');
+  });
+
   it('uses trained-expert confidence for high-conviction rescue while primary Plan-B keeps its ensemble score', () => {
     const rescueInput = {
       ensemble: {

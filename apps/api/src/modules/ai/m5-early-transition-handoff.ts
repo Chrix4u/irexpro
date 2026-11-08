@@ -36,7 +36,6 @@ export interface M5EarlyTransitionHandoffDecision {
 const M5_BAR_DURATION_MS = 5 * 60_000;
 const MAX_M5_BAR_CLOSE_AGE_MS = 5 * 60_000;
 const MAX_M5_EVALUATION_AGE_MS = 2 * 60_000;
-const MIN_M5_NET_EXPECTED_R = 0.2;
 const MIN_M5_ENSEMBLE_SCORE = 0.6;
 const MIN_M1_CONFIRM_CONFIDENCE = 0.6;
 const MIN_M1_CONFIRM_DIRECTION_QUALITY = 0.55;
@@ -87,8 +86,10 @@ export function evaluateM5EarlyTransitionHandoff(
   if (!m5.paperExecutionEligible) return reject('M5_GOVERNANCE_BLOCKED');
   if (m5.eventRisk !== 'CLEAR') return reject('M5_EVENT_RISK_BLOCKED');
   if (m5.driftState !== 'NORMAL') return reject('M5_DRIFT_NOT_NORMAL');
-  if (!finiteAtLeast(m5.netExpectedR, MIN_M5_NET_EXPECTED_R)) {
-    return reject('M5_NET_EXPECTED_R_TOO_LOW');
+  // Predictive after-cost return is shadow-only. Require a finite broker-
+  // based estimate but do not veto on the unvalidated 0.20R forecast floor.
+  if (!Number.isFinite(m5.netExpectedR)) {
+    return reject('M5_NET_EXPECTED_R_UNAVAILABLE');
   }
   if (!finiteAtLeast(m5.ensembleScore, MIN_M5_ENSEMBLE_SCORE)) {
     return reject('M5_ENSEMBLE_SCORE_TOO_LOW');
