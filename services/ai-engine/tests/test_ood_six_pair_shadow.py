@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from test_ood_shadow_candidate import example
 
 from app.domain.training.ood_shadow_candidate import SIX_PAIR_RESEARCH_PAIRS
 from app.domain.training.ood_six_pair_shadow import RESEARCH_ARTIFACT, study_from_csv
-from test_ood_shadow_candidate import example
 
 
 def test_all_six_pairs_are_reported_without_fit_or_execution(tmp_path: Path) -> None:
