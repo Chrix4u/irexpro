@@ -390,7 +390,7 @@ export function compareExitAlternatives(input: ExitScenarioInput): ExitAlternati
  * *next completed* broker-native M1 bucket, never a quote from before exit.
  * A midpoint candle touch is NOT a certifiable broker bid/ask TP/SL fill.
  */
-export const ADVERSE_EXIT_COUNTERFACTUAL_ARTIFACT = 'adverse-thesis-exit-verified-m1-v2' as const;
+export const ADVERSE_EXIT_COUNTERFACTUAL_ARTIFACT = 'adverse-thesis-exit-verified-m1-v3' as const;
 
 export type AdverseExitCounterfactualInput = Omit<
   ExitScenarioInput,

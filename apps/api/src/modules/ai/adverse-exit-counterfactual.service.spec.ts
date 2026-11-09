@@ -37,6 +37,12 @@ describe('DEMO adverse-exit retrospective worker', () => {
       "audit0.metadata #>> '{aiCloseTrigger,source}' = 'BROKER_ADVERSE_PROTECTION'",
     );
     expect(sql).toContain('ADVERSE_THESIS_FAILED');
+    expect(sql).toContain("'TRADE_CLOSE_REQUESTED', 'TRADE_SUBMITTED'");
+    expect(sql).toContain('audit0.actor_user_id = t.user_id');
+    expect(sql).toContain('audit0.resource_id = t.id::text');
+    expect(sql).toContain("t.closed_at - interval '90 seconds'");
+    expect(sql).toContain("t.closed_at + interval '90 seconds'");
+    expect(sql).toContain('request_evidence');
     expect(sql).toContain('t.closed_at <= $1::timestamptz');
     expect(sql).toContain('NOT EXISTS');
     expect(query.mock.calls[1]?.[1]).toEqual([
@@ -85,6 +91,43 @@ describe('DEMO adverse-exit retrospective worker', () => {
       originalNetPnl: -5.03,
       brokerAdverseReason: 'ADVERSE_THESIS_FAILED',
       originalSlTpHold: { outcome: 'STOP_FIRST', netPnlProxy: expect.any(Number) },
+    });
+  });
+
+  it('correlates a matched historical close submission without claiming the broker certified its reason', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          ...candidate,
+          trigger_reason: 'UNVERIFIED_IN_TRADE_AUDIT',
+          request_evidence: [
+            {
+              action: 'TRADE_SUBMITTED',
+              closeReason: 'AI_CLOSE_SIGNAL',
+              aiCloseTrigger: {
+                source: 'BROKER_ADVERSE_PROTECTION',
+                reasonCode: 'ADVERSE_THESIS_FAILED',
+              },
+            },
+          ],
+        },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    await new ProfitExitAlternativesService({ query } as unknown as DataSource).runOnce(
+      new Date('2026-11-05T06:00:00.000Z'),
+    );
+    const response = JSON.parse(String(query.mock.calls[3][1][8]));
+    expect(response).toMatchObject({
+      brokerAdverseReason: 'ADVERSE_THESIS_FAILED',
+      brokerAdverseTriggerAudited: false,
+      appCloseRequestCorrelated: true,
+      closeReasonEvidenceSource: 'TRADE_SUBMITTED_CORRELATED',
+      closeReasonRequestEvidenceCount: 1,
+      brokerExitReasonCertified: false,
+      modifiesExecution: false,
     });
   });
 
