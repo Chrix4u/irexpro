@@ -131,7 +131,20 @@ export class RiskController {
         ? toRiskViolationSummary(latestDailyLossViolation)
         : null,
       latestRiskSuspensionViolation: latestRiskSuspensionViolation
-        ? toRiskViolationSummary(latestRiskSuspensionViolation)
+        ? {
+            ...toRiskViolationSummary(latestRiskSuspensionViolation),
+            // Only disclose this user's exact connection binding, not the
+            // balance/position/strategy fields in the private riskContext.
+            // Legacy violations without provable scope remain unscoped and
+            // the client must retain fail-closed protection for them.
+            ...(typeof latestRiskSuspensionViolation.riskContext?.brokerConnectionId ===
+            'string'
+              ? {
+                  brokerConnectionId:
+                    latestRiskSuspensionViolation.riskContext.brokerConnectionId,
+                }
+              : {}),
+          }
         : null,
       limits: {
         maxDailyLossPercent: profile.maxDailyLossPercent,
