@@ -86,6 +86,8 @@ export interface TraderTerminalStatus {
   brokers: TerminalBrokerView[];
   /** Broker bound to the active session, when one exists and is visible. */
   sessionBroker: TerminalBrokerView | null;
+  /** Read-only broker scope for recent ended-session risk messaging. */
+  lastEndedSession?: TradingSessionView | null;
   /** Best broker to surface when there is no active-session match. */
   primaryBroker: TerminalBrokerView | null;
   /** Non-fatal control-state failures that must not erase broker identity. */
@@ -363,12 +365,16 @@ function isTerminalBrokerAuthorizationStatus(
  * not match the expected frontend-safe contract.
  */
 export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> {
-  const [riskResult, sessionResult, brokerResult] = await Promise.allSettled([
+  const [riskResult, sessionResult, brokerResult, latestEndedResult] = await Promise.allSettled([
     readWithSingleNetworkRetry(() => api.request<unknown>("/risk/status")),
     readWithSingleNetworkRetry(() =>
       api.request<unknown>("/trading/sessions/active"),
     ),
     readWithSingleNetworkRetry(() => api.listBrokerConnections()),
+    // Optional read-only history. A failure never relaxes server risk gates.
+    readWithSingleNetworkRetry(() =>
+      api.request<unknown>("/trading/sessions/latest-ended"),
+    ),
   ]);
 
   // Broker inventory is independently meaningful. If it cannot be loaded or
@@ -413,6 +419,15 @@ export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> 
     );
   }
 
+  const endedPayload =
+    latestEndedResult.status === "fulfilled"
+      ? normalizeActiveTradingSessionPayload(latestEndedResult.value)
+      : null;
+  const lastEndedSession =
+    endedPayload?.known && endedPayload.session?.status === "ENDED"
+      ? endedPayload.session
+      : null;
+
   const sessionBroker =
     sessionStateKnown && session
       ? (brokers.find((broker) => broker.id === session.brokerConnectionId) ??
@@ -431,6 +446,7 @@ export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> 
     sessionStateKnown,
     brokers,
     sessionBroker,
+    lastEndedSession,
     primaryBroker,
     controlWarnings,
   };

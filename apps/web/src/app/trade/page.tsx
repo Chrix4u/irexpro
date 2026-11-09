@@ -73,6 +73,7 @@ import {
 import {
   dailyLossProtectionMessage,
   dailyRiskCooldownFromViolation,
+  endedRiskViolationMatchesBroker,
   executionBlockedReasons,
   prepareBrokerForAutomationStart,
   resetDailyLossProtection,
@@ -1773,6 +1774,8 @@ export default function AiTradingPage() {
   const [allocation, setAllocation] =
     useState<UserCapitalAllocationView | null>(null);
   const [selectedBrokerId, setSelectedBrokerId] = useState<string>("");
+  // Ensure older in-flight polling cannot overwrite the current broker.
+  const selectedBrokerIdRef = useRef<string>("");
   const [allocationAmount, setAllocationAmount] = useState("");
   const [loading, setLoading] = useState(true);
   const [savingAllocation, setSavingAllocation] = useState(false);
@@ -1848,6 +1851,15 @@ export default function AiTradingPage() {
     shouldOfferRiskResetAfterEndedSession({
       dailyRiskCooldownActive: dailyRiskCooldown.active,
       latestRiskSuspensionCode,
+    }) &&
+    // Old session risk must never be attributed to another selected account.
+    endedRiskViolationMatchesBroker({
+      selectedBrokerConnectionId: selectedBrokerId || terminal?.primaryBroker?.id || null,
+      endedSession: terminal?.lastEndedSession ?? null,
+      violation:
+        terminal?.risk?.latestRiskSuspensionViolation ??
+        terminal?.risk?.latestDailyLossViolation ??
+        null,
     }) &&
     !automationOn &&
     !automationSuspended;
@@ -2153,9 +2165,14 @@ export default function AiTradingPage() {
 
         const brokerId =
           status.sessionBroker?.id ||
-          selectedBrokerId ||
+          selectedBrokerIdRef.current ||
           status.primaryBroker?.id ||
           "";
+        if (status.sessionBroker?.id) {
+          selectedBrokerIdRef.current = status.sessionBroker.id;
+        } else if (!selectedBrokerIdRef.current) {
+          selectedBrokerIdRef.current = brokerId;
+        }
 
         const realisedWindowEnd = new Date();
         const realisedWindowStart = new Date(
@@ -2228,23 +2245,23 @@ export default function AiTradingPage() {
         }
 
         if (brokerId) {
-          setSelectedBrokerId(
-            (current) => status.sessionBroker?.id || current || brokerId,
-          );
+          setSelectedBrokerId(selectedBrokerIdRef.current);
           try {
             const nextAllocation = await api.getCapitalAllocation(brokerId);
-            setAllocation(nextAllocation);
-            setAllocationWarning(null);
-            if (nextAllocation.allocatedCapital) {
-              setAllocationAmount(nextAllocation.allocatedCapital);
+            if (selectedBrokerIdRef.current === brokerId) {
+              setAllocation(nextAllocation);
+              setAllocationWarning(null);
+              setAllocationAmount(nextAllocation.allocatedCapital ?? "");
             }
           } catch {
-            setAllocation(null);
-            setAllocationWarning(
-              "Your broker account is connected, but its AI capital allocation could not be loaded. Trading controls remain disabled until this data is available.",
-            );
+            if (selectedBrokerIdRef.current === brokerId) {
+              setAllocation(null);
+              setAllocationWarning(
+                "Your broker account is connected, but its AI capital allocation could not be loaded. Trading controls remain disabled until this data is available.",
+              );
+            }
           }
-        } else {
+        } else if (!selectedBrokerIdRef.current) {
           setAllocation(null);
         }
       } catch (requestError) {
@@ -2546,15 +2563,18 @@ export default function AiTradingPage() {
   }, [pendingAutomationAction, togglingAutomation]);
 
   async function handleBrokerChange(nextId: string) {
+    selectedBrokerIdRef.current = nextId;
     setSelectedBrokerId(nextId);
     setAllocation(null);
     setAllocationAmount("");
     try {
       const nextAllocation = await api.getCapitalAllocation(nextId);
+      if (selectedBrokerIdRef.current !== nextId) return;
       setAllocation(nextAllocation);
       setAllocationWarning(null);
       setAllocationAmount(nextAllocation.allocatedCapital ?? "");
     } catch {
+      if (selectedBrokerIdRef.current !== nextId) return;
       setAllocation(null);
       setAllocationWarning(
         "This broker is connected, but its AI capital allocation could not be loaded yet.",
@@ -3404,8 +3424,7 @@ export default function AiTradingPage() {
                       !selectedBroker ||
                       savingAllocation ||
                       automationOn ||
-                      automationSuspended ||
-                      endedRiskResetAvailable
+                      automationSuspended
                     }
                   />
                   <Button
@@ -3415,8 +3434,7 @@ export default function AiTradingPage() {
                     disabled={
                       !selectedBroker ||
                       automationOn ||
-                      automationSuspended ||
-                      endedRiskResetAvailable
+                      automationSuspended
                     }
                     onClick={() => void saveAllocation()}
                   >
@@ -3429,9 +3447,11 @@ export default function AiTradingPage() {
                     allocation?.availableCapital,
                     allocation?.accountCurrency,
                   )}
-                  {automationSuspended || endedRiskResetAvailable
-                    ? " · Allocation is locked by the current protection state; reallocation cannot clear or explain this stop."
-                    : ""}
+                  {automationSuspended
+                    ? " · Allocation is locked while this AI session is suspended."
+                    : endedRiskResetAvailable
+                      ? " · You may adjust this allocation while stopped; restarting still requires an explicit risk reset."
+                      : ""}
                 </span>
                 </div>
               </Card>
