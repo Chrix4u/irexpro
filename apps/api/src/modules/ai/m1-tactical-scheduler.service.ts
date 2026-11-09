@@ -984,6 +984,31 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const decisionStartedAt = Date.now();
     const eventRisk = await this.macroEventRisk.assess(instrument, decisionTime);
     const candidates = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2);
+    // Both BUY and SELL candidates read identical historical CLOSED broker
+    // commission evidence for this user/account/pair/as-of minute. Cache only
+    // inside this one pair scan; NEVER share across minutes or accounts.
+    // The evidence is observational for rejected DEMO candidates and remains
+    // independent of execution admission. A failed read is not cached, so the
+    // opposite side retains its former chance to retry.
+    let priorCommissionEvidence:
+      | ReturnType<M1TacticalEvidenceService['loadPriorClosedCommissionRiskR']>
+      | null = null;
+    const getPriorCommissionEvidence = () => {
+      if (!priorCommissionEvidence) {
+        priorCommissionEvidence = this.evidence
+          .loadPriorClosedCommissionRiskR({
+            userId,
+            brokerConnectionId,
+            instrument,
+            asOf: decisionTime,
+          })
+          .catch((error: unknown) => {
+            priorCommissionEvidence = null;
+            throw error;
+          });
+      }
+      return priorCommissionEvidence;
+    };
     for (const [candidate, opposite] of [
       [candidates[0], candidates[1]],
       [candidates[1], candidates[0]],
@@ -998,6 +1023,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         market.spreadEvidence,
         decisionTime,
         market.paperSimulationSpreadPrice,
+        getPriorCommissionEvidence,
       );
     }
 
@@ -1341,6 +1367,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     spreadEvidence: Parameters<typeof evaluateM1TacticalGovernance>[0]['executionSpreadEvidence'],
     decisionTime: Date,
     paperSimulationSpreadPrice?: number,
+    loadPriorCommissionEvidence?: () => ReturnType<
+      M1TacticalEvidenceService['loadPriorClosedCommissionRiskR']
+    >,
   ): Promise<void> {
     if (!features) return;
     // Observational timings only; never consulted by risk or entry authority.
@@ -1803,12 +1832,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     ) {
       const executableFeeStartedAt = Date.now();
       try {
-        feeEvidenceForDecision = await this.evidence.loadPriorClosedCommissionRiskR({
-          userId,
-          brokerConnectionId,
-          instrument: candidate.instrument,
-          asOf: decisionTime,
-        });
+        feeEvidenceForDecision = loadPriorCommissionEvidence
+          ? await loadPriorCommissionEvidence()
+          : await this.evidence.loadPriorClosedCommissionRiskR({
+              userId,
+              brokerConnectionId,
+              instrument: candidate.instrument,
+              asOf: decisionTime,
+            });
       } catch (error) {
         brokerFeeLookupFailed = true;
         this.logger.warn(
@@ -1935,12 +1966,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       let feeLookupFailed = brokerFeeLookupFailed;
       if (!selectedPrimaryForCommission || !commissionFloorEnabled) {
         try {
-          feeEvidence = await this.evidence.loadPriorClosedCommissionRiskR({
-            userId,
-            brokerConnectionId,
-            instrument: candidate.instrument,
-            asOf: decisionTime,
-          });
+          feeEvidence = loadPriorCommissionEvidence
+            ? await loadPriorCommissionEvidence()
+            : await this.evidence.loadPriorClosedCommissionRiskR({
+                userId,
+                brokerConnectionId,
+                instrument: candidate.instrument,
+                asOf: decisionTime,
+              });
         } catch (error) {
           feeLookupFailed = true;
           this.logger.warn(
