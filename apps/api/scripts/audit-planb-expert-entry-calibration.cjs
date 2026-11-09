@@ -36,7 +36,7 @@ const ROWS_SQL=[
   "d.governance #>> '{multimodelTrainedExpert,meanOpportunityProbability}' AS \"expertOpportunity\",",
   "d.governance #>> '{multimodelTrainedExpert,ensembleConfidence}' AS \"expertConfidence\",",
   'p.closed_at AS "priorLossAt",p.fill_price AS "priorEntry",',
-  'p.stop_loss AS "priorStop",',
+  'p.stop_loss AS "priorStop"',
   'FROM trading.trades t',
   'JOIN trading.trade_intents i ON i.id=t.trade_intent_id',
   'AND i.user_id=t.user_id AND i.broker_connection_id=t.broker_connection_id',
