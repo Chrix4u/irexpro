@@ -47,7 +47,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_ood_research" "$HOME/.ssh/known_hosts"
 
-      - name: Export bounded OOD evidence and evaluate shadow readiness
+      - name: Export bounded OOD evidence and independently score DEMO loss-brake recovery
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -58,4 +58,4 @@ jobs:
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
-            'bash /home/lightworld/webapps/irexpro-staging/scripts/research/run_ood_shadow_training.sh && bash /home/lightworld/webapps/irexpro-staging/scripts/research/run_demo_admission_rejected_shadow.sh'
+            'bash /home/lightworld/webapps/irexpro-staging/scripts/research/run_ood_shadow_training.sh && bash /home/lightworld/webapps/irexpro-staging/scripts/research/run_demo_admission_rejected_shadow.sh && cd /home/lightworld/webapps/irexpro-staging/apps/api && node scripts/audit-demo-loss-brake-recovery-shadow.cjs'
