@@ -1856,6 +1856,7 @@ export default function AiTradingPage() {
   const endedRiskViolationMatchesBroker = riskSuspensionMatchesBroker(
     terminal?.risk?.latestRiskSuspensionViolation ?? null,
     riskUiBrokerConnectionId,
+    terminal?.brokers ?? [],
   );
   const endedRiskResetAvailable =
     endedRiskViolationMatchesBroker &&
