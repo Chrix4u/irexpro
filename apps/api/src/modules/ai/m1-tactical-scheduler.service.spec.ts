@@ -415,6 +415,48 @@ describe('M1TacticalSchedulerService shadow phase', () => {
     expect(failed.receiveSignal).not.toHaveBeenCalled();
   });
 
+  it('observes busy next-minute wakeups once without skipping a recoverable minute or adding trade authority', async () => {
+    const h = harness();
+    let releaseMarket: (() => void) | undefined;
+    const marketGate = new Promise<void>((resolve) => {
+      releaseMarket = resolve;
+    });
+    const initialLoad = h.loadSnapshot.getMockImplementation();
+    expect(initialLoad).toBeDefined();
+    h.loadSnapshot.mockImplementation(async (connectionId: string, instrument: string, at: Date) => {
+      await marketGate;
+      return initialLoad!(connectionId, instrument, at);
+    });
+
+    const initialRun = h.service.runOnce(OPEN_NOW);
+    expect(h.service.getStatus().running).toBe(true);
+    await h.service.runOnce(new Date('2026-10-15T12:30:45.000Z'));
+    expect(h.service.getStatus().busyMinuteOverlapCount).toBe(0);
+
+    await h.service.runOnce(new Date('2026-10-15T12:31:15.000Z'));
+    await h.service.runOnce(new Date('2026-10-15T12:31:45.000Z'));
+    await h.service.runOnce(new Date('2026-10-17T12:32:15.000Z'));
+    expect(h.service.getStatus()).toEqual(
+      expect.objectContaining({
+        running: true,
+        lastSlotKey: '2026-10-15T12:30:00.000Z',
+        busyMinuteOverlapCount: 1,
+        lastBusyOverlapSlotKey: '2026-10-15T12:31:00.000Z',
+      }),
+    );
+    expect(h.loadSnapshot).toHaveBeenCalledTimes(1);
+    expect(h.recordDecision).not.toHaveBeenCalled();
+
+    releaseMarket!();
+    await initialRun;
+    // A later wake-up within that same minute is still processed normally.
+    await h.service.runOnce(new Date('2026-10-15T12:31:50.000Z'));
+    expect(h.service.getStatus().lastSlotKey).toBe('2026-10-15T12:31:00.000Z');
+    expect(h.service.getStatus().busyMinuteOverlapCount).toBe(1);
+    expect(h.recordDecision).toHaveBeenCalledTimes(24);
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
+
   it('evaluates one completed minute only once even when woken again inside the same minute', async () => {
     const h = harness();
     await h.service.runOnce(OPEN_NOW);
