@@ -150,6 +150,15 @@ def test_earlier_possible_stop_makes_later_target_quote_close_ambiguous() -> Non
     assert report["broker_net_pnl_verified"] is False
 
 
+def test_same_minute_midpoint_stop_touch_never_counts_as_certain_target_first() -> None:
+    row = example()
+    row["first_possible_mid_stop_at"] = row["first_target_close_at"]
+    report = build_report(pd.DataFrame([row]), inspect_at="2026-11-09T08:02:00Z")
+    assert report["inspection"]["target_before_stop_quote_close"] is False
+    assert report["overall"]["target_before_stop_quote_closes"] == 0
+    assert report["execution_allowed"] is False
+
+
 def test_midpoint_stop_or_target_touches_are_not_misreported_as_fills() -> None:
     row = example()
     row["possible_low"] = 1.1167

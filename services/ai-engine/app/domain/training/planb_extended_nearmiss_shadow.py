@@ -155,7 +155,7 @@ def prepare(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         df["target_before_stop_quote_close"] = (
             target.notna()
             & (stop.isna() | (target < stop))
-            & (possible_mid_stop.isna() | (target <= possible_mid_stop))
+            & (possible_mid_stop.isna() | (target < possible_mid_stop))
         )
         df["stop_before_target_quote_close"] = (
             stop.notna() & (target.isna() | (stop < target))
