@@ -601,7 +601,10 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                 observedAt: Date;
               } | null = null;
               try {
-                alignedContext = await this.loadRecentPositionSideAlignment(trade, observedAt);
+                alignedContext = await this.loadPositionSideAlignmentWithinDeadline(
+                  trade,
+                  observedAt,
+                );
               } catch {
                 this.logger.warn(
                   'cTrader adverse grace context unavailable; normal close remains eligible',
@@ -1120,6 +1123,23 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           }
         : null,
     };
+  }
+
+  private async loadPositionSideAlignmentWithinDeadline(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+  ): Promise<{ m5Aligned: number | null; m15Aligned: number | null; observedAt: Date } | null> {
+    // A broken/slow diagnostic query must never postpone the original
+    // protective broker close for an indefinite period.
+    let deadline: NodeJS.Timeout | null = null;
+    try {
+      const timeout = new Promise<null>((resolve) => {
+        deadline = setTimeout(() => resolve(null), 500);
+      });
+      return await Promise.race([this.loadRecentPositionSideAlignment(trade, observedAt), timeout]);
+    } finally {
+      if (deadline) clearTimeout(deadline);
+    }
   }
 
   private async loadRecentPositionSideAlignment(
