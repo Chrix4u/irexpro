@@ -372,6 +372,29 @@ describe('M1TacticalSchedulerService shadow phase', () => {
     expect(h.recordDecision).toHaveBeenCalledTimes(12);
   });
 
+  it('evaluates both sides of all six pairs before blocking on historical shadow settlements', async () => {
+    const h = harness();
+    await h.service.runOnce(OPEN_NOW);
+
+    const lastEntryDecisionWrite = Math.max(...h.recordDecision.mock.invocationCallOrder);
+    expect(h.recordDecision).toHaveBeenCalledTimes(12);
+    for (const loadResearch of [
+      h.loadPendingDriftCounterfactuals,
+      h.loadMatureShadowEpisodeLeaders,
+      h.loadMatureLowVolRangeLeaders,
+    ]) {
+      expect(loadResearch).toHaveBeenCalledTimes(6);
+      const firstResearchCall = Math.min(...loadResearch.mock.invocationCallOrder);
+      expect(firstResearchCall).toBeGreaterThan(lastEntryDecisionWrite);
+    }
+    for (const instrument of ['AUDUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCAD', 'USDCHF']) {
+      expect(h.service.getStatus().scanTimings[instrument].shadowSettlementMs).toEqual(
+        expect.any(Number),
+      );
+    }
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
+
   it('marks missing market data and pair fetch failures without stopping other instruments', async () => {
     const unready = harness({ warm: false });
     await unready.service.runOnce(OPEN_NOW);

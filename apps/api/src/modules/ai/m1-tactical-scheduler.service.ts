@@ -659,10 +659,13 @@ function unique(values: string[]): string[] {
 export interface M1TacticalScanTiming {
   slotTime: string;
   startedAfterSlotMs: number;
+  /** End of entry-critical evaluation, not deferred research completion. */
   finishedAfterSlotMs: number;
+  /** Entry-critical per-pair wall time; intentionally excludes later shadow settlement. */
   totalMs: number;
   marketLoadMs: number | null;
   decisionEvaluationMs: number | null;
+  /** Historical observation time, measured after all pair entries are evaluated. */
   shadowSettlementMs: number | null;
   state: 'COMPLETED' | 'MARKET_NOT_READY' | 'FEATURES_UNAVAILABLE' | 'ERROR';
 }
@@ -799,9 +802,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         }
       }
       if (!brokerConnectionId) return;
-      // Evaluate the three DEMO entry candidates FIRST each minute, then
-      // continue gathering research on excluded pairs. This changes priority,
-      // not model math, and never gives a research pair execution permission.
+      // Evaluate every approved DEMO entry pair before running historical
+      // research settlements. The V2 list contains all six majors, and this
+      // order does not grant additional broker execution authority.
       const focused = this.rolloutPolicy.demoEntryInstruments;
       const scanOrder = focused
         ? [
@@ -809,6 +812,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ...this.rolloutPolicy.instruments.filter((instrument) => !focused.includes(instrument)),
           ]
         : this.rolloutPolicy.instruments;
+      // Historical outcomes are observational: they must never make a later
+      // pair wait to receive its current-minute broker eligibility decision.
+      // Maintain serial entry/risk evaluations; only the read-only observation
+      // phase moves behind all six pairs.
+      const deferredShadow: Array<{
+        instrument: string;
+        trace: M1TacticalScanTiming;
+        settle: () => Promise<void>;
+      }> = [];
       for (const instrument of scanOrder) {
         const startedAt = Date.now();
         const trace: M1TacticalScanTiming = {
@@ -822,7 +834,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           state: 'ERROR',
         };
         try {
-          await this.processInstrument(userId, brokerConnectionId, instrument, decisionTime, trace);
+          const settle = await this.processInstrument(
+            userId,
+            brokerConnectionId,
+            instrument,
+            decisionTime,
+            trace,
+          );
+          if (settle) deferredShadow.push({ instrument, trace, settle });
           if (trace.state === 'ERROR') trace.state = 'COMPLETED';
         } catch (error) {
           this.logger.warn(
@@ -865,6 +884,26 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           }
         }
       }
+      // The previous interleaved research work made later USD pairs start
+      // 50-90 seconds after a minute boundary on the deployed six-pair V2.
+      // Research still settles against each original snapshot/decisionTime,
+      // but no longer obstructs this minute's later entry evaluations.
+      for (const task of deferredShadow) {
+        try {
+          await task.settle();
+        } catch (error) {
+          this.logger.warn(
+            'M1 shadow settlement deferred instrument=' +
+              task.instrument +
+              ' slot=' +
+              slotKey +
+              ': ' +
+              (error as Error).message,
+          );
+        } finally {
+          this.lastScanTimings.set(task.instrument, { ...task.trace });
+        }
+      }
       this.lastRunAt = new Date(now);
       this.lastError = null;
     } catch (error) {
@@ -881,7 +920,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     instrument: string,
     decisionTime: Date,
     timing?: M1TacticalScanTiming,
-  ): Promise<void> {
+  ): Promise<(() => Promise<void>) | null> {
     const marketStartedAt = Date.now();
     const market = await this.marketData.loadSnapshot(brokerConnectionId, instrument, decisionTime);
     if (timing) timing.marketLoadMs = Math.max(0, Date.now() - marketStartedAt);
@@ -899,7 +938,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     }
     if (!market) {
       if (timing) timing.state = 'MARKET_NOT_READY';
-      return;
+      return null;
     }
 
     const features = buildM1TacticalFeatures({
@@ -913,7 +952,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     });
     if (!features) {
       if (timing) timing.state = 'FEATURES_UNAVAILABLE';
-      return;
+      return null;
     }
 
     const decisionStartedAt = Date.now();
@@ -937,29 +976,36 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     }
 
     if (timing) timing.decisionEvaluationMs = Math.max(0, Date.now() - decisionStartedAt);
-    const settlementStartedAt = Date.now();
-    await this.settleMatureDriftCounterfactuals(
-      userId,
-      brokerConnectionId,
-      instrument,
-      decisionTime,
-      market.m1,
-    );
-    await this.settleMatureShadowEpisodes(
-      userId,
-      brokerConnectionId,
-      instrument,
-      decisionTime,
-      market.m1,
-    );
-    await this.settleMatureLowVolRangeShadowEpisodes(
-      userId,
-      brokerConnectionId,
-      instrument,
-      decisionTime,
-      market.m1,
-    );
-    if (timing) timing.shadowSettlementMs = Math.max(0, Date.now() - settlementStartedAt);
+    // Capture the original completed-minute bars. No model/risk/dispatch path
+    // depends on settling these historical research results in the same pair turn.
+    return async () => {
+      const settlementStartedAt = Date.now();
+      try {
+        await this.settleMatureDriftCounterfactuals(
+          userId,
+          brokerConnectionId,
+          instrument,
+          decisionTime,
+          market.m1,
+        );
+        await this.settleMatureShadowEpisodes(
+          userId,
+          brokerConnectionId,
+          instrument,
+          decisionTime,
+          market.m1,
+        );
+        await this.settleMatureLowVolRangeShadowEpisodes(
+          userId,
+          brokerConnectionId,
+          instrument,
+          decisionTime,
+          market.m1,
+        );
+      } finally {
+        if (timing) timing.shadowSettlementMs = Math.max(0, Date.now() - settlementStartedAt);
+      }
+    };
   }
 
   private async settleMatureLowVolRangeShadowEpisodes(
