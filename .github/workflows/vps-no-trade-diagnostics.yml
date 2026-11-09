@@ -906,6 +906,33 @@ jobs:
           printf '%s\n' '--- sanitized VPS no-trade diagnostics ---'
           cat "$output_file"
 
+      - name: Export six-pair V2 persisted cadence (research only, nonblocking)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if ! ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          api='/home/lightworld/webapps/irexpro-staging/apps/api'
+          if [[ -f "$api/scripts/audit-demo-six-pair-cadence.cjs" ]]; then
+            cd "$api"
+            node scripts/audit-demo-six-pair-cadence.cjs
+          else
+            printf '%s\n' 'DEMO_CADENCE_RESEARCH_SKIPPED_NOT_DEPLOYED'
+          fi
+          REMOTE
+          then
+            # Research evidence availability never bypasses execution safeguards
+            # or breaks the independent production deployment health contract.
+            printf '%s\n' 'DEMO_CADENCE_RESEARCH_UNAVAILABLE'
+          fi
+
       - name: Remove ephemeral SSH material
         if: ${{ always() }}
         shell: bash

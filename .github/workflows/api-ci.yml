@@ -165,6 +165,12 @@ jobs:
           DB_PASSWORD: test_password
           COOKIE_SECRET: test_cookie_secret_min_16
 
+
+      - name: Verify read-only six-pair cadence research
+        run: node --test apps/api/scripts/audit-demo-six-pair-cadence.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04
