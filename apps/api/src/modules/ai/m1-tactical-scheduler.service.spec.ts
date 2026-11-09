@@ -423,10 +423,12 @@ describe('M1TacticalSchedulerService shadow phase', () => {
     });
     const initialLoad = h.loadSnapshot.getMockImplementation();
     expect(initialLoad).toBeDefined();
-    h.loadSnapshot.mockImplementation(async (connectionId: string, instrument: string, at: Date) => {
-      await marketGate;
-      return initialLoad!(connectionId, instrument, at);
-    });
+    h.loadSnapshot.mockImplementation(
+      async (connectionId: string, instrument: string, at: Date) => {
+        await marketGate;
+        return initialLoad!(connectionId, instrument, at);
+      },
+    );
 
     const initialRun = h.service.runOnce(OPEN_NOW);
     expect(h.service.getStatus().running).toBe(true);
