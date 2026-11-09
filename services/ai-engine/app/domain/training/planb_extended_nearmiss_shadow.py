@@ -53,7 +53,7 @@ REQUIRED = (
     "first_target_close_at",
     "first_stop_close_at",
     "first_possible_mid_stop_at",
-    "last_observed_m1_bar_at",
+    "last_observed_m1_quote_at",
     *PRICE_COLUMNS,
 )
 
@@ -73,7 +73,7 @@ def prepare(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         "first_target_close_at",
         "first_stop_close_at",
         "first_possible_mid_stop_at",
-        "last_observed_m1_bar_at",
+        "last_observed_m1_quote_at",
     ):
         df[key] = pd.to_datetime(df[key], utc=True, errors="coerce")
     valid = (
@@ -282,14 +282,14 @@ def build_report(
                 "target_before_stop_quote_close": bool(
                     row["target_before_stop_quote_close"]
                 ),
-                "observed_m1_bar_at": (
-                    row["last_observed_m1_bar_at"].isoformat()
-                    if pd.notna(row["last_observed_m1_bar_at"])
+                "observed_m1_quote_at": (
+                    row["last_observed_m1_quote_at"].isoformat()
+                    if pd.notna(row["last_observed_m1_quote_at"])
                     else None
                 ),
                 "full_60_minute_observation": bool(
-                    pd.notna(row["last_observed_m1_bar_at"])
-                    and row["last_observed_m1_bar_at"]
+                    pd.notna(row["last_observed_m1_quote_at"])
+                    and row["last_observed_m1_quote_at"]
                     >= row["entry_quote_at"] + pd.Timedelta(minutes=60)
                 ),
             }

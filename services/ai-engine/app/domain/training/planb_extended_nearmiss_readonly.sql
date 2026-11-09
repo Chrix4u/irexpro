@@ -49,7 +49,7 @@ SELECT d.instrument,d.direction,d.route,
   lifecycle.first_target_close_at,
   lifecycle.first_stop_close_at,
   lifecycle.first_possible_mid_stop_at,
-  lifecycle.last_observed_m1_bar_at
+  lifecycle.last_observed_m1_quote_at
 FROM eligible d
 JOIN LATERAL (
  SELECT bid_close,ask_close,last_quote_sample_at FROM market_data.provider_quote_candles q
@@ -99,7 +99,7 @@ JOIN LATERAL (
      (d.direction='BUY' AND q.low<=(d.candidate->>'stopLoss')::numeric)
      OR (d.direction='SELL' AND q.high>=(d.candidate->>'stopLoss')::numeric)
    ) AS first_possible_mid_stop_at,
-   MAX(q.bucket_time) AS last_observed_m1_bar_at
+   MAX(q.last_quote_sample_at) AS last_observed_m1_quote_at
  FROM market_data.provider_quote_candles q
  WHERE q.connection_id=d.broker_connection_id AND q.instrument=d.instrument
    AND q.timeframe='M1' AND q.source='ctrader-broker-native'
