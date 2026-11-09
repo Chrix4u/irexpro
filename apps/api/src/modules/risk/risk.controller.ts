@@ -137,11 +137,9 @@ export class RiskController {
             // balance/position/strategy fields in the private riskContext.
             // Legacy violations without provable scope remain unscoped and
             // the client must retain fail-closed protection for them.
-            ...(typeof latestRiskSuspensionViolation.riskContext?.brokerConnectionId ===
-            'string'
+            ...(typeof latestRiskSuspensionViolation.riskContext?.brokerConnectionId === 'string'
               ? {
-                  brokerConnectionId:
-                    latestRiskSuspensionViolation.riskContext.brokerConnectionId,
+                  brokerConnectionId: latestRiskSuspensionViolation.riskContext.brokerConnectionId,
                 }
               : {}),
           }
