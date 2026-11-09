@@ -659,10 +659,13 @@ function unique(values: string[]): string[] {
 export interface M1TacticalScanTiming {
   slotTime: string;
   startedAfterSlotMs: number;
+  /** End of entry-critical evaluation, not deferred research completion. */
   finishedAfterSlotMs: number;
+  /** Entry-critical per-pair wall time; intentionally excludes later shadow settlement. */
   totalMs: number;
   marketLoadMs: number | null;
   decisionEvaluationMs: number | null;
+  /** Historical observation time, measured after all pair entries are evaluated. */
   shadowSettlementMs: number | null;
   state: 'COMPLETED' | 'MARKET_NOT_READY' | 'FEATURES_UNAVAILABLE' | 'ERROR';
 }
