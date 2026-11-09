@@ -678,6 +678,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
   private running = false;
   private destroyed = false;
   private lastSlotKey: string | null = null;
+  /** Observability only: one count per later minute that wakes while the prior slot is running. */
+  private busyMinuteOverlapCount = 0;
+  private lastBusyOverlapSlotKey: string | null = null;
   private lastRunAt: Date | null = null;
   private lastError: string | null = null;
   private readonly marketReadiness = new Map<string, M1TacticalMarketReadiness>();
@@ -758,6 +761,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         : {}),
       running: this.running,
       lastSlotKey: this.lastSlotKey,
+      // These are in-process busy wake-up observations, NOT a count of missed
+      // eligible fills. A later wake-up can still process the same minute.
+      busyMinuteOverlapCount: this.busyMinuteOverlapCount,
+      lastBusyOverlapSlotKey: this.lastBusyOverlapSlotKey,
       lastRunAt: this.lastRunAt?.toISOString() ?? null,
       lastError: this.lastError,
       marketReadiness: Object.fromEntries(
@@ -778,11 +785,30 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
   }
 
   async runOnce(now = new Date()): Promise<void> {
-    if (this.destroyed || this.running || !this.enabled()) return;
+    if (this.destroyed || !this.enabled()) return;
     if (!Number.isFinite(now.getTime()) || !isFxWeeklySessionOpen(now)) return;
     const decisionTime = minuteBoundary(now);
     const slotKey = decisionTime.toISOString();
     if (this.lastSlotKey === slotKey) return;
+
+    // Observe, but never change, the pre-existing single-flight guard. Log
+    // once per distinct later minute, not once per 15-second timer wake-up.
+    // The same minute may still be evaluated after the previous run returns;
+    // this is NOT evidence that an actual order was missed.
+    if (this.running) {
+      if (this.lastBusyOverlapSlotKey !== slotKey) {
+        this.lastBusyOverlapSlotKey = slotKey;
+        this.busyMinuteOverlapCount++;
+        this.logger.warn(
+          'M1 tactical busy-minute overlap slot=' +
+            slotKey +
+            ' previousSlot=' +
+            (this.lastSlotKey ?? 'UNKNOWN') +
+            ' authority=OBSERVATION_ONLY',
+        );
+      }
+      return;
+    }
 
     // Claim this completed-minute slot before I/O. A provider failure must not
     // create a tight retry loop inside the same minute; the next slot is a new
