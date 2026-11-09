@@ -109,15 +109,27 @@ describe('riskSuspensionMatchesBroker', () => {
   });
 
   it('fails closed when either identity, violation scope or broker selection is unknown', () => {
-    expect(riskSuspensionMatchesBroker({}, 'pepperstone-demo', distinctAccounts)).toBe(true);
-    expect(riskSuspensionMatchesBroker({ brokerConnectionId: null }, 'pepperstone-demo', distinctAccounts)).toBe(true);
-    expect(riskSuspensionMatchesBroker({ brokerConnectionId: '' }, 'pepperstone-demo', distinctAccounts)).toBe(true);
-    expect(riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, null, distinctAccounts)).toBe(true);
-    expect(riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, 'pepperstone-demo', [])).toBe(true);
-    expect(riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, 'pepperstone-demo', [
-      { id: 'old-ctrader', logicalAccountKey: null },
-      { id: 'pepperstone-demo', logicalAccountKey: 'new-account-key' },
-    ])).toBe(true);
+    expect(
+      riskSuspensionMatchesBroker({}, 'pepperstone-demo', distinctAccounts),
+    ).toBe(true);
+    expect(
+      riskSuspensionMatchesBroker({ brokerConnectionId: null }, 'pepperstone-demo', distinctAccounts),
+    ).toBe(true);
+    expect(
+      riskSuspensionMatchesBroker({ brokerConnectionId: '' }, 'pepperstone-demo', distinctAccounts),
+    ).toBe(true);
+    expect(
+      riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, null, distinctAccounts),
+    ).toBe(true);
+    expect(
+      riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, 'pepperstone-demo', []),
+    ).toBe(true);
+    expect(
+      riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, 'pepperstone-demo', [
+        { id: 'old-ctrader', logicalAccountKey: null },
+        { id: 'pepperstone-demo', logicalAccountKey: 'new-account-key' },
+      ]),
+    ).toBe(true);
   });
 });
 
