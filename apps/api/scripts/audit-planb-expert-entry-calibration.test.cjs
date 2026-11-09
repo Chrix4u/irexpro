@@ -61,6 +61,33 @@ test('source analysis keeps day, route and exploratory score cohorts separate',(
   assert.throws(()=>analyze([...rows,rows[0]],'2026-11-09T12:00:00Z'),
     /DUPLICATE_BROKER_TRADE/);
 });
+test('shows gross winners lost to costs without overstating after-fee results',()=>{
+  const rows=[
+    DATA({id:'fee-flip',gross:'1',commission:'-2',expertOpportunity:'0.38',expertState:'ABSTAIN'}),
+    DATA({id:'actual-net-win',openedAt:'2026-11-09T09:02:00Z',
+      intentAt:'2026-11-09T09:01:55Z',decisionAt:'2026-11-09T09:01:51Z',
+      gross:'5',commission:'-1',expertOpportunity:'0.38',expertState:'CONFIRM',
+      priorLossAt:null}),
+    DATA({id:'missing-commission',openedAt:'2026-11-09T09:22:00Z',
+      intentAt:'2026-11-09T09:21:55Z',decisionAt:'2026-11-09T09:21:50Z',
+      gross:'7',commission:null,priorLossAt:null}),
+  ];
+  const report=analyze(rows,'2026-11-09T12:00:00Z');
+  assert.equal(report.total.records,3);
+  assert.equal(report.total.priced,2);
+  assert.equal(report.total.unpriced,1);
+  assert.equal(report.total.grossWins,2);
+  assert.equal(report.total.netWins,1);
+  assert.equal(report.total.grossPositiveNetNonpositive,1);
+  assert.equal(report.total.grossWinFraction,1);
+  assert.equal(report.total.netWinFraction,0.5);
+  assert.equal(report.total.netEUR,3);
+  assert.equal(report.byRoute.TREND_CONTINUATION.grossPositiveNetNonpositive,1);
+  assert.equal(report.byExpertState['ABSTAIN/EXPLORATORY_HIGH'].netEUR,-1);
+  assert.equal(report.byExpertState['CONFIRM/EXPLORATORY_HIGH'].netEUR,4);
+  assert.equal(report.modifiesExecution,false);
+  assert.equal(report.total.forwardQualified,false);
+});
 test('scope SQL and transaction guarantee read-only cTrader DEMO and as-of join',async()=>{
   assert.match(OWNER_SQL,/user_id=\$2/);
   assert.match(OWNER_SQL,/account_type='DEMO'/);
