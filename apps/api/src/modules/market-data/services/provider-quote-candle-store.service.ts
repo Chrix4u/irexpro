@@ -414,18 +414,27 @@ export class ProviderQuoteCandleStoreService {
     const bucketMinutes = TIMEFRAME_MINUTES[normalized];
     if (!bucketMinutes) return [];
 
-    // cTrader warms M5/M15/H1/H4 directly. Prefer those provider-native bars
-    // when present so legitimate no-tick M1 gaps do not make higher-timeframe
-    // feature context stale or force us to fabricate aggregate broker evidence.
+    // Prefer native higher-timeframe bars. For M5/M15 only, when the last
+    // direct close is over one full timeframe old, check whether complete,
+    // provider-confirmed native M1 history can fill newer CLOSED buckets.
+    // Never synthesize missing M1 bars or use live quote-only snapshots.
+    let direct: ProviderQuoteCandle[] = [];
     if (['M5', 'M15', 'H1', 'H4'].includes(normalized)) {
-      const direct = await this.getStoredCandles(
+      direct = await this.getStoredCandles(
         connectionId,
         instrument,
         normalized,
         count,
         evaluatedAt,
       );
-      if (direct.length > 0) return direct;
+      if (direct.length > 0) {
+        if (normalized !== 'M5' && normalized !== 'M15') return direct;
+        const latestDirect = new Date(direct[direct.length - 1]!.timestamp).getTime();
+        const directCloseAgeMs = evaluatedAt.getTime() - latestDirect - bucketMinutes * 60_000;
+        if (!Number.isFinite(directCloseAgeMs) || directCloseAgeMs <= bucketMinutes * 60_000) {
+          return direct;
+        }
+      }
     }
 
     const m1 = await this.getM1Candles(
@@ -456,6 +465,25 @@ export class ProviderQuoteCandleStoreService {
         (candle, index) => new Date(candle.timestamp).getTime() === bucketStart + index * 60_000,
       );
       if (!contiguous) continue;
+      if (direct.length > 0) {
+        // A direct-history gap must never be patched with unverified midpoint
+        // ticks: only complete cTrader historical M1 bars (full-minute
+        // first/last sample provenance) may extend the native context.
+        const confirmedHistoricalM1 = ordered.every((row, index) => {
+          const evidence = row as ProviderQuoteCandle;
+          const barOpen = bucketStart + index * 60_000;
+          const first = new Date(evidence.firstSampleAt).getTime();
+          const last = new Date(evidence.lastSampleAt).getTime();
+          return (
+            evidence.source === 'ctrader-broker-native' &&
+            Number.isFinite(first) &&
+            Number.isFinite(last) &&
+            first <= barOpen &&
+            last >= barOpen + 59_000
+          );
+        });
+        if (!confirmedHistoricalM1) continue;
+      }
       const highs = ordered.map((x) => Number(x.high));
       const lows = ordered.map((x) => Number(x.low));
       if (highs.some((x) => !Number.isFinite(x)) || lows.some((x) => !Number.isFinite(x))) {
@@ -473,7 +501,23 @@ export class ProviderQuoteCandleStoreService {
       });
     }
 
-    return aggregated.slice(-count);
+    if (direct.length === 0) return aggregated.slice(-count);
+    const latestDirectTime = new Date(direct[direct.length - 1]!.timestamp).getTime();
+    const possibleNewer = aggregated.filter(
+      (candle) => new Date(candle.timestamp).getTime() > latestDirectTime,
+    );
+    const confirmedNewer: OHLCV[] = [];
+    let expectedOpenTime = latestDirectTime + bucketMinutes * 60_000;
+    for (const candle of possibleNewer) {
+      const openedAt = new Date(candle.timestamp).getTime();
+      // Never leap across an unobserved M5/M15 interval.
+      if (openedAt !== expectedOpenTime) break;
+      confirmedNewer.push(candle);
+      expectedOpenTime += bucketMinutes * 60_000;
+    }
+    // Retain the original native series when there is no complete, verified
+    // newer M1 bucket. The caller's existing freshness veto still applies.
+    return confirmedNewer.length > 0 ? [...direct, ...confirmedNewer].slice(-count) : direct;
   }
 
   async countM1Candles(connectionId: string, instrument: string): Promise<number> {

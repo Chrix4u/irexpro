@@ -159,4 +159,169 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
     expect(direct).toHaveBeenCalledWith('ctrader-1', 'EURUSD', 'H4', 30, EVALUATED_AT);
     expect(m1).not.toHaveBeenCalled();
   });
+
+  function brokerM1(openTime: string, source = 'ctrader-broker-native') {
+    const timestamp = new Date(openTime);
+    return {
+      timestamp,
+      open: '1.10000',
+      high: '1.10020',
+      low: '1.09980',
+      close: '1.10010',
+      volume: '20',
+      tickVolume: '20',
+      source,
+      sampleCount: 20,
+      spreadClose: null,
+      firstSampleAt: new Date(timestamp),
+      lastSampleAt: new Date(timestamp.getTime() + 59_000),
+    };
+  }
+
+  function nativeContext(openTime: string) {
+    const timestamp = new Date(openTime);
+    return {
+      timestamp,
+      open: '1.09950',
+      high: '1.10000',
+      low: '1.09900',
+      close: '1.09980',
+      volume: '100',
+      tickVolume: '100',
+      source: 'ctrader-broker-native',
+      sampleCount: 100,
+      spreadClose: null,
+      firstSampleAt: timestamp,
+      lastSampleAt: new Date(timestamp.getTime() + 5 * 60_000 - 1000),
+    };
+  }
+
+  it('recovers a delayed native M5 close only from complete confirmed cTrader M1 history', async () => {
+    const service = new ProviderQuoteCandleStoreService({
+      query: jest.fn(),
+    } as unknown as DataSource);
+    const original = nativeContext('2026-11-09T00:35:00.000Z');
+    jest.spyOn(service, 'getStoredCandles').mockResolvedValue([original]);
+    const m1 = jest
+      .spyOn(service, 'getM1Candles')
+      .mockResolvedValue(
+        Array.from({ length: 5 }, (_, i) => brokerM1(`2026-11-09T00:${40 + i}:00.000Z`)),
+      );
+    const evaluatedAt = new Date('2026-11-09T00:51:00.000Z');
+
+    const recovered = await service.getCandles('ctrader-1', 'USDJPY', 'M5', 30, evaluatedAt);
+    expect(m1).toHaveBeenCalled();
+    expect(recovered).toHaveLength(2);
+    expect(recovered[0]).toBe(original);
+    expect(recovered[1]).toMatchObject({
+      timestamp: new Date('2026-11-09T00:40:00.000Z'),
+      open: '1.10000',
+      high: '1.1002000000',
+      low: '1.0998000000',
+      close: '1.10010',
+    });
+  });
+
+  it('does not construct missing native M5 history from a gap or quote-only M1 data', async () => {
+    const service = new ProviderQuoteCandleStoreService({
+      query: jest.fn(),
+    } as unknown as DataSource);
+    const original = nativeContext('2026-11-09T00:35:00.000Z');
+    jest.spyOn(service, 'getStoredCandles').mockResolvedValue([original]);
+    const m1 = jest.spyOn(service, 'getM1Candles');
+    const time = new Date('2026-11-09T00:51:00.000Z');
+    const complete = Array.from({ length: 5 }, (_, i) =>
+      brokerM1(`2026-11-09T00:${40 + i}:00.000Z`),
+    );
+
+    m1.mockResolvedValue(complete.filter((_, i) => i !== 2));
+    await expect(service.getCandles('ctrader-1', 'USDJPY', 'M5', 30, time)).resolves.toEqual([
+      original,
+    ]);
+
+    m1.mockResolvedValue(
+      complete.map((row, i) => (i === 2 ? { ...row, source: 'metaapi-rpc-sampled' } : row)),
+    );
+    await expect(service.getCandles('ctrader-1', 'USDJPY', 'M5', 30, time)).resolves.toEqual([
+      original,
+    ]);
+
+    m1.mockResolvedValue(
+      complete.map((row, i) =>
+        i === 2 ? { ...row, lastSampleAt: new Date(row.timestamp.getTime() + 12_000) } : row,
+      ),
+    );
+    await expect(service.getCandles('ctrader-1', 'USDJPY', 'M5', 30, time)).resolves.toEqual([
+      original,
+    ]);
+  });
+
+  it('does not leap over missing native five-minute buckets to a later recovered bar', async () => {
+    const service = new ProviderQuoteCandleStoreService({
+      query: jest.fn(),
+    } as unknown as DataSource);
+    const original = nativeContext('2026-11-09T00:25:00.000Z');
+    jest.spyOn(service, 'getStoredCandles').mockResolvedValue([original]);
+    jest
+      .spyOn(service, 'getM1Candles')
+      .mockResolvedValue(
+        Array.from({ length: 5 }, (_, i) => brokerM1(`2026-11-09T00:${40 + i}:00.000Z`)),
+      );
+    await expect(
+      service.getCandles('ctrader-1', 'USDJPY', 'M5', 30, new Date('2026-11-09T00:51:00.000Z')),
+    ).resolves.toEqual([original]);
+  });
+
+  it('does not expose a still-forming M5 candle when direct context is stale', async () => {
+    const service = new ProviderQuoteCandleStoreService({
+      query: jest.fn(),
+    } as unknown as DataSource);
+    const original = nativeContext('2026-11-09T00:25:00.000Z');
+    jest.spyOn(service, 'getStoredCandles').mockResolvedValue([original]);
+    jest
+      .spyOn(service, 'getM1Candles')
+      .mockResolvedValue(
+        Array.from({ length: 5 }, (_, i) => brokerM1(`2026-11-09T00:${40 + i}:00.000Z`)),
+      );
+    await expect(
+      service.getCandles('ctrader-1', 'USDJPY', 'M5', 30, new Date('2026-11-09T00:43:00.000Z')),
+    ).resolves.toEqual([original]);
+  });
+
+  it('keeps fresh directly stored M5 bars without requesting redundant M1 history', async () => {
+    const service = new ProviderQuoteCandleStoreService({
+      query: jest.fn(),
+    } as unknown as DataSource);
+    const original = nativeContext('2026-11-09T00:40:00.000Z');
+    jest.spyOn(service, 'getStoredCandles').mockResolvedValue([original]);
+    const m1 = jest.spyOn(service, 'getM1Candles');
+    await expect(
+      service.getCandles('ctrader-1', 'USDJPY', 'M5', 30, new Date('2026-11-09T00:48:00.000Z')),
+    ).resolves.toEqual([original]);
+    expect(m1).not.toHaveBeenCalled();
+  });
+
+  it('applies the same fully completed M1 provenance rules to delayed M15', async () => {
+    const service = new ProviderQuoteCandleStoreService({
+      query: jest.fn(),
+    } as unknown as DataSource);
+    const original = nativeContext('2026-11-09T00:00:00.000Z');
+    jest.spyOn(service, 'getStoredCandles').mockResolvedValue([original]);
+    jest
+      .spyOn(service, 'getM1Candles')
+      .mockResolvedValue(
+        Array.from({ length: 15 }, (_, i) =>
+          brokerM1(`2026-11-09T00:${String(15 + i).padStart(2, '0')}:00.000Z`),
+        ),
+      );
+    const result = await service.getCandles(
+      'ctrader-1',
+      'USDJPY',
+      'M15',
+      30,
+      new Date('2026-11-09T00:50:00.000Z'),
+    );
+    expect(result).toHaveLength(2);
+    expect(result[1]!.timestamp).toEqual(new Date('2026-11-09T00:15:00.000Z'));
+  });
 });
