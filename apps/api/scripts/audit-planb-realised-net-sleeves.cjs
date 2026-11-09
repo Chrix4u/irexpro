@@ -148,8 +148,32 @@ async function runAudit({client,userId,connectionId}){
     const result=(await client.query(REALIZED_SQL,
       [userId,connectionId,start.toISOString(),snapshot.toISOString(),MAX_TRADES+1])).rows;
     if(result.length>MAX_TRADES)throw Error('TRADE_HISTORY_TRUNCATED');
-    const report=analyze(result,snapshot);
+    // A CLOSED broker trade can still have an incomplete P&L/fee
+    // reconciliation. NEVER treat that missing value as zero profit or loss.
+    // Include an explicit coverage deficit while excluding only those rows
+    // from numeric net calculations.
+    const unpriced=result.filter(row =>
+      toAmount(row.gross)===null || toAmount(row.commission)===null);
+    const priced=result.filter(row =>
+      toAmount(row.gross)!==null && toAmount(row.commission)!==null);
+    const report=analyze(priced,snapshot);
+    const missingBySleeve={};
+    for(const row of unpriced) {
+      const key=[row.instrument,row.direction,row.route||'UNKNOWN'].join('/');
+      missingBySleeve[key]=(missingBySleeve[key]||0)+1;
+    }
+    report.dataQuality={
+      queriedClosedTrades:result.length,
+      pricedClosedTrades:priced.length,
+      unpricedClosedTrades:unpriced.length,
+      unpricedBySleeve:missingBySleeve,
+      afterCostTotalComplete:unpriced.length===0,
+    };
+    if(unpriced.length)report.limitations.push(
+      'The reported realized net excludes closed broker trades with incomplete gross or commission. Total realized P&L is therefore PARTIAL.',
+    );
     await client.query('COMMIT');
+
     return report;
   } catch(e) {await client.query('ROLLBACK');throw e}
 }
