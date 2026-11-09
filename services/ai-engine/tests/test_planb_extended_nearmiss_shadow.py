@@ -47,7 +47,7 @@ def example(
         "first_target_close_at": (t + timedelta(minutes=21)).isoformat(),
         "first_stop_close_at": None,
         "first_possible_mid_stop_at": None,
-        "last_observed_m1_bar_at": (t + timedelta(minutes=25)).isoformat(),
+        "last_observed_m1_quote_at": (t + timedelta(minutes=25)).isoformat(),
         "aligned_m5": 1,
         "aligned_m15": 1,
         "aligned_h1": -0.33481167,
@@ -159,6 +159,15 @@ def test_same_minute_midpoint_stop_touch_never_counts_as_certain_target_first() 
     report = build_report(pd.DataFrame([row]), inspect_at="2026-11-09T08:02:00Z")
     assert report["inspection"]["target_before_stop_quote_close"] is False
     assert report["overall"]["target_before_stop_quote_closes"] == 0
+    assert report["execution_allowed"] is False
+
+
+def test_complete_60_minute_window_requires_sample_time_not_bucket_open() -> None:
+    row = example()
+    row["last_observed_m1_quote_at"] = "2026-11-09T09:02:59.000Z"
+    report = build_report(pd.DataFrame([row]), inspect_at="2026-11-09T08:02:00Z")
+    assert report["inspection"]["full_60_minute_observation"] is True
+    assert report["inspection"]["observed_m1_quote_at"] == "2026-11-09T09:02:59+00:00"
     assert report["execution_allowed"] is False
 
 
