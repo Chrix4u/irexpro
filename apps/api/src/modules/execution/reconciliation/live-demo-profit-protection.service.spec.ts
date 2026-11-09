@@ -2,6 +2,8 @@ import { DataSource } from 'typeorm';
 import {
   LiveDemoProfitProtectionService,
   evaluateLiveDemoAdverseProtection,
+  evaluateContinuationRecoveryGrace,
+  CONTINUATION_RECOVERY_GRACE_MINUTES,
   evaluateLiveDemoProfitLockTrendRecheck,
   evaluateLiveDemoThesisProtection,
 } from './live-demo-profit-protection.service';
@@ -45,10 +47,12 @@ describe('LiveDemoProfitProtectionService', () => {
     auditService?: AuditService,
     feeRows: Array<Record<string, unknown>> = [],
     patienceRows: Array<Record<string, unknown>> = [],
+    recoveryRows: Array<Record<string, unknown>> = [],
   ) {
     const query = jest.fn().mockImplementation(async (sql: string) => {
       if (sql.includes('past_fees')) return feeRows;
       if (sql.includes('AS same_side_continuation_at')) return patienceRows;
+      if (sql.includes('AS aligned_m5')) return recoveryRows;
       if (sql.includes('FROM trading.trades t')) return rows;
       if (sql.includes('FROM trading.m1_tactical_decisions')) return thesisRows;
       if (sql.includes('FROM market_data.provider_quote_candles')) return m1Rows;
@@ -67,7 +71,7 @@ describe('LiveDemoProfitProtectionService', () => {
             lotSize: '0.20',
             openPrice: '1.11300',
             currentPrice,
-            stopLoss: '1.11250',
+            stopLoss: String(rows[0]?.stop_loss ?? '1.11250'),
             takeProfit: '1.11380',
             unrealisedPnl: currentPnl,
             openedAt: new Date('2026-10-28T08:55:00.000Z'),
@@ -680,6 +684,110 @@ describe('LiveDemoProfitProtectionService', () => {
     );
   });
 
+  it('defers the 08:51 EURUSD BUY only if the latest two broker-native M1 minutes are truly quoted', async () => {
+    const observedAt = new Date('2026-11-09T08:51:05.000Z');
+    const candles = [
+      {
+        bucket_time: new Date('2026-11-09T08:50:00Z'),
+        open: '1.11863',
+        high: '1.11863',
+        low: '1.11848',
+        close: '1.11851',
+        sample_count: 21,
+        positive_quote_sample_count: 21,
+        last_quote_sample_at: new Date('2026-11-09T08:50:58Z'),
+        source: 'ctrader-broker-native',
+      },
+      {
+        bucket_time: new Date('2026-11-09T08:49:00Z'),
+        open: '1.11868',
+        high: '1.11872',
+        low: '1.11866',
+        close: '1.11866',
+        sample_count: 16,
+        positive_quote_sample_count: 16,
+        last_quote_sample_at: new Date('2026-11-09T08:49:59Z'),
+        source: 'ctrader-broker-native',
+      },
+      {
+        bucket_time: new Date('2026-11-09T08:48:00Z'),
+        open: '1.11881',
+        high: '1.11892',
+        low: '1.11869',
+        close: '1.11870',
+        sample_count: 25,
+        positive_quote_sample_count: 25,
+        last_quote_sample_at: new Date('2026-11-09T08:48:59Z'),
+        source: 'ctrader-broker-native',
+      },
+    ];
+    const buy = candidate({
+      opened_at: new Date('2026-11-09T08:48:29.000Z'),
+      stop_loss: '1.11827',
+      max_favorable_pnl: '0',
+      max_adverse_pnl: '-5.00',
+      initial_risk_pnl: '8',
+      is_m1_strategy: true,
+      strategy_route: 'TREND_CONTINUATION',
+    });
+    const aligned = [
+      { created_at: new Date('2026-11-09T08:50:29Z'), aligned_m5: '1', aligned_m15: '1' },
+    ];
+    const h = harness([buy], '-4.96', 'DEMO', candles, '1.11851', [], undefined, [], [], aligned);
+    await h.service.runOnce(observedAt);
+    expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+    expect(h.query).toHaveBeenCalledWith(expect.stringContaining('AS aligned_m5'), [
+      'user-1',
+      'conn-1',
+      'EURUSD',
+      'BUY',
+      observedAt.toISOString(),
+    ]);
+    // Grace is tied to opened_at, not renewed by subsequent scheduler scans.
+    // Recheck using a NEW harness with later fully completed broker-native
+    // M1 bars; never inject future data into the first evaluation.
+    const laterCandles = [
+      {
+        ...candles[0],
+        bucket_time: new Date('2026-11-09T08:52:00Z'),
+        open: '1.11863',
+        high: '1.11864',
+        low: '1.11848',
+        close: '1.11851',
+        last_quote_sample_at: new Date('2026-11-09T08:52:58Z'),
+      },
+      {
+        ...candles[1],
+        bucket_time: new Date('2026-11-09T08:51:00Z'),
+        open: '1.11865',
+        high: '1.11865',
+        low: '1.11853',
+        close: '1.11855',
+        last_quote_sample_at: new Date('2026-11-09T08:51:58Z'),
+      },
+      candles[0],
+    ];
+    const hLater = harness(
+      [buy],
+      '-4.96',
+      'DEMO',
+      laterCandles,
+      '1.11851',
+      [],
+      undefined,
+      [],
+      [],
+      aligned,
+    );
+    await hLater.service.runOnce(new Date('2026-11-09T08:53:01Z'));
+    expect(hLater.executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      'user-1',
+      TradeCloseReason.AI_CLOSE_SIGNAL,
+      { source: 'BROKER_ADVERSE_PROTECTION', reasonCode: 'ADVERSE_THESIS_FAILED' },
+    );
+  });
+
   it('never applies automatic profit protection to a real-money LIVE connection', async () => {
     const h = harness([candidate()], '7.00', 'LIVE');
 
@@ -690,6 +798,86 @@ describe('LiveDemoProfitProtectionService', () => {
       expect.stringContaining('UPDATE trading.trades'),
       expect.anything(),
     );
+  });
+});
+
+describe('bounded M1 continuation recovery grace', () => {
+  const observedAt = new Date('2026-11-09T08:51:05.000Z');
+  const base = {
+    tradeDirection: 'BUY' as const,
+    strategyRoute: 'TREND_CONTINUATION',
+    elapsedMinutes: 2.6,
+    currentR: -0.62,
+    adverseReason: 'ADVERSE_THESIS_FAILED' as const,
+    m1Evidence: {
+      completedBars: 3,
+      adverseBars: 3,
+      alignedLatestBodyPressure: -0.84,
+      alignedMomentum3: -0.47,
+      latestAgeSeconds: 5,
+      liveQuoteBars: 3,
+      consecutiveLiveQuoteBars: 3,
+    },
+    m5Aligned: 1,
+    m15Aligned: 1,
+    alignmentObservedAt: new Date('2026-11-09T08:50:29.000Z'),
+    observedAt,
+    authoritativeStop: 1.11827,
+    brokerStop: 1.11827,
+    currentPrice: 1.11851,
+  };
+
+  it('gives a fixed, non-renewing recovery check to the losing EURUSD continuation example', () => {
+    expect(evaluateContinuationRecoveryGrace(base)).toBe(true);
+    expect(
+      evaluateContinuationRecoveryGrace({
+        ...base,
+        elapsedMinutes: CONTINUATION_RECOVERY_GRACE_MINUTES,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    { currentR: -0.65 },
+    { currentR: -0.8 },
+    { adverseReason: 'EMERGENCY_ADVERSE_CUT' as const },
+    { strategyRoute: 'CONFIRMED_REVERSAL' },
+    { strategyRoute: 'EARLY_TRANSITION' },
+    { m5Aligned: -1 },
+    { m15Aligned: 0 },
+    { m5Aligned: null },
+    { alignmentObservedAt: new Date('2026-11-09T08:47:00Z') },
+    { alignmentObservedAt: new Date('2026-11-09T08:51:06Z') },
+    { authoritativeStop: 1.11852 },
+    { brokerStop: null },
+    { brokerStop: 1.1195 },
+    { currentPrice: 1.1182 },
+    { m1Evidence: null },
+    { m1Evidence: { ...base.m1Evidence, consecutiveLiveQuoteBars: 1 } },
+    { m1Evidence: { ...base.m1Evidence, latestAgeSeconds: 120 } },
+  ])('does not defer a protective close without complete safe evidence: %p', (override) => {
+    expect(evaluateContinuationRecoveryGrace({ ...base, ...override })).toBe(false);
+  });
+
+  it('works identically for SELL without weakening the stop direction', () => {
+    expect(
+      evaluateContinuationRecoveryGrace({
+        ...base,
+        tradeDirection: 'SELL',
+        currentPrice: 1.11851,
+        authoritativeStop: 1.1188,
+        brokerStop: 1.1188,
+      }),
+    ).toBe(true);
+    expect(
+      evaluateContinuationRecoveryGrace({
+        ...base,
+        tradeDirection: 'SELL',
+        currentPrice: 1.11885,
+        authoritativeStop: 1.1188,
+        brokerStop: 1.1188,
+      }),
+    ).toBe(false);
   });
 });
 
