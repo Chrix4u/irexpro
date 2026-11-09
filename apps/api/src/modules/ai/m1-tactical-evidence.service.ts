@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1 } from './demo-focused-instruments';
+import { DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2 } from './demo-focused-instruments';
 import {
   toDemoFocusedEntryDiagnostic,
   type DemoFocusedEntryDiagnostic,
@@ -593,7 +593,7 @@ export class M1TacticalEvidenceService {
           FROM top_planb_reasons
         ), '[]'::jsonb) AS leading_planb_reasons
       `,
-      [userId, [...DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1]],
+      [userId, [...DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2]],
     )) as DemoFocusedEntryDiagnosticRow[];
     return toDemoFocusedEntryDiagnostic(rows[0]);
   }

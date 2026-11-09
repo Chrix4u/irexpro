@@ -4,7 +4,7 @@ import type { OHLCV } from '../../broker/interfaces/broker-adapter.interface';
 import { BrokerService } from '../../broker/broker.service';
 import { BrokerConnectionStatus } from '../../broker/interfaces/broker-adapter.interface';
 import { CTRADER_FAMILY_BROKER_IDS } from '../../broker/registry/broker-catalog';
-import { DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1 } from '../../ai/demo-focused-instruments';
+import { DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2 } from '../../ai/demo-focused-instruments';
 import { isFxWeeklySessionOpen } from '../utils/fx-weekly-session';
 import { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.service';
 
@@ -249,19 +249,19 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     const instruments = this.instruments();
     if (instruments.length === 0) return;
     const focused = instruments.filter((instrument) =>
-      DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1.includes(instrument),
+      DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2.includes(instrument),
     );
     const research = instruments.filter(
-      (instrument) => !DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1.includes(instrument),
+      (instrument) => !DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2.includes(instrument),
     );
-    // Only the exact 3+3 six-pair scanner is optimized. All other
+    // Historical 3+3 focus uses a separate prioritized cadence. With all six
     // configurations retain the original round-robin behavior.
     const prioritize = focused.length === 3 && research.length === 3;
     const groupCycle = this.historyCycleCount++;
-    // Three cycles favor focused entry pairs, one cycle refreshes all three
-    // research-only pairs. Historical M1 broker backfill preserves full minute
-    // bars; the independent live bid/ask loop still covers *all six* every
-    // second. Never suppress a broker quote or synthesize missing bars.
+    // The active six-pair DEMO policy uses the equal-turn round-robin path.
+    // Historical 3+3 prioritized scans are kept for reproducible research.
+    // The independent live bid/ask loop still covers all six every second.
+    // Never suppress a broker quote or synthesize missing bars.
     const m1Instruments = prioritize ? (groupCycle % 4 === 3 ? research : focused) : instruments;
     const m1Count = Math.min(M1_REQUESTS_PER_CYCLE, m1Instruments.length);
     const m1Batch = Array.from(
@@ -273,10 +273,8 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     this.m1RotationOffset = (this.m1RotationOffset + m1Count) % m1Instruments.length;
 
     // Keep the same three M1 + one context historical calls per cycle. The
-    // existing H1/M5/M15/H4 rotation is untouched. Every fourth request
-    // *for a given timeframe* goes to research-only, with independent
-    // round-robin cursors: M5/M15 research bars stay under their strict
-    // 10/20-minute freshness windows on the 15-second six-pair deployment.
+    // H1/M5/M15/H4 rotation is untouched. Under V2 all six pairs share
+    // fair turn-taking; M5/M15 must still satisfy strict freshness limits.
     const timeframe =
       CONTEXT_REFRESH_ROTATION[this.contextRotationOffset % CONTEXT_REFRESH_ROTATION.length]!;
     this.contextRotationOffset = (this.contextRotationOffset + 1) % CONTEXT_REFRESH_ROTATION.length;

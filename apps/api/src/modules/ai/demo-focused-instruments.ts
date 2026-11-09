@@ -2,10 +2,9 @@
  * DEMO-only M1 promoted model entry scope, justified by the 2026-11-05
  * completed broker FULL_AUTO DEMO trade audit. Every pair had negative
  * AFTER-COST net P&L; these three are a controlled trial, not winners.
- * The other three stay under research until independent evidence improves.
- *
- * Use this same immutable list at both scheduler and the central signal
- * orchestrator boundary so a delayed/replayed signal cannot bypass it.
+ * Historical V1 policy only: retained to allow faithful replay and rollback.
+ * The operator-requested six-pair DEMO restoration is the separately
+ * versioned V2 list below; neither list grants LIVE or PAPER authority.
  */
 export const DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1: readonly string[] = Object.freeze([
   'AUDUSD',
@@ -13,7 +12,27 @@ export const DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1: readonly string[] = Object.freez
   'EURUSD',
 ]);
 
-/** An exact symbol match is required; suffix aliases never acquire authority. */
+/**
+ * 2026-11-09 DEMO-only restoration of the original six major instruments.
+ * The entry allowlist is not an execution shortcut: Plan B, M1 timing, OOD,
+ * news, broker authorization, risk engine, margin and stops remain mandatory.
+ * Historical after-fee sleeves are negative; review outcomes before promotion.
+ */
+export const DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2: readonly string[] = Object.freeze([
+  'AUDUSD',
+  'GBPUSD',
+  'EURUSD',
+  'USDCAD',
+  'USDCHF',
+  'USDJPY',
+]);
+
+/** The historic focused-three scope remains available for precise rollback. */
 export function isFocusedDemoEntryInstrument(instrument: string): boolean {
   return DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1.includes(instrument);
+}
+
+/** Exact-symbol DEMO entry scope; suffix aliases never gain authority. */
+export function isRestoredDemoEntryInstrument(instrument: string): boolean {
+  return DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2.includes(instrument);
 }
