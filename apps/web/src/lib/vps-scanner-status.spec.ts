@@ -1372,6 +1372,70 @@ describe("active multi-model execution presentation", () => {
     );
   });
 
+  it("explains a trend-extended SELL abstention as higher-timeframe opposition, not ordinary waiting", () => {
+    const rejected = JSON.parse(JSON.stringify(status));
+    rejected.latestDecision.instrument = "EURUSD";
+    rejected.latestDecision.direction = "SELL";
+    rejected.latestDecision.route = "ABSTAIN";
+    rejected.latestDecision.m1TimingRoute = "ABSTAIN";
+    rejected.latestDecision.m1TimingReason = "HIGHER_TIMEFRAME_CONFLICT";
+    rejected.latestDecision.primaryConfidence = 0.64;
+    rejected.latestDecision.planBRegime = "TREND_EXTENDED";
+    rejected.latestDecision.planBRegimeAllowed = false;
+    rejected.latestDecision.planBPaperAdmitted = false;
+    rejected.latestDecision.executionAuthority = "NONE";
+    rejected.latestDecision.multimodelExecutable = false;
+    rejected.latestDecision.blockers = [
+      "MULTIMODEL_PLAN_B_NOT_ADMITTED",
+      "DRIFT_OUT_OF_DISTRIBUTION",
+      "MULTIMODEL_CONTINUATION_TIMING_NOT_READY",
+    ];
+    rejected.latestDecision.modelDriftDiagnostics = [
+      "emaSeparation:HARD_LOW",
+      "mtfStrength:HARD_LOW",
+    ];
+    const view = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: rejected,
+      fastMarkState: "LIVE",
+    });
+    expect(view.headline).toBe("No qualified strategy route — trade blocked");
+    expect(view.score).toBe(64);
+    expect(view.tradeExpected).toBe(false);
+    expect(view.detail).toContain("extended trend");
+    expect(view.detail).toContain("proposed SELL also conflicts with the higher-timeframe trend");
+    expect(view.secondaryChecks).toContain("Higher-timeframe trend conflicts with proposed SELL");
+    expect(view.detail).toContain("shadow-only research");
+    expect(view.detail).not.toContain("entry timing is not confirmed");
+  });
+
+  it("reports that aligned M1 BUY timing does not qualify an extended Plan-B regime", () => {
+    const rejected = JSON.parse(JSON.stringify(status));
+    rejected.latestDecision.instrument = "EURUSD";
+    rejected.latestDecision.direction = "BUY";
+    rejected.latestDecision.route = "M1_TREND_CONTINUATION";
+    rejected.latestDecision.m1TimingRoute = "M1_TREND_CONTINUATION";
+    rejected.latestDecision.m1TimingReason = "TREND_STRUCTURE_ALIGNED";
+    rejected.latestDecision.planBRegime = "TREND_EXTENDED";
+    rejected.latestDecision.planBRegimeAllowed = false;
+    rejected.latestDecision.planBPaperAdmitted = false;
+    rejected.latestDecision.executionAuthority = "NONE";
+    rejected.latestDecision.multimodelExecutable = false;
+    rejected.latestDecision.blockers = ["MULTIMODEL_PLAN_B_NOT_ADMITTED"];
+    const view = deriveTradeReadinessUiState({
+      automationOn: true,
+      scannerStatus: VALID_STATUS,
+      m1TacticalStatus: rejected,
+      fastMarkState: "LIVE",
+    });
+    expect(view.tradeExpected).toBe(false);
+    expect(view.headline).toBe("No qualified strategy route — trade blocked");
+    expect(view.detail).toContain("M1 BUY entry timing is aligned");
+    expect(view.detail).toContain("extended trend");
+    expect(view.secondaryChecks ?? []).not.toContain("M1 entry timing is not confirmed");
+  });
+
   it("labels Sunday rollover as unqualified rather than claiming shadow costs can block execution", () => {
     const rejected = JSON.parse(JSON.stringify(status));
     rejected.latestDecision.instrument = "GBPUSD";
