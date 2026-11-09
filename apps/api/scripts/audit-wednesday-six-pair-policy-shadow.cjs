@@ -82,8 +82,11 @@ const DECISIONS_SQL = [
   'LEFT JOIN LATERAL (',
   ' SELECT count(*)::int AS bars,min(q.bucket_time) AS first_bar,max(q.bucket_time) AS last_bar,',
   ' min(q.bucket_time) FILTER(WHERE',
-  "   (d.direction='BUY' AND q.low <= (d.candidate->>'stopLoss')::numeric) OR",
-  "   (d.direction='SELL' AND q.high >= (d.candidate->>'stopLoss')::numeric)) AS first_possible_stop,",
+  // Stored M1 OHLC does not retain full bid/ask intraminute extrema.
+  // Pad the price low/high by at least the recorded spread. This may
+  // overcount possible stops, but must never label an uncertain hold safe.
+  "   (d.direction='BUY' AND q.low - greatest(coalesce(q.spread_close,0),q.ask_close-q.bid_close) <= (d.candidate->>'stopLoss')::numeric) OR",
+  "   (d.direction='SELL' AND q.high + greatest(coalesce(q.spread_close,0),q.ask_close-q.bid_close) >= (d.candidate->>'stopLoss')::numeric)) AS first_possible_stop,",
   ' min(q.bucket_time) FILTER(WHERE',
   "   (d.direction='BUY' AND q.high >= (d.candidate->>'takeProfit')::numeric) OR",
   "   (d.direction='SELL' AND q.low <= (d.candidate->>'takeProfit')::numeric)) AS first_possible_target,",
@@ -411,6 +414,8 @@ function analyze(decisions, feeRows, actualRows, since, snapshotAt) {
     },
     provenance: {
       source: 'ctrader-broker-native-quoted-M1',
+      stopTouchConservatism:
+        'quote-side BID/ASK closes plus M1 low/high spread-padded possible touches; intraminute bid/ask extrema unavailable',
       entry: 'first verified broker M1 quote sample after persisted decision (up to 150 sec)',
       future: 'first verified M1 quote at +15 to +18 min from entry reference',
       independentEpisodes:
@@ -428,7 +433,7 @@ function analyze(decisions, feeRows, actualRows, since, snapshotAt) {
     warnings: [
       'This is NOT a re-execution of old model versions under new data; it uses saved decision-time model approvals from their actual policy date.',
       'One non-executed signal is not one brokerage fill or independent trade. Commission-R values are historical estimates, never a promised execution cost.',
-      '15-minute mark-to-market R is reported only if the contiguous broker-native path shows no possible TP or SL touch; such touches are separate upper/lower bound evidence, not orders.',
+      '15-minute mark-to-market R is reported only if the contiguous broker-native path shows no possible TP or spread-padded SL touch; quote-side intraminute bid/ask extrema are unavailable and any uncertain touch is censored, not an order.',
       'Neither policy reconstructs actual broker fills, position overlap, loss brakes, available equity, lot constraints, spread at submit or portfolio drawdown.',
       'Price scenarios from the same day are not independent out-of-sample validation; dates and pair clusters have correlated exposure.',
       'Do not promote any strategy or restore DEMO/LIVE instrument authority from this report.',

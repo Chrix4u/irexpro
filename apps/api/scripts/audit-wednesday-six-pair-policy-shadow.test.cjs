@@ -135,6 +135,16 @@ test('15 minute price proxy uses executable-side ASK for BUY and BID for SELL', 
   assert.equal(y.state, 'NO_BARRIER_TOUCH');
   assert.ok(Math.abs(y.grossR - 0.3) < 1e-9);
 });
+test('SQL pads possible intraminute broker stop touches using quote spread', () => {
+  const { DECISIONS_SQL } = require('./audit-wednesday-six-pair-policy-shadow.cjs');
+  assert.ok(
+    DECISIONS_SQL.includes('q.low - greatest(coalesce(q.spread_close,0),q.ask_close-q.bid_close)'),
+  );
+  assert.ok(
+    DECISIONS_SQL.includes('q.high + greatest(coalesce(q.spread_close,0),q.ask_close-q.bid_close)'),
+  );
+});
+
 test('missing quotes, gaps and quote-before-decision never become winning hypothetical trades', () => {
   for (const change of [
     { entryAt: '2026-11-09T08:02:48Z' },
