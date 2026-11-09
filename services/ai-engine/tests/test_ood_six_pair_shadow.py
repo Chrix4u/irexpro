@@ -2,14 +2,43 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import pytest
-from test_ood_shadow_candidate import example
 
-from app.domain.training.ood_shadow_candidate import SIX_PAIR_RESEARCH_PAIRS
+from app.domain.training.ood_shadow_candidate import (
+    ENVELOPE_NUMERIC_FEATURES,
+    NUMERIC_FEATURES,
+    SIX_PAIR_RESEARCH_PAIRS,
+)
 from app.domain.training.ood_six_pair_shadow import RESEARCH_ARTIFACT, study_from_csv
+
+
+def example() -> dict:
+    decision = datetime(2026, 11, 5, 12, 0, tzinfo=UTC)
+    row = {
+        "instrument": "EURUSD",
+        "route": "M1_TREND_CONTINUATION",
+        "direction": "BUY",
+        "decision_time_utc": decision.isoformat(),
+        "signal_bar_time_utc": (decision - timedelta(minutes=1)).isoformat(),
+        "entry_observed_at_utc": (decision - timedelta(seconds=15)).isoformat(),
+        "future_observed_at_utc": (decision + timedelta(minutes=15, seconds=30)).isoformat(),
+        "diagnostics_json": '["extensionAtr:HARD_HIGH"]',
+        "entry_bid": 1.1000,
+        "entry_ask": 1.1002,
+        "future_bid_15m": 1.1006,
+        "future_ask_15m": 1.1008,
+        "entry_quote_source": "ctrader-broker-native",
+        "future_quote_source": "ctrader-broker-native",
+    }
+    row.update({field: 0.32 for field in NUMERIC_FEATURES})
+    row.update({field: 0.4 for field in ENVELOPE_NUMERIC_FEATURES})
+    row["envelope_rsi14"] = 44.0
+    row["stop_distance"] = 0.001
+    return row
 
 
 def test_all_six_pairs_are_reported_without_fit_or_execution(tmp_path: Path) -> None:
