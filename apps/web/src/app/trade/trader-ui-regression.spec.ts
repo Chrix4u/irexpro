@@ -9,6 +9,15 @@ describe('AI Trader production UI regression contract', () => {
     'utf8',
   );
 
+  it('does not apply a previous broker account drawdown lock to a different connected DEMO account', () => {
+    expect(pageSource).toContain('riskSuspensionMatchesBroker(');
+    expect(pageSource).toContain('endedRiskViolationMatchesBroker &&');
+    expect(pageSource).toContain('terminal?.sessionBroker?.id ??');
+    expect(pageSource).toContain('broker.id === selectedBrokerId');
+    expect(pageSource).toContain('endedRiskResetAvailable');
+    expect(pageSource).not.toContain('setAllocationAmount("50000")');
+  });
+
   it('groups broker selection and allocation into one card and gives AI Trading the second wide card', () => {
     const deck = pageSource.split('className="ai-control-deck"')[1]
       ?.split('className="ai-overview-grid"')[0];
