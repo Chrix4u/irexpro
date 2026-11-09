@@ -28,15 +28,16 @@ def example(
         "plan_b_regime": "TREND_EXTENDED",
         "plan_b_paper_admitted": "false",
         "decision_time_utc": t.isoformat(),
-        "entry_quote_at": (t - timedelta(seconds=3)).isoformat(),
+        "decision_available_at_utc": (t + timedelta(seconds=50)).isoformat(),
+        "entry_quote_at": (t + timedelta(seconds=57)).isoformat(),
         "future_quote_at": (t + timedelta(minutes=15, seconds=58)).isoformat(),
         "entry_quote_source": "ctrader-broker-native",
         "future_quote_source": "ctrader-broker-native",
         "proposed_entry": 1.11728,
         "stop_loss": 1.11678,
         "take_profit": 1.11808,
-        "entry_bid": 1.11728,
-        "entry_ask": 1.11728,
+        "entry_bid": 1.11742,
+        "entry_ask": 1.11742,
         "future_bid": 1.11771,
         "future_ask": 1.11772,
         "decision_spread": 0.000019,
@@ -74,9 +75,10 @@ def test_case_matches_802_missed_buy_without_ever_authorizing_execution() -> Non
     case = report["inspection"]
     assert case is not None
     assert case["entry_signal"] == pytest.approx(1.11728)
-    assert case["conservative_entry_quote_proxy"] == pytest.approx(1.117299)
+    assert case["conservative_entry_quote_proxy"] == pytest.approx(1.117439)
+    assert case["decision_available_at_utc"] == "2026-11-09T08:02:50+00:00"
     assert case["future_bid_quote"] == pytest.approx(1.11771)
-    assert case["fifteen_min_proxy_pips"] == pytest.approx(3.11)
+    assert case["fifteen_min_proxy_pips"] == pytest.approx(1.71)
     assert case["possible_stop_touch_midpoint_only"] is False
     assert case["possible_target_touch_midpoint_only"] is False
     assert case["first_target_bidask_quote_close_at"] == "2026-11-09T08:23:00+00:00"
@@ -106,7 +108,8 @@ def test_sell_uses_bid_entry_and_conservative_future_ask() -> None:
         ("future_quote_source", "metaapi-rpc-sampled"),
         ("path_m1_bars", 12),
         ("decision_spread", -0.0001),
-        ("entry_quote_at", "2026-11-09T08:03:00Z"),
+        ("entry_quote_at", "2026-11-09T08:02:20Z"),
+        ("decision_available_at_utc", "2026-11-09T08:03:59Z"),
         ("future_quote_at", "2026-11-09T08:11:00Z"),
         ("future_bid", 0),
         ("stop_loss", 1.1185),

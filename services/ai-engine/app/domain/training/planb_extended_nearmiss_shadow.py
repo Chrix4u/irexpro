@@ -45,6 +45,7 @@ REQUIRED = (
     "route",
     "plan_b_regime",
     "decision_time_utc",
+    "decision_available_at_utc",
     "entry_quote_at",
     "future_quote_at",
     "entry_quote_source",
@@ -66,6 +67,7 @@ def prepare(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         df[key] = pd.to_numeric(df[key], errors="coerce")
     for key in (
         "decision_time_utc",
+        "decision_available_at_utc",
         "entry_quote_at",
         "future_quote_at",
         "first_target_close_at",
@@ -84,12 +86,15 @@ def prepare(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         & df[list(PRICE_COLUMNS)].notna().all(axis=1)
         & np.isfinite(df[list(PRICE_COLUMNS)].to_numpy(dtype=float)).all(axis=1)
         & df["decision_time_utc"].notna()
+        & df["decision_available_at_utc"].notna()
+        & (df["decision_available_at_utc"] >= df["decision_time_utc"])
+        & (df["decision_available_at_utc"] - df["decision_time_utc"] <= pd.Timedelta(minutes=2))
         & df["entry_quote_at"].notna()
         & df["future_quote_at"].notna()
-        & (df["entry_quote_at"] <= df["decision_time_utc"])
-        & (df["decision_time_utc"] - df["entry_quote_at"] <= pd.Timedelta(minutes=3))
-        & (df["future_quote_at"] >= df["decision_time_utc"] + pd.Timedelta(minutes=15))
-        & (df["future_quote_at"] <= df["decision_time_utc"] + pd.Timedelta(minutes=18))
+        & (df["entry_quote_at"] >= df["decision_available_at_utc"])
+        & (df["entry_quote_at"] - df["decision_available_at_utc"] <= pd.Timedelta(seconds=150))
+        & (df["future_quote_at"] >= df["entry_quote_at"] + pd.Timedelta(minutes=15))
+        & (df["future_quote_at"] <= df["entry_quote_at"] + pd.Timedelta(minutes=18))
         & (df["entry_bid"] > 0)
         & (df["entry_ask"] >= df["entry_bid"])
         & (df["future_bid"] > 0)
@@ -250,6 +255,7 @@ def build_report(
                 "instrument": str(row["instrument"]),
                 "direction": str(row["direction"]),
                 "regime": str(row["plan_b_regime"]),
+                "decision_available_at_utc": row["decision_available_at_utc"].isoformat(),
                 "entry_signal": round(float(row["proposed_entry"]), 5),
                 "conservative_entry_quote_proxy": round(float(row["proxy_entry"]), 6),
                 "future_bid_quote": round(float(row["future_bid"]), 6),
@@ -284,7 +290,7 @@ def build_report(
                 "full_60_minute_observation": bool(
                     pd.notna(row["last_observed_m1_bar_at"])
                     and row["last_observed_m1_bar_at"]
-                    >= row["decision_time_utc"] + pd.Timedelta(minutes=60)
+                    >= row["entry_quote_at"] + pd.Timedelta(minutes=60)
                 ),
             }
     return {
@@ -299,12 +305,15 @@ def build_report(
         "commission_and_swap_verified": False,
         "extra_hypothetical_friction_pips": 1.0,
         "methodology": (
-            "Causal completed cTrader M1 bid/ask quote before decision and observed "
-            "quote >=15min afterward, with recorded execution spread plus 1pip assumed "
+            "First completed cTrader M1 bid/ask quote observed AFTER the model decision "
+            "was durably recorded (not the previous signal candle), and a future quote "
+            ">=15min after that reference, with recorded execution spread plus 1pip assumed "
             "friction. One earliest observation per symbol across sides/regimes every "
             "30min. Fixed horizon is not a fill, stop/TP simulation or broker net P&L."
         ),
         "limitations": (
+            "Broker quote closes following a saved decision are only executable-price "
+            "proxies, not actual synchronous quote/order evidence. "
             "Only short-sample provider quotes, not independent daily folds. "
             "Midpoint OHLC stop/target touches are possible-touch flags only; "
             "first 60-minute bid/ask quote CLOSE crossing is not proof of order "

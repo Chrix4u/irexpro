@@ -2,7 +2,7 @@
 -- Broker-native point-in-time samples, fully separate from execution.
 -- No permissions, orders, broker writes, or trading state modifications.
 WITH decisions AS (
- SELECT d.instrument,d.direction,d.route,d.evaluated_at,d.broker_connection_id,
+ SELECT d.instrument,d.direction,d.route,d.evaluated_at,d.created_at,d.broker_connection_id,
    d.candidate,d.governance->'multimodelEnsemble' plan_b,
    d.governance->'multimodelGovernance' model,
    ROW_NUMBER() OVER (
@@ -27,6 +27,7 @@ WITH decisions AS (
 )
 SELECT d.instrument,d.direction,d.route,
   d.evaluated_at AS decision_time_utc,
+  d.created_at AS decision_available_at_utc,
   d.plan_b->>'regime' AS plan_b_regime,
   d.plan_b->>'paperAdmitted' AS plan_b_paper_admitted,
   (d.candidate->>'entry')::numeric AS proposed_entry,
@@ -56,10 +57,13 @@ JOIN LATERAL (
    AND q.source='ctrader-broker-native'
    AND q.positive_quote_sample_count>0
    AND q.bid_close>0 AND q.ask_close>=q.bid_close
-   AND q.bucket_time>=date_trunc('minute',d.evaluated_at)-interval '2 minutes'
-   AND q.bucket_time<date_trunc('minute',d.evaluated_at)
-   AND q.last_quote_sample_at<=d.evaluated_at
- ORDER BY q.bucket_time DESC LIMIT 1
+   -- A signal's prior candle is not an executable quote. Use the first
+   -- verified broker-close quote AFTER the persisted model decision exists.
+   AND q.bucket_time>=date_trunc('minute',d.created_at)
+   AND q.bucket_time<=date_trunc('minute',d.created_at)+interval '2 minutes'
+   AND q.last_quote_sample_at>=d.created_at
+   AND q.last_quote_sample_at<=d.created_at+interval '150 seconds'
+ ORDER BY q.last_quote_sample_at ASC LIMIT 1
 ) e ON TRUE
 JOIN LATERAL (
  SELECT bid_close,ask_close,last_quote_sample_at FROM market_data.provider_quote_candles q
@@ -67,18 +71,19 @@ JOIN LATERAL (
    AND q.source='ctrader-broker-native'
    AND q.positive_quote_sample_count>0
    AND q.bid_close>0 AND q.ask_close>=q.bid_close
-   AND q.bucket_time>=d.evaluated_at+interval '15 minutes'
-   AND q.bucket_time<=d.evaluated_at+interval '17 minutes'
-   AND q.last_quote_sample_at>=d.evaluated_at+interval '15 minutes'
- ORDER BY q.bucket_time ASC LIMIT 1
+   AND q.bucket_time>=date_trunc('minute',e.last_quote_sample_at+interval '15 minutes')-interval '1 minute'
+   AND q.bucket_time<=date_trunc('minute',e.last_quote_sample_at+interval '18 minutes')
+   AND q.last_quote_sample_at>=e.last_quote_sample_at+interval '15 minutes'
+   AND q.last_quote_sample_at<=e.last_quote_sample_at+interval '18 minutes'
+ ORDER BY q.last_quote_sample_at ASC LIMIT 1
 ) f ON TRUE
 JOIN LATERAL (
  SELECT min(q.low) min_low,max(q.high) max_high,count(*) bar_count
  FROM market_data.provider_quote_candles q
  WHERE q.connection_id=d.broker_connection_id AND q.instrument=d.instrument AND q.timeframe='M1'
    AND q.source='ctrader-broker-native'
-   AND q.bucket_time>=date_trunc('minute',d.evaluated_at)
-   AND q.bucket_time<date_trunc('minute',d.evaluated_at)+interval '15 minutes'
+   AND q.bucket_time>=date_trunc('minute',e.last_quote_sample_at)
+   AND q.bucket_time<date_trunc('minute',e.last_quote_sample_at)+interval '15 minutes'
 ) path ON TRUE
 JOIN LATERAL (
  SELECT
@@ -100,10 +105,10 @@ JOIN LATERAL (
    AND q.timeframe='M1' AND q.source='ctrader-broker-native'
    AND q.positive_quote_sample_count>0 AND q.bid_close>0
    AND q.ask_close>=q.bid_close
-   AND q.bucket_time>=date_trunc('minute',d.evaluated_at)
+   AND q.bucket_time>=date_trunc('minute',e.last_quote_sample_at)
    AND q.bucket_time<=LEAST(
      date_trunc('minute',now())-interval '1 minute',
-     date_trunc('minute',d.evaluated_at)+interval '60 minutes'
+     date_trunc('minute',e.last_quote_sample_at)+interval '60 minutes'
    )
 ) lifecycle ON TRUE
 ORDER BY d.evaluated_at,d.instrument,d.direction;
