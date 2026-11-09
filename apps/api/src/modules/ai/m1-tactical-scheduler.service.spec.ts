@@ -124,6 +124,8 @@ function harness(options: { marketDataErrorFor?: string; warm?: boolean } = {}) 
   const markDriftCounterfactual15m = jest.fn().mockResolvedValue(undefined);
   const loadMatureShadowEpisodeLeaders = jest.fn().mockResolvedValue([]);
   const markShadowOutcome15mV1 = jest.fn().mockResolvedValue(undefined);
+  const loadMatureLowVolRangeLeaders = jest.fn().mockResolvedValue([]);
+  const markLowVolRangeShadowOutcome = jest.fn().mockResolvedValue(undefined);
   const evidence = {
     recordDecision,
     loadRoutePairSideEvidence,
@@ -131,6 +133,8 @@ function harness(options: { marketDataErrorFor?: string; warm?: boolean } = {}) 
     markDriftCounterfactual15m,
     loadMatureShadowEpisodeLeaders,
     markShadowOutcome15mV1,
+    loadMatureLowVolRangeLeaders,
+    markLowVolRangeShadowOutcome,
   } as unknown as M1TacticalEvidenceService;
   const receiveSignal = jest.fn();
   const signal = { receiveSignal } as unknown as AiSignalService;
@@ -146,6 +150,8 @@ function harness(options: { marketDataErrorFor?: string; warm?: boolean } = {}) 
     markDriftCounterfactual15m,
     loadMatureShadowEpisodeLeaders,
     markShadowOutcome15mV1,
+    loadMatureLowVolRangeLeaders,
+    markLowVolRangeShadowOutcome,
     receiveSignal,
   };
 }
@@ -854,6 +860,8 @@ function phase2Harness(
   });
   const loadPendingDriftCounterfactuals = jest.fn().mockResolvedValue([]);
   const markDriftCounterfactual15m = jest.fn().mockResolvedValue(undefined);
+  const loadMatureLowVolRangeLeaders = jest.fn().mockResolvedValue([]);
+  const markLowVolRangeShadowOutcome = jest.fn().mockResolvedValue(undefined);
   const evidence = {
     recordDecision,
     loadRoutePairSideEvidence,
@@ -873,6 +881,8 @@ function phase2Harness(
     loadPriorClosedCommissionRiskR,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
+    loadMatureLowVolRangeLeaders,
+    markLowVolRangeShadowOutcome,
   } as unknown as M1TacticalEvidenceService;
   const receiveSignal = jest.fn(async (candidate: any) => ({
     outcome: options.signalOutcome ?? 'EXECUTION_SUCCEEDED',
@@ -970,6 +980,8 @@ function phase2Harness(
     loadPriorClosedCommissionRiskR,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
+    loadMatureLowVolRangeLeaders,
+    markLowVolRangeShadowOutcome,
     findBySignal,
     trainedExpertEvaluate,
     loadSnapshot: (marketData as any).loadSnapshot as jest.Mock,
@@ -4085,6 +4097,14 @@ describe('M1 V8 multi-model DEMO authority', () => {
             oldRequiredNetR: 0.2,
             modifiesExecution: false,
           }),
+        }),
+        lowVolRangeShadow: expect.objectContaining({
+          artifact: 'low-vol-range-shadow-v1',
+          mode: 'SHADOW_ONLY',
+          grantsExecution: false,
+          modifiesExecution: false,
+          productionEligible: false,
+          executionAuthority: 'NONE',
         }),
       }),
     );

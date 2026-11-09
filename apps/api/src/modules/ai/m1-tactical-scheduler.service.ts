@@ -61,6 +61,8 @@ import { HighConvictionBrokerExpertService } from './high-conviction-broker-expe
 import type { HighConvictionOverlay } from './high-conviction-overlay';
 import { evaluateProductionQualificationShadow } from './production-qualification-shadow';
 import { observeSecondaryPredictedCostFloor } from './secondary-predicted-cost-shadow';
+import { evaluateLowVolRangeShadow, LOW_VOL_RANGE_STOP_ATR } from './low-vol-range-shadow';
+import { evaluateLowVolRangeShadowOutcome } from './low-vol-range-shadow-outcome';
 import {
   evaluateMultimodelDemoAuthority,
   multimodelDemoExecutionVolumeCap,
@@ -850,6 +852,58 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       decisionTime,
       market.m1,
     );
+    await this.settleMatureLowVolRangeShadowEpisodes(
+      userId,
+      brokerConnectionId,
+      instrument,
+      decisionTime,
+      market.m1,
+    );
+  }
+
+  private async settleMatureLowVolRangeShadowEpisodes(
+    userId: string,
+    brokerConnectionId: string,
+    instrument: string,
+    decisionTime: Date,
+    m1Bars: Parameters<typeof evaluateM1CausalOutcome15m>[0]['bars'],
+  ): Promise<void> {
+    let leaders: Awaited<ReturnType<M1TacticalEvidenceService['loadMatureLowVolRangeLeaders']>>;
+    try {
+      leaders = await this.evidence.loadMatureLowVolRangeLeaders({
+        userId,
+        brokerConnectionId,
+        instrument,
+        policyVersion: M1_TACTICAL_POLICY_V2.version,
+        asOf: decisionTime,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Low-vol range research load deferred instrument=${instrument}: ${(error as Error).message}`,
+      );
+      return;
+    }
+    for (const leader of leaders) {
+      const result = evaluateLowVolRangeShadowOutcome({
+        decisionId: leader.id,
+        direction: leader.direction,
+        evaluatedAt: leader.evaluatedAt,
+        asOf: decisionTime,
+        stopDistance: leader.stopDistance,
+        targetDistance: leader.targetDistance,
+        observedExecutionCostR: leader.observedExecutionCostR,
+        hypothesisCohort: leader.hypothesisCohort,
+        completedBrokerM1Bars: m1Bars,
+      });
+      if (!result) continue;
+      try {
+        await this.evidence.markLowVolRangeShadowOutcome(leader.id, result);
+      } catch (error) {
+        this.logger.warn(
+          `Low-vol range research settlement deferred decision=${leader.id}: ${(error as Error).message}`,
+        );
+      }
+    }
   }
 
   private async settleMatureDriftCounterfactuals(
@@ -1759,6 +1813,27 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? observeSecondaryPredictedCostFloor(multimodelDemo.governance.netExpectedR, 0.2)
         : null,
     };
+    // Research sidecar only. Neither candidate nor its later outcome feeds
+    // canExecute, position sizing, model admission, or broker order dispatch.
+    const lowVolRangeShadow = evaluateLowVolRangeShadow({
+      features,
+      direction: candidate.direction,
+      evaluatedAt: decisionTime,
+      eventRisk,
+      spreadEvidenceValid: governance.genericGovernance.executionSpreadEvidenceValid,
+      // Governance normalizes observed broker spread against the original
+      // tactical stop. Rebase to this independent research stop geometry;
+      // otherwise a short range stop would understate actual cost in R.
+      observedExecutionCostR:
+        Number.isFinite(governance.genericGovernance.estimatedExecutionCostR) &&
+        Number.isFinite(candidate.stopDistance) &&
+        candidate.stopDistance > 0 &&
+        Number.isFinite(features.atr14) &&
+        features.atr14 > 0
+          ? (governance.genericGovernance.estimatedExecutionCostR * candidate.stopDistance) /
+            (features.atr14 * LOW_VOL_RANGE_STOP_ATR)
+          : null,
+    });
     const productionQualificationShadow = multimodelDemo
       ? evaluateProductionQualificationShadow({
           candidateDirection: candidate.direction,
@@ -1836,6 +1911,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         demoBrokerCommissionGate: commissionGateAudit,
         productionQualificationShadow,
         secondaryPredictedCostShadow,
+        lowVolRangeShadow,
         multimodelLossStreakBrake: multimodelLossStreakBrake
           ? { ...multimodelLossStreakBrake }
           : null,

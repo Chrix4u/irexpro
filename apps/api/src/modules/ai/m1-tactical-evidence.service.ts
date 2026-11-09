@@ -14,6 +14,11 @@ import type { M1ShadowPairSideOutcome } from './m1-shadow-pair-side-reliability'
 import { m1UsdRiskAtStop } from './m1-tactical-currency-exposure';
 import type { M5EarlyTransitionEvidence } from './m5-early-transition-handoff';
 import { EXTENSION_EXHAUSTION_SHADOW_ARTIFACT } from './extension-exhaustion-shadow';
+import {
+  LOW_VOL_RANGE_EPISODE_MINUTES,
+  LOW_VOL_RANGE_SHADOW_ARTIFACT,
+} from './low-vol-range-shadow';
+import type { LowVolRangeShadowOutcome } from './low-vol-range-shadow-outcome';
 import type { ExtensionExhaustionShadowReliability } from './extension-exhaustion-demo-scout';
 import {
   evaluateM1PortfolioNetLossBrake,
@@ -1749,6 +1754,133 @@ export class M1TacticalEvidenceService {
           AND governance -> 'shadowOutcome15mV1' IS NULL
       `,
       [decisionId, JSON.stringify(payload)],
+    );
+  }
+
+  /**
+   * Research-only fixed UTC-16m cohort. Group the oldest study-eligible event in
+   * each pair/direction/episode before maturity filtering so a later scan
+   * cannot silently replace an episode leader when a time cutoff advances.
+   * No broker order, grant or production model promotion path reads this.
+   */
+  async loadMatureLowVolRangeLeaders(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    policyVersion: string;
+    asOf: Date;
+  }): Promise<
+    Array<{
+      id: string;
+      direction: 'BUY' | 'SELL';
+      evaluatedAt: Date;
+      stopDistance: number;
+      targetDistance: number;
+      observedExecutionCostR: number;
+      hypothesisCohort: 'STABILIZED_ENTRY_HYPOTHESIS' | 'UNSTABLE_MOMENTUM_CONTROL';
+    }>
+  > {
+    const rows = (await this.dataSource.query(
+      `
+        WITH annotated AS (
+          SELECT id, instrument, direction, evaluated_at, governance,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY instrument, direction,
+                     governance -> 'lowVolRangeShadow' ->> 'hypothesisCohort',
+                     FLOOR(EXTRACT(EPOCH FROM evaluated_at) / ${LOW_VOL_RANGE_EPISODE_MINUTES * 60})::bigint
+                   ORDER BY evaluated_at ASC, id ASC
+                 ) AS episode_rank
+          FROM trading.m1_tactical_decisions
+          WHERE user_id = $1
+            AND broker_connection_id = $2
+            AND instrument = $3
+            AND policy_version = $4
+            AND execution_authority = 'NONE'
+            AND governance -> 'lowVolRangeShadow' ->> 'artifact' = $6
+            AND governance -> 'lowVolRangeShadow' ->> 'outcomeStudyEligible' = 'true'
+            AND evaluated_at >= TO_TIMESTAMP(
+              FLOOR(EXTRACT(EPOCH FROM ($5::timestamptz - interval '90 minutes')) / ${LOW_VOL_RANGE_EPISODE_MINUTES * 60})
+              * ${LOW_VOL_RANGE_EPISODE_MINUTES * 60}
+            )
+            AND evaluated_at <= ($5::timestamptz - interval '16 minutes')
+        )
+        SELECT id, direction, evaluated_at,
+               governance -> 'lowVolRangeShadow' AS research
+        FROM annotated
+        WHERE episode_rank = 1
+          AND evaluated_at > ($5::timestamptz - interval '90 minutes')
+          AND governance -> 'lowVolRangeShadowOutcome15m' IS NULL
+        ORDER BY evaluated_at ASC, id ASC
+        LIMIT 12
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument.trim().toUpperCase(),
+        input.policyVersion,
+        input.asOf.toISOString(),
+        LOW_VOL_RANGE_SHADOW_ARTIFACT,
+      ],
+    )) as Array<{
+      id: string;
+      direction: 'BUY' | 'SELL';
+      evaluated_at: Date | string;
+      research: unknown;
+    }>;
+    return rows.flatMap((row) => {
+      const state = jsonObject(row.research);
+      const evaluatedAt = date(row.evaluated_at);
+      const stopDistance = nullableNumber(state.hypotheticalStopDistance);
+      const targetDistance = nullableNumber(state.hypotheticalTargetDistance);
+      const observedExecutionCostR = nullableNumber(state.observedExecutionCostR);
+      if (
+        !Number.isFinite(evaluatedAt.getTime()) ||
+        !['BUY', 'SELL'].includes(row.direction) ||
+        stopDistance === null ||
+        stopDistance <= 0 ||
+        targetDistance === null ||
+        targetDistance <= 0 ||
+        observedExecutionCostR === null ||
+        observedExecutionCostR < 0 ||
+        state.mode !== 'SHADOW_ONLY' ||
+        state.executionAuthority !== 'NONE' ||
+        !['STABILIZED_ENTRY_HYPOTHESIS', 'UNSTABLE_MOMENTUM_CONTROL'].includes(
+          String(state.hypothesisCohort ?? ''),
+        )
+      ) {
+        return [];
+      }
+      return [
+        {
+          id: row.id,
+          direction: row.direction,
+          evaluatedAt,
+          stopDistance,
+          targetDistance,
+          observedExecutionCostR,
+          hypothesisCohort: state.hypothesisCohort as
+            | 'STABILIZED_ENTRY_HYPOTHESIS'
+            | 'UNSTABLE_MOMENTUM_CONTROL',
+        },
+      ];
+    });
+  }
+
+  async markLowVolRangeShadowOutcome(
+    decisionId: string,
+    outcome: LowVolRangeShadowOutcome,
+  ): Promise<void> {
+    await this.dataSource.query(
+      `
+        UPDATE trading.m1_tactical_decisions
+        SET governance = jsonb_set(governance, '{lowVolRangeShadowOutcome15m}', $2::jsonb, true),
+            updated_at = now()
+        WHERE id = $1
+          AND governance -> 'lowVolRangeShadow' ->> 'outcomeStudyEligible' = 'true'
+          AND governance -> 'lowVolRangeShadowOutcome15m' IS NULL
+          AND execution_authority = 'NONE'
+      `,
+      [decisionId, JSON.stringify(outcome)],
     );
   }
 
