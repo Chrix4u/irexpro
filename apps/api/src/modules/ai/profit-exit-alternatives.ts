@@ -1,7 +1,9 @@
 /** Read-only comparison of early close, protected runner and partial close.
  * No broker order is created or modified by this module.
  */
-export const EXIT_ALTERNATIVES_ARTIFACT = 'exit-alternatives-verified-m1-v1';
+// Versioned: v1 contained only barrier outcomes and silently treated profitable
+// open-at-horizon paths as UNRESOLVED, hiding genuine recovery evidence.
+export const EXIT_ALTERNATIVES_ARTIFACT = 'exit-alternatives-verified-m1-v2';
 export type ExitOutcome =
   | 'TP_FIRST'
   | 'STOP_FIRST'
@@ -14,6 +16,11 @@ export interface ExitCandle {
   bucket_time: Date | string;
   high: number | string;
   low: number | string;
+  // Broker-native executable-side quote at the COMPLETE M1 candle close.
+  // Required for horizon returns; v1 barrier-only callers may omit them.
+  bid_close?: number | string | null;
+  ask_close?: number | string | null;
+  spread_close?: number | string | null;
   sample_count: number | string;
   positive_quote_sample_count: number | string;
   last_quote_sample_at: Date | string | null;
@@ -50,6 +57,7 @@ export interface ExitAlternativesReport {
   runner: ExitScenario;
   halfPartial: ExitScenario;
   methodology: 'CONTIGUOUS_LIVE_QUOTE_M1_MIDPOINT_PROXY';
+  holdHorizonSnapshots: ExitHoldHorizonSnapshot[];
 }
 
 const numeric = (value: unknown): number | null => {
@@ -129,6 +137,171 @@ function firstBarrier(input: ExitScenarioInput, stopPrice: number): ExitScenario
 }
 
 /**
+ * A completed-candle mark-to-market continuation, NOT a fill.
+ * Horizon is counted as 15/30/60 complete M1 candle buckets strictly
+ * AFTER the exit minute. Intra-minute bid/ask extrema aren't archived, so
+ * ambiguous midpoint+spread SL/TP touches censor price-path returns.
+ */
+export interface ExitHoldHorizonSnapshot {
+  completedBars: 15 | 30 | 60;
+  state:
+    | 'OPEN_AT_HORIZON'
+    | 'POSSIBLE_STOP_FIRST'
+    | 'POSSIBLE_TARGET_FIRST'
+    | 'SAME_BAR_AMBIGUITY'
+    | 'DATA_GAP'
+    | 'MONEY_CONVERSION_UNAVAILABLE';
+  quoteAt: string | null;
+  executableSidePrice: number | null;
+  indicativeNetPnl: number | null;
+  deltaVsActualClose: number | null;
+  actualNetPnl: number | null;
+  providerFillCertified: false;
+}
+
+export function evaluatePostExitHoldHorizons(
+  input: Omit<ExitScenarioInput, 'runnerStopPrice' | 'runnerEligible'>,
+): ExitHoldHorizonSnapshot[] {
+  const sign = input.direction === 'BUY' ? 1 : -1;
+  const actualNet = [input.grossPnl, input.commission, input.swap].every(Number.isFinite)
+    ? rounded(input.grossPnl - Math.abs(input.commission) + input.swap)
+    : null;
+  const make = (
+    completedBars: 15 | 30 | 60,
+    state: ExitHoldHorizonSnapshot['state'],
+    quoteAt: string | null = null,
+    executableSidePrice: number | null = null,
+    indicativeNetPnl: number | null = null,
+  ): ExitHoldHorizonSnapshot => ({
+    completedBars,
+    state,
+    quoteAt,
+    executableSidePrice,
+    indicativeNetPnl,
+    deltaVsActualClose:
+      actualNet !== null && indicativeNetPnl !== null
+        ? rounded(indicativeNetPnl - actualNet)
+        : null,
+    actualNetPnl: actualNet,
+    providerFillCertified: false,
+  });
+  if (
+    !Number.isFinite(input.closeAt.getTime()) ||
+    ![
+      input.entryPrice,
+      input.exitPrice,
+      input.stopPrice,
+      input.takeProfitPrice,
+      input.grossPnl,
+      input.commission,
+      input.swap,
+    ].every(Number.isFinite) ||
+    input.entryPrice <= 0 ||
+    input.exitPrice <= 0 ||
+    input.stopPrice <= 0 ||
+    input.takeProfitPrice <= 0 ||
+    sign * (input.entryPrice - input.stopPrice) <= 0 ||
+    sign * (input.takeProfitPrice - input.entryPrice) <= 0
+  ) {
+    return ([15, 30, 60] as const).map((n) => make(n, 'DATA_GAP'));
+  }
+  const observed = new Map<number, ExitCandle | null>();
+  for (const candle of input.candles) {
+    const at = new Date(candle.bucket_time).getTime();
+    if (!Number.isFinite(at)) continue;
+    // Duplicates must never be selected as whichever price looks favorable.
+    observed.set(at, observed.has(at) ? null : candle);
+  }
+  const firstBucket = Math.floor(input.closeAt.getTime() / 60_000) * 60_000 + 60_000;
+  const snapshots: ExitHoldHorizonSnapshot[] = [];
+  // Historical gross conversion per unit of price movement is indicative:
+  // keep lot size and the original realized broker FX conversion fixed.
+  const realisedPriceMove = sign * (input.exitPrice - input.entryPrice);
+  const moneyPerPriceUnit =
+    Math.abs(realisedPriceMove) >= 0.000001 &&
+    Math.abs(input.grossPnl) >= 0.05 &&
+    input.grossPnl * realisedPriceMove > 0
+      ? input.grossPnl / realisedPriceMove
+      : null;
+  let censored: ExitHoldHorizonSnapshot['state'] | null = null;
+  let gap = false;
+  for (let n = 1; n <= 60; n++) {
+    const at = firstBucket + (n - 1) * 60_000;
+    const candle = observed.get(at);
+    if (!candle) {
+      gap = true;
+    } else if (!gap && !censored) {
+      const checked = eligibleBar(candle);
+      const bid = numeric(candle.bid_close);
+      const ask = numeric(candle.ask_close);
+      const spread = numeric(candle.spread_close);
+      if (
+        !checked ||
+        checked.at !== at ||
+        bid === null ||
+        ask === null ||
+        spread === null ||
+        !Number.isFinite(spread) ||
+        bid <= 0 ||
+        ask < bid ||
+        spread < 0 ||
+        spread > Math.max(0.0001, bid * 0.002)
+      ) {
+        gap = true;
+      } else {
+        // If bid/ask high/low is not available, widen the midpoint by
+        // observed positive spread. Better to censor an ambiguous recovery
+        // than invent one where the broker stop might have been triggered.
+        const possibleStop =
+          input.direction === 'BUY'
+            ? checked.low - Math.max(spread, ask - bid) <= input.stopPrice
+            : checked.high + Math.max(spread, ask - bid) >= input.stopPrice;
+        const possibleTarget =
+          input.direction === 'BUY'
+            ? checked.high >= input.takeProfitPrice
+            : checked.low <= input.takeProfitPrice;
+        if (possibleStop && possibleTarget) censored = 'SAME_BAR_AMBIGUITY';
+        else if (possibleStop) censored = 'POSSIBLE_STOP_FIRST';
+        else if (possibleTarget) censored = 'POSSIBLE_TARGET_FIRST';
+      }
+    }
+    if (n !== 15 && n !== 30 && n !== 60) continue;
+    const horizon = n as 15 | 30 | 60;
+    if (gap) {
+      snapshots.push(make(horizon, 'DATA_GAP'));
+      continue;
+    }
+    if (censored) {
+      snapshots.push(make(horizon, censored));
+      continue;
+    }
+    const horizonCandle = observed.get(at);
+    if (!horizonCandle) {
+      snapshots.push(make(horizon, 'DATA_GAP'));
+      continue;
+    }
+    const bid = numeric(horizonCandle.bid_close);
+    const ask = numeric(horizonCandle.ask_close);
+    if (bid === null || ask === null || !horizonCandle.last_quote_sample_at) {
+      snapshots.push(make(horizon, 'DATA_GAP'));
+      continue;
+    }
+    const price = input.direction === 'BUY' ? bid : ask;
+    const quoteAt = new Date(horizonCandle.last_quote_sample_at).toISOString();
+    if (moneyPerPriceUnit === null) {
+      snapshots.push(make(horizon, 'MONEY_CONVERSION_UNAVAILABLE', quoteAt, price));
+      continue;
+    }
+    const hypotheticalNet =
+      moneyPerPriceUnit * sign * (price - input.entryPrice) -
+      Math.abs(input.commission) +
+      input.swap;
+    snapshots.push(make(horizon, 'OPEN_AT_HORIZON', quoteAt, price, rounded(hypotheticalNet)));
+  }
+  return snapshots;
+}
+
+/**
  * The P&L/price relationship is only an estimated linear proxy.
  * Broker-side bid/ask fills, stop distance, commissions, FX and gaps can
  * materially change outcomes. This must never grant execution authority.
@@ -153,6 +326,7 @@ export function compareExitAlternatives(input: ExitScenarioInput): ExitAlternati
     runner: none(),
     halfPartial: none(),
     methodology: 'CONTIGUOUS_LIVE_QUOTE_M1_MIDPOINT_PROXY',
+    holdHorizonSnapshots: evaluatePostExitHoldHorizons(input),
   };
   const sign = input.direction === 'BUY' ? 1 : -1;
   if (
@@ -216,7 +390,7 @@ export function compareExitAlternatives(input: ExitScenarioInput): ExitAlternati
  * *next completed* broker-native M1 bucket, never a quote from before exit.
  * A midpoint candle touch is NOT a certifiable broker bid/ask TP/SL fill.
  */
-export const ADVERSE_EXIT_COUNTERFACTUAL_ARTIFACT = 'adverse-thesis-exit-verified-m1-v1' as const;
+export const ADVERSE_EXIT_COUNTERFACTUAL_ARTIFACT = 'adverse-thesis-exit-verified-m1-v2' as const;
 
 export type AdverseExitCounterfactualInput = Omit<
   ExitScenarioInput,
@@ -232,6 +406,7 @@ export interface AdverseExitCounterfactualReport {
   originalSlTpHold: ExitScenario;
   brokerFillCertified: false;
   forecastAtEntry: false;
+  holdHorizonSnapshots: ExitHoldHorizonSnapshot[];
 }
 
 export function compareAdverseExitCounterfactual(
@@ -280,6 +455,7 @@ export function compareAdverseExitCounterfactual(
     originalSlTpHold: invalid(),
     brokerFillCertified: false,
     forecastAtEntry: false,
+    holdHorizonSnapshots: evaluatePostExitHoldHorizons(input),
   };
   if (!valid) return report;
 
