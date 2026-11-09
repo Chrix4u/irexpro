@@ -91,3 +91,34 @@ test('requires account-owned cTrader DEMO and read-only transaction',async()=>{
   assert.match(REALIZED_SQL,/t.broker_connection_id=\$2/);
   assert.match(REALIZED_SQL,/PRIMARY_PLAN_B/);
 });
+
+
+test('keeps incomplete broker settlements visible without imputing their costs',async()=>{
+  const client={query:async(sql)=>{
+    if(sql.includes('SELECT current_timestamp AS')) return {
+      rows:[{snapshotAt:'2026-11-09T15:00:00Z'}],
+    };
+    if(sql.includes('SELECT t.id')) return {
+      rows:[
+        SAMPLE({id:'good',gross:'8',commission:'-1.6'}),
+        SAMPLE({id:'unpriced',gross:null,commission:null,
+          instrument:'USDJPY',direction:'SELL',route:'EARLY_TRANSITION'}),
+      ],
+    };
+    return {rows:[]};
+  }};
+  const report=await runAudit({
+    client,userId:'fbeee4fa-1cd3-4adf-b378-0b6d7a6b5d22',
+    connectionId:'ff7e1f93-0fc3-43f8-bccc-6a7a2ab366c1',
+  });
+  assert.equal(report.total.closedTrades,1);
+  assert.equal(report.total.netEUR,6.4);
+  assert.deepEqual(report.dataQuality,{
+    queriedClosedTrades:2,
+    pricedClosedTrades:1,
+    unpricedClosedTrades:1,
+    unpricedBySleeve:{'USDJPY/SELL/EARLY_TRANSITION':1},
+    afterCostTotalComplete:false,
+  });
+  assert.ok(report.limitations.some(text=>text.includes('PARTIAL')));
+});
