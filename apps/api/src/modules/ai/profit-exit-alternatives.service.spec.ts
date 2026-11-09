@@ -52,6 +52,9 @@ describe('ProfitExitAlternativesService', () => {
     await new ProfitExitAlternativesService({ query } as unknown as DataSource).runOnce(
       new Date('2026-11-04T10:10:00.000Z'),
     );
+    expect(String(query.mock.calls[1]?.[0])).toContain('bid_close');
+    expect(String(query.mock.calls[1]?.[0])).toContain('ask_close');
+    expect(String(query.mock.calls[1]?.[0])).toContain("interval '61 minutes'");
     const saved = query.mock.calls[2];
     expect(String(saved?.[0])).toContain('ON CONFLICT');
     const response = JSON.parse(String(saved?.[1]?.[8]));
@@ -60,6 +63,11 @@ describe('ProfitExitAlternativesService', () => {
       originalNetPnl: 4.4,
       runner: { outcome: 'DATA_GAP', netPnlProxy: null },
       halfPartial: { outcome: 'DATA_GAP', netPnlProxy: null },
+      holdHorizonSnapshots: [
+        { completedBars: 15, state: 'DATA_GAP', providerFillCertified: false },
+        { completedBars: 30, state: 'DATA_GAP', providerFillCertified: false },
+        { completedBars: 60, state: 'DATA_GAP', providerFillCertified: false },
+      ],
     });
   });
 });

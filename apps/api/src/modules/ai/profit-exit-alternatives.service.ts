@@ -253,7 +253,7 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
   ): Promise<ExitCandle[]> {
     return (await this.dataSource.query(
       `
-        SELECT bucket_time, high, low, close, source,
+        SELECT bucket_time, high, low, close, bid_close, ask_close, spread_close, source,
           sample_count, positive_quote_sample_count, last_quote_sample_at
         FROM market_data.provider_quote_candles
         WHERE connection_id = $1 AND instrument = $2
@@ -261,8 +261,12 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
           AND positive_quote_sample_count > 0
           AND last_quote_sample_at >= bucket_time
           AND last_quote_sample_at < bucket_time + interval '1 minute'
+          -- Exactly sixty fully completed M1 buckets strictly after the
+          -- closure minute. The final bucket closes 60–61 minutes after
+          -- the actual close; worker maturity >=65 minutes guarantees it.
           AND bucket_time >= date_trunc('minute', $3::timestamptz) + interval '1 minute'
-          AND bucket_time + interval '1 minute' <= $3::timestamptz + interval '60 minutes'
+          AND bucket_time + interval '1 minute'
+              <= date_trunc('minute', $3::timestamptz) + interval '61 minutes'
         ORDER BY bucket_time ASC LIMIT 60
       `,
       [row.broker_connection_id, row.instrument.toUpperCase(), closeAt.toISOString()],
@@ -283,7 +287,8 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
       brokerAdverseTriggerAudited: row.trigger_reason !== 'UNVERIFIED_IN_TRADE_AUDIT',
       ...result,
       quoteProvenance: 'CTRADER_POSITIVE_LIVE_QUOTES_WITHIN_M1_BUCKET',
-      limitations: 'MIDPOINT_BAR_TOUCH_NOT_BROKER_FILL;SLIPPAGE_SWAP_AND_FUTURE_FEES_UNKNOWN',
+      limitations:
+        'HOLD_HORIZONS_ARE_COMPLETED_M1_BUCKET_COUNTS;MIDPOINT_SPREAD_PADDED_TOUCH_NOT_BROKER_FILL;ACTUAL_FX_CONVERSION_SLIPPAGE_AND_FUTURE_FEES_UNKNOWN',
     };
     await this.dataSource.query(
       `
