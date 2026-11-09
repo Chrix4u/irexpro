@@ -70,25 +70,54 @@ const CONFIRMATION = {
 } satisfies ExecutionConfirmationView;
 
 describe('riskSuspensionMatchesBroker', () => {
-  it('does not lock a newly selected broker due to another ended broker session', () => {
-    expect(riskSuspensionMatchesBroker(
-      { brokerConnectionId: 'old-ctrader' },
-      'pepperstone-demo',
-    )).toBe(false);
+  const distinctAccounts = [
+    { id: 'old-ctrader', logicalAccountKey: 'old-account-key' },
+    { id: 'pepperstone-demo', logicalAccountKey: 'new-account-key' },
+  ];
+
+  it('does not lock a different verified Pepperstone DEMO account', () => {
+    expect(
+      riskSuspensionMatchesBroker(
+        { brokerConnectionId: 'old-ctrader' },
+        'pepperstone-demo',
+        distinctAccounts,
+      ),
+    ).toBe(false);
   });
 
-  it('keeps the original breached account protected', () => {
-    expect(riskSuspensionMatchesBroker(
-      { brokerConnectionId: 'old-ctrader' },
-      'old-ctrader',
-    )).toBe(true);
+  it('retains protection for the same breached broker connection', () => {
+    expect(
+      riskSuspensionMatchesBroker(
+        { brokerConnectionId: 'old-ctrader' },
+        'old-ctrader',
+        distinctAccounts,
+      ),
+    ).toBe(true);
   });
 
-  it('fails closed for unscoped historic suspensions or unknown selection', () => {
-    expect(riskSuspensionMatchesBroker({}, 'pepperstone-demo')).toBe(true);
-    expect(riskSuspensionMatchesBroker({ brokerConnectionId: null }, 'pepperstone-demo')).toBe(true);
-    expect(riskSuspensionMatchesBroker({ brokerConnectionId: '' }, 'pepperstone-demo')).toBe(true);
-    expect(riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, null)).toBe(true);
+  it('retains protection when the SAME account is reconnected under a new connection ID', () => {
+    expect(
+      riskSuspensionMatchesBroker(
+        { brokerConnectionId: 'old-ctrader' },
+        'pepperstone-demo',
+        [
+          { id: 'old-ctrader', logicalAccountKey: 'shared-account-key' },
+          { id: 'pepperstone-demo', logicalAccountKey: 'shared-account-key' },
+        ],
+      ),
+    ).toBe(true);
+  });
+
+  it('fails closed when either identity, violation scope or broker selection is unknown', () => {
+    expect(riskSuspensionMatchesBroker({}, 'pepperstone-demo', distinctAccounts)).toBe(true);
+    expect(riskSuspensionMatchesBroker({ brokerConnectionId: null }, 'pepperstone-demo', distinctAccounts)).toBe(true);
+    expect(riskSuspensionMatchesBroker({ brokerConnectionId: '' }, 'pepperstone-demo', distinctAccounts)).toBe(true);
+    expect(riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, null, distinctAccounts)).toBe(true);
+    expect(riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, 'pepperstone-demo', [])).toBe(true);
+    expect(riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, 'pepperstone-demo', [
+      { id: 'old-ctrader', logicalAccountKey: null },
+      { id: 'pepperstone-demo', logicalAccountKey: 'new-account-key' },
+    ])).toBe(true);
   });
 });
 
