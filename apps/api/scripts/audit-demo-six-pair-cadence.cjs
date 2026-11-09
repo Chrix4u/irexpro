@@ -9,6 +9,16 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const PAIRS = Object.freeze(['AUDUSD', 'GBPUSD', 'EURUSD', 'USDCAD', 'USDCHF', 'USDJPY']);
 const V2 = 'm1-tactical-v8-demo-primary-fee-shadow-six-pair-v2';
 const REPORT = '/home/lightworld/webapps/irexpro-research/six-pair-cadence/latest-report.json';
+const RECENT_WINDOW_MINUTES = 10;
+
+function parseWindowMinutes(raw) {
+  if (raw === undefined || raw === '') return 60;
+  if (typeof raw !== 'string' || !/^[1-9][0-9]{0,2}$/.test(raw))
+    throw Error('INVALID_CADENCE_WINDOW_MINUTES');
+  const minutes = Number(raw);
+  if (minutes < 5 || minutes > 180) throw Error('INVALID_CADENCE_WINDOW_MINUTES');
+  return minutes;
+}
 
 // Only decision-time stored evidence. The exact policy pin excludes old
 // focused-three decisions even if they were persisted late after a rollout.
@@ -119,6 +129,12 @@ async function runAudit({ client, userId, connectionId, since, until }) {
       userId, connectionId, start.toISOString(), end.toISOString(), V2, [...PAIRS],
     ]);
     if (found.rows.length > 1086) throw Error('TRUNCATED_OR_UNBOUNDED_COVERAGE');
+    // The headline hour can contain deploy/restart minutes. Also show a short,
+    // same-snapshot tail so operators can distinguish pre-release from recent
+    // scanning without claiming persistence delay is runtime latency.
+    const recentStart = new Date(end.getTime() - Math.min(RECENT_WINDOW_MINUTES * 60000, ms));
+    const recentRows = found.rows.filter((row) => new Date(row.slot).getTime() >= recentStart.getTime());
+    const recent = summarize(recentRows, recentStart, end);
     const report = {
       artifact: 'ctrader-demo-six-pair-cadence-observation-v1',
       generatedAt: new Date().toISOString(),
@@ -128,6 +144,15 @@ async function runAudit({ client, userId, connectionId, since, until }) {
       authority: 'RESEARCH_ONLY',
       modifiesExecution: false,
       ...summarize(found.rows, start, end),
+      recentWindow: {
+        since: recentStart.toISOString(),
+        through: end.toISOString(),
+        windowMinutes: recent.windowMinutes,
+        observedSlots: recent.observedSlots,
+        slotsWithAllSix: recent.slotsWithAllSix,
+        slotsMissingSomePairs: recent.slotsMissingSomePairs,
+        byPair: recent.byPair,
+      },
       limitations: [
         'A missing persisted decision may reflect restart, market closure, missing broker bars or an inactive session; it is not proof of a slow or missed scan.',
         'Persistence lag is from the saved M1 evaluated minute to the first database write; it is NOT the scheduler start lag or a broker fill latency.',
@@ -150,7 +175,7 @@ async function main() {
   const { Client } = require('pg');
   const { getDatabaseSslOptions } = require('../dist/config/database-tls');
   const end = new Date(Math.floor(Date.now() / 60000) * 60000);
-  const start = new Date(end.getTime() - 60 * 60000);
+  const start = new Date(end.getTime() - parseWindowMinutes(process.env.IREXPRO_CADENCE_WINDOW_MINUTES) * 60000);
   const client = new Client({
     host: process.env.DB_HOST || 'localhost',
     port: Number(process.env.DB_PORT || 5432),
@@ -173,7 +198,8 @@ async function main() {
     mkdirSync(resolve(REPORT, '..'), { recursive: true, mode: 0o700 });
     writeFileSync(REPORT, JSON.stringify(report, null, 2), { mode: 0o600 });
     console.log('DEMO_CADENCE_RESEARCH ' + JSON.stringify({
-      policy: report.rolloutPolicyVersion, observedSlots: report.observedSlots,
+      policy: report.rolloutPolicyVersion, since: report.since, through: report.through,
+      recentWindow: report.recentWindow, observedSlots: report.observedSlots,
       slotsWithAllSix: report.slotsWithAllSix,
       slotsMissingSomePairs: report.slotsMissingSomePairs,
       byPair: report.byPair,
@@ -183,7 +209,7 @@ async function main() {
     await client.end();
   }
 }
-module.exports = { PAIRS, V2, COVERAGE_SQL, summarize, runAudit };
+module.exports = { PAIRS, V2, COVERAGE_SQL, summarize, runAudit, parseWindowMinutes };
 if (require.main === module)
   main().catch((e) => {
     console.error('DEMO_CADENCE_RESEARCH_FAILED ' + String(e.message).slice(0, 160));
