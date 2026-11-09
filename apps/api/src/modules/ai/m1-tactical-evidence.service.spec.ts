@@ -1473,3 +1473,146 @@ describe('M1 causal cTrader commission evidence', () => {
     ).resolves.toEqual({ sampleCount: 0, p90FeeR: null });
   });
 });
+
+describe('low-vol range research evidence boundary', () => {
+  const scope = {
+    userId: '11111111-1111-4111-8111-111111111111',
+    brokerConnectionId: '22222222-2222-4222-8222-222222222222',
+    instrument: 'eurusd',
+    policyVersion: 'm1-tactical-v2-m5-lifecycle',
+    asOf: new Date('2026-11-08T23:50:00.000Z'),
+  };
+
+  it('loads only oldest matured, non-executable fixed-episode candidates in exact broker scope', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        id: 'research-decision-1',
+        direction: 'BUY',
+        evaluated_at: '2026-11-08T23:32:00.000Z',
+        research: {
+          artifact: 'low-vol-range-shadow-v1',
+          mode: 'SHADOW_ONLY',
+          executionAuthority: 'NONE',
+          candidate: true,
+          outcomeStudyEligible: true,
+          hypothesisCohort: 'STABILIZED_ENTRY_HYPOTHESIS',
+          hypotheticalStopDistance: 0.00015,
+          hypotheticalTargetDistance: 0.0001,
+          observedExecutionCostR: 0.16,
+        },
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    await expect(service.loadMatureLowVolRangeLeaders(scope)).resolves.toEqual([
+      {
+        id: 'research-decision-1',
+        direction: 'BUY',
+        evaluatedAt: new Date('2026-11-08T23:32:00.000Z'),
+        stopDistance: 0.00015,
+        targetDistance: 0.0001,
+        observedExecutionCostR: 0.16,
+        hypothesisCohort: 'STABILIZED_ENTRY_HYPOTHESIS',
+      },
+    ]);
+    const [sql, params] = query.mock.calls[0]!;
+    for (const statement of [
+      'FROM trading.m1_tactical_decisions',
+      'user_id = $1',
+      'broker_connection_id = $2',
+      'instrument = $3',
+      'policy_version = $4',
+      "execution_authority = 'NONE'",
+      "governance -> 'lowVolRangeShadow' ->> 'outcomeStudyEligible' = 'true'",
+      'PARTITION BY instrument, direction',
+      "governance -> 'lowVolRangeShadow' ->> 'hypothesisCohort'",
+      'ORDER BY evaluated_at ASC, id ASC',
+      "governance -> 'lowVolRangeShadowOutcome15m' IS NULL",
+      "evaluated_at <= ($5::timestamptz - interval '16 minutes')",
+    ]) {
+      expect(String(sql)).toContain(statement);
+    }
+    expect(params).toEqual([
+      scope.userId,
+      scope.brokerConnectionId,
+      'EURUSD',
+      scope.policyVersion,
+      scope.asOf.toISOString(),
+      'low-vol-range-shadow-v1',
+    ]);
+    expect(String(sql)).not.toContain('broker.orders');
+    expect(String(sql)).not.toContain('UPDATE');
+  });
+
+  it('refuses invalid research pricing and accidental live authority in recovered rows', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        id: 'd1',
+        direction: 'BUY',
+        evaluated_at: '2026-11-08T23:32:00Z',
+        research: {
+          mode: 'SHADOW_ONLY',
+          executionAuthority: 'NONE',
+          hypotheticalStopDistance: 0.00015,
+          hypotheticalTargetDistance: 0.0001,
+          observedExecutionCostR: null,
+        },
+      },
+      {
+        id: 'd2',
+        direction: 'SELL',
+        evaluated_at: '2026-11-08T23:32:00Z',
+        research: {
+          mode: 'SHADOW_ONLY',
+          executionAuthority: 'BROKER_NATIVE',
+          hypotheticalStopDistance: 0.00015,
+          hypotheticalTargetDistance: 0.0001,
+          observedExecutionCostR: 0.1,
+        },
+      },
+    ]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    await expect(service.loadMatureLowVolRangeLeaders(scope)).resolves.toEqual([]);
+  });
+
+  it('writes one idempotent outcome annotation without changing execution authority or opening trades', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    await service.markLowVolRangeShadowOutcome('decision-id', {
+      artifact: 'low-vol-range-shadow-outcome-15m-v1',
+      mode: 'SHADOW_ONLY',
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+      productionEligible: false,
+      episodeDecisionId: 'decision-id',
+      hypothesisCohort: 'STABILIZED_ENTRY_HYPOTHESIS',
+      evaluatedAt: '2026-11-08T23:30:00.000Z',
+      observedAt: '2026-11-08T23:46:00.000Z',
+      outcome: 'TP',
+      source: 'COMPLETED_M1_OHLC',
+      estimatedExecutionCostR: 0.16,
+      entryBarOpenTime: '2026-11-08T23:31:00.000Z',
+      terminalBarOpenTime: '2026-11-08T23:36:00.000Z',
+      stopLoss: 1.09985,
+      takeProfit: 1.1001,
+      grossRMultiple: 2 / 3,
+      afterSpreadProxyRMultiple: 2 / 3 - 0.16,
+      netRMultiple: null,
+      commissionIncluded: false,
+      costBasis: 'OBSERVED_SPREAD_P90_PLUS_BUFFER_NO_COMMISSION',
+    });
+    const [sql, params] = query.mock.calls[0]!;
+    expect(String(sql)).toContain("jsonb_set(governance, '{lowVolRangeShadowOutcome15m}'");
+    expect(String(sql)).toContain("governance -> 'lowVolRangeShadowOutcome15m' IS NULL");
+    expect(String(sql)).toContain("execution_authority = 'NONE'");
+    expect(String(sql)).not.toMatch(
+      /\b(trading\.trades|trading\.trade_intents|broker\.broker_connections)\b/,
+    );
+    expect(params[0]).toBe('decision-id');
+    expect(JSON.parse(params[1])).toMatchObject({
+      mode: 'SHADOW_ONLY',
+      modifiesExecution: false,
+      executionAuthority: 'NONE',
+      outcome: 'TP',
+    });
+  });
+});
