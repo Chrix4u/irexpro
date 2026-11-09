@@ -315,13 +315,13 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
       'trade-1',
       USER,
       TradeCloseReason.AI_CLOSE_SIGNAL,
-      { source: 'AI_EXIT_ORCHESTRATOR' },
+      expect.objectContaining({ source: 'AI_EXIT_ORCHESTRATOR' }),
     );
     expect(executionService.closeTrade).toHaveBeenCalledWith(
       'trade-2',
       USER,
       TradeCloseReason.AI_CLOSE_SIGNAL,
-      { source: 'AI_EXIT_ORCHESTRATOR' },
+      expect.objectContaining({ source: 'AI_EXIT_ORCHESTRATOR' }),
     );
     expect(result.trades.map((t) => t.tradeId).sort()).toEqual(['trade-1', 'trade-2']);
   });
@@ -342,7 +342,7 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
       'trade-2',
       USER,
       TradeCloseReason.AI_CLOSE_SIGNAL,
-      { source: 'AI_EXIT_ORCHESTRATOR' },
+      expect.objectContaining({ source: 'AI_EXIT_ORCHESTRATOR' }),
     );
   });
 
@@ -396,6 +396,34 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
           closedCount: 1,
           targetCount: 1,
         }),
+      }),
+    );
+  });
+
+  it('passes validated exit-signal provenance to the trade close request', async () => {
+    executionReadService.listOpenPositions.mockResolvedValue([openTrade('trade-1')]);
+    executionService.closeTrade.mockResolvedValue(
+      openTrade('trade-1', { status: TradeStatus.RECONCILIATION_PENDING }),
+    );
+    const generatedAt = new Date('2026-11-09T08:51:00.000Z');
+    const signal = exitSignal({
+      generatedAt,
+      confidenceScore: 0.73,
+      strategyCode: 'irexpro-multimodel-ensemble-v1',
+      modelVersion: 'demo-v1',
+    });
+    await service.processExitSignal(signal);
+    expect(executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      USER,
+      TradeCloseReason.AI_CLOSE_SIGNAL,
+      expect.objectContaining({
+        source: 'AI_EXIT_ORCHESTRATOR',
+        decisionSignalId: SIGNAL,
+        decisionAt: generatedAt.toISOString(),
+        confidenceScore: 0.73,
+        strategyCode: 'irexpro-multimodel-ensemble-v1',
+        modelVersion: 'demo-v1',
       }),
     );
   });
@@ -456,13 +484,13 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
       'trade-1',
       USER,
       TradeCloseReason.AI_CLOSE_SIGNAL,
-      { source: 'AI_EXIT_ORCHESTRATOR' },
+      expect.objectContaining({ source: 'AI_EXIT_ORCHESTRATOR' }),
     );
     expect(executionService.closeTrade).toHaveBeenCalledWith(
       'trade-2',
       USER,
       TradeCloseReason.AI_CLOSE_SIGNAL,
-      { source: 'AI_EXIT_ORCHESTRATOR' },
+      expect.objectContaining({ source: 'AI_EXIT_ORCHESTRATOR' }),
     );
   });
 
