@@ -34,6 +34,8 @@ export interface RiskStatusView {
     rejectionCode: string;
     rejectionReason: string;
     evaluatedAt: string;
+    /** Sanitized exact-account scope. Missing on legacy data: fail closed. */
+    brokerConnectionId?: string;
   } | null;
   limits: {
     maxDailyLossPercent: string;
@@ -181,7 +183,9 @@ function isRiskStatus(value: unknown): value is RiskStatusView {
     (isRecord(latestRiskSuspensionViolation) &&
       typeof latestRiskSuspensionViolation.rejectionCode === "string" &&
       typeof latestRiskSuspensionViolation.rejectionReason === "string" &&
-      typeof latestRiskSuspensionViolation.evaluatedAt === "string");
+      typeof latestRiskSuspensionViolation.evaluatedAt === "string" &&
+      (latestRiskSuspensionViolation.brokerConnectionId === undefined ||
+        typeof latestRiskSuspensionViolation.brokerConnectionId === "string"));
 
   return (
     typeof value.killSwitchActive === "boolean" &&
