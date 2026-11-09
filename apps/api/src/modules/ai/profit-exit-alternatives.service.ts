@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { resolveAdverseExitProvenance } from './adverse-exit-provenance';
 import { DataSource } from 'typeorm';
 import {
   compareExitAlternatives,
@@ -47,6 +48,7 @@ interface AdverseCandidate extends Pick<
   | 'swap'
 > {
   trigger_reason: 'ADVERSE_THESIS_FAILED' | 'EMERGENCY_ADVERSE_CUT' | 'UNVERIFIED_IN_TRADE_AUDIT';
+  request_evidence?: unknown;
 }
 
 /** Read-only prospective 60-minute exit comparison, 60s background audit.
@@ -128,6 +130,10 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
           const closedAt = new Date(row.closed_at);
           if (!Number.isFinite(closedAt.getTime())) continue;
           const candles = await this.loadVerifiedCandles(row, closedAt);
+          const provenance = resolveAdverseExitProvenance({
+            directCloseReason: row.trigger_reason,
+            requestEvidence: row.request_evidence,
+          });
           const result = compareAdverseExitCounterfactual({
             direction: row.direction,
             closeAt: closedAt,
@@ -140,7 +146,7 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
             swap: Number(row.swap),
             candles,
           });
-          await this.persistAdverse(row, closedAt, result);
+          await this.persistAdverse(row, closedAt, result, provenance);
         } catch (error) {
           this.logger.warn(`DEMO adverse-exit audit deferred: ${(error as Error).message}`);
         }
@@ -207,7 +213,8 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
           t.direction, t.closed_at, t.fill_price, t.exit_price,
           t.stop_loss, t.take_profit, t.realised_pnl, t.commission, t.swap,
           COALESCE(closure.metadata #>> '{aiCloseTrigger,reasonCode}',
-            'UNVERIFIED_IN_TRADE_AUDIT') AS trigger_reason
+            'UNVERIFIED_IN_TRADE_AUDIT') AS trigger_reason,
+          requests.request_evidence
         FROM trading.trades t
         JOIN trading.trade_intents ti ON ti.id = t.trade_intent_id
           AND ti.user_id = t.user_id AND ti.broker_connection_id = t.broker_connection_id
@@ -224,6 +231,28 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
               IN ('ADVERSE_THESIS_FAILED', 'EMERGENCY_ADVERSE_CUT')
           ORDER BY audit0.created_at DESC LIMIT 1
         ) closure ON true
+        LEFT JOIN LATERAL (
+          SELECT jsonb_agg(jsonb_build_object(
+            'action', audit0.action,
+            'closeReason', COALESCE(
+              audit0.metadata->>'requestedCloseReason',
+              audit0.metadata->>'closeReason'
+            ),
+            'aiCloseTrigger', audit0.metadata->'aiCloseTrigger'
+          ) ORDER BY audit0.created_at ASC) AS request_evidence
+          FROM audit.audit_logs audit0
+          WHERE audit0.resource_type = 'Trade'
+            AND audit0.resource_id = t.id::text
+            AND audit0.actor_user_id = t.user_id
+            AND audit0.action IN ('TRADE_CLOSE_REQUESTED', 'TRADE_SUBMITTED')
+            AND COALESCE(
+              audit0.metadata->>'requestedCloseReason',
+              audit0.metadata->>'closeReason'
+            ) = 'AI_CLOSE_SIGNAL'
+            AND audit0.created_at BETWEEN
+              t.closed_at - interval '90 seconds'
+              AND t.closed_at + interval '90 seconds'
+        ) requests ON true
         WHERE t.status = 'CLOSED'
           AND t.close_reason = 'AI_CLOSE_SIGNAL'
           AND t.realised_pnl < 0
@@ -277,14 +306,19 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
     row: AdverseCandidate,
     closeAt: Date,
     result: ReturnType<typeof compareAdverseExitCounterfactual>,
+    provenance: ReturnType<typeof resolveAdverseExitProvenance>,
   ): Promise<void> {
     const checkpointAt = new Date(closeAt.getTime() + 60 * 60_000);
     const response = {
       artifact: ADVERSE_EXIT_COUNTERFACTUAL_ARTIFACT,
       snapshotAt: closeAt.toISOString(),
       originalTradeCurrency: row.account_currency,
-      brokerAdverseReason: row.trigger_reason,
-      brokerAdverseTriggerAudited: row.trigger_reason !== 'UNVERIFIED_IN_TRADE_AUDIT',
+      brokerAdverseReason: provenance.reason,
+      brokerAdverseTriggerAudited: provenance.auditedAtClose,
+      appCloseRequestCorrelated: provenance.correlatedAppRequest,
+      closeReasonEvidenceSource: provenance.source,
+      closeReasonRequestEvidenceCount: provenance.requestEvidenceCount,
+      brokerExitReasonCertified: provenance.brokerReasonCertified,
       ...result,
       quoteProvenance: 'CTRADER_POSITIVE_LIVE_QUOTES_WITHIN_M1_BUCKET',
       limitations:
