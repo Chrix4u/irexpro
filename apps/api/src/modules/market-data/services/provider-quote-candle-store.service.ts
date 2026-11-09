@@ -517,9 +517,7 @@ export class ProviderQuoteCandleStoreService {
     }
     // Retain the original native series when there is no complete, verified
     // newer M1 bucket. The caller's existing freshness veto still applies.
-    return confirmedNewer.length > 0
-      ? [...direct, ...confirmedNewer].slice(-count)
-      : direct;
+    return confirmedNewer.length > 0 ? [...direct, ...confirmedNewer].slice(-count) : direct;
   }
 
   async countM1Candles(connectionId: string, instrument: string): Promise<number> {
