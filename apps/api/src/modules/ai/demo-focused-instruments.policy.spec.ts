@@ -1,5 +1,7 @@
 import {
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
+  DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
+  M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
   M1_TACTICAL_ROLLOUT_POLICY_V1,
   M1_TACTICAL_ROLLOUT_POLICY_V8,
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION,
@@ -79,5 +81,50 @@ describe('2026-11-05 reversible DEMO focused-three entry permission', () => {
     expect(demoInstrumentEntryAllowed(M1_TACTICAL_ROLLOUT_POLICY_V8, 'USDJPY')).toBe(true);
     expect(M1_TACTICAL_ROLLOUT_POLICY_V8.demoEntryInstruments).toBeUndefined();
     expect(M1_TACTICAL_ROLLOUT_POLICY_V1.demoEntryInstruments).toBeUndefined();
+  });
+});
+
+describe('2026-11-09 restored six-pair DEMO entry eligibility', () => {
+  const restored = M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW;
+
+  it('versions the restored list without rewriting the focused-three policy', () => {
+    expect(DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1).toEqual(['AUDUSD', 'GBPUSD', 'EURUSD']);
+    expect(DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2).toEqual([
+      'AUDUSD',
+      'GBPUSD',
+      'EURUSD',
+      'USDCAD',
+      'USDCHF',
+      'USDJPY',
+    ]);
+    expect(restored.version).toBe('m1-tactical-v8-demo-primary-fee-shadow-six-pair-v2');
+    expect(restored.demoEntryInstruments).toEqual(DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2);
+    expect(Object.isFrozen(restored.demoEntryInstruments)).toBe(true);
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW.demoEntryInstruments).toEqual(
+      DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
+    );
+  });
+
+  it.each(['AUDUSD', 'GBPUSD', 'EURUSD', 'USDCAD', 'USDCHF', 'USDJPY'])(
+    'allows %s through the instrument gate, not around other execution gates',
+    (instrument) => expect(demoInstrumentEntryAllowed(restored, instrument)).toBe(true),
+  );
+
+  it.each(['XAUUSD', 'USDJPY-ALT', 'EURUSDx', ''])(
+    'keeps unapproved or suffixed instrument %s blocked',
+    (instrument) => expect(demoInstrumentEntryAllowed(restored, instrument)).toBe(false),
+  );
+
+  it('retains all safety and fee-shadow settings exactly', () => {
+    expect(restored).toMatchObject({
+      phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+      demoPrimaryOnlyProbation: true,
+      demoBrokerCommissionFloor: false,
+      demoBrokerCommissionShadow: true,
+      paperVolumeCap: 4,
+    });
+    expect(demoInstrumentEntryAllowed({ ...restored, demoEntryInstruments: [] }, 'USDJPY')).toBe(
+      false,
+    );
   });
 });

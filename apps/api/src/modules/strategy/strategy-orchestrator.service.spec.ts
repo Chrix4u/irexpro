@@ -603,27 +603,27 @@ describe('StrategyOrchestratorService', () => {
 
     it.each([
       [
-        'USDJPY',
+        'USDJPY-ALT',
         'external-irexpro-multimodel-ensemble',
         'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
       ],
       [
-        'USDCAD',
+        'USDCAD-ALT',
         'external-irexpro-multimodel-ensemble',
         'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
       ],
       [
-        'USDCHF',
+        'USDCHF-ALT',
         'external-irexpro-multimodel-ensemble',
         'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
       ],
       [
-        'USDJPY',
+        'USDJPY-ALT',
         'external-irexpro-m1-tactical',
         'external-provider/irexpro-m1-tactical/m1-tactical-v2-m5-lifecycle',
       ],
     ])(
-      'rejects a promoted DEMO %s signal from %s before risk evaluation and broker dispatch',
+      'rejects an unapproved/suffixed DEMO %s signal from %s before risk evaluation and broker dispatch',
       async (instrument, strategyCode, modelVersion) => {
         (executionService.getActiveSession as jest.Mock).mockResolvedValue({
           ...activeSession(),
@@ -663,14 +663,14 @@ describe('StrategyOrchestratorService', () => {
       },
     );
 
-    it('does not permit a research-only promoted DEMO signal by omitting external provider metadata', async () => {
+    it('does not permit an unapproved suffixed DEMO signal by omitting external provider metadata', async () => {
       (executionService.getActiveSession as jest.Mock).mockResolvedValue({
         ...activeSession(),
         executionMode: ExecutionMode.FULL_AUTO,
       });
       const result = await service.processSignal(
         validCandidate({
-          instrument: 'USDJPY',
+          instrument: 'USDJPY-ALT',
           confidenceScore: 0.72,
           timeframe: 'M1',
           strategyCode: 'external-irexpro-multimodel-ensemble',

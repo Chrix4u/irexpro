@@ -191,7 +191,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
     );
   });
 
-  it('queries only the exact current user, active validated cTrader DEMO session and three allowed pairs', async () => {
+  it('queries only the exact current user, active validated cTrader DEMO session and six allowed pairs', async () => {
     const query = jest.fn().mockResolvedValue([
       {
         active_session_count: '1',
@@ -219,7 +219,10 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       count: 22,
     });
     const [sql, params] = query.mock.calls[0] as [string, unknown[]];
-    expect(params).toEqual(['user-12', ['AUDUSD', 'GBPUSD', 'EURUSD']]);
+    expect(params).toEqual([
+      'user-12',
+      ['AUDUSD', 'GBPUSD', 'EURUSD', 'USDCAD', 'USDCHF', 'USDJPY'],
+    ]);
     expect(sql).toContain('s.user_id = $1');
     expect(sql).toContain('d.user_id = $1');
     expect(sql).toContain('b.user_id = s.user_id');

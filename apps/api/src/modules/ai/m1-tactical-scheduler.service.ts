@@ -1,5 +1,11 @@
-import { DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1 } from './demo-focused-instruments';
-export { DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1 } from './demo-focused-instruments';
+import {
+  DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
+  DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
+} from './demo-focused-instruments';
+export {
+  DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
+  DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
+} from './demo-focused-instruments';
 
 import {
   Inject,
@@ -511,8 +517,8 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION: Readonly<M1Ta
  * closed trades, 2026-11-05. All six sleeves have negative AFTER-FEE net P&L.
  * AUDUSD (60 closures), GBPUSD (13), EURUSD (32, one incomplete fee) are a
  * controlled research shortlist, NOT historically profitable winners.
- * USDJPY (-124.18 EUR/27), USDCAD (-87.15 EUR/39), and USDCHF (only 5)
- * retain observational scoring but can never open NEW positions here.
+ * The original V1 shortlist remains for historical decision replay and
+ * rollback. A separate V2 policy restores all six to DEMO eligibility.
  * No changes to LIVE, PAPER, existing broker positions or risk suspensions.
  */
 
@@ -551,6 +557,18 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW: Readonly<M1T
     version: 'm1-tactical-v8-demo-primary-fee-shadow-focused3-v1',
     demoBrokerCommissionFloor: false,
     demoBrokerCommissionShadow: true,
+  });
+
+/**
+ * Operator-requested DEMO six-pair reactivation. Explicitly version the
+ * policy so historical focused-three decisions can still be attributed to
+ * their original restrictions. No additional execution/risk authority.
+ */
+export const M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW: Readonly<M1TacticalRolloutPolicy> =
+  Object.freeze({
+    ...M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW,
+    version: 'm1-tactical-v8-demo-primary-fee-shadow-six-pair-v2',
+    demoEntryInstruments: DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
   });
 
 export function m1RiskMarketRegime(

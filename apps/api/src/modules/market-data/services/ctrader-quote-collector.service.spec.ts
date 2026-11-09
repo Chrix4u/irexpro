@@ -271,11 +271,9 @@ describe('CTraderQuoteCollectorService', () => {
     expect(m1Calls.every((call) => call[4] === 60)).toBe(true);
   });
 
-  it('prioritizes the exact three DEMO entry pairs without starving research or adding requests', async () => {
+  it('fairly rotates all six active DEMO entry pairs without adding provider requests', async () => {
     const h = harness();
-    const focused = ['EURUSD', 'GBPUSD', 'AUDUSD'];
-    const research = ['USDJPY', 'USDCAD', 'USDCHF'];
-    const instruments = [...focused, ...research];
+    const instruments = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'];
     const cycles = 192; // 12 complete context rotations; every group has full H4 coverage.
 
     for (let index = 0; index < cycles; index += 1) {
@@ -292,20 +290,16 @@ describe('CTraderQuoteCollectorService', () => {
     expect(context).toHaveLength(cycles);
     expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(cycles * 6);
 
-    for (const instrument of focused) {
-      expect(m1.filter((call) => call[2] === instrument)).toHaveLength(144);
-    }
-    for (const instrument of research) {
-      expect(m1.filter((call) => call[2] === instrument)).toHaveLength(48);
+    for (const instrument of instruments) {
+      expect(m1.filter((call) => call[2] === instrument)).toHaveLength(96);
     }
 
     const slotsFor = (instrument: string, timeframe: string): number[] =>
       context.flatMap((call, index) =>
         call[2] === instrument && call[3] === timeframe ? [index] : [],
       );
-    // The *timeframe* schedule is unchanged; only the instrument allocation
-    // within a timeframe has changed (3 focused for 1 research). Distinct
-    // per-timeframe counters prevent H4 being silently starved.
+    // The timeframe schedule is unchanged. All six share the same
+    // per-timeframe round-robin; H4 must not become starved.
     expect(context.slice(0, 16).map((call) => call[3])).toEqual([
       'M5',
       'M15',
@@ -324,39 +318,29 @@ describe('CTraderQuoteCollectorService', () => {
       'H1',
       'H4',
     ]);
-    for (const [timeframe, expectedFocused, expectedResearch] of [
-      ['M5', 18, 6],
-      ['M15', 18, 6],
-      ['H1', 9, 3],
-      ['H4', 3, 1],
+    for (const [timeframe, expectedCount] of [
+      ['M5', 12],
+      ['M15', 12],
+      ['H1', 6],
+      ['H4', 2],
     ] as const) {
-      for (const instrument of focused) {
-        expect(slotsFor(instrument, timeframe)).toHaveLength(expectedFocused);
-      }
-      for (const instrument of research) {
-        expect(slotsFor(instrument, timeframe)).toHaveLength(expectedResearch);
+      for (const instrument of instruments) {
+        expect(slotsFor(instrument, timeframe)).toHaveLength(expectedCount);
       }
     }
 
-    // With the staging 15s cycle, focused M5/M15 max gap is 3 minutes and
-    // research M5/M15 max gap 8 minutes, within their strict readiness bounds.
-    // H1 focused max gap is 6 min, vs 8 min under the old equal-share path.
+    // All six must stay within the 10/20-minute strict M5/M15 freshness
+    // bounds at the 15-second history cadence, including restored pairs.
     for (const instrument of instruments) {
       for (const timeframe of ['M5', 'M15', 'H1']) {
         const positions = slotsFor(instrument, timeframe);
-        const maxGap = focused.includes(instrument)
-          ? timeframe === 'H1'
-            ? 24
-            : 12
-          : timeframe === 'H1'
-            ? 64
-            : 32;
+        const maxGap = timeframe === 'H1' ? 64 : 32;
         for (let index = 1; index < positions.length; index += 1) {
           expect(positions[index]! - positions[index - 1]!).toBeLessThanOrEqual(maxGap);
         }
       }
     }
-    // Provider quote sampling still visits all six, including research-only.
+    // Provider quote sampling still visits all six at each live quote cycle.
     const quotesBySymbol = h.getCurrentPriceForConnection.mock.calls;
     for (const instrument of instruments) {
       expect(quotesBySymbol.filter((call) => call[2] === instrument)).toHaveLength(cycles);
@@ -445,7 +429,9 @@ describe('broker-native feed interruption diagnostics remain fail closed', () =>
       volume: '50',
     };
     h.getOhlcvForConnection.mockResolvedValue([recent]);
+    // Equal six-pair round-robin revisits EURUSD on the third (not second) cycle.
     await h.service.collectOnce(new Date(OPEN_NOW.getTime() + 15_000));
+    await h.service.collectOnce(new Date(OPEN_NOW.getTime() + 30_000));
     status = h.service.getHistoricalCollectionStatus();
     expect(status.latestBrokerClosedBarAt['EURUSD:M1']).toBe(recent.timestamp.toISOString());
     expect(status.staleHistoricalResponses['EURUSD:M1']).toBeUndefined();
@@ -487,8 +473,8 @@ describe('z.ai P9 cTrader historical failure telemetry', () => {
     const status = h.service.getHistoricalCollectionStatus();
     expect(status.lastSuccessfulCollectAt['EURUSD:M1']).toBe(OPEN_NOW.toISOString());
     expect(status.lastSuccessfulCollectAt['EURUSD:M5']).toBe(OPEN_NOW.toISOString());
-    expect(status.lastSuccessfulCollectAt['AUDUSD:M1']).toBe(OPEN_NOW.toISOString());
-    expect(status.lastSuccessfulCollectAt['USDJPY:M1']).toBeUndefined();
+    expect(status.lastSuccessfulCollectAt['USDJPY:M1']).toBe(OPEN_NOW.toISOString());
+    expect(status.lastSuccessfulCollectAt['AUDUSD:M1']).toBeUndefined();
     expect(status.historicalRefreshFailures).toEqual({});
     expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(6);
   });
