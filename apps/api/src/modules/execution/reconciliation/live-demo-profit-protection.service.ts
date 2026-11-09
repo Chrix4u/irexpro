@@ -11,6 +11,9 @@ import { evaluateProfitLockPatienceShadow } from './profit-lock-patience-shadow'
 import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
 
 const LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS = 5_000;
+// Maximum ordinary adverse-thesis grace from actual position open. A new
+// interval never starts at each scan/restart; a hard broker SL is never moved.
+export const CONTINUATION_RECOVERY_GRACE_MINUTES = 4.5;
 
 export interface LiveDemoM1AdverseEvidence {
   completedBars: number;
@@ -20,6 +23,8 @@ export interface LiveDemoM1AdverseEvidence {
   latestAgeSeconds: number;
   /** Independently observed cTrader quotes, never inferred from trendbar tick volume. */
   liveQuoteBars?: number;
+  /** Count of truly consecutive latest completed, independently quoted M1 bars. */
+  consecutiveLiveQuoteBars?: number;
   latestLiveSpreadPrice?: number | null;
 }
 
@@ -36,6 +41,80 @@ export interface LiveDemoAdverseProtectionDecision {
     | 'EMERGENCY_ADVERSE_CUT'
     | 'HOLD';
   currentR: number | null;
+}
+
+/**
+ * A narrowly scoped hold for EXISTING trend-continuation positions, never a
+ * new entry permission. Does not suppress broker stop, emergency adverse cut,
+ * confirmed opposite reversal, profit protection, or manual exit.
+ * Fail-closed on missing/stale same-side context and broker quote evidence.
+ */
+export function evaluateContinuationRecoveryGrace(input: {
+  tradeDirection: 'BUY' | 'SELL';
+  strategyRoute: string | null;
+  elapsedMinutes: number;
+  currentR: number | null;
+  adverseReason: LiveDemoAdverseProtectionDecision['reason'];
+  m1Evidence: LiveDemoM1AdverseEvidence | null;
+  m5Aligned: number | null;
+  m15Aligned: number | null;
+  alignmentObservedAt: Date | null;
+  observedAt: Date;
+  authoritativeStop: number | null;
+  brokerStop: number | null;
+  currentPrice: number | null;
+}): boolean {
+  if (
+    input.strategyRoute !== 'TREND_CONTINUATION' ||
+    input.adverseReason !== 'ADVERSE_THESIS_FAILED' ||
+    !Number.isFinite(input.elapsedMinutes) ||
+    input.elapsedMinutes < 1 ||
+    input.elapsedMinutes >= CONTINUATION_RECOVERY_GRACE_MINUTES ||
+    input.currentR === null ||
+    !Number.isFinite(input.currentR) ||
+    input.currentR <= -0.65 ||
+    input.currentR > -0.45 ||
+    input.authoritativeStop === null ||
+    input.authoritativeStop <= 0 ||
+    input.brokerStop === null ||
+    input.brokerStop <= 0 ||
+    // A configured DB stop is not sufficient: the broker must actually show
+    // the same protective stop for the currently open position.
+    Math.abs(input.brokerStop - input.authoritativeStop) >
+      Math.max(0.00001, input.authoritativeStop * 1e-7) ||
+    input.currentPrice === null ||
+    input.currentPrice <= 0 ||
+    (input.tradeDirection === 'BUY'
+      ? input.currentPrice <= input.authoritativeStop
+      : input.currentPrice >= input.authoritativeStop)
+  ) {
+    return false;
+  }
+  const m1 = input.m1Evidence;
+  if (
+    !m1 ||
+    m1.completedBars < 2 ||
+    (m1.consecutiveLiveQuoteBars ?? 0) < 2 ||
+    m1.latestAgeSeconds < 0 ||
+    m1.latestAgeSeconds > 90 ||
+    !Number.isFinite(m1.alignedLatestBodyPressure) ||
+    !Number.isFinite(m1.alignedMomentum3)
+  ) {
+    return false;
+  }
+  if (
+    input.m5Aligned === null ||
+    input.m15Aligned === null ||
+    !Number.isFinite(input.m5Aligned) ||
+    !Number.isFinite(input.m15Aligned) ||
+    input.m5Aligned <= 0 ||
+    input.m15Aligned <= 0 ||
+    !input.alignmentObservedAt
+  ) {
+    return false;
+  }
+  const asOfAge = (input.observedAt.getTime() - input.alignmentObservedAt.getTime()) / 1000;
+  return Number.isFinite(asOfAge) && asOfAge >= 0 && asOfAge <= 150;
 }
 
 export interface LiveDemoTrainedExpertThesis {
@@ -506,6 +585,60 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               m1Evidence,
             });
             if (!adverseDecision.shouldClose) continue;
+
+            // Only ordinary, moderate adverse-thesis continuation cuts can
+            // receive a bounded re-evaluation. All emergency, broker stop,
+            // qualified opposite-reversal and protective exits already ran.
+            // A failed/slow research-context read must NOT prevent closing.
+            if (
+              adverseDecision.reason === 'ADVERSE_THESIS_FAILED' &&
+              trade.is_m1_strategy &&
+              strategyRoute === 'TREND_CONTINUATION'
+            ) {
+              let alignedContext: {
+                m5Aligned: number | null;
+                m15Aligned: number | null;
+                observedAt: Date;
+              } | null = null;
+              try {
+                alignedContext = await this.loadPositionSideAlignmentWithinDeadline(
+                  trade,
+                  observedAt,
+                );
+              } catch {
+                this.logger.warn(
+                  'cTrader adverse grace context unavailable; normal close remains eligible',
+                );
+              }
+              const elapsedMinutes = (observedAt.getTime() - openedAt.getTime()) / 60_000;
+              if (
+                evaluateContinuationRecoveryGrace({
+                  tradeDirection: trade.direction,
+                  strategyRoute,
+                  elapsedMinutes,
+                  currentR: adverseDecision.currentR,
+                  adverseReason: adverseDecision.reason,
+                  m1Evidence,
+                  m5Aligned: alignedContext?.m5Aligned ?? null,
+                  m15Aligned: alignedContext?.m15Aligned ?? null,
+                  alignmentObservedAt: alignedContext?.observedAt ?? null,
+                  observedAt,
+                  authoritativeStop,
+                  brokerStop: finite(position.stopLoss),
+                  currentPrice,
+                })
+              ) {
+                // Avoid logging the same trade twelve times per minute.
+                if (Math.floor(observedAt.getTime() / 5_000) % 12 === 0) {
+                  this.logger.log(
+                    `cTrader adverse recovery grace trade=${trade.trade_id} ${trade.instrument} ${trade.direction} ` +
+                      `elapsedMin=${elapsedMinutes.toFixed(2)} currentR=${adverseDecision.currentR?.toFixed(3) ?? 'n/a'} ` +
+                      `M5M15=ALIGNED stop=UNCHANGED hardExit=ACTIVE`,
+                  );
+                }
+                continue;
+              }
+            }
 
             this.logger.warn(
               `cTrader DEMO AI_CLOSE_SIGNAL trade=${trade.trade_id} ${trade.instrument} ${trade.direction} ` +
@@ -992,6 +1125,64 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     };
   }
 
+  private async loadPositionSideAlignmentWithinDeadline(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+  ): Promise<{ m5Aligned: number | null; m15Aligned: number | null; observedAt: Date } | null> {
+    // A broken/slow diagnostic query must never postpone the original
+    // protective broker close for an indefinite period.
+    let deadline: NodeJS.Timeout | null = null;
+    try {
+      const timeout = new Promise<null>((resolve) => {
+        deadline = setTimeout(() => resolve(null), 500);
+      });
+      return await Promise.race([this.loadRecentPositionSideAlignment(trade, observedAt), timeout]);
+    } finally {
+      if (deadline) clearTimeout(deadline);
+    }
+  }
+
+  private async loadRecentPositionSideAlignment(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+  ): Promise<{ m5Aligned: number | null; m15Aligned: number | null; observedAt: Date } | null> {
+    // Same-side existing-trade trend context is NOT a new entry authority.
+    // Use only decisions actually persisted before this close checkpoint.
+    const rows = (await this.dataSource.query(
+      `
+        SELECT created_at, candidate->>'alignedM5' AS aligned_m5,
+          candidate->>'alignedM15' AS aligned_m15
+        FROM trading.m1_tactical_decisions
+        WHERE user_id = $1 AND broker_connection_id = $2
+          AND instrument = $3 AND direction = $4
+          AND created_at <= $5::timestamptz
+          AND created_at >= $5::timestamptz - interval '150 seconds'
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      `,
+      [
+        trade.user_id,
+        trade.broker_connection_id,
+        trade.instrument.toUpperCase(),
+        trade.direction,
+        observedAt.toISOString(),
+      ],
+    )) as Array<{
+      created_at: Date | string;
+      aligned_m5: string | number | null;
+      aligned_m15: string | number | null;
+    }>;
+    const row = rows[0];
+    if (!row) return null;
+    const timestamp = new Date(row.created_at);
+    if (!Number.isFinite(timestamp.getTime())) return null;
+    return {
+      m5Aligned: row.aligned_m5 === null ? null : finite(row.aligned_m5),
+      m15Aligned: row.aligned_m15 === null ? null : finite(row.aligned_m15),
+      observedAt: timestamp,
+    };
+  }
+
   private async loadCausalM1Evidence(
     trade: OpenAiTradeRow,
     observedAt: Date,
@@ -1073,10 +1264,20 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     const alignedMomentum3 =
       totalRange > 0 ? sign * ((latest.close - oldest.open) / totalRange) : 0;
     const latestCloseAt = latest.bucketTime.getTime() + 60_000;
+    let consecutiveLiveQuoteBars = 0;
+    for (const row of parsed) {
+      if (
+        !row.hasLiveQuote ||
+        row.bucketTime.getTime() !== latest.bucketTime.getTime() - consecutiveLiveQuoteBars * 60_000
+      )
+        break;
+      consecutiveLiveQuoteBars++;
+    }
     return {
       completedBars: parsed.length,
       adverseBars: parsed.filter((row) => row.alignedBodyPressure <= -0.15).length,
       liveQuoteBars: parsed.filter((row) => row.hasLiveQuote).length,
+      consecutiveLiveQuoteBars,
       latestLiveSpreadPrice: latest.hasLiveQuote ? latest.spreadPrice : null,
       alignedLatestBodyPressure: latest.alignedBodyPressure,
       alignedMomentum3,
