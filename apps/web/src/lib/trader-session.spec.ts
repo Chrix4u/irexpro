@@ -11,6 +11,7 @@ import {
   prepareBrokerForAutomationStart,
   resetDailyLossProtection,
   resetDailyLossProtectionForBroker,
+  riskSuspensionMatchesBroker,
   shouldOfferRiskResetAfterEndedSession,
 } from './trader-session';
 
@@ -67,6 +68,70 @@ const CONFIRMATION = {
   expiresAt: '2026-09-10T00:05:00.000Z',
   orderPayloadDigest: 'sha256:fixture-digest',
 } satisfies ExecutionConfirmationView;
+
+describe('riskSuspensionMatchesBroker', () => {
+  const distinctAccounts = [
+    { id: 'old-ctrader', logicalAccountKey: 'old-account-key' },
+    { id: 'pepperstone-demo', logicalAccountKey: 'new-account-key' },
+  ];
+
+  it('does not lock a different verified Pepperstone DEMO account', () => {
+    expect(
+      riskSuspensionMatchesBroker(
+        { brokerConnectionId: 'old-ctrader' },
+        'pepperstone-demo',
+        distinctAccounts,
+      ),
+    ).toBe(false);
+  });
+
+  it('retains protection for the same breached broker connection', () => {
+    expect(
+      riskSuspensionMatchesBroker(
+        { brokerConnectionId: 'old-ctrader' },
+        'old-ctrader',
+        distinctAccounts,
+      ),
+    ).toBe(true);
+  });
+
+  it('retains protection when the SAME account is reconnected under a new connection ID', () => {
+    expect(
+      riskSuspensionMatchesBroker(
+        { brokerConnectionId: 'old-ctrader' },
+        'pepperstone-demo',
+        [
+          { id: 'old-ctrader', logicalAccountKey: 'shared-account-key' },
+          { id: 'pepperstone-demo', logicalAccountKey: 'shared-account-key' },
+        ],
+      ),
+    ).toBe(true);
+  });
+
+  it('fails closed when either identity, violation scope or broker selection is unknown', () => {
+    expect(
+      riskSuspensionMatchesBroker({}, 'pepperstone-demo', distinctAccounts),
+    ).toBe(true);
+    expect(
+      riskSuspensionMatchesBroker({ brokerConnectionId: null }, 'pepperstone-demo', distinctAccounts),
+    ).toBe(true);
+    expect(
+      riskSuspensionMatchesBroker({ brokerConnectionId: '' }, 'pepperstone-demo', distinctAccounts),
+    ).toBe(true);
+    expect(
+      riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, null, distinctAccounts),
+    ).toBe(true);
+    expect(
+      riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, 'pepperstone-demo', []),
+    ).toBe(true);
+    expect(
+      riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, 'pepperstone-demo', [
+        { id: 'old-ctrader', logicalAccountKey: null },
+        { id: 'pepperstone-demo', logicalAccountKey: 'new-account-key' },
+      ]),
+    ).toBe(true);
+  });
+});
 
 describe('prepareBrokerForAutomationStart', () => {
   beforeEach(() => {

@@ -486,6 +486,36 @@ export interface DailyRiskCooldownState {
  * precedence. Otherwise the UI offers a daily-loss reset that the server
  * correctly rejects with 403.
  */
+/**
+ * An ended session's historic drawdown belongs to its broker connection.
+ * A different selected DEMO account may configure its OWN allocation,
+ * but this does not remove the original violation, reset a suspended
+ * session, or grant a new session any execution authority.
+ *
+ * An absent/malformed scope is legacy evidence: fail closed and keep
+ * the historic protection visible rather than guessing another account.
+ */
+export function riskSuspensionMatchesBroker(
+  latestViolation: { brokerConnectionId?: string | null } | null | undefined,
+  selectedBrokerConnectionId: string | null,
+  brokers: ReadonlyArray<{ id: string; logicalAccountKey?: string | null }>,
+): boolean {
+  if (!latestViolation || !selectedBrokerConnectionId) return true;
+  const scope = latestViolation.brokerConnectionId;
+  if (typeof scope !== 'string' || !scope.trim()) return true;
+  if (scope === selectedBrokerConnectionId) return true;
+
+  // Reconnecting the SAME logical broker account can create a new connection
+  // UUID. A different UUID alone must never evade the original drawdown
+  // protection. If either account identity is missing, keep it locked.
+  const oldIdentity = brokers.find((broker) => broker.id === scope)?.logicalAccountKey?.trim();
+  const newIdentity = brokers
+    .find((broker) => broker.id === selectedBrokerConnectionId)
+    ?.logicalAccountKey?.trim();
+  if (!oldIdentity || !newIdentity) return true;
+  return oldIdentity === newIdentity;
+}
+
 export function shouldOfferRiskResetAfterEndedSession(input: {
   dailyRiskCooldownActive: boolean;
   latestRiskSuspensionCode: string | null | undefined;
