@@ -634,6 +634,21 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
+/**
+ * Observability only: bounded latest-scan metrics per pair.
+ * Never affects execution authority, admission or price calculations.
+ */
+export interface M1TacticalScanTiming {
+  slotTime: string;
+  startedAfterSlotMs: number;
+  finishedAfterSlotMs: number;
+  totalMs: number;
+  marketLoadMs: number | null;
+  decisionEvaluationMs: number | null;
+  shadowSettlementMs: number | null;
+  state: 'COMPLETED' | 'MARKET_NOT_READY' | 'FEATURES_UNAVAILABLE' | 'ERROR';
+}
+
 @Injectable()
 export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(M1TacticalSchedulerService.name);
@@ -645,6 +660,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
   private lastRunAt: Date | null = null;
   private lastError: string | null = null;
   private readonly marketReadiness = new Map<string, M1TacticalMarketReadiness>();
+  private readonly lastScanTimings = new Map<string, M1TacticalScanTiming>();
 
   constructor(
     private readonly config: ConfigService,
@@ -730,6 +746,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ]),
       ),
       m5Independent: true as const,
+      // Snapshot only; no account identifiers or trading inputs.
+      scanTimings: Object.fromEntries(
+        [...this.lastScanTimings.entries()].map(([instrument, timing]) => [
+          instrument,
+          { ...timing },
+        ]),
+      ),
     };
   }
 
@@ -769,12 +792,59 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ]
         : this.rolloutPolicy.instruments;
       for (const instrument of scanOrder) {
+        const startedAt = Date.now();
+        const trace: M1TacticalScanTiming = {
+          slotTime: slotKey,
+          startedAfterSlotMs: Math.max(0, startedAt - decisionTime.getTime()),
+          finishedAfterSlotMs: 0,
+          totalMs: 0,
+          marketLoadMs: null,
+          decisionEvaluationMs: null,
+          shadowSettlementMs: null,
+          state: 'ERROR',
+        };
         try {
-          await this.processInstrument(userId, brokerConnectionId, instrument, decisionTime);
+          await this.processInstrument(userId, brokerConnectionId, instrument, decisionTime, trace);
+          if (trace.state === 'ERROR') trace.state = 'COMPLETED';
         } catch (error) {
           this.logger.warn(
-            `M1 tactical ${instrument} slot=${slotKey} failed closed: ${(error as Error).message}`,
+            'M1 tactical ' +
+              instrument +
+              ' slot=' +
+              slotKey +
+              ' failed closed: ' +
+              (error as Error).message,
           );
+        } finally {
+          const finishedAt = Date.now();
+          trace.totalMs = Math.max(0, finishedAt - startedAt);
+          trace.finishedAfterSlotMs = Math.max(0, finishedAt - decisionTime.getTime());
+          this.lastScanTimings.set(instrument, { ...trace });
+          // Avoid per-minute logs for healthy fast pairs; log timing anomalies.
+          // A historical/test-injected slot should not produce false live-latency alarms.
+          if (
+            trace.startedAfterSlotMs <= 5 * 60_000 &&
+            (trace.totalMs >= 15_000 || trace.startedAfterSlotMs >= 35_000)
+          ) {
+            this.logger.warn(
+              'M1 tactical latency instrument=' +
+                instrument +
+                ' slot=' +
+                slotKey +
+                ' startLagMs=' +
+                trace.startedAfterSlotMs +
+                ' totalMs=' +
+                trace.totalMs +
+                ' marketMs=' +
+                (trace.marketLoadMs ?? 'UNKNOWN') +
+                ' decisionMs=' +
+                (trace.decisionEvaluationMs ?? 'UNKNOWN') +
+                ' shadowMs=' +
+                (trace.shadowSettlementMs ?? 'UNKNOWN') +
+                ' state=' +
+                trace.state,
+            );
+          }
         }
       }
       this.lastRunAt = new Date(now);
@@ -792,8 +862,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     brokerConnectionId: string,
     instrument: string,
     decisionTime: Date,
+    timing?: M1TacticalScanTiming,
   ): Promise<void> {
+    const marketStartedAt = Date.now();
     const market = await this.marketData.loadSnapshot(brokerConnectionId, instrument, decisionTime);
+    if (timing) timing.marketLoadMs = Math.max(0, Date.now() - marketStartedAt);
     const readiness = this.marketData.getLastReadiness?.(brokerConnectionId, instrument) ?? null;
     if (readiness) {
       const previous = this.marketReadiness.get(instrument);
@@ -806,7 +879,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         );
       }
     }
-    if (!market) return;
+    if (!market) {
+      if (timing) timing.state = 'MARKET_NOT_READY';
+      return;
+    }
 
     const features = buildM1TacticalFeatures({
       instrument: market.instrument,
@@ -817,8 +893,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       h1: market.h1,
       h4: market.h4,
     });
-    if (!features) return;
+    if (!features) {
+      if (timing) timing.state = 'FEATURES_UNAVAILABLE';
+      return;
+    }
 
+    const decisionStartedAt = Date.now();
     const eventRisk = await this.macroEventRisk.assess(instrument, decisionTime);
     const candidates = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2);
     for (const [candidate, opposite] of [
@@ -838,6 +918,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       );
     }
 
+    if (timing) timing.decisionEvaluationMs = Math.max(0, Date.now() - decisionStartedAt);
+    const settlementStartedAt = Date.now();
     await this.settleMatureDriftCounterfactuals(
       userId,
       brokerConnectionId,
@@ -859,6 +941,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       decisionTime,
       market.m1,
     );
+    if (timing) timing.shadowSettlementMs = Math.max(0, Date.now() - settlementStartedAt);
   }
 
   private async settleMatureLowVolRangeShadowEpisodes(

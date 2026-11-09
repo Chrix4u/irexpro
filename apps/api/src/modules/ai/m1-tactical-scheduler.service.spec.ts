@@ -345,6 +345,52 @@ describe('M1TacticalSchedulerService shadow phase', () => {
     interval.mockRestore();
   });
 
+  it('reports latest per-pair timing breakdown without changing signal authority', async () => {
+    const h = harness();
+    await h.service.runOnce(OPEN_NOW);
+
+    const timings = h.service.getStatus().scanTimings;
+    expect(Object.keys(timings)).toHaveLength(6);
+    for (const instrument of ['AUDUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCAD', 'USDCHF']) {
+      const timing = timings[instrument];
+      expect(timing).toEqual(
+        expect.objectContaining({
+          slotTime: '2026-10-15T12:30:00.000Z',
+          startedAfterSlotMs: expect.any(Number),
+          finishedAfterSlotMs: expect.any(Number),
+          totalMs: expect.any(Number),
+          marketLoadMs: expect.any(Number),
+          decisionEvaluationMs: expect.any(Number),
+          shadowSettlementMs: expect.any(Number),
+          state: 'COMPLETED',
+        }),
+      );
+      expect(timing.totalMs).toBeGreaterThanOrEqual(0);
+    }
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.recordDecision).toHaveBeenCalledTimes(12);
+  });
+
+  it('marks missing market data and pair fetch failures without stopping other instruments', async () => {
+    const unready = harness({ warm: false });
+    await unready.service.runOnce(OPEN_NOW);
+    expect(unready.service.getStatus().scanTimings.EURUSD).toEqual(
+      expect.objectContaining({
+        state: 'MARKET_NOT_READY',
+        marketLoadMs: expect.any(Number),
+        decisionEvaluationMs: null,
+        shadowSettlementMs: null,
+      }),
+    );
+    const failed = harness({ marketDataErrorFor: 'EURUSD' });
+    await failed.service.runOnce(OPEN_NOW);
+    expect(failed.service.getStatus().scanTimings.EURUSD).toEqual(
+      expect.objectContaining({ state: 'ERROR', decisionEvaluationMs: null }),
+    );
+    expect(failed.service.getStatus().scanTimings.USDJPY.state).toBe('COMPLETED');
+    expect(failed.receiveSignal).not.toHaveBeenCalled();
+  });
+
   it('evaluates one completed minute only once even when woken again inside the same minute', async () => {
     const h = harness();
     await h.service.runOnce(OPEN_NOW);
