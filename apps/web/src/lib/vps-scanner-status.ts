@@ -766,6 +766,16 @@ export function deriveTradeReadinessUiState(
       blocker.startsWith("MULTIMODEL_TRAINED_EXPERT_"),
     );
     const planBBlocked = blockers.includes("MULTIMODEL_PLAN_B_NOT_ADMITTED");
+    const trendExtendedNotQualified =
+      planBBlocked &&
+      m1Decision.planBRegimeAllowed === false &&
+      m1Decision.planBRegime === "TREND_EXTENDED";
+    const m1HigherTimeframeConflict =
+      m1Decision.m1TimingRoute === "ABSTAIN" &&
+      m1Decision.m1TimingReason === "HIGHER_TIMEFRAME_CONFLICT";
+    const m1TimingConfirmed =
+      m1Decision.m1TimingRoute === "M1_TREND_CONTINUATION" &&
+      m1Decision.m1TimingReason === "TREND_STRUCTURE_ALIGNED";
     let detail = multimodelPrimary
       ? "The multi-model ensemble is evaluating fresh broker-native data, but the current quorum still has execution blockers."
       : "The active M1 engine is evaluating fresh broker-native data, but this setup still has execution blockers.";
@@ -826,7 +836,13 @@ export function deriveTradeReadinessUiState(
         m1Decision.planBRegimeAllowed === false
           ? m1Decision.planBRegime === "ROLLOVER_RISK"
             ? "The Sunday reopening or New York rollover market is not a qualified Plan B trading regime. Session quality, model drift and M1 entry timing may also prevent a trade. Predicted after-cost and historical commission thresholds are shadow-only research and do not independently veto orders."
-            : "This market is outside the currently qualified Plan B strategy regimes. Plan B has not admitted an entry; drift and signal-quality checks may also reject it. Predicted after-cost and historical commission thresholds remain shadow-only research."
+            : trendExtendedNotQualified
+              ? m1HigherTimeframeConflict
+                ? `Plan B has not admitted an entry: it sees an extended trend rather than a qualified new-entry regime. The proposed ${m1Decision.direction} also conflicts with the higher-timeframe trend, so M1 has abstained. Neither a positive predicted return nor the readiness score overrides these independent checks. Predicted after-cost and historical commission thresholds remain shadow-only research.`
+                : m1TimingConfirmed
+                  ? `M1 ${m1Decision.direction} entry timing is aligned, but Plan B has not admitted an entry: it still classifies this as an extended trend without a qualified new-entry route. Agreement on timing alone does not authorize a trade. Predicted after-cost and historical commission thresholds remain shadow-only research.`
+                  : "Plan B has not admitted an entry: it sees an extended trend without a qualified new-entry route. M1 has not independently confirmed a valid entry. Predicted after-cost and historical commission thresholds remain shadow-only research."
+              : "This market is outside the currently qualified Plan B strategy regimes. Plan B has not admitted an entry; drift and signal-quality checks may also reject it. Predicted after-cost and historical commission thresholds remain shadow-only research."
           : "Plan B has not admitted this entry. The meter is not an execution instruction; independent model quality, drift and account-risk restrictions may still be active. Predicted after-cost and historical commission thresholds are research-only.";
     }
     const driftEvidence = driftBlocked
@@ -854,7 +870,11 @@ export function deriveTradeReadinessUiState(
       ...(planBBlocked && !planBPrimary ? ["Plan B model has not admitted this setup"] : []),
       ...(driftBlocked && !driftPrimary ? ["Market outside the validated model range"] : []),
       ...(blockers.includes("MULTIMODEL_CONTINUATION_TIMING_NOT_READY") && !timingPrimary
-        ? ["M1 entry timing is not confirmed"]
+        ? [m1HigherTimeframeConflict
+          ? `Higher-timeframe trend conflicts with proposed ${m1Decision.direction}`
+          : m1Decision.m1TimingReason === "DIRECTION_EDGE_TOO_SMALL"
+            ? "M1 directional evidence is too weak"
+            : "M1 entry timing is not confirmed"]
         : []),
       ...(blockers.includes("MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED")
         ? ["M1 reversal is not confirmed"]
