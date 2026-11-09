@@ -332,6 +332,30 @@ jobs:
           GROUP BY p.instrument
           ORDER BY p.instrument;
 
+          -- Read-only comparison readiness for another DEMO broker. Scope to
+          -- the active FULL_AUTO owner's own connections; expose provider
+          -- types and counts only, never account IDs or credentials. CONNECTED
+          -- here is not proof of a working hosted MT5 worker.
+          WITH active_owner AS (
+            SELECT DISTINCT user_id
+            FROM trading.trading_sessions
+            WHERE execution_mode = 'FULL_AUTO'
+              AND status::text = 'ACTIVE'
+          )
+          SELECT 'owner_demo_broker_connection_counts',
+            b.broker_id,
+            b.status::text,
+            COUNT(*)
+          FROM broker.broker_connections b
+          JOIN active_owner a ON a.user_id = b.user_id
+          WHERE b.account_type = 'DEMO'
+            AND b.broker_id IN (
+              'ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader',
+              'direct-mt5', 'oanda', 'metatrader5'
+            )
+          GROUP BY b.broker_id, b.status::text
+          ORDER BY b.broker_id, b.status::text;
+
           -- Distinguish a model block from lack of user-authorised execution.
           -- No user, account, or connection identifiers leave this diagnostic.
           SELECT
