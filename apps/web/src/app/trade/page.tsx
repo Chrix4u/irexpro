@@ -77,6 +77,7 @@ import {
   prepareBrokerForAutomationStart,
   resetDailyLossProtection,
   resetDailyLossProtectionForBroker,
+  riskSuspensionMatchesBroker,
   shouldOfferRiskResetAfterEndedSession,
 } from "@/lib/trader-session";
 import "./ai-trader.css";
@@ -1844,7 +1845,20 @@ export default function AiTradingPage() {
   const dailyRiskCooldown = dailyRiskCooldownFromViolation(
     terminal?.risk?.latestDailyLossViolation ?? null,
   );
+  // A stopped session's violation is historical USER evidence, not an
+  // account-global lock on every different broker the user selects.
+  // Active/suspended sessions remain pinned to their actual execution broker.
+  const riskUiBrokerConnectionId =
+    terminal?.sessionBroker?.id ??
+    terminal?.brokers.find((broker) => broker.id === selectedBrokerId)?.id ??
+    terminal?.primaryBroker?.id ??
+    null;
+  const endedRiskViolationMatchesBroker = riskSuspensionMatchesBroker(
+    terminal?.risk?.latestRiskSuspensionViolation ?? null,
+    riskUiBrokerConnectionId,
+  );
   const endedRiskResetAvailable =
+    endedRiskViolationMatchesBroker &&
     shouldOfferRiskResetAfterEndedSession({
       dailyRiskCooldownActive: dailyRiskCooldown.active,
       latestRiskSuspensionCode,
