@@ -128,6 +128,9 @@ export enum AuditAction {
   TRADE_SUBMITTED = 'TRADE_SUBMITTED',
   TRADE_OPENED = 'TRADE_OPENED',
   TRADE_MODIFIED = 'TRADE_MODIFIED',
+  // Pre-broker dispatch record; not proof of a fill. Survives deferred
+  // reconciliation when cTrader provides no specific close reason.
+  TRADE_CLOSE_REQUESTED = 'TRADE_CLOSE_REQUESTED',
   TRADE_CLOSED = 'TRADE_CLOSED',
   // Read-only DEMO profit-lock trend check, evaluated as of the close decision.
   // A shadow HOLD recommendation never overrides an existing protective close.

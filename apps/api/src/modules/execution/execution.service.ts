@@ -69,6 +69,12 @@ interface AiCloseTrigger {
     | 'DEMO_DRAWDOWN_GUARD'
     | 'M1_CONFIRMED_DIRECTION_FLIP';
   reasonCode?: string;
+  /** Optional producer evidence. Never use these fields to authorize a close. */
+  decisionSignalId?: string;
+  strategyCode?: string;
+  modelVersion?: string;
+  confidenceScore?: number;
+  decisionAt?: string;
 }
 
 /**
@@ -1154,7 +1160,39 @@ export class ExecutionService {
       providerReferenceId,
     };
 
+    // Begin durable request-side provenance before broker dispatch. Crucially
+    // do NOT await the audit DB before sending a risk-reducing CLOSE_POSITION:
+    // slow audit storage must not delay a protective close. The request event
+    // remains queryable if reconciliation later records only AI_CLOSE_SIGNAL.
+    // When producer evidence is missing, record UNVERIFIED rather than guessing.
+    const closeRequestAudit = this.auditService
+      .log({
+        actorUserId: userId,
+        action: AuditAction.TRADE_CLOSE_REQUESTED,
+        resourceType: 'Trade',
+        resourceId: trade.id,
+        metadata: {
+          closeReason: reason,
+          instrument: trade.instrument,
+          direction: trade.direction,
+          closeOrderClientId: closeIntent.clientOrderId,
+          attempt,
+          aiCloseTrigger:
+            reason === TradeCloseReason.AI_CLOSE_SIGNAL
+              ? (aiCloseTrigger ?? { source: 'UNVERIFIED' })
+              : null,
+          executionOutcome: 'NOT_YET_DISPATCHED',
+        },
+      })
+      .catch(() => {
+        // AuditService already catches storage failures; tolerate a defensive
+        // mock/alternative implementation rejection without blocking broker CLOSE.
+        this.logger.warn('Trade close provenance audit unavailable');
+      });
+
     const dispatch = await this.orchestrator.dispatchOrder(closeIntent, connection);
+    // Wait only after the broker dispatch attempt, before processing its result.
+    await closeRequestAudit;
     const triggerMetadata =
       reason === TradeCloseReason.AI_CLOSE_SIGNAL && aiCloseTrigger ? { aiCloseTrigger } : {};
 

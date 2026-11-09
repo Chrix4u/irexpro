@@ -1218,6 +1218,120 @@ describe('ExecutionService', () => {
       );
     });
 
+    it.each(['FILLED', 'WORKING', 'UNKNOWN', 'REJECTED'] as const)(
+      'records AI close source before %s dispatch, even if the provider does not close immediately',
+      async (outcome) => {
+        tradeRepo.findOne.mockResolvedValue(openTrade());
+        orchestrator.dispatchOrder.mockResolvedValueOnce({
+          outcome,
+          orderId: mockOrder.id,
+          avgFillPrice: '1.09000',
+          reason: 'provider response',
+          certainty: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+        });
+        const trigger = {
+          source: 'AI_EXIT_ORCHESTRATOR',
+          decisionSignalId: 'decision-signal-123',
+          strategyCode: 'multimodel-test',
+          modelVersion: 'v3',
+          confidenceScore: 0.71,
+          decisionAt: '2026-11-09T08:51:00.000Z',
+        } as const;
+        try {
+          await service.closeTrade('trade-1', 'user-1', TradeCloseReason.AI_CLOSE_SIGNAL, trigger);
+        } catch {
+          if (outcome !== 'REJECTED') throw new Error('unexpected close failure');
+        }
+        expect(auditService.log).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: AuditAction.TRADE_CLOSE_REQUESTED,
+            resourceType: 'Trade',
+            resourceId: 'trade-1',
+            metadata: expect.objectContaining({
+              closeReason: TradeCloseReason.AI_CLOSE_SIGNAL,
+              instrument: 'EURUSD',
+              attempt: 1,
+              closeOrderClientId: 'close-trade-1',
+              aiCloseTrigger: trigger,
+              executionOutcome: 'NOT_YET_DISPATCHED',
+            }),
+          }),
+        );
+        const auditOrder = auditService.log.mock.invocationCallOrder.find(
+          (_, index: number) =>
+            auditService.log.mock.calls[index][0].action === AuditAction.TRADE_CLOSE_REQUESTED,
+        );
+        expect(auditOrder).toBeLessThan(orchestrator.dispatchOrder.mock.invocationCallOrder[0]);
+      },
+    );
+
+    it('does not delay broker close dispatch while the provenance audit store is slow', async () => {
+      tradeRepo.findOne.mockResolvedValue(openTrade());
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'UNKNOWN',
+        orderId: mockOrder.id,
+        certainty: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+      });
+
+      let releaseAudit!: () => void;
+      auditService.log.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseAudit = resolve;
+          }),
+      );
+      const closing = service.closeTrade('trade-1', 'user-1', TradeCloseReason.AI_CLOSE_SIGNAL, {
+        source: 'BROKER_ADVERSE_PROTECTION',
+        reasonCode: 'ADVERSE_THESIS_FAILED',
+      });
+      // Audit write is pending; the provider dispatch must still have started.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledWith(
+        expect.objectContaining({ providerAction: 'CLOSE_POSITION' }),
+        expect.anything(),
+      );
+      releaseAudit();
+      await closing;
+    });
+
+    it('marks AI close provenance UNVERIFIED when the caller supplies no trigger', async () => {
+      tradeRepo.findOne.mockResolvedValue(openTrade());
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'UNKNOWN',
+        orderId: mockOrder.id,
+        certainty: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+      });
+      await service.closeTrade('trade-1', 'user-1', TradeCloseReason.AI_CLOSE_SIGNAL);
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.TRADE_CLOSE_REQUESTED,
+          metadata: expect.objectContaining({
+            aiCloseTrigger: { source: 'UNVERIFIED' },
+          }),
+        }),
+      );
+    });
+
+    it('does not invent an AI close producer for a manual close', async () => {
+      tradeRepo.findOne.mockResolvedValue(openTrade());
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'FILLED',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        avgFillPrice: '1.09000',
+      });
+      await service.closeTrade('trade-1', 'user-1', TradeCloseReason.MANUAL_CLOSE);
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.TRADE_CLOSE_REQUESTED,
+          metadata: expect.objectContaining({
+            closeReason: TradeCloseReason.MANUAL_CLOSE,
+            aiCloseTrigger: null,
+          }),
+        }),
+      );
+    });
+
     it('FAIL-CLOSED: provider-refused close throws ConflictException and trade stays OPEN', async () => {
       tradeRepo.findOne.mockResolvedValue(openTrade());
       orchestrator.dispatchOrder.mockResolvedValueOnce({

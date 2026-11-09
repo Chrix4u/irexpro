@@ -291,7 +291,17 @@ export class AiExitOrchestratorService {
           target.id,
           signal.userId,
           TradeCloseReason.AI_CLOSE_SIGNAL,
-          { source: 'AI_EXIT_ORCHESTRATOR' },
+          {
+            source: 'AI_EXIT_ORCHESTRATOR',
+            decisionSignalId: signal.signalId,
+            strategyCode: signal.strategyCode ?? undefined,
+            modelVersion: signal.modelVersion ?? undefined,
+            confidenceScore: signal.confidenceScore,
+            decisionAt:
+              typeof signal.generatedAt === 'string'
+                ? signal.generatedAt
+                : signal.generatedAt.toISOString(),
+          },
         );
         trades.push({
           tradeId: target.id,
