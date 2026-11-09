@@ -37,6 +37,7 @@ describe('VPS no-trade diagnostics workflow contract', () => {
 
     expect(source).toContain('ctrader_m1_persisted_freshness');
     expect(source).toContain('ctrader_active_demo_sources');
+    expect(source).toContain('owner_demo_broker_connection_counts');
     expect(source).toContain('ctrader_collector_m1_error_class_counts');
     expect(source).toContain("c.source = 'ctrader-broker-native'");
     expect(source).toContain("s.execution_mode = 'FULL_AUTO'");
