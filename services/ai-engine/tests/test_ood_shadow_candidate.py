@@ -35,6 +35,8 @@ def example(*, direction: str = "BUY") -> dict:
         "entry_ask": 1.1002,
         "future_bid_15m": 1.1006,
         "future_ask_15m": 1.1008,
+        "entry_quote_source": "ctrader-broker-native",
+        "future_quote_source": "ctrader-broker-native",
     }
     record.update({name: 0.32 for name in NUMERIC_FEATURES})
     record.update({
@@ -68,6 +70,41 @@ def test_asof_quotes_and_future_labels_never_enter_model_features() -> None:
     assert features.iloc[0]["envelope_rsi14"] == pytest.approx(44)
     assert records.iloc[0]["precise_envelope_complete"]
     assert quality["precise_envelope_records"] == 1
+
+
+def test_research_rejects_cross_provider_or_unverified_quote_provenance() -> None:
+    for source_key in ("entry_quote_source", "future_quote_source"):
+        candidate = example()
+        candidate[source_key] = "metaapi-rpc-sampled"
+        with pytest.raises(ValueError, match="causal quote"):
+            prepare_cohort(pd.DataFrame([candidate]))
+
+
+def test_six_pair_diagnostic_uses_jpy_pip_scale_without_changing_training_scope() -> None:
+    from app.domain.training.ood_shadow_candidate import (
+        APPROVED_PAIRS,
+        SIX_PAIR_RESEARCH_PAIRS,
+    )
+    assert APPROVED_PAIRS == ("AUDUSD", "EURUSD", "GBPUSD")
+    assert len(SIX_PAIR_RESEARCH_PAIRS) == 6
+    jpy = example()
+    jpy.update({
+        "instrument": "USDJPY",
+        "entry_bid": 150.00,
+        "entry_ask": 150.02,
+        "future_bid_15m": 150.09,
+        "future_ask_15m": 150.11,
+        "stop_distance": 0.2,
+    })
+    with pytest.raises(ValueError, match="causal quote"):
+        prepare_cohort(pd.DataFrame([jpy]))
+    rows, quality = prepare_cohort(
+        pd.DataFrame([jpy]), approved_pairs=SIX_PAIR_RESEARCH_PAIRS
+    )
+    assert quality["causally_verified_records"] == 1
+    assert rows.iloc[0]["spread_observed_pips"] == pytest.approx(2.0)
+    assert rows.iloc[0]["spread_inclusive_pips"] == pytest.approx(7.0)
+    assert rows.iloc[0]["proxy_pips"] == pytest.approx(6.0)
 
 
 def test_legacy_ood_labels_remain_for_research_but_cannot_fit_without_magnitudes() -> None:
