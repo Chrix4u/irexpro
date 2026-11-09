@@ -119,7 +119,8 @@ function normalize(row){
   };
 }
 function summarize(rows){
-  let positives=0,net=0,gross=0,fees=0;
+  let positives=0,grossPositives=0,grossPositiveNetNonpositive=0;
+  let net=0,gross=0,fees=0;
   const days=new Set(),pricedDays=new Set();
   let priced=0,failed=0;
   for(const item of rows){
@@ -127,12 +128,18 @@ function summarize(rows){
     if(item.net===null){failed++;continue;}
     priced++;pricedDays.add(item.day);
     if(item.net>0)positives++;
+    if(item.gross>0){
+      grossPositives++;
+      if(item.net<=0)grossPositiveNetNonpositive++;
+    }
     net+=item.net;gross+=item.gross;fees+=item.commission;
   }
   return {
     records:rows.length,priced,unpriced:failed,days:days.size,pricedDays:pricedDays.size,
-    netWins:positives,
+    netWins:positives,grossWins:grossPositives,
+    grossPositiveNetNonpositive,
     netWinFraction:priced?Number((positives/priced).toFixed(4)):null,
+    grossWinFraction:priced?Number((grossPositives/priced).toFixed(4)):null,
     netEUR:priced?money(net):null,
     grossEUR:priced?money(gross):null,
     commissionsEUR:priced?money(fees):null,
@@ -161,7 +168,10 @@ function analyze(raw,asOf){
     exploratoryOpportunitySplit:OPPORTUNITY_EXPLORATORY_BAND,
     exploratoryRepeatWindowMinutes:RECENT_LOSS_WINDOW_MS/60000,
     exploratoryEntryToleranceRiskR:RETRY_ENTRY_DISTANCE_R,
-    total:summarize(rows),expertRoute,pairSide,retry,byDay:daily,
+    total:summarize(rows),
+    byRoute:byGroup(rows,x=>x.route),
+    byExpertState:byGroup(rows,x=>x.expertState+'/'+x.expertBand),
+    expertRoute,pairSide,retry,byDay:daily,
     limitations:[
       'Expert opportunity threshold 0.35 and 10m/0.35R re-entry definition were selected during exploratory research: NOT prospective or validated.',
       'No training, fitted probability calibration, or out-of-sample inference is made from these labels.',
@@ -169,6 +179,8 @@ function analyze(raw,asOf){
       'Only realized, account-owned DEMO trades are observed. Rejected candidates and what-if fills are not in the cohort.',
       'Broker fill and gross/commission are measured after trade; plannedEntry is the as-of pre-order entry for retry measurement.',
       'Missing expert provenance or broker economics stays visible and never becomes a zero-fee win.',
+      'Gross-positive/net-nonpositive counts are descriptive broker P&L outcomes, not evidence that a larger target or longer hold would have profited.',
+      'Expert state is separately grouped because ABSTAIN is not an approving vote, even with a high opportunity score.',
       'Strategy versions and day regimes differ; no model should be promoted or blocked from these observational bands.',
       'No broker change, model weight/threshold modification, order side, lot size, emergency stop or LIVE/DEMO authority change.',
     ],
@@ -213,6 +225,7 @@ async function main(){
     writeFileSync(REPORT,JSON.stringify(report,null,2),{encoding:'utf8',mode:0o600});
     console.log('EXPERT_CALIBRATION_SHADOW '+JSON.stringify({
       artifact:report.artifact,asOf:report.asOf,total:report.total,
+      byRoute:report.byRoute,byExpertState:report.byExpertState,
       expertRoute:report.expertRoute,retry:report.retry,
     }));
   }finally{await client.end()}
