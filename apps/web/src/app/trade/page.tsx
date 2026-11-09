@@ -3548,8 +3548,8 @@ export default function AiTradingPage() {
                   <div className="ai-control-card__diagnosis" aria-label="Why no new DEMO trades">
                     <strong>Why no new trades? · Last 60 minutes</strong>
                     <small>
-                      {demoEntryDiagnostic.evaluatedDecisions} M1 decisions ·{" "}
-                      {demoEntryDiagnostic.candidateDecisions} non-abstain ·{" "}
+                      {demoEntryDiagnostic.evaluatedDecisions} M1 checks ·{" "}
+                      {demoEntryDiagnostic.candidateDecisions} directional checks ·{" "}
                       {demoEntryDiagnostic.brokerAuthorizedDecisions} broker-authorized ·{" "}
                       {demoEntryDiagnostic.executionSucceeded} executed
                     </small>
@@ -3588,9 +3588,9 @@ export default function AiTradingPage() {
                         passed Plan B admission · {demoEntryDiagnostic.primaryPathDecisions}{" "}
                         reached the primary path ·{" "}
                         {demoEntryDiagnostic.primaryReliabilityVetoDecisions} primary
-                        entries held by weak recent performance ·{" "}
+                        checks held by weak recent performance ·{" "}
                         {demoEntryDiagnostic.eligibleFallbackProbationVetoDecisions}{" "}
-                        otherwise eligible fallback entries held in probation.
+                        fallback checks held in probation.
                       </small>
                     )}
                     {demoEntryDiagnostic.leadingBlockers.length ? (
@@ -3616,7 +3616,8 @@ export default function AiTradingPage() {
                       </small>
                     )}
                     <small>
-                      Counts cover the current DEMO session and the three entry pairs only.
+                      Counts reflect repeated minute-by-minute checks, not independently qualified
+                      trade opportunities. Only the three eligible DEMO pairs are counted.
                       Reasons may overlap. No risk or commission check is bypassed.
                     </small>
                   </div>
