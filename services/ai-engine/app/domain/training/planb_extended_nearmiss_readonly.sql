@@ -44,7 +44,11 @@ SELECT d.instrument,d.direction,d.route,
   f.last_quote_sample_at AS future_quote_at,
   'ctrader-broker-native' AS future_quote_source,
   path.min_low AS possible_low,path.max_high AS possible_high,
-  path.bar_count AS path_m1_bars
+  path.bar_count AS path_m1_bars,
+  lifecycle.first_target_close_at,
+  lifecycle.first_stop_close_at,
+  lifecycle.first_possible_mid_stop_at,
+  lifecycle.last_observed_m1_bar_at
 FROM eligible d
 JOIN LATERAL (
  SELECT bid_close,ask_close,last_quote_sample_at FROM market_data.provider_quote_candles q
@@ -76,4 +80,30 @@ JOIN LATERAL (
    AND q.bucket_time>=date_trunc('minute',d.evaluated_at)
    AND q.bucket_time<date_trunc('minute',d.evaluated_at)+interval '15 minutes'
 ) path ON TRUE
+JOIN LATERAL (
+ SELECT
+   MIN(q.bucket_time) FILTER (WHERE
+     (d.direction='BUY' AND q.bid_close>=(d.candidate->>'takeProfit')::numeric)
+     OR (d.direction='SELL' AND q.ask_close<=(d.candidate->>'takeProfit')::numeric)
+   ) AS first_target_close_at,
+   MIN(q.bucket_time) FILTER (WHERE
+     (d.direction='BUY' AND q.bid_close<=(d.candidate->>'stopLoss')::numeric)
+     OR (d.direction='SELL' AND q.ask_close>=(d.candidate->>'stopLoss')::numeric)
+   ) AS first_stop_close_at,
+   MIN(q.bucket_time) FILTER (WHERE
+     (d.direction='BUY' AND q.low<=(d.candidate->>'stopLoss')::numeric)
+     OR (d.direction='SELL' AND q.high>=(d.candidate->>'stopLoss')::numeric)
+   ) AS first_possible_mid_stop_at,
+   MAX(q.bucket_time) AS last_observed_m1_bar_at
+ FROM market_data.provider_quote_candles q
+ WHERE q.connection_id=d.broker_connection_id AND q.instrument=d.instrument
+   AND q.timeframe='M1' AND q.source='ctrader-broker-native'
+   AND q.positive_quote_sample_count>0 AND q.bid_close>0
+   AND q.ask_close>=q.bid_close
+   AND q.bucket_time>=date_trunc('minute',d.evaluated_at)
+   AND q.bucket_time<=LEAST(
+     date_trunc('minute',now())-interval '1 minute',
+     date_trunc('minute',d.evaluated_at)+interval '60 minutes'
+   )
+) lifecycle ON TRUE
 ORDER BY d.evaluated_at,d.instrument,d.direction;

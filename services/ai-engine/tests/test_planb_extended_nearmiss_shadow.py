@@ -43,6 +43,10 @@ def example(
         "possible_low": 1.11721,
         "possible_high": 1.11788,
         "path_m1_bars": 15,
+        "first_target_close_at": (t + timedelta(minutes=21)).isoformat(),
+        "first_stop_close_at": None,
+        "first_possible_mid_stop_at": None,
+        "last_observed_m1_bar_at": (t + timedelta(minutes=25)).isoformat(),
         "aligned_m5": 1,
         "aligned_m15": 1,
         "aligned_h1": -0.33481167,
@@ -75,6 +79,9 @@ def test_case_matches_802_missed_buy_without_ever_authorizing_execution() -> Non
     assert case["fifteen_min_proxy_pips"] == pytest.approx(3.11)
     assert case["possible_stop_touch_midpoint_only"] is False
     assert case["possible_target_touch_midpoint_only"] is False
+    assert case["first_target_bidask_quote_close_at"] == "2026-11-09T08:23:00+00:00"
+    assert case["target_before_stop_quote_close"] is True
+    assert case["full_60_minute_observation"] is False
     assert report["model_fitted"] is False
     assert report["execution_allowed"] is False
     assert report["promotion_allowed"] is False
@@ -84,6 +91,7 @@ def test_case_matches_802_missed_buy_without_ever_authorizing_execution() -> Non
 
 def test_sell_uses_bid_entry_and_conservative_future_ask() -> None:
     row = example(direction="SELL")
+    row["first_target_close_at"] = None
     verified, quality = prepare(pd.DataFrame([row]))
     assert quality["causally_qualified_rows"] == 1
     assert verified.iloc[0]["proxy_entry"] == pytest.approx(1.11728)
@@ -131,6 +139,15 @@ def test_cohort_cooldown_de_duplicates_across_sides_and_regimes() -> None:
     assert len(independent) == 3
     assert independent["instrument"].tolist().count("EURUSD") == 2
     assert independent["instrument"].tolist().count("GBPUSD") == 1
+
+
+def test_earlier_possible_stop_makes_later_target_quote_close_ambiguous() -> None:
+    row = example()
+    row["first_possible_mid_stop_at"] = "2026-11-09T08:07:00Z"
+    report = build_report(pd.DataFrame([row]), inspect_at="2026-11-09T08:02:00Z")
+    assert report["inspection"]["target_before_stop_quote_close"] is False
+    assert report["overall"]["target_before_stop_quote_closes"] == 0
+    assert report["broker_net_pnl_verified"] is False
 
 
 def test_midpoint_stop_or_target_touches_are_not_misreported_as_fills() -> None:

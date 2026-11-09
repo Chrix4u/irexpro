@@ -49,6 +49,10 @@ REQUIRED = (
     "future_quote_at",
     "entry_quote_source",
     "future_quote_source",
+    "first_target_close_at",
+    "first_stop_close_at",
+    "first_possible_mid_stop_at",
+    "last_observed_m1_bar_at",
     *PRICE_COLUMNS,
 )
 
@@ -60,7 +64,15 @@ def prepare(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     df = raw.copy()
     for key in PRICE_COLUMNS:
         df[key] = pd.to_numeric(df[key], errors="coerce")
-    for key in ("decision_time_utc", "entry_quote_at", "future_quote_at"):
+    for key in (
+        "decision_time_utc",
+        "entry_quote_at",
+        "future_quote_at",
+        "first_target_close_at",
+        "first_stop_close_at",
+        "first_possible_mid_stop_at",
+        "last_observed_m1_bar_at",
+    ):
         df[key] = pd.to_datetime(df[key], utc=True, errors="coerce")
     valid = (
         df["instrument"].isin(PAIRS)
@@ -135,6 +147,19 @@ def prepare(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         )
         df["m5_m15_aligned"] = (df["aligned_m5"] > 0) & (df["aligned_m15"] > 0)
         df["h1_opposed"] = df["aligned_h1"] < 0
+        target = df["first_target_close_at"]
+        stop = df["first_stop_close_at"]
+        possible_mid_stop = df["first_possible_mid_stop_at"]
+        # A quote close beyond TP is observable, not proof a broker order
+        # executed; an earlier possible intraminute stop makes it ambiguous.
+        df["target_before_stop_quote_close"] = (
+            target.notna()
+            & (stop.isna() | (target < stop))
+            & (possible_mid_stop.isna() | (target <= possible_mid_stop))
+        )
+        df["stop_before_target_quote_close"] = (
+            stop.notna() & (target.isna() | (stop < target))
+        )
         df["utc_day"] = df["decision_time_utc"].dt.strftime("%Y-%m-%d")
     return df, {
         "raw_quote_matched_rows": int(len(raw)),
@@ -166,6 +191,8 @@ def metrics(df: pd.DataFrame) -> dict:
             "distinct_utc_days": 0,
             "possible_stop_touches": 0,
             "possible_target_touches": 0,
+            "target_before_stop_quote_closes": 0,
+            "stop_before_target_quote_closes": 0,
         }
     p = df["fifteen_min_proxy_pips"]
     gains = float(p.clip(lower=0).sum())
@@ -178,6 +205,12 @@ def metrics(df: pd.DataFrame) -> dict:
         "distinct_utc_days": int(df["utc_day"].nunique()),
         "possible_stop_touches": int(df["possible_stop_touch"].sum()),
         "possible_target_touches": int(df["possible_target_touch"].sum()),
+        "target_before_stop_quote_closes": int(
+            df["target_before_stop_quote_close"].sum()
+        ),
+        "stop_before_target_quote_closes": int(
+            df["stop_before_target_quote_close"].sum()
+        ),
     }
 
 
@@ -225,6 +258,34 @@ def build_report(
                 "possible_stop_touch_midpoint_only": bool(row["possible_stop_touch"]),
                 "possible_target_touch_midpoint_only": bool(row["possible_target_touch"]),
                 "independent_episode_sample": bool(row.name in episodes.index),
+                "first_target_bidask_quote_close_at": (
+                    row["first_target_close_at"].isoformat()
+                    if pd.notna(row["first_target_close_at"])
+                    else None
+                ),
+                "first_stop_bidask_quote_close_at": (
+                    row["first_stop_close_at"].isoformat()
+                    if pd.notna(row["first_stop_close_at"])
+                    else None
+                ),
+                "possible_midpoint_stop_touch_at": (
+                    row["first_possible_mid_stop_at"].isoformat()
+                    if pd.notna(row["first_possible_mid_stop_at"])
+                    else None
+                ),
+                "target_before_stop_quote_close": bool(
+                    row["target_before_stop_quote_close"]
+                ),
+                "observed_m1_bar_at": (
+                    row["last_observed_m1_bar_at"].isoformat()
+                    if pd.notna(row["last_observed_m1_bar_at"])
+                    else None
+                ),
+                "full_60_minute_observation": bool(
+                    pd.notna(row["last_observed_m1_bar_at"])
+                    and row["last_observed_m1_bar_at"]
+                    >= row["decision_time_utc"] + pd.Timedelta(minutes=60)
+                ),
             }
     return {
         "artifact": ARTIFACT,
@@ -246,7 +307,10 @@ def build_report(
         "limitations": (
             "Only short-sample provider quotes, not independent daily folds. "
             "Midpoint OHLC stop/target touches are possible-touch flags only; "
-            "intraminute bid/ask ordering, fills, slippage, financing and "
+            "first 60-minute bid/ask quote CLOSE crossing is not proof of order "
+            "execution or first intraminute touch. An earlier possible midpoint "
+            "stop invalidates quote-close target-first classification. "
+            "Intraminute bid/ask ordering, fills, slippage, financing and "
             "commissions cannot be verified from these bars."
         ),
         "data_quality": quality,
