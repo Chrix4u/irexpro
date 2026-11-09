@@ -791,8 +791,28 @@ describe('LiveDemoProfitProtectionService', () => {
   it('does not let a stalled M5/M15 research query block an otherwise required protective close', async () => {
     const currentAt = new Date('2026-11-09T08:51:05Z');
     const bars = [
-      { bucket_time: new Date('2026-11-09T08:50:00Z'), open: '1.11863', high: '1.11863', low: '1.11848', close: '1.11851', sample_count: 21, positive_quote_sample_count: 21, last_quote_sample_at: new Date('2026-11-09T08:50:58Z'), source: 'ctrader-broker-native' },
-      { bucket_time: new Date('2026-11-09T08:49:00Z'), open: '1.11868', high: '1.11872', low: '1.11866', close: '1.11866', sample_count: 16, positive_quote_sample_count: 16, last_quote_sample_at: new Date('2026-11-09T08:49:59Z'), source: 'ctrader-broker-native' },
+      {
+        bucket_time: new Date('2026-11-09T08:50:00Z'),
+        open: '1.11863',
+        high: '1.11863',
+        low: '1.11848',
+        close: '1.11851',
+        sample_count: 21,
+        positive_quote_sample_count: 21,
+        last_quote_sample_at: new Date('2026-11-09T08:50:58Z'),
+        source: 'ctrader-broker-native',
+      },
+      {
+        bucket_time: new Date('2026-11-09T08:49:00Z'),
+        open: '1.11868',
+        high: '1.11872',
+        low: '1.11866',
+        close: '1.11866',
+        sample_count: 16,
+        positive_quote_sample_count: 16,
+        last_quote_sample_at: new Date('2026-11-09T08:49:59Z'),
+        source: 'ctrader-broker-native',
+      },
     ];
     const buy = candidate({
       opened_at: new Date('2026-11-09T08:48:29Z'),
