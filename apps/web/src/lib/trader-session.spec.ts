@@ -11,6 +11,7 @@ import {
   prepareBrokerForAutomationStart,
   resetDailyLossProtection,
   resetDailyLossProtectionForBroker,
+  riskSuspensionMatchesBroker,
   shouldOfferRiskResetAfterEndedSession,
 } from './trader-session';
 
@@ -67,6 +68,29 @@ const CONFIRMATION = {
   expiresAt: '2026-09-10T00:05:00.000Z',
   orderPayloadDigest: 'sha256:fixture-digest',
 } satisfies ExecutionConfirmationView;
+
+describe('riskSuspensionMatchesBroker', () => {
+  it('does not lock a newly selected broker due to another ended broker session', () => {
+    expect(riskSuspensionMatchesBroker(
+      { brokerConnectionId: 'old-ctrader' },
+      'pepperstone-demo',
+    )).toBe(false);
+  });
+
+  it('keeps the original breached account protected', () => {
+    expect(riskSuspensionMatchesBroker(
+      { brokerConnectionId: 'old-ctrader' },
+      'old-ctrader',
+    )).toBe(true);
+  });
+
+  it('fails closed for unscoped historic suspensions or unknown selection', () => {
+    expect(riskSuspensionMatchesBroker({}, 'pepperstone-demo')).toBe(true);
+    expect(riskSuspensionMatchesBroker({ brokerConnectionId: null }, 'pepperstone-demo')).toBe(true);
+    expect(riskSuspensionMatchesBroker({ brokerConnectionId: '' }, 'pepperstone-demo')).toBe(true);
+    expect(riskSuspensionMatchesBroker({ brokerConnectionId: 'old-ctrader' }, null)).toBe(true);
+  });
+});
 
 describe('prepareBrokerForAutomationStart', () => {
   beforeEach(() => {
