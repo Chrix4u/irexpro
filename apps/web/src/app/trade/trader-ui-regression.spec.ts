@@ -22,7 +22,7 @@ describe('AI Trader production UI regression contract', () => {
     expect(broker).toContain('aria-label="AI capital allocation amount"');
     expect(broker).toContain('Allocate');
     expect(broker).toContain('endedRiskResetAvailable');
-    expect(broker).toContain('Allocation is locked by the current protection state');
+    expect(broker).toContain('You may adjust this allocation while stopped');
     expect(deck).not.toContain('ai-control-card--allocation');
     expect(deck).toContain('Reset Risk Protection & Start AI');
     expect(deck).toContain('ai-control-card__focus');
@@ -123,6 +123,14 @@ describe('AI Trader production UI regression contract', () => {
     expect(pageSource).toContain('scannerResult.status === "fulfilled"');
     expect(pageSource).toContain('tacticalResult.status === "fulfilled"');
     expect(pageSource).toContain('brokerParityResult.status === "fulfilled"');
+  });
+
+  it('keeps the selected broker scope and protects against stale allocation replies', () => {
+    expect(pageSource).toContain('endedRiskViolationMatchesBroker({');
+    expect(pageSource).toContain('endedSession: terminal?.lastEndedSession ?? null');
+    expect(pageSource).toContain('selectedBrokerIdRef.current = nextId');
+    expect(pageSource).toContain('if (selectedBrokerIdRef.current !== nextId) return;');
+    expect(pageSource).toContain('if (selectedBrokerIdRef.current === brokerId)');
   });
 
   it('binds chart polling to the effective session broker, not stale selection state', () => {

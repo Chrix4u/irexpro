@@ -1985,6 +1985,32 @@ export class ExecutionService {
       .getOne();
   }
 
+  /**
+   * Historical, owner-scoped broker identity for ended-session risk UI.
+   * Only project the public session fields; never expose balances, risk
+   * snapshots or broker credentials. This read has no execution authority.
+   */
+  async getLatestEndedSessionForClient(userId: string): Promise<TradingSession | null> {
+    return this.sessionRepo
+      .createQueryBuilder('session')
+      .select([
+        'session.id',
+        'session.brokerConnectionId',
+        'session.executionMode',
+        'session.authorityGeneration',
+        'session.status',
+        'session.startedAt',
+        'session.endedAt',
+        'session.createdAt',
+        'session.updatedAt',
+      ])
+      .where('session.userId = :userId', { userId })
+      .andWhere('session.status = :ended', { ended: TradingSessionStatus.ENDED })
+      .orderBy('session.endedAt', 'DESC')
+      .addOrderBy('session.startedAt', 'DESC')
+      .getOne();
+  }
+
   async findSessionById(sessionId: string): Promise<TradingSession | null> {
     return this.sessionRepo.findOne({ where: { id: sessionId } });
   }

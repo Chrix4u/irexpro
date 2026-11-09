@@ -1428,6 +1428,35 @@ describe('ExecutionService', () => {
 
   // ─── Session management (Round 5 — session is the authoritative target) ───
 
+  describe('getLatestEndedSessionForClient()', () => {
+    it('only reads owner-scoped ended broker identity without any risk or balance snapshots', async () => {
+      const ended = {
+        id: 'session-2',
+        brokerConnectionId: 'conn-old',
+        status: TradingSessionStatus.ENDED,
+      };
+      const qb = {
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(ended),
+      };
+      sessionRepo.createQueryBuilder.mockReturnValue(qb as never);
+      await expect(service.getLatestEndedSessionForClient('user-1')).resolves.toBe(ended);
+      expect(qb.where).toHaveBeenCalledWith('session.userId = :userId', { userId: 'user-1' });
+      expect(qb.andWhere).toHaveBeenCalledWith('session.status = :ended', {
+        ended: TradingSessionStatus.ENDED,
+      });
+      expect(qb.orderBy).toHaveBeenCalledWith('session.endedAt', 'DESC');
+      expect(qb.select.mock.calls[0][0]).toContain('session.brokerConnectionId');
+      expect(qb.select.mock.calls[0][0]).not.toContain('session.peakEquity');
+      expect(qb.select.mock.calls[0][0]).not.toContain('session.openingBalance');
+      expect(qb.select.mock.calls[0][0]).not.toContain('session.riskProfileSnapshot');
+    });
+  });
+
   describe('getActiveSessionForClient()', () => {
     it('reads only browser-authority fields with deterministic active-session ordering', async () => {
       const projectedSession = {

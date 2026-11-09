@@ -877,6 +877,10 @@ export class TradingService {
     return this.executionService.getActiveSessionForClient(userId);
   }
 
+  async getLatestEndedSession(userId: string): Promise<TradingSession | null> {
+    return this.executionService.getLatestEndedSessionForClient(userId);
+  }
+
   async getAutomationRuntimeStatus(userId: string, sessionId: string) {
     const session = await this.executionService.findSessionById(sessionId);
     if (!session || session.userId !== userId) {

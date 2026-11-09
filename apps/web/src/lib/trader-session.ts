@@ -486,6 +486,38 @@ export interface DailyRiskCooldownState {
  * precedence. Otherwise the UI offers a daily-loss reset that the server
  * correctly rejects with 403.
  */
+/**
+ * Historical protection belongs to the broker of the ended session that
+ * actually recorded the violation, never an unrelated newly selected broker.
+ * No data from this browser helper grants execution or resets the server risk
+ * policy. Missing or invalid scope evidence never authorizes a reset.
+ */
+export function endedRiskViolationMatchesBroker(input: {
+  selectedBrokerConnectionId: string | null | undefined;
+  endedSession: {
+    brokerConnectionId: string;
+    startedAt: string;
+    endedAt?: string | null;
+  } | null | undefined;
+  violation: { evaluatedAt: string } | null | undefined;
+}): boolean {
+  const { selectedBrokerConnectionId, endedSession, violation } = input;
+  if (
+    !selectedBrokerConnectionId ||
+    !endedSession ||
+    endedSession.brokerConnectionId !== selectedBrokerConnectionId ||
+    !endedSession.endedAt ||
+    !violation
+  ) return false;
+
+  const start = Date.parse(endedSession.startedAt);
+  const end = Date.parse(endedSession.endedAt);
+  const evaluated = Date.parse(violation.evaluatedAt);
+  if (![start, end, evaluated].every(Number.isFinite) || end < start) return false;
+  // Tolerate small server clock skew, but never unrelated historical sessions.
+  return evaluated >= start - 60_000 && evaluated <= end + 60_000;
+}
+
 export function shouldOfferRiskResetAfterEndedSession(input: {
   dailyRiskCooldownActive: boolean;
   latestRiskSuspensionCode: string | null | undefined;

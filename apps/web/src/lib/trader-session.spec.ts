@@ -5,6 +5,7 @@ import {
   connectionVerificationLabel,
   dailyLossProtectionMessage,
   dailyRiskCooldownFromViolation,
+  endedRiskViolationMatchesBroker,
   executionBlockedReasons,
   formatExpiryCountdown,
   loadPendingExecutionConfirmations,
@@ -361,6 +362,43 @@ describe('dailyLossProtectionMessage', () => {
     ).toBe(
       'All new AI entries are blocked by daily-loss protection. Daily-loss limit: 5.00%. Daily loss 51.45 has reached limit (5.00% = 46.01 of the session opening balance 920.12)',
     );
+  });
+});
+
+describe('endedRiskViolationMatchesBroker', () => {
+  const endedSession = {
+    brokerConnectionId: 'old-ctrader',
+    startedAt: '2026-11-09T18:00:00.000Z',
+    endedAt: '2026-11-09T22:50:00.000Z',
+  };
+  const violation = { evaluatedAt: '2026-11-09T22:45:00.000Z' };
+
+  it('matches a historical violation to the broker of the ended session', () => {
+    expect(endedRiskViolationMatchesBroker({
+      selectedBrokerConnectionId: 'old-ctrader', endedSession, violation,
+    })).toBe(true);
+  });
+
+  it('does not carry old cTrader drawdown into new Pepperstone allocation', () => {
+    expect(endedRiskViolationMatchesBroker({
+      selectedBrokerConnectionId: 'pepperstone', endedSession, violation,
+    })).toBe(false);
+  });
+
+  it('rejects stale violations and missing or unprovable broker history', () => {
+    expect(endedRiskViolationMatchesBroker({
+      selectedBrokerConnectionId: 'old-ctrader',
+      endedSession,
+      violation: { evaluatedAt: '2026-11-08T22:00:00.000Z' },
+    })).toBe(false);
+    expect(endedRiskViolationMatchesBroker({
+      selectedBrokerConnectionId: 'old-ctrader',
+      endedSession: { ...endedSession, endedAt: null },
+      violation,
+    })).toBe(false);
+    expect(endedRiskViolationMatchesBroker({
+      selectedBrokerConnectionId: 'old-ctrader', endedSession: null, violation,
+    })).toBe(false);
   });
 });
 

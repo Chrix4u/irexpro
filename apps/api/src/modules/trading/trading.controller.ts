@@ -308,6 +308,19 @@ export class TradingController {
     };
   }
 
+  /**
+   * Informational only: identifies the broker for the most recent ended
+   * session so historical risk notices cannot be applied to a different
+   * account. Never grants or resets trading authority.
+   */
+  @Get('latest-ended')
+  @ApiOperation({ summary: 'Get the latest ended session (broker-scoped risk display)' })
+  @ApiResponse({ status: 200, type: ActiveTradingSessionResponseDto })
+  async getLatestEnded(@CurrentUserId() userId: string): Promise<ActiveTradingSessionResponseDto> {
+    const session = await this.tradingService.getLatestEndedSession(userId);
+    return { session: session ? toTradingSessionResponse(session) : null };
+  }
+
   @Get(':id/automation-status')
   @ApiOperation({ summary: 'Get AI automation runtime status for a trading session' })
   async getAutomationStatus(
