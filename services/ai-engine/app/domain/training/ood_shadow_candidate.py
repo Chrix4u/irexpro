@@ -23,6 +23,7 @@ import pandas as pd
 
 SHADOW_VERSION = "ood-price-15m-precise-envelope-shadow-v2"
 APPROVED_PAIRS = ("AUDUSD", "EURUSD", "GBPUSD")
+SIX_PAIR_RESEARCH_PAIRS = ("AUDUSD", "EURUSD", "GBPUSD", "USDCAD", "USDCHF", "USDJPY")
 APPROVED_ROUTES = ("M1_TREND_CONTINUATION", "M1_EARLY_TRANSITION")
 NUMERIC_FEATURES = (
     "confidence",
@@ -69,6 +70,8 @@ REQUIRED = (
     "entry_ask",
     "future_bid_15m",
     "future_ask_15m",
+    "entry_quote_source",
+    "future_quote_source",
     *NUMERIC_FEATURES,
 )
 HORIZON_MINUTES = 15
@@ -98,7 +101,9 @@ KNOWN_DIAGNOSTICS = (
 )
 
 
-def prepare_cohort(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+def prepare_cohort(
+    raw: pd.DataFrame, *, approved_pairs: tuple[str, ...] = APPROVED_PAIRS
+) -> tuple[pd.DataFrame, dict]:
     """Keep only causally valid, independently quoted OOD decisions."""
     missing = sorted(set(REQUIRED) - set(raw.columns))
     if missing:
@@ -125,7 +130,9 @@ def prepare_cohort(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         records[name] = pd.to_numeric(records[name], errors="coerce")
     records = records.replace([np.inf, -np.inf], np.nan)
     valid = (
-        records["instrument"].isin(APPROVED_PAIRS)
+        records["instrument"].isin(approved_pairs)
+        & records["entry_quote_source"].eq("ctrader-broker-native")
+        & records["future_quote_source"].eq("ctrader-broker-native")
         & records["route"].isin(APPROVED_ROUTES)
         & records["direction"].isin(("BUY", "SELL"))
         & records[list(NUMERIC_FEATURES)].notna().all(axis=1)
@@ -162,7 +169,9 @@ def prepare_cohort(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     records = records.loc[valid].copy()
     if records.empty:
         raise ValueError("All OOD observations failed causal quote/feature validity")
-    pip = 0.0001  # All approved USD-quoted majors use four-decimal pip units.
+    # Research includes JPY quotes only in the optional six-pair diagnostic cohort.
+    # Never value a USDJPY 0.01-pip move as a non-JPY 0.0001-pip move.
+    pip = np.where(records["instrument"].eq("USDJPY"), 0.01, 0.0001)
     records["spread_observed_pips"] = (records["entry_ask"] - records["entry_bid"]) / pip
     raw_return = np.where(
         records["direction"] == "BUY",
@@ -203,6 +212,8 @@ def prepare_cohort(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     )
     quality = {
         "raw_records": int(total),
+        "verified_quote_source": "ctrader-broker-native",
+        "approved_instruments": list(approved_pairs),
         "causally_verified_records": int(len(records)),
         "rejected_records": int(total - len(records)),
         "distinct_utc_days": int(records["utc_day"].nunique()),
@@ -313,6 +324,14 @@ def summarize_independent_ood_conditions(frame: pd.DataFrame) -> dict:
         "route_outcomes": {
             route: proxy_metrics(group)
             for route, group in independent.groupby("route", sort=True)
+        },
+        "pair_outcomes": {
+            pair: {
+                "observations": int(len(group)),
+                "distinct_utc_days": int(group["utc_day"].nunique()),
+                **proxy_metrics(group),
+            }
+            for pair, group in independent.groupby("instrument", sort=True)
         },
         "condition_outcomes": condition_rows,
         "interpretation": (
