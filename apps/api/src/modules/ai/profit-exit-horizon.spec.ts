@@ -1,5 +1,6 @@
 import {
   evaluatePostExitHoldHorizons,
+  summarizeExitObservation,
   ExitCandle,
   ExitScenarioInput,
 } from './profit-exit-alternatives';
@@ -181,5 +182,50 @@ describe('post-exit completed M1 horizon recovery research v2', () => {
     expect(x[0].actualNetPnl).toBe(0.46);
     expect(x[0].indicativeNetPnl).toBeLessThan(0);
     expect(x[2].indicativeNetPnl).toBeGreaterThan(0.46);
+  });
+  it('does not hide a qualified partial-close study behind ineligible runner status', () => {
+    const tp = {
+      runner: { outcome: 'INELIGIBLE' as const },
+      halfPartial: { outcome: 'TP_FIRST' as const },
+    };
+    const sl = {
+      runner: { outcome: 'INELIGIBLE' as const },
+      halfPartial: { outcome: 'STOP_FIRST' as const },
+    };
+    const none = {
+      runner: { outcome: 'INELIGIBLE' as const },
+      halfPartial: { outcome: 'INELIGIBLE' as const },
+    };
+    expect(summarizeExitObservation(tp)).toEqual({
+      state: 'TP_FIRST',
+      scenario: 'HALF_PARTIAL',
+    });
+    expect(summarizeExitObservation(sl)).toEqual({
+      state: 'STOP_FIRST',
+      scenario: 'HALF_PARTIAL',
+    });
+    expect(summarizeExitObservation(none)).toEqual({
+      state: 'INELIGIBLE',
+      scenario: 'HALF_PARTIAL',
+    });
+  });
+
+  it('prefers an eligible runner observation without rewriting its outcome', () => {
+    const gap = {
+      runner: { outcome: 'DATA_GAP' as const },
+      halfPartial: { outcome: 'TP_FIRST' as const },
+    };
+    const stop = {
+      runner: { outcome: 'STOP_FIRST' as const },
+      halfPartial: { outcome: 'TP_FIRST' as const },
+    };
+    expect(summarizeExitObservation(gap)).toEqual({
+      state: 'DATA_GAP',
+      scenario: 'PROTECTED_RUNNER',
+    });
+    expect(summarizeExitObservation(stop)).toEqual({
+      state: 'STOP_FIRST',
+      scenario: 'PROTECTED_RUNNER',
+    });
   });
 });

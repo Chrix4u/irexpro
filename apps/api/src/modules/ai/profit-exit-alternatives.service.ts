@@ -7,6 +7,7 @@ import {
   EXIT_ALTERNATIVES_ARTIFACT,
   ADVERSE_EXIT_COUNTERFACTUAL_ARTIFACT,
   ExitCandle,
+  summarizeExitObservation,
 } from './profit-exit-alternatives';
 
 interface Candidate {
@@ -357,8 +358,10 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
     result: ReturnType<typeof compareExitAlternatives>,
   ): Promise<void> {
     const checkpointAt = new Date(closeAt.getTime() + 60 * 60_000);
+    const summary = summarizeExitObservation(result);
     const response = {
       artifact: EXIT_ALTERNATIVES_ARTIFACT,
+      stateScenario: summary.scenario,
       snapshotAt: closeAt.toISOString(),
       originalTradeCurrency: row.account_currency,
       ...result,
@@ -386,7 +389,7 @@ export class ProfitExitAlternativesService implements OnModuleInit, OnModuleDest
         row.broker_connection_id,
         EXIT_ALTERNATIVES_ARTIFACT,
         checkpointAt.toISOString(),
-        result.runner.outcome,
+        summary.state,
         JSON.stringify({ M1: 'ctrader-broker-native-positive-live-quotes' }),
         JSON.stringify(response),
       ],
