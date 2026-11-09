@@ -55,7 +55,9 @@ describe('RiskController public response hardening', () => {
         },
       ]),
     };
-    const result = await new RiskController(riskService as unknown as RiskService).getRiskStatus(USER_ID);
+    const result = await new RiskController(riskService as unknown as RiskService).getRiskStatus(
+      USER_ID,
+    );
     expect(result.latestRiskSuspensionViolation).toMatchObject({
       brokerConnectionId: 'old-ctrader-account',
       rejectionCode: RiskRejectionCode.MAX_DRAWDOWN_REACHED,
