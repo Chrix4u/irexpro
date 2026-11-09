@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { PAIRS, V2, COVERAGE_SQL, summarize, runAudit } = require('./audit-demo-six-pair-cadence.cjs');
+const { PAIRS, V2, COVERAGE_SQL, summarize, runAudit, parseWindowMinutes } = require('./audit-demo-six-pair-cadence.cjs');
 
 const START = new Date('2026-11-09T18:50:00Z');
 const END = new Date('2026-11-09T18:55:00Z');
@@ -76,4 +76,56 @@ test('fails closed with rollback for a broker account not owned by the user', as
   await assert.rejects(() => runAudit({ client, userId: USER, connectionId: CONNECTION, since: START, until: END }), /SCOPED_CTRADER_DEMO_NOT_FOUND/);
   assert.equal(calls.at(-1), 'ROLLBACK');
   await assert.rejects(() => runAudit({ client, userId: USER, connectionId: CONNECTION, since: START, until: new Date('2026-11-09T18:54:00Z') }), /INVALID_WINDOW/);
+});
+
+test('short window reflects latest rows only from the same scoped database snapshot', async () => {
+  const from = new Date('2026-11-09T18:40:00Z');
+  const to = new Date('2026-11-09T19:00:00Z');
+  const rows = [
+    row('2026-11-09T18:41:00Z', 'AUDUSD', { authorized: 1, first_persist_lag_sec: 80 }),
+    ...PAIRS.map((pair) => row('2026-11-09T18:55:00Z', pair, {
+      first_persist_lag_sec: pair === 'USDJPY' ? 11 : 3,
+    })),
+    row('2026-11-09T18:57:00Z', 'EURUSD', { ood: 1 }),
+  ];
+  const calls = [];
+  const client = {
+    query: async (sql) => {
+      calls.push(sql);
+      if (sql.includes('SELECT id FROM broker.broker_connections')) return { rows: [{ id: CONNECTION }] };
+      if (sql === COVERAGE_SQL) return { rows };
+      return { rows: [] };
+    },
+  };
+  const report = await runAudit({ client, userId: USER, connectionId: CONNECTION, since: from, until: to });
+  assert.equal(calls.filter((x) => x === COVERAGE_SQL).length, 1);
+  assert.equal(report.observedSlots, 3);
+  assert.equal(report.byPair.AUDUSD.authorized, 1);
+  assert.equal(report.recentWindow.windowMinutes, 10);
+  assert.equal(report.recentWindow.since, '2026-11-09T18:50:00.000Z');
+  assert.equal(report.recentWindow.observedSlots, 2);
+  assert.equal(report.recentWindow.slotsWithAllSix, 1);
+  assert.equal(report.recentWindow.byPair.AUDUSD.authorized, 0);
+  assert.equal(report.recentWindow.byPair.EURUSD.ood, 1);
+  assert.equal(report.recentWindow.byPair.USDJPY.persistLagP95Seconds, 11);
+});
+
+test('short window caps to full report when only five-minute window is supplied', async () => {
+  const client = {
+    query: async (sql) => sql.includes('SELECT id FROM broker.broker_connections')
+      ? { rows: [{ id: CONNECTION }] }
+      : sql === COVERAGE_SQL ? { rows: [row(START.toISOString(), 'USDJPY')] } : { rows: [] },
+  };
+  const report = await runAudit({ client, userId: USER, connectionId: CONNECTION, since: START, until: END });
+  assert.equal(report.recentWindow.windowMinutes, 5);
+  assert.equal(report.recentWindow.observedSlots, report.observedSlots);
+});
+
+test('optional CLI cadence window is bounded and rejects ambiguous values', () => {
+  assert.equal(parseWindowMinutes(undefined), 60);
+  assert.equal(parseWindowMinutes(''), 60);
+  assert.equal(parseWindowMinutes('5'), 5);
+  assert.equal(parseWindowMinutes('180'), 180);
+  for (const raw of ['4', '181', '0', '05', '10.1', '-1', '10m', 'NaN', '1000', null])
+    assert.throws(() => parseWindowMinutes(raw), /INVALID_CADENCE_WINDOW_MINUTES/);
 });
