@@ -1343,12 +1343,23 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     paperSimulationSpreadPrice?: number,
   ): Promise<void> {
     if (!features) return;
+    // Observational timings only; never consulted by risk or entry authority.
+    const startedCandidateAt = Date.now();
+    const timings = {
+      reliabilityMs: 0,
+      scoutMs: 0,
+      multimodelMs: 0,
+      executableFeeMs: 0,
+      blockedFeeShadowMs: 0,
+      persistMs: 0,
+    };
     const routeDecision = classifyM1TacticalRoute(
       candidate,
       opposite,
       features,
       M1_TACTICAL_POLICY_V2,
     );
+    const reliabilityStartedAt = Date.now();
     const reliability = await this.reliabilityFor(
       userId,
       brokerConnectionId,
@@ -1356,6 +1367,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       routeDecision,
       decisionTime,
     );
+    timings.reliabilityMs = Date.now() - reliabilityStartedAt;
     const expectancy = evaluateM1TacticalExpectancy({
       targetR: candidate.grossExpectedR,
       confidence: candidate.confidence,
@@ -1373,6 +1385,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       reliability,
       expectancy,
     });
+    const scoutStartedAt = Date.now();
     const shadowPairSideReliability = await this.shadowPairSideReliabilityFor(
       userId,
       brokerConnectionId,
@@ -1380,7 +1393,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       routeDecision,
       decisionTime,
     );
+    timings.scoutMs = Date.now() - scoutStartedAt;
     const professionalDemoPhase = this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
+    const multimodelStartedAt = Date.now();
     const multimodelDemo = professionalDemoPhase
       ? await this.evaluateDemoMultimodel(
           userId,
@@ -1393,6 +1408,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           paperSimulationSpreadPrice,
         )
       : null;
+    timings.multimodelMs = Date.now() - multimodelStartedAt;
     const demoProfitabilityReliabilityGate = professionalDemoPhase
       ? evaluateDemoProfitabilityReliabilityGate({
           m1Route: routeDecision.route,
@@ -1785,6 +1801,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       preliminaryCanExecute &&
       selectedPrimaryForCommission
     ) {
+      const executableFeeStartedAt = Date.now();
       try {
         feeEvidenceForDecision = await this.evidence.loadPriorClosedCommissionRiskR({
           userId,
@@ -1797,6 +1814,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         this.logger.warn(
           `M1 broker commission admission evidence unavailable instrument=${candidate.instrument}: ${(error as Error).message}`,
         );
+      } finally {
+        timings.executableFeeMs = Date.now() - executableFeeStartedAt;
       }
     }
     const demoBrokerCommissionGate = evaluateDemoBrokerCommissionEntryGate({
@@ -1911,6 +1930,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       planB: ReturnType<typeof evaluateM1CausalCommissionShadow> | null;
     } | null = null;
     if (professionalDemoPhase && !canExecute && routeDecision.route !== 'ABSTAIN') {
+      const shadowFeeStartedAt = Date.now();
       let feeEvidence = feeEvidenceForDecision;
       let feeLookupFailed = brokerFeeLookupFailed;
       if (!selectedPrimaryForCommission || !commissionFloorEnabled) {
@@ -1949,6 +1969,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             })
           : null,
       };
+      timings.blockedFeeShadowMs = Date.now() - shadowFeeStartedAt;
     }
 
     // Observation on the connected DEMO engine; no admission, volume or execution modification.
@@ -2026,6 +2047,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         })
       : null;
 
+    const persistStartedAt = Date.now();
     const decision = await this.evidence.recordDecision({
       userId,
       brokerConnectionId,
@@ -2119,6 +2141,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       },
       blockers,
     });
+    timings.persistMs = Date.now() - persistStartedAt;
 
     const executionAlreadyDurable =
       Boolean(decision.tradeIntentId) || decision.outcomeState === 'EXECUTION_SUCCEEDED';
@@ -2145,6 +2168,38 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         m5EarlyTransitionEvidence,
         m5EarlyTransitionHandoff,
         extensionExhaustionDemoScout,
+      );
+    }
+
+    const totalMs = Math.max(0, Date.now() - startedCandidateAt);
+    if (totalMs >= 5_000) {
+      const attributedMs = Object.values(timings).reduce((sum, ms) => sum + ms, 0);
+      // No account IDs, price/feature vectors or credentials. In particular,
+      // this logger never changes model decisions or broker authorization.
+      this.logger.warn(
+        'M1 candidate phase latency instrument=' +
+          candidate.instrument +
+          ' direction=' +
+          candidate.direction +
+          ' slot=' +
+          decisionTime.toISOString() +
+          ' totalMs=' +
+          totalMs +
+          ' reliabilityMs=' +
+          timings.reliabilityMs +
+          ' scoutMs=' +
+          timings.scoutMs +
+          ' multimodelMs=' +
+          timings.multimodelMs +
+          ' executableFeeMs=' +
+          timings.executableFeeMs +
+          ' blockedFeeShadowMs=' +
+          timings.blockedFeeShadowMs +
+          ' persistMs=' +
+          timings.persistMs +
+          ' otherMs=' +
+          Math.max(0, totalMs - attributedMs) +
+          ' authority=OBSERVATION_ONLY',
       );
     }
   }
