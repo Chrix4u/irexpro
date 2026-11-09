@@ -60,6 +60,19 @@ export interface ExitAlternativesReport {
   holdHorizonSnapshots: ExitHoldHorizonSnapshot[];
 }
 
+/** The persisted observation state must describe an evaluated scenario.
+ * An unqualified protected runner does NOT invalidate the separately
+ * evaluated half-partial scenario. Reporting only; never used for orders.
+ */
+export function summarizeExitObservation(result: {
+  runner: Pick<ExitScenario, 'outcome'>;
+  halfPartial: Pick<ExitScenario, 'outcome'>;
+}): { state: ExitOutcome; scenario: 'PROTECTED_RUNNER' | 'HALF_PARTIAL' } {
+  return result.runner.outcome === 'INELIGIBLE'
+    ? { state: result.halfPartial.outcome, scenario: 'HALF_PARTIAL' }
+    : { state: result.runner.outcome, scenario: 'PROTECTED_RUNNER' };
+}
+
 const numeric = (value: unknown): number | null => {
   if (value == null || value === '') return null;
   const n = Number(value);
