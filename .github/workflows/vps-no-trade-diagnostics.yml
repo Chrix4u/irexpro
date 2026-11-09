@@ -118,6 +118,43 @@ jobs:
           print(f'm1_readiness_change_events={len(m1_readiness)}')
           print(f'm1_currency_exposure_block_events={len(m1_exposure_blocks)}')
           print(f'm1_fail_closed_events={len(m1_fail_closed)}')
+
+          # Historical cTrader bar collection can silently fail or return old
+          # history even while the broker account and PM2 services are online.
+          # Report only whitelisted currency symbols and categorized error
+          # counts; never print raw provider errors, IDs, tokens or log bodies.
+          collector_errors = Counter()
+          collector_events = 0
+          allowed_pairs = {'AUDUSD', 'EURUSD', 'GBPUSD', 'USDCAD', 'USDCHF', 'USDJPY'}
+          for line in api.splitlines():
+              if '[CTraderQuoteCollectorService]' not in line:
+                  continue
+              collector_events += 1
+              symbol = re.search(r'\binstrument=([A-Z]{6})\b', line)
+              pair = symbol.group(1) if symbol and symbol.group(1) in allowed_pairs else 'ALL'
+              lower = line.lower()
+              if 'm1 refresh deferred' in lower:
+                  if 'rate limit' in lower or 'too many requests' in lower:
+                      reason = 'RATE_LIMIT'
+                  elif 'timeout' in lower or 'timed out' in lower:
+                      reason = 'TIMEOUT'
+                  elif 'connection' in lower or 'socket' in lower:
+                      reason = 'CONNECTION'
+                  elif 'auth' in lower or 'token' in lower:
+                      reason = 'AUTH'
+                  else:
+                      reason = 'OTHER'
+                  collector_errors[(pair, reason)] += 1
+              elif 'broker-native m1 returned stale closed history' in lower:
+                  collector_errors[(pair, 'STALE_PROVIDER_HISTORY')] += 1
+              elif 'live quote sampling deferred' in lower:
+                  collector_errors[('ALL', 'LIVE_QUOTE_DEFERRED')] += 1
+              elif 'm1 source' in lower and ('paused' in lower or 'unavailable' in lower):
+                  collector_errors[('ALL', 'SOURCE_PAUSED_OR_UNAVAILABLE')] += 1
+          print(f'ctrader_collector_log_events={collector_events}')
+          print('ctrader_collector_m1_error_class_counts:')
+          for (pair, reason), count in sorted(collector_errors.items()):
+              print(f'  {pair}|{reason}|{count}')
           print('m1_readiness_reason_counts:')
           for key, value in Counter(re.findall(r'M1 tactical readiness .*?reason=([A-Z][A-Z0-9_]+)', '\n'.join(m1_readiness))).most_common(15):
               print(f'  {key}={value}')
@@ -240,6 +277,60 @@ jobs:
           WHERE evaluated_at >= NOW() - interval '24 hours'
           GROUP BY route, execution_authority, COALESCE(outcome_state, 'PENDING')
           ORDER BY route, execution_authority, COALESCE(outcome_state, 'PENDING');
+
+          -- Freshness comparison on the active cTrader DEMO broker connection
+          -- only. This does not assume another user's data or reveal account
+          -- identifiers. A separately configured market-data connection needs
+          -- its own explicitly bound source audit; missing rows here do not
+          -- establish that the broker API itself is down.
+          WITH pairs(instrument) AS (
+            VALUES ('AUDUSD'), ('EURUSD'), ('GBPUSD'),
+                   ('USDCAD'), ('USDCHF'), ('USDJPY')
+          ), active_sources AS (
+            SELECT DISTINCT s.broker_connection_id AS id
+            FROM trading.trading_sessions s
+            JOIN broker.broker_connections b
+              ON b.id = s.broker_connection_id AND b.user_id = s.user_id
+            WHERE s.execution_mode = 'FULL_AUTO'
+              AND s.status::text = 'ACTIVE'
+              AND b.broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')
+              AND b.account_type = 'DEMO'
+          )
+          SELECT 'ctrader_active_demo_sources', COUNT(*) FROM active_sources;
+          WITH pairs(instrument) AS (
+            VALUES ('AUDUSD'), ('EURUSD'), ('GBPUSD'),
+                   ('USDCAD'), ('USDCHF'), ('USDJPY')
+          ), active_sources AS (
+            SELECT DISTINCT s.broker_connection_id AS id
+            FROM trading.trading_sessions s
+            JOIN broker.broker_connections b
+              ON b.id = s.broker_connection_id AND b.user_id = s.user_id
+            WHERE s.execution_mode = 'FULL_AUTO'
+              AND s.status::text = 'ACTIVE'
+              AND b.broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')
+              AND b.account_type = 'DEMO'
+          )
+          SELECT
+            'ctrader_m1_persisted_freshness',
+            p.instrument,
+            COALESCE(
+              to_char(MAX(c.bucket_time) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS'),
+              'NO_BROKER_NATIVE_M1'
+            ),
+            COALESCE(
+              GREATEST(0, FLOOR(EXTRACT(EPOCH FROM
+                (NOW() - (MAX(c.bucket_time) + interval '1 minute'))) / 60))::text,
+              'UNKNOWN'
+            ),
+            COUNT(*) FILTER (WHERE c.bucket_time >= NOW() - interval '10 minutes')
+          FROM pairs p CROSS JOIN active_sources a
+          LEFT JOIN market_data.provider_quote_candles c
+            ON c.connection_id = a.id
+            AND c.instrument = p.instrument
+            AND c.timeframe = 'M1'
+            AND c.source = 'ctrader-broker-native'
+          GROUP BY p.instrument
+          ORDER BY p.instrument;
 
           -- Distinguish a model block from lack of user-authorised execution.
           -- No user, account, or connection identifiers leave this diagnostic.
