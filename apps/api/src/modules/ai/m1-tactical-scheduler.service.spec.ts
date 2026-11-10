@@ -2230,6 +2230,7 @@ describe('M1 professional v8 DEMO promotion', () => {
       'demo-conn-2',
       'EURUSD',
       new Date('2026-10-15T10:30:00.000Z'),
+      { requireExecutionBrokerSource: true },
     );
   });
 
