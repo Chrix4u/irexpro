@@ -2568,6 +2568,76 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(h.receiveSignal).not.toHaveBeenCalled();
   });
 
+  it('cannot issue even a historically enabled flip-close when a fast-stop brake vetoes the opposite entry', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      fastStopBrake: {
+        active: true,
+        reason: 'RECENT_FAST_STOP',
+        latestFastStopClosedAt: new Date('2026-10-15T10:28:00.000Z'),
+        latestFastStopDurationMinutes: 1,
+        cooldownMinutes: 5,
+        maxStopDurationMinutes: 2,
+      },
+      openPositions: [
+        {
+          tradeId: 'trade-old-sell',
+          tradeIntentId: 'intent-old-sell',
+          instrument: 'EURUSD',
+          direction: 'SELL',
+          openedAt: new Date('2026-10-15T10:27:00.000Z'),
+          decisionId: 'decision-old-sell',
+          route: 'M1_TREND_CONTINUATION',
+          policyVersion: 'm1-tactical-v2-m5-lifecycle',
+          originalNetExpectedR: 0.18,
+        },
+      ],
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'CONFIRMED_REVERSAL',
+            paperAdmitted: true,
+          },
+          trainedExpert: {
+            ...result.trainedExpert,
+            allBrokerNative: true,
+            direction: 'BUY',
+            longVotes: 3,
+            shortVotes: 0,
+            ensembleConfidence: 0.76,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
+        };
+      });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    const buy = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
+    expect(buy?.blockers).toContain('M1_FAST_STOP_REGIME_BRAKE');
+    expect(buy?.governance.directionFlipConflict).toMatchObject({
+      confirmedReversal: true,
+      nonPositionEntryGatesPassed: false,
+      exitResearchOnly: true,
+      exitRequested: false,
+    });
+    expect(h.closeTrade).not.toHaveBeenCalled();
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
+
   it('closes an older opposite DEMO thesis first and defers a fully qualified confirmed reversal entry', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
