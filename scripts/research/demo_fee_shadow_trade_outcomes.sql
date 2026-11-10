@@ -1,6 +1,8 @@
 -- Strictly READ ONLY. The hypothetical cTrader DEMO fee rejection is recorded
 -- on the causal M1 decision linked to the actual cTrader broker trade.
 -- Never infer profit from rejected/no-trade signals.
+-- Only broker-authorized, intent-bearing entries belong to the actual-fill
+-- experiment; research-only decisions are separately analyzed elsewhere.
 BEGIN READ ONLY;
 WITH active_demo_scope AS (
   SELECT DISTINCT ON (ts.user_id)
@@ -39,6 +41,8 @@ WITH active_demo_scope AS (
   WHERE d.evaluated_at >= GREATEST(s.started_at, NOW() - INTERVAL '14 days')
     AND d.governance->'demoBrokerCommissionGate'->>'shadowOnly'='true'
     AND d.governance->'demoBrokerCommissionGate'->>'selectedPrimary'='true'
+    AND d.execution_authority='BROKER_NATIVE'
+    AND d.trade_intent_id IS NOT NULL
 )
 SELECT instrument,
        CASE WHEN would_have_been_fee_vetoed
@@ -46,6 +50,7 @@ SELECT instrument,
             ELSE 'PREVIOUS_FEE_GATE_WOULD_ALLOW' END AS historical_fee_verdict,
        COUNT(*) AS model_decisions,
        COUNT(*) FILTER (WHERE status IS NOT NULL) AS broker_trades_linked,
+       COUNT(*) FILTER (WHERE status IS NULL) AS unfilled_broker_intents,
        COUNT(*) FILTER (WHERE status='OPEN') AS still_open,
        COUNT(*) FILTER (WHERE status='CLOSED') AS closed_trades,
        COUNT(*) FILTER (WHERE status='CLOSED' AND after_cost_net IS NULL) AS incomplete_cost_records,
