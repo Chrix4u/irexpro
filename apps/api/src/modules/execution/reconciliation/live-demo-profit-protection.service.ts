@@ -3,6 +3,7 @@ import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditService } from '../../audit/audit.service';
 import { DataSource } from 'typeorm';
 import { BrokerService } from '../../broker/broker.service';
+import { CTRADER_FAMILY_BROKER_IDS } from '../../broker/registry/broker-catalog';
 import { ExecutionService } from '../execution.service';
 import { TradeCloseReason } from '../entities/trade.entity';
 import { evaluatePaperProfitLock } from '../../broker/adapters/paper-broker.adapter';
@@ -452,7 +453,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
             first.user_id,
           );
           if (
-            snapshot.connection.brokerId !== 'ctrader' ||
+            !CTRADER_FAMILY_BROKER_IDS.includes(snapshot.connection.brokerId) ||
             String(snapshot.connection.accountType).toUpperCase() !== 'DEMO'
           ) {
             continue;
@@ -467,8 +468,10 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
             const position = positions.get(providerPositionId);
             if (!position) continue;
             const currentPnl = finite(position.unrealisedPnl);
-            const initialRisk = finite(trade.initial_risk_pnl);
-            if (currentPnl === null || initialRisk === null || initialRisk <= 0) continue;
+            // Broker-native price-path evidence has value even if the capital
+            // allocation's R-at-stop proof is absent. Risk-less observations
+            // must never activate an automated exit.
+            if (currentPnl === null) continue;
 
             const previousPeak = finite(trade.max_favorable_pnl) ?? 0;
             const previousAdverse = finite(trade.max_adverse_pnl) ?? 0;
@@ -492,6 +495,14 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               peakObservedAt,
               observedAt,
             });
+
+            // Pepperstone and other cTrader-family DEMO accounts receive
+            // read-only peak/adverse/give-back telemetry. Existing cTrader
+            // exit authority is unchanged until broker-specific profit-lock
+            // outcomes have been validated. LIVE remains excluded above.
+            if (snapshot.connection.brokerId !== 'ctrader') continue;
+            const initialRisk = finite(trade.initial_risk_pnl);
+            if (initialRisk === null || initialRisk <= 0) continue;
 
             const authoritativeStop = finite(trade.stop_loss);
             const currentPrice = finite(position.currentPrice);
