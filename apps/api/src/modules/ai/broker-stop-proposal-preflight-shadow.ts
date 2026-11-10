@@ -46,7 +46,10 @@ export interface BrokerStopProposal {
     brokerMetadataVerified: boolean;
     digits: number;
     tickSize: string;
+    /** Already normalized from cTrader distanceSetIn (points or percentage). */
     minStopDistance: string;
+    minStopDistanceUnit: 'ABSOLUTE_PRICE' | 'RAW_POINTS' | 'RAW_PERCENT';
+    minStopDistanceConversionVerified: boolean;
     /** Explicit conservative price distance covering costs and slippage. */
     verifiedCostBufferPrice: string;
   };
@@ -127,6 +130,8 @@ export function validateBrokerStopProposal(
   if (snapshot.status !== 'OPEN') blockers.add('POSITION_NOT_OPEN');
   if (
     symbol.brokerMetadataVerified !== true ||
+    symbol.minStopDistanceUnit !== 'ABSOLUTE_PRICE' ||
+    symbol.minStopDistanceConversionVerified !== true ||
     !Number.isInteger(symbol.digits) ||
     symbol.digits < 0 ||
     symbol.digits > 10

@@ -42,6 +42,8 @@ const buy: BrokerStopProposal = {
     digits: 5,
     tickSize: '0.00001',
     minStopDistance: '0.00010',
+    minStopDistanceUnit: 'ABSOLUTE_PRICE',
+    minStopDistanceConversionVerified: true,
     verifiedCostBufferPrice: '0.00020',
   },
 };
@@ -131,6 +133,22 @@ describe('non-executing broker-held profit-lock preflight', () => {
         now,
       ).blockers,
     ).toContain('STOP_DOES_NOT_SECURE_AFTER_COST_PROFIT');
+  });
+
+  it('cannot confuse raw cTrader stop distance in points or percent with price distance', () => {
+    for (const unit of ['RAW_POINTS', 'RAW_PERCENT'] as const) {
+      const result = preflight({
+        symbol: { ...buy.symbol, minStopDistanceUnit: unit },
+      });
+      expect(result.structurallyValid).toBe(false);
+      expect(result.candidate).toBeNull();
+      expect(result.blockers).toContain('BROKER_SYMBOL_METADATA_UNVERIFIED');
+    }
+    expect(
+      preflight({
+        symbol: { ...buy.symbol, minStopDistanceConversionVerified: false },
+      }).blockers,
+    ).toContain('BROKER_SYMBOL_METADATA_UNVERIFIED');
   });
 
   it('fails closed when the conservative broker fee buffer is absent or unverified', () => {

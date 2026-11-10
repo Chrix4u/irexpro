@@ -29,6 +29,15 @@ estimated fee-inclusive breakeven. The buffer is **not** assumed correct merely
 because a caller supplied it; cost provenance must be independently verified
 before any eventual broker integration.
 
+**Important cTrader metadata unit gate:** Official Spotware `ProtoOASymbol`
+defines `slDistance` and `distanceSetIn`, where the distance may be in
+**points or percentage**, not absolute price. The preflight rejects
+`RAW_POINTS`, `RAW_PERCENT` and missing conversion provenance. The adapter
+must separately convert this symbol-specific broker value to an absolute
+price distance based on its verified `digits`, current quote and
+`distanceSetIn` before ever supplying `ABSOLUTE_PRICE`.
+See https://help.ctrader.com/open-api/model-messages/#protooasymbol.
+
 A structurally valid result contains a **candidate only**, explicitly
 `executionAuthority: NONE`, `brokerWriteAuthorized: false`,
 `brokerStopConfirmed: false`, `autoPromotionEnabled: false`.
