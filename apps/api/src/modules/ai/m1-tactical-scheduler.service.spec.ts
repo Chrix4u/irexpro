@@ -34,6 +34,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION,
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW,
   M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
+  M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION,
   m1RiskMarketRegime,
   m1RouteExecutableInPhase,
   m1ShadowOutcomeEligible,
@@ -2152,7 +2153,7 @@ describe('M1 professional v8 DEMO promotion', () => {
       paperVolumeCap: 4,
     });
     expect(moduleSource).toMatch(
-      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW/,
+      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION/,
     );
     expect(M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW.demoEntryInstruments).toEqual([
       'AUDUSD',
@@ -2410,6 +2411,162 @@ describe('M1 V8 multi-model DEMO authority', () => {
     executionMode: ExecutionMode.FULL_AUTO,
     brokerConnectionId: 'demo-conn-2',
   };
+
+  it('keeps fully-admitted Primary Plan-B EARLY_TRANSITION research-only under V9', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'EARLY_TRANSITION',
+            paperAdmitted: true,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
+        };
+      });
+
+    await driveFeatures(h, transitionFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    const buy = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
+    expect(buy?.governance.multimodelEnsemble).toMatchObject({
+      strategyRoute: 'EARLY_TRANSITION',
+      paperAdmitted: true,
+    });
+    expect(buy?.executionAuthority).toBe('NONE');
+    expect(buy?.blockers).toContain('M1_DEMO_EARLY_TRANSITION_RESEARCH_ONLY');
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.closeTrade).not.toHaveBeenCalled();
+  });
+
+  it('keeps admitted M5 EARLY_TRANSITION handoff research-only in V9 without affecting its evidence', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      m5EarlyTransitionEvidence: {
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        marketBarTime: new Date('2026-10-15T10:25:00.000Z'),
+        evaluatedAt: new Date('2026-10-15T10:29:00.000Z'),
+        strategyRoute: 'EARLY_TRANSITION',
+        paperAdmitted: true,
+        paperExecutionEligible: true,
+        eventRisk: 'CLEAR',
+        driftState: 'NORMAL',
+        netExpectedR: 0.31,
+        ensembleScore: 0.66,
+        consensusPassed: 7,
+        consensusRequired: 6,
+      },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: false,
+          },
+          authority: {
+            ...result.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
+      });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    const buy = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
+    expect(buy?.governance.m5EarlyTransitionHandoff).toMatchObject({ eligible: true });
+    expect(buy?.executionAuthority).toBe('NONE');
+    expect(buy?.blockers).toContain('M1_DEMO_EARLY_TRANSITION_RESEARCH_ONLY');
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.closeTrade).not.toHaveBeenCalled();
+  });
+
+  it('observes an otherwise-qualified confirmed direction flip without closing the original DEMO trade in V9', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      openPositions: [
+        {
+          tradeId: 'trade-open-sell',
+          tradeIntentId: 'intent-open-sell',
+          instrument: 'EURUSD',
+          direction: 'SELL',
+          openedAt: new Date('2026-10-15T10:27:00.000Z'),
+          decisionId: 'decision-open-sell',
+          route: 'M1_TREND_CONTINUATION',
+          policyVersion: 'm1-tactical-v2-m5-lifecycle',
+          originalNetExpectedR: 0.18,
+        },
+      ],
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'CONFIRMED_REVERSAL',
+            paperAdmitted: true,
+          },
+          trainedExpert: {
+            ...result.trainedExpert,
+            allBrokerNative: true,
+            direction: 'BUY',
+            longVotes: 3,
+            shortVotes: 0,
+            ensembleConfidence: 0.76,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
+        };
+      });
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+
+    const buy = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
+    expect(buy?.blockers).toContain('M1_DIRECTION_FLIP_RESEARCH_ONLY');
+    expect(buy?.governance.directionFlipConflict).toMatchObject({
+      confirmedReversal: true,
+      nonPositionEntryGatesPassed: true,
+      exitResearchOnly: true,
+      exitRequested: false,
+    });
+    expect(buy?.executionAuthority).toBe('NONE');
+    expect(h.closeTrade).not.toHaveBeenCalled();
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
 
   it('closes an older opposite DEMO thesis first and defers a fully qualified confirmed reversal entry', async () => {
     const h = phase2Harness({
