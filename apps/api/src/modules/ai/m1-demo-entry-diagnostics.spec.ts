@@ -222,6 +222,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
     expect(params).toEqual([
       'user-12',
       ['AUDUSD', 'GBPUSD', 'EURUSD', 'USDCAD', 'USDCHF', 'USDJPY'],
+      ['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader'],
     ]);
     expect(sql).toContain('s.user_id = $1');
     expect(sql).toContain('d.user_id = $1');
@@ -229,7 +230,9 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
     expect(sql).toContain("s.execution_mode = 'FULL_AUTO'");
     expect(sql).toContain("s.status = 'ACTIVE'");
     expect(sql).toContain("b.account_type = 'DEMO'");
-    expect(sql).toContain("b.broker_id = 'ctrader'");
+    expect(sql).toContain('b.broker_id = ANY($3::text[])');
+    expect(sql).toContain('b.id = s.broker_connection_id');
+    expect(sql).not.toContain("b.broker_id = 'ctrader'");
     expect(sql).toContain('d.broker_connection_id');
     expect(sql).toContain("GREATEST(s.started_at, NOW() - interval '60 minutes')");
     expect(sql).toContain('d.instrument = ANY($2::text[])');

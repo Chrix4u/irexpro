@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { CTRADER_FAMILY_BROKER_IDS } from '../broker/registry/broker-catalog';
 import { DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2 } from './demo-focused-instruments';
 import {
   toDemoFocusedEntryDiagnostic,
@@ -454,9 +455,9 @@ export class M1TacticalEvidenceService {
   constructor(private readonly dataSource: DataSource) {}
 
   /**
-   * Bounded, read-only, account-scoped explanation of why the three focused
+   * Bounded, read-only, account-scoped explanation of why the six focused
    * DEMO pairs are not opening trades. A currently ACTIVE, exact-user cTrader
-   * DEMO FULL_AUTO session is required; historical/suspended sessions never
+   * family DEMO FULL_AUTO session is required; historical/suspended sessions never
    * inherit newer decisions. Never changes execution authority or risk.
    *
    * The most common reasons are overlapping reasons PER DECISION (not trades).
@@ -473,7 +474,7 @@ export class M1TacticalEvidenceService {
         FROM trading.trading_sessions s
         JOIN broker.broker_connections b
           ON b.id = s.broker_connection_id AND b.user_id = s.user_id
-          AND b.broker_id = 'ctrader' AND b.account_type = 'DEMO'
+          AND b.broker_id = ANY($3::text[]) AND b.account_type = 'DEMO'
         WHERE s.user_id = $1
           AND s.execution_mode = 'FULL_AUTO'
           AND s.status = 'ACTIVE'
@@ -593,7 +594,7 @@ export class M1TacticalEvidenceService {
           FROM top_planb_reasons
         ), '[]'::jsonb) AS leading_planb_reasons
       `,
-      [userId, [...DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2]],
+      [userId, [...DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2], [...CTRADER_FAMILY_BROKER_IDS]],
     )) as DemoFocusedEntryDiagnosticRow[];
     return toDemoFocusedEntryDiagnostic(rows[0]);
   }
