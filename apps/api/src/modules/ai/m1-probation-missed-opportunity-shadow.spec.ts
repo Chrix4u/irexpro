@@ -69,7 +69,7 @@ describe('M1 probation-only gross missed-opportunity research', () => {
       state: 'STOP_QUOTE_TOUCH',
       indicativeGrossR: -1,
       observedMinutes: 3,
-      maxAdversePipsBeforeDecision: 8,
+      maxAdversePipsBeforeDecision: 2,
     });
   });
   it('does not resolve intrabar TP and SL when both prices are touched', () => {
@@ -81,6 +81,16 @@ describe('M1 probation-only gross missed-opportunity research', () => {
       observedMinutes: 1,
     });
   });
+  it('excludes unordered TP-minute adverse extremes from pre-touch excursion', () => {
+    const bars = candles();
+    bars[1] = minute(1, 1.1235, 1.12395, 1.1225, 1.1227);
+    const result = score(bars);
+    expect(result.state).toBe('TARGET_QUOTE_TOUCH');
+    // The high and target touch both occurred in minute 1; the high may
+    // have happened after TP. Only minute 0 adverse counts as prior.
+    expect(result.maxAdversePipsBeforeDecision).toBe(2);
+  });
+
   it('does not turn missing or synthetic quotes into winners', () => {
     const bars = candles();
     bars[3] = minute(3, 1.1235, 1.12365, 1.1226, 1.1227);

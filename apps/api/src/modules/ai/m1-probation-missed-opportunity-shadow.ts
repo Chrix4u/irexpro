@@ -160,7 +160,6 @@ export function evaluateM1ProbationMissedOpportunity(input: {
       sign === 1
         ? Math.max(0, entry - Number(candle.low))
         : Math.max(0, Number(candle.high) - entry);
-    worstAdverse = Math.max(worstAdverse, adverse);
     const hitsStop = sign === 1 ? Number(candle.low) <= stop! : Number(candle.high) >= stop!;
     const hitsTarget = sign === 1 ? Number(candle.high) >= target! : Number(candle.low) <= target!;
     if (hitsStop || hitsTarget) {
@@ -171,6 +170,8 @@ export function evaluateM1ProbationMissedOpportunity(input: {
             ? 'STOP_QUOTE_TOUCH'
             : 'TARGET_QUOTE_TOUCH';
       result.eventMinute = new Date(at).toISOString();
+      // Do not order intraminute adverse extremes relative to a TP/SL touch.
+      // Only prior fully completed M1 candles contribute to this measurement.
       result.maxAdversePipsBeforeDecision = round(worstAdverse / pip, 2);
       result.indicativeGrossR =
         result.state === 'BOTH_IN_BAR'
@@ -180,6 +181,7 @@ export function evaluateM1ProbationMissedOpportunity(input: {
             : round(input.targetDistance / input.stopDistance, 4);
       return result;
     }
+    worstAdverse = Math.max(worstAdverse, adverse);
   }
   result.state = 'TIME_MARK';
   result.maxAdversePipsBeforeDecision = round(worstAdverse / pip, 2);
