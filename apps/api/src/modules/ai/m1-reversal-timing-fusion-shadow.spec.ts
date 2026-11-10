@@ -83,6 +83,14 @@ describe('M1 reversal timing M1/M5 fusion shadow', () => {
       }).state,
     ).toBe('COMPLETED_M5_TURN_MISSING');
   });
+  it('does not misclassify a candidate with failed-breakout evidence as the missing-breakout cohort', () => {
+    expect(score({ failedBreakoutAgainstDirection: true })).toMatchObject({
+      state: 'FAILED_BREAKOUT_PRESENT_OTHER_ROUTE_BLOCK',
+      wouldConfirmWithoutFailedBreakout: false,
+      originalFailedBreakout: true,
+    });
+  });
+
   it('rejects non-finite or malformed features, never promotes them', () => {
     expect(score({ alignedM5Momentum1Atr: NaN }).state).toBe('INVALID_EVIDENCE');
     expect(score({ instrument: 'XAUUSD' }).state).toBe('ALTERNATIVE_CONFIRMATION_CANDIDATE');

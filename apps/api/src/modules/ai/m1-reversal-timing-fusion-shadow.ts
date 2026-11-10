@@ -14,6 +14,7 @@ export type M1ReversalFusionState =
   | 'M1_SLOPE_NOT_ALIGNED'
   | 'COMPLETED_M5_TURN_MISSING'
   | 'ORIGINAL_M1_ALREADY_CONFIRMED'
+  | 'FAILED_BREAKOUT_PRESENT_OTHER_ROUTE_BLOCK'
   | 'INVALID_EVIDENCE';
 
 export interface M1ReversalFusionResult {
@@ -117,7 +118,9 @@ export function evaluateM1ReversalTimingFusionShadow(input: {
               ? 'M1_SLOPE_NOT_ALIGNED'
               : !completedM5TurnPassed
                 ? 'COMPLETED_M5_TURN_MISSING'
-                : 'ALTERNATIVE_CONFIRMATION_CANDIDATE';
+                : c.failedBreakoutAgainstDirection === true
+                  ? 'FAILED_BREAKOUT_PRESENT_OTHER_ROUTE_BLOCK'
+                  : 'ALTERNATIVE_CONFIRMATION_CANDIDATE';
 
   return {
     artifact: M1_REVERSAL_TIMING_FUSION_SHADOW_ARTIFACT,
