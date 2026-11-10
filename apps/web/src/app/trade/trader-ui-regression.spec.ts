@@ -60,6 +60,16 @@ describe('AI Trader production UI regression contract', () => {
     ).toContain(".ai-control-card__diagnosis");
   });
 
+  it('warns while a telemetry-only Pepperstone/IC Markets DEMO account is actively trading', () => {
+    expect(pageSource).toContain('data-testid="ctrader-demo-profit-lock-not-active"');
+    expect(pageSource).toContain('selectedBroker?.brokerId === "pepperstone-ctrader"');
+    expect(pageSource).toContain('selectedBroker?.brokerId === "icmarkets-ctrader"');
+    expect(pageSource).toContain('AI profit protection is not executing on this DEMO broker.');
+    expect(pageSource).toContain('Peak profit and give-back values are observation-only here');
+    expect(pageSource).toContain('/trade/protection-lab');
+    expect(pageSource).toContain('Stopping an AI session');
+  });
+
   it('keeps the live scanning market cockpit visible in the trade surface', () => {
     expect(pageSource).toContain('SCANNING');
     expect(pageSource).toContain('Last move');
