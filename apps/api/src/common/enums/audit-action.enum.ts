@@ -135,6 +135,9 @@ export enum AuditAction {
   // Read-only DEMO profit-lock trend check, evaluated as of the close decision.
   // A shadow HOLD recommendation never overrides an existing protective close.
   DEMO_PROFIT_LOCK_TREND_RECHECK = 'DEMO_PROFIT_LOCK_TREND_RECHECK',
+  // Research-only first hypothetical legacy profit-lock exit for alternative
+  // cTrader-family DEMO brokers. Existing broker TP/SL remain authoritative.
+  DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW = 'DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW',
   TRADE_REJECTED = 'TRADE_REJECTED',
   TRADE_RECONCILED = 'TRADE_RECONCILED',
   // Sprint 32: idempotency — a duplicate trade intent was suppressed

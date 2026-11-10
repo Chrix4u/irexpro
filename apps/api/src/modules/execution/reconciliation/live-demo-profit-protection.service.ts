@@ -364,6 +364,71 @@ export function evaluateLiveDemoProfitLockTrendRecheck(input: {
   return { wouldHoldIfEnabled: true, reason: 'CONTINUATION_CANDIDATE', thesisAgeSeconds };
 }
 
+/**
+ * Read-only parity check for Pepperstone/IC Markets DEMO positions.
+ * Compare the existing cTrader profit lock against the prior BROKER-observed
+ * mark to identify the first candidate exit; never grant execution authority.
+ */
+export function evaluateAlternativeDemoProfitLockShadow(input: {
+  previousObservationCount: number;
+  previousMaxFavorablePnl: number;
+  previousProfitGiveback: number;
+  maxFavorablePnl: number;
+  currentPnl: number;
+  initialRiskPnl: number | null;
+  isM1Strategy: boolean;
+  strategyRoute: 'TREND_CONTINUATION' | 'CONFIRMED_REVERSAL' | 'EARLY_TRANSITION' | null;
+}) {
+  const disabled = {
+    mode: 'SHADOW_ONLY' as const,
+    wouldClose: false,
+    firstCrossing: false,
+    protectedFloorPnl: null as string | null,
+    retentionFraction: null as string | null,
+    noTradeAuthority: true as const,
+    modifiesExecution: false as const,
+  };
+  const risk = input.initialRiskPnl;
+  if (
+    risk === null ||
+    !Number.isFinite(risk) ||
+    risk <= 0 ||
+    ![
+      input.previousMaxFavorablePnl,
+      input.previousProfitGiveback,
+      input.maxFavorablePnl,
+      input.currentPnl,
+    ].every(Number.isFinite)
+  ) {
+    return disabled;
+  }
+  const options = {
+    initialRiskPnl: money(risk),
+    isM1Strategy: input.isM1Strategy,
+    strategyRoute: input.strategyRoute,
+  };
+  const current = evaluatePaperProfitLock({
+    ...options,
+    maxFavorablePnl: money(input.maxFavorablePnl),
+    currentPnl: money(input.currentPnl),
+  });
+  const previous = evaluatePaperProfitLock({
+    ...options,
+    maxFavorablePnl: money(input.previousMaxFavorablePnl),
+    currentPnl: money(input.previousMaxFavorablePnl - input.previousProfitGiveback),
+  });
+  return {
+    mode: 'SHADOW_ONLY' as const,
+    wouldClose: current.shouldClose,
+    firstCrossing:
+      input.previousObservationCount > 0 && current.shouldClose && !previous.shouldClose,
+    protectedFloorPnl: current.protectedFloorPnl,
+    retentionFraction: current.retentionFraction,
+    noTradeAuthority: true as const,
+    modifiesExecution: false as const,
+  };
+}
+
 interface OpenAiTradeRow {
   trade_id: string;
   user_id: string;
@@ -496,11 +561,72 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               observedAt,
             });
 
-            // Pepperstone and other cTrader-family DEMO accounts receive
-            // read-only peak/adverse/give-back telemetry. Existing cTrader
-            // exit authority is unchanged until broker-specific profit-lock
-            // outcomes have been validated. LIVE remains excluded above.
-            if (snapshot.connection.brokerId !== 'ctrader') continue;
+            // Alternative cTrader-family DEMO accounts retain their original
+            // broker TP/SL. A first-crossing observation shows exactly where
+            // the existing cTrader lock WOULD have exited, without sacrificing
+            // a potential full-TP winner or affecting the entry scanner.
+            if (snapshot.connection.brokerId !== 'ctrader') {
+              const risk = finite(trade.initial_risk_pnl);
+              const strategyRoute =
+                trade.strategy_route === 'TREND_CONTINUATION' ||
+                trade.strategy_route === 'CONFIRMED_REVERSAL' ||
+                trade.strategy_route === 'EARLY_TRANSITION'
+                  ? trade.strategy_route
+                  : null;
+              const shadow = evaluateAlternativeDemoProfitLockShadow({
+                previousObservationCount: Math.max(0, Number(trade.path_observation_count) || 0),
+                previousMaxFavorablePnl: previousPeak,
+                previousProfitGiveback: finite(trade.profit_giveback) ?? 0,
+                maxFavorablePnl,
+                currentPnl,
+                initialRiskPnl: risk,
+                isM1Strategy: trade.is_m1_strategy,
+                strategyRoute,
+              });
+              if (shadow.firstCrossing && this.auditService) {
+                try {
+                  const fees = await this.loadCausalRunnerCostEstimate(trade, observedAt);
+                  const protectedGrossFloor = Number(shadow.protectedFloorPnl);
+                  await this.auditService.log({
+                    actorUserId: trade.user_id,
+                    action: AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+                    resourceType: 'Trade',
+                    resourceId: trade.trade_id,
+                    metadata: {
+                      mode: 'SHADOW_ONLY',
+                      observedAt: observedAt.toISOString(),
+                      brokerId: snapshot.connection.brokerId,
+                      instrument: trade.instrument,
+                      direction: trade.direction,
+                      strategyRoute,
+                      peakGrossPnl: money(maxFavorablePnl),
+                      currentGrossPnl: money(currentPnl),
+                      grossGiveback: money(profitGiveback),
+                      initialRiskPnl: money(risk!),
+                      retentionFraction: shadow.retentionFraction,
+                      hypotheticalGrossFloor: shadow.protectedFloorPnl,
+                      hypotheticalNetFloor:
+                        fees && Number.isFinite(protectedGrossFloor)
+                          ? money(protectedGrossFloor - fees.estimatedCost)
+                          : null,
+                      estimatedBrokerCosts: fees?.estimatedCost ?? null,
+                      feeSampleCount: fees?.sampleCount ?? 0,
+                      feeEvidence: fees ? 'CAUSAL_ACCOUNT_SYMBOL_FEES' : 'INSUFFICIENT',
+                      hypotheticalAction: 'WOULD_CLOSE',
+                      actualAction: 'HOLD_BROKER_TP_SL',
+                      noTradeAuthority: true,
+                      modifiesExecution: false,
+                    },
+                  });
+                } catch (error) {
+                  this.logger.warn(
+                    'Alternative DEMO profit-lock shadow observation deferred; broker TP/SL unchanged: ' +
+                      (error as Error).message,
+                  );
+                }
+              }
+              continue;
+            }
             const initialRisk = finite(trade.initial_risk_pnl);
             if (initialRisk === null || initialRisk <= 0) continue;
 

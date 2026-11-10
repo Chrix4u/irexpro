@@ -6,6 +6,7 @@ import {
   CONTINUATION_RECOVERY_GRACE_MINUTES,
   evaluateLiveDemoProfitLockTrendRecheck,
   evaluateLiveDemoThesisProtection,
+  evaluateAlternativeDemoProfitLockShadow,
 } from './live-demo-profit-protection.service';
 import { BrokerService } from '../../broker/broker.service';
 import { ExecutionService } from '../execution.service';
@@ -112,6 +113,75 @@ describe('LiveDemoProfitProtectionService', () => {
       'user-1',
       TradeCloseReason.PROFIT_PROTECTION,
     );
+  });
+
+  it('classifies first legacy profit-lock crossing as SHADOW_ONLY without shortening full-TP winners', () => {
+    const baseline = {
+      previousObservationCount: 5,
+      previousMaxFavorablePnl: 10,
+      previousProfitGiveback: 0,
+      maxFavorablePnl: 10,
+      currentPnl: 7,
+      initialRiskPnl: 9,
+      isM1Strategy: true,
+      strategyRoute: 'TREND_CONTINUATION' as const,
+    };
+    expect(evaluateAlternativeDemoProfitLockShadow(baseline)).toMatchObject({
+      mode: 'SHADOW_ONLY',
+      wouldClose: true,
+      firstCrossing: true,
+      protectedFloorPnl: '8.00',
+      noTradeAuthority: true,
+      modifiesExecution: false,
+    });
+    expect(evaluateAlternativeDemoProfitLockShadow({ ...baseline, currentPnl: 9 })).toMatchObject({
+      wouldClose: false,
+      firstCrossing: false,
+    });
+    expect(
+      evaluateAlternativeDemoProfitLockShadow({ ...baseline, previousProfitGiveback: 3 }),
+    ).toMatchObject({ wouldClose: true, firstCrossing: false });
+    expect(
+      evaluateAlternativeDemoProfitLockShadow({ ...baseline, previousObservationCount: 0 }),
+    ).toMatchObject({ wouldClose: true, firstCrossing: false });
+    expect(
+      evaluateAlternativeDemoProfitLockShadow({ ...baseline, initialRiskPnl: null }),
+    ).toMatchObject({ wouldClose: false, firstCrossing: false });
+  });
+
+  it('audits Pepperstone first hypothetical profit-lock crossing with causal fee evidence but NEVER exits', async () => {
+    const auditService = { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService;
+    const h = harness(
+      [candidate({ max_favorable_pnl: '10.00', profit_giveback: '0.00' })],
+      '7.00',
+      'DEMO',
+      [],
+      '1.11340',
+      [],
+      auditService,
+      [{ sample_count: 6, p90_cost_per_lot: '2.00' }],
+      [],
+      [],
+      'pepperstone-ctrader',
+    );
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+        resourceId: 'trade-1',
+        metadata: expect.objectContaining({
+          mode: 'SHADOW_ONLY',
+          hypotheticalAction: 'WOULD_CLOSE',
+          actualAction: 'HOLD_BROKER_TP_SL',
+          hypotheticalGrossFloor: '8.00',
+          estimatedBrokerCosts: 0.4,
+          feeSampleCount: 6,
+          noTradeAuthority: true,
+          modifiesExecution: false,
+        }),
+      }),
+    );
+    expect(h.executionService.closeTrade).not.toHaveBeenCalled();
   });
 
   it('records Pepperstone DEMO peak and give-back using the order-position id without activating new exits', async () => {
