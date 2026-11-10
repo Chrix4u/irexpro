@@ -3626,6 +3626,23 @@ export default function AiTradingPage() {
                         fallback checks held in probation.
                       </small>
                     )}
+                    {demoEntryDiagnostic.planBReversalTimingHeldDecisions > 0 && (
+                      <small className="ai-control-card__diagnosis-alert" role="status">
+                        Plan B admitted reversals that M1 did not independently confirm in{" "}
+                        {demoEntryDiagnostic.planBReversalTimingHeldDecisions} model checks.
+                        M1 abstained in{" "}
+                        {demoEntryDiagnostic.planBReversalM1AbstainedDecisions} of those checks.
+                        These are repeated evaluations, not missed broker orders.
+                      </small>
+                    )}
+                    {demoEntryDiagnostic.rolloverRegimeDecisions > 0 && (
+                      <small>
+                        Rollover-risk conditions were detected in{" "}
+                        {demoEntryDiagnostic.rolloverRegimeDecisions} model checks.
+                        New orders still require normal market conditions, broker spreads,
+                        model agreement and risk approval.
+                      </small>
+                    )}
                     {demoEntryDiagnostic.leadingBlockers.length ? (
                       <small>
                         Frequent reasons among proposed entries:{" "}

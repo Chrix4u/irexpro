@@ -22,6 +22,9 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
     sessionAgeMinutes: 396,
     lastDecisionAgeSeconds: 35,
     planBAdmittedDecisions: 2,
+    planBReversalTimingHeldDecisions: 81,
+    planBReversalM1AbstainedDecisions: 79,
+    rolloverRegimeDecisions: 40,
     primaryPathDecisions: 1,
     primaryReliabilityVetoDecisions: 1,
     eligibleFallbackProbationVetoDecisions: 0,
@@ -75,6 +78,9 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
       sessionAgeMinutes: 0,
       lastDecisionAgeSeconds: null,
       planBAdmittedDecisions: 0,
+      planBReversalTimingHeldDecisions: 0,
+      planBReversalM1AbstainedDecisions: 0,
+      rolloverRegimeDecisions: 0,
       primaryPathDecisions: 0,
       primaryReliabilityVetoDecisions: 0,
       eligibleFallbackProbationVetoDecisions: 0,
@@ -97,6 +103,9 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
     })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, operatingState: "BROKER_READY" })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, primaryPathDecisions: 23 })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, planBReversalM1AbstainedDecisions: 82 })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, planBReversalTimingHeldDecisions: 282 })).toBe(false);
+    expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, rolloverRegimeDecisions: 282 })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, primaryReliabilityVetoDecisions: 7 })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, onlyCurrentSession: false })).toBe(false);
     expect(hasDemoFocusedEntryDiagnosticUiShape({ ...evidence, leadingPlanBReasons: undefined })).toBe(false);
