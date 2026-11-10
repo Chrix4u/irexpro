@@ -952,9 +952,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     requireExecutionBrokerSource = false,
   ): Promise<(() => Promise<void>) | null> {
     const marketStartedAt = Date.now();
-    const market = await this.marketData.loadSnapshot(brokerConnectionId, instrument, decisionTime, {
-      requireExecutionBrokerSource,
-    });
+    const market = await this.marketData.loadSnapshot(
+      brokerConnectionId,
+      instrument,
+      decisionTime,
+      { requireExecutionBrokerSource },
+    );
     if (timing) timing.marketLoadMs = Math.max(0, Date.now() - marketStartedAt);
     const readiness = this.marketData.getLastReadiness?.(brokerConnectionId, instrument) ?? null;
     if (readiness) {
