@@ -17,6 +17,41 @@ import {
   BrokerPosition,
 } from '../../broker/interfaces/broker-adapter.interface';
 import { compareDecimal } from './reconciliation-comparator';
+import { ExactDecimal } from '../../../common/utils/exact-decimal';
+
+/**
+ * Broker-reported CLOSE economics are a terminal, independently observed P&L
+ * point. Durable 5-second OPEN telemetry can miss the final price movement,
+ * particularly on TP/SL fills. Reconcile ONLY the sampled fallback path;
+ * never overwrite a provider-supplied full path or fabricate live quote samples.
+ * Figures are gross account-currency P&L; costs are stored separately.
+ */
+export function reconcileDurableProfitPathAtClose<
+  T extends {
+    maxFavorablePnl: string;
+    maxAdversePnl: string;
+    profitGiveback: string;
+    peakObservedAt: Date | null;
+  },
+>(path: T, realisedPnl: string | null, closedAt: Date): T {
+  const final = realisedPnl === null ? null : ExactDecimal.tryParse(realisedPnl);
+  const peak = ExactDecimal.tryParse(path.maxFavorablePnl);
+  const trough = ExactDecimal.tryParse(path.maxAdversePnl);
+  if (!final || !peak || !trough || !Number.isFinite(closedAt.getTime())) return path;
+
+  const best = ExactDecimal.max(ExactDecimal.ZERO, ExactDecimal.max(peak, final));
+  const worst = ExactDecimal.min(ExactDecimal.ZERO, ExactDecimal.min(trough, final));
+  const giveback = ExactDecimal.max(ExactDecimal.ZERO, best.sub(final));
+  return {
+    ...path,
+    maxFavorablePnl: best.toFixed(8),
+    maxAdversePnl: worst.toFixed(8),
+    profitGiveback: giveback.toFixed(8),
+    // The broker CLOSE, not a synthetic M1 candle, established a newer peak.
+    // Leave sample count and last OPEN quote timestamp unchanged.
+    peakObservedAt: final.gt(peak) && final.gt(ExactDecimal.ZERO) ? closedAt : path.peakObservedAt,
+  };
+}
 
 /**
  * ReconciliationResolutionService — SAFELY converges internal state onto
@@ -118,11 +153,17 @@ export class ReconciliationResolutionService {
             lastObservedAt: trade.pathLastObservedAt ?? null,
           }
         : null;
-    const pathDiagnostics = providerPathDiagnostics ?? durablePathDiagnostics;
+    const pathDiagnostics =
+      providerPathDiagnostics ??
+      (durablePathDiagnostics
+        ? reconcileDurableProfitPathAtClose(durablePathDiagnostics, realisedPnl, closedAt)
+        : null);
     const pathDiagnosticsSource = providerPathDiagnostics
       ? 'PROVIDER'
       : durablePathDiagnostics
-        ? 'DURABLE_TRADE_TELEMETRY'
+        ? realisedPnl != null
+          ? 'DURABLE_TRADE_TELEMETRY_WITH_PROVIDER_EXIT'
+          : 'DURABLE_TRADE_TELEMETRY'
         : null;
 
     const result = await this.tradeRepo.update({ id: trade.id, status: trade.status }, {
