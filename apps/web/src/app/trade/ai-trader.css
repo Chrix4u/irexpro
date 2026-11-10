@@ -2257,6 +2257,34 @@
   font-size: 0.75rem;
 }
 .ai-readiness__focus b { color: var(--text); }
+/* Account-backed one-hour funnel, distinct from the cosmetic scanner sweep. */
+.ai-readiness__entry-evidence {
+  display: grid;
+  gap: 0.26rem;
+  margin-top: 0.75rem;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--border-soft, var(--border));
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  text-align: left;
+}
+.ai-readiness__entry-evidence strong {
+  color: var(--text);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.ai-readiness__entry-evidence small {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+.ai-readiness__scan-live--delayed .ai-readiness__scan-pulse {
+  animation: none;
+  background: var(--warning);
+  box-shadow: none;
+}
+
 .ai-readiness__legend {
   display: flex;
   justify-content: center;

@@ -2,6 +2,8 @@ import {
   deriveActiveModelUiState,
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
+  summarizeDemoEntryEvidence,
+  type DemoFocusedEntryDiagnosticView,
   hasExternalProviderPerformanceUiShape,
   hasDemoFocusedEntryDiagnosticUiShape,
   hasM1TacticalStatusUiShape,
@@ -9,7 +11,7 @@ import {
 } from "./vps-scanner-status";
 
 describe("user-scoped recent DEMO entry decision evidence", () => {
-  const evidence = {
+  const evidence: DemoFocusedEntryDiagnosticView = {
     scope: "ACTIVE_CTRADER_DEMO",
     windowMinutes: 60,
     evaluatedDecisions: 281,
@@ -32,6 +34,39 @@ describe("user-scoped recent DEMO entry decision evidence", () => {
     ],
     onlyCurrentSession: true,
   };
+  it("shows the actual last-hour broker-authorization funnel, not the animated scanner stage", () => {
+    expect(summarizeDemoEntryEvidence(evidence)).toEqual({
+      headline:
+        "Last 60 min: 281 model checks · 2 Plan B admitted · 0 broker-authorized · 0 executed",
+      detail:
+        "No broker-authorized entry. Most frequent gate: Primary model admission not met (211 repeated decisions).",
+      delayed: false,
+    });
+    expect(summarizeDemoEntryEvidence(null)).toBeNull();
+  });
+
+  it("calls a stale market decision feed delayed rather than continuously scanning", () => {
+    const stale = {
+      ...evidence,
+      operatingState: "STALE_SCAN_EVIDENCE" as const,
+      lastDecisionAgeSeconds: 350,
+    };
+    expect(summarizeDemoEntryEvidence(stale)?.delayed).toBe(true);
+    expect(summarizeDemoEntryEvidence(stale)?.detail).toContain("delayed");
+  });
+
+  it("distinguishes broker authorization from an actually executed position", () => {
+    const authorized = {
+      ...evidence,
+      brokerAuthorizedDecisions: 2,
+      executionSucceeded: 0,
+      operatingState: "RECENT_ENTRY_AUTHORIZATION" as const,
+    };
+    expect(summarizeDemoEntryEvidence(authorized)?.detail).toContain(
+      "not an executed fill",
+    );
+  });
+
   it("accepts only complete bounded current-session diagnostic evidence", () => {
     expect(hasDemoFocusedEntryDiagnosticUiShape(evidence)).toBe(true);
     expect(hasDemoFocusedEntryDiagnosticUiShape({
@@ -1362,7 +1397,7 @@ describe("active multi-model execution presentation", () => {
     expect(result).toMatchObject({
       score: 64,
       band: "FORMING",
-      headline: "No qualified strategy route — trade blocked",
+      headline: "Current setup has no qualified route — trade blocked",
       tradeExpected: false,
     });
     expect(result.detail).toContain("Plan B has not admitted an entry");
@@ -1400,7 +1435,7 @@ describe("active multi-model execution presentation", () => {
       m1TacticalStatus: rejected,
       fastMarkState: "LIVE",
     });
-    expect(view.headline).toBe("No qualified strategy route — trade blocked");
+    expect(view.headline).toBe("Current setup has no qualified route — trade blocked");
     expect(view.score).toBe(64);
     expect(view.tradeExpected).toBe(false);
     expect(view.detail).toContain("extended trend");
@@ -1430,7 +1465,7 @@ describe("active multi-model execution presentation", () => {
       fastMarkState: "LIVE",
     });
     expect(view.tradeExpected).toBe(false);
-    expect(view.headline).toBe("No qualified strategy route — trade blocked");
+    expect(view.headline).toBe("Current setup has no qualified route — trade blocked");
     expect(view.detail).toContain("M1 BUY entry timing is aligned");
     expect(view.detail).toContain("extended trend");
     expect(view.secondaryChecks ?? []).not.toContain("M1 entry timing is not confirmed");
@@ -1457,7 +1492,7 @@ describe("active multi-model execution presentation", () => {
       m1TacticalStatus: rejected,
       fastMarkState: "LIVE",
     });
-    expect(view.headline).toBe("No qualified strategy route — trade blocked");
+    expect(view.headline).toBe("Current setup has no qualified route — trade blocked");
     expect(view.detail).toContain("rollover market");
     expect(view.detail).toContain("shadow-only research");
     expect(view.detail).not.toContain("after-cost checks may also reject");

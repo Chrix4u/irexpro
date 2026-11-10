@@ -51,6 +51,7 @@ import {
   deriveActiveModelUiState,
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
+  summarizeDemoEntryEvidence,
   hasExternalProviderPerformanceUiShape,
   hasM1TacticalStatusUiShape,
   hasDemoFocusedEntryDiagnosticUiShape,
@@ -1385,6 +1386,7 @@ function TradeReadinessGauge({
   direction,
   scanFrame,
   lastRunAt,
+  entryDiagnostic,
 }: {
   score: number;
   band: "WAITING" | "FORMING" | "READY";
@@ -1395,10 +1397,13 @@ function TradeReadinessGauge({
   direction: "BUY" | "SELL" | null;
   scanFrame: LiveScanFrame;
   lastRunAt: string | null;
+  entryDiagnostic: DemoFocusedEntryDiagnosticView | null;
 }) {
   const angle = -180 + Math.max(0, Math.min(100, score)) * 1.8;
   const scanAngle = -180 + scanFrame.sweepPercent * 1.8;
   const tone = band === "READY" ? "ready" : band === "FORMING" ? "forming" : "waiting";
+  const entryEvidence = summarizeDemoEntryEvidence(entryDiagnostic);
+  const evidenceDelayed = entryEvidence?.delayed === true;
   const lastRunAge = lastRunAt
     ? Math.max(0, Math.floor((Date.now() - new Date(lastRunAt).getTime()) / 1000))
     : null;
@@ -1431,11 +1436,11 @@ function TradeReadinessGauge({
         <strong className="ai-readiness__score">{score}</strong>
         <span className="ai-readiness__score-label">/ 100</span>
       </div>
-      <div className="ai-readiness__scan-live">
+      <div className={`ai-readiness__scan-live${evidenceDelayed ? " ai-readiness__scan-live--delayed" : ""}`}>
         <span className="ai-readiness__scan-pulse" aria-hidden="true" />
         <div>
-          <span>Scanning now</span>
-          <strong>{scanFrame.stage.label}</strong>
+          <span>{evidenceDelayed ? "Scan evidence delayed" : "Scanner activity"}</span>
+          <strong>{evidenceDelayed ? "Awaiting fresh model decisions" : scanFrame.stage.label}</strong>
           <small>
             {scanFrame.stage.detail}
             {lastRunAge != null && Number.isFinite(lastRunAge)
@@ -1448,7 +1453,7 @@ function TradeReadinessGauge({
         {LIVE_SCAN_STAGES.map((stage, index) => (
           <div
             key={stage.id}
-            className={index === scanFrame.stageIndex ? "is-active" : ""}
+            className={!evidenceDelayed && index === scanFrame.stageIndex ? "is-active" : ""}
             title={stage.detail}
           >
             <i aria-hidden="true" />
@@ -1465,6 +1470,13 @@ function TradeReadinessGauge({
           </span>
         ) : null}
       </div>
+      {entryEvidence ? (
+        <div className="ai-readiness__entry-evidence" role="status">
+          <strong>{entryEvidence.headline}</strong>
+          <small>{entryEvidence.detail}</small>
+          <small>Counts are repeated model checks, not independent opportunities.</small>
+        </div>
+      ) : null}
       <div className="ai-readiness__legend" aria-hidden="true">
         <span><i className="is-waiting" />Wait</span>
         <span><i className="is-forming" />Forming</span>
@@ -3216,6 +3228,7 @@ export default function AiTradingPage() {
                 {...tradeReadiness}
                 scanFrame={liveScanFrame}
                 lastRunAt={m1TacticalStatus?.lastRunAt ?? null}
+                entryDiagnostic={automationOn ? demoEntryDiagnostic : null}
               />
               <section className="ai-performance-panel" aria-labelledby="recent-performance-title">
                 <div className="ai-performance-panel__head">
@@ -3637,7 +3650,10 @@ export default function AiTradingPage() {
                     )}
                     <small>
                       Counts reflect repeated minute-by-minute checks, not independently qualified
-                      trade opportunities. Only the three eligible DEMO pairs are counted.
+                      trade opportunities. Only DEMO entry-enabled pairs are counted
+                      {m1TacticalStatus?.demoEntryInstruments?.length
+                        ? ` (${m1TacticalStatus.demoEntryInstruments.length} currently enabled)`
+                        : ""}.
                       Reasons may overlap. No risk or commission check is bypassed.
                     </small>
                   </div>
