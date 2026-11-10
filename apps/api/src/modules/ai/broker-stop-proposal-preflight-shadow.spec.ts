@@ -133,6 +133,22 @@ describe('non-executing broker-held profit-lock preflight', () => {
     ).toContain('STOP_DOES_NOT_SECURE_AFTER_COST_PROFIT');
   });
 
+  it('fails closed when the conservative broker fee buffer is absent or unverified', () => {
+    for (const buffer of ['', '0', '-0.00010', '0.000001']) {
+      const result = preflight({
+        symbol: { ...buy.symbol, verifiedCostBufferPrice: buffer },
+      });
+      expect(result.structurallyValid).toBe(false);
+      expect(result.candidate).toBeNull();
+      expect(
+        result.blockers.some(
+          (reason) =>
+            reason === 'STOP_PRECISION_OR_TICK_INVALID' || reason === 'MALFORMED_PRICE_OR_VOLUME',
+        ),
+      ).toBe(true);
+    }
+  });
+
   it('keeps the stop outside the broker minimum executable stop-distance envelope', () => {
     expect(preflight({ proposedStopLoss: '1.10091' }).blockers).toContain(
       'STOP_TOO_CLOSE_TO_EXECUTABLE_QUOTE',
