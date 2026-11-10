@@ -39,7 +39,7 @@ import { HighConvictionBrokerExpertService } from './high-conviction-broker-expe
 import {
   M1TacticalSchedulerService,
   M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
-  M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
+  M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION,
 } from './m1-tactical-scheduler.service';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
 import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-api-key.guard';
@@ -103,7 +103,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     HighConvictionBrokerExpertService,
     {
       provide: M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
-      useValue: M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
+      useValue: M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION,
     },
     M1TacticalSchedulerService,
   ],

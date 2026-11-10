@@ -11,6 +11,9 @@ export const DEMO_ENTRY_BLOCKER_LABELS: Readonly<Record<string, string>> = Objec
   MULTIMODEL_PLAN_B_NOT_ADMITTED: 'Primary Plan B not admitted',
   M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION: 'Eligible fallback entries held in probation',
   M1_DEMO_EARLY_TRANSITION_PAIR_SIDE_DEGRADED: 'Recent early-transition results too weak',
+  M1_DEMO_EARLY_TRANSITION_RESEARCH_ONLY: 'Early-transition trades are in research-only probation',
+  M1_DIRECTION_FLIP_RESEARCH_ONLY:
+    'Opposite reversal is under observation; existing trade stays open',
   M1_DEMO_RELIABILITY_EARLY_LOSS_STREAK: 'Recent consecutive losing trades',
   MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED: 'M1 timing has not confirmed reversal',
   M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE: 'Account-wide recent net losses',
