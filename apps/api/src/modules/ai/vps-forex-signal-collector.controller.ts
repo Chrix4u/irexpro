@@ -58,6 +58,16 @@ export class VpsForexSignalCollectorController {
     return this.m1Evidence.loadFocusedDemoEntryDiagnostic(userId);
   }
 
+  @Get('m1-tactical/route-net-performance')
+  @ApiOperation({
+    summary: 'Read realized route performance after broker commissions and swaps',
+    description:
+      'User-scoped, broker-account/currency-isolated research summary for the latest connected cTrader-family DEMO account. Uses verified closed trades only, with no order or risk authority.',
+  })
+  async getDemoRouteNetPerformance(@CurrentUserId() userId: string) {
+    return this.m1Evidence.loadDemoRouteNetPerformance(userId);
+  }
+
   @Get('broker-parity/status')
   @ApiOperation({
     summary: 'Read Broker-Parity v7 preparation/runtime status',

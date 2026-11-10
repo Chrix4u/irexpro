@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { CTRADER_FAMILY_BROKER_IDS } from '../broker/registry/broker-catalog';
+import {
+  toDemoRouteNetPerformance,
+  type DemoRouteNetPerformance,
+  type DemoRouteNetPerformanceRow,
+} from './demo-route-net-performance';
 import { DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2 } from './demo-focused-instruments';
 import {
   toDemoFocusedEntryDiagnostic,
@@ -597,6 +602,76 @@ export class M1TacticalEvidenceService {
       [userId, [...DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2], [...CTRADER_FAMILY_BROKER_IDS]],
     )) as DemoFocusedEntryDiagnosticRow[];
     return toDemoFocusedEntryDiagnostic(rows[0]);
+  }
+
+  /**
+   * Broker-realized after-fee performance, without predictive cost estimates.
+   * The latest user-owned connected FULL_AUTO cTrader-family DEMO broker is
+   * selected, then all trades remain bound to that exact connection/currency.
+   * No identifiers or per-trade history are returned to the caller.
+   */
+  async loadDemoRouteNetPerformance(userId: string): Promise<DemoRouteNetPerformance> {
+    const rows = (await this.dataSource.query(
+      `
+        WITH selected AS (
+          SELECT b.id AS broker_connection_id, b.broker_id, b.account_currency
+          FROM trading.trading_sessions s
+          JOIN broker.broker_connections b
+            ON b.id = s.broker_connection_id AND b.user_id = s.user_id
+          WHERE s.user_id = $1
+            AND s.execution_mode = 'FULL_AUTO'
+            AND s.started_at >= NOW() - interval '30 days'
+            AND b.account_type = 'DEMO'
+            AND b.status = 'CONNECTED'
+            AND b.broker_id = ANY($2::text[])
+          ORDER BY (s.ended_at IS NULL) DESC, s.started_at DESC
+          LIMIT 1
+        ), trade_economics AS (
+          SELECT
+            COALESCE(NULLIF(ti.metadata->>'multimodel_execution_authority_path', ''), 'UNKNOWN')
+              AS authority_path,
+            COALESCE(NULLIF(ti.metadata->>'multimodel_plan_b_route', ''), 'UNKNOWN')
+              AS strategy_route,
+            t.realised_pnl, t.commission, t.swap,
+            (t.realised_pnl IS NOT NULL AND t.commission IS NOT NULL AND t.swap IS NOT NULL)
+              AS complete
+          FROM trading.trades t
+          JOIN selected s
+            ON s.broker_connection_id = t.broker_connection_id
+            AND s.account_currency = t.account_currency
+          JOIN trading.trade_intents ti
+            ON ti.id = t.trade_intent_id
+            AND ti.user_id = t.user_id
+            AND ti.broker_connection_id = t.broker_connection_id
+          WHERE t.user_id = $1
+            AND t.status = 'CLOSED'
+            AND t.closed_at >= NOW() - interval '10 days'
+            AND t.closed_at <= NOW()
+        ), grouped AS (
+          SELECT authority_path, strategy_route,
+            COUNT(*)::int AS closed_trades,
+            COUNT(*) FILTER (WHERE complete)::int AS verified_trades,
+            COUNT(*) FILTER (WHERE complete AND realised_pnl+commission+swap > 0)::int
+              AS net_wins,
+            COUNT(*) FILTER (WHERE complete AND realised_pnl+commission+swap < 0)::int
+              AS net_losses,
+            ROUND(SUM(realised_pnl) FILTER (WHERE complete), 2)::text AS gross_pnl,
+            ROUND(SUM(commission) FILTER (WHERE complete), 2)::text AS commission,
+            ROUND(SUM(swap) FILTER (WHERE complete), 2)::text AS swap,
+            ROUND(SUM(realised_pnl+commission+swap) FILTER (WHERE complete), 2)::text
+              AS net_pnl
+          FROM trade_economics
+          GROUP BY authority_path, strategy_route
+        )
+        SELECT s.broker_id, s.account_currency,
+          g.authority_path, g.strategy_route, g.closed_trades, g.verified_trades,
+          g.net_wins, g.net_losses, g.gross_pnl, g.commission, g.swap, g.net_pnl
+        FROM selected s LEFT JOIN grouped g ON true
+        ORDER BY g.authority_path, g.strategy_route
+      `,
+      [userId, [...CTRADER_FAMILY_BROKER_IDS]],
+    )) as DemoRouteNetPerformanceRow[];
+    return toDemoRouteNetPerformance(rows);
   }
 
   /**
