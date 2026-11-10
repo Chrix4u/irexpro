@@ -1320,6 +1320,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       governance,
       trainedExpert,
       candidateDirection: candidate.direction,
+      m1ReversalEvidence: candidate,
       m1TimingRoute: classifyM1TacticalRoute(
         candidate,
         buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2).find(
@@ -1718,7 +1719,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const confirmedDirectionFlip =
       activeOppositePositions.length > 0 &&
       multimodelPrimaryExecutable &&
-      multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL';
+      multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL' &&
+      // A local M1 continuation, even when consistently aligned with the
+      // Plan-B reversal, must not force-close an opposite broker position.
+      multimodelDemo?.authority.reversalTimingBridge !== true;
     if (confirmedDirectionFlip && this.executionService) {
       for (const position of activeOppositePositions) {
         try {

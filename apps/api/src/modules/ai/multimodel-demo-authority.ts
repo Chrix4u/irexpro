@@ -24,6 +24,21 @@ export interface MultimodelDemoAuthorityInput {
   trainedExpert: HighConvictionOverlay;
   candidateDirection: 'BUY' | 'SELL';
   m1TimingRoute: M1TacticalRoute;
+  /** Same-decision completed M1/M5 evidence, never later candles. */
+  m1ReversalEvidence?: Pick<
+    M1TacticalCandidate,
+    | 'directionQuality'
+    | 'alignedMomentum1Atr'
+    | 'alignedMomentum3Atr'
+    | 'alignedMomentum5Atr'
+    | 'alignedEmaSlopeAtr'
+    | 'alignedM5Momentum1Atr'
+    | 'alignedM5Momentum3Atr'
+    | 'alignedM5BodyPressure3'
+    | 'alignedM5LatestBodyPressure'
+    | 'alignedHigherTimeframeAgreement'
+    | 'failedBreakoutAgainstDirection'
+  >;
 }
 
 export type MultimodelDemoAuthorityPath = 'PRIMARY_PLAN_B' | 'HIGH_CONVICTION_RESCUE' | 'BLOCKED';
@@ -33,6 +48,9 @@ export interface MultimodelDemoAuthorityDecision {
   authorityPath: MultimodelDemoAuthorityPath;
   rescueVolumeCap: number | null;
   expertConflictVolumeCap: number | null;
+  /** Capped semantic alignment, not an unconstrained new reversal strategy. */
+  reversalTimingBridge: boolean;
+  reversalTimingBridgeVolumeCap: number | null;
   primaryEngineCode: typeof MULTIMODEL_DEMO_ENGINE_CODE;
   trainedExpertConfirmed: boolean;
   trainedExpertOpposed: boolean;
@@ -52,9 +70,79 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
+/**
+ * A Plan-B reversal is a market-regime label, while M1 continuation means
+ * the *current local price impulse* is already moving toward the proposed
+ * side. They can be compatible, but only with independent M1 and completed
+ * M5 proof plus unanimous, fresh broker-native expert corroboration.
+ *
+ * This narrow bridge retains normal Plan-B governance, drift, events,
+ * broker spread, session, portfolio, fee and loss vetoes. Never accept ABSTAIN.
+ */
+function reversalTimingBridgeEligible(input: MultimodelDemoAuthorityInput): boolean {
+  if (
+    input.ensemble.strategyRoute !== 'CONFIRMED_REVERSAL' ||
+    input.m1TimingRoute !== 'M1_TREND_CONTINUATION'
+  )
+    return false;
+  const c = input.m1ReversalEvidence;
+  if (!c || c.failedBreakoutAgainstDirection !== false) return false;
+  const votesLong = input.trainedExpert.longVotes ?? 0;
+  const votesShort = input.trainedExpert.shortVotes ?? 0;
+  const votes = votesLong + votesShort;
+  const alignedVotes = input.candidateDirection === 'BUY' ? votesLong : votesShort;
+  const expertAge = input.trainedExpert.freshnessSeconds;
+  if (
+    input.trainedExpert.allBrokerNative !== true ||
+    input.trainedExpert.direction !== input.candidateDirection ||
+    votes < 3 ||
+    votes !== alignedVotes ||
+    !Number.isFinite(input.trainedExpert.ensembleConfidence) ||
+    (input.trainedExpert.ensembleConfidence ?? 0) < 0.7 ||
+    !Number.isFinite(expertAge) ||
+    expertAge == null ||
+    expertAge < 0 ||
+    expertAge > 120
+  )
+    return false;
+
+  const values = [
+    c.directionQuality,
+    c.alignedMomentum1Atr,
+    c.alignedMomentum3Atr,
+    c.alignedMomentum5Atr,
+    c.alignedEmaSlopeAtr,
+    c.alignedM5Momentum1Atr,
+    c.alignedM5Momentum3Atr,
+    c.alignedM5BodyPressure3,
+    c.alignedHigherTimeframeAgreement,
+  ];
+  if (values.some((v) => !Number.isFinite(v))) return false;
+  const establishedM5 =
+    c.alignedM5BodyPressure3 >= 0.12 &&
+    c.alignedM5Momentum3Atr >= 0.2 &&
+    c.alignedM5Momentum1Atr >= 0.2;
+  const decisiveM5 =
+    c.alignedM5LatestBodyPressure != null &&
+    Number.isFinite(c.alignedM5LatestBodyPressure) &&
+    c.alignedM5LatestBodyPressure >= 0.6 &&
+    c.alignedM5Momentum1Atr >= 0.3 &&
+    c.alignedM5Momentum3Atr >= -0.1;
+  return (
+    c.directionQuality >= 0.68 &&
+    c.alignedMomentum1Atr >= 0.5 &&
+    c.alignedMomentum3Atr >= 0.5 &&
+    c.alignedMomentum5Atr >= 0.25 &&
+    c.alignedEmaSlopeAtr > 0 &&
+    c.alignedHigherTimeframeAgreement >= 0.2 &&
+    (establishedM5 || decisiveM5)
+  );
+}
+
 function confirmedReversalTimingConsistent(input: MultimodelDemoAuthorityInput): boolean {
   if (input.ensemble.strategyRoute !== 'CONFIRMED_REVERSAL') return true;
   if (input.m1TimingRoute === 'M1_CONFIRMED_REVERSAL') return true;
+  if (reversalTimingBridgeEligible(input)) return true;
   if (input.m1TimingRoute !== 'M1_EARLY_TRANSITION') return false;
 
   // Plan-B and M1 intentionally use independent reversal definitions. When
@@ -157,6 +245,7 @@ export function evaluateMultimodelDemoAuthority(
     blockers.push('MULTIMODEL_GOVERNANCE_BLOCKED', ...input.governance.paperExecutionBlockers);
   }
   const trainedExpertOpposed = trainedExpertStronglyOpposes(input);
+  const reversalTimingBridge = reversalTimingBridgeEligible(input);
   if (!confirmedReversalTimingConsistent(input)) {
     blockers.push('MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED');
   }
@@ -181,6 +270,8 @@ export function evaluateMultimodelDemoAuthority(
         : 'BLOCKED',
     rescueVolumeCap: rescueExecutable ? 0.2 : null,
     expertConflictVolumeCap: primaryPlanBExecutable && trainedExpertOpposed ? 0.2 : null,
+    reversalTimingBridge: primaryPlanBExecutable && reversalTimingBridge,
+    reversalTimingBridgeVolumeCap: primaryPlanBExecutable && reversalTimingBridge ? 0.2 : null,
     primaryEngineCode: MULTIMODEL_DEMO_ENGINE_CODE,
     trainedExpertConfirmed:
       input.trainedExpert.state === 'CONFIRM' &&
@@ -214,6 +305,7 @@ export function multimodelDemoExecutionVolumeCap(
     rolloutVolumeCap,
     authority.rescueVolumeCap,
     authority.expertConflictVolumeCap,
+    authority.reversalTimingBridgeVolumeCap,
   ].filter((value): value is number => value != null && Number.isFinite(value));
   return Math.min(...caps);
 }
