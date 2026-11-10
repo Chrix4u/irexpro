@@ -51,6 +51,9 @@ jobs:
       - name: Test main staging release policy
         run: node scripts/deployment/main-staging-release-gate.mjs --self-test
 
+      - name: Test staging deployment trading-idle safety gate
+        run: bash scripts/deployment/check-staging-trading-idle.spec.sh
+
       - name: Wait for applicable exact-main push workflows
         env:
           GITHUB_TOKEN: ${{ github.token }}
