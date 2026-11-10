@@ -162,6 +162,26 @@ describe('CTraderQuoteCollectorService', () => {
     }
   });
 
+  it('warms all four contexts for the switched USDJPY DEMO source before ordinary rotation', async () => {
+    const h = harness({ recentDemoConnectionId: 'pepperstone-ctrader-connection' });
+
+    for (let cycle = 0; cycle < 4; cycle += 1) {
+      await h.service.collectOnce(new Date(OPEN_NOW.getTime() + cycle * 15_000));
+    }
+
+    const contexts = h.getOhlcvForConnection.mock.calls
+      .filter((call) => call[3] !== 'M1')
+      .map((call) => ({ instrument: call[2], timeframe: call[3], connection: call[1] }));
+    expect(contexts).toEqual(
+      ['H1', 'H4', 'M5', 'M15'].map((timeframe) => ({
+        instrument: 'USDJPY',
+        timeframe,
+        connection: 'pepperstone-ctrader-connection',
+      })),
+    );
+    expect(h.getOhlcvForConnection).toHaveBeenCalledTimes(16);
+  });
+
   it('keeps the configured cTrader source when no recent connected DEMO session exists', async () => {
     const h = harness({ recentDemoConnectionId: null });
 
