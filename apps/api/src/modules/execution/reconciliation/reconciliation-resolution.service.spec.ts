@@ -9,7 +9,10 @@ import { AuditService } from '../../audit/audit.service';
 import { DomainEventBus } from '../../events/event-bus.service';
 import { DomainEventType } from '../../events/enums/domain-event-type.enum';
 import { BrokerOrderState } from '../../broker/interfaces/broker-adapter.interface';
-import { ReconciliationResolutionService } from './reconciliation-resolution.service';
+import {
+  ReconciliationResolutionService,
+  reconcileDurableProfitPathAtClose,
+} from './reconciliation-resolution.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 
 const TRADE_REPO = getRepositoryToken(Trade);
@@ -125,6 +128,63 @@ describe('ReconciliationResolutionService', () => {
     }).compile();
 
     service = module.get(ReconciliationResolutionService);
+  });
+
+  describe('terminal broker economics and sampled profit path', () => {
+    const snapshot = {
+      maxFavorablePnl: '208.00000000',
+      maxAdversePnl: '-84.00000000',
+      profitGiveback: '224.00000000',
+      observationCount: 546,
+      peakObservedAt: new Date('2026-11-10T13:20:00Z'),
+      lastObservedAt: new Date('2026-11-10T13:29:55Z'),
+    };
+
+    it('makes an actual TP profit the terminal best observed gross P&L without adding fictitious samples', () => {
+      const closedAt = new Date('2026-11-10T13:30:01Z');
+      const result = reconcileDurableProfitPathAtClose(snapshot, '396.00000000', closedAt);
+      expect(result).toMatchObject({
+        maxFavorablePnl: '396.00000000',
+        maxAdversePnl: '-84.00000000',
+        profitGiveback: '0.00000000',
+        observationCount: 546,
+        peakObservedAt: closedAt,
+        lastObservedAt: snapshot.lastObservedAt,
+      });
+    });
+
+    it('makes a broker-confirmed loss the terminal adverse P&L and measured final giveback', () => {
+      const result = reconcileDurableProfitPathAtClose(
+        {
+          ...snapshot,
+          maxFavorablePnl: '124.95000000',
+          maxAdversePnl: '-207.48000000',
+          profitGiveback: '288.47000000',
+        },
+        '-307.80000000',
+        new Date('2026-11-10T09:00:04Z'),
+      );
+      expect(result).toMatchObject({
+        maxFavorablePnl: '124.95000000',
+        maxAdversePnl: '-307.80000000',
+        profitGiveback: '432.75000000',
+        peakObservedAt: snapshot.peakObservedAt,
+      });
+    });
+
+    it('preserves durable path if provider economics are absent or malformed', () => {
+      expect(reconcileDurableProfitPathAtClose(snapshot, null, new Date())).toBe(snapshot);
+      expect(reconcileDurableProfitPathAtClose(snapshot, 'bad', new Date())).toBe(snapshot);
+    });
+
+    it('uses exact decimal arithmetic for small account-currency fractions', () => {
+      const result = reconcileDurableProfitPathAtClose(
+        { ...snapshot, maxFavorablePnl: '0.30000000', maxAdversePnl: '-0.01000000' },
+        '0.10000000',
+        new Date('2026-11-10T13:30:01Z'),
+      );
+      expect(result.profitGiveback).toBe('0.20000000');
+    });
   });
 
   // ─── closeTradeFromProvider ────────────────────────────────────────────────
@@ -292,7 +352,7 @@ describe('ReconciliationResolutionService', () => {
           closeReason: TradeCloseReason.PROFIT_PROTECTION,
           maxFavorablePnl: '10.60000000',
           maxAdversePnl: '0.00000000',
-          profitGiveback: '2.15000000',
+          profitGiveback: '1.07000000',
           pathObservationCount: 54,
           pathPeakObservedAt: peakAt,
           pathLastObservedAt: lastAt,
@@ -307,7 +367,7 @@ describe('ReconciliationResolutionService', () => {
             closeReasonSource: 'APP_CLOSE_INTENT_FALLBACK',
             pathDiagnostics: expect.objectContaining({
               maxFavorablePnl: '10.60000000',
-              profitGiveback: '2.15000000',
+              profitGiveback: '1.07000000',
               observationCount: 54,
             }),
           }),
