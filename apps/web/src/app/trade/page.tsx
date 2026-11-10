@@ -3071,6 +3071,9 @@ export default function AiTradingPage() {
               iRexPro opens only qualified opportunities and manages each AI position
               within your allocation and protection rules.
             </p>
+            <Link href="/trade/protection-lab" className="btn btn--ghost btn--sm">
+              Smart Protection Lab · Review broker-native profit replay
+            </Link>
           </div>
           <div className="ai-trader__hero-state" data-ai-state={aiVisualState}>
             <span>AI Trading</span>
@@ -3117,6 +3120,23 @@ export default function AiTradingPage() {
         </section>
 
         {error && <Alert variant="error">{error}</Alert>}
+        {automationOn &&
+          (selectedBroker?.brokerId === "pepperstone-ctrader" ||
+            selectedBroker?.brokerId === "icmarkets-ctrader") && (
+            <div data-testid="ctrader-demo-profit-lock-not-active">
+              <Alert variant="warning">
+                <strong>AI profit protection is not executing on this DEMO broker.</strong>{" "}
+                Peak profit and give-back values are observation-only here; they
+                do not automatically secure profit. Broker-held SL and TP remain
+                active, but a trade may return from a profitable peak to its
+                original SL. Review the{" "}
+                <Link href="/trade/protection-lab">Smart Protection Lab</Link>{" "}
+                and consider stopping new AI entries while the broker-specific
+                protection mechanism is being validated. Stopping an AI session
+                may also close its positions depending on your stop confirmation.
+              </Alert>
+            </div>
+          )}
         {terminal?.controlWarnings.map((warning) => (
           <Alert key={warning} variant="warning">
             {warning}
