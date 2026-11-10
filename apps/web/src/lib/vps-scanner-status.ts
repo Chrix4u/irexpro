@@ -216,6 +216,55 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
       validReason(reason) && (reason.count as number) <= candidateCount);
 }
 
+export interface DemoEntryEvidenceSummary {
+  headline: string;
+  detail: string;
+  delayed: boolean;
+}
+
+/**
+ * Account-scoped executed/authorized funnel rather than the animated scanner
+ * stage. The numbers are repeated model decisions, not independent trade
+ * opportunities, and never imply execution permission.
+ */
+export function summarizeDemoEntryEvidence(
+  evidence: DemoFocusedEntryDiagnosticView | null,
+): DemoEntryEvidenceSummary | null {
+  if (!evidence || evidence.scope !== "ACTIVE_CTRADER_DEMO") return null;
+  const headline =
+    `Last 60 min: ${evidence.evaluatedDecisions.toLocaleString("en-US")} model checks · ` +
+    `${evidence.planBAdmittedDecisions.toLocaleString("en-US")} Plan B admitted · ` +
+    `${evidence.brokerAuthorizedDecisions.toLocaleString("en-US")} broker-authorized · ` +
+    `${evidence.executionSucceeded.toLocaleString("en-US")} executed`;
+  if (
+    evidence.operatingState === "STALE_SCAN_EVIDENCE" ||
+    evidence.operatingState === "NO_RECENT_SCANS"
+  ) {
+    return {
+      headline,
+      detail:
+        "Decision evidence is delayed. Moving scanner graphics do not prove a fresh model decision.",
+      delayed: true,
+    };
+  }
+  if (evidence.brokerAuthorizedDecisions === 0) {
+    const leading = evidence.leadingBlockers[0];
+    return {
+      headline,
+      detail: leading
+        ? `No broker-authorized entry. Most frequent gate: ${leading.label} (${leading.count} repeated decisions).`
+        : "No broker-authorized entry in this window; model admission and entry timing still govern.",
+      delayed: false,
+    };
+  }
+  return {
+    headline,
+    detail:
+      "Authorization is not an executed fill. Broker dispatch and reconciliation determine actual trades.",
+    delayed: false,
+  };
+}
+
 export interface M1TacticalStatusView {
   enabled: boolean;
   phase: string;
@@ -926,7 +975,7 @@ export function deriveTradeReadinessUiState(
             ? "Plan-B signal quality not met — trade blocked"
             : planBBlocked
             ? m1Decision.planBRegimeAllowed === false
-              ? "No qualified strategy route — trade blocked"
+              ? "Current setup has no qualified route — trade blocked"
               : "Plan-B admission not met — trade blocked"
             : driftBlocked
               ? "Model drift — execution blocked"
