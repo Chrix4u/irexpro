@@ -39,10 +39,11 @@ import { isUniqueViolation } from '../../broker/utils/db-unique-violation';
  *    conversion authority (out of scope here by design).
  *
  *  - REALISED LOSS MEASUREMENT (getTodayRealisedLossExact): the NET realised
- *    P&L of CLOSED losing trades of the logical account + currency since UTC
- *    day start. Commissions and swap/financing charges are EMBEDDED in the
- *    provider-reported realised_pnl — they are not added on top and not
- *    subtracted again. Deposits and withdrawals are BALANCE EVENTS, not trade
+ *    P&L of CLOSED trades of the logical account + currency since UTC
+ *    day start. The durable trade columns store gross realised_pnl and
+ *    SEPARATE signed commission and swap/financing charges; all three must be
+ *    added exactly once. Null economics make the risk window incomplete and
+ *    must fail closed. Deposits and withdrawals are BALANCE EVENTS, not trade
  *    P&L: they never enter this sum (they affect equity, which is why the
  *    daily-loss budget is measured on trade P&L against the opening
  *    snapshot baseline, not on balance deltas).
@@ -181,12 +182,12 @@ export class DailyRiskPeriodService {
 
   /**
    * Today's realised loss for (userId, logicalAccountKey, accountCurrency) —
-   * NET realised P&L of CLOSED losing trades since the active UTC risk-window
-   * start (UTC midnight, or the latest explicit same-day user reset), as a RAW
-   * decimal string (never a float). `complete=false` reports that legacy
-   * NULL-provenance losing trades exist today for the user (rows without an
-   * immutable logical_account_key/account_currency): they are excluded from
-   * the scoped total and LIVE risk decisions must fail closed on them.
+   * NET realised P&L of CLOSED trades since the active UTC risk-window start
+   * (UTC midnight, or the latest explicit same-day user reset), as a RAW
+   * decimal string (never a float). All three separate economics columns
+   * realised_pnl + commission + swap must be non-null. `complete=false`
+   * reports missing account/currency provenance or incomplete closed-trade
+   * economics; Risk Engine callers must fail closed instead of assuming zero.
    */
   async getTodayRealisedLossExact(input: {
     userId: string;
@@ -202,7 +203,8 @@ export class DailyRiskPeriodService {
 
     const sumRows: Array<{ total: string | number | null }> = await this.dataSource.query(
       `SELECT CASE
-                WHEN COALESCE(SUM(realised_pnl), 0) < 0 THEN COALESCE(SUM(realised_pnl), 0)
+                WHEN COALESCE(SUM(realised_pnl + commission + swap), 0) < 0
+                  THEN COALESCE(SUM(realised_pnl + commission + swap), 0)
                 ELSE 0
               END AS total
        FROM ${this.tradesTableName()}
@@ -211,7 +213,9 @@ export class DailyRiskPeriodService {
          AND account_currency = $3
          AND status = 'CLOSED'
          AND closed_at >= $4
-         AND realised_pnl IS NOT NULL`,
+         AND realised_pnl IS NOT NULL
+         AND commission IS NOT NULL
+         AND swap IS NOT NULL`,
       [input.userId, input.logicalAccountKey, input.accountCurrency, windowStartIso],
     );
     const rawTotal = sumRows[0]?.total;
@@ -234,7 +238,24 @@ export class DailyRiskPeriodService {
          AND (logical_account_key IS NULL OR account_currency IS NULL)`,
       [input.userId, windowStartIso],
     );
-    const complete = Number(legacyRows[0]?.n ?? 0) === 0;
+    // A closed trade is NOT economically complete just because gross P&L
+    // was reported: the broker may deliver commission/swap later. Summing
+    // known trades without these costs understates the daily-loss budget.
+    // Account/currency-scoped missing economics also fail closed, even when
+    // the gross component is positive or zero (fees can turn a win into a loss).
+    const incompleteEconomicsRows: Array<{ n: number | string }> = await this.dataSource.query(
+      `SELECT COUNT(*) AS n
+         FROM ${this.tradesTableName()}
+         WHERE user_id = $1
+           AND logical_account_key = $2
+           AND account_currency = $3
+           AND status = 'CLOSED'
+           AND closed_at >= $4
+           AND (realised_pnl IS NULL OR commission IS NULL OR swap IS NULL)`,
+      [input.userId, input.logicalAccountKey, input.accountCurrency, windowStartIso],
+    );
+    const complete =
+      Number(legacyRows[0]?.n ?? 0) === 0 && Number(incompleteEconomicsRows[0]?.n ?? 0) === 0;
 
     return { total, complete };
   }

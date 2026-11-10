@@ -32,6 +32,7 @@ import { PostEntryMinute1TelemetryService } from './post-entry-minute1-telemetry
 import { PostEntryDemoDrawdownGuardService } from './post-entry-demo-drawdown-guard.service';
 import { ProfitProtectionCounterfactualService } from './profit-protection-counterfactual.service';
 import { ProfitExitAlternativesService } from './profit-exit-alternatives.service';
+import { SmartProfitProtectionReplayService } from './smart-profit-protection-replay.service';
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import { M1TacticalMarketDataService } from './m1-tactical-market-data.service';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
@@ -39,7 +40,7 @@ import { HighConvictionBrokerExpertService } from './high-conviction-broker-expe
 import {
   M1TacticalSchedulerService,
   M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
-  M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
+  M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION,
 } from './m1-tactical-scheduler.service';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
 import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-api-key.guard';
@@ -97,13 +98,14 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     PostEntryDemoDrawdownGuardService,
     ProfitProtectionCounterfactualService,
     ProfitExitAlternativesService,
+    SmartProfitProtectionReplayService,
     EnsemblePostEntryProtectionShadowService,
     M1TacticalMarketDataService,
     M1TacticalEvidenceService,
     HighConvictionBrokerExpertService,
     {
       provide: M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
-      useValue: M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
+      useValue: M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION,
     },
     M1TacticalSchedulerService,
   ],

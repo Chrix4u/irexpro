@@ -2,6 +2,7 @@ import {
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
   DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
   M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
+  M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION,
   M1_TACTICAL_ROLLOUT_POLICY_V1,
   M1_TACTICAL_ROLLOUT_POLICY_V8,
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION,
@@ -81,6 +82,27 @@ describe('2026-11-05 reversible DEMO focused-three entry permission', () => {
     expect(demoInstrumentEntryAllowed(M1_TACTICAL_ROLLOUT_POLICY_V8, 'USDJPY')).toBe(true);
     expect(M1_TACTICAL_ROLLOUT_POLICY_V8.demoEntryInstruments).toBeUndefined();
     expect(M1_TACTICAL_ROLLOUT_POLICY_V1.demoEntryInstruments).toBeUndefined();
+  });
+});
+
+describe('2026-11-10 V9 route and exit probation', () => {
+  it('retains the six-pair list and fee shadow without changing the historical V8 policy', () => {
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION).toMatchObject({
+      phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+      demoPrimaryOnlyProbation: true,
+      demoBrokerCommissionFloor: false,
+      demoBrokerCommissionShadow: true,
+      demoEarlyTransitionResearchOnly: true,
+      demoDirectionFlipCloseEnabled: false,
+      paperVolumeCap: 4,
+    });
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION.demoEntryInstruments).toEqual(
+      DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
+    );
+    expect(
+      M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW.demoEarlyTransitionResearchOnly,
+    ).toBeUndefined();
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW.demoBrokerCommissionShadow).toBe(true);
   });
 });
 

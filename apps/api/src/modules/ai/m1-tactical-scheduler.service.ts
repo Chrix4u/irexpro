@@ -412,6 +412,10 @@ export interface M1TacticalRolloutPolicy {
   demoBrokerCommissionFloor?: boolean;
   /** DEMO-only: measure the historical fee veto but never use it to authorize/deny an order. */
   demoBrokerCommissionShadow?: boolean;
+  /** DEMO-only research probation for the loss-making Plan-B/M5 EARLY_TRANSITION route. */
+  demoEarlyTransitionResearchOnly?: boolean;
+  /** Explicit opt-in for a direction-flip to CLOSE an already-open DEMO position. */
+  demoDirectionFlipCloseEnabled?: boolean;
   /** Explicit DEMO-only new-entry allowlist; all other instruments remain research-only. */
   demoEntryInstruments?: readonly string[];
   routeNetExpectedRFloors: Readonly<Record<Exclude<M1TacticalRoute, 'ABSTAIN'>, number>>;
@@ -498,6 +502,9 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V8: Readonly<M1TacticalRolloutPolicy> = 
   version: 'm1-tactical-rollout-v8-demo-professional',
   phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
   paperVolumeCap: 4,
+  // Historical rollout only. The active V9 probation disables this side-effect
+  // until independent broker-close economics support promoting it.
+  demoDirectionFlipCloseEnabled: true,
 });
 
 /** TEMPORARY DEMO research probation — primary ensemble is the only
@@ -569,6 +576,19 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW: Readonly<M1Tacti
     ...M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW,
     version: 'm1-tactical-v8-demo-primary-fee-shadow-six-pair-v2',
     demoEntryInstruments: DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
+  });
+
+/**
+ * Account-wide broker-native DEMO entry probation, not a change to PAPER
+ * research or LIVE risk. All primary/M5 early-transition evidence still scores
+ * and persists so subsequent forward evaluation can reverse this policy.
+ */
+export const M1_TACTICAL_ROLLOUT_POLICY_V9_ROUTE_PROBATION: Readonly<M1TacticalRolloutPolicy> =
+  Object.freeze({
+    ...M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
+    version: 'm1-tactical-v9-demo-route-probation-v1',
+    demoEarlyTransitionResearchOnly: true,
+    demoDirectionFlipCloseEnabled: false,
   });
 
 export function m1RiskMarketRegime(
@@ -1648,8 +1668,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       this.rolloutPolicy,
       candidate.instrument,
     );
+    const demoEarlyTransitionResearchOnly =
+      professionalDemoPhase &&
+      this.rolloutPolicy.demoEarlyTransitionResearchOnly === true &&
+      (multimodelDemo?.ensemble.strategyRoute === 'EARLY_TRANSITION' ||
+        m5EarlyTransitionHandoffEligible);
     const preliminaryCanExecute = professionalDemoPhase
       ? demoInstrumentAllowed &&
+        !demoEarlyTransitionResearchOnly &&
         demoProfitabilityExecutionAllowed &&
         !multimodelDirectionConflict &&
         (multimodelPrimaryExecutable ||
@@ -1719,23 +1745,6 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       activeOppositePositions.length > 0 &&
       multimodelPrimaryExecutable &&
       multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL';
-    if (confirmedDirectionFlip && this.executionService) {
-      for (const position of activeOppositePositions) {
-        try {
-          await this.executionService.closeTrade(
-            position.tradeId,
-            userId,
-            TradeCloseReason.AI_CLOSE_SIGNAL,
-            { source: 'M1_CONFIRMED_DIRECTION_FLIP' },
-          );
-        } catch (error) {
-          this.logger.warn(
-            `M1 confirmed direction flip exit deferred trade=${position.tradeId} ` +
-              `${candidate.instrument} ${position.direction}->${candidate.direction}: ${(error as Error).message}`,
-          );
-        }
-      }
-    }
     const activeOppositePosition = activeOppositePositions.length > 0;
 
     const bootstrapExecutionSelected =
@@ -1856,10 +1865,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       shadowBrokerFeeP90R: demoBrokerCommissionShadowGate?.brokerFeeP90R ?? null,
       shadowAfterFeeExpectedR: demoBrokerCommissionShadowGate?.afterFeeExpectedR ?? null,
     };
-    const canExecute =
+    const entryChecksExceptOppositePositionPassed =
       preliminaryCanExecute &&
       !oppositePositionStateUnavailable &&
-      !activeOppositePosition &&
       !professionalM1ActiveSameSideIntent &&
       !extensionExhaustionActiveSameSideIntent &&
       fastStopRegimeBrake?.active !== true &&
@@ -1867,6 +1875,32 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       portfolioNetLossBrake?.active !== true &&
       !demoPrimaryOnlyProbation.blocked &&
       !demoBrokerCommissionGate.blocked;
+    const canExecute = entryChecksExceptOppositePositionPassed && !activeOppositePosition;
+    // A Plan-B reversal signal must never close an existing position before
+    // every other pre-entry condition has been checked. The current DEMO V9
+    // rollout is observation-only for direction-flip exits, even when all
+    // conditions pass, because independent net-close evidence is not yet proven.
+    const directionFlipExitAuthorized =
+      confirmedDirectionFlip &&
+      entryChecksExceptOppositePositionPassed &&
+      this.rolloutPolicy.demoDirectionFlipCloseEnabled === true;
+    if (directionFlipExitAuthorized && this.executionService) {
+      for (const position of activeOppositePositions) {
+        try {
+          await this.executionService.closeTrade(
+            position.tradeId,
+            userId,
+            TradeCloseReason.AI_CLOSE_SIGNAL,
+            { source: 'M1_CONFIRMED_DIRECTION_FLIP' },
+          );
+        } catch (error) {
+          this.logger.warn(
+            `M1 confirmed direction flip exit deferred trade=${position.tradeId} ` +
+              `${candidate.instrument} ${position.direction}->${candidate.direction}: ${(error as Error).message}`,
+          );
+        }
+      }
+    }
     const effectiveGovernanceBlockers =
       microDriftOnlyRescue || localImpulseDriftOnlyRescue ? [] : governance.blockers;
     const researchBlockers = unique([
@@ -1889,6 +1923,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const blockers = professionalDemoPhase
       ? unique([
           ...(!demoInstrumentAllowed ? ['M1_DEMO_INSTRUMENT_RESEARCH_ONLY'] : []),
+          ...(demoEarlyTransitionResearchOnly ? ['M1_DEMO_EARLY_TRANSITION_RESEARCH_ONLY'] : []),
           ...(demoProfitabilityReliabilityGate?.blockers ?? []),
           ...(multimodelDirectionConflict ? ['MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT'] : []),
           ...(professionalM1FallbackExecutable ||
@@ -1920,9 +1955,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(oppositePositionStateUnavailable ? ['M1_OPPOSITE_POSITION_STATE_UNAVAILABLE'] : []),
           ...(activeOppositePosition
             ? [
-                confirmedDirectionFlip
+                directionFlipExitAuthorized
                   ? 'M1_DIRECTION_FLIP_EXIT_PENDING'
-                  : 'M1_ACTIVE_OPPOSITE_POSITION',
+                  : confirmedDirectionFlip
+                    ? 'M1_DIRECTION_FLIP_RESEARCH_ONLY'
+                    : 'M1_ACTIVE_OPPOSITE_POSITION',
               ]
             : []),
         ])
@@ -2135,7 +2172,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
               candidateDirection: candidate.direction,
               oppositeTradeIds: activeOppositePositions.map((position) => position.tradeId),
               confirmedReversal: confirmedDirectionFlip,
-              exitRequested: confirmedDirectionFlip && Boolean(this.executionService),
+              nonPositionEntryGatesPassed: entryChecksExceptOppositePositionPassed,
+              exitResearchOnly: confirmedDirectionFlip && !directionFlipExitAuthorized,
+              exitRequested: directionFlipExitAuthorized && Boolean(this.executionService),
             }
           : null,
         oppositePositionStateUnavailable,
