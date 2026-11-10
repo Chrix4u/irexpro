@@ -48,6 +48,7 @@ describe('LiveDemoProfitProtectionService', () => {
     feeRows: Array<Record<string, unknown>> = [],
     patienceRows: Array<Record<string, unknown>> = [],
     recoveryRows: Array<Record<string, unknown>> = [],
+    brokerId = 'ctrader',
   ) {
     const query = jest.fn().mockImplementation(async (sql: string) => {
       if (sql.includes('past_fees')) return feeRows;
@@ -62,7 +63,7 @@ describe('LiveDemoProfitProtectionService', () => {
     const dataSource = { query } as unknown as DataSource;
     const brokerService = {
       getOpenPositionsForConnection: jest.fn().mockResolvedValue({
-        connection: { id: 'conn-1', brokerId: 'ctrader', accountType },
+        connection: { id: 'conn-1', brokerId, accountType },
         positions: [
           {
             externalOrderId: 'position-7001',
@@ -111,6 +112,111 @@ describe('LiveDemoProfitProtectionService', () => {
       'user-1',
       TradeCloseReason.PROFIT_PROTECTION,
     );
+  });
+
+  it('records Pepperstone DEMO peak and give-back using the order-position id without activating new exits', async () => {
+    const h = harness(
+      [
+        candidate({
+          external_position_id: null,
+          external_order_id: 'position-7001',
+          max_favorable_pnl: null,
+          max_adverse_pnl: null,
+          path_observation_count: null,
+          initial_risk_pnl: '9.00',
+        }),
+      ],
+      '7.00',
+      'DEMO',
+      [],
+      '1.11340',
+      [],
+      undefined,
+      [],
+      [],
+      [],
+      'pepperstone-ctrader',
+    );
+
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+
+    expect(h.brokerService.getOpenPositionsForConnection).toHaveBeenCalledWith('conn-1', 'user-1');
+    expect(h.query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE trading.trades'),
+      expect.arrayContaining(['trade-1', '7.00000000', '0.00000000', '0.00000000', 1]),
+    );
+    // Even if the old cTrader profit lock might close at this profit, the
+    // newly supported Pepperstone provider remains observation-only.
+    expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+  });
+
+  it('records Pepperstone DEMO path observations without an R-at-stop estimate but cannot close', async () => {
+    const h = harness(
+      [candidate({ initial_risk_pnl: null, path_observation_count: null })],
+      '-2.50',
+      'DEMO',
+      [],
+      '1.11340',
+      [],
+      undefined,
+      [],
+      [],
+      [],
+      'pepperstone-ctrader',
+    );
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+
+    expect(h.query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE trading.trades'),
+      expect.arrayContaining(['trade-1', '10.00000000', '-2.50000000', '12.50000000', 1]),
+    );
+    expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+  });
+
+  it('never observes or closes a Pepperstone LIVE position through the DEMO collector', async () => {
+    const h = harness(
+      [candidate()],
+      '7.00',
+      'LIVE',
+      [],
+      '1.11340',
+      [],
+      undefined,
+      [],
+      [],
+      [],
+      'pepperstone-ctrader',
+    );
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+    expect(
+      h.query.mock.calls.some((call: unknown[]) =>
+        String(call[0]).includes('UPDATE trading.trades'),
+      ),
+    ).toBe(false);
+    expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+  });
+
+  it('does not accept unrelated DEMO brokers into cTrader profit-path telemetry', async () => {
+    const h = harness(
+      [candidate()],
+      '7.00',
+      'DEMO',
+      [],
+      '1.11340',
+      [],
+      undefined,
+      [],
+      [],
+      [],
+      'metatrader5',
+    );
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+    expect(
+      h.query.mock.calls.some((call: unknown[]) =>
+        String(call[0]).includes('UPDATE trading.trades'),
+      ),
+    ).toBe(false);
+    expect(h.executionService.closeTrade).not.toHaveBeenCalled();
   });
 
   it('records a causal DEMO profit-lock trend check without delaying or overriding the close', async () => {
