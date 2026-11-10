@@ -63,6 +63,7 @@ describe('M1 delayed-entry risk parity quote research', () => {
   it('uses exactly completed M1 closes for selection, enters next quote minute', () => {
     const first = score(candles());
     expect(first.state).toBe('CONFIRMED');
+    expect(first.artifact).toBe(DELAY_ENTRY_PARITY_SHADOW_ARTIFACT);
     expect(first.simulatedEntryAt).toBe('2026-11-10T02:42:00.000Z');
     expect(first.confirmationM1Closes).toEqual([158.08, 158.07, 158.06]);
     expect(first.indicativeQuoteEntry).toBe(158.065);
