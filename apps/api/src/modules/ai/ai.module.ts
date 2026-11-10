@@ -35,6 +35,7 @@ import { ProfitExitAlternativesService } from './profit-exit-alternatives.servic
 import { PostClosePathForensicsService } from './post-close-path-forensics.service';
 import { TradeEntryPathForensicsService } from './trade-entry-path-forensics.service';
 import { M1DelayedEntryParityService } from './m1-delayed-entry-parity.service';
+import { M1ProbationMissedOpportunityShadowService } from './m1-probation-missed-opportunity-shadow.service';
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import { M1TacticalMarketDataService } from './m1-tactical-market-data.service';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
@@ -103,6 +104,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     PostClosePathForensicsService,
     TradeEntryPathForensicsService,
     M1DelayedEntryParityService,
+    M1ProbationMissedOpportunityShadowService,
     EnsemblePostEntryProtectionShadowService,
     M1TacticalMarketDataService,
     M1TacticalEvidenceService,
