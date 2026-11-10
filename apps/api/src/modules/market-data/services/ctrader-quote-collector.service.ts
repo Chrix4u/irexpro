@@ -96,6 +96,10 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   private readonly latestBrokerClosedBarAt = new Map<string, string>();
   private readonly staleHistoricalResponses = new Map<string, number>();
   private sourceResolution: { connectionId: string; resolvedAtMs: number } | null = null;
+  private contextWarmupQueue: Array<{
+    instrument: string;
+    timeframe: (typeof CONTEXT_REFRESH_ROTATION)[number];
+  }> = [];
 
   getHistoricalCollectionStatus(): {
     lastSuccessfulCollectAt: Record<string, string>;
@@ -300,6 +304,25 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
         this.historicalRefreshFailures.clear();
         this.latestBrokerClosedBarAt.clear();
         this.staleHistoricalResponses.clear();
+        // When a recent FULL_AUTO session selects a different cTrader DEMO
+        // account, use the existing one-context-request-per-cycle allowance to
+        // warm H1/H4/M5/M15 for each of its six pairs before regular rotation.
+        // USDJPY first improves the observed chart/entry inspection case only;
+        // all symbols retain the same execution eligibility and risk gates.
+        const instruments = this.instruments();
+        const priorityOrder = [
+          ...instruments.filter((instrument) => instrument === 'USDJPY'),
+          ...instruments.filter((instrument) => instrument !== 'USDJPY'),
+        ];
+        this.contextWarmupQueue =
+          selected && selected !== configuredSource
+            ? priorityOrder.flatMap((instrument) =>
+                (['H1', 'H4', 'M5', 'M15'] as const).map((timeframe) => ({
+                  instrument,
+                  timeframe,
+                })),
+              )
+            : [];
         this.logger.log(
           `cTrader M1 collection source selected connection=${connectionId} ` +
             `reason=${selected ? 'RECENT_FULL_AUTO_DEMO_SESSION' : 'CONFIGURED_DEFAULT'}`,
@@ -367,8 +390,11 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
         : this.focusedContextOffsets
       : this.contextInstrumentOffsets;
     const instrumentOffset = offsets[timeframe] % contextInstruments.length;
-    const context = { instrument: contextInstruments[instrumentOffset]!, timeframe };
+    const regularContext = { instrument: contextInstruments[instrumentOffset]!, timeframe };
     offsets[timeframe] = (instrumentOffset + 1) % contextInstruments.length;
+    // A source switch does not increase historical request throughput: each
+    // cycle still fetches exactly three M1 slices and ONE native context slice.
+    const context = this.contextWarmupQueue.shift() ?? regularContext;
 
     // All provider requests are independent; slow research history must not
     // block the cTrader live quote lane or postpone the focused M1 refresh.
