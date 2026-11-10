@@ -38,7 +38,6 @@ export type M1TacticalMarketReadinessReason =
   | 'READY'
   | 'INVALID_INPUT'
   | 'BROKER_M1_SOURCE_UNAVAILABLE'
-  | 'BROKER_EXECUTION_SOURCE_MISMATCH'
   | 'BROKER_M1_STALE'
   | 'BROKER_M5_CONTEXT_STALE'
   | 'BROKER_M15_CONTEXT_STALE'
@@ -164,25 +163,12 @@ export class M1TacticalMarketDataService {
     }
 
     const configuredSource = this.configuredMarketDataConnectionId();
-    // Research may intentionally read another account's broker-native candles,
-    // but a FULL_AUTO execution cannot authorize an order from that account's
-    // evidence. The active execution broker must own every M1 source row.
-    if (
-      options.requireExecutionBrokerSource &&
-      configuredSource &&
-      configuredSource !== executionConnectionId
-    ) {
-      this.setReadiness(
-        executionConnectionId,
-        normalizedInstrument,
-        'BROKER_EXECUTION_SOURCE_MISMATCH',
-        null,
-        decisionTime,
-        'The configured M1 market-data account differs from the active execution account.',
-      );
-      return null;
-    }
-    const brokerSource = configuredSource || executionConnectionId;
+    // Research can deliberately read a configured source account, but FULL_AUTO
+    // always reads the exact active execution account. Missing Pepperstone
+    // candles must fail closed, never substitute the original cTrader cache.
+    const brokerSource = options.requireExecutionBrokerSource
+      ? executionConnectionId
+      : configuredSource || executionConnectionId;
     const brokerSnapshot = await this.loadBrokerNativeSnapshot(
       brokerSource,
       normalizedInstrument,

@@ -97,7 +97,7 @@ describe('M1 tactical market-data binding', () => {
     expect(h.getOHLCV).not.toHaveBeenCalled();
   });
 
-  it('rejects cross-account candles for FULL_AUTO execution before querying the source store', async () => {
+  it('always queries the exact FULL_AUTO execution broker even if a different research source is configured', async () => {
     const h = harness('original-ctrader-connection');
 
     await expect(
@@ -106,11 +106,18 @@ describe('M1 tactical market-data binding', () => {
       }),
     ).resolves.toBeNull();
 
-    expect(h.getCandles).not.toHaveBeenCalled();
-    expect(h.getLatestPositiveSpreadQuote).not.toHaveBeenCalled();
+    expect(h.getCandles).toHaveBeenCalledTimes(5);
+    for (const call of h.getCandles.mock.calls) {
+      expect(call[0]).toBe('pepperstone-execution-connection');
+    }
+    expect(h.getLatestPositiveSpreadQuote).toHaveBeenCalledWith(
+      'pepperstone-execution-connection',
+      'USDJPY',
+      DECISION,
+    );
     expect(h.service.getLastReadiness('pepperstone-execution-connection', 'USDJPY')).toMatchObject({
       ready: false,
-      reason: 'BROKER_EXECUTION_SOURCE_MISMATCH',
+      reason: 'BROKER_M1_SOURCE_UNAVAILABLE',
       authority: null,
     });
   });

@@ -1,4 +1,6 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import type { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import type { OHLCV } from '../../broker/interfaces/broker-adapter.interface';
 import { BrokerService } from '../../broker/broker.service';
@@ -9,6 +11,7 @@ import { isFxWeeklySessionOpen } from '../utils/fx-weekly-session';
 import { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.service';
 
 const DEFAULT_INTERVAL_MS = 15_000;
+const BROKER_SOURCE_RESOLVE_INTERVAL_MS = 15_000;
 const MIN_INTERVAL_MS = 10_000;
 const MAX_INTERVAL_MS = 300_000;
 const DEFAULT_LIVE_QUOTE_INTERVAL_MS = 1_000;
@@ -92,6 +95,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   /** Read-only provenance: a successful request can still return old candles. */
   private readonly latestBrokerClosedBarAt = new Map<string, string>();
   private readonly staleHistoricalResponses = new Map<string, number>();
+  private sourceResolution: { connectionId: string; resolvedAtMs: number } | null = null;
 
   getHistoricalCollectionStatus(): {
     lastSuccessfulCollectAt: Record<string, string>;
@@ -152,6 +156,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
     private readonly config: ConfigService,
     private readonly brokerService: BrokerService,
     private readonly store: ProviderQuoteCandleStoreService,
+    @Optional() @InjectDataSource() private readonly dataSource?: DataSource,
   ) {}
 
   onModuleInit(): void {
@@ -179,10 +184,14 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   async collectOnce(now = new Date()): Promise<void> {
     if (this.running || !this.enabled() || !isFxWeeklySessionOpen(now)) return;
     const userId = this.userId();
-    const connectionId = this.sourceConnectionId();
-    if (!userId || !connectionId) return;
+    if (!userId) return;
 
     this.running = true;
+    const connectionId = await this.resolveCollectionConnectionId(userId);
+    if (!connectionId) {
+      this.running = false;
+      return;
+    }
     try {
       const connection = await this.brokerService.findConnectionById(connectionId, userId);
       if (!CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId)) {
@@ -222,10 +231,14 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   async collectLiveQuotesOnce(now = new Date()): Promise<void> {
     if (this.liveQuoteRunning || !this.enabled() || !isFxWeeklySessionOpen(now)) return;
     const userId = this.userId();
-    const connectionId = this.sourceConnectionId();
-    if (!userId || !connectionId) return;
+    if (!userId) return;
 
     this.liveQuoteRunning = true;
+    const connectionId = await this.resolveCollectionConnectionId(userId);
+    if (!connectionId) {
+      this.liveQuoteRunning = false;
+      return;
+    }
     try {
       const connection = await this.brokerService.findConnectionById(connectionId, userId);
       if (!CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId)) return;
@@ -238,6 +251,70 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       );
     } finally {
       this.liveQuoteRunning = false;
+    }
+  }
+
+  /**
+   * The configured source remains the default research account. While DEMO
+   * users trial another cTrader account, collect from the latest FULL_AUTO
+   * cTrader session (active first, then most recently ended), even when AI is
+   * stopped. This prepares that exact broker's M1/M5/M15/H1/H4 history for
+   * charting and future execution without ever moving source rows across
+   * connection IDs. Read-only, user-scoped and cached to avoid 1 Hz DB reads.
+   */
+  private async resolveCollectionConnectionId(userId: string): Promise<string> {
+    const configuredSource = this.sourceConnectionId();
+    if (!this.dataSource) return configuredSource;
+    const now = Date.now();
+    if (
+      this.sourceResolution &&
+      now - this.sourceResolution.resolvedAtMs >= 0 &&
+      now - this.sourceResolution.resolvedAtMs < BROKER_SOURCE_RESOLVE_INTERVAL_MS
+    ) {
+      return this.sourceResolution.connectionId;
+    }
+
+    try {
+      const rows: Array<{ connectionId: string }> = await this.dataSource.query(
+        `SELECT s.broker_connection_id AS "connectionId"
+         FROM trading.trading_sessions s
+         JOIN broker.broker_connections b
+           ON b.id = s.broker_connection_id AND b.user_id = s.user_id
+         WHERE s.user_id = $1
+           AND s.execution_mode = 'FULL_AUTO'
+           AND s.started_at >= NOW() - INTERVAL '7 days'
+           AND b.account_type = 'DEMO'
+           AND b.status = 'CONNECTED'
+           AND b.broker_id = ANY($2::text[])
+         ORDER BY (s.ended_at IS NULL) DESC, s.started_at DESC
+         LIMIT 1`,
+        [userId, [...CTRADER_FAMILY_BROKER_IDS]],
+      );
+      const selected = String(rows[0]?.connectionId ?? '').trim();
+      const connectionId = selected || configuredSource;
+      if (this.sourceResolution?.connectionId !== connectionId) {
+        // Per-pair status keys are intentionally compatibility-preserving.
+        // Clear old-account observations so status cannot imply that the
+        // newly selected account already has fresh broker-native bars.
+        this.lastSuccessfulCollectAt.clear();
+        this.historicalRefreshFailures.clear();
+        this.latestBrokerClosedBarAt.clear();
+        this.staleHistoricalResponses.clear();
+        this.logger.log(
+          `cTrader M1 collection source selected connection=${connectionId} ` +
+            `reason=${selected ? 'RECENT_FULL_AUTO_DEMO_SESSION' : 'CONFIGURED_DEFAULT'}`,
+        );
+      }
+      this.sourceResolution = { connectionId, resolvedAtMs: now };
+      return connectionId;
+    } catch (error) {
+      this.warnThrottled(
+        'm1-collection-session-source-unavailable',
+        `Unable to resolve latest broker session for cTrader collection: ${(error as Error).message}; configured source retained.`,
+      );
+      // A transient DB failure must not redirect a previously selected broker
+      // to an unverified session; the default account remains explicit.
+      return configuredSource;
     }
   }
 

@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
+import type { DataSource } from 'typeorm';
 import type { BrokerService } from '../../broker/broker.service';
 import { BrokerConnectionStatus } from '../../broker/interfaces/broker-adapter.interface';
 import type { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.service';
@@ -28,6 +29,7 @@ function harness(
     status?: BrokerConnectionStatus;
     quoteTimestamp?: Date;
     collectionInstruments?: string;
+    recentDemoConnectionId?: string | null;
   } = {},
 ) {
   const findConnectionById = jest.fn().mockResolvedValue({
@@ -68,6 +70,14 @@ function harness(
     upsertM1Sample,
   } as unknown as ProviderQuoteCandleStoreService;
 
+  const query = jest
+    .fn()
+    .mockResolvedValue(
+      options.recentDemoConnectionId ? [{ connectionId: options.recentDemoConnectionId }] : [],
+    );
+  const dataSource =
+    options.recentDemoConnectionId !== undefined ? ({ query } as unknown as DataSource) : undefined;
+
   return {
     service: new CTraderQuoteCollectorService(
       config(
@@ -77,7 +87,9 @@ function harness(
       ),
       broker,
       store,
+      dataSource,
     ),
+    query,
     findConnectionById,
     getOhlcvForConnection,
     getCurrentPriceForConnection,
@@ -124,6 +136,39 @@ describe('CTraderQuoteCollectorService', () => {
       expect(call[0]).toBe('ctrader-1');
       expect(call[3]).toBe('ctrader-broker-native');
     }
+  });
+
+  it('warms the most recently ended cTrader DEMO session account while the AI is stopped', async () => {
+    const h = harness({ recentDemoConnectionId: 'pepperstone-ctrader-connection' });
+
+    await h.service.collectOnce(OPEN_NOW);
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+
+    expect(h.query).toHaveBeenCalledTimes(1);
+    expect(h.query).toHaveBeenCalledWith(
+      expect.stringContaining("s.execution_mode = 'FULL_AUTO'"),
+      ['user-1', expect.arrayContaining(['ctrader', 'pepperstone-ctrader'])],
+    );
+    expect(h.findConnectionById).toHaveBeenCalledWith('pepperstone-ctrader-connection', 'user-1');
+    expect(h.getOhlcvForConnection).toHaveBeenCalledTimes(4);
+    for (const call of h.getOhlcvForConnection.mock.calls) {
+      expect(call[1]).toBe('pepperstone-ctrader-connection');
+    }
+    for (const call of h.upsertHistoricalCandles.mock.calls) {
+      expect(call[0]).toBe('pepperstone-ctrader-connection');
+    }
+    for (const call of h.upsertM1Sample.mock.calls) {
+      expect(call[0]).toBe('pepperstone-ctrader-connection');
+    }
+  });
+
+  it('keeps the configured cTrader source when no recent connected DEMO session exists', async () => {
+    const h = harness({ recentDemoConnectionId: null });
+
+    await h.service.collectOnce(OPEN_NOW);
+    expect(h.query).toHaveBeenCalledTimes(1);
+    expect(h.findConnectionById).toHaveBeenCalledWith('ctrader-1', 'user-1');
+    expect(h.getOhlcvForConnection.mock.calls.every((call) => call[1] === 'ctrader-1')).toBe(true);
   });
 
   it('does not let a stalled M1 fetch prevent other broker-native history and context requests from starting', async () => {
