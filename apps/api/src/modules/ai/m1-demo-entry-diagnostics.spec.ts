@@ -1,6 +1,9 @@
 import type { DataSource } from 'typeorm';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
-import { toDemoFocusedEntryDiagnostic } from './m1-demo-entry-diagnostics';
+import {
+  DEMO_ENTRY_BLOCKER_LABELS,
+  toDemoFocusedEntryDiagnostic,
+} from './m1-demo-entry-diagnostics';
 
 describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
   it('treats a missing current cTrader DEMO session as no current-session evidence', () => {
@@ -263,5 +266,16 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
     expect(sql).toContain("'MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED'");
     expect(sql).toContain("'EVENT_RISK_HIGH_IMPACT_BLOCK'");
     expect(sql).not.toMatch(/\bUPDATE\b|\bINSERT\b|\bDELETE\b|\bEXECUTE\b/i);
+  });
+});
+
+describe('V9 research probation diagnostic descriptions', () => {
+  it('explains new early-transition and direction-flip shadow blockers without suggesting a broker failure', () => {
+    expect(DEMO_ENTRY_BLOCKER_LABELS.M1_DEMO_EARLY_TRANSITION_RESEARCH_ONLY).toContain(
+      'research-only',
+    );
+    expect(DEMO_ENTRY_BLOCKER_LABELS.M1_DIRECTION_FLIP_RESEARCH_ONLY).toContain(
+      'existing trade stays open',
+    );
   });
 });
