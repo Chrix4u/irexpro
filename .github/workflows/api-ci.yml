@@ -171,6 +171,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify active-DEMO M1 timing audit scope and fail-closed behavior
+        run: node --test apps/api/scripts/audit-planb-m1-timing-counterfactual.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04

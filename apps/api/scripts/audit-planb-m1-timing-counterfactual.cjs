@@ -15,7 +15,24 @@ const SCOPE_SQL = `
   SELECT CURRENT_TIMESTAMP AS "snapshotAt", broker_id AS "brokerId"
   FROM broker.broker_connections
   WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
-    AND broker_id = 'ctrader' AND account_type = 'DEMO'
+    AND broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')
+    AND account_type = 'DEMO'
+`;
+
+// Default to the broker that the user's current DEMO trading session is
+// actually using; the generic market-data connection may belong to an old
+// broker and yield a misleading zero-decision research report.
+const ACTIVE_DEMO_CONNECTION_SQL = `
+  SELECT ts.broker_connection_id AS "connectionId"
+  FROM trading.trading_sessions ts
+  JOIN broker.broker_connections bc
+    ON bc.id = ts.broker_connection_id AND bc.user_id = ts.user_id
+  WHERE ts.user_id = $1
+    AND ts.status = 'ACTIVE' AND ts.execution_mode = 'FULL_AUTO'
+    AND bc.account_type = 'DEMO' AND bc.deleted_at IS NULL
+    AND bc.broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')
+  ORDER BY ts.started_at DESC
+  LIMIT 1
 `;
 
 const DECISIONS_SQL = `
@@ -127,7 +144,7 @@ async function runPlanBTimingCounterfactualAudit({
   evaluateOutcome,
   maxDecisions = 4000,
 }) {
-  if (!UUID.test(userId ?? '') || !UUID.test(connectionId ?? '')) {
+  if (!UUID.test(userId ?? '') || (connectionId != null && !UUID.test(connectionId))) {
     throw new Error('INVALID_AUDIT_SCOPE');
   }
   const from = new Date(since);
@@ -139,7 +156,14 @@ async function runPlanBTimingCounterfactualAudit({
   await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   try {
     await client.query("SET LOCAL statement_timeout = '30s'");
-    const scope = (await client.query(SCOPE_SQL, [connectionId, userId])).rows[0];
+    const active = connectionId
+      ? null
+      : (await client.query(ACTIVE_DEMO_CONNECTION_SQL, [userId])).rows[0];
+    const resolvedConnectionId = connectionId ?? active?.connectionId;
+    if (!UUID.test(resolvedConnectionId ?? '')) {
+      throw new Error('ACTIVE_CTRADER_DEMO_SESSION_UNAVAILABLE');
+    }
+    const scope = (await client.query(SCOPE_SQL, [resolvedConnectionId, userId])).rows[0];
     if (!scope) throw new Error('CTRADER_DEMO_SCOPE_UNAVAILABLE');
     const through = new Date(scope.snapshotAt);
     const latestEvaluated = new Date(through.getTime() - 16 * 60_000);
@@ -153,7 +177,7 @@ async function runPlanBTimingCounterfactualAudit({
     const rows = (
       await client.query(DECISIONS_SQL, [
         userId,
-        connectionId,
+        resolvedConnectionId,
         POLICY,
         from.toISOString(),
         latestEvaluated.toISOString(),
@@ -162,7 +186,7 @@ async function runPlanBTimingCounterfactualAudit({
     ).rows;
     const leaders = selectEpisodeLeaders(rows);
     const candles = (
-      await client.query(CANDLES_SQL, [connectionId, from.toISOString(), through.toISOString()])
+      await client.query(CANDLES_SQL, [resolvedConnectionId, from.toISOString(), through.toISOString()])
     ).rows;
     const byInstrument = new Map();
     for (const candle of candles) {
@@ -213,6 +237,8 @@ async function runPlanBTimingCounterfactualAudit({
 
     const report = {
       artifact: ARTIFACT,
+      brokerId: scope.brokerId,
+      brokerScope: 'ACTIVE_OR_EXPLICIT_USER_OWNED_CTRADER_DEMO',
       generatedAt: through.toISOString(),
       from: from.toISOString(),
       through: latestEvaluated.toISOString(),
@@ -268,13 +294,16 @@ async function main() {
     const report = await runPlanBTimingCounterfactualAudit({
       client,
       userId: process.env.VPS_FOREX_SCANNER_USER_ID,
-      connectionId:
-        process.env.M1_TACTICAL_MARKET_DATA_CONNECTION_ID ??
-        process.env.VPS_FOREX_SCANNER_BROKER_CONNECTION_ID,
+      // Explicit, dedicated override is allowed for controlled retrospectives.
+      // Never silently use the stale market-data account in a broker-switching app.
+      connectionId: process.env.PLANB_M1_TIMING_AUDIT_CONNECTION_ID || undefined,
       since:
         process.env.PLANB_M1_TIMING_AUDIT_SINCE ??
         new Date(Date.now() - 6 * 3600_000).toISOString(),
       evaluateOutcome: evaluateM1CausalOutcome15m,
+      maxDecisions: process.env.PLANB_M1_TIMING_AUDIT_MAX_DECISIONS
+        ? Number(process.env.PLANB_M1_TIMING_AUDIT_MAX_DECISIONS)
+        : 4000,
     });
     console.log('PLANB_M1_TIMING_AUDIT ' + JSON.stringify(report));
   } finally {
@@ -287,6 +316,7 @@ module.exports = {
   POLICY,
   TIMING_REJECT,
   SCOPE_SQL,
+  ACTIVE_DEMO_CONNECTION_SQL,
   DECISIONS_SQL,
   CANDLES_SQL,
   selectEpisodeLeaders,
