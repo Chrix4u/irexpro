@@ -33,6 +33,7 @@ import { PostEntryDemoDrawdownGuardService } from './post-entry-demo-drawdown-gu
 import { ProfitProtectionCounterfactualService } from './profit-protection-counterfactual.service';
 import { ProfitExitAlternativesService } from './profit-exit-alternatives.service';
 import { PostClosePathForensicsService } from './post-close-path-forensics.service';
+import { TradeEntryPathForensicsService } from './trade-entry-path-forensics.service';
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import { M1TacticalMarketDataService } from './m1-tactical-market-data.service';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
@@ -99,6 +100,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     ProfitProtectionCounterfactualService,
     ProfitExitAlternativesService,
     PostClosePathForensicsService,
+    TradeEntryPathForensicsService,
     EnsemblePostEntryProtectionShadowService,
     M1TacticalMarketDataService,
     M1TacticalEvidenceService,
