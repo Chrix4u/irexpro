@@ -321,6 +321,17 @@ STAGE="candidate-verification"
 git fetch --quiet origin main
 git cat-file -e "${CANDIDATE_SHA}^{commit}" 2>/dev/null || die "Candidate commit is unavailable."
 git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main || die "Candidate is not contained in origin/main."
+
+# The currently deployed checkout may not yet contain this new safeguard.
+# Fetch its exact source from the verified candidate WITHOUT checking out
+# the candidate, installing dependencies or restarting anything.
+STAGE="trading-idle-before-checkout"
+trading_preflight_script="$(mktemp)"
+trap 'rm -f "$trading_preflight_script"' EXIT
+git show "${CANDIDATE_SHA}:scripts/deployment/check-staging-trading-idle.sh"   > "$trading_preflight_script" || die "Candidate trading-idle guard is missing."
+bash "$trading_preflight_script"
+
+STAGE="candidate-checkout"
 git switch --quiet --detach "$CANDIDATE_SHA"
 [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]] || die "Exact candidate checkout failed."
 [[ -z "$(git status --porcelain)" ]] || die "Exact candidate checkout is not clean."
@@ -354,6 +365,12 @@ STAGE="ai-python-dependencies"
 sync_ai_python_dependencies
 
 # Keep the staging database schema on the same immutable release as the API.
+# A trading session could have started while builds were running. Refuse DB
+# migrations and PM2 restart unless a SECOND read-only check still confirms
+# no active AI session, pending order or open/reconciling broker position.
+STAGE="trading-idle-before-migrations"
+bash "$STAGING_ROOT/scripts/deployment/check-staging-trading-idle.sh"
+
 # Migrations run only after every application build succeeds and before ANY
 # PM2 process is restarted. A migration failure therefore fails closed while
 # the previously running release remains untouched.
