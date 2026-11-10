@@ -97,6 +97,38 @@ describe('M1 tactical market-data binding', () => {
     expect(h.getOHLCV).not.toHaveBeenCalled();
   });
 
+  it('rejects cross-account candles for FULL_AUTO execution before querying the source store', async () => {
+    const h = harness('original-ctrader-connection');
+
+    await expect(
+      h.service.loadSnapshot('pepperstone-execution-connection', 'USDJPY', DECISION, {
+        requireExecutionBrokerSource: true,
+      }),
+    ).resolves.toBeNull();
+
+    expect(h.getCandles).not.toHaveBeenCalled();
+    expect(h.getLatestPositiveSpreadQuote).not.toHaveBeenCalled();
+    expect(h.service.getLastReadiness('pepperstone-execution-connection', 'USDJPY')).toMatchObject({
+      ready: false,
+      reason: 'BROKER_EXECUTION_SOURCE_MISMATCH',
+      authority: null,
+    });
+  });
+
+  it('keeps same-account broker-native reads available for FULL_AUTO', async () => {
+    const h = harness('pepperstone-execution-connection');
+
+    await h.service.loadSnapshot('pepperstone-execution-connection', 'USDJPY', DECISION, {
+      requireExecutionBrokerSource: true,
+    });
+    expect(h.getCandles).toHaveBeenCalledTimes(5);
+    expect(h.getLatestPositiveSpreadQuote).toHaveBeenCalledWith(
+      'pepperstone-execution-connection',
+      'USDJPY',
+      DECISION,
+    );
+  });
+
   it('builds a PAPER-only snapshot from fresh connection-scoped M1 plus cached higher-timeframe context when no separate source is configured', async () => {
     const h = harness(undefined, true);
 

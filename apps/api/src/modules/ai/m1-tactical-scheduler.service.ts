@@ -818,6 +818,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     try {
       const userId = this.userId();
       let brokerConnectionId = this.connectionId();
+      let requireExecutionBrokerSource = false;
       if (
         this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&
         this.executionService
@@ -825,6 +826,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         const active = await this.executionService.getActiveSession(userId);
         if (active?.executionMode === ExecutionMode.FULL_AUTO) {
           brokerConnectionId = active.brokerConnectionId;
+          requireExecutionBrokerSource = true;
         }
       }
       if (!brokerConnectionId) return;
@@ -866,6 +868,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             instrument,
             decisionTime,
             trace,
+            requireExecutionBrokerSource,
           );
           if (settle) deferredShadow.push({ instrument, trace, settle });
           if (trace.state === 'ERROR') trace.state = 'COMPLETED';
@@ -946,9 +949,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     instrument: string,
     decisionTime: Date,
     timing?: M1TacticalScanTiming,
+    requireExecutionBrokerSource = false,
   ): Promise<(() => Promise<void>) | null> {
     const marketStartedAt = Date.now();
-    const market = await this.marketData.loadSnapshot(brokerConnectionId, instrument, decisionTime);
+    const market = await this.marketData.loadSnapshot(
+      brokerConnectionId,
+      instrument,
+      decisionTime,
+      { requireExecutionBrokerSource },
+    );
     if (timing) timing.marketLoadMs = Math.max(0, Date.now() - marketStartedAt);
     const readiness = this.marketData.getLastReadiness?.(brokerConnectionId, instrument) ?? null;
     if (readiness) {
