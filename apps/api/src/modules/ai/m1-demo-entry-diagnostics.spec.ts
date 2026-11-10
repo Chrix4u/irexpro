@@ -30,6 +30,9 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       sessionAgeMinutes: 0,
       lastDecisionAgeSeconds: null,
       planBAdmittedDecisions: 0,
+      planBReversalTimingHeldDecisions: 0,
+      planBReversalM1AbstainedDecisions: 0,
+      rolloverRegimeDecisions: 0,
       primaryPathDecisions: 0,
       primaryReliabilityVetoDecisions: 0,
       eligibleFallbackProbationVetoDecisions: 0,
@@ -52,6 +55,9 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
         session_age_minutes: '396',
         last_decision_age_seconds: '15',
         planb_admitted_decisions: '8',
+        planb_reversal_timing_held_decisions: '81',
+        planb_reversal_m1_abstained_decisions: '79',
+        rollover_regime_decisions: '12',
         primary_path_decisions: '2',
         primary_reliability_veto_decisions: '2',
         eligible_fallback_probation_veto_decisions: '3',
@@ -78,6 +84,9 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       sessionAgeMinutes: 396,
       lastDecisionAgeSeconds: 15,
       planBAdmittedDecisions: 8,
+      planBReversalTimingHeldDecisions: 81,
+      planBReversalM1AbstainedDecisions: 79,
+      rolloverRegimeDecisions: 12,
       primaryPathDecisions: 2,
       primaryReliabilityVetoDecisions: 2,
       eligibleFallbackProbationVetoDecisions: 3,
@@ -250,6 +259,9 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
     expect(sql).toMatch(/cohort AS \(\s*SELECT d\.evaluated_at, d\.route/);
     expect(sql).toContain('MAX(evaluated_at)');
     expect(sql).toContain('AS planb_admitted_decisions');
+    expect(sql).toContain('AS planb_reversal_timing_held_decisions');
+    expect(sql).toContain('AS planb_reversal_m1_abstained_decisions');
+    expect(sql).toContain('AS rollover_regime_decisions');
     expect(sql).toContain('AS primary_path_decisions');
     expect(sql).toContain('AS primary_reliability_veto_decisions');
     expect(sql).toContain('AS eligible_fallback_probation_veto_decisions');

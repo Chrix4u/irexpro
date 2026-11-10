@@ -49,6 +49,12 @@ export interface DemoFocusedEntryDiagnostic {
   lastDecisionAgeSeconds: number | null;
   /** Observed execution funnel; counts can overlap, never confer authority. */
   planBAdmittedDecisions: number;
+  /** All Plan B reversal admissions held by independent M1 timing, including abstentions. */
+  planBReversalTimingHeldDecisions: number;
+  /** Subset of reversal timing holds where M1 never proposed a trade. */
+  planBReversalM1AbstainedDecisions: number;
+  /** All evaluated decisions in a rollover-classified regime, not orders. */
+  rolloverRegimeDecisions: number;
   primaryPathDecisions: number;
   primaryReliabilityVetoDecisions: number;
   eligibleFallbackProbationVetoDecisions: number;
@@ -76,6 +82,9 @@ export interface DemoFocusedEntryDiagnosticRow {
   session_age_minutes: number | string;
   last_decision_age_seconds: number | string | null;
   planb_admitted_decisions: number | string;
+  planb_reversal_timing_held_decisions?: number | string;
+  planb_reversal_m1_abstained_decisions?: number | string;
+  rollover_regime_decisions?: number | string;
   primary_path_decisions: number | string;
   primary_reliability_veto_decisions: number | string;
   eligible_fallback_probation_veto_decisions: number | string;
@@ -126,6 +135,13 @@ export function toDemoFocusedEntryDiagnostic(
     sessionAgeMinutes: active ? safeCount(row?.session_age_minutes) : 0,
     lastDecisionAgeSeconds,
     planBAdmittedDecisions: active ? safeCount(row?.planb_admitted_decisions) : 0,
+    planBReversalTimingHeldDecisions: active
+      ? safeCount(row?.planb_reversal_timing_held_decisions)
+      : 0,
+    planBReversalM1AbstainedDecisions: active
+      ? safeCount(row?.planb_reversal_m1_abstained_decisions)
+      : 0,
+    rolloverRegimeDecisions: active ? safeCount(row?.rollover_regime_decisions) : 0,
     primaryPathDecisions: active ? safeCount(row?.primary_path_decisions) : 0,
     primaryReliabilityVetoDecisions: active
       ? safeCount(row?.primary_reliability_veto_decisions)

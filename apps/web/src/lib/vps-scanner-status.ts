@@ -132,6 +132,9 @@ export interface DemoFocusedEntryDiagnosticView {
   sessionAgeMinutes: number;
   lastDecisionAgeSeconds: number | null;
   planBAdmittedDecisions: number;
+  planBReversalTimingHeldDecisions: number;
+  planBReversalM1AbstainedDecisions: number;
+  rolloverRegimeDecisions: number;
   primaryPathDecisions: number;
   primaryReliabilityVetoDecisions: number;
   eligibleFallbackProbationVetoDecisions: number;
@@ -167,6 +170,9 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
     value.sessionInactiveDecisions,
     value.sessionAgeMinutes,
     value.planBAdmittedDecisions,
+    value.planBReversalTimingHeldDecisions,
+    value.planBReversalM1AbstainedDecisions,
+    value.rolloverRegimeDecisions,
     value.primaryPathDecisions,
     value.primaryReliabilityVetoDecisions,
     value.eligibleFallbackProbationVetoDecisions,
@@ -195,8 +201,13 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
       value.lastDecisionAgeSeconds < 240
   )) return false;
   const candidateCount = value.candidateDecisions as number;
+  const evaluatedCount = value.evaluatedDecisions as number;
   const primaryCount = value.primaryPathDecisions as number;
-  if (primaryCount > candidateCount ||
+  if ((value.planBReversalM1AbstainedDecisions as number) >
+        (value.planBReversalTimingHeldDecisions as number) ||
+      (value.planBReversalTimingHeldDecisions as number) > evaluatedCount ||
+      (value.rolloverRegimeDecisions as number) > evaluatedCount ||
+      primaryCount > candidateCount ||
     (value.planBAdmittedDecisions as number) > candidateCount ||
     (value.primaryReliabilityVetoDecisions as number) > primaryCount ||
     (value.eligibleFallbackProbationVetoDecisions as number) > candidateCount)

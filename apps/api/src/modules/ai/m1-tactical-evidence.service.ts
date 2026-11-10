@@ -569,6 +569,21 @@ export class M1TacticalEvidenceService {
           WHERE route <> 'ABSTAIN'
             AND governance->'multimodelEnsemble'->>'paperAdmitted' = 'true'
         ) AS planb_admitted_decisions,
+        -- Unlike the usual M1 candidate funnel, include ABSTAIN scans here:
+        -- Plan B may admit a reversal that the independent M1 system rejects.
+        (SELECT COUNT(*) FROM cohort
+          WHERE governance->'multimodelEnsemble'->>'paperAdmitted' = 'true'
+            AND blockers ? 'MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED'
+        ) AS planb_reversal_timing_held_decisions,
+        (SELECT COUNT(*) FROM cohort
+          WHERE route = 'ABSTAIN'
+            AND governance->'multimodelEnsemble'->>'paperAdmitted' = 'true'
+            AND blockers ? 'MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED'
+        ) AS planb_reversal_m1_abstained_decisions,
+        -- Rollover counts describe the model's observed regime, not a broker halt.
+        (SELECT COUNT(*) FROM cohort
+          WHERE governance->'multimodelEnsemble'->>'regime' = 'ROLLOVER_RISK'
+        ) AS rollover_regime_decisions,
         (SELECT COUNT(*) FROM cohort
           WHERE route <> 'ABSTAIN'
             AND governance->'multimodelAuthority'->>'authorityPath' = 'PRIMARY_PLAN_B'
