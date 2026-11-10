@@ -4,8 +4,24 @@ import { BrokerParityV7Service } from './broker-parity-v7.service';
 import { V8DedicatedPaperReadinessService } from './v8-dedicated-paper-readiness.service';
 import { M1TacticalSchedulerService } from './m1-tactical-scheduler.service';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
+import { SmartProfitProtectionReplayService } from './smart-profit-protection-replay.service';
 
 describe('VpsForexSignalCollectorController', () => {
+  it('returns only authenticated user-scoped shadow comparison, never mutating a trade', async () => {
+    const report = { executionAuthority: 'NONE', modifiesExecution: false, trades: [] };
+    const getUserReplay = jest.fn().mockResolvedValue(report);
+    const controller = new VpsForexSignalCollectorController(
+      {} as VpsForexSignalCollectorService,
+      {} as BrokerParityV7Service,
+      {} as V8DedicatedPaperReadinessService,
+      {} as M1TacticalSchedulerService,
+      {} as M1TacticalEvidenceService,
+      { getUserReplay } as unknown as SmartProfitProtectionReplayService,
+    );
+    await expect(controller.getSmartProfitProtectionReplay('owner-12')).resolves.toEqual(report);
+    expect(getUserReplay).toHaveBeenCalledWith('owner-12');
+  });
+
   it('scopes status to the authenticated user and exposes no configuration secrets', async () => {
     const getStatus = jest.fn().mockResolvedValue({
       providerCode: 'vps-twelvedata-six-pair-v7',
@@ -20,6 +36,7 @@ describe('VpsForexSignalCollectorController', () => {
       {} as V8DedicatedPaperReadinessService,
       {} as M1TacticalSchedulerService,
       {} as M1TacticalEvidenceService,
+      {} as SmartProfitProtectionReplayService,
     );
 
     const result = await controller.getStatus('user-1');
@@ -54,6 +71,7 @@ describe('VpsForexSignalCollectorController', () => {
       {} as V8DedicatedPaperReadinessService,
       { getStatus: jest.fn() } as unknown as M1TacticalSchedulerService,
       { loadFocusedDemoEntryDiagnostic } as unknown as M1TacticalEvidenceService,
+      {} as SmartProfitProtectionReplayService,
     );
     await expect(controller.getM1EntryDiagnostics('user-1')).resolves.toEqual(diagnostic);
     expect(loadFocusedDemoEntryDiagnostic).toHaveBeenCalledWith('user-1');
@@ -90,6 +108,7 @@ describe('VpsForexSignalCollectorController', () => {
         getStatus: jest.fn().mockReturnValue(schedulerStatus),
       } as unknown as M1TacticalSchedulerService,
       { loadLatestDecisionStateForUser } as unknown as M1TacticalEvidenceService,
+      {} as SmartProfitProtectionReplayService,
     );
 
     await expect(controller.getM1TacticalStatus('user-1')).resolves.toEqual({

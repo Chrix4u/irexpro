@@ -6,6 +6,7 @@ import { BrokerParityV7Service } from './broker-parity-v7.service';
 import { V8DedicatedPaperReadinessService } from './v8-dedicated-paper-readiness.service';
 import { M1TacticalSchedulerService } from './m1-tactical-scheduler.service';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
+import { SmartProfitProtectionReplayService } from './smart-profit-protection-replay.service';
 
 @ApiTags('AI External Providers')
 @Controller('ai/external/vps-forex')
@@ -16,6 +17,7 @@ export class VpsForexSignalCollectorController {
     private readonly v8DedicatedPaper: V8DedicatedPaperReadinessService,
     private readonly m1Tactical: M1TacticalSchedulerService,
     private readonly m1Evidence: M1TacticalEvidenceService,
+    private readonly smartProfitReplay: SmartProfitProtectionReplayService,
   ) {}
 
   @Get('status')
@@ -56,6 +58,16 @@ export class VpsForexSignalCollectorController {
   })
   async getM1EntryDiagnostics(@CurrentUserId() userId: string) {
     return this.m1Evidence.loadFocusedDemoEntryDiagnostic(userId);
+  }
+
+  @Get('m1-tactical/smart-profit-protection-replay')
+  @ApiOperation({
+    summary: 'Compare trade protection policies without sending broker instructions',
+    description:
+      'Authenticated, read-only, exact-user cTrader-family DEMO quote-close replay. Tests TP-winner retention, losing-trade give-back, fees and M5/M15 trend confirmation. Never closes, amends, starts or places orders.',
+  })
+  async getSmartProfitProtectionReplay(@CurrentUserId() userId: string) {
+    return this.smartProfitReplay.getUserReplay(userId);
   }
 
   @Get('broker-parity/status')

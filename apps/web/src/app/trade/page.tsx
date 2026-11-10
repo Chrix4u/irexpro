@@ -3071,6 +3071,9 @@ export default function AiTradingPage() {
               iRexPro opens only qualified opportunities and manages each AI position
               within your allocation and protection rules.
             </p>
+            <Link href="/trade/protection-lab" className="btn btn--ghost btn--sm">
+              Smart Protection Lab · Review broker-native profit replay
+            </Link>
           </div>
           <div className="ai-trader__hero-state" data-ai-state={aiVisualState}>
             <span>AI Trading</span>
