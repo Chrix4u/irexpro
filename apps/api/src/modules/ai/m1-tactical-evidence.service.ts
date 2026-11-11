@@ -1471,6 +1471,9 @@ export class M1TacticalEvidenceService {
    * The previous GBPUSD SELL protected at 08:01:20 and the next SELL opened
    * at 08:01:35, then hit SL. Enforce only a 3-minute same-pair, same-side
    * cooldown AFTER a successful broker-reconciled PROFIT_PROTECTION close.
+   * An audited close REQUEST also holds the same side while reconciliation
+   * finishes; the real GBPUSD close request preceded the next opening by only
+   * 17 seconds and its final TRADE_CLOSED audit was written later.
    *
    * No whole-market ban, no opposing-side ban, no reliance on predicted P&L.
    * Decision-time as-of predicate prevents historical replay look-ahead.
@@ -1484,23 +1487,38 @@ export class M1TacticalEvidenceService {
   }): Promise<{ active: boolean; cooldownRemainingSeconds: number }> {
     const rows = (await this.dataSource.query(
       `
-        SELECT max(t.closed_at) AS last_protected_close
-        FROM trading.trades t
-        JOIN trading.trade_intents ti
-          ON ti.id=t.trade_intent_id
-         AND ti.user_id=t.user_id
-         AND ti.broker_connection_id=t.broker_connection_id
-        WHERE t.user_id=$1 AND t.broker_connection_id=$2
-          AND t.instrument=$3 AND t.direction=$4
-          AND t.status='CLOSED'
-          AND t.close_reason='PROFIT_PROTECTION'
-          AND ti.timeframe='M1'
-          AND ti.strategy_code IN (
-            'external-irexpro-m1-tactical',
-            'external-irexpro-multimodel-ensemble'
-          )
-          AND t.closed_at <= $5::timestamptz
-          AND t.closed_at > $5::timestamptz - interval '3 minutes'
+        WITH owned_m1_trades AS (
+          SELECT t.id, t.closed_at, t.status, t.close_reason
+          FROM trading.trades t
+          JOIN trading.trade_intents ti
+            ON ti.id=t.trade_intent_id
+           AND ti.user_id=t.user_id
+           AND ti.broker_connection_id=t.broker_connection_id
+          WHERE t.user_id=$1 AND t.broker_connection_id=$2
+            AND t.instrument=$3 AND t.direction=$4
+            AND ti.timeframe='M1'
+            AND ti.strategy_code IN (
+              'external-irexpro-m1-tactical',
+              'external-irexpro-multimodel-ensemble'
+            )
+        ), protected_events AS (
+          SELECT t.closed_at event_at
+          FROM owned_m1_trades t
+          WHERE t.status='CLOSED' AND t.close_reason='PROFIT_PROTECTION'
+            AND t.closed_at <= $5::timestamptz
+            AND t.closed_at > $5::timestamptz - interval '3 minutes'
+          UNION ALL
+          SELECT a.created_at event_at
+          FROM owned_m1_trades t
+          JOIN audit.audit_logs a
+            ON a.resource_type='Trade' AND a.resource_id=t.id::text
+           AND a.actor_user_id=$1
+          WHERE a.action='TRADE_CLOSE_REQUESTED'
+            AND a.metadata->>'closeReason'='PROFIT_PROTECTION'
+            AND a.created_at <= $5::timestamptz
+            AND a.created_at > $5::timestamptz - interval '3 minutes'
+        )
+        SELECT max(event_at) AS last_protected_close FROM protected_events
       `,
       [
         input.userId,
