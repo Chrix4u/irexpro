@@ -2,6 +2,7 @@ import {
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
   DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
 } from './demo-focused-instruments';
+import { orderM1DemoSixPairScan } from './m1-demo-six-pair-scan-order';
 export {
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
   DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
@@ -833,13 +834,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       // Evaluate every approved DEMO entry pair before running historical
       // research settlements. The V2 list contains all six majors, and this
       // order does not grant additional broker execution authority.
-      const focused = this.rolloutPolicy.demoEntryInstruments;
-      const scanOrder = focused
-        ? [
-            ...focused.filter((instrument) => this.rolloutPolicy.instruments.includes(instrument)),
-            ...this.rolloutPolicy.instruments.filter((instrument) => !focused.includes(instrument)),
-          ]
-        : this.rolloutPolicy.instruments;
+      const scanOrder = orderM1DemoSixPairScan({
+        phase: this.rolloutPolicy.phase,
+        policyInstruments: this.rolloutPolicy.instruments,
+        demoEntryInstruments: this.rolloutPolicy.demoEntryInstruments,
+        decisionTime,
+      });
       // Historical outcomes are observational: they must never make a later
       // pair wait to receive its current-minute broker eligibility decision.
       // Maintain serial entry/risk evaluations; only the read-only observation
