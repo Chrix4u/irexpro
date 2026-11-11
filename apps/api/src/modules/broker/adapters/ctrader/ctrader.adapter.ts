@@ -815,9 +815,19 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           toTimestamp: end,
         });
         const payload = expectCtraderPayload<{
+          ctidTraderAccountId?: number | string;
           tickData?: unknown;
           hasMore?: unknown;
         }>(response, CTRADER_PAYLOAD_TYPE.GET_TICKDATA_RES);
+        if (
+          payload.ctidTraderAccountId === undefined ||
+          parseCtraderId(payload.ctidTraderAccountId, 'response.ctidTraderAccountId') !== accountId
+        ) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.BROKER_SERVER_ERROR,
+            'Historical tick response account did not match the authorized DEMO account.',
+          );
+        }
         result[side.key] = decodeCtraderHistoricalTickSide(payload, start, end);
       }
       return result;
