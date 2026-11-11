@@ -1445,6 +1445,100 @@ export class M1TacticalEvidenceService {
     };
   }
 
+  /**
+   * Exact owner-and-connection verification for the narrowly scoped Pepperstone
+   * cTrader DEMO risk pilot. Never inferred from a scanner or generic cTrader
+   * connection; missing/retired credentials do not grant the pilot.
+   */
+  async isPepperstoneDemoBrokerConnection(input: {
+    userId: string;
+    brokerConnectionId: string;
+  }): Promise<boolean> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT b.broker_id AS broker_id, b.account_type AS account_type
+        FROM broker.broker_connections b
+        WHERE b.user_id=$1 AND b.id=$2 AND b.deleted_at IS NULL
+        LIMIT 1
+      `,
+      [input.userId, input.brokerConnectionId],
+    )) as Array<{ broker_id: string; account_type: string }>;
+    if (rows.length !== 1) throw new Error('BROKER_ACCOUNT_SCOPE_UNAVAILABLE');
+    return rows[0].broker_id === 'pepperstone-ctrader' && rows[0].account_type === 'DEMO';
+  }
+
+  /**
+   * The previous GBPUSD SELL protected at 08:01:20 and the next SELL opened
+   * at 08:01:35, then hit SL. Enforce only a 3-minute same-pair, same-side
+   * cooldown AFTER a successful broker-reconciled PROFIT_PROTECTION close.
+   * An audited close REQUEST also holds the same side while reconciliation
+   * finishes; the real GBPUSD close request preceded the next opening by only
+   * 17 seconds and its final TRADE_CLOSED audit was written later.
+   *
+   * No whole-market ban, no opposing-side ban, no reliance on predicted P&L.
+   * Decision-time as-of predicate prevents historical replay look-ahead.
+   */
+  async loadRecentlyProtectedSameSideReentry(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    evaluatedAt: Date;
+  }): Promise<{ active: boolean; cooldownRemainingSeconds: number }> {
+    const rows = (await this.dataSource.query(
+      `
+        WITH owned_m1_trades AS (
+          SELECT t.id, t.closed_at, t.status, t.close_reason
+          FROM trading.trades t
+          JOIN trading.trade_intents ti
+            ON ti.id=t.trade_intent_id
+           AND ti.user_id=t.user_id
+           AND ti.broker_connection_id=t.broker_connection_id
+          WHERE t.user_id=$1 AND t.broker_connection_id=$2
+            AND t.instrument=$3 AND t.direction=$4
+            AND ti.timeframe='M1'
+            AND ti.strategy_code IN (
+              'external-irexpro-m1-tactical',
+              'external-irexpro-multimodel-ensemble'
+            )
+        ), protected_events AS (
+          SELECT t.closed_at event_at
+          FROM owned_m1_trades t
+          WHERE t.status='CLOSED' AND t.close_reason='PROFIT_PROTECTION'
+            AND t.closed_at <= $5::timestamptz
+            AND t.closed_at > $5::timestamptz - interval '3 minutes'
+          UNION ALL
+          SELECT a.created_at event_at
+          FROM owned_m1_trades t
+          JOIN audit.audit_logs a
+            ON a.resource_type='Trade' AND a.resource_id=t.id::text
+           AND a.actor_user_id=$1
+          WHERE a.action='TRADE_CLOSE_REQUESTED'
+            AND a.metadata->>'closeReason'='PROFIT_PROTECTION'
+            AND a.created_at <= $5::timestamptz
+            AND a.created_at > $5::timestamptz - interval '3 minutes'
+        )
+        SELECT max(event_at) AS last_protected_close FROM protected_events
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument.trim().toUpperCase(),
+        input.direction,
+        input.evaluatedAt.toISOString(),
+      ],
+    )) as Array<{ last_protected_close: Date | string | null }>;
+    const closedAt = rows[0]?.last_protected_close ? new Date(rows[0].last_protected_close) : null;
+    if (!closedAt || !Number.isFinite(closedAt.getTime())) {
+      return { active: false, cooldownRemainingSeconds: 0 };
+    }
+    const remaining = Math.max(
+      0,
+      Math.ceil((closedAt.getTime() + 3 * 60_000 - input.evaluatedAt.getTime()) / 1000),
+    );
+    return { active: remaining > 0, cooldownRemainingSeconds: remaining };
+  }
+
   async loadOpenPaperRiskPositions(
     input: M1OpenPaperRiskPositionQuery,
   ): Promise<M1OpenPaperRiskPositionSnapshot[]> {

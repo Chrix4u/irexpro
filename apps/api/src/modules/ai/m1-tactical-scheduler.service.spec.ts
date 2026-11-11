@@ -290,6 +290,59 @@ describe('M1 tactical aligned-currency exposure guard', () => {
     });
   });
 
+  it('uses a 0.25% Pepperstone DEMO stop-risk cap without adding a general no-trade gate', async () => {
+    const { service } = guardHarness(40000, []);
+    const professional = {
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      entry: 1.11535,
+      stopLoss: 1.11585,
+    } as any;
+    const normal = await (service as any).resolveM1CurrencyExposureGuard(
+      'user-1',
+      'conn-1',
+      professional,
+      4,
+      false,
+    );
+    const pilot = await (service as any).resolveM1CurrencyExposureGuard(
+      'user-1',
+      'conn-1',
+      professional,
+      4,
+      true,
+    );
+    expect(normal.allowed).toBe(true);
+    expect(normal.volumeCap).toBe(4);
+    expect(pilot.allowed).toBe(true);
+    expect(pilot.volumeCap).toBe(2);
+  });
+
+  it('sizes down a fourth same-USD position rather than blocking unrelated pairs', async () => {
+    const { service } = guardHarness(40000, [
+      { instrument: 'EURUSD', direction: 'SELL', riskAtStop: 100 },
+      { instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 100 },
+      { instrument: 'USDJPY', direction: 'BUY', riskAtStop: 100 },
+    ]);
+    const candidate = {
+      instrument: 'AUDUSD',
+      direction: 'SELL',
+      entry: 0.68712,
+      stopLoss: 0.68762,
+    } as any;
+    const decision = await (service as any).resolveM1CurrencyExposureGuard(
+      'user-1',
+      'conn-1',
+      candidate,
+      4,
+      true,
+    );
+    expect(decision.allowed).toBe(true);
+    expect(decision.volumeCap).toBeGreaterThan(0);
+    expect(decision.volumeCap).toBeLessThan(2);
+    expect(decision.decision.projectedAlignedRiskPercent).toBeLessThan(1);
+  });
+
   it('keeps full M1 scout size while aligned stop-risk stays below two percent', async () => {
     const { service } = guardHarness(1000, [
       { instrument: 'GBPUSD', direction: 'SELL', riskAtStop: 5 },
@@ -968,6 +1021,13 @@ function phase2Harness(
     .fn()
     .mockResolvedValue(options.duplicateOppositeIntent ?? false);
   const markRescueObservation = jest.fn().mockResolvedValue(undefined);
+  // Existing generic cTrader, PAPER and IC Markets tests remain outside the
+  // explicitly owned Pepperstone DEMO loss-control pilot.
+  const isPepperstoneDemoBrokerConnection = jest.fn().mockResolvedValue(false);
+  const loadRecentlyProtectedSameSideReentry = jest.fn().mockResolvedValue({
+    active: false,
+    cooldownRemainingSeconds: 0,
+  });
   const loadPriorClosedCommissionRiskR = jest.fn().mockResolvedValue({
     sampleCount: 27,
     p90FeeR: 0.285,
@@ -992,6 +1052,8 @@ function phase2Harness(
     hasActiveM1Intent,
     hasActiveOppositeM1Intent,
     markRescueObservation,
+    isPepperstoneDemoBrokerConnection,
+    loadRecentlyProtectedSameSideReentry,
     loadPriorClosedCommissionRiskR,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
@@ -1091,6 +1153,8 @@ function phase2Harness(
     hasActiveM1Intent,
     hasActiveOppositeM1Intent,
     markRescueObservation,
+    isPepperstoneDemoBrokerConnection,
+    loadRecentlyProtectedSameSideReentry,
     loadPriorClosedCommissionRiskR,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
@@ -2231,6 +2295,52 @@ describe('M1 professional v8 DEMO promotion', () => {
       'EURUSD',
       new Date('2026-10-15T10:30:00.000Z'),
       { requireExecutionBrokerSource: true },
+    );
+  });
+
+  it('Pepperstone DEMO protected GBPUSD re-entry holds only the same side during its 3-minute cooling interval', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: {
+        id: 'session-demo-1',
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'demo-conn-2',
+      },
+      shadowPairSideOutcomesByConnection: {
+        'demo-conn-2': [],
+        'conn-1': [
+          { observedAt: new Date('2026-10-15T10:20:00Z'), netR: 0.6 },
+          { observedAt: new Date('2026-10-15T10:10:00Z'), netR: 0.4 },
+          { observedAt: new Date('2026-10-15T10:00:00Z'), netR: -0.1 },
+        ],
+      },
+      evidenceByRoute: { M1_EARLY_TRANSITION: [] },
+    });
+    h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
+    h.loadRecentlyProtectedSameSideReentry.mockResolvedValue({
+      active: true,
+      cooldownRemainingSeconds: 165,
+    });
+    await driveFeatures(h, transitionFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    expect(h.isPepperstoneDemoBrokerConnection).toHaveBeenCalledWith({
+      userId: 'user-1',
+      brokerConnectionId: 'demo-conn-2',
+    });
+    expect(h.loadRecentlyProtectedSameSideReentry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        brokerConnectionId: 'demo-conn-2',
+        instrument: expect.any(String),
+        direction: expect.any(String),
+        evaluatedAt: expect.any(Date),
+      }),
+    );
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    expect(h.markOutcomeState).toHaveBeenCalledWith(
+      expect.any(String),
+      'RISK_REJECTED',
+      expect.any(Date),
+      expect.stringContaining('M1_PEPPERSTONE_DEMO_SAME_SIDE_PROTECTED_EXIT_COOLDOWN'),
     );
   });
 

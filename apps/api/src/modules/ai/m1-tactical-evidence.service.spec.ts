@@ -871,6 +871,94 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(params).toEqual([input().userId, input().brokerConnectionId]);
   });
 
+  it('verifies the exact user-owned Pepperstone DEMO connection; generic or LIVE are excluded', async () => {
+    for (const [broker_id, account_type, expected] of [
+      ['pepperstone-ctrader', 'DEMO', true],
+      ['pepperstone-ctrader', 'LIVE', false],
+      ['ctrader', 'DEMO', false],
+      ['icmarkets-ctrader', 'DEMO', false],
+    ] as const) {
+      const query = jest.fn().mockResolvedValue([{ broker_id, account_type }]);
+      const svc = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+      expect(
+        await svc.isPepperstoneDemoBrokerConnection({
+          userId: input().userId,
+          brokerConnectionId: input().brokerConnectionId,
+        }),
+      ).toBe(expected);
+      expect(query.mock.calls[0]![1]).toEqual([input().userId, input().brokerConnectionId]);
+      expect(String(query.mock.calls[0]![0])).toContain('b.deleted_at IS NULL');
+    }
+    const missing = new M1TacticalEvidenceService({
+      query: jest.fn().mockResolvedValue([]),
+    } as unknown as DataSource);
+    await expect(
+      missing.isPepperstoneDemoBrokerConnection({
+        userId: input().userId,
+        brokerConnectionId: input().brokerConnectionId,
+      }),
+    ).rejects.toThrow('BROKER_ACCOUNT_SCOPE_UNAVAILABLE');
+  });
+
+  it('holds just the same pair and side for 3m following a broker-confirmed profit-protected exit', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValue([{ last_protected_close: '2026-11-11T08:01:20.613Z' }]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const at = new Date('2026-11-11T08:01:35.914Z');
+    const result = await service.loadRecentlyProtectedSameSideReentry({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'gbpusd',
+      direction: 'SELL',
+      evaluatedAt: at,
+    });
+    expect(result).toEqual({ active: true, cooldownRemainingSeconds: 165 });
+    const [sql, params] = query.mock.calls[0]!;
+    for (const fragment of [
+      't.user_id=$1',
+      't.broker_connection_id=$2',
+      't.instrument=$3 AND t.direction=$4',
+      "t.status='CLOSED'",
+      "t.close_reason='PROFIT_PROTECTION'",
+      "a.action='TRADE_CLOSE_REQUESTED'",
+      "a.metadata->>'closeReason'='PROFIT_PROTECTION'",
+      'a.actor_user_id=$1',
+      'a.resource_id=t.id::text',
+      'a.created_at <= $5::timestamptz',
+      "ti.timeframe='M1'",
+      "interval '3 minutes'",
+      't.closed_at <= $5::timestamptz',
+    ])
+      expect(String(sql)).toContain(fragment);
+    expect(params).toEqual([
+      input().userId,
+      input().brokerConnectionId,
+      'GBPUSD',
+      'SELL',
+      at.toISOString(),
+    ]);
+    query.mockResolvedValueOnce([{ last_protected_close: null }]);
+    expect(
+      await service.loadRecentlyProtectedSameSideReentry({
+        userId: input().userId,
+        brokerConnectionId: input().brokerConnectionId,
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        evaluatedAt: at,
+      }),
+    ).toEqual({ active: false, cooldownRemainingSeconds: 0 });
+    query.mockResolvedValueOnce([{ last_protected_close: '2026-11-11T08:01:20.613Z' }]);
+    const later = await service.loadRecentlyProtectedSameSideReentry({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'GBPUSD',
+      direction: 'SELL',
+      evaluatedAt: new Date('2026-11-11T08:04:21.000Z'),
+    });
+    expect(later).toEqual({ active: false, cooldownRemainingSeconds: 0 });
+  });
+
   it('checks active same-side M1 intent identity before another execution is submitted', async () => {
     const query = jest.fn().mockResolvedValue([{ exists: true }]);
     const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
