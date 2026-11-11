@@ -496,6 +496,13 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     this.logger.log(
       `cTrader DEMO profit protection enabled cadence=${LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS / 1000}s authority=PROFIT_PROTECTION LIVE=false`,
     );
+    this.logger.log(
+      `Pepperstone cTrader DEMO early-net-giveback protection ` +
+        (process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK === 'enabled'
+          ? 'ENABLED_DEMO_ONLY'
+          : 'DISABLED_SHADOW_ONLY') +
+        ' LIVE=false originalBrokerTP_SL=UNCHANGED',
+    );
   }
 
   onModuleDestroy(): void {
