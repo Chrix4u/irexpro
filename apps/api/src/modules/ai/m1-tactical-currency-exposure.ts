@@ -2,6 +2,66 @@ import { decomposeCurrencyRisk, type ForexDirection } from './adaptive-currency-
 
 export const M1_ALIGNED_CURRENCY_REDUCE_PERCENT = 2;
 export const M1_ALIGNED_CURRENCY_BLOCK_PERCENT = 3;
+// Pepperstone DEMO loss-control pilot. These limits are NOT changed for
+// generic cTrader, IC Markets, PAPER or any LIVE broker. The target sizes
+// down qualified signals instead of categorically banning currency pairs.
+export const M1_PEPPERSTONE_DEMO_MAX_TRADE_RISK_PERCENT = 0.25;
+export const M1_PEPPERSTONE_DEMO_ALIGNED_CURRENCY_TARGET_PERCENT = 1;
+export const M1_PEPPERSTONE_DEMO_ALIGNED_CURRENCY_BLOCK_PERCENT = 1.25;
+
+export function capM1DemoRequestedVolumeByRisk(input: {
+  allocatedCapital: number;
+  instrument: string;
+  entryPrice: number;
+  stopLoss: number;
+  requestedVolumeCap: number;
+  maxTradeRiskPercent?: number;
+  volumeStep?: number;
+}): { volumeCap: number; requestedRiskAtStop: number | null; permittedRiskAtStop: number | null } {
+  const step = input.volumeStep ?? 0.001;
+  const maximumPercent = input.maxTradeRiskPercent ?? M1_PEPPERSTONE_DEMO_MAX_TRADE_RISK_PERCENT;
+  if (
+    !Number.isFinite(input.allocatedCapital) ||
+    input.allocatedCapital <= 0 ||
+    !Number.isFinite(input.requestedVolumeCap) ||
+    input.requestedVolumeCap <= 0 ||
+    !Number.isFinite(step) ||
+    step <= 0 ||
+    !Number.isFinite(maximumPercent) ||
+    maximumPercent <= 0
+  ) {
+    return { volumeCap: 0, requestedRiskAtStop: null, permittedRiskAtStop: null };
+  }
+  const requestedRiskAtStop = m1UsdRiskAtStop({
+    instrument: input.instrument,
+    lotSize: input.requestedVolumeCap,
+    entryPrice: input.entryPrice,
+    stopLoss: input.stopLoss,
+  });
+  if (requestedRiskAtStop === null)
+    return {
+      volumeCap: 0,
+      requestedRiskAtStop: null,
+      permittedRiskAtStop: null,
+    };
+  const maxRisk = (input.allocatedCapital * maximumPercent) / 100;
+  const rawAllowed = Math.min(
+    input.requestedVolumeCap,
+    (input.requestedVolumeCap * maxRisk) / requestedRiskAtStop,
+  );
+  // Floor, never ceil: never exceed the requested position or DEMO risk cap.
+  const volumeCap = Number((Math.floor(rawAllowed / step + 1e-9) * step).toFixed(8));
+  const permittedRiskAtStop =
+    volumeCap > 0
+      ? m1UsdRiskAtStop({
+          instrument: input.instrument,
+          lotSize: volumeCap,
+          entryPrice: input.entryPrice,
+          stopLoss: input.stopLoss,
+        })
+      : null;
+  return { volumeCap, requestedRiskAtStop, permittedRiskAtStop };
+}
 
 export interface M1CurrencyRiskPosition {
   instrument: string;
@@ -76,6 +136,8 @@ export function findLargestClearM1Volume(input: {
   requestedVolumeCap: number;
   productFloor: number;
   volumeStep: number;
+  alignedReducePercent?: number;
+  alignedBlockPercent?: number;
 }): {
   allowed: boolean;
   volumeCap: number;
@@ -97,6 +159,8 @@ export function findLargestClearM1Volume(input: {
         direction: input.candidate.direction,
         riskAtStop: riskAtStop ?? 0,
       },
+      reduceAtPercent: input.alignedReducePercent,
+      blockAtPercent: input.alignedBlockPercent,
     });
   };
 
@@ -226,6 +290,8 @@ export function evaluateM1TacticalCurrencyExposure(input: {
   allocatedCapital: number;
   positions: M1CurrencyRiskPosition[];
   candidate: { instrument: string; direction: ForexDirection; riskAtStop: number };
+  reduceAtPercent?: number;
+  blockAtPercent?: number;
 }): M1CurrencyExposureDecision {
   if (!Number.isFinite(input.allocatedCapital) || input.allocatedCapital <= 0) {
     return blocked('ALLOCATION_UNAVAILABLE', input.allocatedCapital);
@@ -270,10 +336,20 @@ export function evaluateM1TacticalCurrencyExposure(input: {
     ...candidateCurrencies.map((currency) => Math.abs(projectedCurrencyRisk[currency] ?? 0)),
   );
   const projectedAlignedRiskPercent = (projectedAlignedRisk / input.allocatedCapital) * 100;
+  const reduceAtPercent = input.reduceAtPercent ?? M1_ALIGNED_CURRENCY_REDUCE_PERCENT;
+  const blockAtPercent = input.blockAtPercent ?? M1_ALIGNED_CURRENCY_BLOCK_PERCENT;
+  if (
+    !Number.isFinite(reduceAtPercent) ||
+    reduceAtPercent <= 0 ||
+    !Number.isFinite(blockAtPercent) ||
+    blockAtPercent <= reduceAtPercent
+  ) {
+    return blocked('RISK_EVIDENCE_INCOMPLETE', input.allocatedCapital);
+  }
   const capacity =
-    projectedAlignedRiskPercent >= M1_ALIGNED_CURRENCY_BLOCK_PERCENT
+    projectedAlignedRiskPercent >= blockAtPercent
       ? 'BLOCKED'
-      : projectedAlignedRiskPercent >= M1_ALIGNED_CURRENCY_REDUCE_PERCENT
+      : projectedAlignedRiskPercent >= reduceAtPercent
         ? 'REDUCED'
         : 'CLEAR';
   return {

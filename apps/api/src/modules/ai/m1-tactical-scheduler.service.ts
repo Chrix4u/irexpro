@@ -121,6 +121,9 @@ import {
 import {
   evaluateM1TacticalCurrencyExposure,
   findLargestClearM1Volume,
+  capM1DemoRequestedVolumeByRisk,
+  M1_PEPPERSTONE_DEMO_ALIGNED_CURRENCY_TARGET_PERCENT,
+  M1_PEPPERSTONE_DEMO_ALIGNED_CURRENCY_BLOCK_PERCENT,
   type M1CurrencyExposureDecision,
 } from './m1-tactical-currency-exposure';
 
@@ -2222,6 +2225,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     brokerConnectionId: string,
     candidate: M1TacticalCandidate,
     requestedVolumeCap: number,
+    pepperstoneDemoRiskPilot = false,
   ): Promise<{
     allowed: boolean;
     volumeCap: number;
@@ -2272,6 +2276,16 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       return { allowed: false, volumeCap: 0, decision, productFloorBlocked: false };
     }
 
+    const riskAdjustedVolumeCap = pepperstoneDemoRiskPilot
+      ? capM1DemoRequestedVolumeByRisk({
+          allocatedCapital,
+          instrument: candidate.instrument,
+          entryPrice: candidate.entry,
+          stopLoss: candidate.stopLoss,
+          requestedVolumeCap,
+          volumeStep: 0.001,
+        }).volumeCap
+      : requestedVolumeCap;
     return findLargestClearM1Volume({
       allocatedCapital,
       positions,
@@ -2281,7 +2295,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         entryPrice: candidate.entry,
         stopLoss: candidate.stopLoss,
       },
-      requestedVolumeCap,
+      requestedVolumeCap: riskAdjustedVolumeCap,
+      ...(pepperstoneDemoRiskPilot
+        ? {
+            alignedReducePercent: M1_PEPPERSTONE_DEMO_ALIGNED_CURRENCY_TARGET_PERCENT,
+            alignedBlockPercent: M1_PEPPERSTONE_DEMO_ALIGNED_CURRENCY_BLOCK_PERCENT,
+          }
+        : {}),
       // Screening floor only, not permission to execute a 0.001-lot trade.
       productFloor: Number(PAPER_BROKER_AWARE_EXPOSURE_SEARCH_FLOOR),
       // This is a pre-screen, NOT executable broker sizing. Broker spec,
@@ -2365,11 +2385,61 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       return;
     }
 
+    // This control acts ONLY on the exact owned Pepperstone cTrader DEMO
+    // connection. Existing generic cTrader/IC Markets/PAPER/LIVE sizing is
+    // unchanged. The same-side cooldown follows only a confirmed broker
+    // PROFIT_PROTECTION close; it is NOT a scanner-wide trade-rate throttle.
+    let pepperstoneDemoRiskPilot = false;
+    if (professionalDemoPhase) {
+      try {
+        pepperstoneDemoRiskPilot = await this.evidence.isPepperstoneDemoBrokerConnection({
+          userId,
+          brokerConnectionId,
+        });
+        if (pepperstoneDemoRiskPilot) {
+          const recentProtectedExit = await this.evidence.loadRecentlyProtectedSameSideReentry({
+            userId,
+            brokerConnectionId,
+            instrument: candidate.instrument,
+            direction: candidate.direction,
+            evaluatedAt: decisionTime,
+          });
+          if (recentProtectedExit.active) {
+            await this.evidence.markOutcomeState(
+              decisionId,
+              'RISK_REJECTED',
+              new Date(),
+              'M1_PEPPERSTONE_DEMO_SAME_SIDE_PROTECTED_EXIT_COOLDOWN ' +
+                `remainingSeconds=${recentProtectedExit.cooldownRemainingSeconds} ` +
+                'sameInstrument=true sameDirection=true otherPairsUnaffected=true',
+            );
+            return;
+          }
+        }
+      } catch (error) {
+        // A missing broker identity or recent-exit history must not silently
+        // revert to the old unprotected 4-lot sizing path for this DEMO.
+        await this.evidence.markOutcomeState(
+          decisionId,
+          'RISK_REJECTED',
+          new Date(),
+          'M1_DEMO_BROKER_SCOPE_OR_REENTRY_HISTORY_UNAVAILABLE',
+        );
+        this.logger.warn(
+          'M1 DEMO broker risk pilot evidence unavailable instrument=' +
+            candidate.instrument +
+            ' reason=' +
+            (error as Error).message,
+        );
+        return;
+      }
+    }
     const currencyExposureGuard = await this.resolveM1CurrencyExposureGuard(
       userId,
       brokerConnectionId,
       candidate,
       executionVolumeCap,
+      pepperstoneDemoRiskPilot,
     );
     if (!currencyExposureGuard.allowed) {
       const reason = currencyExposureGuard.productFloorBlocked
@@ -2593,6 +2663,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ],
           m1_scout_requested_volume_cap: executionVolumeCap,
           m1_scout_execution_volume_cap: finalExecutionVolumeCap,
+          m1_pepperstone_demo_reentry_and_risk_pilot: pepperstoneDemoRiskPilot,
+          m1_pepperstone_demo_max_risk_percent: pepperstoneDemoRiskPilot ? 0.25 : null,
+          m1_pepperstone_demo_aligned_target_percent: pepperstoneDemoRiskPilot
+            ? M1_PEPPERSTONE_DEMO_ALIGNED_CURRENCY_TARGET_PERCENT
+            : null,
+          m1_pepperstone_demo_pre_screen_lot_cap: finalExecutionVolumeCap,
           m1_currency_exposure_capacity: currencyExposureGuard.decision.capacity,
           m1_currency_exposure_reason: currencyExposureGuard.decision.reason,
           m1_currency_exposure_projected_aligned_risk:

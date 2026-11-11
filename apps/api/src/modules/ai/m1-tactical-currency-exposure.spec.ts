@@ -1,6 +1,7 @@
 import {
   evaluateM1TacticalCurrencyExposure,
   findLargestClearM1Volume,
+  capM1DemoRequestedVolumeByRisk,
   m1UsdRiskAtStop,
 } from './m1-tactical-currency-exposure';
 
@@ -147,6 +148,100 @@ describe('M1 tactical currency exposure', () => {
     expect(result.allowed).toBe(false);
     expect(result.volumeCap).toBe(0);
     expect(result.productFloorBlocked).toBe(true);
+  });
+
+  it('reduces a 4-lot EURUSD entry with 0.50% stop risk to 2 lots at a 0.25% DEMO cap', () => {
+    const decision = capM1DemoRequestedVolumeByRisk({
+      allocatedCapital: 40000,
+      instrument: 'EURUSD',
+      entryPrice: 1.11535,
+      stopLoss: 1.11585,
+      requestedVolumeCap: 4,
+    });
+    expect(decision).toMatchObject({ volumeCap: 2 });
+    expect(decision.requestedRiskAtStop).toBeCloseTo(200, 2);
+    expect(decision.permittedRiskAtStop).toBeCloseTo(100, 2);
+  });
+
+  it('reduces a 4-lot USDCHF entry with $241 initial risk below $100 without up-sizing', () => {
+    const decision = capM1DemoRequestedVolumeByRisk({
+      allocatedCapital: 40000,
+      instrument: 'USDCHF',
+      entryPrice: 0.82852,
+      stopLoss: 0.82802,
+      requestedVolumeCap: 4,
+    });
+    expect(decision.volumeCap).toBeLessThan(2);
+    expect(decision.volumeCap).toBeGreaterThan(1);
+    expect(decision.permittedRiskAtStop).toBeLessThanOrEqual(100.001);
+  });
+
+  it('leaves a valid 0.20-lot scout unchanged rather than forcing a larger order', () => {
+    expect(
+      capM1DemoRequestedVolumeByRisk({
+        allocatedCapital: 40000,
+        instrument: 'USDJPY',
+        entryPrice: 158.922,
+        stopLoss: 158.872,
+        requestedVolumeCap: 0.2,
+      }).volumeCap,
+    ).toBe(0.2);
+  });
+
+  it('applies a 1% shared-USD target only when explicitly configured and preserves opposed positions', () => {
+    const args = {
+      allocatedCapital: 40000,
+      positions: [{ instrument: 'GBPUSD', direction: 'SELL' as const, riskAtStop: 310 }],
+      candidate: {
+        instrument: 'EURUSD',
+        direction: 'SELL' as const,
+        entryPrice: 1.12,
+        stopLoss: 1.1205,
+      },
+      requestedVolumeCap: 2,
+      productFloor: 0.001,
+      volumeStep: 0.001,
+    };
+    const normal = findLargestClearM1Volume(args);
+    const pilot = findLargestClearM1Volume({
+      ...args,
+      alignedReducePercent: 1,
+      alignedBlockPercent: 1.25,
+    });
+    expect(normal.volumeCap).toBe(2);
+    expect(pilot.allowed).toBe(true);
+    expect(pilot.volumeCap).toBeGreaterThan(0);
+    expect(pilot.volumeCap).toBeLessThan(2);
+    expect(pilot.decision.projectedAlignedRiskPercent).toBeLessThanOrEqual(1.001);
+    const opposite = findLargestClearM1Volume({
+      ...args,
+      candidate: { ...args.candidate, direction: 'BUY' as const },
+      alignedReducePercent: 1,
+      alignedBlockPercent: 1.25,
+    });
+    expect(opposite.allowed).toBe(true);
+    expect(opposite.volumeCap).toBe(2);
+  });
+
+  it('rejects invalid negative risk or allocation rather than guessing a 0.001 lot', () => {
+    expect(
+      capM1DemoRequestedVolumeByRisk({
+        allocatedCapital: 0,
+        instrument: 'EURUSD',
+        entryPrice: 1.1,
+        stopLoss: 1.101,
+        requestedVolumeCap: 4,
+      }).volumeCap,
+    ).toBe(0);
+    expect(
+      capM1DemoRequestedVolumeByRisk({
+        allocatedCapital: 40000,
+        instrument: 'EURUSD',
+        entryPrice: 0,
+        stopLoss: 1.101,
+        requestedVolumeCap: 4,
+      }).volumeCap,
+    ).toBe(0);
   });
 
   it('fails closed when allocation or risk evidence is unusable', () => {
