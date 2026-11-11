@@ -32,6 +32,8 @@ describe('LiveDemoProfitProtectionService', () => {
     path_peak_observed_at: new Date('2026-10-28T09:00:00.000Z'),
     initial_risk_pnl: '9.00',
     stop_loss: '1.11250',
+    take_profit: '1.11380',
+    path_last_observed_at: new Date('2026-10-28T09:04:54.000Z'),
     opened_at: new Date('2026-10-28T09:01:00.000Z'),
     is_m1_strategy: true,
     strategy_route: 'TREND_CONTINUATION',
@@ -51,8 +53,10 @@ describe('LiveDemoProfitProtectionService', () => {
     recoveryRows: Array<Record<string, unknown>> = [],
     brokerId = 'ctrader',
     existingRescueAuditRows: Array<Record<string, unknown>> = [],
+    fxFamilyFeeRows: Array<Record<string, unknown>> = [],
   ) {
     const query = jest.fn().mockImplementation(async (sql: string) => {
+      if (sql.includes('fx_family_fees')) return fxFamilyFeeRows;
       if (sql.includes('past_fees')) return feeRows;
       if (sql.includes('AS same_side_continuation_at')) return patienceRows;
       if (sql.includes('AS aligned_m5')) return recoveryRows;
@@ -149,6 +153,160 @@ describe('LiveDemoProfitProtectionService', () => {
     expect(
       evaluateAlternativeDemoProfitLockShadow({ ...baseline, initialRiskPnl: null }),
     ).toMatchObject({ wouldClose: false, firstCrossing: false });
+  });
+
+  it('closes only the already-owned Pepperstone DEMO position under an explicitly enabled, positive-after-fee lock', async () => {
+    const prior = process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = 'enabled';
+    try {
+      const h = harness(
+        [
+          candidate({
+            max_favorable_pnl: '10.00',
+            profit_giveback: '3.00',
+            path_observation_count: 7,
+            initial_risk_pnl: '9.00',
+          }),
+        ],
+        '5.00',
+        'DEMO',
+        [],
+        '1.11340',
+        [],
+        undefined,
+        [],
+        [],
+        [],
+        'pepperstone-ctrader',
+        [],
+        [{ sample_count: 17, p90_cost_per_lot: '6.00' }],
+      );
+      await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+      expect(h.query).toHaveBeenCalledWith(expect.stringContaining('fx_family_fees'), [
+        'user-1',
+        'conn-1',
+        'EUR',
+        '2026-10-28T09:05:00.000Z',
+      ]);
+      expect(h.executionService.closeTrade).toHaveBeenCalledTimes(1);
+      expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+        'trade-1',
+        'user-1',
+        TradeCloseReason.PROFIT_PROTECTION,
+      );
+      expect(h.query).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE trading.trades'),
+        expect.any(Array),
+      );
+    } finally {
+      if (prior === undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = prior;
+    }
+  });
+
+  it('holds Pepperstone DEMO if round-trip fee evidence is missing even if gross profit is falling', async () => {
+    const prior = process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = 'enabled';
+    try {
+      const h = harness(
+        [
+          candidate({
+            max_favorable_pnl: '10',
+            profit_giveback: '3',
+            path_observation_count: 7,
+            initial_risk_pnl: '9',
+          }),
+        ],
+        '5.00',
+        'DEMO',
+        [],
+        '1.11340',
+        [],
+        undefined,
+        [],
+        [],
+        [],
+        'pepperstone-ctrader',
+      );
+      await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+    } finally {
+      if (prior === undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = prior;
+    }
+  });
+
+  it('never uses Pepperstone DEMO enablement to close a LIVE broker position', async () => {
+    const prior = process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = 'enabled';
+    try {
+      const h = harness(
+        [
+          candidate({
+            max_favorable_pnl: '10',
+            profit_giveback: '3',
+            path_observation_count: 7,
+          }),
+        ],
+        '5.00',
+        'LIVE',
+        [],
+        '1.11340',
+        [],
+        undefined,
+        [],
+        [],
+        [],
+        'pepperstone-ctrader',
+        [],
+        [{ sample_count: 17, p90_cost_per_lot: '6' }],
+      );
+      await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+      expect(h.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('fx_family_fees'),
+        expect.anything(),
+      );
+    } finally {
+      if (prior === undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = prior;
+    }
+  });
+
+  it('does not close with mismatched broker TP even when the feature is explicitly enabled', async () => {
+    const prior = process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = 'enabled';
+    try {
+      const h = harness(
+        [
+          candidate({
+            max_favorable_pnl: '10',
+            profit_giveback: '3',
+            path_observation_count: 7,
+          }),
+        ],
+        '5.00',
+        'DEMO',
+        [],
+        '1.11340',
+        [],
+        undefined,
+        [],
+        [],
+        [],
+        'pepperstone-ctrader',
+        [],
+        [{ sample_count: 17, p90_cost_per_lot: '6' }],
+      );
+      const snapshot = await h.brokerService.getOpenPositionsForConnection('conn-1', 'user-1');
+      snapshot.positions[0].takeProfit = '1.11400';
+      h.brokerService.getOpenPositionsForConnection.mockResolvedValue(snapshot);
+      await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+    } finally {
+      if (prior === undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = prior;
+    }
   });
 
   it('audits Pepperstone first hypothetical profit-lock crossing with causal fee evidence but NEVER exits', async () => {
