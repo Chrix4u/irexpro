@@ -134,6 +134,7 @@ export interface DemoFocusedEntryDiagnosticView {
   planBAdmittedDecisions: number;
   planBReversalTimingHeldDecisions: number;
   planBReversalM1AbstainedDecisions: number;
+  planBAdmittedM1ContinuationRouteMismatchDecisions: number;
   rolloverRegimeDecisions: number;
   primaryPathDecisions: number;
   primaryReliabilityVetoDecisions: number;
@@ -172,6 +173,7 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
     value.planBAdmittedDecisions,
     value.planBReversalTimingHeldDecisions,
     value.planBReversalM1AbstainedDecisions,
+    value.planBAdmittedM1ContinuationRouteMismatchDecisions,
     value.rolloverRegimeDecisions,
     value.primaryPathDecisions,
     value.primaryReliabilityVetoDecisions,
@@ -206,6 +208,9 @@ export function hasDemoFocusedEntryDiagnosticUiShape(
   if ((value.planBReversalM1AbstainedDecisions as number) >
         (value.planBReversalTimingHeldDecisions as number) ||
       (value.planBReversalTimingHeldDecisions as number) > evaluatedCount ||
+      (value.planBAdmittedM1ContinuationRouteMismatchDecisions as number) >
+        (value.planBAdmittedDecisions as number) ||
+      (value.planBAdmittedM1ContinuationRouteMismatchDecisions as number) > candidateCount ||
       (value.rolloverRegimeDecisions as number) > evaluatedCount ||
       primaryCount > candidateCount ||
     (value.planBAdmittedDecisions as number) > candidateCount ||
