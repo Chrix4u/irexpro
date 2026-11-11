@@ -1857,6 +1857,29 @@ describe('CTraderAdapter', () => {
       ).toBe(false);
     });
 
+    it('rejects a historical response carrying another provider account ID', async () => {
+      server.on(CTRADER_PAYLOAD_TYPE.GET_TICKDATA_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.GET_TICKDATA_RES,
+          {
+            ctidTraderAccountId: Number(SECOND_ACCOUNT_ID),
+            hasMore: false,
+            tickData: [{ timestamp: startMs + 10_000, tick: 110010 }],
+          },
+          envelope,
+        ),
+      );
+      await connectDemo();
+      await expect(
+        adapter.getHistoricalBrokerTicksForResearch('EURUSD', start, end),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.BROKER_SERVER_ERROR });
+      const reads = server.requests.filter(
+        (x) => x.payloadType === CTRADER_PAYLOAD_TYPE.GET_TICKDATA_REQ,
+      );
+      expect(reads).toHaveLength(1);
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+    });
+
     it('refuses a truncated provider page instead of treating incomplete history as a win', async () => {
       server.on(CTRADER_PAYLOAD_TYPE.GET_TICKDATA_REQ, (payload, envelope) =>
         echo(

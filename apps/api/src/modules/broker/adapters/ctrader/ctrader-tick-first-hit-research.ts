@@ -3,8 +3,10 @@
  * historical ticks. NO broker order entry, account mutation or AI authority.
  *
  * cTrader returns NEWEST-FIRST ticks: the first timestamp is absolute Unix
- * milliseconds, each subsequent timestamp is a positive time *difference*
- * from the previous, newer tick. Tick price is integer price × 100000.
+ * milliseconds, each subsequent timestamp is a SIGNED (normally negative)
+ * delta from the previous, newer tick. Tick PRICE is also delta-encoded:
+ * the first tick is the absolute price scaled by 100000, subsequent
+ * ticks are signed price deltas from the previous newer tick.
  *
  * IMPORTANT: A hasMore page is incomplete and must NEVER be used to declare
  * stop-first or target-first. Separate BID/ASK streams do not establish
@@ -40,7 +42,7 @@ function exactSafeInt(value: unknown): number {
     throw new Error('INVALID_CTRADER_TICK_INTEGER');
   }
   const n = Number(value);
-  if (!Number.isSafeInteger(n) || n < 0) throw new Error('INVALID_CTRADER_TICK_INTEGER');
+  if (!Number.isSafeInteger(n)) throw new Error('INVALID_CTRADER_TICK_INTEGER');
   return n;
 }
 
@@ -70,23 +72,31 @@ export function decodeCtraderHistoricalTickSide(
   }
   const reversed: CtraderResearchTick[] = [];
   let lastTime = 0;
+  let lastPrice = 0;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i] as Record<string, unknown> | null;
     if (!row || typeof row !== 'object') throw new Error('INVALID_CTRADER_TICK_ROW');
     const timeValue = exactSafeInt(row.timestamp);
-    const rawPrice = exactSafeInt(row.tick);
-    if (rawPrice <= 0) throw new Error('INVALID_CTRADER_TICK_PRICE');
+    const tickValue = exactSafeInt(row.tick);
     if (i === 0) {
+      // First row is ABSOLUTE Unix time and ABSOLUTE price ×100000.
       lastTime = timeValue;
+      lastPrice = tickValue;
     } else {
-      // Reverse chronology: timestamp encodes delta from PRIOR NEWER tick.
-      if (timeValue > lastTime) throw new Error('INVALID_CTRADER_RELATIVE_TIME');
-      lastTime -= timeValue;
+      // Official broker data, observed on Pepperstone DEMO 11 Nov 2026:
+      // negative timestamp delta and either positive/negative PRICE delta.
+      // Both are relative to the PRIOR, NEWER tick (newest-first wire).
+      if (timeValue > 0) throw new Error('INVALID_CTRADER_RELATIVE_TIME');
+      lastTime += timeValue;
+      lastPrice += tickValue;
     }
-    if (lastTime < fromMs || lastTime > toMs) {
+    if (!Number.isSafeInteger(lastTime) || lastTime < fromMs || lastTime > toMs) {
       throw new Error('CTRADER_TICK_OUTSIDE_REQUEST_WINDOW');
     }
-    reversed.push({ atMs: lastTime, price: rawPrice / 100_000 });
+    if (!Number.isSafeInteger(lastPrice) || lastPrice <= 0) {
+      throw new Error('INVALID_CTRADER_TICK_PRICE');
+    }
+    reversed.push({ atMs: lastTime, price: lastPrice / 100_000 });
   }
   // Reverse without sorting, preserving provider order within equal-ms ticks.
   return reversed.reverse();
