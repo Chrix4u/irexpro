@@ -637,7 +637,8 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               if (snapshot.connection.brokerId === 'pepperstone-ctrader') {
                 const observedAtPeak = finite(trade.max_favorable_pnl) ?? 0;
                 const eligibleForRescueResearch =
-                  risk !== null && risk > 0 &&
+                  risk !== null &&
+                  risk > 0 &&
                   observedAtPeak >= 0.5 * risk &&
                   currentPnl <= -0.25 * risk &&
                   currentPnl > -0.85 * risk;
@@ -660,27 +661,30 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                       previousPeakPnl: observedAtPeak,
                       currentPnl,
                       previousObservationCount: Math.max(
-                        0, Number(trade.path_observation_count) || 0,
+                        0,
+                        Number(trade.path_observation_count) || 0,
                       ),
-                      elapsedMinutes: openedAt && Number.isFinite(openedAt.getTime())
-                        ? (observedAt.getTime() - openedAt.getTime()) / 60_000
-                        : Number.NaN,
+                      elapsedMinutes:
+                        openedAt && Number.isFinite(openedAt.getTime())
+                          ? (observedAt.getTime() - openedAt.getTime()) / 60_000
+                          : Number.NaN,
                       authoritativeStop: finite(trade.stop_loss),
                       brokerStop: finite(position.stopLoss),
                       currentPrice: finite(position.currentPrice),
                       brokerEntryPrice: finite(position.openPrice),
-                      m1: m1 ? {
-                        completedBars: m1.completedBars,
-                        adverseBars: m1.adverseBars,
-                        liveQuoteBars: m1.liveQuoteBars ?? 0,
-                        consecutiveLiveQuoteBars: m1.consecutiveLiveQuoteBars ?? 0,
-                        alignedLatestBodyPressure: m1.alignedLatestBodyPressure,
-                        alignedMomentum3: m1.alignedMomentum3,
-                        latestAgeSeconds: m1.latestAgeSeconds,
-                      } : null,
+                      m1: m1
+                        ? {
+                            completedBars: m1.completedBars,
+                            adverseBars: m1.adverseBars,
+                            liveQuoteBars: m1.liveQuoteBars ?? 0,
+                            consecutiveLiveQuoteBars: m1.consecutiveLiveQuoteBars ?? 0,
+                            alignedLatestBodyPressure: m1.alignedLatestBodyPressure,
+                            alignedMomentum3: m1.alignedMomentum3,
+                            latestAgeSeconds: m1.latestAgeSeconds,
+                          }
+                        : null,
                     });
-                    const previousCurrentPnl =
-                      previousPeak - (finite(trade.profit_giveback) ?? 0);
+                    const previousCurrentPnl = previousPeak - (finite(trade.profit_giveback) ?? 0);
                     // Emit at most one durable audit for the initial loss-band
                     // crossing, not another event on every five-second scan.
                     // If M1 evidence is missing we log nothing and HOLD.

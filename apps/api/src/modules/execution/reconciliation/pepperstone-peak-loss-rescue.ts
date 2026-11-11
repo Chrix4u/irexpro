@@ -111,10 +111,7 @@ export function evaluatePepperstonePeakLossRescue(input: {
   }
   const peakR = input.previousPeakPnl / risk;
   const currentR = input.currentPnl / risk;
-  if (
-    !Number.isFinite(input.previousObservationCount) ||
-    input.previousObservationCount < 12
-  ) {
+  if (!Number.isFinite(input.previousObservationCount) || input.previousObservationCount < 12) {
     return report('INSUFFICIENT_BROKER_OBSERVATIONS', peakR, currentR);
   }
   if (!Number.isFinite(input.elapsedMinutes) || input.elapsedMinutes < 3) {
@@ -145,9 +142,10 @@ export function evaluatePepperstonePeakLossRescue(input: {
       ? input.currentPrice <= input.authoritativeStop
       : input.currentPrice >= input.authoritativeStop;
   if (breached) return report('BROKER_STOP_ALREADY_BREACHED', peakR, currentR);
-  const adversePrice = input.tradeDirection === 'BUY'
-    ? input.currentPrice < input.brokerEntryPrice
-    : input.currentPrice > input.brokerEntryPrice;
+  const adversePrice =
+    input.tradeDirection === 'BUY'
+      ? input.currentPrice < input.brokerEntryPrice
+      : input.currentPrice > input.brokerEntryPrice;
   if (!adversePrice) return report('BROKER_PRICE_NOT_ADVERSE', peakR, currentR);
 
   const m1 = input.m1;
@@ -164,11 +162,7 @@ export function evaluatePepperstonePeakLossRescue(input: {
   ) {
     return report('STALE_OR_INSUFFICIENT_M1_QUOTES', peakR, currentR);
   }
-  if (
-    m1.adverseBars < 2 ||
-    m1.alignedLatestBodyPressure > -0.2 ||
-    m1.alignedMomentum3 > -0.15
-  ) {
+  if (m1.adverseBars < 2 || m1.alignedLatestBodyPressure > -0.2 || m1.alignedMomentum3 > -0.15) {
     return report('DIRECTIONAL_REVERSAL_UNCONFIRMED', peakR, currentR);
   }
   return report('CONFIRMED_PEAK_TO_LOSS_CANDIDATE', peakR, currentR);
