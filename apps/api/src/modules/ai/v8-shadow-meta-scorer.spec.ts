@@ -1,5 +1,7 @@
 import {
   scorePlanBShadowMeta,
+  scorePlanBClockNeutralResearch,
+  PLAN_B_CLOCK_NEUTRAL_RESEARCH_ARTIFACT,
   scoreV8ShadowMeta,
   V8_SHADOW_ADMISSION_THRESHOLD,
   V8_SHADOW_ARTIFACT,
@@ -74,6 +76,39 @@ describe('v8 shadow meta scorer', () => {
 
     expect(cadSell.probability).toBeCloseTo(chfSell.probability, 12);
     expect(cadSell.expectedR).toBeCloseTo(chfSell.expectedR, 12);
+  });
+
+  it('persists a clock-neutral research comparator without modifying executable Plan B', () => {
+    const common = {
+      instrument: 'USDJPY',
+      direction: 'BUY' as const,
+      confidence: 0.7,
+      extensionAtr: 0.55,
+      volatilityScore: 0.2,
+      emaSeparation: 0.65,
+      mtfStrength: 0.6,
+      rsi14: 58,
+    };
+    const noon = { ...common, scanTime: new Date('2026-11-11T12:00:00Z') };
+    const evening = { ...common, scanTime: new Date('2026-11-11T20:00:00Z') };
+    const activeNoon = scorePlanBShadowMeta(noon);
+    const activeEvening = scorePlanBShadowMeta(evening);
+    const researchNoon = scorePlanBClockNeutralResearch(noon);
+    const researchEvening = scorePlanBClockNeutralResearch(evening);
+
+    expect(activeNoon.probability).toBeGreaterThan(activeEvening.probability);
+    expect(researchNoon.hourNeutralProbability).toBeCloseTo(
+      researchEvening.hourNeutralProbability, 12,
+    );
+    expect(researchNoon.activePlanBProbability).toBe(activeNoon.probability);
+    expect(researchEvening.activePlanBProbability).toBe(activeEvening.probability);
+    expect(researchNoon.artifact).toBe(PLAN_B_CLOCK_NEUTRAL_RESEARCH_ARTIFACT);
+    expect(researchEvening.mode).toBe('RESEARCH_ONLY');
+    expect(researchEvening.modifiesExecution).toBe(false);
+    expect(researchEvening.calibrationQualified).toBe(false);
+    expect(researchEvening).not.toHaveProperty('executable');
+    expect(researchEvening).not.toHaveProperty('admitted');
+    expect(scorePlanBShadowMeta(evening)).toEqual(activeEvening);
   });
 
   it('rejects invalid numeric inputs instead of inventing a score', () => {

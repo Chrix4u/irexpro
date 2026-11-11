@@ -64,6 +64,7 @@ import {
   type PlanBEnsembleScore,
   type PlanBPortfolioPosition,
 } from './plan-b-multimodel-shadow';
+import { scorePlanBClockNeutralResearch } from './v8-shadow-meta-scorer';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import type { HighConvictionOverlay } from './high-conviction-overlay';
 import { evaluateProductionQualificationShadow } from './production-qualification-shadow';
@@ -2178,6 +2179,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           : 'irexpro-m1-tactical',
         m1TacticalRole: professionalDemoPhase ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE',
         multimodelEnsemble: multimodelDemo?.ensemble ?? null,
+        // Clock-factor counterfactual is a persisted, prospective RESEARCH
+        // SIDE-CAR. Nothing consumes it for execution, admission, SL/TP,
+        // portfolio allocation, or deployment/promotion.
+        planBClockNeutralResearch: multimodelDemo
+          ? scorePlanBClockNeutralResearch(
+              m1CandidateToPlanBInput(candidate, features, decisionTime),
+            )
+          : null,
         multimodelGovernance: multimodelDemo?.governance ?? null,
         multimodelTrainedExpert: multimodelDemo?.trainedExpert ?? null,
         multimodelAuthority: multimodelDemo?.authority ?? null,

@@ -5,6 +5,15 @@ export const V8_SHADOW_TARGET_R_MULTIPLE = 2.5 / 1.5;
 export const PLAN_B_SHADOW_ARTIFACT = 'plan-b-online-meta-v2-instrument-neutral';
 export const PLAN_B_SHADOW_MODE = 'PROSPECTIVE_SHADOW_ONLY';
 export const PLAN_B_SHADOW_ADMISSION_THRESHOLD = 0.40828402366863903;
+/**
+ * Prospective research only: measures the development-era UTC-hour harmonic
+ * contribution without assigning trading authority or recalibrating a threshold.
+ * Broker-native outcomes and purged out-of-sample validation are required
+ * before any session-neutral model may govern executable signals.
+ */
+export const PLAN_B_CLOCK_NEUTRAL_RESEARCH_ARTIFACT =
+  'plan-b-hour-neutral-counterfactual-research-v1';
+
 
 export interface V8ShadowMetaInput {
   instrument: string;
@@ -156,5 +165,38 @@ export function scorePlanBShadowMeta(input: V8ShadowMetaInput): PlanBShadowMetaS
     expectedR,
     admitted,
     reason: admitted ? 'ADMIT' : 'REJECT_EXPECTED_VALUE',
+  };
+}
+
+
+/**
+ * An independent diagnostic; the active Plan B meta score is not modified.
+ *
+ * The legacy threshold is displayed only as a counterfactual reference. It
+ * was NOT trained/calibrated for this hour-neutral model and MUST NOT be used
+ * to approve an order. No runtime route, admission, cost, or risk gate reads
+ * this research output.
+ */
+export function scorePlanBClockNeutralResearch(input: V8ShadowMetaInput) {
+  const active = scorePlanBShadowMeta(input);
+  const hour = new Date(input.scanTime).getUTCHours();
+  const clockLogitContribution =
+    (BASE_WEIGHTS.hour_sin ?? 0) * Math.sin((2 * Math.PI * hour) / 24) +
+    (BASE_WEIGHTS.hour_cos ?? 0) * Math.cos((2 * Math.PI * hour) / 24);
+  const originalLogit = Math.log(active.probability / (1 - active.probability));
+  const hourNeutralProbability = sigmoid(originalLogit - clockLogitContribution);
+  return {
+    artifact: PLAN_B_CLOCK_NEUTRAL_RESEARCH_ARTIFACT,
+    mode: 'RESEARCH_ONLY' as const,
+    modifiesExecution: false as const,
+    calibrationQualified: false as const,
+    hourUtc: hour,
+    clockLogitContribution,
+    activePlanBProbability: active.probability,
+    activePlanBAdmitted: active.admitted,
+    hourNeutralProbability,
+    legacyThresholdForComparisonOnly: PLAN_B_SHADOW_ADMISSION_THRESHOLD,
+    crossesLegacyThresholdForComparisonOnly:
+      hourNeutralProbability >= PLAN_B_SHADOW_ADMISSION_THRESHOLD,
   };
 }
