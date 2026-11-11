@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
-
 from unittest import TestCase, main
 
 from app.domain.training.demo_timed_alpha_multihorizon import (
