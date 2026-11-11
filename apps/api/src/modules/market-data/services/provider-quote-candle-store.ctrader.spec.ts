@@ -86,6 +86,59 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
     expect(sql).not.toContain('COUNT(p.*)');
   });
 
+  it('includes positive intraminute observations even if the last broker quote has zero spread', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        bid_close: '1.10000',
+        ask_close: '1.10000',
+        spread_close: '0.00000',
+        last_sample_at: EVALUATED_AT.toISOString(),
+        positive_sample_count: 80,
+        p50_spread: 0.00001,
+        p75_spread: 0.00002,
+        p90_spread: 0.00002,
+        latest_positive_sample_at: '2026-10-18T21:30:00.000Z',
+      },
+    ]);
+    const service = new ProviderQuoteCandleStoreService({ query } as unknown as DataSource);
+    const quote = await service.getLatestPositiveSpreadQuote('ctrader-1', 'EURUSD', EVALUATED_AT);
+    const sql = String(query.mock.calls[0]![0]);
+    // A zero final spread is not proof that earlier live quotes in that
+    // minute lacked positive spreads; the authoritative counter records them.
+    expect(sql).toContain('AND positive_quote_sample_count > 0');
+    expect(sql).not.toContain('AND spread_close > 0');
+    // Zero final-minute spreads must not contaminate the positive-only P90.
+    expect(sql).toContain('CASE WHEN p.spread_close > 0');
+    // An exact last-positive tick time is unavailable: use a conservative
+    // minute-open lower bound, never the potentially later final quote time.
+    expect(sql).toContain("date_trunc('minute', p.last_quote_sample_at)");
+    expect(quote).toMatchObject({
+      positiveSampleCount: 80,
+      spread: '0.0000200000',
+      latestPositiveSampleAt: new Date('2026-10-18T21:30:00.000Z'),
+    });
+  });
+
+  it('fails closed when zero-spread quote minutes have no positive spread price evidence', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        bid_close: '1.10000',
+        ask_close: '1.10000',
+        spread_close: '0.00000',
+        last_sample_at: EVALUATED_AT.toISOString(),
+        positive_sample_count: 80,
+        p50_spread: null,
+        p75_spread: null,
+        p90_spread: null,
+        latest_positive_sample_at: '2026-10-18T21:30:00.000Z',
+      },
+    ]);
+    const service = new ProviderQuoteCandleStoreService({ query } as unknown as DataSource);
+    expect(
+      await service.getLatestPositiveSpreadQuote('ctrader-1', 'EURUSD', EVALUATED_AT),
+    ).toBeNull();
+  });
+
   it('requires a live bid/ask row for the latest positive-spread quote', async () => {
     const query = jest.fn().mockResolvedValue([
       {

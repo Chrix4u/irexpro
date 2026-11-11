@@ -225,12 +225,14 @@ export class ProviderQuoteCandleStoreService {
         ORDER BY last_quote_sample_at DESC
         LIMIT 1
       ), positive AS (
+        -- A minute can contain genuine positive broker spreads but end with
+        -- bid == ask. Preserve those observed sample counts and freshness;
+        -- use only genuinely positive stored close spreads for P50/P75/P90.
         SELECT spread_close, last_quote_sample_at, positive_quote_sample_count
         FROM market_data.provider_quote_candles
         WHERE connection_id = $1
           AND instrument = $2
           AND timeframe = 'M1'
-          AND spread_close > 0
           AND positive_quote_sample_count > 0
           AND last_quote_sample_at > ($3::timestamptz - interval '30 minutes')
           AND last_quote_sample_at <= $3::timestamptz
@@ -241,10 +243,13 @@ export class ProviderQuoteCandleStoreService {
         l.spread_close,
         l.last_sample_at,
         COALESCE(SUM(p.positive_quote_sample_count), 0)::int AS positive_sample_count,
-        percentile_cont(0.50) WITHIN GROUP (ORDER BY p.spread_close::double precision) AS p50_spread,
-        percentile_cont(0.75) WITHIN GROUP (ORDER BY p.spread_close::double precision) AS p75_spread,
-        percentile_cont(0.90) WITHIN GROUP (ORDER BY p.spread_close::double precision) AS p90_spread,
-        MAX(p.last_quote_sample_at) AS latest_positive_sample_at
+        percentile_cont(0.50) WITHIN GROUP (ORDER BY CASE WHEN p.spread_close > 0 THEN p.spread_close::double precision END) AS p50_spread,
+        percentile_cont(0.75) WITHIN GROUP (ORDER BY CASE WHEN p.spread_close > 0 THEN p.spread_close::double precision END) AS p75_spread,
+        percentile_cont(0.90) WITHIN GROUP (ORDER BY CASE WHEN p.spread_close > 0 THEN p.spread_close::double precision END) AS p90_spread,
+        -- The exact timestamp of a positive intraminute tick is not stored.
+        -- Bucket start is a conservative lower bound; using its final quote
+        -- timestamp could falsely make old positive evidence look fresher.
+        MAX(date_trunc('minute', p.last_quote_sample_at)) AS latest_positive_sample_at
       FROM latest l
       LEFT JOIN positive p ON true
       GROUP BY l.bid_close, l.ask_close, l.spread_close, l.last_sample_at
