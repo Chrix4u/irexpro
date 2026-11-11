@@ -684,34 +684,51 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                           }
                         : null,
                     });
-                    const previousCurrentPnl = previousPeak - (finite(trade.profit_giveback) ?? 0);
-                    // Emit at most one durable audit for the initial loss-band
-                    // crossing, not another event on every five-second scan.
-                    // If M1 evidence is missing we log nothing and HOLD.
-                    if (
-                      rescue.wouldReduceDrawdown &&
-                      this.auditService &&
-                      previousCurrentPnl > -0.25 * risk
-                    ) {
-                      await this.auditService.log({
-                        actorUserId: trade.user_id,
-                        action: AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
-                        resourceType: 'Trade',
-                        resourceId: trade.trade_id,
-                        metadata: {
-                          ...rescue,
-                          observedAt: observedAt.toISOString(),
-                          instrument: trade.instrument,
-                          direction: trade.direction,
-                          peakGrossPnl: money(observedAtPeak),
-                          currentGrossPnl: money(currentPnl),
-                          initialRiskPnl: money(risk),
-                          hypotheticalAction: 'WOULD_CLOSE_PEAK_TO_LOSS_RESCUE',
-                          actualAction: 'HOLD_BROKER_TP_SL',
-                          noTradeAuthority: true,
-                          modifiesExecution: false,
-                        },
-                      });
+                    // The M1 confirmation requires two completed adverse bars.
+                    // It may arrive AFTER the first loss-band crossing, so a
+                    // crossing-only audit silently misses the first *confirmed*
+                    // rescue. Deduplicate by trade+artifact in durable audit
+                    // history instead; this branch can NEVER close a position.
+                    if (rescue.wouldReduceDrawdown && this.auditService) {
+                      const logged = (await this.dataSource.query(
+                        `
+                          SELECT id FROM audit.audit_logs
+                          WHERE actor_user_id=$1
+                            AND action=$2 AND resource_type='Trade'
+                            AND resource_id=$3 AND metadata->>'artifact'=$4
+                          LIMIT 1
+                        `,
+                        [
+                          trade.user_id,
+                          AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+                          trade.trade_id,
+                          rescue.artifact,
+                        ],
+                      )) as unknown;
+                      // A failed/invalid idempotence lookup never authorizes
+                      // an audit or changes the broker TP/SL. A restarted
+                      // scanner must not log the same confirmed case again.
+                      if (Array.isArray(logged) && logged.length === 0) {
+                        await this.auditService.log({
+                          actorUserId: trade.user_id,
+                          action: AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+                          resourceType: 'Trade',
+                          resourceId: trade.trade_id,
+                          metadata: {
+                            ...rescue,
+                            observedAt: observedAt.toISOString(),
+                            instrument: trade.instrument,
+                            direction: trade.direction,
+                            peakGrossPnl: money(observedAtPeak),
+                            currentGrossPnl: money(currentPnl),
+                            initialRiskPnl: money(risk),
+                            hypotheticalAction: 'WOULD_CLOSE_PEAK_TO_LOSS_RESCUE',
+                            actualAction: 'HOLD_BROKER_TP_SL',
+                            noTradeAuthority: true,
+                            modifiesExecution: false,
+                          },
+                        });
+                      }
                     }
                   } catch (error) {
                     // No research query or audit failure can suppress the
