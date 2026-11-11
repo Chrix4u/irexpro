@@ -1808,6 +1808,95 @@ describe('CTraderAdapter', () => {
     });
   });
 
+  describe('broker-native historical tick research (DEMO-only, never an order)', () => {
+    const start = new Date('2026-11-11T11:00:00Z');
+    const end = new Date('2026-11-11T11:01:00Z');
+    const startMs = start.getTime();
+
+    it('reads both native BID and ASK sides from exact account and symbol via 2145', async () => {
+      server.on(CTRADER_PAYLOAD_TYPE.GET_TICKDATA_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.GET_TICKDATA_RES,
+          {
+            ctidTraderAccountId: Number(ACCOUNT_ID),
+            hasMore: false,
+            tickData: [
+              {
+                timestamp: startMs + 10_000,
+                tick: payload.type === 1 ? 110_010 : 110_018,
+              },
+            ],
+          },
+          envelope,
+        ),
+      );
+      await connectDemo();
+      const result = await adapter.getHistoricalBrokerTicksForResearch('EURUSD', start, end);
+      expect(result.bidTicks).toEqual([{ atMs: startMs + 10_000, price: 1.1001 }]);
+      expect(result.askTicks).toEqual([{ atMs: startMs + 10_000, price: 1.10018 }]);
+      const requests = server.requests.filter(
+        (x) => x.payloadType === CTRADER_PAYLOAD_TYPE.GET_TICKDATA_REQ,
+      );
+      expect(requests).toHaveLength(2);
+      expect(requests.map((x) => x.payload?.type)).toEqual([1, 2]);
+      for (const r of requests)
+        expect(r.payload).toMatchObject({
+          ctidTraderAccountId: Number(ACCOUNT_ID),
+          symbolId: 101,
+          fromTimestamp: startMs,
+          toTimestamp: end.getTime(),
+        });
+      expect(
+        server.requests.some((r) =>
+          [
+            CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ,
+            CTRADER_PAYLOAD_TYPE.CLOSE_POSITION_REQ,
+            CTRADER_PAYLOAD_TYPE.AMEND_POSITION_SLTP_REQ,
+          ].includes(r.payloadType as never),
+        ),
+      ).toBe(false);
+    });
+
+    it('refuses a truncated provider page instead of treating incomplete history as a win', async () => {
+      server.on(CTRADER_PAYLOAD_TYPE.GET_TICKDATA_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.GET_TICKDATA_RES,
+          {
+            hasMore: true,
+            ctidTraderAccountId: Number(ACCOUNT_ID),
+            tickData: [{ timestamp: startMs + 10_000, tick: 110010 }],
+          },
+          envelope,
+        ),
+      );
+      await connectDemo();
+      await expect(
+        adapter.getHistoricalBrokerTicksForResearch('EURUSD', start, end),
+      ).rejects.toThrow('INCOMPLETE_CTRADER_TICK_HISTORY_PAGE');
+    });
+
+    it('refuses LIVE sessions without sending historical requests', async () => {
+      adapter.setMode(BrokerMode.LIVE);
+      await connectDemo();
+      await expect(
+        adapter.getHistoricalBrokerTicksForResearch('EURUSD', start, end),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.INVALID_REQUEST });
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.GET_TICKDATA_REQ)).toBeUndefined();
+    });
+
+    it('refuses invalid or oversized historical windows', async () => {
+      await connectDemo();
+      await expect(
+        adapter.getHistoricalBrokerTicksForResearch(
+          'EURUSD',
+          start,
+          new Date(startMs + 13 * 60_000),
+        ),
+      ).rejects.toThrow('INVALID_BOUNDED_HISTORICAL_TICK_WINDOW');
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.GET_TICKDATA_REQ)).toBeUndefined();
+    });
+  });
+
   // ─── z.ai P1 DEMO: read-only deal + current position evidence ────────────
 
   describe('readDemoPartialCloseProviderEvidence', () => {
