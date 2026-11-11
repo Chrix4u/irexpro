@@ -191,6 +191,16 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify Pepperstone short-horizon executed-trade audit is causal and read-only
+        run: node --test apps/api/scripts/audit-short-horizon-broker-marks.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify Plan B short-horizon M1 marks never grant trading authority
+        run: node --test apps/api/scripts/audit-short-horizon-m1-episodes.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04
