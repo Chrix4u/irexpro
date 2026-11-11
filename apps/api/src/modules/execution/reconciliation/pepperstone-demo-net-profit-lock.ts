@@ -171,7 +171,7 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   if (peakR >= 0.5) return reply('ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED', null, null, null, peakR);
   // The early-peak giveback floor is intentionally wider than a standard
   // 70–90% trailing lock; high-TP runners may need room to retrace.
-  const minNetBuffer = Math.max(3, risk * 0.035, fee * 0.2);
+  const minNetBuffer = Math.max(0.5, risk * 0.035, fee * 0.2);
   // A 5-second polling gap can cross the floor. Leave an actionable price
   // window above the minimum net-positive exit margin.
   const executionAllowance = Math.max(risk * 0.02, fee * 0.25);
@@ -192,7 +192,7 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   }
   // No broker close is advertised as protected-positive after the broker
   // net mark loses the ADDITIONAL historical fee reserve and slippage buffer.
-  if (net < Math.max(3, fee * 0.2, risk * 0.02)) {
+  if (net < Math.max(0.5, fee * 0.2, risk * 0.02)) {
     return reply('NO_REMAINING_POSITIVE_NET', grossFloor, netFloor, net, peakR);
   }
   return reply('PROTECTED_POSITIVE_NET_PROFIT', grossFloor, netFloor, net, peakR);

@@ -72,6 +72,32 @@ describe('Pepperstone DEMO explicit after-cost profit-lock close policy', () => 
       }).reason,
     ).toBe('ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED');
   });
+  it('protects a small 0.20-lot Pepperstone DEMO position with risk-scaled reserve', () => {
+    expect(
+      evaluatePepperstoneDemoNetProfitLock({
+        ...input,
+        tradeInstrument: 'USDCHF',
+        brokerInstrument: 'USDCHF',
+        tradeLotSize: 0.2,
+        brokerLotSize: 0.2,
+        initialRiskPnl: 12.11,
+        brokerEntryPrice: 0.82592,
+        currentPrice: 0.826,
+        authoritativeStop: 0.82542,
+        brokerStop: 0.82542,
+        authoritativeTakeProfit: 0.82672,
+        brokerTakeProfit: 0.82672,
+        maxFavorableBrokerNetPnl: 4.49,
+        previousObservedBrokerNetPnl: 3.1,
+        currentBrokerNetPnl: 2.42,
+        conservativeExitReserve: 1.2,
+      }),
+    ).toMatchObject({
+      shouldClose: true,
+      reason: 'PROTECTED_POSITIVE_NET_PROFIT',
+    });
+  });
+
   it('does not claim protected gain if the extra close-cost reserve is exhausted', () => {
     expect(
       evaluatePepperstoneDemoNetProfitLock({
