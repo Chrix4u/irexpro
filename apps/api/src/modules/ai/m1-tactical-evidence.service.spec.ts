@@ -1427,6 +1427,9 @@ describe('M1 causal cTrader commission evidence', () => {
     const [sql, params] = query.mock.calls[0];
     expect(sql).toContain('b.user_id = $1 AND b.id = $2');
     expect(sql).toContain("b.account_type = 'DEMO'");
+    expect(sql).toContain('b.broker_id = ANY($5::text[])');
+    expect(sql).toContain('b.deleted_at IS NULL');
+    expect(sql).not.toContain("b.broker_id = 'ctrader'");
     expect(sql).toContain('b.account_currency = t.account_currency');
     expect(sql).toContain("s.execution_mode = 'FULL_AUTO'");
     expect(sql).toContain('s.user_id = t.user_id');
@@ -1439,7 +1442,13 @@ describe('M1 causal cTrader commission evidence', () => {
     expect(sql).toContain('ORDER BY t.closed_at DESC, t.id DESC LIMIT 40');
     expect(sql).toContain("a.sizing_inputs->>'riskAmount'");
     expect(sql).toContain('percentile_cont(0.9)');
-    expect(params).toEqual(['user-1', 'conn-1', 'USDJPY', '2026-11-04T20:00:00.000Z']);
+    expect(params).toEqual([
+      'user-1',
+      'conn-1',
+      'USDJPY',
+      '2026-11-04T20:00:00.000Z',
+      ['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader'],
+    ]);
   });
 
   it('rejects invalid instrument and time before hitting the database', async () => {

@@ -665,7 +665,8 @@ export class M1TacticalEvidenceService {
             AND s.account_currency = t.account_currency
           JOIN broker.broker_connections b ON b.id = t.broker_connection_id
             AND b.user_id = $1 AND b.id = $2
-            AND b.broker_id = 'ctrader' AND b.account_type = 'DEMO'
+            AND b.broker_id = ANY($5::text[]) AND b.account_type = 'DEMO'
+            AND b.deleted_at IS NULL
             AND b.account_currency = t.account_currency
           LEFT JOIN LATERAL (
             SELECT sizing_inputs FROM trading.capital_allocations ca
@@ -682,7 +683,13 @@ export class M1TacticalEvidenceService {
         ) historical
         WHERE fee_r IS NOT NULL AND fee_r >= 0
       `,
-      [input.userId, input.brokerConnectionId, instrument, input.asOf.toISOString()],
+      [
+        input.userId,
+        input.brokerConnectionId,
+        instrument,
+        input.asOf.toISOString(),
+        [...CTRADER_FAMILY_BROKER_IDS],
+      ],
     )) as Array<{ sample_count: number | string; p90_fee_r: number | string | null }>;
     const count = Number(rows[0]?.sample_count ?? 0);
     const p90 = nullableNumber(rows[0]?.p90_fee_r);
