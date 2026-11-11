@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { PAIRS, V2, COVERAGE_SQL, summarize, runAudit, parseWindowMinutes } = require('./audit-demo-six-pair-cadence.cjs');
+const { PAIRS, V2, BROKER_IDS, ACTIVE_SCOPE_SQL, COVERAGE_SQL, summarize, runAudit, parseWindowMinutes } = require('./audit-demo-six-pair-cadence.cjs');
 
 const START = new Date('2026-11-09T18:50:00Z');
 const END = new Date('2026-11-09T18:55:00Z');
@@ -54,12 +54,19 @@ test('enforces exact owner DEMO scope, frozen policy version and read-only trans
   const client = {
     query: async (sql, params) => {
       calls.push({ sql, params });
-      if (sql.includes('SELECT id FROM broker.broker_connections')) return { rows: [{ id: CONNECTION }] };
+      if (sql === ACTIVE_SCOPE_SQL) return { rows: [{ id: CONNECTION }] };
       if (sql === COVERAGE_SQL) return { rows: [row(START.toISOString(), 'EURUSD', { authorized: 1 })] };
       return { rows: [] };
     },
   };
-  const report = await runAudit({ client, userId: USER, connectionId: CONNECTION, since: START, until: END });
+  const report = await runAudit({ client, userId: USER, since: START, until: END });
+  assert.deepEqual(calls[2].params, [USER, [...BROKER_IDS]]);
+  assert.equal(calls[2].sql, ACTIVE_SCOPE_SQL);
+  assert.match(ACTIVE_SCOPE_SQL, /s.status='ACTIVE'/);
+  assert.match(ACTIVE_SCOPE_SQL, /s.execution_mode='FULL_AUTO'/);
+  assert.match(ACTIVE_SCOPE_SQL, /b.account_type='DEMO'/);
+  assert.match(ACTIVE_SCOPE_SQL, /b.user_id=s.user_id/);
+  assert.match(ACTIVE_SCOPE_SQL, /s.authority_generation DESC/);
   assert.equal(calls[0].sql, 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   assert.equal(calls.at(-1).sql, 'COMMIT');
   assert.deepEqual(calls[3].params, [USER, CONNECTION, START.toISOString(), END.toISOString(), V2, [...PAIRS]]);
@@ -70,12 +77,12 @@ test('enforces exact owner DEMO scope, frozen policy version and read-only trans
   assert.equal(report.authority, 'RESEARCH_ONLY');
 });
 
-test('fails closed with rollback for a broker account not owned by the user', async () => {
+test('fails closed with rollback when there is no active owned broker account', async () => {
   const calls = [];
   const client = { query: async (sql) => { calls.push(sql); return { rows: [] }; } };
-  await assert.rejects(() => runAudit({ client, userId: USER, connectionId: CONNECTION, since: START, until: END }), /SCOPED_CTRADER_DEMO_NOT_FOUND/);
+  await assert.rejects(() => runAudit({ client, userId: USER, since: START, until: END }), /NO_ACTIVE_OWNED_CTRADER_DEMO_SESSION/);
   assert.equal(calls.at(-1), 'ROLLBACK');
-  await assert.rejects(() => runAudit({ client, userId: USER, connectionId: CONNECTION, since: START, until: new Date('2026-11-09T18:54:00Z') }), /INVALID_WINDOW/);
+  await assert.rejects(() => runAudit({ client, userId: USER, since: START, until: new Date('2026-11-09T18:54:00Z') }), /INVALID_WINDOW/);
 });
 
 test('short window reflects latest rows only from the same scoped database snapshot', async () => {
@@ -92,12 +99,12 @@ test('short window reflects latest rows only from the same scoped database snaps
   const client = {
     query: async (sql) => {
       calls.push(sql);
-      if (sql.includes('SELECT id FROM broker.broker_connections')) return { rows: [{ id: CONNECTION }] };
+      if (sql === ACTIVE_SCOPE_SQL) return { rows: [{ id: CONNECTION }] };
       if (sql === COVERAGE_SQL) return { rows };
       return { rows: [] };
     },
   };
-  const report = await runAudit({ client, userId: USER, connectionId: CONNECTION, since: from, until: to });
+  const report = await runAudit({ client, userId: USER, since: from, until: to });
   assert.equal(calls.filter((x) => x === COVERAGE_SQL).length, 1);
   assert.equal(report.observedSlots, 3);
   assert.equal(report.byPair.AUDUSD.authorized, 1);
@@ -112,13 +119,37 @@ test('short window reflects latest rows only from the same scoped database snaps
 
 test('short window caps to full report when only five-minute window is supplied', async () => {
   const client = {
-    query: async (sql) => sql.includes('SELECT id FROM broker.broker_connections')
+    query: async (sql) => sql === ACTIVE_SCOPE_SQL
       ? { rows: [{ id: CONNECTION }] }
       : sql === COVERAGE_SQL ? { rows: [row(START.toISOString(), 'USDJPY')] } : { rows: [] },
   };
-  const report = await runAudit({ client, userId: USER, connectionId: CONNECTION, since: START, until: END });
+  const report = await runAudit({ client, userId: USER, since: START, until: END });
   assert.equal(report.recentWindow.windowMinutes, 5);
   assert.equal(report.recentWindow.observedSlots, report.observedSlots);
+});
+
+test('a past fixed connection is NOT used: active Pepperstone DEMO controls the scope', async () => {
+  const calls = [];
+  const client = {
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      if (sql === ACTIVE_SCOPE_SQL) return {rows:[{id:CONNECTION}]};
+      if (sql === COVERAGE_SQL) return {rows:[row(START.toISOString(),'USDJPY')]};
+      return {rows:[]};
+    },
+  };
+  const stale = '3bb56ba7-299c-4668-807a-ff5ac0a6ed9a';
+  const previous = process.env.M1_TACTICAL_MARKET_DATA_CONNECTION_ID;
+  process.env.M1_TACTICAL_MARKET_DATA_CONNECTION_ID = stale;
+  try {
+    const report = await runAudit({client,userId:USER,since:START,until:END});
+    assert.equal(report.observedEvaluations,2);
+    assert.equal(calls[3].params[1],CONNECTION);
+    assert.notEqual(calls[3].params[1],stale);
+  } finally {
+    if(previous===undefined)delete process.env.M1_TACTICAL_MARKET_DATA_CONNECTION_ID;
+    else process.env.M1_TACTICAL_MARKET_DATA_CONNECTION_ID=previous;
+  }
 });
 
 test('optional CLI cadence window is bounded and rejects ambiguous values', () => {

@@ -8,6 +8,7 @@ const { mkdirSync, writeFileSync } = require('node:fs');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PAIRS = Object.freeze(['AUDUSD', 'GBPUSD', 'EURUSD', 'USDCAD', 'USDCHF', 'USDJPY']);
 const V2 = 'm1-tactical-v8-demo-primary-fee-shadow-six-pair-v2';
+const BROKER_IDS = Object.freeze(['ctrader', 'pepperstone-ctrader']);
 const REPORT = '/home/lightworld/webapps/irexpro-research/six-pair-cadence/latest-report.json';
 const RECENT_WINDOW_MINUTES = 10;
 
@@ -19,6 +20,19 @@ function parseWindowMinutes(raw) {
   if (minutes < 5 || minutes > 180) throw Error('INVALID_CADENCE_WINDOW_MINUTES');
   return minutes;
 }
+
+// Each run first discovers the CURRENT owned ACTIVE FULL_AUTO cTrader-family
+// DEMO session inside the SAME read-only transaction. A stale fixed
+// M1_TACTICAL_MARKET_DATA_CONNECTION_ID silently reported zero scans after the
+// user switched to Pepperstone; it must never select the diagnostic scope.
+const ACTIVE_SCOPE_SQL = [
+  'SELECT s.broker_connection_id AS id',
+  'FROM trading.trading_sessions s',
+  'JOIN broker.broker_connections b ON b.id=s.broker_connection_id AND b.user_id=s.user_id',
+  "WHERE s.user_id=$1 AND s.status='ACTIVE' AND s.execution_mode='FULL_AUTO'",
+  "AND b.broker_id = ANY($2::text[]) AND b.account_type='DEMO' AND b.deleted_at IS NULL",
+  'ORDER BY s.authority_generation DESC,s.started_at DESC LIMIT 1',
+].join('\n');
 
 // Only decision-time stored evidence. The exact policy pin excludes old
 // focused-three decisions even if they were persisted late after a rollout.
@@ -109,8 +123,8 @@ function summarize(rows, since, until) {
   };
 }
 
-async function runAudit({ client, userId, connectionId, since, until }) {
-  if (!UUID.test(userId || '') || !UUID.test(connectionId || '')) throw Error('INVALID_OWNER_SCOPE');
+async function runAudit({ client, userId, since, until }) {
+  if (!UUID.test(userId || '')) throw Error('INVALID_OWNER_SCOPE');
   const start = new Date(since);
   const end = new Date(until);
   const ms = end.getTime() - start.getTime();
@@ -120,13 +134,12 @@ async function runAudit({ client, userId, connectionId, since, until }) {
   await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   try {
     await client.query("SET LOCAL statement_timeout='45s'");
-    const owner = await client.query(
-      "SELECT id FROM broker.broker_connections WHERE user_id=$1 AND id=$2 AND broker_id='ctrader' AND account_type='DEMO' AND deleted_at IS NULL",
-      [userId, connectionId],
-    );
-    if (owner.rows.length !== 1) throw Error('SCOPED_CTRADER_DEMO_NOT_FOUND');
+    const owner = await client.query(ACTIVE_SCOPE_SQL, [userId, [...BROKER_IDS]]);
+    if (owner.rows.length !== 1 || !UUID.test(owner.rows[0]?.id || ''))
+      throw Error('NO_ACTIVE_OWNED_CTRADER_DEMO_SESSION');
+    const activeConnectionId = owner.rows[0].id;
     const found = await client.query(COVERAGE_SQL, [
-      userId, connectionId, start.toISOString(), end.toISOString(), V2, [...PAIRS],
+      userId, activeConnectionId, start.toISOString(), end.toISOString(), V2, [...PAIRS],
     ]);
     if (found.rows.length > 1086) throw Error('TRUNCATED_OR_UNBOUNDED_COVERAGE');
     // The headline hour can contain deploy/restart minutes. Also show a short,
@@ -191,7 +204,6 @@ async function main() {
     const report = await runAudit({
       client,
       userId: process.env.VPS_FOREX_SCANNER_USER_ID,
-      connectionId: process.env.M1_TACTICAL_MARKET_DATA_CONNECTION_ID,
       since: start,
       until: end,
     });
@@ -209,7 +221,10 @@ async function main() {
     await client.end();
   }
 }
-module.exports = { PAIRS, V2, COVERAGE_SQL, summarize, runAudit, parseWindowMinutes };
+module.exports = {
+  PAIRS, V2, BROKER_IDS, ACTIVE_SCOPE_SQL, COVERAGE_SQL,
+  summarize, runAudit, parseWindowMinutes,
+};
 if (require.main === module)
   main().catch((e) => {
     console.error('DEMO_CADENCE_RESEARCH_FAILED ' + String(e.message).slice(0, 160));
