@@ -17,6 +17,25 @@ const REPORT_PATH =
 const START = '2026-11-04T00:00:00.000Z';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LIMIT = 1200;
+const ACTIVE_CTRADER_DEMO_SQL = `
+ SELECT s.broker_connection_id AS "connectionId"
+ FROM trading.trading_sessions s
+ JOIN broker.broker_connections b
+   ON b.id=s.broker_connection_id AND b.user_id=s.user_id
+ WHERE s.user_id=$1 AND s.status='ACTIVE'
+   AND s.execution_mode='FULL_AUTO'
+   AND b.account_type='DEMO' AND b.deleted_at IS NULL
+   AND b.broker_id IN ('ctrader','pepperstone-ctrader','icmarkets-ctrader')
+ ORDER BY s.authority_generation DESC, s.started_at DESC
+ LIMIT 1
+`;
+const SCOPE_SQL = `
+ SELECT b.id,b.broker_id AS "brokerId",b.account_currency AS "accountCurrency"
+ FROM broker.broker_connections b
+ WHERE b.user_id=$1 AND b.id=$2
+   AND b.broker_id IN ('ctrader','pepperstone-ctrader','icmarkets-ctrader')
+   AND b.account_type='DEMO' AND b.deleted_at IS NULL
+`;
 
 const DECISIONS_SQL = [
   'WITH ranked AS MATERIALIZED (',
@@ -103,7 +122,7 @@ const FEES_SQL = [
   't.realised_pnl AS gross,t.commission,t.swap,t.lot_size AS "lotSize"',
   'FROM trading.trades t',
   "WHERE t.user_id=$1 AND t.broker_connection_id=$2 AND t.status='CLOSED'",
-  "AND t.account_currency='EUR' AND t.closed_at>=$3::timestamptz",
+  'AND t.account_currency=$5 AND t.closed_at>=$3::timestamptz',
   'AND t.closed_at < $4::timestamptz',
   'ORDER BY t.closed_at ASC LIMIT 3001',
 ].join('\n');
@@ -248,7 +267,7 @@ function analyze(rows, feeRows, since, until) {
   };
 }
 async function runAudit({ client, userId, connectionId, since = START, until = new Date() }) {
-  if (!UUID.test(userId || '') || !UUID.test(connectionId || ''))
+  if (!UUID.test(userId || '') || (connectionId != null && !UUID.test(connectionId)))
     throw Error('INVALID_EXACT_OWNER_SCOPE');
   const start = new Date(since),
     end = new Date(until);
@@ -262,15 +281,19 @@ async function runAudit({ client, userId, connectionId, since = START, until = n
   await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   try {
     await client.query("SET LOCAL statement_timeout='60000ms'");
-    const sc = await client.query(
-      "SELECT id FROM broker.broker_connections WHERE user_id=$1 AND id=$2 AND broker_id='ctrader' AND account_type='DEMO' AND deleted_at IS NULL",
-      [userId, connectionId],
-    );
+    const current = connectionId
+      ? null
+      : (await client.query(ACTIVE_CTRADER_DEMO_SQL, [userId])).rows[0];
+    const selectedConnection = connectionId ?? current?.connectionId;
+    if (!UUID.test(selectedConnection || '')) throw Error('ACTIVE_CTRADER_DEMO_UNAVAILABLE');
+    const sc = await client.query(SCOPE_SQL, [userId, selectedConnection]);
     if (sc.rows.length !== 1) throw Error('CTRADER_DEMO_SCOPE_NOT_FOUND');
+    const accountCurrency = String(sc.rows[0].accountCurrency || '');
+    if (!/^[A-Z]{3}$/.test(accountCurrency)) throw Error('INVALID_DEMO_ACCOUNT_CURRENCY');
     const endForLabels = new Date(end.getTime() - 20 * 60000).toISOString();
     const sampled = await client.query(DECISIONS_SQL, [
       userId,
-      connectionId,
+      selectedConnection,
       start.toISOString(),
       endForLabels,
       LIMIT + 1,
@@ -278,14 +301,20 @@ async function runAudit({ client, userId, connectionId, since = START, until = n
     if (sampled.rows.length > LIMIT) throw Error('TOO_MANY_OOD_WINDOWS_INCREASE_DAY_SCOPING');
     const fees = await client.query(FEES_SQL, [
       userId,
-      connectionId,
+      selectedConnection,
       new Date(start.getTime() - 30 * 86400000).toISOString(),
       end.toISOString(),
+      accountCurrency,
     ]);
     if (fees.rows.length > 3000) throw Error('TOO_MANY_FEE_ROWS');
     const report = analyze(sampled.rows, fees.rows, start.toISOString(), endForLabels);
     await client.query('COMMIT');
-    return report;
+    return {
+      ...report,
+      brokerId: sc.rows[0].brokerId,
+      accountCurrency,
+      brokerScope: 'ACTIVE_OR_EXPLICIT_USER_OWNED_CTRADER_FAMILY_DEMO',
+    };
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
@@ -313,7 +342,8 @@ async function main() {
     const report = await runAudit({
       client: db,
       userId: process.env.VPS_FOREX_SCANNER_USER_ID,
-      connectionId: process.env.M1_TACTICAL_MARKET_DATA_CONNECTION_ID,
+      // Explicit historical override only. Default is the active broker session.
+      connectionId: process.env.OOD_SHADOW_AUDIT_CONNECTION_ID || undefined,
       since: process.env.OOD_SHADOW_SINCE || START,
     });
     mkdirSync(resolve(REPORT_PATH, '..'), { recursive: true, mode: 0o700 });
@@ -332,7 +362,10 @@ async function main() {
     await db.end();
   }
 }
-module.exports = { ARTIFACT, DECISIONS_SQL, FEES_SQL, laneOf, aggregate, analyze, runAudit };
+module.exports = {
+  ARTIFACT, ACTIVE_CTRADER_DEMO_SQL, SCOPE_SQL,
+  DECISIONS_SQL, FEES_SQL, laneOf, aggregate, analyze, runAudit,
+};
 if (require.main === module)
   main().catch((e) => {
     console.error('OOD_REGIME_SHADOW_FAILED ' + String(e.message).slice(0, 200));

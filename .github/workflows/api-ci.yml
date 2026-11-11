@@ -176,6 +176,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify OOD broker-native path research scopes active Pepperstone DEMO
+        run: node --test apps/api/scripts/audit-ood-regime-shadow.test.cjs
+        env:
+          NODE_ENV: test
+
       - name: Verify as-of Plan B time-factor research never authorizes entries
         run: node --test apps/api/scripts/audit-planb-clock-factor-funnel.test.cjs
         env:
