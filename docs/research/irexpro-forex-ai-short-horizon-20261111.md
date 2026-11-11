@@ -86,3 +86,73 @@ Optional OFFLINE dataset export for later approved research:
 This writes a user-private 0600 JSON only in an explicitly approved /tmp/irexpro-*.json path, refuses overwrites, and contains 17 allowlisted as-of predictive features and separately held outcome labels. No user ID or broker connection ID is exported. On 11 Nov the protected, exploratory dataset contained 1,214 five-minute episodes and was 2.0 MiB; no model was trained or promoted because the sample covers too few independent market days.
 
 Both audits enforce active owned Pepperstone DEMO connection, read-only repeatable-read PostgreSQL transaction, bounded statement time, causal quote sample timestamp, broker bid/ask, as-of historical commission, clear censoring/quote-missing labels and NO executable broker/model action. CI runs 15 pure tests. **No new entry veto, order path, user setting, broker permission, training artifact or production model is changed in this research change.**
+
+## November 11 follow-up: out-of-time model learning experiment (research only)
+
+The first dataset contains 1,659 as-of episodes spanning just two UTC dates:
+- November 10 train, after trimming a 20-minute label embargo before November 11.
+- November 11 separate but **incomplete same-day** holdout. One prior day is not enough to qualify any model.
+- 17 original candidate attributes and five as-of Plan B features; no future quote, realized P&L, broker ID or account ID in predictors.
+- Per-horizon L2 logistic profitable-mark probability plus Ridge expected broker-net-USD mark; scaler and feature encoder fitted on training day only.
+- A second paired-Ridge experiment predicts marks for the **original direction and opposite direction**, choosing NO_EDGE if neither estimated after-fee result is positive. Both label families are segregated from predictor inputs; only historical causal quote marks are used.
+- These are hypothetical *one-lot* MARKS before additional slippage, not broker-filled trades with first-touch SL/TP or a portfolio simulator. **No model weights persisted, no registry changes, no order authority.**
+
+### Out-of-time cost-adjusted mark comparison
+
+Dollar values below are **average estimated USD per hypothetical standard lot**, not actual P&L.
+The model-selected samples are different, so the table does NOT represent
+a parallel, equal-risk, executed portfolio backtest.
+
+| Horizon | All original candidate marks on held-out day | Timed-alpha selected | Timed-alpha selected count |
+| --- | ---: | ---: | ---: |
+| 1m | -$6.80 | -$23.50 | 2 |
+| 3m | -$6.65 | -$10.74 | 14 |
+| 5m | -$6.74 | -$9.12 | 80 |
+| 10m | -$5.93 | -$9.01 | 116 |
+
+**None** improved mean net value. The top fifth by predicted net
+also had *worse* mean holdout economics for every horizon.
+
+### Original vs opposite direction research
+
+On all paired broker-quote episodes before chronological holdout, the original 10m candidate direction averaged -$5.36/lot and the opposite direction -$13.62/lot; 399 of 1,264 reverse 10m marks were individually net positive. Selecting the reversed direction *after seeing future prices* is invalid hindsight. A model must identify reversals prospectively before spread and commission.
+
+The supervised three-way direction research on later-day holdout produced:
+
+| Horizon | Original held-out marks | Opposite held-out marks | Model-selected BUY/SELL marks | Selected pairs |
+| --- | ---: | ---: | ---: | ---: |
+| 1m | -$6.80 | -$8.10 | -$10.14 | 7 |
+| 3m | -$6.65 | -$8.28 | -$11.09 | 15 |
+| 5m | -$6.74 | -$8.17 | -$9.52 | 84 |
+| 10m | -$5.93 | -$8.93 | -$7.53 | 227 |
+
+**No profitable or qualified model emerged.** These negative holdout
+results mean simply reversing the existing trend-continuation decisions is
+not a validated answer. Continue collecting independent market days.
+
+### Reproducible offline experiment
+
+Run from an authorized VPS **without changing broker trading permissions**:
+
+1. In apps/api, export the as-of candidate data to an owner-private,
+   non-overwriting file with the explicit research-only scripts, e.g.
+   IREXPRO_HORIZON_AUDIT_START=2026-11-09T00:00:00Z,
+   IREXPRO_HORIZON_AUDIT_END=2026-11-11T11:00:00Z and
+   IREXPRO_HORIZON_COHORT_EXPORT=/tmp/irexpro-m1-horizon-samples.json.
+   No user IDs or broker connection IDs are exported.
+2. From services/ai-engine with installed dependencies and PYTHONPATH=.,
+   run Python module
+   app.domain.training.demo_timed_alpha_multihorizon with --cohort-json
+   and --report-json pointing to distinct /tmp/irexpro-*.json paths.
+3. The report defaults to zero order authority, cannot overwrite results,
+   never saves model weights, and labels each horizon
+   EXPLORATORY_ONLY_INSUFFICIENT_DAYS. Tests validate train/holdout chronology,
+   20-minute embargo, refusal of execution-bearing datasets and invariance
+   of model predictions when held-out labels are changed.
+
+Next research required: actual **broker bid/ask tick ordering** with
+causal stop/TP first-touch / competing-risk and time-to-target labels,
+commission/slippage stress, minimum 10 independent training days and
+at least 3 independent future holdout days, then prospective DEMO-only
+shadow comparison. The existing approved Plan B / M1 paths must continue
+running; the experimental NO_EDGE outcome is not a new trade blocker.
