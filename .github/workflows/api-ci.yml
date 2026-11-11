@@ -181,6 +181,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify active Pepperstone realised-fee calibration audit stays read-only
+        run: node --test apps/api/scripts/audit-commission-r-calibration-gap.test.cjs
+        env:
+          NODE_ENV: test
+
       - name: Verify as-of Plan B time-factor research never authorizes entries
         run: node --test apps/api/scripts/audit-planb-clock-factor-funnel.test.cjs
         env:
