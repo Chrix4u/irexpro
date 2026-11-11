@@ -50,6 +50,7 @@ describe('LiveDemoProfitProtectionService', () => {
     patienceRows: Array<Record<string, unknown>> = [],
     recoveryRows: Array<Record<string, unknown>> = [],
     brokerId = 'ctrader',
+    existingRescueAuditRows: Array<Record<string, unknown>> = [],
   ) {
     const query = jest.fn().mockImplementation(async (sql: string) => {
       if (sql.includes('past_fees')) return feeRows;
@@ -58,6 +59,7 @@ describe('LiveDemoProfitProtectionService', () => {
       if (sql.includes('FROM trading.trades t')) return rows;
       if (sql.includes('FROM trading.m1_tactical_decisions')) return thesisRows;
       if (sql.includes('FROM market_data.provider_quote_candles')) return m1Rows;
+      if (sql.includes('FROM audit.audit_logs')) return existingRescueAuditRows;
       if (sql.includes('UPDATE trading.trades')) return [];
       return [];
     });
@@ -347,6 +349,91 @@ describe('LiveDemoProfitProtectionService', () => {
         }),
       }),
     );
+    expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['late M1 confirmation after a prior loss-band crossing', []],
+    ['already durably audited confirmed event', [{ id: 'existing-rescue-audit' }]],
+  ])('records a confirmed Pepperstone rescue once: %s', async (_, existingAudit) => {
+    const auditService = { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService;
+    const bars = [
+      {
+        bucket_time: new Date('2026-10-28T09:04:00Z'),
+        open: '1.11275',
+        high: '1.11277',
+        low: '1.11257',
+        close: '1.11260',
+        sample_count: 22,
+        positive_quote_sample_count: 22,
+        last_quote_sample_at: new Date('2026-10-28T09:04:58Z'),
+        source: 'ctrader-broker-native',
+      },
+      {
+        bucket_time: new Date('2026-10-28T09:03:00Z'),
+        open: '1.11288',
+        high: '1.11290',
+        low: '1.11270',
+        close: '1.11274',
+        sample_count: 18,
+        positive_quote_sample_count: 18,
+        last_quote_sample_at: new Date('2026-10-28T09:03:55Z'),
+        source: 'ctrader-broker-native',
+      },
+      {
+        bucket_time: new Date('2026-10-28T09:02:00Z'),
+        open: '1.11303',
+        high: '1.11305',
+        low: '1.11284',
+        close: '1.11288',
+        sample_count: 20,
+        positive_quote_sample_count: 20,
+        last_quote_sample_at: new Date('2026-10-28T09:02:50Z'),
+        source: 'ctrader-broker-native',
+      },
+    ];
+    const h = harness(
+      [
+        candidate({
+          max_favorable_pnl: '6.00',
+          profit_giveback: '10.00', // previous observed mark was already below -0.25R
+          path_observation_count: 25,
+          opened_at: new Date('2026-10-28T09:00:00Z'),
+        }),
+      ],
+      '-3.00',
+      'DEMO',
+      bars,
+      '1.11260',
+      [],
+      auditService,
+      [],
+      [],
+      [],
+      'pepperstone-ctrader',
+      existingAudit,
+    );
+    await h.service.runOnce(new Date('2026-10-28T09:05:10Z'));
+    expect(h.query).toHaveBeenCalledWith(expect.stringContaining('FROM audit.audit_logs'), [
+      'user-1',
+      AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+      'trade-1',
+      'pepperstone-demo-confirmed-peak-loss-rescue-shadow-v1',
+    ]);
+    if (existingAudit.length === 0) {
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+          metadata: expect.objectContaining({
+            hypotheticalAction: 'WOULD_CLOSE_PEAK_TO_LOSS_RESCUE',
+            modifiesExecution: false,
+            noTradeAuthority: true,
+          }),
+        }),
+      );
+    } else {
+      expect(auditService.log).not.toHaveBeenCalled();
+    }
     expect(h.executionService.closeTrade).not.toHaveBeenCalled();
   });
 
