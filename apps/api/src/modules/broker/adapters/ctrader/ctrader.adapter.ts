@@ -105,6 +105,11 @@ import {
 } from '../../interfaces/provider-dispatch-certainty';
 import { redactString } from '../../../../common/utils/redact-sensitive.util';
 import { CTraderClientService } from './ctrader-client.service';
+import {
+  decodeCtraderHistoricalTickSide,
+  validateCtraderResearchTickWindow,
+  type CtraderResearchTick,
+} from './ctrader-tick-first-hit-research';
 import { assertDiscoveredBrokerIdentity } from './ctrader-broker-identity';
 import {
   CtraderDemoPartialBrokerRead,
@@ -752,6 +757,72 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       });
     } catch (err) {
       throw this.mapError(err);
+    }
+  }
+
+  /**
+   * Read-only cTrader historical ticks (2145/2146) for OFFLINE research.
+   * Never exposed via IBrokerAdapter, API controllers, scheduled jobs or
+   * any strategy execution path. Requires an authorized DEMO session.
+   *
+   * The existing client service enforces Spotware's 5/s historical rate cap.
+   * A truncated page (hasMore=true) is REJECTED, not used to claim SL/TP
+   * first-touch. Narrow the time window when provider pagination occurs.
+   */
+  async getHistoricalBrokerTicksForResearch(
+    instrument: string,
+    from: Date,
+    to: Date,
+  ): Promise<{ bidTicks: CtraderResearchTick[]; askTicks: CtraderResearchTick[] }> {
+    if (this.mode !== BrokerMode.DEMO) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        'Historical tick research is restricted to DEMO sessions.',
+      );
+    }
+    const session = this.requireCurrentSession();
+    if (session.env !== 'DEMO') {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.ENVIRONMENT_MISMATCH,
+        'Historical tick research refuses a LIVE broker session.',
+      );
+    }
+    const start = from instanceof Date ? from.getTime() : NaN;
+    const end = to instanceof Date ? to.getTime() : NaN;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        'Historical tick research requires bounded valid dates.',
+      );
+    }
+    try {
+      validateCtraderResearchTickWindow(start, end);
+      const symbolId = await this.resolveSymbolIdOrThrow(session, instrument);
+      const accountId = parseCtraderId(session.accountId, 'ctidTraderAccountId');
+      const result: { bidTicks: CtraderResearchTick[]; askTicks: CtraderResearchTick[] } = {
+        bidTicks: [],
+        askTicks: [],
+      };
+      for (const side of [
+        { type: 1, key: 'bidTicks' as const },
+        { type: 2, key: 'askTicks' as const },
+      ]) {
+        const response = await this.client.request('DEMO', CTRADER_PAYLOAD_TYPE.GET_TICKDATA_REQ, {
+          ctidTraderAccountId: accountId,
+          symbolId,
+          type: side.type,
+          fromTimestamp: start,
+          toTimestamp: end,
+        });
+        const payload = expectCtraderPayload<{
+          tickData?: unknown;
+          hasMore?: unknown;
+        }>(response, CTRADER_PAYLOAD_TYPE.GET_TICKDATA_RES);
+        result[side.key] = decodeCtraderHistoricalTickSide(payload, start, end);
+      }
+      return result;
+    } catch (error) {
+      throw this.mapError(error);
     }
   }
 

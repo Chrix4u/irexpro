@@ -90,6 +90,7 @@ export const CTRADER_PAYLOAD_TYPE = {
   GET_POSITION_UNREALIZED_PNL_RES: 2188,
   // ticks (historical rate-limit class)
   GET_TICKDATA_REQ: 2145,
+  GET_TICKDATA_RES: 2146,
 } as const;
 
 /**
