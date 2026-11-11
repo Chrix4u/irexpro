@@ -3635,6 +3635,16 @@ export default function AiTradingPage() {
                         These are repeated evaluations, not missed broker orders.
                       </small>
                     )}
+                    {demoEntryDiagnostic.planBAdmittedM1ContinuationRouteMismatchDecisions >
+                      0 && (
+                      <small className="ai-control-card__diagnosis-alert" role="status">
+                        Plan B admitted a reversal or early transition while M1 saw a
+                        same-direction trend continuation in{" "}
+                        {demoEntryDiagnostic.planBAdmittedM1ContinuationRouteMismatchDecisions}{" "}
+                        checks. Their entry timing labels disagreed, so the execution
+                        gate held the setups. Repeated model checks, not missed broker orders.
+                      </small>
+                    )}
                     {demoEntryDiagnostic.rolloverRegimeDecisions > 0 && (
                       <small>
                         Rollover-risk conditions were detected in{" "}

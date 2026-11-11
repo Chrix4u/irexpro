@@ -53,6 +53,8 @@ export interface DemoFocusedEntryDiagnostic {
   planBReversalTimingHeldDecisions: number;
   /** Subset of reversal timing holds where M1 never proposed a trade. */
   planBReversalM1AbstainedDecisions: number;
+  /** Same-side, Plan B reversal/transition admissions held when M1 labels continuation. */
+  planBAdmittedM1ContinuationRouteMismatchDecisions: number;
   /** All evaluated decisions in a rollover-classified regime, not orders. */
   rolloverRegimeDecisions: number;
   primaryPathDecisions: number;
@@ -84,6 +86,7 @@ export interface DemoFocusedEntryDiagnosticRow {
   planb_admitted_decisions: number | string;
   planb_reversal_timing_held_decisions?: number | string;
   planb_reversal_m1_abstained_decisions?: number | string;
+  planb_admitted_m1_continuation_route_mismatch_decisions?: number | string;
   rollover_regime_decisions?: number | string;
   primary_path_decisions: number | string;
   primary_reliability_veto_decisions: number | string;
@@ -140,6 +143,9 @@ export function toDemoFocusedEntryDiagnostic(
       : 0,
     planBReversalM1AbstainedDecisions: active
       ? safeCount(row?.planb_reversal_m1_abstained_decisions)
+      : 0,
+    planBAdmittedM1ContinuationRouteMismatchDecisions: active
+      ? safeCount(row?.planb_admitted_m1_continuation_route_mismatch_decisions)
       : 0,
     rolloverRegimeDecisions: active ? safeCount(row?.rollover_regime_decisions) : 0,
     primaryPathDecisions: active ? safeCount(row?.primary_path_decisions) : 0,
