@@ -176,6 +176,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify OOD broker-native path research scopes active Pepperstone DEMO
+        run: node --test apps/api/scripts/audit-ood-regime-shadow.test.cjs
+        env:
+          NODE_ENV: test
+
       - name: Verify active Pepperstone realised-fee calibration audit stays read-only
         run: node --test apps/api/scripts/audit-commission-r-calibration-gap.test.cjs
         env:

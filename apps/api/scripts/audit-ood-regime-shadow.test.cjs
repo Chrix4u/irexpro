@@ -3,6 +3,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   ARTIFACT,
+  ACTIVE_CTRADER_DEMO_SQL,
+  SCOPE_SQL,
   DECISIONS_SQL,
   FEES_SQL,
   laneOf,
@@ -162,4 +164,78 @@ test('chronological cooldown removes adjacent-window overlap for the same instru
   assert.equal(out.sample.selectedOnePerInstrumentPer30MinuteWindow, 4);
   assert.equal(out.sample.excludedAdjacentWindowOverlap, 1);
   assert.equal(out.sample.spacedIndependentEpisodes, 3);
+});
+
+const USER = '2caa0c64-00dd-48fb-babb-06b39cb74068';
+const ACTIVE = '26ef9b4e-6e24-4a65-a4f2-8db22e209e9d';
+const OLD = 'b2f686be-b7ea-4b24-b9cb-fcc89b9cfaef';
+const opts = (client, connectionId) => ({
+  client, userId: USER, connectionId,
+  since: '2026-11-10T17:00:00Z', until: '2026-11-11T01:00:00Z',
+});
+function mockResearchClient({ accountCurrency='USD', active=ACTIVE }={}) {
+  const calls = [];
+  return {
+    calls,
+    query: async(sql, params) => {
+      calls.push({sql,params});
+      if (sql === ACTIVE_CTRADER_DEMO_SQL) {
+        return {rows:active?[{connectionId:active}]:[]};
+      }
+      if (sql === SCOPE_SQL) {
+        return {rows:[{id:params[1], brokerId:'pepperstone-ctrader', accountCurrency}]};
+      }
+      if (sql === DECISIONS_SQL) return {rows:[]};
+      if (sql === FEES_SQL) return {rows:[]};
+      return {rows:[]};
+    },
+  };
+}
+
+test('active user-owned Pepperstone DEMO selects matching USD history and broker quotes', async () => {
+  assert.match(ACTIVE_CTRADER_DEMO_SQL,/s.user_id=\$1/);
+  assert.match(ACTIVE_CTRADER_DEMO_SQL,/b.user_id=s.user_id/);
+  assert.match(ACTIVE_CTRADER_DEMO_SQL,/s.status='ACTIVE'/);
+  assert.match(ACTIVE_CTRADER_DEMO_SQL,/s.execution_mode='FULL_AUTO'/);
+  assert.match(SCOPE_SQL,/'pepperstone-ctrader'/);
+  assert.match(SCOPE_SQL,/b.user_id=\$1 AND b.id=\$2/);
+  assert.match(FEES_SQL,/t.account_currency=\$5/);
+  assert.doesNotMatch(FEES_SQL,/t.account_currency='EUR'/);
+  const c=mockResearchClient();
+  const r=await runAudit(opts(c));
+  assert.equal(r.brokerId,'pepperstone-ctrader');
+  assert.equal(r.accountCurrency,'USD');
+  assert.equal(r.modifiesExecution,false);
+  assert.equal(r.promotionAllowed,false);
+  assert.match(c.calls[0].sql,/REPEATABLE READ READ ONLY/);
+  assert.deepEqual(c.calls.find(x=>x.sql===DECISIONS_SQL).params.slice(0,2),[USER,ACTIVE]);
+  assert.deepEqual(c.calls.find(x=>x.sql===FEES_SQL).params.slice(0,2),[USER,ACTIVE]);
+  assert.equal(c.calls.find(x=>x.sql===FEES_SQL).params[4],'USD');
+  assert.equal(c.calls.at(-1).sql,'COMMIT');
+});
+
+test('explicit historical account remains exact user owned and does not select current',async()=>{
+  const c=mockResearchClient();
+  await runAudit(opts(c,OLD));
+  assert.equal(c.calls.some(x=>x.sql===ACTIVE_CTRADER_DEMO_SQL),false);
+  assert.deepEqual(c.calls.find(x=>x.sql===SCOPE_SQL).params,[USER,OLD]);
+  assert.equal(c.calls.find(x=>x.sql===FEES_SQL).params[1],OLD);
+});
+
+test('missing current broker session and malformed account currency fail closed', async()=>{
+  const missing=mockResearchClient({active:null});
+  await assert.rejects(runAudit(opts(missing)),/ACTIVE_CTRADER_DEMO_UNAVAILABLE/);
+  assert.equal(missing.calls.some(x=>x.sql===DECISIONS_SQL),false);
+  assert.equal(missing.calls.at(-1).sql,'ROLLBACK');
+  const bad=mockResearchClient({accountCurrency:'USD_EUR_MIX'});
+  await assert.rejects(runAudit(opts(bad)),/INVALID_DEMO_ACCOUNT_CURRENCY/);
+  assert.equal(bad.calls.some(x=>x.sql===FEES_SQL),false);
+  assert.equal(bad.calls.at(-1).sql,'ROLLBACK');
+});
+
+test('invalid explicit connection and user scope never start a database transaction',async()=>{
+  const c=mockResearchClient();
+  await assert.rejects(runAudit(opts(c,'not-a-uuid')),/INVALID_EXACT_OWNER_SCOPE/);
+  await assert.rejects(runAudit({...opts(c),userId:'incorrect'}),/INVALID_EXACT_OWNER_SCOPE/);
+  assert.equal(c.calls.length,0);
 });
