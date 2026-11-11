@@ -11,6 +11,7 @@ import { evaluateProtectedRunnerShadow } from './protected-runner-shadow';
 import { evaluateProfitLockPatienceShadow } from './profit-lock-patience-shadow';
 import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
 import { evaluatePepperstonePeakLossRescue } from './pepperstone-peak-loss-rescue';
+import { evaluatePepperstoneDemoNetProfitLock } from './pepperstone-demo-net-profit-lock';
 
 const LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS = 5_000;
 // Maximum ordinary adverse-thesis grace from actual position open. A new
@@ -445,6 +446,8 @@ interface OpenAiTradeRow {
   path_peak_observed_at: Date | string | null;
   initial_risk_pnl: string | number | null;
   stop_loss: string | number | null;
+  take_profit: string | number | null;
+  path_last_observed_at: Date | string | null;
   lot_size: string | number | null;
   account_currency: string | null;
   opened_at: Date | string | null;
@@ -492,6 +495,13 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     this.timer.unref?.();
     this.logger.log(
       `cTrader DEMO profit protection enabled cadence=${LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS / 1000}s authority=PROFIT_PROTECTION LIVE=false`,
+    );
+    this.logger.log(
+      `Pepperstone cTrader DEMO early-net-giveback protection ` +
+        (process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK === 'enabled'
+          ? 'ENABLED_DEMO_ONLY'
+          : 'DISABLED_SHADOW_ONLY') +
+        ' LIVE=false originalBrokerTP_SL=UNCHANGED',
     );
   }
 
@@ -564,6 +574,100 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               peakObservedAt,
               observedAt,
             });
+
+            // Optional, deliberately scoped net-positive giveback protection
+            // over cTrader's ALREADY-net-unrealized P&L. Historical round-trip
+            // fees are held as an EXTRA conservative close-cost reserve.
+            // for existing Pepperstone DEMO M1 continuation positions only.
+            // The enable switch is OFF unless staging operators explicitly
+            // enable it after CI and a broker-native economic replay. LIVE and
+            // alternative broker families can never reach this branch.
+            if (
+              snapshot.connection.brokerId === 'pepperstone-ctrader' &&
+              process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK === 'enabled'
+            ) {
+              const risk = finite(trade.initial_risk_pnl);
+              const previousCurrentPnl = previousPeak - (finite(trade.profit_giveback) ?? 0);
+              const candidate =
+                risk !== null &&
+                risk > 0 &&
+                trade.is_m1_strategy &&
+                trade.strategy_route === 'TREND_CONTINUATION' &&
+                maxFavorablePnl >= risk * 0.2 &&
+                maxFavorablePnl < risk * 0.5 &&
+                currentPnl > 0 &&
+                previousPeak > 0 &&
+                previousCurrentPnl > currentPnl &&
+                Number(trade.path_observation_count) >= 3;
+              if (candidate) {
+                try {
+                  const fees = await this.loadCausalPepperstoneDemoCostEstimate(trade, observedAt);
+                  const bookedCommission = finite(position.commission);
+                  const bookedSwap = finite(position.swap);
+                  const knownBookedCost =
+                    Math.max(0, -(bookedCommission ?? 0)) + Math.max(0, -(bookedSwap ?? 0));
+                  const conservativeExitReserve = fees
+                    ? Math.max(fees.estimatedCost, knownBookedCost)
+                    : null;
+                  const decision = evaluatePepperstoneDemoNetProfitLock({
+                    brokerId: snapshot.connection.brokerId,
+                    accountType: String(snapshot.connection.accountType).toUpperCase(),
+                    tradeInstrument: trade.instrument,
+                    brokerInstrument: position.instrument,
+                    tradeDirection: trade.direction,
+                    brokerDirection: position.direction,
+                    tradeLotSize: finite(trade.lot_size) ?? Number.NaN,
+                    brokerLotSize: finite(position.lotSize) ?? Number.NaN,
+                    isM1Strategy: trade.is_m1_strategy,
+                    strategyRoute: trade.strategy_route,
+                    initialRiskPnl: risk,
+                    brokerEntryPrice: finite(position.openPrice),
+                    currentPrice: finite(position.currentPrice),
+                    authoritativeStop: finite(trade.stop_loss),
+                    brokerStop: finite(position.stopLoss),
+                    authoritativeTakeProfit: finite(trade.take_profit),
+                    brokerTakeProfit: finite(position.takeProfit),
+                    openedAt: trade.opened_at ? new Date(trade.opened_at) : null,
+                    previousObservationAt: trade.path_last_observed_at
+                      ? new Date(trade.path_last_observed_at)
+                      : null,
+                    observedAt,
+                    previousObservationCount: Number(trade.path_observation_count),
+                    previousObservedBrokerNetPnl: previousCurrentPnl,
+                    maxFavorableBrokerNetPnl: maxFavorablePnl,
+                    currentBrokerNetPnl: currentPnl,
+                    conservativeExitReserve,
+                    feeSampleCount: fees?.sampleCount ?? 0,
+                    feeEvidenceSource: fees?.source ?? null,
+                  });
+                  if (decision.shouldClose) {
+                    this.logger.warn(
+                      `Pepperstone DEMO NET_PROFIT_PROTECTION trade=${trade.trade_id} ${trade.instrument} ${trade.direction} ` +
+                        `peakBrokerNet=${money(maxFavorablePnl)} nowBrokerNet=${money(currentPnl)} ` +
+                        `extraExitReserve=${money(conservativeExitReserve!)} feeSource=${fees!.source} ` +
+                        `netAfterExtraReserve=${money(decision.estimatedNetAfterReserve!)} protectedBrokerNetFloor=${money(decision.protectedBrokerNetFloor!)} ` +
+                        `brokerStop=VERIFIED live=false`,
+                    );
+                    // An owned CLOSE_POSITION only. ExecutionService performs
+                    // broker dispatch, durable close-attempt idempotence and
+                    // trade reconciliation. Neither TP nor SL is amended.
+                    await this.executionService.closeTrade(
+                      trade.trade_id,
+                      trade.user_id,
+                      TradeCloseReason.PROFIT_PROTECTION,
+                    );
+                    continue;
+                  }
+                } catch (error) {
+                  // Do not claim a profit close on an unverified or failed
+                  // provider dispatch. The original broker SL/TP stays live.
+                  this.logger.warn(
+                    `Pepperstone DEMO net-profit close unavailable trade=${trade.trade_id}: ` +
+                      (error as Error).message,
+                  );
+                }
+              }
+            }
 
             // Alternative cTrader-family DEMO accounts retain their original
             // broker TP/SL. A first-crossing observation shows exactly where
@@ -1115,6 +1219,56 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
    * lot. A minimum of five past, same-account/symbol/currency samples is
    * required; no future closes can influence a proposed runner.
    */
+  private async loadCausalPepperstoneDemoCostEstimate(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+  ): Promise<{
+    estimatedCost: number;
+    sampleCount: number;
+    source: 'SAME_SYMBOL' | 'SAME_ACCOUNT_FX_MAJORS';
+  } | null> {
+    // Prefer five or more closed fills for the EXACT instrument. No fallback
+    // ever substitutes guessed or zero commission.
+    const sameSymbol = await this.loadCausalRunnerCostEstimate(trade, observedAt);
+    if (sameSymbol) return { ...sameSymbol, source: 'SAME_SYMBOL' };
+    const lots = finite(trade.lot_size);
+    if (lots === null || lots <= 0 || !trade.account_currency) return null;
+    // Commission tariffs for this broker's six FX majors are empirically
+    // observed per lot on the same connection and account currency, strictly
+    // BEFORE the decision. Require >=8 priced past closes for fallback.
+    const rows = (await this.dataSource.query(
+      `
+        SELECT COUNT(*)::int sample_count,
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY cost_per_lot) p90_cost_per_lot
+        FROM (
+          SELECT (
+            ABS(t.commission) + GREATEST(0, -COALESCE(t.swap,0))
+          ) / NULLIF(t.lot_size,0) cost_per_lot
+          FROM trading.trades t
+          WHERE t.user_id=$1 AND t.broker_connection_id=$2
+            AND t.account_currency=$3
+            AND t.instrument IN ('EURUSD','GBPUSD','AUDUSD','USDJPY','USDCHF','USDCAD')
+            AND t.status='CLOSED' AND t.commission IS NOT NULL
+            AND t.lot_size>0
+            AND t.closed_at < $4::timestamptz
+            AND t.closed_at >= $4::timestamptz - interval '21 days'
+          ORDER BY t.closed_at DESC
+          LIMIT 40
+        ) fx_family_fees
+      `,
+      [trade.user_id, trade.broker_connection_id, trade.account_currency, observedAt.toISOString()],
+    )) as Array<{ sample_count: string | number; p90_cost_per_lot: string | number | null }>;
+    const samples = Number(rows[0]?.sample_count ?? 0);
+    const feePerLot = finite(rows[0]?.p90_cost_per_lot);
+    if (!Number.isInteger(samples) || samples < 8 || feePerLot === null || feePerLot <= 0)
+      return null;
+    return {
+      estimatedCost: feePerLot * lots,
+      sampleCount: samples,
+      source: 'SAME_ACCOUNT_FX_MAJORS',
+    };
+  }
+
   private async loadCausalRunnerCostEstimate(
     trade: OpenAiTradeRow,
     observedAt: Date,
@@ -1195,6 +1349,8 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           NULLIF(ca.sizing_inputs->>'riskAmount', '')::numeric
         ) AS initial_risk_pnl,
         t.stop_loss,
+        t.take_profit,
+        t.path_last_observed_at,
         (
           COALESCE(ti.metadata->>'m1_rollout_phase', '') <> ''
           OR COALESCE(ti.metadata->>'timeframe', '') = 'M1'
@@ -1206,6 +1362,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         SELECT sizing_inputs
         FROM trading.capital_allocations ca0
         WHERE ca0.trade_intent_id = t.trade_intent_id
+          AND ca0.created_at <= t.opened_at
         ORDER BY ca0.created_at DESC
         LIMIT 1
       ) ca ON true
