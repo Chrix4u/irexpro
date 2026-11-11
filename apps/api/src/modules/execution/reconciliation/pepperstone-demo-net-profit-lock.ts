@@ -114,8 +114,8 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
     Math.abs(stop - brokerStop) > Math.max(0.00001, stop * 1e-7) ||
     Math.abs(tp - brokerTp) > Math.max(0.00001, tp * 1e-7) ||
     (input.tradeDirection === 'BUY'
-      ? !(stop < open && open < tp && stop < mark && mark < tp)
-      : !(tp < open && open < stop && tp < mark && mark < stop))
+      ? !(stop < open && open < tp && open < mark && mark < tp)
+      : !(tp < open && open < stop && tp < mark && mark < open))
   )
     return reply('UNVERIFIED_BROKER_BARRIERS');
   const ageSeconds = input.openedAt

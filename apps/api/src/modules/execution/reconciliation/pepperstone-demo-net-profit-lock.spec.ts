@@ -106,6 +106,7 @@ describe('Pepperstone DEMO explicit after-cost profit-lock close policy', () => 
     { brokerStop: 158.88 },
     { brokerTakeProfit: 159.01 },
     { currentPrice: 158.872 },
+    { currentPrice: 158.92 }, // broker quote must also show the position is favorable
     { currentPrice: 159.002 },
     { authoritativeStop: null },
     { brokerEntryPrice: null },
