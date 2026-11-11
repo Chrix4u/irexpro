@@ -1250,10 +1250,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     spreadEvidence: Parameters<typeof evaluateM1TacticalGovernance>[0]['executionSpreadEvidence'],
     decisionTime: Date,
     paperSimulationSpreadPrice?: number,
+    phaseTimings?: { portfolioMs: number; trainedExpertMs: number },
   ): Promise<MultimodelDemoEvaluation> {
     const planBInput = m1CandidateToPlanBInput(candidate, features, decisionTime);
     const portfolioPositions: PlanBPortfolioPosition[] = [];
     let portfolioSnapshotAvailable = false;
+    const portfolioStartedAt = Date.now();
     try {
       const snapshot = await this.evidence.loadOpenPaperRiskPositions({
         userId,
@@ -1271,6 +1273,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       this.logger.warn(
         `Multi-model portfolio snapshot unavailable connection=${brokerConnectionId}: ${(error as Error).message}`,
       );
+    } finally {
+      if (phaseTimings) phaseTimings.portfolioMs += Math.max(0, Date.now() - portfolioStartedAt);
     }
 
     const ensemble = scorePlanBMultimodelShadow(planBInput, portfolioPositions);
@@ -1294,6 +1298,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       paperSimulationSpreadPrice,
     });
 
+    const expertStartedAt = Date.now();
     const trainedExpert: HighConvictionOverlay = this.highConvictionBrokerExpert
       ? await this.highConvictionBrokerExpert.evaluate({
           userId,
@@ -1317,6 +1322,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           regime: null,
           modifiesExecution: false,
         };
+    if (phaseTimings) phaseTimings.trainedExpertMs += Math.max(0, Date.now() - expertStartedAt);
 
     const baseAuthority = evaluateMultimodelDemoAuthority({
       ensemble,
@@ -1362,10 +1368,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       reliabilityMs: 0,
       scoutMs: 0,
       multimodelMs: 0,
+      m5StageMs: 0,
+      extensionStageMs: 0,
+      downstreamRiskMs: 0,
+      orderDispatchMs: 0,
       executableFeeMs: 0,
       blockedFeeShadowMs: 0,
       persistMs: 0,
     };
+    const multimodelSubphases = { portfolioMs: 0, trainedExpertMs: 0 };
     const routeDecision = classifyM1TacticalRoute(
       candidate,
       opposite,
@@ -1419,6 +1430,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           spreadEvidence,
           decisionTime,
           paperSimulationSpreadPrice,
+          multimodelSubphases,
         )
       : null;
     timings.multimodelMs = Date.now() - multimodelStartedAt;
@@ -1519,6 +1531,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       multimodelDemo?.authority.blockers.includes(
         'MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT',
       ) === true;
+    const m5StageStartedAt = Date.now();
     let m5EarlyTransitionEvidence: M5EarlyTransitionEvidence | null = null;
     let m5EarlyTransitionHandoff: M5EarlyTransitionHandoffDecision | null = null;
     if (
@@ -1551,7 +1564,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         );
       }
     }
+    timings.m5StageMs = Math.max(0, Date.now() - m5StageStartedAt);
     const m5EarlyTransitionHandoffEligible = m5EarlyTransitionHandoff?.eligible === true;
+    const extensionStageStartedAt = Date.now();
     let extensionExhaustionDemoScout: ExtensionExhaustionDemoScoutDecision | null = null;
     if (
       professionalDemoPhase &&
@@ -1599,6 +1614,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         reliability,
       });
     }
+    timings.extensionStageMs = Math.max(0, Date.now() - extensionStageStartedAt);
     const extensionExhaustionDemoScoutExecutable = extensionExhaustionDemoScout?.eligible === true;
     const executionVolumeCap = m5EarlyTransitionHandoffEligible
       ? m5EarlyTransitionHandoff!.lotCap
@@ -1665,6 +1681,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // DEMO portfolio loses repeatedly across several instruments. Require
     // same-session broker-account net economics before ANY new primary-engine
     // DEMO entry; never alter existing positions or weaken session authority.
+    const downstreamRiskStartedAt = Date.now();
     let portfolioNetLossBrake: M1PortfolioNetLossBrakeDecision | null = null;
     if (professionalDemoPhase && preliminaryCanExecute && this.executionService) {
       try {
@@ -1799,6 +1816,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             evaluatedAt: decisionTime,
           })
         : null;
+    timings.downstreamRiskMs = Math.max(0, Date.now() - downstreamRiskStartedAt);
     const selectedPrimaryForCommission =
       professionalDemoPhase &&
       multimodelPrimaryExecutable &&
@@ -2163,28 +2181,33 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       Boolean(decision.tradeIntentId) || decision.outcomeState === 'EXECUTION_SUCCEEDED';
 
     if (canExecute && !executionAlreadyDurable) {
-      await this.submitPaperDecision(
-        decision.id,
-        userId,
-        brokerConnectionId,
-        candidate,
-        routeDecision,
-        governance,
-        reliability,
-        features,
-        decisionTime,
-        shadowPairSideReliability,
-        microDriftOnlyRescue,
-        localImpulseDriftOnlyRescue,
-        evidenceQualifiedScout,
-        scoutReliabilityTier,
-        executionVolumeCap,
-        multimodelDemo,
-        professionalM1Fallback,
-        m5EarlyTransitionEvidence,
-        m5EarlyTransitionHandoff,
-        extensionExhaustionDemoScout,
-      );
+      const dispatchStartedAt = Date.now();
+      try {
+        await this.submitPaperDecision(
+          decision.id,
+          userId,
+          brokerConnectionId,
+          candidate,
+          routeDecision,
+          governance,
+          reliability,
+          features,
+          decisionTime,
+          shadowPairSideReliability,
+          microDriftOnlyRescue,
+          localImpulseDriftOnlyRescue,
+          evidenceQualifiedScout,
+          scoutReliabilityTier,
+          executionVolumeCap,
+          multimodelDemo,
+          professionalM1Fallback,
+          m5EarlyTransitionEvidence,
+          m5EarlyTransitionHandoff,
+          extensionExhaustionDemoScout,
+        );
+      } finally {
+        timings.orderDispatchMs = Math.max(0, Date.now() - dispatchStartedAt);
+      }
     }
 
     const totalMs = Math.max(0, Date.now() - startedCandidateAt);
@@ -2207,6 +2230,18 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           timings.scoutMs +
           ' multimodelMs=' +
           timings.multimodelMs +
+          ' modelPortfolioMs=' +
+          multimodelSubphases.portfolioMs +
+          ' trainedExpertMs=' +
+          multimodelSubphases.trainedExpertMs +
+          ' m5StageMs=' +
+          timings.m5StageMs +
+          ' extensionStageMs=' +
+          timings.extensionStageMs +
+          ' downstreamRiskMs=' +
+          timings.downstreamRiskMs +
+          ' orderDispatchMs=' +
+          timings.orderDispatchMs +
           ' executableFeeMs=' +
           timings.executableFeeMs +
           ' blockedFeeShadowMs=' +
