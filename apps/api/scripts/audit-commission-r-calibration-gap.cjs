@@ -6,9 +6,28 @@ const ARTIFACT = 'ex-ante-vs-realized-commission-r-audit-v1';
 const MAX_ROWS = 2000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SCOPE_SQL = `
- SELECT current_timestamp AS "asOf" FROM broker.broker_connections
- WHERE id=$1 AND user_id=$2 AND broker_id='ctrader'
+ SELECT current_timestamp AS "asOf", broker_id AS "brokerId",
+        account_currency AS "accountCurrency"
+ FROM broker.broker_connections
+ WHERE id=$1 AND user_id=$2
+   AND broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')
    AND account_type='DEMO' AND deleted_at IS NULL
+`;
+// A former default used M1_TACTICAL_MARKET_DATA_CONNECTION_ID: that ID could
+// still point to a retired 'ctrader' account after a Pepperstone broker switch.
+// Choose the user's ACTIVE FULL_AUTO DEMO connection, never a stale market-data
+// connection. Historical scope overrides must be explicit and owned by user.
+const ACTIVE_DEMO_CONNECTION_SQL = `
+ SELECT s.broker_connection_id AS "connectionId"
+ FROM trading.trading_sessions s
+ JOIN broker.broker_connections b
+   ON b.id=s.broker_connection_id AND b.user_id=s.user_id
+ WHERE s.user_id=$1 AND s.execution_mode='FULL_AUTO'
+   AND s.status='ACTIVE' AND b.account_type='DEMO'
+   AND b.deleted_at IS NULL
+   AND b.broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')
+ ORDER BY s.authority_generation DESC, s.started_at DESC
+ LIMIT 1
 `;
 const TRADE_SQL = `
  SELECT t.instrument, t.direction, t.opened_at AS "openedAt", t.closed_at AS "closedAt",
@@ -208,7 +227,8 @@ function evaluateRows(raw, since, asOf) {
   };
 }
 async function runAudit({ client, userId, connectionId, since, maxRows = MAX_ROWS }) {
-  if (!UUID.test(userId ?? '') || !UUID.test(connectionId ?? '')) throw Error('INVALID_DEMO_SCOPE');
+  if (!UUID.test(userId ?? '') || (connectionId != null && !UUID.test(connectionId)))
+    throw Error('INVALID_DEMO_SCOPE');
   if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > MAX_ROWS)
     throw Error('INVALID_ROW_LIMIT');
   const from = new Date(since);
@@ -216,7 +236,12 @@ async function runAudit({ client, userId, connectionId, since, maxRows = MAX_ROW
   await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   try {
     await client.query("SET LOCAL statement_timeout = '30s'");
-    const scope = (await client.query(SCOPE_SQL, [connectionId, userId])).rows[0];
+    const active = connectionId
+      ? null
+      : (await client.query(ACTIVE_DEMO_CONNECTION_SQL, [userId])).rows[0];
+    const resolvedConnectionId = connectionId ?? active?.connectionId;
+    if (!UUID.test(resolvedConnectionId ?? '')) throw Error('ACTIVE_CTRADER_DEMO_UNAVAILABLE');
+    const scope = (await client.query(SCOPE_SQL, [resolvedConnectionId, userId])).rows[0];
     if (!scope) throw Error('OWNER_CTRADER_DEMO_NOT_FOUND');
     const asOf = new Date(scope.asOf);
     if (!Number.isFinite(asOf.getTime()) || from > asOf || asOf - from > 14 * 864e5)
@@ -224,7 +249,7 @@ async function runAudit({ client, userId, connectionId, since, maxRows = MAX_ROW
     const raw = (
       await client.query(TRADE_SQL, [
         userId,
-        connectionId,
+        resolvedConnectionId,
         from.toISOString(),
         asOf.toISOString(),
         maxRows + 1,
@@ -233,7 +258,17 @@ async function runAudit({ client, userId, connectionId, since, maxRows = MAX_ROW
     if (raw.length > maxRows) throw Error('TRUNCATED_TRADE_HISTORY');
     const report = evaluateRows(raw, from, asOf);
     await client.query('COMMIT');
-    return report;
+    return {
+      ...report,
+      brokerId: scope.brokerId,
+      accountCurrency: scope.accountCurrency,
+      scope: 'ACTIVE_OR_EXPLICIT_USER_OWNED_CTRADER_FAMILY_DEMO',
+      cohortQualified: false,
+      reasonsNotQualified: [
+        'No entry policy is modified by commission calibration research',
+        'A broker/account research cohort cannot establish prospective profitability',
+      ],
+    };
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
@@ -261,7 +296,7 @@ async function main() {
     const report = await runAudit({
       client: c,
       userId: process.env.VPS_FOREX_SCANNER_USER_ID,
-      connectionId: process.env.M1_TACTICAL_MARKET_DATA_CONNECTION_ID,
+      connectionId: process.env.COMMISSION_R_AUDIT_CONNECTION_ID || undefined,
       since: process.env.COMMISSION_R_AUDIT_SINCE || new Date(Date.now() - 7 * 864e5).toISOString(),
     });
     console.log('COMMISSION_R_AUDIT ' + JSON.stringify(report));
@@ -269,7 +304,10 @@ async function main() {
     await c.end();
   }
 }
-module.exports = { ARTIFACT, SCOPE_SQL, TRADE_SQL, normalize, summarize, evaluateRows, runAudit };
+module.exports = {
+  ARTIFACT, SCOPE_SQL, ACTIVE_DEMO_CONNECTION_SQL, TRADE_SQL,
+  normalize, summarize, evaluateRows, runAudit,
+};
 if (require.main === module)
   main().catch(() => {
     console.error('COMMISSION_R_AUDIT_FAILED read-only research could not complete');
