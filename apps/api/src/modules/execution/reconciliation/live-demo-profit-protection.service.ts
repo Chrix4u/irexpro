@@ -1355,6 +1355,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         SELECT sizing_inputs
         FROM trading.capital_allocations ca0
         WHERE ca0.trade_intent_id = t.trade_intent_id
+          AND ca0.created_at <= t.opened_at
         ORDER BY ca0.created_at DESC
         LIMIT 1
       ) ca ON true

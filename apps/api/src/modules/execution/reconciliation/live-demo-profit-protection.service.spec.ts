@@ -105,6 +105,12 @@ describe('LiveDemoProfitProtectionService', () => {
     };
   }
 
+  it('reads initial capital risk only from allocations made before position entry', async () => {
+    const h = harness();
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+    expect(h.query).toHaveBeenCalledWith(expect.stringContaining('ca0.created_at <= t.opened_at'));
+  });
+
   it('persists peak/giveback telemetry and profit-protects a cTrader DEMO winner that retraces through its R floor', async () => {
     const h = harness([candidate()], '7.00');
 
