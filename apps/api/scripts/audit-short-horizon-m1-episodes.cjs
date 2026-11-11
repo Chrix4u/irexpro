@@ -44,6 +44,45 @@ function causalFeePerLot(closes,at) {
     .slice(-40).map(c=>c.feePerLot).filter(v=>Number.isFinite(v)&&v>0);
   return vals.length>=8?p90(vals):null;
 }
+function oppositeDirection(direction) {
+  if(direction==='BUY')return 'SELL';
+  if(direction==='SELL')return 'BUY';
+  throw new Error('UNSUPPORTED_DIRECTION_FOR_RESEARCH');
+}
+function comparePairedDirections(cases) {
+  // An ORACLE choice using future outcomes would be hindsight. Its output
+  // exists solely to quantify whether direction errors occur frequently.
+  // It is NEVER a model policy, signal filter, broker authorization or PnL.
+  const report={};
+  for(const h of HORIZONS) {
+    let pairs=0,originalPositive=0,oppositePositive=0,
+      oppositeBetter=0,bothNegative=0,bothPositive=0,
+      sumOriginal=0,sumOpposite=0;
+    for(const item of cases) {
+      const current=item.study?.outcomes?.[h];
+      const reverse=item.oppositeStudy?.outcomes?.[h];
+      if(!current||!reverse)continue;
+      pairs++;sumOriginal+=current.netUsd1Lot;sumOpposite+=reverse.netUsd1Lot;
+      if(current.netUsd1Lot>0)originalPositive++;
+      if(reverse.netUsd1Lot>0)oppositePositive++;
+      if(reverse.netUsd1Lot>current.netUsd1Lot)oppositeBetter++;
+      if(current.netUsd1Lot<=0&&reverse.netUsd1Lot<=0)bothNegative++;
+      if(current.netUsd1Lot>0&&reverse.netUsd1Lot>0)bothPositive++;
+    }
+    report[h]={
+      n:pairs,
+      originalPositive,
+      oppositePositive,
+      oppositeBetterInHindsight:oppositeBetter,
+      bothNonPositive:bothNegative,
+      bothPositive,
+      originalMeanNetOneLot:pairs?Number((sumOriginal/pairs).toFixed(2)):null,
+      oppositeMeanNetOneLot:pairs?Number((sumOpposite/pairs).toFixed(2)):null,
+      warning:'Opposite-side marks are counterfactual, not broker-executable approvals; the better direction cannot be known in advance.',
+    };
+  }
+  return report;
+}
 function studyEpisode(decision,quotes,closes) {
   const decided=timestamp(decision.created_at);
   if(decided===null||!['BUY','SELL'].includes(decision.direction)||!Array.isArray(quotes))return null;
@@ -79,7 +118,7 @@ const ASOF_NUMERIC_FEATURES = Object.freeze([
 // Only explicitly allowlisted as-of candidate fields enter the offline
 // learning dataset; never export user IDs, broker IDs or raw governance JSON.
 // Labels are separate and must never enter the predictive feature list.
-function asofTrainingRow(decision,study) {
+function asofTrainingRow(decision,study,oppositeStudy=null) {
   const c=decision.candidate && typeof decision.candidate==='object'
     ? decision.candidate : {};
   const meta=decision.plan_b && typeof decision.plan_b==='object'
@@ -100,6 +139,9 @@ function asofTrainingRow(decision,study) {
     features,
     // Outcomes ONLY in this label object, never usable as training features.
     labels:study?.reason==='MARKED'?study.outcomes:null,
+    // Counter-direction labels are held separately for supervised
+    // BUY/SELL/NO_EDGE research, and NEVER enter as-of predictor features.
+    oppositeLabels:oppositeStudy?.reason==='MARKED'?oppositeStudy.outcomes:null,
     feeEvidenceAvailable:study?.reason==='MARKED',
   };
 }
@@ -217,6 +259,10 @@ async function main() {
       executionAuthority:x.execution_authority,
       planBAdmitted:x.paper_admitted==='true',
       study:studyEpisode(x,quotesBySymbol.get(x.instrument)||[],feeCloses),
+      oppositeStudy:studyEpisode(
+        {...x,direction:oppositeDirection(x.direction)},
+        quotesBySymbol.get(x.instrument)||[],feeCloses,
+      ),
     }));
     const summary={
       artifact:'irexpro-readonly-5min-dedup-M1-candidate-horizon-mark-study-v1',
@@ -225,7 +271,9 @@ async function main() {
       brokerQuoteBars:bars.length,causalFeeFills:feeCloses.length,
       excludedNoCausalQuoteOrFee:cases.filter(x=>x.study?.reason!=='MARKED').length,
       cohorts:aggregateEpisodes(cases),
+      pairedOppositeDirection:comparePairedDirections(cases),
       warnings:[
+        'Opposite-side studies are price-mark counterfactuals; hindsight-best direction is NEVER a trade selection policy.',
         'M1 bid/ask marks not broker fills; no slippage/latency/first-touch of SL/TP.',
         'Future candidate outcomes are research labels only, never training features or trade authority.',
         '5-minute pair-side episodes are still temporally dependent. A two-day period is inadequate for production training.',
@@ -243,7 +291,8 @@ async function main() {
         throw new Error('COHORT_EXPORT_REQUIRES_EXPLICIT_LOCAL_TMP_PATH');
       }
       const fs=require('node:fs');
-      const dataset=rows.map((row,i)=>asofTrainingRow(row,cases[i].study));
+      const dataset=rows.map((row,i)=>
+        asofTrainingRow(row,cases[i].study,cases[i].oppositeStudy));
       fs.writeFileSync(exportPath,JSON.stringify({
         artifact:'irexpro-offline-1-3-5-10m-research-cohort-v1',
         trainingAuthority:'NONE',promotionAllowed:false,brokerOrders:0,
@@ -255,5 +304,5 @@ async function main() {
   }catch(e){try{await c.query('ROLLBACK')}catch{};throw e}
   finally{await c.end()}
 }
-module.exports={validQuote,firstCausalQuote,causalFeePerLot,p90,studyEpisode,aggregateEpisodes,asofTrainingRow};
+module.exports={validQuote,firstCausalQuote,causalFeePerLot,p90,studyEpisode,aggregateEpisodes,asofTrainingRow,oppositeDirection,comparePairedDirections};
 if(require.main===module)main().catch(e=>{console.error('AUDIT_FAILED',e.message);process.exitCode=1});

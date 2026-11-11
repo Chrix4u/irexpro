@@ -1,7 +1,7 @@
 'use strict';
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const {validQuote,firstCausalQuote,causalFeePerLot,studyEpisode,aggregateEpisodes,asofTrainingRow}=
+const {validQuote,firstCausalQuote,causalFeePerLot,studyEpisode,aggregateEpisodes,asofTrainingRow,oppositeDirection,comparePairedDirections}=
   require('./audit-short-horizon-m1-episodes.cjs');
 const quote=(at,bid,ask,opts={})=>({
  last_quote_sample_at:at,bid_close:bid,ask_close:ask,
@@ -73,4 +73,37 @@ test('training export contains only pre-decision allowlisted features, with labe
  assert.equal(data.features.brokerKey,undefined);
  assert.ok(!JSON.stringify(data).includes('PRIVATE'));
  assert.equal(data.observedBrokerAuthority,false);
+});
+
+test('opposite-side mark uses the SAME first post-decision quote with true bid/ask spread and commission',()=>{
+ const a=studyEpisode(d,qs,fees);
+ const b=studyEpisode({...d,direction:oppositeDirection(d.direction)},qs,fees);
+ assert.equal(oppositeDirection('BUY'),'SELL');
+ assert.equal(oppositeDirection('SELL'),'BUY');
+ assert.equal(a.entryAt,b.entryAt);
+ assert.equal(b.outcomes[1].positiveAfterCosts,false);
+ const paired=comparePairedDirections([{study:a,oppositeStudy:b}]);
+ assert.equal(paired[1].n,1);
+ assert.equal(paired[1].originalPositive,1);
+ assert.equal(paired[1].oppositePositive,0);
+});
+test('two-sided direction outcomes never become predictive input or execution authority',()=>{
+ const a=studyEpisode(d,qs,fees);
+ const b=studyEpisode({...d,direction:'SELL'},qs,fees);
+ const out=asofTrainingRow({...d,route:'M1_TREND_CONTINUATION',
+   candidate:{atr:.001},plan_b:{metaProbability:.57}},
+   a,b);
+ assert.equal(out.observedBrokerAuthority,false);
+ assert.deepEqual(Object.keys(out.features),[
+   'atr','score','confidence','directionQuality','grossExpectedR',
+   'alignedEmaSeparationAtr','alignedEmaSlopeAtr',
+   'alignedM5Momentum1Atr','alignedM5Momentum3Atr',
+   'alignedMomentum1Atr','alignedMomentum3Atr','alignedMomentum5Atr',
+   'alignedM5BodyPressure3','alignedHigherTimeframeAgreement',
+   'alignedM30DirectionalEfficiency','breakoutAtr','m5BodyExpansionRatio',
+   'planBMetaProbability','planBExpectedR','planBDirectionQuality',
+   'planBTradeQuality','planBExitQuality',
+ ]);
+ assert.ok(out.oppositeLabels[1]);
+ assert.ok(!JSON.stringify(out.features).includes('netUsd'));
 });
