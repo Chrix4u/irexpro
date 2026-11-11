@@ -243,6 +243,146 @@ describe('LiveDemoProfitProtectionService', () => {
     expect(h.executionService.closeTrade).not.toHaveBeenCalled();
   });
 
+  it('does not manufacture a zero-P&L broker mark from null provider unrealised P&L', async () => {
+    const h = harness(
+      [candidate()],
+      '7.00',
+      'DEMO',
+      [],
+      '1.11340',
+      [],
+      undefined,
+      [],
+      [],
+      [],
+      'pepperstone-ctrader',
+    );
+    const result = await h.brokerService.getOpenPositionsForConnection('conn-1', 'user-1');
+    result.positions[0].unrealisedPnl = null;
+    h.brokerService.getOpenPositionsForConnection.mockResolvedValue(result);
+    await h.service.runOnce(new Date('2026-10-28T09:05:10.000Z'));
+    expect(
+      h.query.mock.calls.some((call: unknown[]) =>
+        String(call[0]).includes('UPDATE trading.trades'),
+      ),
+    ).toBe(false);
+    expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+  });
+
+  it('records a Pepperstone DEMO profit-peak-to-loss M1-confirmed rescue hypothesis but never exits', async () => {
+    const auditService = { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService;
+    const bars = [
+      {
+        bucket_time: new Date('2026-10-28T09:04:00.000Z'),
+        open: '1.11275',
+        high: '1.11277',
+        low: '1.11257',
+        close: '1.11260',
+        sample_count: 22,
+        positive_quote_sample_count: 22,
+        last_quote_sample_at: new Date('2026-10-28T09:04:58Z'),
+        source: 'ctrader-broker-native',
+      },
+      {
+        bucket_time: new Date('2026-10-28T09:03:00.000Z'),
+        open: '1.11288',
+        high: '1.11290',
+        low: '1.11270',
+        close: '1.11274',
+        sample_count: 18,
+        positive_quote_sample_count: 18,
+        last_quote_sample_at: new Date('2026-10-28T09:03:55Z'),
+        source: 'ctrader-broker-native',
+      },
+      {
+        bucket_time: new Date('2026-10-28T09:02:00.000Z'),
+        open: '1.11303',
+        high: '1.11305',
+        low: '1.11284',
+        close: '1.11288',
+        sample_count: 20,
+        positive_quote_sample_count: 20,
+        last_quote_sample_at: new Date('2026-10-28T09:02:50Z'),
+        source: 'ctrader-broker-native',
+      },
+    ];
+    const h = harness(
+      [
+        candidate({
+          max_favorable_pnl: '6.00',
+          profit_giveback: '0.00',
+          path_observation_count: 25,
+          opened_at: new Date('2026-10-28T09:00:00Z'),
+        }),
+      ],
+      '-3.00',
+      'DEMO',
+      bars,
+      '1.11260',
+      [],
+      auditService,
+      [],
+      [],
+      [],
+      'pepperstone-ctrader',
+    );
+    await h.service.runOnce(new Date('2026-10-28T09:05:10.000Z'));
+    expect(h.query).toHaveBeenCalledWith(
+      expect.stringContaining('FROM market_data.provider_quote_candles'),
+      ['conn-1', 'EURUSD', expect.any(String)],
+    );
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+        resourceId: 'trade-1',
+        metadata: expect.objectContaining({
+          artifact: 'pepperstone-demo-confirmed-peak-loss-rescue-shadow-v1',
+          wouldReduceDrawdown: true,
+          reason: 'CONFIRMED_PEAK_TO_LOSS_CANDIDATE',
+          hypotheticalAction: 'WOULD_CLOSE_PEAK_TO_LOSS_RESCUE',
+          actualAction: 'HOLD_BROKER_TP_SL',
+          grantsExecution: false,
+          modifiesExecution: false,
+          noTradeAuthority: true,
+        }),
+      }),
+    );
+    expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+  });
+
+  it('does not interpret stale/non-live M1 bars as a Pepperstone peak-to-loss rescue', async () => {
+    const auditService = { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService;
+    const h = harness(
+      [
+        candidate({
+          max_favorable_pnl: '6.00',
+          profit_giveback: '0.00',
+          path_observation_count: 25,
+          opened_at: new Date('2026-10-28T09:00:00Z'),
+        }),
+      ],
+      '-3.00',
+      'DEMO',
+      [],
+      '1.11260',
+      [],
+      auditService,
+      [],
+      [],
+      [],
+      'pepperstone-ctrader',
+    );
+    await h.service.runOnce(new Date('2026-10-28T09:05:10.000Z'));
+    expect(auditService.log).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          hypotheticalAction: 'WOULD_CLOSE_PEAK_TO_LOSS_RESCUE',
+        }),
+      }),
+    );
+    expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+  });
+
   it('never observes or closes a Pepperstone LIVE position through the DEMO collector', async () => {
     const h = harness(
       [candidate()],

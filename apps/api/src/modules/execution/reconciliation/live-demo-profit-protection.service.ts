@@ -10,6 +10,7 @@ import { evaluatePaperProfitLock } from '../../broker/adapters/paper-broker.adap
 import { evaluateProtectedRunnerShadow } from './protected-runner-shadow';
 import { evaluateProfitLockPatienceShadow } from './profit-lock-patience-shadow';
 import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
+import { evaluatePepperstonePeakLossRescue } from './pepperstone-peak-loss-rescue';
 
 const LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS = 5_000;
 // Maximum ordinary adverse-thesis grace from actual position open. A new
@@ -452,6 +453,9 @@ interface OpenAiTradeRow {
 }
 
 function finite(value: unknown): number | null {
+  // A missing broker P&L is NOT zero profit. Never manufacture an observed
+  // path point (or let an unquoted close appear as a break-even reading).
+  if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -623,6 +627,100 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                     'Alternative DEMO profit-lock shadow observation deferred; broker TP/SL unchanged: ' +
                       (error as Error).message,
                   );
+                }
+              }
+              // Distinguish a late, confirmed peak-to-loss reversal from the
+              // much earlier ordinary 0.395R profit lock. The latter would
+              // harvest some Pepperstone trades that ultimately reach TP.
+              // This narrower rescue is RESEARCH ONLY: no feature flag,
+              // execution path or broker-side stop mutation can promote it.
+              if (snapshot.connection.brokerId === 'pepperstone-ctrader') {
+                const observedAtPeak = finite(trade.max_favorable_pnl) ?? 0;
+                const eligibleForRescueResearch =
+                  risk !== null &&
+                  risk > 0 &&
+                  observedAtPeak >= 0.5 * risk &&
+                  currentPnl <= -0.25 * risk &&
+                  currentPnl > -0.85 * risk;
+                if (eligibleForRescueResearch) {
+                  try {
+                    const openedAt = trade.opened_at ? new Date(trade.opened_at) : null;
+                    const m1 = await this.loadCausalM1Evidence(trade, observedAt);
+                    const rescue = evaluatePepperstonePeakLossRescue({
+                      brokerId: snapshot.connection.brokerId,
+                      accountType: String(snapshot.connection.accountType).toUpperCase(),
+                      tradeInstrument: trade.instrument,
+                      brokerInstrument: position.instrument,
+                      tradeDirection: trade.direction,
+                      brokerDirection: position.direction,
+                      tradeLotSize: finite(trade.lot_size) ?? Number.NaN,
+                      brokerLotSize: finite(position.lotSize) ?? Number.NaN,
+                      strategyRoute,
+                      isM1Strategy: trade.is_m1_strategy,
+                      initialRiskPnl: risk,
+                      previousPeakPnl: observedAtPeak,
+                      currentPnl,
+                      previousObservationCount: Math.max(
+                        0,
+                        Number(trade.path_observation_count) || 0,
+                      ),
+                      elapsedMinutes:
+                        openedAt && Number.isFinite(openedAt.getTime())
+                          ? (observedAt.getTime() - openedAt.getTime()) / 60_000
+                          : Number.NaN,
+                      authoritativeStop: finite(trade.stop_loss),
+                      brokerStop: finite(position.stopLoss),
+                      currentPrice: finite(position.currentPrice),
+                      brokerEntryPrice: finite(position.openPrice),
+                      m1: m1
+                        ? {
+                            completedBars: m1.completedBars,
+                            adverseBars: m1.adverseBars,
+                            liveQuoteBars: m1.liveQuoteBars ?? 0,
+                            consecutiveLiveQuoteBars: m1.consecutiveLiveQuoteBars ?? 0,
+                            alignedLatestBodyPressure: m1.alignedLatestBodyPressure,
+                            alignedMomentum3: m1.alignedMomentum3,
+                            latestAgeSeconds: m1.latestAgeSeconds,
+                          }
+                        : null,
+                    });
+                    const previousCurrentPnl = previousPeak - (finite(trade.profit_giveback) ?? 0);
+                    // Emit at most one durable audit for the initial loss-band
+                    // crossing, not another event on every five-second scan.
+                    // If M1 evidence is missing we log nothing and HOLD.
+                    if (
+                      rescue.wouldReduceDrawdown &&
+                      this.auditService &&
+                      previousCurrentPnl > -0.25 * risk
+                    ) {
+                      await this.auditService.log({
+                        actorUserId: trade.user_id,
+                        action: AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+                        resourceType: 'Trade',
+                        resourceId: trade.trade_id,
+                        metadata: {
+                          ...rescue,
+                          observedAt: observedAt.toISOString(),
+                          instrument: trade.instrument,
+                          direction: trade.direction,
+                          peakGrossPnl: money(observedAtPeak),
+                          currentGrossPnl: money(currentPnl),
+                          initialRiskPnl: money(risk),
+                          hypotheticalAction: 'WOULD_CLOSE_PEAK_TO_LOSS_RESCUE',
+                          actualAction: 'HOLD_BROKER_TP_SL',
+                          noTradeAuthority: true,
+                          modifiesExecution: false,
+                        },
+                      });
+                    }
+                  } catch (error) {
+                    // No research query or audit failure can suppress the
+                    // broker's existing TP/SL or affect other positions.
+                    this.logger.warn(
+                      'Pepperstone DEMO peak-loss research unavailable; broker TP/SL unchanged: ' +
+                        (error as Error).message,
+                    );
+                  }
                 }
               }
               continue;
