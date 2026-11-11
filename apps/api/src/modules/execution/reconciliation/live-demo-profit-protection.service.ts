@@ -587,6 +587,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                 trade.is_m1_strategy &&
                 trade.strategy_route === 'TREND_CONTINUATION' &&
                 maxFavorablePnl >= risk * 0.2 &&
+                maxFavorablePnl < risk * 0.5 &&
                 currentPnl > 0 &&
                 previousPeak > 0 &&
                 previousCurrentPnl > currentPnl &&

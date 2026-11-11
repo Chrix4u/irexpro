@@ -70,7 +70,7 @@ describe('Pepperstone DEMO explicit after-cost profit-lock close policy', () => 
         previousObservedBrokerNetPnl: 183,
         currentBrokerNetPnl: 150,
       }).reason,
-    ).toBe('NO_PROTECTED_GIVEBACK');
+    ).toBe('ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED');
   });
   it('does not claim protected gain if the extra close-cost reserve is exhausted', () => {
     expect(
@@ -158,6 +158,20 @@ describe('Pepperstone DEMO explicit after-cost profit-lock close policy', () => 
       }).reason,
     ).toBe('GROSS_PNL_NOT_DECLINING');
   });
+  it('does not truncate an already established 1R TP runner on its later retracement', () => {
+    const result = evaluatePepperstoneDemoNetProfitLock({
+      ...input,
+      initialRiskPnl: 200,
+      maxFavorableBrokerNetPnl: 208,
+      previousObservedBrokerNetPnl: 70,
+      currentBrokerNetPnl: 30,
+    });
+    expect(result).toMatchObject({
+      shouldClose: false,
+      reason: 'ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED',
+    });
+  });
+
   it('supports SELL-side quote and protective barrier verification', () => {
     const sell = {
       ...input,

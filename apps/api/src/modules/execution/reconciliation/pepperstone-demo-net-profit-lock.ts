@@ -23,6 +23,7 @@ export type PepperstoneDemoNetLockReason =
   | 'INVALID_RISK_OR_FEE'
   | 'INSUFFICIENT_PRIOR_FEE_SAMPLES'
   | 'NO_MEANINGFUL_NET_PEAK'
+  | 'ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED'
   | 'NO_PROTECTED_GIVEBACK'
   | 'GROSS_PNL_NOT_DECLINING'
   | 'NO_REMAINING_POSITIVE_NET'
@@ -163,6 +164,11 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   // Require a nontrivial, fee-covered peak. Not armed on tiny green ticks.
   const minimumPeak = Math.max(risk * 0.2, fee * 1.65, fee + risk * 0.1);
   if (peak < minimumPeak) return reply('NO_MEANINGFUL_NET_PEAK', null, null, null, peakR);
+  // Limit this first DEMO pilot to the two observed stopout geometries: both
+  // peaked below 0.50R. A genuine AUDUSD TP winner went far past 1R then
+  // recovered from a deep drawdown. Never truncate an established >=0.50R
+  // runner through this *early-peak* experiment.
+  if (peakR >= 0.5) return reply('ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED', null, null, null, peakR);
   // The early-peak giveback floor is intentionally wider than a standard
   // 70–90% trailing lock; high-TP runners may need room to retrace.
   const minNetBuffer = Math.max(3, risk * 0.035, fee * 0.2);
