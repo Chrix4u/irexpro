@@ -36,6 +36,9 @@ export interface CtraderFirstHitResearchResult {
 
 const MAX_TICKS_PER_SIDE = 100_000;
 const MAX_RESEARCH_TICK_WINDOW_MS = 12 * 60_000;
+// A completed provider page alone does not establish that a market was still
+// emitting BOTH quote sides at the target expiry.
+const MAX_EXPIRY_TWO_SIDED_QUOTE_LAG_MS = 5_000;
 
 function exactSafeInt(value: unknown): number {
   if (typeof value !== 'number' && typeof value !== 'string') {
@@ -168,6 +171,24 @@ export function evaluateCtraderTickFirstHitResearch(input: {
   ) {
     return insufficient(allCount);
   }
+  // A hypothetical BUY whose BID is already at/below SL, or a SELL whose
+  // ASK is already at/above SL, cannot be treated as a safe open position.
+  const brokerExitSideAtEntry = input.direction === 'BUY' ? bid.price : ask.price;
+  const immediateStop =
+    input.direction === 'BUY'
+      ? brokerExitSideAtEntry <= input.stopLoss
+      : brokerExitSideAtEntry >= input.stopLoss;
+  if (immediateStop) {
+    return {
+      outcome: 'STOP_FIRST',
+      atMs: entryAtMs,
+      entryAtMs,
+      entryBid: bid.price,
+      entryAsk: ask.price,
+      observedTickCount: allCount,
+    };
+  }
+
   const endAt = entryAtMs + input.horizonMinutes * 60_000;
   // To evaluate a BUY exit, use executable BID ticks. SELL exit uses ASK.
   const side = input.direction === 'BUY' ? input.bidTicks : input.askTicks;
@@ -186,6 +207,17 @@ export function evaluateCtraderTickFirstHitResearch(input: {
     if (x.atMs !== hitAt) break;
     hitTarget ||= target;
     hitStop ||= stop;
+  }
+  if (hitAt === null) {
+    // No touch is not the same as a fully observed no-touch interval.
+    // Require independent BID and ASK quotes immediately after expiry.
+    const nearExpiry = (ticks: readonly CtraderResearchTick[]): boolean =>
+      ticks.some(
+        (tick) => tick.atMs >= endAt && tick.atMs <= endAt + MAX_EXPIRY_TWO_SIDED_QUOTE_LAG_MS,
+      );
+    if (!nearExpiry(input.bidTicks) || !nearExpiry(input.askTicks)) {
+      return insufficient(allCount);
+    }
   }
   return {
     outcome:

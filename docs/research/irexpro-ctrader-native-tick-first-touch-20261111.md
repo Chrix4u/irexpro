@@ -40,3 +40,15 @@ that its historical response account matches the authorized DEMO
 account before trusting the returned price history.
 This correction changes NO entry rule, broker order, original SL/TP,
 model weight, or DEMO/LIVE permission.
+
+
+## Tick-label integrity hardening — 11 Nov 2026
+
+A complete provider page is not proof that quote history extends through
+the full target expiry. The research-only first-touch classifier returns
+INSUFFICIENT_TICK_EVIDENCE instead of NEITHER_WITHIN_HORIZON unless both
+BID and ASK have a quote within five seconds after expiry. It also
+classifies an SL already breached by the executable BID (BUY) or ASK
+(SELL) at hypothetical entry as immediate STOP_FIRST. Both changes
+are conservative research labels, not broker execution or risk gates.
+Recalculate older first-touch cohort reports before comparing models.

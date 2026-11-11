@@ -255,6 +255,75 @@ describe('Spotware native tick first-touch research — NEVER broker authority',
     ).toBe('INSUFFICIENT_TICK_EVIDENCE');
   });
 
+  it('requires both quote sides at expiry before declaring NEITHER_WITHIN_HORIZON', () => {
+    const common = {
+      direction: 'BUY' as const,
+      decisionAtMs: FROM,
+      horizonMinutes: 1 as const,
+      stopLoss: 1.099,
+      takeProfit: 1.101,
+    };
+    const initial = {
+      bidTicks: [
+        { atMs: FROM + 100, price: 1.1 },
+        { atMs: FROM + 5_000, price: 1.1001 },
+      ],
+      askTicks: [
+        { atMs: FROM + 200, price: 1.10008 },
+        { atMs: FROM + 5_100, price: 1.10018 },
+      ],
+    };
+    expect(evaluateCtraderTickFirstHitResearch({ ...common, ...initial }).outcome).toBe(
+      'INSUFFICIENT_TICK_EVIDENCE',
+    );
+    const complete = {
+      bidTicks: [...initial.bidTicks, { atMs: FROM + 60_700, price: 1.1002 }],
+      askTicks: [...initial.askTicks, { atMs: FROM + 60_800, price: 1.10028 }],
+    };
+    expect(evaluateCtraderTickFirstHitResearch({ ...common, ...complete }).outcome).toBe(
+      'NEITHER_WITHIN_HORIZON',
+    );
+    expect(
+      evaluateCtraderTickFirstHitResearch({
+        ...common,
+        bidTicks: complete.bidTicks,
+        askTicks: initial.askTicks,
+      }).outcome,
+    ).toBe('INSUFFICIENT_TICK_EVIDENCE');
+    const stale = {
+      bidTicks: [...initial.bidTicks, { atMs: FROM + 66_000, price: 1.1002 }],
+      askTicks: [...initial.askTicks, { atMs: FROM + 66_100, price: 1.10028 }],
+    };
+    expect(evaluateCtraderTickFirstHitResearch({ ...common, ...stale }).outcome).toBe(
+      'INSUFFICIENT_TICK_EVIDENCE',
+    );
+  });
+
+  it('detects an immediate spread-triggered stop at hypothetical entry', () => {
+    const buy = evaluateCtraderTickFirstHitResearch({
+      direction: 'BUY',
+      decisionAtMs: FROM,
+      horizonMinutes: 1,
+      stopLoss: 1.10003,
+      takeProfit: 1.1009,
+      bidTicks: [{ atMs: FROM + 100, price: 1.1 }],
+      askTicks: [{ atMs: FROM + 200, price: 1.1001 }],
+    });
+    expect(buy.outcome).toBe('STOP_FIRST');
+    expect(buy.atMs).toBe(FROM + 200);
+    const sell = evaluateCtraderTickFirstHitResearch({
+      direction: 'SELL',
+      decisionAtMs: FROM,
+      horizonMinutes: 1,
+      stopLoss: 1.10005,
+      takeProfit: 1.099,
+      bidTicks: [{ atMs: FROM + 100, price: 1.1 }],
+      askTicks: [{ atMs: FROM + 200, price: 1.1001 }],
+    });
+    expect(sell.outcome).toBe('STOP_FIRST');
+    expect(sell.atMs).toBe(FROM + 200);
+  });
+
   it('does not infer a win from insufficient ticks or intrabar candle high/low', () => {
     const r = evaluateCtraderTickFirstHitResearch({
       bidTicks: ticks.bidTicks.slice(0, 1),
