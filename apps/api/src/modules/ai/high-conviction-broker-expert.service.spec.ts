@@ -97,6 +97,73 @@ describe('HighConvictionBrokerExpertService', () => {
     });
   });
 
+  it('classifies one broker-native model snapshot separately for BUY and SELL', async () => {
+    const client = new FakeAiEngineClient();
+    const service = new HighConvictionBrokerExpertService(client as never);
+
+    const pair = await service.evaluatePair({
+      userId: 'user-1',
+      brokerConnectionId: 'ctrader-demo-connection',
+      instrument: 'eurusd',
+      candidateCloseTime: new Date('2026-10-27T20:30:00.000Z'),
+    });
+
+    expect(client.calls).toEqual([
+      { userId: 'user-1', brokerConnectionId: 'ctrader-demo-connection', instrument: 'EURUSD' },
+    ]);
+    expect(pair.BUY).toMatchObject({
+      state: 'CONFIRM',
+      direction: 'BUY',
+      allBrokerNative: true,
+      modifiesExecution: false,
+    });
+    expect(pair.SELL).toMatchObject({
+      state: 'CONFLICT',
+      direction: 'BUY',
+      allBrokerNative: true,
+      modifiesExecution: false,
+    });
+    expect(pair.BUY.decisionTime).toBe(pair.SELL.decisionTime);
+  });
+
+  it('fails both directions closed on one failed broker scoring request', async () => {
+    const client = new FakeAiEngineClient();
+    client.error = new Error('AI engine unavailable');
+    const service = new HighConvictionBrokerExpertService(client as never);
+
+    const pair = await service.evaluatePair({
+      userId: 'user-1',
+      brokerConnectionId: 'ctrader-demo-connection',
+      instrument: 'EURUSD',
+      candidateCloseTime: new Date('2026-10-27T20:30:00.000Z'),
+    });
+
+    expect(client.calls).toHaveLength(1);
+    expect(pair.BUY).toMatchObject({ state: 'UNAVAILABLE', allBrokerNative: false });
+    expect(pair.SELL).toMatchObject({ state: 'UNAVAILABLE', allBrokerNative: false });
+  });
+
+  it('keeps model requests separate across broker accounts and instruments', async () => {
+    const client = new FakeAiEngineClient();
+    const service = new HighConvictionBrokerExpertService(client as never);
+    for (const item of [
+      { userId: 'user-1', brokerConnectionId: 'demo-1', instrument: 'EURUSD' },
+      { userId: 'user-1', brokerConnectionId: 'demo-2', instrument: 'EURUSD' },
+      { userId: 'user-1', brokerConnectionId: 'demo-2', instrument: 'USDJPY' },
+    ]) {
+      await service.evaluatePair({
+        ...item,
+        candidateCloseTime: new Date('2026-10-27T20:30:00.000Z'),
+      });
+    }
+    expect(client.calls).toHaveLength(3);
+    expect(client.calls.map((item) => item.brokerConnectionId)).toEqual([
+      'demo-1',
+      'demo-2',
+      'demo-2',
+    ]);
+  });
+
   it('fails closed when the trained scorer reports mixed/non-broker provenance', async () => {
     const client = new FakeAiEngineClient();
     client.response = readyResponse({

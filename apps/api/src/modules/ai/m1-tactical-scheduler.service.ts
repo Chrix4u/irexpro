@@ -993,6 +993,29 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       return null;
     }
 
+    // A single per-pair, per-minute broker AI snapshot can be consistently
+    // classified for BUY and SELL. Claim lazily at the original expert
+    // evaluation point so the first candidate's timing is unchanged.
+    // No cache survives this processInstrument call; broker order, portfolio,
+    // intent and risk checks remain fresh and serial for each direction.
+    let expertPair: Promise<Readonly<Record<'BUY' | 'SELL', HighConvictionOverlay>>> | null = null;
+    const trainedExpertForSlot =
+      this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&
+      typeof this.highConvictionBrokerExpert?.evaluatePair === 'function'
+        ? async (direction: 'BUY' | 'SELL'): Promise<HighConvictionOverlay> => {
+            if (!expertPair) {
+              expertPair = this.highConvictionBrokerExpert!.evaluatePair({
+                userId,
+                brokerConnectionId,
+                instrument,
+                candidateCloseTime: decisionTime,
+              });
+            }
+            const scores = await expertPair;
+            return scores[direction];
+          }
+        : undefined;
+
     const decisionStartedAt = Date.now();
     const eventRisk = await this.macroEventRisk.assess(instrument, decisionTime);
     const candidates = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2);
@@ -1010,6 +1033,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         market.spreadEvidence,
         decisionTime,
         market.paperSimulationSpreadPrice,
+        trainedExpertForSlot,
       );
     }
 
@@ -1251,6 +1275,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     decisionTime: Date,
     paperSimulationSpreadPrice?: number,
     phaseTimings?: { portfolioMs: number; trainedExpertMs: number },
+    trainedExpertForSlot?: (direction: 'BUY' | 'SELL') => Promise<HighConvictionOverlay>,
   ): Promise<MultimodelDemoEvaluation> {
     const planBInput = m1CandidateToPlanBInput(candidate, features, decisionTime);
     const portfolioPositions: PlanBPortfolioPosition[] = [];
@@ -1299,29 +1324,31 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     });
 
     const expertStartedAt = Date.now();
-    const trainedExpert: HighConvictionOverlay = this.highConvictionBrokerExpert
-      ? await this.highConvictionBrokerExpert.evaluate({
-          userId,
-          brokerConnectionId,
-          instrument: candidate.instrument,
-          candidateDirection: candidate.direction,
-          candidateCloseTime: decisionTime,
-        })
-      : {
-          state: 'UNAVAILABLE',
-          reason: 'TRAINED_EXPERT_SERVICE_UNAVAILABLE',
-          decisionTime: null,
-          freshnessSeconds: null,
-          allBrokerNative: false,
-          direction: null,
-          admitted: null,
-          ensembleConfidence: null,
-          meanOpportunityProbability: null,
-          longVotes: null,
-          shortVotes: null,
-          regime: null,
-          modifiesExecution: false,
-        };
+    const trainedExpert: HighConvictionOverlay = trainedExpertForSlot
+      ? await trainedExpertForSlot(candidate.direction)
+      : this.highConvictionBrokerExpert
+        ? await this.highConvictionBrokerExpert.evaluate({
+            userId,
+            brokerConnectionId,
+            instrument: candidate.instrument,
+            candidateDirection: candidate.direction,
+            candidateCloseTime: decisionTime,
+          })
+        : {
+            state: 'UNAVAILABLE',
+            reason: 'TRAINED_EXPERT_SERVICE_UNAVAILABLE',
+            decisionTime: null,
+            freshnessSeconds: null,
+            allBrokerNative: false,
+            direction: null,
+            admitted: null,
+            ensembleConfidence: null,
+            meanOpportunityProbability: null,
+            longVotes: null,
+            shortVotes: null,
+            regime: null,
+            modifiesExecution: false,
+          };
     if (phaseTimings) phaseTimings.trainedExpertMs += Math.max(0, Date.now() - expertStartedAt);
 
     const baseAuthority = evaluateMultimodelDemoAuthority({
@@ -1360,6 +1387,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     spreadEvidence: Parameters<typeof evaluateM1TacticalGovernance>[0]['executionSpreadEvidence'],
     decisionTime: Date,
     paperSimulationSpreadPrice?: number,
+    trainedExpertForSlot?: (direction: 'BUY' | 'SELL') => Promise<HighConvictionOverlay>,
   ): Promise<void> {
     if (!features) return;
     // Observational timings only; never consulted by risk or entry authority.
@@ -1431,6 +1459,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           decisionTime,
           paperSimulationSpreadPrice,
           multimodelSubphases,
+          trainedExpertForSlot,
         )
       : null;
     timings.multimodelMs = Date.now() - multimodelStartedAt;
