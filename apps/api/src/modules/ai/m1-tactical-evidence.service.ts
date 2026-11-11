@@ -580,6 +580,21 @@ export class M1TacticalEvidenceService {
             AND governance->'multimodelEnsemble'->>'paperAdmitted' = 'true'
             AND blockers ? 'MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED'
         ) AS planb_reversal_m1_abstained_decisions,
+        -- These are the SAME proposed side: M1 has a valid continuation route,
+        -- but Plan B independently labels the same candidate as a reversal
+        -- or early transition. Do not confuse semantic mismatch with M1 ABSTAIN,
+        -- and do not grant permission to trade via this diagnostic.
+        (SELECT COUNT(*) FROM cohort
+          WHERE route = 'M1_TREND_CONTINUATION'
+            AND governance->'multimodelEnsemble'->>'paperAdmitted' = 'true'
+            AND (
+              (governance->'multimodelEnsemble'->>'strategyRoute' = 'CONFIRMED_REVERSAL'
+                AND blockers ? 'MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED')
+              OR
+              (governance->'multimodelEnsemble'->>'strategyRoute' = 'EARLY_TRANSITION'
+                AND blockers ? 'MULTIMODEL_EARLY_TRANSITION_NOT_M1_CONFIRMED')
+            )
+        ) AS planb_admitted_m1_continuation_route_mismatch_decisions,
         -- Rollover counts describe the model's observed regime, not a broker halt.
         (SELECT COUNT(*) FROM cohort
           WHERE governance->'multimodelEnsemble'->>'regime' = 'ROLLOVER_RISK'

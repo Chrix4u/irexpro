@@ -32,6 +32,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       planBAdmittedDecisions: 0,
       planBReversalTimingHeldDecisions: 0,
       planBReversalM1AbstainedDecisions: 0,
+      planBAdmittedM1ContinuationRouteMismatchDecisions: 0,
       rolloverRegimeDecisions: 0,
       primaryPathDecisions: 0,
       primaryReliabilityVetoDecisions: 0,
@@ -57,6 +58,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
         planb_admitted_decisions: '8',
         planb_reversal_timing_held_decisions: '81',
         planb_reversal_m1_abstained_decisions: '79',
+        planb_admitted_m1_continuation_route_mismatch_decisions: '4',
         rollover_regime_decisions: '12',
         primary_path_decisions: '2',
         primary_reliability_veto_decisions: '2',
@@ -86,6 +88,7 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       planBAdmittedDecisions: 8,
       planBReversalTimingHeldDecisions: 81,
       planBReversalM1AbstainedDecisions: 79,
+      planBAdmittedM1ContinuationRouteMismatchDecisions: 4,
       rolloverRegimeDecisions: 12,
       primaryPathDecisions: 2,
       primaryReliabilityVetoDecisions: 2,
@@ -254,6 +257,10 @@ describe('user-scoped, fail-closed focused DEMO no-trade evidence', () => {
       "COALESCE(c.governance->'multimodelEnsemble'->>'paperAdmitted', 'false')",
     );
     expect(sql).toContain('AS leading_planb_reasons');
+    expect(sql).toContain('AS planb_admitted_m1_continuation_route_mismatch_decisions');
+    expect(sql).toContain("route = 'M1_TREND_CONTINUATION'");
+    expect(sql).toContain("blockers ? 'MULTIMODEL_EARLY_TRANSITION_NOT_M1_CONFIRMED'");
+    expect(sql).toContain("blockers ? 'MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED'");
     // The age expression is evaluated from the bounded cohort, not directly
     // from the decision table. This column must be included in that CTE.
     expect(sql).toMatch(/cohort AS \(\s*SELECT d\.evaluated_at, d\.route/);
