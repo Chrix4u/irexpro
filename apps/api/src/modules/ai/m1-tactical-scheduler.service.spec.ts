@@ -4267,6 +4267,56 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(recorded?.governance.reliability.reason).toBe('EARLY_LOSS_STREAK');
   });
 
+  it('scores one DEMO pair only once for both directional M1 candidates in one slot', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+    });
+    h.loadSnapshot.mockImplementation(async (_account: string, instrument: string, when: Date) =>
+      snapshot(instrument, when),
+    );
+    const perPairScore = jest.fn(async (input: any) => {
+      const common = {
+        reason: null,
+        decisionTime: input.candidateCloseTime.toISOString(),
+        freshnessSeconds: 0,
+        allBrokerNative: true,
+        direction: 'BUY',
+        admitted: true,
+        ensembleConfidence: 0.76,
+        meanOpportunityProbability: 0.63,
+        longVotes: 3,
+        shortVotes: 0,
+        regime: 'calm',
+        modifiesExecution: false,
+      };
+      return {
+        BUY: { ...common, state: 'CONFIRM' },
+        SELL: { ...common, state: 'CONFLICT' },
+      };
+    });
+    (h.service as any).highConvictionBrokerExpert.evaluatePair = perPairScore;
+
+    await h.service.runOnce(OPEN_NOW);
+
+    expect(perPairScore).toHaveBeenCalledTimes(1);
+    expect(perPairScore).toHaveBeenCalledWith({
+      userId: 'user-1',
+      brokerConnectionId: 'demo-conn-2',
+      instrument: 'EURUSD',
+      candidateCloseTime: new Date('2026-10-15T12:30:00.000Z'),
+    });
+    expect(h.trainedExpertEvaluate).not.toHaveBeenCalled();
+    const byDirection = Object.fromEntries(
+      h.recordDecision.mock.calls.map(([row]) => [row.direction, row]),
+    );
+    expect(Object.keys(byDirection).sort()).toEqual(['BUY', 'SELL']);
+    expect(byDirection.BUY.governance.multimodelTrainedExpert.state).toBe('CONFIRM');
+    expect(byDirection.SELL.governance.multimodelTrainedExpert.state).toBe('CONFLICT');
+    // The shared trained score does not short-circuit per-direction persistence.
+    expect(h.recordDecision).toHaveBeenCalledTimes(2);
+  });
+
   it('lets a Plan-B + trained-expert confirmed continuation execute even though the M1 rollout route was historically shadow-only', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,

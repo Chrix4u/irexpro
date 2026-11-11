@@ -37,6 +37,39 @@ export class HighConvictionBrokerExpertService {
 
   constructor(private readonly aiEngineClient: AiEngineClient) {}
 
+  /**
+   * Take one broker-native model snapshot for both opposing M1 candidates
+   * within the SAME instrument/decision slot. The raw request is direction-
+   * independent; each candidate still gets its own fail-closed classification.
+   *
+   * This method has no persistent cache. The caller owns the exact slot
+   * lifetime and MUST NOT share results across accounts, pairs or minutes.
+   */
+  async evaluatePair(
+    input: Omit<HighConvictionBrokerExpertInput, 'candidateDirection'>,
+  ): Promise<Readonly<Record<'BUY' | 'SELL', HighConvictionOverlay>>> {
+    try {
+      const response = await this.aiEngineClient.scorePlanBV4ChallengerBroker({
+        userId: input.userId,
+        brokerConnectionId: input.brokerConnectionId,
+        instrument: input.instrument.trim().toUpperCase(),
+      });
+      return {
+        BUY: classifyHighConvictionOverlay(response, 'BUY', input.candidateCloseTime),
+        SELL: classifyHighConvictionOverlay(response, 'SELL', input.candidateCloseTime),
+      };
+    } catch (error) {
+      this.logger.warn(
+        `Plan-B trained broker expert unavailable instrument=${input.instrument.trim().toUpperCase()}: ${(error as Error).message}`,
+      );
+      // One failed broker score means NEITHER direction may gain authority.
+      return {
+        BUY: unavailable('TRAINED_EXPERT_REQUEST_FAILED'),
+        SELL: unavailable('TRAINED_EXPERT_REQUEST_FAILED'),
+      };
+    }
+  }
+
   async evaluate(input: HighConvictionBrokerExpertInput): Promise<HighConvictionOverlay> {
     try {
       const response = await this.aiEngineClient.scorePlanBV4ChallengerBroker({
