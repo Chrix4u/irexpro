@@ -1671,6 +1671,173 @@ export class M1TacticalEvidenceService {
    * Read-only, exact owner/broker/pair/side and as-of bounded; if this
    * query fails the scheduler refuses the trial.
    */
+  /**
+   * DEMO probation exception requires an owner-verified, connected, active
+   * FULL_AUTO broker account. The rollout phase string alone is NOT proof
+   * of broker DEMO status. If this read fails, callers must deny exception.
+   */
+  async isActiveConnectedOwnerDemoBroker(input: {
+    userId: string;
+    brokerConnectionId: string;
+  }): Promise<boolean> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT EXISTS (
+          SELECT 1
+          FROM trading.trading_sessions s
+          JOIN broker.broker_connections b
+            ON b.id = s.broker_connection_id AND b.user_id = s.user_id
+          WHERE s.user_id = $1
+            AND s.broker_connection_id = $2
+            AND s.status = 'ACTIVE'
+            AND s.execution_mode = 'FULL_AUTO'
+            AND b.account_type = 'DEMO'
+            AND b.status = 'CONNECTED'
+            AND b.broker_id = 'pepperstone-ctrader'
+            AND b.deleted_at IS NULL
+        ) AS exists
+      `,
+      [input.userId, input.brokerConnectionId],
+    )) as Array<{ exists: boolean }>;
+    return rows[0]?.exists === true;
+  }
+
+  /**
+   * Exact owner/broker/pair/side/policy realised NET-R evidence.
+   * A gross-positive route may have lost AFTER real broker commissions.
+   * Seven distinct closed trades are required. No generic cross-pair
+   * fallback, no guessed fees, no research-shadow substitutions.
+   */
+  async loadQualifiedM1ContinuationAfterFeeEvidence(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    evaluatedAt: Date;
+    policyVersion: string;
+  }): Promise<{
+    sampleCount: number;
+    netWins: number;
+    averageNetR: number | null;
+    recentNetR: number | null;
+    complete: boolean;
+  }> {
+    const rows = (await this.dataSource.query(
+      `
+        WITH matched AS MATERIALIZED (
+          SELECT DISTINCT ON (t.id)
+            t.id, t.closed_at, t.realised_pnl, t.commission, t.swap,
+            NULLIF(a.sizing_inputs->>'finalRiskAtStop','') AS risk_at_stop
+          FROM trading.m1_tactical_decisions d
+          JOIN trading.trade_intents ti
+            ON ti.user_id=d.user_id
+           AND ti.broker_connection_id=d.broker_connection_id
+           AND (
+             ti.id=d.trade_intent_id
+             OR (d.trade_intent_id IS NULL AND d.signal_id IS NOT NULL
+               AND ti.signal_id=d.signal_id)
+           )
+          JOIN trading.trades t
+            ON t.trade_intent_id=ti.id AND t.user_id=d.user_id
+           AND t.broker_connection_id=d.broker_connection_id
+          LEFT JOIN LATERAL (
+            SELECT ca.sizing_inputs FROM trading.capital_allocations ca
+            WHERE ca.trade_intent_id=t.trade_intent_id
+            ORDER BY ca.created_at DESC LIMIT 1
+          ) a ON TRUE
+          WHERE d.user_id=$1 AND d.broker_connection_id=$2
+            AND d.instrument=$3 AND d.direction=$4
+            AND d.route='M1_TREND_CONTINUATION'
+            AND d.policy_version=$5
+            AND t.status='CLOSED'
+            AND t.closed_at <= $6::timestamptz
+            AND t.closed_at > $6::timestamptz - interval '7 days'
+          ORDER BY t.id,t.closed_at DESC
+        )
+        SELECT realised_pnl,commission,swap,risk_at_stop,closed_at
+        FROM matched ORDER BY closed_at DESC LIMIT 7
+      `,
+      [
+        input.userId, input.brokerConnectionId,
+        input.instrument.trim().toUpperCase(),input.direction,
+        input.policyVersion,input.evaluatedAt.toISOString(),
+      ],
+    )) as Array<{
+      realised_pnl: string | number | null;
+      commission: string | number | null;
+      swap: string | number | null;
+      risk_at_stop: string | number | null;
+      closed_at: string | Date;
+    }>;
+    const netR: number[]=[];
+    for (const row of rows) {
+      if (
+        row.realised_pnl == null || row.commission == null ||
+        row.swap == null || row.risk_at_stop == null
+      ) {
+        return {
+          sampleCount: rows.length, netWins: 0,
+          averageNetR: null, recentNetR: null, complete: false,
+        };
+      }
+      const gross=Number(row.realised_pnl);
+      const commission=Number(row.commission);
+      const swap=Number(row.swap);
+      const risk=Number(row.risk_at_stop);
+      if (
+        ![gross,commission,swap,risk].every(Number.isFinite) ||
+        risk <= 0 || commission > 0
+      ) {
+        return {
+          sampleCount: rows.length, netWins: 0,
+          averageNetR: null, recentNetR: null, complete: false,
+        };
+      }
+      netR.push((gross+commission+swap)/risk);
+    }
+    return {
+      sampleCount: netR.length,
+      netWins: netR.filter(v=>v>0).length,
+      averageNetR: netR.length
+        ? netR.reduce((sum,v)=>sum+v,0)/netR.length : null,
+      recentNetR: netR.length >= 3
+        ? netR.slice(0,3).reduce((sum,v)=>sum+v,0) : null,
+      complete: netR.length >= 7,
+    };
+  }
+
+  /** Fail-closed exact-owner DEMO same-side 90m canary repeat limit. */
+  async hasRecentM1QualifiedContinuationCanary(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    evaluatedAt: Date;
+    cooldownMinutes: number;
+  }): Promise<boolean> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT EXISTS (
+          SELECT 1 FROM trading.m1_tactical_decisions
+          WHERE user_id = $1
+            AND broker_connection_id = $2
+            AND instrument = $3
+            AND direction = $4
+            AND evaluated_at < $5::timestamptz
+            AND evaluated_at >= $5::timestamptz - ($6::int * interval '1 minute')
+            AND execution_authority = 'BROKER_NATIVE'
+            AND governance #>> '{demoPrimaryOnlyProbation,qualifiedContinuationCanary}' = 'true'
+        ) AS exists
+      `,
+      [
+        input.userId, input.brokerConnectionId,
+        input.instrument.trim().toUpperCase(), input.direction,
+        input.evaluatedAt.toISOString(), input.cooldownMinutes,
+      ],
+    )) as Array<{ exists: boolean }>;
+    return rows[0]?.exists === true;
+  }
+
   async hasRecentM1RecoveryCanary(input: {
     userId: string;
     brokerConnectionId: string;

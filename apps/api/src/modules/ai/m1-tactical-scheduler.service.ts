@@ -93,6 +93,7 @@ import {
 } from './m1-portfolio-net-loss-brake';
 import { evaluateDemoProfitabilityReliabilityGate } from './demo-profitability-reliability-gate';
 import { evaluateDemoPrimaryOnlyProbation } from './demo-primary-only-route-probation';
+import { classifyForexSessionClock } from './forex-session-clock';
 import { evaluateIndependentM1OpportunityShadow } from './independent-m1-opportunity-shadow';
 import {
   evaluateM1RoutePairSideReliability,
@@ -168,6 +169,14 @@ interface M1ProfessionalFallbackDecision {
 // and ONLY after the 180m reliability cooldown + every normal risk gate.
 export const M1_DEMO_RECOVERY_CANARY_LOT_CAP = 0.01;
 export const M1_DEMO_RECOVERY_CANARY_SPACING_MINUTES = 240;
+/**
+ * A once-per-90m, 0.01-lot, owner-confirmed DEMO only exception to the
+ * duplicate primary-only probation veto for ALREADY qualified continuation.
+ * It does not authorize a trade without every normal M1/broker risk gate.
+ */
+export const M1_DEMO_QUALIFIED_CONTINUATION_CANARY_LOT_CAP = 0.01;
+export const M1_DEMO_QUALIFIED_CONTINUATION_CANARY_SPACING_MINUTES = 90;
+
 const M1_PROFESSIONAL_FALLBACK_LOT_CAP = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_LOT_CAP = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_MIN_EXPECTED_R = 0.2;
@@ -1716,6 +1725,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const recoveryCanaryVolumeCap = recoveryCanary
       ? Math.min(executionVolumeCap, M1_DEMO_RECOVERY_CANARY_LOT_CAP)
       : executionVolumeCap;
+    // This must not be a 0.20-lot fallback simply because Plan B was
+    // non-admitted. Dedicated DEMO trial cap is 0.01 lot.
+    // The probation decision is computed below after owner verification;
+    // defer applying this cap until then.
     const microDriftOnlyRescue =
       earlyTransitionMicro &&
       shadowPairSideReliability?.eligible === true &&
@@ -1736,8 +1749,56 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? shadowPairSideReliability?.eligible === true &&
           (standardGovernanceExecutable || localImpulseDriftOnlyRescue)
         : standardGovernanceExecutable;
+    // Never infer DEMO account type from rollout-policy naming. A favorable
+    // exact pair/side M1 sleeve can be put on a tiny research canary only if
+    // the broker is owner-bound, connected and has an ACTIVE DEMO session.
+    let verifiedDemoForQualifiedContinuation = false;
+    let qualifiedContinuationAfterFeeEvidence: Awaited<
+      ReturnType<M1TacticalEvidenceService['loadQualifiedM1ContinuationAfterFeeEvidence']>
+    > | null = null;
+    if (
+      professionalDemoPhase &&
+      this.rolloutPolicy.demoPrimaryOnlyProbation === true &&
+      professionalM1FallbackExecutable &&
+      professionalM1Fallback?.tier === 'QUALIFIED_CONTINUATION' &&
+      reliability?.reason === 'POSITIVE_EXPECTANCY'
+    ) {
+      try {
+        verifiedDemoForQualifiedContinuation =
+          await this.evidence.isActiveConnectedOwnerDemoBroker({
+            userId, brokerConnectionId,
+          });
+        if (verifiedDemoForQualifiedContinuation) {
+          qualifiedContinuationAfterFeeEvidence =
+            await this.evidence.loadQualifiedM1ContinuationAfterFeeEvidence({
+              userId, brokerConnectionId,
+              instrument: candidate.instrument,
+              direction: candidate.direction,
+              evaluatedAt: decisionTime,
+              policyVersion: candidate.policyVersion,
+            });
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Qualified continuation DEMO owner verification unavailable ${candidate.instrument}: ${(error as Error).message}`,
+        );
+      }
+    }
     const demoPrimaryOnlyProbation = evaluateDemoPrimaryOnlyProbation({
       enabled: professionalDemoPhase && this.rolloutPolicy.demoPrimaryOnlyProbation === true,
+      brokerAccountIsDemo: verifiedDemoForQualifiedContinuation,
+      afterCommissionEvidence: qualifiedContinuationAfterFeeEvidence,
+      genuineRollover: classifyForexSessionClock(decisionTime) === 'ROLLOVER',
+      qualifiedContinuationEvidence: reliability
+        ? {
+            eligible: reliability.eligible,
+            reason: reliability.reason,
+            samples: reliability.samples,
+            wins: reliability.wins,
+            averageRealizedR: reliability.averageRealizedR,
+            recentRealizedR: reliability.recentRealizedR,
+          }
+        : null,
       primaryAuthorityPath: multimodelDemo?.authority.authorityPath ?? null,
       m5HandoffEligible: m5EarlyTransitionHandoffEligible,
       executableFallbackTier: professionalM1FallbackExecutable
@@ -1745,6 +1806,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         : null,
       extensionScoutExecutable: extensionExhaustionDemoScoutExecutable,
     });
+    const selectedExecutionVolumeCap =
+      demoPrimaryOnlyProbation.qualifiedContinuationCanary
+        ? Math.min(
+            recoveryCanaryVolumeCap,
+            M1_DEMO_QUALIFIED_CONTINUATION_CANARY_LOT_CAP,
+          )
+        : recoveryCanaryVolumeCap;
     // Authoritative DEMO new-entry scope, after all research predictions
     // have been scored. A research-only pair MUST NOT reach a broker write,
     // including direction-flip closures triggered by a new entry candidate.
@@ -1799,6 +1867,29 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           cooldownMinutes: M1_PORTFOLIO_NET_LOSS_BRAKE_COOLDOWN_MINUTES,
           cooldownRemainingSeconds: 0,
         };
+      }
+    }
+    // The controlled qualified-M1 alternative is NOT a Plan B override
+    // for unqualified candidates. It is a small exception to probation for
+    // the exact already-qualified continuation route. Fail-closed when the
+    // last real broker-native canary cannot be checked.
+    let qualifiedContinuationCanaryRecentlyAuthorized = false;
+    let qualifiedContinuationCanaryHistoryUnavailable = false;
+    if (demoPrimaryOnlyProbation.qualifiedContinuationCanary && preliminaryCanExecute) {
+      try {
+        qualifiedContinuationCanaryRecentlyAuthorized =
+          await this.evidence.hasRecentM1QualifiedContinuationCanary({
+            userId, brokerConnectionId,
+            instrument: candidate.instrument,
+            direction: candidate.direction,
+            evaluatedAt: decisionTime,
+            cooldownMinutes: M1_DEMO_QUALIFIED_CONTINUATION_CANARY_SPACING_MINUTES,
+          });
+      } catch (error) {
+        qualifiedContinuationCanaryHistoryUnavailable = true;
+        this.logger.warn(
+          `Qualified continuation canary history unavailable ${candidate.instrument}: ${(error as Error).message}`,
+        );
       }
     }
     // Fail-closed on unavailable recovery history. Query ONLY for a would-
@@ -2000,6 +2091,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       portfolioNetLossBrake?.active !== true &&
       !recoveryCanaryRecentlyAuthorized &&
       !recoveryCanaryHistoryUnavailable &&
+      !qualifiedContinuationCanaryRecentlyAuthorized &&
+      !qualifiedContinuationCanaryHistoryUnavailable &&
       !demoPrimaryOnlyProbation.blocked &&
       !demoBrokerCommissionGate.blocked;
     const effectiveGovernanceBlockers =
@@ -2050,6 +2143,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(portfolioNetLossBrake?.active === true ? ['M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE'] : []),
           ...(recoveryCanaryRecentlyAuthorized ? ['M1_RECOVERY_CANARY_REPEAT_COOLDOWN'] : []),
           ...(recoveryCanaryHistoryUnavailable ? ['M1_RECOVERY_CANARY_HISTORY_UNAVAILABLE'] : []),
+          ...(qualifiedContinuationCanaryRecentlyAuthorized
+            ? ['M1_DEMO_QUALIFIED_CONTINUATION_CANARY_REPEAT_COOLDOWN'] : []),
+          ...(qualifiedContinuationCanaryHistoryUnavailable
+            ? ['M1_DEMO_QUALIFIED_CONTINUATION_CANARY_HISTORY_UNAVAILABLE'] : []),
           ...(demoPrimaryOnlyProbation.blocked ? ['M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION'] : []),
           ...(demoBrokerCommissionGate.blocked
             ? [`M1_DEMO_BROKER_COMMISSION_${demoBrokerCommissionGate.reason}`]
@@ -2277,7 +2374,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? { ...provisionalScoutReliability }
             : null,
         scoutReliabilityTier,
-        executionVolumeCap: recoveryCanaryVolumeCap,
+        executionVolumeCap: selectedExecutionVolumeCap,
+        qualifiedContinuationCanaryRecentlyAuthorized,
+        qualifiedContinuationCanaryHistoryUnavailable,
         recoveryCanary: recoveryCanary || false,
         recoveryCanaryHistoryUnavailable,
         recoveryCanaryRecentlyAuthorized,
@@ -2291,6 +2390,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         fastStopRegimeBrake: fastStopRegimeBrake ? { ...fastStopRegimeBrake } : null,
         portfolioNetLossBrake: portfolioNetLossBrake ? { ...portfolioNetLossBrake } : null,
         demoPrimaryOnlyProbation: { ...demoPrimaryOnlyProbation },
+        qualifiedContinuationAfterFeeEvidence,
         demoBrokerCommissionGate: commissionGateAudit,
         productionQualificationShadow,
         secondaryPredictedCostShadow,
@@ -2361,7 +2461,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           localImpulseDriftOnlyRescue,
           evidenceQualifiedScout,
           scoutReliabilityTier,
-          recoveryCanaryVolumeCap,
+          selectedExecutionVolumeCap,
           multimodelDemo,
           professionalM1Fallback,
           m5EarlyTransitionEvidence,

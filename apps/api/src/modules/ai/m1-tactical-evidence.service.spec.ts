@@ -63,6 +63,100 @@ describe('M1 loss recovery canary single-flight query', () => {
   });
 });
 
+describe('owner-verified DEMO continuation canary evidence', () => {
+  const broker = {
+    userId: '11111111-1111-4111-8111-111111111111',
+    brokerConnectionId: '22222222-2222-4222-8222-222222222222',
+  };
+  it('requires a connected owner-bound active FULL_AUTO Pepperstone DEMO, not a rollout label', async () => {
+    const query=jest.fn().mockResolvedValue([{exists:true}]);
+    const evidence=new M1TacticalEvidenceService({query} as unknown as DataSource);
+    expect(await evidence.isActiveConnectedOwnerDemoBroker(broker)).toBe(true);
+    const [sql,args]=query.mock.calls[0];
+    for(const piece of [
+      's.user_id = $1', 's.broker_connection_id = $2',
+      "s.status = 'ACTIVE'", "s.execution_mode = 'FULL_AUTO'",
+      "b.account_type = 'DEMO'", "b.status = 'CONNECTED'",
+      "b.broker_id = 'pepperstone-ctrader'", 'b.deleted_at IS NULL',
+    ]) expect(sql).toContain(piece);
+    expect(args).toEqual([broker.userId,broker.brokerConnectionId]);
+  });
+  it('does not grant a canary when broker scope is absent', async () => {
+    const query=jest.fn().mockResolvedValue([{exists:false}]);
+    const evidence=new M1TacticalEvidenceService({query} as unknown as DataSource);
+    expect(await evidence.isActiveConnectedOwnerDemoBroker(broker)).toBe(false);
+  });
+  it('limits prior broker-authenticated canaries to exact pair+side within 90min', async () => {
+    const query=jest.fn().mockResolvedValue([{exists:true}]);
+    const evidence=new M1TacticalEvidenceService({query} as unknown as DataSource);
+    const input={...broker,instrument:'audusd',direction:'SELL' as const,
+      evaluatedAt:new Date('2026-11-12T19:05:00Z'),cooldownMinutes:90};
+    expect(await evidence.hasRecentM1QualifiedContinuationCanary(input)).toBe(true);
+    const [sql,args]=query.mock.calls[0];
+    expect(sql).toContain("execution_authority = 'BROKER_NATIVE'");
+    expect(sql).toContain("governance #>> '{demoPrimaryOnlyProbation,qualifiedContinuationCanary}' = 'true'");
+    expect(sql).toContain('evaluated_at < $5::timestamptz');
+    expect(args).toEqual([
+      broker.userId,broker.brokerConnectionId,'AUDUSD','SELL',
+      '2026-11-12T19:05:00.000Z',90,
+    ]);
+  });
+});
+
+describe('exact real after-commission M1 continuation qualification', () => {
+  const input = {
+    userId:'11111111-1111-4111-8111-111111111111',
+    brokerConnectionId:'22222222-2222-4222-8222-222222222222',
+    instrument:'audusd',
+    direction:'SELL' as const,
+    evaluatedAt: new Date('2026-11-12T19:05:00Z'),
+    policyVersion:'m1-tactical-v2-m5-lifecycle',
+  };
+  const gross = [-100,22,156,32,-116,52,396];
+  const commissions = [-12,-12,-12,-12,-24,-24,-24];
+  const risk = [100,100,100,100,200,200,200];
+  const rows = gross.map((value,i)=>({
+    realised_pnl:String(value),
+    commission:String(commissions[i]),
+    swap:'0',
+    risk_at_stop:String(risk[i]),
+    closed_at:new Date(Date.UTC(2026,10,12,10,16-i)),
+  }));
+  it('qualifies five NET winners among seven owner-bound exact trades and accounts for all fees', async () => {
+    const query=jest.fn().mockResolvedValue(rows);
+    const e=new M1TacticalEvidenceService({query} as unknown as DataSource);
+    const result=await e.loadQualifiedM1ContinuationAfterFeeEvidence(input);
+    expect(result.complete).toBe(true);
+    expect(result.sampleCount).toBe(7);
+    expect(result.netWins).toBe(5);
+    expect(result.averageNetR).toBeCloseTo(1.92/7,8);
+    expect(result.recentNetR).toBeCloseTo(0.42,8);
+    const [sql,args]=query.mock.calls[0];
+    for(const bit of [
+      'SELECT DISTINCT ON (t.id)', 't.commission', 't.swap',
+      'finalRiskAtStop', "d.route='M1_TREND_CONTINUATION'",
+      'd.broker_connection_id=$2', 'd.instrument=$3',
+      'd.direction=$4', 'd.policy_version=$5',
+      "t.status='CLOSED'",'t.closed_at <= $6::timestamptz',
+    ]) expect(String(sql)).toContain(bit);
+    expect(args).toEqual([
+      input.userId,input.brokerConnectionId,'AUDUSD','SELL',
+      input.policyVersion,input.evaluatedAt.toISOString(),
+    ]);
+  });
+  it('fails closed on missing commission, insufficient trades or zero initial risk', async () => {
+    const query=jest.fn()
+      .mockResolvedValueOnce(rows.slice(0,6))
+      .mockResolvedValueOnce(rows.map((r,i)=>i===0?{...r,commission:null}:r))
+      .mockResolvedValueOnce(rows.map((r,i)=>i===0?{...r,risk_at_stop:'0'}:r));
+    const e=new M1TacticalEvidenceService({query} as unknown as DataSource);
+    for(let i=0;i<3;i++){
+      const r=await e.loadQualifiedM1ContinuationAfterFeeEvidence(input);
+      expect(r.complete).toBe(false);
+    }
+  });
+});
+
 describe('M1 tactical decision migration contract', () => {
   it('creates an isolated decision table with the exact idempotency fence and safety fields', () => {
     expect(fs.existsSync(MIGRATION)).toBe(true);
