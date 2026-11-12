@@ -1,6 +1,8 @@
 # iRexPro broker-native, read-only independent M1 opportunity audit
 # At most one instance; no DB writes, orders or model promotions.
+# Every 30 minutes during active international trading hours. A conservative
+# 12-minute horizon-maturation buffer is enforced inside the read-only audit.
 SHELL=/bin/bash
 PATH=/usr/local/apps/nodejs22/bin:/usr/local/bin:/usr/bin:/bin
 CRON_TZ=UTC
-45 21 * * 1-5 root /home/lightworld/webapps/irexpro-staging/apps/api/scripts/run-m1-opportunity-audit.sh >> /home/lightworld/webapps/irexpro-staging/var/shadow-audits/m1-opportunity/runner.log 2>&1
+15,45 6-21 * * 1-5 root /home/lightworld/webapps/irexpro-staging/apps/api/scripts/run-m1-opportunity-audit.sh >> /home/lightworld/webapps/irexpro-staging/var/shadow-audits/m1-opportunity/runner.log 2>&1

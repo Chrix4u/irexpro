@@ -69,3 +69,22 @@ test('summaries do not count missing values as successes', () => {
     evaluated:2,netPips:-1,profitable:1,winRate:0.5,profitFactor:0.5,
   });
 });
+
+
+test('BUY TP cannot be inferred from midpoint high unless bid clears target',()=>{
+  const result=quickProfitFirstTouch({
+    direction:'BUY',entry:1.10500,stop:1.10400,
+    capturePips:2,quoteSpreadPips:1,
+    bars:[{high:1.10525,low:1.10500}],
+  });
+  assert.equal(result.status,'NO_FIRST_TOUCH');
+});
+
+test('BUY first touch uses conservative executable BID and stop-first ordering',()=>{
+  const result=quickProfitFirstTouch({
+    direction:'BUY',entry:1.10500,stop:1.10400,
+    capturePips:2,quoteSpreadPips:1,
+    bars:[{high:1.10545,low:1.10405}],
+  });
+  assert.equal(result.status,'STOP_FIRST');
+});
