@@ -22,6 +22,8 @@ export const REJECTED_EDGE_EPISODE_GAP_MINUTES = 15;
 interface ShadowDecisionRow {
   shadow_decision_id: string;
   user_id: string;
+  /** Exact, owner-verified DEMO broker associated with this immutable decision. */
+  broker_connection_id: string;
   instrument: string;
   direction: 'BUY' | 'SELL';
   evaluated_at: string | Date;
@@ -206,7 +208,8 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
       modifiesExecution: false,
       cadenceSeconds: 60,
       checkpointsMinutes: [5, 10, 15, 30, 60, 120, 240],
-      brokerSourceConfigured: Boolean(this.marketDataConnectionId()),
+      brokerSourceConfigured: true,
+      brokerSourceMode: 'DECISION_TIME_DEMO_SESSION' as const,
       lastRunAt: this.lastRunAt?.toISOString() ?? null,
       lastScored: this.lastScored,
       lastCandidates: this.lastCandidates,
@@ -327,23 +330,45 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
     return (await this.dataSource.query(
       `
         SELECT
-          id AS shadow_decision_id,
-          user_id,
-          instrument,
-          direction,
-          evaluated_at,
-          entry_price,
-          confidence,
-          components,
+          decision.id AS shadow_decision_id,
+          decision.user_id,
+          COALESCE(session_source.broker_connection_id, original_broker.id) AS broker_connection_id,
+          decision.instrument,
+          decision.direction,
+          decision.evaluated_at,
+          decision.entry_price,
+          decision.confidence,
+          decision.components,
           CASE
             WHEN admitted = true OR components ->> 'paperAdmitted' = 'true'
               THEN '${PLAN_B_V85_ARTIFACT}'
             ELSE '${REJECTED_EDGE_OUTCOME_SHADOW_ARTIFACT}'
           END AS observation_artifact
         FROM trading.ensemble_shadow_decisions AS decision
-        WHERE engine_code = $1
-          AND model_version = $2
-          AND user_id = $3
+        -- The ensemble's source may be an internal paper-broker identity.
+        -- The real broker-native DEMO session at decision time is authoritative.
+        LEFT JOIN LATERAL (
+          SELECT session.broker_connection_id
+          FROM trading.trading_sessions AS session
+          JOIN broker.broker_connections AS native
+            ON native.id = session.broker_connection_id
+           AND native.user_id = decision.user_id
+           AND native.account_type = 'DEMO'
+           AND native.broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')
+          WHERE session.user_id = decision.user_id
+            AND session.execution_mode = 'FULL_AUTO'
+            AND session.started_at <= decision.evaluated_at
+            AND (session.ended_at IS NULL OR session.ended_at >= decision.evaluated_at)
+          ORDER BY session.started_at DESC LIMIT 1
+        ) AS session_source ON true
+        LEFT JOIN broker.broker_connections AS original_broker
+          ON original_broker.id = decision.broker_connection_id
+         AND original_broker.user_id = decision.user_id
+         AND original_broker.account_type = 'DEMO'
+         AND original_broker.broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')
+        WHERE decision.engine_code = $1
+          AND decision.model_version = $2
+          AND decision.user_id = $3
           AND (
             admitted = true
             OR components ->> 'paperAdmitted' = 'true'
@@ -419,7 +444,11 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
     );
 
     const due = dueV85Checkpoints(openedAt, observationEnd, terminal);
-    const marketDataConnectionId = this.marketDataConnectionId();
+    // Global static configuration may point to an old DEMO account. The
+    // candidate query resolves an owner-bound broker-native DEMO source from
+    // the session active AT THE DECISION TIME (or exact original DEMO source).
+    // Missing source remains WAITING; it cannot be guessed or cross-account.
+    const marketDataConnectionId = row.broker_connection_id || '';
 
     for (const checkpointMinutes of due) {
       const checkpointAt = new Date(openedAt.getTime() + checkpointMinutes * 60_000);
@@ -567,20 +596,4 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
     return this.config.get<string>('vpsForexScanner.userId', '').trim();
   }
 
-  private marketDataConnectionId(): string {
-    // Shadow checkpoints need broker-native evidence, not the PAPER execution
-    // identity. Prefer the dedicated tactical source, then the configured
-    // broker-native expert source. PAPER is only a final compatibility fallback.
-    const m1Source = this.config.get<string>('vpsForexScanner.m1MarketDataConnectionId', '').trim();
-    if (m1Source) return m1Source;
-
-    if (this.config.get<boolean>('multimodelBrokerExpert.enabled', false)) {
-      const brokerNativeSource = this.config
-        .get<string>('multimodelBrokerExpert.sourceConnectionId', '')
-        .trim();
-      if (brokerNativeSource) return brokerNativeSource;
-    }
-
-    return this.config.get<string>('vpsForexScanner.brokerConnectionId', '').trim();
-  }
 }

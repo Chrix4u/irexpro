@@ -48,6 +48,7 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
         {
           shadow_decision_id: '00000000-0000-0000-0000-000000000001',
           user_id: '00000000-0000-0000-0000-000000000002',
+          broker_connection_id: '00000000-0000-0000-0000-000000000088',
           instrument: 'EURUSD',
           direction: 'BUY',
           evaluated_at: '2026-10-05T10:00:00Z',
@@ -112,6 +113,11 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
 
     const candidateSql = String(query.mock.calls[0]?.[0]);
     expect(candidateSql).toContain('admitted = true');
+    expect(candidateSql).toContain('native.user_id = decision.user_id');
+    expect(candidateSql).toContain("native.account_type = 'DEMO'");
+    expect(candidateSql).toContain('session.started_at <= decision.evaluated_at');
+    expect(candidateSql).toContain('session.ended_at IS NULL');
+    expect(candidateSql).toContain('COALESCE(session_source.broker_connection_id, original_broker.id)');
     expect(candidateSql).toContain("components ->> 'paperAdmitted' = 'true'");
     expect(candidateSql).toContain("components -> 'governance' ->> 'netExpectedR'");
     expect(candidateSql).toContain("components -> 'governance' ->> 'executionSpreadEvidenceValid'");
@@ -167,6 +173,7 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
         {
           shadow_decision_id: '00000000-0000-0000-0000-000000000010',
           user_id: '00000000-0000-0000-0000-000000000002',
+          broker_connection_id: '00000000-0000-0000-0000-000000000088',
           instrument: 'GBPUSD',
           direction: 'SELL',
           evaluated_at: '2026-10-05T10:00:00Z',
@@ -237,6 +244,7 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
         {
           shadow_decision_id: '00000000-0000-0000-0000-000000000001',
           user_id: '00000000-0000-0000-0000-000000000002',
+          broker_connection_id: '00000000-0000-0000-0000-000000000088',
           instrument: 'EURUSD',
           direction: 'BUY',
           evaluated_at: '2026-10-05T10:00:00Z',
@@ -373,6 +381,7 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
         {
           shadow_decision_id: '00000000-0000-0000-0000-000000000001',
           user_id: '00000000-0000-0000-0000-000000000002',
+          broker_connection_id: '',
           instrument: 'EURUSD',
           direction: 'BUY',
           evaluated_at: '2026-10-05T10:00:00Z',

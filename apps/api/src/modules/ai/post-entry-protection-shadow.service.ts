@@ -135,7 +135,11 @@ export class PostEntryProtectionShadowService implements OnModuleInit, OnModuleD
       modifiesExecution: false,
       cadenceSeconds: 60,
       checkpointsMinutes: [...PLAN_B_V85_CHECKPOINTS],
-      brokerSourceConfigured: Boolean(this.marketDataConnectionId()),
+      brokerSourceConfigured: true,
+      brokerSourceMode: 'ACTUAL_TRADE_DEMO_BROKER' as const,
+      legacySourceConfigured: Boolean(
+        this.config.get<string>('vpsForexScanner.m1MarketDataConnectionId', '').trim(),
+      ),
       lastRunAt: this.lastRunAt?.toISOString() ?? null,
       lastScored: this.lastScored,
       lastError: this.lastError,
@@ -178,6 +182,11 @@ export class PostEntryProtectionShadowService implements OnModuleInit, OnModuleD
           ti.metadata
         FROM trading.trades t
         JOIN trading.trade_intents ti ON ti.id = t.trade_intent_id
+        JOIN broker.broker_connections source
+          ON source.id = t.broker_connection_id
+         AND source.user_id = t.user_id
+         AND source.account_type = 'DEMO'
+         AND source.broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')
         WHERE t.trade_intent_id IS NOT NULL
           AND t.opened_at IS NOT NULL
           AND COALESCE(t.fill_price, t.requested_entry_price) IS NOT NULL
@@ -338,16 +347,9 @@ export class PostEntryProtectionShadowService implements OnModuleInit, OnModuleD
   }
 
   private marketDataConnectionId(executionBrokerConnectionId?: string): string {
-    const m1Source = this.config.get<string>('vpsForexScanner.m1MarketDataConnectionId', '').trim();
-    if (m1Source) return m1Source;
-
-    if (this.config.get<boolean>('multimodelBrokerExpert.enabled', false)) {
-      const brokerNativeSource = this.config
-        .get<string>('multimodelBrokerExpert.sourceConnectionId', '')
-        .trim();
-      if (brokerNativeSource) return brokerNativeSource;
-    }
-
+    // The candidate query has already verified the actual trade's broker is
+    // an owner-matched cTrader-family DEMO account. A stale global research
+    // connection must NEVER override that execution broker's market data.
     return (executionBrokerConnectionId ?? '').trim();
   }
 }
