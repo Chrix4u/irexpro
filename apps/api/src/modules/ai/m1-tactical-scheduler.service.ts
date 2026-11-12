@@ -93,6 +93,7 @@ import {
 } from './m1-portfolio-net-loss-brake';
 import { evaluateDemoProfitabilityReliabilityGate } from './demo-profitability-reliability-gate';
 import { evaluateDemoPrimaryOnlyProbation } from './demo-primary-only-route-probation';
+import { evaluateIndependentM1OpportunityShadow } from './independent-m1-opportunity-shadow';
 import {
   evaluateM1RoutePairSideReliability,
   type M1ReliabilityRoute,
@@ -2117,6 +2118,45 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       timings.blockedFeeShadowMs = Date.now() - shadowFeeStartedAt;
     }
 
+    // Audit the M1 specialist independently of the primary Plan B veto.
+    // This is a prospective hypothesis for broker-mark, profit-capture and
+    // stop-first outcomes. It MUST NOT modify canExecute or broker orders.
+    const independentM1OpportunityShadow = professionalDemoPhase
+      ? evaluateIndependentM1OpportunityShadow({
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          route: routeDecision.route,
+          evaluatedAt: decisionTime,
+          candidateEntry: candidate.entry,
+          stopLoss: candidate.stopLoss,
+          takeProfit: candidate.takeProfit,
+          confidence: candidate.confidence,
+          directionQuality: candidate.directionQuality,
+          routeEligible: routeDecision.eligible,
+          m1PaperEligible: governance.paperEligible,
+          m1NetExpectedR: governance.netExpectedR,
+          spreadEvidenceValid: governance.genericGovernance.executionSpreadEvidenceValid,
+          eventRisk,
+          reliability: reliability
+            ? {
+                eligible: reliability.eligible,
+                reason: reliability.reason,
+                samples: reliability.samples,
+                wins: reliability.wins,
+                losses: reliability.losses,
+                recentRealizedR: reliability.recentRealizedR,
+              }
+            : null,
+          planB: multimodelDemo
+            ? {
+                paperAdmitted: multimodelDemo.ensemble.paperAdmitted,
+                netExpectedR: multimodelDemo.governance.netExpectedR,
+                regime: multimodelDemo.ensemble.regime,
+              }
+            : null,
+        })
+      : null;
+
     // Observation on the connected DEMO engine; no admission, volume or execution modification.
     const zaiDemoDiagnostics = professionalDemoPhase
       ? {
@@ -2254,6 +2294,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         demoBrokerCommissionGate: commissionGateAudit,
         productionQualificationShadow,
         secondaryPredictedCostShadow,
+        independentM1OpportunityShadow,
         lowVolRangeShadow,
         multimodelLossStreakBrake: multimodelLossStreakBrake
           ? { ...multimodelLossStreakBrake }
