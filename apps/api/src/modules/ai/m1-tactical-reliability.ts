@@ -10,6 +10,9 @@ export const M1_RELIABILITY_RECENT_PAYOFF_SAMPLES = 5;
 export const M1_RELIABILITY_RECENT_AVERAGE_R_FLOOR = -0.1;
 export const M1_RELIABILITY_MAX_SAMPLES = 20;
 export const M1_RELIABILITY_CARRY_FORWARD_DAYS = 7;
+/** Finite cooldown after actual losses. Never restores full-sized authority:
+ *  the scheduler separately enforces a tiny, one-per-4h recovery canary. */
+export const M1_RELIABILITY_EARLY_LOSS_COOLDOWN_MINUTES = 180;
 
 const POLICY_LINEAGE: Readonly<Record<string, readonly string[]>> = Object.freeze({
   'm1-tactical-v1': Object.freeze(['m1-tactical-v1']),
@@ -53,6 +56,7 @@ export type M1RoutePairSideReliabilityReason =
   | 'PROFIT_GIVEBACK_LOSS_STREAK'
   | 'PAYOFF_EVIDENCE_INCOMPLETE'
   | 'EARLY_LOSS_STREAK'
+  | 'EARLY_LOSS_STREAK_RECOVERY_CANARY'
   | 'INVALID_EVIDENCE';
 
 export interface M1RoutePairSideReliabilityDecision {
@@ -237,6 +241,13 @@ export function evaluateM1RoutePairSideReliability(
   }
 
   if (recentLossStreak) {
+    const mostRecentLossAgeMs = evaluatedAtMs - selected[0]!.closedAt.getTime();
+    // Without a finite exit this streak is self-locking: no later trade can
+    // restore reliability for up to seven days. After three hours, it remains
+    // empirically UNQUALIFIED but can enter an explicitly capped research
+    // recovery path after all primary Plan-B and broker risk checks pass.
+    const canAttemptRecovery =
+      mostRecentLossAgeMs >= M1_RELIABILITY_EARLY_LOSS_COOLDOWN_MINUTES * 60_000;
     return {
       eligible: false,
       samples,
@@ -251,7 +262,9 @@ export function evaluateM1RoutePairSideReliability(
       recentRealizedR,
       recentPayoffRSamples,
       recentPayoffAverageR,
-      reason: 'EARLY_LOSS_STREAK',
+      reason: canAttemptRecovery
+        ? 'EARLY_LOSS_STREAK_RECOVERY_CANARY'
+        : 'EARLY_LOSS_STREAK',
       consideredPolicyVersions: [...consideredPolicyVersions],
     };
   }

@@ -28,6 +28,41 @@ function input(changes: Partial<M1TacticalDecisionInput> = {}): M1TacticalDecisi
   };
 }
 
+describe('M1 loss recovery canary single-flight query', () => {
+  const queryInput = {
+    userId: '11111111-1111-4111-8111-111111111111',
+    brokerConnectionId: '22222222-2222-4222-8222-222222222222',
+    instrument: 'eurusd',
+    direction: 'BUY' as const,
+    evaluatedAt: new Date('2026-11-12T16:00:00.000Z'),
+    cooldownMinutes: 240,
+  };
+
+  it('checks exact owner, broker, pair, side, as-of and real BROKER_NATIVE authority', async () => {
+    const query = jest.fn().mockResolvedValue([{ exists: true }]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    await expect(service.hasRecentM1RecoveryCanary(queryInput)).resolves.toBe(true);
+    const [sql, params] = query.mock.calls[0];
+    expect(String(sql)).toContain('user_id = $1');
+    expect(String(sql)).toContain('broker_connection_id = $2');
+    expect(String(sql)).toContain('instrument = $3');
+    expect(String(sql)).toContain('direction = $4');
+    expect(String(sql)).toContain("execution_authority = 'BROKER_NATIVE'");
+    expect(String(sql)).toContain("governance ->> 'recoveryCanary'");
+    expect(String(sql)).toContain('evaluated_at < $5::timestamptz');
+    expect(params).toEqual([
+      queryInput.userId, queryInput.brokerConnectionId, 'EURUSD', 'BUY',
+      '2026-11-12T16:00:00.000Z', 240,
+    ]);
+  });
+
+  it('does not mistake no previous canary for a duplicate execution', async () => {
+    const query = jest.fn().mockResolvedValue([{ exists: false }]);
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    await expect(service.hasRecentM1RecoveryCanary(queryInput)).resolves.toBe(false);
+  });
+});
+
 describe('M1 tactical decision migration contract', () => {
   it('creates an isolated decision table with the exact idempotency fence and safety fields', () => {
     expect(fs.existsSync(MIGRATION)).toBe(true);

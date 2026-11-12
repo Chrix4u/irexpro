@@ -162,6 +162,11 @@ interface M1ProfessionalFallbackDecision {
   lotCap: number;
 }
 
+// DEMO recovery after real consecutive losses is never a full-sized
+// trade. Exactly one 0.01-lot-at-most primary Plan-B canary per 4 hours,
+// and ONLY after the 180m reliability cooldown + every normal risk gate.
+export const M1_DEMO_RECOVERY_CANARY_LOT_CAP = 0.01;
+export const M1_DEMO_RECOVERY_CANARY_SPACING_MINUTES = 240;
 const M1_PROFESSIONAL_FALLBACK_LOT_CAP = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_LOT_CAP = 0.2;
 const M1_PROFESSIONAL_CONTINUATION_MIN_EXPECTED_R = 0.2;
@@ -1581,6 +1586,18 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       professionalDemoPhase &&
       demoProfitabilityExecutionAllowed &&
       multimodelDemo?.authority.executable === true;
+    // With two recent M1 losses, the exact pair/side/route needs a finite
+    // three-hour cooldown before a tiny exploratory recovery entry. A
+    // successful canary does not immediately restore 4-lot eligibility:
+    // keep recovery size and spacing until five actual route samples.
+    const recoveryCanary =
+      professionalDemoPhase &&
+      (reliability?.reason === 'EARLY_LOSS_STREAK_RECOVERY_CANARY' ||
+        (reliability?.reason === 'INSUFFICIENT_EVIDENCE' &&
+          reliability.samples > 0 &&
+          reliability.samples < 5 &&
+          reliability.losses >= 2));
+
     const multimodelDirectionConflict =
       professionalDemoPhase &&
       multimodelDemo?.authority.blockers.includes(
@@ -1695,6 +1712,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             : provisionalScoutReliability
               ? Math.min(this.rolloutPolicy.paperVolumeCap, provisionalScoutReliability.lotCap)
               : this.rolloutPolicy.paperVolumeCap;
+    const recoveryCanaryVolumeCap = recoveryCanary
+      ? Math.min(executionVolumeCap, M1_DEMO_RECOVERY_CANARY_LOT_CAP)
+      : executionVolumeCap;
     const microDriftOnlyRescue =
       earlyTransitionMicro &&
       shadowPairSideReliability?.eligible === true &&
@@ -1735,10 +1755,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       ? demoInstrumentAllowed &&
         demoProfitabilityExecutionAllowed &&
         !multimodelDirectionConflict &&
-        (multimodelPrimaryExecutable ||
-          m5EarlyTransitionHandoffEligible ||
-          professionalM1FallbackExecutable ||
-          extensionExhaustionDemoScoutExecutable)
+        (recoveryCanary
+          ? multimodelPrimaryExecutable
+          : (multimodelPrimaryExecutable ||
+            m5EarlyTransitionHandoffEligible ||
+            professionalM1FallbackExecutable ||
+            extensionExhaustionDemoScoutExecutable))
       : routeExecutable && routePayoffEligible && governanceExecutable;
     // An isolated pair/side/route can have a clean local streak while the
     // DEMO portfolio loses repeatedly across several instruments. Require
@@ -1776,6 +1798,28 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           cooldownMinutes: M1_PORTFOLIO_NET_LOSS_BRAKE_COOLDOWN_MINUTES,
           cooldownRemainingSeconds: 0,
         };
+      }
+    }
+    // Fail-closed on unavailable recovery history. Query ONLY for a would-
+    // otherwise-authorize primary Plan-B canary so normal scans stay cheap.
+    let recoveryCanaryRecentlyAuthorized = false;
+    let recoveryCanaryHistoryUnavailable = false;
+    if (recoveryCanary && preliminaryCanExecute) {
+      try {
+        recoveryCanaryRecentlyAuthorized = await this.evidence.hasRecentM1RecoveryCanary({
+          userId,
+          brokerConnectionId,
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          evaluatedAt: decisionTime,
+          cooldownMinutes: M1_DEMO_RECOVERY_CANARY_SPACING_MINUTES,
+        });
+      } catch (error) {
+        recoveryCanaryHistoryUnavailable = true;
+        this.logger.warn(
+          `M1 recovery canary history unavailable instrument=${candidate.instrument} ` +
+            `direction=${candidate.direction}: ${(error as Error).message}`,
+        );
       }
     }
     let activeOppositePositions: Awaited<
@@ -1953,6 +1997,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       fastStopRegimeBrake?.active !== true &&
       multimodelLossStreakBrake?.active !== true &&
       portfolioNetLossBrake?.active !== true &&
+      !recoveryCanaryRecentlyAuthorized &&
+      !recoveryCanaryHistoryUnavailable &&
       !demoPrimaryOnlyProbation.blocked &&
       !demoBrokerCommissionGate.blocked;
     const effectiveGovernanceBlockers =
@@ -2001,6 +2047,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
             : []),
           ...(portfolioNetLossBrake?.active === true ? ['M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE'] : []),
+          ...(recoveryCanaryRecentlyAuthorized ? ['M1_RECOVERY_CANARY_REPEAT_COOLDOWN'] : []),
+          ...(recoveryCanaryHistoryUnavailable ? ['M1_RECOVERY_CANARY_HISTORY_UNAVAILABLE'] : []),
           ...(demoPrimaryOnlyProbation.blocked ? ['M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION'] : []),
           ...(demoBrokerCommissionGate.blocked
             ? [`M1_DEMO_BROKER_COMMISSION_${demoBrokerCommissionGate.reason}`]
@@ -2189,7 +2237,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? { ...provisionalScoutReliability }
             : null,
         scoutReliabilityTier,
-        executionVolumeCap,
+        executionVolumeCap: recoveryCanaryVolumeCap,
+        recoveryCanary: recoveryCanary || false,
+        recoveryCanaryHistoryUnavailable,
+        recoveryCanaryRecentlyAuthorized,
         professionalM1Fallback,
         professionalM1FallbackExecutionEnabled: professionalM1FallbackExecutable,
         microDriftOnlyRescue,
@@ -2269,7 +2320,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           localImpulseDriftOnlyRescue,
           evidenceQualifiedScout,
           scoutReliabilityTier,
-          executionVolumeCap,
+          recoveryCanaryVolumeCap,
           multimodelDemo,
           professionalM1Fallback,
           m5EarlyTransitionEvidence,

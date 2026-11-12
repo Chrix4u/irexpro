@@ -1015,6 +1015,7 @@ function phase2Harness(
       cooldownRemainingSeconds: 0,
     },
   );
+  const hasRecentM1RecoveryCanary = jest.fn().mockResolvedValue(false);
   const hasActiveM1Intent = jest
     .fn()
     .mockResolvedValue(options.duplicateSameDirectionIntent ?? false);
@@ -1050,6 +1051,7 @@ function phase2Harness(
     loadFastStopRegimeBrake,
     loadPortfolioNetLossStreakBrake,
     loadMultimodelLossStreakBrake,
+    hasRecentM1RecoveryCanary,
     hasActiveM1Intent,
     hasActiveOppositeM1Intent,
     markRescueObservation,
@@ -1151,6 +1153,7 @@ function phase2Harness(
     loadFastStopRegimeBrake,
     loadPortfolioNetLossStreakBrake,
     loadMultimodelLossStreakBrake,
+    hasRecentM1RecoveryCanary,
     hasActiveM1Intent,
     hasActiveOppositeM1Intent,
     markRescueObservation,
@@ -4157,6 +4160,111 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(recorded?.governance.demoProfitabilityReliabilityGate).toEqual(
       expect.objectContaining({ executable: false, lossStreakVeto: true }),
     );
+  });
+
+  it('recovers the primary DEMO route after 180m only at 0.01 lot and suppresses repeats for four hours', async () => {
+    const oldLosses = [
+      '2026-10-15T07:29:00.000Z',
+      '2026-10-15T07:19:00.000Z',
+      '2026-10-15T07:09:00.000Z',
+    ].map((closedAt) => ({
+      route: 'M1_TREND_CONTINUATION',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      policyVersion: 'm1-tactical-v2-m5-lifecycle',
+      realisedPnl: -5,
+      riskAtStop: 10,
+      closedAt: new Date(closedAt),
+    }));
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: oldLosses },
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(
+      async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: { ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
+          authority: { ...result.authority,
+            executable: true, authorityPath: 'PRIMARY_PLAN_B', blockers: [] },
+        };
+      },
+    );
+
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    const first = h.recordDecision.mock.calls.find(
+      ([v]) => v.route === 'M1_TREND_CONTINUATION' && v.direction === 'BUY',
+    )?.[0];
+    expect(first?.governance.reliability.reason).toBe('EARLY_LOSS_STREAK_RECOVERY_CANARY');
+    expect(first?.governance.reliability.eligible).toBe(false);
+    expect(first?.governance.recoveryCanary).toBe(true);
+    expect(first?.governance.executionVolumeCap).toBe(0.01);
+    expect(first?.executionAuthority).toBe('BROKER_NATIVE');
+    expect(h.hasRecentM1RecoveryCanary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        brokerConnectionId: 'demo-conn-2',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        cooldownMinutes: 240,
+      }),
+    );
+    expect(h.receiveSignal).toHaveBeenCalledWith(
+      expect.objectContaining({ suggestedVolume: 0.01 }),
+    );
+
+    // Even if the M1 model repeats the identical BUY a minute later,
+    // an already-authorized recovery attempt blocks another broker order.
+    h.receiveSignal.mockClear();
+    h.recordDecision.mockClear();
+    h.hasRecentM1RecoveryCanary.mockResolvedValue(true);
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const repeat = h.recordDecision.mock.calls.find(
+      ([v]) => v.route === 'M1_TREND_CONTINUATION' && v.direction === 'BUY',
+    )?.[0];
+    expect(repeat?.executionAuthority).toBe('NONE');
+    expect(repeat?.blockers).toContain('M1_RECOVERY_CANARY_REPEAT_COOLDOWN');
+  });
+
+  it('fails closed when recovery-canary prior order evidence cannot be read', async () => {
+    const oldLosses = [
+      '2026-10-15T07:29:00.000Z',
+      '2026-10-15T07:19:00.000Z',
+      '2026-10-15T07:09:00.000Z',
+    ].map((closedAt) => ({
+      route: 'M1_TREND_CONTINUATION', instrument: 'EURUSD',
+      direction: 'BUY', policyVersion: 'm1-tactical-v2-m5-lifecycle',
+      realisedPnl: -5, riskAtStop: 10, closedAt: new Date(closedAt),
+    }));
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: oldLosses },
+    });
+    h.hasRecentM1RecoveryCanary.mockRejectedValue(new Error('simulated database error'));
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(
+      async (...args: any[]) => {
+        const result = await original(...args);
+        return {
+          ...result,
+          ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
+          authority: { ...result.authority,
+            executable: true, authorityPath: 'PRIMARY_PLAN_B', blockers: [] },
+        };
+      },
+    );
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+    const blocked = h.recordDecision.mock.calls.find(
+      ([v]) => v.route === 'M1_TREND_CONTINUATION' && v.direction === 'BUY',
+    )?.[0];
+    expect(blocked?.blockers).toContain('M1_RECOVERY_CANARY_HISTORY_UNAVAILABLE');
+    expect(blocked?.executionAuthority).toBe('NONE');
   });
 
   it('vetoes an otherwise executable primary Plan-B early transition when pair-side evidence is degraded', async () => {

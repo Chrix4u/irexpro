@@ -1665,6 +1665,50 @@ export class M1TacticalEvidenceService {
     });
   }
 
+  /**
+   * Hard DEMO recovery-canary repeat suppression. A recovery canary is
+   * an actual BROKER_NATIVE authorized decision, not a paper hypothesis.
+   * Read-only, exact owner/broker/pair/side and as-of bounded; if this
+   * query fails the scheduler refuses the trial.
+   */
+  async hasRecentM1RecoveryCanary(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    evaluatedAt: Date;
+    cooldownMinutes: number;
+  }): Promise<boolean> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT EXISTS (
+          SELECT 1 FROM trading.m1_tactical_decisions
+          WHERE user_id = $1
+            AND broker_connection_id = $2
+            AND instrument = $3
+            AND direction = $4
+            AND evaluated_at < $5::timestamptz
+            AND evaluated_at >= $5::timestamptz - ($6::int * interval '1 minute')
+            AND execution_authority = 'BROKER_NATIVE'
+            AND governance -> 'reliability' ->> 'reason' IN (
+              'EARLY_LOSS_STREAK_RECOVERY_CANARY',
+              'INSUFFICIENT_EVIDENCE'
+            )
+            AND COALESCE((governance ->> 'recoveryCanary')::boolean, false) = true
+        ) AS exists
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument.trim().toUpperCase(),
+        input.direction,
+        input.evaluatedAt.toISOString(),
+        input.cooldownMinutes,
+      ],
+    )) as Array<{ exists: boolean }>;
+    return rows[0]?.exists === true;
+  }
+
   async hasActiveM1Intent(input: M1ActiveIntentQuery): Promise<boolean> {
     const instrument = input.instrument.trim().toUpperCase();
     const rows = (await this.dataSource.query(
