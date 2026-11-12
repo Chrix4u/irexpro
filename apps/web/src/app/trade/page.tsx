@@ -26,6 +26,7 @@ import { useAuth } from "@/context/auth-context";
 import { useNotification } from "@/hooks/useNotification";
 import { MotionStatusOrb } from "@/components/ui/motion-status-orb";
 import { MarketClosedState } from "./MarketClosedState";
+import { AiTraderLoading } from "./ai-trader-loading";
 import { api } from "@/lib/api";
 import { formatAgeSeconds } from "@/lib/duration";
 import { mapApiError } from "@/lib/error-mapping";
@@ -1362,17 +1363,29 @@ function FinancialKpi({
   value,
   hint,
   tone = "neutral",
+  loading = false,
 }: {
   label: string;
   value: string;
   hint: string;
   tone?: "positive" | "negative" | "neutral";
+  loading?: boolean;
 }) {
   return (
-    <article className={`ai-kpi-card ai-kpi-card--${tone}`}>
+    <article className={`ai-kpi-card ai-kpi-card--${tone}`} aria-busy={loading}>
       <span className="ai-kpi-card__label">{label}</span>
-      <strong className="ai-kpi-card__value">{value}</strong>
-      <span className="ai-kpi-card__hint">{hint}</span>
+      {loading ? (
+        <>
+          <span className="ai-loading-shimmer ai-kpi-card__value--loading" aria-hidden="true" />
+          <span className="ai-loading-shimmer ai-loading-shimmer--hint" aria-hidden="true" />
+          <span className="sr-only">Loading {label.toLowerCase()} from the broker</span>
+        </>
+      ) : (
+        <>
+          <strong className="ai-kpi-card__value">{value}</strong>
+          <span className="ai-kpi-card__hint">{hint}</span>
+        </>
+      )}
     </article>
   );
 }
@@ -1777,6 +1790,7 @@ export default function AiTradingPage() {
     summary: ClosedTradeReportSummaryView;
   } | null>(null);
   const [livePositions, setLivePositions] = useState<LivePositionRowView[]>([]);
+  const [positionsLoaded, setPositionsLoaded] = useState(false);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
   const [chartInstrument, setChartInstrument] = useState("EURUSD");
   const [chartTimeframe, setChartTimeframe] = useState<
@@ -2099,6 +2113,46 @@ export default function AiTradingPage() {
         const status = await loadTraderTerminalStatus();
         setTerminal(status);
 
+        // The capital card is a CORE read, not a dependency of research
+        // telemetry, model status, historical reports, or live charts.
+        // Start it immediately after the broker is known and independently
+        // release the skeleton when that verified response settles.
+        const brokerId =
+          status.sessionBroker?.id ||
+          selectedBrokerIdRef.current ||
+          status.primaryBroker?.id ||
+          "";
+        if (status.sessionBroker?.id) {
+          selectedBrokerIdRef.current = status.sessionBroker.id;
+        } else if (!selectedBrokerIdRef.current) {
+          selectedBrokerIdRef.current = brokerId;
+        }
+        if (brokerId) {
+          setSelectedBrokerId(selectedBrokerIdRef.current);
+          void api.getCapitalAllocation(brokerId)
+            .then((nextAllocation) => {
+              if (selectedBrokerIdRef.current === brokerId) {
+                setAllocation(nextAllocation);
+                setAllocationWarning(null);
+                setAllocationAmount(nextAllocation.allocatedCapital ?? "");
+              }
+            })
+            .catch(() => {
+              if (selectedBrokerIdRef.current === brokerId) {
+                setAllocation(null);
+                setAllocationWarning(
+                  "Your broker account is connected, but its AI capital allocation could not be loaded. Trading controls remain disabled until this data is available.",
+                );
+              }
+            })
+            .finally(() => {
+              if (showSpinner) setLoading(false);
+            });
+        } else if (!selectedBrokerIdRef.current) {
+          setAllocation(null);
+          if (showSpinner) setLoading(false);
+        }
+
         // Secondary status feeds are independent of trading controls and of
         // one another. Fetch them concurrently to avoid a serial HTTP waterfall
         // extending the intended four-second workspace refresh interval.
@@ -2184,17 +2238,6 @@ export default function AiTradingPage() {
           setAutomationRuntimeWarning(null);
         }
 
-        const brokerId =
-          status.sessionBroker?.id ||
-          selectedBrokerIdRef.current ||
-          status.primaryBroker?.id ||
-          "";
-        if (status.sessionBroker?.id) {
-          selectedBrokerIdRef.current = status.sessionBroker.id;
-        } else if (!selectedBrokerIdRef.current) {
-          selectedBrokerIdRef.current = brokerId;
-        }
-
         const realisedWindowEnd = new Date();
         const realisedWindowStart = new Date(
           realisedWindowEnd.getTime() - 24 * 60 * 60_000,
@@ -2230,7 +2273,10 @@ export default function AiTradingPage() {
         // snapshot. Keep the previous data on screen and let the existing
         // polling loops retry automatically.
         if (snapshot) setExecution(snapshot);
-        if (positions) setLivePositions(positions);
+        if (positions) {
+          setLivePositions(positions);
+          setPositionsLoaded(true);
+        }
         if (brokerId && realisedReport) {
           setRealised24hReport({
             brokerConnectionId: brokerId,
@@ -2265,26 +2311,6 @@ export default function AiTradingPage() {
           setActivityWarning(null);
         }
 
-        if (brokerId) {
-          setSelectedBrokerId(selectedBrokerIdRef.current);
-          try {
-            const nextAllocation = await api.getCapitalAllocation(brokerId);
-            if (selectedBrokerIdRef.current === brokerId) {
-              setAllocation(nextAllocation);
-              setAllocationWarning(null);
-              setAllocationAmount(nextAllocation.allocatedCapital ?? "");
-            }
-          } catch {
-            if (selectedBrokerIdRef.current === brokerId) {
-              setAllocation(null);
-              setAllocationWarning(
-                "Your broker account is connected, but its AI capital allocation could not be loaded. Trading controls remain disabled until this data is available.",
-              );
-            }
-          }
-        } else if (!selectedBrokerIdRef.current) {
-          setAllocation(null);
-        }
       } catch (requestError) {
         setError(mapApiError(requestError).message);
       } finally {
@@ -2292,7 +2318,7 @@ export default function AiTradingPage() {
         if (showSpinner) setLoading(false);
       }
     },
-    [user, selectedBrokerId, emitActivityToasts],
+    [user, emitActivityToasts],
   );
 
   useEffect(() => {
@@ -3037,11 +3063,7 @@ export default function AiTradingPage() {
   const showDeveloperDiagnostics = false;
 
   if (restoring) {
-    return (
-      <div style={{ padding: "3rem" }}>
-        <LoadingSpinner text="Restoring trading workspace…" />
-      </div>
-    );
+    return <AiTraderLoading />;
   }
 
   if (!user) {
@@ -3054,6 +3076,19 @@ export default function AiTradingPage() {
           </Link>
         </Card>
       </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <DashboardShell
+        user={user}
+        onLogout={logout}
+        activeRoute="/trade"
+        title="AI Trading"
+      >
+        <AiTraderLoading />
+      </DashboardShell>
     );
   }
 
@@ -3190,22 +3225,26 @@ export default function AiTradingPage() {
             >
               <FinancialKpi
                 label="Equity"
+                loading={!allocation && !allocationWarning}
                 value={money(allocation?.brokerEquity, allocation?.accountCurrency)}
                 hint="Current broker account equity"
               />
               <FinancialKpi
                 label="AI Allocation"
+                loading={!allocation && !allocationWarning}
                 value={money(allocation?.allocatedCapital, allocation?.accountCurrency)}
                 hint={`${money(allocation?.availableCapital, allocation?.accountCurrency)} available`}
               />
               <FinancialKpi
                 label="24h Net P&L"
+                loading={!realised24hReport && !execution && !activityWarning}
                 value={signedMoney(realised24hNetPnl, realisedCurrency)}
                 hint={`${realised24hWins} wins · ${realised24hLosses} losses`}
                 tone={netPnlTone}
               />
               <FinancialKpi
                 label="Open P&L"
+                loading={!positionsLoaded && !activityWarning}
                 value={
                   aiOpenPositions.length === 0
                     ? money("0", allocation?.accountCurrency)
