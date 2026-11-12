@@ -43,8 +43,15 @@ export class BrokerAccount {
   @Column({ name: 'free_margin', type: 'numeric', precision: 18, scale: 8, default: '0' })
   freeMargin: string;
 
-  /** Decimal string — percentage (e.g., '250.00' for 250%). */
-  @Column({ name: 'margin_level', type: 'numeric', precision: 10, scale: 4, default: '0' })
+  /**
+   * Decimal percentage — a properly collateralized 0.01-lot forex DEMO
+   * position may use ~$1 margin with >$48k equity, producing >3.5 MILLION%
+   * margin level. The former numeric(10,4) field overflowed after a valid
+   * broker fill, suspended the CONNECTED broker and paused profit protection.
+   * Match the authoritative broker snapshot numeric(20,8) exactly.
+   * Never cap/saturate the provider's observed margin percentage.
+   */
+  @Column({ name: 'margin_level', type: 'numeric', precision: 20, scale: 8, default: '0' })
   marginLevel: string;
 
   @Column({ name: 'currency', type: 'varchar', length: 3, nullable: true })
