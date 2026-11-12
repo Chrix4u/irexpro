@@ -77,6 +77,14 @@ Read-only SQL against the real Pepperstone DEMO records confirmed
 the corrected cooldown reservation is **false** after the unfilled
 19:33 attempt.
 
+**NULL-safe reservation addendum:** PostgreSQL equality against an
+unobserved `outcome_state = NULL` yields SQL UNKNOWN, not FALSE.
+Use `d.outcome_state IS NOT DISTINCT FROM 'EXECUTION_FAILED'` inside
+the excluded-rejection predicate. This preserves the 90-minute
+reservation on **all pending/unreconciled orders** and prevents
+double broker fills. Only a proven failed, REJECTED and unfilled
+intent releases the repeat gate.
+
 ## Safety guarantees and acceptance criteria
 
 - No orders manually forced. No historical outcomes, broker fills,
