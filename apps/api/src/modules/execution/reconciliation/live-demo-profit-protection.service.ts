@@ -12,6 +12,7 @@ import { evaluateProfitLockPatienceShadow } from './profit-lock-patience-shadow'
 import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
 import { evaluatePepperstonePeakLossRescue } from './pepperstone-peak-loss-rescue';
 import { evaluatePepperstoneDemoNetProfitLock } from './pepperstone-demo-net-profit-lock';
+import { evaluatePepperstoneHighPeakGivebackShadow } from './pepperstone-high-peak-giveback-shadow';
 
 const LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS = 5_000;
 // Maximum ordinary adverse-thesis grace from actual position open. A new
@@ -740,6 +741,114 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               // execution path or broker-side stop mutation can promote it.
               if (snapshot.connection.brokerId === 'pepperstone-ctrader') {
                 const observedAtPeak = finite(trade.max_favorable_pnl) ?? 0;
+                // The active early-net-profit lock intentionally stops at
+                // 0.50R. Capture the separate >1R-to-positive-deep-giveback
+                // research case so TP runners are NOT prematurely harvested
+                // by an unvalidated broad trailing stop. All broker actions
+                // remain owned by the original active DEMO policy.
+                const highPeakPositiveGivebackWindow =
+                  risk !== null &&
+                  risk > 0 &&
+                  observedAtPeak >= risk &&
+                  currentPnl > 0 &&
+                  currentPnl <= Math.min(risk * 0.4, observedAtPeak * 0.35) &&
+                  Number(trade.path_observation_count) >= 12;
+                if (highPeakPositiveGivebackWindow) {
+                  try {
+                    const [causalCost, m1] = await Promise.all([
+                      this.loadCausalPepperstoneDemoCostEstimate(trade, observedAt),
+                      this.loadCausalM1Evidence(trade, observedAt),
+                    ]);
+                    const highPeak = evaluatePepperstoneHighPeakGivebackShadow({
+                      brokerId: snapshot.connection.brokerId,
+                      accountType: String(snapshot.connection.accountType),
+                      accountCurrency: trade.account_currency,
+                      tradeInstrument: trade.instrument,
+                      brokerInstrument: position.instrument,
+                      tradeDirection: trade.direction,
+                      brokerDirection: position.direction,
+                      tradeLotSize: finite(trade.lot_size) ?? Number.NaN,
+                      brokerLotSize: finite(position.lotSize) ?? Number.NaN,
+                      strategyRoute,
+                      isM1Strategy: trade.is_m1_strategy,
+                      initialRiskPnl: risk,
+                      previousPeakPnl: observedAtPeak,
+                      previousObservedPnl:
+                        observedAtPeak - (finite(trade.profit_giveback) ?? 0),
+                      currentBrokerNetPnl: currentPnl,
+                      previousObservationCount:
+                        Math.max(0, Number(trade.path_observation_count) || 0),
+                      elapsedMinutes: trade.opened_at
+                        ? (observedAt.getTime() - new Date(trade.opened_at).getTime()) / 60_000
+                        : Number.NaN,
+                      openedAt: trade.opened_at ? new Date(trade.opened_at) : null,
+                      observedAt,
+                      previousObservationAt: trade.path_last_observed_at
+                        ? new Date(trade.path_last_observed_at)
+                        : null,
+                      brokerEntryPrice: finite(position.openPrice),
+                      currentPrice: finite(position.currentPrice),
+                      authoritativeStop: finite(trade.stop_loss),
+                      brokerStop: finite(position.stopLoss),
+                      authoritativeTakeProfit: finite(trade.take_profit),
+                      brokerTakeProfit: finite(position.takeProfit),
+                      conservativeExtraExitCost: causalCost?.estimatedCost ?? null,
+                      causalFeeSampleCount: causalCost?.sampleCount ?? 0,
+                      m1: m1
+                        ? {
+                            completedBars: m1.completedBars,
+                            adverseBars: m1.adverseBars,
+                            liveQuoteBars: m1.liveQuoteBars ?? 0,
+                            consecutiveLiveQuoteBars: m1.consecutiveLiveQuoteBars ?? 0,
+                            alignedLatestBodyPressure: m1.alignedLatestBodyPressure,
+                            alignedMomentum3: m1.alignedMomentum3,
+                            latestAgeSeconds: m1.latestAgeSeconds,
+                          }
+                        : null,
+                    });
+                    if (highPeak.wouldProtectIfIndependentlyQualified && this.auditService) {
+                      const existing = (await this.dataSource.query(
+                        `
+                          SELECT id FROM audit.audit_logs
+                          WHERE actor_user_id=$1 AND action=$2 AND resource_type='Trade'
+                            AND resource_id=$3 AND metadata->>'artifact'=$4
+                          LIMIT 1
+                        `,
+                        [
+                          trade.user_id,
+                          AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+                          trade.trade_id,
+                          highPeak.artifact,
+                        ],
+                      )) as unknown;
+                      if (Array.isArray(existing) && existing.length === 0) {
+                        await this.auditService.log({
+                          actorUserId: trade.user_id,
+                          action: AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+                          resourceType: 'Trade',
+                          resourceId: trade.trade_id,
+                          metadata: {
+                            ...highPeak,
+                            observedAt: observedAt.toISOString(),
+                            instrument: trade.instrument,
+                            direction: trade.direction,
+                            hypotheticalAction: 'WOULD_CLOSE_HIGH_PEAK_REVERSAL_AFTER_COSTS',
+                            actualAction: 'HOLD_BROKER_TP_SL',
+                            brokerNativeM1Confirmation: true,
+                            brokerExtraFeeReserve: causalCost?.estimatedCost ?? null,
+                            noTradeAuthority: true,
+                            modifiesExecution: false,
+                          },
+                        });
+                      }
+                    }
+                  } catch (error) {
+                    this.logger.warn(
+                      'Pepperstone DEMO high-peak reversal research deferred; broker TP/SL unchanged: ' +
+                        (error as Error).message,
+                    );
+                  }
+                }
                 const eligibleForRescueResearch =
                   risk !== null &&
                   risk > 0 &&
