@@ -74,6 +74,41 @@ function eligibleMark(trade, horizon, quotes) {
     ...pnl,
   } : null;
 }
+function groupActualAndSurvivingMarks(cases,keyFn) {
+  const groups = new Map();
+  for (const item of cases) {
+    const key=keyFn(item);
+    if (!groups.has(key)) groups.set(key,[]);
+    groups.get(key).push(item);
+  }
+  const result={};
+  for (const [key,rows] of [...groups.entries()].sort(([a],[b])=>a.localeCompare(b))) {
+    const output={
+      actuallyClosed:rows.length,
+      actualNetUSD:Number(rows.reduce((s,x)=>s+x.actualNetUSD,0).toFixed(2)),
+      realisedNetWinners:rows.filter(x=>x.actualNetUSD>0).length,
+      horizons:{},
+    };
+    for(const h of HORIZONS) {
+      const valid=rows.map(x=>x.horizons[h])
+        .filter(x=>x.state==='OBSERVED_WHILE_STILL_OPEN');
+      const closedEarly=rows.filter(x=>x.horizons[h].state==='TRADE_CLOSED_BEFORE_HORIZON').length;
+      const missing=rows.length-valid.length-closedEarly;
+      output.horizons[h]={
+        observableSurvivors:valid.length,closedBeforeHorizon:closedEarly,
+        quotesMissingWhileOpen:missing,
+        conditionalNetWinners:valid.filter(x=>x.netUSD>0).length,
+        conditionalNetLosers:valid.filter(x=>x.netUSD<0).length,
+        conditionalNetUSD:valid.length?
+          Number(valid.reduce((s,x)=>s+x.netUSD,0).toFixed(2)):null,
+        conditionalMeanNetUSD:valid.length?
+          Number((valid.reduce((s,x)=>s+x.netUSD,0)/valid.length).toFixed(2)):null,
+      };
+    }
+    result[key]=output;
+  }
+  return result;
+}
 function summarize(trades) {
   const periods = HORIZONS.map(horizon => ({
     horizonMinutes: horizon, eligible:0, netPositive:0, netNegative:0,
@@ -128,7 +163,13 @@ function summarize(trades) {
       outputs[p.horizonMinutes]={state:'OBSERVED_WHILE_STILL_OPEN',netUSD:Number(q.netUSD.toFixed(2)),
         signedPips:Number(q.pips.toFixed(2)),lagSeconds:Number(q.quoteDelaySec.toFixed(1))};
     }
-    cases.push({instrument:trade.instrument,direction:trade.direction,
+    cases.push({
+      // Strategy labels belong to the SAME executed intent, not a model
+      // candidate observed minutes later. Never mix M1 fallback with the
+      // primary Plan B path when interpreting early quote marks.
+      executionPath:trade.execution_path||'UNKNOWN_EXECUTION_PATH',
+      planBRoute:trade.plan_b_route||'UNKNOWN_PLAN_B_ROUTE',
+      instrument:trade.instrument,direction:trade.direction,
       openedAt:new Date(trade.opened_at).toISOString(),actualCloseAt:new Date(trade.closed_at).toISOString(),
       actualNetUSD:Number(net.toFixed(2)),reason:trade.close_reason,
       recordedPeakUSD:finiteNumber(trade.max_favorable_pnl),
@@ -151,6 +192,12 @@ function summarize(trades) {
       netUSD:Number(actualNet.toFixed(2)),
     },
     lossProfiles,
+    // Survivors are not a random set: the actual broker may already have
+    // closed large losers (or winners). These summaries are research only.
+    byExecutionPathAndPlanBRoute:groupActualAndSurvivingMarks(cases,x=>
+      [x.executionPath,x.planBRoute].join('/')),
+    byExecutionPathAndPairSideRoute:groupActualAndSurvivingMarks(cases,x=>
+      [x.executionPath,x.instrument,x.direction,x.planBRoute].join('/')),
     horizonObservations:periods.map(p=>({
       horizonMinutes:p.horizonMinutes, eligible:p.eligible, netPositive:p.netPositive,
       netNegative:p.netNegative,
@@ -197,10 +244,15 @@ async function main() {
     const connection=sessions.rows[0].broker_connection_id;
     const rows=await c.query(`
       SELECT t.instrument,t.direction,t.opened_at,t.closed_at,t.close_reason,
+             ti.metadata->>'multimodel_execution_authority_path' AS execution_path,
+             ti.metadata->>'multimodel_plan_b_route' AS plan_b_route,
              t.fill_price,t.exit_price,t.lot_size,t.realised_pnl,
              t.commission,t.swap,t.max_favorable_pnl,
              q.quotes
       FROM trading.trades t
+      LEFT JOIN trading.trade_intents ti ON ti.id=t.trade_intent_id
+        AND ti.user_id=t.user_id
+        AND ti.broker_connection_id=t.broker_connection_id
       LEFT JOIN LATERAL (
         SELECT coalesce(jsonb_agg(jsonb_build_object(
           'last_quote_sample_at', c.last_quote_sample_at,
@@ -227,5 +279,6 @@ async function main() {
   } catch(e){try{await c.query('ROLLBACK')}catch{};throw e}
   finally{await c.end()}
 }
-module.exports={finiteNumber,timestamp,pricePip,brokerMarkNetUSD,eligibleMark,summarize};
+module.exports={finiteNumber,timestamp,pricePip,brokerMarkNetUSD,
+  eligibleMark,summarize,groupActualAndSurvivingMarks};
 if(require.main===module)main().catch(e=>{console.error('AUDIT_FAILED:',e.message);process.exitCode=1});
