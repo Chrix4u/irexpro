@@ -52,6 +52,7 @@ import {
 import { evaluateM1TacticalGovernance } from './m1-tactical-governance';
 import {
   evaluateM5EarlyTransitionHandoff,
+  m1MayConfirmM5EarlyTransition,
   type M5EarlyTransitionEvidence,
   type M5EarlyTransitionHandoffDecision,
 } from './m5-early-transition-handoff';
@@ -1591,7 +1592,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     if (
       professionalDemoPhase &&
       !multimodelPrimaryExecutable &&
-      (!professionalM1FallbackExecutable || professionalM1BootstrapExecutable)
+      (!professionalM1FallbackExecutable || professionalM1BootstrapExecutable) &&
+      m1MayConfirmM5EarlyTransition({
+        m1Route: routeDecision.route,
+        m1Reason: routeDecision.reason,
+        m1Confidence: candidate.confidence,
+        m1DirectionQuality: candidate.directionQuality,
+        m1ExecutionCostUsable: governance.genericGovernance.paperExecutionCostUsable === true,
+        m1EventRisk: eventRisk,
+      })
     ) {
       try {
         m5EarlyTransitionEvidence = await this.evidence.loadLatestM5EarlyTransitionEvidence({
