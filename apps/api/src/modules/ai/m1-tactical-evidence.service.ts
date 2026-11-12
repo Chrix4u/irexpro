@@ -1749,6 +1749,14 @@ export class M1TacticalEvidenceService {
             AND d.instrument=$3 AND d.direction=$4
             AND d.route='M1_TREND_CONTINUATION'
             AND d.policy_version=$5
+            -- A 2/4-lot PRIMARY_PLAN_B fill is not evidence that the
+            -- independent M1 QUALIFIED_CONTINUATION path has positive
+            -- after-fee expectancy. Previously all seven "qualified"
+            -- AUDUSD SELL examples belonged to PRIMARY_PLAN_B, so the
+            -- supposed M1 canary had NEVER been independently validated.
+            -- Fail closed until there are seven actual closed, paid-fee
+            -- fills from the SAME independent execution authority.
+            AND ti.metadata->>'multimodel_execution_authority_path'='QUALIFIED_CONTINUATION'
             AND t.status='CLOSED'
             AND t.closed_at <= $6::timestamptz
             AND t.closed_at > $6::timestamptz - interval '7 days'

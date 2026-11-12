@@ -148,6 +148,10 @@ describe('exact real after-commission M1 continuation qualification', () => {
       'finalRiskAtStop', "d.route='M1_TREND_CONTINUATION'",
       'd.broker_connection_id=$2', 'd.instrument=$3',
       'd.direction=$4', 'd.policy_version=$5',
+      // The 7 earlier AUDUSD SELL wins/losses came from PRIMARY_PLAN_B.
+      // They CANNOT qualify an independent M1 fallback. The actual
+      // source strategy/authority is mandatory, not just M1 timing label.
+      "ti.metadata->>'multimodel_execution_authority_path'='QUALIFIED_CONTINUATION'",
       "t.status='CLOSED'",'t.closed_at <= $6::timestamptz',
     ]) expect(String(sql)).toContain(bit);
     expect(args).toEqual([
