@@ -1,3 +1,4 @@
+import { classifyForexSessionClock } from './forex-session-clock';
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ENSEMBLE_OUTCOME_MODEL_VERSION } from './ensemble-shadow-outcome';
@@ -89,11 +90,7 @@ function sessionOf(row: AdaptivePredictionOutcomeRow): AdaptiveMarketSession | n
   }
   const time = new Date(row.evaluated_at);
   if (!Number.isFinite(time.getTime())) return null;
-  const hour = time.getUTCHours();
-  if (hour >= 21) return 'ROLLOVER';
-  if (hour < 7) return 'ASIA';
-  if (hour < 13) return 'LONDON';
-  return 'NEW_YORK';
+  return classifyForexSessionClock(time);
 }
 
 function stateOf(row: AdaptivePredictionOutcomeRow): AdaptiveMarketState | null {

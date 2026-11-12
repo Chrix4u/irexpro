@@ -1,3 +1,5 @@
+import { classifyForexSessionClock } from './forex-session-clock';
+
 export const ADAPTIVE_MARKET_STATE_ARTIFACT = 'adaptive-market-state-v1';
 
 export type AdaptiveMarketState =
@@ -55,11 +57,7 @@ function clamp01(value: number): number {
 }
 
 export function adaptiveMarketSession(scanTime: Date): AdaptiveMarketSession {
-  const hour = scanTime.getUTCHours();
-  if (hour >= 21) return 'ROLLOVER';
-  if (hour < 7) return 'ASIA';
-  if (hour < 13) return 'LONDON';
-  return 'NEW_YORK';
+  return classifyForexSessionClock(scanTime);
 }
 
 function finiteInputs(input: AdaptiveMarketStateInput): boolean {
