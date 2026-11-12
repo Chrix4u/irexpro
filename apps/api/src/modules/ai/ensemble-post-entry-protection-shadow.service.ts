@@ -18,6 +18,8 @@ export const POST_ENTRY_EVIDENCE_MIN_ELIGIBLE_PROFIT_DECISIONS = 30;
 export const REJECTED_EDGE_OUTCOME_SHADOW_ARTIFACT = 'plan-b-rejected-edge-outcome-shadow-v1';
 export const REJECTED_EDGE_MIN_NET_EXPECTED_R = 0.08;
 export const REJECTED_EDGE_EPISODE_GAP_MINUTES = 15;
+export const POST_ENTRY_SCORING_RETRY_MAX_ATTEMPTS = 3;
+export const POST_ENTRY_SCORING_RETRY_COOLDOWN_MS = 5 * 60_000;
 
 interface ShadowDecisionRow {
   shadow_decision_id: string;
@@ -36,6 +38,33 @@ interface ShadowDecisionRow {
 interface ExistingObservation {
   checkpoint_minutes: number;
   state: string;
+  reason?: string | null;
+  evaluated_at?: string | Date | null;
+  response?: { researchRetryAttempts?: number } | null;
+}
+
+/** Only transient scoring failures can be retried. Read-only, bounded,
+ *  and never re-evaluates a finished READY or NOT_YET_ELIGIBLE score. */
+export function v85RetryAttempts(observation: ExistingObservation): number {
+  const raw = observation.response?.researchRetryAttempts;
+  return Number.isInteger(raw) && raw! >= 1
+    ? Math.min(raw!, POST_ENTRY_SCORING_RETRY_MAX_ATTEMPTS)
+    : 1;
+}
+
+export function v85ObservationTerminal(observation: ExistingObservation, now: Date): boolean {
+  if (observation.state === 'READY' || observation.state === 'NOT_YET_ELIGIBLE')
+    return true;
+  if (observation.state === 'WAITING_FOR_BROKER_DATA' &&
+      observation.reason === 'HISTORICAL_SPREAD_UNOBSERVABLE')
+    return true;
+  if (observation.state !== 'ERROR') return false;
+  if (observation.reason !== 'POST_ENTRY_SCORING_FAILED') return true;
+  if (v85RetryAttempts(observation) >= POST_ENTRY_SCORING_RETRY_MAX_ATTEMPTS)
+    return true;
+  const last = observation.evaluated_at ? new Date(observation.evaluated_at).getTime() : NaN;
+  if (!Number.isFinite(last) || !Number.isFinite(now.getTime())) return true;
+  return last + POST_ENTRY_SCORING_RETRY_COOLDOWN_MS > now.getTime();
 }
 
 interface ParsedShadowEntryFeatures {
@@ -426,7 +455,7 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
 
     const existing = (await this.dataSource.query(
       `
-        SELECT checkpoint_minutes, state
+        SELECT checkpoint_minutes, state, reason, evaluated_at, response
         FROM trading.ensemble_post_entry_shadow_observations
         WHERE ensemble_shadow_decision_id = $1
           AND artifact = $2
@@ -436,10 +465,7 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
 
     const terminal = new Set(
       existing
-        .filter(
-          (item) =>
-            item.state === 'READY' || item.state === 'NOT_YET_ELIGIBLE' || item.state === 'ERROR',
-        )
+        .filter((item) => v85ObservationTerminal(item, now))
         .map((item) => Number(item.checkpoint_minutes)),
     );
 
@@ -482,13 +508,23 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
         });
       }
 
+      // The score API has no broker-write authority. Persist attempts within
+      // the existing JSON response for bounded recovery after transient errors.
+      const previous = existing.find(
+        (item) => Number(item.checkpoint_minutes) === checkpointMinutes,
+      );
+      const retryAttempts = previous ? v85RetryAttempts(previous) + 1 : 1;
+      const responseWithRetry = response.state === 'ERROR' &&
+        response.reason === 'POST_ENTRY_SCORING_FAILED'
+          ? { ...response, researchRetryAttempts: retryAttempts }
+          : response;
       await this.persistObservation(
         row,
         observationArtifact,
         checkpointMinutes,
         checkpointAt,
         marketDataConnectionId || null,
-        response,
+        responseWithRetry,
       );
 
       if (response.state === 'READY') {

@@ -284,6 +284,36 @@ describe('MarketDataService', () => {
     });
   });
 
+  it('uses a genuine earlier positive same-minute tick when M1 bar closes with zero spread', async () => {
+    (brokerService.findConnectionById as jest.Mock).mockResolvedValueOnce({
+      id: query.brokerConnectionId, brokerId: 'pepperstone-ctrader',
+    });
+    providerQuoteStore.getCandles.mockResolvedValueOnce(
+      Array.from({ length: 25 }, (_, i) => ({
+        timestamp: new Date(Date.UTC(2026, 10, 12, 10, i, 0)),
+        open: '1.10000', high: '1.10020',
+        low: '1.09990', close: '1.10005', volume: '100',
+        spreadClose: i === 0 ? '0.0000000000' : '0.0000200000',
+        lastPositiveSpread: i === 0 ? '0.0000800000' : null,
+      })),
+    );
+    providerQuoteStore.getLatestPositiveSpreadQuote.mockResolvedValueOnce({
+      instrument: 'EURUSD', bid: '1.10004', ask: '1.10006',
+      spread: '0.00008', timestamp: new Date('2026-11-12T10:24:50.000Z'),
+      positiveSampleCount: 15,
+      latestPositiveSampleAt: new Date('2026-11-12T10:24:00.000Z'),
+    });
+    const result = await service.getInternalOhlcv({
+      ...query, timeframe: 'M1', limit: 100,
+    });
+    expect(result.candles[0]).toMatchObject({
+      priceDigits: 10, spreadPoints: '800000',
+    });
+    expect(result.candles[1]).toMatchObject({
+      priceDigits: 10, spreadPoints: '200000',
+    });
+  });
+
   it('fails closed for cTrader AI OHLCV when the persisted broker-native store is too sparse instead of bursting broker history', async () => {
     (brokerService.findConnectionById as jest.Mock).mockResolvedValueOnce({
       id: query.brokerConnectionId,

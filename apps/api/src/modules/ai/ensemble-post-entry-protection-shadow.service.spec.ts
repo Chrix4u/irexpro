@@ -5,6 +5,8 @@ import { PLAN_B_ACTIVE_MODEL_POLICY_VERSION } from './plan-b-multimodel-shadow';
 import {
   EnsemblePostEntryProtectionShadowService,
   parseV85ShadowDecisionFeatures,
+  v85ObservationTerminal,
+  v85RetryAttempts,
 } from './ensemble-post-entry-protection-shadow.service';
 
 function components(outcome?: Record<string, unknown>) {
@@ -19,6 +21,45 @@ function components(outcome?: Record<string, unknown>) {
     ...(outcome ? { outcome } : {}),
   };
 }
+
+describe('v8.5 scoring-error recovery policy', () => {
+  const now = new Date('2026-11-12T15:00:00Z');
+  const observation = {
+    checkpoint_minutes: 10, state: 'ERROR',
+    reason: 'POST_ENTRY_SCORING_FAILED',
+    evaluated_at: '2026-11-12T14:54:00Z',
+  };
+  it('recovers legacy errors after cooldown, never broker-executes', () => {
+    expect(v85RetryAttempts(observation)).toBe(1);
+    expect(v85ObservationTerminal(observation, now)).toBe(false);
+    expect(v85ObservationTerminal(observation, new Date('2026-11-12T14:58:00Z'))).toBe(true);
+  });
+  it('never retries already READY, nontransient errors or exhausted errors', () => {
+    expect(v85ObservationTerminal({ ...observation, state: 'READY' }, now)).toBe(true);
+    expect(v85ObservationTerminal({ ...observation, reason: 'INVALID_BROKER_ID' }, now)).toBe(true);
+    expect(v85ObservationTerminal({
+      ...observation,
+      state: 'WAITING_FOR_BROKER_DATA',
+      reason: 'HISTORICAL_SPREAD_UNOBSERVABLE',
+    }, now)).toBe(true);
+    expect(v85ObservationTerminal({
+      ...observation,
+      state: 'WAITING_FOR_BROKER_DATA',
+      reason: 'AWAITING_BROKER_SPREAD_EVIDENCE',
+    }, now)).toBe(false);
+    expect(v85ObservationTerminal({
+      ...observation, response: { researchRetryAttempts: 3 },
+    }, now)).toBe(true);
+  });
+  it('permits a second attempt, then stops at three total', () => {
+    expect(v85ObservationTerminal({
+      ...observation, response: { researchRetryAttempts: 2 },
+    }, now)).toBe(false);
+    expect(v85ObservationTerminal({
+      ...observation, evaluated_at: null,
+    }, now)).toBe(true);
+  });
+});
 
 describe('EnsemblePostEntryProtectionShadowService', () => {
   it('parses immutable ensemble decision features and optional terminal outcome time', () => {
