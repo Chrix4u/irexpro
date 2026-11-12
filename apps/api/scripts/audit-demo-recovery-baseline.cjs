@@ -11,7 +11,7 @@ const path=require('node:path');
 require('dotenv').config({path:path.resolve(__dirname,'../.env'),quiet:true});
 const {Client}=require('pg');
 
-const ARTIFACT='irexpro-demo-recovery-baseline-v1';
+const ARTIFACT='irexpro-demo-recovery-baseline-v2';
 const BASELINE_DAYS=['2026-11-10','2026-11-11','2026-11-12'];
 const FOCUSED_PAIRS=new Set(['EURUSD','AUDUSD']);
 const ALL_MAJORS=new Set(['EURUSD','AUDUSD','GBPUSD','USDCHF','USDJPY','USDCAD']);
@@ -76,6 +76,31 @@ function compareFunnel(rows){
     };
   }
   return result;
+}
+function buildRouteEconomics(focusedTrades,days=BASELINE_DAYS) {
+  const routeAfterFeeEconomics={};
+  const routeAfterFeeByDay={};
+  const routeAfterFeeByGhanaSession={};
+  const routeNames=new Set(focusedTrades.map(t=>t.route||'UNKNOWN_ROUTE'));
+  for(const route of routeNames){
+    const selected=focusedTrades.filter(t=>
+      (t.route||'UNKNOWN_ROUTE')===route);
+    routeAfterFeeEconomics[route]=groupTrades(selected);
+    for(const day of days){
+      routeAfterFeeByDay[day+':'+route]=groupTrades(
+        selected.filter(t=>t.utc_day===day),
+      );
+    }
+    for(const session of ['00_TO_12_UTC','13_TO_23_UTC']){
+      routeAfterFeeByGhanaSession[route+':'+session]=groupTrades(
+        selected.filter(t=>{
+          const hour=new Date(t.created_at).getUTCHours();
+          return session==='00_TO_12_UTC' ? hour<13 : hour>=13;
+        }),
+      );
+    }
+  }
+  return {routeAfterFeeEconomics,routeAfterFeeByDay,routeAfterFeeByGhanaSession};
 }
 async function audit(){
   const db=new Client({
@@ -179,7 +204,11 @@ async function audit(){
       tradesByDay:{},byPairDay:{},funnel:compareFunnel(decisions.rows),
       quoteCoverage:{},
       unverifiedHistoryCannotAuthorizeStrategyPromotion:true,
-      strategyAttribution:{},qualification:{
+      strategyAttribution:{},
+      routeAfterFeeEconomics:{},
+      routeAfterFeeByDay:{},
+      routeAfterFeeByGhanaSession:{},
+      qualification:{
         automaticPromotion:false,brokerOrdersSubmitted:false,
         executionLogicChanged:false,
         caution:'Positive historical session is not out-of-sample edge',
@@ -213,6 +242,11 @@ async function audit(){
         report.strategyAttribution[k]=(report.strategyAttribution[k]||0)+1;
       }
     }
+    // Actual historical broker fills are scored by their original route.
+    // Do not mix EARLY_TRANSITION, CONFIRMED_REVERSAL and CONTINUATION
+    // under a generic "Plan B won" label. Separate each trading session.
+    const focusedTrades=trades.rows.filter(t=>FOCUSED_PAIRS.has(t.instrument));
+    Object.assign(report,buildRouteEconomics(focusedTrades));
     console.log('DEMO_RECOVERY_BASELINE '+JSON.stringify(report));
     await db.query('ROLLBACK');
   }finally{await db.end()}
@@ -221,4 +255,4 @@ if(require.main===module)audit().catch(e=>{
   console.error('DEMO_RECOVERY_BASELINE_FAILED',e.code||'',e.message);
   process.exitCode=1;
 });
-module.exports={finiteMoney,tradeNet,groupTrades,compareFunnel};
+module.exports={finiteMoney,tradeNet,groupTrades,compareFunnel,buildRouteEconomics};

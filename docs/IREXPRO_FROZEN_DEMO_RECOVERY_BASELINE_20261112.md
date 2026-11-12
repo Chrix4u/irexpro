@@ -34,6 +34,58 @@ All numbers are USD (the account currency in the linked broker ledger).
   to commission and stop/exit path. Increasing trade count or
   restoring volume alone is not strategy qualification.
 
+## Route-specific actual broker economics, 10–12 November
+
+The benchmark now isolates each real originating M1 route instead of
+describing everything as "Plan B": all 19 focused broker fills across
+10–12 November carried primary Plan B authority, but their *entry
+routes* had very different loss profiles.
+
+| Originating route | Fills | Net winners | Net after commission | Profit factor | Max closed-trade drawdown |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| M1 trend continuation | 13 | 9 | +$740 | 2.276 | $216 |
+| M1 early transition | 6 | 2 | +$116 | 1.244 | $272 |
+
+By UTC/Ghana date, trend continuation was **+$444 (10 Nov)**,
+**+$510 (11 Nov)** and **−$214 (12 Nov)**. Early transition was
+**+$16, +$304 and −$204**, respectively. Those data make continuation
+the better *historical champion candidate*, not yet a valid unattended
+trading strategy. The samples are small, executed lots varied from
+2.00–4.00, and 12 November shows substantial deterioration.
+
+**Time pattern:** all six early-transition fills and 12 of the
+13 trend-continuation fills opened before 13:00 Ghana time. The one
+post-13:00 continuation was an AUDUSD SELL opened at 13:14 on
+11 November; it netted +$144. Eighteen of nineteen focused trades
+opened in the 00:00–12:59 window. This validates the user's
+observed afternoon trade-frequency asymmetry over three dates,
+without proving there is a literal hard-coded 13:00 closure.
+
+### Prospective M1 independent challenger as of 21:03 UTC, 12 Nov
+
+The read-only independently eligible, Plan-B-disagreed opportunity
+observer scored 10 nonoverlapping episodes, including 8 AUDUSD
+episodes with complete stop-path proxy observations. AUDUSD 5-minute
+fixed-hold net −10.6 estimated pips; 2-pip quick-capture with
+pessimistic stop-first −8.9 pips; 1-pip pullback variant 3 fills
+and −4.0 pips. EURUSD had only 2 five-minute endpoints and
+one valid five-minute complete stop path; sample insufficient
+to qualify. This **does not support switching independent M1
+to broker execution**. It is prospective quote-based research,
+not actual order fills.
+
+The latest M1 drift diagnostics show current AUDUSD continuation
+rejections from weak EMA separation, extended ATR moves and
+occasionally low RSI. EURUSD also shows low-volatility stressed
+conditions. These are market-feature boundaries, not proof of
+a disconnected broker.
+
+**Decision:** preserve current LIVE/DEMO risk architecture and
+existing DEMO entry configuration. Do not globally remove
+Plan B admission or relax drift envelopes to increase trades.
+Next change must be a causally evaluated, independently profitable
+route that can survive the broker's actual cost and stop path.
+
 ## Entry-decision compatibility, not merely scans
 
 | Day | Pair | M1 evaluations | M1 routed | Plan B paper-admitted | Both simultaneously | Broker authorized |

@@ -1,6 +1,6 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {finiteMoney,tradeNet,groupTrades,compareFunnel}=
+const {finiteMoney,tradeNet,groupTrades,compareFunnel,buildRouteEconomics}=
   require('./audit-demo-recovery-baseline.cjs');
 const trade=(gross,commission,swap='0',date='2026-11-11T10:00:00Z')=>({
   realised_pnl:gross,commission,swap,created_at:date,
@@ -54,4 +54,33 @@ test('money parser rejects invalid nonnumeric data',()=>{
   assert.equal(finiteMoney(''),null);
   assert.equal(finiteMoney('NaN'),null);
   assert.equal(finiteMoney('10.15'),10.15);
+});
+
+
+test('isolates actual PRIMARY route economics without averaging reversals with continuations',()=>{
+  const trades=[
+    {...trade('328','-24', '0', '2026-11-11T07:45:00Z'),
+      route:'M1_TREND_CONTINUATION',utc_day:'2026-11-11'},
+    {...trade('-116','-24', '0', '2026-11-11T09:47:00Z'),
+      route:'M1_TREND_CONTINUATION',utc_day:'2026-11-11'},
+    {...trade('156','-12', '0', '2026-11-11T13:14:00Z'),
+      route:'M1_TREND_CONTINUATION',utc_day:'2026-11-11'},
+    {...trade('328','-24', '0', '2026-11-11T02:08:00Z'),
+      route:'M1_EARLY_TRANSITION',utc_day:'2026-11-11'},
+  ];
+  const r=buildRouteEconomics(trades,['2026-11-11']);
+  assert.equal(r.routeAfterFeeEconomics['M1_TREND_CONTINUATION'].net,308);
+  assert.equal(r.routeAfterFeeEconomics['M1_EARLY_TRANSITION'].net,304);
+  assert.equal(
+    r.routeAfterFeeByGhanaSession['M1_TREND_CONTINUATION:13_TO_23_UTC'].net,
+    144,
+  );
+  assert.equal(
+    r.routeAfterFeeByGhanaSession['M1_TREND_CONTINUATION:00_TO_12_UTC'].deals,
+    2,
+  );
+  assert.equal(
+    r.routeAfterFeeEconomics['M1_EARLY_TRANSITION'].eligibleForAutomaticPromotion,
+    false,
+  );
 });
