@@ -95,6 +95,14 @@ describe('owner-verified DEMO continuation canary evidence', () => {
     const [sql,args]=query.mock.calls[0];
     expect(sql).toContain("execution_authority = 'BROKER_NATIVE'");
     expect(sql).toContain("governance #>> '{demoPrimaryOnlyProbation,qualifiedContinuationCanary}' = 'true'");
+    // A sizing/allocation failure with a definitively rejected, unfilled
+    // intent must NOT lock out the next qualified minute for 90 minutes.
+    // Pending/unreconciled orders still retain the cooldown.
+    expect(sql).toContain("d.outcome_state = 'EXECUTION_FAILED'");
+    expect(sql).toContain("ti.status = 'REJECTED'");
+    expect(sql).toContain('ti.trade_id IS NULL');
+    expect(sql).toContain('AND NOT (');
+    expect(sql).toContain('ti.id = d.trade_intent_id');
     expect(sql).toContain('evaluated_at < $5::timestamptz');
     expect(args).toEqual([
       broker.userId,broker.brokerConnectionId,'AUDUSD','SELL',

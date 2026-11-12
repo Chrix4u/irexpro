@@ -994,9 +994,27 @@ export class PositionSizingService {
         if (reservePerLot.isPositive()) {
           const nominalStopRiskCeiling = originalLots.mul(riskPerLot);
           const projectedRiskPerLot = riskPerLot.add(reservePerLot);
-          const lotsWithinEnvelope = nominalStopRiskCeiling
-            .divDown(projectedRiskPerLot, LOT_SCALE)
-            .divDown(lotStep, 0).mul(lotStep);
+          // A 0.01-lot DEMO probe may be explicitly capped at the broker's
+          // minimum by the strategy, even though its *true* drawdown-adjusted
+          // account risk budget can pay the spread and commission too.
+          // Dividing the bare 0.01-lot stop risk by a cost-inclusive per-lot
+          // risk ALWAYS rounds to 0 on a 0.01 step: a self-locking sizing bug.
+          // For exact broker-minimum probes ONLY, verify the inclusive cost
+          // against the EXISTING effective budget AND durable profile ceiling.
+          // Never round up, increase proposed lots, change SL/TP, or apply
+          // this exception to larger positions or non-DEMO accounts.
+          const costInclusiveRiskCeiling = originalLots.eq(minLot)
+            ? ExactDecimal.min(
+                riskAmountInQuoteCurrency,
+                profileRiskCeilingAmountInQuoteCurrency,
+              )
+            : nominalStopRiskCeiling;
+          const lotsWithinEnvelope = ExactDecimal.min(
+            originalLots,
+            costInclusiveRiskCeiling
+              .divDown(projectedRiskPerLot, LOT_SCALE)
+              .divDown(lotStep, 0).mul(lotStep),
+          );
           if (lotsWithinEnvelope.lt(minLot)) {
             throw new PositionSizingError(
               'POSITION_SIZE_BELOW_MINIMUM',

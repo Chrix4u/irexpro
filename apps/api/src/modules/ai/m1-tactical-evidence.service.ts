@@ -1818,15 +1818,30 @@ export class M1TacticalEvidenceService {
     const rows = (await this.dataSource.query(
       `
         SELECT EXISTS (
-          SELECT 1 FROM trading.m1_tactical_decisions
-          WHERE user_id = $1
-            AND broker_connection_id = $2
-            AND instrument = $3
-            AND direction = $4
-            AND evaluated_at < $5::timestamptz
-            AND evaluated_at >= $5::timestamptz - ($6::int * interval '1 minute')
-            AND execution_authority = 'BROKER_NATIVE'
-            AND governance #>> '{demoPrimaryOnlyProbation,qualifiedContinuationCanary}' = 'true'
+          SELECT 1 FROM trading.m1_tactical_decisions d
+          WHERE d.user_id = $1
+            AND d.broker_connection_id = $2
+            AND d.instrument = $3
+            AND d.direction = $4
+            AND d.evaluated_at < $5::timestamptz
+            AND d.evaluated_at >= $5::timestamptz - ($6::int * interval '1 minute')
+            AND d.execution_authority = 'BROKER_NATIVE'
+            AND d.governance #>> '{demoPrimaryOnlyProbation,qualifiedContinuationCanary}' = 'true'
+            -- An approval is not a broker fill. Only a definitively
+            -- REJECTED intent, with no broker trade, may be retried.
+            -- Unknown/pending outcome or failed-with-unreconciled-intent
+            -- remains reserved: never risk a duplicate broker position.
+            AND NOT (
+              d.outcome_state = 'EXECUTION_FAILED'
+              AND EXISTS (
+                SELECT 1 FROM trading.trade_intents ti
+                WHERE ti.id = d.trade_intent_id
+                  AND ti.user_id = d.user_id
+                  AND ti.broker_connection_id = d.broker_connection_id
+                  AND ti.status = 'REJECTED'
+                  AND ti.trade_id IS NULL
+              )
+            )
         ) AS exists
       `,
       [
