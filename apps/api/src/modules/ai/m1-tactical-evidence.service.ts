@@ -1832,7 +1832,7 @@ export class M1TacticalEvidenceService {
             -- Unknown/pending outcome or failed-with-unreconciled-intent
             -- remains reserved: never risk a duplicate broker position.
             AND NOT (
-              d.outcome_state = 'EXECUTION_FAILED'
+              d.outcome_state IS NOT DISTINCT FROM 'EXECUTION_FAILED'
               AND EXISTS (
                 SELECT 1 FROM trading.trade_intents ti
                 WHERE ti.id = d.trade_intent_id

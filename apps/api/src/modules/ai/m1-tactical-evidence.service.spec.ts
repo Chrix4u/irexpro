@@ -98,7 +98,10 @@ describe('owner-verified DEMO continuation canary evidence', () => {
     // A sizing/allocation failure with a definitively rejected, unfilled
     // intent must NOT lock out the next qualified minute for 90 minutes.
     // Pending/unreconciled orders still retain the cooldown.
-    expect(sql).toContain("d.outcome_state = 'EXECUTION_FAILED'");
+    // IS NOT DISTINCT FROM is NULL-safe. Pending outcome=NULL must still
+    // reserve the exact pair/side cooldown to avoid double broker fills.
+    expect(sql).toContain("d.outcome_state IS NOT DISTINCT FROM 'EXECUTION_FAILED'");
+    expect(sql).not.toContain("d.outcome_state = 'EXECUTION_FAILED'");
     expect(sql).toContain("ti.status = 'REJECTED'");
     expect(sql).toContain('ti.trade_id IS NULL');
     expect(sql).toContain('AND NOT (');
