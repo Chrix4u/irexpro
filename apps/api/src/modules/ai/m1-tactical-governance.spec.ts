@@ -14,6 +14,7 @@ import {
 } from './m1-tactical-governance';
 import type { EnsembleSleeveEvidence, ExecutionSpreadEvidence } from './ensemble-governance';
 import { evaluateM1TacticalExpectancy } from './m1-tactical-expectancy';
+import { m1CandidateToPlanBInput } from './multimodel-demo-authority';
 
 function snapshot(overrides: Partial<M1TacticalFeatureSnapshot> = {}): M1TacticalFeatureSnapshot {
   return {
@@ -160,6 +161,38 @@ describe('evaluateM1TacticalGovernance', () => {
       expectNoElevatedAuthority(result);
     },
   );
+
+  it('uses the same M1 EMA ATR/2 normalization as Plan B before shared drift calibration', () => {
+    const input = baseInput();
+    const features = snapshot({ emaSeparationAtr: 1.04 });
+    const [candidate] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
+    const planB=m1CandidateToPlanBInput(candidate,features,features.decisionTime);
+    expect(candidate.alignedEmaSeparationAtr).toBeGreaterThan(0.84442);
+    expect(planB.emaSeparation).toBeCloseTo(candidate.alignedEmaSeparationAtr / 2, 10);
+    expect(planB.emaSeparation).toBeLessThan(0.84442);
+    const result = evaluateM1TacticalGovernance({
+      ...input, candidate, routeDecision: route(candidate), features,
+    });
+    expect(result.genericGovernance.driftState).toBe('NORMAL');
+    expect(result.genericGovernance.driftDiagnostics).not.toContain('emaSeparation:HARD_HIGH');
+    expect(result.blockers).not.toContain('DRIFT_OUT_OF_DISTRIBUTION');
+    expectNoElevatedAuthority(result);
+  });
+
+  it('still rejects genuinely beyond-corpus EMA separation AFTER Plan B normalization', () => {
+    const input = baseInput();
+    const features = snapshot({ emaSeparationAtr: 1.82 });
+    const [candidate] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
+    const normalized=m1CandidateToPlanBInput(candidate,features,features.decisionTime);
+    expect(normalized.emaSeparation).toBeGreaterThan(0.84442);
+    const result=evaluateM1TacticalGovernance({
+      ...input,candidate,routeDecision:route(candidate),features,
+    });
+    expect(result.genericGovernance.driftState).toBe('OUT_OF_DISTRIBUTION');
+    expect(result.genericGovernance.driftDiagnostics).toContain('emaSeparation:HARD_HIGH');
+    expect(result.blockers).toContain('DRIFT_OUT_OF_DISTRIBUTION');
+    expectNoElevatedAuthority(result);
+  });
 
   it('blocks out-of-distribution feature evidence', () => {
     const input = baseInput();
