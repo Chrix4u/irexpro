@@ -43,6 +43,8 @@ export function evaluateDemoPrimaryOnlyProbation(input: {
     complete: boolean;
   } | null;
   genuineRollover?: boolean;
+  /** Never seed a new M1 fallback into imminent broker rollover spread. */
+  preRolloverRiskWindow?: boolean;
 }): DemoPrimaryOnlyProbationDecision {
   // This exactly matches the order-routing precedence in submitPaperDecision.
   // A fallback that has no primary permission stays observational only.
@@ -70,6 +72,7 @@ export function evaluateDemoPrimaryOnlyProbation(input: {
     input.enabled === true &&
     input.brokerAccountIsDemo === true &&
     input.genuineRollover !== true &&
+    input.preRolloverRiskWindow !== true &&
     afterFee?.complete === true &&
     afterFee.sampleCount >= DEMO_QUALIFIED_CONTINUATION_CANARY_MIN_SAMPLES &&
     afterFee.netWins >= DEMO_QUALIFIED_CONTINUATION_CANARY_MIN_WINS &&

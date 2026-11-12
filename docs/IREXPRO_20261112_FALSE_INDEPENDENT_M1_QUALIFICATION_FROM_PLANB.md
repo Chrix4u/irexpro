@@ -72,3 +72,32 @@ after-fee evidence**.
   provenance alone will create more Plan B orders.
 - Actual broker fills and prospective independent results, not
   backfilled model labels, are required for future promotion.
+
+## Confirmed close and pre-rollover timing defect (22:02 UTC)
+
+The independent 0.01-lot trade closed at 22:01:01 with provider
+`BROKER_CLOSE`, exit ask 0.68143, gross realised P&L −$0.90,
+commission −$0.06, swap −$0.03; **net −$0.99**.
+Its planned stop price was 0.68101, a difference of 0.00042 / 4.2 pips.
+The broker's cTrader bid/ask quote recorder, scoped by this EXACT
+broker connection, observed at 22:01:21 a bid of 0.68016 and ask of
+0.68143: spread **12.7 pips**, compared with 0.3 pip at 21:58:56.
+The close price exactly matches the observed post-rollover ask.
+This is STRONG evidence of rollover spread/execution exposure but
+`BROKER_CLOSE` alone does not prove the internal cTrader stop-trigger
+event or precise intrasecond slippage mechanism.
+
+The trade was opened at 21:15 UTC in November, exactly 45 minutes
+before the New York 17:00 EST rollover. A 4.8-pip stop is materially
+smaller than the 12.7-pip spread observed at rollover; this M1
+fallback trial should never enter close to the dealer rollover unless
+there is a verified exit lifecycle that will finish before the
+liquidity transition.
+
+**Supplemental narrow mitigation:** use the shared timezone-aware
+`isForexPreRolloverHour()` clock to deny the independent
+QUALIFIED_CONTINUATION canary permission during NY hour 16,
+i.e. 21:00–21:59 UTC in winter and 20:00–20:59 in summer.
+Keep the existing 17:00 NY rollover veto; neither this new guard
+nor provenance correction modifies primary Plan B, LIVE execution,
+position sizing, or already-open broker trades.

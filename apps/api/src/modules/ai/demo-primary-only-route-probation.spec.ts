@@ -113,6 +113,26 @@ describe('reversible DEMO-only entry-authority probation', () => {
     });
   });
 
+  it('denies an otherwise qualified trial in the hour before NY rollover', () => {
+    const decision=evaluateDemoPrimaryOnlyProbation({
+      ...primary,
+      primaryAuthorityPath:'BLOCKED',
+      executableFallbackTier:'QUALIFIED_CONTINUATION',
+      qualifiedContinuationEvidence:qualified,
+      afterCommissionEvidence:qualifiedAfterFee,
+      brokerAccountIsDemo:true,
+      genuineRollover:false,
+      preRolloverRiskWindow:true,
+    });
+    expect(decision).toMatchObject({
+      blocked:true,
+      qualifiedContinuationCanary:false,
+      chosenAuthorityPath:'QUALIFIED_CONTINUATION',
+      reason:'FALLBACK_ROUTE_IN_PROBATION',
+      modifiesOpenPositions:false,
+    });
+  });
+
   it('denies the exemption for LIVE, unknown account, rollover, thin or negative sleeves', () => {
     const base = {
       ...primary,

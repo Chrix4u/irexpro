@@ -18,6 +18,22 @@ const NY_HOUR = new Intl.DateTimeFormat('en-US', {
 export type ForexSessionClockLabel =
   | 'ASIA' | 'LONDON' | 'NEW_YORK' | 'ROLLOVER';
 
+/**
+ * One hour BEFORE 17:00 New York daily FX rollover. A broker can widen
+ * the bid/ask spread more than a tight intraday stop during rollover,
+ * even when the midprice has not reached the planned risk boundary.
+ *
+ * This helper is a narrow risk veto for NEW independent DEMO micro-lot
+ * entries, not a forced close or a change to the primary strategy.
+ * DST is automatically respected by the shared America/New_York clock.
+ */
+export function isForexPreRolloverHour(evaluatedAt: Date): boolean {
+  if (!Number.isFinite(evaluatedAt.getTime())) {
+    throw new Error('Forex rollover-risk timestamp must be valid');
+  }
+  return Number(NY_HOUR.format(evaluatedAt)) === 16;
+}
+
 export function classifyForexSessionClock(
   evaluatedAt: Date,
 ): ForexSessionClockLabel {

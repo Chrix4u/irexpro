@@ -1,4 +1,4 @@
-import { classifyForexSessionClock } from './forex-session-clock';
+import { classifyForexSessionClock, isForexPreRolloverHour } from './forex-session-clock';
 import { adaptiveMarketSession, classifyAdaptiveMarketState } from './adaptive-market-state';
 import { classifyPaperSpreadSession } from './paper-spread-calibration-shadow';
 
@@ -22,6 +22,19 @@ describe('Forex session clock New York DST rollover integrity', () => {
     expect(adaptiveMarketSession(stamp)).toBe(expected);
     expect(classifyPaperSpreadSession(stamp)).toBe(expected);
   });
+
+  it.each([
+    ['2026-11-12T20:59:00Z',false],
+    ['2026-11-12T21:00:00Z',true],
+    ['2026-11-12T21:15:00Z',true],
+    ['2026-11-12T21:59:00Z',true],
+    ['2026-11-12T22:00:00Z',false],
+    ['2026-07-15T19:59:00Z',false],
+    ['2026-07-15T20:00:00Z',true],
+    ['2026-07-15T20:59:00Z',true],
+    ['2026-07-15T21:00:00Z',false],
+  ] as const)('pre-rollover M1 canary risk window %s is %s',
+    (time,expected)=>expect(isForexPreRolloverHour(new Date(time))).toBe(expected));
 
   it('never assumes a 3-hour nightly rollover in November', () => {
     const before = classifyForexSessionClock(new Date('2026-11-12T21:30:00Z'));

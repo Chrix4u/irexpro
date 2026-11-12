@@ -93,7 +93,7 @@ import {
 } from './m1-portfolio-net-loss-brake';
 import { evaluateDemoProfitabilityReliabilityGate } from './demo-profitability-reliability-gate';
 import { evaluateDemoPrimaryOnlyProbation } from './demo-primary-only-route-probation';
-import { classifyForexSessionClock } from './forex-session-clock';
+import { classifyForexSessionClock, isForexPreRolloverHour } from './forex-session-clock';
 import { evaluateIndependentM1OpportunityShadow } from './independent-m1-opportunity-shadow';
 import {
   evaluateM1RoutePairSideReliability,
@@ -1789,6 +1789,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       brokerAccountIsDemo: verifiedDemoForQualifiedContinuation,
       afterCommissionEvidence: qualifiedContinuationAfterFeeEvidence,
       genuineRollover: classifyForexSessionClock(decisionTime) === 'ROLLOVER',
+      // On 12 Nov a 21:15 M1 SELL remained open through the 22:00
+      // NY rollover and was exited at an observed 12.7-pip spread
+      // against a 4.8-pip stop. Prevent that narrow trial timing again.
+      preRolloverRiskWindow: isForexPreRolloverHour(decisionTime),
       qualifiedContinuationEvidence: reliability
         ? {
             eligible: reliability.eligible,
