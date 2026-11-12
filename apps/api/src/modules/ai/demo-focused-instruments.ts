@@ -62,7 +62,12 @@ export function isFocusedDemoEntryInstrument(instrument: string): boolean {
 export function isRestoredDemoEntryInstrument(instrument: string): boolean {
   return DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2.includes(instrument);
 }
-/** Current execution-boundary allowlist; keep historical V1/V2 for replay only. */
+/**
+ * Central strategy-orchestrator guard MUST mirror the ACTIVE V4 policy,
+ * not historical V3. Otherwise scanned USDCAD/USDJPY would be denied
+ * just before broker-risk validation even though the scheduler allowed
+ * them. Exact symbols only, no LIVE promotion.
+ */
 export function isCurrentFocusedDemoEntryInstrument(instrument: string): boolean {
-  return DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3.includes(instrument);
+  return DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.includes(instrument);
 }

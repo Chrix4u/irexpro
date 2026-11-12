@@ -12,6 +12,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW,
   demoInstrumentEntryAllowed,
 } from './m1-tactical-scheduler.service';
+import { isCurrentFocusedDemoEntryInstrument } from './demo-focused-instruments';
 
 describe('2026-11-05 reversible DEMO focused-three entry permission', () => {
   const policy = M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION;
@@ -165,10 +166,14 @@ describe('2026-11-12 owner-authorized four-pair Pepperstone DEMO eligibility', (
     expect(policy.demoEntryInstruments).toBe(DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4);
     expect(policy.version).toBe('m1-tactical-v8-demo-primary-fee-shadow-focused4-v4');
     expect(policy.demoEntryInstruments).toHaveLength(4);
-    for(const symbol of DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4)
+    for(const symbol of DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4) {
       expect(demoInstrumentEntryAllowed(policy,symbol)).toBe(true);
-    for(const symbol of ['GBPUSD','USDCHF','XAUUSD','EURUSDx','USDJPY-ALT',''])
+      expect(isCurrentFocusedDemoEntryInstrument(symbol)).toBe(true);
+    }
+    for(const symbol of ['GBPUSD','USDCHF','XAUUSD','EURUSDx','USDJPY-ALT','']) {
       expect(demoInstrumentEntryAllowed(policy,symbol)).toBe(false);
+      expect(isCurrentFocusedDemoEntryInstrument(symbol)).toBe(false);
+    }
   });
   it('inherits ALL original quality/risk gates and leaves historical focused-two policy immutable',()=>{
     expect(policy).toMatchObject({

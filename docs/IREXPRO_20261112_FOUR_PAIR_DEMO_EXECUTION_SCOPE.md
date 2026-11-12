@@ -82,3 +82,21 @@ pair-side subsets as qualified profitable strategies.
 7. No-availability/no-trade assertions are limited to the exact
    observed after-deployment period; never claim an approved
    or filled order without actual broker-native evidence.
+
+## Critical independently enforced dispatcher gate
+
+The first implementation review found a second authorization check:
+`StrategyOrchestratorService.processSignal` Gate 3.6 calls
+`isCurrentFocusedDemoEntryInstrument`, which had hard-coded the
+historical V3 two-pair list. Without updating that *separate*
+central execution guard, freshly scored USDCAD and USDJPY signals
+would still fail just ahead of broker risk validation with
+`DEMO_INSTRUMENT_RESEARCH_ONLY`, despite the new scanner policy.
+
+That helper now references exact immutable V4 four-pair scope.
+The orchestrator rejection message is updated from "two" to "four";
+GBPUSD/USDCHF and suffixed symbols still fail before risk or broker
+dispatch. Strategy-orchestrator tests explicitly verify that USDCAD
+and USDJPY reach the normal downstream risk validation without
+bypassing it. All old two-pair policy fixtures stay immutable for
+replay/rollback.
