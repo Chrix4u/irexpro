@@ -1,7 +1,9 @@
 import {
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
   DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
+  DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3,
   M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
+  M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_TWO_FEE_SHADOW,
   M1_TACTICAL_ROLLOUT_POLICY_V1,
   M1_TACTICAL_ROLLOUT_POLICY_V8,
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION,
@@ -126,5 +128,26 @@ describe('2026-11-09 restored six-pair DEMO entry eligibility', () => {
     expect(demoInstrumentEntryAllowed({ ...restored, demoEntryInstruments: [] }, 'USDJPY')).toBe(
       false,
     );
+  });
+});
+
+describe('2026-11-12 focused two-pair DEMO execution authority', () => {
+  const pilot = M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_TWO_FEE_SHADOW;
+  it('uses the operator-approved two-pair allowlist without expanding risk authority', () => {
+    expect(DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3).toEqual(['EURUSD', 'AUDUSD']);
+    expect(Object.isFrozen(DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3)).toBe(true);
+    expect(pilot.version).toBe('m1-tactical-v8-demo-primary-fee-shadow-focused2-v3');
+    expect(pilot.instruments).toHaveLength(6);
+    expect(pilot.demoEntryInstruments).toBe(DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3);
+    expect(pilot.demoPrimaryOnlyProbation).toBe(true);
+    expect(pilot.demoBrokerCommissionShadow).toBe(true);
+    expect(pilot.demoBrokerCommissionFloor).toBe(false);
+    expect(pilot.paperVolumeCap).toBe(4);
+  });
+  it.each(['EURUSD', 'AUDUSD'])('allows %s to reach the ordinary independent gates', pair => {
+    expect(demoInstrumentEntryAllowed(pilot, pair)).toBe(true);
+  });
+  it.each(['GBPUSD', 'USDJPY', 'USDCHF', 'USDCAD', 'EURUSDx'])('blocks DEMO entry on %s', pair => {
+    expect(demoInstrumentEntryAllowed(pilot, pair)).toBe(false);
   });
 });

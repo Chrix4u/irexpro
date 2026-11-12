@@ -27,6 +27,18 @@ export const DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2: readonly string[] = Object.free
   'USDJPY',
 ]);
 
+/**
+ * 2026-11-12 DEMO-focused two-pair pilot after the 10–12 November
+ * broker-settled sleeve audit. The other four are DORMANT: not executed
+ * and not evaluated by the M1 tactical scheduler. Historical evidence
+ * remains available for later explicit operator reactivation.
+ * Neither paper nor live authority is expanded.
+ */
+export const DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3: readonly string[] = Object.freeze([
+  'EURUSD',
+  'AUDUSD',
+]);
+
 /** The historic focused-three scope remains available for precise rollback. */
 export function isFocusedDemoEntryInstrument(instrument: string): boolean {
   return DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1.includes(instrument);

@@ -1,4 +1,7 @@
-import { DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2 } from './demo-focused-instruments';
+import {
+  DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
+  DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3,
+} from './demo-focused-instruments';
 
 /**
  * Bounded, serial-scheduler priority for the RESTORED six-pair DEMO entry
@@ -27,6 +30,18 @@ export function orderM1DemoSixPairScan(input: {
         ...input.policyInstruments.filter((instrument) => !focused.includes(instrument)),
       ]
     : [...input.policyInstruments];
+
+  // V3 operator focus is deliberately a SCAN restriction, not merely
+  // prioritisation. Skipped pairs cannot load broker bars, score, or reach
+  // broker order routing through this M1 scheduler. Older policies keep
+  // their historical scanning semantics for reproducible replay.
+  const focusedTwo =
+    input.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&
+    focused?.length === DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3.length &&
+    DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3.every(
+      (instrument) => focused.includes(instrument) && input.policyInstruments.includes(instrument),
+    );
+  if (focusedTwo) return [...DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3];
 
   const isExactlyRestoredSix =
     input.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&

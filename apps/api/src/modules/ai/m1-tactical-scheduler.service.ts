@@ -1,11 +1,13 @@
 import {
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
   DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
+  DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3,
 } from './demo-focused-instruments';
 import { orderM1DemoSixPairScan } from './m1-demo-six-pair-scan-order';
 export {
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
   DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
+  DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3,
 } from './demo-focused-instruments';
 
 import {
@@ -565,6 +567,19 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW: Readonly<M1T
   });
 
 /**
+ * Reversible operator-approved DEMO focused-two trading AND M1 scanning:
+ * ONLY EURUSD/AUDUSD enter the high-frequency sequential evaluation loop.
+ * No new model threshold or execution authorization; ordinary risk gates,
+ * active-position protection and independent paper services are unchanged.
+ */
+export const M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_TWO_FEE_SHADOW: Readonly<M1TacticalRolloutPolicy> =
+  Object.freeze({
+    ...M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW,
+    version: 'm1-tactical-v8-demo-primary-fee-shadow-focused2-v3',
+    demoEntryInstruments: DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3,
+  });
+
+/**
  * Operator-requested DEMO six-pair reactivation. Explicitly version the
  * policy so historical focused-three decisions can still be attributed to
  * their original restrictions. No additional execution/risk authority.
@@ -760,6 +775,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? {
             demoEntryInstruments: [...this.rolloutPolicy.demoEntryInstruments],
             researchOnlyInstruments: this.rolloutPolicy.instruments.filter(
+              (instrument) => !this.rolloutPolicy.demoEntryInstruments!.includes(instrument),
+            ),
+            m1ScannedInstruments: orderM1DemoSixPairScan({
+              phase: this.rolloutPolicy.phase,
+              policyInstruments: this.rolloutPolicy.instruments,
+              demoEntryInstruments: this.rolloutPolicy.demoEntryInstruments,
+              decisionTime: new Date(),
+            }),
+            m1DormantInstruments: this.rolloutPolicy.instruments.filter(
               (instrument) => !this.rolloutPolicy.demoEntryInstruments!.includes(instrument),
             ),
           }
