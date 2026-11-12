@@ -867,13 +867,23 @@ export class M1TacticalEvidenceService {
   ): Promise<M1TacticalLatestDecisionState | null> {
     const rows = (await this.dataSource.query(
       `
+        -- Narrow to the user's latest minute BEFORE JSON-based same-bar ranking.
+        -- Sorting the entire tactical history made the cockpit status stall for
+        -- tens of seconds and compete with the entry-critical M1 scanner.
+        WITH latest_bar AS (
+          SELECT bar_time
+          FROM trading.m1_tactical_decisions
+          WHERE user_id = $1
+          ORDER BY bar_time DESC
+          LIMIT 1
+        )
         SELECT
-          instrument, direction, route, bar_time, candidate, governance, blockers,
-          execution_authority, outcome_state
-        FROM trading.m1_tactical_decisions
-        WHERE user_id = $1
+          d.instrument, d.direction, d.route, d.bar_time, d.candidate, d.governance, d.blockers,
+          d.execution_authority, d.outcome_state
+        FROM trading.m1_tactical_decisions d
+        INNER JOIN latest_bar lb ON lb.bar_time = d.bar_time
+        WHERE d.user_id = $1
         ORDER BY
-          bar_time DESC,
           -- Always show real authorization first. Among same-bar
           -- nonexecuted decisions, prefer entry-eligible DEMO pairs.
           -- Research-only USDJPY/USDCAD/USDCHF must not displace an

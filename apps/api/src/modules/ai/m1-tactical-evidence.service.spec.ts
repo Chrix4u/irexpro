@@ -259,6 +259,8 @@ describe('M1TacticalEvidenceService', () => {
     });
     const [sql, params] = query.mock.calls[0]!;
     expect(String(sql)).toContain('WHERE user_id = $1');
+    expect(String(sql)).toContain('WITH latest_bar AS');
+    expect(String(sql)).toContain('INNER JOIN latest_bar lb ON lb.bar_time = d.bar_time');
     expect(String(sql).replace(/\s+/g, ' ')).toContain('ORDER BY bar_time DESC');
     expect(String(sql)).toContain("execution_authority <> 'NONE'");
     expect(String(sql)).toContain('CARDINALITY($2::text[])');
