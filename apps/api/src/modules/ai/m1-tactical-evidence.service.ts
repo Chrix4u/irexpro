@@ -200,7 +200,8 @@ export interface M1MultimodelLossStreakBrakeDecision {
     | 'CLEAR'
     | 'RECENT_MULTIMODEL_LOSS_STREAK'
     | 'RECENT_NEGATIVE_PAYOFF'
-    | 'PERSISTENT_NEGATIVE_PAYOFF';
+    | 'PERSISTENT_NEGATIVE_PAYOFF'
+    | 'BROKER_COST_EVIDENCE_INCOMPLETE';
   strategyRoute: M1MultimodelStrategyRoute;
   recentClosedTrades: number;
   payoffClosedTrades: number;
@@ -1071,7 +1072,10 @@ export class M1TacticalEvidenceService {
           d.instrument,
           d.direction,
           d.policy_version,
-          t.realised_pnl,
+          -- Reliability must use ACCOUNT-CURRENCY NET broker results.
+          -- A +$5 gross exit with -$6 paid commission is a LOSS,
+          -- not a model win. Missing fees must not masquerade as zero.
+          (t.realised_pnl + t.commission + t.swap) AS realised_pnl,
           t.lot_size,
           t.fill_price,
           t.stop_loss,
@@ -1112,7 +1116,9 @@ export class M1TacticalEvidenceService {
           AND d.policy_version = ANY($6::text[])
           AND t.status = 'CLOSED'
           AND t.realised_pnl IS NOT NULL
-          AND t.realised_pnl <> 0
+          AND t.commission IS NOT NULL
+          AND t.swap IS NOT NULL
+          AND (t.realised_pnl + t.commission + t.swap) <> 0
           AND t.closed_at IS NOT NULL
           AND t.closed_at <= $7::timestamptz
           AND t.closed_at > ($7::timestamptz - interval '7 days')
@@ -1245,7 +1251,8 @@ export class M1TacticalEvidenceService {
     const instrument = input.instrument.trim().toUpperCase();
     const rows = (await this.dataSource.query(
       `
-        SELECT t.realised_pnl, t.closed_at
+        SELECT (t.realised_pnl + t.commission + t.swap) AS realised_pnl,
+               t.closed_at
         FROM trading.trades t
         JOIN trading.trade_intents ti
           ON ti.id = t.trade_intent_id
@@ -1265,6 +1272,9 @@ export class M1TacticalEvidenceService {
           AND ti.metadata ->> 'external_provider_paper_only' = 'true'
           AND t.status = 'CLOSED'
           AND t.realised_pnl IS NOT NULL
+          -- Do not discard unpriced historical fills: a missing fee MUST
+          -- remain visible in the first 8 latest closes and fail closed
+          -- rather than allowing a falsely profitable Plan B sleeve.
           AND t.closed_at IS NOT NULL
           AND t.closed_at <= $6::timestamptz
           AND t.closed_at > ($6::timestamptz - interval '14 days')
@@ -1281,6 +1291,34 @@ export class M1TacticalEvidenceService {
       ],
     )) as Array<{ realised_pnl: string | number; closed_at: string | Date }>;
 
+    // Financial evidence cannot label a gross win as a net win.
+    // PostgreSQL's signed sums turn NULL when either settled broker cost
+    // is unavailable. Do not silently treat that as a zero-P&L observation
+    // or drop it from the loss window: both could lift the brake wrongly.
+    if (rows.some((row) =>
+      row.realised_pnl === null ||
+      row.realised_pnl === undefined ||
+      row.realised_pnl === '' ||
+      !Number.isFinite(Number(row.realised_pnl))
+    )) {
+      return {
+        artifact: M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT,
+        active: true,
+        reason: 'BROKER_COST_EVIDENCE_INCOMPLETE',
+        strategyRoute: input.strategyRoute,
+        recentClosedTrades: rows.length,
+        payoffClosedTrades: rows.length,
+        recentLosses: 0,
+        recentWins: 0,
+        cumulativeRealisedPnl: 0,
+        profitFactor: null,
+        negativePayoff: false,
+        persistentNegativePayoff: false,
+        latestClosedAt: rows[0]?.closed_at ? date(rows[0].closed_at) : null,
+        cooldownHours: M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS,
+        cooldownRemainingSeconds: 0,
+      };
+    }
     const payoffRows = rows.map((row) => ({
       pnl: number(row.realised_pnl),
       closedAt: date(row.closed_at),
@@ -2556,11 +2594,13 @@ export class M1TacticalEvidenceService {
       `
         SELECT
           COUNT(*)::int AS closed_trades,
-          COUNT(*) FILTER (WHERE t.realised_pnl > 0)::int AS wins,
-          COUNT(*) FILTER (WHERE t.realised_pnl < 0)::int AS losses,
-          COALESCE(SUM(t.realised_pnl), 0) AS realised_pnl,
-          COALESCE(SUM(t.realised_pnl) FILTER (WHERE t.realised_pnl > 0), 0) AS gross_profit,
-          COALESCE(ABS(SUM(t.realised_pnl) FILTER (WHERE t.realised_pnl < 0)), 0) AS gross_loss
+          COUNT(*) FILTER (WHERE (t.realised_pnl+t.commission+t.swap) > 0)::int AS wins,
+          COUNT(*) FILTER (WHERE (t.realised_pnl+t.commission+t.swap) < 0)::int AS losses,
+          COALESCE(SUM(t.realised_pnl+t.commission+t.swap), 0) AS realised_pnl,
+          COALESCE(SUM(t.realised_pnl+t.commission+t.swap)
+            FILTER (WHERE (t.realised_pnl+t.commission+t.swap) > 0), 0) AS gross_profit,
+          COALESCE(ABS(SUM(t.realised_pnl+t.commission+t.swap)
+            FILTER (WHERE (t.realised_pnl+t.commission+t.swap) < 0)), 0) AS gross_loss
         FROM trading.m1_tactical_decisions d
         JOIN trading.trade_intents ti
           ON ti.user_id = d.user_id
@@ -2581,6 +2621,8 @@ export class M1TacticalEvidenceService {
           AND ($6::text IS NULL OR d.policy_version = $6)
           AND t.status = 'CLOSED'
           AND t.realised_pnl IS NOT NULL
+          AND t.commission IS NOT NULL
+          AND t.swap IS NOT NULL
           AND t.closed_at >= $7::timestamptz
           AND t.closed_at <= $8::timestamptz
       `,

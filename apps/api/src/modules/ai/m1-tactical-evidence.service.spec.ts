@@ -501,7 +501,12 @@ describe('M1TacticalEvidenceService', () => {
     expect(normalized).toContain('t.max_favorable_pnl');
     expect(normalized).toContain('reconstructed_path_v1');
     expect(normalized).toContain("t.status = 'CLOSED'");
-    expect(normalized).toContain('t.realised_pnl <> 0');
+    // Broker commission and swap are SIGNED. Missing settled fees are
+    // never treated as zero; otherwise the M1 model can learn false wins.
+    expect(normalized).toContain('(t.realised_pnl + t.commission + t.swap) AS realised_pnl');
+    expect(normalized).toContain('(t.realised_pnl + t.commission + t.swap) <> 0');
+    expect(normalized).toContain('t.commission IS NOT NULL');
+    expect(normalized).toContain('t.swap IS NOT NULL');
     expect(normalized).toContain("t.closed_at > ($7::timestamptz - interval '7 days')");
     expect(normalized).toContain('d.policy_version = ANY($6::text[])');
     expect(normalized).toContain('ORDER BY (d.policy_version = $8) DESC, t.closed_at DESC');
@@ -629,6 +634,8 @@ describe('M1TacticalEvidenceService', () => {
     expect(normalized).toContain('t.direction = $4');
     expect(normalized).toContain("d.governance -> 'multimodelEnsemble' ->> 'strategyRoute' = $5");
     expect(normalized).toContain("ti.strategy_code = 'external-irexpro-multimodel-ensemble'");
+    expect(normalized).toContain('(t.realised_pnl + t.commission + t.swap) AS realised_pnl');
+    expect(normalized).toContain('t.realised_pnl IS NOT NULL');
     expect(normalized).toContain("ti.timeframe = 'M1'");
     expect(normalized).toContain("t.status = 'CLOSED'");
     expect(normalized).toContain("t.closed_at > ($6::timestamptz - interval '14 days')");
@@ -642,6 +649,26 @@ describe('M1TacticalEvidenceService', () => {
       'CONFIRMED_REVERSAL',
       evaluatedAt.toISOString(),
     ]);
+  });
+
+  it('fails closed rather than converting missing settled commission to zero profit', async () => {
+    const query=jest.fn().mockResolvedValue([
+      { realised_pnl:null, closed_at:'2026-11-12T10:19:00Z' },
+      { realised_pnl:'6.00', closed_at:'2026-11-12T09:00:00Z' },
+    ]);
+    const service=new M1TacticalEvidenceService({query} as unknown as DataSource);
+    const result=await service.loadMultimodelLossStreakBrake({
+      userId:input().userId,brokerConnectionId:input().brokerConnectionId,
+      instrument:'EURUSD',direction:'SELL',
+      strategyRoute:'CONFIRMED_REVERSAL',
+      evaluatedAt:new Date('2026-11-12T12:00:00Z'),
+    });
+    expect(result).toMatchObject({
+      active:true,
+      reason:'BROKER_COST_EVIDENCE_INCOMPLETE',
+      strategyRoute:'CONFIRMED_REVERSAL',
+    });
+    expect(result.cooldownRemainingSeconds).toBe(0);
   });
 
   it('activates the exact pair-side-route brake when recent payoff is negative despite interspersed wins', async () => {
@@ -921,7 +948,9 @@ describe('M1TacticalEvidenceService', () => {
     });
     const sql = String(query.mock.calls[0]![0]);
     expect(sql).toContain('JOIN trading.trades t');
-    expect(sql).toContain('t.realised_pnl');
+    expect(sql).toContain('t.realised_pnl+t.commission+t.swap');
+    expect(sql).toContain('t.commission IS NOT NULL');
+    expect(sql).toContain('t.swap IS NOT NULL');
     expect(sql).not.toContain('d.realised_pnl');
   });
 });
