@@ -70,6 +70,7 @@ import {
 } from "@/lib/trader-execution";
 import {
   loadTraderTerminalStatus,
+  loadLatestEndedTradingSession,
   type TraderTerminalStatus,
   type TerminalBrokerView,
 } from "@/lib/trader-terminal-status";
@@ -1845,6 +1846,12 @@ export default function AiTradingPage() {
   const seenPositionIds = useRef<Set<string>>(new Set());
   const seenExecutionStates = useRef<Map<string, string>>(new Map());
   const tradingRefreshInFlight = useRef(false);
+  // Slow research/cockpit telemetry cannot delay broker balances, closed
+  // trades or Start/Stop controls. Prevent overlapping 4s HTTP batches.
+  const researchTelemetryInFlight = useRef(false);
+  const latestEndedInFlight = useRef(false);
+  const latestEndedFetchedAt = useRef(0);
+  const runtimeStatusInFlight = useRef(false);
   const positionsRefreshInFlight = useRef(false);
   const tacticalRefreshInFlight = useRef(false);
 
@@ -2111,7 +2118,38 @@ export default function AiTradingPage() {
         // the Start/Stop workspace unavailable when one of those secondary
         // endpoints has a transient server-side failure.
         const status = await loadTraderTerminalStatus();
-        setTerminal(status);
+        // Preserve already-verified ended-session details while the fast
+        // control poll refreshes; never carry them across broker accounts.
+        setTerminal((previous) => ({
+          ...status,
+          lastEndedSession:
+            previous?.primaryBroker?.id === status.primaryBroker?.id
+              ? previous?.lastEndedSession ?? null
+              : null,
+        }));
+
+        // Optional ended-session history is intentionally decoupled from
+        // verified broker equity and Start/Stop. Throttle to avoid hammering
+        // the database on the four-second poll.
+        if (!latestEndedInFlight.current &&
+            (Date.now() - latestEndedFetchedAt.current > 60_000)) {
+          latestEndedInFlight.current = true;
+          latestEndedFetchedAt.current = Date.now();
+          void loadLatestEndedTradingSession().then((endedSession) => {
+            setTerminal((current) =>
+              current !== null &&
+              current.primaryBroker?.id === status.primaryBroker?.id &&
+              current.session?.id === status.session?.id
+                ? { ...current, lastEndedSession: endedSession }
+                : current,
+            );
+          }).catch(() => {
+            // Optional risk history never overrides verified active-session
+            // risk gates. A later poll can retry without dropping controls.
+          }).finally(() => {
+            latestEndedInFlight.current = false;
+          });
+        }
 
         // The capital card is a CORE read, not a dependency of research
         // telemetry, model status, historical reports, or live charts.
@@ -2153,85 +2191,83 @@ export default function AiTradingPage() {
           if (showSpinner) setLoading(false);
         }
 
-        // Secondary status feeds are independent of trading controls and of
-        // one another. Fetch them concurrently to avoid a serial HTTP waterfall
-        // extending the intended four-second workspace refresh interval.
-        const [
-          providerResult,
-          scannerResult,
-          tacticalResult,
-          brokerParityResult,
-        ] = await Promise.allSettled([
-          (async () => {
-            const evidence = await api.request<unknown>(
-              "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v7",
-            );
-            if (!hasExternalProviderPerformanceUiShape(evidence)) {
-              throw new Error("Provider performance contract mismatch");
+        // Broker financials and executions must NOT wait for M1 status,
+        // parity or archived provider performance, any of which can stall.
+        // Keep observational status asynchronous and rate-limit its own
+        // polling; it has no authority to enable Start/Stop.
+        if (!researchTelemetryInFlight.current) {
+          researchTelemetryInFlight.current = true;
+          void Promise.allSettled([
+            (async () => {
+              const evidence = await api.request<unknown>(
+                "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v7",
+              );
+              if (!hasExternalProviderPerformanceUiShape(evidence)) {
+                throw new Error("Provider performance contract mismatch");
+              }
+              return evidence as ExternalProviderPerformanceView;
+            })(),
+            (async () => {
+              const scannerStatus = await api.request<unknown>(
+                "/ai/external/vps-forex/status",
+              );
+              if (!hasVpsScannerUiShape(scannerStatus)) {
+                throw new Error("VPS scanner status contract mismatch");
+              }
+              return scannerStatus as VpsForexScannerStatusView;
+            })(),
+            (async () => {
+              const tacticalStatus = await api.request<unknown>(
+                "/ai/external/vps-forex/m1-tactical/status",
+              );
+              if (!hasM1TacticalStatusUiShape(tacticalStatus)) {
+                throw new Error("M1 tactical status contract mismatch");
+              }
+              return tacticalStatus;
+            })(),
+            Promise.all([
+              api.request<BrokerParityRuntimeStatusView>(
+                "/ai/external/vps-forex/broker-parity/status",
+              ),
+              api.request<V8DedicatedPaperStatusView>(
+                "/ai/external/vps-forex/v8-dedicated-paper/status",
+              ),
+            ]),
+          ]).then(([
+            providerResult, scannerResult, tacticalResult, brokerParityResult,
+          ]) => {
+            // On a transient polling error retain last valid evidence instead
+            // of replacing it with null/dashes.
+            if (providerResult.status === "fulfilled") setProviderEvidence(providerResult.value);
+            if (scannerResult.status === "fulfilled") setVpsScannerStatus(scannerResult.value);
+            if (tacticalResult.status === "fulfilled") setM1TacticalStatus(tacticalResult.value);
+            if (brokerParityResult.status === "fulfilled") {
+              const [parityStatus, v8Status] = brokerParityResult.value;
+              setBrokerParityRuntime(parityStatus);
+              setV8DedicatedPaperStatus(v8Status);
             }
-            return evidence as ExternalProviderPerformanceView;
-          })(),
-          (async () => {
-            const scannerStatus = await api.request<unknown>(
-              "/ai/external/vps-forex/status",
-            );
-            if (!hasVpsScannerUiShape(scannerStatus)) {
-              throw new Error("VPS scanner status contract mismatch");
-            }
-            return scannerStatus as VpsForexScannerStatusView;
-          })(),
-          (async () => {
-            const tacticalStatus = await api.request<unknown>(
-              "/ai/external/vps-forex/m1-tactical/status",
-            );
-            if (!hasM1TacticalStatusUiShape(tacticalStatus)) {
-              throw new Error("M1 tactical status contract mismatch");
-            }
-            return tacticalStatus;
-          })(),
-          Promise.all([
-            api.request<BrokerParityRuntimeStatusView>(
-              "/ai/external/vps-forex/broker-parity/status",
-            ),
-            api.request<V8DedicatedPaperStatusView>(
-              "/ai/external/vps-forex/v8-dedicated-paper/status",
-            ),
-          ]),
-        ]);
-
-        setProviderEvidence(providerResult.status === "fulfilled" ? providerResult.value : null);
-        setVpsScannerStatus(scannerResult.status === "fulfilled" ? scannerResult.value : null);
-        setM1TacticalStatus(tacticalResult.status === "fulfilled" ? tacticalResult.value : null);
-        if (brokerParityResult.status === "fulfilled") {
-          const [parityStatus, v8Status] = brokerParityResult.value;
-          setBrokerParityRuntime(parityStatus);
-          setV8DedicatedPaperStatus(v8Status);
-        } else {
-          setBrokerParityRuntime(null);
-          setV8DedicatedPaperStatus(null);
+          }).finally(() => {
+            researchTelemetryInFlight.current = false;
+          });
         }
 
-        // Keep secondary market-intelligence context aligned with the actual
-        // scheduler universe. Falling back to EURUSD preserves the ordinary
-        // non-research workspace before a runtime is registered.
-        let marketInstrument = "EURUSD";
-
+        // Engine status is independent of account financials and may be
+        // delayed or unavailable when the broker session is healthy.
         if (status.session) {
-          try {
-            const runtime = await api.request<AiAutomationRuntimeStatus>(
+          if (!runtimeStatusInFlight.current) {
+            runtimeStatusInFlight.current = true;
+            void api.request<AiAutomationRuntimeStatus>(
               `/trading/sessions/${encodeURIComponent(status.session.id)}/automation-status`,
-            );
-            setAutomationRuntime(runtime);
-            setAutomationRuntimeWarning(null);
-            const runtimeInstrument = runtime.instruments.find((value) =>
-              /^[A-Z0-9._-]{3,24}$/.test(value),
-            );
-            if (runtimeInstrument) marketInstrument = runtimeInstrument;
-          } catch {
-            setAutomationRuntime(null);
-            setAutomationRuntimeWarning(
-              "AI Trading is running, but the AI engine runtime status could not be verified yet.",
-            );
+            ).then((runtime) => {
+              setAutomationRuntime(runtime);
+              setAutomationRuntimeWarning(null);
+            }).catch(() => {
+              setAutomationRuntimeWarning(
+                "AI Trading is running, but the AI engine runtime status could not be verified yet.",
+              );
+            }).finally(() => {
+              runtimeStatusInFlight.current = false;
+            });
           }
         } else {
           setAutomationRuntime(null);

@@ -64,7 +64,7 @@ describe('AI Trader production UI regression contract', () => {
     expect(pageSource).toContain('SCANNING');
     expect(pageSource).toContain('Last move');
     expect(pageSource).toContain('Current AI view');
-    expect(pageSource).toContain('Watched instruments');
+    expect(pageSource).toContain('m1TacticalStatus.demoEntryInstruments.join(" · ")');
   });
 
   it('keeps the enriched 24h realized-results cards and history entry point', () => {
@@ -117,8 +117,11 @@ describe('AI Trader production UI regression contract', () => {
   });
 
   it('fetches independent AI status feeds without serially blocking the four-second refresh', () => {
-    expect(pageSource).toContain('Fetch them concurrently to avoid a serial HTTP waterfall');
-    expect(pageSource).toContain('await Promise.allSettled([');
+    expect(pageSource).toContain('Broker financials and executions must NOT wait for M1 status');
+    expect(pageSource).toContain('void Promise.allSettled([');
+    expect(pageSource).toContain('researchTelemetryInFlight.current');
+    expect(pageSource).toContain('loadLatestEndedTradingSession().then((endedSession) =>');
+    expect(pageSource).toContain('runtimeStatusInFlight.current');
     expect(pageSource).toContain('providerResult.status === "fulfilled"');
     expect(pageSource).toContain('scannerResult.status === "fulfilled"');
     expect(pageSource).toContain('tacticalResult.status === "fulfilled"');
