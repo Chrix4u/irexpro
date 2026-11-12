@@ -48,3 +48,7 @@ export function isFocusedDemoEntryInstrument(instrument: string): boolean {
 export function isRestoredDemoEntryInstrument(instrument: string): boolean {
   return DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2.includes(instrument);
 }
+/** Current execution-boundary allowlist; keep historical V1/V2 for replay only. */
+export function isCurrentFocusedDemoEntryInstrument(instrument: string): boolean {
+  return DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3.includes(instrument);
+}

@@ -663,6 +663,25 @@ describe('StrategyOrchestratorService', () => {
       },
     );
 
+    it.each(['GBPUSD', 'USDJPY', 'USDCAD', 'USDCHF'])(
+      'blocks dormant %s at central DEMO execution boundary even if external signal is replayed',
+      async (instrument) => {
+        (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+          ...activeSession(), executionMode: ExecutionMode.FULL_AUTO,
+        });
+        const result = await service.processSignal(validCandidate({
+          instrument, confidenceScore: 0.74, timeframe: 'M1',
+          strategyCode: 'external-irexpro-multimodel-ensemble',
+          modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+          suggestedVolume: 0.2, metadata: {},
+        }));
+        expect(result.outcome).toBe('SIGNAL_INVALID');
+        expect(result.reason).toContain('DEMO_INSTRUMENT_RESEARCH_ONLY');
+        expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+        expect(executionService.executeTrade).not.toHaveBeenCalled();
+      },
+    );
+
     it('does not permit an unapproved suffixed DEMO signal by omitting external provider metadata', async () => {
       (executionService.getActiveSession as jest.Mock).mockResolvedValue({
         ...activeSession(),
