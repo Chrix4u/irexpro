@@ -37,6 +37,7 @@ import {
   loadMarketIntelligence,
 } from "@/lib/market-intelligence";
 import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
+import { resolveDemoChartInstruments } from "@/lib/trading-chart-focus";
 import {
   LIVE_SCAN_STAGES,
   deriveLiveScanFrame,
@@ -1777,7 +1778,7 @@ export default function AiTradingPage() {
   } | null>(null);
   const [livePositions, setLivePositions] = useState<LivePositionRowView[]>([]);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
-  const [chartInstrument, setChartInstrument] = useState("USDJPY");
+  const [chartInstrument, setChartInstrument] = useState("EURUSD");
   const [chartTimeframe, setChartTimeframe] = useState<
     "M1" | "M5" | "M15" | "H1" | "H4"
   >("M1");
@@ -1928,13 +1929,21 @@ export default function AiTradingPage() {
         : confidencePercent >= 45
           ? "building"
           : "weak";
-  const watchedInstruments = automationRuntime?.instruments?.length
-    ? automationRuntime.instruments
-    : [chartInstrument];
-  const latestChartCandle = market?.candles?.at(-1) ?? null;
+  // The legacy automation runtime still reports a broad six-pair universe.
+  // The authenticated DEMO M1 policy is authoritative for chart tabs;
+  // before it arrives the fallback is the active EURUSD/AUDUSD focus.
+  const watchedInstruments = useMemo(
+    () => resolveDemoChartInstruments(m1TacticalStatus),
+    [m1TacticalStatus],
+  );
+  const visibleChartMarket =
+    market?.instrument === chartInstrument && market?.timeframe === chartTimeframe
+      ? market
+      : null;
+  const latestChartCandle = visibleChartMarket?.candles?.at(-1) ?? null;
   const previousChartCandle =
-    market?.candles && market.candles.length > 1
-      ? (market.candles.at(-2) ?? null)
+    visibleChartMarket?.candles && visibleChartMarket.candles.length > 1
+      ? (visibleChartMarket.candles.at(-2) ?? null)
       : null;
   const chartMove =
     latestChartCandle && previousChartCandle
@@ -2392,11 +2401,11 @@ export default function AiTradingPage() {
   }, [user, refreshTradingData]);
 
   useEffect(() => {
-    const watched = automationRuntime?.instruments ?? [];
-    if (watched.length && !watched.includes(chartInstrument)) {
-      setChartInstrument(watched[0]);
+    // A stale automation poll must not switch the chart back to a paused pair.
+    if (!watchedInstruments.includes(chartInstrument)) {
+      setChartInstrument(watchedInstruments[0]);
     }
-  }, [automationRuntime?.instruments, chartInstrument]);
+  }, [watchedInstruments, chartInstrument]);
 
   useEffect(() => {
     if (!user || !marketBrokerConnectionId) return;
@@ -2427,7 +2436,10 @@ export default function AiTradingPage() {
           setMarket((previous) => ({
             ...snapshot,
             candles: reconcileLiveCandles(
-              previous?.candles ?? [],
+              previous?.instrument === snapshot.instrument &&
+                previous?.timeframe === snapshot.timeframe
+                ? previous.candles
+                : [],
               snapshot.candles,
               snapshot.quote,
               chartTimeframe,
@@ -5269,7 +5281,7 @@ export default function AiTradingPage() {
 
                 <div
                   className="ai-cockpit__instruments"
-                  aria-label="Watched instruments"
+                  aria-label="Active trading chart instruments"
                 >
                   {watchedInstruments.map((instrument) => (
                     <button
@@ -5292,13 +5304,7 @@ export default function AiTradingPage() {
                         <span className="ai-cockpit__label">
                           {chartInstrument}
                         </span>
-                        <strong>
-                          {automationRuntime?.research_uat
-                            ? (automationRuntime.last_market_data_close ??
-                              market?.quote.bid ??
-                              "—")
-                            : (market?.quote.bid ?? "—")}
-                        </strong>
+                        <strong>{visibleChartMarket?.quote.bid ?? "—"}</strong>
                         <small>
                           {chartLoading
                             ? "Updating chart…"
@@ -5335,7 +5341,7 @@ export default function AiTradingPage() {
                       </div>
                       <div>
                         <span>Spread</span>
-                        <strong>{market?.quote.spread ?? "—"}</strong>
+                        <strong>{visibleChartMarket?.quote.spread ?? "—"}</strong>
                       </div>
                       <div
                         className={
@@ -5354,7 +5360,7 @@ export default function AiTradingPage() {
                     </div>
                     <MarketPriceChart
                       key={`${chartInstrument}-${chartTimeframe}`}
-                      candles={market?.candles ?? []}
+                      candles={visibleChartMarket?.candles ?? []}
                     />
                   </div>
 
