@@ -4,6 +4,8 @@ import { BrokerService } from '../../broker/broker.service';
 import { RiskOrderGeometryService } from '../../risk/risk-order-geometry.service';
 import type { BrokerInstrument } from '../../broker/interfaces/broker-adapter.interface';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
+import { DataSource } from 'typeorm';
+import { ModuleRef } from '@nestjs/core';
 
 /**
  * PositionSizingService (Round 6 live-execution completion §4) — the
@@ -671,5 +673,85 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       expect((err as PositionSizingError).code).toBe('EQUITY_UNPROVABLE');
       expect((err as Error).message).toContain('EQUITY_UNPROVABLE');
     }
+  });
+});
+
+
+describe('2026-11-12 Pepperstone DEMO cost-aware sizing pilot', () => {
+  const testUser = '11111111-1111-4111-8111-111111111111';
+  const testConnection = '22222222-2222-4222-8222-222222222222';
+  const now = new Date();
+  const quote = {
+    contractSize: ExactDecimal.parse('100000'),
+    freshQuote: ExactDecimal.parse('1.10931'),
+    quoteRef: { bid: '1.10931', ask: '1.10941', observedAt: now.toISOString(), source: 'broker-current-price' },
+    instrumentSpec: EURUSD_SPEC,
+  };
+  const paper = {
+    executionMode: 'FULL_AUTO',
+    allocatedCapital: '40000',
+    confidenceTier: 'BASE' as const,
+    minimumExecutableLot: '0.20',
+    marketReferenceEntryPrice: '1.10930',
+  };
+  const params = {
+    userId: testUser, brokerConnectionId: testConnection,
+    instrument: 'EURUSD', direction: 'SELL' as const,
+    entryType: 'MARKET' as const, requestedEntryPrice: null,
+    stopLoss: '1.10980', requestedLotUpperBound: '2',
+    paperAllocationSizing: paper,
+  };
+  function setup(brokerId = 'pepperstone-ctrader', fees: Array<{sample_count:number;p90_fee_per_lot:string|null}> = [{sample_count:12,p90_fee_per_lot:'6'}]) {
+    const db = { query: jest.fn().mockResolvedValue(fees) };
+    const module = { get: jest.fn((key: unknown) => key === DataSource ? db : null) };
+    const broker = {
+      getBrokerAccountState: jest.fn().mockResolvedValue({ equity:'40000', freeMargin:'38000', balance:'40000', currency:'USD' }),
+      findConnectionById: jest.fn().mockResolvedValue({ brokerId, accountType:'DEMO' }),
+      getRequiredMargin: jest.fn().mockResolvedValue('2000'),
+      getCurrentPriceForConnection: jest.fn().mockResolvedValue(null),
+    };
+    const orderGeometry = { resolveOrderGeometry: jest.fn().mockResolvedValue(quote) };
+    const profileRepo = {findOne:jest.fn().mockResolvedValue(profileRow({maxPositionSizeLot:'100',maxLeverageAllowed:30}))};
+    const service = new PositionSizingService(
+      broker as unknown as BrokerService,
+      orderGeometry as unknown as RiskOrderGeometryService,
+      profileRepo as never,
+      module as unknown as ModuleRef,
+    );
+    return {service,db,broker,orderGeometry};
+  }
+
+  it('uses P90 prior paid commission plus two broker-observed spreads to resize without blocking SELL entry', async () => {
+    const {service,db,broker}=setup();
+    const sized=await service.sizePosition(params);
+    expect(sized.lots).toBe('1.31'); // original 2 lots * $50 / ($50 + 2*$10 spread + $6 fees)
+    expect(sized.inputs.finalRiskAtStop).toBe('65.5');
+    expect(sized.inputs.demoExecutionRiskEnvelope).toMatchObject({
+      artifact:'pepperstone-demo-cost-aware-risk-sizing-v1',
+      originalLots:'2', adjustedLots:'1.31', initialGrossStopRisk:'100',
+      conservativeEstimatedStopRisk:'99.56', observedSpread:'0.0001',
+      historicalFeePerLot:'6', feeSource:'SAME_SYMBOL', commissionIncluded:true,
+      isGuaranteedMaximumLoss:false,
+    });
+    expect(db.query).toHaveBeenCalledWith(expect.stringContaining("closed_at < $4::timestamptz"),expect.any(Array));
+    expect(broker.getRequiredMargin).toHaveBeenCalledWith(testConnection, expect.objectContaining({lotSize:'1.31'}));
+  });
+
+  it('uses documented spread-only sizing when paid fee evidence is missing, without claiming commission is included', async () => {
+    const {service}=setup('pepperstone-ctrader',[{sample_count:1,p90_fee_per_lot:'6'}]);
+    const sized=await service.sizePosition(params);
+    expect(sized.lots).toBe('1.42');
+    expect(sized.inputs.demoExecutionRiskEnvelope).toMatchObject({
+      commissionIncluded:false,feeSource:'UNAVAILABLE',historicalFeePerLot:null,
+      conservativeEstimatedStopRisk:'99.4',isGuaranteedMaximumLoss:false,
+    });
+  });
+
+  it('never changes other brokers or LIVE sizing under the DEMO cost pilot', async () => {
+    const {service,db}=setup('ctrader');
+    const sized=await service.sizePosition(params);
+    expect(sized.lots).toBe('2');
+    expect(sized.inputs.demoExecutionRiskEnvelope).toBeUndefined();
+    expect(db.query).not.toHaveBeenCalled();
   });
 });
