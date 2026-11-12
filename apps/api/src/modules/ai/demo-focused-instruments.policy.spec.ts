@@ -2,8 +2,10 @@ import {
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
   DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3,
+  DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4,
   M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
   M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_TWO_FEE_SHADOW,
+  M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW,
   M1_TACTICAL_ROLLOUT_POLICY_V1,
   M1_TACTICAL_ROLLOUT_POLICY_V8,
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_COMMISSION,
@@ -149,5 +151,39 @@ describe('2026-11-12 focused two-pair DEMO execution authority', () => {
   });
   it.each(['GBPUSD', 'USDJPY', 'USDCHF', 'USDCAD', 'EURUSDx'])('blocks DEMO entry on %s', pair => {
     expect(demoInstrumentEntryAllowed(pilot, pair)).toBe(false);
+  });
+});
+
+
+describe('2026-11-12 owner-authorized four-pair Pepperstone DEMO eligibility', () => {
+  const policy=M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW;
+  it('allows exactly EURUSD, AUDUSD, USDCAD, USDJPY and no other symbols',()=>{
+    expect(DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4).toEqual([
+      'EURUSD','AUDUSD','USDCAD','USDJPY',
+    ]);
+    expect(Object.isFrozen(DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4)).toBe(true);
+    expect(policy.demoEntryInstruments).toBe(DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4);
+    expect(policy.version).toBe('m1-tactical-v8-demo-primary-fee-shadow-focused4-v4');
+    expect(policy.demoEntryInstruments).toHaveLength(4);
+    for(const symbol of DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4)
+      expect(demoInstrumentEntryAllowed(policy,symbol)).toBe(true);
+    for(const symbol of ['GBPUSD','USDCHF','XAUUSD','EURUSDx','USDJPY-ALT',''])
+      expect(demoInstrumentEntryAllowed(policy,symbol)).toBe(false);
+  });
+  it('inherits ALL original quality/risk gates and leaves historical focused-two policy immutable',()=>{
+    expect(policy).toMatchObject({
+      phase:'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+      demoPrimaryOnlyProbation:true,
+      demoBrokerCommissionFloor:false,
+      demoBrokerCommissionShadow:true,
+      paperVolumeCap:4,
+    });
+    expect(policy.routeNetExpectedRFloors).toEqual(
+      M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_TWO_FEE_SHADOW.routeNetExpectedRFloors,
+    );
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_TWO_FEE_SHADOW.demoEntryInstruments)
+      .toEqual(['EURUSD','AUDUSD']);
+    expect(demoInstrumentEntryAllowed({...policy,demoEntryInstruments:[]},'USDCAD'))
+      .toBe(false);
   });
 });

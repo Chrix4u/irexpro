@@ -35,6 +35,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW,
   M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
   M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_TWO_FEE_SHADOW,
+  M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW,
   m1RiskMarketRegime,
   m1RouteExecutableInPhase,
   m1ShadowOutcomeEligible,
@@ -2229,7 +2230,7 @@ describe('M1 professional v8 DEMO promotion', () => {
       paperVolumeCap: 4,
     });
     expect(moduleSource).toMatch(
-      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_TWO_FEE_SHADOW/,
+      /provide:\s*M1_TACTICAL_ROLLOUT_POLICY_TOKEN[\s\S]*useValue:\s*M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW/,
     );
     expect(M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW.demoEntryInstruments).toEqual([
       'AUDUSD',
@@ -2243,6 +2244,15 @@ describe('M1 professional v8 DEMO promotion', () => {
       'EURUSD',
       'AUDUSD',
     ]);
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW.demoEntryInstruments).toEqual([
+      'EURUSD', 'AUDUSD', 'USDCAD', 'USDJPY',
+    ]);
+    expect(M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW).toMatchObject({
+      phase:'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+      demoPrimaryOnlyProbation:true,
+      demoBrokerCommissionShadow:true,
+      paperVolumeCap:4,
+    });
   });
 
   it('records causal commission-adjusted M1 and Plan-B economics only after DEMO admission has been denied', async () => {

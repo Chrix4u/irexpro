@@ -1,6 +1,7 @@
 import {
   DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3,
+  DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4,
 } from './demo-focused-instruments';
 
 /**
@@ -42,6 +43,28 @@ export function orderM1DemoSixPairScan(input: {
       (instrument) => focused.includes(instrument) && input.policyInstruments.includes(instrument),
     );
   if (focusedTwo) return [...DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3];
+
+  // Four-pair DEMO focus must be a SCAN boundary as well as an entry
+  // allowlist. Rotating the lead by completed minute avoids always
+  // starving USDCAD/USDJPY behind the first two in a slow serial loop.
+  // Malformed, duplicate or non-DEMO focus never gains this shortcut.
+  const focusedFour =
+    input.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&
+    focused?.length === DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.length &&
+    input.decisionTime instanceof Date &&
+    Number.isFinite(input.decisionTime.getTime()) &&
+    DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.every(
+      (instrument) => focused.includes(instrument) && input.policyInstruments.includes(instrument),
+    );
+  if (focusedFour) {
+    const minute = Math.floor(input.decisionTime.getTime() / 60_000);
+    const offset = ((minute % DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.length) +
+      DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.length) % DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.length;
+    return [
+      ...DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.slice(offset),
+      ...DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.slice(0, offset),
+    ];
+  }
 
   const isExactlyRestoredSix =
     input.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&

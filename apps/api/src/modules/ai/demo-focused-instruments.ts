@@ -39,6 +39,20 @@ export const DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3: readonly string[] = Object.freez
   'AUDUSD',
 ]);
 
+/**
+ * 2026-11-12 user-approved four-pair FULL_AUTO DEMO execution universe.
+ * All four are eligible to reach ordinary independent model, after-fee,
+ * spread, session/news, broker identity, margin, stop and risk checks.
+ * GBPUSD and USDCHF remain DORMANT. V1/V2/V3 are retained for rollback.
+ * Immutable exact instruments: no aliases, no LIVE authority.
+ */
+export const DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4: readonly string[] = Object.freeze([
+  'EURUSD',
+  'AUDUSD',
+  'USDCAD',
+  'USDJPY',
+]);
+
 /** The historic focused-three scope remains available for precise rollback. */
 export function isFocusedDemoEntryInstrument(instrument: string): boolean {
   return DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1.includes(instrument);

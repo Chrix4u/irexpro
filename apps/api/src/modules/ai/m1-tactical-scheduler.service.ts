@@ -2,12 +2,14 @@ import {
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
   DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3,
+  DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4,
 } from './demo-focused-instruments';
 import { orderM1DemoSixPairScan } from './m1-demo-six-pair-scan-order';
 export {
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
   DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3,
+  DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4,
 } from './demo-focused-instruments';
 
 import {
@@ -593,6 +595,19 @@ export const M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_TWO_FEE_SHADOW: Readonly<M1Ta
     ...M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW,
     version: 'm1-tactical-v8-demo-primary-fee-shadow-focused2-v3',
     demoEntryInstruments: DEMO_FOCUSED_ENTRY_INSTRUMENTS_V3,
+  });
+
+/**
+ * Operator-authorized FOUR-PAIR DEMO focus. This changes ONLY which
+ * instruments the existing primary Plan B and M1 specialist evaluate.
+ * It does not override loss brakes, after-commission admission,
+ * primary-only fallback probation, lot sizing or LIVE safety.
+ */
+export const M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW: Readonly<M1TacticalRolloutPolicy> =
+  Object.freeze({
+    ...M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_TWO_FEE_SHADOW,
+    version: 'm1-tactical-v8-demo-primary-fee-shadow-focused4-v4',
+    demoEntryInstruments: DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4,
   });
 
 /**

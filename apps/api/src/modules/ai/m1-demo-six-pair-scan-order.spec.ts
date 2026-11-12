@@ -4,6 +4,7 @@ import {
   M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_FEE_SHADOW,
   M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
   M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_TWO_FEE_SHADOW,
+  M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW,
 } from './m1-tactical-scheduler.service';
 
 const DEMO = M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW;
@@ -121,5 +122,47 @@ describe('2026-11-12 focused two-pair DEMO M1 scanning', () => {
       demoEntryInstruments: ['GBPUSD', 'USDJPY'],
     });
     expect(strange).toHaveLength(6);
+  });
+});
+
+
+describe('exact four-pair DEMO scanner and fair high-frequency evaluation',()=>{
+  const policy=M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW;
+  const param=(time=SLOT)=>({
+    phase:policy.phase,policyInstruments:policy.instruments,
+    demoEntryInstruments:policy.demoEntryInstruments,decisionTime:time,
+  });
+  it('scans exactly four approved instruments with no GBPUSD/USDCHF',()=>{
+    const order=orderM1DemoSixPairScan(param());
+    expect(order).toHaveLength(4);
+    expect(new Set(order)).toEqual(new Set(['EURUSD','AUDUSD','USDCAD','USDJPY']));
+  });
+  it('rotates first priority across all four completed minutes without duplicates',()=>{
+    const orders=Array.from({length:4},(_,i)=>orderM1DemoSixPairScan(
+      param(new Date(SLOT.getTime()+i*60000)),
+    ));
+    expect(new Set(orders.map(x=>x[0]))).toEqual(
+      new Set(['EURUSD','AUDUSD','USDCAD','USDJPY']),
+    );
+    for(const row of orders){
+      expect(row).toHaveLength(4);
+      expect(new Set(row).size).toBe(4);
+    }
+    expect(orderM1DemoSixPairScan(param(new Date(SLOT.getTime()+40000))))
+      .toEqual(orders[0]);
+  });
+  it('keeps malformed four-pair claims and non-DEMO phases out of the scan shortcut',()=>{
+    for(const list of [
+      ['EURUSD','AUDUSD','USDCAD','USDCHF'],
+      ['EURUSD','AUDUSD','USDJPY','USDJPY'],
+      ['EURUSD','AUDUSD','USDJPY','USDCADx'],
+    ]){
+      expect(orderM1DemoSixPairScan({...param(),demoEntryInstruments:list}))
+        .toHaveLength(6);
+    }
+    expect(orderM1DemoSixPairScan({...param(),phase:'SHADOW'})).toHaveLength(6);
+    expect(orderM1DemoSixPairScan({...param(),phase:'PAPER_CONTINUATION'})).toHaveLength(6);
+    expect(orderM1DemoSixPairScan({ ...param(),
+      decisionTime:new Date('bad') })).toHaveLength(6);
   });
 });
