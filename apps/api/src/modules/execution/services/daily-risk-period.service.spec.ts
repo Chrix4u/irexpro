@@ -107,6 +107,10 @@ class TradeMirror {
   status: string;
   @Column({ name: 'realised_pnl', type: 'numeric', precision: 18, scale: 8, nullable: true })
   realisedPnl: string | null;
+  @Column({ name: 'commission', type: 'numeric', precision: 18, scale: 8, nullable: true })
+  commission: string | null;
+  @Column({ name: 'swap', type: 'numeric', precision: 18, scale: 8, nullable: true })
+  swap: string | null;
   @Column({ name: 'closed_at', type: 'datetime', nullable: true })
   closedAt: Date | null;
   @CreateDateColumn({ name: 'created_at', type: 'datetime' })
@@ -169,6 +173,8 @@ const seedTrade = async (
     accountCurrency?: string | null;
     status?: string;
     realisedPnl?: string | null;
+    commission?: string | null;
+    swap?: string | null;
     closedAt?: Date | null;
   },
 ): Promise<void> => {
@@ -176,8 +182,8 @@ const seedTrade = async (
   await dataSource.query(
     `INSERT INTO trades
        (id, user_id, logical_account_key, account_currency, status,
-        realised_pnl, closed_at, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+        realised_pnl, commission, swap, closed_at, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
     [
       row.id,
       row.userId ?? USER,
@@ -185,6 +191,8 @@ const seedTrade = async (
       row.accountCurrency === undefined ? 'USD' : row.accountCurrency,
       row.status ?? 'CLOSED',
       row.realisedPnl ?? null,
+      row.commission === undefined ? '0.00' : row.commission,
+      row.swap === undefined ? '0.00' : row.swap,
       row.closedAt === undefined ? NOW.toISOString() : (row.closedAt?.toISOString() ?? null),
       ts,
     ],
@@ -391,6 +399,78 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
       expect(result.total).toBe('-150.75');
       expect(ExactDecimal.parse(result.total).eq(ExactDecimal.parse('-150.75'))).toBe(true);
       expect(result.complete).toBe(true);
+    });
+
+    it('accounts for separate signed broker commission and financing in the exact daily net loss', async () => {
+      // Actual cTrader-family trade columns separate gross profit and fees.
+      // Neither the $312 in commissions nor the $2 swap may disappear from
+      // the loss limit or be counted twice.
+      await seedTrade(dataSource, {
+        id: 'gross-loss',
+        realisedPnl: '-407.37',
+        commission: '-312.00',
+        swap: '-2.00',
+      });
+      const result = await todayLoss();
+      expect(result).toEqual({ total: '-721.37', complete: true });
+      expect(ExactDecimal.parse(result.total).eq(ExactDecimal.parse('-721.37'))).toBe(true);
+    });
+
+    it('recognizes a gross-winning trade that is a NET loser after commission', async () => {
+      await seedTrade(dataSource, {
+        id: 'winner-after-fees-loss',
+        realisedPnl: '12.00',
+        commission: '-24.00',
+        swap: '0.00',
+      });
+      expect(await todayLoss()).toEqual({ total: '-12', complete: true });
+    });
+
+    it('fails closed when any closed position has unknown fee or financing economics', async () => {
+      await seedTrade(dataSource, {
+        id: 'unknown-commission',
+        realisedPnl: '-100.00',
+        commission: null,
+      });
+      expect(await todayLoss()).toEqual({ total: '0', complete: false });
+      await dataSource.query('DELETE FROM trades');
+      await seedTrade(dataSource, {
+        id: 'unknown-swap',
+        realisedPnl: '15.00',
+        commission: '-24.00',
+        swap: null,
+      });
+      expect(await todayLoss()).toEqual({ total: '0', complete: false });
+      await dataSource.query('DELETE FROM trades');
+      await seedTrade(dataSource, {
+        id: 'unknown-gross',
+        realisedPnl: null,
+        commission: '-24.00',
+        swap: '0.00',
+      });
+      expect(await todayLoss()).toEqual({ total: '0', complete: false });
+    });
+
+    it('isolates missing fee provenance to the appropriate broker-account currency', async () => {
+      await seedTrade(dataSource, {
+        id: 'my-known-net',
+        realisedPnl: '-100.00',
+        commission: '-24.00',
+        swap: '0.00',
+      });
+      await seedTrade(dataSource, {
+        id: 'other-account-unknown',
+        logicalAccountKey: OTHER_KEY,
+        realisedPnl: '-500.00',
+        commission: null,
+      });
+      await seedTrade(dataSource, {
+        id: 'other-currency-unknown',
+        accountCurrency: 'EUR',
+        realisedPnl: '-500.00',
+        commission: null,
+      });
+      expect(await todayLoss()).toEqual({ total: '-124', complete: true });
     });
 
     it('excludes losses of a DIFFERENT account currency', async () => {
