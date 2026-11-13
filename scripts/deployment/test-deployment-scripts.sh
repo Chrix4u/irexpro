@@ -61,12 +61,23 @@ make_fixture() {
   git -C "$repo" init --quiet --initial-branch=main
   printf '/apps/api/.env\n/services/ai-engine/.env\n/services/ai-engine/.venv/\n' >> "$repo/.git/info/exclude"
   printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$repo/apps/api/.env"
+  # The current staging script now validates a read-only database state
+  # before checkout and before migrations. Fixture credentials are fake and
+  # the psql binary is always shimmed, never reaching a real database.
+  cat >> "$repo/apps/api/.env" <<'ENV'
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_USER=fixture_user
+DB_PASSWORD=fixture_password_only
+DB_NAME=fixture_db
+ENV
   printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$repo/services/ai-engine/.env"
   printf '# fixture locked Python requirements\n' > "$repo/services/ai-engine/requirements.lock"
   git -C "$repo" config user.email 'ci@example.invalid'
   git -C "$repo" config user.name 'Deployment Safety CI'
 
   cp "$SCRIPT_DIR/deploy-staging.sh" "$repo/scripts/deployment/deploy-staging.sh"
+  cp "$SCRIPT_DIR/check-staging-trading-idle.sh" "$repo/scripts/deployment/check-staging-trading-idle.sh"
   cp "$SCRIPT_DIR/rollback-staging.sh" "$repo/scripts/deployment/rollback-staging.sh"
   printf '{"packageManager":"%s"}\n' "$ROOT_PACKAGE_MANAGER" > "$repo/package.json"
   printf 'prior\n' > "$repo/release-marker.txt"
@@ -111,6 +122,19 @@ fi
 exit 0
 SHIM
   chmod 700 "$FIXTURE_REPO/services/ai-engine/.venv/bin/python"
+
+  cat > "$FAKE_BIN/psql" <<'SHIM'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+sql="$(cat)"
+[[ "$sql" == *'BEGIN READ ONLY'* && "$sql" == *'trading.trading_sessions'* &&
+   "$sql" == *'trading.trades'* && "$sql" == *'ROLLBACK'* ]] || exit 90
+if [[ "${FAKE_TRADING_BUSY:-0}" == '1' ]]; then
+  printf 'ACTIVE_AI_SESSION\n'
+else
+  printf 'IDLE\n'
+fi
+SHIM
 
   cat > "$FAKE_BIN/node" <<'SHIM'
 #!/usr/bin/env bash
@@ -218,7 +242,7 @@ else
 fi
 SHIM
 
-  chmod 700 "$FAKE_BIN/node" "$FAKE_BIN/corepack" "$FAKE_BIN/pm2" "$FAKE_BIN/curl"
+  chmod 700 "$FAKE_BIN/node" "$FAKE_BIN/corepack" "$FAKE_BIN/pm2" "$FAKE_BIN/curl" "$FAKE_BIN/psql"
 }
 
 run_deploy() {
@@ -310,6 +334,13 @@ git -C "$FIXTURE_REPO" remote set-url origin 'https://github.com/christianagbota
 expect_failure 'Unexpected origin repository' run_deploy "$FIXTURE_CANDIDATE_SHA"
 [[ ! -s "$COMMAND_LOG" ]] || fail 'Stale-owner origin rejection must happen before install/build/restart commands.'
 
+make_fixture 'active-session-cannot-deploy'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+expect_failure 'failed_stage=trading-idle-before-checkout' run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_TRADING_BUSY=1
+[[ ! -s "$COMMAND_LOG" ]] || fail 'Active trading must block before all install/build/restart commands.'
+[[ "$(git -C "$FIXTURE_REPO" rev-parse HEAD)" = "$FIXTURE_PRIOR_SHA" ]] ||
+  fail 'Active trading preflight must keep the old staging checkout.'
+
 make_fixture 'node-major-mismatch'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
 expect_failure 'Node.js major version does not match the verified release baseline' run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_NODE_MAJOR=20
@@ -322,7 +353,7 @@ expect_failure 'failed_stage=internal-api-key-preflight' run_deploy "$FIXTURE_CA
 
 make_fixture 'internal-key-placeholder'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
-printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'dev_internal_key_change_me' > "$FIXTURE_REPO/apps/api/.env"
+sed -i 's/^NESTJS_INTERNAL_API_KEY=.*/NESTJS_INTERNAL_API_KEY=dev_internal_key_change_me/' "$FIXTURE_REPO/apps/api/.env"
 printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'dev_internal_key_change_me' > "$FIXTURE_REPO/services/ai-engine/.env"
 expect_failure 'failed_stage=internal-api-key-preflight' run_deploy "$FIXTURE_CANDIDATE_SHA"
 [[ ! -s "$COMMAND_LOG" ]] || fail 'Development internal-key placeholder must fail before install/build/restart commands.'
