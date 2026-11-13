@@ -118,24 +118,38 @@ function reversalTimingBridgeEligible(input: MultimodelDemoAuthorityInput): bool
     c.alignedHigherTimeframeAgreement,
   ];
   if (values.some((v) => !Number.isFinite(v))) return false;
+  // Two independent ways to confirm the SAME-side local impulse:
+  // (1) established M1 momentum over 1/3/5 bars + completed M5 turn;
+  // (2) decisive *fresh* completed M5 turn + strong latest M1 impulse.
+  // A new reversal may not yet have accumulated 3/5 full M1 momentum bars,
+  // so imposing the mature-continuation threshold on both paths makes a
+  // genuinely fresh turn impossible to confirm.
   const establishedM5 =
     c.alignedM5BodyPressure3 >= 0.12 &&
     c.alignedM5Momentum3Atr >= 0.2 &&
     c.alignedM5Momentum1Atr >= 0.2;
-  const decisiveM5 =
-    c.alignedM5LatestBodyPressure != null &&
-    Number.isFinite(c.alignedM5LatestBodyPressure) &&
-    c.alignedM5LatestBodyPressure >= 0.6 &&
-    c.alignedM5Momentum1Atr >= 0.3 &&
-    c.alignedM5Momentum3Atr >= -0.1;
-  return (
+  const establishedM1 =
     c.directionQuality >= 0.68 &&
     c.alignedMomentum1Atr >= 0.5 &&
     c.alignedMomentum3Atr >= 0.5 &&
     c.alignedMomentum5Atr >= 0.25 &&
+    c.alignedHigherTimeframeAgreement >= 0.2;
+  const decisiveFreshM5 =
+    c.alignedM5LatestBodyPressure != null &&
+    Number.isFinite(c.alignedM5LatestBodyPressure) &&
+    c.alignedM5LatestBodyPressure >= 0.7 &&
+    c.alignedM5Momentum1Atr >= 0.4 &&
+    c.alignedM5Momentum3Atr >= 0.3 &&
+    c.alignedM5BodyPressure3 >= 0.2;
+  const decisiveFreshM1 =
+    c.directionQuality >= 0.62 &&
+    c.alignedMomentum1Atr >= 0.7 &&
+    c.alignedMomentum3Atr >= 0.1 &&
+    c.alignedMomentum5Atr >= 0.1 &&
+    c.alignedHigherTimeframeAgreement >= 0.25;
+  return (
     c.alignedEmaSlopeAtr > 0 &&
-    c.alignedHigherTimeframeAgreement >= 0.2 &&
-    (establishedM5 || decisiveM5)
+    ((establishedM5 && establishedM1) || (decisiveFreshM5 && decisiveFreshM1))
   );
 }
 

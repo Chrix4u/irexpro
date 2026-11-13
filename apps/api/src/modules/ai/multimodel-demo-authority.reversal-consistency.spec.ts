@@ -123,6 +123,66 @@ describe('Plan-B confirmed-reversal timing consistency', () => {
     expect(multimodelDemoExecutionVolumeCap(4, result)).toBe(0.2);
   });
 
+  it('reconciles a newly decisive M5 reversal even before M1 three-bar momentum matures', () => {
+    const base = bridgingInput();
+    const result = evaluateMultimodelDemoAuthority({
+      ...base,
+      m1ReversalEvidence: {
+        ...base.m1ReversalEvidence,
+        directionQuality: 0.637,
+        alignedMomentum1Atr: 0.907,
+        alignedMomentum3Atr: 0.151,
+        alignedMomentum5Atr: 0.151,
+        alignedEmaSlopeAtr: 0.146,
+        alignedM5Momentum1Atr: 0.52,
+        alignedM5Momentum3Atr: 1.041,
+        alignedM5BodyPressure3: 0.485,
+        alignedM5LatestBodyPressure: 0.727,
+        alignedHigherTimeframeAgreement: 0.265,
+      },
+    });
+    expect(result.executable).toBe(true);
+    expect(result.reversalTimingBridge).toBe(true);
+    expect(result.reversalTimingBridgeVolumeCap).toBe(0.2);
+    expect(multimodelDemoExecutionVolumeCap(4, result)).toBe(0.2);
+  });
+
+  it('keeps weak or opposite fresh-M5 reversals blocked rather than relaxing drift', () => {
+    const base = bridgingInput();
+    const fresh = {
+      ...base.m1ReversalEvidence,
+      directionQuality: 0.637,
+      alignedMomentum1Atr: 0.907,
+      alignedMomentum3Atr: 0.151,
+      alignedMomentum5Atr: 0.151,
+      alignedM5Momentum1Atr: 0.52,
+      alignedM5Momentum3Atr: 1.041,
+      alignedM5BodyPressure3: 0.485,
+      alignedM5LatestBodyPressure: 0.727,
+      alignedHigherTimeframeAgreement: 0.265,
+    };
+    const bad = [
+      { directionQuality: 0.619 },
+      { alignedMomentum1Atr: 0.69 },
+      { alignedMomentum3Atr: 0.09 },
+      { alignedMomentum5Atr: 0.09 },
+      { alignedM5Momentum1Atr: 0.39 },
+      { alignedM5Momentum3Atr: 0.29 },
+      { alignedM5BodyPressure3: 0.19 },
+      { alignedM5LatestBodyPressure: 0.69 },
+      { alignedHigherTimeframeAgreement: 0.24 },
+      { alignedEmaSlopeAtr: 0 },
+    ];
+    for (const overrides of bad) {
+      const result = evaluateMultimodelDemoAuthority({
+        ...base,
+        m1ReversalEvidence: { ...fresh, ...overrides },
+      });
+      expect(result.executable).toBe(false);
+      expect(result.reversalTimingBridge).toBe(false);
+    }
+  });
+
   it('never promotes drift, event, unavailable spread or non-admitted Plan B through the semantic bridge', () => {
     const base = bridgingInput();
     for (const alteration of [
