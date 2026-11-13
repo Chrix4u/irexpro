@@ -65,6 +65,7 @@ test('read-only query is strictly owner + broker-connection scoped and produces 
  const db={async query(sql,params){
   queries.push([sql,params]);
   if(sql===q.scope)return {rows:[{id:'owner-broker',broker:'pepperstone-ctrader',account:'DEMO',currency:'USD'}]};
+  if(sql===q.coverage)return {rows:[{scans:480,fieldSeen:0,validShadowRows:0}]};
   return {rows:[]};
  }};
  const x=await audit(db,USER,FIRST_PROSPECTIVE,'2026-11-13T01:10:00Z',
@@ -72,8 +73,11 @@ test('read-only query is strictly owner + broker-connection scoped and produces 
  assert.equal(x.brokerOrderAuthority,'NONE');
  assert.equal(x.autoPromotionAllowed,false);
  assert.equal(x.rawMismatchDecisions,0);
+ assert.deepEqual(x.observerCoverage,{scans:480,fieldSeen:0,validShadowRows:0,
+  state:'OBSERVER_NOT_PERSISTED',readyForOutcomeEvaluation:false});
  assert.match(queries[0][0],/^BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY/);
  assert.deepEqual(queries.find(v=>v[0]===q.decisions)[1],[USER,'owner-broker',FIRST_PROSPECTIVE,'2026-11-13T01:10:00Z']);
+ assert.deepEqual(queries.find(v=>v[0]===q.coverage)[1],[USER,'owner-broker',FIRST_PROSPECTIVE,'2026-11-13T01:10:00Z']);
  assert.ok(queries.find(v=>v[0]===q.fees)[1][0]===USER);
  assert.ok(queries.find(v=>v[0]==='COMMIT'));
  assert.ok(!queries.some(v=>/\b(INSERT|UPDATE|DELETE)\b|\bALTER\s+TABLE\b/i.test(v[0])));

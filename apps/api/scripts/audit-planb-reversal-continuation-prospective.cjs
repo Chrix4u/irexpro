@@ -21,6 +21,13 @@ const q={
  AND b.status='CONNECTED' AND b.authorization_status='ACTIVE'
  AND b.deleted_at IS NULL
  ORDER BY s.started_at DESC LIMIT 1`,
+ coverage:`SELECT count(*)::int AS "scans",
+ count(*) FILTER (WHERE d.governance ? 'planBReversalM1ContinuationShadow')::int AS "fieldSeen",
+ count(*) FILTER (WHERE d.governance#>>'{planBReversalM1ContinuationShadow,artifact}'=
+ 'planb-reversal-m1-continuation-asof-shadow-v1')::int AS "validShadowRows"
+ FROM trading.m1_tactical_decisions d
+ WHERE d.user_id=$1 AND d.broker_connection_id=$2
+ AND d.evaluated_at >=$3::timestamptz AND d.evaluated_at <$4::timestamptz`,
  decisions:`SELECT d.id,d.evaluated_at AS "evaluatedAt",d.instrument,d.direction,d.route,
   d.execution_authority AS "executionAuthority",d.blockers,
   d.governance#>'{planBReversalM1ContinuationShadow}' AS shadow,
@@ -110,6 +117,7 @@ async function audit(db,user,from,to,now=Date.now()){
   const scope=(await db.query(q.scope,[user])).rows[0];
   if(!scope||scope.broker!=='pepperstone-ctrader'||scope.account!=='DEMO'||
      scope.currency!=='USD')throw Error('NO_OWNER_VERIFIED_DEMO_BROKER');
+  const coverage=(await db.query(q.coverage,[user,scope.id,from,to])).rows[0];
   const decisionRows=(await db.query(q.decisions,[user,scope.id,from,to])).rows;
   if(decisionRows.length>5000)throw Error('DECISION_HISTORY_TRUNCATED');
   const quoteRows=(await db.query(q.quotes,[scope.id,from,
@@ -132,6 +140,16 @@ async function audit(db,user,from,to,now=Date.now()){
   return {artifact:ARTIFACT,mode:'READ_ONLY',
    broker:'pepperstone-ctrader',accountType:'DEMO',currency:'USD',
    from,to,rawMismatchDecisions:decisionRows.length,
+   observerCoverage:{
+    scans:Number(coverage?.scans||0),
+    fieldSeen:Number(coverage?.fieldSeen||0),
+    validShadowRows:Number(coverage?.validShadowRows||0),
+    state:Number(coverage?.scans||0)===0?'NO_SCANS_YET':
+      Number(coverage?.fieldSeen||0)===0?'OBSERVER_NOT_PERSISTED':
+      Number(coverage?.validShadowRows||0)===0?'OBSERVER_FIELD_PRESENT_BUT_NO_VALID_RECORDS':
+      'FROZEN_OBSERVER_RECORDED',
+    readyForOutcomeEvaluation:Number(coverage?.validShadowRows||0)>0,
+   },
    validFrozenShadowDecisions:decisionRows.filter(eligibleRow).length,
    excludedInvalidShadowRecords:decisionRows.filter(x=>!eligibleRow(x)).length,
    all:summary(cases),
@@ -168,7 +186,8 @@ async function main(){
   fs.mkdirSync(path.dirname(out),{recursive:true,mode:0o700});
   fs.writeFileSync(out,JSON.stringify(r,null,2),{mode:0o600});
   console.log('REVERSAL_CONTINUATION_PROSPECTIVE '+JSON.stringify({
-   from:r.from,to:r.to,rawMismatchDecisions:r.rawMismatchDecisions,
+   from:r.from,to:r.to,observerCoverage:r.observerCoverage,
+   rawMismatchDecisions:r.rawMismatchDecisions,
    all:r.all,prospectivelyEligible:r.prospectivelyEligible,
    comparisonExcluded:r.comparisonExcluded}));
  }finally{await db.end()}

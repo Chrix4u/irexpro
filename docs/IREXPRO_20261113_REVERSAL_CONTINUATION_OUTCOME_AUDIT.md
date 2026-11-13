@@ -42,9 +42,21 @@ Private report (no user IDs or broker account numbers):
 ## Initial audited result
 At **2026-11-13 01:10 UTC**, the first prospective window
 00:45–01:10 UTC had **zero** persisted reversal/M1-continuation mismatch
-rows. It is too early to estimate profitability or infer the observer is
-inactive; first check subsequent scanner records and whether the compiled
-service actually runs the frozen observer. No trade admission was changed.
+rows. A second read-only check of the prior 60 minutes showed **480 scanner
+decisions but zero rows containing the new observer field**. That is an
+instrumentation/deployment issue, NOT evidence of no opportunities or a
+profitable/unprofitable pattern. The API's PM2 start timestamp was
+**23:58 UTC on 12 November**, whereas the compiled observer file was
+updated at approximately **00:50 UTC on 13 November**. The running Node
+process therefore predates that compiled code and may not have loaded it.
+The audit now explicitly reports `observerCoverage.state` and refuses to
+treat absent instrumentation as usable outcome evidence.
+
+The same read-only check found **one ACTIVE FULL_AUTO AI session and zero
+unsettled trades**. The deployment safety policy prohibits restarting or
+deploying while the session is active. No restart was attempted, and no
+trade admission was changed. Schedule a controlled restart only after
+the operator stops the session and confirms no pending/reconciling trades.
 
 The script unit tests passed **6/6**, Node syntax and git whitespace checks
 passed. The latest installed strategy remains the primary Plan B strategy,
