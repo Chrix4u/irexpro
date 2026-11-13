@@ -29,6 +29,7 @@ import {
 } from '../broker/services/broker-account-snapshot.service';
 import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { isCurrentFocusedDemoEntryInstrument } from '../ai/demo-focused-instruments';
+import { evaluatePepperstoneDemoOperatorLotPreference } from './pepperstone-demo-operator-lot-preference';
 
 /**
  * Server-side DEMO promotion allowlist. Transport metadata can never grant
@@ -289,6 +290,9 @@ export class StrategyOrchestratorService {
       candidate.metadata?.signal_source === 'EXTERNAL_PROVIDER' &&
       candidate.metadata?.external_provider_paper_only === true;
     let externalProviderDemoPromoted = false;
+    // Exact owner/broker/session validation below is required before applying
+    // any operator size preference; never trust a caller's metadata alone.
+    let ownerVerifiedPepperstoneDemoLotPreference = false;
     if (externalProviderPaperOnly) {
       let paperConnection;
       try {
@@ -314,6 +318,9 @@ export class StrategyOrchestratorService {
         paperConnection?.demoValidated === true &&
         paperConnection?.liveTradingEnabled !== true;
       externalProviderDemoPromoted = Boolean(exactPromotedDemoBoundary);
+      ownerVerifiedPepperstoneDemoLotPreference = Boolean(
+        exactPromotedDemoBoundary && paperConnection?.brokerId === 'pepperstone-ctrader',
+      );
       if (!exactPaperBoundary && !exactPromotedDemoBoundary) {
         const reason =
           'External provider signal rejected: requires the exact PAPER_ONLY internal paper-broker DEMO session or a server-promoted, validated real-provider DEMO model/session';
@@ -651,6 +658,23 @@ export class StrategyOrchestratorService {
         }
       }
 
+      // A strategy-imposed 0.01-lot trial is not permission to silently
+      // replace it with 3-4 lots. Under the owner's Pepperstone DEMO
+      // preference, abstain if the AI's existing maximum is too small.
+      const suggestedPreference = evaluatePepperstoneDemoOperatorLotPreference({
+        exactOwnerVerifiedPepperstoneDemoFullAuto: ownerVerifiedPepperstoneDemoLotPreference,
+        riskSizedLots: executionCandidate.suggestedVolume,
+      });
+      if (!suggestedPreference.allowed) {
+        throw Object.assign(
+          new Error(
+            `${suggestedPreference.outcome}: requested upper bound ${executionCandidate.suggestedVolume} ` +
+              'lots is outside the operator preferred 3-4 lot DEMO band; no automatic upsize',
+          ),
+          { code: 'DEMO_OPERATOR_LOT_PREFERENCE_BLOCKED' },
+        );
+      }
+
       sized = await this.positionSizingService.sizePosition({
         userId,
         brokerConnectionId: session.brokerConnectionId,
@@ -669,6 +693,22 @@ export class StrategyOrchestratorService {
         strategyTimeframe: executionCandidate.timeframe,
         paperAllocationSizing,
       });
+      // AUTHORITATIVE size is computed from broker margin, equity,
+      // protective stop, paid spread/commission and durable risk profile.
+      // Do not bypass any of these or round a smaller risk-sized lot UP.
+      const sizedPreference = evaluatePepperstoneDemoOperatorLotPreference({
+        exactOwnerVerifiedPepperstoneDemoFullAuto: ownerVerifiedPepperstoneDemoLotPreference,
+        riskSizedLots: sized.lots,
+      });
+      if (!sizedPreference.allowed) {
+        throw Object.assign(
+          new Error(
+            `${sizedPreference.outcome}: verified broker/risk-sized ${sized.lots} lots ` +
+              'does not meet operator preferred 3-4 lots; entry abstained',
+          ),
+          { code: 'DEMO_OPERATOR_LOT_PREFERENCE_BLOCKED' },
+        );
+      }
       await this.allocationService.resolveOrAllocate({
         intent: {
           id: tradeIntent.id,
