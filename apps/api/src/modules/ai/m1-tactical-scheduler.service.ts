@@ -73,6 +73,7 @@ import { scorePlanBClockNeutralResearch } from './v8-shadow-meta-scorer';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import type { HighConvictionOverlay } from './high-conviction-overlay';
 import { evaluateProductionQualificationShadow } from './production-qualification-shadow';
+import { observePlanBReversalM1ContinuationMismatch } from './planb-reversal-m1-continuation-shadow';
 import { observeSecondaryPredictedCostFloor } from './secondary-predicted-cost-shadow';
 import { evaluateLowVolRangeShadow, LOW_VOL_RANGE_STOP_ATR } from './low-vol-range-shadow';
 import { evaluateLowVolRangeShadowOutcome } from './low-vol-range-shadow-outcome';
@@ -1519,6 +1520,36 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         )
       : null;
     timings.multimodelMs = Date.now() - multimodelStartedAt;
+    // Pure decision-time observation. It is never referenced by
+    // preliminaryCanExecute, canExecute, sizing or broker dispatch.
+    // Record the FULL cohort, including failures, to prevent later
+    // cherry-picking a previously winning mismatch pattern.
+    const planBReversalM1ContinuationShadow = multimodelDemo
+      ? observePlanBReversalM1ContinuationMismatch({
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          planBStrategyRoute: multimodelDemo.ensemble.strategyRoute,
+          planBPaperAdmitted: multimodelDemo.ensemble.paperAdmitted,
+          planBGovernanceEligible: multimodelDemo.governance.paperExecutionEligible,
+          planBNetExpectedR: multimodelDemo.governance.netExpectedR,
+          driftState: multimodelDemo.governance.driftState,
+          eventRisk: multimodelDemo.governance.eventRisk,
+          executionSpreadEvidenceValid:
+            multimodelDemo.governance.executionSpreadEvidenceValid === true,
+          m1Route: routeDecision.route,
+          m1Direction: routeDecision.direction,
+          m1Reason: routeDecision.reason,
+          m1ScoreEdge: routeDecision.scoreEdge,
+          directionQuality: candidate.directionQuality,
+          alignedHigherTimeframeAgreement: candidate.alignedHigherTimeframeAgreement,
+          alignedM5Momentum1Atr: candidate.alignedM5Momentum1Atr,
+          alignedM5Momentum3Atr: candidate.alignedM5Momentum3Atr,
+          alignedM5BodyPressure3: candidate.alignedM5BodyPressure3,
+          alignedM5LatestBodyPressure: candidate.alignedM5LatestBodyPressure ?? null,
+          failedBreakoutWithDirection: candidate.failedBreakoutWithDirection,
+          trainedExpertOpposed: multimodelDemo.authority.trainedExpertOpposed,
+        })
+      : null;
     const demoProfitabilityReliabilityGate = professionalDemoPhase
       ? evaluateDemoProfitabilityReliabilityGate({
           m1Route: routeDecision.route,
@@ -2431,6 +2462,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
               m1CandidateToPlanBInput(candidate, features, decisionTime),
             )
           : null,
+        planBReversalM1ContinuationShadow,
         multimodelGovernance: multimodelDemo?.governance ?? null,
         multimodelTrainedExpert: multimodelDemo?.trainedExpert ?? null,
         multimodelAuthority: multimodelDemo?.authority ?? null,
