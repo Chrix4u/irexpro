@@ -30,6 +30,8 @@ import { MacroEventRiskService } from './macro-event-risk.service';
 import { PostEntryProtectionShadowService } from './post-entry-protection-shadow.service';
 import { PostEntryMinute1TelemetryService } from './post-entry-minute1-telemetry.service';
 import { PostEntryDemoDrawdownGuardService } from './post-entry-demo-drawdown-guard.service';
+import { DemoDrawdownExitAuditService } from './demo-drawdown-exit-audit.service';
+import { DemoDrawdownExitAuditController } from './demo-drawdown-exit-audit.controller';
 import { ProfitProtectionCounterfactualService } from './profit-protection-counterfactual.service';
 import { ProfitExitAlternativesService } from './profit-exit-alternatives.service';
 import { PostClosePathForensicsService } from './post-close-path-forensics.service';
@@ -80,6 +82,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     ExternalSignalPerformanceController,
     TradingViewWebhookController,
     VpsForexSignalCollectorController,
+    DemoDrawdownExitAuditController,
   ],
   providers: [
     AiService,
@@ -101,6 +104,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     PostEntryProtectionShadowService,
     PostEntryMinute1TelemetryService,
     PostEntryDemoDrawdownGuardService,
+    DemoDrawdownExitAuditService,
     ProfitProtectionCounterfactualService,
     ProfitExitAlternativesService,
     PostClosePathForensicsService,
