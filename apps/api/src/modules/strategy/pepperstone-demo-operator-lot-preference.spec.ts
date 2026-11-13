@@ -73,19 +73,29 @@ describe('owner-verified Pepperstone DEMO preferred 3–4 lots', () => {
 
   it('is used after certified owner/broker/model validation and both before sizing and allocation', () => {
     const source = readFileSync(join(__dirname, 'strategy-orchestrator.service.ts'), 'utf8');
-    const auth = source.indexOf('const exactPromotedDemoBoundary =');
+    const ownerLookup = source.indexOf('this.brokerService.findConnectionById(');
+    const verified = source.indexOf('const ownerVerifiedPepperstoneDemoLotPreference =');
     const pepperstone = source.indexOf("paperConnection?.brokerId === 'pepperstone-ctrader'");
+    const metadataBranch = source.indexOf('if (externalProviderPaperOnly) {');
     const suggested = source.indexOf('const suggestedPreference =');
     const sizing = source.indexOf('sized = await this.positionSizingService.sizePosition({');
     const sized = source.indexOf('const sizedPreference =');
     const allocation = source.indexOf('await this.allocationService.resolveOrAllocate({');
-    expect(auth).toBeGreaterThan(0);
-    expect(pepperstone).toBeGreaterThan(auth);
-    expect(suggested).toBeGreaterThan(pepperstone);
+    expect(ownerLookup).toBeGreaterThan(0);
+    expect(verified).toBeGreaterThan(ownerLookup);
+    expect(pepperstone).toBeGreaterThan(verified);
+    expect(metadataBranch).toBeGreaterThan(pepperstone);
+    expect(suggested).toBeGreaterThan(metadataBranch);
     expect(sizing).toBeGreaterThan(suggested);
     expect(sized).toBeGreaterThan(sizing);
     expect(allocation).toBeGreaterThan(sized);
     expect(source).toContain('DEMO_OPERATOR_LOT_PREFERENCE_BLOCKED');
+    expect(source).toContain('DEMO_OPERATOR_BROKER_IDENTITY_UNVERIFIED');
+    // A server-recognized exact model tuple requires owner-bound account
+    // verification even if an upstream signal omitted optional metadata.
+    expect(source).toContain(
+      '(serverPromotedExternalDemoModel && session.executionMode === ExecutionMode.FULL_AUTO)',
+    );
     expect(source).toContain('executionCandidate.suggestedVolume');
     expect(source).toContain('riskSizedLots: sized.lots');
     expect(source).not.toContain('sized.lots =');

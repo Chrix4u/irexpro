@@ -22,6 +22,10 @@ DEMO and use a 3–4-lot preferred execution band.
 - A pure rule classifies authoritative risk-sized entries.
 - Apply it only after exact owner/connection, server-promoted model,
   Pepperstone cTrader DEMO and FULL_AUTO session verification.
+- The exact server-promoted model tuple is checked **independently of optional
+  EXTERNAL_PROVIDER metadata**. Earlier wiring could miss the restriction if
+  that optional flag was absent. Missing owner/broker verification now fails
+  closed instead of allowing an undersized order on that path.
 - Reject an AI strategy proposal whose cap is below 3; NEVER increase a
   0.01 recovery canary to 3 merely to satisfy an operator preference.
 - Reject broker/risk-sized entries outside [3.00, 4.00] before allocation
