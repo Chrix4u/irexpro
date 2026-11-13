@@ -1,3 +1,5 @@
+import { classifyForexSessionClock } from './forex-session-clock';
+
 export const PAPER_SPREAD_CALIBRATION_SHADOW_ARTIFACT = 'paper-spread-calibration-shadow-v1';
 export const PAPER_SPREAD_CALIBRATION_MIN_SAMPLES = 100;
 export const PAPER_SPREAD_CALIBRATION_MIN_FIXED_FRACTION = 0.25;
@@ -39,11 +41,7 @@ export interface PaperSpreadCalibrationDecision {
 }
 
 export function classifyPaperSpreadSession(evaluatedAt: Date): PaperSpreadSession {
-  const hour = evaluatedAt.getUTCHours();
-  if (hour >= 21) return 'ROLLOVER';
-  if (hour >= 13) return 'NEW_YORK';
-  if (hour >= 7) return 'LONDON';
-  return 'ASIA';
+  return classifyForexSessionClock(evaluatedAt);
 }
 
 export function evaluatePaperSpreadCalibrationShadow(

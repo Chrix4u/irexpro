@@ -99,6 +99,33 @@ describe('evaluateM1RoutePairSideReliability', () => {
     expect(result.reason).toBe('EARLY_LOSS_STREAK');
   });
 
+  it('ends the self-locking seven-day early-loss brake after 180 minutes, without qualifying a normal-size trade', () => {
+    const closed = new Date(NOW.getTime() - 180 * 60_000);
+    const matching = [
+      row(-1.0, {
+        route: 'M1_EARLY_TRANSITION',
+        closedAt: closed,
+      }),
+      row(-0.8, {
+        route: 'M1_EARLY_TRANSITION',
+        closedAt: new Date(closed.getTime() - 20 * 60_000),
+      }),
+    ];
+    const before = evaluate(matching, {
+      route: 'M1_EARLY_TRANSITION',
+      evaluatedAt: new Date(closed.getTime() + 179 * 60_000),
+    });
+    expect(before.reason).toBe('EARLY_LOSS_STREAK');
+    expect(before.eligible).toBe(false);
+    const after = evaluate(matching, { route: 'M1_EARLY_TRANSITION' });
+    expect(after.reason).toBe('EARLY_LOSS_STREAK_RECOVERY_CANARY');
+    // Evidence is STILL empirically negative. The broker scheduler is solely
+    // responsible for an explicit 0.01-lot, one-per-four-hour DEMO canary.
+    expect(after.eligible).toBe(false);
+    expect(after.samples).toBe(2);
+    expect(after.recentRealizedR).toBeLessThan(0);
+  });
+
   it('brakes provisional early-transition after two consecutive realised losses', () => {
     const evidence = [
       row(-1, { route: 'M1_EARLY_TRANSITION', closedAt: new Date(NOW.getTime() - 60_000) }),

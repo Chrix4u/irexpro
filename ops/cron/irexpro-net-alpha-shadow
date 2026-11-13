@@ -1,0 +1,7 @@
+# Daily, private, low-priority iRexPro net-alpha research audit (staging)
+# Installed by the engineer to /etc/cron.d/irexpro-net-alpha-shadow.
+# Read-only, never places orders, never auto-promotes strategies to DEMO/LIVE.
+SHELL=/bin/bash
+PATH=/usr/local/apps/nodejs22/bin:/usr/local/bin:/usr/bin:/bin
+CRON_TZ=UTC
+25 21 * * 1-5 root /home/lightworld/webapps/irexpro-staging/apps/api/scripts/run-net-alpha-shadow.sh >> /home/lightworld/webapps/irexpro-staging/var/shadow-audits/net-alpha/runner.log 2>&1

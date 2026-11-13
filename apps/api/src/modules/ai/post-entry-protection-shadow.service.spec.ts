@@ -41,7 +41,7 @@ describe('PostEntryProtectionShadowService', () => {
     expect(dueV85Checkpoints(openedAt, closedAt, new Set())).toEqual([5, 10]);
   });
 
-  it('scores a due checkpoint from the dedicated broker-native market-data connection while preserving execution identity', async () => {
+  it('scores using the exact owner-verified DEMO trade broker, never a stale globally configured source', async () => {
     const now = new Date('2026-10-05T10:06:00Z');
     const query = jest
       .fn()
@@ -114,7 +114,7 @@ describe('PostEntryProtectionShadowService', () => {
     expect(aiEngineClient.scorePlanBV85PostEntryBrokerCheckpoint).toHaveBeenCalledTimes(1);
     expect(aiEngineClient.scorePlanBV85PostEntryBrokerCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
-        brokerConnectionId: '00000000-0000-0000-0000-000000000088',
+        brokerConnectionId: '00000000-0000-0000-0000-000000000004',
         instrument: 'EURUSD',
         direction: 'BUY',
         checkpointMinutes: 5,
@@ -128,7 +128,9 @@ describe('PostEntryProtectionShadowService', () => {
     );
     const persisted = query.mock.calls[2]?.[1] as unknown[];
     expect(persisted[3]).toBe('00000000-0000-0000-0000-000000000004');
-    expect(persisted[4]).toBe('00000000-0000-0000-0000-000000000088');
+    expect(persisted[4]).toBe('00000000-0000-0000-0000-000000000004');
+    expect(String(query.mock.calls[0]?.[0])).toContain('source.user_id = t.user_id');
+    expect(String(query.mock.calls[0]?.[0])).toContain("source.account_type = 'DEMO'");
     expect(String(query.mock.calls[2]?.[0])).toContain("execution_authority = 'NONE'");
     expect(service.getStatus().modifiesExecution).toBe(false);
     expect(service.getStatus().lastScored).toBe(1);

@@ -60,6 +60,41 @@ function freshAge(now: Date, observedAt: Date, maxAgeMs: number): boolean {
 }
 
 /**
+ * Causal, pre-I/O check against exactly the M1-side requirements in the
+ * full M5 handoff evaluator below. No M5 database observation could ever
+ * qualify when these facts fail. This avoids costly redundant DB reads
+ * for the large cohort of M1 non-qualifying decisions, without changing
+ * thresholds, evidence freshness, risk, broker orders or admissibility.
+ */
+export function m1MayConfirmM5EarlyTransition(
+  input: Pick<
+    M5EarlyTransitionHandoffInput,
+    | 'm1Route'
+    | 'm1Reason'
+    | 'm1Confidence'
+    | 'm1DirectionQuality'
+    | 'm1ExecutionCostUsable'
+    | 'm1EventRisk'
+  >,
+): boolean {
+  if (!input.m1ExecutionCostUsable || input.m1EventRisk !== 'CLEAR') return false;
+  if (input.m1Route === 'M1_TREND_CONTINUATION') {
+    return (
+      finiteAtLeast(input.m1Confidence, MIN_M1_CONFIRM_CONFIDENCE) &&
+      finiteAtLeast(input.m1DirectionQuality, MIN_M1_CONFIRM_DIRECTION_QUALITY)
+    );
+  }
+  if (input.m1Route === 'ABSTAIN') {
+    return (
+      input.m1Reason !== 'DIRECTION_EDGE_TOO_SMALL' &&
+      finiteAtLeast(input.m1Confidence, MIN_M1_STRONG_ABSTAIN_CONFIDENCE) &&
+      finiteAtLeast(input.m1DirectionQuality, MIN_M1_STRONG_ABSTAIN_DIRECTION_QUALITY)
+    );
+  }
+  return false;
+}
+
+/**
  * Bounded DEMO handoff for a strong M5 Plan-B EARLY_TRANSITION.
  *
  * This is deliberately not a generic gate bypass. M5 must already be admitted,

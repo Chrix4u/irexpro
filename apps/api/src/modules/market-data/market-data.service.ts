@@ -102,8 +102,16 @@ export class MarketDataService {
             // evidence for historical checkpoints instead of attaching spread
             // metadata only to the newest candle. Provider-native backfill rows
             // deliberately have no spreadClose and remain fail-closed.
+            // Use a broker-observed positive quote from this same minute
+            // when the last tick itself reports zero spread. The quote-store
+            // keeps original bid_close/ask_close unchanged; historic rows
+            // without a genuine positive bid/ask observation remain unscored.
+            const spreadEvidence = candle as OHLCV & {
+              spreadClose?: string | null;
+              lastPositiveSpread?: string | null;
+            };
             const persistedSpread = Number(
-              (candle as OHLCV & { spreadClose?: string | null }).spreadClose,
+              spreadEvidence.lastPositiveSpread ?? spreadEvidence.spreadClose,
             );
             const hasPersistedSpread = Number.isFinite(persistedSpread) && persistedSpread > 0;
             const historicalSpreadPoints = hasPersistedSpread

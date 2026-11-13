@@ -14,6 +14,14 @@ MULTITIMEFRAME_RUNTIME_PROFILE = "multitimeframe_v4"
 MULTITIMEFRAME_LABEL_SELECTION_POLICY = "all_exact_horizon_finite_rows_v2"
 MULTITIMEFRAME_BACKTEST_POLICY = "non_overlapping_equal_weight_periods_v1"
 MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY = "outer_validation_untouched_internal_early_stop_v1"
+class MissingBrokerSpreadMetadata(ValueError):
+    """A completed broker candle lacks observed spread/precision metadata.
+
+    The caller must never substitute a future/current spread for a historic
+    checkpoint, which would leak future information into a trained model.
+    """
+
+
 RUNTIME_TIMEFRAMES = ("M1", "M5", "M15", "H1", "H4")
 TIMEFRAME_MINUTES = {
     "M1": 1,
@@ -246,7 +254,7 @@ def build_multitimeframe_runtime_features(
         latest_by_timeframe[timeframe] = latest_candle
 
     if latest_m1.spread_points is None or latest_m1.price_digits is None:
-        raise ValueError(
+        raise MissingBrokerSpreadMetadata(
             "M1 broker candle is missing spread_points/price_digits required "
             "for the trained friction-aware model"
         )

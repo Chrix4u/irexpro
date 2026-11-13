@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Trade, TradeCloseReason, TradeStatus } from '../entities/trade.entity';
 import { Order } from '../orders/order.entity';
 import { OrderStatus } from '../orders/order.enums';
@@ -18,6 +18,7 @@ import {
 } from '../../broker/interfaces/broker-adapter.interface';
 import { compareDecimal } from './reconciliation-comparator';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
+import { proveUniqueCtraderDemoSettlement } from './closed-demo-settlement-proof';
 
 /**
  * Broker-reported CLOSE economics are a terminal, independently observed P&L
@@ -96,6 +97,92 @@ export class ReconciliationResolutionService {
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
   ) {}
+
+  /**
+   * Reconcile a formerly CLOSED, economically incomplete DEMO trade only
+   * after obtaining exactly one complete, uniquely verified provider CLOSE
+   * deal. A guarded NULL-only CAS prevents races, overrides or fabricated
+   * P&L. No trade is reopened and no broker order is placed.
+   */
+  async backfillClosedDemoSettlement(input: {
+    trade: Trade;
+    brokerId: string;
+    accountType: string;
+    providerDeals: import('../../broker/interfaces/broker-adapter.interface').BrokerClosedTrade[];
+    observedAt: Date;
+  }): Promise<boolean> {
+    const { trade } = input;
+    if (
+      trade.status !== TradeStatus.CLOSED ||
+      trade.realisedPnl !== null ||
+      trade.commission !== null ||
+      trade.exitPrice !== null
+    ) return false;
+    const proof = proveUniqueCtraderDemoSettlement(
+      trade, input.providerDeals, input.brokerId, input.accountType, input.observedAt,
+    );
+    if (!proof.matched) return false;
+    const p = proof.provider;
+    const patch: Partial<Trade> = {
+      exitPrice: p.closePrice,
+      realisedPnl: p.realisedPnl,
+      commission: p.commission,
+      swap: p.swap,
+    };
+    if (
+      (trade.pathObservationCount ?? 0) > 0 &&
+      trade.maxFavorablePnl != null &&
+      trade.maxAdversePnl != null &&
+      trade.profitGiveback != null
+    ) {
+      const updatedPath = reconcileDurableProfitPathAtClose({
+        maxFavorablePnl: trade.maxFavorablePnl,
+        maxAdversePnl: trade.maxAdversePnl,
+        profitGiveback: trade.profitGiveback,
+        peakObservedAt: trade.pathPeakObservedAt ?? null,
+      }, p.realisedPnl, p.closedAt);
+      patch.maxFavorablePnl = updatedPath.maxFavorablePnl;
+      patch.maxAdversePnl = updatedPath.maxAdversePnl;
+      patch.profitGiveback = updatedPath.profitGiveback;
+      patch.pathPeakObservedAt = updatedPath.peakObservedAt;
+    }
+    const result = await this.tradeRepo.update({
+      id: trade.id,
+      userId: trade.userId,
+      brokerConnectionId: trade.brokerConnectionId,
+      status: TradeStatus.CLOSED,
+      realisedPnl: IsNull(),
+      commission: IsNull(),
+      exitPrice: IsNull(),
+    }, patch as never);
+    if (!result.affected) return false;
+    await this.auditService.log({
+      actorUserId: trade.userId,
+      action: AuditAction.TRADE_RECONCILED,
+      resourceType: 'Trade',
+      resourceId: trade.id,
+      metadata: {
+        artifact: 'unique-ctrader-demo-closed-economics-recovery-v1',
+        evidence: 'ONE_FULL_CLOSING_DEAL_EXACT_POSITION_ENTRY_VOLUME_AND_TIME',
+        brokerId: input.brokerId,
+        providerPositionId: p.externalOrderId,
+        providerClosedAt: p.closedAt.toISOString(),
+        closePrice: p.closePrice,
+        realisedPnl: p.realisedPnl,
+        commission: p.commission,
+        swap: p.swap,
+        priorStatus: TradeStatus.CLOSED,
+        currentStatus: TradeStatus.CLOSED,
+        originalCloseReasonPreserved: trade.closeReason,
+        noBrokerOrder: true,
+        noPositionMutation: true,
+      },
+    });
+    this.logger.log(
+      `Recovered missing provider closing economics for trade ${trade.id} from uniquely matched ${input.brokerId} DEMO deal`,
+    );
+    return true;
+  }
 
   // ─── Position-side resolution ─────────────────────────────────────────────
 

@@ -12,6 +12,12 @@ import { evaluateProfitLockPatienceShadow } from './profit-lock-patience-shadow'
 import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
 import { evaluatePepperstonePeakLossRescue } from './pepperstone-peak-loss-rescue';
 import { evaluatePepperstoneDemoNetProfitLock } from './pepperstone-demo-net-profit-lock';
+import { evaluatePepperstoneHighPeakGivebackShadow } from './pepperstone-high-peak-giveback-shadow';
+import {
+  evaluatePepperstoneDemoRolloverExposure,
+  isForexFinalTenMinutesBeforeRollover,
+  PEPPERSTONE_DEMO_ROLLOVER_EXPOSURE_ARTIFACT,
+} from './pepperstone-rollover-exposure-shadow';
 
 const LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS = 5_000;
 // Maximum ordinary adverse-thesis grace from actual position open. A new
@@ -479,6 +485,8 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
   private readonly logger = new Logger(LiveDemoProfitProtectionService.name);
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  // One non-blocking audit per position/minute, not every 5s price-path tick.
+  private readonly rolloverShadowObservedMinute = new Map<string, number>();
 
   constructor(
     private readonly dataSource: DataSource,
@@ -574,6 +582,34 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               peakObservedAt,
               observedAt,
             });
+
+            // A rollover-exposure audit NEVER waits ahead of an active SL,
+            // profit-lock or adverse-thesis exit. Run it in a separate,
+            // explicitly read-only/audit-only path after snapshot validation.
+            // Only near actual NY 17:00 rollover and only cTrader Pepperstone
+            // DEMO. This cannot close, extend, reopen or resize anything.
+            if (
+              this.auditService &&
+              snapshot.connection.brokerId === 'pepperstone-ctrader' &&
+              isForexFinalTenMinutesBeforeRollover(observedAt)
+            ) {
+              const minuteKey = Math.floor(observedAt.getTime() / 60_000);
+              if (this.rolloverShadowObservedMinute.get(trade.trade_id) !== minuteKey) {
+                this.rolloverShadowObservedMinute.set(trade.trade_id, minuteKey);
+                void this.recordPepperstoneRolloverExposureShadow({
+                  trade, observedAt, currentPnl,
+                  brokerDirection: position.direction,
+                  brokerInstrument: position.instrument,
+                  brokerLots: finite(position.lotSize),
+                  brokerEntry: finite(position.openPrice),
+                  brokerStop: finite(position.stopLoss),
+                }).catch((error) => {
+                  this.logger.warn(
+                    `Pepperstone rollover SHADOW observation skipped: ${(error as Error).message}`,
+                  );
+                });
+              }
+            }
 
             // Optional, deliberately scoped net-positive giveback protection
             // over cTrader's ALREADY-net-unrealized P&L. Historical round-trip
@@ -740,6 +776,114 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               // execution path or broker-side stop mutation can promote it.
               if (snapshot.connection.brokerId === 'pepperstone-ctrader') {
                 const observedAtPeak = finite(trade.max_favorable_pnl) ?? 0;
+                // The active early-net-profit lock intentionally stops at
+                // 0.50R. Capture the separate >1R-to-positive-deep-giveback
+                // research case so TP runners are NOT prematurely harvested
+                // by an unvalidated broad trailing stop. All broker actions
+                // remain owned by the original active DEMO policy.
+                const highPeakPositiveGivebackWindow =
+                  risk !== null &&
+                  risk > 0 &&
+                  observedAtPeak >= risk &&
+                  currentPnl > 0 &&
+                  currentPnl <= Math.min(risk * 0.4, observedAtPeak * 0.35) &&
+                  Number(trade.path_observation_count) >= 12;
+                if (highPeakPositiveGivebackWindow) {
+                  try {
+                    const [causalCost, m1] = await Promise.all([
+                      this.loadCausalPepperstoneDemoCostEstimate(trade, observedAt),
+                      this.loadCausalM1Evidence(trade, observedAt),
+                    ]);
+                    const highPeak = evaluatePepperstoneHighPeakGivebackShadow({
+                      brokerId: snapshot.connection.brokerId,
+                      accountType: String(snapshot.connection.accountType),
+                      accountCurrency: trade.account_currency,
+                      tradeInstrument: trade.instrument,
+                      brokerInstrument: position.instrument,
+                      tradeDirection: trade.direction,
+                      brokerDirection: position.direction,
+                      tradeLotSize: finite(trade.lot_size) ?? Number.NaN,
+                      brokerLotSize: finite(position.lotSize) ?? Number.NaN,
+                      strategyRoute,
+                      isM1Strategy: trade.is_m1_strategy,
+                      initialRiskPnl: risk,
+                      previousPeakPnl: observedAtPeak,
+                      previousObservedPnl:
+                        observedAtPeak - (finite(trade.profit_giveback) ?? 0),
+                      currentBrokerNetPnl: currentPnl,
+                      previousObservationCount:
+                        Math.max(0, Number(trade.path_observation_count) || 0),
+                      elapsedMinutes: trade.opened_at
+                        ? (observedAt.getTime() - new Date(trade.opened_at).getTime()) / 60_000
+                        : Number.NaN,
+                      openedAt: trade.opened_at ? new Date(trade.opened_at) : null,
+                      observedAt,
+                      previousObservationAt: trade.path_last_observed_at
+                        ? new Date(trade.path_last_observed_at)
+                        : null,
+                      brokerEntryPrice: finite(position.openPrice),
+                      currentPrice: finite(position.currentPrice),
+                      authoritativeStop: finite(trade.stop_loss),
+                      brokerStop: finite(position.stopLoss),
+                      authoritativeTakeProfit: finite(trade.take_profit),
+                      brokerTakeProfit: finite(position.takeProfit),
+                      conservativeExtraExitCost: causalCost?.estimatedCost ?? null,
+                      causalFeeSampleCount: causalCost?.sampleCount ?? 0,
+                      m1: m1
+                        ? {
+                            completedBars: m1.completedBars,
+                            adverseBars: m1.adverseBars,
+                            liveQuoteBars: m1.liveQuoteBars ?? 0,
+                            consecutiveLiveQuoteBars: m1.consecutiveLiveQuoteBars ?? 0,
+                            alignedLatestBodyPressure: m1.alignedLatestBodyPressure,
+                            alignedMomentum3: m1.alignedMomentum3,
+                            latestAgeSeconds: m1.latestAgeSeconds,
+                          }
+                        : null,
+                    });
+                    if (highPeak.wouldProtectIfIndependentlyQualified && this.auditService) {
+                      const existing = (await this.dataSource.query(
+                        `
+                          SELECT id FROM audit.audit_logs
+                          WHERE actor_user_id=$1 AND action=$2 AND resource_type='Trade'
+                            AND resource_id=$3 AND metadata->>'artifact'=$4
+                          LIMIT 1
+                        `,
+                        [
+                          trade.user_id,
+                          AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+                          trade.trade_id,
+                          highPeak.artifact,
+                        ],
+                      )) as unknown;
+                      if (Array.isArray(existing) && existing.length === 0) {
+                        await this.auditService.log({
+                          actorUserId: trade.user_id,
+                          action: AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+                          resourceType: 'Trade',
+                          resourceId: trade.trade_id,
+                          metadata: {
+                            ...highPeak,
+                            observedAt: observedAt.toISOString(),
+                            instrument: trade.instrument,
+                            direction: trade.direction,
+                            hypotheticalAction: 'WOULD_CLOSE_HIGH_PEAK_REVERSAL_AFTER_COSTS',
+                            actualAction: 'HOLD_BROKER_TP_SL',
+                            brokerNativeM1Confirmation: true,
+                            brokerExtraFeeReserve: causalCost?.estimatedCost ?? null,
+                            noTradeAuthority: true,
+                            modifiesExecution: false,
+                          },
+                        });
+                      }
+                    }
+                  } catch (error) {
+                    this.logger.warn(
+                      'Pepperstone DEMO high-peak reversal research deferred; broker TP/SL unchanged: ' +
+                        (error as Error).message,
+                    );
+                  }
+                }
                 const eligibleForRescueResearch =
                   risk !== null &&
                   risk > 0 &&
@@ -1017,6 +1161,106 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     } finally {
       this.running = false;
     }
+  }
+
+  private async recordPepperstoneRolloverExposureShadow(input: {
+    trade: OpenAiTradeRow;
+    observedAt: Date;
+    currentPnl: number;
+    brokerDirection: string;
+    brokerInstrument: string;
+    brokerLots: number | null;
+    brokerEntry: number | null;
+    brokerStop: number | null;
+  }): Promise<void> {
+    // The caller already established an owner-scoped Pepperstone DEMO
+    // connection from the broker adapter. Do not accept a changed position,
+    // an unknown volume, or a stale/other-account minute quote.
+    const { trade, observedAt } = input;
+    if (
+      input.brokerDirection !== trade.direction ||
+      input.brokerInstrument.toUpperCase() !== trade.instrument.toUpperCase() ||
+      input.brokerLots === null || input.brokerLots <= 0 ||
+      finite(trade.lot_size) === null ||
+      Math.abs(input.brokerLots - finite(trade.lot_size)!) > 0.00001
+    ) return;
+    const quote = (await this.dataSource.query(
+      `
+        SELECT last_positive_bid AS bid, last_positive_ask AS ask,
+          last_positive_sample_at AS observed_at
+        FROM market_data.provider_quote_candles
+        WHERE connection_id=$1 AND instrument=$2 AND timeframe='M1'
+          AND source='ctrader-broker-native'
+          AND bucket_time >= $3::timestamptz - interval '2 minutes'
+          AND bucket_time <= $3::timestamptz
+          AND last_positive_sample_at <= $3::timestamptz
+          AND last_positive_sample_at >= $3::timestamptz - interval '45 seconds'
+        ORDER BY last_positive_sample_at DESC
+        LIMIT 1
+      `,
+      [trade.broker_connection_id, trade.instrument, observedAt.toISOString()],
+    )) as Array<{
+      bid: string | number | null;
+      ask: string | number | null;
+      observed_at: Date | string | null;
+    }>;
+    const latest = quote[0] ?? null;
+    const decision = evaluatePepperstoneDemoRolloverExposure({
+      brokerId: 'pepperstone-ctrader',
+      accountType: 'DEMO',
+      observedAt,
+      direction: trade.direction,
+      instrument: trade.instrument,
+      positionSizeLots: input.brokerLots,
+      initialRiskPnl: finite(trade.initial_risk_pnl),
+      currentBrokerNetPnl: input.currentPnl,
+      entryPrice: input.brokerEntry,
+      authoritativeStop: finite(trade.stop_loss),
+      brokerStop: input.brokerStop,
+      bid: latest ? finite(latest.bid) : null,
+      ask: latest ? finite(latest.ask) : null,
+      quoteObservedAt: latest?.observed_at
+        ? new Date(latest.observed_at) : null,
+    });
+    if (!decision.wouldConsiderPreRolloverClose || !this.auditService) return;
+    const rolloverDate = observedAt.toISOString().slice(0, 10);
+    const existing = (await this.dataSource.query(
+      `
+        SELECT id FROM audit.audit_logs
+        WHERE actor_user_id=$1 AND action=$2 AND resource_type='Trade'
+          AND resource_id=$3 AND metadata->>'artifact'=$4
+          AND metadata->>'rolloverDate'=$5
+        LIMIT 1
+      `,
+      [
+        trade.user_id,
+        AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+        trade.trade_id,
+        PEPPERSTONE_DEMO_ROLLOVER_EXPOSURE_ARTIFACT,
+        rolloverDate,
+      ],
+    )) as unknown;
+    if (!Array.isArray(existing) || existing.length !== 0) return;
+    await this.auditService.log({
+      actorUserId: trade.user_id,
+      action: AuditAction.DEMO_ALTERNATIVE_PROFIT_LOCK_SHADOW,
+      resourceType: 'Trade',
+      resourceId: trade.trade_id,
+      metadata: {
+        ...decision,
+        rolloverDate,
+        observedAt: observedAt.toISOString(),
+        quoteObservedAt: latest?.observed_at
+          ? new Date(latest.observed_at).toISOString() : null,
+        instrument: trade.instrument,
+        direction: trade.direction,
+        brokerNativeSpread: true,
+        brokerPositionStopVerified: true,
+        hypotheticalAction: 'WOULD_REDUCE_ROLLOVER_RISK',
+        actualAction: 'HOLD_OR_EXISTING_BROKER_TP_SL',
+        requiresProspectiveOutcomesBeforePromotion: true,
+      },
+    });
   }
 
   /**

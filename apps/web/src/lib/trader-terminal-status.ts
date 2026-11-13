@@ -357,6 +357,20 @@ function isTerminalBrokerAuthorizationStatus(
 }
 
 /**
+ * Read-only optional risk-history enrichment. A long-running query must not
+ * block the broker, risk and active session reads that guard user controls.
+ */
+export async function loadLatestEndedTradingSession(): Promise<TradingSessionView | null> {
+  const payload = await readWithSingleNetworkRetry(() =>
+    api.request<unknown>("/trading/sessions/latest-ended"),
+  );
+  const normalized = normalizeActiveTradingSessionPayload(payload);
+  return normalized?.known && normalized.session?.status === "ENDED"
+    ? normalized.session
+    : null;
+}
+
+/**
  * Compose existing authoritative API contracts for the trading workspace.
  *
  * This function does not infer balances, P&L, positions, AI confidence, market
@@ -365,18 +379,16 @@ function isTerminalBrokerAuthorizationStatus(
  * not match the expected frontend-safe contract.
  */
 export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> {
-  const [riskResult, sessionResult, brokerResult, latestEndedResult] = await Promise.allSettled([
+  // Only authoritative control reads belong to this critical path.
+  // The optional ended-session HISTORY lookup must never hold up account
+  // loading (or cause a visually dormant AI cockpit).
+  const [riskResult, sessionResult, brokerResult] = await Promise.allSettled([
     readWithSingleNetworkRetry(() => api.request<unknown>("/risk/status")),
     readWithSingleNetworkRetry(() =>
       api.request<unknown>("/trading/sessions/active"),
     ),
     readWithSingleNetworkRetry(() => api.listBrokerConnections()),
-    // Optional read-only history. A failure never relaxes server risk gates.
-    readWithSingleNetworkRetry(() =>
-      api.request<unknown>("/trading/sessions/latest-ended"),
-    ),
   ]);
-
   // Broker inventory is independently meaningful. If it cannot be loaded or
   // validated we have no truthful broker state and the page may fail normally.
   if (brokerResult.status === "rejected") {
@@ -419,14 +431,9 @@ export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> 
     );
   }
 
-  const endedPayload =
-    latestEndedResult.status === "fulfilled"
-      ? normalizeActiveTradingSessionPayload(latestEndedResult.value)
-      : null;
-  const lastEndedSession =
-    endedPayload?.known && endedPayload.session?.status === "ENDED"
-      ? endedPayload.session
-      : null;
+  // Populated by the independent read-only poll after the broker controls
+  // are visible; does not influence broker-side session authorization.
+  const lastEndedSession: TradingSessionView | null = null;
 
   const sessionBroker =
     sessionStateKnown && session

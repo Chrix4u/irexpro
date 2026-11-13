@@ -18,10 +18,14 @@ export const POST_ENTRY_EVIDENCE_MIN_ELIGIBLE_PROFIT_DECISIONS = 30;
 export const REJECTED_EDGE_OUTCOME_SHADOW_ARTIFACT = 'plan-b-rejected-edge-outcome-shadow-v1';
 export const REJECTED_EDGE_MIN_NET_EXPECTED_R = 0.08;
 export const REJECTED_EDGE_EPISODE_GAP_MINUTES = 15;
+export const POST_ENTRY_SCORING_RETRY_MAX_ATTEMPTS = 3;
+export const POST_ENTRY_SCORING_RETRY_COOLDOWN_MS = 5 * 60_000;
 
 interface ShadowDecisionRow {
   shadow_decision_id: string;
   user_id: string;
+  /** Exact, owner-verified DEMO broker associated with this immutable decision. */
+  broker_connection_id: string;
   instrument: string;
   direction: 'BUY' | 'SELL';
   evaluated_at: string | Date;
@@ -34,6 +38,33 @@ interface ShadowDecisionRow {
 interface ExistingObservation {
   checkpoint_minutes: number;
   state: string;
+  reason?: string | null;
+  evaluated_at?: string | Date | null;
+  response?: { researchRetryAttempts?: number } | null;
+}
+
+/** Only transient scoring failures can be retried. Read-only, bounded,
+ *  and never re-evaluates a finished READY or NOT_YET_ELIGIBLE score. */
+export function v85RetryAttempts(observation: ExistingObservation): number {
+  const raw = observation.response?.researchRetryAttempts;
+  return Number.isInteger(raw) && raw! >= 1
+    ? Math.min(raw!, POST_ENTRY_SCORING_RETRY_MAX_ATTEMPTS)
+    : 1;
+}
+
+export function v85ObservationTerminal(observation: ExistingObservation, now: Date): boolean {
+  if (observation.state === 'READY' || observation.state === 'NOT_YET_ELIGIBLE')
+    return true;
+  if (observation.state === 'WAITING_FOR_BROKER_DATA' &&
+      observation.reason === 'HISTORICAL_SPREAD_UNOBSERVABLE')
+    return true;
+  if (observation.state !== 'ERROR') return false;
+  if (observation.reason !== 'POST_ENTRY_SCORING_FAILED') return true;
+  if (v85RetryAttempts(observation) >= POST_ENTRY_SCORING_RETRY_MAX_ATTEMPTS)
+    return true;
+  const last = observation.evaluated_at ? new Date(observation.evaluated_at).getTime() : NaN;
+  if (!Number.isFinite(last) || !Number.isFinite(now.getTime())) return true;
+  return last + POST_ENTRY_SCORING_RETRY_COOLDOWN_MS > now.getTime();
 }
 
 interface ParsedShadowEntryFeatures {
@@ -206,7 +237,8 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
       modifiesExecution: false,
       cadenceSeconds: 60,
       checkpointsMinutes: [5, 10, 15, 30, 60, 120, 240],
-      brokerSourceConfigured: Boolean(this.marketDataConnectionId()),
+      brokerSourceConfigured: true,
+      brokerSourceMode: 'DECISION_TIME_DEMO_SESSION' as const,
       lastRunAt: this.lastRunAt?.toISOString() ?? null,
       lastScored: this.lastScored,
       lastCandidates: this.lastCandidates,
@@ -327,23 +359,45 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
     return (await this.dataSource.query(
       `
         SELECT
-          id AS shadow_decision_id,
-          user_id,
-          instrument,
-          direction,
-          evaluated_at,
-          entry_price,
-          confidence,
-          components,
+          decision.id AS shadow_decision_id,
+          decision.user_id,
+          COALESCE(session_source.broker_connection_id, original_broker.id) AS broker_connection_id,
+          decision.instrument,
+          decision.direction,
+          decision.evaluated_at,
+          decision.entry_price,
+          decision.confidence,
+          decision.components,
           CASE
             WHEN admitted = true OR components ->> 'paperAdmitted' = 'true'
               THEN '${PLAN_B_V85_ARTIFACT}'
             ELSE '${REJECTED_EDGE_OUTCOME_SHADOW_ARTIFACT}'
           END AS observation_artifact
         FROM trading.ensemble_shadow_decisions AS decision
-        WHERE engine_code = $1
-          AND model_version = $2
-          AND user_id = $3
+        -- The ensemble's source may be an internal paper-broker identity.
+        -- The real broker-native DEMO session at decision time is authoritative.
+        LEFT JOIN LATERAL (
+          SELECT session.broker_connection_id
+          FROM trading.trading_sessions AS session
+          JOIN broker.broker_connections AS native
+            ON native.id = session.broker_connection_id
+           AND native.user_id = decision.user_id
+           AND native.account_type = 'DEMO'
+           AND native.broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')
+          WHERE session.user_id = decision.user_id
+            AND session.execution_mode = 'FULL_AUTO'
+            AND session.started_at <= decision.evaluated_at
+            AND (session.ended_at IS NULL OR session.ended_at >= decision.evaluated_at)
+          ORDER BY session.started_at DESC LIMIT 1
+        ) AS session_source ON true
+        LEFT JOIN broker.broker_connections AS original_broker
+          ON original_broker.id = decision.broker_connection_id
+         AND original_broker.user_id = decision.user_id
+         AND original_broker.account_type = 'DEMO'
+         AND original_broker.broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader')
+        WHERE decision.engine_code = $1
+          AND decision.model_version = $2
+          AND decision.user_id = $3
           AND (
             admitted = true
             OR components ->> 'paperAdmitted' = 'true'
@@ -401,7 +455,7 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
 
     const existing = (await this.dataSource.query(
       `
-        SELECT checkpoint_minutes, state
+        SELECT checkpoint_minutes, state, reason, evaluated_at, response
         FROM trading.ensemble_post_entry_shadow_observations
         WHERE ensemble_shadow_decision_id = $1
           AND artifact = $2
@@ -411,15 +465,16 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
 
     const terminal = new Set(
       existing
-        .filter(
-          (item) =>
-            item.state === 'READY' || item.state === 'NOT_YET_ELIGIBLE' || item.state === 'ERROR',
-        )
+        .filter((item) => v85ObservationTerminal(item, now))
         .map((item) => Number(item.checkpoint_minutes)),
     );
 
     const due = dueV85Checkpoints(openedAt, observationEnd, terminal);
-    const marketDataConnectionId = this.marketDataConnectionId();
+    // Global static configuration may point to an old DEMO account. The
+    // candidate query resolves an owner-bound broker-native DEMO source from
+    // the session active AT THE DECISION TIME (or exact original DEMO source).
+    // Missing source remains WAITING; it cannot be guessed or cross-account.
+    const marketDataConnectionId = row.broker_connection_id || '';
 
     for (const checkpointMinutes of due) {
       const checkpointAt = new Date(openedAt.getTime() + checkpointMinutes * 60_000);
@@ -453,13 +508,23 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
         });
       }
 
+      // The score API has no broker-write authority. Persist attempts within
+      // the existing JSON response for bounded recovery after transient errors.
+      const previous = existing.find(
+        (item) => Number(item.checkpoint_minutes) === checkpointMinutes,
+      );
+      const retryAttempts = previous ? v85RetryAttempts(previous) + 1 : 1;
+      const responseWithRetry = response.state === 'ERROR' &&
+        response.reason === 'POST_ENTRY_SCORING_FAILED'
+          ? { ...response, researchRetryAttempts: retryAttempts }
+          : response;
       await this.persistObservation(
         row,
         observationArtifact,
         checkpointMinutes,
         checkpointAt,
         marketDataConnectionId || null,
-        response,
+        responseWithRetry,
       );
 
       if (response.state === 'READY') {
@@ -567,20 +632,4 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
     return this.config.get<string>('vpsForexScanner.userId', '').trim();
   }
 
-  private marketDataConnectionId(): string {
-    // Shadow checkpoints need broker-native evidence, not the PAPER execution
-    // identity. Prefer the dedicated tactical source, then the configured
-    // broker-native expert source. PAPER is only a final compatibility fallback.
-    const m1Source = this.config.get<string>('vpsForexScanner.m1MarketDataConnectionId', '').trim();
-    if (m1Source) return m1Source;
-
-    if (this.config.get<boolean>('multimodelBrokerExpert.enabled', false)) {
-      const brokerNativeSource = this.config
-        .get<string>('multimodelBrokerExpert.sourceConnectionId', '')
-        .trim();
-      if (brokerNativeSource) return brokerNativeSource;
-    }
-
-    return this.config.get<string>('vpsForexScanner.brokerConnectionId', '').trim();
-  }
 }

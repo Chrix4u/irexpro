@@ -1,3 +1,4 @@
+import { classifyForexSessionClock } from './forex-session-clock';
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import type { AdaptiveMarketSession, AdaptiveMarketState } from './adaptive-market-state';
@@ -110,11 +111,7 @@ function sessionFor(row: AdaptiveEdgeOutcomeRow): AdaptiveMarketSession {
   if (!row.signal_generated_at) return 'NEW_YORK';
   const time = new Date(row.signal_generated_at);
   if (!Number.isFinite(time.getTime())) return 'NEW_YORK';
-  const hour = time.getUTCHours();
-  if (hour >= 21) return 'ROLLOVER';
-  if (hour < 7) return 'ASIA';
-  if (hour < 13) return 'LONDON';
-  return 'NEW_YORK';
+  return classifyForexSessionClock(time);
 }
 
 function profitFactor(values: number[]): number | null {

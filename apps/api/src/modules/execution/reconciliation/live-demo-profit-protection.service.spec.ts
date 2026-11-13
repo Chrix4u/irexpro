@@ -105,6 +105,51 @@ describe('LiveDemoProfitProtectionService', () => {
     };
   }
 
+  it('records only a read-only rollover risk audit and never force-closes a losing DEMO position', async () => {
+    const auditService={log:jest.fn().mockResolvedValue(undefined)} as unknown as AuditService;
+    const t=candidate({
+      instrument:'AUDUSD',direction:'SELL',lot_size:'0.01',
+      opened_at:new Date('2026-11-12T21:15:19.000Z'),
+      max_favorable_pnl:'0',max_adverse_pnl:'-0.25',profit_giveback:'0.25',
+      initial_risk_pnl:'0.48',stop_loss:'0.68101',take_profit:'0.67971',
+    });
+    const quote = [{
+      bid:'0.68084',ask:'0.68086',
+      observed_at:new Date('2026-11-12T21:55:05.000Z'),
+    }];
+    const h=harness([t],'-0.32','DEMO',quote,'0.68086',[],auditService,
+      [],[],[],'pepperstone-ctrader');
+    h.brokerService.getOpenPositionsForConnection.mockResolvedValue({
+      connection:{id:'conn-1',brokerId:'pepperstone-ctrader',accountType:'DEMO'},
+      positions:[{
+        externalOrderId:'position-7001',instrument:'AUDUSD',direction:'SELL',
+        lotSize:'0.01',openPrice:'0.68053',currentPrice:'0.68086',
+        stopLoss:'0.68101',takeProfit:'0.67971',unrealisedPnl:'-0.32',
+        openedAt:new Date('2026-11-12T21:15:19Z'),commission:'0',swap:'0',
+      }],
+    });
+    await h.service.runOnce(new Date('2026-11-12T21:55:10Z'));
+    // The intentionally non-blocking audit must not delay safety exits.
+    for(let i=0;i<4;i++) await new Promise<void>(resolve=>setImmediate(resolve));
+    expect(h.query).toHaveBeenCalledWith(
+      expect.stringContaining("source='ctrader-broker-native'"),
+      ['conn-1','AUDUSD','2026-11-12T21:55:10.000Z'],
+    );
+    expect((auditService.log as jest.Mock)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resourceType:'Trade',resourceId:'trade-1',
+        metadata:expect.objectContaining({
+          mode:'SHADOW_ONLY',
+          reason:'NEAR_STOP_AND_ADVERSE',
+          actualAction:'HOLD_OR_EXISTING_BROKER_TP_SL',
+          noBrokerTradeAuthority:true,
+          modifiesOpenPositions:false,
+        }),
+      }),
+    );
+    expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+  });
+
   it('reads initial capital risk only from allocations made before position entry', async () => {
     const h = harness();
     await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));

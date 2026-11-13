@@ -28,7 +28,7 @@ import {
   SnapshotNotFreshError,
 } from '../broker/services/broker-account-snapshot.service';
 import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
-import { isRestoredDemoEntryInstrument } from '../ai/demo-focused-instruments';
+import { isCurrentFocusedDemoEntryInstrument } from '../ai/demo-focused-instruments';
 
 /**
  * Server-side DEMO promotion allowlist. Transport metadata can never grant
@@ -328,7 +328,7 @@ export class StrategyOrchestratorService {
       }
     }
 
-    // ── Gate 3.6: Reversible six-pair DEMO entry scope ─────────────────────
+    // ── Gate 3.6: Current four-pair DEMO entry scope ─────────────────────
     // The scheduler also applies this rule, but the central orchestrator must
     // independently refuse delayed/replayed/externally injected promoted DEMO
     // signals for research-only symbols. Test the exact promoted model tuple,
@@ -337,10 +337,10 @@ export class StrategyOrchestratorService {
     if (
       session.executionMode === ExecutionMode.FULL_AUTO &&
       serverPromotedExternalDemoModel &&
-      !isRestoredDemoEntryInstrument(candidate.instrument)
+      !isCurrentFocusedDemoEntryInstrument(candidate.instrument)
     ) {
       const reason =
-        'DEMO_INSTRUMENT_RESEARCH_ONLY: this symbol is outside the six approved DEMO instruments (exact-symbol match required)';
+        'DEMO_INSTRUMENT_RESEARCH_ONLY: this symbol is outside the four approved DEMO instruments (exact-symbol match required)';
       this.logger.warn(`Signal ${signalId} rejected: ${reason}`);
       await this.recordIgnored(
         candidate,

@@ -26,6 +26,7 @@ import { useAuth } from "@/context/auth-context";
 import { useNotification } from "@/hooks/useNotification";
 import { MotionStatusOrb } from "@/components/ui/motion-status-orb";
 import { MarketClosedState } from "./MarketClosedState";
+import { AiTraderLoading } from "./ai-trader-loading";
 import { api } from "@/lib/api";
 import { formatAgeSeconds } from "@/lib/duration";
 import { mapApiError } from "@/lib/error-mapping";
@@ -37,6 +38,7 @@ import {
   loadMarketIntelligence,
 } from "@/lib/market-intelligence";
 import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
+import { resolveDemoChartInstruments } from "@/lib/trading-chart-focus";
 import {
   LIVE_SCAN_STAGES,
   deriveLiveScanFrame,
@@ -68,6 +70,7 @@ import {
 } from "@/lib/trader-execution";
 import {
   loadTraderTerminalStatus,
+  loadLatestEndedTradingSession,
   type TraderTerminalStatus,
   type TerminalBrokerView,
 } from "@/lib/trader-terminal-status";
@@ -1361,17 +1364,29 @@ function FinancialKpi({
   value,
   hint,
   tone = "neutral",
+  loading = false,
 }: {
   label: string;
   value: string;
   hint: string;
   tone?: "positive" | "negative" | "neutral";
+  loading?: boolean;
 }) {
   return (
-    <article className={`ai-kpi-card ai-kpi-card--${tone}`}>
+    <article className={`ai-kpi-card ai-kpi-card--${tone}`} aria-busy={loading}>
       <span className="ai-kpi-card__label">{label}</span>
-      <strong className="ai-kpi-card__value">{value}</strong>
-      <span className="ai-kpi-card__hint">{hint}</span>
+      {loading ? (
+        <>
+          <span className="ai-loading-shimmer ai-kpi-card__value--loading" aria-hidden="true" />
+          <span className="ai-loading-shimmer ai-loading-shimmer--hint" aria-hidden="true" />
+          <span className="sr-only">Loading {label.toLowerCase()} from the broker</span>
+        </>
+      ) : (
+        <>
+          <strong className="ai-kpi-card__value">{value}</strong>
+          <span className="ai-kpi-card__hint">{hint}</span>
+        </>
+      )}
     </article>
   );
 }
@@ -1776,8 +1791,9 @@ export default function AiTradingPage() {
     summary: ClosedTradeReportSummaryView;
   } | null>(null);
   const [livePositions, setLivePositions] = useState<LivePositionRowView[]>([]);
+  const [positionsLoaded, setPositionsLoaded] = useState(false);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
-  const [chartInstrument, setChartInstrument] = useState("USDJPY");
+  const [chartInstrument, setChartInstrument] = useState("EURUSD");
   const [chartTimeframe, setChartTimeframe] = useState<
     "M1" | "M5" | "M15" | "H1" | "H4"
   >("M1");
@@ -1830,6 +1846,12 @@ export default function AiTradingPage() {
   const seenPositionIds = useRef<Set<string>>(new Set());
   const seenExecutionStates = useRef<Map<string, string>>(new Map());
   const tradingRefreshInFlight = useRef(false);
+  // Slow research/cockpit telemetry cannot delay broker balances, closed
+  // trades or Start/Stop controls. Prevent overlapping 4s HTTP batches.
+  const researchTelemetryInFlight = useRef(false);
+  const latestEndedInFlight = useRef(false);
+  const latestEndedFetchedAt = useRef(0);
+  const runtimeStatusInFlight = useRef(false);
   const positionsRefreshInFlight = useRef(false);
   const tacticalRefreshInFlight = useRef(false);
 
@@ -1928,13 +1950,21 @@ export default function AiTradingPage() {
         : confidencePercent >= 45
           ? "building"
           : "weak";
-  const watchedInstruments = automationRuntime?.instruments?.length
-    ? automationRuntime.instruments
-    : [chartInstrument];
-  const latestChartCandle = market?.candles?.at(-1) ?? null;
+  // The legacy automation runtime still reports a broad six-pair universe.
+  // The authenticated DEMO M1 policy is authoritative for chart tabs;
+  // before it arrives the fallback is the active EURUSD/AUDUSD focus.
+  const watchedInstruments = useMemo(
+    () => resolveDemoChartInstruments(m1TacticalStatus),
+    [m1TacticalStatus],
+  );
+  const visibleChartMarket =
+    market?.instrument === chartInstrument && market?.timeframe === chartTimeframe
+      ? market
+      : null;
+  const latestChartCandle = visibleChartMarket?.candles?.at(-1) ?? null;
   const previousChartCandle =
-    market?.candles && market.candles.length > 1
-      ? (market.candles.at(-2) ?? null)
+    visibleChartMarket?.candles && visibleChartMarket.candles.length > 1
+      ? (visibleChartMarket.candles.at(-2) ?? null)
       : null;
   const chartMove =
     latestChartCandle && previousChartCandle
@@ -2088,93 +2118,43 @@ export default function AiTradingPage() {
         // the Start/Stop workspace unavailable when one of those secondary
         // endpoints has a transient server-side failure.
         const status = await loadTraderTerminalStatus();
-        setTerminal(status);
+        // Preserve already-verified ended-session details while the fast
+        // control poll refreshes; never carry them across broker accounts.
+        setTerminal((previous) => ({
+          ...status,
+          lastEndedSession:
+            previous?.primaryBroker?.id === status.primaryBroker?.id
+              ? previous?.lastEndedSession ?? null
+              : null,
+        }));
 
-        // Secondary status feeds are independent of trading controls and of
-        // one another. Fetch them concurrently to avoid a serial HTTP waterfall
-        // extending the intended four-second workspace refresh interval.
-        const [
-          providerResult,
-          scannerResult,
-          tacticalResult,
-          brokerParityResult,
-        ] = await Promise.allSettled([
-          (async () => {
-            const evidence = await api.request<unknown>(
-              "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v7",
+        // Optional ended-session history is intentionally decoupled from
+        // verified broker equity and Start/Stop. Throttle to avoid hammering
+        // the database on the four-second poll.
+        if (!latestEndedInFlight.current &&
+            (Date.now() - latestEndedFetchedAt.current > 60_000)) {
+          latestEndedInFlight.current = true;
+          latestEndedFetchedAt.current = Date.now();
+          void loadLatestEndedTradingSession().then((endedSession) => {
+            setTerminal((current) =>
+              current !== null &&
+              current.primaryBroker?.id === status.primaryBroker?.id &&
+              current.session?.id === status.session?.id
+                ? { ...current, lastEndedSession: endedSession }
+                : current,
             );
-            if (!hasExternalProviderPerformanceUiShape(evidence)) {
-              throw new Error("Provider performance contract mismatch");
-            }
-            return evidence as ExternalProviderPerformanceView;
-          })(),
-          (async () => {
-            const scannerStatus = await api.request<unknown>(
-              "/ai/external/vps-forex/status",
-            );
-            if (!hasVpsScannerUiShape(scannerStatus)) {
-              throw new Error("VPS scanner status contract mismatch");
-            }
-            return scannerStatus as VpsForexScannerStatusView;
-          })(),
-          (async () => {
-            const tacticalStatus = await api.request<unknown>(
-              "/ai/external/vps-forex/m1-tactical/status",
-            );
-            if (!hasM1TacticalStatusUiShape(tacticalStatus)) {
-              throw new Error("M1 tactical status contract mismatch");
-            }
-            return tacticalStatus;
-          })(),
-          Promise.all([
-            api.request<BrokerParityRuntimeStatusView>(
-              "/ai/external/vps-forex/broker-parity/status",
-            ),
-            api.request<V8DedicatedPaperStatusView>(
-              "/ai/external/vps-forex/v8-dedicated-paper/status",
-            ),
-          ]),
-        ]);
-
-        setProviderEvidence(providerResult.status === "fulfilled" ? providerResult.value : null);
-        setVpsScannerStatus(scannerResult.status === "fulfilled" ? scannerResult.value : null);
-        setM1TacticalStatus(tacticalResult.status === "fulfilled" ? tacticalResult.value : null);
-        if (brokerParityResult.status === "fulfilled") {
-          const [parityStatus, v8Status] = brokerParityResult.value;
-          setBrokerParityRuntime(parityStatus);
-          setV8DedicatedPaperStatus(v8Status);
-        } else {
-          setBrokerParityRuntime(null);
-          setV8DedicatedPaperStatus(null);
+          }).catch(() => {
+            // Optional risk history never overrides verified active-session
+            // risk gates. A later poll can retry without dropping controls.
+          }).finally(() => {
+            latestEndedInFlight.current = false;
+          });
         }
 
-        // Keep secondary market-intelligence context aligned with the actual
-        // scheduler universe. Falling back to EURUSD preserves the ordinary
-        // non-research workspace before a runtime is registered.
-        let marketInstrument = "EURUSD";
-
-        if (status.session) {
-          try {
-            const runtime = await api.request<AiAutomationRuntimeStatus>(
-              `/trading/sessions/${encodeURIComponent(status.session.id)}/automation-status`,
-            );
-            setAutomationRuntime(runtime);
-            setAutomationRuntimeWarning(null);
-            const runtimeInstrument = runtime.instruments.find((value) =>
-              /^[A-Z0-9._-]{3,24}$/.test(value),
-            );
-            if (runtimeInstrument) marketInstrument = runtimeInstrument;
-          } catch {
-            setAutomationRuntime(null);
-            setAutomationRuntimeWarning(
-              "AI Trading is running, but the AI engine runtime status could not be verified yet.",
-            );
-          }
-        } else {
-          setAutomationRuntime(null);
-          setAutomationRuntimeWarning(null);
-        }
-
+        // The capital card is a CORE read, not a dependency of research
+        // telemetry, model status, historical reports, or live charts.
+        // Start it immediately after the broker is known and independently
+        // release the skeleton when that verified response settles.
         const brokerId =
           status.sessionBroker?.id ||
           selectedBrokerIdRef.current ||
@@ -2184,6 +2164,114 @@ export default function AiTradingPage() {
           selectedBrokerIdRef.current = status.sessionBroker.id;
         } else if (!selectedBrokerIdRef.current) {
           selectedBrokerIdRef.current = brokerId;
+        }
+        if (brokerId) {
+          setSelectedBrokerId(selectedBrokerIdRef.current);
+          void api.getCapitalAllocation(brokerId)
+            .then((nextAllocation) => {
+              if (selectedBrokerIdRef.current === brokerId) {
+                setAllocation(nextAllocation);
+                setAllocationWarning(null);
+                setAllocationAmount(nextAllocation.allocatedCapital ?? "");
+              }
+            })
+            .catch(() => {
+              if (selectedBrokerIdRef.current === brokerId) {
+                setAllocation(null);
+                setAllocationWarning(
+                  "Your broker account is connected, but its AI capital allocation could not be loaded. Trading controls remain disabled until this data is available.",
+                );
+              }
+            })
+            .finally(() => {
+              if (showSpinner) setLoading(false);
+            });
+        } else if (!selectedBrokerIdRef.current) {
+          setAllocation(null);
+          if (showSpinner) setLoading(false);
+        }
+
+        // Broker financials and executions must NOT wait for M1 status,
+        // parity or archived provider performance, any of which can stall.
+        // Keep observational status asynchronous and rate-limit its own
+        // polling; it has no authority to enable Start/Stop.
+        if (!researchTelemetryInFlight.current) {
+          researchTelemetryInFlight.current = true;
+          void Promise.allSettled([
+            (async () => {
+              const evidence = await api.request<unknown>(
+                "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v7",
+              );
+              if (!hasExternalProviderPerformanceUiShape(evidence)) {
+                throw new Error("Provider performance contract mismatch");
+              }
+              return evidence as ExternalProviderPerformanceView;
+            })(),
+            (async () => {
+              const scannerStatus = await api.request<unknown>(
+                "/ai/external/vps-forex/status",
+              );
+              if (!hasVpsScannerUiShape(scannerStatus)) {
+                throw new Error("VPS scanner status contract mismatch");
+              }
+              return scannerStatus as VpsForexScannerStatusView;
+            })(),
+            (async () => {
+              const tacticalStatus = await api.request<unknown>(
+                "/ai/external/vps-forex/m1-tactical/status",
+              );
+              if (!hasM1TacticalStatusUiShape(tacticalStatus)) {
+                throw new Error("M1 tactical status contract mismatch");
+              }
+              return tacticalStatus;
+            })(),
+            Promise.all([
+              api.request<BrokerParityRuntimeStatusView>(
+                "/ai/external/vps-forex/broker-parity/status",
+              ),
+              api.request<V8DedicatedPaperStatusView>(
+                "/ai/external/vps-forex/v8-dedicated-paper/status",
+              ),
+            ]),
+          ]).then(([
+            providerResult, scannerResult, tacticalResult, brokerParityResult,
+          ]) => {
+            // On a transient polling error retain last valid evidence instead
+            // of replacing it with null/dashes.
+            if (providerResult.status === "fulfilled") setProviderEvidence(providerResult.value);
+            if (scannerResult.status === "fulfilled") setVpsScannerStatus(scannerResult.value);
+            if (tacticalResult.status === "fulfilled") setM1TacticalStatus(tacticalResult.value);
+            if (brokerParityResult.status === "fulfilled") {
+              const [parityStatus, v8Status] = brokerParityResult.value;
+              setBrokerParityRuntime(parityStatus);
+              setV8DedicatedPaperStatus(v8Status);
+            }
+          }).finally(() => {
+            researchTelemetryInFlight.current = false;
+          });
+        }
+
+        // Engine status is independent of account financials and may be
+        // delayed or unavailable when the broker session is healthy.
+        if (status.session) {
+          if (!runtimeStatusInFlight.current) {
+            runtimeStatusInFlight.current = true;
+            void api.request<AiAutomationRuntimeStatus>(
+              `/trading/sessions/${encodeURIComponent(status.session.id)}/automation-status`,
+            ).then((runtime) => {
+              setAutomationRuntime(runtime);
+              setAutomationRuntimeWarning(null);
+            }).catch(() => {
+              setAutomationRuntimeWarning(
+                "AI Trading is running, but the AI engine runtime status could not be verified yet.",
+              );
+            }).finally(() => {
+              runtimeStatusInFlight.current = false;
+            });
+          }
+        } else {
+          setAutomationRuntime(null);
+          setAutomationRuntimeWarning(null);
         }
 
         const realisedWindowEnd = new Date();
@@ -2221,7 +2309,10 @@ export default function AiTradingPage() {
         // snapshot. Keep the previous data on screen and let the existing
         // polling loops retry automatically.
         if (snapshot) setExecution(snapshot);
-        if (positions) setLivePositions(positions);
+        if (positions) {
+          setLivePositions(positions);
+          setPositionsLoaded(true);
+        }
         if (brokerId && realisedReport) {
           setRealised24hReport({
             brokerConnectionId: brokerId,
@@ -2256,26 +2347,6 @@ export default function AiTradingPage() {
           setActivityWarning(null);
         }
 
-        if (brokerId) {
-          setSelectedBrokerId(selectedBrokerIdRef.current);
-          try {
-            const nextAllocation = await api.getCapitalAllocation(brokerId);
-            if (selectedBrokerIdRef.current === brokerId) {
-              setAllocation(nextAllocation);
-              setAllocationWarning(null);
-              setAllocationAmount(nextAllocation.allocatedCapital ?? "");
-            }
-          } catch {
-            if (selectedBrokerIdRef.current === brokerId) {
-              setAllocation(null);
-              setAllocationWarning(
-                "Your broker account is connected, but its AI capital allocation could not be loaded. Trading controls remain disabled until this data is available.",
-              );
-            }
-          }
-        } else if (!selectedBrokerIdRef.current) {
-          setAllocation(null);
-        }
       } catch (requestError) {
         setError(mapApiError(requestError).message);
       } finally {
@@ -2283,7 +2354,7 @@ export default function AiTradingPage() {
         if (showSpinner) setLoading(false);
       }
     },
-    [user, selectedBrokerId, emitActivityToasts],
+    [user, emitActivityToasts],
   );
 
   useEffect(() => {
@@ -2392,11 +2463,11 @@ export default function AiTradingPage() {
   }, [user, refreshTradingData]);
 
   useEffect(() => {
-    const watched = automationRuntime?.instruments ?? [];
-    if (watched.length && !watched.includes(chartInstrument)) {
-      setChartInstrument(watched[0]);
+    // A stale automation poll must not switch the chart back to a paused pair.
+    if (!watchedInstruments.includes(chartInstrument)) {
+      setChartInstrument(watchedInstruments[0]);
     }
-  }, [automationRuntime?.instruments, chartInstrument]);
+  }, [watchedInstruments, chartInstrument]);
 
   useEffect(() => {
     if (!user || !marketBrokerConnectionId) return;
@@ -2427,7 +2498,10 @@ export default function AiTradingPage() {
           setMarket((previous) => ({
             ...snapshot,
             candles: reconcileLiveCandles(
-              previous?.candles ?? [],
+              previous?.instrument === snapshot.instrument &&
+                previous?.timeframe === snapshot.timeframe
+                ? previous.candles
+                : [],
               snapshot.candles,
               snapshot.quote,
               chartTimeframe,
@@ -3025,11 +3099,7 @@ export default function AiTradingPage() {
   const showDeveloperDiagnostics = false;
 
   if (restoring) {
-    return (
-      <div style={{ padding: "3rem" }}>
-        <LoadingSpinner text="Restoring trading workspace…" />
-      </div>
-    );
+    return <AiTraderLoading />;
   }
 
   if (!user) {
@@ -3042,6 +3112,19 @@ export default function AiTradingPage() {
           </Link>
         </Card>
       </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <DashboardShell
+        user={user}
+        onLogout={logout}
+        activeRoute="/trade"
+        title="AI Trading"
+      >
+        <AiTraderLoading />
+      </DashboardShell>
     );
   }
 
@@ -3178,22 +3261,26 @@ export default function AiTradingPage() {
             >
               <FinancialKpi
                 label="Equity"
+                loading={!allocation && !allocationWarning}
                 value={money(allocation?.brokerEquity, allocation?.accountCurrency)}
                 hint="Current broker account equity"
               />
               <FinancialKpi
                 label="AI Allocation"
+                loading={!allocation && !allocationWarning}
                 value={money(allocation?.allocatedCapital, allocation?.accountCurrency)}
                 hint={`${money(allocation?.availableCapital, allocation?.accountCurrency)} available`}
               />
               <FinancialKpi
                 label="24h Net P&L"
+                loading={!realised24hReport && !execution && !activityWarning}
                 value={signedMoney(realised24hNetPnl, realisedCurrency)}
                 hint={`${realised24hWins} wins · ${realised24hLosses} losses`}
                 tone={netPnlTone}
               />
               <FinancialKpi
                 label="Open P&L"
+                loading={!positionsLoaded && !activityWarning}
                 value={
                   aiOpenPositions.length === 0
                     ? money("0", allocation?.accountCurrency)
@@ -5269,7 +5356,7 @@ export default function AiTradingPage() {
 
                 <div
                   className="ai-cockpit__instruments"
-                  aria-label="Watched instruments"
+                  aria-label="Active trading chart instruments"
                 >
                   {watchedInstruments.map((instrument) => (
                     <button
@@ -5292,13 +5379,7 @@ export default function AiTradingPage() {
                         <span className="ai-cockpit__label">
                           {chartInstrument}
                         </span>
-                        <strong>
-                          {automationRuntime?.research_uat
-                            ? (automationRuntime.last_market_data_close ??
-                              market?.quote.bid ??
-                              "—")
-                            : (market?.quote.bid ?? "—")}
-                        </strong>
+                        <strong>{visibleChartMarket?.quote.bid ?? "—"}</strong>
                         <small>
                           {chartLoading
                             ? "Updating chart…"
@@ -5335,7 +5416,7 @@ export default function AiTradingPage() {
                       </div>
                       <div>
                         <span>Spread</span>
-                        <strong>{market?.quote.spread ?? "—"}</strong>
+                        <strong>{visibleChartMarket?.quote.spread ?? "—"}</strong>
                       </div>
                       <div
                         className={
@@ -5354,7 +5435,7 @@ export default function AiTradingPage() {
                     </div>
                     <MarketPriceChart
                       key={`${chartInstrument}-${chartTimeframe}`}
-                      candles={market?.candles ?? []}
+                      candles={visibleChartMarket?.candles ?? []}
                     />
                   </div>
 

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, MoreThan, Repository } from 'typeorm';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { BrokerAccount } from '../../broker/entities/broker-account.entity';
 import { BrokerService } from '../../broker/broker.service';
@@ -35,6 +35,7 @@ import {
 import { ReconciliationDiscrepancyType, ReconciliationRunStatus } from './reconciliation.enums';
 import { ReconciliationPersistenceService } from './reconciliation-persistence.service';
 import { ReconciliationResolutionService } from './reconciliation-resolution.service';
+import { proveCtraderEntryOrderPositionRef } from './closed-demo-settlement-proof';
 import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
 import {
   METAAPI_PROVIDER_QUOTA_COOLDOWN_MS,
@@ -216,6 +217,11 @@ function sanitizeReconciliationReason(reason: unknown): string {
 export class StateReconciliationService {
   private readonly logger = new Logger(StateReconciliationService.name);
   private readonly providerQuotaCooldownUntilByConnection = new Map<string, number>();
+  // The existing reconciliation loop ignores CLOSED trades, meaning a deal
+  // arriving after its position disappears would otherwise never repair P&L.
+  // Keep a separate bounded DEMO-only 15-minute late-settlement lookup,
+  // never repeated on every 60s general reconciliation sweep.
+  private readonly closedEconomicsLookupAtByConnection = new Map<string, number>();
 
   constructor(
     @InjectRepository(Trade)
@@ -428,8 +434,75 @@ export class StateReconciliationService {
         this.accountRepo.findOne({ where: { brokerConnectionId: connection.id } }),
       ]);
 
+      const lateEconomicsNow = Date.now();
+      const shouldInspectLateEconomics =
+        CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId) &&
+        String(connection.accountType).toUpperCase() === 'DEMO' &&
+        lateEconomicsNow -
+          (this.closedEconomicsLookupAtByConnection.get(connection.id) ?? 0) >= 15 * 60_000;
+      let closedUnsettledTrades: Trade[] = [];
+      if (shouldInspectLateEconomics) {
+        this.closedEconomicsLookupAtByConnection.set(connection.id, lateEconomicsNow);
+        closedUnsettledTrades = await this.tradeRepo.find({
+          where: {
+            brokerConnectionId: connection.id,
+            userId: connection.userId,
+            status: TradeStatus.CLOSED,
+            realisedPnl: IsNull(),
+            commission: IsNull(),
+            exitPrice: IsNull(),
+            closedAt: MoreThan(new Date(lateEconomicsNow - 7 * 86400_000)),
+          },
+          order: { closedAt: 'DESC' },
+          take: 10,
+        });
+      }
       const closedTrades =
-        internalTrades.length > 0 ? await this.fetchClosedTrades(adapter, internalTrades) : [];
+        internalTrades.length + closedUnsettledTrades.length > 0
+          ? await this.fetchClosedTrades(
+              adapter,
+              [...internalTrades, ...closedUnsettledTrades],
+            )
+          : [];
+
+      // A provider close without economics can remain CLOSED safely; if a
+      // complete uniquely matched full closing deal later becomes visible,
+      // fill ONLY the three NULL economics via a guarded CAS. Never create a
+      // synthetic profit/commission or reorder an already closed trade.
+      for (const settled of closedUnsettledTrades) {
+        try {
+          let tradeForProof = settled;
+          // cTrader may have stored the ENTRY order ID but not the created
+          // position ID. A CLOSE deal is keyed by POSITION ID. Recover the
+          // relationship only from the same authenticated broker account's
+          // FILLED entry-order response; do not try time/price-only matching.
+          if (
+            !settled.externalPositionId &&
+            settled.externalOrderId &&
+            !closedTrades.some(deal => deal.externalOrderId === settled.externalOrderId)
+          ) {
+            const providerEntryOrder = await adapter.getOrderById(settled.externalOrderId);
+            const positionRef = proveCtraderEntryOrderPositionRef(
+              settled, providerEntryOrder,
+            );
+            if (positionRef) {
+              tradeForProof = { ...settled, externalPositionId: positionRef };
+            }
+          }
+          await this.resolution.backfillClosedDemoSettlement({
+            trade: tradeForProof,
+            brokerId: connection.brokerId,
+            accountType: String(connection.accountType),
+            providerDeals: closedTrades,
+            observedAt: new Date(),
+          });
+        } catch (error) {
+          this.logger.warn(
+            'Late cTrader DEMO settlement proof deferred: ' +
+            sanitizeReconciliationReason(error),
+          );
+        }
+      }
 
       const preDiffResolutionRefs = await this.recoverTimedOutProviderPositions(
         connection,
