@@ -3400,12 +3400,12 @@ describe('M1 V8 multi-model DEMO authority', () => {
       await driveFeatures(h,features,{brokerConnectionId:'demo-conn-2'});
       const decision=h.recordDecision.mock.calls.find(([v])=>v.direction==='BUY')?.[0];
       expect(decision?.governance.counterPilot).toMatchObject({
-        eligible:true,reason:'ELIGIBLE',sourceSide:'SELL',maxLot:0.01,
+        eligible:true,reason:'ELIGIBLE',sourceSide:'SELL',maxLot:4,
       });
       expect(decision?.executionAuthority).toBe('BROKER_NATIVE');
       expect(h.receiveSignal).toHaveBeenCalledWith(
         expect.objectContaining({
-          direction:'BUY',suggestedVolume:0.01,
+          direction:'BUY',suggestedVolume:expect.any(Number),
           metadata:expect.objectContaining({
             m1_pepperstone_demo_counter_pilot:true,
             m1_pepperstone_demo_counter_source_side:'SELL',
@@ -3413,6 +3413,11 @@ describe('M1 V8 multi-model DEMO authority', () => {
           }),
         }),
       );
+      const counterOrder = h.receiveSignal.mock.calls.find(([signal]) =>
+        signal.direction === 'BUY' && signal.metadata?.m1_pepperstone_demo_counter_pilot === true,
+      )?.[0];
+      expect(counterOrder?.suggestedVolume).toBeGreaterThan(0);
+      expect(counterOrder?.suggestedVolume).toBeLessThanOrEqual(4);
       expect(h.closeTrade).not.toHaveBeenCalled();
       expect(h.loadDemoAlternativeTrialEntryCount).toHaveBeenCalledWith(
         expect.objectContaining({

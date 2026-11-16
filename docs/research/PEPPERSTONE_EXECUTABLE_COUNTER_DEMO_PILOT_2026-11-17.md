@@ -1,12 +1,15 @@
 # iRexPro independently executable expert COUNTER — Pepperstone DEMO pilot
 
 **Implementation date:** 16 November 2026.
-**Authorized experiment:** **Tuesday 17 November 2026 08:00–11:00 UTC/Ghana**.
+**Active experiment:** **Monday 16 November 2026 21:00 to Tuesday 17 November 00:00 UTC/Ghana**, with an automatic cutoff at midnight.
 **Scope:** exact owner's connected Pepperstone cTrader **DEMO** FULL_AUTO
 session only. **LIVE broker accounts are excluded** from this code path.
 **Activation flag:** `IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT=enabled`.
 **Exact safety caps:** at most **four newly submitted counter trade intents**
-across the trial time window; at most **0.01 standard lot** per entry.
+across the trial time window; at most **4.00 standard lots** per entry,
+**subject to the unchanged 0.25% allocation risk-at-stop limit** and
+normal broker-native margin, available equity and currency exposure screens.
+Four lots is an upper bound, NOT a minimum or default size.
 Existing account allocation, margin, daily-loss, portfolio loss-streak,
 currency correlation, broker-native spread, stop-loss, position-conflict,
 and other order-execution gates remain active and may reduce or reject a trade.
@@ -58,18 +61,17 @@ every *submitted* tagged trade intent of any final status in the
 session-specific timebox to avoid retry-abuse; rejected scans never
 consume the four-entry budget.
 
-## Tuesday daytime trial and rollover safety
+## Timeboxed late-evening DEMO trial and rollover safety
 
-The user authorized a bounded DEMO counter test, not a live-account
-trade. The fixed authority window is Tuesday 08:00–11:00 Africa/Accra,
-selected to avoid the thin Monday-night pre-rollover price conditions.
-The engine must be enabled only after pre-deployment verification. No historical candidate is replayed:
-each decision is independently assessed on fresh quotes with <=120-second
-age. The established broker spread and news/rollover checks remain active
-and can veto orders on Tuesday as well. Trading
-permission is **not a guarantee that a qualifying market setup exists**.
-The continuation route stays paused, and the previous 20:00–21:00
-trial remains expired.
+The operator authorized live **DEMO** broker execution (never LIVE funds)
+during the 21:00–00:00 Ghana-time window. This includes the rollover-risk
+period; broker-native spread verification, macro risk, the portfolio
+net-loss brake and stop-risk/margin sizing remain strict and may veto
+all entries. Historical candidates are not replayed, and the maximum
+decision age is 120 seconds. A larger lot ceiling **does not**
+raise the stop-loss risk allowance or relax market/entry quality.
+The previously configured 20:00–21:00 alternative micro-trial is expired,
+and trend continuation remains paused.
 
 ## Proof before activating
 
@@ -81,7 +83,7 @@ stale decision or window, missing stops, continuation pause and volume
 limits. Integration tests in
 `m1-tactical-scheduler.service.spec.ts`
 prove a fully qualified counter reaches the actual
-`receiveSignal` function with its own BUY-side SL/TP and 0.01-lot cap,
+`receiveSignal` function with its own BUY-side SL/TP and risk-capped up-to-4.00-lot allowance,
 explicit counter route/tag and owner demo broker; a counter with a
 finished time window cannot submit. No live test credentials or
 uncontrolled real orders are used by these deterministic tests.

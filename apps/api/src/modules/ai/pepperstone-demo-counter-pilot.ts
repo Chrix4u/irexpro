@@ -7,7 +7,7 @@ import type { HighConvictionOverlay } from './high-conviction-overlay';
 export const COUNTER_PILOT_ARTIFACT = 'pepperstone-demo-independent-counter-entry-v1' as const;
 export const COUNTER_PILOT_START = '2026-11-16T21:00:00.000Z';
 export const COUNTER_PILOT_END = '2026-11-17T00:00:00.000Z';
-export const COUNTER_PILOT_LOT_CAP = 0.01;
+export const COUNTER_PILOT_LOT_CAP = 4;
 export const COUNTER_PILOT_ENTRY_LIMIT = 4;
 
 export type CounterPilotReason =

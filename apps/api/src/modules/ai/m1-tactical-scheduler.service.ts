@@ -87,6 +87,7 @@ import {
   COUNTER_PILOT_START,
   COUNTER_PILOT_END,
   COUNTER_PILOT_ENTRY_LIMIT,
+  COUNTER_PILOT_LOT_CAP,
   type CounterPilotDecision,
 } from './pepperstone-demo-counter-pilot';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
@@ -831,7 +832,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         startsAt: COUNTER_PILOT_START,
         endsAt: COUNTER_PILOT_END,
         maxEntries: COUNTER_PILOT_ENTRY_LIMIT,
-        maxLot: 0.01,
+        maxLot: COUNTER_PILOT_LOT_CAP,
         exactBroker: 'Pepperstone cTrader DEMO',
       },
       instruments: [...this.rolloutPolicy.instruments],
@@ -1938,8 +1939,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const recoveryCanaryVolumeCap = recoveryCanary
       ? Math.min(executionVolumeCap, M1_DEMO_RECOVERY_CANARY_LOT_CAP)
       : executionVolumeCap;
-    // This must not be a 0.20-lot fallback simply because Plan B was
-    // non-admitted. Dedicated DEMO trial cap is 0.01 lot.
+    // The legacy 20-21 UTC alternative admission remains capped at 0.01.
+    // Only the independent COUNTER pilot has a 4.00-lot *ceiling*; the
+    // unchanged 0.25% stop-risk cap and broker margin control the actual lot.
+    // The independent COUNTER cap may be 4.00, but broker equity,
+    // 0.25% per-trade stop risk, active exposure and provider margin
+    // still reduce or reject the actual volume below this ceiling.
     // The probation decision is computed below after owner verification;
     // defer applying this cap until then.
     const microDriftOnlyRescue =

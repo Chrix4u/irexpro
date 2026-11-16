@@ -4,6 +4,7 @@ import {
   COUNTER_PILOT_LOT_CAP,COUNTER_PILOT_ENTRY_LIMIT,
 } from './pepperstone-demo-counter-pilot';
 import type { CounterPilotModel } from './pepperstone-demo-counter-pilot';
+import { capM1DemoRequestedVolumeByRisk } from './m1-tactical-currency-exposure';
 const expert = {
   state:'CONFIRM' as const,reason:null,
   admitted:true,allBrokerNative:true,direction:'SELL' as const,
@@ -40,12 +41,26 @@ describe('independent counter-entry Pepperstone DEMO pilot',()=>{
     expect(r).toMatchObject({
       eligible:true,reason:'ELIGIBLE',sourceSide:'BUY',
       sourceRoute:'CONFIRMED_REVERSAL',
-      route:'EARLY_TRANSITION',maxLot:0.01,
+      route:'EARLY_TRANSITION',maxLot:4,
       endsAt:COUNTER_PILOT_END,bypassesBrokerRisk:false,
       bypassesModelAdmission:false,modifiesOpenPositions:false,
     });
     expect(COUNTER_PILOT_ENTRY_LIMIT).toBe(4);
-    expect(COUNTER_PILOT_LOT_CAP).toBe(0.01);
+    expect(COUNTER_PILOT_LOT_CAP).toBe(4);
+  });
+  it('allows 4.00 lots only when stop-loss risk remains at or under 0.25% of allocated DEMO capital',()=>{
+    const lowStopRisk=capM1DemoRequestedVolumeByRisk({
+      allocatedCapital:40000,instrument:'EURUSD',
+      entryPrice:1.10,stopLoss:1.1002,requestedVolumeCap:COUNTER_PILOT_LOT_CAP,
+    });
+    expect(lowStopRisk.volumeCap).toBe(4);
+    expect(lowStopRisk.permittedRiskAtStop).toBeCloseTo(80,2);
+    const widerStop=capM1DemoRequestedVolumeByRisk({
+      allocatedCapital:40000,instrument:'EURUSD',
+      entryPrice:1.10,stopLoss:1.1005,requestedVolumeCap:COUNTER_PILOT_LOT_CAP,
+    });
+    expect(widerStop.volumeCap).toBe(2);
+    expect(widerStop.permittedRiskAtStop).toBeCloseTo(100,2);
   });
   it('cannot replay the expired Monday trial or send outside tonight pilot window',()=>{
     expect(COUNTER_PILOT_START).toBe('2026-11-16T21:00:00.000Z');
