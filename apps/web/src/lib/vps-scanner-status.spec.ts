@@ -226,6 +226,28 @@ describe('server-authoritative DEMO focused-pair status contract', () => {
     })).toBe(false);
   });
 
+  it('validates the separate active reversal and early-transition DEMO trial status', () => {
+    const trial = {
+      enabled: true, activeNow: true,
+      startsAt: "2026-11-16T23:36:00.000Z",
+      endsAt: "2026-11-17T20:00:00.000Z",
+      maxEntries: 4, maxLot: 4,
+      exactBroker: "Pepperstone cTrader DEMO",
+      allowedRoutes: ["CONFIRMED_REVERSAL", "EARLY_TRANSITION"],
+    };
+    expect(hasM1TacticalStatusUiShape({...base, advisoryAlternatePilot: trial}))
+      .toBe(true);
+    expect(hasM1TacticalStatusUiShape({
+      ...base, advisoryAlternatePilot: {...trial, maxLot: "4"},
+    })).toBe(false);
+    expect(hasM1TacticalStatusUiShape({
+      ...base, advisoryAlternatePilot: {...trial, allowedRoutes: [true]},
+    })).toBe(false);
+    expect(hasM1TacticalStatusUiShape({
+      ...base, advisoryAlternatePilot: {...trial, endsAt: null},
+    })).toBe(false);
+  });
+
   it('rejects an invalid server pair list instead of displaying invented authority', () => {
     expect(hasM1TacticalStatusUiShape({
       ...base, demoEntryInstruments: ['AUDUSD', 4],

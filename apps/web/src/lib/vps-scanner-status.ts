@@ -292,6 +292,17 @@ export interface M1TacticalStatusView {
   demoEntryInstruments?: string[];
   /** Watched pairs that only generate research decisions, never new entries. */
   researchOnlyInstruments?: string[];
+  /** Server-authoritative current reversal/early-transition DEMO experiment. */
+  advisoryAlternatePilot?: {
+    enabled: boolean;
+    activeNow: boolean;
+    startsAt: string;
+    endsAt: string;
+    maxEntries: number;
+    maxLot: number;
+    exactBroker: string;
+    allowedRoutes: string[];
+  };
   /** Owner-scoped broker DEMO-only authorization window; display, not an execution control. */
   counterDemoPilot?: {
     enabled: boolean;
@@ -380,6 +391,24 @@ export function hasM1TacticalStatusUiShape(
     (value.researchOnlyInstruments !== undefined &&
       !isStringArray(value.researchOnlyInstruments))
   ) return false;
+  if (value.advisoryAlternatePilot !== undefined) {
+    const pilot = value.advisoryAlternatePilot;
+    if (!isRecord(pilot) ||
+        typeof pilot.enabled !== "boolean" ||
+        typeof pilot.activeNow !== "boolean" ||
+        typeof pilot.startsAt !== "string" ||
+        !isNullableTimestamp(pilot.startsAt) ||
+        typeof pilot.endsAt !== "string" ||
+        !isNullableTimestamp(pilot.endsAt) ||
+        !Number.isSafeInteger(pilot.maxEntries) ||
+        (pilot.maxEntries as number) < 1 ||
+        typeof pilot.maxLot !== "number" ||
+        !Number.isFinite(pilot.maxLot) ||
+        pilot.maxLot <= 0 ||
+        typeof pilot.exactBroker !== "string" ||
+        pilot.exactBroker.length > 80 ||
+        !isStringArray(pilot.allowedRoutes)) return false;
+  }
   if (value.counterDemoPilot !== undefined) {
     const pilot = value.counterDemoPilot;
     if (!isRecord(pilot) ||

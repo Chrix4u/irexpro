@@ -60,6 +60,18 @@ describe('AI Trader production UI regression contract', () => {
     ).toContain(".ai-control-card__diagnosis");
   });
 
+  it('displays the actually activated advisory reversal and early-transition DEMO pilot', () => {
+    expect(pageSource).toContain('Reversal and early-transition DEMO trading trial');
+    expect(pageSource).toContain('advisoryAlternatePilot.activeNow');
+    expect(pageSource).toContain('advisoryAlternatePilot.allowedRoutes');
+    expect(pageSource).toContain('advisoryAlternatePilot.startsAt');
+    expect(pageSource).toContain('advisoryAlternatePilot.endsAt');
+    expect(pageSource).toContain('advisoryAlternatePilot.maxEntries');
+    expect(pageSource).toContain('advisoryAlternatePilot.maxLot.toFixed(2)');
+    expect(pageSource).toContain('ENTRY WINDOW OPEN');
+    expect(pageSource).toContain('An open entry window does not mean a trade has qualified');
+  });
+
   it('displays the counter DEMO trial ceiling and cutoff without a trading control', () => {
     expect(pageSource).toContain('Independent COUNTER DEMO pilot status');
     expect(pageSource).toContain('counterDemoPilot.activeNow');

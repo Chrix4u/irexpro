@@ -3667,6 +3667,50 @@ export default function AiTradingPage() {
                     ) : null}
                   </div>
                 ) : null}
+                {m1TacticalStatus?.advisoryAlternatePilot?.enabled && (
+                  <div className="ai-control-card__focus" aria-label="Reversal and early-transition DEMO trading trial" role="status">
+                    <strong>
+                      Reversal + early-transition DEMO trial ·{" "}
+                      {m1TacticalStatus.advisoryAlternatePilot.activeNow
+                        ? "ENTRY WINDOW OPEN"
+                        : "OUTSIDE ENTRY WINDOW"}
+                    </strong>
+                    <small>
+                      {m1TacticalStatus.advisoryAlternatePilot.exactBroker} ·{" "}
+                      Routes: {m1TacticalStatus.advisoryAlternatePilot.allowedRoutes
+                        .map((route) => route.replaceAll("_", " ").toLowerCase())
+                        .join(" · ")}.
+                    </small>
+                    <small>
+                      Trial begins{" "}
+                      {new Date(m1TacticalStatus.advisoryAlternatePilot.startsAt).toLocaleString(
+                        "en-GH", {
+                          timeZone: "Africa/Accra", weekday: "short", day: "numeric",
+                          month: "short", hour: "numeric", minute: "2-digit",
+                        },
+                      )}{" "}
+                      and closes{" "}
+                      {new Date(m1TacticalStatus.advisoryAlternatePilot.endsAt).toLocaleString(
+                        "en-GH", {
+                          timeZone: "Africa/Accra", weekday: "short", day: "numeric",
+                          month: "short", hour: "numeric", minute: "2-digit",
+                        },
+                      )}{" "}
+                      Ghana time.
+                    </small>
+                    <small>
+                      At most {m1TacticalStatus.advisoryAlternatePilot.maxEntries} new trial entries
+                      across the whole window; up to{" "}
+                      {m1TacticalStatus.advisoryAlternatePilot.maxLot.toFixed(2)} lots
+                      per qualified entry, not a guaranteed or minimum size.
+                      Normal account margin, stop-loss risk and broker admission still apply.
+                    </small>
+                    <small>
+                      An open entry window does not mean a trade has qualified or been placed.
+                      Check “Why no new trades?” for recent scanner and broker decisions.
+                    </small>
+                  </div>
+                )}
                 {automationOn && m1TacticalStatus?.counterDemoPilot?.enabled && (
                   <div className="ai-control-card__focus" aria-label="Independent COUNTER DEMO pilot status">
                     <strong>
