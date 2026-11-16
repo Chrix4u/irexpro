@@ -846,6 +846,7 @@ function phase2Harness(
     suspendTrendContinuation?: boolean;
     enableAlternativeTrial?: boolean;
     enableCounterPilot?: boolean;
+    enableAdvisoryAlternates?: boolean;
     rollout?: any;
     evidenceByRoute?: Record<string, any[]>;
     shadowPairSideOutcomes?: Array<{ observedAt: Date; netR: number }>;
@@ -932,6 +933,8 @@ function phase2Harness(
           options.enableAlternativeTrial ? 'enabled' : '',
         'IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT':
           options.enableCounterPilot ? 'enabled' : '',
+        'IREXPRO_PEPPERSTONE_DEMO_ADVISORY_ALTERNATES':
+          options.enableAdvisoryAlternates ? 'enabled' : '',
       };
       return values[key] ?? fallback;
     }),
@@ -3349,6 +3352,70 @@ describe('M1 V8 multi-model DEMO authority', () => {
     });
     expect(recorded?.blockers ?? []).not.toContain('M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION');
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it('bridges an independently approved DEMO reversal with same-side expert ABSTAIN majority',async()=>{
+    jest.useFakeTimers({
+      now:new Date('2026-11-17T16:20:40.000Z'),
+      doNotFake:['setTimeout','setInterval','setImmediate','nextTick'],
+    });
+    try{
+      const h=phase2Harness({
+        rollout:M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+        session:fullAutoSession,enableAdvisoryAlternates:true,
+        suspendTrendContinuation:true,
+      });
+      h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
+      const original=(h.service as any).evaluateDemoMultimodel.bind(h.service);
+      jest.spyOn(h.service as any,'evaluateDemoMultimodel').mockImplementation(
+        async(...args:any[])=>{
+          const x=await original(...args);
+          return {...x,portfolioSnapshotAvailable:true,
+            ensemble:{...x.ensemble,strategyRoute:'CONFIRMED_REVERSAL',
+              paperAdmitted:true,ensembleScore:0.7,directionQuality:0.7},
+            governance:{...x.governance,paperExecutionEligible:true,
+              paperExecutionBlockers:[],paperExecutionCostUsable:true,
+              executionSpreadEvidenceValid:true,netExpectedR:0.23,
+              eventRisk:'CLEAR',driftState:'IN_DISTRIBUTION',sleeveState:'COLLECTING'},
+            trainedExpert:{...x.trainedExpert,state:'ABSTAIN',admitted:false,
+              direction:args[2].direction,allBrokerNative:true,
+              longVotes:args[2].direction==='BUY'?2:1,
+              shortVotes:args[2].direction==='SELL'?2:1,
+              meanOpportunityProbability:0.3,freshnessSeconds:60,
+              ensembleConfidence:0.5},
+            authority:{...x.authority,executable:false,
+              authorityPath:'BLOCKED',trainedExpertOpposed:false,
+              blockers:['MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED']},
+          };
+        });
+      const features={...cleanContinuationFeatures(),
+        decisionTime:new Date('2026-11-17T16:20:00.000Z'),
+        latestM1OpenTime:new Date('2026-11-17T16:19:00.000Z'),
+        emaSeparationAtr:0,
+      };
+      await driveFeatures(h,features,{brokerConnectionId:'demo-conn-2'});
+      const record=h.recordDecision.mock.calls.find(([v])=>v.direction==='BUY')?.[0];
+      expect(record?.governance.advisoryAlternateTrial).toMatchObject({
+        eligible:true,reason:'ELIGIBLE',maxLot:4,
+        route:'CONFIRMED_REVERSAL',
+      });
+      expect(record?.executionAuthority).toBe('BROKER_NATIVE');
+      expect(h.receiveSignal).toHaveBeenCalledWith(expect.objectContaining({
+        direction:'BUY',suggestedVolume:expect.any(Number),
+        metadata:expect.objectContaining({
+          m1_pepperstone_demo_advisory_alternates:true,
+          multimodel_execution_authority_path:
+            'DEMO_ADVISORY_REVERSAL_EARLY_ENTRY_PILOT',
+        }),
+      }));
+      expect(h.closeTrade).not.toHaveBeenCalled();
+      expect(h.loadDemoAlternativeTrialEntryCount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          startsAt:'2026-11-17T15:00:00.000Z',
+          endsAt:'2026-11-17T20:00:00.000Z',
+        }),
+      );
+    }finally{jest.useRealTimers()}
   });
 
   it('executes a separately qualified BUY counter into the existing Pepperstone DEMO risk path', async () => {

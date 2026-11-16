@@ -90,6 +90,14 @@ import {
   COUNTER_PILOT_LOT_CAP,
   type CounterPilotDecision,
 } from './pepperstone-demo-counter-pilot';
+import {
+  evaluateAdvisoryAlternateTrial,
+  ADVISORY_ALTERNATE_ARTIFACT,
+  ADVISORY_ALTERNATE_START,
+  ADVISORY_ALTERNATE_END,
+  ADVISORY_ALTERNATE_ENTRY_LIMIT,
+  type AdvisoryAlternateTrialDecision,
+} from './pepperstone-demo-advisory-alternate-trial';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import type { HighConvictionOverlay } from './high-conviction-overlay';
 import { evaluateProductionQualificationShadow } from './production-qualification-shadow';
@@ -834,6 +842,20 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         maxEntries: COUNTER_PILOT_ENTRY_LIMIT,
         maxLot: COUNTER_PILOT_LOT_CAP,
         exactBroker: 'Pepperstone cTrader DEMO',
+      },
+      advisoryAlternatePilot: {
+        enabled: professionalDemoPhase &&
+          this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_ADVISORY_ALTERNATES', '') === 'enabled',
+        activeNow: professionalDemoPhase &&
+          this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_ADVISORY_ALTERNATES', '') === 'enabled' &&
+          Date.now() >= Date.parse(ADVISORY_ALTERNATE_START) &&
+          Date.now() < Date.parse(ADVISORY_ALTERNATE_END),
+        startsAt: ADVISORY_ALTERNATE_START,
+        endsAt: ADVISORY_ALTERNATE_END,
+        maxEntries: ADVISORY_ALTERNATE_ENTRY_LIMIT,
+        maxLot: 4,
+        exactBroker: 'Pepperstone cTrader DEMO',
+        allowedRoutes: ['CONFIRMED_REVERSAL','EARLY_TRANSITION'],
       },
       instruments: [...this.rolloutPolicy.instruments],
       ...(professionalDemoPhase && this.rolloutPolicy.demoEntryInstruments
@@ -1777,29 +1799,100 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       candidate: multimodelDemo,
       opposingSource: counterOpposedSource,
     });
-    let demoAlternativeTrial: DemoAlternativeTrialDecision | CounterPilotDecision =
-      counterPilot.eligible ? counterPilot : initialDemoAlternativeTrial;
+    // Same-direction advisory expert votes may corroborate an already
+    // paper-admitted reversal/early transition even if its FINAL expert
+    // outcome is ABSTAIN. This limited trial bridges only duplicated
+    // timing/confirmation, not spread, cost or broker-risk controls.
+    const advisoryEnabled = professionalDemoPhase &&
+      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_ADVISORY_ALTERNATES', '') === 'enabled';
+    const advisoryWindowOpen = advisoryEnabled &&
+      Date.now() >= Date.parse(ADVISORY_ALTERNATE_START) &&
+      Date.now() < Date.parse(ADVISORY_ALTERNATE_END);
+    let advisoryBrokerVerified = false;
+    if (advisoryWindowOpen && multimodelDemo &&
+        ['CONFIRMED_REVERSAL','EARLY_TRANSITION'].includes(
+          multimodelDemo.ensemble.strategyRoute,
+        ) && multimodelDemo.ensemble.paperAdmitted) {
+      try {
+        advisoryBrokerVerified =
+          await this.evidence.isPepperstoneDemoBrokerConnection({
+            userId, brokerConnectionId,
+          });
+      } catch (error) {
+        this.logger.warn('DEMO advisory alternate account validation unavailable: ' +
+          (error as Error).message);
+      }
+    }
+    const advisoryAlternateTrial = evaluateAdvisoryAlternateTrial({
+      enabled: advisoryWindowOpen,
+      brokerVerified: advisoryBrokerVerified,
+      now: new Date(),
+      decisionTime,
+      route: multimodelDemo?.ensemble.strategyRoute ?? null,
+      side: candidate.direction,
+      paperAdmitted: multimodelDemo?.ensemble.paperAdmitted === true,
+      governanceEligible: multimodelDemo?.governance.paperExecutionEligible === true,
+      portfolioSnapshotAvailable: multimodelDemo?.portfolioSnapshotAvailable === true,
+      ensembleScore: multimodelDemo?.ensemble.ensembleScore ?? null,
+      planbDirectionQuality: multimodelDemo?.ensemble.directionQuality ?? null,
+      netExpectedR: multimodelDemo?.governance.netExpectedR ?? null,
+      executionSpreadEvidenceValid:
+        multimodelDemo?.governance.executionSpreadEvidenceValid === true,
+      paperExecutionCostUsable:
+        multimodelDemo?.governance.paperExecutionCostUsable === true,
+      eventRisk: multimodelDemo?.governance.eventRisk ?? 'UNKNOWN',
+      driftState: multimodelDemo?.governance.driftState ?? 'UNKNOWN',
+      sleeveState: multimodelDemo?.governance.sleeveState ?? 'BLOCKED',
+      m1Route: routeDecision.route,
+      m1Confidence: candidate.confidence,
+      m1DirectionQuality: candidate.directionQuality,
+      stopDistance: candidate.stopDistance,
+      targetDistance: candidate.targetDistance,
+      expertSide: multimodelDemo?.trainedExpert.direction ?? null,
+      expertState: multimodelDemo?.trainedExpert.state ?? null,
+      expertNative: multimodelDemo?.trainedExpert.allBrokerNative === true,
+      expertAdmitted: multimodelDemo?.trainedExpert.admitted ?? null,
+      expertFreshness: multimodelDemo?.trainedExpert.freshnessSeconds ?? null,
+      expertProbability:
+        multimodelDemo?.trainedExpert.meanOpportunityProbability ?? null,
+      expertLongVotes: multimodelDemo?.trainedExpert.longVotes ?? null,
+      expertShortVotes: multimodelDemo?.trainedExpert.shortVotes ?? null,
+    });
+    let demoAlternativeTrial:
+      DemoAlternativeTrialDecision | CounterPilotDecision | AdvisoryAlternateTrialDecision =
+      counterPilot.eligible ? counterPilot
+        : advisoryAlternateTrial.eligible ? advisoryAlternateTrial
+        : initialDemoAlternativeTrial;
     if (demoAlternativeTrial.eligible) {
       try {
         const counterSelected = demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT;
+        const advisorySelected = demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT;
         const priorTrialEntries =
           await this.evidence.loadDemoAlternativeTrialEntryCount({
             userId, brokerConnectionId,
             ...(counterSelected
               ? { startsAt: COUNTER_PILOT_START, endsAt: COUNTER_PILOT_END }
-              : {}),
+              : advisorySelected
+                ? { startsAt: ADVISORY_ALTERNATE_START, endsAt: ADVISORY_ALTERNATE_END }
+                : {}),
           });
         const limit = counterSelected
-          ? COUNTER_PILOT_ENTRY_LIMIT : DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT;
+          ? COUNTER_PILOT_ENTRY_LIMIT
+          : advisorySelected ? ADVISORY_ALTERNATE_ENTRY_LIMIT
+          : DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT;
         if (priorTrialEntries >= limit) {
           demoAlternativeTrial = counterSelected
             ? {...counterPilot, eligible:false, reason:'ENTRY_LIMIT_REACHED'}
-            : {...initialDemoAlternativeTrial, eligible:false, reason:'ENTRY_LIMIT_REACHED'};
+            : advisorySelected
+              ? {...advisoryAlternateTrial, eligible:false, reason:'ENTRY_LIMIT_REACHED'}
+              : {...initialDemoAlternativeTrial, eligible:false, reason:'ENTRY_LIMIT_REACHED'};
         }
       } catch (error) {
         demoAlternativeTrial = counterPilot.eligible
           ? {...counterPilot, eligible:false, reason:'LIMIT_CHECK_UNAVAILABLE'}
-          : {...initialDemoAlternativeTrial, eligible:false, reason:'LIMIT_CHECK_UNAVAILABLE'};
+          : advisoryAlternateTrial.eligible
+            ? {...advisoryAlternateTrial, eligible:false, reason:'LIMIT_CHECK_UNAVAILABLE'}
+            : {...initialDemoAlternativeTrial, eligible:false, reason:'LIMIT_CHECK_UNAVAILABLE'};
         this.logger.warn(
           'DEMO alternate trial entry budget unavailable: ' +
           (error as Error).message,
@@ -1808,7 +1901,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     }
     const multimodelPrimaryExecutable =
       professionalDemoPhase &&
-      (demoProfitabilityExecutionAllowed || counterPilot.eligible) &&
+      (demoProfitabilityExecutionAllowed || counterPilot.eligible || advisoryAlternateTrial.eligible) &&
       (multimodelDemo?.authority.executable === true || demoAlternativeTrial.eligible);
     // With two recent M1 losses, the exact pair/side/route needs a finite
     // three-hour cooldown before a tiny exploratory recovery entry. A
@@ -2728,6 +2821,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         demoContinuationPause,
         demoAlternativeTrial,
         counterPilot,
+        advisoryAlternateTrial,
         qualifiedContinuationAfterFeeEvidence,
         demoBrokerCommissionGate: commissionGateAudit,
         productionQualificationShadow,
@@ -2971,7 +3065,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     m5EarlyTransitionEvidence: M5EarlyTransitionEvidence | null = null,
     m5EarlyTransitionHandoff: M5EarlyTransitionHandoffDecision | null = null,
     extensionExhaustionDemoScout: ExtensionExhaustionDemoScoutDecision | null = null,
-    demoAlternativeTrial: DemoAlternativeTrialDecision | CounterPilotDecision | null = null,
+    demoAlternativeTrial:
+      DemoAlternativeTrialDecision | CounterPilotDecision |
+      AdvisoryAlternateTrialDecision | null = null,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -3044,14 +3140,19 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       }
       try {
         const counterSelected = demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT;
+        const advisorySelected = demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT;
         const count = await this.evidence.loadDemoAlternativeTrialEntryCount({
           userId, brokerConnectionId,
           ...(counterSelected
             ? {startsAt: COUNTER_PILOT_START, endsAt: COUNTER_PILOT_END}
-            : {}),
+            : advisorySelected
+              ? {startsAt: ADVISORY_ALTERNATE_START, endsAt: ADVISORY_ALTERNATE_END}
+              : {}),
         });
         if (count >= (counterSelected
-          ? COUNTER_PILOT_ENTRY_LIMIT : DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT)) {
+          ? COUNTER_PILOT_ENTRY_LIMIT
+          : advisorySelected ? ADVISORY_ALTERNATE_ENTRY_LIMIT
+          : DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT)) {
           await this.evidence.markOutcomeState(
             decisionId, 'RISK_REJECTED', new Date(),
             'M1_DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT_REACHED',
@@ -3283,7 +3384,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           multimodel_execution_authority_path: demoAlternativeTrial?.eligible
             ? demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
               ? 'DEMO_EXPERT_COUNTER_ENTRY_PILOT'
-              : 'DEMO_ALTERNATIVE_TIMING_TRIAL'
+              : demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT
+                ? 'DEMO_ADVISORY_REVERSAL_EARLY_ENTRY_PILOT'
+                : 'DEMO_ALTERNATIVE_TIMING_TRIAL'
             : useProfessionalM1Fallback
               ? professionalM1Fallback?.tier
             : useM5EarlyTransitionHandoff
@@ -3374,6 +3477,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_scout_execution_volume_cap: finalExecutionVolumeCap,
           m1_pepperstone_demo_reentry_and_risk_pilot: pepperstoneDemoRiskPilot,
           m1_pepperstone_demo_alternative_trial: demoAlternativeTrial?.eligible === true,
+          m1_pepperstone_demo_advisory_alternates:
+            demoAlternativeTrial?.eligible === true &&
+            demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT,
           m1_pepperstone_demo_counter_pilot:
             demoAlternativeTrial?.eligible === true &&
             demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT,
