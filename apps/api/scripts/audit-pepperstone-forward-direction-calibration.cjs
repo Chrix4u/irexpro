@@ -7,6 +7,7 @@
  */
 const fs=require('node:fs'),path=require('node:path');
 const {mark,validQuote}=require('./audit-pepperstone-alternative-route-opportunities.cjs');
+const {analyzeM1Barriers}=require('./forward-direction-m1-barrier-review.cjs');
 const START='2026-11-16T17:50:00.000Z';
 const ARTIFACT='irexpro-forward-direction-side-calibration-v1';
 const REPORT='/home/lightworld/webapps/irexpro-research/forward-direction-calibration/latest-report.json';
@@ -128,6 +129,8 @@ function evaluateEpisode(e,book){
    reverseNormalizedNetUsd:available?reverse.netUSDPerStandardLot:null,
    chosenWin:available?chosen.netPips>0:null,
    oppositeWin:available?reverse.netPips>0:null,
+   chosenBarrierReview:analyzeM1Barriers(e,book,h,e.direction),
+   oppositeBarrierReview:analyzeM1Barriers(e,book,h,e.oppositeDirection),
    firstHitStopLoss:'NOT_EVALUATED',
   };
  }
@@ -137,8 +140,17 @@ function bucket(items,h){
  const usable=items.map(x=>x.outcomes[h]).filter(x=>x.status==='PAIR_COMPARABLE');
  const sum=key=>usable.reduce((s,x)=>s+x[key],0);
  const round=n=>+n.toFixed(3);
+ const statusCounts=key=>usable.reduce((out,item)=>{
+  const status=item[key]?.status??'UNKNOWN_NOT_REVIEWED';
+  out[status]=(out[status]??0)+1;return out;
+ },{});
  return {
   selected:items.length,observed:usable.length,missing:items.length-usable.length,
+  chosenBarrierReviewCounts:statusCounts('chosenBarrierReview'),
+  oppositeBarrierReviewCounts:statusCounts('oppositeBarrierReview'),
+  chosenPositiveMarkWithPossibleEarlierStop:usable.filter(
+   x=>x.chosenWin&&x.chosenBarrierReview?.status==='POSSIBLE_STOP_BEFORE_TARGET'
+  ).length,
   chosenWins:usable.filter(x=>x.chosenWin).length,
   counterWins:usable.filter(x=>x.oppositeWin).length,
   bothLose:usable.filter(x=>!x.chosenWin&&!x.oppositeWin).length,

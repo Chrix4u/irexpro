@@ -202,3 +202,51 @@ No broker order, model weight or live execution authority was changed.
 20 Node regression tests passed across the historical and
 prospective research scripts; the API health remains separate
 from and unaffected by the shadow observer.
+
+## 18:44 UTC — conservative M1 barrier-path review
+
+New read-only, side-by-side research module
+`apps/api/scripts/forward-direction-m1-barrier-review.cjs` uses
+the existing owner-scoped broker-native M1 candle midpoint ranges, the
+last timestamped positive spread and the *simulated* next-minute bid/ask
+entry. For every subsequent full M1 bar, it determines whether a
+stop-loss or take-profit **might** have been touched for the chosen
+direction and separately for the inverted direction.
+
+It labels only:
+- `POSSIBLE_STOP_BEFORE_TARGET`
+- `POSSIBLE_TARGET_BEFORE_STOP`
+- `AMBIGUOUS_BOTH_POSSIBLE`
+- `NO_POSSIBLE_TOUCH_IN_INSPECTED_BARS`
+- `UNKNOWN_...` for missing/invalid input
+
+These are **possible M1-range interactions**, not actual stop fills.
+The first entry minute is skipped because the entry is modeled
+from its last positive sample; using the entire entry-minute range
+would include price movements before the hypothetical entry.
+The last positive spread is NOT guaranteed to equal the spread at
+the minute's high or low, and no tick-ordering can be recovered from
+aggregated candles. This method can miss within-minute crossings and
+misorder stop versus target. No inferred fills are added to the
+after-cost fixed-hold P&L or treated as realized trading results.
+
+At ~18:44 UTC the frozen prospective cohort included 432 M1 scanner
+decisions, 15 qualified observations, 10 matured qualified observations
+and 5 unique non-overlapping episodes with native bid/ask marks.
+At the 15-minute horizon, chosen direction had 2/5 positive marks,
+opposite 2/5, mean net selected -0.354 pips and opposite -2.134 pips.
+In the chosen-side M1 review: 1 possible stop-before-target, 1 possible
+target-before-stop, 3 without a possible barrier touch in inspected
+full-minute bars. Reverse-side review: also one possible stop,
+one possible target, and three no possible touches.
+For example, a qualified USDJPY BUY reversal first indicated
+a possible stop interaction at 17:59, while its mirrored SELL
+first indicated a possible target interaction at 18:00. Neither
+is a verified broker order/fill and neither should be activated
+from this sample.
+
+New independent tests cover BUY/SELL asymmetry, same-minute
+ambiguity, missing quote path, invalid spread/ranges, and
+unassessed partial entry-minute risk. Integration adds per-route
+and per-horizon counts, without granting authority, changing
+live trading, or weakening existing risk gates.
