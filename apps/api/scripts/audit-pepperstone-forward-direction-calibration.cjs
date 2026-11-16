@@ -42,6 +42,22 @@ const SQL_SIGNALS=[
  "AND d.governance #>> '{multimodelGovernance,paperExecutionEligible}'='true'",
  'ORDER BY d.evaluated_at,d.instrument,d.direction LIMIT 40001',
 ].join(' ');
+const SQL_PROGRESS=[
+ 'SELECT count(*)::int AS total_scans,',
+ "count(*) filter(where d.governance #>> '{multimodelEnsemble,paperAdmitted}'='true')::int AS paper_admitted,",
+ "count(*) filter(where d.governance #>> '{multimodelGovernance,paperExecutionEligible}'='true')::int AS governance_eligible,",
+ "count(*) filter(where d.governance #>> '{multimodelEnsemble,paperAdmitted}'='true'",
+ "AND d.governance #>> '{multimodelGovernance,paperExecutionEligible}'='true')::int AS qualified_total,",
+ "count(*) filter(where d.evaluated_at >= $5::timestamptz",
+ "AND d.governance #>> '{multimodelEnsemble,paperAdmitted}'='true'",
+ "AND d.governance #>> '{multimodelGovernance,paperExecutionEligible}'='true')::int AS qualified_pending,",
+ "max(d.evaluated_at) AS latest_scan_at,",
+ "max(d.evaluated_at) filter(where d.governance #>> '{multimodelEnsemble,paperAdmitted}'='true'",
+ "AND d.governance #>> '{multimodelGovernance,paperExecutionEligible}'='true') AS latest_qualified_at",
+ 'FROM trading.m1_tactical_decisions d',
+ 'WHERE d.user_id=$1 AND d.broker_connection_id=$2',
+ 'AND d.evaluated_at >= $3::timestamptz AND d.evaluated_at < $4::timestamptz',
+].join(' ');
 const SQL_QUOTES=[
  'SELECT instrument,bucket_time,last_quote_sample_at,bid_close,ask_close,',
  'source,positive_quote_sample_count FROM market_data.provider_quote_candles',
@@ -129,17 +145,32 @@ function bucket(items,h){
   counterNormalizedNetUsd:usable.length?+sum('reverseNormalizedNetUsd').toFixed(2):null,
  };
 }
+function qualityBand(value){
+ const n=numeric(value);
+ return n===null?'UNKNOWN':n<0.55?'BELOW_0_55':
+  n<0.60?'FROM_0_55_TO_0_60':
+  n<0.65?'FROM_0_60_TO_0_65':'AT_LEAST_0_65';
+}
 function summary(episodes){
- const byRoute={},byDay={};
+ const byRoute={},byDay={},byQualityBand={},byInstrumentSide={},byM1Route={};
  const describe=items=>Object.fromEntries(HORIZONS.map(h=>[h,bucket(items,h)]));
  for(const row of episodes){
   (byRoute[row.planb_route]??=[]).push(row);
   (byDay[row.evaluated_at.slice(0,10)]??=[]).push(row);
+  (byQualityBand[qualityBand(row.planbQuality)]??=[]).push(row);
+  (byInstrumentSide[row.instrument+'|'+row.direction]??=[]).push(row);
+  (byM1Route[row.m1Route||'UNKNOWN']??=[]).push(row);
  }
+ const grouped=group=>Object.fromEntries(
+  Object.entries(group).sort(([a],[b])=>a.localeCompare(b))
+   .map(([key,values])=>[key,describe(values)]));
  return {
   byHorizon:describe(episodes),
-  byRoute:Object.fromEntries(Object.entries(byRoute).map(([k,v])=>[k,describe(v)])),
-  byDay:Object.fromEntries(Object.entries(byDay).map(([k,v])=>[k,describe(v)])),
+  byRoute:grouped(byRoute),
+  byDay:grouped(byDay),
+  byQualityBand:grouped(byQualityBand),
+  byInstrumentSide:grouped(byInstrumentSide),
+  byM1Route:grouped(byM1Route),
  };
 }
 async function run(db,userId,asOf=new Date()){
@@ -154,6 +185,11 @@ async function run(db,userId,asOf=new Date()){
   const rows=through>from?(await db.query(SQL_SIGNALS,[
    userId,session.id,from.toISOString(),through.toISOString()])).rows:[];
   if(rows.length>=40001)throw Error('SIGNAL_HISTORY_TRUNCATED');
+  // Separate still-maturing qualified forecasts from missing signals.
+  // A 19-minute latency boundary guarantees complete 15-minute horizons.
+  const progress=(await db.query(SQL_PROGRESS,[
+   userId,session.id,from.toISOString(),asOf.toISOString(),through.toISOString(),
+  ])).rows[0];
   const quotes=(await db.query(SQL_QUOTES,[
    session.id,from.toISOString(),asOf.toISOString()])).rows;
   if(quotes.length>85000)throw Error('QUOTE_HISTORY_TOO_LARGE');
@@ -166,12 +202,37 @@ async function run(db,userId,asOf=new Date()){
   }
   const selected=selectEpisodes(rows);
   const episodes=selected.episodes.map(r=>evaluateEpisode(r,book));
+  const lastBrokerQuoteAt=quotes.filter(validQuote).reduce((last,q)=>{
+   const at=millis(q.last_quote_sample_at);
+   return at>last?at:last;
+  },-Infinity);
+  const qualifiedTotal=Number(progress?.qualified_total??0);
+  const qualifiedPending=Number(progress?.qualified_pending??0);
+  const telemetry={
+   scannerDecisions:Number(progress?.total_scans??0),
+   paperAdmitted:Number(progress?.paper_admitted??0),
+   governanceEligible:Number(progress?.governance_eligible??0),
+   jointlyQualified:qualifiedTotal,
+   waitingForMaturity:qualifiedPending,
+   maturedQualified:qualifiedTotal-qualifiedPending,
+   latestScanAt:progress?.latest_scan_at??null,
+   latestQualifiedAt:progress?.latest_qualified_at??null,
+   latestNativeBrokerQuoteAt:Number.isFinite(lastBrokerQuoteAt)?
+    new Date(lastBrokerQuoteAt).toISOString():null,
+   nativeBrokerDataFresh:Number.isFinite(lastBrokerQuoteAt)&&
+     asOf.getTime()-lastBrokerQuoteAt<=10*MS,
+   outcomeMaturityBufferMinutes:19,
+   status:episodes.length>0?'MATURED_RESEARCH_EPISODES':
+    qualifiedPending>0?'QUALIFIED_SIGNALS_WAITING_FOR_OUTCOME':
+    qualifiedTotal>0?'MATURED_SIGNALS_NOT_SELECTED':
+    'NO_QUALIFIED_SIGNALS_YET',
+  };
   return {
    artifact:ARTIFACT,generatedAt:asOf.toISOString(),prospectiveStart:START,
    observationWindow:{from:from.toISOString(),through:through.toISOString()},
    source:'OWNER_PEPPERSTONE_CTRADER_DEMO_USD_NATIVE_QUOTES',
    rawAdmittedDecisions:rows.length,verifiedQuoteRows:quotes.length,
-   selectedEpisodes:episodes.length,skipped:selected.skipped,
+   telemetry,selectedEpisodes:episodes.length,skipped:selected.skipped,
    authority:'SHADOW_ONLY',modifiesExecution:false,placesOrders:false,
    experimentalSideSelection:'HIGHEST_PLANB_SCORE_SAME_BAR_THEN_FIRST_15M_INSTRUMENT',
    normalizedCommissionUsdPerStandardLot:6,slippageAllowancePips:0.2,
@@ -188,6 +249,32 @@ async function run(db,userId,asOf=new Date()){
   };
  }catch(e){try{await db.query('ROLLBACK')}catch{}throw e;}
 }
+function archiveFinalizedDays(report,base=path.dirname(REPORT)){
+ const now=millis(report.generatedAt),archived=[];
+ if(!Number.isFinite(now)||report.authority!=='SHADOW_ONLY'||
+  report.modifiesExecution!==false||report.placesOrders!==false)
+  throw Error('ARCHIVE_REQUIRES_VERIFIED_SHADOW_REPORT');
+ const dailyDir=path.join(base,'daily');
+ for(const day of Object.keys(report.byDay)){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(day))continue;
+  const nextMidnight=Date.parse(day+'T00:00:00Z')+86400000;
+  // All 15m marks plus provider settlement buffer must have elapsed.
+  if(now<nextMidnight+20*60000)continue;
+  const destination=path.join(dailyDir,day+'.json');
+  if(fs.existsSync(destination))continue; // Immutable finalized snapshot.
+  const episodes=report.episodes.filter(x=>x.evaluated_at.slice(0,10)===day);
+  if(!episodes.length)continue;
+  fs.mkdirSync(dailyDir,{recursive:true,mode:0o700});
+  const data={artifact:report.artifact,day,finalizedAt:report.generatedAt,
+   authority:'SHADOW_ONLY',modifiesExecution:false,placesOrders:false,
+   cohort:summary(episodes),episodes};
+  const tmp=destination+'.tmp.'+process.pid;
+  fs.writeFileSync(tmp,JSON.stringify(data,null,2),{mode:0o600});
+  fs.renameSync(tmp,destination);
+  archived.push(day);
+ }
+ return archived;
+}
 async function collect(){
  require('dotenv').config({path:path.resolve(__dirname,'../.env'),quiet:true});
  const{Client}=require('pg'),{getDatabaseSslOptions}=require('../dist/config/database-tls');
@@ -203,6 +290,7 @@ async function collect(){
   const tmp=REPORT+'.tmp';
   fs.writeFileSync(tmp,JSON.stringify(report,null,2),{mode:0o600});
   fs.renameSync(tmp,REPORT);
+  archiveFinalizedDays(report);
   return report;
  }finally{await client.end();}
 }
@@ -212,11 +300,16 @@ async function main(){
   if(busy)return;busy=true;
   try{
    const r=await collect();
-   const signature=JSON.stringify({episodes:r.selectedEpisodes,summary:r.byHorizon});
+   const signature=JSON.stringify({
+    episodes:r.selectedEpisodes,summary:r.byHorizon,
+    telemetry:{qualified:r.telemetry.jointlyQualified,
+     matured:r.telemetry.maturedQualified,status:r.telemetry.status},
+   });
    if(signature!==lastSignature){
     console.log('FORWARD_DIRECTION_CALIBRATION',JSON.stringify({
      generatedAt:r.generatedAt,selected:r.selectedEpisodes,
-     admittedRows:r.rawAdmittedDecisions,byHorizon:r.byHorizon,
+     admittedRows:r.rawAdmittedDecisions,telemetry:r.telemetry,
+     byHorizon:r.byHorizon,
     }));
     lastSignature=signature;
    }
@@ -225,6 +318,7 @@ async function main(){
  }
  await cycle();if(watch)setInterval(()=>void cycle(),300000);
 }
-module.exports={START,ARTIFACT,SQL_SESSION,SQL_SIGNALS,SQL_QUOTES,
- selectEpisodes,evaluateEpisode,bucket,summary,run};
+module.exports={START,ARTIFACT,SQL_SESSION,SQL_SIGNALS,SQL_PROGRESS,SQL_QUOTES,
+ selectEpisodes,evaluateEpisode,bucket,qualityBand,summary,
+ archiveFinalizedDays,run};
 if(require.main===module)main().catch(e=>{console.error('CALIBRATION_FATAL',e.message);process.exitCode=1});

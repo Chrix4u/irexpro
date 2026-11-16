@@ -90,3 +90,81 @@ test('research SQL strictly scopes Pepperstone DEMO USD and prohibits mutations'
  for(const sql of [SQL_SESSION,SQL_SIGNALS,SQL_QUOTES])
   assert.doesNotMatch(sql,/\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE)\b/i);
 });
+
+test('pending qualified decisions are visible without prematurely scoring future prices',async()=>{
+ const {run,SQL_PROGRESS}=require('./audit-pepperstone-forward-direction-calibration.cjs');
+ const uuid='11111111-1111-4111-8111-111111111111';
+ const queried=[];
+ const db={query:async(sql,params)=>{
+  queried.push([sql,params]);
+  if(sql===SQL_SESSION)return {rows:[{id:'broker-demo'}]};
+  if(sql===SQL_PROGRESS)return {rows:[{
+   total_scans:96,paper_admitted:7,governance_eligible:5,
+   qualified_total:5,qualified_pending:5,
+   latest_scan_at:'2026-11-16T18:02:00Z',
+   latest_qualified_at:'2026-11-16T18:00:00Z',
+  }]};
+  if(sql===SQL_QUOTES)return {rows:[q(2,1.1,1.1001)]};
+  return {rows:[]};
+ }};
+ const report=await run(db,uuid,new Date('2026-11-16T18:03:00Z'));
+ assert.equal(report.selectedEpisodes,0);
+ assert.equal(report.telemetry.scannerDecisions,96);
+ assert.equal(report.telemetry.jointlyQualified,5);
+ assert.equal(report.telemetry.waitingForMaturity,5);
+ assert.equal(report.telemetry.maturedQualified,0);
+ assert.equal(report.telemetry.status,'QUALIFIED_SIGNALS_WAITING_FOR_OUTCOME');
+ assert.equal(report.telemetry.nativeBrokerDataFresh,true);
+ assert.equal(report.authority,'SHADOW_ONLY');
+ assert.equal(report.placesOrders,false);
+ assert.equal(queried[0][0],'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+ assert.equal(queried[queried.length-1][0],'COMMIT');
+ assert.match(SQL_PROGRESS,/d\.broker_connection_id=\$2/);
+ assert.match(SQL_PROGRESS,/d\.evaluated_at >= \$5::timestamptz/);
+ assert.doesNotMatch(SQL_PROGRESS,/\b(?:INSERT|UPDATE|DELETE|DROP|ALTER)\b/i);
+});
+
+test('prospective scores are reported by predeclared quality bands and instrument-side',()=>{
+ const {qualityBand}=require('./audit-pepperstone-forward-direction-calibration.cjs');
+ assert.equal(qualityBand(null),'UNKNOWN');
+ assert.equal(qualityBand(0.54),'BELOW_0_55');
+ assert.equal(qualityBand(0.55),'FROM_0_55_TO_0_60');
+ assert.equal(qualityBand(0.60),'FROM_0_60_TO_0_65');
+ assert.equal(qualityBand(0.65),'AT_LEAST_0_65');
+ const e=selectEpisodes([
+  row(0,'BUY',0.71,{planb_quality:'0.62'}),
+  row(0,'SELL',0.60,{planb_quality:'0.50'}),
+ ]).episodes[0];
+ const report=summary([evaluateEpisode(e,book)]);
+ assert.equal(report.byQualityBand.FROM_0_60_TO_0_65['5'].selected,1);
+ assert.equal(report.byQualityBand.FROM_0_60_TO_0_65['5'].chosenWins,1);
+ assert.equal(report.byInstrumentSide['EURUSD|BUY']['5'].counterWins,0);
+ assert.equal(report.byM1Route.ABSTAIN['5'].observed,1);
+});
+
+test('finalized day evidence is archived once, after all outcomes mature',()=>{
+ const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+ const {archiveFinalizedDays,ARTIFACT}=require('./audit-pepperstone-forward-direction-calibration.cjs');
+ const base=fs.mkdtempSync(path.join(os.tmpdir(),'irexpro-dir-cal-'));
+ try{
+  const episode=evaluateEpisode(selectEpisodes([row(0,'BUY',0.71)]).episodes[0],book);
+  const report={
+   artifact:ARTIFACT,authority:'SHADOW_ONLY',
+   modifiesExecution:false,placesOrders:false,
+   generatedAt:'2026-11-17T00:19:59.000Z',
+   byDay:{'2026-11-16':summary([episode]).byHorizon},
+   episodes:[episode],
+  };
+  assert.deepEqual(archiveFinalizedDays(report,base),[]);
+  report.generatedAt='2026-11-17T00:20:00.000Z';
+  assert.deepEqual(archiveFinalizedDays(report,base),['2026-11-16']);
+  const p=path.join(base,'daily','2026-11-16.json');
+  const first=fs.readFileSync(p,'utf8');
+  assert.equal(JSON.parse(first).cohort.byHorizon['5'].chosenWins,1);
+  assert.equal(fs.statSync(p).mode&0o777,0o600);
+  assert.deepEqual(archiveFinalizedDays(report,base),[]);
+  assert.equal(fs.readFileSync(p,'utf8'),first);
+  assert.throws(()=>archiveFinalizedDays({...report,placesOrders:true},base),
+   /ARCHIVE_REQUIRES_VERIFIED_SHADOW_REPORT/);
+ }finally{fs.rmSync(base,{recursive:true,force:true});}
+});

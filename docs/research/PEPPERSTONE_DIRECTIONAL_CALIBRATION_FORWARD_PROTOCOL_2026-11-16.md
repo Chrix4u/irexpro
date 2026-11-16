@@ -92,3 +92,69 @@ after-cost expectation and acceptable max drawdown; propose a separately
 reviewed DEMO-only pilot before granting any new execution authority.
 The existing operator-requested Pepperstone DEMO continuation pause
 remains in effect until explicitly changed.
+
+## 16 November 2026 — Forward observer maturity and data-health enhancement
+
+The first observer report shortly after launch was blank because it deliberately
+waits **19 minutes** after each M1 decision to collect all 3/5/10/15-minute
+outcome marks. A blank scored table before that boundary does not mean that
+the scanner or market-data feed stopped.
+
+At **18:06 UTC**, a direct read-only check showed:
+- 136 M1 scanner decisions since the fixed start at 17:50
+- 9 Plan-B paper-admitted, 7 governance eligible, **7 jointly qualified**
+- **7 qualified candidate decisions still waiting for outcome maturity**
+- broker-native quote last sampled within seconds; source verified
+- 0 matured episodes so far by design; no real broker authorization
+- early qualified observations were mixed: continuation with weak directional
+  scores and USDJPY reversals with independent M1 reliability blockers
+
+The report now separates `scannerDecisions`, `paperAdmitted`,
+`governanceEligible`, `jointlyQualified`,
+`waitingForMaturity`, `maturedQualified`, last M1 scan time, latest
+qualified decision time, last native broker quote time and freshness.
+This lets the operator distinguish **data unavailable**, **waiting for
+maturity**, and **matured with measured hypotheses**.
+
+Prospective analysis is additionally partitioned by the **predeclared**
+feature-quality bands below 0.55, 0.55–0.60, 0.60–0.65 and >=0.65,
+by instrument/direction, and by M1 route (including `ABSTAIN`).
+These quality partitions were suggested by retrospective discovery and
+must not be presented as independent unbiased hypothesis discovery;
+their *future* measured outcomes are the prospective holdout.
+No automatic execution threshold is derived from these partitions.
+
+The output and observer remain owner-scoped, 100% read-only, with
+`placesOrders=false` and `modifiesExecution=false`.
+
+## Continuing observation: no false-empty and durable history
+
+The observer now includes two layers of status that must not be conflated:
+`jointlyQualified` includes admitted research observations that may still be
+inside the 19-minute settlement window, while `maturedQualified` and
+`selectedEpisodes` describe fully elapsed, deduplicated episodes. The report
+names `QUALIFIED_SIGNALS_WAITING_FOR_OUTCOME` instead of showing zero as
+though signals never existed. It also records recent scanner timestamps,
+verified broker quote timestamps, and native-quote freshness.
+
+The prospective daily outcomes are now broken down by
+`byQualityBand` (predetermined 0.55, 0.60, 0.65 boundaries),
+`byInstrumentSide`, and `byM1Route`. This distinguishes whether a BUY
+or SELL hypothesis performed well and whether M1 actually confirmed it.
+`ABSTAIN` remains a research observation only and never gains execution
+authority from a favorable later mark.
+
+After the first 20 minutes of the following UTC day, finalized day outcomes
+are archived **once** to
+`/home/lightworld/webapps/irexpro-research/forward-direction-calibration/daily/YYYY-MM-DD.json`
+in a restricted directory, with 0600 file permissions. The immutable daily
+archive prevents the rolling seven-day research window from discarding the
+prospective evidence needed for a longer, independent multi-day evaluation.
+Tests verify no premature archive, no overwrite of finalized days and
+rejection of authority-bearing reports.
+
+At **18:08 UTC**, diagnostics showed 152 scanner decisions, 11 paper-admitted,
+8 jointly qualified, 8 still waiting for maturation and fresh broker-native
+quotes. The first possible fully matured outcome from the 17:52 research
+candidate is after approximately 18:11 UTC. Until then, showing zero wins or
+losses would be premature.
