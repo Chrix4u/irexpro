@@ -5,6 +5,7 @@ import { CtraderTransport } from './ctrader-transport';
 import { FakeCtraderTransport, ScriptedCtraderServer } from './ctrader.fake-transport';
 import { BrokerMode, BrokerConnectionResult } from '../../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../../interfaces/broker-adapter.errors';
+import { ProviderDispatchCertainty } from '../../interfaces/provider-dispatch-certainty';
 import {
   CTRADER_ENVIRONMENT_URLS,
   CTRADER_PAYLOAD_TYPE,
@@ -317,6 +318,25 @@ describe('CTraderAdapter', () => {
         comment: 'idem-key-002',
       });
     });
+
+    it.each(['LONG', 'SHORT', 'buy', '', undefined, null])(
+      'rejects malformed direction %s before sending a broker request',
+      async (badDirection) => {
+        await connectDemo();
+        await expect(adapter.placeOrder({
+          idempotencyKey: 'direction-fail-closed',
+          instrument: 'EUR/USD',
+          direction: badDirection as 'BUY',
+          lotSize: '0.01',
+          stopLoss: '0',
+          takeProfit: '0',
+        })).rejects.toMatchObject({
+          code: BrokerErrorCode.INVALID_REQUEST,
+          dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+        });
+        expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+      },
+    );
 
     it('maps SELL direction to tradeSide 2', async () => {
       await connectDemo();
