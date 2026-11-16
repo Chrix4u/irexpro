@@ -5,8 +5,8 @@ import type { HighConvictionOverlay } from './high-conviction-overlay';
  * independent own-side models and normal broker/risk gates must agree.
  */
 export const COUNTER_PILOT_ARTIFACT = 'pepperstone-demo-independent-counter-entry-v1' as const;
-export const COUNTER_PILOT_START = '2026-11-17T08:00:00.000Z';
-export const COUNTER_PILOT_END = '2026-11-17T11:00:00.000Z';
+export const COUNTER_PILOT_START = '2026-11-16T21:00:00.000Z';
+export const COUNTER_PILOT_END = '2026-11-17T00:00:00.000Z';
 export const COUNTER_PILOT_LOT_CAP = 0.01;
 export const COUNTER_PILOT_ENTRY_LIMIT = 4;
 
@@ -132,5 +132,8 @@ export function evaluateCounterPilot(input: {
      !(Number.isFinite(input.targetDistance)&&
        input.targetDistance>input.stopDistance))
     return deny('INDEPENDENT_STOP_TARGET_MISSING');
+  // Mandatory final fail-closed exact-owner Pepperstone DEMO broker check.
+  // A confirmed expert and strong score can NEVER authorize another account.
+  if(!input.brokerVerified)return deny('WRONG_ACCOUNT');
   return {...base,eligible:true,reason:'ELIGIBLE'};
 }
