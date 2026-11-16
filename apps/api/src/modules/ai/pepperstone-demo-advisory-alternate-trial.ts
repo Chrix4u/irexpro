@@ -86,11 +86,16 @@ export function evaluateAdvisoryAlternateTrial(input: {
       now>=Date.parse(ADVISORY_ALTERNATE_END)) return deny('OUTSIDE_WINDOW');
   if (!Number.isFinite(at) || at<Date.parse(ADVISORY_ALTERNATE_START) ||
       at>now+5000 || now-at>120_000) return deny('STALE_DECISION');
-  if (!input.brokerVerified) return deny('WRONG_ACCOUNT');
+  // A non-admitted TREND_CONTINUATION check is not a broker-identity
+  // error. Reserve WRONG_ACCOUNT for an otherwise eligible alternate,
+  // which is the only case that performs a live identity lookup.
   if (!['CONFIRMED_REVERSAL','EARLY_TRANSITION'].includes(input.route??'') ||
       input.paperAdmitted!==true || input.governanceEligible!==true ||
       input.portfolioSnapshotAvailable!==true)
     return deny('NOT_ADMITTED_REVERSAL_OR_TRANSITION');
+  // Mandatory verified Pepperstone DEMO owner boundary is still enforced
+  // before any actual alternate entry can qualify.
+  if (!input.brokerVerified) return deny('WRONG_ACCOUNT');
   if (!(Number.isFinite(input.ensembleScore) && (input.ensembleScore??0)>=0.60) ||
       !(Number.isFinite(input.planbDirectionQuality) && (input.planbDirectionQuality??0)>=0.54) ||
       !(Number.isFinite(input.netExpectedR) && (input.netExpectedR??0)>=0.12) ||

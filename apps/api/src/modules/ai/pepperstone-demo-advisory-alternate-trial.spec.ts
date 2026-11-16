@@ -38,6 +38,12 @@ describe('Pepperstone DEMO advisory alternate entry pilot',()=>{
       .toBe('NOT_ADMITTED_REVERSAL_OR_TRANSITION');
     expect(evaluate({...input(),route:'TREND_CONTINUATION'}).reason)
       .toBe('NOT_ADMITTED_REVERSAL_OR_TRANSITION');
+    // Scanner intentionally skips account lookup for unadmitted trends.
+    // The reason must describe non-admission, not claim the owner's
+    // connected DEMO broker is incorrectly configured.
+    expect(evaluate({...input(),brokerVerified:false,
+      route:'TREND_CONTINUATION',paperAdmitted:false}).reason)
+      .toBe('NOT_ADMITTED_REVERSAL_OR_TRANSITION');
   });
   it('cannot execute before its immediate Monday start or after Tuesday cutoff',()=>{
     expect(ADVISORY_ALTERNATE_START).toBe('2026-11-16T23:36:00.000Z');
