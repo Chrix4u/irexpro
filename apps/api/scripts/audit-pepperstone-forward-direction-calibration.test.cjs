@@ -1,0 +1,92 @@
+'use strict';
+const{test}=require('node:test'),assert=require('node:assert/strict');
+const {START,SQL_SESSION,SQL_SIGNALS,SQL_QUOTES,selectEpisodes,
+ evaluateEpisode,bucket,summary}=require('./audit-pepperstone-forward-direction-calibration.cjs');
+const at=(m,s=10)=>'2026-11-16T18:'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+'Z';
+const row=(min,side,score,options={})=>({
+ instrument:'EURUSD',direction:side,bar_time:at(min,0),
+ evaluated_at:at(min,side==='BUY'?10:14),
+ planb_route:'CONFIRMED_REVERSAL',ensemble_score:String(score),
+ planb_quality:'0.7',admitted:'true',governance_eligible:'true',
+ m1_route:'ABSTAIN',stop_distance:'0.0005',target_distance:'0.0008',
+ ...options,
+});
+const q=(min,bid,ask)=>({
+ bucket_time:at(min,0),last_quote_sample_at:at(min,55),
+ bid_close:bid,ask_close:ask,
+ positive_quote_sample_count:5,source:'ctrader-broker-native',
+});
+const book=new Map([['EURUSD',new Map([
+ [Date.parse(at(1,0)),q(1,1.1,1.1001)],
+ [Date.parse(at(6,0)),q(6,1.1003,1.1004)],
+])]]);
+test('two contemporaneous candidates compare their as-of scores, not BUY-first iteration',()=>{
+ const r=selectEpisodes([row(0,'BUY',0.6),row(0,'SELL',0.7)]);
+ assert.equal(r.episodes.length,1);
+ assert.equal(r.episodes[0].direction,'SELL');
+ assert.equal(r.episodes[0].oppositeDirection,'BUY');
+ assert.equal(r.episodes[0].sameBarOppositeObserved,true);
+ assert.equal(r.episodes[0].evaluated_at,new Date(at(0,14)).toISOString());
+});
+test('even a later stronger candidate cannot replace the first selected episode within 15 minutes',()=>{
+ const r=selectEpisodes([
+  row(0,'BUY',0.62),row(0,'SELL',0.6),
+  row(5,'SELL',0.99),row(5,'BUY',0.5),
+  row(16,'SELL',0.7),row(16,'BUY',0.6),
+ ]);
+ assert.deepEqual(r.episodes.map(x=>x.direction),['BUY','SELL']);
+ assert.equal(r.skipped.overlap,1);
+});
+test('opposite-side hypothetical mark never becomes a broker order',()=>{
+ const e=selectEpisodes([row(0,'BUY',0.71),row(0,'SELL',0.6)]).episodes[0];
+ const result=evaluateEpisode(e,book).outcomes[5];
+ assert.equal(result.status,'PAIR_COMPARABLE');
+ assert.equal(result.chosenNetPips,1.2);
+ assert.equal(result.reverseNetPips,-4.8);
+ assert.equal(result.firstHitStopLoss,'NOT_EVALUATED');
+ const stats=bucket([evaluateEpisode(e,book)],5);
+ assert.equal(stats.chosenWins,1);
+ assert.equal(stats.counterWins,0);
+ assert.equal(stats.chosenNormalizedNetUsd,12);
+ assert.equal(stats.counterNormalizedNetUsd,-48);
+});
+test('missing bid/ask marks remain unknown rather than profitable',()=>{
+ const e=selectEpisodes([row(0,'BUY',0.71)]).episodes[0];
+ const marks=evaluateEpisode(e,new Map());
+ assert.equal(marks.outcomes[5].status,'MISSING_NATIVE_BID_ASK');
+ const stats=summary([marks]).byHorizon[5];
+ assert.equal(stats.observed,0);
+ assert.equal(stats.chosenMeanNetPips,null);
+ assert.equal(stats.missing,1);
+});
+test('tie on same-bar opposite scores is skipped, not assigned by ordering',()=>{
+ const r=selectEpisodes([row(0,'BUY',0.65),row(0,'SELL',0.65)]);
+ assert.equal(r.episodes.length,0);
+ assert.equal(r.skipped.ambiguous,1);
+});
+test('only admitted and governance-qualified Plan-B decisions are eligible research candidates',()=>{
+ const r=selectEpisodes([
+  row(0,'BUY',0.75,{admitted:'false'}),
+  row(1,'SELL',0.8,{governance_eligible:'false'}),
+  row(2,'SELL',0.71,{planb_route:'UNKNOWN'}),
+  row(3,'SELL',0.72,{ensemble_score:null}),
+  row(4,'SELL',0.61),
+ ]);
+ assert.equal(r.episodes.length,1);
+ assert.equal(r.episodes[0].evaluated_at,new Date(at(4,14)).toISOString());
+ assert.equal(r.skipped.invalid,3);
+ assert.equal(r.skipped.missingScore,1);
+});
+test('research SQL strictly scopes Pepperstone DEMO USD and prohibits mutations',()=>{
+ assert.equal(START,'2026-11-16T17:50:00.000Z');
+ assert.match(SQL_SESSION,/s\.user_id=\$1/);
+ assert.match(SQL_SESSION,/s\.account_currency='USD'/);
+ assert.match(SQL_SESSION,/b\.broker_id='pepperstone-ctrader'/);
+ assert.match(SQL_SESSION,/b\.account_type='DEMO'/);
+ assert.match(SQL_SIGNALS,/d\.broker_connection_id=\$2/);
+ assert.match(SQL_SIGNALS,/d\.evaluated_at>=\$3/);
+ assert.match(SQL_SIGNALS,/LIMIT 40001/);
+ assert.match(SQL_QUOTES,/source='ctrader-broker-native'/);
+ for(const sql of [SQL_SESSION,SQL_SIGNALS,SQL_QUOTES])
+  assert.doesNotMatch(sql,/\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE)\b/i);
+});
