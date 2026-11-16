@@ -3411,7 +3411,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
       expect(h.closeTrade).not.toHaveBeenCalled();
       expect(h.loadDemoAlternativeTrialEntryCount).toHaveBeenCalledWith(
         expect.objectContaining({
-          startsAt:'2026-11-17T15:00:00.000Z',
+          startsAt:'2026-11-16T23:36:00.000Z',
           endsAt:'2026-11-17T20:00:00.000Z',
         }),
       );

@@ -9,7 +9,7 @@
  */
 export const ADVISORY_ALTERNATE_ARTIFACT =
   'pepperstone-demo-advisory-alternate-bridge-v1' as const;
-export const ADVISORY_ALTERNATE_START = '2026-11-17T15:00:00.000Z';
+export const ADVISORY_ALTERNATE_START = '2026-11-16T23:36:00.000Z';
 export const ADVISORY_ALTERNATE_END = '2026-11-17T20:00:00.000Z';
 export const ADVISORY_ALTERNATE_MAX_LOT = 4;
 export const ADVISORY_ALTERNATE_ENTRY_LIMIT = 4;

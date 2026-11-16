@@ -54,13 +54,17 @@ votes agree >=2/3*, native/fresh, opportunity probability >=0.25.
 The model's own after-fee R, spread, M1 direction-quality, independent
 stop and target, no OOD drift and broker risk remain mandatory.
 
-**Frozen upcoming window:** Tuesday **17 November 2026 15:00–20:00**
+**Revised immediately at owner's request:** Monday **16 November
+2026 23:36**, through Tuesday **17 November 20:00**
 Africa/Accra (UTC). **At most four DEMO tagged intents**, max **4.00
 lots**, always subject to the unchanged **0.25% of allocation stop risk**
 and broker margin/currency exposure checks. This is a ceiling, not a
 promise of 4 lots or four entries. It never targets LIVE, never
 automatically closes opposite positions, never replays old scans,
-does not re-enable trend continuation, and self-expires at 20:00.
+does not re-enable trend continuation, and self-expires at 20:00. The four-intent limit applies to this entire
+window, not four each night or afternoon. Enabling during rollover does
+not guarantee execution because Plan B OOD, spread and expert vote
+requirements still fail closed.
 
 The earlier Monday late-evening COUNTER pilot is independent and still
 expires at 00:00. The 21:00–23:15 market produced mostly ROLLOVER_RISK,

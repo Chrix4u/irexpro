@@ -39,10 +39,10 @@ describe('Pepperstone DEMO advisory alternate entry pilot',()=>{
     expect(evaluate({...input(),route:'TREND_CONTINUATION'}).reason)
       .toBe('NOT_ADMITTED_REVERSAL_OR_TRANSITION');
   });
-  it('cannot execute before or after the authorized Tuesday session',()=>{
-    expect(ADVISORY_ALTERNATE_START).toBe('2026-11-17T15:00:00.000Z');
+  it('cannot execute before its immediate Monday start or after Tuesday cutoff',()=>{
+    expect(ADVISORY_ALTERNATE_START).toBe('2026-11-16T23:36:00.000Z');
     expect(ADVISORY_ALTERNATE_END).toBe('2026-11-17T20:00:00.000Z');
-    expect(evaluate({...input(),now:new Date('2026-11-16T23:40:00.000Z')}).reason)
+    expect(evaluate({...input(),now:new Date('2026-11-16T23:35:00.000Z')}).reason)
       .toBe('OUTSIDE_WINDOW');
     expect(evaluate({...input(),now:new Date(ADVISORY_ALTERNATE_END)}).reason)
       .toBe('OUTSIDE_WINDOW');
