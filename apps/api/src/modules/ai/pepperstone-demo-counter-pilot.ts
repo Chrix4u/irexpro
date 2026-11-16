@@ -5,8 +5,8 @@ import type { HighConvictionOverlay } from './high-conviction-overlay';
  * independent own-side models and normal broker/risk gates must agree.
  */
 export const COUNTER_PILOT_ARTIFACT = 'pepperstone-demo-independent-counter-entry-v1' as const;
-export const COUNTER_PILOT_START = '2026-11-16T21:00:00.000Z';
-export const COUNTER_PILOT_END = '2026-11-17T00:00:00.000Z';
+export const COUNTER_PILOT_START = '2026-11-17T08:00:00.000Z';
+export const COUNTER_PILOT_END = '2026-11-17T11:00:00.000Z';
 export const COUNTER_PILOT_LOT_CAP = 0.01;
 export const COUNTER_PILOT_ENTRY_LIMIT = 4;
 
@@ -88,7 +88,8 @@ export function evaluateCounterPilot(input: {
      now>=Date.parse(COUNTER_PILOT_END))return deny('OUTSIDE_WINDOW');
   if(!Number.isFinite(time)||time<Date.parse(COUNTER_PILOT_START)||
      time>now+5000||now-time>120000)return deny('STALE_SIGNAL');
-  if(!input.brokerVerified)return deny('WRONG_ACCOUNT');
+  // Diagnose genuine signal failures before a verified-account veto.
+  // All executable outcomes still require verified DEMO identity below.
   const original=input.opposingSource, own=input.candidate;
   if(!original || !['CONFIRMED_REVERSAL','EARLY_TRANSITION'].includes(
       original.ensemble.strategyRoute) ||

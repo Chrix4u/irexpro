@@ -1,7 +1,7 @@
 # iRexPro independently executable expert COUNTER — Pepperstone DEMO pilot
 
 **Implementation date:** 16 November 2026.
-**Authorized experiment:** **Tonight, Monday 16 November 2026 21:00–Tuesday 17 November 00:00 UTC/Ghana**.
+**Authorized experiment:** **Tuesday 17 November 2026 08:00–11:00 UTC/Ghana**.
 **Scope:** exact owner's connected Pepperstone cTrader **DEMO** FULL_AUTO
 session only. **LIVE broker accounts are excluded** from this code path.
 **Activation flag:** `IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT=enabled`.
@@ -58,15 +58,15 @@ every *submitted* tagged trade intent of any final status in the
 session-specific timebox to avoid retry-abuse; rejected scans never
 consume the four-entry budget.
 
-## Why now, and rollover safety
+## Tuesday daytime trial and rollover safety
 
-The user expressly requested execution **as soon as possible tonight**,
-rather than waiting until Tuesday morning. The code's fixed authority
-window is 21:00–00:00 Africa/Accra, with the engine enabled only after
-pre-deployment verification. No historical candidate is replayed:
+The user authorized a bounded DEMO counter test, not a live-account
+trade. The fixed authority window is Tuesday 08:00–11:00 Africa/Accra,
+selected to avoid the thin Monday-night pre-rollover price conditions.
+The engine must be enabled only after pre-deployment verification. No historical candidate is replayed:
 each decision is independently assessed on fresh quotes with <=120-second
 age. The established broker spread and news/rollover checks remain active
-and can veto orders during the documented rollover-risk period. Trading
+and can veto orders on Tuesday as well. Trading
 permission is **not a guarantee that a qualifying market setup exists**.
 The continuation route stays paused, and the previous 20:00–21:00
 trial remains expired.

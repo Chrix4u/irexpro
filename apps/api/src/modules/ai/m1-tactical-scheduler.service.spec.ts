@@ -3353,7 +3353,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
 
   it('executes a separately qualified BUY counter into the existing Pepperstone DEMO risk path', async () => {
     jest.useFakeTimers({
-      now:new Date('2026-11-16T21:20:40.000Z'),
+      now:new Date('2026-11-17T08:20:40.000Z'),
       doNotFake:['setTimeout','setInterval','setImmediate','nextTick'],
     });
     try {
@@ -3393,8 +3393,8 @@ describe('M1 V8 multi-model DEMO authority', () => {
           };
         });
       const features={...cleanContinuationFeatures(),
-        decisionTime:new Date('2026-11-16T21:20:00Z'),
-        latestM1OpenTime:new Date('2026-11-16T21:19:00Z'),
+        decisionTime:new Date('2026-11-17T08:20:00Z'),
+        latestM1OpenTime:new Date('2026-11-17T08:19:00Z'),
         emaSeparationAtr:0,
       };
       await driveFeatures(h,features,{brokerConnectionId:'demo-conn-2'});
@@ -3416,8 +3416,8 @@ describe('M1 V8 multi-model DEMO authority', () => {
       expect(h.closeTrade).not.toHaveBeenCalled();
       expect(h.loadDemoAlternativeTrialEntryCount).toHaveBeenCalledWith(
         expect.objectContaining({
-          startsAt:'2026-11-16T21:00:00.000Z',
-          endsAt:'2026-11-17T00:00:00.000Z',
+          startsAt:'2026-11-17T08:00:00.000Z',
+          endsAt:'2026-11-17T11:00:00.000Z',
         }),
       );
     }finally{jest.useRealTimers();}
@@ -3425,7 +3425,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
 
   it('keeps the counter pilot unable to authorize DEMO orders after its 11 AM cutoff',async()=>{
     jest.useFakeTimers({
-      now:new Date('2026-11-17T00:00:00Z'),
+      now:new Date('2026-11-17T11:00:00Z'),
       doNotFake:['setTimeout','setInterval','setImmediate','nextTick'],
     });
     try{
@@ -3436,7 +3436,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
       const features={...cleanContinuationFeatures(),
-        decisionTime:new Date('2026-11-17T00:00:00Z'),
+        decisionTime:new Date('2026-11-17T11:00:00Z'),
         latestM1OpenTime:new Date('2026-11-17T10:59:00Z'),
         emaSeparationAtr:0,
       };
