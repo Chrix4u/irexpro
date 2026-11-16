@@ -37,6 +37,8 @@ describe('timeboxed Pepperstone DEMO alternate timing admission',()=>{
   });
   it('never authorizes continuation or M1 continuation semantic conflicts',()=>{
     expect(evaluate({...input(),route:'TREND_CONTINUATION'}).eligible).toBe(false);
+    expect(evaluate({...input(),route:'TREND_CONTINUATION',brokerVerified:false}).reason)
+      .toBe('ROUTE_NOT_ALLOWED');
     expect(evaluate({...input(),m1Route:'M1_TREND_CONTINUATION'}).eligible).toBe(false);
   });
   it('refuses historical rescoring, stale candidates, future decisions and any decision after 21:00 UTC',()=>{

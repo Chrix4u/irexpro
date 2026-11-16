@@ -79,10 +79,10 @@ export function evaluateDemoAlternativeTrial(input: {
       now - candleTime > 120_000 ||
       candleTime < Date.parse(DEMO_ALTERNATIVE_TRIAL_START))
     return deny('STALE_CANDIDATE');
-  if (!input.brokerVerified) return deny('WRONG_BROKER');
   if (input.route !== 'CONFIRMED_REVERSAL' &&
       input.route !== 'EARLY_TRANSITION')
     return deny('ROUTE_NOT_ALLOWED');
+  if (!input.brokerVerified) return deny('WRONG_BROKER');
   if (!input.paperAdmitted || !input.governanceEligible ||
       !input.portfolioSnapshotAvailable ||
       !input.executionSpreadEvidenceValid || !input.paperExecutionCostUsable ||
