@@ -3667,6 +3667,36 @@ export default function AiTradingPage() {
                     ) : null}
                   </div>
                 ) : null}
+                {automationOn && m1TacticalStatus?.counterDemoPilot?.enabled && (
+                  <div className="ai-control-card__focus" aria-label="Independent COUNTER DEMO pilot status">
+                    <strong>
+                      COUNTER demo pilot ·{" "}
+                      {m1TacticalStatus.counterDemoPilot.activeNow ? "ACTIVE" : "OUTSIDE ENTRY WINDOW"}
+                    </strong>
+                    <small>
+                      {m1TacticalStatus.counterDemoPilot.exactBroker} · Up to{" "}
+                      {m1TacticalStatus.counterDemoPilot.maxLot.toFixed(2)} lots
+                      per qualifying entry, never a forced minimum ·{" "}
+                      {m1TacticalStatus.counterDemoPilot.maxEntries} entry limit ·
+                      New entries stop at{" "}
+                      {new Date(m1TacticalStatus.counterDemoPilot.endsAt).toLocaleTimeString(
+                        "en-GH", { timeZone: "Africa/Accra", hour: "numeric", minute: "2-digit" },
+                      )}{" "}
+                      Ghana time.
+                    </small>
+                    <small>
+                      Actual lot size remains limited by the demo allocation,
+                      stop-loss risk, spread, available margin and broker execution checks.
+                    </small>
+                    {m1TacticalStatus.counterDemoPilot.activeNow &&
+                      m1TacticalStatus.latestDecision?.planBRegime === "ROLLOVER_RISK" && (
+                        <small>
+                          Latest model decision: rollover risk. Trading may be held
+                          while spreads and after-cost expectancy are unfavorable.
+                        </small>
+                      )}
+                  </div>
+                )}
                 {automationOn && demoEntryDiagnostic?.scope === "ACTIVE_CTRADER_DEMO" && (
                   <div className="ai-control-card__diagnosis" aria-label="Why no new DEMO trades">
                     <strong>Why no new trades? · Last 60 minutes</strong>

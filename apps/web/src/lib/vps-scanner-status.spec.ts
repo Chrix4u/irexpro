@@ -205,6 +205,27 @@ describe('server-authoritative DEMO focused-pair status contract', () => {
     })).toBe(true);
   });
 
+  it('shows only verified server pilot limits and rejects malformed status data', () => {
+    const pilot = {
+      enabled: true,
+      activeNow: true,
+      startsAt: "2026-11-16T21:00:00.000Z",
+      endsAt: "2026-11-17T00:00:00.000Z",
+      maxEntries: 4,
+      maxLot: 4,
+      exactBroker: "Pepperstone cTrader DEMO",
+    };
+    expect(hasM1TacticalStatusUiShape({ ...base, counterDemoPilot: pilot })).toBe(true);
+    expect(hasM1TacticalStatusUiShape({
+      ...base,
+      counterDemoPilot: { ...pilot, maxLot: "4 lots" },
+    })).toBe(false);
+    expect(hasM1TacticalStatusUiShape({
+      ...base,
+      counterDemoPilot: { ...pilot, endsAt: null },
+    })).toBe(false);
+  });
+
   it('rejects an invalid server pair list instead of displaying invented authority', () => {
     expect(hasM1TacticalStatusUiShape({
       ...base, demoEntryInstruments: ['AUDUSD', 4],

@@ -60,6 +60,16 @@ describe('AI Trader production UI regression contract', () => {
     ).toContain(".ai-control-card__diagnosis");
   });
 
+  it('displays the counter DEMO trial ceiling and cutoff without a trading control', () => {
+    expect(pageSource).toContain('Independent COUNTER DEMO pilot status');
+    expect(pageSource).toContain('counterDemoPilot.activeNow');
+    expect(pageSource).toContain('counterDemoPilot.maxLot.toFixed(2)');
+    expect(pageSource).toContain('counterDemoPilot.maxEntries');
+    expect(pageSource).toContain('timeZone: "Africa/Accra"');
+    expect(pageSource).toContain('planBRegime === "ROLLOVER_RISK"');
+    expect(pageSource).toContain('never a forced minimum');
+  });
+
   it('keeps the live scanning market cockpit visible in the trade surface', () => {
     expect(pageSource).toContain('SCANNING');
     expect(pageSource).toContain('Last move');
