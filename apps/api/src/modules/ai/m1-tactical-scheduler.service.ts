@@ -2084,6 +2084,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const confirmedDirectionFlip =
       activeOppositePositions.length > 0 &&
       multimodelPrimaryExecutable &&
+      // The demo timing experiment may authorize a NEW entry but must never
+      // acquire the legacy privilege to close an already-open broker trade.
+      !demoAlternativeTrial.eligible &&
       multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL' &&
       // A local M1 continuation, even when consistently aligned with the
       // Plan-B reversal, must not force-close an opposite broker position.
@@ -3054,6 +3057,22 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       return;
     }
     const finalExecutionVolumeCap = currencyExposureGuard.volumeCap;
+
+    // All broker eligibility work may take several seconds after initial
+    // trial admission. Refuse a time-expired or stale trial immediately before
+    // creating a durable order identity; no old forecast may leak past 21:00.
+    if (demoAlternativeTrial?.eligible) {
+      const now = Date.now();
+      if (now >= Date.parse(DEMO_ALTERNATIVE_TRIAL_END) ||
+          now - decisionTime.getTime() > 120_000 ||
+          now < decisionTime.getTime()) {
+        await this.evidence.markOutcomeState(
+          decisionId, 'RISK_REJECTED', new Date(),
+          'M1_DEMO_ALTERNATIVE_TRIAL_PRE_DISPATCH_EXPIRED_OR_STALE',
+        );
+        return;
+      }
+    }
 
     const scoutReliabilityArtifact = shadowPairSideReliability
       ? 'artifact' in shadowPairSideReliability

@@ -3408,6 +3408,60 @@ describe('M1 V8 multi-model DEMO authority', () => {
     }
   });
 
+  it('never force-closes an opposite DEMO trade merely because the micro trial resolves M1 abstention', async () => {
+    jest.useFakeTimers({
+      now: new Date('2026-11-16T20:20:40.000Z'),
+      doNotFake: ['setTimeout', 'setInterval', 'setImmediate', 'nextTick'],
+    });
+    try {
+      const h=phase2Harness({
+        rollout:M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+        session:fullAutoSession,
+        enableAlternativeTrial:true,
+        suspendTrendContinuation:true,
+        openPositions:[{
+          tradeId:'old-sell',tradeIntentId:'old-sell-intent',
+          instrument:'EURUSD',direction:'SELL',
+          openedAt:new Date('2026-11-16T20:01:00.000Z'),
+          decisionId:'old-sell-decision',
+          route:'M1_EARLY_TRANSITION',
+          policyVersion:'m1-tactical-v2-m5-lifecycle',
+          originalNetExpectedR:0.2,
+        }],
+      });
+      h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
+      const original=(h.service as any).evaluateDemoMultimodel.bind(h.service);
+      jest.spyOn(h.service as any,'evaluateDemoMultimodel').mockImplementation(async (...args:any[])=>{
+        const x=await original(...args);
+        return {...x,
+          ensemble:{...x.ensemble,strategyRoute:'CONFIRMED_REVERSAL',
+            paperAdmitted:true,ensembleScore:0.73,directionQuality:0.75},
+          governance:{...x.governance,paperExecutionEligible:true,
+            paperExecutionBlockers:[],paperExecutionCostUsable:true,
+            executionSpreadEvidenceValid:true,netExpectedR:0.23,
+            eventRisk:'CLEAR',sleeveState:'COLLECTING'},
+          authority:{...x.authority,executable:false,authorityPath:'BLOCKED',
+            trainedExpertOpposed:false,
+            blockers:['MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED']},
+        };
+      });
+      const f={...cleanContinuationFeatures(),
+        decisionTime:new Date('2026-11-16T20:20:00Z'),
+        latestM1OpenTime:new Date('2026-11-16T20:19:00Z'),
+        emaSeparationAtr:0,
+      };
+      await driveFeatures(h,f,{brokerConnectionId:'demo-conn-2'});
+      const decision=h.recordDecision.mock.calls.find(([v])=>v.direction==='BUY')?.[0];
+      expect(decision?.governance.demoAlternativeTrial).toMatchObject({
+        eligible:true,reason:'ELIGIBLE',
+      });
+      expect(h.closeTrade).not.toHaveBeenCalled();
+      expect(h.receiveSignal).not.toHaveBeenCalled();
+      expect(decision?.blockers).toContain('M1_ACTIVE_OPPOSITE_POSITION');
+      expect(decision?.blockers).not.toContain('M1_DIRECTION_FLIP_EXIT_PENDING');
+    }finally{jest.useRealTimers()}
+  });
+
   it('pauses new owner Pepperstone DEMO primary continuation without dispatch', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,

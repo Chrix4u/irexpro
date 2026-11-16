@@ -88,3 +88,41 @@ code refuses new trial entries without any scheduled external action.
 **No guaranteed winnings or trade count.** The prospective trial is
 speculative and its results must be assessed after actual costs and
 broker reconciliation; real-account promotion remains unauthorized.
+
+## 20:20 UTC follow-up — review of overlapping timing gates
+
+Fresh read-only owner-scoped PostgreSQL history (16 Nov 00:00–20:20)
+contained 517 Plan-B CONFIRMED_REVERSAL and 195 EARLY_TRANSITION
+decision rows. Of these, 516 and 195 respectively were paper-admitted
+and governance-eligible. When retrospectively evaluating the new
+DEMO micro-trial's market/economic floor, independent M1 quality,
+and aligned fresh three-vote native expert corroboration, **66 reversal
+and 17 transition scans** had qualifying research features.
+
+These 83 are *repeated M1 scanning decisions*, not 83 independent
+trades or permissions to replay stale prices. This retrospective
+count is a screening sanity check only; it does not certify after-fee
+profitability or include final broker/portfolio vetoes.
+The initial 20:10–20:19 deployed window had zero broker entries; the
+one fresh Plan-B confirmed-reversal scan missed M1 quality.
+
+## Final safety hardening
+
+The temporary M1 semantic-bridge trial must never inherit the older
+confirmed-direction-flip privilege to close an existing opposite broker
+position. The scheduler now excludes trial authority from automatic
+opposite-position closings; it waits and records an active-opposite
+blocker instead. An additional pre-dispatch timebox/staleness check
+after the capital and currency exposure calculations prevents a
+slow risk evaluation from authorizing a trial signal after 21:00.
+
+Regression integration tests now verify that a strong hypothetical
+DEMO trial reversal **cannot** close an older opposite position or
+open a hedge through the standard entry path. These are limited
+safety corrections only: the continuation pause, Plan-B quality
+floors, broker risk and execution lot cap are unchanged.
+
+All permission flags should remain unchanged after 21:00: the trial
+check rejects new orders once the timebox has ended. Do not claim
+that old existing positions automatically close at 21:00; exits
+remain managed by existing broker risk/execution mechanisms.
