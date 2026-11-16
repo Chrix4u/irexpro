@@ -844,6 +844,7 @@ function phase2Harness(
     reliabilityLosses?: number;
     signalOutcome?: 'EXECUTION_SUCCEEDED' | 'RISK_REJECTED';
     suspendTrendContinuation?: boolean;
+    enableAlternativeTrial?: boolean;
     rollout?: any;
     evidenceByRoute?: Record<string, any[]>;
     shadowPairSideOutcomes?: Array<{ observedAt: Date; netR: number }>;
@@ -926,6 +927,8 @@ function phase2Harness(
         'vpsForexScanner.m1MarketDataConnectionId': 'demo-conn-1',
         'IREXPRO_PEPPERSTONE_DEMO_PAUSE_TREND_CONTINUATION':
           options.suspendTrendContinuation ? 'enabled' : '',
+        'IREXPRO_PEPPERSTONE_DEMO_ALTERNATIVE_TRIAL':
+          options.enableAlternativeTrial ? 'enabled' : '',
       };
       return values[key] ?? fallback;
     }),
@@ -1033,6 +1036,7 @@ function phase2Harness(
   // Existing generic cTrader, PAPER and IC Markets tests remain outside the
   // explicitly owned Pepperstone DEMO loss-control pilot.
   const isPepperstoneDemoBrokerConnection = jest.fn().mockResolvedValue(false);
+  const loadDemoAlternativeTrialEntryCount = jest.fn().mockResolvedValue(0);
   const loadRecentlyProtectedSameSideReentry = jest.fn().mockResolvedValue({
     active: false,
     cooldownRemainingSeconds: 0,
@@ -1067,6 +1071,7 @@ function phase2Harness(
     hasActiveOppositeM1Intent,
     markRescueObservation,
     isPepperstoneDemoBrokerConnection,
+    loadDemoAlternativeTrialEntryCount,
     loadRecentlyProtectedSameSideReentry,
     loadPriorClosedCommissionRiskR,
     loadPepperstonePairSideAsOfRows,
@@ -1173,6 +1178,7 @@ function phase2Harness(
     hasActiveOppositeM1Intent,
     markRescueObservation,
     isPepperstoneDemoBrokerConnection,
+    loadDemoAlternativeTrialEntryCount,
     loadRecentlyProtectedSameSideReentry,
     loadPriorClosedCommissionRiskR,
     loadPepperstonePairSideAsOfRows,
@@ -3340,6 +3346,66 @@ describe('M1 V8 multi-model DEMO authority', () => {
     });
     expect(recorded?.blockers ?? []).not.toContain('M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION');
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes a timeboxed independently confirmed DEMO reversal through the real risk pipeline at 0.01 lot', async () => {
+    jest.useFakeTimers({
+      now: new Date('2026-11-16T20:20:40.000Z'),
+      doNotFake: ['setTimeout', 'setInterval', 'setImmediate', 'nextTick'],
+    });
+    try {
+      const h=phase2Harness({
+        rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+        session: fullAutoSession,
+        enableAlternativeTrial:true,
+        suspendTrendContinuation:true,
+      });
+      h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
+      const original=(h.service as any).evaluateDemoMultimodel.bind(h.service);
+      jest.spyOn(h.service as any,'evaluateDemoMultimodel').mockImplementation(
+        async (...args:any[])=>{
+          const v=await original(...args);
+          return {...v,
+            ensemble:{...v.ensemble,strategyRoute:'CONFIRMED_REVERSAL',
+              paperAdmitted:true,ensembleScore:0.72,directionQuality:0.73},
+            governance:{...v.governance,paperExecutionEligible:true,
+              paperExecutionBlockers:[],paperExecutionCostUsable:true,
+              executionSpreadEvidenceValid:true,netExpectedR:0.24,
+              eventRisk:'CLEAR',sleeveState:'COLLECTING'},
+            authority:{...v.authority,executable:false,authorityPath:'BLOCKED',
+              trainedExpertOpposed:false,
+              blockers:['MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED']},
+          };
+        });
+      const f={...cleanContinuationFeatures(),
+        decisionTime:new Date('2026-11-16T20:20:00.000Z'),
+        latestM1OpenTime:new Date('2026-11-16T20:19:00.000Z'),
+        emaSeparationAtr:0,
+      };
+      const [buy,sell]=buildM1TacticalCandidates(f,M1_TACTICAL_POLICY_V2);
+      expect(classifyM1TacticalRoute(buy,sell,f,M1_TACTICAL_POLICY_V2).route)
+        .toBe('ABSTAIN');
+      await driveFeatures(h,f,{brokerConnectionId:'demo-conn-2'});
+      const decided=h.recordDecision.mock.calls.find(
+        ([v])=>v.direction==='BUY')?.[0];
+      expect(decided?.governance.demoAlternativeTrial).toMatchObject({
+        eligible:true,reason:'ELIGIBLE',maxLot:0.01,
+      });
+      expect(decided?.executionAuthority).toBe('BROKER_NATIVE');
+      expect(decided?.governance.demoContinuationPause.blocked).toBe(false);
+      expect(h.receiveSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          direction:'BUY',suggestedVolume:0.01,
+          metadata:expect.objectContaining({
+            m1_pepperstone_demo_alternative_trial:true,
+            multimodel_execution_authority_path:'DEMO_ALTERNATIVE_TIMING_TRIAL',
+          }),
+        }),
+      );
+      expect(h.loadDemoAlternativeTrialEntryCount).toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('pauses new owner Pepperstone DEMO primary continuation without dispatch', async () => {

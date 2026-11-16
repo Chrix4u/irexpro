@@ -2002,6 +2002,31 @@ export class M1TacticalEvidenceService {
     return rows[0]?.exists === true;
   }
 
+  /** Count only actual newly submitted trial trade intents; rejected scans do
+   * not consume the six-entry budget. Exact owner/connection/UTC timebox. */
+  async loadDemoAlternativeTrialEntryCount(input: {
+    userId: string;
+    brokerConnectionId: string;
+  }): Promise<number> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT COUNT(*)::int AS entry_count
+        FROM trading.trade_intents ti
+        WHERE ti.user_id=$1
+          AND ti.broker_connection_id=$2
+          AND ti.created_at >= '2026-11-16T20:00:00Z'::timestamptz
+          AND ti.created_at < '2026-11-16T21:00:00Z'::timestamptz
+          AND ti.metadata ->> 'm1_pepperstone_demo_alternative_trial' = 'true'
+          AND ti.status IN ('CREATED','EXECUTED')
+      `,
+      [input.userId, input.brokerConnectionId],
+    )) as Array<{ entry_count: number | string }>;
+    const count = Number(rows[0]?.entry_count);
+    if (!Number.isSafeInteger(count) || count < 0)
+      throw new Error('ALTERNATIVE_TRIAL_COUNT_UNVERIFIED');
+    return count;
+  }
+
   async hasActiveM1Intent(input: M1ActiveIntentQuery): Promise<boolean> {
     const instrument = input.instrument.trim().toUpperCase();
     const rows = (await this.dataSource.query(
