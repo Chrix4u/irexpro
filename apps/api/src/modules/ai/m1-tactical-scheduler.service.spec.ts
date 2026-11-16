@@ -845,6 +845,7 @@ function phase2Harness(
     signalOutcome?: 'EXECUTION_SUCCEEDED' | 'RISK_REJECTED';
     suspendTrendContinuation?: boolean;
     enableAlternativeTrial?: boolean;
+    enableCounterPilot?: boolean;
     rollout?: any;
     evidenceByRoute?: Record<string, any[]>;
     shadowPairSideOutcomes?: Array<{ observedAt: Date; netR: number }>;
@@ -929,6 +930,8 @@ function phase2Harness(
           options.suspendTrendContinuation ? 'enabled' : '',
         'IREXPRO_PEPPERSTONE_DEMO_ALTERNATIVE_TRIAL':
           options.enableAlternativeTrial ? 'enabled' : '',
+        'IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT':
+          options.enableCounterPilot ? 'enabled' : '',
       };
       return values[key] ?? fallback;
     }),
@@ -3346,6 +3349,102 @@ describe('M1 V8 multi-model DEMO authority', () => {
     });
     expect(recorded?.blockers ?? []).not.toContain('M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION');
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it('executes a separately qualified BUY counter into the existing Pepperstone DEMO risk path', async () => {
+    jest.useFakeTimers({
+      now:new Date('2026-11-16T21:20:40.000Z'),
+      doNotFake:['setTimeout','setInterval','setImmediate','nextTick'],
+    });
+    try {
+      const h=phase2Harness({
+        rollout:M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+        session:fullAutoSession,
+        enableCounterPilot:true,
+        suspendTrendContinuation:true,
+        trainedExpertState:'CONFIRM',
+        trainedExpertDirection:'BUY',
+      });
+      h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
+      const original=(h.service as any).evaluateDemoMultimodel.bind(h.service);
+      jest.spyOn(h.service as any,'evaluateDemoMultimodel')
+        .mockImplementation(async (...args:any[])=>{
+          const result=await original(...args);
+          const isCounter=args[2].direction==='BUY';
+          return {...result,
+            portfolioSnapshotAvailable:true,
+            ensemble:{...result.ensemble,
+              strategyRoute:isCounter?'EARLY_TRANSITION':'CONFIRMED_REVERSAL',
+              paperAdmitted:true,ensembleScore:0.75,directionQuality:0.73},
+            governance:{...result.governance,paperExecutionEligible:true,
+              paperExecutionBlockers:[],paperExecutionCostUsable:true,
+              executionSpreadEvidenceValid:true,netExpectedR:0.23,
+              eventRisk:'CLEAR',driftState:'IN_DISTRIBUTION',
+              sleeveState:'COLLECTING'},
+            trainedExpert:{...result.trainedExpert,
+              state:isCounter?'CONFIRM':'CONFLICT',
+              admitted:true,allBrokerNative:true,direction:'BUY',
+              longVotes:3,shortVotes:0,ensembleConfidence:0.78,
+              meanOpportunityProbability:0.75,freshnessSeconds:40},
+            authority:{...result.authority,executable:false,
+              authorityPath:'BLOCKED',trainedExpertOpposed:!isCounter,
+              blockers:[isCounter?'MULTIMODEL_EARLY_TRANSITION_NOT_M1_CONFIRMED':
+                'MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT']},
+          };
+        });
+      const features={...cleanContinuationFeatures(),
+        decisionTime:new Date('2026-11-16T21:20:00Z'),
+        latestM1OpenTime:new Date('2026-11-16T21:19:00Z'),
+        emaSeparationAtr:0,
+      };
+      await driveFeatures(h,features,{brokerConnectionId:'demo-conn-2'});
+      const decision=h.recordDecision.mock.calls.find(([v])=>v.direction==='BUY')?.[0];
+      expect(decision?.governance.counterPilot).toMatchObject({
+        eligible:true,reason:'ELIGIBLE',sourceSide:'SELL',maxLot:0.01,
+      });
+      expect(decision?.executionAuthority).toBe('BROKER_NATIVE');
+      expect(h.receiveSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          direction:'BUY',suggestedVolume:0.01,
+          metadata:expect.objectContaining({
+            m1_pepperstone_demo_counter_pilot:true,
+            m1_pepperstone_demo_counter_source_side:'SELL',
+            multimodel_execution_authority_path:'DEMO_EXPERT_COUNTER_ENTRY_PILOT',
+          }),
+        }),
+      );
+      expect(h.closeTrade).not.toHaveBeenCalled();
+      expect(h.loadDemoAlternativeTrialEntryCount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          startsAt:'2026-11-16T21:00:00.000Z',
+          endsAt:'2026-11-17T00:00:00.000Z',
+        }),
+      );
+    }finally{jest.useRealTimers();}
+  });
+
+  it('keeps the counter pilot unable to authorize DEMO orders after its 11 AM cutoff',async()=>{
+    jest.useFakeTimers({
+      now:new Date('2026-11-17T00:00:00Z'),
+      doNotFake:['setTimeout','setInterval','setImmediate','nextTick'],
+    });
+    try{
+      const h=phase2Harness({
+        rollout:M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+        session:fullAutoSession,enableCounterPilot:true,
+        suspendTrendContinuation:true,
+      });
+      h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
+      const features={...cleanContinuationFeatures(),
+        decisionTime:new Date('2026-11-17T00:00:00Z'),
+        latestM1OpenTime:new Date('2026-11-17T10:59:00Z'),
+        emaSeparationAtr:0,
+      };
+      await driveFeatures(h,features,{brokerConnectionId:'demo-conn-2'});
+      const decision=h.recordDecision.mock.calls.find(([v])=>v.direction==='BUY')?.[0];
+      expect(decision?.governance.counterPilot.eligible).toBe(false);
+      expect(h.receiveSignal).not.toHaveBeenCalled();
+    }finally{jest.useRealTimers()}
   });
 
   it('routes a timeboxed independently confirmed DEMO reversal through the real risk pipeline at 0.01 lot', async () => {

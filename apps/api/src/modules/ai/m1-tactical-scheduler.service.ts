@@ -78,10 +78,17 @@ import {
 import {
   evaluateDemoAlternativeTrial,
   DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT,
-  DEMO_ALTERNATIVE_TRIAL_LOT_CAP,
   DEMO_ALTERNATIVE_TRIAL_END,
   type DemoAlternativeTrialDecision,
 } from './pepperstone-demo-alternative-trial';
+import {
+  evaluateCounterPilot,
+  COUNTER_PILOT_ARTIFACT,
+  COUNTER_PILOT_START,
+  COUNTER_PILOT_END,
+  COUNTER_PILOT_ENTRY_LIMIT,
+  type CounterPilotDecision,
+} from './pepperstone-demo-counter-pilot';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import type { HighConvictionOverlay } from './high-conviction-overlay';
 import { evaluateProductionQualificationShadow } from './production-qualification-shadow';
@@ -814,6 +821,19 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       modelPolicyVersion: M1_TACTICAL_POLICY_V2.version,
       phase: this.rolloutPolicy.phase,
       cadenceSeconds: this.rolloutPolicy.cadenceMs / 1000,
+      counterDemoPilot: {
+        enabled: professionalDemoPhase &&
+          this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT', '') === 'enabled',
+        activeNow: professionalDemoPhase &&
+          this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT', '') === 'enabled' &&
+          Date.now() >= Date.parse(COUNTER_PILOT_START) &&
+          Date.now() < Date.parse(COUNTER_PILOT_END),
+        startsAt: COUNTER_PILOT_START,
+        endsAt: COUNTER_PILOT_END,
+        maxEntries: COUNTER_PILOT_ENTRY_LIMIT,
+        maxLot: 0.01,
+        exactBroker: 'Pepperstone cTrader DEMO',
+      },
       instruments: [...this.rolloutPolicy.instruments],
       ...(professionalDemoPhase && this.rolloutPolicy.demoEntryInstruments
         ? {
@@ -1705,24 +1725,80 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       expertLongVotes: multimodelDemo?.trainedExpert.longVotes ?? null,
       expertShortVotes: multimodelDemo?.trainedExpert.shortVotes ?? null,
     });
-    let demoAlternativeTrial: DemoAlternativeTrialDecision = initialDemoAlternativeTrial;
-    if (initialDemoAlternativeTrial.eligible) {
+    // Independent, DEMO-only, timeboxed expert COUNTER pilot. It is
+    // evaluated for the CURRENT candidate side, which already has its own
+    // M1 stop/target and Plan-B cost model. Never reuse the opposed side's
+    // price/risk geometry, and never promote opposing votes alone.
+    const counterEnabled = professionalDemoPhase &&
+      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT', '') === 'enabled';
+    const counterWindowOpen = counterEnabled &&
+      Date.now() >= Date.parse(COUNTER_PILOT_START) &&
+      Date.now() < Date.parse(COUNTER_PILOT_END);
+    let counterBrokerVerified = false;
+    let counterOpposedSource: MultimodelDemoEvaluation | null = null;
+    if (counterWindowOpen && multimodelDemo &&
+        ['CONFIRMED_REVERSAL','EARLY_TRANSITION'].includes(
+          multimodelDemo.ensemble.strategyRoute,
+        ) &&
+        multimodelDemo.ensemble.paperAdmitted === true &&
+        multimodelDemo.trainedExpert.state === 'CONFIRM' &&
+        multimodelDemo.trainedExpert.admitted === true) {
       try {
+        counterBrokerVerified =
+          await this.evidence.isPepperstoneDemoBrokerConnection({
+            userId, brokerConnectionId,
+          });
+        if (counterBrokerVerified) {
+          counterOpposedSource = await this.evaluateDemoMultimodel(
+            userId, brokerConnectionId, opposite, features, eventRisk,
+            spreadEvidence, decisionTime, paperSimulationSpreadPrice,
+            undefined, trainedExpertForSlot,
+          );
+        }
+      } catch (error) {
+        this.logger.warn(
+          'Independent DEMO counter evaluation unavailable: ' +
+          (error as Error).message,
+        );
+      }
+    }
+    const counterPilot = evaluateCounterPilot({
+      enabled: counterWindowOpen,
+      brokerVerified: counterBrokerVerified,
+      now: new Date(),
+      decisionTime,
+      side: candidate.direction,
+      m1Route: routeDecision.route,
+      m1Confidence: candidate.confidence,
+      m1DirectionQuality: candidate.directionQuality,
+      stopDistance: candidate.stopDistance,
+      targetDistance: candidate.targetDistance,
+      candidate: multimodelDemo,
+      opposingSource: counterOpposedSource,
+    });
+    let demoAlternativeTrial: DemoAlternativeTrialDecision | CounterPilotDecision =
+      counterPilot.eligible ? counterPilot : initialDemoAlternativeTrial;
+    if (demoAlternativeTrial.eligible) {
+      try {
+        const counterSelected = demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT;
         const priorTrialEntries =
           await this.evidence.loadDemoAlternativeTrialEntryCount({
             userId, brokerConnectionId,
+            ...(counterSelected
+              ? { startsAt: COUNTER_PILOT_START, endsAt: COUNTER_PILOT_END }
+              : {}),
           });
-        if (priorTrialEntries >= DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT) {
-          demoAlternativeTrial = {
-            ...initialDemoAlternativeTrial, eligible: false,
-            reason: 'ENTRY_LIMIT_REACHED',
-          };
+        const limit = counterSelected
+          ? COUNTER_PILOT_ENTRY_LIMIT : DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT;
+        if (priorTrialEntries >= limit) {
+          demoAlternativeTrial = counterSelected
+            ? {...counterPilot, eligible:false, reason:'ENTRY_LIMIT_REACHED'}
+            : {...initialDemoAlternativeTrial, eligible:false, reason:'ENTRY_LIMIT_REACHED'};
         }
       } catch (error) {
-        demoAlternativeTrial = {
-          ...initialDemoAlternativeTrial, eligible: false,
-          reason: 'LIMIT_CHECK_UNAVAILABLE',
-        };
+        demoAlternativeTrial = counterPilot.eligible
+          ? {...counterPilot, eligible:false, reason:'LIMIT_CHECK_UNAVAILABLE'}
+          : {...initialDemoAlternativeTrial, eligible:false, reason:'LIMIT_CHECK_UNAVAILABLE'};
         this.logger.warn(
           'DEMO alternate trial entry budget unavailable: ' +
           (error as Error).message,
@@ -1731,7 +1807,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     }
     const multimodelPrimaryExecutable =
       professionalDemoPhase &&
-      demoProfitabilityExecutionAllowed &&
+      (demoProfitabilityExecutionAllowed || counterPilot.eligible) &&
       (multimodelDemo?.authority.executable === true || demoAlternativeTrial.eligible);
     // With two recent M1 losses, the exact pair/side/route needs a finite
     // three-hour cooldown before a tiny exploratory recovery entry. A
@@ -1952,7 +2028,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     });
     const selectedExecutionVolumeCap =
       demoAlternativeTrial.eligible
-        ? Math.min(recoveryCanaryVolumeCap, DEMO_ALTERNATIVE_TRIAL_LOT_CAP)
+        ? Math.min(recoveryCanaryVolumeCap, demoAlternativeTrial.maxLot)
         : demoPrimaryOnlyProbation.qualifiedContinuationCanary
         ? Math.min(
             recoveryCanaryVolumeCap,
@@ -2646,6 +2722,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         demoPrimaryOnlyProbation: { ...demoPrimaryOnlyProbation },
         demoContinuationPause,
         demoAlternativeTrial,
+        counterPilot,
         qualifiedContinuationAfterFeeEvidence,
         demoBrokerCommissionGate: commissionGateAudit,
         productionQualificationShadow,
@@ -2889,7 +2966,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     m5EarlyTransitionEvidence: M5EarlyTransitionEvidence | null = null,
     m5EarlyTransitionHandoff: M5EarlyTransitionHandoffDecision | null = null,
     extensionExhaustionDemoScout: ExtensionExhaustionDemoScoutDecision | null = null,
-    demoAlternativeTrial: DemoAlternativeTrialDecision | null = null,
+    demoAlternativeTrial: DemoAlternativeTrialDecision | CounterPilotDecision | null = null,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -2947,11 +3024,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     }
 
     // Recheck the timebox and entry budget immediately before broker-risk
-    // checks. A delayed signal after 21:00 or a race with a prior trade may
-    // not submit a DEMO trial order.
+    // checks. A delayed signal after its own pilot cutoff or a race with a prior
+    // trade may not submit a DEMO trial order.
     if (demoAlternativeTrial?.eligible) {
       const now = Date.now();
-      if (now >= Date.parse(DEMO_ALTERNATIVE_TRIAL_END) ||
+      if (now >= Date.parse(demoAlternativeTrial.endsAt) ||
           now - decisionTime.getTime() > 120_000 ||
           now < decisionTime.getTime()) {
         await this.evidence.markOutcomeState(
@@ -2961,10 +3038,15 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         return;
       }
       try {
+        const counterSelected = demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT;
         const count = await this.evidence.loadDemoAlternativeTrialEntryCount({
           userId, brokerConnectionId,
+          ...(counterSelected
+            ? {startsAt: COUNTER_PILOT_START, endsAt: COUNTER_PILOT_END}
+            : {}),
         });
-        if (count >= DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT) {
+        if (count >= (counterSelected
+          ? COUNTER_PILOT_ENTRY_LIMIT : DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT)) {
           await this.evidence.markOutcomeState(
             decisionId, 'RISK_REJECTED', new Date(),
             'M1_DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT_REACHED',
@@ -3063,7 +3145,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // creating a durable order identity; no old forecast may leak past 21:00.
     if (demoAlternativeTrial?.eligible) {
       const now = Date.now();
-      if (now >= Date.parse(DEMO_ALTERNATIVE_TRIAL_END) ||
+      if (now >= Date.parse(demoAlternativeTrial.endsAt) ||
           now - decisionTime.getTime() > 120_000 ||
           now < decisionTime.getTime()) {
         await this.evidence.markOutcomeState(
@@ -3194,7 +3276,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
               : 'DEMO_FULL_AUTO_PROMOTED'
             : null,
           multimodel_execution_authority_path: demoAlternativeTrial?.eligible
-            ? 'DEMO_ALTERNATIVE_TIMING_TRIAL'
+            ? demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
+              ? 'DEMO_EXPERT_COUNTER_ENTRY_PILOT'
+              : 'DEMO_ALTERNATIVE_TIMING_TRIAL'
             : useProfessionalM1Fallback
               ? professionalM1Fallback?.tier
             : useM5EarlyTransitionHandoff
@@ -3285,6 +3369,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_scout_execution_volume_cap: finalExecutionVolumeCap,
           m1_pepperstone_demo_reentry_and_risk_pilot: pepperstoneDemoRiskPilot,
           m1_pepperstone_demo_alternative_trial: demoAlternativeTrial?.eligible === true,
+          m1_pepperstone_demo_counter_pilot:
+            demoAlternativeTrial?.eligible === true &&
+            demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT,
+          m1_pepperstone_demo_counter_source_side:
+            demoAlternativeTrial?.eligible &&
+            demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
+              ? demoAlternativeTrial.sourceSide : null,
+          m1_pepperstone_demo_counter_source_route:
+            demoAlternativeTrial?.eligible &&
+            demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
+              ? demoAlternativeTrial.sourceRoute : null,
           m1_pepperstone_demo_alternative_trial_artifact:
             demoAlternativeTrial?.eligible ? demoAlternativeTrial.artifact : null,
           m1_pepperstone_demo_alternative_trial_expires_at:
