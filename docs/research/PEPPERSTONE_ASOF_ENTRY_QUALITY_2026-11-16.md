@@ -45,3 +45,23 @@ For 16 November USDJPY SELL, the number of prior consecutive settled same-direct
 3. Investigate initial strategy quality by instrument, direction, session window, regime, and predicted net expectancy. Avoid suppressing profitable windows merely because a historical streak was bad.
 4. Study a demo-only, explicitly approved position risk reduction after sufficiently reliable negative evidence rather than a universal hard trade blocker.
 5. Do not promote to a real-funded account based on today's results.
+
+## Prospectively attached diagnostic (follow-up implementation)
+
+The application source now contains `pepperstone-pair-side-asof-shadow.ts` (pure evaluation), a bounded owner-scoped prior-close reader in `m1-tactical-evidence.service.ts`, and a research-governance field `pepperstonePairSideAsOfShadow` on already-authorized M1 primary Plan B candidates. It is NOT an input to `canExecute`, `receiveSignal`, risk capital allocation, broker lot sizing, trade dispatch, or broker close.
+
+The query is restricted to the exact user, broker connection, `pepperstone-ctrader` demo identity, USD currency, same instrument/direction, at most 40 settled trades in the preceding 14 days, with `closed_at < decisionTime`. An incomplete prior settlement cost or risk is marked UNKNOWN and may not be silently ignored. A candidate with a three-loss history receives a caution field but **not** a veto.
+
+A separate production-database, historical as-of parity check on 16 November found:
+
+| USDJPY SELL decision UTC | Existing narrower route brake prior losses | Broader pair-side prior losses |
+| --- | ---: | ---: |
+| 05:52 | 0 | 3 |
+| 06:17 | 1 | 4 |
+| 09:03 | 2 | 5 |
+
+This gap is explained by the older brake's strategy-route-specific history. The prospective research metric is deliberately broader and non-authoritative. It does not establish that blocking these trades would improve future profits.
+
+The implementation passes new focused unit and evidence-query tests, plus TypeScript type checking. Running the source does not deploy a changed executable service; running API service remains unchanged until a deliberate, tested restart. Because any additional database call can introduce decision-time latency, measure scanner performance in controlled staging before promoting even research-only integrations.
+
+**Entry-critical latency protection:** The prospective research query is bounded by a 350 ms wall-clock timeout. If the lookup throws or exceeds its budget, the persisted label is `UNKNOWN/HISTORY_LOOKUP_FAILED`; the already-computed broker permission, order, lots and stop remain untouched. Late returned research data is ignored. This is a client wait budget, not cancellation of the underlying PostgreSQL request. Three scheduler integration cases cover successful observation, failed lookup and slow lookup.

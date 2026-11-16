@@ -70,6 +70,7 @@ import {
   type PlanBPortfolioPosition,
 } from './plan-b-multimodel-shadow';
 import { scorePlanBClockNeutralResearch } from './v8-shadow-meta-scorer';
+import { evaluatePepperstonePairSideAsOfShadow } from './pepperstone-pair-side-asof-shadow';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import type { HighConvictionOverlay } from './high-conviction-overlay';
 import { evaluateProductionQualificationShadow } from './production-qualification-shadow';
@@ -2379,6 +2380,57 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         })
       : null;
 
+    // Strictly observational, tested against closed-at < decisionTime.
+    // Runs only for a broker-native, already-authorized primary candidate.
+    // No sidecar result is read by canExecute, broker sizing, or order routing.
+    let pepperstonePairSideAsOfShadow: ReturnType<
+      typeof evaluatePepperstonePairSideAsOfShadow
+    > | null = null;
+    if (
+      professionalDemoPhase &&
+      canExecute &&
+      multimodelPrimaryExecutable &&
+      demoPrimaryOnlyProbation.chosenAuthorityPath === 'PRIMARY_PLAN_B'
+    ) {
+      // Research gets a hard wall-clock budget, not unlimited control over
+      // the entry-critical M1 path. Late database responses remain ignored.
+      let shadowReadTimer: NodeJS.Timeout | null = null;
+      try {
+        const asOfRows = await Promise.race([
+          this.evidence.loadPepperstonePairSideAsOfRows({
+            userId,
+            brokerConnectionId,
+            instrument: candidate.instrument,
+            direction: candidate.direction,
+            asOf: decisionTime,
+          }),
+          new Promise<never>((_, reject) => {
+            shadowReadTimer = setTimeout(
+              () => reject(new Error('PAIR_SIDE_SHADOW_READ_TIMEOUT')),
+              350,
+            );
+            shadowReadTimer.unref?.();
+          }),
+        ]);
+        pepperstonePairSideAsOfShadow =
+          evaluatePepperstonePairSideAsOfShadow(asOfRows, decisionTime);
+      } catch (error) {
+        // Never fail or authorize an already-qualified broker order because
+        // read-only research history is unavailable.
+        pepperstonePairSideAsOfShadow = {
+          ...evaluatePepperstonePairSideAsOfShadow([], decisionTime),
+          reason: 'HISTORY_LOOKUP_FAILED',
+        };
+        this.logger.warn(
+          'Pepperstone pair-side as-of research unavailable ' +
+          candidate.instrument + ' ' + candidate.direction + ': ' +
+          (error as Error).message,
+        );
+      } finally {
+        if (shadowReadTimer) clearTimeout(shadowReadTimer);
+      }
+    }
+
     const persistStartedAt = Date.now();
     const decision = await this.evidence.recordDecision({
       userId,
@@ -2443,6 +2495,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         qualifiedContinuationAfterFeeEvidence,
         demoBrokerCommissionGate: commissionGateAudit,
         productionQualificationShadow,
+        pepperstonePairSideAsOfShadow,
         secondaryPredictedCostShadow,
         independentM1OpportunityShadow,
         lowVolRangeShadow,

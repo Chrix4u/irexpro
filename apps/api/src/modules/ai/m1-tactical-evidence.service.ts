@@ -8,6 +8,7 @@ import {
 } from './m1-demo-entry-diagnostics';
 
 import { DataSource } from 'typeorm';
+import type { PepperstonePairSideAsOfRow } from './pepperstone-pair-side-asof-shadow';
 import type { M1ReliabilityRoute, M1RoutePairSideEvidenceRow } from './m1-tactical-reliability';
 import type { M1FailedMoveRescueDecision } from './m1-failed-move-rescue';
 import type { M1DriftCounterfactualResult } from './m1-drift-counterfactual';
@@ -1243,6 +1244,70 @@ export class M1TacticalEvidenceService {
         closedAt: new Date(row.closed_at),
       })),
     });
+  }
+
+  /**
+   * Prospective, broker-native DEMO research reader. Exact owner and connection,
+   * same pair + direction, 14-day completed settlement window, bounded to 40.
+   * Never used by an execution gate or broker-order service.
+   */
+  async loadPepperstonePairSideAsOfRows(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    asOf: Date;
+  }): Promise<PepperstonePairSideAsOfRow[]> {
+    const instrument = input.instrument.trim().toUpperCase();
+    if (
+      !/^[A-Z]{6}$/.test(instrument) ||
+      !Number.isFinite(input.asOf.getTime())
+    ) throw new Error('INVALID_PAIR_SIDE_ASOF_SCOPE');
+    const rows = (await this.dataSource.query(
+      `
+        SELECT t.closed_at, (t.realised_pnl + t.commission + t.swap) AS net_pnl,
+          COALESCE(
+            NULLIF(ca.sizing_inputs->>'finalRiskAtStop', '')::numeric,
+            NULLIF(ca.sizing_inputs->>'riskAmount', '')::numeric
+          ) AS risk_at_stop
+        FROM trading.trades t
+        JOIN broker.broker_connections b
+          ON b.id = t.broker_connection_id AND b.user_id = t.user_id
+        LEFT JOIN LATERAL (
+          SELECT c0.sizing_inputs
+          FROM trading.capital_allocations c0
+          WHERE c0.trade_intent_id = t.trade_intent_id
+            AND c0.created_at <= t.opened_at
+          ORDER BY c0.created_at DESC LIMIT 1
+        ) ca ON true
+        WHERE t.user_id = $1 AND t.broker_connection_id = $2
+          AND b.broker_id = 'pepperstone-ctrader'
+          AND b.account_type = 'DEMO'
+          AND t.account_currency = 'USD'
+          AND t.instrument = $3 AND t.direction = $4
+          AND t.status = 'CLOSED'
+          AND t.closed_at < $5::timestamptz
+          AND t.closed_at >= ($5::timestamptz - interval '14 days')
+        ORDER BY t.closed_at DESC, t.id DESC
+        LIMIT 40
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        instrument,
+        input.direction,
+        input.asOf.toISOString(),
+      ],
+    )) as Array<{
+      closed_at: Date | string;
+      net_pnl: string | number | null;
+      risk_at_stop: string | number | null;
+    }>;
+    return rows.map(row => ({
+      closedAt: row.closed_at,
+      netPnl: row.net_pnl,
+      riskAtStop: row.risk_at_stop,
+    }));
   }
 
   async loadMultimodelLossStreakBrake(
