@@ -36,3 +36,11 @@ Owner scope is the configured VPS user plus an actual `pepperstone-ctrader` conn
 3. Build a broker-independent **counter-direction strategy**, not a blind reverse order: separate entry/timing qualification, stop, target, cost/fee checks, max loss and kill switch. Train and evaluate over independent out-of-sample periods.
 4. Build an authenticated per-user dashboard displaying labels MAIN versus COUNTER, with a prominent broker-executed versus virtual badge and daily scoreboards. Do not expose the private owner report through public assets.
 5. A separate explicit feature flag and security review is required before any dedicated DEMO counter order can be considered. Keep real-money trading disabled until sustained positive prospective evidence.
+
+## Authenticated in-app dashboard — implementation prepared
+
+- Private API endpoint: `GET /api/v1/ai/counter-mirror`. It uses the existing JWT-authenticated AI controller architecture, checks the requesting user against the exact configured scanner owner and reads the private report from the server. There is **no public report directory**, no URL-supplied file path and no cross-account reads.
+- Projection: `AiCounterMirrorReportService` whitelists the fields displayed, verifies the report is research-only with `executionAuthority:'NONE'`, requires the virtual counter's opposite direction and broker-order=false marker, caps result sizes, marks reports stale after five minutes and does not expose raw broker connection IDs, credentials or quote metadata.
+- UI route: `/ai/counter`, accessible through a new link from both `/trade` and `/ai/bidirectional`. The UI shows the daily scorecard and separate MAIN actual versus COUNTER virtual cards, including the independent mirrored SL/TP estimate where observable.
+- New backend unit tests verify owner-scoped access, confidentiality, virtual-only status and report freshness.
+- **Deployment gate:** Building/pushing source does NOT make the new URL reachable while the existing web and API services run earlier builds. Deploy the dashboard during a safe window only after verifying current trading positions, and recheck API/web health immediately afterward. Do not restart the AI engine, change live model versions or promote counter positions to executable orders.

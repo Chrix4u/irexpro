@@ -3166,6 +3166,9 @@ export default function AiTradingPage() {
               iRexPro opens only qualified opportunities and manages each AI position
               within your allocation and protection rules.
             </p>
+            <Link href="/ai/counter" className="btn btn--secondary">
+              MAIN vs COUNTER · Research
+            </Link>
           </div>
           <div className="ai-trader__hero-state" data-ai-state={aiVisualState}>
             <span>AI Trading</span>

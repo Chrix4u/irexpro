@@ -8,6 +8,8 @@ import { AiCopilotService } from './ai-copilot.service';
 import { AiController } from './ai.controller';
 import { AiDecisionExplorerController } from './ai-decision-explorer.controller';
 import { AiBidirectionalDecisionController } from './ai-bidirectional-decision.controller';
+import { AiCounterMirrorReportController } from './ai-counter-mirror-report.controller';
+import { AiCounterMirrorReportService } from './ai-counter-mirror-report.service';
 import { AiCopilotController } from './ai-copilot.controller';
 import { ExternalSignalPerformanceController } from './external-signal-performance.controller';
 import { ExternalSignalPerformanceService } from './external-signal-performance.service';
@@ -76,6 +78,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     AiController,
     AiDecisionExplorerController,
     AiBidirectionalDecisionController,
+    AiCounterMirrorReportController,
     AiCopilotController,
     ExternalSignalPerformanceController,
     TradingViewWebhookController,
@@ -86,6 +89,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     AiSignalService,
     AiDecisionExplorerService,
     AiBidirectionalDecisionService,
+    AiCounterMirrorReportService,
     AiCopilotService,
     InternalApiKeyGuard,
     ExternalSignalApiKeyGuard,

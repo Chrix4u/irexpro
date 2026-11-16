@@ -163,6 +163,7 @@ export default function BidirectionalDecisionPage() {
           </div>
           <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', alignItems: 'center' }}>
             <Link href="/ai" className="btn btn--secondary">Decision Explorer</Link>
+            <Link href="/ai/counter" className="btn btn--secondary">MAIN vs COUNTER</Link>
             <Button type="button" variant="secondary" size="sm" loading={loading} disabled={loading} onClick={() => void refresh()}>
               {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
