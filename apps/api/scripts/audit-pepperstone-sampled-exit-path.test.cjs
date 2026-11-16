@@ -140,3 +140,31 @@ test('daily sampled path archives are immutable, private and restricted to shado
    dir,new Date('2026-11-18T00:20:00Z')), /UNSAFE_ARCHIVE_SOURCE/);
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+test('sparse samples never imply verified stop/target ordering',()=>{
+ const rows=[sample(0.05,1.1000,1.1001),
+   sample(0.90,1.0991,1.0992),
+   sample(2.99,1.0990,1.0991)];
+ const reviewed=sampledSide(e,rows,'BUY',3);
+ assert.equal(reviewed.status,'COMPARABLE_WITH_SAMPLING_GAPS');
+ assert.equal(reviewed.coverage.quotePathCoverage,'SPARSE_SAMPLES');
+ assert.equal(reviewed.coverage.stopTargetOrderingProven,false);
+ assert.equal(reviewed.firstObservedTouch.status,'FIRST_OBSERVED_STOP_LEVEL');
+ assert.equal(reviewed.firstObservedTouch.mayHaveMissedEarlierCrossing,true);
+ assert.ok(reviewed.firstObservedTouch.precedingUnobservedGapMs>30_000);
+});
+test('a dense recorded quote path remains comparable but cannot verify broker fill',()=>{
+ const rows=[sample(0.05,1.1000,1.1001)];
+ for(let j=1;j<=180;j++){
+  const tick=0.05+j*2/60;
+  rows.push(sample(tick,1.1002,1.1003));
+ }
+ const result=sampledSide(e,rows,'BUY',3);
+ assert.equal(result.status,'SAMPLED_PATH_COMPARABLE');
+ assert.equal(result.coverage.quotePathCoverage,'FREQUENT_SAMPLES');
+ assert.equal(result.brokerFillVerified,false);
+ const {summarize}=require('./audit-pepperstone-sampled-exit-path.cjs');
+ const stats=summarize([{sampled:{3:{chosen:result,opposite:result}}}]);
+ assert.equal(stats['3'].chosenFrequentOrModerateSamples,1);
+ assert.equal(stats['3'].chosenCoverageQuality.FREQUENT_SAMPLES,1);
+});

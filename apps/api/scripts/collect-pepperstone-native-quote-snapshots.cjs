@@ -96,6 +96,30 @@ function countUniqueSamples(rows){
  }
  return Object.fromEntries(groups);
 }
+function restoreSeenFromArchives(io=fs,dir=ROOT,now=new Date()){
+ // Rehydrate recent native quote timestamps before a PM2 restart can
+ // append the same source sample again. Scan only the latest 128 KiB.
+ const seen=new Map();
+ for(const shift of [1,0]){
+  const day=new Date(now.getTime()-shift*86400000).toISOString().slice(0,10);
+  const file=path.join(dir,day+'.jsonl');
+  if(!io.existsSync(file))continue;
+  const bytes=io.statSync(file).size;
+  if(!(bytes>0&&bytes<=MAX_DAY_BYTES))continue;
+  const size=Math.min(bytes,128*1024),buffer=Buffer.alloc(size);
+  const fd=io.openSync(file,'r');
+  try{io.readSync(fd,buffer,0,size,bytes-size)}finally{io.closeSync(fd)}
+  const lines=buffer.toString('utf8').split('\n');
+  for(const line of lines){
+   let row;try{row=JSON.parse(line)}catch{continue}
+   if(!Array.isArray(row)||row.length!==5||!VALID_PAIRS.has(row[2]))continue;
+   const stamp=new Date(row[0]).getTime();
+   if(!Number.isFinite(stamp))continue;
+   seen.set(row[2],Math.max(stamp,seen.get(row[2])??-Infinity));
+  }
+ }
+ return seen;
+}
 async function collect(db,owner,seen=new Map(),base=ROOT,now=new Date()){
  if(!UUID.test(owner))throw Error('INVALID_OWNER_SCOPE');
  await db.query('BEGIN READ ONLY');
@@ -112,7 +136,7 @@ async function main(){
  const {Client}=require('pg'),{getDatabaseSslOptions}=require('../dist/config/database-tls');
  const owner=process.env.VPS_FOREX_SCANNER_USER_ID;
  if(!UUID.test(owner||''))throw Error('OWNER_NOT_CONFIGURED');
- const seen=new Map();
+ const seen=restoreSeenFromArchives(fs,ROOT,new Date());
  const db=new Client({host:process.env.DB_HOST||'localhost',
   port:Number(process.env.DB_PORT||5432),database:process.env.DB_NAME||'irexpro_dev',
   user:process.env.DB_USER||'irexpro',password:process.env.DB_PASSWORD,
@@ -153,7 +177,8 @@ async function main(){
  process.on('SIGINT',()=>void stop());process.on('SIGTERM',()=>void stop());
 }
 module.exports={QUERY,ROOT,MAX_DAY_BYTES,RETAIN_DAYS,POLL_MS,MAX_AGE_MS,
- parseSnapshot,persistSnapshots,pruneOldDays,countUniqueSamples,collect};
+ parseSnapshot,persistSnapshots,pruneOldDays,countUniqueSamples,
+ restoreSeenFromArchives,collect};
 if(require.main===module)main().catch(e=>{
  console.error('QUOTE_SHADOW_FATAL',String(e.message).slice(0,160));process.exitCode=1;
 });

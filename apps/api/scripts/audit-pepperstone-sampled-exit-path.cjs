@@ -115,6 +115,8 @@ function sampledSide(episode,records,side,h){
     observedAt:q[0],
     status:stopSeen&&targetSeen?'AMBIGUOUS_SAMPLED_BARRIERS':
      stopSeen?'FIRST_OBSERVED_STOP_LEVEL':'FIRST_OBSERVED_TARGET_LEVEL',
+    precedingUnobservedGapMs:gap,
+    mayHaveMissedEarlierCrossing:true,
    };
   }
  }
@@ -128,6 +130,10 @@ function sampledSide(episode,records,side,h){
   maximumUnsampledGapMs:maxGap,
   horizonMinutes:h,
   finalSnapshotLagMs:endGap,
+  quotePathCoverage:maxGap<=5_000?'FREQUENT_SAMPLES':
+   maxGap<=10_000?'MODERATE_SAMPLES':
+   maxGap<=30_000?'GAPPED_SAMPLES':'SPARSE_SAMPLES',
+  stopTargetOrderingProven:false,
  };
  if(seen===0||endGap>MAX_MARK_STALENESS_MS)
   return {status:'UNKNOWN_NO_NEAR_HORIZON_SNAPSHOT',coverage,firstObservedTouch:firstTouch};
@@ -159,8 +165,18 @@ function summarize(episodes){
    const k=x.firstObservedTouch?.status??x.status;
    s[k]=(s[k]??0)+1;return s;
   },{});
+  const quality=arr=>arr.reduce((out,x)=>{
+   const name=x.coverage?.quotePathCoverage??'UNKNOWN_COVERAGE';
+   out[name]=(out[name]??0)+1;return out;
+  },{});
   stats[h]={
    selected:episodes.length,chosenComparable:c.length,oppositeComparable:r.length,
+   chosenCoverageQuality:quality(chosen),
+   oppositeCoverageQuality:quality(reverse),
+   chosenFrequentOrModerateSamples:c.filter(x=>['FREQUENT_SAMPLES',
+    'MODERATE_SAMPLES'].includes(x.coverage?.quotePathCoverage)).length,
+   oppositeFrequentOrModerateSamples:r.filter(x=>['FREQUENT_SAMPLES',
+    'MODERATE_SAMPLES'].includes(x.coverage?.quotePathCoverage)).length,
    chosenWins:c.filter(x=>x.estimatedFixedHoldNetPips>0).length,
    oppositeWins:r.filter(x=>x.estimatedFixedHoldNetPips>0).length,
    chosenNetPipsSum:sum(c),oppositeNetPipsSum:sum(r),

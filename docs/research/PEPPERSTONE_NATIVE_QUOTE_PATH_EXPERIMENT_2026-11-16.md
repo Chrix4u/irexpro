@@ -95,3 +95,33 @@ outcomes mature, and are never overwritten.
 Five sessions: 32W/42L, net -$1,402.72, PF 0.701.
 Friday alone was profitable. Prospective multi-day profitability is
 not established by this one-day research experiment.
+
+## 19:34 UTC — sampled-path confidence and restart integrity
+
+The new research collector was verified with 3,854 timestamped broker quote
+samples in its first 32 minutes. A recent AUDUSD BUY reversal had a
+5-second entry delay and 360 sampled observations over 15 minutes; its
+maximum missing interval was 8.965 seconds. Its 15-minute virtual outcome
+after estimated cost was -0.4 pips BUY and -1.5 pips opposite SELL.
+**Neither direction was profitable.** No stop or target *was observed*
+in the collected samples, but this cannot rule out unobserved touches.
+
+The improved sampled-path report now separates quote-path coverage into
+`FREQUENT_SAMPLES` (largest gap <=5s), `MODERATE_SAMPLES`
+(<=10s), `GAPPED_SAMPLES` (<=30s), and `SPARSE_SAMPLES`
+(>30s), reporting counts by horizon. No category ever asserts tick-complete
+history. Observed stop/target levels preserve the preceding unsampled
+time gap and `mayHaveMissedEarlierCrossing=true`.
+
+The collector also now restores the latest instrument sample timestamp
+from the bounded tail of today's and yesterday's persisted research JSONL
+when PM2 restarts. This prevents a restarted watcher from duplicating
+samples already written to disk; no database mutations or broker API calls
+are introduced. Full scope and bounded retention remain unchanged.
+
+All 17 focused new collector and sampled-path tests passed, including
+restart idempotency, gap flags, next-minute entry conservatism and
+sampled trade-direction economics. The first sampled cohort is only
+**one** fully comparable 15-minute episode; older forward candidates
+pre-date collector activation and are correctly marked UNKNOWN.
+No inference about sustainable trading profitability can be drawn.

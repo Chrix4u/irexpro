@@ -81,3 +81,27 @@ test('read-only transaction never persists credentials or uses broker dispatch',
    .includes('broker_connection_id'),false);
  }finally{fs.rmSync(tmp,{recursive:true,force:true});}
 });
+
+test('a restarted collector restores last saved native time and never duplicates it',()=>{
+ const {restoreSeenFromArchives}=require('./collect-pepperstone-native-quote-snapshots.cjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'irexpro-restore-'));
+ try{
+  const current='2026-11-16T19:40:00.000Z';
+  const yesterday=['2026-11-15T23:59:59.000Z','2026-11-16T00:00:00.000Z',
+   'EURUSD',1.101,1.1011];
+  const latest=['2026-11-16T19:40:00.000Z','2026-11-16T19:40:02.000Z',
+   'EURUSD',1.102,1.1021];
+  const other=['2026-11-16T19:40:01.000Z','2026-11-16T19:40:02.000Z',
+   'USDJPY',154.1,154.112];
+  fs.writeFileSync(path.join(dir,'2026-11-15.jsonl'),JSON.stringify(yesterday)+'\n');
+  fs.writeFileSync(path.join(dir,'2026-11-16.jsonl'),
+   [JSON.stringify(latest),JSON.stringify(other),'truncated{'].join('\n'));
+  const seen=restoreSeenFromArchives(fs,dir,new Date(current));
+  assert.equal(seen.get('EURUSD'),Date.parse(latest[0]));
+  assert.equal(seen.get('USDJPY'),Date.parse(other[0]));
+  const result=persistSnapshots([sample('2026-11-16T19:40:00.000Z',{
+   bucket_time:'2026-11-16T19:40:00.000Z',
+  })],'2026-11-16T19:40:02.000Z',fs,dir,seen);
+  assert.equal(result.accepted,0);
+ }finally{fs.rmSync(dir,{recursive:true,force:true})}
+});
