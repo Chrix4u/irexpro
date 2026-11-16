@@ -843,6 +843,7 @@ function phase2Harness(
     spreadUsable?: boolean;
     reliabilityLosses?: number;
     signalOutcome?: 'EXECUTION_SUCCEEDED' | 'RISK_REJECTED';
+    suspendTrendContinuation?: boolean;
     rollout?: any;
     evidenceByRoute?: Record<string, any[]>;
     shadowPairSideOutcomes?: Array<{ observedAt: Date; netR: number }>;
@@ -923,6 +924,8 @@ function phase2Harness(
         'vpsForexScanner.userId': 'user-1',
         'vpsForexScanner.brokerConnectionId': 'conn-1',
         'vpsForexScanner.m1MarketDataConnectionId': 'demo-conn-1',
+        'IREXPRO_PEPPERSTONE_DEMO_PAUSE_TREND_CONTINUATION':
+          options.suspendTrendContinuation ? 'enabled' : '',
       };
       return values[key] ?? fallback;
     }),
@@ -3173,10 +3176,11 @@ describe('M1 V8 multi-model DEMO authority', () => {
       closedAt: new Date(Date.UTC(2026, 9, 15, 10, 20 - index, 0)),
     }));
 
-  function qualifiedContinuationProbationHarness() {
+  function qualifiedContinuationProbationHarness(suspendTrendContinuation = false) {
     const h=phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
       session: fullAutoSession,
+      suspendTrendContinuation,
       evidenceByRoute: {M1_TREND_CONTINUATION: positiveContinuationSeven()},
     });
     h.isActiveConnectedOwnerDemoBroker.mockResolvedValue(true);
@@ -3228,6 +3232,24 @@ describe('M1 V8 multi-model DEMO authority', () => {
         brokerConnectionId:'demo-conn-2',
       }),
     );
+  });
+
+  it('pauses the previously qualified M1 continuation canary on Pepperstone DEMO', async () => {
+    const h = qualifiedContinuationProbationHarness(true);
+    h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
+    await driveFeatures(h,cleanContinuationFeatures(),{brokerConnectionId:'demo-conn-2'});
+    const record=h.recordDecision.mock.calls.find(
+      ([v]) => v.direction==='BUY'&&v.route==='M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(record?.governance.demoPrimaryOnlyProbation).toMatchObject({
+      qualifiedContinuationCanary:true,blocked:false,
+    });
+    expect(record?.governance.demoContinuationPause).toMatchObject({
+      enabled:true,blocked:true,reason:'CONTINUATION_PAUSED',
+    });
+    expect(record?.executionAuthority).toBe('NONE');
+    expect(record?.blockers).toContain('M1_PEPPERSTONE_DEMO_TREND_CONTINUATION_PAUSED');
+    expect(h.receiveSignal).not.toHaveBeenCalled();
   });
 
   it('does not authorize a route with positive gross but negative real after-fee R', async () => {
@@ -3317,6 +3339,108 @@ describe('M1 V8 multi-model DEMO authority', () => {
       chosenAuthorityPath: 'PRIMARY_PLAN_B',
     });
     expect(recorded?.blockers ?? []).not.toContain('M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION');
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it('pauses new owner Pepperstone DEMO primary continuation without dispatch', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      suspendTrendContinuation: true,
+    });
+    h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const value = await original(...args);
+        return {
+          ...value,
+          ensemble: { ...value.ensemble,
+            strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
+          authority: { ...value.authority,
+            executable: true, authorityPath: 'PRIMARY_PLAN_B', blockers: [] },
+        };
+      });
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    const record = h.recordDecision.mock.calls.find(
+      ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(record?.executionAuthority).toBe('NONE');
+    expect(record?.blockers).toContain(
+      'M1_PEPPERSTONE_DEMO_TREND_CONTINUATION_PAUSED',
+    );
+    expect(record?.governance.demoContinuationPause).toMatchObject({
+      enabled: true,blocked:true,reason:'CONTINUATION_PAUSED',
+      changesOpenPositions:false,overridesAlternativeAdmission:false,
+    });
+    expect(h.isPepperstoneDemoBrokerConnection).toHaveBeenCalledWith({
+      userId:'user-1',brokerConnectionId:'demo-conn-2',
+    });
+    expect(h.receiveSignal).not.toHaveBeenCalled();
+  });
+
+  it('does not pause other DEMO brokers when the Pepperstone option is enabled', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      suspendTrendContinuation: true,
+    });
+    h.isPepperstoneDemoBrokerConnection.mockResolvedValue(false);
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const value = await original(...args);
+        return {
+          ...value,
+          ensemble: { ...value.ensemble,
+            strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
+          authority: { ...value.authority,
+            executable: true, authorityPath: 'PRIMARY_PLAN_B', blockers: [] },
+        };
+      });
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    const record = h.recordDecision.mock.calls.find(
+      ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(record?.governance.demoContinuationPause).toMatchObject({
+      enabled:true,blocked:false,reason:'OTHER_BROKER',
+    });
+    expect(record?.executionAuthority).toBe('BROKER_NATIVE');
+    expect(h.receiveSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not grant or veto the separately qualified reversal path', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+      session: fullAutoSession,
+      evidenceByRoute: { M1_TREND_CONTINUATION: [] },
+      suspendTrendContinuation: true,
+    });
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const value = await original(...args);
+        return {
+          ...value,
+          ensemble: { ...value.ensemble,
+            strategyRoute: 'CONFIRMED_REVERSAL', paperAdmitted: true },
+          authority: { ...value.authority,
+            executable: true, authorityPath: 'PRIMARY_PLAN_B', blockers: [] },
+        };
+      });
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    const record = h.recordDecision.mock.calls.find(
+      ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
+    expect(record?.governance.demoContinuationPause).toMatchObject({
+      blocked:false,reason:'DISABLED',
+    });
+    expect(record?.blockers).not.toContain(
+      'M1_PEPPERSTONE_DEMO_TREND_CONTINUATION_PAUSED',
+    );
+    expect(record?.executionAuthority).toBe('BROKER_NATIVE');
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
   });
 

@@ -71,6 +71,10 @@ import {
 } from './plan-b-multimodel-shadow';
 import { scorePlanBClockNeutralResearch } from './v8-shadow-meta-scorer';
 import { evaluatePepperstonePairSideAsOfShadow } from './pepperstone-pair-side-asof-shadow';
+import {
+  evaluatePepperstoneDemoContinuationPause,
+  PEPPERSTONE_DEMO_CONTINUATION_PAUSE_BLOCKER,
+} from './pepperstone-demo-continuation-pause';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import type { HighConvictionOverlay } from './high-conviction-overlay';
 import { evaluateProductionQualificationShadow } from './production-qualification-shadow';
@@ -2051,6 +2055,44 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       : extensionExhaustionDemoScoutExecutable
         ? ('TREND_CONTINUATION' as const)
         : multimodelDemo?.ensemble.strategyRoute;
+    // Strictly scoped, reversible experiment. Unlike a route-priority
+    // override, this veto covers primary Plan-B continuation AND executable
+    // continuation fallbacks/canaries. M5 early handoffs and confirmed
+    // reversals remain subject to their existing unrelaxed admission gates.
+    const chosenDemoAuthorityPath = demoPrimaryOnlyProbation.chosenAuthorityPath;
+    const selectedContinuationForPause =
+      (chosenDemoAuthorityPath === 'PRIMARY_PLAN_B' &&
+        multimodelDemo?.ensemble.strategyRoute === 'TREND_CONTINUATION') ||
+      chosenDemoAuthorityPath === 'BOOTSTRAP_CONTINUATION' ||
+      chosenDemoAuthorityPath === 'QUALIFIED_CONTINUATION' ||
+      chosenDemoAuthorityPath === 'EXTENSION_EXHAUSTION_DEMO_SCOUT';
+    const pauseEnabled =
+      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_PAUSE_TREND_CONTINUATION', '') ===
+      'enabled';
+    let pauseBrokerVerified: boolean | null = null;
+    if (professionalDemoPhase && pauseEnabled && preliminaryCanExecute &&
+        selectedContinuationForPause) {
+      try {
+        pauseBrokerVerified = await this.evidence.isPepperstoneDemoBrokerConnection({
+          userId, brokerConnectionId,
+        });
+      } catch (error) {
+        // With the pause requested, missing identity cannot justify
+        // continuing to open large continuation trades.
+        this.logger.warn(
+          'M1 DEMO continuation pause broker scope unavailable instrument=' +
+          candidate.instrument + ': ' + (error as Error).message,
+        );
+      }
+    }
+    const demoContinuationPause = evaluatePepperstoneDemoContinuationPause({
+      enabled: professionalDemoPhase && pauseEnabled &&
+        preliminaryCanExecute && selectedContinuationForPause,
+      isProfessionalDemoPhase: professionalDemoPhase,
+      selectedRoute: selectedContinuationForPause
+        ? 'TREND_CONTINUATION' : executionStrategyRoute ?? null,
+      scopedPepperstoneDemo: pauseBrokerVerified,
+    });
     const multimodelLossStreakBrake =
       preliminaryCanExecute &&
       (multimodelPrimaryExecutable ||
@@ -2145,7 +2187,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       !qualifiedContinuationCanaryRecentlyAuthorized &&
       !qualifiedContinuationCanaryHistoryUnavailable &&
       !demoPrimaryOnlyProbation.blocked &&
-      !demoBrokerCommissionGate.blocked;
+      !demoBrokerCommissionGate.blocked &&
+      !demoContinuationPause.blocked;
     const effectiveGovernanceBlockers =
       microDriftOnlyRescue || localImpulseDriftOnlyRescue ? [] : governance.blockers;
     const researchBlockers = unique([
@@ -2199,6 +2242,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(qualifiedContinuationCanaryHistoryUnavailable
             ? ['M1_DEMO_QUALIFIED_CONTINUATION_CANARY_HISTORY_UNAVAILABLE'] : []),
           ...(demoPrimaryOnlyProbation.blocked ? ['M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION'] : []),
+          ...(demoContinuationPause.blocked
+            ? [PEPPERSTONE_DEMO_CONTINUATION_PAUSE_BLOCKER] : []),
           ...(demoBrokerCommissionGate.blocked
             ? [`M1_DEMO_BROKER_COMMISSION_${demoBrokerCommissionGate.reason}`]
             : []),
@@ -2492,6 +2537,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         fastStopRegimeBrake: fastStopRegimeBrake ? { ...fastStopRegimeBrake } : null,
         portfolioNetLossBrake: portfolioNetLossBrake ? { ...portfolioNetLossBrake } : null,
         demoPrimaryOnlyProbation: { ...demoPrimaryOnlyProbation },
+        demoContinuationPause,
         qualifiedContinuationAfterFeeEvidence,
         demoBrokerCommissionGate: commissionGateAudit,
         productionQualificationShadow,
