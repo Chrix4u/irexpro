@@ -34,7 +34,7 @@ const SQL_SIGNALS=[
  "d.governance #>> '{multimodelGovernance,paperExecutionEligible}' AS governance_eligible,",
  "d.candidate->>'score' AS m1_score,",
  "d.candidate->>'stopDistance' AS stop_distance,",
- "d.candidate->>'targetDistance' AS target_distance,",
+ "d.candidate->>'targetDistance' AS target_distance",
  'FROM trading.m1_tactical_decisions d',
  'WHERE d.user_id=$1 AND d.broker_connection_id=$2',
  'AND d.evaluated_at>=$3::timestamptz AND d.evaluated_at<$4::timestamptz',
@@ -59,10 +59,13 @@ const SQL_PROGRESS=[
  'AND d.evaluated_at >= $3::timestamptz AND d.evaluated_at < $4::timestamptz',
 ].join(' ');
 const SQL_QUOTES=[
- 'SELECT instrument,bucket_time,last_quote_sample_at,bid_close,ask_close,',
- 'source,positive_quote_sample_count FROM market_data.provider_quote_candles',
+ 'SELECT instrument,bucket_time,',
+ 'last_positive_sample_at AS last_quote_sample_at,',
+ 'last_positive_bid AS bid_close,last_positive_ask AS ask_close,',
+ 'source,positive_quote_sample_count,high,low,last_positive_spread',
+ 'FROM market_data.provider_quote_candles',
  "WHERE connection_id=$1 AND timeframe='M1' AND source='ctrader-broker-native'",
- 'AND positive_quote_sample_count>0',
+ 'AND positive_quote_sample_count>0 AND last_positive_spread>0',
  'AND bucket_time>=$2::timestamptz AND bucket_time<$3::timestamptz',
  'ORDER BY instrument,bucket_time',
 ].join(' ');

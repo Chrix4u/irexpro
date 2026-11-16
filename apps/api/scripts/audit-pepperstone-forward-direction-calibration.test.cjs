@@ -168,3 +168,22 @@ test('finalized day evidence is archived once, after all outcomes mature',()=>{
    /ARCHIVE_REQUIRES_VERIFIED_SHADOW_REPORT/);
  }finally{fs.rmSync(base,{recursive:true,force:true});}
 });
+
+test('matured-signal SELECT cannot contain the historical trailing-comma syntax failure',()=>{
+ const {SQL_SIGNALS}=require('./audit-pepperstone-forward-direction-calibration.cjs');
+ assert.doesNotMatch(SQL_SIGNALS,/,\s+FROM\s+trading\.m1_tactical_decisions/i);
+ assert.match(SQL_SIGNALS,/targetDistance' AS target_distance FROM/i);
+});
+
+test('quote query uses timestamped positive-spread cTrader snapshots, never zero-spread close',()=>{
+ const {SQL_QUOTES}=require('./audit-pepperstone-forward-direction-calibration.cjs');
+ const {validQuote}=require('./audit-pepperstone-alternative-route-opportunities.cjs');
+ assert.match(SQL_QUOTES,/last_positive_bid AS bid_close/);
+ assert.match(SQL_QUOTES,/last_positive_ask AS ask_close/);
+ assert.match(SQL_QUOTES,/last_positive_sample_at AS last_quote_sample_at/);
+ assert.match(SQL_QUOTES,/last_positive_spread>0/);
+ assert.equal(validQuote(q(1,1.1000,1.1001)),true);
+ assert.equal(validQuote(q(1,1.1001,1.1001)),false);
+ assert.equal(validQuote({...q(1,1.1000,1.1001),
+   last_quote_sample_at:at(2,10)}),false);
+});

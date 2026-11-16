@@ -158,3 +158,47 @@ At **18:08 UTC**, diagnostics showed 152 scanner decisions, 11 paper-admitted,
 quotes. The first possible fully matured outcome from the 17:52 research
 candidate is after approximately 18:11 UTC. Until then, showing zero wins or
 losses would be premature.
+
+## 18:17 UTC integration verification and clean quote evidence
+
+The first matured signal (AUDUSD SELL at 17:52) exposed two issues
+that could not be detected while the outcome cohort was empty:
+
+1. The matured-decision SQL had a trailing comma before `FROM`.
+   Fixed it. Verified the exact owner/broker-scoped query using
+   `EXPLAIN` and executed it against the VPS PostgreSQL read-only
+   transaction (eight genuine qualified rows in the test window).
+   Regression tests now reject the original malformed SQL.
+
+2. A broker-native quote M1 candle may have `bid_close = ask_close`
+   (zero spread) even when its `positive_quote_sample_count > 0`.
+   Such last-close fields **must not** be treated as executable
+   zero-spread markets, nor should all those candles be thrown away.
+   The database also preserves independent
+   `last_positive_bid`, `last_positive_ask`,
+   `last_positive_spread` and `last_positive_sample_at`.
+   The monitor now exclusively aliases these *timestamped native
+   positive-spread* fields into its bid/ask mark model.
+   It rejects invalid timestamps or non-positive quoted spreads,
+   and does not use synthetic zero-cost fills.
+
+As of ~18:17 UTC, the forward monitor had recorded 216 scanning
+decisions, 10 jointly paper-admitted/governance-eligible scans,
+four matured qualified scans, and **three non-overlapping,
+bid/ask-comparable research episodes**. At a fixed 15-minute
+virtual holding horizon: the selected side was positive in 2/3,
+the opposite was positive in 0/3; mean estimated after-cost pips:
+selected +1.948, opposite -4.219. This is **far too small** to
+prove profitable prediction. One USDJPY reversal with higher quality
+failed after costs; two continuation signals with low quality were
+positive at 15 minutes. These are contrasting *research examples*,
+not authorization to resume continuation.
+
+The protocol still lacks tick-exact stop-loss first-touch checks;
+the observed favorable 15-minute return does NOT establish that
+a broker position would have survived the path to that mark.
+No broker order, model weight or live execution authority was changed.
+
+20 Node regression tests passed across the historical and
+prospective research scripts; the API health remains separate
+from and unaffected by the shadow observer.
