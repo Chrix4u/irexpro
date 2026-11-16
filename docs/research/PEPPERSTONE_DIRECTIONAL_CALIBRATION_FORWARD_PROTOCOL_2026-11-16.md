@@ -250,3 +250,19 @@ ambiguity, missing quote path, invalid spread/ranges, and
 unassessed partial entry-minute risk. Integration adds per-route
 and per-horizon counts, without granting authority, changing
 live trading, or weakening existing risk gates.
+
+## 19:10 UTC — exit-minute causality guard
+
+One further lookahead correction has been applied to the older M1
+midpoint-bar proxy `forward-direction-m1-barrier-review.cjs`.
+If a possible stop/target crossing occurs in **the same M1 bucket
+whose positive bid/ask quote supplies the horizon exit mark**, the
+candle's high/low may include ticks *after* that quote timestamp.
+The research status is now `UNKNOWN_EXIT_MINUTE_ORDER`, never
+`POSSIBLE_STOP_BEFORE_TARGET` or `POSSIBLE_TARGET_BEFORE_STOP`.
+The entry minute also remains unverified. A targeted regression test
+reproduces this boundary.
+
+This does not rewrite actual broker P&L, change any trading permission,
+or claim exact tick order. The forward counterfactual after-cost marks
+remain fixed-hold scenarios, separate from uncertain M1 first-touch.

@@ -53,3 +53,11 @@ test('no observed full-minute crossing is not proof the entry minute was safe',(
  assert.equal(r.entryMinuteUnchecked,true);
  assert.equal(r.exactFillVerified,false);
 });
+
+test('a possible hit inside the exit-minute candle cannot be ordered before its mark',()=>{
+ const m=market([entry,[2,1.1001,1.1002,1.1001,1.1002],
+  [3,1.0994,1.0996,1.0992,1.1002]]);
+ const result=analyzeM1Barriers(e,m,2,'BUY');
+ assert.equal(result.status,'UNKNOWN_EXIT_MINUTE_ORDER');
+ assert.equal(result.exactFillVerified,false);
+});

@@ -45,6 +45,15 @@ function analyzeM1Barriers(episode, quotes, minutes, side) {
     const exitLowProxy = buy ? low - spread/2 : low + spread/2;
     const stopPossible = buy ? exitLowProxy <= stopPrice : exitHighProxy >= stopPrice;
     const targetPossible = buy ? exitHighProxy >= targetPrice : exitLowProxy <= targetPrice;
+    // The mark at this horizon comes from a last-positive quote within
+    // the exit minute. A candle-wide extreme in that same exit minute
+    // may have happened AFTER the mark. Never assert stop/target-first.
+    if (j===minutes && (stopPossible || targetPossible)) return {
+      status:'UNKNOWN_EXIT_MINUTE_ORDER',
+      firstPossibleAt:new Date(barTime).toISOString(),
+      inspectedMinutes:j,entryMinuteUnchecked:true,
+      rangeIsMidpointProxy:true,exactFillVerified:false,
+    };
     if (stopPossible || targetPossible) return {
       status:stopPossible && targetPossible ? 'AMBIGUOUS_BOTH_POSSIBLE' :
         stopPossible ? 'POSSIBLE_STOP_BEFORE_TARGET' : 'POSSIBLE_TARGET_BEFORE_STOP',
