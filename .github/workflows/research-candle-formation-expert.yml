@@ -19,6 +19,9 @@ on:
       - services/ai-engine/tests/test_research_forming_candle_forward_score.py
       - apps/api/scripts/owner-demo-forming-candle-forward-shadow.cjs
       - apps/api/scripts/owner-demo-forming-candle-forward-shadow.test.cjs
+      - apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.cjs
+      - apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.test.cjs
+      - apps/api/scripts/irexpro-forming-candle-outcome-audit.pm2.config.cjs
       - apps/api/scripts/irexpro-forming-candle-forward-shadow.pm2.config.cjs
       - .github/workflows/research-candle-formation-expert.yml
   workflow_dispatch:
@@ -46,10 +49,14 @@ jobs:
           node --check apps/api/scripts/irexpro-forming-candle-shadow.pm2.config.cjs
           node --check apps/api/scripts/owner-demo-forming-candle-forward-shadow.cjs
           node --check apps/api/scripts/irexpro-forming-candle-forward-shadow.pm2.config.cjs
+          node --check apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.cjs
+          node --check apps/api/scripts/irexpro-forming-candle-outcome-audit.pm2.config.cjs
       - name: Verify strict 15-second as-of native snapshots and no trade authority
         run: node --test apps/api/scripts/collect-owner-demo-forming-candle-snapshots.test.cjs
       - name: Verify prospective as-of prediction recorder is read-only
         run: node --test apps/api/scripts/owner-demo-forming-candle-forward-shadow.test.cjs
+      - name: Verify future matured native candles match only prior persisted forecasts
+        run: node --test apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.test.cjs
       - name: Verify no future-candle leakage and no broker authority
         working-directory: services/ai-engine
         run: |

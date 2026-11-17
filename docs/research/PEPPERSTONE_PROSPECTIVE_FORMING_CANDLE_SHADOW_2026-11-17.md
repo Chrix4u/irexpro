@@ -49,3 +49,24 @@ The original ephemeral evaluation report was NOT recovered and no accuracy figur
 At 17:16:45 UTC, the recovered service wrote four fresh prospective forecasts and reported PROSPECTIVE_FORMING_SCORER_READY. A negative unit test confirms model tampering is rejected. No trade orders, stops, lot sizes or profit protection changed.
 
 Operational verification: pm2 describe irexpro-forming-candle-forward-shadow; inspect /root/.pm2/logs/irexpro-forming-candle-forward-shadow-out-466.log and count unique keys in /home/lightworld/webapps/irexpro-research/forming-candle-predictions/YYYY-MM-DD.jsonl.
+
+
+## Prospective next-candle outcome audit (read-only)
+
+The validator scripts/audit-owner-demo-prospective-candle-outcomes.cjs joins only previously saved forecasts to a **later completed** broker-native candle in the same four USD DEMO instruments. For M1 the outcome requires positive native quote sample coverage; M5 uses native trend OHLC only, not invented bid/ask. A label is RED, FLAT or GREEN using the *original, earlier* spread and ATR cost allowance. No current/future OHLC enters the prediction process. Outcomes are not considered mature until at least 30 seconds after the entire following M1/M5 bar closes.
+
+The audit groups by fixed forecast stage and instrument. It never adds correlated early and late snapshots of the same candle as independent trades, and records missing outcomes and pending candles separately. Its directional price measure is only a **spread-only, nonexecuted price proxy** with unmodeled commission, financing and slippage. It cannot certify trading profitability or enable a model.
+
+The background daemon irexpro-forming-candle-outcome-audit runs every five minutes and refreshes /home/lightworld/webapps/irexpro-research/forming-candle-predictions/latest-outcome-audit.json (0600) using BEGIN READ ONLY PostgreSQL queries. The interval is configured locally under apps/api/scripts/irexpro-forming-candle-outcome-audit.pm2.config.cjs and never calls a broker order method.
+
+Initial real forward audit at 17:20:55 UTC: 36 recorded prospective forecasts, 22 matured M1 outcomes, 14 still pending, no missing native outcome. Ten of the 22 matured M1 three-class forecasts matched (45.45%), too few to claim edge; no M5 matured outcomes in the first snapshot.
+
+Start only this service after syntax and nine research unit tests pass:
+
+    cd /home/lightworld/webapps/irexpro-staging/apps/api
+    node --test scripts/audit-owner-demo-prospective-candle-outcomes.test.cjs
+    node scripts/audit-owner-demo-prospective-candle-outcomes.cjs
+    pm2 start scripts/irexpro-forming-candle-outcome-audit.pm2.config.cjs
+    pm2 save
+
+Rollback only this service: pm2 stop irexpro-forming-candle-outcome-audit. Trading services must remain unchanged.
