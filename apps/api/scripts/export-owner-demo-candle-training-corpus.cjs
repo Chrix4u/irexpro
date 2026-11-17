@@ -49,14 +49,13 @@ async function main(){
       "WHEN 'M1' THEN interval '1 minute' WHEN 'M5' THEN interval '5 minutes'",
       "WHEN 'M15' THEN interval '15 minutes' WHEN 'H1' THEN interval '1 hour'",
       "WHEN 'H4' THEN interval '4 hours' ELSE interval '99 days' END <= $6::timestamptz",
-      'AND positive_quote_sample_count >=2 AND sample_count>=2',
-      'AND last_positive_sample_at >= bucket_time',
-      "AND last_positive_sample_at < bucket_time + CASE timeframe",
-      "WHEN 'M1' THEN interval '1 minute' WHEN 'M5' THEN interval '5 minutes'",
-      "WHEN 'M15' THEN interval '15 minutes' WHEN 'H1' THEN interval '1 hour'",
-      "WHEN 'H4' THEN interval '4 hours' ELSE interval '99 days' END",
+      "AND sample_count>=2",
+      "AND (timeframe <> 'M1' OR (positive_quote_sample_count>=2",
+      "AND last_positive_sample_at>=bucket_time",
+      "AND last_positive_sample_at<bucket_time+interval '1 minute'",
+      "AND bid_close>0 AND ask_close>=bid_close))",
       'AND open>0 AND high>=greatest(open,close) AND low<=least(open,close)',
-      'AND low>0 AND close>0 AND bid_close>0 AND ask_close>=bid_close',
+      'AND low>0 AND close>0',
       'ORDER BY instrument,timeframe,bucket_time',
       'LIMIT '+MAX_ROWS,
     ].join(' ');
@@ -67,6 +66,9 @@ async function main(){
   if(!rows.length)throw Error('NO_COMPLETE_OWNER_NATIVE_CANDLES');
   const header=['instrument','timeframe','bucket_time','open','high','low','close',
     'bid_close','ask_close','spread_close','sample_count','positive_quote_sample_count'];
+  // Native M5/H1 trend bars have OHLC, but no bid/ask evidence. They must
+  // never inherit a fabricated zero spread; the trainer joins M1 quotes
+  // available by the higher bar's completed closing timestamp.
   const text=header.join(',')+'\n'+rows.map(r=>header.map(k=>{
     const v=k==='bucket_time'?new Date(r[k]).toISOString():String(r[k]??'');
     if(/[",\n\r]/.test(v))throw Error('UNEXPECTED_CSV_VALUE');
@@ -79,7 +81,7 @@ async function main(){
     asOf:asOf.toISOString(),completedOnly:true,brokerNative:true,
     readOnly:true,accountIdsExported:false,source:'ctrader-broker-native',
     rows:rows.length,instruments:FOCUS,coverage,output:destination,
-    warning:'Candle OHLC are aggregated final bars. Cannot train forming-candle states without archived intrabar as-of snapshots.',
+    warning:'M5/M15/H1/H4 use BROKER NATIVE OHLC only with absent direct bid/ask. Training must join already-completed M1 quote costs as-of. Forming-candle training requires separate archived intrabar as-of snapshots.',
   },null,2));
 }
 if(require.main===module)main().catch(e=>{
