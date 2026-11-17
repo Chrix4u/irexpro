@@ -10,6 +10,8 @@ on:
       - apps/api/scripts/run-owner-demo-post-stop-direction.cjs
       - apps/api/scripts/research-owner-demo-strategy-scorecard.cjs
       - apps/api/scripts/research-owner-demo-strategy-scorecard.test.cjs
+      - apps/api/scripts/research-owner-demo-direction-horizons.cjs
+      - apps/api/scripts/research-owner-demo-direction-horizons.test.cjs
       - .github/workflows/research-post-stop-direction-ci.yml
   workflow_dispatch:
 
@@ -34,7 +36,10 @@ jobs:
           node --check apps/api/scripts/run-owner-demo-post-stop-direction.cjs
           node --check apps/api/scripts/research-owner-demo-strategy-scorecard.cjs
           node --check apps/api/scripts/research-owner-demo-strategy-scorecard.test.cjs
+          node --check apps/api/scripts/research-owner-demo-direction-horizons.cjs
+          node --check apps/api/scripts/research-owner-demo-direction-horizons.test.cjs
       - name: Validate broker price and three-strategy research summaries
         run: |
           node --test apps/api/scripts/research-owner-demo-post-stop-direction.test.cjs
           node --test apps/api/scripts/research-owner-demo-strategy-scorecard.test.cjs
+          node --test apps/api/scripts/research-owner-demo-direction-horizons.test.cjs
