@@ -33,6 +33,7 @@ import { mapApiError } from "@/lib/error-mapping";
 import { loadLiveAccountPositions } from "@/lib/live-account";
 import { resolveAiOpenPositionRows } from "@/lib/ai-open-positions";
 import { executionPathDiagnostics } from "@/lib/trade-path-diagnostics";
+import { hasPendingClosedTradeSettlement } from "@/lib/closed-trade-settlement";
 import {
   loadLiveMarketQuote,
   loadMarketIntelligence,
@@ -1237,6 +1238,7 @@ function PositionTable({
 }
 
 function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
+  const settlementPending = hasPendingClosedTradeSettlement(trade);
   const realized = trade.status === "CLOSED" ? trade.realisedPnl : null;
   const executionReason = executionReasonLabel(trade.executionReasonCode);
   const pathDiagnostics = executionPathDiagnostics(trade);
@@ -1260,6 +1262,9 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
         >
           {trade.status.replaceAll("_", " ")}
         </Badge>
+        {settlementPending && (
+          <Badge variant="warning">Broker settlement pending</Badge>
+        )}
         {realized !== null && (
           <Badge variant={pnlBadge(realized)}>
             {realized.startsWith("-") ? "" : "+"}
@@ -1280,7 +1285,7 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           <span>Realized P&amp;L</span>
           <strong>
             {trade.realisedPnl === null
-              ? "—"
+              ? settlementPending ? "Awaiting broker" : "—"
               : money(trade.realisedPnl, trade.accountCurrency)}
           </strong>
         </div>
@@ -1335,6 +1340,13 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           </strong>
         </div>
       </div>
+      {settlementPending && (
+        <p className="ai-activity-row__settlement-note" role="status">
+          The broker has reported this position closed, but its final exit price,
+          realized profit or loss, and/or charges are not yet verified. Its peak
+          floating P&amp;L is not realized profit; missing amounts are not zero.
+        </p>
+      )}
       {executionReason && (
         <div className="ai-activity-row__reason">{executionReason}</div>
       )}
