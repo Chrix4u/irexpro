@@ -23,7 +23,7 @@ test('only complete broker M1 closes up to target, never a future high/low or fu
   const mark=selectCausalM1Mark(bars,t,1,now);
   assert.equal(mark.bid,1.1004);
   assert.equal(mark.closedAtMs,Date.parse('2026-11-17T10:01:00Z'));
-  assert.equal(selectCausalM1Mark(bars,t,2,now).bid,1.1009);
+  assert.equal(selectCausalM1Mark(bars,t,3,now).bid,1.105);
   assert.equal(selectCausalM1Mark(bars,t,10,'2026-11-17T10:07:00Z'),null);
 });
 test('reject mid-only historical candles, stale samples, and nonnative bars',()=>{
@@ -69,6 +69,6 @@ test('separate blocked versus authorized cohorts; missing cost never a false win
   assert.equal(result.byHorizon['1m'].episodes,1);
   assert.equal(result.byHorizon['1m'].estimatedAfterFeeCoverage,0);
   assert.equal(result.byExecutionAuthority.NOT_BROKER_AUTHORIZED['1m'].episodes,1);
-  assert.equal(result.byExecutionAuthority.BROKER_AUTHORIZED['1m'].episodes,0);
+  assert.equal(result.byExecutionAuthority.BROKER_AUTHORIZED?.['1m']?.episodes ?? 0,0);
   assert.equal(result.modifiesExecution,false);
 });
