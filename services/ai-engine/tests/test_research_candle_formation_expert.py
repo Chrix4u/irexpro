@@ -132,9 +132,9 @@ class CausalCandleTests(unittest.TestCase):
         self.assertGreaterEqual((val.available_at.min()-tr.available_at.max()).total_seconds(),2*3600)
         self.assertEqual(bounds["embargoHours"],1)
 
-    def test_training_artifact_never_grants_execution_authority(self):
+    def test_inadequate_training_history_fails_closed_without_trade_authority(self):
         with tempfile.TemporaryDirectory() as td:
-            d=demo_frames(1600)
+            d=demo_frames(650)
             corpus=Path(td)/"candles.csv"
             d.to_csv(corpus,index=False)
             out=Path("/tmp/irexpro-candle-test-artifact.json")
@@ -143,8 +143,8 @@ class CausalCandleTests(unittest.TestCase):
                 self.assertTrue(result["notActiveTradingAuthority"])
                 self.assertFalse(result["modifiesExecution"])
                 self.assertFalse(result["formingCandlePredictionsAvailable"])
-                self.assertIn(result["timeframes"]["M1"]["status"],
-                              ["TRAINED_RESEARCH_NOT_PROMOTED","NOT_TRAINED"])
+                self.assertEqual(result["timeframes"]["M1"]["status"], "NOT_TRAINED")
+                self.assertEqual(result["timeframes"]["M5"]["status"], "NOT_TRAINED")
             finally:
                 if out.exists():
                     out.unlink()
