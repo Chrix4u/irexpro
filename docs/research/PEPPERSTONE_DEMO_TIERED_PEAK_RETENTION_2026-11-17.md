@@ -36,3 +36,16 @@ The change creates no orders, does not alter lot size or original SL/TP, and doe
 ## Reversibility
 
 To revert just the tiered experiment, set `IREXPRO_PEPPERSTONE_DEMO_TIERED_RETENTION=disabled` (or remove it) and restart the API. The original verified 55% Pepperstone DEMO policy continues. Existing positions are subject to the policy active on their next managed profit-protection observation, without changing their broker-native stops.
+
+## First live DEMO tiered decision / unresolved settlement evidence (02:38 UTC)
+
+The tiered flag and Nest API deployment were verified active at **2026-11-17 02:37:55 UTC**, with the original 5-second profit-protection monitor and broker SL/TP still enabled. The first actual **AUDUSD BUY CONFIRMED_REVERSAL** after activation provided a decision-time comparison:
+
+- Initial risk: **$86.00**; observed broker-net peak: **+$49.88** (**0.58R**); tier: **65%**; required observed-mark floor: **$32.422**.
+- At 02:38:00 UTC the profit manager observed a **falling +$30.96** broker mark, conservatively reserved another **$10.32** in historical execution costs, and issued a profit-protection close request. It logged `legacy55WouldClose=false`, `legacy55Floor=27.434`. This supports only an **earlier decision**, not a proved economic fill or execution at threshold.
+- A `TRADE_CLOSE_REQUESTED` event with `PROFIT_PROTECTION` was persisted at **02:38:02.727 UTC**; the resulting market close order was classified `RECONCILIATION_PENDING` due to an **UNKNOWN dispatch outcome**. State reconciliation found the provider position missing and marked the position `CLOSED` at **02:38:05.091 UTC**, with conservative generic `BROKER_CLOSE` attribution.
+- As of the last read at **02:39:53 UTC**, **exit price, realized P&L, commission and swap were all NULL** for this trade. **Do not count as a profit, do not infer an exact fill from the +$30.96 floating mark, and do not overwrite with synthetic values.** A trustworthy settlement requires a unique, full-volume, broker-authoritative cTrader closing deal plus proven position-reference lineage.
+- Existing `StateReconciliationService` contains guarded `backfillClosedDemoSettlement` for such fully NULL closed rows. Its closed-economics inspection is throttled to once per 15 minutes per connection and may take additional time; reconciliation success is not established. The separate reconciliation order must also converge from `RECONCILIATION_PENDING` once actual broker evidence is available.
+- Follow-up engineering: audit the provider deal matching, investigate the close-dispatch `UNKNOWN` outcome and CAS `PRESERVED_NEWER_TRUTH`, ensure eventual after-fee settlement and original `PROFIT_PROTECTION` request attribution remain inspectable without guessing the provider close reason. **No broker trade or manual economic update is authorized by this note**.
+
+The two other pre-existing owner-DEMO reversal positions were open at the deployment check, with below-arm profit peaks, and the new tiers did not authorize an exit on them. Both continuous trading and original margin/stop/drawdown checks are unchanged.
