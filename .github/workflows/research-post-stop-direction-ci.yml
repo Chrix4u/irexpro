@@ -1,0 +1,34 @@
+name: Research - Pepperstone DEMO Post-Stop Audit
+
+on:
+  push:
+    branches:
+      - fix/planb-clock-neutral-telemetry-20261111
+    paths:
+      - apps/api/scripts/research-owner-demo-post-stop-direction.cjs
+      - apps/api/scripts/research-owner-demo-post-stop-direction.test.cjs
+      - apps/api/scripts/run-owner-demo-post-stop-direction.cjs
+      - .github/workflows/research-post-stop-direction-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-research-classifier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out research branch
+        uses: actions/checkout@v4
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check syntax of research modules
+        run: |
+          node --check apps/api/scripts/research-owner-demo-post-stop-direction.cjs
+          node --check apps/api/scripts/research-owner-demo-post-stop-direction.test.cjs
+          node --check apps/api/scripts/run-owner-demo-post-stop-direction.cjs
+      - name: Execute pure broker-price classification tests without credentials
+        run: node --test apps/api/scripts/research-owner-demo-post-stop-direction.test.cjs
