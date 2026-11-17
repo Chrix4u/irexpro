@@ -16,6 +16,11 @@ function quoteRows(inst='EURUSD',t=START){
      bid:mid-.000006,ask:mid+.000006});
   }
  }
+ for(const off of [3000,9000]){
+   const src=t+300000+off,mid=1.10012+off*.000000001;
+   out.push({instrument:inst,source:src,observed:src+1000,
+     bid:mid-.000006,ask:mid+.000006});
+ }
  return out;
 }
 function raw(q){return [
@@ -45,16 +50,28 @@ test('prospective snapshot has actual observed quote timestamps and no broker mo
  assert.equal(x.modifiesExecution,false);
  assert.equal(x.researchOnly,true);
  assert.equal(x.quotePathSampleCount,150);
+ assert.equal(x.currentQuoteAsOf.samplesWithinFirst15Seconds,2);
+ assert.ok(x.currentQuoteAsOf.spread>0);
+ assert.ok(Number.isFinite(x.currentQuoteAsOf.midVsPreviousQuoteM5Close));
+ assert.ok(Date.parse(x.currentQuoteAsOf.observedAt)<=SLOT);
  assert.equal(x.priceRepresentation,'SAMPLED_MIDQUOTE_NOT_NATIVE_M5_OHLC');
 });
 test('future observed quotes cannot leak into reconstructed previous candle',()=>{
- const q=quoteRows();q[q.length-1].observed=SLOT+1000;
+ const q=quoteRows();q[q.length-3].observed=SLOT+1000;
  const rows=createSnapshots(SLOT,q,SLOT+5000);
  assert.equal(rows.length,1);
  // Removes the quote whose observation happened after the forecast cutoff.
  assert.equal(rows[0].quotePathSampleCount,149);
  const del=quoteRows().filter(q=>q.source<START+4*60000);
  assert.equal(createSnapshots(SLOT,del,SLOT+5000).length,0);
+});
+test('rejects missing or future-observed current M5 decision quotes',()=>{
+ const raw=quoteRows();
+ const missing=raw.filter(q=>q.source<START+300000);
+ assert.equal(createSnapshots(SLOT,missing,SLOT+5000).length,0);
+ const future=quoteRows();
+ for(const q of future)if(q.source>=START+300000)q.observed=SLOT+1000;
+ assert.equal(createSnapshots(SLOT,future,SLOT+5000).length,0);
 });
 test('missing any full minute in broker quote path is not fabricated',()=>{
  const q=quoteRows().filter(x=>x.source<START+120000||x.source>=START+180000);
@@ -70,7 +87,7 @@ test('reads authorized quote archive only from local day and UTC midnight crosso
  try{
   const all=quoteRows().map(q=>JSON.stringify(raw(q))).join('\n')+'\n';
   fs.writeFileSync(path.join(dir,'2026-11-17.jsonl'),all,{mode:0o600});
-  assert.equal(sourceForStage(SLOT,dir).length,150);
+  assert.equal(sourceForStage(SLOT,dir).length,152);
   // Earlier-window quote path may cross 23:59 -> 00:00 UTC.
   const prev=Date.parse('2026-11-17T23:55:00Z');
   const m=quoteRows('EURUSD',prev);

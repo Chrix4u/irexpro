@@ -10,7 +10,7 @@
 const fs=require('node:fs'),path=require('node:path');
 const {latestTail,archiveRows}=require('./collect-owner-demo-forming-candle-snapshots.cjs');
 const {quoteM5AsOf,WIDTH,INSTRUMENTS}=require('./research-owner-demo-m5-causal-context-parity.cjs');
-const ARTIFACT='irexpro-prospective-asof-quoted-m5-context-v1';
+const ARTIFACT='irexpro-prospective-asof-quoted-m5-context-v2';
 const SOURCE='/home/lightworld/webapps/irexpro-research/native-quote-snapshots';
 const ROOT='/home/lightworld/webapps/irexpro-research/m5-context-asof';
 const STAGE=15000,MIN_AGE=4000,MAX_AGE=11500;
@@ -30,7 +30,7 @@ function sourceForStage(slot,dir=SOURCE){
    new Date(slot).toISOString().slice(0,10)];
  const text=[...new Set(days)].map(day=>latestTail(
    path.join(dir,day+'.jsonl'),384*1024)).join('\n');
- return archiveRows(text).filter(q=>q.source>=priorStart&&q.source<priorStart+WIDTH&&
+ return archiveRows(text).filter(q=>q.source>=priorStart&&q.source<=slot&&
    q.observed<=slot);
 }
 function createSnapshots(slot,quotes,recordedAt=Date.now()){
@@ -41,6 +41,17 @@ function createSnapshots(slot,quotes,recordedAt=Date.now()){
  for(const instrument of INSTRUMENTS){
    const q=quoteM5AsOf(quotes,instrument,start,slot);
    if(q.status!=='CERTIFIED_ASOF_QUOTE_SAMPLE')continue;
+   // We also need what the newly forming M5 actually looks like at +15s.
+   // Do NOT use a quote observed after the cutoff, even when its source
+   // timestamp was within the first fifteen seconds.
+   const current=quotes.filter(x=>x.instrument===instrument&&
+     x.source>=slot-STAGE&&x.source<=slot&&x.observed<=slot&&
+     x.observed-x.source>=0&&x.observed-x.source<=10000&&
+     x.ask>x.bid&&x.bid>0)
+     .sort((a,b)=>a.source-b.source||a.observed-b.observed);
+   if(current.length<2)continue;
+   const latest=current.at(-1);
+   if(slot-latest.observed>8500||latest.ask-latest.bid<=0)continue;
    out.push({
      artifact:ARTIFACT,instrument,timeframe:'M5',
      priorBarStart:new Date(start).toISOString(),
@@ -50,6 +61,14 @@ function createSnapshots(slot,quotes,recordedAt=Date.now()){
      quoteOHLC:{open:q.open,high:q.high,low:q.low,close:q.close},
      quotePathSampleCount:q.sourceSampleCount,
      minuteCoverage:q.minutesWithQuotes,
+     currentQuoteAsOf:{
+       bid:latest.bid,ask:latest.ask,mid:(latest.ask+latest.bid)/2,
+       spread:latest.ask-latest.bid,
+       sourceAt:new Date(latest.source).toISOString(),
+       observedAt:new Date(latest.observed).toISOString(),
+       samplesWithinFirst15Seconds:current.length,
+       midVsPreviousQuoteM5Close:(latest.ask+latest.bid)/2-q.close,
+     },
      firstSourceObservedAt:q.firstObservedAt,
      lastSourceObservedAt:q.lastObservedAt,
      provenance:'IMMUTABLE_POSITIVE_NATIVE_BIDASK_ASOF',
@@ -81,10 +100,16 @@ function persist(rows,{dir=ROOT,seen=new Set()}={}){
  fs.mkdirSync(dir,{recursive:true,mode:0o700});
  let written=0,duplicates=0,capped=0;
  for(const x of rows){
+   const live=x.currentQuoteAsOf;
    if(x.artifact!==ARTIFACT||x.researchOnly!==true||
        x.modifiesExecution!==false||x.brokerOrderAuthority!==false||
        x.noNativeM5Read!==true||x.noFutureCandleInfo!==true||
-       x.labelKnown!==false||x.priceRepresentation!=='SAMPLED_MIDQUOTE_NOT_NATIVE_M5_OHLC')
+       x.labelKnown!==false||x.priceRepresentation!=='SAMPLED_MIDQUOTE_NOT_NATIVE_M5_OHLC'||
+       !live||!Number.isFinite(live.bid)||!Number.isFinite(live.ask)||
+       !(live.ask>live.bid>0)||!Number.isFinite(live.midVsPreviousQuoteM5Close)||
+       live.samplesWithinFirst15Seconds<2||
+       new Date(live.sourceAt).getTime()>Date.parse(x.decisionAt)||
+       new Date(live.observedAt).getTime()>Date.parse(x.decisionAt))
      throw Error('UNSAFE_ASOF_M5_RESEARCH_RECORD');
    const k=snapshotKey(x);
    if(seen.has(k)){duplicates++;continue;}

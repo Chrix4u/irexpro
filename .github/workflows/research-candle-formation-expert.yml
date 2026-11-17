@@ -28,6 +28,11 @@ on:
       - apps/api/scripts/collect-owner-demo-m5-asof-context.cjs
       - apps/api/scripts/collect-owner-demo-m5-asof-context.test.cjs
       - apps/api/scripts/irexpro-m5-asof-context-shadow.pm2.config.cjs
+      - apps/api/scripts/research-owner-demo-m5-quote-context-readiness.cjs
+      - apps/api/scripts/research-owner-demo-m5-quote-context-readiness.test.cjs
+      - apps/api/scripts/run-owner-demo-m5-quote-context-readiness.cjs
+      - apps/api/scripts/run-owner-demo-m5-quote-context-readiness.test.cjs
+      - apps/api/scripts/irexpro-m5-quote-readiness-shadow.pm2.config.cjs
       - apps/api/scripts/irexpro-forming-candle-forward-shadow.pm2.config.cjs
       - .github/workflows/research-candle-formation-expert.yml
   workflow_dispatch:
@@ -61,6 +66,9 @@ jobs:
           node --check apps/api/scripts/run-owner-demo-m5-causal-context-parity.cjs
           node --check apps/api/scripts/collect-owner-demo-m5-asof-context.cjs
           node --check apps/api/scripts/irexpro-m5-asof-context-shadow.pm2.config.cjs
+          node --check apps/api/scripts/research-owner-demo-m5-quote-context-readiness.cjs
+          node --check apps/api/scripts/run-owner-demo-m5-quote-context-readiness.cjs
+          node --check apps/api/scripts/irexpro-m5-quote-readiness-shadow.pm2.config.cjs
       - name: Verify strict 15-second as-of native snapshots and no trade authority
         run: node --test apps/api/scripts/collect-owner-demo-forming-candle-snapshots.test.cjs
       - name: Verify prospective as-of prediction recorder is read-only
@@ -69,6 +77,10 @@ jobs:
         run: node --test apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.test.cjs
       - name: Validate M5 price parity and distinguish mutable M1 from immutable quote as-of
         run: node --test apps/api/scripts/research-owner-demo-m5-causal-context-parity.test.cjs
+      - name: Check M5 v2 label maturation and training-readiness barriers
+        run: |
+          node --test apps/api/scripts/research-owner-demo-m5-quote-context-readiness.test.cjs
+          node --test apps/api/scripts/run-owner-demo-m5-quote-context-readiness.test.cjs
       - name: Validate strictly prospective M5 quote context without execution authority
         run: node --test apps/api/scripts/collect-owner-demo-m5-asof-context.test.cjs
       - name: Verify no future-candle leakage and no broker authority
