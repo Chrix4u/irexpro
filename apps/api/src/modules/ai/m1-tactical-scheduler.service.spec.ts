@@ -847,6 +847,7 @@ function phase2Harness(
     enableAlternativeTrial?: boolean;
     enableCounterPilot?: boolean;
     enableAdvisoryAlternates?: boolean;
+    enableContinuousAdvisory?: boolean;
     rollout?: any;
     evidenceByRoute?: Record<string, any[]>;
     shadowPairSideOutcomes?: Array<{ observedAt: Date; netR: number }>;
@@ -927,14 +928,18 @@ function phase2Harness(
         'vpsForexScanner.userId': 'user-1',
         'vpsForexScanner.brokerConnectionId': 'conn-1',
         'vpsForexScanner.m1MarketDataConnectionId': 'demo-conn-1',
-        'IREXPRO_PEPPERSTONE_DEMO_PAUSE_TREND_CONTINUATION':
-          options.suspendTrendContinuation ? 'enabled' : '',
-        'IREXPRO_PEPPERSTONE_DEMO_ALTERNATIVE_TRIAL':
-          options.enableAlternativeTrial ? 'enabled' : '',
-        'IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT':
-          options.enableCounterPilot ? 'enabled' : '',
-        'IREXPRO_PEPPERSTONE_DEMO_ADVISORY_ALTERNATES':
-          options.enableAdvisoryAlternates ? 'enabled' : '',
+        IREXPRO_PEPPERSTONE_DEMO_PAUSE_TREND_CONTINUATION: options.suspendTrendContinuation
+          ? 'enabled'
+          : '',
+        IREXPRO_PEPPERSTONE_DEMO_ALTERNATIVE_TRIAL: options.enableAlternativeTrial ? 'enabled' : '',
+        IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT: options.enableCounterPilot ? 'enabled' : '',
+        IREXPRO_PEPPERSTONE_DEMO_ADVISORY_ALTERNATES: options.enableAdvisoryAlternates
+          ? 'enabled'
+          : '',
+        IREXPRO_PEPPERSTONE_DEMO_CONTINUOUS_ALTERNATES: options.enableContinuousAdvisory
+          ? 'enabled'
+          : '',
+        VPS_FOREX_SCANNER_USER_ID: options.enableContinuousAdvisory ? 'user-1' : '',
       };
       return values[key] ?? fallback;
     }),
@@ -2263,13 +2268,16 @@ describe('M1 professional v8 DEMO promotion', () => {
       'AUDUSD',
     ]);
     expect(M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW.demoEntryInstruments).toEqual([
-      'EURUSD', 'AUDUSD', 'USDCAD', 'USDJPY',
+      'EURUSD',
+      'AUDUSD',
+      'USDCAD',
+      'USDJPY',
     ]);
     expect(M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW).toMatchObject({
-      phase:'DEMO_EARLY_TRANSITION_PROFESSIONAL',
-      demoPrimaryOnlyProbation:true,
-      demoBrokerCommissionShadow:true,
-      paperVolumeCap:4,
+      phase: 'DEMO_EARLY_TRANSITION_PROFESSIONAL',
+      demoPrimaryOnlyProbation: true,
+      demoBrokerCommissionShadow: true,
+      paperVolumeCap: 4,
     });
   });
 
@@ -3189,59 +3197,82 @@ describe('M1 V8 multi-model DEMO authority', () => {
     }));
 
   function qualifiedContinuationProbationHarness(suspendTrendContinuation = false) {
-    const h=phase2Harness({
+    const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
       session: fullAutoSession,
       suspendTrendContinuation,
-      evidenceByRoute: {M1_TREND_CONTINUATION: positiveContinuationSeven()},
+      evidenceByRoute: { M1_TREND_CONTINUATION: positiveContinuationSeven() },
     });
     h.isActiveConnectedOwnerDemoBroker.mockResolvedValue(true);
     h.loadQualifiedM1ContinuationAfterFeeEvidence.mockResolvedValue({
-      sampleCount: 7, netWins: 5, averageNetR: 0.274286,
-      recentNetR: 0.42, complete: true,
+      sampleCount: 7,
+      netWins: 5,
+      averageNetR: 0.274286,
+      recentNetR: 0.42,
+      complete: true,
     });
-    const original=(h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any,'evaluateDemoMultimodel').mockImplementation(
-      async (...args:any[])=>{
-        const v=await original(...args);
-        return {...v,ensemble:{...v.ensemble,
-          strategyRoute:'TREND_CONTINUATION',paperAdmitted:false},
-          authority:{...v.authority,executable:false,
-            authorityPath:'BLOCKED',rescueVolumeCap:null,
-            blockers:['MULTIMODEL_PLAN_B_NOT_ADMITTED']}};
+    const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
+        const v = await original(...args);
+        return {
+          ...v,
+          ensemble: { ...v.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: false },
+          authority: {
+            ...v.authority,
+            executable: false,
+            authorityPath: 'BLOCKED',
+            rescueVolumeCap: null,
+            blockers: ['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+          },
+        };
       });
     return h;
   }
 
   it('allows only owner-verified qualified continuation DEMO with 0.01 lot and unchanged broker risk gates', async () => {
-    const h=qualifiedContinuationProbationHarness();
-    await driveFeatures(h,cleanContinuationFeatures(),{brokerConnectionId:'demo-conn-2'});
-    const approved=h.recordDecision.mock.calls.find(
-      ([v])=>v.direction==='BUY'&&v.route==='M1_TREND_CONTINUATION')?.[0];
+    const h = qualifiedContinuationProbationHarness();
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    const approved = h.recordDecision.mock.calls.find(
+      ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
     expect(approved?.governance.reliability).toMatchObject({
-      reason:'POSITIVE_EXPECTANCY',eligible:true,samples:7,wins:5,losses:2,
+      reason: 'POSITIVE_EXPECTANCY',
+      eligible: true,
+      samples: 7,
+      wins: 5,
+      losses: 2,
     });
     expect(approved?.governance.professionalM1Fallback).toMatchObject({
-      eligible:true,tier:'QUALIFIED_CONTINUATION',
+      eligible: true,
+      tier: 'QUALIFIED_CONTINUATION',
     });
     expect(approved?.governance.demoPrimaryOnlyProbation).toMatchObject({
-      enabled:true,blocked:false,qualifiedContinuationCanary:true,
-      reason:'QUALIFIED_CONTINUATION_CANARY',
+      enabled: true,
+      blocked: false,
+      qualifiedContinuationCanary: true,
+      reason: 'QUALIFIED_CONTINUATION_CANARY',
     });
     expect(approved?.executionAuthority).toBe('BROKER_NATIVE');
     expect(approved?.governance.executionVolumeCap).toBe(0.01);
     expect(approved?.governance.qualifiedContinuationAfterFeeEvidence).toMatchObject({
-      sampleCount: 7, netWins: 5, averageNetR: 0.274286,
-      recentNetR: 0.42, complete: true,
+      sampleCount: 7,
+      netWins: 5,
+      averageNetR: 0.274286,
+      recentNetR: 0.42,
+      complete: true,
     });
     expect(approved?.blockers).not.toContain('M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION');
     expect(h.receiveSignal).toHaveBeenCalledWith(
-      expect.objectContaining({suggestedVolume:0.01}),
+      expect.objectContaining({ suggestedVolume: 0.01 }),
     );
     expect(h.hasRecentM1QualifiedContinuationCanary).toHaveBeenCalledWith(
       expect.objectContaining({
-        instrument:'EURUSD',direction:'BUY',cooldownMinutes:90,
-        brokerConnectionId:'demo-conn-2',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        cooldownMinutes: 90,
+        brokerConnectionId: 'demo-conn-2',
       }),
     );
   });
@@ -3249,15 +3280,18 @@ describe('M1 V8 multi-model DEMO authority', () => {
   it('pauses the previously qualified M1 continuation canary on Pepperstone DEMO', async () => {
     const h = qualifiedContinuationProbationHarness(true);
     h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
-    await driveFeatures(h,cleanContinuationFeatures(),{brokerConnectionId:'demo-conn-2'});
-    const record=h.recordDecision.mock.calls.find(
-      ([v]) => v.direction==='BUY'&&v.route==='M1_TREND_CONTINUATION',
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
+    const record = h.recordDecision.mock.calls.find(
+      ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
     )?.[0];
     expect(record?.governance.demoPrimaryOnlyProbation).toMatchObject({
-      qualifiedContinuationCanary:true,blocked:false,
+      qualifiedContinuationCanary: true,
+      blocked: false,
     });
     expect(record?.governance.demoContinuationPause).toMatchObject({
-      enabled:true,blocked:true,reason:'CONTINUATION_PAUSED',
+      enabled: true,
+      blocked: true,
+      reason: 'CONTINUATION_PAUSED',
     });
     expect(record?.executionAuthority).toBe('NONE');
     expect(record?.blockers).toContain('M1_PEPPERSTONE_DEMO_TREND_CONTINUATION_PAUSED');
@@ -3265,50 +3299,57 @@ describe('M1 V8 multi-model DEMO authority', () => {
   });
 
   it('does not authorize a route with positive gross but negative real after-fee R', async () => {
-    const h=qualifiedContinuationProbationHarness();
+    const h = qualifiedContinuationProbationHarness();
     h.loadQualifiedM1ContinuationAfterFeeEvidence.mockResolvedValue({
-      sampleCount: 7, netWins: 4, averageNetR: -0.1,
-      recentNetR: -0.22, complete: true,
+      sampleCount: 7,
+      netWins: 4,
+      averageNetR: -0.1,
+      recentNetR: -0.22,
+      complete: true,
     });
-    await driveFeatures(h,cleanContinuationFeatures(),{brokerConnectionId:'demo-conn-2'});
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
     expect(h.receiveSignal).not.toHaveBeenCalled();
-    const blocked=h.recordDecision.mock.calls.find(
-      ([v])=>v.direction==='BUY'&&v.route==='M1_TREND_CONTINUATION')?.[0];
+    const blocked = h.recordDecision.mock.calls.find(
+      ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
     expect(blocked?.blockers).toContain('M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION');
     expect(blocked?.governance.demoPrimaryOnlyProbation.qualifiedContinuationCanary).toBe(false);
   });
 
   it('blocks duplicate qualifying continuation for 90 minutes', async () => {
-    const h=qualifiedContinuationProbationHarness();
+    const h = qualifiedContinuationProbationHarness();
     h.hasRecentM1QualifiedContinuationCanary.mockResolvedValue(true);
-    await driveFeatures(h,cleanContinuationFeatures(),{brokerConnectionId:'demo-conn-2'});
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
     expect(h.receiveSignal).not.toHaveBeenCalled();
-    const blocked=h.recordDecision.mock.calls.find(
-      ([v])=>v.direction==='BUY'&&v.route==='M1_TREND_CONTINUATION')?.[0];
+    const blocked = h.recordDecision.mock.calls.find(
+      ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
     expect(blocked?.executionAuthority).toBe('NONE');
     expect(blocked?.blockers).toContain('M1_DEMO_QUALIFIED_CONTINUATION_CANARY_REPEAT_COOLDOWN');
   });
 
   it('fails closed when the DEMO broker cannot be owner-verified', async () => {
-    const h=qualifiedContinuationProbationHarness();
+    const h = qualifiedContinuationProbationHarness();
     h.isActiveConnectedOwnerDemoBroker.mockResolvedValue(false);
-    await driveFeatures(h,cleanContinuationFeatures(),{brokerConnectionId:'demo-conn-2'});
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
     expect(h.receiveSignal).not.toHaveBeenCalled();
-    const blocked=h.recordDecision.mock.calls.find(
-      ([v])=>v.direction==='BUY'&&v.route==='M1_TREND_CONTINUATION')?.[0];
+    const blocked = h.recordDecision.mock.calls.find(
+      ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
     expect(blocked?.blockers).toContain('M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION');
     expect(blocked?.governance.demoPrimaryOnlyProbation.qualifiedContinuationCanary).toBe(false);
   });
 
   it('fails closed when canary-history evidence cannot be read', async () => {
-    const h=qualifiedContinuationProbationHarness();
+    const h = qualifiedContinuationProbationHarness();
     h.hasRecentM1QualifiedContinuationCanary.mockRejectedValue(
       new Error('simulated database timeout'),
     );
-    await driveFeatures(h,cleanContinuationFeatures(),{brokerConnectionId:'demo-conn-2'});
+    await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
     expect(h.receiveSignal).not.toHaveBeenCalled();
-    const blocked=h.recordDecision.mock.calls.find(
-      ([v])=>v.direction==='BUY'&&v.route==='M1_TREND_CONTINUATION')?.[0];
+    const blocked = h.recordDecision.mock.calls.find(
+      ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
+    )?.[0];
     expect(blocked?.executionAuthority).toBe('NONE');
     expect(blocked?.blockers).toContain(
       'M1_DEMO_QUALIFIED_CONTINUATION_CANARY_HISTORY_UNAVAILABLE',
@@ -3354,169 +3395,346 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
   });
 
-  it('bridges an independently approved DEMO reversal with same-side expert ABSTAIN majority',async()=>{
+  it('bridges an independently approved DEMO reversal with same-side expert ABSTAIN majority', async () => {
     jest.useFakeTimers({
-      now:new Date('2026-11-17T16:20:40.000Z'),
-      doNotFake:['setTimeout','setInterval','setImmediate','nextTick'],
+      now: new Date('2026-11-17T16:20:40.000Z'),
+      doNotFake: ['setTimeout', 'setInterval', 'setImmediate', 'nextTick'],
     });
-    try{
-      const h=phase2Harness({
-        rollout:M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
-        session:fullAutoSession,enableAdvisoryAlternates:true,
-        suspendTrendContinuation:true,
+    try {
+      const h = phase2Harness({
+        rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+        session: fullAutoSession,
+        enableAdvisoryAlternates: true,
+        suspendTrendContinuation: true,
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
-      const original=(h.service as any).evaluateDemoMultimodel.bind(h.service);
-      jest.spyOn(h.service as any,'evaluateDemoMultimodel').mockImplementation(
-        async(...args:any[])=>{
-          const x=await original(...args);
-          return {...x,portfolioSnapshotAvailable:true,
-            ensemble:{...x.ensemble,strategyRoute:'CONFIRMED_REVERSAL',
-              paperAdmitted:true,ensembleScore:0.7,directionQuality:0.7},
-            governance:{...x.governance,paperExecutionEligible:true,
-              paperExecutionBlockers:[],paperExecutionCostUsable:true,
-              executionSpreadEvidenceValid:true,netExpectedR:0.23,
-              eventRisk:'CLEAR',driftState:'IN_DISTRIBUTION',sleeveState:'COLLECTING'},
-            trainedExpert:{...x.trainedExpert,state:'ABSTAIN',admitted:false,
-              direction:args[2].direction,allBrokerNative:true,
-              longVotes:args[2].direction==='BUY'?2:1,
-              shortVotes:args[2].direction==='SELL'?2:1,
-              meanOpportunityProbability:0.3,freshnessSeconds:60,
-              ensembleConfidence:0.5},
-            authority:{...x.authority,executable:false,
-              authorityPath:'BLOCKED',trainedExpertOpposed:false,
-              blockers:['MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED']},
+      const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+      jest
+        .spyOn(h.service as any, 'evaluateDemoMultimodel')
+        .mockImplementation(async (...args: any[]) => {
+          const x = await original(...args);
+          return {
+            ...x,
+            portfolioSnapshotAvailable: true,
+            ensemble: {
+              ...x.ensemble,
+              strategyRoute: 'CONFIRMED_REVERSAL',
+              paperAdmitted: true,
+              ensembleScore: 0.7,
+              directionQuality: 0.7,
+            },
+            governance: {
+              ...x.governance,
+              paperExecutionEligible: true,
+              paperExecutionBlockers: [],
+              paperExecutionCostUsable: true,
+              executionSpreadEvidenceValid: true,
+              netExpectedR: 0.23,
+              eventRisk: 'CLEAR',
+              driftState: 'IN_DISTRIBUTION',
+              sleeveState: 'COLLECTING',
+            },
+            trainedExpert: {
+              ...x.trainedExpert,
+              state: 'ABSTAIN',
+              admitted: false,
+              direction: args[2].direction,
+              allBrokerNative: true,
+              longVotes: args[2].direction === 'BUY' ? 2 : 1,
+              shortVotes: args[2].direction === 'SELL' ? 2 : 1,
+              meanOpportunityProbability: 0.3,
+              freshnessSeconds: 60,
+              ensembleConfidence: 0.5,
+            },
+            authority: {
+              ...x.authority,
+              executable: false,
+              authorityPath: 'BLOCKED',
+              trainedExpertOpposed: false,
+              blockers: ['MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED'],
+            },
           };
         });
-      const features={...cleanContinuationFeatures(),
-        decisionTime:new Date('2026-11-17T16:20:00.000Z'),
-        latestM1OpenTime:new Date('2026-11-17T16:19:00.000Z'),
-        emaSeparationAtr:0,
+      const features = {
+        ...cleanContinuationFeatures(),
+        decisionTime: new Date('2026-11-17T16:20:00.000Z'),
+        latestM1OpenTime: new Date('2026-11-17T16:19:00.000Z'),
+        emaSeparationAtr: 0,
       };
-      await driveFeatures(h,features,{brokerConnectionId:'demo-conn-2'});
-      const record=h.recordDecision.mock.calls.find(([v])=>v.direction==='BUY')?.[0];
+      await driveFeatures(h, features, { brokerConnectionId: 'demo-conn-2' });
+      const record = h.recordDecision.mock.calls.find(([v]) => v.direction === 'BUY')?.[0];
       expect(record?.governance.advisoryAlternateTrial).toMatchObject({
-        eligible:true,reason:'ELIGIBLE',maxLot:4,
-        route:'CONFIRMED_REVERSAL',
+        eligible: true,
+        reason: 'ELIGIBLE',
+        maxLot: 4,
+        route: 'CONFIRMED_REVERSAL',
       });
       expect(record?.executionAuthority).toBe('BROKER_NATIVE');
-      expect(h.receiveSignal).toHaveBeenCalledWith(expect.objectContaining({
-        direction:'BUY',suggestedVolume:expect.any(Number),
-        metadata:expect.objectContaining({
-          m1_pepperstone_demo_advisory_alternates:true,
-          multimodel_execution_authority_path:
-            'DEMO_ADVISORY_REVERSAL_EARLY_ENTRY_PILOT',
+      expect(h.receiveSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          direction: 'BUY',
+          suggestedVolume: expect.any(Number),
+          metadata: expect.objectContaining({
+            m1_pepperstone_demo_advisory_alternates: true,
+            multimodel_execution_authority_path: 'DEMO_ADVISORY_REVERSAL_EARLY_ENTRY_PILOT',
+          }),
         }),
-      }));
+      );
       expect(h.closeTrade).not.toHaveBeenCalled();
       expect(h.loadDemoAlternativeTrialEntryCount).toHaveBeenCalledWith(
         expect.objectContaining({
-          startsAt:'2026-11-16T23:36:00.000Z',
-          endsAt:'2026-11-17T20:00:00.000Z',
+          startsAt: '2026-11-16T23:36:00.000Z',
+          endsAt: '2026-11-17T20:00:00.000Z',
         }),
       );
-    }finally{jest.useRealTimers()}
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('continues owner-scoped Pepperstone DEMO advisory reversals beyond 4 entries and the prior expiry, without bypassing risk', async () => {
+    jest.useFakeTimers({
+      now: new Date('2026-11-18T10:20:40.000Z'),
+      doNotFake: ['setTimeout', 'setInterval', 'setImmediate', 'nextTick'],
+    });
+    try {
+      const h = phase2Harness({
+        rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+        session: fullAutoSession,
+        enableAdvisoryAlternates: true,
+        enableContinuousAdvisory: true,
+        suspendTrendContinuation: true,
+      });
+      h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
+      h.loadDemoAlternativeTrialEntryCount.mockResolvedValue(4);
+      const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+      jest
+        .spyOn(h.service as any, 'evaluateDemoMultimodel')
+        .mockImplementation(async (...args: any[]) => {
+          const x = await original(...args);
+          return {
+            ...x,
+            portfolioSnapshotAvailable: true,
+            ensemble: {
+              ...x.ensemble,
+              strategyRoute: 'CONFIRMED_REVERSAL',
+              paperAdmitted: true,
+              ensembleScore: 0.7,
+              directionQuality: 0.7,
+            },
+            governance: {
+              ...x.governance,
+              paperExecutionEligible: true,
+              paperExecutionBlockers: [],
+              paperExecutionCostUsable: true,
+              executionSpreadEvidenceValid: true,
+              netExpectedR: 0.23,
+              eventRisk: 'CLEAR',
+              driftState: 'IN_DISTRIBUTION',
+              sleeveState: 'COLLECTING',
+            },
+            trainedExpert: {
+              ...x.trainedExpert,
+              state: 'ABSTAIN',
+              admitted: false,
+              direction: args[2].direction,
+              allBrokerNative: true,
+              longVotes: args[2].direction === 'BUY' ? 2 : 1,
+              shortVotes: args[2].direction === 'SELL' ? 2 : 1,
+              meanOpportunityProbability: 0.3,
+              freshnessSeconds: 60,
+            },
+            authority: {
+              ...x.authority,
+              executable: false,
+              authorityPath: 'BLOCKED',
+              trainedExpertOpposed: false,
+              blockers: ['MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED'],
+            },
+          };
+        });
+      const features = {
+        ...cleanContinuationFeatures(),
+        decisionTime: new Date('2026-11-18T10:20:00.000Z'),
+        latestM1OpenTime: new Date('2026-11-18T10:19:00.000Z'),
+        emaSeparationAtr: 0,
+      };
+      expect(h.service.getStatus().advisoryAlternatePilot).toMatchObject({
+        enabled: true,
+        activeNow: true,
+        continuousEvidence: true,
+        maxEntries: null,
+        endsAt: null,
+        maxLot: 4,
+      });
+      await driveFeatures(h, features, { brokerConnectionId: 'demo-conn-2' });
+      const record = h.recordDecision.mock.calls.find(([v]) => v.direction === 'BUY')?.[0];
+      expect(record?.governance.advisoryAlternateTrial).toMatchObject({
+        eligible: true,
+        reason: 'ELIGIBLE',
+        entryLimit: null,
+        endsAt: null,
+        continuousEvidence: true,
+        route: 'CONFIRMED_REVERSAL',
+      });
+      expect(record?.executionAuthority).toBe('BROKER_NATIVE');
+      expect(h.loadDemoAlternativeTrialEntryCount).not.toHaveBeenCalled();
+      expect(h.isPepperstoneDemoBrokerConnection).toHaveBeenCalled();
+      expect(h.receiveSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          direction: 'BUY',
+          suggestedVolume: expect.any(Number),
+          metadata: expect.objectContaining({
+            m1_pepperstone_demo_advisory_alternates: true,
+            m1_pepperstone_demo_continuous_evidence: true,
+            multimodel_execution_authority_path: 'DEMO_CONTINUOUS_REVERSAL_EARLY_EVIDENCE',
+            m1_pepperstone_demo_alternative_trial_expires_at: null,
+          }),
+        }),
+      );
+      expect(h.closeTrade).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('executes a separately qualified BUY counter into the existing Pepperstone DEMO risk path', async () => {
     jest.useFakeTimers({
-      now:new Date('2026-11-16T21:20:40.000Z'),
-      doNotFake:['setTimeout','setInterval','setImmediate','nextTick'],
+      now: new Date('2026-11-16T21:20:40.000Z'),
+      doNotFake: ['setTimeout', 'setInterval', 'setImmediate', 'nextTick'],
     });
     try {
-      const h=phase2Harness({
-        rollout:M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
-        session:fullAutoSession,
-        enableCounterPilot:true,
-        suspendTrendContinuation:true,
-        trainedExpertState:'CONFIRM',
-        trainedExpertDirection:'BUY',
+      const h = phase2Harness({
+        rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+        session: fullAutoSession,
+        enableCounterPilot: true,
+        suspendTrendContinuation: true,
+        trainedExpertState: 'CONFIRM',
+        trainedExpertDirection: 'BUY',
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
-      const original=(h.service as any).evaluateDemoMultimodel.bind(h.service);
-      jest.spyOn(h.service as any,'evaluateDemoMultimodel')
-        .mockImplementation(async (...args:any[])=>{
-          const result=await original(...args);
-          const isCounter=args[2].direction==='BUY';
-          return {...result,
-            portfolioSnapshotAvailable:true,
-            ensemble:{...result.ensemble,
-              strategyRoute:isCounter?'EARLY_TRANSITION':'CONFIRMED_REVERSAL',
-              paperAdmitted:true,ensembleScore:0.75,directionQuality:0.73},
-            governance:{...result.governance,paperExecutionEligible:true,
-              paperExecutionBlockers:[],paperExecutionCostUsable:true,
-              executionSpreadEvidenceValid:true,netExpectedR:0.23,
-              eventRisk:'CLEAR',driftState:'IN_DISTRIBUTION',
-              sleeveState:'COLLECTING'},
-            trainedExpert:{...result.trainedExpert,
-              state:isCounter?'CONFIRM':'CONFLICT',
-              admitted:true,allBrokerNative:true,direction:'BUY',
-              longVotes:3,shortVotes:0,ensembleConfidence:0.78,
-              meanOpportunityProbability:0.75,freshnessSeconds:40},
-            authority:{...result.authority,executable:false,
-              authorityPath:'BLOCKED',trainedExpertOpposed:!isCounter,
-              blockers:[isCounter?'MULTIMODEL_EARLY_TRANSITION_NOT_M1_CONFIRMED':
-                'MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT']},
+      const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+      jest
+        .spyOn(h.service as any, 'evaluateDemoMultimodel')
+        .mockImplementation(async (...args: any[]) => {
+          const result = await original(...args);
+          const isCounter = args[2].direction === 'BUY';
+          return {
+            ...result,
+            portfolioSnapshotAvailable: true,
+            ensemble: {
+              ...result.ensemble,
+              strategyRoute: isCounter ? 'EARLY_TRANSITION' : 'CONFIRMED_REVERSAL',
+              paperAdmitted: true,
+              ensembleScore: 0.75,
+              directionQuality: 0.73,
+            },
+            governance: {
+              ...result.governance,
+              paperExecutionEligible: true,
+              paperExecutionBlockers: [],
+              paperExecutionCostUsable: true,
+              executionSpreadEvidenceValid: true,
+              netExpectedR: 0.23,
+              eventRisk: 'CLEAR',
+              driftState: 'IN_DISTRIBUTION',
+              sleeveState: 'COLLECTING',
+            },
+            trainedExpert: {
+              ...result.trainedExpert,
+              state: isCounter ? 'CONFIRM' : 'CONFLICT',
+              admitted: true,
+              allBrokerNative: true,
+              direction: 'BUY',
+              longVotes: 3,
+              shortVotes: 0,
+              ensembleConfidence: 0.78,
+              meanOpportunityProbability: 0.75,
+              freshnessSeconds: 40,
+            },
+            authority: {
+              ...result.authority,
+              executable: false,
+              authorityPath: 'BLOCKED',
+              trainedExpertOpposed: !isCounter,
+              blockers: [
+                isCounter
+                  ? 'MULTIMODEL_EARLY_TRANSITION_NOT_M1_CONFIRMED'
+                  : 'MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT',
+              ],
+            },
           };
         });
-      const features={...cleanContinuationFeatures(),
-        decisionTime:new Date('2026-11-16T21:20:00Z'),
-        latestM1OpenTime:new Date('2026-11-16T21:19:00Z'),
-        emaSeparationAtr:0,
+      const features = {
+        ...cleanContinuationFeatures(),
+        decisionTime: new Date('2026-11-16T21:20:00Z'),
+        latestM1OpenTime: new Date('2026-11-16T21:19:00Z'),
+        emaSeparationAtr: 0,
       };
-      await driveFeatures(h,features,{brokerConnectionId:'demo-conn-2'});
-      const decision=h.recordDecision.mock.calls.find(([v])=>v.direction==='BUY')?.[0];
+      await driveFeatures(h, features, { brokerConnectionId: 'demo-conn-2' });
+      const decision = h.recordDecision.mock.calls.find(([v]) => v.direction === 'BUY')?.[0];
       expect(decision?.governance.counterPilot).toMatchObject({
-        eligible:true,reason:'ELIGIBLE',sourceSide:'SELL',maxLot:4,
+        eligible: true,
+        reason: 'ELIGIBLE',
+        sourceSide: 'SELL',
+        maxLot: 4,
       });
       expect(decision?.executionAuthority).toBe('BROKER_NATIVE');
       expect(h.receiveSignal).toHaveBeenCalledWith(
         expect.objectContaining({
-          direction:'BUY',suggestedVolume:expect.any(Number),
-          metadata:expect.objectContaining({
-            m1_pepperstone_demo_counter_pilot:true,
-            m1_pepperstone_demo_counter_source_side:'SELL',
-            multimodel_execution_authority_path:'DEMO_EXPERT_COUNTER_ENTRY_PILOT',
+          direction: 'BUY',
+          suggestedVolume: expect.any(Number),
+          metadata: expect.objectContaining({
+            m1_pepperstone_demo_counter_pilot: true,
+            m1_pepperstone_demo_counter_source_side: 'SELL',
+            multimodel_execution_authority_path: 'DEMO_EXPERT_COUNTER_ENTRY_PILOT',
           }),
         }),
       );
-      const counterOrder = h.receiveSignal.mock.calls.find(([signal]) =>
-        signal.direction === 'BUY' && signal.metadata?.m1_pepperstone_demo_counter_pilot === true,
+      const counterOrder = h.receiveSignal.mock.calls.find(
+        ([signal]) =>
+          signal.direction === 'BUY' && signal.metadata?.m1_pepperstone_demo_counter_pilot === true,
       )?.[0];
       expect(counterOrder?.suggestedVolume).toBeGreaterThan(0);
       expect(counterOrder?.suggestedVolume).toBeLessThanOrEqual(4);
       expect(h.closeTrade).not.toHaveBeenCalled();
       expect(h.loadDemoAlternativeTrialEntryCount).toHaveBeenCalledWith(
         expect.objectContaining({
-          startsAt:'2026-11-16T21:00:00.000Z',
-          endsAt:'2026-11-17T00:00:00.000Z',
+          startsAt: '2026-11-16T21:00:00.000Z',
+          endsAt: '2026-11-17T00:00:00.000Z',
         }),
       );
-    }finally{jest.useRealTimers();}
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
-  it('keeps the counter pilot unable to authorize DEMO orders after its 11 AM cutoff',async()=>{
+  it('keeps the counter pilot unable to authorize DEMO orders after its 11 AM cutoff', async () => {
     jest.useFakeTimers({
-      now:new Date('2026-11-17T00:00:00Z'),
-      doNotFake:['setTimeout','setInterval','setImmediate','nextTick'],
+      now: new Date('2026-11-17T00:00:00Z'),
+      doNotFake: ['setTimeout', 'setInterval', 'setImmediate', 'nextTick'],
     });
-    try{
-      const h=phase2Harness({
-        rollout:M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
-        session:fullAutoSession,enableCounterPilot:true,
-        suspendTrendContinuation:true,
+    try {
+      const h = phase2Harness({
+        rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+        session: fullAutoSession,
+        enableCounterPilot: true,
+        suspendTrendContinuation: true,
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
-      const features={...cleanContinuationFeatures(),
-        decisionTime:new Date('2026-11-17T00:00:00Z'),
-        latestM1OpenTime:new Date('2026-11-17T10:59:00Z'),
-        emaSeparationAtr:0,
+      const features = {
+        ...cleanContinuationFeatures(),
+        decisionTime: new Date('2026-11-17T00:00:00Z'),
+        latestM1OpenTime: new Date('2026-11-17T10:59:00Z'),
+        emaSeparationAtr: 0,
       };
-      await driveFeatures(h,features,{brokerConnectionId:'demo-conn-2'});
-      const decision=h.recordDecision.mock.calls.find(([v])=>v.direction==='BUY')?.[0];
+      await driveFeatures(h, features, { brokerConnectionId: 'demo-conn-2' });
+      const decision = h.recordDecision.mock.calls.find(([v]) => v.direction === 'BUY')?.[0];
       expect(decision?.governance.counterPilot.eligible).toBe(false);
       expect(h.receiveSignal).not.toHaveBeenCalled();
-    }finally{jest.useRealTimers()}
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('routes a timeboxed independently confirmed DEMO reversal through the real risk pipeline at 0.01 lot', async () => {
@@ -3525,51 +3743,70 @@ describe('M1 V8 multi-model DEMO authority', () => {
       doNotFake: ['setTimeout', 'setInterval', 'setImmediate', 'nextTick'],
     });
     try {
-      const h=phase2Harness({
+      const h = phase2Harness({
         rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
         session: fullAutoSession,
-        enableAlternativeTrial:true,
-        suspendTrendContinuation:true,
+        enableAlternativeTrial: true,
+        suspendTrendContinuation: true,
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
-      const original=(h.service as any).evaluateDemoMultimodel.bind(h.service);
-      jest.spyOn(h.service as any,'evaluateDemoMultimodel').mockImplementation(
-        async (...args:any[])=>{
-          const v=await original(...args);
-          return {...v,
-            ensemble:{...v.ensemble,strategyRoute:'CONFIRMED_REVERSAL',
-              paperAdmitted:true,ensembleScore:0.72,directionQuality:0.73},
-            governance:{...v.governance,paperExecutionEligible:true,
-              paperExecutionBlockers:[],paperExecutionCostUsable:true,
-              executionSpreadEvidenceValid:true,netExpectedR:0.24,
-              eventRisk:'CLEAR',sleeveState:'COLLECTING'},
-            authority:{...v.authority,executable:false,authorityPath:'BLOCKED',
-              trainedExpertOpposed:false,
-              blockers:['MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED']},
+      const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+      jest
+        .spyOn(h.service as any, 'evaluateDemoMultimodel')
+        .mockImplementation(async (...args: any[]) => {
+          const v = await original(...args);
+          return {
+            ...v,
+            ensemble: {
+              ...v.ensemble,
+              strategyRoute: 'CONFIRMED_REVERSAL',
+              paperAdmitted: true,
+              ensembleScore: 0.72,
+              directionQuality: 0.73,
+            },
+            governance: {
+              ...v.governance,
+              paperExecutionEligible: true,
+              paperExecutionBlockers: [],
+              paperExecutionCostUsable: true,
+              executionSpreadEvidenceValid: true,
+              netExpectedR: 0.24,
+              eventRisk: 'CLEAR',
+              sleeveState: 'COLLECTING',
+            },
+            authority: {
+              ...v.authority,
+              executable: false,
+              authorityPath: 'BLOCKED',
+              trainedExpertOpposed: false,
+              blockers: ['MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED'],
+            },
           };
         });
-      const f={...cleanContinuationFeatures(),
-        decisionTime:new Date('2026-11-16T20:20:00.000Z'),
-        latestM1OpenTime:new Date('2026-11-16T20:19:00.000Z'),
-        emaSeparationAtr:0,
+      const f = {
+        ...cleanContinuationFeatures(),
+        decisionTime: new Date('2026-11-16T20:20:00.000Z'),
+        latestM1OpenTime: new Date('2026-11-16T20:19:00.000Z'),
+        emaSeparationAtr: 0,
       };
-      const [buy,sell]=buildM1TacticalCandidates(f,M1_TACTICAL_POLICY_V2);
-      expect(classifyM1TacticalRoute(buy,sell,f,M1_TACTICAL_POLICY_V2).route)
-        .toBe('ABSTAIN');
-      await driveFeatures(h,f,{brokerConnectionId:'demo-conn-2'});
-      const decided=h.recordDecision.mock.calls.find(
-        ([v])=>v.direction==='BUY')?.[0];
+      const [buy, sell] = buildM1TacticalCandidates(f, M1_TACTICAL_POLICY_V2);
+      expect(classifyM1TacticalRoute(buy, sell, f, M1_TACTICAL_POLICY_V2).route).toBe('ABSTAIN');
+      await driveFeatures(h, f, { brokerConnectionId: 'demo-conn-2' });
+      const decided = h.recordDecision.mock.calls.find(([v]) => v.direction === 'BUY')?.[0];
       expect(decided?.governance.demoAlternativeTrial).toMatchObject({
-        eligible:true,reason:'ELIGIBLE',maxLot:0.01,
+        eligible: true,
+        reason: 'ELIGIBLE',
+        maxLot: 0.01,
       });
       expect(decided?.executionAuthority).toBe('BROKER_NATIVE');
       expect(decided?.governance.demoContinuationPause.blocked).toBe(false);
       expect(h.receiveSignal).toHaveBeenCalledWith(
         expect.objectContaining({
-          direction:'BUY',suggestedVolume:0.01,
-          metadata:expect.objectContaining({
-            m1_pepperstone_demo_alternative_trial:true,
-            multimodel_execution_authority_path:'DEMO_ALTERNATIVE_TIMING_TRIAL',
+          direction: 'BUY',
+          suggestedVolume: 0.01,
+          metadata: expect.objectContaining({
+            m1_pepperstone_demo_alternative_trial: true,
+            multimodel_execution_authority_path: 'DEMO_ALTERNATIVE_TIMING_TRIAL',
           }),
         }),
       );
@@ -3585,52 +3822,78 @@ describe('M1 V8 multi-model DEMO authority', () => {
       doNotFake: ['setTimeout', 'setInterval', 'setImmediate', 'nextTick'],
     });
     try {
-      const h=phase2Harness({
-        rollout:M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
-        session:fullAutoSession,
-        enableAlternativeTrial:true,
-        suspendTrendContinuation:true,
-        openPositions:[{
-          tradeId:'old-sell',tradeIntentId:'old-sell-intent',
-          instrument:'EURUSD',direction:'SELL',
-          openedAt:new Date('2026-11-16T20:01:00.000Z'),
-          decisionId:'old-sell-decision',
-          route:'M1_EARLY_TRANSITION',
-          policyVersion:'m1-tactical-v2-m5-lifecycle',
-          originalNetExpectedR:0.2,
-        }],
+      const h = phase2Harness({
+        rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
+        session: fullAutoSession,
+        enableAlternativeTrial: true,
+        suspendTrendContinuation: true,
+        openPositions: [
+          {
+            tradeId: 'old-sell',
+            tradeIntentId: 'old-sell-intent',
+            instrument: 'EURUSD',
+            direction: 'SELL',
+            openedAt: new Date('2026-11-16T20:01:00.000Z'),
+            decisionId: 'old-sell-decision',
+            route: 'M1_EARLY_TRANSITION',
+            policyVersion: 'm1-tactical-v2-m5-lifecycle',
+            originalNetExpectedR: 0.2,
+          },
+        ],
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
-      const original=(h.service as any).evaluateDemoMultimodel.bind(h.service);
-      jest.spyOn(h.service as any,'evaluateDemoMultimodel').mockImplementation(async (...args:any[])=>{
-        const x=await original(...args);
-        return {...x,
-          ensemble:{...x.ensemble,strategyRoute:'CONFIRMED_REVERSAL',
-            paperAdmitted:true,ensembleScore:0.73,directionQuality:0.75},
-          governance:{...x.governance,paperExecutionEligible:true,
-            paperExecutionBlockers:[],paperExecutionCostUsable:true,
-            executionSpreadEvidenceValid:true,netExpectedR:0.23,
-            eventRisk:'CLEAR',sleeveState:'COLLECTING'},
-          authority:{...x.authority,executable:false,authorityPath:'BLOCKED',
-            trainedExpertOpposed:false,
-            blockers:['MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED']},
-        };
-      });
-      const f={...cleanContinuationFeatures(),
-        decisionTime:new Date('2026-11-16T20:20:00Z'),
-        latestM1OpenTime:new Date('2026-11-16T20:19:00Z'),
-        emaSeparationAtr:0,
+      const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
+      jest
+        .spyOn(h.service as any, 'evaluateDemoMultimodel')
+        .mockImplementation(async (...args: any[]) => {
+          const x = await original(...args);
+          return {
+            ...x,
+            ensemble: {
+              ...x.ensemble,
+              strategyRoute: 'CONFIRMED_REVERSAL',
+              paperAdmitted: true,
+              ensembleScore: 0.73,
+              directionQuality: 0.75,
+            },
+            governance: {
+              ...x.governance,
+              paperExecutionEligible: true,
+              paperExecutionBlockers: [],
+              paperExecutionCostUsable: true,
+              executionSpreadEvidenceValid: true,
+              netExpectedR: 0.23,
+              eventRisk: 'CLEAR',
+              sleeveState: 'COLLECTING',
+            },
+            authority: {
+              ...x.authority,
+              executable: false,
+              authorityPath: 'BLOCKED',
+              trainedExpertOpposed: false,
+              blockers: ['MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED'],
+            },
+          };
+        });
+      const f = {
+        ...cleanContinuationFeatures(),
+        decisionTime: new Date('2026-11-16T20:20:00Z'),
+        latestM1OpenTime: new Date('2026-11-16T20:19:00Z'),
+        emaSeparationAtr: 0,
       };
-      await driveFeatures(h,f,{brokerConnectionId:'demo-conn-2'});
-      const decision=h.recordDecision.mock.calls.find(([v])=>v.direction==='BUY')?.[0];
+      await driveFeatures(h, f, { brokerConnectionId: 'demo-conn-2' });
+      const decision = h.recordDecision.mock.calls.find(([v]) => v.direction === 'BUY')?.[0];
       expect(decision?.governance.demoAlternativeTrial).toMatchObject({
-        eligible:true,reason:'ELIGIBLE',
+        eligible: true,
+        reason: 'ELIGIBLE',
       });
       expect(h.closeTrade).not.toHaveBeenCalled();
       expect(h.receiveSignal).not.toHaveBeenCalled();
       expect(decision?.blockers).toContain('M1_ACTIVE_OPPOSITE_POSITION');
       expect(decision?.blockers).not.toContain('M1_DIRECTION_FLIP_EXIT_PENDING');
-    }finally{jest.useRealTimers()}
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('pauses new owner Pepperstone DEMO primary continuation without dispatch', async () => {
@@ -3642,15 +3905,19 @@ describe('M1 V8 multi-model DEMO authority', () => {
     });
     h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel')
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
       .mockImplementation(async (...args: any[]) => {
         const value = await original(...args);
         return {
           ...value,
-          ensemble: { ...value.ensemble,
-            strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
-          authority: { ...value.authority,
-            executable: true, authorityPath: 'PRIMARY_PLAN_B', blockers: [] },
+          ensemble: { ...value.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
+          authority: {
+            ...value.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
         };
       });
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
@@ -3658,15 +3925,17 @@ describe('M1 V8 multi-model DEMO authority', () => {
       ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
     )?.[0];
     expect(record?.executionAuthority).toBe('NONE');
-    expect(record?.blockers).toContain(
-      'M1_PEPPERSTONE_DEMO_TREND_CONTINUATION_PAUSED',
-    );
+    expect(record?.blockers).toContain('M1_PEPPERSTONE_DEMO_TREND_CONTINUATION_PAUSED');
     expect(record?.governance.demoContinuationPause).toMatchObject({
-      enabled: true,blocked:true,reason:'CONTINUATION_PAUSED',
-      changesOpenPositions:false,overridesAlternativeAdmission:false,
+      enabled: true,
+      blocked: true,
+      reason: 'CONTINUATION_PAUSED',
+      changesOpenPositions: false,
+      overridesAlternativeAdmission: false,
     });
     expect(h.isPepperstoneDemoBrokerConnection).toHaveBeenCalledWith({
-      userId:'user-1',brokerConnectionId:'demo-conn-2',
+      userId: 'user-1',
+      brokerConnectionId: 'demo-conn-2',
     });
     expect(h.receiveSignal).not.toHaveBeenCalled();
   });
@@ -3680,15 +3949,19 @@ describe('M1 V8 multi-model DEMO authority', () => {
     });
     h.isPepperstoneDemoBrokerConnection.mockResolvedValue(false);
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel')
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
       .mockImplementation(async (...args: any[]) => {
         const value = await original(...args);
         return {
           ...value,
-          ensemble: { ...value.ensemble,
-            strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
-          authority: { ...value.authority,
-            executable: true, authorityPath: 'PRIMARY_PLAN_B', blockers: [] },
+          ensemble: { ...value.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
+          authority: {
+            ...value.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
         };
       });
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
@@ -3696,7 +3969,9 @@ describe('M1 V8 multi-model DEMO authority', () => {
       ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
     )?.[0];
     expect(record?.governance.demoContinuationPause).toMatchObject({
-      enabled:true,blocked:false,reason:'OTHER_BROKER',
+      enabled: true,
+      blocked: false,
+      reason: 'OTHER_BROKER',
     });
     expect(record?.executionAuthority).toBe('BROKER_NATIVE');
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
@@ -3710,15 +3985,19 @@ describe('M1 V8 multi-model DEMO authority', () => {
       suspendTrendContinuation: true,
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel')
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
       .mockImplementation(async (...args: any[]) => {
         const value = await original(...args);
         return {
           ...value,
-          ensemble: { ...value.ensemble,
-            strategyRoute: 'CONFIRMED_REVERSAL', paperAdmitted: true },
-          authority: { ...value.authority,
-            executable: true, authorityPath: 'PRIMARY_PLAN_B', blockers: [] },
+          ensemble: { ...value.ensemble, strategyRoute: 'CONFIRMED_REVERSAL', paperAdmitted: true },
+          authority: {
+            ...value.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
         };
       });
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
@@ -3726,11 +4005,10 @@ describe('M1 V8 multi-model DEMO authority', () => {
       ([v]) => v.direction === 'BUY' && v.route === 'M1_TREND_CONTINUATION',
     )?.[0];
     expect(record?.governance.demoContinuationPause).toMatchObject({
-      blocked:false,reason:'DISABLED',
+      blocked: false,
+      reason: 'DISABLED',
     });
-    expect(record?.blockers).not.toContain(
-      'M1_PEPPERSTONE_DEMO_TREND_CONTINUATION_PAUSED',
-    );
+    expect(record?.blockers).not.toContain('M1_PEPPERSTONE_DEMO_TREND_CONTINUATION_PAUSED');
     expect(record?.executionAuthority).toBe('BROKER_NATIVE');
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
   });
@@ -3747,12 +4025,17 @@ describe('M1 V8 multi-model DEMO authority', () => {
       { closedAt: '2026-10-14T11:20:00Z', netPnl: '-40', riskAtStop: '100' },
     ]);
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(
-      async (...args: any[]) => {
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
         const result = await original(...args);
         return {
           ...result,
-          ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: true,
+          },
           authority: {
             ...result.authority,
             executable: true,
@@ -3760,14 +4043,12 @@ describe('M1 V8 multi-model DEMO authority', () => {
             blockers: [],
           },
         };
-      },
-    );
+      });
     await driveFeatures(h, cleanContinuationFeatures(), {
       brokerConnectionId: 'demo-conn-2',
     });
     const recorded = h.recordDecision.mock.calls.find(
-      ([value]) => value.direction === 'BUY' &&
-        value.route === 'M1_TREND_CONTINUATION',
+      ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
     )?.[0];
     expect(recorded?.governance.pepperstonePairSideAsOfShadow).toMatchObject({
       mode: 'RESEARCH_ONLY',
@@ -3781,8 +4062,11 @@ describe('M1 V8 multi-model DEMO authority', () => {
     });
     expect(h.loadPepperstonePairSideAsOfRows).toHaveBeenCalledWith(
       expect.objectContaining({
-        userId: 'user-1', brokerConnectionId: 'demo-conn-2',
-        instrument: 'EURUSD', direction: 'BUY', asOf: expect.any(Date),
+        userId: 'user-1',
+        brokerConnectionId: 'demo-conn-2',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        asOf: expect.any(Date),
       }),
     );
     expect(recorded?.executionAuthority).toBe('BROKER_NATIVE');
@@ -3798,12 +4082,17 @@ describe('M1 V8 multi-model DEMO authority', () => {
     });
     h.loadPepperstonePairSideAsOfRows.mockRejectedValue(new Error('simulated research timeout'));
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(
-      async (...args: any[]) => {
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
         const result = await original(...args);
         return {
           ...result,
-          ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: true,
+          },
           authority: {
             ...result.authority,
             executable: true,
@@ -3811,14 +4100,12 @@ describe('M1 V8 multi-model DEMO authority', () => {
             blockers: [],
           },
         };
-      },
-    );
+      });
     await driveFeatures(h, cleanContinuationFeatures(), {
       brokerConnectionId: 'demo-conn-2',
     });
     const recorded = h.recordDecision.mock.calls.find(
-      ([value]) => value.direction === 'BUY' &&
-        value.route === 'M1_TREND_CONTINUATION',
+      ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
     )?.[0];
     expect(recorded?.governance.pepperstonePairSideAsOfShadow).toMatchObject({
       state: 'UNKNOWN',
@@ -3837,20 +4124,28 @@ describe('M1 V8 multi-model DEMO authority', () => {
       evidenceByRoute: { M1_TREND_CONTINUATION: [] },
     });
     h.loadPepperstonePairSideAsOfRows.mockImplementation(
-      () => new Promise(resolve => setTimeout(() => resolve([]), 1000)),
+      () => new Promise((resolve) => setTimeout(() => resolve([]), 1000)),
     );
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(
-      async (...args: any[]) => {
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
         const result = await original(...args);
         return {
           ...result,
-          ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
-          authority: { ...result.authority, executable: true,
-            authorityPath: 'PRIMARY_PLAN_B', blockers: [] },
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: true,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
         };
-      },
-    );
+      });
     const started = Date.now();
     await driveFeatures(h, cleanContinuationFeatures(), {
       brokerConnectionId: 'demo-conn-2',
@@ -3860,7 +4155,9 @@ describe('M1 V8 multi-model DEMO authority', () => {
       ([value]) => value.direction === 'BUY' && value.route === 'M1_TREND_CONTINUATION',
     )?.[0];
     expect(recorded?.governance.pepperstonePairSideAsOfShadow).toMatchObject({
-      state: 'UNKNOWN', reason: 'HISTORY_LOOKUP_FAILED', entryVeto: false,
+      state: 'UNKNOWN',
+      reason: 'HISTORY_LOOKUP_FAILED',
+      entryVeto: false,
     });
     expect(recorded?.executionAuthority).toBe('BROKER_NATIVE');
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
@@ -4869,18 +5166,25 @@ describe('M1 V8 multi-model DEMO authority', () => {
       evidenceByRoute: { M1_TREND_CONTINUATION: oldLosses },
     });
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(
-      async (...args: any[]) => {
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
         const result = await original(...args);
         return {
           ...result,
-          ensemble: { ...result.ensemble,
-            strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
-          authority: { ...result.authority,
-            executable: true, authorityPath: 'PRIMARY_PLAN_B', blockers: [] },
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: true,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
         };
-      },
-    );
+      });
 
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
     const first = h.recordDecision.mock.calls.find(
@@ -4923,9 +5227,13 @@ describe('M1 V8 multi-model DEMO authority', () => {
       '2026-10-15T07:19:00.000Z',
       '2026-10-15T07:09:00.000Z',
     ].map((closedAt) => ({
-      route: 'M1_TREND_CONTINUATION', instrument: 'EURUSD',
-      direction: 'BUY', policyVersion: 'm1-tactical-v2-m5-lifecycle',
-      realisedPnl: -5, riskAtStop: 10, closedAt: new Date(closedAt),
+      route: 'M1_TREND_CONTINUATION',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      policyVersion: 'm1-tactical-v2-m5-lifecycle',
+      realisedPnl: -5,
+      riskAtStop: 10,
+      closedAt: new Date(closedAt),
     }));
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
@@ -4934,17 +5242,25 @@ describe('M1 V8 multi-model DEMO authority', () => {
     });
     h.hasRecentM1RecoveryCanary.mockRejectedValue(new Error('simulated database error'));
     const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
-    jest.spyOn(h.service as any, 'evaluateDemoMultimodel').mockImplementation(
-      async (...args: any[]) => {
+    jest
+      .spyOn(h.service as any, 'evaluateDemoMultimodel')
+      .mockImplementation(async (...args: any[]) => {
         const result = await original(...args);
         return {
           ...result,
-          ensemble: { ...result.ensemble, strategyRoute: 'TREND_CONTINUATION', paperAdmitted: true },
-          authority: { ...result.authority,
-            executable: true, authorityPath: 'PRIMARY_PLAN_B', blockers: [] },
+          ensemble: {
+            ...result.ensemble,
+            strategyRoute: 'TREND_CONTINUATION',
+            paperAdmitted: true,
+          },
+          authority: {
+            ...result.authority,
+            executable: true,
+            authorityPath: 'PRIMARY_PLAN_B',
+            blockers: [],
+          },
         };
-      },
-    );
+      });
     await driveFeatures(h, cleanContinuationFeatures(), { brokerConnectionId: 'demo-conn-2' });
     expect(h.receiveSignal).not.toHaveBeenCalled();
     const blocked = h.recordDecision.mock.calls.find(

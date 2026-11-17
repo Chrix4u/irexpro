@@ -835,9 +835,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       phase: this.rolloutPolicy.phase,
       cadenceSeconds: this.rolloutPolicy.cadenceMs / 1000,
       counterDemoPilot: {
-        enabled: professionalDemoPhase &&
+        enabled:
+          professionalDemoPhase &&
           this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT', '') === 'enabled',
-        activeNow: professionalDemoPhase &&
+        activeNow:
+          professionalDemoPhase &&
           this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT', '') === 'enabled' &&
           Date.now() >= Date.parse(COUNTER_PILOT_START) &&
           Date.now() < Date.parse(COUNTER_PILOT_END),
@@ -848,18 +850,37 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         exactBroker: 'Pepperstone cTrader DEMO',
       },
       advisoryAlternatePilot: {
-        enabled: professionalDemoPhase &&
+        continuousEvidence:
+          professionalDemoPhase &&
+          this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_CONTINUOUS_ALTERNATES', '') ===
+            'enabled' &&
+          !!this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', ''),
+        enabled:
+          professionalDemoPhase &&
           this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_ADVISORY_ALTERNATES', '') === 'enabled',
-        activeNow: professionalDemoPhase &&
-          this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_ADVISORY_ALTERNATES', '') === 'enabled' &&
+        activeNow:
+          professionalDemoPhase &&
+          this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_ADVISORY_ALTERNATES', '') ===
+            'enabled' &&
           Date.now() >= Date.parse(ADVISORY_ALTERNATE_START) &&
-          Date.now() < Date.parse(ADVISORY_ALTERNATE_END),
+          (this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_CONTINUOUS_ALTERNATES', '') ===
+          'enabled'
+            ? !!this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '')
+            : Date.now() < Date.parse(ADVISORY_ALTERNATE_END)),
         startsAt: ADVISORY_ALTERNATE_START,
-        endsAt: ADVISORY_ALTERNATE_END,
-        maxEntries: ADVISORY_ALTERNATE_ENTRY_LIMIT,
+        endsAt:
+          this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_CONTINUOUS_ALTERNATES', '') ===
+            'enabled' && !!this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '')
+            ? null
+            : ADVISORY_ALTERNATE_END,
+        maxEntries:
+          this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_CONTINUOUS_ALTERNATES', '') ===
+            'enabled' && !!this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '')
+            ? null
+            : ADVISORY_ALTERNATE_ENTRY_LIMIT,
         maxLot: 4,
         exactBroker: 'Pepperstone cTrader DEMO',
-        allowedRoutes: ['CONFIRMED_REVERSAL','EARLY_TRANSITION'],
+        allowedRoutes: ['CONFIRMED_REVERSAL', 'EARLY_TRANSITION'],
       },
       instruments: [...this.rolloutPolicy.instruments],
       ...(professionalDemoPhase && this.rolloutPolicy.demoEntryInstruments
@@ -1705,21 +1726,20 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       professionalDemoPhase &&
       this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_ALTERNATIVE_TRIAL', '') === 'enabled';
     const alternateTrialCandidate =
-      alternateTrialConfigured && multimodelDemo &&
+      alternateTrialConfigured &&
+      multimodelDemo &&
       (multimodelDemo.ensemble.strategyRoute === 'CONFIRMED_REVERSAL' ||
         multimodelDemo.ensemble.strategyRoute === 'EARLY_TRANSITION');
     let alternateTrialBrokerVerified = false;
-    if (alternateTrialCandidate &&
-        Date.now() < Date.parse(DEMO_ALTERNATIVE_TRIAL_END)) {
+    if (alternateTrialCandidate && Date.now() < Date.parse(DEMO_ALTERNATIVE_TRIAL_END)) {
       try {
-        alternateTrialBrokerVerified =
-          await this.evidence.isPepperstoneDemoBrokerConnection({
-            userId, brokerConnectionId,
-          });
+        alternateTrialBrokerVerified = await this.evidence.isPepperstoneDemoBrokerConnection({
+          userId,
+          brokerConnectionId,
+        });
       } catch (error) {
         this.logger.warn(
-          'DEMO alternate trial exact broker verification failed: ' +
-          (error as Error).message,
+          'DEMO alternate trial exact broker verification failed: ' + (error as Error).message,
         );
       }
     }
@@ -1737,8 +1757,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       portfolioSnapshotAvailable: multimodelDemo?.portfolioSnapshotAvailable === true,
       executionSpreadEvidenceValid:
         multimodelDemo?.governance.executionSpreadEvidenceValid === true,
-      paperExecutionCostUsable:
-        multimodelDemo?.governance.paperExecutionCostUsable === true,
+      paperExecutionCostUsable: multimodelDemo?.governance.paperExecutionCostUsable === true,
       netExpectedR: multimodelDemo?.governance.netExpectedR ?? null,
       eventRisk: multimodelDemo?.governance.eventRisk ?? 'UNVERIFIED',
       sleeveState: multimodelDemo?.governance.sleeveState ?? 'BLOCKED',
@@ -1756,36 +1775,45 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // evaluated for the CURRENT candidate side, which already has its own
     // M1 stop/target and Plan-B cost model. Never reuse the opposed side's
     // price/risk geometry, and never promote opposing votes alone.
-    const counterEnabled = professionalDemoPhase &&
+    const counterEnabled =
+      professionalDemoPhase &&
       this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT', '') === 'enabled';
-    const counterWindowOpen = counterEnabled &&
+    const counterWindowOpen =
+      counterEnabled &&
       Date.now() >= Date.parse(COUNTER_PILOT_START) &&
       Date.now() < Date.parse(COUNTER_PILOT_END);
     let counterBrokerVerified = false;
     let counterOpposedSource: MultimodelDemoEvaluation | null = null;
-    if (counterWindowOpen && multimodelDemo &&
-        ['CONFIRMED_REVERSAL','EARLY_TRANSITION'].includes(
-          multimodelDemo.ensemble.strategyRoute,
-        ) &&
-        multimodelDemo.ensemble.paperAdmitted === true &&
-        multimodelDemo.trainedExpert.state === 'CONFIRM' &&
-        multimodelDemo.trainedExpert.admitted === true) {
+    if (
+      counterWindowOpen &&
+      multimodelDemo &&
+      ['CONFIRMED_REVERSAL', 'EARLY_TRANSITION'].includes(multimodelDemo.ensemble.strategyRoute) &&
+      multimodelDemo.ensemble.paperAdmitted === true &&
+      multimodelDemo.trainedExpert.state === 'CONFIRM' &&
+      multimodelDemo.trainedExpert.admitted === true
+    ) {
       try {
-        counterBrokerVerified =
-          await this.evidence.isPepperstoneDemoBrokerConnection({
-            userId, brokerConnectionId,
-          });
+        counterBrokerVerified = await this.evidence.isPepperstoneDemoBrokerConnection({
+          userId,
+          brokerConnectionId,
+        });
         if (counterBrokerVerified) {
           counterOpposedSource = await this.evaluateDemoMultimodel(
-            userId, brokerConnectionId, opposite, features, eventRisk,
-            spreadEvidence, decisionTime, paperSimulationSpreadPrice,
-            undefined, trainedExpertForSlot,
+            userId,
+            brokerConnectionId,
+            opposite,
+            features,
+            eventRisk,
+            spreadEvidence,
+            decisionTime,
+            paperSimulationSpreadPrice,
+            undefined,
+            trainedExpertForSlot,
           );
         }
       } catch (error) {
         this.logger.warn(
-          'Independent DEMO counter evaluation unavailable: ' +
-          (error as Error).message,
+          'Independent DEMO counter evaluation unavailable: ' + (error as Error).message,
         );
       }
     }
@@ -1807,28 +1835,42 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // paper-admitted reversal/early transition even if its FINAL expert
     // outcome is ABSTAIN. This limited trial bridges only duplicated
     // timing/confirmation, not spread, cost or broker-risk controls.
-    const advisoryEnabled = professionalDemoPhase &&
+    const advisoryEnabled =
+      professionalDemoPhase &&
       this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_ADVISORY_ALTERNATES', '') === 'enabled';
-    const advisoryWindowOpen = advisoryEnabled &&
+    // Deliberately remove only the *experiment's* old 4-entry/time cutoff,
+    // not the broker's ongoing risk, drawdown, fill or session constraints.
+    // The continued research requires exact configured owner identity.
+    const continuousAdvisoryRequested =
+      advisoryEnabled &&
+      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_CONTINUOUS_ALTERNATES', '') === 'enabled' &&
+      !!this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') &&
+      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId;
+    const advisoryWindowOpen =
+      advisoryEnabled &&
       Date.now() >= Date.parse(ADVISORY_ALTERNATE_START) &&
-      Date.now() < Date.parse(ADVISORY_ALTERNATE_END);
+      (continuousAdvisoryRequested || Date.now() < Date.parse(ADVISORY_ALTERNATE_END));
     let advisoryBrokerVerified = false;
-    if (advisoryWindowOpen && multimodelDemo &&
-        ['CONFIRMED_REVERSAL','EARLY_TRANSITION'].includes(
-          multimodelDemo.ensemble.strategyRoute,
-        ) && multimodelDemo.ensemble.paperAdmitted) {
+    if (
+      advisoryWindowOpen &&
+      multimodelDemo &&
+      ['CONFIRMED_REVERSAL', 'EARLY_TRANSITION'].includes(multimodelDemo.ensemble.strategyRoute) &&
+      multimodelDemo.ensemble.paperAdmitted
+    ) {
       try {
-        advisoryBrokerVerified =
-          await this.evidence.isPepperstoneDemoBrokerConnection({
-            userId, brokerConnectionId,
-          });
+        advisoryBrokerVerified = await this.evidence.isPepperstoneDemoBrokerConnection({
+          userId,
+          brokerConnectionId,
+        });
       } catch (error) {
-        this.logger.warn('DEMO advisory alternate account validation unavailable: ' +
-          (error as Error).message);
+        this.logger.warn(
+          'DEMO advisory alternate account validation unavailable: ' + (error as Error).message,
+        );
       }
     }
     const advisoryAlternateTrial = evaluateAdvisoryAlternateTrial({
       enabled: advisoryWindowOpen,
+      continuousEvidence: continuousAdvisoryRequested && advisoryBrokerVerified,
       relaxedConfirmation:
         advisoryWindowOpen &&
         this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_RELAXED_ALTERNATE_TRIAL', '') ===
@@ -1848,8 +1890,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       netExpectedR: multimodelDemo?.governance.netExpectedR ?? null,
       executionSpreadEvidenceValid:
         multimodelDemo?.governance.executionSpreadEvidenceValid === true,
-      paperExecutionCostUsable:
-        multimodelDemo?.governance.paperExecutionCostUsable === true,
+      paperExecutionCostUsable: multimodelDemo?.governance.paperExecutionCostUsable === true,
       eventRisk: multimodelDemo?.governance.eventRisk ?? 'UNKNOWN',
       driftState: multimodelDemo?.governance.driftState ?? 'UNKNOWN',
       sleeveState: multimodelDemo?.governance.sleeveState ?? 'BLOCKED',
@@ -1863,56 +1904,71 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       expertNative: multimodelDemo?.trainedExpert.allBrokerNative === true,
       expertAdmitted: multimodelDemo?.trainedExpert.admitted ?? null,
       expertFreshness: multimodelDemo?.trainedExpert.freshnessSeconds ?? null,
-      expertProbability:
-        multimodelDemo?.trainedExpert.meanOpportunityProbability ?? null,
+      expertProbability: multimodelDemo?.trainedExpert.meanOpportunityProbability ?? null,
       expertLongVotes: multimodelDemo?.trainedExpert.longVotes ?? null,
       expertShortVotes: multimodelDemo?.trainedExpert.shortVotes ?? null,
     });
     let demoAlternativeTrial:
-      DemoAlternativeTrialDecision | CounterPilotDecision | AdvisoryAlternateTrialDecision =
-      counterPilot.eligible ? counterPilot
-        : advisoryAlternateTrial.eligible ? advisoryAlternateTrial
+      | DemoAlternativeTrialDecision
+      | CounterPilotDecision
+      | AdvisoryAlternateTrialDecision = counterPilot.eligible
+      ? counterPilot
+      : advisoryAlternateTrial.eligible
+        ? advisoryAlternateTrial
         : initialDemoAlternativeTrial;
-    if (demoAlternativeTrial.eligible) {
+    // The only unmetered route is explicitly owner-and-broker-verified
+    // Pepperstone DEMO advisory reversal/early-transition evidence collection.
+    // The counter and other historical studies keep their finite budgets.
+    if (
+      demoAlternativeTrial.eligible &&
+      !(
+        demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT &&
+        demoAlternativeTrial.continuousEvidence === true
+      )
+    ) {
       try {
         const counterSelected = demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT;
         const advisorySelected = demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT;
-        const priorTrialEntries =
-          await this.evidence.loadDemoAlternativeTrialEntryCount({
-            userId, brokerConnectionId,
-            ...(counterSelected
-              ? { startsAt: COUNTER_PILOT_START, endsAt: COUNTER_PILOT_END }
-              : advisorySelected
-                ? { startsAt: ADVISORY_ALTERNATE_START, endsAt: ADVISORY_ALTERNATE_END }
-                : {}),
-          });
+        const priorTrialEntries = await this.evidence.loadDemoAlternativeTrialEntryCount({
+          userId,
+          brokerConnectionId,
+          ...(counterSelected
+            ? { startsAt: COUNTER_PILOT_START, endsAt: COUNTER_PILOT_END }
+            : advisorySelected
+              ? { startsAt: ADVISORY_ALTERNATE_START, endsAt: ADVISORY_ALTERNATE_END }
+              : {}),
+        });
         const limit = counterSelected
           ? COUNTER_PILOT_ENTRY_LIMIT
-          : advisorySelected ? ADVISORY_ALTERNATE_ENTRY_LIMIT
-          : DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT;
+          : advisorySelected
+            ? ADVISORY_ALTERNATE_ENTRY_LIMIT
+            : DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT;
         if (priorTrialEntries >= limit) {
           demoAlternativeTrial = counterSelected
-            ? {...counterPilot, eligible:false, reason:'ENTRY_LIMIT_REACHED'}
+            ? { ...counterPilot, eligible: false, reason: 'ENTRY_LIMIT_REACHED' }
             : advisorySelected
-              ? {...advisoryAlternateTrial, eligible:false, reason:'ENTRY_LIMIT_REACHED'}
-              : {...initialDemoAlternativeTrial, eligible:false, reason:'ENTRY_LIMIT_REACHED'};
+              ? { ...advisoryAlternateTrial, eligible: false, reason: 'ENTRY_LIMIT_REACHED' }
+              : { ...initialDemoAlternativeTrial, eligible: false, reason: 'ENTRY_LIMIT_REACHED' };
         }
       } catch (error) {
         demoAlternativeTrial = counterPilot.eligible
-          ? {...counterPilot, eligible:false, reason:'LIMIT_CHECK_UNAVAILABLE'}
+          ? { ...counterPilot, eligible: false, reason: 'LIMIT_CHECK_UNAVAILABLE' }
           : advisoryAlternateTrial.eligible
-            ? {...advisoryAlternateTrial, eligible:false, reason:'LIMIT_CHECK_UNAVAILABLE'}
-            : {...initialDemoAlternativeTrial, eligible:false, reason:'LIMIT_CHECK_UNAVAILABLE'};
+            ? { ...advisoryAlternateTrial, eligible: false, reason: 'LIMIT_CHECK_UNAVAILABLE' }
+            : {
+                ...initialDemoAlternativeTrial,
+                eligible: false,
+                reason: 'LIMIT_CHECK_UNAVAILABLE',
+              };
         this.logger.warn(
-          'DEMO alternate trial entry budget unavailable: ' +
-          (error as Error).message,
+          'DEMO alternate trial entry budget unavailable: ' + (error as Error).message,
         );
       }
     }
     const multimodelPrimaryExecutable =
       professionalDemoPhase &&
-      // Only the budget-checked trial object grants pilot execution; raw
-      // advisory eligibility must not bypass a consumed four-entry cap.
+      // Only the final, owner-and-broker-verified trial object grants pilot
+      // execution. Old finite pilots still enforce their historical budgets.
       (demoProfitabilityExecutionAllowed || demoAlternativeTrial.eligible) &&
       (multimodelDemo?.authority.executable === true || demoAlternativeTrial.eligible);
     // With two recent M1 losses, the exact pair/side/route needs a finite
@@ -2087,14 +2143,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       reliability?.reason === 'POSITIVE_EXPECTANCY'
     ) {
       try {
-        verifiedDemoForQualifiedContinuation =
-          await this.evidence.isActiveConnectedOwnerDemoBroker({
-            userId, brokerConnectionId,
-          });
+        verifiedDemoForQualifiedContinuation = await this.evidence.isActiveConnectedOwnerDemoBroker(
+          {
+            userId,
+            brokerConnectionId,
+          },
+        );
         if (verifiedDemoForQualifiedContinuation) {
           qualifiedContinuationAfterFeeEvidence =
             await this.evidence.loadQualifiedM1ContinuationAfterFeeEvidence({
-              userId, brokerConnectionId,
+              userId,
+              brokerConnectionId,
               instrument: candidate.instrument,
               direction: candidate.direction,
               evaluatedAt: decisionTime,
@@ -2130,20 +2189,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? 'PRIMARY_PLAN_B'
         : (multimodelDemo?.authority.authorityPath ?? null),
       m5HandoffEligible: m5EarlyTransitionHandoffEligible && !demoAlternativeTrial.eligible,
-      executableFallbackTier: !demoAlternativeTrial.eligible && professionalM1FallbackExecutable
-        ? (professionalM1Fallback?.tier ?? null)
-        : null,
-      extensionScoutExecutable: !demoAlternativeTrial.eligible &&
-        extensionExhaustionDemoScoutExecutable,
+      executableFallbackTier:
+        !demoAlternativeTrial.eligible && professionalM1FallbackExecutable
+          ? (professionalM1Fallback?.tier ?? null)
+          : null,
+      extensionScoutExecutable:
+        !demoAlternativeTrial.eligible && extensionExhaustionDemoScoutExecutable,
     });
-    let selectedExecutionVolumeCap =
-      demoAlternativeTrial.eligible
-        ? Math.min(recoveryCanaryVolumeCap, demoAlternativeTrial.maxLot)
-        : demoPrimaryOnlyProbation.qualifiedContinuationCanary
-        ? Math.min(
-            recoveryCanaryVolumeCap,
-            M1_DEMO_QUALIFIED_CONTINUATION_CANARY_LOT_CAP,
-          )
+    let selectedExecutionVolumeCap = demoAlternativeTrial.eligible
+      ? Math.min(recoveryCanaryVolumeCap, demoAlternativeTrial.maxLot)
+      : demoPrimaryOnlyProbation.qualifiedContinuationCanary
+        ? Math.min(recoveryCanaryVolumeCap, M1_DEMO_QUALIFIED_CONTINUATION_CANARY_LOT_CAP)
         : recoveryCanaryVolumeCap;
     // Authoritative DEMO new-entry scope, after all research predictions
     // have been scored. A research-only pair MUST NOT reach a broker write,
@@ -2158,10 +2214,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         !multimodelDirectionConflict &&
         (recoveryCanary
           ? multimodelPrimaryExecutable
-          : (multimodelPrimaryExecutable ||
+          : multimodelPrimaryExecutable ||
             m5EarlyTransitionHandoffEligible ||
             professionalM1FallbackExecutable ||
-            extensionExhaustionDemoScoutExecutable))
+            extensionExhaustionDemoScoutExecutable)
       : routeExecutable && routePayoffEligible && governanceExecutable;
     // An isolated pair/side/route can have a clean local streak while the
     // DEMO portfolio loses repeatedly across several instruments. Require
@@ -2211,7 +2267,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       try {
         qualifiedContinuationCanaryRecentlyAuthorized =
           await this.evidence.hasRecentM1QualifiedContinuationCanary({
-            userId, brokerConnectionId,
+            userId,
+            brokerConnectionId,
             instrument: candidate.instrument,
             direction: candidate.direction,
             evaluatedAt: decisionTime,
@@ -2359,18 +2416,25 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_PAUSE_TREND_CONTINUATION', '') ===
       'enabled';
     let pauseBrokerVerified: boolean | null = null;
-    if (professionalDemoPhase && pauseEnabled && preliminaryCanExecute &&
-        selectedContinuationForPause) {
+    if (
+      professionalDemoPhase &&
+      pauseEnabled &&
+      preliminaryCanExecute &&
+      selectedContinuationForPause
+    ) {
       try {
         pauseBrokerVerified = await this.evidence.isPepperstoneDemoBrokerConnection({
-          userId, brokerConnectionId,
+          userId,
+          brokerConnectionId,
         });
       } catch (error) {
         // With the pause requested, missing identity cannot justify
         // continuing to open large continuation trades.
         this.logger.warn(
           'M1 DEMO continuation pause broker scope unavailable instrument=' +
-          candidate.instrument + ': ' + (error as Error).message,
+            candidate.instrument +
+            ': ' +
+            (error as Error).message,
         );
       }
     }
@@ -2379,8 +2443,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // AFTER the earlier stretched trend has cooled inside normal Plan-B
     // distribution and a fresh M1/M5 continuation re-accelerates.
     const guardedPullbackEnabled =
-      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_GUARDED_PULLBACK', '') ===
-        'enabled' &&
+      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_GUARDED_PULLBACK', '') === 'enabled' &&
       this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId &&
       !!userId &&
       professionalDemoPhase &&
@@ -2393,7 +2456,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     if (guardedPullbackEnabled) {
       try {
         priorExtendedAt = await this.evidence.loadPriorExtendedTrendForPullback({
-          userId, brokerConnectionId,
+          userId,
+          brokerConnectionId,
           instrument: candidate.instrument,
           direction: candidate.direction,
           asOf: decisionTime,
@@ -2401,8 +2465,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       } catch (error) {
         // A missing/slow causal source is NEVER permission to lift the pause.
         this.logger.warn(
-          'Guarded DEMO pullback evidence unavailable ' + candidate.instrument +
-          ': ' + (error as Error).message,
+          'Guarded DEMO pullback evidence unavailable ' +
+            candidate.instrument +
+            ': ' +
+            (error as Error).message,
         );
       }
     }
@@ -2441,17 +2507,19 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       targetDistance: candidate.targetDistance,
     });
     if (guardedPullback.eligible) {
-      selectedExecutionVolumeCap = Math.min(
-        selectedExecutionVolumeCap, guardedPullback.lotCap,
-      );
+      selectedExecutionVolumeCap = Math.min(selectedExecutionVolumeCap, guardedPullback.lotCap);
     }
     const demoContinuationPause = evaluatePepperstoneDemoContinuationPause({
       guardedPullbackRecovery: guardedPullback.eligible,
-      enabled: professionalDemoPhase && pauseEnabled &&
-        preliminaryCanExecute && selectedContinuationForPause,
+      enabled:
+        professionalDemoPhase &&
+        pauseEnabled &&
+        preliminaryCanExecute &&
+        selectedContinuationForPause,
       isProfessionalDemoPhase: professionalDemoPhase,
       selectedRoute: selectedContinuationForPause
-        ? 'TREND_CONTINUATION' : executionStrategyRoute ?? null,
+        ? 'TREND_CONTINUATION'
+        : (executionStrategyRoute ?? null),
       scopedPepperstoneDemo: pauseBrokerVerified,
     });
     const multimodelLossStreakBrake =
@@ -2603,12 +2671,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(recoveryCanaryRecentlyAuthorized ? ['M1_RECOVERY_CANARY_REPEAT_COOLDOWN'] : []),
           ...(recoveryCanaryHistoryUnavailable ? ['M1_RECOVERY_CANARY_HISTORY_UNAVAILABLE'] : []),
           ...(qualifiedContinuationCanaryRecentlyAuthorized
-            ? ['M1_DEMO_QUALIFIED_CONTINUATION_CANARY_REPEAT_COOLDOWN'] : []),
+            ? ['M1_DEMO_QUALIFIED_CONTINUATION_CANARY_REPEAT_COOLDOWN']
+            : []),
           ...(qualifiedContinuationCanaryHistoryUnavailable
-            ? ['M1_DEMO_QUALIFIED_CONTINUATION_CANARY_HISTORY_UNAVAILABLE'] : []),
+            ? ['M1_DEMO_QUALIFIED_CONTINUATION_CANARY_HISTORY_UNAVAILABLE']
+            : []),
           ...(demoPrimaryOnlyProbation.blocked ? ['M1_DEMO_PRIMARY_ONLY_ROUTE_PROBATION'] : []),
-          ...(demoContinuationPause.blocked
-            ? [PEPPERSTONE_DEMO_CONTINUATION_PAUSE_BLOCKER] : []),
+          ...(demoContinuationPause.blocked ? [PEPPERSTONE_DEMO_CONTINUATION_PAUSE_BLOCKER] : []),
           ...(demoBrokerCommissionGate.blocked
             ? [`M1_DEMO_BROKER_COMMISSION_${demoBrokerCommissionGate.reason}`]
             : []),
@@ -2822,8 +2891,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             shadowReadTimer.unref?.();
           }),
         ]);
-        pepperstonePairSideAsOfShadow =
-          evaluatePepperstonePairSideAsOfShadow(asOfRows, decisionTime);
+        pepperstonePairSideAsOfShadow = evaluatePepperstonePairSideAsOfShadow(
+          asOfRows,
+          decisionTime,
+        );
       } catch (error) {
         // Never fail or authorize an already-qualified broker order because
         // read-only research history is unavailable.
@@ -2833,8 +2904,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         };
         this.logger.warn(
           'Pepperstone pair-side as-of research unavailable ' +
-          candidate.instrument + ' ' + candidate.direction + ': ' +
-          (error as Error).message,
+            candidate.instrument +
+            ' ' +
+            candidate.direction +
+            ': ' +
+            (error as Error).message,
         );
       } finally {
         if (shadowReadTimer) clearTimeout(shadowReadTimer);
@@ -3152,8 +3226,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     m5EarlyTransitionHandoff: M5EarlyTransitionHandoffDecision | null = null,
     extensionExhaustionDemoScout: ExtensionExhaustionDemoScoutDecision | null = null,
     demoAlternativeTrial:
-      DemoAlternativeTrialDecision | CounterPilotDecision |
-      AdvisoryAlternateTrialDecision | null = null,
+      | DemoAlternativeTrialDecision
+      | CounterPilotDecision
+      | AdvisoryAlternateTrialDecision
+      | null = null,
     guardedPullbackRecovery = false,
   ): Promise<void> {
     const session = this.executionService
@@ -3211,48 +3287,94 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       return;
     }
 
-    // Recheck the timebox and entry budget immediately before broker-risk
-    // checks. A delayed signal after its own pilot cutoff or a race with a prior
-    // trade may not submit a DEMO trial order.
+    // Historical finite pilots still verify their timebox and entry budget.
+    // Continuous, owner-verified Pepperstone DEMO advisory does not have an
+    // experimental order-count or expiry cutoff, but MUST keep fresh signals
+    // and a second fail-closed exact-broker identity check before submission.
     if (demoAlternativeTrial?.eligible) {
       const now = Date.now();
-      if (now >= Date.parse(demoAlternativeTrial.endsAt) ||
-          now - decisionTime.getTime() > 120_000 ||
-          now < decisionTime.getTime()) {
+      const continuousAdvisory =
+        demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT &&
+        demoAlternativeTrial.continuousEvidence === true;
+      if (
+        (demoAlternativeTrial.endsAt !== null && now >= Date.parse(demoAlternativeTrial.endsAt)) ||
+        now - decisionTime.getTime() > 120_000 ||
+        now < decisionTime.getTime()
+      ) {
         await this.evidence.markOutcomeState(
-          decisionId, 'RISK_REJECTED', new Date(),
+          decisionId,
+          'RISK_REJECTED',
+          new Date(),
           'M1_DEMO_ALTERNATIVE_TRIAL_EXPIRED_OR_STALE',
         );
         return;
       }
-      try {
-        const counterSelected = demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT;
-        const advisorySelected = demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT;
-        const count = await this.evidence.loadDemoAlternativeTrialEntryCount({
-          userId, brokerConnectionId,
-          ...(counterSelected
-            ? {startsAt: COUNTER_PILOT_START, endsAt: COUNTER_PILOT_END}
-            : advisorySelected
-              ? {startsAt: ADVISORY_ALTERNATE_START, endsAt: ADVISORY_ALTERNATE_END}
-              : {}),
-        });
-        if (count >= (counterSelected
-          ? COUNTER_PILOT_ENTRY_LIMIT
-          : advisorySelected ? ADVISORY_ALTERNATE_ENTRY_LIMIT
-          : DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT)) {
+      if (continuousAdvisory) {
+        const ownerId = this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '');
+        const enabledNow =
+          this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_CONTINUOUS_ALTERNATES', '') ===
+          'enabled';
+        let verifiedNow = false;
+        if (enabledNow && !!ownerId && ownerId === userId) {
+          try {
+            verifiedNow = await this.evidence.isPepperstoneDemoBrokerConnection({
+              userId,
+              brokerConnectionId,
+            });
+          } catch (error) {
+            this.logger.warn(
+              'Continuous DEMO advisory broker revalidation unavailable: ' +
+                (error as Error).message,
+            );
+          }
+        }
+        if (!verifiedNow) {
           await this.evidence.markOutcomeState(
-            decisionId, 'RISK_REJECTED', new Date(),
-            'M1_DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT_REACHED',
+            decisionId,
+            'RISK_REJECTED',
+            new Date(),
+            'M1_DEMO_CONTINUOUS_ADVISORY_OWNER_OR_BROKER_NOT_VERIFIED',
           );
           return;
         }
-      } catch {
-        await this.evidence.markOutcomeState(
-          decisionId, 'RISK_REJECTED', new Date(),
-          'M1_DEMO_ALTERNATIVE_TRIAL_ENTRY_COUNT_UNAVAILABLE',
-        );
-        return;
-      }
+      } else
+        try {
+          const counterSelected = demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT;
+          const advisorySelected = demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT;
+          const count = await this.evidence.loadDemoAlternativeTrialEntryCount({
+            userId,
+            brokerConnectionId,
+            ...(counterSelected
+              ? { startsAt: COUNTER_PILOT_START, endsAt: COUNTER_PILOT_END }
+              : advisorySelected
+                ? { startsAt: ADVISORY_ALTERNATE_START, endsAt: ADVISORY_ALTERNATE_END }
+                : {}),
+          });
+          if (
+            count >=
+            (counterSelected
+              ? COUNTER_PILOT_ENTRY_LIMIT
+              : advisorySelected
+                ? ADVISORY_ALTERNATE_ENTRY_LIMIT
+                : DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT)
+          ) {
+            await this.evidence.markOutcomeState(
+              decisionId,
+              'RISK_REJECTED',
+              new Date(),
+              'M1_DEMO_ALTERNATIVE_TRIAL_ENTRY_LIMIT_REACHED',
+            );
+            return;
+          }
+        } catch {
+          await this.evidence.markOutcomeState(
+            decisionId,
+            'RISK_REJECTED',
+            new Date(),
+            'M1_DEMO_ALTERNATIVE_TRIAL_ENTRY_COUNT_UNAVAILABLE',
+          );
+          return;
+        }
     }
 
     // This control acts ONLY on the exact owned Pepperstone cTrader DEMO
@@ -3306,7 +3428,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     }
     if (demoAlternativeTrial?.eligible && !pepperstoneDemoRiskPilot) {
       await this.evidence.markOutcomeState(
-        decisionId, 'RISK_REJECTED', new Date(),
+        decisionId,
+        'RISK_REJECTED',
+        new Date(),
         'M1_DEMO_ALTERNATIVE_TRIAL_BROKER_NOT_VERIFIED',
       );
       return;
@@ -3333,16 +3457,20 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     }
     const finalExecutionVolumeCap = currencyExposureGuard.volumeCap;
 
-    // All broker eligibility work may take several seconds after initial
-    // trial admission. Refuse a time-expired or stale trial immediately before
-    // creating a durable order identity; no old forecast may leak past 21:00.
+    // Broker eligibility can take seconds. Refuse stale M1 predictions at
+    // final dispatch regardless of pilot mode; old finite trials also keep
+    // their cutoff, but owner-verified continuous DEMO studies do not expire.
     if (demoAlternativeTrial?.eligible) {
       const now = Date.now();
-      if (now >= Date.parse(demoAlternativeTrial.endsAt) ||
-          now - decisionTime.getTime() > 120_000 ||
-          now < decisionTime.getTime()) {
+      if (
+        (demoAlternativeTrial.endsAt !== null && now >= Date.parse(demoAlternativeTrial.endsAt)) ||
+        now - decisionTime.getTime() > 120_000 ||
+        now < decisionTime.getTime()
+      ) {
         await this.evidence.markOutcomeState(
-          decisionId, 'RISK_REJECTED', new Date(),
+          decisionId,
+          'RISK_REJECTED',
+          new Date(),
           'M1_DEMO_ALTERNATIVE_TRIAL_PRE_DISPATCH_EXPIRED_OR_STALE',
         );
         return;
@@ -3472,15 +3600,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
               ? 'DEMO_EXPERT_COUNTER_ENTRY_PILOT'
               : demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT
-                ? 'DEMO_ADVISORY_REVERSAL_EARLY_ENTRY_PILOT'
+                ? demoAlternativeTrial.continuousEvidence
+                  ? 'DEMO_CONTINUOUS_REVERSAL_EARLY_EVIDENCE'
+                  : 'DEMO_ADVISORY_REVERSAL_EARLY_ENTRY_PILOT'
                 : 'DEMO_ALTERNATIVE_TIMING_TRIAL'
             : useProfessionalM1Fallback
               ? professionalM1Fallback?.tier
-            : useM5EarlyTransitionHandoff
-              ? 'M5_EARLY_TRANSITION_HANDOFF'
-              : useExtensionExhaustionDemoScout
-                ? 'EXTENSION_EXHAUSTION_DEMO_SCOUT'
-                : (multimodelDemo?.authority.authorityPath ?? null),
+              : useM5EarlyTransitionHandoff
+                ? 'M5_EARLY_TRANSITION_HANDOFF'
+                : useExtensionExhaustionDemoScout
+                  ? 'EXTENSION_EXHAUSTION_DEMO_SCOUT'
+                  : (multimodelDemo?.authority.authorityPath ?? null),
           m5_early_transition_handoff: useM5EarlyTransitionHandoff,
           m5_early_transition_handoff_reason: useM5EarlyTransitionHandoff
             ? m5EarlyTransitionHandoff.reason
@@ -3568,21 +3698,29 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_pepperstone_demo_advisory_alternates:
             demoAlternativeTrial?.eligible === true &&
             demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT,
+          m1_pepperstone_demo_continuous_evidence:
+            demoAlternativeTrial?.eligible === true &&
+            demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT &&
+            demoAlternativeTrial.continuousEvidence === true,
           m1_pepperstone_demo_counter_pilot:
             demoAlternativeTrial?.eligible === true &&
             demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT,
           m1_pepperstone_demo_counter_source_side:
             demoAlternativeTrial?.eligible &&
             demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
-              ? demoAlternativeTrial.sourceSide : null,
+              ? demoAlternativeTrial.sourceSide
+              : null,
           m1_pepperstone_demo_counter_source_route:
             demoAlternativeTrial?.eligible &&
             demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
-              ? demoAlternativeTrial.sourceRoute : null,
-          m1_pepperstone_demo_alternative_trial_artifact:
-            demoAlternativeTrial?.eligible ? demoAlternativeTrial.artifact : null,
-          m1_pepperstone_demo_alternative_trial_expires_at:
-            demoAlternativeTrial?.eligible ? demoAlternativeTrial.endsAt : null,
+              ? demoAlternativeTrial.sourceRoute
+              : null,
+          m1_pepperstone_demo_alternative_trial_artifact: demoAlternativeTrial?.eligible
+            ? demoAlternativeTrial.artifact
+            : null,
+          m1_pepperstone_demo_alternative_trial_expires_at: demoAlternativeTrial?.eligible
+            ? demoAlternativeTrial.endsAt
+            : null,
           m1_pepperstone_demo_max_risk_percent: pepperstoneDemoRiskPilot ? 0.25 : null,
           m1_pepperstone_demo_aligned_target_percent: pepperstoneDemoRiskPilot
             ? M1_PEPPERSTONE_DEMO_ALIGNED_CURRENCY_TARGET_PERCENT
