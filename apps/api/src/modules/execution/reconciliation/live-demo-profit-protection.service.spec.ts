@@ -259,6 +259,8 @@ describe('LiveDemoProfitProtectionService', () => {
   it('closes an existing Pepperstone DEMO EARLY_TRANSITION winner on verified 0.50R+ giveback with both flags', async () => {
     const previousNetFlag = process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
     const previousAlternateFlag = process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK;
+    const previousOwner = process.env.VPS_FOREX_SCANNER_USER_ID;
+    process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
     process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = 'enabled';
     process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK = 'enabled';
     try {
@@ -290,7 +292,14 @@ describe('LiveDemoProfitProtectionService', () => {
       expect(h.executionService.closeTrade).toHaveBeenCalledWith(
         'trade-1', 'user-1', TradeCloseReason.PROFIT_PROTECTION
       );
+      // Changing the owner-scoped identifier must revoke this new authority.
+      process.env.VPS_FOREX_SCANNER_USER_ID = 'unrelated-user';
+      h.executionService.closeTrade.mockClear();
+      await h.service.runOnce(new Date('2026-11-17T00:50:10Z'));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
     } finally {
+      if (previousOwner === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID = previousOwner;
       if (previousNetFlag === undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
       else process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = previousNetFlag;
       if (previousAlternateFlag === undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK;

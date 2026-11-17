@@ -640,6 +640,11 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                   ? maxFavorablePnl >= risk * 0.2 && maxFavorablePnl < risk * 0.5
                   : process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK ===
                       'enabled' &&
+                    // The pilot is owner-scoped to the known USD DEMO account.
+                    // An unset owner ID cannot broaden an exit to other tenants.
+                    !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+                    trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID &&
+                    trade.account_currency === 'USD' &&
                     (trade.strategy_route === 'EARLY_TRANSITION' ||
                       trade.strategy_route === 'CONFIRMED_REVERSAL') &&
                     maxFavorablePnl >= risk * 0.5) &&
