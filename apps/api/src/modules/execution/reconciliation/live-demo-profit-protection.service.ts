@@ -506,6 +506,16 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       `cTrader DEMO profit protection enabled cadence=${LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS / 1000}s authority=PROFIT_PROTECTION LIVE=false`,
     );
     this.logger.log(
+      `Pepperstone owner USD DEMO tiered alternate peak retention (65/75/80) ` +
+        (process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK === 'enabled' &&
+        process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK === 'enabled' &&
+        process.env.IREXPRO_PEPPERSTONE_DEMO_TIERED_RETENTION === 'enabled' &&
+        !!process.env.VPS_FOREX_SCANNER_USER_ID
+          ? 'ENABLED_DEMO_ONLY'
+          : 'DISABLED') +
+        ' LIVE=false brokerSL_TP=UNCHANGED',
+    );
+    this.logger.log(
       `Pepperstone cTrader DEMO alternate-route 0.50R after-fee giveback ` +
         (process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK === 'enabled' &&
         process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK === 'enabled'
@@ -668,7 +678,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                   const conservativeExitReserve = fees
                     ? Math.max(fees.estimatedCost, knownBookedCost)
                     : null;
-                  const decision = evaluatePepperstoneDemoNetProfitLock({
+                  const lockInput: Parameters<typeof evaluatePepperstoneDemoNetProfitLock>[0] = {
                     brokerId: snapshot.connection.brokerId,
                     accountType: String(snapshot.connection.accountType).toUpperCase(),
                     tradeInstrument: trade.instrument,
@@ -681,6 +691,14 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                     strategyRoute: trade.strategy_route,
                     guardedPullbackContinuation:
                       trade.guarded_pullback_continuation === true,
+                    tieredRetentionEnabled:
+                      process.env.IREXPRO_PEPPERSTONE_DEMO_TIERED_RETENTION ===
+                        'enabled' &&
+                      process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK ===
+                        'enabled' &&
+                      !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+                      trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID &&
+                      trade.account_currency === 'USD',
                     initialRiskPnl: risk,
                     brokerEntryPrice: finite(position.openPrice),
                     currentPrice: finite(position.currentPrice),
@@ -700,13 +718,25 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                     conservativeExitReserve,
                     feeSampleCount: fees?.sampleCount ?? 0,
                     feeEvidenceSource: fees?.source ?? null,
-                  });
+                  };
+                  const decision = evaluatePepperstoneDemoNetProfitLock(lockInput);
                   if (decision.shouldClose) {
+                    // Decision-time counterfactual only, NOT a simulated fill.
+                    // If legacy would've held, the new exit was advanced by
+                    // the 65/75/80% policy. Keep this observable in server logs.
+                    const legacyDecision = decision.tieredRetentionActive
+                      ? evaluatePepperstoneDemoNetProfitLock({
+                          ...lockInput,
+                          tieredRetentionEnabled: false,
+                        })
+                      : null;
                     this.logger.warn(
                       `Pepperstone DEMO NET_PROFIT_PROTECTION trade=${trade.trade_id} ${trade.instrument} ${trade.direction} ` +
                         `peakBrokerNet=${money(maxFavorablePnl)} nowBrokerNet=${money(currentPnl)} ` +
                         `extraExitReserve=${money(conservativeExitReserve!)} feeSource=${fees!.source} ` +
                         `netAfterExtraReserve=${money(decision.estimatedNetAfterReserve!)} protectedBrokerNetFloor=${money(decision.protectedBrokerNetFloor!)} ` +
+                        `tiered=${decision.tieredRetentionActive} peakRetention=${decision.retentionFraction ?? 'n/a'} ` +
+                        `legacy55WouldClose=${legacyDecision?.shouldClose ?? 'n/a'} legacy55Floor=${legacyDecision?.protectedBrokerNetFloor ?? 'n/a'} ` +
                         `brokerStop=VERIFIED live=false`,
                     );
                     // An owned CLOSE_POSITION only. ExecutionService performs

@@ -1,4 +1,7 @@
-import { evaluatePepperstoneDemoNetProfitLock } from './pepperstone-demo-net-profit-lock';
+import {
+  evaluatePepperstoneDemoNetProfitLock,
+  pepperstoneDemoTieredPeakRetention,
+} from './pepperstone-demo-net-profit-lock';
 
 const at = new Date('2026-11-11T01:43:18.000Z');
 const input = {
@@ -289,5 +292,140 @@ describe('Pepperstone DEMO explicit after-cost profit-lock close policy', () => 
         currentPrice: 1.102,
       }).shouldClose,
     ).toBe(false);
+  });
+});
+
+
+describe('Owner-scoped DEMO tiered 65/75/80 after-fee peak retention', () => {
+  const typicalNov17Sell = {
+    ...input,
+    brokerId: 'pepperstone-ctrader',
+    accountType: 'DEMO',
+    strategyRoute: 'EARLY_TRANSITION',
+    tieredRetentionEnabled: true,
+    tradeDirection: 'SELL' as const,
+    brokerDirection: 'SELL' as const,
+    tradeLotSize: 3.18,
+    brokerLotSize: 3.18,
+    brokerEntryPrice: 159.487,
+    currentPrice: 159.454,
+    authoritativeStop: 159.537,
+    brokerStop: 159.537,
+    authoritativeTakeProfit: 159.407,
+    brokerTakeProfit: 159.407,
+    openedAt: new Date('2026-11-17T02:10:23Z'),
+    previousObservationAt: new Date('2026-11-17T02:17:48Z'),
+    observedAt: new Date('2026-11-17T02:17:53Z'),
+    previousObservationCount: 88,
+    initialRiskPnl: 99.69464595,
+    conservativeExitReserve: 19.08,
+    feeEvidenceSource: 'SAME_ACCOUNT_FX_MAJORS' as const,
+    feeSampleCount: 15,
+    maxFavorableBrokerNetPnl: 86.20,
+    previousObservedBrokerNetPnl: 70,
+    currentBrokerNetPnl: 64.40,
+  };
+
+  it('sets 65%, 75% and 80% of peak at exactly the R boundaries', () => {
+    expect(pepperstoneDemoTieredPeakRetention(0.499999)).toBe(0.55);
+    expect(pepperstoneDemoTieredPeakRetention(0.5)).toBe(0.65);
+    expect(pepperstoneDemoTieredPeakRetention(0.749999)).toBe(0.65);
+    expect(pepperstoneDemoTieredPeakRetention(0.75)).toBe(0.75);
+    expect(pepperstoneDemoTieredPeakRetention(0.999999)).toBe(0.75);
+    expect(pepperstoneDemoTieredPeakRetention(1)).toBe(0.80);
+    expect(pepperstoneDemoTieredPeakRetention(2.1)).toBe(0.80);
+    expect(pepperstoneDemoTieredPeakRetention(Number.NaN)).toBe(0.55);
+  });
+
+  it.each(['EARLY_TRANSITION', 'CONFIRMED_REVERSAL'])(
+    'requests a protected positive close on %s at ~75%% of the $86.20 USDJPY peak',
+    (strategyRoute) => {
+      const at75 = evaluatePepperstoneDemoNetProfitLock({
+        ...typicalNov17Sell, strategyRoute,
+      });
+      expect(at75).toMatchObject({
+        shouldClose: true,
+        reason: 'PROTECTED_POSITIVE_NET_PROFIT',
+        tieredRetentionActive: true,
+        retentionFraction: 0.75,
+      });
+      expect(at75.observedPeakR).toBeCloseTo(0.8646, 3);
+      expect(at75.protectedBrokerNetFloor).toBeCloseTo(64.65, 2);
+      expect(at75.estimatedNetAfterReserve).toBeCloseTo(45.32, 2);
+
+      const old = evaluatePepperstoneDemoNetProfitLock({
+        ...typicalNov17Sell, strategyRoute, tieredRetentionEnabled: false,
+      });
+      expect(old).toMatchObject({
+        shouldClose: false, reason: 'NO_PROTECTED_GIVEBACK',
+        tieredRetentionActive: false, retentionFraction: 0.55,
+      });
+      expect(old.protectedBrokerNetFloor).toBeCloseTo(47.41, 2);
+    },
+  );
+
+  it('does not close a plausible TP runner while broker net remains ABOVE 75% peak', () => {
+    const hold = evaluatePepperstoneDemoNetProfitLock({
+      ...typicalNov17Sell,
+      previousObservedBrokerNetPnl: 80,
+      currentBrokerNetPnl: 70,
+    });
+    expect(hold).toMatchObject({
+      shouldClose: false, reason: 'NO_PROTECTED_GIVEBACK',
+      retentionFraction: 0.75,
+    });
+  });
+
+  it('retains 65% for the prior USDJPY 0.72R peak and 80% at 1.10R', () => {
+    const at65 = evaluatePepperstoneDemoNetProfitLock({
+      ...typicalNov17Sell,
+      maxFavorableBrokerNetPnl: 72.2,
+      previousObservedBrokerNetPnl: 51,
+      currentBrokerNetPnl: 46.7,
+    });
+    expect(at65).toMatchObject({
+      shouldClose: true, retentionFraction: 0.65,
+    });
+    expect(at65.protectedBrokerNetFloor).toBeCloseTo(46.93, 2);
+
+    const at80 = evaluatePepperstoneDemoNetProfitLock({
+      ...typicalNov17Sell,
+      maxFavorableBrokerNetPnl: 110,
+      previousObservedBrokerNetPnl: 96,
+      currentBrokerNetPnl: 87.7,
+    });
+    expect(at80).toMatchObject({
+      shouldClose: true, retentionFraction: 0.8,
+    });
+    expect(at80.protectedBrokerNetFloor).toBeCloseTo(88, 2);
+  });
+
+  it('preserves fee safeguards, broker proof, trend-continuation behavior and LIVE denial', () => {
+    const patches = [
+      {accountType: 'LIVE'},
+      {brokerId: 'icmarkets-ctrader'},
+      {brokerInstrument: 'EURUSD'},
+      {brokerLotSize: 3},
+      {brokerStop: 159.53},
+      {feeSampleCount: 2},
+      {conservativeExitReserve: null},
+      {previousObservationAt: new Date('2026-11-17T02:12:00Z')},
+    ];
+    for (const patch of patches) {
+      expect(evaluatePepperstoneDemoNetProfitLock({
+        ...typicalNov17Sell, ...patch,
+      }).shouldClose).toBe(false);
+    }
+    expect(evaluatePepperstoneDemoNetProfitLock({
+      ...typicalNov17Sell, currentBrokerNetPnl: 14,
+    }).shouldClose).toBe(false);
+    expect(evaluatePepperstoneDemoNetProfitLock({
+      ...typicalNov17Sell, strategyRoute: 'TREND_CONTINUATION',
+      guardedPullbackContinuation: false,
+    }).reason).toBe('ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED');
+    expect(evaluatePepperstoneDemoNetProfitLock({
+      ...typicalNov17Sell, strategyRoute: 'TREND_CONTINUATION',
+      guardedPullbackContinuation: true,
+    }).retentionFraction).toBe(0.55);
   });
 });

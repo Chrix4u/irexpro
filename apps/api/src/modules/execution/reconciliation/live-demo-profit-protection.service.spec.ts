@@ -320,6 +320,77 @@ describe('LiveDemoProfitProtectionService', () => {
     }
   });
 
+  it('requests earlier 75% USDJPY DEMO profit close only with owner-scoped tiered switch', async () => {
+    const flags = [
+      'IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK',
+      'IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK',
+      'IREXPRO_PEPPERSTONE_DEMO_TIERED_RETENTION',
+      'VPS_FOREX_SCANNER_USER_ID',
+    ] as const;
+    const before = Object.fromEntries(flags.map((f) => [f, process.env[f]]));
+    process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = 'enabled';
+    process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK = 'enabled';
+    process.env.IREXPRO_PEPPERSTONE_DEMO_TIERED_RETENTION = 'enabled';
+    process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
+    try {
+      const trade = candidate({
+        instrument: 'USDJPY',
+        direction: 'SELL',
+        account_currency: 'USD',
+        lot_size: '3.18',
+        strategy_route: 'EARLY_TRANSITION',
+        max_favorable_pnl: '86.20',
+        profit_giveback: '16.20',
+        path_observation_count: 88,
+        initial_risk_pnl: '99.69464595',
+        stop_loss: '159.537',
+        take_profit: '159.407',
+        opened_at: new Date('2026-11-17T02:10:23Z'),
+        path_last_observed_at: new Date('2026-11-17T02:17:48Z'),
+      });
+      const h = harness(
+        [trade], '64.40', 'DEMO', [], '159.454', [], undefined,
+        [{ sample_count: 15, p90_cost_per_lot: '6.00' }],
+        [], [], 'pepperstone-ctrader',
+      );
+      h.brokerService.getOpenPositionsForConnection.mockResolvedValue({
+        connection: {
+          id: 'conn-1', brokerId: 'pepperstone-ctrader', accountType: 'DEMO',
+        },
+        positions: [{
+          externalOrderId: 'position-7001',
+          instrument: 'USDJPY', direction: 'SELL', lotSize: '3.18',
+          openPrice: '159.487', currentPrice: '159.454',
+          stopLoss: '159.537', takeProfit: '159.407',
+          unrealisedPnl: '64.40', commission: '0', swap: '0',
+        }],
+      });
+      await h.service.runOnce(new Date('2026-11-17T02:17:53Z'));
+      expect(h.executionService.closeTrade).toHaveBeenCalledTimes(1);
+      expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+        'trade-1', 'user-1', TradeCloseReason.PROFIT_PROTECTION,
+      );
+      h.executionService.closeTrade.mockClear();
+
+      // Identical snapshot would have been HELD with the legacy 55% floor.
+      delete process.env.IREXPRO_PEPPERSTONE_DEMO_TIERED_RETENTION;
+      await h.service.runOnce(new Date('2026-11-17T02:17:58Z'));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+
+      // Wrong owner cannot enable the tighter DEMO close authority.
+      process.env.IREXPRO_PEPPERSTONE_DEMO_TIERED_RETENTION = 'enabled';
+      process.env.VPS_FOREX_SCANNER_USER_ID = 'another-owner';
+      await h.service.runOnce(new Date('2026-11-17T02:18:03Z'));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+    } finally {
+      for (const flag of flags) {
+        const value = before[flag];
+        if (value === undefined) delete process.env[flag];
+        else process.env[flag] = value;
+      }
+    }
+  });
+
   it('leaves the same EARLY_TRANSITION giveback in SHADOW mode with the alternate flag disabled', async () => {
     const previousNetFlag = process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
     const previousAlternateFlag = process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK;

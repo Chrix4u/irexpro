@@ -15,7 +15,25 @@
  * at 0.50R+, separate from the legacy continuation-only early-peak policy.
  */
 export const PEPPERSTONE_DEMO_NET_LOCK_ARTIFACT =
-  'pepperstone-demo-positive-after-fee-giveback-lock-v2-alternate-routes' as const;
+  'pepperstone-demo-positive-after-fee-giveback-lock-v3-tiered-owner-demo' as const;
+
+/**
+ * Causal, broker-net PEAK retention for independently admitted Pepperstone
+ * USD DEMO reversal/transition entries. This is not a model forecast; the
+ * higher peak-R bands reserve more of an already observed excursion.
+ * Below 0.50R this helper is not an entry/exit authorization.
+ *
+ * Retain 65% between 0.50R–0.75R; 75% from 0.75R–1.00R; 80% at
+ * >=1.00R. The 85% volatility-adjusted extension stays UNIMPLEMENTED
+ * until fresh, broker-native volatility evidence is proven and tested.
+ */
+export function pepperstoneDemoTieredPeakRetention(peakR: number): number {
+  if (!Number.isFinite(peakR) || peakR < 0.5) return 0.55;
+  if (peakR < 0.75) return 0.65;
+  if (peakR < 1) return 0.75;
+  return 0.80;
+}
+
 
 export type PepperstoneDemoNetLockReason =
   | 'OUT_OF_SCOPE'
@@ -44,6 +62,8 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   strategyRoute: string | null;
   /** Immutable owner-scoped entry lineage, not an unverified runtime claim. */
   guardedPullbackContinuation?: boolean;
+  /** Separate opt-in and service-verified Pepperstone USD DEMO-only rollout. */
+  tieredRetentionEnabled?: boolean;
   initialRiskPnl: number | null;
   brokerEntryPrice: number | null;
   currentPrice: number | null;
@@ -69,13 +89,26 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   estimatedProtectedAfterReserveFloor: number | null;
   estimatedNetAfterReserve: number | null;
   observedPeakR: number | null;
+  retentionFraction: number | null;
+  tieredRetentionActive: boolean;
 } {
+  // An opt-in alone must not grant authority: these exact two routes are
+  // the only ones with the new tiers. Untagged trend continuation keeps its
+  // established behavior, including the >0.50R runner exemption.
+  const tieredRetentionActive =
+    input.tieredRetentionEnabled === true &&
+    input.brokerId === 'pepperstone-ctrader' &&
+    input.accountType === 'DEMO' &&
+    input.isM1Strategy &&
+    (input.strategyRoute === 'EARLY_TRANSITION' ||
+      input.strategyRoute === 'CONFIRMED_REVERSAL');
   const reply = (
     reason: PepperstoneDemoNetLockReason,
     grossFloor: number | null = null,
     netFloor: number | null = null,
     net: number | null = null,
     peakR: number | null = null,
+    retentionFraction: number | null = null,
   ) => ({
     artifact: PEPPERSTONE_DEMO_NET_LOCK_ARTIFACT,
     shouldClose: reason === 'PROTECTED_POSITIVE_NET_PROFIT',
@@ -84,6 +117,8 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
     estimatedProtectedAfterReserveFloor: netFloor,
     estimatedNetAfterReserve: net,
     observedPeakR: peakR,
+    retentionFraction,
+    tieredRetentionActive,
   });
   if (
     input.brokerId !== 'pepperstone-ctrader' ||
@@ -167,15 +202,13 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   }
   const peak = Math.max(0, input.maxFavorableBrokerNetPnl);
   const peakR = peak / risk;
-  // DEMO alternate entries must not turn an observed ~0.5R–0.75R
-  // excursion into a full stop-out merely because the old continuation
-  // experiment excluded their route. A wide 55% peak retention at >=0.50R
-  // gives an early-transition/reversal runner room to seek TP, while the
-  // observed broker-net floor and a full extra causal exit-fee reserve still
-  // require strictly positive estimated realized economics.
-  //
-  // This changes NO entry approval, account/lot policy, broker SL/TP or LIVE
-  // behavior. The existing continuation experiment remains exactly as before.
+  // At a verified >=0.50R peak the existing broker-net AFTER-FEE safeguards
+  // remain mandatory. When separately enabled for the two owner-DEMO
+  // alternate routes, retention grows 65% -> 75% -> 80% as PEAK/R increases.
+  // Untagged continuation and guarded-pullback retain their previous policy.
+  // The independent expert and live trend recheck remain audit-only: without
+  // a broker-confirmed positive stop, forecast confidence cannot veto a due
+  // protective close or guarantee a specific fill.
   const alternateRoute =
     input.strategyRoute === 'EARLY_TRANSITION' ||
     input.strategyRoute === 'CONFIRMED_REVERSAL' ||
@@ -189,30 +222,33 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   // only immutable guarded-pullback DEMO fills receive the 0.50R+ rule.
   if (!alternateRoute && peakR >= 0.5)
     return reply('ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED', null, null, null, peakR);
+  const retentionFraction = tieredRetentionActive
+    ? pepperstoneDemoTieredPeakRetention(peakR)
+    : 0.55;
   const minNetBuffer = Math.max(0.5, risk * 0.035, fee * 0.2);
   const executionAllowance = Math.max(risk * 0.02, fee * 0.25);
   const grossFloor = Math.max(
     fee + minNetBuffer + executionAllowance,
-    peak * 0.55,
+    peak * retentionFraction,
   );
   const netFloor = grossFloor - fee;
   const net = input.currentBrokerNetPnl - fee;
   if (peak - grossFloor < Math.max(risk * 0.03, fee * 0.25)) {
-    return reply('NO_MEANINGFUL_NET_PEAK', grossFloor, netFloor, net, peakR);
+    return reply('NO_MEANINGFUL_NET_PEAK', grossFloor, netFloor, net, peakR, retentionFraction);
   }
   if (input.currentBrokerNetPnl > grossFloor) {
-    return reply('NO_PROTECTED_GIVEBACK', grossFloor, netFloor, net, peakR);
+    return reply('NO_PROTECTED_GIVEBACK', grossFloor, netFloor, net, peakR, retentionFraction);
   }
   if (
     input.previousObservedBrokerNetPnl - input.currentBrokerNetPnl <
     Math.max(0.5, risk * 0.005)
   ) {
-    return reply('GROSS_PNL_NOT_DECLINING', grossFloor, netFloor, net, peakR);
+    return reply('GROSS_PNL_NOT_DECLINING', grossFloor, netFloor, net, peakR, retentionFraction);
   }
   // No broker close is advertised as protected-positive after the broker
   // net mark loses the ADDITIONAL historical fee reserve and slippage buffer.
   if (net < Math.max(0.5, fee * 0.2, risk * 0.02)) {
-    return reply('NO_REMAINING_POSITIVE_NET', grossFloor, netFloor, net, peakR);
+    return reply('NO_REMAINING_POSITIVE_NET', grossFloor, netFloor, net, peakR, retentionFraction);
   }
-  return reply('PROTECTED_POSITIVE_NET_PROFIT', grossFloor, netFloor, net, peakR);
+  return reply('PROTECTED_POSITIVE_NET_PROFIT', grossFloor, netFloor, net, peakR, retentionFraction);
 }
