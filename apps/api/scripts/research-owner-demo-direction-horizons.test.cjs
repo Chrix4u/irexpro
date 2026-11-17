@@ -74,6 +74,8 @@ test('separate blocked versus authorized cohorts; missing cost never a false win
   assert.equal(result.byHorizon['1m'].estimatedAfterFeeCoverage,0);
   assert.equal(result.byExecutionAuthority.NOT_BROKER_AUTHORIZED['1m'].episodes,1);
   assert.equal(result.byExecutionAuthority.EXECUTION_SUCCEEDED?.['1m']?.episodes ?? 0,0);
+  assert.equal(result.oneMinuteConfirmationResearch.byExecutionAuthority
+    .EXECUTION_SUCCEEDED?.['3m']?.eligibleEpisodes ?? 0,0);
   assert.equal(result.modifiesExecution,false);
 });
 

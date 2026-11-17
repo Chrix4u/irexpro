@@ -201,7 +201,10 @@ function summarizeResearch(decisions, candlesByInstrument, feesByInstrument, asO
         if (!immediate || !delayed) continue;
         const route = decision.strategy_route || 'UNKNOWN';
         const authority = decision.execution_authority === 'BROKER_NATIVE'
-          ? 'BROKER_AUTHORIZED' : 'NOT_BROKER_AUTHORIZED';
+          ? decision.outcome_state === 'EXECUTION_SUCCEEDED'
+            ? 'EXECUTION_SUCCEEDED'
+            : 'BROKER_AUTHORIZED_NOT_FILLED'
+          : 'NOT_BROKER_AUTHORIZED';
         for(const [map,key] of [[delayedByRoute,route],[delayedByAuthority,authority]]) {
           (map[key] ||= {});
           const group = (map[key][h] ||= {
