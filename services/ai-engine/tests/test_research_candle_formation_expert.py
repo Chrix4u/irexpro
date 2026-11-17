@@ -107,6 +107,22 @@ class CausalCandleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"UNAPPROVED"):
                 read_broker_candles(f)
 
+    def test_native_m5_without_bidask_is_kept_with_prior_m1_quote_costs(self):
+        with tempfile.TemporaryDirectory() as td:
+            d=demo_frames(1400)
+            higher=d["timeframe"]!="M1"
+            for col in ("bid_close","ask_close","spread_close"):
+                d.loc[higher,col]=np.nan
+            d.loc[higher,"positive_quote_sample_count"]=0
+            p=Path(td)/"native.csv"
+            d.to_csv(p,index=False)
+            clean=read_broker_candles(p)
+            self.assertGreater(len(clean[clean.timeframe=="M5"]),200)
+            m5=build_next_candle_dataset(clean,"M5")
+            self.assertGreater(len(m5),200)
+            self.assertTrue(m5["next_spread_at_entry"].gt(0).all())
+            self.assertTrue(m5["conservative_spread_budget"].gt(0).all())
+
     def test_chronological_split_global_time_and_four_hour_embargo(self):
         d=demo_frames(1200)
         result=build_next_candle_dataset(d,"M1")
