@@ -241,12 +241,28 @@ def score(model, magnitude, span, d, baseline_class, active_features):
     predicted=labels[np.argmax(probs,axis=1)]
     confidence=np.max(probs,axis=1)
     baseline=np.full(len(d),baseline_class)
-    p_dict={int(label):probs[:,i] for i,label in enumerate(labels)}
     selected=((predicted==0)|(predicted==2))&(confidence>=.65)
     # Mid OHLC and observed spread are merely a directional *proxy*;
     # NO commissions, broker stops, actual fills, or FX conversion.
     sign=np.where(predicted==2,1,-1)
     spread_only_move=sign*d["next_price_move"].to_numpy()-d["next_spread_at_entry"].to_numpy()
+    # Never average USDJPY and EURUSD raw price units. Normalize every
+    # opportunity by its own contemporaneously known M1/M5 ATR.
+    normalized_spread_only_move = spread_only_move / d["atr"].to_numpy()
+    by_instrument={}
+    for instrument in FOCUS:
+        mask=(d["instrument"].to_numpy()==instrument)
+        chosen=selected & mask
+        by_instrument[instrument]={
+            "observations":int(mask.sum()),
+            "classAccuracy":round(float((predicted[mask]==d["label"].to_numpy()[mask]).mean()),4)
+                if mask.any() else None,
+            "highConfidenceDirectionalCount":int(chosen.sum()),
+            "spreadOnlyPositiveRate":round(float((spread_only_move[chosen]>0).mean()),4)
+                if chosen.any() else None,
+            "meanSpreadOnlyMoveAtr":round(float(normalized_spread_only_move[chosen].mean()),4)
+                if chosen.any() else None,
+        }
     body_pred=np.maximum(magnitude.predict(X),0)
     range_pred=np.maximum(span.predict(X),0)
     truth=d["label"].to_numpy()
@@ -264,8 +280,9 @@ def score(model, magnitude, span, d, baseline_class, active_features):
         if selected.any() else None,
       "highConfidenceSpreadOnlyPositiveRate":round(float((spread_only_move[selected]>0).mean()),4)
         if selected.any() else None,
-      "meanHighConfidenceSpreadOnlyPriceMove":round(float(spread_only_move[selected].mean()),8)
+      "meanHighConfidenceSpreadOnlyMoveAtr":round(float(normalized_spread_only_move[selected].mean()),4)
         if selected.any() else None,
+      "byInstrument":by_instrument,
       "predictedNextBodyAtrMAE":round(float(mean_absolute_error(d["target_body_atr"],body_pred)),4),
       "predictedNextRangeAtrMAE":round(float(mean_absolute_error(d["target_range_atr"],range_pred)),4),
       "predictionCostStatus":"SPREAD_ONLY_NO_COMMISSION_OR_SLIPPAGE",
