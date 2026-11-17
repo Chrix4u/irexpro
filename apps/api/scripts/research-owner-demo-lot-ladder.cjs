@@ -34,7 +34,7 @@ function scenario(row,targetLots,riskLimitUsd){
   const commission=num(row.commission)*multiplier;
   const swap=num(row.swap)*multiplier;
   const net=gross+commission+swap;
-  const cost=Math.abs(commission+swap);
+  const cost=-commission; // Two-sided commission only; swaps are tracked separately.
   const riskKnown=risk!==null&&risk>0;
   const projectedRiskUsd=riskKnown?round(risk*multiplier):null;
   const riskBudgetPass=riskKnown?projectedRiskUsd<=riskLimitUsd:null;
