@@ -70,3 +70,22 @@ Start only this service after syntax and nine research unit tests pass:
     pm2 save
 
 Rollback only this service: pm2 stop irexpro-forming-candle-outcome-audit. Trading services must remain unchanged.
+## 17 November 2026 — paired as-of prior-candle baseline and immutable forecast provenance
+
+The forward auditor now compares each prior persisted model forecast with an **independent, trading-time-available** simple forecast: continue the direction of the previous fully completed M1 or M5 broker-native candle. The prior candle is loaded by its exact broker-native `bucket_time = forecast barStart - timeframe width` and must satisfy the same exact owner Pepperstone USD DEMO connection and quote-quality constraints. Both baseline and model use the forecast's *originally observed* spread and preceding ATR to define GREEN/RED/FLAT. The audit explicitly reports the number of matched model forecasts and the number with available prior-candle baseline, then compares both on the **same** eligible episodes. Missing prior candles are neither failures nor successes.
+
+Immutable forecast validation also now requires a persisted `forecastWrittenAt` 2–12 seconds after the declared as-of `decisionAt` and **before** the partially forming candle can finish, and verifies that the reported snapshot age and class probabilities (three classes, sum ~1, selected class equal to maximum probability) are internally consistent. Delayed, tampered, duplicate and stale predictions are rejected before any success statistic. The original forecast archive is append-only and not altered by this evaluation.
+
+The actual owner-scoped DEMO read-only evaluation at **17:42:21 UTC** on November 17 produced **180** eligible persisted forecasts: **161** with matured completed native next-candle outcomes, **17** still pending and **2** without a matched native outcome. These are **forecast episodes, not broker trades**.
+
+| Fixed forecast stage | Matured independently stored forecasts | Model 3-class correct | Previous-candle baseline correct | Positive M1/M5 body direction after observed spread |
+| --- | ---: | ---: | ---: | ---: |
+| M1 at +15 seconds | 65 | 26/65 (40.0%) | 15/65 (23.1%) | 25/63 (39.7%) of directional forecasts |
+| M1 at +45 seconds | 85 | 33/85 (38.8%) | 29/85 (34.1%) | 33/84 (39.3%) |
+| M5 at +285 seconds | 11 | 8/11 (72.7%) | 5/11 (45.5%) | 8/11 (72.7%) |
+
+Do **not** add +15s and +45s forecasts of the same underlying M1 candle together as independent trade opportunities. The M5 cohort has only 11 separate stage forecasts and does not substantiate a statistically reliable edge. More importantly, even 39–40% post-spread positive M1 outcomes are not a profitable strategy; the price proxy does not include round-trip commission, slippage, risk, intra-bar stops, partial take profits, or a broker-executable entry price. The baseline is intentionally primitive, and superiority over it alone does not demonstrate profitability.
+
+The baseline audit is research only: no changes to broker execution, model promotion, position limits, drawdown protection, stop-loss or take-profit. Prospective results must continue accumulating across distinct UTC trading days and instruments; later validation will require broker bid/ask entry and exit feasibility, complete commissions and risk-at-stop exposure before considering shadow advisory promotion.
+
+Source: `apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.cjs`; test: `apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.test.cjs`. Deployment involves restarting **only** `irexpro-forming-candle-outcome-audit` PM2 and checking its read-only output file. The recorded historical measurements and forecast files remain private to the VPS.

@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const {
- ARTIFACT,safePrediction,key,expectedNextBucket,outcome,summarize,loadPredictions,
+ ARTIFACT,safePrediction,key,expectedNextBucket,previousContinuationBaseline,outcome,summarize,loadPredictions,
 }=require('./audit-owner-demo-prospective-candle-outcomes.cjs');
 const p=(frame='M1',stage=45,instrument='EURUSD')=>{
  const start='2026-11-17T17:05:00.000Z';
@@ -11,6 +11,11 @@ const p=(frame='M1',stage=45,instrument='EURUSD')=>{
   artifact:'irexpro-owner-demo-prospective-candle-shadow-v1',
   instrument,timeframe:frame,barStart:start,decisionAt:when,
   predictedNextCandleClass:'GREEN_OR_UP',confidence:.69,
+  rawUncalibratedProbabilities:{
+   RED_OR_DOWN:.15,COST_SMALL_OR_FLAT:.16,GREEN_OR_UP:.69,
+  },
+  forecastWrittenAt:new Date(Date.parse(when)+5000).toISOString(),
+  snapshotAgeSeconds:5,
   observedSpreadPrice:0.00002,causalAtrPrice:0.0003,
   modelTrainedAt:'2026-11-17T16:39:53.000Z',
   researchOnly:true,modifiesExecution:false,
@@ -30,6 +35,15 @@ test('only authenticated prospective and fixed-stage forecasts can be evaluated'
    {modelTrainedAt:'2026-11-17T17:06:00Z'}]){
    assert.equal(safePrediction({...p(),...v}),false);
  }
+});
+test('rejects rewritten forecasts saved after bar close or inconsistent probabilities',()=>{
+ const a=p();
+ assert.equal(safePrediction({...a,forecastWrittenAt:'2026-11-17T17:06:10Z'}),false);
+ assert.equal(safePrediction({...a,forecastWrittenAt:'2026-11-17T17:05:46Z'}),false);
+ assert.equal(safePrediction({...a,snapshotAgeSeconds:8}),false);
+ assert.equal(safePrediction({...a,rawUncalibratedProbabilities:{...a.rawUncalibratedProbabilities,GREEN_OR_UP:.99}}),false);
+ assert.equal(safePrediction({...a,confidence:.82}),false);
+ assert.equal(safePrediction({...a,predictedNextCandleClass:'RED_OR_DOWN'}),false);
 });
 test('next native candle is matched by exact timeframe, instrument and bucket',()=>{
  const a=p();
@@ -72,6 +86,58 @@ test('spread and 0.05 ATR are conservative labels, not profit certification',()=
  const z=outcome({...a,observedSpreadPrice:.0001},c(),now);
  assert.equal(z.actualNextClass,'COST_SMALL_OR_FLAT');
  assert.equal(z.forecastCorrect,false);
+});
+test('previous completed candle provides a causal continuation baseline on identical episodes',()=>{
+ const forecast=p(),native=c();
+ const prior=c('M1','2026-11-17T17:04:00.000Z',1.1000,1.10007);
+ const actual=outcome(forecast,native,Date.parse('2026-11-17T17:10:00Z'),prior);
+ assert.equal(previousContinuationBaseline(forecast,prior),'GREEN_OR_UP');
+ assert.equal(actual.status,'MATCHED_COMPLETED_NEXT_CANDLE');
+ assert.equal(actual.baselineComparable,true);
+ assert.equal(actual.baselineCorrect,true);
+ const g=summarize([{p:forecast,result:actual}],new Date('2026-11-17T17:10:00Z'))
+  .byFixedStageInstrument['M1|at_45s|EURUSD'];
+ assert.equal(g.priorCandleBaselineComparable,1);
+ assert.equal(g.priorCandleBaselineCorrect,1);
+ assert.equal(g.priorCandleBaselineAccuracy,1);
+ assert.equal(g.sameSampleModelAccuracy,1);
+});
+test('missing or future previous candle is excluded, never treated as a losing baseline',()=>{
+ const forecast=p();
+ const next=c();
+ const future=c('M1','2026-11-17T17:05:00.000Z');
+ assert.equal(previousContinuationBaseline(forecast,future),null);
+ const a=outcome(forecast,next,Date.parse('2026-11-17T17:10:00Z'),future);
+ assert.equal(a.baselineComparable,false);
+ const g=summarize([{p:forecast,result:a}],new Date('2026-11-17T17:10:00Z'))
+  .byFixedStageInstrument['M1|at_45s|EURUSD'];
+ assert.equal(g.priorCandleBaselineComparable,0);
+ assert.equal(g.priorCandleBaselineAccuracy,null);
+ assert.equal(g.sameSampleModelAccuracy,null);
+ const missing=c('M1','2026-11-17T17:04:00.000Z');
+ missing.positive_quote_sample_count=0;
+ assert.equal(previousContinuationBaseline(forecast,missing),null);
+});
+test('paired model and prior continuation baseline are evaluated on exactly same valid bars',()=>{
+ const first=p();
+ const second={...p('M1',15),
+   predictedNextCandleClass:'RED_OR_DOWN',
+   rawUncalibratedProbabilities:{
+     RED_OR_DOWN:.69,COST_SMALL_OR_FLAT:.16,GREEN_OR_UP:.15,
+   }};
+ const lastBar=c('M1','2026-11-17T17:04:00.000Z',1.10005,1.1000);
+ const forward=c();
+ const a=outcome(first,forward,Date.parse('2026-11-17T17:10:00Z'),lastBar);
+ const b=outcome(second,forward,Date.parse('2026-11-17T17:10:00Z'),null);
+ const grouped=summarize([{p:first,result:a},{p:second,result:b}],
+     new Date('2026-11-17T17:10:00Z')).byFixedStageInstrument;
+ const withBaseline=grouped['M1|at_45s|EURUSD'];
+ assert.equal(withBaseline.priorCandleBaselineComparable,1);
+ assert.equal(withBaseline.priorCandleBaselineCorrect,0);
+ assert.equal(withBaseline.sameSampleModelAccuracy,1);
+ const without=grouped['M1|at_15s|EURUSD'];
+ assert.equal(without.priorCandleBaselineComparable,0);
+ assert.equal(without.sameSampleModelAccuracy,null);
 });
 test('missing or pending predictions are not averaged into success rates',()=>{
  const a=p(),b=p('M1',15,'USDJPY');

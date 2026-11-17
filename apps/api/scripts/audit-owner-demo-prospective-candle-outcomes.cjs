@@ -25,8 +25,26 @@ function safePrediction(p){
  !['RED_OR_DOWN','COST_SMALL_OR_FLAT','GREEN_OR_UP'].includes(p.predictedNextCandleClass))
  return false;
  const start=Date.parse(p.barStart),at=Date.parse(p.decisionAt);
+ const written=Date.parse(p.forecastWrittenAt);
  const stage=(at-start)/1000;
+ const age=(written-at)/1000,reportedAge=finite(p.snapshotAgeSeconds);
  const spread=finite(p.observedSpreadPrice),atr=finite(p.causalAtrPrice);
+ const probabilities=p.rawUncalibratedProbabilities;
+ const required=['RED_OR_DOWN','COST_SMALL_OR_FLAT','GREEN_OR_UP'];
+ if(!probabilities||typeof probabilities!=='object'||
+    Object.keys(probabilities).length!==required.length||
+    required.some(k=>!Object.hasOwn(probabilities,k)||finite(probabilities[k])===null||
+       probabilities[k]<0||probabilities[k]>1))return false;
+ const sum=required.reduce((acc,k)=>acc+probabilities[k],0);
+ const max=Math.max(...required.map(k=>probabilities[k]));
+ if(Math.abs(sum-1)>.001||Math.abs(max-p.confidence)>.001||
+    Math.abs(probabilities[p.predictedNextCandleClass]-max)>.00001)return false;
+ // The persisted research prediction must be written after its as-of stage,
+ // but before that unfinished candle closes. Delayed/replayed predictions
+ // are never silently reclassified as genuine forward evidence.
+ if(!Number.isFinite(written)||!Number.isFinite(reportedAge)||
+    age<2||age>12||Math.abs(age-reportedAge)>.25||
+    written>=start+WIDTH[p.timeframe])return false;
  return Number.isFinite(start)&&Number.isFinite(at)&&STAGES[p.timeframe].includes(stage)&&
  at>start&&at<start+WIDTH[p.timeframe]&&spread!==null&&spread>0&&
  atr!==null&&atr>0&&finite(p.confidence)!==null&&p.confidence>=0&&p.confidence<=1&&
@@ -52,7 +70,19 @@ function loadPredictions(dir=ROOT,asOf=new Date()){
  return rows;
 }
 function expectedNextBucket(p){return Date.parse(p.barStart)+WIDTH[p.timeframe];}
-function outcome(p,candle,asOfMs){
+function previousContinuationBaseline(p,prior){
+ if(!safePrediction(p)||!prior||prior.instrument!==p.instrument||
+    prior.timeframe!==p.timeframe||prior.source!=='ctrader-broker-native'||
+    new Date(prior.bucket_time).getTime()!==Date.parse(p.barStart)-WIDTH[p.timeframe]||
+    finite(prior.sample_count)<2||
+    (p.timeframe==='M1'&&finite(prior.positive_quote_sample_count)<2))return null;
+ const o=finite(prior.open),h=finite(prior.high),l=finite(prior.low),c=finite(prior.close);
+ if([o,h,l,c].some(x=>x===null)||o<=0||l<=0||h<Math.max(o,c)||l>Math.min(o,c))return null;
+ const threshold=Math.max(finite(p.observedSpreadPrice),.05*finite(p.causalAtrPrice));
+ return c-o>threshold?'GREEN_OR_UP':
+        c-o< -threshold?'RED_OR_DOWN':'COST_SMALL_OR_FLAT';
+}
+function outcome(p,candle,asOfMs,prior=null){
  if(!safePrediction(p))return {status:'REJECTED_INVALID_PROSPECTIVE_FORECAST'};
  const next=expectedNextBucket(p),width=WIDTH[p.timeframe];
  if(next+width+30000>asOfMs)return {status:'NOT_YET_MATURED'};
@@ -74,7 +104,14 @@ function outcome(p,candle,asOfMs){
  const direction=p.predictedNextCandleClass==='GREEN_OR_UP'?1:
    p.predictedNextCandleClass==='RED_OR_DOWN'?-1:0;
  const afterSpreadAtr=direction===0?null:(direction*body-spread)/atr;
+ // Earlier broker-native candle was already completed when the forecast
+ // was recorded. Its continuation label is a genuine simple as-of baseline,
+ // not selected from the later outcome's most common class.
+ const priorBaseline=previousContinuationBaseline(p,prior);
  return {status:'MATCHED_COMPLETED_NEXT_CANDLE',
+  previousCandleContinuationBaseline:priorBaseline,
+  baselineComparable:priorBaseline!==null,
+  baselineCorrect:priorBaseline===null?null:priorBaseline===actual,
   actualNextClass:actual,forecastCorrect:actual===p.predictedNextCandleClass,
   directionalForecast:direction!==0,
   spreadOnlyPriceMoveAtr:afterSpreadAtr!==null?Number(afterSpreadAtr.toFixed(6)):null,
@@ -97,8 +134,14 @@ function summarize(items,asOf){
     instrument:p.instrument,independentForecasts:0,correct:0,
     directionalForecasts:0,spreadOnlyDirectionalPositive:0,
     confidenceAbove65:0,confidenceAbove65Correct:0,
+    priorCandleBaselineComparable:0,priorCandleBaselineCorrect:0,correctSameBaseline:0,
     spreadOnlySumAtr:0,notAfterCommission:true};
   g.independentForecasts++;if(result.forecastCorrect)g.correct++;
+  if(result.baselineComparable){
+    g.priorCandleBaselineComparable++;
+    if(result.baselineCorrect)g.priorCandleBaselineCorrect++;
+    if(result.forecastCorrect)g.correctSameBaseline++;
+  }
   if(result.directionalForecast){
     g.directionalForecasts++;
     if(result.spreadOnlyDirectionalPositive)g.spreadOnlyDirectionalPositive++;
@@ -109,6 +152,10 @@ function summarize(items,asOf){
  }
  for(const g of Object.values(groups)){
   g.accuracy=g.independentForecasts?Number((g.correct/g.independentForecasts).toFixed(4)):null;
+  g.priorCandleBaselineAccuracy=g.priorCandleBaselineComparable?
+    Number((g.priorCandleBaselineCorrect/g.priorCandleBaselineComparable).toFixed(4)):null;
+  g.sameSampleModelAccuracy=g.priorCandleBaselineComparable?
+    Number((g.correctSameBaseline/g.priorCandleBaselineComparable).toFixed(4)):null;
   g.spreadOnlyPositiveRate=g.directionalForecasts?
     Number((g.spreadOnlyDirectionalPositive/g.directionalForecasts).toFixed(4)):null;
   g.meanSpreadOnlyAtr=g.directionalForecasts?
@@ -116,6 +163,7 @@ function summarize(items,asOf){
   g.confidentColorHitRate=g.confidenceAbove65?
     Number((g.confidenceAbove65Correct/g.confidenceAbove65).toFixed(4)):null;
   delete g.spreadOnlySumAtr;
+  delete g.correctSameBaseline;
  }
  return {artifact:ARTIFACT,researchOnly:true,modifiesExecution:false,
   promotionAllowed:false,asOf:new Date(asOf).toISOString(),
@@ -127,6 +175,8 @@ function summarize(items,asOf){
    'One prediction per instrument/bar/stage; different stages of the same bar are correlated and must not be added as independent episodes.',
    'The forecast was persisted before the following bar matured. Current or future OHLC cannot retroactively change prediction fields.',
    'Historical next-candle body after contemporaneous spread is NOT an executable entry/exit fill and does NOT include commission, slippage, SL/TP path, margin, or financing.',
+   'Prior-candle continuation baseline uses the earlier completed broker-native candle and the spread/ATR allowance known at the forecast timestamp; unverified prior bars are excluded from paired baseline comparisons.',
+   'The model versus baseline paired comparison uses identical matured forecast episodes. No hindsight-selected majority class is used.',
    'Insufficient market days and no independent after-cost evidence: neither model qualifies for broker execution.',
   ]};
 }
@@ -148,7 +198,8 @@ async function audit({asOf=new Date(),dir=ROOT}={}){
    "ORDER BY created_at DESC LIMIT 1",[owner]);
   if(broker.rows.length!==1)throw Error('OWNER_DEMO_USD_BROKER_UNVERIFIED');
   if(predictions.length){
-   const start=new Date(Math.min(...predictions.map(expectedNextBucket))-60000);
+   const start=new Date(Math.min(...predictions.map(p=>
+     Date.parse(p.barStart)-WIDTH[p.timeframe])));
    const rows=await db.query(
     "SELECT instrument,timeframe,bucket_time,open,high,low,close,source,"+
     "sample_count,positive_quote_sample_count "+
@@ -168,7 +219,8 @@ async function audit({asOf=new Date(),dir=ROOT}={}){
  for(const c of candles)indexed.set([c.instrument,c.timeframe,new Date(c.bucket_time).getTime()].join('|'),c);
  const items=predictions.map(p=>{
   const k=[p.instrument,p.timeframe,expectedNextBucket(p)].join('|');
-  return {p,result:outcome(p,indexed.get(k),asOf.getTime())};
+  const prior=[p.instrument,p.timeframe,Date.parse(p.barStart)-WIDTH[p.timeframe]].join('|');
+  return {p,result:outcome(p,indexed.get(k),asOf.getTime(),indexed.get(prior))};
  });
  return summarize(items,asOf);
 }
@@ -204,5 +256,5 @@ async function main(){
   process.on('SIGINT',stop);process.on('SIGTERM',stop);
  }
 }
-module.exports={ARTIFACT,safePrediction,key,expectedNextBucket,outcome,summarize,loadPredictions,audit};
+module.exports={ARTIFACT,safePrediction,key,expectedNextBucket,previousContinuationBaseline,outcome,summarize,loadPredictions,audit};
 if(require.main===module)main().catch(e=>{console.error('FORWARD_CANDLE_AUDIT_FAILED',String(e.message).slice(0,240));process.exitCode=1});
