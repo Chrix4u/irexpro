@@ -45,6 +45,11 @@ const directions=()=>({
     CONFIRMED_REVERSAL:{'5m':horizon(12,8,.55,-.21)},
     TREND_CONTINUATION:{'5m':horizon(8,0,.75,null)},
   },
+  byExecutedRoute:{
+    EARLY_TRANSITION:{'5m':horizon(6,5,.50,-.22)},
+    CONFIRMED_REVERSAL:{'5m':horizon(4,3,.75,-.08)},
+    TREND_CONTINUATION:{'5m':horizon(2,0,1,null)},
+  },
 });
 test('keeps broker realized positions separate from scanner decision episodes',()=>{
   const r=compile(stops(),directions());
@@ -56,6 +61,8 @@ test('keeps broker realized positions separate from scanner decision episodes',(
   assert.equal(early.executedClosedTradeCohort.winRate,.5);
   assert.equal(early.executedClosedTradeCohort.profitFactor,35/25);
   assert.equal(early.directionalDecisionEpisodeCohort['5m'].independentEpisodeKeys,14);
+  assert.equal(early.executedDecisionEpisodeCohort['5m'].executedDecisionEpisodeKeys,6);
+  assert.equal(early.executedDecisionEpisodeCohort['5m'].meanAfterFeeProxyR,-.22);
   assert.equal(early.directionalDecisionEpisodeCohort['5m'].meanAfterFeeProxyR,-.04);
   assert.equal(r.promotionAllowed,false);
   assert.equal(r.modifiesExecution,false);
@@ -123,8 +130,19 @@ test('adequate evidence permits further research only, NEVER model promotion',()
     {state:'TAKE_PROFIT_CLOSE',confirmedStop:false,profitGiveback:null}));
   const a=stops();a.examples=examples;
   const b=directions();b.byRoute.EARLY_TRANSITION['5m']=horizon(43,36,.67,.2);
+  b.byExecutedRoute.EARLY_TRANSITION['5m']=horizon(25,20,.68,.09);
   const r=compile(a,b).byStrategy.EARLY_TRANSITION;
   assert.equal(r.evidence.sufficientForExploration,true);
   assert.equal(r.evidenceStatus,'ENOUGH_FOR_FURTHER_VALIDATION_NOT_DEPLOYMENT');
   assert.equal(r.decision,'RESEARCH_ONLY_NO_AUTOMATIC_STRATEGY_PROMOTION');
+});
+
+test('missing executed cohort is not silently replaced by all scanner decisions',()=>{
+  const a=stops(),b=directions();
+  delete b.byExecutedRoute;
+  const r=compile(a,b).byStrategy.EARLY_TRANSITION;
+  assert.equal(r.directionalDecisionEpisodeCohort['5m'].independentEpisodeKeys,14);
+  assert.equal(r.executedDecisionEpisodeCohort['5m'].executedDecisionEpisodeKeys,0);
+  assert.equal(r.executedDecisionEpisodeCohort['5m'].meanAfterFeeProxyR,null);
+  assert.equal(r.evidence.sufficientForExploration,false);
 });
