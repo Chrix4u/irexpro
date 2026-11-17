@@ -159,7 +159,7 @@ function evaluateDelayedOneMinute(decision, firstMark, exitMark, feeEvidence) {
 
 function summarizeResearch(decisions, candlesByInstrument, feesByInstrument, asOf) {
   const episodes = deduplicateMarketEpisodes(decisions);
-  const overall = {}, byRoute = {}, byPatternHypothesis = {}, byAuthority = {};
+  const overall = {}, byRoute = {}, byPatternHypothesis = {}, byAuthority = {}, byExecutedRoute = {};
   const delayedByRoute = {}, delayedByAuthority = {};
   const horizons = HORIZONS;
   let missingCausalMarks = 0, unmatchedOriginalEntry = 0;
@@ -190,6 +190,7 @@ function summarizeResearch(decisions, candlesByInstrument, feesByInstrument, asO
       add(byRoute,route);
       add(byPatternHypothesis,hypothesis);
       add(byAuthority,authority);
+      if(authority==='EXECUTION_SUCCEEDED') add(byExecutedRoute,route);
     }
     const first = selectCausalM1Mark(bars,decision.evaluated_at,1,asOf);
     const firstOutcome = evaluatePrediction(decision,first,fee);
@@ -247,7 +248,8 @@ function summarizeResearch(decisions, candlesByInstrument, feesByInstrument, asO
     rawDecisions:decisions.length, independentMarketEpisodes:episodes.length,
     unavailableMarks:missingCausalMarks, invalidOriginalEntry:unmatchedOriginalEntry,
     byHorizon:finalize(overall).ALL,
-    byRoute:finalize(byRoute), byPatternHypothesis:finalize(byPatternHypothesis),
+    byRoute:finalize(byRoute), byExecutedRoute:finalize(byExecutedRoute),
+    byPatternHypothesis:finalize(byPatternHypothesis),
     byExecutionAuthority:finalize(byAuthority),
     oneMinuteConfirmationResearch:{
       trigger:'Original side moves above original spread-inclusive entry after the first fully closed M1 minute; enter at that observed ask/bid, compare +3/+5/+10 minute exits.',
