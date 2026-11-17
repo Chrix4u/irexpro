@@ -23,7 +23,7 @@ async function main() {
   const asOf=new Date();
   const db=new Client({
     host:process.env.DB_HOST,port:Number(process.env.DB_PORT||5432),
-    database:process.env.DB_NAME,user:process.env.DB_NAME?process.env.DB_USER:process.env.DB_USER,
+    database:process.env.DB_NAME,user:process.env.DB_USER,
     password:process.env.DB_PASSWORD,
     ssl:process.env.DB_SSL==='true'?{rejectUnauthorized:false}:false,
     statement_timeout:20000,
