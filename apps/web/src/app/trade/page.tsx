@@ -3725,18 +3725,21 @@ export default function AiTradingPage() {
                           month: "short", hour: "numeric", minute: "2-digit",
                         },
                       )}{" "}
-                      and closes{" "}
-                      {new Date(m1TacticalStatus.advisoryAlternatePilot.endsAt).toLocaleString(
-                        "en-GH", {
-                          timeZone: "Africa/Accra", weekday: "short", day: "numeric",
-                          month: "short", hour: "numeric", minute: "2-digit",
-                        },
-                      )}{" "}
-                      Ghana time.
+                      {m1TacticalStatus.advisoryAlternatePilot.endsAt === null
+                        ? "Ghana time. Continuous trial — no scheduled expiry."
+                        : "Ghana time; closes " + new Date(
+                            m1TacticalStatus.advisoryAlternatePilot.endsAt,
+                          ).toLocaleString("en-GH", {
+                            timeZone: "Africa/Accra", weekday: "short", day: "numeric",
+                            month: "short", hour: "numeric", minute: "2-digit",
+                          }) + " Ghana time."}
                     </small>
                     <small>
-                      At most {m1TacticalStatus.advisoryAlternatePilot.maxEntries} new trial entries
-                      across the whole window; up to{" "}
+                      {m1TacticalStatus.advisoryAlternatePilot.maxEntries === null
+                        ? "No cumulative trade-count limit for this DEMO evidence trial;"
+                        : "At most " + m1TacticalStatus.advisoryAlternatePilot.maxEntries +
+                          " new trial entries across the window;"}{" "}
+                      up to{" "}
                       {m1TacticalStatus.advisoryAlternatePilot.maxLot.toFixed(2)} lots
                       per qualified entry, not a guaranteed or minimum size.
                       Normal account margin, stop-loss risk and broker admission still apply.

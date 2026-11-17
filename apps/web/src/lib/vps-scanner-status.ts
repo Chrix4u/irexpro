@@ -297,8 +297,9 @@ export interface M1TacticalStatusView {
     enabled: boolean;
     activeNow: boolean;
     startsAt: string;
-    endsAt: string;
-    maxEntries: number;
+    /** Null means the authorized continuous DEMO trial has no quota. */
+    endsAt: string | null;
+    maxEntries: number | null;
     maxLot: number;
     exactBroker: string;
     allowedRoutes: string[];
@@ -398,10 +399,14 @@ export function hasM1TacticalStatusUiShape(
         typeof pilot.activeNow !== "boolean" ||
         typeof pilot.startsAt !== "string" ||
         !isNullableTimestamp(pilot.startsAt) ||
-        typeof pilot.endsAt !== "string" ||
         !isNullableTimestamp(pilot.endsAt) ||
-        !Number.isSafeInteger(pilot.maxEntries) ||
-        (pilot.maxEntries as number) < 1 ||
+        !(
+          pilot.continuousEvidence === true
+            ? pilot.endsAt === null && pilot.maxEntries === null
+            : typeof pilot.endsAt === "string" &&
+              Number.isSafeInteger(pilot.maxEntries) &&
+              (pilot.maxEntries as number) >= 1
+        ) ||
         typeof pilot.maxLot !== "number" ||
         !Number.isFinite(pilot.maxLot) ||
         pilot.maxLot <= 0 ||
@@ -594,11 +599,14 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
     : reversalMismatch
       ? "M1 timing · Trend continuation (reversal not confirmed)"
       : `M1 timing · ${routeLabel(m1Route)}`;
-  const executable =
-    decision?.multimodelExecutable === true ||
-    (decision?.multimodelExecutable == null &&
-      decision?.executionAuthority !== "NONE" &&
-      (decision?.blockers?.length ?? 0) === 0);
+  // Missing or invalid decision is never executable. A failed dispatch
+  // cannot be called quorum-ready, even if the model had once admitted it.
+  const executable = Boolean(decision) &&
+    (decision?.multimodelExecutable === true ||
+      (decision?.multimodelExecutable == null &&
+        decision?.executionAuthority !== "NONE")) &&
+    decision?.blockers?.length === 0 &&
+    (decision.outcomeState == null || decision.outcomeState === "EXECUTION_SUCCEEDED");
 
   return {
     label: multimodel
@@ -690,6 +698,16 @@ export function deriveTradeReadinessUiState(
       `Your DEMO broker authorization is ${input.brokerAuthorizationStatus}, not ACTIVE. The AI session can be running while the broker refuses new orders. Use Enable DEMO automation to request activation through the existing validated broker endpoint; model and risk gates remain enforced.`,
       m1Decision?.instrument ?? null,
       m1Decision?.direction ?? null,
+    );
+  }
+  // A broad scanner's 90–100% confidence cannot authorize Pepperstone DEMO
+  // execution if its independent Plan B/M1 decision is missing or malformed.
+  if (input.brokerAccountType === "DEMO" &&
+      input.brokerId !== "paper-broker" && !m1Decision) {
+    return waiting(
+      49,
+      "Awaiting verified Plan-B decision — no trade authorized",
+      "DEMO is connected, but its current Plan B/M1 execution decision is unavailable or not qualified. Scanner confidence and green animations cannot authorize a broker order.",
     );
   }
   if (m1Decision) {

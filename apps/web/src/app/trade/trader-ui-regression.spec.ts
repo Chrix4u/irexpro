@@ -89,6 +89,11 @@ describe('AI Trader production UI regression contract', () => {
     expect(pageSource).toContain('m1TacticalStatus.demoEntryInstruments.join(" · ")');
   });
 
+  it('displays the continuous DEMO pilot without an imaginary expiry or entry limit', () => {
+    expect(pageSource).toContain('Continuous trial — no scheduled expiry');
+    expect(pageSource).toContain('No cumulative trade-count limit for this DEMO evidence trial');
+  });
+
   it('shows an explicit research-only tag for GBPUSD/other out-of-scope model focus', () => {
     expect(pageSource).toContain('isResearchOnlyAiFocus');
     expect(pageSource).toContain('Research-only focus');

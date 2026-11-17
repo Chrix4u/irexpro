@@ -1142,6 +1142,47 @@ describe("active multi-model execution presentation", () => {
     );
   });
 
+  it("accepts continuous DEMO status with no pilot expiry or entry cap", () => {
+    const continuous={
+      ...status,
+      advisoryAlternatePilot:{
+        enabled:true,activeNow:true,continuousEvidence:true,
+        startsAt:"2026-11-16T23:36:00.000Z",endsAt:null,maxEntries:null,
+        maxLot:4,exactBroker:"Pepperstone cTrader DEMO",
+        allowedRoutes:["CONFIRMED_REVERSAL","EARLY_TRANSITION"],
+      },
+      latestDecision:{...status.latestDecision,
+        planBPaperAdmitted:false,multimodelExecutable:false,
+        executionAuthority:"NONE" as const,
+        blockers:["MULTIMODEL_PLAN_B_NOT_ADMITTED"]},
+    };
+    expect(hasM1TacticalStatusUiShape(continuous)).toBe(true);
+    expect(deriveActiveModelUiState(continuous).executable).toBe(false);
+    const readiness=deriveTradeReadinessUiState({
+      automationOn:true,brokerAccountType:"DEMO",brokerId:"pepperstone-ctrader",
+      scannerStatus:VALID_STATUS,m1TacticalStatus:continuous,
+      fastMarkState:"LIVE",
+    });
+    expect(readiness.tradeExpected).toBe(false);
+    expect(readiness.band).not.toBe("READY");
+    expect(readiness.score).toBeLessThan(70);
+  });
+
+  it("never shows quorum or trade readiness with no DEMO tactical decision", () => {
+    const noDecision={...status,latestDecision:null};
+    expect(hasM1TacticalStatusUiShape(noDecision)).toBe(true);
+    expect(deriveActiveModelUiState(noDecision).executable).toBe(false);
+    expect(deriveActiveModelUiState(null).executable).toBe(false);
+    const readiness=deriveTradeReadinessUiState({
+      automationOn:true,brokerAccountType:"DEMO",brokerId:"pepperstone-ctrader",
+      scannerStatus:VALID_STATUS,m1TacticalStatus:noDecision,
+      fastMarkState:"LIVE",
+    });
+    expect(readiness.tradeExpected).toBe(false);
+    expect(readiness.score).toBeLessThan(70);
+    expect(readiness.headline).toContain("no trade authorized");
+  });
+
   it("labels research-only USDJPY before a model expectancy or shadow commission warning", () => {
     const research = {
       ...status,
