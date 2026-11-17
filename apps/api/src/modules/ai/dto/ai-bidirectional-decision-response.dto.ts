@@ -19,6 +19,8 @@ export interface AiBidirectionalSideDto {
   paperAdmitted: boolean;
   paperExecutionEligible: boolean;
   driftState: AiBidirectionalDriftState | null;
+  /** Exact failed bounds of the frozen model feature envelope; does not grant execution. */
+  driftDiagnostics: string[];
   blockers: string[];
 }
 
