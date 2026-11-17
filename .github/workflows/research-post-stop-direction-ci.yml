@@ -1,4 +1,4 @@
-name: Research - Pepperstone DEMO Post-Stop Audit
+name: Research - Pepperstone DEMO Strategy Evidence
 
 on:
   push:
@@ -8,6 +8,8 @@ on:
       - apps/api/scripts/research-owner-demo-post-stop-direction.cjs
       - apps/api/scripts/research-owner-demo-post-stop-direction.test.cjs
       - apps/api/scripts/run-owner-demo-post-stop-direction.cjs
+      - apps/api/scripts/research-owner-demo-strategy-scorecard.cjs
+      - apps/api/scripts/research-owner-demo-strategy-scorecard.test.cjs
       - .github/workflows/research-post-stop-direction-ci.yml
   workflow_dispatch:
 
@@ -30,5 +32,9 @@ jobs:
           node --check apps/api/scripts/research-owner-demo-post-stop-direction.cjs
           node --check apps/api/scripts/research-owner-demo-post-stop-direction.test.cjs
           node --check apps/api/scripts/run-owner-demo-post-stop-direction.cjs
-      - name: Execute pure broker-price classification tests without credentials
-        run: node --test apps/api/scripts/research-owner-demo-post-stop-direction.test.cjs
+          node --check apps/api/scripts/research-owner-demo-strategy-scorecard.cjs
+          node --check apps/api/scripts/research-owner-demo-strategy-scorecard.test.cjs
+      - name: Validate broker price and three-strategy research summaries
+        run: |
+          node --test apps/api/scripts/research-owner-demo-post-stop-direction.test.cjs
+          node --test apps/api/scripts/research-owner-demo-strategy-scorecard.test.cjs
