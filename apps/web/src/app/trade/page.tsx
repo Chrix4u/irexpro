@@ -32,6 +32,7 @@ import { formatAgeSeconds } from "@/lib/duration";
 import { mapApiError } from "@/lib/error-mapping";
 import { loadLiveAccountPositions } from "@/lib/live-account";
 import { resolveAiOpenPositionRows } from "@/lib/ai-open-positions";
+import { estimatePepperstoneDemoRoundTripCommission } from "@/lib/open-commission-presentation";
 import { executionPathDiagnostics } from "@/lib/trade-path-diagnostics";
 import { hasPendingClosedTradeSettlement } from "@/lib/closed-trade-settlement";
 import {
@@ -1089,8 +1090,21 @@ function PositionCard({
           <dd>{position.takeProfit}</dd>
         </div>
         <div>
-          <dt>Commission</dt>
-          <dd>{money(position.commission, position.accountCurrency)}</dd>
+          <dt>Commission charged so far</dt>
+          <dd>
+            {money(position.commission, position.accountCurrency)}
+            {estimatePepperstoneDemoRoundTripCommission(position) ? (
+              <small>
+                Est. entry + exit total:{" "}
+                {money(
+                  estimatePepperstoneDemoRoundTripCommission(position)!.estimatedTotalCommission,
+                  position.accountCurrency,
+                )}. Closing fee is an estimate; broker settlement is final.
+              </small>
+            ) : (
+              <small>Open-position charge only; the broker may add exit fees when the trade closes.</small>
+            )}
+          </dd>
         </div>
         <div>
           <dt>Swap</dt>
@@ -1144,7 +1158,7 @@ function PositionTable({
             <th>Give-back</th>
             <th>SL</th>
             <th>TP</th>
-            <th>Commission</th>
+            <th>Commission charged so far</th>
             <th>Swap</th>
             <th>Status</th>
             <th>Opened</th>
@@ -1211,7 +1225,21 @@ function PositionTable({
               </td>
               <td>{position.stopLoss}</td>
               <td>{position.takeProfit}</td>
-              <td>{money(position.commission, position.accountCurrency)}</td>
+              <td>
+                {money(position.commission, position.accountCurrency)}
+                {estimatePepperstoneDemoRoundTripCommission(position) ? (
+                  <small>
+                    Est. final:{" "}
+                    {money(
+                      estimatePepperstoneDemoRoundTripCommission(position)!.estimatedTotalCommission,
+                      position.accountCurrency,
+                    )}{" "}
+                    (includes estimated exit leg)
+                  </small>
+                ) : (
+                  <small>Closing fee may be added</small>
+                )}
+              </td>
               <td>{money(position.swap, position.accountCurrency)}</td>
               <td>{position.status.replaceAll("_", " ")}</td>
               <td>
@@ -1318,7 +1346,7 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           </>
         ) : null}
         <div>
-          <span>Commission</span>
+          <span>Total commission (entry + exit)</span>
           <strong>{money(trade.commission, trade.accountCurrency)}</strong>
         </div>
         <div>

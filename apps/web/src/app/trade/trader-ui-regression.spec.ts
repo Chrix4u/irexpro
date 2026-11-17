@@ -100,6 +100,14 @@ describe('AI Trader production UI regression contract', () => {
     expect(pageSource).toContain('not one of the four enabled DEMO instruments');
   });
 
+  it('distinguishes open accrued commission from completed broker round-trip fees', () => {
+    expect(pageSource).toContain('estimatePepperstoneDemoRoundTripCommission(position)');
+    expect(pageSource).toContain('Commission charged so far');
+    expect(pageSource).toContain('Est. entry + exit total:');
+    expect(pageSource).toContain('Closing fee is an estimate; broker settlement is final.');
+    expect(pageSource).toContain('Total commission (entry + exit)');
+  });
+
   it('labels broker-closed unsettled trades honestly, never displaying peak as realized', () => {
     expect(pageSource).toContain('hasPendingClosedTradeSettlement(trade)');
     expect(pageSource).toContain('Broker settlement pending');
