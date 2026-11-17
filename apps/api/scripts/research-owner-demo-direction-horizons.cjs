@@ -199,13 +199,15 @@ function summarizeResearch(decisions, candlesByInstrument, feesByInstrument, asO
         for(const [map,key] of [[delayedByRoute,route],[delayedByAuthority,authority]]) {
           (map[key] ||= {});
           const group = (map[key][h] ||= {
-            eligible:0,confirmed:0,pairedImmediate:[],afterDelayedEntry:[],
+            eligible:0,confirmed:0,pairedImmediate:[],afterDelayedEntry:[],unconfirmedImmediate:[],
           });
           group.eligible++;
           if(firstOutcome.directionalR > 0) {
             group.confirmed++;
             group.pairedImmediate.push(immediate);
             group.afterDelayedEntry.push(delayed);
+          } else {
+            group.unconfirmedImmediate.push(immediate);
           }
         }
       }
@@ -222,6 +224,7 @@ function summarizeResearch(decisions, candlesByInstrument, feesByInstrument, asO
         confirmationRate:b.eligible?b.confirmed/b.eligible:null,
         pairedImmediate:summarizeHorizon(b.pairedImmediate),
         delayedOneMinute:summarizeHorizon(b.afterDelayedEntry),
+        afterUnfavorableFirstMinute:summarizeHorizon(b.unconfirmedImmediate),
       }];
     }))]));
   return {
