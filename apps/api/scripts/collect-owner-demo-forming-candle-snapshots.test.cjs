@@ -140,13 +140,14 @@ test('research worker never queries broker, writes database or changes execution
 test('historical replay is as-of and cannot use later observed quote',()=>{
  const old=[row(1,'EURUSD',1.10,1.1001),
   row(5,'EURUSD',1.101,1.1011),
+  row(9,'EURUSD',1.1015,1.1016),
   row(11,'EURUSD',1.102,1.1021,12000), // source 11s, observed 23s
   row(28,'EURUSD',1.11,1.1101)];
  const a=replayArchivedDay(old.map(JSON.stringify).join('\n'),
    slot(0,0),slot(0,30));
  const early=a.find(x=>x.decisionAt===new Date(slot(0,15)).toISOString()&&x.timeframe==='M1');
  assert.ok(early);
- assert.equal(early.sampleCount,2);
+ assert.equal(early.sampleCount,3);
  assert.ok(early.close<1.103);
  const late=a.find(x=>x.decisionAt===new Date(slot(0,30)).toISOString()&&x.timeframe==='M1');
  assert.ok(late);
