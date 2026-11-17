@@ -45,7 +45,7 @@ function assertCompatible(stops,directions){
      Math.abs(a-b)>MAX_SNAPSHOT_SKEW_MS)
     throw Error('RESEARCH_SNAPSHOTS_TOO_FAR_APART');
 }
-function compareRoute(trades, horizonBuckets){
+function compareRoute(trades, horizonBuckets, executedHorizonBuckets={}){
   let settled=0,wins=0,losses=0,breakeven=0;
   let netUsd=0,winningUsd=0,losingUsd=0,commissionUsd=0;
   let confirmedStops=0,stopFollowup=0,reclaims=0,partialBounces=0,
@@ -101,13 +101,36 @@ function compareRoute(trades, horizonBuckets){
       studyType:'SCANNER_DECISION_EPISODES_NOT_EXECUTED_TRADE_PNL',
     };
   }
+  // Executed-at-broker directional episodes are independently tracked. The
+  // filled-decision cohort still cannot be joined directly to every settled
+  // trade without a durable trade-intent key; do not merge denominators.
+  const executedHorizons={};
+  for(const h of HORIZONS){
+    const x=executedHorizonBuckets?.[h]||null;
+    const n=x&&Number.isSafeInteger(x.episodes)&&x.episodes>=0?x.episodes:0;
+    const feeN=x&&Number.isSafeInteger(x.estimatedAfterFeeCoverage)&&
+      x.estimatedAfterFeeCoverage>=0?x.estimatedAfterFeeCoverage:0;
+    executedHorizons[h]={
+      executedDecisionEpisodeKeys:n,
+      grossDirectionHitRate:n>0?numberOrNull(x.directionalWinRate):null,
+      meanGrossDirectionalR:n>0?numberOrNull(x.meanDirectionalR):null,
+      afterFeeProxyCoveredEpisodes:feeN,
+      meanAfterFeeProxyR:feeN>0?numberOrNull(x.meanEstimatedAfterFeeR):null,
+      afterFeeProxyWinRate:feeN>0?numberOrNull(x.estimatedAfterFeeWinRate):null,
+      studyType:'BROKER_DISPATCH_SUCCEEDED_EPISODES_NOT_CLOSED_POSITION_PNL',
+    };
+  }
   const evidence={
     settledTrades:count>0?settled:0,
     priceLabeled5MinuteEpisodes:horizons['5m'].independentEpisodeKeys,
     fiveMinuteFeeCovered:horizons['5m'].afterFeeProxyCoveredEpisodes,
+    executedFiveMinuteEpisodeKeys:executedHorizons['5m'].executedDecisionEpisodeKeys,
+    executedFiveMinuteFeeCovered:executedHorizons['5m'].afterFeeProxyCoveredEpisodes,
     sufficientForExploration:settled>=30&&
       horizons['5m'].independentEpisodeKeys>=30&&
-      horizons['5m'].afterFeeProxyCoveredEpisodes>=25,
+      horizons['5m'].afterFeeProxyCoveredEpisodes>=25&&
+      executedHorizons['5m'].executedDecisionEpisodeKeys>=20&&
+      executedHorizons['5m'].afterFeeProxyCoveredEpisodes>=15,
   };
   return {
     executedClosedTradeCohort:{
@@ -140,6 +163,7 @@ function compareRoute(trades, horizonBuckets){
       unknownBrokerClosesNearSL:nearStopUnconfirmed,
     },
     directionalDecisionEpisodeCohort:horizons,
+    executedDecisionEpisodeCohort:executedHorizons,
     evidence,
     decision:'RESEARCH_ONLY_NO_AUTOMATIC_STRATEGY_PROMOTION',
     evidenceStatus:evidence.sufficientForExploration?
@@ -156,6 +180,7 @@ function compileStrategyScorecard(stops,directions){
     byStrategy[route]=compareRoute(
       rows.filter(x=>x.strategyRoute===route),
       directions.byRoute[route]||{},
+      directions.byExecutedRoute?.[route]||{},
     );
   }
   const unclassified=rows.filter(x=>!ROUTES.includes(x.strategyRoute));
@@ -172,7 +197,7 @@ function compileStrategyScorecard(stops,directions){
     interpretation:[
       'Realized USD P&L, close reasons and post-stop price marks are from CLOSED broker trades only.',
       'Directional hit rates and R proxies come from 20-minute de-duplicated SCANNER DECISION episodes, not necessarily executed orders.',
-      'These two cohorts do not share a matched trade identifier. Never add their counts, divide their outcomes by each other, or treat a directional hit as a realized win.',
+      'The three cohorts (completed trades, all scanner episodes, executed-decision episodes) lack a verified one-to-one identifier. Never mix their denominators or treat a directional hit as a realized win.',
       'Price reclamation after an actual exit cannot prove a wider stop would survive intraminute volatility or improve realized net returns.',
       'No score or threshold can authorize an order, disable risk gates, change broker stops, raise lot size, or promote a model to LIVE.',
       'Portable source reports are redacted: their same-owner broker account linkage cannot be cryptographically established from these two files alone. Generate both on the same authorized host session.',
