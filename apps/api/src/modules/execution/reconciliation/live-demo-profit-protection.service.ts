@@ -704,6 +704,30 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                     // An owned CLOSE_POSITION only. ExecutionService performs
                     // broker dispatch, durable close-attempt idempotence and
                     // trade reconciliation. Neither TP nor SL is amended.
+                    // Ask the latest independent expert/M1 trend thesis what
+                    // it expects next, using only decision-time evidence.
+                    // The as-of consultation is deliberately non-blocking:
+                    // until a positive broker-side protective stop is
+                    // independently installed and confirmed, a bullish
+                    // forecast must NOT override an already-due profit close.
+                    if (
+                      this.auditService &&
+                      (trade.strategy_route === 'EARLY_TRANSITION' ||
+                        trade.strategy_route === 'CONFIRMED_REVERSAL')
+                    ) {
+                      void this.recordProfitLockTrendRecheck(
+                        trade,
+                        observedAt,
+                        currentPnl,
+                        risk!,
+                        {
+                          entryPrice: position.openPrice,
+                          currentPrice: position.currentPrice,
+                          takeProfitPrice: position.takeProfit,
+                        },
+                        snapshot.connection.brokerId,
+                      );
+                    }
                     await this.executionService.closeTrade(
                       trade.trade_id,
                       trade.user_id,
@@ -1296,6 +1320,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       currentPrice: string | number | null;
       takeProfitPrice: string | number | null;
     },
+    brokerId = 'ctrader',
   ): Promise<void> {
     if (!this.auditService) return;
     try {
@@ -1372,7 +1397,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       const zaiP1Canary = evaluateZaiP1ReversalDemoPreflight({
         // The caller has already verified this exact adapter connection is
         // cTrader DEMO; no new provider authorization is inferred here.
-        brokerId: 'ctrader',
+        brokerId,
         accountType: 'DEMO',
         strategyRoute: trade.strategy_route,
         confirmedFreshTrend: recheck.wouldHoldIfEnabled,

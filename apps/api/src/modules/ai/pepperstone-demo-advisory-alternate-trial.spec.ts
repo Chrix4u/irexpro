@@ -32,6 +32,29 @@ describe('Pepperstone DEMO advisory alternate entry pilot',()=>{
   it('permits independently admitted EARLY_TRANSITION on same evidence',()=>{
     expect(evaluate({...input(),route:'EARLY_TRANSITION'}).eligible).toBe(true);
   });
+  it('permits owner-scoped relaxed M1 timing while preserving Plan-B/expert and broker hard gates',()=>{
+    const nearMiss={...input(),relaxedConfirmation:true,
+      m1Route:'M1_TREND_CONTINUATION',m1Confidence:0.645,
+      m1DirectionQuality:0.48,expertProbability:0.18,netExpectedR:0.09};
+    expect(evaluate(nearMiss)).toMatchObject({eligible:true,reason:'ELIGIBLE'});
+    expect(evaluate({...nearMiss,relaxedConfirmation:false}).eligible).toBe(false);
+    expect(evaluate({...nearMiss,brokerVerified:false}).reason).toBe('WRONG_ACCOUNT');
+    expect(evaluate({...nearMiss,paperAdmitted:false}).reason)
+      .toBe('NOT_ADMITTED_REVERSAL_OR_TRANSITION');
+    expect(evaluate({...nearMiss,governanceEligible:false}).reason)
+      .toBe('NOT_ADMITTED_REVERSAL_OR_TRANSITION');
+    expect(evaluate({...nearMiss,portfolioSnapshotAvailable:false}).eligible).toBe(false);
+    expect(evaluate({...nearMiss,expertSide:'BUY'}).reason)
+      .toBe('EXPERT_DIRECTION_NOT_ALIGNED');
+    expect(evaluate({...nearMiss,expertShortVotes:1,expertLongVotes:2}).eligible).toBe(false);
+    expect(evaluate({...nearMiss,expertProbability:0.149}).eligible).toBe(false);
+    expect(evaluate({...nearMiss,netExpectedR:0.079}).eligible).toBe(false);
+    expect(evaluate({...nearMiss,executionSpreadEvidenceValid:false}).eligible).toBe(false);
+    expect(evaluate({...nearMiss,eventRisk:'HIGH_IMPACT_BLOCK'}).eligible).toBe(false);
+    expect(evaluate({...nearMiss,stopDistance:0}).eligible).toBe(false);
+    expect(evaluate({...nearMiss,targetDistance:0.0005}).eligible).toBe(false);
+    expect(evaluate({...nearMiss,route:'TREND_CONTINUATION'}).eligible).toBe(false);
+  });
   it('cannot authorize LIVE, unknown broker or research-only non-admitted candidate',()=>{
     expect(evaluate({...input(),brokerVerified:false}).reason).toBe('WRONG_ACCOUNT');
     expect(evaluate({...input(),paperAdmitted:false}).reason)

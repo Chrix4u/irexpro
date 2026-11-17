@@ -1825,6 +1825,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     }
     const advisoryAlternateTrial = evaluateAdvisoryAlternateTrial({
       enabled: advisoryWindowOpen,
+      relaxedConfirmation:
+        advisoryWindowOpen &&
+        this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_RELAXED_ALTERNATE_TRIAL', '') ===
+          'enabled' &&
+        !!this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') &&
+        this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId,
       brokerVerified: advisoryBrokerVerified,
       now: new Date(),
       decisionTime,
@@ -1901,7 +1907,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     }
     const multimodelPrimaryExecutable =
       professionalDemoPhase &&
-      (demoProfitabilityExecutionAllowed || counterPilot.eligible || advisoryAlternateTrial.eligible) &&
+      // Only the budget-checked trial object grants pilot execution; raw
+      // advisory eligibility must not bypass a consumed four-entry cap.
+      (demoProfitabilityExecutionAllowed || demoAlternativeTrial.eligible) &&
       (multimodelDemo?.authority.executable === true || demoAlternativeTrial.eligible);
     // With two recent M1 losses, the exact pair/side/route needs a finite
     // three-hour cooldown before a tiny exploratory recovery entry. A

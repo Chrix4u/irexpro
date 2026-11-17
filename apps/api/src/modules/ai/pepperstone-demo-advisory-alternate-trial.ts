@@ -37,6 +37,8 @@ export interface AdvisoryAlternateTrialDecision {
 
 export function evaluateAdvisoryAlternateTrial(input: {
   enabled: boolean;
+  /** Explicit owner-scoped DEMO study only: relax duplicate M1/expert confidence gates. */
+  relaxedConfirmation?: boolean;
   brokerVerified: boolean;
   now: Date;
   decisionTime: Date;
@@ -96,18 +98,28 @@ export function evaluateAdvisoryAlternateTrial(input: {
   // Mandatory verified Pepperstone DEMO owner boundary is still enforced
   // before any actual alternate entry can qualify.
   if (!input.brokerVerified) return deny('WRONG_ACCOUNT');
+  // The expanded DEMO study does NOT waive trained Plan-B admission, drift,
+  // current native spread, event safety, portfolio risk, or broker authority.
+  // It lowers only duplicate timing/confirmation floors on a fresh admitted
+  // reversal or early transition with corroborating independent expert votes.
+  const relaxed = input.relaxedConfirmation === true;
   if (!(Number.isFinite(input.ensembleScore) && (input.ensembleScore??0)>=0.60) ||
       !(Number.isFinite(input.planbDirectionQuality) && (input.planbDirectionQuality??0)>=0.54) ||
-      !(Number.isFinite(input.netExpectedR) && (input.netExpectedR??0)>=0.12) ||
+      !(Number.isFinite(input.netExpectedR) &&
+        (input.netExpectedR??0)>=(relaxed ? 0.08 : 0.12)) ||
       input.executionSpreadEvidenceValid!==true ||
       input.paperExecutionCostUsable!==true ||
       input.eventRisk!=='CLEAR' ||
       input.driftState==='OUT_OF_DISTRIBUTION' ||
       input.sleeveState==='BLOCKED')
     return deny('NEGATIVE_AFTER_FEE_OR_MARKET_RISK');
-  if (!['ABSTAIN','M1_EARLY_TRANSITION'].includes(input.m1Route) ||
-      !Number.isFinite(input.m1Confidence) || input.m1Confidence<0.67 ||
-      !Number.isFinite(input.m1DirectionQuality) || input.m1DirectionQuality<0.55 ||
+  if (!(relaxed
+        ? ['ABSTAIN','M1_EARLY_TRANSITION','M1_TREND_CONTINUATION'].includes(input.m1Route)
+        : ['ABSTAIN','M1_EARLY_TRANSITION'].includes(input.m1Route)) ||
+      !Number.isFinite(input.m1Confidence) ||
+      input.m1Confidence<(relaxed ? 0.64 : 0.67) ||
+      !Number.isFinite(input.m1DirectionQuality) ||
+      input.m1DirectionQuality<(relaxed ? 0.45 : 0.55) ||
       !Number.isFinite(input.stopDistance) || input.stopDistance<=0 ||
       !Number.isFinite(input.targetDistance) ||
       input.targetDistance<=input.stopDistance)
@@ -122,7 +134,7 @@ export function evaluateAdvisoryAlternateTrial(input: {
       !Number.isInteger(yes) || !Number.isInteger(no) ||
       (yes??0)<2 || (no??0)>1 ||
       !Number.isFinite(input.expertProbability) ||
-      (input.expertProbability??0)<0.25 ||
+      (input.expertProbability??0)<(relaxed ? 0.15 : 0.25) ||
       !Number.isFinite(input.expertFreshness) ||
       (input.expertFreshness??-1)<0 ||
       (input.expertFreshness??999)>300 ||

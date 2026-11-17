@@ -287,7 +287,20 @@ describe('LiveDemoProfitProtectionService', () => {
           commission:'0',swap:'0'
         }]
       });
+      const trendReview = jest
+        .spyOn(h.service as any, 'recordProfitLockTrendRecheck')
+        .mockResolvedValue(undefined);
+      // Research audit is supplied but must never delay the broker close.
+      (h.service as any).auditService = {log: jest.fn().mockResolvedValue(undefined)};
       await h.service.runOnce(new Date('2026-11-17T00:50:05Z'));
+      expect(trendReview).toHaveBeenCalledWith(
+        expect.objectContaining({instrument:'USDJPY',strategy_route:'EARLY_TRANSITION'}),
+        new Date('2026-11-17T00:50:05Z'),
+        39.30,
+        99.7008973,
+        expect.objectContaining({entryPrice:'159.472',takeProfitPrice:'159.552'}),
+        'pepperstone-ctrader',
+      );
       expect(h.executionService.closeTrade).toHaveBeenCalledTimes(1);
       expect(h.executionService.closeTrade).toHaveBeenCalledWith(
         'trade-1', 'user-1', TradeCloseReason.PROFIT_PROTECTION
