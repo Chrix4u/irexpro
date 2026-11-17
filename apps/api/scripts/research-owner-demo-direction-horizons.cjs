@@ -217,7 +217,7 @@ function summarizeResearch(decisions, candlesByInstrument, feesByInstrument, asO
     [k,Object.fromEntries(horizons.map(h=>[h+'m',summarizeHorizon(buckets[h] || [])]))]));
   const finalizeDelayed = groups => Object.fromEntries(
     Object.entries(groups).map(([k,group])=>[k,Object.fromEntries([3,5,10].map(h=>{
-      const b=group[h] || {eligible:0,confirmed:0,pairedImmediate:[],afterDelayedEntry:[]};
+      const b=group[h] || {eligible:0,confirmed:0,pairedImmediate:[],afterDelayedEntry:[],unconfirmedImmediate:[]};
       return [h+'m',{
         eligibleEpisodes:b.eligible,confirmedEpisodes:b.confirmed,
         skippedEpisodes:b.eligible-b.confirmed,
