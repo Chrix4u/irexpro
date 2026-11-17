@@ -13,6 +13,51 @@ const {summarize,SNAP_ARTIFACT}=require('./research-owner-demo-m5-quote-context-
 const SOURCE='/home/lightworld/webapps/irexpro-research/m5-context-asof';
 const DEST='/home/lightworld/webapps/irexpro-research/m5-context-readiness/latest.json';
 const MAX_DAY_BYTES=7*1024*1024,MAX_DAYS=45;
+const QUALITY_WINDOW_MINUTES=180;
+const INSTRUMENTS=Object.freeze(['EURUSD','AUDUSD','USDJPY','USDCAD']);
+function summarizeNativeM1QuoteQuality(nativeRows,now=new Date()){
+ const byInstrument={};
+ for(const inst of INSTRUMENTS){
+   const x=(nativeRows||[]).find(r=>r.instrument===inst);
+   if(!x){
+     byInstrument[inst]={status:'NO_VERIFIED_NATIVE_M1_DATA_IN_WINDOW',
+       minutesObserved:0,researchQualityOnly:true};
+     continue;
+   }
+   const n=Number(x.minutes_observed),samples=Number(x.total_samples),
+     positive=Number(x.total_positive_samples),
+     zero=Number(x.zero_positive_minutes),
+     one=Number(x.one_positive_minute),
+     positiveTwo=Number(x.two_or_more_positive_minutes),
+     zeroClose=Number(x.zero_or_missing_close_spread_minutes);
+   if(![n,samples,positive,zero,one,positiveTwo,zeroClose].every(Number.isFinite)||
+      n<=0||samples<0||positive<0||positive>samples||
+      [zero,one,positiveTwo,zeroClose].some(v=>v<0||v>n)||
+      zero+one+positiveTwo!==n)
+     throw Error('INVALID_NATIVE_M1_QUALITY_AGGREGATES');
+   const positiveFraction=samples?positive/samples:null;
+   byInstrument[inst]={
+     status:'OBSERVED_RESEARCH_SOURCE_QUALITY',
+     minutesObserved:n,minutesWithNoPositiveSpread:zero,
+     minutesWithOnlyOnePositiveSpread:one,
+     minutesWithAtLeastTwoPositiveSpreads:positiveTwo,
+     minutesWithZeroOrMissingClosingSpread:zeroClose,
+     totalNativeQuoteSamples:samples,totalPositiveSpreadSamples:positive,
+     observedPositiveSpreadFraction:positiveFraction===null?null:+positiveFraction.toFixed(4),
+     averagePositiveSpreadSamplesPerMinute:+(positive/n).toFixed(2),
+     sourceQualityFlag:positiveFraction!==null&&positiveFraction<.15?
+       'SPARSE_POSITIVE_BID_ASK_OBSERVATIONS':'NO_SPARSE_POSITIVE_SPREAD_FLAG',
+     researchQualityOnly:true,modelTrainingAuthority:false,brokerOrderAuthority:false,
+   };
+ }
+ return {
+   asOf:new Date(now).toISOString(),windowMinutes:QUALITY_WINDOW_MINUTES,
+   source:'EXACT_OWNER_PEPPERSTONE_USD_DEMO_BROKER_NATIVE_M1_READ_ONLY',
+   byInstrument,
+   caveat:'Provider M1 sample counts and positive-spread counts are mutable aggregates; these are present-time quality diagnostics, NOT reconstructed as-of historical quote evidence. Zero/crossed spread is not accepted as executable pricing.',
+ };
+}
+
 function readCaptures(now=new Date(),dir=SOURCE){
  const earliest=now.getTime()-MAX_DAYS*86400000,rows=[],exclusions={};
  if(!fs.existsSync(dir))return {rows,exclusions};
@@ -52,7 +97,7 @@ async function audit(now=new Date(),opts={}){
    database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD,
    ssl:process.env.DB_SSL==='true'?{rejectUnauthorized:false}:false,
    statement_timeout:15000});
- let native=[];
+ let native=[],nativeM1Quality=[];
  try{
    await db.connect();await db.query('BEGIN READ ONLY');
    const broker=await db.query(
@@ -60,6 +105,23 @@ async function audit(now=new Date(),opts={}){
      "AND account_type='DEMO' AND account_currency='USD' AND deleted_at IS NULL "+
      "ORDER BY created_at DESC LIMIT 1",[owner]);
    if(broker.rows.length!==1)throw Error('OWNER_PEPPERSTONE_USD_DEMO_MISSING');
+   const quality=await db.query(
+     "SELECT instrument, count(*)::int AS minutes_observed, "+
+     "COALESCE(sum(sample_count),0)::bigint AS total_samples, "+
+     "COALESCE(sum(positive_quote_sample_count),0)::bigint AS total_positive_samples, "+
+     "count(*) FILTER(WHERE positive_quote_sample_count=0)::int AS zero_positive_minutes, "+
+     "count(*) FILTER(WHERE positive_quote_sample_count=1)::int AS one_positive_minute, "+
+     "count(*) FILTER(WHERE positive_quote_sample_count>=2)::int AS two_or_more_positive_minutes, "+
+     "count(*) FILTER(WHERE spread_close IS NULL OR spread_close<=0)::int "+
+       "AS zero_or_missing_close_spread_minutes "+
+     "FROM market_data.provider_quote_candles "+
+     "WHERE connection_id=$1 AND source='ctrader-broker-native' "+
+     "AND timeframe='M1' AND instrument=ANY($2::text[]) "+
+     "AND bucket_time >= $3::timestamptz - interval '180 minutes' "+
+     "AND bucket_time < $3::timestamptz "+
+     "GROUP BY instrument ORDER BY instrument",
+     [broker.rows[0].id,INSTRUMENTS,now]);
+   nativeM1Quality=quality.rows;
    if(rows.length){
      const starts=rows.map(r=>Date.parse(r.priorBarEnd)).filter(Number.isFinite);
      if(starts.length){
@@ -89,6 +151,8 @@ async function audit(now=new Date(),opts={}){
  result.nativeRecordsCompared=native.length;
  result.researchScope='EXACT_OWNER_PEPPERSTONE_CTRADER_USD_DEMO';
  result.noBrokerOrderAction=true;
+ result.nativeM1QuoteQuality=summarizeNativeM1QuoteQuality(nativeM1Quality,now);
+ result.liveQuoteCoverageCaveat='Sparse positive bid/ask samples explain missing as-of contexts; do not fabricate zero spread quotes, infer missing prices, or weaken broker safety gates.';
  return result;
 }
 async function writeOnce(){
@@ -108,6 +172,7 @@ async function writeOnce(){
    baselineAccuracy:report.previousCandleBaselineAccuracy,
    earlyQuoteBaselineAccuracy:report.earlyCurrentQuoteBaselineAccuracy,
    byInstrument:report.perInstrument,
+   nativeM1QuoteQuality:report.nativeM1QuoteQuality?.byInstrument,
    trainingReady:false,promotionAllowed:false,
    source:DEST,
  }));
@@ -130,7 +195,7 @@ async function main(){
  const stop=()=>{clearInterval(ticker);process.exit(0);};
  process.on('SIGTERM',stop);process.on('SIGINT',stop);
 }
-module.exports={SOURCE,DEST,MAX_DAYS,readCaptures,audit,writeOnce};
+module.exports={SOURCE,DEST,MAX_DAYS,QUALITY_WINDOW_MINUTES,INSTRUMENTS,readCaptures,summarizeNativeM1QuoteQuality,audit,writeOnce};
 if(require.main===module)main().catch(e=>{
  console.error('M5_READINESS_FATAL',String(e.message).slice(0,185));
  process.exitCode=1;
