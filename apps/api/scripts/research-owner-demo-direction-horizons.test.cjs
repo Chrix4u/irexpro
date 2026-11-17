@@ -111,3 +111,19 @@ test('unconfirmed first minute is observed but never counted as a delayed fill',
   assert.equal(g.afterUnfavorableFirstMinute.episodes,1);
   assert.equal(g.afterUnfavorableFirstMinute.directionalWinRate,1);
 });
+
+test('executed-route outcomes exclude broker-authorized but unfilled signals',()=>{
+  const filled={...decision(t,'CONFIRMED_REVERSAL'),
+    execution_authority:'BROKER_NATIVE',outcome_state:'EXECUTION_SUCCEEDED'};
+  const rejected={...decision('2026-11-17T10:20:00Z','EARLY_TRANSITION'),
+    execution_authority:'BROKER_NATIVE',outcome_state:'RISK_REJECTED'};
+  const bars=[m1('10:00',1.1004,1.1006),m1('10:20',1.1003,1.1005)];
+  const report=summarizeResearch([filled,rejected],{EURUSD:bars},{EURUSD:[]},
+    '2026-11-17T10:35:00Z');
+  assert.equal(report.byRoute.CONFIRMED_REVERSAL['1m'].episodes,1);
+  assert.equal(report.byRoute.EARLY_TRANSITION['1m'].episodes,1);
+  assert.equal(report.byExecutedRoute.CONFIRMED_REVERSAL['1m'].episodes,1);
+  assert.equal(report.byExecutedRoute.EARLY_TRANSITION?.['1m']?.episodes??0,0);
+  assert.equal(report.byExecutionAuthority.BROKER_AUTHORIZED_NOT_FILLED['1m'].episodes,1);
+  assert.equal(report.modifiesExecution,false);
+});
