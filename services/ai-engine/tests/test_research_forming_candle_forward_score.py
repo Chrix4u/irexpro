@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-from scripts.research_forming_candle_forward_score import asof_features,score_request
+from scripts.research_forming_candle_forward_score import asof_features,score_request,verified_manifest
 from scripts.research_forming_candle_learning import build_labeled_dataset
 
 BEGIN=pd.Timestamp("2026-11-17T10:00:00Z")
@@ -106,6 +106,34 @@ class ProspectiveAsOfTests(unittest.TestCase):
              "decisionAt":s["decisionAt"],"snapshots":[s],"priorBars":{}}
         with self.assertRaisesRegex(ValueError,"NOT_PROSPECTIVE"):
             score_request(req,"/tmp/unused","/tmp/unused",now=t+pd.Timedelta(seconds=16))
+    def test_persisted_model_manifest_is_checked_against_file_sha_and_permissions(self):
+        import hashlib
+        from datetime import datetime,timezone,timedelta
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)/"models";root.mkdir(mode=0o700)
+            digest={}
+            for tf in ("M1","M5"):
+                f=root/f"forming_candle_{tf.lower()}_RESEARCH_ONLY.joblib"
+                data=(tf+" frozen test research").encode()
+                f.write_bytes(data);f.chmod(0o600)
+                digest[tf]=hashlib.sha256(data).hexdigest()
+            manifest={
+                "artifact":"irexpro-forming-candle-expert-research-v1",
+                "promotionAllowed":False,
+                "manifestKind":"FROZEN_RESEARCH_MODEL_ARTIFACT_RECOVERY_V1",
+                "researchOnly":True,"noBrokerOrderAuthority":True,
+                "modelSha256":digest,
+                "asOf":(datetime.now(timezone.utc)+timedelta(minutes=1)).isoformat(),
+            }
+            verified_manifest(manifest,root)
+            f=root/"forming_candle_m5_RESEARCH_ONLY.joblib"
+            f.write_bytes(b"different but local");f.chmod(0o600)
+            with self.assertRaisesRegex(ValueError,"DIGEST_MISMATCH"):
+                verified_manifest(manifest,root)
+            f.write_bytes(b"M5 frozen test research");f.chmod(0o644)
+            with self.assertRaisesRegex(ValueError,"PERMISSIONS_UNSAFE"):
+                verified_manifest(manifest,root)
+
     def test_rejects_attempt_to_attach_live_order_authority(self):
         s=snap_for()
         req={"mode":"RESEARCH_ONLY","brokerOrderAuthority":True,

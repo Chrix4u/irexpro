@@ -38,3 +38,14 @@ To stop research collection only: `pm2 stop irexpro-forming-candle-forward-shado
 The earlier fixed-stage M5 pilot had small independent samples (132 early and 138 late candle episodes), and M1 was below its baseline. No favorable retrospective M5 percentage qualifies an expert to trade. The new **prospective** archive must accumulate independent later sessions and be evaluated against actual completed next-candle labels, simple prior-candle and training-majority baselines, costs, quote gaps and drawdowns. Only a demonstrated after-cost, chronologically out-of-sample improvement may justify a **shadow-only advisory** evaluation; no automatic order promotion.
 
 **Test provenance:** Python feature-parity/no-future-leakage suite and JS read-only/deduplication suite. GitHub Actions workflow `research-candle-formation-expert.yml` runs both suites.
+
+
+## Persistence incident and remediation
+
+The first prospective recorder saved three real predictions before a missing temporary training report caused its Python scorer to restart repeatedly. The trained M1 and M5 research model files survived. They now live in a permanent protected directory: /home/lightworld/webapps/irexpro-research/forming-candle-models/v1/ (directory 0700, model artifacts 0600).
+
+The original ephemeral evaluation report was NOT recovered and no accuracy figures have been reconstructed. Instead, frozen-model-manifest.json is an explicitly labeled FROZEN_RESEARCH_MODEL_ARTIFACT_RECOVERY_V1 manifest; its conservative asOf cutoff comes from the latest verified original model file modification timestamp, plus a two-second safety margin. SHA-256 digests bind the manifest to the exact frozen research models. The scorer rejects modified research bytes, weak filesystem permissions, missing or unsafe manifest, in-sample timestamps and nonresearch artifacts.
+
+At 17:16:45 UTC, the recovered service wrote four fresh prospective forecasts and reported PROSPECTIVE_FORMING_SCORER_READY. A negative unit test confirms model tampering is rejected. No trade orders, stops, lot sizes or profit protection changed.
+
+Operational verification: pm2 describe irexpro-forming-candle-forward-shadow; inspect /root/.pm2/logs/irexpro-forming-candle-forward-shadow-out-466.log and count unique keys in /home/lightworld/webapps/irexpro-research/forming-candle-predictions/YYYY-MM-DD.jsonl.

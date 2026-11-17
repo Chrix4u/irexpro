@@ -7,6 +7,7 @@ credentials, execution API, or LIVE authorization is accessible here.
 from __future__ import annotations
 import argparse
 import json
+import hashlib
 import sys
 import math
 from datetime import datetime, timezone
@@ -126,6 +127,36 @@ def asof_features(snapshot, prior_rows):
         raise ValueError("UNAVAILABLE_CAUSAL_TRAINING_FEATURE")
     return features
 
+def verified_manifest(report,model_root):
+    # The original /tmp training summary was lost to temporary cleanup.
+    # Recover only verifiable research-only model files and their conservative
+    # latest file timestamp. Do NOT manufacture historic profit or accuracy.
+    if report.get("artifact")!=MODEL_ARTIFACT or report.get("promotionAllowed") is not False:
+        raise ValueError("UNVERIFIED_RESEARCH_MODEL_REPORT")
+    if report.get("manifestKind")!="FROZEN_RESEARCH_MODEL_ARTIFACT_RECOVERY_V1":
+        raise ValueError("PERSISTED_MODEL_MANIFEST_REQUIRED")
+    if report.get("researchOnly") is not True or report.get("noBrokerOrderAuthority") is not True:
+        raise ValueError("UNSAFE_MODEL_MANIFEST")
+    digests=report.get("modelSha256")
+    if not isinstance(digests,dict) or set(digests)!=set(STAGES):
+        raise ValueError("MISSING_MODEL_DIGESTS")
+    root=Path(model_root)
+    if root.stat().st_mode & 0o077:
+        raise ValueError("MODEL_DIR_PERMISSIONS_UNSAFE")
+    asof=utc(report["asOf"])
+    for frame in STAGES:
+        f=root/f"forming_candle_{frame.lower()}_RESEARCH_ONLY.joblib"
+        st=f.stat()
+        if st.st_mode & 0o077:
+            raise ValueError("MODEL_FILE_PERMISSIONS_UNSAFE")
+        # Prevent model replacement after manifest construction or a
+        # mismatched M1/M5 checkpoint from silently producing predictions.
+        if hashlib.sha256(f.read_bytes()).hexdigest()!=digests[frame]:
+            raise ValueError("MODEL_FILE_DIGEST_MISMATCH")
+        if pd.Timestamp(st.st_mtime,unit="s",tz="UTC")>asof:
+            raise ValueError("MODEL_NEWER_THAN_MANIFEST")
+    return asof
+
 def score_request(request,model_root,training_report,now=None,model_cache=None,report_cache=None):
     now=utc(now or datetime.now(timezone.utc))
     if request.get("mode")!="RESEARCH_ONLY" or request.get("brokerOrderAuthority") is not False:
@@ -134,9 +165,7 @@ def score_request(request,model_root,training_report,now=None,model_cache=None,r
     if (now-at).total_seconds()<2 or (now-at).total_seconds()>12:
         raise ValueError("NOT_PROSPECTIVE_STAGE_DEADLINE")
     report=report_cache if report_cache is not None else json.loads(Path(training_report).read_text())
-    asof=utc(report["asOf"])
-    if report.get("artifact")!=MODEL_ARTIFACT or report.get("promotionAllowed") is not False:
-        raise ValueError("UNVERIFIED_RESEARCH_MODEL_REPORT")
+    asof=verified_manifest(report,model_root)
     if at<=asof+pd.Timedelta(minutes=1):
         raise ValueError("IN_SAMPLE_PREDICTION_REJECTED")
     out=[]
@@ -193,6 +222,7 @@ def main():
     args=p.parse_args()
     if args.serve:
         report=json.loads(Path(args.training_report).read_text())
+        verified_manifest(report,args.models)
         models={}
         for frame in STAGES:
             models[frame]=load(Path(args.models)/f"forming_candle_{frame.lower()}_RESEARCH_ONLY.joblib")
