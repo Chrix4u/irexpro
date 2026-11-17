@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {deduplicateMarketEpisodes, selectCausalM1Mark, priorFeeCostR,
-  evaluatePrediction,summarizeResearch} = require('./research-owner-demo-direction-horizons.cjs');
+  evaluatePrediction,evaluateDelayedOneMinute,summarizeResearch} = require('./research-owner-demo-direction-horizons.cjs');
 const t='2026-11-17T10:00:00.000Z';
 const now='2026-11-17T10:15:30.000Z';
 const m1=(bucket,bid,ask,opts={})=>({
@@ -71,4 +71,35 @@ test('separate blocked versus authorized cohorts; missing cost never a false win
   assert.equal(result.byExecutionAuthority.NOT_BROKER_AUTHORIZED['1m'].episodes,1);
   assert.equal(result.byExecutionAuthority.BROKER_AUTHORIZED?.['1m']?.episodes ?? 0,0);
   assert.equal(result.modifiesExecution,false);
+});
+
+
+test('research re-entry after one confirmed minute uses future ask, not original entry',()=>{
+  const original=decision(t);
+  const first={bid:1.1004,ask:1.1006,spread:.0002,
+    closedAtMs:Date.parse('2026-11-17T10:01:00Z')};
+  const later={bid:1.1009,ask:1.1011,spread:.0002,
+    closedAtMs:Date.parse('2026-11-17T10:03:00Z')};
+  const actual=evaluateDelayedOneMinute(original,first,later,{samples:5,p90FeeR:.2});
+  assert.ok(Math.abs(actual.directionalR-.3)<1e-7);
+  assert.ok(Math.abs(actual.estimatedAfterFeeR-.1)<1e-7);
+  const report=summarizeResearch([original],{EURUSD:[
+    m1('10:00',1.1004,1.1006),m1('10:02',1.1009,1.1011),
+  ]},{EURUSD:[]},now);
+  const g=report.oneMinuteConfirmationResearch.byRoute.CONFIRMED_REVERSAL['3m'];
+  assert.equal(g.eligibleEpisodes,1);
+  assert.equal(g.confirmedEpisodes,1);
+  assert.equal(g.pairedImmediate.episodes,1);
+  assert.equal(g.delayedOneMinute.episodes,1);
+  assert.ok(g.pairedImmediate.meanDirectionalR>g.delayedOneMinute.meanDirectionalR);
+});
+test('unconfirmed first minute is observed but never counted as a delayed fill',()=>{
+  const report=summarizeResearch([decision(t)],{EURUSD:[
+    m1('10:00',1.1000,1.1002),m1('10:02',1.1009,1.1011),
+  ]},{EURUSD:[]},now);
+  const g=report.oneMinuteConfirmationResearch.byRoute.CONFIRMED_REVERSAL['3m'];
+  assert.equal(g.eligibleEpisodes,1);
+  assert.equal(g.confirmedEpisodes,0);
+  assert.equal(g.skippedEpisodes,1);
+  assert.equal(g.delayedOneMinute.episodes,0);
 });
