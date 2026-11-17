@@ -18,3 +18,15 @@ Owner-reported screenshot at 02:48 UTC shows a CLOSED AUDUSD BUY with 0.67383000
 The `/trade` completed-position view now clearly distinguishes `Broker settlement pending` on a CLOSED position whose exit/final financial fields remain missing, shows `Awaiting broker` for absent realized P&L, and explains that recorded peak P&L is floating, not settled profit. The full trade data and existing generic close-reason attribution remain intact; no existing API/account/trading/risk/broker orders change.
 
 Verification: pure UI null/zero/stale-state tests plus production trader regression suite. A production Next.js build and web process restart are required to publish. Keep this issue open until broker-verified close price, realized P&L and charges have been reconciled, or an explicit provider-unavailable reason is displayed to the owner.
+
+## Final resolution — 02:53:03 UTC
+
+The scheduled existing guarded recovery succeeded: `TRADE_RECONCILED` with artifact `unique-ctrader-demo-closed-economics-recovery-v1`, using a uniquely matched Pepperstone DEMO closing deal. The broker-verified figures were saved at 02:53:03 UTC:
+
+- Entry **0.67383000**; exit **0.67407000**.
+- Realized trading P&L **+$41.28 USD**.
+- Commission **−$10.32 USD**; swap **$0.00**.
+- **Actual net profit +$30.96 USD** (realized trading P&L + signed commission + signed swap).
+- The trade remains **CLOSED**, with conservative `BROKER_CLOSE` attribution. The separate immutable earlier `PROFIT_PROTECTION` close-request audit is still available; provider close-reason provenance must not be invented.
+
+This recovery is broker-evidence-backed, NOT a fabricated fill from the earlier favorable floating mark. The UI's new pending state is still useful for other transiently unsettled broker closes, but this individual card should now render the recovered numeric amounts on its next data refresh.
