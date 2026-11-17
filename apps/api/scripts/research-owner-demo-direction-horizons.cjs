@@ -131,9 +131,34 @@ function summarizeHorizon(scored) {
       estimated.reduce((a,x) => a+x.estimatedAfterFeeR,0)/estimated.length : null,
   };
 }
+/** One-minute confirmation enters at the one-minute observed ask/bid.
+ * The initial direction must already have moved favorably *after spread*.
+ * This is a forward-tested hypothetical entry, not a broker order.
+ */
+function evaluateDelayedOneMinute(decision, firstMark, exitMark, feeEvidence) {
+  if (!firstMark || !exitMark) return null;
+  const entry = finiteNumber(decision.candidate?.entry);
+  const stop = finiteNumber(decision.candidate?.stopLoss);
+  if (entry === null || stop === null || Math.abs(entry-stop) <= 0) return null;
+  const buy = decision.direction === 'BUY', sell = decision.direction === 'SELL';
+  if (!buy && !sell) return null;
+  const delayedEntry = buy ? firstMark.ask : firstMark.bid;
+  const delayedExit = buy ? exitMark.bid : exitMark.ask;
+  const directionalR = (buy ? delayedExit-delayedEntry : delayedEntry-delayedExit) /
+    Math.abs(entry-stop);
+  const feeR = finiteNumber(feeEvidence?.p90FeeR);
+  return {
+    directionalR,estimatedAfterFeeR:feeR === null ? null : directionalR-feeR,
+    feeSamples:feeEvidence?.samples ?? 0,
+    observedSpread:exitMark.spread,
+    markClosedAt:new Date(exitMark.closedAtMs).toISOString(),
+  };
+}
+
 function summarizeResearch(decisions, candlesByInstrument, feesByInstrument, asOf) {
   const episodes = deduplicateMarketEpisodes(decisions);
   const overall = {}, byRoute = {}, byPatternHypothesis = {}, byAuthority = {};
+  const delayedByRoute = {}, delayedByAuthority = {};
   const horizons = HORIZONS;
   let missingCausalMarks = 0, unmatchedOriginalEntry = 0;
   for (const decision of episodes) {
@@ -160,9 +185,45 @@ function summarizeResearch(decisions, candlesByInstrument, feesByInstrument, asO
       add(byPatternHypothesis,hypothesis);
       add(byAuthority,authority);
     }
+    const first = selectCausalM1Mark(bars,decision.evaluated_at,1,asOf);
+    const firstOutcome = evaluatePrediction(decision,first,fee);
+    if (firstOutcome) {
+      for (const h of [3,5,10]) {
+        const later = selectCausalM1Mark(bars,decision.evaluated_at,h,asOf);
+        const immediate = evaluatePrediction(decision,later,fee);
+        const delayed = evaluateDelayedOneMinute(decision,first,later,fee);
+        if (!immediate || !delayed) continue;
+        const route = decision.strategy_route || 'UNKNOWN';
+        const authority = decision.execution_authority === 'BROKER_NATIVE'
+          ? 'BROKER_AUTHORIZED' : 'NOT_BROKER_AUTHORIZED';
+        for(const [map,key] of [[delayedByRoute,route],[delayedByAuthority,authority]]) {
+          (map[key] ||= {});
+          const group = (map[key][h] ||= {
+            eligible:0,confirmed:0,pairedImmediate:[],afterDelayedEntry:[],
+          });
+          group.eligible++;
+          if(firstOutcome.directionalR > 0) {
+            group.confirmed++;
+            group.pairedImmediate.push(immediate);
+            group.afterDelayedEntry.push(delayed);
+          }
+        }
+      }
+    }
   }
   const finalize = value => Object.fromEntries(Object.entries(value).map(([k,buckets])=>
     [k,Object.fromEntries(horizons.map(h=>[h+'m',summarizeHorizon(buckets[h] || [])]))]));
+  const finalizeDelayed = groups => Object.fromEntries(
+    Object.entries(groups).map(([k,group])=>[k,Object.fromEntries([3,5,10].map(h=>{
+      const b=group[h] || {eligible:0,confirmed:0,pairedImmediate:[],afterDelayedEntry:[]};
+      return [h+'m',{
+        eligibleEpisodes:b.eligible,confirmedEpisodes:b.confirmed,
+        skippedEpisodes:b.eligible-b.confirmed,
+        confirmationRate:b.eligible?b.confirmed/b.eligible:null,
+        pairedImmediate:summarizeHorizon(b.pairedImmediate),
+        delayedOneMinute:summarizeHorizon(b.afterDelayedEntry),
+      }];
+    }))]));
   return {
     artifact:'irexpro-owner-demo-directional-horizon-replay-v1',
     researchOnly:true,modifiesExecution:false,
@@ -176,6 +237,12 @@ function summarizeResearch(decisions, candlesByInstrument, feesByInstrument, asO
     byHorizon:finalize(overall).ALL,
     byRoute:finalize(byRoute), byPatternHypothesis:finalize(byPatternHypothesis),
     byExecutionAuthority:finalize(byAuthority),
+    oneMinuteConfirmationResearch:{
+      trigger:'Original side moves above original spread-inclusive entry after the first fully closed M1 minute; enter at that observed ask/bid, compare +3/+5/+10 minute exits.',
+      noExecutionAuthority:true,noModelPromotion:true,
+      byRoute:finalizeDelayed(delayedByRoute),
+      byExecutionAuthority:finalizeDelayed(delayedByAuthority),
+    },
   };
 }
 async function main() {
@@ -259,5 +326,5 @@ async function main() {
   } finally {await client.end();}
 }
 module.exports = {HORIZONS,FOCUS,deduplicateMarketEpisodes,selectCausalM1Mark,
-  priorFeeCostR,evaluatePrediction,summarizeResearch};
+  priorFeeCostR,evaluatePrediction,evaluateDelayedOneMinute,summarizeResearch};
 if(require.main===module) main().catch(err=>{console.error('READ_ONLY_REPLAY_FAILED',err.message);process.exitCode=1});
