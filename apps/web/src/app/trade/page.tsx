@@ -39,7 +39,7 @@ import {
   loadMarketIntelligence,
 } from "@/lib/market-intelligence";
 import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
-import { resolveDemoChartInstruments, nextAiFocusedChartInstrument } from "@/lib/trading-chart-focus";
+import { resolveDemoChartInstruments, nextAiFocusedChartInstrument, isResearchOnlyAiFocus } from "@/lib/trading-chart-focus";
 import {
   LIVE_SCAN_STAGES,
   deriveLiveScanFrame,
@@ -1965,7 +1965,7 @@ export default function AiTradingPage() {
           : "weak";
   // The legacy automation runtime still reports a broad six-pair universe.
   // The authenticated DEMO M1 policy is authoritative for chart tabs;
-  // before it arrives the fallback is the active EURUSD/AUDUSD focus.
+  // before it arrives the fallback is the approved four-pair DEMO focus.
   const watchedInstruments = useMemo(
     () => resolveDemoChartInstruments(m1TacticalStatus),
     [m1TacticalStatus],
@@ -3113,6 +3113,10 @@ export default function AiTradingPage() {
     }
   }, [automationOn, tradeReadiness.instrument, watchedInstruments]);
 
+  const researchOnlyAiFocus = isResearchOnlyAiFocus({
+    aiFocus: tradeReadiness.instrument,
+    watchedInstruments,
+  });
   const activeModelUi = deriveActiveModelUiState(m1TacticalStatus);
   const openPnlTone = totalUnrealisedPnlUnavailable || totalUnrealisedPnl == null
     ? "neutral"
@@ -5582,8 +5586,11 @@ export default function AiTradingPage() {
                     </div>
                     {tradeReadiness.instrument ? (
                       <div className="ai-market-readiness__focus">
-                        <span>Focus</span>
+                        <span>{researchOnlyAiFocus ? "Research-only focus" : "Executable-pair focus"}</span>
                         <b>{tradeReadiness.instrument}{tradeReadiness.direction ? ` · ${tradeReadiness.direction}` : ""}</b>
+                        {researchOnlyAiFocus ? (
+                          <small>This pair is not one of the four enabled DEMO instruments. Scanning it does not permit an entry; the chart stays on an enabled pair.</small>
+                        ) : null}
                       </div>
                     ) : null}
                   </aside>

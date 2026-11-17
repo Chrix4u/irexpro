@@ -1,6 +1,7 @@
 import {
   evaluatePepperstoneDemoNetProfitLock,
   pepperstoneDemoTieredPeakRetention,
+  pepperstoneDemoProgressiveTpPeakRetention,
 } from './pepperstone-demo-net-profit-lock';
 
 const at = new Date('2026-11-11T01:43:18.000Z');
@@ -427,5 +428,99 @@ describe('Owner-scoped DEMO tiered 65/75/80 after-fee peak retention', () => {
       ...typicalNov17Sell, strategyRoute: 'TREND_CONTINUATION',
       guardedPullbackContinuation: true,
     }).retentionFraction).toBe(0.55);
+  });
+});
+
+
+describe('Owner USD DEMO gradual TP-relative after-fee profit harvesting',()=>{
+  const scaled={
+    ...input,brokerId:'pepperstone-ctrader',accountType:'DEMO',
+    strategyRoute:'CONFIRMED_REVERSAL',tieredRetentionEnabled:true,
+    progressiveTpRetentionEnabled:true,
+    tradeDirection:'BUY' as const,brokerDirection:'BUY' as const,
+    initialRiskPnl:100,brokerEntryPrice:159.5,
+    authoritativeStop:159.45,brokerStop:159.45,
+    authoritativeTakeProfit:159.57,brokerTakeProfit:159.57,
+    currentPrice:159.53,
+    previousObservedBrokerNetPnl:54,
+    maxFavorableBrokerNetPnl:62,
+    currentBrokerNetPnl:50.5,
+    conservativeExitReserve:10,feeSampleCount:12,
+    openedAt:new Date('2026-11-11T01:30:46Z'),
+  };
+  it('uses the original SL/TP ratio to infer $140 potential, not an invented $140 hard target',()=>{
+    const r=evaluatePepperstoneDemoNetProfitLock(scaled);
+    expect(r).toMatchObject({
+      shouldClose:true,reason:'PROTECTED_POSITIVE_NET_PROFIT',
+      progressiveTpRetentionActive:true,tieredRetentionActive:true
+    });
+    expect(r.projectedTpAmount).toBeCloseTo(140,2);
+    expect(r.tpPeakFraction).toBeCloseTo(62/140,4);
+    expect(r.retentionFraction).toBeGreaterThan(0.80);
+    expect(r.retentionFraction).toBeLessThan(0.85);
+    expect(r.protectedBrokerNetFloor).toBeGreaterThan(50);
+    expect(r.estimatedNetAfterReserve).toBeCloseTo(40.5,2);
+    const old=evaluatePepperstoneDemoNetProfitLock({...scaled,
+      progressiveTpRetentionEnabled:false});
+    expect(old).toMatchObject({
+      shouldClose:false,reason:'NO_PROTECTED_GIVEBACK',
+      retentionFraction:0.65,progressiveTpRetentionActive:false,
+    });
+    expect(old.protectedBrokerNetFloor).toBeCloseTo(40.3);
+  });
+  it('gradually raises protection at 40%, 55%, 70% and 85% of verified TP potential',()=>{
+    const base={initialRisk:100,conservativeExitReserve:10,
+      brokerEntry:159.5,brokerStop:159.45,brokerTakeProfit:159.57,
+      baseRetention:0.65};
+    const values=[.25,.35,.4,.55,.7,.85].map(frac=>
+      pepperstoneDemoProgressiveTpPeakRetention({...base,peakBrokerNet:frac*140}).retention);
+    expect(values[0]).toBeCloseTo(.65,4);
+    expect(values[1]).toBeCloseTo(.72,4);
+    expect(values[2]).toBeCloseTo(.8,4);
+    expect(values[3]).toBeCloseTo(.86,4);
+    expect(values[4]).toBeCloseTo(.89,4);
+    expect(values[5]).toBeCloseTo(.91,4);
+    expect(values.every((v,i)=>i===0||v>=values[i-1])).toBe(true);
+  });
+  it('does not respond to a $60 absolute peak when the lot-adjusted TP is much larger',()=>{
+    const r=pepperstoneDemoProgressiveTpPeakRetention({
+      peakBrokerNet:62,initialRisk:400,conservativeExitReserve:12,
+      brokerEntry:159.5,brokerStop:159.45,brokerTakeProfit:159.57,
+      baseRetention:.65,
+    });
+    expect(r.tpPeakFraction).toBeCloseTo(62/560,4);
+    expect(r.retention).toBe(.65);
+  });
+  it('retains the tier when fewer than 3x causal fee evidence is earned',()=>{
+    const r=pepperstoneDemoProgressiveTpPeakRetention({
+      peakBrokerNet:55,initialRisk:100,conservativeExitReserve:20,
+      brokerEntry:159.5,brokerStop:159.45,brokerTakeProfit:159.57,
+      baseRetention:.65,
+    });
+    expect(r.retention).toBe(.65);
+    expect(r.tpPeakFraction).toBeCloseTo(55/140,4);
+  });
+  it('does not close a profitable strong runner until a material falling mark crosses the floor',()=>{
+    const hold=evaluatePepperstoneDemoNetProfitLock({
+      ...scaled,previousObservedBrokerNetPnl:61,currentBrokerNetPnl:57
+    });
+    expect(hold).toMatchObject({shouldClose:false,reason:'NO_PROTECTED_GIVEBACK'});
+    const flat=evaluatePepperstoneDemoNetProfitLock({
+      ...scaled,previousObservedBrokerNetPnl:50.5,currentBrokerNetPnl:50.5
+    });
+    expect(flat.shouldClose).toBe(false);
+  });
+  it('never extends the progressive boost to LIVE, wrong provider, or ordinary continuation',()=>{
+    const live=evaluatePepperstoneDemoNetProfitLock({...scaled,accountType:'LIVE'});
+    expect(live.shouldClose).toBe(false);
+    const wrong=evaluatePepperstoneDemoNetProfitLock({...scaled,brokerId:'icmarkets-ctrader'});
+    expect(wrong.shouldClose).toBe(false);
+    const continuation=evaluatePepperstoneDemoNetProfitLock({
+      ...scaled,strategyRoute:'TREND_CONTINUATION',
+      guardedPullbackContinuation:true,
+    });
+    expect(continuation.progressiveTpRetentionActive).toBe(false);
+    expect(continuation.tieredRetentionActive).toBe(false);
+    expect(continuation.retentionFraction).toBe(.55);
   });
 });

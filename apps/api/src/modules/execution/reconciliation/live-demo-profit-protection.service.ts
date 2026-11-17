@@ -506,6 +506,16 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       `cTrader DEMO profit protection enabled cadence=${LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS / 1000}s authority=PROFIT_PROTECTION LIVE=false`,
     );
     this.logger.log(
+      `Pepperstone owner USD DEMO progressive TP-relative peak retention ` +
+        (process.env.IREXPRO_PEPPERSTONE_DEMO_PROGRESSIVE_TP_RETENTION === 'enabled' &&
+         process.env.IREXPRO_PEPPERSTONE_DEMO_TIERED_RETENTION === 'enabled' &&
+         process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK === 'enabled' &&
+         process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK === 'enabled' &&
+         !!process.env.VPS_FOREX_SCANNER_USER_ID
+          ? 'ENABLED_DEMO_ONLY' : 'DISABLED') +
+        ' originalBrokerTP_SL=UNCHANGED LIVE=false',
+    );
+    this.logger.log(
       `Pepperstone owner USD DEMO tiered alternate peak retention (65/75/80) ` +
         (process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK === 'enabled' &&
         process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK === 'enabled' &&
@@ -699,6 +709,14 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                       !!process.env.VPS_FOREX_SCANNER_USER_ID &&
                       trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID &&
                       trade.account_currency === 'USD',
+                    progressiveTpRetentionEnabled:
+                      process.env.IREXPRO_PEPPERSTONE_DEMO_PROGRESSIVE_TP_RETENTION ===
+                        'enabled' &&
+                      process.env.IREXPRO_PEPPERSTONE_DEMO_TIERED_RETENTION ===
+                        'enabled' &&
+                      !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+                      trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID &&
+                      trade.account_currency === 'USD',
                     initialRiskPnl: risk,
                     brokerEntryPrice: finite(position.openPrice),
                     currentPrice: finite(position.currentPrice),
@@ -730,13 +748,23 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                           tieredRetentionEnabled: false,
                         })
                       : null;
+                    // This is a decision comparison, not a counterfactual fill:
+                    // the old tiered rule may have closed later or differently.
+                    const tierOnlyDecision = decision.progressiveTpRetentionActive
+                      ? evaluatePepperstoneDemoNetProfitLock({
+                          ...lockInput,
+                          progressiveTpRetentionEnabled: false,
+                        })
+                      : null;
                     this.logger.warn(
                       `Pepperstone DEMO NET_PROFIT_PROTECTION trade=${trade.trade_id} ${trade.instrument} ${trade.direction} ` +
                         `peakBrokerNet=${money(maxFavorablePnl)} nowBrokerNet=${money(currentPnl)} ` +
                         `extraExitReserve=${money(conservativeExitReserve!)} feeSource=${fees!.source} ` +
                         `netAfterExtraReserve=${money(decision.estimatedNetAfterReserve!)} protectedBrokerNetFloor=${money(decision.protectedBrokerNetFloor!)} ` +
-                        `tiered=${decision.tieredRetentionActive} peakRetention=${decision.retentionFraction ?? 'n/a'} ` +
+                        `tiered=${decision.tieredRetentionActive} progressiveTP=${decision.progressiveTpRetentionActive} ` +
+                        `tpPotential=${decision.projectedTpAmount ?? 'n/a'} peakFractionTP=${decision.tpPeakFraction ?? 'n/a'} peakRetention=${decision.retentionFraction ?? 'n/a'} ` +
                         `legacy55WouldClose=${legacyDecision?.shouldClose ?? 'n/a'} legacy55Floor=${legacyDecision?.protectedBrokerNetFloor ?? 'n/a'} ` +
+                        `oldTierWouldClose=${tierOnlyDecision?.shouldClose ?? 'n/a'} oldTierFloor=${tierOnlyDecision?.protectedBrokerNetFloor ?? 'n/a'} ` +
                         `brokerStop=VERIFIED live=false`,
                     );
                     // An owned CLOSE_POSITION only. ExecutionService performs

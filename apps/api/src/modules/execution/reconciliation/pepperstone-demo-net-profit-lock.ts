@@ -34,6 +34,57 @@ export function pepperstoneDemoTieredPeakRetention(peakR: number): number {
   return 0.80;
 }
 
+/**
+ * The progressive overlay is anchored to actual verified TP/SL DISTANCES
+ * and the existing initial broker-risk budget (thus automatically normalizes
+ * different lot sizes). It never changes the original broker TP/SL. The
+ * expected full-TP amount is a price-distance approximation, not a
+ * forecast, guaranteed fill, or second fee deduction.
+ *
+ * The interpolation starts tightening after 25% of TP potential has been
+ * captured as observed broker-net peak. A >3x historical fee cushion is
+ * required before using this aggressively rising retention policy.
+ */
+export function pepperstoneDemoProgressiveTpPeakRetention(input: {
+  peakBrokerNet: number;
+  initialRisk: number;
+  conservativeExitReserve: number;
+  brokerEntry: number;
+  brokerStop: number;
+  brokerTakeProfit: number;
+  baseRetention: number;
+}): { retention: number; tpPeakFraction: number | null; projectedTpAmount: number | null } {
+  const {peakBrokerNet:peak,initialRisk:risk,conservativeExitReserve:fee,
+    brokerEntry:entry,brokerStop:stop,brokerTakeProfit:tp,baseRetention:base}=input;
+  if (![peak,risk,fee,entry,stop,tp,base].every(Number.isFinite) ||
+      peak <= 0 || risk <= 0 || fee <= 0 || entry <= 0 || stop <= 0 ||
+      tp <= 0 || base < 0.5 || base > 0.95 ||
+      Math.abs(entry-stop) < entry*1e-8)
+    return {retention:base,tpPeakFraction:null,projectedTpAmount:null};
+  const projected = risk*Math.abs(tp-entry)/Math.abs(entry-stop);
+  if(!Number.isFinite(projected)||projected <= 0)
+    return {retention:base,tpPeakFraction:null,projectedTpAmount:null};
+  const fraction=peak/projected;
+  if (!Number.isFinite(fraction) || peak < fee*3)
+    return {retention:base,tpPeakFraction:fraction,projectedTpAmount:projected};
+  // Smooth piecewise linear interpolation, not abrupt jump at $60.
+  const levels:readonly (readonly [number,number])[] = [
+    [0,0.60], [0.25,0.65], [0.35,0.72], [0.40,0.80],
+    [0.55,0.86], [0.70,0.89], [0.85,0.91],
+  ];
+  let suggested=levels[levels.length-1][1];
+  if(fraction <= levels[0][0]) suggested=levels[0][1];
+  else for(let i=1;i<levels.length;i++){
+    if(fraction <= levels[i][0]){
+      const [lowX,lowY]=levels[i-1], [highX,highY]=levels[i];
+      suggested=lowY+(highY-lowY)*(fraction-lowX)/(highX-lowX);
+      break;
+    }
+  }
+  return {retention:Math.min(0.91,Math.max(base,suggested)),
+    tpPeakFraction:fraction,projectedTpAmount:projected};
+}
+
 
 export type PepperstoneDemoNetLockReason =
   | 'OUT_OF_SCOPE'
@@ -64,6 +115,8 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   guardedPullbackContinuation?: boolean;
   /** Separate opt-in and service-verified Pepperstone USD DEMO-only rollout. */
   tieredRetentionEnabled?: boolean;
+  /** Independent opt-in; must be set only after verifying owner+USD+DEMO. */
+  progressiveTpRetentionEnabled?: boolean;
   initialRiskPnl: number | null;
   brokerEntryPrice: number | null;
   currentPrice: number | null;
@@ -91,6 +144,9 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   observedPeakR: number | null;
   retentionFraction: number | null;
   tieredRetentionActive: boolean;
+  progressiveTpRetentionActive: boolean;
+  projectedTpAmount: number | null;
+  tpPeakFraction: number | null;
 } {
   // An opt-in alone must not grant authority: these exact two routes are
   // the only ones with the new tiers. Untagged trend continuation keeps its
@@ -102,6 +158,11 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
     input.isM1Strategy &&
     (input.strategyRoute === 'EARLY_TRANSITION' ||
       input.strategyRoute === 'CONFIRMED_REVERSAL');
+  const progressiveTpRetentionActive =
+    tieredRetentionActive &&
+    input.progressiveTpRetentionEnabled === true;
+  let projectedTpAmount: number | null = null;
+  let tpPeakFraction: number | null = null;
   const reply = (
     reason: PepperstoneDemoNetLockReason,
     grossFloor: number | null = null,
@@ -119,6 +180,9 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
     observedPeakR: peakR,
     retentionFraction,
     tieredRetentionActive,
+    progressiveTpRetentionActive,
+    projectedTpAmount,
+    tpPeakFraction,
   });
   if (
     input.brokerId !== 'pepperstone-ctrader' ||
@@ -222,9 +286,19 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   // only immutable guarded-pullback DEMO fills receive the 0.50R+ rule.
   if (!alternateRoute && peakR >= 0.5)
     return reply('ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED', null, null, null, peakR);
-  const retentionFraction = tieredRetentionActive
+  const baseRetention = tieredRetentionActive
     ? pepperstoneDemoTieredPeakRetention(peakR)
     : 0.55;
+  const progression = progressiveTpRetentionActive
+    ? pepperstoneDemoProgressiveTpPeakRetention({
+        peakBrokerNet:peak,initialRisk:risk,conservativeExitReserve:fee,
+        brokerEntry:open,brokerStop:stop,brokerTakeProfit:tp,
+        baseRetention,
+      })
+    : null;
+  projectedTpAmount = progression?.projectedTpAmount ?? null;
+  tpPeakFraction = progression?.tpPeakFraction ?? null;
+  const retentionFraction=progression?.retention ?? baseRetention;
   const minNetBuffer = Math.max(0.5, risk * 0.035, fee * 0.2);
   const executionAllowance = Math.max(risk * 0.02, fee * 0.25);
   const grossFloor = Math.max(

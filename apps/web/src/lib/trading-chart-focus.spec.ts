@@ -1,11 +1,11 @@
-import { DEFAULT_DEMO_CHART_INSTRUMENTS, resolveDemoChartInstruments, nextAiFocusedChartInstrument } from "./trading-chart-focus";
+import { DEFAULT_DEMO_CHART_INSTRUMENTS, resolveDemoChartInstruments, nextAiFocusedChartInstrument, isResearchOnlyAiFocus } from "./trading-chart-focus";
 
 describe("DEMO chart focus", () => {
-  it("defaults to the operator-approved two pairs without exposing the legacy six", () => {
-    expect(DEFAULT_DEMO_CHART_INSTRUMENTS).toEqual(["EURUSD", "AUDUSD"]);
+  it("defaults to the four approved DEMO pairs while status is refreshing", () => {
+    expect(DEFAULT_DEMO_CHART_INSTRUMENTS).toEqual(["EURUSD", "AUDUSD", "USDCAD", "USDJPY"]);
     expect(Object.isFrozen(DEFAULT_DEMO_CHART_INSTRUMENTS)).toBe(true);
-    expect(resolveDemoChartInstruments(null)).toEqual(["EURUSD", "AUDUSD"]);
-    expect(resolveDemoChartInstruments({ authorityMode: "PAPER_RESEARCH" })).toEqual(["EURUSD", "AUDUSD"]);
+    expect(resolveDemoChartInstruments(null)).toEqual(["EURUSD", "AUDUSD", "USDCAD", "USDJPY"]);
+    expect(resolveDemoChartInstruments({ authorityMode: "PAPER_RESEARCH" })).toEqual(["EURUSD", "AUDUSD", "USDCAD", "USDJPY"]);
   });
 
   it("uses the authenticated DEMO entry universe and drops duplicated or malformed symbols", () => {
@@ -19,7 +19,7 @@ describe("DEMO chart focus", () => {
     expect(resolveDemoChartInstruments({
       authorityMode: "DEMO_FULL_AUTO",
       demoEntryInstruments: [],
-    })).toEqual(["EURUSD", "AUDUSD"]);
+    })).toEqual(["EURUSD", "AUDUSD", "USDCAD", "USDJPY"]);
   });
 
   it("can reflect an explicitly restored broker DEMO entry universe in the future", () => {
@@ -47,5 +47,19 @@ describe("AI instrument auto-follow", () => {
       expect(nextAiFocusedChartInstrument({ aiFocus, previousAiFocus: "USDCAD", watchedInstruments: watched }))
         .toBeNull();
     }
+  });
+});
+
+describe("research versus executable focus presentation", () => {
+  const four=["EURUSD","AUDUSD","USDCAD","USDJPY"];
+  it("marks GBPUSD as research only without chart switching",()=>{
+    expect(isResearchOnlyAiFocus({aiFocus:"GBPUSD",watchedInstruments:four})).toBe(true);
+    expect(nextAiFocusedChartInstrument({aiFocus:"GBPUSD",previousAiFocus:"AUDUSD",watchedInstruments:four})).toBeNull();
+  });
+  it("displays exactly four eligible fallback tabs and distinguishes the research pair",()=>{
+    for (const pair of four) expect(isResearchOnlyAiFocus({aiFocus:pair,watchedInstruments:four})).toBe(false);
+    expect(isResearchOnlyAiFocus({aiFocus:"USDCHF",watchedInstruments:four})).toBe(true);
+    expect(isResearchOnlyAiFocus({aiFocus:null,watchedInstruments:four})).toBe(false);
+    expect(resolveDemoChartInstruments(null)).toEqual(four);
   });
 });

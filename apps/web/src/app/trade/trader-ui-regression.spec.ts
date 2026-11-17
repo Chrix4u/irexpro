@@ -89,6 +89,12 @@ describe('AI Trader production UI regression contract', () => {
     expect(pageSource).toContain('m1TacticalStatus.demoEntryInstruments.join(" · ")');
   });
 
+  it('shows an explicit research-only tag for GBPUSD/other out-of-scope model focus', () => {
+    expect(pageSource).toContain('isResearchOnlyAiFocus');
+    expect(pageSource).toContain('Research-only focus');
+    expect(pageSource).toContain('not one of the four enabled DEMO instruments');
+  });
+
   it('labels broker-closed unsettled trades honestly, never displaying peak as realized', () => {
     expect(pageSource).toContain('hasPendingClosedTradeSettlement(trade)');
     expect(pageSource).toContain('Broker settlement pending');

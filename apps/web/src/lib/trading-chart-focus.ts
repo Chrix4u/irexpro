@@ -2,10 +2,10 @@
  * DEMO chart focus follows the M1 execution universe, NOT the legacy
  * automation runtime's broader six-pair research universe. When the
  * authenticated M1 status cannot be read, show the operator-approved
- * EURUSD/AUDUSD focus rather than resurrecting paused chart tabs.
+ * current four-pair DEMO focus rather than a stale focused-two chart.
  * This is presentation only: it cannot authorize or prohibit an order.
  */
-export const DEFAULT_DEMO_CHART_INSTRUMENTS = Object.freeze(["EURUSD", "AUDUSD"] as const);
+export const DEFAULT_DEMO_CHART_INSTRUMENTS = Object.freeze(["EURUSD", "AUDUSD", "USDCAD", "USDJPY"] as const);
 
 const SUPPORTED_FX_PAIRS = new Set([
   "EURUSD", "AUDUSD", "GBPUSD", "USDJPY", "USDCAD", "USDCHF",
@@ -45,4 +45,15 @@ export function nextAiFocusedChartInstrument(input: {
     return null;
   }
   return input.previousAiFocus === focus ? null : focus;
+}
+
+
+/** Research-only focus may appear in legacy broader market scanning; it
+ * never grants DEMO execution permission or chart auto-follow. */
+export function isResearchOnlyAiFocus(input: {
+  aiFocus: string | null | undefined;
+  watchedInstruments: readonly string[];
+}): boolean {
+  const focus = (input.aiFocus ?? "").trim().toUpperCase();
+  return SUPPORTED_FX_PAIRS.has(focus) && !input.watchedInstruments.includes(focus);
 }
