@@ -72,6 +72,10 @@ import {
 } from './extension-exhaustion-demo-scout';
 import { evaluateEnsembleGovernance, type EnsembleGovernanceDecision } from './ensemble-governance';
 import {
+  evaluateConfirmedReversalCrossSleeveCanary,
+  CONFIRMED_REVERSAL_CROSS_SLEEVE_CANARY_LOT_CAP,
+} from './confirmed-reversal-cross-sleeve-canary';
+import {
   scorePlanBMultimodelShadow,
   type PlanBEnsembleScore,
   type PlanBPortfolioPosition,
@@ -1651,8 +1655,54 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             : null,
         })
       : null;
+    // Only a fully admitted independent Plan-B reversal may escape the
+    // OTHER sleeve's M1 early-transition degradation veto. This never
+    // escapes an M1 loss streak or any ordinary broker/risk veto.
+    const crossSleeveReversalCandidate =
+      professionalDemoPhase &&
+      routeDecision.route === 'M1_EARLY_TRANSITION' &&
+      demoProfitabilityReliabilityGate?.degradedEarlyTransitionVeto === true &&
+      multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL' &&
+      multimodelDemo.authority.authorityPath === 'PRIMARY_PLAN_B' &&
+      multimodelDemo.authority.executable === true;
+    let crossSleeveBrokerVerified = false;
+    if (crossSleeveReversalCandidate) {
+      try {
+        crossSleeveBrokerVerified = await this.evidence.isPepperstoneDemoBrokerConnection({
+          userId,
+          brokerConnectionId,
+        });
+      } catch (error) {
+        this.logger.warn(
+          'Confirmed-reversal DEMO canary broker verification unavailable ' +
+            candidate.instrument + ': ' + (error as Error).message,
+        );
+      }
+    }
+    const crossSleeveReversalCanary = professionalDemoPhase &&
+      evaluateConfirmedReversalCrossSleeveCanary({
+        m1Route: routeDecision.route,
+        reliabilityGate: demoProfitabilityReliabilityGate,
+        strategyRoute: multimodelDemo?.ensemble.strategyRoute ?? null,
+        primaryPlanBExecutable: multimodelDemo?.authority.authorityPath === 'PRIMARY_PLAN_B'
+          && multimodelDemo?.authority.executable === true,
+        portfolioSnapshotAvailable: multimodelDemo?.portfolioSnapshotAvailable === true,
+        brokerVerifiedPepperstoneDemo: crossSleeveBrokerVerified,
+        paperExecutionEligible: multimodelDemo?.governance.paperExecutionEligible === true,
+        executionCostUsable: multimodelDemo?.governance.paperExecutionCostUsable === true,
+        eventRisk: multimodelDemo?.governance.eventRisk ?? 'UNVERIFIED',
+        driftState: multimodelDemo?.governance.driftState ?? 'UNVERIFIED',
+        netExpectedR: multimodelDemo?.governance.netExpectedR ?? null,
+        candidateDirection: candidate.direction,
+        expertDirection: multimodelDemo?.trainedExpert.direction ?? null,
+        expertAllBrokerNative: multimodelDemo?.trainedExpert.allBrokerNative === true,
+        expertFreshnessSeconds: multimodelDemo?.trainedExpert.freshnessSeconds ?? null,
+        expertConfidence: multimodelDemo?.trainedExpert.ensembleConfidence ?? null,
+        expertLongVotes: multimodelDemo?.trainedExpert.longVotes ?? null,
+        expertShortVotes: multimodelDemo?.trainedExpert.shortVotes ?? null,
+      });
     const demoProfitabilityExecutionAllowed =
-      demoProfitabilityReliabilityGate?.executable !== false;
+      demoProfitabilityReliabilityGate?.executable !== false || crossSleeveReversalCanary;
 
     const shadowOnly = this.rolloutPolicy.phase === 'SHADOW';
     const routeExecutable = m1RouteExecutableInPhase(this.rolloutPolicy.phase, routeDecision.route);
@@ -1985,12 +2035,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // successful canary does not immediately restore 4-lot eligibility:
     // keep recovery size and spacing until five actual route samples.
     const recoveryCanary =
-      professionalDemoPhase &&
-      (reliability?.reason === 'EARLY_LOSS_STREAK_RECOVERY_CANARY' ||
-        (reliability?.reason === 'INSUFFICIENT_EVIDENCE' &&
-          reliability.samples > 0 &&
-          reliability.samples < 5 &&
-          reliability.losses >= 2));
+      crossSleeveReversalCanary ||
+      (professionalDemoPhase &&
+        (reliability?.reason === 'EARLY_LOSS_STREAK_RECOVERY_CANARY' ||
+          (reliability?.reason === 'INSUFFICIENT_EVIDENCE' &&
+            reliability.samples > 0 &&
+            reliability.samples < 5 &&
+            reliability.losses >= 2)));
 
     const multimodelDirectionConflict =
       professionalDemoPhase &&
@@ -2106,9 +2157,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             : provisionalScoutReliability
               ? Math.min(this.rolloutPolicy.paperVolumeCap, provisionalScoutReliability.lotCap)
               : this.rolloutPolicy.paperVolumeCap;
-    const recoveryCanaryVolumeCap = recoveryCanary
-      ? Math.min(executionVolumeCap, M1_DEMO_RECOVERY_CANARY_LOT_CAP)
-      : executionVolumeCap;
+    const recoveryCanaryVolumeCap = crossSleeveReversalCanary
+      ? Math.min(executionVolumeCap, CONFIRMED_REVERSAL_CROSS_SLEEVE_CANARY_LOT_CAP)
+      : recoveryCanary
+        ? Math.min(executionVolumeCap, M1_DEMO_RECOVERY_CANARY_LOT_CAP)
+        : executionVolumeCap;
     // The legacy 20-21 UTC alternative admission remains capped at 0.01.
     // Only the independent COUNTER pilot has a 4.00-lot *ceiling*; the
     // unchanged 0.25% stop-risk cap and broker margin control the actual lot.
@@ -2650,7 +2703,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const blockers = professionalDemoPhase
       ? unique([
           ...(!demoInstrumentAllowed ? ['M1_DEMO_INSTRUMENT_RESEARCH_ONLY'] : []),
-          ...(demoProfitabilityReliabilityGate?.blockers ?? []),
+          ...(crossSleeveReversalCanary ? [] : (demoProfitabilityReliabilityGate?.blockers ?? [])),
           ...(multimodelDirectionConflict ? ['MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT'] : []),
           ...(professionalM1FallbackExecutable ||
           m5EarlyTransitionHandoffEligible ||
@@ -3012,6 +3065,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         qualifiedContinuationCanaryRecentlyAuthorized,
         qualifiedContinuationCanaryHistoryUnavailable,
         recoveryCanary: recoveryCanary || false,
+        crossSleeveReversalCanary,
         recoveryCanaryHistoryUnavailable,
         recoveryCanaryRecentlyAuthorized,
         professionalM1Fallback,

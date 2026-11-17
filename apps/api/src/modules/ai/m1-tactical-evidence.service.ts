@@ -2138,9 +2138,12 @@ export class M1TacticalEvidenceService {
             AND evaluated_at < $5::timestamptz
             AND evaluated_at >= $5::timestamptz - ($6::int * interval '1 minute')
             AND execution_authority = 'BROKER_NATIVE'
-            AND governance -> 'reliability' ->> 'reason' IN (
-              'EARLY_LOSS_STREAK_RECOVERY_CANARY',
-              'INSUFFICIENT_EVIDENCE'
+            AND (
+              governance -> 'reliability' ->> 'reason' IN (
+                'EARLY_LOSS_STREAK_RECOVERY_CANARY',
+                'INSUFFICIENT_EVIDENCE'
+              )
+              OR COALESCE((governance ->> 'crossSleeveReversalCanary')::boolean, false) = true
             )
             AND COALESCE((governance ->> 'recoveryCanary')::boolean, false) = true
         ) AS exists
