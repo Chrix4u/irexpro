@@ -3,7 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {
  ARTIFACT,validQuote,candleFromQuotes,snapshotsAt,archiveRows,
- restoreRecentSeen,persist,pruneSnapshots,processSlot,STAGE_MS,
+ restoreRecentSeen,persist,pruneSnapshots,processSlot,STAGE_MS,replayArchivedDay,backfillArchives,RETAIN_DAYS,
 }=require('./collect-owner-demo-forming-candle-snapshots.cjs');
 const row=(second,inst='EURUSD',bid=1.1000,ask=1.1002,observedDelayMs=1000,minute=0)=>[
  new Date(Date.UTC(2026,10,17,16,minute,second)).toISOString(),
@@ -135,4 +135,39 @@ test('research worker never queries broker, writes database or changes execution
  const script=fs.readFileSync(__filename.replace(/\.test\.cjs$/,'.cjs'),'utf8');
  assert.doesNotMatch(script,/\b(?:placeOrder|executeTrade|modifyPosition|closePosition|UPDATE\s+trading|DELETE\s+FROM)\b/);
  assert.match(script,/brokerOrderAuthority:false/);
+});
+
+test('historical replay is as-of and cannot use later observed quote',()=>{
+ const old=[row(1,'EURUSD',1.10,1.1001),
+  row(5,'EURUSD',1.101,1.1011),
+  row(11,'EURUSD',1.102,1.1021,12000), // source 11s, observed 23s
+  row(28,'EURUSD',1.11,1.1101)];
+ const a=replayArchivedDay(old.map(JSON.stringify).join('\n'),
+   slot(0,0),slot(0,30));
+ const early=a.find(x=>x.decisionAt===new Date(slot(0,15)).toISOString()&&x.timeframe==='M1');
+ assert.ok(early);
+ assert.equal(early.sampleCount,2);
+ assert.ok(early.close<1.103);
+ const late=a.find(x=>x.decisionAt===new Date(slot(0,30)).toISOString()&&x.timeframe==='M1');
+ assert.ok(late);
+ assert.ok(late.close>1.10);
+ assert.equal(early.includesNextBarLabel,false);
+});
+test('backfill is idempotent, local-only, private, and keeps 90 days of compact snapshots',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'irexpro-form-bf-'));
+ const src=fs.mkdtempSync(path.join(os.tmpdir(),'irexpro-form-src-'));
+ try{
+  const raw=history('EURUSD',[0,1,2,3],2);
+  fs.writeFileSync(path.join(src,'2026-11-17.jsonl'),raw.map(JSON.stringify).join('\n')+'\n');
+  const now=new Date('2026-11-17T16:09:00Z');
+  const a=backfillArchives({dir,source:src,now});
+  assert.ok(a.written>=6);
+  assert.equal(a.noDatabaseWrites,true);
+  assert.equal(a.modifiesExecution,false);
+  const b=backfillArchives({dir,source:src,now});
+  assert.equal(b.written,0);
+  assert.ok(b.duplicates>=6);
+  assert.equal(RETAIN_DAYS,90);
+  assert.equal(fs.statSync(path.join(dir,'2026-11-17.jsonl')).mode&0o777,0o600);
+ }finally{fs.rmSync(dir,{recursive:true,force:true});fs.rmSync(src,{recursive:true,force:true});}
 });
