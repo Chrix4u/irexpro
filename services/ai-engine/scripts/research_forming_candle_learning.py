@@ -148,7 +148,7 @@ def build_labeled_dataset(snapshots:pd.DataFrame,candles:pd.DataFrame)->pd.DataF
             native=_per_frame_native_candles(candles,frame,inst)
             if native.empty:continue
             # Exact current/next candle index provides future LABELS only.
-            lookup=native.set_index("bucket_time")
+            lookup=native.set_index("bucket_time",drop=False)
             current_index=pd.DatetimeIndex(s["barStart"])
             next_index=current_index+width
             current=lookup.reindex(current_index).reset_index(drop=True)
