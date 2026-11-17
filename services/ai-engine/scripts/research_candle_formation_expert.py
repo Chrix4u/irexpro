@@ -198,14 +198,13 @@ def chronological_splits(d: pd.DataFrame, timeframe: str):
         "validationCutoff":t2.isoformat(),"embargoHours":4}
 
 
-def score(model, magnitude, span, d):
-    X=d.loc[:,FEATURE_NAMES]
+def score(model, magnitude, span, d, baseline_class):
+    X=d.loc[:,list(FEATURE_NAMES)]
     probs=model.predict_proba(X)
     labels=model.classes_
     predicted=labels[np.argmax(probs,axis=1)]
     confidence=np.max(probs,axis=1)
-    majority=int(d["label"].value_counts().idxmax())
-    baseline=np.full(len(d),majority)
+    baseline=np.full(len(d),baseline_class)
     p_dict={int(label):probs[:,i] for i,label in enumerate(labels)}
     selected=((predicted==0)|(predicted==2))&(confidence>=.65)
     # Mid OHLC and observed spread are merely a directional *proxy*;
@@ -262,7 +261,7 @@ def train_expert(input_csv: str|Path, out: str|Path, model_dir: str|Path|None=No
         try:
             d=build_next_candle_dataset(data,tf)
             tr,val,te,boundaries=chronological_splits(d,tf)
-            X_tr=tr.loc[:,FEATURE_NAMES]
+            X_tr=tr.loc[:,list(FEATURE_NAMES)]
             y_tr=tr["label"]
             if len(np.unique(y_tr))<3:
                 raise ValueError("TRAINING_TARGET_CLASS_COVERAGE_INSUFFICIENT")
@@ -280,8 +279,8 @@ def train_expert(input_csv: str|Path, out: str|Path, model_dir: str|Path|None=No
                     "sampleCount":len(d),"trainSamples":len(tr),
                     "validationSamples":len(val),"testSamples":len(te),
                     "boundaries":boundaries,
-                    "validation":score(model,mag,span,val),
-                    "untouchedChronologicalTest":score(model,mag,span,te),
+                    "validation":score(model,mag,span,val,int(y_tr.value_counts().idxmax())),
+                    "untouchedChronologicalTest":score(model,mag,span,te,int(y_tr.value_counts().idxmax())),
                     "featureCount":len(FEATURE_NAMES),
                     "instruments":list(FOCUS)}
             result["timeframes"][tf]=report
