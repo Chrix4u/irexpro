@@ -11,6 +11,8 @@ on:
       - apps/api/scripts/irexpro-forming-candle-shadow.pm2.config.cjs
       - services/ai-engine/scripts/research_candle_formation_expert.py
       - services/ai-engine/tests/test_research_candle_formation_expert.py
+      - services/ai-engine/scripts/research_forming_candle_learning.py
+      - services/ai-engine/tests/test_research_forming_candle_learning.py
       - .github/workflows/research-candle-formation-expert.yml
   workflow_dispatch:
 
@@ -39,4 +41,6 @@ jobs:
         run: node --test apps/api/scripts/collect-owner-demo-forming-candle-snapshots.test.cjs
       - name: Verify no future-candle leakage and no broker authority
         working-directory: services/ai-engine
-        run: python -m unittest discover -s tests -p test_research_candle_formation_expert.py -v
+        run: |
+          python -m unittest discover -s tests -p test_research_candle_formation_expert.py -v
+          python -m unittest discover -s tests -p test_research_forming_candle_learning.py -v
