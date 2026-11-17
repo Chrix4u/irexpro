@@ -849,6 +849,7 @@ function phase2Harness(
     enableAdvisoryAlternates?: boolean;
     enableContinuousAdvisory?: boolean;
     enableQualityRisk?: boolean;
+    enablePatternMemory?: boolean;
     rollout?: any;
     evidenceByRoute?: Record<string, any[]>;
     shadowPairSideOutcomes?: Array<{ observedAt: Date; netR: number }>;
@@ -941,6 +942,9 @@ function phase2Harness(
           ? 'enabled'
           : '',
         IREXPRO_PEPPERSTONE_DEMO_ADVISORY_QUALITY_RISK: options.enableQualityRisk
+          ? 'enabled'
+          : '',
+        IREXPRO_PEPPERSTONE_DEMO_PATTERN_MEMORY: options.enablePatternMemory
           ? 'enabled'
           : '',
         VPS_FOREX_SCANNER_USER_ID: options.enableContinuousAdvisory ? 'user-1' : '',
@@ -1064,6 +1068,7 @@ function phase2Harness(
   const loadOwnerPepperstoneDemoAdvisoryRecentNet = jest.fn().mockResolvedValue({
     samples:5,losing:4,winning:1,averageNetR:-0.42,
   });
+  const loadOwnerPepperstoneDemoPatternHistory = jest.fn().mockResolvedValue([]);
   const loadPendingDriftCounterfactuals = jest.fn().mockResolvedValue([]);
   const markDriftCounterfactual15m = jest.fn().mockResolvedValue(undefined);
   const loadMatureLowVolRangeLeaders = jest.fn().mockResolvedValue([]);
@@ -1094,6 +1099,7 @@ function phase2Harness(
     loadPriorClosedCommissionRiskR,
     loadPepperstonePairSideAsOfRows,
     loadOwnerPepperstoneDemoAdvisoryRecentNet,
+    loadOwnerPepperstoneDemoPatternHistory,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
     loadMatureLowVolRangeLeaders,
@@ -1202,6 +1208,7 @@ function phase2Harness(
     loadPriorClosedCommissionRiskR,
     loadPepperstonePairSideAsOfRows,
     loadOwnerPepperstoneDemoAdvisoryRecentNet,
+    loadOwnerPepperstoneDemoPatternHistory,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
     loadMatureLowVolRangeLeaders,
@@ -3513,6 +3520,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
         enableAdvisoryAlternates: true,
         enableContinuousAdvisory: true,
         enableQualityRisk: true,
+        enablePatternMemory: true,
         suspendTrendContinuation: true,
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
@@ -3594,6 +3602,15 @@ describe('M1 V8 multi-model DEMO authority', () => {
         expect.objectContaining({instrument:'EURUSD',direction:'BUY',
           strategyRoute:'CONFIRMED_REVERSAL'}),
       );
+      expect(h.loadOwnerPepperstoneDemoPatternHistory).toHaveBeenCalledWith(
+        expect.objectContaining({instrument:'EURUSD',direction:'BUY',
+          strategyRoute:'CONFIRMED_REVERSAL'}),
+      );
+      expect(record?.governance.patternMemory).toMatchObject({
+        artifact:'pepperstone-demo-causal-pattern-memory-v1',
+        shadowOnly:true,modifiesExecution:false,
+        hypothesis:'INSUFFICIENT_MATCHED_HISTORY',
+      });
       expect(h.receiveSignal).toHaveBeenCalledWith(
         expect.objectContaining({
           direction: 'BUY',
@@ -3604,6 +3621,9 @@ describe('M1 V8 multi-model DEMO authority', () => {
             m1_advisory_quality_risk_artifact:
               'pepperstone-demo-continuous-advisory-quality-risk-v1',
             m1_advisory_quality_risk_fraction: 0.35,
+            m1_pattern_memory_artifact:'pepperstone-demo-causal-pattern-memory-v1',
+            m1_pattern_memory_hypothesis:'INSUFFICIENT_MATCHED_HISTORY',
+            m1_pattern_memory_shadow_only:true,
             multimodel_execution_authority_path: 'DEMO_CONTINUOUS_REVERSAL_EARLY_EVIDENCE',
             m1_pepperstone_demo_alternative_trial_expires_at: null,
           }),

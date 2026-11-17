@@ -49,6 +49,10 @@ import {
 import { buildM1TacticalFeatures, type M1TacticalFeatureSnapshot } from './m1-tactical-features';
 import { evaluatePepperstoneDemoAdvisoryQuality } from './pepperstone-demo-advisory-quality-risk';
 import {
+  recallPepperstoneDemoPattern,
+  type PatternMemoryObservation,
+} from './pepperstone-demo-pattern-memory';
+import {
   classifyM1TacticalRoute,
   type M1TacticalRoute,
   type M1TacticalRouteDecision,
@@ -2919,6 +2923,44 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       }
     }
 
+    // Causal pattern recall reads only settled historical broker trades and
+    // never overrides entry admission. Every admitted or blocked Plan-B route
+    // is remembered in the tactical decision ledger with this as-of annotation.
+    let patternMemory: PatternMemoryObservation | null = null;
+    const patternRoute=multimodelDemo?.ensemble.strategyRoute ?? null;
+    const recallEnabled=
+      professionalDemoPhase &&
+      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_PATTERN_MEMORY','')==='enabled' &&
+      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID','')===userId &&
+      !!userId && !!patternRoute &&
+      ['EARLY_TRANSITION','CONFIRMED_REVERSAL','TREND_CONTINUATION'].includes(patternRoute);
+    if(recallEnabled){
+      try{
+        const previous=await this.evidence.loadOwnerPepperstoneDemoPatternHistory({
+          userId,brokerConnectionId,instrument:candidate.instrument,
+          direction:candidate.direction,
+          strategyRoute:patternRoute as 'EARLY_TRANSITION'|'CONFIRMED_REVERSAL'|'TREND_CONTINUATION',
+          asOf:decisionTime,
+        });
+        patternMemory=recallPepperstoneDemoPattern({
+          now:decisionTime,
+          route:patternRoute as 'EARLY_TRANSITION'|'CONFIRMED_REVERSAL'|'TREND_CONTINUATION',
+          current:{
+            score:candidate.score,extensionAtr:features.extensionAtr,
+            volatilityScore:features.volatilityScore,
+            emaSeparation:Math.max(0,Math.min(1,candidate.alignedEmaSeparationAtr/2)),
+            mtfStrength:Math.max(0,Math.min(1,candidate.alignedM15)),
+            rsi14:features.rsi14,
+          },
+          previous,
+        });
+      }catch(error){
+        // A research-memory outage cannot approve or deny a broker trade.
+        this.logger.warn('DEMO pattern-memory lookup unavailable '+candidate.instrument+
+          ' '+candidate.direction+': '+(error as Error).message);
+      }
+    }
+
     const persistStartedAt = Date.now();
     const decision = await this.evidence.recordDecision({
       userId,
@@ -2941,6 +2983,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         // research learner must see the actual extension/RSI/volatility
         // magnitudes rather than only the binary HARD_HIGH/HARD_LOW labels.
         // Never consumed by the execution or promotion path.
+        patternMemory,
         oodResearchFeatures: {
           version: 'm1-ood-asof-envelope-v1',
           extensionAtr: features.extensionAtr,
@@ -3067,6 +3110,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           demoAlternativeTrial,
           guardedPullback.eligible,
           brokerMarketContext,
+          patternMemory,
         );
       } finally {
         timings.orderDispatchMs = Math.max(0, Date.now() - dispatchStartedAt);
@@ -3237,6 +3281,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       | null = null,
     guardedPullbackRecovery = false,
     brokerMarketContext?: M1TacticalMarketSnapshot,
+    patternMemory?: PatternMemoryObservation | null,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -3720,6 +3765,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           feature_ema_separation: Math.max(0, Math.min(1, candidate.alignedEmaSeparationAtr / 2)),
           feature_mtf_strength: Math.max(0, Math.min(1, candidate.alignedM15)),
           feature_rsi14: features.rsi14,
+          m1_pattern_memory_artifact: patternMemory?.artifact ?? null,
+          m1_pattern_memory_matching_episodes: patternMemory?.matchingEpisodes ?? null,
+          m1_pattern_memory_hypothesis: patternMemory?.hypothesis ?? null,
+          m1_pattern_memory_average_net_r: patternMemory?.averageNetR ?? null,
+          m1_pattern_memory_positive_then_lost: patternMemory?.positiveThenLost ?? null,
+          m1_pattern_memory_shadow_only: patternMemory?.shadowOnly ?? null,
           position_sizing_tier:
             this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
               ? m1ProfessionalSizingTier(candidate.confidence)

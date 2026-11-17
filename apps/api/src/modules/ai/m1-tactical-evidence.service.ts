@@ -13,6 +13,7 @@ import type { M1ReliabilityRoute, M1RoutePairSideEvidenceRow } from './m1-tactic
 import type { M1FailedMoveRescueDecision } from './m1-failed-move-rescue';
 import type { M1DriftCounterfactualResult } from './m1-drift-counterfactual';
 import type { M1ShadowPairSideOutcome } from './m1-shadow-pair-side-reliability';
+import type { SettledPatternExample } from './pepperstone-demo-pattern-memory';
 import { m1UsdRiskAtStop } from './m1-tactical-currency-exposure';
 import type { M5EarlyTransitionEvidence } from './m5-early-transition-handoff';
 import { EXTENSION_EXHAUSTION_SHADOW_ARTIFACT } from './extension-exhaustion-shadow';
@@ -1059,10 +1060,75 @@ export class M1TacticalEvidenceService {
     return this.toRecord(row);
   }
 
-  /**
-   * DEMO-only historical closed trade evidence for candidate risk fraction.
-   * The broker account, owner, three-way strategy/side, finite window and
-   * closed_at < decision as-of are mandatory. No future/unsettled values.
+  /** Historical original decision features + after-fee broker evidence.
+   * Strict as-of read; no open, unconfirmed, unsettled, other-user, other
+   * broker or other-side outcomes are eligible analogues. */
+  async loadOwnerPepperstoneDemoPatternHistory(input: {
+    userId: string; brokerConnectionId: string; instrument: string;
+    direction: 'BUY' | 'SELL';
+    strategyRoute: 'CONFIRMED_REVERSAL' | 'EARLY_TRANSITION' | 'TREND_CONTINUATION';
+    asOf: Date;
+  }): Promise<SettledPatternExample[]> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT t.closed_at, t.realised_pnl,t.commission,t.swap,
+          t.max_favorable_pnl,t.max_adverse_pnl,
+          ti.metadata->>'feature_candidate_score' score,
+          ti.metadata->>'feature_extension_atr' extension_atr,
+          ti.metadata->>'feature_volatility_score' volatility,
+          ti.metadata->>'feature_ema_separation' ema_separation,
+          ti.metadata->>'feature_mtf_strength' mtf_strength,
+          ti.metadata->>'feature_rsi14' rsi14,
+          NULLIF(ca.sizing_inputs->>'finalRiskAtStop','') risk_at_stop
+        FROM trading.trades t
+        JOIN broker.broker_connections b
+          ON b.id=t.broker_connection_id AND b.user_id=t.user_id
+        JOIN trading.trade_intents ti
+          ON ti.id=t.trade_intent_id AND ti.user_id=t.user_id
+        LEFT JOIN LATERAL (
+          SELECT z.sizing_inputs FROM trading.capital_allocations z
+          WHERE z.trade_intent_id=t.trade_intent_id
+          ORDER BY z.created_at DESC LIMIT 1
+        ) ca ON TRUE
+        WHERE t.user_id=$1 AND t.broker_connection_id=$2
+          AND b.broker_id='pepperstone-ctrader'
+          AND b.account_type='DEMO' AND b.deleted_at IS NULL
+          AND t.instrument=$3 AND t.direction=$4
+          AND ti.metadata->>'multimodel_plan_b_route'=$5
+          AND t.status='CLOSED' AND t.closed_at < $6::timestamptz
+          AND t.closed_at >= $6::timestamptz - interval '90 days'
+          AND t.realised_pnl IS NOT NULL AND t.commission IS NOT NULL
+          AND t.swap IS NOT NULL
+        ORDER BY t.closed_at DESC LIMIT 100
+      `,[input.userId,input.brokerConnectionId,input.instrument,
+        input.direction,input.strategyRoute,input.asOf],
+    )) as Array<Record<string,string|null>>;
+    const valid: SettledPatternExample[] = [];
+    for(const row of rows){
+      const names=['score','extension_atr','volatility','ema_separation',
+        'mtf_strength','rsi14','risk_at_stop','realised_pnl','commission','swap'] as const;
+      if(names.some(key=>row[key]==null || row[key]===''))continue;
+      const n=Object.fromEntries(names.map(key=>[key,Number(row[key])])) as Record<
+        typeof names[number],number>;
+      if(Object.values(n).some(v=>!Number.isFinite(v))||n.risk_at_stop<=0)continue;
+      const favorable=row.max_favorable_pnl!=null?Number(row.max_favorable_pnl):NaN;
+      const adverse=row.max_adverse_pnl!=null?Number(row.max_adverse_pnl):NaN;
+      valid.push({
+        closedAt:row.closed_at!,
+        features:{
+          score:n.score,extensionAtr:n.extension_atr,volatilityScore:n.volatility,
+          emaSeparation:n.ema_separation,mtfStrength:n.mtf_strength,rsi14:n.rsi14,
+        },
+        netR:(n.realised_pnl+n.commission+n.swap)/n.risk_at_stop,
+        maxFavorableR:Number.isFinite(favorable)?favorable/n.risk_at_stop:null,
+        maxAdverseR:Number.isFinite(adverse)?adverse/n.risk_at_stop:null,
+      });
+    }
+    return valid;
+  }
+
+  /** Historical settled after-fee outcomes for DEMO advisory lot sizing.
+   * Never includes future, unsettled, other-owner or other-broker positions.
    */
   async loadOwnerPepperstoneDemoAdvisoryRecentNet(input: {
     userId: string;
