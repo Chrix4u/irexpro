@@ -13,6 +13,8 @@ on:
       - services/ai-engine/tests/test_research_candle_formation_expert.py
       - services/ai-engine/scripts/research_forming_candle_learning.py
       - services/ai-engine/tests/test_research_forming_candle_learning.py
+      - services/ai-engine/scripts/research_forming_candle_independent_stages.py
+      - services/ai-engine/tests/test_research_forming_candle_independent_stages.py
       - .github/workflows/research-candle-formation-expert.yml
   workflow_dispatch:
 
@@ -44,3 +46,4 @@ jobs:
         run: |
           python -m unittest discover -s tests -p test_research_candle_formation_expert.py -v
           python -m unittest discover -s tests -p test_research_forming_candle_learning.py -v
+          python -m unittest discover -s tests -p test_research_forming_candle_independent_stages.py -v
