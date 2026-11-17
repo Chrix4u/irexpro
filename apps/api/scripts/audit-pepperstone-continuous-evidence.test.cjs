@@ -56,3 +56,22 @@ test('open mark older than 90 seconds is flagged stale, not current',()=>{
  assert.equal(r.positionLedger[0].latestObservationFresh,false);
  assert.equal(r.summary.openPositionsWithFreshRecordedMarks,0);
 });
+
+test('counts the separate PRIMARY_PLAN_B 0.01-lot reversal without mixing it into the advisory cohort',()=>{
+  const primary={...base,
+    instrument:'AUDUSD',direction:'SELL',route:'CONFIRMED_REVERSAL',
+    openedAt:at(17),closedAt:at(19),lots:'0.01',
+    grossRealized:'-0.36',commission:'-0.06',swap:'0',
+    advisory:'false',continuous:'false',pullback:'false',
+    closeReason:'AI_CLOSE_SIGNAL',
+  };
+  const result=summarize([base,primary],[],options);
+  assert.equal(result.summary.independentOrders,2);
+  assert.equal(result.summary.completeClosedAfterFees,2);
+  assert.equal(result.summary.realizedNet,30.36);
+  assert.equal(result.byRoute.find(x=>x.cohort==='PRIMARY_PLAN_B').netTotal,-0.42);
+  assert.equal(result.byRoute.find(x=>x.cohort==='CONTINUOUS').netTotal,30.78);
+  assert.equal(result.byRoute.find(x=>x.cohort==='PRIMARY_PLAN_B').closed,1);
+  assert.equal(result.byRoute.find(x=>x.cohort==='PRIMARY_PLAN_B').losses,1);
+  assert.equal(result.summary.open,0);
+});

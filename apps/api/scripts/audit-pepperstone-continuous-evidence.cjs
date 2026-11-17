@@ -40,6 +40,11 @@ AND (
  i.metadata->>'m1_pepperstone_demo_advisory_alternates'='true'
  OR i.metadata->>'m1_pepperstone_demo_continuous_evidence'='true'
  OR i.metadata->>'m1_guarded_pullback_continuation'='true'
+ OR (
+   i.metadata->>'multimodel_execution_authority_path'='PRIMARY_PLAN_B'
+   AND i.metadata->>'multimodel_plan_b_route'
+     IN ('EARLY_TRANSITION','CONFIRMED_REVERSAL','TREND_CONTINUATION')
+ )
 )
 ORDER BY t.opened_at ASC LIMIT 1501
 `;
@@ -71,7 +76,13 @@ function summarize(trades,decisionGroups,{from=START,until=new Date().toISOStrin
   if(!Number.isFinite(opened)||opened<begin||opened>=end)throw Error('OUT_OF_WINDOW_BROKER_TRADE');
   if(!ALLOWED_ROUTES.has(x.route)||!['BUY','SELL'].includes(x.direction)||!['OPEN','CLOSED'].includes(x.status))
     throw Error('OUT_OF_SCOPE_TRADE');
-  const cohort=x.continuous==='true'?'CONTINUOUS':x.advisory==='true'?'ORIGINAL_ADVISORY':'GUARDED_PULLBACK';
+  const cohort=x.continuous==='true'
+    ? 'CONTINUOUS'
+    : x.advisory==='true'
+      ? 'ORIGINAL_ADVISORY'
+      : x.pullback==='true'
+        ? 'GUARDED_PULLBACK'
+        : 'PRIMARY_PLAN_B';
   const fee=val(x.commission),swap=val(x.swap),gross=val(x.grossRealized);
   const closed=x.status==='CLOSED';
   const net=closed&&gross!==null&&fee!==null&&swap!==null?money(gross+fee+swap):null;
@@ -169,6 +180,7 @@ function summarize(trades,decisionGroups,{from=START,until=new Date().toISOStrin
   limitations:[
    'Closed net P&L requires broker-signed realised_pnl, commission and swap; missing fee data is excluded rather than treated as zero.',
    'Broker open-position observedGross = peak minus giveback is a stored observation, not a live executable exit quote, nor net after future commission.',
+   'The scorecard includes original advisory, continuous, guarded pullback and independent PRIMARY_PLAN_B broker fills for the same strategy routes. These execution authorities are separate cohorts, not duplicate trades.',
    'Scanner scans are correlated per-minute pair-side evaluations, NOT trade outcomes.',
    'A completed profitable trial sample is not evidence of LIVE safety or future profit.',
    'This report places no order, changes no risk limit, modifies no stop/target, and never resets a trial.'
