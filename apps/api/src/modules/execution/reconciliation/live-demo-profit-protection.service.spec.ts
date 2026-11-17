@@ -255,6 +255,73 @@ describe('LiveDemoProfitProtectionService', () => {
     }
   });
 
+
+  it('closes an existing Pepperstone DEMO EARLY_TRANSITION winner on verified 0.50R+ giveback with both flags', async () => {
+    const previousNetFlag = process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+    const previousAlternateFlag = process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = 'enabled';
+    process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK = 'enabled';
+    try {
+      const h = harness(
+        [candidate({
+          instrument: 'USDJPY', account_currency: 'USD',
+          lot_size: '3.18', strategy_route: 'EARLY_TRANSITION',
+          max_favorable_pnl: '72.20', profit_giveback: '24.20',
+          path_observation_count: 65, initial_risk_pnl: '99.7008973',
+          stop_loss: '159.422', take_profit: '159.552',
+          opened_at: new Date('2026-11-17T00:44:13Z'),
+          path_last_observed_at: new Date('2026-11-17T00:50:00Z'),
+        })],
+        '39.30', 'DEMO', [], '159.486', [], undefined,
+        [{ sample_count: 9, p90_cost_per_lot: '6.00' }],
+        [], [], 'pepperstone-ctrader',
+      );
+      h.brokerService.getOpenPositionsForConnection.mockResolvedValue({
+        connection:{id:'conn-1',brokerId:'pepperstone-ctrader',accountType:'DEMO'},
+        positions:[{
+          externalOrderId:'position-7001',instrument:'USDJPY',direction:'BUY',
+          lotSize:'3.18',openPrice:'159.472',currentPrice:'159.486',
+          stopLoss:'159.422',takeProfit:'159.552',unrealisedPnl:'39.30',
+          commission:'0',swap:'0'
+        }]
+      });
+      await h.service.runOnce(new Date('2026-11-17T00:50:05Z'));
+      expect(h.executionService.closeTrade).toHaveBeenCalledTimes(1);
+      expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+        'trade-1', 'user-1', TradeCloseReason.PROFIT_PROTECTION
+      );
+    } finally {
+      if (previousNetFlag === undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = previousNetFlag;
+      if (previousAlternateFlag === undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK = previousAlternateFlag;
+    }
+  });
+
+  it('leaves the same EARLY_TRANSITION giveback in SHADOW mode with the alternate flag disabled', async () => {
+    const previousNetFlag = process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+    const previousAlternateFlag = process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = 'enabled';
+    delete process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK;
+    try {
+      const h = harness(
+        [candidate({strategy_route:'EARLY_TRANSITION',initial_risk_pnl:'9',
+          max_favorable_pnl:'10',profit_giveback:'0',
+          path_observation_count:8})],
+        '7', 'DEMO', [], '1.1134',[],undefined,
+        [{sample_count:9,p90_cost_per_lot:'6'}],[],[],
+        'pepperstone-ctrader',
+      );
+      await h.service.runOnce(new Date('2026-10-28T09:05:00Z'));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+    } finally {
+      if (previousNetFlag === undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = previousNetFlag;
+      if (previousAlternateFlag === undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK = previousAlternateFlag;
+    }
+  });
+
   it('holds Pepperstone DEMO if round-trip fee evidence is missing even if gross profit is falling', async () => {
     const prior = process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
     process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = 'enabled';

@@ -112,8 +112,7 @@ describe('Pepperstone DEMO explicit after-cost profit-lock close policy', () => 
     { accountType: 'LIVE' },
     { accountType: 'PAPER' },
     { isM1Strategy: false },
-    { strategyRoute: 'EARLY_TRANSITION' },
-    { strategyRoute: 'CONFIRMED_REVERSAL' },
+    { strategyRoute: 'UNRECOGNIZED' },
   ])('cannot grant a close outside current Pepperstone M1 DEMO route: %p', (patch) => {
     expect(evaluatePepperstoneDemoNetProfitLock({ ...input, ...patch }).shouldClose).toBe(false);
   });
@@ -198,6 +197,55 @@ describe('Pepperstone DEMO explicit after-cost profit-lock close policy', () => 
       reason: 'ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED',
     });
   });
+
+
+  it.each(['EARLY_TRANSITION', 'CONFIRMED_REVERSAL'])(
+    'protects a Pepperstone DEMO %s trade after a meaningful 0.50R+ peak and 45%% giveback',
+    (strategyRoute) => {
+      const alternate = {
+        ...input,
+        strategyRoute,
+        tradeLotSize: 3.18,
+        brokerLotSize: 3.18,
+        initialRiskPnl: 99.7008973,
+        brokerEntryPrice: 159.472,
+        currentPrice: 159.486,
+        authoritativeStop: 159.422,
+        brokerStop: 159.422,
+        authoritativeTakeProfit: 159.552,
+        brokerTakeProfit: 159.552,
+        openedAt: new Date('2026-11-17T00:44:13Z'),
+        previousObservationAt: new Date('2026-11-17T00:50:00Z'),
+        observedAt: new Date('2026-11-17T00:50:05Z'),
+        previousObservationCount: 65,
+        maxFavorableBrokerNetPnl: 72.2,
+        previousObservedBrokerNetPnl: 48,
+        currentBrokerNetPnl: 39.3,
+        conservativeExitReserve: 19.08,
+      };
+      expect(evaluatePepperstoneDemoNetProfitLock(alternate)).toMatchObject({
+        shouldClose: true,
+        reason: 'PROTECTED_POSITIVE_NET_PROFIT',
+      });
+      expect(evaluatePepperstoneDemoNetProfitLock(alternate).protectedBrokerNetFloor).toBeCloseTo(39.71, 2);
+      expect(evaluatePepperstoneDemoNetProfitLock(alternate).estimatedNetAfterReserve).toBeCloseTo(20.22, 2);
+      expect(evaluatePepperstoneDemoNetProfitLock({
+        ...alternate, currentBrokerNetPnl: 54.26,
+      }).reason).toBe('NO_PROTECTED_GIVEBACK');
+      expect(evaluatePepperstoneDemoNetProfitLock({
+        ...alternate, maxFavorableBrokerNetPnl: 45,
+      }).reason).toBe('NO_MEANINGFUL_NET_PEAK');
+      expect(evaluatePepperstoneDemoNetProfitLock({
+        ...alternate, currentBrokerNetPnl: 12,
+      }).shouldClose).toBe(false);
+      expect(evaluatePepperstoneDemoNetProfitLock({
+        ...alternate, brokerStop: 159.421,
+      }).shouldClose).toBe(false);
+      expect(evaluatePepperstoneDemoNetProfitLock({
+        ...alternate, accountType: 'LIVE',
+      }).shouldClose).toBe(false);
+    },
+  );
 
   it('supports SELL-side quote and protective barrier verification', () => {
     const sell = {

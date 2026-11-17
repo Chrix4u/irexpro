@@ -9,11 +9,13 @@
  * for unbooked closing charges/slippage, NOT because the broker mark is gross.
  * This does NOT guarantee a fill or an amount of realized P&L.
  *
- * Applies only to previously authorized, verified, existing M1 continuation
- * positions, NEVER new orders, paper simulation or LIVE accounts.
+ * Applies only to previously authorized, verified, existing M1 positions on
+ * Pepperstone DEMO, NEVER new orders, paper simulation or LIVE accounts.
+ * The two alternate routes have an explicit positive-after-fee giveback band
+ * at 0.50R+, separate from the legacy continuation-only early-peak policy.
  */
 export const PEPPERSTONE_DEMO_NET_LOCK_ARTIFACT =
-  'pepperstone-demo-positive-after-fee-giveback-lock-v1' as const;
+  'pepperstone-demo-positive-after-fee-giveback-lock-v2-alternate-routes' as const;
 
 export type PepperstoneDemoNetLockReason =
   | 'OUT_OF_SCOPE'
@@ -85,7 +87,9 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
     input.brokerId !== 'pepperstone-ctrader' ||
     input.accountType !== 'DEMO' ||
     !input.isM1Strategy ||
-    input.strategyRoute !== 'TREND_CONTINUATION'
+    !['TREND_CONTINUATION', 'EARLY_TRANSITION', 'CONFIRMED_REVERSAL'].includes(
+      input.strategyRoute ?? '',
+    )
   )
     return reply('OUT_OF_SCOPE');
   if (
@@ -161,21 +165,31 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   }
   const peak = Math.max(0, input.maxFavorableBrokerNetPnl);
   const peakR = peak / risk;
-  // Require a nontrivial, fee-covered peak. Not armed on tiny green ticks.
-  const minimumPeak = Math.max(risk * 0.2, fee * 1.65, fee + risk * 0.1);
+  // DEMO alternate entries must not turn an observed ~0.5R–0.75R
+  // excursion into a full stop-out merely because the old continuation
+  // experiment excluded their route. A wide 55% peak retention at >=0.50R
+  // gives an early-transition/reversal runner room to seek TP, while the
+  // observed broker-net floor and a full extra causal exit-fee reserve still
+  // require strictly positive estimated realized economics.
+  //
+  // This changes NO entry approval, account/lot policy, broker SL/TP or LIVE
+  // behavior. The existing continuation experiment remains exactly as before.
+  const alternateRoute =
+    input.strategyRoute === 'EARLY_TRANSITION' ||
+    input.strategyRoute === 'CONFIRMED_REVERSAL';
+  const minimumPeak = alternateRoute
+    ? Math.max(risk * 0.5, fee * 1.8, fee + risk * 0.15)
+    : Math.max(risk * 0.2, fee * 1.65, fee + risk * 0.1);
   if (peak < minimumPeak) return reply('NO_MEANINGFUL_NET_PEAK', null, null, null, peakR);
-  // Limit this first DEMO pilot to the two observed stopout geometries: both
-  // peaked below 0.50R. A genuine AUDUSD TP winner went far past 1R then
-  // recovered from a deep drawdown. Never truncate an established >=0.50R
-  // runner through this *early-peak* experiment.
-  if (peakR >= 0.5) return reply('ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED', null, null, null, peakR);
-  // The early-peak giveback floor is intentionally wider than a standard
-  // 70–90% trailing lock; high-TP runners may need room to retrace.
+  // Only continuation positions retain the pre-existing <0.50R pilot cap.
+  if (!alternateRoute && peakR >= 0.5)
+    return reply('ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED', null, null, null, peakR);
   const minNetBuffer = Math.max(0.5, risk * 0.035, fee * 0.2);
-  // A 5-second polling gap can cross the floor. Leave an actionable price
-  // window above the minimum net-positive exit margin.
   const executionAllowance = Math.max(risk * 0.02, fee * 0.25);
-  const grossFloor = Math.max(fee + minNetBuffer + executionAllowance, peak * 0.55);
+  const grossFloor = Math.max(
+    fee + minNetBuffer + executionAllowance,
+    peak * 0.55,
+  );
   const netFloor = grossFloor - fee;
   const net = input.currentBrokerNetPnl - fee;
   if (peak - grossFloor < Math.max(risk * 0.03, fee * 0.25)) {

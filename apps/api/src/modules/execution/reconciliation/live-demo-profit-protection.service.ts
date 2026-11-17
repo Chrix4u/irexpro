@@ -505,6 +505,14 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       `cTrader DEMO profit protection enabled cadence=${LIVE_DEMO_PROFIT_PROTECTION_INTERVAL_MS / 1000}s authority=PROFIT_PROTECTION LIVE=false`,
     );
     this.logger.log(
+      `Pepperstone cTrader DEMO alternate-route 0.50R after-fee giveback ` +
+        (process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK === 'enabled' &&
+        process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK === 'enabled'
+          ? 'ENABLED_DEMO_ONLY'
+          : 'DISABLED') +
+        ' LIVE=false originalBrokerTP_SL=UNCHANGED',
+    );
+    this.logger.log(
       `Pepperstone cTrader DEMO early-net-giveback protection ` +
         (process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK === 'enabled'
           ? 'ENABLED_DEMO_ONLY'
@@ -614,10 +622,10 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
             // Optional, deliberately scoped net-positive giveback protection
             // over cTrader's ALREADY-net-unrealized P&L. Historical round-trip
             // fees are held as an EXTRA conservative close-cost reserve.
-            // for existing Pepperstone DEMO M1 continuation positions only.
-            // The enable switch is OFF unless staging operators explicitly
-            // enable it after CI and a broker-native economic replay. LIVE and
-            // alternative broker families can never reach this branch.
+            // for verified existing Pepperstone DEMO M1 positions only.
+            // The independent alternate-route switch is explicitly opt-in
+            // on Pepperstone DEMO only. Never silently widen continuation,
+            // LIVE-account or other-broker closing authority.
             if (
               snapshot.connection.brokerId === 'pepperstone-ctrader' &&
               process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK === 'enabled'
@@ -628,9 +636,13 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                 risk !== null &&
                 risk > 0 &&
                 trade.is_m1_strategy &&
-                trade.strategy_route === 'TREND_CONTINUATION' &&
-                maxFavorablePnl >= risk * 0.2 &&
-                maxFavorablePnl < risk * 0.5 &&
+                (trade.strategy_route === 'TREND_CONTINUATION'
+                  ? maxFavorablePnl >= risk * 0.2 && maxFavorablePnl < risk * 0.5
+                  : process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK ===
+                      'enabled' &&
+                    (trade.strategy_route === 'EARLY_TRANSITION' ||
+                      trade.strategy_route === 'CONFIRMED_REVERSAL') &&
+                    maxFavorablePnl >= risk * 0.5) &&
                 currentPnl > 0 &&
                 previousPeak > 0 &&
                 previousCurrentPnl > currentPnl &&
