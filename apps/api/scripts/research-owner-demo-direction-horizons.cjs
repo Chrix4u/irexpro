@@ -50,15 +50,17 @@ function deduplicateMarketEpisodes(rows) {
   });
 }
 /**
- * At target horizon use the latest completed M1 bar no more than one minute
- * older than target. No price from after target may enter this label.
- * A closing bid/ask sample must be from the latter 30s of its candle and
- * never be from a future/out-of-account/historical mid-only bar.
+ * Select the FIRST completed M1 bar whose close is at or within 60s AFTER
+ * the horizon. This is a post-event OUTCOME label, not an input at prediction
+ * time. Never label a 5-minute horizon using a 4-minute candle.
+ * A broker closing bid/ask sample must be from the last 30s of the selected
+ * M1 bar, captured by analysis time, and never from mid-only history.
  */
 function selectCausalM1Mark(bars, decisionAt, horizonMinutes, asOf) {
   const decision = iso(decisionAt), now = iso(asOf);
   if (decision === null || now === null || !HORIZONS.includes(horizonMinutes)) return null;
   const target = decision + horizonMinutes * 60_000;
+  // The complete horizon label must be observable; no partial future bar.
   if (target > now - 2_000) return null;
   let best = null;
   for (const c of bars || []) {
@@ -66,13 +68,13 @@ function selectCausalM1Mark(bars, decisionAt, horizonMinutes, asOf) {
     const quote = iso(c.last_quote_sample_at);
     if (bucket === null || quote === null || c.source !== BROKER_SOURCE) continue;
     const barClose = bucket + 60_000;
-    if (barClose <= decision || barClose > target ||
-        barClose < target - 60_000 || quote > target ||
+    if (barClose < target || barClose > target + 60_000 ||
+        barClose <= decision || quote > now ||
         quote < bucket + 30_000 || quote >= barClose + 1_000) continue;
     const bid = finiteNumber(c.bid_close), ask = finiteNumber(c.ask_close);
     if (bid === null || ask === null || bid <= 0 || ask < bid ||
         (finiteNumber(c.sample_count) ?? 0) < 2) continue;
-    if (!best || barClose > best.closedAtMs) {
+    if (!best || barClose < best.closedAtMs) {
       best = {closedAtMs: barClose, bid, ask, spread: ask - bid};
     }
   }
@@ -174,7 +176,11 @@ function summarizeResearch(decisions, candlesByInstrument, feesByInstrument, asO
       }
       const route = decision.strategy_route || 'UNKNOWN';
       const hypothesis = decision.pattern_hypothesis || 'NO_MEMORY';
-      const authority = decision.execution_authority === 'BROKER_NATIVE' ? 'BROKER_AUTHORIZED' : 'NOT_BROKER_AUTHORIZED';
+      const authority = decision.execution_authority === 'BROKER_NATIVE'
+      ? decision.outcome_state === 'EXECUTION_SUCCEEDED'
+        ? 'EXECUTION_SUCCEEDED'
+        : 'BROKER_AUTHORIZED_NOT_FILLED'
+      : 'NOT_BROKER_AUTHORIZED';
       const add = (map,key) => {
         if (!map[key]) map[key] = {};
         if (!map[key][horizon]) map[key][horizon] = [];
@@ -232,9 +238,9 @@ function summarizeResearch(decisions, candlesByInstrument, feesByInstrument, asO
     researchOnly:true,modifiesExecution:false,
     asOf:new Date(asOf).toISOString(), lookbackHours:LOOKBACK_HOURS,
     source:BROKER_SOURCE, instruments:[...FOCUS], horizonsMinutes:horizons,
-    meaning:'M1 decision entry versus later broker bid/ask, in initial stop-risk units R. Not actual hypothetical fills or verified trade profitability.',
+    meaning:'Original M1 candidate entry versus first complete broker bid/ask M1 close at/within 60s after each horizon, in initial stop-risk units R. Research labels, not executable fills or verified trade profitability.',
     feeMeaning:'p90 of at least 5 prior settled normalized broker commission/swap costs, otherwise missing; an after-fee estimate only, not realized P&L.',
-    independence:'one earliest decision per instrument/direction/route/20-minute bucket; not independent across pairs or simultaneous USD exposure',
+    independence:'deduplicated pair-side-route 20-minute episode keys; overlapping opposite sides, routes and USD exposures are NOT statistically independent',
     rawDecisions:decisions.length, independentMarketEpisodes:episodes.length,
     unavailableMarks:missingCausalMarks, invalidOriginalEntry:unmatchedOriginalEntry,
     byHorizon:finalize(overall).ALL,
@@ -276,7 +282,7 @@ async function main() {
     if(broker.rows.length!==1) throw new Error('ACTIVE_CONNECTED_OWNER_DEMO_REQUIRED');
     const connection = broker.rows[0].id;
     const decisions = (await client.query([
-      'SELECT d.evaluated_at,d.instrument,d.direction,d.execution_authority,',
+      'SELECT d.evaluated_at,d.instrument,d.direction,d.execution_authority,d.outcome_state,',
       "d.governance #>> '{multimodelEnsemble,strategyRoute}' AS strategy_route,",
       "d.governance #>> '{patternMemory,hypothesis}' AS pattern_hypothesis,",
       'd.candidate',

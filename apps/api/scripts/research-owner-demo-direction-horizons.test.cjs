@@ -24,6 +24,9 @@ test('only complete broker M1 closes up to target, never a future high/low or fu
   assert.equal(mark.bid,1.1004);
   assert.equal(mark.closedAtMs,Date.parse('2026-11-17T10:01:00Z'));
   assert.equal(selectCausalM1Mark(bars,t,3,now).bid,1.105);
+  // Decision halfway through a minute: a just-before-target 1m bar
+  // must NOT substitute for the true 1m horizon after that decision.
+  assert.equal(selectCausalM1Mark(bars,'2026-11-17T10:00:30Z',1,now).bid,1.1009);
   assert.equal(selectCausalM1Mark(bars,t,10,'2026-11-17T10:07:00Z'),null);
 });
 test('reject mid-only historical candles, stale samples, and nonnative bars',()=>{
@@ -61,7 +64,8 @@ test('20-minute correlated minute checks count as one independent market episode
 });
 test('separate blocked versus authorized cohorts; missing cost never a false win',()=>{
   const d=[decision('2026-11-17T10:00:00Z'),
-    {...decision('2026-11-17T10:20:00Z'),execution_authority:'BROKER_NATIVE'}];
+    {...decision('2026-11-17T10:20:00Z'),execution_authority:'BROKER_NATIVE',
+      outcome_state:'EXECUTION_SUCCEEDED'}];
   const bars=[m1('10:00',1.1004,1.1006),m1('10:01',1.1005,1.1007)];
   const result=summarizeResearch(d,{EURUSD:bars},{EURUSD:[]},'2026-11-17T10:35:00Z');
   assert.equal(result.rawDecisions,2);
@@ -69,7 +73,7 @@ test('separate blocked versus authorized cohorts; missing cost never a false win
   assert.equal(result.byHorizon['1m'].episodes,1);
   assert.equal(result.byHorizon['1m'].estimatedAfterFeeCoverage,0);
   assert.equal(result.byExecutionAuthority.NOT_BROKER_AUTHORIZED['1m'].episodes,1);
-  assert.equal(result.byExecutionAuthority.BROKER_AUTHORIZED?.['1m']?.episodes ?? 0,0);
+  assert.equal(result.byExecutionAuthority.EXECUTION_SUCCEEDED?.['1m']?.episodes ?? 0,0);
   assert.equal(result.modifiesExecution,false);
 });
 
