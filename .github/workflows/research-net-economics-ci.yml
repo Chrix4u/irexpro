@@ -7,6 +7,10 @@ on:
     paths:
       - apps/api/scripts/research-owner-demo-net-economics-review.cjs
       - apps/api/scripts/research-owner-demo-net-economics-review.test.cjs
+      - apps/api/scripts/research-owner-demo-commission-routing-shadow.cjs
+      - apps/api/scripts/research-owner-demo-commission-routing-shadow.test.cjs
+      - apps/api/scripts/run-owner-demo-commission-routing-shadow.cjs
+      - apps/api/scripts/run-owner-demo-commission-routing-shadow.test.cjs
       - apps/api/scripts/audit-commission-r-calibration-gap.cjs
       - apps/api/scripts/audit-commission-r-calibration-gap.test.cjs
       - .github/workflows/research-net-economics-ci.yml
@@ -28,7 +32,11 @@ jobs:
         run: |
           node --check apps/api/scripts/audit-commission-r-calibration-gap.cjs
           node --check apps/api/scripts/research-owner-demo-net-economics-review.cjs
+          node --check apps/api/scripts/research-owner-demo-commission-routing-shadow.cjs
+          node --check apps/api/scripts/run-owner-demo-commission-routing-shadow.cjs
       - name: Validate broker-scope, after-cost decomposition, and no order authority
         run: |
           node --test apps/api/scripts/audit-commission-r-calibration-gap.test.cjs
           node --test apps/api/scripts/research-owner-demo-net-economics-review.test.cjs
+          node --test apps/api/scripts/research-owner-demo-commission-routing-shadow.test.cjs
+          node --test apps/api/scripts/run-owner-demo-commission-routing-shadow.test.cjs
