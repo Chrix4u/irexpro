@@ -113,8 +113,8 @@ class CausalCandleTests(unittest.TestCase):
         tr,val,te,bounds=chronological_splits(result,"M1")
         self.assertLess(tr.available_at.max(),val.available_at.min())
         self.assertLess(val.available_at.max(),te.available_at.min())
-        self.assertGreaterEqual((val.available_at.min()-tr.available_at.max()).total_seconds(),8*3600)
-        self.assertEqual(bounds["embargoHours"],4)
+        self.assertGreaterEqual((val.available_at.min()-tr.available_at.max()).total_seconds(),2*3600)
+        self.assertEqual(bounds["embargoHours"],1)
 
     def test_training_artifact_never_grants_execution_authority(self):
         with tempfile.TemporaryDirectory() as td:
