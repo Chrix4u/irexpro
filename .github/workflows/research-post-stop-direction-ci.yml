@@ -15,6 +15,9 @@ on:
       - apps/api/scripts/research-owner-demo-lot-ladder.cjs
       - apps/api/scripts/research-owner-demo-lot-ladder.test.cjs
       - apps/api/scripts/run-owner-demo-lot-ladder.cjs
+      - apps/api/scripts/research-owner-demo-profit-lock-hold-validation.cjs
+      - apps/api/scripts/research-owner-demo-profit-lock-hold-validation.test.cjs
+      - apps/api/scripts/run-owner-demo-profit-lock-hold-validation.cjs
       - .github/workflows/research-post-stop-direction-ci.yml
   workflow_dispatch:
 
@@ -44,9 +47,13 @@ jobs:
           node --check apps/api/scripts/research-owner-demo-lot-ladder.cjs
           node --check apps/api/scripts/research-owner-demo-lot-ladder.test.cjs
           node --check apps/api/scripts/run-owner-demo-lot-ladder.cjs
+          node --check apps/api/scripts/research-owner-demo-profit-lock-hold-validation.cjs
+          node --check apps/api/scripts/research-owner-demo-profit-lock-hold-validation.test.cjs
+          node --check apps/api/scripts/run-owner-demo-profit-lock-hold-validation.cjs
       - name: Validate broker price and three-strategy research summaries
         run: |
           node --test apps/api/scripts/research-owner-demo-post-stop-direction.test.cjs
           node --test apps/api/scripts/research-owner-demo-strategy-scorecard.test.cjs
           node --test apps/api/scripts/research-owner-demo-direction-horizons.test.cjs
           node --test apps/api/scripts/research-owner-demo-lot-ladder.test.cjs
+          node --test apps/api/scripts/research-owner-demo-profit-lock-hold-validation.test.cjs
