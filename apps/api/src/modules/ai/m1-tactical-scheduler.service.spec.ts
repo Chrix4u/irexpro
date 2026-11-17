@@ -850,6 +850,7 @@ function phase2Harness(
     enableContinuousAdvisory?: boolean;
     enableQualityRisk?: boolean;
     enablePatternMemory?: boolean;
+    enableHighConvictionSixLots?: boolean;
     rollout?: any;
     evidenceByRoute?: Record<string, any[]>;
     shadowPairSideOutcomes?: Array<{ observedAt: Date; netR: number }>;
@@ -945,6 +946,9 @@ function phase2Harness(
           ? 'enabled'
           : '',
         IREXPRO_PEPPERSTONE_DEMO_PATTERN_MEMORY: options.enablePatternMemory
+          ? 'enabled'
+          : '',
+        IREXPRO_PEPPERSTONE_DEMO_HIGH_CONVICTION_6LOT: options.enableHighConvictionSixLots
           ? 'enabled'
           : '',
         VPS_FOREX_SCANNER_USER_ID: options.enableContinuousAdvisory ? 'user-1' : '',
@@ -3521,6 +3525,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
         enableContinuousAdvisory: true,
         enableQualityRisk: true,
         enablePatternMemory: true,
+        enableHighConvictionSixLots: true,
         suspendTrendContinuation: true,
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
@@ -3624,6 +3629,10 @@ describe('M1 V8 multi-model DEMO authority', () => {
             m1_pattern_memory_artifact:'pepperstone-demo-causal-pattern-memory-v1',
             m1_pattern_memory_hypothesis:'INSUFFICIENT_MATCHED_HISTORY',
             m1_pattern_memory_shadow_only:true,
+            m1_high_conviction_ceiling_eligible:false,
+            m1_high_conviction_ceiling_reason:'INDEPENDENT_EXPERT_UNCONFIRMED',
+            m1_high_conviction_ceiling_lots:4,
+            m1_high_conviction_stop_unchanged:true,
             multimodel_execution_authority_path: 'DEMO_CONTINUOUS_REVERSAL_EARLY_EVIDENCE',
             m1_pepperstone_demo_alternative_trial_expires_at: null,
           }),

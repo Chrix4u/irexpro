@@ -48,6 +48,7 @@ import {
 } from './m1-tactical-candidate';
 import { buildM1TacticalFeatures, type M1TacticalFeatureSnapshot } from './m1-tactical-features';
 import { evaluatePepperstoneDemoAdvisoryQuality } from './pepperstone-demo-advisory-quality-risk';
+import { evaluatePepperstoneDemoHighConvictionCeiling } from './pepperstone-demo-high-conviction-lot-ceiling';
 import {
   recallPepperstoneDemoPattern,
   type PatternMemoryObservation,
@@ -3531,9 +3532,59 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         recent,
       });
     }
+    // High-conviction is an OPTIONAL CEILING, not a lot instruction. No
+    // independent expert confirmation, broad model disagreement, poor
+    // after-cost expectancy, or a stop tight to ATR/spread => keep 4 lots.
+    // Never modify the original broker stop/TP to fit a larger requested lot.
+    const highConvictionCeiling = evaluatePepperstoneDemoHighConvictionCeiling({
+      enabled:
+        this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_HIGH_CONVICTION_6LOT', '') === 'enabled',
+      ownerVerifiedPepperstoneUsdDemo:
+        pepperstoneDemoRiskPilot &&
+        !!userId &&
+        this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId,
+      continuousAlternate:
+        demoAlternativeTrial?.eligible === true &&
+        demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT &&
+        demoAlternativeTrial.continuousEvidence === true,
+      baseVolumeCap: executionVolumeCap,
+      route: multimodelDemo?.ensemble.strategyRoute ?? null,
+      direction: candidate.direction,
+      planBAdmitted: multimodelDemo?.ensemble.paperAdmitted === true,
+      governanceEligible: multimodelDemo?.governance.paperExecutionEligible === true,
+      planBScore: multimodelDemo?.ensemble.ensembleScore ?? null,
+      planBDirectionQuality: multimodelDemo?.ensemble.directionQuality ?? null,
+      netExpectedR: multimodelDemo?.governance.netExpectedR ?? null,
+      spreadEvidenceValid: multimodelDemo?.governance.executionSpreadEvidenceValid === true,
+      eventRisk: multimodelDemo?.governance.eventRisk ?? 'UNKNOWN',
+      driftState: multimodelDemo?.governance.driftState ?? 'UNKNOWN',
+      expertState: multimodelDemo?.trainedExpert.state ?? null,
+      expertDirection: multimodelDemo?.trainedExpert.direction ?? null,
+      expertAdmitted: multimodelDemo?.trainedExpert.admitted ?? null,
+      expertNative: multimodelDemo?.trainedExpert.allBrokerNative === true,
+      expertProbability: multimodelDemo?.trainedExpert.meanOpportunityProbability ?? null,
+      expertFreshnessSeconds: multimodelDemo?.trainedExpert.freshnessSeconds ?? null,
+      m1Route: routeDecision.route,
+      m1Confidence: candidate.confidence,
+      m1DirectionQuality: candidate.directionQuality,
+      m5Direction: qualityRisk?.m5Direction ?? null,
+      h1Direction: qualityRisk?.h1Direction ?? null,
+      qualityRiskFraction: qualityRisk?.riskFraction ?? null,
+      patternHypothesis: patternMemory?.hypothesis ?? null,
+      stopDistance: candidate.stopDistance,
+      m1Atr14: features.atr14,
+      brokerSpreadPrice: brokerMarketContext?.spreadEvidence?.spreadPrice ?? null,
+      targetDistance: candidate.targetDistance,
+      guardedPullback: guardedPullbackRecovery,
+    });
+    const maxRequestedBeforeQuality =
+      highConvictionCeiling.eligible
+        ? highConvictionCeiling.maxLotCeiling
+        : executionVolumeCap;
     const qualityAdjustedVolumeCap = qualityRisk
-      ? Math.min(executionVolumeCap,executionVolumeCap*qualityRisk.riskFraction)
-      : executionVolumeCap;
+      ? Math.min(maxRequestedBeforeQuality,
+          maxRequestedBeforeQuality * qualityRisk.riskFraction)
+      : maxRequestedBeforeQuality;
     const currencyExposureGuard = await this.resolveM1CurrencyExposureGuard(
       userId,
       brokerConnectionId,
@@ -3800,6 +3851,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ],
           m1_scout_requested_volume_cap: executionVolumeCap,
           m1_scout_execution_volume_cap: finalExecutionVolumeCap,
+          m1_high_conviction_ceiling_artifact: highConvictionCeiling.artifact,
+          m1_high_conviction_ceiling_eligible: highConvictionCeiling.eligible,
+          m1_high_conviction_ceiling_reason: highConvictionCeiling.reason,
+          m1_high_conviction_ceiling_lots: highConvictionCeiling.maxLotCeiling,
+          m1_high_conviction_stop_unchanged: true,
           m1_advisory_quality_risk_artifact: qualityRisk?.artifact ?? null,
           m1_advisory_quality_risk_fraction: qualityRisk?.riskFraction ?? null,
           m1_advisory_quality_risk_rationale: qualityRisk?.rationale ?? null,
