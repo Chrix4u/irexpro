@@ -102,4 +102,6 @@ test('unconfirmed first minute is observed but never counted as a delayed fill',
   assert.equal(g.confirmedEpisodes,0);
   assert.equal(g.skippedEpisodes,1);
   assert.equal(g.delayedOneMinute.episodes,0);
+  assert.equal(g.afterUnfavorableFirstMinute.episodes,1);
+  assert.equal(g.afterUnfavorableFirstMinute.directionalWinRate,1);
 });
