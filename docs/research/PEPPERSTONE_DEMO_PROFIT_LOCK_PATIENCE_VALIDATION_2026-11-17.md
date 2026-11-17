@@ -10,7 +10,7 @@ iRexPro already runs `ProfitExitAlternativesService` with artifact `exit-alterna
 
 ## Files
 
-- `apps/api/scripts/research-owner-demo-profit-lock-hold-validation.cjs`: pure comparison of actual settled PROFT_PROTECTION close and prior HOLD/CLOSE recommendation versus subsequently observed barrier-censored price/P&L evidence.
+- `apps/api/scripts/research-owner-demo-profit-lock-hold-validation.cjs`: pure comparison of actual settled PROFIT_PROTECTION close and prior HOLD/CLOSE recommendation versus subsequently observed barrier-censored price/P&L evidence.
 - `apps/api/scripts/research-owner-demo-profit-lock-hold-validation.test.cjs`: deterministic unit tests for time causality, direction signal provenance, after-fee reconciliation, 15/30/60 minute horizons, censoring and no execution authority.
 - `apps/api/scripts/run-owner-demo-profit-lock-hold-validation.cjs`: a read-only PostgreSQL runner that selects only exact-owner Pepperstone cTrader USD DEMO closed positions and reconciled shadow rows.
 - `.github/workflows/research-post-stop-direction-ci.yml`: syntax and behavior CI without broker or VPS secrets.
