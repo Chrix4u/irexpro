@@ -67,8 +67,10 @@ def read_asof_snapshots(folder: str|Path, since_days: int=10,
                 if x.get("instrument") not in FOCUS or x.get("timeframe") not in FRAME_MINUTES:
                     continue
                 try:
-                    start=pd.Timestamp(x["barStart"]),decision=pd.Timestamp(x["decisionAt"])
-                    src=pd.Timestamp(x["lastSourceAt"]),observed=pd.Timestamp(x["lastObservedAt"])
+                    start=pd.Timestamp(x["barStart"])
+                    decision=pd.Timestamp(x["decisionAt"])
+                    src=pd.Timestamp(x["lastSourceAt"])
+                    observed=pd.Timestamp(x["lastObservedAt"])
                     first=pd.Timestamp(x["firstSourceAt"])
                     if any(t.tzinfo is None for t in (start,decision,src,observed,first)):
                         continue
