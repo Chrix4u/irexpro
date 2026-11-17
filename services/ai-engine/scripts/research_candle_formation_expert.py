@@ -188,14 +188,14 @@ def chronological_splits(d: pd.DataFrame, timeframe: str):
     t1,t2 = unique.iloc[int(.60*len(unique))],unique.iloc[int(.80*len(unique))]
     # Higher-timeframe history is causal, but embargo guards dependence
     # around nearby market episodes and bar labels.
-    gap=pd.Timedelta(hours=4)
+    gap=pd.Timedelta(hours=1)
     train=d[d.available_at < t1-gap].copy()
     validation=d[(d.available_at > t1+gap)&(d.available_at < t2-gap)].copy()
     test=d[d.available_at > t2+gap].copy()
     if min(len(train),len(validation),len(test)) < 120:
         raise ValueError("INSUFFICIENT_CHRONOLOGICAL_SPLIT")
     return train,validation,test,{"trainCutoff":t1.isoformat(),
-        "validationCutoff":t2.isoformat(),"embargoHours":4}
+        "validationCutoff":t2.isoformat(),"embargoHours":1}
 
 
 def score(model, magnitude, span, d, baseline_class):
