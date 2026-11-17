@@ -165,6 +165,57 @@ test('duplicate persisted forecast cannot inflate observed accuracy',()=>{
   assert.equal(key(row),key(loadPredictions(dir,new Date('2026-11-17T19:00:00Z'))[0]));
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
+test('fixed-stage global comparison pairs equal episodes and exposes shared USD market clock',()=>{
+ const u=p('M1',45,'EURUSD'),v=p('M1',45,'AUDUSD');
+ const uNext=c(),vNext={...c(),instrument:'AUDUSD',close:1.09990,low:1.09986};
+ const uPrior=c('M1','2026-11-17T17:04:00.000Z',1.10006,1.1000);
+ const vPrior={...c('M1','2026-11-17T17:04:00.000Z',1.10006,1.1000),instrument:'AUDUSD'};
+ const now=Date.parse('2026-11-17T17:10:00Z');
+ const a=outcome(u,uNext,now,uPrior);
+ const b=outcome(v,vNext,now,vPrior);
+ // EURUSD: AI correct, prior-candle continuation wrong.
+ assert.equal(a.forecastCorrect,true);
+ assert.equal(a.baselineCorrect,false);
+ // AUDUSD: AI wrong, earlier candle baseline correct.
+ assert.equal(b.forecastCorrect,false);
+ assert.equal(b.baselineCorrect,true);
+ const z=summarize([{p:u,result:a},{p:v,result:b}],new Date(now));
+ const g=z.byFixedStageAcrossInstruments['M1|at_45s'];
+ assert.equal(g.independentForecasts,2);
+ assert.equal(g.distinctMarketTimeBuckets,1);
+ assert.equal(g.distinctUtcTradingDays,1);
+ assert.equal(g.priorCandleBaselineComparable,2);
+ assert.equal(g.correct,1);
+ assert.equal(g.modelOnlyCorrect,1);
+ assert.equal(g.baselineOnlyCorrect,1);
+ assert.equal(g.pairedDisagreementCount,2);
+ assert.equal(g.pairedAccuracyDifference,0);
+ assert.equal(g.accuracy,.5);
+ assert.equal(g.priorCandleBaselineAccuracy,.5);
+ assert.equal(g.sameSampleModelAccuracy,.5);
+ assert.equal(z.promotionAllowed,false);
+ assert.match(g.independenceWarning,/USD exposure/);
+});
+test('unavailable earlier candle does not inflate paired baseline denominator across pairs',()=>{
+ const u=p('M1',45,'EURUSD'),v=p('M1',45,'AUDUSD');
+ const now=Date.parse('2026-11-17T17:10:00Z');
+ const q=c();
+ const a=outcome(u,q,now,null);
+ const b=outcome(v,{...q,instrument:'AUDUSD'},now,
+   {...c('M1','2026-11-17T17:04:00.000Z'),instrument:'AUDUSD'});
+ const g=summarize([{p:u,result:a},{p:v,result:b}],new Date(now))
+   .byFixedStageAcrossInstruments['M1|at_45s'];
+ assert.equal(g.independentForecasts,2);
+ assert.equal(g.priorCandleBaselineComparable,1);
+ assert.equal(g.sameSampleModelAccuracy,1);
+ assert.equal(g.pairedAccuracyDifference,0);
+});
+test('direct summary rejects repeated persisted stage/candle forecast keys',()=>{
+ const f=p();
+ const r=outcome(f,c(),Date.parse('2026-11-17T17:10:00Z'));
+ assert.throws(()=>summarize([{p:f,result:r},{p:f,result:r}],
+   new Date('2026-11-17T17:10:00Z')),/DUPLICATE_MATURED_FORECAST_KEY/);
+});
 test('outcome auditor source has no trading or mutation methods',()=>{
  const body=fs.readFileSync(__filename.replace(/\.test\.cjs$/,'.cjs'),'utf8');
  assert.match(body,/BEGIN READ ONLY/);

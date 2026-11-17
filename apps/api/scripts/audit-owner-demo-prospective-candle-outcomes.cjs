@@ -122,63 +122,101 @@ function outcome(p,candle,asOfMs,prior=null){
  };
 }
 function summarize(items,asOf){
- const groups={};let matched=0,pending=0,missing=0,other=0;
+ const pairGroups={},stageGroups={},seenKeys=new Set();
+ let matched=0,pending=0,missing=0,other=0;
+ const createGroup=(p,stage,allPairs)=>({
+   timeframe:p.timeframe,stageSeconds:stage,
+   instrument:allPairs?'ALL_FOUR':p.instrument,
+   independentForecasts:0,correct:0,
+   directionalForecasts:0,spreadOnlyDirectionalPositive:0,
+   confidenceAbove65:0,confidenceAbove65Correct:0,
+   priorCandleBaselineComparable:0,priorCandleBaselineCorrect:0,
+   correctSameBaseline:0,modelOnlyCorrect:0,baselineOnlyCorrect:0,
+   spreadOnlySumAtr:0,notAfterCommission:true,
+   _marketCandleTimes:new Set(),_utcDays:new Set(),
+ });
+ const record=(g,p,result)=>{
+   g.independentForecasts++;
+   if(result.forecastCorrect)g.correct++;
+   g._marketCandleTimes.add(expectedNextBucket(p));
+   g._utcDays.add(p.decisionAt.slice(0,10));
+   if(result.baselineComparable){
+     g.priorCandleBaselineComparable++;
+     if(result.baselineCorrect)g.priorCandleBaselineCorrect++;
+     if(result.forecastCorrect)g.correctSameBaseline++;
+     if(result.forecastCorrect&&!result.baselineCorrect)g.modelOnlyCorrect++;
+     if(!result.forecastCorrect&&result.baselineCorrect)g.baselineOnlyCorrect++;
+   }
+   if(result.directionalForecast){
+     g.directionalForecasts++;
+     if(result.spreadOnlyDirectionalPositive)g.spreadOnlyDirectionalPositive++;
+     g.spreadOnlySumAtr+=result.spreadOnlyPriceMoveAtr;
+   }
+   if(p.confidence>=.65){
+     g.confidenceAbove65++;
+     if(result.forecastCorrect)g.confidenceAbove65Correct++;
+   }
+ };
  for(const {p,result} of items){
-  if(result.status==='NOT_YET_MATURED'){pending++;continue}
-  if(result.status==='MISSING_NATIVE_COMPLETED_OUTCOME'){missing++;continue}
-  if(result.status!=='MATCHED_COMPLETED_NEXT_CANDLE'){other++;continue}
-  matched++;
-  const stage=(Date.parse(p.decisionAt)-Date.parse(p.barStart))/1000;
-  const name=[p.timeframe,'at_'+stage+'s',p.instrument].join('|');
-  const g=groups[name] ||= {timeframe:p.timeframe,stageSeconds:stage,
-    instrument:p.instrument,independentForecasts:0,correct:0,
-    directionalForecasts:0,spreadOnlyDirectionalPositive:0,
-    confidenceAbove65:0,confidenceAbove65Correct:0,
-    priorCandleBaselineComparable:0,priorCandleBaselineCorrect:0,correctSameBaseline:0,
-    spreadOnlySumAtr:0,notAfterCommission:true};
-  g.independentForecasts++;if(result.forecastCorrect)g.correct++;
-  if(result.baselineComparable){
-    g.priorCandleBaselineComparable++;
-    if(result.baselineCorrect)g.priorCandleBaselineCorrect++;
-    if(result.forecastCorrect)g.correctSameBaseline++;
-  }
-  if(result.directionalForecast){
-    g.directionalForecasts++;
-    if(result.spreadOnlyDirectionalPositive)g.spreadOnlyDirectionalPositive++;
-    g.spreadOnlySumAtr+=result.spreadOnlyPriceMoveAtr;
-  }
-  if(p.confidence>=.65){g.confidenceAbove65++;
-    if(result.forecastCorrect)g.confidenceAbove65Correct++;}
+   if(result.status==='NOT_YET_MATURED'){pending++;continue;}
+   if(result.status==='MISSING_NATIVE_COMPLETED_OUTCOME'){missing++;continue;}
+   if(result.status!=='MATCHED_COMPLETED_NEXT_CANDLE'){other++;continue;}
+   // No duplicate same-stage market episode may inflate the research
+   // statistic even when a caller bypasses the archive loader.
+   const unique=key(p);
+   if(seenKeys.has(unique))throw Error('DUPLICATE_MATURED_FORECAST_KEY');
+   seenKeys.add(unique);matched++;
+   const stage=(Date.parse(p.decisionAt)-Date.parse(p.barStart))/1000;
+   const pairKey=[p.timeframe,'at_'+stage+'s',p.instrument].join('|');
+   const stageKey=[p.timeframe,'at_'+stage+'s'].join('|');
+   record(pairGroups[pairKey] ||= createGroup(p,stage,false),p,result);
+   record(stageGroups[stageKey] ||= createGroup(p,stage,true),p,result);
  }
- for(const g of Object.values(groups)){
-  g.accuracy=g.independentForecasts?Number((g.correct/g.independentForecasts).toFixed(4)):null;
-  g.priorCandleBaselineAccuracy=g.priorCandleBaselineComparable?
-    Number((g.priorCandleBaselineCorrect/g.priorCandleBaselineComparable).toFixed(4)):null;
-  g.sameSampleModelAccuracy=g.priorCandleBaselineComparable?
-    Number((g.correctSameBaseline/g.priorCandleBaselineComparable).toFixed(4)):null;
-  g.spreadOnlyPositiveRate=g.directionalForecasts?
-    Number((g.spreadOnlyDirectionalPositive/g.directionalForecasts).toFixed(4)):null;
-  g.meanSpreadOnlyAtr=g.directionalForecasts?
-    Number((g.spreadOnlySumAtr/g.directionalForecasts).toFixed(6)):null;
-  g.confidentColorHitRate=g.confidenceAbove65?
-    Number((g.confidenceAbove65Correct/g.confidenceAbove65).toFixed(4)):null;
-  delete g.spreadOnlySumAtr;
-  delete g.correctSameBaseline;
- }
+ const finalize=g=>{
+   g.accuracy=g.independentForecasts?
+     Number((g.correct/g.independentForecasts).toFixed(4)):null;
+   g.priorCandleBaselineAccuracy=g.priorCandleBaselineComparable?
+     Number((g.priorCandleBaselineCorrect/g.priorCandleBaselineComparable).toFixed(4)):null;
+   g.sameSampleModelAccuracy=g.priorCandleBaselineComparable?
+     Number((g.correctSameBaseline/g.priorCandleBaselineComparable).toFixed(4)):null;
+   g.pairedAccuracyDifference=g.priorCandleBaselineComparable?
+     Number(((g.correctSameBaseline-g.priorCandleBaselineCorrect)/
+       g.priorCandleBaselineComparable).toFixed(4)):null;
+   g.pairedDisagreementCount=g.modelOnlyCorrect+g.baselineOnlyCorrect;
+   g.spreadOnlyPositiveRate=g.directionalForecasts?
+     Number((g.spreadOnlyDirectionalPositive/g.directionalForecasts).toFixed(4)):null;
+   g.meanSpreadOnlyAtr=g.directionalForecasts?
+     Number((g.spreadOnlySumAtr/g.directionalForecasts).toFixed(6)):null;
+   g.confidentColorHitRate=g.confidenceAbove65?
+     Number((g.confidenceAbove65Correct/g.confidenceAbove65).toFixed(4)):null;
+   g.distinctMarketTimeBuckets=g._marketCandleTimes.size;
+   g.distinctUtcTradingDays=g._utcDays.size;
+   // All four currencies can react to the same USD event; even different
+   // pair/candle rows are NOT guaranteed to be independent market episodes.
+   g.independenceWarning='Pairs share market time and USD exposure; stage groups are not IID trade samples';
+   delete g.spreadOnlySumAtr;
+   delete g.correctSameBaseline;
+   delete g._marketCandleTimes;
+   delete g._utcDays;
+ };
+ for(const g of Object.values(pairGroups))finalize(g);
+ for(const g of Object.values(stageGroups))finalize(g);
  return {artifact:ARTIFACT,researchOnly:true,modifiesExecution:false,
-  promotionAllowed:false,asOf:new Date(asOf).toISOString(),
-  source:'PREVIOUSLY_PERSISTED_ASOF_FORECAST_PLUS_LATER_NATIVE_CANDLE',
-  inputPredictions:items.length,matchedCompleted:matched,pendingOutcomes:pending,
-  missingNativeOutcome:missing,rejectedOrInvalidOutcome:other,
-  byFixedStageInstrument:groups,
-  limitations:[
-   'One prediction per instrument/bar/stage; different stages of the same bar are correlated and must not be added as independent episodes.',
-   'The forecast was persisted before the following bar matured. Current or future OHLC cannot retroactively change prediction fields.',
-   'Historical next-candle body after contemporaneous spread is NOT an executable entry/exit fill and does NOT include commission, slippage, SL/TP path, margin, or financing.',
-   'Prior-candle continuation baseline uses the earlier completed broker-native candle and the spread/ATR allowance known at the forecast timestamp; unverified prior bars are excluded from paired baseline comparisons.',
-   'The model versus baseline paired comparison uses identical matured forecast episodes. No hindsight-selected majority class is used.',
-   'Insufficient market days and no independent after-cost evidence: neither model qualifies for broker execution.',
-  ]};
+   promotionAllowed:false,asOf:new Date(asOf).toISOString(),
+   source:'PREVIOUSLY_PERSISTED_ASOF_FORECAST_PLUS_LATER_NATIVE_CANDLE',
+   inputPredictions:items.length,matchedCompleted:matched,pendingOutcomes:pending,
+   missingNativeOutcome:missing,rejectedOrInvalidOutcome:other,
+   byFixedStageInstrument:pairGroups,
+   byFixedStageAcrossInstruments:stageGroups,
+   evidenceStatus:'SHADOW_RESEARCH_ONLY_NO_AFTER_COMMISSION_EDGE_ESTABLISHED',
+   limitations:[
+     'Within each fixed timeframe and stage, each instrument/candle counts once. Different stages of the same candle are correlated and must not be added as independent observations.',
+     'Four pairs share market time and USD shocks; distinct instrument candles are not independent market regimes or actual trades. Stage-level distinct market-time buckets disclose this clustering.',
+     'Model and earlier completed-candle continuation baseline use exact same matured and validated forecast episodes; model-only and baseline-only correct counts expose the paired disagreement.',
+     'The forecast was persisted before the following bar matured. Current or future OHLC cannot retroactively change prediction fields.',
+     'Historical next-candle body after contemporaneous spread is NOT an executable entry/exit fill and does NOT include commission, slippage, SL/TP path, margin, or financing.',
+     'Insufficient market days and no independent after-cost evidence: neither model qualifies for broker execution.',
+   ]};
 }
 async function audit({asOf=new Date(),dir=ROOT}={}){
  require('dotenv').config({path:path.join(__dirname,'..','.env'),quiet:true});

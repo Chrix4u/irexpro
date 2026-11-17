@@ -89,3 +89,21 @@ Do **not** add +15s and +45s forecasts of the same underlying M1 candle together
 The baseline audit is research only: no changes to broker execution, model promotion, position limits, drawdown protection, stop-loss or take-profit. Prospective results must continue accumulating across distinct UTC trading days and instruments; later validation will require broker bid/ask entry and exit feasibility, complete commissions and risk-at-stop exposure before considering shadow advisory promotion.
 
 Source: `apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.cjs`; test: `apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.test.cjs`. Deployment involves restarting **only** `irexpro-forming-candle-outcome-audit` PM2 and checking its read-only output file. The recorded historical measurements and forecast files remain private to the VPS.
+
+## Exact matched-pair benchmark and correlated-time safeguard (17 November, 18:06 UTC)
+
+The prospective audit now reports **byFixedStageAcrossInstruments** in addition to per-instrument evidence. Its two accuracy rates use the **exact same matured forecasts** when a valid earlier completed candle exists. A deterministic `priorCandleContinuationBaseline` uses only the immediately preceding broker-native candle, classified using the contemporaneous forecast's measured spread/ATR allowance. An absent or malformed earlier candle is not treated as a wrong baseline guess. The paired summary also counts `modelOnlyCorrect` and `baselineOnlyCorrect`, not just two unpaired percentages.
+
+Historical snapshot at **18:06:22 UTC**: 342 real forecasts had been recorded, 320 next-candle outcomes matured, 18 pending and 4 lacked a verifiable native next candle. These are **forecast events, not trades**, and no commission-adjusted profit is implied.
+
+| Fixed stage | Matured forecast episodes | Same-sample AI accuracy | Same-sample preceding-candle baseline | Different market-time buckets | Mean spread-only directional ATR |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| M1 +15s | 129 (128 baseline comparable) | 42.97% | 34.38% | 38 | -0.118464 |
+| M1 +45s | 165 (164 baseline comparable) | 40.24% | 39.02% | 49 | -0.118184 |
+| M5 +285s | 26 | 53.85% | 38.46% | **8** | +0.027938 |
+
+Do not add M1 +15s to M1 +45s as independent market outcomes: they can forecast the same following candle. Likewise four currency pairs can share USD macroeconomic drivers and the same market-time bucket. All displayed observations came from **one UTC trading date** and cannot justify execution or model promotion. A positive spread-only price result does not cover the real broker commission, slippage, intraminute barrier path, or account drawdown.
+
+**M5 early-stage gap:** at 18:08 UTC the owner broker's latest recorded M5 bucket was 18:00 (some M5 records had updates several minutes after their nominal close), while M1 quote buckets were already present at 18:08. As a result the 15-second-after-M5-open forward inference often has no finalized preceding broker-native M5 bar. The system correctly fails closed with `MOST_RECENT_PRIOR_BAR_MISSING`. Do not repair that by taking a later finalized M5 candle or silently substituting an approximate in-progress bar; such changes would break the training/inference as-of contract. Investigate independently time-verified M1-to-M5 aggregation and retraining before enabling earlier M5 forecasts.
+
+The file `latest-outcome-audit.json` is refreshed by the existing five-minute research PM2 service and remains explicitly `researchOnly=true`, `promotionAllowed=false`. All existing live DEMO broker entries, profit protection, lots, risk limits and the LIVE account are untouched.
