@@ -38,6 +38,7 @@ import {
 } from './m1-tactical-evidence.service';
 import {
   M1TacticalMarketDataService,
+  type M1TacticalMarketSnapshot,
   type M1TacticalMarketReadiness,
 } from './m1-tactical-market-data.service';
 import {
@@ -46,6 +47,7 @@ import {
   type M1TacticalCandidate,
 } from './m1-tactical-candidate';
 import { buildM1TacticalFeatures, type M1TacticalFeatureSnapshot } from './m1-tactical-features';
+import { evaluatePepperstoneDemoAdvisoryQuality } from './pepperstone-demo-advisory-quality-risk';
 import {
   classifyM1TacticalRoute,
   type M1TacticalRoute,
@@ -1171,6 +1173,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         decisionTime,
         market.paperSimulationSpreadPrice,
         trainedExpertForSlot,
+        market,
       );
     }
 
@@ -1525,6 +1528,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     decisionTime: Date,
     paperSimulationSpreadPrice?: number,
     trainedExpertForSlot?: (direction: 'BUY' | 'SELL') => Promise<HighConvictionOverlay>,
+    brokerMarketContext?: M1TacticalMarketSnapshot,
   ): Promise<void> {
     if (!features) return;
     // Observational timings only; never consulted by risk or entry authority.
@@ -3062,6 +3066,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           extensionExhaustionDemoScout,
           demoAlternativeTrial,
           guardedPullback.eligible,
+          brokerMarketContext,
         );
       } finally {
         timings.orderDispatchMs = Math.max(0, Date.now() - dispatchStartedAt);
@@ -3231,6 +3236,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       | AdvisoryAlternateTrialDecision
       | null = null,
     guardedPullbackRecovery = false,
+    brokerMarketContext?: M1TacticalMarketSnapshot,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -3435,11 +3441,61 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       );
       return;
     }
+    // The owner-verified, opt-in continuous DEMO advisory can continue to
+    // collect independent trades with no cumulative quota while reflecting
+    // weaker confirmation and as-of paid-fee losses in its requested lot cap.
+    // Existing broker margin, stop, currency exposure and portfolio checks
+    // remain authoritative. No negative trade history is a permanent veto.
+    const qualityRiskEnabled =
+      pepperstoneDemoRiskPilot &&
+      demoAlternativeTrial?.eligible === true &&
+      demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT &&
+      demoAlternativeTrial.continuousEvidence === true &&
+      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_ADVISORY_QUALITY_RISK', '') === 'enabled' &&
+      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId;
+    let qualityRisk: ReturnType<typeof evaluatePepperstoneDemoAdvisoryQuality> | null = null;
+    if (qualityRiskEnabled && multimodelDemo) {
+      let recent: Awaited<ReturnType<
+        M1TacticalEvidenceService['loadOwnerPepperstoneDemoAdvisoryRecentNet']
+      >> | null = null;
+      try {
+        recent = await this.evidence.loadOwnerPepperstoneDemoAdvisoryRecentNet({
+          userId, brokerConnectionId, instrument: candidate.instrument,
+          direction: candidate.direction,
+          strategyRoute: multimodelDemo.ensemble.strategyRoute as
+            'CONFIRMED_REVERSAL'|'EARLY_TRANSITION',
+          asOf: decisionTime,
+        });
+      } catch (error) {
+        // Missing history must not restore full-size DOUBLE_ABSTAIN entries.
+        this.logger.warn(
+          'DEMO advisory historical after-fee evidence unavailable: ' +
+            (error as Error).message,
+        );
+      }
+      qualityRisk = evaluatePepperstoneDemoAdvisoryQuality({
+        route: multimodelDemo.ensemble.strategyRoute,
+        m1Route: routeDecision.route,
+        expertState: multimodelDemo.trainedExpert.state,
+        expertDirection: multimodelDemo.trainedExpert.direction,
+        signalDirection: candidate.direction,
+        expertProbability: multimodelDemo.trainedExpert.meanOpportunityProbability,
+        decisionTime, stopDistance: candidate.stopDistance,
+        m5: brokerMarketContext?.m5,
+        h1: brokerMarketContext?.h1,
+        recent,
+      });
+    }
+    const qualityAdjustedVolumeCap = qualityRisk
+      ? Math.min(executionVolumeCap,executionVolumeCap*qualityRisk.riskFraction)
+      : executionVolumeCap;
     const currencyExposureGuard = await this.resolveM1CurrencyExposureGuard(
       userId,
       brokerConnectionId,
       candidate,
-      guardedPullbackRecovery ? Math.min(executionVolumeCap, 0.2) : executionVolumeCap,
+      guardedPullbackRecovery
+        ? Math.min(qualityAdjustedVolumeCap, 0.2)
+        : qualityAdjustedVolumeCap,
       pepperstoneDemoRiskPilot,
     );
     if (!currencyExposureGuard.allowed) {
@@ -3693,6 +3749,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ],
           m1_scout_requested_volume_cap: executionVolumeCap,
           m1_scout_execution_volume_cap: finalExecutionVolumeCap,
+          m1_advisory_quality_risk_artifact: qualityRisk?.artifact ?? null,
+          m1_advisory_quality_risk_fraction: qualityRisk?.riskFraction ?? null,
+          m1_advisory_quality_risk_rationale: qualityRisk?.rationale ?? null,
+          m1_advisory_quality_m5_direction: qualityRisk?.m5Direction ?? null,
+          m1_advisory_quality_h1_direction: qualityRisk?.h1Direction ?? null,
+          m1_advisory_quality_recent_net_samples: qualityRisk?.recentSamples ?? null,
+          m1_advisory_quality_recent_average_net_r: qualityRisk?.recentAverageNetR ?? null,
           m1_pepperstone_demo_reentry_and_risk_pilot: pepperstoneDemoRiskPilot,
           m1_pepperstone_demo_alternative_trial: demoAlternativeTrial?.eligible === true,
           m1_pepperstone_demo_advisory_alternates:

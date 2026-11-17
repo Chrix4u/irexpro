@@ -848,6 +848,7 @@ function phase2Harness(
     enableCounterPilot?: boolean;
     enableAdvisoryAlternates?: boolean;
     enableContinuousAdvisory?: boolean;
+    enableQualityRisk?: boolean;
     rollout?: any;
     evidenceByRoute?: Record<string, any[]>;
     shadowPairSideOutcomes?: Array<{ observedAt: Date; netR: number }>;
@@ -937,6 +938,9 @@ function phase2Harness(
           ? 'enabled'
           : '',
         IREXPRO_PEPPERSTONE_DEMO_CONTINUOUS_ALTERNATES: options.enableContinuousAdvisory
+          ? 'enabled'
+          : '',
+        IREXPRO_PEPPERSTONE_DEMO_ADVISORY_QUALITY_RISK: options.enableQualityRisk
           ? 'enabled'
           : '',
         VPS_FOREX_SCANNER_USER_ID: options.enableContinuousAdvisory ? 'user-1' : '',
@@ -1057,6 +1061,9 @@ function phase2Harness(
     p90FeeR: 0.285,
   });
   const loadPepperstonePairSideAsOfRows = jest.fn().mockResolvedValue([]);
+  const loadOwnerPepperstoneDemoAdvisoryRecentNet = jest.fn().mockResolvedValue({
+    samples:5,losing:4,winning:1,averageNetR:-0.42,
+  });
   const loadPendingDriftCounterfactuals = jest.fn().mockResolvedValue([]);
   const markDriftCounterfactual15m = jest.fn().mockResolvedValue(undefined);
   const loadMatureLowVolRangeLeaders = jest.fn().mockResolvedValue([]);
@@ -1086,6 +1093,7 @@ function phase2Harness(
     loadRecentlyProtectedSameSideReentry,
     loadPriorClosedCommissionRiskR,
     loadPepperstonePairSideAsOfRows,
+    loadOwnerPepperstoneDemoAdvisoryRecentNet,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
     loadMatureLowVolRangeLeaders,
@@ -1193,6 +1201,7 @@ function phase2Harness(
     loadRecentlyProtectedSameSideReentry,
     loadPriorClosedCommissionRiskR,
     loadPepperstonePairSideAsOfRows,
+    loadOwnerPepperstoneDemoAdvisoryRecentNet,
     loadPendingDriftCounterfactuals,
     markDriftCounterfactual15m,
     loadMatureLowVolRangeLeaders,
@@ -3503,6 +3512,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
         session: fullAutoSession,
         enableAdvisoryAlternates: true,
         enableContinuousAdvisory: true,
+        enableQualityRisk: true,
         suspendTrendContinuation: true,
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
@@ -3580,6 +3590,10 @@ describe('M1 V8 multi-model DEMO authority', () => {
       expect(record?.executionAuthority).toBe('BROKER_NATIVE');
       expect(h.loadDemoAlternativeTrialEntryCount).not.toHaveBeenCalled();
       expect(h.isPepperstoneDemoBrokerConnection).toHaveBeenCalled();
+      expect(h.loadOwnerPepperstoneDemoAdvisoryRecentNet).toHaveBeenCalledWith(
+        expect.objectContaining({instrument:'EURUSD',direction:'BUY',
+          strategyRoute:'CONFIRMED_REVERSAL'}),
+      );
       expect(h.receiveSignal).toHaveBeenCalledWith(
         expect.objectContaining({
           direction: 'BUY',
@@ -3587,11 +3601,17 @@ describe('M1 V8 multi-model DEMO authority', () => {
           metadata: expect.objectContaining({
             m1_pepperstone_demo_advisory_alternates: true,
             m1_pepperstone_demo_continuous_evidence: true,
+            m1_advisory_quality_risk_artifact:
+              'pepperstone-demo-continuous-advisory-quality-risk-v1',
+            m1_advisory_quality_risk_fraction: 0.35,
             multimodel_execution_authority_path: 'DEMO_CONTINUOUS_REVERSAL_EARLY_EVIDENCE',
             m1_pepperstone_demo_alternative_trial_expires_at: null,
           }),
         }),
       );
+      const sent=h.receiveSignal.mock.calls[0]?.[0];
+      expect(sent.suggestedVolume).toBeGreaterThan(0);
+      expect(sent.suggestedVolume).toBeLessThan(2);
       expect(h.closeTrade).not.toHaveBeenCalled();
     } finally {
       jest.useRealTimers();
