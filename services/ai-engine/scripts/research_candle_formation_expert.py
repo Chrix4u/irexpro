@@ -83,6 +83,11 @@ def read_broker_candles(path: str | Path) -> pd.DataFrame:
 def _frame_features(bars: pd.DataFrame) -> pd.DataFrame:
     """All rolling calculations use this or earlier COMPLETED candles only."""
     x = bars.sort_values("bucket_time").copy().reset_index(drop=True)
+    x["bucket_time"] = pd.to_datetime(x["bucket_time"], utc=True)
+    if "available_at" not in x.columns:
+        x["available_at"] = x["bucket_time"] + pd.to_timedelta(
+            MINUTES[str(x["timeframe"].iloc[0])], unit="m"
+        )
     eps = 1e-10
     o, h, l, c = (x[k] for k in ("open", "high", "low", "close"))
     tr = pd.concat([(h-l), (h-c.shift(1)).abs(), (l-c.shift(1)).abs()], axis=1).max(axis=1)
