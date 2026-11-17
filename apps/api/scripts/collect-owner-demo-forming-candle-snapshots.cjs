@@ -21,7 +21,7 @@ const MAX_OBSERVATION_LAG_MS=10000;
 const MAX_DECISION_QUOTE_AGE_MS=8500;
 const FIRST_QUOTE_WINDOW_MS=12000;
 const MIN_OBSERVED_SAMPLES=2;
-const RETAIN_DAYS=30;
+const RETAIN_DAYS=90;
 const MAX_DAY_BYTES=32*1024*1024;
 const ROOT='/home/lightworld/webapps/irexpro-research/forming-candle-snapshots';
 const SOURCE='/home/lightworld/webapps/irexpro-research/native-quote-snapshots';
@@ -172,13 +172,71 @@ function pruneSnapshots(dir=ROOT,now=new Date()){
   }
   return removed;
 }
+/**
+ * Efficient forward-only replay of previously saved *as-of* native quotes.
+ * Crucially, the latest complete candle is NEVER read during feature
+ * construction. A quote first observed after a slot stays invisible.
+ */
+function replayArchivedDay(text,fromMs,toMs){
+  if(!(Number.isFinite(fromMs)&&Number.isFinite(toMs))||
+      toMs<fromMs||toMs-fromMs>86400000)
+    throw Error('BACKFILL_WINDOW_MUST_BE_AT_MOST_ONE_DAY');
+  const rows=archiveRows(text).sort((a,b)=>a.observed-b.observed);
+  const end=Math.min(toMs,Date.now()-15000);
+  let pointer=0,buffer=[];
+  const result=[];
+  const start=Math.ceil(fromMs/STAGE_MS)*STAGE_MS;
+  for(let slot=start;slot<=end;slot+=STAGE_MS){
+    while(pointer<rows.length&&rows[pointer].observed<=slot){
+      const q=rows[pointer++];if(q.source<=slot)buffer.push(q);
+    }
+    const begin=Math.floor(slot/FIVE_MS)*FIVE_MS;
+    if(buffer.length)buffer=buffer.filter(q=>q.source>=begin&&q.source<=slot);
+    if(slot%MINUTE_MS!==0)
+      result.push(...snapshotsAt(buffer,slot));
+  }
+  return result;
+}
+function backfillArchives(opts={}){
+  const source=opts.source||SOURCE,dir=opts.dir||ROOT;
+  const now=opts.now||new Date();
+  const seen=new Set();
+  fs.mkdirSync(dir,{recursive:true,mode:0o700});
+  const days=[1,0].map(n=>new Date(now.getTime()-n*86400000).toISOString().slice(0,10));
+  let candidates=0,written=0,duplicates=0,capped=0;
+  for(const day of days){
+    const outFile=path.join(dir,day+'.jsonl');
+    if(fs.existsSync(outFile)){
+      for(const line of fs.readFileSync(outFile,'utf8').split('\n')){
+        try{const x=JSON.parse(line);if(x.artifact===ARTIFACT)seen.add(snapshotKey(x));}
+        catch{}
+      }
+    }
+    const file=path.join(source,day+'.jsonl');
+    if(!fs.existsSync(file))continue;
+    const body=fs.readFileSync(file,'utf8');
+    const from=Date.parse(day+'T00:00:00.000Z');
+    const end=Math.min(from+86400000-STAGE_MS,now.getTime()-15000);
+    if(end<=from)continue;
+    const generated=replayArchivedDay(body,from,end);
+    const result=persist(generated,{dir,seen});
+    candidates+=generated.length;written+=result.written;
+    duplicates+=result.duplicates;capped+=result.capped;
+  }
+  return {days,candidates,written,duplicates,capped,
+    noBrokerQueries:true,noDatabaseWrites:true,modifiesExecution:false};
+}
 function processSlot(slot,opts={}){
   const source=opts.source||SOURCE;
   const q=sourceQuotesForSlot(slot,source);
   return persist(snapshotsAt(q,slot),opts);
 }
 async function main(){
-  if(!process.argv.includes('--watch'))throw Error('RESEARCH_WATCH_FLAG_REQUIRED');
+  if(process.argv.includes('--backfill')){
+    console.log('FORMING_CANDLE_BACKFILL',JSON.stringify(backfillArchives()));
+    return;
+  }
+  if(!process.argv.includes('--watch'))throw Error('RESEARCH_WATCH_OR_BACKFILL_FLAG_REQUIRED');
   const seen=restoreRecentSeen(ROOT,new Date());
   let lastSlot=null,active=false,cycles=0,stored=0,lastDay='';
   async function step(){
@@ -210,7 +268,7 @@ async function main(){
 }
 module.exports={ARTIFACT,FOCUS,ROOT,SOURCE,STAGE_MS,RETAIN_DAYS,
   validQuote,candleFromQuotes,snapshotsAt,archiveRows,latestTail,
-  sourceQuotesForSlot,restoreRecentSeen,persist,pruneSnapshots,processSlot};
+  sourceQuotesForSlot,restoreRecentSeen,persist,pruneSnapshots,processSlot,replayArchivedDay,backfillArchives};
 if(require.main===module)main().catch(e=>{
   console.error('FORMING_CANDLE_SHADOW_FATAL',String(e.message).slice(0,170));
   process.exitCode=1;
