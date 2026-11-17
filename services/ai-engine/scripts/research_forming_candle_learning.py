@@ -16,9 +16,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts.research_candle_formation_expert import (
-    FOCUS, read_broker_candles,
-)
+try:
+    from scripts.research_candle_formation_expert import FOCUS, read_broker_candles
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    # Direct invocation: python scripts/research_forming_candle_learning.py
+    from research_candle_formation_expert import FOCUS, read_broker_candles
 
 ARTIFACT="irexpro-forming-candle-expert-research-v1"
 SNAP_ARTIFACT="irexpro-forming-candle-asof-quote-shadow-v1"
