@@ -71,11 +71,15 @@ def read_broker_candles(path: str | Path) -> pd.DataFrame:
     good = (df["open"] > 0) & (df["low"] > 0) & (df["close"] > 0)
     good &= df["high"] >= df[["open", "close"]].max(axis=1)
     good &= df["low"] <= df[["open", "close"]].min(axis=1)
-    good &= df["ask_close"] >= df["bid_close"]
-    good &= df["bid_close"] > 0
+    quote_m1 = df["timeframe"] == "M1"
+    # Higher-timeframe provider trend bars have verified OHLC but no
+    # independent bid/ask quotes. Cost is recovered strictly from earlier
+    # completed native M1 bars by decision time, never invented as zero.
+    good &= ((~quote_m1) | (df["ask_close"] >= df["bid_close"]))
+    good &= ((~quote_m1) | (df["bid_close"] > 0))
     good &= df["sample_count"] >= 2
-    good &= df["positive_quote_sample_count"] >= 2
-    good &= df["spread_close"] >= 0
+    good &= ((~quote_m1) | (df["positive_quote_sample_count"] >= 2))
+    good &= ((~quote_m1) | (df["spread_close"] >= 0))
     df = df.loc[good].copy()
     return df.sort_values(["instrument", "timeframe", "bucket_time"]).reset_index(drop=True)
 
@@ -135,6 +139,29 @@ def build_next_candle_dataset(corpus: pd.DataFrame, target: str) -> pd.DataFrame
             continue
         base = _frame_features(raw)
         base["instrument_id"] = FOCUS.index(instrument)
+        # Both M1 and M5 forecast cost evidence are derived from completed
+        # M1 bid/ask observations. Native M5+ bars have no bid/ask. We use
+        # the causal p90 of >=5 earlier *positive* spreads in the last 60
+        # real M1 samples, and refuse missing/stale quote evidence.
+        m1_raw = corpus[(corpus.instrument == instrument) &
+                        (corpus.timeframe == "M1")].sort_values("bucket_time").copy()
+        if len(m1_raw) < 40:
+            continue
+        m1_cost = m1_raw[["available_at","spread_close"]].copy()
+        m1_cost["observed_positive_spread"] = m1_cost["spread_close"].where(
+            m1_cost["spread_close"] > 0
+        )
+        m1_cost["conservative_spread_budget"] = (
+            m1_cost["observed_positive_spread"]
+            .rolling(60, min_periods=5).quantile(.90)
+        )
+        base = pd.merge_asof(
+            base.sort_values("available_at"),
+            m1_cost[["available_at","conservative_spread_budget"]].sort_values("available_at"),
+            on="available_at",direction="backward",
+            tolerance=pd.Timedelta(minutes=2),
+        )
+        base["spread_atr"] = base["conservative_spread_budget"] / base["atr"].clip(lower=1e-10)
         # Only consecutive real broker bars can have a next-candle label.
         next_start = base["bucket_time"].shift(-1)
         next_open = base["open"].shift(-1)
@@ -143,7 +170,7 @@ def build_next_candle_dataset(corpus: pd.DataFrame, target: str) -> pd.DataFrame
         next_low = base["low"].shift(-1)
         consecutive = next_start == base["available_at"]
         move = next_close - next_open
-        cost_threshold = np.maximum(base["spread_close"], 0.05*base["atr"])
+        cost_threshold = np.maximum(base["conservative_spread_budget"], 0.05*base["atr"])
         base["label"] = np.select(
             [move < -cost_threshold, move > cost_threshold],
             [0,2], default=1,
@@ -151,7 +178,7 @@ def build_next_candle_dataset(corpus: pd.DataFrame, target: str) -> pd.DataFrame
         base["target_body_atr"] = move.abs() / base["atr"].clip(lower=1e-10)
         base["target_range_atr"] = (next_high-next_low) / base["atr"].clip(lower=1e-10)
         base["next_price_move"] = move
-        base["next_spread_at_entry"] = base["spread_close"]
+        base["next_spread_at_entry"] = base["conservative_spread_budget"]
         base["has_contiguous_next"] = consecutive
         for tf in CONTEXTS[target]:
             context = corpus[(corpus.instrument == instrument) & (corpus.timeframe == tf)]
@@ -171,6 +198,7 @@ def build_next_candle_dataset(corpus: pd.DataFrame, target: str) -> pd.DataFrame
                 tolerance=pd.Timedelta(minutes=MINUTES[tf]*2),
             )
         keep = base["has_contiguous_next"] & base["atr"].gt(0)
+        keep &= base["conservative_spread_budget"].gt(0)
         keep &= base["target_body_atr"].notna() & base["target_range_atr"].notna()
         base = base.loc[keep].copy()
         for tf in ("M5","M15","H1","H4"):
@@ -257,6 +285,7 @@ def train_expert(input_csv: str|Path, out: str|Path, model_dir: str|Path|None=No
         "limitations":[
           "Completed broker mid OHLC cannot train an in-progress candle forecaster without archived as-of intrabar snapshots.",
           "This model predicts statistical possibilities, not known next-candle colors or exact candle heights.",
+          "Higher-timeframe M5/M15/H1/H4 OHLC have no direct bid/ask; cost proxy uses an as-of rolling p90 of positive completed native M1 spreads.",
           "Spread-only proxy is not executable P&L and excludes round-trip commission, slippage, margin and stop-loss path.",
           "One short market window and one chronological test block cannot establish persistent edge across volatility regimes.",
           "No broker execution integration. Promotion requires later unseen out-of-sample and costs-inclusive evidence.",
