@@ -459,6 +459,7 @@ interface OpenAiTradeRow {
   opened_at: Date | string | null;
   is_m1_strategy: boolean;
   strategy_route: string | null;
+  guarded_pullback_continuation?: boolean;
 }
 
 function finite(value: unknown): number | null {
@@ -637,7 +638,12 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                 risk > 0 &&
                 trade.is_m1_strategy &&
                 (trade.strategy_route === 'TREND_CONTINUATION'
-                  ? maxFavorablePnl >= risk * 0.2 && maxFavorablePnl < risk * 0.5
+                  ? (maxFavorablePnl >= risk * 0.2 && maxFavorablePnl < risk * 0.5) ||
+                    (trade.guarded_pullback_continuation === true &&
+                      !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+                      trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID &&
+                      trade.account_currency === 'USD' &&
+                      maxFavorablePnl >= risk * 0.5)
                   : process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK ===
                       'enabled' &&
                     // The pilot is owner-scoped to the known USD DEMO account.
@@ -673,6 +679,8 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                     brokerLotSize: finite(position.lotSize) ?? Number.NaN,
                     isM1Strategy: trade.is_m1_strategy,
                     strategyRoute: trade.strategy_route,
+                    guardedPullbackContinuation:
+                      trade.guarded_pullback_continuation === true,
                     initialRiskPnl: risk,
                     brokerEntryPrice: finite(position.openPrice),
                     currentPrice: finite(position.currentPrice),
@@ -713,7 +721,8 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                     if (
                       this.auditService &&
                       (trade.strategy_route === 'EARLY_TRANSITION' ||
-                        trade.strategy_route === 'CONFIRMED_REVERSAL')
+                        trade.strategy_route === 'CONFIRMED_REVERSAL' ||
+                        trade.guarded_pullback_continuation === true)
                     ) {
                       void this.recordProfitLockTrendRecheck(
                         trade,
@@ -1630,6 +1639,8 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
             ELSE NULLIF(ti.metadata->>'m1_tactical_route', '')
           END
         ) AS strategy_route,
+        (ti.metadata->>'m1_guarded_pullback_continuation' = 'true')
+          AS guarded_pullback_continuation,
         COALESCE(
           NULLIF(ca.sizing_inputs->>'finalRiskAtStop', '')::numeric,
           NULLIF(ca.sizing_inputs->>'riskAmount', '')::numeric

@@ -13,15 +13,17 @@ export interface PepperstoneDemoContinuationPause {
   blocked: boolean;
   selectedRoute: string | null;
   reason: 'DISABLED' | 'OTHER_ROUTE' | 'OTHER_BROKER' | 'CONTINUATION_PAUSED' |
-    'BROKER_SCOPE_UNAVAILABLE';
+    'BROKER_SCOPE_UNAVAILABLE' | 'GUARDED_PULLBACK_RECOVERY';
   changesOpenPositions: false;
   overridesAlternativeAdmission: false;
+  guardedPullbackRecovery: boolean;
 }
 export function evaluatePepperstoneDemoContinuationPause(input: {
   enabled: boolean;
   isProfessionalDemoPhase: boolean;
   selectedRoute: string | null;
   scopedPepperstoneDemo: boolean | null;
+  guardedPullbackRecovery?: boolean;
 }): PepperstoneDemoContinuationPause {
   const base = {
     artifact: 'pepperstone-demo-continuation-pause-v1' as const,
@@ -30,6 +32,7 @@ export function evaluatePepperstoneDemoContinuationPause(input: {
     selectedRoute: input.selectedRoute,
     changesOpenPositions: false as const,
     overridesAlternativeAdmission: false as const,
+    guardedPullbackRecovery: input.guardedPullbackRecovery === true,
   };
   if (!input.enabled || !input.isProfessionalDemoPhase)
     return {...base,blocked:false,reason:'DISABLED' as const};
@@ -41,5 +44,7 @@ export function evaluatePepperstoneDemoContinuationPause(input: {
     return {...base,blocked:true,reason:'BROKER_SCOPE_UNAVAILABLE' as const};
   if (input.scopedPepperstoneDemo === false)
     return {...base,blocked:false,reason:'OTHER_BROKER' as const};
+  if (input.guardedPullbackRecovery === true)
+    return {...base,blocked:false,reason:'GUARDED_PULLBACK_RECOVERY' as const};
   return {...base,blocked:true,reason:'CONTINUATION_PAUSED' as const};
 }

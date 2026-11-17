@@ -247,6 +247,29 @@ describe('Pepperstone DEMO explicit after-cost profit-lock close policy', () => 
     },
   );
 
+
+  it('extends the high-peak after-fee protection ONLY to explicitly tagged DEMO guarded pullbacks',()=>{
+    const guarded={
+      ...input,
+      strategyRoute:'TREND_CONTINUATION',
+      guardedPullbackContinuation:true,
+      initialRiskPnl:40,
+      maxFavorableBrokerNetPnl:28,
+      previousObservedBrokerNetPnl:18,
+      currentBrokerNetPnl:15,
+      conservativeExitReserve:5,
+    };
+    expect(evaluatePepperstoneDemoNetProfitLock(guarded)).toMatchObject({
+      shouldClose:true,reason:'PROTECTED_POSITIVE_NET_PROFIT'
+    });
+    expect(evaluatePepperstoneDemoNetProfitLock({
+      ...guarded,guardedPullbackContinuation:false,
+    }).reason).toBe('ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED');
+    expect(evaluatePepperstoneDemoNetProfitLock({
+      ...guarded,accountType:'LIVE',
+    }).shouldClose).toBe(false);
+  });
+
   it('supports SELL-side quote and protective barrier verification', () => {
     const sell = {
       ...input,

@@ -38,3 +38,20 @@ describe('Pepperstone DEMO trend continuation temporary pause', () => {
     });
   });
 });
+
+describe('guarded pullback exception to continuation pause',()=>{
+  it('lifts only the verified existing Pepperstone DEMO continuation pause for an admitted pullback',()=>{
+    const base={ enabled:true,isProfessionalDemoPhase:true,
+      selectedRoute:'TREND_CONTINUATION',scopedPepperstoneDemo:true,
+      guardedPullbackRecovery:true };
+    expect(evaluate(base)).toMatchObject({
+      blocked:false,reason:'GUARDED_PULLBACK_RECOVERY',guardedPullbackRecovery:true
+    });
+    expect(evaluate({...base,guardedPullbackRecovery:false}).blocked)
+      .toBe(true);
+    expect(evaluate({...base,scopedPepperstoneDemo:null}).blocked)
+      .toBe(true);
+    expect(evaluate({...base,selectedRoute:'EARLY_TRANSITION'}).reason)
+      .toBe('OTHER_ROUTE');
+  });
+});

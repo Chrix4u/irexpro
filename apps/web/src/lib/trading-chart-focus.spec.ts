@@ -1,4 +1,4 @@
-import { DEFAULT_DEMO_CHART_INSTRUMENTS, resolveDemoChartInstruments } from "./trading-chart-focus";
+import { DEFAULT_DEMO_CHART_INSTRUMENTS, resolveDemoChartInstruments, nextAiFocusedChartInstrument } from "./trading-chart-focus";
 
 describe("DEMO chart focus", () => {
   it("defaults to the operator-approved two pairs without exposing the legacy six", () => {
@@ -27,5 +27,25 @@ describe("DEMO chart focus", () => {
       authorityMode: "DEMO_FULL_AUTO",
       demoEntryInstruments: ["AUDUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCAD", "USDCHF"],
     })).toHaveLength(6);
+  });
+});
+
+describe("AI instrument auto-follow", () => {
+  const watched = ["EURUSD", "USDJPY", "USDCAD"];
+  it("switches the chart when a newly focused executable pair changes", () => {
+    expect(nextAiFocusedChartInstrument({ aiFocus: "USDCAD", previousAiFocus: "EURUSD", watchedInstruments: watched }))
+      .toBe("USDCAD");
+    expect(nextAiFocusedChartInstrument({ aiFocus: "USDJPY", previousAiFocus: "USDCAD", watchedInstruments: watched }))
+      .toBe("USDJPY");
+  });
+  it("does not undo a manual chart selection while AI focus is unchanged", () => {
+    expect(nextAiFocusedChartInstrument({ aiFocus: "USDCAD", previousAiFocus: "USDCAD", watchedInstruments: watched }))
+      .toBeNull();
+  });
+  it("ignores absent, unsupported and research-only focused instruments", () => {
+    for (const aiFocus of [null, "", "XAUUSD", "AUDUSD"]) {
+      expect(nextAiFocusedChartInstrument({ aiFocus, previousAiFocus: "USDCAD", watchedInstruments: watched }))
+        .toBeNull();
+    }
   });
 });

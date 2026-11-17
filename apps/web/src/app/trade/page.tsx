@@ -38,7 +38,7 @@ import {
   loadMarketIntelligence,
 } from "@/lib/market-intelligence";
 import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
-import { resolveDemoChartInstruments } from "@/lib/trading-chart-focus";
+import { resolveDemoChartInstruments, nextAiFocusedChartInstrument } from "@/lib/trading-chart-focus";
 import {
   LIVE_SCAN_STAGES,
   deriveLiveScanFrame,
@@ -1794,6 +1794,7 @@ export default function AiTradingPage() {
   const [positionsLoaded, setPositionsLoaded] = useState(false);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
   const [chartInstrument, setChartInstrument] = useState("EURUSD");
+  const previousAiFocusRef = useRef<string | null>(null);
   const [chartTimeframe, setChartTimeframe] = useState<
     "M1" | "M5" | "M15" | "H1" | "H4"
   >("M1");
@@ -3081,6 +3082,25 @@ export default function AiTradingPage() {
     fallbackConfidence: displayedConfidence,
     fallbackThreshold: displayedConfidenceThreshold,
   });
+  // Follow the AI focus when it changes, without flickering on every
+  // one-second status refresh or hijacking manual inspection of another chart.
+  // This is an UI-only change; focus cannot grant broker execution authority.
+  useEffect(() => {
+    if (!automationOn) {
+      previousAiFocusRef.current = null;
+      return;
+    }
+    const next = nextAiFocusedChartInstrument({
+      aiFocus: tradeReadiness.instrument,
+      previousAiFocus: previousAiFocusRef.current,
+      watchedInstruments,
+    });
+    if (next) {
+      previousAiFocusRef.current = next;
+      setChartInstrument(next);
+    }
+  }, [automationOn, tradeReadiness.instrument, watchedInstruments]);
+
   const activeModelUi = deriveActiveModelUiState(m1TacticalStatus);
   const openPnlTone = totalUnrealisedPnlUnavailable || totalUnrealisedPnl == null
     ? "neutral"

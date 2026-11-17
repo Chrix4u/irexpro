@@ -1563,6 +1563,38 @@ export class M1TacticalEvidenceService {
    * cTrader DEMO risk pilot. Never inferred from a scanner or generic cTrader
    * connection; missing/retired credentials do not grant the pilot.
    */
+  /**
+   * A causal prior overextension must PRECEDE the current recovered entry.
+   * This is a bounded read of previously persisted native M1 decisions,
+   * and cannot infer a pullback from the currently stretched candle.
+   */
+  async loadPriorExtendedTrendForPullback(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    asOf: Date;
+  }): Promise<Date | null> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT MAX(d.evaluated_at) AS last_extended
+        FROM trading.m1_tactical_decisions d
+        WHERE d.user_id=$1 AND d.broker_connection_id=$2
+          AND d.instrument=$3 AND d.direction=$4
+          AND d.evaluated_at >= $5::timestamptz - interval '25 minutes'
+          AND d.evaluated_at <= $5::timestamptz - interval '2 minutes'
+          AND d.governance->'multimodelEnsemble'->>'regime'='TREND_EXTENDED'
+          AND (d.governance->'oodResearchFeatures'->>'extensionAtr')::numeric >= 1.5
+      `,
+      [input.userId, input.brokerConnectionId,
+       input.instrument, input.direction, input.asOf.toISOString()],
+    )) as Array<{last_extended: Date | string | null}>;
+    const value = rows[0]?.last_extended;
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date : null;
+  }
+
   async isPepperstoneDemoBrokerConnection(input: {
     userId: string;
     brokerConnectionId: string;

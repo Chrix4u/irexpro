@@ -99,6 +99,10 @@ import {
   type AdvisoryAlternateTrialDecision,
 } from './pepperstone-demo-advisory-alternate-trial';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
+import {
+  evaluateGuardedPullback,
+  type GuardedPullbackDecision,
+} from './pepperstone-demo-guarded-pullback';
 import type { HighConvictionOverlay } from './high-conviction-overlay';
 import { evaluateProductionQualificationShadow } from './production-qualification-shadow';
 import { observePlanBReversalM1ContinuationMismatch } from './planb-reversal-m1-continuation-shadow';
@@ -2132,7 +2136,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       extensionScoutExecutable: !demoAlternativeTrial.eligible &&
         extensionExhaustionDemoScoutExecutable,
     });
-    const selectedExecutionVolumeCap =
+    let selectedExecutionVolumeCap =
       demoAlternativeTrial.eligible
         ? Math.min(recoveryCanaryVolumeCap, demoAlternativeTrial.maxLot)
         : demoPrimaryOnlyProbation.qualifiedContinuationCanary
@@ -2370,7 +2374,79 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         );
       }
     }
+    // Even with the continuation pause active, an explicitly enabled owner-
+    // scoped DEMO recovery can reopen a LIMITED 0.20-lot continuation only
+    // AFTER the earlier stretched trend has cooled inside normal Plan-B
+    // distribution and a fresh M1/M5 continuation re-accelerates.
+    const guardedPullbackEnabled =
+      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_GUARDED_PULLBACK', '') ===
+        'enabled' &&
+      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId &&
+      !!userId &&
+      professionalDemoPhase &&
+      pauseEnabled &&
+      selectedContinuationForPause &&
+      preliminaryCanExecute &&
+      pauseBrokerVerified === true &&
+      multimodelDemo?.ensemble.strategyRoute === 'TREND_CONTINUATION';
+    let priorExtendedAt: Date | null = null;
+    if (guardedPullbackEnabled) {
+      try {
+        priorExtendedAt = await this.evidence.loadPriorExtendedTrendForPullback({
+          userId, brokerConnectionId,
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          asOf: decisionTime,
+        });
+      } catch (error) {
+        // A missing/slow causal source is NEVER permission to lift the pause.
+        this.logger.warn(
+          'Guarded DEMO pullback evidence unavailable ' + candidate.instrument +
+          ': ' + (error as Error).message,
+        );
+      }
+    }
+    const guardedPullback: GuardedPullbackDecision = evaluateGuardedPullback({
+      enabled: guardedPullbackEnabled,
+      brokerVerified: pauseBrokerVerified === true,
+      decisionTime,
+      priorExtendedAt,
+      planBRoute: multimodelDemo?.ensemble.strategyRoute ?? null,
+      planBRegime: multimodelDemo?.ensemble.regime ?? null,
+      paperAdmitted: multimodelDemo?.ensemble.paperAdmitted === true,
+      governanceEligible: multimodelDemo?.governance.paperExecutionEligible === true,
+      portfolioSnapshotAvailable: multimodelDemo?.portfolioSnapshotAvailable === true,
+      driftState: multimodelDemo?.governance.driftState ?? 'UNKNOWN',
+      eventRisk: multimodelDemo?.governance.eventRisk ?? 'UNKNOWN',
+      spreadVerified: multimodelDemo?.governance.executionSpreadEvidenceValid === true,
+      costsUsable: multimodelDemo?.governance.paperExecutionCostUsable === true,
+      netExpectedR: multimodelDemo?.governance.netExpectedR ?? null,
+      confidence: candidate.confidence,
+      directionQuality: candidate.directionQuality,
+      extensionAtr: features.extensionAtr,
+      rsi14: features.rsi14,
+      alignedEmaSeparationAtr: candidate.alignedEmaSeparationAtr,
+      alignedM15: candidate.alignedM15,
+      alignedMomentum1Atr: candidate.alignedMomentum1Atr,
+      alignedMomentum3Atr: candidate.alignedMomentum3Atr,
+      alignedM5LatestBodyPressure: candidate.alignedM5LatestBodyPressure ?? 0,
+      m1Route: routeDecision.route,
+      direction: candidate.direction,
+      expertDirection: multimodelDemo?.trainedExpert.direction ?? null,
+      expertNative: multimodelDemo?.trainedExpert.allBrokerNative === true,
+      expertFreshnessSeconds: multimodelDemo?.trainedExpert.freshnessSeconds ?? null,
+      expertLongVotes: multimodelDemo?.trainedExpert.longVotes ?? 0,
+      expertShortVotes: multimodelDemo?.trainedExpert.shortVotes ?? 0,
+      stopDistance: candidate.stopDistance,
+      targetDistance: candidate.targetDistance,
+    });
+    if (guardedPullback.eligible) {
+      selectedExecutionVolumeCap = Math.min(
+        selectedExecutionVolumeCap, guardedPullback.lotCap,
+      );
+    }
     const demoContinuationPause = evaluatePepperstoneDemoContinuationPause({
+      guardedPullbackRecovery: guardedPullback.eligible,
       enabled: professionalDemoPhase && pauseEnabled &&
         preliminaryCanExecute && selectedContinuationForPause,
       isProfessionalDemoPhase: professionalDemoPhase,
@@ -2827,6 +2903,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         portfolioNetLossBrake: portfolioNetLossBrake ? { ...portfolioNetLossBrake } : null,
         demoPrimaryOnlyProbation: { ...demoPrimaryOnlyProbation },
         demoContinuationPause,
+        guardedPullback,
         demoAlternativeTrial,
         counterPilot,
         advisoryAlternateTrial,
@@ -2910,6 +2987,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m5EarlyTransitionHandoff,
           extensionExhaustionDemoScout,
           demoAlternativeTrial,
+          guardedPullback.eligible,
         );
       } finally {
         timings.orderDispatchMs = Math.max(0, Date.now() - dispatchStartedAt);
@@ -3076,6 +3154,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     demoAlternativeTrial:
       DemoAlternativeTrialDecision | CounterPilotDecision |
       AdvisoryAlternateTrialDecision | null = null,
+    guardedPullbackRecovery = false,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -3236,7 +3315,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       userId,
       brokerConnectionId,
       candidate,
-      executionVolumeCap,
+      guardedPullbackRecovery ? Math.min(executionVolumeCap, 0.2) : executionVolumeCap,
       pepperstoneDemoRiskPilot,
     );
     if (!currencyExposureGuard.allowed) {
@@ -3459,6 +3538,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
               ? m1ProfessionalSizingTier(candidate.confidence)
               : 'RESEARCH',
+          m1_guarded_pullback_continuation: guardedPullbackRecovery,
           m1_tactical_route: routeDecision.route,
           m1_policy_version: candidate.policyVersion,
           m1_rollout_policy_version: this.rolloutPolicy.version,

@@ -42,6 +42,8 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   brokerLotSize: number;
   isM1Strategy: boolean;
   strategyRoute: string | null;
+  /** Immutable owner-scoped entry lineage, not an unverified runtime claim. */
+  guardedPullbackContinuation?: boolean;
   initialRiskPnl: number | null;
   brokerEntryPrice: number | null;
   currentPrice: number | null;
@@ -176,12 +178,15 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   // behavior. The existing continuation experiment remains exactly as before.
   const alternateRoute =
     input.strategyRoute === 'EARLY_TRANSITION' ||
-    input.strategyRoute === 'CONFIRMED_REVERSAL';
+    input.strategyRoute === 'CONFIRMED_REVERSAL' ||
+    (input.strategyRoute === 'TREND_CONTINUATION' &&
+      input.guardedPullbackContinuation === true);
   const minimumPeak = alternateRoute
     ? Math.max(risk * 0.5, fee * 1.8, fee + risk * 0.15)
     : Math.max(risk * 0.2, fee * 1.65, fee + risk * 0.1);
   if (peak < minimumPeak) return reply('NO_MEANINGFUL_NET_PEAK', null, null, null, peakR);
-  // Only continuation positions retain the pre-existing <0.50R pilot cap.
+  // Legacy continuation positions retain the pre-existing <0.50R pilot cap;
+  // only immutable guarded-pullback DEMO fills receive the 0.50R+ rule.
   if (!alternateRoute && peakR >= 0.5)
     return reply('ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED', null, null, null, peakR);
   const minNetBuffer = Math.max(0.5, risk * 0.035, fee * 0.2);

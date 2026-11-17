@@ -29,3 +29,20 @@ export function resolveDemoChartInstruments(
   // Empty/malformed server data must never fall back to the old six-pair list.
   return active.length ? active : [...DEFAULT_DEMO_CHART_INSTRUMENTS];
 }
+
+/**
+ * Presentation-only AI focus transition. A manual chart selection is kept
+ * while the AI continues focusing the same pair, but a NEW focused symbol
+ * moves the chart automatically. Never switch to a research-only/paused tab.
+ */
+export function nextAiFocusedChartInstrument(input: {
+  aiFocus: string | null | undefined;
+  previousAiFocus: string | null;
+  watchedInstruments: readonly string[];
+}): string | null {
+  const focus = (input.aiFocus ?? "").trim().toUpperCase();
+  if (!SUPPORTED_FX_PAIRS.has(focus) || !input.watchedInstruments.includes(focus)) {
+    return null;
+  }
+  return input.previousAiFocus === focus ? null : focus;
+}

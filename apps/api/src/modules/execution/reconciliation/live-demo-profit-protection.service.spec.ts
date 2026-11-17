@@ -344,6 +344,43 @@ describe('LiveDemoProfitProtectionService', () => {
     }
   });
 
+
+  it('protects only the owner-tagged guarded-continuation DEMO runner after a 0.50R peak', async () => {
+    const oldNet = process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+    const oldOwner = process.env.VPS_FOREX_SCANNER_USER_ID;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = 'enabled';
+    process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
+    try {
+      const row = candidate({
+        strategy_route:'TREND_CONTINUATION',
+        guarded_pullback_continuation:true,
+        account_currency:'USD',
+        max_favorable_pnl:'28',
+        profit_giveback:'8',
+        initial_risk_pnl:'40',
+        path_observation_count:9,
+      });
+      const h = harness(
+        [row], '15', 'DEMO', [], '1.1134', [], undefined,
+        [{sample_count:9,p90_cost_per_lot:'5'}], [], [],
+        'pepperstone-ctrader',
+      );
+      await h.service.runOnce(new Date('2026-10-28T09:05:00Z'));
+      expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+        'trade-1','user-1',TradeCloseReason.PROFIT_PROTECTION,
+      );
+      h.executionService.closeTrade.mockClear();
+      (row as any).guarded_pullback_continuation=false;
+      await h.service.runOnce(new Date('2026-10-28T09:05:05Z'));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+    } finally {
+      if(oldNet===undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK=oldNet;
+      if(oldOwner===undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID=oldOwner;
+    }
+  });
+
   it('holds Pepperstone DEMO if round-trip fee evidence is missing even if gross profit is falling', async () => {
     const prior = process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK;
     process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = 'enabled';
