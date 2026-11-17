@@ -1660,6 +1660,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // escapes an M1 loss streak or any ordinary broker/risk veto.
     const crossSleeveReversalCandidate =
       professionalDemoPhase &&
+      !!userId &&
+      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId &&
       routeDecision.route === 'M1_EARLY_TRANSITION' &&
       demoProfitabilityReliabilityGate?.degradedEarlyTransitionVeto === true &&
       multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL' &&
