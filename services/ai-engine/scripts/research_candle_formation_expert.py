@@ -234,8 +234,8 @@ def chronological_splits(d: pd.DataFrame, timeframe: str):
         "validationCutoff":t2.isoformat(),"embargoHours":1}
 
 
-def score(model, magnitude, span, d, baseline_class):
-    X=d.loc[:,list(FEATURE_NAMES)]
+def score(model, magnitude, span, d, baseline_class, active_features):
+    X=d.loc[:,active_features]
     probs=model.predict_proba(X)
     labels=model.classes_
     predicted=labels[np.argmax(probs,axis=1)]
@@ -298,7 +298,18 @@ def train_expert(input_csv: str|Path, out: str|Path, model_dir: str|Path|None=No
         try:
             d=build_next_candle_dataset(data,tf)
             tr,val,te,boundaries=chronological_splits(d,tf)
-            X_tr=tr.loc[:,list(FEATURE_NAMES)]
+            # Sklearn HistGB's bin mapper cannot handle training columns
+            # with *no* observed values (e.g. M5-only ctx_m5_*). Select
+            # features from TRAINING only; freeze exact schema for validation
+            # and untouched test to prevent forward feature-selection leakage.
+            active_features=[
+                name for name in FEATURE_NAMES
+                if tr[name].notna().sum() >= max(30,int(.03*len(tr)))
+                and tr[name].nunique(dropna=True) > 1
+            ]
+            if len(active_features)<12:
+                raise ValueError("INSUFFICIENT_TRAIN_FEATURE_COVERAGE")
+            X_tr=tr.loc[:,active_features]
             y_tr=tr["label"]
             if len(np.unique(y_tr))<3:
                 raise ValueError("TRAINING_TARGET_CLASS_COVERAGE_INSUFFICIENT")
@@ -316,9 +327,9 @@ def train_expert(input_csv: str|Path, out: str|Path, model_dir: str|Path|None=No
                     "sampleCount":len(d),"trainSamples":len(tr),
                     "validationSamples":len(val),"testSamples":len(te),
                     "boundaries":boundaries,
-                    "validation":score(model,mag,span,val,int(y_tr.value_counts().idxmax())),
-                    "untouchedChronologicalTest":score(model,mag,span,te,int(y_tr.value_counts().idxmax())),
-                    "featureCount":len(FEATURE_NAMES),
+                    "validation":score(model,mag,span,val,int(y_tr.value_counts().idxmax()),active_features),
+                    "untouchedChronologicalTest":score(model,mag,span,te,int(y_tr.value_counts().idxmax()),active_features),
+                    "featureCount":len(active_features),
                     "instruments":list(FOCUS)}
             result["timeframes"][tf]=report
             if model_dir is not None:
@@ -326,7 +337,7 @@ def train_expert(input_csv: str|Path, out: str|Path, model_dir: str|Path|None=No
                 target.mkdir(parents=True,exist_ok=True)
                 f=target/f"candle_formation_{tf.lower()}_RESEARCH_ONLY.joblib"
                 dump({"artifact":ARTIFACT,"frame":tf,"model":model,"bodyModel":mag,
-                      "rangeModel":span,"features":FEATURE_NAMES,"boundaries":boundaries,
+                      "rangeModel":span,"features":active_features,"boundaries":boundaries,
                       "researchOnly":True},f)
                 f.chmod(0o600)
         except (ValueError,KeyError) as exc:
