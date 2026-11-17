@@ -15,6 +15,11 @@ on:
       - services/ai-engine/tests/test_research_forming_candle_learning.py
       - services/ai-engine/scripts/research_forming_candle_independent_stages.py
       - services/ai-engine/tests/test_research_forming_candle_independent_stages.py
+      - services/ai-engine/scripts/research_forming_candle_forward_score.py
+      - services/ai-engine/tests/test_research_forming_candle_forward_score.py
+      - apps/api/scripts/owner-demo-forming-candle-forward-shadow.cjs
+      - apps/api/scripts/owner-demo-forming-candle-forward-shadow.test.cjs
+      - apps/api/scripts/irexpro-forming-candle-forward-shadow.pm2.config.cjs
       - .github/workflows/research-candle-formation-expert.yml
   workflow_dispatch:
 
@@ -39,11 +44,16 @@ jobs:
           node --check apps/api/scripts/export-owner-demo-candle-training-corpus.cjs
           node --check apps/api/scripts/collect-owner-demo-forming-candle-snapshots.cjs
           node --check apps/api/scripts/irexpro-forming-candle-shadow.pm2.config.cjs
+          node --check apps/api/scripts/owner-demo-forming-candle-forward-shadow.cjs
+          node --check apps/api/scripts/irexpro-forming-candle-forward-shadow.pm2.config.cjs
       - name: Verify strict 15-second as-of native snapshots and no trade authority
         run: node --test apps/api/scripts/collect-owner-demo-forming-candle-snapshots.test.cjs
+      - name: Verify prospective as-of prediction recorder is read-only
+        run: node --test apps/api/scripts/owner-demo-forming-candle-forward-shadow.test.cjs
       - name: Verify no future-candle leakage and no broker authority
         working-directory: services/ai-engine
         run: |
           python -m unittest discover -s tests -p test_research_candle_formation_expert.py -v
           python -m unittest discover -s tests -p test_research_forming_candle_learning.py -v
           python -m unittest discover -s tests -p test_research_forming_candle_independent_stages.py -v
+          python -m unittest discover -s tests -p test_research_forming_candle_forward_score.py -v
