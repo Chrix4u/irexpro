@@ -13,6 +13,7 @@ test('4 to 7 lots scale both commission and losses, not the model win rate',()=>
   assert.equal(x.status,'EXCEEDS_STOP_RISK_CAP');
   assert.equal(x.targetLots,7);
   assert.equal(x.hypotheticalCommissionUsd,-42);
+  assert.equal(x.hypotheticalFeeOutlayUsd,42);
   assert.equal(x.hypotheticalNetUsd,147.41);
   assert.equal(x.hypotheticalStopRiskUsd,362.35);
   assert.equal(x.riskBudgetPass,false);
@@ -65,4 +66,10 @@ test('reports each lot size and route with costs and all risk exemptions separat
 test('rejects invalid equity and attempts to override conservative stop-loss budget',()=>{
   assert.throws(()=>reportLadder([t],{equityUsd:0,riskPercent:.25}),/REQUIRED/);
   assert.throws(()=>reportLadder([t],{equityUsd:48064,riskPercent:2}),/REQUIRED/);
+});
+
+test('swap credits are not reported as commission charges',()=>{
+  const x=scenario({...t,swap:'15.00'},7,120.16);
+  assert.equal(x.hypotheticalFeeOutlayUsd,42);
+  assert.equal(x.hypotheticalSwapUsd,61.76);
 });
