@@ -147,6 +147,9 @@ def build_next_candle_dataset(corpus: pd.DataFrame, target: str) -> pd.DataFrame
                         (corpus.timeframe == "M1")].sort_values("bucket_time").copy()
         if len(m1_raw) < 40:
             continue
+        if "available_at" not in m1_raw.columns:
+            m1_raw["bucket_time"] = pd.to_datetime(m1_raw["bucket_time"], utc=True)
+            m1_raw["available_at"] = m1_raw["bucket_time"] + pd.Timedelta(minutes=1)
         m1_cost = m1_raw[["available_at","spread_close"]].copy()
         m1_cost["observed_positive_spread"] = m1_cost["spread_close"].where(
             m1_cost["spread_close"] > 0
