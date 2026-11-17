@@ -112,7 +112,7 @@ function DirectionCard({ side, label }: { side: BidirectionalSideView | null; la
             </p>
           )}
           <p className="text-sm muted mt-1" style={{ marginBottom: 0 }}>
-            This describes the model's historical feature range, not a broker outage.
+            This describes the model&apos;s historical feature range, not a broker outage.
             {!side.paperAdmitted && ' This direction also failed model admission separately.'}
             {side.netExpectedR != null && side.netExpectedR < 0 &&
               ' Estimated net return after costs is negative.'}
@@ -234,7 +234,7 @@ export default function BidirectionalDecisionPage() {
               These are paired BUY and SELL PAPER research decisions for closed M5 bars,
               not broker orders. The separate M1 reversal/early-transition DEMO trial
               can have different entry decisions. An out-of-distribution label means
-              one or more features fell outside the model's historical training range;
+              one or more features fell outside the model&apos;s historical training range;
               it is not a diagnosis of a failed price feed.
             </p>
             <section className="mt-4">
