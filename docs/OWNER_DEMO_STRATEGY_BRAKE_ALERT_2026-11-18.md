@@ -13,11 +13,15 @@ The owner reported that DEMO trading was silent after the last position closed a
 
 ## Installation/verification
 
-From `apps/api`, apply the migration before activating the new endpoint:
+The owner-decision migration CreateDemoStrategyBrakeOwnerDecisions1795020000000
+was **applied and verified on the authorized staging database on 18 November 2026**,
+including the recorded public.migrations entry and the new trading table.
 
-```bash
-./node_modules/.bin/typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts
-```
+**Existing project caveat:** The generic TypeORM migration CLI glob picks up an
+unrelated *.spec.ts test file and fails with ReferenceError: describe is not defined.
+For this deployment, a temporary TypeORM DataSource loaded **only the named migration**
+and called runMigrations({transaction:'each'}). Do not rerun the broad CLI
+until its migration discovery pattern is repaired.
 
 Verify tests:
 
