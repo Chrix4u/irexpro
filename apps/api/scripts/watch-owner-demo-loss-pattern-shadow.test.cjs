@@ -136,3 +136,55 @@ test('DB snapshot enforced REPEATABLE READ READ ONLY',async()=>{
  assert.equal(calls[0].sql,'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
  assert.equal(calls.at(-1).sql,'COMMIT');
 });
+
+test('forward entry event preserves genuinely pre-entry completed candlesticks',()=>{
+ const fingerprint={mode:'FROZEN_BROKER_NATIVE_PRE_ENTRY_CANDLES_ONLY',
+   M1:{state:'VERIFIED_COMPLETED_AS_OF_ENTRY',latestCandle:'LONG_UPPER_REJECTION_WICK'},
+   M5:{state:'VERIFIED_COMPLETED_AS_OF_ENTRY',latestCandle:'BEAR_WIDE_BODY'}};
+ const x=m.plan(row({preEntryCandlesticks:fingerprint}),new Map(),when+12000,baseline)[0];
+ assert.equal(x.stage,'ENTRY');
+ assert.equal(x.entry.preEntryCandlesticks.M1.latestCandle,'LONG_UPPER_REJECTION_WICK');
+ assert.equal(x.entry.preEntryCandlesticks.noTradingAuthority,undefined);
+ assert.equal(x.noPostEntryDataAtEnrollment,true);
+ assert.equal(Object.hasOwn(x,'settledNetUsd'),false);
+});
+test('settlement cannot be graded when broker closed before frozen entry timestamp',()=>{
+ const e=m.plan(row(),new Map(),when+12000,baseline)[0];
+ const closed=m.plan(row({status:'CLOSED',
+  closed_at:new Date(when+7000).toISOString(),
+  realised_pnl:'-55',commission:'-12',swap:'0'}),m.setStages([e]),when+160000,baseline);
+ assert.equal(closed.some(x=>x.stage==='SETTLED'),false);
+});
+test('worker tick fetches and persists frozen candle fingerprints once',async()=>{
+ const {QUERY}=require('./owner-demo-entry-candlestick-context.cjs');
+ const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'irexpro-entry-wick-'));
+ try{
+  const calls=[];
+  const db={query:async(sql,args)=>{
+   calls.push(sql);
+   if(sql===m.SQL)return {rows:[row({broker_connection_id:
+    '54e9a1e6-8d74-425f-9bfa-991235815c73'})]};
+   if(sql===QUERY)return {rows:[{
+    timeframe:'M1',bucket_time:new Date(when-120000).toISOString(),
+    open:1.1300,high:1.1330,low:1.1299,close:1.1303,
+    source:'ctrader-broker-native',sample_count:10,positive_quote_sample_count:8,
+    last_sample_at:new Date(when-61000).toISOString(),
+    created_at:new Date(when-118000).toISOString(),
+    updated_at:new Date(when-61000).toISOString(),
+   }]};
+   return {rows:[]};
+  }};
+  const result=await m.tick({client:db,owner,
+   marker:{activatedAt:new Date(when-1000).toISOString(),baselineSha256:'test'},
+   baseline,root:tmp,now:when+12000});
+  assert.equal(result.added,1);
+  assert.equal(result.report.futureEntriesEnrolled,1);
+  const events=m.readJournal(tmp,when+12000);
+  assert.equal(events.length,1);
+  assert.equal(events[0].entry.preEntryCandlesticks.M1.state,
+   'VERIFIED_COMPLETED_AS_OF_ENTRY');
+  assert.equal(events[0].entry.preEntryCandlesticks.M1.latestCandle,
+   'LONG_UPPER_REJECTION_WICK');
+  assert.equal(calls.filter(x=>x===QUERY).length,1);
+ }finally{fs.rmSync(tmp,{recursive:true,force:true})}
+});

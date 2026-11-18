@@ -7,6 +7,7 @@
  */
 const fs=require('node:fs'),path=require('node:path');
 const {createHash}=require('node:crypto');
+const {fetchForOpenDecision}=require('./owner-demo-entry-candlestick-context.cjs');
 const ROOT='/home/lightworld/webapps/irexpro-research/loss-pattern-forward';
 const BASELINE_SOURCE='/home/lightworld/webapps/irexpro-research/loss-entry-forensics/latest-training-cohort.json';
 const JOURNAL_SOURCE='irexpro-owner-demo-loss-pattern-forward-v1';
@@ -15,7 +16,8 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const CADENCE=12000;
 const MAX_ROWS=1500;
 const SQL=[
- 'SELECT t.id::text trade_key,t.opened_at,t.closed_at,t.status,t.instrument,t.direction,',
+ 'SELECT t.id::text trade_key,t.broker_connection_id::text broker_connection_id,',
+ 't.opened_at,t.closed_at,t.status,t.instrument,t.direction,',
  't.lot_size,t.realised_pnl,t.commission,t.swap,t.close_reason,',
  't.max_favorable_pnl,t.max_adverse_pnl,t.path_observation_count,',
  'ti.id::text intent_id,ti.metadata,ti.created_at intent_at,',
@@ -159,7 +161,13 @@ function plan(row,stages,now,baseline){
     noTradeAuthority:true}];
   }
   return [{artifact:JOURNAL_SOURCE,tradeKey:key,stage:'ENTRY',
-   capturedAt:iso(now),openedAt:iso(opened),entry:evaluateEntry(feature,baseline),
+   capturedAt:iso(now),openedAt:iso(opened),
+   entry:{...evaluateEntry(feature,baseline),
+    preEntryCandlesticks:row.preEntryCandlesticks||{
+     mode:'NO_VERIFIED_PRE_ENTRY_CANDLES',
+     M1:{state:'NOT_AVAILABLE_AT_CAPTURE'},
+     M5:{state:'NOT_AVAILABLE_AT_CAPTURE'},
+     noTradingAuthority:true}},
    noPostEntryDataAtEnrollment:true,noTradeAuthority:true}];
  }
  if(!m.has('ENTRY'))return events;
@@ -177,7 +185,11 @@ function plan(row,stages,now,baseline){
  }
  if(row.status==='CLOSED'&&!m.has('SETTLED')){
   const gross=num(row.realised_pnl),fee=num(row.commission),swap=num(row.swap);
-  if(gross!==null&&fee!==null&&swap!==null){
+  // A local OPEN observation is not broker proof by itself. Later settlement
+  // must independently establish that the position closed AFTER capture.
+  const closed=date(row.closed_at),captured=date(entry.capturedAt);
+  if(Number.isFinite(closed)&&closed>captured&&
+     gross!==null&&fee!==null&&fee<=0&&swap!==null){
    events.push({artifact:JOURNAL_SOURCE,tradeKey:key,stage:'SETTLED',
     capturedAt:iso(now),closedAt:row.closed_at,closeReason:row.close_reason,
     settledNetUsd:rnd(gross+fee+swap,2),grossUsd:rnd(gross,2),
@@ -320,6 +332,23 @@ async function tick({client,owner,marker,baseline,root,now=Date.now()}){
  const events=readJournal(root,now),stages=setStages(events);
  let added=0;
  for(const row of rows){
+  const stagesForTrade=stages.get(String(row.trade_key));
+  if(row.status==='OPEN'&&!stagesForTrade?.has('ENTRY')&&
+     !stagesForTrade?.has('ENTRY_MISSED')&&
+     Number.isFinite(date(row.opened_at))&&
+     now>=date(row.opened_at)&&now-date(row.opened_at)<=90000){
+   try{
+    // Completed, as-of native candle snapshots are captured exactly once
+    // before a position outcome. A data gap never delays other trades.
+    row.preEntryCandlesticks=await fetchForOpenDecision(client,row);
+   }catch(error){
+    row.preEntryCandlesticks={
+     mode:'NO_VERIFIED_PRE_ENTRY_CANDLES',
+     M1:{state:'NATIVE_CANDLE_QUERY_UNAVAILABLE'},
+     M5:{state:'NATIVE_CANDLE_QUERY_UNAVAILABLE'},
+     noTradingAuthority:true};
+   }
+  }
   const decisions=plan(row,stages,now,baseline);
   for(const e of decisions){
    // Recheck idempotence even when several related events arise in same poll.
