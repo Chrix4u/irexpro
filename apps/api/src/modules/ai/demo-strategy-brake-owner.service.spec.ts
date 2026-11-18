@@ -96,6 +96,12 @@ describe('owner DEMO strategy-level risk modal and one-entry recovery',()=>{
       .toEqual(['KEEP_PAUSED','RESUME_LIMITED']);
     expect(DEMO_STRATEGY_RECOVERY_LOT_CAP).toBe(1);
   });
+  it('cannot reapprove an incident once its single trade intent was consumed',async()=>{
+    const {service,events}=setup({decision:'RESUME_LIMITED',used:1});
+    await expect(service.decide(OWNER,input)).rejects.toThrow(
+      'one-entry recovery allowance for this incident has already been used');
+    expect(events.some(x=>x.sql.includes('INSERT INTO'))).toBe(false);
+  });
   it('approval is incident-bound, time-bounded and strictly one entry',()=>{
     const consent={
       decision:'RESUME_LIMITED' as const,
