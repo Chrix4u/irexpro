@@ -12,6 +12,10 @@ import { evaluateProfitLockPatienceShadow } from './profit-lock-patience-shadow'
 import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
 import { evaluatePepperstonePeakLossRescue } from './pepperstone-peak-loss-rescue';
 import { evaluatePepperstoneDemoNetProfitLock } from './pepperstone-demo-net-profit-lock';
+import {
+  evaluatePepperstoneDemoAdverseCut,
+  PEPPERSTONE_DEMO_ADVERSE_CUT_ARTIFACT,
+} from './pepperstone-demo-adverse-cut';
 import { evaluatePepperstoneHighPeakGivebackShadow } from './pepperstone-high-peak-giveback-shadow';
 import {
   evaluatePepperstoneDemoRolloverExposure,
@@ -532,6 +536,14 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           ? 'ENABLED_DEMO_ONLY'
           : 'DISABLED') +
         ' LIVE=false originalBrokerTP_SL=UNCHANGED',
+    );
+    this.logger.log(
+      'Pepperstone owner USD DEMO persistent adverse M1 cut ' +
+        (process.env.IREXPRO_PEPPERSTONE_DEMO_PERSISTENT_ADVERSE_CUT === 'enabled' &&
+        !!process.env.VPS_FOREX_SCANNER_USER_ID
+          ? 'ENABLED_DEMO_ONLY'
+          : 'DISABLED') +
+        ' requires=2_consecutive_broker_native_adverse_M1 live=false originalBrokerSL_TP=UNCHANGED',
     );
     this.logger.log(
       `Pepperstone cTrader DEMO early-net-giveback protection ` +
@@ -1094,6 +1106,89 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                         (error as Error).message,
                     );
                   }
+                }
+              }
+              // The historical Pepperstone branch was shadow-only for losses:
+              // it continued before the generic cTrader thesis/adverse rules.
+              // This independent, owner-verified USD DEMO pilot can now cut
+              // a materially losing alternate-route trade ONLY when two
+              // consecutive completed broker-native M1 candles independently
+              // confirm persistent adverse price action and spread remains
+              // within the original broker stop geometry. Existing winners,
+              // pending broker stops, other tenants and LIVE stay untouched.
+              if (
+                snapshot.connection.brokerId === 'pepperstone-ctrader' &&
+                process.env.IREXPRO_PEPPERSTONE_DEMO_PERSISTENT_ADVERSE_CUT === 'enabled' &&
+                !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+                trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID &&
+                trade.account_currency === 'USD' &&
+                trade.is_m1_strategy &&
+                (strategyRoute === 'EARLY_TRANSITION' ||
+                  strategyRoute === 'CONFIRMED_REVERSAL') &&
+                currentPnl < 0
+              ) {
+                try {
+                  // No candle or feed lookup failure can fabricate a signal.
+                  const adverseM1 = await this.loadCausalM1Evidence(trade, observedAt);
+                  const openDate = trade.opened_at ? new Date(trade.opened_at) : null;
+                  const verdict = evaluatePepperstoneDemoAdverseCut({
+                    enabled: true,
+                    brokerId: snapshot.connection.brokerId,
+                    accountType: String(snapshot.connection.accountType).toUpperCase(),
+                    accountCurrency: trade.account_currency,
+                    ownerUserId: process.env.VPS_FOREX_SCANNER_USER_ID,
+                    userId: trade.user_id,
+                    isM1Strategy: trade.is_m1_strategy,
+                    strategyRoute,
+                    tradeInstrument: trade.instrument,
+                    brokerInstrument: position.instrument,
+                    tradeDirection: trade.direction,
+                    brokerDirection: position.direction,
+                    tradeLotSize: finite(trade.lot_size),
+                    brokerLotSize: finite(position.lotSize),
+                    entryPrice: finite(position.openPrice),
+                    currentPrice: finite(position.currentPrice),
+                    authoritativeStop: finite(trade.stop_loss),
+                    brokerStop: finite(position.stopLoss),
+                    initialRiskPnl: finite(trade.initial_risk_pnl),
+                    currentBrokerNetPnl: currentPnl,
+                    maxFavorableBrokerNetPnl: maxFavorablePnl,
+                    elapsedMinutes: openDate && Number.isFinite(openDate.getTime())
+                      ? (observedAt.getTime() - openDate.getTime()) / 60_000
+                      : Number.NaN,
+                    priorObservationCount: Number(trade.path_observation_count),
+                    m1: adverseM1,
+                  });
+                  if (verdict.shouldClose) {
+                    this.logger.warn(
+                      'Pepperstone DEMO PERSISTENT_ADVERSE_CUT trade=' +
+                        trade.trade_id + ' instrument=' + trade.instrument +
+                        ' route=' + strategyRoute + ' currentBrokerNet=' +
+                        money(currentPnl) + ' initialRisk=' +
+                        money(finite(trade.initial_risk_pnl)!) +
+                        ' currentR=' + verdict.currentRiskMultiple?.toFixed(3) +
+                        ' evidence=TWO_COMPLETED_BROKER_NATIVE_ADVERSE_M1' +
+                        ' brokerSL_TP=UNCHANGED live=false',
+                    );
+                    // ExecutionService owns the durable close-intent and
+                    // broker reconciliation; a dispatch may fail or slip.
+                    await this.executionService.closeTrade(
+                      trade.trade_id,
+                      trade.user_id,
+                      TradeCloseReason.AI_CLOSE_SIGNAL,
+                      {
+                        source: 'BROKER_ADVERSE_PROTECTION',
+                        reasonCode: PEPPERSTONE_DEMO_ADVERSE_CUT_ARTIFACT,
+                      },
+                    );
+                  }
+                } catch (error) {
+                  // No unverified provider data can justify a new exit;
+                  // the original broker-side SL remains authoritative.
+                  this.logger.warn(
+                    'Pepperstone DEMO persistent adverse review deferred trade=' +
+                      trade.trade_id + ': ' + (error as Error).message,
+                  );
                 }
               }
               continue;

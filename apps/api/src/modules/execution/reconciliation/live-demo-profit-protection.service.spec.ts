@@ -105,6 +105,101 @@ describe('LiveDemoProfitProtectionService', () => {
     };
   }
 
+  it('only applies the new owner USD Pepperstone DEMO adverse pilot to a qualified fresh two-bar loser', async () => {
+    const oldFlag = process.env.IREXPRO_PEPPERSTONE_DEMO_PERSISTENT_ADVERSE_CUT;
+    const oldOwner = process.env.VPS_FOREX_SCANNER_USER_ID;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_PERSISTENT_ADVERSE_CUT = 'enabled';
+    process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
+    try {
+      const losing = candidate({
+        account_currency: 'USD',
+        strategy_route: 'CONFIRMED_REVERSAL',
+        initial_risk_pnl: '10',
+        max_favorable_pnl: '1',
+        profit_giveback: '5',
+        path_observation_count: 30,
+      });
+      const candles = [
+        {
+          bucket_time: new Date('2026-10-28T09:04:00Z'),
+          open: '1.1131', high: '1.11315', low: '1.11270', close: '1.11274',
+          sample_count: '80', positive_quote_sample_count: '75',
+          last_quote_sample_at: new Date('2026-10-28T09:04:50Z'),
+          spread_close: '0.00002', source: 'ctrader-broker-native',
+        },
+        {
+          bucket_time: new Date('2026-10-28T09:03:00Z'),
+          open: '1.11335', high: '1.11340', low: '1.11310', close: '1.11315',
+          sample_count: '80', positive_quote_sample_count: '76',
+          last_quote_sample_at: new Date('2026-10-28T09:03:54Z'),
+          spread_close: '0.00002', source: 'ctrader-broker-native',
+        },
+      ];
+      const h = harness([losing], '-5.5', 'DEMO', candles, '1.11270',
+        [], undefined, [], [], [], 'pepperstone-ctrader');
+      await h.service.runOnce(new Date('2026-10-28T09:05:00Z'));
+      expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+        'trade-1','user-1',TradeCloseReason.AI_CLOSE_SIGNAL,
+        expect.objectContaining({
+          source: 'BROKER_ADVERSE_PROTECTION',
+          reasonCode: 'pepperstone-demo-persistent-adverse-m1-cut-v1',
+        }),
+      );
+
+      h.executionService.closeTrade.mockClear();
+      // Removing one consecutive broker-live quote invalidates the cut.
+      candles[1]!.positive_quote_sample_count = '0';
+      await h.service.runOnce(new Date('2026-10-28T09:05:00Z'));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+
+      // A marked-to-market winner must remain managed by profit protection.
+      candles[1]!.positive_quote_sample_count = '76';
+      h.brokerService.getOpenPositionsForConnection.mockResolvedValueOnce({
+        connection: { id:'conn-1', brokerId:'pepperstone-ctrader', accountType:'DEMO' },
+        positions:[{
+          externalOrderId:'position-7001',instrument:'EURUSD',direction:'BUY',
+          lotSize:'0.20',openPrice:'1.113',currentPrice:'1.1133',
+          stopLoss:'1.1125',takeProfit:'1.1138',unrealisedPnl:'5.5',
+        }],
+      });
+      await h.service.runOnce(new Date('2026-10-28T09:05:00Z'));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+
+      // An account other than the authenticated owner cannot gain pilot exits.
+      losing.user_id = 'another-user';
+      await h.service.runOnce(new Date('2026-10-28T09:05:00Z'));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+    } finally {
+      if (oldFlag === undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_PERSISTENT_ADVERSE_CUT;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_PERSISTENT_ADVERSE_CUT = oldFlag;
+      if (oldOwner === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID = oldOwner;
+    }
+  });
+
+  it('never lets the Pepperstone adverse pilot close a LIVE position even when enabled', async () => {
+    const oldFlag = process.env.IREXPRO_PEPPERSTONE_DEMO_PERSISTENT_ADVERSE_CUT;
+    const oldOwner = process.env.VPS_FOREX_SCANNER_USER_ID;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_PERSISTENT_ADVERSE_CUT = 'enabled';
+    process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
+    try {
+      const h = harness([candidate({
+        account_currency:'USD',
+        strategy_route:'CONFIRMED_REVERSAL',
+        initial_risk_pnl:'10',
+        max_favorable_pnl:'0',
+      })], '-6', 'LIVE', [], '1.1127', [], undefined, [], [], [],
+        'pepperstone-ctrader');
+      await h.service.runOnce(new Date('2026-10-28T09:05:00Z'));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+    } finally {
+      if (oldFlag === undefined) delete process.env.IREXPRO_PEPPERSTONE_DEMO_PERSISTENT_ADVERSE_CUT;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_PERSISTENT_ADVERSE_CUT = oldFlag;
+      if (oldOwner === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID = oldOwner;
+    }
+  });
+
   it('records only a read-only rollover risk audit and never force-closes a losing DEMO position', async () => {
     const auditService={log:jest.fn().mockResolvedValue(undefined)} as unknown as AuditService;
     const t=candidate({
