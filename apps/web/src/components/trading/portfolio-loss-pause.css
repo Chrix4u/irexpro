@@ -65,3 +65,11 @@
   .portfolio-brake-actions { flex-direction:column; }
   .portfolio-brake-actions .btn { width:100%; flex:0 0 auto; }
 }
+
+
+/* Per-incident strategy brake choices, accessible across desktop and mobile. */
+.strategy-loss-alert__items { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:.5rem; margin:.7rem 0; }
+.strategy-loss-alert__item { display:flex; flex-direction:column; align-items:flex-start; gap:.35rem; border:1px solid #64748b; background:#182433; border-radius:.6rem; padding:.7rem .8rem; cursor:pointer; color:#f1f5f9; text-align:left; line-height:1.4; min-height:70px; }
+.strategy-loss-alert__item:hover,.strategy-loss-alert__item:focus-visible { border-color:#f59e0b; outline-offset:3px; }
+.strategy-loss-alert__item span { color:#cbd5e1; font-size:.82rem; }
+.strategy-loss-alert__item span:last-child { color:#fbbf24; font-weight:750; }

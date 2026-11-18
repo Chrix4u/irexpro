@@ -32,6 +32,7 @@ import { TradeCloseReason } from '../execution/entities/trade.entity';
 import { AiSignalService } from './ai-signal.service';
 import { MacroEventRiskService } from './macro-event-risk.service';
 import { DemoPortfolioBrakeConsentService } from './demo-portfolio-brake-consent.service';
+import { DemoStrategyBrakeOwnerService, DEMO_STRATEGY_RECOVERY_LOT_CAP } from './demo-strategy-brake-owner.service';
 import {
   M1_SHADOW_OUTCOME_15M_ARTIFACT,
   M1TacticalEvidenceService,
@@ -796,6 +797,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     @Optional() private readonly allocationService?: AllocationService,
     @Optional() private readonly highConvictionBrokerExpert?: HighConvictionBrokerExpertService,
     @Optional() private readonly demoPortfolioBrakeConsent?: DemoPortfolioBrakeConsentService,
+    @Optional() private readonly demoStrategyBrakeOwner?: DemoStrategyBrakeOwnerService,
   ) {
     this.rolloutPolicy = rolloutPolicy ?? M1_TACTICAL_ROLLOUT_POLICY_V1;
   }
@@ -2632,6 +2634,46 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             evaluatedAt: decisionTime,
           })
         : null;
+    // Owner sees the actual model-specific brake in a modal. An affirmative
+    // DEMO-only incident-scoped choice permits at most ONE small recovery
+    // order. Broker spread, margin, session, portfolio brake, stops, model
+    // admission and all other risk checks remain mandatory.
+    let ownerApprovedLimitedStrategyRecovery = false;
+    if (professionalDemoPhase && preliminaryCanExecute &&
+        demoAlternativeTrial.eligible &&
+        multimodelLossStreakBrake?.active === true &&
+        multimodelLossStreakBrake.latestClosedAt &&
+        ['PERSISTENT_NEGATIVE_PAYOFF','RECENT_MULTIMODEL_LOSS_STREAK','RECENT_NEGATIVE_PAYOFF']
+          .includes(multimodelLossStreakBrake.reason) &&
+        executionStrategyRoute &&
+        ['EARLY_TRANSITION','CONFIRMED_REVERSAL'].includes(executionStrategyRoute) &&
+        this.demoStrategyBrakeOwner && this.executionService) {
+      try {
+        const active = await this.executionService.getActiveSession(userId);
+        if (active?.executionMode === ExecutionMode.FULL_AUTO &&
+            active.brokerConnectionId === brokerConnectionId) {
+          ownerApprovedLimitedStrategyRecovery =
+            await this.demoStrategyBrakeOwner.isRecoveryApproved({
+              userId,brokerConnectionId,sessionId:active.id,
+              route:executionStrategyRoute as 'EARLY_TRANSITION'|'CONFIRMED_REVERSAL',
+              instrument:candidate.instrument,direction:candidate.direction,
+              reason:multimodelLossStreakBrake.reason,
+              latestClosedAt:multimodelLossStreakBrake.latestClosedAt,
+              at:decisionTime,
+            });
+        }
+      } catch (error) {
+        this.logger.warn(
+          'DEMO strategy-loss owner consent unavailable; original pause retained: ' +
+          (error as Error).message,
+        );
+      }
+    }
+    if (ownerApprovedLimitedStrategyRecovery) {
+      selectedExecutionVolumeCap = Math.min(
+        selectedExecutionVolumeCap,DEMO_STRATEGY_RECOVERY_LOT_CAP,
+      );
+    }
     timings.downstreamRiskMs = Math.max(0, Date.now() - downstreamRiskStartedAt);
     const selectedPrimaryForCommission =
       professionalDemoPhase &&
@@ -2705,7 +2747,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       !demoAlternateTrialActiveSameSideIntent &&
       !extensionExhaustionActiveSameSideIntent &&
       fastStopRegimeBrake?.active !== true &&
-      multimodelLossStreakBrake?.active !== true &&
+      (multimodelLossStreakBrake?.active !== true || ownerApprovedLimitedStrategyRecovery) &&
       (portfolioNetLossBrake?.active !== true || ownerAcceptedPortfolioBrake) &&
       !recoveryCanaryRecentlyAuthorized &&
       !recoveryCanaryHistoryUnavailable &&
@@ -2759,7 +2801,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? ['M1_DEMO_ALTERNATIVE_TRIAL_ACTIVE_SAME_SIDE_INTENT']
             : []),
           ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
-          ...(multimodelLossStreakBrake?.active === true
+          ...(multimodelLossStreakBrake?.active === true && !ownerApprovedLimitedStrategyRecovery
             ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
             : []),
           ...(portfolioNetLossBrake?.active === true && !ownerAcceptedPortfolioBrake
@@ -3125,6 +3167,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         secondaryPredictedCostShadow,
         independentM1OpportunityShadow,
         lowVolRangeShadow,
+        ownerApprovedLimitedStrategyRecovery,
         multimodelLossStreakBrake: multimodelLossStreakBrake
           ? { ...multimodelLossStreakBrake }
           : null,

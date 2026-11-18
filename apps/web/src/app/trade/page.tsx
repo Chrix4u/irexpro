@@ -30,6 +30,7 @@ import {
   PortfolioLossPauseNotice,
   type PortfolioLossPauseStatus,
 } from "@/components/trading/PortfolioLossPauseNotice";
+import { StrategyLossBrakeNotice, type StrategyLossBrakeOwnerStatus, type StrategyLossBrakeIncident } from "@/components/trading/StrategyLossBrakeNotice";
 import { AiTraderLoading } from "./ai-trader-loading";
 import { api } from "@/lib/api";
 import { formatAgeSeconds } from "@/lib/duration";
@@ -1881,6 +1882,12 @@ export default function AiTradingPage() {
   const [portfolioLossPauseError, setPortfolioLossPauseError] =
     useState<string | null>(null);
   const [portfolioLossPauseSaving, setPortfolioLossPauseSaving] = useState(false);
+  const [strategyLossAlerts, setStrategyLossAlerts] =
+    useState<StrategyLossBrakeOwnerStatus | null>(null);
+  const [strategyLossAlertsError, setStrategyLossAlertsError] =
+    useState<string | null>(null);
+  const [strategyLossAlertsSaving, setStrategyLossAlertsSaving] = useState(false);
+
   const [brokerParityRuntime, setBrokerParityRuntime] =
     useState<BrokerParityRuntimeStatusView | null>(null);
   const [v8DedicatedPaperStatus, setV8DedicatedPaperStatus] =
@@ -2499,6 +2506,82 @@ export default function AiTradingPage() {
   }, [user, automationOn, terminal?.session?.id,
       terminal?.session?.executionMode, selectedBroker?.id,
       selectedBroker?.accountType, selectedBroker?.brokerId]);
+
+  // Strategy-specific pauses need their own owner decision, separate from
+  // the portfolio-wide three-loss acknowledgement. Poll even without a
+  // newly opened position: scanner brakes prevent that event by design.
+  useEffect(() => {
+    if (!user || !automationOn || terminal?.session?.executionMode !== "FULL_AUTO" ||
+        selectedBroker?.accountType !== "DEMO" ||
+        selectedBroker?.brokerId !== "pepperstone-ctrader") {
+      setStrategyLossAlerts(null);
+      setStrategyLossAlertsError(null);
+      return;
+    }
+    let disposed = false;
+    let pending = false;
+    const refresh = async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const result = await api.request<StrategyLossBrakeOwnerStatus>(
+          "/ai/external/vps-forex/m1-tactical/strategy-loss-alerts",
+        );
+        if (!disposed) {
+          setStrategyLossAlerts(result);
+          setStrategyLossAlertsError(null);
+        }
+      } catch {
+        if (!disposed) setStrategyLossAlertsError(
+          "Strategy restriction alerts could not be refreshed. Trading safety controls remain active.",
+        );
+      } finally {
+        pending = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 4000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [user, automationOn, terminal?.session?.id, terminal?.session?.executionMode,
+      selectedBroker?.id, selectedBroker?.accountType, selectedBroker?.brokerId]);
+
+  const decideStrategyLossAlert = async (
+    incident: StrategyLossBrakeIncident,
+    action: "KEEP_PAUSED" | "RESUME_LIMITED",
+    acknowledged: boolean,
+  ) => {
+    if (strategyLossAlertsSaving) return;
+    setStrategyLossAlertsSaving(true);
+    setStrategyLossAlertsError(null);
+    try {
+      const result = await api.request<StrategyLossBrakeOwnerStatus>(
+        "/ai/external/vps-forex/m1-tactical/strategy-loss-alerts/decision",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            action, acknowledged, route: incident.route,
+            instrument: incident.instrument, direction: incident.direction,
+            incidentClosedAt: incident.incidentClosedAt,
+          }),
+        },
+      );
+      setStrategyLossAlerts(result);
+      if (action === "RESUME_LIMITED") {
+        notify.warning(
+          "Owner authorized one capped DEMO recovery attempt for this strategy-direction. All other risk checks remain active.",
+        );
+      } else {
+        notify.success("This strategy-direction remains under loss protection.");
+      }
+    } catch (reason) {
+      const message = mapApiError(reason).message;
+      setStrategyLossAlertsError(message);
+      notify.error(message);
+      throw reason;
+    } finally {
+      setStrategyLossAlertsSaving(false);
+    }
+  };
 
   const decidePortfolioLossPause = async (
     action: "RESUME" | "KEEP_PAUSED",
@@ -3294,6 +3377,13 @@ export default function AiTradingPage() {
             error={portfolioLossPauseError}
             onDecision={decidePortfolioLossPause}
           />
+          <StrategyLossBrakeNotice
+            status={strategyLossAlerts}
+            saving={strategyLossAlertsSaving}
+            error={strategyLossAlertsError}
+            deferAutoOpen={portfolioLossPause?.requiresOwnerDecision === true}
+            onDecision={decideStrategyLossAlert}
+          />
           <MarketClosedState
             nextEligibleScanAt={vpsScannerStatus.marketSchedule.nextEligibleScanAt}
           />
@@ -3315,6 +3405,13 @@ export default function AiTradingPage() {
           saving={portfolioLossPauseSaving}
           error={portfolioLossPauseError}
           onDecision={decidePortfolioLossPause}
+        />
+        <StrategyLossBrakeNotice
+          status={strategyLossAlerts}
+          saving={strategyLossAlertsSaving}
+          error={strategyLossAlertsError}
+          deferAutoOpen={portfolioLossPause?.requiresOwnerDecision === true}
+          onDecision={decideStrategyLossAlert}
         />
         <section className="ai-trader__hero">
           <div>

@@ -45,6 +45,8 @@ import { M1TacticalMarketDataService } from './m1-tactical-market-data.service';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
 import { DemoPortfolioBrakeConsentService } from './demo-portfolio-brake-consent.service';
 import { DemoPortfolioBrakeConsentController } from './demo-portfolio-brake-consent.controller';
+import { DemoStrategyBrakeOwnerController } from './demo-strategy-brake-owner.controller';
+import { DemoStrategyBrakeOwnerService } from './demo-strategy-brake-owner.service';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import {
   M1TacticalSchedulerService,
@@ -86,6 +88,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     TradingViewWebhookController,
     VpsForexSignalCollectorController,
     DemoPortfolioBrakeConsentController,
+    DemoStrategyBrakeOwnerController,
   ],
   providers: [
     AiService,
@@ -120,6 +123,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     M1TacticalMarketDataService,
     M1TacticalEvidenceService,
     DemoPortfolioBrakeConsentService,
+    DemoStrategyBrakeOwnerService,
     HighConvictionBrokerExpertService,
     {
       provide: M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
