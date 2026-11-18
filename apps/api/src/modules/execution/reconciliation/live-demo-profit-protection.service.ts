@@ -8,6 +8,7 @@ import { ExecutionService } from '../execution.service';
 import { TradeCloseReason } from '../entities/trade.entity';
 import { evaluatePaperProfitLock } from '../../broker/adapters/paper-broker.adapter';
 import { evaluateProtectedRunnerShadow } from './protected-runner-shadow';
+import { evaluateVerifiedProtectedRunnerStopShadow } from './verified-profit-runner-stop-shadow';
 import { evaluateProfitLockPatienceShadow } from './profit-lock-patience-shadow';
 import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
 import { evaluatePepperstonePeakLossRescue } from './pepperstone-peak-loss-rescue';
@@ -803,6 +804,10 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                           entryPrice: position.openPrice,
                           currentPrice: position.currentPrice,
                           takeProfitPrice: position.takeProfit,
+                          stopLossPrice: position.stopLoss,
+                          brokerInstrument: position.instrument,
+                          brokerDirection: position.direction,
+                          brokerLots: position.lotSize,
                         },
                         snapshot.connection.brokerId,
                       );
@@ -1248,6 +1253,10 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                 entryPrice: position.openPrice,
                 currentPrice: position.currentPrice,
                 takeProfitPrice: position.takeProfit,
+                stopLossPrice: position.stopLoss,
+                brokerInstrument: position.instrument,
+                brokerDirection: position.direction,
+                brokerLots: position.lotSize,
               });
               continue;
             }
@@ -1467,6 +1476,38 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
   }
 
   /**
+   * Fresh contemporaneous cTrader bid/ask only, read from the owner DEMO
+   * connection and only at/before the shadow decision. No fabricated quotes.
+   */
+  private async loadVerifiedRunnerAsOfNativeQuote(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+  ): Promise<{ bid: number; ask: number; observedAt: Date } | null> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT last_positive_bid AS bid, last_positive_ask AS ask,
+          last_positive_sample_at AS quote_at
+        FROM market_data.provider_quote_candles
+        WHERE connection_id=$1 AND instrument=$2
+          AND timeframe='M1' AND source='ctrader-broker-native'
+          AND last_positive_sample_at <= $3::timestamptz
+          AND last_positive_sample_at >= $3::timestamptz - interval '15 seconds'
+        ORDER BY last_positive_sample_at DESC
+        LIMIT 1
+      `,
+      [trade.broker_connection_id, trade.instrument.toUpperCase(), observedAt.toISOString()],
+    )) as Array<{ bid: number | string | null; ask: number | string | null;
+      quote_at: Date | string | null }>;
+    const row = rows[0];
+    const bid = finite(row?.bid);
+    const ask = finite(row?.ask);
+    const timestamp = row?.quote_at ? new Date(row.quote_at) : null;
+    return bid !== null && ask !== null && bid > 0 && ask > bid &&
+      timestamp && Number.isFinite(timestamp.getTime())
+      ? { bid, ask, observedAt: timestamp } : null;
+  }
+
+  /**
    * Shadow-only audit, intentionally performed AFTER the protective close
    * request so database reads cannot delay the broker close. Both input
    * readers are constrained to evidence available at observedAt, never the
@@ -1481,15 +1522,25 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       entryPrice: string | number | null;
       currentPrice: string | number | null;
       takeProfitPrice: string | number | null;
+      stopLossPrice?: string | number | null;
+      brokerInstrument?: string | null;
+      brokerDirection?: string | null;
+      brokerLots?: string | number | null;
     },
     brokerId = 'ctrader',
   ): Promise<void> {
     if (!this.auditService) return;
     try {
-      const [latestThesis, m1Evidence, patienceSignal] = await Promise.all([
+      const [latestThesis, m1Evidence, patienceSignal, nativeRunnerQuote] = await Promise.all([
         this.loadLatestAiThesis(trade, observedAt),
         this.loadCausalM1Evidence(trade, observedAt),
         this.loadProfitLockPatienceSignal(trade, observedAt),
+        brokerId === 'pepperstone-ctrader' &&
+        trade.account_currency === 'USD' &&
+        !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+        trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID
+          ? this.loadVerifiedRunnerAsOfNativeQuote(trade, observedAt).catch(() => null)
+          : Promise.resolve(null),
       ]);
       const recheck = evaluateLiveDemoProfitLockTrendRecheck({
         tradeDirection: trade.direction,
@@ -1539,6 +1590,43 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         takeProfitPrice:
           positionPrices.takeProfitPrice == null ? null : finite(positionPrices.takeProfitPrice),
         latestLiveSpreadPrice: m1Evidence?.latestLiveSpreadPrice ?? null,
+      });
+      // An explicit broker-native, post-close shadow check: no modification
+      // is possible from this research path. A candidate still needs live
+      // provider tick/minimum-stop validation and acknowledged amend+reconcile
+      // before any separate executable rollout.
+      const verifiedRunner = evaluateVerifiedProtectedRunnerStopShadow({
+        brokerId,
+        accountType: 'DEMO',
+        currency: trade.account_currency,
+        ownerUserId: process.env.VPS_FOREX_SCANNER_USER_ID || null,
+        userId: trade.user_id,
+        isM1Strategy: trade.is_m1_strategy,
+        route: trade.strategy_route,
+        instrument: trade.instrument,
+        brokerInstrument: positionPrices.brokerInstrument ?? '',
+        direction: trade.direction,
+        brokerDirection:
+          positionPrices.brokerDirection === 'BUY' ? 'BUY' :
+          positionPrices.brokerDirection === 'SELL' ? 'SELL' :
+          trade.direction === 'BUY' ? 'SELL' : 'BUY',
+        tradeLots: finite(trade.lot_size),
+        brokerLots: finite(positionPrices.brokerLots),
+        entry: finite(positionPrices.entryPrice),
+        mark: finite(positionPrices.currentPrice),
+        originalStop: finite(trade.stop_loss),
+        brokerStop: finite(positionPrices.stopLossPrice),
+        takeProfit: finite(trade.take_profit),
+        brokerTakeProfit: finite(positionPrices.takeProfitPrice),
+        brokerNetPnl: currentPnl,
+        initialRiskPnl,
+        estimatedExtraExitReserve: fees?.estimatedCost ?? null,
+        historicalFeeSamples: fees?.sampleCount ?? 0,
+        observedAt,
+        lastBid: nativeRunnerQuote?.bid ?? null,
+        lastAsk: nativeRunnerQuote?.ask ?? null,
+        quoteObservedAt: nativeRunnerQuote?.observedAt ?? null,
+        runner,
       });
       const patienceRunner = evaluateProtectedRunnerShadow({
         trendWouldHold: patience.wouldConsiderBrokerProtectedGrace,
@@ -1594,6 +1682,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           m1AlignedMomentum3: m1Evidence?.alignedMomentum3 ?? null,
           m1LatestAgeSeconds: m1Evidence?.latestAgeSeconds ?? null,
           runnerShadow: runner,
+          brokerVerifiedRunnerReadinessShadow: verifiedRunner,
           protectedGraceShadow: patience,
           protectedGraceRunnerShadow: patienceRunner,
           protectedGraceOppositeExecutableReversal: patienceSignal.oppositeExecutableReversal,
