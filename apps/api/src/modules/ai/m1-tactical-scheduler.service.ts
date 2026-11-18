@@ -31,6 +31,7 @@ import { TradingSessionStatus } from '../execution/entities/trading-session.enti
 import { TradeCloseReason } from '../execution/entities/trade.entity';
 import { AiSignalService } from './ai-signal.service';
 import { MacroEventRiskService } from './macro-event-risk.service';
+import { DemoPortfolioBrakeConsentService } from './demo-portfolio-brake-consent.service';
 import {
   M1_SHADOW_OUTCOME_15M_ARTIFACT,
   M1TacticalEvidenceService,
@@ -794,6 +795,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     @Optional() private readonly tradeIntentService?: TradeIntentService,
     @Optional() private readonly allocationService?: AllocationService,
     @Optional() private readonly highConvictionBrokerExpert?: HighConvictionBrokerExpertService,
+    @Optional() private readonly demoPortfolioBrakeConsent?: DemoPortfolioBrakeConsentService,
   ) {
     this.rolloutPolicy = rolloutPolicy ?? M1_TACTICAL_ROLLOUT_POLICY_V1;
   }
@@ -2321,6 +2323,35 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         };
       }
     }
+    // DEMO owner's explicitly consented pause override is limited to THIS
+    // three-loss incident and the still-active FULL_AUTO broker session.
+    // Every OTHER model, broker and financial risk veto remains binding.
+    let ownerAcceptedPortfolioBrake = false;
+    if (
+      portfolioNetLossBrake?.active === true &&
+      portfolioNetLossBrake.reason === 'RECENT_PORTFOLIO_NET_LOSS_STREAK' &&
+      portfolioNetLossBrake.latestClosedAt &&
+      preliminaryCanExecute &&
+      this.demoPortfolioBrakeConsent &&
+      this.executionService
+    ) {
+      try {
+        const active = await this.executionService.getActiveSession(userId);
+        if (active?.executionMode === ExecutionMode.FULL_AUTO &&
+            active.brokerConnectionId === brokerConnectionId) {
+          ownerAcceptedPortfolioBrake = await this.demoPortfolioBrakeConsent.isOverrideActive({
+            userId, brokerConnectionId, sessionId: active.id,
+            latestClosedAt: portfolioNetLossBrake.latestClosedAt,
+          });
+        }
+      } catch (error) {
+        this.logger.warn(
+          'DEMO risk consent unavailable; original pause retained: ' +
+          (error as Error).message,
+        );
+      }
+    }
+
     // The controlled qualified-M1 alternative is NOT a Plan B override
     // for unqualified candidates. It is a small exception to probation for
     // the exact already-qualified continuation route. Fail-closed when the
@@ -2675,7 +2706,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       !extensionExhaustionActiveSameSideIntent &&
       fastStopRegimeBrake?.active !== true &&
       multimodelLossStreakBrake?.active !== true &&
-      portfolioNetLossBrake?.active !== true &&
+      (portfolioNetLossBrake?.active !== true || ownerAcceptedPortfolioBrake) &&
       !recoveryCanaryRecentlyAuthorized &&
       !recoveryCanaryHistoryUnavailable &&
       !qualifiedContinuationCanaryRecentlyAuthorized &&
@@ -2731,7 +2762,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(multimodelLossStreakBrake?.active === true
             ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
             : []),
-          ...(portfolioNetLossBrake?.active === true ? ['M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE'] : []),
+          ...(portfolioNetLossBrake?.active === true && !ownerAcceptedPortfolioBrake
+            ? ['M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE'] : []),
           ...(recoveryCanaryRecentlyAuthorized ? ['M1_RECOVERY_CANARY_REPEAT_COOLDOWN'] : []),
           ...(recoveryCanaryHistoryUnavailable ? ['M1_RECOVERY_CANARY_HISTORY_UNAVAILABLE'] : []),
           ...(qualifiedContinuationCanaryRecentlyAuthorized
@@ -3079,6 +3111,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         routeNetExpectedRFloor,
         fastStopRegimeBrake: fastStopRegimeBrake ? { ...fastStopRegimeBrake } : null,
         portfolioNetLossBrake: portfolioNetLossBrake ? { ...portfolioNetLossBrake } : null,
+        ownerAcceptedPortfolioBrake,
         demoPrimaryOnlyProbation: { ...demoPrimaryOnlyProbation },
         demoContinuationPause,
         guardedPullback,
@@ -3168,6 +3201,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           guardedPullback.eligible,
           brokerMarketContext,
           patternMemory,
+          ownerAcceptedPortfolioBrake ? portfolioNetLossBrake?.latestClosedAt : null,
         );
       } finally {
         timings.orderDispatchMs = Math.max(0, Date.now() - dispatchStartedAt);
@@ -3339,6 +3373,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     guardedPullbackRecovery = false,
     brokerMarketContext?: M1TacticalMarketSnapshot,
     patternMemory?: PatternMemoryObservation | null,
+    ownerPortfolioBrakeIncidentClosedAt?: Date | null,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -3393,6 +3428,36 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           : 'M1 requires the exact active PAPER session bound to this broker connection',
       );
       return;
+    }
+
+    // Revalidate immediately before submitting an order intent. Consent to
+    // an older incident never authorizes trading through new broker losses.
+    if (ownerPortfolioBrakeIncidentClosedAt) {
+      let approvedNow = false;
+      try {
+        const current = await this.evidence.loadPortfolioNetLossStreakBrake({
+          userId, brokerConnectionId, tradingSessionId: session!.id,
+          evaluatedAt: new Date(),
+        });
+        approvedNow =
+          current.active === true &&
+          current.reason === 'RECENT_PORTFOLIO_NET_LOSS_STREAK' &&
+          current.latestClosedAt?.getTime() === ownerPortfolioBrakeIncidentClosedAt.getTime() &&
+          !!this.demoPortfolioBrakeConsent &&
+          await this.demoPortfolioBrakeConsent.isOverrideActive({
+            userId, brokerConnectionId, sessionId: session!.id,
+            latestClosedAt: ownerPortfolioBrakeIncidentClosedAt,
+          });
+      } catch {
+        approvedNow = false;
+      }
+      if (!approvedNow) {
+        await this.evidence.markOutcomeState(
+          decisionId, 'RISK_REJECTED', new Date(),
+          'M1_DEMO_PORTFOLIO_BRAKE_OWNER_CONSENT_EXPIRED_OR_REVOKED',
+        );
+        return;
+      }
     }
 
     // Historical finite pilots still verify their timebox and entry budget.

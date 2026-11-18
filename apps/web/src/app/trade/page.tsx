@@ -26,6 +26,10 @@ import { useAuth } from "@/context/auth-context";
 import { useNotification } from "@/hooks/useNotification";
 import { MotionStatusOrb } from "@/components/ui/motion-status-orb";
 import { MarketClosedState } from "./MarketClosedState";
+import {
+  PortfolioLossPauseNotice,
+  type PortfolioLossPauseStatus,
+} from "@/components/trading/PortfolioLossPauseNotice";
 import { AiTraderLoading } from "./ai-trader-loading";
 import { api } from "@/lib/api";
 import { formatAgeSeconds } from "@/lib/duration";
@@ -1872,6 +1876,11 @@ export default function AiTradingPage() {
     useState<M1TacticalStatusView | null>(null);
   const [demoEntryDiagnostic, setDemoEntryDiagnostic] =
     useState<DemoFocusedEntryDiagnosticView | null>(null);
+  const [portfolioLossPause, setPortfolioLossPause] =
+    useState<PortfolioLossPauseStatus | null>(null);
+  const [portfolioLossPauseError, setPortfolioLossPauseError] =
+    useState<string | null>(null);
+  const [portfolioLossPauseSaving, setPortfolioLossPauseSaving] = useState(false);
   const [brokerParityRuntime, setBrokerParityRuntime] =
     useState<BrokerParityRuntimeStatusView | null>(null);
   const [v8DedicatedPaperStatus, setV8DedicatedPaperStatus] =
@@ -2450,6 +2459,79 @@ export default function AiTradingPage() {
       window.clearInterval(timer);
     };
   }, [user, automationOn]);
+
+  // The owner is told when a DEMO loss-streak pause silently prevents entries.
+  // Run independently from chart/research polling and never grant authority
+  // from the UI. Only the authenticated server's incident-bound response does.
+  useEffect(() => {
+    if (!user || !automationOn || terminal?.session?.executionMode !== "FULL_AUTO" ||
+        selectedBroker?.accountType !== "DEMO" ||
+        selectedBroker?.brokerId !== "pepperstone-ctrader") {
+      setPortfolioLossPause(null);
+      setPortfolioLossPauseError(null);
+      return;
+    }
+    let disposed = false;
+    let busy = false;
+    const check = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const current = await api.request<PortfolioLossPauseStatus>(
+          "/ai/external/vps-forex/m1-tactical/portfolio-loss-pause",
+        );
+        if (!disposed) {
+          setPortfolioLossPause(current);
+          setPortfolioLossPauseError(null);
+        }
+      } catch {
+        if (!disposed) setPortfolioLossPauseError(
+          "The risk alert could not be refreshed. Server-side entry protections remain active.",
+        );
+      } finally {
+        busy = false;
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 12000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [user, automationOn, terminal?.session?.id,
+      terminal?.session?.executionMode, selectedBroker?.id,
+      selectedBroker?.accountType, selectedBroker?.brokerId]);
+
+  const decidePortfolioLossPause = async (
+    action: "RESUME" | "KEEP_PAUSED",
+    acknowledged: boolean,
+    incidentClosedAt: string,
+  ) => {
+    if (portfolioLossPauseSaving) return;
+    setPortfolioLossPauseSaving(true);
+    setPortfolioLossPauseError(null);
+    try {
+      const result = await api.request<PortfolioLossPauseStatus>(
+        "/ai/external/vps-forex/m1-tactical/portfolio-loss-pause/decision",
+        {
+          method: "POST",
+          body: JSON.stringify({ action, acknowledged, incidentClosedAt }),
+        },
+      );
+      setPortfolioLossPause(result);
+      if (action === "RESUME") {
+        notify.warning(
+          "You authorized additional DEMO trading risk for this loss incident. Other safety rules remain active.",
+        );
+      } else {
+        notify.success("Portfolio-loss safety pause retained for this DEMO account.");
+      }
+    } catch (reason) {
+      const message = mapApiError(reason).message;
+      setPortfolioLossPauseError(message);
+      notify.error(message);
+      throw reason;
+    } finally {
+      setPortfolioLossPauseSaving(false);
+    }
+  };
 
   // This user/account-scoped investigation is separate from core Start/Stop
   // and the fast 4-second status feed. Refresh every 30s; its failure must
@@ -3221,6 +3303,12 @@ export default function AiTradingPage() {
       title="AI Trading"
     >
       <main className="ai-trader" data-testid="ai-trader-workspace">
+        <PortfolioLossPauseNotice
+          status={portfolioLossPause}
+          saving={portfolioLossPauseSaving}
+          error={portfolioLossPauseError}
+          onDecision={decidePortfolioLossPause}
+        />
         <section className="ai-trader__hero">
           <div>
             <p className="workspace-hero__eyebrow">Autonomous trading control</p>
