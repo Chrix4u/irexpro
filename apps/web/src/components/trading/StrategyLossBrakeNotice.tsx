@@ -47,18 +47,22 @@ export function StrategyLossBrakeNotice({status,error,saving=false,
   const descriptionId=useId();
   const items=status?.supported&&status.active?status.incidents:[];
   const item=items.find(x=>x.id===selected)||null;
+  const selectedId=item?.id ?? null;
 
   useEffect(()=>{
-    if(deferAutoOpen||!status?.supported)return;
+    // A fresh 4-second status poll must not replace an alert the owner
+    // is currently reading with another incident. Queue the remaining
+    // incidents until the current dialog is dismissed or decided.
+    if(selected || deferAutoOpen || !status?.supported)return;
     const next=status.incidents.find(x=>x.requiresOwnerDecision&&!seen.current.has(x.id));
     if(!next)return;
     seen.current.add(next.id);
     setAck(false);
     setSelected(next.id);
-  },[status,deferAutoOpen]);
+  },[status,deferAutoOpen,selected]);
 
   useEffect(()=>{
-    if(!item)return;
+    if(!selectedId)return;
     priorFocus.current=document.activeElement as HTMLElement|null;
     const old=document.body.style.overflow;
     document.body.style.overflow="hidden";
@@ -84,7 +88,7 @@ export function StrategyLossBrakeNotice({status,error,saving=false,
       document.body.style.overflow=old;
       priorFocus.current?.focus?.();
     };
-  },[item?.id,busy]);
+  },[selectedId,busy]);
 
   if(!status?.supported||!items.length)return null;
   const decide=async(action:"KEEP_PAUSED"|"RESUME_LIMITED")=>{

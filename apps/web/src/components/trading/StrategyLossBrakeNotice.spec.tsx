@@ -46,6 +46,19 @@ describe("Owner strategy-level loss modal",()=>{
   await act(async()=>fireEvent.click(action));
   expect(onDecision).toHaveBeenCalledWith(base.incidents[0],"RESUME_LIMITED",true);
  });
+ it("never swaps out an undecided alert when another incident appears on refresh",async()=>{
+  const next={...base.incidents[0],
+    id:"CONFIRMED_REVERSAL|EURUSD|BUY|2026-11-18T14:22:47.343Z",
+    instrument:"EURUSD",direction:"BUY" as const,
+  };
+  const {rerender}=render(<StrategyLossBrakeNotice status={base} onDecision={jest.fn()}/>);
+  await screen.findByTestId("strategy-loss-brake-dialog");
+  expect(screen.getByRole("alertdialog")).toHaveTextContent("USDJPY SELL");
+  rerender(<StrategyLossBrakeNotice
+    status={{...base,incidents:[base.incidents[0],next]}} onDecision={jest.fn()}/>);
+  expect(screen.getByRole("alertdialog")).toHaveTextContent("USDJPY SELL");
+  expect(screen.getByRole("alertdialog")).not.toHaveTextContent("EURUSD BUY");
+ });
  it("allows keeping this strategy paused without checking the risk box",async()=>{
   const onDecision=jest.fn().mockResolvedValue(undefined);
   render(<StrategyLossBrakeNotice status={base} onDecision={onDecision}/>);
