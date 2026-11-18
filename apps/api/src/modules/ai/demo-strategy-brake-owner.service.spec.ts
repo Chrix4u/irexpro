@@ -98,7 +98,9 @@ describe('owner DEMO strategy-level risk modal and one-entry recovery',()=>{
   });
   it('approval is incident-bound, time-bounded and strictly one entry',()=>{
     const consent={
-      decision:'RESUME_LIMITED' as const,created_at:'2026-11-18T22:30:00Z',
+      decision:'RESUME_LIMITED' as const,
+      brake_reason:'PERSISTENT_NEGATIVE_PAYOFF',
+      created_at:'2026-11-18T22:30:00Z',
       expires_at:'2026-11-18T23:30:00Z',
     };
     expect(validLimitedRecoveryConsent(CLOSED,consent,new Date('2026-11-18T22:31:00Z'),0)).toBe(true);
