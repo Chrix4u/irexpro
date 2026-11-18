@@ -2493,7 +2493,8 @@ export default function AiTradingPage() {
       }
     };
     void check();
-    const timer = window.setInterval(() => void check(), 12000);
+    // Near-real-time account risk notification without changing the trading engine.
+    const timer = window.setInterval(() => void check(), 4000);
     return () => { disposed = true; window.clearInterval(timer); };
   }, [user, automationOn, terminal?.session?.id,
       terminal?.session?.executionMode, selectedBroker?.id,
@@ -3287,6 +3288,12 @@ export default function AiTradingPage() {
         title="AI Trading"
       >
         <main className="ai-trader" data-testid="ai-trader-workspace">
+          <PortfolioLossPauseNotice
+            status={portfolioLossPause}
+            saving={portfolioLossPauseSaving}
+            error={portfolioLossPauseError}
+            onDecision={decidePortfolioLossPause}
+          />
           <MarketClosedState
             nextEligibleScanAt={vpsScannerStatus.marketSchedule.nextEligibleScanAt}
           />

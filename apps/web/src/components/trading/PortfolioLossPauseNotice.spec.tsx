@@ -69,6 +69,64 @@ describe("DEMO account-owned loss pause notice", () => {
     expect(screen.getByTestId("portfolio-loss-pause-alert")).toBeInTheDocument();
   });
 
+  it("automatically pops up when an already open trading page receives a NEW pause", async () => {
+    const { rerender } = render(
+      <PortfolioLossPauseNotice status={{ ...base, active:false, state:"CLEAR",
+        requiresOwnerDecision:false,incidentClosedAt:null }}
+        onDecision={jest.fn()} />,
+    );
+    expect(screen.queryByTestId("portfolio-loss-pause-dialog")).not.toBeInTheDocument();
+    rerender(<PortfolioLossPauseNotice status={base} onDecision={jest.fn()} />);
+    expect(await screen.findByTestId("portfolio-loss-pause-dialog")).toBeInTheDocument();
+  });
+
+  it("auto-alerts once per incident and alerts again for the NEXT distinct incident", async () => {
+    const onDecision=jest.fn().mockResolvedValue(undefined);
+    const { rerender }=render(
+      <PortfolioLossPauseNotice status={base} onDecision={onDecision} />,
+    );
+    await screen.findByTestId("portfolio-loss-pause-dialog");
+    fireEvent.click(screen.getByRole("button", { name:"Review later" }));
+    expect(screen.queryByTestId("portfolio-loss-pause-dialog")).not.toBeInTheDocument();
+
+    // Repeated polls of the same incident must NOT repeatedly reopen it.
+    rerender(<PortfolioLossPauseNotice status={{ ...base }} onDecision={onDecision} />);
+    expect(screen.queryByTestId("portfolio-loss-pause-dialog")).not.toBeInTheDocument();
+
+    // A newer broker loss-closing incident REQUIRES fresh owner approval.
+    rerender(<PortfolioLossPauseNotice status={{
+      ...base, incidentClosedAt:"2026-11-18T15:00:00.000Z",
+      brakeExpiresAt:"2026-11-18T17:00:00.000Z",
+    }} onDecision={onDecision} />);
+    expect(await screen.findByTestId("portfolio-loss-pause-dialog")).toBeInTheDocument();
+    expect(onDecision).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-reopen an incident after its server-recorded WAIT decision", async () => {
+    const onDecision=jest.fn();
+    const { rerender }=render(
+      <PortfolioLossPauseNotice status={{ ...base,
+        userDecision:"KEEP_PAUSED",state:"WAITING",requiresOwnerDecision:false }}
+        onDecision={onDecision} />,
+    );
+    expect(screen.getByTestId("portfolio-loss-pause-alert")).toBeInTheDocument();
+    expect(screen.queryByTestId("portfolio-loss-pause-dialog")).not.toBeInTheDocument();
+    rerender(<PortfolioLossPauseNotice status={{ ...base,
+      userDecision:"KEEP_PAUSED",state:"WAITING",requiresOwnerDecision:false }}
+      onDecision={onDecision} />);
+    expect(screen.queryByTestId("portfolio-loss-pause-dialog")).not.toBeInTheDocument();
+  });
+
+  it("allows keyboard dismissal without consenting to extra loss risk", async () => {
+    const onDecision=jest.fn();
+    render(<PortfolioLossPauseNotice status={base} onDecision={onDecision} />);
+    await screen.findByTestId("portfolio-loss-pause-dialog");
+    fireEvent.keyDown(document, { key:"Escape" });
+    expect(screen.queryByTestId("portfolio-loss-pause-dialog")).not.toBeInTheDocument();
+    expect(onDecision).not.toHaveBeenCalled();
+    expect(screen.getByTestId("portfolio-loss-pause-alert")).toBeInTheDocument();
+  });
+
   it("allows owner to reinstate pause after overriding the current incident", async () => {
     const onDecision=jest.fn().mockResolvedValue(undefined);
     render(<PortfolioLossPauseNotice status={{...base,state:"OVERRIDDEN",

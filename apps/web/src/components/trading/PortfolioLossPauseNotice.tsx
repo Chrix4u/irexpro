@@ -51,6 +51,8 @@ export function PortfolioLossPauseNotice({ status, saving = false, error, onDeci
   const [localBusy, setLocalBusy] = useState(false);
   const lastAutoOpened = useRef<string | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const descriptionId = useId();
   const visible = shouldShowPortfolioBrakeNotice(status);
@@ -74,19 +76,46 @@ export function PortfolioLossPauseNotice({ status, saving = false, error, onDeci
   useEffect(() => {
     if (!reviewOpen) return;
     const previous = document.body.style.overflow;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
     document.body.style.overflow = "hidden";
     const raf = requestAnimationFrame(() => cancelRef.current?.focus());
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !busy) {
         event.preventDefault();
         setReviewOpen(false);
+        return;
+      }
+      // An alertdialog must not allow keyboard focus to escape to the
+      // underlying chart or execution controls while risk choice is open.
+      if (event.key === "Tab") {
+        const panel = dialogRef.current;
+        if (!panel) return;
+        const buttons = Array.from(panel.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        ));
+        if (buttons.length === 0) {
+          event.preventDefault();
+          panel.focus();
+          return;
+        }
+        const first = buttons[0];
+        const last = buttons[buttons.length - 1];
+        const target = document.activeElement;
+        if (event.shiftKey && (target === first || !panel.contains(target))) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && (target === last || !panel.contains(target))) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     };
-    document.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
     return () => {
       cancelAnimationFrame(raf);
-      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey, true);
       document.body.style.overflow = previous;
+      previousFocusRef.current?.focus?.();
     };
   }, [reviewOpen, busy]);
 
@@ -137,7 +166,7 @@ export function PortfolioLossPauseNotice({ status, saving = false, error, onDeci
       </section>
       {reviewOpen && (
         <div className="portfolio-brake-overlay">
-          <section role="alertdialog" aria-modal="true"
+          <section ref={dialogRef} role="alertdialog" aria-modal="true" tabIndex={-1}
             aria-labelledby={titleId} aria-describedby={descriptionId}
             className="portfolio-brake-dialog" data-testid="portfolio-loss-pause-dialog">
             <header>
