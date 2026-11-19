@@ -1754,6 +1754,54 @@ describe('LiveDemoProfitProtectionService', () => {
       expect.anything(),
     );
   });
+  it('reviews owner DEMO position once per minute without delaying an already-due profit close', async () => {
+    const fields = ['IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR',
+      'IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK',
+      'IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK',
+      'IREXPRO_PEPPERSTONE_DEMO_TIERED_RETENTION',
+      'VPS_FOREX_SCANNER_USER_ID'] as const;
+    const original = Object.fromEntries(fields.map(k=>[k,process.env[k]]));
+    process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR = 'enabled';
+    process.env.IREXPRO_PEPPERSTONE_DEMO_NET_PROFIT_LOCK = 'enabled';
+    process.env.IREXPRO_PEPPERSTONE_DEMO_ALTERNATE_NET_PROFIT_LOCK = 'enabled';
+    process.env.IREXPRO_PEPPERSTONE_DEMO_TIERED_RETENTION = 'enabled';
+    process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
+    const auditService = {log:jest.fn().mockResolvedValue(undefined)} as unknown as AuditService;
+    const ownerTrade = candidate({
+      account_currency:'USD',strategy_route:'CONFIRMED_REVERSAL',
+      initial_risk_pnl:'9',max_favorable_pnl:'10',
+    });
+    try {
+      const h = harness([ownerTrade], '7.00', 'DEMO', [], '1.1134',
+        [], auditService, [{sample_count:9,p90_cost_per_lot:'6.00'}],
+        [], [], 'pepperstone-ctrader');
+      const monitor = jest.spyOn(h.service as any,
+        'recordPepperstoneDemoExitMonitor').mockResolvedValue(undefined);
+      const observed = new Date('2026-10-28T09:05:00.000Z');
+      await h.service.runOnce(observed);
+      expect(monitor).toHaveBeenCalledTimes(1);
+      expect(monitor).toHaveBeenCalledWith(
+        expect.objectContaining({strategy_route:'CONFIRMED_REVERSAL'}),
+        observed,7,10,expect.objectContaining({direction:'BUY'}),
+      );
+      expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+        'trade-1','user-1',TradeCloseReason.PROFIT_PROTECTION,
+      );
+      await h.service.runOnce(new Date('2026-10-28T09:05:20.000Z'));
+      expect(monitor).toHaveBeenCalledTimes(1);
+      const differentBroker = harness([ownerTrade], '7.00', 'LIVE',
+        [],'1.1134',[],auditService,[],[],[],'pepperstone-ctrader');
+      const noLiveMonitor = jest.spyOn(differentBroker.service as any,
+        'recordPepperstoneDemoExitMonitor').mockResolvedValue(undefined);
+      await differentBroker.service.runOnce(observed);
+      expect(noLiveMonitor).not.toHaveBeenCalled();
+    } finally {
+      for(const key of fields){
+        if(original[key]===undefined)delete process.env[key];
+        else process.env[key]=original[key];
+      }
+    }
+  });
 });
 
 describe('bounded M1 continuation recovery grace', () => {
