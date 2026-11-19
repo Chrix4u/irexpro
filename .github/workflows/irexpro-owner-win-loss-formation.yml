@@ -9,6 +9,8 @@ on:
       - apps/api/scripts/audit-owner-demo-win-loss-formation.test.cjs
       - apps/api/scripts/owner-demo-asof-candle-win-loss.cjs
       - apps/api/scripts/owner-demo-asof-candle-win-loss.test.cjs
+      - apps/api/scripts/audit-owner-demo-after-1938-paper-approvals.cjs
+      - apps/api/scripts/audit-owner-demo-after-1938-paper-approvals.test.cjs
       - .github/workflows/irexpro-owner-win-loss-formation.yml
 permissions:
   contents: read
@@ -25,5 +27,7 @@ jobs:
         run: node --check apps/api/scripts/audit-owner-demo-win-loss-formation.cjs
       - name: Validate causal quote candle join
         run: node --check apps/api/scripts/owner-demo-asof-candle-win-loss.cjs
+      - name: Validate blocked paper-admission quote audit
+        run: node --check apps/api/scripts/audit-owner-demo-after-1938-paper-approvals.cjs
       - name: Regression tests
-        run: node --test apps/api/scripts/audit-owner-demo-win-loss-formation.test.cjs apps/api/scripts/owner-demo-asof-candle-win-loss.test.cjs
+        run: node --test apps/api/scripts/audit-owner-demo-win-loss-formation.test.cjs apps/api/scripts/owner-demo-asof-candle-win-loss.test.cjs apps/api/scripts/audit-owner-demo-after-1938-paper-approvals.test.cjs
