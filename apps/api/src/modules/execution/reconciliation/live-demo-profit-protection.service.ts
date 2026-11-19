@@ -13,6 +13,7 @@ import { evaluateProfitLockPatienceShadow } from './profit-lock-patience-shadow'
 import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
 import { evaluatePepperstonePeakLossRescue } from './pepperstone-peak-loss-rescue';
 import { evaluatePepperstoneDemoNetProfitLock } from './pepperstone-demo-net-profit-lock';
+import { evaluatePepperstoneDemoExitMonitor } from './pepperstone-demo-exit-signal-monitor';
 import {
   evaluatePepperstoneDemoAdverseCut,
   PEPPERSTONE_DEMO_ADVERSE_CUT_ARTIFACT,
@@ -493,6 +494,9 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
   private running = false;
   // One non-blocking audit per position/minute, not every 5s price-path tick.
   private readonly rolloverShadowObservedMinute = new Map<string, number>();
+  // Independent read-only candlestick recheck, at most once per position/minute.
+  // Never holds up five-second broker profit protection or modifies orders.
+  private readonly exitIntelligenceObservedMinute = new Map<string, number>();
 
   constructor(
     private readonly dataSource: DataSource,
@@ -553,11 +557,19 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           : 'DISABLED_SHADOW_ONLY') +
         ' LIVE=false originalBrokerTP_SL=UNCHANGED',
     );
+    this.logger.log(
+      'Pepperstone owner USD DEMO continuing-position M1 exit intelligence ' +
+        (process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR === 'enabled'
+          ? 'ENABLED_SHADOW_ONLY' : 'DISABLED') +
+        ' independentReview=once_per_position_minute profitLockCadence=5s ' +
+        'brokerSL_TP=UNCHANGED tradingAuthority=NONE',
+    );
   }
 
   onModuleDestroy(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.exitIntelligenceObservedMinute.clear();
   }
 
   async runOnce(observedAt = new Date()): Promise<void> {
@@ -624,6 +636,46 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               peakObservedAt,
               observedAt,
             });
+
+            // Owner Pepperstone USD DEMO: analyze ongoing profitable positions
+            // independently of whether a NEW order has broker authority.
+            // Purely observational; never delays profit-lock evaluation,
+            // changes the live exit, or reuses an as-of snapshot after closure.
+            const monitorRisk = finite(trade.initial_risk_pnl);
+            if (
+              this.auditService &&
+              process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR === 'enabled' &&
+              snapshot.connection.brokerId === 'pepperstone-ctrader' &&
+              !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+              trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID &&
+              trade.account_currency === 'USD' &&
+              trade.is_m1_strategy &&
+              monitorRisk !== null && monitorRisk > 0 &&
+              maxFavorablePnl >= monitorRisk * 0.25
+            ) {
+              const minuteKey = Math.floor(observedAt.getTime() / 60_000);
+              if (this.exitIntelligenceObservedMinute.get(trade.trade_id) !== minuteKey) {
+                this.exitIntelligenceObservedMinute.set(trade.trade_id, minuteKey);
+                // Bound in-process keys without resetting execution or broker
+                // evidence. The per-trade timestamp is advisory only.
+                if (this.exitIntelligenceObservedMinute.size > 250)
+                  this.exitIntelligenceObservedMinute.clear();
+                void this.recordPepperstoneDemoExitMonitor(
+                  trade, observedAt, currentPnl, maxFavorablePnl, {
+                    instrument: position.instrument,
+                    direction: position.direction,
+                    lotSize: finite(position.lotSize),
+                    entry: finite(position.openPrice),
+                    mark: finite(position.currentPrice),
+                    stop: finite(position.stopLoss),
+                    takeProfit: finite(position.takeProfit),
+                  },
+                ).catch(error => this.logger.warn(
+                  'Owner DEMO exit-intelligence observation skipped: ' +
+                    (error as Error).message,
+                ));
+              }
+            }
 
             // A rollover-exposure audit NEVER waits ahead of an active SL,
             // profit-lock or adverse-thesis exit. Run it in a separate,
@@ -1505,6 +1557,88 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     return bid !== null && ask !== null && bid > 0 && ask > bid &&
       timestamp && Number.isFinite(timestamp.getTime())
       ? { bid, ask, observedAt: timestamp } : null;
+  }
+
+  /**
+   * Independently re-analyze an OPEN position every ~minute in parallel with
+   * the existing five-second profit lock. It does NOT need the new-entry
+   * executable authority and never delays or supersedes an actual close.
+   * The snapshot is fixed at observedAt, not after any eventual TP outcome.
+   */
+  private async recordPepperstoneDemoExitMonitor(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+    currentBrokerNetPnl: number,
+    peakBrokerNetPnl: number,
+    position: {
+      instrument: string;
+      direction: string;
+      lotSize: number | null;
+      entry: number | null;
+      mark: number | null;
+      stop: number | null;
+      takeProfit: number | null;
+    },
+  ): Promise<void> {
+    if (!this.auditService) return;
+    const [m1, sameSide] = await Promise.all([
+      this.loadCausalM1Evidence(trade, observedAt),
+      this.loadProfitLockPatienceSignal(trade, observedAt),
+    ]);
+    const verdict = evaluatePepperstoneDemoExitMonitor({
+      enabled: process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR === 'enabled',
+      ownerPepperstoneUsdDemoVerified:
+        !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+        trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID &&
+        trade.account_currency === 'USD',
+      route: trade.strategy_route,
+      direction: trade.direction,
+      brokerDirection: position.direction,
+      instrument: trade.instrument,
+      brokerInstrument: position.instrument,
+      tradeLots: finite(trade.lot_size),
+      brokerLots: position.lotSize,
+      initialRiskPnl: finite(trade.initial_risk_pnl),
+      peakBrokerNetPnl,
+      currentBrokerNetPnl,
+      entryPrice: position.entry,
+      brokerStop: position.stop,
+      authoritativeStop: finite(trade.stop_loss),
+      brokerTakeProfit: position.takeProfit,
+      authoritativeTakeProfit: finite(trade.take_profit),
+      currentPrice: position.mark,
+      observedAt,
+      sameSideContinuationAt: sameSide.sameSideContinuationAt,
+      oppositeExecutableReversal: sameSide.oppositeExecutableReversal,
+      m1: m1 ? {
+        completedBars: m1.completedBars,
+        liveQuoteBars: m1.liveQuoteBars ?? 0,
+        latestAgeSeconds: m1.latestAgeSeconds,
+        adverseBars: m1.adverseBars,
+        alignedLatestBodyPressure: m1.alignedLatestBodyPressure,
+        alignedMomentum3: m1.alignedMomentum3,
+      } : null,
+    });
+    await this.auditService.log({
+      actorUserId: trade.user_id,
+      action: AuditAction.DEMO_POSITION_EXIT_INTELLIGENCE_SHADOW,
+      resourceType: 'Trade',
+      resourceId: trade.trade_id,
+      metadata: {
+        ...verdict,
+        observedAt: observedAt.toISOString(),
+        instrument: trade.instrument,
+        direction: trade.direction,
+        strategyRoute: trade.strategy_route,
+        currentBrokerNetPnl,
+        peakBrokerNetPnl,
+        m1LiveQuoteBars: m1?.liveQuoteBars ?? 0,
+        m1AlignedMomentum3: m1?.alignedMomentum3 ?? null,
+        m1AlignedLatestBodyPressure: m1?.alignedLatestBodyPressure ?? null,
+        m1AdverseBars: m1?.adverseBars ?? null,
+        noTradeAuthority: true,
+      },
+    });
   }
 
   /**
