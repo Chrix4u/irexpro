@@ -46,8 +46,8 @@ test('the separate configured continuation pause remains visible when AI is star
   assert.equal(result.continuationPause.observedEnabledCandidates,2);
   assert.equal(result.continuationPause.observedActuallyBlocked,1);
   assert.equal(result.continuationPause.latestObservedReason,'CONTINUATION_PAUSED');
-  assert.equal(result.blockedReasonCountsNonExclusive[0].name,
-    'M1_PEPPERSTONE_DEMO_TREND_CONTINUATION_PAUSED');
+  assert.equal(result.blockedReasonCountsNonExclusive.find(x =>
+    x.name === 'M1_PEPPERSTONE_DEMO_TREND_CONTINUATION_PAUSED')?.count,1);
 });
 test('blocker counts are non-exclusive, not assumed to be sole cause',()=>{
   const result=auditEntryStarvation([
