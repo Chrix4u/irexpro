@@ -12,6 +12,9 @@ const OUTPUT='/home/lightworld/webapps/irexpro-research/native-quote-snapshots/l
 const PIP=p=>p.endsWith('JPY')?0.01:0.0001;
 const VALID_PAIRS=new Set(['AUDUSD','EURUSD','GBPUSD','USDCHF','USDJPY','USDCAD']);
 const HORIZONS=[3,5,10,15],ENTRY_MAX_DELAY_MS=12_000;
+// Heavy archival replay is research-only: raw native quote collection remains
+// at its existing cadence. Avoid re-parsing ~400k archived ticks every 5 min.
+const REPLAY_WATCH_INTERVAL_MS=15*60_000;
 const MAX_OBSERVED_STALENESS_MS=10_000,MAX_MARK_STALENESS_MS=12_000;
 const MS=60_000;
 const n=x=>x==null||x===''?null:Number.isFinite(Number(x))?Number(x):null;
@@ -285,10 +288,11 @@ async function main(){
   if(busy)return;busy=true;
   try{await once()}catch(e){console.error('SAMPLED_PATH_FAILED',e.message)}
   finally{busy=false;}
- },300000)}
+ },REPLAY_WATCH_INTERVAL_MS)}
 }
 module.exports={validRecord,prepareIndex,addRecord,loadSamples,
- sampledSide,summarize,groupSummary,archiveFinalizedSampled,audit,HORIZONS};
+ sampledSide,summarize,groupSummary,archiveFinalizedSampled,audit,HORIZONS,
+ REPLAY_WATCH_INTERVAL_MS};
 if(require.main===module)main().catch(e=>{
  console.error('SAMPLED_PATH_FATAL',e.message);process.exitCode=1;
 });

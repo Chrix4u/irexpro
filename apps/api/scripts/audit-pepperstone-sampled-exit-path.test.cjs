@@ -1,8 +1,8 @@
 'use strict';
 const{test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-const {validRecord,prepareIndex,addRecord,loadSamples,sampledSide,audit}=require(
- './audit-pepperstone-sampled-exit-path.cjs');
+const {validRecord,prepareIndex,addRecord,loadSamples,sampledSide,audit,
+ REPLAY_WATCH_INTERVAL_MS}=require('./audit-pepperstone-sampled-exit-path.cjs');
 const minute=60*1000;
 const start=Date.parse('2026-11-16T19:02:00Z');
 const clock=n=>new Date(start+n*minute).toISOString();
@@ -16,6 +16,9 @@ const e={
  stop_distance:'0.0005',target_distance:'0.0008',planbQuality:0.7,
 };
 function markBook(records){return records;}
+test('archival replay runs no more than once per 15 minutes in watch mode',()=>{
+ assert.equal(REPLAY_WATCH_INTERVAL_MS,15*60_000);
+});
 test('strict sample validation rejects retroactive or impossible quote timestamps',()=>{
  assert.equal(validRecord(sample(1,1.10,1.1001)),true);
  assert.equal(validRecord(sample(1,1.10,1.10)),false);
