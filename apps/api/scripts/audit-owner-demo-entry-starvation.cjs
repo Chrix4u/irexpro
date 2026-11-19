@@ -41,6 +41,12 @@ function auditEntryStarvation(decisions, trades, asOf, lookbackMinutes = 120, li
   // trade opportunities or confuse execution_authority with broker fills.
   const candidates = valid.filter(d => d.route !== 'ABSTAIN');
   const denied = candidates.filter(d => d.execution_authority !== 'BROKER_NATIVE');
+  // A separately qualified Plan-B owner DEMO alternate may execute even
+  // when the independent tactical M1 classifier is ABSTAIN. Count its
+  // BROKER_NATIVE decision as authorized, but retain the M1-abstain
+  // distinction so this is not mislabeled M1 confirmation.
+  const authorizedAll = valid.filter(d => d.execution_authority === 'BROKER_NATIVE');
+  const authorizedM1Abstain = authorizedAll.filter(d => d.route === 'ABSTAIN');
   const blocked = denied.flatMap(d => Array.isArray(d.blockers)
     ? [...new Set(d.blockers.filter(x => typeof x === 'string'))]
         .map(blocker => ({blocker}))
@@ -89,7 +95,9 @@ function auditEntryStarvation(decisions, trades, asOf, lookbackMinutes = 120, li
     m1Abstentions:valid.length-candidates.length,
     m1NonAbstainCandidates:candidates.length,
     nonAbstainNoBrokerAuthority:denied.length,
-    brokerNativeAuthorizedDecisions:candidates.length-denied.length,
+    brokerNativeAuthorizedDecisions:authorizedAll.length,
+    brokerNativeAuthorizedM1AbstainDecisions:authorizedM1Abstain.length,
+    brokerNativeAuthorizedNonAbstainDecisions:candidates.length-denied.length,
     ordersOpenedInWindow:actual.length,
     possibleTradeRowTruncation:trades.length>=4000,
     lastOrderOpenedAt:lastTrade?.opened_at || null,
@@ -127,6 +135,7 @@ function auditEntryStarvation(decisions, trades, asOf, lookbackMinutes = 120, li
       'A stored enabled=false pause is ambiguous when no preliminary executable route reached the pause check; verify actual VPS config instead.',
       'A separate authenticated active FULL_AUTO session check is still required.',
       'A BROKER_NATIVE decision does not guarantee successful broker submission.',
+      'A separately qualified DEMO Plan-B alternate may authorize a trade when its M1 tactical route is ABSTAIN; count that authorization separately.',
       'A full 4000-row trade sample means the window count is only a lower bound.',
       'This report does not infer broker availability, margin or actual current positions.',
     ],
