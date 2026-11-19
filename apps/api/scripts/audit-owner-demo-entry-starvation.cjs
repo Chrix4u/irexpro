@@ -83,6 +83,7 @@ function auditEntryStarvation(decisions, trades, asOf, lookbackMinutes = 120, li
     nonAbstainNoBrokerAuthority:denied.length,
     brokerNativeAuthorizedDecisions:candidates.length-denied.length,
     ordersOpenedInWindow:actual.length,
+    possibleTradeRowTruncation:trades.length>=4000,
     lastOrderOpenedAt:lastTrade?.opened_at || null,
     lastOrderInstrument:lastTrade?.instrument || null,
     minutesSinceLastOrder:minutesSince(lastTrade?.opened_at,asOfMs),
@@ -114,6 +115,7 @@ function auditEntryStarvation(decisions, trades, asOf, lookbackMinutes = 120, li
       'A recorded enabled continuation pause is independent of Start/Stop Trading.',
       'A separate authenticated active FULL_AUTO session check is still required.',
       'A BROKER_NATIVE decision does not guarantee successful broker submission.',
+      'A full 4000-row trade sample means the window count is only a lower bound.',
       'This report does not infer broker availability, margin or actual current positions.',
     ],
   };
@@ -167,7 +169,7 @@ async function run() {
       "AND bc.broker_id='pepperstone-ctrader'",
       "AND bc.account_type='DEMO' AND bc.account_currency='USD'",
       'AND t.opened_at<=$2::timestamptz',
-      'ORDER BY t.opened_at DESC LIMIT 30',
+      'ORDER BY t.opened_at DESC LIMIT 4000',
     ].join(' '),[owner,asOf.toISOString()]);
     await db.query('ROLLBACK');
     console.log(JSON.stringify(
