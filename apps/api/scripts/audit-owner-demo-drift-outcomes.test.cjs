@@ -100,3 +100,37 @@ test('makes missing independent day holdout explicit',()=>{
   assert.equal(report.chronologicalMatchedDriftDays.later,null);
   assert.equal(report.chronologicalMatchedDriftDays.status,'NO_SEPARATE_DAY_HOLDOUT');
 });
+
+test('rejected-drift counterfactuals are reported, not substituted for normal M1 labels',()=>{
+  const ordinary=row(0,'NORMAL',-.4);
+  const candidate=row(25,'OUT_OF_DISTRIBUTION',.8,{
+    outcome:null,
+    multimodel_cost_source:'BROKER_OBSERVED_P90',
+    drift_outcome:{
+      artifact:'m1-drift-counterfactual-15m-v1',
+      source:'COMPLETED_M1_OHLC',
+      horizonBars:15,
+      modifiesExecution:false,
+      outcome:'TP',
+      selectionPolicy:'FIXED_UTC_16M_EPISODE_RESEARCH',
+      driftEvidenceSource:'MULTIMODEL',
+      driftStateAtDecision:'OUT_OF_DISTRIBUTION',
+      entryBarOpenTime:stamp(26),
+      observedAt:stamp(41),
+      grossRMultiple:.95,
+      estimatedExecutionCostR:.15,
+      netRMultiple:.8,
+      nonDriftBlockersAtDecision:['ENSEMBLE_NOT_PAPER_ADMITTED'],
+      driftWasOnlySubstantiveBlocker:false,
+    },
+  });
+  const report=buildDriftCohort([ordinary,candidate],asOf);
+  assert.equal(report.rejectedDriftCounterfactuals.validCounterfactualQuoteLabels,1);
+  assert.equal(report.rejectedDriftCounterfactuals.quoteLabelsWithOtherBlockers,1);
+  assert.equal(report.rejectedDriftCounterfactuals.comparisonToNormalShadow,
+    'NOT_COMPARABLE_SELECTION_POLICY');
+  const ood=report.byPlanBRouteAndDrift.find(g=>g.key.endsWith('OUT_OF_DISTRIBUTION'));
+  assert.equal(ood.observedCompletedM1,0);
+  assert.equal(report.matchedDriftDays.comparableStrata,0);
+  assert.equal(report.grantsTradeAuthority,false);
+});
