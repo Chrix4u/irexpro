@@ -89,6 +89,20 @@ function buildDriftCohort(rows,asOf,sourceLimit=10000) {
     matchedDriftDays:compareMatchedDriftDays(selected,settledLabel,asOfMs,{
       sourceTruncated:sorted.length>=sourceLimit,
     }),
+    chronologicalMatchedDriftDays:{
+      splitDay:split,
+      earlier:compareMatchedDriftDays(before,settledLabel,asOfMs,{
+        sourceTruncated:sorted.length>=sourceLimit,
+      }),
+      later:split?compareMatchedDriftDays(after,settledLabel,asOfMs,{
+        sourceTruncated:sorted.length>=sourceLimit,
+      }):null,
+      status:split?'RETROSPECTIVE_TIME_SPLIT_ONLY':'NO_SEPARATE_DAY_HOLDOUT',
+      retrained:false,
+      promoteThresholds:false,
+      grantsTradeAuthority:false,
+      qualificationRequiresIndependentProspectiveEvidence:true,
+    },
     topDriftDiagnostics:groups(r=>[
       r.strategy_route,r.drift,
       Array.isArray(r.diagnostics)?r.diagnostics.join(',')||'NONE':'MISSING'
@@ -100,6 +114,7 @@ function buildDriftCohort(rows,asOf,sourceLimit=10000) {
       'A same-data threshold adjustment would be lookahead-biased.',
       'The day split is descriptive; no model was retrained or promoted.',
       'Same-day matched drift differences still reflect observational confounding and variable label coverage.',
+      'Earlier/later day cohorts are retrospective reports, not sealed training and holdout sets.',
     ],
   };
 }
