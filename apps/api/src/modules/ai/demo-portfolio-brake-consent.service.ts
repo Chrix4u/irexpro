@@ -30,7 +30,7 @@ interface BrokerClosedRecord {
 
 export interface DemoPortfolioBrakeStatus {
   supported: boolean;
-  state: 'UNAVAILABLE' | 'CLEAR' | 'PAUSED' | 'WAITING' | 'OVERRIDDEN';
+  state: 'UNAVAILABLE' | 'CLEAR' | 'PAUSED' | 'WAITING' | 'OVERRIDDEN' | 'ADVISORY';
   active: boolean;
   requiresOwnerDecision: boolean;
   resumeAuthorized: boolean;
@@ -198,13 +198,16 @@ export class DemoPortfolioBrakeConsentService {
     };
     const session = await this.activeOwnerDemo(userId);
     if (!session) return empty;
+    const advisoryOnly =
+      this.ownerScope(userId) &&
+      this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY','')==='enabled';
     const brake = await this.readBrake(userId, session, now);
     const hasIncident = brake.active === true &&
       brake.reason === 'RECENT_PORTFOLIO_NET_LOSS_STREAK' &&
       brake.consecutiveNetLosses >= 3 &&
       brake.latestClosedAt !== null;
     const latestClosedAt = brake.latestClosedAt ? new Date(brake.latestClosedAt) : null;
-    const consent = hasIncident && latestClosedAt
+    const consent = !advisoryOnly && hasIncident && latestClosedAt
       ? await this.lastConsent(userId, session, latestClosedAt)
       : null;
     const override = hasIncident && latestClosedAt
@@ -242,11 +245,12 @@ export class DemoPortfolioBrakeConsentService {
       supported: true,
       state: !brake.active ? 'CLEAR'
         : !hasIncident ? 'UNAVAILABLE'
+          : advisoryOnly ? 'ADVISORY'
           : override ? 'OVERRIDDEN'
             : consent?.decision === 'KEEP_PAUSED' ? 'WAITING'
               : 'PAUSED',
       active: brake.active,
-      requiresOwnerDecision: hasIncident && !override && !consent,
+      requiresOwnerDecision: !advisoryOnly && hasIncident && !override && !consent,
       resumeAuthorized: override,
       userDecision: consent?.decision === 'RESUME' || consent?.decision === 'KEEP_PAUSED'
         ? consent.decision : null,
@@ -258,13 +262,15 @@ export class DemoPortfolioBrakeConsentService {
       lastThreeNetUsd: sum,
       recentLosses: losses,
       reason: hasIncident
-        ? 'Three consecutive net DEMO losses triggered a two-hour portfolio-wide new-entry pause.'
+        ? advisoryOnly
+          ? 'Three net DEMO losses detected. AI Trader does not pause automatically; use Stop Trading to stop.'
+          : 'Three consecutive net DEMO losses triggered a two-hour portfolio-wide new-entry pause.'
         : brake.active
           ? 'Portfolio risk evidence is unavailable; entries remain protected.'
           : 'No active portfolio loss-streak pause.',
       brokerAccountType: 'DEMO',
       currency: 'USD',
-      canOverrideCurrentIncident: hasIncident,
+      canOverrideCurrentIncident: hasIncident && !advisoryOnly,
     };
   }
 
@@ -284,6 +290,9 @@ export class DemoPortfolioBrakeConsentService {
     }
     const session = await this.activeOwnerDemo(userId);
     if (!session) throw new ForbiddenException('Only the owner of the active Pepperstone USD DEMO session may choose.');
+    if (this.ownerScope(userId) &&
+        this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY','')==='enabled')
+      throw new BadRequestException('Portfolio cooldown decisions are retired. Use Start Trading or Stop Trading.');
     const now = new Date();
     const brake = await this.readBrake(userId, session, now);
     if (brake.active !== true ||

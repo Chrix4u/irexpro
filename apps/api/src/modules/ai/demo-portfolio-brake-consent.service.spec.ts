@@ -30,7 +30,7 @@ const trades = [
   { closed_at:'2026-11-18T09:37:22Z',instrument:'AUDUSD',direction:'SELL',
     realised_pnl:'-29.26',commission:'-10',swap:'0' },
 ];
-function setup(decision: 'RESUME'|'KEEP_PAUSED'|null=null) {
+function setup(decision: 'RESUME'|'KEEP_PAUSED'|null=null,advisoryOnly=false) {
   const events:Array<{decision:string,expires_at:string}> = [];
   if (decision) events.push({decision,expires_at:'2026-11-18T14:05:33.982Z'});
   const query = jest.fn().mockImplementation(async (sql:string, params:unknown[])=>{
@@ -45,7 +45,9 @@ function setup(decision: 'RESUME'|'KEEP_PAUSED'|null=null) {
     }
     throw Error('Unexpected query '+sql.slice(0,80));
   });
-  const config = {get: (_:string)=>OWNER} as ConfigService;
+  const config = {get: (key:string)=>
+    key==='IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY'&&advisoryOnly?'enabled':OWNER,
+  } as ConfigService;
   const evidence = {
     loadPortfolioNetLossStreakBrake: jest.fn().mockResolvedValue(brake()),
   } as unknown as M1TacticalEvidenceService;
@@ -78,6 +80,19 @@ describe('owner-controlled current-DEMO portfolio loss-streak pause',()=>{
     expect(r.canOverrideCurrentIncident).toBe(false);
   });
 
+  it('reports last-three losses as advisory with no owner approval required',async()=>{
+    const {service,query}=setup(null,true);
+    const status=await service.getStatus(OWNER,AT);
+    expect(status.state).toBe('ADVISORY');
+    expect(status.active).toBe(true);
+    expect(status.requiresOwnerDecision).toBe(false);
+    expect(status.canOverrideCurrentIncident).toBe(false);
+    expect(status.reason).toContain('does not pause automatically');
+    await expect(service.decide(OWNER,{
+      action:'RESUME',acknowledged:true,incidentClosedAt:CLOSE,
+    })).rejects.toThrow('retired');
+    expect(query.mock.calls.some(([sql])=>sql.includes('INSERT INTO'))).toBe(false);
+  });
   it('shows the three signed net losses and actual two-hour end',async()=>{
     const {service}=setup();
     const r=await service.getStatus(OWNER,AT);

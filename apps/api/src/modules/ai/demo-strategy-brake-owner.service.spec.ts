@@ -24,7 +24,7 @@ const input={
  instrument:'USDJPY',direction:'SELL' as const,incidentClosedAt:CLOSED,
 };
 function setup(opts:{decision?:'CONTINUE_TRADING'|'KEEP_PAUSED'|'RESUME_LIMITED';
- reason?:string;denySession?:boolean}={}){
+ reason?:string;denySession?:boolean;advisoryOnly?:boolean}={}){
  let decision=opts.decision??null;
  const events:{sql:string;params:unknown[]}[]=[];
  const query=jest.fn().mockImplementation(async(sql:string,params:unknown[])=>{
@@ -41,7 +41,9 @@ function setup(opts:{decision?:'CONTINUE_TRADING'|'KEEP_PAUSED'|'RESUME_LIMITED'
   }
   throw Error('Unexpected SQL '+sql.slice(0,100));
  });
- const config={get:()=>OWNER} as unknown as ConfigService;
+ const config={get:(key:string)=>
+  key==='IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY'&&opts.advisoryOnly?'enabled':OWNER,
+ } as unknown as ConfigService;
  const evidence={loadMultimodelLossStreakBrake:jest.fn().mockResolvedValue({
   active:true,reason:opts.reason??'PERSISTENT_NEGATIVE_PAYOFF',
   latestClosedAt:new Date(CLOSED),
@@ -64,6 +66,16 @@ describe('Owner controlled DEMO strategy loss pause: Keep Paused / Continue Trad
   expect((await service.getStatus('intruder')).supported).toBe(false);
   await expect(service.decide('intruder',input)).rejects.toBeInstanceOf(ForbiddenException);
   expect(query).not.toHaveBeenCalled();
+ });
+ it('owner advisory mode needs no per-strategy decision and rejects old POST approvals',async()=>{
+  const {service,events}=setup({advisoryOnly:true});
+  const status=await service.getStatus(OWNER,AT);
+  expect(status.active).toBe(true);
+  expect(status.incidents[0].requiresOwnerDecision).toBe(false);
+  expect(status.incidents[0].continueTradingAuthorized).toBe(false);
+  expect(status.summary).toContain('Start Trading or Stop Trading');
+  await expect(service.decide(OWNER,input)).rejects.toThrow('retired');
+  expect(events.some(x=>x.sql.includes('INSERT INTO'))).toBe(false);
  });
  it('shows exact strategy, instrument and direction to the owner',async()=>{
   const {service}=setup();

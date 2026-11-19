@@ -134,6 +134,7 @@ import { evaluateM1TacticalExpectancy } from './m1-tactical-expectancy';
 import { attributeZaiDemoBlockers, diagnoseZaiDemoCostGeometry } from './zai-demo-diagnostics';
 import { evaluateM1CausalCommissionShadow } from './m1-causal-commission-shadow';
 import { evaluateDemoBrokerCommissionEntryGate } from './demo-broker-commission-entry-gate';
+import { ownerDemoLossPausePolicy } from './owner-demo-loss-pauses-advisory';
 import {
   M1_PORTFOLIO_NET_LOSS_BRAKE_ARTIFACT,
   M1_PORTFOLIO_NET_LOSS_BRAKE_COOLDOWN_MINUTES,
@@ -2291,6 +2292,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // DEMO portfolio loses repeatedly across several instruments. Require
     // same-session broker-account net economics before ANY new primary-engine
     // DEMO entry; never alter existing positions or weaken session authority.
+    const ownerDemoAdvisoryRequested =
+      professionalDemoPhase &&
+      this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY','')==='enabled' &&
+      !!userId &&
+      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID','')===userId;
     const downstreamRiskStartedAt = Date.now();
     let portfolioNetLossBrake: M1PortfolioNetLossBrakeDecision | null = null;
     if (professionalDemoPhase && preliminaryCanExecute && this.executionService) {
@@ -2325,32 +2331,27 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         };
       }
     }
-    // DEMO owner's explicitly consented pause override is limited to THIS
-    // three-loss incident and the still-active FULL_AUTO broker session.
-    // Every OTHER model, broker and financial risk veto remains binding.
+    // Existing incident-scoped owner overrides remain supported outside the
+    // newly scoped advisory policy. No approval is needed for the owner DEMO
+    // after its broker and FULL_AUTO session have been verified.
     let ownerAcceptedPortfolioBrake = false;
-    if (
-      portfolioNetLossBrake?.active === true &&
-      portfolioNetLossBrake.reason === 'RECENT_PORTFOLIO_NET_LOSS_STREAK' &&
-      portfolioNetLossBrake.latestClosedAt &&
-      preliminaryCanExecute &&
-      this.demoPortfolioBrakeConsent &&
-      this.executionService
-    ) {
+    if (!ownerDemoAdvisoryRequested &&
+        portfolioNetLossBrake?.active === true &&
+        portfolioNetLossBrake.reason === 'RECENT_PORTFOLIO_NET_LOSS_STREAK' &&
+        portfolioNetLossBrake.latestClosedAt &&
+        preliminaryCanExecute &&
+        this.demoPortfolioBrakeConsent && this.executionService) {
       try {
         const active = await this.executionService.getActiveSession(userId);
         if (active?.executionMode === ExecutionMode.FULL_AUTO &&
             active.brokerConnectionId === brokerConnectionId) {
           ownerAcceptedPortfolioBrake = await this.demoPortfolioBrakeConsent.isOverrideActive({
-            userId, brokerConnectionId, sessionId: active.id,
-            latestClosedAt: portfolioNetLossBrake.latestClosedAt,
+            userId,brokerConnectionId,sessionId:active.id,
+            latestClosedAt:portfolioNetLossBrake.latestClosedAt,
           });
         }
       } catch (error) {
-        this.logger.warn(
-          'DEMO risk consent unavailable; original pause retained: ' +
-          (error as Error).message,
-        );
+        this.logger.warn('DEMO portfolio consent unavailable: ' + (error as Error).message);
       }
     }
 
@@ -2634,19 +2635,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             evaluatedAt: decisionTime,
           })
         : null;
-    // Account-owner setting bypasses only the model-specific loss-streak
-    // brake for this DEMO strategy, pair, and direction. It persists for the
-    // same DEMO broker account until the owner changes it; normal model lot
-    // sizing, broker checks and independent portfolio protection still apply.
+    // Only this exact owner Pepperstone USD DEMO FULL_AUTO account receives
+    // advisory-only historical loss cooldowns. Never extend to other users,
+    // LIVE broker accounts or inactive sessions. An unavailable broker scope
+    // retains all prior protections.
     let ownerApprovedStrategyContinuation = false;
-    if (professionalDemoPhase && preliminaryCanExecute &&
-        (demoAlternativeTrial.eligible || executionStrategyRoute==='TREND_CONTINUATION') &&
-        multimodelLossStreakBrake?.active === true &&
+    if (!ownerDemoAdvisoryRequested && professionalDemoPhase &&
+        preliminaryCanExecute && multimodelLossStreakBrake?.active === true &&
         multimodelLossStreakBrake.latestClosedAt &&
-        ['PERSISTENT_NEGATIVE_PAYOFF','RECENT_MULTIMODEL_LOSS_STREAK','RECENT_NEGATIVE_PAYOFF']
-          .includes(multimodelLossStreakBrake.reason) &&
         executionStrategyRoute &&
-        ['EARLY_TRANSITION','CONFIRMED_REVERSAL','TREND_CONTINUATION'].includes(executionStrategyRoute) &&
+        ['EARLY_TRANSITION','CONFIRMED_REVERSAL','TREND_CONTINUATION']
+          .includes(executionStrategyRoute) &&
         this.demoStrategyBrakeOwner && this.executionService) {
       try {
         const active = await this.executionService.getActiveSession(userId);
@@ -2655,7 +2654,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ownerApprovedStrategyContinuation =
             await this.demoStrategyBrakeOwner.isContinuationApproved({
               userId,brokerConnectionId,sessionId:active.id,
-              route:executionStrategyRoute as 'EARLY_TRANSITION'|'CONFIRMED_REVERSAL'|'TREND_CONTINUATION',
+              route:executionStrategyRoute as
+                'EARLY_TRANSITION'|'CONFIRMED_REVERSAL'|'TREND_CONTINUATION',
               instrument:candidate.instrument,direction:candidate.direction,
               reason:multimodelLossStreakBrake.reason,
               latestClosedAt:multimodelLossStreakBrake.latestClosedAt,
@@ -2663,12 +2663,42 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             });
         }
       } catch (error) {
-        this.logger.warn(
-          'DEMO strategy-loss owner consent unavailable; original pause retained: ' +
-          (error as Error).message,
-        );
+        this.logger.warn('DEMO strategy consent unavailable: ' + (error as Error).message);
       }
     }
+    let ownerDemoDiscretionaryPausesAdvisory = false;
+    if (
+      ownerDemoAdvisoryRequested && preliminaryCanExecute &&
+      this.executionService &&
+      (fastStopRegimeBrake?.active===true ||
+        multimodelLossStreakBrake?.active===true ||
+        portfolioNetLossBrake?.active===true)
+    ) {
+      try {
+        const activeSession = await this.executionService.getActiveSession(userId);
+        if (activeSession?.executionMode===ExecutionMode.FULL_AUTO &&
+            activeSession.brokerConnectionId===brokerConnectionId) {
+          ownerDemoDiscretionaryPausesAdvisory =
+            await this.evidence.isPepperstoneUsdDemoBrokerConnection({
+              userId,brokerConnectionId,
+            });
+        }
+      } catch (error) {
+        this.logger.warn('Owner DEMO loss-advisory broker verification failed: ' +
+          (error as Error).message);
+      }
+    }
+    const ownerLossPausePolicy=ownerDemoLossPausePolicy({
+      featureEnabled:
+        this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY','')==='enabled',
+      exactOwner:!!userId &&
+        this.config.get<string>('VPS_FOREX_SCANNER_USER_ID','')===userId,
+      exactPepperstoneUsdDemo:ownerDemoDiscretionaryPausesAdvisory,
+      fullAutoActive:ownerDemoDiscretionaryPausesAdvisory,
+      model:multimodelLossStreakBrake,
+      portfolio:portfolioNetLossBrake,
+      fastStop:fastStopRegimeBrake,
+    });
     timings.downstreamRiskMs = Math.max(0, Date.now() - downstreamRiskStartedAt);
     const selectedPrimaryForCommission =
       professionalDemoPhase &&
@@ -2741,9 +2771,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       !professionalM1ActiveSameSideIntent &&
       !demoAlternateTrialActiveSameSideIntent &&
       !extensionExhaustionActiveSameSideIntent &&
-      fastStopRegimeBrake?.active !== true &&
-      (multimodelLossStreakBrake?.active !== true || ownerApprovedStrategyContinuation) &&
-      (portfolioNetLossBrake?.active !== true || ownerAcceptedPortfolioBrake) &&
+      !ownerLossPausePolicy.fastStopCooldownBlocks &&
+      (!ownerLossPausePolicy.modelLossStreakBlocks || ownerApprovedStrategyContinuation) &&
+      (!ownerLossPausePolicy.portfolioLossStreakBlocks || ownerAcceptedPortfolioBrake) &&
       !recoveryCanaryRecentlyAuthorized &&
       !recoveryCanaryHistoryUnavailable &&
       !qualifiedContinuationCanaryRecentlyAuthorized &&
@@ -2795,11 +2825,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(demoAlternateTrialActiveSameSideIntent
             ? ['M1_DEMO_ALTERNATIVE_TRIAL_ACTIVE_SAME_SIDE_INTENT']
             : []),
-          ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
-          ...(multimodelLossStreakBrake?.active === true && !ownerApprovedStrategyContinuation
+          ...(ownerLossPausePolicy.fastStopCooldownBlocks ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
+          ...(ownerLossPausePolicy.modelLossStreakBlocks && !ownerApprovedStrategyContinuation
             ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
             : []),
-          ...(portfolioNetLossBrake?.active === true && !ownerAcceptedPortfolioBrake
+          ...(ownerLossPausePolicy.portfolioLossStreakBlocks && !ownerAcceptedPortfolioBrake
             ? ['M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE'] : []),
           ...(recoveryCanaryRecentlyAuthorized ? ['M1_RECOVERY_CANARY_REPEAT_COOLDOWN'] : []),
           ...(recoveryCanaryHistoryUnavailable ? ['M1_RECOVERY_CANARY_HISTORY_UNAVAILABLE'] : []),
@@ -2825,7 +2855,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ])
       : unique([
           ...researchBlockers,
-          ...(fastStopRegimeBrake?.active === true ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
+          ...(ownerLossPausePolicy.fastStopCooldownBlocks ? ['M1_FAST_STOP_REGIME_BRAKE'] : []),
         ]);
 
     // Commission research is evaluated only for already-blocked DEMO
@@ -3163,6 +3193,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         independentM1OpportunityShadow,
         lowVolRangeShadow,
         ownerApprovedStrategyContinuation,
+        ownerLossPausePolicy,
         multimodelLossStreakBrake: multimodelLossStreakBrake
           ? { ...multimodelLossStreakBrake }
           : null,

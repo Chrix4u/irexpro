@@ -4,7 +4,7 @@ import "./portfolio-loss-pause.css";
 
 export interface PortfolioLossPauseStatus {
   supported: boolean;
-  state: "UNAVAILABLE" | "CLEAR" | "PAUSED" | "WAITING" | "OVERRIDDEN";
+  state: "UNAVAILABLE" | "CLEAR" | "PAUSED" | "WAITING" | "OVERRIDDEN" | "ADVISORY";
   active: boolean;
   requiresOwnerDecision: boolean;
   resumeAuthorized: boolean;

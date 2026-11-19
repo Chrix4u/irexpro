@@ -1718,6 +1718,23 @@ export class M1TacticalEvidenceService {
     return Number.isFinite(date.getTime()) ? date : null;
   }
 
+  /** Exact owner, nondeleted Pepperstone USD DEMO identity for manual
+   * Start/Stop policy. Never infer account currency from app defaults. */
+  async isPepperstoneUsdDemoBrokerConnection(input: {
+    userId: string;
+    brokerConnectionId: string;
+  }): Promise<boolean> {
+    const rows = (await this.dataSource.query(
+      `SELECT b.id FROM broker.broker_connections b
+       WHERE b.user_id=$1 AND b.id=$2 AND b.deleted_at IS NULL
+         AND b.broker_id='pepperstone-ctrader'
+         AND b.account_type='DEMO' AND b.account_currency='USD'
+       LIMIT 1`,
+      [input.userId, input.brokerConnectionId],
+    )) as Array<{ id: string }>;
+    return rows.length === 1;
+  }
+
   async isPepperstoneDemoBrokerConnection(input: {
     userId: string;
     brokerConnectionId: string;

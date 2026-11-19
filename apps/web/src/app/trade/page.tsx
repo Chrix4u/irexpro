@@ -26,11 +26,8 @@ import { useAuth } from "@/context/auth-context";
 import { useNotification } from "@/hooks/useNotification";
 import { MotionStatusOrb } from "@/components/ui/motion-status-orb";
 import { MarketClosedState } from "./MarketClosedState";
-import {
-  PortfolioLossPauseNotice,
-  type PortfolioLossPauseStatus,
-} from "@/components/trading/PortfolioLossPauseNotice";
-import { StrategyLossBrakeNotice, type StrategyLossBrakeOwnerStatus, type StrategyLossBrakeIncident } from "@/components/trading/StrategyLossBrakeNotice";
+import type { PortfolioLossPauseStatus } from "@/components/trading/PortfolioLossPauseNotice";
+import type { StrategyLossBrakeOwnerStatus } from "@/components/trading/StrategyLossBrakeNotice";
 import { AiTraderLoading } from "./ai-trader-loading";
 import { api } from "@/lib/api";
 import { formatAgeSeconds } from "@/lib/duration";
@@ -1879,14 +1876,12 @@ export default function AiTradingPage() {
     useState<DemoFocusedEntryDiagnosticView | null>(null);
   const [portfolioLossPause, setPortfolioLossPause] =
     useState<PortfolioLossPauseStatus | null>(null);
-  const [portfolioLossPauseError, setPortfolioLossPauseError] =
+  const [, setPortfolioLossPauseError] =
     useState<string | null>(null);
-  const [portfolioLossPauseSaving, setPortfolioLossPauseSaving] = useState(false);
   const [strategyLossAlerts, setStrategyLossAlerts] =
     useState<StrategyLossBrakeOwnerStatus | null>(null);
-  const [strategyLossAlertsError, setStrategyLossAlertsError] =
+  const [, setStrategyLossAlertsError] =
     useState<string | null>(null);
-  const [strategyLossAlertsSaving, setStrategyLossAlertsSaving] = useState(false);
 
   const [brokerParityRuntime, setBrokerParityRuntime] =
     useState<BrokerParityRuntimeStatusView | null>(null);
@@ -2467,9 +2462,8 @@ export default function AiTradingPage() {
     };
   }, [user, automationOn]);
 
-  // The owner is told when a DEMO loss-streak pause silently prevents entries.
-  // Run independently from chart/research polling and never grant authority
-  // from the UI. Only the authenticated server's incident-bound response does.
+  // Informational DEMO loss-pattern warnings. The owner uses Start/Stop to
+  // control the AI session; this polling path never grants trading authority.
   useEffect(() => {
     if (!user || !automationOn || terminal?.session?.executionMode !== "FULL_AUTO" ||
         selectedBroker?.accountType !== "DEMO" ||
@@ -2507,9 +2501,8 @@ export default function AiTradingPage() {
       terminal?.session?.executionMode, selectedBroker?.id,
       selectedBroker?.accountType, selectedBroker?.brokerId]);
 
-  // Strategy-specific pauses need their own owner decision, separate from
-  // the portfolio-wide three-loss acknowledgement. Poll even without a
-  // newly opened position: scanner brakes prevent that event by design.
+  // Strategy-specific after-fee loss diagnostics are read only and do not
+  // interrupt trading or ask the owner for permission.
   useEffect(() => {
     if (!user || !automationOn || terminal?.session?.executionMode !== "FULL_AUTO" ||
         selectedBroker?.accountType !== "DEMO" ||
@@ -2545,74 +2538,6 @@ export default function AiTradingPage() {
   }, [user, automationOn, terminal?.session?.id, terminal?.session?.executionMode,
       selectedBroker?.id, selectedBroker?.accountType, selectedBroker?.brokerId]);
 
-  const decideStrategyLossAlert = async (
-    incident: StrategyLossBrakeIncident,
-    action: "KEEP_PAUSED" | "CONTINUE_TRADING",
-  ) => {
-    if (strategyLossAlertsSaving) return;
-    setStrategyLossAlertsSaving(true);
-    setStrategyLossAlertsError(null);
-    try {
-      const result = await api.request<StrategyLossBrakeOwnerStatus>(
-        "/ai/external/vps-forex/m1-tactical/strategy-loss-alerts/decision",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            action, route: incident.route,
-            instrument: incident.instrument, direction: incident.direction,
-            incidentClosedAt: incident.incidentClosedAt,
-          }),
-        },
-      );
-      setStrategyLossAlerts(result);
-      if (action === "CONTINUE_TRADING") {
-        notify.success("Continue Trading enabled for this strategy direction.");
-      } else {
-        notify.success("This strategy direction will stay paused.");
-      }
-    } catch (reason) {
-      const message = mapApiError(reason).message;
-      setStrategyLossAlertsError(message);
-      notify.error(message);
-      throw reason;
-    } finally {
-      setStrategyLossAlertsSaving(false);
-    }
-  };
-
-  const decidePortfolioLossPause = async (
-    action: "RESUME" | "KEEP_PAUSED",
-    acknowledged: boolean,
-    incidentClosedAt: string,
-  ) => {
-    if (portfolioLossPauseSaving) return;
-    setPortfolioLossPauseSaving(true);
-    setPortfolioLossPauseError(null);
-    try {
-      const result = await api.request<PortfolioLossPauseStatus>(
-        "/ai/external/vps-forex/m1-tactical/portfolio-loss-pause/decision",
-        {
-          method: "POST",
-          body: JSON.stringify({ action, acknowledged, incidentClosedAt }),
-        },
-      );
-      setPortfolioLossPause(result);
-      if (action === "RESUME") {
-        notify.warning(
-          "You authorized additional DEMO trading risk for this loss incident. Other safety rules remain active.",
-        );
-      } else {
-        notify.success("Portfolio-loss safety pause retained for this DEMO account.");
-      }
-    } catch (reason) {
-      const message = mapApiError(reason).message;
-      setPortfolioLossPauseError(message);
-      notify.error(message);
-      throw reason;
-    } finally {
-      setPortfolioLossPauseSaving(false);
-    }
-  };
 
   // This user/account-scoped investigation is separate from core Start/Stop
   // and the fast 4-second status feed. Refresh every 30s; its failure must
@@ -3368,19 +3293,12 @@ export default function AiTradingPage() {
         title="AI Trading"
       >
         <main className="ai-trader" data-testid="ai-trader-workspace">
-          <PortfolioLossPauseNotice
-            status={portfolioLossPause}
-            saving={portfolioLossPauseSaving}
-            error={portfolioLossPauseError}
-            onDecision={decidePortfolioLossPause}
-          />
-          <StrategyLossBrakeNotice
-            status={strategyLossAlerts}
-            saving={strategyLossAlertsSaving}
-            error={strategyLossAlertsError}
-            deferAutoOpen={portfolioLossPause?.requiresOwnerDecision === true}
-            onDecision={decideStrategyLossAlert}
-          />
+          {automationOn && (portfolioLossPause?.active || strategyLossAlerts?.active) && (
+            <div role="status" className="portfolio-brake-alert">
+              <strong>Loss-pattern warning</strong>
+              <p>Recent trading losses were detected. AI Trader remains under your Start/Stop control; no extra loss-streak approval is required.</p>
+            </div>
+          )}
           <MarketClosedState
             nextEligibleScanAt={vpsScannerStatus.marketSchedule.nextEligibleScanAt}
           />
@@ -3397,19 +3315,12 @@ export default function AiTradingPage() {
       title="AI Trading"
     >
       <main className="ai-trader" data-testid="ai-trader-workspace">
-        <PortfolioLossPauseNotice
-          status={portfolioLossPause}
-          saving={portfolioLossPauseSaving}
-          error={portfolioLossPauseError}
-          onDecision={decidePortfolioLossPause}
-        />
-        <StrategyLossBrakeNotice
-          status={strategyLossAlerts}
-          saving={strategyLossAlertsSaving}
-          error={strategyLossAlertsError}
-          deferAutoOpen={portfolioLossPause?.requiresOwnerDecision === true}
-          onDecision={decideStrategyLossAlert}
-        />
+        {automationOn && (portfolioLossPause?.active || strategyLossAlerts?.active) && (
+          <div role="status" className="portfolio-brake-alert">
+            <strong>Loss-pattern warning</strong>
+            <p>Recent losses were detected. Trading continues when a valid opportunity qualifies. Use Stop Trading if you want the AI to stop.</p>
+          </div>
+        )}
         <section className="ai-trader__hero">
           <div>
             <p className="workspace-hero__eyebrow">Autonomous trading control</p>

@@ -118,10 +118,13 @@ export class DemoStrategyBrakeOwnerService {
    overridesHardAccountOrBrokerRisk:false,noAutomaticSideReversal:true,
   };
   const s=await this.session(id);if(!s)return empty;
+  const advisoryOnly =
+   this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY','')==='enabled' &&
+   this.owner(id);
   const incidents:StrategyBrakeIncident[]=[];
   for(const x of await this.candidates(id,s,now)){
-   const d=await this.consent(id,s,x);
-   const approved=validContinuedTradingConsent(d,now);
+   const d=advisoryOnly?null:await this.consent(id,s,x);
+   const approved=advisoryOnly||validContinuedTradingConsent(d,now);
    incidents.push({
     id:[x.strategy,x.instrument,x.direction,iso(x.brake.latestClosedAt!)].join('|'),
     route:x.strategy,instrument:x.instrument,direction:x.direction,
@@ -134,20 +137,25 @@ export class DemoStrategyBrakeOwnerService {
     recentWins:n(x.brake.recentWins),recentLosses:n(x.brake.recentLosses),
     userDecision:d?.decision==='CONTINUE_TRADING'?'CONTINUE_TRADING':
       d?.decision==='KEEP_PAUSED'?'KEEP_PAUSED':null,
-    continueTradingAuthorized:approved,
-    requiresOwnerDecision:!d||d.decision==='RESUME_LIMITED',
+    continueTradingAuthorized:advisoryOnly?false:approved,
+    requiresOwnerDecision:advisoryOnly?false:(!d||d.decision==='RESUME_LIMITED'),
    });
   }
   return {...empty,supported:true,accountType:'DEMO',currency:'USD',
    active:incidents.length>0,incidents,
    summary:incidents.length?
-    'A strategy-loss restriction needs the account owner to choose Pause or Continue Trading.':
-    'No recent qualified strategy-loss brake incidents.'};
+    (advisoryOnly
+      ? 'Loss-pattern warnings only. The owner uses Start Trading or Stop Trading.'
+      : 'A strategy-loss restriction needs the account owner to choose Pause or Continue Trading.'):
+    'No recent strategy loss-pattern warnings.'};
  }
  async decide(id:string,input:{
   action:Action;route:Route;instrument:string;
   direction:Side;incidentClosedAt:string;
  }):Promise<StrategyBrakeOwnerStatus>{
+  if (this.owner(id) &&
+    this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY','')==='enabled')
+    throw new BadRequestException('Individual strategy pause decisions are retired. Use Start Trading or Stop Trading.');
   if(!['KEEP_PAUSED','CONTINUE_TRADING'].includes(input.action)||
     !ROUTES.includes(input.route)||!PAIRS.includes(input.instrument as typeof PAIRS[number])||
     !['BUY','SELL'].includes(input.direction)||
