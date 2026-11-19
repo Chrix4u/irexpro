@@ -14,6 +14,7 @@ import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canar
 import { evaluatePepperstonePeakLossRescue } from './pepperstone-peak-loss-rescue';
 import { evaluatePepperstoneDemoNetProfitLock } from './pepperstone-demo-net-profit-lock';
 import { evaluatePepperstoneDemoExitMonitor } from './pepperstone-demo-exit-signal-monitor';
+import { evaluateCtraderStopDistanceProof } from './ctrader-native-min-stop-distance-shadow';
 import {
   evaluatePepperstoneDemoAdverseCut,
   PEPPERSTONE_DEMO_ADVERSE_CUT_ARTIFACT,
@@ -1627,6 +1628,9 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       typeof evaluateVerifiedProtectedRunnerStopShadow
     > | null = null;
     let protectedRunnerPreflightReason: string | null = null;
+    let protectedRunnerNativeDistanceShadow: ReturnType<
+      typeof evaluateCtraderStopDistanceProof
+    > | null = null;
     if (
       verdict.recommendation === 'HEALTHY_CONTINUATION_RESEARCH' &&
       (trade.strategy_route === 'EARLY_TRANSITION' ||
@@ -1686,6 +1690,37 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           runner,
         });
         protectedRunnerPreflightReason = runner.reason;
+        if (
+          protectedRunnerReadinessShadow.eligibleForIndependentProviderValidation &&
+          protectedRunnerReadinessShadow.proposedStopForResearchOnly !== null
+        ) {
+          // Read-only symbol specification; missing/ambiguous broker minimum
+          // stop distance FAILS CLOSED. Quotes are as-of this observation.
+          // This is never a provider modification or live HOLD permission.
+          const symbol = typeof this.brokerService.getInstrumentSpecForConnection === 'function'
+            ? await this.brokerService.getInstrumentSpecForConnection(
+                trade.user_id, trade.broker_connection_id, trade.instrument,
+              ).catch(() => null)
+            : null;
+          protectedRunnerNativeDistanceShadow = evaluateCtraderStopDistanceProof({
+            ownerDemoVerified:
+              !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+              trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID,
+            brokerId:'pepperstone-ctrader',
+            accountType:'DEMO',
+            currency:trade.account_currency ?? '',
+            instrument:trade.instrument,
+            direction:trade.direction,
+            entryPrice:position.entry ?? Number.NaN,
+            originalStop:finite(trade.stop_loss) ?? Number.NaN,
+            originalTakeProfit:finite(trade.take_profit) ?? Number.NaN,
+            proposedStop:protectedRunnerReadinessShadow.proposedStopForResearchOnly,
+            lastBid:quote?.bid ?? null,
+            lastAsk:quote?.ask ?? null,
+            quoteObservedAt:quote?.observedAt ?? null,
+            observedAt,symbol,
+          });
+        }
       } catch (error) {
         // Pure research cannot delay or revoke the existing protection policy.
         protectedRunnerPreflightReason =
@@ -1711,6 +1746,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         peakBrokerNetPnl,
         protectedRunnerPreflightReason,
         protectedRunnerReadinessShadow,
+        protectedRunnerNativeDistanceShadow,
         m1LiveQuoteBars: m1?.liveQuoteBars ?? 0,
         m1ConsecutiveLiveQuoteBars: m1?.consecutiveLiveQuoteBars ?? 0,
         m1AlignedMomentum3: m1?.alignedMomentum3 ?? null,

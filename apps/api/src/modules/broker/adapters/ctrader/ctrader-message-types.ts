@@ -355,6 +355,12 @@ export interface CtraderSymbol {
   stepVolume?: number;
   lotSize?: number;
   tradingMode?: number;
+  /** ProtoOASymbol.slDistance: minimum stop distance from current price. */
+  slDistance?: number;
+  /** ProtoOASymbol.tpDistance: minimum TP distance from current price. */
+  tpDistance?: number;
+  /** ProtoOASymbolDistanceType: 1=points (default), 2=percentage. */
+  distanceSetIn?: number;
 }
 
 /** ProtoOAAsset (2113). */

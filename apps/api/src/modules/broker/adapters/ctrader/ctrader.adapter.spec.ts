@@ -1775,6 +1775,37 @@ describe('CTraderAdapter', () => {
     });
   });
 
+  describe('getInstrumentList minimum stop metadata', () => {
+    it('passes through cTrader native slDistance and its declared point/percentage units', async () => {
+      server.on(CTRADER_PAYLOAD_TYPE.SYMBOL_BY_ID_REQ,(payload,envelope)=>{
+        const ids=Array.isArray(payload.symbolId)?payload.symbolId as number[]:[];
+        return {
+          clientMsgId:envelope.clientMsgId,
+          payloadType:CTRADER_PAYLOAD_TYPE.SYMBOL_BY_ID_RES,
+          payload:{
+            symbol:ids.map(symbolId=>({
+              symbolId,digits:5,pipPosition:4,
+              minVolume:1000,maxVolume:100000000,
+              stepVolume:1000,lotSize:10000000,
+              slDistance:symbolId===101?25:2,
+              distanceSetIn:symbolId===101?1:2,
+            })),
+          },
+        };
+      });
+      await connectDemo();
+      const items=await adapter.getInstrumentList();
+      const major=items.find(i=>i.symbol==='EUR/USD');
+      expect(major).toMatchObject({
+        minStopLossDistance:'25',minStopLossDistanceUnit:'POINTS',
+      });
+      const other=items.find(i=>i.symbol!=='EUR/USD');
+      expect(other).toMatchObject({
+        minStopLossDistance:'2',minStopLossDistanceUnit:'PERCENTAGE',
+      });
+    });
+  });
+
   describe('getCurrentPrice', () => {
     it('subscribes, consumes one spot event and unsubscribes (spot ÷ 100 000)', async () => {
       await connectDemo();

@@ -114,6 +114,18 @@ giveback. Opposite executable reversal and deterioration warnings
 still take priority. This is **SHADOW_ONLY**; its candidates need
 prospective post-exit validation, not immediate autonomous holds.
 
+The cTrader adapter now exposes the broker's `ProtoOASymbol.slDistance`
+and `distanceSetIn` as optional normalized `BrokerInstrument` fields,
+without changing sizing or new-order admission. A **read-only** independent
+native stop-distance preflight evaluates prospective runner stops against
+the broker's actual price digits, declared minimum stop distance and fresh
+bid/ask, with an additional spread/tick safety buffer. It supports
+point-defined distances only; percentage-based or missing symbol
+distance units are explicitly marked unsupported rather than guessed.
+A passing preflight is STILL not broker acceptance or confirmed installed
+protection. Before any actual amendment, the symbol and current bid/ask
+must be refreshed and an accepted change independently read back.
+
 The currently enabled DEMO safeguard from the previous section still
 does not use this ledger to place amendments or delay closes.
 

@@ -680,6 +680,16 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           maxLot: volumeCentsToLotString(symbol.maxVolume ?? 0, symbol.lotSize),
           lotStep: volumeCentsToLotString(symbol.stepVolume ?? 0, symbol.lotSize),
           contractSize: moneyToDecimalString(symbol.lotSize, 2),
+          ...(Number.isInteger(symbol.slDistance) && (symbol.slDistance ?? 0) > 0 &&
+          (symbol.distanceSetIn === undefined ||
+            symbol.distanceSetIn === 1 || symbol.distanceSetIn === 2)
+            ? {
+                minStopLossDistance: String(symbol.slDistance),
+                minStopLossDistanceUnit:
+                  (symbol.distanceSetIn === 2 ? 'PERCENTAGE' : 'POINTS') as
+                    'POINTS' | 'PERCENTAGE',
+              }
+            : {}),
         });
       }
       return instruments;
