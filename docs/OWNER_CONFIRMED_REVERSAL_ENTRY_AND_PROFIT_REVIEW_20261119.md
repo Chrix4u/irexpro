@@ -62,3 +62,35 @@ node scripts/audit-owner-demo-reversal-entry-exits.cjs
 ## Decision and next threshold for change
 
 **Keep the currently operating DEMO strategies unchanged** while the existing frozen, prospective loss-pattern observer continues gathering evidence. The next legitimate investigation is a *decision-time* 0.25R profit-floor shadow that captures quote freshness, documented fees and descending broker marks, compared with the current 0.50R protector. Never change the live threshold based solely on a final historical peak. Separately assess entry timing across at least several independent days rather than treating correlated one-minute trades as independent trials.
+
+## Prospective 0.25R shadow monitor — no execution authority
+
+The separate research observer is `apps/api/scripts/watch-owner-demo-low-peak-profit-shadow.cjs`
+and its PM2 configuration is `irexpro-owner-low-peak-forward-shadow.pm2.config.cjs`.
+It freezes a new activation timestamp and enrolls only positions that OPEN
+after activation. It cannot retrospectively invent a hypothetical 0.25R
+broker exit on the recently closed losing positions.
+
+Every eight seconds it reads a bounded, READ ONLY broker telemetry snapshot
+for the active FULL_AUTO, connected/authorized Pepperstone USD DEMO owner.
+It requires pre-entry stop-risk and historical commission-per-lot evidence.
+Missing or stale evidence cannot create a lower-peak crossing event.
+
+The monitor compares a broker-net peak crossing of the **hypothetical 0.25R**
+cost-aware peak gate with the untouched **production 0.50R** rule. It requires
+two fresh, descending broker-net P&L observations, a positive cost reserve
+and strictly verified original scope. A P&L crossing is **not** a valid
+execution quote, broker stop amendment, proof of fill, or saved cash.
+
+It writes an append-only owner-only journal, restart-resilient state and
+a summary beneath:
+`/home/lightworld/webapps/irexpro-research/reversal-low-peak-forward/`.
+
+It does not submit, cancel or close an order; change Start/Stop; amend stops;
+change lots; change a model; alter LIVE trading; or promote a strategy.
+Testing command:
+`node --test apps/api/scripts/watch-owner-demo-low-peak-profit-shadow.test.cjs`.
+PM2 research worker (only after committing/pushing):
+`pm2 start scripts/irexpro-owner-low-peak-forward-shadow.pm2.config.cjs`.
+Several independent prospective trading days and fresh quote/fill checks
+are necessary before considering an actual DEMO exit-policy change.
