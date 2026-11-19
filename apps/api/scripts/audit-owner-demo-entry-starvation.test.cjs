@@ -103,3 +103,16 @@ test('an inactive pause check does not prove the VPS environment flag is disable
   assert.equal(result.continuationPause.observedEnabledCandidates,0);
   assert.equal(result.continuationPause.latestObservedReason,'DISABLED');
 });
+test('M1 abstain does not conceal a separately broker-authorized DEMO Plan-B trade',()=>{
+  const report=auditEntryStarvation([
+    cand(1,{route:'ABSTAIN',direction:'SELL',execution_authority:'BROKER_NATIVE',
+      blockers:['MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED']}),
+    cand(2,{route:'M1_EARLY_TRANSITION',execution_authority:'NONE'}),
+  ],[{instrument:'USDCAD',opened_at:d(1),status:'OPEN'}],AT);
+  assert.equal(report.m1Abstentions,1);
+  assert.equal(report.brokerNativeAuthorizedDecisions,1);
+  assert.equal(report.brokerNativeAuthorizedM1AbstainDecisions,1);
+  assert.equal(report.brokerNativeAuthorizedNonAbstainDecisions,0);
+  assert.equal(report.nonAbstainNoBrokerAuthority,1);
+  assert.equal(report.ordersOpenedInWindow,1);
+});
