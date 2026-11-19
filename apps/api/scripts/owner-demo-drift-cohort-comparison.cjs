@@ -10,12 +10,20 @@ const DRIFT_STATES = ['NORMAL', 'OUT_OF_DISTRIBUTION'];
 const round = n => Number(n.toFixed(4));
 
 function summarize(rows, labelOf, asOfMs) {
-  const complete = rows.map(r => labelOf(r, asOfMs)).filter(Boolean);
+  const allComplete = rows.map(r => labelOf(r, asOfMs)).filter(Boolean);
+  // Simulated/missing costs can be useful descriptive shadow outcomes, but
+  // cannot be treated as a broker-cost-matched after-fee comparison.
+  const complete = allComplete.filter(
+    label => label.costSource === 'BROKER_OBSERVED_P90' && Number.isFinite(label.netR),
+  );
   const net = complete.map(r => r.netR);
   return {
     episodes: rows.length,
+    observedQuoteLabels: allComplete.length,
     completedLabels: complete.length,
-    missingLabels: rows.length - complete.length,
+    unverifiedCostLabels: allComplete.length - complete.length,
+    missingLabels: rows.length - allComplete.length,
+    // Paired comparison requires valid quote label AND broker-observed cost.
     coverage: rows.length ? round(complete.length / rows.length) : null,
     meanEstimatedNetR: net.length ? round(net.reduce((a, b) => a + b, 0) / net.length) : null,
   };
@@ -102,6 +110,7 @@ function compareMatchedDriftDays(selected, labelOf, asOfMs, options = {}) {
     artifact: 'owner-demo-matched-drift-shadow-comparison-v1',
     status,
     interpretation: 'DESCRIPTIVE_QUOTE_ONLY_NOT_CAUSAL',
+    comparableCostEvidence: 'BROKER_OBSERVED_P90_ONLY',
     executionAuthority: 'NONE',
     modelTrainingStatus: 'NOT_TRAINED',
     modifiesExecution: false,
@@ -120,7 +129,7 @@ function compareMatchedDriftDays(selected, labelOf, asOfMs, options = {}) {
     limitations: [
       'Matched-day observational quote results do not establish causation or broker executability.',
       'Unlabelled scenarios may be missing non-randomly; compare coverage by state.',
-      'All estimates include only shadow-estimated cost, not actual commission/slippage fills.',
+      'Only broker-observed P90 spread cost provenance qualifies for paired comparisons; these remain hypothetical and exclude actual commission and slippage fills.',
       'Evidence cannot promote drift thresholds, reversal models or live trading.',
     ],
   };
