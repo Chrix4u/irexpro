@@ -1829,6 +1829,79 @@ describe('LiveDemoProfitProtectionService', () => {
       else process.env.VPS_FOREX_SCANNER_USER_ID=oldOwner;
     }
   });
+
+  it('records a real broker-quote-backed protected-runner preflight but never amends positions', async () => {
+    const priorFlag=process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR;
+    const priorOwner=process.env.VPS_FOREX_SCANNER_USER_ID;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR='enabled';
+    process.env.VPS_FOREX_SCANNER_USER_ID='user-1';
+    const logger={log:jest.fn().mockResolvedValue(undefined)} as unknown as AuditService;
+    const h=harness([candidate()], '7','DEMO',[],'1.1134',[],logger,
+      [],[],[],'pepperstone-ctrader');
+    const service=h.service as any;
+    const at=new Date('2026-11-19T08:01:00Z');
+    jest.spyOn(service,'loadCausalM1Evidence').mockResolvedValue({
+      completedBars:3,liveQuoteBars:3,latestAgeSeconds:18,adverseBars:0,
+      alignedLatestBodyPressure:0.48,alignedMomentum3:0.45,
+      latestLiveSpreadPrice:0.00002,
+    });
+    jest.spyOn(service,'loadProfitLockPatienceSignal').mockResolvedValue({
+      sameSideContinuationAt:new Date(at.getTime()-40000),
+      oppositeExecutableReversal:false,
+    });
+    const feeReader=jest.spyOn(service,'loadCausalPepperstoneDemoCostEstimate')
+      .mockResolvedValue({estimatedCost:1.6,sampleCount:12,source:'SAME_SYMBOL'});
+    const quoteReader=jest.spyOn(service,'loadVerifiedRunnerAsOfNativeQuote')
+      .mockResolvedValue({bid:1.11339,ask:1.11341,
+        observedAt:new Date(at.getTime()-3000)});
+    const trade=candidate({
+      account_currency:'USD',initial_risk_pnl:'9',
+      strategy_route:'CONFIRMED_REVERSAL',lot_size:'0.20',
+      max_favorable_pnl:'10',
+    });
+    try{
+      await service.recordPepperstoneDemoExitMonitor(trade,at,7,10,{
+        instrument:'EURUSD',direction:'BUY',lotSize:0.2,
+        entry:1.113,mark:1.1134,stop:1.1125,takeProfit:1.1138,
+      });
+      expect(feeReader).toHaveBeenCalledTimes(1);
+      expect(quoteReader).toHaveBeenCalledTimes(1);
+      expect(logger.log).toHaveBeenCalledWith(expect.objectContaining({
+        action:AuditAction.DEMO_POSITION_EXIT_INTELLIGENCE_SHADOW,
+        metadata:expect.objectContaining({
+          mode:'SHADOW_ONLY',recommendation:'HEALTHY_CONTINUATION_RESEARCH',
+          protectedRunnerPreflightReason:'BROKER_VALIDATION_REQUIRED',
+          protectedRunnerReadinessShadow:expect.objectContaining({
+            eligibleForIndependentProviderValidation:true,
+            reason:'REQUIRES_BROKER_TICK_MIN_STOP_AND_AMENDMENT_VERIFICATION',
+            noTradeAuthority:true,modifiesExecution:false,
+          }),
+        }),
+      }));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+      // Missing causal fee / quote evidence must not lead to any amendment.
+      feeReader.mockResolvedValueOnce(null);
+      quoteReader.mockResolvedValueOnce(null);
+      (logger.log as jest.Mock).mockClear();
+      await service.recordPepperstoneDemoExitMonitor(trade,at,7,10,{
+        instrument:'EURUSD',direction:'BUY',lotSize:0.2,
+        entry:1.113,mark:1.1134,stop:1.1125,takeProfit:1.1138,
+      });
+      expect(logger.log).toHaveBeenCalledWith(expect.objectContaining({
+        metadata:expect.objectContaining({
+          protectedRunnerReadinessShadow:expect.objectContaining({
+            eligibleForIndependentProviderValidation:false,
+          }),
+        }),
+      }));
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+    }finally{
+      if(priorFlag===undefined)delete process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR=priorFlag;
+      if(priorOwner===undefined)delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID=priorOwner;
+    }
+  });
 });
 
 describe('bounded M1 continuation recovery grace', () => {

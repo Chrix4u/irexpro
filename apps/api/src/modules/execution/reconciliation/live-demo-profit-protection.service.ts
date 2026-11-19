@@ -1618,6 +1618,83 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         alignedMomentum3: m1.alignedMomentum3,
       } : null,
     });
+    // If an ALREADY OPEN reversal/transition appears fit to continue,
+    // independently estimate whether a positive broker stop might exist.
+    // This extra evidence is research-only: never call modifyOrder, never
+    // amend the trade record, and never bypass an existing protective close.
+    let protectedRunnerReadinessShadow: ReturnType<
+      typeof evaluateVerifiedProtectedRunnerStopShadow
+    > | null = null;
+    let protectedRunnerPreflightReason: string | null = null;
+    if (
+      verdict.recommendation === 'HEALTHY_CONTINUATION_RESEARCH' &&
+      (trade.strategy_route === 'EARLY_TRANSITION' ||
+        trade.strategy_route === 'CONFIRMED_REVERSAL') &&
+      currentBrokerNetPnl >= (finite(trade.initial_risk_pnl) ?? Infinity) * 0.5
+    ) {
+      try {
+        const [fees, quote] = await Promise.all([
+          this.loadCausalPepperstoneDemoCostEstimate(trade, observedAt),
+          this.loadVerifiedRunnerAsOfNativeQuote(trade, observedAt),
+        ]);
+        const runner = evaluateProtectedRunnerShadow({
+          trendWouldHold: true,
+          instrument: trade.instrument,
+          direction: trade.direction,
+          grossUnrealisedPnl: currentBrokerNetPnl,
+          initialRiskPnl: finite(trade.initial_risk_pnl) ?? Number.NaN,
+          estimatedBrokerCosts: fees?.estimatedCost ?? null,
+          feeSampleCount: fees?.sampleCount ?? 0,
+          entryPrice: position.entry,
+          currentPrice: position.mark,
+          originalStopPrice: finite(trade.stop_loss),
+          takeProfitPrice: position.takeProfit,
+          latestLiveSpreadPrice:
+            quote ? quote.ask - quote.bid : m1?.latestLiveSpreadPrice ?? null,
+        });
+        protectedRunnerReadinessShadow = evaluateVerifiedProtectedRunnerStopShadow({
+          brokerId: 'pepperstone-ctrader',
+          accountType: 'DEMO',
+          currency: trade.account_currency,
+          ownerUserId: process.env.VPS_FOREX_SCANNER_USER_ID || null,
+          userId: trade.user_id,
+          isM1Strategy: trade.is_m1_strategy,
+          route: trade.strategy_route,
+          instrument: trade.instrument,
+          brokerInstrument: position.instrument,
+          direction: trade.direction,
+          brokerDirection: position.direction === 'BUY' ? 'BUY' :
+            position.direction === 'SELL' ? 'SELL' :
+            trade.direction === 'BUY' ? 'SELL' : 'BUY',
+          tradeLots: finite(trade.lot_size),
+          brokerLots: position.lotSize,
+          entry: position.entry,
+          mark: position.mark,
+          originalStop: finite(trade.stop_loss),
+          brokerStop: position.stop,
+          takeProfit: finite(trade.take_profit),
+          brokerTakeProfit: position.takeProfit,
+          brokerNetPnl: currentBrokerNetPnl,
+          initialRiskPnl: finite(trade.initial_risk_pnl) ?? Number.NaN,
+          estimatedExtraExitReserve: fees?.estimatedCost ?? null,
+          historicalFeeSamples: fees?.sampleCount ?? 0,
+          observedAt,
+          lastBid: quote?.bid ?? null,
+          lastAsk: quote?.ask ?? null,
+          quoteObservedAt: quote?.observedAt ?? null,
+          runner,
+        });
+        protectedRunnerPreflightReason = runner.reason;
+      } catch (error) {
+        // Pure research cannot delay or revoke the existing protection policy.
+        protectedRunnerPreflightReason =
+          'READ_ONLY_BROKER_STOP_READINESS_DATA_UNAVAILABLE';
+        this.logger.warn(
+          'Owner DEMO runner-stop preflight deferred: ' +
+            (error as Error).message.slice(0, 120),
+        );
+      }
+    }
     await this.auditService.log({
       actorUserId: trade.user_id,
       action: AuditAction.DEMO_POSITION_EXIT_INTELLIGENCE_SHADOW,
@@ -1631,6 +1708,8 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         strategyRoute: trade.strategy_route,
         currentBrokerNetPnl,
         peakBrokerNetPnl,
+        protectedRunnerPreflightReason,
+        protectedRunnerReadinessShadow,
         m1LiveQuoteBars: m1?.liveQuoteBars ?? 0,
         m1AlignedMomentum3: m1?.alignedMomentum3 ?? null,
         m1AlignedLatestBodyPressure: m1?.alignedLatestBodyPressure ?? null,
