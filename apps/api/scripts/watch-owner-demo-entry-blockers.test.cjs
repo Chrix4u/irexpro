@@ -30,6 +30,21 @@ test('poll cadence is research-only and bounded',()=>{
 test('reports real active global 120-minute brake',()=>{
  assert.equal(classify(base,at),'VALID_PORTFOLIO_BRAKE_ACTIVE');
 });
+test('owner advisory-only loss observation is not called an actual trading halt',()=>{
+ const x={...base,latestOwnerPausePolicy:{
+   advisoryOnly:true,portfolioLossStreakBlocks:false},
+  eligibleAlternativeWithEffectivePortfolioVeto:1,
+  selectedAlternativeBrakedSinceLastClose:0};
+ assert.equal(classify(x,at),'OWNER_LOSS_STREAK_WARNING_ONLY');
+ const status=compact(x,classify(x,at));
+ assert.equal(status.ownerLossPauseAdvisoryOnly,true);
+ assert.equal(status.effectivePortfolioVetoCount,1);
+ // An earlier observed veto does not turn the CURRENT advisory session
+ // back into a 120-minute mandatory pause.
+ assert.equal(classify({...x,latestOwnerPausePolicy:{
+  advisoryOnly:true,portfolioLossStreakBlocks:true}},at),
+  'VALID_PORTFOLIO_BRAKE_ACTIVE');
+});
 test('after expiry, recognizes that a new trade is STILL absent',()=>{
  const x={...base,independentlyComputedAccountBrake:{
   ...base.independentlyComputedAccountBrake,

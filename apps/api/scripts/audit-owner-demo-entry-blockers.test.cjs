@@ -91,6 +91,22 @@ test('research blocks never claim all eligible alternatives would broker-fill',(
  assert.equal(r.modes.changesBrakes,false);
  assert.equal(r.modes.liveEligible,false);
 });
+test('owner DEMO advisory-only raw loss streak is not misreported as an order veto',()=>{
+ const x=candidate({
+  blockers:['MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED'],
+  owner_pause_policy:{advisoryOnly:true,portfolioLossStreakBlocks:false,
+   modelLossStreakBlocks:false,fastStopCooldownBlocks:false},
+ });
+ const r=summarize([x],losses,{n:0,latest:null,since_latest_close:0},
+  new Date(AT));
+ assert.equal(r.eligibleAlternativeWithPortfolioBrake,1);
+ assert.equal(r.eligibleAlternativeWithEffectivePortfolioVeto,0);
+ assert.equal(r.selectedAlternativeBrakedSinceLastClose,0);
+ assert.equal(r.ownerDemoAdvisoryOnlyDecisions,1);
+ assert.equal(r.latestOwnerPausePolicy.advisoryOnly,true);
+ assert.equal(r.activeSafetyObservations.portfolioBrake,1);
+ assert.equal(r.effectiveSafetyVetoes.portfolioBrake,0);
+});
 test('selected alternate without portfolio brake can be rejected by a separate safety rule',()=>{
  const x=candidate({
   evaluated_at:'2026-11-18T12:59:00Z',

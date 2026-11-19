@@ -18,6 +18,7 @@ const DECISIONS_SQL=[
  "d.governance->'demoAlternativeTrial' AS alternative,",
  "d.governance->'portfolioNetLossBrake' AS portfolio_brake,",
  "d.governance->'multimodelLossStreakBrake' AS strategy_brake,",
+ "d.governance->'ownerLossPausePolicy' AS owner_pause_policy,",
  "d.governance->'demoContinuationPause' AS continuation_pause,",
  "d.governance->'demoBrokerCommissionGate' AS commission_gate",
  "FROM trading.m1_tactical_decisions d",
@@ -80,8 +81,13 @@ function eligiblePath(row){
    altEligible&&infoList(row.blockers).some(x=>
     x==='MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED'||
     x==='MULTIMODEL_EARLY_TRANSITION_NOT_M1_CONFIRMED'),
+  // A recorded model loss is not an effective veto when the verified owner
+  // DEMO session has opted into advisory-only loss-pause policy.
   portfolioBrakeActive:row.portfolio_brake?.active===true,
   strategyBrakeActive:row.strategy_brake?.active===true,
+  portfolioBrakeBlocks:infoList(row.blockers).includes('M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE'),
+  strategyBrakeBlocks:infoList(row.blockers).includes('M1_MULTIMODEL_LOSS_STREAK_BRAKE'),
+  ownerAdvisoryOnly:row.owner_pause_policy?.advisoryOnly===true,
  };
 }
 function settled(row){
@@ -121,9 +127,13 @@ function summarize(decisions,closes,orders,now=new Date()){
  const byModelRoute={};
  const bySelectedAlternateReason={};
  const byActiveSafety={portfolioBrake:0,strategyBrake:0};
+ const byEffectiveSafety={portfolioBrake:0,strategyBrake:0};
  let observed=0,eligibleAlternative=0,eligiblePrimary=0,eligibleRoute=0,
-  altBlockedByPortfolio=0,altBlockedByStrategy=0;
- let latestDecision=null,latestEligible=null,latestPortfolioBrake=null;
+  altBlockedByPortfolio=0,altBlockedByStrategy=0,
+  altEffectivelyBlockedByPortfolio=0,altEffectivelyBlockedByStrategy=0,
+  ownerAdvisoryDecisions=0;
+ let latestDecision=null,latestEligible=null,latestPortfolioBrake=null,
+  latestOwnerPausePolicy=null;
  let decisionsSinceLatestClose=0,alternateEligibleSinceLatestClose=0,
   alternateBrakeSinceLatestClose=0;
  const lastClosedAt=closes.reduce((best,r)=>{
@@ -139,7 +149,7 @@ function summarize(decisions,closes,orders,now=new Date()){
   if(d>lastClosedAt){
    decisionsSinceLatestClose++;
    if(state.altEligible)alternateEligibleSinceLatestClose++;
-   if(state.altEligible&&state.portfolioBrakeActive)
+   if(state.altEligible&&state.portfolioBrakeBlocks)
     alternateBrakeSinceLatestClose++;
   }
   const reason=row.alternative?.reason||'NOT_EVALUATED';
@@ -152,6 +162,18 @@ function summarize(decisions,closes,orders,now=new Date()){
   }
   if(state.altEligible&&state.portfolioBrakeActive)altBlockedByPortfolio++;
   if(state.altEligible&&state.strategyBrakeActive)altBlockedByStrategy++;
+  if(state.altEligible&&state.portfolioBrakeBlocks)altEffectivelyBlockedByPortfolio++;
+  if(state.altEligible&&state.strategyBrakeBlocks)altEffectivelyBlockedByStrategy++;
+  if(state.portfolioBrakeBlocks)byEffectiveSafety.portfolioBrake++;
+  if(state.strategyBrakeBlocks)byEffectiveSafety.strategyBrake++;
+  if(state.ownerAdvisoryOnly)ownerAdvisoryDecisions++;
+  if(row.owner_pause_policy&&
+     (!latestOwnerPausePolicy||d>ts(latestOwnerPausePolicy.evaluatedAt)))
+    latestOwnerPausePolicy={evaluatedAt:row.evaluated_at,
+     advisoryOnly:state.ownerAdvisoryOnly,
+     modelLossStreakBlocks:row.owner_pause_policy.modelLossStreakBlocks===true,
+     portfolioLossStreakBlocks:row.owner_pause_policy.portfolioLossStreakBlocks===true,
+     fastStopCooldownBlocks:row.owner_pause_policy.fastStopCooldownBlocks===true};
   if(state.portfolioBrakeActive){
    byActiveSafety.portfolioBrake++;
    if(!latestPortfolioBrake||d>ts(latestPortfolioBrake.evaluatedAt))
@@ -183,20 +205,28 @@ function summarize(decisions,closes,orders,now=new Date()){
   selectedContinuousAlternativeEligible:eligibleAlternative,
   selectedPrimaryAuthorityEligible:eligiblePrimary,
   eitherModelPathEligibleCount:eligibleRoute,
+  // 'With*Brake' counters below are raw observation counts, NOT proof
+  // that the corresponding cooldown prevented an order.
   eligibleAlternativeWithPortfolioBrake:altBlockedByPortfolio,
   eligibleAlternativeWithStrategyBrake:altBlockedByStrategy,
+  eligibleAlternativeWithEffectivePortfolioVeto:altEffectivelyBlockedByPortfolio,
+  eligibleAlternativeWithEffectiveStrategyVeto:altEffectivelyBlockedByStrategy,
+  ownerDemoAdvisoryOnlyDecisions:ownerAdvisoryDecisions,
+  latestOwnerPausePolicy,
   latestScannerPortfolioBrake:latestPortfolioBrake,
   independentlyComputedAccountBrake:risk,
   recentFullAutoSettlements:recent,
   lastDecisionModelRouteCounts:byModelRoute,
   selectedAlternativeReasonCounts:bySelectedAlternateReason,
   activeSafetyObservations:byActiveSafety,
+  effectiveSafetyVetoes:byEffectiveSafety,
   diagnosticBlockersRanked:Object.entries(blocking).sort((a,b)=>b[1]-a[1])
    .slice(0,25).map(([reason,count])=>({reason,count})),
   caveats:[
    'Scanner blockers are diagnostic model-level labels, not an exhaustive exact replica of the final canExecute broker-dispatch predicate.',
    'When continuous alternative eligibility is true, an authority M1 timing-label mismatch may be an overridden diagnostic rather than a standalone effective execution veto.',
-   'The 120-minute portfolio brake is computed independently from same-account FULL_AUTO settled broker economics; compare with original scanner snapshot, do not infer another broker account.',
+   'The 120-minute portfolio brake is a RAW independently computed loss observation. When latestOwnerPausePolicy.advisoryOnly=true, it is not itself an effective execution veto.',
+   'Only blocker codes recorded by the scheduler represent effective portfolio/strategy brakes; even an eligible path can still fail other broker, risk, or freshness checks.',
    'The definitive broker entry also requires fresh signal, session, risk, commission and provider confirmation, which this script neither grants nor bypasses.',
    'This is an owner-only bounded read-only analysis, not a script capable of placing orders, changing lots, shortening risk cooldown or promoting LIVE.',
   ],
@@ -258,6 +288,8 @@ async function main(){
    brakedSinceLastClose:r.selectedAlternativeBrakedSinceLastClose,
    alternativeEligible:r.selectedContinuousAlternativeEligible,
    alternativeWithBrake:r.eligibleAlternativeWithPortfolioBrake,
+   alternativeWithEffectiveBrake:r.eligibleAlternativeWithEffectivePortfolioVeto,
+   advisoryOnly:r.latestOwnerPausePolicy?.advisoryOnly??null,
    brake:r.independentlyComputedAccountBrake,
    topBlockers:r.diagnosticBlockersRanked.slice(0,12),
    source:'PRIVATE_OWNER_DEMO_RESEARCH_ONLY',

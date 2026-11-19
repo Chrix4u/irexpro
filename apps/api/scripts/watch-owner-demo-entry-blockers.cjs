@@ -20,6 +20,12 @@ function classify(report,now=Date.now()){
  if(report.newTradeIntentsSinceLastClose>0)
   return 'NEW_DEMO_INTENT_SUBMITTED';
  const brake=report.independentlyComputedAccountBrake;
+ // The independently recomputed cooldown is NOT a dispatch veto for the
+ // verified owner DEMO when the scheduler has advisory-only mode enabled.
+ if(report.latestOwnerPausePolicy?.advisoryOnly===true &&
+    report.latestOwnerPausePolicy?.portfolioLossStreakBlocks===false &&
+    brake?.state==='CONFIRMED_THREE_LOSSES_120M_GUARD')
+  return 'OWNER_LOSS_STREAK_WARNING_ONLY';
  if(brake?.state==='CONFIRMED_THREE_LOSSES_120M_GUARD')
   return 'VALID_PORTFOLIO_BRAKE_ACTIVE';
  if(brake?.state==='THREE_LOSSES_BUT_TIME_GATE_EXPIRED')
@@ -34,6 +40,8 @@ function compact(report,state){
   scannedSinceLastClose:report.decisionsSinceLatestClosedTrade,
   eligibleAlternatesSinceLastClose:report.selectedAlternativeEligibleSinceLastClose,
   brakedAlternatesSinceLastClose:report.selectedAlternativeBrakedSinceLastClose,
+  ownerLossPauseAdvisoryOnly:report.latestOwnerPausePolicy?.advisoryOnly??null,
+  effectivePortfolioVetoCount:report.eligibleAlternativeWithEffectivePortfolioVeto??null,
   newIntentsSinceLastClose:report.newTradeIntentsSinceLastClose,
   latestScanAt:report.latestDecisionAt,
   latestCloseAt:report.independentlyComputedAccountBrake.latestClosedAt,
