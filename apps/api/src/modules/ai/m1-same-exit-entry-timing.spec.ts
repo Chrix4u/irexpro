@@ -36,7 +36,7 @@ const base: Parameters<typeof compareDelayedEntryAtActualExit>[0] = {
   originalTarget:1.43022,originalExit:1.43070,
   originalClosedAt:closeAt,
   actualGrossPnl:26.56,actualCommission:-12,actualSwap:0,
-  estimatedOriginalRiskAccountCurrency:88.07,
+  verifiedOriginalRiskAccountCurrency:69.88120195,
   delayed,candles:bars(),
 };
 const compare = (patch:Partial<typeof base>={}) =>
@@ -53,10 +53,15 @@ describe('matched original-exit M1 entry timing research',()=>{
       noTradeAuthority:true,modifiesExecution:false,
       modelTrainingStatus:'RESEARCH_ONLY_NOT_TRAINED',
     });
-    expect(r.actualNetAfterFeesR).toBeCloseTo(14.56/88.07,3);
+    expect(r.actualNetAfterFeesR).toBeCloseTo(14.56/69.88120195,3);
+    // 2.1 additional pips priced with the actual broker's 1.9-pip gross,
+    // not with a fabricated account-currency/point conversion.
+    const incrementalGross = 26.56 * (2.1/1.9);
     expect(r.delayedSameExitNetAfterFeesR)
-      .toBeCloseTo((.00040/.00063)-12/88.07,3);
-    expect(r.indicativeDeltaNetR).toBeCloseTo(.00021/.00063,3);
+      .toBeCloseTo((14.56+incrementalGross)/69.88120195,3);
+    expect(r.indicativeDeltaNetR).toBeCloseTo(incrementalGross/69.88120195,3);
+    expect(r.originalStopRiskAccountCurrency).toBeCloseTo(69.88,2);
+    expect(r.grossPerPriceUnitFromActualClose).toBeGreaterThan(0);
     expect(r.maxAdversePipsBeforeActualClose).toBeCloseTo(2,1);
   });
 
@@ -116,8 +121,10 @@ describe('matched original-exit M1 entry timing research',()=>{
   it('fails closed without broker settlement, original stop-risk or validated fee',()=>{
     for(const patch of [
       {originalExit:null},{actualGrossPnl:null},{actualCommission:null},
-      {actualSwap:null},{estimatedOriginalRiskAccountCurrency:null},
-      {estimatedOriginalRiskAccountCurrency:0},
+      {actualSwap:null},{verifiedOriginalRiskAccountCurrency:null},
+      {verifiedOriginalRiskAccountCurrency:0},
+      {actualGrossPnl:-26.56},
+      {originalExit:1.430885},
       {originalStop:1.4302},{originalTarget:1.4317},
       {delayed:{...delayed,indicativeQuoteEntry:null}},
     ]){

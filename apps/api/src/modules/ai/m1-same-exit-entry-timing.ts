@@ -5,7 +5,7 @@ import { isVerifiedNativeMinute } from './m1-delayed-entry-parity-shadow';
  * Does not assume a hypothetical broker fill, a changed closing decision,
  * or execution authority. Exit-bar OHLC is deliberately excluded.
  */
-export const SAME_EXIT_TIMING_ARTIFACT = 'm1-same-exit-entry-timing-research-v1' as const;
+export const SAME_EXIT_TIMING_ARTIFACT = 'm1-same-exit-entry-timing-research-v2-verified-risk' as const;
 export type SameExitState =
   | 'NO_CONFIRMATION' | 'UNVERIFIED_SETTLEMENT' | 'ENTRY_AFTER_ACTUAL_CLOSE'
   | 'CLOSE_IN_ENTRY_MINUTE' | 'DATA_GAP' | 'STOP_TOUCH_BEFORE_ACTUAL_CLOSE'
@@ -26,6 +26,8 @@ export interface SameExitTimingResult {
   indicativeEntryImprovementPips: number | null;
   maxAdversePipsBeforeActualClose: number | null;
   assumption: 'SAME_EXIT_PRICE_UNCHANGED_VOLUME_ESTIMATED_FEES_NOT_EXECUTABLE';
+  originalStopRiskAccountCurrency: number | null;
+  grossPerPriceUnitFromActualClose: number | null;
   noTradeAuthority: true;
   modifiesExecution: false;
   modelTrainingStatus: 'RESEARCH_ONLY_NOT_TRAINED';
@@ -43,7 +45,7 @@ export function compareDelayedEntryAtActualExit(input: {
   actualGrossPnl: number | null;
   actualCommission: number | null;
   actualSwap: number | null;
-  estimatedOriginalRiskAccountCurrency: number | null;
+  verifiedOriginalRiskAccountCurrency: number | null;
   delayed: DelayedEntryParityResult;
   candles: readonly VerifiedNativeMinute[];
 }): SameExitTimingResult {
@@ -63,6 +65,8 @@ export function compareDelayedEntryAtActualExit(input: {
     indicativeEntryImprovementPips: null,
     maxAdversePipsBeforeActualClose: null,
     assumption: 'SAME_EXIT_PRICE_UNCHANGED_VOLUME_ESTIMATED_FEES_NOT_EXECUTABLE',
+    originalStopRiskAccountCurrency: null,
+    grossPerPriceUnitFromActualClose: null,
     noTradeAuthority: true, modifiesExecution: false,
     modelTrainingStatus: 'RESEARCH_ONLY_NOT_TRAINED',
   });
@@ -75,7 +79,7 @@ export function compareDelayedEntryAtActualExit(input: {
   const originalRisk = Math.abs(input.originalFill - input.originalStop);
   const originalTarget = Math.abs(input.originalTarget - input.originalFill);
   const quote = delayed.indicativeQuoteEntry;
-  const risk = input.estimatedOriginalRiskAccountCurrency;
+  const risk = input.verifiedOriginalRiskAccountCurrency;
   const pips = input.instrument.toUpperCase().endsWith('JPY') ? 0.01 : 0.0001;
   if (delayed.originalDirection !== input.direction ||
     (sign === 1
@@ -93,6 +97,7 @@ export function compareDelayedEntryAtActualExit(input: {
     !Number.isFinite(at) || delayed.quotePricingNotExecutable !== true)
     return base('UNVERIFIED_SETTLEMENT');
   const result = base('INDICATIVE_SAME_EXIT');
+  result.originalStopRiskAccountCurrency = rounded(risk!, 2);
   result.indicativeEntryImprovementPips =
     rounded(sign * (input.originalFill - quote) / pips, 2);
   // Never call an entry at or after the actual exit a valid alternative.
@@ -132,8 +137,19 @@ export function compareDelayedEntryAtActualExit(input: {
   }
   result.maxAdversePipsBeforeActualClose = rounded(peakAdverse / pips, 2);
   const fees = input.actualCommission! + input.actualSwap!;
-  const netActual = (input.actualGrossPnl! + fees) / risk!;
-  const netDelayed = sign * (input.originalExit! - quote) / originalRisk + fees / risk!;
+  const originalMovement = sign * (input.originalExit! - input.originalFill);
+  const gross = input.actualGrossPnl!;
+  // Infer the pip-to-currency conversion only from the original BROKER
+  // settlement. Reject an inconsistent broker gross/price-move sign or a
+  // near-zero close movement rather than inventing a conversion rate.
+  if (Math.abs(originalMovement) <= pips / 10 ||
+      gross === 0 || gross * originalMovement <= 0)
+    return { ...result, state: 'UNVERIFIED_SETTLEMENT' };
+  const grossPerPriceUnit = gross / originalMovement;
+  result.grossPerPriceUnitFromActualClose = rounded(grossPerPriceUnit, 4);
+  const incrementalGross = sign * (input.originalFill - quote) * grossPerPriceUnit;
+  const netActual = (gross + fees) / risk!;
+  const netDelayed = (gross + incrementalGross + fees) / risk!;
   // Same broker close and same unchanged volume are counterfactual assumptions,
   // not realizable P&L. Do not infer model fitness from one pair.
   result.actualNetAfterFeesR = rounded(netActual);

@@ -24,6 +24,7 @@ const trade = {
   swap: '0',
   lot_size: '4.0000',
   close_reason: 'BROKER_CLOSE',
+  original_risk_account_currency: '69.88120195',
   timeframe: 'M1',
   route: 'EARLY_TRANSITION',
   pretrade_features: { confidence: 0.72 },
@@ -69,6 +70,7 @@ describe('M1DelayedEntryParityService persistence / authority', () => {
     expect(selects.map(([, args]) => args[1])).toEqual([60, 240]);
     for (const [sql] of selects) {
       expect(sql).toContain("bc.account_type='DEMO'");
+      expect(sql).toContain('trading.capital_allocations');
       expect(sql).toContain('NOT EXISTS');
       expect(sql).toContain('t.opened_at < $1::timestamptz');
     }
@@ -89,8 +91,9 @@ describe('M1DelayedEntryParityService persistence / authority', () => {
       expect(result.pretradeFeatures).toEqual({ confidence: 0.72 });
       expect(result.scenarios).toHaveLength(2);
       expect(result.scenarios[1].riskParityLotMultiplier).toBeCloseTo(1 / 1.4, 4);
+      expect(result.verifiedOriginalRiskAccountCurrency).toBe('69.88120195');
       expect(result.sameExitComparison).toMatchObject({
-        artifact: 'm1-same-exit-entry-timing-research-v1',
+        artifact: 'm1-same-exit-entry-timing-research-v2-verified-risk',
         noTradeAuthority: true,
         modifiesExecution: false,
         modelTrainingStatus: 'RESEARCH_ONLY_NOT_TRAINED',

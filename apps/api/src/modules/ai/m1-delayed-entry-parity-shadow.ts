@@ -4,7 +4,7 @@
  * M1 quote open. Evaluation takes place only after the entire horizon.
  * No execution authority; quote OHLC does not simulate broker fills.
  */
-export const DELAY_ENTRY_PARITY_SHADOW_ARTIFACT = 'm1-confirmed-delay-stop-parity-shadow-v2-same-exit';
+export const DELAY_ENTRY_PARITY_SHADOW_ARTIFACT = 'm1-confirmed-delay-stop-parity-shadow-v3-verified-risk';
 export const DELAY_ENTRY_PARITY_HORIZONS = [60, 240] as const;
 export type DelayEntryParityHorizon = (typeof DELAY_ENTRY_PARITY_HORIZONS)[number];
 export const DELAY_ENTRY_CONFIRMATION_WINDOW_MINUTES = 5;
