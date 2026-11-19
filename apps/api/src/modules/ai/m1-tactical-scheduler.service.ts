@@ -50,6 +50,7 @@ import {
 } from './m1-tactical-candidate';
 import { buildM1TacticalFeatures, type M1TacticalFeatureSnapshot } from './m1-tactical-features';
 import { evaluatePepperstoneDemoAdvisoryQuality } from './pepperstone-demo-advisory-quality-risk';
+import { evaluatePepperstoneDemoM5ReversalSoftCap } from './pepperstone-demo-m5-reversal-soft-cap';
 import { evaluatePepperstoneDemoHighConvictionCeiling } from './pepperstone-demo-high-conviction-lot-ceiling';
 import {
   recallPepperstoneDemoPattern,
@@ -3809,13 +3810,27 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       ? Math.min(maxRequestedBeforeQuality,
           maxRequestedBeforeQuality * qualityRisk.riskFraction)
       : maxRequestedBeforeQuality;
+    // Prospective owner-Pepperstone DEMO-only loss mitigation. The frozen
+    // CONFIRMED_REVERSAL entry cohort with M5 opposition is net losing.
+    // Apply a *soft lot ceiling*, never a new trade veto, direction flip, or
+    // broker SL/TP change. Require independent completed native M5 evidence.
+    const m5ReversalSoftCap = evaluatePepperstoneDemoM5ReversalSoftCap({
+      enabled:
+        this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_M5_REVERSAL_SOFT_CAP', '') ===
+          'enabled',
+      ownerVerifiedUsdDemo: qualityRiskEnabled,
+      route: multimodelDemo?.ensemble.strategyRoute ?? null,
+      alignedM5: Number.isFinite(candidate.alignedM5) ? candidate.alignedM5 : null,
+      brokerM5Direction: qualityRisk?.m5Direction ?? null,
+      requestedLotCap: qualityAdjustedVolumeCap,
+    });
     const currencyExposureGuard = await this.resolveM1CurrencyExposureGuard(
       userId,
       brokerConnectionId,
       candidate,
       guardedPullbackRecovery
-        ? Math.min(qualityAdjustedVolumeCap, 0.2)
-        : qualityAdjustedVolumeCap,
+        ? Math.min(m5ReversalSoftCap.requestedLotCap, 0.2)
+        : m5ReversalSoftCap.requestedLotCap,
       pepperstoneDemoRiskPilot,
     );
     if (!currencyExposureGuard.allowed) {
@@ -4087,6 +4102,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_advisory_quality_h1_direction: qualityRisk?.h1Direction ?? null,
           m1_advisory_quality_recent_net_samples: qualityRisk?.recentSamples ?? null,
           m1_advisory_quality_recent_average_net_r: qualityRisk?.recentAverageNetR ?? null,
+          m1_reversal_m5_soft_cap_artifact: m5ReversalSoftCap.artifact,
+          m1_reversal_m5_soft_cap_applied: m5ReversalSoftCap.applied,
+          m1_reversal_m5_soft_cap_reason: m5ReversalSoftCap.reason,
+          m1_reversal_m5_soft_cap_aligned_m5: m5ReversalSoftCap.alignedM5,
+          m1_reversal_m5_soft_cap_before_lots: m5ReversalSoftCap.originalLotCap,
+          m1_reversal_m5_soft_cap_after_lots: m5ReversalSoftCap.requestedLotCap,
           m1_pepperstone_demo_reentry_and_risk_pilot: pepperstoneDemoRiskPilot,
           m1_pepperstone_demo_alternative_trial: demoAlternativeTrial?.eligible === true,
           m1_pepperstone_demo_advisory_alternates:
