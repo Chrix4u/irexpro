@@ -14,14 +14,34 @@ function evaluateM1AtEntry(input) {
   const oppAt = time(input.oppositeM1CreatedAt);
   const oppEval = time(input.oppositeM1EvaluatedAt);
   const own = opened !== null && ownAt !== null && ownAt <= opened;
-  const opposite = own && oppAt !== null && oppEval !== null &&
+  const persistedOpposite = own && oppAt !== null && oppEval !== null &&
     oppAt <= opened && oppEval <= opened;
+  // This route is deterministically scored from the SAME feature pair
+  // before the candidate reaches order dispatch. Unlike a later DB row,
+  // the immutable trade-intent metadata accompanies the opening order.
+  const snapshotTime = time(input.sameSnapshotDecisionTime);
+  const expectedOtherDirection = input.entryDirection === 'BUY' ? 'SELL' :
+    input.entryDirection === 'SELL' ? 'BUY' : null;
+  const synchronousSnapshot = own && expectedOtherDirection !== null &&
+    input.sameSnapshotShadowOnly === true &&
+    input.sameSnapshotDirection === expectedOtherDirection &&
+    typeof input.sameSnapshotRoute === 'string' &&
+    ['ABSTAIN','M1_TREND_CONTINUATION','M1_CONFIRMED_REVERSAL',
+      'M1_EARLY_TRANSITION'].includes(input.sameSnapshotRoute) &&
+    snapshotTime !== null && snapshotTime <= opened;
+  const opposite = synchronousSnapshot || persistedOpposite;
+  const selectedRoute = synchronousSnapshot ? input.sameSnapshotRoute :
+    persistedOpposite ? input.oppositeM1Route : null;
   return {
     executedDecisionAvailableAtEntry: own,
     oppositeDecisionAvailableAtEntry: opposite,
+    oppositeRouteAtEntry: selectedRoute,
+    oppositeSourceAtEntry: synchronousSnapshot
+      ? 'SAME_SNAPSHOT_BEFORE_ORDER'
+      : persistedOpposite ? 'PERSISTED_BEFORE_ORDER' : 'NOT_AVAILABLE_AT_ENTRY',
     verifiedDoubleAbstain: opposite &&
       input.executedM1Route === 'ABSTAIN' &&
-      input.oppositeM1Route === 'ABSTAIN',
+      selectedRoute === 'ABSTAIN',
   };
 }
 function theoreticalNoEntryOmission(examples) {

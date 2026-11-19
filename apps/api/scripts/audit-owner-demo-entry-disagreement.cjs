@@ -29,6 +29,7 @@ const finite = (v) => (v === null || v === undefined || v === '' ? null :
   Number.isFinite(Number(v)) ? Number(v) : null);
 const aggregate = (items) => ({
   availableOppositeBeforeEntry: items.filter(x => x.retrospectiveAudit.oppositeDecisionAvailableAtEntry).length,
+  synchronousOppositeSnapshot: items.filter(x => x.retrospectiveAudit.oppositeSourceAtEntry === 'SAME_SNAPSHOT_BEFORE_ORDER').length,
   oppositeOnlySeenAfterEntry: items.filter(x => x.retrospectiveAudit.laterOppositeDecisionSeen &&
     !x.retrospectiveAudit.oppositeDecisionAvailableAtEntry).length,
   twoSidedAbstainKnownAtEntry: items.filter(x => x.retrospectiveAudit.verifiedDoubleAbstain).length,
@@ -66,6 +67,11 @@ const aggregate = (items) => ({
         op.governance->'routeDecision'->>'reason' opposite_m1_reason,
         op.created_at AS opposite_created_at, op.evaluated_at AS opposite_evaluated_at,
         md.created_at AS executed_m1_created_at,
+        ti.metadata->>'m1_opposite_tactical_route_asof' opposite_snapshot_route,
+        ti.metadata->>'m1_opposite_tactical_direction_asof' opposite_snapshot_direction,
+        ti.metadata->>'m1_opposite_tactical_snapshot_time' opposite_snapshot_time,
+        ti.metadata->>'m1_opposite_tactical_reason_asof' opposite_snapshot_reason,
+        ti.metadata->>'m1_opposite_tactical_shadow_only' opposite_snapshot_shadow,
         late.created_at AS later_opposite_created_at,
         late.route AS later_opposite_route,
         t.realised_pnl, t.commission, t.swap,
@@ -131,6 +137,11 @@ const aggregate = (items) => ({
         oppositeM1CreatedAt:r.opposite_created_at,
         oppositeM1EvaluatedAt:r.opposite_evaluated_at,
         oppositeM1Route:r.opposite_m1_route,
+        entryDirection:r.direction,
+        sameSnapshotRoute:r.opposite_snapshot_route,
+        sameSnapshotDirection:r.opposite_snapshot_direction,
+        sameSnapshotDecisionTime:r.opposite_snapshot_time,
+        sameSnapshotShadowOnly:r.opposite_snapshot_shadow === 'true',
       });
       const ownM1VerifiedAtEntry=asOf.executedDecisionAvailableAtEntry;
       const oppositeVerifiedAtEntry=asOf.oppositeDecisionAvailableAtEntry;
@@ -160,8 +171,11 @@ const aggregate = (items) => ({
         },
         retrospectiveAudit: {
           oppositeDecisionAvailableAtEntry: oppositeVerifiedAtEntry,
-          oppositeM1Route: oppositeVerifiedAtEntry ? r.opposite_m1_route : null,
-          oppositeM1Reason: oppositeVerifiedAtEntry ? r.opposite_m1_reason : null,
+          oppositeSourceAtEntry: asOf.oppositeSourceAtEntry,
+          oppositeM1Route: asOf.oppositeRouteAtEntry,
+          oppositeM1Reason: asOf.oppositeSourceAtEntry === 'SAME_SNAPSHOT_BEFORE_ORDER'
+            ? r.opposite_snapshot_reason
+            : oppositeVerifiedAtEntry ? r.opposite_m1_reason : null,
           laterOppositeDecisionSeen: r.later_opposite_created_at !== null,
           laterOppositeRouteForAuditOnly: r.later_opposite_route,
           verifiedDoubleAbstain: doubleAbstain,
@@ -211,13 +225,13 @@ const aggregate = (items) => ({
       name, ...aggregate(items), minimum30SettledTradesNotIndependent: items.length >= 30,
     })).sort((a,b)=>b.count-a.count);
     const result = {
-      artifact:'owner-pepperstone-demo-entry-disagreement-chronological-asof-research-v3',
+      artifact:'owner-pepperstone-demo-entry-disagreement-chronological-asof-research-v4',
       asOf:new Date().toISOString(),days,
       accountScope:'OWNER_PEPPERSTONE_USD_DEMO_ONLY',
       modifiesExecution:false,modelTrainingStatus:'NOT_TRAINED',
       caveats:[
         'Closed broker positions only; no inferred opposite-side broker fill.',
-        'Opposite M1 is eligible for as-of comparison only if evaluated and persisted before the order opened; later decisions are separate audit-only evidence.',
+        'Opposite M1 is eligible only from a validated pre-order same-snapshot tactical annotation or an independently evaluated and persisted earlier decision; later decisions are audit-only.',
         'No independently time-split strategy performance has been proven.',
         'Paired M1 results are conditional quote scenarios, not executable P&L.',
         'Outcomes for recent and older dates share changing policies and markets.',

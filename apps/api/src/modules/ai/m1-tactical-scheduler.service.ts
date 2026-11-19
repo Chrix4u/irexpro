@@ -1568,6 +1568,16 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       features,
       M1_TACTICAL_POLICY_V2,
     );
+    // Same immutable completed-market snapshot, scored synchronously BEFORE
+    // either side can submit to the broker. The opposite database row often
+    // appears after the first fill; it must not be used as pretrade evidence.
+    // This independent tactical view is research only, NOT broker authority.
+    const oppositeRouteAtSignal = classifyM1TacticalRoute(
+      opposite,
+      candidate,
+      features,
+      M1_TACTICAL_POLICY_V2,
+    );
     const reliabilityStartedAt = Date.now();
     const reliability = await this.reliabilityFor(
       userId,
@@ -3183,6 +3193,19 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           shortHorizonMomentumAtr: features.momentum1Atr,
         },
         routeDecision: { ...routeDecision },
+        oppositeM1AtSignal: {
+          artifact: 'm1-opposite-tactical-same-snapshot-v1',
+          direction: opposite.direction,
+          route: oppositeRouteAtSignal.route,
+          eligible: oppositeRouteAtSignal.eligible,
+          reason: oppositeRouteAtSignal.reason,
+          scoreEdge: oppositeRouteAtSignal.scoreEdge,
+          policyVersion: oppositeRouteAtSignal.policyVersion,
+          decisionTime: decisionTime.toISOString(),
+          executionAuthority: 'NONE',
+          modifiesExecution: false,
+          grantsOppositeTrade: false,
+        },
         reliability: reliability ? { ...reliability } : null,
         shadowPairSideReliability: shadowPairSideReliability
           ? { artifact: scoutReliabilityArtifact, ...shadowPairSideReliability }
@@ -3306,6 +3329,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           brokerMarketContext,
           patternMemory,
           ownerAcceptedPortfolioBrake ? portfolioNetLossBrake?.latestClosedAt : null,
+          oppositeRouteAtSignal,
         );
       } finally {
         timings.orderDispatchMs = Math.max(0, Date.now() - dispatchStartedAt);
@@ -3478,6 +3502,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     brokerMarketContext?: M1TacticalMarketSnapshot,
     patternMemory?: PatternMemoryObservation | null,
     ownerPortfolioBrakeIncidentClosedAt?: Date | null,
+    oppositeRouteAtSignal?: M1TacticalRouteDecision,
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -4069,6 +4094,16 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
               : 'RESEARCH',
           m1_guarded_pullback_continuation: guardedPullbackRecovery,
           m1_tactical_route: routeDecision.route,
+          // This is the paired tactical snapshot BEFORE submitting an order.
+          // It is not the opposite-side trained-expert vote, a broker fill
+          // forecast, or independent order authority.
+          m1_opposite_tactical_route_asof: oppositeRouteAtSignal?.route ?? null,
+          m1_opposite_tactical_reason_asof: oppositeRouteAtSignal?.reason ?? null,
+          m1_opposite_tactical_direction_asof:
+            oppositeRouteAtSignal ? (candidate.direction === 'BUY' ? 'SELL' : 'BUY') : null,
+          m1_opposite_tactical_eligible_asof: oppositeRouteAtSignal?.eligible ?? null,
+          m1_opposite_tactical_snapshot_time: decisionTime.toISOString(),
+          m1_opposite_tactical_shadow_only: true,
           m1_policy_version: candidate.policyVersion,
           m1_rollout_policy_version: this.rolloutPolicy.version,
           m1_rollout_phase: this.rolloutPolicy.phase,

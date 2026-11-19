@@ -5527,6 +5527,22 @@ describe('M1 V8 multi-model DEMO authority', () => {
     expect(Object.keys(byDirection).sort()).toEqual(['BUY', 'SELL']);
     expect(byDirection.BUY.governance.multimodelTrainedExpert.state).toBe('CONFIRM');
     expect(byDirection.SELL.governance.multimodelTrainedExpert.state).toBe('CONFLICT');
+    // The very first BUY decision includes a synchronous SELL tactical
+    // snapshot, even if the SELL database row is persisted after its order.
+    expect(byDirection.BUY.governance.oppositeM1AtSignal).toMatchObject({
+      artifact: 'm1-opposite-tactical-same-snapshot-v1',
+      direction: 'SELL',
+      route: byDirection.SELL.governance.routeDecision.route,
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+      grantsOppositeTrade: false,
+    });
+    expect(byDirection.SELL.governance.oppositeM1AtSignal).toMatchObject({
+      direction: 'BUY',
+      route: byDirection.BUY.governance.routeDecision.route,
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+    });
     // The shared trained score does not short-circuit per-direction persistence.
     expect(h.recordDecision).toHaveBeenCalledTimes(2);
   });
@@ -5562,6 +5578,10 @@ describe('M1 V8 multi-model DEMO authority', () => {
           external_provider_code: 'irexpro-multimodel-ensemble-v1',
           primary_engine_code: 'irexpro-multimodel-ensemble-v1',
           m1_tactical_role: 'TIMING_SPECIALIST',
+          m1_opposite_tactical_route_asof: expect.any(String),
+          m1_opposite_tactical_direction_asof: 'SELL',
+          m1_opposite_tactical_snapshot_time: expect.any(String),
+          m1_opposite_tactical_shadow_only: true,
           multimodel_trained_expert_state: 'CONFIRM',
           multimodel_trained_expert_long_votes: 3,
           multimodel_trained_expert_short_votes: 0,
