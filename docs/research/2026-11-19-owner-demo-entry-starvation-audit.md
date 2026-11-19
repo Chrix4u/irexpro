@@ -50,6 +50,16 @@ authority when M1 itself ABSTAINed, and does not infer the current VPS flag
 from conditionally executed pause checks. Live 60-minute run passed;
 nine CLI tests and the targeted scheduler regression passed.
 
+## Authoritative session verification at 21:28 UTC
+
+The owner's latest trading.trading_sessions record is **ACTIVE** in
+**FULL_AUTO** mode on the Pepperstone cTrader **USD DEMO** connection;
+it started on November 10, 2026 and has not ended. The Stop AI
+Trading close-positions flag is false. This read confirms the user did
+not leave the execution session paused while the scanner continued
+collecting signals. It does not guarantee every broker submission would
+be accepted: broker margin/market state and model admission still apply.
+
 ## Priority next
 
 Do not remove all drift and model admission gates to obtain more losing
