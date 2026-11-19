@@ -765,6 +765,8 @@ export interface M1TacticalScanTiming {
   totalMs: number;
   marketLoadMs: number | null;
   decisionEvaluationMs: number | null;
+  /** Full broker expert request duration including time overlapped by other reads. */
+  trainedExpertFetchMs: number | null;
   /** Historical observation time, measured after all pair entries are evaluated. */
   shadowSettlementMs: number | null;
   state: 'COMPLETED' | 'MARKET_NOT_READY' | 'FEATURES_UNAVAILABLE' | 'ERROR';
@@ -1016,6 +1018,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           totalMs: 0,
           marketLoadMs: null,
           decisionEvaluationMs: null,
+          trainedExpertFetchMs: null,
           shadowSettlementMs: null,
           state: 'ERROR',
         };
@@ -1063,6 +1066,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
                 (trace.marketLoadMs ?? 'UNKNOWN') +
                 ' decisionMs=' +
                 (trace.decisionEvaluationMs ?? 'UNKNOWN') +
+                ' trainedExpertFetchMs=' +
+                (trace.trainedExpertFetchMs ?? 'UNKNOWN') +
                 ' shadowMs=' +
                 (trace.shadowSettlementMs ?? 'UNKNOWN') +
                 ' state=' +
@@ -1148,22 +1153,26 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       return null;
     }
 
-    // A single per-pair, per-minute broker AI snapshot can be consistently
-    // classified for BUY and SELL. Claim lazily at the original expert
-    // evaluation point so the first candidate's timing is unchanged.
-    // No cache survives this processInstrument call; broker order, portfolio,
-    // intent and risk checks remain fresh and serial for each direction.
+    // Start ONE broker-native expert score immediately after the completed
+    // market snapshot is verified, overlapping the independent event-risk,
+    // reliability and scout reads. BUY and SELL still receive separate
+    // direction-specific classifications of the SAME per-slot model response.
+    // Scope: this instrument and minute ONLY; no cross-slot cache or fallback
+    // to stale predictions. Entry/risk/portfolio/order checks stay serial.
     let expertPair: Promise<Readonly<Record<'BUY' | 'SELL', HighConvictionOverlay>>> | null = null;
     const trainedExpertForSlot =
       this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' &&
       typeof this.highConvictionBrokerExpert?.evaluatePair === 'function'
         ? async (direction: 'BUY' | 'SELL'): Promise<HighConvictionOverlay> => {
             if (!expertPair) {
+              const fetchStartedAt = Date.now();
               expertPair = this.highConvictionBrokerExpert!.evaluatePair({
                 userId,
                 brokerConnectionId,
                 instrument,
                 candidateCloseTime: decisionTime,
+              }).finally(() => {
+                if (timing) timing.trainedExpertFetchMs = Math.max(0, Date.now() - fetchStartedAt);
               });
             }
             const scores = await expertPair;
@@ -1172,8 +1181,19 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         : undefined;
 
     const decisionStartedAt = Date.now();
-    const eventRisk = await this.macroEventRisk.assess(instrument, decisionTime);
     const candidates = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2);
+    // The expert service returns UNAVAILABLE for a failed broker scoring call.
+    // Attach a rejection handler even if subsequent event-risk work fails,
+    // so a discarded prefetch never produces an unhandled rejection.
+    if (trainedExpertForSlot) {
+      void trainedExpertForSlot(candidates[0].direction).catch((error) => {
+        this.logger.warn(
+          'M1 prefetch unavailable instrument=' + instrument +
+          ' slot=' + decisionTime.toISOString() + ': ' + (error as Error).message,
+        );
+      });
+    }
+    const eventRisk = await this.macroEventRisk.assess(instrument, decisionTime);
     for (const [candidate, opposite] of [
       [candidates[0], candidates[1]],
       [candidates[1], candidates[0]],

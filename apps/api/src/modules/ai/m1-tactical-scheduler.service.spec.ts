@@ -417,6 +417,7 @@ describe('M1TacticalSchedulerService shadow phase', () => {
           totalMs: expect.any(Number),
           marketLoadMs: expect.any(Number),
           decisionEvaluationMs: expect.any(Number),
+          trainedExpertFetchMs: null,
           shadowSettlementMs: expect.any(Number),
           state: 'COMPLETED',
         }),
@@ -446,6 +447,7 @@ describe('M1TacticalSchedulerService shadow phase', () => {
       expect(h.service.getStatus().scanTimings[instrument].shadowSettlementMs).toEqual(
         expect.any(Number),
       );
+      expect(h.service.getStatus().scanTimings[instrument].trainedExpertFetchMs).toBeNull();
     }
     expect(h.receiveSignal).not.toHaveBeenCalled();
   });
@@ -5479,6 +5481,73 @@ describe('M1 V8 multi-model DEMO authority', () => {
       ([value]) => value.route === 'M1_EARLY_TRANSITION',
     )?.[0];
     expect(recorded?.governance.reliability.reason).toBe('EARLY_LOSS_STREAK');
+  });
+
+  it('starts one per-slot expert score before waiting for independent macro risk', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+    });
+    h.loadSnapshot.mockImplementation(async (_account: string, pair: string, when: Date) =>
+      snapshot(pair, when),
+    );
+    let macroEntered!: () => void;
+    let releaseMacro!: () => void;
+    const entered = new Promise<void>((resolve) => { macroEntered = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseMacro = resolve; });
+    (h.service as any).macroEventRisk.assess = jest.fn(async () => {
+      macroEntered();
+      await gate;
+      return { state: 'CLEAR' };
+    });
+    const makeOverlay = (side: 'BUY' | 'SELL') => ({
+      state: 'ABSTAIN', reason: null,
+      direction: side, decisionTime: OPEN_NOW.toISOString(),
+      freshnessSeconds: 0, allBrokerNative: true, admitted: false,
+      ensembleConfidence: 0.61, meanOpportunityProbability: 0.43,
+      longVotes: 0, shortVotes: 0, regime: 'calm',
+      modifiesExecution: false,
+    });
+    const score = jest.fn(async () => ({
+      BUY: makeOverlay('BUY'), SELL: makeOverlay('SELL'),
+    }));
+    (h.service as any).highConvictionBrokerExpert.evaluatePair = score;
+
+    const pass = h.service.runOnce(OPEN_NOW);
+    await entered;
+    try {
+      // Previous serial ordering made the broker model wait on macro I/O.
+      expect(score).toHaveBeenCalledTimes(1);
+      expect(score).toHaveBeenCalledWith({
+        userId: 'user-1',
+        brokerConnectionId: 'demo-conn-2',
+        instrument: 'EURUSD',
+        candidateCloseTime: new Date('2026-10-15T12:30:00.000Z'),
+      });
+      expect(h.recordDecision).not.toHaveBeenCalled();
+    } finally {
+      releaseMacro();
+      await pass;
+    }
+    // Both side decisions still have durable records and the same score.
+    expect(score).toHaveBeenCalledTimes(1);
+    expect(h.recordDecision).toHaveBeenCalledTimes(2);
+    expect(h.service.getStatus().scanTimings.EURUSD.trainedExpertFetchMs)
+      .toEqual(expect.any(Number));
+  });
+
+  it('does not fetch an expert without a verified market snapshot', async () => {
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: fullAutoSession,
+    });
+    h.loadSnapshot.mockResolvedValue(null);
+    const score = jest.fn();
+    (h.service as any).highConvictionBrokerExpert.evaluatePair = score;
+
+    await h.service.runOnce(OPEN_NOW);
+    expect(score).not.toHaveBeenCalled();
+    expect(h.recordDecision).not.toHaveBeenCalled();
   });
 
   it('scores one DEMO pair only once for both directional M1 candidates in one slot', async () => {
