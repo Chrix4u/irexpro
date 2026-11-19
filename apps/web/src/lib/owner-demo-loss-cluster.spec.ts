@@ -45,6 +45,25 @@ describe("owner USD DEMO repeated-loss advisory", () => {
     expect(detect([a, { ...b, closedAt: "2026-11-19T02:40:00Z" }], NOW)).toBeNull();
     expect(detect([a, b], new Date("2026-11-19T05:00:00Z"))).toBeNull();
   });
+  it("keeps overlapping 3-loss cluster visible after a later AUDUSD broker close", () => {
+    const late = trade("aud-loss", "2026-11-19T03:02:07.939Z", "-46.44", "-10.32",
+      { instrument: "AUDUSD", direction: "BUY" });
+    const three = detect([a, b, late], new Date("2026-11-19T03:24:00Z"));
+    expect(three?.trades.map(x => x.instrument)).toEqual([
+      "AUDUSD", "EURUSD", "USDCAD",
+    ]);
+    expect(three?.netUsd).toBe(-179.93);
+    expect(three?.latestClosedAt).toBe(late.closedAt);
+  });
+  it("does not collect an older loss beyond ten minutes into the new incident", () => {
+    const recent = trade("last", "2026-11-19T03:10:00Z", "-30", "-6");
+    const middle = trade("middle", "2026-11-19T03:04:00Z", "-26", "-6");
+    const old = trade("old", "2026-11-19T02:50:00Z", "-80", "-6");
+    const result = detect([recent, middle, old],
+      new Date("2026-11-19T03:11:00Z"));
+    expect(result?.netUsd).toBe(-68);
+    expect(result?.trades).toHaveLength(2);
+  });
   it("de-duplicates trade identity; cannot mistake the same trade for two losses", () => {
     expect(detect([a, { ...a }], NOW)).toBeNull();
   });

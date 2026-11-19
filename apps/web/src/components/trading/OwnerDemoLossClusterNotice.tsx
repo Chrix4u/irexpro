@@ -104,7 +104,7 @@ export function OwnerDemoLossClusterNotice({
           <span className="portfolio-brake-alert__tag">Pepperstone · USD DEMO</span>
         </div>
         <p>
-          Two broker-settled positions closed at a combined{" "}
+          {incident.trades.length} broker-settled positions closed at a combined{" "}
           <strong>{fmt(incident.netUsd)}</strong>. AI Trading is still running.
           No strategy has been automatically paused by this alert.
         </p>
@@ -120,7 +120,7 @@ export function OwnerDemoLossClusterNotice({
             data-testid="owner-demo-loss-cluster-dialog">
             <header>
               <span className="portfolio-brake-alert__tag">Pepperstone USD DEMO</span>
-              <h2 id={titleId}>Two recent trades closed at a loss</h2>
+              <h2 id={titleId}>Recent trades closed at a loss</h2>
             </header>
             <p id={descId}>
               These positions lost <strong>{fmt(incident.netUsd)}</strong> net

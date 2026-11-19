@@ -37,24 +37,33 @@ export function detectOwnerDemoLossCluster(
         nowMs - closedMs > 60 * 60_000 || trade.status !== "CLOSED") continue;
     unique.set(trade.id, trade);
   }
+  // Review the most recent 2–3 consecutive losses within a ten-minute
+  // broker-close cluster. A later losing position must not hide an earlier
+  // simultaneous two-loss incident merely because it closed minutes later.
   const latest = [...unique.values()].sort((a, b) =>
-    Date.parse(b.closedAt!) - Date.parse(a.closedAt!)).slice(0, 2);
-  if (latest.length !== 2) return null;
-  const [first, second] = latest;
-  const gap = Date.parse(first.closedAt!) - Date.parse(second.closedAt!);
-  const firstNet = costAdjustedNet(first);
-  const secondNet = costAdjustedNet(second);
-  if (gap < 0 || gap > 2 * 60_000 ||
-      firstNet === null || secondNet === null ||
-      firstNet >= 0 || secondNet >= 0 ||
-      firstNet + secondNet > -25) return null;
+    Date.parse(b.closedAt!) - Date.parse(a.closedAt!)).slice(0, 3);
+  if (latest.length < 2) return null;
+  const newestMs = Date.parse(latest[0].closedAt!);
+  const consecutive: Array<{ trade: TradeExecutionView; netUsd: number }> = [];
+  for (const trade of latest) {
+    const gap = newestMs - Date.parse(trade.closedAt!);
+    if (gap < 0 || gap > 10 * 60_000) break;
+    const net = costAdjustedNet(trade);
+    if (net === null || net >= 0) break;
+    consecutive.push({ trade, netUsd: net });
+  }
+  if (consecutive.length < 2) return null;
+  const combined = Math.round(consecutive.reduce((total, x) =>
+    total + x.netUsd, 0) * 100) / 100;
+  if (combined > -25) return null;
   return {
-    incidentId: [first.id, second.id, first.closedAt, second.closedAt].join("|"),
-    latestClosedAt: first.closedAt!,
-    trades: [first, second].map((trade, i) => ({
-      id: trade.id, instrument: trade.instrument, direction: trade.direction,
-      netUsd: i === 0 ? firstNet : secondNet,
+    incidentId: consecutive.map(x =>
+      x.trade.id + "|" + x.trade.closedAt).join("|"),
+    latestClosedAt: latest[0].closedAt!,
+    trades: consecutive.map(x => ({
+      id: x.trade.id, instrument: x.trade.instrument,
+      direction: x.trade.direction, netUsd: x.netUsd,
     })),
-    netUsd: Math.round((firstNet + secondNet) * 100) / 100,
+    netUsd: combined,
   };
 }

@@ -12,7 +12,7 @@ Both were dispatched on the `DEMO_CONTINUOUS_REVERSAL_EARLY_EVIDENCE` path despi
 ## Implemented UI behavior
 
 - The existing broker-scoped closed-execution snapshot is read from the selected Pepperstone **DEMO FULL_AUTO** session. No new broker, database or order polling is added.
-- An owner-visible loss-cluster dialog appears for the **two most recently closed**, distinct USD DEMO positions only when both were broker-settled net losses, closed within **two minutes**, the most recent close was within **60 minutes**, and the combined loss is at least **$25**.
+- An owner-visible loss-cluster dialog appears for the **two or three most recently closed**, distinct USD DEMO positions when at least two consecutive broker-net losses closed within **ten minutes** of the latest, the most recent close was within **60 minutes**, and the combined loss is at least **$25**.
 - Commission is normalized once as a debit regardless of API sign; swap and realized broker P&L must be present and numeric. No missing commission is treated as zero.
 - The snapshot must have been loaded for the exact currently selected broker connection and must not be a degraded closed-execution fallback.
 - The dialog clearly displays the two instruments/directions, each net result and combined loss.
@@ -37,3 +37,16 @@ Source:
 ## Next financial work
 
 Do not confuse the alert with an improvement to the strategy's expected return. The independently audited 121 settled USD DEMO trades had **-$1,859.45 net**, commission **-$1,267.20**, after-cost profit factor approximately **0.53**, and materially optimistic Plan-B expected R. To improve profitability, validate a recalibrated entry model against unseen time periods, examine early reversal timing, and measure broker exits and correlated USD exposure. Do not promote to LIVE from current results.
+
+## Additional late-close regression (same day)
+
+At 03:02 UTC the overlapping AUDUSD BUY from 02:56 UTC settled
+**-$56.76 net**. That means the originally simultaneous 02:56 losses
+are no longer the last two closes; a strict two-minute/last-two check
+would miss this actual three-position incident. Detection now examines
+up to three consecutive broker-confirmed losses closed within ten
+minutes of the most recent, with the same >=$25 combined net-loss
+threshold and immutable per-incident acknowledgement key. For the
+actual broker data the cluster is **-$179.93** from three losing
+Confirmed Reversal positions. This is an advisory UI adjustment only,
+not an additional automated strategy restriction.
