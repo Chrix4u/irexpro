@@ -103,8 +103,9 @@ export function evaluatePepperstoneDemoExitMonitor(
     Math.abs(i.authoritativeTakeProfit!-i.brokerTakeProfit!)>
       Math.max(0.0000001,Math.abs(i.brokerTakeProfit!)*1e-8))
     return reply('UNVERIFIED_NO_INFERENCE','BROKER_OWNER_POSITION_OR_RISK_UNVERIFIED');
-  if(i.peakBrokerNetPnl<risk*0.25)
-    return reply('NOT_MEANINGFUL_PROFIT','PEAK_BELOW_0_25R');
+  // Even before the first meaningful profitable excursion, observe M1
+  // deterioration: new-entry qualification is NOT required to warn that an
+  // existing position's thesis is weakening. A warning has no close authority.
   const m=i.m1;
   if(!m || m.completedBars<2 || m.liveQuoteBars<2 ||
     !Number.isFinite(m.latestAgeSeconds)||m.latestAgeSeconds<0||
@@ -121,6 +122,8 @@ export function evaluatePepperstoneDemoExitMonitor(
     return reply('DETERIORATION_REVIEW_NOW',
       i.oppositeExecutableReversal?'EXECUTABLE_OPPOSITE_REVERSAL':
       'REPEATED_ADVERSE_BROKER_M1_AND_GIVEBACK');
+  if(i.peakBrokerNetPnl<risk*0.25)
+    return reply('NOT_MEANINGFUL_PROFIT','PEAK_BELOW_0_25R');
   const age=i.sameSideContinuationAt
     ?(i.observedAt.getTime()-i.sameSideContinuationAt.getTime())/1000:null;
   const supported=age!==null&&Number.isFinite(age)&&age>=0&&age<=180&&

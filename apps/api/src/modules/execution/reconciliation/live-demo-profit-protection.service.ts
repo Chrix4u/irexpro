@@ -650,8 +650,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID &&
               trade.account_currency === 'USD' &&
               trade.is_m1_strategy &&
-              monitorRisk !== null && monitorRisk > 0 &&
-              maxFavorablePnl >= monitorRisk * 0.25
+              monitorRisk !== null && monitorRisk > 0
             ) {
               const minuteKey = Math.floor(observedAt.getTime() / 60_000);
               if (this.exitIntelligenceObservedMinute.get(trade.trade_id) !== minuteKey) {
@@ -1703,6 +1702,49 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
             }
           : null,
       });
+      // Independent EXISTING-POSITION decision frozen at the real close
+      // decision timestamp. It does not mistake a NEW-ORDER admission veto for
+      // evidence that this already-open position must be closed, and cannot
+      // delay the actual protection close (which is dispatched beforehand).
+      const independentExitIntelligenceShadow =
+        brokerId === 'pepperstone-ctrader'
+          ? evaluatePepperstoneDemoExitMonitor({
+              enabled: process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR === 'enabled',
+              ownerPepperstoneUsdDemoVerified:
+                !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+                trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID &&
+                trade.account_currency === 'USD',
+              route: trade.strategy_route,
+              direction: trade.direction,
+              brokerDirection: positionPrices.brokerDirection ?? '',
+              instrument: trade.instrument,
+              brokerInstrument: positionPrices.brokerInstrument ?? '',
+              tradeLots: finite(trade.lot_size),
+              brokerLots: finite(positionPrices.brokerLots),
+              initialRiskPnl,
+              peakBrokerNetPnl: Math.max(
+                currentPnl, finite(trade.max_favorable_pnl) ?? 0,
+              ),
+              currentBrokerNetPnl: currentPnl,
+              entryPrice: finite(positionPrices.entryPrice),
+              brokerStop: finite(positionPrices.stopLossPrice),
+              authoritativeStop: finite(trade.stop_loss),
+              brokerTakeProfit: finite(positionPrices.takeProfitPrice),
+              authoritativeTakeProfit: finite(trade.take_profit),
+              currentPrice: finite(positionPrices.currentPrice),
+              observedAt,
+              sameSideContinuationAt: patienceSignal.sameSideContinuationAt,
+              oppositeExecutableReversal: patienceSignal.oppositeExecutableReversal,
+              m1: m1Evidence ? {
+                completedBars: m1Evidence.completedBars,
+                liveQuoteBars: m1Evidence.liveQuoteBars ?? 0,
+                latestAgeSeconds: m1Evidence.latestAgeSeconds,
+                adverseBars: m1Evidence.adverseBars,
+                alignedLatestBodyPressure: m1Evidence.alignedLatestBodyPressure,
+                alignedMomentum3: m1Evidence.alignedMomentum3,
+              } : null,
+            })
+          : null;
       // Historical fees are scoped by account, symbol and currency, and every
       // sample must have closed BEFORE the observed decision time.
       const fees =
@@ -1816,6 +1858,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           m1AlignedMomentum3: m1Evidence?.alignedMomentum3 ?? null,
           m1LatestAgeSeconds: m1Evidence?.latestAgeSeconds ?? null,
           runnerShadow: runner,
+          independentExitIntelligenceShadow,
           brokerVerifiedRunnerReadinessShadow: verifiedRunner,
           protectedGraceShadow: patience,
           protectedGraceRunnerShadow: patienceRunner,

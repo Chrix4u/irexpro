@@ -66,4 +66,20 @@ describe('Pepperstone DEMO existing-position exit-intelligence monitor',()=>{
     expect(assess({...base,sameSideContinuationAt:null}).recommendation)
       .toBe('INDETERMINATE_KEEP_PROTECTION');
   });
+  it('detects real early adverse candlestick warnings before 0.25R',()=>{
+    const smallPeak={...base,peakBrokerNetPnl:10,currentBrokerNetPnl:-25,
+      m1:{...base.m1,adverseBars:3,alignedMomentum3:-0.42,
+        alignedLatestBodyPressure:-0.7}};
+    const flagged=assess(smallPeak);
+    expect(flagged.recommendation).toBe('DETERIORATION_REVIEW_NOW');
+    expect(flagged.peakR).toBeCloseTo(0.1);
+    expect(flagged.closeOrders).toBe(0);
+    expect(flagged.newOrders).toBe(0);
+    expect(flagged.changesExecution).toBe(false);
+    expect(assess({...smallPeak,m1: {...smallPeak.m1,liveQuoteBars:1}})
+      .recommendation).toBe('STALE_OR_INCOMPLETE_CANDLE_EVIDENCE');
+    expect(assess({...smallPeak,m1:{...smallPeak.m1,adverseBars:0,
+      alignedMomentum3:0.12,alignedLatestBodyPressure:0.18}})
+      .recommendation).toBe('NOT_MEANINGFUL_PROFIT');
+  });
 });

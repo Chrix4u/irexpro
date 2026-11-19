@@ -1802,6 +1802,33 @@ describe('LiveDemoProfitProtectionService', () => {
       }
     }
   });
+
+  it('samples early low-peak owner DEMO positions instead of waiting for 0.25R', async () => {
+    const oldFlag=process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR;
+    const oldOwner=process.env.VPS_FOREX_SCANNER_USER_ID;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR='enabled';
+    process.env.VPS_FOREX_SCANNER_USER_ID='user-1';
+    try {
+      const h=harness([candidate({
+        account_currency:'USD',strategy_route:'CONFIRMED_REVERSAL',
+        initial_risk_pnl:'9',max_favorable_pnl:'0.8',
+      })], '0.3','DEMO',[],'1.1132',[],{
+        log:jest.fn().mockResolvedValue(undefined),
+      } as unknown as AuditService,[],[],[],'pepperstone-ctrader');
+      const monitor=jest.spyOn(h.service as any,
+        'recordPepperstoneDemoExitMonitor').mockResolvedValue(undefined);
+      await h.service.runOnce(new Date('2026-10-28T09:05:00Z'));
+      expect(monitor).toHaveBeenCalledTimes(1);
+      expect(monitor).toHaveBeenCalledWith(
+        expect.anything(),expect.any(Date),0.3,0.8,expect.anything(),
+      );
+    } finally {
+      if(oldFlag===undefined)delete process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_EXIT_MONITOR=oldFlag;
+      if(oldOwner===undefined)delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID=oldOwner;
+    }
+  });
 });
 
 describe('bounded M1 continuation recovery grace', () => {
