@@ -153,6 +153,41 @@ function summary(rows){
   byDay,byRoute,
  };
 }
+// A current-day shadow forecast uses ONLY earlier complete UTC market days.
+// The resulting adjustment can be displayed and monitored, never used to
+// withhold, reverse, size or send an order.
+function prospectiveCalibration(normalized,now=new Date()){
+ const at=ms(now);
+ if(!Number.isFinite(at))throw Error('INVALID_PROSPECTIVE_TIME');
+ const cutoff=day(now)+'T00:00:00.000Z';
+ const start=Date.parse(cutoff);
+ const eligible=normalized.filter(t=>t.status==='VALID'&&
+   t.closed<start&&t.closed>=start-MAX_LOOKBACK_DAYS*86400000&&
+   t.day<day(now));
+ const routes={};
+ for(const route of ROUTES){
+  const evidence=eligible.filter(t=>t.route===route);
+  routes[route]=calibrate(evidence);
+ }
+ return {asOf:now.toISOString(),priorOnlyBefore:cutoff,
+  routes,executionAuthority:'NONE',modifiesOrders:false,
+  changesStops:false,changesLotSize:false};
+}
+// A thought experiment only: below-zero corrected estimates are NOT executable
+// rejections. Count actual profitable trades they would wrongly reject.
+function advisoryThresholdImpact(observations){
+ const ready=observations.filter(t=>t.adjustedExpectedNetR!==null);
+ const rejected=ready.filter(t=>t.adjustedExpectedNetR<=0);
+ const retained=ready.filter(t=>t.adjustedExpectedNetR>0);
+ const cash=list=>rnd(list.reduce((s,t)=>s+t.actualNetUsd,0),2);
+ return {compared:ready.length,nonPositiveAdjustedForecast:rejected.length,
+  positiveAdjustedForecast:retained.length,
+  winningTradesThatWouldBeRejected:rejected.filter(t=>t.actualNetUsd>0).length,
+  losingTradesThatWouldBeRetained:retained.filter(t=>t.actualNetUsd<0).length,
+  rejectedCohortActualNetUsd:cash(rejected),
+  retainedCohortActualNetUsd:cash(retained),
+  causalSavingsProven:false,executionGateQualified:false};
+}
 function analyze(raw,now=new Date()){
  const t=raw.map(normalize),obs=score(t);
  return {
@@ -171,6 +206,8 @@ function analyze(raw,now=new Date()){
   },
   invalidOrUnpricedRows:t.filter(r=>r.status!=='VALID').length,
   result:summary(obs),
+  prospective:prospectiveCalibration(t,now),
+  advisoryThresholdImpact:advisoryThresholdImpact(obs),
   tradeObservations:obs,
   limitations:[
    'No intra-day trade with a closure on the same UTC market day is ever used to adjust another trade that day; this deliberately removes tightly correlated same-day leakage.',
@@ -220,10 +257,13 @@ async function main(){
   console.log('DAY_PURGED_OWNER_NET_R_CALIBRATION',JSON.stringify({
    generatedAt:r.generatedAt,policy:r.policy,invalid:r.invalidOrUnpricedRows,
    result:r.result,
+   prospective:r.prospective,
+   advisoryThresholdImpact:r.advisoryThresholdImpact,
   }));
  }finally{await c.end()}
 }
-module.exports={ARTIFACT,SQL,normalize,priorCohort,calibrate,score,summary,analyze,audit};
+module.exports={ARTIFACT,SQL,normalize,priorCohort,calibrate,score,summary,
+ prospectiveCalibration,advisoryThresholdImpact,analyze,audit};
 if(require.main===module)main().catch(e=>{
  console.error('DAY_PURGED_NET_R_AUDIT_FAILED',String(e.message).slice(0,200));
  process.exitCode=1;

@@ -1,6 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {ARTIFACT,SQL,normalize,priorCohort,calibrate,score,summary,analyze,audit}
+const {ARTIFACT,SQL,normalize,priorCohort,calibrate,score,summary,analyze,audit,
+ prospectiveCalibration,advisoryThresholdImpact}
  =require('./audit-owner-demo-net-r-walkforward.cjs');
 const OWNER='b0d690b5-5a09-4d7f-a7b9-68f81f6bf615';
 const date=(d,h='10:00')=>d+'T'+h+':00Z';
@@ -119,6 +120,39 @@ test('raw vs calibrated comparison uses identical held-out trade cohort',()=>{
  assert.equal(r.modifiesLotSize,false);
  assert.equal(r.changesOrderAuthority,false);
  assert.equal(r.artifact,ARTIFACT);
+});
+test('current-day shadow correction ignores every same-day closed outcome',()=>{
+ const history=Array.from({length:15},(_,i)=>normalize(row(
+  ['2026-11-10','2026-11-11','2026-11-12'][i%3],
+  String(i),{realised_pnl:'-25'})));
+ const now=new Date('2026-11-19T07:30:00Z');
+ const base=prospectiveCalibration(history,now);
+ const intraday=normalize(row('2026-11-19','today',{
+  realised_pnl:'90000',closed_at:'2026-11-19T07:00:00Z',
+  opened_at:'2026-11-19T06:00:00Z',
+  allocated_at:'2026-11-19T05:59:00Z'}));
+ const changed=prospectiveCalibration([...history,intraday],now);
+ assert.equal(base.routes.EARLY_TRANSITION.adjustmentR,
+  changed.routes.EARLY_TRANSITION.adjustmentR);
+ assert.equal(base.routes.EARLY_TRANSITION.priorTrades,15);
+ assert.equal(base.routes.CONFIRMED_REVERSAL.adjustmentR,null);
+ assert.equal(base.priorOnlyBefore,'2026-11-19T00:00:00.000Z');
+ assert.equal(base.modifiesOrders,false);
+ assert.equal(base.changesLotSize,false);
+});
+test('soft forecast screening counts missed real winners, never authorizes a veto',()=>{
+ const r=advisoryThresholdImpact([
+  {adjustedExpectedNetR:-0.2,actualNetUsd:10},
+  {adjustedExpectedNetR:-0.4,actualNetUsd:-30},
+  {adjustedExpectedNetR:0.2,actualNetUsd:-12},
+  {adjustedExpectedNetR:null,actualNetUsd:100},
+ ]);
+ assert.equal(r.compared,3);
+ assert.equal(r.winningTradesThatWouldBeRejected,1);
+ assert.equal(r.losingTradesThatWouldBeRetained,1);
+ assert.equal(r.rejectedCohortActualNetUsd,-20);
+ assert.equal(r.causalSavingsProven,false);
+ assert.equal(r.executionGateQualified,false);
 });
 test('read-only transaction rejects invalid user ID, retains strict bound and privacy',async()=>{
  let calls=[],data=[];

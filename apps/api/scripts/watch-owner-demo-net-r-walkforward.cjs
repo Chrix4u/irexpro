@@ -23,6 +23,8 @@ function summarizeSuccess(out){
   baselineMAE:r.maeRawOnComparedCohort,
   shadowMAE:r.maeAdjustedOnComparedCohort,
   preliminaryAccuracy:r.directionOfAccuracyChange,
+  prospective:result.prospective??null,
+  advisoryThresholdImpact:result.advisoryThresholdImpact??null,
   modifiesExecution:false,lotChanges:0,brokerOrders:0,
   qualifiedForLive:false,
  };
