@@ -167,7 +167,10 @@ function summarize(decisions,closes,orders,now=new Date()){
   if(state.portfolioBrakeBlocks)byEffectiveSafety.portfolioBrake++;
   if(state.strategyBrakeBlocks)byEffectiveSafety.strategyBrake++;
   if(state.ownerAdvisoryOnly)ownerAdvisoryDecisions++;
-  if(row.owner_pause_policy&&
+  // Only the last executable model-path candidate is relevant here.
+  // A subsequent ineligible scanner tick may have advisoryOnly=false
+  // because it never reached the exact-owner broker verification step.
+  if(row.owner_pause_policy&&(state.altEligible||state.primaryEligible)&&
      (!latestOwnerPausePolicy||d>ts(latestOwnerPausePolicy.evaluatedAt)))
     latestOwnerPausePolicy={evaluatedAt:row.evaluated_at,
      advisoryOnly:state.ownerAdvisoryOnly,

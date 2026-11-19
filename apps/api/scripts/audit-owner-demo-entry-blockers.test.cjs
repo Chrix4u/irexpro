@@ -107,6 +107,22 @@ test('owner DEMO advisory-only raw loss streak is not misreported as an order ve
  assert.equal(r.activeSafetyObservations.portfolioBrake,1);
  assert.equal(r.effectiveSafetyVetoes.portfolioBrake,0);
 });
+test('latest owner advisory status comes from an eligible path, not a later ineligible tick',()=>{
+ const eligible=candidate({
+  owner_pause_policy:{advisoryOnly:true,portfolioLossStreakBlocks:false},
+  blockers:[],
+ });
+ const ineligible=candidate({
+  evaluated_at:'2026-11-18T13:27:00Z',
+  alternative:{eligible:false},
+  owner_pause_policy:{advisoryOnly:false,portfolioLossStreakBlocks:true},
+  blockers:[],
+ });
+ const r=summarize([ineligible,eligible],losses,{n:0,since_latest_close:0},
+  new Date(AT));
+ assert.equal(r.latestOwnerPausePolicy.advisoryOnly,true);
+ assert.equal(r.ownerDemoAdvisoryOnlyDecisions,1);
+});
 test('selected alternate without portfolio brake can be rejected by a separate safety rule',()=>{
  const x=candidate({
   evaluated_at:'2026-11-18T12:59:00Z',
