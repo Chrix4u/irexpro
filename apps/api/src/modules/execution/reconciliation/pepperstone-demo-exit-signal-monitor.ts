@@ -32,6 +32,8 @@ export interface PepperstoneDemoExitMonitorInput {
   m1: {
     completedBars: number;
     liveQuoteBars: number;
+    /** Verified consecutive independently-quoted completed M1 bars. */
+    consecutiveLiveQuoteBars?: number;
     latestAgeSeconds: number;
     adverseBars: number;
     alignedLatestBodyPressure: number;
@@ -50,6 +52,8 @@ export type PepperstoneDemoExitMonitorDecision = {
     | 'HEALTHY_CONTINUATION_RESEARCH'
     | 'INDETERMINATE_KEEP_PROTECTION';
   reason: string;
+  /** Standalone candlestick evidence is research only, never order authority. */
+  continuationEvidence: 'TACTICAL_SAME_SIDE_VOTE' | 'INDEPENDENT_BROKER_M1' | null;
   currentR: number | null;
   peakR: number | null;
   givebackFraction: number | null;
@@ -82,9 +86,10 @@ export function evaluatePepperstoneDemoExitMonitor(
   const reply=(
     recommendation:PepperstoneDemoExitMonitorDecision['recommendation'],reason:string,
     grace=false,
+    continuationEvidence:PepperstoneDemoExitMonitorDecision['continuationEvidence']=null,
   ):PepperstoneDemoExitMonitorDecision=>({
     artifact:PEPPERSTONE_DEMO_EXIT_INTELLIGENCE_ARTIFACT,
-    mode:'SHADOW_ONLY',recommendation,reason,currentR,peakR,
+    mode:'SHADOW_ONLY',recommendation,reason,continuationEvidence,currentR,peakR,
     givebackFraction,existingBrokerProfitStopVerified:!!stopVerified,
     hypotheticalGraceEligibleOnlyIfProtected:grace && !!stopVerified,
     closeOrders:0,stopAmendments:0,newOrders:0,changesLive:false,
@@ -126,15 +131,24 @@ export function evaluatePepperstoneDemoExitMonitor(
     return reply('NOT_MEANINGFUL_PROFIT','PEAK_BELOW_0_25R');
   const age=i.sameSideContinuationAt
     ?(i.observedAt.getTime()-i.sameSideContinuationAt.getTime())/1000:null;
-  const supported=age!==null&&Number.isFinite(age)&&age>=0&&age<=180&&
-    m.adverseBars<=1&&m.alignedMomentum3>=0.1&&
-    m.alignedLatestBodyPressure>=0.15&&
+  const tacticalContinuation=age!==null&&Number.isFinite(age)&&
+    age>=0&&age<=180&&m.adverseBars<=1&&
+    m.alignedMomentum3>=0.1&&m.alignedLatestBodyPressure>=0.15&&
     i.currentBrokerNetPnl>=risk*0.4&&
     (givebackFraction===null||givebackFraction<=0.4);
-  if(supported)
+  // The M1 candle expert can independently support an ALREADY OPEN trade
+  // even if a NEW ENTRY has no executable tactical continuation vote.
+  // Stronger thresholds + consecutive quote confirmation prevent turning
+  // mere noisy momentum into presumed profitability. SHADOW_ONLY always.
+  const independentNativeCandles=m.completedBars>=3&&m.liveQuoteBars>=3&&
+    (m.consecutiveLiveQuoteBars??0)>=2&&m.adverseBars===0&&
+    m.alignedMomentum3>=0.2&&m.alignedLatestBodyPressure>=0.3&&
+    i.currentBrokerNetPnl>=risk*0.4&&
+    (givebackFraction===null||givebackFraction<=0.35);
+  if(tacticalContinuation||independentNativeCandles)
     return reply('HEALTHY_CONTINUATION_RESEARCH',
       stopVerified?'SUPPORTIVE_NATIVE_M1_WITH_VERIFIED_POSITIVE_BROKER_STOP':
       'SUPPORTIVE_NATIVE_M1_BUT_NO_VERIFIED_POSITIVE_BROKER_STOP',
-      true);
+      true,tacticalContinuation?'TACTICAL_SAME_SIDE_VOTE':'INDEPENDENT_BROKER_M1');
   return reply('INDETERMINATE_KEEP_PROTECTION','NO_CONFIRMED_CONTINUATION_OR_REVERSAL');
 }

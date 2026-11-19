@@ -59,6 +59,7 @@ import { ProtectiveOrderReconciliationService } from './reconciliation/protectiv
 import { LiveDemoProfitProtectionService } from './reconciliation/live-demo-profit-protection.service';
 import { DemoPartialCloseLedgerService } from './reconciliation/demo-partial-close-ledger.service';
 import { DemoPartialCloseReconciliationService } from './reconciliation/demo-partial-close-reconciliation.service';
+import { DemoProfitStopAuthoritySyncService } from './reconciliation/demo-profit-stop-authority-sync.service';
 
 /**
  * ExecutionModule — Live trade execution, lifecycle management, and
@@ -174,6 +175,10 @@ import { DemoPartialCloseReconciliationService } from './reconciliation/demo-par
     DemoPartialCloseLedgerService,
     // Internal-only provider evidence persistence; broker dispatch stays disabled.
     DemoPartialCloseReconciliationService,
+    // Internal-only, default-disabled and no controller or broker amendment
+    // dispatch; synchronizes pre-verified broker stop proof + trade authority
+    // atomically when a separately authorized workflow is eventually active.
+    DemoProfitStopAuthoritySyncService,
     TradeReconciliationJob,
     TradeReconciliationProducer,
     // Round 7 (P1): the expiry-hygiene sweeper (stale intents/confirmations

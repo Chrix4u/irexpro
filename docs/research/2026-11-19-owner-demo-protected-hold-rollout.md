@@ -85,8 +85,35 @@ or calling the broker. A future executor must atomically persist the new
 authoritative stop, maintain crash recovery and prove broker readback
 before it is eligible to withhold an existing profit close.
 
-This migration's presence in source code **does not by itself mean the
-database migration has run**, or that its workflow is executable.
+The target migration was applied to the owner staging PostgreSQL database
+on **19 November 2026**, in its own verified transaction; the migration
+history and five indexes were checked afterward. Two unrelated migrations
+(`AccelerateM1AndShadowDecisionReads` and
+`WidenBrokerAccountMarginLevel`) were intentionally **not applied**.
+
+The registered internal `DemoProfitStopAuthoritySyncService` can reconcile
+an *already acknowledged and independently broker-confirmed* DEMO stop:
+it checks the current broker position readback, account identity,
+direction, instrument, lot, fill, TP, committed original stop, and
+future-dated intent; it then atomically updates `trading.trades.stop_loss`
+and the amendment intent's `AUTHORITY_COMMITTED` state. Failure of either
+update rolls the transaction back. Broker commands, new positions and
+a delay of profit protection are not part of this service.
+
+`IREXPRO_PEPPERSTONE_DEMO_STOP_AUTHORITY_SYNC` is **not enabled**. No
+controller, job, or automatic broker amendment executor calls this service.
+The registered service and installed ledger alone do **not** enable
+protected holding or prove improved trading P&L.
+
+A new stronger, independently quoted M1 continuation research branch also
+operates without new-entry permission: at least 3 broker-native completed
+M1 bars, 2 consecutive independent quote-backed bars, aligned M1
+momentum >=0.20, latest candle body pressure >=0.30,
+no adverse bars, a profitable 0.4R current position and <=35% peak
+giveback. Opposite executable reversal and deterioration warnings
+still take priority. This is **SHADOW_ONLY**; its candidates need
+prospective post-exit validation, not immediate autonomous holds.
+
 The currently enabled DEMO safeguard from the previous section still
 does not use this ledger to place amendments or delay closes.
 
@@ -94,10 +121,12 @@ does not use this ledger to place amendments or delay closes.
 
 The cTrader adapter supports `modifyOrder` on positions, but its acceptance
 response is NOT sufficient evidence of final broker stop installation.
-`ProtectiveOrderReconciliationService.verifyAndRepairOne()` currently restores
-provider stop/TP back to the internally authoritative `trades.stop_loss` and
-`trades.take_profit` when mismatched. Thus blindly amending the broker's
-stop without coordinating the internal authority could be promptly reverted.
+`ProtectiveOrderReconciliationService.verifyAndRepairOne()` ordinarily restores
+deviated broker protections to the original trade authority. The owner-DEMO
+guard above now **preserves a strictly tighter, verified, profitable broker
+stop** and records the unsynchronized discrepancy, but this is NOT the same
+as atomically persisting the new authoritative stop or permitting longer
+holding. Blind broker amendments remain unsupported.
 
 A safe future rollout needs all of the following in the same owner DEMO
 scope, with idempotent per-position safeguards:

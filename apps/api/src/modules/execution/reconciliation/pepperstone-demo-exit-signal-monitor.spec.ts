@@ -66,6 +66,31 @@ describe('Pepperstone DEMO existing-position exit-intelligence monitor',()=>{
     expect(assess({...base,sameSideContinuationAt:null}).recommendation)
       .toBe('INDETERMINATE_KEEP_PROTECTION');
   });
+  it('recognizes independent quote-backed M1 continuation without new-entry permission',()=>{
+    const standalone={...base,sameSideContinuationAt:null,
+      m1:{...base.m1,consecutiveLiveQuoteBars:3,
+        alignedMomentum3:0.35,alignedLatestBodyPressure:0.45,
+        adverseBars:0}};
+    const x=assess(standalone);
+    expect(x.recommendation).toBe('HEALTHY_CONTINUATION_RESEARCH');
+    expect(x.continuationEvidence).toBe('INDEPENDENT_BROKER_M1');
+    expect(x.hypotheticalGraceEligibleOnlyIfProtected).toBe(false);
+    expect(x.changesExecution).toBe(false);
+    expect(x.closeOrders).toBe(0);
+    expect(x.stopAmendments).toBe(0);
+    expect(assess({...standalone,oppositeExecutableReversal:true})
+      .recommendation).toBe('DETERIORATION_REVIEW_NOW');
+    expect(assess({...standalone,m1:{...standalone.m1,
+      consecutiveLiveQuoteBars:1}}).recommendation)
+      .toBe('INDETERMINATE_KEEP_PROTECTION');
+    expect(assess({...standalone,m1:{...standalone.m1,
+      alignedMomentum3:0.05}}).recommendation)
+      .toBe('INDETERMINATE_KEEP_PROTECTION');
+    expect(assess({...standalone,m1:{...standalone.m1,
+      latestAgeSeconds:100}}).recommendation)
+      .toBe('STALE_OR_INCOMPLETE_CANDLE_EVIDENCE');
+  });
+
   it('detects real early adverse candlestick warnings before 0.25R',()=>{
     const smallPeak={...base,peakBrokerNetPnl:10,currentBrokerNetPnl:-25,
       m1:{...base.m1,adverseBars:3,alignedMomentum3:-0.42,

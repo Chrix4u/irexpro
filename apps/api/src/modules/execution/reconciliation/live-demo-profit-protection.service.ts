@@ -1612,6 +1612,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       m1: m1 ? {
         completedBars: m1.completedBars,
         liveQuoteBars: m1.liveQuoteBars ?? 0,
+        consecutiveLiveQuoteBars: m1.consecutiveLiveQuoteBars ?? 0,
         latestAgeSeconds: m1.latestAgeSeconds,
         adverseBars: m1.adverseBars,
         alignedLatestBodyPressure: m1.alignedLatestBodyPressure,
@@ -1711,6 +1712,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         protectedRunnerPreflightReason,
         protectedRunnerReadinessShadow,
         m1LiveQuoteBars: m1?.liveQuoteBars ?? 0,
+        m1ConsecutiveLiveQuoteBars: m1?.consecutiveLiveQuoteBars ?? 0,
         m1AlignedMomentum3: m1?.alignedMomentum3 ?? null,
         m1AlignedLatestBodyPressure: m1?.alignedLatestBodyPressure ?? null,
         m1AdverseBars: m1?.adverseBars ?? null,
@@ -1817,6 +1819,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               m1: m1Evidence ? {
                 completedBars: m1Evidence.completedBars,
                 liveQuoteBars: m1Evidence.liveQuoteBars ?? 0,
+                consecutiveLiveQuoteBars: m1Evidence.consecutiveLiveQuoteBars ?? 0,
                 latestAgeSeconds: m1Evidence.latestAgeSeconds,
                 adverseBars: m1Evidence.adverseBars,
                 alignedLatestBodyPressure: m1Evidence.alignedLatestBodyPressure,
