@@ -28,6 +28,7 @@ import { MotionStatusOrb } from "@/components/ui/motion-status-orb";
 import { MarketClosedState } from "./MarketClosedState";
 import type { PortfolioLossPauseStatus } from "@/components/trading/PortfolioLossPauseNotice";
 import type { StrategyLossBrakeOwnerStatus } from "@/components/trading/StrategyLossBrakeNotice";
+import { OwnerDemoLossClusterNotice } from "@/components/trading/OwnerDemoLossClusterNotice";
 import { AiTraderLoading } from "./ai-trader-loading";
 import { api } from "@/lib/api";
 import { formatAgeSeconds } from "@/lib/duration";
@@ -37,6 +38,7 @@ import { resolveAiOpenPositionRows } from "@/lib/ai-open-positions";
 import { estimatePepperstoneDemoRoundTripCommission } from "@/lib/open-commission-presentation";
 import { executionPathDiagnostics } from "@/lib/trade-path-diagnostics";
 import { hasPendingClosedTradeSettlement } from "@/lib/closed-trade-settlement";
+import { detectOwnerDemoLossCluster } from "@/lib/owner-demo-loss-cluster";
 import {
   loadLiveMarketQuote,
   loadMarketIntelligence,
@@ -1828,6 +1830,8 @@ export default function AiTradingPage() {
   const [execution, setExecution] = useState<TraderExecutionSnapshot | null>(
     null,
   );
+  const [executionScopedBrokerId, setExecutionScopedBrokerId] =
+    useState<string | null>(null);
   const [realised24hReport, setRealised24hReport] = useState<{
     brokerConnectionId: string;
     summary: ClosedTradeReportSummaryView;
@@ -2360,7 +2364,10 @@ export default function AiTradingPage() {
         // Secondary read failures must never erase the last authoritative UI
         // snapshot. Keep the previous data on screen and let the existing
         // polling loops retry automatically.
-        if (snapshot) setExecution(snapshot);
+        if (snapshot) {
+          setExecution(snapshot);
+          setExecutionScopedBrokerId(brokerId || null);
+        }
         if (positions) {
           setLivePositions(positions);
           setPositionsLoaded(true);
@@ -3115,6 +3122,16 @@ export default function AiTradingPage() {
 
   const recentClosedTrades = execution?.closedExecutions.slice(0, 10) ?? [];
   const latestClosedTrade = recentClosedTrades[0] ?? null;
+  // Broker-scoped, broker-settled loss cluster advisory only. No model or
+  // risk gate reads this result. Stop still requires the existing confirmation.
+  const ownerDemoLossCluster =
+    automationOn && terminal?.session?.executionMode === "FULL_AUTO" &&
+    selectedBroker?.accountType === "DEMO" &&
+    selectedBroker?.brokerId === "pepperstone-ctrader" &&
+    selectedBroker?.id === executionScopedBrokerId &&
+    execution?.degradedFeeds.includes("CLOSED_EXECUTIONS") !== true
+      ? detectOwnerDemoLossCluster(execution?.closedExecutions ?? [])
+      : null;
   const recentExecutionActivity = summarizeRecentExecutionActivity(
     execution?.recentExecutions ?? [],
   );
@@ -3321,6 +3338,13 @@ export default function AiTradingPage() {
             <p>Recent losses were detected. Trading continues when a valid opportunity qualifies. Use Stop Trading if you want the AI to stop.</p>
           </div>
         )}
+        <OwnerDemoLossClusterNotice
+          incident={ownerDemoLossCluster}
+          brokerConnectionId={selectedBroker?.id ?? null}
+          active={automationOn}
+          deferAutoOpen={pendingAutomationAction !== null}
+          onReviewStop={() => setPendingAutomationAction("STOP")}
+        />
         <section className="ai-trader__hero">
           <div>
             <p className="workspace-hero__eyebrow">Autonomous trading control</p>
