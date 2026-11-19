@@ -86,10 +86,13 @@ function compareMatchedDriftDays(selected, labelOf, asOfMs, options = {}) {
   );
   const normalLabels = pairedEpisodes('NORMAL');
   const oodLabels = pairedEpisodes('OUT_OF_DISTRIBUTION');
-  const normalCoverage = comparableStrata.reduce((s, x) => s + x.normal.completedLabels, 0) /
-    (comparableStrata.reduce((s, x) => s + x.normal.episodes, 0) || 1);
-  const oodCoverage = comparableStrata.reduce((s, x) => s + x.outOfDistribution.completedLabels, 0) /
-    (comparableStrata.reduce((s, x) => s + x.outOfDistribution.episodes, 0) || 1);
+  // Include EVERY matched market stratum in completeness, not only strata
+  // where both outcomes happened to settle. Otherwise missing labels on
+  // OOD candidates can disappear when we select only comparable rows.
+  const normalCoverage = pairedStrata.reduce((s, x) => s + x.normal.completedLabels, 0) /
+    (pairedStrata.reduce((s, x) => s + x.normal.episodes, 0) || 1);
+  const oodCoverage = pairedStrata.reduce((s, x) => s + x.outOfDistribution.completedLabels, 0) /
+    (pairedStrata.reduce((s, x) => s + x.outOfDistribution.episodes, 0) || 1);
   let status = 'DESCRIPTIVE_ONLY_NO_POLICY_AUTHORITY';
   if (sourceTruncated) status = 'SOURCE_TRUNCATED';
   else if (comparableStrata.length === 0) status = 'NO_COMPARABLE_SETTLED_STRATA';
@@ -119,8 +122,8 @@ function compareMatchedDriftDays(selected, labelOf, asOfMs, options = {}) {
     observedComparableDays: days,
     comparableNormalLabels: normalLabels,
     comparableOutOfDistributionLabels: oodLabels,
-    normalCoverageInComparableStrata: round(normalCoverage),
-    outOfDistributionCoverageInComparableStrata: round(oodCoverage),
+    normalCoverageAcrossBothStateStrata: round(normalCoverage),
+    outOfDistributionCoverageAcrossBothStateStrata: round(oodCoverage),
     // Equal weight per same-instrument/side/route/day stratum: volume of
     // repeated one-minute scanning must not dominate the comparison.
     balancedOodMinusNormalMeanEstimatedNetR: balancedDifference,
