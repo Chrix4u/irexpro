@@ -2869,7 +2869,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ...(!demoInstrumentAllowed ? ['M1_DEMO_INSTRUMENT_RESEARCH_ONLY'] : []),
           ...(crossSleeveReversalCanary ? [] : (demoProfitabilityReliabilityGate?.blockers ?? [])),
           ...(multimodelDirectionConflict ? ['MULTIMODEL_TRAINED_EXPERT_DIRECTION_CONFLICT'] : []),
-          ...(professionalM1FallbackExecutable ||
+          // An independently qualified DEMO alternate can legitimately use
+          // the same Plan-B signal while its ordinary M1-timing authority is
+          // blocked. Do not persist that superseded PRIMARY-path blocker as
+          // the effective reason an ALTERNATE order was denied. Preserve the
+          // primary evaluation itself in multimodelAuthority for forensics.
+          ...(demoAlternativeTrial.eligible ||
+          professionalM1FallbackExecutable ||
           m5EarlyTransitionHandoffEligible ||
           extensionExhaustionDemoScoutExecutable
             ? []
@@ -3292,6 +3298,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         multimodelGovernance: multimodelDemo?.governance ?? null,
         multimodelTrainedExpert: multimodelDemo?.trainedExpert ?? null,
         multimodelAuthority: multimodelDemo?.authority ?? null,
+        primaryPlanBBlockersSupersededByDemoAlternate:
+          professionalDemoPhase && demoAlternativeTrial.eligible
+            ? (multimodelDemo?.authority.blockers ?? [])
+            : [],
+        primaryPlanBBlockersSupersededResearchOnly: true,
         multimodelPortfolioSnapshotAvailable: multimodelDemo?.portfolioSnapshotAvailable ?? null,
         demoProfitabilityReliabilityGate,
         zaiDemoDiagnostics,

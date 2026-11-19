@@ -3611,6 +3611,12 @@ describe('M1 V8 multi-model DEMO authority', () => {
         route: 'CONFIRMED_REVERSAL',
       });
       expect(record?.executionAuthority).toBe('BROKER_NATIVE');
+      // The primary reversal was blocked by M1 timing, but the owner-scoped
+      // alternate independently admitted this decision. The recorded active
+      // blockers must not claim an authorized trade was denied.
+      expect(record?.blockers).not.toContain('MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED');
+      expect(record?.governance.primaryPlanBBlockersSupersededByDemoAlternate)
+        .toContain('MULTIMODEL_REVERSAL_NOT_M1_CONFIRMED');
       expect(h.loadDemoAlternativeTrialEntryCount).not.toHaveBeenCalled();
       expect(h.isPepperstoneDemoBrokerConnection).toHaveBeenCalled();
       expect(h.loadOwnerPepperstoneDemoAdvisoryRecentNet).toHaveBeenCalledWith(
