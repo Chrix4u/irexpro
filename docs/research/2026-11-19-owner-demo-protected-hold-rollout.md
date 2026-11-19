@@ -65,6 +65,31 @@ provider readback and **atomic stop-authority persistence** is still
 required. The guard does not write an amendment or create a broker order.
 Do not enable for LIVE accounts.
 
+## Durable stop-amendment intent foundation (schema, not execution)
+
+A separately additive migration
+`1795082400000-CreateDemoProfitStopAmendmentIntents` defines a
+`trading.demo_profit_stop_amendment_intents` ledger. It is restricted to
+Pepperstone USD DEMO Early Transition / Confirmed Reversal positions with
+positive risk-reducing stop geometry, explicit fee reserve and an estimated
+positive net floor. Partial unique indexes prevent more than one unresolved
+stop-amendment workflow per trade and duplicate client request IDs.
+
+The read-only state reducer requires **separate** PREPARED, DISPATCHING,
+ACKNOWLEDGED, BROKER_VERIFIED and AUTHORITY_COMMITTED stages. A broker
+acknowledgement does not mean the stop is installed. A readback-verified
+stop does not mean the internal authority was committed. Uncertain
+provider outcomes require manual reconciliation rather than blind retry.
+The reducer is explicitly prohibited from granting active hold authority
+or calling the broker. A future executor must atomically persist the new
+authoritative stop, maintain crash recovery and prove broker readback
+before it is eligible to withhold an existing profit close.
+
+This migration's presence in source code **does not by itself mean the
+database migration has run**, or that its workflow is executable.
+The currently enabled DEMO safeguard from the previous section still
+does not use this ledger to place amendments or delay closes.
+
 ## Why a broker-side positive stop is NOT yet executable
 
 The cTrader adapter supports `modifyOrder` on positions, but its acceptance
