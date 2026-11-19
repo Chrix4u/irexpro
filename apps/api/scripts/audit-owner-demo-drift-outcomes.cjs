@@ -5,11 +5,12 @@
  */
 'use strict';
 const path = require('node:path');
+const {compareMatchedDriftDays} = require('./owner-demo-drift-cohort-comparison.cjs');
 const ARTIFACT = 'owner-pepperstone-demo-drift-shadow-cohort-v1';
 const OUTCOME_ARTIFACT = 'm1-shadow-outcome-15m-v1';
 const STATUSES = new Set(['TP','SL','MTM']);
 const DRIFT = new Set(['NORMAL','STRESSED','OUT_OF_DISTRIBUTION']);
-const toMs = x => { const n = new Date(x).getTime(); return Number.isFinite(n) ? n : null; };
+const toMs = x => { if(x==null||x==='') return null; const n = new Date(x).getTime(); return Number.isFinite(n) ? n : null; };
 const asNum = x => x == null || x === '' ? null : Number.isFinite(Number(x)) ? Number(x) : null;
 
 function settledLabel(row, asOfMs) {
@@ -85,6 +86,9 @@ function buildDriftCohort(rows,asOf,sourceLimit=10000) {
     laterPeriod:aggregate(after,asOfMs),
     byPlanBRouteAndDrift:groups(r=>[r.strategy_route,r.drift].join(' / ')),
     byInstrumentRouteAndDrift:groups(r=>[r.instrument,r.strategy_route,r.drift].join(' / ')),
+    matchedDriftDays:compareMatchedDriftDays(selected,settledLabel,asOfMs,{
+      sourceTruncated:sorted.length>=sourceLimit,
+    }),
     topDriftDiagnostics:groups(r=>[
       r.strategy_route,r.drift,
       Array.isArray(r.diagnostics)?r.diagnostics.join(',')||'NONE':'MISSING'
@@ -95,6 +99,7 @@ function buildDriftCohort(rows,asOf,sourceLimit=10000) {
       '20-minute episode spacing reduces overlap but does not make trades independent.',
       'A same-data threshold adjustment would be lookahead-biased.',
       'The day split is descriptive; no model was retrained or promoted.',
+      'Same-day matched drift differences still reflect observational confounding and variable label coverage.',
     ],
   };
 }
