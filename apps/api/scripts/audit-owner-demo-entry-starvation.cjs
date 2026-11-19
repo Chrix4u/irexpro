@@ -49,7 +49,15 @@ function auditEntryStarvation(decisions, trades, asOf, lookbackMinutes = 120, li
     time: d.evaluated_at, instrument: d.instrument,
     decision: asObject(d.demo_continuation_pause),
   }));
-  const latestFlag = paused.find(d => d.decision.enabled === true || d.decision.enabled === false);
+  // The scheduler evaluates a separate continuation pause only AFTER a
+  // preliminary executable route exists. A decision with enabled=false can
+  // mean "check not reached", not "VPS environment flag disabled". Never infer
+  // current configuration from a series of prior non-eligible decisions.
+  const observedEngagedPause = paused
+    .filter(d => d.decision.enabled === true)
+    .sort((a,b) => asTime(b.time)-asTime(a.time))[0];
+  const newestPauseState = [...paused]
+    .sort((a,b) => asTime(b.time)-asTime(a.time))[0];
   const latestPrimary = candidates.map(d => asObject(d.primary_only_probation));
   const latestByPair = new Map();
   for (const d of valid) {
@@ -88,8 +96,11 @@ function auditEntryStarvation(decisions, trades, asOf, lookbackMinutes = 120, li
     lastOrderInstrument:lastTrade?.instrument || null,
     minutesSinceLastOrder:minutesSince(lastTrade?.opened_at,asOfMs),
     continuationPause:{
-      observedConfiguredEnabled:latestFlag?.decision.enabled ?? null,
-      latestObservedReason:latestFlag?.decision.reason || null,
+      currentEnvironmentEnabled:null,
+      configurationRequiresDirectVpsCheck:true,
+      observedConfiguredEnabled:observedEngagedPause?.decision.enabled ?? null,
+      latestEngagedAt:observedEngagedPause?.time ?? null,
+      latestObservedReason:newestPauseState?.decision.reason || null,
       observedEnabledCandidates:paused.filter(x => x.decision.enabled===true).length,
       observedActuallyBlocked:paused.filter(x => x.decision.blocked===true).length,
     },
@@ -113,6 +124,7 @@ function auditEntryStarvation(decisions, trades, asOf, lookbackMinutes = 120, li
       'M1 scanned opportunities and broker submissions are different measures.',
       'Blocker reasons overlap. Removing one blocker may still produce no trades.',
       'A recorded enabled continuation pause is independent of Start/Stop Trading.',
+      'A stored enabled=false pause is ambiguous when no preliminary executable route reached the pause check; verify actual VPS config instead.',
       'A separate authenticated active FULL_AUTO session check is still required.',
       'A BROKER_NATIVE decision does not guarantee successful broker submission.',
       'A full 4000-row trade sample means the window count is only a lower bound.',
