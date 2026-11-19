@@ -1,5 +1,7 @@
 name: iRexPro DEMO drift research
 on:
+  push:
+    branches: ["research/demo-drift-outcome-audit-20261119"]
   pull_request:
     paths:
       - "apps/api/scripts/audit-owner-demo-drift-outcomes.cjs"
