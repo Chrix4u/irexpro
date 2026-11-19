@@ -1,35 +1,28 @@
-# DEMO account-owner strategy-loss alerts and bounded recovery
+# iRexPro DEMO — simple owner choice for strategy loss pauses
 
-The owner reported that DEMO trading was silent after the last position closed at 16:53:40 UTC on 18 November 2026, despite scanner decisions. The same-account 3-hour scan had three independently eligible alternative strategy signals blocked by `M1_MULTIMODEL_LOSS_STREAK_BRAKE`, without the existing portfolio-wide loss-pause modal triggering.
+The account owner requested a simple, visible decision rather than silent strategy restrictions or a temporary one-entry exception.
 
-## What was implemented
+The AI Trader now asks:
 
-- Owner-only authenticated `GET /ai/external/vps-forex/m1-tactical/strategy-loss-alerts`: read exact active Pepperstone cTrader USD DEMO account, group recent selected alternative signals with active strategy brakes by **strategy, instrument, direction and latest broker close incident**, show historical profit factor, payoff sample, persistent-loss state and cooldown. Never expose another user's data.
-- Owner-only `POST /ai/external/vps-forex/m1-tactical/strategy-loss-alerts/decision`: explicitly accept **KEEP_PAUSED** or **RESUME_LIMITED** for that exact current broker-verified brake incident, with a required additional-loss acknowledgement for the latter. Append-only audited decisions in `trading.demo_strategy_brake_owner_decisions` (new migration).
-- AI Trader page polls the authenticated owner state every 4 seconds independently of chart/position updates; auto-opens a modal for the first unreviewed incident, displays each additional affected pair/side, and leaves a persistent banner with manual re-review controls. The existing portfolio-wide modal takes priority when both need a decision.
-- A limited recovery is **not a blanket override**. It expires in **one hour** and can admit at most **one fresh trade intent** for the exact strategy/pair/direction/incident, with at most **1.00 lot**. Counting an intention before broker fill prevents concurrent duplicate submissions and intentionally fails closed for an unsuccessful attempt.
-- The broker's original account/session ownership, market data, model Plan-B admission, spread, stop/target, loss portfolio pause, margin, session, and every other pre-existing risk gate remain effective. No LIVE account permissions or automatic reversal were added.
-- Consent is checked again at the scanner decision point; missing SQL evidence or mismatched broker/session/incident fails closed. The server, not the client component, determines authority.
+> Pepperstone DEMO (USD) — [strategy], [instrument] [BUY/SELL] was paused after losses. Do you want to keep it paused or allow it to continue trading?
 
-## Installation/verification
+Exactly two choices: **Keep Paused** and **Continue Trading**. No recovery-cap wording, extra checkbox, 1.00-lot rule, or one-hour expiry appears in the strategy modal.
 
-The owner-decision migration CreateDemoStrategyBrakeOwnerDecisions1795020000000
-was **applied and verified on the authorized staging database on 18 November 2026**,
-including the recorded public.migrations entry and the new trading table.
+## Server-side behavior
 
-**Existing project caveat:** The generic TypeORM migration CLI glob picks up an
-unrelated *.spec.ts test file and fails with ReferenceError: describe is not defined.
-For this deployment, a temporary TypeORM DataSource loaded **only the named migration**
-and called runMigrations({transaction:'each'}). Do not rerun the broad CLI
-until its migration discovery pattern is repaired.
+- `CONTINUE_TRADING` is an explicit authenticated owner choice for a particular Pepperstone **DEMO USD** broker connection, strategy, instrument and direction, persisted across trading-session restarts on that same broker connection.
+- `KEEP_PAUSED` revokes any previous Continue Trading choice for that same pair/side/strategy.
+- A Continue Trading selection bypasses **only that route's model-specific historical loss-streak brake**. It does not directly place any order, flip directions, bypass the portfolio-wide loss pause, or change required broker margin, stops, spreads, session, cost, model qualification or all other account-wide safety controls.
+- The normal strategy's existing lot-size logic is used; there is **no additional 1.00-lot ceiling** and **no one-entry or one-hour quota** created by this owner choice.
+- Only the verified owner can make the decision; the backend rechecks the active DEMO broker-backed loss incident before accepting a new choice. Other accounts cannot read or change it.
+- Stored owner choices are audited in `trading.demo_strategy_brake_owner_decisions`. Migration `1795030000000-EnableDemoStrategyOwnerContinue` retains legacy historic `RESUME_LIMITED` rows for audit but never treats them as a new indefinite approval.
+- Early Transition, Confirmed Reversal and Trend Continuation are eligible for strategy-level notices if a real scanner brake is active. Ordinary scanner/market risk gates remain operational.
+- The owner requested Trend Continuation be re-enabled for DEMO. Change only the owner-scoped `IREXPRO_PEPPERSTONE_DEMO_PAUSE_TREND_CONTINUATION=disabled` setting; this is **not** a promotion to LIVE and does not override its other normal trade qualification gates.
 
-Verify tests:
+## Validation
 
-```bash
-cd apps/api
-./node_modules/.bin/jest src/modules/ai/demo-strategy-brake-owner.service.spec.ts --runInBand
-cd ../web
-./node_modules/.bin/jest src/components/trading/StrategyLossBrakeNotice.spec.tsx --runInBand
-```
+Use the targeted migration runner with **only** this migration class because the repository-wide TypeORM migration command currently attempts to load a Jest test file.
 
-The new modal informs the owner of real restrictions without claiming that a permission guarantees orders. This is not a relaxation of hard account loss, out-of-distribution, or broker risk barriers.
+Run backend Jest `demo-strategy-brake-owner.service.spec.ts` and frontend Jest `StrategyLossBrakeNotice.spec.tsx`. Build `apps/api` and `apps/web` independently, activate builds with saved rollback copies, and verify API health, authenticated-route protection and the AI Trader page.
+
+Historical caution: Trend Continuation's inspected November DEMO trade history showed a significantly negative net P&L. Re-enabling it is at the owner's request for further **DEMO** observation, not a claim that the strategy is profitable.

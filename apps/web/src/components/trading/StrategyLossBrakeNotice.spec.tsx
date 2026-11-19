@@ -1,10 +1,10 @@
 import "@testing-library/jest-dom";
 import React from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { StrategyLossBrakeNotice, type StrategyLossBrakeOwnerStatus } from "./StrategyLossBrakeNotice";
-const base:StrategyLossBrakeOwnerStatus={
+import {act,fireEvent,render,screen} from "@testing-library/react";
+import {StrategyLossBrakeNotice,type StrategyLossBrakeOwnerStatus} from "./StrategyLossBrakeNotice";
+const state:StrategyLossBrakeOwnerStatus={
  supported:true,active:true,accountType:"DEMO",currency:"USD",
- summary:"Strategy loss protection active",
+ summary:"Owner strategy decisions",
  otherModelAndBrokerRiskChecksRemainActive:true,
  overridesHardAccountOrBrokerRisk:false,noAutomaticSideReversal:true,
  incidents:[{
@@ -14,70 +14,65 @@ const base:StrategyLossBrakeOwnerStatus={
   incidentClosedAt:"2026-11-18T14:22:47.343Z",
   cooldownRemainingSeconds:19000,persistentNegativePayoff:true,
   payoffTrades:8,profitFactor:.4895,recentWins:2,recentLosses:0,
-  userDecision:null,resumeLimitedAuthorized:false,requiresOwnerDecision:true,
-  recoveryLotCap:1,maxRecoveryEntries:1,remainingConsentSeconds:0,
+  userDecision:null,continueTradingAuthorized:false,requiresOwnerDecision:true,
  }],
 };
 beforeAll(()=>{
- window.requestAnimationFrame=(fn:FrameRequestCallback)=>
-  window.setTimeout(()=>fn(performance.now()),0);
- window.cancelAnimationFrame=(id:number)=>window.clearTimeout(id);
+ window.requestAnimationFrame=(f:FrameRequestCallback)=>window.setTimeout(()=>f(performance.now()),0);
+ window.cancelAnimationFrame=(i:number)=>window.clearTimeout(i);
 });
-describe("Owner strategy-level loss modal",()=>{
- it("does not display the incident to unsupported accounts",()=>{
-  render(<StrategyLossBrakeNotice status={{...base,supported:false}} onDecision={jest.fn()}/>);
+describe("Simple owner DEMO strategy pause decision",()=>{
+ it("does not expose another account's incidents",()=>{
+  render(<StrategyLossBrakeNotice status={{...state,supported:false}} onDecision={jest.fn()}/>);
   expect(screen.queryByTestId("strategy-loss-brake-alert")).not.toBeInTheDocument();
  });
- it("automatically opens a distinct per-strategy incident with actual risk facts",async()=>{
-  render(<StrategyLossBrakeNotice status={base} onDecision={jest.fn()}/>);
-  await screen.findByTestId("strategy-loss-brake-dialog");
-  expect(screen.getAllByText(/USDJPY SELL/).length).toBeGreaterThan(0);
-  expect(screen.getByText("0.49")).toBeInTheDocument();
-  expect(screen.getByText(/maximum|at most/i)).toBeInTheDocument();
+ it("opens a simple two-choice account owner prompt",async()=>{
+  render(<StrategyLossBrakeNotice status={state} onDecision={jest.fn()}/>);
+  const dialog=await screen.findByRole("alertdialog");
+  expect(dialog).toHaveTextContent("USDJPY SELL");
+  expect(dialog).toHaveTextContent("Pepperstone DEMO");
+  expect(screen.getByRole("button",{name:"Keep Paused"})).toBeInTheDocument();
+  expect(screen.getByRole("button",{name:"Continue Trading"})).toBeInTheDocument();
+  expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  expect(dialog).not.toHaveTextContent("1.00 lot");
+  expect(dialog).not.toHaveTextContent("one hour");
  });
- it("prevents recovery without explicit risk acceptance",async()=>{
-  const onDecision=jest.fn().mockResolvedValue(undefined);
-  render(<StrategyLossBrakeNotice status={base} onDecision={onDecision}/>);
-  const action=await screen.findByRole("button",{name:/Authorize one capped DEMO/i});
-  expect(action).toBeDisabled();
-  fireEvent.click(action);expect(onDecision).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("checkbox"));
-  expect(action).toBeEnabled();
-  await act(async()=>fireEvent.click(action));
-  expect(onDecision).toHaveBeenCalledWith(base.incidents[0],"RESUME_LIMITED",true);
+ it("Continue Trading requires one explicit button click, no checkbox",async()=>{
+  const cb=jest.fn().mockResolvedValue(undefined);
+  render(<StrategyLossBrakeNotice status={state} onDecision={cb}/>);
+  const button=await screen.findByRole("button",{name:"Continue Trading"});
+  await act(async()=>fireEvent.click(button));
+  expect(cb).toHaveBeenCalledWith(state.incidents[0],"CONTINUE_TRADING");
  });
- it("never swaps out an undecided alert when another incident appears on refresh",async()=>{
-  const next={...base.incidents[0],
-    id:"CONFIRMED_REVERSAL|EURUSD|BUY|2026-11-18T14:22:47.343Z",
-    instrument:"EURUSD",direction:"BUY" as const,
-  };
-  const {rerender}=render(<StrategyLossBrakeNotice status={base} onDecision={jest.fn()}/>);
-  await screen.findByTestId("strategy-loss-brake-dialog");
-  expect(screen.getByRole("alertdialog")).toHaveTextContent("USDJPY SELL");
-  rerender(<StrategyLossBrakeNotice
-    status={{...base,incidents:[base.incidents[0],next]}} onDecision={jest.fn()}/>);
+ it("Keep Paused sends exact incident and keeps strategy blocked",async()=>{
+  const cb=jest.fn().mockResolvedValue(undefined);
+  render(<StrategyLossBrakeNotice status={state} onDecision={cb}/>);
+  const button=await screen.findByRole("button",{name:"Keep Paused"});
+  await act(async()=>fireEvent.click(button));
+  expect(cb).toHaveBeenCalledWith(state.incidents[0],"KEEP_PAUSED");
+ });
+ it("does not interrupt an open modal on a live four-second refresh",async()=>{
+  const other={...state.incidents[0],id:"other",instrument:"EURUSD",direction:"BUY" as const};
+  const {rerender}=render(<StrategyLossBrakeNotice status={state} onDecision={jest.fn()}/>);
+  await screen.findByRole("alertdialog");
+  rerender(<StrategyLossBrakeNotice status={{...state,incidents:[state.incidents[0],other]}}
+   onDecision={jest.fn()}/>);
   expect(screen.getByRole("alertdialog")).toHaveTextContent("USDJPY SELL");
   expect(screen.getByRole("alertdialog")).not.toHaveTextContent("EURUSD BUY");
  });
- it("allows keeping this strategy paused without checking the risk box",async()=>{
-  const onDecision=jest.fn().mockResolvedValue(undefined);
-  render(<StrategyLossBrakeNotice status={base} onDecision={onDecision}/>);
-  await screen.findByTestId("strategy-loss-brake-dialog");
-  await act(async()=>fireEvent.click(screen.getByRole("button",{name:/Keep this strategy-direction paused/i})));
-  expect(onDecision).toHaveBeenCalledWith(base.incidents[0],"KEEP_PAUSED",false);
+ it("defers to any account-wide portfolio decision",async()=>{
+  const {rerender}=render(<StrategyLossBrakeNotice status={state} onDecision={jest.fn()}
+    deferAutoOpen/>);
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  rerender(<StrategyLossBrakeNotice status={state} onDecision={jest.fn()}/>);
+  expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
  });
- it("defers auto-opening until portfolio-wide decision is resolved",async()=>{
-  const {rerender}=render(<StrategyLossBrakeNotice status={base}
-   onDecision={jest.fn()} deferAutoOpen/>);
-  expect(screen.queryByTestId("strategy-loss-brake-dialog")).not.toBeInTheDocument();
-  rerender(<StrategyLossBrakeNotice status={base} onDecision={jest.fn()} deferAutoOpen={false}/>);
-  expect(await screen.findByTestId("strategy-loss-brake-dialog")).toBeInTheDocument();
- });
- it("does not automatically reopen a reviewed or already-consented incident",async()=>{
-  render(<StrategyLossBrakeNotice status={{...base,incidents:[{
-   ...base.incidents[0],requiresOwnerDecision:false,userDecision:"KEEP_PAUSED",
+ it("shows the current owner Continue Trading status with a re-review button",()=>{
+  render(<StrategyLossBrakeNotice status={{...state,incidents:[{
+   ...state.incidents[0],requiresOwnerDecision:false,
+   continueTradingAuthorized:true,userDecision:"CONTINUE_TRADING",
   }]}} onDecision={jest.fn()}/>);
-  expect(screen.queryByTestId("strategy-loss-brake-dialog")).not.toBeInTheDocument();
-  expect(screen.getByText("Owner kept paused")).toBeInTheDocument();
+  expect(screen.getByText("Continue Trading selected")).toBeInTheDocument();
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
  });
 });

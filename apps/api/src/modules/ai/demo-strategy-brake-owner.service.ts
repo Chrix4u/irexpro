@@ -3,27 +3,24 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
 
-const ROUTES = ['EARLY_TRANSITION','CONFIRMED_REVERSAL'] as const;
+const ROUTES = ['EARLY_TRANSITION','CONFIRMED_REVERSAL','TREND_CONTINUATION'] as const;
 const PAIRS = ['EURUSD','AUDUSD','USDJPY','USDCAD'] as const;
 const WINDOW_MS = 6 * 3600000;
-const APPROVAL_MS = 3600000;
-export const DEMO_STRATEGY_RECOVERY_LOT_CAP = 1;
 type Route = typeof ROUTES[number];
 type Side = 'BUY' | 'SELL';
-type Action = 'KEEP_PAUSED' | 'RESUME_LIMITED';
+type Action = 'KEEP_PAUSED' | 'CONTINUE_TRADING';
 type Session = {session_id:string;broker_connection_id:string};
 type Brake = {active:boolean;reason:string;latestClosedAt:string|null;
  cooldownRemainingSeconds?:number;persistentNegativePayoff?:boolean;
  recentWins?:number;recentLosses?:number;profitFactor?:number|null;payoffClosedTrades?:number};
 type Candidate = {evaluated_at:string|Date;instrument:string;direction:Side;strategy:Route;brake:Brake};
-type Consent = {decision:Action;brake_reason:string;created_at:string|Date;expires_at:string|Date};
+type Consent = {decision:Action|'RESUME_LIMITED';created_at:string|Date};
 export interface StrategyBrakeIncident {
   id:string;route:Route;instrument:string;direction:Side;reason:string;
   latestBlockedAt:string;incidentClosedAt:string;
   cooldownRemainingSeconds:number;persistentNegativePayoff:boolean;
   payoffTrades:number;profitFactor:number|null;recentWins:number;recentLosses:number;
-  userDecision:Action|null;resumeLimitedAuthorized:boolean;requiresOwnerDecision:boolean;
-  recoveryLotCap:number;maxRecoveryEntries:1;remainingConsentSeconds:number;
+  userDecision:Action|null;continueTradingAuthorized:boolean;requiresOwnerDecision:boolean;
 }
 export interface StrategyBrakeOwnerStatus {
   supported:boolean;active:boolean;accountType:'DEMO'|null;currency:'USD'|null;
@@ -41,25 +38,18 @@ export const STRATEGY_BRAKE_SQL=[
   "AND b.broker_id='pepperstone-ctrader' AND b.account_type='DEMO'",
   "AND b.account_currency='USD' AND b.deleted_at IS NULL",
   'AND d.evaluated_at>=$3::timestamptz AND d.evaluated_at<=$4::timestamptz',
-  "AND d.governance->'demoAlternativeTrial'->>'eligible'='true'",
+  "AND (d.governance->'demoAlternativeTrial'->>'eligible'='true' OR",
+  "d.governance->'multimodelEnsemble'->>'strategyRoute'='TREND_CONTINUATION')",
   "AND d.governance->'multimodelLossStreakBrake'->>'active'='true'",
   "AND d.governance->'multimodelEnsemble'->>'strategyRoute' IN",
-  "('EARLY_TRANSITION','CONFIRMED_REVERSAL')",
+  "('EARLY_TRANSITION','CONFIRMED_REVERSAL','TREND_CONTINUATION')",
   'ORDER BY d.evaluated_at DESC,d.id DESC LIMIT 101',
 ].join(' ');
 const CONSENT_SQL=[
- 'SELECT decision,brake_reason,created_at,expires_at FROM trading.demo_strategy_brake_owner_decisions',
- 'WHERE user_id=$1 AND broker_connection_id=$2 AND trading_session_id=$3',
- 'AND strategy_route=$4 AND instrument=$5 AND direction=$6',
- 'AND incident_closed_at=$7::timestamptz',
+ 'SELECT decision,created_at FROM trading.demo_strategy_brake_owner_decisions',
+ 'WHERE user_id=$1 AND broker_connection_id=$2',
+ 'AND strategy_route=$3 AND instrument=$4 AND direction=$5',
  'ORDER BY created_at DESC,id DESC LIMIT 1',
-].join(' ');
-const SPENT_SQL=[
- 'SELECT COUNT(*)::int n FROM trading.trade_intents ti',
- 'WHERE ti.user_id=$1 AND ti.broker_connection_id=$2 AND ti.trading_session_id=$3',
- 'AND ti.instrument=$4 AND ti.direction=$5',
- "AND ti.metadata->>'multimodel_plan_b_route'=$6",
- 'AND ti.created_at >= $7::timestamptz',
 ].join(' ');
 const iso=(date:string|Date)=>new Date(date).toISOString();
 const n=(x:unknown)=>x===null||x===undefined||!Number.isFinite(Number(x))?0:Number(x);
@@ -73,13 +63,10 @@ function validCandidate(x:Candidate) {
    typeof x.brake.latestClosedAt==='string' &&
    Number.isFinite(Date.parse(x.brake.latestClosedAt));
 }
-export function validLimitedRecoveryConsent(incident:string,d:Consent|null,at:Date,used:number) {
- if(!d||d.decision!=='RESUME_LIMITED'||used!==0)return false;
- const created=new Date(d.created_at).getTime(),expires=new Date(d.expires_at).getTime();
- const incidentAt=Date.parse(incident),current=at.getTime();
- return [created,expires,incidentAt,current].every(Number.isFinite) &&
-  created>incidentAt && current>=created && current<expires &&
-  expires>created && expires<=created+APPROVAL_MS+1000;
+export function validContinuedTradingConsent(d:Consent|null,at:Date):boolean {
+ if(!d||d.decision!=='CONTINUE_TRADING')return false;
+ const issued=new Date(d.created_at).getTime();
+ return Number.isFinite(issued)&&issued<=at.getTime();
 }
 @Injectable()
 export class DemoStrategyBrakeOwnerService {
@@ -119,16 +106,9 @@ export class DemoStrategyBrakeOwnerService {
  }
  private async consent(id:string,s:Session,x:Candidate):Promise<Consent|null> {
   const rows=await this.db.query(CONSENT_SQL,[
-   id,s.broker_connection_id,s.session_id,x.strategy,x.instrument,x.direction,
-   iso(x.brake.latestClosedAt!),
+   id,s.broker_connection_id,x.strategy,x.instrument,x.direction,
   ]) as Consent[];
   return rows[0]??null;
- }
- private async spent(id:string,s:Session,x:Candidate,at:Date):Promise<number> {
-  const rows=await this.db.query(SPENT_SQL,[
-   id,s.broker_connection_id,s.session_id,x.instrument,x.direction,x.strategy,at.toISOString(),
-  ]) as Array<{n:number}>;
-  return n(rows[0]?.n);
  }
  async getStatus(id:string,now=new Date()):Promise<StrategyBrakeOwnerStatus> {
   const empty:StrategyBrakeOwnerStatus={
@@ -141,8 +121,7 @@ export class DemoStrategyBrakeOwnerService {
   const incidents:StrategyBrakeIncident[]=[];
   for(const x of await this.candidates(id,s,now)){
    const d=await this.consent(id,s,x);
-   const used=d?.decision==='RESUME_LIMITED'?await this.spent(id,s,x,new Date(x.brake.latestClosedAt!)):0;
-   const approved=validLimitedRecoveryConsent(iso(x.brake.latestClosedAt!),d,now,used);
+   const approved=validContinuedTradingConsent(d,now);
    incidents.push({
     id:[x.strategy,x.instrument,x.direction,iso(x.brake.latestClosedAt!)].join('|'),
     route:x.strategy,instrument:x.instrument,direction:x.direction,
@@ -153,30 +132,28 @@ export class DemoStrategyBrakeOwnerService {
     payoffTrades:n(x.brake.payoffClosedTrades),
     profitFactor:x.brake.profitFactor==null?null:n(x.brake.profitFactor),
     recentWins:n(x.brake.recentWins),recentLosses:n(x.brake.recentLosses),
-    userDecision:d?.decision??null,resumeLimitedAuthorized:approved,
-    requiresOwnerDecision:!d,recoveryLotCap:DEMO_STRATEGY_RECOVERY_LOT_CAP,
-    maxRecoveryEntries:1,
-    remainingConsentSeconds:approved?Math.ceil((new Date(d!.expires_at).getTime()-now.getTime())/1000):0,
+    userDecision:d?.decision==='CONTINUE_TRADING'?'CONTINUE_TRADING':
+      d?.decision==='KEEP_PAUSED'?'KEEP_PAUSED':null,
+    continueTradingAuthorized:approved,
+    requiresOwnerDecision:!d||d.decision==='RESUME_LIMITED',
    });
   }
   return {...empty,supported:true,accountType:'DEMO',currency:'USD',
    active:incidents.length>0,incidents,
    summary:incidents.length?
-    'One or more strategies were blocked by loss protection. The account owner must review each incident.':
+    'A strategy-loss restriction needs the account owner to choose Pause or Continue Trading.':
     'No recent qualified strategy-loss brake incidents.'};
  }
  async decide(id:string,input:{
-  action:Action;acknowledged:boolean;route:Route;instrument:string;
+  action:Action;route:Route;instrument:string;
   direction:Side;incidentClosedAt:string;
  }):Promise<StrategyBrakeOwnerStatus>{
-  if(!['KEEP_PAUSED','RESUME_LIMITED'].includes(input.action)||
+  if(!['KEEP_PAUSED','CONTINUE_TRADING'].includes(input.action)||
     !ROUTES.includes(input.route)||!PAIRS.includes(input.instrument as typeof PAIRS[number])||
     !['BUY','SELL'].includes(input.direction)||
     !Number.isFinite(Date.parse(input.incidentClosedAt))||
     iso(input.incidentClosedAt)!==input.incidentClosedAt)
    throw new BadRequestException('Invalid strategy brake action or incident.');
-  if(input.action==='RESUME_LIMITED'&&!input.acknowledged)
-   throw new BadRequestException('Explicit acknowledgement of additional DEMO losses is required.');
   const s=await this.session(id);
   if(!s)throw new ForbiddenException('Only the owner of the active Pepperstone USD DEMO session may choose.');
   const now=new Date();
@@ -194,12 +171,6 @@ export class DemoStrategyBrakeOwnerService {
       .includes(live.reason)||
     !live.latestClosedAt||live.latestClosedAt.toISOString()!==input.incidentClosedAt)
    throw new BadRequestException('The current broker-backed model brake has changed. Refresh first.');
-  // A new approval cannot reset the single-attempt budget. It is anchored
-  // to the incident's broker close, not to each appended consent record.
-  if(input.action==='RESUME_LIMITED' &&
-     await this.spent(id,s,x,new Date(input.incidentClosedAt))>0)
-    throw new BadRequestException(
-      'The one-entry recovery allowance for this incident has already been used.');
   const sql=[
    'INSERT INTO trading.demo_strategy_brake_owner_decisions',
    '(user_id,broker_connection_id,trading_session_id,strategy_route,instrument,',
@@ -209,13 +180,14 @@ export class DemoStrategyBrakeOwnerService {
   await this.db.query(sql,[
    id,s.broker_connection_id,s.session_id,input.route,input.instrument,
    input.direction,live.reason,input.incidentClosedAt,input.action,
-   input.action==='RESUME_LIMITED'&&input.acknowledged,
-   new Date(now.getTime()+APPROVAL_MS).toISOString(),
+   false,null,
   ]);
   return this.getStatus(id);
  }
- /** Fail closed. One DEMO entry <=1 lot; all other broker/market/portfolio gates still apply. */
- async isRecoveryApproved(input:{
+ /** Owner opts into continuing normal DEMO entries for the exact strategy,
+  * instrument and direction within this active broker session. The scoped
+  * model loss brake is the ONLY check this consent can bypass. */
+ async isContinuationApproved(input:{
   userId:string;brokerConnectionId:string;sessionId:string;route:Route;
   instrument:string;direction:Side;reason:string;latestClosedAt:Date;at?:Date;
  }):Promise<boolean>{
@@ -231,9 +203,6 @@ export class DemoStrategyBrakeOwnerService {
    brake:{active:true,reason:input.reason,
     latestClosedAt:input.latestClosedAt.toISOString()}};
   const d=await this.consent(input.userId,s,x);
-  if(!d||d.decision!=='RESUME_LIMITED'||d.brake_reason!==input.reason)return false;
-  const used=await this.spent(input.userId,s,x,input.latestClosedAt);
-  return validLimitedRecoveryConsent(input.latestClosedAt.toISOString(),
-    d,input.at??new Date(),used);
+  return validContinuedTradingConsent(d,input.at??new Date());
  }
 }

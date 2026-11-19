@@ -14,10 +14,9 @@ export class DemoStrategyBrakeOwnerController {
 
   @Post('decision')
   @HttpCode(200)
-  @ApiOperation({summary:'Account-owner incident-scoped DEMO safety decision; one capped recovery only'})
+  @ApiOperation({summary:'Account-owner incident-scoped DEMO safety decision; resume normal strategy operation or keep paused'})
   decide(@CurrentUserId() id:string, @Body() body:{
-    action:'KEEP_PAUSED'|'RESUME_LIMITED';
-    acknowledged:boolean;
+    action:'KEEP_PAUSED'|'CONTINUE_TRADING';
     route:'EARLY_TRANSITION'|'CONFIRMED_REVERSAL';
     instrument:string;
     direction:'BUY'|'SELL';

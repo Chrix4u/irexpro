@@ -2547,8 +2547,7 @@ export default function AiTradingPage() {
 
   const decideStrategyLossAlert = async (
     incident: StrategyLossBrakeIncident,
-    action: "KEEP_PAUSED" | "RESUME_LIMITED",
-    acknowledged: boolean,
+    action: "KEEP_PAUSED" | "CONTINUE_TRADING",
   ) => {
     if (strategyLossAlertsSaving) return;
     setStrategyLossAlertsSaving(true);
@@ -2559,19 +2558,17 @@ export default function AiTradingPage() {
         {
           method: "POST",
           body: JSON.stringify({
-            action, acknowledged, route: incident.route,
+            action, route: incident.route,
             instrument: incident.instrument, direction: incident.direction,
             incidentClosedAt: incident.incidentClosedAt,
           }),
         },
       );
       setStrategyLossAlerts(result);
-      if (action === "RESUME_LIMITED") {
-        notify.warning(
-          "Owner authorized one capped DEMO recovery attempt for this strategy-direction. All other risk checks remain active.",
-        );
+      if (action === "CONTINUE_TRADING") {
+        notify.success("Continue Trading enabled for this strategy direction.");
       } else {
-        notify.success("This strategy-direction remains under loss protection.");
+        notify.success("This strategy direction will stay paused.");
       }
     } catch (reason) {
       const message = mapApiError(reason).message;
