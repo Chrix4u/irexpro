@@ -67,3 +67,36 @@ test('only completed broker-native outcomes can contribute positive edge',()=>{
   }});
   assert.equal(settledLabel(altered,Date.parse(asOf)),null);
 });
+
+test('reports earlier and later matched drift outcomes separately without training on future days',()=>{
+  const rows=[];
+  const baseDay=Date.parse('2026-11-16T16:00:00.000Z');
+  for(let day=0;day<4;day++){
+    for(const [minute,drift,netR] of [
+      [0,'NORMAL',-.2],[20,'NORMAL',-.3],
+      [40,'OUT_OF_DISTRIBUTION',.4],[60,'OUT_OF_DISTRIBUTION',.2],
+    ]){
+      const time=new Date(baseDay+day*86400000+minute*60000).toISOString();
+      const observedAt=new Date(baseDay+day*86400000+(minute+15)*60000).toISOString();
+      rows.push(row(minute,drift,netR,{
+        id:[day,minute,drift].join('-'),bar_time:time,
+        outcome:{...row(minute,drift,netR).outcome,observedAt},
+      }));
+    }
+  }
+  const report=buildDriftCohort(rows,asOf);
+  assert.equal(report.chronologicalSplitDay,'2026-11-19');
+  assert.equal(report.chronologicalMatchedDriftDays.splitDay,'2026-11-19');
+  assert.equal(report.chronologicalMatchedDriftDays.earlier.comparableStrata,3);
+  assert.equal(report.chronologicalMatchedDriftDays.later.comparableStrata,1);
+  assert.equal(report.chronologicalMatchedDriftDays.retrained,false);
+  assert.equal(report.chronologicalMatchedDriftDays.promoteThresholds,false);
+  assert.equal(report.chronologicalMatchedDriftDays.grantsTradeAuthority,false);
+  assert.equal(report.chronologicalMatchedDriftDays.status,'RETROSPECTIVE_TIME_SPLIT_ONLY');
+});
+test('makes missing independent day holdout explicit',()=>{
+  const report=buildDriftCohort([row(0,'NORMAL',1)],asOf);
+  assert.equal(report.chronologicalMatchedDriftDays.splitDay,null);
+  assert.equal(report.chronologicalMatchedDriftDays.later,null);
+  assert.equal(report.chronologicalMatchedDriftDays.status,'NO_SEPARATE_DAY_HOLDOUT');
+});
