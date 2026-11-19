@@ -99,7 +99,7 @@ function auditEntryStarvation(decisions, trades, asOf, lookbackMinutes = 120, li
     brokerNativeAuthorizedM1AbstainDecisions:authorizedM1Abstain.length,
     brokerNativeAuthorizedNonAbstainDecisions:candidates.length-denied.length,
     ordersOpenedInWindow:actual.length,
-    possibleTradeRowTruncation:trades.length>=4000,
+    possibleTradeRowTruncation:trades.length>=50,
     lastOrderOpenedAt:lastTrade?.opened_at || null,
     lastOrderInstrument:lastTrade?.instrument || null,
     minutesSinceLastOrder:minutesSince(lastTrade?.opened_at,asOfMs),
@@ -136,7 +136,7 @@ function auditEntryStarvation(decisions, trades, asOf, lookbackMinutes = 120, li
       'A separate authenticated active FULL_AUTO session check is still required.',
       'A BROKER_NATIVE decision does not guarantee successful broker submission.',
       'A separately qualified DEMO Plan-B alternate may authorize a trade when its M1 tactical route is ABSTAIN; count that authorization separately.',
-      'A full 4000-row trade sample means the window count is only a lower bound.',
+      'A full 50-row recent trade sample means the in-window count is only a lower bound.',
       'This report does not infer broker availability, margin or actual current positions.',
     ],
   };
@@ -157,7 +157,7 @@ async function run() {
     user:process.env.DB_USER,password:process.env.DB_PASSWORD,
     database:process.env.DB_NAME,
     ssl:process.env.DB_SSL==='true'?{rejectUnauthorized:false}:undefined,
-    connectionTimeoutMillis:7000,statement_timeout:12000,
+    connectionTimeoutMillis:7000,statement_timeout:18000,
   });
   await db.connect();
   try {
@@ -190,7 +190,7 @@ async function run() {
       "AND bc.broker_id='pepperstone-ctrader'",
       "AND bc.account_type='DEMO' AND bc.account_currency='USD'",
       'AND t.opened_at<=$2::timestamptz',
-      'ORDER BY t.opened_at DESC LIMIT 4000',
+      'ORDER BY t.opened_at DESC LIMIT 50',
     ].join(' '),[owner,asOf.toISOString()]);
     await db.query('ROLLBACK');
     console.log(JSON.stringify(
