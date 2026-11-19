@@ -43,6 +43,28 @@ hypothetical broker fills. Longer unconditional holding is not authorized.
   no broker SL amendments, no suppressing the actual profit close, no
   LIVE-account authority.
 
+## 19 November: guard against accidental loss of a tighter broker stop
+
+A separate reconciliation invariant is implemented for the authenticated
+owner's Pepperstone USD **DEMO** account, gated by
+`IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP=enabled`. When the
+provider reports a strictly more-protective already-profitable stop than the
+original authorized risk stop, reconciliation will **not amend it back to the
+weaker level**, provided broker identity, account and currency, side, symbol,
+lot size, entry and current price, stop geometry and matching original TP all
+agree. It returns `PROFIT_STOP_PRESERVED_REQUIRES_SYNC` in the aggregate
+protective reconciliation audit and reports the number of such positions.
+This is a no-amendment safety guard, not approval to hold a trade longer or
+to assume authoritative stop updates have been persisted. If any proof is
+missing, the prior documented repair path remains. The service can still
+close a position under its current five-second protection decision; it
+does not rely on this guard to suppress that close.
+
+For a durable protected-hold rollout, successful broker amendment with
+provider readback and **atomic stop-authority persistence** is still
+required. The guard does not write an amendment or create a broker order.
+Do not enable for LIVE accounts.
+
 ## Why a broker-side positive stop is NOT yet executable
 
 The cTrader adapter supports `modifyOrder` on positions, but its acceptance
