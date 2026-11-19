@@ -6,6 +6,8 @@ on:
     paths:
       - "apps/api/scripts/audit-owner-demo-drift-outcomes.cjs"
       - "apps/api/scripts/audit-owner-demo-drift-outcomes.test.cjs"
+      - "apps/api/scripts/owner-demo-drift-cohort-comparison.cjs"
+      - "apps/api/scripts/owner-demo-drift-cohort-comparison.test.cjs"
       - ".github/workflows/irexpro-demo-drift-research.yml"
   workflow_dispatch:
 
@@ -24,4 +26,4 @@ jobs:
       - name: Validate read-only research script
         run: node --check apps/api/scripts/audit-owner-demo-drift-outcomes.cjs
       - name: Test as-of, outcome coverage and M1 episode separation
-        run: node --test apps/api/scripts/audit-owner-demo-drift-outcomes.test.cjs
+        run: node --test apps/api/scripts/audit-owner-demo-drift-outcomes.test.cjs apps/api/scripts/owner-demo-drift-cohort-comparison.test.cjs
