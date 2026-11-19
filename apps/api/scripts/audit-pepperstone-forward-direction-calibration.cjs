@@ -8,6 +8,7 @@
 const fs=require('node:fs'),path=require('node:path');
 const {mark,validQuote}=require('./audit-pepperstone-alternative-route-opportunities.cjs');
 const {analyzeM1Barriers}=require('./forward-direction-m1-barrier-review.cjs');
+const {evaluateDayPurgedDirection}=require('./owner-demo-day-purged-directional-calibration.cjs');
 const START='2026-11-16T17:50:00.000Z';
 const ARTIFACT='irexpro-forward-direction-side-calibration-v1';
 const REPORT='/home/lightworld/webapps/irexpro-research/forward-direction-calibration/latest-report.json';
@@ -251,7 +252,9 @@ async function run(db,userId,asOf=new Date()){
    authority:'SHADOW_ONLY',modifiesExecution:false,placesOrders:false,
    experimentalSideSelection:'HIGHEST_PLANB_SCORE_SAME_BAR_THEN_FIRST_15M_INSTRUMENT',
    normalizedCommissionUsdPerStandardLot:6,slippageAllowancePips:0.2,
-   ...summary(episodes),episodes,
+   ...summary(episodes),
+   dayPurgedDirectionalResearch:evaluateDayPurgedDirection(episodes,asOf),
+   episodes,
    limitations:[
     'The primary signal is a predeclared *research* selector, NOT a broker execution decision.',
     'Both directions are virtual and use a single standard-lot normalization, not account sizing.',
@@ -317,6 +320,7 @@ async function main(){
    const r=await collect();
    const signature=JSON.stringify({
     episodes:r.selectedEpisodes,summary:r.byHorizon,
+    directionalCalibration:r.dayPurgedDirectionalResearch?.byChoice,
     telemetry:{qualified:r.telemetry.jointlyQualified,
      matured:r.telemetry.maturedQualified,status:r.telemetry.status},
    });
@@ -325,6 +329,10 @@ async function main(){
      generatedAt:r.generatedAt,selected:r.selectedEpisodes,
      admittedRows:r.rawAdmittedDecisions,telemetry:r.telemetry,
      byHorizon:r.byHorizon,
+     dayPurgedDirection:{
+      qualifiedOutOfSample:r.dayPurgedDirectionalResearch?.qualifiedOutOfSample,
+      byChoice:r.dayPurgedDirectionalResearch?.byChoice,
+     },
     }));
     lastSignature=signature;
    }
