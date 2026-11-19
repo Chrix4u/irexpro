@@ -12,7 +12,7 @@ function example(drift,minute,netR,other={}) {
     strategy_route:'TREND_CONTINUATION',
     m1_route:'M1_TREND_CONTINUATION',
     drift,
-    outcome:netR==null?null:{netR},...other,
+    outcome:netR==null?null:{netR,costSource:'BROKER_OBSERVED_P90'},...other,
   };
 }
 const labelOf = row => row.outcome;
@@ -92,4 +92,24 @@ test('small sample and truncated scan stay explicitly unqualified',()=>{
   });
   assert.equal(truncated.status,'SOURCE_TRUNCATED');
   assert.equal(truncated.executionAuthority,'NONE');
+});
+
+test('does not treat simulated spread costs as broker-quality evidence',()=>{
+  const rows=[
+    example('NORMAL',0,.1),example('NORMAL',20,.1),
+    example('OUT_OF_DISTRIBUTION',40,2,{
+      outcome:{netR:2,costSource:'PAPER_SIMULATION_SPREAD'},
+    }),
+    example('OUT_OF_DISTRIBUTION',60,1,{
+      outcome:{netR:1,costSource:'STATIC_DIAGNOSTIC_FALLBACK'},
+    }),
+  ];
+  const result=compareMatchedDriftDays(rows,labelOf,asOfMs,opts);
+  assert.equal(result.bothDriftStatesPresentStrata,1);
+  assert.equal(result.comparableStrata,0);
+  assert.equal(result.matchedStrata[0].outOfDistribution.observedQuoteLabels,2);
+  assert.equal(result.matchedStrata[0].outOfDistribution.unverifiedCostLabels,2);
+  assert.equal(result.matchedStrata[0].outOfDistribution.completedLabels,0);
+  assert.equal(result.balancedOodMinusNormalMeanEstimatedNetR,null);
+  assert.equal(result.comparableCostEvidence,'BROKER_OBSERVED_P90_ONLY');
 });
