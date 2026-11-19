@@ -25,6 +25,10 @@ export interface PatternMemoryObservation {
   wins:number;losses:number;
   averageNetR:number|null;
   positiveThenLost:number;
+  /** Previously lost at least half of initial broker stop risk but still won net. */
+  adverseThenWon:number;
+  /** Previously reached at least 0.85R adverse excursion and still won net. */
+  nearStopThenWon:number;
   nearestDistance:number|null;
   hypothesis:'INSUFFICIENT_MATCHED_HISTORY'|'POSSIBLE_FALSE_REVERSAL'|
     'POSSIBLE_FALSE_CONTINUATION'|'REPEATED_FAVORABLE_PATTERN'|'MIXED_HISTORY';
@@ -66,6 +70,14 @@ export function recallPepperstoneDemoPattern(input:{
   const average=matches.length?matches.reduce((a,b)=>a+b.netR,0)/matches.length:null;
   const positiveThenLost=matches.filter(s=>s.netR<0&&
     typeof s.maxFavorableR==='number'&&s.maxFavorableR>=0.2).length;
+  // A winning close does not imply a good entry. Separate adverse-then-win
+  // paths from clean wins without promoting a single recovery into authority.
+  const adverseThenWon=matches.filter(s=>s.netR>0&&
+    typeof s.maxAdverseR==='number'&&Number.isFinite(s.maxAdverseR)&&
+    s.maxAdverseR<=-0.50).length;
+  const nearStopThenWon=matches.filter(s=>s.netR>0&&
+    typeof s.maxAdverseR==='number'&&Number.isFinite(s.maxAdverseR)&&
+    s.maxAdverseR<=-0.85).length;
   let hypothesis:PatternMemoryObservation['hypothesis']='INSUFFICIENT_MATCHED_HISTORY';
   if(matches.length>=4){
     if(losses/matches.length>=0.75&&(average??0)<-0.2){
@@ -80,6 +92,7 @@ export function recallPepperstoneDemoPattern(input:{
     shadowOnly:true,modifiesExecution:false,
     matchingEpisodes:matches.length,comparedClosedTrades:input.previous.length,
     wins,losses,averageNetR:average,
-    positiveThenLost,nearestDistance:matches[0]?.distance??null,hypothesis,
+    positiveThenLost,adverseThenWon,nearStopThenWon,
+    nearestDistance:matches[0]?.distance??null,hypothesis,
   };
 }

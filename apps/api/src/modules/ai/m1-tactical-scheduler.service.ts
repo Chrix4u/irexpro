@@ -4060,6 +4060,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_pattern_memory_hypothesis: patternMemory?.hypothesis ?? null,
           m1_pattern_memory_average_net_r: patternMemory?.averageNetR ?? null,
           m1_pattern_memory_positive_then_lost: patternMemory?.positiveThenLost ?? null,
+          m1_pattern_memory_adverse_then_won: patternMemory?.adverseThenWon ?? null,
+          m1_pattern_memory_near_stop_then_won: patternMemory?.nearStopThenWon ?? null,
           m1_pattern_memory_shadow_only: patternMemory?.shadowOnly ?? null,
           position_sizing_tier:
             this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'

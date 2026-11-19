@@ -37,6 +37,32 @@ describe('causal historical DEMO entry-pattern memory',()=>{
     expect(r.hypothesis).toBe('REPEATED_FAVORABLE_PATTERN');
     expect(r.positiveThenLost).toBe(1);
   });
+  it('recognizes a settled deep-adverse winner without calling the entry safe',()=>{
+    const winner={
+      ...sample(55,14.56/69.88120195,current,.5943),
+      maxAdverseR:-64.69/69.88120195,
+    };
+    const r=recall({...params,route:'EARLY_TRANSITION',
+      previous:[winner]});
+    expect(r.matchingEpisodes).toBe(1);
+    expect(r.wins).toBe(1);
+    expect(r.adverseThenWon).toBe(1);
+    expect(r.nearStopThenWon).toBe(1);
+    expect(r.positiveThenLost).toBe(0);
+    expect(r.hypothesis).toBe('INSUFFICIENT_MATCHED_HISTORY');
+    expect(r.shadowOnly).toBe(true);
+    expect(r.modifiesExecution).toBe(false);
+  });
+  it('does not label near-stop recovery for a losing or marginally adverse winner',()=>{
+    const losing={...sample(50,-1),maxAdverseR:-.94};
+    const shallow={...sample(80,.2),maxAdverseR:-.14};
+    const medium={...sample(110,.3),maxAdverseR:-.65};
+    const unknown={...sample(140,.2),maxAdverseR:null};
+    const r=recall({...params,previous:[losing,shallow,medium,unknown]});
+    expect(r.adverseThenWon).toBe(1);
+    expect(r.nearStopThenWon).toBe(0);
+    expect(r.hypothesis).toBe('MIXED_HISTORY');
+  });
   it('never promotes matching patterns to trade authority',()=>{
     const r=recall({...params,route:'TREND_CONTINUATION',
       previous:[sample(55,-1),sample(85,-.9),sample(115,-.8),sample(145,-.7)]});
