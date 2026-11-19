@@ -16,6 +16,8 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const ROUTES=new Set(['TREND_CONTINUATION','CONFIRMED_REVERSAL','EARLY_TRANSITION']);
 const PAIRS=new Set(['AUDUSD','EURUSD','GBPUSD','USDCHF','USDJPY','USDCAD']);
 const MS=60000,HORIZONS=[3,5,10,15];
+// Research replay, not live quotes: keep DB load predictable on shared VPS.
+const RESEARCH_CADENCE_MS=15*60000;
 const numeric=v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null;
 const millis=x=>x==null?NaN:new Date(x).getTime();
 const byTime=(a,b)=>millis(a.evaluated_at)-millis(b.evaluated_at);
@@ -312,6 +314,28 @@ async function collect(){
   return report;
  }finally{await client.end();}
 }
+// If PostgreSQL is overloaded, enrich a verified recent existing snapshot
+// without pretending any new broker quote was fetched. Keep its original
+// generatedAt, with a separate time for this research-only calculation.
+function enrichCachedReport(file=REPORT,now=new Date()){
+ const r=JSON.parse(fs.readFileSync(file,'utf8'));
+ const age=now.getTime()-Date.parse(r.generatedAt);
+ if(r.artifact!==ARTIFACT||r.authority!=='SHADOW_ONLY'||
+    r.modifiesExecution!==false||r.placesOrders!==false||
+    !Array.isArray(r.episodes)||!Number.isFinite(age)||age<0||
+    age>6*3600000)
+  throw Error('NO_VERIFIED_RECENT_RESEARCH_SNAPSHOT');
+ r.dayPurgedDirectionalResearch=evaluateDayPurgedDirection(
+   r.episodes,new Date(r.generatedAt));
+ r.directionResearchRefreshedAt=now.toISOString();
+ r.directionResearchBasedOnCachedBrokerQuotes=true;
+ const tmp=file+'.enrichment.'+process.pid+'.tmp';
+ fs.writeFileSync(tmp,JSON.stringify(r,null,2),{mode:0o600});
+ fs.renameSync(tmp,file);
+ return {originalQuoteReportAt:r.generatedAt,computedAt:now.toISOString(),
+   outOfSample:r.dayPurgedDirectionalResearch.qualifiedOutOfSample,
+   requiresFreshBrokerQuery:true,modifiesExecution:false};
+}
 async function main(){
  const watch=process.argv.includes('--watch');let busy=false,lastSignature='';
  async function cycle(){
@@ -336,12 +360,20 @@ async function main(){
     }));
     lastSignature=signature;
    }
-  }catch(e){console.error('FORWARD_DIRECTION_CALIBRATION_FAILED',String(e?.message).slice(0,170));}
-  finally{busy=false;}
+  }catch(e){
+   console.error('FORWARD_DIRECTION_CALIBRATION_FAILED',String(e?.message).slice(0,170));
+   try{
+    const cached=enrichCachedReport();
+    console.log('DIRECTION_RESEARCH_CACHED_SNAPSHOT',JSON.stringify(cached));
+   }catch(error){
+    console.warn('DIRECTION_RESEARCH_CACHE_NOT_AVAILABLE',
+      String(error?.message).slice(0,110));
+   }
+  }finally{busy=false;}
  }
- await cycle();if(watch)setInterval(()=>void cycle(),300000);
+ await cycle();if(watch)setInterval(()=>void cycle(),RESEARCH_CADENCE_MS);
 }
 module.exports={START,ARTIFACT,SQL_SESSION,SQL_SIGNALS,SQL_PROGRESS,SQL_QUOTES,
  selectEpisodes,evaluateEpisode,bucket,qualityBand,summary,
- archiveFinalizedDays,run};
+ archiveFinalizedDays,RESEARCH_CADENCE_MS,enrichCachedReport,run};
 if(require.main===module)main().catch(e=>{console.error('CALIBRATION_FATAL',e.message);process.exitCode=1});

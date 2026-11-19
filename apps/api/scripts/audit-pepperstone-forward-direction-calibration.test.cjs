@@ -187,3 +187,35 @@ test('quote query uses timestamped positive-spread cTrader snapshots, never zero
  assert.equal(validQuote({...q(1,1.1000,1.1001),
    last_quote_sample_at:at(2,10)}),false);
 });
+
+test('cached directional enrichment preserves quote timestamp and no broker authority',()=>{
+ const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+ const {ARTIFACT,enrichCachedReport,RESEARCH_CADENCE_MS}=
+   require('./audit-pepperstone-forward-direction-calibration.cjs');
+ const folder=fs.mkdtempSync(path.join(os.tmpdir(),'irexpro-dir-cache-'));
+ const file=path.join(folder,'cached.json');
+ try{
+  const asOf='2026-11-19T07:30:00.000Z';
+  fs.writeFileSync(file,JSON.stringify({
+   artifact:ARTIFACT,generatedAt:asOf,authority:'SHADOW_ONLY',
+   modifiesExecution:false,placesOrders:false,episodes:[],
+  }),{mode:0o600});
+  const record=enrichCachedReport(file,new Date('2026-11-19T08:00:00.000Z'));
+  const r=JSON.parse(fs.readFileSync(file));
+  assert.equal(r.generatedAt,asOf);
+  assert.equal(r.directionResearchBasedOnCachedBrokerQuotes,true);
+  assert.equal(r.dayPurgedDirectionalResearch.noAutoDirectionFlip,true);
+  assert.equal(r.dayPurgedDirectionalResearch.noNewEntryVeto,true);
+  assert.equal(record.requiresFreshBrokerQuery,true);
+  assert.equal(record.modifiesExecution,false);
+  assert.equal(RESEARCH_CADENCE_MS,15*60000);
+  assert.equal(fs.statSync(file).mode&0o777,0o600);
+  assert.throws(()=>enrichCachedReport(file,
+    new Date('2026-11-20T02:00:00Z')),/NO_VERIFIED_RECENT/);
+  fs.writeFileSync(file,JSON.stringify({
+   ...r,placesOrders:true,
+  }));
+  assert.throws(()=>enrichCachedReport(file,
+    new Date('2026-11-19T08:05:00Z')),/NO_VERIFIED_RECENT/);
+ }finally{fs.rmSync(folder,{recursive:true,force:true})}
+});
