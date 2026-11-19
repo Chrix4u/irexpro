@@ -1,0 +1,31 @@
+name: iRexPro DEMO drift research
+on:
+  push:
+    branches: ["research/demo-drift-outcome-audit-20261119"]
+  pull_request:
+    paths:
+      - "apps/api/scripts/audit-owner-demo-drift-outcomes.cjs"
+      - "apps/api/scripts/audit-owner-demo-drift-outcomes.test.cjs"
+      - "apps/api/scripts/owner-demo-drift-cohort-comparison.cjs"
+      - "apps/api/scripts/owner-demo-drift-cohort-comparison.test.cjs"
+      - "apps/api/scripts/owner-demo-rejected-drift-counterfactual.cjs"
+      - "apps/api/scripts/owner-demo-rejected-drift-counterfactual.test.cjs"
+      - ".github/workflows/irexpro-demo-drift-research.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quote-shadow-audit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate read-only research script
+        run: node --check apps/api/scripts/audit-owner-demo-drift-outcomes.cjs
+      - name: Test as-of, outcome coverage and M1 episode separation
+        run: node --test apps/api/scripts/audit-owner-demo-drift-outcomes.test.cjs apps/api/scripts/owner-demo-drift-cohort-comparison.test.cjs apps/api/scripts/owner-demo-rejected-drift-counterfactual.test.cjs
