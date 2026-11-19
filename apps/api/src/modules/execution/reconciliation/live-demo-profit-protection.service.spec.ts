@@ -105,6 +105,73 @@ describe('LiveDemoProfitProtectionService', () => {
     };
   }
 
+  it('rescues only a verified owner DEMO Confirmed Reversal loss after a 0.34R peak', async () => {
+    const previousOwner=process.env.VPS_FOREX_SCANNER_USER_ID;
+    const previousFlag=process.env.IREXPRO_PEPPERSTONE_DEMO_POST_PEAK_ADVERSE_RESCUE;
+    process.env.VPS_FOREX_SCANNER_USER_ID='user-1';
+    process.env.IREXPRO_PEPPERSTONE_DEMO_POST_PEAK_ADVERSE_RESCUE='enabled';
+    try {
+      const t=candidate({
+        strategy_route:'CONFIRMED_REVERSAL',account_currency:'USD',
+        direction:'SELL',lot_size:'1.78',initial_risk_pnl:'89',
+        max_favorable_pnl:'30.26',profit_giveback:'35.60',
+        path_observation_count:176,stop_loss:'1.09983',
+        take_profit:'1.09853',
+        opened_at:new Date('2026-10-28T09:01:00Z'),
+      });
+      const candles=[
+        {bucket_time:new Date('2026-10-28T09:04:00Z'),
+          open:'1.09930',high:'1.09942',low:'1.09929',close:'1.09941',
+          sample_count:30,positive_quote_sample_count:30,
+          last_quote_sample_at:new Date('2026-10-28T09:04:51Z'),
+          spread_close:'0.00002',source:'ctrader-broker-native'},
+        {bucket_time:new Date('2026-10-28T09:03:00Z'),
+          open:'1.09925',high:'1.09934',low:'1.09924',close:'1.09933',
+          sample_count:30,positive_quote_sample_count:30,
+          last_quote_sample_at:new Date('2026-10-28T09:03:50Z'),
+          spread_close:'0.00002',source:'ctrader-broker-native'},
+        {bucket_time:new Date('2026-10-28T09:02:00Z'),
+          open:'1.09917',high:'1.09926',low:'1.09916',close:'1.09925',
+          sample_count:30,positive_quote_sample_count:0,
+          last_quote_sample_at:null,
+          spread_close:'0.00002',source:'ctrader-broker-native'},
+      ];
+      const h=harness([t],'-5.34','DEMO',candles,'1.09932',
+        [],undefined,[],[],[],'pepperstone-ctrader');
+      h.brokerService.getOpenPositionsForConnection.mockResolvedValue({
+        connection:{id:'conn-1',brokerId:'pepperstone-ctrader',
+          accountType:'DEMO'},
+        positions:[{externalOrderId:'position-7001',instrument:'EURUSD',
+          direction:'SELL',lotSize:'1.78',openPrice:'1.09927',
+          currentPrice:'1.09932',stopLoss:'1.09983',takeProfit:'1.09853',
+          unrealisedPnl:'-5.34',commission:'-10.68',swap:'0'}],
+      });
+      await h.service.runOnce(new Date('2026-10-28T09:05:10Z'));
+      expect(h.executionService.closeTrade).toHaveBeenCalledWith(
+        'trade-1','user-1',TradeCloseReason.AI_CLOSE_SIGNAL,
+        expect.objectContaining({
+          source:'BROKER_ADVERSE_PROTECTION',
+          reasonCode:'pepperstone-owner-demo-confirmed-reversal-post-peak-loss-rescue-v1',
+        }),
+      );
+      expect(h.executionService.closeTrade).toHaveBeenCalledTimes(1);
+      process.env.IREXPRO_PEPPERSTONE_DEMO_POST_PEAK_ADVERSE_RESCUE='disabled';
+      const disabled=harness([t],'-5.34','DEMO',candles,'1.09932',
+        [],undefined,[],[],[],'pepperstone-ctrader');
+      disabled.brokerService.getOpenPositionsForConnection.mockResolvedValue(
+        await h.brokerService.getOpenPositionsForConnection.mock.results[0].value,
+      );
+      await disabled.service.runOnce(new Date('2026-10-28T09:05:10Z'));
+      expect(disabled.executionService.closeTrade).not.toHaveBeenCalled();
+    }finally{
+      if(previousOwner===undefined)delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID=previousOwner;
+      if(previousFlag===undefined)
+        delete process.env.IREXPRO_PEPPERSTONE_DEMO_POST_PEAK_ADVERSE_RESCUE;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_POST_PEAK_ADVERSE_RESCUE=previousFlag;
+    }
+  });
+
   it('only applies the new owner USD Pepperstone DEMO adverse pilot to a qualified fresh two-bar loser', async () => {
     const oldFlag = process.env.IREXPRO_PEPPERSTONE_DEMO_PERSISTENT_ADVERSE_CUT;
     const oldOwner = process.env.VPS_FOREX_SCANNER_USER_ID;

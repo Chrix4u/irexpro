@@ -19,6 +19,10 @@ import {
   evaluatePepperstoneDemoAdverseCut,
   PEPPERSTONE_DEMO_ADVERSE_CUT_ARTIFACT,
 } from './pepperstone-demo-adverse-cut';
+import {
+  evaluatePepperstoneDemoPostPeakAdverseRescue,
+  PEPPERSTONE_DEMO_POST_PEAK_ADVERSE_RESCUE_ARTIFACT,
+} from './pepperstone-demo-post-peak-rescue';
 import { evaluatePepperstoneHighPeakGivebackShadow } from './pepperstone-high-peak-giveback-shadow';
 import {
   evaluatePepperstoneDemoRolloverExposure,
@@ -1165,6 +1169,99 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                   }
                 }
               }
+              // Narrow owner Pepperstone USD DEMO rescue for the exact
+              // 0.30-0.50R CONFIRMED_REVERSAL protection gap that allowed
+              // a +$30.26 peak to close at -$113.92 net. This never changes
+              // new-entry authorization, the broker SL/TP, or LIVE trades.
+              // Only 3 independently adverse M1 bars and >=2 consecutive
+              // live-quoted bars permit a loss-limiting close. A stale quote,
+              // recovered winner, mismatch or failed close cannot fabricate
+              // a rescue; the existing broker SL stays authoritative.
+              if (
+                process.env.IREXPRO_PEPPERSTONE_DEMO_POST_PEAK_ADVERSE_RESCUE === 'enabled' &&
+                snapshot.connection.brokerId === 'pepperstone-ctrader' &&
+                !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+                trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID &&
+                trade.account_currency === 'USD' &&
+                trade.is_m1_strategy &&
+                strategyRoute === 'CONFIRMED_REVERSAL' &&
+                risk !== null && risk > 0 &&
+                maxFavorablePnl >= risk * 0.30 &&
+                maxFavorablePnl < risk * 0.50 &&
+                currentPnl <= 0 && currentPnl > -risk * 0.70
+              ) {
+                try {
+                  const m1 = await this.loadCausalM1Evidence(trade, observedAt);
+                  const openedAt = trade.opened_at ? new Date(trade.opened_at) : null;
+                  const verdict = evaluatePepperstoneDemoPostPeakAdverseRescue({
+                    enabled: true,
+                    brokerId: snapshot.connection.brokerId,
+                    accountType: String(snapshot.connection.accountType).toUpperCase(),
+                    accountCurrency: trade.account_currency,
+                    ownerUserId: process.env.VPS_FOREX_SCANNER_USER_ID,
+                    userId: trade.user_id,
+                    strategyRoute,
+                    isM1Strategy: trade.is_m1_strategy,
+                    tradeInstrument: trade.instrument,
+                    brokerInstrument: position.instrument,
+                    tradeDirection: trade.direction,
+                    brokerDirection: position.direction,
+                    tradeLots: finite(trade.lot_size),
+                    brokerLots: finite(position.lotSize),
+                    entryPrice: finite(position.openPrice),
+                    currentPrice: finite(position.currentPrice),
+                    originalStop: finite(trade.stop_loss),
+                    brokerStop: finite(position.stopLoss),
+                    originalTakeProfit: finite(trade.take_profit),
+                    brokerTakeProfit: finite(position.takeProfit),
+                    initialRiskPnl: risk,
+                    peakBrokerNetPnl: maxFavorablePnl,
+                    currentBrokerNetPnl: currentPnl,
+                    previousObservationCount: Number(trade.path_observation_count),
+                    elapsedMinutes:
+                      openedAt && Number.isFinite(openedAt.getTime())
+                        ? (observedAt.getTime() - openedAt.getTime()) / 60_000
+                        : Number.NaN,
+                    m1: m1 ? {
+                      completedBars: m1.completedBars,
+                      adverseBars: m1.adverseBars,
+                      liveQuoteBars: m1.liveQuoteBars ?? 0,
+                      consecutiveLiveQuoteBars: m1.consecutiveLiveQuoteBars ?? 0,
+                      alignedLatestBodyPressure: m1.alignedLatestBodyPressure,
+                      alignedMomentum3: m1.alignedMomentum3,
+                      latestAgeSeconds: m1.latestAgeSeconds,
+                      latestLiveSpreadPrice: m1.latestLiveSpreadPrice ?? null,
+                    } : null,
+                  });
+                  if (verdict.shouldClose) {
+                    this.logger.warn(
+                      'Pepperstone DEMO POST_PEAK_ADVERSE_RESCUE trade=' +
+                        trade.trade_id + ' ' + trade.instrument + ' ' +
+                        trade.direction + ' route=' + strategyRoute +
+                        ' peakBrokerNet=' + money(maxFavorablePnl) +
+                        ' currentBrokerNet=' + money(currentPnl) +
+                        ' initialRisk=' + money(risk) +
+                        ' 3_ADVERSE_M1_BARS brokerSL_TP=UNCHANGED LIVE=false',
+                    );
+                    await this.executionService.closeTrade(
+                      trade.trade_id,
+                      trade.user_id,
+                      TradeCloseReason.AI_CLOSE_SIGNAL,
+                      {
+                        source: 'BROKER_ADVERSE_PROTECTION',
+                        reasonCode: PEPPERSTONE_DEMO_POST_PEAK_ADVERSE_RESCUE_ARTIFACT,
+                      },
+                    );
+                    continue;
+                  }
+                } catch (error) {
+                  this.logger.warn(
+                    'Pepperstone DEMO post-peak rescue unavailable trade=' +
+                    trade.trade_id + ': ' + (error as Error).message,
+                  );
+                }
+              }
+
               // The historical Pepperstone branch was shadow-only for losses:
               // it continued before the generic cTrader thesis/adverse rules.
               // This independent, owner-verified USD DEMO pilot can now cut
