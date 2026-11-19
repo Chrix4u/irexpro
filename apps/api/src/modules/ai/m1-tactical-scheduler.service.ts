@@ -135,6 +135,7 @@ import { attributeZaiDemoBlockers, diagnoseZaiDemoCostGeometry } from './zai-dem
 import { evaluateM1CausalCommissionShadow } from './m1-causal-commission-shadow';
 import { evaluateDemoBrokerCommissionEntryGate } from './demo-broker-commission-entry-gate';
 import { ownerDemoLossPausePolicy } from './owner-demo-loss-pauses-advisory';
+import { resolveOwnerDemoRecoveryCanarySizing } from './owner-demo-recovery-canary-sizing';
 import {
   M1_PORTFOLIO_NET_LOSS_BRAKE_ARTIFACT,
   M1_PORTFOLIO_NET_LOSS_BRAKE_COOLDOWN_MINUTES,
@@ -2050,6 +2051,32 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             reliability.samples < 5 &&
             reliability.losses >= 2)));
 
+    // The owner's Start/Stop policy also makes the legacy historical-loss
+    // 0.01-lot recovery canary advisory in the *verified* Pepperstone USD
+    // DEMO FULL_AUTO account. It still requires admitted model evidence and
+    // the original broker/portfolio stop-risk, margin and exposure sizing.
+    let ownerDemoRecoveryVerified = false;
+    const ownerDemoRecoveryFeatureEnabled =
+      this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY','')==='enabled';
+    if (recoveryCanary && !crossSleeveReversalCanary &&
+        professionalDemoPhase && ownerDemoRecoveryFeatureEnabled &&
+        !!userId &&
+        this.config.get<string>('VPS_FOREX_SCANNER_USER_ID','')===userId &&
+        this.executionService) {
+      try {
+        const active = await this.executionService.getActiveSession(userId);
+        if (active?.executionMode===ExecutionMode.FULL_AUTO &&
+            active.brokerConnectionId===brokerConnectionId) {
+          ownerDemoRecoveryVerified =
+            await this.evidence.isPepperstoneUsdDemoBrokerConnection({
+              userId,brokerConnectionId,
+            });
+        }
+      } catch (error) {
+        this.logger.warn('Owner DEMO recovery sizing verification unavailable: '+
+          (error as Error).message);
+      }
+    }
     const multimodelDirectionConflict =
       professionalDemoPhase &&
       multimodelDemo?.authority.blockers.includes(
@@ -2164,11 +2191,16 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             : provisionalScoutReliability
               ? Math.min(this.rolloutPolicy.paperVolumeCap, provisionalScoutReliability.lotCap)
               : this.rolloutPolicy.paperVolumeCap;
+    const ownerDemoRecoveryCanarySizing=resolveOwnerDemoRecoveryCanarySizing({
+      recoveryCanary,crossSleeveReversalCanary,
+      ownerDemoVerified:ownerDemoRecoveryVerified,
+      featureEnabled:ownerDemoRecoveryFeatureEnabled,
+      normalVolumeCap:executionVolumeCap,
+      recoveryCanaryLotCap:M1_DEMO_RECOVERY_CANARY_LOT_CAP,
+    });
     const recoveryCanaryVolumeCap = crossSleeveReversalCanary
       ? Math.min(executionVolumeCap, CONFIRMED_REVERSAL_CROSS_SLEEVE_CANARY_LOT_CAP)
-      : recoveryCanary
-        ? Math.min(executionVolumeCap, M1_DEMO_RECOVERY_CANARY_LOT_CAP)
-        : executionVolumeCap;
+      : ownerDemoRecoveryCanarySizing.volumeCap;
     // The legacy 20-21 UTC alternative admission remains capped at 0.01.
     // Only the independent COUNTER pilot has a 4.00-lot *ceiling*; the
     // unchanged 0.25% stop-risk cap and broker margin control the actual lot.
@@ -2383,7 +2415,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // otherwise-authorize primary Plan-B canary so normal scans stay cheap.
     let recoveryCanaryRecentlyAuthorized = false;
     let recoveryCanaryHistoryUnavailable = false;
-    if (recoveryCanary && preliminaryCanExecute) {
+    if (ownerDemoRecoveryCanarySizing.enforceHistoricalCanarySpacing &&
+        preliminaryCanExecute) {
       try {
         recoveryCanaryRecentlyAuthorized = await this.evidence.hasRecentM1RecoveryCanary({
           userId,
@@ -3166,6 +3199,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         qualifiedContinuationCanaryRecentlyAuthorized,
         qualifiedContinuationCanaryHistoryUnavailable,
         recoveryCanary: recoveryCanary || false,
+        ownerDemoRecoveryCanarySizing,
         crossSleeveReversalCanary,
         recoveryCanaryHistoryUnavailable,
         recoveryCanaryRecentlyAuthorized,

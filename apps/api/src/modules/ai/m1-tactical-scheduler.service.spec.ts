@@ -851,6 +851,7 @@ function phase2Harness(
     enableQualityRisk?: boolean;
     enablePatternMemory?: boolean;
     enableHighConvictionSixLots?: boolean;
+    enableOwnerLossAdvisory?: boolean;
     rollout?: any;
     evidenceByRoute?: Record<string, any[]>;
     shadowPairSideOutcomes?: Array<{ observedAt: Date; netR: number }>;
@@ -951,7 +952,10 @@ function phase2Harness(
         IREXPRO_PEPPERSTONE_DEMO_HIGH_CONVICTION_6LOT: options.enableHighConvictionSixLots
           ? 'enabled'
           : '',
-        VPS_FOREX_SCANNER_USER_ID: options.enableContinuousAdvisory ? 'user-1' : '',
+        IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY:
+          options.enableOwnerLossAdvisory ? 'enabled' : '',
+        VPS_FOREX_SCANNER_USER_ID: options.enableContinuousAdvisory ||
+          options.enableOwnerLossAdvisory ? 'user-1' : '',
       };
       return values[key] ?? fallback;
     }),
@@ -1059,6 +1063,8 @@ function phase2Harness(
   // Existing generic cTrader, PAPER and IC Markets tests remain outside the
   // explicitly owned Pepperstone DEMO loss-control pilot.
   const isPepperstoneDemoBrokerConnection = jest.fn().mockResolvedValue(false);
+  const isPepperstoneUsdDemoBrokerConnection = jest.fn()
+    .mockResolvedValue(options.enableOwnerLossAdvisory === true);
   const loadDemoAlternativeTrialEntryCount = jest.fn().mockResolvedValue(0);
   const loadRecentlyProtectedSameSideReentry = jest.fn().mockResolvedValue({
     active: false,
@@ -1098,6 +1104,7 @@ function phase2Harness(
     hasActiveOppositeM1Intent,
     markRescueObservation,
     isPepperstoneDemoBrokerConnection,
+    isPepperstoneUsdDemoBrokerConnection,
     loadDemoAlternativeTrialEntryCount,
     loadRecentlyProtectedSameSideReentry,
     loadPriorClosedCommissionRiskR,
@@ -1207,6 +1214,7 @@ function phase2Harness(
     hasActiveOppositeM1Intent,
     markRescueObservation,
     isPepperstoneDemoBrokerConnection,
+    isPepperstoneUsdDemoBrokerConnection,
     loadDemoAlternativeTrialEntryCount,
     loadRecentlyProtectedSameSideReentry,
     loadPriorClosedCommissionRiskR,
@@ -5268,6 +5276,47 @@ describe('M1 V8 multi-model DEMO authority', () => {
     )?.[0];
     expect(repeat?.executionAuthority).toBe('NONE');
     expect(repeat?.blockers).toContain('M1_RECOVERY_CANARY_REPEAT_COOLDOWN');
+  });
+
+  it('owner Pepperstone USD DEMO no longer gets a 0.01-lot history canary or four-hour repeat gate', async () => {
+    const oldLosses = [
+      '2026-10-15T07:29:00.000Z',
+      '2026-10-15T07:19:00.000Z',
+      '2026-10-15T07:09:00.000Z',
+    ].map(closedAt => ({
+      route:'M1_TREND_CONTINUATION',instrument:'EURUSD',direction:'BUY',
+      policyVersion:'m1-tactical-v2-m5-lifecycle',realisedPnl:-5,riskAtStop:10,
+      closedAt:new Date(closedAt),
+    }));
+    const h=phase2Harness({
+      rollout:M1_TACTICAL_ROLLOUT_POLICY_V8,session:fullAutoSession,
+      evidenceByRoute:{M1_TREND_CONTINUATION:oldLosses},
+      enableOwnerLossAdvisory:true,
+    });
+    const evaluate=(h.service as any).evaluateDemoMultimodel.bind(h.service);
+    jest.spyOn(h.service as any,'evaluateDemoMultimodel').mockImplementation(async(...args:any[])=>{
+      const r=await evaluate(...args);
+      return {...r,ensemble:{...r.ensemble,strategyRoute:'TREND_CONTINUATION',
+        paperAdmitted:true},authority:{...r.authority,executable:true,
+          authorityPath:'PRIMARY_PLAN_B',blockers:[]}};
+    });
+    // Old entry evidence may report a repeat; it is no longer an automatic
+    // four-hour pause for the exact owner DEMO account.
+    h.hasRecentM1RecoveryCanary.mockResolvedValue(true);
+    await driveFeatures(h,cleanContinuationFeatures(),{brokerConnectionId:'demo-conn-2'});
+    const row=h.recordDecision.mock.calls.find(([x])=>
+      x.route==='M1_TREND_CONTINUATION'&&x.direction==='BUY')?.[0];
+    expect(row?.governance.reliability.reason).toBe('EARLY_LOSS_STREAK_RECOVERY_CANARY');
+    expect(row?.governance.ownerDemoRecoveryCanarySizing).toEqual(
+      expect.objectContaining({historicalLossRecoveryAdvisory:true,
+        enforceHistoricalCanarySpacing:false,volumeCap:expect.any(Number)}));
+    expect(row?.governance.executionVolumeCap).toBeGreaterThan(0.01);
+    expect(h.hasRecentM1RecoveryCanary).not.toHaveBeenCalled();
+    expect(h.receiveSignal).toHaveBeenCalledWith(
+      expect.objectContaining({suggestedVolume:expect.any(Number)}));
+    expect(h.receiveSignal.mock.calls[0]?.[0].suggestedVolume).toBeGreaterThan(0.01);
+    expect(h.isPepperstoneUsdDemoBrokerConnection).toHaveBeenCalledWith({
+      userId:'user-1',brokerConnectionId:'demo-conn-2'});
   });
 
   it('fails closed when recovery-canary prior order evidence cannot be read', async () => {
