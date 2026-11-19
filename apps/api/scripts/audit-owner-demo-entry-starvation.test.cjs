@@ -43,6 +43,8 @@ test('the separate configured continuation pause remains visible when AI is star
     }),
   ],[],AT);
   assert.equal(result.continuationPause.observedConfiguredEnabled,true);
+  assert.equal(result.continuationPause.currentEnvironmentEnabled,null);
+  assert.equal(result.continuationPause.configurationRequiresDirectVpsCheck,true);
   assert.equal(result.continuationPause.observedEnabledCandidates,2);
   assert.equal(result.continuationPause.observedActuallyBlocked,1);
   assert.equal(result.continuationPause.latestObservedReason,'CONTINUATION_PAUSED');
@@ -87,4 +89,17 @@ test('rejects invalid lookback without initiating any database action',()=>{
   for(const bad of [0,7.5,500,-1]){
     assert.throws(()=>auditEntryStarvation([],[],AT,bad));
   }
+});
+
+test('an inactive pause check does not prove the VPS environment flag is disabled',()=>{
+  const result=auditEntryStarvation([
+    cand(1,{
+      demo_continuation_pause:{enabled:false,blocked:false,reason:'DISABLED'},
+      blockers:['MULTIMODEL_PLAN_B_NOT_ADMITTED'],
+    }),
+  ],[],AT);
+  assert.equal(result.continuationPause.observedConfiguredEnabled,null);
+  assert.equal(result.continuationPause.currentEnvironmentEnabled,null);
+  assert.equal(result.continuationPause.observedEnabledCandidates,0);
+  assert.equal(result.continuationPause.latestObservedReason,'DISABLED');
 });
