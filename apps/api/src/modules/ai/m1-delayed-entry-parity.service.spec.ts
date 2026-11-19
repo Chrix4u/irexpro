@@ -89,6 +89,13 @@ describe('M1DelayedEntryParityService persistence / authority', () => {
       expect(result.pretradeFeatures).toEqual({ confidence: 0.72 });
       expect(result.scenarios).toHaveLength(2);
       expect(result.scenarios[1].riskParityLotMultiplier).toBeCloseTo(1 / 1.4, 4);
+      expect(result.sameExitComparison).toMatchObject({
+        artifact: 'm1-same-exit-entry-timing-research-v1',
+        noTradeAuthority: true,
+        modifiesExecution: false,
+        modelTrainingStatus: 'RESEARCH_ONLY_NOT_TRAINED',
+        actualCloseAt: '2026-11-10T02:48:28.000Z',
+      });
     }
     expect(
       query.mock.calls.some(([sql]) =>

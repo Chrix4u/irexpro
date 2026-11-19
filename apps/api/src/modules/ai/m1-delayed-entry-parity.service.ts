@@ -9,6 +9,10 @@ import {
   type DelayedEntryParityResult,
   type VerifiedNativeMinute,
 } from './m1-delayed-entry-parity-shadow';
+import {
+  compareDelayedEntryAtActualExit,
+  type SameExitTimingResult,
+} from './m1-same-exit-entry-timing';
 
 const INTERVAL_MS = 120_000;
 const MAX_CANDIDATES = 25;
@@ -93,7 +97,23 @@ export class M1DelayedEntryParityService implements OnModuleInit, OnModuleDestro
               horizonMinutes: horizon,
               candles,
             });
-            await this.persist(row, horizon, evaluated, new Date(until));
+            const sameExit = compareDelayedEntryAtActualExit({
+              instrument: row.instrument,
+              direction: row.direction,
+              originalFill: Number(row.fill_price),
+              originalStop: Number(row.stop_loss),
+              originalTarget: Number(row.take_profit),
+              originalExit: row.exit_price == null ? null : Number(row.exit_price),
+              originalClosedAt: new Date(row.closed_at),
+              actualGrossPnl: row.realised_pnl == null ? null : Number(row.realised_pnl),
+              actualCommission: row.commission == null ? null : Number(row.commission),
+              actualSwap: row.swap == null ? null : Number(row.swap),
+              estimatedOriginalRiskAccountCurrency:
+                evaluated.estimatedOriginalRiskAccountCurrency,
+              delayed: evaluated,
+              candles,
+            });
+            await this.persist(row, horizon, evaluated, new Date(until), sameExit);
           } catch (error) {
             this.logger.warn(
               'Delayed-entry research observation deferred: ' + (error as Error).message,
@@ -188,9 +208,11 @@ export class M1DelayedEntryParityService implements OnModuleInit, OnModuleDestro
     horizon: DelayEntryParityHorizon,
     evaluated: DelayedEntryParityResult,
     checkpointAt: Date,
+    sameExit: SameExitTimingResult,
   ): Promise<void> {
     const response = {
       ...evaluated,
+      sameExitComparison: sameExit,
       brokerId: row.broker_id,
       instrument: row.instrument,
       originalOpenedAt: new Date(row.opened_at).toISOString(),
@@ -210,7 +232,7 @@ export class M1DelayedEntryParityService implements OnModuleInit, OnModuleDestro
       originalCloseReason: row.close_reason,
       methodology: 'CAUSAL_COMPLETED_M1_CONFIRMATION_THEN_NEXT_BAR_OPEN_INDICATIVE_QUOTE_REPLAY',
       limitation:
-        'Not executable P&L: M1 OHLC high/low is unordered; quote opens are not broker fills. Excludes spread at actual entry, slippage, swaps and opportunity costs. Commission is extrapolated from actual fill/exit geometry; counterfactual hold period differs from actual.',
+        'Not executable P&L: M1 OHLC high/low is unordered; quote opens are not broker fills. Excludes spread at actual entry, slippage, swaps and opportunity costs. Commission is extrapolated from actual fill/exit geometry; counterfactual hold period differs from actual. Same-exit comparison is conditional on the original close decision, skips the partial exit minute and excludes quote barriers reached earlier.',
       stopVariationAuthority: 'NONE',
       execution_authority: 'NONE',
       modifies_execution: false,
