@@ -6,6 +6,7 @@
 'use strict';
 const path = require('node:path');
 const {compareMatchedDriftDays} = require('./owner-demo-drift-cohort-comparison.cjs');
+const {summarizeRejectedDriftCounterfactuals} = require('./owner-demo-rejected-drift-counterfactual.cjs');
 const ARTIFACT = 'owner-pepperstone-demo-drift-shadow-cohort-v1';
 const OUTCOME_ARTIFACT = 'm1-shadow-outcome-15m-v1';
 const STATUSES = new Set(['TP','SL','MTM']);
@@ -86,6 +87,9 @@ function buildDriftCohort(rows,asOf,sourceLimit=10000) {
     laterPeriod:aggregate(after,asOfMs),
     byPlanBRouteAndDrift:groups(r=>[r.strategy_route,r.drift].join(' / ')),
     byInstrumentRouteAndDrift:groups(r=>[r.instrument,r.strategy_route,r.drift].join(' / ')),
+    // Different worker with a different sampling rule. This must never be
+    // silently combined with the ordinary 15m M1 shadow labels above.
+    rejectedDriftCounterfactuals:summarizeRejectedDriftCounterfactuals(sorted,asOfMs),
     matchedDriftDays:compareMatchedDriftDays(selected,settledLabel,asOfMs,{
       sourceTruncated:sorted.length>=sourceLimit,
     }),
@@ -115,6 +119,7 @@ function buildDriftCohort(rows,asOf,sourceLimit=10000) {
       'The day split is descriptive; no model was retrained or promoted.',
       'Same-day matched drift differences still reflect observational confounding and variable label coverage.',
       'Earlier/later day cohorts are retrospective reports, not sealed training and holdout sets.',
+      'Ordinary shadow episodes exclude many blocked OOD candidates; the existing rejected-drift worker instead uses one earliest per-instrument fixed 16-minute bucket. These are different selection policies; their apparent returns must not be directly compared.',
     ],
   };
 }
@@ -139,7 +144,10 @@ async function run() {
       "d.governance->'multimodelEnsemble'->>'strategyRoute' AS strategy_route,",
       "d.governance->'multimodelGovernance'->>'driftState' AS drift,",
       "d.governance->'multimodelGovernance'->'driftDiagnostics' AS diagnostics,",
-      "d.governance->'shadowOutcome15mV1' AS outcome",
+      "d.governance->'shadowOutcome15mV1' AS outcome,",
+      "d.governance->'driftCounterfactual15m' AS drift_outcome,",
+      "d.governance->'multimodelGovernance'->>'executionCostSource' AS multimodel_cost_source,",
+      "d.governance->'genericGovernance'->>'executionCostSource' AS generic_cost_source",
       'FROM trading.m1_tactical_decisions d',
       'JOIN broker.broker_connections bc ON bc.id=d.broker_connection_id AND bc.user_id=d.user_id',
       "WHERE d.user_id=$1 AND bc.user_id=$1 AND bc.broker_id='pepperstone-ctrader'",
