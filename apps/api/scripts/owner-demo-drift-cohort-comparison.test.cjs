@@ -76,8 +76,8 @@ test('highly selected label coverage prevents a research qualification',()=>{
     ...opts,minCoverage:.65,
   });
   assert.equal(result.comparableStrata,1);
-  assert.equal(result.normalCoverageInComparableStrata,.5);
-  assert.equal(result.outOfDistributionCoverageInComparableStrata,.5);
+  assert.equal(result.normalCoverageAcrossBothStateStrata,.5);
+  assert.equal(result.outOfDistributionCoverageAcrossBothStateStrata,.5);
   assert.equal(result.status,'LOW_OUTCOME_COVERAGE');
 });
 test('small sample and truncated scan stay explicitly unqualified',()=>{
@@ -112,4 +112,22 @@ test('does not treat simulated spread costs as broker-quality evidence',()=>{
   assert.equal(result.matchedStrata[0].outOfDistribution.completedLabels,0);
   assert.equal(result.balancedOodMinusNormalMeanEstimatedNetR,null);
   assert.equal(result.comparableCostEvidence,'BROKER_OBSERVED_P90_ONLY');
+});
+
+test('missing outcomes in matched but noncomparable market strata reduce coverage',()=>{
+  const rows=[
+    example('NORMAL',0,.1),example('NORMAL',20,.1),
+    example('OUT_OF_DISTRIBUTION',40,.8),example('OUT_OF_DISTRIBUTION',60,.8),
+    // Second matched instrument-side-route-day exists, but OOD is censored.
+    example('NORMAL',0,.1,{instrument:'EURUSD'}),
+    example('NORMAL',20,.1,{instrument:'EURUSD'}),
+    example('OUT_OF_DISTRIBUTION',40,null,{instrument:'EURUSD'}),
+    example('OUT_OF_DISTRIBUTION',60,null,{instrument:'EURUSD'}),
+  ];
+  const report=compareMatchedDriftDays(rows,labelOf,asOfMs,opts);
+  assert.equal(report.comparableStrata,1);
+  assert.equal(report.bothDriftStatesPresentStrata,2);
+  assert.equal(report.normalCoverageAcrossBothStateStrata,1);
+  assert.equal(report.outOfDistributionCoverageAcrossBothStateStrata,.5);
+  assert.equal(report.status,'LOW_OUTCOME_COVERAGE');
 });
