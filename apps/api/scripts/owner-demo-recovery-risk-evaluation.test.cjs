@@ -154,3 +154,44 @@ test('missing or blank broker-net evidence cannot be mistaken for a flat settled
  t.settled.netUsd='';
  assert.equal(report.cohortStats([t]).settledTrades,0);
 });
+
+test('early fee-covered caution is separately audited for winners, losers and lead time',()=>{
+ const loser=trade({net:-122.4,warning:false});
+ loser.snapshots[1].signal.earlyFeeCoveredProfitFadeWatchOnly=true;
+ loser.snapshots[1].signal.hypotheticalNetAfterFeeEstimateUsd=28.56;
+ loser.snapshots[1].at='2026-11-20T10:17:30Z';
+ const winner=trade({net:69.84,warning:false});
+ winner.snapshots[1].signal.earlyFeeCoveredProfitFadeWatchOnly=true;
+ winner.snapshots[1].signal.hypotheticalNetAfterFeeEstimateUsd=12.9;
+ winner.snapshots[1].at='2026-11-20T10:17:20Z';
+ const clean=trade({net:23,warning:false});
+ const rpt=report.evaluate([loser,winner,clean]);
+ const cr=rpt.byRoute.CONFIRMED_REVERSAL;
+ assert.equal(cr.warned.tradeCount,0);
+ assert.equal(cr.unwarned.tradeCount,3);
+ assert.equal(cr.earlyStillProfitableCautions.tradeCount,2);
+ assert.equal(cr.earlyStillProfitableCautions.afterCostWinners,1);
+ assert.equal(cr.earlyStillProfitableCautions.afterCostLosers,1);
+ assert.equal(cr.earlyStillProfitableCautions.winningNetUsd,69.84);
+ assert.equal(cr.earlyStillProfitableCautions.losingNetUsd,-122.4);
+ assert.equal(cr.earlyStillProfitableCautions.totalEarlyCautionSnapshots,2);
+ assert.equal(cr.earlyStillProfitableCautions.firstCautionBeforeCloseAtLeast120Seconds,2);
+ assert.equal(cr.earlyStillProfitableCautions.earliestCautionTheoreticalNetPositiveSnapshots,2);
+ assert.equal(cr.earlyStillProfitableCautions.neverAutoClose,true);
+ assert.equal(cr.noExecutionAuthority,true);
+ assert.equal(rpt.autoPromote,false);
+});
+test('repeated early-caution signals on a winning trade count as one after-fee winner',()=>{
+ const winner=trade({net:111.11,warning:false,repeats:3});
+ for(const s of Object.values(winner.snapshots)){
+  s.signal.earlyFeeCoveredProfitFadeWatchOnly=true;
+  s.signal.hypotheticalNetAfterFeeEstimateUsd=9;
+  s.at='2026-11-20T10:18:12Z';
+ }
+ const r=report.earlyProfitCautionScore([winner]);
+ assert.equal(r.tradeCount,1);
+ assert.equal(r.afterCostWinners,1);
+ assert.equal(r.totalActualBrokerNetUsd,111.11);
+ assert.equal(r.totalEarlyCautionSnapshots,3);
+ assert.equal(r.quoteOnlyNotExecutable,true);
+});

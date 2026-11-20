@@ -89,6 +89,34 @@ function setup(root,owner,connection,now=Date.now()){
  if(state.artifact!==model.ARTIFACT||!state.trades)throw Error('INVALID_STATE');
  return {marker,state};
 }
+function setupEarlyCaution(root,owner,conn,now=Date.now()){
+ if(!UUID.test(owner)||!UUID.test(conn))throw Error('EARLY_CAUTION_SCOPE_REQUIRED');
+ const file=path.join(root,'early-profit-caution-activation.json');
+ if(!fs.existsSync(file))fs.writeFileSync(file,JSON.stringify({
+  artifact:model.EARLY_CAUTION_ARTIFACT,
+  activatedAt:new Date(now).toISOString(),
+  ownerHash:sha(owner),brokerConnectionHash:sha(conn),
+  broker:'pepperstone-ctrader',accountType:'DEMO',accountCurrency:'USD',
+  priceDecayFractionMax:.8,priceDecayFractionMin:.2,
+  minimumPeakToFeeMultiple:1.5,minimumStopHeadroomR:.35,
+  m1AlignedRMax:-.055,m3AlignedRMin:-.11,
+  quoteNetPositiveRequired:true,readOnly:true,canAutoClose:false,
+  noRetrospectiveScoring:true,canAutoPromote:false,
+ },null,2),{flag:'wx',mode:0o600});
+ const rule=JSON.parse(fs.readFileSync(file,'utf8'));
+ if(rule.artifact!==model.EARLY_CAUTION_ARTIFACT||rule.ownerHash!==sha(owner)||
+  rule.brokerConnectionHash!==sha(conn)||rule.broker!=='pepperstone-ctrader'||
+  rule.accountType!=='DEMO'||rule.accountCurrency!=='USD'||
+  rule.priceDecayFractionMax!==.8||rule.priceDecayFractionMin!==.2||
+  rule.minimumPeakToFeeMultiple!==1.5||rule.minimumStopHeadroomR!==.35||
+  rule.quoteNetPositiveRequired!==true||
+  rule.m1AlignedRMax!==-.055||rule.m3AlignedRMin!==-.11||
+  rule.canAutoClose!==false||rule.canAutoPromote!==false||
+  rule.noRetrospectiveScoring!==true||rule.readOnly!==true||
+  !Number.isFinite(ms(rule.activatedAt))||ms(rule.activatedAt)>now)
+  throw Error('INVALID_FROZEN_EARLY_CAUTION_RULE');
+ return rule;
+}
 function feeEvidence(row){
  const lots=ns(row.lot_size);
  if(!(lots>0))return null;
@@ -141,6 +169,15 @@ function plan(row,entry,marker,now,quotes){
  const checkpoint=model.asOfCheckpoint(row,current.openedAt,now);
  if(checkpoint&&!current.snapshots[checkpoint]){
   const result=model.evaluate(row,quotes,now,current.feeReserveUsd);
+  const cautionStart=ms(marker.earlyCautionActivatedAt);
+  if(!Number.isFinite(cautionStart)||
+   ms(current.openedAt)<cautionStart||now<cautionStart){
+   // Original live snapshots remain immutable; reviewed earlier trades
+   // cannot silently become independent successes under this NEW rule.
+   result.earlyFeeCoveredProfitFadeWatchOnly=false;
+   result.earlyFadeLabel='INELIGIBLE_PRE_EARLY_CAUTION_RULE_ACTIVATION';
+   result.earlyFadeTheoreticalRemainingNetUsd=null;
+  }
   current.snapshots[checkpoint]={at:new Date(now).toISOString(),
    checkpointMinute:checkpoint,signal:result,
    futures:Object.fromEntries(HORIZONS.map(h=>[h,{
@@ -209,6 +246,8 @@ function summary(state,marker,now=Date.now()){
  }
  return {artifact:model.ARTIFACT,generatedAt:new Date(now).toISOString(),
   activatedAt:marker.activatedAt,
+  earlyCautionRuleActivatedAt:marker.earlyCautionActivatedAt||null,
+  earlyCautionEligibleOnlyOnNewPostActivationTrades:true,
   broker:'pepperstone-ctrader',accountType:'DEMO',currency:'USD',
   enrolled:trades.length,settled:trades.filter(t=>t.settled).length,
   snapshots:snapshots.length,warningSnapshots:warned.length,
@@ -295,6 +334,8 @@ async function main(){
  const owner=process.env.VPS_FOREX_SCANNER_USER_ID,
   conn=process.env.IREXPRO_OWNER_PEPPERSTONE_DEMO_NOON_TRIAL_BROKER_CONNECTION_ID;
  const {marker,state}=setup(ROOT,owner,conn);
+ const frozenEarlyCaution=setupEarlyCaution(ROOT,owner,conn);
+ marker.earlyCautionActivatedAt=frozenEarlyCaution.activatedAt;
  const {Client}=require('pg');
  let busy=false,started=0,failures=0;
  setInterval(()=>{
@@ -333,7 +374,7 @@ async function main(){
  console.log('OWNER_RECOVERY_SHADOW_ACTIVE '+marker.activatedAt+' noOrders=true');
  setInterval(()=>void scan(),12000);
 }
-module.exports={ROOT,TRADES_SQL,QUOTES_SQL,FEES_SQL,setup,feeEvidence,feeReserve,enroll,plan,summary,query,tick};
+module.exports={ROOT,TRADES_SQL,QUOTES_SQL,FEES_SQL,setup,setupEarlyCaution,feeEvidence,feeReserve,enroll,plan,summary,query,tick};
 if(require.main===module)main().catch(e=>{
  console.error('OWNER_RECOVERY_RESEARCH_FATAL',String(e.message).slice(0,200));
  process.exitCode=1;

@@ -211,3 +211,75 @@ test('an as-of pre-fill allocation has source precedence over historical fee fal
  assert.equal(watcher.feeEvidence(t).source,'PRE_FILL_ALLOCATION_HISTORICAL_FEE');
  assert.equal(watcher.feeReserve(t),12);
 });
+
+test('research-only early profit fade flags AUDUSD-like as-of 3m evidence, without closing anything',()=>{
+ const q=model.earlyProfitFade({
+  fee:24.48,peak:77.52,gross:53.04,net:28.56,
+  m1:-.0833,m3:.2292,bufferR:1.2708});
+ assert.equal(q,true);
+ const no=(update)=>model.earlyProfitFade({
+  fee:24.48,peak:77.52,gross:53.04,net:28.56,
+  m1:-.0833,m3:.2292,bufferR:1.2708,...update});
+ for(const patch of [
+  {fee:null},{peak:null},{gross:null},{net:-4.08},
+  {net:null},{m1:.1},{m3:-.3},{gross:71},{gross:10},{bufferR:.25},
+ ])assert.equal(no(patch),false,JSON.stringify(patch));
+});
+test('new early caution does not reclassify existing high risk or issue a broker close',()=>{
+ const q=quotes();
+ // Use as-of M1 downward turn with older 3m still positive; after-fee gross
+ // mark retained and broker-recorded peak persist exactly at decision time.
+ q[0].bid=1.10046;q[0].ask=1.10048;
+ q[1].bid=1.10050;q[1].ask=1.10052;
+ q[2].bid=1.10041;q[2].ask=1.10043;
+ const observedRow=row({max_favorable_pnl:'77.52',profit_giveback:'20'});
+ const result=model.evaluate(observedRow,q,time,24.48);
+ assert.equal(result.state,'NO_STRONG_REVERSAL_WARNING');
+ // This synthetic quote fixture may not satisfy all pause conditions; ensure
+ // no automated order permissions regardless of caution state.
+ assert.equal(result.noTradingAuthority,true);
+ assert.equal(result.noProfitProtectionChanges,true);
+ assert.equal(result.earlyFadeExitFillAvailable,false);
+ assert.equal(result.earlyFadeMayRecoverAndMakeMoreProfit,true);
+});
+
+test('new early-caution rule is frozen to owner DEMO and cannot silently inherit the old observation epoch',()=>{
+ const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'irexpro-caution-only-'));
+ const owner='6ed0ae55-4e31-4d22-9074-55c97800397a';
+ const conn='dde65a12-70e1-4d6b-97bb-5af2384d8714';
+ try{
+  const a=watcher.setupEarlyCaution(root,owner,conn,time);
+  assert.equal(a.artifact,model.EARLY_CAUTION_ARTIFACT);
+  assert.equal(a.activatedAt,iso(time));
+  assert.equal(a.noRetrospectiveScoring,true);
+  assert.equal(a.canAutoClose,false);
+  assert.equal(a.canAutoPromote,false);
+  assert.deepEqual(watcher.setupEarlyCaution(root,owner,conn,time+4000),a);
+  assert.throws(()=>watcher.setupEarlyCaution(root,owner,
+   '3b154a1e-05b1-4276-bf4c-8f4c351b4a59',time+5000),
+   /INVALID_FROZEN_EARLY_CAUTION_RULE/);
+  const f=path.join(root,'early-profit-caution-activation.json');
+  fs.writeFileSync(f,JSON.stringify({...a,canAutoClose:true}));
+  assert.throws(()=>watcher.setupEarlyCaution(root,owner,conn,time+6000),
+   /INVALID_FROZEN_EARLY_CAUTION_RULE/);
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+test('pre-activation entries cannot be counted as prospectively warned by new early caution rule',()=>{
+ const current=row();
+ const begin=time-8*60000;
+ const pre={...current,opened_at:iso(time-5*60000)};
+ const enrolled={tradeId:pre.trade_id,openedAt:pre.opened_at,
+  brokerConnectionId:pre.broker_connection_id,route:pre.route,
+  instrument:pre.instrument,direction:pre.direction,
+  filledLots:2,originalStop:1.0997,feeReserveUsd:24.48,
+  snapshots:{},settled:null};
+ const m={activatedAt:iso(begin),earlyCautionActivatedAt:iso(time-2*60000)};
+ const a=watcher.plan(pre,enrolled,m,time,quotes());
+ assert.ok(a.entry.snapshots[5]);
+ assert.equal(a.entry.snapshots[5].signal.earlyFeeCoveredProfitFadeWatchOnly,false);
+ assert.equal(a.entry.snapshots[5].signal.earlyFadeLabel,
+  'INELIGIBLE_PRE_EARLY_CAUTION_RULE_ACTIVATION');
+ assert.equal(a.entry.snapshots[5].signal.noTradingAuthority,true);
+ assert.equal(a.entry.snapshots[5].signal.noProfitProtectionChanges,true);
+});

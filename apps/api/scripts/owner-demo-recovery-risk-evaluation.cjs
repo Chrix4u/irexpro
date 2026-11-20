@@ -73,6 +73,32 @@ function leadTimeStats(trades){
   meanLeadSeconds:valid.length?rnd(valid.reduce((a,b)=>a+b,0)/valid.length):null,
   timingIsNotEvidenceOfExecutableBrokerClose:true};
 }
+// Separate early still-net-positive cautions from severe warnings. Being
+// positive at quote time does not imply a broker fill was obtainable.
+function earlyProfitCautionScore(trades){
+ const alerted=trades.filter(t=>compact(t).some(s=>
+  s.signal.earlyFeeCoveredProfitFadeWatchOnly===true));
+ const matched=alerted.filter(t=>money(t)!==null);
+ const lead=matched.map(t=>{
+  const at=compact(t).filter(s=>s.signal.earlyFeeCoveredProfitFadeWatchOnly===true)
+   .map(s=>Date.parse(s.at)).filter(Number.isFinite).sort((a,b)=>a-b)[0];
+  return (Date.parse(t.settled.closedAt)-at)/1000;
+ }).filter(Number.isFinite);
+ const positive=alerted.flatMap(t=>compact(t).filter(s=>
+  s.signal.earlyFeeCoveredProfitFadeWatchOnly===true));
+ return {
+  ...cohortStats(alerted),
+  totalEarlyCautionSnapshots:positive.length,
+  firstCautionBeforeClose:lead.filter(x=>x>=0).length,
+  firstCautionBeforeCloseAtLeast30Seconds:lead.filter(x=>x>=30).length,
+  firstCautionBeforeCloseAtLeast60Seconds:lead.filter(x=>x>=60).length,
+  firstCautionBeforeCloseAtLeast120Seconds:lead.filter(x=>x>=120).length,
+  earliestCautionTheoreticalNetPositiveSnapshots:positive.filter(s=>
+   s.signal.hypotheticalNetAfterFeeEstimateUsd>0).length,
+  quoteOnlyNotExecutable:true,neverAutoClose:true,
+  noPromotionWithoutWinnerAndLoserForwardComparison:true,
+ };
+}
 function horizonStats(records){
  const states={};
  const validQuote=records.filter(r=>r.actual?.state==='REALTIME_BROKER_NATIVE_PRICE_MARK_ONLY');
@@ -123,6 +149,7 @@ function evaluate(trades,now=new Date()){
   perRoute[route]={
    warned:cohortStats(warned),unwarned:cohortStats(unwarned),
    warnedLeadTimeBeforeActualClose:leadTimeStats(warned),
+   earlyStillProfitableCautions:earlyProfitCautionScore(all.filter(t=>t.route===route)),
    unevaluable:cohortStats(group.INSUFFICIENT_OR_MISSING_EVIDENCE),
    independentDaysWithSettledEvidence:days,
    candidateForManualCalibrationReview:qualified,
@@ -160,4 +187,4 @@ function evaluate(trades,now=new Date()){
    'Independent market days, quote coverage and complete net settlement must mature before any model calibration review.'],
  };
 }
-module.exports={ARTIFACT,HORIZONS,ROUTES,RISK_STATES,VALID_STATES,cohorts,cohortStats,horizonStats,evaluate};
+module.exports={ARTIFACT,HORIZONS,ROUTES,RISK_STATES,VALID_STATES,cohorts,cohortStats,earlyProfitCautionScore,horizonStats,evaluate};

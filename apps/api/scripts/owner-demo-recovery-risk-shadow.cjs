@@ -4,6 +4,7 @@
  * research. NOT trained/calibrated probabilities, NOT a trading instruction.
  */
 const ARTIFACT='irexpro-owner-demo-recovery-5-10-15-20m-shadow-v1';
+const EARLY_CAUTION_ARTIFACT='irexpro-demo-early-fee-covered-profit-fade-research-v1';
 const HORIZONS=Object.freeze([5,10,15,20]);
 const CHECKPOINTS=Object.freeze([1,2,3,4,5,6,8,10,12,15,18,20,25,30,40,50,60]);
 const INSTRUMENTS=Object.freeze(['EURUSD','AUDUSD','USDJPY','USDCAD']);
@@ -35,6 +36,20 @@ function newest(quotes,now){
 function atOffset(quotes,last,minutes){
  const target=last.barStart-minutes*60000;
  return quotes.find(q=>q.barStart===target)||null;
+}
+/**
+ * Early, fee-covered profit fading signal. This is intentionally only an
+ * observational research candidate: M1 adverse while M3 is not yet adverse.
+ * It MUST NOT enter the severe-warning/automatic exit cohort.
+ */
+function earlyProfitFade({fee,peak,gross,net,m1,m3,bufferR}){
+ const hasEvidence=[fee,peak,gross,net,m1,m3,bufferR]
+  .every(Number.isFinite);
+ if(!hasEvidence||!(fee>0)||!(peak>fee*1.5)||
+  !(net>0)||!(gross>0)||!(bufferR>.35))return false;
+ const retainedGrossFraction=gross/peak;
+ return retainedGrossFraction<.8&&retainedGrossFraction>.20&&
+  m1<=-.055&&m3>-.11;
 }
 function evaluate(row,quotes,now,feeReserve){
  const base={artifact:ARTIFACT,at:new Date(now).toISOString(),
@@ -69,6 +84,8 @@ function evaluate(row,quotes,now,feeReserve){
  const peakCoveredFee=timelyPath&&fee>0&&peak>fee*1.15;
  const atRisk=buffer/risk<.35;
  const momentumOpposes=adverse1&&adverse3;
+ const earlyFade=earlyProfitFade({fee,peak:timelyPath?peak:null,
+  gross:quoteGross,net:netEstimate,m1,m3,bufferR:buffer/risk});
  let state='INSUFFICIENT_MOMENTUM_EVIDENCE';
  if(m1!==null&&m3!==null){
   state='NO_STRONG_REVERSAL_WARNING';
@@ -92,6 +109,14 @@ function evaluate(row,quotes,now,feeReserve){
   recordedGivebackBrokerPnlUsd:timelyPath?giveback:null,
   recordedPeakAboveFeeReserve:peakCoveredFee,
   peakDataFresh:timelyPath,
+  // Standalone early caution: does NOT alter 'state', confidence,
+  // strategy rules or profit protection, even when it fires.
+  earlyFeeCoveredProfitFadeWatchOnly:earlyFade,
+  earlyFadeRuleArtifact:EARLY_CAUTION_ARTIFACT,
+  earlyFadeLabel:earlyFade?'NET_PROFIT_FADING_M1_FIRST_TURN':'NONE',
+  earlyFadeTheoreticalRemainingNetUsd:earlyFade?rnd(netEstimate,2):null,
+  earlyFadeExitFillAvailable:false,
+  earlyFadeMayRecoverAndMakeMoreProfit:true,
   watchOnly:true,requiresIndependentProspectiveValidation:true,
   hypotheticalMarkedNetNotBrokerCloseFill:true,
   horizons:Object.fromEntries(HORIZONS.map(h=>[h,{
@@ -147,5 +172,5 @@ function labelMature(record,row,quotes,now,feeReserve){
   riskAtHorizon:mark.state,
   noBrokerFillClaim:true,noGuaranteedRecoveryClaim:true};
 }
-module.exports={ARTIFACT,HORIZONS,CHECKPOINTS,INSTRUMENTS,ROUTES,quote,newest,evaluate,
- asOfCheckpoint,labelMature};
+module.exports={ARTIFACT,EARLY_CAUTION_ARTIFACT,HORIZONS,CHECKPOINTS,INSTRUMENTS,ROUTES,quote,newest,evaluate,
+ earlyProfitFade,asOfCheckpoint,labelMature};
