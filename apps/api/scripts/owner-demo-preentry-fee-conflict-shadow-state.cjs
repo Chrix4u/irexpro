@@ -5,7 +5,8 @@ const STATE_ARTIFACT='irexpro-owner-demo-entry-confluence-frozen-prospective-sta
 const MARKER_FILE='preentry-fee-double-abstain-activation.json';
 const STATE_FILE='preentry-fee-double-abstain-state.json';
 const sha=x=>crypto.createHash('sha256').update(x).digest('hex');
-const valid=x=>typeof x==='string'&&/^[0-9a-f]{8}-[0-9a-f-]{27,36}$/i.test(x);
+const valid=x=>typeof x==='string'&&
+ /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(x);
 const t=x=>x==null?NaN:new Date(x).getTime();
 function setup(root,owner,conn,now=new Date()) {
  if(!valid(owner)||!valid(conn)||!Number.isFinite(t(now)))

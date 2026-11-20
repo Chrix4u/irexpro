@@ -162,3 +162,22 @@ test('SQL requires a linked decision recorded and evaluated BEFORE exact demo fi
  assert.match(audit.SQL,/LIMIT 501/);
  assert.doesNotMatch(audit.SQL,/\b(?:INSERT|UPDATE|DELETE|TRUNCATE)\b/i);
 });
+
+test('unflagged healthy winners and other strategies are not labeled false-positive vetoes',()=>{
+ const warning=m.classify(row(),NOW,MARKER_AT);
+ const clean=m.classify(row({fee_shadow_reason:'AFTER_BROKER_FEES_ELIGIBLE'}),NOW,MARKER_AT);
+ const other=m.classify(row({route:'EARLY_TRANSITION'}),NOW,MARKER_AT);
+ const rows=[
+  nominalTrade({tradeId:'warned',settledBrokerNetUsd:-28}),
+  nominalTrade({tradeId:'clean',settledBrokerNetUsd:+38}),
+  nominalTrade({tradeId:'other',route:'EARLY_TRANSITION',settledBrokerNetUsd:+66}),
+ ];
+ const result=m.summarize(rows,{warned:warning,clean,other},MARKER_AT);
+ assert.equal(result.flagged.losers,1);
+ assert.equal(result.unflaggedControls.winners,1);
+ assert.equal(result.unflaggedControls.falseWarningsOnRealWinners,0);
+ assert.equal(result.unflaggedControls.actualWinnersUsdPotentiallyExcluded,0);
+ assert.equal(result.otherRouteControls.winners,1);
+ assert.equal(result.otherRouteControls.falseWarningsOnRealWinners,0);
+ assert.equal(result.otherRouteControls.actualBrokerNetUsd,66);
+});

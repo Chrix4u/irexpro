@@ -77,13 +77,15 @@ function summarize(trades,observations,activatedAt){
  const observed=newTrades.filter(r=>observations[r.tradeId]&&
   observations[r.tradeId].label!=='MISSED_WHILE_OPEN_NOT_CAPTURED');
  const missed=newTrades.filter(r=>observations[r.tradeId]?.label==='MISSED_WHILE_OPEN_NOT_CAPTURED');
- const flagged=observed.filter(r=>
+ const flagged=observed.filter(r=>r.route==='CONFIRMED_REVERSAL'&&
   observations[r.tradeId].shadowWouldDiscourageEntry===true);
- const controls=observed.filter(r=>
+ const controls=observed.filter(r=>r.route==='CONFIRMED_REVERSAL'&&
   observations[r.tradeId].eligible&&
-  observations[r.tradeId].shadowWouldDiscourageEntry===false);
+  observations[r.tradeId].shadowWouldDiscourageEntry!==true);
+ const otherRouteControls=observed.filter(r=>r.route!=='CONFIRMED_REVERSAL'&&
+  observations[r.tradeId].eligible);
  const complete=a=>a.filter(r=>r.fullySettled&&Number.isFinite(r.settledBrokerNetUsd));
- const fin=a=>{
+ const fin=(a,wasWarned=false)=>{
   const c=complete(a),wins=c.filter(r=>r.settledBrokerNetUsd>0),
    losses=c.filter(r=>r.settledBrokerNetUsd<0);
   const positive=wins.reduce((s,r)=>s+r.settledBrokerNetUsd,0),
@@ -91,18 +93,21 @@ function summarize(trades,observations,activatedAt){
   return {trades:a.length,open:a.filter(r=>r.status==='OPEN').length,
    closed:c.length,winners:wins.length,losers:losses.length,
    actualBrokerNetUsd:+(positive+negative).toFixed(2),
-   falseWarningsOnRealWinners:wins.length,
-   actualWinnersUsdPotentiallyExcluded:+positive.toFixed(2),
-   actualLosersUsdFlagged:+negative.toFixed(2)};
+   falseWarningsOnRealWinners:wasWarned?wins.length:0,
+   actualWinnersUsdPotentiallyExcluded:wasWarned?+positive.toFixed(2):0,
+   actualLosersUsdFlagged:wasWarned?+negative.toFixed(2):0};
  };
  return {
   artifact:ARTIFACT,frozenRuleActivatedAt:activatedAt,
   beforeActivationTradesExcluded:trades.length-newTrades.length,
   postActivationTrades:newTrades.length,
-  observedOpenWithDecisionEvidence:observed.length,
+  observedFirstOpenSnapshots:observed.length,
+  observedOpenWithDecisionEvidence:observed.filter(r=>
+   observations[r.tradeId].eligible).length,
   closedBeforeFirstOpenSnapshot:missed.length,
-  flagged:fin(flagged),
+  flagged:fin(flagged,true),
   unflaggedControls:fin(controls),
+  otherRouteControls:fin(otherRouteControls),
   unableToJudge:fin(observed.filter(r=>!observations[r.tradeId].eligible)),
   warningsCannotBlockOrders:true,noAutoPromote:true,noAutoLiveTrading:true,
   noCounterfactualSavedProfitClaims:true,
