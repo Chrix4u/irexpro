@@ -51,6 +51,7 @@ import { buildM1TacticalFeatures, type M1TacticalFeatureSnapshot } from './m1-ta
 import { evaluatePepperstoneDemoAdvisoryQuality } from './pepperstone-demo-advisory-quality-risk';
 import { evaluatePepperstoneDemoM5ReversalSoftCap } from './pepperstone-demo-m5-reversal-soft-cap';
 import { evaluateOwnerDemoWeakReversalCap } from './owner-demo-weak-reversal-exposure-ceiling';
+import { evaluateOwnerDemoPreDispatchConfluence } from './owner-demo-predispatch-fee-confluence-shadow';
 import { evaluatePepperstoneDemoHighConvictionCeiling } from './pepperstone-demo-high-conviction-lot-ceiling';
 import {
   recallPepperstoneDemoPattern,
@@ -3227,6 +3228,38 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       alignedH4: candidate.alignedH4,
     } : null;
 
+    // This is genuinely evaluated and persisted BEFORE submitPaperDecision.
+    // It is an isolated owner Pepperstone DEMO research observation, never
+    // an execution veto, lot size adjustment, broker stop or strategy gate.
+    const ownerDemoPreDispatchFeeConfluenceShadow =
+      evaluateOwnerDemoPreDispatchConfluence({
+        featureEnabled: this.config.get<string>(
+          'IREXPRO_OWNER_DEMO_PREDISPATCH_FEE_CONFLUENCE_SHADOW',
+          '',
+        ) === 'enabled',
+        exactOwner: !!userId &&
+          this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId,
+        exactPepperstoneDemoBrokerVerified: advisoryBrokerVerified,
+        professionalDemoPhase,
+        candidateAdmittedForDispatch: canExecute,
+        decisionTime,
+        strategyRoute: multimodelDemo?.ensemble.strategyRoute ?? null,
+        m1Route: routeDecision.route,
+        trainedExpertState: multimodelDemo?.trainedExpert.state ?? null,
+        feeShadowReason: demoBrokerCommissionShadowGate?.reason ?? null,
+        feeShadowSampleCount: demoBrokerCommissionShadowGate?.sampleCount ?? null,
+        feeShadowAfterFeeExpectedR:
+          demoBrokerCommissionShadowGate?.afterFeeExpectedR ?? null,
+        feeShadowRequiredFloorR:
+          demoBrokerCommissionShadowGate?.minimumAfterFeeR ?? null,
+        alignedH1: candidate.alignedH1,
+        alignedM5: candidate.alignedM5,
+        negativePayoff: multimodelLossStreakBrake?.negativePayoff === true,
+        recentPayoffClosedTrades:
+          multimodelLossStreakBrake?.payoffClosedTrades ?? null,
+        recentClosedTrades:
+          multimodelLossStreakBrake?.recentClosedTrades ?? null,
+      });
     const persistStartedAt = Date.now();
     const decision = await this.evidence.recordDecision({
       userId,
@@ -3250,6 +3283,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         // magnitudes rather than only the binary HARD_HIGH/HARD_LOW labels.
         // Never consumed by the execution or promotion path.
         patternMemory,
+        ownerDemoPreDispatchFeeConfluenceShadow,
         ownerDemoEntryOutcomeShadow,
         ownerDemoPreEntryCandleSnapshot,
         oodResearchFeatures: {

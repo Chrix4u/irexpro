@@ -8,6 +8,7 @@
 const fs=require('node:fs'),path=require('node:path');
 const confluence=require('./owner-demo-preentry-fee-conflict-shadow.cjs');
 const frozenEntry=require('./owner-demo-preentry-fee-conflict-shadow-state.cjs');
+const preDispatch=require('./owner-demo-predispatch-forward-score.cjs');
 const ARTIFACT='owner-demo-weak-reversal-ceiling-prospective-broker-outcomes-v1';
 const RULE='owner-pepperstone-demo-weak-reversal-seven-lot-ceiling-v1';
 const ACTIVATED_AT='2026-11-20T17:37:18.000Z'; // Verified API activation.
@@ -39,7 +40,8 @@ const SQL=[
  'e.fee_shadow_minimum_after_fee_r,',
  'e.model_loss_brake_active,e.model_loss_brake_negative_payoff,',
  'e.model_loss_brake_payoff_closed_trades,e.model_loss_brake_recent_closed_trades,',
- 'e.aligned_h1_at_entry,e.aligned_m5_at_entry',
+ 'e.aligned_h1_at_entry,e.aligned_m5_at_entry,',
+ 'e.pre_dispatch_shadow',
  'FROM trading.trades t',
  'JOIN trading.trade_intents ti ON ti.id=t.trade_intent_id AND ti.user_id=t.user_id',
  'AND ti.broker_connection_id=t.broker_connection_id',
@@ -56,7 +58,8 @@ const SQL=[
  "z.governance->'multimodelLossStreakBrake'->>'payoffClosedTrades' AS model_loss_brake_payoff_closed_trades,",
  "z.governance->'multimodelLossStreakBrake'->>'recentClosedTrades' AS model_loss_brake_recent_closed_trades,",
  "z.candidate->>'alignedH1' AS aligned_h1_at_entry,",
- "z.candidate->>'alignedM5' AS aligned_m5_at_entry",
+ "z.candidate->>'alignedM5' AS aligned_m5_at_entry,",
+ "z.governance->'ownerDemoPreDispatchFeeConfluenceShadow' AS pre_dispatch_shadow",
  'FROM trading.m1_tactical_decisions z',
  'WHERE z.trade_intent_id=ti.id AND z.user_id=t.user_id',
  'AND z.broker_connection_id=t.broker_connection_id',
@@ -127,6 +130,10 @@ function decode(row,asOf) {
   observedProfitGivebackUsd:num(row.profit_giveback),
   actualAfterCostWinningTrade:net===null?null:net>0,
   actualAfterCostLosingTrade:net===null?null:net<0,
+  // Unlike the older post-fill OPEN observer, this evidence is evaluated,
+  // persisted and causally timestamped in recordDecision BEFORE order send.
+  // Invalid or missing provenance is NEVER interpreted as a warning.
+  preDispatch:preDispatch.provenance(row),
  };
 }
 function totals(rows){
@@ -212,6 +219,7 @@ function analyze(rows,asOf=new Date()){
     provenanceIncompleteOrInvalid:totals(parsed.filter(r=>!r.provenanceValid)),
   },
   lossClusterObservations:clusters(parsed),
+  preDispatchShadow:preDispatch.summarize(parsed),
   daily:days,
   actualUniqueTradeIds:true,
   excludesPreActivationEntries:true,

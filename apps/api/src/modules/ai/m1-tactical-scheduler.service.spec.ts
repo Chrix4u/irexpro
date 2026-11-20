@@ -854,6 +854,7 @@ function phase2Harness(
     enablePatternMemory?: boolean;
     enableHighConvictionSixLots?: boolean;
     enableOwnerLossAdvisory?: boolean;
+    enableOwnerPredispatchConfluenceShadow?: boolean;
     rollout?: any;
     evidenceByRoute?: Record<string, any[]>;
     shadowPairSideOutcomes?: Array<{ observedAt: Date; netR: number }>;
@@ -956,6 +957,8 @@ function phase2Harness(
           : '',
         IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY:
           options.enableOwnerLossAdvisory ? 'enabled' : '',
+        IREXPRO_OWNER_DEMO_PREDISPATCH_FEE_CONFLUENCE_SHADOW:
+          options.enableOwnerPredispatchConfluenceShadow ? 'enabled' : '',
         VPS_FOREX_SCANNER_USER_ID: options.enableContinuousAdvisory ||
           options.enableOwnerLossAdvisory ? 'user-1' : '',
       };
@@ -3541,6 +3544,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
         enableQualityRisk: true,
         enablePatternMemory: true,
         enableHighConvictionSixLots: true,
+        enableOwnerPredispatchConfluenceShadow: true,
         suspendTrendContinuation: true,
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
@@ -3616,6 +3620,16 @@ describe('M1 V8 multi-model DEMO authority', () => {
         route: 'CONFIRMED_REVERSAL',
       });
       expect(record?.executionAuthority).toBe('BROKER_NATIVE');
+      expect(record?.governance.ownerDemoPreDispatchFeeConfluenceShadow).toMatchObject({
+        artifact:'owner-demo-predispatch-fee-dual-abstain-research-v1',
+        evaluationPhase:'BEFORE_DURABLE_DECISION_AND_BEFORE_ORDER_DISPATCH',
+        ownerDemoScopeVerified:true,
+        selectedForDispatch:true,
+        researchOnly:true,
+        strategyRoute:'CONFIRMED_REVERSAL',
+        noOrderBlock:true,noNewExecutionGate:true,
+        noLotSizingChange:true,noStopChange:true,noExitAuthority:true,
+      });
       // The primary reversal was blocked by M1 timing, but the owner-scoped
       // alternate independently admitted this decision. The recorded active
       // blockers must not claim an authorized trade was denied.
