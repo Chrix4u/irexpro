@@ -365,6 +365,18 @@ async function main(){
   const {run:refreshOwnerNoonLotTrial}=require('./audit-owner-pepperstone-demo-noon-lot-trial.cjs');
   await refreshOwnerNoonLotTrial();
  }catch(e){console.error('OWNER_NOON_LOT_TRIAL_MONITOR_FAILED',String(e.message).slice(0,180))}
+ // Distinguish unchanged original entry stop/target geometry from later
+ // broker-close / 5m-guard / protected win outcomes. Research only.
+ try{
+  const {run:refreshExitPayoff}=require('./audit-owner-demo-exit-payoff-geometry.cjs');
+  await refreshExitPayoff();
+ }catch(e){console.error('OWNER_EXIT_PAYOFF_RESEARCH_FAILED',String(e.message).slice(0,180))}
+ // Reuse validated two-clock native quote cache already loaded for the
+ // guard analysis. Never estimate delayed broker P&L or change live exits.
+ try{
+  const {runWithArchive:refreshProtectionPostExit}=require('./audit-owner-demo-profit-protection-postexit.cjs');
+  await refreshProtectionPostExit(quoteFiles.byPair,quoteFiles.stats,fromUtc);
+ }catch(e){console.error('PROFIT_PROTECTION_POSTEXIT_RESEARCH_FAILED',String(e.message).slice(0,180))}
  console.log('GUARD_POSTEXIT_SHADOW '+JSON.stringify({asOf:report.asOf,
   fromUtc,closed:report.aggregate.validBrokerSettlements,
   actualNetUsd:report.aggregate.realizedGuardExitNetUsd,
