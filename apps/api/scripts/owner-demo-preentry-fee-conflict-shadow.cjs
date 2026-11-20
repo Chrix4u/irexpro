@@ -21,6 +21,12 @@ function classify(row,now,activatedAt){
   noCalibratedProbability:true,brokerFillWasNotPredicted:true,
   openedAt:Number.isFinite(opened)?new Date(opened).toISOString():null,
   prospectivelyObservedOpenAt:Number.isFinite(nowMs)?new Date(nowMs).toISOString():null,
+  firstCapturedSecondsAfterBrokerFill:Number.isFinite(nowMs-opened)?
+   +((nowMs-opened)/1000).toFixed(2):null,
+  warningIssuedBeforeBrokerFill:false,
+  decisionEvidenceTimestampPredatesFill:Number.isFinite(decisionCreated)&&
+   Number.isFinite(decisionAt)&&decisionCreated<=opened&&decisionAt<=opened,
+  predictedPriorToSettlementOnly:true,
   frozenRuleActivatedAt:activatedAt,
  };
  if(!Number.isFinite(opened)||!Number.isFinite(nowMs)||!Number.isFinite(start)||

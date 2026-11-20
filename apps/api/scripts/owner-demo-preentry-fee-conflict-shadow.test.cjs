@@ -40,6 +40,10 @@ test('strong shadow alert is frozen as-of a genuine OPEN position with prior dec
  assert.equal(a.noLotAmendment,true);
  assert.equal(a.noExitAuthority,true);
  assert.equal(a.noCalibratedProbability,true);
+ assert.equal(a.firstCapturedSecondsAfterBrokerFill,30);
+ assert.equal(a.warningIssuedBeforeBrokerFill,false);
+ assert.equal(a.decisionEvidenceTimestampPredatesFill,true);
+ assert.equal(a.predictedPriorToSettlementOnly,true);
 });
 test('after fee shortfall, independent dual abstain and verified samples all necessary',()=>{
  for(const patch of [
