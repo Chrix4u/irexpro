@@ -97,6 +97,7 @@ function summarize(rows,now=new Date()){
   grossBrokerPnlUsdSettled:0,actualLotTotal:0,settledLotTotal:0,
   highestFilledLots:null,highestRequestedLots:null,
   byStrategy:{},byInstrument:{},byLotBucket:{},byStrategyInstrument:{},
+  byCloseReason:{},byStrategyCloseReason:{},byStrategyInstrumentCloseReason:{},
   economics:null,
   latest:[],
   notes:[
@@ -144,7 +145,8 @@ function summarize(rows,now=new Date()){
    report.settledLotTotal+=lot;
    const initialRisk=num(r.risk_at_stop);
    settledDetails.push({route:String(r.strategy_route||'UNKNOWN'),
-    instrument:String(r.instrument||'UNKNOWN'),lot,net,
+    instrument:String(r.instrument||'UNKNOWN'),
+    closeReason:String(r.close_reason||'UNAVAILABLE'),lot,net,
     riskUsd:initialRisk!=null&&initialRisk>0?initialRisk:null,
     gross:netParts[0],commission:netParts[1],swap:netParts[2]});
    if(net>0)report.settledWins++;
@@ -180,6 +182,11 @@ function summarize(rows,now=new Date()){
  }
  report.byLotBucket=groupSettlements(settledDetails,t=>t.lot>=4?'ACTUAL_FOUR_PLUS':'ACTUAL_BELOW_FOUR');
  report.byStrategyInstrument=groupSettlements(settledDetails,t=>t.route+'|'+t.instrument);
+ report.byCloseReason=groupSettlements(settledDetails,t=>t.closeReason);
+ report.byStrategyCloseReason=groupSettlements(settledDetails,t=>t.route+'|'+t.closeReason);
+ report.byStrategyInstrumentCloseReason=groupSettlements(settledDetails,t=>
+  t.route+'|'+t.instrument+'|'+t.closeReason);
+ report.notes.push('Close reasons are recorded application/broker labels, not necessarily verified native provider stop or TP executions.');
  report.notes.push('Net USD per settled lot is a descriptive filled-volume ratio, not risk-normalized return or a sizing recommendation.');
  report.notes.push('Break-even win rate uses only observed winning/losing payoff magnitudes; same-day groups are NOT independent forecasts.');
  report.latest=report.latest.slice(-20).reverse();

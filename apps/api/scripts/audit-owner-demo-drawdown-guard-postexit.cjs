@@ -365,6 +365,16 @@ async function main(){
   const {run:refreshOwnerNoonLotTrial}=require('./audit-owner-pepperstone-demo-noon-lot-trial.cjs');
   await refreshOwnerNoonLotTrial();
  }catch(e){console.error('OWNER_NOON_LOT_TRIAL_MONITOR_FAILED',String(e.message).slice(0,180))}
+ // For 4 hours after exact trial expiry, reuse this same read-only monitor
+ // to detect any post-noon expired-artifact, >4 requested lot or late fill.
+ // No new timer, DEMO policy change, broker action or order authority.
+ try{
+  const noonExpiry=Date.parse('2026-11-20T12:00:00.000Z');
+  if(Date.now()>=noonExpiry && Date.now()<noonExpiry+4*60*60*1000){
+   const {run:refreshNoonExpiry}=require('./audit-owner-demo-noon-expiry-integrity.cjs');
+   await refreshNoonExpiry();
+  }
+ }catch(e){console.error('OWNER_NOON_EXPIRY_INTEGRITY_REFRESH_FAILED',String(e.message).slice(0,180))}
  // Distinguish unchanged original entry stop/target geometry from later
  // broker-close / 5m-guard / protected win outcomes. Research only.
  try{

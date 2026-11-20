@@ -119,6 +119,26 @@ test('missing or invalid ex-ante risk cannot be silently imputed',()=>{
  assert.equal(s.economics.meanRealizedNetR,null);
  assert.equal(s.economics.pooledNetPerRecordedInitialStopRisk,null);
 });
+test('close reason decomposition reconciles net and never includes still-open positions',()=>{
+ const s=summarize([
+  row({trade_status:'CLOSED',closed_at:'2026-11-20T04:09:00Z',
+   realised_pnl:'80',commission:'-10',swap:'0',close_reason:'PROFIT_PROTECTION'}),
+  row({intent_id:'loss',trade_id:'loss-trade',created_at:'2026-11-20T04:12:00Z',
+   instrument:'USDCAD',strategy_route:'EARLY_TRANSITION',trade_status:'CLOSED',
+   closed_at:'2026-11-20T04:18:00Z',realised_pnl:'-100',commission:'-20',swap:'0',
+   close_reason:'BROKER_CLOSE'}),
+  row({intent_id:'open',trade_id:'open-trade',created_at:'2026-11-20T04:20:00Z',
+   trade_status:'OPEN',close_reason:'BROKER_CLOSE',realised_pnl:null})
+ ],new Date('2026-11-20T05:00:00Z'));
+ assert.equal(s.settled,2);
+ assert.equal(s.brokerNetUsdSettled,-50);
+ assert.equal(s.byCloseReason.PROFIT_PROTECTION.netUsd,70);
+ assert.equal(s.byCloseReason.BROKER_CLOSE.netUsd,-120);
+ assert.equal(s.byCloseReason.BROKER_CLOSE.settled,1);
+ assert.equal(s.byStrategyCloseReason['EARLY_TRANSITION|BROKER_CLOSE'].netUsd,-120);
+ assert.equal(s.byStrategyInstrumentCloseReason['EARLY_TRANSITION|USDCAD|BROKER_CLOSE'].losses,1);
+ assert.equal(s.noLiveTradingAuthority,true);assert.equal(s.modifiesOrders,false);
+});
 test('rejects a supposed trial signal outside the exact authorized window',()=>{
  assert.throws(()=>summarize([
   row({created_at:'2026-11-20T12:00:00Z'}),
