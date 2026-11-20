@@ -50,6 +50,7 @@ import {
 import { buildM1TacticalFeatures, type M1TacticalFeatureSnapshot } from './m1-tactical-features';
 import { evaluatePepperstoneDemoAdvisoryQuality } from './pepperstone-demo-advisory-quality-risk';
 import { evaluatePepperstoneDemoM5ReversalSoftCap } from './pepperstone-demo-m5-reversal-soft-cap';
+import { evaluateOwnerDemoWeakReversalCap } from './owner-demo-weak-reversal-exposure-ceiling';
 import { evaluatePepperstoneDemoHighConvictionCeiling } from './pepperstone-demo-high-conviction-lot-ceiling';
 import {
   recallPepperstoneDemoPattern,
@@ -3404,6 +3405,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           patternMemory,
           ownerAcceptedPortfolioBrake ? portfolioNetLossBrake?.latestClosedAt : null,
           oppositeRouteAtSignal,
+          {
+            feeShadowReason: demoBrokerCommissionShadowGate?.reason ?? null,
+            feeShadowPriorSamples: demoBrokerCommissionShadowGate?.sampleCount ?? null,
+            modelLossStreakActive: multimodelLossStreakBrake?.active === true,
+            modelLossStreakReason: multimodelLossStreakBrake?.reason ?? null,
+          },
         );
       } finally {
         timings.orderDispatchMs = Math.max(0, Date.now() - dispatchStartedAt);
@@ -3581,6 +3588,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     patternMemory?: PatternMemoryObservation | null,
     ownerPortfolioBrakeIncidentClosedAt?: Date | null,
     oppositeRouteAtSignal?: M1TacticalRouteDecision,
+    weakReversalEvidence?: {
+      feeShadowReason: string | null;
+      feeShadowPriorSamples: number | null;
+      modelLossStreakActive: boolean;
+      modelLossStreakReason: string | null;
+    },
   ): Promise<void> {
     const session = this.executionService
       ? await this.executionService.getActiveSession(userId)
@@ -3974,6 +3987,30 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? Math.min(maxRequestedBeforeQuality,
             maxRequestedBeforeQuality * qualityRisk.riskFraction)
         : maxRequestedBeforeQuality;
+    // Owner DEMO only: seven-lot trial can bypass the pre-existing advisory
+    // quality multiplier. Restore the STANDARD requested four-lot CEILING
+    // on weak Confirmed Reversal when independent pre-decision broker fee
+    // or completed recent-loss evidence ALSO warns. No entry veto/lot floor.
+    const weakReversalCap = evaluateOwnerDemoWeakReversalCap({
+      enabled: this.config.get<string>(
+        'IREXPRO_OWNER_DEMO_WEAK_REVERSAL_4LOT_CEILING',
+        '',
+      ) === 'enabled',
+      exactOwnerVerified: qualityRiskEnabled && pepperstoneDemoRiskPilot &&
+        !!userId &&
+        this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId,
+      ongoingSevenLotEligible: ongoingSevenLot.eligible && noonLotTrialForAdmittedReversal,
+      continuousDemoAlternate: demoAlternativeTrial?.eligible === true &&
+        demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT &&
+        demoAlternativeTrial.continuousEvidence === true,
+      route: multimodelDemo?.ensemble.strategyRoute ?? null,
+      requestedLotCap: qualityAdjustedVolumeCap,
+      independentQualityRiskFraction: qualityRisk?.riskFraction ?? null,
+      feeShadowReason: weakReversalEvidence?.feeShadowReason ?? null,
+      feeShadowPriorSamples: weakReversalEvidence?.feeShadowPriorSamples ?? null,
+      modelLossStreakActive: weakReversalEvidence?.modelLossStreakActive === true,
+      modelLossStreakReason: weakReversalEvidence?.modelLossStreakReason ?? null,
+    });
     // Prospective owner-Pepperstone DEMO-only loss mitigation. The frozen
     // CONFIRMED_REVERSAL entry cohort with M5 opposition is net losing.
     // Apply a *soft lot ceiling*, never a new trade veto, direction flip, or
@@ -3986,7 +4023,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       route: multimodelDemo?.ensemble.strategyRoute ?? null,
       alignedM5: Number.isFinite(candidate.alignedM5) ? candidate.alignedM5 : null,
       brokerM5Direction: qualityRisk?.m5Direction ?? null,
-      requestedLotCap: qualityAdjustedVolumeCap,
+      requestedLotCap: weakReversalCap.requestedLotCap,
     });
     const currencyExposureGuard = await this.resolveM1CurrencyExposureGuard(
       userId,
@@ -4292,6 +4329,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_advisory_quality_h1_direction: qualityRisk?.h1Direction ?? null,
           m1_advisory_quality_recent_net_samples: qualityRisk?.recentSamples ?? null,
           m1_advisory_quality_recent_average_net_r: qualityRisk?.recentAverageNetR ?? null,
+          m1_owner_demo_weak_reversal_ceiling_artifact: weakReversalCap.artifact,
+          m1_owner_demo_weak_reversal_ceiling_applied: weakReversalCap.applied,
+          m1_owner_demo_weak_reversal_ceiling_reason: weakReversalCap.reason,
+          m1_owner_demo_weak_reversal_ceiling_before_lots: weakReversalCap.originalRequestedLots,
+          m1_owner_demo_weak_reversal_ceiling_after_lots: weakReversalCap.requestedLotCap,
+          m1_owner_demo_weak_reversal_ceiling_fee_warning: weakReversalCap.feeWarningAccepted,
+          m1_owner_demo_weak_reversal_ceiling_loss_warning: weakReversalCap.lossWarningAccepted,
           m1_reversal_m5_soft_cap_artifact: m5ReversalSoftCap.artifact,
           m1_reversal_m5_soft_cap_applied: m5ReversalSoftCap.applied,
           m1_reversal_m5_soft_cap_reason: m5ReversalSoftCap.reason,
