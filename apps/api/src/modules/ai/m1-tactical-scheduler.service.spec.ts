@@ -2608,7 +2608,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
     brokerConnectionId: 'demo-conn-2',
   };
 
-  it('closes an older opposite DEMO thesis first and defers a fully qualified confirmed reversal entry', async () => {
+  it('does not auto-close an opposite DEMO position merely because new confirmed reversal wants to enter', async () => {
     const h = phase2Harness({
       rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
       session: fullAutoSession,
@@ -2663,13 +2663,14 @@ describe('M1 V8 multi-model DEMO authority', () => {
       brokerConnectionId: 'demo-conn-2',
       instrument: 'EURUSD',
     });
-    expect(h.closeTrade).toHaveBeenCalledWith('trade-old-sell', 'user-1', 'AI_CLOSE_SIGNAL', {
-      source: 'M1_CONFIRMED_DIRECTION_FLIP',
-    });
+    expect(h.closeTrade).not.toHaveBeenCalled();
     expect(h.receiveSignal).not.toHaveBeenCalled();
     const recorded = h.recordDecision.mock.calls.find(([value]) => value.direction === 'BUY')?.[0];
     expect(recorded?.executionAuthority).toBe('NONE');
-    expect(recorded?.blockers).toContain('M1_DIRECTION_FLIP_EXIT_PENDING');
+    expect(recorded?.blockers).toContain('M1_ACTIVE_OPPOSITE_POSITION');
+    expect(recorded?.governance?.directionFlipConflict).toMatchObject({
+      exitRequested:false,action:'WAIT_EXISTING_OPPOSITE_POSITION',
+    });
   });
 
   it('waits instead of hedging when an opposite open DEMO position exists without a confirmed reversal', async () => {

@@ -28,7 +28,6 @@ import { AllocationService } from '../execution/services/allocation.service';
 import { PAPER_BROKER_AWARE_EXPOSURE_SEARCH_FLOOR } from '../execution/services/position-sizing.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { TradingSessionStatus } from '../execution/entities/trading-session.entity';
-import { TradeCloseReason } from '../execution/entities/trade.entity';
 import { AiSignalService } from './ai-signal.service';
 import { MacroEventRiskService } from './macro-event-risk.service';
 import { DemoPortfolioBrakeConsentService } from './demo-portfolio-brake-consent.service';
@@ -2487,33 +2486,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         );
       }
     }
-    const confirmedDirectionFlip =
-      activeOppositePositions.length > 0 &&
-      multimodelPrimaryExecutable &&
-      // The demo timing experiment may authorize a NEW entry but must never
-      // acquire the legacy privilege to close an already-open broker trade.
-      !demoAlternativeTrial.eligible &&
-      multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL' &&
-      // A local M1 continuation, even when consistently aligned with the
-      // Plan-B reversal, must not force-close an opposite broker position.
-      multimodelDemo?.authority.reversalTimingBridge !== true;
-    if (confirmedDirectionFlip && this.executionService) {
-      for (const position of activeOppositePositions) {
-        try {
-          await this.executionService.closeTrade(
-            position.tradeId,
-            userId,
-            TradeCloseReason.AI_CLOSE_SIGNAL,
-            { source: 'M1_CONFIRMED_DIRECTION_FLIP' },
-          );
-        } catch (error) {
-          this.logger.warn(
-            `M1 confirmed direction flip exit deferred trade=${position.tradeId} ` +
-              `${candidate.instrument} ${position.direction}->${candidate.direction}: ${(error as Error).message}`,
-          );
-        }
-      }
-    }
+    // A new entry candidate, even CONFIRMED_REVERSAL, is not an exit signal.
+    // Hold it when an opposite real DEMO position already exists. Previously
+    // this could force-close a valid position at a loss merely to flip sides.
+    // Actual exits stay with the separate risk/profit/owner exit services.
     const activeOppositePosition = activeOppositePositions.length > 0;
 
     const bootstrapExecutionSelected =
@@ -2916,13 +2892,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? [`M1_DEMO_BROKER_COMMISSION_${demoBrokerCommissionGate.reason}`]
             : []),
           ...(oppositePositionStateUnavailable ? ['M1_OPPOSITE_POSITION_STATE_UNAVAILABLE'] : []),
-          ...(activeOppositePosition
-            ? [
-                confirmedDirectionFlip
-                  ? 'M1_DIRECTION_FLIP_EXIT_PENDING'
-                  : 'M1_ACTIVE_OPPOSITE_POSITION',
-              ]
-            : []),
+          ...(activeOppositePosition ? ['M1_ACTIVE_OPPOSITE_POSITION'] : []),
         ])
       : unique([
           ...researchBlockers,
@@ -3374,8 +3344,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ? {
               candidateDirection: candidate.direction,
               oppositeTradeIds: activeOppositePositions.map((position) => position.tradeId),
-              confirmedReversal: confirmedDirectionFlip,
-              exitRequested: confirmedDirectionFlip && Boolean(this.executionService),
+              confirmedReversal: false,
+              exitRequested: false,
+              action: 'WAIT_EXISTING_OPPOSITE_POSITION',
             }
           : null,
         oppositePositionStateUnavailable,

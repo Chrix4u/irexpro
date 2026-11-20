@@ -282,9 +282,11 @@ export interface M1OpenPaperPositionSnapshot {
   direction: 'BUY' | 'SELL';
   openedAt: Date;
   decisionId: string;
-  route: M1ReliabilityRoute;
+  // A real OPEN broker position is still exposure when its tactical route
+  // abstained; never discard it from the opposite-position safeguard.
+  route: M1ReliabilityRoute | 'ABSTAIN' | 'UNVERIFIED';
   policyVersion: string;
-  originalNetExpectedR: number;
+  originalNetExpectedR: number | null;
 }
 
 export interface M1RescueObservationInput {
@@ -1753,15 +1755,13 @@ export class M1TacticalEvidenceService {
   }
 
   /**
-   * The previous GBPUSD SELL protected at 08:01:20 and the next SELL opened
-   * at 08:01:35, then hit SL. Enforce only a 3-minute same-pair, same-side
-   * cooldown AFTER a successful broker-reconciled PROFIT_PROTECTION close.
-   * An audited close REQUEST also holds the same side while reconciliation
-   * finishes; the real GBPUSD close request preceded the next opening by only
-   * 17 seconds and its final TRADE_CLOSED audit was written later.
-   *
-   * No whole-market ban, no opposing-side ban, no reliance on predicted P&L.
-   * Decision-time as-of predicate prevents historical replay look-ahead.
+   * Scope a short 3-minute reentry hold to the SAME pair and SAME direction
+   * after (a) broker-reconciled PROFIT_PROTECTION or (b) an audited
+   * DEMO_DRAWDOWN_GUARD AI close request. On Nov 20 USDCAD SELL closed
+   * at a loss through the 5m guard and another route reopened SELL 91s later.
+   * The source must be verified, not guessed from the generic AI_CLOSE_SIGNAL.
+   * Risk-reducing exits are never delayed. Other directions and pairs remain
+   * eligible, and late/hindsight close events are excluded at decision time.
    */
   async loadRecentlyProtectedSameSideReentry(input: {
     userId: string;
@@ -1799,7 +1799,13 @@ export class M1TacticalEvidenceService {
             ON a.resource_type='Trade' AND a.resource_id=t.id::text
            AND a.actor_user_id=$1
           WHERE a.action='TRADE_CLOSE_REQUESTED'
-            AND a.metadata->>'closeReason'='PROFIT_PROTECTION'
+            AND (
+              a.metadata->>'closeReason'='PROFIT_PROTECTION'
+              OR (
+                a.metadata->>'closeReason'='AI_CLOSE_SIGNAL'
+                AND a.metadata->'aiCloseTrigger'->>'source'='DEMO_DRAWDOWN_GUARD'
+              )
+            )
             AND a.created_at <= $5::timestamptz
             AND a.created_at > $5::timestamptz - interval '3 minutes'
         )
@@ -1891,8 +1897,8 @@ export class M1TacticalEvidenceService {
           AND t.broker_connection_id = $2
           AND t.instrument = $3
           AND t.status = 'OPEN'
-          AND ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')
-          AND ti.timeframe = 'M1'
+          AND ti.strategy_code LIKE 'external-irexpro-%'
+          AND ti.timeframe IN ('M1', 'M5')
           AND ti.metadata ->> 'external_provider_paper_only' = 'true'
         ORDER BY t.opened_at ASC
       `,
@@ -1904,7 +1910,13 @@ export class M1TacticalEvidenceService {
       'M1_EARLY_TRANSITION',
     ]);
     return rows.flatMap((row) => {
-      const route = String(row.route ?? '') as M1ReliabilityRoute;
+      const rawRoute = String(row.route ?? '');
+      // The main multi-model ensemble may open an actual position while its
+      // separate M1 tactical advisor says ABSTAIN. Its route/provenance must
+      // not make the open BUY/SELL invisible to opposite-exposure checks.
+      const route: M1OpenPaperPositionSnapshot['route'] = validRoutes.has(rawRoute as M1ReliabilityRoute)
+        ? (rawRoute as M1ReliabilityRoute)
+        : rawRoute === 'ABSTAIN' ? 'ABSTAIN' : 'UNVERIFIED';
       const direction = String(row.direction ?? '') as 'BUY' | 'SELL';
       const openedAt = date(row.opened_at as string | Date);
       const originalNetExpectedR = number(row.original_net_expected_r);
@@ -1915,12 +1927,8 @@ export class M1TacticalEvidenceService {
       if (
         !tradeId ||
         !tradeIntentId ||
-        !decisionId ||
-        !policyVersion ||
-        !validRoutes.has(route) ||
         !['BUY', 'SELL'].includes(direction) ||
-        !Number.isFinite(openedAt.getTime()) ||
-        !Number.isFinite(originalNetExpectedR)
+        !Number.isFinite(openedAt.getTime())
       ) {
         return [];
       }

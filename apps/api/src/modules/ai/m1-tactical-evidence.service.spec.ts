@@ -992,12 +992,30 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
     expect(normalized).toContain('t.broker_connection_id = $2');
     expect(normalized).toContain('t.instrument = $3');
     expect(normalized).toContain("t.status = 'OPEN'");
-    expect(normalized).toContain(
-      "ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')",
-    );
-    expect(normalized).toContain("ti.timeframe = 'M1'");
+    expect(normalized).toContain("ti.strategy_code LIKE 'external-irexpro-%'");
+    expect(normalized).toContain("ti.timeframe IN ('M1', 'M5')");
     expect(normalized).toContain("ti.metadata ->> 'external_provider_paper_only' = 'true'");
     expect(params).toEqual([input().userId, input().brokerConnectionId, 'EURUSD']);
+  });
+
+  it('keeps actual open ensemble exposure visible even when separate M1 advisor ABSTAINS', async () => {
+    const query = jest.fn().mockResolvedValue([
+      { trade_id:'old-buy',trade_intent_id:'old-intent',instrument:'EURUSD',
+        direction:'BUY',opened_at:'2026-11-20T00:24:26Z',
+        decision_id:'old-m1',route:'ABSTAIN',
+        policy_version:'m1-tactical-v2-m5-lifecycle',original_net_expected_r:'0.156' },
+      { trade_id:'other-open',trade_intent_id:'second-intent',instrument:'EURUSD',
+        direction:'SELL',opened_at:'2026-11-20T01:07:36Z',
+        decision_id:null,route:null,policy_version:null,original_net_expected_r:null },
+    ]);
+    const svc = new M1TacticalEvidenceService({query} as unknown as DataSource);
+    const positions = await svc.loadOpenPaperPositions({
+      userId:input().userId,brokerConnectionId:input().brokerConnectionId,instrument:'eurusd',
+    });
+    expect(positions).toHaveLength(2);
+    expect(positions[0]).toMatchObject({tradeId:'old-buy',direction:'BUY',route:'ABSTAIN'});
+    expect(positions[1]).toMatchObject({tradeId:'other-open',direction:'SELL',route:'UNVERIFIED'});
+    expect(positions.filter(p=>p.direction==='BUY')).toHaveLength(1);
   });
 
   it('loads all open iRexPro PAPER entry exposure across M1 and M5 with durable USD stop-risk evidence', async () => {
@@ -1098,6 +1116,8 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
       "t.close_reason='PROFIT_PROTECTION'",
       "a.action='TRADE_CLOSE_REQUESTED'",
       "a.metadata->>'closeReason'='PROFIT_PROTECTION'",
+      "a.metadata->>'closeReason'='AI_CLOSE_SIGNAL'",
+      "a.metadata->'aiCloseTrigger'->>'source'='DEMO_DRAWDOWN_GUARD'",
       'a.actor_user_id=$1',
       'a.resource_id=t.id::text',
       'a.created_at <= $5::timestamptz',
@@ -1132,6 +1152,32 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
       evaluatedAt: new Date('2026-11-11T08:04:21.000Z'),
     });
     expect(later).toEqual({ active: false, cooldownRemainingSeconds: 0 });
+  });
+
+  it('keeps USDCAD SELL on hold 91 seconds after verified DEMO drawdown-guard exit', async () => {
+    const query=jest.fn().mockResolvedValue([{
+      last_protected_close:'2026-11-20T01:04:49.561Z',
+    }]);
+    const svc=new M1TacticalEvidenceService({query} as unknown as DataSource);
+    const result=await svc.loadRecentlyProtectedSameSideReentry({
+      userId:input().userId,brokerConnectionId:input().brokerConnectionId,
+      instrument:'usdcad',direction:'SELL',
+      evaluatedAt:new Date('2026-11-20T01:06:24.676Z'),
+    });
+    expect(result).toEqual({active:true,cooldownRemainingSeconds:85});
+    expect(String(query.mock.calls[0]![0])).toContain(
+      "a.metadata->'aiCloseTrigger'->>'source'='DEMO_DRAWDOWN_GUARD'");
+    expect(query.mock.calls[0]![1]).toEqual([
+      input().userId,input().brokerConnectionId,'USDCAD','SELL',
+      '2026-11-20T01:06:24.676Z',
+    ]);
+    query.mockResolvedValueOnce([{last_protected_close:null}]);
+    const otherSide=await svc.loadRecentlyProtectedSameSideReentry({
+      userId:input().userId,brokerConnectionId:input().brokerConnectionId,
+      instrument:'USDCAD',direction:'BUY',
+      evaluatedAt:new Date('2026-11-20T01:06:24.676Z'),
+    });
+    expect(otherSide.active).toBe(false);
   });
 
   it('checks active same-side M1 intent identity before another execution is submitted', async () => {
