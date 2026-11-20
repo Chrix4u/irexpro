@@ -223,3 +223,58 @@ test('frozen per-route warning report exposes cost and missed winners without au
  assert.equal(r.qualification,'NOT_QUALIFIED_TO_MODIFY_EXECUTION');
  assert.equal(r.brokerOrders,0);
 });
+
+test('original pre-entry warnings are invariant to eventual gross fees and swap',()=>{
+ const e=m.plan(row(),new Map(),when+12000,baseline)[0];
+ const changed=m.plan(row({realised_pnl:'999',commission:'-200',swap:'-10'}),new Map(),when+12000,baseline)[0];
+ assert.deepEqual(changed.entry.preRegisteredWarnings,e.entry.preRegisteredWarnings);
+ assert.equal(changed.entry.features.initialRiskUsd,100);
+ assert.equal(Object.hasOwn(changed.entry,'grossUsd'),false);
+});
+test('decomposes true gross losses from trades flipped net-negative only by costs',()=>{
+ const e=m.plan(row(),new Map(),when+12000,baseline)[0];
+ const second={...e,tradeKey:'c1a0e628-09cb-4d89-868c-cbb88d6cb7b4'};
+ const third={...e,tradeKey:'e5b6142e-29a6-4c9d-add8-46b97cfdab0d'};
+ const outcome=(key,gross,fee,swap,net)=>({
+  artifact:m.JOURNAL_SOURCE,tradeKey:key,stage:'SETTLED',
+  capturedAt:new Date(when+160000).toISOString(),closeReason:'BROKER_CLOSE',
+  grossUsd:gross,signedCommissionUsd:fee,swapUsd:swap,settledNetUsd:net,
+ });
+ const r=m.summarize([
+  e,outcome(e.tradeKey,8,-15,0,-7),
+  second,outcome(second.tradeKey,-40,-10,0,-50),
+  third,outcome(third.tradeKey,60,-10,-2,48),
+ ],{activatedAt:new Date(when-1000).toISOString(),baselineSha256:'test'},baseline);
+ const x=r.byRoute.CONFIRMED_REVERSAL;
+ assert.equal(x.settled,3);
+ assert.equal(x.economicsSettlementCovered,3);
+ assert.equal(x.economicsMissingOrMismatched,0);
+ assert.equal(x.netUsd,-9);
+ assert.equal(x.grossTradingPnlUsd,28);
+ assert.equal(x.signedCommissionUsd,-35);
+ assert.equal(x.signedSwapUsd,-2);
+ assert.equal(x.totalSignedCostUsd,-37);
+ assert.equal(x.grossProfitableTrades,2);
+ assert.equal(x.grossLossMakingTrades,1);
+ assert.equal(x.grossProfitableButNetLosingTrades,1);
+ assert.equal(x.grossProfitableButNetLosingGrossUsd,8);
+ assert.equal(x.grossProfitableButNetLosingNetUsd,-7);
+ assert.equal(x.grossNegativeTradesNetUsd,-50);
+ assert.equal(x.costsDoNotOverrideFrozenEntryMembership,true);
+ assert.equal(r.byRouteWarning['CONFIRMED_REVERSAL|CR_M5_OPPOSES'].flagged.grossProfitableButNetLosingTrades,1);
+ assert.equal(r.brokerOrders,0);
+});
+test('inconsistent or missing gross commission evidence is UNKNOWN not reconstructed',()=>{
+ const e=m.plan(row(),new Map(),when+12000,baseline)[0];
+ const r=m.summarize([e,{
+  artifact:m.JOURNAL_SOURCE,tradeKey:e.tradeKey,stage:'SETTLED',
+  capturedAt:new Date(when+160000).toISOString(),settledNetUsd:-33,
+  grossUsd:10,signedCommissionUsd:null,swapUsd:0,
+ }],{activatedAt:new Date(when-1000).toISOString(),baselineSha256:'x'},baseline);
+ const x=r.byRoute.CONFIRMED_REVERSAL;
+ assert.equal(x.settled,1);
+ assert.equal(x.economicsSettlementCovered,0);
+ assert.equal(x.economicsMissingOrMismatched,1);
+ assert.equal(x.grossProfitableButNetLosingTrades,0);
+ assert.equal(x.netUsd,-33);
+});

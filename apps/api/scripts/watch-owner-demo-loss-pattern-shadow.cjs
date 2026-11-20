@@ -228,11 +228,40 @@ function summarize(events,marker,baseline){
   const meanR=riskRows.length?riskRows.reduce((a,x)=>
    a+num(x.settled.settledNetUsd)/num(x.entry.entry.features.initialRiskUsd),0)/riskRows.length:null;
   const winNet=sum(winners),lossNet=sum(losers);
+  // Economic attribution is computed only AFTER broker settlement. None of
+  // gross/fee/swap/closeReason feeds the frozen pre-entry warning membership.
+  // All three signed components must exist; do not infer missing charges.
+  const economic=done.filter(x=>{
+   const s=x.settled,g=num(s.grossUsd),c=num(s.signedCommissionUsd),w=num(s.swapUsd),n=num(s.settledNetUsd);
+   return g!==null&&c!==null&&c<=0&&w!==null&&n!==null&&
+    Math.abs((g+c+w)-n)<=0.03;
+  });
+  const grossPositive=economic.filter(x=>num(x.settled.grossUsd)>0);
+  const grossNegative=economic.filter(x=>num(x.settled.grossUsd)<0);
+  const feeFlipped=economic.filter(x=>num(x.settled.grossUsd)>0&&num(x.settled.settledNetUsd)<0);
+  const grossSum=xs=>xs.reduce((s,x)=>s+num(x.settled.grossUsd),0);
+  const signedCosts=economic.reduce((s,x)=>({
+   commission:s.commission+num(x.settled.signedCommissionUsd),
+   swap:s.swap+num(x.settled.swapUsd),
+  }),{commission:0,swap:0});
   return {enrolled:rows.length,settled:done.length,openOrUnsettled:rows.length-done.length,
    wins:winners.length,losses:losers.length,
    winRate:done.length?rnd(winners.length/done.length,4):null,
    winnerNetUsd:winNet,loserNetUsd:lossNet,netUsd:sum(done),
    afterCostProfitFactor:lossNet<0?rnd(winNet/-lossNet,4):null,
+   economicsSettlementCovered:economic.length,
+   economicsMissingOrMismatched:done.length-economic.length,
+   grossTradingPnlUsd:rnd(grossSum(economic),2),
+   signedCommissionUsd:rnd(signedCosts.commission,2),
+   signedSwapUsd:rnd(signedCosts.swap,2),
+   totalSignedCostUsd:rnd(signedCosts.commission+signedCosts.swap,2),
+   grossProfitableTrades:grossPositive.length,
+   grossLossMakingTrades:grossNegative.length,
+   grossProfitableButNetLosingTrades:feeFlipped.length,
+   grossProfitableButNetLosingGrossUsd:rnd(grossSum(feeFlipped),2),
+   grossProfitableButNetLosingNetUsd:sum(feeFlipped),
+   grossNegativeTradesNetUsd:sum(grossNegative),
+   costsDoNotOverrideFrozenEntryMembership:true,
    initialStopRiskCovered:riskRows.length,initialStopRiskMissing:done.length-riskRows.length,
    meanNetR:meanR===null?null:rnd(meanR,4),
    pooledNetPerInitialStopRisk:sumRisk>0?
