@@ -278,3 +278,48 @@ test('inconsistent or missing gross commission evidence is UNKNOWN not reconstru
  assert.equal(x.grossProfitableButNetLosingTrades,0);
  assert.equal(x.netUsd,-33);
 });
+
+test('untouched FX reopening holdout uses entry clock, not a later settlement clock',()=>{
+ const pre=m.plan(row(),new Map(),when+12000,baseline)[0];
+ const reopened='2026-11-22T22:01:00.000Z';
+ const after={...pre,tradeKey:'c1a0e628-09cb-4d89-868c-cbb88d6cb7b4',
+  openedAt:reopened,capturedAt:'2026-11-22T22:01:12.000Z',
+  entry:{...pre.entry,features:{...pre.entry.features,openedAt:reopened,
+   decisionAt:'2026-11-22T22:00:54.000Z'}}};
+ const settle=(tradeKey,pnl)=>({artifact:m.JOURNAL_SOURCE,tradeKey,
+  stage:'SETTLED',capturedAt:'2026-11-23T00:05:00Z',
+  settledNetUsd:pnl,grossUsd:pnl+12,signedCommissionUsd:-12,swapUsd:0});
+ const r=m.summarize([
+  pre,settle(pre.tradeKey,-90),
+  after,settle(after.tradeKey,40),
+ ],{activatedAt:'2026-11-18T21:39:43.892Z',baselineSha256:'x'},baseline);
+ assert.equal(r.futureEntriesEnrolled,2);
+ assert.equal(r.prospectiveUnseenAfterUtc,'2026-11-22T22:00:00.000Z');
+ assert.equal(r.prospectiveUnseen.cohortEnrolled,1);
+ assert.equal(r.prospectiveUnseen.settled,1);
+ assert.deepEqual(r.prospectiveUnseen.independentSettledEntryDays,['2026-11-22']);
+ const h=r.prospectiveUnseen.byOriginalFrozenRouteWarning['CONFIRMED_REVERSAL|CR_M5_OPPOSES'];
+ assert.equal(h.warned.settled,1);
+ assert.equal(h.warned.netUsd,40);
+ assert.equal(h.warned.signedCommissionUsd,-12);
+ assert.deepEqual(h.warnedDistinctSettledDays,['2026-11-22']);
+ assert.equal(h.hypotheticalWinnerNetSacrificedUsd,40);
+ assert.equal(h.eligibleForManualStatisticalReview,false);
+ assert.equal(h.executableVetoEligible,false);
+ assert.equal(r.prospectiveUnseen.noAutoPromotion,true);
+ assert.equal(r.prospectiveUnseen.reviewedNov18To20Excluded,true);
+ assert.equal(r.modifiesExecution,false);
+ assert.equal(r.brokerOrders,0);
+});
+test('future close of a Nov20 trade cannot contaminate the independent holdout',()=>{
+ const pre=m.plan(row(),new Map(),when+12000,baseline)[0];
+ const settlement={artifact:m.JOURNAL_SOURCE,tradeKey:pre.tradeKey,
+  stage:'SETTLED',capturedAt:'2026-11-25T11:11:00Z',
+  settledNetUsd:-100,grossUsd:-90,signedCommissionUsd:-10,swapUsd:0};
+ const r=m.summarize([pre,settlement],
+  {activatedAt:'2026-11-18T21:39:43.892Z',baselineSha256:'x'},baseline);
+ assert.equal(r.byRoute.CONFIRMED_REVERSAL.settled,1);
+ assert.equal(r.prospectiveUnseen.cohortEnrolled,0);
+ assert.equal(r.prospectiveUnseen.settled,0);
+ assert.equal(r.prospectiveUnseen.byOriginalFrozenRouteWarning['CONFIRMED_REVERSAL|CR_M5_OPPOSES'].eligibleForManualStatisticalReview,false);
+});

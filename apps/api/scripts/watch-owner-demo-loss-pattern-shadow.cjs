@@ -14,6 +14,10 @@ const JOURNAL_SOURCE='irexpro-owner-demo-loss-pattern-forward-v1';
 const ROUTES=['EARLY_TRANSITION','CONFIRMED_REVERSAL'];
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CADENCE=12000;
+// Independent holdout begins at the next FX market reopen, strictly AFTER
+// every Nov18-20 owner-reviewed entry and after all 7 warning definitions
+// were already frozen. Do not retune its threshold using discovery outcomes.
+const UNTOUCHED_FORWARD_AFTER='2026-11-22T22:00:00.000Z';
 const MAX_ROWS=1500;
 const SQL=[
  'SELECT t.id::text trade_key,t.broker_connection_id::text broker_connection_id,',
@@ -302,6 +306,39 @@ function summarize(events,marker,baseline){
  }
  for(const reason of ['PROFIT_PROTECTION','AI_CLOSE_SIGNAL','BROKER_CLOSE'])
   byCloseReason[reason]=stats(valid.filter(x=>x.settled?.closeReason===reason));
+ // Immutable shadow validation split: Nov18-20 has already been examined by
+ // the owner and cannot provide unbiased threshold or veto evidence. Only
+ // trades enrolled after the next FX reopening enter the holdout scoreboard.
+ const unseen=valid.filter(x=>date(x.entry.entry.features.openedAt)>=date(UNTOUCHED_FORWARD_AFTER));
+ const unseenSettled=unseen.filter(x=>num(x.settled?.settledNetUsd)!==null);
+ const uniqueDays=rows=>[...new Set(rows.map(x=>x.entry.entry.features.openedAt.slice(0,10)))].sort();
+ const byFrozenWarningUnseen={};
+ for(const route of ROUTES){
+  const scoped=unseen.filter(x=>x.entry.entry.features.route===route);
+  for(const h of HYPOTHESES){
+   const warned=scoped.filter(x=>x.entry.entry.preRegisteredWarnings.includes(h.id));
+   const other=scoped.filter(x=>!x.entry.entry.preRegisteredWarnings.includes(h.id));
+   const wDone=warned.filter(x=>num(x.settled?.settledNetUsd)!==null);
+   const oDone=other.filter(x=>num(x.settled?.settledNetUsd)!==null);
+   const allDays=uniqueDays([...wDone,...oDone]);
+   const eligibleForManualStatisticalReview=allDays.length>=5&&
+    wDone.length>=20&&oDone.length>=30&&
+    uniqueDays(wDone).length>=3&&uniqueDays(oDone).length>=3&&
+    stats(wDone).economicsSettlementCovered===wDone.length&&
+    stats(oDone).economicsSettlementCovered===oDone.length;
+   byFrozenWarningUnseen[route+'|'+h.id]={
+    frozenBeforeHoldout:true,entryCohortOpensAfterUtc:UNTOUCHED_FORWARD_AFTER,
+    warned:stats(warned),unwarned:stats(other),
+    warnedDistinctSettledDays:uniqueDays(wDone),
+    unwarnedDistinctSettledDays:uniqueDays(oDone),
+    allDistinctSettledDays:allDays,
+    hypotheticalWinnerNetSacrificedUsd:stats(wDone).winnerNetUsd,
+    hypotheticalLosingNetAvoidedUsd:-stats(wDone).loserNetUsd,
+    eligibleForManualStatisticalReview,
+    executableVetoEligible:false,autoEnableVeto:false,
+   };
+  }
+ }
  const settled=valid.filter(x=>num(x.settled?.settledNetUsd)!==null);
  const days=[...new Set(settled.map(x=>x.entry.entry.features.openedAt.slice(0,10)))];
  const profitGivebacks=settled.filter(x=>x.settled.settledNetUsd<0&&
@@ -320,6 +357,18 @@ function summarize(events,marker,baseline){
   confirmedPeak025REvents:peak025,confirmedPeak050REvents:peak050,
   futureSettledProfitGaveBackToLoss:profitGivebacks.length,
   byRoute,byWarning,byRouteInstrument,byRouteWarning,byCloseReason,
+  prospectiveUnseenAfterUtc:UNTOUCHED_FORWARD_AFTER,
+  prospectiveUnseen:{
+   cohortEnrolled:unseen.length,settled:unseenSettled.length,
+   independentSettledEntryDays:uniqueDays(unseenSettled),
+   asOfNowBeforeStart:Date.now()<date(UNTOUCHED_FORWARD_AFTER),
+   byOriginalFrozenRouteWarning:byFrozenWarningUnseen,
+   noExecutionAuthority:true,noAutoPromotion:true,
+   reviewedNov18To20Excluded:true,
+   warningDefinitionsOriginallyFrozenWithActivation:true,
+   entryBasedCutoffNotSettlementBased:true,
+   minimumReviewCriteria:'at least 5 entry days, 20 flagged/30 unflagged broker-net settled fills, 3 days per side, full signed fees and no backfilled entry captures',
+  },
   riskNormalization:'BROKER_NET_DIVIDED_BY_FROZEN_PRE_FILL_ALLOCATION_RISK_DENOMINATOR; FALLBACK_RISK_AMOUNT_MAY_NOT_EQUAL_ACTUAL_STOP_RISK',
   frozenWarningMembershipUnchanged:true,
   qualification:'NOT_QUALIFIED_TO_MODIFY_EXECUTION',
