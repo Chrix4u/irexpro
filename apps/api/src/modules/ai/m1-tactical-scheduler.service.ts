@@ -3196,9 +3196,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       brokerMarketContext.connectionId === brokerConnectionId &&
       Number.isFinite(features.latestM1OpenTime.getTime()) &&
       features.latestM1OpenTime.getTime() + 60_000 <= decisionTime.getTime();
+    // The scanner's authoritative owner binding is the validated, trimmed
+    // vpsForexScanner.userId config used by runOnce(), not an independent raw
+    // environment-key lookup (which may be absent in a nested ConfigService).
+    // A mismatched broker account still receives MODEL_SCOPE_MISMATCH from
+    // the immutable model's connection fingerprint; this is research ONLY.
     const ownerDemoEntryOutcomeShadow =
       professionalDemoPhase && observedBrokerCandles &&
-      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId &&
+      this.userId() === userId &&
       multimodelDemo
         ? scoreOwnerDemoEntryOutcome({
             brokerConnectionId,

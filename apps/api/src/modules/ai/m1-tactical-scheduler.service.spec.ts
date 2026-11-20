@@ -1591,6 +1591,7 @@ async function driveFeatures(
     eventRisk?: 'CLEAR' | 'HIGH_IMPACT_BLOCK' | 'UNVERIFIED';
     spreadEvidence?: any;
     brokerConnectionId?: string;
+    brokerMarketContext?: M1TacticalMarketSnapshot;
   } = {},
 ) {
   const [buy, sell] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V2);
@@ -1613,6 +1614,9 @@ async function driveFeatures(
         }
       : options.spreadEvidence,
     features.decisionTime,
+    undefined,
+    undefined,
+    options.brokerMarketContext,
   );
   return route;
 }
@@ -5928,5 +5932,49 @@ describe('M1 V8 multi-model DEMO authority', () => {
 
     expect(h.receiveSignal).toHaveBeenCalledTimes(1);
     expect(h.trainedExpertEvaluate).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('Owner DEMO after-fee entry scoring wiring', () => {
+  it('records a research model status using the authoritative scanner owner binding, without changing order permission', async () => {
+    // phase2Harness deliberately omits the raw VPS_FOREX_SCANNER_USER_ID
+    // key in this configuration, but contains vpsForexScanner.userId.
+    const h = phase2Harness({
+      rollout: M1_TACTICAL_ROLLOUT_POLICY_V8,
+      session: {
+        id: 'owner-entry-shadow-test-session',
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'demo-conn-2',
+      },
+    });
+    const features = {
+      ...cleanContinuationFeatures(),
+      decisionTime: new Date('2026-11-20T01:00:00Z'),
+      latestM1OpenTime: new Date('2026-11-20T00:59:00Z'),
+    };
+    const brokerContext = {
+      ...snapshot('EURUSD', features.decisionTime),
+      connectionId: 'demo-conn-2',
+      marketDataAuthority: 'BROKER_NATIVE' as const,
+    };
+    await driveFeatures(h, features, {
+      brokerConnectionId: 'demo-conn-2',
+      brokerMarketContext: brokerContext,
+    });
+    const record = h.recordDecision.mock.calls.find(([value]) =>
+      value.direction === 'BUY')?.[0];
+    expect(record).toBeDefined();
+    expect(record?.governance?.ownerDemoPreEntryCandleSnapshot?.source)
+      .toBe('metaapi-rpc-sampled');
+    // The synthetic connection is not the owner DEMO training account;
+    // it MUST be scored as mismatched, never granted model authority.
+    expect(record?.governance?.ownerDemoEntryOutcomeShadow).toMatchObject({
+      status: 'MODEL_SCOPE_MISMATCH',
+      shadowOnly: true,
+      modifiesExecution: false,
+      grantsTradeAuthority: false,
+      vetoRecommended: false,
+    });
   });
 });
