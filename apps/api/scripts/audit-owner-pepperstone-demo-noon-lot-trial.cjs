@@ -37,6 +37,37 @@ const QUERY=[
 ].join(' ');
 const num=x=>x==null||x===''?null:Number.isFinite(Number(x))?Number(x):null;
 const rnd=x=>Number(x.toFixed(2));
+// Descriptive after-fee economics from settled broker fills, never from requests.
+// Do not turn these same-session, outcome-selected groups into a sizing rule.
+function economicSummary(settlements){
+ const wins=settlements.filter(t=>t.net>0),losses=settlements.filter(t=>t.net<0);
+ const sum=(ts,key)=>ts.reduce((n,t)=>n+t[key],0);
+ const gain=sum(wins,'net'),loss=sum(losses,'net');
+ const avgGain=wins.length?gain/wins.length:null;
+ const avgLoss=losses.length?-loss/losses.length:null;
+ const lots=sum(settlements,'lot');
+ return {
+  settled:settlements.length,wins:wins.length,losses:losses.length,
+  flat:settlements.length-wins.length-losses.length,
+  winRate:settlements.length?Number((wins.length/settlements.length).toFixed(4)):null,
+  netUsd:rnd(sum(settlements,'net')),netWinningUsd:rnd(gain),netLosingUsd:rnd(loss),
+  grossBrokerPnlUsd:rnd(sum(settlements,'gross')),
+  commissionUsd:rnd(sum(settlements,'commission')),swapUsd:rnd(sum(settlements,'swap')),
+  averageWinnerUsd:avgGain==null?null:rnd(avgGain),
+  averageLoserUsd:avgLoss==null?null:rnd(-avgLoss),
+  profitFactor:loss<0?Number((gain/-loss).toFixed(4)):null,
+  breakEvenWinRateAtObservedPayoffs:avgGain!=null&&avgLoss!=null&&avgGain+avgLoss>0
+    ?Number((avgLoss/(avgGain+avgLoss)).toFixed(4)):null,
+  settledLotTotal:rnd(lots),
+  netUsdPerSettledLot:lots>0?rnd(sum(settlements,'net')/lots):null,
+ };
+}
+function groupSettlements(rows,key){
+ const grouped={};
+ for(const t of rows)(grouped[key(t)]??=[]).push(t);
+ return Object.fromEntries(Object.entries(grouped).sort(([a],[b])=>a.localeCompare(b))
+   .map(([k,v])=>[k,economicSummary(v)]));
+}
 function summarize(rows,now=new Date()){
  const current=now.getTime(),start=Date.parse(BEGIN),end=Date.parse(END);
  if(!Number.isFinite(current))throw Error('INVALID_CLOCK');
@@ -52,9 +83,11 @@ function summarize(rows,now=new Date()){
   requestedFourLotsOrMore:0,requestedBelowFourLots:0,
   unfilled:0,unreconciled:0,stillOpen:0,
   settled:0,settledWins:0,settledLosses:0,settledFlat:0,
-  brokerNetUsdSettled:0,commissionUsdSettled:0,actualLotTotal:0,
+  brokerNetUsdSettled:0,commissionUsdSettled:0,swapUsdSettled:0,
+  grossBrokerPnlUsdSettled:0,actualLotTotal:0,settledLotTotal:0,
   highestFilledLots:null,highestRequestedLots:null,
-  byStrategy:{},byInstrument:{},
+  byStrategy:{},byInstrument:{},byLotBucket:{},byStrategyInstrument:{},
+  economics:null,
   latest:[],
   notes:[
    'Only independently matched broker trades are considered filled; requested lots are not executions.',
@@ -64,6 +97,7 @@ function summarize(rows,now=new Date()){
    'Open positions created during the trial can remain open after the request-window ends; expiration controls NEW high-lot requests.',
   ]
  };
+ const settledDetails=[];
  for(const r of rows){
   const opened=new Date(r.created_at).getTime();
   if(!Number.isFinite(opened)||opened<start||opened>=end)throw Error('OUTSIDE_TRIAL_WINDOW');
@@ -95,6 +129,12 @@ function summarize(rows,now=new Date()){
    report.settled++;
    report.brokerNetUsdSettled+=net;
    report.commissionUsdSettled+=netParts[1];
+   report.swapUsdSettled+=netParts[2];
+   report.grossBrokerPnlUsdSettled+=netParts[0];
+   report.settledLotTotal+=lot;
+   settledDetails.push({route:String(r.strategy_route||'UNKNOWN'),
+    instrument:String(r.instrument||'UNKNOWN'),lot,net,
+    gross:netParts[0],commission:netParts[1],swap:netParts[2]});
    if(net>0)report.settledWins++;
    else if(net<0)report.settledLosses++;
    else report.settledFlat++;
@@ -111,10 +151,25 @@ function summarize(rows,now=new Date()){
  report.actualLotTotal=rnd(report.actualLotTotal);
  report.brokerNetUsdSettled=rnd(report.brokerNetUsdSettled);
  report.commissionUsdSettled=rnd(report.commissionUsdSettled);
+ report.swapUsdSettled=rnd(report.swapUsdSettled);
+ report.grossBrokerPnlUsdSettled=rnd(report.grossBrokerPnlUsdSettled);
+ report.settledLotTotal=rnd(report.settledLotTotal);
  report.averageActualFilledLots=report.filled?rnd(report.actualLotTotal/report.filled):null;
- for(const group of [...Object.values(report.byStrategy),...Object.values(report.byInstrument)]){
+ report.economics=economicSummary(settledDetails);
+ const strategyEconomics=groupSettlements(settledDetails,t=>t.route);
+ const instrumentEconomics=groupSettlements(settledDetails,t=>t.instrument);
+ for(const [key,group] of Object.entries(report.byStrategy)){
   group.netUsd=rnd(group.netUsd);
+  group.economics=strategyEconomics[key]??economicSummary([]);
  }
+ for(const [key,group] of Object.entries(report.byInstrument)){
+  group.netUsd=rnd(group.netUsd);
+  group.economics=instrumentEconomics[key]??economicSummary([]);
+ }
+ report.byLotBucket=groupSettlements(settledDetails,t=>t.lot>=4?'ACTUAL_FOUR_PLUS':'ACTUAL_BELOW_FOUR');
+ report.byStrategyInstrument=groupSettlements(settledDetails,t=>t.route+'|'+t.instrument);
+ report.notes.push('Net USD per settled lot is a descriptive filled-volume ratio, not risk-normalized return or a sizing recommendation.');
+ report.notes.push('Break-even win rate uses only observed winning/losing payoff magnitudes; same-day groups are NOT independent forecasts.');
  report.latest=report.latest.slice(-20).reverse();
  return report;
 }
