@@ -384,6 +384,18 @@ async function main(){
   const {run:refreshAsOfExitWarnings}=require('./audit-owner-demo-asof-exit-warning-lineage.cjs');
   await refreshAsOfExitWarnings();
  }catch(e){console.error('OWNER_ASOF_EXIT_WARNING_RESEARCH_FAILED',String(e.message).slice(0,180))}
+ // A heavier historical pre-entry contradiction replay uses original intent
+ // timestamps and the sampled broker quote archives. Refresh at MOST once
+ // per three hours so the VPS/AI executor is not burdened every 30 minutes.
+ // Never affect admission, signal generation, risk or broker orders.
+ try{
+  const filename=ROOT+'/entry-formation/latest-preentry-contradiction-cohorts.json';
+  const age=fs.existsSync(filename)?Date.now()-fs.statSync(filename).mtimeMs:Infinity;
+  if(age>=3*60*60*1000){
+   const {run:refreshPreentryContradiction}=require('./audit-owner-demo-preentry-contradiction-cohorts.cjs');
+   await refreshPreentryContradiction();
+  }
+ }catch(e){console.error('OWNER_PREENTRY_CONTRADICTION_RESEARCH_FAILED',String(e.message).slice(0,180))}
  console.log('GUARD_POSTEXIT_SHADOW '+JSON.stringify({asOf:report.asOf,
   fromUtc,closed:report.aggregate.validBrokerSettlements,
   actualNetUsd:report.aggregate.realizedGuardExitNetUsd,
