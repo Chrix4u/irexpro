@@ -43,6 +43,39 @@ function groupStatus(records){
  }
  return groups;
 }
+function groupRouteAndObservedPath(records){
+ // This is POST-entry explanatory evidence, never a pre-intent feature or order gate.
+ const report={};
+ for(const m of [1,3,5,10,20,30]){
+  const groups={};
+  for(const r of records){
+   const mark=r.stages.get('MARK_'+m+'M');
+   const o=mark?.observation;
+   if(o?.status!=='SAMPLED_MARK_ONLY'||o.afterActualExit!==false||
+     mark.actualTradeWasClosedBeforeMarketMark===true)continue;
+   const pips=num(o.alignedPipsFromBrokerEntry);
+   const net=num(r.settled?.settledNetUsd);
+   if(pips===null||net===null)continue;
+   const path=pips>0?'FAVORABLE':pips<0?'ADVERSE':'FLAT';
+   const route=String(r.entry.route||'UNVERIFIED');
+   const key=route+'|'+path;
+   const group=groups[key]??={route,path,trades:0,netWinners:0,
+    netLosers:0,settledNetUsd:0,averageObservedPips:0};
+   group.trades++;
+   if(net>0)group.netWinners++;
+   if(net<0)group.netLosers++;
+   group.settledNetUsd+=net;
+   group.averageObservedPips+=pips;
+  }
+  for(const g of Object.values(groups)){
+   g.settledNetUsd=round(g.settledNetUsd,2);
+   g.averageObservedPips=round(g.averageObservedPips/g.trades,3);
+   g.settledWinRate=round(g.netWinners/g.trades,4);
+  }
+  report[m+'m']=groups;
+ }
+ return report;
+}
 function summarize(events,marker,now=Date.now()){
  const ids=new Map(),errors=[];
  let ignored=0,dup=0;
@@ -121,6 +154,9 @@ function summarize(events,marker,now=Date.now()){
   settledTrades:settled.length,settledNetUsd:round(outcome,2),
   byOriginalEntryRoute:byRoute,byFrozen60sDecision:byGroup,
   byMarketObservationHorizon:horizons,
+  byOriginalRouteAndObservedPath:groupRouteAndObservedPath(records),
+  observedPathIsPostEntryOnly:true,
+  observedPathCannotBeUsedAsPreEntryFeature:true,
   prospectiveQualification:'NOT_QUALIFIED',
   provisionalDataRequirement:'SEVERAL_INDEPENDENT_FUTURE_DATES_WITH_MATCHED_SETTLEMENTS',
   interpretation:[
@@ -167,7 +203,7 @@ function writeSummary(root,now=Date.now()){
  fs.renameSync(temp,filename);
  return report;
 }
-module.exports={ROOT,REPORT,ARTIFACT,SOURCE,groupStatus,summarize,
+module.exports={ROOT,REPORT,ARTIFACT,SOURCE,groupStatus,groupRouteAndObservedPath,summarize,
  readJournal,writeSummary};
 if(require.main===module){
  try{

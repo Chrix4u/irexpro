@@ -58,6 +58,23 @@ test('frozen pre-entry checkpoint groups only ACTUAL original settled P&L',()=>{
  assert.equal(r.byMarketObservationHorizon['20m'].stagesObserved,0);
  assert.equal(r.byMarketObservationHorizon['30m'].stagesObserved,0);
 });
+test('strategy-specific early adverse paths compare actual settled outcomes, never future entry features',()=>{
+ const id='a617d643-4d4c-4ad7-a467-11f517d11e37';
+ const adverse={...mark(false,id),observation:{
+  ...mark(false,id).observation,alignedPipsFromBrokerEntry:-2.2}};
+ const report=summarize([entry(),mark(),settled(30),
+  {...entry(id),route:'CONFIRMED_REVERSAL'},adverse,settled(-60,id)],
+  marker,Date.parse('2026-11-18T14:09:00Z'));
+ const g=report.byOriginalRouteAndObservedPath['3m'];
+ assert.equal(g['EARLY_TRANSITION|FAVORABLE'].settledNetUsd,30);
+ assert.equal(g['CONFIRMED_REVERSAL|ADVERSE'].settledNetUsd,-60);
+ assert.equal(g['CONFIRMED_REVERSAL|ADVERSE'].averageObservedPips,-2.2);
+ assert.equal(report.observedPathIsPostEntryOnly,true);
+ assert.equal(report.observedPathCannotBeUsedAsPreEntryFeature,true);
+ const censored=summarize([entry(),mark(true),settled()],
+  marker,Date.parse('2026-11-18T14:09:00Z'));
+ assert.equal(Object.keys(censored.byOriginalRouteAndObservedPath['3m']).length,0);
+});
 test('after-close quote marks stay censored from within-position outcome',()=>{
  const r=summarize([entry(),checkpoint(),mark(true),settled()],marker,Date.parse('2026-11-18T14:09:00Z'));
  assert.equal(r.byMarketObservationHorizon['3m'].afterOriginalPositionClosedCensored,1);

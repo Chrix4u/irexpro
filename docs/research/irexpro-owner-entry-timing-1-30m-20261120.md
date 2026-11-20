@@ -35,3 +35,10 @@ The primary model proposes direction; a second timing meta-model recommends `ENT
 
 ## Tests
 `node --test apps/api/scripts/collect-owner-demo-prospective-entry-timing.test.cjs apps/api/scripts/audit-owner-demo-prospective-entry-outcomes.test.cjs apps/api/scripts/owner-demo-entry-timing-checkpoint-shadow.test.cjs`
+
+## First outcome comparison (post-entry evidence only)
+Among settled CONFIRMED_REVERSAL trades with a valid +3m mark while the original position was still open:
+- Favorable +3m mark: 9 trades, 7 net winners, +$81.83 net.
+- Adverse +3m mark: 33 trades, 12 net winners, -$844.57 net.
+Meanwhile EARLY_TRANSITION adverse +3m: 5 trades, 4 net winners and +$13.33 net.
+The reporter now persists these separated route / observed-path / realized-outcome cohorts for every checked horizon. This is **explanatory only**, contains post-open information, and cannot be used directly as a causal signal for the original trade.
