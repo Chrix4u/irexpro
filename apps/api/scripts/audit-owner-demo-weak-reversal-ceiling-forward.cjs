@@ -6,6 +6,8 @@
  * No account API, no broker write, no trading changes, no counterfactual fills.
  */
 const fs=require('node:fs'),path=require('node:path');
+const confluence=require('./owner-demo-preentry-fee-conflict-shadow.cjs');
+const frozenEntry=require('./owner-demo-preentry-fee-conflict-shadow-state.cjs');
 const ARTIFACT='owner-demo-weak-reversal-ceiling-prospective-broker-outcomes-v1';
 const RULE='owner-pepperstone-demo-weak-reversal-seven-lot-ceiling-v1';
 const ACTIVATED_AT='2026-11-20T17:37:18.000Z'; // Verified API activation.
@@ -30,11 +32,36 @@ const SQL=[
  "ti.metadata->>'m1_owner_demo_weak_reversal_ceiling_loss_warning' AS cap_loss_warning,",
  "ti.metadata->>'m1_advisory_quality_risk_fraction' AS quality_fraction,",
  "ti.metadata->>'m1_owner_demo_ongoing_seven_lot_artifact' AS seven_lot_artifact,",
- "ti.metadata->>'m1_pepperstone_demo_pre_screen_lot_cap' AS broker_prescreen_cap",
+ "ti.metadata->>'m1_pepperstone_demo_pre_screen_lot_cap' AS broker_prescreen_cap,",
+ 'e.m1_decision_at,e.m1_decision_created_at,e.m1_entry_route,',
+ 'e.trained_expert_state,e.fee_shadow_reason,',
+ 'e.fee_shadow_sample_count,e.fee_shadow_after_fee_expected_r,',
+ 'e.fee_shadow_minimum_after_fee_r,',
+ 'e.model_loss_brake_active,e.model_loss_brake_negative_payoff,',
+ 'e.model_loss_brake_payoff_closed_trades,e.model_loss_brake_recent_closed_trades,',
+ 'e.aligned_h1_at_entry,e.aligned_m5_at_entry',
  'FROM trading.trades t',
  'JOIN trading.trade_intents ti ON ti.id=t.trade_intent_id AND ti.user_id=t.user_id',
  'AND ti.broker_connection_id=t.broker_connection_id',
  'JOIN broker.broker_connections b ON b.id=t.broker_connection_id AND b.user_id=t.user_id',
+ 'LEFT JOIN LATERAL (SELECT z.evaluated_at AS m1_decision_at,',
+ 'z.created_at AS m1_decision_created_at,z.route AS m1_entry_route,',
+ "z.governance->'multimodelTrainedExpert'->>'state' AS trained_expert_state,",
+ "z.governance->'demoBrokerCommissionGate'->>'shadowReason' AS fee_shadow_reason,",
+ "z.governance->'demoBrokerCommissionGate'->>'sampleCount' AS fee_shadow_sample_count,",
+ "z.governance->'demoBrokerCommissionGate'->>'shadowAfterFeeExpectedR' AS fee_shadow_after_fee_expected_r,",
+ "z.governance->'demoBrokerCommissionGate'->>'minimumAfterFeeR' AS fee_shadow_minimum_after_fee_r,",
+ "z.governance->'multimodelLossStreakBrake'->>'active' AS model_loss_brake_active,",
+ "z.governance->'multimodelLossStreakBrake'->>'negativePayoff' AS model_loss_brake_negative_payoff,",
+ "z.governance->'multimodelLossStreakBrake'->>'payoffClosedTrades' AS model_loss_brake_payoff_closed_trades,",
+ "z.governance->'multimodelLossStreakBrake'->>'recentClosedTrades' AS model_loss_brake_recent_closed_trades,",
+ "z.candidate->>'alignedH1' AS aligned_h1_at_entry,",
+ "z.candidate->>'alignedM5' AS aligned_m5_at_entry",
+ 'FROM trading.m1_tactical_decisions z',
+ 'WHERE z.trade_intent_id=ti.id AND z.user_id=t.user_id',
+ 'AND z.broker_connection_id=t.broker_connection_id',
+ 'AND z.created_at<=t.opened_at AND z.evaluated_at<=t.opened_at',
+ 'ORDER BY z.evaluated_at DESC,z.id DESC LIMIT 1) e ON TRUE',
  "WHERE t.user_id=$1 AND t.broker_connection_id=$2",
  "AND b.broker_id='pepperstone-ctrader' AND b.account_type='DEMO'",
  "AND b.account_currency='USD' AND b.deleted_at IS NULL",
@@ -213,6 +240,10 @@ async function run(){
   connectionTimeoutMillis:6000,statement_timeout:15000,
   application_name:'irexpro-owner-weak-reversal-forward-only-READONLY'});
  const now=new Date();let rows;
+ // Freeze hypothesis activation BEFORE reading newly opened trades. New
+ // observations cannot inherit known outcomes or old history from before
+ // this independent rule existed.
+ const activation=frozenEntry.setup(OUT,owner,conn,now);
  await db.connect();
  try{await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   rows=(await db.query(SQL,[owner,conn,ACTIVATED_AT,now.toISOString()])).rows;
@@ -221,6 +252,20 @@ async function run(){
  }catch(e){await db.query('ROLLBACK').catch(()=>{});throw e}
  finally{await db.end()}
  const result=analyze(rows,now);
+ // Monotonic immutable first-OPEN observations. Any trade first seen after
+ // closure is marked missed, NOT retrospectively scored as a warning.
+ const previous=frozenEntry.load(OUT,activation);
+ const newlyFrozen=frozenEntry.freeze(rows,previous,activation,now);
+ if(newlyFrozen.newCaptures)frozenEntry.save(OUT,newlyFrozen.state);
+ const observations=newlyFrozen.state.observations;
+ result.preEntryConfluenceShadow=confluence.summarize(
+  result.inspectedTradeOutcomes,observations,activation.activatedAt);
+ result.preEntryConfluenceFrozenActivation=activation.activatedAt;
+ result.preEntryConfluenceNewlyObservedThisTick=newlyFrozen.newCaptures;
+ for(const position of result.inspectedTradeOutcomes){
+  if(Date.parse(position.openedAt)>=Date.parse(activation.activatedAt))
+   position.preEntryConfluenceFrozen=observations[position.tradeId]||null;
+ }
  fs.mkdirSync(OUT,{recursive:true,mode:0o700});
  const temporary=path.join(OUT,'latest-report.json.tmp-'+process.pid);
  const destination=path.join(OUT,'latest-report.json');

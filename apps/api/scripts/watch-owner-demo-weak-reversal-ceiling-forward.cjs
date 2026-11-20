@@ -17,6 +17,11 @@ async function tick() {
    cappedBookedNetUsd:report.byGroup.weakConfirmedReversalCapped.bookedNetUsd,
    uncappedConfirmedSettled:report.byGroup.confirmedReversalUnchanged.settled,
    censoredOpen:report.all.openPositions,
+   shadowEligibleSince:report.preEntryConfluenceFrozenActivation||null,
+   shadowFlagged:report.preEntryConfluenceShadow?.flagged?.trades||0,
+   shadowWarnedActualWinners:report.preEntryConfluenceShadow?.flagged?.winners||0,
+   shadowWarnedActualLosers:report.preEntryConfluenceShadow?.flagged?.losers||0,
+   shadowMissedFastCloses:report.preEntryConfluenceShadow?.closedBeforeFirstOpenSnapshot||0,
    source:'BROKER_SETTLED_ONLY',
   };
   if(JSON.stringify(snapshot)!==JSON.stringify(last)){
