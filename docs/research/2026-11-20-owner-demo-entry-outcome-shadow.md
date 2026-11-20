@@ -103,3 +103,39 @@ unfilled candidates to surface selection bias; those are never broker
 profits. Refit cautiously on newly resolved data only after the prior
 model's prospective results are recorded. No shadow observation can
 authorize a LIVE broker order.
+
+## November 20 live deployment verification — owner binding regression
+
+The after-fee model's initial deployment was storing
+`ownerDemoPreEntryCandleSnapshot` but writing JSON null for every
+`ownerDemoEntryOutcomeShadow`: the scorer was not being called. The
+scanner consumes the normalized `vpsForexScanner.userId` configuration
+while the new scoring condition used a separate raw environment-key
+lookup. The owner-scoped SHADOW condition was corrected to reuse the
+exact scanner owner binding via `this.userId() === userId`. The
+immutable broker-connection fingerprint remains a separate independent
+account-isolation check inside the scorer.
+
+Verification against the live Pepperstone USD DEMO staging database after
+API restart: by 00:29 UTC, 9 recent post-restart decisions persisted
+**non-null** `ownerDemoEntryOutcomeShadow` objects; 0 recorded
+`MODEL_SCOPE_MISMATCH`. All 9 were Plan B
+`TREND_CONTINUATION`, which correctly returned
+`INSUFFICIENT_ROUTE_TRAINING` rather than fabricating a calibrated
+win probability: the training epoch had only ONE Continuation sample.
+Fitted probabilities apply to Confirmed Reversal and Early Transition
+only when those original routes recur.
+
+The existing prospective scoreboard had one settled USD DEMO trade
+opened on Nov 20 before this correction was live and appropriately
+listed it as **missing/unverified pre-order score**, not a retroactively
+backfilled prediction. Never treat such a missing-score trade as valid
+model performance.
+
+Checks: focused scheduler owner-scope integration test PASSED; 6
+trainer/scoreboard research tests PASSED; full API build PASSED; PM2
+API restart and HTTP 200 health confirmed, with zero unstable restarts.
+The scorer is synchronous and never awaited on the broker order path;
+no order/admission/risk/SL/TP/lot policy is changed by this patch.
+
+Deployment commit: `1b34aa20`.
