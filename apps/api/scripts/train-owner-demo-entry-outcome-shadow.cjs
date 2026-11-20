@@ -10,6 +10,7 @@ const path=require('node:path'),fs=require('node:fs'),crypto=require('node:crypt
 require('ts-node/register/transpile-only');
 const {
  ENTRY_OUTCOME_FEATURES,encodeEntryOutcomeFeatures,entryOutcomeWinProbability,
+ fingerprintOwnerDemoEntryBroker,
 }=require('../src/modules/ai/owner-demo-entry-outcome-shadow.ts');
 const {
  SQL,normalize
@@ -97,7 +98,9 @@ function validation(rows,model,training){
  };
  return output;
 }
-function buildTrainingResult(records){
+function buildTrainingResult(records,brokerConnectionFingerprint){
+ if(typeof brokerConnectionFingerprint!=='string'||brokerConnectionFingerprint.length!==64)
+  throw Error('BROKER_CONNECTION_FINGERPRINT_REQUIRED');
  const valid=records.filter(x=>x.matchedDecision&&['WIN','LOSS'].includes(x.label))
   .map(x=>({...x,features:vector(x)}))
   .filter(x=>x.features!=null);
@@ -120,6 +123,7 @@ function buildTrainingResult(records){
   artifact:'owner-demo-after-fee-entry-discriminator-v1',
   trainingCutoffUtc:TRAIN_END,
   source:'EXACT_OWNER_BROKER_SETTLED_AFTER_FEE_FILLS',
+  brokerConnectionFingerprint,
   status:'RESEARCH_ONLY',routes,
  };
  return {artifact,report,
@@ -152,16 +156,27 @@ async function main(){
   ssl:process.env.DB_SSL==='true'?{rejectUnauthorized:false}:undefined,
   connectionTimeoutMillis:7500,statement_timeout:22000});
  await db.connect();
- let records=[];
+ let records=[];let verifiedBrokerConnectionId=null;
  try {
   await db.query('BEGIN READ ONLY');
   const result=await db.query(SQL,[owner,'pepperstone-ctrader',
     '2026-11-17T00:00:00Z','2026-11-20T00:00:00Z']);
   if(result.rows.length>800)throw Error('SOURCE_TRUNCATED');
   records=result.rows.map(normalize);
+  const brokerConnections=(await db.query([
+   'SELECT DISTINCT t.broker_connection_id FROM trading.trades t',
+   'JOIN broker.broker_connections b ON b.id=t.broker_connection_id',
+   'AND b.user_id=t.user_id',
+   "WHERE t.user_id=$1 AND b.broker_id='pepperstone-ctrader'",
+   "AND b.account_type='DEMO' AND b.account_currency='USD'",
+   "AND t.status='CLOSED' AND t.opened_at >= $2::timestamptz",
+   'AND t.opened_at < $3::timestamptz',
+  ].join(' '),[owner,'2026-11-17T00:00:00Z','2026-11-20T00:00:00Z'])).rows;
+  if(brokerConnections.length!==1)throw Error('TRAINING_ACCOUNT_NOT_UNIQUE');
+  verifiedBrokerConnectionId=brokerConnections[0].broker_connection_id;
   await db.query('ROLLBACK');
  } finally {await db.end()}
- const built=buildTrainingResult(records);
+ const built=buildTrainingResult(records,fingerprintOwnerDemoEntryBroker(verifiedBrokerConnectionId));
  if(built.population.training.count<40||built.population.later.count<20)
   throw Error('LACKS_TRAIN_AND_LATER_DAY_COVERAGE');
  const oldExists=fs.existsSync(GENERATED);

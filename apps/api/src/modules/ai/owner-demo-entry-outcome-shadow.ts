@@ -3,6 +3,7 @@
  * on actual closed after-fee trades. SHADOW ONLY: no broker authority.
  * A fitted win probability is not the probability of a profitable live fill.
  */
+import { createHash } from 'node:crypto';
 import { OWNER_DEMO_ENTRY_OUTCOME_FITTED } from './owner-demo-entry-outcome-model.generated';
 
 export const OWNER_DEMO_ENTRY_OUTCOME_ARTIFACT =
@@ -40,6 +41,7 @@ export interface FittedEntryOutcomeArtifact {
   artifact: typeof OWNER_DEMO_ENTRY_OUTCOME_ARTIFACT;
   trainingCutoffUtc: string;
   source: 'EXACT_OWNER_BROKER_SETTLED_AFTER_FEE_FILLS';
+  brokerConnectionFingerprint: string;
   status: 'RESEARCH_ONLY';
   routes: Partial<Record<EntryOutcomeRoute, FittedEntryOutcomeRoute>>;
 }
@@ -50,7 +52,8 @@ export interface EntryOutcomeObservation {
   grantsTradeAuthority: false;
   vetoRecommended: false;
   status: 'FITTED_SHADOW_UNQUALIFIED' | 'INSUFFICIENT_ROUTE_TRAINING' |
-    'INVALID_ENTRY_FEATURES' | 'TRAINING_NOT_CAUSAL' | 'MODEL_UNAVAILABLE';
+    'INVALID_ENTRY_FEATURES' | 'TRAINING_NOT_CAUSAL' | 'MODEL_UNAVAILABLE' |
+    'MODEL_SCOPE_MISMATCH';
   route: EntryOutcomeRoute | null;
   probabilityOfAfterFeeWinningTrade: number | null;
   probabilityOfAfterFeeLosingTrade: number | null;
@@ -62,6 +65,12 @@ export interface EntryOutcomeObservation {
   source: 'HISTORICAL_EXECUTED_FILLS_NOT_ALL_CANDIDATES';
   /** Original, frozen decision-time evidence, never post-close P&L. */
   features: EntryOutcomeVector | null;
+}
+/** Irreversible, context-separated UUID fingerprint; NEVER stores raw broker ID. */
+export function fingerprintOwnerDemoEntryBroker(connectionId: string): string {
+  return createHash('sha256')
+    .update('irexpro-owner-demo-entry-outcome-v1|' + connectionId.trim())
+    .digest('hex');
 }
 function finite(x: unknown): number | null {
   if (x === null || x === undefined || x === '') return null;
@@ -104,6 +113,7 @@ export function entryOutcomeWinProbability(
   return linear==null?null:1/(1+Math.exp(-clip(linear,-30,30)));
 }
 export function scoreOwnerDemoEntryOutcome(input: {
+  brokerConnectionId: string;
   route: EntryOutcomeRoute | null;
   evaluatedAt: Date;
   featureValues: Partial<Record<EntryOutcomeFeature,unknown>>;
@@ -130,6 +140,9 @@ export function scoreOwnerDemoEntryOutcome(input: {
   if(!features)return {...base,status:'INVALID_ENTRY_FEATURES'};
   if(!fitted||fitted.artifact!==OWNER_DEMO_ENTRY_OUTCOME_ARTIFACT ||
       fitted.status!=='RESEARCH_ONLY')return base;
+  if(!input.brokerConnectionId || !fitted.brokerConnectionFingerprint ||
+      fingerprintOwnerDemoEntryBroker(input.brokerConnectionId)!==fitted.brokerConnectionFingerprint)
+    return {...base,status:'MODEL_SCOPE_MISMATCH'};
   if(!Number.isFinite(input.evaluatedAt.getTime())||
     input.evaluatedAt.getTime()<=new Date(fitted.trainingCutoffUtc).getTime())
     return {...base,status:'TRAINING_NOT_CAUSAL'};

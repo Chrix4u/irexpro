@@ -5,6 +5,7 @@ export const OWNER_DEMO_ENTRY_OUTCOME_FITTED: FittedEntryOutcomeArtifact =
   "artifact": "owner-demo-after-fee-entry-discriminator-v1",
   "trainingCutoffUtc": "2026-11-19T00:00:00.000Z",
   "source": "EXACT_OWNER_BROKER_SETTLED_AFTER_FEE_FILLS",
+  "brokerConnectionFingerprint": "ab5b42b1942bddb4cfb9923d80c6b25e6165ac7f4946d10fd5316332a8521f07",
   "status": "RESEARCH_ONLY",
   "routes": {
     "CONFIRMED_REVERSAL": {

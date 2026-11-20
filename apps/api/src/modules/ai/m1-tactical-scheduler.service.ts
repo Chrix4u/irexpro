@@ -3199,9 +3199,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const ownerDemoEntryOutcomeShadow =
       professionalDemoPhase && observedBrokerCandles &&
       this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId &&
-      this.config.get<string>('VPS_FOREX_SCANNER_BROKER_CONNECTION_ID', '') === brokerConnectionId &&
       multimodelDemo
         ? scoreOwnerDemoEntryOutcome({
+            brokerConnectionId,
             route: multimodelDemo.ensemble.strategyRoute,
             evaluatedAt: decisionTime,
             featureValues: {

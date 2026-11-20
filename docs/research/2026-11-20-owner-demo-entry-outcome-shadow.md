@@ -29,9 +29,11 @@ per-candidate prediction sidecar.
    **training observations only**. Persisted model output includes
    probability estimates and `researchLowScoreFlag`. These fields are
    not referenced by execution, position sizing or order dispatch.
-6. Owner and exact active broker connection ID must match the existing
-   private VPS scanner configuration, and the snapshot must be
-   completed, broker-native and pre-entry. All other accounts receive
+6. Owner identity must match the private scanner user setting, while the
+   broker account is matched by a one-way SHA-256 connection fingerprint
+   derived from the one connected Pepperstone USD DEMO trading account
+   that supplied the actual settled training fills. The snapshot must
+   be completed, broker-native and pre-entry. All other accounts receive
    no shadow score. No new account permissions.
 7. Scores and as-of candle data are saved to
    `trading.m1_tactical_decisions.governance` under

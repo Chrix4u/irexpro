@@ -2,6 +2,7 @@ import {
   encodeEntryOutcomeFeatures,
   entryOutcomeWinProbability,
   scoreOwnerDemoEntryOutcome,
+  fingerprintOwnerDemoEntryBroker,
   type FittedEntryOutcomeArtifact,
 } from './owner-demo-entry-outcome-shadow';
 
@@ -15,6 +16,7 @@ const model:FittedEntryOutcomeArtifact={
   artifact:'owner-demo-after-fee-entry-discriminator-v1',
   trainingCutoffUtc:'2026-11-19T00:00:00.000Z',
   source:'EXACT_OWNER_BROKER_SETTLED_AFTER_FEE_FILLS',
+  brokerConnectionFingerprint:fingerprintOwnerDemoEntryBroker('test-connection'),
   status:'RESEARCH_ONLY',
   routes:{
     CONFIRMED_REVERSAL:{
@@ -38,6 +40,7 @@ describe('Owner DEMO after-fee entry discriminator SHADOW',()=>{
   });
   it('scores only after the fixed training cutoff and never grants entry authority',()=>{
     const decision=scoreOwnerDemoEntryOutcome({
+      brokerConnectionId:'test-connection',
       route:'CONFIRMED_REVERSAL',evaluatedAt:new Date('2026-11-19T23:00:00Z'),
       featureValues:features,fitted:model,
     });
@@ -50,12 +53,19 @@ describe('Owner DEMO after-fee entry discriminator SHADOW',()=>{
     expect(decision.grantsTradeAuthority).toBe(false);
     expect(decision.vetoRecommended).toBe(false);
     expect(scoreOwnerDemoEntryOutcome({
+      brokerConnectionId:'other-account',
+      route:'CONFIRMED_REVERSAL',evaluatedAt:new Date('2026-11-20T00:10:00Z'),
+      featureValues:features,fitted:model,
+    }).status).toBe('MODEL_SCOPE_MISMATCH');
+    expect(scoreOwnerDemoEntryOutcome({
+      brokerConnectionId:'test-connection',
       route:'CONFIRMED_REVERSAL',evaluatedAt:new Date('2026-11-18T23:59:00Z'),
       featureValues:features,fitted:model,
     }).status).toBe('TRAINING_NOT_CAUSAL');
   });
   it('does not invent a continuation model or use candidate outcomes',()=>{
     const decision=scoreOwnerDemoEntryOutcome({
+      brokerConnectionId:'test-connection',
       route:'TREND_CONTINUATION',evaluatedAt:new Date('2026-11-19T23:00:00Z'),
       featureValues:features,fitted:model,
     });

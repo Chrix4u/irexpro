@@ -36,7 +36,7 @@ test('training excludes any label that closed after cutoff even when entry was e
  const leaked=entry('2026-11-18','2026-11-19',false,99);
  const legitimate=training.concat([leaked]);
  const later=Array.from({length:15},(_,i)=>entry('2026-11-19','2026-11-19',i<8,i));
- const report=buildTrainingResult([...legitimate,...later]);
+ const report=buildTrainingResult([...legitimate,...later],'0'.repeat(64));
  assert.equal(report.population.allRows,56);
  assert.equal(report.population.training.count,40);
  assert.equal(report.population.later.count,15);
