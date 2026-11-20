@@ -10,7 +10,7 @@ const expert = {
   admitted:true,allBrokerNative:true,direction:'SELL' as const,
   longVotes:0,shortVotes:3,ensembleConfidence:0.76,
   meanOpportunityProbability:0.74,freshnessSeconds:25,
-  decisionTime:'2026-11-16T21:14:00.000Z',
+  decisionTime:'2026-11-20T21:14:00.000Z',
   regime:'active_clean',modifiesExecution:false as const,
 };
 const model=():CounterPilotModel=>({
@@ -24,8 +24,8 @@ const model=():CounterPilotModel=>({
 });
 const input=()=>({
   enabled:true,brokerVerified:true,
-  now:new Date('2026-11-16T21:15:30Z'),
-  decisionTime:new Date('2026-11-16T21:15:00Z'),
+  now:new Date('2026-11-20T21:15:30Z'),
+  decisionTime:new Date('2026-11-20T21:15:00Z'),
   side:'SELL' as const,m1Route:'ABSTAIN',
   m1Confidence:0.73,m1DirectionQuality:0.68,
   stopDistance:0.0008,targetDistance:0.0013,
@@ -45,7 +45,7 @@ describe('independent counter-entry Pepperstone DEMO pilot',()=>{
       endsAt:COUNTER_PILOT_END,bypassesBrokerRisk:false,
       bypassesModelAdmission:false,modifiesOpenPositions:false,
     });
-    expect(COUNTER_PILOT_ENTRY_LIMIT).toBe(4);
+    expect(COUNTER_PILOT_ENTRY_LIMIT).toBe(2);
     expect(COUNTER_PILOT_LOT_CAP).toBe(4);
   });
   it('allows 4.00 lots only when stop-loss risk remains at or under 0.25% of allocated DEMO capital',()=>{
@@ -62,16 +62,16 @@ describe('independent counter-entry Pepperstone DEMO pilot',()=>{
     expect(widerStop.volumeCap).toBe(2);
     expect(widerStop.permittedRiskAtStop).toBeCloseTo(100,2);
   });
-  it('cannot replay the expired Monday trial or send outside tonight pilot window',()=>{
-    expect(COUNTER_PILOT_START).toBe('2026-11-16T21:00:00.000Z');
+  it('cannot replay the expired Monday trial or send after Friday close',()=>{
+    expect(COUNTER_PILOT_START).toBe('2026-11-20T21:12:00.000Z');
     const a=input();
-    expect(evaluate({...a,now:new Date('2026-11-16T20:59:00Z')}).reason)
+    expect(evaluate({...a,now:new Date('2026-11-20T21:11:59Z')}).reason)
       .toBe('OUTSIDE_WINDOW');
-    expect(evaluate({...a,now:new Date('2026-11-16T21:40:00Z')}).reason)
+    expect(evaluate({...a,now:new Date('2026-11-20T21:40:00Z')}).reason)
       .toBe('STALE_SIGNAL');
-    expect(evaluate({...a,now:new Date('2026-11-17T00:00:00Z')}).reason)
+    expect(evaluate({...a,now:new Date('2026-11-20T22:00:00Z')}).reason)
       .toBe('OUTSIDE_WINDOW');
-    expect(evaluate({...a,decisionTime:new Date('2026-11-16T21:11:00Z')}).reason)
+    expect(evaluate({...a,decisionTime:new Date('2026-11-20T21:11:00Z')}).reason)
       .toBe('STALE_SIGNAL');
   });
   it('fails closed on disconnected broker, disabled flag or wrong source route',()=>{

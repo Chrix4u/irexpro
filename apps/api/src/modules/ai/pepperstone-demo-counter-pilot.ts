@@ -1,14 +1,15 @@
 import type { HighConvictionOverlay } from './high-conviction-overlay';
 
 /** One owner-scoped, DEMO-only executable counter-direction pilot.
+ * Friday research window refresh does not waive independent counter-side gates.
  * The expert's opposite vote alone is NEVER an order signal. Both
  * independent own-side models and normal broker/risk gates must agree.
  */
-export const COUNTER_PILOT_ARTIFACT = 'pepperstone-demo-independent-counter-entry-v1' as const;
-export const COUNTER_PILOT_START = '2026-11-16T21:00:00.000Z';
-export const COUNTER_PILOT_END = '2026-11-17T00:00:00.000Z';
+export const COUNTER_PILOT_ARTIFACT = 'pepperstone-demo-independent-counter-entry-friday-v2' as const;
+export const COUNTER_PILOT_START = '2026-11-20T21:12:00.000Z';
+export const COUNTER_PILOT_END = '2026-11-20T22:00:00.000Z';
 export const COUNTER_PILOT_LOT_CAP = 4;
-export const COUNTER_PILOT_ENTRY_LIMIT = 4;
+export const COUNTER_PILOT_ENTRY_LIMIT = 2;
 
 export type CounterPilotReason =
   | 'DISABLED' | 'OUTSIDE_WINDOW' | 'STALE_SIGNAL' | 'WRONG_ACCOUNT'
