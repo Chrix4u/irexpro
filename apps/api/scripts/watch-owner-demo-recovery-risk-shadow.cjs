@@ -8,6 +8,7 @@
 const path=require('node:path'),fs=require('node:fs');
 const {createHash}=require('node:crypto');
 const model=require('./owner-demo-recovery-risk-shadow.cjs');
+const rapid=require('./owner-demo-subminute-recovery-shadow.cjs');
 const {evaluate:evaluateForwardRecovery}=require('./owner-demo-recovery-risk-evaluation.cjs');
 const ROOT='/home/lightworld/webapps/irexpro-research/recovery-risk-forward';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -47,6 +48,19 @@ const QUOTES_SQL=[
  'AND instrument=ANY($2::text[])',
  "AND bucket_time>=current_timestamp-interval '11 minutes'",
  'ORDER BY instrument,bucket_time DESC LIMIT 100'
+].join(' ');
+// Live forming M1 native quotes are read only while fresh OPEN demo positions
+// exist; never use later-updated quotes as an earlier decision snapshot.
+const RAPID_QUOTES_SQL=[
+ 'SELECT DISTINCT ON(instrument) instrument,timeframe,bucket_time,source,',
+ 'created_at,updated_at,sample_count,positive_quote_sample_count,',
+ 'last_positive_sample_at,last_positive_bid,last_positive_ask',
+ 'FROM market_data.provider_quote_candles',
+ "WHERE connection_id=$1 AND timeframe='M1' AND source='ctrader-broker-native'",
+ 'AND instrument=ANY($2::text[])',
+ "AND bucket_time>=date_trunc('minute',$3::timestamptz)-interval '1 minute'",
+ 'AND bucket_time<=date_trunc(\'minute\',$3::timestamptz)',
+ 'ORDER BY instrument,bucket_time DESC'
 ].join(' ');
 // Pre-entry broker fee evidence ONLY: never use the trade's own subsequent
 // commission to form a predictor. Limit to the latest 32 PRIOR settlements.
@@ -117,6 +131,29 @@ function setupEarlyCaution(root,owner,conn,now=Date.now()){
   throw Error('INVALID_FROZEN_EARLY_CAUTION_RULE');
  return rule;
 }
+function setupRapid(root,owner,conn,now=Date.now()){
+ if(!UUID.test(owner)||!UUID.test(conn))throw Error('RAPID_QUOTE_EXACT_SCOPE_REQUIRED');
+ const file=path.join(root,'subminute-quote-activation.json');
+ if(!fs.existsSync(file))fs.writeFileSync(file,JSON.stringify({
+  artifact:rapid.ARTIFACT,activatedAt:new Date(now).toISOString(),
+  ownerHash:sha(owner),brokerConnectionHash:sha(conn),
+  broker:'pepperstone-ctrader',accountType:'DEMO',accountCurrency:'USD',
+  maxTradeAgeSeconds:60,maxQuoteAgeSeconds:10,
+  noRetrospectiveScoring:true,brokerOrders:0,
+  readOnly:true,autoClose:false,autoStopAmend:false,
+  autoModelPromotion:false,
+ },null,2),{flag:'wx',mode:0o600});
+ const r=JSON.parse(fs.readFileSync(file,'utf8'));
+ if(r.artifact!==rapid.ARTIFACT||r.ownerHash!==sha(owner)||
+  r.brokerConnectionHash!==sha(conn)||r.broker!=='pepperstone-ctrader'||
+  r.accountType!=='DEMO'||r.accountCurrency!=='USD'||
+  r.maxTradeAgeSeconds!==60||r.maxQuoteAgeSeconds!==10||
+  r.noRetrospectiveScoring!==true||r.brokerOrders!==0||
+  r.readOnly!==true||r.autoClose!==false||r.autoStopAmend!==false||
+  r.autoModelPromotion!==false||!Number.isFinite(ms(r.activatedAt))||
+  ms(r.activatedAt)>now)throw Error('INVALID_FROZEN_RAPID_ACTIVATION');
+ return r;
+}
 function feeEvidence(row){
  const lots=ns(row.lot_size);
  if(!(lots>0))return null;
@@ -152,9 +189,9 @@ function enroll(row,marker,now){
   originalStop:stop,feeReserveUsd:frozenFee?.reserveUsd??null,
   feeReserveSource:frozenFee?.source??'MISSING_VERIFIED_ASOF_COST',
   feeEvidencePriorSettlements:frozenFee?.priorSettledSampleCount??null,
-  enrolledAt:new Date(now).toISOString(),snapshots:{},settled:null};
+  enrolledAt:new Date(now).toISOString(),snapshots:{},rapidSamples:[],settled:null};
 }
-function plan(row,entry,marker,now,quotes){
+function plan(row,entry,marker,now,quotes,rapidRaw=null){
  const events=[];
  let current=entry;
  if(!current){
@@ -165,6 +202,23 @@ function plan(row,entry,marker,now,quotes){
    filledLots:current.filledLots,feeReserveUsd:current.feeReserveUsd,
    feeReserveSource:current.feeReserveSource,
    feeEvidencePriorSettlements:current.feeEvidencePriorSettlements}});
+ }
+ const rapidStart=ms(marker.rapidActivatedAt),age=now-ms(current.openedAt);
+ if(row.status==='OPEN'&&Number.isFinite(rapidStart)&&
+  ms(current.openedAt)>=rapidStart&&age>=5000&&age<=60000){
+  const q=rapid.freshFormingNativeQuote(rapidRaw,now,current.openedAt);
+  const samples=current.rapidSamples||[];
+  const last=samples.length?samples[samples.length-1]:null;
+  if(q&&samples.length<8&&(!last||
+   ms(q.at)-ms(last.quoteSampledAt)>=8000)){
+   const signal=rapid.evaluateRapid(row,q,last,current.feeReserveUsd,now);
+   if(signal.status==='VALID_ASOF_SUBMINUTE_OBSERVATION'){
+    current.rapidSamples=samples;
+    samples.push(signal);
+    events.push({stage:'PROSPECTIVE_SUBMINUTE_OPEN_NATIVE_QUOTE',
+     rapidSignal:signal,noBrokerOrders:true,watchOnly:true});
+   }
+  }
  }
  const checkpoint=model.asOfCheckpoint(row,current.openedAt,now);
  if(checkpoint&&!current.snapshots[checkpoint]){
@@ -247,6 +301,8 @@ function summary(state,marker,now=Date.now()){
  return {artifact:model.ARTIFACT,generatedAt:new Date(now).toISOString(),
   activatedAt:marker.activatedAt,
   earlyCautionRuleActivatedAt:marker.earlyCautionActivatedAt||null,
+  rapidQuoteRuleActivatedAt:marker.rapidActivatedAt||null,
+  rapidQuoteForwardValidation:rapid.forwardSummary(trades,marker.rapidActivatedAt),
   earlyCautionEligibleOnlyOnNewPostActivationTrades:true,
   broker:'pepperstone-ctrader',accountType:'DEMO',currency:'USD',
   enrolled:trades.length,settled:trades.filter(t=>t.settled).length,
@@ -276,7 +332,7 @@ function atomic(file,json){
  fs.writeFileSync(temp,JSON.stringify(json,null,2),{flag:'wx',mode:0o600});
  fs.renameSync(temp,file);
 }
-async function query(db,owner,conn,activatedAt,now,existingTrades={}){
+async function query(db,owner,conn,activatedAt,now,existingTrades={},rapidActivatedAt=null){
  await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
  try{
   await db.query("SET LOCAL statement_timeout='12000ms'");
@@ -295,6 +351,14 @@ async function query(db,owner,conn,activatedAt,now,existingTrades={}){
    const proof=(await db.query(FEES_SQL,[owner,conn,row.opened_at])).rows[0];
    if(proof)Object.assign(row,proof);
   }
+  const rapidCandidates=t.filter(r=>r.status==='OPEN'&&
+   Number.isFinite(ms(rapidActivatedAt))&&ms(r.opened_at)>=ms(rapidActivatedAt)&&
+   now-ms(r.opened_at)>=0&&now-ms(r.opened_at)<=60000);
+  const rapidSymbols=[...new Set(rapidCandidates.map(x=>x.instrument))]
+   .filter(x=>model.INSTRUMENTS.includes(x));
+  const rapidRaw=rapidSymbols.length?(await db.query(
+   RAPID_QUOTES_SQL,[conn,rapidSymbols,new Date(now).toISOString()])).rows:[];
+  if(rapidRaw.length>rapidSymbols.length)throw Error('INVALID_NATIVE_RAPID_QUERY_BOUND');
   await db.query('COMMIT');
   const by={};
   for(const q of quotes){
@@ -302,16 +366,19 @@ async function query(db,owner,conn,activatedAt,now,existingTrades={}){
    if(parsed)(by[q.instrument]||=[]).push(parsed);
   }
   for(const a of Object.values(by))a.sort((x,y)=>x.barStart-y.barStart);
-  return {trades:t,quotes:by};
+  return {trades:t,quotes:by,rapidRawByInstrument:Object.fromEntries(
+   rapidRaw.map(x=>[x.instrument,x]))};
  }catch(e){await db.query('ROLLBACK').catch(()=>{});throw e;}
 }
 async function tick(db,root,owner,conn,marker,state){
- const now=Date.now(),data=await query(db,owner,conn,marker.activatedAt,now,state.trades);
+ const now=Date.now(),data=await query(db,owner,conn,marker.activatedAt,now,
+  state.trades,marker.rapidActivatedAt);
  let count=0;
  for(const row of data.trades){
   const id=String(row.trade_id);
   if(!UUID.test(id))continue;
-  const result=plan(row,state.trades[id],marker,now,data.quotes[row.instrument]||[]);
+  const result=plan(row,state.trades[id],marker,now,data.quotes[row.instrument]||[],
+   data.rapidRawByInstrument[row.instrument]||null);
   if(!result.entry)continue;
   state.trades[id]=result.entry;
   for(const evt of result.events){
@@ -336,6 +403,8 @@ async function main(){
  const {marker,state}=setup(ROOT,owner,conn);
  const frozenEarlyCaution=setupEarlyCaution(ROOT,owner,conn);
  marker.earlyCautionActivatedAt=frozenEarlyCaution.activatedAt;
+ const frozenRapid=setupRapid(ROOT,owner,conn);
+ marker.rapidActivatedAt=frozenRapid.activatedAt;
  const {Client}=require('pg');
  let busy=false,started=0,failures=0;
  setInterval(()=>{
@@ -374,7 +443,8 @@ async function main(){
  console.log('OWNER_RECOVERY_SHADOW_ACTIVE '+marker.activatedAt+' noOrders=true');
  setInterval(()=>void scan(),12000);
 }
-module.exports={ROOT,TRADES_SQL,QUOTES_SQL,FEES_SQL,setup,setupEarlyCaution,feeEvidence,feeReserve,enroll,plan,summary,query,tick};
+module.exports={ROOT,TRADES_SQL,QUOTES_SQL,RAPID_QUOTES_SQL,FEES_SQL,
+ setup,setupEarlyCaution,setupRapid,feeEvidence,feeReserve,enroll,plan,summary,query,tick};
 if(require.main===module)main().catch(e=>{
  console.error('OWNER_RECOVERY_RESEARCH_FATAL',String(e.message).slice(0,200));
  process.exitCode=1;
