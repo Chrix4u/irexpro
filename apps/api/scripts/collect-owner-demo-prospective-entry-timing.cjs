@@ -5,7 +5,7 @@
  * Enrolls ONLY owner trades observed OPEN within 90 seconds of execution
  * AFTER this collector's own immutable activation timestamp. Freezes the
  * original trade-intent and causal pre-intent quote context, followed by
- * on-time +60s shadow decision and +3/+5/+10m market observations.
+ * on-time +60s shadow decision and +1/+3/+5/+10/+20/+30m market observations.
  * Missed stages stay MISSED, never reconstructed later using hindsight.
  *
  * No broker adapter, order, model, risk-gate or trade-execution imports.
@@ -27,9 +27,12 @@ const MAX_ROWS=250;
 const SCOPE=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STAGES=[
  ['CHECKPOINT_60S',60000,40000],
+ ['MARK_1M',60000,40000],
  ['MARK_3M',180000,40000],
  ['MARK_5M',300000,40000],
  ['MARK_10M',600000,40000],
+ ['MARK_20M',1200000,40000],
+ ['MARK_30M',1800000,40000],
 ];
 const SQL=[
  "SELECT t.id::text trade_key,t.instrument,t.direction,t.opened_at,t.closed_at,",
@@ -138,7 +141,8 @@ function plan(row,seen,now){
  for(const [stage,age,window] of STAGES){
   if(seen.has(stageKey(key,stage))||
      seen.has(stageKey(key,stage+'_MISSED')))continue;
-  if(now<opened+age+8000)continue;
+  // Both evaluators require +10s maturity: never irreversibly record NOT_MATURED.
+  if(now<opened+age+10000)continue;
   if(now>opened+age+window){
    actions.push(event(key,stage+'_MISSED',now,{reason:'CAPTURE_DEADLINE_EXCEEDED'}));
    continue;
@@ -190,7 +194,7 @@ function derive(row,action,quotes,now){
   });
  }
  const minute=Number(action.kind.match(/^MARK_(\d+)M$/)?.[1]);
- if(![3,5,10].includes(minute))throw Error('UNEXPECTED_RESEARCH_STAGE');
+ if(![1,3,5,10,20,30].includes(minute))throw Error('UNEXPECTED_RESEARCH_STAGE');
  const observation=afterOpenMark(t,qs,minute,now);
  return event(key,action.kind,now,{
   checkpointOffsetMinutes:minute,

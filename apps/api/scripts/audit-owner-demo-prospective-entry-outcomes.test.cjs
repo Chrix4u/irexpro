@@ -55,6 +55,8 @@ test('frozen pre-entry checkpoint groups only ACTUAL original settled P&L',()=>{
  assert.equal(c.actualMeanNetR,-.8);
  assert.equal(r.byMarketObservationHorizon['3m'].whileOriginalPositionOpen,1);
  assert.equal(r.byMarketObservationHorizon['3m'].favorableWhileOriginalOpen,1);
+ assert.equal(r.byMarketObservationHorizon['20m'].stagesObserved,0);
+ assert.equal(r.byMarketObservationHorizon['30m'].stagesObserved,0);
 });
 test('after-close quote marks stay censored from within-position outcome',()=>{
  const r=summarize([entry(),checkpoint(),mark(true),settled()],marker,Date.parse('2026-11-18T14:09:00Z'));

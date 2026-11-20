@@ -71,7 +71,7 @@ function summarize(events,marker,now=Date.now()){
   if(settled&&ts(settled.capturedAt)<captured){
    errors.push('SETTLEMENT_BEFORE_ENTRY_CAPTURE');continue;
   }
-  const marks=[3,5,10].map(m=>stage.get('MARK_'+m+'M')||null);
+  const marks=[1,3,5,10,20,30].map(m=>stage.get('MARK_'+m+'M')||null);
   records.push({entry,checkpoint,settled,marks,stages:stage});
  }
  const byGroup=groupStatus(records);
@@ -86,7 +86,7 @@ function summarize(events,marker,now=Date.now()){
  }
  for(const b of Object.values(byRoute))b.bookedNetUsd=round(b.bookedNetUsd,2);
  const horizons={};
- for(const m of [3,5,10]){
+ for(const m of [1,3,5,10,20,30]){
   const observed=records.map(r=>r.stages.get('MARK_'+m+'M'))
    .filter(Boolean);
   const mark=observed.filter(x=>x.observation?.status==='SAMPLED_MARK_ONLY');

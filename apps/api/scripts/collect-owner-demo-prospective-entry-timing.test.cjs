@@ -39,6 +39,8 @@ const qmap=()=>({EURUSD:[
  quote(started+179000,1.1005),
  quote(started+299000,1.1004),
  quote(started+599000,1.1006),
+ quote(started+1199000,1.1007),
+ quote(started+1799000,1.1009),
  ],AUDUSD:[],USDJPY:[],USDCAD:[]});
 test('SELECT is owner-scoped, read-only, one broker DEMO USD, no LIVE or orders',()=>{
  assert.match(SQL,/t.user_id=\$1 AND b.user_id=\$1/);
@@ -47,7 +49,7 @@ test('SELECT is owner-scoped, read-only, one broker DEMO USD, no LIVE or orders'
  assert.match(SQL,/t.account_currency='USD'/);
  assert.match(SQL,/t.opened_at >= \$2::timestamptz/);
  assert.doesNotMatch(SQL,/UPDATE|DELETE|INSERT/);
- assert.equal(STAGES.length,4);
+ assert.equal(STAGES.length,7);
  assert.equal(ARTIFACT.startsWith('irexpro-prospective'),true);
 });
 test('entry metadata is taken from original intent, and never needs final profit',()=>{
@@ -81,9 +83,9 @@ test('only prospectively eligible enrolled trades produce checkpoint events',()=
  const seen=new Set([stageKey(tradeKey,'ENTRY')]);
  assert.deepEqual(plan(row(),seen,started+10000),[]);
  const a=plan(row(),seen,started+72000);
- assert.equal(a.length,1);
- assert.equal(a[0].kind,'CHECKPOINT_60S');
- const x=derive(row(),a[0],qmap(),started+72000);
+ assert.equal(a.length,2);
+ assert.ok(a.some(x=>x.kind==='MARK_1M'));
+ const x=derive(row(),a.find(x=>x.kind==='CHECKPOINT_60S'),qmap(),started+72000);
  assert.equal(x.stage,'CHECKPOINT_60S');
  assert.equal(x.checkpoint.artifact.startsWith('irexpro-owner'),true);
  assert.equal(x.checkpoint.noTradeAuthority,true);
@@ -99,17 +101,47 @@ test('3/5/10m outcome marks must be on time; after real trade close is censored'
  const enrolled=new Set([stageKey(tradeKey,'ENTRY'),stageKey(tradeKey,'CHECKPOINT_60S')]);
  const at=started+180000+12000;
  const stages=plan(row(),enrolled,at);
- assert.equal(stages[0].kind,'MARK_3M');
- const e=derive(row(),stages[0],qmap(),at);
+ const mark3=stages.find(x=>x.kind==='MARK_3M');
+ assert.ok(mark3);
+ const e=derive(row(),mark3,qmap(),at);
  assert.equal(e.stage,'MARK_3M');
  assert.equal(e.observation.status,'SAMPLED_MARK_ONLY');
  assert.equal(e.observation.afterActualExit,false);
  assert.equal(e.noHypotheticalBrokerFill,true);
  const closed=derive(row({closed_at:timestamp(started+120000),status:'CLOSED',
   realised_pnl:'20',commission:'-10',swap:'0'}),
-  stages[0],qmap(),at);
+  mark3,qmap(),at);
  assert.equal(closed.observation.afterActualExit,true);
  assert.equal(closed.actualTradeWasClosedBeforeMarketMark,true);
+});
+test('stage scheduling never saves a checkpoint before the evaluator matures',()=>{
+ const seen=new Set([stageKey(tradeKey,'ENTRY')]);
+ assert.deepEqual(plan(row(),seen,started+69000),[]);
+ const ready=plan(row(),seen,started+70000);
+ assert.deepEqual(ready.map(x=>x.kind),['CHECKPOINT_60S','MARK_1M']);
+ const marks=ready.map(x=>derive(row(),x,qmap(),started+70000));
+ assert.notEqual(marks[0].checkpoint.state,'CHECKPOINT_NOT_MATURE');
+ assert.notEqual(marks[1].observation.status,'NOT_MATURED');
+});
+test('20/30-minute research marks are on-time, read-only and censored after close',()=>{
+ const seen=new Set([stageKey(tradeKey,'ENTRY'),
+  ...STAGES.filter(s=>s[1]<1200000).map(s=>stageKey(tradeKey,s[0]))]);
+ const at20=started+1200000+12000;
+ const at30=started+1800000+12000;
+ const m20=plan(row(),seen,at20).find(x=>x.kind==='MARK_20M');
+ assert.ok(m20);
+ const e20=derive(row(),m20,qmap(),at20);
+ assert.equal(e20.observation.status,'SAMPLED_MARK_ONLY');
+ assert.equal(e20.observation.horizonMinutes,20);
+ assert.equal(e20.noTradeAuthority,true);
+ seen.add(stageKey(tradeKey,'MARK_20M'));
+ const m30=plan(row(),seen,at30).find(x=>x.kind==='MARK_30M');
+ assert.ok(m30);
+ const e30=derive(row({status:'CLOSED',
+  closed_at:timestamp(started+900000)}),m30,qmap(),at30);
+ assert.equal(e30.observation.horizonMinutes,30);
+ assert.equal(e30.actualTradeWasClosedBeforeMarketMark,true);
+ assert.equal(e30.noHypotheticalBrokerFill,true);
 });
 test('settlement uses signed actual settled costs and does not reenter closed trade',()=>{
  const seen=new Set([stageKey(tradeKey,'ENTRY')]);
