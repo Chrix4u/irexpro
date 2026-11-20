@@ -3545,6 +3545,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
         enablePatternMemory: true,
         enableHighConvictionSixLots: true,
         enableOwnerPredispatchConfluenceShadow: true,
+        enableOwnerLossAdvisory: true,
         suspendTrendContinuation: true,
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);

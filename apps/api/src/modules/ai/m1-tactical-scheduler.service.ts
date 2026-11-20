@@ -3228,18 +3228,39 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       alignedH4: candidate.alignedH4,
     } : null;
 
-    // This is genuinely evaluated and persisted BEFORE submitPaperDecision.
-    // It is an isolated owner Pepperstone DEMO research observation, never
-    // an execution veto, lot size adjustment, broker stop or strategy gate.
+    // This is evaluated and persisted BEFORE submitPaperDecision; the
+    // independent research observation NEVER changes canExecute or broker
+    // behavior. Verify USD explicitly: the existing loss-advisory USD check
+    // is only run when an actual loss brake is active, not on clean entries.
+    const preDispatchResearchRequested = this.config.get<string>(
+      'IREXPRO_OWNER_DEMO_PREDISPATCH_FEE_CONFLUENCE_SHADOW',
+      '',
+    ) === 'enabled';
+    const preDispatchOwnerVerified = !!userId &&
+      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId;
+    let preDispatchUsdAccountVerified = ownerDemoDiscretionaryPausesAdvisory;
+    if (preDispatchResearchRequested && preDispatchOwnerVerified &&
+        professionalDemoPhase && canExecute && advisoryBrokerVerified &&
+        multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL' &&
+        !preDispatchUsdAccountVerified) {
+      try {
+        // Existing DB-backed verifier; not an order endpoint. Failure
+        // abstains from research and does NOT veto a qualified trade.
+        preDispatchUsdAccountVerified =
+          await this.evidence.isPepperstoneUsdDemoBrokerConnection({
+            userId, brokerConnectionId,
+          });
+      } catch (error) {
+        this.logger.warn('Owner DEMO pre-dispatch research scope unavailable: ' +
+          (error as Error).message);
+      }
+    }
     const ownerDemoPreDispatchFeeConfluenceShadow =
       evaluateOwnerDemoPreDispatchConfluence({
-        featureEnabled: this.config.get<string>(
-          'IREXPRO_OWNER_DEMO_PREDISPATCH_FEE_CONFLUENCE_SHADOW',
-          '',
-        ) === 'enabled',
-        exactOwner: !!userId &&
-          this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId,
-        exactPepperstoneDemoBrokerVerified: advisoryBrokerVerified,
+        featureEnabled: preDispatchResearchRequested,
+        exactOwner: preDispatchOwnerVerified,
+        exactPepperstoneDemoBrokerVerified:
+          advisoryBrokerVerified && preDispatchUsdAccountVerified,
         professionalDemoPhase,
         candidateAdmittedForDispatch: canExecute,
         decisionTime,
