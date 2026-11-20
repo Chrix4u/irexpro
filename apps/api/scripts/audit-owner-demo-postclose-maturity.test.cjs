@@ -55,3 +55,33 @@ test('rollout cohorts use entry and settlement timestamps, excluding straddlers'
   assert.equal(r.BEFORE['15m'].total,1);
   assert.equal(r.STRADDLED_EXCLUDED['15m'].total,1);
 });
+
+test('original sampled TP may lose precedence under latest recorded barriers',()=>{
+  const now='2026-11-20T11:10:00.000Z';
+  const orig={firstTargetAt:'2026-11-20T10:11:00.000Z'};
+  const last={pathCoverage:'CONTIGUOUS_SAMPLED_PATH',
+    firstQuoteAt:'2026-11-20T10:00:02.000Z',
+    lastQuoteAt:'2026-11-20T11:09:59.000Z',
+    firstTargetAt:'2026-11-20T10:16:00.000Z',
+    firstStopAt:'2026-11-20T10:07:00.000Z'};
+  const a=sample({originalTp:150,originalSl:100,lastRecordedTp:155,lastRecordedSl:105,
+    afterCloseLastRecordedBarriers:last},orig);
+  const b=sample({originalTp:150,originalSl:100,lastRecordedTp:155,lastRecordedSl:105,
+    afterCloseLastRecordedBarriers:{...last,firstTargetAt:'2026-11-20T10:12:00.000Z',firstStopAt:null}},orig);
+  const c=sample({originalTp:150,originalSl:100,lastRecordedTp:155,lastRecordedSl:105},orig);
+  assert.equal(classify(a,30,now),'TP_FIRST_SAMPLED');
+  assert.equal(classify(a,30,now,'LAST_RECORDED'),'SL_FIRST_SAMPLED');
+  assert.throws(()=>classify(a,30,now,'BAD'),/INVALID_BARRIER_SOURCE/);
+  const result=summarize({artifact:'irexpro-owner-pepperstone-usd-demo-20261120-0430-tp-first-readonly-v1',
+    researchOnly:true,brokerOrders:false,asOf:now,trades:[a,b,c]});
+  const comp=result.protectedOriginalVsLastRecorded['30m'];
+  assert.equal(comp.originalTargetFirst,3);
+  assert.equal(comp.bothTargetFirst,1);
+  assert.equal(comp.lastRecordedStopFirstAfterOriginalTarget,1);
+  assert.equal(comp.lastRecordedUnknownAfterOriginalTarget,1);
+  assert.equal(comp.changedRecordedBarrierCount,3);
+  assert.equal(result.protectedLastRecordedBarriers['30m'].TP_FIRST_SAMPLED,1);
+  assert.equal(result.protectedLastRecordedBarriers['30m'].SL_FIRST_SAMPLED,1);
+  assert.equal(result.protectedLastRecordedBarriers['30m'].INCOMPLETE_QUOTE_COVERAGE,1);
+  assert.equal(result.ordersSent,0);
+});
