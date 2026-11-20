@@ -27,3 +27,13 @@ Pure helper `explainTradeReadinessScore` validates/clamps display scores and nev
 ## Safe web release
 
 Frontend-only. Prepare an isolated Next.js build using `IREXPRO_WEB_RELEASE_BUILD_DIR=.next.readiness52-20261120` and the default `.next` output for the currently running server. The optional `next.config.mjs::distDir` override enables isolation. Validate the staged build including BUILD_ID and trade route compiled code before touching `.next`. Back up the previous build, swap only the web output, restart only `irexpro-web-staging`, validate public /trade response and unchanged API/profit protection process IDs, roll back if web fails. Do not confuse building and pushing code with deployed UI.
+
+## Production frontend deployment verified
+
+The isolated build `.next.readiness52-20261120` completed at **2026-11-20T20:34:14Z** with exit code 0, 30 generated Next.js pages and a compiled dynamic `/trade` route. Build ID `TKKy7T7nfQ833gfF1Z2J8`. Before deployment, the staged site was launched independently on loopback port 3099; a `GET /trade` smoke test returned HTTP 200. It did not touch active `.next` or the broker API.
+
+Next.js automatically rewrote `apps/web/tsconfig.json` during its isolated build to include temporary `.next.readiness52-20261120/types`; that unintended generated-only edit was restored to the committed tsconfig before release. No unrelated project or prior-release files were deleted.
+
+The frontend-only rollback-protected deployment succeeded at **2026-11-20T20:36:32Z**. Current output moved from `apps/web/.next` to `apps/web/.next.before-readiness52-20261120` (retained for rollback); tested isolated build was moved into active `.next`. Only `irexpro-web-staging` PM2 was restarted, PID **532234 -> 2823858**. The deployed active build ID was verified as `TKKy7T7nfQ833gfF1Z2J8`. Public `https://irexpro.lightworldtech.com/trade` returned **HTTP 200**, and API health `https://irexpro.lightworldtech.com/api/v1/health` also **HTTP 200**. Crucially, trading API PID **2797464** and preexisting profit-protection daemon PID **2452772** were unchanged. New frontend entry score caption and `ENTRY NOT QUALIFIED` badge were built and deployed. The code was committed/pushed on the original research branch at `b12603e2` before deployment.
+
+**Business/trading limitation:** No new trade was forced, no strategy/entry/portfolio/lot/risk guard relaxed, and no broker position amended or closed for this visual fix. The market scanner continued to produce fresh decisions with no executable entries in the audited window. A displayed 52 is an assessment, not a percent-complete task; it can remain stable until market evidence changes. Monitor genuine broker admissions and after-commission outcomes separately.
