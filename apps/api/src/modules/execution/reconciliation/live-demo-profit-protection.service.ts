@@ -14,7 +14,7 @@ import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canar
 import { evaluatePepperstonePeakLossRescue } from './pepperstone-peak-loss-rescue';
 import { evaluatePepperstoneDemoNetProfitLock } from './pepperstone-demo-net-profit-lock';
 import { evaluatePepperstoneDemoExitMonitor } from './pepperstone-demo-exit-signal-monitor';
-import { evaluateCtraderStopDistanceProof } from './ctrader-native-min-stop-distance-shadow';
+import { evaluateCtraderStopDistanceProof, normalizeIndicativeCtraderStopToTick } from './ctrader-native-min-stop-distance-shadow';
 import {
   evaluatePepperstoneDemoAdverseCut,
   PEPPERSTONE_DEMO_ADVERSE_CUT_ARTIFACT,
@@ -1728,6 +1728,9 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     let protectedRunnerNativeDistanceShadow: ReturnType<
       typeof evaluateCtraderStopDistanceProof
     > | null = null;
+    let publishedStopDistance: string | null = null;
+    let publishedStopDistanceUnit: string | null = null;
+    let brokerRoundedShadowStop: number | null = null;
     if (
       verdict.recommendation === 'HEALTHY_CONTINUATION_RESEARCH' &&
       (trade.strategy_route === 'EARLY_TRANSITION' ||
@@ -1799,6 +1802,17 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                 trade.user_id, trade.broker_connection_id, trade.instrument,
               ).catch(() => null)
             : null;
+          // The indicative P&L-to-price slope produces off-grid decimals.
+          // Never send those as a broker stop; round conservatively to the
+          // SYMBOL'S published digits before the separate native preflight.
+          // The original unrounded shadow proposal is retained for audit.
+          publishedStopDistance = symbol?.minStopLossDistance ?? null;
+          publishedStopDistanceUnit = symbol?.minStopLossDistanceUnit ?? null;
+          brokerRoundedShadowStop = symbol?.digits == null ? null :
+            normalizeIndicativeCtraderStopToTick(
+              protectedRunnerReadinessShadow.proposedStopForResearchOnly,
+              trade.direction, symbol.digits,
+            );
           protectedRunnerNativeDistanceShadow = evaluateCtraderStopDistanceProof({
             ownerDemoVerified:
               !!process.env.VPS_FOREX_SCANNER_USER_ID &&
@@ -1811,7 +1825,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
             entryPrice:position.entry ?? Number.NaN,
             originalStop:finite(trade.stop_loss) ?? Number.NaN,
             originalTakeProfit:finite(trade.take_profit) ?? Number.NaN,
-            proposedStop:protectedRunnerReadinessShadow.proposedStopForResearchOnly,
+            proposedStop:brokerRoundedShadowStop ?? Number.NaN,
             lastBid:quote?.bid ?? null,
             lastAsk:quote?.ask ?? null,
             quoteObservedAt:quote?.observedAt ?? null,
@@ -1844,6 +1858,11 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         protectedRunnerPreflightReason,
         protectedRunnerReadinessShadow,
         protectedRunnerNativeDistanceShadow,
+        // Provider-public symbol metadata only; differentiate actual
+        // published zero from absent optional slDistance, which stays blocked.
+        publishedStopDistance,
+        publishedStopDistanceUnit,
+        brokerRoundedShadowStop,
         m1LiveQuoteBars: m1?.liveQuoteBars ?? 0,
         m1ConsecutiveLiveQuoteBars: m1?.consecutiveLiveQuoteBars ?? 0,
         m1AlignedMomentum3: m1?.alignedMomentum3 ?? null,

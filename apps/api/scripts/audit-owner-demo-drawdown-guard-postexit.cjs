@@ -403,6 +403,13 @@ async function main(){
   const {run:refreshProgressiveRetention}=require('./audit-owner-demo-progressive-profit-retention.cjs');
   await refreshProgressiveRetention();
  }catch(e){console.error('OWNER_DEMO_PROGRESSIVE_RETENTION_RESEARCH_FAILED',String(e.message).slice(0,180))}
+ // A separate zero-order account-scoped audit tracks whether broker-native
+ // symbol SL distance and tick-normalized stop candidates become eligible.
+ // Never triggers a broker stop amendment or changes a protective close.
+ try{
+  const {run:refreshBrokerStopReadiness}=require('./audit-owner-demo-broker-stop-readiness.cjs');
+  await refreshBrokerStopReadiness();
+ }catch(e){console.error('OWNER_DEMO_BROKER_STOP_READINESS_FAILED',String(e.message).slice(0,180))}
  console.log('GUARD_POSTEXIT_SHADOW '+JSON.stringify({asOf:report.asOf,
   fromUtc,closed:report.aggregate.validBrokerSettlements,
   actualNetUsd:report.aggregate.realizedGuardExitNetUsd,

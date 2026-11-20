@@ -1,5 +1,7 @@
-import {evaluateCtraderStopDistanceProof as assess}
-  from './ctrader-native-min-stop-distance-shadow';
+import {
+  evaluateCtraderStopDistanceProof as assess,
+  normalizeIndicativeCtraderStopToTick as roundStop,
+} from './ctrader-native-min-stop-distance-shadow';
 
 const base={
   ownerDemoVerified:true,brokerId:'pepperstone-ctrader',
@@ -79,5 +81,48 @@ describe('Pepperstone DEMO cTrader native minimum stop preflight',()=>{
       {originalTakeProfit:1.09900},
     ])expect(assess({...base,...patch}).candidateMeetsAdvertisedMinDistance)
       .toBe(false);
+  });
+});
+
+describe('broker-native zero minimum and conservative tick normalization',()=>{
+  it('accepts an EXPLICIT provider slDistance=0 but still demands spread/tick distance',()=>{
+    const x=assess({...base,symbol:{...base.symbol,
+      minStopLossDistance:'0'}});
+    expect(x).toMatchObject({
+      candidateMeetsAdvertisedMinDistance:true,
+      minDistancePrice:0,
+      reason:'BROKER_MIN_STOP_POINTS_PASSED_REQUIRES_PROVIDER_ACK_AND_READBACK',
+      brokerOrderActions:0,changesExecution:false,
+    });
+    const near=assess({...base,symbol:{...base.symbol,
+      minStopLossDistance:'0'},proposedStop:1.10227});
+    expect(near.reason).toBe('STOP_TOO_CLOSE_TO_BROKER_MARKET');
+  });
+  it('never infers zero from an absent optional ProtoOASymbol.slDistance',()=>{
+    const missing=assess({...base,symbol:{...base.symbol,
+      minStopLossDistance:undefined}});
+    expect(missing.reason).toBe('MIN_STOP_DISTANCE_UNAVAILABLE');
+    expect(missing.candidateMeetsAdvertisedMinDistance).toBe(false);
+    const unsupported=assess({...base,symbol:{...base.symbol,
+      minStopLossDistance:'0',minStopLossDistanceUnit:'PERCENTAGE' as const}});
+    expect(unsupported.reason).toBe('PERCENTAGE_DISTANCE_NOT_NORMALIZED');
+  });
+  it('uses conservative BUY downward and SELL upward broker-tick rounding',()=>{
+    expect(roundStop(1.10120972,'BUY',5)).toBe(1.10120);
+    expect(roundStop(1.09880123,'SELL',5)).toBe(1.09881);
+    expect(roundStop(158.96508261,'SELL',3)).toBe(158.966);
+    expect(roundStop(159.12387654,'BUY',3)).toBe(159.123);
+    expect(roundStop(1.10120,'BUY',5)).toBe(1.10120);
+    expect(roundStop(1.09880,'SELL',5)).toBe(1.09880);
+    expect(roundStop(Number.NaN,'BUY',5)).toBeNull();
+    expect(roundStop(1.10,'BUY',0)).toBeNull();
+  });
+  it('tests the broker-rounded candidate against the broker minimum, not the off-grid guess',()=>{
+    const proposedStop=roundStop(1.10120972,'BUY',base.symbol.digits)!;
+    const x=assess({...base,proposedStop});
+    expect(x.candidateMeetsAdvertisedMinDistance).toBe(true);
+    expect(x.brokerOrderActions).toBe(0);
+    expect(assess({...base,proposedStop:1.10120972}).reason)
+      .toBe('INVALID_PRICE_OR_RISK_GEOMETRY');
   });
 });

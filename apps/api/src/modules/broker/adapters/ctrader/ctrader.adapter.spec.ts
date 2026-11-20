@@ -1804,6 +1804,31 @@ describe('CTraderAdapter', () => {
         minStopLossDistance:'2',minStopLossDistanceUnit:'PERCENTAGE',
       });
     });
+
+    it('distinguishes explicit zero SL distance from missing optional provider distance', async () => {
+      server.on(CTRADER_PAYLOAD_TYPE.SYMBOL_BY_ID_REQ,(payload,envelope)=>{
+        const ids=Array.isArray(payload.symbolId)?payload.symbolId as number[]:[];
+        return {
+          clientMsgId:envelope.clientMsgId,
+          payloadType:CTRADER_PAYLOAD_TYPE.SYMBOL_BY_ID_RES,
+          payload:{symbol:ids.map((symbolId,index)=>({
+            symbolId,digits:5,pipPosition:4,
+            minVolume:1000,maxVolume:100000000,
+            stepVolume:1000,lotSize:10000000,
+            ...(index===0?{slDistance:0,distanceSetIn:1}:{distanceSetIn:1}),
+          }))},
+        };
+      });
+      await connectDemo();
+      const specs=await adapter.getInstrumentList();
+      const first=specs.find(i=>i.symbol==='EUR/USD');
+      expect(first).toMatchObject({
+        minStopLossDistance:'0',minStopLossDistanceUnit:'POINTS',
+      });
+      const second=specs.find(i=>i.symbol!=='EUR/USD');
+      expect(second?.minStopLossDistance).toBeUndefined();
+      expect(second?.minStopLossDistanceUnit).toBeUndefined();
+    });
   });
 
   describe('getCurrentPrice', () => {

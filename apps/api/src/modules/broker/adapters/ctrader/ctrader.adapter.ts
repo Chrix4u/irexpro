@@ -680,7 +680,10 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           maxLot: volumeCentsToLotString(symbol.maxVolume ?? 0, symbol.lotSize),
           lotStep: volumeCentsToLotString(symbol.stepVolume ?? 0, symbol.lotSize),
           contractSize: moneyToDecimalString(symbol.lotSize, 2),
-          ...(Number.isInteger(symbol.slDistance) && (symbol.slDistance ?? 0) > 0 &&
+          // An explicitly published 0 is a legitimate zero minimum, not
+          // missing metadata. Keep absent slDistance UNKNOWN/fail-closed.
+          ...(Number.isInteger(symbol.slDistance) && symbol.slDistance !== undefined &&
+          symbol.slDistance >= 0 &&
           (symbol.distanceSetIn === undefined ||
             symbol.distanceSetIn === 1 || symbol.distanceSetIn === 2)
             ? {

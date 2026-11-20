@@ -45,6 +45,29 @@ export type CtraderStopDistanceProof = {
   changesExecution: false;
 };
 
+/**
+ * Prepare a RESEARCH-ONLY candidate for the provider's actual tick grid.
+ * BUY stop rounds DOWN; SELL stop rounds UP, so rounding never pretends
+ * to guarantee MORE protection than the original indicative price.
+ * The preflight must then re-check geometry, minimum stop distance and
+ * net-profit floor using the rounded level; this function grants nothing.
+ */
+export function normalizeIndicativeCtraderStopToTick(
+  stop: number, direction: 'BUY' | 'SELL', digits: number,
+): number | null {
+  if (!Number.isFinite(stop) || stop <= 0 ||
+    !Number.isInteger(digits) || digits < 1 || digits > 9) return null;
+  const scale = 10 ** digits;
+  const scaled = stop * scale;
+  if (!Number.isFinite(scaled) || scaled > Number.MAX_SAFE_INTEGER) return null;
+  const tolerance = 1e-7;
+  const units = direction === 'BUY'
+    ? Math.floor(scaled + tolerance)
+    : Math.ceil(scaled - tolerance);
+  if (units <= 0) return null;
+  return Number((units / scale).toFixed(digits));
+}
+
 export function evaluateCtraderStopDistanceProof(
   i: CtraderStopDistanceProofInput,
 ): CtraderStopDistanceProof {
@@ -73,7 +96,11 @@ export function evaluateCtraderStopDistanceProof(
   }
   const raw=i.symbol.minStopLossDistance;
   const points=raw == null?NaN:Number(raw);
-  if (!Number.isInteger(points) || points<=0 ||
+  // cTrader declares slDistance as an OPTIONAL unsigned integer; a
+  // PRESENT 0 means zero published minimum, while an ABSENT field stays
+  // UNKNOWN. Spread/tick headroom remains mandatory even for published 0.
+  if (raw === null || raw === undefined || raw === '' ||
+      !Number.isInteger(points) || points<0 ||
       !i.symbol.minStopLossDistanceUnit) {
     return fail('MIN_STOP_DISTANCE_UNAVAILABLE');
   }
@@ -88,7 +115,9 @@ export function evaluateCtraderStopDistanceProof(
   const bid=i.lastBid??NaN, ask=i.lastAsk??NaN;
   if (!Number.isFinite(ageSeconds)||ageSeconds<0||ageSeconds>5 ||
       !Number.isFinite(bid)||!Number.isFinite(ask)||
-      bid<=0||ask<=bid||ask-bid>minPrice*3) {
+      // A published zero minimum does NOT imply a zero allowable spread.
+      // Keep a conservative independent spread cap of twelve ticks.
+      bid<=0||ask<=bid||ask-bid>Math.max(minPrice*3,tick*12)) {
     return fail('STALE_OR_INVALID_BROKER_QUOTE',minPrice,
       Number.isFinite(ageSeconds)?ageSeconds:null);
   }
