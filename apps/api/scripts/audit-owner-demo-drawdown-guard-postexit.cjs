@@ -396,6 +396,13 @@ async function main(){
    await refreshPreentryContradiction();
   }
  }catch(e){console.error('OWNER_PREENTRY_CONTRADICTION_RESEARCH_FAILED',String(e.message).slice(0,180))}
+ // Compare broker-settled actual after-fee peak retention across the
+ // 09:28:43 UTC owner USD DEMO progressive-TP activation, with straddling
+ // positions excluded. Read-only, no additional timer or broker action.
+ try{
+  const {run:refreshProgressiveRetention}=require('./audit-owner-demo-progressive-profit-retention.cjs');
+  await refreshProgressiveRetention();
+ }catch(e){console.error('OWNER_DEMO_PROGRESSIVE_RETENTION_RESEARCH_FAILED',String(e.message).slice(0,180))}
  console.log('GUARD_POSTEXIT_SHADOW '+JSON.stringify({asOf:report.asOf,
   fromUtc,closed:report.aggregate.validBrokerSettlements,
   actualNetUsd:report.aggregate.realizedGuardExitNetUsd,
