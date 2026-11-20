@@ -11,6 +11,9 @@ const browserSecurityHeaders = [
 ];
 
 const nextConfig = {
+  // Build validated UI releases in an isolated output directory while the
+  // current Next server continues to read .next. Unset in production runtime.
+  distDir: process.env.IREXPRO_WEB_RELEASE_BUILD_DIR || '.next',
   reactStrictMode: true,
   poweredByHeader: false,
   // Transpile the shared workspace packages so they ship as raw TypeScript

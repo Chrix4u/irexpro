@@ -2,6 +2,7 @@ import {
   deriveActiveModelUiState,
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
+  explainTradeReadinessScore,
   summarizeDemoEntryEvidence,
   type DemoFocusedEntryDiagnosticView,
   hasExternalProviderPerformanceUiShape,
@@ -9,6 +10,25 @@ import {
   hasM1TacticalStatusUiShape,
   hasVpsScannerUiShape,
 } from "./vps-scanner-status";
+
+describe("entry gauge is a model score, never trade-formation progress", () => {
+  it("explains that a steady 52 means scanning without an approved order", () => {
+    const detail = explainTradeReadinessScore(52, false);
+    expect(detail).toContain("52/100 is a model score");
+    expect(detail).toContain("not 52% of a trade completed");
+    expect(detail).toContain("a new order requires separate model admission");
+  });
+  it("does not imply that a ready signal guarantees a broker fill", () => {
+    expect(explainTradeReadinessScore(82, true)).toBe(
+      "82/100 is the current model score, not a guaranteed broker fill.",
+    );
+  });
+  it("bounds corrupt or unusual display scores without authorizing orders", () => {
+    expect(explainTradeReadinessScore(-30, false)).toContain("0/100");
+    expect(explainTradeReadinessScore(150, false)).toContain("100/100");
+    expect(explainTradeReadinessScore(Number.NaN, false)).toContain("0/100");
+  });
+});
 
 describe("user-scoped recent DEMO entry decision evidence", () => {
   const evidence: DemoFocusedEntryDiagnosticView = {

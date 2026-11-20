@@ -2228,6 +2228,15 @@
   font-size: 0.78rem;
 }
 
+.ai-readiness__score-caption {
+  max-width: 25rem;
+  margin: 0.35rem auto 0.8rem;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
 .ai-readiness__copy {
   margin-top: 0.7rem;
   text-align: center;

@@ -107,6 +107,17 @@ const MAX_BLOCKED_READINESS_SCORE = 69;
 
 export type TradeReadinessBand = "WAITING" | "FORMING" | "READY";
 
+/** The 0–100 needle is a point-in-time model score, NEVER a progress bar.
+ * Repeated scans can leave it unchanged or decrease it without a stalled job. */
+export function explainTradeReadinessScore(score: number, tradeExpected: boolean): string {
+  const safeScore = Number.isFinite(score)
+    ? Math.round(Math.max(0, Math.min(100, score)))
+    : 0;
+  return tradeExpected
+    ? `${safeScore}/100 is the current model score, not a guaranteed broker fill.`
+    : `${safeScore}/100 is a model score, not ${safeScore}% of a trade completed. Scanning continues; a new order requires separate model admission, timing, and risk approval.`;
+}
+
 export interface TradeReadinessUiState {
   score: number;
   band: TradeReadinessBand;

@@ -59,6 +59,7 @@ import {
   deriveActiveModelUiState,
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
+  explainTradeReadinessScore,
   summarizeDemoEntryEvidence,
   hasExternalProviderPerformanceUiShape,
   hasM1TacticalStatusUiShape,
@@ -1475,17 +1476,17 @@ function TradeReadinessGauge({
           <h2 id="trade-readiness-title">Trade Readiness</h2>
         </div>
         <Badge variant={band === "READY" ? "success" : band === "FORMING" ? "warning" : "info"}>
-          {band === "READY" ? "TRADE READY" : band === "FORMING" ? "FORMING" : "WAITING"}
+          {band === "READY" ? "TRADE READY" : band === "FORMING" ? "ENTRY NOT QUALIFIED" : "WAITING"}
         </Badge>
       </div>
       <div
         className="ai-readiness__meter"
         role="meter"
-        aria-label="Trade readiness"
+        aria-label="Current model entry score, not trade formation progress"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={score}
-        aria-valuetext={`${headline}, ${score} percent`}
+        aria-valuetext={`${headline}. ${explainTradeReadinessScore(score, tradeExpected)}`}
       >
         <div className="ai-readiness__arc" aria-hidden="true">
           <span className="ai-readiness__scan-needle" style={{ transform: `rotate(${scanAngle}deg)` }} />
@@ -1495,6 +1496,9 @@ function TradeReadinessGauge({
         <strong className="ai-readiness__score">{score}</strong>
         <span className="ai-readiness__score-label">/ 100</span>
       </div>
+      <p className="ai-readiness__score-caption">
+        {explainTradeReadinessScore(score, tradeExpected)}
+      </p>
       <div className={`ai-readiness__scan-live${evidenceDelayed ? " ai-readiness__scan-live--delayed" : ""}`}>
         <span className="ai-readiness__scan-pulse" aria-hidden="true" />
         <div>
