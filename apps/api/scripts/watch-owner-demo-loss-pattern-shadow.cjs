@@ -223,9 +223,20 @@ function summarize(events,marker,baseline){
   const winners=done.filter(x=>num(x.settled.settledNetUsd)>0);
   const losers=done.filter(x=>num(x.settled.settledNetUsd)<0);
   const sum=xs=>rnd(xs.reduce((a,b)=>a+Number(b.settled.settledNetUsd),0),2);
+  const riskRows=done.filter(x=>num(x.entry.entry.features.initialRiskUsd)>0);
+  const sumRisk=riskRows.reduce((a,x)=>a+num(x.entry.entry.features.initialRiskUsd),0);
+  const meanR=riskRows.length?riskRows.reduce((a,x)=>
+   a+num(x.settled.settledNetUsd)/num(x.entry.entry.features.initialRiskUsd),0)/riskRows.length:null;
+  const winNet=sum(winners),lossNet=sum(losers);
   return {enrolled:rows.length,settled:done.length,openOrUnsettled:rows.length-done.length,
    wins:winners.length,losses:losers.length,
-   winnerNetUsd:sum(winners),loserNetUsd:sum(losers),netUsd:sum(done),
+   winRate:done.length?rnd(winners.length/done.length,4):null,
+   winnerNetUsd:winNet,loserNetUsd:lossNet,netUsd:sum(done),
+   afterCostProfitFactor:lossNet<0?rnd(winNet/-lossNet,4):null,
+   initialStopRiskCovered:riskRows.length,initialStopRiskMissing:done.length-riskRows.length,
+   meanNetR:meanR===null?null:rnd(meanR,4),
+   pooledNetPerInitialStopRisk:sumRisk>0?
+    rnd(riskRows.reduce((a,x)=>a+num(x.settled.settledNetUsd),0)/sumRisk,4):null,
    eligibleToRecommendTrades:false};
  };
  const byRoute={};
@@ -238,6 +249,30 @@ function summarize(events,marker,baseline){
   byWarning[h.id]={flagged:stats(yes),unflagged:stats(no),
    originallyFixedBeforeFutureOutcome:true,notAnExecutableRiskVeto:true};
  }
+ // Frozen entry-time enrollment only; instrument/route slices cannot use
+ // future realized outcomes to change their membership or thresholds.
+ const byRouteInstrument={};
+ const byRouteWarning={};
+ const byCloseReason={};
+ for(const route of ROUTES){
+  const routed=valid.filter(x=>x.entry.entry.features.route===route);
+  for(const symbol of ['EURUSD','AUDUSD','USDJPY','USDCAD']){
+   const scoped=routed.filter(x=>x.entry.entry.features.instrument===symbol);
+   byRouteInstrument[route+'|'+symbol]=stats(scoped);
+  }
+  for(const hypothesis of HYPOTHESES){
+   const flagged=routed.filter(x=>x.entry.entry.preRegisteredWarnings.includes(hypothesis.id));
+   const unflagged=routed.filter(x=>!x.entry.entry.preRegisteredWarnings.includes(hypothesis.id));
+   byRouteWarning[route+'|'+hypothesis.id]={
+    flagged:stats(flagged),unflagged:stats(unflagged),
+    hypotheticalWinnersRejected:stats(flagged).wins,
+    hypotheticalLosersAvoided:stats(flagged).losses,
+    purelyObservational:true,executableVetoEligible:false,
+   };
+  }
+ }
+ for(const reason of ['PROFIT_PROTECTION','AI_CLOSE_SIGNAL','BROKER_CLOSE'])
+  byCloseReason[reason]=stats(valid.filter(x=>x.settled?.closeReason===reason));
  const settled=valid.filter(x=>num(x.settled?.settledNetUsd)!==null);
  const days=[...new Set(settled.map(x=>x.entry.entry.features.openedAt.slice(0,10)))];
  const profitGivebacks=settled.filter(x=>x.settled.settledNetUsd<0&&
@@ -255,7 +290,9 @@ function summarize(events,marker,baseline){
   futureIndependentSettledDays:days.length,
   confirmedPeak025REvents:peak025,confirmedPeak050REvents:peak050,
   futureSettledProfitGaveBackToLoss:profitGivebacks.length,
-  byRoute,byWarning,
+  byRoute,byWarning,byRouteInstrument,byRouteWarning,byCloseReason,
+  riskNormalization:'BROKER_NET_DIVIDED_BY_FROZEN_PRE_FILL_ALLOCATION_RISK_DENOMINATOR; FALLBACK_RISK_AMOUNT_MAY_NOT_EQUAL_ACTUAL_STOP_RISK',
+  frozenWarningMembershipUnchanged:true,
   qualification:'NOT_QUALIFIED_TO_MODIFY_EXECUTION',
   requiredEvidence:'Multiple independent future market days, broker-net positive expectancy, low false rejection of winners, after-cost and drawdown tests. A losing BUY is not proof that a SELL would profit.',
  };
@@ -361,6 +398,11 @@ async function tick({client,owner,marker,baseline,root,now=Date.now()}){
  const report=writeSummary(root,marker,baseline,events);
  return {added,observed:rows.length,report};
 }
+const MAX_STALLED_STEP_MS=90_000;
+function watchdogStalled(busySince,now=Date.now(),threshold=MAX_STALLED_STEP_MS){
+ return Number.isFinite(busySince)&&busySince>0&&Number.isFinite(now)&&
+  Number.isFinite(threshold)&&threshold>0&&now-busySince>threshold;
+}
 async function main(){
  require('dotenv').config({path:path.join(__dirname,'../.env'),quiet:true});
  const {Client}=require('pg');
@@ -371,26 +413,49 @@ async function main(){
   port:Number(process.env.DB_PORT||5432),database:process.env.DB_NAME,
   user:process.env.DB_USER,password:process.env.DB_PASSWORD,
   ssl:getDatabaseSslOptions(process.env.DB_SSL==='true'),
+  connectionTimeoutMillis:8000,query_timeout:15000,
   application_name:'irexpro-owner-loss-memory-readonly'});
  await c.connect();
- let busy=false,stopped=false;
+ let busy=false,stopped=false,busySince=null,consecutiveFailures=0;
+ // Install watchdog before FIRST tick: otherwise a hung initial read may
+ // leave PM2 reporting 'online' while no future entries are frozen.
+ const watchdog=setInterval(()=>{
+  if(!stopped&&watchdogStalled(busySince)){
+   console.error('LOSS_PATTERN_SHADOW_STALLED_RESTART',JSON.stringify({
+    busySeconds:Math.round((Date.now()-busySince)/1000),
+    noTradingAuthority:true}));
+   process.exit(1); // PM2 restarts only this isolated read-only watcher.
+  }
+ },CADENCE);
  const step=async()=>{
   if(stopped||busy)return;
-  busy=true;try{
+  busy=true;busySince=Date.now();try{
    const x=await tick({client:c,owner,marker,baseline,root:ROOT});
+   consecutiveFailures=0;
    if(x.added||!process.argv.includes('--watch'))
     console.log('LOSS_PATTERN_SHADOW',JSON.stringify({
      at:x.report.generatedAt,enrolled:x.report.futureEntriesEnrolled,
      settled:Object.values(x.report.byRoute).reduce((n,v)=>n+v.settled,0),
      events:x.added,qualified:false,brokerOrders:0,modifiesExecution:false,
    }));
-  }catch(e){console.error('LOSS_PATTERN_SHADOW_DEFERRED',e.message.slice(0,180))}
-  finally{busy=false}
+  }catch(e){
+   consecutiveFailures++;
+   console.error('LOSS_PATTERN_SHADOW_DEFERRED',e.message.slice(0,180));
+   if(consecutiveFailures>=3){
+    console.error('LOSS_PATTERN_SHADOW_REPEAT_FAILURE_RESTART',JSON.stringify({
+     consecutiveFailures,noTradingAuthority:true}));
+    process.exit(1); // Restart only this research process; do not touch API.
+   }
+  }finally{busy=false;busySince=null}
  };
  await step();
- if(!process.argv.includes('--watch')){await c.end();return}
+ if(!process.argv.includes('--watch')){
+  clearInterval(watchdog);await c.end();
+  if(consecutiveFailures)process.exitCode=1;
+  return;
+ }
  const timer=setInterval(step,CADENCE);
- const stop=async()=>{stopped=true;clearInterval(timer);
+ const stop=async()=>{stopped=true;clearInterval(timer);clearInterval(watchdog);
   while(busy)await new Promise(r=>setTimeout(r,100));
   await c.end().catch(()=>{});process.exit(0)};
  process.once('SIGTERM',()=>void stop());
@@ -398,7 +463,7 @@ async function main(){
 }
 module.exports={ROOT,JOURNAL_SOURCE,BASELINE_SOURCE,HYPOTHESES,SQL,
  frozenEntry,scoreEntry,evaluateEntry,plan,summarize,loadActivation,
- setStages,readJournal,readTrades,tick};
+ setStages,readJournal,readTrades,tick,watchdogStalled,MAX_STALLED_STEP_MS};
 if(require.main===module)main().catch(e=>{
  console.error('LOSS_PATTERN_SHADOW_FATAL',String(e.message).slice(0,180));process.exitCode=1;
 });

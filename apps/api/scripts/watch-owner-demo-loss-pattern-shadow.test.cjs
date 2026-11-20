@@ -188,3 +188,38 @@ test('worker tick fetches and persists frozen candle fingerprints once',async()=
   assert.equal(calls.filter(x=>x===QUERY).length,1);
  }finally{fs.rmSync(tmp,{recursive:true,force:true})}
 });
+
+test('read-only watcher watchdog detects a frozen busy tick without false startup alarms',()=>{
+ assert.equal(m.watchdogStalled(null,when),false);
+ assert.equal(m.watchdogStalled(when-30000,when),false);
+ assert.equal(m.watchdogStalled(when-m.MAX_STALLED_STEP_MS,when),false);
+ assert.equal(m.watchdogStalled(when-m.MAX_STALLED_STEP_MS-1,when),true);
+ assert.equal(m.watchdogStalled(NaN,when),false);
+ assert.equal(m.watchdogStalled(when,NaN),false);
+});
+test('frozen per-route warning report exposes cost and missed winners without authorizing a veto',()=>{
+ const orig=m.plan(row(),new Map(),when+12000,baseline)[0];
+ const second={...orig,tradeKey:'c1a0e628-09cb-4d89-868c-cbb88d6cb7b4',
+  entry:{...orig.entry,features:{...orig.entry.features,
+   route:'EARLY_TRANSITION',instrument:'AUDUSD',initialRiskUsd:200},
+   preRegisteredWarnings:['ET_M1_MOMENTUM3_OPPOSES']}};
+ const settled=(k,net,reason)=>({artifact:m.JOURNAL_SOURCE,tradeKey:k,stage:'SETTLED',
+  capturedAt:new Date(when+180000).toISOString(),
+  settledNetUsd:net,closeReason:reason,
+  maxFavorableBrokerNetUsd:25});
+ const r=m.summarize([
+  orig,settled(orig.tradeKey,-50,'AI_CLOSE_SIGNAL'),
+  second,settled(second.tradeKey,100,'PROFIT_PROTECTION'),
+ ],{activatedAt:new Date(when-1000).toISOString(),baselineSha256:'x'},baseline);
+ assert.equal(r.byRouteInstrument['CONFIRMED_REVERSAL|USDJPY'].netUsd,-50);
+ assert.equal(r.byRouteInstrument['EARLY_TRANSITION|AUDUSD'].netUsd,100);
+ assert.equal(r.byRouteWarning['EARLY_TRANSITION|ET_M1_MOMENTUM3_OPPOSES'].hypotheticalWinnersRejected,1);
+ assert.equal(r.byRouteWarning['EARLY_TRANSITION|ET_M1_MOMENTUM3_OPPOSES'].hypotheticalLosersAvoided,0);
+ assert.equal(r.byRouteWarning['EARLY_TRANSITION|ET_M1_MOMENTUM3_OPPOSES'].flagged.meanNetR,.5);
+ assert.equal(r.byRouteWarning['CONFIRMED_REVERSAL|CR_M5_OPPOSES'].flagged.meanNetR,-.5);
+ assert.equal(r.byCloseReason.PROFIT_PROTECTION.netUsd,100);
+ assert.equal(r.byCloseReason.AI_CLOSE_SIGNAL.netUsd,-50);
+ assert.equal(r.frozenWarningMembershipUnchanged,true);
+ assert.equal(r.qualification,'NOT_QUALIFIED_TO_MODIFY_EXECUTION');
+ assert.equal(r.brokerOrders,0);
+});
