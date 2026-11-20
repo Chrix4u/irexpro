@@ -377,6 +377,13 @@ async function main(){
   const {runWithArchive:refreshProtectionPostExit}=require('./audit-owner-demo-profit-protection-postexit.cjs');
   await refreshProtectionPostExit(quoteFiles.byPair,quoteFiles.stats,fromUtc);
  }catch(e){console.error('PROFIT_PROTECTION_POSTEXIT_RESEARCH_FAILED',String(e.message).slice(0,180))}
+ // Owner-only past-position exit-intelligence observations, strictly frozen
+ // before broker settlement, are matched to actual net results. Prospective
+ // deterioration flags carry ZERO execution authority.
+ try{
+  const {run:refreshAsOfExitWarnings}=require('./audit-owner-demo-asof-exit-warning-lineage.cjs');
+  await refreshAsOfExitWarnings();
+ }catch(e){console.error('OWNER_ASOF_EXIT_WARNING_RESEARCH_FAILED',String(e.message).slice(0,180))}
  console.log('GUARD_POSTEXIT_SHADOW '+JSON.stringify({asOf:report.asOf,
   fromUtc,closed:report.aggregate.validBrokerSettlements,
   actualNetUsd:report.aggregate.realizedGuardExitNetUsd,
