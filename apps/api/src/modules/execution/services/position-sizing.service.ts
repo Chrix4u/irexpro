@@ -12,6 +12,7 @@ import {
   type PaperAllocationConfidenceTier,
 } from './paper-allocation-sizing-policy';
 import { drawdownRiskAdjustment } from './drawdown-risk-scaling';
+import { ownerPepperstoneDemoNoonLotTrial } from '../../ai/owner-pepperstone-demo-noon-lot-trial';
 
 /**
  * Round 6 live-execution completion (§4) — typed failure codes for the
@@ -758,8 +759,27 @@ export class PositionSizingService {
     const paperPreferredLot = allocationAwarePaper
       ? ExactDecimal.parse(PAPER_PRODUCT_PREFERRED_LOT)
       : null;
+    // A narrowly scoped, server-clock-expiring DEMO trial can lift the
+    // four-lot PRODUCT upper bound to six. This does not lift the proven
+    // broker/spec, model-request, full stop-risk, leverage or margin bounds.
+    // The exact owner AND separately configured DEMO connection must match;
+    // generic PAPER, other users/brokers and LIVE remain capped as before.
+    const ownerNoonDemoTrial = ownerPepperstoneDemoNoonLotTrial({
+      enabled: process.env.IREXPRO_OWNER_PEPPERSTONE_DEMO_4PLUS_UNTIL_NOON_20261120 === 'enabled',
+      userId,
+      configuredOwnerId: process.env.VPS_FOREX_SCANNER_USER_ID,
+      brokerConnectionId: params.brokerConnectionId,
+      configuredBrokerConnectionId:
+        process.env.IREXPRO_OWNER_PEPPERSTONE_DEMO_NOON_TRIAL_BROKER_CONNECTION_ID,
+      brokerId: paperBrokerId,
+      accountType: paperBrokerAccountType,
+      accountCurrency,
+      now: new Date(),
+    });
     const paperProductMaximumLot = allocationAwarePaper
-      ? ExactDecimal.parse(PAPER_PRODUCT_MAX_LOT)
+      ? ExactDecimal.parse(ownerNoonDemoTrial.eligible
+          ? String(ownerNoonDemoTrial.maxRequestedLots)
+          : PAPER_PRODUCT_MAX_LOT)
       : null;
     let effectiveRequestedLotUpperBound = requestedLotUpperBound;
     if (paperProductMinimumLot && paperProductMaximumLot) {

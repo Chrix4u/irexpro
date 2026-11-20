@@ -114,6 +114,10 @@ import {
 } from './pepperstone-demo-advisory-alternate-trial';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import {
+  ownerPepperstoneDemoNoonLotTrial,
+  OWNER_DEMO_NOON_LOT_TRIAL_ARTIFACT,
+} from './owner-pepperstone-demo-noon-lot-trial';
+import {
   evaluateGuardedPullback,
   type GuardedPullbackDecision,
 } from './pepperstone-demo-guarded-pullback';
@@ -3453,6 +3457,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     candidate: M1TacticalCandidate,
     requestedVolumeCap: number,
     pepperstoneDemoRiskPilot = false,
+    demoTrialPreScreenRiskPercent?: number,
   ): Promise<{
     allowed: boolean;
     volumeCap: number;
@@ -3510,6 +3515,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           entryPrice: candidate.entry,
           stopLoss: candidate.stopLoss,
           requestedVolumeCap,
+          ...(demoTrialPreScreenRiskPercent !== undefined
+            ? { maxTradeRiskPercent: demoTrialPreScreenRiskPercent }
+            : {}),
           volumeStep: 0.001,
         }).volumeCap
       : requestedVolumeCap;
@@ -3893,14 +3901,54 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       targetDistance: candidate.targetDistance,
       guardedPullback: guardedPullbackRecovery,
     });
-    const maxRequestedBeforeQuality =
-      highConvictionCeiling.eligible
+    // Owner explicitly authorized a short DEMO high-lot evaluation to noon
+    // Ghana time. The risk engine (including current drawdown scaling) remains
+    // authoritative; this only requests up to six lots for already admitted
+    // continuous CR/ET signals. Rescue, counter, alternate short-cap and
+    // independent M5-conflict ceilings are not removed by this experiment.
+    const noonLotTrial = ownerPepperstoneDemoNoonLotTrial({
+      enabled: this.config.get<string>(
+        'IREXPRO_OWNER_PEPPERSTONE_DEMO_4PLUS_UNTIL_NOON_20261120',
+        '',
+      ) === 'enabled',
+      userId,
+      configuredOwnerId: this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', ''),
+      brokerConnectionId,
+      configuredBrokerConnectionId: this.config.get<string>(
+        'IREXPRO_OWNER_PEPPERSTONE_DEMO_NOON_TRIAL_BROKER_CONNECTION_ID',
+        '',
+      ),
+      brokerId: pepperstoneDemoRiskPilot ? 'pepperstone-ctrader' : null,
+      accountType: pepperstoneDemoRiskPilot ? 'DEMO' : null,
+      accountCurrency: pepperstoneDemoRiskPilot ? 'USD' : null,
+      now: new Date(),
+    });
+    const noonLotTrialForAdmittedReversal =
+      noonLotTrial.eligible &&
+      qualityRiskEnabled &&
+      demoAlternativeTrial?.eligible === true &&
+      demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT &&
+      demoAlternativeTrial.continuousEvidence === true &&
+      ['CONFIRMED_REVERSAL', 'EARLY_TRANSITION'].includes(
+        multimodelDemo?.ensemble.strategyRoute ?? '',
+      ) &&
+      !guardedPullbackRecovery &&
+      !useProfessionalM1Fallback &&
+      !useM5EarlyTransitionHandoff;
+    const maxRequestedBeforeQuality = noonLotTrialForAdmittedReversal
+      ? noonLotTrial.maxRequestedLots
+      : highConvictionCeiling.eligible
         ? highConvictionCeiling.maxLotCeiling
         : executionVolumeCap;
-    const qualityAdjustedVolumeCap = qualityRisk
-      ? Math.min(maxRequestedBeforeQuality,
-          maxRequestedBeforeQuality * qualityRisk.riskFraction)
-      : maxRequestedBeforeQuality;
+    // During the owner-authorized DEMO trial, suspend the *advisory* lot
+    // multiplier only. The independent M5 weak-entry soft cap, hard broker
+    // risk-at-stop, drawdown, currency exposure and margin all still apply.
+    const qualityAdjustedVolumeCap = noonLotTrialForAdmittedReversal
+      ? maxRequestedBeforeQuality
+      : qualityRisk
+        ? Math.min(maxRequestedBeforeQuality,
+            maxRequestedBeforeQuality * qualityRisk.riskFraction)
+        : maxRequestedBeforeQuality;
     // Prospective owner-Pepperstone DEMO-only loss mitigation. The frozen
     // CONFIRMED_REVERSAL entry cohort with M5 opposition is net losing.
     // Apply a *soft lot ceiling*, never a new trade veto, direction flip, or
@@ -3923,6 +3971,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? Math.min(m5ReversalSoftCap.requestedLotCap, 0.2)
         : m5ReversalSoftCap.requestedLotCap,
       pepperstoneDemoRiskPilot,
+      noonLotTrialForAdmittedReversal
+        ? noonLotTrial.maximumPrescreenRiskPercent
+        : undefined,
     );
     if (!currencyExposureGuard.allowed) {
       const reason = currencyExposureGuard.productFloorBlocked
@@ -3989,6 +4040,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const signalId = uuidv5(signalIdentity, M1_SIGNAL_NAMESPACE);
     await this.evidence.markExecutionLink(decisionId, signalId, undefined);
 
+    // Strict cutoff at the last application dispatch, not only at model
+    // scoring or server startup. A candidate crossing noon is discarded;
+    // future candidates use the original lot sizing without a restart.
+    if (noonLotTrialForAdmittedReversal &&
+        Date.now() >= Date.parse(noonLotTrial.endsAt)) {
+      await this.evidence.markOutcomeState(
+        decisionId, 'RISK_REJECTED', new Date(),
+        'OWNER_PEPPERSTONE_DEMO_NOON_LOT_TRIAL_EXPIRED_BEFORE_DISPATCH',
+      );
+      return;
+    }
     try {
       const result = await this.aiSignalService.receiveSignal({
         signalId,
@@ -4239,7 +4301,23 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           m1_pepperstone_demo_alternative_trial_expires_at: demoAlternativeTrial?.eligible
             ? demoAlternativeTrial.endsAt
             : null,
-          m1_pepperstone_demo_max_risk_percent: pepperstoneDemoRiskPilot ? 0.25 : null,
+          m1_pepperstone_demo_max_risk_percent: pepperstoneDemoRiskPilot
+            ? noonLotTrialForAdmittedReversal
+              ? noonLotTrial.maximumPrescreenRiskPercent
+              : 0.25
+            : null,
+          m1_owner_demo_noon_lot_trial_artifact: noonLotTrialForAdmittedReversal
+            ? OWNER_DEMO_NOON_LOT_TRIAL_ARTIFACT
+            : null,
+          m1_owner_demo_noon_lot_trial_expires_at: noonLotTrialForAdmittedReversal
+            ? noonLotTrial.endsAt
+            : null,
+          m1_owner_demo_noon_lot_trial_max_requested_lots: noonLotTrialForAdmittedReversal
+            ? noonLotTrial.maxRequestedLots
+            : null,
+          m1_owner_demo_noon_lot_trial_advisory_quality_fraction: noonLotTrialForAdmittedReversal
+            ? (qualityRisk?.riskFraction ?? null)
+            : null,
           m1_pepperstone_demo_aligned_target_percent: pepperstoneDemoRiskPilot
             ? M1_PEPPERSTONE_DEMO_ALIGNED_CURRENCY_TARGET_PERCENT
             : null,
