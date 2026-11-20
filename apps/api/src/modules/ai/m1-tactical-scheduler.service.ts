@@ -84,6 +84,7 @@ import {
   type PlanBPortfolioPosition,
 } from './plan-b-multimodel-shadow';
 import { scorePlanBClockNeutralResearch } from './v8-shadow-meta-scorer';
+import { scoreOwnerDemoEntryOutcome } from './owner-demo-entry-outcome-shadow';
 import { evaluatePepperstonePairSideAsOfShadow } from './pepperstone-pair-side-asof-shadow';
 import {
   evaluatePepperstoneDemoContinuationPause,
@@ -3186,6 +3187,62 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       }
     }
 
+    // Frozen pre-entry snapshot of completed broker-native M1 candles. The
+    // post-entry label is NEVER available here. All features are observed
+    // before any order can be submitted. Scoring is owner DEMO SHADOW-ONLY,
+    // and does not participate in canExecute, lot sizing or broker dispatch.
+    const observedBrokerCandles =
+      brokerMarketContext?.marketDataAuthority === 'BROKER_NATIVE' &&
+      brokerMarketContext.connectionId === brokerConnectionId &&
+      Number.isFinite(features.latestM1OpenTime.getTime()) &&
+      features.latestM1OpenTime.getTime() + 60_000 <= decisionTime.getTime();
+    const ownerDemoEntryOutcomeShadow =
+      professionalDemoPhase && observedBrokerCandles &&
+      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId &&
+      this.config.get<string>('VPS_FOREX_SCANNER_BROKER_CONNECTION_ID', '') === brokerConnectionId &&
+      multimodelDemo
+        ? scoreOwnerDemoEntryOutcome({
+            route: multimodelDemo.ensemble.strategyRoute,
+            evaluatedAt: decisionTime,
+            featureValues: {
+              alignedM5: candidate.alignedM5,
+              m5Body: candidate.alignedM5LatestBodyPressure,
+              alignedH1: candidate.alignedH1,
+              alignedH4: candidate.alignedH4,
+              alignedM1Momentum3: candidate.alignedMomentum3Atr,
+              planBScore: multimodelDemo.ensemble.ensembleScore,
+              forecastNetR: multimodelDemo.governance.netExpectedR,
+            },
+          })
+        : null;
+    const ownerDemoPreEntryCandleSnapshot = observedBrokerCandles ? {
+      artifact: 'owner-demo-broker-native-completed-candle-asof-v1',
+      researchOnly: true,
+      modifiesExecution: false,
+      grantsTradeAuthority: false,
+      observedAt: decisionTime.toISOString(),
+      latestCompletedM1BarOpen: features.latestM1OpenTime.toISOString(),
+      source: brokerMarketContext?.candleSource ?? null,
+      m1BodyRangeRatio: features.bodyRangeRatio,
+      m1CloseAligned:
+        candidate.direction === 'BUY'
+          ? 2 * features.closeLocation - 1
+          : 1 - 2 * features.closeLocation,
+      m1OpposingWickRatio:
+        candidate.direction === 'BUY'
+          ? features.upperWickRatio
+          : features.lowerWickRatio,
+      m1SupportiveWickRatio:
+        candidate.direction === 'BUY'
+          ? features.lowerWickRatio
+          : features.upperWickRatio,
+      m5AlignedLatestBodyPressure: candidate.alignedM5LatestBodyPressure ?? null,
+      m5AlignedBodyPressure3: candidate.alignedM5BodyPressure3,
+      m1AlignedMomentum3Atr: candidate.alignedMomentum3Atr,
+      alignedH1: candidate.alignedH1,
+      alignedH4: candidate.alignedH4,
+    } : null;
+
     const persistStartedAt = Date.now();
     const decision = await this.evidence.recordDecision({
       userId,
@@ -3209,6 +3266,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         // magnitudes rather than only the binary HARD_HIGH/HARD_LOW labels.
         // Never consumed by the execution or promotion path.
         patternMemory,
+        ownerDemoEntryOutcomeShadow,
+        ownerDemoPreEntryCandleSnapshot,
         oodResearchFeatures: {
           version: 'm1-ood-asof-envelope-v1',
           extensionAtr: features.extensionAtr,
