@@ -358,6 +358,13 @@ async function main(){
   const {main:refreshPreEntryResearch}=require('./audit-owner-demo-preentry-to-5m-outcomes.cjs');
   await refreshPreEntryResearch();
  }catch(e){console.error('PREENTRY_FIVE_MINUTE_RESEARCH_REFRESH_FAILED',String(e.message).slice(0,180))}
+ // The explicit owner demo high-lot window gets its own *actual broker fills*
+ // versus requested volume and after-fee settled outcome ledger. Uses this
+ // existing read-only half-hourly monitor, no new trading process or timer.
+ try{
+  const {run:refreshOwnerNoonLotTrial}=require('./audit-owner-pepperstone-demo-noon-lot-trial.cjs');
+  await refreshOwnerNoonLotTrial();
+ }catch(e){console.error('OWNER_NOON_LOT_TRIAL_MONITOR_FAILED',String(e.message).slice(0,180))}
  console.log('GUARD_POSTEXIT_SHADOW '+JSON.stringify({asOf:report.asOf,
   fromUtc,closed:report.aggregate.validBrokerSettlements,
   actualNetUsd:report.aggregate.realizedGuardExitNetUsd,
