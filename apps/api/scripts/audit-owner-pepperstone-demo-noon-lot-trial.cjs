@@ -26,7 +26,8 @@ const QUERY=[
  'JOIN broker.broker_connections b ON b.id=ti.broker_connection_id AND b.user_id=ti.user_id',
  'LEFT JOIN trading.trades t ON t.trade_intent_id=ti.id AND t.user_id=ti.user_id',
  'LEFT JOIN LATERAL(SELECT a.sizing_inputs FROM trading.capital_allocations a',
- ' WHERE a.trade_intent_id=ti.id AND a.user_id=ti.user_id AND a.created_at<=now()',
+ ' WHERE a.trade_intent_id=ti.id AND a.user_id=ti.user_id',
+ ' AND t.opened_at IS NOT NULL AND a.created_at<=t.opened_at',
  ' ORDER BY a.created_at DESC LIMIT 1) ca ON TRUE',
  'WHERE ti.user_id=$1 AND b.user_id=$1 AND ti.broker_connection_id=$2',
  "AND b.broker_id='pepperstone-ctrader' AND b.account_type='DEMO'",
@@ -46,6 +47,9 @@ function economicSummary(settlements){
  const avgGain=wins.length?gain/wins.length:null;
  const avgLoss=losses.length?-loss/losses.length:null;
  const lots=sum(settlements,'lot');
+ const riskCovered=settlements.filter(t=>Number.isFinite(t.riskUsd)&&t.riskUsd>0);
+ const riskSum=sum(riskCovered,'riskUsd');
+ const rValues=riskCovered.map(t=>t.net/t.riskUsd);
  return {
   settled:settlements.length,wins:wins.length,losses:losses.length,
   flat:settlements.length-wins.length-losses.length,
@@ -60,6 +64,12 @@ function economicSummary(settlements){
     ?Number((avgLoss/(avgGain+avgLoss)).toFixed(4)):null,
   settledLotTotal:rnd(lots),
   netUsdPerSettledLot:lots>0?rnd(sum(settlements,'net')/lots):null,
+  riskCoveredSettlements:riskCovered.length,
+  riskMissingSettlements:settlements.length-riskCovered.length,
+  recordedInitialStopRiskUsd:rnd(riskSum),
+  meanRealizedNetR:rValues.length?Number((rValues.reduce((n,v)=>n+v,0)/rValues.length).toFixed(4)):null,
+  pooledNetPerRecordedInitialStopRisk:riskSum>0
+   ?Number((sum(riskCovered,'net')/riskSum).toFixed(4)):null,
  };
 }
 function groupSettlements(rows,key){
@@ -132,8 +142,10 @@ function summarize(rows,now=new Date()){
    report.swapUsdSettled+=netParts[2];
    report.grossBrokerPnlUsdSettled+=netParts[0];
    report.settledLotTotal+=lot;
+   const initialRisk=num(r.risk_at_stop);
    settledDetails.push({route:String(r.strategy_route||'UNKNOWN'),
     instrument:String(r.instrument||'UNKNOWN'),lot,net,
+    riskUsd:initialRisk!=null&&initialRisk>0?initialRisk:null,
     gross:netParts[0],commission:netParts[1],swap:netParts[2]});
    if(net>0)report.settledWins++;
    else if(net<0)report.settledLosses++;

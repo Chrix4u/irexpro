@@ -14,6 +14,7 @@ const row=(overrides={})=>({
 test('only the precise owner DEMO and source-artifact intents can be read',()=>{
  for(const fragment of [
   'ti.user_id=$1','b.user_id=$1','ti.broker_connection_id=$2',
+  'a.created_at<=t.opened_at','t.opened_at IS NOT NULL',
   "b.broker_id='pepperstone-ctrader'","b.account_type='DEMO'",
   "b.account_currency='USD'",'ti.created_at<$5::timestamptz',
   'ti.created_at>=$4::timestamptz',"ti.metadata->>'m1_owner_demo_noon_lot_trial_artifact'=$3"
@@ -80,6 +81,11 @@ test('economic decomposition uses actual filled lots, signed fees and settled ou
  assert.equal(s.economics.breakEvenWinRateAtObservedPayoffs,0.7143);
  assert.equal(s.economics.settledLotTotal,7.49);
  assert.equal(s.economics.netUsdPerSettledLot,-8.01);
+ assert.equal(s.economics.riskCoveredSettlements,2);
+ assert.equal(s.economics.riskMissingSettlements,0);
+ assert.equal(s.economics.recordedInitialStopRiskUsd,344);
+ assert.equal(s.economics.meanRealizedNetR,-0.1744);
+ assert.equal(s.economics.pooledNetPerRecordedInitialStopRisk,-0.1744);
  assert.equal(s.byLotBucket.ACTUAL_FOUR_PLUS.netUsd,40);
  assert.equal(s.byLotBucket.ACTUAL_BELOW_FOUR.netUsd,-100);
  assert.equal(s.byStrategyInstrument['CONFIRMED_REVERSAL|AUDUSD'].netUsd,40);
@@ -97,6 +103,21 @@ test('all-open and all-winning cohorts do not invent break-even or profit factor
  assert.equal(win.economics.profitFactor,null);
  assert.equal(win.economics.breakEvenWinRateAtObservedPayoffs,null);
  assert.equal(win.economics.winRate,1);
+});
+test('missing or invalid ex-ante risk cannot be silently imputed',()=>{
+ const s=summarize([
+  row({trade_status:'CLOSED',closed_at:'2026-11-20T04:11:00Z',
+   realised_pnl:'50',commission:'-10',swap:'0',risk_at_stop:null}),
+  row({intent_id:'x',trade_id:'y',created_at:'2026-11-20T04:13:00Z',
+   trade_status:'CLOSED',closed_at:'2026-11-20T04:21:00Z',
+   realised_pnl:'-10',commission:'-5',swap:'0',risk_at_stop:'0'})
+ ],new Date('2026-11-20T05:00:00Z'));
+ assert.equal(s.economics.netUsd,25);
+ assert.equal(s.economics.riskCoveredSettlements,0);
+ assert.equal(s.economics.riskMissingSettlements,2);
+ assert.equal(s.economics.recordedInitialStopRiskUsd,0);
+ assert.equal(s.economics.meanRealizedNetR,null);
+ assert.equal(s.economics.pooledNetPerRecordedInitialStopRisk,null);
 });
 test('rejects a supposed trial signal outside the exact authorized window',()=>{
  assert.throws(()=>summarize([
