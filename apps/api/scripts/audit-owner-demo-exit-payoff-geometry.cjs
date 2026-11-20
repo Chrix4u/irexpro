@@ -18,6 +18,14 @@ const QUERY=[
  't.max_adverse_pnl,t.profit_giveback,t.path_peak_observed_at,',
  'ti.created_at AS intent_at,ti.stop_loss AS original_intent_stop,',
  'ti.take_profit AS original_intent_target,ti.metadata,',
+ 'EXISTS(SELECT 1 FROM audit.audit_logs a WHERE a.actor_user_id=t.user_id',
+ "AND a.resource_type='Trade' AND a.resource_id=t.id::text",
+ "AND a.action='TRADE_CLOSE_REQUESTED'",
+ "AND a.created_at>=t.opened_at AND a.created_at<=t.closed_at + interval '2 minutes')",
+ 'AS app_close_request_persisted,',
+ 'EXISTS(SELECT 1 FROM trading.orders o WHERE o.trade_id=t.id AND o.user_id=t.user_id',
+ "AND o.created_at>=t.opened_at AND o.created_at<=t.closed_at + interval '2 minutes')",
+ 'AS linked_postopen_order_persisted,',
  'd.id::text AS decision_id,d.created_at AS decision_recorded_at,',
  'd.evaluated_at AS decision_evaluated_at,d.candidate,d.governance,',
  "ca.sizing_inputs->>'finalRiskAtStop' AS allocated_stop_risk_usd,",
@@ -123,6 +131,15 @@ function decode(row){
   dayUtc:new Date(opened).toISOString().slice(0,10),
   instrument:row.instrument,direction:row.direction,route:String(m.multimodel_plan_b_route||'UNKNOWN'),
   closeClass,originalCloseReason:row.close_reason||'UNKNOWN',isTrial:trial,
+  // Audited application request/order records ONLY. The absence of an
+  // application request cannot identify the provider's native close reason.
+  appCloseRequestEvidence:row.app_close_request_persisted===true?'PERSISTED':
+   row.app_close_request_persisted===false?'NOT_RECORDED':'UNKNOWN',
+  linkedPostOpenOrderEvidence:row.linked_postopen_order_persisted===true?'PERSISTED':
+   row.linked_postopen_order_persisted===false?'NOT_RECORDED':'UNKNOWN',
+  preEntryM5Opposition:originalDecisionVerified&&val(candidate.alignedM5)!==null?
+   val(candidate.alignedM5)<=-0.2:null,
+  preEntryM5Value:originalDecisionVerified?val(candidate.alignedM5):null,
   trialCohort:trial?'EXPLICIT_OWNER_HIGH_LOT':'BASELINE_OTHER',closedAt:new Date(closed).toISOString(),
   filledLots:lot,netUsd:net,netPerLotUsd:rounded(net/lot),
   grossUsd:gross,commissionUsd:commission,swapUsd:swap,
@@ -181,6 +198,14 @@ function calculate(group){
   meanDurationMinutes:mean(lengths),
   exitWithin2pOfOriginalIntentStop:nearStop.length,
   exitWithin2pOfOriginalIntentTarget:nearTarget.length,
+  appCloseRequestPersisted:group.filter(x=>x.appCloseRequestEvidence==='PERSISTED').length,
+  appCloseRequestNotRecorded:group.filter(x=>x.appCloseRequestEvidence==='NOT_RECORDED').length,
+  appCloseRequestEvidenceUnknown:group.filter(x=>x.appCloseRequestEvidence==='UNKNOWN').length,
+  linkedPostopenOrderPersisted:group.filter(x=>x.linkedPostOpenOrderEvidence==='PERSISTED').length,
+  linkedPostopenOrderNotRecorded:group.filter(x=>x.linkedPostOpenOrderEvidence==='NOT_RECORDED').length,
+  frozenPreentryM5Opposed:group.filter(x=>x.preEntryM5Opposition===true).length,
+  frozenPreentryM5AlignedOrNeutral:group.filter(x=>x.preEntryM5Opposition===false).length,
+  frozenPreentryM5Unknown:group.filter(x=>x.preEntryM5Opposition===null).length,
   previouslyPositiveBrokerGrossPeakAndNetLoss:group.filter(x=>x.peakedPositiveBeforeLoss).length,
   sampledPeakExceedsLaterFinalFeesYetTradeLoses:group.filter(
    x=>x.observedAfterFinalCostsPositivePeakBeforeLoss).length,
@@ -216,6 +241,15 @@ function analyze(rows,now=new Date()){
   byDay:groups(trades,x=>x.dayUtc),
   byDayAndStrategy:groups(trades,x=>x.dayUtc+'|'+x.route),
   byInstrumentAndStrategy:groups(trades,x=>x.route+'|'+x.instrument),
+  // Include ALL actual fills when calculating hypothetical skipped winners;
+  // studying M5 only within stopped-out trades would bias the denominator.
+  byStrategyAndOriginalPreEntryM5:groups(trades,x=>x.route+'|'+(
+   x.preEntryM5Opposition===null?'M5_UNKNOWN':
+   x.preEntryM5Opposition?'M5_OPPOSED':'M5_NOT_OPPOSED')),
+  byStrategyInstrumentAndOriginalPreEntryM5:groups(trades,x=>
+   x.route+'|'+x.instrument+'|'+(
+    x.preEntryM5Opposition===null?'M5_UNKNOWN':
+    x.preEntryM5Opposition?'M5_OPPOSED':'M5_NOT_OPPOSED')),
   byExitClass:groups(trades,x=>x.closeClass),
   byStrategyAndExitClass:groups(trades,x=>x.route+'|'+x.closeClass),
   byOriginalRiskRatio:groups(trades,x=>x.plannedRewardToRisk===null?'UNVERIFIED':
@@ -225,6 +259,22 @@ function analyze(rows,now=new Date()){
   brokerCloseOriginalIntentBarrier:groups(bclose,x=>x.nearOriginalStop?
    'EXIT_WITHIN_2P_OF_ORIGINAL_STOP':x.nearOriginalTarget?
    'EXIT_WITHIN_2P_OF_ORIGINAL_TARGET':'EXIT_AWAY_FROM_ORIGINAL_BARRIERS'),
+  // A recorded app close request is independent provenance, not proof of a
+  // specific native broker deal reason. Keep missing records distinct.
+  brokerCloseByAppRequestEvidence:groups(bclose,x=>x.appCloseRequestEvidence),
+  brokerCloseByLinkedPostopenOrderEvidence:groups(bclose,x=>x.linkedPostOpenOrderEvidence),
+  brokerCloseByRouteAndAppRequest:groups(bclose,x=>x.route+'|'+x.appCloseRequestEvidence),
+  brokerCloseByRouteAndStopProximity:groups(bclose,x=>x.route+'|'+(
+   !x.fillGeometryVerified?'UNVERIFIED_ORIGINAL_BARRIER':
+   x.nearOriginalStop?'NEAR_ORIGINAL_STOP':
+   x.nearOriginalTarget?'NEAR_ORIGINAL_TARGET':'AWAY_FROM_ORIGINAL_BARRIERS')),
+  brokerCloseByFrozenM5Contradiction:groups(bclose,x=>x.route+'|'+(
+   x.preEntryM5Opposition===null?'UNVERIFIED_PRE_ENTRY_M5':
+   x.preEntryM5Opposition?'ORIGINAL_M5_OPPOSED':'ORIGINAL_M5_NOT_OPPOSED')),
+  brokerCloseNearStopNoAppRequest:calculate(bclose.filter(x=>
+   x.nearOriginalStop&&x.appCloseRequestEvidence==='NOT_RECORDED')),
+  providerNativeStopTriggerVerified:false,
+  actualProviderDealReasonAvailable:false,
   confirmedGuardExit:calculate(guard),
   otherExit:calculate(notGuard),
   observedProfitableGrossPeakThenNetLoss:calculate(lossAfterGrossPeak),
@@ -235,6 +285,9 @@ function analyze(rows,now=new Date()){
    'This is settled-trade selection; not causal evidence that changing exits would prevent losses.',
    'Original tactical stop/target reference is from the immutable pre-intent candidate, while actual broker fill may be offset by price movement; both geometric ratios are reported separately.',
    'Broker close_reason=BROKER_CLOSE does not prove an SL/TP trigger; within-2-pip proximity to ORIGINAL intent levels is only a price-distance label.',
+   'App close-request and linked order provenance are independently checked against persisted timestamps, not provider deal events. NOT_RECORDED means the application DB has no matching record, not that the broker never received or processed other orders.',
+   'No provider-native stop/target deal reason is stored in the inspected order/trade event tables, so STOP_HIT, stop-fill slippage, broker amendment ACK and exact provider attribution remain UNVERIFIED.',
+   'Original frozen model M5 contradiction is an as-of diagnostic, not a universal cause of stop losses or a validated abstention feature.',
    'MFE, MAE and giveback are sampled broker-mark observations with incomplete tick coverage; they are not executable peak fills and cannot be turned into guaranteed profit claims.',
    'An earlier positive GROSS mark may still have been negative NET of commission; never equate peakGross>0 with a profitable exit opportunity.',
    'Original fill-to-intent stop dollar risk is a reference, not a guaranteed maximum loss; slippage, stop amendments, swap and broker fills can exceed it.',

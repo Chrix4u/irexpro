@@ -142,3 +142,74 @@ test('invalid or unverified broker settlement never gets a fabricated monetary v
  const stats=calculate([]);assert.equal(stats.avgLossUsd,null);
  assert.equal(stats.netUsd,0);
 });
+
+test('historical broker-close source provenance stays separate from price proximity and app AI closes',()=>{
+ const stopWithoutApp=row({trade_id:'broker-near-stop',close_reason:'BROKER_CLOSE',
+  app_close_request_persisted:false,linked_postopen_order_persisted:false,
+  exit_price:'.67050',realised_pnl:'-104',
+  candidate:{...row().candidate,alignedM5:-.4}});
+ const stopWithApp=row({trade_id:'broker-with-app',close_reason:'BROKER_CLOSE',
+  app_close_request_persisted:true,linked_postopen_order_persisted:true,
+  exit_price:'.67050',realised_pnl:'-104',
+  candidate:{...row().candidate,alignedM5:.3}});
+ const normalApp=row({trade_id:'ai-exit',close_reason:'AI_CLOSE_SIGNAL',
+  app_close_request_persisted:true,linked_postopen_order_persisted:true,
+  realised_pnl:'-50'});
+ const a=analyze([stopWithoutApp,stopWithApp,normalApp]);
+ assert.equal(a.brokerCloseByAppRequestEvidence.NOT_RECORDED.trades,1);
+ assert.equal(a.brokerCloseByAppRequestEvidence.PERSISTED.trades,1);
+ assert.equal(a.brokerCloseNearStopNoAppRequest.trades,1);
+ assert.equal(a.brokerCloseNearStopNoAppRequest.settledLosses,1);
+ assert.equal(a.brokerCloseByLinkedPostopenOrderEvidence.NOT_RECORDED.trades,1);
+ assert.equal(a.brokerCloseByRouteAndStopProximity['CONFIRMED_REVERSAL|NEAR_ORIGINAL_STOP'].trades,2);
+ assert.equal(a.brokerCloseByFrozenM5Contradiction['CONFIRMED_REVERSAL|ORIGINAL_M5_OPPOSED'].trades,1);
+ assert.equal(a.brokerCloseByFrozenM5Contradiction['CONFIRMED_REVERSAL|ORIGINAL_M5_NOT_OPPOSED'].trades,1);
+ assert.equal(a.providerNativeStopTriggerVerified,false);
+ assert.equal(a.actualProviderDealReasonAvailable,false);
+ assert.equal(a.noExecutionsChanged,true);
+});
+test('unrecorded app-request provenance is not inferred from undefined/mock values',()=>{
+ const unknown=decode(row({close_reason:'BROKER_CLOSE',exit_price:'.67050'}));
+ assert.equal(unknown.appCloseRequestEvidence,'UNKNOWN');
+ assert.equal(unknown.linkedPostOpenOrderEvidence,'UNKNOWN');
+ assert.equal(unknown.preEntryM5Opposition,null);
+ assert.equal(unknown.nearOriginalStop,true);
+ assert.equal(unknown.closeClass,'BROKER_CLOSE');
+});
+test('query requires owner-bound persisted close requests and orders inside close window',()=>{
+ assert.match(QUERY,/a\.actor_user_id=t\.user_id/);
+ assert.match(QUERY,/a\.action='TRADE_CLOSE_REQUESTED'/);
+ assert.match(QUERY,/AS app_close_request_persisted/);
+ assert.match(QUERY,/o\.trade_id=t\.id AND o\.user_id=t\.user_id/);
+ assert.match(QUERY,/AS linked_postopen_order_persisted/);
+ assert.match(QUERY,/a\.created_at>=t\.opened_at/);
+ assert.match(QUERY,/o\.created_at>=t\.opened_at/);
+ assert.doesNotMatch(QUERY,/\b(?:INSERT|UPDATE|DELETE|TRUNCATE)\b/i);
+});
+
+test('frozen M5 warning is evaluated across ALL trades, including winners that a blocker would lose',()=>{
+ const contradictedLoss=row({trade_id:'m5-stopout',close_reason:'BROKER_CLOSE',
+  app_close_request_persisted:false,linked_postopen_order_persisted:false,
+  exit_price:'.67050',realised_pnl:'-104',
+  candidate:{...row().candidate,alignedM5:-.4}});
+ const contradictedWin=row({trade_id:'m5-winner',close_reason:'PROFIT_PROTECTION',
+  app_close_request_persisted:true,linked_postopen_order_persisted:true,
+  candidate:{...row().candidate,alignedM5:-.5}});
+ const alignedLoss=row({trade_id:'aligned-stopout',close_reason:'BROKER_CLOSE',
+  app_close_request_persisted:false,linked_postopen_order_persisted:false,
+  exit_price:'.67050',realised_pnl:'-104',
+  candidate:{...row().candidate,alignedM5:.4}});
+ const report=analyze([contradictedLoss,contradictedWin,alignedLoss]);
+ const flagged=report.byStrategyAndOriginalPreEntryM5['CONFIRMED_REVERSAL|M5_OPPOSED'];
+ const unflagged=report.byStrategyAndOriginalPreEntryM5['CONFIRMED_REVERSAL|M5_NOT_OPPOSED'];
+ assert.equal(flagged.trades,2);
+ assert.equal(flagged.settledWins,1);
+ assert.equal(flagged.settledLosses,1);
+ assert.equal(unflagged.trades,1);
+ assert.equal(unflagged.settledLosses,1);
+ assert.equal(report.brokerCloseNearStopNoAppRequest.trades,2);
+ assert.equal(report.brokerCloseNearStopNoAppRequest.frozenPreentryM5Opposed,1);
+ assert.equal(report.byStrategyInstrumentAndOriginalPreEntryM5['CONFIRMED_REVERSAL|AUDUSD|M5_OPPOSED'].trades,2);
+ assert.equal(report.providerNativeStopTriggerVerified,false);
+ assert.equal(report.noExecutionsChanged,true);
+});
