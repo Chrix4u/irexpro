@@ -5,7 +5,7 @@ import type { HighConvictionOverlay } from './high-conviction-overlay';
  * The expert's opposite vote alone is NEVER an order signal. Both
  * independent own-side models and normal broker/risk gates must agree.
  */
-export const COUNTER_PILOT_ARTIFACT = 'pepperstone-demo-independent-counter-entry-friday-v2' as const;
+export const COUNTER_PILOT_ARTIFACT = 'pepperstone-demo-independent-counter-entry-friday-v3' as const;
 export const COUNTER_PILOT_START = '2026-11-20T21:12:00.000Z';
 export const COUNTER_PILOT_END = '2026-11-20T22:00:00.000Z';
 export const COUNTER_PILOT_LOT_CAP = 4;
@@ -40,6 +40,8 @@ export interface CounterPilotModel {
     paperAdmitted: boolean;
     ensembleScore: number;
     directionQuality: number;
+    regime?: string;
+    reasons?: string[];
   };
   governance: {
     paperExecutionEligible: boolean;
@@ -71,7 +73,8 @@ export function evaluateCounterPilot(input: {
   const base = {
     artifact: COUNTER_PILOT_ARTIFACT,
     route: input.candidate?.ensemble.strategyRoute ?? null,
-    maxLot: COUNTER_PILOT_LOT_CAP,
+    maxLot: input.candidate?.ensemble.strategyRoute === 'TREND_CONTINUATION'
+      ? Math.min(0.5, COUNTER_PILOT_LOT_CAP) : COUNTER_PILOT_LOT_CAP,
     endsAt: COUNTER_PILOT_END,
     startsAt: COUNTER_PILOT_START,
     entryLimit: COUNTER_PILOT_ENTRY_LIMIT,
@@ -112,22 +115,44 @@ export function evaluateCounterPilot(input: {
      (ex.freshnessSeconds??999)>180 ||
      (ex.freshnessSeconds??-1)<0)
     return deny('EXPERT_DID_NOT_CONFIRM');
-  if(!own||!['CONFIRMED_REVERSAL','EARLY_TRANSITION'].includes(own.ensemble.strategyRoute)||
-     own.ensemble.paperAdmitted!==true||
-     own.governance.paperExecutionEligible!==true||
+  // The original reversal's opposing side cannot normally also have a
+  // Plan-B reversal admission: the two sides share one TREND_WEAK regime.
+  // Allow a separate, tightly capped native-expert-backed M1 trend proposal
+  // ONLY when the sole Plan-B rejection is this regime-label mismatch.
+  // All other directional, META, after-fee, market and broker evidence must pass.
+  const independentlyAdmittedCounterTrend =
+    own?.ensemble.strategyRoute === 'TREND_CONTINUATION' &&
+    own.ensemble.regime === 'TREND_WEAK' &&
+    own.ensemble.paperAdmitted === false &&
+    Array.isArray(own.ensemble.reasons) &&
+    own.ensemble.reasons.length === 1 &&
+    own.ensemble.reasons[0] === 'REGIME_TREND_WEAK' &&
+    own.governance.netExpectedR >= 0.2 &&
+    (own.governance.driftState === 'NORMAL' ||
+     own.governance.driftState === 'IN_DISTRIBUTION');
+  const ownRouteAdmitted =
+    (['CONFIRMED_REVERSAL','EARLY_TRANSITION'].includes(own?.ensemble.strategyRoute ?? '') &&
+      own?.ensemble.paperAdmitted === true &&
+      own.governance.paperExecutionEligible === true) ||
+    independentlyAdmittedCounterTrend;
+  if(!own||!ownRouteAdmitted||
+
      own.portfolioSnapshotAvailable!==true||
-     !(own.ensemble.ensembleScore>=0.6)||
-     !(own.ensemble.directionQuality>=0.54)||
-     !(own.governance.netExpectedR>=0.12)||
+     !(own.ensemble.ensembleScore>=(independentlyAdmittedCounterTrend ? 0.65 : 0.6))||
+     !(own.ensemble.directionQuality>=(independentlyAdmittedCounterTrend ? 0.6 : 0.54))||
+     !(own.governance.netExpectedR>=(independentlyAdmittedCounterTrend ? 0.2 : 0.12))||
      own.governance.executionSpreadEvidenceValid!==true ||
      own.governance.paperExecutionCostUsable!==true ||
      own.governance.eventRisk!=='CLEAR' ||
      own.governance.driftState==='OUT_OF_DISTRIBUTION')
     return deny('COUNTER_NOT_QUALIFIED');
-  // This bridges a semantic M1 timing label only; do not grant authority
-  // to continuation or to objectively weak opposite-side M1 features.
-  if(!['ABSTAIN','M1_EARLY_TRANSITION'].includes(input.m1Route)||
-     !(input.m1Confidence>=0.67)||!(input.m1DirectionQuality>=0.55))
+  // Weak-regime counter-trends require a high-quality native M1 continuation
+  // view and 0.5-lot limit; they cannot trade on a bare ABSTAIN label.
+  if(!(independentlyAdmittedCounterTrend
+      ? input.m1Route === 'M1_TREND_CONTINUATION'
+      : ['ABSTAIN','M1_EARLY_TRANSITION'].includes(input.m1Route))||
+     !(input.m1Confidence>=(independentlyAdmittedCounterTrend ? 0.72 : 0.67))||
+     !(input.m1DirectionQuality>=(independentlyAdmittedCounterTrend ? 0.62 : 0.55)))
     return deny('COUNTER_M1_NOT_QUALIFIED');
   if(!(Number.isFinite(input.stopDistance)&&input.stopDistance>0)||
      !(Number.isFinite(input.targetDistance)&&

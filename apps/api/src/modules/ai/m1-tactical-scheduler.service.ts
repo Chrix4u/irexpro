@@ -1885,7 +1885,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // price/risk geometry, and never promote opposing votes alone.
     const counterEnabled =
       professionalDemoPhase &&
-      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT', '') === 'enabled';
+      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_COUNTER_PILOT', '') === 'enabled' &&
+      !!this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') &&
+      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId;
     const counterWindowOpen =
       counterEnabled &&
       Date.now() >= Date.parse(COUNTER_PILOT_START) &&
@@ -1895,13 +1897,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     if (
       counterWindowOpen &&
       multimodelDemo &&
-      ['CONFIRMED_REVERSAL', 'EARLY_TRANSITION'].includes(multimodelDemo.ensemble.strategyRoute) &&
-      multimodelDemo.ensemble.paperAdmitted === true &&
+      // Candidate is the expert-supported opposite side. Requiring this
+      // side to ALSO be a reversal made the counter pilot unreachable in
+      // the shared TREND_WEAK regime; evaluate the opposing source instead.
+      ['CONFIRMED_REVERSAL', 'EARLY_TRANSITION', 'TREND_CONTINUATION'].includes(
+        multimodelDemo.ensemble.strategyRoute,
+      ) &&
       multimodelDemo.trainedExpert.state === 'CONFIRM' &&
       multimodelDemo.trainedExpert.admitted === true
     ) {
       try {
-        counterBrokerVerified = await this.evidence.isPepperstoneDemoBrokerConnection({
+        counterBrokerVerified = await this.evidence.isPepperstoneUsdDemoBrokerConnection({
           userId,
           brokerConnectionId,
         });

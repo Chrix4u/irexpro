@@ -1,0 +1,23 @@
+# Owner Pepperstone USD DEMO: unreachable counter-direction branch repair — Friday 2026-11-20
+
+## Concrete bug
+
+The previous `pepperstone-demo-independent-counter-entry-friday-v2` trial was active through 22:00 UTC, but its scheduler queried an opposing admitted reversal only when the **current** candidate was ALSO a fully Plan-B-admitted `CONFIRMED_REVERSAL` or `EARLY_TRANSITION`, with an admitted CONFIRM native expert. The pure evaluator additionally demanded both the original and current side were reversals/transitions and independently paper-admitted. Both opposing sides share the same underlying `TREND_WEAK` regime and directional short-horizon momentum, making that pairing largely unreachable. The trial's `NO_OPPOSING_ADMITTED_REVERSAL` outcomes were therefore not just market conditions.
+
+## v3 repair
+
+- The scheduler may evaluate the independently scored **opposite source** for a current-side, native-expert-`CONFIRM` candidate including `TREND_CONTINUATION`; it must verify the exact configured OWNER and independently verify the actual **Pepperstone USD DEMO** broker connection before evaluating the opposite. No broker orders in this source-evaluation step.
+- The pure pilot retains the older fully admitted reversal/early-transition route and adds a **strictly narrower counter-trend rescue** for a current side that is Plan-B rejected **solely** because the shared regime is `REGIME_TREND_WEAK`. It accepts no other Plan-B reason: `META_EXPECTED_VALUE`, `EXPECTED_R`, `DIRECTION_QUALITY`, `TRADE_QUALITY`, `EXIT_FEASIBILITY`, `CONFIDENCE_FLOOR`, `SESSION_QUALITY`, etc. all independently disqualify this rescue. The owner existing `TREND_CONTINUATION` model is otherwise unchanged.
+- Counter-specific strict evidence: confirmed and admitted 3–0 all-broker-native expert, >=0.65 expert confidence, >=0.60 opportunity probability, <=180s freshness; original opposing paper-admitted reversal/transition and its own risk governance; current independent candidate ensemble score >=0.65, direction quality >=0.60, own M1 **M1_TREND_CONTINUATION** route >=0.72 M1 confidence and >=0.62 M1 direction quality, net model-estimated **>=+0.20 R after baseline costs**, NORMAL / IN_DISTRIBUTION drift, clear event risk, current native spread and usable execution cost, available portfolio snapshot, own valid protective stop and target.
+- Counter-direction continuation maximum **0.50 lots**, with all pre-existing stop-distance risk budgeting, broker margin, active-position, fee and portfolio controls still authoritative. This is substantially below the old 4.00 lots limit; the older confirmed reversal/early-transition counter case retains its existing 4.00-lot ceiling but still obeys the existing stop-risk and broker rules.
+- Maintains original v2 time window **2026-11-20 21:12–22:00 UTC** and combined **2-entry** budget; expires automatically. Does NOT authorize LIVE accounts or override Start/Stop or other markets. No automatic inverse order on an unadmitted expert vote.
+- In particular, the EURUSD SELL from 20:58 UTC is **NOT** eligible: Plan-B also rejected META/EXPECTED_R/directional evidence and the estimated after-cost return was **−0.206R**, with expert `ABSTAIN`. The new allowance expressly cannot resurrect it.
+
+## Source validation / deployment gates
+
+- Added three new targeted tests (previously 9; **12/12 Jest tests passed**): narrow one-reason counter rescue, mandatory negative/abstaining and M1 rejection, unrelated weak trend rejected.
+- Independently transpiled changed scheduler and counter module with exact TypeScript project compiler settings in a separate staging tree. Full TypeScript scheduler transpilation changed decorator metadata representation; instead, the stage deployment copies existing compiled scheduler and applies only the **three verified counter-branch expression changes**. The resulting counter branch matches the TypeScript-compiled source **exactly**, while keeping the existing live NestJS dependency injection metadata. The counter module is fully transpiled using project settings.
+- Runtime deployment is only allowed when exact owner Pepperstone USD DEMO is confirmed **FLAT**, the existing services are healthy, and the API critical profit-protection and forward-monitoring PIDs will not change. Copy backups, reload API only, assert healthy result, restore files and API service if any stage fails while flat. The account's `.env` and risk flags must remain identical.
+- No claim is made of new broker fills or a profitable strategy until independently observed and reconciled.
+
+**Status:** See the following deployed-release section when available; this document records the precise intended change and evidence, not a guarantee of execution.

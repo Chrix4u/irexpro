@@ -114,6 +114,71 @@ describe('independent counter-entry Pepperstone DEMO pilot',()=>{
     const c=input();c.targetDistance=c.stopDistance;
     expect(evaluate(c).reason).toBe('INDEPENDENT_STOP_TARGET_MISSING');
   });
+  it('admits a separately scored native SELL counter when the ONLY Plan-B veto is shared TREND_WEAK regime',()=>{
+    const a=input();
+    a.candidate.ensemble={
+      strategyRoute:'TREND_CONTINUATION',paperAdmitted:false,
+      ensembleScore:0.71,directionQuality:0.74,
+      regime:'TREND_WEAK',reasons:['REGIME_TREND_WEAK'],
+    };
+    a.candidate.governance.paperExecutionEligible=false;
+    a.candidate.governance.netExpectedR=0.26;
+    a.candidate.governance.driftState='NORMAL';
+    a.m1Route='M1_TREND_CONTINUATION';
+    a.m1Confidence=0.76;
+    a.m1DirectionQuality=0.69;
+    const r=evaluate(a);
+    expect(r).toMatchObject({
+      eligible:true,reason:'ELIGIBLE',maxLot:0.5,
+      bypassesBrokerRisk:false,bypassesModelAdmission:false,
+    });
+  });
+  it('does NOT rescue a negative-after-cost, weak-direction or independently non-confirmed counter',()=>{
+    const a=input();
+    a.candidate.ensemble={
+      strategyRoute:'TREND_CONTINUATION',paperAdmitted:false,
+      ensembleScore:0.71,directionQuality:0.74,
+      regime:'TREND_WEAK',reasons:['REGIME_TREND_WEAK'],
+    };
+    a.candidate.governance.paperExecutionEligible=false;
+    a.candidate.governance.netExpectedR=0.26;
+    a.candidate.governance.driftState='NORMAL';
+    a.m1Route='M1_TREND_CONTINUATION';
+    a.m1Confidence=0.76;
+    a.m1DirectionQuality=0.69;
+    const b=input(); b.candidate.ensemble={...a.candidate.ensemble,
+      reasons:['REGIME_TREND_WEAK','META_EXPECTED_VALUE']};
+    b.candidate.governance.paperExecutionEligible=false;
+    b.candidate.governance.netExpectedR=0.26;
+    b.candidate.governance.driftState='NORMAL';
+    b.m1Route='M1_TREND_CONTINUATION';
+    b.m1Confidence=0.76;
+    b.m1DirectionQuality=0.69;
+    expect(evaluate(b).reason).toBe('COUNTER_NOT_QUALIFIED');
+    a.candidate.governance.netExpectedR=-0.206;
+    expect(evaluate(a).reason).toBe('COUNTER_NOT_QUALIFIED');
+    a.candidate.governance.netExpectedR=0.26;
+    a.candidate.trainedExpert.state='ABSTAIN';
+    a.candidate.trainedExpert.admitted=false;
+    expect(evaluate(a).reason).toBe('EXPERT_DID_NOT_CONFIRM');
+    a.candidate.trainedExpert.state='CONFIRM';
+    a.candidate.trainedExpert.admitted=true;
+    a.m1Route='ABSTAIN';
+    expect(evaluate(a).reason).toBe('COUNTER_M1_NOT_QUALIFIED');
+  });
+  it('does not enable a counter rescue for an unrelated non-admitted trend',()=>{
+    const a=input();
+    a.candidate.ensemble={
+      strategyRoute:'TREND_CONTINUATION',paperAdmitted:false,
+      ensembleScore:0.74,directionQuality:0.78,
+      regime:'TREND_EXTENDED',reasons:['REGIME_TREND_EXTENDED'],
+    };
+    a.candidate.governance.netExpectedR=0.5;
+    a.m1Route='M1_TREND_CONTINUATION';
+    a.m1Confidence=0.8;
+    a.m1DirectionQuality=0.8;
+    expect(evaluate(a).reason).toBe('COUNTER_NOT_QUALIFIED');
+  });
   it('can symmetrically evaluate a BUY counter of an admitted SELL reversal',()=>{
     const a=input();
     a.side='BUY' as any;
