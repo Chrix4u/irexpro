@@ -118,6 +118,10 @@ import {
   OWNER_DEMO_NOON_LOT_TRIAL_ARTIFACT,
 } from './owner-pepperstone-demo-noon-lot-trial';
 import {
+  ownerPepperstoneDemoOngoingSevenLot,
+  OWNER_DEMO_ONGOING_SEVEN_LOT_ARTIFACT,
+} from './owner-pepperstone-demo-ongoing-seven-lot';
+import {
   evaluateGuardedPullback,
   type GuardedPullbackDecision,
 } from './pepperstone-demo-guarded-pullback';
@@ -3901,12 +3905,28 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       targetDistance: candidate.targetDistance,
       guardedPullback: guardedPullbackRecovery,
     });
-    // Owner explicitly authorized a short DEMO high-lot evaluation to noon
-    // Ghana time. The risk engine (including current drawdown scaling) remains
-    // authoritative; this only requests up to six lots for already admitted
-    // continuous CR/ET signals. Rescue, counter, alternate short-cap and
-    // independent M5-conflict ceilings are not removed by this experiment.
-    const noonLotTrial = ownerPepperstoneDemoNoonLotTrial({
+    // Owner reaffirmed ongoing USD DEMO requests up to seven lots after the
+    // previous noon trial expired. The same strict owner/connection identity
+    // and full broker stop-risk, drawdown, margin and model safeguards remain.
+    // This NEVER guarantees 4/4.5/6/7 actual lots or grants LIVE authority.
+    const ongoingSevenLot = ownerPepperstoneDemoOngoingSevenLot({
+      enabled: this.config.get<string>(
+        'IREXPRO_OWNER_PEPPERSTONE_DEMO_ONGOING_7LOT_20261120',
+        '',
+      ) === 'enabled',
+      userId,
+      configuredOwnerId: this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', ''),
+      brokerConnectionId,
+      configuredBrokerConnectionId: this.config.get<string>(
+        'IREXPRO_OWNER_PEPPERSTONE_DEMO_NOON_TRIAL_BROKER_CONNECTION_ID',
+        '',
+      ),
+      brokerId: pepperstoneDemoRiskPilot ? 'pepperstone-ctrader' : null,
+      accountType: pepperstoneDemoRiskPilot ? 'DEMO' : null,
+      accountCurrency: pepperstoneDemoRiskPilot ? 'USD' : null,
+      now: new Date(),
+    });
+    const historicNoonLotTrial = ownerPepperstoneDemoNoonLotTrial({
       enabled: this.config.get<string>(
         'IREXPRO_OWNER_PEPPERSTONE_DEMO_4PLUS_UNTIL_NOON_20261120',
         '',
@@ -3923,6 +3943,11 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       accountCurrency: pepperstoneDemoRiskPilot ? 'USD' : null,
       now: new Date(),
     });
+    // New explicit ongoing permission wins only on the same verified DEMO;
+    // preserve the historical finite-trial behavior for historical tests.
+    const noonLotTrial = ongoingSevenLot.eligible
+      ? ongoingSevenLot
+      : historicNoonLotTrial;
     const noonLotTrialForAdmittedReversal =
       noonLotTrial.eligible &&
       qualityRiskEnabled &&
@@ -4040,10 +4065,10 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const signalId = uuidv5(signalIdentity, M1_SIGNAL_NAMESPACE);
     await this.evidence.markExecutionLink(decisionId, signalId, undefined);
 
-    // Strict cutoff at the last application dispatch, not only at model
-    // scoring or server startup. A candidate crossing noon is discarded;
-    // future candidates use the original lot sizing without a restart.
-    if (noonLotTrialForAdmittedReversal &&
+    // Retired finite trials still expire at the last application dispatch.
+    // The explicitly configured ongoing DEMO permission has no expiry and
+    // cannot carry a stale historical noon artifact into new trade intents.
+    if (noonLotTrialForAdmittedReversal && noonLotTrial.endsAt !== null &&
         Date.now() >= Date.parse(noonLotTrial.endsAt)) {
       await this.evidence.markOutcomeState(
         decisionId, 'RISK_REJECTED', new Date(),
@@ -4306,18 +4331,26 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
               ? noonLotTrial.maximumPrescreenRiskPercent
               : 0.25
             : null,
-          m1_owner_demo_noon_lot_trial_artifact: noonLotTrialForAdmittedReversal
-            ? OWNER_DEMO_NOON_LOT_TRIAL_ARTIFACT
-            : null,
-          m1_owner_demo_noon_lot_trial_expires_at: noonLotTrialForAdmittedReversal
-            ? noonLotTrial.endsAt
-            : null,
-          m1_owner_demo_noon_lot_trial_max_requested_lots: noonLotTrialForAdmittedReversal
-            ? noonLotTrial.maxRequestedLots
-            : null,
-          m1_owner_demo_noon_lot_trial_advisory_quality_fraction: noonLotTrialForAdmittedReversal
-            ? (qualityRisk?.riskFraction ?? null)
-            : null,
+          // Distinct artifact: never falsely label a new ongoing trade as
+          // part of the expired 03:57–12:00 UTC size experiment.
+          m1_owner_demo_noon_lot_trial_artifact:
+            noonLotTrialForAdmittedReversal && !ongoingSevenLot.eligible
+              ? OWNER_DEMO_NOON_LOT_TRIAL_ARTIFACT : null,
+          m1_owner_demo_noon_lot_trial_expires_at:
+            noonLotTrialForAdmittedReversal && !ongoingSevenLot.eligible
+              ? noonLotTrial.endsAt : null,
+          m1_owner_demo_noon_lot_trial_max_requested_lots:
+            noonLotTrialForAdmittedReversal && !ongoingSevenLot.eligible
+              ? noonLotTrial.maxRequestedLots : null,
+          m1_owner_demo_noon_lot_trial_advisory_quality_fraction:
+            noonLotTrialForAdmittedReversal && !ongoingSevenLot.eligible
+              ? (qualityRisk?.riskFraction ?? null) : null,
+          m1_owner_demo_ongoing_seven_lot_artifact:
+            noonLotTrialForAdmittedReversal && ongoingSevenLot.eligible
+              ? OWNER_DEMO_ONGOING_SEVEN_LOT_ARTIFACT : null,
+          m1_owner_demo_ongoing_seven_lot_max_requested_lots:
+            noonLotTrialForAdmittedReversal && ongoingSevenLot.eligible
+              ? ongoingSevenLot.maxRequestedLots : null,
           m1_pepperstone_demo_aligned_target_percent: pepperstoneDemoRiskPilot
             ? M1_PEPPERSTONE_DEMO_ALIGNED_CURRENCY_TARGET_PERCENT
             : null,

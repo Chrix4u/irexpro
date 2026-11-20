@@ -143,3 +143,26 @@ test('historically reviewed Nov20 is excluded from every future-validation claim
  assert.equal(result.prospectiveUnseenAfterReviewedDays.executableVetoEligible,false);
  assert.equal(result.validatedOnFutureUntouchedTradingDays,false);
 });
+
+test('frozen preentry hypothesis is not generalized across routes or symbols',()=>{
+ const cr=original({tradeKey:'cr-loss',instrument:'AUDUSD',netUsd:-145,netUsdPerLot:-41.43,label:'LOSS'});
+ const et=original({tradeKey:'et-win',instrument:'USDJPY',entryRoute:'EARLY_TRANSITION',
+   netUsd:90,netUsdPerLot:25.71,label:'WIN'});
+ const records=analyze([cr,et],new Map([
+   ['cr-loss',context()],
+   ['et-win',context({route:'EARLY_TRANSITION',instrument:'USDJPY',netRealizedR:.48})],
+ ]),new Map([['cr-loss',candle()],['et-win',candle(.5)]]),
+ new Date('2026-11-20T08:03:00Z'));
+ const crKey=records.frozenRuleByRouteInstrument['CONFIRMED_REVERSAL|AUDUSD'];
+ const etKey=records.frozenRuleByRouteInstrument['EARLY_TRANSITION|USDJPY'];
+ assert.equal(crKey.comparison.hypotheticalSkipped.losses,1);
+ assert.equal(crKey.comparison.sacrificedWinningTrades,0);
+ assert.equal(etKey.comparison.hypotheticalSkipped.wins,1);
+ assert.equal(etKey.comparison.sacrificedWinningTrades,1);
+ assert.equal(crKey.prospectiveUnseen.knownEvidence.trades,0);
+ assert.equal(etKey.prospectiveUnseen.knownEvidence.trades,0);
+ assert.equal(crKey.enablesAbstention,false);
+ assert.equal(etKey.enablesAbstention,false);
+ assert.equal(records.realBrokerVetoEnabled,false);
+ assert.equal(records.noNewOrders,true);
+});

@@ -143,6 +143,20 @@ function analyze(rows,contextById,candlesById,asOf,fromUtc=FROM){
  const future=trades.filter(x=>x.openedAt>=FORWARD_AFTER);
  const prospectiveRoute=compare(future,
   'LAST_60S_QUOTE_AND_MODEL_M5_OPPOSE','CONFIRMED_REVERSAL',FORWARD_AFTER.slice(0,10));
+ // Frozen research-only route × symbol ledger. A quote/M5 symptom can be
+ // harmful to one setup while removing winners in another. Do not retune
+ // the threshold after inspecting each pair; preserve all false positives.
+ const frozenFlag='LAST_60S_QUOTE_AND_MODEL_M5_OPPOSE';
+ const keys=[...new Set(trades.map(x=>x.route+'|'+x.instrument))].sort();
+ const frozenByRouteInstrument=Object.fromEntries(keys.map(key=>{
+  const [route,instrument]=key.split('|');
+  const scope=trades.filter(x=>x.route===route&&x.instrument===instrument);
+  const comparison=compare(scope,frozenFlag,route,'2026-11-19');
+  const unseen=compare(scope.filter(x=>x.openedAt>=FORWARD_AFTER),
+   frozenFlag,route,FORWARD_AFTER.slice(0,10));
+  return [key,{route,instrument,comparison,prospectiveUnseen:unseen,
+   enablesAbstention:false,retunesThreshold:false}];
+ }));
  const independentFutureDays=new Set(future.filter(x=>x.route==='CONFIRMED_REVERSAL')
   .map(x=>x.day)).size;
  const prospectiveReviewReady=independentFutureDays>=5&&
@@ -165,6 +179,7 @@ function analyze(rows,contextById,candlesById,asOf,fromUtc=FROM){
   byRoute:group(trades,x=>x.route),
   comparison:contrasts,
   leadingCandidateComparison:main,
+  frozenRuleByRouteInstrument:frozenByRouteInstrument,
   prospectiveUnseenAfterUtc:FORWARD_AFTER,
   prospectiveUnseenAfterReviewedDays:{
    distinctEntryDays:independentFutureDays,

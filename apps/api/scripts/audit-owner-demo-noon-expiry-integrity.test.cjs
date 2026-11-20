@@ -49,6 +49,29 @@ test('post-noon small orders with no trial artifact pass without fabricated prof
  assert.equal(r.afterNoonExpiredTrialArtifacts,0);
  assert.equal(r.requiresExpiryInvestigation,false);
 });
+test('new approved ongoing 4/4.5/6/7 DEMO requests are NOT expired noon violations',()=>{
+ const x=make({created_at:'2026-11-20T13:06:30Z',opened_at:'2026-11-20T13:06:42Z',
+  requested_lot_size:'7',filled_lots:'6.2',trial_artifact:null,
+  ongoing_artifact:'owner-pepperstone-usd-demo-ongoing-seven-lot-20261120-v1',
+  ongoing_max_lots:'7'});
+ const r=summarize([x],new Date('2026-11-20T13:15:00Z'));
+ assert.equal(r.afterNoonOngoingSevenLotIntents,1);
+ assert.equal(r.afterNoonAuthorizedOngoingRequestsAboveFour,1);
+ assert.equal(r.afterNoonAuthorizedOngoingFillsAboveFour,1);
+ assert.equal(r.afterNoonUnexplainedRequestsAboveFour,0);
+ assert.equal(r.afterNoonExpiredTrialArtifacts,0);
+ assert.equal(r.requiresExpiryInvestigation,false);
+ assert.equal(r.brokerDispatchVerified,false);
+});
+test('new ongoing artifact never justifies a request greater than 7',()=>{
+ const r=summarize([make({created_at:'2026-11-20T13:07:00Z',
+  opened_at:'2026-11-20T13:07:02Z',requested_lot_size:'7.5',filled_lots:'7.2',trial_artifact:null,
+  ongoing_artifact:'owner-pepperstone-usd-demo-ongoing-seven-lot-20261120-v1',
+  ongoing_max_lots:'7'})],new Date('2026-11-20T13:20:00Z'));
+ assert.equal(r.afterNoonUnexplainedRequestsAboveFour,1);
+ assert.equal(r.afterNoonUnexplainedFillsAboveFour,1);
+ assert.equal(r.requiresExpiryInvestigation,true);
+});
 test('invalid evidence timestamps and excess rows are rejected',()=>{
  assert.throws(()=>summarize([make({created_at:'2026-11-20T13:00:00Z'})],new Date(at)),
   /INVALID_SOURCE_TIME/);

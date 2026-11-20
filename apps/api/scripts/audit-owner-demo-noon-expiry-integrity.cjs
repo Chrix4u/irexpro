@@ -4,12 +4,15 @@
 // Never enables/disables trading or sends broker orders.
 const fs=require('node:fs'),path=require('node:path');
 const {ARTIFACT,END}=require('./audit-owner-pepperstone-demo-noon-lot-trial.cjs');
+const ONGOING_ARTIFACT='owner-pepperstone-usd-demo-ongoing-seven-lot-20261120-v1';
 const START='2026-11-20T11:45:00.000Z';
 const OUT='/home/lightworld/webapps/irexpro-research/owner-noon-lot-trial/latest-expiry-integrity.json';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const QUERY=[
  'SELECT ti.created_at,ti.instrument,ti.direction,ti.requested_lot_size,',
  "ti.metadata->>'m1_owner_demo_noon_lot_trial_artifact' trial_artifact,",
+ "ti.metadata->>'m1_owner_demo_ongoing_seven_lot_artifact' ongoing_artifact,",
+ "ti.metadata->>'m1_owner_demo_ongoing_seven_lot_max_requested_lots' ongoing_max_lots,",
  "ti.metadata->>'multimodel_plan_b_route' strategy_route,",
  't.opened_at,t.lot_size filled_lots,t.status trade_status',
  'FROM trading.trade_intents ti',
@@ -33,6 +36,11 @@ function summarize(rows,asOf=new Date()){
   phase:now>=end?'EXPIRED_BY_SERVER_CLOCK':'ACTIVE',
   rowsExamined:rows.length,beforeNoonIntents:0,afterNoonIntents:0,
   afterNoonExpiredTrialArtifacts:0,afterNoonRequestedAboveFour:0,
+  afterNoonOngoingSevenLotIntents:0,
+  afterNoonAuthorizedOngoingRequestsAboveFour:0,
+  afterNoonUnexplainedRequestsAboveFour:0,
+  afterNoonAuthorizedOngoingFillsAboveFour:0,
+  afterNoonUnexplainedFillsAboveFour:0,
   afterNoonFills:0,afterNoonFilledAboveFour:0,preNoonIntentLateFills:0,
   postNoonRequestedOverFour:[],postNoonFilledOverFour:[],postNoonExpiredTrialArtifactExamples:[],
   expiresAutomaticallyInCode:true,brokerDispatchVerified:false,
@@ -40,23 +48,34 @@ function summarize(rows,asOf=new Date()){
   limitations:['Time-scoped historical intent and fill records, not a broker-side order audit.',
    'Orders with intents created before noon and filled afterward are counted separately.',
    'The audit never treats missing orders as proof of successful trading or profitable outcomes.',
-   'A post-expiry lot size above 4 is a review flag, not an assertion of illegitimate execution.',
+   'After a new separately authorized ongoing DEMO policy, a >4 and <=7 request with its exact new artifact is expected and not an expiry exception.',
+   'A request/fill above 4 without a matching ongoing artifact is flagged for investigation, never assumed an illegal broker fill.',
    'This does not modify the trading API, account, lot limits, strategy or risk configuration.']};
  for(const x of rows){
   const created=ms(x.created_at),opened=ms(x.opened_at);
   if(!Number.isFinite(created)||created>now)throw Error('INVALID_SOURCE_TIME');
   const afterCreated=created>=end,afterFill=Number.isFinite(opened)&&opened>=end;
   const requested=num(x.requested_lot_size),filled=num(x.filled_lots);
+  // Ongoing allowance is separately authorized and cannot reuse the
+  // EXPIRED noon metadata. This is an audit classifier, not dispatch approval.
+  const ongoing=afterCreated &&
+   created>=Date.parse('2026-11-20T12:50:00.000Z') &&
+   x.ongoing_artifact===ONGOING_ARTIFACT &&
+   num(x.ongoing_max_lots)===7 && x.trial_artifact!==ARTIFACT;
   const preview={createdAt:new Date(created).toISOString(),openedAt:Number.isFinite(opened)?new Date(opened).toISOString():null,
    instrument:x.instrument,route:x.strategy_route||'UNKNOWN',
-   requestedLots:requested,filledLots:filled,trialArtifactPresent:x.trial_artifact===ARTIFACT};
+   requestedLots:requested,filledLots:filled,trialArtifactPresent:x.trial_artifact===ARTIFACT,
+   ongoingSevenLotArtifactPresent:ongoing};
   if(afterCreated){
    r.afterNoonIntents++;
+   if(ongoing)r.afterNoonOngoingSevenLotIntents++;
    if(x.trial_artifact===ARTIFACT){
     r.afterNoonExpiredTrialArtifacts++;r.postNoonExpiredTrialArtifactExamples.push(preview);
    }
    if(requested!=null&&requested>4){
     r.afterNoonRequestedAboveFour++;r.postNoonRequestedOverFour.push(preview);
+    if(ongoing && requested<=7)r.afterNoonAuthorizedOngoingRequestsAboveFour++;
+    else r.afterNoonUnexplainedRequestsAboveFour++;
    }
   }else r.beforeNoonIntents++;
   if(afterFill){
@@ -64,13 +83,18 @@ function summarize(rows,asOf=new Date()){
    if(!afterCreated)r.preNoonIntentLateFills++;
    if(filled!=null&&filled>4){
     r.afterNoonFilledAboveFour++;r.postNoonFilledOverFour.push(preview);
+    if(afterCreated){
+     if(ongoing && filled<=7)r.afterNoonAuthorizedOngoingFillsAboveFour++;
+     else r.afterNoonUnexplainedFillsAboveFour++;
+    }
    }
   }
  }
  r.postNoonRequestedOverFour=r.postNoonRequestedOverFour.slice(0,15);
  r.postNoonFilledOverFour=r.postNoonFilledOverFour.slice(0,15);
  r.postNoonExpiredTrialArtifactExamples=r.postNoonExpiredTrialArtifactExamples.slice(0,15);
- r.requiresExpiryInvestigation=Boolean(r.afterNoonExpiredTrialArtifacts||r.afterNoonRequestedAboveFour||r.afterNoonFilledAboveFour);
+ r.requiresExpiryInvestigation=Boolean(r.afterNoonExpiredTrialArtifacts||
+  r.afterNoonUnexplainedRequestsAboveFour||r.afterNoonUnexplainedFillsAboveFour);
  return r;
 }
 async function run(){
@@ -99,6 +123,10 @@ async function run(){
   expiredTrialIntents:report.afterNoonExpiredTrialArtifacts,
   requestedOverFour:report.afterNoonRequestedAboveFour,
   filledOverFourAfterNoon:report.afterNoonFilledAboveFour,
+  ongoingAuthorizedRequestsOverFour:report.afterNoonAuthorizedOngoingRequestsAboveFour,
+  ongoingAuthorizedFillsOverFour:report.afterNoonAuthorizedOngoingFillsAboveFour,
+  unexplainedRequestsOverFour:report.afterNoonUnexplainedRequestsAboveFour,
+  unexplainedFillsOverFour:report.afterNoonUnexplainedFillsAboveFour,
   needsReview:report.requiresExpiryInvestigation,noOrders:true}));
  return report;
 }
