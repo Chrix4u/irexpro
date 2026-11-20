@@ -345,6 +345,13 @@ async function main(){
  const archive=path.join(path.dirname(OUT),'daily',report.asOf.slice(0,10)+'.json');
  fs.mkdirSync(path.dirname(archive),{recursive:true,mode:0o700});
  fs.writeFileSync(archive,contents,{mode:0o600});
+ // Share the same 30-minute read-only research process rather than adding
+ // another broker/market-connected service or operational timer. A failure
+ // in the independent economics report must not interrupt quote-path audit.
+ try{
+  const {runCheckpointEconomics}=require('./audit-owner-demo-5m-checkpoint-economics.cjs');
+  await runCheckpointEconomics();
+ }catch(e){console.error('GUARD_CHECKPOINT_ECONOMICS_REFRESH_FAILED',String(e.message).slice(0,180))}
  console.log('GUARD_POSTEXIT_SHADOW '+JSON.stringify({asOf:report.asOf,
   fromUtc,closed:report.aggregate.validBrokerSettlements,
   actualNetUsd:report.aggregate.realizedGuardExitNetUsd,
