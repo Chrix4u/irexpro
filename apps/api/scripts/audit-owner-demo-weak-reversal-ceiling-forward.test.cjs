@@ -130,3 +130,20 @@ test('read-only SQL is strictly account-scoped and bounded',()=>{
  assert.doesNotMatch(audit.SQL,/\b(?:UPDATE|INSERT|DELETE|TRUNCATE|CALL|SELECT INTO)\b/i);
  assert.equal(audit.ACTIVATED_AT,'2026-11-20T17:37:18.000Z');
 });
+
+test('sampled gross peak below actual final commissions cannot be called protectable profit',()=>{
+ const clipped=settled('usd-jpy',-144.97,'2026-11-20T18:02:38Z',{
+  realised_pnl:'-120.97',commission:'-24.00',
+  max_favorable_pnl:'15.71',profit_giveback:'136.68'});
+ const noPeak=settled('aud-usd',-113.27,'2026-11-20T18:03:37Z',{
+  opened_at:'2026-11-20T18:00:50Z',realised_pnl:'-98.81',
+  commission:'-14.46',max_favorable_pnl:'0.00',profit_giveback:'98.81'});
+ const report=audit.analyze([clipped,noPeak],at);
+ const g=report.byGroup.weakConfirmedReversalCapped;
+ assert.equal(g.losers,2);
+ assert.equal(g.bookedNetUsd,-258.24);
+ assert.equal(g.grossPeakToAfterFeeLossTrades,1);
+ assert.equal(g.lossesWithSampledPeakExceedingFinalBrokerCosts,0);
+ assert.equal(g.lossesWithSampledPeakAtOrBelowFinalBrokerCosts,2);
+ assert.equal(g.sampledPeakNotExecutableBrokerExit,true);
+});

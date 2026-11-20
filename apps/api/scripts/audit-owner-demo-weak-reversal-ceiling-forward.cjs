@@ -119,6 +119,16 @@ function totals(rows){
   bookedProfitFactor:lost<0?rounded(winnings/-lost):null,
   grossPeakToAfterFeeLossTrades:losses.filter(r=>
     Number.isFinite(r.observedGrossPeakUsd)&&r.observedGrossPeakUsd>0).length,
+  // Post-exit diagnostics: compare the actually sampled gross peak with
+  // final settled broker commission+swap. NEVER use final fees as pre-entry
+  // knowledge or infer an executable profitable exit at the peak.
+  lossesWithSampledPeakExceedingFinalBrokerCosts:losses.filter(r=>
+    Number.isFinite(r.observedGrossPeakUsd)&&
+    r.observedGrossPeakUsd+r.brokerCommissionUsd+r.brokerSwapUsd>0).length,
+  lossesWithSampledPeakAtOrBelowFinalBrokerCosts:losses.filter(r=>
+    Number.isFinite(r.observedGrossPeakUsd)&&
+    r.observedGrossPeakUsd+r.brokerCommissionUsd+r.brokerSwapUsd<=0).length,
+  sampledPeakNotExecutableBrokerExit:true,
   distinctTradingDays:[...new Set(rows.map(r=>r.openedAt.slice(0,10)))].length,
  };
 }

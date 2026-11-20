@@ -23,3 +23,14 @@ At the 18:04 UTC review, two new Confirmed Reversal trades recorded `cap_applied
 Combined first two actual post-cap Confirmed Reversal settlements = **-$258.24 net**, both losses. The open USDCAD BUY `TREND_CONTINUATION` 0.20-lot position was not capped; its eventual broker outcome is unknown while OPEN. **This sizing feature lowers the requested exposure on some already weak trades, but has not established an entry edge and has not stopped actual losses. Do not promote to real money.**
 
 The future research question is whether a pre-entry, **frozen independent fee shortfall + weak model timing + higher-timeframe/recent-performance conflict** can distinguish losing from winning admissions over multiple new days without choking healthy opportunities. A shadow-only hypothesis may be added, but only post-activation, tracking false-positive blocked winners explicitly.
+
+## Fee-coverable favorable peak diagnostic (18:10 UTC)
+
+The first two capped Confirmed Reversal settlements have **zero** confirmed sampled gross-price peaks sufficient to cover their final settled commission+swap, despite USDJPY showing one short-lived **gross** favorable mark:
+- USDJPY BUY: observed gross peak **+$15.71**, realized commission **-$24.00**, broker settled net **-$144.97**; the sampled peak was below the final fee by **$8.29**.
+- AUDUSD BUY: observed gross peak **$0.00**, realized commission **-$14.46**, broker settled net **-$113.27**.
+The scorecard now separately reports `lossesWithSampledPeakExceedingFinalBrokerCosts` (0) and `lossesWithSampledPeakAtOrBelowFinalBrokerCosts` (2) for the cap cohort, with explicit `sampledPeakNotExecutableBrokerExit:true`. Final broker commission is an **outcome**, not causal knowledge available before entry; it must never feed a past profit-protection decision.
+
+The previously implemented 7-lot permission cohort was also examined as a **retrospective-only** contrast: 23 completed owner-DEMO Confirmed Reversal entries, 11 wins/12 losses, net **-$1,501.97**. A fee-below-floor plus both M1 and expert abstain symptom occurred in **12 trades, 9 losses and 3 wins** (net -$1,486.13), leaving 11 other trades with 8 wins/3 losses (net -$15.84). A blanket admission veto on this clue would have **sacrificed 3 genuine winning trades**, so **do not activate an automatic blocker from this in-sample result**. It is useful for formulating a future **separately frozen, prospectively tested** entry-quality hypothesis.
+
+This further demonstrates that the two post-release losses are **primarily entry-quality/economics**, not missed after-fee profit-protection exits. Preserve the current profit-protection daemon and all owner demo start/stop controls.
