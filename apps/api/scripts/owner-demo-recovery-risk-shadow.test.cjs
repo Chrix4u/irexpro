@@ -163,3 +163,50 @@ test('two warnings on one trade never double-count a broker settlement as saving
  assert.equal(r.realizedNetUsdOnWarnedDistinctTrades,-195);
  assert.equal(r.noAutomaticProfitProtectionChanges,true);
 });
+
+test('pre-open broker fee sample freezes a validated 4.9-lot USD commission reserve',()=>{
+ const t=row({opened_at:iso(time-15000),lot_size:'4.9',
+  sizing_inputs:{},historical_fee_per_lot:'6.00000',
+  min_fee_per_lot:'6',max_fee_per_lot:'6',fee_samples:32});
+ const proof=watcher.feeEvidence(t);
+ assert.equal(proof.source,'PRIOR_SETTLED_BROKER_FEES_BEFORE_OPEN');
+ assert.equal(proof.priorSettledSampleCount,32);
+ assert.equal(proof.feePerLot,6);
+ assert.equal(proof.reserveUsd,29.4);
+ const frozen=watcher.enroll(t,marker,time);
+ assert.equal(frozen.feeReserveUsd,29.4);
+ assert.equal(frozen.feeReserveSource,'PRIOR_SETTLED_BROKER_FEES_BEFORE_OPEN');
+ assert.equal(frozen.feeEvidencePriorSettlements,32);
+ assert.equal(watcher.feeReserve(t),29.4);
+});
+test('as-of fee evidence MUST predate target opening and remain owner/broker scoped',()=>{
+ const sql=watcher.FEES_SQL;
+ for(const value of [
+  'h.user_id=$1 AND h.broker_connection_id=$2',
+  "h.account_currency='USD' AND h.status='CLOSED'",
+  'h.closed_at<$3::timestamptz',
+  "h.opened_at>=$3::timestamptz-interval '7 days'",
+  'h.commission<0 AND h.lot_size>0',
+  'ORDER BY h.closed_at DESC LIMIT 32',
+ ])assert.ok(sql.includes(value),value);
+ assert.doesNotMatch(sql,/\b(INSERT|UPDATE|DELETE|TRUNCATE)\b/i);
+});
+test('missing, unstable and insufficient broker cost history never invent a fee reserve',()=>{
+ const base={...row(),sizing_inputs:{},
+  historical_fee_per_lot:'6',min_fee_per_lot:'6',
+  max_fee_per_lot:'6',fee_samples:32};
+ assert.equal(watcher.feeReserve(base),12);
+ for(const change of [
+  {fee_samples:11},{fee_samples:33},
+  {min_fee_per_lot:'5',max_fee_per_lot:'6'},
+  {historical_fee_per_lot:'NaN'},
+  {historical_fee_per_lot:'7'},
+  {fee_samples:null},{max_fee_per_lot:null},
+ ])assert.equal(watcher.feeReserve({...base,...change}),null,JSON.stringify(change));
+});
+test('an as-of pre-fill allocation has source precedence over historical fee fallback',()=>{
+ const t=row({historical_fee_per_lot:'6',fee_samples:32,
+  min_fee_per_lot:'6',max_fee_per_lot:'6'});
+ assert.equal(watcher.feeEvidence(t).source,'PRE_FILL_ALLOCATION_HISTORICAL_FEE');
+ assert.equal(watcher.feeReserve(t),12);
+});

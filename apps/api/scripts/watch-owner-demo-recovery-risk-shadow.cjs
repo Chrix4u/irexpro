@@ -8,6 +8,7 @@
 const path=require('node:path'),fs=require('node:fs');
 const {createHash}=require('node:crypto');
 const model=require('./owner-demo-recovery-risk-shadow.cjs');
+const {evaluate:evaluateForwardRecovery}=require('./owner-demo-recovery-risk-evaluation.cjs');
 const ROOT='/home/lightworld/webapps/irexpro-research/recovery-risk-forward';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HORIZONS=model.HORIZONS;
@@ -47,6 +48,20 @@ const QUOTES_SQL=[
  "AND bucket_time>=current_timestamp-interval '11 minutes'",
  'ORDER BY instrument,bucket_time DESC LIMIT 100'
 ].join(' ');
+// Pre-entry broker fee evidence ONLY: never use the trade's own subsequent
+// commission to form a predictor. Limit to the latest 32 PRIOR settlements.
+const FEES_SQL=[
+ 'SELECT count(*)::int AS fee_samples,',
+ 'round(avg(z.fee)::numeric,5) AS historical_fee_per_lot,',
+ 'min(z.fee) AS min_fee_per_lot,max(z.fee) AS max_fee_per_lot',
+ 'FROM (SELECT abs(h.commission)/h.lot_size AS fee FROM trading.trades h',
+ 'WHERE h.user_id=$1 AND h.broker_connection_id=$2',
+ "AND h.account_currency='USD' AND h.status='CLOSED'",
+ 'AND h.closed_at<$3::timestamptz',
+ "AND h.opened_at>=$3::timestamptz-interval '7 days'",
+ 'AND h.commission<0 AND h.lot_size>0',
+ 'ORDER BY h.closed_at DESC LIMIT 32) z'
+].join(' ');
 function setup(root,owner,connection,now=Date.now()){
  if(!UUID.test(owner)||!UUID.test(connection))throw Error('MISSING_EXACT_DEMO_SCOPE');
  fs.mkdirSync(root,{recursive:true,mode:0o700});
@@ -73,11 +88,24 @@ function setup(root,owner,connection,now=Date.now()){
  if(state.artifact!==model.ARTIFACT||!state.trades)throw Error('INVALID_STATE');
  return {marker,state};
 }
-function feeReserve(row){
- const fee=ns(row.sizing_inputs?.demoExecutionRiskEnvelope?.historicalFeePerLot);
+function feeEvidence(row){
  const lots=ns(row.lot_size);
- return fee>0&&lots>0?+(fee*lots).toFixed(4):null;
+ if(!(lots>0))return null;
+ const prefill=ns(row.sizing_inputs?.demoExecutionRiskEnvelope?.historicalFeePerLot);
+ if(prefill>0)return {reserveUsd:+(prefill*lots).toFixed(4),
+  feePerLot:prefill,source:'PRE_FILL_ALLOCATION_HISTORICAL_FEE',
+  priorSettledSampleCount:null};
+ const average=ns(row.historical_fee_per_lot),
+  lo=ns(row.min_fee_per_lot),hi=ns(row.max_fee_per_lot),
+  count=ns(row.fee_samples);
+ // Do not assert costs from a small, mixed or volatile broker sample.
+ if(!(count>=12&&count<=32&&average>0&&lo>0&&hi>=lo&&
+  hi/lo<=1.05&&average>=lo&&average<=hi))return null;
+ return {reserveUsd:+(average*lots).toFixed(4),
+  feePerLot:average,source:'PRIOR_SETTLED_BROKER_FEES_BEFORE_OPEN',
+  priorSettledSampleCount:count};
 }
+function feeReserve(row){return feeEvidence(row)?.reserveUsd??null;}
 function enroll(row,marker,now){
  const opened=ms(row.opened_at),start=ms(marker.activatedAt),
   amount=ns(row.lot_size),fill=ns(row.fill_price),stop=ns(row.stop_loss),
@@ -88,10 +116,13 @@ function enroll(row,marker,now){
   !(fill>0&&stop>0&&sign*(fill-stop)>0)||
   !Number.isFinite(opened)||opened<start||opened>now||now-opened>90000)
   return null;
+ const frozenFee=feeEvidence(row);
  return {tradeId:row.trade_id,openedAt:new Date(opened).toISOString(),
   brokerConnectionId:row.broker_connection_id,route:row.route,
   instrument:row.instrument,direction:row.direction,filledLots:amount,
-  originalStop:stop,feeReserveUsd:feeReserve(row),
+  originalStop:stop,feeReserveUsd:frozenFee?.reserveUsd??null,
+  feeReserveSource:frozenFee?.source??'MISSING_VERIFIED_ASOF_COST',
+  feeEvidencePriorSettlements:frozenFee?.priorSettledSampleCount??null,
   enrolledAt:new Date(now).toISOString(),snapshots:{},settled:null};
 }
 function plan(row,entry,marker,now,quotes){
@@ -102,7 +133,9 @@ function plan(row,entry,marker,now,quotes){
   if(!current)return {entry:null,events};
   events.push({stage:'ENROLLED',frozenEntry:{
    openedAt:current.openedAt,route:current.route,instrument:current.instrument,
-   filledLots:current.filledLots,feeReserveUsd:current.feeReserveUsd}});
+   filledLots:current.filledLots,feeReserveUsd:current.feeReserveUsd,
+   feeReserveSource:current.feeReserveSource,
+   feeEvidencePriorSettlements:current.feeEvidencePriorSettlements}});
  }
  const checkpoint=model.asOfCheckpoint(row,current.openedAt,now);
  if(checkpoint&&!current.snapshots[checkpoint]){
@@ -187,6 +220,7 @@ function summary(state,marker,now=Date.now()){
   possibleRepeatedSignalsPerTrade:true,notAnEstimatedSavingsClaim:true,
   independentEntryDays:new Set(trades.map(t=>t.openedAt.slice(0,10))).size,
   byCheckpoint,byFutureHorizon,
+  forwardValidation:evaluateForwardRecovery(trades,now),
   readOnly:true,modelCalibrated:false,probabilityModelQualified:false,
   noAutomaticProfitProtectionChanges:true,noBrokerOrders:true,noTradeAuthority:true,
   noModelPromotion:true,noStopAmendments:true,
@@ -202,7 +236,7 @@ function atomic(file,json){
  fs.writeFileSync(temp,JSON.stringify(json,null,2),{flag:'wx',mode:0o600});
  fs.renameSync(temp,file);
 }
-async function query(db,owner,conn,activatedAt,now){
+async function query(db,owner,conn,activatedAt,now,existingTrades={}){
  await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
  try{
   await db.query("SET LOCAL statement_timeout='12000ms'");
@@ -211,6 +245,16 @@ async function query(db,owner,conn,activatedAt,now){
   const symbols=[...new Set(t.map(r=>r.instrument))].filter(x=>model.INSTRUMENTS.includes(x));
   const quotes=symbols.length?(await db.query(QUOTES_SQL,[conn,symbols])).rows:[];
   if(quotes.length>100)throw Error('QUOTE_SCOPE_TRUNCATED');
+  // Query historical cost only for brand-new OPEN trade enrolments. The
+  // prior cohort closes STRICTLY before that trade opened, never afterwards.
+  const openNew=t.filter(r=>r.status==='OPEN'&&!existingTrades[r.trade_id]&&
+   Number.isFinite(ms(r.opened_at))&&ms(r.opened_at)>=ms(activatedAt)&&
+   now-ms(r.opened_at)>=0&&now-ms(r.opened_at)<=90000);
+  if(openNew.length>12)throw Error('UNBOUNDED_NEW_POSITION_ENROLLMENT');
+  for(const row of openNew){
+   const proof=(await db.query(FEES_SQL,[owner,conn,row.opened_at])).rows[0];
+   if(proof)Object.assign(row,proof);
+  }
   await db.query('COMMIT');
   const by={};
   for(const q of quotes){
@@ -222,7 +266,7 @@ async function query(db,owner,conn,activatedAt,now){
  }catch(e){await db.query('ROLLBACK').catch(()=>{});throw e;}
 }
 async function tick(db,root,owner,conn,marker,state){
- const now=Date.now(),data=await query(db,owner,conn,marker.activatedAt,now);
+ const now=Date.now(),data=await query(db,owner,conn,marker.activatedAt,now,state.trades);
  let count=0;
  for(const row of data.trades){
   const id=String(row.trade_id);
@@ -288,7 +332,7 @@ async function main(){
  console.log('OWNER_RECOVERY_SHADOW_ACTIVE '+marker.activatedAt+' noOrders=true');
  setInterval(()=>void scan(),12000);
 }
-module.exports={ROOT,TRADES_SQL,QUOTES_SQL,setup,feeReserve,enroll,plan,summary,query,tick};
+module.exports={ROOT,TRADES_SQL,QUOTES_SQL,FEES_SQL,setup,feeEvidence,feeReserve,enroll,plan,summary,query,tick};
 if(require.main===module)main().catch(e=>{
  console.error('OWNER_RECOVERY_RESEARCH_FATAL',String(e.message).slice(0,200));
  process.exitCode=1;
