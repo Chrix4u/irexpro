@@ -352,6 +352,12 @@ async function main(){
   const {runCheckpointEconomics}=require('./audit-owner-demo-5m-checkpoint-economics.cjs');
   await runCheckpointEconomics();
  }catch(e){console.error('GUARD_CHECKPOINT_ECONOMICS_REFRESH_FAILED',String(e.message).slice(0,180))}
+ // Compare only fully linked PRE-INTENT evidence against later settled P&L.
+ // Zero execution authority. A failure cannot affect guard/quote monitoring.
+ try{
+  const {main:refreshPreEntryResearch}=require('./audit-owner-demo-preentry-to-5m-outcomes.cjs');
+  await refreshPreEntryResearch();
+ }catch(e){console.error('PREENTRY_FIVE_MINUTE_RESEARCH_REFRESH_FAILED',String(e.message).slice(0,180))}
  console.log('GUARD_POSTEXIT_SHADOW '+JSON.stringify({asOf:report.asOf,
   fromUtc,closed:report.aggregate.validBrokerSettlements,
   actualNetUsd:report.aggregate.realizedGuardExitNetUsd,
