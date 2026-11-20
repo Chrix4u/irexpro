@@ -1,0 +1,92 @@
+name: Research - Candle Formation Expert
+
+on:
+  push:
+    branches:
+      - fix/planb-clock-neutral-telemetry-20261111
+    paths:
+      - apps/api/scripts/export-owner-demo-candle-training-corpus.cjs
+      - apps/api/scripts/collect-owner-demo-forming-candle-snapshots.cjs
+      - apps/api/scripts/collect-owner-demo-forming-candle-snapshots.test.cjs
+      - apps/api/scripts/irexpro-forming-candle-shadow.pm2.config.cjs
+      - services/ai-engine/scripts/research_candle_formation_expert.py
+      - services/ai-engine/tests/test_research_candle_formation_expert.py
+      - services/ai-engine/scripts/research_forming_candle_learning.py
+      - services/ai-engine/tests/test_research_forming_candle_learning.py
+      - services/ai-engine/scripts/research_forming_candle_independent_stages.py
+      - services/ai-engine/tests/test_research_forming_candle_independent_stages.py
+      - services/ai-engine/scripts/research_forming_candle_forward_score.py
+      - services/ai-engine/tests/test_research_forming_candle_forward_score.py
+      - apps/api/scripts/owner-demo-forming-candle-forward-shadow.cjs
+      - apps/api/scripts/owner-demo-forming-candle-forward-shadow.test.cjs
+      - apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.cjs
+      - apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.test.cjs
+      - apps/api/scripts/irexpro-forming-candle-outcome-audit.pm2.config.cjs
+      - apps/api/scripts/research-owner-demo-m5-causal-context-parity.cjs
+      - apps/api/scripts/research-owner-demo-m5-causal-context-parity.test.cjs
+      - apps/api/scripts/run-owner-demo-m5-causal-context-parity.cjs
+      - apps/api/scripts/collect-owner-demo-m5-asof-context.cjs
+      - apps/api/scripts/collect-owner-demo-m5-asof-context.test.cjs
+      - apps/api/scripts/irexpro-m5-asof-context-shadow.pm2.config.cjs
+      - apps/api/scripts/research-owner-demo-m5-quote-context-readiness.cjs
+      - apps/api/scripts/research-owner-demo-m5-quote-context-readiness.test.cjs
+      - apps/api/scripts/run-owner-demo-m5-quote-context-readiness.cjs
+      - apps/api/scripts/run-owner-demo-m5-quote-context-readiness.test.cjs
+      - apps/api/scripts/irexpro-m5-quote-readiness-shadow.pm2.config.cjs
+      - apps/api/scripts/irexpro-forming-candle-forward-shadow.pm2.config.cjs
+      - .github/workflows/research-candle-formation-expert.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  causal-next-candle-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: services/ai-engine/pyproject.toml
+      - name: Install only research model dependencies
+        run: python -m pip install "numpy>=2.1" "pandas>=2.2" "scikit-learn>=1.5" "joblib>=1.4"
+      - name: Check broker data, forming-candle and PM2 syntax
+        run: |
+          node --check apps/api/scripts/export-owner-demo-candle-training-corpus.cjs
+          node --check apps/api/scripts/collect-owner-demo-forming-candle-snapshots.cjs
+          node --check apps/api/scripts/irexpro-forming-candle-shadow.pm2.config.cjs
+          node --check apps/api/scripts/owner-demo-forming-candle-forward-shadow.cjs
+          node --check apps/api/scripts/irexpro-forming-candle-forward-shadow.pm2.config.cjs
+          node --check apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.cjs
+          node --check apps/api/scripts/irexpro-forming-candle-outcome-audit.pm2.config.cjs
+          node --check apps/api/scripts/research-owner-demo-m5-causal-context-parity.cjs
+          node --check apps/api/scripts/run-owner-demo-m5-causal-context-parity.cjs
+          node --check apps/api/scripts/collect-owner-demo-m5-asof-context.cjs
+          node --check apps/api/scripts/irexpro-m5-asof-context-shadow.pm2.config.cjs
+          node --check apps/api/scripts/research-owner-demo-m5-quote-context-readiness.cjs
+          node --check apps/api/scripts/run-owner-demo-m5-quote-context-readiness.cjs
+          node --check apps/api/scripts/irexpro-m5-quote-readiness-shadow.pm2.config.cjs
+      - name: Verify strict 15-second as-of native snapshots and no trade authority
+        run: node --test apps/api/scripts/collect-owner-demo-forming-candle-snapshots.test.cjs
+      - name: Verify prospective as-of prediction recorder is read-only
+        run: node --test apps/api/scripts/owner-demo-forming-candle-forward-shadow.test.cjs
+      - name: Verify future matured native candles match only prior persisted forecasts
+        run: node --test apps/api/scripts/audit-owner-demo-prospective-candle-outcomes.test.cjs
+      - name: Validate M5 price parity and distinguish mutable M1 from immutable quote as-of
+        run: node --test apps/api/scripts/research-owner-demo-m5-causal-context-parity.test.cjs
+      - name: Check M5 v2 label maturation and training-readiness barriers
+        run: |
+          node --test apps/api/scripts/research-owner-demo-m5-quote-context-readiness.test.cjs
+          node --test apps/api/scripts/run-owner-demo-m5-quote-context-readiness.test.cjs
+      - name: Validate strictly prospective M5 quote context without execution authority
+        run: node --test apps/api/scripts/collect-owner-demo-m5-asof-context.test.cjs
+      - name: Verify no future-candle leakage and no broker authority
+        working-directory: services/ai-engine
+        run: |
+          python -m unittest discover -s tests -p test_research_candle_formation_expert.py -v
+          python -m unittest discover -s tests -p test_research_forming_candle_learning.py -v
+          python -m unittest discover -s tests -p test_research_forming_candle_independent_stages.py -v
+          python -m unittest discover -s tests -p test_research_forming_candle_forward_score.py -v

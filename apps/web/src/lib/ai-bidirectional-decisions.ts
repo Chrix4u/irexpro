@@ -21,6 +21,8 @@ export interface BidirectionalSideView {
   paperAdmitted: boolean;
   paperExecutionEligible: boolean;
   driftState: BidirectionalDriftState | null;
+  /** Optional for compatibility with older read-only decisions API. */
+  driftDiagnostics?: string[];
   blockers: string[];
 }
 
@@ -77,7 +79,15 @@ function side(value: unknown): value is BidirectionalSideView {
     'driftState',
     'blockers',
   ];
-  if (Object.keys(item).length !== keys.length || keys.some((key) => !(key in item))) return false;
+  const optionalKeys = ['driftDiagnostics'];
+  if (keys.some((key) => !(key in item)) ||
+      Object.keys(item).some((key) => !keys.includes(key) && !optionalKeys.includes(key)) ||
+      (item.driftDiagnostics !== undefined &&
+        (!Array.isArray(item.driftDiagnostics) ||
+          item.driftDiagnostics.length > 20 ||
+          !item.driftDiagnostics.every(
+            (diagnostic: unknown) => typeof diagnostic === 'string' && diagnostic.length <= 120,
+          )))) return false;
   if (item.direction !== 'BUY' && item.direction !== 'SELL') return false;
   if (!iso(item.evaluatedAt)) return false;
   if (!finite(item.confidence) || item.confidence < 0 || item.confidence > 1) return false;

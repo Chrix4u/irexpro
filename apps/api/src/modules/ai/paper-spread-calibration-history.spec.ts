@@ -26,6 +26,12 @@ describe('loadPaperSpreadCalibrationHistory', () => {
     ]);
     expect(String(query.mock.calls[0]![0])).toContain("interval '21 days'");
     expect(String(query.mock.calls[0]![0])).toContain('percentile_cont(0.95)');
+    expect(String(query.mock.calls[0]![0])).toContain(
+      "last_sample_at AT TIME ZONE 'America/New_York'",
+    );
+    expect(String(query.mock.calls[0]![0])).toContain(
+      "THEN 'ROLLOVER'",
+    );
   });
 
   it('normalizes missing or invalid aggregate values to fail-closed empty history', async () => {

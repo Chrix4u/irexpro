@@ -8,6 +8,8 @@ import { AiCopilotService } from './ai-copilot.service';
 import { AiController } from './ai.controller';
 import { AiDecisionExplorerController } from './ai-decision-explorer.controller';
 import { AiBidirectionalDecisionController } from './ai-bidirectional-decision.controller';
+import { AiCounterMirrorReportController } from './ai-counter-mirror-report.controller';
+import { AiCounterMirrorReportService } from './ai-counter-mirror-report.service';
 import { AiCopilotController } from './ai-copilot.controller';
 import { ExternalSignalPerformanceController } from './external-signal-performance.controller';
 import { ExternalSignalPerformanceService } from './external-signal-performance.service';
@@ -41,11 +43,15 @@ import { M1ReversalTimingFusionShadowService } from './m1-reversal-timing-fusion
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import { M1TacticalMarketDataService } from './m1-tactical-market-data.service';
 import { M1TacticalEvidenceService } from './m1-tactical-evidence.service';
+import { DemoPortfolioBrakeConsentService } from './demo-portfolio-brake-consent.service';
+import { DemoPortfolioBrakeConsentController } from './demo-portfolio-brake-consent.controller';
+import { DemoStrategyBrakeOwnerController } from './demo-strategy-brake-owner.controller';
+import { DemoStrategyBrakeOwnerService } from './demo-strategy-brake-owner.service';
 import { HighConvictionBrokerExpertService } from './high-conviction-broker-expert.service';
 import {
   M1TacticalSchedulerService,
   M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
-  M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
+  M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW,
 } from './m1-tactical-scheduler.service';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
 import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-api-key.guard';
@@ -76,16 +82,20 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     AiController,
     AiDecisionExplorerController,
     AiBidirectionalDecisionController,
+    AiCounterMirrorReportController,
     AiCopilotController,
     ExternalSignalPerformanceController,
     TradingViewWebhookController,
     VpsForexSignalCollectorController,
+    DemoPortfolioBrakeConsentController,
+    DemoStrategyBrakeOwnerController,
   ],
   providers: [
     AiService,
     AiSignalService,
     AiDecisionExplorerService,
     AiBidirectionalDecisionService,
+    AiCounterMirrorReportService,
     AiCopilotService,
     InternalApiKeyGuard,
     ExternalSignalApiKeyGuard,
@@ -112,10 +122,12 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     EnsemblePostEntryProtectionShadowService,
     M1TacticalMarketDataService,
     M1TacticalEvidenceService,
+    DemoPortfolioBrakeConsentService,
+    DemoStrategyBrakeOwnerService,
     HighConvictionBrokerExpertService,
     {
       provide: M1_TACTICAL_ROLLOUT_POLICY_TOKEN,
-      useValue: M1_TACTICAL_ROLLOUT_POLICY_V8_SIX_PAIR_FEE_SHADOW,
+      useValue: M1_TACTICAL_ROLLOUT_POLICY_V8_FOCUSED_FOUR_FEE_SHADOW,
     },
     M1TacticalSchedulerService,
   ],

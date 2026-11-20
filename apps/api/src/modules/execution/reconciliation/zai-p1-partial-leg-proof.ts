@@ -1,3 +1,5 @@
+import { CTRADER_FAMILY_BROKER_IDS } from '../../broker/registry/broker-catalog';
+
 /**
  * z.ai P1: broker reconciliation proof for a FUTURE cTrader DEMO partial exit.
  * Deterministic, read-only, no dispatch authority. Financial values remain
@@ -65,7 +67,10 @@ export function evaluatePartialCloseProof(input: PartialCloseProofInput): Partia
     remainingLots,
   });
 
-  if (input.brokerId.toLowerCase() !== 'ctrader' || input.accountType.toUpperCase() !== 'DEMO') {
+  if (
+    !CTRADER_FAMILY_BROKER_IDS.includes(input.brokerId.trim().toLowerCase()) ||
+    input.accountType.toUpperCase() !== 'DEMO'
+  ) {
     return result('NOT_CTRADER_DEMO');
   }
   if (!input.providerDealId?.trim()) return result('MISSING_PROVIDER_DEAL');

@@ -663,6 +663,51 @@ describe('StrategyOrchestratorService', () => {
       },
     );
 
+    it.each(['GBPUSD', 'USDCHF'])(
+      'blocks dormant %s at central DEMO execution boundary even if external signal is replayed',
+      async (instrument) => {
+        (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+          ...activeSession(), executionMode: ExecutionMode.FULL_AUTO,
+        });
+        const result = await service.processSignal(validCandidate({
+          instrument, confidenceScore: 0.74, timeframe: 'M1',
+          strategyCode: 'external-irexpro-multimodel-ensemble',
+          modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+          suggestedVolume: 0.2, metadata: {},
+        }));
+        expect(result.outcome).toBe('SIGNAL_INVALID');
+        expect(result.reason).toContain('DEMO_INSTRUMENT_RESEARCH_ONLY');
+        expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+        expect(executionService.executeTrade).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['USDCAD', 'USDJPY'])(
+      'permits approved four-pair %s to reach the separate primary broker-risk gates',
+      async (instrument) => {
+        (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+          ...activeSession(), executionMode: ExecutionMode.FULL_AUTO,
+        });
+        (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+          id: 'conn-1', userId: 'user-1',
+          brokerId: 'pepperstone-ctrader', accountType: BrokerMode.DEMO,
+          authorizationStatus: 'ACTIVE', demoValidated: true,
+          liveTradingEnabled: false,
+          logicalAccountKey: 'pepperstone-ctrader::demo::acct-1',
+        });
+        const result = await service.processSignal(validCandidate({
+          instrument, direction: 'BUY', confidenceScore: 0.72,
+          timeframe: 'M1',
+          strategyCode: 'external-irexpro-multimodel-ensemble',
+          modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+          suggestedVolume: 0.2,
+          metadata: {},
+        }));
+        expect(result.reason||'').not.toContain('DEMO_INSTRUMENT_RESEARCH_ONLY');
+        expect(riskService.validateProposedTrade).toHaveBeenCalled();
+      },
+    );
+
     it('does not permit an unapproved suffixed DEMO signal by omitting external provider metadata', async () => {
       (executionService.getActiveSession as jest.Mock).mockResolvedValue({
         ...activeSession(),

@@ -291,7 +291,10 @@ export class PostEntryDemoDrawdownGuardService implements OnModuleInit, OnModule
         row.trade_id,
         row.user_id,
         TradeCloseReason.AI_CLOSE_SIGNAL,
-        { source: 'DEMO_DRAWDOWN_GUARD' },
+        {
+          source: 'DEMO_DRAWDOWN_GUARD',
+          reasonCode: PLAN_B_V89_DEMO_DRAWDOWN_GUARD_ARTIFACT,
+        },
       );
       const state: GuardState =
         closed.status === TradeStatus.CLOSED

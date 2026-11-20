@@ -1,3 +1,5 @@
+import { CTRADER_FAMILY_BROKER_IDS } from '../../broker/registry/broker-catalog';
+
 /**
  * z.ai P1: research preflight for a DEMO-only confirmed-reversal partial exit.
  * This is an as-of-profit-protection observation, never a broker command.
@@ -86,7 +88,10 @@ export function evaluateZaiP1ReversalDemoPreflight(
     canModifyOrder: false,
     modifiesExecution: false,
   });
-  if (input.brokerId.toLowerCase() !== 'ctrader' || input.accountType.toUpperCase() !== 'DEMO') {
+  if (
+    !CTRADER_FAMILY_BROKER_IDS.includes(input.brokerId.trim().toLowerCase()) ||
+    input.accountType.toUpperCase() !== 'DEMO'
+  ) {
     return base('NOT_CTRADER_DEMO');
   }
   if (input.strategyRoute !== 'CONFIRMED_REVERSAL') return base('NOT_CONFIRMED_REVERSAL');

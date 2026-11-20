@@ -5,6 +5,7 @@ import { CtraderTransport } from './ctrader-transport';
 import { FakeCtraderTransport, ScriptedCtraderServer } from './ctrader.fake-transport';
 import { BrokerMode, BrokerConnectionResult } from '../../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../../interfaces/broker-adapter.errors';
+import { ProviderDispatchCertainty } from '../../interfaces/provider-dispatch-certainty';
 import {
   CTRADER_ENVIRONMENT_URLS,
   CTRADER_PAYLOAD_TYPE,
@@ -317,6 +318,25 @@ describe('CTraderAdapter', () => {
         comment: 'idem-key-002',
       });
     });
+
+    it.each(['LONG', 'SHORT', 'buy', '', undefined, null])(
+      'rejects malformed direction %s before sending a broker request',
+      async (badDirection) => {
+        await connectDemo();
+        await expect(adapter.placeOrder({
+          idempotencyKey: 'direction-fail-closed',
+          instrument: 'EUR/USD',
+          direction: badDirection as 'BUY',
+          lotSize: '0.01',
+          stopLoss: '0',
+          takeProfit: '0',
+        })).rejects.toMatchObject({
+          code: BrokerErrorCode.INVALID_REQUEST,
+          dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+        });
+        expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+      },
+    );
 
     it('maps SELL direction to tradeSide 2', async () => {
       await connectDemo();
@@ -1752,6 +1772,37 @@ describe('CTraderAdapter', () => {
       // ONE batched SymbolById request for both symbols.
       const symbolById = findRequest(server, CTRADER_PAYLOAD_TYPE.SYMBOL_BY_ID_REQ)!;
       expect(symbolById.payload?.symbolId).toEqual([101, 102]);
+    });
+  });
+
+  describe('getInstrumentList minimum stop metadata', () => {
+    it('passes through cTrader native slDistance and its declared point/percentage units', async () => {
+      server.on(CTRADER_PAYLOAD_TYPE.SYMBOL_BY_ID_REQ,(payload,envelope)=>{
+        const ids=Array.isArray(payload.symbolId)?payload.symbolId as number[]:[];
+        return {
+          clientMsgId:envelope.clientMsgId,
+          payloadType:CTRADER_PAYLOAD_TYPE.SYMBOL_BY_ID_RES,
+          payload:{
+            symbol:ids.map(symbolId=>({
+              symbolId,digits:5,pipPosition:4,
+              minVolume:1000,maxVolume:100000000,
+              stepVolume:1000,lotSize:10000000,
+              slDistance:symbolId===101?25:2,
+              distanceSetIn:symbolId===101?1:2,
+            })),
+          },
+        };
+      });
+      await connectDemo();
+      const items=await adapter.getInstrumentList();
+      const major=items.find(i=>i.symbol==='EUR/USD');
+      expect(major).toMatchObject({
+        minStopLossDistance:'25',minStopLossDistanceUnit:'POINTS',
+      });
+      const other=items.find(i=>i.symbol!=='EUR/USD');
+      expect(other).toMatchObject({
+        minStopLossDistance:'2',minStopLossDistanceUnit:'PERCENTAGE',
+      });
     });
   });
 

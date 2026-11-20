@@ -429,6 +429,10 @@ export interface BrokerInstrument {
   maxLot: string;
   lotStep: string;
   contractSize: string;
+  /** Broker-native minimum stop loss distance; do not infer when absent. */
+  minStopLossDistance?: string;
+  /** Points vs percentage as explicitly declared by the broker symbol. */
+  minStopLossDistanceUnit?: 'POINTS' | 'PERCENTAGE';
 }
 
 export interface BrokerPrice {

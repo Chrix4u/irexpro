@@ -1,4 +1,4 @@
-import { evaluateM5EarlyTransitionHandoff } from './m5-early-transition-handoff';
+import { evaluateM5EarlyTransitionHandoff, m1MayConfirmM5EarlyTransition } from './m5-early-transition-handoff';
 
 const NOW = new Date('2026-10-29T17:10:00.000Z');
 
@@ -140,5 +140,37 @@ describe('evaluateM5EarlyTransitionHandoff', () => {
     ],
   ])('blocks %s', (_label, overrides) => {
     expect(evaluateM5EarlyTransitionHandoff(input(overrides as any) as any).eligible).toBe(false);
+  });
+});
+
+describe('M1-only causal prefilter for expensive M5 handoff lookup', () => {
+  const may = (overrides: Record<string, unknown> = {}) =>
+    m1MayConfirmM5EarlyTransition(input(overrides) as any);
+
+  it('preserves M5 observation for eligible trend continuations and strong non-ambiguous abstains', () => {
+    expect(may()).toBe(true);
+    expect(may({
+      m1Route: 'ABSTAIN',
+      m1Reason: 'HIGHER_TIMEFRAME_CONFLICT',
+      m1Confidence: 0.738,
+      m1DirectionQuality: 0.696,
+    })).toBe(true);
+  });
+
+  it.each([
+    { m1Route: 'M1_EARLY_TRANSITION' },
+    { m1Route: 'M1_CONFIRMED_REVERSAL' },
+    { m1Route: 'ABSTAIN', m1Reason: 'DIRECTION_EDGE_TOO_SMALL', m1Confidence: 0.99 },
+    { m1Route: 'ABSTAIN', m1Reason: 'NO_VALID_ROUTE', m1Confidence: 0.69 },
+    { m1Route: 'ABSTAIN', m1Reason: 'NO_VALID_ROUTE', m1DirectionQuality: 0.64 },
+    { m1Route: 'M1_TREND_CONTINUATION', m1Confidence: 0.59 },
+    { m1Route: 'M1_TREND_CONTINUATION', m1DirectionQuality: 0.54 },
+    { m1ExecutionCostUsable: false },
+    { m1EventRisk: 'HIGH_IMPACT_BLOCK' },
+    { m1EventRisk: 'UNVERIFIED' },
+    { m1Confidence: Number.NaN },
+  ])('skips provably ineligible M1 confirmation without a broker lookup: %j', overrides => {
+    expect(may(overrides)).toBe(false);
+    expect(evaluateM5EarlyTransitionHandoff(input(overrides) as any).eligible).toBe(false);
   });
 });

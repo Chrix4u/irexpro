@@ -139,7 +139,10 @@ describe('PostEntryDemoDrawdownGuardService', () => {
       candidate.trade_id,
       candidate.user_id,
       TradeCloseReason.AI_CLOSE_SIGNAL,
-      { source: 'DEMO_DRAWDOWN_GUARD' },
+      {
+        source: 'DEMO_DRAWDOWN_GUARD',
+        reasonCode: 'plan-b-v89-demo-5m-drawdown-guard-v1',
+      },
     );
     const persist = query.mock.calls.find((call: unknown[]) =>
       String(call[0]).includes('INSERT INTO trading.post_entry_shadow_observations'),

@@ -43,6 +43,62 @@ const overlay = (
   modifiesExecution: false as const,
 });
 
+/**
+ * The actual 04 Nov EUR demo had positive net P&L, but it did NOT use a
+ * different primary Plan B strategy. Guard that ORIGINAL primary authority
+ * contract against accidental future regressions while keeping separate
+ * account/portfolio risk and independent fallback restrictions intact.
+ *
+ * The READ-ONLY reference is transcribed from Git 0ccae758, pre-first
+ * 04 Nov broker fill. It is never imported by production code.
+ */
+describe('historical 04-Nov primary Plan B compatibility (NO execution promotion)', () => {
+  it('retains the old primary decision across model routes, independent M1 timing, admission, governance and expert states', () => {
+    const frozen = require('../../../scripts/audit-nov04-primary-authority-replay.cjs') as {
+      nov04PrimaryAuthority: (input: Record<string, unknown>) => {
+        valid: boolean; eligible: boolean; reason: string;
+      };
+    };
+    const strategies = [
+      'TREND_CONTINUATION', 'CONFIRMED_REVERSAL', 'EARLY_TRANSITION',
+    ] as const;
+    const m1Routes = [
+      'M1_TREND_CONTINUATION', 'M1_EARLY_TRANSITION',
+      'M1_CONFIRMED_REVERSAL', 'ABSTAIN',
+    ] as const;
+    let compared=0;
+    for(const strategyRoute of strategies) {
+      for(const m1TimingRoute of m1Routes) {
+        for(const paperAdmitted of [true,false]) {
+          for(const paperExecutionEligible of [true,false]) {
+            for(const expertState of ['CONFIRM','ABSTAIN','CONFLICT'] as const) {
+              const input = {
+                ensemble: { ...ensemble(paperAdmitted), strategyRoute },
+                governance: governance(paperExecutionEligible),
+                trainedExpert: overlay(expertState),
+                candidateDirection: 'BUY' as const,
+                m1TimingRoute,
+              };
+              const legacy=frozen.nov04PrimaryAuthority({
+                ensemble:input.ensemble,
+                strategy_governance:input.governance,
+                expert:input.trainedExpert,
+                direction:input.candidateDirection,
+                route:input.m1TimingRoute,
+              });
+              const actual=evaluateMultimodelDemoAuthority(input);
+              expect(legacy.valid).toBe(true);
+              expect(actual.authorityPath==='PRIMARY_PLAN_B').toBe(legacy.eligible);
+              compared++;
+            }
+          }
+        }
+      }
+    }
+    expect(compared).toBe(144);
+  });
+});
+
 describe('evaluateMultimodelDemoAuthority', () => {
   it('authorizes qualified DEMO trend continuation when the M1 timing route confirms continuation', () => {
     const result = evaluateMultimodelDemoAuthority({

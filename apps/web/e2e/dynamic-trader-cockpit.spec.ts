@@ -422,6 +422,22 @@ test.describe("AI Trader market schedule", () => {
   });
 });
 
+test.describe("focused EURUSD/AUDUSD trader charts", () => {
+  test("does not show paused pairs even when the legacy automation runtime still supplies all six", async ({ page }) => {
+    await gotoAiTrader(page);
+    const chartPairs = page.getByLabel("Active trading chart instruments");
+    await expect(chartPairs.getByRole("button")).toHaveText(["EURUSD", "AUDUSD"]);
+    await expect(chartPairs.getByRole("button", { name: "EURUSD" })).toHaveClass(/is-active/);
+
+    await chartPairs.getByRole("button", { name: "AUDUSD" }).click();
+    await expect(chartPairs.getByRole("button", { name: "AUDUSD" })).toHaveClass(/is-active/);
+    await expect(chartPairs.getByRole("button", { name: "USDJPY" })).toHaveCount(0);
+    await expect(chartPairs.getByRole("button", { name: "GBPUSD" })).toHaveCount(0);
+    await expect(chartPairs.getByRole("button", { name: "USDCAD" })).toHaveCount(0);
+    await expect(chartPairs.getByRole("button", { name: "USDCHF" })).toHaveCount(0);
+  });
+});
+
 test.describe("AI Trader novice workflow", () => {
   test("shows broker, allocation, one automation control, positions and AI activity", async ({
     page,

@@ -1,7 +1,7 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
 import { RiskProfile } from '../../risk/entities/risk-profile.entity';
 import { BrokerService } from '../../broker/broker.service';
@@ -112,6 +112,22 @@ export interface PositionSizingInputs {
   microAccountMarginReservePercent?: string | null;
   finalRiskAtStop?: string;
   finalRiskAtStopPercentOfCapital?: string;
+  /** Pepperstone DEMO scoped, decision-time conservative risk projection. Never a guaranteed fill/SL cap. */
+  demoExecutionRiskEnvelope?: {
+    artifact: 'pepperstone-demo-cost-aware-risk-sizing-v1';
+    originalLots: string;
+    initialGrossStopRisk: string;
+    adjustedLots: string;
+    modelStopDistance: string;
+    observedSpread: string;
+    spreadReserveMultiple: 2;
+    historicalFeePerLot: string | null;
+    historicalFeeSamples: number;
+    feeSource: 'SAME_SYMBOL' | 'SAME_ACCOUNT_FX_MAJORS' | 'UNAVAILABLE';
+    conservativeEstimatedStopRisk: string;
+    commissionIncluded: boolean;
+    isGuaranteedMaximumLoss: false;
+  };
   maxLot: string;
   lotStep: string;
   profileMaxPositionSizeLot: string;
@@ -203,6 +219,60 @@ export class PositionSizingService {
     } catch {
       return null;
     }
+  }
+
+  /** Strictly as-of historical broker costs; never use future fills or guessed tariffs. */
+  private async loadPepperstoneDemoHistoricalFeePerLot(input: {
+    userId: string;
+    brokerConnectionId: string;
+    accountCurrency: string;
+    instrument: string;
+    asOf: Date;
+  }): Promise<{
+    feePerLot: string;
+    sampleCount: number;
+    source: 'SAME_SYMBOL' | 'SAME_ACCOUNT_FX_MAJORS';
+  } | null> {
+    let db: DataSource | null = null;
+    try { db = this.moduleRef?.get(DataSource, { strict: false }) ?? null; }
+    catch { return null; }
+    if (!db) return null;
+    for (const sameSymbol of [true, false]) {
+      try {
+        const rows = (await db.query(
+          `SELECT COUNT(*)::int sample_count,
+                  percentile_cont(0.9) WITHIN GROUP (ORDER BY fee_per_lot) p90_fee_per_lot
+             FROM (
+               SELECT (ABS(commission) + GREATEST(0, -COALESCE(swap,0))) /
+                      NULLIF(lot_size,0) fee_per_lot
+               FROM trading.trades
+               WHERE user_id=$1 AND broker_connection_id=$2 AND account_currency=$3
+                 AND status='CLOSED' AND commission IS NOT NULL AND lot_size>0
+                 AND closed_at < $4::timestamptz
+                 AND closed_at >= $4::timestamptz - interval '21 days'
+                 AND (CASE WHEN $5::boolean THEN instrument=$6
+                      ELSE instrument=ANY(ARRAY['EURUSD','AUDUSD','GBPUSD',
+                                                'USDCAD','USDCHF','USDJPY']) END)
+               ORDER BY closed_at DESC LIMIT 40
+             ) historical`,
+          [input.userId,input.brokerConnectionId,input.accountCurrency,
+           input.asOf.toISOString(),sameSymbol,input.instrument],
+        )) as Array<{sample_count:string|number;p90_fee_per_lot:string|number|null}>;
+        const samples = Number(rows[0]?.sample_count ?? 0);
+        const fee = ExactDecimal.tryParse(String(rows[0]?.p90_fee_per_lot ?? ''));
+        if (samples >= (sameSymbol ? 5 : 8) && fee?.isPositive()) {
+          return {
+            feePerLot: fee.toString(), sampleCount: samples,
+            source: sameSymbol ? 'SAME_SYMBOL' : 'SAME_ACCOUNT_FX_MAJORS',
+          };
+        }
+      } catch {
+        // Cost evidence is optional for this size-only pilot. Never replace
+        // unavailable broker fees with a guessed zero-cost claim.
+        return null;
+      }
+    }
+    return null;
   }
 
   /**
@@ -304,6 +374,8 @@ export class PositionSizingService {
     let requestedRiskPercent = riskPercent;
     let riskCapitalBase = equity;
     let allocationAwarePaper = false;
+    let paperBrokerId: string | null = null;
+    let paperBrokerAccountType: string | null = null;
     let removeAiLotCeiling = false;
     let removeProfileLotCeiling = false;
 
@@ -315,6 +387,8 @@ export class PositionSizingService {
           userId,
         );
         brokerAccountType = connection.accountType;
+        paperBrokerId = connection.brokerId;
+        paperBrokerAccountType = connection.accountType;
       } catch {
         // Environment is authorization evidence. If it cannot be proven, the
         // allocation-aware override stays disabled and legacy risk ceilings remain.
@@ -877,6 +951,102 @@ export class PositionSizingService {
       requiredMargin = bestMargin;
     }
 
+    // A model's pre-fill gross R was previously displayed as if it captured
+    // the broker's whole stop-out cost. On Pepperstone focused DEMO M1 the
+    // actual fill can be adverse to the last quote, and an SL close has fees.
+    // Keep the original intended gross stop-risk amount as a *monetary*
+    // envelope, not a hard volume floor. Use broker-observed spread and
+    // strictly PRIOR paid commissions to step size DOWN. The market order,
+    // broker SL/TP, independent risk engine, and signal gates stay unchanged.
+    // No invented fee: unavailable history is labelled and only the observed
+    // spread component is covered. The projection is NOT a slippage guarantee.
+    let demoExecutionRiskEnvelope: PositionSizingInputs['demoExecutionRiskEnvelope'];
+    const pepperstoneFocusedDemo =
+      allocationAwarePaper &&
+      params.paperAllocationSizing?.executionMode === 'FULL_AUTO' &&
+      paperBrokerAccountType === 'DEMO' &&
+      paperBrokerId === 'pepperstone-ctrader' &&
+      (normalizedInstrument === 'EURUSD' || normalizedInstrument === 'AUDUSD') &&
+      accountCurrency === quoteCurrency &&
+      params.entryType === 'MARKET';
+    if (pepperstoneFocusedDemo) {
+      const quoteRef = geometry.quoteRef;
+      const bid = ExactDecimal.tryParse(String(quoteRef?.bid ?? ''));
+      const ask = ExactDecimal.tryParse(String(quoteRef?.ask ?? ''));
+      const quoteAt = Date.parse(String(quoteRef?.observedAt ?? ''));
+      const quoteAgeMs = Date.now() - quoteAt;
+      if (
+        bid?.isPositive() && ask?.isPositive() && ask.gte(bid) &&
+        Number.isFinite(quoteAgeMs) && quoteAgeMs >= -5_000 && quoteAgeMs <= 60_000
+      ) {
+        const originalLots = lots;
+        const observedSpread = ask.sub(bid);
+        const reserveMultiple = ExactDecimal.parse('2');
+        const spreadReservePerLot = observedSpread.mul(reserveMultiple).mul(contractSize);
+        const feeEvidence = await this.loadPepperstoneDemoHistoricalFeePerLot({
+          userId, brokerConnectionId, accountCurrency, instrument: normalizedInstrument,
+          asOf: new Date(),
+        });
+        const historicalFeePerLot = feeEvidence
+          ? ExactDecimal.parse(feeEvidence.feePerLot)
+          : ExactDecimal.ZERO;
+        const reservePerLot = spreadReservePerLot.add(historicalFeePerLot);
+        if (reservePerLot.isPositive()) {
+          const nominalStopRiskCeiling = originalLots.mul(riskPerLot);
+          const projectedRiskPerLot = riskPerLot.add(reservePerLot);
+          // A 0.01-lot DEMO probe may be explicitly capped at the broker's
+          // minimum by the strategy, even though its *true* drawdown-adjusted
+          // account risk budget can pay the spread and commission too.
+          // Dividing the bare 0.01-lot stop risk by a cost-inclusive per-lot
+          // risk ALWAYS rounds to 0 on a 0.01 step: a self-locking sizing bug.
+          // For exact broker-minimum probes ONLY, verify the inclusive cost
+          // against the EXISTING effective budget AND durable profile ceiling.
+          // Never round up, increase proposed lots, change SL/TP, or apply
+          // this exception to larger positions or non-DEMO accounts.
+          const costInclusiveRiskCeiling = originalLots.eq(minLot)
+            ? ExactDecimal.min(
+                riskAmountInQuoteCurrency,
+                profileRiskCeilingAmountInQuoteCurrency,
+              )
+            : nominalStopRiskCeiling;
+          const lotsWithinEnvelope = ExactDecimal.min(
+            originalLots,
+            costInclusiveRiskCeiling
+              .divDown(projectedRiskPerLot, LOT_SCALE)
+              .divDown(lotStep, 0).mul(lotStep),
+          );
+          if (lotsWithinEnvelope.lt(minLot)) {
+            throw new PositionSizingError(
+              'POSITION_SIZE_BELOW_MINIMUM',
+              `${instrument}: broker spread/fee-aware size ${lotsWithinEnvelope.toString()} ` +
+              `is below verified minimum ${minLot.toString()}; never round risk up`,
+            );
+          }
+          if (lotsWithinEnvelope.lt(lots)) {
+            lots = lotsWithinEnvelope;
+            requiredMargin = await requiredMarginForLots(lots);
+          }
+        }
+        demoExecutionRiskEnvelope = {
+          artifact: 'pepperstone-demo-cost-aware-risk-sizing-v1',
+          originalLots: originalLots.toString(),
+          initialGrossStopRisk: originalLots.mul(riskPerLot).toString(),
+          adjustedLots: lots.toString(),
+          modelStopDistance: slDistance.toString(),
+          observedSpread: observedSpread.toString(),
+          spreadReserveMultiple: 2,
+          historicalFeePerLot: feeEvidence?.feePerLot ?? null,
+          historicalFeeSamples: feeEvidence?.sampleCount ?? 0,
+          feeSource: feeEvidence?.source ?? 'UNAVAILABLE',
+          conservativeEstimatedStopRisk: lots.mul(
+            riskPerLot.add(spreadReservePerLot).add(historicalFeePerLot),
+          ).toString(),
+          commissionIncluded: feeEvidence !== null,
+          isGuaranteedMaximumLoss: false,
+        };
+      }
+    }
+
     const finalRiskAtStopInQuoteCurrency = lots.mul(riskPerLot);
     const finalRiskAtStop = finalRiskAtStopInQuoteCurrency.divDown(
       quotePerAccountCurrency,
@@ -945,6 +1115,7 @@ export class PositionSizingService {
       microAccountMarginReservePercent,
       finalRiskAtStop: finalRiskAtStop.toString(),
       finalRiskAtStopPercentOfCapital: finalRiskAtStopPercentOfCapital.toString(),
+      ...(demoExecutionRiskEnvelope ? { demoExecutionRiskEnvelope } : {}),
       maxLot: maxLot.toString(),
       lotStep: lotStep.toString(),
       profileMaxPositionSizeLot: profileMaxLots.toString(),

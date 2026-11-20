@@ -62,6 +62,7 @@ describe('AiBidirectionalDecisionService', () => {
             governance: {
               netExpectedR: -0.11,
               driftState: 'OUT_OF_DISTRIBUTION',
+              driftDiagnostics: ['confidence:HARD_LOW', 'emaSeparation:HARD_LOW'],
               paperExecutionEligible: false,
               paperExecutionBlockers: [
                 'ENSEMBLE_NOT_PAPER_ADMITTED',
@@ -96,6 +97,7 @@ describe('AiBidirectionalDecisionService', () => {
         netExpectedR: -0.11,
         paperExecutionEligible: false,
         driftState: 'OUT_OF_DISTRIBUTION',
+        driftDiagnostics: ['confidence:HARD_LOW', 'emaSeparation:HARD_LOW'],
         blockers: [
           'ENSEMBLE_NOT_PAPER_ADMITTED',
           'PAPER_NET_EXPECTED_R',
@@ -103,6 +105,7 @@ describe('AiBidirectionalDecisionService', () => {
         ],
       },
     });
+    expect(result.comparisons[0].buy?.driftDiagnostics).toEqual([]);
     expect(JSON.stringify(result)).not.toContain('stopLoss');
     expect(JSON.stringify(result)).not.toContain('takeProfit');
     expect(JSON.stringify(result)).not.toContain('spreadPrice');

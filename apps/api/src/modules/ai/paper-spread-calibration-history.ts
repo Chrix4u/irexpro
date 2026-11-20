@@ -27,10 +27,16 @@ export async function loadPaperSpreadCalibrationHistory(
         AND last_sample_at > ($3::timestamptz - interval '21 days')
         AND last_sample_at <= $3::timestamptz
         AND CASE
-          WHEN EXTRACT(HOUR FROM last_sample_at AT TIME ZONE 'UTC') >= 21 THEN 'ROLLOVER'
-          WHEN EXTRACT(HOUR FROM last_sample_at AT TIME ZONE 'UTC') >= 13 THEN 'NEW_YORK'
-          WHEN EXTRACT(HOUR FROM last_sample_at AT TIME ZONE 'UTC') >= 7 THEN 'LONDON'
-          ELSE 'ASIA'
+          -- Match the common JS session mapping using NY DST-aware
+          -- rollover, not the previously incorrect fixed 21-24 UTC block.
+          WHEN EXTRACT(HOUR FROM last_sample_at AT TIME ZONE 'America/New_York') = 17
+            THEN 'ROLLOVER'
+          WHEN EXTRACT(HOUR FROM last_sample_at AT TIME ZONE 'America/New_York') >= 18
+            OR EXTRACT(HOUR FROM last_sample_at AT TIME ZONE 'UTC') < 7
+            THEN 'ASIA'
+          WHEN EXTRACT(HOUR FROM last_sample_at AT TIME ZONE 'UTC') < 13
+            THEN 'LONDON'
+          ELSE 'NEW_YORK'
         END = $4
     `,
     [

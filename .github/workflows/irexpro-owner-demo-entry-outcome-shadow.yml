@@ -1,0 +1,48 @@
+name: iRexPro owner DEMO entry outcome shadow
+
+on:
+  push:
+    branches:
+      - fix/planb-clock-neutral-telemetry-20261111
+    paths:
+      - apps/api/src/modules/ai/owner-demo-entry-outcome*
+      - apps/api/src/modules/ai/m1-tactical-scheduler.service.ts
+      - apps/api/scripts/train-owner-demo-entry-outcome-shadow*
+      - apps/api/scripts/audit-owner-demo-entry-discriminator-prospective*
+      - .github/workflows/irexpro-owner-demo-entry-outcome-shadow.yml
+  pull_request:
+    paths:
+      - apps/api/src/modules/ai/owner-demo-entry-outcome*
+      - apps/api/src/modules/ai/m1-tactical-scheduler.service.ts
+      - apps/api/scripts/train-owner-demo-entry-outcome-shadow*
+      - apps/api/scripts/audit-owner-demo-entry-discriminator-prospective*
+      - .github/workflows/irexpro-owner-demo-entry-outcome-shadow.yml
+
+permissions:
+  contents: read
+
+jobs:
+  model-and-runtime-shadow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 17
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install only API workspace dependencies
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Verify read-only model training and prospective audit
+        run: |
+          cd apps/api
+          node --check scripts/train-owner-demo-entry-outcome-shadow.cjs
+          node --check scripts/audit-owner-demo-entry-discriminator-prospective.cjs
+          node --test scripts/train-owner-demo-entry-outcome-shadow.test.cjs scripts/audit-owner-demo-entry-discriminator-prospective.test.cjs
+      - name: Test live shadow scorer
+        run: pnpm --filter @irexpro/api exec jest src/modules/ai/owner-demo-entry-outcome-shadow.spec.ts --runInBand --silent
+      - name: Type-check API with new shadow
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json

@@ -117,6 +117,7 @@ function toSide(row: EnsembleDecisionRow): AiBidirectionalSideDto | null {
     paperAdmitted: bool(components?.paperAdmitted),
     paperExecutionEligible: bool(governance?.paperExecutionEligible),
     driftState: driftState(governance?.driftState),
+    driftDiagnostics: stringArray(governance?.driftDiagnostics),
     blockers,
   };
 }

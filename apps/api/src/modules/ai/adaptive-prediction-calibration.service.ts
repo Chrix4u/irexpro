@@ -1,3 +1,4 @@
+import { classifyForexSessionClock } from './forex-session-clock';
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ENSEMBLE_OUTCOME_MODEL_VERSION } from './ensemble-shadow-outcome';
@@ -89,11 +90,7 @@ function sessionOf(row: AdaptivePredictionOutcomeRow): AdaptiveMarketSession | n
   }
   const time = new Date(row.evaluated_at);
   if (!Number.isFinite(time.getTime())) return null;
-  const hour = time.getUTCHours();
-  if (hour >= 21) return 'ROLLOVER';
-  if (hour < 7) return 'ASIA';
-  if (hour < 13) return 'LONDON';
-  return 'NEW_YORK';
+  return classifyForexSessionClock(time);
 }
 
 function stateOf(row: AdaptivePredictionOutcomeRow): AdaptiveMarketState | null {
@@ -422,29 +419,35 @@ export class AdaptivePredictionCalibrationService {
     { expiresAt: number; result: AdaptivePredictionCalibrationDecision }
   >();
 
-  constructor(private readonly dataSource: DataSource) {}
+  // Broker-account/decision-time scoped data only; never cache final
+  // candidate authority here. An in-flight query can otherwise be repeated
+  // for every directional candidate while PostgreSQL is under heavy load.
+  private readonly historyRowsCache = new Map<
+    string,
+    { promise: Promise<AdaptivePredictionOutcomeRow[]>; expiresAt: number | null }
+  >();
 
-  async getCalibration(
+  private getHistoricalRows(
     request: AdaptivePredictionCalibrationRequest,
-  ): Promise<AdaptivePredictionCalibrationDecision> {
-    const cacheKey = [
+  ): Promise<AdaptivePredictionOutcomeRow[]> {
+    // The query has no instrument/route filters, so safely share ONLY its
+    // history inputs at the exact same as-of timestamp and model versions.
+    const key = [
       request.userId,
       request.brokerConnectionId,
-      request.instrument,
-      request.direction,
-      request.session,
-      request.state,
-      request.strategyRoute,
-      request.decisionPolicyVersions.join(','),
-      String(request.rawConfidence),
-      String(request.rawNetExpectedR),
+      [...request.decisionPolicyVersions].sort().join(','),
       request.evaluatedAt.toISOString(),
+      ENSEMBLE_OUTCOME_MODEL_VERSION,
     ].join('|');
-    const cached = this.cache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) return cached.result;
+    const now = Date.now();
+    const existing = this.historyRowsCache.get(key);
+    if (existing && (existing.expiresAt === null || existing.expiresAt > now)) {
+      return existing.promise;
+    }
+    if (existing) this.historyRowsCache.delete(key);
 
-    try {
-      const rows = (await this.dataSource.query(
+    const promise = (async (): Promise<AdaptivePredictionOutcomeRow[]> => {
+      return (await this.dataSource.query(
         `
           SELECT
             instrument,
@@ -478,6 +481,63 @@ export class AdaptivePredictionCalibrationService {
           ENSEMBLE_OUTCOME_MODEL_VERSION,
         ],
       )) as AdaptivePredictionOutcomeRow[];
+    })();
+    const record = { promise, expiresAt: null as number | null };
+    this.historyRowsCache.set(key, record);
+    // In-flight queries stay shared even when they take longer than the TTL;
+    // start the 5-second retention only after the query has completed.
+    // A failed read must be evicted to permit a genuine later retry.
+    void promise.then(
+      () => {
+        if (this.historyRowsCache.get(key) === record) {
+          record.expiresAt = Date.now() + 5_000;
+        }
+      },
+      () => {
+        if (this.historyRowsCache.get(key) === record) this.historyRowsCache.delete(key);
+      },
+    );
+    // Small bounded cache; never evict a running promise, whose callers
+    // still need to share the same database query.
+    for (const [cacheKey, entry] of this.historyRowsCache) {
+      if (entry.expiresAt !== null && entry.expiresAt <= now) {
+        this.historyRowsCache.delete(cacheKey);
+      }
+    }
+    if (this.historyRowsCache.size > 24) {
+      for (const [cacheKey, entry] of this.historyRowsCache) {
+        if (entry.expiresAt !== null && cacheKey !== key) {
+          this.historyRowsCache.delete(cacheKey);
+          if (this.historyRowsCache.size <= 24) break;
+        }
+      }
+    }
+    return promise;
+  }
+
+  constructor(private readonly dataSource: DataSource) {}
+
+  async getCalibration(
+    request: AdaptivePredictionCalibrationRequest,
+  ): Promise<AdaptivePredictionCalibrationDecision> {
+    const cacheKey = [
+      request.userId,
+      request.brokerConnectionId,
+      request.instrument,
+      request.direction,
+      request.session,
+      request.state,
+      request.strategyRoute,
+      request.decisionPolicyVersions.join(','),
+      String(request.rawConfidence),
+      String(request.rawNetExpectedR),
+      request.evaluatedAt.toISOString(),
+    ].join('|');
+    const cached = this.cache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.result;
+
+    try {
+      const rows = await this.getHistoricalRows(request);
       const result = buildAdaptivePredictionCalibration(rows, request);
       this.cache.set(cacheKey, { expiresAt: Date.now() + 5_000, result });
       return result;

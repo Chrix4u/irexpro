@@ -680,6 +680,16 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           maxLot: volumeCentsToLotString(symbol.maxVolume ?? 0, symbol.lotSize),
           lotStep: volumeCentsToLotString(symbol.stepVolume ?? 0, symbol.lotSize),
           contractSize: moneyToDecimalString(symbol.lotSize, 2),
+          ...(Number.isInteger(symbol.slDistance) && (symbol.slDistance ?? 0) > 0 &&
+          (symbol.distanceSetIn === undefined ||
+            symbol.distanceSetIn === 1 || symbol.distanceSetIn === 2)
+            ? {
+                minStopLossDistance: String(symbol.slDistance),
+                minStopLossDistanceUnit:
+                  (symbol.distanceSetIn === 2 ? 'PERCENTAGE' : 'POINTS') as
+                    'POINTS' | 'PERCENTAGE',
+              }
+            : {}),
         });
       }
       return instruments;
@@ -866,6 +876,18 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     const session = this.resolveSession(order.connectionReference);
     if (!session) throw this.notConnected();
     try {
+      // Order-direction invariant: a malformed runtime direction must NEVER
+      // fall through the BUY/SELL protobuf ternary and become a SELL order.
+      // This is a local, pre-send rejection (no provider request made).
+      if (order.direction !== 'BUY' && order.direction !== 'SELL') {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.INVALID_REQUEST,
+          'cTrader order direction must be exactly BUY or SELL',
+          undefined,
+          false,
+          ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+        );
+      }
       // Fail-closed order-kind dispatch (Sprint 50 PR-3): never silently
       // downgrade a non-market kind. All four normalized kinds are supported
       // by the ProtoOANewOrderReq surface.

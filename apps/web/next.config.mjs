@@ -27,6 +27,17 @@ const nextConfig = {
         source: '/:path*',
         headers: browserSecurityHeaders,
       },
+      {
+        // The AI trader route previously shipped a one-year cache directive
+        // because the client-only app shell was statically prerendered.
+        // A force-dynamic layout plus explicit response policy prevents stale
+        // six-pair UI from persisting in browsers and intermediary caches.
+        source: '/trade',
+        headers: [{
+          key: 'Cache-Control',
+          value: 'private, no-store, max-age=0, must-revalidate',
+        }],
+      },
     ];
   },
   // The web app and API are served from the same domain in staging; the API is
