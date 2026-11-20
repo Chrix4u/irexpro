@@ -285,6 +285,10 @@ export class PostEntryDemoDrawdownGuardService implements OnModuleInit, OnModule
       return;
     }
 
+    // Freeze the model-evidence timestamp BEFORE the broker close request.
+    // The actual observation database write happens after risk-reducing
+    // dispatch, but a post-dispatch now() must not impersonate model as-of.
+    const preCloseEvidenceEvaluatedAt = new Date();
     this.lastCloseAttempts += 1;
     try {
       const closed = await this.executionService.closeTrade(
@@ -317,6 +321,7 @@ export class PostEntryDemoDrawdownGuardService implements OnModuleInit, OnModule
         'CLOSE_DEMO',
         true,
         response,
+        preCloseEvidenceEvaluatedAt,
       );
     } catch {
       await this.persistObservation(
@@ -328,6 +333,7 @@ export class PostEntryDemoDrawdownGuardService implements OnModuleInit, OnModule
         'CLOSE_DEMO',
         true,
         response,
+        preCloseEvidenceEvaluatedAt,
       );
     }
   }
@@ -341,7 +347,11 @@ export class PostEntryDemoDrawdownGuardService implements OnModuleInit, OnModule
     action: GuardAction,
     modifiesExecution: boolean,
     sourceResponse: PlanBV85BrokerCheckpointResponse,
+    evidenceEvaluatedAt: Date = new Date(),
   ): Promise<void> {
+    if (!Number.isFinite(evidenceEvaluatedAt.getTime())) {
+      throw new Error('INVALID_POST_ENTRY_EVIDENCE_TIME');
+    }
     const checkpointAt = new Date(
       new Date(row.opened_at).getTime() + PLAN_B_V89_DEMO_DRAWDOWN_CHECKPOINT_MINUTES * 60_000,
     );
@@ -350,6 +360,8 @@ export class PostEntryDemoDrawdownGuardService implements OnModuleInit, OnModule
       mode: 'DEMO_EXECUTION_GUARD',
       checkpoint_minutes: PLAN_B_V89_DEMO_DRAWDOWN_CHECKPOINT_MINUTES,
       checkpoint_at: checkpointAt.toISOString(),
+      // PRE-DISPATCH evidence time (not the later database write time).
+      evidence_evaluated_at: evidenceEvaluatedAt.toISOString(),
       guard_threshold_r: PLAN_B_V89_DEMO_DRAWDOWN_CLOSE_R,
       current_r: currentR,
       action,
@@ -375,11 +387,11 @@ export class PostEntryDemoDrawdownGuardService implements OnModuleInit, OnModule
           execution_authority, modifies_execution, updated_at
         )
         VALUES (
-          $1,$2,$3,$4,$4,$5,$6,$7,now(),$8,$9,$10,$11,$12,false,$13,$14::jsonb,$15::jsonb,'DEMO_ONLY',$16,now()
+          $1,$2,$3,$4,$4,$5,$6,$7,$17::timestamptz,$8,$9,$10,$11,$12,false,$13,$14::jsonb,$15::jsonb,'DEMO_ONLY',$16,now()
         )
         ON CONFLICT (trade_id, artifact, checkpoint_minutes)
         DO UPDATE SET
-          evaluated_at = now(),
+          evaluated_at = EXCLUDED.evaluated_at,
           state = EXCLUDED.state,
           reason = EXCLUDED.reason,
           probability = EXCLUDED.probability,
@@ -410,6 +422,7 @@ export class PostEntryDemoDrawdownGuardService implements OnModuleInit, OnModule
         JSON.stringify(sourceResponse.market_data_sources ?? null),
         JSON.stringify(response),
         modifiesExecution,
+        evidenceEvaluatedAt.toISOString(),
       ],
     );
   }

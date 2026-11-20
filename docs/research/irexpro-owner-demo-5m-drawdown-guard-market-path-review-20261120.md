@@ -66,6 +66,14 @@ node --test scripts/audit-owner-demo-drawdown-guard-postexit.test.cjs \
 node scripts/audit-owner-demo-drawdown-guard-postexit.cjs
 ```
 
+## Historical five-minute score provenance defect discovered
+
+The 29 confirmed guard close attempts could be matched to preexisting `trading.post_entry_shadow_observations` with recorded `current_r` and model probability. **All 29 rows had `evaluated_at` written after the actual audit close request**, with timestamp differences **1.67 to 8.13 seconds**. This is a storage-timing limitation, not proof the underlying AI scoring itself occurred after the close. Nevertheless, those historical score timestamps cannot be presented as independently frozen *pre-close* observations for training.
+
+Remediation: in `PostEntryDemoDrawdownGuardService`, freeze `preCloseEvidenceEvaluatedAt` immediately after the verified broker-native AI response and before calling `ExecutionService.closeTrade()`. The subsequent database write now uses that exact timestamp in `evaluated_at` and in the JSON evidence, rather than SQL `now()` after broker dispatch. The broker risk-reducing CLOSE call still precedes the audit DB write and is never held up by storage.
+
+**Important:** no older observation is rewritten or retroactively certified. The continuous research watcher now explicitly joins only guard observations meeting **all** of: the exact prior trade, matching owner, `action=CLOSE_DEMO`, `evaluated_at <= TRADE_CLOSE_REQUESTED.created_at`, and the durable JSON `evidence_evaluated_at` exactly equal to the database evidence time. A raw score with later timestamps is labeled **historical/unverified**, never relabeled as pre-close. The November 20 baseline correctly shows **0 verified pre-close scores out of 29 historical exits**. Future qualifying scores can be compared against the sampled 10-minute stop-versus-recovery path without changing trading decisions. This does not modify the guard threshold, its timing, broker orders, stops or LIVE authorization.
+
 ## Trading decisions deliberately NOT made
 
 - Do not disable the five-minute DEMO guard: sampled follow-through was often adverse and original stop levels were frequently observed afterward.

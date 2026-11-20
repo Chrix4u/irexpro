@@ -22,7 +22,10 @@ const SQL=[
 'SELECT t.instrument,t.direction,t.opened_at,t.closed_at,t.fill_price,',
 't.exit_price,t.stop_loss,t.take_profit,t.realised_pnl,t.commission,',
 't.swap,t.lot_size,ti.metadata->>\'multimodel_plan_b_route\' AS route,',
-'ca.created_at AS close_requested_at',
+'ca.created_at AS close_requested_at,',
+'guard.current_r AS verified_guard_current_r,',
+'guard.probability AS verified_guard_probability,',
+'guard.evaluated_at AS verified_guard_evaluated_at',
 'FROM trading.trades t',
 'JOIN broker.broker_connections b ON b.id=t.broker_connection_id AND b.user_id=t.user_id',
 'JOIN trading.trade_intents ti ON ti.id=t.trade_intent_id',
@@ -34,6 +37,15 @@ const SQL=[
 " AND a.metadata->'aiCloseTrigger'->>'source'='DEMO_DRAWDOWN_GUARD'",
 " AND a.created_at>=t.opened_at AND a.created_at<=t.closed_at+interval '2 minutes'",
 ' ORDER BY a.created_at ASC LIMIT 1) ca ON true',
+'LEFT JOIN LATERAL (SELECT o.current_r,o.probability,o.evaluated_at',
+' FROM trading.post_entry_shadow_observations o',
+' WHERE o.trade_id=t.id AND o.user_id=t.user_id',
+" AND o.artifact='plan-b-v89-demo-5m-drawdown-guard-v1'",
+" AND o.action='CLOSE_DEMO'",
+' AND o.evaluated_at>=t.opened_at AND o.evaluated_at<=ca.created_at',
+" AND o.response->>'evidence_evaluated_at' IS NOT NULL",
+" AND (o.response->>'evidence_evaluated_at')::timestamptz=o.evaluated_at",
+' ORDER BY o.evaluated_at DESC LIMIT 1) guard ON true',
 'WHERE t.user_id=$1 AND b.user_id=$1',
 " AND b.broker_id='pepperstone-ctrader' AND b.account_type='DEMO'",
 " AND b.account_currency='USD' AND t.account_currency='USD'",
@@ -181,6 +193,18 @@ function alignPreExitExpert(trade,byPair){
    (chosen.predictedNextCandleClass==='GREEN_OR_UP')===(trade.direction==='BUY')?'AGREE':'OPPOSE',
   researchOnly:true,noExitAuthority:true};
 }
+function verifyPreExitGuardScore(trade){
+ const at=ms(trade.verified_guard_evaluated_at),cutoff=ms(trade.close_requested_at),
+  opened=ms(trade.opened_at),currentR=num(trade.verified_guard_current_r),
+  probability=num(trade.verified_guard_probability);
+ if(!Number.isFinite(at)||!Number.isFinite(cutoff)||!Number.isFinite(opened)||
+    at<opened||at>cutoff||currentR==null||currentR>-.4+1e-8||
+    probability==null||probability<0||probability>1)
+  return {status:'HISTORICAL_GUARD_SCORE_ASOF_UNVERIFIED'};
+ return {status:'VERIFIED_BEFORE_CLOSE_REQUEST',currentR:round(currentR,5),
+  rawModelProbability:round(probability,5),evaluatedAt:new Date(at).toISOString(),
+  closeRequestAt:new Date(cutoff).toISOString(),researchOnly:true,noDecisionAuthority:true};
+}
 function summarize(details,quotesStats,fromUtc=windowStart()){
  const b={observed:details.length,validBrokerSettlements:0,invalid:0,
   realizedGuardExitNetUsd:0,byRoute:{},byInstrument:{},horizons:{}};
@@ -252,13 +276,35 @@ function summarize(details,quotesStats,fromUtc=windowStart()){
   const key=p.class+'|'+p.directionalAgreement+'|'+state;
   expert.byPriorClassAndLater10mPath[key]=(expert.byPriorClassAndLater10mPath[key]||0)+1;
  }
+ const guardEvidence={verifiedPreClose:0,historicalOrUnverified:0,by10mObservedPath:{}};
+ for(const t of details){
+  if(t.status!=='BROKER_SETTLED')continue;
+  const e=t.preExitGuardScore;
+  if(e?.status!=='VERIFIED_BEFORE_CLOSE_REQUEST'){
+   guardEvidence.historicalOrUnverified++;continue;
+  }
+  guardEvidence.verifiedPreClose++;
+  const h=t.stages['10m'];
+  const key=h.status!=='COMPLETE_SAMPLED_PATH'?'INCOMPLETE':
+   h.sampledOriginalStop?'STOP_SAMPLED':
+   h.sampledReturnToOriginalEntry?'RETURN_NO_SAMPLED_STOP':'NEITHER';
+  const group=guardEvidence.by10mObservedPath[key]??={trades:0,
+   meanPreCloseR:0,meanRawModelProbability:0};
+  group.trades++;group.meanPreCloseR+=e.currentR;
+  group.meanRawModelProbability+=e.rawModelProbability;
+ }
+ for(const g of Object.values(guardEvidence.by10mObservedPath)){
+  g.meanPreCloseR=round(g.meanPreCloseR/g.trades,4);
+  g.meanRawModelProbability=round(g.meanRawModelProbability/g.trades,4);
+ }
  return {artifact:ARTIFACT,asOf:new Date().toISOString(),researchOnly:true,
   modifiesExecution:false,brokerOrders:false,noSqlWrites:true,
   scope:{broker:'pepperstone-ctrader',accountType:'DEMO',currency:'USD',
    fromInclusiveUtc:fromUtc,rollingUtcDays:ROLLING_UTC_DAYS,
    verifiedCloseRequestSource:'DEMO_DRAWDOWN_GUARD',
    quoteSource:'prospective native bid/ask sampled quote archive',verifiedQuoteStats:quotesStats},
-  aggregate:b,preExitCandlestickExpertAlignment:expert,details,
+  aggregate:b,preExitCandlestickExpertAlignment:expert,
+  preExitGuardScoreAlignment:guardEvidence,details,
   limitations:[
    'Sampled bid/ask quotes are not full tick history. An unobserved original stop/target could have triggered before a later apparent recovery.',
    'A closing quote after the actual exit is NOT a broker-executable hypothetical delayed fill or proven P&L.',
@@ -286,7 +332,10 @@ async function main(){
  const experts=loadGuardForecasts(fromUtc);
  const details=rows.map(r=>{
   const result=outcome(r,quoteFiles.byPair.get(r.instrument));
-  if(result.status==='BROKER_SETTLED')result.preExitCandlestickExpert=alignPreExitExpert(r,experts);
+  if(result.status==='BROKER_SETTLED'){
+   result.preExitCandlestickExpert=alignPreExitExpert(r,experts);
+   result.preExitGuardScore=verifyPreExitGuardScore(r);
+  }
   return result;
  });
  const report=summarize(details,quoteFiles.stats,fromUtc);
@@ -302,6 +351,7 @@ async function main(){
   quote30m:report.aggregate.horizons['30m'].completeQuotePaths,
   sampledStop30m:report.aggregate.horizons['30m'].sampledOriginalStop,
   preExitCandleMatches:report.preExitCandlestickExpertAlignment.verifiedBeforeGuardRequest,
+  verifiedPreCloseGuardScores:report.preExitGuardScoreAlignment.verifiedPreClose,
   researchOnly:true,brokerOrders:false}));
  return report;
 }
@@ -316,7 +366,7 @@ async function watch(){
  setInterval(()=>void run(),30*60*1000);
 }
 module.exports={ARTIFACT,SQL,HORIZONS,windowStart,validQuote,outcome,summarize,loadQuotes,
- loadGuardForecasts,alignPreExitExpert};
+ loadGuardForecasts,alignPreExitExpert,verifyPreExitGuardScore};
 if(require.main===module){
  const task=process.argv.includes('--watch')?watch():main();
  task.catch(e=>{console.error('READ_ONLY_GUARD_AUDIT_FAILED',String(e.message).slice(0,180));process.exitCode=1});

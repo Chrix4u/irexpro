@@ -124,3 +124,37 @@ test('pre-exit candlestick alignment requires independently frozen real as-of pr
  assert.equal(alignPreExitExpert(trade(),new Map([['USDCAD',[{...p,researchOnly:false}]]])).status,
   'NO_VERIFIED_PRE_EXIT_FORECAST');
 });
+
+test('pre-exit guard scoring is admitted only with verified before-close evidence time',()=>{
+ const {verifyPreExitGuardScore,SQL}=require('./audit-owner-demo-drawdown-guard-postexit.cjs');
+ for(const part of [
+  "o.evaluated_at<=ca.created_at",
+  "o.response->>'evidence_evaluated_at' IS NOT NULL",
+  "(o.response->>'evidence_evaluated_at')::timestamptz=o.evaluated_at",
+  "o.action='CLOSE_DEMO'",
+  'o.trade_id=t.id AND o.user_id=t.user_id'
+ ])assert.ok(SQL.includes(part),part);
+ const valid=trade({verified_guard_current_r:'-0.62',
+  verified_guard_probability:'0.47',
+  verified_guard_evaluated_at:iso(closed-10000)});
+ const evidence=verifyPreExitGuardScore(valid);
+ assert.equal(evidence.status,'VERIFIED_BEFORE_CLOSE_REQUEST');
+ assert.equal(evidence.currentR,-.62);
+ assert.equal(evidence.rawModelProbability,.47);
+ assert.equal(evidence.noDecisionAuthority,true);
+ assert.equal(verifyPreExitGuardScore({...valid,
+  verified_guard_evaluated_at:iso(closed+1000)}).status,
+  'HISTORICAL_GUARD_SCORE_ASOF_UNVERIFIED');
+ assert.equal(verifyPreExitGuardScore({...valid,
+  verified_guard_evaluated_at:null}).status,
+  'HISTORICAL_GUARD_SCORE_ASOF_UNVERIFIED');
+ assert.equal(verifyPreExitGuardScore({...valid,
+  verified_guard_current_r:'-0.2'}).status,
+  'HISTORICAL_GUARD_SCORE_ASOF_UNVERIFIED');
+ const o=outcome(valid,[q(4,1.20015),q(54,1.19995)],later);
+ o.preExitGuardScore=evidence;
+ const result=summarize([o],{files:1});
+ assert.equal(result.preExitGuardScoreAlignment.verifiedPreClose,1);
+ assert.equal(result.preExitGuardScoreAlignment.by10mObservedPath.INCOMPLETE.trades,1);
+ assert.equal(result.preExitGuardScoreAlignment.by10mObservedPath.INCOMPLETE.meanPreCloseR,-.62);
+});
