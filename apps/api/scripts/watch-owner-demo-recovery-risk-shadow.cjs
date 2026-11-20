@@ -58,6 +58,7 @@ const FEES_SQL=[
  'WHERE h.user_id=$1 AND h.broker_connection_id=$2',
  "AND h.account_currency='USD' AND h.status='CLOSED'",
  'AND h.closed_at<$3::timestamptz',
+ 'AND h.created_at<=$3::timestamptz AND h.updated_at<=$3::timestamptz',
  "AND h.opened_at>=$3::timestamptz-interval '7 days'",
  'AND h.commission<0 AND h.lot_size>0',
  'ORDER BY h.closed_at DESC LIMIT 32) z'

@@ -185,6 +185,7 @@ test('as-of fee evidence MUST predate target opening and remain owner/broker sco
   'h.user_id=$1 AND h.broker_connection_id=$2',
   "h.account_currency='USD' AND h.status='CLOSED'",
   'h.closed_at<$3::timestamptz',
+  'h.created_at<=$3::timestamptz AND h.updated_at<=$3::timestamptz',
   "h.opened_at>=$3::timestamptz-interval '7 days'",
   'h.commission<0 AND h.lot_size>0',
   'ORDER BY h.closed_at DESC LIMIT 32',
