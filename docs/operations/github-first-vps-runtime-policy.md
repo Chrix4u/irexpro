@@ -239,3 +239,29 @@ Avoid changing the model or altering 376 order statuses just to clear this
 operational gate; first establish broker-side facts and fix the root cause of
 stuck order/provider identifiers. No changes to trading strategy or risk
 settings are included in this PR.
+
+### Isolated preview pointer activation and reversible rollback
+
+The verified artifact may be activated **only** behind a separate preview
+pointer with `scripts/deployment/atomic-preview-links.sh`:
+
+```bash
+bash scripts/deployment/atomic-preview-links.sh activate \
+  /home/lightworld/runtime/irexpro/candidates/<source-sha>-<build-tool-sha-prefix>
+bash scripts/deployment/atomic-preview-links.sh rollback
+```
+
+The script does **not** modify any PM2 definition, live trading root, Nginx
+route, live database, broker connection, order record or AI scheduler. It
+validates the release provenance and required compiled entrypoints, updates
+`preview/current` and `preview/previous` by atomic symlink replacement,
+and takes an exclusive lock to reject concurrent pointer changes. Invalid
+release directories fail closed. It has an isolated shell-test mode under
+`/tmp/irexpro-preview-test.*` for deterministic A/B activation and two
+rollback rounds, and is tested by required Deployment Script Safety CI.
+
+As of 2026-11-21, the VPS `preview/current` pointer references the single
+verified GitHub-built release. The **public website and broker-connected
+PM2 paths are not switched**. It is not yet a demonstration of live API/AI
+rollback; that still requires broker position reconciliation and the four
+cutover HOLD conditions to be satisfied.
