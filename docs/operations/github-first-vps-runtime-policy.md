@@ -336,3 +336,29 @@ half-hourly snapshots are capped at 336, and the low-priority nightly
 first-level directory inventory is protected against concurrent builds.
 Neither automatically cleans up files or substitutes for project-specific
 release-state verification.
+
+### 2026-11-21 nested-worktree storage audit and conservative remediation
+
+The original bounded cache-pruning script handled only direct child worktrees.
+A real production audit found 14 older than 14-day, registered nested
+`.worktrees/feat/*` / `.worktrees/fix/*` iRexPro worktrees that retained
+ignored pnpm dependency trees. The script now accepts **only those two
+fixed nested parent paths**, still requires a registered Git worktree,
+`.git` metadata, >=14-day age, an ignored generated path, and absence
+of active process/cwd references, while rejecting symlinks.
+
+Production dry-run identified **6 eligible** nested worktrees / **42**
+ignored generated directories; the others did **not** satisfy all checks and
+were not removed. The low-I/O bounded apply completed with 42/42 folders
+removed, preserving branches, models, broker state, databases and all
+running 23 iRexPro PM2 services. Actual `df` recovered approximately
+**0.40 GiB** net (used bytes 298385846272 -> 297955020800), much less
+than apparent directory contents. This demonstrates why other project
+storage must be measured and verified before cleanup promises.
+
+Read-only initial `webapps` audit measured 83,384 MiB across 72
+directories, with iPresenterPlux 19,605 MiB, iEduPro Next 14,748 MiB,
+iRexPro staging 9,778 MiB, iFleetPro 4,433 MiB. These are **whole
+application-directory measurements**, not a disposable or recoverable
+space estimate. Independent project source/DB/rollback protection remains
+mandatory. The shared VPS was still near 90% after cleanup.

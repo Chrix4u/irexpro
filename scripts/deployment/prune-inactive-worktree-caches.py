@@ -12,10 +12,18 @@ import subprocess
 from pathlib import Path
 
 REPO=Path("/home/lightworld/webapps/irexpro-staging")
+NESTED_ROOTS=(
+    # Registered legacy feature/fix worktrees live one directory below
+    # .worktrees. The prior cleanup never reached them despite many being
+    # >14 days old and retaining large ignored pnpm node_modules trees.
+    Path("/home/lightworld/webapps/irexpro-staging/.worktrees/feat"),
+    Path("/home/lightworld/webapps/irexpro-staging/.worktrees/fix"),
+)
 ROOTS=(
     Path("/home/lightworld/webapps/irexpro-staging/.worktrees"),
     Path("/home/lightworld/webapps/irexpro-worktrees"),
     Path("/home/lightworld/dev"),
+    *NESTED_ROOTS,
 )
 RELATIVE_CACHES=(
     "apps/web/.next",
@@ -49,6 +57,10 @@ for chunk in out.strip().split("\n\n"):
         continue
     line=chunk.splitlines()[0]
     entries.append(Path(line[len("worktree "):]))
+# Prioritize only the explicitly permitted nested groups during a bounded
+# remediation run, rather than sweeping additional direct worktrees first.
+entries.sort(key=lambda w: (0 if w.parent in NESTED_ROOTS else 1, str(w)))
+
 def active_worktree_paths():
     active=[]
     for item in os.scandir("/proc"):
@@ -71,7 +83,8 @@ for w in entries:
     if eligible_worktrees >= LIMIT:
         break
     try:
-        if w.parent not in ROOTS or w.is_symlink() or not w.is_dir() or not (w/".git").is_file():
+        if (w.parent not in ROOTS or w.parent.is_symlink() or
+                w.is_symlink() or not w.is_dir() or not (w/".git").is_file()):
             continue
         if w.stat().st_mtime > CUTOFF:
             continue
@@ -96,7 +109,8 @@ for w in entries:
     eligible_worktrees += 1
     candidate_folders += len(cache)
     print(("APPLY" if MODE=="apply" else "ELIGIBLE"),
-          w.name,"generated_folders",len(cache),flush=True)
+          str(w.relative_to(REPO)) if w.is_relative_to(REPO) else w.name,
+          "generated_folders",len(cache),flush=True)
     if MODE=="apply":
         for p in cache:
             if p.is_symlink() or not p.is_dir():
