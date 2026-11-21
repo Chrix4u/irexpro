@@ -101,3 +101,21 @@ cloning 1.3 GB of Python dependencies per app release.
 **Do not merge the ops branch into `main` automatically:** the existing
 main staging deployment job still rebuilds applications on the VPS.
 Changing the default workflow requires a separately tested migration.
+
+### Cutover hold and preflight
+
+Before moving PM2 paths or deleting the legacy checkout, inspect the
+candidate with the **read-only** command:
+
+```bash
+python3 scripts/deployment/preflight-artifact-cutover.py \
+  /home/lightworld/runtime/irexpro/candidates/<verified-candidate>
+```
+
+This verifies entrypoints, all 19 worker script paths, existing core PM2
+health, native API modules, and externalized environment/AI/state stores.
+It deliberately returns **HOLD** until the old VPS-build workflow is
+replaced and broker positions can be reconciled before restarting the
+trading scheduler. Never launch a second API/AI scheduler against the demo
+broker as a cutover test. The existing live PM2 deployment remains
+authoritative until rollback and restart-safe state handling are proven.
