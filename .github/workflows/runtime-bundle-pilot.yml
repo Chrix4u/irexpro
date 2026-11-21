@@ -1,0 +1,88 @@
+name: iRexPro Runtime Bundle (GitHub Build Pilot)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irexpro-runtime-bundle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    name: Build and archive only deployable app outputs
+    if: github.repository == 'Chrix4u/irexpro'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: '10.34.5'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install and compile on GitHub runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          pnpm install --frozen-lockfile
+          pnpm --filter @irexpro/api build
+          pnpm --filter @irexpro/web build
+          pnpm --filter @irexpro/admin build
+
+      - name: Package compiled deliverables, not git history or dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f apps/api/dist/main.js
+          test -f apps/web/.next/BUILD_ID
+          test -f apps/admin/.next/BUILD_ID
+          mkdir -p "$RUNNER_TEMP/irexpro-bundle"
+          for path in \
+            apps/api/dist \
+            apps/web/.next \
+            apps/admin/.next \
+            apps/api/package.json \
+            apps/web/package.json \
+            apps/admin/package.json \
+            package.json \
+            pnpm-lock.yaml \
+            pnpm-workspace.yaml; do
+            cp -a --parents "$path" "$RUNNER_TEMP/irexpro-bundle"
+          done
+          for path in apps/web/public apps/admin/public; do
+            if test -d "$path"; then
+              cp -a --parents "$path" "$RUNNER_TEMP/irexpro-bundle"
+            fi
+          done
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/irexpro-bundle/RELEASE_SHA"
+          tar -czf "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz" -C "$RUNNER_TEMP/irexpro-bundle" .
+          sha256sum "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz" > "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz.sha256"
+          bash scripts/deployment/inspect-runtime-bundle.sh "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz" "$GITHUB_SHA"
+
+      - name: Retain build bundle for rollout testing
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: irexpro-runtime-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/irexpro-runtime-bundle.tar.gz
+            ${{ runner.temp }}/irexpro-runtime-bundle.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
