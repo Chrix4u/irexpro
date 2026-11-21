@@ -27,6 +27,13 @@ rmdir "$root/api"
 pnpm --filter @irexpro/api deploy --prod --legacy "$root/api"
 test -f "$root/api/dist/main.js"
 test -d "$root/api/node_modules/@nestjs/core"
+# Legacy pnpm deploy may emit a virtual-store self-alias that points back to
+# the repository checkout. That alias is not an API runtime dependency and
+# must never be transported to the VPS.
+self_alias="$root/api/node_modules/.pnpm/node_modules/@irexpro/api"
+if [[ -L "$self_alias" ]]; then
+  rm -- "$self_alias"
+fi
 # Declutter generated deploy output. Never remove the runtime scripts,
 # migrations or AI data: they have separate lifecycle requirements.
 rm -rf "$root/api/test" "$root/api/coverage" "$root/api/.git" "$root/api/node_modules/.cache"
