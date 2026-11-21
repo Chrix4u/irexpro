@@ -24,8 +24,11 @@ active_sha="$(git -C /home/lightworld/webapps/irexpro-staging rev-parse HEAD)"
 )
 script_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 python3 "$script_root/inspect-standalone-runtime.py" "$archive" "$sha"
-tool_sha="$(git -C "$script_root/../.." rev-parse --short HEAD)"
-candidate="$stage_root/$sha-$tool_sha"
+# Identity comes from the verified artifact, not the current script checkout.
+# Re-running an improved staging script must not create a duplicate release.
+tool_sha="$(tar -xzOf "$archive" ./meta/BUILD_TOOL_SHA | tr -d '\r\n')"
+[[ "$tool_sha" =~ ^[a-f0-9]{40}$ ]] || { echo "Artifact build-tool SHA invalid" >&2; exit 4; }
+candidate="$stage_root/$sha-${tool_sha:0:8}"
 [[ ! -e "$candidate" ]] || { echo "Candidate already staged: $candidate"; exit 0; }
 temp="$(mktemp -d "$stage_root/.extract.XXXXXXXX")"
 cleanup() { if [[ -n "${temp:-}" && -d "$temp" ]]; then rm -rf -- "$temp"; fi; }

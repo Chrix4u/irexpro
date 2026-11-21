@@ -6,7 +6,6 @@ modifies symlinks, or executes database migrations. Report blockers clearly.
 """
 from pathlib import Path
 import json
-import os
 import subprocess
 import sys
 
@@ -69,16 +68,27 @@ if api.is_dir():
     rc, text = run(["node", "-e", 'for (const x of ["@nestjs/core","typeorm","pg","argon2"]) require(x)'], cwd=api)
     verify("Production API and native module imports resolve", rc == 0)
 
-# Secrets and persistent state must be symlinked to explicitly protected
-# shared paths. Do not read their contents or print them.
+# A snapshot alone is insufficient. The verified candidate must link to the
+# protected shared storage, not carry a second stale copy of the credentials.
+# Do not print or open secret contents in this read-only preflight.
 shared = Path("/home/lightworld/runtime/irexpro/shared")
-for name, rel in [
-    ("API secret config", "env/api.env"),
-    ("AI secret config", "env/ai.env"),
-    ("AI Python environment", "python/ai-venv"),
-    ("trading operational state", "var"),
+def linked_to(relative_path, shared_relative_path):
+    link = candidate / relative_path
+    shared_target = shared / shared_relative_path
+    return (link.is_symlink() and shared_target.exists()
+            and link.resolve() == shared_target.resolve())
+
+for name, rel, target in [
+    ("Candidate API secret config", "api/.env", "env/api.env"),
+    ("Candidate API worker config", "apps/api/.env", "env/api.env"),
+    ("Candidate AI secret config", "services/ai-engine/.env", "env/ai.env"),
+    ("Candidate independent Python environment", "services/ai-engine/.venv", "python/ai-venv"),
+    ("Candidate operational-state mount", "var", "var"),
 ]:
-    verify(name + " externalized into protected shared storage", (shared / rel).exists())
+    verify(name + " points to protected shared storage", linked_to(rel, target))
+verify("Live operational-state writers use shared storage (not a stale snapshot)",
+       staging.joinpath("var").resolve() == shared.joinpath("var").resolve(),
+       "Live trading state still writes to legacy path. Reconcile writes and switch atomically before retiring old runtime")
 
 verify("Current deployment pipeline no longer builds on live VPS",
        False, "Legacy VPS-build staging deployment still needs tested artifact-only replacement")

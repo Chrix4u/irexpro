@@ -119,3 +119,54 @@ replaced and broker positions can be reconciled before restarting the
 trading scheduler. Never launch a second API/AI scheduler against the demo
 broker as a cutover test. The existing live PM2 deployment remains
 authoritative until rollback and restart-safe state handling are proven.
+
+## Phase 3b: Protected shared runtime preparation (completed 2026-11-21)
+
+A candidate for the exact active trading commit now exists outside source history
+under `/home/lightworld/runtime/irexpro/candidates/`. The VPS maintains:
+
+- `shared/env/api.env` and `shared/env/ai.env` with owner-only 0600
+  permissions; copies are byte-verified against active credentials.
+- `shared/python/ai-venv`, one independent copy of the existing Python
+  environment, not another 1.3 GB copy per application deployment.
+- `shared/var`, an **initial snapshot** of runtime audit state. It is not yet
+  authoritative: live writers still use the legacy staging source directory.
+
+The candidate contains only symlinks to these shared paths. Its source code
+and Node production dependencies come solely from the GitHub-built release.
+The current PM2 processes, their environment files, database, brokers, and
+the original Python environment are still unchanged.
+
+To fetch the tested build directly from GitHub, using an authenticated GitHub
+CLI on the VPS, with no VPS-side compilation:
+
+```bash
+bash scripts/deployment/stage-from-github-actions.sh \
+  44897767105 \
+  652a9858deedcfee1b0240a98440f109000aec3b
+```
+
+This validates the exact GitHub Actions run, its successful conclusion,
+authorized builder branch, embedded source SHA, tarball checksum, unsafe
+archive links, compiled entrypoints, Node dependencies and web/admin canary.
+If an identical artifact has already been staged, it is reused rather than
+duplicated. It then binds the protected shared paths, performs a read-only
+cutover preflight, and explicitly refuses to change running services.
+
+The 2026-11-21 proof: 15 of 18 cutover checks passed; three blocking
+conditions remain:
+
+1. The active operational-state writers must be stopped/reconciled and
+   the final `var` delta migrated before they can be switched to shared
+   state. Snapshot consistency is **not** live-writer consistency.
+2. The previous GitHub `Staging Deploy` workflow still fetches source and
+   runs builds on the VPS. Disable and replace it only after a tested
+   artifact-only production promotion with atomic rollback is ready.
+3. Broker open positions, order reconciliation and idempotent scheduler
+   restart must be explicitly verified before moving active API, AI and
+   shadow workers. Do not start two broker-connected execution engines.
+
+The core active trading commit stays `652a9858`, and 23 of 23 PM2
+processes were online at last observation. The extra shared Python copy
+temporarily uses ~1.3 GB until the legacy source environment can be retired
+after a successful cutover. Do **not** delete it prematurely.
