@@ -1,0 +1,92 @@
+name: Direct Net V4 Report Diagnostics
+
+on:
+  push:
+    branches: ['research/short-horizon-direct-net-v4-20261024']
+    paths:
+      - '.github/workflows/direct-net-v4-report-diagnostics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REPORT_SHA: 9d7f777f356cc86babfecb3d4d9545a89b2d6527
+  STAGING_SSH_HOST: vps.lightworldtech.com
+  STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+  STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+  SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+jobs:
+  diagnose:
+    name: Print saved v4 calibration diagnostics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: staging
+    steps:
+      - name: Configure pinned SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Print pair/fold calibration and validation diagnostics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_report="/home/lightworld/research/irexpro-direct-net-v4/$REPORT_SHA/direct-net-v4-5m-one-fold.json"
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "python3 - '$remote_report'" <<'PY'
+          import json, sys
+          path=sys.argv[1]
+          report=json.load(open(path, encoding='utf-8'))
+          evaluation=report['evaluation']
+          print('DIRECT_NET_V4_DIAGNOSTICS_BEGIN')
+          print('candidate_sha=', report['candidate_sha'])
+          print('decision_time_before=', report['decision_time_before'])
+          for fold in evaluation.get('folds', []):
+              print('FOLD', fold.get('fold'), 'train_last=', fold.get('train_last'), 'validation_first=', fold.get('validation_first'), 'validation_last=', fold.get('validation_last'))
+              fit=fold.get('fit', {})
+              print('FIT_ROWS', fit.get('fit_rows'), 'EARLY_ROWS', fit.get('early_rows'))
+              pairs=fit.get('pairs', {})
+              for pair in sorted(pairs):
+                  print('PAIR_CAL', pair, json.dumps(pairs[pair], sort_keys=True))
+              summary=fold.get('summary', {})
+              print('FOLD_SUMMARY', json.dumps({
+                  'active_signals': summary.get('active_signals'),
+                  'non_overlapping_opportunities': summary.get('non_overlapping_opportunities'),
+                  'opportunities_per_validation_day': summary.get('opportunities_per_validation_day'),
+                  'balanced_accuracy': summary.get('classification', {}).get('balanced_accuracy'),
+                  'trading': summary.get('trading'),
+                  'long_fraction': summary.get('long_fraction'),
+                  'short_fraction': summary.get('short_fraction'),
+              }, sort_keys=True))
+          print('BY_INSTRUMENT_BEGIN')
+          for pair, summary in sorted(evaluation.get('by_instrument', {}).items()):
+              print('PAIR_VAL', pair, json.dumps({
+                  'active_signals': summary.get('active_signals'),
+                  'opportunities': summary.get('non_overlapping_opportunities'),
+                  'opportunities_per_day': summary.get('opportunities_per_validation_day'),
+                  'balanced_accuracy': summary.get('classification', {}).get('balanced_accuracy'),
+                  'trading': summary.get('trading'),
+                  'long_fraction': summary.get('long_fraction'),
+                  'short_fraction': summary.get('short_fraction'),
+              }, sort_keys=True))
+          print('DIRECT_NET_V4_DIAGNOSTICS_END')
+          PY
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"

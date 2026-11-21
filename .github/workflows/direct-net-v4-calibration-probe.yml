@@ -1,0 +1,176 @@
+name: Direct Net V4 Calibration Probe
+
+on:
+  push:
+    branches: ['research/short-horizon-direct-net-v4-20261024']
+    paths:
+      - '.github/workflows/direct-net-v4-calibration-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: ${{ github.sha }}
+  STAGING_SSH_HOST: vps.lightworldtech.com
+  STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+  STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+  SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+jobs:
+  probe:
+    name: Probe 5m pair calibration economics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment:
+      name: staging
+    concurrency:
+      group: irexpro-direct-net-v4-calibration-probe
+      cancel-in-progress: true
+    steps:
+      - name: Configure pinned SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Fit exact 5m fold and print threshold rejection anatomy
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          candidate_sha="$1"
+          staging='/home/lightworld/webapps/irexpro-staging'
+          six_pair_root='/home/lightworld/research/irexpro-six-pair'
+          root='/home/lightworld/research/irexpro-direct-net-v4-probe'
+          worktree="$root/$candidate_sha/worktree"
+          pairs=(EURUSD GBPUSD USDJPY AUDUSD USDCAD USDCHF)
+          cd "$staging"
+          git fetch --quiet --no-tags origin "$candidate_sha"
+          install -d -m 700 "$root/$candidate_sha"
+          git worktree prune
+          if [[ -e "$worktree/.git" ]]; then
+            test "$(git -C "$worktree" rev-parse HEAD)" = "$candidate_sha"
+          else
+            rm -rf "$worktree"
+            git worktree add --detach "$worktree" "$candidate_sha"
+          fi
+
+          corpus_root=''
+          while IFS= read -r candidate_root; do
+            valid=true
+            for pair in "${pairs[@]}"; do
+              test -s "$candidate_root/corpora/${pair}_MTF.csv" || valid=false
+              test -s "$candidate_root/corpora/${pair}_MTF.manifest.json" || valid=false
+            done
+            if [[ "$valid" == true ]]; then corpus_root="$candidate_root"; break; fi
+          done < <(find "$six_pair_root" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
+          test -n "$corpus_root"
+          python_bin="$staging/services/ai-engine/.venv/bin/python"
+          test -x "$python_bin"
+          cd "$worktree/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_XGB_N_JOBS=4
+          "$python_bin" - "$corpus_root" <<'PY'
+          from __future__ import annotations
+          import json, sys
+          from pathlib import Path
+          import numpy as np
+          import pandas as pd
+
+          from app.domain.models.multitimeframe_features import INITIAL_FOREX_UNIVERSE, MULTITIMEFRAME_FEATURE_COLUMNS
+          from app.domain.training.run_first_six_pair import _research_qualification_cutoff
+          from app.domain.training.short_horizon_direct_net import (
+              MAX_CALIBRATION_DENSITY,
+              MIN_CALIBRATION_DENSITY,
+              MIN_CALIBRATION_MEAN_BPS,
+              MIN_CALIBRATION_PROFIT_FACTOR,
+              MIN_CALIBRATION_ROWS,
+              MIN_SIDE_FRACTION,
+              _raw_profit_factor,
+              fit_pair_direct_net_experts,
+          )
+          from app.domain.training.train_multitimeframe import (
+              LONG_NET_RETURN_COLUMN,
+              SHORT_NET_RETURN_COLUMN,
+              _split_internal_early_stopping_tail,
+              load_and_prepare_corpora,
+          )
+          from app.domain.training.validation import iter_purged_walk_forward_time_splits
+
+          corpus_root=Path(sys.argv[1])
+          datasets={p: corpus_root/'corpora'/f'{p}_MTF.csv' for p in INITIAL_FOREX_UNIVERSE}
+          cutoff=_research_qualification_cutoff(datasets)
+          pooled,_=load_and_prepare_corpora(datasets,horizon_bars=5,decision_time_before=cutoff.isoformat())
+          unique_periods=int(pooled['decision_time'].nunique())
+          min_train=max(250,int(unique_periods*0.60))
+          validation=max(100,int(unique_periods*0.07))
+          training,_=next(iter(iter_purged_walk_forward_time_splits(
+              pooled,time_column='decision_time',min_train_periods=min_train,
+              validation_periods=validation,purge_periods=5,embargo_periods=5,max_splits=1)))
+          models,calibrations,_=fit_pair_direct_net_experts(training,horizon_bars=5,feature_columns=list(MULTITIMEFRAME_FEATURE_COLUMNS))
+          _,early=_split_internal_early_stopping_tail(training,horizon_bars=5)
+          print('DIRECT_NET_V4_CALIBRATION_PROBE_BEGIN')
+          for pair in INITIAL_FOREX_UNIVERSE:
+              f=early.loc[early['instrument'].astype(str)==pair]
+              lp=np.asarray(models[f'{pair}::long'].predict(f[list(MULTITIMEFRAME_FEATURE_COLUMNS)]),dtype=float)
+              sp=np.asarray(models[f'{pair}::short'].predict(f[list(MULTITIMEFRAME_FEATURE_COLUMNS)]),dtype=float)
+              pred_long=lp>=sp
+              best=np.maximum(lp,sp)
+              lr=pd.to_numeric(f[LONG_NET_RETURN_COLUMN],errors='raise').to_numpy(dtype=float)*10000.0
+              sr=pd.to_numeric(f[SHORT_NET_RETURN_COLUMN],errors='raise').to_numpy(dtype=float)*10000.0
+              realized=np.where(pred_long,lr,sr)
+              quantiles=np.linspace(1.0-MAX_CALIBRATION_DENSITY,1.0-MIN_CALIBRATION_DENSITY,35)
+              thresholds=sorted({float(np.quantile(best,q)) for q in quantiles})
+              rows=[]
+              for threshold in thresholds:
+                  active=best>=threshold
+                  n=int(active.sum())
+                  if n<MIN_CALIBRATION_ROWS: continue
+                  density=n/len(best)
+                  if density<MIN_CALIBRATION_DENSITY or density>MAX_CALIBRATION_DENSITY: continue
+                  values=realized[active]
+                  side=pred_long[active]
+                  mean=float(values.mean())
+                  pf=_raw_profit_factor(values)
+                  lf=float(side.mean()); sf=1.0-lf
+                  rows.append({'threshold':threshold,'rows':n,'density':density,'mean_bps':mean,'pf':pf,'long_fraction':lf,'short_fraction':sf,
+                      'mean_ok':mean>MIN_CALIBRATION_MEAN_BPS,
+                      'pf_ok':pf is not None and pf>=MIN_CALIBRATION_PROFIT_FACTOR,
+                      'side_ok':lf>=MIN_SIDE_FRACTION and sf>=MIN_SIDE_FRACTION,
+                      'throughput':mean*density})
+              def safe_pf(v): return -1.0 if v['pf'] is None else float(v['pf'])
+              diag={
+                  'calibration_reason': calibrations[pair].reason,
+                  'candidate_count': len(rows),
+                  'mean_ok_count': sum(r['mean_ok'] for r in rows),
+                  'pf_ok_count': sum(r['pf_ok'] for r in rows),
+                  'side_ok_count': sum(r['side_ok'] for r in rows),
+                  'mean_pf_ok_count': sum(r['mean_ok'] and r['pf_ok'] for r in rows),
+                  'all_ok_count': sum(r['mean_ok'] and r['pf_ok'] and r['side_ok'] for r in rows),
+                  'predicted_long_fraction_all': float(pred_long.mean()),
+                  'prediction_best_bps_p50': float(np.quantile(best,0.50)),
+                  'prediction_best_bps_p80': float(np.quantile(best,0.80)),
+                  'prediction_best_bps_p95': float(np.quantile(best,0.95)),
+                  'best_mean': max(rows,key=lambda r:r['mean_bps']) if rows else None,
+                  'best_pf': max(rows,key=safe_pf) if rows else None,
+                  'best_throughput': max(rows,key=lambda r:r['throughput']) if rows else None,
+              }
+              print('PAIR_PROBE',pair,json.dumps(diag,sort_keys=True,default=str))
+          print('DIRECT_NET_V4_CALIBRATION_PROBE_END')
+          PY
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
