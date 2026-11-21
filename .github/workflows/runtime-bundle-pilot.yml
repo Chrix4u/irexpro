@@ -74,7 +74,7 @@ jobs:
           done
           printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/irexpro-bundle/RELEASE_SHA"
           tar -czf "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz" -C "$RUNNER_TEMP/irexpro-bundle" .
-          sha256sum "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz" > "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz.sha256"
+          (cd "$RUNNER_TEMP" && sha256sum irexpro-runtime-bundle.tar.gz > irexpro-runtime-bundle.tar.gz.sha256)
           bash scripts/deployment/inspect-runtime-bundle.sh "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz" "$GITHUB_SHA"
 
       - name: Retain build bundle for rollout testing

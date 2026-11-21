@@ -62,7 +62,7 @@ for w in git_worktrees():
     sha = w.get("HEAD", "")
     remote_sha=remote.get(branch)
     if remote_sha != sha:
-        code,_=run(["git","-C",REPO,"merge-base","--is-ancestor",sha,"origin/main"],5)
+        code,_=run(["git","-C",REPO,"merge-base","--is-ancestor",sha,remote.get("refs/heads/main", "nonexistent")],5)
         if code: continue
     code,dirty=run(["git","-C",str(p),"status","--porcelain","--untracked-files=all"],7)
     if code or dirty.strip(): continue
