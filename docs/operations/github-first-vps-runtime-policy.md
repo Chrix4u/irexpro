@@ -170,3 +170,32 @@ The core active trading commit stays `652a9858`, and 23 of 23 PM2
 processes were online at last observation. The extra shared Python copy
 temporarily uses ~1.3 GB until the legacy source environment can be retired
 after a successful cutover. Do **not** delete it prematurely.
+
+### Broker/order reconciliation gate (read-only, 2026-11-21)
+
+Run the new cutover audit with the verified candidate API folder:
+
+```bash
+node scripts/deployment/readonly-broker-cutover-audit.cjs \
+  /home/lightworld/runtime/irexpro/candidates/<release-identity>/api
+```
+
+This opens a PostgreSQL **read-only transaction**, prints aggregate counts
+and closes it. It sends **no broker orders**, changes **no order status** and
+does **not** expose credentials or account identifiers.
+
+The 2026-11-21 snapshot of the active staging database found 1,014 CLOSED
+trade-ledger rows and zero unclosed trade-ledger rows, but 375 orders with
+`RECONCILIATION_PENDING` and one `ACKNOWLEDGED`. Of the 375 pending rows,
+70 had been updated since 2026-11-20. No rows existed in
+`broker_reconciliation.broker_trade_reconciliation_runs`. These counts alone
+cannot prove the provider has an open position or that any particular order
+was filled. A successful live broker-side check and matching provider state
+are still required. The new gate therefore fails closed rather than claiming
+the broker is flat.
+
+With this independent ledger check included, the currently staged
+candidate passes **15 of 19** cutover checks. The four unresolved conditions
+are (a) order/ledger reconciliation, (b) live operational-state writer
+cutover, (c) retiring the old VPS-build deployment workflow after testing
+the replacement, and (d) independent broker position/restart verification.

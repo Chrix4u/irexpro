@@ -68,6 +68,15 @@ if api.is_dir():
     rc, text = run(["node", "-e", 'for (const x of ["@nestjs/core","typeorm","pg","argon2"]) require(x)'], cwd=api)
     verify("Production API and native module imports resolve", rc == 0)
 
+# No broker orders are sent. This gate examines the order/trade ledger in
+# read-only mode, refusing promotion while unresolved orders remain.
+if api.is_dir():
+    ledger_script = Path(__file__).with_name("readonly-broker-cutover-audit.cjs")
+    rc, _ = run(["node", str(ledger_script), str(api)])
+    verify("Read-only order and trade ledger reconciled for restart",
+           rc == 0,
+           "Unresolved order or broker ledger state; run the read-only audit and independently verify broker-side positions")
+
 # A snapshot alone is insufficient. The verified candidate must link to the
 # protected shared storage, not carry a second stale copy of the credentials.
 # Do not print or open secret contents in this read-only preflight.
