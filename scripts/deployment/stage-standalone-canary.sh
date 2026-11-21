@@ -45,7 +45,7 @@ files = list(root.rglob('*.py'))
 if not files:
     raise SystemExit('Missing Python AI source')
 for source in files:
-    ast.parse(source.read_text(), filename=str(source))
+    ast.parse(source.read_text(encoding="utf-8-sig"), filename=str(source))
 print(f'Checked {len(files)} Python AI source files')
 PYTHON
 # Smoke tests ONLY the independent Next.js web/admin servers; launching the

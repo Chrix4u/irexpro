@@ -96,7 +96,7 @@ jobs:
           python3 - <<'PYTHON'
           import ast, pathlib, os
           for src in pathlib.Path(os.environ['RUNNER_TEMP']).joinpath('irexpro-standalone-smoke/services/ai-engine').rglob('*.py'):
-              ast.parse(src.read_text(), filename=str(src))
+              ast.parse(src.read_text(encoding="utf-8-sig"), filename=str(src))
           print('Python AI source syntax checked without starting schedulers')
           PYTHON
           (
