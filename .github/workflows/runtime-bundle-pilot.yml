@@ -1,0 +1,106 @@
+name: iRexPro Runtime Bundle (GitHub Build Pilot)
+
+on:
+  push:
+    branches: [ops/github-first-vps-storage-20261121]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character commit SHA to build (defaults to workflow SHA)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irexpro-runtime-bundle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    name: Build and archive only deployable app outputs
+    if: github.repository == 'Chrix4u/irexpro'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      NEXT_PUBLIC_API_BASE_URL: https://irexpro.lightworldtech.com/api/v1
+      NEXT_PUBLIC_APP_ENV: staging
+      SOURCE_SHA: ${{ github.event_name == 'push' && github.ref_name == 'ops/github-first-vps-storage-20261121' && '652a9858deedcfee1b0240a98440f109000aec3b' || inputs.source_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Checkout GitHub build tools without modifying the candidate source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          path: .builder-tools
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: '10.34.5'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install and compile on GitHub runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          pnpm install --frozen-lockfile
+          pnpm --filter @irexpro/api build
+          NEXT_PUBLIC_APP_URL=https://irexpro.lightworldtech.com pnpm --filter @irexpro/web build
+          NEXT_PUBLIC_APP_URL=https://irexproadmin.lightworldtech.com pnpm --filter @irexpro/admin build
+
+      - name: Package compiled deliverables, not git history or dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f apps/api/dist/main.js
+          test -f apps/web/.next/BUILD_ID
+          test -f apps/admin/.next/BUILD_ID
+          mkdir -p "$RUNNER_TEMP/irexpro-bundle"
+          for path in \
+            apps/api/dist \
+            apps/web/.next \
+            apps/admin/.next \
+            apps/api/package.json \
+            apps/web/package.json \
+            apps/admin/package.json \
+            package.json \
+            pnpm-lock.yaml \
+            pnpm-workspace.yaml; do
+            cp -a --parents "$path" "$RUNNER_TEMP/irexpro-bundle"
+          done
+          for path in apps/web/public apps/admin/public; do
+            if test -d "$path"; then
+              cp -a --parents "$path" "$RUNNER_TEMP/irexpro-bundle"
+            fi
+          done
+          printf '%s\n' "$SOURCE_SHA" > "$RUNNER_TEMP/irexpro-bundle/RELEASE_SHA"
+          tar -czf "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz" -C "$RUNNER_TEMP/irexpro-bundle" .
+          (cd "$RUNNER_TEMP" && sha256sum irexpro-runtime-bundle.tar.gz > irexpro-runtime-bundle.tar.gz.sha256)
+          bash .builder-tools/scripts/deployment/inspect-runtime-bundle.sh "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz" "$SOURCE_SHA"
+
+      - name: Retain build bundle for rollout testing
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: irexpro-runtime-${{ env.SOURCE_SHA }}
+          path: |
+            ${{ runner.temp }}/irexpro-runtime-bundle.tar.gz
+            ${{ runner.temp }}/irexpro-runtime-bundle.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
