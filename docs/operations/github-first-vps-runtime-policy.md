@@ -49,3 +49,55 @@ The bundle is **not yet sufficient for an unattended production switch**, becaus
 7. Add a scheduled maintenance audit (dry-run by default). Never automatically purge live data or branches based solely on age.
 
 Do not enable a workflow that runs unreviewed trading code merely to reclaim disk. Storage cleanup and trading strategy promotion are independent changes.
+
+## Phase 3a: Isolated source-light canary (implementation on ops branch)
+
+`iRexPro Isolated Standalone Runtime Canary` is a second, opt-in
+GitHub Actions workflow. It checks out the **exact existing demo trading
+commit** and applies reviewed Next.js *standalone output configuration*
+inside the ephemeral CI checkout only. GitHub builds compiled Nest API,
+Next web and admin, then packages:
+
+- `api/`: compiled Nest output and production Node dependencies via pnpm deploy;
+- `web/` and `admin/`: standalone Node servers and traced dependencies,
+  with copied static assets;
+- `apps/api/scripts`: the Node shadow-worker sources with production
+  dependency pointers, preserving required original workspace-relative paths;
+- `services/ai-engine/`: Python AI application and worker scripts plus the
+  hash-locked dependency manifest, but **not** the 1.3 GB environment;
+- `meta/`: full source commit SHA, tooling commit SHA, and runtime scope.
+
+The artifact must pass the SHA-256 checksum and the link/path/required-file
+validation. This is a **source-light runtime**, not a full iRexPro release:
+the installed Python virtual environment (~1.3 GB), running shadow
+research workers, model datasets, broker credentials and database state
+deliberately remain outside the replaceable release artifact.
+
+To verify the exact GitHub Actions artifact on the VPS without changing
+public services:
+
+```bash
+# Download the verified GitHub Actions artifact and checksum into a private
+# temporary folder first (name shown in the successful workflow run).
+sha=652a9858deedcfee1b0240a98440f109000aec3b
+bash scripts/deployment/stage-standalone-canary.sh \
+  /path/to/irexpro-standalone-runtime.tar.gz \
+  /path/to/irexpro-standalone-runtime.tar.gz.sha256 \
+  "$sha"
+```
+
+This only starts the web/admin standalone processes on loopback TCP 4305 and
+4306, checks login/admin pages and web static assets, and terminates those
+canary processes. It **never starts a second Nest trading API**, never
+modifies PM2 or Nginx, and never changes the active trading commit.
+
+After the source-light canary succeeds, only an explicitly tested release
+orchestrator should modify `current` / `previous` symlinks. All live
+workers must use stable externalized env/data/model mounts; API migrations
+and Python AI dependencies must be validated; live release and rollback
+health must be tested. Keep a separate model/venv version policy to avoid
+cloning 1.3 GB of Python dependencies per app release.
+
+**Do not merge the ops branch into `main` automatically:** the existing
+main staging deployment job still rebuilds applications on the VPS.
+Changing the default workflow requires a separately tested migration.

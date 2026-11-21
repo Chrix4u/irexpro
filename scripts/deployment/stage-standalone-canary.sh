@@ -33,6 +33,21 @@ trap cleanup EXIT
 tar -xzf "$archive" -C "$temp" --no-same-owner
 test -f "$temp/meta/RELEASE_SHA"
 test "$(cat "$temp/meta/RELEASE_SHA")" = "$sha"
+test -f "$temp/services/ai-engine/app/main.py"
+test -f "$temp/apps/api/scripts/audit-pepperstone-main-counter-virtual.cjs"
+# Check AI and worker script syntax without importing modules or starting
+# schedulers, broker connections, database writers, or trading executions.
+node --check "$temp/apps/api/scripts/audit-pepperstone-main-counter-virtual.cjs"
+IREXPRO_CANDIDATE_PATH="$temp" python3 - <<'PYTHON'
+import ast, os, pathlib
+root = pathlib.Path(os.environ['IREXPRO_CANDIDATE_PATH']) / 'services/ai-engine'
+files = list(root.rglob('*.py'))
+if not files:
+    raise SystemExit('Missing Python AI source')
+for source in files:
+    ast.parse(source.read_text(), filename=str(source))
+print(f'Checked {len(files)} Python AI source files')
+PYTHON
 # Smoke tests ONLY the independent Next.js web/admin servers; launching the
 # real Nest trading API here could create a second execution scheduler.
 bash "$script_root/smoke-standalone-runtime.sh" "$temp"

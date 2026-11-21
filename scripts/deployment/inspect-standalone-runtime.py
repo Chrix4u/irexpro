@@ -24,6 +24,9 @@ required = {
     "api/package.json",
     "web/apps/web/server.js",
     "admin/apps/admin/server.js",
+    "apps/api/scripts/audit-pepperstone-main-counter-virtual.cjs",
+    "services/ai-engine/app/main.py",
+    "services/ai-engine/requirements.lock",
 }
 found = set()
 with tarfile.open(filename, "r:gz") as archive:

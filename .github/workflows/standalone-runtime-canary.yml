@@ -89,7 +89,16 @@ jobs:
           mkdir -p "$canary"
           tar -xzf "$RUNNER_TEMP/irexpro-standalone-runtime.tar.gz" -C "$canary"
           test -d "$canary/api/node_modules/@nestjs/core"
-          (cd "$canary/api" && node -e 'require.resolve("@nestjs/core"); require.resolve("@nestjs/common"); console.log("Nest runtime dependencies OK")')
+          (cd "$canary/api" && node -e 'for(const x of ["@nestjs/core","@nestjs/common","typeorm","pg","argon2"]) require(x); console.log("Nest, database and native argon2 dependencies OK")')
+          test -f "$canary/apps/api/scripts/audit-pepperstone-main-counter-virtual.cjs"
+          node --check "$canary/apps/api/scripts/audit-pepperstone-main-counter-virtual.cjs"
+          test -f "$canary/services/ai-engine/app/main.py"
+          python3 - <<'PYTHON'
+          import ast, pathlib, os
+          for src in pathlib.Path(os.environ['RUNNER_TEMP']).joinpath('irexpro-standalone-smoke/services/ai-engine').rglob('*.py'):
+              ast.parse(src.read_text(), filename=str(src))
+          print('Python AI source syntax checked without starting schedulers')
+          PYTHON
           (
             cd "$canary/web/apps/web"
             HOSTNAME=127.0.0.1 PORT=4305 node server.js >"$RUNNER_TEMP/irexpro-canary-web.log" 2>&1
