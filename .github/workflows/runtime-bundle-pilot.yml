@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 45
     env:
       NEXT_TELEMETRY_DISABLED: '1'
+      NEXT_PUBLIC_API_BASE_URL: https://irexpro.lightworldtech.com/api/v1
+      NEXT_PUBLIC_APP_ENV: staging
 
     steps:
       - name: Checkout exact release source
@@ -46,8 +48,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           pnpm install --frozen-lockfile
           pnpm --filter @irexpro/api build
-          pnpm --filter @irexpro/web build
-          pnpm --filter @irexpro/admin build
+          NEXT_PUBLIC_APP_URL=https://irexpro.lightworldtech.com pnpm --filter @irexpro/web build
+          NEXT_PUBLIC_APP_URL=https://irexproadmin.lightworldtech.com pnpm --filter @irexpro/admin build
 
       - name: Package compiled deliverables, not git history or dependencies
         shell: bash
