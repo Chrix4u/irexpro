@@ -52,7 +52,7 @@ for attempt in $(seq 1 40); do
   fi
   sleep 2
 done
-[[ "$ready" == true ]] || { echo "Canary HTTP readiness failed: web=$web_code admin=$admin_code" >&2; exit 5; }
+[[ "$ready" == true ]] || { echo "Canary HTTP readiness failed after $attempt attempts: web=$web_code admin=$admin_code" >&2; exit 5; }
 # Prove that the static Next assets were included in the extracted runtime,
 # rather than being accidentally served from the original VPS source checkout.
 page="$(curl -fsS --max-time 10 "http://127.0.0.1:$web_port/login")"
