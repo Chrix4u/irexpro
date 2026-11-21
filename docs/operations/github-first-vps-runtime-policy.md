@@ -199,3 +199,43 @@ candidate passes **15 of 19** cutover checks. The four unresolved conditions
 are (a) order/ledger reconciliation, (b) live operational-state writer
 cutover, (c) retiring the old VPS-build deployment workflow after testing
 the replacement, and (d) independent broker position/restart verification.
+
+### Correct demo account reconciliation sources (2026-11-21 audit refinement)
+
+The `broker_reconciliation.broker_trade_reconciliation_runs` table tracks
+the LIVE account trade-history reconciliation endpoint and must **not** be
+treated as evidence that an automated DEMO state sweep never ran. The
+authoritative scheduled broker-state reconciliation history is in
+`reconciliation.runs`, with open mismatches in
+`reconciliation.discrepancies`.
+
+The read-only audit now joins unresolved orders to broker account mode and
+provider, and checks the most recent state sweep for each affected connection.
+On November 21, the result was:
+
+- All **376** unresolved order rows are DEMO, associated with two broker
+  connections (249 Pepperstone cTrader pending, 126 cTrader pending and one
+  cTrader acknowledged).
+- All 376 have linked `CLOSED` trade records, but none has a provider order
+  reference recorded on the order row. This is not proof of broker settlement.
+- **718** OPEN warning-level reconciliation discrepancies:
+  **660 UNRESOLVED_EXECUTION_RESULT** and
+  **58 POSITION_CLOSED_EXTERNALLY**, distributed over the two demo connections.
+- The latest periodic automated state reconciliation runs were
+  `COMPLETED_WITH_WARNINGS` and saw zero provider positions in those
+  individual sweeps. **Provider snapshots cannot replace independent broker
+  verification**, especially before an API/scheduler restart.
+- No trade-ledger rows were nonclosed. No automatic order-status repair,
+  forced trade closure, or brokerage mutation was attempted.
+
+The policy in `scripts/deployment/reconciliation-cutover-policy.cjs` is
+pure and covered by six Node regression tests under the required Deployment
+Script Safety gate. It refuses promotion on missing/stale/failed state
+reconciliation, unresolved orders, open discrepancies, nonclosed trades,
+reported provider positions, or invalid counters. Broker-side verification
+remains separately mandatory **even when these internal checks pass**.
+
+Avoid changing the model or altering 376 order statuses just to clear this
+operational gate; first establish broker-side facts and fix the root cause of
+stuck order/provider identifiers. No changes to trading strategy or risk
+settings are included in this PR.

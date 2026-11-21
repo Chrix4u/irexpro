@@ -73,6 +73,7 @@ jobs:
           bash scripts/deployment/test-staging-cd-bootstrap.sh
           bash scripts/deployment/test-lightworld-runner-phase1.sh
           python3 scripts/deployment/test-trading-diagnostics.py
+          node --test scripts/deployment/reconciliation-cutover-policy.test.cjs
 
       - name: Test exact-main staging release gate policy
         run: node scripts/deployment/main-staging-release-gate.mjs --self-test
