@@ -1,6 +1,8 @@
 name: iRexPro Runtime Bundle (GitHub Build Pilot)
 
 on:
+  push:
+    branches: [ops/github-first-vps-storage-20261121]
   workflow_dispatch:
 
 permissions:
