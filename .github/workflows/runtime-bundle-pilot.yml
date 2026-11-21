@@ -4,6 +4,11 @@ on:
   push:
     branches: [ops/github-first-vps-storage-20261121]
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character commit SHA to build (defaults to workflow SHA)
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -22,12 +27,20 @@ jobs:
       NEXT_TELEMETRY_DISABLED: '1'
       NEXT_PUBLIC_API_BASE_URL: https://irexpro.lightworldtech.com/api/v1
       NEXT_PUBLIC_APP_ENV: staging
+      SOURCE_SHA: ${{ github.event_name == 'push' && github.ref_name == 'ops/github-first-vps-storage-20261121' && '652a9858deedcfee1b0240a98440f109000aec3b' || inputs.source_sha || github.sha }}
 
     steps:
       - name: Checkout exact release source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Checkout GitHub build tools without modifying the candidate source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
           ref: ${{ github.sha }}
+          path: .builder-tools
           persist-credentials: false
 
       - name: Setup pnpm
@@ -45,7 +58,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           pnpm install --frozen-lockfile
           pnpm --filter @irexpro/api build
           NEXT_PUBLIC_APP_URL=https://irexpro.lightworldtech.com pnpm --filter @irexpro/web build
@@ -76,15 +90,15 @@ jobs:
               cp -a --parents "$path" "$RUNNER_TEMP/irexpro-bundle"
             fi
           done
-          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/irexpro-bundle/RELEASE_SHA"
+          printf '%s\n' "$SOURCE_SHA" > "$RUNNER_TEMP/irexpro-bundle/RELEASE_SHA"
           tar -czf "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz" -C "$RUNNER_TEMP/irexpro-bundle" .
           (cd "$RUNNER_TEMP" && sha256sum irexpro-runtime-bundle.tar.gz > irexpro-runtime-bundle.tar.gz.sha256)
-          bash scripts/deployment/inspect-runtime-bundle.sh "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz" "$GITHUB_SHA"
+          bash .builder-tools/scripts/deployment/inspect-runtime-bundle.sh "$RUNNER_TEMP/irexpro-runtime-bundle.tar.gz" "$SOURCE_SHA"
 
       - name: Retain build bundle for rollout testing
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: irexpro-runtime-${{ github.sha }}
+          name: irexpro-runtime-${{ env.SOURCE_SHA }}
           path: |
             ${{ runner.temp }}/irexpro-runtime-bundle.tar.gz
             ${{ runner.temp }}/irexpro-runtime-bundle.tar.gz.sha256
