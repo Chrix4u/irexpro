@@ -1,6 +1,7 @@
 import { Order } from '../orders/order.entity';
 import { OrderKind, OrderTimeInForce } from '../orders/order.enums';
 import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
+import type { BrokerPrice } from '../../broker/interfaces/broker-adapter.interface';
 
 /**
  * ExecutionIntent — Directive PHASE D "execution intent".
@@ -107,6 +108,8 @@ export type ProviderDispatchOutcome =
       realisedPnl?: string;
       commission?: string;
       swap?: string;
+      /** Exact fresh quote already proven by the final market-safety gate. */
+      executionQuote?: BrokerPrice;
     }
   | {
       outcome: 'WORKING';

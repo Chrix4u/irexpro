@@ -1,12 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
 import { BrokerService } from '../../broker/broker.service';
+import type { BrokerPrice } from '../../broker/interfaces/broker-adapter.interface';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
 import { OrderService } from '../orders/order.service';
 import type { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import type { ExecutionIntent } from './execution-intent.interface';
+import { rememberProvenExecutionQuote } from '../services/execution-quote-registry';
 
 /**
  * Round 6 live-execution completion (§5/§18) — typed failure codes for the
@@ -91,7 +93,7 @@ export class MarketSafetyGateService {
     intent: ExecutionIntent,
     connection: BrokerConnection,
     orderId: string,
-  ): Promise<void> {
+  ): Promise<BrokerPrice> {
     // 1. The provable current quote (§18 — no invention on gaps).
     const quote = await this.brokerService.getCurrentPriceForConnection(
       intent.userId,
@@ -173,6 +175,13 @@ export class MarketSafetyGateService {
         );
       }
     }
+
+    // Telemetry-only handoff: keep the exact already-proven quote for the
+    // Trade CAS that follows a successful provider fill. This does not make
+    // another quote request and cannot change trading authority.
+    rememberProvenExecutionQuote(intent.tradeId, quote);
+
+    return quote;
   }
 
   /** Terminally reject the order + audit, then surface the typed error. */

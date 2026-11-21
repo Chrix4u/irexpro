@@ -9,6 +9,7 @@ import {
   BrokerMode,
   BrokerOrderRequest,
   BrokerOrderResult,
+  BrokerPrice,
 } from '../../broker/interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../../broker/interfaces/broker-adapter.errors';
 import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
@@ -484,11 +485,16 @@ export class ExecutionOrchestrator {
     // market facts (fresh quote, sane spread, bounded deviation from the
     // risk-validated reference) — when market state cannot be proven it
     // NEVER invents one (§18).
+    let executionQuote: BrokerPrice | undefined;
     if (
       operationClass === ProviderOperationClass.NEW_EXPOSURE &&
       intent.providerAction === 'PLACE'
     ) {
-      await this.marketSafetyGate.assertMarketSafeForDispatch(intent, connection, order.id);
+      executionQuote = await this.marketSafetyGate.assertMarketSafeForDispatch(
+        intent,
+        connection,
+        order.id,
+      );
     }
 
     // ── ROUND 6 (#365): the PROVIDER-DISPATCH COMMITMENT ─────────────────
@@ -605,6 +611,7 @@ export class ExecutionOrchestrator {
             realisedPnl: action.realisedPnl,
             commission: action.commission,
             swap: action.swap,
+            executionQuote,
           };
         }
 
