@@ -15,6 +15,7 @@ export interface ClosedTradeReportFilters {
   direction?: string;
   outcome?: string;
   closeReason?: string;
+  includeReasonBreakdown?: boolean;
 }
 
 export interface ClosedTradeCurrencySummary {
@@ -45,6 +46,21 @@ export interface ClosedTradeCurrencySummary {
   averageHoldMinutes: number | null;
 }
 
+export interface ClosedTradeReasonSummary {
+  accountCurrency: string | null;
+  closeReason: TradeCloseReason | null;
+  totalTrades: number;
+  pnlTradeCount: number;
+  wins: number;
+  losses: number;
+  flats: number;
+  /** Gross recorded P&L before explicit broker costs; null when currency is unknown. */
+  grossRealisedPnl: string | null;
+  /** Known net P&L after commissions and financing. */
+  netRealisedPnl: string | null;
+  totalExplicitCosts: string | null;
+}
+
 export interface ClosedTradeReportSummary {
   totalTrades: number;
   pnlTradeCount: number;
@@ -69,6 +85,8 @@ export interface ClosedTradeReportSummary {
   totalExplicitCosts: string | null;
   averageHoldMinutes: number | null;
   currencyBreakdown: ClosedTradeCurrencySummary[];
+  /** Entire filtered result set, not merely current page. Never combine currencies. */
+  reasonBreakdown: ClosedTradeReasonSummary[];
 }
 
 export interface ClosedTradeReport {
@@ -79,6 +97,19 @@ export interface ClosedTradeReport {
   totalPages: number;
   summary: ClosedTradeReportSummary;
 }
+
+type ClosedTradeReasonAggregateRow = {
+  accountCurrency: string | null;
+  closeReason: TradeCloseReason | null;
+  totalTrades: string | number;
+  pnlTradeCount: string | number;
+  wins: string | number;
+  losses: string | number;
+  flats: string | number;
+  grossRealisedPnl: string | number | null;
+  netRealisedPnl: string | number | null;
+  totalExplicitCosts: string | number | null;
+};
 
 type ClosedTradeAggregateRow = {
   accountCurrency: string | null;
@@ -327,6 +358,53 @@ export class ExecutionReadService {
       .orderBy('trade.accountCurrency', 'ASC')
       .getRawMany()) as ClosedTradeAggregateRow[];
 
+    // Read-only filtered exit attribution. Group by the recorded close reason
+    // and account currency; never compute an aggregate from the paginated rows.
+    // This intentionally does not infer specific AI rule triggers from the
+    // generic AI_CLOSE_SIGNAL reason (those belong to order-linked audit data).
+    let reasonBreakdown: ClosedTradeReasonSummary[] = [];
+    if (filters.includeReasonBreakdown === true) {
+      const reasonRows = (await baseQuery
+        .clone()
+        .select('trade.accountCurrency', 'accountCurrency')
+        .addSelect('trade.closeReason', 'closeReason')
+        .addSelect('COUNT(*)', 'totalTrades')
+        .addSelect(
+          'SUM(CASE WHEN trade.realisedPnl IS NOT NULL THEN 1 ELSE 0 END)',
+          'pnlTradeCount',
+        )
+        .addSelect('SUM(CASE WHEN trade.realisedPnl > 0 THEN 1 ELSE 0 END)', 'wins')
+        .addSelect('SUM(CASE WHEN trade.realisedPnl < 0 THEN 1 ELSE 0 END)', 'losses')
+        .addSelect('SUM(CASE WHEN trade.realisedPnl = 0 THEN 1 ELSE 0 END)', 'flats')
+        .addSelect('COALESCE(SUM(trade.realisedPnl), 0)', 'grossRealisedPnl')
+        .addSelect(
+          'COALESCE(SUM(trade.realisedPnl), 0) - COALESCE(SUM(ABS(trade.commission)), 0) + COALESCE(SUM(trade.swap), 0)',
+          'netRealisedPnl',
+        )
+        .addSelect(
+          'COALESCE(SUM(ABS(trade.commission)), 0) - COALESCE(SUM(trade.swap), 0)',
+          'totalExplicitCosts',
+        )
+        .groupBy('trade.accountCurrency')
+        .addGroupBy('trade.closeReason')
+        .orderBy('trade.accountCurrency', 'ASC')
+        .addOrderBy('trade.closeReason', 'ASC')
+        .getRawMany()) as ClosedTradeReasonAggregateRow[];
+
+      reasonBreakdown = reasonRows.map((row) => ({
+        accountCurrency: row.accountCurrency,
+        closeReason: row.closeReason,
+        totalTrades: Number(row.totalTrades) || 0,
+        pnlTradeCount: Number(row.pnlTradeCount) || 0,
+        wins: Number(row.wins) || 0,
+        losses: Number(row.losses) || 0,
+        flats: Number(row.flats) || 0,
+        grossRealisedPnl: row.accountCurrency ? numericString(row.grossRealisedPnl) : null,
+        netRealisedPnl: row.accountCurrency ? numericString(row.netRealisedPnl) : null,
+        totalExplicitCosts: row.accountCurrency ? numericString(row.totalExplicitCosts) : null,
+      }));
+    }
+
     const currencyBreakdown = rawRows
       .map((row) => currencySummary(row))
       .filter((row): row is ClosedTradeCurrencySummary => row !== null);
@@ -367,6 +445,7 @@ export class ExecutionReadService {
         totalExplicitCosts: singleCurrency?.totalExplicitCosts ?? null,
         averageHoldMinutes: singleCurrency?.averageHoldMinutes ?? null,
         currencyBreakdown,
+        reasonBreakdown,
       },
     };
   }

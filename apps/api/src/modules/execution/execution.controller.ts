@@ -153,6 +153,7 @@ export class ExecutionController {
   @ApiQuery({ name: 'direction', required: false, enum: ['BUY', 'SELL'] })
   @ApiQuery({ name: 'outcome', required: false, enum: ['ALL', 'WIN', 'LOSS', 'FLAT'] })
   @ApiQuery({ name: 'closeReason', required: false, enum: TradeCloseReason })
+  @ApiQuery({ name: 'includeReasonBreakdown', required: false, type: Boolean })
   async getClosedTradeReport(
     @CurrentUserId() userId: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
@@ -164,6 +165,7 @@ export class ExecutionController {
     @Query('direction') direction?: string,
     @Query('outcome') outcome?: string,
     @Query('closeReason') closeReason?: string,
+    @Query('includeReasonBreakdown') includeReasonBreakdown?: string,
   ) {
     const report = await this.executionReadService.listClosedTradeReport(userId, {
       page,
@@ -175,6 +177,7 @@ export class ExecutionController {
       direction,
       outcome,
       closeReason,
+      ...(includeReasonBreakdown === 'true' ? { includeReasonBreakdown: true } : {}),
     });
 
     return {

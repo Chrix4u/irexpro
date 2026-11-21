@@ -63,6 +63,7 @@ export function createExecutionApi(
       if (query.direction) params.set('direction', query.direction);
       if (query.outcome && query.outcome !== 'ALL') params.set('outcome', query.outcome);
       if (query.closeReason) params.set('closeReason', query.closeReason);
+      if (query.includeReasonBreakdown) params.set('includeReasonBreakdown', 'true');
       return client.request<ClosedTradeReportView>(
         `/execution/trades/closed/report?${params.toString()}`,
       );

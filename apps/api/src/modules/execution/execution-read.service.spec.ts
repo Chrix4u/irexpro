@@ -129,10 +129,36 @@ describe('ExecutionReadService', () => {
         },
       ]),
     };
+    const reasonQuery = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      addGroupBy: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([
+        {
+          accountCurrency: 'USD',
+          closeReason: 'STOP_LOSS_HIT',
+          totalTrades: '51',
+          pnlTradeCount: '50',
+          wins: '30',
+          losses: '19',
+          flats: '1',
+          grossRealisedPnl: '300.15',
+          netRealisedPnl: '274.40',
+          totalExplicitCosts: '25.75',
+        },
+      ]),
+    };
     const baseQuery = {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
-      clone: jest.fn().mockReturnValueOnce(pageQuery).mockReturnValueOnce(summaryQuery),
+      clone: jest
+        .fn()
+        .mockReturnValueOnce(pageQuery)
+        .mockReturnValueOnce(summaryQuery)
+        .mockReturnValueOnce(reasonQuery),
     };
     const reportRepo = {
       createQueryBuilder: jest.fn().mockReturnValue(baseQuery),
@@ -149,6 +175,7 @@ describe('ExecutionReadService', () => {
       direction: 'SELL',
       outcome: 'LOSS',
       closeReason: 'STOP_LOSS_HIT',
+      includeReasonBreakdown: true,
     });
 
     expect(baseQuery.where).toHaveBeenCalledWith('trade.userId = :userId', { userId: USER_ID });
@@ -204,6 +231,52 @@ describe('ExecutionReadService', () => {
     });
     expect(result.summary.profitFactor).toBeCloseTo(500.25 / 200.1, 8);
     expect(result.summary.currencyBreakdown).toHaveLength(1);
+    expect(result.summary.reasonBreakdown).toEqual([
+      expect.objectContaining({
+        accountCurrency: 'USD',
+        closeReason: 'STOP_LOSS_HIT',
+        totalTrades: 51,
+        pnlTradeCount: 50,
+        netRealisedPnl: '274.40',
+        totalExplicitCosts: '25.75',
+      }),
+    ]);
+    expect(reasonQuery.addGroupBy).toHaveBeenCalledWith('trade.closeReason');
+    // Attribution is computed over the same user/broker/filter scope, not page 2 alone.
+    expect(baseQuery.clone).toHaveBeenCalledTimes(3);
+  });
+
+  it('skips the extra reason aggregation for ordinary 24h dashboard polling', async () => {
+    const pageQuery = {
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+    };
+    const summaryQuery = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    };
+    const baseQuery = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      clone: jest.fn().mockReturnValueOnce(pageQuery).mockReturnValueOnce(summaryQuery),
+    };
+    const repo = {
+      createQueryBuilder: jest.fn().mockReturnValue(baseQuery),
+    } as unknown as Repository<Trade>;
+
+    const result = await new ExecutionReadService(repo).listClosedTradeReport(USER_ID, {
+      page: 1,
+      pageSize: 1,
+    });
+
+    expect(result.summary.reasonBreakdown).toEqual([]);
+    expect(baseQuery.clone).toHaveBeenCalledTimes(2);
   });
 
   it('rejects an inverted closed-trade report date range', async () => {

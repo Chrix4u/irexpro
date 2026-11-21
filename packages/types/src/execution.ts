@@ -108,6 +108,8 @@ export interface ClosedTradeReportQuery {
   direction?: TradeExecutionDirection;
   outcome?: ClosedTradeOutcomeFilter;
   closeReason?: TradeExecutionCloseReason;
+  /** Opt in only when the full filtered exit contribution report is needed. */
+  includeReasonBreakdown?: boolean;
 }
 
 export interface ClosedTradeCurrencySummaryView {
@@ -137,6 +139,19 @@ export interface ClosedTradeCurrencySummaryView {
   averageHoldMinutes: number | null;
 }
 
+export interface ClosedTradeReasonSummaryView {
+  accountCurrency: string | null;
+  closeReason: TradeExecutionCloseReason | null;
+  totalTrades: number;
+  pnlTradeCount: number;
+  wins: number;
+  losses: number;
+  flats: number;
+  grossRealisedPnl: string | null;
+  netRealisedPnl: string | null;
+  totalExplicitCosts: string | null;
+}
+
 export interface ClosedTradeReportSummaryView {
   totalTrades: number;
   pnlTradeCount: number;
@@ -164,6 +179,8 @@ export interface ClosedTradeReportSummaryView {
   totalExplicitCosts: string | null;
   averageHoldMinutes: number | null;
   currencyBreakdown: ClosedTradeCurrencySummaryView[];
+  /** Entire filtered result, grouped without mixing monetary currencies. */
+  reasonBreakdown?: ClosedTradeReasonSummaryView[];
 }
 
 export interface ClosedTradeReportView {
