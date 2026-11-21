@@ -1,0 +1,13 @@
+[Unit]
+Description=Read-only, low-I/O directory size inventory of Lightworld VPS
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lightworld-storage-watch inventory
+Nice=19
+IOSchedulingClass=idle
+CPUQuota=15%
+UMask=0077
+NoNewPrivileges=yes
+TimeoutStartSec=20min

@@ -327,3 +327,12 @@ script; the host does not automatically intercept arbitrary `pnpm`/
 `/home/lightworld/SHARED_VPS_DEPLOYMENT_POLICY_20261121.md` instruct
 agents to invoke the checker. Other projects must add their own CI,
 release and cleanup implementations and verify them before closing issues.
+
+### Shared VPS storage monitoring (2026-11-21)
+
+The read-only shared VPS monitor and two installed systemd timers are
+documented in `docs/operations/shared-vps-storage-observer.md`. The
+half-hourly snapshots are capped at 336, and the low-priority nightly
+first-level directory inventory is protected against concurrent builds.
+Neither automatically cleans up files or substitutes for project-specific
+release-state verification.

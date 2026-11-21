@@ -1,0 +1,12 @@
+[Unit]
+Description=Sample Lightworld VPS storage use and growth
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+AccuracySec=2min
+Persistent=false
+Unit=lightworld-vps-storage-watch.service
+
+[Install]
+WantedBy=timers.target

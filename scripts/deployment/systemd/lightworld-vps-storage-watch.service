@@ -1,0 +1,13 @@
+[Unit]
+Description=Collect read-only Lightworld shared VPS storage metrics
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lightworld-storage-watch collect
+Nice=19
+IOSchedulingClass=idle
+CPUQuota=15%
+UMask=0077
+NoNewPrivileges=yes
+TimeoutStartSec=90s
