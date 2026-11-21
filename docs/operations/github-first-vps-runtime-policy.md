@@ -265,3 +265,38 @@ verified GitHub-built release. The **public website and broker-connected
 PM2 paths are not switched**. It is not yet a demonstration of live API/AI
 rollback; that still requires broker position reconciliation and the four
 cutover HOLD conditions to be satisfied.
+
+### Recurring VPS generated-cache retention (enabled 2026-11-21)
+
+The installed weekly service is `lightworld-irexpro-cache-prune.timer`,
+scheduled for Saturdays at 11:15 UTC with up to 10 minutes randomized
+delay (during the FX weekend closure). Its approved script is pinned locally
+at `/usr/local/sbin/lightworld-irexpro-prune-inactive-caches`, under
+`/etc/systemd/system/lightworld-irexpro-cache-prune.service`.
+
+The script source is `scripts/deployment/prune-inactive-worktree-caches.py`.
+It only removes **ignored** generated `node_modules`, `.next`, or
+`.turbo` directories inside enumerated Git worktrees older than 14 days.
+It checks `/proc` for active commands and working directories, refuses
+links and paths escaping the worktree, and never deletes source code,
+branches, models, broker state, or live PM2 directories. Each run is
+limited to 30 inactive worktrees, serialized with `flock`, and executes
+under idle I/O priority and a CPU quota. It does not stop any application.
+
+The manual 2026-11-21 cleanup first removed the inactive GitHub runtime
+candidate and its duplicated Python environment (the exact live PM2
+versions were verified untouched), then removed one superseded 161 MB Next
+build backup. The protected environment copies remain; the duplicate
+**1.3 GB** Python interpreter environment was deleted because no live
+process used it. The verified GitHub Actions artifact is reproducible
+and can be re-downloaded for a later controlled cutover.
+
+Three audited cache batches removed 339 ignored generated directories from
+56 inactive iRexPro worktrees. VPS usage improved from approximately
+286 GB/93% used and 25 GB available to 277 GB/90% used and 34 GB available,
+while all 23 iRexPro PM2 services stayed online.
+
+**This is not full artifact-only deployment activation.** The active staging
+checkout and the legacy VPS build workflow remain, and other projects'
+builds/releases also use the shared VPS. The planned replacement still
+requires a safe trading-state and broker reconciliation cutover.
