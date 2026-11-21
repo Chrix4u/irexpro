@@ -76,6 +76,7 @@ jobs:
           node --test scripts/deployment/reconciliation-cutover-policy.test.cjs
           bash scripts/deployment/test-atomic-preview-links.sh
           python3 -m py_compile scripts/deployment/prune-inactive-worktree-caches.py
+          python3 scripts/deployment/test-lightworld-vps-capacity-check.py
 
       - name: Test exact-main staging release gate policy
         run: node scripts/deployment/main-staging-release-gate.mjs --self-test

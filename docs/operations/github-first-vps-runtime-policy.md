@@ -260,11 +260,12 @@ release directories fail closed. It has an isolated shell-test mode under
 `/tmp/irexpro-preview-test.*` for deterministic A/B activation and two
 rollback rounds, and is tested by required Deployment Script Safety CI.
 
-As of 2026-11-21, the VPS `preview/current` pointer references the single
-verified GitHub-built release. The **public website and broker-connected
-PM2 paths are not switched**. It is not yet a demonstration of live API/AI
-rollback; that still requires broker position reconciliation and the four
-cutover HOLD conditions to be satisfied.
+During the November 21 preview rehearsal, the VPS `preview/current` pointer
+referenced the single verified GitHub-built release. That **unused preview
+candidate and pointer were subsequently removed** in the same day's disk
+recovery, without changing production PM2, the AI broker processes or the
+public Nginx route. This was not a live API/AI rollback; broker/state
+reconciliation and the four HOLD conditions remain prerequisites.
 
 ### Recurring VPS generated-cache retention (enabled 2026-11-21)
 
@@ -300,3 +301,29 @@ while all 23 iRexPro PM2 services stayed online.
 checkout and the legacy VPS build workflow remain, and other projects'
 builds/releases also use the shared VPS. The planned replacement still
 requires a safe trading-state and broker reconciliation cutover.
+
+### Shared read-only capacity preflight for ALL hosted projects
+
+The operator-approved, globally installed tool
+`/usr/local/sbin/lightworld-vps-capacity-check` is intentionally **not**
+a cross-project cleanup agent or deployment hook. Its version-controlled
+source is `scripts/deployment/lightworld-vps-capacity-check.py`, with
+regression tests in `test-lightworld-vps-capacity-check.py` run by required
+deployment safety CI.
+
+- `lightworld-vps-capacity-check inspect`: emit JSON disk and concurrent
+  compiler count, never block.
+- `lightworld-vps-capacity-check build`: return exit 10 if `df`-aligned
+  root usage is 90%+, free space is 30 GiB or less, or other heavy builds
+  are active. Direct agents to use CI build artifacts.
+- `lightworld-vps-capacity-check artifact 500`: check that a 500 MiB
+  compressed artifact has 4x extraction headroom **plus** an 8 GiB reserve.
+  This does **not** authorize transaction, broker or database cutovers.
+
+This is an **explicit opt-in preflight call** for each project agent or deploy
+script; the host does not automatically intercept arbitrary `pnpm`/
+`next` commands. The project-specific GitHub issues, shared
+`/home/lightworld/AGENTS.md`, and
+`/home/lightworld/SHARED_VPS_DEPLOYMENT_POLICY_20261121.md` instruct
+agents to invoke the checker. Other projects must add their own CI,
+release and cleanup implementations and verify them before closing issues.
