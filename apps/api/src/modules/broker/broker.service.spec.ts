@@ -330,18 +330,22 @@ describe('BrokerService', () => {
       const linked = await service.createConnection(dto as any, 'user-1', undefined, derived);
 
       expect(linked.accountType).toBe(BrokerMode.LIVE);
-      expect(connectionRepo.create).toHaveBeenCalledWith(expect.objectContaining({
-        accountType: BrokerMode.LIVE,
-        status: BrokerConnectionStatus.DISCONNECTED,
-        authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
-        liveTradingEnabled: false,
-        credentialStatus: BrokerCredentialStatus.CREATED,
-        logicalAccountKey: derived.logicalAccountKey,
-      }));
-      expect(encryption.encrypt).toHaveBeenCalledWith(expect.objectContaining({
-        apiKey: dto.apiKey,
-        accountId: dto.accountId,
-      }));
+      expect(connectionRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountType: BrokerMode.LIVE,
+          status: BrokerConnectionStatus.DISCONNECTED,
+          authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
+          liveTradingEnabled: false,
+          credentialStatus: BrokerCredentialStatus.CREATED,
+          logicalAccountKey: derived.logicalAccountKey,
+        }),
+      );
+      expect(encryption.encrypt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          apiKey: dto.apiKey,
+          accountId: dto.accountId,
+        }),
+      );
       expect(linkOutbox.enqueueWithinTransaction).toHaveBeenCalledTimes(1);
       // Even a linked, saved, funded LIVE account cannot enable execution
       // while the operator's provider certification remains UNVERIFIED.
@@ -350,8 +354,9 @@ describe('BrokerService', () => {
         userId: 'user-1',
         authorizationStatus: BrokerAuthorizationStatus.CONNECTED,
       });
-      await expect(service.enableLiveTrading('saved-live', 'user-1'))
-        .rejects.toThrow(ForbiddenException);
+      await expect(service.enableLiveTrading('saved-live', 'user-1')).rejects.toThrow(
+        ForbiddenException,
+      );
       expect(connectionRepo.update).not.toHaveBeenCalled();
     });
 
@@ -365,19 +370,29 @@ describe('BrokerService', () => {
         apiKey: 'untrusted-client-token',
         additionalParams: { oauthDiscoveredLiveLinkOnly: true },
       };
-      await expect(service.createConnection(live as any, 'user-1'))
-        .rejects.toThrow(ForbiddenException);
-      await expect(service.createConnection(live as any, 'user-1', undefined, {
-        oauthDiscoveredLiveLinkOnly: true,
-      })).rejects.toThrow(ForbiddenException);
-      await expect(service.createConnection({
-        ...live,
-        brokerId: 'oanda',
-      } as any, 'user-1', undefined, {
-        oauthDiscoveredLiveLinkOnly: true,
-        flowId: 'server-flow',
-        logicalAccountKey: 'oanda|oanda|70010001',
-      })).rejects.toThrow(ForbiddenException);
+      await expect(service.createConnection(live as any, 'user-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      await expect(
+        service.createConnection(live as any, 'user-1', undefined, {
+          oauthDiscoveredLiveLinkOnly: true,
+        }),
+      ).rejects.toThrow(ForbiddenException);
+      await expect(
+        service.createConnection(
+          {
+            ...live,
+            brokerId: 'oanda',
+          } as any,
+          'user-1',
+          undefined,
+          {
+            oauthDiscoveredLiveLinkOnly: true,
+            flowId: 'server-flow',
+            logicalAccountKey: 'oanda|oanda|70010001',
+          },
+        ),
+      ).rejects.toThrow(ForbiddenException);
       expect(connectionRepo.save).not.toHaveBeenCalled();
     });
 

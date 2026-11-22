@@ -692,7 +692,8 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
 
     it('links provider-discovered LIVE accounts using an internal link-only permission', async () => {
       brokerService.createConnection.mockResolvedValue({
-        ...linkedConnection, accountType: BrokerMode.LIVE,
+        ...linkedConnection,
+        accountType: BrokerMode.LIVE,
       });
       const flowId = await authorizedFlowId();
       const result = await service.linkAccount(USER, flowId, '7654321');
