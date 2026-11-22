@@ -222,6 +222,13 @@ describe('loadLiveAccountPositions runtime guards', () => {
     ...overrides,
   });
 
+  it('rejects results from a different broker account under a scoped positions request', async () => {
+    requestMock.mockResolvedValue({ positions: [positionRow()], total: 1 });
+    await expect(loadLiveAccountPositions('conn-other'))
+      .rejects.toThrow('Live account positions connection scope mismatch');
+    expect(requestMock).toHaveBeenCalledWith('/live-account/positions?connectionId=conn-other');
+  });
+
   it('accepts position rows with environment UNKNOWN', async () => {
     requestMock.mockResolvedValue({ positions: [positionRow()], total: 1 });
 
@@ -321,6 +328,13 @@ describe('loadLiveAccountOrders runtime guards', () => {
     total: orders.length,
     limit: 50,
     offset: 0,
+  });
+
+  it('rejects cross-account order rows even when API payload is structurally valid', async () => {
+    requestMock.mockResolvedValue(ordersPage([orderRow()]));
+    await expect(loadLiveAccountOrders('ALL', 16, 0, 'conn-other'))
+      .rejects.toThrow('Live account orders connection scope mismatch');
+    expect(requestMock.mock.calls[0][0]).toContain('connectionId=conn-other');
   });
 
   it('accepts an in-flight DISPATCH_COMMITTED row under the ALL filter (R7-audit-C A7)', async () => {
