@@ -18,9 +18,10 @@ import { LiveAccountActivityPageDto } from './dto/live-account-activity-response
  *
  * Read-only aggregation powering the user's Live Account dashboard. All routes
  * are protected by the global JwtAuthGuard; the controller accepts ONLY the
- * authenticated user's UUID via @CurrentUserId() and never any
- * client-supplied userId / connectionId / accountId (Directive §40 tenant
- * isolation). The controller stays thin — validation and aggregation live in
+ * authenticated user's UUID via @CurrentUserId(). An optional
+ * client-supplied connectionId is a FILTER only: every repository query
+ * still requires the authenticated userId in its AND-clause. The controller
+ * stays thin — validation and aggregation live in
  * LiveAccountService, DTOs serialize to the frozen
  * @irexpro/types/live-account contract.
  */
@@ -50,18 +51,26 @@ export class LiveAccountController {
   })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 50 })
   @ApiQuery({ name: 'offset', required: false, type: Number, example: 0 })
+  @ApiQuery({
+    name: 'connectionId',
+    required: false,
+    type: String,
+    description: 'Optional user-owned broker connection filter; never a user identity',
+  })
   @ApiResponse({ status: 200, type: LiveAccountOrdersPageDto })
   async getOrders(
     @CurrentUserId() userId: string,
     @Query('status') status?: string,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number = 50,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number = 0,
+    @Query('connectionId') connectionId?: string,
   ): Promise<LiveAccountOrdersPageDto> {
     return this.liveAccountService.getOrders(
       userId,
       normalizeOrderStatusFilter(status),
       clampPaginationLimit(limit),
       clampPaginationOffset(offset),
+      connectionId,
     );
   }
 
@@ -69,9 +78,18 @@ export class LiveAccountController {
   @ApiOperation({
     summary: 'Open / reconciliation-held positions for the authenticated user',
   })
+  @ApiQuery({
+    name: 'connectionId',
+    required: false,
+    type: String,
+    description: 'Optional user-owned broker connection filter; never a user identity',
+  })
   @ApiResponse({ status: 200, type: LiveAccountPositionsViewDto })
-  async getPositions(@CurrentUserId() userId: string): Promise<LiveAccountPositionsViewDto> {
-    return this.liveAccountService.getPositions(userId);
+  async getPositions(
+    @CurrentUserId() userId: string,
+    @Query('connectionId') connectionId?: string,
+  ): Promise<LiveAccountPositionsViewDto> {
+    return this.liveAccountService.getPositions(userId, connectionId);
   }
 
   @Get('activity')

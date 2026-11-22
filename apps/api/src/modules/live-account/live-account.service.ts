@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, In, MoreThanOrEqual, Not, Repository } from 'typeorm';
 import { BrokerAccount } from '../broker/entities/broker-account.entity';
@@ -266,6 +266,17 @@ export class LiveAccountService {
     };
   }
 
+  // Client filter ONLY, never a principal. The query below ALWAYS keeps
+  // authenticated userId in the same AND-clause as brokerConnectionId.
+  // Reject arrays, whitespace, control chars and unbounded input.
+  private validateAccountScope(connectionId?: string): string | null {
+    if (connectionId === undefined) return null;
+    if (typeof connectionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(connectionId)) {
+      throw new BadRequestException('Invalid broker connection filter');
+    }
+    return connectionId;
+  }
+
   // ─── GET /live-account/orders ─────────────────────────────────────────────
 
   async getOrders(
@@ -273,15 +284,23 @@ export class LiveAccountService {
     status: LiveOrderStatusFilter | string | null | undefined = LiveOrderStatusFilter.ALL,
     limit: number = LIVE_ACCOUNT_DEFAULT_PAGE_LIMIT,
     offset: number = 0,
+    connectionId?: string,
   ): Promise<LiveAccountOrdersPageDto> {
+    const scopedConnectionId = this.validateAccountScope(connectionId);
     const filter = normalizeOrderStatusFilter(status);
     const safeLimit = clampPaginationLimit(limit);
     const safeOffset = clampPaginationOffset(offset);
 
+    // Always intersect a requested broker with the authenticated user ID.
+    // A foreign tenant's connection ID can never widen this query.
+    const scope = {
+      userId,
+      ...(scopedConnectionId ? { brokerConnectionId: scopedConnectionId } : {}),
+    };
     const where: FindOptionsWhere<Order> =
       filter === LiveOrderStatusFilter.ALL
-        ? { userId }
-        : { userId, status: In([...ORDER_STATUS_FILTERS[filter]]) };
+        ? scope
+        : { ...scope, status: In([...ORDER_STATUS_FILTERS[filter]]) };
 
     const [orders, total, connectionContext] = await Promise.all([
       this.orderRepo.find({
@@ -309,9 +328,11 @@ export class LiveAccountService {
 
   // ─── GET /live-account/positions ──────────────────────────────────────────
 
-  async getPositions(userId: string): Promise<LiveAccountPositionsViewDto> {
+  async getPositions(userId: string, connectionId?: string): Promise<LiveAccountPositionsViewDto> {
+    const scopedConnectionId = this.validateAccountScope(connectionId);
     const where: FindOptionsWhere<Trade> = {
       userId,
+      ...(scopedConnectionId ? { brokerConnectionId: scopedConnectionId } : {}),
       status: In([TradeStatus.OPEN, TradeStatus.RECONCILIATION_PENDING]),
     };
 

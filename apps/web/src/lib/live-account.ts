@@ -495,24 +495,33 @@ export async function loadLiveAccountOrders(
   status: LiveOrderStatusFilter = 'WORKING',
   limit = 20,
   offset = 0,
+  connectionId?: string,
 ): Promise<LiveAccountOrdersPage> {
   const query = buildQuery([
     ['status', status],
     ['limit', limit],
     ['offset', offset],
+    ...(connectionId ? [['connectionId', connectionId] as [string, string]] : []),
   ]);
   const payload = await api.request<unknown>(`/live-account/orders?${query}`);
   if (!isLiveAccountOrdersPage(payload)) {
     throw new Error('Live account orders contract mismatch');
   }
+  if (connectionId && payload.orders.some((order) => order.brokerConnectionId !== connectionId)) {
+    throw new Error('Live account orders connection scope mismatch');
+  }
   return payload;
 }
 
 /** GET /live-account/positions — open positions with connection context. */
-export async function loadLiveAccountPositions(): Promise<LiveAccountPositionsView> {
-  const payload = await api.request<unknown>('/live-account/positions');
+export async function loadLiveAccountPositions(connectionId?: string): Promise<LiveAccountPositionsView> {
+  const query = connectionId ? '?' + buildQuery([['connectionId', connectionId]]) : '';
+  const payload = await api.request<unknown>('/live-account/positions' + query);
   if (!isLiveAccountPositionsView(payload)) {
     throw new Error('Live account positions contract mismatch');
+  }
+  if (connectionId && payload.positions.some((position) => position.brokerConnectionId !== connectionId)) {
+    throw new Error('Live account positions connection scope mismatch');
   }
   return payload;
 }
