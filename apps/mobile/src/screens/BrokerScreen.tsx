@@ -802,7 +802,12 @@ function ConnectFlowModal({
           buildOAuthLinkRequest(oauthFlowId, account),
         );
         await clearPendingBrokerOAuth();
-        setFeedback({ ok: true, message: "Account linked" });
+        setFeedback({
+          ok: true,
+          message: account.isLive
+            ? "LIVE account linked for monitoring. Real-money AI trading remains disabled until certified."
+            : "DEMO account linked",
+        });
         await onConnected();
       } catch (err) {
         setFeedback({

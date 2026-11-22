@@ -107,19 +107,17 @@ export interface OAuthAccountOption {
 }
 
 /**
- * Maps discovered accounts to selectable options. DEMO accounts are
- * selectable; LIVE accounts are NOT (production-LIVE verification is
- * pending for cTrader-family brokers — platform compatibility is
- * contract-tested, LIVE verification is an operator evidence program).
+ * Both OAuth-authorized DEMO and LIVE accounts can be linked. LIVE
+ * linkage is for monitoring and does NOT authorize real-money orders.
  */
 export function oauthAccountOptions(accounts: BrokerOAuthAccount[]): OAuthAccountOption[] {
   return accounts.map((account) =>
     account.isLive
       ? {
           account,
-          selectable: false,
+          selectable: true,
           note:
-          "LIVE linking is pending — it requires operator-attested production-LIVE verification evidence. Connect the matching DEMO account for now.",
+          "LIVE linkage is for monitoring. Real-money AI trading stays disabled until broker certification and explicit approval.",
         }
       : { account, selectable: true },
   );
@@ -127,7 +125,7 @@ export function oauthAccountOptions(accounts: BrokerOAuthAccount[]): OAuthAccoun
 
 /** Default display name for a linked OAuth connection. */
 export function oauthDisplayName(account: BrokerOAuthAccount): string {
-  return `${account.brokerTitleShort ?? "cTrader"} DEMO ${account.ctidTraderAccountId}`;
+  return `${account.brokerTitleShort ?? "cTrader"} ${account.isLive ? "LIVE" : "DEMO"} ${account.ctidTraderAccountId}`;
 }
 
 /** Builds the link request for a chosen account (pure). */

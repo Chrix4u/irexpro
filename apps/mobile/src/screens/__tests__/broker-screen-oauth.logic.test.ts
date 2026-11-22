@@ -117,24 +117,24 @@ describe("cold-start pending OAuth context freshness", () => {
   });
 });
 
-describe("oauthAccountOptions (honest LIVE gating)", () => {
-  it("marks DEMO accounts selectable and LIVE accounts blocked with the honest reason", () => {
+describe("oauthAccountOptions (LIVE linking without trading)", () => {
+  it("makes DEMO and LIVE linkable while explaining the LIVE execution hold", () => {
     const options = oauthAccountOptions([
       account(),
       account({ ctidTraderAccountId: "7654321", isLive: true }),
     ]);
     expect(options[0].selectable).toBe(true);
     expect(options[0].note).toBeUndefined();
-    expect(options[1].selectable).toBe(false);
-    expect(options[1].note).toContain("production-LIVE");
+    expect(options[1].selectable).toBe(true);
+    expect(options[1].note).toContain("disabled");
+    expect(options[1].note).toContain("certification");
   });
 
   it("never renders a LIVE account as simply verified (§AB honesty)", () => {
     const options = oauthAccountOptions([account({ isLive: true })]);
-    expect(options[0].selectable).toBe(false);
-    // The note states LIVE linking is PENDING evidence — it never claims the
-    // broker is verified.
-    expect(options[0].note).toContain("pending");
+    expect(options[0].selectable).toBe(true);
+    // LINKABLE is not EXECUTABLE. The copy never claims certification.
+    expect(options[0].note).toContain("disabled");
     expect(options[0].note).not.toContain("is verified");
     expect(options[0].note).not.toContain("LIVE verified");
   });
@@ -148,6 +148,16 @@ describe("buildOAuthLinkRequest", () => {
       ctidTraderAccountId: "1234567",
       displayName: "cTrader DEMO 1234567",
     });
+  });
+
+  it("labels LIVE broker accounts without calling them DEMO", () => {
+    expect(oauthDisplayName(account({
+      brokerTitleShort: "Pepperstone",
+      ctidTraderAccountId: "55",
+      isLive: true,
+    }))).toBe("Pepperstone LIVE 55");
+    expect(buildOAuthLinkRequest("flow-live", account({ isLive: true })).displayName)
+      .toBe("cTrader LIVE 1234567");
   });
 
   it("uses the broker title and the caller-supplied display name", () => {
