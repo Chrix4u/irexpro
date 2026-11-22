@@ -430,20 +430,31 @@ async function setupLiveAccountRoutes(page: Page): Promise<void> {
 
     // ── Live account contract routes ────────────────────────────────────
     if (apiPath === 'live-account/overview') return fulfill(200, mockOverview);
-    if (apiPath === 'live-account/positions') return fulfill(200, mockPositions);
+    if (apiPath === 'live-account/positions') {
+      const connectionId = url.searchParams.get('connectionId');
+      const positions = connectionId
+        ? mockPositions.positions.filter((position) => position.brokerConnectionId === connectionId)
+        : mockPositions.positions;
+      return fulfill(200, { positions, total: positions.length });
+    }
 
     if (apiPath === 'live-account/orders') {
       const status = url.searchParams.get('status') ?? 'WORKING';
       const limit = Number(url.searchParams.get('limit') ?? '10');
       const offset = Number(url.searchParams.get('offset') ?? '0');
+      const connectionId = url.searchParams.get('connectionId');
+      const accountRows = (rows: LiveOrderRowView[]) =>
+        connectionId ? rows.filter((order) => order.brokerConnectionId === connectionId) : rows;
       if (status === 'HISTORY') {
-        return fulfill(200, ordersPage(mockHistoryOrders, mockHistoryOrders.length, limit, offset));
+        const scoped = accountRows(mockHistoryOrders);
+        return fulfill(200, ordersPage(scoped, scoped.length, limit, offset));
       }
       if (status === 'ALL') {
-        const all = [...allWorkingOrders, ...mockHistoryOrders];
-        return fulfill(200, ordersPage(all, all.length, limit, offset));
+        const scoped = accountRows([...allWorkingOrders, ...mockHistoryOrders]);
+        return fulfill(200, ordersPage(scoped, scoped.length, limit, offset));
       }
-      return fulfill(200, ordersPage(allWorkingOrders, allWorkingOrders.length, limit, offset));
+      const scoped = accountRows(allWorkingOrders);
+      return fulfill(200, ordersPage(scoped, scoped.length, limit, offset));
     }
 
     if (apiPath === 'live-account/activity') {
@@ -506,8 +517,12 @@ test.describe('Positions & Activity', () => {
     await expect(positions.getByText('XAUUSD', { exact: true })).toBeVisible();
     await expect(positions.getByText('+28.75 USD', { exact: true })).toBeVisible();
 
+    // The selected LIVE account must not show a DEMO position.
+    await expect(positions.getByText('GBPUSD', { exact: true })).toHaveCount(0);
+    await page.getByRole('combobox', { name: 'Viewing broker account' }).selectOption(DEMO_CONNECTION_ID);
     await expect(positions.getByText('GBPUSD', { exact: true })).toBeVisible();
     await expect(positions.getByText('P&L unavailable', { exact: true })).toBeVisible();
+    await expect(positions.getByText('EURUSD', { exact: true })).toHaveCount(0);
   });
 
   test('renders recent orders, audited AI activity, alerts and execution health', async ({ page }) => {
@@ -518,7 +533,11 @@ test.describe('Positions & Activity', () => {
     await expect(page.getByText('DISPATCH COMMITTED', { exact: true }).first()).toBeVisible();
 
     await expect(page.getByText('ORDER SUBMITTED', { exact: true }).first()).toBeVisible();
+    // Do not mix DEMO credential alerts into the selected LIVE account.
+    await expect(page.getByText(/credentials have expired/i)).toHaveCount(0);
+    await page.getByRole('combobox', { name: 'Viewing broker account' }).selectOption(DEMO_CONNECTION_ID);
     await expect(page.getByText(/credentials have expired/i)).toBeVisible();
+    await expect(page.getByText('RECONCILIATION PENDING', { exact: true })).toHaveCount(0);
 
     const activityTimeline = page.locator('.activity-ai-card .activity-timeline');
     await expect(activityTimeline).toHaveCSS('overflow-y', 'auto');
