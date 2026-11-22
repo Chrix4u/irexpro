@@ -19,9 +19,9 @@ import type { BrokerOAuthAccount, BrokerConnectionView } from '@irexpro/types';
  * connection.
  *
  * Honesty rules (mirroring the server):
- * - DEMO accounts are selectable; LIVE accounts render as pending
- *   production-LIVE verification (UNVERIFIED brokers are DEMO-only — the
- *   server fails closed regardless of what this UI allows).
+ * - Provider-authorized DEMO and LIVE accounts may be securely LINKED.
+ *   A LIVE link is not a real-money trading authorization. Execution remains
+ *   independently blocked until the broker is production-LIVE certified.
  * - No token material ever appears here (the API never returns it).
  */
 type CallbackPhase = 'exchanging' | 'pick' | 'linking' | 'done' | 'error';
@@ -104,18 +104,20 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
 
   const handleLink = useCallback(
     async (account: BrokerOAuthAccount) => {
-      if (!flowId || account.isLive) return;
+      if (!flowId) return;
       setPhase('linking');
       try {
         const connection = await api.linkBrokerOAuth({
           flowId,
           ctidTraderAccountId: account.ctidTraderAccountId,
-          displayName: `${account.brokerTitleShort ?? 'cTrader'} DEMO ${account.ctidTraderAccountId}`,
+          displayName: `${account.brokerTitleShort ?? 'cTrader'} ${account.isLive ? 'LIVE' : 'DEMO'} ${account.ctidTraderAccountId}`,
         });
         sessionStorage.removeItem(IREXPRO_BROKER_OAUTH_FLOW_KEY);
         setLinkedConnection(connection);
         setPhase('done');
-        notify.success('cTrader account linked.');
+        notify.success(account.isLive
+          ? 'LIVE account linked for monitoring. Real-money AI trading remains disabled.'
+          : 'DEMO account linked.');
       } catch (err) {
         setPhase('error');
         setError(mapApiError(err).message);
@@ -168,9 +170,9 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
       {phase === 'pick' && (
         <Card title="Choose an account to link">
           <p className="card__subtitle">
-            These are the cTrader accounts you granted access to. DEMO accounts are ready to
-            link; LIVE accounts require production-LIVE verification of the broker on our
-            platform first (currently pending for cTrader-family brokers).
+            These are the cTrader accounts you authorized. Both DEMO and LIVE accounts can
+            be linked. LIVE linkage saves account access securely, but real-money orders
+            remain disabled until broker certification, risk validation and your approval.
           </p>
           {accounts.length === 0 ? (
             <Alert variant="warning">
@@ -192,7 +194,7 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     gap: 'var(--space-3)',
-                    opacity: account.isLive ? 0.7 : 1,
+                    opacity: 1,
                   }}
                 >
                   <div style={{ minWidth: 0, flex: '1 1 220px' }}>
@@ -201,7 +203,7 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
                         {account.brokerTitleShort ?? 'cTrader'}
                       </strong>
                       <Badge variant={account.isLive ? 'warning' : 'success'}>
-                        {account.isLive ? 'LIVE — verification pending' : 'DEMO'}
+                        {account.isLive ? 'LIVE — orders disabled' : 'DEMO'}
                       </Badge>
                     </div>
                     <div className="text-sm muted" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}>
@@ -210,18 +212,17 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
                     </div>
                     {account.isLive && (
                       <div className="text-sm muted" style={{ marginTop: 'var(--space-1)' }}>
-                        Live linking opens after operator-verified production-LIVE evidence —
-                        connect the matching DEMO account for now.
+                        Link this account now for monitoring. AI trading with real
+                        money stays locked until separate execution certification.
                       </div>
                     )}
                   </div>
                   <Button
                     variant={account.isLive ? 'secondary' : 'primary'}
                     size="sm"
-                    disabled={account.isLive}
                     onClick={() => void handleLink(account)}
                   >
-                    {account.isLive ? 'Not yet available' : 'Link this account'}
+                    {account.isLive ? 'Link LIVE (no trading)' : 'Link DEMO'}
                   </Button>
                 </div>
               ))}
@@ -244,8 +245,10 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
           <Alert variant="success">
             <span style={{ flex: 1 }}>
               ✅ {linkedConnection.brokerName} account {linkedConnection.accountId} is linked
-              (credentials encrypted). Next: connect it and run the DEMO validation checklist
-              from the broker connections page.
+              (credentials encrypted).
+              {linkedConnection.accountType === 'LIVE'
+                ? ' Real-money AI trading stays disabled until independently certified. You can view and connect this account from the broker page.'
+                : ' Next: connect it and run the DEMO validation checklist from the broker connections page.'}
             </span>
           </Alert>
           <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 'var(--space-4)', flexWrap: 'wrap' }}>

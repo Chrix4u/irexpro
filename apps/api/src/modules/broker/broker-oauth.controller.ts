@@ -129,9 +129,9 @@ export class BrokerOAuthController {
       'Persists the chosen account through the canonical createConnection path: ' +
       'credentials (access token + refresh token + expiry tracking) are ' +
       "AES-256-GCM encrypted; the environment derives from the account's " +
-      'server-reported isLive flag; LIVE linking for production-LIVE-unverified ' +
-      'brokers fails closed exactly like the manual path. The OAuth flow is ' +
-      'consumed (single-use).',
+      'server-reported isLive flag; LIVE accounts may be linked without ' +
+      'granting trading authority. Execution remains blocked until certified. ' +
+      'The OAuth flow is consumed (single-use).',
   })
   @ApiResponse({
     status: HttpStatus.CREATED,
@@ -141,7 +141,7 @@ export class BrokerOAuthController {
   @ApiResponse({ status: 400, description: 'Account not granted to this authorization' })
   @ApiResponse({
     status: 403,
-    description: 'LIVE connection on an unverified broker (fail-closed)',
+    description: 'Unsupported broker identity or environment rejected (fail-closed)',
   })
   @ApiResponse({ status: 404, description: 'Flow unknown or not owned by the caller' })
   async linkAccount(

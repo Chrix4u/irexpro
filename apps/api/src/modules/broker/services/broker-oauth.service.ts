@@ -561,10 +561,9 @@ export class BrokerOAuthService {
       );
     }
 
-    // The account's isLive flag (SERVER-DERIVED via 2149, not a client
-    // assertion) decides the environment. LIVE linking for unverified
-    // brokers fails closed inside createConnection exactly like the manual
-    // path — OAuth NEVER weakens the production-LIVE gate.
+    // Provider-discovered isLive (not client input) defines the environment.
+    // LIVE linkage only saves encrypted tokens; the separate order execution
+    // approval and production-LIVE certification gates remain unchanged.
     const providerBrokerIdentity = normalizeProviderBrokerIdentity(account.brokerTitleShort);
     const accountType = account.isLive ? BrokerMode.LIVE : BrokerMode.DEMO;
     const logicalAccountKey = computeLogicalAccountKey(
@@ -629,6 +628,7 @@ export class BrokerOAuthService {
         providerBrokerIdentity,
         logicalAccountKey,
         flowId,
+        ...(account.isLive ? { oauthDiscoveredLiveLinkOnly: true as const } : {}),
         linkAudit: {
           payload: {
             action: AuditAction.BROKER_OAUTH_ACCOUNT_LINKED,
@@ -692,9 +692,8 @@ export class BrokerOAuthService {
       // so restoring AUTHORIZED is retry-safe. (For the pathological
       // committed-but-ACK-lost case the retry adopts via the pre-check
       // above — the unique index makes the world converge either way.)
-      // LIVE-for-unverified rejections (gates run BEFORE the INSERT) and
-      // every other pre-persistence failure propagate exactly as before —
-      // the user can pick a DEMO account from the same authorization.
+      // Every other pre-persistence failure propagates as before.
+      // Uncertified LIVE accounts remain linked without trading authority.
       await this.casRestoreLinkingToAuthorized(flow.id);
       this.logger.warn(
         `cTrader OAuth link failed for flow=${flowId}: ${err instanceof Error ? err.constructor.name : 'UNKNOWN'}`,
