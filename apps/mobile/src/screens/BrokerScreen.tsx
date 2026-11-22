@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  AppState,
   KeyboardAvoidingView,
   Linking,
   Modal,
@@ -33,6 +34,7 @@ import type {
   BrokerOAuthAccountsResult,
   BrokerRegistryEntry,
   CreateBrokerConnectionRequest,
+  DirectMt5ConnectionHealthView,
 } from "@irexpro/types";
 import { isBrokerConnectionRuntimeReady } from "@irexpro/types";
 import { api } from "../lib/api";
@@ -59,6 +61,11 @@ import {
 } from "./broker-screen-oauth.logic";
 import { ActionDialog, Banner, palette } from "../components/ui";
 import {
+  buildHostedMt5MobileRequest,
+  hostedMt5MobileAvailability,
+  hostedMt5MobileStatus,
+} from "./hosted-mt5-mobile.logic";
+import {
   clearPendingBrokerOAuth,
   getPendingBrokerOAuth,
   savePendingBrokerOAuth,
@@ -69,6 +76,11 @@ const ENVIRONMENT_OPTIONS: ReadonlyArray<"DEMO" | "LIVE"> = ["DEMO", "LIVE"];
 export default function BrokerScreen() {
   const [registry, setRegistry] = useState<BrokerRegistryEntry[]>([]);
   const [connections, setConnections] = useState<BrokerConnectionView[]>([]);
+  // A saved connection is NOT evidence of a live broker terminal.
+  // The user sees server-authoritative, heartbeat-verified MT5 status.
+  const [mt5HealthById, setMt5HealthById] = useState<
+    Record<string, DirectMt5ConnectionHealthView | null>
+  >({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -84,6 +96,38 @@ export default function BrokerScreen() {
     result: BrokerOAuthAccountsResult;
   } | null>(null);
   const coldStartHandled = useRef(false);
+  // Ignore old in-flight heartbeat responses after background/foreground,
+  // broker changes, or a newer refresh. A stale response must never turn
+  // an offline terminal indicator back to green.
+  const mt5HealthRequestId = useRef(0);
+
+  const refreshMt5Statuses = useCallback(async (
+    currentConnections: BrokerConnectionView[],
+  ) => {
+    const requestId = ++mt5HealthRequestId.current;
+    const mt5Connections = currentConnections.filter(
+      (connection) => connection.brokerId === "direct-mt5",
+    );
+    if (!mt5Connections.length) {
+      setMt5HealthById({});
+      return;
+    }
+    const statuses = await Promise.all(mt5Connections.map(
+      async (connection) => ({
+        id: connection.id,
+        health: await api.getDirectMt5ConnectionHealth(connection.id)
+          .catch(() => null),
+      }),
+    ));
+    // A failed heartbeat readback becomes unknown, never a falsely green
+    // execution-ready state. Drop a response that arrived after suspension
+    // or after a newer request replaced its state.
+    if (AppState.currentState !== "active" ||
+        mt5HealthRequestId.current !== requestId) return;
+    setMt5HealthById(Object.fromEntries(
+      statuses.map(({ id, health }) => [id, health]),
+    ));
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -93,6 +137,8 @@ export default function BrokerScreen() {
       ]);
       setRegistry(catalog.brokers);
       setConnections(userConnections);
+      // MT5 terminal health is fetched by the connection lifecycle effect.
+      // The broker catalog never waits on a potentially offline terminal.
       setError(null);
     } catch (err) {
       setError(
@@ -102,11 +148,40 @@ export default function BrokerScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [refreshMt5Statuses]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Keep the terminal indicator fresh only while the app is foregrounded.
+  // On resume, erase the previous broker state BEFORE requesting a new readback.
+  // The AI and Windows worker remain independent of mobile app lifecycle.
+  useEffect(() => {
+    if (!connections.some((connection) => connection.brokerId === "direct-mt5")) {
+      mt5HealthRequestId.current += 1;
+      setMt5HealthById({});
+      return;
+    }
+    void refreshMt5Statuses(connections);
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      mt5HealthRequestId.current += 1;
+      setMt5HealthById({});
+      if (nextState === "active") {
+        void refreshMt5Statuses(connections);
+      }
+    });
+    const interval = setInterval(() => {
+      if (AppState.currentState === "active") {
+        void refreshMt5Statuses(connections);
+      }
+    }, 15_000);
+    return () => {
+      subscription.remove();
+      clearInterval(interval);
+      mt5HealthRequestId.current += 1;
+    };
+  }, [connections, refreshMt5Statuses]);
 
   useEffect(() => {
     if (loading || registry.length === 0 || coldStartHandled.current) return;
@@ -326,7 +401,12 @@ export default function BrokerScreen() {
             );
             const connectionAction = brokerConnectionAction(connection.status);
             const runtimeReady = isBrokerConnectionRuntimeReady(registryEntry);
-            const reconnectBlocked = connectionAction === "RECONNECT" && !runtimeReady;
+            const mt5Health = mt5HealthById[connection.id];
+            const hostedWaiting =
+              mt5Health?.hostMode === "IREXPRO_HOSTED" &&
+              mt5Health.executionReady !== true;
+            const reconnectBlocked = connectionAction === "RECONNECT" &&
+              (!runtimeReady || hostedWaiting);
             return (
             <View
               key={connection.id}
@@ -412,6 +492,31 @@ export default function BrokerScreen() {
                   {connection.lastErrorMessage}
                 </Text>
               ) : null}
+              {connection.brokerId === "direct-mt5" ? (
+                <View style={styles.hostedStatusCard}>
+                  <Text style={styles.hostedStatusTitle}>
+                    {hostedMt5MobileStatus(mt5HealthById[connection.id]).title}
+                  </Text>
+                  <Text style={styles.muted}>
+                    {hostedMt5MobileStatus(mt5HealthById[connection.id]).detail}
+                  </Text>
+                  {mt5HealthById[connection.id]?.lastHeartbeatAt ? (
+                    <Text style={styles.mutedSmall}>
+                      Last broker heartbeat: {
+                        new Date(mt5HealthById[connection.id]!.lastHeartbeatAt!).toLocaleString()
+                      }
+                    </Text>
+                  ) : null}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Refresh MT5 terminal status"
+                    style={styles.hostedRefreshButton}
+                    onPress={() => void refreshMt5Statuses(connections)}
+                  >
+                    <Text style={styles.secondaryButtonText}>Refresh terminal status</Text>
+                  </Pressable>
+                </View>
+              ) : null}
               {reconnectBlocked ? (
                 <Text style={styles.errorTextSmall}>
                   {registryEntry?.connectionReadiness?.message ??
@@ -454,12 +559,17 @@ export default function BrokerScreen() {
         <Text style={styles.sectionTitle}>Broker catalog</Text>
         {registry.map((entry) => {
           const presentation = statusPresentation(entry.status);
-          const connectable = isConnectableEntry(entry);
+          const hostedAvailability =
+            entry.id === "direct-mt5" ? hostedMt5MobileAvailability(entry) : null;
+          const connectable = hostedAvailability
+            ? hostedAvailability.ready
+            : isConnectableEntry(entry);
           const mobileReadiness = mobileConnectionReadiness(entry);
-          const runtimeBlocked =
-            entry.adapterAvailable === true &&
-            presentation.connectable &&
-            mobileReadiness?.ready === false;
+          const runtimeBlocked = hostedAvailability
+            ? !hostedAvailability.ready
+            : entry.adapterAvailable === true &&
+              presentation.connectable &&
+              mobileReadiness?.ready === false;
           // Fixed taxonomy label — e.g. an UNVERIFIED BETA provider is
           // 'Production LIVE Unverified', never simply "Live".
           const verificationLabel = verificationLabelForEntry(entry);
@@ -512,9 +622,16 @@ export default function BrokerScreen() {
                   </Text>
                 ))}
               </View>
+              {entry.id === "direct-mt5" ? (
+                <Text style={styles.mutedSmall}>
+                  Phone-only MT5 setup uses iRexPro's hosted Windows execution
+                  worker. Your phone and laptop can be switched off after the
+                  DEMO terminal is confirmed healthy. LIVE remains unavailable.
+                </Text>
+              ) : null}
               {runtimeBlocked ? (
                 <Text style={styles.errorTextSmall}>
-                  {mobileReadiness?.message ??
+                  {hostedAvailability?.message ?? mobileReadiness?.message ??
                     "This broker is awaiting platform configuration."}
                 </Text>
               ) : null}
@@ -525,7 +642,9 @@ export default function BrokerScreen() {
                   style={styles.primaryButton}
                   onPress={() => setConnectTarget(entry)}
                 >
-                  <Text style={styles.primaryButtonText}>Connect</Text>
+                  <Text style={styles.primaryButtonText}>
+                    {entry.id === "direct-mt5" ? "Connect MT5 on iRexPro" : "Connect"}
+                  </Text>
                 </Pressable>
               ) : runtimeBlocked ? (
                 <Pressable
@@ -534,7 +653,9 @@ export default function BrokerScreen() {
                   style={[styles.secondaryButton, styles.buttonDisabled]}
                   disabled
                 >
-                  <Text style={styles.secondaryButtonText}>Platform setup required</Text>
+                  <Text style={styles.secondaryButtonText}>
+                    {entry.id === "direct-mt5" ? "Hosted worker unavailable" : "Platform setup required"}
+                  </Text>
                 </Pressable>
               ) : null}
             </View>
@@ -593,9 +714,14 @@ export default function BrokerScreen() {
             setConnectTarget(null);
             setRestoredOAuth(null);
           }}
-          onConnected={async () => {
+          onConnected={async (mode) => {
             setConnectTarget(null);
             setRestoredOAuth(null);
+            if (mode === "HOSTED_MT5_PENDING") {
+              setNotice(
+                "MT5 DEMO provisioning requested. Verify the terminal heartbeat below before trading. Your phone and laptop are not required to stay on.",
+              );
+            }
             await load();
           }}
         />
@@ -614,9 +740,11 @@ function ConnectFlowModal({
   entry: BrokerRegistryEntry;
   restoredOAuthResult?: BrokerOAuthAccountsResult | null;
   onClose: () => void;
-  onConnected: () => Promise<void>;
+  onConnected: (mode?: "HOSTED_MT5_PENDING") => Promise<void>;
 }) {
   const isOAuthBroker = entry.authenticationType === "OAUTH";
+  const isHostedMt5 = entry.id === "direct-mt5";
+  const hostedAvailability = hostedMt5MobileAvailability(entry);
   const mobileReadiness = mobileConnectionReadiness(entry);
   const runtimeReady = mobileReadiness?.ready !== false;
   const fields = credentialFields(entry.authenticationType);
@@ -635,6 +763,12 @@ function ConnectFlowModal({
   const [accountId, setAccountId] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [serverUrl, setServerUrl] = useState("");
+  const [hostedServer, setHostedServer] = useState("");
+  const [hostedPassword, setHostedPassword] = useState("");
+  const [hostedDisplayName, setHostedDisplayName] = useState("");
+  // If the account was saved but provisioning failed, retry its existing
+  // owner-bound ID rather than creating duplicate broker credentials.
+  const [hostedPendingId, setHostedPendingId] = useState<string | null>(null);
   const [busy, setBusy] = useState<"test" | "create" | "connect" | null>(null);
   const [feedback, setFeedback] = useState<{
     ok: boolean;
@@ -664,6 +798,7 @@ function ConnectFlowModal({
   >(restoredOAuthResult?.accounts ?? null);
 
   const closeFlow = useCallback(() => {
+    setHostedPassword("");
     if (isOAuthBroker) {
       void clearPendingBrokerOAuth();
     }
@@ -816,6 +951,55 @@ function ConnectFlowModal({
     [oauthFlowId, onConnected],
   );
 
+  const submitHostedMt5 = async () => {
+    if (busy || !hostedAvailability.ready || !isHostedMt5) return;
+    const requestOrError = hostedPendingId
+      ? null
+      : buildHostedMt5MobileRequest(entry, {
+          accountLogin: accountId,
+          brokerServer: hostedServer,
+          tradingPassword: hostedPassword,
+          displayName: hostedDisplayName,
+        });
+    if (requestOrError && "error" in requestOrError) {
+      setFeedback({ ok: false, message: requestOrError.error });
+      return;
+    }
+    setFeedback(null);
+    let connectionId = hostedPendingId;
+    try {
+      if (!connectionId && requestOrError) {
+        setBusy("create");
+        const created = await api.createBrokerConnection(requestOrError);
+        connectionId = created.id;
+        setHostedPendingId(connectionId);
+        // The password is passed only through the authenticated HTTPS
+        // creation call, then wiped from native form state. Never log it.
+        setHostedPassword("");
+      }
+      if (!connectionId) throw new Error("MT5 account was not saved");
+      setBusy("connect");
+      await api.provisionHostedMt5(connectionId);
+      setFeedback({
+        ok: true,
+        message: "Hosted MT5 DEMO provisioning requested. Trading is not enabled until the broker heartbeat is verified.",
+      });
+      await onConnected("HOSTED_MT5_PENDING");
+    } catch {
+      // The POST may have saved an owner-bound broker connection already.
+      // Retry provisioning using its exact ID; never assume trade success.
+      setHostedPassword("");
+      setFeedback({
+        ok: false,
+        message: connectionId
+          ? "MT5 details were saved, but the hosted terminal is not ready. Retry provisioning or check terminal status."
+          : "MT5 account could not be saved. Check the worker status and broker details.",
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const submit = async () => {
     const requestOrError = buildConnectionRequest(
       entry,
@@ -880,7 +1064,136 @@ function ConnectFlowModal({
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <Text style={styles.title}>Connect {entry.name}</Text>
 
-          {isOAuthBroker ? (
+          {isHostedMt5 ? (
+            <View>
+              <View style={styles.hostedStatusCard}>
+                <Text style={styles.hostedStatusTitle}>
+                  iRexPro hosted MT5 — DEMO
+                </Text>
+                <Text style={styles.muted}>
+                  Connect using only your phone. An isolated MT5 terminal
+                  runs on iRexPro-owned Windows infrastructure; the MT5
+                  mobile app itself does not run trading robots.
+                </Text>
+                <Text style={hostedAvailability.ready ? styles.successText : styles.errorText}>
+                  {hostedAvailability.message}
+                </Text>
+                <Text style={styles.mutedSmall}>
+                  LIVE trading is unavailable until the hosted-worker and
+                  broker certification checks are complete.
+                </Text>
+              </View>
+
+              {hostedAvailability.ready ? (
+                <>
+                  <Text style={styles.label}>MT5 account login</Text>
+                  <TextInput
+                    accessibilityLabel="Numeric MetaTrader 5 account login"
+                    style={styles.input}
+                    value={accountId}
+                    onChangeText={setAccountId}
+                    keyboardType="number-pad"
+                    autoCorrect={false}
+                    maxLength={20}
+                    placeholder="Account login number"
+                    placeholderTextColor={palette.muted}
+                    editable={!hostedPendingId && busy === null}
+                  />
+
+                  <Text style={styles.label}>Broker MT5 server</Text>
+                  <TextInput
+                    accessibilityLabel="Exact MetaTrader 5 broker server"
+                    style={styles.input}
+                    value={hostedServer}
+                    onChangeText={setHostedServer}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    maxLength={255}
+                    placeholder="e.g. Broker-MT5-Demo"
+                    placeholderTextColor={palette.muted}
+                    editable={!hostedPendingId && busy === null}
+                  />
+
+                  <Text style={styles.label}>MT5 trading password</Text>
+                  {hostedPendingId ? (
+                    <Text style={styles.muted}>
+                      Credentials are saved encrypted on the server. You
+                      can retry provisioning without entering them again.
+                    </Text>
+                  ) : (
+                    <TextInput
+                      accessibilityLabel="MetaTrader 5 trading password"
+                      style={styles.input}
+                      value={hostedPassword}
+                      onChangeText={setHostedPassword}
+                      secureTextEntry
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      autoComplete="off"
+                      placeholder="Trading password — not investor password"
+                      placeholderTextColor={palette.muted}
+                      editable={busy === null}
+                    />
+                  )}
+                  <Text style={styles.mutedSmall}>
+                    The investor password provides read-only access and
+                    cannot authorize trades. Your trading password is
+                    transmitted only over the authenticated API connection.
+                  </Text>
+                  <Text style={styles.label}>Display name (optional)</Text>
+                  <TextInput
+                    accessibilityLabel="Hosted MetaTrader 5 account display name"
+                    style={styles.input}
+                    value={hostedDisplayName}
+                    onChangeText={setHostedDisplayName}
+                    maxLength={100}
+                    autoCorrect={false}
+                    editable={!hostedPendingId && busy === null}
+                    placeholder="My MT5 demo"
+                    placeholderTextColor={palette.muted}
+                  />
+                  {feedback ? (
+                    <Text style={feedback.ok ? styles.successText : styles.errorText}
+                      accessibilityLiveRegion="polite">
+                      {feedback.message}
+                    </Text>
+                  ) : null}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={hostedPendingId
+                      ? "Retry provisioning existing hosted MT5 demo"
+                      : "Connect MetaTrader 5 demo on iRexPro servers"}
+                    style={[styles.primaryButton, busy ? styles.buttonDisabled : null]}
+                    disabled={busy !== null}
+                    onPress={() => void submitHostedMt5()}
+                  >
+                    {busy ? (
+                      <ActivityIndicator color="#ffffff" />
+                    ) : (
+                      <Text style={styles.primaryButtonText}>
+                        {hostedPendingId ? "Retry hosted provisioning" : "Connect hosted MT5 DEMO"}
+                      </Text>
+                    )}
+                  </Pressable>
+                </>
+              ) : (
+                <Text style={styles.sectionHint}>
+                  No personal computer is required once the iRexPro
+                  execution worker is available. The connection cannot be
+                  activated until the server verifies a healthy worker.
+                </Text>
+              )}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Cancel hosted MT5 setup"
+                style={styles.secondaryButton}
+                disabled={busy !== null}
+                onPress={closeFlow}
+              >
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
+              </Pressable>
+            </View>
+          ) : isOAuthBroker ? (
             /* ── cTrader OAuth connection flow (architect finding 4):
              * external consent on a SERVER-assigned HTTPS callback +
              * server-side code exchange + one-time handoff token deep link
@@ -1311,6 +1624,31 @@ const styles = StyleSheet.create({
   },
   dangerButtonText: { color: palette.danger.text, fontSize: 13, fontWeight: "900" },
   buttonDisabled: { opacity: 0.6 },
+  hostedStatusCard: {
+    minWidth: 0,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: palette.inputBorder,
+    backgroundColor: palette.input,
+    gap: 6,
+    marginVertical: 10,
+  },
+  hostedStatusTitle: {
+    color: palette.text,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: "800",
+  },
+  hostedRefreshButton: {
+    minHeight: 44,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: palette.inputBorder,
+    marginTop: 5,
+  },
   // ── cTrader OAuth flow (Sprint 56 correction round 1 / audit point 6) ──
   sectionHint: { color: palette.muted, fontSize: 13, lineHeight: 19, marginBottom: 12 },
   mutedText: { color: palette.helper, fontSize: 12, marginTop: 2 },
