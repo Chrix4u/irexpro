@@ -293,6 +293,11 @@ run_rollback() {
 bash -n "$SCRIPT_DIR/deploy-staging.sh"
 bash -n "$SCRIPT_DIR/rollback-staging.sh"
 node "$SCRIPT_DIR/staging-quiescence.cjs" --self-test
+# Candidate release code is piped to node stdin, not invoked by filename.
+# This must execute the guard entry point in that exact runtime form.
+stdin_guard_output="$(node - --self-test < "$SCRIPT_DIR/staging-quiescence.cjs")"
+[[ "$stdin_guard_output" == *'staging-quiescence self-test OK'* ]] ||
+  fail 'Staging guard stdin entrypoint was skipped.'
 
 expect_failure 'Usage:' bash "$SCRIPT_DIR/deploy-staging.sh"
 expect_failure 'full lowercase commit SHA' bash "$SCRIPT_DIR/deploy-staging.sh" main
