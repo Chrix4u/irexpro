@@ -96,7 +96,10 @@ async function main() {
   }
 }
 
-if (require.main === module) {
+// Deployment boots candidate source via git show piped to node stdin.
+// In Node stdin mode require.main is undefined; testing only that flag
+// would silently SKIP the guard. Importers must not execute it.
+if (require.main === module || (module.id === '[stdin]' && process.argv[1] === '-')) {
   void main();
 }
 module.exports = { classify, readCounts };
