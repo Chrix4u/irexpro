@@ -8,6 +8,7 @@ from irexpro_mt5_connector.host_worker import (
     HostWorkerApi,
     HostWorkerApiError,
     HostWorkerConfig,
+    host_worker_runtime_ready,
     HostedAssignment,
     HostedMt5WorkerSupervisor,
     InMemorySecretStore,
@@ -293,6 +294,98 @@ class FakeWorkerApi:
 
     def heartbeat_assignment(self, connector_id, error_code=None):
         self.heartbeats.append((connector_id, error_code))
+
+
+
+def test_runtime_gate_requires_clean_terminal_and_writable_session_root(tmp_path: Path):
+    template = tmp_path / "broker-template"
+    template.mkdir()
+    config = HostWorkerConfig(
+        server_url="https://api.example.test/api/v1",
+        worker_id="worker-accra-1",
+        worker_token="w" * 32,
+        mt5_template_dir=template,
+        session_root=tmp_path / "sessions",
+    )
+
+    assert host_worker_runtime_ready(config) is False
+    (template / "terminal64.exe").write_bytes(b"broker-clean-terminal")
+    assert host_worker_runtime_ready(config) is True
+    assert config.session_root.is_dir()
+    # The health gate leaves no credentials or lingering readiness files.
+    assert list(config.session_root.iterdir()) == []
+    (template / "terminal64.exe").unlink()
+    assert host_worker_runtime_ready(config) is False
+
+
+def test_worker_reports_runtime_failure_and_recovers_without_killing_active_sessions(
+    tmp_path: Path,
+):
+    template = tmp_path / "template"
+    template.mkdir()
+    terminal = template / "terminal64.exe"
+    terminal.write_bytes(b"broker-terminal")
+    fake_api = FakeWorkerApi([
+        assignment(),
+        None,
+        HostedAssignment.from_payload({
+            **assignment_dict(),
+            "connectorId": "connector-2",
+            "brokerConnectionId": "connection-2",
+            "accountLogin": "23456789",
+            "brokerServer": "Other-Broker-Demo",
+        }),
+        None,
+    ])
+    children = []
+    clock = [100.0]
+
+    def launcher(_spec):
+        child = FakeChild()
+        children.append(child)
+        return child
+
+    config = HostWorkerConfig(
+        server_url="https://api.example.test/api/v1",
+        worker_id="worker-accra-1",
+        worker_token="w" * 32,
+        mt5_template_dir=template,
+        session_root=tmp_path / "sessions",
+        max_sessions=2,
+        heartbeat_seconds=60,
+    )
+    supervisor = HostedMt5WorkerSupervisor(
+        config, api=fake_api, launcher=launcher, monotonic=lambda: clock[0],
+    )
+
+    supervisor.tick()
+    assert fake_api.presences[-1]["runtime_ready"] is True
+    assert fake_api.lease_calls == 2
+    assert supervisor.active_connector_ids == ("connector-1",)
+
+    terminal.unlink()
+    clock[0] += 1.0
+    supervisor.tick()
+    # Report unavailable immediately even though the normal presence
+    # heartbeat interval is 60 s. Do not claim available capacity.
+    assert fake_api.presences[-1]["runtime_ready"] is False
+    assert fake_api.lease_calls == 2
+    assert supervisor.active_connector_ids == ("connector-1",)
+    assert children[0].terminated is False
+
+    terminal.write_bytes(b"restored-broker-terminal")
+    clock[0] += 1.0
+    supervisor.tick()
+    assert fake_api.presences[-1]["runtime_ready"] is True
+    assert supervisor.active_connector_ids == ("connector-1", "connector-2")
+    # Capacity is full at 2 children; no extra lease for a third.
+    assert fake_api.lease_calls == 3
+    assert len(children) == 2
+    # Two different brokers stay isolated in separate directories.
+    assert (config.session_root / "connector-1" / "terminal64.exe").is_file()
+    assert (config.session_root / "connector-2" / "terminal64.exe").is_file()
+    assert children[0].terminated is False
+    supervisor.shutdown()
 
 
 def test_supervisor_reports_presence_even_with_zero_assignments(tmp_path: Path):
