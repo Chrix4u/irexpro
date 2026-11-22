@@ -307,6 +307,80 @@ describe('BrokerService', () => {
       expect(result.id).toBe('conn-new');
     });
 
+    it('links an OAuth-discovered cTrader LIVE account without ever enabling LIVE orders', async () => {
+      const providerRegistry = module.get(BrokerProviderRegistryService);
+      jest.spyOn(providerRegistry, 'isProductionLiveEligible').mockReturnValue(false);
+      registry.getAdapter.mockReturnValue({ brokerName: 'cTrader' });
+      connectionRepo.create.mockImplementation((input) => input);
+      connectionRepo.save.mockImplementation(async (input) => ({ id: 'saved-live', ...input }));
+      const dto = {
+        brokerId: 'pepperstone-ctrader',
+        accountType: BrokerMode.LIVE,
+        accountId: '70010001',
+        apiKey: 'server-only-oauth-access-token',
+        additionalParams: { refreshToken: 'server-only-refresh-token' },
+      };
+      const derived: BrokerConnectionServerDerived = {
+        flowId: 'server-oauth-flow-id',
+        logicalAccountKey: 'pepperstone-ctrader|pepperstone|70010001',
+        providerBrokerIdentity: 'pepperstone',
+        oauthDiscoveredLiveLinkOnly: true,
+      };
+
+      const linked = await service.createConnection(dto as any, 'user-1', undefined, derived);
+
+      expect(linked.accountType).toBe(BrokerMode.LIVE);
+      expect(connectionRepo.create).toHaveBeenCalledWith(expect.objectContaining({
+        accountType: BrokerMode.LIVE,
+        status: BrokerConnectionStatus.DISCONNECTED,
+        authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
+        liveTradingEnabled: false,
+        credentialStatus: BrokerCredentialStatus.CREATED,
+        logicalAccountKey: derived.logicalAccountKey,
+      }));
+      expect(encryption.encrypt).toHaveBeenCalledWith(expect.objectContaining({
+        apiKey: dto.apiKey,
+        accountId: dto.accountId,
+      }));
+      expect(linkOutbox.enqueueWithinTransaction).toHaveBeenCalledTimes(1);
+      // Even a linked, saved, funded LIVE account cannot enable execution
+      // while the operator's provider certification remains UNVERIFIED.
+      connectionRepo.findOne.mockResolvedValue({
+        ...linked,
+        userId: 'user-1',
+        authorizationStatus: BrokerAuthorizationStatus.CONNECTED,
+      });
+      await expect(service.enableLiveTrading('saved-live', 'user-1'))
+        .rejects.toThrow(ForbiddenException);
+      expect(connectionRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects unverified manual or forged LIVE creation and other broker routes', async () => {
+      const providerRegistry = module.get(BrokerProviderRegistryService);
+      jest.spyOn(providerRegistry, 'isProductionLiveEligible').mockReturnValue(false);
+      const live = {
+        brokerId: 'pepperstone-ctrader',
+        accountType: BrokerMode.LIVE,
+        accountId: '70010001',
+        apiKey: 'untrusted-client-token',
+        additionalParams: { oauthDiscoveredLiveLinkOnly: true },
+      };
+      await expect(service.createConnection(live as any, 'user-1'))
+        .rejects.toThrow(ForbiddenException);
+      await expect(service.createConnection(live as any, 'user-1', undefined, {
+        oauthDiscoveredLiveLinkOnly: true,
+      })).rejects.toThrow(ForbiddenException);
+      await expect(service.createConnection({
+        ...live,
+        brokerId: 'oanda',
+      } as any, 'user-1', undefined, {
+        oauthDiscoveredLiveLinkOnly: true,
+        flowId: 'server-flow',
+        logicalAccountKey: 'oanda|oanda|70010001',
+      })).rejects.toThrow(ForbiddenException);
+      expect(connectionRepo.save).not.toHaveBeenCalled();
+    });
+
     it('persists the DERIVED logical account key at INSERT time (manual connects are idempotency-protected, #332)', async () => {
       const dto = {
         brokerId: 'metatrader5',

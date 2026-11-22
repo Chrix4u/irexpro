@@ -672,6 +672,7 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       expect(serverDerived.providerBrokerIdentity).toBe('spotware');
       expect(serverDerived.logicalAccountKey).toBe('ctrader|spotware|1234567');
       expect(serverDerived.flowId).toBe(flowId);
+      expect(serverDerived.oauthDiscoveredLiveLinkOnly).toBeUndefined();
       expect(serverDerived.linkAudit.payload.action).toBe(AuditAction.BROKER_OAUTH_ACCOUNT_LINKED);
       // Linked audit metadata: no tokens.
       expect(serverDerived.linkAudit.payload.metadata).toMatchObject({
@@ -689,7 +690,24 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       expect(linked).toBeUndefined();
     });
 
-    it('derives LIVE from the account flag and PROPAGATES the fail-closed LIVE rejection', async () => {
+    it('links provider-discovered LIVE accounts using an internal link-only permission', async () => {
+      brokerService.createConnection.mockResolvedValue({
+        ...linkedConnection, accountType: BrokerMode.LIVE,
+      });
+      const flowId = await authorizedFlowId();
+      const result = await service.linkAccount(USER, flowId, '7654321');
+
+      expect(result.accountType).toBe(BrokerMode.LIVE);
+      const dto: ConnectBrokerDto = brokerService.createConnection.mock.calls[0][0];
+      const derived = brokerService.createConnection.mock.calls[0][3];
+      expect(dto.accountType).toBe(BrokerMode.LIVE);
+      expect(dto.accountId).toBe('7654321');
+      expect(derived.flowId).toBe(flowId);
+      expect(derived.oauthDiscoveredLiveLinkOnly).toBe(true);
+      expect((await row(flowId))!.state).toBe('CONSUMED');
+    });
+
+    it('still propagates a provider rejection if LIVE linking fails', async () => {
       // The production-LIVE gate lives inside createConnection (unverified
       // brokers reject LIVE) — OAuth must NOT weaken it.
       brokerService.createConnection.mockRejectedValue(

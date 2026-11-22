@@ -99,6 +99,10 @@ export interface BrokerConnectionServerDerived {
   logicalAccountKey?: string | null;
   /** Round 5 (#332): originating OAuth flow (outbox traceability only). */
   flowId?: string | null;
+  /** Internal cTrader OAuth live linkage; never accepted from client DTOs.
+   * LINKING ONLY: it grants no authority to trade real money.
+   */
+  oauthDiscoveredLiveLinkOnly?: true;
   /**
    * Round 5 (#332): the OAuth ACCOUNT_LINKED audit entry committed
    * ATOMICALLY with the connection (durable-truth audit — delivered by the
@@ -296,12 +300,25 @@ export class BrokerService {
       );
     }
 
+    // Link only a server-discovered cTrader OAuth LIVE account before
+    // execution certification; no real-money trading authority is granted.
+    // Public ConnectBrokerDto has no route to set this internal capability.
+    const oauthLiveLinkOnly =
+      dto.accountType === BrokerMode.LIVE &&
+      CTRADER_FAMILY_BROKER_IDS.includes(dto.brokerId) &&
+      serverDerived?.oauthDiscoveredLiveLinkOnly === true &&
+      typeof serverDerived.flowId === 'string' &&
+      serverDerived.flowId.length > 0 &&
+      typeof serverDerived.logicalAccountKey === 'string' &&
+      serverDerived.logicalAccountKey.length > 0;
+
     // Phase H (architect): production-LIVE eligibility fails closed —
     // implementation status (BETA) and adapter availability are NOT
     // production-LIVE approval. LIVE connections require VERIFIED
     // operator evidence; UNVERIFIED providers are DEMO-only.
     if (
       dto.accountType === BrokerMode.LIVE &&
+      !oauthLiveLinkOnly &&
       !this.providerRegistry.isProductionLiveEligible(dto.brokerId)
     ) {
       throw new ForbiddenException(
@@ -320,7 +337,11 @@ export class BrokerService {
     // never applies. (Today every cTrader-family entry is UNVERIFIED, so
     // this gate is redundantly fail-closed — the model exists so a future
     // VERIFIED flip can never leak authorization across identities.)
-    if (dto.accountType === BrokerMode.LIVE && CTRADER_FAMILY_BROKER_IDS.includes(dto.brokerId)) {
+    if (
+      dto.accountType === BrokerMode.LIVE &&
+      !oauthLiveLinkOnly &&
+      CTRADER_FAMILY_BROKER_IDS.includes(dto.brokerId)
+    ) {
       const connectionIdentity = serverDerived?.providerBrokerIdentity ?? null;
       const evidence = this.ctraderFamilyLiveEvidence();
       if (
@@ -380,6 +401,8 @@ export class BrokerService {
       status: BrokerConnectionStatus.DISCONNECTED,
       authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
       credentialStatus: BrokerCredentialStatus.CREATED,
+      // A newly linked account can never execute orders automatically.
+      liveTradingEnabled: false,
       encryptedCredentials: encrypted.ciphertext,
       credentialIv: encrypted.iv,
       credentialTag: encrypted.tag,

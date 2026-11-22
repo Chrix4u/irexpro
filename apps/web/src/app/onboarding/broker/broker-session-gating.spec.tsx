@@ -124,6 +124,41 @@ describe('broker auth restoration gating', () => {
     expect(sessionStorage.getItem(IREXPRO_BROKER_OAUTH_FLOW_KEY)).toBe('flow-1');
   });
 
+  it('requires explicit selection to LINK a LIVE account without claiming trading approval', async () => {
+    authState.user = { id: 'user-1' };
+    authState.restoring = false;
+    sessionStorage.setItem(IREXPRO_BROKER_OAUTH_FLOW_KEY, 'flow-live');
+    completeBrokerOAuth.mockResolvedValue({
+      flowId: 'flow-live',
+      accounts: [{
+        ctidTraderAccountId: '7654321',
+        isLive: true,
+        traderLogin: 7009,
+        brokerTitleShort: 'Pepperstone',
+      }],
+    });
+    linkBrokerOAuth.mockResolvedValue({
+      brokerName: 'Pepperstone',
+      accountId: '7654321',
+      accountType: 'LIVE',
+    });
+
+    render(<BrokerOAuthCallbackClient code="live-authorization-code" />);
+
+    await screen.findByText('LIVE — orders disabled');
+    expect(linkBrokerOAuth).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Link LIVE (no trading)' }));
+
+    await waitFor(() => {
+      expect(linkBrokerOAuth).toHaveBeenCalledWith({
+        flowId: 'flow-live',
+        ctidTraderAccountId: '7654321',
+        displayName: 'Pepperstone LIVE 7654321',
+      });
+    });
+    expect(await screen.findByText(/Real-money AI trading stays disabled/)).not.toBeNull();
+  });
+
   it('automatically links the only discovered DEMO account after authorization', async () => {
     authState.user = { id: 'user-1' };
     authState.restoring = false;
