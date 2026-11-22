@@ -604,6 +604,42 @@ def test_worker_instance_lock_fails_fast_when_same_windows_worker_is_already_run
     assert (tmp_path / ".worker-accra-1.lock").exists()
 
 
+def test_real_windows_session_lock_blocks_a_second_process(tmp_path: Path):
+    """Exercise actual Windows msvcrt locking, not just a fake lock."""
+    import subprocess
+    import sys
+
+    if sys.platform != "win32":
+        pytest.skip("Windows-only real OS file-lock test")
+
+    child_script = (
+        "import sys\n"
+        "from irexpro_mt5_connector.host_worker import WorkerInstanceLock\n"
+        "lock = WorkerInstanceLock(sys.argv[1], 'session-connector-1')\n"
+        "try:\n"
+        "    lock.acquire()\n"
+        "except RuntimeError:\n"
+        "    raise SystemExit(17)\n"
+        "else:\n"
+        "    lock.release()\n"
+        "    raise SystemExit(0)\n"
+    )
+    # A second process must be refused while the original connector lives.
+    with WorkerInstanceLock(tmp_path, "session-connector-1"):
+        blocked = subprocess.run(
+            [sys.executable, "-c", child_script, str(tmp_path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        assert blocked.returncode == 17
+
+    # Exiting normally releases the OS lock, permitting safe recovery.
+    allowed = subprocess.run(
+        [sys.executable, "-c", child_script, str(tmp_path)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert allowed.returncode == 0
+
+
 def test_worker_main_holds_single_instance_lock_for_supervisor_lifetime(tmp_path: Path, monkeypatch):
     from irexpro_mt5_connector import host_worker
 
