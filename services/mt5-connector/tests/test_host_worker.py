@@ -8,6 +8,7 @@ from irexpro_mt5_connector.host_worker import (
     HostWorkerApi,
     HostWorkerApiError,
     HostWorkerConfig,
+    host_worker_runtime_ready,
     HostedAssignment,
     HostedMt5WorkerSupervisor,
     InMemorySecretStore,
@@ -295,6 +296,98 @@ class FakeWorkerApi:
         self.heartbeats.append((connector_id, error_code))
 
 
+
+def test_runtime_gate_requires_clean_terminal_and_writable_session_root(tmp_path: Path):
+    template = tmp_path / "broker-template"
+    template.mkdir()
+    config = HostWorkerConfig(
+        server_url="https://api.example.test/api/v1",
+        worker_id="worker-accra-1",
+        worker_token="w" * 32,
+        mt5_template_dir=template,
+        session_root=tmp_path / "sessions",
+    )
+
+    assert host_worker_runtime_ready(config) is False
+    (template / "terminal64.exe").write_bytes(b"broker-clean-terminal")
+    assert host_worker_runtime_ready(config) is True
+    assert config.session_root.is_dir()
+    # The health gate leaves no credentials or lingering readiness files.
+    assert list(config.session_root.iterdir()) == []
+    (template / "terminal64.exe").unlink()
+    assert host_worker_runtime_ready(config) is False
+
+
+def test_worker_reports_runtime_failure_and_recovers_without_killing_active_sessions(
+    tmp_path: Path,
+):
+    template = tmp_path / "template"
+    template.mkdir()
+    terminal = template / "terminal64.exe"
+    terminal.write_bytes(b"broker-terminal")
+    fake_api = FakeWorkerApi([
+        assignment(),
+        None,
+        HostedAssignment.from_payload({
+            **assignment_dict(),
+            "connectorId": "connector-2",
+            "brokerConnectionId": "connection-2",
+            "accountLogin": "23456789",
+            "brokerServer": "Other-Broker-Demo",
+        }),
+        None,
+    ])
+    children = []
+    clock = [100.0]
+
+    def launcher(_spec):
+        child = FakeChild()
+        children.append(child)
+        return child
+
+    config = HostWorkerConfig(
+        server_url="https://api.example.test/api/v1",
+        worker_id="worker-accra-1",
+        worker_token="w" * 32,
+        mt5_template_dir=template,
+        session_root=tmp_path / "sessions",
+        max_sessions=2,
+        heartbeat_seconds=60,
+    )
+    supervisor = HostedMt5WorkerSupervisor(
+        config, api=fake_api, launcher=launcher, monotonic=lambda: clock[0],
+    )
+
+    supervisor.tick()
+    assert fake_api.presences[-1]["runtime_ready"] is True
+    assert fake_api.lease_calls == 2
+    assert supervisor.active_connector_ids == ("connector-1",)
+
+    terminal.unlink()
+    clock[0] += 1.0
+    supervisor.tick()
+    # Report unavailable immediately even though the normal presence
+    # heartbeat interval is 60 s. Do not claim available capacity.
+    assert fake_api.presences[-1]["runtime_ready"] is False
+    assert fake_api.lease_calls == 2
+    assert supervisor.active_connector_ids == ("connector-1",)
+    assert children[0].terminated is False
+
+    terminal.write_bytes(b"restored-broker-terminal")
+    clock[0] += 1.0
+    supervisor.tick()
+    assert fake_api.presences[-1]["runtime_ready"] is True
+    assert supervisor.active_connector_ids == ("connector-1", "connector-2")
+    # Capacity is full at 2 children; no extra lease for a third.
+    assert fake_api.lease_calls == 3
+    assert len(children) == 2
+    # Two different brokers stay isolated in separate directories.
+    assert (config.session_root / "connector-1" / "terminal64.exe").is_file()
+    assert (config.session_root / "connector-2" / "terminal64.exe").is_file()
+    assert children[0].terminated is False
+    supervisor.shutdown()
+
+
 def test_supervisor_reports_presence_even_with_zero_assignments(tmp_path: Path):
     template = tmp_path / "template"
     template.mkdir()
@@ -511,6 +604,42 @@ def test_worker_instance_lock_fails_fast_when_same_windows_worker_is_already_run
     assert (tmp_path / ".worker-accra-1.lock").exists()
 
 
+def test_real_windows_session_lock_blocks_a_second_process(tmp_path: Path):
+    """Exercise actual Windows msvcrt locking, not just a fake lock."""
+    import subprocess
+    import sys
+
+    if sys.platform != "win32":
+        pytest.skip("Windows-only real OS file-lock test")
+
+    child_script = (
+        "import sys\n"
+        "from irexpro_mt5_connector.host_worker import WorkerInstanceLock\n"
+        "lock = WorkerInstanceLock(sys.argv[1], 'session-connector-1')\n"
+        "try:\n"
+        "    lock.acquire()\n"
+        "except RuntimeError:\n"
+        "    raise SystemExit(17)\n"
+        "else:\n"
+        "    lock.release()\n"
+        "    raise SystemExit(0)\n"
+    )
+    # A second process must be refused while the original connector lives.
+    with WorkerInstanceLock(tmp_path, "session-connector-1"):
+        blocked = subprocess.run(
+            [sys.executable, "-c", child_script, str(tmp_path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        assert blocked.returncode == 17
+
+    # Exiting normally releases the OS lock, permitting safe recovery.
+    allowed = subprocess.run(
+        [sys.executable, "-c", child_script, str(tmp_path)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert allowed.returncode == 0
+
+
 def test_worker_main_holds_single_instance_lock_for_supervisor_lifetime(tmp_path: Path, monkeypatch):
     from irexpro_mt5_connector import host_worker
 
@@ -567,6 +696,22 @@ def test_session_child_writes_only_non_secret_connector_config_and_keeps_credent
     session_dir.mkdir()
     terminal_path.write_bytes(b"fixture-terminal")
     captured = {}
+    lock_events = []
+
+    class FakeChildLock:
+        def __init__(self, lock_root, lock_name):
+            assert Path(lock_root) == session_dir
+            assert lock_name == "session-connector-1"
+            lock_events.append("constructed")
+
+        def __enter__(self):
+            lock_events.append("acquired")
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            lock_events.append("released")
+
+    monkeypatch.setattr(host_worker, "WorkerInstanceLock", FakeChildLock)
 
     def fake_run_connector(**kwargs):
         from irexpro_mt5_connector.config import ConnectorSettings
@@ -582,6 +727,7 @@ def test_session_child_writes_only_non_secret_connector_config_and_keeps_credent
         return 0
 
     def fake_supervised(**kwargs):
+        assert lock_events == ["constructed", "acquired"]
         return kwargs["runner"](
             config_path=kwargs["config_path"],
             journal_path=kwargs["journal_path"],
@@ -599,6 +745,7 @@ def test_session_child_writes_only_non_secret_connector_config_and_keeps_credent
         assignment_payload=assignment_dict(),
     ) == 0
 
+    assert lock_events == ["constructed", "acquired", "released"]
     raw_config = (session_dir / "connector.json").read_text(encoding="utf-8")
     assert "mt5-password-secret" not in raw_config
     assert "connector-token-secret" not in raw_config
@@ -608,6 +755,52 @@ def test_session_child_writes_only_non_secret_connector_config_and_keeps_credent
     assert captured["terminal_server"] == "Broker-Demo"
     assert captured["portable"] is True
     assert captured["settings"].account_type == "DEMO"
+
+
+def test_hosted_session_child_refuses_duplicate_before_touching_config_or_journal(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from irexpro_mt5_connector import host_worker
+
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    terminal_path = session_dir / "terminal64.exe"
+    terminal_path.write_bytes(b"unmodified-terminal")
+    existing_config = session_dir / "connector.json"
+    existing_config.write_text("existing-running-session-config", encoding="utf-8")
+    existing_journal = session_dir / "journal.sqlite3"
+    existing_journal.write_bytes(b"existing-session-journal")
+
+    class DuplicateSessionLock:
+        def __init__(self, root, name):
+            assert Path(root) == session_dir
+            assert name == "session-connector-1"
+
+        def __enter__(self):
+            raise RuntimeError("Hosted MT5 session already running")
+
+        def __exit__(self, exc_type, exc, traceback):
+            raise AssertionError("Unacquired lock should never be released")
+
+    monkeypatch.setattr(host_worker, "WorkerInstanceLock", DuplicateSessionLock)
+    monkeypatch.setattr(
+        host_worker,
+        "run_supervised_connector",
+        lambda **kwargs: pytest.fail("duplicate child must not start trading"),
+    )
+
+    with pytest.raises(RuntimeError, match="already running"):
+        run_session_child(
+            server_url="https://api.example.test/api/v1",
+            session_dir=session_dir,
+            terminal_path=terminal_path,
+            assignment_payload=assignment_dict(),
+        )
+
+    assert existing_config.read_text(encoding="utf-8") == "existing-running-session-config"
+    assert existing_journal.read_bytes() == b"existing-session-journal"
+    assert terminal_path.read_bytes() == b"unmodified-terminal"
 
 
 def test_worker_url_validation_allows_only_https_or_true_loopback_http(tmp_path: Path):

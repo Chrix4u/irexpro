@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -427,6 +428,33 @@ def build_session_child_spec(
     )
 
 
+def host_worker_runtime_ready(config: HostWorkerConfig) -> bool:
+    """Non-secret local health gate for *new* hosted MT5 assignments.
+
+    This checks only that the clean terminal template remains available and
+    the persistent session directory is writable. It does NOT claim a broker
+    is authenticated or authorize trading. No MT5 terminal is started and
+    no customer credential, order or journal is accessed.
+
+    On failure the supervisor leaves existing children alone, reports its
+    worker capacity unavailable, and declines NEW assignments.
+    """
+    try:
+        relative = _safe_relative_terminal_path(config.terminal_relative_path)
+        template = config.mt5_template_dir
+        if not template.is_dir() or not (template / relative).is_file():
+            return False
+        root = config.session_root
+        if root.is_symlink():
+            return False
+        root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryFile(dir=root):
+            pass
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 class ChildProcess(Protocol):
     def poll(self) -> int | None: ...
     def terminate(self) -> None: ...
@@ -474,6 +502,7 @@ class HostedMt5WorkerSupervisor:
         self.monotonic = monotonic
         self._active: dict[str, ActiveHostedSession] = {}
         self._last_presence_heartbeat: float | None = None
+        self._last_runtime_ready: bool | None = None
 
     @property
     def active_connector_ids(self) -> tuple[str, ...]:
@@ -481,6 +510,7 @@ class HostedMt5WorkerSupervisor:
 
     def tick(self) -> None:
         now = self.monotonic()
+        runtime_ready = host_worker_runtime_ready(self.config)
         self._reap_exited()
         for connector_id, active in list(self._active.items()):
             if now - active.last_worker_heartbeat >= self.config.heartbeat_seconds:
@@ -493,7 +523,7 @@ class HostedMt5WorkerSupervisor:
                     continue
                 active.last_worker_heartbeat = now
 
-        while len(self._active) < self.config.max_sessions:
+        while runtime_ready and len(self._active) < self.config.max_sessions:
             try:
                 assignment = self.api.lease_assignment()
             except (HostWorkerApiError, requests.RequestException):
@@ -507,18 +537,20 @@ class HostedMt5WorkerSupervisor:
 
         if (
             self._last_presence_heartbeat is None
+            or runtime_ready != self._last_runtime_ready
             or now - self._last_presence_heartbeat >= self.config.heartbeat_seconds
         ):
             try:
                 self.api.heartbeat_worker_presence(
                     worker_version=HOST_WORKER_VERSION,
-                    runtime_ready=True,
+                    runtime_ready=runtime_ready,
                     max_sessions=self.config.max_sessions,
                     active_sessions=len(self._active),
                 )
             except (HostWorkerApiError, requests.RequestException):
                 pass
             self._last_presence_heartbeat = now
+            self._last_runtime_ready = runtime_ready
 
     def _reap_exited(self) -> None:
         for connector_id, active in list(self._active.items()):
@@ -619,43 +651,50 @@ def run_session_child(
     broker_server = assignment.broker_server
     account_type = assignment.account_type
 
-    settings = ConnectorSettings(
-        server_url=server_url.rstrip("/"),
-        connector_id=connector_id,
-        broker_connection_id=assignment.broker_connection_id,
-        account_login=account_login,
-        broker_server=broker_server,
-        account_type=account_type,
-        terminal_path=str(Path(terminal_path)),
-        poll_seconds=1.0,
-        auto_start=False,
-        start_minimized=True,
-    )
-    settings.save(config_path)  # contains no password and no connector token
-    secret_store = InMemorySecretStore(connector_id, connector_token)
-    assignment.clear_secrets()
-
-    def terminal_factory(path: str | None):
-        return MetaQuotesMt5Terminal(
-            path,
-            login=account_login,
-            password=trading_password,
-            server=broker_server,
-            portable=True,
+    # The supervisor may crash while its session child survives. On restart,
+    # a new supervisor must NEVER open the same SQLite journal or MT5 terminal
+    # concurrently with that orphan. Windows byte-range locks release on
+    # process death and fence one exact hosted connector session.
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", connector_id):
+        raise HostWorkerApiError("Hosted MT5 session connector id is invalid")
+    with WorkerInstanceLock(directory, f"session-{connector_id}"):
+        settings = ConnectorSettings(
+            server_url=server_url.rstrip("/"),
+            connector_id=connector_id,
+            broker_connection_id=assignment.broker_connection_id,
+            account_login=account_login,
+            broker_server=broker_server,
+            account_type=account_type,
+            terminal_path=str(Path(terminal_path)),
+            poll_seconds=1.0,
+            auto_start=False,
+            start_minimized=True,
         )
+        settings.save(config_path)  # contains no password and no connector token
+        secret_store = InMemorySecretStore(connector_id, connector_token)
+        assignment.clear_secrets()
 
-    def hosted_runner(**kwargs):
-        return run_connector(
-            **kwargs,
-            terminal_factory=terminal_factory,
-            secret_store_factory=lambda: secret_store,
+        def terminal_factory(path: str | None):
+            return MetaQuotesMt5Terminal(
+                path,
+                login=account_login,
+                password=trading_password,
+                server=broker_server,
+                portable=True,
+            )
+
+        def hosted_runner(**kwargs):
+            return run_connector(
+                **kwargs,
+                terminal_factory=terminal_factory,
+                secret_store_factory=lambda: secret_store,
+            )
+
+        return run_supervised_connector(
+            config_path=config_path,
+            journal_path=journal_path,
+            runner=hosted_runner,
         )
-
-    return run_supervised_connector(
-        config_path=config_path,
-        journal_path=journal_path,
-        runner=hosted_runner,
-    )
 
 
 def validate_host_worker_runtime(platform_name: str | None = None) -> None:
@@ -806,9 +845,10 @@ def main(argv: list[str] | None = None) -> int:
         poll_seconds=args.poll_seconds,
         terminal_relative_path=args.terminal_relative_path,
     )
-    if not config.mt5_template_dir.is_dir():
-        raise RuntimeError("HOSTED_MT5_TEMPLATE_DIR must point to a clean MT5 template directory")
-    config.session_root.mkdir(parents=True, exist_ok=True)
+    if not host_worker_runtime_ready(config):
+        raise RuntimeError(
+            "Hosted MT5 worker local runtime is not ready (terminal template or session storage)"
+        )
     supervisor = HostedMt5WorkerSupervisor(config)
     with WorkerInstanceLock(config.session_root, config.worker_id):
         return supervisor.run_forever()
