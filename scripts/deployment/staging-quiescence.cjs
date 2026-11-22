@@ -45,13 +45,23 @@ async function readCounts() {
     // does not certify order history, and does not authorize LIVE execution.
     // Missing/stale/failed broker snapshots continue to HOLD deployments.
     const statement = `
-      WITH latest_provider AS (
-        SELECT DISTINCT ON (broker_connection_id)
-          broker_connection_id, status, completed_at,
-          provider_orders_seen, provider_positions_seen,
-          account_snapshot_compared, errors
-        FROM reconciliation.runs
-        ORDER BY broker_connection_id, created_at DESC
+      WITH pending_connections AS (
+        SELECT DISTINCT broker_connection_id
+        FROM trading.orders
+        WHERE status IN ('DISPATCH_COMMITTED','SUBMITTED','ACKNOWLEDGED',
+                         'PARTIALLY_FILLED','RECONCILIATION_PENDING')
+      ), latest_provider AS (
+        SELECT c.broker_connection_id, p.status, p.completed_at,
+          p.provider_orders_seen, p.provider_positions_seen,
+          p.account_snapshot_compared, p.errors
+        FROM pending_connections c
+        LEFT JOIN LATERAL (
+          SELECT r.status, r.completed_at, r.provider_orders_seen,
+            r.provider_positions_seen, r.account_snapshot_compared, r.errors
+          FROM reconciliation.runs r
+          WHERE r.broker_connection_id = c.broker_connection_id
+          ORDER BY r.created_at DESC LIMIT 1
+        ) p ON TRUE
       ), unconfirmed AS (
         SELECT o.status,
           (b.account_type = 'DEMO'
