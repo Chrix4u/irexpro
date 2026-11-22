@@ -651,43 +651,50 @@ def run_session_child(
     broker_server = assignment.broker_server
     account_type = assignment.account_type
 
-    settings = ConnectorSettings(
-        server_url=server_url.rstrip("/"),
-        connector_id=connector_id,
-        broker_connection_id=assignment.broker_connection_id,
-        account_login=account_login,
-        broker_server=broker_server,
-        account_type=account_type,
-        terminal_path=str(Path(terminal_path)),
-        poll_seconds=1.0,
-        auto_start=False,
-        start_minimized=True,
-    )
-    settings.save(config_path)  # contains no password and no connector token
-    secret_store = InMemorySecretStore(connector_id, connector_token)
-    assignment.clear_secrets()
-
-    def terminal_factory(path: str | None):
-        return MetaQuotesMt5Terminal(
-            path,
-            login=account_login,
-            password=trading_password,
-            server=broker_server,
-            portable=True,
+    # The supervisor may crash while its session child survives. On restart,
+    # a new supervisor must NEVER open the same SQLite journal or MT5 terminal
+    # concurrently with that orphan. Windows byte-range locks release on
+    # process death and fence one exact hosted connector session.
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", connector_id):
+        raise HostWorkerApiError("Hosted MT5 session connector id is invalid")
+    with WorkerInstanceLock(directory, f"session-{connector_id}"):
+        settings = ConnectorSettings(
+            server_url=server_url.rstrip("/"),
+            connector_id=connector_id,
+            broker_connection_id=assignment.broker_connection_id,
+            account_login=account_login,
+            broker_server=broker_server,
+            account_type=account_type,
+            terminal_path=str(Path(terminal_path)),
+            poll_seconds=1.0,
+            auto_start=False,
+            start_minimized=True,
         )
+        settings.save(config_path)  # contains no password and no connector token
+        secret_store = InMemorySecretStore(connector_id, connector_token)
+        assignment.clear_secrets()
 
-    def hosted_runner(**kwargs):
-        return run_connector(
-            **kwargs,
-            terminal_factory=terminal_factory,
-            secret_store_factory=lambda: secret_store,
+        def terminal_factory(path: str | None):
+            return MetaQuotesMt5Terminal(
+                path,
+                login=account_login,
+                password=trading_password,
+                server=broker_server,
+                portable=True,
+            )
+
+        def hosted_runner(**kwargs):
+            return run_connector(
+                **kwargs,
+                terminal_factory=terminal_factory,
+                secret_store_factory=lambda: secret_store,
+            )
+
+        return run_supervised_connector(
+            config_path=config_path,
+            journal_path=journal_path,
+            runner=hosted_runner,
         )
-
-    return run_supervised_connector(
-        config_path=config_path,
-        journal_path=journal_path,
-        runner=hosted_runner,
-    )
 
 
 def validate_host_worker_runtime(platform_name: str | None = None) -> None:

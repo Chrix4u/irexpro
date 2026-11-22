@@ -660,6 +660,22 @@ def test_session_child_writes_only_non_secret_connector_config_and_keeps_credent
     session_dir.mkdir()
     terminal_path.write_bytes(b"fixture-terminal")
     captured = {}
+    lock_events = []
+
+    class FakeChildLock:
+        def __init__(self, lock_root, lock_name):
+            assert Path(lock_root) == session_dir
+            assert lock_name == "session-connector-1"
+            lock_events.append("constructed")
+
+        def __enter__(self):
+            lock_events.append("acquired")
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            lock_events.append("released")
+
+    monkeypatch.setattr(host_worker, "WorkerInstanceLock", FakeChildLock)
 
     def fake_run_connector(**kwargs):
         from irexpro_mt5_connector.config import ConnectorSettings
@@ -675,6 +691,7 @@ def test_session_child_writes_only_non_secret_connector_config_and_keeps_credent
         return 0
 
     def fake_supervised(**kwargs):
+        assert lock_events == ["constructed", "acquired"]
         return kwargs["runner"](
             config_path=kwargs["config_path"],
             journal_path=kwargs["journal_path"],
@@ -692,6 +709,7 @@ def test_session_child_writes_only_non_secret_connector_config_and_keeps_credent
         assignment_payload=assignment_dict(),
     ) == 0
 
+    assert lock_events == ["constructed", "acquired", "released"]
     raw_config = (session_dir / "connector.json").read_text(encoding="utf-8")
     assert "mt5-password-secret" not in raw_config
     assert "connector-token-secret" not in raw_config
@@ -701,6 +719,52 @@ def test_session_child_writes_only_non_secret_connector_config_and_keeps_credent
     assert captured["terminal_server"] == "Broker-Demo"
     assert captured["portable"] is True
     assert captured["settings"].account_type == "DEMO"
+
+
+def test_hosted_session_child_refuses_duplicate_before_touching_config_or_journal(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from irexpro_mt5_connector import host_worker
+
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    terminal_path = session_dir / "terminal64.exe"
+    terminal_path.write_bytes(b"unmodified-terminal")
+    existing_config = session_dir / "connector.json"
+    existing_config.write_text("existing-running-session-config", encoding="utf-8")
+    existing_journal = session_dir / "journal.sqlite3"
+    existing_journal.write_bytes(b"existing-session-journal")
+
+    class DuplicateSessionLock:
+        def __init__(self, root, name):
+            assert Path(root) == session_dir
+            assert name == "session-connector-1"
+
+        def __enter__(self):
+            raise RuntimeError("Hosted MT5 session already running")
+
+        def __exit__(self, exc_type, exc, traceback):
+            raise AssertionError("Unacquired lock should never be released")
+
+    monkeypatch.setattr(host_worker, "WorkerInstanceLock", DuplicateSessionLock)
+    monkeypatch.setattr(
+        host_worker,
+        "run_supervised_connector",
+        lambda **kwargs: pytest.fail("duplicate child must not start trading"),
+    )
+
+    with pytest.raises(RuntimeError, match="already running"):
+        run_session_child(
+            server_url="https://api.example.test/api/v1",
+            session_dir=session_dir,
+            terminal_path=terminal_path,
+            assignment_payload=assignment_dict(),
+        )
+
+    assert existing_config.read_text(encoding="utf-8") == "existing-running-session-config"
+    assert existing_journal.read_bytes() == b"existing-session-journal"
+    assert terminal_path.read_bytes() == b"unmodified-terminal"
 
 
 def test_worker_url_validation_allows_only_https_or_true_loopback_http(tmp_path: Path):

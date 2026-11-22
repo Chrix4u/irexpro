@@ -181,3 +181,29 @@ prove fresh heartbeats and broker position readback after reopening either
 client. Restart/kill the worker and verify that every uncertain broker result
 is reconciled without duplicate new orders. Never run real-money canaries or
 enable LIVE merely because worker prerequisites passed.
+
+### Per-session duplicate-process fencing
+
+The hosted worker now acquires a Windows byte-range lock inside each isolated
+connector session directory before writing its connector configuration, opening
+the SQLite journal, or connecting to an MT5 terminal. The lock is held for the
+full child process lifetime. If a supervisor is restarted while an orphaned
+child remains alive, a new child for the **same** connector cannot open that
+journal or terminal concurrently; its attempt exits without overwriting the
+existing connector files. The original process retains its lock until it
+exits, and Windows releases the OS file lock on process termination.
+
+This is not a replacement for server-side connector token rotation, lease
+expiry, exact broker identity checks or the order reconciler. An orphaned
+process or broker may still have outstanding orders. Never purge its session
+directory, reset its journal, or force-start a second connector to clear
+that condition. Investigate and reconcile broker positions first, then
+terminate the orphaned process using the Windows administrator account,
+verify lease expiry and restart the worker. The API must remain fail-closed
+for uncertain or unreconciled orders.
+
+Validation includes distinct broker DEMO server and login assignments,
+the tested Windows file-lock duplicate guard, and a regression that verifies
+a rejected duplicate child does **not** overwrite the existing
+\`connector.json\`, \`journal.sqlite3\` or terminal file. This is a
+code-level safeguard pending real Windows process/reboot testing.
