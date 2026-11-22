@@ -96,10 +96,15 @@ export default function BrokerScreen() {
     result: BrokerOAuthAccountsResult;
   } | null>(null);
   const coldStartHandled = useRef(false);
+  // Ignore old in-flight heartbeat responses after background/foreground,
+  // broker changes, or a newer refresh. A stale response must never turn
+  // an offline terminal indicator back to green.
+  const mt5HealthRequestId = useRef(0);
 
   const refreshMt5Statuses = useCallback(async (
     currentConnections: BrokerConnectionView[],
   ) => {
+    const requestId = ++mt5HealthRequestId.current;
     const mt5Connections = currentConnections.filter(
       (connection) => connection.brokerId === "direct-mt5",
     );
@@ -114,8 +119,11 @@ export default function BrokerScreen() {
           .catch(() => null),
       }),
     ));
-    // A failed heartbeat readback explicitly becomes unknown, never
-    // preserved as a falsely green execution-ready state.
+    // A failed heartbeat readback becomes unknown, never a falsely green
+    // execution-ready state. Drop a response that arrived after suspension
+    // or after a newer request replaced its state.
+    if (AppState.currentState !== "active" ||
+        mt5HealthRequestId.current !== requestId) return;
     setMt5HealthById(Object.fromEntries(
       statuses.map(({ id, health }) => [id, health]),
     ));
@@ -129,8 +137,8 @@ export default function BrokerScreen() {
       ]);
       setRegistry(catalog.brokers);
       setConnections(userConnections);
-      // Do not hold up the catalog for a slow MT5 worker: fetch independently.
-      void refreshMt5Statuses(userConnections);
+      // MT5 terminal health is fetched by the connection lifecycle effect.
+      // The broker catalog never waits on a potentially offline terminal.
       setError(null);
     } catch (err) {
       setError(
@@ -146,16 +154,33 @@ export default function BrokerScreen() {
     void load();
   }, [load]);
 
-  // Keep the connection indicator fresh while the app is foregrounded.
-  // Stop polling when backgrounded; the server continues trading independently.
+  // Keep the terminal indicator fresh only while the app is foregrounded.
+  // On resume, erase the previous broker state BEFORE requesting a new readback.
+  // The AI and Windows worker remain independent of mobile app lifecycle.
   useEffect(() => {
-    if (!connections.some((connection) => connection.brokerId === "direct-mt5")) return;
+    if (!connections.some((connection) => connection.brokerId === "direct-mt5")) {
+      mt5HealthRequestId.current += 1;
+      setMt5HealthById({});
+      return;
+    }
+    void refreshMt5Statuses(connections);
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      mt5HealthRequestId.current += 1;
+      setMt5HealthById({});
+      if (nextState === "active") {
+        void refreshMt5Statuses(connections);
+      }
+    });
     const interval = setInterval(() => {
       if (AppState.currentState === "active") {
         void refreshMt5Statuses(connections);
       }
     }, 15_000);
-    return () => clearInterval(interval);
+    return () => {
+      subscription.remove();
+      clearInterval(interval);
+      mt5HealthRequestId.current += 1;
+    };
   }, [connections, refreshMt5Statuses]);
 
   useEffect(() => {
