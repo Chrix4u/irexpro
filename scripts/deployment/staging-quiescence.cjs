@@ -38,13 +38,62 @@ async function readCounts() {
   try {
     await db.connect();
     await db.query('BEGIN READ ONLY');
-    const statement = [
-      'SELECT',
-      "(SELECT COUNT(*)::int FROM trading.trading_sessions WHERE status = 'ACTIVE') AS active_sessions,",
-      "(SELECT COUNT(*)::int FROM trading.trades WHERE status IN ('PENDING','OPEN','RECONCILIATION_PENDING')) AS open_or_pending_trades,",
-      "(SELECT COUNT(*)::int FROM trading.orders WHERE status IN ('DISPATCH_COMMITTED','SUBMITTED','ACKNOWLEDGED','PARTIALLY_FILLED')) AS inflight_orders,",
-      "(SELECT COUNT(*)::int FROM trading.orders WHERE status = 'RECONCILIATION_PENDING' AND updated_at > NOW() - INTERVAL '1 hour') AS recent_uncertain_orders",
-    ].join(' ');
+    // Historical order journal rows can outlive already-CLOSED DEMO trades.
+    // Treat them as deploy-only artifacts ONLY when a very recent, successful
+    // provider reconciliation for that SAME connection observes zero working
+    // orders AND zero open positions. This NEVER edits/resolves the journal,
+    // does not certify order history, and does not authorize LIVE execution.
+    // Missing/stale/failed broker snapshots continue to HOLD deployments.
+    const statement = `
+      WITH pending_connections AS (
+        SELECT DISTINCT broker_connection_id
+        FROM trading.orders
+        WHERE status IN ('DISPATCH_COMMITTED','SUBMITTED','ACKNOWLEDGED',
+                         'PARTIALLY_FILLED','RECONCILIATION_PENDING')
+      ), latest_provider AS (
+        SELECT c.broker_connection_id, p.status, p.completed_at,
+          p.provider_orders_seen, p.provider_positions_seen,
+          p.account_snapshot_compared, p.errors
+        FROM pending_connections c
+        LEFT JOIN LATERAL (
+          SELECT r.status, r.completed_at, r.provider_orders_seen,
+            r.provider_positions_seen, r.account_snapshot_compared, r.errors
+          FROM reconciliation.runs r
+          WHERE r.broker_connection_id = c.broker_connection_id
+          ORDER BY r.created_at DESC LIMIT 1
+        ) p ON TRUE
+      ), unconfirmed AS (
+        SELECT o.status,
+          (b.account_type = 'DEMO'
+           AND o.status IN ('ACKNOWLEDGED','RECONCILIATION_PENDING')
+           AND o.provider_order_id IS NULL
+           AND o.updated_at < NOW() - INTERVAL '24 hours'
+           AND t.status = 'CLOSED' AND t.closed_at IS NOT NULL
+           AND t.closed_at < NOW() - INTERVAL '24 hours'
+           AND p.status IN ('COMPLETED','COMPLETED_WITH_WARNINGS')
+           AND p.completed_at > NOW() - INTERVAL '3 minutes'
+           AND p.errors = 0 AND p.account_snapshot_compared > 0
+           AND p.provider_orders_seen = 0 AND p.provider_positions_seen = 0
+          ) IS TRUE AS historically_closed_provider_clear
+        FROM trading.orders o
+        LEFT JOIN trading.trades t ON t.id = o.trade_id
+        LEFT JOIN broker.broker_connections b ON b.id = o.broker_connection_id
+        LEFT JOIN latest_provider p ON p.broker_connection_id = o.broker_connection_id
+        WHERE o.status IN ('DISPATCH_COMMITTED','SUBMITTED','ACKNOWLEDGED',
+                           'PARTIALLY_FILLED','RECONCILIATION_PENDING')
+      ) SELECT
+        (SELECT COUNT(*)::int FROM trading.trading_sessions WHERE status = 'ACTIVE') AS active_sessions,
+        (SELECT COUNT(*)::int FROM trading.trades
+          WHERE status IN ('PENDING','OPEN','RECONCILIATION_PENDING')) AS open_or_pending_trades,
+        (SELECT COUNT(*)::int FROM unconfirmed
+          WHERE status IN ('DISPATCH_COMMITTED','SUBMITTED','ACKNOWLEDGED','PARTIALLY_FILLED')
+          AND NOT historically_closed_provider_clear) AS inflight_orders,
+        (SELECT COUNT(*)::int FROM unconfirmed
+          WHERE status = 'RECONCILIATION_PENDING'
+          AND NOT historically_closed_provider_clear) AS recent_uncertain_orders,
+        (SELECT COUNT(*)::int FROM unconfirmed WHERE historically_closed_provider_clear)
+          AS historical_orders_not_reconciled
+    `;
     const rows = await db.query(statement);
     await db.query('ROLLBACK');
     const row = rows.rows[0];
@@ -54,6 +103,7 @@ async function readCounts() {
       openOrPendingTrades: row.open_or_pending_trades,
       inflightOrders: row.inflight_orders,
       recentUncertainOrders: row.recent_uncertain_orders,
+      historicalOrdersNotReconciled: row.historical_orders_not_reconciled,
     };
   } finally {
     await db.end().catch(() => {});
@@ -86,7 +136,7 @@ async function main() {
       process.exitCode = 12;
       return;
     }
-    console.log('Staging release guard PASS: no active session, position or recent uncertain broker order.');
+    console.log('Staging release guard PASS: no active session or unproven current broker exposure. Historical closed DEMO journal rows, if any, remain UNRECONCILED; LIVE execution is NOT certified.');
   } catch (error) {
     // Do not log raw DB errors or credentials.
     const code = error && typeof error.code === 'string' && /^[A-Z0-9_]{2,12}$/.test(error.code)
