@@ -4164,7 +4164,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       independentExpertState: multimodelDemo?.trainedExpert.state ?? null,
       matchedExpectancySamples: governance.expectancy.evidenceSamples,
       driftOutOfDistribution: governance.blockers.includes('DRIFT_OUT_OF_DISTRIBUTION'),
-      ensemblePaperAdmitted: multimodelDemo?.ensemble.paperAdmitted === true,
+      independentGovernanceEligible: governance.paperExecutionEligible === true,
     });
     if (!doubleAbstainAdmission.allowed) {
       await this.evidence.markOutcomeState(

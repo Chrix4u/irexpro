@@ -12,7 +12,7 @@ const asOfWeakDemo: DemoDoubleAbstainAdmissionInput = {
   independentExpertState: 'ABSTAIN',
   matchedExpectancySamples: 0,
   driftOutOfDistribution: true,
-  ensemblePaperAdmitted: false,
+  independentGovernanceEligible: false,
 };
 
 describe('DEMO double-abstain admission at original entry timestamp', () => {
@@ -21,7 +21,7 @@ describe('DEMO double-abstain admission at original entry timestamp', () => {
       allowed: false, reason: DEMO_DOUBLE_ABSTAIN_UNCALIBRATED_OOD,
     });
   });
-  it('also abstains on a historical profitable EURUSD signal having identical as-of weakness, to expose false rejects', () => {
+  it('also abstains on a historically profitable EURUSD signal with identical as-of weakness, exposing false rejects', () => {
     expect(evaluateDemoDoubleAbstainAdmission(asOfWeakDemo).allowed).toBe(false);
   });
   it.each([
@@ -32,7 +32,7 @@ describe('DEMO double-abstain admission at original entry timestamp', () => {
     ['independent expert confirms direction', { independentExpertState: 'BUY' }],
     ['model inside its supported distribution', { driftOutOfDistribution: false }],
     ['historically supported statistical expectancy', { matchedExpectancySamples: 11 }],
-    ['ensemble independently paper admitted', { ensemblePaperAdmitted: true }],
+    ['independent governance genuinely admits', { independentGovernanceEligible: true }],
     ['unknown evidence does not impersonate explicit zero', { matchedExpectancySamples: null }],
   ])('does not invent a prohibition when %s', (_label, override) => {
     expect(evaluateDemoDoubleAbstainAdmission({ ...asOfWeakDemo, ...override }).allowed).toBe(true);

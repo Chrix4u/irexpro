@@ -12,7 +12,7 @@ export interface DemoDoubleAbstainAdmissionInput {
   independentExpertState: string | null;
   matchedExpectancySamples: number | null;
   driftOutOfDistribution: boolean;
-  ensemblePaperAdmitted: boolean;
+  independentGovernanceEligible: boolean;
 }
 
 export const DEMO_DOUBLE_ABSTAIN_UNCALIBRATED_OOD =
@@ -30,7 +30,7 @@ export function evaluateDemoDoubleAbstainAdmission(
     Number.isFinite(input.matchedExpectancySamples) &&
     input.matchedExpectancySamples === 0 &&
     input.driftOutOfDistribution === true &&
-    input.ensemblePaperAdmitted === false;
+    input.independentGovernanceEligible === false;
 
   return exactUncalibratedAbstention
     ? { allowed: false, reason: DEMO_DOUBLE_ABSTAIN_UNCALIBRATED_OOD }
