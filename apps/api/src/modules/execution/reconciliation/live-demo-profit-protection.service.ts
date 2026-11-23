@@ -3,6 +3,10 @@ import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditService } from '../../audit/audit.service';
 import { DataSource } from 'typeorm';
 import { BrokerService } from '../../broker/broker.service';
+import type { BrokerPosition } from '../../broker/interfaces/broker-adapter.interface';
+import { DemoProtectedProfitRunnerOrchestrator } from './demo-protected-profit-runner-orchestrator.service';
+import { evaluateVerifiedProfitRunnerHold } from './verified-profit-stop-runner-policy';
+import { type DemoProfitStopIntentState } from './demo-profit-stop-amendment-state';
 import { CTRADER_FAMILY_BROKER_IDS } from '../../broker/registry/broker-catalog';
 import { ExecutionService } from '../execution.service';
 import { TradeCloseReason } from '../entities/trade.entity';
@@ -509,6 +513,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     private readonly brokerService: BrokerService,
     private readonly executionService: ExecutionService,
     @Optional() private readonly auditService?: AuditService,
+    @Optional() private readonly protectedRunnerOrchestrator?: DemoProtectedProfitRunnerOrchestrator,
   ) {}
 
   onModuleInit(): void {
@@ -710,6 +715,28 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               }
             }
 
+            // Every ALREADY installed positive-stop runner has a separate,
+            // five-second stop/TP/ledger/candle/expert inspection, even when
+            // the original peak giveback gate is not crossed again. An expired
+            // or unprovable runner CLOSES rather than becoming an indefinite
+            // hold. All flags default off; LIVE is never enrolled.
+            if (this.isOwnerDemoProtectedRunnerScope(
+              trade, snapshot.connection.brokerId,
+              String(snapshot.connection.accountType).toUpperCase()
+            )) {
+              const managed = await this.manageExistingBrokerProtectedRunner(
+                trade, position, observedAt, currentPnl, maxFavorablePnl,
+              );
+              if (managed === 'HOLD') continue;
+              if (managed === 'CLOSE') {
+                await this.executionService.closeTrade(
+                  trade.trade_id, trade.user_id,
+                  TradeCloseReason.PROFIT_PROTECTION,
+                );
+                continue;
+              }
+            }
+
             // Optional, deliberately scoped net-positive giveback protection
             // over cTrader's ALREADY-net-unrealized P&L. Historical round-trip
             // fees are held as an EXTRA conservative close-cost reserve.
@@ -809,6 +836,19 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                   };
                   const decision = evaluatePepperstoneDemoNetProfitLock(lockInput);
                   if (decision.shouldClose) {
+                    // A broker-protected continuation can be considered only
+                    // after a fresh, causally eligible candle + trained
+                    // expert decision and an acknowledged, persisted positive
+                    // stop. Otherwise the existing close remains mandatory.
+                    // This deliberately cannot execute without FOUR flags.
+                    if (await this.maybeStartBrokerProtectedProfitRunner({
+                      trade, position, observedAt, currentPnl,
+                      maxFavorablePnl, risk: risk!,
+                      conservativeExitReserve,
+                      historicalFeeSamples: fees?.sampleCount ?? 0,
+                    })) {
+                      continue;
+                    }
                     // Decision-time counterfactual only, NOT a simulated fill.
                     // If legacy would've held, the new exit was advanced by
                     // the 65/75/80% policy. Keep this observable in server logs.
@@ -1522,6 +1562,334 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       }
     } finally {
       this.running = false;
+    }
+  }
+
+  private isOwnerDemoProtectedRunnerScope(
+    trade: OpenAiTradeRow, brokerId: string, accountType: string,
+  ): boolean {
+    return brokerId === 'pepperstone-ctrader' && accountType === 'DEMO' &&
+      trade.account_currency === 'USD' && trade.is_m1_strategy &&
+      (trade.strategy_route === 'EARLY_TRANSITION' ||
+       trade.strategy_route === 'CONFIRMED_REVERSAL') &&
+      !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+      trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID;
+  }
+
+  private isProtectedRunnerExecutablePilotEnabled(): boolean {
+    return process.env.IREXPRO_PEPPERSTONE_DEMO_PROTECTED_RUNNER_EXECUTION === 'enabled' &&
+      process.env.IREXPRO_PEPPERSTONE_DEMO_PROTECTED_RUNNER_AMEND === 'enabled' &&
+      process.env.IREXPRO_PEPPERSTONE_DEMO_STOP_AUTHORITY_SYNC === 'enabled' &&
+      process.env.IREXPRO_PEPPERSTONE_DEMO_PROTECTED_RUNNER_HOLD === 'enabled';
+  }
+
+  /**
+   * Fail-closed review of an ALREADY committed provider stop. This must run
+   * independently of the original profit-lock trigger: that trigger assumes
+   * the ORIGINAL adverse stop, so it ceases to be applicable after a stronger
+   * stop is durably committed. The time horizon starts at the first commit,
+   * never at the latest quote or process restart.
+   */
+  private async manageExistingBrokerProtectedRunner(
+    trade: OpenAiTradeRow,
+    position: BrokerPosition,
+    observedAt: Date,
+    currentPnl: number,
+    peakPnl: number,
+  ): Promise<'NONE' | 'HOLD' | 'CLOSE'> {
+    // Do not let a missing ledger table accidentally suppress the legacy
+    // profit-close rule in a stopped/older installation.
+    let records: Array<{
+      id:string;state:DemoProfitStopIntentState;
+      broker_connection_id:string;broker_position_id:string;
+      original_stop:string;original_take_profit:string;
+      proposed_positive_stop:string;
+      estimated_net_floor_after_reserve:string;
+      broker_ack_at:Date|string|null;
+      broker_verified_at:Date|string|null;
+      authority_committed_at:Date|string|null;
+      expires_at:Date|string;
+      authoritative_stop:string;trade_status:string;session_status:string;
+    }>;
+    try {
+      records=await this.dataSource.query(
+        `SELECT l.id,l.state,l.broker_connection_id,l.broker_position_id,
+                l.original_stop::text,l.original_take_profit::text,
+                l.proposed_positive_stop::text,
+                l.estimated_net_floor_after_reserve::text,
+                l.broker_ack_at,l.broker_verified_at,
+                l.authority_committed_at,l.expires_at,
+                t.stop_loss::text AS authoritative_stop,
+                t.status AS trade_status,s.status AS session_status
+           FROM trading.demo_profit_stop_amendment_intents l
+           JOIN trading.trades t ON t.id=l.trade_id AND t.user_id=l.user_id
+           JOIN trading.trading_sessions s ON s.id=t.trading_session_id
+          WHERE l.trade_id=$1 AND l.user_id=$2
+            AND l.broker_connection_id=$3
+          ORDER BY l.created_at DESC LIMIT 2`,
+        [trade.trade_id,trade.user_id,trade.broker_connection_id],
+      ) as typeof records;
+    } catch(error) {
+      // Feature-off runtimes that predate the additive ledger are unchanged.
+      if (!this.isProtectedRunnerExecutablePilotEnabled()) return 'NONE';
+      this.logger.warn('DEMO protected runner ledger unavailable: '+(error as Error).message);
+      return 'CLOSE';
+    }
+    if (!records.length) return 'NONE';
+    const l=records[0];
+    if (records.length!==1 || !l || l.trade_status!=='OPEN' ||
+        l.session_status!=='ACTIVE' ||
+        !Number.isFinite(new Date(l.expires_at).getTime()) ||
+        new Date(l.expires_at).getTime()<=Date.now() ||
+        l.state!=='AUTHORITY_COMMITTED' ||
+        !this.isProtectedRunnerExecutablePilotEnabled() ||
+        !this.protectedRunnerOrchestrator) return 'CLOSE';
+    const originalRisk=finite(trade.initial_risk_pnl);
+    if (originalRisk===null || originalRisk<=0) return 'CLOSE';
+    const providerPositionId=trade.external_position_id ?? trade.external_order_id;
+    if (!providerPositionId || l.broker_position_id!==providerPositionId ||
+        l.broker_connection_id!==trade.broker_connection_id) return 'CLOSE';
+    try {
+      const fresh=await this.brokerService.getOpenPositionsForConnection(
+        trade.broker_connection_id,trade.user_id,
+      );
+      if (fresh.connection.brokerId!=='pepperstone-ctrader' ||
+          String(fresh.connection.accountType).toUpperCase()!=='DEMO' ||
+          fresh.connection.accountCurrency!=='USD' ||
+          fresh.connection.userId!==trade.user_id) return 'CLOSE';
+      const providerPositions=fresh.positions.filter(p=>p.externalOrderId===providerPositionId);
+      if (providerPositions.length!==1) return 'CLOSE';
+      const broker=providerPositions[0];
+      if (broker.markIsStale === true ||
+          broker.instrument!==trade.instrument || broker.direction!==trade.direction) return 'CLOSE';
+      const [candles, fees, expertSignal, latestThesis, m1Evidence, quote] = await Promise.all([
+        this.loadAsOfBrokerNativeProfitExitCandles(trade,observedAt),
+        this.loadCausalPepperstoneDemoCostEstimate(trade,observedAt),
+        this.loadProfitLockPatienceSignal(trade,observedAt),
+        this.loadLatestAiThesis(trade,observedAt),
+        this.loadCausalM1Evidence(trade,observedAt),
+        this.brokerService.getCurrentPriceForConnection(
+          trade.user_id,trade.broker_connection_id,trade.instrument,
+        ),
+      ]);
+      if (!fees || !Number.isInteger(fees.sampleCount) ||
+          fees.sampleCount<5 || !quote || !expertSignal ||
+          !latestThesis || !m1Evidence) return 'CLOSE';
+      const realObservedAt=new Date();
+      const spread=Number(quote.ask)-Number(quote.bid);
+      const ageSeconds=(realObservedAt.getTime()-new Date(quote.timestamp).getTime())/1000;
+      const mark=trade.direction==='BUY'?Number(quote.bid):Number(quote.ask);
+      if (!Number.isFinite(spread) || spread<=0 ||
+          !Number.isFinite(ageSeconds) || ageSeconds<0 || ageSeconds>5 ||
+          !Number.isFinite(mark) || mark<=0 ||
+          Math.abs(mark-Number(broker.currentPrice))>spread*3) return 'CLOSE';
+      const recheck=evaluateLiveDemoProfitLockTrendRecheck({
+        tradeDirection:trade.direction, observedAt,
+        latestThesis,m1Evidence,
+      });
+      if (!recheck.wouldHoldIfEnabled) return 'CLOSE';
+      const patience=evaluateProfitLockPatienceShadow({
+        direction:trade.direction,observedAt,
+        currentGrossPnl:Number(broker.unrealisedPnl),
+        initialRiskPnl:originalRisk,maxFavorablePnl:peakPnl,
+        latestSameSideM1ContinuationAt:expertSignal.sameSideContinuationAt,
+        oppositeExecutableReversal:expertSignal.oppositeExecutableReversal,
+        m1Evidence:{
+          completedBars:m1Evidence.completedBars,
+          liveQuoteBars:m1Evidence.liveQuoteBars??0,
+          latestAgeSeconds:m1Evidence.latestAgeSeconds,
+          adverseBars:m1Evidence.adverseBars,
+          alignedLatestBodyPressure:m1Evidence.alignedLatestBodyPressure,
+          alignedMomentum3:m1Evidence.alignedMomentum3,
+        },
+      });
+      if (!patience.wouldConsiderBrokerProtectedGrace) return 'CLOSE';
+      const originalStop=Number(l.original_stop),tp=Number(l.original_take_profit);
+      const candle=evaluateCandleAwareProfitExitShadow({
+        brokerId:'pepperstone-ctrader',accountType:'DEMO',direction:trade.direction,
+        asOf:observedAt,
+        openedAt:trade.opened_at?new Date(trade.opened_at):new Date(NaN),
+        entryPrice:Number(broker.openPrice),currentPrice:mark,
+        originalStopPrice:originalStop,takeProfitPrice:tp,
+        grossCurrentPnl:Number(broker.unrealisedPnl),
+        grossPeakPnl:Math.max(peakPnl,Number(broker.unrealisedPnl)),
+        initialRiskPnl:originalRisk,
+        conservativeEstimatedCosts:fees.estimatedCost,
+        lastTwoCompletedM1:candles.m1,lastCompletedM5:candles.m5,
+      });
+      const dt=(x:Date|string|null)=>x?new Date(x):null;
+      const committedAt=dt(l.authority_committed_at);
+      if (!committedAt) return 'CLOSE';
+      const decision=evaluateVerifiedProfitRunnerHold({
+        brokerId:'pepperstone-ctrader',accountType:'DEMO',accountCurrency:'USD',
+        userId:trade.user_id,ownerUserId:process.env.VPS_FOREX_SCANNER_USER_ID||null,
+        tradeBrokerConnectionId:trade.broker_connection_id,
+        ledgerBrokerConnectionId:l.broker_connection_id,
+        tradeProviderPositionId:providerPositionId,
+        ledgerProviderPositionId:l.broker_position_id,
+        brokerProviderPositionId:broker.externalOrderId,
+        direction:trade.direction,brokerDirection:broker.direction,
+        tradeLots:Number(trade.lot_size),brokerLots:Number(broker.lotSize),
+        now:realObservedAt,holdStartedAt:committedAt,
+        brokerReadbackAt:realObservedAt,
+        entryPrice:Number(broker.openPrice),currentBrokerMark:mark,
+        originalStop,ledgerProposedStop:Number(l.proposed_positive_stop),
+        authoritativeStop:Number(l.authoritative_stop),
+        brokerReadbackStop:Number(broker.stopLoss),
+        takeProfit:tp,brokerReadbackTakeProfit:Number(broker.takeProfit),
+        brokerNetPnl:Number(broker.unrealisedPnl),
+        netFloorAfterCosts:Number(l.estimated_net_floor_after_reserve),
+        initialRiskPnl:originalRisk,estimatedExitCostsUsd:fees.estimatedCost,
+        adverseSlippageReserveUsd:Math.max(.02*originalRisk,.2),
+        independentExpertConfirmedOpposite:expertSignal.oppositeExecutableReversal,
+        ledgerState:l.state,brokerAcceptedAt:dt(l.broker_ack_at),
+        brokerVerifiedAt:dt(l.broker_verified_at),
+        authorityCommittedAt:committedAt,ledgerExpiresAt:new Date(l.expires_at),
+        candle,
+      });
+      if (decision.decision!=='HOLD_PROTECTED') {
+        this.logger.warn('DEMO PROTECTED RUNNER CLOSE trade='+trade.trade_id+' reason='+decision.reason);
+        return 'CLOSE';
+      }
+      this.logger.log('DEMO PROTECTED RUNNER HOLD trade='+trade.trade_id+
+        ' brokerStop='+broker.stopLoss+' remainingSec='+
+        Math.max(0,Math.floor((new Date(l.expires_at).getTime()-realObservedAt.getTime())/1000))+
+        ' nextBrokerCheckSeconds=5 live=false');
+      return 'HOLD';
+    } catch (error) {
+      this.logger.warn('DEMO protected runner lost evidence, closing trade='+trade.trade_id+
+        ' reason='+(error as Error).message.slice(0,100));
+      return 'CLOSE';
+    }
+  }
+
+  /**
+   * Attempt a NEW positive stop only if a verified already-open DEMO trade
+   * meets the independent trained expert, M1/M5 broker-native candle and
+   * fee-aware protected-runner criteria. Any error leaves the ordinary
+   * profit-close behavior intact; never retry an uncertain provider amend.
+   */
+  private async maybeStartBrokerProtectedProfitRunner(input:{
+    trade:OpenAiTradeRow;position:BrokerPosition;observedAt:Date;
+    currentPnl:number;maxFavorablePnl:number;risk:number;
+    conservativeExitReserve:number|null;historicalFeeSamples:number;
+  }):Promise<boolean>{
+    const {trade,position,observedAt,currentPnl,maxFavorablePnl,risk}=input;
+    if (!this.isProtectedRunnerExecutablePilotEnabled() ||
+        !this.protectedRunnerOrchestrator ||
+        !this.isOwnerDemoProtectedRunnerScope(trade,'pepperstone-ctrader','DEMO') ||
+        position.markIsStale===true ||
+        risk<=0 || currentPnl<=0 ||
+        !Number.isFinite(input.conservativeExitReserve) ||
+        (input.conservativeExitReserve??0)<=0 ||
+        input.historicalFeeSamples<5) return false;
+    const providerPositionId=trade.external_position_id??trade.external_order_id;
+    if (!providerPositionId || providerPositionId!==position.externalOrderId) return false;
+    try {
+      const [candles,signal,thesis,m1,quote,spec]=await Promise.all([
+        this.loadAsOfBrokerNativeProfitExitCandles(trade,observedAt),
+        this.loadProfitLockPatienceSignal(trade,observedAt),
+        this.loadLatestAiThesis(trade,observedAt),
+        this.loadCausalM1Evidence(trade,observedAt),
+        this.brokerService.getCurrentPriceForConnection(
+          trade.user_id,trade.broker_connection_id,trade.instrument),
+        this.brokerService.getInstrumentSpecForConnection(
+          trade.user_id,trade.broker_connection_id,trade.instrument),
+      ]);
+      if (!thesis || !m1 || !quote || !spec ||
+          signal.oppositeExecutableReversal) return false;
+      if (!evaluateLiveDemoProfitLockTrendRecheck({
+        tradeDirection:trade.direction,observedAt,
+        latestThesis:thesis,m1Evidence:m1,
+      }).wouldHoldIfEnabled) return false;
+      const wait=evaluateProfitLockPatienceShadow({
+        direction:trade.direction,observedAt,currentGrossPnl:currentPnl,
+        initialRiskPnl:risk,maxFavorablePnl,
+        latestSameSideM1ContinuationAt:signal.sameSideContinuationAt,
+        oppositeExecutableReversal:signal.oppositeExecutableReversal,
+        m1Evidence:{completedBars:m1.completedBars,liveQuoteBars:m1.liveQuoteBars??0,
+          latestAgeSeconds:m1.latestAgeSeconds,adverseBars:m1.adverseBars,
+          alignedLatestBodyPressure:m1.alignedLatestBodyPressure,
+          alignedMomentum3:m1.alignedMomentum3},
+      });
+      if (!wait.wouldConsiderBrokerProtectedGrace) return false;
+      const entry=Number(position.openPrice),mark=Number(position.currentPrice),
+        stop=Number(position.stopLoss),tp=Number(position.takeProfit);
+      const candle=evaluateCandleAwareProfitExitShadow({
+        brokerId:'pepperstone-ctrader',accountType:'DEMO',direction:trade.direction,
+        asOf:observedAt,openedAt:trade.opened_at?new Date(trade.opened_at):new Date(NaN),
+        entryPrice:entry,currentPrice:mark,originalStopPrice:stop,takeProfitPrice:tp,
+        grossCurrentPnl:currentPnl,grossPeakPnl:maxFavorablePnl,
+        initialRiskPnl:risk,conservativeEstimatedCosts:input.conservativeExitReserve,
+        lastTwoCompletedM1:candles.m1,lastCompletedM5:candles.m5,
+      });
+      if (!candle.wouldResearchProtectedGrace) return false;
+      const ageSeconds=(Date.now()-new Date(quote.timestamp).getTime())/1000;
+      const spread=Number(quote.ask)-Number(quote.bid);
+      if (!Number.isFinite(ageSeconds)||ageSeconds<0||ageSeconds>5||
+          !Number.isFinite(spread)||spread<=0 ||
+          Math.abs(mark-(trade.direction==='BUY'?Number(quote.bid):Number(quote.ask)))>spread*3)
+        return false;
+      const candidate=evaluateProtectedRunnerShadow({
+        trendWouldHold:true,instrument:trade.instrument,direction:trade.direction,
+        grossUnrealisedPnl:currentPnl,initialRiskPnl:risk,
+        estimatedBrokerCosts:input.conservativeExitReserve,
+        feeSampleCount:input.historicalFeeSamples,
+        entryPrice:entry,currentPrice:mark,originalStopPrice:stop,
+        takeProfitPrice:tp,latestLiveSpreadPrice:spread,
+      });
+      const digits=spec.digits;
+      if (!candidate.eligibleForFurtherResearch ||
+          candidate.indicativeProtectedStopPrice===null ||
+          candidate.proposedNetFloorPnl===null ||
+          digits===undefined || !Number.isInteger(digits)) return false;
+      const rounded=normalizeIndicativeCtraderStopToTick(
+        candidate.indicativeProtectedStopPrice,trade.direction,digits,
+      );
+      if (rounded===null) return false;
+      const providerStopPreflight=evaluateCtraderStopDistanceProof({
+        ownerDemoVerified:true,brokerId:'pepperstone-ctrader',
+        accountType:'DEMO',currency:'USD',instrument:trade.instrument,
+        direction:trade.direction,entryPrice:entry,originalStop:stop,
+        originalTakeProfit:tp,proposedStop:rounded,
+        lastBid:Number(quote.bid),lastAsk:Number(quote.ask),
+        quoteObservedAt:new Date(quote.timestamp),observedAt:new Date(),symbol:spec,
+      });
+      if (!providerStopPreflight.candidateMeetsAdvertisedMinDistance) return false;
+      const riskDistance=Math.abs(entry-stop);
+      const priceGrossFloor=risk*Math.abs(entry-rounded)/riskDistance;
+      const adverseSlipReserve=Math.max(.02*risk,.2);
+      const independentNetFloor=priceGrossFloor-input.conservativeExitReserve!-adverseSlipReserve;
+      if (!Number.isFinite(independentNetFloor) ||
+          independentNetFloor<Math.max(0.1*risk,1)) return false;
+      const ledgerNetFloor=Math.min(candidate.proposedNetFloorPnl,independentNetFloor);
+      if (!(ledgerNetFloor>0)) return false;
+      const fmt=(p:number)=>p.toFixed(digits);
+      const outcome=await this.protectedRunnerOrchestrator.prepareAndCommitVerifiedPositiveStop({
+        userId:trade.user_id,brokerConnectionId:trade.broker_connection_id,
+        tradeId:trade.trade_id,brokerPositionId:providerPositionId,
+        instrument:trade.instrument,direction:trade.direction,
+        strategyRoute:trade.strategy_route as 'EARLY_TRANSITION'|'CONFIRMED_REVERSAL',
+        tradeLots:String(trade.lot_size),entryPrice:fmt(entry),
+        originalStop:fmt(stop),originalTakeProfit:fmt(tp),
+        proposedPositiveStop:fmt(rounded),
+        estimatedExitCostReserve:input.conservativeExitReserve!.toFixed(8),
+        estimatedNetFloorAfterReserve:ledgerNetFloor.toFixed(8),
+      });
+      if (outcome.status!=='PREPARED_AND_BROKER_VERIFIED') {
+        this.logger.warn('DEMO stop admission unproven trade='+trade.trade_id+
+          ' reason='+outcome.reason);
+        return false;
+      }
+      // Immediately re-observe the broker, ledger and candles AFTER the
+      // amendment/authority transaction. An ACK alone never grants a hold.
+      return await this.manageExistingBrokerProtectedRunner(
+        trade,position,new Date(),currentPnl,maxFavorablePnl,
+      )==='HOLD';
+    }catch(error){
+      this.logger.warn('DEMO protected runner admission failed closed trade='+trade.trade_id+
+        ' reason='+(error as Error).message.slice(0,110));
+      return false;
     }
   }
 
