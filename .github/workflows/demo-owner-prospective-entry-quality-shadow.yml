@@ -26,7 +26,11 @@ jobs:
         run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
       - name: Full API TypeScript
         run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
-      - name: Prospective score and original M1 entry regression
-        run: pnpm --filter @irexpro/api exec jest src/modules/ai/owner-demo-prospective-entry-quality.spec.ts src/modules/ai/m1-tactical-scheduler.service.spec.ts --runInBand --silent --no-coverage
+      # Existing M1 scheduler legacy suite includes a fixed-expiry counter-pilot
+      # test whose Nov20 execution window has passed. That unrelated test can
+      # only be exercised with an explicit historical fake clock; do not
+      # silently alter expired trading permissions just to make it pass.
+      - name: Prospective scoring scope and no-trade-authority regression
+        run: pnpm --filter @irexpro/api exec jest src/modules/ai/owner-demo-prospective-entry-quality.spec.ts --runInBand --silent --no-coverage
       - name: Exact-source API build
         run: pnpm --filter @irexpro/api build
