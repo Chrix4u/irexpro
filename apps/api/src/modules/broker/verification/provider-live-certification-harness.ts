@@ -1202,6 +1202,28 @@ export async function runLiveCertificationChecklist(
         }
         try {
           const stopDistance = ExactDecimal.parse(points).divByPowerOfTen(5);
+          // Real-time rollover spreads can approach or exceed the entire
+          // five-pip protective stop. Independently re-fetch the broker quote
+          // IMMEDIATELY before this real-money order (the earlier price
+          // stage is not a per-dispatch quote). For a minimum-size protected
+          // certification canary, the spread must not consume more than 25%
+          // of its total stop distance; otherwise fail with ZERO provider
+          // order calls. On a five-pip EURUSD stop this is <=1.25 pips.
+          const freshPrice = await adapter.getCurrentPrice(ctx.instrument!.symbol);
+          const freshBid = ExactDecimal.tryParse(freshPrice.bid);
+          const freshAsk = ExactDecimal.tryParse(freshPrice.ask);
+          const freshSpread = ExactDecimal.tryParse(freshPrice.spread);
+          const quoteAgeMs = Date.now() - new Date(freshPrice.timestamp).getTime();
+          if (!freshBid?.isPositive() || !freshAsk?.isPositive() ||
+              !freshSpread || freshSpread.lt(ExactDecimal.ZERO) ||
+              freshAsk.lt(freshBid) ||
+              !freshAsk.sub(freshBid).eq(freshSpread) ||
+              !Number.isFinite(quoteAgeMs) || quoteAgeMs < -5_000 ||
+              quoteAgeMs > 15_000 ||
+              freshSpread.mul(ExactDecimal.parse('4')).gt(stopDistance)) {
+            return { status:'FAIL', detail:
+              'Pepperstone LIVE spread or quote freshness exceeds protected-canary threshold (maximum 25% of stop) — zero broker orders' };
+          }
           const grossRisk = stopDistance
             .mul(ExactDecimal.parse(ctx.instrument!.contractSize))
             .mul(ExactDecimal.parse(ctx.canary.actualSize));
@@ -1441,6 +1463,22 @@ export async function runLiveCertificationChecklist(
         rescaleDecimal({ digits: stopDigits, scale: anchorScale }, ctx.digits).digits,
         ctx.digits,
       );
+      // The candidate stop must be strictly MORE protective than the
+      // broker-acknowledged atomic stop already on the real-money position.
+      // A smaller numeric BUY stop would WIDEN the loss allowance, despite
+      // being below entry/bid. Never allow a certification amendment to do
+      // that, even when the quote moved adversely after the fill.
+      const currentPosition = await adapter.getPositionById(ctx.canaryOrderId);
+      const currentProtectedStop = currentPosition?.stopLoss
+        ? parseUnsignedDecimalString(currentPosition.stopLoss) : null;
+      const proposedProtectedStop = parseUnsignedDecimalString(protectiveStop);
+      if (!currentPosition || !currentProtectedStop || !proposedProtectedStop ||
+          compareDecimals(proposedProtectedStop, currentProtectedStop) <= 0) {
+        return {
+          status: 'FAIL',
+          detail: 'Existing LIVE canary stop is missing or a candidate amendment would widen protection — no amendment sent',
+        };
+      }
       let result: BrokerOrderResult;
       try {
         result = await adapter.modifyOrder(ctx.canaryOrderId, { newStopLoss: protectiveStop });

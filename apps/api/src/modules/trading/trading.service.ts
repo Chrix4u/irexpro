@@ -1114,8 +1114,28 @@ export class TradingService {
       connection.liveTradingEnabled !== true;
     if (promotedDemoBinding) return;
 
+    // The owner may select the already-linked Pepperstone LIVE account and
+    // confirm Start without an additional operator workflow AFTER the actual
+    // provider is independently certified and this exact connection is
+    // ACTIVE. Nothing about a $50 balance, a DEMO validation, an OAuth link
+    // or the browser button is evidence of production certification.
+    // Separate position-sizing and dispatch safeguards remain authoritative.
+    const certifiedOwnerLiveBinding =
+      connection.id !== configuredPaperConnectionId &&
+      connection.brokerId === 'pepperstone-ctrader' &&
+      connection.accountType === BrokerMode.LIVE &&
+      connection.accountCurrency === 'USD' &&
+      executionMode === ExecutionMode.FULL_AUTO &&
+      connection.status === BrokerConnectionStatus.CONNECTED &&
+      connection.authorizationStatus === BrokerAuthorizationStatus.ACTIVE &&
+      connection.liveTradingEnabled === true &&
+      this.brokerService.isProductionLiveEligible(connection.brokerId);
+    if (certifiedOwnerLiveBinding) return;
+
     throw new ForbiddenException(
-      'This V8 rollout permits only the exact PAPER research binding or an ACTIVE, validated real-provider DEMO connection in FULL_AUTO. LIVE execution remains disabled.',
+      'Multi-model LIVE start requires the exact owner-linked Pepperstone USD LIVE account, ' +
+        'ACTIVE broker authorization, and independent production-LIVE provider certification. ' +
+        'No real-money AI session was started.',
     );
   }
 

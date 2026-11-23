@@ -75,6 +75,7 @@
  *   getOrderById (ProtoOAOrderDetailsReq).
  */
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { ExactDecimal } from '../../../../common/utils/exact-decimal';
 import { randomUUID } from 'node:crypto';
 import {
   AdapterMetadata,
@@ -954,6 +955,8 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       // position can exist. No broker order is submitted on malformed or
       // ambiguous dual-protection input.
       let marketRelativeStopLoss: number | null = null;
+      let marketRelativeTakeProfit: number | null = null;
+      let liveFullProtectionAtomic = false;
       if (order.relativeStopLoss !== undefined) {
         const raw=order.relativeStopLoss;
         if (kind !== 'MARKET' ||
@@ -967,6 +970,61 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           );
         }
         marketRelativeStopLoss=Number(raw);
+      } else if (session.env === 'LIVE' && kind === 'MARKET') {
+        // Production cTrader MARKET entries require BOTH SL and TP in the
+        // ORIGINAL 2106 order. Waiting for a position and then sending 2110
+        // left a real-money exposure interval with no broker stop. Use a
+        // fresh, account+symbol scoped provider quote and the model's ABSOLUTE
+        // stop/target to compute the provider's atomic RELATIVE distances.
+        // fetchSpotQuote enforces broker timestamp freshness; no cache,
+        // midpoint, hypothetical quote or guessed distance is permitted.
+        const sl = ExactDecimal.tryParse(order.stopLoss);
+        const tp = ExactDecimal.tryParse(order.takeProfit);
+        if (!sl?.isPositive() || !tp?.isPositive()) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_REQUEST,
+            'LIVE cTrader MARKET requires positive model SL and TP before broker dispatch',
+            undefined, false, ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          );
+        }
+        const spot = await this.fetchSpotQuote(session, symbolId);
+        const bid = ExactDecimal.tryParse(spotToPrice(spot.bid ?? 0));
+        const ask = ExactDecimal.tryParse(spotToPrice(spot.ask ?? 0));
+        if (!bid?.isPositive() || !ask?.isPositive() || ask.lt(bid)) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_PRICE,
+            'LIVE broker bid/ask quote invalid; refusing unprotected MARKET order',
+            undefined, false, ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          );
+        }
+        const reference = order.direction === 'BUY' ? ask : bid;
+        if (order.direction === 'BUY'
+            ? !sl.lt(reference) || !tp.gt(reference)
+            : !sl.gt(reference) || !tp.lt(reference)) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_PRICE,
+            'LIVE broker quote has crossed model SL or TP; refusing MARKET order',
+            undefined, false, ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          );
+        }
+        const stopPoints = reference.sub(sl).abs().mulByPowerOfTen(5).toString();
+        const targetPoints = tp.sub(reference).abs().mulByPowerOfTen(5).toString();
+        // Open API requires int64 point distances; JS transports safely encode
+        // only positive safe integers. Never round up the model's risk or
+        // fabricate a missing stop. The risk gate already checked lot size,
+        // stop-cost envelope, spread and margin.
+        if (![stopPoints, targetPoints].every(
+          (n) => /^[1-9]\d*$/.test(n) && Number.isSafeInteger(Number(n)),
+        )) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_REQUEST,
+            'LIVE relative SL/TP cannot be represented exactly in broker points',
+            undefined, false, ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          );
+        }
+        marketRelativeStopLoss = Number(stopPoints);
+        marketRelativeTakeProfit = Number(targetPoints);
+        liveFullProtectionAtomic = true;
       }
       const payload: Record<string, unknown> = {
         ctidTraderAccountId: ctid,
@@ -981,6 +1039,9 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       };
       if (marketRelativeStopLoss!==null) {
         payload.relativeStopLoss=marketRelativeStopLoss;
+      }
+      if (marketRelativeTakeProfit!==null) {
+        payload.relativeTakeProfit=marketRelativeTakeProfit;
       }
       // DAY time-in-force → GOOD_TILL_DATE needs an expiration timestamp:
       // the end of the current UTC trading day (proto field 6, Unix ms).
@@ -1050,8 +1111,12 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         protoOrderType === CtraderOrderType.MARKET &&
         result.status === 'FILLED' &&
         result.externalOrderId &&
-        this.hasProtection(order)
+        this.hasProtection(order) &&
+        !liveFullProtectionAtomic
       ) {
+        // LIVE full protection was included atomically in 2106. Never
+        // overwrite its fill-relative stops with stale absolute pre-fill
+        // prices, which could silently widen live risk after slippage.
         await this.amendPositionProtection(
           session,
           result.externalOrderId,

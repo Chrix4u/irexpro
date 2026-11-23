@@ -3748,6 +3748,17 @@ export default function AiTradingPage() {
                       ? " · You may adjust this allocation while stopped; restarting still requires an explicit risk reset."
                       : ""}
                 </span>
+                {selectedBroker?.brokerId === "pepperstone-ctrader" &&
+                  selectedBroker.accountType === "LIVE" ? (
+                    <span className="ai-control-card__hint">
+                      LIVE lot sizing: preferred 0.10–1.00 lots; broker-supported
+                      micro sizes such as 0.01 or 0.04 remain available when
+                      the account, stop-loss, margin and estimated trading costs
+                      permit them. The AI never forces 0.10 lots. With $50
+                      equity, its current estimated risk budget is at most
+                      2% ($1) per trade; actual slippage can exceed estimates.
+                    </span>
+                  ) : null}
                 </div>
               </Card>
 

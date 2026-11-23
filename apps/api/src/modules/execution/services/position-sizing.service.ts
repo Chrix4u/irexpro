@@ -3,7 +3,7 @@ import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
-import { evaluatePepperstoneLiveMicroRisk, pepperstoneLivePilotIsScoped, PEPPERSTONE_LIVE_PILOT_LOT_CEILING, PEPPERSTONE_LIVE_PILOT_MIN_LOTS } from './pepperstone-live-micro-risk';
+import { evaluatePepperstoneLiveMicroRisk, pepperstoneLivePilotIsScoped, PEPPERSTONE_LIVE_PILOT_LOT_CEILING, PEPPERSTONE_LIVE_PILOT_MIN_LOTS, PEPPERSTONE_LIVE_PILOT_PREFERRED_MIN_LOTS } from './pepperstone-live-micro-risk';
 import { RiskProfile } from '../../risk/entities/risk-profile.entity';
 import { BrokerService } from '../../broker/broker.service';
 import { BrokerFxConversionService } from '../../market-data/services/broker-fx-conversion.service';
@@ -140,6 +140,9 @@ export interface PositionSizingInputs {
     artifact: 'pepperstone-usd-live-micro-pilot-v1';
     maxLots: '1';
     requestedMinimumLots: '0.01';
+    preferredMinimumLots: '0.10';
+    brokerMinimumLots: string;
+    costRiskStepDownFromLots: string | null;
     maximumRiskUsd: string;
     projectedCostInclusiveRiskUsd: string;
     feeReservePerLotUsd: '8';
@@ -1132,42 +1135,81 @@ export class PositionSizingService {
       }
     }
 
-    const finalRiskAtStopInQuoteCurrency = lots.mul(riskPerLot);
-    const finalRiskAtStop = finalRiskAtStopInQuoteCurrency.divDown(
-      quotePerAccountCurrency,
-      LOT_SCALE,
-    );
-    const finalRiskAtStopPercentOfCapital = finalRiskAtStop
-      .divDown(riskCapitalBase, LOT_SCALE)
-      .mulByPowerOfTen(2);
-
     let liveMicroPilotEnvelope: PositionSizingInputs['liveMicroPilotEnvelope'];
-    // The independent account-aware proof is checked AFTER broker-volume,
-    // margin and cross-currency conversion. The $8-per-standard-lot cost
-    // reserve plus $0.20 fixed slippage is a conservative SCREENING estimate,
-    // not a verified live tariff or guaranteed maximum fill loss.
+    // LIVE preferred 0.10–1.00 does NOT make 0.10 an executable floor. Start
+    // with the existing model/risk/margin-derived volume; if the conservative
+    // 2%-of-equity stop+fee reserve still exceeds the cap, move DOWN on the
+    // exact broker volume grid. No up-sizing, min-lot rounding, or DEMO pilot
+    // privilege is inherited. Every tested candidate uses a rounded-UP risk
+    // conversion, never a favorable truncated value.
     if (pepperstoneLiveMicro) {
+      const proposedLots = lots;
+      const riskForCandidate = (candidateLots: ExactDecimal) =>
+        evaluatePepperstoneLiveMicroRisk({
+          equityUsd: equity.toString(),
+          lots: candidateLots.toString(),
+          brokerMinimumLots: minLot.toString(),
+          grossRiskAtStopUsd: candidateLots.mul(riskPerLot)
+            .divUp(quotePerAccountCurrency, LOT_SCALE).toString(),
+        });
       let liveMicroResult: ReturnType<typeof evaluatePepperstoneLiveMicroRisk>;
       try {
-        liveMicroResult = evaluatePepperstoneLiveMicroRisk({
-          equityUsd: equity.toString(), lots: lots.toString(),
-          brokerMinimumLots: minLot.toString(),
-          grossRiskAtStopUsd: finalRiskAtStop.toString(),
-        });
-      } catch {
+        liveMicroResult = riskForCandidate(lots);
+        if (!liveMicroResult.allowed &&
+            liveMicroResult.code === 'LIVE_COST_INCLUSIVE_RISK_LIMIT') {
+          // Binary search across the provider's actual volume increments. The
+          // all-in risk projection increases monotonically with volume; this
+          // finds the LARGEST affordable grid lot, including 0.01 or 0.04.
+          let low = BigInt(minLot.divUp(lotStep, 0).toString());
+          let high = BigInt(lots.divDown(lotStep, 0).toString());
+          let affordableLots: ExactDecimal | null = null;
+          let affordableVerdict: typeof liveMicroResult | null = null;
+          while (low <= high) {
+            const mid = (low + high) / 2n;
+            const candidate = lotStep.mul(ExactDecimal.parse(mid.toString()));
+            const verdict = riskForCandidate(candidate);
+            if (verdict.allowed) {
+              affordableLots = candidate;
+              affordableVerdict = verdict;
+              low = mid + 1n;
+            } else if (verdict.code === 'LIVE_COST_INCLUSIVE_RISK_LIMIT' ||
+                       verdict.code === 'LIVE_LOT_RANGE_LIMIT') {
+              high = mid - 1n;
+            } else {
+              throw new PositionSizingError(verdict.code!,
+                'LIVE broker volume limits cannot be proven for a down-sized position');
+            }
+          }
+          if (affordableLots && affordableVerdict) {
+            const downsizedMargin = await requiredMarginForLots(affordableLots);
+            if (downsizedMargin.gt(marginCapacity)) {
+              throw new PositionSizingError('BROKER_MINIMUM_MARGIN_UNAFFORDABLE',
+                'LIVE risk-sized volume fails broker margin verification');
+            }
+            lots = affordableLots;
+            requiredMargin = downsizedMargin;
+            liveMicroResult = affordableVerdict;
+          }
+        }
+      } catch (error) {
+        if (error instanceof PositionSizingError) throw error;
         throw new PositionSizingError('LIVE_LOT_INPUT_UNPROVABLE',
-          'LIVE broker lot-range risk/cost evidence cannot be proven; no order is affordable');
+          'LIVE broker lot/risk/cost evidence cannot be proven; no order is affordable');
       }
       if (!liveMicroResult.allowed) {
         throw new PositionSizingError(liveMicroResult.code!,
-          `Pepperstone LIVE requested lot-range order refused: projected stop/cost ` +
-          `${liveMicroResult.projectedCostInclusiveRiskUsd} USD, maximum ` +
-          `${liveMicroResult.maximumRiskUsd} USD. No rounding up and no DEMO lot inheritance.`);
+          `Pepperstone LIVE cost-aware order refused: at broker minimum ` +
+          `${minLot.toString()}, proposed stop+cost risk is not affordable ` +
+          `(initial estimate ${liveMicroResult.projectedCostInclusiveRiskUsd} USD, ` +
+          `maximum ${liveMicroResult.maximumRiskUsd} USD). Never force 0.10 lots.`);
       }
       liveMicroPilotEnvelope = {
         artifact: 'pepperstone-usd-live-micro-pilot-v1',
         maxLots: '1',
         requestedMinimumLots: '0.01',
+        preferredMinimumLots: '0.10',
+        brokerMinimumLots: minLot.toString(),
+        costRiskStepDownFromLots: lots.lt(proposedLots) ? proposedLots.toString() : null,
         maximumRiskUsd: liveMicroResult.maximumRiskUsd,
         projectedCostInclusiveRiskUsd: liveMicroResult.projectedCostInclusiveRiskUsd,
         feeReservePerLotUsd: '8',
@@ -1176,6 +1218,18 @@ export class PositionSizingService {
         brokerLiveVerificationRequired: true,
       };
     }
+
+    // Compute FINAL stop-risk only after the LIVE cost envelope has possibly
+    // reduced the broker lot. Persisted risk metrics and capital reservations
+    // must never refer to an earlier rejected, larger volume.
+    const finalRiskAtStopInQuoteCurrency = lots.mul(riskPerLot);
+    const finalRiskAtStop = pepperstoneLiveMicro
+      ? finalRiskAtStopInQuoteCurrency.divUp(quotePerAccountCurrency, LOT_SCALE)
+      : finalRiskAtStopInQuoteCurrency.divDown(quotePerAccountCurrency, LOT_SCALE);
+    const finalRiskAtStopPercentOfCapital = (pepperstoneLiveMicro
+      ? finalRiskAtStop.divUp(riskCapitalBase, LOT_SCALE)
+      : finalRiskAtStop.divDown(riskCapitalBase, LOT_SCALE))
+      .mulByPowerOfTen(2);
 
     const finalNotionalAccountCurrency = lots.mul(notionalPerLotAccountCurrency);
     const finalEffectiveLeverage = finalNotionalAccountCurrency.divUp(equity, LOT_SCALE);
@@ -1226,9 +1280,15 @@ export class PositionSizingService {
       minLot: minLot.toString(),
       policyMinimumExecutableLot: policyMinimumExecutableLot?.toString() ?? null,
       policyMinimumLotLifted,
-      preferredLotTarget: policyMinimumExecutableLot?.toString() ?? null,
+      preferredLotTarget: pepperstoneLiveMicro
+        ? PEPPERSTONE_LIVE_PILOT_PREFERRED_MIN_LOTS
+        : policyMinimumExecutableLot?.toString() ?? null,
       lotSelectionReason:
-        allocationAwarePaper && policyMinimumExecutableLot
+        pepperstoneLiveMicro
+          ? lots.gte(ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_PREFERRED_MIN_LOTS))
+            ? 'PREFERRED_LOT_ACHIEVED'
+            : 'BROKER_RISK_SCALED_DOWN'
+        : allocationAwarePaper && policyMinimumExecutableLot
           ? lots.gte(policyMinimumExecutableLot)
             ? 'PREFERRED_LOT_ACHIEVED'
             : 'BROKER_RISK_SCALED_DOWN'

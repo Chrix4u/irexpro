@@ -6,6 +6,9 @@ import { ExactDecimal } from '../../../common/utils/exact-decimal';
  * Risk, actual free margin and stop+cost geometry always decide size.
  * This policy NEVER authorizes production-LIVE order execution.
  */
+/** User-preferred AI size, NEVER a hard executable minimum. */
+export const PEPPERSTONE_LIVE_PILOT_PREFERRED_MIN_LOTS = '0.10';
+/** Broker executable floor (per-instrument broker minimum may be higher). */
 export const PEPPERSTONE_LIVE_PILOT_MIN_LOTS = '0.01';
 export const PEPPERSTONE_LIVE_PILOT_LOT_CEILING = '1';
 export const PEPPERSTONE_LIVE_PILOT_EQUITY_RISK_PERCENT = '2';
