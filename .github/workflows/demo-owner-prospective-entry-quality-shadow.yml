@@ -1,0 +1,32 @@
+name: iRexPro owner DEMO prospective entry-quality observation
+on:
+  push:
+    branches: ['feat/owner-demo-prospective-entry-quality-shadow-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/src/modules/ai/owner-demo-prospective-entry-quality*'
+      - 'apps/api/src/modules/ai/m1-tactical-scheduler.service.ts'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  prospective-readonly-shadow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install API dependencies
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Full API TypeScript
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - name: Prospective score and original M1 entry regression
+        run: pnpm --filter @irexpro/api exec jest src/modules/ai/owner-demo-prospective-entry-quality.spec.ts src/modules/ai/m1-tactical-scheduler.service.spec.ts --runInBand --silent --no-coverage
+      - name: Exact-source API build
+        run: pnpm --filter @irexpro/api build
