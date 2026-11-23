@@ -1377,6 +1377,9 @@ export class BrokerService {
     if ((dto.accountType as BrokerMode) !== connection.accountType) {
       throw new BadRequestException('Credential rotation must use the same account type');
     }
+    if (dto.accountId !== connection.accountId) {
+      throw new BadRequestException('Credential rotation must use the same broker trading account ID');
+    }
 
     // #291 / correction round 3 (finding 5 reconciliation): the NEW
     // credential set is validated on an EPHEMERAL adapter context — the
@@ -1404,6 +1407,11 @@ export class BrokerService {
       testError = testResult.errorMessage;
     } catch (err) {
       testError = err instanceof BrokerAdapterError ? err.message : 'Rotation test failed';
+    }
+
+    if (testOk && testResult?.accountId && testResult.accountId !== connection.accountId) {
+      testOk = false;
+      testError = 'Provider validated credentials for a different trading account';
     }
 
     if (!testOk) {

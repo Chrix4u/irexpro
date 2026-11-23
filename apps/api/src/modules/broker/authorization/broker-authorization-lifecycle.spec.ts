@@ -51,6 +51,7 @@ const mockAdapter = (over: Record<string, unknown> = {}) => ({
 
 const baseConnection = (over: Partial<Record<string, unknown>> = {}) => ({
   id: 'conn-1',
+  accountId: '123',
   userId: 'user-1',
   brokerId: 'metatrader5',
   brokerName: 'MetaTrader 5 (via MetaAPI)',
@@ -625,6 +626,24 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
       // (credential GENERATION change) invalidates NEW-exposure authority.
       expect(authorityBump).toHaveBeenCalledWith('user-1', 'BROKER_CREDENTIAL_ROTATED');
       expect(authorityInvalidate).toHaveBeenCalledWith('user-1', 'BROKER_CREDENTIAL_ROTATED');
+    });
+
+    it('refuses credential rotation onto a different account ID even when the broker is unchanged', async () => {
+      connectionRepo.findOne.mockResolvedValue(baseConnection());
+      await expect(service.rotateCredentials('conn-1',{
+        brokerId:'metatrader5',accountType:BrokerMode.LIVE,accountId:'different-account',
+      } as never,'user-1')).rejects.toThrow(BadRequestException);
+      expect(adapter.testConnection).not.toHaveBeenCalled();
+      expect(connectionRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses provider validation when it returns a different account ID', async () => {
+      connectionRepo.findOne.mockResolvedValue(baseConnection());
+      adapter.testConnection.mockResolvedValue({success:true,accountId:'different-account'});
+      await expect(service.rotateCredentials('conn-1',{
+        brokerId:'metatrader5',accountType:BrokerMode.LIVE,accountId:'123',
+      } as never,'user-1')).rejects.toThrow(BadRequestException);
+      expect(connectionRepo.update).not.toHaveBeenCalled();
     });
 
     it('refuses rotation to a different broker or account type', async () => {
