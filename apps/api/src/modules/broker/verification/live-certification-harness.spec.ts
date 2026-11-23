@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { ExactDecimal } from '../../../common/utils/exact-decimal';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -488,8 +489,25 @@ describe('LIVE certification harness — full machinery (fake LIVE adapter, alwa
     expect(adapter.calls).not.toContain('placeOrder');
   });
 
+  it('refuses a Pepperstone atomic canary with rollover-wide spread and places no order', async () => {
+    const adapter = new FakeLiveCertificationAdapter();
+    adapter.quoteSpread = '0.00049';
+    const o=liveGateOptions(adapter);
+    const evidence=await runLiveProviderCertification({...o,
+      target:{...o.target,brokerId:'pepperstone-ctrader'},
+      instrument:'EURUSD',maxCanaryRiskUsd:'1',protectedCanaryRelativeStopLoss:'50',
+    });
+    expect(evidence.certificationResult).toBe('FAIL');
+    expect(evidence.steps.find(x=>x.name==='place-minimum-safe-order')).toMatchObject({
+      status: 'FAIL', detail: expect.stringContaining('spread or quote freshness'),
+    });
+    expect(adapter.calls).not.toContain('placeOrder');
+  });
+
   it('places exactly one protected 5-pip fake canary below the $1 cost-inclusive envelope', async () => {
-    const adapter=new FakeLiveCertificationAdapter();adapter.separateProviderOrderIds=true;const o=liveGateOptions(adapter);
+    const adapter=new FakeLiveCertificationAdapter();
+    adapter.quoteSpread = '0.00010';
+    adapter.separateProviderOrderIds=true;const o=liveGateOptions(adapter);
     const evidence=await runLiveProviderCertification({...o,
       target:{...o.target,brokerId:'pepperstone-ctrader'},
       instrument:'EURUSD',maxCanaryRiskUsd:'1',protectedCanaryRelativeStopLoss:'50',
@@ -949,6 +967,8 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
   leakFloatMoney = false;
   /** When set, getRequiredMargin() returns null (unprovable margin). */
   marginNull = false;
+  /** Simulated provider spread; normal 1 pip or rollover 4.9 pip. */
+  quoteSpread = '0.00020';
 
   private readonly positions = new Map<string, BrokerPosition>();
   private readonly orderStates = new Map<string, BrokerOrderState>();
@@ -1130,9 +1150,9 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
     this.calls.push('getCurrentPrice');
     return {
       instrument,
-      bid: '1.08400',
+      bid: ExactDecimal.parse('1.08420').sub(ExactDecimal.parse(this.quoteSpread)).toString(),
       ask: '1.08420',
-      spread: '0.00020',
+      spread: this.quoteSpread,
       timestamp: new Date(),
     };
   }
