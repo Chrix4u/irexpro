@@ -1,4 +1,5 @@
 import * as crypto from 'crypto';
+import { evaluateDemoCombinedStopRisk } from './demo-combined-stop-risk';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -32,7 +33,9 @@ export type AllocationFailureCode =
   | 'ALLOCATION_CURRENCY_MISMATCH'
   /** The intent's allocation was terminally released — a replay of the same
    *  decision may not re-allocate capital. */
-  | 'ALLOCATION_ALREADY_RELEASED';
+  | 'ALLOCATION_ALREADY_RELEASED'
+  | 'ALLOCATION_DEMO_COMBINED_STOP_RISK'
+  | 'ALLOCATION_DEMO_STOP_RISK_UNPROVABLE';
 
 /** Typed fail-closed allocation rejection — carries the stable machine code. */
 export class AllocationError extends Error {
@@ -179,6 +182,8 @@ export class AllocationService {
      * capital ceiling. LIVE callers must not set this false.
      */
     enforceConcentrationCaps?: boolean;
+    /** Verified DEMO only, explicit 1%-or-less total proposed stop exposure cap. */
+    demoCombinedStopRiskPercent?: string;
   }): Promise<CapitalAllocation> {
     const { intent, sized } = params;
     const enforceConcentrationCaps =
@@ -332,6 +337,73 @@ export class AllocationService {
               'ALLOCATION_STRATEGY_CONCENTRATION',
               `strategy ${intent.strategyCode} exposure ${sameStrategy.add(requested).toString()} ` +
                 `would exceed the ${budget.maxStrategyConcentration}% cap ${cap.toString()}`,
+            );
+          }
+        }
+
+        // 6.5 Owner DEMO combined account stop-risk budget, checked inside
+        // the SAME account advisory-lock transaction. Include all already
+        // committed open/pending/in-flight positions and prior paid commissions
+        // with a 20% gross risk headroom. Unavailable inputs fail closed. This
+        // is a conservative projection, not a broker stop-fill guarantee.
+        if (params.demoCombinedStopRiskPercent !== undefined) {
+          try {
+            const historicalFees = await manager.query(
+              `SELECT MAX(ABS(t.commission) / NULLIF(t.lot_size, 0))::text AS fee_per_lot
+               FROM trading.trades t
+               JOIN broker.broker_connections b ON b.id=t.broker_connection_id
+               WHERE b.user_id=$1 AND b.logical_account_key=$2
+                 AND b.broker_id='pepperstone-ctrader' AND b.account_type='DEMO'
+                 AND t.status='CLOSED' AND t.commission IS NOT NULL
+                 AND t.lot_size > 0 AND t.closed_at > NOW()-INTERVAL '45 days'`,
+              [intent.userId, logicalAccountKey],
+            );
+            const feePerLot = historicalFees[0]?.fee_per_lot;
+            if (feePerLot == null) throw new Error('NO_PAID_BROKER_FEE_EVIDENCE');
+            const existing = await manager.query(
+              `SELECT a.allocated_lots, a.sizing_inputs->>'finalRiskAtStop' AS gross_risk,
+                      t.status AS trade_status, i.status AS intent_status
+               FROM trading.capital_allocations a
+               LEFT JOIN trading.trades t ON t.trade_intent_id=a.trade_intent_id
+               LEFT JOIN trading.trade_intents i ON i.id=a.trade_intent_id
+               WHERE a.user_id=$1 AND a.logical_account_key=$2 AND a.status='ACTIVE'`,
+              [intent.userId, logicalAccountKey],
+            );
+            const committed = existing
+              .filter(row =>
+                row.trade_status === 'PENDING' || row.trade_status === 'OPEN' ||
+                row.trade_status === 'RECONCILIATION_PENDING' ||
+                (row.trade_status == null && row.intent_status === 'CREATED'),
+              )
+              .map(row => ({
+                grossStopRisk: String(row.gross_risk ?? ''),
+                lots: String(row.allocated_lots ?? ''),
+              }));
+            const evaluation = evaluateDemoCombinedStopRisk({
+              totalCapital: budget.totalCapital,
+              brokerEquity: currentEquity.toString(),
+              maxPercent: params.demoCombinedStopRiskPercent,
+              observedCommissionPerLot: String(feePerLot),
+              proposed: {
+                grossStopRisk: String(sized.inputs.finalRiskAtStop ?? ''),
+                lots: sized.lots,
+              },
+              committed,
+            });
+            if (!evaluation.allowed) {
+              throw new AllocationError(
+                'ALLOCATION_DEMO_COMBINED_STOP_RISK',
+                `Fee-inclusive projected stop exposure ${evaluation.projectedRisk} ` +
+                `would exceed the verified DEMO account budget ${evaluation.maxRisk} ` +
+                `${budget.accountCurrency}; reduce size or close existing exposure`,
+              );
+            }
+          } catch (error) {
+            if (error instanceof AllocationError) throw error;
+            throw new AllocationError(
+              'ALLOCATION_DEMO_STOP_RISK_UNPROVABLE',
+              'Broker DEMO combined stop-risk inputs are unavailable or invalid ' +
+                '(no fallback that permits a large trade)',
             );
           }
         }
