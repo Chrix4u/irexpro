@@ -591,6 +591,11 @@ describe('LIVE certification harness — full machinery (fake LIVE adapter, alwa
     expect(JSON.stringify(written)).not.toContain(CREDENTIAL_MARKER);
     expect(JSON.stringify(written)).not.toContain(FAKE_ACCOUNT_ID);
     expect((written as { mode?: string }).mode).toBe('LIVE');
+    expect(written).toMatchObject({
+      certificationResult: 'PASS',
+      evidenceState: 'PERSISTED',
+      artifactPath: evidence.artifactPath,
+    });
     // The evidence hash is a sha256 hex digest and read-back verification
     // passes against the artifact on disk.
     expect(evidence.evidenceSha256).toMatch(/^[0-9a-f]{64}$/);
@@ -863,6 +868,21 @@ describe('LIVE certification harness — Round 7.1 P0-2: durable-evidence finali
     // The in-memory hash still matches the UNTAMPERED content — the
     // verification compares it against the (now different) artifact.
     expect(evidence.evidenceSha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('rejects artifact metadata tampering even when the canonical SHA is unchanged', async () => {
+    const evidence = await runLiveProviderCertification(
+      liveGateOptions(new FakeLiveCertificationAdapter()),
+    );
+    const original = JSON.parse(readFileSync(evidence.artifactPath!, 'utf8'));
+    for (const tampered of [
+      { ...original, evidenceState: 'PERSISTENCE_FAILED' },
+      { ...original, certificationResult: 'EVIDENCE_PERSISTENCE_FAILED' },
+      { ...original, artifactPath: '/some/other/evidence.json' },
+    ]) {
+      writeFileSync(evidence.artifactPath!, JSON.stringify(tampered, null, 2), 'utf8');
+      expect(verifyLiveCertificationArtifact(evidence.artifactPath!, evidence)).toBe(false);
+    }
   });
 
   it('the canonical evidence hash is stable across serialization round-trips (record → artifact → re-parse)', async () => {
