@@ -259,6 +259,14 @@ export interface BrokerOrderRequest {
   lotSize: string;
   stopLoss: string;
   takeProfit: string;
+  /**
+   * Optional MARKET-only, cTrader-native atomic entry protection. Positive
+   * integer distance in 1/100000 of a price unit from the provider fill.
+   * NOT a guaranteed fill and NOT a substitute for stop/fee risk limits.
+   * Mutually exclusive with absolute stopLoss and with absolute takeProfit.
+   * The adapter must reject unsupported usage BEFORE broker dispatch.
+   */
+  relativeStopLoss?: string;
   comment?: string;
   /** Opaque provider account reference; memory-only and never audited. */
   connectionReference?: string;

@@ -94,6 +94,8 @@
  * Tests never flip it." The durable JSON artifact this harness writes is the
  * evidenceRef material for that process.
  */
+import { ExactDecimal } from '../../../common/utils/exact-decimal';
+import { evaluatePepperstoneLiveMicroRisk } from '../../execution/services/pepperstone-live-micro-risk';
 import { createHash, randomUUID } from 'crypto';
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -620,6 +622,13 @@ export interface LiveCertificationOptions {
    * account currency for USD-denominated accounts).
    */
   maxCanaryExposure: string;
+  /** Pepperstone LIVE micro-canary: require a provider-atomic relative stop,
+   * positive integer units of 1/100000 of quote price. The corresponding
+   * pessimistic after-fee estimated risk must fit maxCanaryRiskUsd. No value
+   * means NO real-money Pepperstone canary may be submitted.
+   */
+  protectedCanaryRelativeStopLoss?: string;
+  maxCanaryRiskUsd?: string;
   /**
    * Credentials for the harness's own connect calls — memory-only, NEVER
    * recorded in evidence.
@@ -734,6 +743,7 @@ interface LiveChecklistContext {
   canaryOrderId?: string;
   canaryEntryPrice?: string;
   freeMargin?: string;
+  equity?: string;
   accountCurrency?: string | null;
   baselinePositionIds: Set<string>;
   baselineOrderIds: Set<string>;
@@ -972,6 +982,7 @@ export async function runLiveCertificationChecklist(
       }
       ctx.accountCurrency = info.currency;
       ctx.freeMargin = info.freeMargin;
+      ctx.equity = info.equity;
       return {
         status: 'PASS',
         detail:
@@ -1170,6 +1181,46 @@ export async function runLiveCertificationChecklist(
           detail: `prerequisite stage(s) did not pass (${missing.join(', ')}) — no canary order`,
         };
       }
+      // Pepperstone LIVE $50 canary is forbidden unless an atomic relative
+      // stop can be attached at NEW_ORDER_REQ time. An after-fill 2110 amend
+      // leaves an unprotected window and is not a safe certification canary.
+      // USD account + USD quote pair are mandatory for direct quote-currency
+      // economics, so a cross-pair currency conversion cannot be guessed.
+      if (options.target.brokerId === 'pepperstone-ctrader') {
+        const points = options.protectedCanaryRelativeStopLoss;
+        const explicitRiskCap = options.maxCanaryRiskUsd;
+        if (!points || !/^[1-9]\d*$/.test(points) ||
+            !Number.isSafeInteger(Number(points)) ||
+            !explicitRiskCap || ctx.accountCurrency !== 'USD' ||
+            !ctx.instrument!.symbol.endsWith('USD') ||
+            !ctx.equity || !ctx.canary ||
+            !passed('baseline-exposure-snapshot') ||
+            ctx.baselinePositionIds.size !== 0 ||
+            ctx.baselineOrderIds.size !== 0) {
+          return { status:'FAIL', detail:'Pepperstone LIVE atomic stop, USD pair, flat exposure or risk cap unverified — no canary order' };
+        }
+        try {
+          const stopDistance = ExactDecimal.parse(points).divByPowerOfTen(5);
+          const grossRisk = stopDistance
+            .mul(ExactDecimal.parse(ctx.instrument!.contractSize))
+            .mul(ExactDecimal.parse(ctx.canary.actualSize));
+          const risk = evaluatePepperstoneLiveMicroRisk({
+            equityUsd: ctx.equity,
+            lots: ctx.canary.actualSize,
+            brokerMinimumLots: ctx.instrument!.minLot,
+            grossRiskAtStopUsd: grossRisk.toString(),
+          });
+          if (!risk.allowed ||
+              ExactDecimal.parse(risk.projectedCostInclusiveRiskUsd)
+                .gt(ExactDecimal.parse(explicitRiskCap)) ||
+              ExactDecimal.parse(explicitRiskCap)
+                .gt(ExactDecimal.parse(ctx.equity).mul(ExactDecimal.parse('0.02')))) {
+            return { status:'FAIL', detail:`Pepperstone cost-inclusive protected canary exceeds micro risk envelope (${risk.code || 'operator cap'}) — zero orders` };
+          }
+        } catch {
+          return { status:'FAIL', detail:'Pepperstone LIVE protected canary numeric or risk proof failed — zero orders' };
+        }
+      }
       const request: BrokerOrderRequest = {
         idempotencyKey: `live-cert-${randomUUID()}`,
         clientOrderId: `livecert-${randomUUID()}`,
@@ -1178,15 +1229,21 @@ export async function runLiveCertificationChecklist(
         lotSize: ctx.canary!.actualSize,
         stopLoss: '0',
         takeProfit: '0',
+        ...(options.target.brokerId === 'pepperstone-ctrader'
+          ? { relativeStopLoss: options.protectedCanaryRelativeStopLoss }
+          : {}),
         orderKind: 'MARKET',
         timeInForce: 'GTC',
         comment: 'live-certification-canary',
         connectionReference: ctx.connectionReference,
       };
       const result = await adapter.placeOrder(request);
+      // Capture provider identity BEFORE verifying the fill fields so a
+      // PENDING/partial/malformed acknowledgement still triggers the later
+      // emergency close stage. Never retry the entry after uncertainty.
+      if (result.externalOrderId) ctx.canaryOrderId = result.externalOrderId;
       const violations = assertCanaryOrderResult('canaryOrder', result, 'FILLED', true);
       if (violations.length > 0) return { status: 'FAIL', detail: violations.join('; ') };
-      ctx.canaryOrderId = result.externalOrderId;
       return {
         status: 'PASS',
         detail:
@@ -1305,6 +1362,23 @@ export async function runLiveCertificationChecklist(
       );
       if (violations.length > 0) return { status: 'FAIL', detail: violations.join('; ') };
       ctx.canaryEntryPrice = position.openPrice;
+      // Require broker READBACK of the atomic 2106 position stop before
+      // claiming the minimum-size real-money canary was protected at entry.
+      // The subsequent close step still runs even if this check fails.
+      if (options.target.brokerId === 'pepperstone-ctrader') {
+        const actual=parseUnsignedDecimalString(position.stopLoss);
+        const entry=parseUnsignedDecimalString(position.openPrice);
+        const distance=options.protectedCanaryRelativeStopLoss
+          ? ExactDecimal.parse(options.protectedCanaryRelativeStopLoss).divByPowerOfTen(5)
+          : null;
+        if(!actual||!entry||actual.digits<=0n||
+           compareDecimals(actual,entry)>=0||!distance||
+           ExactDecimal.parse(position.openPrice)
+             .sub(ExactDecimal.parse(position.stopLoss))
+             .gt(distance.add(ExactDecimal.parse('0.00001')))) {
+          return {status:'FAIL',detail:'Pepperstone LIVE opened canary does not have verified atomic protective stop'};
+        }
+      }
       return {
         status: 'PASS',
         detail:

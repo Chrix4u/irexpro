@@ -260,6 +260,35 @@ describe('CTraderAdapter', () => {
       expect(result.filledAt).toEqual(new Date(1757000000123));
     });
 
+    it('puts Spotware relativeStopLoss in the ORIGINAL MARKET order request (atomic protection)', async () => {
+      await connectDemo();
+      await adapter.placeOrder({
+        idempotencyKey:'atomic-sl-001',instrument:'EUR/USD',
+        direction:'BUY',lotSize:'0.01',stopLoss:'0',takeProfit:'0',
+        relativeStopLoss:'50',orderKind:'MARKET',
+      });
+      const request=findRequest(server,CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)!;
+      expect(request.payload?.relativeStopLoss).toBe(50);
+      expect(request.payload).not.toHaveProperty('stopLoss');
+      expect(findRequest(server,CTRADER_PAYLOAD_TYPE.AMEND_POSITION_SLTP_REQ)).toBeUndefined();
+    });
+
+    it.each([
+      {relativeStopLoss:'0',stopLoss:'0',takeProfit:'0'},
+      {relativeStopLoss:'-50',stopLoss:'0',takeProfit:'0'},
+      {relativeStopLoss:'5.5',stopLoss:'0',takeProfit:'0'},
+      {relativeStopLoss:'9007199254740993',stopLoss:'0',takeProfit:'0'},
+      {relativeStopLoss:'50',stopLoss:'1.085',takeProfit:'0'},
+      {relativeStopLoss:'50',stopLoss:'0',takeProfit:'1.1'},
+    ])('refuses malformed or ambiguous MARKET relative stop before 2106 dispatch (%p)', async (fields) => {
+      await connectDemo();
+      await expect(adapter.placeOrder({
+        idempotencyKey:'atomic-sl-invalid',instrument:'EUR/USD',direction:'BUY',
+        lotSize:'0.01',orderKind:'MARKET',...fields,
+      })).rejects.toMatchObject({code:BrokerErrorCode.INVALID_REQUEST});
+      expect(findRequest(server,CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+    });
+
     it('maps timeInForce FOK to FILL_OR_KILL (4) on the wire', async () => {
       await connectDemo();
       await adapter.placeOrder({

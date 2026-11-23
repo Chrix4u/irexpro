@@ -948,6 +948,26 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
             ? CtraderTimeInForce.IMMEDIATE_OR_CANCEL
             : CtraderTimeInForce.GOOD_TILL_CANCEL;
 
+      // Spotware ProtoOANewOrderReq supports an atomic relativeStopLoss for
+      // MARKET orders (1/100000 of quote-price units). Unlike an absolute
+      // stopLoss, this is included in the ORIGINAL 2106 request, before any
+      // position can exist. No broker order is submitted on malformed or
+      // ambiguous dual-protection input.
+      let marketRelativeStopLoss: number | null = null;
+      if (order.relativeStopLoss !== undefined) {
+        const raw=order.relativeStopLoss;
+        if (kind !== 'MARKET' ||
+            !/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw)) ||
+            this.isNonZeroPrice(order.stopLoss) ||
+            this.isNonZeroPrice(order.takeProfit)) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_REQUEST,
+            'MARKET relativeStopLoss must be a safe positive integer and exclusive of absolute SL/TP',
+            undefined, false, ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          );
+        }
+        marketRelativeStopLoss=Number(raw);
+      }
       const payload: Record<string, unknown> = {
         ctidTraderAccountId: ctid,
         symbolId,
@@ -959,6 +979,9 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         label: idem.label,
         comment: idem.comment,
       };
+      if (marketRelativeStopLoss!==null) {
+        payload.relativeStopLoss=marketRelativeStopLoss;
+      }
       // DAY time-in-force → GOOD_TILL_DATE needs an expiration timestamp:
       // the end of the current UTC trading day (proto field 6, Unix ms).
       if (protoTif === CtraderTimeInForce.GOOD_TILL_DATE) {
