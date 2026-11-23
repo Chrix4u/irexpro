@@ -2,6 +2,9 @@ name: iRexPro DEMO candle-aware exit shadow
 on:
   push:
     branches: ['feat/profit-protection-candle-aware-shadow-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/src/modules/execution/reconciliation/**'
   workflow_dispatch:
 permissions:
   contents: read

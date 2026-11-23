@@ -2129,6 +2129,27 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           // Independent M1+M5 as-of candle check of the existing position.
           // Evaluated AFTER broker close dispatch; cannot veto an exit.
           candleAwareProfitPatienceShadow,
+          // Freeze only provider-native, connection-scoped candles that were
+          // inserted AND last updated before the exit decision. Future 2/5/10
+          // minute outcomes must be labeled in a separate later research job.
+          causalExitCandleSnapshot: {
+            artifact: 'irexpro-causal-candle-exit-snapshot-v1',
+            source: 'ctrader-broker-native',
+            observedAt: observedAt.toISOString(),
+            evaluationHorizonMinutes: [2, 5, 10],
+            futureOutcomeAtDecision: null,
+            m1: candleContext.m1.map(bar => ({
+              startedAt: bar.startedAt.toISOString(), open: bar.open,
+              high: bar.high, low: bar.low, close: bar.close,
+              brokerNativeSampleCount: bar.brokerNativeSampleCount,
+            })),
+            m5: candleContext.m5 ? {
+              startedAt: candleContext.m5.startedAt.toISOString(),
+              open: candleContext.m5.open, high: candleContext.m5.high,
+              low: candleContext.m5.low, close: candleContext.m5.close,
+              brokerNativeSampleCount: candleContext.m5.brokerNativeSampleCount,
+            } : null,
+          },
           protectedGraceRunnerShadow: patienceRunner,
           protectedGraceOppositeExecutableReversal: patienceSignal.oppositeExecutableReversal,
           m1AlignedLatestBodyPressure: m1Evidence?.alignedLatestBodyPressure ?? null,
