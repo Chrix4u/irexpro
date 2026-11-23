@@ -1,0 +1,33 @@
+name: iRexPro held entry quality — research only
+on:
+  push:
+    branches: ['research/held-entry-quality-winner-loss-discrimination-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/scripts/research/replay-held-entry-quality-shadow.cjs'
+      - 'apps/api/src/modules/ai/held-entry-quality-shadow-research.spec.ts'
+      - 'docs/research/pepperstone-demo-held-entry-2026-11-23.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  historical-analysis-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install API only
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Validate read-only script syntax
+        run: node --check apps/api/scripts/research/replay-held-entry-quality-shadow.cjs
+      - name: Full API type-check
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - name: Run historical replay research-only unit tests
+        run: pnpm --filter @irexpro/api exec jest src/modules/ai/held-entry-quality-shadow-research.spec.ts --runInBand --silent --no-coverage
