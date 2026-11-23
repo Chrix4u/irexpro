@@ -114,20 +114,26 @@ export function evaluatePepperstoneLivePortfolioBudget(input: {
   locallyProvenOpenPositions: number;
   pendingOrUncertainOrders: boolean;
   maxOpenPositions: number;
+  maxEffectiveLeverage: string;
+  proposedNotionalUsd: string;
+  existingNotionalsUsd: string[];
 }): {
   allowed: boolean;
   reason: 'LIVE_POSITION_COUNT_UNPROVABLE' | 'LIVE_POSITION_LIMIT' |
-    'LIVE_PORTFOLIO_STOP_RISK_LIMIT' | null;
+    'LIVE_PORTFOLIO_STOP_RISK_LIMIT' | 'LIVE_PORTFOLIO_LEVERAGE_LIMIT' | null;
   projectedTotalRiskUsd: string;
   riskCapUsd: string;
 } {
   const equity = ExactDecimal.parse(input.equityUsd);
   const proposed = ExactDecimal.parse(input.proposedCostInclusiveRiskUsd);
-  if (!equity.isPositive() || !proposed.isPositive() ||
+  const proposedNotional = ExactDecimal.parse(input.proposedNotionalUsd);
+  const maxLeverage = ExactDecimal.parse(input.maxEffectiveLeverage);
+  if (!equity.isPositive() || !proposedNotional.isPositive() || !maxLeverage.isPositive() || !proposed.isPositive() ||
       !Number.isInteger(input.providerOpenPositions) ||
       !Number.isInteger(input.locallyProvenOpenPositions) ||
       input.providerOpenPositions < 0 || input.locallyProvenOpenPositions < 0 ||
       input.existingCostInclusiveRisksUsd.length !== input.locallyProvenOpenPositions ||
+      input.existingNotionalsUsd.length !== input.locallyProvenOpenPositions ||
       !Number.isInteger(input.maxOpenPositions) || input.maxOpenPositions < 1 ||
       input.maxOpenPositions > 100) {
     throw new Error('LIVE_PORTFOLIO_EVIDENCE_UNPROVABLE');
@@ -139,14 +145,22 @@ export function evaluatePepperstoneLivePortfolioBudget(input: {
     if (!value.isPositive()) throw new Error('LIVE_PORTFOLIO_EVIDENCE_UNPROVABLE');
     return sum.add(value);
   }, proposed);
+  const combinedNotional = input.existingNotionalsUsd.reduce((sum, notional) => {
+    const value = ExactDecimal.parse(notional);
+    if (!value.isPositive()) throw new Error('LIVE_PORTFOLIO_EVIDENCE_UNPROVABLE');
+    return sum.add(value);
+  }, proposedNotional);
+  const totalLeverageCap = equity.mul(maxLeverage);
   const reason = input.pendingOrUncertainOrders ||
       input.providerOpenPositions !== input.locallyProvenOpenPositions
     ? 'LIVE_POSITION_COUNT_UNPROVABLE'
     : input.locallyProvenOpenPositions >= input.maxOpenPositions
       ? 'LIVE_POSITION_LIMIT'
-      : total.gt(cap)
-        ? 'LIVE_PORTFOLIO_STOP_RISK_LIMIT'
-        : null;
+      : combinedNotional.gte(totalLeverageCap)
+        ? 'LIVE_PORTFOLIO_LEVERAGE_LIMIT'
+        : total.gt(cap)
+          ? 'LIVE_PORTFOLIO_STOP_RISK_LIMIT'
+          : null;
   return {
     allowed: reason === null,
     reason,

@@ -37,6 +37,7 @@ export type AllocationFailureCode =
   | 'ALLOCATION_LIVE_MICRO_ONE_POSITION'
   | 'ALLOCATION_LIVE_PORTFOLIO_STOP_RISK'
   | 'ALLOCATION_LIVE_PORTFOLIO_POSITION_LIMIT'
+  | 'ALLOCATION_LIVE_PORTFOLIO_LEVERAGE_LIMIT'
   | 'ALLOCATION_LIVE_MICRO_DAILY_LOSS'
   | 'ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE';
 
@@ -386,6 +387,7 @@ export class AllocationService {
           const positions = await manager.query(
             `SELECT a.sizing_inputs->'liveMicroPilotEnvelope'->>
                       'projectedCostInclusiveRiskUsd' AS risk_after_costs,
+                    a.sizing_inputs->>'finalNotionalAccountCurrency' AS notional_account_currency,
                     t.status AS trade_status, i.status AS intent_status
              FROM trading.capital_allocations a
              LEFT JOIN trading.trades t ON t.trade_intent_id=a.trade_intent_id
@@ -418,11 +420,12 @@ export class AllocationService {
             [intent.brokerConnectionId],
           );
           const positionLimits = await manager.query(
-            `SELECT max_open_trades FROM trading.risk_profiles
+            `SELECT max_open_trades, max_leverage_allowed FROM trading.risk_profiles
              WHERE user_id=$1 LIMIT 1`,
             [intent.userId],
           );
           const maxOpenPositions = Number(positionLimits[0]?.max_open_trades);
+          const maxEffectiveLeverage = String(positionLimits[0]?.max_leverage_allowed ?? '');
           if (!Number.isInteger(maxOpenPositions) || maxOpenPositions < 1 ||
               maxOpenPositions > 100) {
             throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
@@ -442,6 +445,11 @@ export class AllocationService {
               locallyProvenOpenPositions: confirmedOpen.length,
               pendingOrUncertainOrders: inFlightOrUncertain || unresolved.length > 0,
               maxOpenPositions,
+              maxEffectiveLeverage,
+              proposedNotionalUsd: String(sized.inputs.finalNotionalAccountCurrency),
+              existingNotionalsUsd: confirmedOpen.map(
+                (row: Record<string, unknown>) => String(row.notional_account_currency ?? ''),
+              ),
             });
           } catch {
             throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
@@ -452,7 +460,9 @@ export class AllocationService {
               ? 'ALLOCATION_LIVE_PORTFOLIO_STOP_RISK'
               : portfolio.reason === 'LIVE_POSITION_LIMIT'
                 ? 'ALLOCATION_LIVE_PORTFOLIO_POSITION_LIMIT'
-                : 'ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE';
+                : portfolio.reason === 'LIVE_PORTFOLIO_LEVERAGE_LIMIT'
+                  ? 'ALLOCATION_LIVE_PORTFOLIO_LEVERAGE_LIMIT'
+                  : 'ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE';
             throw new AllocationError(failureCode,
               `LIVE combined projected stop/cost exposure ${portfolio.projectedTotalRiskUsd} ` +
               `USD must remain within ${portfolio.riskCapUsd} USD across all positions; ` +

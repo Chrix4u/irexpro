@@ -63,6 +63,9 @@ describe('LIVE multi-position portfolio admission: same-account evidence', () =>
     locallyProvenOpenPositions: 1,
     pendingOrUncertainOrders: false,
     maxOpenPositions: 3,
+    maxEffectiveLeverage: '30',
+    proposedNotionalUsd: '350',
+    existingNotionalsUsd: ['350'],
   };
   it('allows one additional small trade when BOTH total under the 2% budget', () => {
     expect(portfolio(base)).toEqual({
@@ -75,11 +78,11 @@ describe('LIVE multi-position portfolio admission: same-account evidence', () =>
   });
   it('allows a third only if the owner risk profile permits three AND total stop risk fits', () => {
     expect(portfolio({...base,providerOpenPositions:2,locallyProvenOpenPositions:2,
-      existingCostInclusiveRisksUsd:['0.1','0.1']}).allowed).toBe(true);
+      existingCostInclusiveRisksUsd:['0.1','0.1'],existingNotionalsUsd:['300','300']}).allowed).toBe(true);
   });
   it('respects the configured max_open_trades instead of a separate hardcoded two', () => {
     expect(portfolio({...base,providerOpenPositions:2,locallyProvenOpenPositions:2,
-      maxOpenPositions:2,existingCostInclusiveRisksUsd:['0.1','0.1']}).reason)
+      maxOpenPositions:2,existingCostInclusiveRisksUsd:['0.1','0.1'],existingNotionalsUsd:['300','300']}).reason)
       .toBe('LIVE_POSITION_LIMIT');
   });
   it('rejects untracked manual positions or provider/ledger mismatch', () => {
@@ -89,6 +92,13 @@ describe('LIVE multi-position portfolio admission: same-account evidence', () =>
   it('blocks pending or uncertain execution rather than double submitting', () => {
     expect(portfolio({...base,pendingOrUncertainOrders:true}).reason)
       .toBe('LIVE_POSITION_COUNT_UNPROVABLE');
+  });
+  it('rejects two individually affordable positions if aggregate notional exceeds leverage policy', () => {
+    expect(portfolio({...base,proposedNotionalUsd:'1100',existingNotionalsUsd:['1100']}).reason)
+      .toBe('LIVE_PORTFOLIO_LEVERAGE_LIMIT');
+  });
+  it('fails closed when a current position has unproven notional', () => {
+    expect(()=>portfolio({...base,existingNotionalsUsd:['']})).toThrow();
   });
   it('does not invent a previous position risk that was never persisted', () => {
     expect(()=>portfolio({...base,existingCostInclusiveRisksUsd:[]})).toThrow();
