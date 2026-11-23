@@ -86,6 +86,7 @@ import {
 } from './plan-b-multimodel-shadow';
 import { scorePlanBClockNeutralResearch } from './v8-shadow-meta-scorer';
 import { scoreOwnerDemoEntryOutcome } from './owner-demo-entry-outcome-shadow';
+import { evaluateOwnerDemoProspectiveEntryQuality } from './owner-demo-prospective-entry-quality';
 import { evaluatePepperstonePairSideAsOfShadow } from './pepperstone-pair-side-asof-shadow';
 import {
   evaluatePepperstoneDemoContinuationPause,
@@ -3287,6 +3288,44 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         recentClosedTrades:
           multimodelLossStreakBrake?.recentClosedTrades ?? null,
       });
+    // Owner-only, account-verified research-on-new-signals. Unlike the 2026-11-23
+    // hindsight study, these features are recorded at decision time BEFORE
+    // broker dispatch. This diagnostic CANNOT alter canExecute, the original
+    // model's entry decision, lot size or any LIVE account permission.
+    const prospectiveEnabled = this.config.get<string>(
+      'IREXPRO_OWNER_DEMO_PROSPECTIVE_ENTRY_QUALITY_SHADOW', '',
+    ) === 'enabled';
+    let prospectiveBrokerScopeVerified = false;
+    if (prospectiveEnabled && professionalDemoPhase && preDispatchOwnerVerified) {
+      try {
+        prospectiveBrokerScopeVerified = preDispatchUsdAccountVerified ||
+          await this.evidence.isPepperstoneUsdDemoBrokerConnection({
+            userId, brokerConnectionId,
+          });
+      } catch (error) {
+        this.logger.warn('Owner DEMO prospective quality scope could not be verified: ' +
+          (error as Error).message);
+      }
+    }
+    const ownerDemoProspectiveEntryQualityShadow =
+      evaluateOwnerDemoProspectiveEntryQuality({
+        enabled: prospectiveEnabled,
+        exactOwnerPepperstoneUsdDemoVerified: prospectiveBrokerScopeVerified,
+        decisionAt: decisionTime,
+        instrument: candidate.instrument,
+        direction: candidate.direction,
+        route: routeDecision.route,
+        strategyRoute: multimodelDemo?.ensemble.strategyRoute ?? null,
+        expertState: multimodelDemo?.trainedExpert.state ?? null,
+        paperExpectancySamples: expectancy.evidenceSamples,
+        entryConfidence: candidate.confidence,
+        m5Aligned: candidate.alignedM5,
+        m30DirectionalEfficiency: candidate.alignedM30DirectionalEfficiency ?? null,
+        h4Aligned: candidate.alignedH4,
+        originalAdmissionBlockers: governance.blockers,
+        professionalFallbackExecutionEnabled: professionalM1FallbackExecutable,
+      });
+
     const persistStartedAt = Date.now();
     const decision = await this.evidence.recordDecision({
       userId,
@@ -3312,6 +3351,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         patternMemory,
         ownerDemoPreDispatchFeeConfluenceShadow,
         ownerDemoEntryOutcomeShadow,
+        ownerDemoProspectiveEntryQualityShadow,
         ownerDemoPreEntryCandleSnapshot,
         oodResearchFeatures: {
           version: 'm1-ood-asof-envelope-v1',
