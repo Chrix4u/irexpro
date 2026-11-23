@@ -8,19 +8,19 @@ import { provePepperstoneDemoClosedOrderFill } from './closed-demo-order-deal-pr
 const opened=new Date('2026-11-23T18:04:56.856Z');
 const sent=new Date('2026-11-23T18:13:40.043Z');
 const closed=new Date('2026-11-23T18:13:41.745Z');
-const order={userId:'owner',brokerConnectionId:'demo-connection',tradeId:'trade-1',
+const order: Parameters<typeof provePepperstoneDemoClosedOrderFill>[0]['order']={userId:'owner',brokerConnectionId:'demo-connection',tradeId:'trade-1',
   status:OrderStatus.RECONCILIATION_PENDING,providerOrderId:null,
   orderKind:OrderKind.MARKET,instrument:'USDCAD',direction:TradeDirection.BUY,
   requestedQuantity:'2.8000',filledQuantity:'0.0000',avgFillPrice:null,
   createdAt:new Date('2026-11-23T18:13:39.965Z'),submittedAt:sent};
-const trade={id:'trade-1',userId:'owner',brokerConnectionId:'demo-connection',
+const trade: Parameters<typeof provePepperstoneDemoClosedOrderFill>[0]['trade']={id:'trade-1',userId:'owner',brokerConnectionId:'demo-connection',
   status:TradeStatus.CLOSED,instrument:'USDCAD',direction:TradeDirection.SELL,
   externalPositionId:null,externalOrderId:'8422910',lotSize:'2.8000',
   openedAt:opened,closedAt:closed,exitPrice:'1.43767000',realisedPnl:'60.38000000'};
-const deal={externalOrderId:'8422910',instrument:'USDCAD',direction:'BUY' as const,
+const deal: BrokerClosedTrade={externalOrderId:'8422910',instrument:'USDCAD',direction:'BUY' as const,
   lotSize:'2.8',openPrice:'1.43798',closePrice:'1.43767',stopLoss:'0',takeProfit:'0',
   realisedPnl:'60.38',openedAt:closed,closedAt:closed,commission:'-8.4',swap:'0',
-  closeReason:'UNKNOWN' as const} satisfies BrokerClosedTrade;
+  closeReason:'UNKNOWN' as const};
 const input={brokerId:'pepperstone-ctrader',accountType:'DEMO',
   accountUserId:'owner',accountConnectionId:'demo-connection',
   order,trade,providerClosedDeals:[deal],observedAt:new Date('2026-11-23T18:15:00Z')};
