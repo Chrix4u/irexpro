@@ -249,7 +249,11 @@ export class DemoProfitStopAuthoritySyncService {
             SET stop_loss=$3
           WHERE id=$1 AND user_id=$2 AND status='OPEN'
             AND broker_connection_id=$4
-            AND external_position_id=$5
+            -- Pepperstone cTrader stores the provider POSITION ID under
+            -- external_order_id for existing DEMO trades. Require the exact
+            -- broker-readback-matched ID; prefer external_position_id only
+            -- when explicitly recorded, with no fallback to a different ID.
+            AND COALESCE(external_position_id,external_order_id)=$5
             AND stop_loss=$6 AND take_profit=$7
           RETURNING stop_loss::text AS stop_loss`,
         [row.trade_id,userId,row.proposed_positive_stop,row.broker_connection_id,
