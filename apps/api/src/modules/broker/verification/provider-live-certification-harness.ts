@@ -1761,6 +1761,14 @@ export function verifyLiveCertificationArtifact(
     const raw = readFileSync(path, 'utf8');
     const parsed = JSON.parse(raw) as LiveCertificationEvidence;
     if (parsed.runId !== evidence.runId) return false;
+    // Durability state is excluded from the canonical content hash, so
+    // compare it explicitly. Otherwise a file incorrectly persisted as
+    // EVIDENCE_PERSISTENCE_FAILED can masquerade as an in-memory PASS.
+    if (parsed.evidenceSha256 !== evidence.evidenceSha256 ||
+        parsed.evidenceState !== evidence.evidenceState ||
+        parsed.certificationResult !== evidence.certificationResult ||
+        parsed.artifactPath !== evidence.artifactPath ||
+        parsed.artifactPath !== path) return false;
     return computeLiveCertificationEvidenceSha256(parsed) === evidence.evidenceSha256;
   } catch {
     return false;
@@ -1799,15 +1807,21 @@ function finalizeLiveCertificationEvidence(
         new Date(record.finishedAt),
       ),
     );
-    writeFileSync(path, JSON.stringify(evidence, null, 2), { encoding: 'utf8' });
-    if (!verifyLiveCertificationArtifact(path, evidence)) {
+    // Persist the FINAL result before read-back verification. The previous
+    // flow wrote the initial PERSISTENCE_FAILED object and changed only the
+    // in-memory return value to PASS, leaving the actual artifact invalid.
+    const persistedEvidence: LiveCertificationEvidence = {
+      ...evidence,
+      evidenceState: 'PERSISTED',
+      certificationResult: record.overall,
+      artifactPath: path,
+    };
+    writeFileSync(path, JSON.stringify(persistedEvidence, null, 2), { encoding: 'utf8' });
+    if (!verifyLiveCertificationArtifact(path, persistedEvidence)) {
       throw new Error(
-        'read-back verification failed (artifact missing, unparsable, or hash mismatch)',
+        'read-back verification failed (artifact missing, unparsable, hash or result mismatch)',
       );
     }
-    evidence.evidenceState = 'PERSISTED';
-    evidence.certificationResult = record.overall;
-    evidence.artifactPath = path;
     // Round 7.1 (CodeQL CWE-532 hygiene): no env-derived values in console
     // output — the artifact directory and the sha256 (computed over a record
     // that legitimately contains operator-supplied identifiers) live in the
@@ -1819,7 +1833,7 @@ function finalizeLiveCertificationEvidence(
         `certificationResult=${record.overall} ` +
         `(sha256 + artifact path are recorded inside the evidence artifact)`,
     );
-    return evidence;
+    return persistedEvidence;
   } catch (err) {
     console.error(
       '[live-certification] EVIDENCE PERSISTENCE FAILED — this run is NOT certifiable: ' +
