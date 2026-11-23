@@ -16,6 +16,58 @@ export interface CompletedProfitExitCandle {
   low: number;
   close: number;
   brokerNativeSampleCount: number;
+  // Stored canonical M5 or a bounded, strict aggregation of five COMPLETE
+  // source-matched broker-native M1 bars. Derived M5 is not an independent
+  // provider feed and never substitutes for the separate trained expert.
+  provenance?: 'STORED_BROKER_NATIVE_M5' | 'COMPOSED_FROM_BROKER_NATIVE_M1';
+}
+
+/**
+ * Construct the latest CLOSED, UTC-aligned M5 bar from five individually
+ * completed and as-of-approved broker-native M1 bars. The DB caller must
+ * already enforce the original INSERT, most recent UPDATE and last quote
+ * timestamps <= decision time for each M1 row. No current forming bar,
+ * missing minute, duplicate minute, or provider-less sample is accepted.
+ *
+ * This solves late M5 materialization without claiming that today's final
+ * mutable historical candles were known at earlier decision timestamps.
+ */
+export function composeAsOfNativeM5FromFiveM1(
+  asOf: Date,
+  completedAsOfNativeM1: CompletedProfitExitCandle[],
+): CompletedProfitExitCandle | null {
+  const asOfMillis=asOf.getTime();
+  if (!Number.isFinite(asOfMillis)) return null;
+  // At 12:15:05, the latest fully closed M5 is 12:10–12:15;
+  // at 12:14:59, the latest fully closed M5 is 12:05–12:10.
+  const end=Math.floor(asOfMillis/300_000)*300_000;
+  const start=end-300_000;
+  const relevant=completedAsOfNativeM1.filter(b=>
+    b.startedAt instanceof Date && Number.isFinite(b.startedAt.getTime()) &&
+    b.startedAt.getTime()>=start && b.startedAt.getTime()<end,
+  ).sort((a,b)=>a.startedAt.getTime()-b.startedAt.getTime());
+  if(relevant.length!==5) return null;
+  let samples=0;
+  for(let i=0;i<5;i++) {
+    const b=relevant[i]!;
+    if(b.timeframeMinutes!==1 || b.startedAt.getTime()!==start+i*60_000 ||
+       b.startedAt.getTime()+60_000>asOfMillis ||
+       !Number.isSafeInteger(b.brokerNativeSampleCount) ||
+       b.brokerNativeSampleCount<1 ||
+       ![b.open,b.high,b.low,b.close].every(Number.isFinite) ||
+       b.low<=0 || b.low>Math.min(b.open,b.close) ||
+       b.high<Math.max(b.open,b.close)) return null;
+    samples+=b.brokerNativeSampleCount;
+  }
+  if(!Number.isSafeInteger(samples) || samples<5) return null;
+  return {
+    startedAt:new Date(start),timeframeMinutes:5,
+    open:relevant[0]!.open,close:relevant[4]!.close,
+    high:Math.max(...relevant.map(b=>b.high)),
+    low:Math.min(...relevant.map(b=>b.low)),
+    brokerNativeSampleCount:samples,
+    provenance:'COMPOSED_FROM_BROKER_NATIVE_M1',
+  };
 }
 
 export type CandleAwareExitReason =
