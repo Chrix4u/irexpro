@@ -1,0 +1,36 @@
+name: iRexPro DEMO admission and combined-risk regression
+on:
+  push:
+    branches:
+      - fix/demo-fee-inclusive-combined-stop-risk-20261123
+  pull_request:
+    paths:
+      - apps/api/src/modules/ai/demo-double-abstain-admission.ts
+      - apps/api/src/modules/ai/demo-double-abstain-admission.spec.ts
+      - apps/api/src/modules/ai/m1-tactical-scheduler.service.ts
+      - apps/api/src/modules/execution/services/allocation.service.ts
+      - apps/api/src/modules/execution/services/demo-combined-stop-risk.ts
+      - apps/api/src/modules/execution/services/demo-combined-stop-risk.spec.ts
+      - apps/api/src/modules/strategy/strategy-orchestrator.service.ts
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  admission-and-risk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install API dependencies (no deploy)
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Type-check entire API
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - name: Verify admission, allocation and strategy regressions
+        run: pnpm --filter @irexpro/api exec jest src/modules/ai/demo-double-abstain-admission.spec.ts src/modules/execution/services/demo-combined-stop-risk.spec.ts src/modules/execution/services/allocation.service.spec.ts src/modules/strategy/strategy-orchestrator.service.spec.ts --runInBand --silent --no-coverage

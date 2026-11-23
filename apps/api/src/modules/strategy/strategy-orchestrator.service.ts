@@ -702,7 +702,15 @@ export class StrategyOrchestratorService {
         // bounded by the explicit shared capital pool and the final Risk
         // Engine. Do not let 50%/60% concentration bookkeeping veto the first
         // professional 0.20-lot DEMO position. LIVE behavior is unchanged.
-        ...(externalProviderDemoPromoted ? { enforceConcentrationCaps: false } : {}),
+        ...(externalProviderDemoPromoted
+          ? {
+              enforceConcentrationCaps: false,
+              // 1% of the smaller of verified equity and allocated capital,
+              // shared by ALL pending/open/in-flight orders on this DEMO.
+              // Fee plus 20% stop-gap buffer is rechecked under the account lock.
+              demoCombinedStopRiskPercent: '1',
+            }
+          : {}),
       });
     } catch (err) {
       // Round 7.1 (P1 — sizing input freshness): a LIVE freshness rejection
