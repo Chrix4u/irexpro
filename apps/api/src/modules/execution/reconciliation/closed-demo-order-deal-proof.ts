@@ -60,7 +60,8 @@ export function provePepperstoneDemoClosedOrderFill(input: {
   const decimal=/^\d+(?:\.\d+)?$/;
   const qty=order.requestedQuantity,fill=order.filledQuantity,
     lots=trade.lotSize,price=trade.exitPrice,gross=trade.realisedPnl;
-  if(![qty,fill,lots,price].every(x=>typeof x==='string'&&decimal.test(x))||
+  if(![qty,fill,lots].every(x=>typeof x==='string'&&decimal.test(x))||
+      typeof price!=='string'||!decimal.test(price)||
       gross===null||gross===undefined||
       !/^-?\d+(?:\.\d+)?$/.test(gross)||
       compareDecimal(qty,'0')<=0||compareDecimal(fill,'0')!==0||
