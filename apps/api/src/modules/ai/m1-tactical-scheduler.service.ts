@@ -3320,7 +3320,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         paperExpectancySamples: expectancy.evidenceSamples,
         entryConfidence: candidate.confidence,
         m5Aligned: candidate.alignedM5,
-        m30DirectionalEfficiency: candidate.alignedM30DirectionalEfficiency,
+        m30DirectionalEfficiency: candidate.alignedM30DirectionalEfficiency ?? null,
         h4Aligned: candidate.alignedH4,
         originalAdmissionBlockers: governance.blockers,
         professionalFallbackExecutionEnabled: professionalM1FallbackExecutable,
