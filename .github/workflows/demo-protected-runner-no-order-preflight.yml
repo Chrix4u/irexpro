@@ -28,4 +28,4 @@ jobs:
       - name: Type check full API
         run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
       - name: Assert no provider order or DB mutation authority in CLI
-        run: pnpm --filter @irexpro/api exec jest scripts/validation/demo-protected-runner-no-order-preflight.spec.ts --runInBand --silent --no-coverage --runTestsByPath
+        run: pnpm --filter @irexpro/api exec jest src/modules/execution/reconciliation/demo-protected-runner-no-order-preflight.spec.ts --runInBand --silent --no-coverage --runTestsByPath
