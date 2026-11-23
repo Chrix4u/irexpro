@@ -1,0 +1,28 @@
+name: iRexPro Pepperstone LIVE readiness diagnosis no orders
+on:
+  push:
+    branches: ['ops/pepperstone-live-certification-readiness-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/scripts/validation/pepperstone-live-activation-readiness-ro.cjs'
+      - 'apps/api/src/modules/broker/verification/pepperstone-live-activation-readiness.spec.ts'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  safe-readiness-diagnosis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - run: node --check apps/api/scripts/validation/pepperstone-live-activation-readiness-ro.cjs
+      - run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - run: pnpm --filter @irexpro/api exec jest src/modules/broker/verification/pepperstone-live-activation-readiness.spec.ts --runInBand --silent --no-coverage
