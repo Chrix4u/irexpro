@@ -6305,10 +6305,24 @@ export default function AiTradingPage() {
                   it is closed.
                 </Alert>
               ) : (
-                <Alert variant="info">
-                  Once started, the AI may open, manage and close positions
-                  automatically within your allocation and server-enforced
-                  protections until you stop AI Trading.
+                <Alert variant={selectedBroker?.accountType === "LIVE" ? "warning" : "info"}>
+                  {selectedBroker?.accountType === "LIVE" ? (
+                    <>
+                      <strong>You selected a real-money LIVE account.</strong>{" "}
+                      Confirming requests this account&apos;s LIVE authorization
+                      from the server and starts the AI only if the provider is
+                      production-verified and all trading gates pass. The AI
+                      may then open and close real-money positions; losses can
+                      exceed the amount expected at a stop in volatile markets.
+                      If certification is incomplete, no session is started.
+                    </>
+                  ) : (
+                    <>
+                      Once started, the AI may open, manage and close positions
+                      automatically within your allocation and server-enforced
+                      protections until you stop AI Trading.
+                    </>
+                  )}
                 </Alert>
               )}
 

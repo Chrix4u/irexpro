@@ -84,7 +84,7 @@ function isSessionPayload(value: unknown): value is TradingSessionView {
 export type AutomationStartBroker = Pick<
   BrokerConnectionView,
   "id" | "brokerId" | "accountType" | "authorizationStatus" | "demoValidated"
->;
+> & { liveTradingEnabled?: boolean };
 
 export type BrokerAutomationPreparationResult =
   | { ready: true }
@@ -153,17 +153,31 @@ function describeDemoValidationFailure(result: DemoValidationResultView): string
  *
  * External DEMO brokers are evidence-gated: an unvalidated connection must
  * pass the server's real validate-demo checklist before the browser may ask
- * to activate DEMO automation. PAPER and LIVE paths are untouched, and an
- * already-ACTIVE DEMO connection requires no preparation.
+ * to activate DEMO automation. A LIVE account is activated only after the
+ * owner presses Start and confirms the real-money warning: the existing
+ * audited server endpoint independently checks production certification,
+ * broker authorization, and DEMO validation. The browser never grants
+ * LIVE permission itself. PAPER and already-active connections are untouched.
  */
 export async function prepareBrokerForAutomationStart(
   broker: AutomationStartBroker,
 ): Promise<BrokerAutomationPreparationResult> {
-  if (
-    broker.accountType !== "DEMO" ||
-    broker.brokerId === "paper-broker" ||
-    broker.authorizationStatus === "ACTIVE"
-  ) {
+  if (broker.accountType === "LIVE") {
+    if (broker.authorizationStatus === "ACTIVE" && broker.liveTradingEnabled === true) {
+      return { ready: true };
+    }
+    // User-initiated only (after explicit Start confirmation). No automatic
+    // authorization during account selection, page load or balance refresh.
+    // A BETA/UNVERIFIED provider is refused by BrokerService; do not retry
+    // or attempt to bypass its production-LIVE certification gate.
+    await api.request<void>(
+      `/broker/connections/${encodeURIComponent(broker.id)}/enable-live-trading`,
+      { method: "POST" },
+    );
+    return { ready: true };
+  }
+
+  if (broker.brokerId === "paper-broker" || broker.authorizationStatus === "ACTIVE") {
     return { ready: true };
   }
 
