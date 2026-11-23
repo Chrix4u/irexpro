@@ -302,6 +302,11 @@ export interface BrokerOrderModification {
 export interface BrokerOrderResult {
   success: boolean;
   externalOrderId?: string;
+  /** Native cTrader ORDER id for OrderDetailsReq; externalOrderId is the
+   * POSITION id for filled MARKET orders. Never substitute either for the
+   * other, particularly in real-money certification/reconciliation.
+   */
+  brokerNativeOrderId?: string;
   filledPrice?: string;
   /** Sprint 50 PR-3: filled quantity when the provider reports partial fills
    * (decimal string). When omitted on a FILLED result, orchestrators may

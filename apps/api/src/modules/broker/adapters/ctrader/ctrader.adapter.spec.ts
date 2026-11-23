@@ -254,7 +254,8 @@ describe('CTraderAdapter', () => {
 
       expect(result.success).toBe(true);
       expect(result.status).toBe('FILLED');
-      expect(result.externalOrderId).toBe('7654321');
+      expect(result.externalOrderId).toBe('7654321'); // actual POSITION identity
+      expect(result.brokerNativeOrderId).toBe('7654322'); // separate ORDER identity
       expect(result.filledPrice).toBe('1.08651');
       expect(result.filledQuantity).toBe('0.1'); // deal.filledVolume as lots
       expect(result.filledAt).toEqual(new Date(1757000000123));

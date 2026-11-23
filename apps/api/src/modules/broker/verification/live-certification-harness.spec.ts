@@ -489,7 +489,7 @@ describe('LIVE certification harness — full machinery (fake LIVE adapter, alwa
   });
 
   it('places exactly one protected 5-pip fake canary below the $1 cost-inclusive envelope', async () => {
-    const adapter=new FakeLiveCertificationAdapter();const o=liveGateOptions(adapter);
+    const adapter=new FakeLiveCertificationAdapter();adapter.separateProviderOrderIds=true;const o=liveGateOptions(adapter);
     const evidence=await runLiveProviderCertification({...o,
       target:{...o.target,brokerId:'pepperstone-ctrader'},
       instrument:'EURUSD',maxCanaryRiskUsd:'1',protectedCanaryRelativeStopLoss:'50',
@@ -499,6 +499,7 @@ describe('LIVE certification harness — full machinery (fake LIVE adapter, alwa
     expect(adapter.calls.filter(x=>x==='closeOrder')).toHaveLength(1);
     expect(evidence.steps.find(x=>x.name==='query-position')?.status).toBe('PASS');
     expect(evidence.certificationResult).toBe('PASS');
+    expect(adapter.lastOrderLookupId).toMatch(/^fake-native-order-/);
   });
 
   it('drives the full certification sequence against a fake LIVE adapter and passes deterministically', async () => {
@@ -953,6 +954,8 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
   private readonly orderStates = new Map<string, BrokerOrderState>();
   private readonly closedTrades: BrokerClosedTrade[] = [];
   private nextId = 1;
+  separateProviderOrderIds = false;
+  lastOrderLookupId: string | null = null;
   private canaryClosedOnce = false;
 
   openPositionCount(): number {
@@ -1151,6 +1154,8 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
       );
     }
     const externalOrderId = `fake-live-order-${this.nextId++}`;
+    const brokerNativeOrderId = this.separateProviderOrderIds
+      ? `fake-native-order-${this.nextId}` : externalOrderId;
     const filledPrice = '1.08420';
     this.positions.set(externalOrderId, {
       externalOrderId,
@@ -1166,8 +1171,8 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
       commission: '0.00',
       swap: '0.00',
     });
-    this.orderStates.set(externalOrderId, {
-      providerOrderId: externalOrderId,
+    this.orderStates.set(brokerNativeOrderId, {
+      providerOrderId: brokerNativeOrderId,
       clientOrderId: order.clientOrderId ?? null,
       status: 'FILLED',
       instrument: order.instrument,
@@ -1182,6 +1187,7 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
     return {
       success: true,
       externalOrderId,
+      brokerNativeOrderId,
       filledPrice,
       filledQuantity: order.lotSize,
       filledAt: new Date(),
@@ -1259,6 +1265,7 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
   }
 
   async getOrderById(providerOrderId: string): Promise<BrokerOrderState | null> {
+    this.lastOrderLookupId = providerOrderId;
     this.calls.push('getOrderById');
     return this.orderStates.get(providerOrderId) ?? null;
   }

@@ -740,7 +740,8 @@ interface LiveChecklistContext {
   digits: number;
   askPrice?: string;
   canary?: LiveCanarySizing;
-  canaryOrderId?: string;
+  canaryOrderId?: string; // Position id for cTrader MARKET fills.
+  canaryBrokerOrderId?: string; // Provider's native OrderId for order history.
   canaryEntryPrice?: string;
   freeMargin?: string;
   equity?: string;
@@ -1242,6 +1243,7 @@ export async function runLiveCertificationChecklist(
       // PENDING/partial/malformed acknowledgement still triggers the later
       // emergency close stage. Never retry the entry after uncertainty.
       if (result.externalOrderId) ctx.canaryOrderId = result.externalOrderId;
+      if (result.brokerNativeOrderId) ctx.canaryBrokerOrderId = result.brokerNativeOrderId;
       const violations = assertCanaryOrderResult('canaryOrder', result, 'FILLED', true);
       if (violations.length > 0) return { status: 'FAIL', detail: violations.join('; ') };
       return {
@@ -1264,7 +1266,10 @@ export async function runLiveCertificationChecklist(
           detail: 'place-minimum-safe-order did not pass — no provider ack to verify',
         };
       }
-      const result = await adapter.getOrderById(ctx.canaryOrderId);
+      const orderRef = options.target.brokerId === 'pepperstone-ctrader'
+        ? ctx.canaryBrokerOrderId : ctx.canaryOrderId;
+      if (!orderRef) return {status:'FAIL',detail:'Provider native market ORDER ID is absent (position ID cannot substitute)'};
+      const result = await adapter.getOrderById(orderRef);
       if (!result) {
         return {
           status: 'FAIL',
@@ -1302,7 +1307,10 @@ export async function runLiveCertificationChecklist(
           detail: 'no canary order to query (place-minimum-safe-order did not pass)',
         };
       }
-      const state = await adapter.getOrderById(ctx.canaryOrderId);
+      const orderRef = options.target.brokerId === 'pepperstone-ctrader'
+        ? ctx.canaryBrokerOrderId : ctx.canaryOrderId;
+      if (!orderRef) return {status:'FAIL',detail:'Provider native ORDER ID unavailable, refusing certification order lookup'};
+      const state = await adapter.getOrderById(orderRef);
       if (!state) {
         return {
           status: 'FAIL',
@@ -1322,7 +1330,7 @@ export async function runLiveCertificationChecklist(
       // The working-order listing (the reconciliation read surface) must not
       // carry the FILLED market canary as a working order.
       const working = await adapter.listOrders();
-      if (working.some((o) => o.providerOrderId === ctx.canaryOrderId)) {
+      if (working.some((o) => o.providerOrderId === orderRef)) {
         return {
           status: 'FAIL',
           detail: `filled canary order ${ctx.canaryOrderId} still listed among ${working.length} working order(s)`,
