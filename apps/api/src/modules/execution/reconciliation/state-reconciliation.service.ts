@@ -16,7 +16,7 @@ import { DomainEventBus } from '../../events/event-bus.service';
 import { DomainEventType } from '../../events/enums/domain-event-type.enum';
 import { Trade, TradeStatus } from '../entities/trade.entity';
 import { Order } from '../orders/order.entity';
-import { OrderStatus } from '../orders/order.enums';
+import { OrderKind, OrderStatus } from '../orders/order.enums';
 import { OrderService } from '../orders/order.service';
 // Round 7.1 (P0-5): pre-commitment crash recovery needs the intent (capital
 // allocation release) and the grant (provability of DEFINITELY_NOT_SENT).
@@ -36,6 +36,7 @@ import { ReconciliationDiscrepancyType, ReconciliationRunStatus } from './reconc
 import { ReconciliationPersistenceService } from './reconciliation-persistence.service';
 import { ReconciliationResolutionService } from './reconciliation-resolution.service';
 import { proveCtraderEntryOrderPositionRef } from './closed-demo-settlement-proof';
+import { provePepperstoneDemoClosedOrderFill } from './closed-demo-order-deal-proof';
 import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
 import {
   METAAPI_PROVIDER_QUOTA_COOLDOWN_MS,
@@ -689,6 +690,85 @@ export class StateReconciliationService {
             `Trade resolution failed for ${trade.id} (retried next run): ` +
               sanitizeReconciliationReason(err),
           );
+        }
+      }
+
+      // 7a2. Pepperstone USD DEMO only: exact broker DealList recovery for a
+      // fully CLOSED position whose associated MARKET close order remained
+      // RECONCILIATION_PENDING with zero fill and no provider order ID.
+      // Previously closedTrades was not fetched when all trade economics were
+      // already populated, leaving recent genuine closes stranded forever.
+      // This is account-scoped, bounded to recent terminal evidence, and
+      // uses ONLY OrderService.applyFill (exact-decimal domain CAS). No provider
+      // order, no invented ticket, no mutation of trade equity/realised P&L.
+      if (connection.brokerId === 'pepperstone-ctrader' &&
+          String(connection.accountType).toUpperCase()==='DEMO' &&
+          !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+          connection.userId===process.env.VPS_FOREX_SCANNER_USER_ID) {
+        const asOf=new Date();
+        const recentCloseOrders=internalOrders.filter(o=>
+          o.status===OrderStatus.RECONCILIATION_PENDING &&
+          o.orderKind===OrderKind.MARKET && o.providerOrderId===null &&
+          o.tradeId && o.filledQuantity &&
+          isZeroLikeDecimal(o.filledQuantity) && o.avgFillPrice===null &&
+          o.submittedAt instanceof Date && o.createdAt instanceof Date &&
+          asOf.getTime()-o.submittedAt.getTime()>=5_000 &&
+          asOf.getTime()-o.submittedAt.getTime()<=6*3600_000,
+        ).sort((a,b)=>b.submittedAt!.getTime()-a.submittedAt!.getTime())
+          .slice(0,2);
+        for(const order of recentCloseOrders){
+          try {
+            // An order cannot be inferred from a closed position if another
+            // close order for that trade might have caused the same deal.
+            if (internalOrders.filter(o=>o.tradeId===order.tradeId &&
+                o.status===OrderStatus.RECONCILIATION_PENDING &&
+                o.orderKind===OrderKind.MARKET).length!==1) continue;
+            const trade=await this.tradeRepo.findOne({where:{
+              id:order.tradeId!,userId:connection.userId,
+              brokerConnectionId:connection.id,status:TradeStatus.CLOSED,
+            }});
+            if(!trade || !trade.openedAt ||
+                !Number.isFinite(trade.openedAt.getTime()) ||
+                asOf.getTime()-trade.openedAt.getTime()>6*3600_000 ||
+                !trade.closedAt ||
+                providerPositions.some(p=>p.externalOrderId===
+                  (trade.externalPositionId||trade.externalOrderId))) continue;
+            // Bounded to this specific position's original entry: querying
+            // from only the close order timestamp could hide partial deals.
+            const providerDeals=await adapter.getClosedTrades(
+              new Date(Math.max(0,trade.openedAt.getTime()-60_000)),asOf,
+            );
+            const proof=provePepperstoneDemoClosedOrderFill({
+              brokerId:connection.brokerId,
+              accountType:String(connection.accountType).toUpperCase(),
+              accountUserId:connection.userId,
+              accountConnectionId:connection.id,
+              order,trade,providerClosedDeals:providerDeals,observedAt:asOf,
+            });
+            if(!proof.matched) continue;
+            // The OrderService itself enforces fill <= requested and an
+            // optimistic status CAS. If a concurrent worker won, no duplicate
+            // fill can be booked; retry rather than overwriting anything.
+            const completed=await this.orderService.applyFill(order.id,{
+              quantity:proof.quantity,price:proof.price,
+            });
+            if(completed.status!==OrderStatus.FILLED) throw new Error(
+              'Broker-deal-proven close order was not terminally reconciled',
+            );
+            resolutionRefs.push({
+              type:ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+              internalRefId:order.id,providerRef:null,
+              resolution:'Pepperstone DEMO uniquely matched closed deal: '+
+                'exact position, side, lots, exit, gross P&L and timestamp; '+
+                'close order fill booked via exact-decimal domain CAS',
+            });
+            autoResolvedCount++;
+          }catch(error){
+            errors++;
+            this.logger.warn('Pepperstone DEMO closed-order deal convergence '+
+              'deferred for order '+order.id+': '+
+              sanitizeReconciliationReason(error));
+          }
         }
       }
 
