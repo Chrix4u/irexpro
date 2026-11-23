@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-const src=fs.readFileSync(path.resolve(__dirname,'../../../scripts/validation/pepperstone-live-activation-readiness-ro.cjs'),'utf8');
+const src=fs.readFileSync(path.resolve(__dirname,'../../../../scripts/validation/pepperstone-live-activation-readiness-ro.cjs'),'utf8');
 describe('Pepperstone LIVE no-order certification readiness',()=>{
   it('only reports read-only state and cannot authorize real orders',()=>{
     expect(src).toContain("await db.query('BEGIN READ ONLY')");
