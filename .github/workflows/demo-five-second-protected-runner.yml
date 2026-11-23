@@ -26,7 +26,7 @@ jobs:
       - name: Type-check full API
         run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
       - name: Five-second owner-DEMO execution regressions
-        run: pnpm --filter @irexpro/api exec jest src/modules/execution/reconciliation/live-demo-profit-protection.service.spec.ts src/modules/execution/reconciliation/demo-protected-profit-runner-orchestrator.service.spec.ts src/modules/execution/reconciliation/verified-profit-stop-runner-policy.spec.ts src/modules/execution/reconciliation/demo-profit-stop-authority-sync.service.spec.ts src/modules/execution/reconciliation/candle-aware-profit-patience-shadow.spec.ts src/modules/broker/broker-demo-profit-stop-gateway.spec.ts --runInBand --silent --no-coverage
+        run: pnpm --filter @irexpro/api exec jest src/modules/execution/reconciliation/demo-five-second-protected-runner.integration.spec.ts src/modules/execution/reconciliation/live-demo-profit-protection.service.spec.ts src/modules/execution/reconciliation/demo-protected-profit-runner-orchestrator.service.spec.ts src/modules/execution/reconciliation/verified-profit-stop-runner-policy.spec.ts src/modules/execution/reconciliation/demo-profit-stop-authority-sync.service.spec.ts src/modules/execution/reconciliation/candle-aware-profit-patience-shadow.spec.ts src/modules/broker/broker-demo-profit-stop-gateway.spec.ts --runInBand --silent --no-coverage
       - name: Build exact source API dist
         run: pnpm --filter @irexpro/api build
       - name: Package immutable disabled-by-default release

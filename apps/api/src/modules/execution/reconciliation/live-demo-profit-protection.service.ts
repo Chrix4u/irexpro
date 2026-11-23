@@ -1609,7 +1609,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       broker_verified_at:Date|string|null;
       authority_committed_at:Date|string|null;
       expires_at:Date|string;
-      authoritative_stop:string;trade_status:string;
+      authoritative_stop:string;trade_status:string;session_status:string;
     }>;
     try {
       records=await this.dataSource.query(
@@ -1620,9 +1620,10 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
                 l.broker_ack_at,l.broker_verified_at,
                 l.authority_committed_at,l.expires_at,
                 t.stop_loss::text AS authoritative_stop,
-                t.status AS trade_status
+                t.status AS trade_status,s.status AS session_status
            FROM trading.demo_profit_stop_amendment_intents l
            JOIN trading.trades t ON t.id=l.trade_id AND t.user_id=l.user_id
+           JOIN trading.trading_sessions s ON s.id=t.trading_session_id
           WHERE l.trade_id=$1 AND l.user_id=$2
             AND l.broker_connection_id=$3
           ORDER BY l.created_at DESC LIMIT 2`,
@@ -1637,6 +1638,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
     if (!records.length) return 'NONE';
     const l=records[0];
     if (records.length!==1 || !l || l.trade_status!=='OPEN' ||
+        l.session_status!=='ACTIVE' ||
         !Number.isFinite(new Date(l.expires_at).getTime()) ||
         new Date(l.expires_at).getTime()<=Date.now() ||
         l.state!=='AUTHORITY_COMMITTED' ||
