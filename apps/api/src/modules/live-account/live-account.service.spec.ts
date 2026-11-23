@@ -1110,6 +1110,25 @@ describe('LiveAccountService', () => {
   });
 
   describe('getOrders', () => {
+    it('intersects account filter with authenticated user and pagination count', async () => {
+      await service.getOrders(USER_ID, 'ALL', 25, 0, 'conn-live');
+      expect(orderRepo.find.mock.calls[0][0].where).toEqual({
+        userId: USER_ID,
+        brokerConnectionId: 'conn-live',
+      });
+      expect(orderRepo.count.mock.calls[0][0].where).toEqual({
+        userId: USER_ID,
+        brokerConnectionId: 'conn-live',
+      });
+    });
+
+    it('rejects malformed connection IDs before querying orders', async () => {
+      await expect(service.getOrders(USER_ID, 'ALL', 25, 0, 'conn id')).rejects.toThrow(
+        'Invalid broker connection filter',
+      );
+      expect(orderRepo.find).not.toHaveBeenCalled();
+    });
+
     it('WORKING maps to the working status set with pagination', async () => {
       await service.getOrders(USER_ID, 'WORKING', 25, 10);
 
@@ -1225,6 +1244,21 @@ describe('LiveAccountService', () => {
   // ─── Positions ────────────────────────────────────────────────────────────
 
   describe('getPositions', () => {
+    it('scopes provider readback and durable positions by user AND chosen account', async () => {
+      await service.getPositions(USER_ID, 'conn-demo');
+      const where = tradeRepo.find.mock.calls[0][0].where;
+      expect(where.userId).toBe(USER_ID);
+      expect(where.brokerConnectionId).toBe('conn-demo');
+      expect(tradeRepo.count.mock.calls[0][0].where.brokerConnectionId).toBe('conn-demo');
+    });
+
+    it('rejects invalid connection filter before querying positions', async () => {
+      await expect(service.getPositions(USER_ID, 'x'.repeat(129))).rejects.toThrow(
+        'Invalid broker connection filter',
+      );
+      expect(tradeRepo.find).not.toHaveBeenCalled();
+    });
+
     it('returns only OPEN and RECONCILIATION_PENDING trades, newest first', async () => {
       await service.getPositions(USER_ID);
 

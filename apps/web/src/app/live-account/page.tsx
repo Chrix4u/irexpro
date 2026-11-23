@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   LiveAccountActivityPage,
   LiveAccountOrdersPage,
@@ -116,32 +116,51 @@ export default function TradingActivityPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
+  const lastRequest = useRef(0);
 
-  const refresh = useCallback(async (initial = false) => {
+  const refresh = useCallback(async (initial = false, requestedConnectionId?: string) => {
     if (!user) return;
+    // Ignore any older response that finishes after a rapid account switch.
+    const requestId = ++lastRequest.current;
     if (initial) setLoading(true);
     else setRefreshing(true);
     setError(null);
     try {
-      const [nextOverview, nextPositions, nextOrders, nextActivity] = await Promise.all([
-        loadLiveAccountOverview(),
-        loadLiveAccountPositions(),
-        loadLiveAccountOrders('ALL', 16, 0),
+      const nextOverview = await loadLiveAccountOverview();
+      const desired = requestedConnectionId ?? selectedConnectionId;
+      const connectionId =
+        nextOverview.connections.find((connection) => connection.id === desired)?.id ??
+        nextOverview.connections[0]?.id ??
+        null;
+      const [nextPositions, nextOrders, nextActivity] = await Promise.all([
+        connectionId
+          ? loadLiveAccountPositions(connectionId)
+          : Promise.resolve({ positions: [], total: 0 }),
+        connectionId
+          ? loadLiveAccountOrders('ALL', 16, 0, connectionId)
+          : Promise.resolve({ orders: [], total: 0, limit: 16, offset: 0 }),
+        // Audit events are user-wide, not account-filtered; label them.
         loadLiveAccountActivity(16, 0),
       ]);
+      if (requestId !== lastRequest.current) return;
+      setSelectedConnectionId(connectionId);
       setOverview(nextOverview);
       setPositions(nextPositions);
       setOrders(nextOrders);
       setActivity(nextActivity);
     } catch (requestError) {
+      if (requestId !== lastRequest.current) return;
       const message = mapApiError(requestError).message;
       setError(message);
       if (!initial) notify.error(message);
     } finally {
-      if (initial) setLoading(false);
-      else setRefreshing(false);
+      if (requestId === lastRequest.current) {
+        if (initial) setLoading(false);
+        else setRefreshing(false);
+      }
     }
-  }, [user, notify]);
+  }, [user, notify, selectedConnectionId]);
 
   useEffect(() => {
     if (!user) return;
@@ -154,13 +173,28 @@ export default function TradingActivityPage() {
     return () => window.clearInterval(timer);
   }, [user, refresh]);
 
-  const primaryConnection = overview?.connections[0] ?? null;
+  // Financial figures, open positions and orders all represent exactly the
+  // same server-scoped account. Never show a LIVE balance with DEMO trades.
+  const primaryConnection =
+    overview?.connections.find((connection) => connection.id === selectedConnectionId) ??
+    overview?.connections[0] ??
+    null;
   const financial = primaryConnection?.financial ?? null;
   const activePositions = positions?.positions ?? [];
   const recentOrders = orders?.orders ?? [];
   const recentActivity = activity?.activity ?? [];
-
-  const environment = useMemo(() => overview?.environment ?? 'UNKNOWN', [overview]);
+  const environment = primaryConnection?.accountType ?? 'UNKNOWN';
+  const selectedSession = Boolean(
+    primaryConnection && overview?.automation.sessionConnectionId === primaryConnection.id,
+  );
+  const selectedAutomationStatus = selectedSession
+    ? overview?.automation.status ?? 'IDLE'
+    : overview?.automation.status === 'ACTIVE'
+      ? 'ACTIVE ON ANOTHER ACCOUNT'
+      : 'IDLE';
+  const selectedAlerts = overview?.alerts.filter(
+    (alert) => alert.connectionId === null || alert.connectionId === primaryConnection?.id,
+  ) ?? [];
 
   if (restoring) {
     return <div style={{ padding: '3rem' }}><LoadingSpinner text="Restoring trading activity…" /></div>;
@@ -190,7 +224,42 @@ export default function TradingActivityPage() {
             </p>
           </div>
           <div className="trading-activity__hero-actions">
+            {overview && overview.connections.length > 1 && primaryConnection ? (
+              <label htmlFor="view-broker-account" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <span className="text-sm muted">Viewing account</span>
+                <select
+                  id="view-broker-account"
+                  aria-label="Viewing broker account"
+                  value={primaryConnection.id}
+                  onChange={(event) => {
+                    const nextId = event.currentTarget.value;
+                    setSelectedConnectionId(nextId);
+                    setPositions(null);
+                    setOrders(null);
+                    void refresh(false, nextId);
+                  }}
+                  style={{
+                    maxWidth: '280px',
+                    minWidth: '180px',
+                    minHeight: '40px',
+                    padding: '0.45rem 0.6rem',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border-soft)',
+                    background: 'var(--surface-tint)',
+                    color: 'var(--text)',
+                  }}
+                >
+                  {overview.connections.map((connection) => (
+                    <option key={connection.id} value={connection.id}>
+                      {connection.accountType} · {connection.displayName || connection.brokerName}
+                      {connection.maskedAccountId ? ' · ' + connection.maskedAccountId : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <Badge variant={environment === 'LIVE' ? 'warning' : 'info'}>{environment}</Badge>
+            <Link href="/onboarding/broker" className="activity-link">Manage broker accounts</Link>
             <Button
               type="button"
               variant="secondary"
@@ -242,20 +311,20 @@ export default function TradingActivityPage() {
               <Card>
                 <span className="activity-summary__label">AI Trading</span>
                 <strong className="activity-summary__value">
-                  {overview?.automation.status ?? 'IDLE'}
+                  {selectedAutomationStatus}
                 </strong>
                 <span className="activity-summary__meta">
-                  {overview?.automation.startedAt
+                  {selectedSession && overview?.automation.startedAt
                     ? `Started ${formatTimestamp(overview.automation.startedAt)}`
-                    : 'Start or stop AI Trading from the AI Trading workspace'}
+                    : 'AI trading is not running on this selected account'}
                 </span>
                 <Link href="/trade" className="activity-link mt-4">Open AI Trading</Link>
               </Card>
             </section>
 
-            {overview?.alerts.length ? (
+            {selectedAlerts.length ? (
               <section className="activity-alert-strip" aria-label="Account alerts">
-                {overview.alerts.slice(0, 3).map((item) => (
+                {selectedAlerts.slice(0, 3).map((item) => (
                   <Alert
                     key={item.key}
                     variant={
@@ -339,7 +408,7 @@ export default function TradingActivityPage() {
               <Card
                 className="activity-ai-card"
                 title="AI Activity"
-                subtitle="Recent account events generated by the server-side trading workflow."
+                subtitle="User-wide audit events across all your broker accounts (not filtered to the selected account)."
               >
                 <div className="activity-timeline">
                   {recentActivity.length === 0 ? (
@@ -356,7 +425,7 @@ export default function TradingActivityPage() {
                 </div>
               </Card>
 
-              <Card title="Execution Health" subtitle="A simple health view of the AI execution pipeline.">
+              <Card title="Execution Health" subtitle="All linked accounts combined; these counts are not filtered to the selected account.">
                 <div className="activity-health-grid">
                   <div><span>Open positions</span><strong>{overview?.executionHealth.openPositions ?? 0}</strong></div>
                   <div><span>Working orders</span><strong>{overview?.executionHealth.workingOrders ?? 0}</strong></div>

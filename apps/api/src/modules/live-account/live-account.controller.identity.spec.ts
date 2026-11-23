@@ -15,8 +15,8 @@ import { toLiveActivityRowView } from './dto/live-account-activity-response.dto'
  *
  * Proves:
  * - the four read endpoints exist under the right paths/methods;
- * - ONLY the authenticated user's UUID is ever passed to the service (never
- *   client-supplied connection/account identifiers);
+ * - the authenticated user UUID always leads each service call; an optional
+ *   broker connection ID is a tenant-constrained filter, not a principal;
  * - query pagination is clamped and invalid status filters fall back to ALL;
  * - service entities serialize into the frozen response DTO shapes.
  */
@@ -71,7 +71,7 @@ describe('LiveAccountController (identity contract)', () => {
     });
   });
 
-  describe('passes ONLY the authenticated user UUID to the service', () => {
+  describe('authenticated user is always the principal, connection ID is filter-only', () => {
     it('getOverview receives exactly the userId', async () => {
       await controller.getOverview(USER_ID);
       expect(service.getOverview).toHaveBeenCalledTimes(1);
@@ -82,15 +82,22 @@ describe('LiveAccountController (identity contract)', () => {
     it('getPositions receives exactly the userId', async () => {
       await controller.getPositions(USER_ID);
       expect(service.getPositions).toHaveBeenCalledTimes(1);
-      expect(service.getPositions).toHaveBeenCalledWith(USER_ID);
-      expect(service.getPositions.mock.calls[0]).toHaveLength(1);
+      expect(service.getPositions).toHaveBeenCalledWith(USER_ID, undefined);
+      expect(service.getPositions.mock.calls[0]).toHaveLength(2);
     });
 
     it('getOrders passes the userId first and never a client connection id', async () => {
       await controller.getOrders(USER_ID, 'WORKING', 25, 50);
-      expect(service.getOrders).toHaveBeenCalledWith(USER_ID, 'WORKING', 25, 50);
+      expect(service.getOrders).toHaveBeenCalledWith(USER_ID, 'WORKING', 25, 50, undefined);
       expect(service.getOrders.mock.calls[0][0]).toBe(USER_ID);
       expect(typeof service.getOrders.mock.calls[0][0]).toBe('string');
+    });
+
+    it('forwards account-scope filters while preserving the authenticated user', async () => {
+      await controller.getPositions(USER_ID, 'conn-live');
+      await controller.getOrders(USER_ID, 'ALL', 25, 0, 'conn-demo');
+      expect(service.getPositions).toHaveBeenCalledWith(USER_ID, 'conn-live');
+      expect(service.getOrders).toHaveBeenCalledWith(USER_ID, 'ALL', 25, 0, 'conn-demo');
     });
 
     it('getActivity passes the userId first', async () => {
@@ -100,12 +107,11 @@ describe('LiveAccountController (identity contract)', () => {
     });
 
     it('never forwards a principal object in place of the UUID', async () => {
-      // The controller method itself accepts exactly ONE argument — identity
-      // extraction is owned exclusively by the @CurrentUserId() decorator
-      // (which rejects malformed principals). Nothing else can inject a
-      // connection/account identifier into the service call.
+      // Only @CurrentUserId() provides the authenticated principal. An
+      // optional connection filter is a separate string query parameter and
+      // cannot override user identity or widen the repository predicate.
       expect(controller.getOverview.length).toBe(1);
-      expect(controller.getPositions.length).toBe(1);
+      expect(controller.getPositions.length).toBe(2);
 
       await controller.getOverview(USER_ID);
       expect(service.getOverview).toHaveBeenCalledWith(USER_ID);
@@ -126,9 +132,11 @@ describe('LiveAccountController (identity contract)', () => {
 
     it('identity-only handlers declare exactly one parameter (the userId)', () => {
       expect(paramTypes('getOverview')).toHaveLength(1);
-      expect(paramTypes('getPositions')).toHaveLength(1);
+      expect(paramTypes('getPositions')).toHaveLength(2);
+      expect(paramTypes('getPositions')[0]).toBe(String);
+      expect(paramTypes('getPositions')[1]).toBe(String);
       expect(controller.getOverview.length).toBe(1);
-      expect(controller.getPositions.length).toBe(1);
+      expect(controller.getPositions.length).toBe(2);
     });
 
     it('query-parameter handlers accept ONLY scalars after the userId (no identifier objects)', () => {
@@ -162,10 +170,10 @@ describe('LiveAccountController (identity contract)', () => {
       await controller.getActivity(USER_ID, 50, 0);
 
       expect(service.getOverview.mock.calls[0]).toEqual([USER_ID]);
-      expect(service.getPositions.mock.calls[0]).toEqual([USER_ID]);
+      expect(service.getPositions.mock.calls[0]).toEqual([USER_ID, undefined]);
       expect(service.getOrders.mock.calls[0][0]).toBe(USER_ID);
       expect(service.getActivity.mock.calls[0][0]).toBe(USER_ID);
-      expect(service.getOrders).toHaveBeenCalledWith(USER_ID, 'ALL', 50, 0);
+      expect(service.getOrders).toHaveBeenCalledWith(USER_ID, 'ALL', 50, 0, undefined);
       expect(service.getActivity).toHaveBeenCalledWith(USER_ID, 50, 0);
     });
   });
@@ -173,17 +181,17 @@ describe('LiveAccountController (identity contract)', () => {
   describe('query validation (limit clamping, status fallback)', () => {
     it('falls back to ALL for an invalid status and clamps limit/offset', async () => {
       await controller.getOrders(USER_ID, 'NOT_A_STATUS', 999, -5);
-      expect(service.getOrders).toHaveBeenCalledWith(USER_ID, 'ALL', 100, 0);
+      expect(service.getOrders).toHaveBeenCalledWith(USER_ID, 'ALL', 100, 0, undefined);
     });
 
     it('keeps a valid WORKING status and normal pagination untouched', async () => {
       await controller.getOrders(USER_ID, 'WORKING', 50, 0);
-      expect(service.getOrders).toHaveBeenCalledWith(USER_ID, 'WORKING', 50, 0);
+      expect(service.getOrders).toHaveBeenCalledWith(USER_ID, 'WORKING', 50, 0, undefined);
     });
 
     it('treats a missing status as ALL', async () => {
       await controller.getOrders(USER_ID, undefined, 50, 0);
-      expect(service.getOrders).toHaveBeenCalledWith(USER_ID, 'ALL', 50, 0);
+      expect(service.getOrders).toHaveBeenCalledWith(USER_ID, 'ALL', 50, 0, undefined);
     });
 
     it('clamps activity pagination', async () => {
