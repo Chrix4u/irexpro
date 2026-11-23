@@ -161,7 +161,7 @@ export class DemoProtectedProfitRunnerOrchestrator {
          broker_quote_ask,broker_quote_at,estimated_exit_cost_reserve,
          estimated_net_floor_after_reserve,state,expires_at)
        SELECT t.user_id,t.id,t.broker_connection_id,b.broker_id,b.account_type,
-              t.account_currency,$4,$5,$6,t.instrument,t.direction,t.lot_size,
+              t.account_currency,$4::text,$5::text,$6::text,t.instrument,t.direction,t.lot_size,
               t.fill_price,t.stop_loss,t.take_profit,$7::numeric,
               $8::numeric,$9::numeric,$10::timestamptz,$11::numeric,
               $12::numeric,'PREPARED',$10::timestamptz+interval '180 seconds'
@@ -173,8 +173,8 @@ export class DemoProtectedProfitRunnerOrchestrator {
           AND t.status='OPEN' AND b.status='CONNECTED'
           AND b.broker_id='pepperstone-ctrader' AND b.account_type='DEMO'
           AND b.account_currency='USD' AND t.account_currency='USD'
-          AND ti.metadata->>'multimodel_plan_b_route'=$4
-          AND COALESCE(t.external_position_id,t.external_order_id)=$5
+          AND ti.metadata->>'multimodel_plan_b_route'=$4::text
+          AND COALESCE(t.external_position_id,t.external_order_id)=$5::text
           AND t.instrument=$13 AND t.direction=$14
           AND t.lot_size=$15::numeric AND t.fill_price=$16::numeric
           AND t.stop_loss=$17::numeric AND t.take_profit=$18::numeric
