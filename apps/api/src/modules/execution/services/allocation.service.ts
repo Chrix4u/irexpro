@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
+import { evaluatePepperstoneLivePortfolioBudget } from './pepperstone-live-micro-risk';
 import { CapitalAllocation, CapitalAllocationStatus } from '../entities/capital-allocation.entity';
 import { CapitalBudget } from '../entities/capital-budget.entity';
 import { BrokerService } from '../../broker/broker.service';
@@ -34,6 +35,9 @@ export type AllocationFailureCode =
    *  decision may not re-allocate capital. */
   | 'ALLOCATION_ALREADY_RELEASED'
   | 'ALLOCATION_LIVE_MICRO_ONE_POSITION'
+  | 'ALLOCATION_LIVE_PORTFOLIO_STOP_RISK'
+  | 'ALLOCATION_LIVE_PORTFOLIO_POSITION_LIMIT'
+  | 'ALLOCATION_LIVE_PORTFOLIO_LEVERAGE_LIMIT'
   | 'ALLOCATION_LIVE_MICRO_DAILY_LOSS'
   | 'ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE';
 
@@ -339,18 +343,13 @@ export class AllocationService {
           }
         }
 
-        // 6.7 USD Pepperstone LIVE micro pilot: transaction-scoped single-
-        // position authority. A candidate is admitted only with zero active
-        // allocations AND a fresh provider account observation showing no
-        // open positions. Existing orders in uncertain states also block.
-        // The account advisory lock serializes competing simultaneous intents.
-        // This is a safety condition, NOT production-LIVE verification.
+        // 6.7 LIVE account: allow another broker-valid small trade when the
+        // EXISTING portfolio and proposed stop+cost exposure fit the SAME
+        // verified account equity. The advisory lock above serializes this
+        // risk check and reservation. Uncertain provider/ledger state fails
+        // closed; do not convert broker account count into an order approval.
         if (sized.inputs.liveMicroPilotEnvelope?.artifact ===
             'pepperstone-usd-live-micro-pilot-v1') {
-          if (committed.isPositive()) {
-            throw new AllocationError('ALLOCATION_LIVE_MICRO_ONE_POSITION',
-              'Pepperstone LIVE micro account allows only one open/pending/in-flight position');
-          }
           const stateRows = await manager.query(
             `SELECT open_positions_count, synced_at
              FROM broker.broker_accounts
@@ -361,24 +360,113 @@ export class AllocationService {
           const ageMs = observed?.synced_at != null
             ? Date.now() - new Date(String(observed.synced_at)).getTime() : NaN;
           if (observed?.open_positions_count == null ||
-              Number(observed.open_positions_count) !== 0 ||
+              !Number.isInteger(Number(observed.open_positions_count)) ||
               !Number.isFinite(ageMs) || ageMs < -5_000 || ageMs > 45_000) {
             throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
-              'LIVE micro account requires a recent provider snapshot of zero open positions');
+              'LIVE account needs a fresh provider-confirmed open-position count');
           }
+          const brokerWorkingOrders = await manager.query(
+            `SELECT provider_orders_seen, provider_positions_seen, completed_at, status, errors
+             FROM reconciliation.runs
+             WHERE broker_connection_id=$1 ORDER BY created_at DESC LIMIT 1`,
+            [intent.brokerConnectionId],
+          );
+          const latestRecon = brokerWorkingOrders[0];
+          const reconAgeMs = latestRecon?.completed_at != null
+            ? Date.now() - new Date(String(latestRecon.completed_at)).getTime() : NaN;
+          if (latestRecon?.provider_orders_seen == null ||
+              latestRecon?.provider_positions_seen == null ||
+              Number(latestRecon.provider_orders_seen) !== 0 ||
+              Number(latestRecon.provider_positions_seen) !== Number(observed.open_positions_count) ||
+              latestRecon.status !== 'COMPLETED' ||
+              Number(latestRecon.errors) !== 0 ||
+              !Number.isFinite(reconAgeMs) || reconAgeMs < -5_000 || reconAgeMs > 120_000) {
+            throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
+              'LIVE account has unverified or outstanding provider working orders');
+          }
+          const positions = await manager.query(
+            `SELECT a.sizing_inputs->'liveMicroPilotEnvelope'->>
+                      'projectedCostInclusiveRiskUsd' AS risk_after_costs,
+                    a.sizing_inputs->>'finalNotionalAccountCurrency' AS notional_account_currency,
+                    t.status AS trade_status, i.status AS intent_status
+             FROM trading.capital_allocations a
+             LEFT JOIN trading.trades t ON t.trade_intent_id=a.trade_intent_id
+             LEFT JOIN trading.trade_intents i ON i.id=a.trade_intent_id
+             WHERE a.user_id=$1 AND a.logical_account_key=$2
+               AND a.status='ACTIVE'`,
+            [intent.userId, logicalAccountKey],
+          );
+          const confirmedOpen = positions.filter(
+            (row: Record<string, unknown>) => row.trade_status === 'OPEN',
+          );
+          const inFlightOrUncertain = positions.some(
+            (row: Record<string, unknown>) =>
+              row.trade_status === 'PENDING' ||
+              row.trade_status === 'RECONCILIATION_PENDING' ||
+              (row.trade_status == null &&
+                !['REJECTED','EXPIRED','CANCELLED'].includes(String(row.intent_status))) ||
+              (row.trade_status != null &&
+                !['OPEN','CLOSED','REJECTED','CANCELLED'].includes(String(row.trade_status))),
+          );
           const unresolved = await manager.query(
             `SELECT 1 FROM trading.orders o
              LEFT JOIN trading.trades t ON t.id=o.trade_id
              WHERE o.broker_connection_id=$1
                AND o.status IN ('CREATED','SUBMITTED','DISPATCH_COMMITTED',
                  'ACKNOWLEDGED','PARTIALLY_FILLED','RECONCILIATION_PENDING')
-               AND (t.id IS NULL OR t.status <> 'CLOSED')
+               AND (t.id IS NULL OR t.status NOT IN ('OPEN','CLOSED')
+                 OR o.status='PARTIALLY_FILLED')
              LIMIT 1`,
             [intent.brokerConnectionId],
           );
-          if (unresolved.length > 0) {
-            throw new AllocationError('ALLOCATION_LIVE_MICRO_ONE_POSITION',
-              'LIVE micro account has an unfinished broker order; no second order');
+          const positionLimits = await manager.query(
+            `SELECT max_open_trades, max_leverage_allowed FROM trading.risk_profiles
+             WHERE user_id=$1 LIMIT 1`,
+            [intent.userId],
+          );
+          const maxOpenPositions = Number(positionLimits[0]?.max_open_trades);
+          const maxEffectiveLeverage = String(positionLimits[0]?.max_leverage_allowed ?? '');
+          if (!Number.isInteger(maxOpenPositions) || maxOpenPositions < 1 ||
+              maxOpenPositions > 100) {
+            throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
+              'LIVE user risk-profile open-position limit cannot be verified');
+          }
+          let portfolio: ReturnType<typeof evaluatePepperstoneLivePortfolioBudget>;
+          try {
+            portfolio = evaluatePepperstoneLivePortfolioBudget({
+              equityUsd: currentEquity.toString(),
+              proposedCostInclusiveRiskUsd: String(
+                sized.inputs.liveMicroPilotEnvelope.projectedCostInclusiveRiskUsd,
+              ),
+              existingCostInclusiveRisksUsd: confirmedOpen.map(
+                (row: Record<string, unknown>) => String(row.risk_after_costs ?? ''),
+              ),
+              providerOpenPositions: Number(observed.open_positions_count),
+              locallyProvenOpenPositions: confirmedOpen.length,
+              pendingOrUncertainOrders: inFlightOrUncertain || unresolved.length > 0,
+              maxOpenPositions,
+              maxEffectiveLeverage,
+              proposedNotionalUsd: String(sized.inputs.finalNotionalAccountCurrency),
+              existingNotionalsUsd: confirmedOpen.map(
+                (row: Record<string, unknown>) => String(row.notional_account_currency ?? ''),
+              ),
+            });
+          } catch {
+            throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
+              'Existing LIVE risk evidence could not be proven; no unverified second position');
+          }
+          if (!portfolio.allowed) {
+            const failureCode = portfolio.reason === 'LIVE_PORTFOLIO_STOP_RISK_LIMIT'
+              ? 'ALLOCATION_LIVE_PORTFOLIO_STOP_RISK'
+              : portfolio.reason === 'LIVE_POSITION_LIMIT'
+                ? 'ALLOCATION_LIVE_PORTFOLIO_POSITION_LIMIT'
+                : portfolio.reason === 'LIVE_PORTFOLIO_LEVERAGE_LIMIT'
+                  ? 'ALLOCATION_LIVE_PORTFOLIO_LEVERAGE_LIMIT'
+                  : 'ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE';
+            throw new AllocationError(failureCode,
+              `LIVE combined projected stop/cost exposure ${portfolio.projectedTotalRiskUsd} ` +
+              `USD must remain within ${portfolio.riskCapUsd} USD across all positions; ` +
+              `provider and ledger positions must agree (reason ${portfolio.reason})`);
           }
           const losses = await manager.query(
             `SELECT COALESCE(SUM(GREATEST(0, -(

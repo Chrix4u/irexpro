@@ -3,7 +3,7 @@ import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
-import { evaluatePepperstoneLiveMicroRisk, pepperstoneLivePilotIsScoped, PEPPERSTONE_LIVE_PILOT_LOT_CEILING, PEPPERSTONE_LIVE_PILOT_MIN_LOTS } from './pepperstone-live-micro-risk';
+import { evaluatePepperstoneLiveMicroRisk, affordablePepperstoneLiveLots, pepperstoneLivePilotIsScoped, PEPPERSTONE_LIVE_PILOT_LOT_CEILING } from './pepperstone-live-micro-risk';
 import { RiskProfile } from '../../risk/entities/risk-profile.entity';
 import { BrokerService } from '../../broker/broker.service';
 import { BrokerFxConversionService } from '../../market-data/services/broker-fx-conversion.service';
@@ -53,7 +53,6 @@ export type PositionSizingFailureCode =
   | 'POSITION_SIZE_ZERO'
   | 'LIVE_LOT_BROKER_MIN_TOO_LARGE'
   | 'LIVE_LOT_RANGE_LIMIT'
-  | 'LIVE_MIN_LOT_NOT_AFFORDABLE'
   | 'LIVE_COST_INCLUSIVE_RISK_LIMIT'
   | 'LIVE_LOT_INPUT_UNPROVABLE';
 
@@ -139,7 +138,6 @@ export interface PositionSizingInputs {
   liveMicroPilotEnvelope?: {
     artifact: 'pepperstone-usd-live-micro-pilot-v1';
     maxLots: '1';
-    requestedMinimumLots: '0.1';
     maximumRiskUsd: string;
     projectedCostInclusiveRiskUsd: string;
     feeReservePerLotUsd: '8';
@@ -887,14 +885,6 @@ export class PositionSizingService {
       );
     }
 
-    // The requested 0.10 minimum is NEVER an invitation to round UP.
-    // If independent risk + leverage sizing chose <0.10, no LIVE order.
-    if (pepperstoneLiveMicro && lots.lt(ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_MIN_LOTS))) {
-      throw new PositionSizingError('LIVE_MIN_LOT_NOT_AFFORDABLE',
-        `Risk-sized LIVE volume ${lots.toString()} is below the selected 0.10 minimum; ` +
-        'refuse rather than force an unaffordable larger position');
-    }
-
     let policyMinimumExecutableLot: ExactDecimal | null = null;
     let policyMinimumLotLifted = false;
     if (allocationAwarePaper && paperPreferredLot) {
@@ -1132,6 +1122,30 @@ export class PositionSizingService {
       }
     }
 
+    // User may prefer 0.10–1.00 lots, but smaller broker-valid volume MUST
+    // be considered. Re-size DOWN again to fund the expected fee/slippage
+    // envelope before treating the opportunity as unaffordable. The account
+    // allocation lock independently re-checks aggregate position risk.
+    if (pepperstoneLiveMicro) {
+      const perLotStopUsd = riskPerLot.divUp(quotePerAccountCurrency, LOT_SCALE);
+      const affordableLots = ExactDecimal.parse(affordablePepperstoneLiveLots({
+        equityUsd: equity.toString(),
+        proposedLots: lots.toString(),
+        brokerLotStep: lotStep.toString(),
+        stopRiskPerLotUsd: perLotStopUsd.toString(),
+      }));
+      if (affordableLots.lt(minLot)) {
+        throw new PositionSizingError('POSITION_SIZE_BELOW_MINIMUM',
+          `After broker stop, fee and slippage estimates, this LIVE account can support ` +
+          `${affordableLots.toString()} lots, below broker ${instrument} minimum ` +
+          `${minLot.toString()}; no forced rounding up`);
+      }
+      if (affordableLots.lt(lots)) {
+        lots = affordableLots;
+        requiredMargin = await requiredMarginForLots(lots);
+      }
+    }
+
     const finalRiskAtStopInQuoteCurrency = lots.mul(riskPerLot);
     const finalRiskAtStop = finalRiskAtStopInQuoteCurrency.divDown(
       quotePerAccountCurrency,
@@ -1160,14 +1174,13 @@ export class PositionSizingService {
       }
       if (!liveMicroResult.allowed) {
         throw new PositionSizingError(liveMicroResult.code!,
-          `Pepperstone LIVE requested lot-range order refused: projected stop/cost ` +
+          `Pepperstone LIVE broker-minimum-to-1.0 lot order refused: projected stop/cost ` +
           `${liveMicroResult.projectedCostInclusiveRiskUsd} USD, maximum ` +
           `${liveMicroResult.maximumRiskUsd} USD. No rounding up and no DEMO lot inheritance.`);
       }
       liveMicroPilotEnvelope = {
         artifact: 'pepperstone-usd-live-micro-pilot-v1',
         maxLots: '1',
-        requestedMinimumLots: '0.1',
         maximumRiskUsd: liveMicroResult.maximumRiskUsd,
         projectedCostInclusiveRiskUsd: liveMicroResult.projectedCostInclusiveRiskUsd,
         feeReservePerLotUsd: '8',
