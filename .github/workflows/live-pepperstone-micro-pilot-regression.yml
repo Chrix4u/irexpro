@@ -1,7 +1,7 @@
 name: iRexPro LIVE micro sizing safety
 on:
   push:
-    branches: ['fix/live-pepperstone-micro-lot-risk-20261123', 'release/pepperstone-live-micro-only-20261123']
+    branches: ['fix/live-pepperstone-micro-lot-risk-20261123', 'release/pepperstone-live-micro-only-20261123', 'feat/live-ctrader-range-0p1-1-20261123']
   pull_request:
     paths:
       - 'apps/api/src/modules/execution/services/position-sizing.service.ts'
