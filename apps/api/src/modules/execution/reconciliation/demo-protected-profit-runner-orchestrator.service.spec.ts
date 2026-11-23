@@ -73,7 +73,7 @@ describe('owner Pepperstone DEMO protected stop orchestration before any hold',(
       ['IREXPRO_PEPPERSTONE_DEMO_PROTECTED_RUNNER_AMEND',flag2],
       ['IREXPRO_PEPPERSTONE_DEMO_STOP_AUTHORITY_SYNC',flag3],
       ['VPS_FOREX_SCANNER_USER_ID',owner],
-    ]){if(value===undefined)delete process.env[key];else process.env[key]=value}
+    ] as Array<[string,string|undefined]>){if(value===undefined)delete process.env[key];else process.env[key]=value}
   });
   it('is disabled unless all THREE opt-in flags are enabled',async()=>{
     delete process.env.IREXPRO_PEPPERSTONE_DEMO_PROTECTED_RUNNER_EXECUTION;
