@@ -1,0 +1,29 @@
+name: iRexPro DEMO candle-aware exit shadow
+on:
+  push:
+    branches: ['feat/profit-protection-candle-aware-shadow-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/src/modules/execution/reconciliation/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  profit-exit-shadow-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install only API dependency tree
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Full API TypeScript compile-check (no broker calls)
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - name: Profit-protection plus candle as-of shadow regression
+        run: pnpm --filter @irexpro/api exec jest src/modules/execution/reconciliation/candle-aware-profit-patience-shadow.spec.ts src/modules/execution/reconciliation/live-demo-profit-protection.service.spec.ts src/modules/execution/reconciliation/profit-lock-patience-shadow.spec.ts src/modules/execution/reconciliation/pepperstone-demo-net-profit-lock.spec.ts --runInBand --silent --no-coverage

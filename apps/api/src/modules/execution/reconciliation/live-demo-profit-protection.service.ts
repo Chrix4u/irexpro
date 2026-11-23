@@ -10,6 +10,7 @@ import { evaluatePaperProfitLock } from '../../broker/adapters/paper-broker.adap
 import { evaluateProtectedRunnerShadow } from './protected-runner-shadow';
 import { evaluateVerifiedProtectedRunnerStopShadow } from './verified-profit-runner-stop-shadow';
 import { evaluateProfitLockPatienceShadow } from './profit-lock-patience-shadow';
+import { evaluateCandleAwareProfitExitShadow, type CompletedProfitExitCandle } from './candle-aware-profit-patience-shadow';
 import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
 import { evaluatePepperstonePeakLossRescue } from './pepperstone-peak-loss-rescue';
 import { evaluatePepperstoneDemoNetProfitLock } from './pepperstone-demo-net-profit-lock';
@@ -1897,7 +1898,8 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
   ): Promise<void> {
     if (!this.auditService) return;
     try {
-      const [latestThesis, m1Evidence, patienceSignal, nativeRunnerQuote] = await Promise.all([
+      const [latestThesis, m1Evidence, patienceSignal, nativeRunnerQuote,
+        candleContext, asOfPepperstoneExitCosts] = await Promise.all([
         this.loadLatestAiThesis(trade, observedAt),
         this.loadCausalM1Evidence(trade, observedAt),
         this.loadProfitLockPatienceSignal(trade, observedAt),
@@ -1907,7 +1909,36 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         trade.user_id === process.env.VPS_FOREX_SCANNER_USER_ID
           ? this.loadVerifiedRunnerAsOfNativeQuote(trade, observedAt).catch(() => null)
           : Promise.resolve(null),
+        brokerId === 'pepperstone-ctrader'
+          ? this.loadAsOfBrokerNativeProfitExitCandles(trade, observedAt).catch(() => ({
+              m1: [] as CompletedProfitExitCandle[],
+              m5: null as CompletedProfitExitCandle | null,
+            }))
+          : Promise.resolve({
+              m1: [] as CompletedProfitExitCandle[],
+              m5: null as CompletedProfitExitCandle | null,
+            }),
+        brokerId === 'pepperstone-ctrader'
+          ? this.loadCausalPepperstoneDemoCostEstimate(trade, observedAt).catch(() => null)
+          : Promise.resolve(null),
       ]);
+      const candleAwareProfitPatienceShadow = evaluateCandleAwareProfitExitShadow({
+        brokerId,
+        accountType: 'DEMO',
+        direction: trade.direction,
+        asOf: observedAt,
+        openedAt: trade.opened_at ? new Date(trade.opened_at) : new Date(NaN),
+        entryPrice: finite(positionPrices.entryPrice) ?? Number.NaN,
+        currentPrice: finite(positionPrices.currentPrice) ?? Number.NaN,
+        originalStopPrice: finite(trade.stop_loss) ?? Number.NaN,
+        takeProfitPrice: finite(trade.take_profit) ?? Number.NaN,
+        grossCurrentPnl: currentPnl,
+        grossPeakPnl: Math.max(currentPnl, finite(trade.max_favorable_pnl) ?? 0),
+        initialRiskPnl,
+        conservativeEstimatedCosts: asOfPepperstoneExitCosts?.estimatedCost ?? null,
+        lastTwoCompletedM1: candleContext.m1,
+        lastCompletedM5: candleContext.m5,
+      });
       const recheck = evaluateLiveDemoProfitLockTrendRecheck({
         tradeDirection: trade.direction,
         observedAt,
@@ -2095,6 +2126,30 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
           independentExitIntelligenceShadow,
           brokerVerifiedRunnerReadinessShadow: verifiedRunner,
           protectedGraceShadow: patience,
+          // Independent M1+M5 as-of candle check of the existing position.
+          // Evaluated AFTER broker close dispatch; cannot veto an exit.
+          candleAwareProfitPatienceShadow,
+          // Freeze only provider-native, connection-scoped candles that were
+          // inserted AND last updated before the exit decision. Future 2/5/10
+          // minute outcomes must be labeled in a separate later research job.
+          causalExitCandleSnapshot: {
+            artifact: 'irexpro-causal-candle-exit-snapshot-v1',
+            source: 'ctrader-broker-native',
+            observedAt: observedAt.toISOString(),
+            evaluationHorizonMinutes: [2, 5, 10],
+            futureOutcomeAtDecision: null,
+            m1: candleContext.m1.map(bar => ({
+              startedAt: bar.startedAt.toISOString(), open: bar.open,
+              high: bar.high, low: bar.low, close: bar.close,
+              brokerNativeSampleCount: bar.brokerNativeSampleCount,
+            })),
+            m5: candleContext.m5 ? {
+              startedAt: candleContext.m5.startedAt.toISOString(),
+              open: candleContext.m5.open, high: candleContext.m5.high,
+              low: candleContext.m5.low, close: candleContext.m5.close,
+              brokerNativeSampleCount: candleContext.m5.brokerNativeSampleCount,
+            } : null,
+          },
           protectedGraceRunnerShadow: patienceRunner,
           protectedGraceOppositeExecutableReversal: patienceSignal.oppositeExecutableReversal,
           m1AlignedLatestBodyPressure: m1Evidence?.alignedLatestBodyPressure ?? null,
@@ -2111,6 +2166,54 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         `cTrader DEMO shadow trend recheck unavailable trade=${trade.trade_id}: ${(error as Error).message}`,
       );
     }
+  }
+
+  /**
+   * Immutable read-only broker-native candle snapshot AS OF the exit decision.
+   * Broker connection identity, closed bar bounds and last tick time are all
+   * required; historical data appended later cannot leak into the audit.
+   * No provider request, trading action or position mutation.
+   */
+  private async loadAsOfBrokerNativeProfitExitCandles(
+    trade: OpenAiTradeRow,
+    observedAt: Date,
+  ): Promise<{ m1: CompletedProfitExitCandle[]; m5: CompletedProfitExitCandle | null }> {
+    const query = async (timeframe: 'M1' | 'M5', limit: number) =>
+      this.dataSource.query(
+        `SELECT bucket_time, open, high, low, close, sample_count
+         FROM market_data.provider_quote_candles
+         WHERE connection_id=$1 AND instrument=$2 AND timeframe=$3
+           AND source='ctrader-broker-native'
+           AND bucket_time + CASE WHEN $3='M1' THEN interval '1 minute'
+                                  ELSE interval '5 minutes' END <= $4::timestamptz
+           -- Historical candle values are mutable/rebuilt. Require that
+           -- both original INSERT and last UPDATE precede this decision:
+           -- a candle inserted or revised later is NOT causal evidence.
+           AND created_at <= $4::timestamptz
+           AND updated_at <= $4::timestamptz
+           AND last_sample_at <= $4::timestamptz
+           AND sample_count > 0
+         ORDER BY bucket_time DESC LIMIT $5`,
+        [trade.broker_connection_id, trade.instrument.toUpperCase(),
+          timeframe, observedAt.toISOString(), limit],
+      ) as Promise<Array<{
+        bucket_time: Date | string; open: string; high: string;
+        low: string; close: string; sample_count: number;
+      }>>;
+    const [m1Rows, m5Rows] = await Promise.all([query('M1',2), query('M5',1)]);
+    const convert = (row: {
+      bucket_time: Date | string; open: string; high: string;
+      low: string; close: string; sample_count: number;
+    }, timeframeMinutes: 1 | 5): CompletedProfitExitCandle => ({
+      startedAt: new Date(row.bucket_time), timeframeMinutes,
+      open: Number(row.open), high: Number(row.high),
+      low: Number(row.low), close: Number(row.close),
+      brokerNativeSampleCount: Number(row.sample_count),
+    });
+    return {
+      m1: m1Rows.map(row => convert(row,1)).reverse(),
+      m5: m5Rows[0] ? convert(m5Rows[0],5) : null,
+    };
   }
 
   /**
