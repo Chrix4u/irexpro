@@ -1,0 +1,31 @@
+name: iRexPro LIVE 0.01 to 1.00 risk-only preparation
+on:
+  push:
+    branches: ['feat/pepperstone-live-affordable-minlots-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/src/modules/execution/services/pepperstone-live-micro-risk*'
+      - 'apps/api/src/modules/execution/services/position-sizing.service.ts'
+      - 'apps/api/src/modules/execution/services/allocation.service.ts'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  live-lot-risk-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install API dependency graph
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Type check complete API
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - name: Verify broker LIVE risk and DEMO sizing isolation
+        run: pnpm --filter @irexpro/api exec jest src/modules/execution/services/pepperstone-live-micro-risk.spec.ts src/modules/execution/services/position-sizing.dynamic-small-account.spec.ts src/modules/execution/services/position-sizing.service.spec.ts src/modules/execution/services/position-sizing.paper-allocation.spec.ts src/modules/execution/services/allocation.service.spec.ts --runInBand --silent --no-coverage

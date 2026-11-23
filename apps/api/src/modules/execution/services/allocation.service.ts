@@ -32,7 +32,10 @@ export type AllocationFailureCode =
   | 'ALLOCATION_CURRENCY_MISMATCH'
   /** The intent's allocation was terminally released — a replay of the same
    *  decision may not re-allocate capital. */
-  | 'ALLOCATION_ALREADY_RELEASED';
+  | 'ALLOCATION_ALREADY_RELEASED'
+  | 'ALLOCATION_LIVE_MICRO_ONE_POSITION'
+  | 'ALLOCATION_LIVE_MICRO_DAILY_LOSS'
+  | 'ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE';
 
 /** Typed fail-closed allocation rejection — carries the stable machine code. */
 export class AllocationError extends Error {
@@ -333,6 +336,69 @@ export class AllocationService {
               `strategy ${intent.strategyCode} exposure ${sameStrategy.add(requested).toString()} ` +
                 `would exceed the ${budget.maxStrategyConcentration}% cap ${cap.toString()}`,
             );
+          }
+        }
+
+        // 6.7 USD Pepperstone LIVE micro pilot: transaction-scoped single-
+        // position authority. A candidate is admitted only with zero active
+        // allocations AND a fresh provider account observation showing no
+        // open positions. Existing orders in uncertain states also block.
+        // The account advisory lock serializes competing simultaneous intents.
+        // This is a safety condition, NOT production-LIVE verification.
+        if (sized.inputs.liveMicroPilotEnvelope?.artifact ===
+            'pepperstone-usd-live-micro-pilot-v1') {
+          if (committed.isPositive()) {
+            throw new AllocationError('ALLOCATION_LIVE_MICRO_ONE_POSITION',
+              'Pepperstone LIVE micro account allows only one open/pending/in-flight position');
+          }
+          const stateRows = await manager.query(
+            `SELECT open_positions_count, synced_at
+             FROM broker.broker_accounts
+             WHERE broker_connection_id=$1 LIMIT 1`,
+            [intent.brokerConnectionId],
+          );
+          const observed = stateRows[0];
+          const ageMs = observed?.synced_at != null
+            ? Date.now() - new Date(String(observed.synced_at)).getTime() : NaN;
+          if (observed?.open_positions_count == null ||
+              Number(observed.open_positions_count) !== 0 ||
+              !Number.isFinite(ageMs) || ageMs < -5_000 || ageMs > 45_000) {
+            throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
+              'LIVE micro account requires a recent provider snapshot of zero open positions');
+          }
+          const unresolved = await manager.query(
+            `SELECT 1 FROM trading.orders o
+             LEFT JOIN trading.trades t ON t.id=o.trade_id
+             WHERE o.broker_connection_id=$1
+               AND o.status IN ('CREATED','SUBMITTED','DISPATCH_COMMITTED',
+                 'ACKNOWLEDGED','PARTIALLY_FILLED','RECONCILIATION_PENDING')
+               AND (t.id IS NULL OR t.status <> 'CLOSED')
+             LIMIT 1`,
+            [intent.brokerConnectionId],
+          );
+          if (unresolved.length > 0) {
+            throw new AllocationError('ALLOCATION_LIVE_MICRO_ONE_POSITION',
+              'LIVE micro account has an unfinished broker order; no second order');
+          }
+          const losses = await manager.query(
+            `SELECT COALESCE(SUM(GREATEST(0, -(
+               COALESCE(t.realised_pnl,0)+COALESCE(t.commission,0)+COALESCE(t.swap,0)
+             ))),0)::text AS daily_loss
+             FROM trading.trades t
+             WHERE t.broker_connection_id=$1 AND t.status='CLOSED'
+               AND t.closed_at >= date_trunc('day', NOW())`,
+            [intent.brokerConnectionId],
+          );
+          const dailyLoss = ExactDecimal.tryParse(String(losses[0]?.daily_loss ?? ''));
+          const cap = currentEquity.mul(ExactDecimal.parse('0.04'));
+          if (!dailyLoss || dailyLoss.lt(ExactDecimal.ZERO)) {
+            throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
+              'LIVE micro daily realised loss cannot be verified');
+          }
+          if (dailyLoss.gte(cap)) {
+            throw new AllocationError('ALLOCATION_LIVE_MICRO_DAILY_LOSS',
+              `LIVE micro daily realised losses ${dailyLoss.toString()} USD ` +
+              `reached safe stop threshold ${cap.toString()} USD`);
           }
         }
 
