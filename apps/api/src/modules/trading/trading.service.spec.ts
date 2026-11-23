@@ -125,6 +125,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         freeMargin: '9000.00',
         currency: 'USD',
       }),
+      isProductionLiveEligible: jest.fn().mockReturnValue(false),
       getSupportedInstrumentsForConnection: jest.fn().mockResolvedValue(
         ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'].map((symbol) => ({
           symbol,
@@ -581,6 +582,83 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(allocationService.getUserCapitalAllocationState).not.toHaveBeenCalled();
       expect(executionService.startSession).not.toHaveBeenCalled();
     });
+
+    it('allows owner-selected Pepperstone LIVE only after provider certification and exact account authorization', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      brokerService.isProductionLiveEligible.mockReturnValue(true);
+      brokerService.findConnectionById.mockResolvedValue(buildHealthyConnection({
+        id: 'conn-1', brokerId: 'pepperstone-ctrader',
+        accountType: BrokerMode.LIVE, accountCurrency: 'USD',
+        status: BrokerConnectionStatus.CONNECTED,
+        authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+        demoValidated: false, liveTradingEnabled: true,
+      }));
+      brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure.mockResolvedValue(
+        buildAcceptedSnapshot({ currency: 'USD', balance: '50.00', equity: '50.00' }),
+      );
+      allocationService.getUserCapitalAllocationState.mockResolvedValue({
+        brokerConnectionId: 'conn-1', logicalAccountKey: 'pepperstone-live-unique',
+        accountCurrency: 'USD', brokerEquity: '50.00',
+        hasAllocation: true, allocatedCapital: '50.00', committedCapital: '0',
+        availableCapital: '50.00',
+      });
+      executionService.startSession.mockResolvedValue(
+        mockSession({ executionMode: ExecutionMode.FULL_AUTO }),
+      );
+
+      const session = await service.startTradingSession(
+        'user-1', 'conn-1', ExecutionMode.FULL_AUTO,
+      );
+      expect(session.executionMode).toBe(ExecutionMode.FULL_AUTO);
+      expect(brokerService.isProductionLiveEligible).toHaveBeenCalledWith('pepperstone-ctrader');
+      expect(brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure)
+        .toHaveBeenCalledWith('conn-1');
+      expect(executionService.startSession).toHaveBeenCalledWith(
+        'user-1', 'conn-1', '50.00', expect.any(Object),
+        ExecutionMode.FULL_AUTO, expect.objectContaining({ accountCurrency: 'USD' }),
+      );
+      // User-owned multi-model execution never silently becomes the
+      // unrelated legacy Python scheduler.
+      expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { certified: false, authorized: true, enabled: true, currency: 'USD' },
+      { certified: true, authorized: false, enabled: true, currency: 'USD' },
+      { certified: true, authorized: true, enabled: false, currency: 'USD' },
+      { certified: true, authorized: true, enabled: true, currency: 'EUR' },
+    ])('does not start a LIVE scanner session without complete certification and binding %j',
+      async ({ certified, authorized, enabled, currency }) => {
+        const values: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.apiKey': 'real-key-123456',
+          'vpsForexScanner.userId': 'user-1',
+          'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+        };
+        configService.get.mockImplementation((key: string, fallback?: unknown) =>
+          key in values ? values[key] : fallback,
+        );
+        brokerService.isProductionLiveEligible.mockReturnValue(certified);
+        brokerService.findConnectionById.mockResolvedValue(buildHealthyConnection({
+          brokerId: 'pepperstone-ctrader', accountType: BrokerMode.LIVE,
+          accountCurrency: currency, authorizationStatus: authorized
+            ? BrokerAuthorizationStatus.ACTIVE : BrokerAuthorizationStatus.CONNECTED,
+          liveTradingEnabled: enabled,
+        }));
+        await expect(service.startTradingSession(
+          'user-1', 'conn-1', ExecutionMode.FULL_AUTO,
+        )).rejects.toThrow(ForbiddenException);
+        expect(executionService.startSession).not.toHaveBeenCalled();
+      },
+    );
 
     it('keeps PAPER execution bound while using a connected MT5 DEMO account for market data', async () => {
       brokerService.findConnectionsByUser.mockResolvedValue([

@@ -274,6 +274,57 @@ describe('CTraderAdapter', () => {
       expect(findRequest(server,CTRADER_PAYLOAD_TYPE.AMEND_POSITION_SLTP_REQ)).toBeUndefined();
     });
 
+    it('places LIVE MARKET SL and TP atomically from fresh broker-native pricing', async () => {
+      adapter.setMode(BrokerMode.LIVE);
+      await connectDemo();
+      await adapter.placeOrder({
+        idempotencyKey: 'live-atomic-1', instrument: 'EUR/USD',
+        direction: 'BUY', lotSize: '0.01', stopLoss: '1.08650',
+        takeProfit: '1.08800', orderKind: 'MARKET',
+      });
+      const request = findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)!;
+      expect(request.payload).toMatchObject({
+        relativeStopLoss: 50, relativeTakeProfit: 100,
+      });
+      expect(request.payload).not.toHaveProperty('stopLoss');
+      expect(request.payload).not.toHaveProperty('takeProfit');
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ)).toBeDefined();
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.AMEND_POSITION_SLTP_REQ)).toBeUndefined();
+    });
+
+    it('places LIVE SELL with correctly directed atomic relative SL and TP', async () => {
+      adapter.setMode(BrokerMode.LIVE);
+      await connectDemo();
+      await adapter.placeOrder({
+        idempotencyKey: 'live-atomic-sell-1', instrument: 'EUR/USD',
+        direction: 'SELL', lotSize: '0.01', stopLoss: '1.08700',
+        takeProfit: '1.08550', orderKind: 'MARKET',
+      });
+      const request = findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)!;
+      expect(request.payload).toMatchObject({
+        relativeStopLoss: 50, relativeTakeProfit: 100,
+      });
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.AMEND_POSITION_SLTP_REQ)).toBeUndefined();
+    });
+
+    it.each([
+      {stopLoss:'0',takeProfit:'1.08800'},
+      {stopLoss:'1.08650',takeProfit:'0'},
+      {stopLoss:'1.08800',takeProfit:'1.08900'},
+      {stopLoss:'1.08650',takeProfit:'1.08600'},
+    ])('refuses unprotected or invalid LIVE BUY MARKET before NEW_ORDER_REQ (%p)', async (fields) => {
+      adapter.setMode(BrokerMode.LIVE);
+      await connectDemo();
+      await expect(adapter.placeOrder({
+        idempotencyKey:'live-atomic-invalid',instrument:'EUR/USD',direction:'BUY',
+        lotSize:'0.01',orderKind:'MARKET',...fields,
+      })).rejects.toMatchObject({
+        code: expect.stringMatching(/INVALID_REQUEST|INVALID_PRICE/),
+        dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+      });
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+    });
+
     it.each([
       {relativeStopLoss:'0',stopLoss:'0',takeProfit:'0'},
       {relativeStopLoss:'-50',stopLoss:'0',takeProfit:'0'},

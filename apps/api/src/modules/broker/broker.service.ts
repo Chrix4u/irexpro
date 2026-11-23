@@ -157,6 +157,16 @@ export class BrokerService {
   // ─── Read operations ──────────────────────────────────────────────────────
 
   /**
+   * Read-only proof required by every multi-model LIVE session admission.
+   * The registry considers only current, durable HARNESS_CERTIFIED evidence;
+   * it deliberately refuses legacy attestations and BETA/UNVERIFIED brokers.
+   * No caller can promote a broker by setting a connection flag.
+   */
+  isProductionLiveEligible(brokerId: string): boolean {
+    return this.providerRegistry.isProductionLiveEligible(brokerId);
+  }
+
+  /**
    * Sprint 50 PR-4 — load connections by id for the reconciliation worker
    * (it discovers candidate connection ids from internal trading state and
    * needs the full connection rows to reach their adapters).
