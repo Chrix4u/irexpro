@@ -118,6 +118,11 @@ describe('durable owner Pepperstone DEMO profit-stop authority synchronization',
     expect(h.writes).toEqual(['TRADE','LEDGER']);
     expect(h.queries.join('\n')).toContain('FOR UPDATE OF t, l');
     expect(h.queries.join('\n')).toContain("AND stop_loss=$6 AND take_profit=$7");
+    // Pepperstone cTrader DEMO trade rows have external_position_id=NULL;
+    // verified provider position ID lives in external_order_id. A strict
+    // external_position_id-only CAS would reject 100% of real DEMO positions.
+    expect(h.queries.join('\n')).toContain('COALESCE(external_position_id,external_order_id)=$5');
+    expect(h.queries.join('\n')).not.toContain('AND external_position_id=$5');
     expect(h.queries.join('\n')).toContain("AND state='ACKNOWLEDGED'");
   });
 
