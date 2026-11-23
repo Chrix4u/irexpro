@@ -135,6 +135,15 @@ export interface PositionSizingInputs {
     commissionIncluded: boolean;
     isGuaranteedMaximumLoss: false;
   };
+  liveMicroPilotEnvelope?: {
+    artifact: 'pepperstone-usd-live-micro-pilot-v1';
+    maxLots: '0.01';
+    maximumRiskUsd: string;
+    projectedCostInclusiveRiskUsd: string;
+    feeAndSlippageReserveUsd: '0.20';
+    stopBufferMultiple: '1.20';
+    brokerLiveVerificationRequired: true;
+  };
   maxLot: string;
   lotStep: string;
   profileMaxPositionSizeLot: string;
@@ -1121,6 +1130,7 @@ export class PositionSizingService {
       .divDown(riskCapitalBase, LOT_SCALE)
       .mulByPowerOfTen(2);
 
+    let liveMicroPilotEnvelope: PositionSizingInputs['liveMicroPilotEnvelope'];
     // The independent account-aware proof is checked AFTER broker-volume,
     // margin and cross-currency conversion. A guessed commission is NOT a
     // production fee quote: $0.20 is a conservative screening reserve for
@@ -1143,6 +1153,15 @@ export class PositionSizingService {
           `${liveMicroResult.projectedCostInclusiveRiskUsd} USD, maximum ` +
           `${liveMicroResult.maximumRiskUsd} USD. No rounding up and no DEMO lot inheritance.`);
       }
+      liveMicroPilotEnvelope = {
+        artifact: 'pepperstone-usd-live-micro-pilot-v1',
+        maxLots: '0.01',
+        maximumRiskUsd: liveMicroResult.maximumRiskUsd,
+        projectedCostInclusiveRiskUsd: liveMicroResult.projectedCostInclusiveRiskUsd,
+        feeAndSlippageReserveUsd: '0.20',
+        stopBufferMultiple: '1.20',
+        brokerLiveVerificationRequired: true,
+      };
     }
 
     const finalNotionalAccountCurrency = lots.mul(notionalPerLotAccountCurrency);
@@ -1205,6 +1224,7 @@ export class PositionSizingService {
       finalRiskAtStop: finalRiskAtStop.toString(),
       finalRiskAtStopPercentOfCapital: finalRiskAtStopPercentOfCapital.toString(),
       ...(demoExecutionRiskEnvelope ? { demoExecutionRiskEnvelope } : {}),
+      ...(liveMicroPilotEnvelope ? { liveMicroPilotEnvelope } : {}),
       maxLot: maxLot.toString(),
       lotStep: lotStep.toString(),
       profileMaxPositionSizeLot: profileMaxLots.toString(),
