@@ -1,0 +1,31 @@
+name: iRexPro DEMO no-order pilot preflight
+on:
+  push:
+    branches: ['feat/demo-runner-no-order-pilot-preflight-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/scripts/validation/demo-protected-runner-no-order-preflight.*'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  no-order-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Check read-only CLI syntax (never connect to provider on CI)
+        run: node --check apps/api/scripts/validation/demo-protected-runner-no-order-preflight.cjs
+      - name: Install scoped API dependency tree
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Type check full API
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - name: Assert no provider order or DB mutation authority in CLI
+        run: pnpm --filter @irexpro/api exec jest scripts/validation/demo-protected-runner-no-order-preflight.spec.ts --runInBand --silent --no-coverage --runTestsByPath
