@@ -114,6 +114,18 @@ describe('owner Pepperstone DEMO protected stop orchestration before any hold',(
     expect((await h.service.prepareAndCommitVerifiedPositiveStop(candidate)).status).toBe('UNRESOLVED');
     expect(h.brokerService.amendVerifiedOwnerDemoProfitStop).not.toHaveBeenCalled();
   });
+  it('explicitly casts reused SQL parameters to prevent PostgreSQL 42P08',async()=>{
+    const h=mk();
+    expect((await h.service.prepareAndCommitVerifiedPositiveStop(candidate)).status)
+      .toBe('PREPARED_AND_BROKER_VERIFIED');
+    const insertion=h.query.mock.calls.find(x=>String(x[0]).includes(
+      'INSERT INTO trading.demo_profit_stop_amendment_intents'));
+    expect(insertion).toBeDefined();
+    expect(String(insertion![0])).toContain('t.account_currency,$4::text,$5::text,$6::text');
+    expect(String(insertion![0])).toContain("ti.metadata->>'multimodel_plan_b_route'=$4::text");
+    expect(String(insertion![0])).toContain('COALESCE(t.external_position_id,t.external_order_id)=$5::text');
+  });
+
   it('commits a provider-acknowledged verified stop but NEVER grants hold authority',async()=>{
     const h=mk();const r=await h.service.prepareAndCommitVerifiedPositiveStop(candidate);
     expect(r).toEqual({status:'PREPARED_AND_BROKER_VERIFIED',ledgerId:'new-ledger',
