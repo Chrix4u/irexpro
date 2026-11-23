@@ -171,7 +171,7 @@ export class DemoProfitStopAuthoritySyncService {
                 t.fill_price::text AS trade_fill,
                 t.stop_loss::text AS trade_stop,
                 t.take_profit::text AS trade_tp,
-                t.external_position_id AS trade_provider_position,
+                COALESCE(t.external_position_id,t.external_order_id) AS trade_provider_position,
                 t.logical_account_key AS trade_logical_key,
                 b.logical_account_key AS broker_logical_key,
                 b.account_currency AS connection_currency,
