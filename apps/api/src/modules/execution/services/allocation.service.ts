@@ -417,6 +417,17 @@ export class AllocationService {
              LIMIT 1`,
             [intent.brokerConnectionId],
           );
+          const positionLimits = await manager.query(
+            `SELECT max_open_trades FROM trading.risk_profiles
+             WHERE user_id=$1 LIMIT 1`,
+            [intent.userId],
+          );
+          const maxOpenPositions = Number(positionLimits[0]?.max_open_trades);
+          if (!Number.isInteger(maxOpenPositions) || maxOpenPositions < 1 ||
+              maxOpenPositions > 100) {
+            throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
+              'LIVE user risk-profile open-position limit cannot be verified');
+          }
           let portfolio: ReturnType<typeof evaluatePepperstoneLivePortfolioBudget>;
           try {
             portfolio = evaluatePepperstoneLivePortfolioBudget({
@@ -430,6 +441,7 @@ export class AllocationService {
               providerOpenPositions: Number(observed.open_positions_count),
               locallyProvenOpenPositions: confirmedOpen.length,
               pendingOrUncertainOrders: inFlightOrUncertain || unresolved.length > 0,
+              maxOpenPositions,
             });
           } catch {
             throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',

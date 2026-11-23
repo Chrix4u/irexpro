@@ -103,7 +103,8 @@ export function affordablePepperstoneLiveLots(input: {
 /**
  * Exact multi-position risk proof, evaluated inside one serialized account
  * allocation transaction with provider-position parity. No future data.
- * 2 live positions max is an initial operational limit, NOT a trade target.
+ * Maximum open positions comes from the existing risk-profile setting,
+ * never a new hardcoded limit. Provider/ledger parity still required.
  */
 export function evaluatePepperstoneLivePortfolioBudget(input: {
   equityUsd: string;
@@ -112,6 +113,7 @@ export function evaluatePepperstoneLivePortfolioBudget(input: {
   providerOpenPositions: number;
   locallyProvenOpenPositions: number;
   pendingOrUncertainOrders: boolean;
+  maxOpenPositions: number;
 }): {
   allowed: boolean;
   reason: 'LIVE_POSITION_COUNT_UNPROVABLE' | 'LIVE_POSITION_LIMIT' |
@@ -125,7 +127,9 @@ export function evaluatePepperstoneLivePortfolioBudget(input: {
       !Number.isInteger(input.providerOpenPositions) ||
       !Number.isInteger(input.locallyProvenOpenPositions) ||
       input.providerOpenPositions < 0 || input.locallyProvenOpenPositions < 0 ||
-      input.existingCostInclusiveRisksUsd.length !== input.locallyProvenOpenPositions) {
+      input.existingCostInclusiveRisksUsd.length !== input.locallyProvenOpenPositions ||
+      !Number.isInteger(input.maxOpenPositions) || input.maxOpenPositions < 1 ||
+      input.maxOpenPositions > 100) {
     throw new Error('LIVE_PORTFOLIO_EVIDENCE_UNPROVABLE');
   }
   const cap = equity.mul(ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_EQUITY_RISK_PERCENT))
@@ -138,7 +142,7 @@ export function evaluatePepperstoneLivePortfolioBudget(input: {
   const reason = input.pendingOrUncertainOrders ||
       input.providerOpenPositions !== input.locallyProvenOpenPositions
     ? 'LIVE_POSITION_COUNT_UNPROVABLE'
-    : input.locallyProvenOpenPositions >= 2
+    : input.locallyProvenOpenPositions >= input.maxOpenPositions
       ? 'LIVE_POSITION_LIMIT'
       : total.gt(cap)
         ? 'LIVE_PORTFOLIO_STOP_RISK_LIMIT'

@@ -62,6 +62,7 @@ describe('LIVE multi-position portfolio admission: same-account evidence', () =>
     providerOpenPositions: 1,
     locallyProvenOpenPositions: 1,
     pendingOrUncertainOrders: false,
+    maxOpenPositions: 3,
   };
   it('allows one additional small trade when BOTH total under the 2% budget', () => {
     expect(portfolio(base)).toEqual({
@@ -72,9 +73,14 @@ describe('LIVE multi-position portfolio admission: same-account evidence', () =>
     expect(portfolio({...base,proposedCostInclusiveRiskUsd:'0.60'}).reason)
       .toBe('LIVE_PORTFOLIO_STOP_RISK_LIMIT');
   });
-  it('does not open a third position during the initial pilot', () => {
+  it('allows a third only if the owner risk profile permits three AND total stop risk fits', () => {
     expect(portfolio({...base,providerOpenPositions:2,locallyProvenOpenPositions:2,
-      existingCostInclusiveRisksUsd:['0.1','0.1']}).reason).toBe('LIVE_POSITION_LIMIT');
+      existingCostInclusiveRisksUsd:['0.1','0.1']}).allowed).toBe(true);
+  });
+  it('respects the configured max_open_trades instead of a separate hardcoded two', () => {
+    expect(portfolio({...base,providerOpenPositions:2,locallyProvenOpenPositions:2,
+      maxOpenPositions:2,existingCostInclusiveRisksUsd:['0.1','0.1']}).reason)
+      .toBe('LIVE_POSITION_LIMIT');
   });
   it('rejects untracked manual positions or provider/ledger mismatch', () => {
     expect(portfolio({...base,providerOpenPositions:2}).reason)
