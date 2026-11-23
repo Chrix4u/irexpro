@@ -32,7 +32,7 @@ import { existsSync } from 'fs';
  *
  * CI NEVER sets these variables → this suite reports as SKIPPED on every CI
  * run (the describe.skip branch): CI is credential-free AND gate-closed, so a
- * real-money certification run is structurally impossible there.
+ * real-money certification run is structurally impossible there. Pepperstone requires protectedCanaryRelativeStopLoss and maxCanaryRiskUsd before any order.
  *
  * WHAT IT DOES: builds the REAL CTraderAdapter + CTraderClientService (the
  * same dynamic-import factory discipline as the DEMO harness; LIVE mode
@@ -62,6 +62,8 @@ const operatorId = process.env.IREXPRO_LIVE_CERT_OPERATOR_ID;
 const accessToken = process.env.CTRADER_LIVE_CERT_ACCESS_TOKEN;
 const ctidAccountId = process.env.CTRADER_LIVE_CERT_CTRID_ACCOUNT_ID;
 const maxCanaryExposure = process.env.CTRADER_LIVE_CERT_MAX_CANARY_EXPOSURE;
+const maxCanaryRiskUsd = process.env.CTRADER_LIVE_CERT_MAX_CANARY_RISK_USD;
+const protectedCanaryRelativeStopLoss = process.env.CTRADER_LIVE_CERT_RELATIVE_STOP_LOSS;
 const platformClientId = process.env.CTRADER_CLIENT_ID;
 const platformClientSecret = process.env.CTRADER_CLIENT_SECRET;
 const instrument = process.env.CTRADER_LIVE_CERT_INSTRUMENT;
@@ -95,6 +97,8 @@ describeCtraderLiveCertification(
         },
         operator: { operatorId: operatorId!, evidenceDir },
         maxCanaryExposure: maxCanaryExposure!,
+        ...(maxCanaryRiskUsd ? { maxCanaryRiskUsd } : {}),
+        ...(protectedCanaryRelativeStopLoss ? { protectedCanaryRelativeStopLoss } : {}),
         credentials: { apiKey: accessToken!, accountId: ctidAccountId! },
         ...(instrument ? { instrument } : {}),
       });
@@ -118,28 +122,13 @@ describeCtraderLiveCertification(
       expect(isCertifiablePass(evidence)).toBe(true);
       expect(evidence.artifactPath).toBeDefined();
       expect(existsSync(evidence.artifactPath!)).toBe(true);
+      expect(JSON.stringify(evidence)).not.toContain(accessToken!);
       // A certification PASS means zero failures AND the complete canary
       // lifecycle (place → close → verify-closed → zero unexpected exposure).
       expect(evidence.summary.failed).toBe(0);
       expect(evidence.summary.passed).toBeGreaterThan(0);
     }, 300_000);
 
-    it('never includes the access token in the sanitized evidence', async () => {
-      const evidence = await runLiveProviderCertification({
-        gate,
-        target: {
-          brokerId: requestedBrokerId,
-          accountId: ctidAccountId!,
-          credentialSource:
-            'env:CTRADER_LIVE_CERT_ACCESS_TOKEN (operator-supplied cTrader OAuth access token)',
-        },
-        operator: { operatorId: operatorId!, evidenceDir },
-        maxCanaryExposure: maxCanaryExposure!,
-        credentials: { apiKey: accessToken!, accountId: ctidAccountId! },
-        ...(instrument ? { instrument } : {}),
-      });
-      expect(JSON.stringify(evidence)).not.toContain(accessToken!);
-    }, 300_000);
   },
 );
 

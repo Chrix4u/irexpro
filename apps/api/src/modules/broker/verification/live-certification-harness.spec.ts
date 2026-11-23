@@ -466,6 +466,41 @@ describe('LIVE certification harness — full machinery (fake LIVE adapter, alwa
     };
   }
 
+  it('refuses a Pepperstone LIVE canary without atomic stop proof (zero broker orders)', async () => {
+    const adapter=new FakeLiveCertificationAdapter();const o=liveGateOptions(adapter);
+    const evidence=await runLiveProviderCertification({...o,
+      target:{...o.target,brokerId:'pepperstone-ctrader'},
+      instrument:'EURUSD',maxCanaryRiskUsd:'1',
+    });
+    expect(evidence.overall).toBe('FAIL');
+    expect(evidence.steps.find(x=>x.name==='place-minimum-safe-order')?.status).toBe('FAIL');
+    expect(adapter.calls).not.toContain('placeOrder');
+  });
+
+  it('refuses Pepperstone when stop+cost projected risk exceeds $1 (zero broker orders)', async () => {
+    const adapter=new FakeLiveCertificationAdapter();const o=liveGateOptions(adapter);
+    const evidence=await runLiveProviderCertification({...o,
+      target:{...o.target,brokerId:'pepperstone-ctrader'},
+      instrument:'EURUSD',maxCanaryRiskUsd:'1',protectedCanaryRelativeStopLoss:'100',
+    });
+    expect(evidence.overall).toBe('FAIL');
+    expect(evidence.steps.find(x=>x.name==='place-minimum-safe-order')?.status).toBe('FAIL');
+    expect(adapter.calls).not.toContain('placeOrder');
+  });
+
+  it('places exactly one protected 5-pip fake canary below the $1 cost-inclusive envelope', async () => {
+    const adapter=new FakeLiveCertificationAdapter();const o=liveGateOptions(adapter);
+    const evidence=await runLiveProviderCertification({...o,
+      target:{...o.target,brokerId:'pepperstone-ctrader'},
+      instrument:'EURUSD',maxCanaryRiskUsd:'1',protectedCanaryRelativeStopLoss:'50',
+    });
+    expect(evidence.overall).toBe('PASS');
+    expect(adapter.calls.filter(x=>x==='placeOrder')).toHaveLength(1);
+    expect(adapter.calls.filter(x=>x==='closeOrder')).toHaveLength(1);
+    expect(evidence.steps.find(x=>x.name==='query-position')?.status).toBe('PASS');
+    expect(evidence.certificationResult).toBe('PASS');
+  });
+
   it('drives the full certification sequence against a fake LIVE adapter and passes deterministically', async () => {
     const adapter = new FakeLiveCertificationAdapter();
     const evidence = await runLiveProviderCertification(liveGateOptions(adapter));
@@ -1124,7 +1159,7 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
       lotSize: order.lotSize,
       openPrice: filledPrice,
       currentPrice: '1.08410',
-      stopLoss: '0',
+      stopLoss: order.relativeStopLoss === '50' ? '1.08370' : '0',
       takeProfit: '0',
       unrealisedPnl: '-0.10',
       openedAt: new Date(),

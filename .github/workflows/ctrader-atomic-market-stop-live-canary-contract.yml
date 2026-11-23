@@ -1,0 +1,33 @@
+name: iRexPro cTrader atomic market stop LIVE certification safety
+on:
+  push:
+    branches: ['fix/ctrader-market-relative-sl-certified-canary-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/src/modules/broker/interfaces/broker-adapter.interface.ts'
+      - 'apps/api/src/modules/broker/adapters/ctrader/ctrader.adapter.ts'
+      - 'apps/api/src/modules/broker/adapters/ctrader/ctrader.adapter.spec.ts'
+      - 'apps/api/src/modules/broker/verification/provider-live-certification-harness.ts'
+      - 'apps/api/src/modules/broker/verification/ctrader.live-certification.spec.ts'
+      - 'apps/api/src/modules/broker/verification/live-certification-harness.spec.ts'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  no-live-orders-in-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Full API TypeScript
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - name: Broker-adapter atomic stop and credential-free harness regression
+        run: pnpm --filter @irexpro/api exec jest src/modules/broker/adapters/ctrader/ctrader.adapter.spec.ts src/modules/broker/verification/live-certification-harness.spec.ts src/modules/broker/verification/ctrader.live-certification.spec.ts --runInBand --silent --no-coverage
