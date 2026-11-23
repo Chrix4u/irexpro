@@ -370,12 +370,12 @@ export class AllocationService {
               [intent.userId, logicalAccountKey],
             );
             const committed = existing
-              .filter(row =>
+              .filter((row: Record<string, unknown>) =>
                 row.trade_status === 'PENDING' || row.trade_status === 'OPEN' ||
                 row.trade_status === 'RECONCILIATION_PENDING' ||
                 (row.trade_status == null && row.intent_status === 'CREATED'),
               )
-              .map(row => ({
+              .map((row: Record<string, unknown>) => ({
                 grossStopRisk: String(row.gross_risk ?? ''),
                 lots: String(row.allocated_lots ?? ''),
               }));
