@@ -2497,6 +2497,9 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         return {
           success: true,
           externalOrderId: externalId !== '' ? externalId : undefined,
+          brokerNativeOrderId: protoOrder?.orderId !== undefined
+            ? String(protoOrder.orderId)
+            : deal?.orderId !== undefined ? String(deal.orderId) : undefined,
           filledPrice:
             deal?.executionPrice !== undefined
               ? wirePriceToDecimalString(deal.executionPrice)
