@@ -1,3 +1,4 @@
+import { evaluateDemoDoubleAbstainAdmission } from './demo-double-abstain-admission';
 import {
   DEMO_FOCUSED_ENTRY_INSTRUMENTS_V1,
   DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2,
@@ -4150,6 +4151,30 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       shadowPairSideReliability.artifact === M1_PROVISIONAL_SCOUT_RELIABILITY_ARTIFACT
         ? shadowPairSideReliability
         : null;
+
+    // Prospective DEMO-only admission stop: this exact uncalibrated,
+    // out-of-distribution double-abstention caused major opening losses on
+    // 2026-11-23. Preserve shadow measurements and all broker risk controls.
+    // Does not affect LIVE, alternative M1 fallback, or already-open trades.
+    const doubleAbstainAdmission = evaluateDemoDoubleAbstainAdmission({
+      verifiedPepperstoneDemo: pepperstoneDemoRiskPilot,
+      professionalDemoPhase,
+      professionalM1Fallback: useProfessionalM1Fallback,
+      m1Route: routeDecision.route,
+      independentExpertState: multimodelDemo?.trainedExpert.state ?? null,
+      matchedExpectancySamples: governance.expectancy.evidenceSamples,
+      driftOutOfDistribution: governance.blockers.includes('DRIFT_OUT_OF_DISTRIBUTION'),
+      ensemblePaperAdmitted: multimodelDemo?.ensemble.paperAdmitted === true,
+    });
+    if (!doubleAbstainAdmission.allowed) {
+      await this.evidence.markOutcomeState(
+        decisionId,
+        'RISK_REJECTED',
+        new Date(),
+        doubleAbstainAdmission.reason!,
+      );
+      return;
+    }
 
     const signalIdentity = [
       userId,
