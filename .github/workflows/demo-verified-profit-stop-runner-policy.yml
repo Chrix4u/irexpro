@@ -1,0 +1,29 @@
+name: iRexPro DEMO verified profit stop runner policy
+on:
+  push:
+    branches: ['feat/demo-verified-positive-stop-runner-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/src/modules/execution/reconciliation/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify-profit-stop-runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install scoped API dependencies
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Full API TypeScript check
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - name: Broker-verified protected runner and existing exit regressions
+        run: pnpm --filter @irexpro/api exec jest src/modules/execution/reconciliation/verified-profit-stop-runner-policy.spec.ts src/modules/execution/reconciliation/demo-profit-stop-amendment-state.spec.ts src/modules/execution/reconciliation/demo-profit-stop-authority-sync.service.spec.ts src/modules/execution/reconciliation/candle-aware-profit-patience-shadow.spec.ts src/modules/execution/reconciliation/live-demo-profit-protection.service.spec.ts --runInBand --silent --no-coverage
