@@ -390,10 +390,7 @@ export class AllocationService {
             [intent.brokerConnectionId],
           );
           const dailyLoss = ExactDecimal.tryParse(String(losses[0]?.daily_loss ?? ''));
-          const cap = ExactDecimal.min(
-            currentEquity.mul(ExactDecimal.parse('0.04')),
-            ExactDecimal.parse('2'),
-          );
+          const cap = currentEquity.mul(ExactDecimal.parse('0.04'));
           if (!dailyLoss || dailyLoss.lt(ExactDecimal.ZERO)) {
             throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
               'LIVE micro daily realised loss cannot be verified');

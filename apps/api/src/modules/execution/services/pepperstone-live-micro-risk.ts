@@ -1,15 +1,17 @@
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
 
 /**
- * Conservative PREPARATION for the first Pepperstone USD LIVE micro-account
- * pilot. This does NOT authorize LIVE execution or bypass broker verification.
- * It is applied only after authoritative broker min-lot / stop / FX data.
- * Fee/slippage reserve is deliberately conservative, not a broker guarantee.
+ * Account-scoped Pepperstone LIVE lot-range policy. A desired 0.10–1.00 lot
+ * range is never permission to round UP from a smaller risk-sized order.
+ * If the broker/profile/equity/stop/cost cannot support 0.10, abstain.
+ * This policy NEVER authorizes production-LIVE order execution.
  */
-export const PEPPERSTONE_LIVE_PILOT_LOT_CEILING = '0.01';
+export const PEPPERSTONE_LIVE_PILOT_MIN_LOTS = '0.1';
+export const PEPPERSTONE_LIVE_PILOT_LOT_CEILING = '1';
 export const PEPPERSTONE_LIVE_PILOT_EQUITY_RISK_PERCENT = '2';
-export const PEPPERSTONE_LIVE_PILOT_ABSOLUTE_RISK_USD = '1';
-export const PEPPERSTONE_LIVE_PILOT_COST_RESERVE_USD = '0.20';
+/** Conservative screening estimate, not an attested broker commission tariff. */
+export const PEPPERSTONE_LIVE_PILOT_COST_RESERVE_PER_LOT_USD = '8';
+export const PEPPERSTONE_LIVE_PILOT_FIXED_SLIPPAGE_RESERVE_USD = '0.20';
 export const PEPPERSTONE_LIVE_PILOT_STOP_BUFFER_MULTIPLIER = '1.20';
 
 export function pepperstoneLivePilotIsScoped(input: {
@@ -27,35 +29,38 @@ export function evaluatePepperstoneLiveMicroRisk(input: {
   grossRiskAtStopUsd: string;
 }): {
   allowed: boolean;
-  code: 'LIVE_MICRO_BROKER_MIN_TOO_LARGE' | 'LIVE_MICRO_LOT_LIMIT' |
-    'LIVE_MICRO_COST_INCLUSIVE_RISK_LIMIT' | null;
+  code: 'LIVE_LOT_BROKER_MIN_TOO_LARGE' | 'LIVE_LOT_RANGE_LIMIT' |
+    'LIVE_MIN_LOT_NOT_AFFORDABLE' | 'LIVE_COST_INCLUSIVE_RISK_LIMIT' | null;
   projectedCostInclusiveRiskUsd: string;
   maximumRiskUsd: string;
 } {
   const maxLot = ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_LOT_CEILING);
+  const requestedMinLot = ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_MIN_LOTS);
   const equity = ExactDecimal.parse(input.equityUsd);
   const lots = ExactDecimal.parse(input.lots);
   const brokerMin = ExactDecimal.parse(input.brokerMinimumLots);
   const grossRisk = ExactDecimal.parse(input.grossRiskAtStopUsd);
   if (!equity.isPositive() || !lots.isPositive() || !brokerMin.isPositive() ||
       !grossRisk.isPositive()) {
-    throw new Error('LIVE_MICRO_INPUT_UNPROVABLE');
+    throw new Error('LIVE_LOT_INPUT_UNPROVABLE');
   }
-  const riskCap = ExactDecimal.min(
-    equity.mul(ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_EQUITY_RISK_PERCENT))
-      .divByPowerOfTen(2),
-    ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_ABSOLUTE_RISK_USD),
-  );
+  // Equity-proportional cap: $1 at $50 equity, $20 at $1,000 equity.
+  const riskCap = equity
+    .mul(ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_EQUITY_RISK_PERCENT))
+    .divByPowerOfTen(2);
   const projected = grossRisk
     .mul(ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_STOP_BUFFER_MULTIPLIER))
-    .add(ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_COST_RESERVE_USD));
+    .add(lots.mul(ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_COST_RESERVE_PER_LOT_USD)))
+    .add(ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_FIXED_SLIPPAGE_RESERVE_USD));
   const code = brokerMin.gt(maxLot)
-    ? 'LIVE_MICRO_BROKER_MIN_TOO_LARGE'
+    ? 'LIVE_LOT_BROKER_MIN_TOO_LARGE'
     : lots.gt(maxLot) || lots.lt(brokerMin)
-      ? 'LIVE_MICRO_LOT_LIMIT'
-      : projected.gt(riskCap)
-        ? 'LIVE_MICRO_COST_INCLUSIVE_RISK_LIMIT'
-        : null;
+      ? 'LIVE_LOT_RANGE_LIMIT'
+      : lots.lt(requestedMinLot)
+        ? 'LIVE_MIN_LOT_NOT_AFFORDABLE'
+        : projected.gt(riskCap)
+          ? 'LIVE_COST_INCLUSIVE_RISK_LIMIT'
+          : null;
   return {
     allowed: code === null,
     code,

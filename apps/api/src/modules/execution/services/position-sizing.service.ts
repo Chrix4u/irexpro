@@ -3,7 +3,7 @@ import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
-import { evaluatePepperstoneLiveMicroRisk, pepperstoneLivePilotIsScoped, PEPPERSTONE_LIVE_PILOT_LOT_CEILING } from './pepperstone-live-micro-risk';
+import { evaluatePepperstoneLiveMicroRisk, pepperstoneLivePilotIsScoped, PEPPERSTONE_LIVE_PILOT_LOT_CEILING, PEPPERSTONE_LIVE_PILOT_MIN_LOTS } from './pepperstone-live-micro-risk';
 import { RiskProfile } from '../../risk/entities/risk-profile.entity';
 import { BrokerService } from '../../broker/broker.service';
 import { BrokerFxConversionService } from '../../market-data/services/broker-fx-conversion.service';
@@ -51,10 +51,11 @@ export type PositionSizingFailureCode =
   | 'BROKER_MINIMUM_MARGIN_UNAFFORDABLE'
   | 'POLICY_MINIMUM_LOT_UNPROVABLE'
   | 'POSITION_SIZE_ZERO'
-  | 'LIVE_MICRO_BROKER_MIN_TOO_LARGE'
-  | 'LIVE_MICRO_LOT_LIMIT'
-  | 'LIVE_MICRO_COST_INCLUSIVE_RISK_LIMIT'
-  | 'LIVE_MICRO_INPUT_UNPROVABLE';
+  | 'LIVE_LOT_BROKER_MIN_TOO_LARGE'
+  | 'LIVE_LOT_RANGE_LIMIT'
+  | 'LIVE_MIN_LOT_NOT_AFFORDABLE'
+  | 'LIVE_COST_INCLUSIVE_RISK_LIMIT'
+  | 'LIVE_LOT_INPUT_UNPROVABLE';
 
 /** Typed fail-closed sizing rejection — carries the stable machine code. */
 export class PositionSizingError extends Error {
@@ -137,10 +138,12 @@ export interface PositionSizingInputs {
   };
   liveMicroPilotEnvelope?: {
     artifact: 'pepperstone-usd-live-micro-pilot-v1';
-    maxLots: '0.01';
+    maxLots: '1';
+    requestedMinimumLots: '0.1';
     maximumRiskUsd: string;
     projectedCostInclusiveRiskUsd: string;
-    feeAndSlippageReserveUsd: '0.20';
+    feeReservePerLotUsd: '8';
+    fixedSlippageReserveUsd: '0.20';
     stopBufferMultiple: '1.20';
     brokerLiveVerificationRequired: true;
   };
@@ -842,7 +845,7 @@ export class PositionSizingService {
       ExactDecimal.min(lotsByRiskBudget, maxLot),
       lotsByLeverageCeiling,
     );
-    // LIVE Pepperstone pilot: the MAXIMUM is 0.01, never a preferred lot or
+    // LIVE Pepperstone pilot: the MAXIMUM is 1.0, never a preferred lot or
     // minimum. If the actual broker minimum is larger, abstain, don't round up.
     if (pepperstoneLiveMicro) {
       lotsBeforeStep = ExactDecimal.min(lotsBeforeStep,
@@ -882,6 +885,14 @@ export class PositionSizingService {
         `risk-budget volume ${lots.toFixed(LOT_SCALE, 'DOWN')} is below the instrument ` +
           `minimum ${minLot.toString()} — rounding UP would exceed the risk budget`,
       );
+    }
+
+    // The requested 0.10 minimum is NEVER an invitation to round UP.
+    // If independent risk + leverage sizing chose <0.10, no LIVE order.
+    if (pepperstoneLiveMicro && lots.lt(ExactDecimal.parse(PEPPERSTONE_LIVE_PILOT_MIN_LOTS))) {
+      throw new PositionSizingError('LIVE_MIN_LOT_NOT_AFFORDABLE',
+        `Risk-sized LIVE volume ${lots.toString()} is below the selected 0.10 minimum; ` +
+        'refuse rather than force an unaffordable larger position');
     }
 
     let policyMinimumExecutableLot: ExactDecimal | null = null;
@@ -1132,9 +1143,9 @@ export class PositionSizingService {
 
     let liveMicroPilotEnvelope: PositionSizingInputs['liveMicroPilotEnvelope'];
     // The independent account-aware proof is checked AFTER broker-volume,
-    // margin and cross-currency conversion. A guessed commission is NOT a
-    // production fee quote: $0.20 is a conservative screening reserve for
-    // this 0.01-lot experiment, not a guaranteed all-in loss cap.
+    // margin and cross-currency conversion. The $8-per-standard-lot cost
+    // reserve plus $0.20 fixed slippage is a conservative SCREENING estimate,
+    // not a verified live tariff or guaranteed maximum fill loss.
     if (pepperstoneLiveMicro) {
       let liveMicroResult: ReturnType<typeof evaluatePepperstoneLiveMicroRisk>;
       try {
@@ -1144,21 +1155,23 @@ export class PositionSizingService {
           grossRiskAtStopUsd: finalRiskAtStop.toString(),
         });
       } catch {
-        throw new PositionSizingError('LIVE_MICRO_INPUT_UNPROVABLE',
-          'LIVE broker micro risk/cost evidence cannot be proven; no order is affordable');
+        throw new PositionSizingError('LIVE_LOT_INPUT_UNPROVABLE',
+          'LIVE broker lot-range risk/cost evidence cannot be proven; no order is affordable');
       }
       if (!liveMicroResult.allowed) {
         throw new PositionSizingError(liveMicroResult.code!,
-          `Pepperstone LIVE micro-sized order refused: projected stop/cost ` +
+          `Pepperstone LIVE requested lot-range order refused: projected stop/cost ` +
           `${liveMicroResult.projectedCostInclusiveRiskUsd} USD, maximum ` +
           `${liveMicroResult.maximumRiskUsd} USD. No rounding up and no DEMO lot inheritance.`);
       }
       liveMicroPilotEnvelope = {
         artifact: 'pepperstone-usd-live-micro-pilot-v1',
-        maxLots: '0.01',
+        maxLots: '1',
+        requestedMinimumLots: '0.1',
         maximumRiskUsd: liveMicroResult.maximumRiskUsd,
         projectedCostInclusiveRiskUsd: liveMicroResult.projectedCostInclusiveRiskUsd,
-        feeAndSlippageReserveUsd: '0.20',
+        feeReservePerLotUsd: '8',
+        fixedSlippageReserveUsd: '0.20',
         stopBufferMultiple: '1.20',
         brokerLiveVerificationRequired: true,
       };
