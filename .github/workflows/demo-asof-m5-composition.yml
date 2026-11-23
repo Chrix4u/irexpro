@@ -1,0 +1,30 @@
+name: iRexPro DEMO native M1 to as-of M5 completion
+on:
+  push:
+    branches: ['feat/protected-runner-causal-m5-composition-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/src/modules/execution/reconciliation/candle-aware*'
+      - 'apps/api/src/modules/execution/reconciliation/live-demo-profit-protection.service.ts'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  causal-native-m5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install API dependencies
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Full API TypeScript compile check
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - name: M5 composition, candle expert and profit safety regressions
+        run: pnpm --filter @irexpro/api exec jest src/modules/execution/reconciliation/candle-aware-native-m5-composition.spec.ts src/modules/execution/reconciliation/candle-aware-profit-patience-shadow.spec.ts src/modules/execution/reconciliation/demo-five-second-protected-runner.integration.spec.ts src/modules/execution/reconciliation/live-demo-profit-protection.service.spec.ts src/modules/execution/reconciliation/demo-profit-stop-authority-sync.service.spec.ts src/modules/execution/reconciliation/demo-protected-profit-runner-orchestrator.service.spec.ts --runInBand --silent --no-coverage

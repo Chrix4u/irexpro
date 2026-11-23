@@ -14,7 +14,7 @@ import { evaluatePaperProfitLock } from '../../broker/adapters/paper-broker.adap
 import { evaluateProtectedRunnerShadow } from './protected-runner-shadow';
 import { evaluateVerifiedProtectedRunnerStopShadow } from './verified-profit-runner-stop-shadow';
 import { evaluateProfitLockPatienceShadow } from './profit-lock-patience-shadow';
-import { evaluateCandleAwareProfitExitShadow, type CompletedProfitExitCandle } from './candle-aware-profit-patience-shadow';
+import { evaluateCandleAwareProfitExitShadow, composeAsOfNativeM5FromFiveM1, type CompletedProfitExitCandle } from './candle-aware-profit-patience-shadow';
 import { evaluateZaiP1ReversalDemoPreflight } from './zai-p1-reversal-demo-canary';
 import { evaluatePepperstonePeakLossRescue } from './pepperstone-peak-loss-rescue';
 import { evaluatePepperstoneDemoNetProfitLock } from './pepperstone-demo-net-profit-lock';
@@ -2516,6 +2516,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               open: candleContext.m5.open, high: candleContext.m5.high,
               low: candleContext.m5.low, close: candleContext.m5.close,
               brokerNativeSampleCount: candleContext.m5.brokerNativeSampleCount,
+              provenance: candleContext.m5.provenance ?? 'STORED_BROKER_NATIVE_M5',
             } : null,
           },
           protectedGraceRunnerShadow: patienceRunner,
@@ -2568,7 +2569,7 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
         bucket_time: Date | string; open: string; high: string;
         low: string; close: string; sample_count: number;
       }>>;
-    const [m1Rows, m5Rows] = await Promise.all([query('M1',2), query('M5',1)]);
+    const [m1Rows, m5Rows] = await Promise.all([query('M1',10), query('M5',1)]);
     const convert = (row: {
       bucket_time: Date | string; open: string; high: string;
       low: string; close: string; sample_count: number;
@@ -2579,8 +2580,23 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
       brokerNativeSampleCount: Number(row.sample_count),
     });
     return {
-      m1: m1Rows.map(row => convert(row,1)).reverse(),
-      m5: m5Rows[0] ? convert(m5Rows[0],5) : null,
+      // The fast reversal expert uses exactly the last two completed M1.
+      // Additional completed M1 bars are ONLY to reconstruct a UTC-aligned
+      // M5 when its separately stored provider-native row arrived late.
+      m1: m1Rows.slice(0,2).map(row => convert(row,1)).reverse(),
+      m5: (() => {
+        const expectedStart=Math.floor(observedAt.getTime()/300_000)*300_000-300_000;
+        const persisted=m5Rows[0] ? convert(m5Rows[0],5) : null;
+        if (persisted && persisted.startedAt.getTime()===expectedStart) {
+          return {...persisted,provenance:'STORED_BROKER_NATIVE_M5' as const};
+        }
+        // An older M5 from a previous window is NOT evidence of the just
+        // completed period. Recompose from five strictly as-of eligible M1
+        // rows, or abstain rather than fabricate a contemporary M5.
+        return composeAsOfNativeM5FromFiveM1(
+          observedAt,m1Rows.map(row => convert(row,1)),
+        );
+      })(),
     };
   }
 
