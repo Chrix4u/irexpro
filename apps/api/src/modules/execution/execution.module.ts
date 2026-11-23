@@ -60,6 +60,7 @@ import { LiveDemoProfitProtectionService } from './reconciliation/live-demo-prof
 import { DemoPartialCloseLedgerService } from './reconciliation/demo-partial-close-ledger.service';
 import { DemoPartialCloseReconciliationService } from './reconciliation/demo-partial-close-reconciliation.service';
 import { DemoProfitStopAuthoritySyncService } from './reconciliation/demo-profit-stop-authority-sync.service';
+import { DemoProtectedProfitRunnerOrchestrator } from './reconciliation/demo-protected-profit-runner-orchestrator.service';
 
 /**
  * ExecutionModule — Live trade execution, lifecycle management, and
@@ -179,6 +180,9 @@ import { DemoProfitStopAuthoritySyncService } from './reconciliation/demo-profit
     // dispatch; synchronizes pre-verified broker stop proof + trade authority
     // atomically when a separately authorized workflow is eventually active.
     DemoProfitStopAuthoritySyncService,
+    // Internal, triple-flag-disabled broker-verified DEMO protection setup.
+    // Does not subscribe to the profit loop or grant an executable HOLD.
+    DemoProtectedProfitRunnerOrchestrator,
     TradeReconciliationJob,
     TradeReconciliationProducer,
     // Round 7 (P1): the expiry-hygiene sweeper (stale intents/confirmations
