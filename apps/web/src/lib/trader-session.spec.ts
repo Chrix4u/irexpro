@@ -140,15 +140,37 @@ describe('prepareBrokerForAutomationStart', () => {
     );
   });
 
-  it('does not touch validation or DEMO activation for paper, live, or already ACTIVE brokers', async () => {
+  it('requests LIVE enablement only after the owner confirms Start, using the audited server endpoint', async () => {
+    requestMock.mockResolvedValueOnce(undefined);
+    await expect(prepareBrokerForAutomationStart({
+      ...externalDemo,
+      id: 'connected-live-1',
+      accountType: 'LIVE',
+      liveTradingEnabled: false,
+    })).resolves.toEqual({ ready: true });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(requestMock).toHaveBeenCalledWith(
+      '/broker/connections/connected-live-1/enable-live-trading',
+      { method: 'POST' },
+    );
+  });
+
+  it('propagates a refused LIVE verification and never assumes authority was granted', async () => {
+    requestMock.mockRejectedValueOnce(new Error('Provider is not production-LIVE verified'));
+    await expect(prepareBrokerForAutomationStart({
+      ...externalDemo, accountType: 'LIVE', liveTradingEnabled: false,
+    })).rejects.toThrow('Provider is not production-LIVE verified');
+    expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves paper, validated ACTIVE DEMO, and already-authorized LIVE untouched', async () => {
     for (const broker of [
       { ...externalDemo, brokerId: 'paper-broker' },
-      { ...externalDemo, accountType: 'LIVE' as const },
       { ...externalDemo, authorizationStatus: 'ACTIVE' as const },
+      { ...externalDemo, accountType: 'LIVE' as const, authorizationStatus: 'ACTIVE' as const, liveTradingEnabled: true },
     ]) {
       await expect(prepareBrokerForAutomationStart(broker)).resolves.toEqual({ ready: true });
     }
-
     expect(requestMock).not.toHaveBeenCalled();
   });
 });
