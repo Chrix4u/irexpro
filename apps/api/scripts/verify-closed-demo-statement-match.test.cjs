@@ -188,3 +188,13 @@ test('P&L composition retains sub-eight-decimal differences instead of rounding 
   assert.equal(pnl.mismatches.length, 1);
   assert.equal(checkPnlComposition([{ ...trade, swap: '0.000000001' }], [s]).mismatches.length, 0);
 });
+
+test('scientific notation from the statement is expanded exactly, with bounded exponent', () => {
+  assert.equal(normalizeDecimals('-2.4E+2'), '-240');
+  assert.equal(normalizeDecimals('1.230E-3'), '0.00123');
+  assert.equal(normalizeDecimals('9007199254740993E+1'), '90071992547409930');
+  assert.equal(normalizeDecimals('-0E+2'), '0');
+  assert.equal(normalizeDecimals('1e999999999'), null);
+  const statement = parseFingerprints(fs.readFileSync(FIXTURE, 'utf-8'));
+  assert.equal(statement.filter((row) => row.net === null).length, 0);
+});

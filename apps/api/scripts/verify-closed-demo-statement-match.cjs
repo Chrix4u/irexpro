@@ -31,7 +31,20 @@ function compareDecimal(a, b, scale = 8) {
 
 function normalizeDecimals(value) {
   if (value === null || value === undefined) return null;
-  const s = String(value).replace(/\u00a0/g, '').trim();
+  let s = String(value).replace(/\u00a0/g, '').trim();
+  // Statement exports may encode exact decimal amounts in scientific notation.
+  // Expand the coefficient as text; never round through a floating-point value.
+  const scientific = /^(-?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/.exec(s);
+  if (scientific) {
+    const [, sign, whole, fraction = '', exponent] = scientific;
+    const shift = Number(exponent);
+    if (!Number.isSafeInteger(shift) || Math.abs(shift) > 100) return null;
+    const digits = whole + fraction;
+    const point = whole.length + shift;
+    s = sign + (point <= 0 ? '0.' + '0'.repeat(-point) + digits :
+      point >= digits.length ? digits + '0'.repeat(point - digits.length) :
+      digits.slice(0, point) + '.' + digits.slice(point));
+  }
   if (!/^-?\d+(?:\.\d+)?$/.test(s)) return null;
   const negative = s.startsWith('-');
   const body = negative ? s.slice(1) : s;
