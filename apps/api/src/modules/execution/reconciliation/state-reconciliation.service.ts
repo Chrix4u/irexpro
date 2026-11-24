@@ -36,7 +36,10 @@ import { ReconciliationDiscrepancyType, ReconciliationRunStatus } from './reconc
 import { ReconciliationPersistenceService } from './reconciliation-persistence.service';
 import { ReconciliationResolutionService } from './reconciliation-resolution.service';
 import { proveCtraderEntryOrderPositionRef } from './closed-demo-settlement-proof';
-import { provePepperstoneDemoClosedOrderFill } from './closed-demo-order-deal-proof';
+import {
+  provePepperstoneDemoClosedOrderFill,
+  selectRecentDemoCloseOrders,
+} from './closed-demo-order-deal-proof';
 import { isProvenUnsentEntry } from '../trade-read-truth';
 import { reconcileProvenUnsentEntry } from './proven-unsent-entry';
 import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
@@ -225,6 +228,7 @@ export class StateReconciliationService {
   // Keep a separate bounded DEMO-only 15-minute late-settlement lookup,
   // never repeated on every 60s general reconciliation sweep.
   private readonly closedEconomicsLookupAtByConnection = new Map<string, number>();
+  private readonly demoCloseRecoveryCursor = new Map<string, string>();
 
   constructor(
     @InjectRepository(Trade)
@@ -740,23 +744,17 @@ export class StateReconciliationService {
         connection.userId === process.env.VPS_FOREX_SCANNER_USER_ID
       ) {
         const asOf = new Date();
-        const recentCloseOrders = internalOrders
-          .filter(
-            (o) =>
-              o.status === OrderStatus.RECONCILIATION_PENDING &&
-              o.orderKind === OrderKind.MARKET &&
-              o.providerOrderId === null &&
-              o.tradeId &&
-              o.filledQuantity &&
-              isZeroLikeDecimal(o.filledQuantity) &&
-              o.avgFillPrice === null &&
-              o.submittedAt instanceof Date &&
-              o.createdAt instanceof Date &&
-              asOf.getTime() - o.submittedAt.getTime() >= 5_000 &&
-              asOf.getTime() - o.submittedAt.getTime() <= 6 * 3600_000,
-          )
-          .sort((a, b) => b.submittedAt!.getTime() - a.submittedAt!.getTime())
-          .slice(0, 2);
+        const recentCloseOrders = selectRecentDemoCloseOrders(
+          internalOrders,
+          asOf,
+          this.demoCloseRecoveryCursor.get(connection.id),
+        );
+        if (recentCloseOrders.length === 0) this.demoCloseRecoveryCursor.delete(connection.id);
+        else
+          this.demoCloseRecoveryCursor.set(
+            connection.id,
+            recentCloseOrders[recentCloseOrders.length - 1].id,
+          );
         for (const order of recentCloseOrders) {
           try {
             // An order cannot be inferred from a closed position if another

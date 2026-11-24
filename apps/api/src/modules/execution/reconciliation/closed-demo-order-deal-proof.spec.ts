@@ -3,7 +3,10 @@ import * as path from 'node:path';
 import { BrokerClosedTrade } from '../../broker/interfaces/broker-adapter.interface';
 import { TradeDirection, TradeStatus } from '../entities/trade.entity';
 import { OrderKind, OrderStatus } from '../orders/order.enums';
-import { provePepperstoneDemoClosedOrderFill } from './closed-demo-order-deal-proof';
+import {
+  provePepperstoneDemoClosedOrderFill,
+  selectRecentDemoCloseOrders,
+} from './closed-demo-order-deal-proof';
 
 const opened = new Date('2026-11-23T18:04:56.856Z');
 const sent = new Date('2026-11-23T18:13:40.043Z');
@@ -140,5 +143,46 @@ describe('Pepperstone DEMO CLOSED trade with unsettled closing order', () => {
     expect(source).toMatch(/connection\.userId\s*===\s*process\.env\.VPS_FOREX_SCANNER_USER_ID/);
     expect(source).toMatch(/this\.tradeRepo\.findOne\(\{\s*where:\s*\{/);
     expect(source).toMatch(/status:\s*TradeStatus\.CLOSED/);
+  });
+});
+
+describe('bounded DEMO close ledger retry selection', () => {
+  const candidate = (id: string, tradeId = id) => ({ ...order, id, tradeId });
+  const at = input.observedAt;
+  it('rotates past unresolved candidates without exceeding two per pass', () => {
+    const rows = ['d', 'b', 'c', 'a', 'e'].map((id) => candidate(id));
+    expect(selectRecentDemoCloseOrders(rows, at, undefined).map((o) => o.id)).toEqual(['a', 'b']);
+    expect(selectRecentDemoCloseOrders(rows, at, 'b').map((o) => o.id)).toEqual(['c', 'd']);
+    expect(selectRecentDemoCloseOrders(rows, at, 'd').map((o) => o.id)).toEqual(['e', 'a']);
+    expect(
+      selectRecentDemoCloseOrders(
+        rows.filter((o) => o.id !== 'b'),
+        at,
+        'b',
+      ).map((o) => o.id),
+    ).toEqual(['c', 'd']);
+  });
+  it('does not consume budget on duplicate unresolved orders even outside the time window', () => {
+    const rows = [
+      candidate('a', 'duplicate'),
+      { ...candidate('b', 'duplicate'), submittedAt: new Date(0) },
+      candidate('c'),
+      candidate('d'),
+    ];
+    expect(selectRecentDemoCloseOrders(rows, at, undefined).map((o) => o.id)).toEqual(['c', 'd']);
+  });
+  it('retains all eligibility time, state and missing-fill fences', () => {
+    const rows = [
+      candidate('ok'),
+      { ...candidate('old'), submittedAt: new Date(0) },
+      { ...candidate('new'), submittedAt: at },
+      { ...candidate('filled'), filledQuantity: '1' },
+      { ...candidate('known'), providerOrderId: '123' },
+      { ...candidate('terminal'), status: OrderStatus.FILLED },
+      { ...candidate('limit'), orderKind: OrderKind.LIMIT },
+      { ...candidate('invalid'), submittedAt: new Date(NaN) },
+    ];
+    expect(selectRecentDemoCloseOrders(rows, at, undefined).map((o) => o.id)).toEqual(['ok']);
+    expect(selectRecentDemoCloseOrders(rows, new Date(NaN), undefined)).toEqual([]);
   });
 });

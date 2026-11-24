@@ -160,3 +160,56 @@ export function provePepperstoneDemoClosedOrderFill(input: {
   }
   return { matched: true, quantity: qty, price: deal.closePrice, positionRef: ref };
 }
+
+/** Fair, bounded selection for the existing DEMO ledger recovery only.
+ * Ambiguous multiple orders are excluded before the two-read budget is used.
+ * A cursor rotates past unresolved evidence; proof/authority stays unchanged.
+ */
+export function selectRecentDemoCloseOrders<
+  T extends Pick<
+    Order,
+    | 'id'
+    | 'tradeId'
+    | 'status'
+    | 'orderKind'
+    | 'providerOrderId'
+    | 'filledQuantity'
+    | 'avgFillPrice'
+    | 'submittedAt'
+    | 'createdAt'
+  >,
+>(orders: readonly T[], asOf: Date, afterId: string | undefined): T[] {
+  const now = asOf.getTime();
+  if (!Number.isFinite(now)) return [];
+  const counts = new Map<string, number>();
+  for (const o of orders) {
+    if (
+      o.tradeId &&
+      o.status === OrderStatus.RECONCILIATION_PENDING &&
+      o.orderKind === OrderKind.MARKET
+    )
+      counts.set(o.tradeId, (counts.get(o.tradeId) ?? 0) + 1);
+  }
+  const eligible = orders
+    .filter((o) => {
+      if (
+        !o.tradeId ||
+        counts.get(o.tradeId) !== 1 ||
+        o.status !== OrderStatus.RECONCILIATION_PENDING ||
+        o.orderKind !== OrderKind.MARKET ||
+        o.providerOrderId !== null ||
+        typeof o.filledQuantity !== 'string' ||
+        !/^[-+]?0+(?:\.0+)?$/.test(o.filledQuantity.trim()) ||
+        o.avgFillPrice !== null ||
+        !(o.submittedAt instanceof Date) ||
+        !(o.createdAt instanceof Date)
+      )
+        return false;
+      const age = now - o.submittedAt.getTime();
+      return age >= 5_000 && age <= 6 * 3600_000;
+    })
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const next = afterId === undefined ? 0 : eligible.findIndex((o) => o.id > afterId);
+  const start = next < 0 ? 0 : next;
+  return [...eligible.slice(start), ...eligible.slice(0, start)].slice(0, 2);
+}
