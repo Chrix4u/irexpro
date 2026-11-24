@@ -5756,7 +5756,13 @@ export default function AiTradingPage() {
                     </div>
                     {tradeReadiness.instrument ? (
                       <div className="ai-market-readiness__focus">
-                        <span>{researchOnlyAiFocus ? "Research-only focus" : "Executable-pair focus"}</span>
+                        <span>
+                          {researchOnlyAiFocus
+                            ? "Research-only focus"
+                            : tradeReadiness.tradeExpected
+                              ? "Qualified entry candidate"
+                              : "Setup under evaluation"}
+                        </span>
                         <b>{tradeReadiness.instrument}{tradeReadiness.direction ? ` · ${tradeReadiness.direction}` : ""}</b>
                         {researchOnlyAiFocus ? (
                           <small>This pair is not one of the four enabled DEMO instruments. Scanning it does not permit an entry; the chart stays on an enabled pair.</small>
