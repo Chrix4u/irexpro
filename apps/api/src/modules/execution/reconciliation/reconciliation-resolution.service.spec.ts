@@ -2,7 +2,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Trade, TradeCloseReason, TradeStatus, TradeDirection } from '../entities/trade.entity';
 import { Order } from '../orders/order.entity';
-import { OrderStatus } from '../orders/order.enums';
+import { OrderKind, OrderStatus } from '../orders/order.enums';
 import { OrderService } from '../orders/order.service';
 import { TradeStateMachine } from '../orders/trade-state-machine';
 import { AuditService } from '../../audit/audit.service';
@@ -102,6 +102,7 @@ describe('ReconciliationResolutionService', () => {
     resolveReconciliationFillState: jest.Mock;
     applyFill: jest.Mock;
     findByTradeId: jest.Mock;
+    findReconcilableByTradeId: jest.Mock;
   };
   let auditService: { log: jest.Mock };
   let eventBus: { publish: jest.Mock };
@@ -113,6 +114,7 @@ describe('ReconciliationResolutionService', () => {
       resolveReconciliationFillState: jest.fn().mockResolvedValue(baseOrder()),
       applyFill: jest.fn().mockResolvedValue(baseOrder()),
       findByTradeId: jest.fn().mockResolvedValue(null),
+      findReconcilableByTradeId: jest.fn().mockResolvedValue([]),
     };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
     eventBus = { publish: jest.fn() };
@@ -439,16 +441,153 @@ describe('ReconciliationResolutionService', () => {
       );
     });
 
-    it('resolves the linked RECONCILIATION_PENDING entry order to FILLED', async () => {
-      orderService.findByTradeId.mockResolvedValue(
-        baseOrder({ status: OrderStatus.RECONCILIATION_PENDING }),
-      );
+    it('converges the stranded ENTRY order from the trade fill facts via applyFill', async () => {
+      orderService.findReconcilableByTradeId.mockResolvedValue([
+        baseOrder({
+          providerOrderId: null,
+          direction: TradeDirection.BUY,
+          orderKind: OrderKind.MARKET,
+          tradeId: 'trade-1',
+        }),
+      ]);
       await service.closeTradeFromProvider(baseTrade(), null);
-      expect(orderService.resolveReconciliation).toHaveBeenCalledWith(
+      expect(orderService.applyFill).toHaveBeenCalledWith(
         'order-1',
-        OrderStatus.FILLED,
-        expect.anything(),
+        expect.objectContaining({ quantity: '1.0000', price: '1.10000' }),
       );
+      expect(orderService.resolveReconciliation).not.toHaveBeenCalled();
+    });
+
+    it('converges the stranded CLOSE order from the provider closed deal via applyFill', async () => {
+      orderService.findReconcilableByTradeId.mockResolvedValue([
+        baseOrder({
+          id: 'close-order-1',
+          providerOrderId: null,
+          direction: TradeDirection.SELL,
+          orderKind: OrderKind.MARKET,
+          tradeId: 'trade-1',
+          requestedQuantity: '1.0000',
+        }),
+      ]);
+      await service.closeTradeFromProvider(baseTrade(), {
+        externalOrderId: 'pos-1',
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        lotSize: '1.0000',
+        openPrice: '1.10000',
+        closePrice: '1.12000',
+        stopLoss: '0',
+        takeProfit: '0',
+        realisedPnl: '200.00',
+        openedAt: new Date('2025-01-01T00:00:00Z'),
+        closedAt: new Date('2025-01-02T00:00:00Z'),
+        commission: '-6.00',
+        swap: '0.00',
+        closeReason: 'UNKNOWN',
+      });
+      expect(orderService.applyFill).toHaveBeenCalledWith('close-order-1', {
+        quantity: '1.0000',
+        price: '1.12000',
+      });
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.ORDER_RECONCILED,
+          resourceId: 'close-order-1',
+          metadata: expect.objectContaining({
+            leg: 'CLOSE',
+            evidence: 'PROVIDER_CLOSED_DEAL_EXACT_QUANTITY_AND_PRICE',
+          }),
+        }),
+      );
+    });
+
+    it('leaves the stranded CLOSE order pending when the deal quantity is not the full close', async () => {
+      orderService.findReconcilableByTradeId.mockResolvedValue([
+        baseOrder({
+          id: 'close-order-1',
+          providerOrderId: null,
+          direction: TradeDirection.SELL,
+          orderKind: OrderKind.MARKET,
+          tradeId: 'trade-1',
+          requestedQuantity: '2.0000',
+        }),
+      ]);
+      await service.closeTradeFromProvider(baseTrade(), {
+        externalOrderId: 'pos-1',
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        lotSize: '1.0000',
+        openPrice: '1.10000',
+        closePrice: '1.12000',
+        stopLoss: '0',
+        takeProfit: '0',
+        realisedPnl: '200.00',
+        openedAt: new Date('2025-01-01T00:00:00Z'),
+        closedAt: new Date('2025-01-02T00:00:00Z'),
+        commission: '-6.00',
+        swap: '0.00',
+        closeReason: 'UNKNOWN',
+      });
+      expect(orderService.applyFill).not.toHaveBeenCalled();
+    });
+
+    it('never fabricates a close-order fill without a provider closed deal', async () => {
+      orderService.findReconcilableByTradeId.mockResolvedValue([
+        baseOrder({
+          id: 'close-order-1',
+          providerOrderId: null,
+          direction: TradeDirection.SELL,
+          orderKind: OrderKind.MARKET,
+          tradeId: 'trade-1',
+        }),
+      ]);
+      await service.closeTradeFromProvider(baseTrade(), null);
+      expect(orderService.applyFill).not.toHaveBeenCalled();
+      expect(orderService.resolveReconciliation).not.toHaveBeenCalled();
+    });
+
+    it('skips convergence for orders with a provider id or an existing recorded fill', async () => {
+      orderService.findReconcilableByTradeId.mockResolvedValue([
+        baseOrder({
+          id: 'close-with-id',
+          providerOrderId: 'ticket-9',
+          direction: TradeDirection.SELL,
+          orderKind: OrderKind.MARKET,
+          tradeId: 'trade-1',
+        }),
+        baseOrder({
+          id: 'close-prefilled',
+          providerOrderId: null,
+          filledQuantity: '1.0000',
+          avgFillPrice: '1.12000',
+          direction: TradeDirection.SELL,
+          orderKind: OrderKind.MARKET,
+          tradeId: 'trade-1',
+        }),
+      ]);
+      await service.closeTradeFromProvider(baseTrade(), {
+        externalOrderId: 'pos-1',
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        lotSize: '1.0000',
+        openPrice: '1.10000',
+        closePrice: '1.12000',
+        stopLoss: '0',
+        takeProfit: '0',
+        realisedPnl: '200.00',
+        openedAt: new Date('2025-01-01T00:00:00Z'),
+        closedAt: new Date('2025-01-02T00:00:00Z'),
+        commission: '-6.00',
+        swap: '0.00',
+        closeReason: 'UNKNOWN',
+      });
+      expect(orderService.applyFill).not.toHaveBeenCalled();
+    });
+
+    it('does not break the trade close when the stranded-order lookup throws', async () => {
+      orderService.findReconcilableByTradeId.mockRejectedValue(new Error('db read failed'));
+      const closed = await service.closeTradeFromProvider(baseTrade(), null);
+      expect(closed).toBe(true);
     });
   });
 

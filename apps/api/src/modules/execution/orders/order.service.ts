@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import * as crypto from 'crypto';
 import { Order } from './order.entity';
 import {
@@ -18,6 +18,16 @@ import {
 } from './order.enums';
 import { OrderStateMachine } from './order-state-machine';
 import { compareDecimal } from '../reconciliation/reconciliation-comparator';
+
+/** Non-terminal order statuses the reconciliation cycle may still converge. */
+const RECONCILABLE_ORDER_STATUSES: OrderStatus[] = [
+  OrderStatus.CREATED,
+  OrderStatus.SUBMITTED,
+  OrderStatus.DISPATCH_COMMITTED,
+  OrderStatus.ACKNOWLEDGED,
+  OrderStatus.PARTIALLY_FILLED,
+  OrderStatus.RECONCILIATION_PENDING,
+];
 
 /** Input contract for idempotent order submission. */
 export interface SubmitOrderInput {
@@ -390,6 +400,23 @@ export class OrderService {
    */
   async findByTradeId(tradeId: string): Promise<Order | null> {
     return this.orderRepo.findOne({ where: { tradeId } });
+  }
+
+  /**
+   * ALL still-reconcilable orders linked to a trade. A trade can carry an
+   * ENTRY order and a CLOSE order simultaneously (both linked via trade_id);
+   * the singular findByTradeId is ambiguous between them. Callers that must
+   * act on a specific leg (entry vs close) classify by direction/kind and
+   * MUST use this plural read — never the ambiguous single row.
+   */
+  async findReconcilableByTradeId(tradeId: string): Promise<Order[]> {
+    return this.orderRepo.find({
+      where: {
+        tradeId,
+        status: In([...RECONCILABLE_ORDER_STATUSES] as OrderStatus[]),
+      },
+      order: { createdAt: 'ASC' },
+    });
   }
 
   async listOrdersByUser(userId: string, limit = 50): Promise<Order[]> {

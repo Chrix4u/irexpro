@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { Trade, TradeCloseReason, TradeStatus } from '../entities/trade.entity';
 import { Order } from '../orders/order.entity';
-import { OrderStatus } from '../orders/order.enums';
+import { OrderKind, OrderStatus } from '../orders/order.enums';
 import { OrderService } from '../orders/order.service';
 import { TradeStateMachine } from '../orders/trade-state-machine';
 import { AuditService } from '../../audit/audit.service';
@@ -337,10 +337,13 @@ export class ReconciliationResolutionService {
       reason: 'Provider reports the position closed',
     });
 
-    // Provider-observed close implies the linked entry order FILLED.
-    await this.resolveLinkedOrder(trade.id, trade.userId, OrderStatus.FILLED, {
-      reason: 'Provider-observed position closed — entry order resolved FILLED',
-    });
+    // Provider-observed close implies the linked orders converged. The old
+    // status-only resolveLinkedOrder(FILLED) path THREW by design for
+    // fill-bearing targets and was swallowed — leaving the closing order
+    // RECONCILIATION_PENDING forever while the trade itself closed (the
+    // stranded-bookkeeping defect). The broker deal in hand now converges the
+    // stranded close order through the fill-bearing applyFill CAS.
+    await this.convergeStrandedOrdersAfterProviderClose(trade, closedTrade);
 
     return true;
   }
@@ -533,9 +536,171 @@ export class ReconciliationResolutionService {
   // ─── Shared ───────────────────────────────────────────────────────────────
 
   /**
-   * Resolve the trade's linked RECONCILIATION_PENDING order. DEFENSIVE: an
-   * order-resolution failure is logged and retried next run — it NEVER
-   * breaks the (authoritative) trade resolution.
+   * Converge the trade's stranded internal orders once the provider-observed
+   * close has been booked (guarded CAS above). Two shapes, both fill-bearing:
+   *
+   * 1. CLOSE order — MARKET, direction OPPOSITE to the trade, no provider
+   *    order id, zero recorded fill (the lost-acknowledgement shape of the
+   *    375-record DEMO incident). The provider CLOSED DEAL in hand is the
+   *    authoritative fill: exact quantity and close price are required, then
+   *    applyFill books them atomically (overfill fail-closed, status CAS).
+   * 2. ENTRY order — direction EQUAL to the trade's, zero recorded fill: the
+   *    provider position (observed while open, now closed) established the
+   *    trade's fill price and full lot size; applyFill books the entry fill.
+   *
+   * Anything that cannot be proven EXACTLY is left RECONCILIATION_PENDING
+   * (surfaced for the next cycle / manual review) — never fabricated here.
+   * Per-order failures never break the authoritative trade resolution above.
+   */
+  private async convergeStrandedOrdersAfterProviderClose(
+    trade: Trade,
+    closedDeal: BrokerClosedTrade | null,
+  ): Promise<void> {
+    let orders: Order[] = [];
+    try {
+      orders = await this.orderService.findReconcilableByTradeId(trade.id);
+    } catch (err) {
+      this.logger.warn(
+        `Stranded-order lookup failed for trade ${trade.id} (retried next run): ` +
+          `${(err as Error).message}`,
+      );
+      return;
+    }
+    for (const order of orders) {
+      try {
+        if (order.status !== OrderStatus.RECONCILIATION_PENDING) continue;
+        const isCloseShape =
+          order.orderKind === OrderKind.MARKET && order.direction !== trade.direction;
+        const isEntryShape = order.direction === trade.direction;
+        if (!isCloseShape && !isEntryShape) continue;
+
+        const proof = isCloseShape
+          ? this.proveCloseOrderFillFromClosedDeal(order, trade, closedDeal)
+          : this.proveEntryOrderFillFromTrade(order, trade);
+        if (!proof.matched) {
+          this.logger.warn(
+            `Stranded ${isCloseShape ? 'close' : 'entry'} order ${order.id} for trade ` +
+              `${trade.id} not convergible from provider evidence (${proof.reason}) — ` +
+              'left RECONCILIATION_PENDING for retry / manual review',
+          );
+          continue;
+        }
+
+        const completed = await this.orderService.applyFill(order.id, {
+          quantity: proof.quantity,
+          price: proof.price,
+        });
+        if (completed.status !== OrderStatus.FILLED) {
+          // Partial deal coverage — recorded, not terminal; surfaced, retried.
+          this.logger.warn(
+            `Stranded order ${order.id} for trade ${trade.id} recorded a partial ` +
+              `fill (${completed.filledQuantity}/${completed.requestedQuantity}); ` +
+              'terminal convergence deferred to further provider evidence',
+          );
+        }
+        await this.auditService.log({
+          actorUserId: trade.userId,
+          action: AuditAction.ORDER_RECONCILED,
+          resourceType: 'Order',
+          resourceId: order.id,
+          metadata: {
+            clientOrderId: order.clientOrderId,
+            leg: isCloseShape ? 'CLOSE' : 'ENTRY',
+            resolvedTo: completed.status,
+            evidence: proof.evidence,
+            providerPositionId: closedDeal?.externalOrderId ?? null,
+            providerClosePrice: proof.price,
+            providerFillQuantity: proof.quantity,
+            noBrokerOrderPlaced: true,
+            noTradeMutation: true,
+            source: 'reconciliation-resolution',
+          },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Stranded order convergence failed for trade ${trade.id} order ` +
+            `${order.id} (retried next run): ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Exact-decimal proof that a stranded MARKET CLOSE order was economically
+   * filled by the provider's closing deal. The deal's quantity must equal the
+   * requested quantity EXACTLY (a partial close is NOT proof of a terminal
+   * fill); the close price must be a positive decimal; the instrument must
+   * match. Missing deal evidence fails closed — nothing is inferred.
+   */
+  private proveCloseOrderFillFromClosedDeal(
+    order: Order,
+    trade: Trade,
+    closedDeal: BrokerClosedTrade | null,
+  ): { matched: true; quantity: string; price: string; evidence: string } | { matched: false; reason: string } {
+    if (!closedDeal) return { matched: false, reason: 'NO_PROVIDER_CLOSED_DEAL' };
+    const decimal = /^\d+(?:\.\d+)?$/;
+    if (closedDeal.instrument !== order.instrument)
+      return { matched: false, reason: 'DEAL_INSTRUMENT_MISMATCH' };
+    if (typeof closedDeal.closePrice !== 'string' || !decimal.test(closedDeal.closePrice))
+      return { matched: false, reason: 'DEAL_CLOSE_PRICE_UNPROVEN' };
+    if (typeof closedDeal.lotSize !== 'string' || !decimal.test(closedDeal.lotSize))
+      return { matched: false, reason: 'DEAL_CLOSE_QUANTITY_UNPROVEN' };
+    if (compareDecimal(closedDeal.lotSize, order.requestedQuantity) !== 0)
+      return { matched: false, reason: 'DEAL_QUANTITY_NOT_FULL_CLOSE' };
+    if (compareDecimal(closedDeal.closePrice, '0') <= 0)
+      return { matched: false, reason: 'DEAL_CLOSE_PRICE_UNPROVEN' };
+    if (order.providerOrderId !== null)
+      return { matched: false, reason: 'ORDER_HAS_PROVIDER_ID_USE_STABLE_IDENTIFIER_PATH' };
+    if (order.filledQuantity == null || compareDecimal(order.filledQuantity, '0') !== 0)
+      return { matched: false, reason: 'ORDER_ALREADY_HAS_RECORDED_FILL' };
+    if (order.avgFillPrice !== null) return { matched: false, reason: 'ORDER_ALREADY_HAS_FILL_PRICE' };
+    return {
+      matched: true,
+      quantity: closedDeal.lotSize,
+      price: closedDeal.closePrice,
+      evidence: 'PROVIDER_CLOSED_DEAL_EXACT_QUANTITY_AND_PRICE',
+    };
+  }
+
+  /**
+   * Exact-decimal proof that a stranded ENTRY order was filled: the provider
+   * position observation (persisted on the trade) carries the authoritative
+   * fill price and the full lot size, and the order must have requested
+   * exactly that quantity. Trade economics missing → fails closed.
+   */
+  private proveEntryOrderFillFromTrade(
+    order: Order,
+    trade: Trade,
+  ): { matched: true; quantity: string; price: string; evidence: string } | { matched: false; reason: string } {
+    const decimal = /^\d+(?:\.\d+)?$/;
+    if (order.providerOrderId !== null)
+      return { matched: false, reason: 'ORDER_HAS_PROVIDER_ID_USE_STABLE_IDENTIFIER_PATH' };
+    if (order.filledQuantity == null || compareDecimal(order.filledQuantity, '0') !== 0)
+      return { matched: false, reason: 'ORDER_ALREADY_HAS_RECORDED_FILL' };
+    if (order.avgFillPrice !== null) return { matched: false, reason: 'ORDER_ALREADY_HAS_FILL_PRICE' };
+    if (typeof trade.fillPrice !== 'string' || !decimal.test(trade.fillPrice))
+      return { matched: false, reason: 'TRADE_FILL_PRICE_UNPROVEN' };
+    if (typeof trade.lotSize !== 'string' || !decimal.test(trade.lotSize))
+      return { matched: false, reason: 'TRADE_LOT_SIZE_UNPROVEN' };
+    if (compareDecimal(trade.lotSize, order.requestedQuantity) !== 0)
+      return { matched: false, reason: 'TRADE_LOT_SIZE_NOT_FULL_ORDER_QUANTITY' };
+    if (compareDecimal(trade.fillPrice, '0') <= 0)
+      return { matched: false, reason: 'TRADE_FILL_PRICE_UNPROVEN' };
+    return {
+      matched: true,
+      quantity: trade.lotSize,
+      price: trade.fillPrice,
+      evidence: 'PROVIDER_POSITION_OBSERVED_FILL_PRICE_AND_FULL_LOT_SIZE',
+    };
+  }
+
+  /**
+   * Resolve the trade's linked RECONCILIATION_PENDING order to a NON-FILL-BEARING
+   * state only (ACKNOWLEDGED/CANCELLED/REJECTED/EXPIRED). Fill-bearing targets
+   * must go through convergeStrandedOrdersAfterProviderClose / applyFill —
+   * resolveReconciliation rejects them by design. DEFENSIVE: an order-resolution
+   * failure is logged and retried next run — it NEVER breaks the
+   * (authoritative) trade resolution.
    */
   private async resolveLinkedOrder(
     tradeId: string,
