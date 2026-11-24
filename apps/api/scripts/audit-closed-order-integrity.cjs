@@ -1,6 +1,8 @@
 'use strict';
 // Read-only integrity report. Never infers a broker outcome from local state.
-const SQL = `SELECT o.status AS order_status,
+const SQL = `SELECT CASE WHEN UPPER(b.account_type) = 'LIVE' THEN 'LIVE'
+       WHEN UPPER(b.account_type) = 'DEMO' THEN 'DEMO' ELSE 'OTHER_OR_UNKNOWN' END AS account_environment,
+  o.status AS order_status,
   COALESCE(t.status, 'NO_LINKED_TRADE') AS trade_status,
   CASE WHEN t.id IS NULL THEN 'UNLINKED'
        WHEN o.direction = t.direction THEN 'SAME_SIDE'
@@ -14,26 +16,33 @@ const SQL = `SELECT o.status AS order_status,
 FROM trading.orders o
 LEFT JOIN trading.trades t ON t.id = o.trade_id
   AND t.user_id = o.user_id AND t.broker_connection_id = o.broker_connection_id
+LEFT JOIN broker.broker_connections b ON b.id = o.broker_connection_id AND b.user_id = o.user_id
 WHERE o.status IN ('DISPATCH_COMMITTED','SUBMITTED','ACKNOWLEDGED','PARTIALLY_FILLED','RECONCILIATION_PENDING')
-GROUP BY 1,2,3,4,5,6 ORDER BY 1,2,3,4,5,6`;
+GROUP BY 1,2,3,4,5,6,7 ORDER BY 1,2,3,4,5,6,7`;
 
 function summarize(groups) {
-  const totals = { uncertainOrders: 0, closedTradeOrders: 0, agedClosedTradeOrders: 0,
-    closedTradeMissingProviderId: 0, closedTradeZeroFill: 0, closedTradeOppositeSide: 0 };
+  const empty = () => ({ uncertainOrders: 0, closedTradeOrders: 0, agedClosedTradeOrders: 0,
+    closedTradeMissingProviderId: 0, closedTradeZeroFill: 0, closedTradeOppositeSide: 0 });
+  const totals = empty();
+  const byEnvironment = { LIVE: empty(), DEMO: empty(), OTHER_OR_UNKNOWN: empty() };
   for (const g of groups) {
     if (!Number.isSafeInteger(g.records) || g.records < 0) throw Error('INVALID_INTEGRITY_COUNT');
-    totals.uncertainOrders += g.records;
-    if (g.trade_status !== 'CLOSED') continue;
-    totals.closedTradeOrders += g.records;
-    if (g.aged) totals.agedClosedTradeOrders += g.records;
-    if (g.missing_provider_id) totals.closedTradeMissingProviderId += g.records;
-    if (g.zero_recorded_fill) totals.closedTradeZeroFill += g.records;
-    if (g.side_relation === 'OPPOSITE_SIDE') totals.closedTradeOppositeSide += g.records;
+    const environment = ['LIVE', 'DEMO'].includes(g.account_environment)
+      ? g.account_environment : 'OTHER_OR_UNKNOWN';
+    for (const target of [totals, byEnvironment[environment]]) {
+      target.uncertainOrders += g.records;
+      if (g.trade_status !== 'CLOSED') continue;
+      target.closedTradeOrders += g.records;
+      if (g.aged) target.agedClosedTradeOrders += g.records;
+      if (g.missing_provider_id) target.closedTradeMissingProviderId += g.records;
+      if (g.zero_recorded_fill) target.closedTradeZeroFill += g.records;
+      if (g.side_relation === 'OPPOSITE_SIDE') target.closedTradeOppositeSide += g.records;
+    }
   }
-  return { artifact: 'closed-order-integrity-v1', readOnly: true,
+  return { artifact: 'closed-order-integrity-v2', readOnly: true,
     brokerExposureVerified: false, brokerOutcomeVerified: false,
     status: totals.closedTradeOrders > 0 ? 'INTERNAL_DISCREPANCY_REQUIRES_REVIEW' : 'NO_CLOSED_TRADE_ORDER_DISCREPANCY_DETECTED',
-    totals, groups };
+    totals, byEnvironment, groups };
 }
 
 async function inspect(db) {

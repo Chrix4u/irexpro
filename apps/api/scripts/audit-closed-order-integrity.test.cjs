@@ -35,3 +35,19 @@ test('query failure rolls back and remains a failure', async () => {
   await assert.rejects(inspect(db), /unavailable/);
   assert.deepEqual(calls, ['BEGIN READ ONLY', SQL, 'ROLLBACK']);
 });
+
+test('separates LIVE, DEMO and unknown account discrepancies without claiming external safety', () => {
+  const result = summarize([
+    row({ account_environment: 'DEMO', records: 375 }),
+    row({ account_environment: 'LIVE', records: 3, aged: false }),
+    row({ account_environment: 'PAPER', records: 2 }),
+    row({ account_environment: 'LIVE', trade_status: 'OPEN', records: 1 }),
+  ]);
+  assert.equal(result.byEnvironment.DEMO.closedTradeOrders, 375);
+  assert.equal(result.byEnvironment.LIVE.closedTradeOrders, 3);
+  assert.equal(result.byEnvironment.LIVE.uncertainOrders, 4);
+  assert.equal(result.byEnvironment.OTHER_OR_UNKNOWN.closedTradeOrders, 2);
+  assert.equal(result.totals.closedTradeOrders, 380);
+  assert.equal(result.brokerOutcomeVerified, false);
+  assert.match(SQL, /b.id = o.broker_connection_id AND b.user_id = o.user_id/);
+});
