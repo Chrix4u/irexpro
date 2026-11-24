@@ -1324,6 +1324,26 @@ export async function runLiveCertificationChecklist(
       if (result.brokerNativeOrderId) ctx.canaryBrokerOrderId = result.brokerNativeOrderId;
       const violations = assertCanaryOrderResult('canaryOrder', result, 'FILLED', true);
       if (violations.length > 0) return { status: 'FAIL', detail: violations.join('; ') };
+      // Pepperstone may omit the native order id in the fill ACK even when
+      // position reconciliation proves the fill. An optional cTrader-only
+      // read-only DealList lookup can independently attest the originating
+      // order ID; it NEVER substitutes the position ID and never sends an
+      // additional entry. If the read is incomplete or ambiguous the later
+      // ack/query stages still FAIL, not SKIP to a fabricated PASS.
+      if (
+        options.target.brokerId === 'pepperstone-ctrader' &&
+        !ctx.canaryBrokerOrderId &&
+        ctx.canaryOrderId
+      ) {
+        const nativeIdentityReader = adapter as IBrokerAdapter & {
+          findOpeningOrderIdForPosition?: (positionId: string) => Promise<string | null>;
+        };
+        if (typeof nativeIdentityReader.findOpeningOrderIdForPosition === 'function') {
+          ctx.canaryBrokerOrderId =
+            (await nativeIdentityReader.findOpeningOrderIdForPosition(ctx.canaryOrderId)) ??
+            undefined;
+        }
+      }
       return {
         status: 'PASS',
         detail:

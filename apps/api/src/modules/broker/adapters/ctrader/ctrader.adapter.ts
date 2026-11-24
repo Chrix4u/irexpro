@@ -683,15 +683,17 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           contractSize: moneyToDecimalString(symbol.lotSize, 2),
           // An explicitly published 0 is a legitimate zero minimum, not
           // missing metadata. Keep absent slDistance UNKNOWN/fail-closed.
-          ...(Number.isInteger(symbol.slDistance) && symbol.slDistance !== undefined &&
+          ...(Number.isInteger(symbol.slDistance) &&
+          symbol.slDistance !== undefined &&
           symbol.slDistance >= 0 &&
           (symbol.distanceSetIn === undefined ||
-            symbol.distanceSetIn === 1 || symbol.distanceSetIn === 2)
+            symbol.distanceSetIn === 1 ||
+            symbol.distanceSetIn === 2)
             ? {
                 minStopLossDistance: String(symbol.slDistance),
-                minStopLossDistanceUnit:
-                  (symbol.distanceSetIn === 2 ? 'PERCENTAGE' : 'POINTS') as
-                    'POINTS' | 'PERCENTAGE',
+                minStopLossDistanceUnit: (symbol.distanceSetIn === 2 ? 'PERCENTAGE' : 'POINTS') as
+                  | 'POINTS'
+                  | 'PERCENTAGE',
               }
             : {}),
         });
@@ -958,18 +960,23 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       let marketRelativeTakeProfit: number | null = null;
       let liveFullProtectionAtomic = false;
       if (order.relativeStopLoss !== undefined) {
-        const raw=order.relativeStopLoss;
-        if (kind !== 'MARKET' ||
-            !/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw)) ||
-            this.isNonZeroPrice(order.stopLoss) ||
-            this.isNonZeroPrice(order.takeProfit)) {
+        const raw = order.relativeStopLoss;
+        if (
+          kind !== 'MARKET' ||
+          !/^[1-9]\d*$/.test(raw) ||
+          !Number.isSafeInteger(Number(raw)) ||
+          this.isNonZeroPrice(order.stopLoss) ||
+          this.isNonZeroPrice(order.takeProfit)
+        ) {
           throw new BrokerAdapterError(
             BrokerErrorCode.INVALID_REQUEST,
             'MARKET relativeStopLoss must be a safe positive integer and exclusive of absolute SL/TP',
-            undefined, false, ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+            undefined,
+            false,
+            ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
           );
         }
-        marketRelativeStopLoss=Number(raw);
+        marketRelativeStopLoss = Number(raw);
       } else if (session.env === 'LIVE' && kind === 'MARKET') {
         // Production cTrader MARKET entries require BOTH SL and TP in the
         // ORIGINAL 2106 order. Waiting for a position and then sending 2110
@@ -984,7 +991,9 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           throw new BrokerAdapterError(
             BrokerErrorCode.INVALID_REQUEST,
             'LIVE cTrader MARKET requires positive model SL and TP before broker dispatch',
-            undefined, false, ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+            undefined,
+            false,
+            ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
           );
         }
         const spot = await this.fetchSpotQuote(session, symbolId);
@@ -994,17 +1003,23 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           throw new BrokerAdapterError(
             BrokerErrorCode.INVALID_PRICE,
             'LIVE broker bid/ask quote invalid; refusing unprotected MARKET order',
-            undefined, false, ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+            undefined,
+            false,
+            ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
           );
         }
         const reference = order.direction === 'BUY' ? ask : bid;
-        if (order.direction === 'BUY'
+        if (
+          order.direction === 'BUY'
             ? !sl.lt(reference) || !tp.gt(reference)
-            : !sl.gt(reference) || !tp.lt(reference)) {
+            : !sl.gt(reference) || !tp.lt(reference)
+        ) {
           throw new BrokerAdapterError(
             BrokerErrorCode.INVALID_PRICE,
             'LIVE broker quote has crossed model SL or TP; refusing MARKET order',
-            undefined, false, ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+            undefined,
+            false,
+            ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
           );
         }
         const stopPoints = reference.sub(sl).abs().mulByPowerOfTen(5).toString();
@@ -1013,13 +1028,17 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         // only positive safe integers. Never round up the model's risk or
         // fabricate a missing stop. The risk gate already checked lot size,
         // stop-cost envelope, spread and margin.
-        if (![stopPoints, targetPoints].every(
-          (n) => /^[1-9]\d*$/.test(n) && Number.isSafeInteger(Number(n)),
-        )) {
+        if (
+          ![stopPoints, targetPoints].every(
+            (n) => /^[1-9]\d*$/.test(n) && Number.isSafeInteger(Number(n)),
+          )
+        ) {
           throw new BrokerAdapterError(
             BrokerErrorCode.INVALID_REQUEST,
             'LIVE relative SL/TP cannot be represented exactly in broker points',
-            undefined, false, ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+            undefined,
+            false,
+            ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
           );
         }
         marketRelativeStopLoss = Number(stopPoints);
@@ -1037,11 +1056,11 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         label: idem.label,
         comment: idem.comment,
       };
-      if (marketRelativeStopLoss!==null) {
-        payload.relativeStopLoss=marketRelativeStopLoss;
+      if (marketRelativeStopLoss !== null) {
+        payload.relativeStopLoss = marketRelativeStopLoss;
       }
-      if (marketRelativeTakeProfit!==null) {
-        payload.relativeTakeProfit=marketRelativeTakeProfit;
+      if (marketRelativeTakeProfit !== null) {
+        payload.relativeTakeProfit = marketRelativeTakeProfit;
       }
       // DAY time-in-force → GOOD_TILL_DATE needs an expiration timestamp:
       // the end of the current UTC trading day (proto field 6, Unix ms).
@@ -1103,7 +1122,21 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           idem.comment,
           symbol.lotSize,
         );
-        if (reconciledFill) result = reconciledFill;
+        if (reconciledFill) {
+          // The execution ACK may contain an order ID even when its position
+          // fill is only confirmed later through ReconcileRes. Preserve that
+          // *native order* ID rather than discarding it when replacing the
+          // PENDING order result with the independently observed position.
+          // Reconciled position IDs must never stand in for an order ID.
+          result = {
+            ...reconciledFill,
+            brokerNativeOrderId:
+              result.brokerNativeOrderId ??
+              (result.externalOrderId && /^[1-9]\d*$/.test(result.externalOrderId)
+                ? result.externalOrderId
+                : undefined),
+          };
+        }
       }
 
       // MARKET + SL/TP: attach the protection to the FILLED position (2110).
@@ -1654,6 +1687,55 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       // as an error fallback (Directive §AN #7).
       if (mapped.code === BrokerErrorCode.POSITION_NOT_FOUND) return null;
       throw mapped;
+    }
+  }
+
+  /**
+   * Strictly read-only native ORDER identity evidence for a just-opened
+   * certification canary. The cTrader ReconcileRes position snapshot only
+   * carries positionId; DealListRes carries the originating DEAL.orderId.
+   *
+   * Never fabricate an order ID, infer it from a position ID, paginate with
+   * unproven timestamp ordering, or accept ambiguous deals (e.g. scale-ins).
+   * If history is stale/incomplete, return null so certification fails closed.
+   * Not part of IBrokerAdapter, not used for execution or risk authority.
+   */
+  async findOpeningOrderIdForPosition(positionId: string): Promise<string | null> {
+    const session = this.requireCurrentSession();
+    const normalizedPositionId = String(parseCtraderId(positionId, 'positionId'));
+    const now = Date.now();
+    const from = now - 15 * 60_000;
+    const to = now + 15_000;
+    try {
+      const response = await this.client.request(session.env, CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ, {
+        ctidTraderAccountId: parseCtraderId(session.accountId, 'ctidTraderAccountId'),
+        fromTimestamp: from,
+        toTimestamp: to,
+        maxRows: DEAL_LIST_MAX_ROWS,
+      });
+      const payload = expectCtraderPayload<{ deal?: CtraderDeal[]; hasMore?: boolean }>(
+        response,
+        CTRADER_PAYLOAD_TYPE.DEAL_LIST_RES,
+      );
+      // At the 200-row cap, an incomplete or unmarked page could conceal
+      // another opening deal, making a native order identity ambiguous.
+      if (payload.hasMore !== false || !Array.isArray(payload.deal)) return null;
+      const openDeals = payload.deal.filter(
+        (deal) =>
+          String(deal.positionId) === normalizedPositionId &&
+          deal.closePositionDetail == null &&
+          Number.isSafeInteger(Number(deal.executionTimestamp)) &&
+          Number(deal.executionTimestamp) >= from &&
+          Number(deal.executionTimestamp) <= to &&
+          Number.isSafeInteger(Number(deal.orderId)) &&
+          Number(deal.orderId) > 0,
+      );
+      const uniqueOrderIds = [...new Set(openDeals.map((deal) => String(deal.orderId)))];
+      return uniqueOrderIds.length === 1 && openDeals.length === 1 ? uniqueOrderIds[0] : null;
+    } catch {
+      // It is safer to leave the order uncertified than to obscure a native
+      // provider-read failure with a guessed order/position mapping.
+      return null;
     }
   }
 
@@ -2562,9 +2644,12 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         return {
           success: true,
           externalOrderId: externalId !== '' ? externalId : undefined,
-          brokerNativeOrderId: protoOrder?.orderId !== undefined
-            ? String(protoOrder.orderId)
-            : deal?.orderId !== undefined ? String(deal.orderId) : undefined,
+          brokerNativeOrderId:
+            protoOrder?.orderId !== undefined
+              ? String(protoOrder.orderId)
+              : deal?.orderId !== undefined
+                ? String(deal.orderId)
+                : undefined,
           filledPrice:
             deal?.executionPrice !== undefined
               ? wirePriceToDecimalString(deal.executionPrice)
