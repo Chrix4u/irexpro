@@ -47,8 +47,8 @@ function freshness(timestamp: Date, thresholdMs: number, nowMs: number): MarketD
  *
  * Real-broker market intelligence is read-only and connection-scoped. MetaTrader
  * reads remain provider-backed via the decrypted MetaAPI account reference.
- * cTrader DEMO reads consume the persisted broker-native quote/candle store that
- * the background collector already maintains, so browser polling never competes
+ * cTrader DEMO and LIVE reads consume the exact connection's persisted
+ * broker-native quote/candle store, so browser polling never competes
  * with execution infrastructure for provider quota. The built-in DEMO-only paper
  * broker exposes either its deterministic simulator or scanner-owned read-only
  * live cache. No browser market values are synthesized and no real/live broker
@@ -196,14 +196,13 @@ export class MarketIntelligenceService {
 
     if (
       CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId) &&
-      connection.accountType === 'DEMO'
+      (connection.accountType === 'DEMO' || connection.accountType === 'LIVE')
     ) {
       try {
-        // cTrader is already sampled continuously by CTraderQuoteCollectorService.
-        // Trader-facing refreshes must consume that exact connection-scoped,
-        // broker-native store rather than issuing another quote + OHLCV request
-        // on every browser poll. The direct path caused UI reads to compete with
-        // the collector for provider quota and intermittently return 503s.
+        // cTrader DEMO/LIVE is sampled by CTraderQuoteCollectorService.
+        // A workspace reads the exact selected connection's data: NEVER
+        // reuse DEMO history for LIVE. Missing LIVE quotes/candles return 503,
+        // with no provider burst or execution-guard relaxation.
         const [quote, rawCandles] = await Promise.all([
           this.providerQuoteStore.getLatestQuote(connection.id, instrument),
           this.providerQuoteStore.getCandles(connection.id, instrument, timeframe, query.limit),
