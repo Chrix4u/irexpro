@@ -1,11 +1,12 @@
 """Cheap, offline invariants for the quote-mark forecast/exit research path."""
 import unittest
+
 import numpy as np
 import pandas as pd
-from app.domain.training.demo_pepperstone_two_pair_horizon_audit import (
-    enrich, nonoverlap, HORIZONS
-)
+
 from app.domain.training.demo_first_touch_horizon_research import first_touch
+from app.domain.training.demo_pepperstone_two_pair_horizon_audit import HORIZONS, enrich
+
 
 class BrokerHorizonResearchTests(unittest.TestCase):
     def test_horizon_targets_require_real_completed_future_minutes(self):

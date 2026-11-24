@@ -7,7 +7,8 @@ from unittest import IsolatedAsyncioTestCase
 from unittest.mock import patch
 
 from app.api.v1.routes.models import (
-    PostEntryBrokerScoreRequest, score_plan_b_v85_broker_checkpoint,
+    PostEntryBrokerScoreRequest,
+    score_plan_b_v85_broker_checkpoint,
 )
 from app.domain.models.multitimeframe_features import MissingBrokerSpreadMetadata
 

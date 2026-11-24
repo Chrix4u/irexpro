@@ -1,14 +1,18 @@
 """Causal and no-execution contract tests for independent net-alpha challenger."""
 import unittest
+
 import numpy as np
 import pandas as pd
 
-from app.domain.training.demo_pepperstone_two_pair_horizon_audit import enrich
 from app.domain.training.demo_independent_net_alpha_challenger import (
-    ARTIFACT, HORIZONS, choose_forecast_side,
-    generate_causal_targets, results_for_signals, run,
+    ARTIFACT,
+    HORIZONS,
     assess_challenger_qualification,
+    choose_forecast_side,
+    generate_causal_targets,
+    results_for_signals,
 )
+from app.domain.training.demo_pepperstone_two_pair_horizon_audit import enrich
 
 
 def quote_frame(n=180):

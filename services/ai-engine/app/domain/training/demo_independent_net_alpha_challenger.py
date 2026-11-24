@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -20,10 +20,13 @@ from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from app.domain.training.demo_pepperstone_two_pair_horizon_audit import (
-    FEATURES, PIP, enrich, summarize,
-)
 from app.domain.training.demo_first_touch_horizon_research import first_touch
+from app.domain.training.demo_pepperstone_two_pair_horizon_audit import (
+    FEATURES,
+    PIP,
+    enrich,
+    summarize,
+)
 
 ARTIFACT = "irexpro-independent-net-alpha-walkforward-v1"
 HORIZONS = (1, 3, 5, 10, 30, 60)
@@ -216,7 +219,7 @@ def run(csv: Path) -> dict:
     report = {
         "artifact": ARTIFACT, "promotionAllowed": False,
         "executionAuthority": "NONE", "brokerOrders": 0,
-        "createdAtUTC": datetime.now(timezone.utc).isoformat(),
+        "createdAtUTC": datetime.now(UTC).isoformat(),
         "model": "STANDARDIZED_RIDGE_DIRECTIONAL_MOVE_PLUS_LOGISTIC_CALIBRATION",
         "horizonsMinutes": list(HORIZONS),
         "assumptions": {
