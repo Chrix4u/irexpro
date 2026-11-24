@@ -151,3 +151,40 @@ test('self-test mode exercises the same matcher with fixtures (no database)', ()
   const out = execFileSync('node', [path.join(__dirname, 'verify-closed-demo-statement-match.cjs'), '--self-test'], { encoding: 'utf-8' });
   assert.equal(JSON.parse(out).selfTest, 'SELFTEST_OK');
 });
+
+test('one statement row cannot be reused for two internal rows, nor vice versa', () => {
+  const s = parseFingerprints(fs.readFileSync(FIXTURE, 'utf-8'))[2];
+  const trade = { id: 't1', instrument: s.symbol, direction: s.openingDirection, fill_price: s.entry, exit_price: s.exit, lot_size: s.lots, closed_at: `${s.day}T00:32:11Z` };
+  const t2 = { ...trade, id: 't2' };
+  const a = matchClosedTrades([trade, t2], [s]);
+  assert.equal(a.matched.length, 0);
+  assert.equal(a.ambiguousTrades.length, 2);
+  assert.equal(a.ambiguousStatement.length, 1);
+  const b = matchClosedTrades([trade], [s, { ...s }]);
+  assert.equal(b.matched.length, 0);
+  assert.equal(b.ambiguousStatement.length, 2);
+  const order = { ...trade, order_id: 'o1', trade_direction: trade.direction, order_direction: s.closingDirection };
+  const c = matchStranded([order, { ...order, order_id: 'o2' }], [s]);
+  assert.equal(c.matched.length, 0);
+  assert.equal(c.ambiguous.length, 2);
+  assert.equal(matchStranded([{ ...order, closed_at: null }], [s]).unmatched.length, 1);
+});
+
+test('missing or invalid monetary evidence never produces a fully matched report', () => {
+  const s = parseFingerprints(fs.readFileSync(FIXTURE, 'utf-8'))[2];
+  const trade = { id: 't1', instrument: s.symbol, direction: s.openingDirection, fill_price: s.entry, exit_price: s.exit, lot_size: s.lots, closed_at: `${s.day}T00:32:11Z`, realised_pnl: 'bad', commission: '0', swap: '0' };
+  const pnl = checkPnlComposition([trade], [s]);
+  assert.equal(pnl.checked, 0);
+  assert.equal(pnl.missingEconomics.length, 1);
+  assert.equal(summarize({ strandedMatch: matchStranded([], [s]), closedMatch: matchClosedTrades([trade], [s]), pnl, statementRows: [s], dbClosedCount: 1 }).status, 'DISCREPANCY_REQUIRES_REVIEW');
+  assert.equal(compareDecimal('1.000000001', '1'), null);
+});
+
+test('P&L composition retains sub-eight-decimal differences instead of rounding them away', () => {
+  const s = parseFingerprints(fs.readFileSync(FIXTURE, 'utf-8'))[2];
+  const trade = { id: 't1', instrument: s.symbol, direction: s.openingDirection, fill_price: s.entry, exit_price: s.exit, lot_size: s.lots, closed_at: `${s.day}T00:32:11Z`, realised_pnl: '-106.320000001', commission: '-24', swap: '0' };
+  const pnl = checkPnlComposition([trade], [s]);
+  assert.equal(pnl.checked, 1);
+  assert.equal(pnl.mismatches.length, 1);
+  assert.equal(checkPnlComposition([{ ...trade, swap: '0.000000001' }], [s]).mismatches.length, 0);
+});

@@ -16,6 +16,7 @@ function decimalToScaled(value, scale) {
   if (!/^-?\d+(?:\.\d+)?$/.test(s)) return null;
   const negative = s.startsWith('-');
   const [i = '0', f = ''] = s.replace('-', '').split('.');
+  if (/[1-9]/.test(f.slice(scale))) return null;
   const frac = (f + '0'.repeat(scale)).slice(0, scale);
   const v = BigInt(i || '0') * 10n ** BigInt(scale) + BigInt(frac || '0');
   return negative ? -v : v;
@@ -77,7 +78,7 @@ function parseFingerprints(csvText) {
       raw: line,
     };
     row.closingDirection = row.openingDirection === 'BUY' ? 'SELL' : 'BUY';
-    if (!row.symbol || !row.day || row.entry === null || row.exit === null || row.lots === null) {
+    if (!row.symbol || !['BUY', 'SELL'].includes(row.openingDirection) || !/^\d{4}-\d{2}-\d{2}$/.test(row.day) || row.entry === null || row.exit === null || row.lots === null) {
       throw new Error(`UNPARSEABLE_FINGERPRINT_ROW:${line.slice(0, 120)}`);
     }
     rows.push(row);
@@ -97,118 +98,85 @@ function economicKey(row) {
  * direction, fill_price == entry, exit_price == closing price, lot_size ==
  * lots, and the trade closed on the same UTC calendar day. Exact decimals.
  */
+function sameEconomics(db, statement, direction) {
+  const day = db.closed_at ? new Date(db.closed_at).toISOString().slice(0, 10) : null;
+  return day !== null && statement.day === day &&
+    statement.symbol === db.instrument && statement.openingDirection === direction &&
+    compareDecimal(db.fill_price, statement.entry) === 0 &&
+    compareDecimal(db.exit_price, statement.exit) === 0 &&
+    compareDecimal(db.lot_size, statement.lots) === 0;
+}
+
+// Only mutually unique economic candidates are counted. No arbitrary first
+// match, greedy assignment, timestamp guessing or reuse across distinct rows.
+function reciprocalCandidates(dbRows, statementRows, predicate) {
+  const edges = dbRows.map((db) => statementRows.map((s, i) => predicate(db, s) ? i : -1).filter((i) => i >= 0));
+  const counts = statementRows.map(() => 0);
+  for (const candidates of edges) for (const i of candidates) counts[i] += 1;
+  return { edges, counts };
+}
+
 function matchStranded(strandedDb, statementRows) {
-  const byKey = new Map();
-  for (const s of statementRows) {
-    const key = economicKey(s);
-    if (!byKey.has(key)) byKey.set(key, []);
-    byKey.get(key).push(s);
-  }
-  const matched = [];
-  const unmatched = [];
-  const ambiguous = [];
-  for (const db of strandedDb) {
-    const dbTradeDirection = String(db.trade_direction || '').toUpperCase();
-    const dbOrderDirection = String(db.order_direction || '').toUpperCase();
-    const day = db.closed_at ? new Date(db.closed_at).toISOString().slice(0, 10) : null;
-    const candidates = [];
-    for (const s of statementRows) {
-      if (s.symbol !== db.instrument) continue;
-      if (s.openingDirection !== dbTradeDirection) continue;
-      if (s.closingDirection !== dbOrderDirection) continue;
-      if (day !== null && s.day !== day) continue;
-      if (compareDecimal(db.fill_price, s.entry) !== 0) continue;
-      if (compareDecimal(db.exit_price, s.exit) !== 0) continue;
-      if (compareDecimal(db.lot_size, s.lots) !== 0) continue;
-      candidates.push(s);
-    }
-    if (candidates.length === 1) matched.push({ db, statement: candidates[0] });
-    else if (candidates.length > 1) ambiguous.push({ db, candidates });
-    else unmatched.push({ db });
-  }
+  const { edges, counts } = reciprocalCandidates(strandedDb, statementRows, (db, s) =>
+    sameEconomics(db, s, String(db.trade_direction || '').toUpperCase()) &&
+    s.closingDirection === String(db.order_direction || '').toUpperCase());
+  const matched = [], unmatched = [], ambiguous = [];
+  strandedDb.forEach((db, i) => {
+    const candidates = edges[i];
+    if (candidates.length === 1 && counts[candidates[0]] === 1) {
+      matched.push({ db, statement: statementRows[candidates[0]] });
+    } else if (candidates.length) {
+      ambiguous.push({ db, candidates: candidates.map((j) => statementRows[j]) });
+    } else unmatched.push({ db });
+  });
   return { matched, unmatched, ambiguous };
 }
 
-/**
- * Side B — closed trades ↔ statement deals (completeness of the window).
- * Every statement deal should have a DB closed trade with the same economics.
- */
+/** Closed trades ↔ statement deals, without counting ambiguous pairs as matches. */
 function matchClosedTrades(closedDb, statementRows) {
-  const matched = [];
-  const unmatchedStatement = [];
-  const matchedStatementIndices = new Set();
-  for (const s of statementRows) {
-    const candidates = closedDb.filter((t) => {
-      const dir = String(t.direction || '').toUpperCase();
-      if (t.instrument !== s.symbol || dir !== s.openingDirection) return false;
-      if (compareDecimal(t.fill_price, s.entry) !== 0) return false;
-      if (compareDecimal(t.exit_price, s.exit) !== 0) return false;
-      if (compareDecimal(t.lot_size, s.lots) !== 0) return false;
-      const day = t.closed_at ? new Date(t.closed_at).toISOString().slice(0, 10) : null;
-      return day === s.day;
-    });
-    if (candidates.length >= 1) {
-      matched.push({ statement: s, trade: candidates[0], duplicates: candidates.length - 1 });
-      matchedStatementIndices.add(s);
-    } else {
-      unmatchedStatement.push(s);
-    }
-  }
-  const unmatchedTrades = closedDb.filter((t) => {
-    const dir = String(t.direction || '').toUpperCase();
-    const day = t.closed_at ? new Date(t.closed_at).toISOString().slice(0, 10) : null;
-    return !statementRows.some(
-      (s) =>
-        s.symbol === t.instrument &&
-        s.openingDirection === dir &&
-        s.day === day &&
-        compareDecimal(t.fill_price, s.entry) === 0 &&
-        compareDecimal(t.exit_price, s.exit) === 0 &&
-        compareDecimal(t.lot_size, s.lots) === 0,
-    );
+  const { edges, counts } = reciprocalCandidates(closedDb, statementRows, (db, s) =>
+    sameEconomics(db, s, String(db.direction || '').toUpperCase()));
+  const matched = [], unmatchedTrades = [], ambiguousTrades = [];
+  const used = new Set();
+  closedDb.forEach((trade, i) => {
+    const candidates = edges[i];
+    if (candidates.length === 1 && counts[candidates[0]] === 1) {
+      const j = candidates[0];
+      used.add(j);
+      matched.push({ trade, statement: statementRows[j] });
+    } else if (candidates.length) ambiguousTrades.push(trade);
+    else unmatchedTrades.push(trade);
   });
-  return { matched, unmatchedStatement, unmatchedTrades };
+  const unmatchedStatement = statementRows.filter((_, i) => counts[i] === 0);
+  const ambiguousStatement = statementRows.filter((_, i) => counts[i] > 0 && !used.has(i));
+  return { matched, unmatchedStatement, unmatchedTrades, ambiguousTrades, ambiguousStatement };
 }
 
-/** Net P&L composition: statement net == realised + commission + swap (exact). */
+/** Compare P&L only for reciprocal matches with all valid economic fields. */
 function checkPnlComposition(closedDb, statementRows) {
-  const mismatches = [];
-  const missingEconomics = [];
-  for (const t of closedDb) {
-    if (t.realised_pnl === null || t.commission === null || t.swap === null) {
-      missingEconomics.push(t);
+  const mismatches = [], missingEconomics = [];
+  const { matched } = matchClosedTrades(closedDb, statementRows);
+  let checked = 0;
+  for (const { trade: t, statement: s } of matched) {
+    const amounts = [t.realised_pnl, t.commission, t.swap, s.net].map(normalizeDecimals);
+    if (amounts.some((v) => v === null)) {
+      missingEconomics.push({ trade_id: t.id, missingFields: ['realised_pnl', 'commission', 'swap', 'statement_net'].filter((_, i) => amounts[i] === null) });
       continue;
     }
-    const day = t.closed_at ? new Date(t.closed_at).toISOString().slice(0, 10) : null;
-    const dir = String(t.direction || '').toUpperCase();
-    const s = statementRows.find(
-      (row) =>
-        row.symbol === t.instrument &&
-        row.openingDirection === dir &&
-        row.day === day &&
-        compareDecimal(t.fill_price, row.entry) === 0 &&
-        compareDecimal(t.exit_price, row.exit) === 0 &&
-        compareDecimal(t.lot_size, row.lots) === 0,
-    );
-    if (!s || s.net === null) continue;
-    const composed = decimalToScaled(t.realised_pnl, 8) +
-      decimalToScaled(t.commission, 8) + decimalToScaled(t.swap, 8);
-    const net = decimalToScaled(s.net, 8);
-    if (composed !== net) {
-      mismatches.push({
-        trade_id: t.id,
-        composed: String(t.realised_pnl) + ' + ' + String(t.commission) + ' + ' + String(t.swap),
-        statement_net: s.net,
-      });
+    const scale = Math.max(...amounts.map((v) => (v.split('.')[1] || '').length));
+    const [realised, commission, swap, net] = amounts.map((v) => decimalToScaled(v, scale));
+    checked += 1;
+    if (realised + commission + swap !== net) {
+      mismatches.push({ trade_id: t.id, composed: String(t.realised_pnl) + ' + ' + String(t.commission) + ' + ' + String(t.swap), statement_net: s.net });
     }
   }
-  return { mismatches, missingEconomics };
+  return { mismatches, missingEconomics, checked };
 }
 
 function summarize(input) {
   const { strandedMatch, closedMatch, pnl, statementRows, dbClosedCount } = input;
   return {
-    artifact: 'closed-demo-statement-match-v1',
+    artifact: 'closed-demo-statement-match-v2',
     readOnly: true,
     statement: {
       deals: statementRows.length,
@@ -225,9 +193,11 @@ function summarize(input) {
       matchedToStatement: closedMatch.matched.length,
       unmatchedStatementDeals: closedMatch.unmatchedStatement.length,
       unmatchedDbTrades: closedMatch.unmatchedTrades.length,
+      ambiguousDbTrades: closedMatch.ambiguousTrades.length,
+      ambiguousStatementDeals: closedMatch.ambiguousStatement.length,
     },
     pnlComposition: {
-      checked: dbClosedCount - pnl.missingEconomics.length,
+      checked: pnl.checked,
       mismatches: pnl.mismatches.length,
       missingEconomics: pnl.missingEconomics.length,
     },
@@ -236,6 +206,10 @@ function summarize(input) {
       strandedMatch.ambiguous.length === 0 &&
       closedMatch.unmatchedStatement.length === 0 &&
       closedMatch.unmatchedTrades.length === 0 &&
+      closedMatch.ambiguousTrades.length === 0 &&
+      closedMatch.ambiguousStatement.length === 0 &&
+      pnl.missingEconomics.length === 0 &&
+      pnl.checked === dbClosedCount &&
       pnl.mismatches.length === 0
         ? 'FULLY_MATCHED'
         : 'DISCREPANCY_REQUIRES_REVIEW',
@@ -257,7 +231,7 @@ async function inspect(db, options) {
          FROM trading.orders o
          JOIN trading.trades t ON t.id = o.trade_id AND t.user_id = o.user_id
               AND t.broker_connection_id = o.broker_connection_id
-         JOIN broker.broker_connections b ON b.id = o.broker_connection_id
+         JOIN broker.broker_connections b ON b.id = o.broker_connection_id AND b.user_id = o.user_id
          WHERE o.status = 'RECONCILIATION_PENDING' AND o.order_kind = 'MARKET'
            AND o.provider_order_id IS NULL AND o.filled_quantity = 0
            AND t.status = 'CLOSED' AND o.direction <> t.direction
@@ -276,7 +250,7 @@ async function inspect(db, options) {
         `SELECT t.id, t.instrument, t.direction, t.lot_size, t.fill_price, t.exit_price,
                 t.realised_pnl, t.commission, t.swap, t.closed_at
          FROM trading.trades t
-         JOIN broker.broker_connections b ON b.id = t.broker_connection_id
+         JOIN broker.broker_connections b ON b.id = t.broker_connection_id AND b.user_id = t.user_id
          WHERE t.status = 'CLOSED' AND UPPER(b.account_type) = 'DEMO'
            ${options.broker ? 'AND b.broker_id = $' + (closedParams.indexOf(options.broker) + 1) : ''}
            ${options.from ? "AND t.closed_at >= $".concat(String(closedParams.indexOf(options.from) + 1)) : ''}
@@ -306,7 +280,10 @@ async function inspect(db, options) {
         })),
         unmatchedStatementDeals: closedMatch.unmatchedStatement.map((s) => s.raw),
         unmatchedDbTrades: closedMatch.unmatchedTrades,
+        ambiguousDbTrades: closedMatch.ambiguousTrades,
+        ambiguousStatementDeals: closedMatch.ambiguousStatement.map((s) => s.raw),
         pnlMismatches: pnl.mismatches,
+        missingPnlEconomics: pnl.missingEconomics,
       },
     };
   } finally {
@@ -349,8 +326,9 @@ function selfTest() {
       closed_at: '2026-11-10T00:32:11.061Z' },
   ];
   const b = matchClosedTrades(closedDb, statementRows);
-  // Both EURUSD duplicate rows match the same single trade, plus USDJPY.
-  if (b.matched.length !== 3) throw new Error('SELFTEST_SIDE_B');
+  // Duplicate EURUSD economics remain ambiguous; only USDJPY matches.
+  if (b.ambiguousStatement.length !== 2 || b.ambiguousTrades.length !== 1) throw new Error('SELFTEST_AMBIGUITY');
+  if (b.matched.length !== 1) throw new Error('SELFTEST_SIDE_B');
   if (b.unmatchedStatement.length !== 1) throw new Error('SELFTEST_UNMATCHED_STATEMENT');
   const pnl = checkPnlComposition(closedDb, statementRows);
   if (pnl.mismatches.length !== 0) throw new Error('SELFTEST_PNL');
