@@ -109,6 +109,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
+        // A confirmed expiry intentionally lands on login. Do not silently
+        // bounce back to the dashboard by restoring a cookie on that landing.
+        if (window.location.pathname === '/login' &&
+            new URLSearchParams(window.location.search).get('reason') === 'session-expired') return;
         const tokens = await refreshBrowserSession();
         if (cancelled || !tokens) return;
         storeTokens(tokens);

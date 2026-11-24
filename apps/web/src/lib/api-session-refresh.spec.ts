@@ -96,7 +96,7 @@ describe('authenticated browser session expiry', () => {
     expect(observer).toHaveBeenCalledTimes(1);
     expect(observer).toHaveBeenCalledWith({ type: 'expired' });
     await client.verifyBrowserSession();
-    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
   });
   it('updates React subscribers when a valid cookie renews the token', async () => {
     const { client, observer } = setup();
@@ -115,9 +115,35 @@ describe('authenticated browser session expiry', () => {
     const { client, observer } = setup();
     global.fetch = jest.fn()
       .mockResolvedValueOnce({ status: 401, text: async () => '' })
-      .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) });
+      .mockResolvedValue({ ok: false, status: 401, json: async () => ({}) });
     await client.verifyBrowserSession();
     expect(observer).toHaveBeenCalledWith({ type: 'expired' });
+  });
+  it('does not rotate a valid user session on an unrelated API 401', async () => {
+    const { client, observer } = setup();
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({ status: 401, ok: false, json: async () => ({ message: 'Broker unauthorized' }) })
+      .mockResolvedValueOnce({ status: 200, ok: true, text: async () => '{}' });
+    await expect(client.api.request('/broker/connections')).rejects.toThrow();
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(observer).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining('/auth/refresh'), expect.anything());
+  });
+  it('recovers a rotation race without emitting an expiry event', async () => {
+    const { client, observer } = setup();
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ accessToken: 'renewed' }) });
+    expect(await client.refreshBrowserSession()).toEqual({ accessToken: 'renewed' });
+    expect(observer).toHaveBeenCalledTimes(1);
+    expect(observer).toHaveBeenCalledWith({ type: 'refreshed', accessToken: 'renewed' });
+  });
+  it('coalesces simultaneous focus and reconnect checks', async () => {
+    const { client, observer } = setup();
+    global.fetch = jest.fn().mockResolvedValue({ status: 200, text: async () => '{}' });
+    await Promise.all([client.verifyBrowserSession(), client.verifyBrowserSession(), client.verifyBrowserSession()]);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(observer).not.toHaveBeenCalled();
   });
   it('does not let a stale refresh overwrite a new login', async () => {
     const { client, observer } = setup();
