@@ -142,6 +142,10 @@ async function main(){
   const compiled=process.env.IREXPRO_CAUSAL_EVALUATOR_DIST||
     path.resolve(__dirname,'../../dist');
   const {evaluateM1CausalOutcome15m}=require(path.resolve(compiled,'modules/ai/m1-causal-outcome'));
+  const configuredOwner=env.VPS_FOREX_SCANNER_USER_ID;
+  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(configuredOwner||'')){
+    throw Error('SCOPED_OWNER_ID_NOT_CONFIGURED');
+  }
   const db=new Client({
     host:env.DB_HOST,port:Number(env.DB_PORT||5432),
     database:env.DB_NAME,user:env.DB_USER,password:env.DB_PASSWORD,
@@ -155,8 +159,9 @@ async function main(){
     const connection=await db.query(
       "SELECT id,user_id,account_type,broker_id FROM broker.broker_connections "+
       "WHERE broker_id='pepperstone-ctrader' AND account_type='LIVE' "+
-      "AND provider_broker_identity='pepperstone' AND account_id='49506270' "+
-      "AND deleted_at IS NULL"
+      "AND provider_broker_identity='pepperstone' AND user_id=$1 "+
+      "AND deleted_at IS NULL",
+      [configuredOwner]
     );
     if(connection.rows.length!==1)throw Error('EXACT_LIVE_ACCOUNT_SCOPE_MISSING');
     const scope=connection.rows[0];

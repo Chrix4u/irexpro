@@ -101,3 +101,11 @@ test('does not coerce missing values to a positive stop distance',()=>{
   assert.equal(toFinitePositive(0),null);
   assert.equal(toFinitePositive('0.0005'),0.0005);
 });
+
+test('LIVE research DB scope is bound to the configured owner, not hardcoded account numbers',()=>{
+  const fs=require('node:fs');
+  const source=fs.readFileSync(require.resolve('./pepperstone-live-route-outcomes-ro.cjs'),'utf8');
+  assert.match(source,/env\.VPS_FOREX_SCANNER_USER_ID/);
+  assert.match(source,/provider_broker_identity='pepperstone' AND user_id=\$1/);
+  assert.doesNotMatch(source,/49506270/);
+});
