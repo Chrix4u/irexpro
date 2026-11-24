@@ -4,9 +4,10 @@ import type { Trade } from '../entities/trade.entity';
 import { OrderStatus, OrderKind } from '../orders/order.enums';
 import { TradeStatus } from '../entities/trade.entity';
 import { compareDecimal } from './reconciliation-comparator';
+import { CTRADER_FAMILY_BROKER_IDS } from '../../broker/registry/broker-catalog';
 
 /**
- * Pepperstone DEMO: a closed POSITION in the broker's authenticated DealList
+ * Pepperstone USD DEMO: a closed POSITION in the broker's authenticated DealList
  * may prove the previously uncertain CLOSE ORDER economically filled, but
  * only after cross-checking the durable position, the unique closing deal,
  * and the exact same account/side/volume/exit/P&L/timestamp. A missing broker
@@ -19,7 +20,21 @@ export type ClosedDemoOrderFillProof =
   | { matched: true; quantity: string; price: string; positionRef: string }
   | { matched: false; reason: string };
 
-export function provePepperstoneDemoClosedOrderFill(input: {
+/** Scope + freshness policy for the shared DEMO closed-order proof core. */
+type ProofScope = {
+  /** Broker ids whose DEMO accounts this proof path may authorize. */
+  allowedBrokerIds: readonly string[];
+  /**
+   * Maximum age of the closing evidence (now − trade.closedAt) in ms, or
+   * null when aged historical evidence is admissible. The exact-decimal
+   * field matching itself does not degrade with age; the freshness cap is
+   * a live-recovery fence only, so aged sweeps pass null.
+   */
+  maxCloseAgeMs: number | null;
+};
+
+/** Shared proof input shape (order/trade/provider-deal evidence). */
+type ClosedDemoOrderFillProofInput = {
   brokerId: string;
   accountType: string;
   accountUserId: string;
@@ -27,38 +42,43 @@ export function provePepperstoneDemoClosedOrderFill(input: {
   order: Pick<
     Order,
     | 'userId'
-    | 'brokerConnectionId'
-    | 'tradeId'
-    | 'status'
-    | 'providerOrderId'
-    | 'orderKind'
-    | 'instrument'
-    | 'direction'
-    | 'requestedQuantity'
-    | 'filledQuantity'
-    | 'avgFillPrice'
-    | 'createdAt'
-    | 'submittedAt'
+      | 'brokerConnectionId'
+      | 'tradeId'
+      | 'status'
+      | 'providerOrderId'
+      | 'orderKind'
+      | 'instrument'
+      | 'direction'
+      | 'requestedQuantity'
+      | 'filledQuantity'
+      | 'avgFillPrice'
+      | 'createdAt'
+      | 'submittedAt'
   >;
   trade: Pick<
     Trade,
     | 'id'
-    | 'userId'
-    | 'brokerConnectionId'
-    | 'status'
-    | 'instrument'
-    | 'direction'
-    | 'externalPositionId'
-    | 'externalOrderId'
-    | 'lotSize'
-    | 'openedAt'
-    | 'closedAt'
-    | 'exitPrice'
-    | 'realisedPnl'
+      | 'userId'
+      | 'brokerConnectionId'
+      | 'status'
+      | 'instrument'
+      | 'direction'
+      | 'externalPositionId'
+      | 'externalOrderId'
+      | 'lotSize'
+      | 'openedAt'
+      | 'closedAt'
+      | 'exitPrice'
+      | 'realisedPnl'
   >;
   providerClosedDeals: readonly BrokerClosedTrade[];
   observedAt: Date;
-}): ClosedDemoOrderFillProof {
+};
+
+function proveDemoClosedOrderFillCore(
+  input: ClosedDemoOrderFillProofInput,
+  scope: ProofScope,
+): ClosedDemoOrderFillProof {
   const no = (reason: string): ClosedDemoOrderFillProof => ({ matched: false, reason });
   const {
     brokerId,
@@ -71,7 +91,7 @@ export function provePepperstoneDemoClosedOrderFill(input: {
     observedAt,
   } = input;
   if (
-    brokerId !== 'pepperstone-ctrader' ||
+    !scope.allowedBrokerIds.includes(brokerId) ||
     accountType !== 'DEMO' ||
     !accountUserId ||
     !accountConnectionId ||
@@ -109,8 +129,8 @@ export function provePepperstoneDemoClosedOrderFill(input: {
     sent > closed ||
     closed > now ||
     closed - sent > 120_000 ||
-    now - closed > 6 * 3600_000 ||
-    sent - created > 120_000
+    sent - created > 120_000 ||
+    (scope.maxCloseAgeMs !== null && now - closed > scope.maxCloseAgeMs)
   )
     return no('CLOSE_DISPATCH_TIME_UNPROVEN');
   const ref = trade.externalPositionId || trade.externalOrderId;
@@ -161,6 +181,35 @@ export function provePepperstoneDemoClosedOrderFill(input: {
   return { matched: true, quantity: qty, price: deal.closePrice, positionRef: ref };
 }
 
+/** Live-recovery scope: single Pepperstone DEMO account, six-hour freshness. */
+export function provePepperstoneDemoClosedOrderFill(
+  input: ClosedDemoOrderFillProofInput,
+): ClosedDemoOrderFillProof {
+  return proveDemoClosedOrderFillCore(input, {
+    allowedBrokerIds: ['pepperstone-ctrader'],
+    maxCloseAgeMs: 6 * 3600_000,
+  });
+}
+
+/**
+ * Aged historical scope: any cTrader-family DEMO account (pepperstone,
+ * generic, icmarkets) with NO freshness cap on the closing evidence.
+ *
+ * Rationale: the stranded population (375 records) is historical; the
+ * exact-decimal account/side/volume/exit/P&L/timestamp matching does not
+ * degrade with age, and the broker DealList remains the authoritative
+ * record. All other fail-closed guarantees are identical to the live path.
+ * LIVE accounts remain out of scope for automated order-row recovery.
+ */
+export function proveAgedCtraderDemoClosedOrderFill(
+  input: ClosedDemoOrderFillProofInput,
+): ClosedDemoOrderFillProof {
+  return proveDemoClosedOrderFillCore(input, {
+    allowedBrokerIds: CTRADER_FAMILY_BROKER_IDS,
+    maxCloseAgeMs: null,
+  });
+}
+
 /** Fair, bounded selection for the existing DEMO ledger recovery only.
  * Ambiguous multiple orders are excluded before the two-read budget is used.
  * A cursor rotates past unresolved evidence; proof/authority stays unchanged.
@@ -169,14 +218,14 @@ export function selectRecentDemoCloseOrders<
   T extends Pick<
     Order,
     | 'id'
-    | 'tradeId'
-    | 'status'
-    | 'orderKind'
-    | 'providerOrderId'
-    | 'filledQuantity'
-    | 'avgFillPrice'
-    | 'submittedAt'
-    | 'createdAt'
+      | 'tradeId'
+      | 'status'
+      | 'orderKind'
+      | 'providerOrderId'
+      | 'filledQuantity'
+      | 'avgFillPrice'
+      | 'submittedAt'
+      | 'createdAt'
   >,
 >(orders: readonly T[], asOf: Date, afterId: string | undefined): T[] {
   const now = asOf.getTime();

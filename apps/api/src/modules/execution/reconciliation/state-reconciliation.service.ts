@@ -38,8 +38,13 @@ import { ReconciliationResolutionService } from './reconciliation-resolution.ser
 import { proveCtraderEntryOrderPositionRef } from './closed-demo-settlement-proof';
 import {
   provePepperstoneDemoClosedOrderFill,
+  proveAgedCtraderDemoClosedOrderFill,
   selectRecentDemoCloseOrders,
 } from './closed-demo-order-deal-proof';
+import {
+  selectAgedDemoCloseRecoveryCandidates,
+  agedTradeNeedsSettlementBackfill,
+} from './closed-demo-order-recovery-sweep';
 import { isProvenUnsentEntry } from '../trade-read-truth';
 import { reconcileProvenUnsentEntry } from './proven-unsent-entry';
 import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
@@ -229,6 +234,8 @@ export class StateReconciliationService {
   // never repeated on every 60s general reconciliation sweep.
   private readonly closedEconomicsLookupAtByConnection = new Map<string, number>();
   private readonly demoCloseRecoveryCursor = new Map<string, string>();
+  /** Fair-rotation cursor for the aged (historical) DEMO close-order sweep. */
+  private readonly agedDemoCloseRecoveryCursor = new Map<string, string>();
 
   constructor(
     @InjectRepository(Trade)
@@ -729,6 +736,13 @@ export class StateReconciliationService {
         }
       }
 
+      // Orders already attempted by the 7a2 live recovery in THIS cycle —
+      // excluded from the 7a3 aged sweep below so a single cycle never
+      // attempts the same order twice through two scopes (the proofs differ
+      // only by the freshness fence; a retry adds nothing until the next
+      // cycle re-reads the persisted status).
+      const liveRecoveryAttemptedOrderIds = new Set<string>();
+
       // 7a2. Pepperstone USD DEMO only: exact broker DealList recovery for a
       // fully CLOSED position whose associated MARKET close order remained
       // RECONCILIATION_PENDING with zero fill and no provider order ID.
@@ -756,6 +770,7 @@ export class StateReconciliationService {
             recentCloseOrders[recentCloseOrders.length - 1].id,
           );
         for (const order of recentCloseOrders) {
+          liveRecoveryAttemptedOrderIds.add(order.id);
           try {
             // An order cannot be inferred from a closed position if another
             // close order for that trade might have caused the same deal.
@@ -828,6 +843,120 @@ export class StateReconciliationService {
             this.logger.warn(
               'Pepperstone DEMO closed-order deal convergence ' +
                 'deferred for order ' +
+                order.id +
+                ': ' +
+                sanitizeReconciliationReason(error),
+            );
+          }
+        }
+      }
+
+      // 7a3. cTrader-family DEMO, aged historical scope: the same exact
+      // DealList proof WITHOUT the six-hour freshness fence, across every
+      // family DEMO account (generic ctrader included), with a fair rotating
+      // budget. This is the convergence path for stranded close orders whose
+      // trades closed days or weeks ago (the 375-record incident): the
+      // ordinary order sweep skips orders without a provider order id, so
+      // without this path they would remain RECONCILIATION_PENDING forever.
+      // LIVE accounts are excluded — LIVE order-row recovery stays subject
+      // to independent operator review. No identifiers are invented; the
+      // proof re-verifies the full account/side/volume/exit/P&L/timestamp.
+      if (
+        CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId) &&
+        String(connection.accountType).toUpperCase() === 'DEMO'
+      ) {
+        const agedAsOf = new Date();
+        const agedCandidates = selectAgedDemoCloseRecoveryCandidates(
+          internalOrders,
+          agedAsOf,
+          this.agedDemoCloseRecoveryCursor.get(connection.id),
+        ).filter((candidate) => !liveRecoveryAttemptedOrderIds.has(candidate.id));
+        if (agedCandidates.length === 0)
+          this.agedDemoCloseRecoveryCursor.delete(connection.id);
+        else
+          this.agedDemoCloseRecoveryCursor.set(
+            connection.id,
+            agedCandidates[agedCandidates.length - 1].id,
+          );
+        for (const order of agedCandidates) {
+          try {
+            const trade = await this.tradeRepo.findOne({
+              where: {
+                id: order.tradeId!,
+                userId: connection.userId,
+                brokerConnectionId: connection.id,
+                status: TradeStatus.CLOSED,
+              },
+            });
+            if (
+              !trade ||
+              !trade.openedAt ||
+              !Number.isFinite(trade.openedAt.getTime()) ||
+              !trade.closedAt ||
+              providerPositions.some(
+                (p) => p.externalOrderId === (trade.externalPositionId || trade.externalOrderId),
+              )
+            )
+              continue;
+            // Bounded to this specific position's original entry: querying
+            // from only the close order timestamp could hide partial deals.
+            const providerDeals = await adapter.getClosedTrades(
+              new Date(Math.max(0, trade.openedAt.getTime() - 60_000)),
+              agedAsOf,
+            );
+            // Aged trades with NULL close economics need the settlement
+            // backfilled FIRST (NULL-only CAS, unique-deal proof) so the
+            // order-row proof has exit price / realised P&L to verify.
+            if (agedTradeNeedsSettlementBackfill(trade)) {
+              const backfilled = await this.resolution.backfillClosedDemoSettlement({
+                trade,
+                brokerId: connection.brokerId,
+                accountType: String(connection.accountType).toUpperCase(),
+                providerDeals,
+                observedAt: agedAsOf,
+              });
+              if (backfilled) {
+                const refreshed = await this.tradeRepo.findOne({
+                  where: { id: trade.id, status: TradeStatus.CLOSED },
+                });
+                if (refreshed) Object.assign(trade, refreshed);
+              }
+            }
+            const proof = proveAgedCtraderDemoClosedOrderFill({
+              brokerId: connection.brokerId,
+              accountType: String(connection.accountType).toUpperCase(),
+              accountUserId: connection.userId,
+              accountConnectionId: connection.id,
+              order,
+              trade,
+              providerClosedDeals: providerDeals,
+              observedAt: agedAsOf,
+            });
+            if (!proof.matched) continue;
+            // The OrderService itself enforces fill <= requested and an
+            // optimistic status CAS. If a concurrent worker won, no duplicate
+            // fill can be booked; retry rather than overwriting anything.
+            const completed = await this.orderService.applyFill(order.id, {
+              quantity: proof.quantity,
+              price: proof.price,
+            });
+            if (completed.status !== OrderStatus.FILLED)
+              throw new Error('Aged DEMO close order was not terminally reconciled');
+            resolutionRefs.push({
+              type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+              internalRefId: order.id,
+              providerRef: null,
+              resolution:
+                'Aged cTrader DEMO uniquely matched closed deal: ' +
+                'exact position, side, lots, exit, gross P&L and timestamp ' +
+                '(historical scope, no freshness fence); ' +
+                'close order fill booked via exact-decimal domain CAS',
+            });
+            autoResolvedCount++;
+          } catch (error) {
+            errors++;
+            this.logger.warn(
+              'Aged DEMO closed-order recovery deferred for order ' +
                 order.id +
                 ': ' +
                 sanitizeReconciliationReason(error),
