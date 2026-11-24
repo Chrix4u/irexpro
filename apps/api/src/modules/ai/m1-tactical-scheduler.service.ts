@@ -4293,6 +4293,14 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           multimodel_governance_net_expected_r: multimodelDemo?.governance.netExpectedR ?? null,
           multimodel_trained_expert_state: multimodelDemo?.trainedExpert.state ?? null,
           multimodel_trained_expert_direction: multimodelDemo?.trainedExpert.direction ?? null,
+          // Server-frozen primary-route semantic handoff proof. Must be
+          // completed broker-native expert evidence, never JSON caller claims.
+          multimodel_trained_expert_native:
+            multimodelDemo?.trainedExpert.allBrokerNative === true,
+          multimodel_trained_expert_freshness_seconds:
+            multimodelDemo?.trainedExpert.freshnessSeconds ?? null,
+          multimodel_primary_reversal_timing_bridge:
+            multimodelDemo?.authority.reversalTimingBridge === true,
           multimodel_trained_expert_confidence:
             multimodelDemo?.trainedExpert.ensembleConfidence ?? null,
           multimodel_trained_expert_opportunity_probability:
