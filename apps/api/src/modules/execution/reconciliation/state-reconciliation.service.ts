@@ -441,8 +441,8 @@ export class StateReconciliationService {
       const shouldInspectLateEconomics =
         CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId) &&
         String(connection.accountType).toUpperCase() === 'DEMO' &&
-        lateEconomicsNow -
-          (this.closedEconomicsLookupAtByConnection.get(connection.id) ?? 0) >= 15 * 60_000;
+        lateEconomicsNow - (this.closedEconomicsLookupAtByConnection.get(connection.id) ?? 0) >=
+          15 * 60_000;
       let closedUnsettledTrades: Trade[] = [];
       if (shouldInspectLateEconomics) {
         this.closedEconomicsLookupAtByConnection.set(connection.id, lateEconomicsNow);
@@ -462,10 +462,7 @@ export class StateReconciliationService {
       }
       const closedTrades =
         internalTrades.length + closedUnsettledTrades.length > 0
-          ? await this.fetchClosedTrades(
-              adapter,
-              [...internalTrades, ...closedUnsettledTrades],
-            )
+          ? await this.fetchClosedTrades(adapter, [...internalTrades, ...closedUnsettledTrades])
           : [];
 
       // A provider close without economics can remain CLOSED safely; if a
@@ -482,12 +479,10 @@ export class StateReconciliationService {
           if (
             !settled.externalPositionId &&
             settled.externalOrderId &&
-            !closedTrades.some(deal => deal.externalOrderId === settled.externalOrderId)
+            !closedTrades.some((deal) => deal.externalOrderId === settled.externalOrderId)
           ) {
             const providerEntryOrder = await adapter.getOrderById(settled.externalOrderId);
-            const positionRef = proveCtraderEntryOrderPositionRef(
-              settled, providerEntryOrder,
-            );
+            const positionRef = proveCtraderEntryOrderPositionRef(settled, providerEntryOrder);
             if (positionRef) {
               tradeForProof = { ...settled, externalPositionId: positionRef };
             }
@@ -501,8 +496,7 @@ export class StateReconciliationService {
           });
         } catch (error) {
           this.logger.warn(
-            'Late cTrader DEMO settlement proof deferred: ' +
-            sanitizeReconciliationReason(error),
+            'Late cTrader DEMO settlement proof deferred: ' + sanitizeReconciliationReason(error),
           );
         }
       }
@@ -589,28 +583,37 @@ export class StateReconciliationService {
 
       // Resolve explicit local non-dispatch evidence without creating a fill,
       // closing a real position, retrying an order or reviving a risk grant.
-      const providerClientOrderIds = new Set(providerOrders
-        .map(o => o.clientOrderId).filter((id): id is string => typeof id === 'string'));
+      const providerClientOrderIds = new Set(
+        providerOrders
+          .map((o) => o.clientOrderId)
+          .filter((id): id is string => typeof id === 'string'),
+      );
       for (const trade of internalTrades) {
         if (!isProvenUnsentEntry(trade)) continue;
         try {
           const age = Date.now() - new Date(trade.updatedAt).getTime();
           if (!Number.isFinite(age) || age < PRE_COMMITMENT_GRACE_MS) continue;
           const orderId = await reconcileProvenUnsentEntry(
-            this.tradeRepo.manager, trade.id, connection.userId,
-            connection.id, providerClientOrderIds,
+            this.tradeRepo.manager,
+            trade.id,
+            connection.userId,
+            connection.id,
+            providerClientOrderIds,
           );
           if (!orderId) continue;
           for (const internalRefId of [trade.id, orderId]) {
             resolutionRefs.push({
               type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
-              internalRefId, providerRef: null,
+              internalRefId,
+              providerRef: null,
               resolution: 'Proven unsent entry; order and trade rejected, allocation released',
             });
           }
         } catch (err) {
           errors++;
-          this.logger.warn('Proven-unsent entry convergence deferred: ' + sanitizeReconciliationReason(err));
+          this.logger.warn(
+            'Proven-unsent entry convergence deferred: ' + sanitizeReconciliationReason(err),
+          );
         }
       }
 
@@ -730,73 +733,107 @@ export class StateReconciliationService {
       // This is account-scoped, bounded to recent terminal evidence, and
       // uses ONLY OrderService.applyFill (exact-decimal domain CAS). No provider
       // order, no invented ticket, no mutation of trade equity/realised P&L.
-      if (connection.brokerId === 'pepperstone-ctrader' &&
-          String(connection.accountType).toUpperCase()==='DEMO' &&
-          !!process.env.VPS_FOREX_SCANNER_USER_ID &&
-          connection.userId===process.env.VPS_FOREX_SCANNER_USER_ID) {
-        const asOf=new Date();
-        const recentCloseOrders=internalOrders.filter(o=>
-          o.status===OrderStatus.RECONCILIATION_PENDING &&
-          o.orderKind===OrderKind.MARKET && o.providerOrderId===null &&
-          o.tradeId && o.filledQuantity &&
-          isZeroLikeDecimal(o.filledQuantity) && o.avgFillPrice===null &&
-          o.submittedAt instanceof Date && o.createdAt instanceof Date &&
-          asOf.getTime()-o.submittedAt.getTime()>=5_000 &&
-          asOf.getTime()-o.submittedAt.getTime()<=6*3600_000,
-        ).sort((a,b)=>b.submittedAt!.getTime()-a.submittedAt!.getTime())
-          .slice(0,2);
-        for(const order of recentCloseOrders){
+      if (
+        connection.brokerId === 'pepperstone-ctrader' &&
+        String(connection.accountType).toUpperCase() === 'DEMO' &&
+        !!process.env.VPS_FOREX_SCANNER_USER_ID &&
+        connection.userId === process.env.VPS_FOREX_SCANNER_USER_ID
+      ) {
+        const asOf = new Date();
+        const recentCloseOrders = internalOrders
+          .filter(
+            (o) =>
+              o.status === OrderStatus.RECONCILIATION_PENDING &&
+              o.orderKind === OrderKind.MARKET &&
+              o.providerOrderId === null &&
+              o.tradeId &&
+              o.filledQuantity &&
+              isZeroLikeDecimal(o.filledQuantity) &&
+              o.avgFillPrice === null &&
+              o.submittedAt instanceof Date &&
+              o.createdAt instanceof Date &&
+              asOf.getTime() - o.submittedAt.getTime() >= 5_000 &&
+              asOf.getTime() - o.submittedAt.getTime() <= 6 * 3600_000,
+          )
+          .sort((a, b) => b.submittedAt!.getTime() - a.submittedAt!.getTime())
+          .slice(0, 2);
+        for (const order of recentCloseOrders) {
           try {
             // An order cannot be inferred from a closed position if another
             // close order for that trade might have caused the same deal.
-            if (internalOrders.filter(o=>o.tradeId===order.tradeId &&
-                o.status===OrderStatus.RECONCILIATION_PENDING &&
-                o.orderKind===OrderKind.MARKET).length!==1) continue;
-            const trade=await this.tradeRepo.findOne({where:{
-              id:order.tradeId!,userId:connection.userId,
-              brokerConnectionId:connection.id,status:TradeStatus.CLOSED,
-            }});
-            if(!trade || !trade.openedAt ||
-                !Number.isFinite(trade.openedAt.getTime()) ||
-                asOf.getTime()-trade.openedAt.getTime()>6*3600_000 ||
-                !trade.closedAt ||
-                providerPositions.some(p=>p.externalOrderId===
-                  (trade.externalPositionId||trade.externalOrderId))) continue;
+            if (
+              internalOrders.filter(
+                (o) =>
+                  o.tradeId === order.tradeId &&
+                  o.status === OrderStatus.RECONCILIATION_PENDING &&
+                  o.orderKind === OrderKind.MARKET,
+              ).length !== 1
+            )
+              continue;
+            const trade = await this.tradeRepo.findOne({
+              where: {
+                id: order.tradeId!,
+                userId: connection.userId,
+                brokerConnectionId: connection.id,
+                status: TradeStatus.CLOSED,
+              },
+            });
+            if (
+              !trade ||
+              !trade.openedAt ||
+              !Number.isFinite(trade.openedAt.getTime()) ||
+              asOf.getTime() - trade.openedAt.getTime() > 6 * 3600_000 ||
+              !trade.closedAt ||
+              providerPositions.some(
+                (p) => p.externalOrderId === (trade.externalPositionId || trade.externalOrderId),
+              )
+            )
+              continue;
             // Bounded to this specific position's original entry: querying
             // from only the close order timestamp could hide partial deals.
-            const providerDeals=await adapter.getClosedTrades(
-              new Date(Math.max(0,trade.openedAt.getTime()-60_000)),asOf,
+            const providerDeals = await adapter.getClosedTrades(
+              new Date(Math.max(0, trade.openedAt.getTime() - 60_000)),
+              asOf,
             );
-            const proof=provePepperstoneDemoClosedOrderFill({
-              brokerId:connection.brokerId,
-              accountType:String(connection.accountType).toUpperCase(),
-              accountUserId:connection.userId,
-              accountConnectionId:connection.id,
-              order,trade,providerClosedDeals:providerDeals,observedAt:asOf,
+            const proof = provePepperstoneDemoClosedOrderFill({
+              brokerId: connection.brokerId,
+              accountType: String(connection.accountType).toUpperCase(),
+              accountUserId: connection.userId,
+              accountConnectionId: connection.id,
+              order,
+              trade,
+              providerClosedDeals: providerDeals,
+              observedAt: asOf,
             });
-            if(!proof.matched) continue;
+            if (!proof.matched) continue;
             // The OrderService itself enforces fill <= requested and an
             // optimistic status CAS. If a concurrent worker won, no duplicate
             // fill can be booked; retry rather than overwriting anything.
-            const completed=await this.orderService.applyFill(order.id,{
-              quantity:proof.quantity,price:proof.price,
+            const completed = await this.orderService.applyFill(order.id, {
+              quantity: proof.quantity,
+              price: proof.price,
             });
-            if(completed.status!==OrderStatus.FILLED) throw new Error(
-              'Broker-deal-proven close order was not terminally reconciled',
-            );
+            if (completed.status !== OrderStatus.FILLED)
+              throw new Error('Broker-deal-proven close order was not terminally reconciled');
             resolutionRefs.push({
-              type:ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
-              internalRefId:order.id,providerRef:null,
-              resolution:'Pepperstone DEMO uniquely matched closed deal: '+
-                'exact position, side, lots, exit, gross P&L and timestamp; '+
+              type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+              internalRefId: order.id,
+              providerRef: null,
+              resolution:
+                'Pepperstone DEMO uniquely matched closed deal: ' +
+                'exact position, side, lots, exit, gross P&L and timestamp; ' +
                 'close order fill booked via exact-decimal domain CAS',
             });
             autoResolvedCount++;
-          }catch(error){
+          } catch (error) {
             errors++;
-            this.logger.warn('Pepperstone DEMO closed-order deal convergence '+
-              'deferred for order '+order.id+': '+
-              sanitizeReconciliationReason(error));
+            this.logger.warn(
+              'Pepperstone DEMO closed-order deal convergence ' +
+                'deferred for order ' +
+                order.id +
+                ': ' +
+                sanitizeReconciliationReason(error),
+            );
           }
         }
       }

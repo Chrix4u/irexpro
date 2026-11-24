@@ -851,9 +851,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const professionalDemoPhase = this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL';
     return {
       enabled: this.enabled(),
-      primaryEngineCode: professionalDemoPhase
-        ? MULTIMODEL_ENGINE_CODE
-        : 'irexpro-m1-tactical',
+      primaryEngineCode: professionalDemoPhase ? MULTIMODEL_ENGINE_CODE : 'irexpro-m1-tactical',
       primaryEngineDisplayName: professionalDemoPhase
         ? 'iRexPro Multi-Model Ensemble'
         : 'iRexPro M1 Tactical',
@@ -1201,8 +1199,12 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     if (trainedExpertForSlot) {
       void trainedExpertForSlot(candidates[0].direction).catch((error) => {
         this.logger.warn(
-          'M1 prefetch unavailable instrument=' + instrument +
-          ' slot=' + decisionTime.toISOString() + ': ' + (error as Error).message,
+          'M1 prefetch unavailable instrument=' +
+            instrument +
+            ' slot=' +
+            decisionTime.toISOString() +
+            ': ' +
+            (error as Error).message,
         );
       });
     }
@@ -1727,17 +1729,21 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       } catch (error) {
         this.logger.warn(
           'Confirmed-reversal DEMO canary broker verification unavailable ' +
-            candidate.instrument + ': ' + (error as Error).message,
+            candidate.instrument +
+            ': ' +
+            (error as Error).message,
         );
       }
     }
-    const crossSleeveReversalCanary = professionalDemoPhase &&
+    const crossSleeveReversalCanary =
+      professionalDemoPhase &&
       evaluateConfirmedReversalCrossSleeveCanary({
         m1Route: routeDecision.route,
         reliabilityGate: demoProfitabilityReliabilityGate,
         strategyRoute: multimodelDemo?.ensemble.strategyRoute ?? null,
-        primaryPlanBExecutable: multimodelDemo?.authority.authorityPath === 'PRIMARY_PLAN_B'
-          && multimodelDemo?.authority.executable === true,
+        primaryPlanBExecutable:
+          multimodelDemo?.authority.authorityPath === 'PRIMARY_PLAN_B' &&
+          multimodelDemo?.authority.executable === true,
         portfolioSnapshotAvailable: multimodelDemo?.portfolioSnapshotAvailable === true,
         brokerVerifiedPepperstoneDemo: crossSleeveBrokerVerified,
         paperExecutionEligible: multimodelDemo?.governance.paperExecutionEligible === true,
@@ -2107,24 +2113,31 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // the original broker/portfolio stop-risk, margin and exposure sizing.
     let ownerDemoRecoveryVerified = false;
     const ownerDemoRecoveryFeatureEnabled =
-      this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY','')==='enabled';
-    if (recoveryCanary && !crossSleeveReversalCanary &&
-        professionalDemoPhase && ownerDemoRecoveryFeatureEnabled &&
-        !!userId &&
-        this.config.get<string>('VPS_FOREX_SCANNER_USER_ID','')===userId &&
-        this.executionService) {
+      this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY', '') === 'enabled';
+    if (
+      recoveryCanary &&
+      !crossSleeveReversalCanary &&
+      professionalDemoPhase &&
+      ownerDemoRecoveryFeatureEnabled &&
+      !!userId &&
+      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId &&
+      this.executionService
+    ) {
       try {
         const active = await this.executionService.getActiveSession(userId);
-        if (active?.executionMode===ExecutionMode.FULL_AUTO &&
-            active.brokerConnectionId===brokerConnectionId) {
-          ownerDemoRecoveryVerified =
-            await this.evidence.isPepperstoneUsdDemoBrokerConnection({
-              userId,brokerConnectionId,
-            });
+        if (
+          active?.executionMode === ExecutionMode.FULL_AUTO &&
+          active.brokerConnectionId === brokerConnectionId
+        ) {
+          ownerDemoRecoveryVerified = await this.evidence.isPepperstoneUsdDemoBrokerConnection({
+            userId,
+            brokerConnectionId,
+          });
         }
       } catch (error) {
-        this.logger.warn('Owner DEMO recovery sizing verification unavailable: '+
-          (error as Error).message);
+        this.logger.warn(
+          'Owner DEMO recovery sizing verification unavailable: ' + (error as Error).message,
+        );
       }
     }
     const multimodelDirectionConflict =
@@ -2241,12 +2254,13 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             : provisionalScoutReliability
               ? Math.min(this.rolloutPolicy.paperVolumeCap, provisionalScoutReliability.lotCap)
               : this.rolloutPolicy.paperVolumeCap;
-    const ownerDemoRecoveryCanarySizing=resolveOwnerDemoRecoveryCanarySizing({
-      recoveryCanary,crossSleeveReversalCanary,
-      ownerDemoVerified:ownerDemoRecoveryVerified,
-      featureEnabled:ownerDemoRecoveryFeatureEnabled,
-      normalVolumeCap:executionVolumeCap,
-      recoveryCanaryLotCap:M1_DEMO_RECOVERY_CANARY_LOT_CAP,
+    const ownerDemoRecoveryCanarySizing = resolveOwnerDemoRecoveryCanarySizing({
+      recoveryCanary,
+      crossSleeveReversalCanary,
+      ownerDemoVerified: ownerDemoRecoveryVerified,
+      featureEnabled: ownerDemoRecoveryFeatureEnabled,
+      normalVolumeCap: executionVolumeCap,
+      recoveryCanaryLotCap: M1_DEMO_RECOVERY_CANARY_LOT_CAP,
     });
     const recoveryCanaryVolumeCap = crossSleeveReversalCanary
       ? Math.min(executionVolumeCap, CONFIRMED_REVERSAL_CROSS_SLEEVE_CANARY_LOT_CAP)
@@ -2376,9 +2390,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // DEMO entry; never alter existing positions or weaken session authority.
     const ownerDemoAdvisoryRequested =
       professionalDemoPhase &&
-      this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY','')==='enabled' &&
+      this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY', '') === 'enabled' &&
       !!userId &&
-      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID','')===userId;
+      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId;
     const downstreamRiskStartedAt = Date.now();
     let portfolioNetLossBrake: M1PortfolioNetLossBrakeDecision | null = null;
     if (professionalDemoPhase && preliminaryCanExecute && this.executionService) {
@@ -2417,19 +2431,26 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // newly scoped advisory policy. No approval is needed for the owner DEMO
     // after its broker and FULL_AUTO session have been verified.
     let ownerAcceptedPortfolioBrake = false;
-    if (!ownerDemoAdvisoryRequested &&
-        portfolioNetLossBrake?.active === true &&
-        portfolioNetLossBrake.reason === 'RECENT_PORTFOLIO_NET_LOSS_STREAK' &&
-        portfolioNetLossBrake.latestClosedAt &&
-        preliminaryCanExecute &&
-        this.demoPortfolioBrakeConsent && this.executionService) {
+    if (
+      !ownerDemoAdvisoryRequested &&
+      portfolioNetLossBrake?.active === true &&
+      portfolioNetLossBrake.reason === 'RECENT_PORTFOLIO_NET_LOSS_STREAK' &&
+      portfolioNetLossBrake.latestClosedAt &&
+      preliminaryCanExecute &&
+      this.demoPortfolioBrakeConsent &&
+      this.executionService
+    ) {
       try {
         const active = await this.executionService.getActiveSession(userId);
-        if (active?.executionMode === ExecutionMode.FULL_AUTO &&
-            active.brokerConnectionId === brokerConnectionId) {
+        if (
+          active?.executionMode === ExecutionMode.FULL_AUTO &&
+          active.brokerConnectionId === brokerConnectionId
+        ) {
           ownerAcceptedPortfolioBrake = await this.demoPortfolioBrakeConsent.isOverrideActive({
-            userId,brokerConnectionId,sessionId:active.id,
-            latestClosedAt:portfolioNetLossBrake.latestClosedAt,
+            userId,
+            brokerConnectionId,
+            sessionId: active.id,
+            latestClosedAt: portfolioNetLossBrake.latestClosedAt,
           });
         }
       } catch (error) {
@@ -2465,8 +2486,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // otherwise-authorize primary Plan-B canary so normal scans stay cheap.
     let recoveryCanaryRecentlyAuthorized = false;
     let recoveryCanaryHistoryUnavailable = false;
-    if (ownerDemoRecoveryCanarySizing.enforceHistoricalCanarySpacing &&
-        preliminaryCanExecute) {
+    if (ownerDemoRecoveryCanarySizing.enforceHistoricalCanarySpacing && preliminaryCanExecute) {
       try {
         recoveryCanaryRecentlyAuthorized = await this.evidence.hasRecentM1RecoveryCanary({
           userId,
@@ -2700,26 +2720,39 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // LIVE broker accounts or inactive sessions. An unavailable broker scope
     // retains all prior protections.
     let ownerApprovedStrategyContinuation = false;
-    if (!ownerDemoAdvisoryRequested && professionalDemoPhase &&
-        preliminaryCanExecute && multimodelLossStreakBrake?.active === true &&
-        multimodelLossStreakBrake.latestClosedAt &&
-        executionStrategyRoute &&
-        ['EARLY_TRANSITION','CONFIRMED_REVERSAL','TREND_CONTINUATION']
-          .includes(executionStrategyRoute) &&
-        this.demoStrategyBrakeOwner && this.executionService) {
+    if (
+      !ownerDemoAdvisoryRequested &&
+      professionalDemoPhase &&
+      preliminaryCanExecute &&
+      multimodelLossStreakBrake?.active === true &&
+      multimodelLossStreakBrake.latestClosedAt &&
+      executionStrategyRoute &&
+      ['EARLY_TRANSITION', 'CONFIRMED_REVERSAL', 'TREND_CONTINUATION'].includes(
+        executionStrategyRoute,
+      ) &&
+      this.demoStrategyBrakeOwner &&
+      this.executionService
+    ) {
       try {
         const active = await this.executionService.getActiveSession(userId);
-        if (active?.executionMode === ExecutionMode.FULL_AUTO &&
-            active.brokerConnectionId === brokerConnectionId) {
+        if (
+          active?.executionMode === ExecutionMode.FULL_AUTO &&
+          active.brokerConnectionId === brokerConnectionId
+        ) {
           ownerApprovedStrategyContinuation =
             await this.demoStrategyBrakeOwner.isContinuationApproved({
-              userId,brokerConnectionId,sessionId:active.id,
-              route:executionStrategyRoute as
-                'EARLY_TRANSITION'|'CONFIRMED_REVERSAL'|'TREND_CONTINUATION',
-              instrument:candidate.instrument,direction:candidate.direction,
-              reason:multimodelLossStreakBrake.reason,
-              latestClosedAt:multimodelLossStreakBrake.latestClosedAt,
-              at:decisionTime,
+              userId,
+              brokerConnectionId,
+              sessionId: active.id,
+              route: executionStrategyRoute as
+                | 'EARLY_TRANSITION'
+                | 'CONFIRMED_REVERSAL'
+                | 'TREND_CONTINUATION',
+              instrument: candidate.instrument,
+              direction: candidate.direction,
+              reason: multimodelLossStreakBrake.reason,
+              latestClosedAt: multimodelLossStreakBrake.latestClosedAt,
+              at: decisionTime,
             });
         }
       } catch (error) {
@@ -2728,36 +2761,40 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     }
     let ownerDemoDiscretionaryPausesAdvisory = false;
     if (
-      ownerDemoAdvisoryRequested && preliminaryCanExecute &&
+      ownerDemoAdvisoryRequested &&
+      preliminaryCanExecute &&
       this.executionService &&
-      (fastStopRegimeBrake?.active===true ||
-        multimodelLossStreakBrake?.active===true ||
-        portfolioNetLossBrake?.active===true)
+      (fastStopRegimeBrake?.active === true ||
+        multimodelLossStreakBrake?.active === true ||
+        portfolioNetLossBrake?.active === true)
     ) {
       try {
         const activeSession = await this.executionService.getActiveSession(userId);
-        if (activeSession?.executionMode===ExecutionMode.FULL_AUTO &&
-            activeSession.brokerConnectionId===brokerConnectionId) {
+        if (
+          activeSession?.executionMode === ExecutionMode.FULL_AUTO &&
+          activeSession.brokerConnectionId === brokerConnectionId
+        ) {
           ownerDemoDiscretionaryPausesAdvisory =
             await this.evidence.isPepperstoneUsdDemoBrokerConnection({
-              userId,brokerConnectionId,
+              userId,
+              brokerConnectionId,
             });
         }
       } catch (error) {
-        this.logger.warn('Owner DEMO loss-advisory broker verification failed: ' +
-          (error as Error).message);
+        this.logger.warn(
+          'Owner DEMO loss-advisory broker verification failed: ' + (error as Error).message,
+        );
       }
     }
-    const ownerLossPausePolicy=ownerDemoLossPausePolicy({
+    const ownerLossPausePolicy = ownerDemoLossPausePolicy({
       featureEnabled:
-        this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY','')==='enabled',
-      exactOwner:!!userId &&
-        this.config.get<string>('VPS_FOREX_SCANNER_USER_ID','')===userId,
-      exactPepperstoneUsdDemo:ownerDemoDiscretionaryPausesAdvisory,
-      fullAutoActive:ownerDemoDiscretionaryPausesAdvisory,
-      model:multimodelLossStreakBrake,
-      portfolio:portfolioNetLossBrake,
-      fastStop:fastStopRegimeBrake,
+        this.config.get<string>('IREXPRO_OWNER_DEMO_LOSS_PAUSES_ADVISORY_ONLY', '') === 'enabled',
+      exactOwner: !!userId && this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId,
+      exactPepperstoneUsdDemo: ownerDemoDiscretionaryPausesAdvisory,
+      fullAutoActive: ownerDemoDiscretionaryPausesAdvisory,
+      model: multimodelLossStreakBrake,
+      portfolio: portfolioNetLossBrake,
+      fastStop: fastStopRegimeBrake,
     });
     timings.downstreamRiskMs = Math.max(0, Date.now() - downstreamRiskStartedAt);
     const selectedPrimaryForCommission =
@@ -2896,7 +2933,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             ? ['M1_MULTIMODEL_LOSS_STREAK_BRAKE']
             : []),
           ...(ownerLossPausePolicy.portfolioLossStreakBlocks && !ownerAcceptedPortfolioBrake
-            ? ['M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE'] : []),
+            ? ['M1_PORTFOLIO_NET_LOSS_STREAK_BRAKE']
+            : []),
           ...(recoveryCanaryRecentlyAuthorized ? ['M1_RECOVERY_CANARY_REPEAT_COOLDOWN'] : []),
           ...(recoveryCanaryHistoryUnavailable ? ['M1_RECOVERY_CANARY_HISTORY_UNAVAILABLE'] : []),
           ...(qualifiedContinuationCanaryRecentlyAuthorized
@@ -3142,37 +3180,50 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // never overrides entry admission. Every admitted or blocked Plan-B route
     // is remembered in the tactical decision ledger with this as-of annotation.
     let patternMemory: PatternMemoryObservation | null = null;
-    const patternRoute=multimodelDemo?.ensemble.strategyRoute ?? null;
-    const recallEnabled=
+    const patternRoute = multimodelDemo?.ensemble.strategyRoute ?? null;
+    const recallEnabled =
       professionalDemoPhase &&
-      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_PATTERN_MEMORY','')==='enabled' &&
-      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID','')===userId &&
-      !!userId && !!patternRoute &&
-      ['EARLY_TRANSITION','CONFIRMED_REVERSAL','TREND_CONTINUATION'].includes(patternRoute);
-    if(recallEnabled){
-      try{
-        const previous=await this.evidence.loadOwnerPepperstoneDemoPatternHistory({
-          userId,brokerConnectionId,instrument:candidate.instrument,
-          direction:candidate.direction,
-          strategyRoute:patternRoute as 'EARLY_TRANSITION'|'CONFIRMED_REVERSAL'|'TREND_CONTINUATION',
-          asOf:decisionTime,
+      this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_PATTERN_MEMORY', '') === 'enabled' &&
+      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId &&
+      !!userId &&
+      !!patternRoute &&
+      ['EARLY_TRANSITION', 'CONFIRMED_REVERSAL', 'TREND_CONTINUATION'].includes(patternRoute);
+    if (recallEnabled) {
+      try {
+        const previous = await this.evidence.loadOwnerPepperstoneDemoPatternHistory({
+          userId,
+          brokerConnectionId,
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          strategyRoute: patternRoute as
+            | 'EARLY_TRANSITION'
+            | 'CONFIRMED_REVERSAL'
+            | 'TREND_CONTINUATION',
+          asOf: decisionTime,
         });
-        patternMemory=recallPepperstoneDemoPattern({
-          now:decisionTime,
-          route:patternRoute as 'EARLY_TRANSITION'|'CONFIRMED_REVERSAL'|'TREND_CONTINUATION',
-          current:{
-            score:candidate.score,extensionAtr:features.extensionAtr,
-            volatilityScore:features.volatilityScore,
-            emaSeparation:Math.max(0,Math.min(1,candidate.alignedEmaSeparationAtr/2)),
-            mtfStrength:Math.max(0,Math.min(1,candidate.alignedM15)),
-            rsi14:features.rsi14,
+        patternMemory = recallPepperstoneDemoPattern({
+          now: decisionTime,
+          route: patternRoute as 'EARLY_TRANSITION' | 'CONFIRMED_REVERSAL' | 'TREND_CONTINUATION',
+          current: {
+            score: candidate.score,
+            extensionAtr: features.extensionAtr,
+            volatilityScore: features.volatilityScore,
+            emaSeparation: Math.max(0, Math.min(1, candidate.alignedEmaSeparationAtr / 2)),
+            mtfStrength: Math.max(0, Math.min(1, candidate.alignedM15)),
+            rsi14: features.rsi14,
           },
           previous,
         });
-      }catch(error){
+      } catch (error) {
         // A research-memory outage cannot approve or deny a broker trade.
-        this.logger.warn('DEMO pattern-memory lookup unavailable '+candidate.instrument+
-          ' '+candidate.direction+': '+(error as Error).message);
+        this.logger.warn(
+          'DEMO pattern-memory lookup unavailable ' +
+            candidate.instrument +
+            ' ' +
+            candidate.direction +
+            ': ' +
+            (error as Error).message,
+        );
       }
     }
 
@@ -3191,9 +3242,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // A mismatched broker account still receives MODEL_SCOPE_MISMATCH from
     // the immutable model's connection fingerprint; this is research ONLY.
     const ownerDemoEntryOutcomeShadow =
-      professionalDemoPhase && observedBrokerCandles &&
-      this.userId() === userId &&
-      multimodelDemo
+      professionalDemoPhase && observedBrokerCandles && this.userId() === userId && multimodelDemo
         ? scoreOwnerDemoEntryOutcome({
             brokerConnectionId,
             route: multimodelDemo.ensemble.strategyRoute,
@@ -3209,124 +3258,123 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
             },
           })
         : null;
-    const ownerDemoPreEntryCandleSnapshot = observedBrokerCandles ? {
-      artifact: 'owner-demo-broker-native-completed-candle-asof-v1',
-      researchOnly: true,
-      modifiesExecution: false,
-      grantsTradeAuthority: false,
-      observedAt: decisionTime.toISOString(),
-      latestCompletedM1BarOpen: features.latestM1OpenTime.toISOString(),
-      source: brokerMarketContext?.candleSource ?? null,
-      m1BodyRangeRatio: features.bodyRangeRatio,
-      m1CloseAligned:
-        candidate.direction === 'BUY'
-          ? 2 * features.closeLocation - 1
-          : 1 - 2 * features.closeLocation,
-      m1OpposingWickRatio:
-        candidate.direction === 'BUY'
-          ? features.upperWickRatio
-          : features.lowerWickRatio,
-      m1SupportiveWickRatio:
-        candidate.direction === 'BUY'
-          ? features.lowerWickRatio
-          : features.upperWickRatio,
-      m5AlignedLatestBodyPressure: candidate.alignedM5LatestBodyPressure ?? null,
-      m5AlignedBodyPressure3: candidate.alignedM5BodyPressure3,
-      m1AlignedMomentum3Atr: candidate.alignedMomentum3Atr,
-      alignedH1: candidate.alignedH1,
-      alignedH4: candidate.alignedH4,
-    } : null;
+    const ownerDemoPreEntryCandleSnapshot = observedBrokerCandles
+      ? {
+          artifact: 'owner-demo-broker-native-completed-candle-asof-v1',
+          researchOnly: true,
+          modifiesExecution: false,
+          grantsTradeAuthority: false,
+          observedAt: decisionTime.toISOString(),
+          latestCompletedM1BarOpen: features.latestM1OpenTime.toISOString(),
+          source: brokerMarketContext?.candleSource ?? null,
+          m1BodyRangeRatio: features.bodyRangeRatio,
+          m1CloseAligned:
+            candidate.direction === 'BUY'
+              ? 2 * features.closeLocation - 1
+              : 1 - 2 * features.closeLocation,
+          m1OpposingWickRatio:
+            candidate.direction === 'BUY' ? features.upperWickRatio : features.lowerWickRatio,
+          m1SupportiveWickRatio:
+            candidate.direction === 'BUY' ? features.lowerWickRatio : features.upperWickRatio,
+          m5AlignedLatestBodyPressure: candidate.alignedM5LatestBodyPressure ?? null,
+          m5AlignedBodyPressure3: candidate.alignedM5BodyPressure3,
+          m1AlignedMomentum3Atr: candidate.alignedMomentum3Atr,
+          alignedH1: candidate.alignedH1,
+          alignedH4: candidate.alignedH4,
+        }
+      : null;
 
     // This is evaluated and persisted BEFORE submitPaperDecision; the
     // independent research observation NEVER changes canExecute or broker
     // behavior. Verify USD explicitly: the existing loss-advisory USD check
     // is only run when an actual loss brake is active, not on clean entries.
-    const preDispatchResearchRequested = this.config.get<string>(
-      'IREXPRO_OWNER_DEMO_PREDISPATCH_FEE_CONFLUENCE_SHADOW',
-      '',
-    ) === 'enabled';
-    const preDispatchOwnerVerified = !!userId &&
-      this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId;
+    const preDispatchResearchRequested =
+      this.config.get<string>('IREXPRO_OWNER_DEMO_PREDISPATCH_FEE_CONFLUENCE_SHADOW', '') ===
+      'enabled';
+    const preDispatchOwnerVerified =
+      !!userId && this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId;
     let preDispatchUsdAccountVerified = ownerDemoDiscretionaryPausesAdvisory;
-    if (preDispatchResearchRequested && preDispatchOwnerVerified &&
-        professionalDemoPhase && canExecute && advisoryBrokerVerified &&
-        multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL' &&
-        !preDispatchUsdAccountVerified) {
+    if (
+      preDispatchResearchRequested &&
+      preDispatchOwnerVerified &&
+      professionalDemoPhase &&
+      canExecute &&
+      advisoryBrokerVerified &&
+      multimodelDemo?.ensemble.strategyRoute === 'CONFIRMED_REVERSAL' &&
+      !preDispatchUsdAccountVerified
+    ) {
       try {
         // Existing DB-backed verifier; not an order endpoint. Failure
         // abstains from research and does NOT veto a qualified trade.
-        preDispatchUsdAccountVerified =
-          await this.evidence.isPepperstoneUsdDemoBrokerConnection({
-            userId, brokerConnectionId,
-          });
+        preDispatchUsdAccountVerified = await this.evidence.isPepperstoneUsdDemoBrokerConnection({
+          userId,
+          brokerConnectionId,
+        });
       } catch (error) {
-        this.logger.warn('Owner DEMO pre-dispatch research scope unavailable: ' +
-          (error as Error).message);
+        this.logger.warn(
+          'Owner DEMO pre-dispatch research scope unavailable: ' + (error as Error).message,
+        );
       }
     }
-    const ownerDemoPreDispatchFeeConfluenceShadow =
-      evaluateOwnerDemoPreDispatchConfluence({
-        featureEnabled: preDispatchResearchRequested,
-        exactOwner: preDispatchOwnerVerified,
-        exactPepperstoneDemoBrokerVerified:
-          advisoryBrokerVerified && preDispatchUsdAccountVerified,
-        professionalDemoPhase,
-        candidateAdmittedForDispatch: canExecute,
-        decisionTime,
-        strategyRoute: multimodelDemo?.ensemble.strategyRoute ?? null,
-        m1Route: routeDecision.route,
-        trainedExpertState: multimodelDemo?.trainedExpert.state ?? null,
-        feeShadowReason: demoBrokerCommissionShadowGate?.reason ?? null,
-        feeShadowSampleCount: demoBrokerCommissionShadowGate?.sampleCount ?? null,
-        feeShadowAfterFeeExpectedR:
-          demoBrokerCommissionShadowGate?.afterFeeExpectedR ?? null,
-        feeShadowRequiredFloorR:
-          demoBrokerCommissionShadowGate?.minimumAfterFeeR ?? null,
-        alignedH1: candidate.alignedH1,
-        alignedM5: candidate.alignedM5,
-        negativePayoff: multimodelLossStreakBrake?.negativePayoff === true,
-        recentPayoffClosedTrades:
-          multimodelLossStreakBrake?.payoffClosedTrades ?? null,
-        recentClosedTrades:
-          multimodelLossStreakBrake?.recentClosedTrades ?? null,
-      });
+    const ownerDemoPreDispatchFeeConfluenceShadow = evaluateOwnerDemoPreDispatchConfluence({
+      featureEnabled: preDispatchResearchRequested,
+      exactOwner: preDispatchOwnerVerified,
+      exactPepperstoneDemoBrokerVerified: advisoryBrokerVerified && preDispatchUsdAccountVerified,
+      professionalDemoPhase,
+      candidateAdmittedForDispatch: canExecute,
+      decisionTime,
+      strategyRoute: multimodelDemo?.ensemble.strategyRoute ?? null,
+      m1Route: routeDecision.route,
+      trainedExpertState: multimodelDemo?.trainedExpert.state ?? null,
+      feeShadowReason: demoBrokerCommissionShadowGate?.reason ?? null,
+      feeShadowSampleCount: demoBrokerCommissionShadowGate?.sampleCount ?? null,
+      feeShadowAfterFeeExpectedR: demoBrokerCommissionShadowGate?.afterFeeExpectedR ?? null,
+      feeShadowRequiredFloorR: demoBrokerCommissionShadowGate?.minimumAfterFeeR ?? null,
+      alignedH1: candidate.alignedH1,
+      alignedM5: candidate.alignedM5,
+      negativePayoff: multimodelLossStreakBrake?.negativePayoff === true,
+      recentPayoffClosedTrades: multimodelLossStreakBrake?.payoffClosedTrades ?? null,
+      recentClosedTrades: multimodelLossStreakBrake?.recentClosedTrades ?? null,
+    });
     // Owner-only, account-verified research-on-new-signals. Unlike the 2026-11-23
     // hindsight study, these features are recorded at decision time BEFORE
     // broker dispatch. This diagnostic CANNOT alter canExecute, the original
     // model's entry decision, lot size or any LIVE account permission.
-    const prospectiveEnabled = this.config.get<string>(
-      'IREXPRO_OWNER_DEMO_PROSPECTIVE_ENTRY_QUALITY_SHADOW', '',
-    ) === 'enabled';
+    const prospectiveEnabled =
+      this.config.get<string>('IREXPRO_OWNER_DEMO_PROSPECTIVE_ENTRY_QUALITY_SHADOW', '') ===
+      'enabled';
     let prospectiveBrokerScopeVerified = false;
     if (prospectiveEnabled && professionalDemoPhase && preDispatchOwnerVerified) {
       try {
-        prospectiveBrokerScopeVerified = preDispatchUsdAccountVerified ||
-          await this.evidence.isPepperstoneUsdDemoBrokerConnection({
-            userId, brokerConnectionId,
-          });
+        prospectiveBrokerScopeVerified =
+          preDispatchUsdAccountVerified ||
+          (await this.evidence.isPepperstoneUsdDemoBrokerConnection({
+            userId,
+            brokerConnectionId,
+          }));
       } catch (error) {
-        this.logger.warn('Owner DEMO prospective quality scope could not be verified: ' +
-          (error as Error).message);
+        this.logger.warn(
+          'Owner DEMO prospective quality scope could not be verified: ' + (error as Error).message,
+        );
       }
     }
-    const ownerDemoProspectiveEntryQualityShadow =
-      evaluateOwnerDemoProspectiveEntryQuality({
-        enabled: prospectiveEnabled,
-        exactOwnerPepperstoneUsdDemoVerified: prospectiveBrokerScopeVerified,
-        decisionAt: decisionTime,
-        instrument: candidate.instrument,
-        direction: candidate.direction,
-        route: routeDecision.route,
-        strategyRoute: multimodelDemo?.ensemble.strategyRoute ?? null,
-        expertState: multimodelDemo?.trainedExpert.state ?? null,
-        paperExpectancySamples: expectancy.evidenceSamples,
-        entryConfidence: candidate.confidence,
-        m5Aligned: candidate.alignedM5,
-        m30DirectionalEfficiency: candidate.alignedM30DirectionalEfficiency ?? null,
-        h4Aligned: candidate.alignedH4,
-        originalAdmissionBlockers: governance.blockers,
-        professionalFallbackExecutionEnabled: professionalM1FallbackExecutable,
-      });
+    const ownerDemoProspectiveEntryQualityShadow = evaluateOwnerDemoProspectiveEntryQuality({
+      enabled: prospectiveEnabled,
+      exactOwnerPepperstoneUsdDemoVerified: prospectiveBrokerScopeVerified,
+      decisionAt: decisionTime,
+      instrument: candidate.instrument,
+      direction: candidate.direction,
+      route: routeDecision.route,
+      strategyRoute: multimodelDemo?.ensemble.strategyRoute ?? null,
+      expertState: multimodelDemo?.trainedExpert.state ?? null,
+      paperExpectancySamples: expectancy.evidenceSamples,
+      entryConfidence: candidate.confidence,
+      m5Aligned: candidate.alignedM5,
+      m30DirectionalEfficiency: candidate.alignedM30DirectionalEfficiency ?? null,
+      h4Aligned: candidate.alignedH4,
+      originalAdmissionBlockers: governance.blockers,
+      professionalFallbackExecutionEnabled: professionalM1FallbackExecutable,
+    });
 
     const persistStartedAt = Date.now();
     const decision = await this.evidence.recordDecision({
@@ -3427,9 +3475,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         multimodelLossStreakBrake: multimodelLossStreakBrake
           ? { ...multimodelLossStreakBrake }
           : null,
-        primaryEngineCode: professionalDemoPhase
-          ? MULTIMODEL_ENGINE_CODE
-          : 'irexpro-m1-tactical',
+        primaryEngineCode: professionalDemoPhase ? MULTIMODEL_ENGINE_CODE : 'irexpro-m1-tactical',
         m1TacticalRole: professionalDemoPhase ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE',
         multimodelEnsemble: multimodelDemo?.ensemble ?? null,
         // Clock-factor counterfactual is a persisted, prospective RESEARCH
@@ -3759,7 +3805,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       let approvedNow = false;
       try {
         const current = await this.evidence.loadPortfolioNetLossStreakBrake({
-          userId, brokerConnectionId, tradingSessionId: session!.id,
+          userId,
+          brokerConnectionId,
+          tradingSessionId: session!.id,
           evaluatedAt: new Date(),
         });
         approvedNow =
@@ -3767,16 +3815,20 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           current.reason === 'RECENT_PORTFOLIO_NET_LOSS_STREAK' &&
           current.latestClosedAt?.getTime() === ownerPortfolioBrakeIncidentClosedAt.getTime() &&
           !!this.demoPortfolioBrakeConsent &&
-          await this.demoPortfolioBrakeConsent.isOverrideActive({
-            userId, brokerConnectionId, sessionId: session!.id,
+          (await this.demoPortfolioBrakeConsent.isOverrideActive({
+            userId,
+            brokerConnectionId,
+            sessionId: session!.id,
             latestClosedAt: ownerPortfolioBrakeIncidentClosedAt,
-          });
+          }));
       } catch {
         approvedNow = false;
       }
       if (!approvedNow) {
         await this.evidence.markOutcomeState(
-          decisionId, 'RISK_REJECTED', new Date(),
+          decisionId,
+          'RISK_REJECTED',
+          new Date(),
           'M1_DEMO_PORTFOLIO_BRAKE_OWNER_CONSENT_EXPIRED_OR_REVOKED',
         );
         return;
@@ -3945,22 +3997,24 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId;
     let qualityRisk: ReturnType<typeof evaluatePepperstoneDemoAdvisoryQuality> | null = null;
     if (qualityRiskEnabled && multimodelDemo) {
-      let recent: Awaited<ReturnType<
-        M1TacticalEvidenceService['loadOwnerPepperstoneDemoAdvisoryRecentNet']
-      >> | null = null;
+      let recent: Awaited<
+        ReturnType<M1TacticalEvidenceService['loadOwnerPepperstoneDemoAdvisoryRecentNet']>
+      > | null = null;
       try {
         recent = await this.evidence.loadOwnerPepperstoneDemoAdvisoryRecentNet({
-          userId, brokerConnectionId, instrument: candidate.instrument,
+          userId,
+          brokerConnectionId,
+          instrument: candidate.instrument,
           direction: candidate.direction,
           strategyRoute: multimodelDemo.ensemble.strategyRoute as
-            'CONFIRMED_REVERSAL'|'EARLY_TRANSITION',
+            | 'CONFIRMED_REVERSAL'
+            | 'EARLY_TRANSITION',
           asOf: decisionTime,
         });
       } catch (error) {
         // Missing history must not restore full-size DOUBLE_ABSTAIN entries.
         this.logger.warn(
-          'DEMO advisory historical after-fee evidence unavailable: ' +
-            (error as Error).message,
+          'DEMO advisory historical after-fee evidence unavailable: ' + (error as Error).message,
         );
       }
       qualityRisk = evaluatePepperstoneDemoAdvisoryQuality({
@@ -3970,7 +4024,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         expertDirection: multimodelDemo.trainedExpert.direction,
         signalDirection: candidate.direction,
         expertProbability: multimodelDemo.trainedExpert.meanOpportunityProbability,
-        decisionTime, stopDistance: candidate.stopDistance,
+        decisionTime,
+        stopDistance: candidate.stopDistance,
         m5: brokerMarketContext?.m5,
         h1: brokerMarketContext?.h1,
         recent,
@@ -4026,10 +4081,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // and full broker stop-risk, drawdown, margin and model safeguards remain.
     // This NEVER guarantees 4/4.5/6/7 actual lots or grants LIVE authority.
     const ongoingSevenLot = ownerPepperstoneDemoOngoingSevenLot({
-      enabled: this.config.get<string>(
-        'IREXPRO_OWNER_PEPPERSTONE_DEMO_ONGOING_7LOT_20261120',
-        '',
-      ) === 'enabled',
+      enabled:
+        this.config.get<string>('IREXPRO_OWNER_PEPPERSTONE_DEMO_ONGOING_7LOT_20261120', '') ===
+        'enabled',
       userId,
       configuredOwnerId: this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', ''),
       brokerConnectionId,
@@ -4043,10 +4097,9 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       now: new Date(),
     });
     const historicNoonLotTrial = ownerPepperstoneDemoNoonLotTrial({
-      enabled: this.config.get<string>(
-        'IREXPRO_OWNER_PEPPERSTONE_DEMO_4PLUS_UNTIL_NOON_20261120',
-        '',
-      ) === 'enabled',
+      enabled:
+        this.config.get<string>('IREXPRO_OWNER_PEPPERSTONE_DEMO_4PLUS_UNTIL_NOON_20261120', '') ===
+        'enabled',
       userId,
       configuredOwnerId: this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', ''),
       brokerConnectionId,
@@ -4061,9 +4114,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     });
     // New explicit ongoing permission wins only on the same verified DEMO;
     // preserve the historical finite-trial behavior for historical tests.
-    const noonLotTrial = ongoingSevenLot.eligible
-      ? ongoingSevenLot
-      : historicNoonLotTrial;
+    const noonLotTrial = ongoingSevenLot.eligible ? ongoingSevenLot : historicNoonLotTrial;
     const noonLotTrialForAdmittedReversal =
       noonLotTrial.eligible &&
       qualityRiskEnabled &&
@@ -4087,23 +4138,23 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const qualityAdjustedVolumeCap = noonLotTrialForAdmittedReversal
       ? maxRequestedBeforeQuality
       : qualityRisk
-        ? Math.min(maxRequestedBeforeQuality,
-            maxRequestedBeforeQuality * qualityRisk.riskFraction)
+        ? Math.min(maxRequestedBeforeQuality, maxRequestedBeforeQuality * qualityRisk.riskFraction)
         : maxRequestedBeforeQuality;
     // Owner DEMO only: seven-lot trial can bypass the pre-existing advisory
     // quality multiplier. Restore the STANDARD requested four-lot CEILING
     // on weak Confirmed Reversal when independent pre-decision broker fee
     // or completed recent-loss evidence ALSO warns. No entry veto/lot floor.
     const weakReversalCap = evaluateOwnerDemoWeakReversalCap({
-      enabled: this.config.get<string>(
-        'IREXPRO_OWNER_DEMO_WEAK_REVERSAL_4LOT_CEILING',
-        '',
-      ) === 'enabled',
-      exactOwnerVerified: qualityRiskEnabled && pepperstoneDemoRiskPilot &&
+      enabled:
+        this.config.get<string>('IREXPRO_OWNER_DEMO_WEAK_REVERSAL_4LOT_CEILING', '') === 'enabled',
+      exactOwnerVerified:
+        qualityRiskEnabled &&
+        pepperstoneDemoRiskPilot &&
         !!userId &&
         this.config.get<string>('VPS_FOREX_SCANNER_USER_ID', '') === userId,
       ongoingSevenLotEligible: ongoingSevenLot.eligible && noonLotTrialForAdmittedReversal,
-      continuousDemoAlternate: demoAlternativeTrial?.eligible === true &&
+      continuousDemoAlternate:
+        demoAlternativeTrial?.eligible === true &&
         demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT &&
         demoAlternativeTrial.continuousEvidence === true,
       route: multimodelDemo?.ensemble.strategyRoute ?? null,
@@ -4120,8 +4171,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // broker SL/TP change. Require independent completed native M5 evidence.
     const m5ReversalSoftCap = evaluatePepperstoneDemoM5ReversalSoftCap({
       enabled:
-        this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_M5_REVERSAL_SOFT_CAP', '') ===
-          'enabled',
+        this.config.get<string>('IREXPRO_PEPPERSTONE_DEMO_M5_REVERSAL_SOFT_CAP', '') === 'enabled',
       ownerVerifiedUsdDemo: qualityRiskEnabled,
       route: multimodelDemo?.ensemble.strategyRoute ?? null,
       alignedM5: Number.isFinite(candidate.alignedM5) ? candidate.alignedM5 : null,
@@ -4136,9 +4186,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         ? Math.min(m5ReversalSoftCap.requestedLotCap, 0.2)
         : m5ReversalSoftCap.requestedLotCap,
       pepperstoneDemoRiskPilot,
-      noonLotTrialForAdmittedReversal
-        ? noonLotTrial.maximumPrescreenRiskPercent
-        : undefined,
+      noonLotTrialForAdmittedReversal ? noonLotTrial.maximumPrescreenRiskPercent : undefined,
     );
     if (!currencyExposureGuard.allowed) {
       const reason = currencyExposureGuard.productFloorBlocked
@@ -4208,356 +4256,375 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     // Retired finite trials still expire at the last application dispatch.
     // The explicitly configured ongoing DEMO permission has no expiry and
     // cannot carry a stale historical noon artifact into new trade intents.
-    if (noonLotTrialForAdmittedReversal && noonLotTrial.endsAt !== null &&
-        Date.now() >= Date.parse(noonLotTrial.endsAt)) {
+    if (
+      noonLotTrialForAdmittedReversal &&
+      noonLotTrial.endsAt !== null &&
+      Date.now() >= Date.parse(noonLotTrial.endsAt)
+    ) {
       await this.evidence.markOutcomeState(
-        decisionId, 'RISK_REJECTED', new Date(),
+        decisionId,
+        'RISK_REJECTED',
+        new Date(),
         'OWNER_PEPPERSTONE_DEMO_NOON_LOT_TRIAL_EXPIRED_BEFORE_DISPATCH',
       );
       return;
     }
     try {
-      const result = await this.aiSignalService.receiveSignal(brandServerM1Signal({
-        signalId,
-        userId,
-        tradingSessionId: session.id,
-        brokerConnectionId,
-        instrument: candidate.instrument,
-        direction: candidate.direction,
-        confidenceScore: useM5EarlyTransitionHandoff
-          ? m5EarlyTransitionEvidence.ensembleScore
-          : professionalDemoPhase && multimodelDemo && !useProfessionalM1Fallback
-            ? multimodelSignalConfidence(
-                {
-                  ensemble: multimodelDemo.ensemble,
-                  trainedExpert: multimodelDemo.trainedExpert,
-                },
-                multimodelDemo.authority,
-              )
-            : candidate.confidence,
-        suggestedEntryPrice: candidate.entry,
-        suggestedStopLoss: canonicalSignalPrice(candidate.stopLoss),
-        suggestedTakeProfit: canonicalSignalPrice(candidate.takeProfit),
-        suggestedVolume: finalExecutionVolumeCap,
-        timeframe: 'M1',
-        strategyCode:
-          professionalDemoPhase && !useProfessionalM1Fallback
-            ? 'external-irexpro-multimodel-ensemble'
-            : 'external-irexpro-m1-tactical',
-        marketRegime: useM5EarlyTransitionHandoff
-          ? 'TRANSITION'
-          : professionalDemoPhase && multimodelDemo && !useProfessionalM1Fallback
-            ? multimodelDemo.ensemble.strategyRoute === 'TREND_CONTINUATION'
-              ? 'TREND_HEALTHY'
-              : multimodelDemo.ensemble.strategyRoute === 'CONFIRMED_REVERSAL'
-                ? 'REVERSAL'
-                : 'TRANSITION'
-            : m1RiskMarketRegime(routeDecision.route),
-        volatilityScore: features.volatilityScore,
-        generatedAt: new Date(decisionTime),
-        modelVersion:
-          professionalDemoPhase && !useProfessionalM1Fallback
-            ? `external-provider/${MULTIMODEL_ENGINE_CODE}/demo-v1`
-            : `external-provider/irexpro-m1-tactical/${candidate.policyVersion}`,
-        metadata: {
-          signal_source: 'EXTERNAL_PROVIDER',
-          external_provider_code:
-            professionalDemoPhase && !useProfessionalM1Fallback
-              ? MULTIMODEL_ENGINE_CODE
-              : 'irexpro-m1-tactical',
-          primary_engine_code:
-            professionalDemoPhase && !useProfessionalM1Fallback
-              ? MULTIMODEL_ENGINE_CODE
-              : 'irexpro-m1-tactical',
-          m1_tactical_role: useProfessionalM1Fallback
-            ? 'PRIMARY_FALLBACK'
-            : professionalDemoPhase
-              ? 'TIMING_SPECIALIST'
-              : 'PRIMARY_RESEARCH_ROUTE',
-          m1_professional_fallback: useProfessionalM1Fallback,
-          m1_professional_fallback_tier: professionalM1Fallback?.tier ?? null,
-          m1_professional_fallback_reason: professionalM1Fallback?.reason ?? null,
-          m1_professional_fallback_lot_cap:
-            professionalM1Fallback?.eligible === true ? professionalM1Fallback.lotCap : null,
-          multimodel_plan_b_score: useM5EarlyTransitionHandoff
+      const result = await this.aiSignalService.receiveSignal(
+        brandServerM1Signal({
+          signalId,
+          userId,
+          tradingSessionId: session.id,
+          brokerConnectionId,
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          confidenceScore: useM5EarlyTransitionHandoff
             ? m5EarlyTransitionEvidence.ensembleScore
-            : (multimodelDemo?.ensemble.ensembleScore ?? null),
-          multimodel_plan_b_route: useM5EarlyTransitionHandoff
-            ? m5EarlyTransitionEvidence.strategyRoute
-            : (multimodelDemo?.ensemble.strategyRoute ?? null),
-          multimodel_plan_b_expected_r: useM5EarlyTransitionHandoff
-            ? m5EarlyTransitionEvidence.netExpectedR
-            : (multimodelDemo?.ensemble.expectedR ?? null),
-          multimodel_plan_b_paper_admitted: useM5EarlyTransitionHandoff
-            ? m5EarlyTransitionEvidence.paperAdmitted
-            : (multimodelDemo?.ensemble.paperAdmitted ?? null),
-          multimodel_governance_net_expected_r: multimodelDemo?.governance.netExpectedR ?? null,
-          multimodel_trained_expert_state: multimodelDemo?.trainedExpert.state ?? null,
-          multimodel_trained_expert_direction: multimodelDemo?.trainedExpert.direction ?? null,
-          // Server-frozen primary-route semantic handoff proof. Must be
-          // completed broker-native expert evidence, never JSON caller claims.
-          multimodel_trained_expert_native:
-            multimodelDemo?.trainedExpert.allBrokerNative === true,
-          multimodel_trained_expert_freshness_seconds:
-            multimodelDemo?.trainedExpert.freshnessSeconds ?? null,
-          multimodel_primary_reversal_timing_bridge:
-            multimodelDemo?.authority.reversalTimingBridge === true,
-          multimodel_trained_expert_confidence:
-            multimodelDemo?.trainedExpert.ensembleConfidence ?? null,
-          multimodel_trained_expert_opportunity_probability:
-            multimodelDemo?.trainedExpert.meanOpportunityProbability ?? null,
-          multimodel_trained_expert_long_votes: multimodelDemo?.trainedExpert.longVotes ?? null,
-          multimodel_trained_expert_short_votes: multimodelDemo?.trainedExpert.shortVotes ?? null,
-          multimodel_execution_authority: professionalDemoPhase
-            ? useProfessionalM1Fallback
-              ? 'M1_PROFESSIONAL_FALLBACK'
-              : 'DEMO_FULL_AUTO_PROMOTED'
-            : null,
-          multimodel_execution_authority_path: demoAlternativeTrial?.eligible
-            ? demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
-              ? 'DEMO_EXPERT_COUNTER_ENTRY_PILOT'
-              : demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT
-                ? demoAlternativeTrial.continuousEvidence
-                  ? 'DEMO_CONTINUOUS_REVERSAL_EARLY_EVIDENCE'
-                  : 'DEMO_ADVISORY_REVERSAL_EARLY_ENTRY_PILOT'
-                : 'DEMO_ALTERNATIVE_TIMING_TRIAL'
-            : useProfessionalM1Fallback
-              ? professionalM1Fallback?.tier
-              : useM5EarlyTransitionHandoff
-                ? 'M5_EARLY_TRANSITION_HANDOFF'
-                : useExtensionExhaustionDemoScout
-                  ? 'EXTENSION_EXHAUSTION_DEMO_SCOUT'
-                  : (multimodelDemo?.authority.authorityPath ?? null),
-          m5_early_transition_handoff: useM5EarlyTransitionHandoff,
-          m5_early_transition_handoff_reason: useM5EarlyTransitionHandoff
-            ? m5EarlyTransitionHandoff.reason
-            : null,
-          m5_early_transition_lot_cap: useM5EarlyTransitionHandoff
-            ? m5EarlyTransitionHandoff.lotCap
-            : null,
-          m5_early_transition_net_expected_r: useM5EarlyTransitionHandoff
-            ? m5EarlyTransitionEvidence.netExpectedR
-            : null,
-          m5_early_transition_ensemble_score: useM5EarlyTransitionHandoff
-            ? m5EarlyTransitionEvidence.ensembleScore
-            : null,
-          m5_early_transition_market_bar_time: useM5EarlyTransitionHandoff
-            ? m5EarlyTransitionEvidence.marketBarTime.toISOString()
-            : null,
-          extension_exhaustion_demo_scout: useExtensionExhaustionDemoScout,
-          extension_exhaustion_demo_scout_artifact: extensionExhaustionDemoScout?.artifact ?? null,
-          extension_exhaustion_demo_scout_reason: extensionExhaustionDemoScout?.reason ?? null,
-          extension_exhaustion_demo_scout_lot_cap: useExtensionExhaustionDemoScout
-            ? extensionExhaustionDemoScout!.lotCap
-            : null,
-          extension_exhaustion_demo_scout_samples:
-            extensionExhaustionDemoScout?.reliability?.samples ?? 0,
-          extension_exhaustion_demo_scout_average_r:
-            extensionExhaustionDemoScout?.reliability?.averageNetR ?? null,
-          extension_exhaustion_demo_scout_profit_factor:
-            extensionExhaustionDemoScout?.reliability?.profitFactor ?? null,
-          extension_exhaustion_demo_scout_recent3_r:
-            extensionExhaustionDemoScout?.reliability?.recent3R ?? null,
-          multimodel_rescue_volume_cap: multimodelDemo?.authority.rescueVolumeCap ?? null,
-          external_provider_paper_only: true,
-          production_eligible: false,
-          m1_route_reliability_reason: routeReliability?.reason ?? null,
-          ...(routeReliability?.reason === 'PROFIT_GIVEBACK_CAUTION'
-            ? {
-                // First verified winner→loser giveback is a soft brake, not an
-                // overfit hard veto. The authoritative position sizer applies
-                // this 0.5x multiplier to the risk budget; a repeated recent
-                // giveback is blocked earlier by PROFIT_GIVEBACK_LOSS_STREAK.
-                adaptive_risk_multiplier: 0.5,
-              }
-            : {}),
-          // Immutable entry snapshot consumed by the v8.5 post-entry learner.
-          // Keep the same feature scale used by the historical Plan-B/v7
-          // training stream: candidate score + direction-aligned EMA/MTF
-          // strength, raw RSI, extension and volatility.
-          feature_candidate_score: candidate.score,
-          feature_extension_atr: features.extensionAtr,
-          feature_volatility_score: features.volatilityScore,
-          feature_ema_separation: Math.max(0, Math.min(1, candidate.alignedEmaSeparationAtr / 2)),
-          feature_mtf_strength: Math.max(0, Math.min(1, candidate.alignedM15)),
-          feature_rsi14: features.rsi14,
-          m1_pattern_memory_artifact: patternMemory?.artifact ?? null,
-          m1_pattern_memory_matching_episodes: patternMemory?.matchingEpisodes ?? null,
-          m1_pattern_memory_hypothesis: patternMemory?.hypothesis ?? null,
-          m1_pattern_memory_average_net_r: patternMemory?.averageNetR ?? null,
-          m1_pattern_memory_positive_then_lost: patternMemory?.positiveThenLost ?? null,
-          m1_pattern_memory_adverse_then_won: patternMemory?.adverseThenWon ?? null,
-          m1_pattern_memory_near_stop_then_won: patternMemory?.nearStopThenWon ?? null,
-          m1_pattern_memory_shadow_only: patternMemory?.shadowOnly ?? null,
-          position_sizing_tier:
-            this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
-              ? m1ProfessionalSizingTier(candidate.confidence)
-              : 'RESEARCH',
-          m1_guarded_pullback_continuation: guardedPullbackRecovery,
-          m1_tactical_route: routeDecision.route,
-          // This is the paired tactical snapshot BEFORE submitting an order.
-          // It is not the opposite-side trained-expert vote, a broker fill
-          // forecast, or independent order authority.
-          m1_opposite_tactical_route_asof: oppositeRouteAtSignal?.route ?? null,
-          m1_opposite_tactical_reason_asof: oppositeRouteAtSignal?.reason ?? null,
-          m1_opposite_tactical_direction_asof:
-            oppositeRouteAtSignal ? (candidate.direction === 'BUY' ? 'SELL' : 'BUY') : null,
-          m1_opposite_tactical_eligible_asof: oppositeRouteAtSignal?.eligible ?? null,
-          m1_opposite_tactical_snapshot_time: decisionTime.toISOString(),
-          m1_opposite_tactical_shadow_only: true,
-          m1_policy_version: candidate.policyVersion,
-          m1_rollout_policy_version: this.rolloutPolicy.version,
-          m1_rollout_phase: this.rolloutPolicy.phase,
-          m1_shadow_pair_side_reliability_artifact: scoutReliabilityArtifact,
-          m1_shadow_pair_side_reliability_reason: shadowPairSideReliability?.reason ?? null,
-          m1_shadow_pair_side_reliability_samples: shadowPairSideReliability?.samples ?? 0,
-          m1_shadow_pair_side_reliability_average_r: shadowPairSideReliability?.averageNetR ?? null,
-          m1_shadow_pair_side_reliability_profit_factor:
-            shadowPairSideReliability?.profitFactor ?? null,
-          m1_shadow_pair_side_reliability_positive_fraction:
-            shadowPairSideReliability?.positiveFraction ?? null,
-          m1_evidence_qualified_scout_eligible:
-            evidenceQualifiedScout && shadowPairSideReliability?.eligible === true,
-          m1_scout_reliability_tier: scoutReliabilityTier,
-          m1_scout_broker_native_reliability_samples:
-            shadowPairSideReliability?.brokerNativeSampleCount ?? 0,
-          m1_scout_bootstrap_reliability_samples:
-            shadowPairSideReliability?.bootstrapSampleCount ?? 0,
-          m1_scout_evidence_connection_ids: shadowPairSideReliability?.evidenceConnectionIds ?? [
-            brokerConnectionId,
-          ],
-          m1_scout_requested_volume_cap: executionVolumeCap,
-          m1_scout_execution_volume_cap: finalExecutionVolumeCap,
-          m1_high_conviction_ceiling_artifact: highConvictionCeiling.artifact,
-          m1_high_conviction_ceiling_eligible: highConvictionCeiling.eligible,
-          m1_high_conviction_ceiling_reason: highConvictionCeiling.reason,
-          m1_high_conviction_ceiling_lots: highConvictionCeiling.maxLotCeiling,
-          m1_high_conviction_stop_unchanged: true,
-          m1_advisory_quality_risk_artifact: qualityRisk?.artifact ?? null,
-          m1_advisory_quality_risk_fraction: qualityRisk?.riskFraction ?? null,
-          m1_advisory_quality_risk_rationale: qualityRisk?.rationale ?? null,
-          m1_advisory_quality_m5_direction: qualityRisk?.m5Direction ?? null,
-          m1_advisory_quality_h1_direction: qualityRisk?.h1Direction ?? null,
-          m1_advisory_quality_recent_net_samples: qualityRisk?.recentSamples ?? null,
-          m1_advisory_quality_recent_average_net_r: qualityRisk?.recentAverageNetR ?? null,
-          m1_owner_demo_weak_reversal_ceiling_artifact: weakReversalCap.artifact,
-          m1_owner_demo_weak_reversal_ceiling_applied: weakReversalCap.applied,
-          m1_owner_demo_weak_reversal_ceiling_reason: weakReversalCap.reason,
-          m1_owner_demo_weak_reversal_ceiling_before_lots: weakReversalCap.originalRequestedLots,
-          m1_owner_demo_weak_reversal_ceiling_after_lots: weakReversalCap.requestedLotCap,
-          m1_owner_demo_weak_reversal_ceiling_fee_warning: weakReversalCap.feeWarningAccepted,
-          m1_owner_demo_weak_reversal_ceiling_loss_warning: weakReversalCap.lossWarningAccepted,
-          m1_reversal_m5_soft_cap_artifact: m5ReversalSoftCap.artifact,
-          m1_reversal_m5_soft_cap_applied: m5ReversalSoftCap.applied,
-          m1_reversal_m5_soft_cap_reason: m5ReversalSoftCap.reason,
-          m1_reversal_m5_soft_cap_aligned_m5: m5ReversalSoftCap.alignedM5,
-          m1_reversal_m5_soft_cap_before_lots: m5ReversalSoftCap.originalLotCap,
-          m1_reversal_m5_soft_cap_after_lots: m5ReversalSoftCap.requestedLotCap,
-          m1_pepperstone_demo_reentry_and_risk_pilot: pepperstoneDemoRiskPilot,
-          m1_pepperstone_demo_alternative_trial: demoAlternativeTrial?.eligible === true,
-          m1_pepperstone_demo_advisory_alternates:
-            demoAlternativeTrial?.eligible === true &&
-            demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT,
-          m1_pepperstone_demo_continuous_evidence:
-            demoAlternativeTrial?.eligible === true &&
-            demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT &&
-            demoAlternativeTrial.continuousEvidence === true,
-          m1_pepperstone_demo_counter_pilot:
-            demoAlternativeTrial?.eligible === true &&
-            demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT,
-          m1_pepperstone_demo_counter_source_side:
-            demoAlternativeTrial?.eligible &&
-            demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
-              ? demoAlternativeTrial.sourceSide
-              : null,
-          m1_pepperstone_demo_counter_source_route:
-            demoAlternativeTrial?.eligible &&
-            demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
-              ? demoAlternativeTrial.sourceRoute
-              : null,
-          m1_pepperstone_demo_alternative_trial_artifact: demoAlternativeTrial?.eligible
-            ? demoAlternativeTrial.artifact
-            : null,
-          m1_pepperstone_demo_alternative_trial_expires_at: demoAlternativeTrial?.eligible
-            ? demoAlternativeTrial.endsAt
-            : null,
-          m1_pepperstone_demo_max_risk_percent: pepperstoneDemoRiskPilot
-            ? noonLotTrialForAdmittedReversal
-              ? noonLotTrial.maximumPrescreenRiskPercent
-              : 0.25
-            : null,
-          // Distinct artifact: never falsely label a new ongoing trade as
-          // part of the expired 03:57–12:00 UTC size experiment.
-          m1_owner_demo_noon_lot_trial_artifact:
-            noonLotTrialForAdmittedReversal && !ongoingSevenLot.eligible
-              ? OWNER_DEMO_NOON_LOT_TRIAL_ARTIFACT : null,
-          m1_owner_demo_noon_lot_trial_expires_at:
-            noonLotTrialForAdmittedReversal && !ongoingSevenLot.eligible
-              ? noonLotTrial.endsAt : null,
-          m1_owner_demo_noon_lot_trial_max_requested_lots:
-            noonLotTrialForAdmittedReversal && !ongoingSevenLot.eligible
-              ? noonLotTrial.maxRequestedLots : null,
-          m1_owner_demo_noon_lot_trial_advisory_quality_fraction:
-            noonLotTrialForAdmittedReversal && !ongoingSevenLot.eligible
-              ? (qualityRisk?.riskFraction ?? null) : null,
-          m1_owner_demo_ongoing_seven_lot_artifact:
-            noonLotTrialForAdmittedReversal && ongoingSevenLot.eligible
-              ? OWNER_DEMO_ONGOING_SEVEN_LOT_ARTIFACT : null,
-          m1_owner_demo_ongoing_seven_lot_max_requested_lots:
-            noonLotTrialForAdmittedReversal && ongoingSevenLot.eligible
-              ? ongoingSevenLot.maxRequestedLots : null,
-          m1_pepperstone_demo_aligned_target_percent: pepperstoneDemoRiskPilot
-            ? M1_PEPPERSTONE_DEMO_ALIGNED_CURRENCY_TARGET_PERCENT
-            : null,
-          m1_pepperstone_demo_pre_screen_lot_cap: finalExecutionVolumeCap,
-          m1_currency_exposure_capacity: currencyExposureGuard.decision.capacity,
-          m1_currency_exposure_reason: currencyExposureGuard.decision.reason,
-          m1_currency_exposure_projected_aligned_risk:
-            currencyExposureGuard.decision.projectedAlignedRisk,
-          m1_currency_exposure_projected_aligned_risk_percent:
-            currencyExposureGuard.decision.projectedAlignedRiskPercent,
-          m1_currency_exposure_allocated_capital: currencyExposureGuard.decision.allocatedCapital,
-          m1_meaningful_scout_reliability_artifact: meaningfulScoutReliability
-            ? M1_MEANINGFUL_SCOUT_RELIABILITY_ARTIFACT
-            : null,
-          m1_meaningful_scout_reliability_samples: meaningfulScoutReliability?.samples ?? 0,
-          m1_meaningful_scout_reliability_recent_net_r:
-            meaningfulScoutReliability?.recentNetR ?? null,
-          m1_provisional_scout_reliability_artifact: provisionalScoutReliability
-            ? M1_PROVISIONAL_SCOUT_RELIABILITY_ARTIFACT
-            : null,
-          m1_provisional_scout_reliability_samples: provisionalScoutReliability?.samples ?? 0,
-          m1_provisional_scout_reliability_recent_net_r:
-            provisionalScoutReliability?.recentNetR ?? null,
-          m1_micro_drift_only_rescue: microDriftOnlyRescue,
-          m1_local_impulse_drift_only_rescue: localImpulseDriftOnlyRescue,
-          m1_decision_id: decisionId,
-          m1_target_r_geometry: candidate.grossExpectedR,
-          m1_expectancy_artifact: governance.expectancy.artifact,
-          m1_expectancy_source: governance.expectancy.source,
-          m1_heuristic_prior_expected_r: governance.expectancy.heuristicPriorExpectedR,
-          m1_statistical_expected_r: governance.expectancy.statisticalExpectedR,
-          m1_expectancy_implied_win_probability: governance.expectancy.impliedWinProbability,
-          m1_expectancy_evidence_samples: governance.expectancy.evidenceSamples,
-          m1_expectancy_evidence_average_realized_r: governance.expectancy.evidenceAverageRealizedR,
-          m1_expectancy_recent_payoff_average_r: governance.expectancy.recentPayoffAverageR,
-          m1_gross_expected_r: candidate.grossExpectedR,
-          m1_execution_cost_r: governance.genericGovernance.estimatedExecutionCostR,
-          m1_execution_cost_source: governance.genericGovernance.executionCostSource,
-          m1_net_expected_r: governance.netExpectedR,
-          m1_route_net_expected_r_floor:
-            this.rolloutPolicy.routeNetExpectedRFloors[
-              routeDecision.route as Exclude<M1TacticalRoute, 'ABSTAIN'>
-            ],
-          m1_execution_authority: professionalDemoPhase
-            ? useProfessionalM1Fallback
-              ? 'DEMO_FULL_AUTO_M1_FALLBACK'
-              : useExtensionExhaustionDemoScout
-                ? 'DEMO_EXTENSION_EXHAUSTION_SCOUT'
+            : professionalDemoPhase && multimodelDemo && !useProfessionalM1Fallback
+              ? multimodelSignalConfidence(
+                  {
+                    ensemble: multimodelDemo.ensemble,
+                    trainedExpert: multimodelDemo.trainedExpert,
+                  },
+                  multimodelDemo.authority,
+                )
+              : candidate.confidence,
+          suggestedEntryPrice: candidate.entry,
+          suggestedStopLoss: canonicalSignalPrice(candidate.stopLoss),
+          suggestedTakeProfit: canonicalSignalPrice(candidate.takeProfit),
+          suggestedVolume: finalExecutionVolumeCap,
+          timeframe: 'M1',
+          strategyCode:
+            professionalDemoPhase && !useProfessionalM1Fallback
+              ? 'external-irexpro-multimodel-ensemble'
+              : 'external-irexpro-m1-tactical',
+          marketRegime: useM5EarlyTransitionHandoff
+            ? 'TRANSITION'
+            : professionalDemoPhase && multimodelDemo && !useProfessionalM1Fallback
+              ? multimodelDemo.ensemble.strategyRoute === 'TREND_CONTINUATION'
+                ? 'TREND_HEALTHY'
+                : multimodelDemo.ensemble.strategyRoute === 'CONFIRMED_REVERSAL'
+                  ? 'REVERSAL'
+                  : 'TRANSITION'
+              : m1RiskMarketRegime(routeDecision.route),
+          volatilityScore: features.volatilityScore,
+          generatedAt: new Date(decisionTime),
+          modelVersion:
+            professionalDemoPhase && !useProfessionalM1Fallback
+              ? `external-provider/${MULTIMODEL_ENGINE_CODE}/demo-v1`
+              : `external-provider/irexpro-m1-tactical/${candidate.policyVersion}`,
+          metadata: {
+            signal_source: 'EXTERNAL_PROVIDER',
+            external_provider_code:
+              professionalDemoPhase && !useProfessionalM1Fallback
+                ? MULTIMODEL_ENGINE_CODE
+                : 'irexpro-m1-tactical',
+            primary_engine_code:
+              professionalDemoPhase && !useProfessionalM1Fallback
+                ? MULTIMODEL_ENGINE_CODE
+                : 'irexpro-m1-tactical',
+            m1_tactical_role: useProfessionalM1Fallback
+              ? 'PRIMARY_FALLBACK'
+              : professionalDemoPhase
+                ? 'TIMING_SPECIALIST'
+                : 'PRIMARY_RESEARCH_ROUTE',
+            m1_professional_fallback: useProfessionalM1Fallback,
+            m1_professional_fallback_tier: professionalM1Fallback?.tier ?? null,
+            m1_professional_fallback_reason: professionalM1Fallback?.reason ?? null,
+            m1_professional_fallback_lot_cap:
+              professionalM1Fallback?.eligible === true ? professionalM1Fallback.lotCap : null,
+            multimodel_plan_b_score: useM5EarlyTransitionHandoff
+              ? m5EarlyTransitionEvidence.ensembleScore
+              : (multimodelDemo?.ensemble.ensembleScore ?? null),
+            multimodel_plan_b_route: useM5EarlyTransitionHandoff
+              ? m5EarlyTransitionEvidence.strategyRoute
+              : (multimodelDemo?.ensemble.strategyRoute ?? null),
+            multimodel_plan_b_expected_r: useM5EarlyTransitionHandoff
+              ? m5EarlyTransitionEvidence.netExpectedR
+              : (multimodelDemo?.ensemble.expectedR ?? null),
+            multimodel_plan_b_paper_admitted: useM5EarlyTransitionHandoff
+              ? m5EarlyTransitionEvidence.paperAdmitted
+              : (multimodelDemo?.ensemble.paperAdmitted ?? null),
+            multimodel_governance_net_expected_r: multimodelDemo?.governance.netExpectedR ?? null,
+            multimodel_trained_expert_state: multimodelDemo?.trainedExpert.state ?? null,
+            multimodel_trained_expert_direction: multimodelDemo?.trainedExpert.direction ?? null,
+            // Server-frozen primary-route semantic handoff proof. Must be
+            // completed broker-native expert evidence, never JSON caller claims.
+            multimodel_trained_expert_native:
+              multimodelDemo?.trainedExpert.allBrokerNative === true,
+            multimodel_trained_expert_freshness_seconds:
+              multimodelDemo?.trainedExpert.freshnessSeconds ?? null,
+            multimodel_primary_reversal_timing_bridge:
+              multimodelDemo?.authority.reversalTimingBridge === true,
+            multimodel_trained_expert_confidence:
+              multimodelDemo?.trainedExpert.ensembleConfidence ?? null,
+            multimodel_trained_expert_opportunity_probability:
+              multimodelDemo?.trainedExpert.meanOpportunityProbability ?? null,
+            multimodel_trained_expert_long_votes: multimodelDemo?.trainedExpert.longVotes ?? null,
+            multimodel_trained_expert_short_votes: multimodelDemo?.trainedExpert.shortVotes ?? null,
+            multimodel_execution_authority: professionalDemoPhase
+              ? useProfessionalM1Fallback
+                ? 'M1_PROFESSIONAL_FALLBACK'
                 : 'DEMO_FULL_AUTO_PROMOTED'
-            : 'PAPER_ONLY_RESEARCH',
-        },
-      }));
+              : null,
+            multimodel_execution_authority_path: demoAlternativeTrial?.eligible
+              ? demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
+                ? 'DEMO_EXPERT_COUNTER_ENTRY_PILOT'
+                : demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT
+                  ? demoAlternativeTrial.continuousEvidence
+                    ? 'DEMO_CONTINUOUS_REVERSAL_EARLY_EVIDENCE'
+                    : 'DEMO_ADVISORY_REVERSAL_EARLY_ENTRY_PILOT'
+                  : 'DEMO_ALTERNATIVE_TIMING_TRIAL'
+              : useProfessionalM1Fallback
+                ? professionalM1Fallback?.tier
+                : useM5EarlyTransitionHandoff
+                  ? 'M5_EARLY_TRANSITION_HANDOFF'
+                  : useExtensionExhaustionDemoScout
+                    ? 'EXTENSION_EXHAUSTION_DEMO_SCOUT'
+                    : (multimodelDemo?.authority.authorityPath ?? null),
+            m5_early_transition_handoff: useM5EarlyTransitionHandoff,
+            m5_early_transition_handoff_reason: useM5EarlyTransitionHandoff
+              ? m5EarlyTransitionHandoff.reason
+              : null,
+            m5_early_transition_lot_cap: useM5EarlyTransitionHandoff
+              ? m5EarlyTransitionHandoff.lotCap
+              : null,
+            m5_early_transition_net_expected_r: useM5EarlyTransitionHandoff
+              ? m5EarlyTransitionEvidence.netExpectedR
+              : null,
+            m5_early_transition_ensemble_score: useM5EarlyTransitionHandoff
+              ? m5EarlyTransitionEvidence.ensembleScore
+              : null,
+            m5_early_transition_market_bar_time: useM5EarlyTransitionHandoff
+              ? m5EarlyTransitionEvidence.marketBarTime.toISOString()
+              : null,
+            extension_exhaustion_demo_scout: useExtensionExhaustionDemoScout,
+            extension_exhaustion_demo_scout_artifact:
+              extensionExhaustionDemoScout?.artifact ?? null,
+            extension_exhaustion_demo_scout_reason: extensionExhaustionDemoScout?.reason ?? null,
+            extension_exhaustion_demo_scout_lot_cap: useExtensionExhaustionDemoScout
+              ? extensionExhaustionDemoScout!.lotCap
+              : null,
+            extension_exhaustion_demo_scout_samples:
+              extensionExhaustionDemoScout?.reliability?.samples ?? 0,
+            extension_exhaustion_demo_scout_average_r:
+              extensionExhaustionDemoScout?.reliability?.averageNetR ?? null,
+            extension_exhaustion_demo_scout_profit_factor:
+              extensionExhaustionDemoScout?.reliability?.profitFactor ?? null,
+            extension_exhaustion_demo_scout_recent3_r:
+              extensionExhaustionDemoScout?.reliability?.recent3R ?? null,
+            multimodel_rescue_volume_cap: multimodelDemo?.authority.rescueVolumeCap ?? null,
+            external_provider_paper_only: true,
+            production_eligible: false,
+            m1_route_reliability_reason: routeReliability?.reason ?? null,
+            ...(routeReliability?.reason === 'PROFIT_GIVEBACK_CAUTION'
+              ? {
+                  // First verified winner→loser giveback is a soft brake, not an
+                  // overfit hard veto. The authoritative position sizer applies
+                  // this 0.5x multiplier to the risk budget; a repeated recent
+                  // giveback is blocked earlier by PROFIT_GIVEBACK_LOSS_STREAK.
+                  adaptive_risk_multiplier: 0.5,
+                }
+              : {}),
+            // Immutable entry snapshot consumed by the v8.5 post-entry learner.
+            // Keep the same feature scale used by the historical Plan-B/v7
+            // training stream: candidate score + direction-aligned EMA/MTF
+            // strength, raw RSI, extension and volatility.
+            feature_candidate_score: candidate.score,
+            feature_extension_atr: features.extensionAtr,
+            feature_volatility_score: features.volatilityScore,
+            feature_ema_separation: Math.max(0, Math.min(1, candidate.alignedEmaSeparationAtr / 2)),
+            feature_mtf_strength: Math.max(0, Math.min(1, candidate.alignedM15)),
+            feature_rsi14: features.rsi14,
+            m1_pattern_memory_artifact: patternMemory?.artifact ?? null,
+            m1_pattern_memory_matching_episodes: patternMemory?.matchingEpisodes ?? null,
+            m1_pattern_memory_hypothesis: patternMemory?.hypothesis ?? null,
+            m1_pattern_memory_average_net_r: patternMemory?.averageNetR ?? null,
+            m1_pattern_memory_positive_then_lost: patternMemory?.positiveThenLost ?? null,
+            m1_pattern_memory_adverse_then_won: patternMemory?.adverseThenWon ?? null,
+            m1_pattern_memory_near_stop_then_won: patternMemory?.nearStopThenWon ?? null,
+            m1_pattern_memory_shadow_only: patternMemory?.shadowOnly ?? null,
+            position_sizing_tier:
+              this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
+                ? m1ProfessionalSizingTier(candidate.confidence)
+                : 'RESEARCH',
+            m1_guarded_pullback_continuation: guardedPullbackRecovery,
+            m1_tactical_route: routeDecision.route,
+            // This is the paired tactical snapshot BEFORE submitting an order.
+            // It is not the opposite-side trained-expert vote, a broker fill
+            // forecast, or independent order authority.
+            m1_opposite_tactical_route_asof: oppositeRouteAtSignal?.route ?? null,
+            m1_opposite_tactical_reason_asof: oppositeRouteAtSignal?.reason ?? null,
+            m1_opposite_tactical_direction_asof: oppositeRouteAtSignal
+              ? candidate.direction === 'BUY'
+                ? 'SELL'
+                : 'BUY'
+              : null,
+            m1_opposite_tactical_eligible_asof: oppositeRouteAtSignal?.eligible ?? null,
+            m1_opposite_tactical_snapshot_time: decisionTime.toISOString(),
+            m1_opposite_tactical_shadow_only: true,
+            m1_policy_version: candidate.policyVersion,
+            m1_rollout_policy_version: this.rolloutPolicy.version,
+            m1_rollout_phase: this.rolloutPolicy.phase,
+            m1_shadow_pair_side_reliability_artifact: scoutReliabilityArtifact,
+            m1_shadow_pair_side_reliability_reason: shadowPairSideReliability?.reason ?? null,
+            m1_shadow_pair_side_reliability_samples: shadowPairSideReliability?.samples ?? 0,
+            m1_shadow_pair_side_reliability_average_r:
+              shadowPairSideReliability?.averageNetR ?? null,
+            m1_shadow_pair_side_reliability_profit_factor:
+              shadowPairSideReliability?.profitFactor ?? null,
+            m1_shadow_pair_side_reliability_positive_fraction:
+              shadowPairSideReliability?.positiveFraction ?? null,
+            m1_evidence_qualified_scout_eligible:
+              evidenceQualifiedScout && shadowPairSideReliability?.eligible === true,
+            m1_scout_reliability_tier: scoutReliabilityTier,
+            m1_scout_broker_native_reliability_samples:
+              shadowPairSideReliability?.brokerNativeSampleCount ?? 0,
+            m1_scout_bootstrap_reliability_samples:
+              shadowPairSideReliability?.bootstrapSampleCount ?? 0,
+            m1_scout_evidence_connection_ids: shadowPairSideReliability?.evidenceConnectionIds ?? [
+              brokerConnectionId,
+            ],
+            m1_scout_requested_volume_cap: executionVolumeCap,
+            m1_scout_execution_volume_cap: finalExecutionVolumeCap,
+            m1_high_conviction_ceiling_artifact: highConvictionCeiling.artifact,
+            m1_high_conviction_ceiling_eligible: highConvictionCeiling.eligible,
+            m1_high_conviction_ceiling_reason: highConvictionCeiling.reason,
+            m1_high_conviction_ceiling_lots: highConvictionCeiling.maxLotCeiling,
+            m1_high_conviction_stop_unchanged: true,
+            m1_advisory_quality_risk_artifact: qualityRisk?.artifact ?? null,
+            m1_advisory_quality_risk_fraction: qualityRisk?.riskFraction ?? null,
+            m1_advisory_quality_risk_rationale: qualityRisk?.rationale ?? null,
+            m1_advisory_quality_m5_direction: qualityRisk?.m5Direction ?? null,
+            m1_advisory_quality_h1_direction: qualityRisk?.h1Direction ?? null,
+            m1_advisory_quality_recent_net_samples: qualityRisk?.recentSamples ?? null,
+            m1_advisory_quality_recent_average_net_r: qualityRisk?.recentAverageNetR ?? null,
+            m1_owner_demo_weak_reversal_ceiling_artifact: weakReversalCap.artifact,
+            m1_owner_demo_weak_reversal_ceiling_applied: weakReversalCap.applied,
+            m1_owner_demo_weak_reversal_ceiling_reason: weakReversalCap.reason,
+            m1_owner_demo_weak_reversal_ceiling_before_lots: weakReversalCap.originalRequestedLots,
+            m1_owner_demo_weak_reversal_ceiling_after_lots: weakReversalCap.requestedLotCap,
+            m1_owner_demo_weak_reversal_ceiling_fee_warning: weakReversalCap.feeWarningAccepted,
+            m1_owner_demo_weak_reversal_ceiling_loss_warning: weakReversalCap.lossWarningAccepted,
+            m1_reversal_m5_soft_cap_artifact: m5ReversalSoftCap.artifact,
+            m1_reversal_m5_soft_cap_applied: m5ReversalSoftCap.applied,
+            m1_reversal_m5_soft_cap_reason: m5ReversalSoftCap.reason,
+            m1_reversal_m5_soft_cap_aligned_m5: m5ReversalSoftCap.alignedM5,
+            m1_reversal_m5_soft_cap_before_lots: m5ReversalSoftCap.originalLotCap,
+            m1_reversal_m5_soft_cap_after_lots: m5ReversalSoftCap.requestedLotCap,
+            m1_pepperstone_demo_reentry_and_risk_pilot: pepperstoneDemoRiskPilot,
+            m1_pepperstone_demo_alternative_trial: demoAlternativeTrial?.eligible === true,
+            m1_pepperstone_demo_advisory_alternates:
+              demoAlternativeTrial?.eligible === true &&
+              demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT,
+            m1_pepperstone_demo_continuous_evidence:
+              demoAlternativeTrial?.eligible === true &&
+              demoAlternativeTrial.artifact === ADVISORY_ALTERNATE_ARTIFACT &&
+              demoAlternativeTrial.continuousEvidence === true,
+            m1_pepperstone_demo_counter_pilot:
+              demoAlternativeTrial?.eligible === true &&
+              demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT,
+            m1_pepperstone_demo_counter_source_side:
+              demoAlternativeTrial?.eligible &&
+              demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
+                ? demoAlternativeTrial.sourceSide
+                : null,
+            m1_pepperstone_demo_counter_source_route:
+              demoAlternativeTrial?.eligible &&
+              demoAlternativeTrial.artifact === COUNTER_PILOT_ARTIFACT
+                ? demoAlternativeTrial.sourceRoute
+                : null,
+            m1_pepperstone_demo_alternative_trial_artifact: demoAlternativeTrial?.eligible
+              ? demoAlternativeTrial.artifact
+              : null,
+            m1_pepperstone_demo_alternative_trial_expires_at: demoAlternativeTrial?.eligible
+              ? demoAlternativeTrial.endsAt
+              : null,
+            m1_pepperstone_demo_max_risk_percent: pepperstoneDemoRiskPilot
+              ? noonLotTrialForAdmittedReversal
+                ? noonLotTrial.maximumPrescreenRiskPercent
+                : 0.25
+              : null,
+            // Distinct artifact: never falsely label a new ongoing trade as
+            // part of the expired 03:57–12:00 UTC size experiment.
+            m1_owner_demo_noon_lot_trial_artifact:
+              noonLotTrialForAdmittedReversal && !ongoingSevenLot.eligible
+                ? OWNER_DEMO_NOON_LOT_TRIAL_ARTIFACT
+                : null,
+            m1_owner_demo_noon_lot_trial_expires_at:
+              noonLotTrialForAdmittedReversal && !ongoingSevenLot.eligible
+                ? noonLotTrial.endsAt
+                : null,
+            m1_owner_demo_noon_lot_trial_max_requested_lots:
+              noonLotTrialForAdmittedReversal && !ongoingSevenLot.eligible
+                ? noonLotTrial.maxRequestedLots
+                : null,
+            m1_owner_demo_noon_lot_trial_advisory_quality_fraction:
+              noonLotTrialForAdmittedReversal && !ongoingSevenLot.eligible
+                ? (qualityRisk?.riskFraction ?? null)
+                : null,
+            m1_owner_demo_ongoing_seven_lot_artifact:
+              noonLotTrialForAdmittedReversal && ongoingSevenLot.eligible
+                ? OWNER_DEMO_ONGOING_SEVEN_LOT_ARTIFACT
+                : null,
+            m1_owner_demo_ongoing_seven_lot_max_requested_lots:
+              noonLotTrialForAdmittedReversal && ongoingSevenLot.eligible
+                ? ongoingSevenLot.maxRequestedLots
+                : null,
+            m1_pepperstone_demo_aligned_target_percent: pepperstoneDemoRiskPilot
+              ? M1_PEPPERSTONE_DEMO_ALIGNED_CURRENCY_TARGET_PERCENT
+              : null,
+            m1_pepperstone_demo_pre_screen_lot_cap: finalExecutionVolumeCap,
+            m1_currency_exposure_capacity: currencyExposureGuard.decision.capacity,
+            m1_currency_exposure_reason: currencyExposureGuard.decision.reason,
+            m1_currency_exposure_projected_aligned_risk:
+              currencyExposureGuard.decision.projectedAlignedRisk,
+            m1_currency_exposure_projected_aligned_risk_percent:
+              currencyExposureGuard.decision.projectedAlignedRiskPercent,
+            m1_currency_exposure_allocated_capital: currencyExposureGuard.decision.allocatedCapital,
+            m1_meaningful_scout_reliability_artifact: meaningfulScoutReliability
+              ? M1_MEANINGFUL_SCOUT_RELIABILITY_ARTIFACT
+              : null,
+            m1_meaningful_scout_reliability_samples: meaningfulScoutReliability?.samples ?? 0,
+            m1_meaningful_scout_reliability_recent_net_r:
+              meaningfulScoutReliability?.recentNetR ?? null,
+            m1_provisional_scout_reliability_artifact: provisionalScoutReliability
+              ? M1_PROVISIONAL_SCOUT_RELIABILITY_ARTIFACT
+              : null,
+            m1_provisional_scout_reliability_samples: provisionalScoutReliability?.samples ?? 0,
+            m1_provisional_scout_reliability_recent_net_r:
+              provisionalScoutReliability?.recentNetR ?? null,
+            m1_micro_drift_only_rescue: microDriftOnlyRescue,
+            m1_local_impulse_drift_only_rescue: localImpulseDriftOnlyRescue,
+            m1_decision_id: decisionId,
+            m1_target_r_geometry: candidate.grossExpectedR,
+            m1_expectancy_artifact: governance.expectancy.artifact,
+            m1_expectancy_source: governance.expectancy.source,
+            m1_heuristic_prior_expected_r: governance.expectancy.heuristicPriorExpectedR,
+            m1_statistical_expected_r: governance.expectancy.statisticalExpectedR,
+            m1_expectancy_implied_win_probability: governance.expectancy.impliedWinProbability,
+            m1_expectancy_evidence_samples: governance.expectancy.evidenceSamples,
+            m1_expectancy_evidence_average_realized_r:
+              governance.expectancy.evidenceAverageRealizedR,
+            m1_expectancy_recent_payoff_average_r: governance.expectancy.recentPayoffAverageR,
+            m1_gross_expected_r: candidate.grossExpectedR,
+            m1_execution_cost_r: governance.genericGovernance.estimatedExecutionCostR,
+            m1_execution_cost_source: governance.genericGovernance.executionCostSource,
+            m1_net_expected_r: governance.netExpectedR,
+            m1_route_net_expected_r_floor:
+              this.rolloutPolicy.routeNetExpectedRFloors[
+                routeDecision.route as Exclude<M1TacticalRoute, 'ABSTAIN'>
+              ],
+            m1_execution_authority: professionalDemoPhase
+              ? useProfessionalM1Fallback
+                ? 'DEMO_FULL_AUTO_M1_FALLBACK'
+                : useExtensionExhaustionDemoScout
+                  ? 'DEMO_EXTENSION_EXHAUSTION_SCOUT'
+                  : 'DEMO_FULL_AUTO_PROMOTED'
+              : 'PAPER_ONLY_RESEARCH',
+          },
+        }),
+      );
       if (this.tradeIntentService) {
         try {
           const intent = await this.tradeIntentService.findBySignal(userId, signalId);

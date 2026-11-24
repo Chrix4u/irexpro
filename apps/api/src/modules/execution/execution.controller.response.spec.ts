@@ -329,7 +329,9 @@ describe('ExecutionController frontend-safe responses', () => {
     ]);
     const responses = await controller.listRecentExecutions(USER_ID, 50);
     expect(responses.map((row) => row.executionReasonCode)).toEqual([
-      'EXECUTION_NOT_SUBMITTED', 'EXECUTION_UNRESOLVED', 'EXECUTION_UNRESOLVED',
+      'EXECUTION_NOT_SUBMITTED',
+      'EXECUTION_UNRESOLVED',
+      'EXECUTION_UNRESOLVED',
     ]);
     expect(responses.every((row) => row.status === TradeStatus.RECONCILIATION_PENDING)).toBe(true);
   });

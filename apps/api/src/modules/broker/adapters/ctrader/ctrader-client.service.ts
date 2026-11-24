@@ -806,9 +806,14 @@ export class CTraderClientService implements OnModuleDestroy {
       }, REQUEST_TIMEOUT_MS);
       const accountId = payload.ctidTraderAccountId;
       conn.pending.set(clientMsgId, {
-        resolve, reject, timer, requestPayloadType: payloadType,
-        accountId: typeof accountId === 'number' && Number.isSafeInteger(accountId) && accountId > 0
-          ? accountId : undefined,
+        resolve,
+        reject,
+        timer,
+        requestPayloadType: payloadType,
+        accountId:
+          typeof accountId === 'number' && Number.isSafeInteger(accountId) && accountId > 0
+            ? accountId
+            : undefined,
       });
       try {
         conn.transport.send({ clientMsgId, payloadType, payload });
@@ -878,9 +883,12 @@ export class CTraderClientService implements OnModuleDestroy {
         // Provider authorization can expire without a transport disconnect.
         // Invalidate only the account actually named by this request, not an
         // unrelated DEMO/LIVE connection. Never retry the rejected operation.
-        if (pending.accountId !== undefined &&
-            (name === 'ACCOUNT_NOT_AUTHORIZED' || name === 'OA_AUTH_TOKEN_EXPIRED' ||
-             name === 'CH_ACCESS_TOKEN_INVALID')) {
+        if (
+          pending.accountId !== undefined &&
+          (name === 'ACCOUNT_NOT_AUTHORIZED' ||
+            name === 'OA_AUTH_TOKEN_EXPIRED' ||
+            name === 'CH_ACCESS_TOKEN_INVALID')
+        ) {
           conn.authorizedAccounts.delete(pending.accountId);
         }
         pending.reject(

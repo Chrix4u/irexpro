@@ -128,18 +128,26 @@ describe('CTraderClientService', () => {
         payloadType: CTRADER_PAYLOAD_TYPE.OA_ERROR_RES,
         payload: { errorCode, description: 'Trading account is not authorized' },
       }));
-      await expect(client.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, {
-        ctidTraderAccountId: 1234567,
-      })).rejects.toMatchObject({ code: BrokerErrorCode.AUTHENTICATION_FAILED });
+      await expect(
+        client.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, {
+          ctidTraderAccountId: 1234567,
+        }),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.AUTHENTICATION_FAILED });
       expect(client.hasAccountSession('DEMO', ACCOUNT_ID)).toBe(false);
       expect(client.hasAccountSession('DEMO', '7654321')).toBe(true);
       expect(client.hasAccountSession('LIVE', ACCOUNT_ID)).toBe(true);
-      expect(server.requests.filter(r => r.payloadType === CTRADER_PAYLOAD_TYPE.TRADER_REQ)).toHaveLength(1);
+      expect(
+        server.requests.filter((r) => r.payloadType === CTRADER_PAYLOAD_TYPE.TRADER_REQ),
+      ).toHaveLength(1);
       await client.ensureAccountSession('DEMO', ACCOUNT_ID, 'new-token', 'validation');
       expect(client.hasAccountSession('DEMO', ACCOUNT_ID)).toBe(true);
-      expect(server.requests.filter(r =>
-        r.payloadType === CTRADER_PAYLOAD_TYPE.ACCOUNT_AUTH_REQ &&
-        r.payload?.accessToken === 'new-token')).toHaveLength(1);
+      expect(
+        server.requests.filter(
+          (r) =>
+            r.payloadType === CTRADER_PAYLOAD_TYPE.ACCOUNT_AUTH_REQ &&
+            r.payload?.accessToken === 'new-token',
+        ),
+      ).toHaveLength(1);
     },
   );
 
