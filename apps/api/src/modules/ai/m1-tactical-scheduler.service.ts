@@ -29,6 +29,7 @@ import { PAPER_BROKER_AWARE_EXPOSURE_SEARCH_FLOOR } from '../execution/services/
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { AiSignalService } from './ai-signal.service';
+import { brandServerM1Signal } from '../strategy/server-m1-signal-origin';
 import { MacroEventRiskService } from './macro-event-risk.service';
 import { DemoPortfolioBrakeConsentService } from './demo-portfolio-brake-consent.service';
 import { DemoStrategyBrakeOwnerService } from './demo-strategy-brake-owner.service';
@@ -4215,7 +4216,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
       return;
     }
     try {
-      const result = await this.aiSignalService.receiveSignal({
+      const result = await this.aiSignalService.receiveSignal(brandServerM1Signal({
         signalId,
         userId,
         tradingSessionId: session.id,
@@ -4547,7 +4548,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
                 : 'DEMO_FULL_AUTO_PROMOTED'
             : 'PAPER_ONLY_RESEARCH',
         },
-      });
+      }));
       if (this.tradeIntentService) {
         try {
           const intent = await this.tradeIntentService.findBySignal(userId, signalId);
