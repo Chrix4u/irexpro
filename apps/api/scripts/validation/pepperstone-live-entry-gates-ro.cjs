@@ -11,15 +11,16 @@ function tally(items){
   return Object.fromEntries([...m].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])));
 }
 function summarizeLiveEntryDecisions(rows,{countOrders=0}={}){
-  let admitted=0,qualified=0,both=0,matching=0,authorized=0,paper=0,primary=0,bridges=0;
+  let admitted=0,qualified=0,both=0,matching=0,authorized=0,paper=0,primary=0,bridges=0,lateGateFailures=0;
   const reasons=[],blocks=[],outcomes=[],latest=new Map();
   for(const r of rows){
     const a=r.plan_b_admitted===true||r.plan_b_admitted==='true',q=r.route&&r.route!=='ABSTAIN';
-    const match={
+    const expected={
       TREND_CONTINUATION:'M1_TREND_CONTINUATION',
       CONFIRMED_REVERSAL:'M1_CONFIRMED_REVERSAL',
       EARLY_TRANSITION:'M1_EARLY_TRANSITION',
-    }[r.plan_b_route]===r.route;
+    }[r.plan_b_route];
+    const match=expected!==undefined&&expected===r.route;
     if(a)admitted++;
     if(q)qualified++;
     if(a&&q)both++;
@@ -32,6 +33,8 @@ function summarizeLiveEntryDecisions(rows,{countOrders=0}={}){
        (r.route==='M1_EARLY_TRANSITION'||
         (r.route==='M1_TREND_CONTINUATION'&&r.reversal_bridge==='true')))bridges++;
     if(r.execution_authority==='BROKER_NATIVE')authorized++;
+    if(r.execution_authority==='BROKER_NATIVE'&&
+      ['SIGNAL_INVALID','RISK_REJECTED','EXECUTION_REJECTED'].includes(r.outcome_state))lateGateFailures++;
     if(r.execution_authority==='PAPER_ONLY_RESEARCH')paper++;
     reasons.push(r.m1_reason||'UNKNOWN');
     blocks.push(...normalizeBlockers(r.blockers));
@@ -43,6 +46,8 @@ function summarizeLiveEntryDecisions(rows,{countOrders=0}={}){
       primaryModelAuthority:r.primary_authority||null,
       reversalTimingBridge:r.reversal_bridge==='true',
       executionAuthority:r.execution_authority,asOf:r.bar_time,
+      outcomeState:r.outcome_state||null,
+      outcomeReason:typeof r.outcome_reason==='string'?r.outcome_reason.slice(0,220):null,
       blockers:normalizeBlockers(r.blockers).slice(0,8),
     });
   }
@@ -50,9 +55,11 @@ function summarizeLiveEntryDecisions(rows,{countOrders=0}={}){
     decisionRows:rows.length,planBAdmitted:admitted,
     m1RouteQualified:qualified,admittedWithAnyM1Route:both,exactModelM1RouteMatch:matching,
     primaryModelAuthorityGranted:primary,primaryReversalTimingBridges:bridges,
-    brokerNativeAuthorityGranted:authorized,paperOnlyResearch:paper,
+    brokerNativeAuthorityGranted:authorized,brokerAuthorizedButRejected:lateGateFailures,
+    paperOnlyResearch:paper,
     recordedLiveOrders:countOrders,
     assessment:rows.length===0?'NO_RECENT_LIVE_DECISIONS':
+      lateGateFailures>0?'BROKER_AUTHORIZED_DECISION_FAILED_LATER_GATE':
       authorized>0&&countOrders===0?'AUTHORIZED_DECISION_REQUIRES_ORDER_PATH_REVIEW':
       authorized>0?'BROKER_AUTHORIZED_DECISIONS_EXIST':
       'NO_BROKER_AUTHORIZED_ENTRY_IN_WINDOW',
@@ -108,7 +115,7 @@ async function main(){
       "governance->'multimodelEnsemble'->>'strategyRoute' plan_b_route,"+
       "governance->'multimodelAuthority'->>'authorityPath' primary_authority,"+
       "governance->'multimodelAuthority'->>'reversalTimingBridge' reversal_bridge,"+
-      "outcome_state "+
+      "outcome_state,outcome_reason "+
       "FROM trading.m1_tactical_decisions "+
       "WHERE broker_connection_id=$1 AND user_id=$2 "+
       "AND evaluated_at>=$3 "+

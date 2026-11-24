@@ -76,3 +76,22 @@ test('post-release diagnostics distinguish true primary model authority from a m
   assert.equal(a.primaryReversalTimingBridges,2);
   assert.equal(a.brokerNativeAuthorityGranted,0);
 });
+
+test('unknown or missing model route never counts as a matched strategy',()=>{
+  const x=summarizeLiveEntryDecisions([
+    row({plan_b_route:'UNKNOWN',route:undefined}),
+    row({plan_b_route:null,route:undefined}),
+  ]);
+  assert.equal(x.exactModelM1RouteMatch,0);
+});
+test('broker-authorized later-gate failure is visibly distinct from M1 abstention',()=>{
+  const x=summarizeLiveEntryDecisions([row({
+    plan_b_route:'TREND_CONTINUATION',route:'M1_TREND_CONTINUATION',
+    primary_authority:'PRIMARY_PLAN_B',execution_authority:'BROKER_NATIVE',
+    outcome_state:'SIGNAL_INVALID',outcome_reason:'EXTERNAL_PROVIDER_PAPER_ONLY',
+  })]);
+  assert.equal(x.primaryModelAuthorityGranted,1);
+  assert.equal(x.brokerAuthorizedButRejected,1);
+  assert.equal(x.assessment,'BROKER_AUTHORIZED_DECISION_FAILED_LATER_GATE');
+  assert.equal(x.latestByPair[0].outcomeReason,'EXTERNAL_PROVIDER_PAPER_ONLY');
+});
