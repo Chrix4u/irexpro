@@ -30,6 +30,7 @@ import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { AiSignalService } from './ai-signal.service';
 import { brandServerM1Signal } from '../strategy/server-m1-signal-origin';
+import { canonicalSignalPrice } from './canonical-signal-price';
 import { MacroEventRiskService } from './macro-event-risk.service';
 import { DemoPortfolioBrakeConsentService } from './demo-portfolio-brake-consent.service';
 import { DemoStrategyBrakeOwnerService } from './demo-strategy-brake-owner.service';
@@ -4235,8 +4236,8 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
               )
             : candidate.confidence,
         suggestedEntryPrice: candidate.entry,
-        suggestedStopLoss: candidate.stopLoss,
-        suggestedTakeProfit: candidate.takeProfit,
+        suggestedStopLoss: canonicalSignalPrice(candidate.stopLoss),
+        suggestedTakeProfit: canonicalSignalPrice(candidate.takeProfit),
         suggestedVolume: finalExecutionVolumeCap,
         timeframe: 'M1',
         strategyCode:
