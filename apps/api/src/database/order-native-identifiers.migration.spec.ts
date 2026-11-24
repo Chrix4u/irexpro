@@ -24,19 +24,28 @@ describe('Order native identifier separation migration is additive and reversibl
     expect(sql).toContain("provider_deal_id IS NULL OR provider_deal_id <> ''");
     expect(sql).toContain('COMMENT ON COLUMN trading.orders.provider_position_id');
     expect(sql).toContain('COMMENT ON COLUMN trading.orders.provider_deal_id');
+    // Duplicate-deal attribution guard: partial unique index, one native deal
+    // per broker connection, NULL/'' outside the index (legacy rows untouched).
+    expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_provider_deal_id');
+    expect(sql).toContain('ON trading.orders (broker_connection_id, provider_deal_id)');
+    expect(sql).toContain("WHERE provider_deal_id IS NOT NULL AND provider_deal_id <> ''");
+    expect(sql).toContain('COMMENT ON INDEX trading.uq_orders_provider_deal_id');
     // Additive only — no rewrite of existing identifier columns or rows.
     expect(sql).not.toMatch(/UPDATE\s+trading\.orders/i);
     expect(sql).not.toMatch(/DROP\s+COLUMN\s+provider_order_id/i);
-    expect(sql).not.toMatch(/NOT\s+NULL/);
+    // No NOT NULL constraints on the added columns (a partial-index predicate
+    // legitimately references IS NOT NULL — scope the check to ADD COLUMN).
+    expect(sql).not.toMatch(/ADD\s+COLUMN[^(]*NOT\s+NULL/i);
   });
 
-  it('drops exactly the added constraint and columns on rollback', async () => {
+  it('drops exactly the added constraint, index and columns on rollback', async () => {
     const { runner, statements } = collect();
     await new AddOrderProviderNativeIdentifiers1795220000000().down(runner);
     const sql = statements.join('\n');
     expect(sql).toContain('DROP COLUMN IF EXISTS provider_position_id');
     expect(sql).toContain('DROP COLUMN IF EXISTS provider_deal_id');
     expect(sql).toContain('DROP CONSTRAINT IF EXISTS ck_orders_native_identifier_shape');
+    expect(sql).toContain('DROP INDEX IF EXISTS trading.uq_orders_provider_deal_id');
     expect(sql).not.toMatch(/DROP\s+COLUMN\s+provider_order_id/i);
   });
 });
