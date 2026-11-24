@@ -20,9 +20,37 @@ Status: DRAFT, NOT MERGED, NOT DEPLOYED. No automated LIVE trading was enabled.
 
 The draft catalog promotion is limited to the Pepperstone broker identity. Generic cTrader and IC Markets remain UNVERIFIED. Pepperstone remains BETA in overall implementation status. A single protected 0.01-lot AUDUSD test does not certify all order kinds, all instruments, mobile OAuth, or any AI strategy.
 
-Before merge, the accountable operator must independently attest both evidence hashes and confirm Spotware/Pepperstone real-account automated API trading permissions. Actual successful API trading is technical evidence, not contractual proof of provider approval.
+Before merge, the accountable operator must independently attest both
+evidence hashes, confirm the platform application is approved in Spotware's
+Open API portal and ensure the owner's exact LIVE account remains authorized
+with the trading OAuth permission. The independently verified broker fill
+proves technical trading permission on that account at test time, but does
+not establish a general contractual authorization for every account or user.
 
-The temporary November 22 Pepperstone DEMO release hold remains in effect for unresolved historical order records. Do not dismiss it, delete those records, or restart the live trading service under that hold. Approve a controlled maintenance release only after reconciling the hold, verifying there are no active broker sessions or residual exposure, reviewing rollback, and accepting the runtime risk envelope.
+The official cTrader Open API guide says approved apps can trade on DEMO and
+LIVE accounts and that the Open API is supported by default across affiliated
+brokers. It does **not** establish a blanket requirement for a *second*,
+separate Pepperstone API partner approval for each supported account.
+Specific broker or account restrictions, if any, should be verified rather
+than invented as generic blockers.
+
+- Official API overview: https://help.ctrader.com/open-api/
+- Approved application registration: https://help.ctrader.com/open-api/api-application/
+- OAuth permission scopes: https://help.ctrader.com/open-api/account-authentication/
+- Explicit prior trader approval is required by Spotware terms:
+  https://help.ctrader.com/open-api/terms-of-use/
+
+The temporary November 22 Pepperstone DEMO release hold remains in effect
+for 249 historical RECONCILIATION_PENDING close-order records linked to 249
+closed trades. Read-only audit on 2026-11-24 found no active AI sessions,
+no open positions, and no working orders; the old records are beyond the
+six-hour guarded auto-recovery window. One record has close-before-submission
+timestamp ordering, so bulk status rewriting is particularly unsafe. Do
+not dismiss the hold, delete those records, or restart the trading service
+under that hold. Approve a controlled maintenance release only after
+independent authenticated close-deal reconciliation, resolving the
+exception, exact-candidate preflight verification, zero-exposure checks,
+reviewing rollback, and accepting the runtime risk envelope.
 
 Publishing a certified provider must NOT start automated trades on its own. Separate explicit owner-level LIVE authorization, risk approval, supported broker account, order reconciliation and final dispatch gating remain required.
 

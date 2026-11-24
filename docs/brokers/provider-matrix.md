@@ -149,6 +149,8 @@ when the entry is in the catalog, has a registered adapter, and carries
 connectable for **DEMO** use — the two facts are rendered distinctly by UI
 consumers.
 
+**cTrader Open API approval clarification:** Spotware requires its own approved API application and account-level OAuth trading permission; Spotware documentation describes DEMO and LIVE support across cTrader-affiliated brokers by default. The blanket claim that Pepperstone additionally requires a separate individual API partner approval for every account is not established in the official documentation. Verify real account restrictions and user consent, but do not invent a second broker-specific approval step. Sources: [Overview](https://help.ctrader.com/open-api/), [Application registration](https://help.ctrader.com/open-api/api-application/), [OAuth scopes](https://help.ctrader.com/open-api/account-authentication/).
+
 **2026-11-24 release review:** Pepperstone alone has a persisted operator LIVE certification PASS (run 4ec633e4-a443-47e3-8bca-1f8f214982f5). Its single-alias catalog promotion is DRAFT and NOT deployed. Generic cTrader and IC Markets remain UNVERIFIED. The DEMO historical-order operational hold remains active. See [Pepperstone attestation review](./pepperstone-live-certification-attestation-review-20261124.md).
 
 ### Certification-state model (Round 7.1 — truthful provenance)
