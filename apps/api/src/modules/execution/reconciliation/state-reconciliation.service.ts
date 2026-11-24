@@ -37,6 +37,8 @@ import { ReconciliationPersistenceService } from './reconciliation-persistence.s
 import { ReconciliationResolutionService } from './reconciliation-resolution.service';
 import { proveCtraderEntryOrderPositionRef } from './closed-demo-settlement-proof';
 import { provePepperstoneDemoClosedOrderFill } from './closed-demo-order-deal-proof';
+import { isProvenUnsentEntry } from '../trade-read-truth';
+import { reconcileProvenUnsentEntry } from './proven-unsent-entry';
 import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
 import {
   METAAPI_PROVIDER_QUOTA_COOLDOWN_MS,
@@ -584,6 +586,33 @@ export class StateReconciliationService {
       }> = [...preDiffResolutionRefs];
       let errors = 0;
       let autoResolvedCount = 0;
+
+      // Resolve explicit local non-dispatch evidence without creating a fill,
+      // closing a real position, retrying an order or reviving a risk grant.
+      const providerClientOrderIds = new Set(providerOrders
+        .map(o => o.clientOrderId).filter((id): id is string => typeof id === 'string'));
+      for (const trade of internalTrades) {
+        if (!isProvenUnsentEntry(trade)) continue;
+        try {
+          const age = Date.now() - new Date(trade.updatedAt).getTime();
+          if (!Number.isFinite(age) || age < PRE_COMMITMENT_GRACE_MS) continue;
+          const orderId = await reconcileProvenUnsentEntry(
+            this.tradeRepo.manager, trade.id, connection.userId,
+            connection.id, providerClientOrderIds,
+          );
+          if (!orderId) continue;
+          for (const internalRefId of [trade.id, orderId]) {
+            resolutionRefs.push({
+              type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+              internalRefId, providerRef: null,
+              resolution: 'Proven unsent entry; order and trade rejected, allocation released',
+            });
+          }
+        } catch (err) {
+          errors++;
+          this.logger.warn('Proven-unsent entry convergence deferred: ' + sanitizeReconciliationReason(err));
+        }
+      }
 
       // 7a. Positions: externally-closed + async-fill recovery.
       for (const trade of internalTrades) {
