@@ -711,3 +711,47 @@
     gap: 0.75rem;
   }
 }
+
+/* OAuth chooser: the account list owns its scroll, not the clipped dashboard.
+   Bound it to short desktop and mobile viewports; keep the heading and cancel
+   action outside the scroll area. Rows never shrink to fit the container. */
+.broker-oauth-chooser {
+  min-width: 0;
+}
+.broker-oauth-account-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+  max-height: clamp(10rem, calc(100vh - 19rem), 34rem);
+  max-height: clamp(10rem, calc(100dvh - 19rem), 34rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  padding-inline-end: 0.25rem;
+  -webkit-overflow-scrolling: touch;
+}
+.broker-oauth-account-list:focus-visible {
+  outline: 2px solid var(--border);
+  outline-offset: 2px;
+}
+.broker-oauth-account-row {
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.broker-oauth-account-list::-webkit-scrollbar { width: 6px; }
+.broker-oauth-account-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-full);
+}
+@media (max-width: 700px) {
+  .broker-oauth-account-list {
+    max-height: clamp(10rem, calc(100dvh - 20rem), 28rem);
+  }
+  .broker-oauth-account-row > .btn { max-width: 100%; white-space: normal; }
+}

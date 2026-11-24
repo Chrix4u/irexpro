@@ -168,7 +168,7 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
       )}
 
       {phase === 'pick' && (
-        <Card title="Choose an account to link">
+        <Card title="Choose an account to link" className="broker-oauth-chooser">
           <p className="card__subtitle">
             These are the cTrader accounts you authorized. Both DEMO and LIVE accounts can
             be linked. LIVE linkage saves account access securely, but real-money orders
@@ -180,10 +180,11 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
               least one account at cTrader, then start again.
             </Alert>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+            <div className="broker-oauth-account-list" role="region" aria-label="Authorized trading accounts" tabIndex={0}>
               {accounts.map((account) => (
                 <div
                   key={account.ctidTraderAccountId}
+                  className="broker-oauth-account-row"
                   style={{
                     padding: 'var(--space-4)',
                     border: '1px solid var(--border-soft)',
