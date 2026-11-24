@@ -949,6 +949,8 @@ function executionReasonLabel(code: string | null | undefined): string | null {
       "Trade skipped because the market moved too far before the order could open.",
     DISPATCH_BOUNDARY_BLOCKED:
       "Trade skipped because conditions changed before the order could be sent.",
+    EXECUTION_NOT_SUBMITTED:
+      "Order was not sent to the broker. No position was opened.",
     EXECUTION_UNRESOLVED:
       "Order confirmation is still pending.",
     EXECUTION_CANCELLED:
@@ -1271,6 +1273,7 @@ function PositionTable({
 }
 
 function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
+  const notSubmitted = trade.executionReasonCode === "EXECUTION_NOT_SUBMITTED";
   const settlementPending = hasPendingClosedTradeSettlement(trade);
   const realized = trade.status === "CLOSED" ? trade.realisedPnl : null;
   const executionReason = executionReasonLabel(trade.executionReasonCode);
@@ -1288,12 +1291,12 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           variant={
             trade.status === "CLOSED" || trade.status === "OPEN"
               ? "success"
-              : trade.status === "REJECTED" || trade.status === "CANCELLED"
+              : notSubmitted || trade.status === "REJECTED" || trade.status === "CANCELLED"
                 ? "error"
                 : "warning"
           }
         >
-          {trade.status.replaceAll("_", " ")}
+          {notSubmitted ? "NOT SUBMITTED" : trade.status.replaceAll("_", " ")}
         </Badge>
         {settlementPending && (
           <Badge variant="warning">Broker settlement pending</Badge>

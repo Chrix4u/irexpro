@@ -311,6 +311,29 @@ describe('ExecutionController frontend-safe responses', () => {
     expect(JSON.stringify(response)).not.toContain('internal provider detail');
   });
 
+  it('distinguishes unsent entry from genuine uncertainty without rewriting durable status', async () => {
+    const pending = {
+      status: TradeStatus.RECONCILIATION_PENDING,
+      dispatchCertainty: 'DEFINITELY_NOT_SENT',
+      externalOrderId: null,
+      externalPositionId: null,
+      fillPrice: null,
+      openedAt: null,
+      realisedPnl: null,
+      closedAt: null,
+    };
+    readService.listRecentExecutions.mockResolvedValue([
+      makeTrade(pending),
+      makeTrade({ ...pending, dispatchCertainty: 'MAY_HAVE_REACHED_PROVIDER' }),
+      makeTrade({ ...pending, externalPositionId: 'existing-position' }),
+    ]);
+    const responses = await controller.listRecentExecutions(USER_ID, 50);
+    expect(responses.map((row) => row.executionReasonCode)).toEqual([
+      'EXECUTION_NOT_SUBMITTED', 'EXECUTION_UNRESOLVED', 'EXECUTION_UNRESOLVED',
+    ]);
+    expect(responses.every((row) => row.status === TradeStatus.RECONCILIATION_PENDING)).toBe(true);
+  });
+
   it('returns authoritative lifecycle fields and currency-bound realized P&L', async () => {
     const [response] = await controller.listRecentExecutions(USER_ID, 50);
     expect(response.exitPrice).toBe('1.10800000');

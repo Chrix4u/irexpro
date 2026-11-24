@@ -381,7 +381,7 @@ describe('LiveAccountService', () => {
 
       const findArgs = tradeRepo.find.mock.calls[0][0];
       expect(findArgs.where.userId).toBe(USER_ID);
-      expect(tradeRepo.count).toHaveBeenCalledWith({ where: findArgs.where });
+      expect(tradeRepo.count).not.toHaveBeenCalled();
     });
 
     it('scopes activity to the authenticated actor', async () => {
@@ -1249,7 +1249,7 @@ describe('LiveAccountService', () => {
       const where = tradeRepo.find.mock.calls[0][0].where;
       expect(where.userId).toBe(USER_ID);
       expect(where.brokerConnectionId).toBe('conn-demo');
-      expect(tradeRepo.count.mock.calls[0][0].where.brokerConnectionId).toBe('conn-demo');
+      expect(tradeRepo.count).not.toHaveBeenCalled();
     });
 
     it('rejects invalid connection filter before querying positions', async () => {
@@ -1269,7 +1269,7 @@ describe('LiveAccountService', () => {
         TradeStatus.RECONCILIATION_PENDING,
       ]);
       expect(findArgs.order).toEqual({ openedAt: 'DESC', createdAt: 'DESC' });
-      expect(tradeRepo.count).toHaveBeenCalledWith({ where: findArgs.where });
+      expect(tradeRepo.count).not.toHaveBeenCalled();
     });
 
     it('enriches environment and broker name from the owning connection', async () => {
@@ -1285,7 +1285,7 @@ describe('LiveAccountService', () => {
 
       const view = await service.getPositions(USER_ID);
 
-      expect(view.total).toBe(0); // count mock default
+      expect(view.total).toBe(3); // same filtered snapshot as positions
       expect(view.positions[0].environment).toBe('LIVE');
       expect(view.positions[0].brokerName).toBe('MetaTrader 5');
       expect(view.positions[1].environment).toBe('DEMO');
@@ -1314,6 +1314,26 @@ describe('LiveAccountService', () => {
       expect(position.status).toBe('OPEN');
       expect(position.openedAt).toBe('2026-01-15T10:00:00.000Z');
       expect(typeof position.lotSize).toBe('string');
+    });
+
+    it('excludes proven unsent entries but retains uncertain and previously filled positions', async () => {
+      const pending = {
+        status: TradeStatus.RECONCILIATION_PENDING,
+        dispatchCertainty: 'DEFINITELY_NOT_SENT',
+        externalOrderId: null,
+        externalPositionId: null,
+        fillPrice: null,
+        openedAt: null,
+      };
+      tradeRepo.find.mockResolvedValue([
+        trade({ ...pending, id: 'unsent' }),
+        trade({ ...pending, id: 'uncertain', dispatchCertainty: 'MAY_HAVE_REACHED_PROVIDER' }),
+        trade({ ...pending, id: 'failed-close', fillPrice: '1.10005' }),
+        trade({ id: 'open' }),
+      ]);
+      const view = await service.getPositions(USER_ID);
+      expect(view.positions.map((row) => row.id)).toEqual(['uncertain', 'failed-close', 'open']);
+      expect(view.total).toBe(3);
     });
 
     it('flags RECONCILIATION_PENDING positions as such', async () => {
