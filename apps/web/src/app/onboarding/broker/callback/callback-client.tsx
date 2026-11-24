@@ -143,7 +143,7 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
 
   return (
     <DashboardShell user={user} onLogout={logout} activeRoute="/onboarding/broker">
-      <div style={{ marginBottom: 'var(--space-6)' }}>
+      <div className="broker-oauth-heading">
         <h1 style={{ marginBottom: 'var(--space-2)' }}>cTrader authorization</h1>
         <p className="muted" style={{ maxWidth: '640px', lineHeight: 1.6 }}>
           Complete the connection by choosing the trading account you authorized.
@@ -168,7 +168,8 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
       )}
 
       {phase === 'pick' && (
-        <Card title="Choose an account to link" className="broker-oauth-chooser">
+        <section className="card broker-oauth-chooser" aria-labelledby="broker-oauth-chooser-title" tabIndex={0}>
+          <h2 id="broker-oauth-chooser-title" className="card__title">Choose an account to link</h2>
           <p className="card__subtitle">
             These are the cTrader accounts you authorized. Both DEMO and LIVE accounts can
             be linked. LIVE linkage saves account access securely, but real-money orders
@@ -180,7 +181,7 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
               least one account at cTrader, then start again.
             </Alert>
           ) : (
-            <div className="broker-oauth-account-list" role="region" aria-label="Authorized trading accounts" tabIndex={0}>
+            <div className="broker-oauth-account-list">
               {accounts.map((account) => (
                 <div
                   key={account.ctidTraderAccountId}
@@ -232,7 +233,7 @@ export default function BrokerOAuthCallbackClient({ code }: { code: string | nul
           <div style={{ marginTop: 'var(--space-4)' }}>
             <Link href="/onboarding/broker" className="text-sm">← Cancel and go back</Link>
           </div>
-        </Card>
+        </section>
       )}
 
       {phase === 'linking' && (
