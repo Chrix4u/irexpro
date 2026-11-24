@@ -48,3 +48,43 @@ test('operator query uses configured owner scope, not a hardcoded broker account
   assert.match(source,/account_type='LIVE' AND user_id=\$1/);
   assert.doesNotMatch(source,/49506270/);
 });
+
+test('primary Plan-B reversal M1 early bridge is shown only with model authority',()=>{
+  const accepted=summarizeLiveEntryDecisions([
+    row({route:'M1_EARLY_TRANSITION',primary_authority_path:'PRIMARY_PLAN_B'}),
+  ]);
+  assert.equal(accepted.approvedReversalTimingBridges,1);
+  assert.equal(accepted.primaryPlanBAuthorityGranted,1);
+  assert.equal(accepted.brokerNativeAuthorityGranted,0);
+  const rejected=summarizeLiveEntryDecisions([
+    row({route:'M1_EARLY_TRANSITION',primary_authority_path:'BLOCKED'}),
+  ]);
+  assert.equal(rejected.approvedReversalTimingBridges,0);
+});
+test('M1 continuation bridge requires original explicit same-snapshot reversalTimingBridge proof',()=>{
+  const rejected=summarizeLiveEntryDecisions([
+    row({route:'M1_TREND_CONTINUATION',primary_authority_path:'PRIMARY_PLAN_B',reversal_timing_bridge:false}),
+  ]);
+  const accepted=summarizeLiveEntryDecisions([
+    row({route:'M1_TREND_CONTINUATION',primary_authority_path:'PRIMARY_PLAN_B',reversal_timing_bridge:true}),
+  ]);
+  assert.equal(rejected.approvedReversalTimingBridges,0);
+  assert.equal(accepted.approvedReversalTimingBridges,1);
+});
+test('unknown / missing model route never accidentally counts as match',()=>{
+  const x=summarizeLiveEntryDecisions([
+    row({plan_b_route:'UNKNOWN',route:undefined}),
+    row({plan_b_route:null,route:undefined}),
+  ]);
+  assert.equal(x.exactModelM1RouteMatch,0);
+});
+test('a BROKER_NATIVE authorized LIVE decision rejected downstream is not reported as a strategy abstention',()=>{
+  const x=summarizeLiveEntryDecisions([row({
+    route:'M1_TREND_CONTINUATION',plan_b_route:'TREND_CONTINUATION',
+    primary_authority_path:'PRIMARY_PLAN_B',execution_authority:'BROKER_NATIVE',
+    outcome_state:'SIGNAL_INVALID',outcome_reason:'EXTERNAL_PROVIDER_PAPER_ONLY',
+  })]);
+  assert.equal(x.brokerAuthorizedButRejected,1);
+  assert.equal(x.assessment,'BROKER_AUTHORIZED_DECISION_FAILED_LATER_GATE');
+  assert.equal(x.latestByPair[0].outcomeReason,'EXTERNAL_PROVIDER_PAPER_ONLY');
+});
