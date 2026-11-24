@@ -67,6 +67,7 @@ make_fixture() {
   git -C "$repo" config user.name 'Deployment Safety CI'
 
   cp "$SCRIPT_DIR/deploy-staging.sh" "$repo/scripts/deployment/deploy-staging.sh"
+  cp "$SCRIPT_DIR/staging-quiescence.cjs" "$repo/scripts/deployment/staging-quiescence.cjs"
   cp "$SCRIPT_DIR/rollback-staging.sh" "$repo/scripts/deployment/rollback-staging.sh"
   printf '{"packageManager":"%s"}\n' "$ROOT_PACKAGE_MANAGER" > "$repo/package.json"
   printf 'prior\n' > "$repo/release-marker.txt"
@@ -117,6 +118,17 @@ SHIM
 set -Eeuo pipefail
 if [[ -n "${FAKE_NODE_MAJOR:-}" && "${1:-}" == '-p' && "${2:-}" == "process.versions.node.split('.')[0]" ]]; then
   printf '%s\n' "$FAKE_NODE_MAJOR"
+  exit 0
+fi
+if [[ "${1:-}" == '-' ]]; then
+  # The fixture has no broker DB. Simulate its read-only pass/hold without
+  # trading, and verify that a hold happens BEFORE a build or PM2 command.
+  cat > /dev/null
+  if [[ "${FAKE_GUARD_BLOCK:-0}" == '1' ]]; then
+    printf 'DEPLOY HOLD: simulated active session
+' >&2
+    exit 12
+  fi
   exit 0
 fi
 exec "$REAL_NODE" "$@"
@@ -280,6 +292,12 @@ run_rollback() {
 
 bash -n "$SCRIPT_DIR/deploy-staging.sh"
 bash -n "$SCRIPT_DIR/rollback-staging.sh"
+node "$SCRIPT_DIR/staging-quiescence.cjs" --self-test
+# Candidate release code is piped to node stdin, not invoked by filename.
+# This must execute the guard entry point in that exact runtime form.
+stdin_guard_output="$(node - --self-test < "$SCRIPT_DIR/staging-quiescence.cjs")"
+[[ "$stdin_guard_output" == *'staging-quiescence self-test OK'* ]] ||
+  fail 'Staging guard stdin entrypoint was skipped.'
 
 expect_failure 'Usage:' bash "$SCRIPT_DIR/deploy-staging.sh"
 expect_failure 'full lowercase commit SHA' bash "$SCRIPT_DIR/deploy-staging.sh" main
@@ -309,6 +327,11 @@ git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
 git -C "$FIXTURE_REPO" remote set-url origin 'https://github.com/christianagbotah/irexpro.git'
 expect_failure 'Unexpected origin repository' run_deploy "$FIXTURE_CANDIDATE_SHA"
 [[ ! -s "$COMMAND_LOG" ]] || fail 'Stale-owner origin rejection must happen before install/build/restart commands.'
+
+make_fixture 'active-broker-deploy-hold'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+expect_failure 'simulated active session' run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_GUARD_BLOCK=1
+[[ ! -s "$COMMAND_LOG" ]] || fail 'Active-trader guard must fail before install/build or PM2 restart.'
 
 make_fixture 'node-major-mismatch'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"

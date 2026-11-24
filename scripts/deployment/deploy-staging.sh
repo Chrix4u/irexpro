@@ -274,6 +274,15 @@ run_database_migrations() {
   return 1
 }
 
+# Execute the read-only database guard directly from the exact candidate.
+# No checkout, migrations or process restarts can happen if trading is active.
+assert_trading_quiescent() {
+  local guard_path='scripts/deployment/staging-quiescence.cjs'
+  git show "${CANDIDATE_SHA}:${guard_path}" |
+    (cd "$STAGING_ROOT" && node -) ||
+    die "Active trading session or unresolved exposure; release remains on hold."
+}
+
 [[ "$#" -eq 1 ]] || die "Usage: deploy-staging.sh <40-character-commit-sha>"
 CANDIDATE_SHA="$1"
 readonly CANDIDATE_SHA
@@ -321,6 +330,8 @@ STAGE="candidate-verification"
 git fetch --quiet origin main
 git cat-file -e "${CANDIDATE_SHA}^{commit}" 2>/dev/null || die "Candidate commit is unavailable."
 git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main || die "Candidate is not contained in origin/main."
+STAGE="trading-quiescence-before-checkout"
+assert_trading_quiescent
 git switch --quiet --detach "$CANDIDATE_SHA"
 [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]] || die "Exact candidate checkout failed."
 [[ -z "$(git status --porcelain)" ]] || die "Exact candidate checkout is not clean."
@@ -357,11 +368,15 @@ sync_ai_python_dependencies
 # Migrations run only after every application build succeeds and before ANY
 # PM2 process is restarted. A migration failure therefore fails closed while
 # the previously running release remains untouched.
+STAGE="trading-quiescence-before-migrations"
+assert_trading_quiescent
 STAGE="database-migrations"
 run_database_migrations
 
 STAGE="ai-model-runtime-configuration"
 configure_xgboost_runtime_env
+STAGE="trading-quiescence-before-restarts"
+assert_trading_quiescent
 STAGE="restart-ai"
 pm2 restart "$AI_PM2_NAME" --update-env
 STAGE="ai-runtime-readiness"
