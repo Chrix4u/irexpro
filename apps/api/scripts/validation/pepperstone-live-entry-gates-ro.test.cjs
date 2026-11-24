@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {summarizeLiveEntryDecisions,normalizeBlockers}=require('./pepperstone-live-entry-gates-ro.cjs');
+const {summarizeLiveEntryDecisions,normalizeBlockers,parseSinceArgument}=require('./pepperstone-live-entry-gates-ro.cjs');
 const row=(x={})=>({
   instrument:'USDJPY',direction:'SELL',route:'ABSTAIN',
   execution_authority:'NONE',plan_b_admitted:'true',
@@ -49,41 +49,48 @@ test('operator query uses configured owner scope, not a hardcoded broker account
   assert.doesNotMatch(source,/49506270/);
 });
 
-test('primary Plan-B reversal M1 early bridge is shown only with model authority',()=>{
-  const accepted=summarizeLiveEntryDecisions([
-    row({route:'M1_EARLY_TRANSITION',primary_authority_path:'PRIMARY_PLAN_B'}),
-  ]);
-  assert.equal(accepted.approvedReversalTimingBridges,1);
-  assert.equal(accepted.primaryPlanBAuthorityGranted,1);
-  assert.equal(accepted.brokerNativeAuthorityGranted,0);
-  const rejected=summarizeLiveEntryDecisions([
-    row({route:'M1_EARLY_TRANSITION',primary_authority_path:'BLOCKED'}),
-  ]);
-  assert.equal(rejected.approvedReversalTimingBridges,0);
+test('post-release window requires full UTC timestamp and fails closed beyond two hours',()=>{
+  const now=Date.parse('2026-11-24T09:00:00Z');
+  assert.equal(parseSinceArgument(['--since=2026-11-24T08:48:22Z'],now).toISOString(),
+    '2026-11-24T08:48:22.000Z');
+  assert.equal(parseSinceArgument([],now),null);
+  for(const args of [
+    ['--since=2026-11-24'],
+    ['--since=2026-11-24T08:48:22+00:00'],
+    ['--since=2026-11-24T06:30:00Z'],
+    ['--since=2026-11-24T09:01:00Z'],
+    ['--all'],
+    ['--since=2026-11-24T08:48:22Z','--all'],
+  ])assert.throws(()=>parseSinceArgument(args,now));
 });
-test('M1 continuation bridge requires original explicit same-snapshot reversalTimingBridge proof',()=>{
-  const rejected=summarizeLiveEntryDecisions([
-    row({route:'M1_TREND_CONTINUATION',primary_authority_path:'PRIMARY_PLAN_B',reversal_timing_bridge:false}),
+test('post-release diagnostics distinguish true primary model authority from a mere route name',()=>{
+  const a=summarizeLiveEntryDecisions([
+    row({plan_b_route:'CONFIRMED_REVERSAL',route:'M1_EARLY_TRANSITION',primary_authority:'BLOCKED'}),
+    row({plan_b_route:'CONFIRMED_REVERSAL',route:'M1_EARLY_TRANSITION',primary_authority:'PRIMARY_PLAN_B'}),
+    row({plan_b_route:'CONFIRMED_REVERSAL',route:'M1_TREND_CONTINUATION',
+      primary_authority:'PRIMARY_PLAN_B',reversal_bridge:'true'}),
   ]);
-  const accepted=summarizeLiveEntryDecisions([
-    row({route:'M1_TREND_CONTINUATION',primary_authority_path:'PRIMARY_PLAN_B',reversal_timing_bridge:true}),
-  ]);
-  assert.equal(rejected.approvedReversalTimingBridges,0);
-  assert.equal(accepted.approvedReversalTimingBridges,1);
+  assert.equal(a.admittedWithAnyM1Route,3);
+  assert.equal(a.exactModelM1RouteMatch,0);
+  assert.equal(a.primaryModelAuthorityGranted,2);
+  assert.equal(a.primaryReversalTimingBridges,2);
+  assert.equal(a.brokerNativeAuthorityGranted,0);
 });
-test('unknown / missing model route never accidentally counts as match',()=>{
+
+test('unknown or missing model route never counts as a matched strategy',()=>{
   const x=summarizeLiveEntryDecisions([
     row({plan_b_route:'UNKNOWN',route:undefined}),
     row({plan_b_route:null,route:undefined}),
   ]);
   assert.equal(x.exactModelM1RouteMatch,0);
 });
-test('a BROKER_NATIVE authorized LIVE decision rejected downstream is not reported as a strategy abstention',()=>{
+test('broker-authorized later-gate failure is visibly distinct from M1 abstention',()=>{
   const x=summarizeLiveEntryDecisions([row({
-    route:'M1_TREND_CONTINUATION',plan_b_route:'TREND_CONTINUATION',
-    primary_authority_path:'PRIMARY_PLAN_B',execution_authority:'BROKER_NATIVE',
+    plan_b_route:'TREND_CONTINUATION',route:'M1_TREND_CONTINUATION',
+    primary_authority:'PRIMARY_PLAN_B',execution_authority:'BROKER_NATIVE',
     outcome_state:'SIGNAL_INVALID',outcome_reason:'EXTERNAL_PROVIDER_PAPER_ONLY',
   })]);
+  assert.equal(x.primaryModelAuthorityGranted,1);
   assert.equal(x.brokerAuthorizedButRejected,1);
   assert.equal(x.assessment,'BROKER_AUTHORIZED_DECISION_FAILED_LATER_GATE');
   assert.equal(x.latestByPair[0].outcomeReason,'EXTERNAL_PROVIDER_PAPER_ONLY');
