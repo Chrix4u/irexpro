@@ -455,6 +455,8 @@ describe('StateReconciliationService', () => {
         commission: '-8.40',
         swap: '0',
         closeReason: 'UNKNOWN',
+        providerDealId: '6860122',
+        providerNativeOrderId: '7695022',
       };
       orderRepo.find.mockResolvedValue([orphan]);
       tradeRepo.findOne.mockResolvedValue(terminal);
@@ -478,7 +480,11 @@ describe('StateReconciliationService', () => {
       expect(orderService.applyFill).toHaveBeenCalledWith('close-order-1', {
         quantity: '2.8000',
         price: '1.43767',
+        // Closing-order identity, three separate native ids from the proof:
+        // the native ORDER id (deal.orderId), the POSITION id and the DEAL id.
+        providerOrderId: '7695022',
         providerPositionId: '8422910',
+        providerDealId: '6860122',
       });
       expect(adapter.modifyOrder).not.toHaveBeenCalled();
       expect(persistence.resolveDiscrepanciesByRef).toHaveBeenCalled();
@@ -538,6 +544,8 @@ describe('StateReconciliationService', () => {
         commission: '-8.40',
         swap: '0',
         closeReason: 'UNKNOWN',
+        providerDealId: '6860122',
+        providerNativeOrderId: '7695022',
       };
       orderRepo.find.mockResolvedValue([orphan]);
       tradeRepo.find.mockResolvedValue([]);
@@ -556,7 +564,10 @@ describe('StateReconciliationService', () => {
       expect(orderService.applyFill).toHaveBeenCalledWith('aged-close-order-1', {
         quantity: '2.8000',
         price: '1.43767',
+        // Closing-order identity, three separate native ids from the proof.
+        providerOrderId: '7695022',
         providerPositionId: '8422910',
+        providerDealId: '6860122',
       });
       expect(adapter.modifyOrder).not.toHaveBeenCalled();
     } finally {

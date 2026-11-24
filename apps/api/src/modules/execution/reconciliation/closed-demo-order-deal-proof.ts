@@ -22,8 +22,15 @@ export type ClosedDemoOrderFillProof =
       quantity: string;
       price: string;
       positionRef: string;
-      /** Native closing-deal id when the provider surfaced one. */
+      /** Native closing-DEAL id when the provider surfaced one. */
       dealId?: string;
+      /**
+       * Native closing ORDER id (cTrader deal.orderId) when the provider
+       * surfaced one — the closing order's OWN id, never the position id and
+       * never the entry order's id. Absent when the broker does not expose
+       * it; callers must not synthesize a substitute.
+       */
+      orderId?: string;
     }
   | { matched: false; reason: string };
 
@@ -191,6 +198,7 @@ function proveDemoClosedOrderFillCore(
     price: deal.closePrice,
     positionRef: ref,
     ...(deal.providerDealId != null ? { dealId: deal.providerDealId } : {}),
+    ...(deal.providerNativeOrderId != null ? { orderId: deal.providerNativeOrderId } : {}),
   };
 }
 

@@ -548,6 +548,16 @@ export class ReconciliationResolutionService {
    *    provider position (observed while open, now closed) established the
    *    trade's fill price and full lot size; applyFill books the entry fill.
    *
+   * DUPLICATE-ATTRIBUTION GUARDS (single broker deal / single position-open
+   * fill can each prove at most ONE internal order):
+   * - A leg (close or entry) with MORE THAN ONE stranded order is ambiguous:
+   *   which order the evidence belongs to cannot be proven, so NONE of them
+   *   is credited — the ambiguity is surfaced in an audit record and all
+   *   candidates stay RECONCILIATION_PENDING for manual review.
+   * - Closing-deal identifiers are attributed only to the CLOSE order; the
+   *   ENTRY order is never stamped with the closing deal/order ids, and its
+   *   own native order and opening deal ids stay explicitly unknown.
+   *
    * Anything that cannot be proven EXACTLY is left RECONCILIATION_PENDING
    * (surfaced for the next cycle / manual review) — never fabricated here.
    * Per-order failures never break the authoritative trade resolution above.
@@ -566,68 +576,195 @@ export class ReconciliationResolutionService {
       );
       return;
     }
-    for (const order of orders) {
-      try {
-        if (order.status !== OrderStatus.RECONCILIATION_PENDING) continue;
-        const isCloseShape =
-          order.orderKind === OrderKind.MARKET && order.direction !== trade.direction;
-        const isEntryShape = order.direction === trade.direction;
-        if (!isCloseShape && !isEntryShape) continue;
 
-        const proof = isCloseShape
-          ? this.proveCloseOrderFillFromClosedDeal(order, trade, closedDeal)
-          : this.proveEntryOrderFillFromTrade(order, trade);
-        if (!proof.matched) {
-          this.logger.warn(
-            `Stranded ${isCloseShape ? 'close' : 'entry'} order ${order.id} for trade ` +
-              `${trade.id} not convergible from provider evidence (${proof.reason}) — ` +
-              'left RECONCILIATION_PENDING for retry / manual review',
-          );
-          continue;
-        }
+    const pending = orders.filter((o) => o.status === OrderStatus.RECONCILIATION_PENDING);
+    const closeLeg = pending.filter(
+      (o) => o.orderKind === OrderKind.MARKET && o.direction !== trade.direction,
+    );
+    const entryLeg = pending.filter((o) => o.direction === trade.direction);
 
-        const completed = await this.orderService.applyFill(order.id, {
-          quantity: proof.quantity,
-          price: proof.price,
-          ...(closedDeal?.externalOrderId != null
-            ? { providerPositionId: closedDeal.externalOrderId }
-            : {}),
-          ...(closedDeal?.providerDealId != null
-            ? { providerDealId: closedDeal.providerDealId }
-            : {}),
-        });
-        if (completed.status !== OrderStatus.FILLED) {
-          // Partial deal coverage — recorded, not terminal; surfaced, retried.
-          this.logger.warn(
-            `Stranded order ${order.id} for trade ${trade.id} recorded a partial ` +
-              `fill (${completed.filledQuantity}/${completed.requestedQuantity}); ` +
-              'terminal convergence deferred to further provider evidence',
-          );
-        }
-        await this.auditService.log({
-          actorUserId: trade.userId,
-          action: AuditAction.ORDER_RECONCILED,
-          resourceType: 'Order',
-          resourceId: order.id,
-          metadata: {
-            clientOrderId: order.clientOrderId,
-            leg: isCloseShape ? 'CLOSE' : 'ENTRY',
-            resolvedTo: completed.status,
-            evidence: proof.evidence,
-            providerPositionId: closedDeal?.externalOrderId ?? null,
-            providerClosePrice: proof.price,
-            providerFillQuantity: proof.quantity,
-            noBrokerOrderPlaced: true,
-            noTradeMutation: true,
-            source: 'reconciliation-resolution',
-          },
-        });
-      } catch (err) {
+    if (closeLeg.length > 1) {
+      await this.auditAmbiguousStrandedLeg(trade, 'CLOSE', closeLeg);
+    } else if (closeLeg.length === 1) {
+      await this.convergeCloseOrderFromClosedDeal(trade, closeLeg[0]!, closedDeal);
+    }
+
+    if (entryLeg.length > 1) {
+      await this.auditAmbiguousStrandedLeg(trade, 'ENTRY', entryLeg);
+    } else if (entryLeg.length === 1) {
+      await this.convergeEntryOrderFromTrade(trade, entryLeg[0]!);
+    }
+  }
+
+  /**
+   * Surface an ambiguous stranded leg: the evidence on hand (one closing
+   * deal / one position-open fill) can prove at most one of these orders,
+   * and nothing can prove WHICH one. Crediting any of them would be a guess
+   * that duplicates the evidence across rows — so none is credited and the
+   * candidates stay RECONCILIATION_PENDING for manual review.
+   */
+  private async auditAmbiguousStrandedLeg(
+    trade: Trade,
+    leg: 'CLOSE' | 'ENTRY',
+    candidates: Order[],
+  ): Promise<void> {
+    this.logger.warn(
+      `Stranded ${leg} convergence for trade ${trade.id} is ambiguous — ` +
+        `${candidates.length} RECONCILIATION_PENDING candidates and a single evidentiary fill; ` +
+        'all candidates left pending for manual review (no fill booked)',
+    );
+    try {
+      await this.auditService.log({
+        actorUserId: trade.userId,
+        action: AuditAction.ORDER_RECONCILIATION_PENDING,
+        resourceType: 'Trade',
+        resourceId: trade.id,
+        metadata: {
+          artifact: 'stranded-convergence-ambiguity-surfaced-v1',
+          leg,
+          candidateOrderIds: candidates.map((o) => o.id),
+          candidateClientOrderIds: candidates.map((o) => o.clientOrderId),
+          evidence: 'SINGLE_FILL_CANNOT_BE_ATTRIBUTED_TO_ONE_OF_SEVERAL_ORDERS',
+          resolution: 'NO_FILL_BOOKED_MANUAL_REVIEW_REQUIRED',
+          noBrokerOrderPlaced: true,
+          noTradeMutation: true,
+          source: 'reconciliation-resolution',
+        },
+      });
+    } catch (err) {
+      this.logger.warn(`Ambiguity audit write failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Converge the trade's single stranded CLOSE order from the provider's
+   * closing deal. Identifier attribution: the closing order keeps its OWN
+   * native ORDER id (deal.orderId), the POSITION id (deal.positionId via
+   * externalOrderId) and the closing DEAL id — three separate fields, never
+   * interchangeable, and never the entry order's identifiers.
+   */
+  private async convergeCloseOrderFromClosedDeal(
+    trade: Trade,
+    order: Order,
+    closedDeal: BrokerClosedTrade | null,
+  ): Promise<void> {
+    const proof = this.proveCloseOrderFillFromClosedDeal(order, trade, closedDeal);
+    if (!proof.matched) {
+      this.logger.warn(
+        `Stranded close order ${order.id} for trade ${trade.id} not convergible from ` +
+          `provider evidence (${proof.reason}) — left RECONCILIATION_PENDING for retry / manual review`,
+      );
+      return;
+    }
+    try {
+      const completed = await this.orderService.applyFill(order.id, {
+        quantity: proof.quantity,
+        price: proof.price,
+        // Closing-order identity: native ORDER id from the provider's own
+        // deal record, the POSITION id, and the closing DEAL id. Absent
+        // identifiers stay unknown (never synthesized, never cross-legged).
+        providerOrderId: closedDeal?.providerNativeOrderId ?? null,
+        providerPositionId: closedDeal?.externalOrderId ?? null,
+        providerDealId: closedDeal?.providerDealId ?? null,
+      });
+      if (completed.status !== OrderStatus.FILLED) {
+        // Partial deal coverage — recorded, not terminal; surfaced, retried.
         this.logger.warn(
-          `Stranded order convergence failed for trade ${trade.id} order ` +
-            `${order.id} (retried next run): ${(err as Error).message}`,
+          `Stranded close order ${order.id} for trade ${trade.id} recorded a partial ` +
+            `fill (${completed.filledQuantity}/${completed.requestedQuantity}); ` +
+            'terminal convergence deferred to further provider evidence',
         );
       }
+      await this.auditService.log({
+        actorUserId: trade.userId,
+        action: AuditAction.ORDER_RECONCILED,
+        resourceType: 'Order',
+        resourceId: order.id,
+        metadata: {
+          clientOrderId: order.clientOrderId,
+          leg: 'CLOSE',
+          resolvedTo: completed.status,
+          evidence: proof.evidence,
+          providerOrderId: closedDeal?.providerNativeOrderId ?? null,
+          providerPositionId: closedDeal?.externalOrderId ?? null,
+          providerDealId: closedDeal?.providerDealId ?? null,
+          providerClosePrice: proof.price,
+          providerFillQuantity: proof.quantity,
+          noBrokerOrderPlaced: true,
+          noTradeMutation: true,
+          source: 'reconciliation-resolution',
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Stranded close order convergence failed for trade ${trade.id} order ` +
+          `${order.id} (retried next run): ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Converge the trade's single stranded ENTRY order from the provider
+   * position facts already persisted on the trade. Identifier attribution:
+   * only the POSITION the entry opened is known — the native entry ORDER id
+   * was lost with the lost acknowledgement and the native OPENING deal id
+   * was never surfaced by the provider result, so both stay explicitly
+   * unknown. The closing deal's ids are NEVER stamped onto the entry order.
+   */
+  private async convergeEntryOrderFromTrade(trade: Trade, order: Order): Promise<void> {
+    const proof = this.proveEntryOrderFillFromTrade(order, trade);
+    if (!proof.matched) {
+      this.logger.warn(
+        `Stranded entry order ${order.id} for trade ${trade.id} not convergible from ` +
+          `provider evidence (${proof.reason}) — left RECONCILIATION_PENDING for retry / manual review`,
+      );
+      return;
+    }
+    try {
+      const completed = await this.orderService.applyFill(order.id, {
+        quantity: proof.quantity,
+        price: proof.price,
+        // ENTRY identity: position only. Native entry order id and native
+        // opening deal id remain explicitly unknown — closing-deal
+        // identifiers must never be assigned to the opening order.
+        providerOrderId: null,
+        providerPositionId: trade.externalPositionId ?? null,
+        providerDealId: null,
+      });
+      if (completed.status !== OrderStatus.FILLED) {
+        this.logger.warn(
+          `Stranded entry order ${order.id} for trade ${trade.id} recorded a partial ` +
+            `fill (${completed.filledQuantity}/${completed.requestedQuantity}); ` +
+            'terminal convergence deferred to further provider evidence',
+        );
+      }
+      await this.auditService.log({
+        actorUserId: trade.userId,
+        action: AuditAction.ORDER_RECONCILED,
+        resourceType: 'Order',
+        resourceId: order.id,
+        metadata: {
+          clientOrderId: order.clientOrderId,
+          leg: 'ENTRY',
+          resolvedTo: completed.status,
+          evidence: proof.evidence,
+          providerOrderId: null,
+          providerPositionId: trade.externalPositionId ?? null,
+          providerDealId: null,
+          entryOrderIdentityNote:
+            'NATIVE_ENTRY_ORDER_ID_AND_OPENING_DEAL_ID_EXPLICITLY_UNKNOWN',
+          providerFillPrice: proof.price,
+          providerFillQuantity: proof.quantity,
+          noBrokerOrderPlaced: true,
+          noTradeMutation: true,
+          source: 'reconciliation-resolution',
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Stranded entry order convergence failed for trade ${trade.id} order ` +
+          `${order.id} (retried next run): ${(err as Error).message}`,
+      );
     }
   }
 
@@ -635,8 +772,11 @@ export class ReconciliationResolutionService {
    * Exact-decimal proof that a stranded MARKET CLOSE order was economically
    * filled by the provider's closing deal. The deal's quantity must equal the
    * requested quantity EXACTLY (a partial close is NOT proof of a terminal
-   * fill); the close price must be a positive decimal; the instrument must
-   * match. Missing deal evidence fails closed — nothing is inferred.
+   * fill); the close price must be a positive decimal; the instrument AND
+   * the deal's execution side must match the close order's own side — a
+   * closed position alone never proves a fill, and an opposite-side deal
+   * cannot be the close order's fill. Missing deal evidence fails closed —
+   * nothing is inferred.
    */
   private proveCloseOrderFillFromClosedDeal(
     order: Order,
@@ -649,6 +789,8 @@ export class ReconciliationResolutionService {
     const decimal = /^\d+(?:\.\d+)?$/;
     if (closedDeal.instrument !== order.instrument)
       return { matched: false, reason: 'DEAL_INSTRUMENT_MISMATCH' };
+    if (closedDeal.direction !== order.direction)
+      return { matched: false, reason: 'DEAL_DIRECTION_MISMATCH' };
     if (typeof closedDeal.closePrice !== 'string' || !decimal.test(closedDeal.closePrice))
       return { matched: false, reason: 'DEAL_CLOSE_PRICE_UNPROVEN' };
     if (typeof closedDeal.lotSize !== 'string' || !decimal.test(closedDeal.lotSize))

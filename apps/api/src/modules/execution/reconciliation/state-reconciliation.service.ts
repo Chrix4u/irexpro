@@ -820,11 +820,14 @@ export class StateReconciliationService {
             });
             if (!proof.matched) continue;
             // The OrderService itself enforces fill <= requested and an
-            // optimistic status CAS. If a concurrent worker won, no duplicate
-            // fill can be booked; retry rather than overwriting anything.
+            // optimistic status CAS, and refuses to book a fill whose native
+            // deal id is already attributed to another order row. If a
+            // concurrent worker won, no duplicate fill can be booked; retry
+            // rather than overwriting anything.
             const completed = await this.orderService.applyFill(order.id, {
               quantity: proof.quantity,
               price: proof.price,
+              providerOrderId: proof.orderId ?? null,
               providerPositionId: proof.positionRef,
               ...(proof.dealId != null ? { providerDealId: proof.dealId } : {}),
             });
@@ -935,11 +938,14 @@ export class StateReconciliationService {
             });
             if (!proof.matched) continue;
             // The OrderService itself enforces fill <= requested and an
-            // optimistic status CAS. If a concurrent worker won, no duplicate
-            // fill can be booked; retry rather than overwriting anything.
+            // optimistic status CAS, and refuses to book a fill whose native
+            // deal id is already attributed to another order row. If a
+            // concurrent worker won, no duplicate fill can be booked; retry
+            // rather than overwriting anything.
             const completed = await this.orderService.applyFill(order.id, {
               quantity: proof.quantity,
               price: proof.price,
+              providerOrderId: proof.orderId ?? null,
               providerPositionId: proof.positionRef,
               ...(proof.dealId != null ? { providerDealId: proof.dealId } : {}),
             });
