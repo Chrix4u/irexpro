@@ -216,7 +216,7 @@ export default function AccountPortfolioPage() {
         </section>
 
         <div style={{ marginTop: 'var(--space-4)' }}>
-          <Link href="/trade" className="btn btn--ghost btn--sm">
+          <Link href="/trade" prefetch={false} className="btn btn--ghost btn--sm">
             Back to Trading Workspace
           </Link>
         </div>

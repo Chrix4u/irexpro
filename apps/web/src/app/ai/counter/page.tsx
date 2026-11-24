@@ -70,7 +70,7 @@ export default function CounterMirrorPage() {
           </p>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-          <Link href="/trade" className="btn btn--secondary">AI Trader</Link>
+          <Link href="/trade" prefetch={false} className="btn btn--secondary">AI Trader</Link>
           <Link href="/ai/bidirectional" className="btn btn--secondary">BUY / SELL analysis</Link>
           <Button type="button" size="sm" variant="secondary" onClick={() => void load()}>
             Refresh

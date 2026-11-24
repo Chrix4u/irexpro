@@ -495,7 +495,8 @@ test.describe("AI Trader novice workflow", () => {
     await expect(
       page.getByRole("heading", { level: 2, name: "Market" }),
     ).toBeVisible();
-    await expect(page.getByText("SCANNING", { exact: true })).toBeVisible();
+    const engine = page.getByRole("region", { name: "Active AI decision engine" });
+    await expect(engine.getByText("SCANNING", { exact: true })).toBeVisible();
     await expect(page.getByText("60.00% gate", { exact: true })).toHaveCount(0);
     await expect(page.getByText(/Candidate .* floor/i)).toHaveCount(0);
     await expect(page.getByText(/Meta .* gate/i)).toHaveCount(0);

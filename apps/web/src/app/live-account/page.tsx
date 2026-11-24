@@ -318,7 +318,7 @@ export default function TradingActivityPage() {
                     ? `Started ${formatTimestamp(overview.automation.startedAt)}`
                     : 'AI trading is not running on this selected account'}
                 </span>
-                <Link href="/trade" className="activity-link mt-4">Open AI Trading</Link>
+                <Link href="/trade" prefetch={false} className="activity-link mt-4">Open AI Trading</Link>
               </Card>
             </section>
 

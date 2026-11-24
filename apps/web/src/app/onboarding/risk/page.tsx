@@ -181,7 +181,7 @@ export default function AiProtectionPage() {
                 <Link href="/onboarding/broker" className="btn btn--secondary">
                   Broker Account
                 </Link>
-                <Link href="/trade" className="btn btn--primary">
+                <Link href="/trade" prefetch={false} className="btn btn--primary">
                   Open AI Trading
                 </Link>
                 <Link

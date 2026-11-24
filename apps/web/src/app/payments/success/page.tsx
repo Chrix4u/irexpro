@@ -157,7 +157,7 @@ export default function PaymentSuccessPage() {
             <p className="muted">
               Open positions, closed executions and server-authoritative trading activity are available in the Trading Workspace.
             </p>
-            <Link href="/trade" className="btn btn--secondary mt-4">Open Trading Workspace</Link>
+            <Link href="/trade" prefetch={false} className="btn btn--secondary mt-4">Open Trading Workspace</Link>
           </Card>
           <Card title="Portfolio & risk">
             <p className="muted">

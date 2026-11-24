@@ -382,12 +382,12 @@ export default function ClosedTradeHistoryPage() {
               Refresh
             </Button>
             <Link
-              href="/trade/history/profit-protection"
+              href="/trade/history/profit-protection" prefetch={false}
               className="btn btn--secondary btn--sm"
             >
               Profit Protection Exit Quality
             </Link>
-            <Link href="/trade" className="btn btn--ghost btn--sm">
+            <Link href="/trade" prefetch={false} className="btn btn--ghost btn--sm">
               Back to AI Trading
             </Link>
           </div>
