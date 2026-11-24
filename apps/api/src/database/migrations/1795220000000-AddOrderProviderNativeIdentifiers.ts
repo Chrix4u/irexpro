@@ -18,6 +18,13 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * deal that proved a reconciliation fill. provider_order_id keeps the
  * NATIVE ORDER id going forward (mapper prefers brokerNativeOrderId); the
  * three are never interchangeable.
+ *
+ * The partial unique index additionally enforces duplicate-deal attribution
+ * prevention: one native broker deal may be recorded on at most ONE order
+ * row per broker connection, so repeated or concurrent reconciliation can
+ * never credit the same provider deal to multiple internal orders. NULL and
+ * empty-string deal ids (the whole pre-existing population) are outside the
+ * index, so existing rows are untouched.
  */
 export class AddOrderProviderNativeIdentifiers1795220000000 implements MigrationInterface {
   name = 'AddOrderProviderNativeIdentifiers1795220000000';
@@ -47,9 +54,21 @@ export class AddOrderProviderNativeIdentifiers1795220000000 implements Migration
       COMMENT ON COLUMN trading.orders.provider_deal_id IS
         'Broker-native DEAL id that proved a reconciliation-booked fill (cTrader dealId). Populated only from provider evidence; never fabricated.'
     `);
+    await queryRunner.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_provider_deal_id
+        ON trading.orders (broker_connection_id, provider_deal_id)
+        WHERE provider_deal_id IS NOT NULL AND provider_deal_id <> ''
+    `);
+    await queryRunner.query(`
+      COMMENT ON INDEX trading.uq_orders_provider_deal_id IS
+        'One native broker deal may be attributed to at most one internal order row per broker connection — duplicate-deal attribution guard.'
+    `);
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
+      DROP INDEX IF EXISTS trading.uq_orders_provider_deal_id
+    `);
     await queryRunner.query(`
       ALTER TABLE trading.orders
         DROP CONSTRAINT IF EXISTS ck_orders_native_identifier_shape

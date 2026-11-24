@@ -344,41 +344,81 @@ export class OrderService {
       throw new ConflictException(`Order ${orderId} is not fillable (status: ${current.status})`);
     }
 
-    const result = await this.dataSource.query(
-      `UPDATE trading.orders
-       SET
-         filled_quantity = filled_quantity + $2::numeric,
-         avg_fill_price = CASE
-           WHEN filled_quantity = 0 THEN $3::numeric
-           ELSE (avg_fill_price * filled_quantity + $3::numeric * $2::numeric)
-                / (filled_quantity + $2::numeric)
-         END,
-         status = CASE
-           WHEN filled_quantity + $2::numeric = requested_quantity THEN 'FILLED'
-           ELSE 'PARTIALLY_FILLED'
-         END,
-         provider_order_id = COALESCE($4, provider_order_id),
-         provider_position_id = COALESCE($6, provider_position_id),
-         provider_deal_id = COALESCE($7, provider_deal_id),
-         finalized_at = CASE
-           WHEN filled_quantity + $2::numeric = requested_quantity THEN NOW()
-           ELSE finalized_at
-         END,
-         updated_at = NOW()
-       WHERE id = $1
-         AND status = $5
-         AND filled_quantity + $2::numeric <= requested_quantity
-       RETURNING *`,
-      [
-        orderId,
-        fill.quantity,
-        fill.price,
-        fill.providerOrderId ?? null,
-        current.status,
-        fill.providerPositionId ?? null,
-        fill.providerDealId ?? null,
-      ],
-    );
+    // Native-deal idempotency: the same broker deal can be delivered more
+    // than once (duplicate provider events, repeated or concurrent
+    // reconciliation). A fill already booked from that exact deal id must
+    // never be booked a second time — return the persisted row unchanged.
+    if (fill.providerDealId != null && current.providerDealId === fill.providerDealId) {
+      this.logger.log(
+        `Fill for order ${orderId} already booked from provider deal ${fill.providerDealId} — duplicate deal fill ignored`,
+      );
+      return current;
+    }
+
+    // Deal ownership: one native broker deal may be credited to at most ONE
+    // internal order row. Refuse to book a fill whose deal id is already
+    // recorded on a different order of the same broker connection; the
+    // partial unique index (migration 1795220000000) backs this against
+    // concurrent writers at the database level.
+    if (fill.providerDealId != null && current.providerDealId !== fill.providerDealId) {
+      const owner = await this.findDealOwner(current.brokerConnectionId, fill.providerDealId);
+      if (owner && owner !== orderId) {
+        throw new ConflictException(
+          `Provider deal ${fill.providerDealId} is already attributed to order ${owner} — ` +
+            'a single broker deal cannot be credited to multiple internal orders',
+        );
+      }
+    }
+
+    let result: unknown;
+    try {
+      result = await this.dataSource.query(
+        `UPDATE trading.orders
+         SET
+           filled_quantity = filled_quantity + $2::numeric,
+           avg_fill_price = CASE
+             WHEN filled_quantity = 0 THEN $3::numeric
+             ELSE (avg_fill_price * filled_quantity + $3::numeric * $2::numeric)
+                  / (filled_quantity + $2::numeric)
+           END,
+           status = CASE
+             WHEN filled_quantity + $2::numeric = requested_quantity THEN 'FILLED'
+             ELSE 'PARTIALLY_FILLED'
+           END,
+           provider_order_id = COALESCE($4, provider_order_id),
+           provider_position_id = COALESCE($6, provider_position_id),
+           provider_deal_id = COALESCE($7, provider_deal_id),
+           finalized_at = CASE
+             WHEN filled_quantity + $2::numeric = requested_quantity THEN NOW()
+             ELSE finalized_at
+           END,
+           updated_at = NOW()
+         WHERE id = $1
+           AND status = $5
+           AND filled_quantity + $2::numeric <= requested_quantity
+         RETURNING *`,
+        [
+          orderId,
+          fill.quantity,
+          fill.price,
+          fill.providerOrderId ?? null,
+          current.status,
+          fill.providerPositionId ?? null,
+          fill.providerDealId ?? null,
+        ],
+      );
+    } catch (err) {
+      // A concurrent writer booked the same native deal onto another order
+      // row between the ownership pre-check and this UPDATE — the partial
+      // unique index on (broker_connection_id, provider_deal_id) refuses it.
+      if (fill.providerDealId != null && this.isUniqueConstraintViolation(err)) {
+        throw new ConflictException(
+          `Provider deal ${fill.providerDealId} was concurrently attributed to another order — ` +
+            'a single broker deal cannot be credited to multiple internal orders',
+        );
+      }
+      throw err;
+    }
 
     // TypeORM's Postgres driver returns [rows, rowCount] for UPDATE queries
     // (even with RETURNING *) — unwrap the nested rows array before use.
@@ -441,6 +481,25 @@ export class OrderService {
       },
       order: { createdAt: 'ASC' },
     });
+  }
+
+  /**
+   * The id of the order row that already recorded the given native provider
+   * deal for a broker connection, when any. One native deal belongs to at
+   * most one internal order — callers use this to refuse crediting the same
+   * deal to a second row (duplicate-deal attribution guard).
+   */
+  async findDealOwner(
+    brokerConnectionId: string,
+    providerDealId: string,
+  ): Promise<string | null> {
+    const rows: Record<string, unknown>[] = await this.dataSource.query(
+      `SELECT id FROM trading.orders
+       WHERE broker_connection_id = $1 AND provider_deal_id = $2
+       LIMIT 1`,
+      [brokerConnectionId, providerDealId],
+    );
+    return rows.length > 0 ? (rows[0]!.id as string) : null;
   }
 
   async listOrdersByUser(userId: string, limit = 50): Promise<Order[]> {
