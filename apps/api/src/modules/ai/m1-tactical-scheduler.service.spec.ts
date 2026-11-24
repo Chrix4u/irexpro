@@ -848,6 +848,7 @@ function phase2Harness(
     suspendTrendContinuation?: boolean;
     enableAlternativeTrial?: boolean;
     enableCounterPilot?: boolean;
+    counterPilotOwnerId?: string;
     enableAdvisoryAlternates?: boolean;
     enableContinuousAdvisory?: boolean;
     enableQualityRisk?: boolean;
@@ -957,7 +958,8 @@ function phase2Harness(
         IREXPRO_OWNER_DEMO_PREDISPATCH_FEE_CONFLUENCE_SHADOW:
           options.enableOwnerPredispatchConfluenceShadow ? 'enabled' : '',
         VPS_FOREX_SCANNER_USER_ID:
-          options.enableContinuousAdvisory || options.enableOwnerLossAdvisory ? 'user-1' : '',
+          options.counterPilotOwnerId ??
+          (options.enableContinuousAdvisory || options.enableOwnerLossAdvisory ? 'user-1' : ''),
       };
       return values[key] ?? fallback;
     }),
@@ -3698,7 +3700,7 @@ describe('M1 V8 multi-model DEMO authority', () => {
 
   it('executes a separately qualified BUY counter into the existing Pepperstone DEMO risk path', async () => {
     jest.useFakeTimers({
-      now: new Date('2026-11-16T21:20:40.000Z'),
+      now: new Date('2026-11-20T21:15:40.000Z'),
       doNotFake: ['setTimeout', 'setInterval', 'setImmediate', 'nextTick'],
     });
     try {
@@ -3706,11 +3708,13 @@ describe('M1 V8 multi-model DEMO authority', () => {
         rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
         session: fullAutoSession,
         enableCounterPilot: true,
+        counterPilotOwnerId: 'user-1',
         suspendTrendContinuation: true,
         trainedExpertState: 'CONFIRM',
         trainedExpertDirection: 'BUY',
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
+      h.isPepperstoneUsdDemoBrokerConnection.mockResolvedValue(true);
       const original = (h.service as any).evaluateDemoMultimodel.bind(h.service);
       jest
         .spyOn(h.service as any, 'evaluateDemoMultimodel')
@@ -3765,8 +3769,8 @@ describe('M1 V8 multi-model DEMO authority', () => {
         });
       const features = {
         ...cleanContinuationFeatures(),
-        decisionTime: new Date('2026-11-16T21:20:00Z'),
-        latestM1OpenTime: new Date('2026-11-16T21:19:00Z'),
+        decisionTime: new Date('2026-11-20T21:15:00Z'),
+        latestM1OpenTime: new Date('2026-11-20T21:14:00Z'),
         emaSeparationAtr: 0,
       };
       await driveFeatures(h, features, { brokerConnectionId: 'demo-conn-2' });
@@ -3798,8 +3802,8 @@ describe('M1 V8 multi-model DEMO authority', () => {
       expect(h.closeTrade).not.toHaveBeenCalled();
       expect(h.loadDemoAlternativeTrialEntryCount).toHaveBeenCalledWith(
         expect.objectContaining({
-          startsAt: '2026-11-16T21:00:00.000Z',
-          endsAt: '2026-11-17T00:00:00.000Z',
+          startsAt: '2026-11-20T21:12:00.000Z',
+          endsAt: '2026-11-20T22:00:00.000Z',
         }),
       );
     } finally {
@@ -3807,9 +3811,9 @@ describe('M1 V8 multi-model DEMO authority', () => {
     }
   });
 
-  it('keeps the counter pilot unable to authorize DEMO orders after its 11 AM cutoff', async () => {
+  it('keeps the counter pilot unable to authorize DEMO orders at its configured historical cutoff', async () => {
     jest.useFakeTimers({
-      now: new Date('2026-11-17T00:00:00Z'),
+      now: new Date('2026-11-20T22:00:00Z'),
       doNotFake: ['setTimeout', 'setInterval', 'setImmediate', 'nextTick'],
     });
     try {
@@ -3817,13 +3821,15 @@ describe('M1 V8 multi-model DEMO authority', () => {
         rollout: M1_TACTICAL_ROLLOUT_POLICY_V8_PRIMARY_ONLY_PROBATION,
         session: fullAutoSession,
         enableCounterPilot: true,
+        counterPilotOwnerId: 'user-1',
         suspendTrendContinuation: true,
       });
       h.isPepperstoneDemoBrokerConnection.mockResolvedValue(true);
+      h.isPepperstoneUsdDemoBrokerConnection.mockResolvedValue(true);
       const features = {
         ...cleanContinuationFeatures(),
-        decisionTime: new Date('2026-11-17T00:00:00Z'),
-        latestM1OpenTime: new Date('2026-11-17T10:59:00Z'),
+        decisionTime: new Date('2026-11-20T22:00:00Z'),
+        latestM1OpenTime: new Date('2026-11-20T21:59:00Z'),
         emaSeparationAtr: 0,
       };
       await driveFeatures(h, features, { brokerConnectionId: 'demo-conn-2' });
