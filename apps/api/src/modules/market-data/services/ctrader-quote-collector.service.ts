@@ -3,6 +3,9 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import type { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import type { OHLCV } from '../../broker/interfaces/broker-adapter.interface';
+import { BrokerMode } from '../../broker/interfaces/broker-adapter.interface';
+import { BrokerAuthorizationStatus } from '../../broker/authorization/broker-authorization-status';
+import type { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { BrokerService } from '../../broker/broker.service';
 import { BrokerConnectionStatus } from '../../broker/interfaces/broker-adapter.interface';
 import { CTRADER_FAMILY_BROKER_IDS } from '../../broker/registry/broker-catalog';
@@ -213,6 +216,8 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
         return;
       }
 
+      if (!this.liveSourceIsAllowed(connection)) return;
+
       // Execution-grade bid/ask evidence has priority over historical backfill.
       // A slow/rate-limited OHLCV request must never starve fresh quote samples
       // used by M1 readiness, cross-currency sizing and final risk validation.
@@ -247,6 +252,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
       const connection = await this.brokerService.findConnectionById(connectionId, userId);
       if (!CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId)) return;
       if (connection.status !== BrokerConnectionStatus.CONNECTED) return;
+      if (!this.liveSourceIsAllowed(connection)) return;
       await this.sampleLiveSpreads(userId, connectionId);
     } catch (error) {
       this.warnThrottled(
@@ -259,12 +265,35 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   }
 
   /**
-   * The configured source remains the default research account. While DEMO
-   * users trial another cTrader account, collect from the latest FULL_AUTO
-   * cTrader session (active first, then most recently ended), even when AI is
-   * stopped. This prepares that exact broker's M1/M5/M15/H1/H4 history for
-   * charting and future execution without ever moving source rows across
-   * connection IDs. Read-only, user-scoped and cached to avoid 1 Hz DB reads.
+   * A session lookup is not an execution authorization. Recheck its LIVE
+   * account binding at the moment of each quote/history read, so revoked
+   * authorization or an unknown broker identity cannot be sampled as a
+   * qualified LIVE source during the 15-second cache lifetime.
+   */
+  private liveSourceIsAllowed(connection: BrokerConnection): boolean {
+    if (connection.accountType !== BrokerMode.LIVE) return true;
+    const allowed =
+      connection.brokerId === 'pepperstone-ctrader' &&
+      connection.providerBrokerIdentity === 'pepperstone' &&
+      connection.authorizationStatus === BrokerAuthorizationStatus.ACTIVE &&
+      connection.liveTradingEnabled === true;
+    if (!allowed) {
+      this.warnThrottled(
+        connection.id + ':unauthorized-live-market-source',
+        'The selected cTrader LIVE source is no longer authorized for exact-account sampling.',
+      );
+    }
+    return allowed;
+  }
+
+  /**
+   * Resolve the exact cTrader connection used by the owner-selected FULL_AUTO
+   * session. An ACTIVE, authorized Pepperstone LIVE session takes precedence
+   * over recently ended DEMO sessions; otherwise preserve the established
+   * DEMO-history fallback. Never borrow DEMO candles/spreads for LIVE.
+   *
+   * LIVE is read-only in this collector: broker requests are quote/OHLCV only;
+   * no LIVE order permission is granted by market-data source selection.
    */
   private async resolveCollectionConnectionId(userId: string): Promise<string> {
     const configuredSource = this.sourceConnectionId();
@@ -287,10 +316,20 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
          WHERE s.user_id = $1
            AND s.execution_mode = 'FULL_AUTO'
            AND s.started_at >= NOW() - INTERVAL '7 days'
-           AND b.account_type = 'DEMO'
            AND b.status = 'CONNECTED'
            AND b.broker_id = ANY($2::text[])
-         ORDER BY (s.ended_at IS NULL) DESC, s.started_at DESC
+           AND (
+             b.account_type = 'DEMO'
+             OR (
+               b.account_type = 'LIVE'
+               AND b.broker_id = 'pepperstone-ctrader'
+               AND b.provider_broker_identity = 'pepperstone'
+               AND b.authorization_status = 'ACTIVE'
+               AND b.live_trading_enabled = TRUE
+               AND s.status = 'ACTIVE'
+             )
+           )
+         ORDER BY (s.status = 'ACTIVE') DESC, s.started_at DESC
          LIMIT 1`,
         [userId, [...CTRADER_FAMILY_BROKER_IDS]],
       );
@@ -304,9 +343,9 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
         this.historicalRefreshFailures.clear();
         this.latestBrokerClosedBarAt.clear();
         this.staleHistoricalResponses.clear();
-        // When a recent FULL_AUTO session selects a different cTrader DEMO
-        // account, use the existing one-context-request-per-cycle allowance to
-        // warm H1/H4/M5/M15 for each of its six pairs before regular rotation.
+        // When a FULL_AUTO session switches accounts, including a certified
+        // Pepperstone LIVE binding, warm exact-account context without raising
+        // provider request rates, importing DEMO bars, or fabricating spread.
         // USDJPY first improves the observed chart/entry inspection case only;
         // all symbols retain the same execution eligibility and risk gates.
         const instruments = this.instruments();
