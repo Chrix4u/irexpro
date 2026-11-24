@@ -40,3 +40,11 @@ test('malformed blocker strings never grant anything',()=>{
 test('an empty 30-minute decision window is distinct from failed execution',()=>{
   assert.equal(summarizeLiveEntryDecisions([]).assessment,'NO_RECENT_LIVE_DECISIONS');
 });
+
+test('operator query uses configured owner scope, not a hardcoded broker account ID',()=>{
+  const fs=require('node:fs');
+  const source=fs.readFileSync(require.resolve('./pepperstone-live-entry-gates-ro.cjs'),'utf8');
+  assert.match(source,/env\.VPS_FOREX_SCANNER_USER_ID/);
+  assert.match(source,/account_type='LIVE' AND user_id=\$1/);
+  assert.doesNotMatch(source,/49506270/);
+});
