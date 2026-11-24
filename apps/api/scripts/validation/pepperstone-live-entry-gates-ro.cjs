@@ -61,14 +61,19 @@ async function main(){
     connectionTimeoutMillis:4000,statement_timeout:8000,
     application_name:'irexpro_pepperstone_live_entry_gate_audit_readonly',
   });
+  const configuredOwner=env.VPS_FOREX_SCANNER_USER_ID;
+  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(configuredOwner||'')){
+    throw Error('SCOPED_OWNER_ID_NOT_CONFIGURED');
+  }
   await db.connect();
   try{
     await db.query('BEGIN READ ONLY');
     const b=await db.query(
       "SELECT id,user_id,status,authorization_status,live_trading_enabled "+
       "FROM broker.broker_connections WHERE broker_id='pepperstone-ctrader' "+
-      "AND account_type='LIVE' AND account_id='49506270' "+
-      "AND provider_broker_identity='pepperstone' AND deleted_at IS NULL"
+      "AND account_type='LIVE' AND user_id=$1 "+
+      "AND provider_broker_identity='pepperstone' AND deleted_at IS NULL",
+      [configuredOwner]
     );
     if(b.rows.length!==1)throw Error('EXACT_LIVE_ACCOUNT_BINDING_NOT_UNIQUE');
     const owner=b.rows[0],params=[owner.id,owner.user_id];

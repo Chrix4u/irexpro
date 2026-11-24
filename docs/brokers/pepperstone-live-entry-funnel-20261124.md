@@ -15,7 +15,7 @@ From the VPS:
     cd /home/lightworld/webapps/irexpro-staging/apps/api
     node scripts/validation/pepperstone-live-entry-gates-ro.cjs
 
-The tool checks exact Pepperstone LIVE account 49506270, exact owner and
+The tool checks the configured owner's unique Pepperstone LIVE account and
 connection, active session, last 30 minutes of M1 decisions and recorded
 order counts. It distinguishes independent Plan-B admission, M1 route
 qualification, their co-occurrence, exact matching strategy route,
