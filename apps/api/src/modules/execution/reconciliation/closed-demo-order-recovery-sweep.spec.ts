@@ -114,12 +114,12 @@ describe('aged cTrader-family DEMO closed-order proof (no freshness fence)', () 
       ),
     ).toBe('CLOSE_DISPATCH_TIME_UNPROVEN');
     // ...while the same evidence still fails closed on economics mismatch:
-    expect(
-      reasonOf(proveAged({ providerClosedDeals: [{ ...deal, closePrice: '1.43768' }] })),
-    ).toBe('EXACT_BROKER_CLOSE_DEAL_ECONOMICS_MISMATCH');
-    expect(
-      reasonOf(proveAged({ providerClosedDeals: [{ ...deal, lotSize: '1.4' }] })),
-    ).toBe('EXACT_BROKER_CLOSE_DEAL_ECONOMICS_MISMATCH');
+    expect(reasonOf(proveAged({ providerClosedDeals: [{ ...deal, closePrice: '1.43768' }] }))).toBe(
+      'EXACT_BROKER_CLOSE_DEAL_ECONOMICS_MISMATCH',
+    );
+    expect(reasonOf(proveAged({ providerClosedDeals: [{ ...deal, lotSize: '1.4' }] }))).toBe(
+      'EXACT_BROKER_CLOSE_DEAL_ECONOMICS_MISMATCH',
+    );
     expect(reasonOf(proveAged({ providerClosedDeals: [] }))).toBe('PROVIDER_DEAL_NOT_UNIQUE');
     expect(
       reasonOf(proveAged({ providerClosedDeals: [deal, { ...deal, externalOrderId: '8422910' }] })),
@@ -127,9 +127,9 @@ describe('aged cTrader-family DEMO closed-order proof (no freshness fence)', () 
   });
 
   it('rejects future close timestamps and malformed provenance like the live path', () => {
-    expect(
-      reasonOf(proveAged({ observedAt: new Date('2026-11-09T12:00:00Z') })),
-    ).toBe('CLOSE_DISPATCH_TIME_UNPROVEN');
+    expect(reasonOf(proveAged({ observedAt: new Date('2026-11-09T12:00:00Z') }))).toBe(
+      'CLOSE_DISPATCH_TIME_UNPROVEN',
+    );
     expect(reasonOf(proveAged({ trade: { ...trade, closedAt: null as never } }))).toBe(
       'TIME_PROVENANCE_UNVERIFIED',
     );
@@ -163,10 +163,19 @@ describe('selectAgedDemoCloseRecoveryCandidates', () => {
     expect(
       selectAgedDemoCloseRecoveryCandidates(
         [
-          { ...stranded('with-id', 't1', new Date('2026-11-10T06:00:00Z')), providerOrderId: '991' },
+          {
+            ...stranded('with-id', 't1', new Date('2026-11-10T06:00:00Z')),
+            providerOrderId: '991',
+          },
           { ...stranded('filled', 't2', new Date('2026-11-10T06:00:00Z')), filledQuantity: '1' },
-          { ...stranded('limit', 't3', new Date('2026-11-10T06:00:00Z')), orderKind: OrderKind.LIMIT },
-          { ...stranded('terminal', 't4', new Date('2026-11-10T06:00:00Z')), status: OrderStatus.FILLED },
+          {
+            ...stranded('limit', 't3', new Date('2026-11-10T06:00:00Z')),
+            orderKind: OrderKind.LIMIT,
+          },
+          {
+            ...stranded('terminal', 't4', new Date('2026-11-10T06:00:00Z')),
+            status: OrderStatus.FILLED,
+          },
         ],
         now,
         undefined,
@@ -185,16 +194,12 @@ describe('selectAgedDemoCloseRecoveryCandidates', () => {
     const ids = Array.from({ length: 30 }, (_, i) => `o${String(i).padStart(2, '0')}`);
     const orders = ids.map((id) => stranded(id, `t-${id}`, new Date('2026-11-10T06:00:00Z')));
     const first = selectAgedDemoCloseRecoveryCandidates(orders, now, undefined).map((o) => o.id);
-    const second = selectAgedDemoCloseRecoveryCandidates(
-      orders,
-      now,
-      first[first.length - 1],
-    ).map((o) => o.id);
-    const third = selectAgedDemoCloseRecoveryCandidates(
-      orders,
-      now,
-      second[second.length - 1],
-    ).map((o) => o.id);
+    const second = selectAgedDemoCloseRecoveryCandidates(orders, now, first[first.length - 1]).map(
+      (o) => o.id,
+    );
+    const third = selectAgedDemoCloseRecoveryCandidates(orders, now, second[second.length - 1]).map(
+      (o) => o.id,
+    );
     // Batch 1: the first 25 in deterministic id order.
     expect(first).toEqual(ids.slice(0, 25));
     // Batch 2: the remaining 5 then wraps to the head to fill the budget —
@@ -217,9 +222,9 @@ describe('selectAgedDemoCloseRecoveryCandidates', () => {
     const noSubmitted = { ...stranded('x', 't1', new Date('2026-11-10T06:00:00Z')) };
     delete (noSubmitted as { submittedAt?: Date }).submittedAt;
     expect(selectAgedDemoCloseRecoveryCandidates([noSubmitted], now, undefined)).toEqual([]);
-    expect(selectAgedDemoCloseRecoveryCandidates([stranded('y', 't2', now)], new Date('nan'), undefined)).toEqual(
-      [],
-    );
+    expect(
+      selectAgedDemoCloseRecoveryCandidates([stranded('y', 't2', now)], new Date('nan'), undefined),
+    ).toEqual([]);
   });
 });
 

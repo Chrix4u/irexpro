@@ -38,14 +38,14 @@ export function selectAgedDemoCloseRecoveryCandidates<
   T extends Pick<
     Order,
     | 'id'
-      | 'tradeId'
-      | 'status'
-      | 'orderKind'
-      | 'providerOrderId'
-      | 'filledQuantity'
-      | 'avgFillPrice'
-      | 'submittedAt'
-      | 'createdAt'
+    | 'tradeId'
+    | 'status'
+    | 'orderKind'
+    | 'providerOrderId'
+    | 'filledQuantity'
+    | 'avgFillPrice'
+    | 'submittedAt'
+    | 'createdAt'
   >,
 >(orders: readonly T[], asOf: Date, afterId: string | undefined): T[] {
   const now = asOf.getTime();

@@ -873,8 +873,7 @@ export class StateReconciliationService {
           agedAsOf,
           this.agedDemoCloseRecoveryCursor.get(connection.id),
         ).filter((candidate) => !liveRecoveryAttemptedOrderIds.has(candidate.id));
-        if (agedCandidates.length === 0)
-          this.agedDemoCloseRecoveryCursor.delete(connection.id);
+        if (agedCandidates.length === 0) this.agedDemoCloseRecoveryCursor.delete(connection.id);
         else
           this.agedDemoCloseRecoveryCursor.set(
             connection.id,

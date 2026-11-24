@@ -642,7 +642,9 @@ export class ReconciliationResolutionService {
     order: Order,
     trade: Trade,
     closedDeal: BrokerClosedTrade | null,
-  ): { matched: true; quantity: string; price: string; evidence: string } | { matched: false; reason: string } {
+  ):
+    | { matched: true; quantity: string; price: string; evidence: string }
+    | { matched: false; reason: string } {
     if (!closedDeal) return { matched: false, reason: 'NO_PROVIDER_CLOSED_DEAL' };
     const decimal = /^\d+(?:\.\d+)?$/;
     if (closedDeal.instrument !== order.instrument)
@@ -659,7 +661,8 @@ export class ReconciliationResolutionService {
       return { matched: false, reason: 'ORDER_HAS_PROVIDER_ID_USE_STABLE_IDENTIFIER_PATH' };
     if (order.filledQuantity == null || compareDecimal(order.filledQuantity, '0') !== 0)
       return { matched: false, reason: 'ORDER_ALREADY_HAS_RECORDED_FILL' };
-    if (order.avgFillPrice !== null) return { matched: false, reason: 'ORDER_ALREADY_HAS_FILL_PRICE' };
+    if (order.avgFillPrice !== null)
+      return { matched: false, reason: 'ORDER_ALREADY_HAS_FILL_PRICE' };
     return {
       matched: true,
       quantity: closedDeal.lotSize,
@@ -677,13 +680,16 @@ export class ReconciliationResolutionService {
   private proveEntryOrderFillFromTrade(
     order: Order,
     trade: Trade,
-  ): { matched: true; quantity: string; price: string; evidence: string } | { matched: false; reason: string } {
+  ):
+    | { matched: true; quantity: string; price: string; evidence: string }
+    | { matched: false; reason: string } {
     const decimal = /^\d+(?:\.\d+)?$/;
     if (order.providerOrderId !== null)
       return { matched: false, reason: 'ORDER_HAS_PROVIDER_ID_USE_STABLE_IDENTIFIER_PATH' };
     if (order.filledQuantity == null || compareDecimal(order.filledQuantity, '0') !== 0)
       return { matched: false, reason: 'ORDER_ALREADY_HAS_RECORDED_FILL' };
-    if (order.avgFillPrice !== null) return { matched: false, reason: 'ORDER_ALREADY_HAS_FILL_PRICE' };
+    if (order.avgFillPrice !== null)
+      return { matched: false, reason: 'ORDER_ALREADY_HAS_FILL_PRICE' };
     if (typeof trade.fillPrice !== 'string' || !decimal.test(trade.fillPrice))
       return { matched: false, reason: 'TRADE_FILL_PRICE_UNPROVEN' };
     if (typeof trade.lotSize !== 'string' || !decimal.test(trade.lotSize))

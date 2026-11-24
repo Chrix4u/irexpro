@@ -208,7 +208,9 @@ export class OrderService {
     }
     const order = await this.applyTransition(orderId, OrderStatus.ACKNOWLEDGED, {
       providerOrderId,
-      ...(extras.providerPositionId != null ? { providerPositionId: extras.providerPositionId } : {}),
+      ...(extras.providerPositionId != null
+        ? { providerPositionId: extras.providerPositionId }
+        : {}),
     });
     return order;
   }
