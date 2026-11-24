@@ -92,9 +92,32 @@ const output={artifact:'pepperstone-live-account-readiness-diagnostic-v1',
   const proof=evidenceReadOnlyStatus();
   output.canaryPlaceStopCloseReconcileEvidence=proof.status;
   if(proof.status==='ATTESTED_PASS_PENDING_RELEASE'){
-    output.certifiedProviderReleasePending=true;
     output.certificationEvidenceRunId=proof.runId;
-    output.blockers.push('CERTIFICATION_PASS_AWAITING_REVIEWED_PROVIDER_RELEASE');
+    // The actual running API gets authority exclusively from its compiled
+    // identity-scoped registry. Inspect that release READ ONLY, not source
+    // snippets or user-supplied input. Independent original evidence must
+    // match the exact broker and canonical hash before reporting certified.
+    let released=false;
+    try{
+      const catalog=require(path.join(root,'dist/modules/broker/registry/broker-catalog.js')).BROKER_CATALOG;
+      const item=catalog.find(x=>x.id==='pepperstone-ctrader');
+      released=item?.productionLiveVerification?.status==='VERIFIED' &&
+        item.productionLiveVerification.certifiedVia==='HARNESS_CERTIFIED' &&
+        item.productionLiveVerification.certificationRunRef===
+          '4ec633e4-a443-47e3-8bca-1f8f214982f5@sha256:f9d9b0cdb19b5f97629e2608fe93f52f5258237c719d0ca55fdfe0e42ac84643';
+    }catch{
+      output.warnings.push('DEPLOYED_BROKER_REGISTRY_READ_UNAVAILABLE');
+    }
+    if(released){
+      output.providerLiveCertification='CERTIFIED';
+      output.certifiedProviderReleasePending=false;
+      output.savedOAuthTradingScope='LIVE_ORDER_EXECUTION_PROVEN_BY_CERTIFICATION';
+      if(!output.automatedLiveEnabled)output.blockers.push('ACCOUNT_OWNER_ENABLE_LIVE_REQUIRED');
+      output.recommendation='OWNER_MAY_ENABLE_LIVE_WITH_NORMAL_RISK_GATES';
+    }else{
+      output.certifiedProviderReleasePending=true;
+      output.blockers.push('CERTIFICATION_PASS_AWAITING_REVIEWED_PROVIDER_RELEASE');
+    }
   }else{
     if(proof.status==='INVALID')output.warnings.push('CERTIFICATION_EVIDENCE_INTEGRITY_REVIEW_REQUIRED');
     output.blockers.push('REAL_LIVE_CANARY_ORDER_STOP_EXIT_RECONCILIATION_NOT_CERTIFIED');
