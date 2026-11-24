@@ -489,10 +489,7 @@ export class OrderService {
    * most one internal order — callers use this to refuse crediting the same
    * deal to a second row (duplicate-deal attribution guard).
    */
-  async findDealOwner(
-    brokerConnectionId: string,
-    providerDealId: string,
-  ): Promise<string | null> {
+  async findDealOwner(brokerConnectionId: string, providerDealId: string): Promise<string | null> {
     const rows: Record<string, unknown>[] = await this.dataSource.query(
       `SELECT id FROM trading.orders
        WHERE broker_connection_id = $1 AND provider_deal_id = $2

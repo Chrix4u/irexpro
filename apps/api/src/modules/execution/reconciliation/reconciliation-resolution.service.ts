@@ -751,8 +751,7 @@ export class ReconciliationResolutionService {
           providerOrderId: null,
           providerPositionId: trade.externalPositionId ?? null,
           providerDealId: null,
-          entryOrderIdentityNote:
-            'NATIVE_ENTRY_ORDER_ID_AND_OPENING_DEAL_ID_EXPLICITLY_UNKNOWN',
+          entryOrderIdentityNote: 'NATIVE_ENTRY_ORDER_ID_AND_OPENING_DEAL_ID_EXPLICITLY_UNKNOWN',
           providerFillPrice: proof.price,
           providerFillQuantity: proof.quantity,
           noBrokerOrderPlaced: true,

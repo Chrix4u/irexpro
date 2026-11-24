@@ -601,9 +601,7 @@ describe('OrderService', () => {
       const [sql, params] = query.mock.calls[0] as unknown as [string, unknown[]];
       expect(sql).toContain('SELECT id FROM trading.orders');
       expect(sql).toContain('provider_deal_id = $2');
-      expect(params).toEqual(
-        expect.arrayContaining([baseInput.brokerConnectionId, 'deal-951']),
-      );
+      expect(params).toEqual(expect.arrayContaining([baseInput.brokerConnectionId, 'deal-951']));
     });
 
     it('translates a concurrent unique-index violation into a duplicate-attribution Conflict', async () => {
@@ -636,17 +634,19 @@ describe('OrderService', () => {
       await expect(service.findDealOwner(baseInput.brokerConnectionId, 'deal-9')).resolves.toBe(
         'order-owner',
       );
-      expect(query).toHaveBeenCalledWith(
-        expect.stringContaining('provider_deal_id = $2'),
-        [baseInput.brokerConnectionId, 'deal-9'],
-      );
+      expect(query).toHaveBeenCalledWith(expect.stringContaining('provider_deal_id = $2'), [
+        baseInput.brokerConnectionId,
+        'deal-9',
+      ]);
     });
 
     it('findDealOwner returns null when no row owns the deal', async () => {
       const query = jest.fn().mockResolvedValue([]);
       (dataSource as unknown as { query: jest.Mock }).query = query;
 
-      await expect(service.findDealOwner(baseInput.brokerConnectionId, 'deal-9')).resolves.toBeNull();
+      await expect(
+        service.findDealOwner(baseInput.brokerConnectionId, 'deal-9'),
+      ).resolves.toBeNull();
     });
   });
 
