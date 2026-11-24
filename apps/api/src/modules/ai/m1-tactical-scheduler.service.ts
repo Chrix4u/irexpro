@@ -136,13 +136,13 @@ import { observeSecondaryPredictedCostFloor } from './secondary-predicted-cost-s
 import { evaluateLowVolRangeShadow, LOW_VOL_RANGE_STOP_ATR } from './low-vol-range-shadow';
 import { evaluateLowVolRangeShadowOutcome } from './low-vol-range-shadow-outcome';
 import {
-  evaluateMultimodelDemoAuthority,
-  multimodelDemoExecutionVolumeCap,
+  evaluateMultimodelAuthority,
+  multimodelExecutionVolumeCap,
   m1CandidateToPlanBInput,
-  multimodelDemoSignalConfidence,
-  MULTIMODEL_DEMO_ENGINE_CODE,
-  type MultimodelDemoAuthorityDecision,
-} from './multimodel-demo-authority';
+  multimodelSignalConfidence,
+  MULTIMODEL_ENGINE_CODE,
+  type MultimodelAuthorityDecision,
+} from './multimodel-authority';
 import { evaluateM1TacticalExpectancy } from './m1-tactical-expectancy';
 import { attributeZaiDemoBlockers, diagnoseZaiDemoCostGeometry } from './zai-demo-diagnostics';
 import { evaluateM1CausalCommissionShadow } from './m1-causal-commission-shadow';
@@ -210,7 +210,7 @@ interface MultimodelDemoEvaluation {
   ensemble: PlanBEnsembleScore;
   governance: EnsembleGovernanceDecision;
   trainedExpert: HighConvictionOverlay;
-  authority: MultimodelDemoAuthorityDecision;
+  authority: MultimodelAuthorityDecision;
   portfolioSnapshotAvailable: boolean;
 }
 
@@ -834,7 +834,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ? 'DEMO_FULL_AUTO_PROMOTED'
           : 'PAPER_ONLY_RESEARCH';
     this.logger.log(
-      `M1 tactical scheduler enabled phase=${this.rolloutPolicy.phase} cadence=${this.rolloutPolicy.cadenceMs / 1000}s authority=${startupAuthority} primaryEngine=${this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' ? MULTIMODEL_DEMO_ENGINE_CODE : 'irexpro-m1-tactical'} m1Role=${this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE'}`,
+      `M1 tactical scheduler enabled phase=${this.rolloutPolicy.phase} cadence=${this.rolloutPolicy.cadenceMs / 1000}s authority=${startupAuthority} primaryEngine=${this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' ? MULTIMODEL_ENGINE_CODE : 'irexpro-m1-tactical'} m1Role=${this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL' ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE'}`,
     );
     this.timer = setInterval(() => void this.runOnce(), this.rolloutPolicy.cadenceMs);
     this.timer.unref?.();
@@ -851,7 +851,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     return {
       enabled: this.enabled(),
       primaryEngineCode: professionalDemoPhase
-        ? MULTIMODEL_DEMO_ENGINE_CODE
+        ? MULTIMODEL_ENGINE_CODE
         : 'irexpro-m1-tactical',
       primaryEngineDisplayName: professionalDemoPhase
         ? 'iRexPro Multi-Model Ensemble'
@@ -1539,7 +1539,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           };
     if (phaseTimings) phaseTimings.trainedExpertMs += Math.max(0, Date.now() - expertStartedAt);
 
-    const baseAuthority = evaluateMultimodelDemoAuthority({
+    const baseAuthority = evaluateMultimodelAuthority({
       ensemble,
       governance,
       trainedExpert,
@@ -1557,7 +1557,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
     const portfolioBlocker = portfolioSnapshotAvailable
       ? []
       : ['MULTIMODEL_PORTFOLIO_SNAPSHOT_UNAVAILABLE'];
-    const authority: MultimodelDemoAuthorityDecision = {
+    const authority: MultimodelAuthorityDecision = {
       ...baseAuthority,
       executable: baseAuthority.executable && portfolioSnapshotAvailable,
       blockers: unique([...baseAuthority.blockers, ...portfolioBlocker]),
@@ -2232,7 +2232,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ? extensionExhaustionDemoScout!.lotCap
           : this.rolloutPolicy.phase === 'DEMO_EARLY_TRANSITION_PROFESSIONAL'
             ? multimodelDemo
-              ? multimodelDemoExecutionVolumeCap(
+              ? multimodelExecutionVolumeCap(
                   this.rolloutPolicy.paperVolumeCap,
                   multimodelDemo.authority,
                 )
@@ -3427,7 +3427,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           ? { ...multimodelLossStreakBrake }
           : null,
         primaryEngineCode: professionalDemoPhase
-          ? MULTIMODEL_DEMO_ENGINE_CODE
+          ? MULTIMODEL_ENGINE_CODE
           : 'irexpro-m1-tactical',
         m1TacticalRole: professionalDemoPhase ? 'TIMING_SPECIALIST' : 'PRIMARY_RESEARCH_ROUTE',
         multimodelEnsemble: multimodelDemo?.ensemble ?? null,
@@ -4226,7 +4226,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         confidenceScore: useM5EarlyTransitionHandoff
           ? m5EarlyTransitionEvidence.ensembleScore
           : professionalDemoPhase && multimodelDemo && !useProfessionalM1Fallback
-            ? multimodelDemoSignalConfidence(
+            ? multimodelSignalConfidence(
                 {
                   ensemble: multimodelDemo.ensemble,
                   trainedExpert: multimodelDemo.trainedExpert,
@@ -4256,17 +4256,17 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
         generatedAt: new Date(decisionTime),
         modelVersion:
           professionalDemoPhase && !useProfessionalM1Fallback
-            ? `external-provider/${MULTIMODEL_DEMO_ENGINE_CODE}/demo-v1`
+            ? `external-provider/${MULTIMODEL_ENGINE_CODE}/demo-v1`
             : `external-provider/irexpro-m1-tactical/${candidate.policyVersion}`,
         metadata: {
           signal_source: 'EXTERNAL_PROVIDER',
           external_provider_code:
             professionalDemoPhase && !useProfessionalM1Fallback
-              ? MULTIMODEL_DEMO_ENGINE_CODE
+              ? MULTIMODEL_ENGINE_CODE
               : 'irexpro-m1-tactical',
           primary_engine_code:
             professionalDemoPhase && !useProfessionalM1Fallback
-              ? MULTIMODEL_DEMO_ENGINE_CODE
+              ? MULTIMODEL_ENGINE_CODE
               : 'irexpro-m1-tactical',
           m1_tactical_role: useProfessionalM1Fallback
             ? 'PRIMARY_FALLBACK'
