@@ -215,13 +215,18 @@ export class ProtectiveOrderReconciliationService {
       action: AuditAction.PROTECTIVE_ORDER_RECONCILED,
       resourceType: 'BrokerConnection',
       resourceId: connection.id,
-      severity: repairFailedCount > 0 ? AuditSeverity.CRITICAL :
-        preservedTighterProfitStopCount > 0 ? AuditSeverity.WARNING : AuditSeverity.INFO,
+      severity:
+        repairFailedCount > 0
+          ? AuditSeverity.CRITICAL
+          : preservedTighterProfitStopCount > 0
+            ? AuditSeverity.WARNING
+            : AuditSeverity.INFO,
       metadata: {
         checked: candidates.length,
         preservedTighterProfitStopCount,
-        pendingAuthority: pendingAuthority.map(r => ({
-          tradeId: r.tradeId, outcome: r.outcome,
+        pendingAuthority: pendingAuthority.map((r) => ({
+          tradeId: r.tradeId,
+          outcome: r.outcome,
           detail: r.detail ?? null,
         })),
         protectedCount,
@@ -290,8 +295,7 @@ export class ProtectiveOrderReconciliationService {
     if (!slOk && tpOk) {
       const stronger = evaluateBrokerTighterProfitStopPreservation({
         guardEnabled:
-          process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP ===
-          'enabled',
+          process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP === 'enabled',
         ownerUserId: process.env.VPS_FOREX_SCANNER_USER_ID ?? null,
         userId: trade.userId,
         brokerId: connection.brokerId,

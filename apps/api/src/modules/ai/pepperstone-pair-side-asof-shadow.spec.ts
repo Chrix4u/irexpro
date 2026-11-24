@@ -16,10 +16,12 @@ const make = (
 
 describe('prospective Pepperstone pair-side quality research', () => {
   it('is always non-executable, even with a strong history', () => {
-    const rows = Array.from({length: 12}, (_, i) => make(
-      new Date(Date.UTC(2026, 10, 10 + Math.floor(i / 4), i % 4)).toISOString(),
-      i % 4 === 0 ? '-25' : '90',
-    ));
+    const rows = Array.from({ length: 12 }, (_, i) =>
+      make(
+        new Date(Date.UTC(2026, 10, 10 + Math.floor(i / 4), i % 4)).toISOString(),
+        i % 4 === 0 ? '-25' : '90',
+      ),
+    );
     const d = score(rows, AS_OF);
     expect(d).toMatchObject({
       mode: 'RESEARCH_ONLY',
@@ -50,22 +52,28 @@ describe('prospective Pepperstone pair-side quality research', () => {
   });
 
   it('excludes later closes, including at the exact as-of timestamp', () => {
-    const d = score([
-      make('2026-11-16T06:16:59Z', '-7'),
-      make('2026-11-16T06:17:00Z', '-7'),
-      make('2026-11-16T06:17:01Z', '-7'),
-      make('2026-10-01T01:00:00Z', '-7'),
-    ], AS_OF);
+    const d = score(
+      [
+        make('2026-11-16T06:16:59Z', '-7'),
+        make('2026-11-16T06:17:00Z', '-7'),
+        make('2026-11-16T06:17:01Z', '-7'),
+        make('2026-10-01T01:00:00Z', '-7'),
+      ],
+      AS_OF,
+    );
     expect(d.historyClosedTrades).toBe(1);
     expect(d.consecutiveNetLosses).toBe(1);
   });
 
   it('fails to unknown when an earlier broker fee or risk was unpriced', () => {
-    const d = score([
-      make('2026-11-15T10:00:00Z', '-10'),
-      make('2026-11-15T11:00:00Z', null),
-      make('2026-11-15T12:00:00Z', '-10', null),
-    ], AS_OF);
+    const d = score(
+      [
+        make('2026-11-15T10:00:00Z', '-10'),
+        make('2026-11-15T11:00:00Z', null),
+        make('2026-11-15T12:00:00Z', '-10', null),
+      ],
+      AS_OF,
+    );
     expect(d).toMatchObject({
       historyClosedTrades: 3,
       pricedTrades: 1,
@@ -77,18 +85,20 @@ describe('prospective Pepperstone pair-side quality research', () => {
   });
 
   it('does not fake a favorable edge from one trading day', () => {
-    const rows = Array.from({length: 12}, (_, i) => make(
-      new Date(Date.UTC(2026, 10, 15, i)).toISOString(), '100',
-    ));
+    const rows = Array.from({ length: 12 }, (_, i) =>
+      make(new Date(Date.UTC(2026, 10, 15, i)).toISOString(), '100'),
+    );
     expect(score(rows, AS_OF).state).toBe('UNKNOWN');
     expect(score(rows, AS_OF).distinctClosingDays).toBe(1);
   });
 
   it('identifies a neutral historical sample without claiming a winning model', () => {
-    const rows = Array.from({length: 12}, (_, i) => make(
-      new Date(Date.UTC(2026, 10, 10 + Math.floor(i / 4), i % 4)).toISOString(),
-      i % 2 === 0 ? '20' : '-40',
-    ));
+    const rows = Array.from({ length: 12 }, (_, i) =>
+      make(
+        new Date(Date.UTC(2026, 10, 10 + Math.floor(i / 4), i % 4)).toISOString(),
+        i % 2 === 0 ? '20' : '-40',
+      ),
+    );
     const d = score(rows, AS_OF);
     expect(d.state).toBe('EDGE_NOT_ESTABLISHED');
     expect(d.entryVeto).toBe(false);

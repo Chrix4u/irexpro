@@ -1,7 +1,10 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
-import { AiCounterMirrorReportService, type CounterMirrorWebReport } from './ai-counter-mirror-report.service';
+import {
+  AiCounterMirrorReportService,
+  type CounterMirrorWebReport,
+} from './ai-counter-mirror-report.service';
 
 @ApiTags('AI')
 @Controller('ai')

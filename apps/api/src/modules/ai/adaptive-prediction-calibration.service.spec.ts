@@ -179,7 +179,7 @@ describe('adaptive prediction calibration', () => {
     const second = service.getCalibration(alternative);
     expect(query).toHaveBeenCalledTimes(1);
     release([]);
-    const [a,b] = await Promise.all([first,second]);
+    const [a, b] = await Promise.all([first, second]);
     expect(a.rawConfidence).toBe(0.67);
     expect(b.rawConfidence).toBe(0.81);
     expect(b.rawNetExpectedR).toBe(0.25);
@@ -187,7 +187,9 @@ describe('adaptive prediction calibration', () => {
     expect(b.authoritative).toBe(false);
 
     await service.getCalibration({
-      ...alternative, direction: 'BUY', rawConfidence: 0.52,
+      ...alternative,
+      direction: 'BUY',
+      rawConfidence: 0.52,
     });
     expect(query).toHaveBeenCalledTimes(1);
   });
@@ -199,20 +201,23 @@ describe('adaptive prediction calibration', () => {
     await service.getCalibration({ ...request, brokerConnectionId: 'another-demo' });
     await service.getCalibration({ ...request, userId: 'another-owner' });
     await service.getCalibration({
-      ...request, decisionPolicyVersions: ['different-training-policy'],
+      ...request,
+      decisionPolicyVersions: ['different-training-policy'],
     });
     await service.getCalibration({
-      ...request, evaluatedAt: new Date(request.evaluatedAt.getTime() + 1),
+      ...request,
+      evaluatedAt: new Date(request.evaluatedAt.getTime() + 1),
     });
     expect(query).toHaveBeenCalledTimes(5);
   });
 
   it('evicts failed historical reads, retaining unavailable rather than fabricated evidence', async () => {
-    const query = jest.fn()
+    const query = jest
+      .fn()
       .mockRejectedValueOnce(new Error('historical database request failed'))
       .mockResolvedValueOnce([]);
     const service = new AdaptivePredictionCalibrationService({ query } as unknown as DataSource);
-    const [a,b] = await Promise.all([
+    const [a, b] = await Promise.all([
       service.getCalibration(request),
       service.getCalibration({ ...request, instrument: 'AUDUSD' }),
     ]);

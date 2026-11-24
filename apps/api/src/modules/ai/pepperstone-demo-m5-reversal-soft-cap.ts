@@ -53,15 +53,13 @@ export function evaluatePepperstoneDemoM5ReversalSoftCap(
   });
   if (!Number.isFinite(input.requestedLotCap) || input.requestedLotCap <= 0)
     return result('INVALID_BASE_CAP_UNCHANGED', input.requestedLotCap);
-  if (!input.enabled || !input.ownerVerifiedUsdDemo ||
-      input.route !== 'CONFIRMED_REVERSAL')
+  if (!input.enabled || !input.ownerVerifiedUsdDemo || input.route !== 'CONFIRMED_REVERSAL')
     return result('NOT_SCOPED_UNCHANGED', input.requestedLotCap);
-  if (!Number.isFinite(input.alignedM5) || input.alignedM5 === null ||
-      input.alignedM5 > -0.2)
+  if (!Number.isFinite(input.alignedM5) || input.alignedM5 === null || input.alignedM5 > -0.2)
     return result('NO_FROZEN_M5_CONFLICT_UNCHANGED', input.requestedLotCap);
   // Require separately completed, fresh broker-native M5 bars. A missing
   // as-of independent observation never fabricates a loss signal.
-  if (!['NEUTRAL','WITH','AGAINST'].includes(input.brokerM5Direction ?? ''))
+  if (!['NEUTRAL', 'WITH', 'AGAINST'].includes(input.brokerM5Direction ?? ''))
     return result('BROKER_M5_UNVERIFIED_UNCHANGED', input.requestedLotCap);
   // Do not turn an already-small requested ceiling into a micro-lot order.
   if (input.requestedLotCap <= PEPPERSTONE_DEMO_M5_REVERSAL_MIN_UNCHANGED_CAP)

@@ -14,7 +14,6 @@ export const PLAN_B_SHADOW_ADMISSION_THRESHOLD = 0.40828402366863903;
 export const PLAN_B_CLOCK_NEUTRAL_RESEARCH_ARTIFACT =
   'plan-b-hour-neutral-counterfactual-research-v1';
 
-
 export interface V8ShadowMetaInput {
   instrument: string;
   direction: 'BUY' | 'SELL';
@@ -167,7 +166,6 @@ export function scorePlanBShadowMeta(input: V8ShadowMetaInput): PlanBShadowMetaS
     reason: admitted ? 'ADMIT' : 'REJECT_EXPECTED_VALUE',
   };
 }
-
 
 /**
  * An independent diagnostic; the active Plan B meta score is not modified.

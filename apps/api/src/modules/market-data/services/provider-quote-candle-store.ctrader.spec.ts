@@ -67,13 +67,18 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
   it('stores a separate immutable-per-minute last positive bid/ask mark even after zero-spread quotes', async () => {
     const query = jest.fn().mockResolvedValue([]);
     const service = new ProviderQuoteCandleStoreService({ query } as unknown as DataSource);
-    await service.upsertM1Sample('ctrader-1', 'EURUSD', {
-      instrument: 'EURUSD',
-      bid: '1.10000',
-      ask: '1.10008',
-      spread: '0.00008',
-      timestamp: EVALUATED_AT,
-    }, 'ctrader-broker-native');
+    await service.upsertM1Sample(
+      'ctrader-1',
+      'EURUSD',
+      {
+        instrument: 'EURUSD',
+        bid: '1.10000',
+        ask: '1.10008',
+        spread: '0.00008',
+        timestamp: EVALUATED_AT,
+      },
+      'ctrader-broker-native',
+    );
 
     const sql = String(query.mock.calls[0]?.[0]);
     expect(sql).toContain('last_positive_bid');
@@ -86,13 +91,18 @@ describe('ProviderQuoteCandleStoreService cTrader history', () => {
 
     // Zero-spread quotes preserve (rather than overwrite) previously
     // stored positive bid/ask: their EXCLUDED.last_positive_sample_at is NULL.
-    await service.upsertM1Sample('ctrader-1', 'EURUSD', {
-      instrument: 'EURUSD',
-      bid: '1.10003',
-      ask: '1.10003',
-      spread: '0',
-      timestamp: new Date(EVALUATED_AT.getTime() + 1_000),
-    }, 'ctrader-broker-native');
+    await service.upsertM1Sample(
+      'ctrader-1',
+      'EURUSD',
+      {
+        instrument: 'EURUSD',
+        bid: '1.10003',
+        ask: '1.10003',
+        spread: '0',
+        timestamp: new Date(EVALUATED_AT.getTime() + 1_000),
+      },
+      'ctrader-broker-native',
+    );
     expect(query).toHaveBeenCalledTimes(2);
     expect(String(query.mock.calls[1]?.[0])).toContain(
       'CASE WHEN $7::numeric > 0 THEN $8::timestamptz ELSE NULL END',

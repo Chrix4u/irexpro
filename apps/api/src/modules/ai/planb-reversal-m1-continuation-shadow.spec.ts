@@ -67,7 +67,9 @@ describe('prospective Plan B reversal versus M1 continuation research', () => {
 
   it('does not infer eligibility when Plan B / governance has denied the signal', () => {
     expect(observe(base({ planBPaperAdmitted: false })).reason).toBe('PLAN_B_NOT_FULLY_ADMITTED');
-    expect(observe(base({ planBGovernanceEligible: false })).reason).toBe('PLAN_B_NOT_FULLY_ADMITTED');
+    expect(observe(base({ planBGovernanceEligible: false })).reason).toBe(
+      'PLAN_B_NOT_FULLY_ADMITTED',
+    );
   });
 
   it.each([
@@ -114,9 +116,15 @@ describe('prospective Plan B reversal versus M1 continuation research', () => {
     const file = readFileSync(join(__dirname, 'm1-tactical-scheduler.service.ts'), 'utf8');
     expect(file).toContain('const planBReversalM1ContinuationShadow = multimodelDemo');
     expect(file).toContain('        planBReversalM1ContinuationShadow,');
-    const executionDerivation = file.split('const canExecute =')[1].split('const effectiveGovernanceBlockers')[0];
+    const executionDerivation = file
+      .split('const canExecute =')[1]
+      .split('const effectiveGovernanceBlockers')[0];
     expect(executionDerivation).not.toContain('planBReversalM1ContinuationShadow');
-    const preliminary = file.split('const preliminaryCanExecute =')[1].split('const canExecute =')[0];
-    expect(preliminary).not.toContain('planBReversalM1ContinuationShadow.eligibleForProspectiveStudy');
+    const preliminary = file
+      .split('const preliminaryCanExecute =')[1]
+      .split('const canExecute =')[0];
+    expect(preliminary).not.toContain(
+      'planBReversalM1ContinuationShadow.eligibleForProspectiveStudy',
+    );
   });
 });

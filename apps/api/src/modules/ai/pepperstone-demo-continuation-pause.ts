@@ -12,8 +12,13 @@ export interface PepperstoneDemoContinuationPause {
   scopedPepperstoneDemo: boolean | null;
   blocked: boolean;
   selectedRoute: string | null;
-  reason: 'DISABLED' | 'OTHER_ROUTE' | 'OTHER_BROKER' | 'CONTINUATION_PAUSED' |
-    'BROKER_SCOPE_UNAVAILABLE' | 'GUARDED_PULLBACK_RECOVERY';
+  reason:
+    | 'DISABLED'
+    | 'OTHER_ROUTE'
+    | 'OTHER_BROKER'
+    | 'CONTINUATION_PAUSED'
+    | 'BROKER_SCOPE_UNAVAILABLE'
+    | 'GUARDED_PULLBACK_RECOVERY';
   changesOpenPositions: false;
   overridesAlternativeAdmission: false;
   guardedPullbackRecovery: boolean;
@@ -35,16 +40,16 @@ export function evaluatePepperstoneDemoContinuationPause(input: {
     guardedPullbackRecovery: input.guardedPullbackRecovery === true,
   };
   if (!input.enabled || !input.isProfessionalDemoPhase)
-    return {...base,blocked:false,reason:'DISABLED' as const};
+    return { ...base, blocked: false, reason: 'DISABLED' as const };
   if (input.selectedRoute !== 'TREND_CONTINUATION')
-    return {...base,blocked:false,reason:'OTHER_ROUTE' as const};
+    return { ...base, blocked: false, reason: 'OTHER_ROUTE' as const };
   // An uncertain broker identity must never grant exposure while the pause
   // is requested. Only proven non-Pepperstone connections remain unchanged.
   if (input.scopedPepperstoneDemo === null)
-    return {...base,blocked:true,reason:'BROKER_SCOPE_UNAVAILABLE' as const};
+    return { ...base, blocked: true, reason: 'BROKER_SCOPE_UNAVAILABLE' as const };
   if (input.scopedPepperstoneDemo === false)
-    return {...base,blocked:false,reason:'OTHER_BROKER' as const};
+    return { ...base, blocked: false, reason: 'OTHER_BROKER' as const };
   if (input.guardedPullbackRecovery === true)
-    return {...base,blocked:false,reason:'GUARDED_PULLBACK_RECOVERY' as const};
-  return {...base,blocked:true,reason:'CONTINUATION_PAUSED' as const};
+    return { ...base, blocked: false, reason: 'GUARDED_PULLBACK_RECOVERY' as const };
+  return { ...base, blocked: true, reason: 'CONTINUATION_PAUSED' as const };
 }

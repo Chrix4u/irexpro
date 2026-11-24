@@ -166,12 +166,15 @@ describe('evaluateM1TacticalGovernance', () => {
     const input = baseInput();
     const features = snapshot({ emaSeparationAtr: 1.04 });
     const [candidate] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
-    const planB=m1CandidateToPlanBInput(candidate,features,features.decisionTime);
+    const planB = m1CandidateToPlanBInput(candidate, features, features.decisionTime);
     expect(candidate.alignedEmaSeparationAtr).toBeGreaterThan(0.84442);
     expect(planB.emaSeparation).toBeCloseTo(candidate.alignedEmaSeparationAtr / 2, 10);
     expect(planB.emaSeparation).toBeLessThan(0.84442);
     const result = evaluateM1TacticalGovernance({
-      ...input, candidate, routeDecision: route(candidate), features,
+      ...input,
+      candidate,
+      routeDecision: route(candidate),
+      features,
     });
     expect(result.genericGovernance.driftState).toBe('NORMAL');
     expect(result.genericGovernance.driftDiagnostics).not.toContain('emaSeparation:HARD_HIGH');
@@ -183,10 +186,13 @@ describe('evaluateM1TacticalGovernance', () => {
     const input = baseInput();
     const features = snapshot({ emaSeparationAtr: 1.82 });
     const [candidate] = buildM1TacticalCandidates(features, M1_TACTICAL_POLICY_V1);
-    const normalized=m1CandidateToPlanBInput(candidate,features,features.decisionTime);
+    const normalized = m1CandidateToPlanBInput(candidate, features, features.decisionTime);
     expect(normalized.emaSeparation).toBeGreaterThan(0.84442);
-    const result=evaluateM1TacticalGovernance({
-      ...input,candidate,routeDecision:route(candidate),features,
+    const result = evaluateM1TacticalGovernance({
+      ...input,
+      candidate,
+      routeDecision: route(candidate),
+      features,
     });
     expect(result.genericGovernance.driftState).toBe('OUT_OF_DISTRIBUTION');
     expect(result.genericGovernance.driftDiagnostics).toContain('emaSeparation:HARD_HIGH');

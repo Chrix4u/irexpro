@@ -31,7 +31,7 @@ export function pepperstoneDemoTieredPeakRetention(peakR: number): number {
   if (!Number.isFinite(peakR) || peakR < 0.5) return 0.55;
   if (peakR < 0.75) return 0.65;
   if (peakR < 1) return 0.75;
-  return 0.80;
+  return 0.8;
 }
 
 /**
@@ -54,37 +54,61 @@ export function pepperstoneDemoProgressiveTpPeakRetention(input: {
   brokerTakeProfit: number;
   baseRetention: number;
 }): { retention: number; tpPeakFraction: number | null; projectedTpAmount: number | null } {
-  const {peakBrokerNet:peak,initialRisk:risk,conservativeExitReserve:fee,
-    brokerEntry:entry,brokerStop:stop,brokerTakeProfit:tp,baseRetention:base}=input;
-  if (![peak,risk,fee,entry,stop,tp,base].every(Number.isFinite) ||
-      peak <= 0 || risk <= 0 || fee <= 0 || entry <= 0 || stop <= 0 ||
-      tp <= 0 || base < 0.5 || base > 0.95 ||
-      Math.abs(entry-stop) < entry*1e-8)
-    return {retention:base,tpPeakFraction:null,projectedTpAmount:null};
-  const projected = risk*Math.abs(tp-entry)/Math.abs(entry-stop);
-  if(!Number.isFinite(projected)||projected <= 0)
-    return {retention:base,tpPeakFraction:null,projectedTpAmount:null};
-  const fraction=peak/projected;
-  if (!Number.isFinite(fraction) || peak < fee*3)
-    return {retention:base,tpPeakFraction:fraction,projectedTpAmount:projected};
+  const {
+    peakBrokerNet: peak,
+    initialRisk: risk,
+    conservativeExitReserve: fee,
+    brokerEntry: entry,
+    brokerStop: stop,
+    brokerTakeProfit: tp,
+    baseRetention: base,
+  } = input;
+  if (
+    ![peak, risk, fee, entry, stop, tp, base].every(Number.isFinite) ||
+    peak <= 0 ||
+    risk <= 0 ||
+    fee <= 0 ||
+    entry <= 0 ||
+    stop <= 0 ||
+    tp <= 0 ||
+    base < 0.5 ||
+    base > 0.95 ||
+    Math.abs(entry - stop) < entry * 1e-8
+  )
+    return { retention: base, tpPeakFraction: null, projectedTpAmount: null };
+  const projected = (risk * Math.abs(tp - entry)) / Math.abs(entry - stop);
+  if (!Number.isFinite(projected) || projected <= 0)
+    return { retention: base, tpPeakFraction: null, projectedTpAmount: null };
+  const fraction = peak / projected;
+  if (!Number.isFinite(fraction) || peak < fee * 3)
+    return { retention: base, tpPeakFraction: fraction, projectedTpAmount: projected };
   // Smooth piecewise linear interpolation, not abrupt jump at $60.
-  const levels:readonly (readonly [number,number])[] = [
-    [0,0.60], [0.25,0.65], [0.35,0.72], [0.40,0.80],
-    [0.55,0.86], [0.70,0.89], [0.85,0.91],
+  const levels: readonly (readonly [number, number])[] = [
+    [0, 0.6],
+    [0.25, 0.65],
+    [0.35, 0.72],
+    [0.4, 0.8],
+    [0.55, 0.86],
+    [0.7, 0.89],
+    [0.85, 0.91],
   ];
-  let suggested=levels[levels.length-1][1];
-  if(fraction <= levels[0][0]) suggested=levels[0][1];
-  else for(let i=1;i<levels.length;i++){
-    if(fraction <= levels[i][0]){
-      const [lowX,lowY]=levels[i-1], [highX,highY]=levels[i];
-      suggested=lowY+(highY-lowY)*(fraction-lowX)/(highX-lowX);
-      break;
+  let suggested = levels[levels.length - 1][1];
+  if (fraction <= levels[0][0]) suggested = levels[0][1];
+  else
+    for (let i = 1; i < levels.length; i++) {
+      if (fraction <= levels[i][0]) {
+        const [lowX, lowY] = levels[i - 1],
+          [highX, highY] = levels[i];
+        suggested = lowY + ((highY - lowY) * (fraction - lowX)) / (highX - lowX);
+        break;
+      }
     }
-  }
-  return {retention:Math.min(0.91,Math.max(base,suggested)),
-    tpPeakFraction:fraction,projectedTpAmount:projected};
+  return {
+    retention: Math.min(0.91, Math.max(base, suggested)),
+    tpPeakFraction: fraction,
+    projectedTpAmount: projected,
+  };
 }
-
 
 export type PepperstoneDemoNetLockReason =
   | 'OUT_OF_SCOPE'
@@ -156,11 +180,9 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
     input.brokerId === 'pepperstone-ctrader' &&
     input.accountType === 'DEMO' &&
     input.isM1Strategy &&
-    (input.strategyRoute === 'EARLY_TRANSITION' ||
-      input.strategyRoute === 'CONFIRMED_REVERSAL');
+    (input.strategyRoute === 'EARLY_TRANSITION' || input.strategyRoute === 'CONFIRMED_REVERSAL');
   const progressiveTpRetentionActive =
-    tieredRetentionActive &&
-    input.progressiveTpRetentionEnabled === true;
+    tieredRetentionActive && input.progressiveTpRetentionEnabled === true;
   let projectedTpAmount: number | null = null;
   let tpPeakFraction: number | null = null;
   const reply = (
@@ -276,8 +298,7 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   const alternateRoute =
     input.strategyRoute === 'EARLY_TRANSITION' ||
     input.strategyRoute === 'CONFIRMED_REVERSAL' ||
-    (input.strategyRoute === 'TREND_CONTINUATION' &&
-      input.guardedPullbackContinuation === true);
+    (input.strategyRoute === 'TREND_CONTINUATION' && input.guardedPullbackContinuation === true);
   const minimumPeak = alternateRoute
     ? Math.max(risk * 0.5, fee * 1.8, fee + risk * 0.15)
     : Math.max(risk * 0.2, fee * 1.65, fee + risk * 0.1);
@@ -286,25 +307,24 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   // only immutable guarded-pullback DEMO fills receive the 0.50R+ rule.
   if (!alternateRoute && peakR >= 0.5)
     return reply('ESTABLISHED_HIGH_PEAK_RUNNER_UNCHANGED', null, null, null, peakR);
-  const baseRetention = tieredRetentionActive
-    ? pepperstoneDemoTieredPeakRetention(peakR)
-    : 0.55;
+  const baseRetention = tieredRetentionActive ? pepperstoneDemoTieredPeakRetention(peakR) : 0.55;
   const progression = progressiveTpRetentionActive
     ? pepperstoneDemoProgressiveTpPeakRetention({
-        peakBrokerNet:peak,initialRisk:risk,conservativeExitReserve:fee,
-        brokerEntry:open,brokerStop:stop,brokerTakeProfit:tp,
+        peakBrokerNet: peak,
+        initialRisk: risk,
+        conservativeExitReserve: fee,
+        brokerEntry: open,
+        brokerStop: stop,
+        brokerTakeProfit: tp,
         baseRetention,
       })
     : null;
   projectedTpAmount = progression?.projectedTpAmount ?? null;
   tpPeakFraction = progression?.tpPeakFraction ?? null;
-  const retentionFraction=progression?.retention ?? baseRetention;
+  const retentionFraction = progression?.retention ?? baseRetention;
   const minNetBuffer = Math.max(0.5, risk * 0.035, fee * 0.2);
   const executionAllowance = Math.max(risk * 0.02, fee * 0.25);
-  const grossFloor = Math.max(
-    fee + minNetBuffer + executionAllowance,
-    peak * retentionFraction,
-  );
+  const grossFloor = Math.max(fee + minNetBuffer + executionAllowance, peak * retentionFraction);
   const netFloor = grossFloor - fee;
   const net = input.currentBrokerNetPnl - fee;
   if (peak - grossFloor < Math.max(risk * 0.03, fee * 0.25)) {
@@ -324,5 +344,12 @@ export function evaluatePepperstoneDemoNetProfitLock(input: {
   if (net < Math.max(0.5, fee * 0.2, risk * 0.02)) {
     return reply('NO_REMAINING_POSITIVE_NET', grossFloor, netFloor, net, peakR, retentionFraction);
   }
-  return reply('PROTECTED_POSITIVE_NET_PROFIT', grossFloor, netFloor, net, peakR, retentionFraction);
+  return reply(
+    'PROTECTED_POSITIVE_NET_PROFIT',
+    grossFloor,
+    netFloor,
+    net,
+    peakR,
+    retentionFraction,
+  );
 }

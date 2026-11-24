@@ -1,5 +1,11 @@
-import { proveUniqueCtraderDemoSettlement, proveCtraderEntryOrderPositionRef } from './closed-demo-settlement-proof';
-import { BrokerClosedTrade, BrokerOrderState } from '../../broker/interfaces/broker-adapter.interface';
+import {
+  proveUniqueCtraderDemoSettlement,
+  proveCtraderEntryOrderPositionRef,
+} from './closed-demo-settlement-proof';
+import {
+  BrokerClosedTrade,
+  BrokerOrderState,
+} from '../../broker/interfaces/broker-adapter.interface';
 
 const now = new Date('2026-11-12T07:45:00.000Z');
 const trade = {
@@ -31,7 +37,11 @@ const deal: BrokerClosedTrade = {
 };
 const verify = (deals: BrokerClosedTrade[], changes = {}) =>
   proveUniqueCtraderDemoSettlement(
-    { ...trade, ...changes }, deals, 'pepperstone-ctrader', 'DEMO', now,
+    { ...trade, ...changes },
+    deals,
+    'pepperstone-ctrader',
+    'DEMO',
+    now,
   );
 
 describe('closed Pepperstone DEMO broker-native settlement proof', () => {
@@ -42,32 +52,41 @@ describe('closed Pepperstone DEMO broker-native settlement proof', () => {
   });
   it('does not match order IDs inferred by price or instrument', () => {
     expect(verify([{ ...deal, externalOrderId: 'other' }])).toEqual({
-      matched: false, reason: 'NO_EXACT_PROVIDER_POSITION',
+      matched: false,
+      reason: 'NO_EXACT_PROVIDER_POSITION',
     });
     expect(verify([deal], { externalOrderId: null })).toEqual({
-      matched: false, reason: 'MISSING_POSITION_FINGERPRINT',
+      matched: false,
+      reason: 'MISSING_POSITION_FINGERPRINT',
     });
   });
   it('refuses partial-close/multiple deals on the same position', () => {
     expect(verify([deal, { ...deal, realisedPnl: '0.12' }])).toEqual({
-      matched: false, reason: 'MULTIPLE_CLOSING_DEALS_UNSAFE',
+      matched: false,
+      reason: 'MULTIPLE_CLOSING_DEALS_UNSAFE',
     });
     expect(verify([{ ...deal, lotSize: '0.10' }])).toEqual({
-      matched: false, reason: 'ENTRY_PRICE_OR_FULL_VOLUME_MISMATCH',
+      matched: false,
+      reason: 'ENTRY_PRICE_OR_FULL_VOLUME_MISMATCH',
     });
   });
   it('rejects different broker account environment, symbol or mismatched closing time', () => {
-    expect(proveUniqueCtraderDemoSettlement(trade, [deal], 'pepperstone-ctrader', 'LIVE', now)
-      .matched).toBe(false);
+    expect(
+      proveUniqueCtraderDemoSettlement(trade, [deal], 'pepperstone-ctrader', 'LIVE', now).matched,
+    ).toBe(false);
     expect(verify([{ ...deal, instrument: 'USDJPY' }]).matched).toBe(false);
     expect(verify([{ ...deal, closedAt: new Date('2026-11-12T06:37:04Z') }]).matched).toBe(false);
     expect(verify([{ ...deal, openPrice: '0.83320' }]).matched).toBe(false);
   });
   it('will not guess P&L, fee, or broker cost sign from incomplete data', () => {
     for (const partial of [
-      { realisedPnl: '' }, { realisedPnl: 'NaN' },
-      { closePrice: '' }, { commission: '' }, { commission: '2.50' },
-      { swap: '' }, { lotSize: '' },
+      { realisedPnl: '' },
+      { realisedPnl: 'NaN' },
+      { closePrice: '' },
+      { commission: '' },
+      { commission: '2.50' },
+      { swap: '' },
+      { lotSize: '' },
     ]) {
       const result = verify([{ ...deal, ...partial }]);
       expect(result.matched).toBe(false);
@@ -111,9 +130,12 @@ describe('verified cTrader entry-order to position-ID correlation', () => {
       { filledQuantity: '0.1000' },
       { avgFillPrice: '0.8332' },
     ]) {
-      expect(proveCtraderEntryOrderPositionRef(trade, {
-        ...order, ...patch,
-      } as BrokerOrderState)).toBeNull();
+      expect(
+        proveCtraderEntryOrderPositionRef(trade, {
+          ...order,
+          ...patch,
+        } as BrokerOrderState),
+      ).toBeNull();
     }
   });
 });

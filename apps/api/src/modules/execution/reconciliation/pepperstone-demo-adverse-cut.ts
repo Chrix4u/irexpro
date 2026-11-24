@@ -51,9 +51,13 @@ export interface PepperstoneDemoAdverseCutInput {
 
 export type PepperstoneDemoAdverseCutDecision = {
   shouldClose: boolean;
-  reason: 'DISABLED_OR_OUT_OF_SCOPE' | 'UNVERIFIED_POSITION' |
-    'UNVERIFIED_RISK_OR_BARRIERS' | 'UNQUALIFIED_LOSS' |
-    'INSUFFICIENT_BROKER_M1_PROOF' | 'PERSISTENT_ADVERSE_M1_CUT';
+  reason:
+    | 'DISABLED_OR_OUT_OF_SCOPE'
+    | 'UNVERIFIED_POSITION'
+    | 'UNVERIFIED_RISK_OR_BARRIERS'
+    | 'UNQUALIFIED_LOSS'
+    | 'INSUFFICIENT_BROKER_M1_PROOF'
+    | 'PERSISTENT_ADVERSE_M1_CUT';
   currentRiskMultiple: number | null;
 };
 
@@ -72,60 +76,85 @@ export function evaluatePepperstoneDemoAdverseCut(
     !input.ownerUserId ||
     input.ownerUserId !== input.userId ||
     !input.isM1Strategy ||
-    (input.strategyRoute !== 'EARLY_TRANSITION' &&
-      input.strategyRoute !== 'CONFIRMED_REVERSAL')
-  ) return hold('DISABLED_OR_OUT_OF_SCOPE');
+    (input.strategyRoute !== 'EARLY_TRANSITION' && input.strategyRoute !== 'CONFIRMED_REVERSAL')
+  )
+    return hold('DISABLED_OR_OUT_OF_SCOPE');
   if (
     !input.tradeInstrument ||
     input.tradeInstrument.toUpperCase() !== input.brokerInstrument.toUpperCase() ||
     input.tradeDirection !== input.brokerDirection ||
-    input.tradeLotSize === null || !Number.isFinite(input.tradeLotSize) ||
+    input.tradeLotSize === null ||
+    !Number.isFinite(input.tradeLotSize) ||
     input.tradeLotSize <= 0 ||
-    input.brokerLotSize === null || !Number.isFinite(input.brokerLotSize) ||
+    input.brokerLotSize === null ||
+    !Number.isFinite(input.brokerLotSize) ||
     input.brokerLotSize <= 0 ||
     Math.abs(input.tradeLotSize - input.brokerLotSize) > 1e-4
-  ) return hold('UNVERIFIED_POSITION');
-  const {entryPrice:entry,currentPrice:mark,authoritativeStop:stop,brokerStop} = input;
-  const risk=input.initialRiskPnl;
+  )
+    return hold('UNVERIFIED_POSITION');
+  const { entryPrice: entry, currentPrice: mark, authoritativeStop: stop, brokerStop } = input;
+  const risk = input.initialRiskPnl;
   if (
-    entry === null || mark === null || stop === null || brokerStop === null ||
+    entry === null ||
+    mark === null ||
+    stop === null ||
+    brokerStop === null ||
     risk === null ||
-    ![entry,mark,stop,brokerStop,risk,input.currentBrokerNetPnl,
-      input.maxFavorableBrokerNetPnl,input.elapsedMinutes].every(Number.isFinite) ||
-    entry <= 0 || mark <= 0 || stop <= 0 || brokerStop <= 0 || risk <= 0 ||
+    ![
+      entry,
+      mark,
+      stop,
+      brokerStop,
+      risk,
+      input.currentBrokerNetPnl,
+      input.maxFavorableBrokerNetPnl,
+      input.elapsedMinutes,
+    ].every(Number.isFinite) ||
+    entry <= 0 ||
+    mark <= 0 ||
+    stop <= 0 ||
+    brokerStop <= 0 ||
+    risk <= 0 ||
     Math.abs(stop - brokerStop) > Math.max(0.00001, stop * 1e-7) ||
     (input.tradeDirection === 'BUY'
       ? !(stop < mark && mark < entry)
       : !(entry < mark && mark < stop))
-  ) return hold('UNVERIFIED_RISK_OR_BARRIERS');
-  const currentR=input.currentBrokerNetPnl/risk;
+  )
+    return hold('UNVERIFIED_RISK_OR_BARRIERS');
+  const currentR = input.currentBrokerNetPnl / risk;
   // Avoid premature cuts during the early noise/recovery window and never
   // reassign protection of a previously meaningful favorable excursion.
   if (
-    input.currentBrokerNetPnl >= 0 || currentR > -0.45 ||
+    input.currentBrokerNetPnl >= 0 ||
+    currentR > -0.45 ||
     input.maxFavorableBrokerNetPnl >= risk * 0.15 ||
     input.elapsedMinutes < 2 ||
     !Number.isInteger(input.priorObservationCount) ||
     input.priorObservationCount < 12
-  ) return hold('UNQUALIFIED_LOSS',currentR);
-  const m1=input.m1;
-  const maxSpread=Math.abs(entry-stop)*0.25;
+  )
+    return hold('UNQUALIFIED_LOSS', currentR);
+  const m1 = input.m1;
+  const maxSpread = Math.abs(entry - stop) * 0.25;
   if (
     !m1 ||
-    !Number.isInteger(m1.completedBars) || m1.completedBars < 2 ||
+    !Number.isInteger(m1.completedBars) ||
+    m1.completedBars < 2 ||
     !Number.isInteger(m1.consecutiveLiveQuoteBars) ||
-      (m1.consecutiveLiveQuoteBars ?? 0) < 2 ||
-    !Number.isInteger(m1.adverseBars) || m1.adverseBars < 2 ||
+    (m1.consecutiveLiveQuoteBars ?? 0) < 2 ||
+    !Number.isInteger(m1.adverseBars) ||
+    m1.adverseBars < 2 ||
     !Number.isFinite(m1.latestAgeSeconds) ||
-      m1.latestAgeSeconds < 0 || m1.latestAgeSeconds > 75 ||
+    m1.latestAgeSeconds < 0 ||
+    m1.latestAgeSeconds > 75 ||
     !Number.isFinite(m1.alignedLatestBodyPressure) ||
-      m1.alignedLatestBodyPressure > -0.35 ||
-    !Number.isFinite(m1.alignedMomentum3) || m1.alignedMomentum3 > -0.15 ||
+    m1.alignedLatestBodyPressure > -0.35 ||
+    !Number.isFinite(m1.alignedMomentum3) ||
+    m1.alignedMomentum3 > -0.15 ||
     m1.latestLiveSpreadPrice == null ||
-      !Number.isFinite(m1.latestLiveSpreadPrice) ||
-      m1.latestLiveSpreadPrice <= 0 ||
-      m1.latestLiveSpreadPrice > maxSpread
-  ) return hold('INSUFFICIENT_BROKER_M1_PROOF',currentR);
-  return { shouldClose:true, reason:'PERSISTENT_ADVERSE_M1_CUT',
-    currentRiskMultiple:currentR };
+    !Number.isFinite(m1.latestLiveSpreadPrice) ||
+    m1.latestLiveSpreadPrice <= 0 ||
+    m1.latestLiveSpreadPrice > maxSpread
+  )
+    return hold('INSUFFICIENT_BROKER_M1_PROOF', currentR);
+  return { shouldClose: true, reason: 'PERSISTENT_ADVERSE_M1_CUT', currentRiskMultiple: currentR };
 }

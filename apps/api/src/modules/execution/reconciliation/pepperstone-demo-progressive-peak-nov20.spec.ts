@@ -32,7 +32,7 @@ describe('Owner Pepperstone DEMO Nov20 progressive profit peak protection regres
     brokerLotSize: 6,
     initialRiskPnl: 188.68161863,
     brokerEntryPrice: 159.001,
-    currentPrice: 158.960,
+    currentPrice: 158.96,
     authoritativeStop: 159.059,
     brokerStop: 159.059,
     authoritativeTakeProfit: 158.929,
@@ -51,12 +51,12 @@ describe('Owner Pepperstone DEMO Nov20 progressive profit peak protection regres
     tradeLotSize: 3.44,
     brokerLotSize: 3.44,
     initialRiskPnl: 172,
-    brokerEntryPrice: 0.666410,
-    currentPrice: 0.666210,
-    authoritativeStop: 0.666900,
-    brokerStop: 0.666900,
-    authoritativeTakeProfit: 0.665600,
-    brokerTakeProfit: 0.665600,
+    brokerEntryPrice: 0.66641,
+    currentPrice: 0.66621,
+    authoritativeStop: 0.6669,
+    brokerStop: 0.6669,
+    authoritativeTakeProfit: 0.6656,
+    brokerTakeProfit: 0.6656,
     previousObservedBrokerNetPnl: 93,
     maxFavorableBrokerNetPnl: 99.76,
     currentBrokerNetPnl: 68,
@@ -65,16 +65,20 @@ describe('Owner Pepperstone DEMO Nov20 progressive profit peak protection regres
 
   it('high-peak USDJPY: moves the protective trigger earlier before the 170-to-65 fall', () => {
     const old = evaluatePepperstoneDemoNetProfitLock({
-      ...highPeakUsdJpy, progressiveTpRetentionEnabled: false,
+      ...highPeakUsdJpy,
+      progressiveTpRetentionEnabled: false,
     });
     const progressive = evaluatePepperstoneDemoNetProfitLock(highPeakUsdJpy);
     expect(old).toMatchObject({
-      shouldClose: false, reason: 'NO_PROTECTED_GIVEBACK',
+      shouldClose: false,
+      reason: 'NO_PROTECTED_GIVEBACK',
       retentionFraction: 0.75,
     });
     expect(progressive).toMatchObject({
-      shouldClose: true, reason: 'PROTECTED_POSITIVE_NET_PROFIT',
-      progressiveTpRetentionActive: true, tieredRetentionActive: true,
+      shouldClose: true,
+      reason: 'PROTECTED_POSITIVE_NET_PROFIT',
+      progressiveTpRetentionActive: true,
+      tieredRetentionActive: true,
     });
     expect(progressive.retentionFraction).toBeGreaterThan(0.89);
     expect(progressive.retentionFraction).toBeLessThan(0.91);
@@ -84,7 +88,8 @@ describe('Owner Pepperstone DEMO Nov20 progressive profit peak protection regres
 
   it('sub-$100 AUDUSD peak: advances the floor without demanding full TP or a fixed dollar trigger', () => {
     const old = evaluatePepperstoneDemoNetProfitLock({
-      ...near100AudUsd, progressiveTpRetentionEnabled: false,
+      ...near100AudUsd,
+      progressiveTpRetentionEnabled: false,
     });
     const progressive = evaluatePepperstoneDemoNetProfitLock(near100AudUsd);
     expect(old.shouldClose).toBe(false);
@@ -106,7 +111,8 @@ describe('Owner Pepperstone DEMO Nov20 progressive profit peak protection regres
       { conservativeExitReserve: null },
     ]) {
       const result = evaluatePepperstoneDemoNetProfitLock({
-        ...highPeakUsdJpy, ...unsafe,
+        ...highPeakUsdJpy,
+        ...unsafe,
       });
       expect(result.shouldClose).toBe(false);
     }

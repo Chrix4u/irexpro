@@ -71,14 +71,12 @@ export interface PepperstoneHighPeakGivebackInput {
   m1: HighPeakM1QuoteEvidence | null;
 }
 
-export function evaluatePepperstoneHighPeakGivebackShadow(
-  input: PepperstoneHighPeakGivebackInput,
-) {
+export function evaluatePepperstoneHighPeakGivebackShadow(input: PepperstoneHighPeakGivebackInput) {
   const risk = input.initialRiskPnl;
-  const peakR = risk !== null && Number.isFinite(risk) && risk > 0
-    ? input.previousPeakPnl / risk : null;
-  const nowR = risk !== null && Number.isFinite(risk) && risk > 0
-    ? input.currentBrokerNetPnl / risk : null;
+  const peakR =
+    risk !== null && Number.isFinite(risk) && risk > 0 ? input.previousPeakPnl / risk : null;
+  const nowR =
+    risk !== null && Number.isFinite(risk) && risk > 0 ? input.currentBrokerNetPnl / risk : null;
   const report = (reason: HighPeakGivebackReason) => ({
     artifact: PEPPERSTONE_HIGH_PEAK_GIVEBACK_ARTIFACT,
     mode: 'RESEARCH_ONLY' as const,
@@ -89,72 +87,98 @@ export function evaluatePepperstoneHighPeakGivebackShadow(
     reason,
     peakR,
     currentR: nowR,
-    estimatedNetAfterExtraCost: input.conservativeExtraExitCost !== null
-      ? input.currentBrokerNetPnl - input.conservativeExtraExitCost : null,
+    estimatedNetAfterExtraCost:
+      input.conservativeExtraExitCost !== null
+        ? input.currentBrokerNetPnl - input.conservativeExtraExitCost
+        : null,
   });
   if (
     input.brokerId !== 'pepperstone-ctrader' ||
     input.accountType.toUpperCase() !== 'DEMO' ||
     input.accountCurrency?.toUpperCase() !== 'USD'
-  ) return report('OUTSIDE_OWNED_DEMO');
+  )
+    return report('OUTSIDE_OWNED_DEMO');
 
   if (
     input.tradeInstrument.trim().toUpperCase() !== input.brokerInstrument.trim().toUpperCase() ||
     input.tradeDirection !== input.brokerDirection ||
-    !Number.isFinite(input.tradeLotSize) || input.tradeLotSize <= 0 ||
+    !Number.isFinite(input.tradeLotSize) ||
+    input.tradeLotSize <= 0 ||
     !Number.isFinite(input.brokerLotSize) ||
     Math.abs(input.tradeLotSize - input.brokerLotSize) > 1e-4
-  ) return report('POSITION_IDENTITY_UNVERIFIED');
+  )
+    return report('POSITION_IDENTITY_UNVERIFIED');
 
   if (!input.isM1Strategy || input.strategyRoute !== 'TREND_CONTINUATION')
     return report('NOT_M1_CONTINUATION');
 
   if (
-    risk === null || !Number.isFinite(risk) || risk <= 0 ||
-    ![input.previousPeakPnl, input.previousObservedPnl, input.currentBrokerNetPnl].every(Number.isFinite)
-  ) return report('INITIAL_RISK_UNAVAILABLE');
+    risk === null ||
+    !Number.isFinite(risk) ||
+    risk <= 0 ||
+    ![input.previousPeakPnl, input.previousObservedPnl, input.currentBrokerNetPnl].every(
+      Number.isFinite,
+    )
+  )
+    return report('INITIAL_RISK_UNAVAILABLE');
 
   const age = input.elapsedMinutes;
   const previousAge = input.previousObservationAt
-    ? (input.observedAt.getTime() - input.previousObservationAt.getTime()) / 1000 : NaN;
+    ? (input.observedAt.getTime() - input.previousObservationAt.getTime()) / 1000
+    : NaN;
   if (
-    !Number.isFinite(age) || age < 3 ||
-    !input.openedAt || !Number.isFinite(input.openedAt.getTime()) ||
+    !Number.isFinite(age) ||
+    age < 3 ||
+    !input.openedAt ||
+    !Number.isFinite(input.openedAt.getTime()) ||
     !Number.isFinite(input.observedAt.getTime()) ||
-    !Number.isFinite(previousAge) || previousAge < 0 || previousAge > 60 ||
+    !Number.isFinite(previousAge) ||
+    previousAge < 0 ||
+    previousAge > 60 ||
     !Number.isInteger(input.previousObservationCount) ||
     input.previousObservationCount < 12
-  ) return report('OBSERVATIONS_NOT_MATURE');
+  )
+    return report('OBSERVATIONS_NOT_MATURE');
 
-  const stop = input.authoritativeStop, brokerStop = input.brokerStop;
-  const tp = input.authoritativeTakeProfit, brokerTp = input.brokerTakeProfit;
-  const entry = input.brokerEntryPrice, mark = input.currentPrice;
+  const stop = input.authoritativeStop,
+    brokerStop = input.brokerStop;
+  const tp = input.authoritativeTakeProfit,
+    brokerTp = input.brokerTakeProfit;
+  const entry = input.brokerEntryPrice,
+    mark = input.currentPrice;
   if (
     [stop, brokerStop, tp, brokerTp, entry, mark].some(
-      x => x === null || !Number.isFinite(x) || x <= 0,
+      (x) => x === null || !Number.isFinite(x) || x <= 0,
     ) ||
     Math.abs(stop! - brokerStop!) > Math.max(0.00001, stop! * 1e-7) ||
     Math.abs(tp! - brokerTp!) > Math.max(0.00001, tp! * 1e-7) ||
     (input.tradeDirection === 'BUY'
       ? !(stop! < entry! && entry! < mark! && mark! < tp!)
       : !(tp! < mark! && mark! < entry! && entry! < stop!))
-  ) return report('BROKER_BARRIERS_UNVERIFIED');
+  )
+    return report('BROKER_BARRIERS_UNVERIFIED');
 
-  if (peakR === null || peakR < 1)
-    return report('NO_ESTABLISHED_HIGH_PEAK');
+  if (peakR === null || peakR < 1) return report('NO_ESTABLISHED_HIGH_PEAK');
 
   if (
-    nowR === null || nowR <= 0 ||
+    nowR === null ||
+    nowR <= 0 ||
     nowR > Math.min(0.4, peakR * 0.35) ||
-    input.previousPeakPnl - input.currentBrokerNetPnl < Math.max(risk * 0.65, input.previousPeakPnl * 0.65) ||
+    input.previousPeakPnl - input.currentBrokerNetPnl <
+      Math.max(risk * 0.65, input.previousPeakPnl * 0.65) ||
     input.previousObservedPnl - input.currentBrokerNetPnl < Math.max(1, risk * 0.01)
-  ) return report('NO_DEEP_POSITIVE_GIVEBACK');
+  )
+    return report('NO_DEEP_POSITIVE_GIVEBACK');
 
   const fee = input.conservativeExtraExitCost;
   if (
-    fee === null || !Number.isFinite(fee) || fee <= 0 ||
-    !Number.isInteger(input.causalFeeSampleCount) || input.causalFeeSampleCount < 8
-  ) return report('MISSING_CAUSAL_CLOSE_COSTS');
+    fee === null ||
+    !Number.isFinite(fee) ||
+    fee <= 0 ||
+    !Number.isInteger(input.causalFeeSampleCount) ||
+    input.causalFeeSampleCount < 8
+  )
+    return report('MISSING_CAUSAL_CLOSE_COSTS');
 
   if (input.currentBrokerNetPnl - fee < Math.max(1, risk * 0.05))
     return report('NO_POST_RESERVE_PROFIT');
@@ -164,15 +188,20 @@ export function evaluatePepperstoneHighPeakGivebackShadow(
 
   const m1 = input.m1;
   if (
-    !m1 || m1.completedBars < 2 || m1.adverseBars < 2 ||
-    m1.liveQuoteBars < 2 || m1.consecutiveLiveQuoteBars < 2 ||
+    !m1 ||
+    m1.completedBars < 2 ||
+    m1.adverseBars < 2 ||
+    m1.liveQuoteBars < 2 ||
+    m1.consecutiveLiveQuoteBars < 2 ||
     !Number.isFinite(m1.latestAgeSeconds) ||
-    m1.latestAgeSeconds < 0 || m1.latestAgeSeconds > 90 ||
+    m1.latestAgeSeconds < 0 ||
+    m1.latestAgeSeconds > 90 ||
     !Number.isFinite(m1.alignedLatestBodyPressure) ||
     !Number.isFinite(m1.alignedMomentum3) ||
     m1.alignedLatestBodyPressure > -0.2 ||
     m1.alignedMomentum3 > -0.15
-  ) return report('DIRECTIONAL_REVERSAL_NOT_VERIFIED');
+  )
+    return report('DIRECTIONAL_REVERSAL_NOT_VERIFIED');
 
   return report('QUALIFIED_SHADOW_GIVEBACK');
 }

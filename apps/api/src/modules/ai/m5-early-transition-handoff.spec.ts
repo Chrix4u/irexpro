@@ -1,4 +1,7 @@
-import { evaluateM5EarlyTransitionHandoff, m1MayConfirmM5EarlyTransition } from './m5-early-transition-handoff';
+import {
+  evaluateM5EarlyTransitionHandoff,
+  m1MayConfirmM5EarlyTransition,
+} from './m5-early-transition-handoff';
 
 const NOW = new Date('2026-10-29T17:10:00.000Z');
 
@@ -149,12 +152,14 @@ describe('M1-only causal prefilter for expensive M5 handoff lookup', () => {
 
   it('preserves M5 observation for eligible trend continuations and strong non-ambiguous abstains', () => {
     expect(may()).toBe(true);
-    expect(may({
-      m1Route: 'ABSTAIN',
-      m1Reason: 'HIGHER_TIMEFRAME_CONFLICT',
-      m1Confidence: 0.738,
-      m1DirectionQuality: 0.696,
-    })).toBe(true);
+    expect(
+      may({
+        m1Route: 'ABSTAIN',
+        m1Reason: 'HIGHER_TIMEFRAME_CONFLICT',
+        m1Confidence: 0.738,
+        m1DirectionQuality: 0.696,
+      }),
+    ).toBe(true);
   });
 
   it.each([
@@ -169,7 +174,7 @@ describe('M1-only causal prefilter for expensive M5 handoff lookup', () => {
     { m1EventRisk: 'HIGH_IMPACT_BLOCK' },
     { m1EventRisk: 'UNVERIFIED' },
     { m1Confidence: Number.NaN },
-  ])('skips provably ineligible M1 confirmation without a broker lookup: %j', overrides => {
+  ])('skips provably ineligible M1 confirmation without a broker lookup: %j', (overrides) => {
     expect(may(overrides)).toBe(false);
     expect(evaluateM5EarlyTransitionHandoff(input(overrides) as any).eligible).toBe(false);
   });

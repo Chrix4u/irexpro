@@ -165,96 +165,121 @@ describe('ProtectiveOrderReconciliationService — the §8 protective-order loop
   });
 
   it('does not loosen an independently observed stronger owner DEMO BUY profit stop', async () => {
-    const beforeFlag=process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP;
-    const beforeOwner=process.env.VPS_FOREX_SCANNER_USER_ID;
-    process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP='enabled';
-    process.env.VPS_FOREX_SCANNER_USER_ID=USER;
+    const beforeFlag = process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP;
+    const beforeOwner = process.env.VPS_FOREX_SCANNER_USER_ID;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP = 'enabled';
+    process.env.VPS_FOREX_SCANNER_USER_ID = USER;
     try {
-      tradeRepo.rows=[openTrade('trade-1',{
-        direction:'BUY' as Trade['direction'],
-        accountCurrency:'USD',lotSize:'0.10',stopLoss:'1.07500',
-        takeProfit:'1.09500',
-      })];
+      tradeRepo.rows = [
+        openTrade('trade-1', {
+          direction: 'BUY' as Trade['direction'],
+          accountCurrency: 'USD',
+          lotSize: '0.10',
+          stopLoss: '1.07500',
+          takeProfit: '1.09500',
+        }),
+      ];
       adapter.getOpenPositions.mockResolvedValue([
-        position('ext-trade-1',{
-          openPrice:'1.08500',currentPrice:'1.08700',
-          stopLoss:'1.08600',takeProfit:'1.09500',
+        position('ext-trade-1', {
+          openPrice: '1.08500',
+          currentPrice: '1.08700',
+          stopLoss: '1.08600',
+          takeProfit: '1.09500',
         }),
       ]);
-      const result=await service.reconcileProtectiveOrders(
-        connection({brokerId:'pepperstone-ctrader',accountCurrency:'USD'}),
+      const result = await service.reconcileProtectiveOrders(
+        connection({ brokerId: 'pepperstone-ctrader', accountCurrency: 'USD' }),
       );
       expect(result).toMatchObject({
-        status:'OK',skippedCount:1,preservedTighterProfitStopCount:1,
-        repairedCount:0,
+        status: 'OK',
+        skippedCount: 1,
+        preservedTighterProfitStopCount: 1,
+        repairedCount: 0,
       });
       expect(adapter.modifyOrder).not.toHaveBeenCalled();
-      expect(auditService.log).toHaveBeenCalledWith(expect.objectContaining({
-        metadata:expect.objectContaining({
-          preservedTighterProfitStopCount:1,
-          pendingAuthority:expect.arrayContaining([
-            expect.objectContaining({
-              tradeId:'trade-1',outcome:'PROFIT_STOP_PRESERVED_REQUIRES_SYNC',
-            }),
-          ]),
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            preservedTighterProfitStopCount: 1,
+            pendingAuthority: expect.arrayContaining([
+              expect.objectContaining({
+                tradeId: 'trade-1',
+                outcome: 'PROFIT_STOP_PRESERVED_REQUIRES_SYNC',
+              }),
+            ]),
+          }),
         }),
-      }));
+      );
       // Explicitly disabling the narrow guard preserves the old correction
       // path; it does not grant an automatic broker amendment on LIVE.
-      process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP='disabled';
+      process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP = 'disabled';
       await service.reconcileProtectiveOrders(
-        connection({brokerId:'pepperstone-ctrader',accountCurrency:'USD'}),
+        connection({ brokerId: 'pepperstone-ctrader', accountCurrency: 'USD' }),
       );
-      expect(adapter.modifyOrder).toHaveBeenCalledWith('ext-trade-1',{
-        newStopLoss:'1.07500',newTakeProfit:'1.09500',
+      expect(adapter.modifyOrder).toHaveBeenCalledWith('ext-trade-1', {
+        newStopLoss: '1.07500',
+        newTakeProfit: '1.09500',
       });
-    }finally{
-      if(beforeFlag===undefined)
+    } finally {
+      if (beforeFlag === undefined)
         delete process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP;
-      else process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP=beforeFlag;
-      if(beforeOwner===undefined)delete process.env.VPS_FOREX_SCANNER_USER_ID;
-      else process.env.VPS_FOREX_SCANNER_USER_ID=beforeOwner;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP = beforeFlag;
+      if (beforeOwner === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID = beforeOwner;
     }
   });
 
   it('preserves a verified stronger owner DEMO SELL stop and never crosses the mark', async () => {
-    const flag=process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP;
-    const owner=process.env.VPS_FOREX_SCANNER_USER_ID;
-    process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP='enabled';
-    process.env.VPS_FOREX_SCANNER_USER_ID=USER;
-    try{
-      tradeRepo.rows=[openTrade('sell',{
-        direction:'SELL' as Trade['direction'],accountCurrency:'USD',
-        lotSize:'0.10',stopLoss:'1.09500',takeProfit:'1.07500',
-      })];
+    const flag = process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP;
+    const owner = process.env.VPS_FOREX_SCANNER_USER_ID;
+    process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP = 'enabled';
+    process.env.VPS_FOREX_SCANNER_USER_ID = USER;
+    try {
+      tradeRepo.rows = [
+        openTrade('sell', {
+          direction: 'SELL' as Trade['direction'],
+          accountCurrency: 'USD',
+          lotSize: '0.10',
+          stopLoss: '1.09500',
+          takeProfit: '1.07500',
+        }),
+      ];
       adapter.getOpenPositions.mockResolvedValue([
-        position('ext-sell',{
-          direction:'SELL',openPrice:'1.08500',currentPrice:'1.08200',
-          stopLoss:'1.08300',takeProfit:'1.07500',
+        position('ext-sell', {
+          direction: 'SELL',
+          openPrice: '1.08500',
+          currentPrice: '1.08200',
+          stopLoss: '1.08300',
+          takeProfit: '1.07500',
         }),
       ]);
-      const result=await service.reconcileProtectiveOrders(
-        connection({brokerId:'pepperstone-ctrader',accountCurrency:'USD'}),
+      const result = await service.reconcileProtectiveOrders(
+        connection({ brokerId: 'pepperstone-ctrader', accountCurrency: 'USD' }),
       );
       expect(result.preservedTighterProfitStopCount).toBe(1);
       expect(adapter.modifyOrder).not.toHaveBeenCalled();
       adapter.getOpenPositions.mockResolvedValue([
-        position('ext-sell',{
-          direction:'SELL',openPrice:'1.08500',currentPrice:'1.08200',
-          stopLoss:'1.08100',takeProfit:'1.07500',
+        position('ext-sell', {
+          direction: 'SELL',
+          openPrice: '1.08500',
+          currentPrice: '1.08200',
+          stopLoss: '1.08100',
+          takeProfit: '1.07500',
         }),
       ]);
       await service.reconcileProtectiveOrders(
-        connection({brokerId:'pepperstone-ctrader',accountCurrency:'USD'}),
+        connection({ brokerId: 'pepperstone-ctrader', accountCurrency: 'USD' }),
       );
-      expect(adapter.modifyOrder).toHaveBeenCalledWith('ext-sell',{
-        newStopLoss:'1.09500',newTakeProfit:'1.07500',
+      expect(adapter.modifyOrder).toHaveBeenCalledWith('ext-sell', {
+        newStopLoss: '1.09500',
+        newTakeProfit: '1.07500',
       });
-    }finally{
-      if(flag===undefined)delete process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP;
-      else process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP=flag;
-      if(owner===undefined)delete process.env.VPS_FOREX_SCANNER_USER_ID;
-      else process.env.VPS_FOREX_SCANNER_USER_ID=owner;
+    } finally {
+      if (flag === undefined)
+        delete process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP;
+      else process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP = flag;
+      if (owner === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID = owner;
     }
   });
 

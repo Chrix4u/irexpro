@@ -39,8 +39,7 @@ export function evaluateOwnerDemoWeakReversalCap(input: OwnerDemoWeakReversalCap
       Number.isInteger(input.feeShadowPriorSamples) &&
       input.feeShadowPriorSamples! >= 12,
     lossWarningAccepted:
-      input.modelLossStreakActive &&
-      input.modelLossStreakReason === 'RECENT_NEGATIVE_PAYOFF',
+      input.modelLossStreakActive && input.modelLossStreakReason === 'RECENT_NEGATIVE_PAYOFF',
     altersBrokerStops: false as const,
     changesDirection: false as const,
     blocksTrade: false as const,
@@ -49,25 +48,26 @@ export function evaluateOwnerDemoWeakReversalCap(input: OwnerDemoWeakReversalCap
   });
   if (!(Number.isFinite(original) && original > 0))
     return output(original, 'INVALID_OR_ABSENT_LOT_CAP_UNCHANGED');
-  if (!input.enabled || !input.exactOwnerVerified ||
-      !input.ongoingSevenLotEligible || !input.continuousDemoAlternate ||
-      input.route !== 'CONFIRMED_REVERSAL')
+  if (
+    !input.enabled ||
+    !input.exactOwnerVerified ||
+    !input.ongoingSevenLotEligible ||
+    !input.continuousDemoAlternate ||
+    input.route !== 'CONFIRMED_REVERSAL'
+  )
     return output(original, 'NOT_EXACT_OWNER_DEMO_CONTINUOUS_REVERSAL_UNCHANGED');
   if (original <= OWNER_DEMO_STANDARD_EXPOSURE_CEILING_LOTS)
     return output(original, 'ALREADY_AT_OR_BELOW_STANDARD_CAP_UNCHANGED');
   const fraction = input.independentQualityRiskFraction;
-  if (fraction === null || !Number.isFinite(fraction) ||
-      fraction < 0.2 || fraction > 0.5)
+  if (fraction === null || !Number.isFinite(fraction) || fraction < 0.2 || fraction > 0.5)
     return output(original, 'QUALITY_EVIDENCE_NOT_STRONG_ENOUGH_FOR_CAP');
   const feeRisk =
     input.feeShadowReason === 'AFTER_BROKER_FEES_BELOW_FLOOR' &&
     Number.isInteger(input.feeShadowPriorSamples) &&
     input.feeShadowPriorSamples! >= 12;
   const lossRisk =
-    input.modelLossStreakActive &&
-    input.modelLossStreakReason === 'RECENT_NEGATIVE_PAYOFF';
-  if (!feeRisk && !lossRisk)
-    return output(original, 'NO_INDEPENDENT_COST_OR_LOSS_WARNING');
+    input.modelLossStreakActive && input.modelLossStreakReason === 'RECENT_NEGATIVE_PAYOFF';
+  if (!feeRisk && !lossRisk) return output(original, 'NO_INDEPENDENT_COST_OR_LOSS_WARNING');
   return output(
     Math.min(original, OWNER_DEMO_STANDARD_EXPOSURE_CEILING_LOTS),
     'WEAK_CONFIRMATION_PLUS_INDEPENDENT_COST_OR_LOSS_WARNING',

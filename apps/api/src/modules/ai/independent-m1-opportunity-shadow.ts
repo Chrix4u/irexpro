@@ -42,9 +42,7 @@ export interface IndependentM1OpportunityInput {
   } | null;
 }
 
-export function evaluateIndependentM1OpportunityShadow(
-  input: IndependentM1OpportunityInput,
-) {
+export function evaluateIndependentM1OpportunityShadow(input: IndependentM1OpportunityInput) {
   const reasons: string[] = [];
   if (input.route !== 'M1_TREND_CONTINUATION') reasons.push('OTHER_M1_ROUTE');
   if (!input.routeEligible) reasons.push('M1_TIMING_NOT_ELIGIBLE');
@@ -52,19 +50,23 @@ export function evaluateIndependentM1OpportunityShadow(
   if (input.eventRisk !== 'CLEAR') reasons.push('EVENT_RISK_NOT_CLEAR');
   if (!input.spreadEvidenceValid) reasons.push('BROKER_SPREAD_NOT_VERIFIED');
   if (!input.reliability?.eligible) reasons.push('ACTUAL_PAIR_SIDE_RELIABILITY_NOT_ELIGIBLE');
-  if (!Number.isFinite(input.m1NetExpectedR))
-    reasons.push('M1_EXPECTED_RETURN_NOT_FINITE');
-  if (!Number.isFinite(input.candidateEntry) || input.candidateEntry <= 0 ||
-      !Number.isFinite(input.stopLoss) || !Number.isFinite(input.takeProfit))
+  if (!Number.isFinite(input.m1NetExpectedR)) reasons.push('M1_EXPECTED_RETURN_NOT_FINITE');
+  if (
+    !Number.isFinite(input.candidateEntry) ||
+    input.candidateEntry <= 0 ||
+    !Number.isFinite(input.stopLoss) ||
+    !Number.isFinite(input.takeProfit)
+  )
     reasons.push('CANDIDATE_PRICE_GEOMETRY_INVALID');
-  const positiveExitGeometry = input.direction === 'SELL'
-    ? input.stopLoss > input.candidateEntry && input.takeProfit < input.candidateEntry
-    : input.stopLoss < input.candidateEntry && input.takeProfit > input.candidateEntry;
+  const positiveExitGeometry =
+    input.direction === 'SELL'
+      ? input.stopLoss > input.candidateEntry && input.takeProfit < input.candidateEntry
+      : input.stopLoss < input.candidateEntry && input.takeProfit > input.candidateEntry;
   if (!positiveExitGeometry) reasons.push('CANDIDATE_STOP_TARGET_INCONSISTENT');
 
   const eligibleForStudy = reasons.length === 0;
-  const planBDisagrees = eligibleForStudy &&
-    input.planB !== null && input.planB.paperAdmitted !== true;
+  const planBDisagrees =
+    eligibleForStudy && input.planB !== null && input.planB.paperAdmitted !== true;
   return {
     artifact: INDEPENDENT_M1_OPPORTUNITY_ARTIFACT,
     mode: 'SHADOW_ONLY' as const,

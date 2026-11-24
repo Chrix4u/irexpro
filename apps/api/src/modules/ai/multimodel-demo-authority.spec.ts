@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import {
   evaluateMultimodelDemoAuthority,
   multimodelDemoExecutionVolumeCap,
@@ -54,24 +55,28 @@ const overlay = (
  */
 describe('historical 04-Nov primary Plan B compatibility (NO execution promotion)', () => {
   it('retains the old primary decision across model routes, independent M1 timing, admission, governance and expert states', () => {
-    const frozen = require('../../../scripts/audit-nov04-primary-authority-replay.cjs') as {
+    const frozen = createRequire(__filename)(
+      '../../../scripts/audit-nov04-primary-authority-replay.cjs',
+    ) as {
       nov04PrimaryAuthority: (input: Record<string, unknown>) => {
-        valid: boolean; eligible: boolean; reason: string;
+        valid: boolean;
+        eligible: boolean;
+        reason: string;
       };
     };
-    const strategies = [
-      'TREND_CONTINUATION', 'CONFIRMED_REVERSAL', 'EARLY_TRANSITION',
-    ] as const;
+    const strategies = ['TREND_CONTINUATION', 'CONFIRMED_REVERSAL', 'EARLY_TRANSITION'] as const;
     const m1Routes = [
-      'M1_TREND_CONTINUATION', 'M1_EARLY_TRANSITION',
-      'M1_CONFIRMED_REVERSAL', 'ABSTAIN',
+      'M1_TREND_CONTINUATION',
+      'M1_EARLY_TRANSITION',
+      'M1_CONFIRMED_REVERSAL',
+      'ABSTAIN',
     ] as const;
-    let compared=0;
-    for(const strategyRoute of strategies) {
-      for(const m1TimingRoute of m1Routes) {
-        for(const paperAdmitted of [true,false]) {
-          for(const paperExecutionEligible of [true,false]) {
-            for(const expertState of ['CONFIRM','ABSTAIN','CONFLICT'] as const) {
+    let compared = 0;
+    for (const strategyRoute of strategies) {
+      for (const m1TimingRoute of m1Routes) {
+        for (const paperAdmitted of [true, false]) {
+          for (const paperExecutionEligible of [true, false]) {
+            for (const expertState of ['CONFIRM', 'ABSTAIN', 'CONFLICT'] as const) {
               const input = {
                 ensemble: { ...ensemble(paperAdmitted), strategyRoute },
                 governance: governance(paperExecutionEligible),
@@ -79,16 +84,16 @@ describe('historical 04-Nov primary Plan B compatibility (NO execution promotion
                 candidateDirection: 'BUY' as const,
                 m1TimingRoute,
               };
-              const legacy=frozen.nov04PrimaryAuthority({
-                ensemble:input.ensemble,
-                strategy_governance:input.governance,
-                expert:input.trainedExpert,
-                direction:input.candidateDirection,
-                route:input.m1TimingRoute,
+              const legacy = frozen.nov04PrimaryAuthority({
+                ensemble: input.ensemble,
+                strategy_governance: input.governance,
+                expert: input.trainedExpert,
+                direction: input.candidateDirection,
+                route: input.m1TimingRoute,
               });
-              const actual=evaluateMultimodelDemoAuthority(input);
+              const actual = evaluateMultimodelDemoAuthority(input);
               expect(legacy.valid).toBe(true);
-              expect(actual.authorityPath==='PRIMARY_PLAN_B').toBe(legacy.eligible);
+              expect(actual.authorityPath === 'PRIMARY_PLAN_B').toBe(legacy.eligible);
               compared++;
             }
           }

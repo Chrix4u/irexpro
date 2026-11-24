@@ -23,11 +23,11 @@ const base = {
   previousObservationAt: new Date('2026-11-12T03:23:25Z'),
   observedAt: now,
   brokerEntryPrice: 1.10731,
-  currentPrice: 1.10710,
+  currentPrice: 1.1071,
   authoritativeStop: 1.1078,
   brokerStop: 1.1078,
-  authoritativeTakeProfit: 1.10650,
-  brokerTakeProfit: 1.10650,
+  authoritativeTakeProfit: 1.1065,
+  brokerTakeProfit: 1.1065,
   conservativeExtraExitCost: 12,
   causalFeeSampleCount: 12,
   m1: {
@@ -58,7 +58,9 @@ describe('Pepperstone DEMO high-peak reversal comparison (research-only)', () =>
 
   it('leaves a full-TP runner with a healthy profit and ordinary retracement alone', () => {
     const r = evaluatePepperstoneHighPeakGivebackShadow({
-      ...base, currentBrokerNetPnl: 102, previousObservedPnl: 112,
+      ...base,
+      currentBrokerNetPnl: 102,
+      previousObservedPnl: 112,
     });
     expect(r.reason).toBe('NO_DEEP_POSITIVE_GIVEBACK');
     expect(r.wouldProtectIfIndependentlyQualified).toBe(false);

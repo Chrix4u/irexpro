@@ -1,15 +1,24 @@
-import type { DelayedEntryParityResult, VerifiedNativeMinute } from './m1-delayed-entry-parity-shadow';
+import type {
+  DelayedEntryParityResult,
+  VerifiedNativeMinute,
+} from './m1-delayed-entry-parity-shadow';
 import { isVerifiedNativeMinute } from './m1-delayed-entry-parity-shadow';
 
 /** Quote-only paired comparison, matched to the ORIGINAL broker close.
  * Does not assume a hypothetical broker fill, a changed closing decision,
  * or execution authority. Exit-bar OHLC is deliberately excluded.
  */
-export const SAME_EXIT_TIMING_ARTIFACT = 'm1-same-exit-entry-timing-research-v2-verified-risk' as const;
+export const SAME_EXIT_TIMING_ARTIFACT =
+  'm1-same-exit-entry-timing-research-v2-verified-risk' as const;
 export type SameExitState =
-  | 'NO_CONFIRMATION' | 'UNVERIFIED_SETTLEMENT' | 'ENTRY_AFTER_ACTUAL_CLOSE'
-  | 'CLOSE_IN_ENTRY_MINUTE' | 'DATA_GAP' | 'STOP_TOUCH_BEFORE_ACTUAL_CLOSE'
-  | 'TARGET_TOUCH_BEFORE_ACTUAL_CLOSE' | 'BOTH_BARRIERS_IN_MINUTE'
+  | 'NO_CONFIRMATION'
+  | 'UNVERIFIED_SETTLEMENT'
+  | 'ENTRY_AFTER_ACTUAL_CLOSE'
+  | 'CLOSE_IN_ENTRY_MINUTE'
+  | 'DATA_GAP'
+  | 'STOP_TOUCH_BEFORE_ACTUAL_CLOSE'
+  | 'TARGET_TOUCH_BEFORE_ACTUAL_CLOSE'
+  | 'BOTH_BARRIERS_IN_MINUTE'
   | 'INDICATIVE_SAME_EXIT';
 
 export interface SameExitTimingResult {
@@ -53,11 +62,12 @@ export function compareDelayedEntryAtActualExit(input: {
   const closeAt = input.originalClosedAt;
   const enteredAt = delayed.simulatedEntryAt;
   const base = (state: SameExitState): SameExitTimingResult => ({
-    artifact: SAME_EXIT_TIMING_ARTIFACT, state,
-    actualCloseAt: closeAt && Number.isFinite(closeAt.getTime())
-      ? closeAt.toISOString() : null,
+    artifact: SAME_EXIT_TIMING_ARTIFACT,
+    state,
+    actualCloseAt: closeAt && Number.isFinite(closeAt.getTime()) ? closeAt.toISOString() : null,
     indicativeEntryAt: enteredAt,
-    firstBarrierAt: null, firstMissingMinute: null,
+    firstBarrierAt: null,
+    firstMissingMinute: null,
     comparedCompletedMinutes: 0,
     actualNetAfterFeesR: null,
     delayedSameExitNetAfterFeesR: null,
@@ -67,11 +77,11 @@ export function compareDelayedEntryAtActualExit(input: {
     assumption: 'SAME_EXIT_PRICE_UNCHANGED_VOLUME_ESTIMATED_FEES_NOT_EXECUTABLE',
     originalStopRiskAccountCurrency: null,
     grossPerPriceUnitFromActualClose: null,
-    noTradeAuthority: true, modifiesExecution: false,
+    noTradeAuthority: true,
+    modifiesExecution: false,
     modelTrainingStatus: 'RESEARCH_ONLY_NOT_TRAINED',
   });
-  if (delayed.state !== 'CONFIRMED' || !enteredAt ||
-      delayed.indicativeQuoteEntry == null)
+  if (delayed.state !== 'CONFIRMED' || !enteredAt || delayed.indicativeQuoteEntry == null)
     return base('NO_CONFIRMATION');
   const at = Date.parse(enteredAt);
   const exitAt = closeAt?.getTime() ?? NaN;
@@ -81,25 +91,38 @@ export function compareDelayedEntryAtActualExit(input: {
   const quote = delayed.indicativeQuoteEntry;
   const risk = input.verifiedOriginalRiskAccountCurrency;
   const pips = input.instrument.toUpperCase().endsWith('JPY') ? 0.01 : 0.0001;
-  if (delayed.originalDirection !== input.direction ||
+  if (
+    delayed.originalDirection !== input.direction ||
     (sign === 1
-      ? !(input.originalStop < input.originalFill &&
-          input.originalFill < input.originalTarget)
-      : !(input.originalTarget < input.originalFill &&
-          input.originalFill < input.originalStop)) ||
+      ? !(input.originalStop < input.originalFill && input.originalFill < input.originalTarget)
+      : !(input.originalTarget < input.originalFill && input.originalFill < input.originalStop)) ||
     at % 60_000 !== 0 ||
-    ![at,exitAt,sign,originalRisk,originalTarget,quote,
-    input.originalFill,input.originalExit,input.actualGrossPnl,
-    input.actualCommission,input.actualSwap,risk].every(
-      x => typeof x === 'number' && Number.isFinite(x),
-    ) || originalRisk <= 0 || originalTarget <= 0 ||
-    quote <= 0 || (risk ?? 0) <= 0 || (input.originalExit ?? 0) <= 0 ||
-    !Number.isFinite(at) || delayed.quotePricingNotExecutable !== true)
+    ![
+      at,
+      exitAt,
+      sign,
+      originalRisk,
+      originalTarget,
+      quote,
+      input.originalFill,
+      input.originalExit,
+      input.actualGrossPnl,
+      input.actualCommission,
+      input.actualSwap,
+      risk,
+    ].every((x) => typeof x === 'number' && Number.isFinite(x)) ||
+    originalRisk <= 0 ||
+    originalTarget <= 0 ||
+    quote <= 0 ||
+    (risk ?? 0) <= 0 ||
+    (input.originalExit ?? 0) <= 0 ||
+    !Number.isFinite(at) ||
+    delayed.quotePricingNotExecutable !== true
+  )
     return base('UNVERIFIED_SETTLEMENT');
   const result = base('INDICATIVE_SAME_EXIT');
   result.originalStopRiskAccountCurrency = rounded(risk!, 2);
-  result.indicativeEntryImprovementPips =
-    rounded(sign * (input.originalFill - quote) / pips, 2);
+  result.indicativeEntryImprovementPips = rounded((sign * (input.originalFill - quote)) / pips, 2);
   // Never call an entry at or after the actual exit a valid alternative.
   if (at >= exitAt) return { ...result, state: 'ENTRY_AFTER_ACTUAL_CLOSE' };
   const endMinute = Math.floor(exitAt / 60_000) * 60_000;
@@ -125,13 +148,19 @@ export function compareDelayedEntryAtActualExit(input: {
     const low = Number(bar.low);
     const hitsStop = sign === 1 ? low <= hypotheticalStop : high >= hypotheticalStop;
     const hitsTarget = sign === 1 ? high >= hypotheticalTarget : low <= hypotheticalTarget;
-    peakAdverse = Math.max(peakAdverse,
-      sign === 1 ? Math.max(0, quote - low) : Math.max(0, high - quote));
+    peakAdverse = Math.max(
+      peakAdverse,
+      sign === 1 ? Math.max(0, quote - low) : Math.max(0, high - quote),
+    );
     if (hitsStop || hitsTarget) {
       result.firstBarrierAt = new Date(minute).toISOString();
       result.maxAdversePipsBeforeActualClose = rounded(peakAdverse / pips, 2);
-      result.state = hitsStop && hitsTarget ? 'BOTH_BARRIERS_IN_MINUTE' :
-        hitsStop ? 'STOP_TOUCH_BEFORE_ACTUAL_CLOSE' : 'TARGET_TOUCH_BEFORE_ACTUAL_CLOSE';
+      result.state =
+        hitsStop && hitsTarget
+          ? 'BOTH_BARRIERS_IN_MINUTE'
+          : hitsStop
+            ? 'STOP_TOUCH_BEFORE_ACTUAL_CLOSE'
+            : 'TARGET_TOUCH_BEFORE_ACTUAL_CLOSE';
       return result;
     }
   }
@@ -142,8 +171,7 @@ export function compareDelayedEntryAtActualExit(input: {
   // Infer the pip-to-currency conversion only from the original BROKER
   // settlement. Reject an inconsistent broker gross/price-move sign or a
   // near-zero close movement rather than inventing a conversion rate.
-  if (Math.abs(originalMovement) <= pips / 10 ||
-      gross === 0 || gross * originalMovement <= 0)
+  if (Math.abs(originalMovement) <= pips / 10 || gross === 0 || gross * originalMovement <= 0)
     return { ...result, state: 'UNVERIFIED_SETTLEMENT' };
   const grossPerPriceUnit = gross / originalMovement;
   result.grossPerPriceUnitFromActualClose = rounded(grossPerPriceUnit, 4);

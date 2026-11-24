@@ -17,16 +17,19 @@ export function resolveOwnerDemoRecoveryCanarySizing(input: {
   enforceHistoricalCanarySpacing: boolean;
 } {
   const normalVolumeCap = Number.isFinite(input.normalVolumeCap)
-    ? Math.max(0, input.normalVolumeCap) : 0;
+    ? Math.max(0, input.normalVolumeCap)
+    : 0;
   const historicalLossRecoveryAdvisory =
-    input.recoveryCanary && !input.crossSleeveReversalCanary &&
-    input.ownerDemoVerified && input.featureEnabled;
+    input.recoveryCanary &&
+    !input.crossSleeveReversalCanary &&
+    input.ownerDemoVerified &&
+    input.featureEnabled;
   return {
     historicalLossRecoveryAdvisory,
-    volumeCap: input.recoveryCanary && !historicalLossRecoveryAdvisory
-      ? Math.min(normalVolumeCap, input.recoveryCanaryLotCap)
-      : normalVolumeCap,
-    enforceHistoricalCanarySpacing:
-      input.recoveryCanary && !historicalLossRecoveryAdvisory,
+    volumeCap:
+      input.recoveryCanary && !historicalLossRecoveryAdvisory
+        ? Math.min(normalVolumeCap, input.recoveryCanaryLotCap)
+        : normalVolumeCap,
+    enforceHistoricalCanarySpacing: input.recoveryCanary && !historicalLossRecoveryAdvisory,
   };
 }

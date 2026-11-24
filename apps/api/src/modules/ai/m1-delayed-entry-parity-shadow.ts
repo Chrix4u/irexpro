@@ -4,7 +4,8 @@
  * M1 quote open. Evaluation takes place only after the entire horizon.
  * No execution authority; quote OHLC does not simulate broker fills.
  */
-export const DELAY_ENTRY_PARITY_SHADOW_ARTIFACT = 'm1-confirmed-delay-stop-parity-shadow-v3-verified-risk';
+export const DELAY_ENTRY_PARITY_SHADOW_ARTIFACT =
+  'm1-confirmed-delay-stop-parity-shadow-v3-verified-risk';
 export const DELAY_ENTRY_PARITY_HORIZONS = [60, 240] as const;
 export type DelayEntryParityHorizon = (typeof DELAY_ENTRY_PARITY_HORIZONS)[number];
 export const DELAY_ENTRY_CONFIRMATION_WINDOW_MINUTES = 5;
@@ -177,7 +178,8 @@ export function evaluateDelayedEntryParity(input: {
   }
   const entryMs = startMs + (signalIndex + 1) * 60000;
   const entryBar = lookup.get(entryMs);
-  if (!isVerifiedNativeMinute(entryBar, entryMs)) return empty('DATA_GAP', new Date(entryMs).toISOString());
+  if (!isVerifiedNativeMinute(entryBar, entryMs))
+    return empty('DATA_GAP', new Date(entryMs).toISOString());
   const quoteEntry = Number(entryBar.open);
   const result = empty('CONFIRMED');
   result.simulatedEntryAt = new Date(entryMs).toISOString();

@@ -34,45 +34,74 @@ export interface ProspectiveEntryQualityObservation {
   modifiesRiskOrLotSize: false;
   grantsLiveOrderAuthority: false;
   candidateWouldMatchOriginalHeldDoubleAbstain: boolean | null;
-  alignmentGroup: 'M5_M30_BOTH_SUPPORT'|'M5_M30_DISAGREE'|'M5_M30_BOTH_ADVERSE'|'UNKNOWN';
+  alignmentGroup: 'M5_M30_BOTH_SUPPORT' | 'M5_M30_DISAGREE' | 'M5_M30_BOTH_ADVERSE' | 'UNKNOWN';
   decisionTime: string | null;
   instrument: string;
   direction: string;
   strategyRoute: string | null;
-  evidence: { confidence: number | null;m5Aligned: number | null;
-    m30DirectionalEfficiency: number | null;h4Aligned: number | null;
-    expertState: string | null;paperExpectancySamples: number | null } | null;
+  evidence: {
+    confidence: number | null;
+    m5Aligned: number | null;
+    m30DirectionalEfficiency: number | null;
+    h4Aligned: number | null;
+    expertState: string | null;
+    paperExpectancySamples: number | null;
+  } | null;
 }
-const valid=(n:number|null):number|null=>n!==null&&Number.isFinite(n)?n:null;
+const valid = (n: number | null): number | null => (n !== null && Number.isFinite(n) ? n : null);
 export function evaluateOwnerDemoProspectiveEntryQuality(
-  input:ProspectiveEntryQualityInput,
-):ProspectiveEntryQualityObservation {
-  const baseline={artifact:OWNER_DEMO_PROSPECTIVE_ENTRY_QUALITY,researchOnly:true as const,
-    modifiesAdmission:false as const,modifiesExecution:false as const,
-    modifiesRiskOrLotSize:false as const,grantsLiveOrderAuthority:false as const,
-    instrument:input.instrument,direction:input.direction,strategyRoute:input.strategyRoute,
+  input: ProspectiveEntryQualityInput,
+): ProspectiveEntryQualityObservation {
+  const baseline = {
+    artifact: OWNER_DEMO_PROSPECTIVE_ENTRY_QUALITY,
+    researchOnly: true as const,
+    modifiesAdmission: false as const,
+    modifiesExecution: false as const,
+    modifiesRiskOrLotSize: false as const,
+    grantsLiveOrderAuthority: false as const,
+    instrument: input.instrument,
+    direction: input.direction,
+    strategyRoute: input.strategyRoute,
   };
-  const inactive=(status:'DISABLED'|'SCOPE_UNVERIFIED'|'FEATURES_MISSING')=>({
-    ...baseline,status,candidateWouldMatchOriginalHeldDoubleAbstain:null,
-    alignmentGroup:'UNKNOWN' as const,decisionTime:null,evidence:null,
+  const inactive = (status: 'DISABLED' | 'SCOPE_UNVERIFIED' | 'FEATURES_MISSING') => ({
+    ...baseline,
+    status,
+    candidateWouldMatchOriginalHeldDoubleAbstain: null,
+    alignmentGroup: 'UNKNOWN' as const,
+    decisionTime: null,
+    evidence: null,
   });
-  if(!input.enabled)return inactive('DISABLED');
-  if(!input.exactOwnerPepperstoneUsdDemoVerified)return inactive('SCOPE_UNVERIFIED');
-  const m5=valid(input.m5Aligned),m30=valid(input.m30DirectionalEfficiency);
-  if(!Number.isFinite(input.decisionAt.getTime()) || m5===null || m30===null)
+  if (!input.enabled) return inactive('DISABLED');
+  if (!input.exactOwnerPepperstoneUsdDemoVerified) return inactive('SCOPE_UNVERIFIED');
+  const m5 = valid(input.m5Aligned),
+    m30 = valid(input.m30DirectionalEfficiency);
+  if (!Number.isFinite(input.decisionAt.getTime()) || m5 === null || m30 === null)
     return inactive('FEATURES_MISSING');
-  const blocked=input.route==='ABSTAIN'&&input.expertState==='ABSTAIN'&&
-    input.paperExpectancySamples===0&&!input.professionalFallbackExecutionEnabled&&
-    input.originalAdmissionBlockers.includes('DRIFT_OUT_OF_DISTRIBUTION')&&
+  const blocked =
+    input.route === 'ABSTAIN' &&
+    input.expertState === 'ABSTAIN' &&
+    input.paperExpectancySamples === 0 &&
+    !input.professionalFallbackExecutionEnabled &&
+    input.originalAdmissionBlockers.includes('DRIFT_OUT_OF_DISTRIBUTION') &&
     input.originalAdmissionBlockers.includes('ENSEMBLE_NOT_PAPER_ADMITTED');
-  return {...baseline,status:'ACTIVE_SHADOW' as const,
-    candidateWouldMatchOriginalHeldDoubleAbstain:blocked,
-    alignmentGroup:m5>=0&&m30>=0?'M5_M30_BOTH_SUPPORT' as const:
-      m5<0&&m30<0?'M5_M30_BOTH_ADVERSE' as const:
-        'M5_M30_DISAGREE' as const,
-    decisionTime:input.decisionAt.toISOString(),
-    evidence:{confidence:valid(input.entryConfidence),m5Aligned:m5,
-      m30DirectionalEfficiency:m30,h4Aligned:valid(input.h4Aligned),
-      expertState:input.expertState,paperExpectancySamples:input.paperExpectancySamples},
+  return {
+    ...baseline,
+    status: 'ACTIVE_SHADOW' as const,
+    candidateWouldMatchOriginalHeldDoubleAbstain: blocked,
+    alignmentGroup:
+      m5 >= 0 && m30 >= 0
+        ? ('M5_M30_BOTH_SUPPORT' as const)
+        : m5 < 0 && m30 < 0
+          ? ('M5_M30_BOTH_ADVERSE' as const)
+          : ('M5_M30_DISAGREE' as const),
+    decisionTime: input.decisionAt.toISOString(),
+    evidence: {
+      confidence: valid(input.entryConfidence),
+      m5Aligned: m5,
+      m30DirectionalEfficiency: m30,
+      h4Aligned: valid(input.h4Aligned),
+      expertState: input.expertState,
+      paperExpectancySamples: input.paperExpectancySamples,
+    },
   };
 }

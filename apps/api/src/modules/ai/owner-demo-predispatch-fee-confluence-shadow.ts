@@ -33,9 +33,7 @@ export type OwnerDemoPreDispatchConfluenceInput = {
 const finite = (x: number | null): number | null =>
   typeof x === 'number' && Number.isFinite(x) ? x : null;
 
-export function evaluateOwnerDemoPreDispatchConfluence(
-  input: OwnerDemoPreDispatchConfluenceInput,
-) {
+export function evaluateOwnerDemoPreDispatchConfluence(input: OwnerDemoPreDispatchConfluenceInput) {
   const scope =
     input.featureEnabled &&
     input.exactOwner &&
@@ -48,16 +46,16 @@ export function evaluateOwnerDemoPreDispatchConfluence(
   const requiredFloor = finite(input.feeShadowRequiredFloorR);
   const credibleFeeShortfall =
     input.feeShadowReason === 'AFTER_BROKER_FEES_BELOW_FLOOR' &&
-    Number.isInteger(feeN) && feeN! >= 12 &&
-    feeExpected !== null && requiredFloor !== null &&
-    requiredFloor > 0 && feeExpected < requiredFloor;
-  const bothAbstained =
-    input.m1Route === 'ABSTAIN' && input.trainedExpertState === 'ABSTAIN';
+    Number.isInteger(feeN) &&
+    feeN! >= 12 &&
+    feeExpected !== null &&
+    requiredFloor !== null &&
+    requiredFloor > 0 &&
+    feeExpected < requiredFloor;
+  const bothAbstained = input.m1Route === 'ABSTAIN' && input.trainedExpertState === 'ABSTAIN';
   const h1 = finite(input.alignedH1);
   const m5 = finite(input.alignedM5);
-  const independentTimeframeConflict =
-    (h1 !== null && h1 <= -0.35) ||
-    (m5 !== null && m5 <= -0.2);
+  const independentTimeframeConflict = (h1 !== null && h1 <= -0.35) || (m5 !== null && m5 <= -0.2);
   const independentRecentLoss =
     input.negativePayoff &&
     Number.isInteger(input.recentPayoffClosedTrades) &&
@@ -65,23 +63,27 @@ export function evaluateOwnerDemoPreDispatchConfluence(
     Number.isInteger(input.recentClosedTrades) &&
     input.recentClosedTrades! >= 5;
 
-  const eligibleForResearch = scope &&
-    input.candidateAdmittedForDispatch && route === 'CONFIRMED_REVERSAL';
+  const eligibleForResearch =
+    scope && input.candidateAdmittedForDispatch && route === 'CONFIRMED_REVERSAL';
   const warning = eligibleForResearch && credibleFeeShortfall && bothAbstained;
-  const label = !scope ? 'NOT_OWNER_VERIFIED_USD_DEMO_RESEARCH' :
-    !input.candidateAdmittedForDispatch ? 'NOT_SELECTED_FOR_DISPATCH' :
-    route !== 'CONFIRMED_REVERSAL' ? 'OTHER_EXECUTABLE_ROUTE_CONTROL' :
-    warning
-      ? independentTimeframeConflict || independentRecentLoss
-        ? 'FEE_DEFICIT_DOUBLE_ABSTAIN_WITH_INDEPENDENT_CONFLICT'
-        : 'FEE_DEFICIT_DOUBLE_ABSTAIN_CAUTION'
-      : 'NO_CONFLUENT_ENTRY_WARNING';
+  const label = !scope
+    ? 'NOT_OWNER_VERIFIED_USD_DEMO_RESEARCH'
+    : !input.candidateAdmittedForDispatch
+      ? 'NOT_SELECTED_FOR_DISPATCH'
+      : route !== 'CONFIRMED_REVERSAL'
+        ? 'OTHER_EXECUTABLE_ROUTE_CONTROL'
+        : warning
+          ? independentTimeframeConflict || independentRecentLoss
+            ? 'FEE_DEFICIT_DOUBLE_ABSTAIN_WITH_INDEPENDENT_CONFLICT'
+            : 'FEE_DEFICIT_DOUBLE_ABSTAIN_CAUTION'
+          : 'NO_CONFLUENT_ENTRY_WARNING';
   return {
     artifact: OWNER_DEMO_PREDISPATCH_FEE_CONFLUENCE_ARTIFACT,
     researchOnly: true as const,
     evaluationPhase: 'BEFORE_DURABLE_DECISION_AND_BEFORE_ORDER_DISPATCH' as const,
     decisionEvaluatedAt: Number.isFinite(input.decisionTime.getTime())
-      ? input.decisionTime.toISOString() : null,
+      ? input.decisionTime.toISOString()
+      : null,
     ownerDemoScopeVerified: scope,
     selectedForDispatch: input.candidateAdmittedForDispatch,
     strategyRoute: route,

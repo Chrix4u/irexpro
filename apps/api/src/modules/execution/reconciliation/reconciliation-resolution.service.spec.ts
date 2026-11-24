@@ -687,19 +687,20 @@ describe('ReconciliationResolutionService', () => {
   });
 
   describe('late cTrader DEMO settlement recovery', () => {
-    const missing = () => baseTrade({
-      status: TradeStatus.CLOSED,
-      externalOrderId: '261975747',
-      instrument: 'USDCHF',
-      direction: TradeDirection.BUY,
-      lotSize: '0.2000',
-      fillPrice: '0.83310000',
-      exitPrice: null,
-      realisedPnl: null,
-      commission: null,
-      openedAt: new Date('2026-11-12T05:07:33.491Z'),
-      closedAt: new Date('2026-11-12T05:37:02.825Z'),
-    });
+    const missing = () =>
+      baseTrade({
+        status: TradeStatus.CLOSED,
+        externalOrderId: '261975747',
+        instrument: 'USDCHF',
+        direction: TradeDirection.BUY,
+        lotSize: '0.2000',
+        fillPrice: '0.83310000',
+        exitPrice: null,
+        realisedPnl: null,
+        commission: null,
+        openedAt: new Date('2026-11-12T05:07:33.491Z'),
+        closedAt: new Date('2026-11-12T05:37:02.825Z'),
+      });
     const broker = () => ({
       externalOrderId: '261975747',
       instrument: 'USD/CHF',
@@ -716,10 +717,7 @@ describe('ReconciliationResolutionService', () => {
       closedAt: new Date('2026-11-12T05:37:04.000Z'),
       closeReason: 'UNKNOWN' as const,
     });
-    const request = (
-      trade = missing(),
-      providerDeals = [broker()],
-    ) => ({
+    const request = (trade = missing(), providerDeals = [broker()]) => ({
       trade,
       providerDeals,
       brokerId: 'pepperstone-ctrader',
@@ -730,22 +728,27 @@ describe('ReconciliationResolutionService', () => {
       expect(await service.backfillClosedDemoSettlement(request())).toBe(true);
       expect(tradeRepo.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: 'trade-1', userId: 'user-1',
-          brokerConnectionId: 'conn-1', status: TradeStatus.CLOSED,
+          id: 'trade-1',
+          userId: 'user-1',
+          brokerConnectionId: 'conn-1',
+          status: TradeStatus.CLOSED,
           realisedPnl: expect.objectContaining({ _type: 'isNull' }),
           commission: expect.objectContaining({ _type: 'isNull' }),
           exitPrice: expect.objectContaining({ _type: 'isNull' }),
         }),
         expect.objectContaining({
-          realisedPnl: '-2.88', commission: '-1.20',
-          exitPrice: '0.83298', swap: '0.00',
+          realisedPnl: '-2.88',
+          commission: '-1.20',
+          exitPrice: '0.83298',
+          swap: '0.00',
         }),
       );
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: AuditAction.TRADE_RECONCILED,
           metadata: expect.objectContaining({
-            noBrokerOrder: true, noPositionMutation: true,
+            noBrokerOrder: true,
+            noPositionMutation: true,
           }),
         }),
       );
@@ -753,26 +756,34 @@ describe('ReconciliationResolutionService', () => {
     });
     it('never overwrites settled or partially known economics', async () => {
       for (const variant of [
-        { realisedPnl: '0.00' }, { commission: '-1.20' },
-        { exitPrice: '0.83298' }, { status: TradeStatus.OPEN },
+        { realisedPnl: '0.00' },
+        { commission: '-1.20' },
+        { exitPrice: '0.83298' },
+        { status: TradeStatus.OPEN },
       ]) {
-        expect(await service.backfillClosedDemoSettlement(
-          request(baseTrade({ ...missing(), ...variant })),
-        )).toBe(false);
+        expect(
+          await service.backfillClosedDemoSettlement(
+            request(baseTrade({ ...missing(), ...variant })),
+          ),
+        ).toBe(false);
       }
       expect(tradeRepo.update).not.toHaveBeenCalled();
       expect(auditService.log).not.toHaveBeenCalled();
     });
     it('never writes ambiguous, incompatible or unsigned broker settlements', async () => {
-      expect(await service.backfillClosedDemoSettlement(
-        request(missing(), [broker(), { ...broker(), closePrice: '0.83297' }]),
-      )).toBe(false);
-      expect(await service.backfillClosedDemoSettlement(
-        request(missing(), [{ ...broker(), commission: '1.20' }]),
-      )).toBe(false);
-      expect(await service.backfillClosedDemoSettlement(
-        { ...request(), accountType: 'LIVE' },
-      )).toBe(false);
+      expect(
+        await service.backfillClosedDemoSettlement(
+          request(missing(), [broker(), { ...broker(), closePrice: '0.83297' }]),
+        ),
+      ).toBe(false);
+      expect(
+        await service.backfillClosedDemoSettlement(
+          request(missing(), [{ ...broker(), commission: '1.20' }]),
+        ),
+      ).toBe(false);
+      expect(
+        await service.backfillClosedDemoSettlement({ ...request(), accountType: 'LIVE' }),
+      ).toBe(false);
       expect(tradeRepo.update).not.toHaveBeenCalled();
     });
     it('avoids double reconciliation after another worker wins the update', async () => {

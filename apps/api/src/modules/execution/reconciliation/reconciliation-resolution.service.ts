@@ -117,9 +117,14 @@ export class ReconciliationResolutionService {
       trade.realisedPnl !== null ||
       trade.commission !== null ||
       trade.exitPrice !== null
-    ) return false;
+    )
+      return false;
     const proof = proveUniqueCtraderDemoSettlement(
-      trade, input.providerDeals, input.brokerId, input.accountType, input.observedAt,
+      trade,
+      input.providerDeals,
+      input.brokerId,
+      input.accountType,
+      input.observedAt,
     );
     if (!proof.matched) return false;
     const p = proof.provider;
@@ -135,26 +140,33 @@ export class ReconciliationResolutionService {
       trade.maxAdversePnl != null &&
       trade.profitGiveback != null
     ) {
-      const updatedPath = reconcileDurableProfitPathAtClose({
-        maxFavorablePnl: trade.maxFavorablePnl,
-        maxAdversePnl: trade.maxAdversePnl,
-        profitGiveback: trade.profitGiveback,
-        peakObservedAt: trade.pathPeakObservedAt ?? null,
-      }, p.realisedPnl, p.closedAt);
+      const updatedPath = reconcileDurableProfitPathAtClose(
+        {
+          maxFavorablePnl: trade.maxFavorablePnl,
+          maxAdversePnl: trade.maxAdversePnl,
+          profitGiveback: trade.profitGiveback,
+          peakObservedAt: trade.pathPeakObservedAt ?? null,
+        },
+        p.realisedPnl,
+        p.closedAt,
+      );
       patch.maxFavorablePnl = updatedPath.maxFavorablePnl;
       patch.maxAdversePnl = updatedPath.maxAdversePnl;
       patch.profitGiveback = updatedPath.profitGiveback;
       patch.pathPeakObservedAt = updatedPath.peakObservedAt;
     }
-    const result = await this.tradeRepo.update({
-      id: trade.id,
-      userId: trade.userId,
-      brokerConnectionId: trade.brokerConnectionId,
-      status: TradeStatus.CLOSED,
-      realisedPnl: IsNull(),
-      commission: IsNull(),
-      exitPrice: IsNull(),
-    }, patch as never);
+    const result = await this.tradeRepo.update(
+      {
+        id: trade.id,
+        userId: trade.userId,
+        brokerConnectionId: trade.brokerConnectionId,
+        status: TradeStatus.CLOSED,
+        realisedPnl: IsNull(),
+        commission: IsNull(),
+        exitPrice: IsNull(),
+      },
+      patch as never,
+    );
     if (!result.affected) return false;
     await this.auditService.log({
       actorUserId: trade.userId,

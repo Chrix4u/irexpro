@@ -98,7 +98,8 @@ describe('v8 shadow meta scorer', () => {
 
     expect(activeNoon.probability).toBeGreaterThan(activeEvening.probability);
     expect(researchNoon.hourNeutralProbability).toBeCloseTo(
-      researchEvening.hourNeutralProbability, 12,
+      researchEvening.hourNeutralProbability,
+      12,
     );
     expect(researchNoon.activePlanBProbability).toBe(activeNoon.probability);
     expect(researchEvening.activePlanBProbability).toBe(activeEvening.probability);

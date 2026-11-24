@@ -111,7 +111,8 @@ export class M1DelayedEntryParityService implements OnModuleInit, OnModuleDestro
               actualSwap: row.swap == null ? null : Number(row.swap),
               verifiedOriginalRiskAccountCurrency:
                 row.original_risk_account_currency == null
-                  ? null : Number(row.original_risk_account_currency),
+                  ? null
+                  : Number(row.original_risk_account_currency),
               delayed: evaluated,
               candles,
             });

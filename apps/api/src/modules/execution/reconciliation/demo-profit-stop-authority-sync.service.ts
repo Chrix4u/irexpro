@@ -67,8 +67,12 @@ function numeric(v: string | number | null | undefined): number | null {
   return Number.isFinite(x) && x > 0 ? x : null;
 }
 
-function equalPrice(a: string | number | null | undefined, b: string | number | null | undefined): boolean {
-  const x = numeric(a); const y = numeric(b);
+function equalPrice(
+  a: string | number | null | undefined,
+  b: string | number | null | undefined,
+): boolean {
+  const x = numeric(a);
+  const y = numeric(b);
   return x !== null && y !== null && Math.abs(x - y) <= 0.00000001;
 }
 
@@ -80,21 +84,27 @@ function validBrokerStop(position: BrokerPosition, intent: StopIntentRow): boole
   const proposed = numeric(intent.proposed_positive_stop);
   const lot = numeric(position.lotSize);
   const requestLot = numeric(intent.trade_lots);
-  if (!entry || !mark || !brokerStop || !tp || !proposed ||
-    !lot || !requestLot ||
+  if (
+    !entry ||
+    !mark ||
+    !brokerStop ||
+    !tp ||
+    !proposed ||
+    !lot ||
+    !requestLot ||
     Math.abs(lot - requestLot) > 0.00005 ||
     !equalPrice(entry, intent.entry_price) ||
     !equalPrice(brokerStop, proposed) ||
     !equalPrice(tp, intent.original_take_profit) ||
     position.instrument !== intent.instrument ||
     position.direction !== intent.direction ||
-    position.externalOrderId !== intent.broker_position_id) return false;
+    position.externalOrderId !== intent.broker_position_id
+  )
+    return false;
   const tick = intent.instrument.endsWith('JPY') ? 0.001 : 0.00001;
   return intent.direction === 'BUY'
-    ? proposed > entry + tick && proposed < mark - 2 * tick &&
-      proposed < tp - tick
-    : proposed < entry - tick && proposed > mark + 2 * tick &&
-      proposed > tp + tick;
+    ? proposed > entry + tick && proposed < mark - 2 * tick && proposed < tp - tick
+    : proposed < entry - tick && proposed > mark + 2 * tick && proposed > tp + tick;
 }
 
 @Injectable()
@@ -109,16 +119,15 @@ export class DemoProfitStopAuthoritySyncService {
    * In the transaction, lock ledger + trade, verify all provenance again,
    * and update both the trade stop and the ledger in one DB commit.
    */
-  async commitVerifiedStop(
-    userId: string,
-    ledgerId: string,
-  ): Promise<DemoStopAuthorityCommit> {
+  async commitVerifiedStop(userId: string, ledgerId: string): Promise<DemoStopAuthorityCommit> {
     if (
       process.env.IREXPRO_PEPPERSTONE_DEMO_STOP_AUTHORITY_SYNC !== 'enabled' ||
       !process.env.VPS_FOREX_SCANNER_USER_ID ||
       process.env.VPS_FOREX_SCANNER_USER_ID !== userId
     ) {
-      throw new ForbiddenException('Owner Pepperstone DEMO stop authority synchronization is disabled.');
+      throw new ForbiddenException(
+        'Owner Pepperstone DEMO stop authority synchronization is disabled.',
+      );
     }
     const prelim: StopIntentRow[] = await this.dataSource.query(
       `SELECT id, user_id, trade_id, broker_connection_id,
@@ -133,24 +142,32 @@ export class DemoProfitStopAuthoritySyncService {
     if (!intent || !['ACKNOWLEDGED', 'AUTHORITY_COMMITTED'].includes(intent.state)) {
       throw new ConflictException('No broker-acknowledged amendment intent for this owner.');
     }
-    const { connection, positions } =
-      await this.brokerService.getOpenPositionsForConnection(intent.broker_connection_id, userId);
+    const { connection, positions } = await this.brokerService.getOpenPositionsForConnection(
+      intent.broker_connection_id,
+      userId,
+    );
     if (
       connection.userId !== userId ||
       connection.brokerId !== 'pepperstone-ctrader' ||
       connection.accountType !== 'DEMO' ||
       connection.accountCurrency !== 'USD'
     ) {
-      throw new ForbiddenException('Broker readback is not from the owner Pepperstone USD DEMO account.');
+      throw new ForbiddenException(
+        'Broker readback is not from the owner Pepperstone USD DEMO account.',
+      );
     }
-    const matching = positions.filter(p => p.externalOrderId === intent.broker_position_id);
+    const matching = positions.filter((p) => p.externalOrderId === intent.broker_position_id);
     if (matching.length !== 1 || !validBrokerStop(matching[0], intent)) {
-      throw new ConflictException('Fresh broker readback does not prove the proposed positive stop.');
+      throw new ConflictException(
+        'Fresh broker readback does not prove the proposed positive stop.',
+      );
     }
     const observationAt = new Date();
-    return this.dataSource.transaction(async manager => {
+    return this.dataSource.transaction(async (manager) => {
       if (Date.now() - observationAt.getTime() > 5000) {
-        throw new ConflictException('Broker readback expired before durable authority synchronization.');
+        throw new ConflictException(
+          'Broker readback expired before durable authority synchronization.',
+        );
       }
       const rows: StopIntentRow[] = await manager.query(
         `SELECT l.id, l.user_id, l.trade_id, l.broker_connection_id,
@@ -217,7 +234,7 @@ export class DemoProfitStopAuthoritySyncService {
         row.trade_instrument !== row.instrument ||
         row.trade_provider_position !== row.broker_position_id ||
         row.route_provenance !== row.strategy_route ||
-        !['EARLY_TRANSITION','CONFIRMED_REVERSAL'].includes(row.strategy_route) ||
+        !['EARLY_TRANSITION', 'CONFIRMED_REVERSAL'].includes(row.strategy_route) ||
         !equalPrice(row.trade_lots_current, row.trade_lots) ||
         !equalPrice(row.trade_fill, row.entry_price) ||
         !equalPrice(row.trade_tp, row.original_take_profit) ||
@@ -226,12 +243,17 @@ export class DemoProfitStopAuthoritySyncService {
         numeric(row.estimated_net_floor_after_reserve) === null ||
         !validBrokerStop(matching[0], row)
       ) {
-        throw new ConflictException('Owner, trade, broker, stop or risk provenance changed before commit.');
+        throw new ConflictException(
+          'Owner, trade, broker, stop or risk provenance changed before commit.',
+        );
       }
-      if (row.state === 'AUTHORITY_COMMITTED' &&
-          equalPrice(row.trade_stop, row.proposed_positive_stop)) {
+      if (
+        row.state === 'AUTHORITY_COMMITTED' &&
+        equalPrice(row.trade_stop, row.proposed_positive_stop)
+      ) {
         return {
-          ledgerId, tradeId: row.trade_id,
+          ledgerId,
+          tradeId: row.trade_id,
           state: 'AUTHORITY_COMMITTED' as const,
           brokerStop: row.proposed_positive_stop,
           committedStop: row.trade_stop!,
@@ -240,11 +262,10 @@ export class DemoProfitStopAuthoritySyncService {
           canDelayProfitClose: false as const,
         };
       }
-      if (row.state !== 'ACKNOWLEDGED' ||
-          !equalPrice(row.trade_stop, row.original_stop)) {
+      if (row.state !== 'ACKNOWLEDGED' || !equalPrice(row.trade_stop, row.original_stop)) {
         throw new ConflictException('Stop authority is not in a committed broker ACK state.');
       }
-      const updates: Array<{stop_loss:string}> = await manager.query(
+      const updates: Array<{ stop_loss: string }> = await manager.query(
         `UPDATE trading.trades
             SET stop_loss=$3
           WHERE id=$1 AND user_id=$2 AND status='OPEN'
@@ -256,13 +277,21 @@ export class DemoProfitStopAuthoritySyncService {
             AND COALESCE(external_position_id,external_order_id)=$5
             AND stop_loss=$6 AND take_profit=$7
           RETURNING stop_loss::text AS stop_loss`,
-        [row.trade_id,userId,row.proposed_positive_stop,row.broker_connection_id,
-          row.broker_position_id,row.original_stop,row.original_take_profit],
+        [
+          row.trade_id,
+          userId,
+          row.proposed_positive_stop,
+          row.broker_connection_id,
+          row.broker_position_id,
+          row.original_stop,
+          row.original_take_profit,
+        ],
       );
-      if (updates.length !== 1) throw new ConflictException(
-        'Trade stop authority CAS failed; broker amendment requires reconciliation.',
-      );
-      const ledgerUpdated: Array<{id:string}> = await manager.query(
+      if (updates.length !== 1)
+        throw new ConflictException(
+          'Trade stop authority CAS failed; broker amendment requires reconciliation.',
+        );
+      const ledgerUpdated: Array<{ id: string }> = await manager.query(
         `UPDATE trading.demo_profit_stop_amendment_intents
             SET state='AUTHORITY_COMMITTED',
                 broker_readback_stop=$3,
@@ -272,11 +301,12 @@ export class DemoProfitStopAuthoritySyncService {
           WHERE id=$1 AND user_id=$2 AND state='ACKNOWLEDGED'
             AND broker_ack_at IS NOT NULL AND expires_at>$4::timestamptz
           RETURNING id`,
-        [ledgerId,userId,row.proposed_positive_stop,observationAt.toISOString()],
+        [ledgerId, userId, row.proposed_positive_stop, observationAt.toISOString()],
       );
-      if (ledgerUpdated.length !== 1) throw new ConflictException(
-        'Ledger authority commit failed; the trade stop update must roll back.',
-      );
+      if (ledgerUpdated.length !== 1)
+        throw new ConflictException(
+          'Ledger authority commit failed; the trade stop update must roll back.',
+        );
       return {
         ledgerId,
         tradeId: row.trade_id,

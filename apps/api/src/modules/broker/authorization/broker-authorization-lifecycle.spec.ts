@@ -630,19 +630,35 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
 
     it('refuses credential rotation onto a different account ID even when the broker is unchanged', async () => {
       connectionRepo.findOne.mockResolvedValue(baseConnection());
-      await expect(service.rotateCredentials('conn-1',{
-        brokerId:'metatrader5',accountType:BrokerMode.LIVE,accountId:'different-account',
-      } as never,'user-1')).rejects.toThrow(BadRequestException);
+      await expect(
+        service.rotateCredentials(
+          'conn-1',
+          {
+            brokerId: 'metatrader5',
+            accountType: BrokerMode.LIVE,
+            accountId: 'different-account',
+          } as never,
+          'user-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
       expect(adapter.testConnection).not.toHaveBeenCalled();
       expect(connectionRepo.update).not.toHaveBeenCalled();
     });
 
     it('refuses provider validation when it returns a different account ID', async () => {
       connectionRepo.findOne.mockResolvedValue(baseConnection());
-      adapter.testConnection.mockResolvedValue({success:true,accountId:'different-account'});
-      await expect(service.rotateCredentials('conn-1',{
-        brokerId:'metatrader5',accountType:BrokerMode.LIVE,accountId:'123',
-      } as never,'user-1')).rejects.toThrow(BadRequestException);
+      adapter.testConnection.mockResolvedValue({ success: true, accountId: 'different-account' });
+      await expect(
+        service.rotateCredentials(
+          'conn-1',
+          {
+            brokerId: 'metatrader5',
+            accountType: BrokerMode.LIVE,
+            accountId: '123',
+          } as never,
+          'user-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
       expect(connectionRepo.update).not.toHaveBeenCalled();
     });
 

@@ -24,23 +24,24 @@ describe('Forex session clock New York DST rollover integrity', () => {
   });
 
   it.each([
-    ['2026-11-12T20:59:00Z',false],
-    ['2026-11-12T21:00:00Z',true],
-    ['2026-11-12T21:15:00Z',true],
-    ['2026-11-12T21:59:00Z',true],
-    ['2026-11-12T22:00:00Z',false],
-    ['2026-07-15T19:59:00Z',false],
-    ['2026-07-15T20:00:00Z',true],
-    ['2026-07-15T20:59:00Z',true],
-    ['2026-07-15T21:00:00Z',false],
-  ] as const)('pre-rollover M1 canary risk window %s is %s',
-    (time,expected)=>expect(isForexPreRolloverHour(new Date(time))).toBe(expected));
+    ['2026-11-12T20:59:00Z', false],
+    ['2026-11-12T21:00:00Z', true],
+    ['2026-11-12T21:15:00Z', true],
+    ['2026-11-12T21:59:00Z', true],
+    ['2026-11-12T22:00:00Z', false],
+    ['2026-07-15T19:59:00Z', false],
+    ['2026-07-15T20:00:00Z', true],
+    ['2026-07-15T20:59:00Z', true],
+    ['2026-07-15T21:00:00Z', false],
+  ] as const)('pre-rollover M1 canary risk window %s is %s', (time, expected) =>
+    expect(isForexPreRolloverHour(new Date(time))).toBe(expected),
+  );
 
   it('never assumes a 3-hour nightly rollover in November', () => {
     const before = classifyForexSessionClock(new Date('2026-11-12T21:30:00Z'));
     const actual = classifyForexSessionClock(new Date('2026-11-12T22:30:00Z'));
     const after = classifyForexSessionClock(new Date('2026-11-12T23:30:00Z'));
-    expect([before,actual,after]).toEqual(['NEW_YORK','ROLLOVER','ASIA']);
+    expect([before, actual, after]).toEqual(['NEW_YORK', 'ROLLOVER', 'ASIA']);
   });
 
   it('keeps the REAL New York rollover fail-closed', () => {
@@ -65,12 +66,14 @@ describe('Forex session clock New York DST rollover integrity', () => {
     expect(rollover.canUpsize).toBe(false);
     expect(rollover.reasons).toContain('ROLLOVER_SESSION');
     const before = classifyAdaptiveMarketState({
-      ...market, scanTime: new Date('2026-11-12T21:30:00Z'),
+      ...market,
+      scanTime: new Date('2026-11-12T21:30:00Z'),
     });
     expect(before.session).toBe('NEW_YORK');
     expect(before.state).toBe('TREND_HEALTHY');
     const after = classifyAdaptiveMarketState({
-      ...market, scanTime: new Date('2026-11-12T23:30:00Z'),
+      ...market,
+      scanTime: new Date('2026-11-12T23:30:00Z'),
     });
     expect(after.session).toBe('ASIA');
     expect(after.state).toBe('TREND_HEALTHY');

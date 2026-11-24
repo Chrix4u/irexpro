@@ -63,17 +63,15 @@ export interface PlanBReversalM1ContinuationShadowDecision {
   alignedM5Momentum1Atr: number | null;
   alignedHigherTimeframeAgreement: number | null;
 }
-const numberOrNull=(value: number | null | undefined): number | null =>
+const numberOrNull = (value: number | null | undefined): number | null =>
   value !== null && value !== undefined && Number.isFinite(value) ? value : null;
 
 export function observePlanBReversalM1ContinuationMismatch(
   x: PlanBReversalM1ContinuationShadowInput,
 ): PlanBReversalM1ContinuationShadowDecision {
   const mismatchObserved =
-    x.planBStrategyRoute === 'CONFIRMED_REVERSAL' &&
-    x.m1Route === 'M1_TREND_CONTINUATION';
-  let reason: PlanBReversalM1ContinuationShadowReason =
-    'NOT_A_REVERSAL_CONTINUATION_MISMATCH';
+    x.planBStrategyRoute === 'CONFIRMED_REVERSAL' && x.m1Route === 'M1_TREND_CONTINUATION';
+  let reason: PlanBReversalM1ContinuationShadowReason = 'NOT_A_REVERSAL_CONTINUATION_MISMATCH';
 
   if (mismatchObserved) {
     if (x.m1Direction !== x.direction || x.trainedExpertOpposed) {
@@ -89,10 +87,7 @@ export function observePlanBReversalM1ContinuationMismatch(
       x.planBNetExpectedR <= 0.1
     ) {
       reason = 'BROKER_COST_OR_EVENT_OR_DRIFT_UNSAFE';
-    } else if (
-      x.m1Reason !== 'TREND_STRUCTURE_ALIGNED' &&
-      x.m1Reason !== 'FRESH_M5_CONTINUATION'
-    ) {
+    } else if (x.m1Reason !== 'TREND_STRUCTURE_ALIGNED' && x.m1Reason !== 'FRESH_M5_CONTINUATION') {
       reason = 'M1_DIRECTION_OR_HTF_WEAK';
     } else if (
       !Number.isFinite(x.m1ScoreEdge) ||
@@ -129,8 +124,7 @@ export function observePlanBReversalM1ContinuationMismatch(
     brokerOrderAuthority: 'NONE',
     automaticPromotionEligible: false,
     mismatchObserved,
-    eligibleForProspectiveStudy:
-      reason === 'M1_CONFIRMED_M5_CONFIRMED_SHADOW_ONLY',
+    eligibleForProspectiveStudy: reason === 'M1_CONFIRMED_M5_CONFIRMED_SHADOW_ONLY',
     reason,
     instrument: x.instrument,
     direction: x.direction,

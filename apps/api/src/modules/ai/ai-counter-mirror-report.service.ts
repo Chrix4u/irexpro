@@ -9,7 +9,8 @@ const EXPECTED_ARTIFACT = 'irexpro-main-counter-pepperstone-virtual-v1';
 
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>) : null;
+    ? (value as Record<string, unknown>)
+    : null;
 }
 function valueNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -82,9 +83,12 @@ export function projectCounterMirrorReport(
 ): CounterMirrorWebReport {
   const root = object(payload);
   if (
-    !root || root.artifact !== EXPECTED_ARTIFACT ||
-    root.executionAuthority !== 'NONE' || root.modifiesTrading !== false
-  ) throw new Error('COUNTER_REPORT_CONTRACT_MISMATCH');
+    !root ||
+    root.artifact !== EXPECTED_ARTIFACT ||
+    root.executionAuthority !== 'NONE' ||
+    root.modifiesTrading !== false
+  )
+    throw new Error('COUNTER_REPORT_CONTRACT_MISMATCH');
   const generatedAt = finiteTime(root.generatedAt);
   if (!generatedAt) throw new Error('COUNTER_REPORT_MISSING_TIMESTAMP');
   const ageMs = now.getTime() - new Date(generatedAt).getTime();
@@ -93,15 +97,32 @@ export function projectCounterMirrorReport(
   if (rawPairs.length > 80) throw new Error('COUNTER_REPORT_TOO_MANY_PAIRS');
   const pairs: CounterMirrorWebRow[] = [];
   for (const raw of rawPairs) {
-    const p = object(raw),m = object(p?.main),c = object(p?.counter);
-    if (!p || !m || !c || m.label !== 'MAIN' || c.label !== 'COUNTER' ||
-        c.isBrokerOrder !== false || c.executionAuthority !== 'NONE') continue;
+    const p = object(raw),
+      m = object(p?.main),
+      c = object(p?.counter);
+    if (
+      !p ||
+      !m ||
+      !c ||
+      m.label !== 'MAIN' ||
+      c.label !== 'COUNTER' ||
+      c.isBrokerOrder !== false ||
+      c.executionAuthority !== 'NONE'
+    )
+      continue;
     const instrument = textValue(m.instrument, 12);
     const openedAt = finiteTime(m.openedAt);
-    const mainDirection = side(m.direction),counterDirection = side(c.direction);
-    if (!/^[A-Z]{6}$/.test(instrument) || !openedAt ||
-        !mainDirection || !counterDirection ||
-        mainDirection === counterDirection || c.instrument !== instrument) continue;
+    const mainDirection = side(m.direction),
+      counterDirection = side(c.direction);
+    if (
+      !/^[A-Z]{6}$/.test(instrument) ||
+      !openedAt ||
+      !mainDirection ||
+      !counterDirection ||
+      mainDirection === counterDirection ||
+      c.instrument !== instrument
+    )
+      continue;
     pairs.push({
       pairId: textValue(p.pairId, 64),
       instrument,
@@ -136,24 +157,30 @@ export function projectCounterMirrorReport(
       const count = (key: string) => Math.max(0, Math.floor(valueNumber(d[key]) ?? 0));
       return {
         day,
-        mainClosed: count('mainClosed'),mainWins: count('mainWins'),
-        mainLosses: count('mainLosses'),mainNetUsd: money(d.actualMainNetUsd) ?? 0,
+        mainClosed: count('mainClosed'),
+        mainWins: count('mainWins'),
+        mainLosses: count('mainLosses'),
+        mainNetUsd: money(d.actualMainNetUsd) ?? 0,
         counterComparable: count('counterComparable'),
-        counterWins: count('counterWins'),counterLosses: count('counterLosses'),
+        counterWins: count('counterWins'),
+        counterLosses: count('counterLosses'),
         counterEstimatedNetUsd: money(d.virtualCounterMatchedNetUsd) ?? 0,
         pairedEstimatedNetUsd: money(d.pairedNetUsd) ?? 0,
         unresolvedCounter: count('unresolvedCounter'),
       };
     })
-    .sort((a,b)=>b.day.localeCompare(a.day))
-    .slice(0,5);
+    .sort((a, b) => b.day.localeCompare(a.day))
+    .slice(0, 5);
   return {
-    artifact: EXPECTED_ARTIFACT,generatedAt,
-    stale: ageMs > 5*60_000,
-    executionAuthority:'NONE',virtualOnly:true,
+    artifact: EXPECTED_ARTIFACT,
+    generatedAt,
+    stale: ageMs > 5 * 60_000,
+    executionAuthority: 'NONE',
+    virtualOnly: true,
     caution:
       'MAIN uses confirmed Pepperstone DEMO executions. COUNTER is a virtual opposite-direction experiment, not a placed broker order. Counter USD returns use minute-level spread and commission estimates and do not guarantee tradable fills.',
-    daily,pairs:pairs.slice(0,35),
+    daily,
+    pairs: pairs.slice(0, 35),
   };
 }
 

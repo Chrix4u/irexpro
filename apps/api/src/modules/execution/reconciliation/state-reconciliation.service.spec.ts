@@ -406,49 +406,84 @@ describe('StateReconciliationService', () => {
   });
 
   it('Pepperstone DEMO closed-order recovery uses authentic DealList + domain fill only', async () => {
-    const previous=process.env.VPS_FOREX_SCANNER_USER_ID;
-    process.env.VPS_FOREX_SCANNER_USER_ID='user-1';
+    const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
+    process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
     try {
-      const now=Date.now();
-      const opened=new Date(now-10*60_000);
-      const sent=new Date(now-2*60_000-1000);
-      const closed=new Date(now-2*60_000);
-      const terminal={...openTrade(),id:'closed-trade-1',
-        status:TradeStatus.CLOSED,instrument:'USDCAD',direction:TradeDirection.SELL,
-        openedAt:opened,closedAt:closed,externalOrderId:'8422910',
-        lotSize:'2.8000',exitPrice:'1.43767000',realisedPnl:'60.38000000'};
-      const orphan={...pendingOrder(),id:'close-order-1',tradeId:'closed-trade-1',
-        providerOrderId:null,orderKind:'MARKET',instrument:'USDCAD',
-        direction:TradeDirection.BUY,requestedQuantity:'2.8000',
-        filledQuantity:'0.0000',avgFillPrice:null,
-        createdAt:new Date(sent.getTime()-75),submittedAt:sent};
-      const deal={externalOrderId:'8422910',instrument:'USDCAD',
-        direction:'BUY',lotSize:'2.8',openPrice:'1.43798',
-        closePrice:'1.43767',stopLoss:'0',takeProfit:'0',
-        realisedPnl:'60.38',openedAt:closed,closedAt:closed,
-        commission:'-8.40',swap:'0',closeReason:'UNKNOWN'};
+      const now = Date.now();
+      const opened = new Date(now - 10 * 60_000);
+      const sent = new Date(now - 2 * 60_000 - 1000);
+      const closed = new Date(now - 2 * 60_000);
+      const terminal = {
+        ...openTrade(),
+        id: 'closed-trade-1',
+        status: TradeStatus.CLOSED,
+        instrument: 'USDCAD',
+        direction: TradeDirection.SELL,
+        openedAt: opened,
+        closedAt: closed,
+        externalOrderId: '8422910',
+        lotSize: '2.8000',
+        exitPrice: '1.43767000',
+        realisedPnl: '60.38000000',
+      };
+      const orphan = {
+        ...pendingOrder(),
+        id: 'close-order-1',
+        tradeId: 'closed-trade-1',
+        providerOrderId: null,
+        orderKind: 'MARKET',
+        instrument: 'USDCAD',
+        direction: TradeDirection.BUY,
+        requestedQuantity: '2.8000',
+        filledQuantity: '0.0000',
+        avgFillPrice: null,
+        createdAt: new Date(sent.getTime() - 75),
+        submittedAt: sent,
+      };
+      const deal = {
+        externalOrderId: '8422910',
+        instrument: 'USDCAD',
+        direction: 'BUY',
+        lotSize: '2.8',
+        openPrice: '1.43798',
+        closePrice: '1.43767',
+        stopLoss: '0',
+        takeProfit: '0',
+        realisedPnl: '60.38',
+        openedAt: closed,
+        closedAt: closed,
+        commission: '-8.40',
+        swap: '0',
+        closeReason: 'UNKNOWN',
+      };
       orderRepo.find.mockResolvedValue([orphan]);
       tradeRepo.findOne.mockResolvedValue(terminal);
       adapter.getClosedTrades.mockResolvedValue([deal]);
-      orderService.applyFill.mockResolvedValue({...orphan,status:OrderStatus.FILLED});
+      orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
       await service.runForConnection({
-        ...connection(),brokerId:'pepperstone-ctrader',
+        ...connection(),
+        brokerId: 'pepperstone-ctrader',
       } as BrokerConnection);
-      expect(tradeRepo.findOne).toHaveBeenCalledWith({where:expect.objectContaining({
-        id:'closed-trade-1',status:TradeStatus.CLOSED,
-      })});
+      expect(tradeRepo.findOne).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          id: 'closed-trade-1',
+          status: TradeStatus.CLOSED,
+        }),
+      });
       expect(adapter.getClosedTrades).toHaveBeenCalledWith(
-        new Date(opened.getTime()-60_000),expect.any(Date),
+        new Date(opened.getTime() - 60_000),
+        expect.any(Date),
       );
       expect(orderService.applyFill).toHaveBeenCalledTimes(1);
-      expect(orderService.applyFill).toHaveBeenCalledWith('close-order-1',{
-        quantity:'2.8000',price:'1.43767',
+      expect(orderService.applyFill).toHaveBeenCalledWith('close-order-1', {
+        quantity: '2.8000',
+        price: '1.43767',
       });
       expect(adapter.modifyOrder).not.toHaveBeenCalled();
       expect(persistence.resolveDiscrepanciesByRef).toHaveBeenCalled();
-    }finally{
-      if(previous===undefined)delete process.env.VPS_FOREX_SCANNER_USER_ID;
-      else process.env.VPS_FOREX_SCANNER_USER_ID=previous;
+    } finally {
+      if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID = previous;
     }
   });
 
@@ -602,7 +637,9 @@ describe('StateReconciliationService', () => {
         externalOrderId: '261975747',
         openedAt: new Date('2026-11-12T05:07:33Z'),
         closedAt: new Date('2026-11-12T05:37:02Z'),
-        realisedPnl: null, commission: null, exitPrice: null,
+        realisedPnl: null,
+        commission: null,
+        exitPrice: null,
       } as Trade;
       const provider = {
         externalOrderId: '261975747',
@@ -630,9 +667,7 @@ describe('StateReconciliationService', () => {
       } as BrokerConnection;
       encryptionService.decrypt.mockReturnValue({ accountId: 'demo-2026' });
       await service.runForConnection(conn);
-      expect(adapter.getClosedTrades).toHaveBeenCalledWith(
-        lateClosed.openedAt, expect.any(Date),
-      );
+      expect(adapter.getClosedTrades).toHaveBeenCalledWith(lateClosed.openedAt, expect.any(Date));
       expect(resolution.backfillClosedDemoSettlement).toHaveBeenCalledWith(
         expect.objectContaining({
           trade: expect.objectContaining({ id: 'closed-usdchf-1' }),
@@ -659,23 +694,38 @@ describe('StateReconciliationService', () => {
         lotSize: '0.2000',
         openedAt: new Date('2026-11-12T05:07:33Z'),
         closedAt: new Date('2026-11-12T05:37:02Z'),
-        realisedPnl: null, commission: null, exitPrice: null,
+        realisedPnl: null,
+        commission: null,
+        exitPrice: null,
       } as Trade;
       tradeRepo.find.mockResolvedValueOnce([]).mockResolvedValueOnce([lateClosed]);
-      const deal = { externalOrderId: '28202855',
-        instrument: 'USDCHF', direction: 'SELL', lotSize: '0.2',
-        openPrice: '0.8331', closePrice: '0.8329',
-        realisedPnl: '-2.88', commission: '-1.20', swap: '0',
-        closedAt: new Date('2026-11-12T05:37:03Z') };
+      const deal = {
+        externalOrderId: '28202855',
+        instrument: 'USDCHF',
+        direction: 'SELL',
+        lotSize: '0.2',
+        openPrice: '0.8331',
+        closePrice: '0.8329',
+        realisedPnl: '-2.88',
+        commission: '-1.20',
+        swap: '0',
+        closedAt: new Date('2026-11-12T05:37:03Z'),
+      };
       adapter.getClosedTrades.mockResolvedValue([deal]);
       adapter.getOrderById.mockResolvedValue({
-        providerOrderId: '261975747', providerPositionId: '28202855',
-        status: 'FILLED', instrument: 'USDCHF', direction: 'BUY',
-        filledQuantity: '0.2', avgFillPrice: '0.8331',
+        providerOrderId: '261975747',
+        providerPositionId: '28202855',
+        status: 'FILLED',
+        instrument: 'USDCHF',
+        direction: 'BUY',
+        filledQuantity: '0.2',
+        avgFillPrice: '0.8331',
       });
       const conn = {
-        ...connection(), brokerId: 'pepperstone-ctrader',
-        encryptedCredentials: 'encrypted', credentialIv: 'iv',
+        ...connection(),
+        brokerId: 'pepperstone-ctrader',
+        encryptedCredentials: 'encrypted',
+        credentialIv: 'iv',
         credentialTag: 'tag',
       } as BrokerConnection;
       encryptionService.decrypt.mockReturnValue({ accountId: 'demo-id' });
@@ -684,7 +734,8 @@ describe('StateReconciliationService', () => {
       expect(resolution.backfillClosedDemoSettlement).toHaveBeenCalledWith(
         expect.objectContaining({
           trade: expect.objectContaining({
-            id: 'settlement-only-order-ref', externalOrderId: '261975747',
+            id: 'settlement-only-order-ref',
+            externalOrderId: '261975747',
             externalPositionId: '28202855',
           }),
           providerDeals: [deal],

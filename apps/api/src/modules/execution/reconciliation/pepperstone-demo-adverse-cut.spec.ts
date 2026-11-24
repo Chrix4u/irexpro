@@ -51,12 +51,18 @@ describe('owner-only Pepperstone DEMO adverse cut', () => {
   });
 
   it('accepts both alternate routes but never restores paused continuation', () => {
-    expect(evaluatePepperstoneDemoAdverseCut({
-      ...base, strategyRoute: 'EARLY_TRANSITION',
-    }).shouldClose).toBe(true);
-    expect(evaluatePepperstoneDemoAdverseCut({
-      ...base, strategyRoute: 'TREND_CONTINUATION',
-    }).shouldClose).toBe(false);
+    expect(
+      evaluatePepperstoneDemoAdverseCut({
+        ...base,
+        strategyRoute: 'EARLY_TRANSITION',
+      }).shouldClose,
+    ).toBe(true);
+    expect(
+      evaluatePepperstoneDemoAdverseCut({
+        ...base,
+        strategyRoute: 'TREND_CONTINUATION',
+      }).shouldClose,
+    ).toBe(false);
   });
 
   it.each([

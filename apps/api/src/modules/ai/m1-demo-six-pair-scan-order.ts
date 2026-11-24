@@ -58,8 +58,10 @@ export function orderM1DemoSixPairScan(input: {
     );
   if (focusedFour) {
     const minute = Math.floor(input.decisionTime.getTime() / 60_000);
-    const offset = ((minute % DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.length) +
-      DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.length) % DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.length;
+    const offset =
+      ((minute % DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.length) +
+        DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.length) %
+      DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.length;
     return [
       ...DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.slice(offset),
       ...DEMO_FOCUSED_ENTRY_INSTRUMENTS_V4.slice(0, offset),

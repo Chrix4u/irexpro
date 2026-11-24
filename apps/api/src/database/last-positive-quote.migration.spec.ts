@@ -5,7 +5,10 @@ describe('real last positive broker quote mark migration', () => {
   it('adds separate as-observed positive bid/ask metadata without backfilling prices', async () => {
     const sqls: string[] = [];
     const runner = {
-      query: jest.fn(async (sql: string) => { sqls.push(sql); return []; }),
+      query: jest.fn(async (sql: string) => {
+        sqls.push(sql);
+        return [];
+      }),
     } as unknown as QueryRunner;
     await new AddLastPositiveBrokerMinuteQuote1794528000000().up(runner);
     const sql = sqls.join('\n');
@@ -21,7 +24,10 @@ describe('real last positive broker quote mark migration', () => {
   it('removes only additive tick evidence columns on explicit rollback', async () => {
     const sqls: string[] = [];
     const runner = {
-      query: jest.fn(async (sql: string) => { sqls.push(sql); return []; }),
+      query: jest.fn(async (sql: string) => {
+        sqls.push(sql);
+        return [];
+      }),
     } as unknown as QueryRunner;
     await new AddLastPositiveBrokerMinuteQuote1794528000000().down(runner);
     const sql = sqls.join('\n');

@@ -18,11 +18,15 @@ export const PEPPERSTONE_LIVE_PILOT_FIXED_SLIPPAGE_RESERVE_USD = '0.20';
 export const PEPPERSTONE_LIVE_PILOT_STOP_BUFFER_MULTIPLIER = '1.20';
 
 export function pepperstoneLivePilotIsScoped(input: {
-  brokerId: string; accountType: string; accountCurrency: string;
+  brokerId: string;
+  accountType: string;
+  accountCurrency: string;
 }): boolean {
-  return input.brokerId === 'pepperstone-ctrader' &&
+  return (
+    input.brokerId === 'pepperstone-ctrader' &&
     input.accountType === 'LIVE' &&
-    input.accountCurrency === 'USD';
+    input.accountCurrency === 'USD'
+  );
 }
 
 export function evaluatePepperstoneLiveMicroRisk(input: {
@@ -32,8 +36,12 @@ export function evaluatePepperstoneLiveMicroRisk(input: {
   grossRiskAtStopUsd: string;
 }): {
   allowed: boolean;
-  code: 'LIVE_LOT_BROKER_MIN_TOO_LARGE' | 'LIVE_LOT_RANGE_LIMIT' |
-    'LIVE_MIN_LOT_NOT_AFFORDABLE' | 'LIVE_COST_INCLUSIVE_RISK_LIMIT' | null;
+  code:
+    | 'LIVE_LOT_BROKER_MIN_TOO_LARGE'
+    | 'LIVE_LOT_RANGE_LIMIT'
+    | 'LIVE_MIN_LOT_NOT_AFFORDABLE'
+    | 'LIVE_COST_INCLUSIVE_RISK_LIMIT'
+    | null;
   projectedCostInclusiveRiskUsd: string;
   maximumRiskUsd: string;
 } {
@@ -43,8 +51,12 @@ export function evaluatePepperstoneLiveMicroRisk(input: {
   const lots = ExactDecimal.parse(input.lots);
   const brokerMin = ExactDecimal.parse(input.brokerMinimumLots);
   const grossRisk = ExactDecimal.parse(input.grossRiskAtStopUsd);
-  if (!equity.isPositive() || !lots.isPositive() || !brokerMin.isPositive() ||
-      !grossRisk.isPositive()) {
+  if (
+    !equity.isPositive() ||
+    !lots.isPositive() ||
+    !brokerMin.isPositive() ||
+    !grossRisk.isPositive()
+  ) {
     throw new Error('LIVE_LOT_INPUT_UNPROVABLE');
   }
   // Equity-proportional cap: $1 at $50 equity, $20 at $1,000 equity.

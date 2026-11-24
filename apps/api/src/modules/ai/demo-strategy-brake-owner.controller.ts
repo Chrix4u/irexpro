@@ -9,19 +9,30 @@ export class DemoStrategyBrakeOwnerController {
   constructor(private readonly owner: DemoStrategyBrakeOwnerService) {}
 
   @Get()
-  @ApiOperation({summary:'Show qualified strategy-level loss brakes to the verified account owner'})
-  status(@CurrentUserId() id:string) { return this.owner.getStatus(id); }
+  @ApiOperation({
+    summary: 'Show qualified strategy-level loss brakes to the verified account owner',
+  })
+  status(@CurrentUserId() id: string) {
+    return this.owner.getStatus(id);
+  }
 
   @Post('decision')
   @HttpCode(200)
-  @ApiOperation({summary:'Account-owner incident-scoped DEMO safety decision; resume normal strategy operation or keep paused'})
-  decide(@CurrentUserId() id:string, @Body() body:{
-    action:'KEEP_PAUSED'|'CONTINUE_TRADING';
-    route:'EARLY_TRANSITION'|'CONFIRMED_REVERSAL';
-    instrument:string;
-    direction:'BUY'|'SELL';
-    incidentClosedAt:string;
-  }) {
-    return this.owner.decide(id,body);
+  @ApiOperation({
+    summary:
+      'Account-owner incident-scoped DEMO safety decision; resume normal strategy operation or keep paused',
+  })
+  decide(
+    @CurrentUserId() id: string,
+    @Body()
+    body: {
+      action: 'KEEP_PAUSED' | 'CONTINUE_TRADING';
+      route: 'EARLY_TRANSITION' | 'CONFIRMED_REVERSAL';
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      incidentClosedAt: string;
+    },
+  ) {
+    return this.owner.decide(id, body);
   }
 }

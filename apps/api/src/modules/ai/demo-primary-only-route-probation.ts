@@ -14,8 +14,12 @@ export interface DemoPrimaryOnlyProbationDecision {
   blocked: boolean;
   chosenAuthorityPath: string;
   qualifiedContinuationCanary: boolean;
-  reason: 'NOT_ENFORCED' | 'NO_EXECUTABLE_PATH' | 'PRIMARY_PLAN_B'
-    | 'FALLBACK_ROUTE_IN_PROBATION' | 'QUALIFIED_CONTINUATION_CANARY';
+  reason:
+    | 'NOT_ENFORCED'
+    | 'NO_EXECUTABLE_PATH'
+    | 'PRIMARY_PLAN_B'
+    | 'FALLBACK_ROUTE_IN_PROBATION'
+    | 'QUALIFIED_CONTINUATION_CANARY';
   modifiesOpenPositions: false;
 }
 
@@ -92,7 +96,8 @@ export function evaluateDemoPrimaryOnlyProbation(input: {
     Number.isFinite(evidence.recentRealizedR) &&
     (evidence.recentRealizedR ?? 0) > 0;
   const blocked =
-    input.enabled && executionPathExists &&
+    input.enabled &&
+    executionPathExists &&
     chosenAuthorityPath !== 'PRIMARY_PLAN_B' &&
     !qualifiedContinuationCanary;
   return {

@@ -5,7 +5,10 @@ describe('broker margin-level decimal precision incident regression', () => {
   it('widens the legacy account projection to match authoritative snapshots', async () => {
     const sql: string[] = [];
     const queryRunner = {
-      query: jest.fn(async (query: string) => { sql.push(query); return []; }),
+      query: jest.fn(async (query: string) => {
+        sql.push(query);
+        return [];
+      }),
     } as unknown as QueryRunner;
     const migration = new WidenBrokerAccountMarginLevel1794529000000();
     await migration.up(queryRunner);
@@ -18,7 +21,10 @@ describe('broker margin-level decimal precision incident regression', () => {
   it('guards rollback against 3.5-million-percent actual margin-level evidence', async () => {
     const sql: string[] = [];
     const queryRunner = {
-      query: jest.fn(async (query: string) => { sql.push(query); return []; }),
+      query: jest.fn(async (query: string) => {
+        sql.push(query);
+        return [];
+      }),
     } as unknown as QueryRunner;
     const migration = new WidenBrokerAccountMarginLevel1794529000000();
     await migration.down(queryRunner);

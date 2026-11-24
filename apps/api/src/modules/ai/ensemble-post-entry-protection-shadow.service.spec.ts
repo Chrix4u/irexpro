@@ -25,7 +25,8 @@ function components(outcome?: Record<string, unknown>) {
 describe('v8.5 scoring-error recovery policy', () => {
   const now = new Date('2026-11-12T15:00:00Z');
   const observation = {
-    checkpoint_minutes: 10, state: 'ERROR',
+    checkpoint_minutes: 10,
+    state: 'ERROR',
     reason: 'POST_ENTRY_SCORING_FAILED',
     evaluated_at: '2026-11-12T14:54:00Z',
   };
@@ -37,27 +38,55 @@ describe('v8.5 scoring-error recovery policy', () => {
   it('never retries already READY, nontransient errors or exhausted errors', () => {
     expect(v85ObservationTerminal({ ...observation, state: 'READY' }, now)).toBe(true);
     expect(v85ObservationTerminal({ ...observation, reason: 'INVALID_BROKER_ID' }, now)).toBe(true);
-    expect(v85ObservationTerminal({
-      ...observation,
-      state: 'WAITING_FOR_BROKER_DATA',
-      reason: 'HISTORICAL_SPREAD_UNOBSERVABLE',
-    }, now)).toBe(true);
-    expect(v85ObservationTerminal({
-      ...observation,
-      state: 'WAITING_FOR_BROKER_DATA',
-      reason: 'AWAITING_BROKER_SPREAD_EVIDENCE',
-    }, now)).toBe(false);
-    expect(v85ObservationTerminal({
-      ...observation, response: { researchRetryAttempts: 3 },
-    }, now)).toBe(true);
+    expect(
+      v85ObservationTerminal(
+        {
+          ...observation,
+          state: 'WAITING_FOR_BROKER_DATA',
+          reason: 'HISTORICAL_SPREAD_UNOBSERVABLE',
+        },
+        now,
+      ),
+    ).toBe(true);
+    expect(
+      v85ObservationTerminal(
+        {
+          ...observation,
+          state: 'WAITING_FOR_BROKER_DATA',
+          reason: 'AWAITING_BROKER_SPREAD_EVIDENCE',
+        },
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      v85ObservationTerminal(
+        {
+          ...observation,
+          response: { researchRetryAttempts: 3 },
+        },
+        now,
+      ),
+    ).toBe(true);
   });
   it('permits a second attempt, then stops at three total', () => {
-    expect(v85ObservationTerminal({
-      ...observation, response: { researchRetryAttempts: 2 },
-    }, now)).toBe(false);
-    expect(v85ObservationTerminal({
-      ...observation, evaluated_at: null,
-    }, now)).toBe(true);
+    expect(
+      v85ObservationTerminal(
+        {
+          ...observation,
+          response: { researchRetryAttempts: 2 },
+        },
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      v85ObservationTerminal(
+        {
+          ...observation,
+          evaluated_at: null,
+        },
+        now,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -158,7 +187,9 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
     expect(candidateSql).toContain("native.account_type = 'DEMO'");
     expect(candidateSql).toContain('session.started_at <= decision.evaluated_at');
     expect(candidateSql).toContain('session.ended_at IS NULL');
-    expect(candidateSql).toContain('COALESCE(session_source.broker_connection_id, original_broker.id)');
+    expect(candidateSql).toContain(
+      'COALESCE(session_source.broker_connection_id, original_broker.id)',
+    );
     expect(candidateSql).toContain("components ->> 'paperAdmitted' = 'true'");
     expect(candidateSql).toContain("components -> 'governance' ->> 'netExpectedR'");
     expect(candidateSql).toContain("components -> 'governance' ->> 'executionSpreadEvidenceValid'");

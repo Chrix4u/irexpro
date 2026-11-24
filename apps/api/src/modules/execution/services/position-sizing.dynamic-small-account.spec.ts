@@ -185,16 +185,23 @@ describe('broker-aware account dynamic lot size (DEMO only)', () => {
 
   it('LIVE $50 steps down to 0.01 rather than rejecting a cost-expensive 0.02 candidate', async () => {
     const { size } = fixture({
-      equity: '50.00', accountType: 'LIVE', brokerId: 'pepperstone-ctrader',
-      instrument: standardCent, marginPerLot: '218', stopLoss: '1.08450',
+      equity: '50.00',
+      accountType: 'LIVE',
+      brokerId: 'pepperstone-ctrader',
+      instrument: standardCent,
+      marginPerLot: '218',
+      stopLoss: '1.08450',
       leverage: 300,
     });
     const result = await size('50.00', '0.20');
     expect(result.lots).toBe('0.01');
     expect(result.inputs.liveMicroPilotEnvelope).toMatchObject({
-      preferredMinimumLots: '0.10', requestedMinimumLots: '0.01',
-      brokerMinimumLots: '0.01', costRiskStepDownFromLots: '0.02',
-      projectedCostInclusiveRiskUsd: '0.88', maximumRiskUsd: '1',
+      preferredMinimumLots: '0.10',
+      requestedMinimumLots: '0.01',
+      brokerMinimumLots: '0.01',
+      costRiskStepDownFromLots: '0.02',
+      projectedCostInclusiveRiskUsd: '0.88',
+      maximumRiskUsd: '1',
     });
     expect(result.inputs.requiredMargin).toBe('2.18');
     expect(result.inputs.preferredLotTarget).toBe('0.10');
@@ -204,38 +211,54 @@ describe('broker-aware account dynamic lot size (DEMO only)', () => {
 
   it('LIVE may use 0.04 when model chooses that smaller size and full costs fit', async () => {
     const { size } = fixture({
-      equity: '250.00', accountType: 'LIVE', brokerId: 'pepperstone-ctrader',
-      instrument: standardCent, marginPerLot: '218', stopLoss: '1.08450',
+      equity: '250.00',
+      accountType: 'LIVE',
+      brokerId: 'pepperstone-ctrader',
+      instrument: standardCent,
+      marginPerLot: '218',
+      stopLoss: '1.08450',
       leverage: 300,
     });
     const result = await size('250.00', '0.04');
     expect(result.lots).toBe('0.04');
     expect(result.inputs.liveMicroPilotEnvelope).toMatchObject({
-      preferredMinimumLots: '0.10', costRiskStepDownFromLots: null,
-      maximumRiskUsd: '5', projectedCostInclusiveRiskUsd: '2.92',
+      preferredMinimumLots: '0.10',
+      costRiskStepDownFromLots: null,
+      maximumRiskUsd: '5',
+      projectedCostInclusiveRiskUsd: '2.92',
     });
     expect(result.inputs.lotSelectionReason).toBe('BROKER_RISK_SCALED_DOWN');
   });
 
   it('LIVE retains 0.10+ preference when affordable, with a hard 1.00 ceiling', async () => {
     const { size } = fixture({
-      equity: '1000.00', accountType: 'LIVE', brokerId: 'pepperstone-ctrader',
-      instrument: standardCent, marginPerLot: '218', stopLoss: '1.08450',
+      equity: '1000.00',
+      accountType: 'LIVE',
+      brokerId: 'pepperstone-ctrader',
+      instrument: standardCent,
+      marginPerLot: '218',
+      stopLoss: '1.08450',
       leverage: 300,
     });
     const result = await size('1000.00', '5');
     expect(result.lots).toBe('0.29');
     expect(result.inputs.liveMicroPilotEnvelope).toMatchObject({
-      maxLots: '1', preferredMinimumLots: '0.10',
-      projectedCostInclusiveRiskUsd: '19.92', maximumRiskUsd: '20',
+      maxLots: '1',
+      preferredMinimumLots: '0.10',
+      projectedCostInclusiveRiskUsd: '19.92',
+      maximumRiskUsd: '20',
     });
     expect(result.inputs.lotSelectionReason).toBe('PREFERRED_LOT_ACHIEVED');
   });
 
   it('LIVE refuses when even broker 0.01 minimum cannot fit the 2% all-in risk envelope', async () => {
     const { size } = fixture({
-      equity: '50.00', accountType: 'LIVE', brokerId: 'pepperstone-ctrader',
-      instrument: standardCent, marginPerLot: '218', stopLoss: '1.08400',
+      equity: '50.00',
+      accountType: 'LIVE',
+      brokerId: 'pepperstone-ctrader',
+      instrument: standardCent,
+      marginPerLot: '218',
+      stopLoss: '1.08400',
       leverage: 300,
     });
     await expect(size('50.00', '0.20')).rejects.toMatchObject({

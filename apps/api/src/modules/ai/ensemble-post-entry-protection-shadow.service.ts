@@ -53,15 +53,15 @@ export function v85RetryAttempts(observation: ExistingObservation): number {
 }
 
 export function v85ObservationTerminal(observation: ExistingObservation, now: Date): boolean {
-  if (observation.state === 'READY' || observation.state === 'NOT_YET_ELIGIBLE')
-    return true;
-  if (observation.state === 'WAITING_FOR_BROKER_DATA' &&
-      observation.reason === 'HISTORICAL_SPREAD_UNOBSERVABLE')
+  if (observation.state === 'READY' || observation.state === 'NOT_YET_ELIGIBLE') return true;
+  if (
+    observation.state === 'WAITING_FOR_BROKER_DATA' &&
+    observation.reason === 'HISTORICAL_SPREAD_UNOBSERVABLE'
+  )
     return true;
   if (observation.state !== 'ERROR') return false;
   if (observation.reason !== 'POST_ENTRY_SCORING_FAILED') return true;
-  if (v85RetryAttempts(observation) >= POST_ENTRY_SCORING_RETRY_MAX_ATTEMPTS)
-    return true;
+  if (v85RetryAttempts(observation) >= POST_ENTRY_SCORING_RETRY_MAX_ATTEMPTS) return true;
   const last = observation.evaluated_at ? new Date(observation.evaluated_at).getTime() : NaN;
   if (!Number.isFinite(last) || !Number.isFinite(now.getTime())) return true;
   return last + POST_ENTRY_SCORING_RETRY_COOLDOWN_MS > now.getTime();
@@ -514,8 +514,8 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
         (item) => Number(item.checkpoint_minutes) === checkpointMinutes,
       );
       const retryAttempts = previous ? v85RetryAttempts(previous) + 1 : 1;
-      const responseWithRetry = response.state === 'ERROR' &&
-        response.reason === 'POST_ENTRY_SCORING_FAILED'
+      const responseWithRetry =
+        response.state === 'ERROR' && response.reason === 'POST_ENTRY_SCORING_FAILED'
           ? { ...response, researchRetryAttempts: retryAttempts }
           : response;
       await this.persistObservation(
@@ -631,5 +631,4 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
   private scannerUserId(): string {
     return this.config.get<string>('vpsForexScanner.userId', '').trim();
   }
-
 }

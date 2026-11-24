@@ -36,30 +36,40 @@ export function ownerDemoLossPausePolicy(input: {
   fastStop: LossPauseEvidence | null;
 }): OwnerDemoLossPausePolicy {
   const advisoryOnly =
-    input.featureEnabled && input.exactOwner &&
-    input.exactPepperstoneUsdDemo && input.fullAutoActive;
+    input.featureEnabled &&
+    input.exactOwner &&
+    input.exactPepperstoneUsdDemo &&
+    input.fullAutoActive;
 
   // Unknown costs/broker evidence never authorize fresh exposure.
-  const modelLossStreakBlocks = input.model?.active === true &&
+  const modelLossStreakBlocks =
+    input.model?.active === true &&
     (!advisoryOnly || input.model.reason === 'BROKER_COST_EVIDENCE_INCOMPLETE');
-  const portfolioLossStreakBlocks = input.portfolio?.active === true &&
+  const portfolioLossStreakBlocks =
+    input.portfolio?.active === true &&
     (!advisoryOnly || input.portfolio.reason !== 'RECENT_PORTFOLIO_NET_LOSS_STREAK');
   const fastStopCooldownBlocks = input.fastStop?.active === true && !advisoryOnly;
   return {
     artifact: OWNER_DEMO_LOSS_PAUSE_ADVISORY_ARTIFACT,
-    advisoryOnly,modelLossStreakBlocks,portfolioLossStreakBlocks,
+    advisoryOnly,
+    modelLossStreakBlocks,
+    portfolioLossStreakBlocks,
     fastStopCooldownBlocks,
     warningCodes: advisoryOnly
       ? [
-        ...(input.model?.active === true && !modelLossStreakBlocks
-          ? ['MODEL_LOSS_STREAK_OBSERVED'] : []),
-        ...(input.portfolio?.active === true && !portfolioLossStreakBlocks
-          ? ['THREE_CONSECUTIVE_NET_LOSSES_OBSERVED'] : []),
-        ...(input.fastStop?.active === true && !fastStopCooldownBlocks
-          ? ['RAPID_STOP_LOSS_OBSERVED'] : []),
-      ]:[],
-    overridesHardRiskControls:false,
-    changesOrderDirection:false,
-    changesPositionSizing:false,
+          ...(input.model?.active === true && !modelLossStreakBlocks
+            ? ['MODEL_LOSS_STREAK_OBSERVED']
+            : []),
+          ...(input.portfolio?.active === true && !portfolioLossStreakBlocks
+            ? ['THREE_CONSECUTIVE_NET_LOSSES_OBSERVED']
+            : []),
+          ...(input.fastStop?.active === true && !fastStopCooldownBlocks
+            ? ['RAPID_STOP_LOSS_OBSERVED']
+            : []),
+        ]
+      : [],
+    overridesHardRiskControls: false,
+    changesOrderDirection: false,
+    changesPositionSizing: false,
   };
 }

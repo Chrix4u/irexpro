@@ -262,9 +262,7 @@ export function evaluateM1RoutePairSideReliability(
       recentRealizedR,
       recentPayoffRSamples,
       recentPayoffAverageR,
-      reason: canAttemptRecovery
-        ? 'EARLY_LOSS_STREAK_RECOVERY_CANARY'
-        : 'EARLY_LOSS_STREAK',
+      reason: canAttemptRecovery ? 'EARLY_LOSS_STREAK_RECOVERY_CANARY' : 'EARLY_LOSS_STREAK',
       consideredPolicyVersions: [...consideredPolicyVersions],
     };
   }

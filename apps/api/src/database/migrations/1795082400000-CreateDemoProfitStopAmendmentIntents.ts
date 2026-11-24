@@ -7,8 +7,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * The final state requires readback of the broker stop AND authoritative
  * internal stop persistence; separate orchestration is not yet active.
  */
-export class CreateDemoProfitStopAmendmentIntents1795082400000
-  implements MigrationInterface {
+export class CreateDemoProfitStopAmendmentIntents1795082400000 implements MigrationInterface {
   name = 'CreateDemoProfitStopAmendmentIntents1795082400000';
 
   async up(queryRunner: QueryRunner): Promise<void> {
@@ -125,8 +124,6 @@ export class CreateDemoProfitStopAmendmentIntents1795082400000
 
   async down(queryRunner: QueryRunner): Promise<void> {
     // Explicit schema rollback only. Never run while amendments are in flight.
-    await queryRunner.query(
-      'DROP TABLE IF EXISTS trading.demo_profit_stop_amendment_intents',
-    );
+    await queryRunner.query('DROP TABLE IF EXISTS trading.demo_profit_stop_amendment_intents');
   }
 }

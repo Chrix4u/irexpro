@@ -61,14 +61,21 @@ export function evaluatePepperstoneDemoRolloverExposure(
 ): PepperstoneRolloverExposureDecision {
   const hold = (
     reason: PepperstoneRolloverExposureReason,
-    partial: Partial<Pick<PepperstoneRolloverExposureDecision,
-      'minutesUntilRollover' | 'stopDistancePips' | 'observedSpreadPips'
-      | 'initialStopPips' | 'currentR'>> = {},
+    partial: Partial<
+      Pick<
+        PepperstoneRolloverExposureDecision,
+        | 'minutesUntilRollover'
+        | 'stopDistancePips'
+        | 'observedSpreadPips'
+        | 'initialStopPips'
+        | 'currentR'
+      >
+    > = {},
   ): PepperstoneRolloverExposureDecision => ({
     artifact: PEPPERSTONE_DEMO_ROLLOVER_EXPOSURE_ARTIFACT,
     mode: 'SHADOW_ONLY',
-    wouldConsiderPreRolloverClose: reason === 'NEAR_STOP_AND_ADVERSE' ||
-      reason === 'SPREAD_THREATENS_STOP',
+    wouldConsiderPreRolloverClose:
+      reason === 'NEAR_STOP_AND_ADVERSE' || reason === 'SPREAD_THREATENS_STOP',
     reason,
     minutesUntilRollover: partial.minutesUntilRollover ?? null,
     stopDistancePips: partial.stopDistancePips ?? null,
@@ -78,13 +85,12 @@ export function evaluatePepperstoneDemoRolloverExposure(
     noBrokerTradeAuthority: true,
     modifiesOpenPositions: false,
   });
-  if (input.brokerId !== 'pepperstone-ctrader' ||
-      input.accountType.toUpperCase() !== 'DEMO')
+  if (input.brokerId !== 'pepperstone-ctrader' || input.accountType.toUpperCase() !== 'DEMO')
     return hold('NOT_VERIFIED_PEPPERSTONE_DEMO');
-  if (!isForexFinalTenMinutesBeforeRollover(input.observedAt))
-    return hold('OUTSIDE_RISK_WINDOW');
+  if (!isForexFinalTenMinutesBeforeRollover(input.observedAt)) return hold('OUTSIDE_RISK_WINDOW');
   const minutesUntilRollover =
-    (60 - input.observedAt.getUTCMinutes()) -
+    60 -
+    input.observedAt.getUTCMinutes() -
     input.observedAt.getUTCSeconds() / 60 -
     input.observedAt.getUTCMilliseconds() / 60_000;
   const partial = { minutesUntilRollover };
@@ -93,59 +99,77 @@ export function evaluatePepperstoneDemoRolloverExposure(
     ? (input.observedAt.getTime() - quoteObservedAt.getTime()) / 1000
     : Number.NaN;
   if (
-    bid === null || ask === null || !Number.isFinite(bid) ||
-    !Number.isFinite(ask) || bid <= 0 || ask <= bid ||
-    !Number.isFinite(quoteAgeSeconds) || quoteAgeSeconds < 0 ||
+    bid === null ||
+    ask === null ||
+    !Number.isFinite(bid) ||
+    !Number.isFinite(ask) ||
+    bid <= 0 ||
+    ask <= bid ||
+    !Number.isFinite(quoteAgeSeconds) ||
+    quoteAgeSeconds < 0 ||
     quoteAgeSeconds > 45
-  ) return hold('STALE_OR_INVALID_BROKER_QUOTE', partial);
+  )
+    return hold('STALE_OR_INVALID_BROKER_QUOTE', partial);
 
   const pip = input.instrument.endsWith('JPY') ? 0.01 : 0.0001;
   const spreadPips = (ask - bid) / pip;
   const stop = input.authoritativeStop;
   const brokerStop = input.brokerStop;
   if (
-    stop === null || brokerStop === null ||
-    !Number.isFinite(stop) || !Number.isFinite(brokerStop) ||
-    stop <= 0 || brokerStop <= 0 ||
+    stop === null ||
+    brokerStop === null ||
+    !Number.isFinite(stop) ||
+    !Number.isFinite(brokerStop) ||
+    stop <= 0 ||
+    brokerStop <= 0 ||
     Math.abs(stop - brokerStop) > pip * 0.15
-  ) return hold('BROKER_STOP_NOT_VERIFIED', {
-    ...partial, observedSpreadPips: spreadPips,
-  });
+  )
+    return hold('BROKER_STOP_NOT_VERIFIED', {
+      ...partial,
+      observedSpreadPips: spreadPips,
+    });
   const { entryPrice, initialRiskPnl, currentBrokerNetPnl } = input;
   if (
-    entryPrice === null || !Number.isFinite(entryPrice) ||
-    entryPrice <= 0 || !Number.isFinite(input.positionSizeLots) ||
-    input.positionSizeLots <= 0 || initialRiskPnl === null ||
-    !Number.isFinite(initialRiskPnl) || initialRiskPnl <= 0 ||
-    currentBrokerNetPnl === null || !Number.isFinite(currentBrokerNetPnl)
-  ) return hold('MISSING_BROKER_RISK', {
-    ...partial, observedSpreadPips: spreadPips,
-  });
-  const initialStopPips =
-    (input.direction === 'BUY' ? entryPrice - stop : stop - entryPrice) / pip;
+    entryPrice === null ||
+    !Number.isFinite(entryPrice) ||
+    entryPrice <= 0 ||
+    !Number.isFinite(input.positionSizeLots) ||
+    input.positionSizeLots <= 0 ||
+    initialRiskPnl === null ||
+    !Number.isFinite(initialRiskPnl) ||
+    initialRiskPnl <= 0 ||
+    currentBrokerNetPnl === null ||
+    !Number.isFinite(currentBrokerNetPnl)
+  )
+    return hold('MISSING_BROKER_RISK', {
+      ...partial,
+      observedSpreadPips: spreadPips,
+    });
+  const initialStopPips = (input.direction === 'BUY' ? entryPrice - stop : stop - entryPrice) / pip;
   if (!Number.isFinite(initialStopPips) || initialStopPips <= 0)
     return hold('MISSING_BROKER_RISK', {
-      ...partial, observedSpreadPips: spreadPips,
+      ...partial,
+      observedSpreadPips: spreadPips,
     });
   const executableClosePrice = input.direction === 'BUY' ? bid : ask;
   const stopDistancePips =
-    (input.direction === 'BUY' ? executableClosePrice - stop
-      : stop - executableClosePrice) / pip;
+    (input.direction === 'BUY' ? executableClosePrice - stop : stop - executableClosePrice) / pip;
   const currentR = currentBrokerNetPnl / initialRiskPnl;
   const details = {
-    ...partial, stopDistancePips, observedSpreadPips: spreadPips,
-    initialStopPips, currentR,
+    ...partial,
+    stopDistancePips,
+    observedSpreadPips: spreadPips,
+    initialStopPips,
+    currentR,
   };
   if (stopDistancePips <= 0) return hold('STOP_ALREADY_CROSSED', details);
 
   // Do not classify a position as near-stop based on a mid price. For a
   // SELL, only the actual ASK quote can determine stop-loss exposure.
-  if (spreadPips >= stopDistancePips && currentR < 0)
-    return hold('SPREAD_THREATENS_STOP', details);
+  if (spreadPips >= stopDistancePips && currentR < 0) return hold('SPREAD_THREATENS_STOP', details);
   // A narrow buffer plus a materially adverse position is a research
   // de-risk candidate; it is NOT a proved profitable market close.
-  if (currentR <= -0.25 &&
-      stopDistancePips <= Math.max(2, initialStopPips * 0.35))
+  if (currentR <= -0.25 && stopDistancePips <= Math.max(2, initialStopPips * 0.35))
     return hold('NEAR_STOP_AND_ADVERSE', details);
   return hold('NOT_NEAR_STOP', details);
 }

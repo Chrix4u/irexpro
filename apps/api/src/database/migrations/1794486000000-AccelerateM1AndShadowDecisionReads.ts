@@ -27,7 +27,9 @@ export class AccelerateM1AndShadowDecisionReads1794486000000 implements Migratio
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP INDEX IF EXISTS trading.ix_ensemble_shadow_user_broker_engine_time`);
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS trading.ix_ensemble_shadow_user_broker_engine_time`,
+    );
     await queryRunner.query(`DROP INDEX IF EXISTS trading.ix_m1_tactical_broker_eval_time`);
     await queryRunner.query(`DROP INDEX IF EXISTS trading.ix_m1_tactical_user_bar_time`);
   }

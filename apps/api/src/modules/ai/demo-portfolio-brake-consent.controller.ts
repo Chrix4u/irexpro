@@ -34,7 +34,8 @@ export class DemoPortfolioBrakeConsentController {
   })
   decide(
     @CurrentUserId() userId: string,
-    @Body() body: {
+    @Body()
+    body: {
       action: 'RESUME' | 'KEEP_PAUSED';
       acknowledged: boolean;
       incidentClosedAt: string;

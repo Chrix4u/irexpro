@@ -768,7 +768,7 @@ export class BrokerOAuthService {
       existing.accountId !== context.account.ctidTraderAccountId ||
       existing.accountType !== context.accountType ||
       (existing.providerBrokerIdentity &&
-       existing.providerBrokerIdentity !== context.providerBrokerIdentity)
+        existing.providerBrokerIdentity !== context.providerBrokerIdentity)
     ) {
       throw new ConflictException(
         'Existing cTrader connection identity does not match the freshly authorized account; no credentials changed.',
@@ -783,9 +783,7 @@ export class BrokerOAuthService {
       refreshToken: context.tokenBundle.refreshToken,
       accessTokenExpiresAt: context.accessTokenExpiresAt.toISOString(),
     };
-    await this.brokerService.rotateCredentials(
-      existing.id, dto, context.userId, context.ipAddress,
-    );
+    await this.brokerService.rotateCredentials(existing.id, dto, context.userId, context.ipAddress);
 
     const consumed = await this.convergeFlowAfterLink(flow.id);
     if (consumed !== 1) {

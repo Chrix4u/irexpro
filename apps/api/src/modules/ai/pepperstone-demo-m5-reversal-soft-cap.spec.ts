@@ -4,9 +4,12 @@ import {
 } from './pepperstone-demo-m5-reversal-soft-cap';
 
 const base = {
-  enabled: true, ownerVerifiedUsdDemo: true,
-  route: 'CONFIRMED_REVERSAL', alignedM5: -0.61,
-  brokerM5Direction: 'NEUTRAL', requestedLotCap: 2,
+  enabled: true,
+  ownerVerifiedUsdDemo: true,
+  route: 'CONFIRMED_REVERSAL',
+  alignedM5: -0.61,
+  brokerM5Direction: 'NEUTRAL',
+  requestedLotCap: 2,
 };
 
 describe('owner DEMO M5 conflict soft-lot cap', () => {
@@ -33,31 +36,31 @@ describe('owner DEMO M5 conflict soft-lot cap', () => {
   });
   it('never affects unverified owners, disabled flag or other strategies', () => {
     for (const value of [
-      {enabled: false},
-      {ownerVerifiedUsdDemo: false},
-      {route:'TREND_CONTINUATION'},
+      { enabled: false },
+      { ownerVerifiedUsdDemo: false },
+      { route: 'TREND_CONTINUATION' },
     ]) {
-      const r = check({...base,...value});
+      const r = check({ ...base, ...value });
       expect(r.applied).toBe(false);
       expect(r.requestedLotCap).toBe(2);
     }
   });
   it('requires an as-of aligned M5 conflict, not just a small negative number', () => {
     for (const alignedM5 of [null, Number.NaN, -0.19, 0, 0.5]) {
-      const r = check({...base,alignedM5});
+      const r = check({ ...base, alignedM5 });
       expect(r.applied).toBe(false);
     }
-    expect(check({...base, alignedM5:-0.2}).applied).toBe(true);
+    expect(check({ ...base, alignedM5: -0.2 }).applied).toBe(true);
   });
   it('requires independent completed broker M5 context', () => {
     for (const brokerM5Direction of [null, 'UNAVAILABLE', 'UNKNOWN']) {
-      expect(check({...base,brokerM5Direction}).applied).toBe(false);
+      expect(check({ ...base, brokerM5Direction }).applied).toBe(false);
     }
-    expect(check({...base,brokerM5Direction:'WITH'}).applied).toBe(true);
-    expect(check({...base,brokerM5Direction:'AGAINST'}).applied).toBe(true);
+    expect(check({ ...base, brokerM5Direction: 'WITH' }).applied).toBe(true);
+    expect(check({ ...base, brokerM5Direction: 'AGAINST' }).applied).toBe(true);
   });
   it('does not manufacture a cap on invalid input', () => {
-    expect(check({...base,requestedLotCap:Number.NaN}).applied).toBe(false);
-    expect(check({...base,requestedLotCap:0}).requestedLotCap).toBe(0);
+    expect(check({ ...base, requestedLotCap: Number.NaN }).applied).toBe(false);
+    expect(check({ ...base, requestedLotCap: 0 }).requestedLotCap).toBe(0);
   });
 });

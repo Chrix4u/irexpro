@@ -29,7 +29,8 @@ export type OwnerDemoOngoingSevenLotInput = {
 
 export function ownerPepperstoneDemoOngoingSevenLot(input: OwnerDemoOngoingSevenLotInput) {
   const time = input.now instanceof Date ? input.now.getTime() : NaN;
-  const eligible = input.enabled === true &&
+  const eligible =
+    input.enabled === true &&
     !!input.userId &&
     !!input.brokerConnectionId &&
     !!input.configuredOwnerId &&
@@ -47,7 +48,8 @@ export function ownerPepperstoneDemoOngoingSevenLot(input: OwnerDemoOngoingSeven
     endsAt: null,
     maxRequestedLots: eligible ? OWNER_DEMO_ONGOING_SEVEN_LOT_REQUESTED_MAX_LOTS : 4,
     maximumPrescreenRiskPercent: eligible
-      ? OWNER_DEMO_ONGOING_SEVEN_LOT_STOP_RISK_SCREEN_PERCENT : 0.25,
+      ? OWNER_DEMO_ONGOING_SEVEN_LOT_STOP_RISK_SCREEN_PERCENT
+      : 0.25,
     requiresActualBrokerRiskApproval: true as const,
     noLiveAuthority: true as const,
   };

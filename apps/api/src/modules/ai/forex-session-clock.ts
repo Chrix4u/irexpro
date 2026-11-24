@@ -15,8 +15,7 @@ const NY_HOUR = new Intl.DateTimeFormat('en-US', {
   hourCycle: 'h23',
 });
 
-export type ForexSessionClockLabel =
-  | 'ASIA' | 'LONDON' | 'NEW_YORK' | 'ROLLOVER';
+export type ForexSessionClockLabel = 'ASIA' | 'LONDON' | 'NEW_YORK' | 'ROLLOVER';
 
 /**
  * One hour BEFORE 17:00 New York daily FX rollover. A broker can widen
@@ -34,9 +33,7 @@ export function isForexPreRolloverHour(evaluatedAt: Date): boolean {
   return Number(NY_HOUR.format(evaluatedAt)) === 16;
 }
 
-export function classifyForexSessionClock(
-  evaluatedAt: Date,
-): ForexSessionClockLabel {
+export function classifyForexSessionClock(evaluatedAt: Date): ForexSessionClockLabel {
   if (!Number.isFinite(evaluatedAt.getTime())) {
     throw new Error('Forex session timestamp must be valid');
   }

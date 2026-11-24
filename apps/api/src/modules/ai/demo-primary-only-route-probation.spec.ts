@@ -95,7 +95,7 @@ describe('reversible DEMO-only entry-authority probation', () => {
   };
 
   it('removes only the redundant probation veto for a mature positive owner-bound DEMO continuation', () => {
-    const decision=evaluateDemoPrimaryOnlyProbation({
+    const decision = evaluateDemoPrimaryOnlyProbation({
       ...primary,
       primaryAuthorityPath: 'BLOCKED',
       executableFallbackTier: 'QUALIFIED_CONTINUATION',
@@ -114,22 +114,22 @@ describe('reversible DEMO-only entry-authority probation', () => {
   });
 
   it('denies an otherwise qualified trial in the hour before NY rollover', () => {
-    const decision=evaluateDemoPrimaryOnlyProbation({
+    const decision = evaluateDemoPrimaryOnlyProbation({
       ...primary,
-      primaryAuthorityPath:'BLOCKED',
-      executableFallbackTier:'QUALIFIED_CONTINUATION',
-      qualifiedContinuationEvidence:qualified,
-      afterCommissionEvidence:qualifiedAfterFee,
-      brokerAccountIsDemo:true,
-      genuineRollover:false,
-      preRolloverRiskWindow:true,
+      primaryAuthorityPath: 'BLOCKED',
+      executableFallbackTier: 'QUALIFIED_CONTINUATION',
+      qualifiedContinuationEvidence: qualified,
+      afterCommissionEvidence: qualifiedAfterFee,
+      brokerAccountIsDemo: true,
+      genuineRollover: false,
+      preRolloverRiskWindow: true,
     });
     expect(decision).toMatchObject({
-      blocked:true,
-      qualifiedContinuationCanary:false,
-      chosenAuthorityPath:'QUALIFIED_CONTINUATION',
-      reason:'FALLBACK_ROUTE_IN_PROBATION',
-      modifiesOpenPositions:false,
+      blocked: true,
+      qualifiedContinuationCanary: false,
+      chosenAuthorityPath: 'QUALIFIED_CONTINUATION',
+      reason: 'FALLBACK_ROUTE_IN_PROBATION',
+      modifiesOpenPositions: false,
     });
   });
 
@@ -144,25 +144,25 @@ describe('reversible DEMO-only entry-authority probation', () => {
       genuineRollover: false,
     };
     for (const patch of [
-      {afterCommissionEvidence: null},
-      {afterCommissionEvidence: {...qualifiedAfterFee, complete: false}},
-      {afterCommissionEvidence: {...qualifiedAfterFee, sampleCount: 6}},
-      {afterCommissionEvidence: {...qualifiedAfterFee, netWins: 4}},
-      {afterCommissionEvidence: {...qualifiedAfterFee, averageNetR: -0.1}},
-      {afterCommissionEvidence: {...qualifiedAfterFee, recentNetR: -0.1}},
-      {brokerAccountIsDemo: false},
-      {brokerAccountIsDemo: undefined},
-      {genuineRollover: true},
-      {qualifiedContinuationEvidence: {...qualified, samples: 6}},
-      {qualifiedContinuationEvidence: {...qualified, wins: 4}},
-      {qualifiedContinuationEvidence: {...qualified, recentRealizedR: -0.1}},
-      {qualifiedContinuationEvidence: {...qualified, averageRealizedR: -0.1}},
-      {qualifiedContinuationEvidence: {...qualified, reason: 'PROFIT_GIVEBACK_CAUTION'}},
-      {executableFallbackTier: 'BOOTSTRAP_CONTINUATION'},
-      {executableFallbackTier: 'QUALIFIED'},
-      {extensionScoutExecutable: true, executableFallbackTier: null},
+      { afterCommissionEvidence: null },
+      { afterCommissionEvidence: { ...qualifiedAfterFee, complete: false } },
+      { afterCommissionEvidence: { ...qualifiedAfterFee, sampleCount: 6 } },
+      { afterCommissionEvidence: { ...qualifiedAfterFee, netWins: 4 } },
+      { afterCommissionEvidence: { ...qualifiedAfterFee, averageNetR: -0.1 } },
+      { afterCommissionEvidence: { ...qualifiedAfterFee, recentNetR: -0.1 } },
+      { brokerAccountIsDemo: false },
+      { brokerAccountIsDemo: undefined },
+      { genuineRollover: true },
+      { qualifiedContinuationEvidence: { ...qualified, samples: 6 } },
+      { qualifiedContinuationEvidence: { ...qualified, wins: 4 } },
+      { qualifiedContinuationEvidence: { ...qualified, recentRealizedR: -0.1 } },
+      { qualifiedContinuationEvidence: { ...qualified, averageRealizedR: -0.1 } },
+      { qualifiedContinuationEvidence: { ...qualified, reason: 'PROFIT_GIVEBACK_CAUTION' } },
+      { executableFallbackTier: 'BOOTSTRAP_CONTINUATION' },
+      { executableFallbackTier: 'QUALIFIED' },
+      { extensionScoutExecutable: true, executableFallbackTier: null },
     ]) {
-      const d=evaluateDemoPrimaryOnlyProbation({...base,...patch});
+      const d = evaluateDemoPrimaryOnlyProbation({ ...base, ...patch });
       expect(d.blocked).toBe(true);
       expect(d.qualifiedContinuationCanary).toBe(false);
     }

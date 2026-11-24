@@ -32,14 +32,18 @@ function brokerCompletedMomentum(
   const end = now.getTime();
   const complete = bars
     .map((bar) => ({ at: new Date(bar.timestamp).getTime(), close: Number(bar.close) }))
-    .filter((bar) => Number.isFinite(bar.at) && Number.isFinite(bar.close) &&
-      bar.close > 0 && bar.at + timeframeMinutes * 60_000 <= end)
+    .filter(
+      (bar) =>
+        Number.isFinite(bar.at) &&
+        Number.isFinite(bar.close) &&
+        bar.close > 0 &&
+        bar.at + timeframeMinutes * 60_000 <= end,
+    )
     .sort((a, b) => a.at - b.at);
   if (complete.length < 3) return 'UNAVAILABLE';
   const latest = complete.at(-1)!;
   // Broker-native M5 or H1 must be as-of the decision, not future or stale.
-  if (end - (latest.at + timeframeMinutes * 60_000) >
-    (timeframeMinutes === 5 ? 10 : 120) * 60_000)
+  if (end - (latest.at + timeframeMinutes * 60_000) > (timeframeMinutes === 5 ? 10 : 120) * 60_000)
     return 'UNAVAILABLE';
   const first = complete.at(-3)!;
   const signed = (latest.close - first.close) * (direction === 'BUY' ? 1 : -1);
@@ -75,18 +79,32 @@ export function evaluatePepperstoneDemoAdvisoryQuality(input: {
   const m1Abstained = input.m1Route === 'ABSTAIN';
   const expertAbstained = input.expertState === 'ABSTAIN';
   const m5Direction = brokerCompletedMomentum(
-    input.m5, 5, input.decisionTime, input.stopDistance, input.signalDirection,
+    input.m5,
+    5,
+    input.decisionTime,
+    input.stopDistance,
+    input.signalDirection,
   );
   const h1Direction = brokerCompletedMomentum(
-    input.h1, 60, input.decisionTime, input.stopDistance, input.signalDirection,
+    input.h1,
+    60,
+    input.decisionTime,
+    input.stopDistance,
+    input.signalDirection,
   );
   const rationale: string[] = [];
   let riskFraction = 1;
-  if (!['CONFIRMED_REVERSAL','EARLY_TRANSITION'].includes(input.route ?? '')) {
+  if (!['CONFIRMED_REVERSAL', 'EARLY_TRANSITION'].includes(input.route ?? '')) {
     return {
       artifact: PEPPERSTONE_ADVISORY_QUALITY_ARTIFACT,
-      riskFraction: 1, m1Abstained, expertAbstained, m5Direction, h1Direction,
-      recentLossEvidenceUsed: false, recentSamples: 0, recentAverageNetR: null,
+      riskFraction: 1,
+      m1Abstained,
+      expertAbstained,
+      m5Direction,
+      h1Direction,
+      recentLossEvidenceUsed: false,
+      recentSamples: 0,
+      recentAverageNetR: null,
       rationale: ['NOT_ALTERNATE_ROUTE'],
     };
   }
@@ -114,13 +132,17 @@ export function evaluatePepperstoneDemoAdvisoryQuality(input: {
     rationale.push('M5_AGAINST_SIDE');
   }
   const recent = input.recent;
-  const completeRecent = !!recent &&
-    Number.isInteger(recent.samples) && recent.samples >= 3 &&
-    Number.isInteger(recent.losing) && Number.isInteger(recent.winning) &&
+  const completeRecent =
+    !!recent &&
+    Number.isInteger(recent.samples) &&
+    recent.samples >= 3 &&
+    Number.isInteger(recent.losing) &&
+    Number.isInteger(recent.winning) &&
     recent.losing + recent.winning <= recent.samples &&
     Number.isFinite(recent.averageNetR);
   const recentLossEvidenceUsed = !!(
-    completeRecent && recent!.losing >= Math.ceil(recent!.samples * 0.6) &&
+    completeRecent &&
+    recent!.losing >= Math.ceil(recent!.samples * 0.6) &&
     (recent!.averageNetR ?? 0) < 0
   );
   if (recentLossEvidenceUsed) {
@@ -131,7 +153,10 @@ export function evaluatePepperstoneDemoAdvisoryQuality(input: {
   return {
     artifact: PEPPERSTONE_ADVISORY_QUALITY_ARTIFACT,
     riskFraction: Math.max(0.2, Math.min(1, Number(riskFraction.toFixed(4)))),
-    m1Abstained, expertAbstained, m5Direction, h1Direction,
+    m1Abstained,
+    expertAbstained,
+    m5Direction,
+    h1Direction,
     recentLossEvidenceUsed,
     recentSamples: completeRecent ? recent!.samples : 0,
     recentAverageNetR: completeRecent ? recent!.averageNetR : null,

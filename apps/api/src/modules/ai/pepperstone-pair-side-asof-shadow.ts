@@ -61,26 +61,27 @@ export function evaluatePepperstonePairSideAsOfShadow(
 ): PepperstonePairSideAsOfShadowDecision {
   const at = asOf.getTime();
   const validTime = Number.isFinite(at);
-  const result = (overrides: Partial<PepperstonePairSideAsOfShadowDecision>):
-    PepperstonePairSideAsOfShadowDecision => ({
-      artifact: PEPPERSTONE_PAIR_SIDE_ASOF_SHADOW_ARTIFACT,
-      mode: 'RESEARCH_ONLY',
-      modifiesExecution: false,
-      grantsExecution: false,
-      entryVeto: false,
-      asOf: validTime ? asOf.toISOString() : 'INVALID',
-      historyClosedTrades: 0,
-      pricedTrades: 0,
-      distinctClosingDays: 0,
-      consecutiveNetLosses: null,
-      threeLossStreakCaution: null,
-      winRate: null,
-      profitFactor: null,
-      meanNetR: null,
-      state: 'UNKNOWN',
-      reason: 'INSUFFICIENT_INDEPENDENT_HISTORY',
-      ...overrides,
-    });
+  const result = (
+    overrides: Partial<PepperstonePairSideAsOfShadowDecision>,
+  ): PepperstonePairSideAsOfShadowDecision => ({
+    artifact: PEPPERSTONE_PAIR_SIDE_ASOF_SHADOW_ARTIFACT,
+    mode: 'RESEARCH_ONLY',
+    modifiesExecution: false,
+    grantsExecution: false,
+    entryVeto: false,
+    asOf: validTime ? asOf.toISOString() : 'INVALID',
+    historyClosedTrades: 0,
+    pricedTrades: 0,
+    distinctClosingDays: 0,
+    consecutiveNetLosses: null,
+    threeLossStreakCaution: null,
+    winRate: null,
+    profitFactor: null,
+    meanNetR: null,
+    state: 'UNKNOWN',
+    reason: 'INSUFFICIENT_INDEPENDENT_HISTORY',
+    ...overrides,
+  });
   if (!validTime) return result({ reason: 'INVALID_EVALUATION_TIME' });
   const start = at - 14 * 86_400_000;
   const prior = rows
@@ -90,18 +91,15 @@ export function evaluatePepperstonePairSideAsOfShadow(
       risk: finite(row.riskAtStop),
     }))
     // Exclude any future, same-timestamp, or out-of-window trade.
-    .filter((row) =>
-      Number.isFinite(row.closedAt) && row.closedAt < at && row.closedAt >= start)
+    .filter((row) => Number.isFinite(row.closedAt) && row.closedAt < at && row.closedAt >= start)
     .sort((a, b) => a.closedAt - b.closedAt);
-  const incomplete = prior.some(row => row.net === null || row.risk === null || row.risk <= 0);
+  const incomplete = prior.some((row) => row.net === null || row.risk === null || row.risk <= 0);
   const priced = prior.filter(
     (row): row is { closedAt: number; net: number; risk: number } =>
-      row.net !== null && row.risk !== null && row.risk > 0
+      row.net !== null && row.risk !== null && row.risk > 0,
   );
   const n = priced.length;
-  const days = new Set(
-    priced.map(row => new Date(row.closedAt).toISOString().slice(0, 10)),
-  ).size;
+  const days = new Set(priced.map((row) => new Date(row.closedAt).toISOString().slice(0, 10))).size;
   // A single incomplete newer trade breaks the ability to prove the current
   // loss-streak and the broader edge: never skip it and infer a clean history.
   let losses = 0;
@@ -111,18 +109,21 @@ export function evaluatePepperstonePairSideAsOfShadow(
       losses++;
     }
   }
-  const positive = priced.filter(row => row.net > 0);
-  const negative = priced.filter(row => row.net < 0);
+  const positive = priced.filter((row) => row.net > 0);
+  const negative = priced.filter((row) => row.net < 0);
   const profit = positive.reduce((sum, row) => sum + row.net, 0);
   const loss = -negative.reduce((sum, row) => sum + row.net, 0);
   const pf = loss > 0 ? profit / loss : profit > 0 ? null : 0;
-  const meanNetR = n
-    ? priced.reduce((sum, row) => sum + row.net / row.risk, 0) / n
-    : null;
+  const meanNetR = n ? priced.reduce((sum, row) => sum + row.net / row.risk, 0) / n : null;
   const hasHistory = n >= 8 && days >= 3;
-  const supported = hasHistory && !incomplete && pf !== null &&
-    pf >= 1.25 && positive.length / n >= 0.55 &&
-    meanNetR !== null && meanNetR > 0.1;
+  const supported =
+    hasHistory &&
+    !incomplete &&
+    pf !== null &&
+    pf >= 1.25 &&
+    positive.length / n >= 0.55 &&
+    meanNetR !== null &&
+    meanNetR > 0.1;
   return result({
     historyClosedTrades: prior.length,
     pricedTrades: n,
@@ -132,10 +133,18 @@ export function evaluatePepperstonePairSideAsOfShadow(
     winRate: n ? rounded(positive.length / n) : null,
     profitFactor: pf === null ? null : rounded(pf, 3),
     meanNetR: meanNetR === null ? null : rounded(meanNetR, 3),
-    state: incomplete || !hasHistory ? 'UNKNOWN' :
-      supported ? 'SUPPORTIVE_HISTORICAL_EDGE' : 'EDGE_NOT_ESTABLISHED',
-    reason: incomplete ? 'INCOMPLETE_PRIOR_BROKER_FEES_OR_RISK' :
-      !hasHistory ? 'INSUFFICIENT_INDEPENDENT_HISTORY' :
-      supported ? 'HISTORICAL_EDGE_SUPPORTED' : 'HISTORICAL_EDGE_NOT_ESTABLISHED',
+    state:
+      incomplete || !hasHistory
+        ? 'UNKNOWN'
+        : supported
+          ? 'SUPPORTIVE_HISTORICAL_EDGE'
+          : 'EDGE_NOT_ESTABLISHED',
+    reason: incomplete
+      ? 'INCOMPLETE_PRIOR_BROKER_FEES_OR_RISK'
+      : !hasHistory
+        ? 'INSUFFICIENT_INDEPENDENT_HISTORY'
+        : supported
+          ? 'HISTORICAL_EDGE_SUPPORTED'
+          : 'HISTORICAL_EDGE_NOT_ESTABLISHED',
   });
 }

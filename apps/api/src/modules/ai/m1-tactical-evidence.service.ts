@@ -1066,7 +1066,9 @@ export class M1TacticalEvidenceService {
    * Strict as-of read; no open, unconfirmed, unsettled, other-user, other
    * broker or other-side outcomes are eligible analogues. */
   async loadOwnerPepperstoneDemoPatternHistory(input: {
-    userId: string; brokerConnectionId: string; instrument: string;
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
     direction: 'BUY' | 'SELL';
     strategyRoute: 'CONFIRMED_REVERSAL' | 'EARLY_TRANSITION' | 'TREND_CONTINUATION';
     asOf: Date;
@@ -1102,28 +1104,51 @@ export class M1TacticalEvidenceService {
           AND t.realised_pnl IS NOT NULL AND t.commission IS NOT NULL
           AND t.swap IS NOT NULL
         ORDER BY t.closed_at DESC LIMIT 100
-      `,[input.userId,input.brokerConnectionId,input.instrument,
-        input.direction,input.strategyRoute,input.asOf],
-    )) as Array<Record<string,string|null>>;
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument,
+        input.direction,
+        input.strategyRoute,
+        input.asOf,
+      ],
+    )) as Array<Record<string, string | null>>;
     const valid: SettledPatternExample[] = [];
-    for(const row of rows){
-      const names=['score','extension_atr','volatility','ema_separation',
-        'mtf_strength','rsi14','risk_at_stop','realised_pnl','commission','swap'] as const;
-      if(names.some(key=>row[key]==null || row[key]===''))continue;
-      const n=Object.fromEntries(names.map(key=>[key,Number(row[key])])) as Record<
-        typeof names[number],number>;
-      if(Object.values(n).some(v=>!Number.isFinite(v))||n.risk_at_stop<=0)continue;
-      const favorable=row.max_favorable_pnl!=null?Number(row.max_favorable_pnl):NaN;
-      const adverse=row.max_adverse_pnl!=null?Number(row.max_adverse_pnl):NaN;
+    for (const row of rows) {
+      const names = [
+        'score',
+        'extension_atr',
+        'volatility',
+        'ema_separation',
+        'mtf_strength',
+        'rsi14',
+        'risk_at_stop',
+        'realised_pnl',
+        'commission',
+        'swap',
+      ] as const;
+      if (names.some((key) => row[key] == null || row[key] === '')) continue;
+      const n = Object.fromEntries(names.map((key) => [key, Number(row[key])])) as Record<
+        (typeof names)[number],
+        number
+      >;
+      if (Object.values(n).some((v) => !Number.isFinite(v)) || n.risk_at_stop <= 0) continue;
+      const favorable = row.max_favorable_pnl != null ? Number(row.max_favorable_pnl) : NaN;
+      const adverse = row.max_adverse_pnl != null ? Number(row.max_adverse_pnl) : NaN;
       valid.push({
-        closedAt:row.closed_at!,
-        features:{
-          score:n.score,extensionAtr:n.extension_atr,volatilityScore:n.volatility,
-          emaSeparation:n.ema_separation,mtfStrength:n.mtf_strength,rsi14:n.rsi14,
+        closedAt: row.closed_at!,
+        features: {
+          score: n.score,
+          extensionAtr: n.extension_atr,
+          volatilityScore: n.volatility,
+          emaSeparation: n.ema_separation,
+          mtfStrength: n.mtf_strength,
+          rsi14: n.rsi14,
         },
-        netR:(n.realised_pnl+n.commission+n.swap)/n.risk_at_stop,
-        maxFavorableR:Number.isFinite(favorable)?favorable/n.risk_at_stop:null,
-        maxAdverseR:Number.isFinite(adverse)?adverse/n.risk_at_stop:null,
+        netR: (n.realised_pnl + n.commission + n.swap) / n.risk_at_stop,
+        maxFavorableR: Number.isFinite(favorable) ? favorable / n.risk_at_stop : null,
+        maxAdverseR: Number.isFinite(adverse) ? adverse / n.risk_at_stop : null,
       });
     }
     return valid;
@@ -1167,20 +1192,26 @@ export class M1TacticalEvidenceService {
         ORDER BY t.closed_at DESC LIMIT 8
       `,
       [
-        input.userId,input.brokerConnectionId,input.instrument,
-        input.direction,input.strategyRoute,input.asOf,
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument,
+        input.direction,
+        input.strategyRoute,
+        input.asOf,
       ],
-    )) as Array<{ realised_pnl:string;commission:string;swap:string;risk:string|null }>;
-    const valid = rows.map(row => {
-      const pnl=Number(row.realised_pnl)+Number(row.commission)+Number(row.swap);
-      const risk=Number(row.risk);
-      return Number.isFinite(pnl)&&Number.isFinite(risk)&&risk>0 ? pnl/risk : null;
-    }).filter((v):v is number => v !== null);
+    )) as Array<{ realised_pnl: string; commission: string; swap: string; risk: string | null }>;
+    const valid = rows
+      .map((row) => {
+        const pnl = Number(row.realised_pnl) + Number(row.commission) + Number(row.swap);
+        const risk = Number(row.risk);
+        return Number.isFinite(pnl) && Number.isFinite(risk) && risk > 0 ? pnl / risk : null;
+      })
+      .filter((v): v is number => v !== null);
     return {
       samples: valid.length,
-      losing: valid.filter(v=>v<0).length,
-      winning:valid.filter(v=>v>0).length,
-      averageNetR:valid.length ? valid.reduce((a,b)=>a+b,0)/valid.length : null,
+      losing: valid.filter((v) => v < 0).length,
+      winning: valid.filter((v) => v > 0).length,
+      averageNetR: valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null,
     };
   }
 
@@ -1384,10 +1415,8 @@ export class M1TacticalEvidenceService {
     asOf: Date;
   }): Promise<PepperstonePairSideAsOfRow[]> {
     const instrument = input.instrument.trim().toUpperCase();
-    if (
-      !/^[A-Z]{6}$/.test(instrument) ||
-      !Number.isFinite(input.asOf.getTime())
-    ) throw new Error('INVALID_PAIR_SIDE_ASOF_SCOPE');
+    if (!/^[A-Z]{6}$/.test(instrument) || !Number.isFinite(input.asOf.getTime()))
+      throw new Error('INVALID_PAIR_SIDE_ASOF_SCOPE');
     const rows = (await this.dataSource.query(
       `
         SELECT t.closed_at, (t.realised_pnl + t.commission + t.swap) AS net_pnl,
@@ -1428,7 +1457,7 @@ export class M1TacticalEvidenceService {
       net_pnl: string | number | null;
       risk_at_stop: string | number | null;
     }>;
-    return rows.map(row => ({
+    return rows.map((row) => ({
       closedAt: row.closed_at,
       netPnl: row.net_pnl,
       riskAtStop: row.risk_at_stop,
@@ -1485,12 +1514,15 @@ export class M1TacticalEvidenceService {
     // PostgreSQL's signed sums turn NULL when either settled broker cost
     // is unavailable. Do not silently treat that as a zero-P&L observation
     // or drop it from the loss window: both could lift the brake wrongly.
-    if (rows.some((row) =>
-      row.realised_pnl === null ||
-      row.realised_pnl === undefined ||
-      row.realised_pnl === '' ||
-      !Number.isFinite(Number(row.realised_pnl))
-    )) {
+    if (
+      rows.some(
+        (row) =>
+          row.realised_pnl === null ||
+          row.realised_pnl === undefined ||
+          row.realised_pnl === '' ||
+          !Number.isFinite(Number(row.realised_pnl)),
+      )
+    ) {
       return {
         artifact: M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT,
         active: true,
@@ -1711,9 +1743,14 @@ export class M1TacticalEvidenceService {
           AND d.governance->'multimodelEnsemble'->>'regime'='TREND_EXTENDED'
           AND (d.governance->'oodResearchFeatures'->>'extensionAtr')::numeric >= 1.5
       `,
-      [input.userId, input.brokerConnectionId,
-       input.instrument, input.direction, input.asOf.toISOString()],
-    )) as Array<{last_extended: Date | string | null}>;
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument,
+        input.direction,
+        input.asOf.toISOString(),
+      ],
+    )) as Array<{ last_extended: Date | string | null }>;
     const value = rows[0]?.last_extended;
     if (!value) return null;
     const date = new Date(value);
@@ -1914,9 +1951,13 @@ export class M1TacticalEvidenceService {
       // The main multi-model ensemble may open an actual position while its
       // separate M1 tactical advisor says ABSTAIN. Its route/provenance must
       // not make the open BUY/SELL invisible to opposite-exposure checks.
-      const route: M1OpenPaperPositionSnapshot['route'] = validRoutes.has(rawRoute as M1ReliabilityRoute)
+      const route: M1OpenPaperPositionSnapshot['route'] = validRoutes.has(
+        rawRoute as M1ReliabilityRoute,
+      )
         ? (rawRoute as M1ReliabilityRoute)
-        : rawRoute === 'ABSTAIN' ? 'ABSTAIN' : 'UNVERIFIED';
+        : rawRoute === 'ABSTAIN'
+          ? 'ABSTAIN'
+          : 'UNVERIFIED';
       const direction = String(row.direction ?? '') as 'BUY' | 'SELL';
       const openedAt = date(row.opened_at as string | Date);
       const originalNetExpectedR = number(row.original_net_expected_r);
@@ -2049,9 +2090,12 @@ export class M1TacticalEvidenceService {
         FROM matched ORDER BY closed_at DESC LIMIT 7
       `,
       [
-        input.userId, input.brokerConnectionId,
-        input.instrument.trim().toUpperCase(),input.direction,
-        input.policyVersion,input.evaluatedAt.toISOString(),
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument.trim().toUpperCase(),
+        input.direction,
+        input.policyVersion,
+        input.evaluatedAt.toISOString(),
       ],
     )) as Array<{
       realised_pnl: string | number | null;
@@ -2060,39 +2104,42 @@ export class M1TacticalEvidenceService {
       risk_at_stop: string | number | null;
       closed_at: string | Date;
     }>;
-    const netR: number[]=[];
+    const netR: number[] = [];
     for (const row of rows) {
       if (
-        row.realised_pnl == null || row.commission == null ||
-        row.swap == null || row.risk_at_stop == null
+        row.realised_pnl == null ||
+        row.commission == null ||
+        row.swap == null ||
+        row.risk_at_stop == null
       ) {
         return {
-          sampleCount: rows.length, netWins: 0,
-          averageNetR: null, recentNetR: null, complete: false,
+          sampleCount: rows.length,
+          netWins: 0,
+          averageNetR: null,
+          recentNetR: null,
+          complete: false,
         };
       }
-      const gross=Number(row.realised_pnl);
-      const commission=Number(row.commission);
-      const swap=Number(row.swap);
-      const risk=Number(row.risk_at_stop);
-      if (
-        ![gross,commission,swap,risk].every(Number.isFinite) ||
-        risk <= 0 || commission > 0
-      ) {
+      const gross = Number(row.realised_pnl);
+      const commission = Number(row.commission);
+      const swap = Number(row.swap);
+      const risk = Number(row.risk_at_stop);
+      if (![gross, commission, swap, risk].every(Number.isFinite) || risk <= 0 || commission > 0) {
         return {
-          sampleCount: rows.length, netWins: 0,
-          averageNetR: null, recentNetR: null, complete: false,
+          sampleCount: rows.length,
+          netWins: 0,
+          averageNetR: null,
+          recentNetR: null,
+          complete: false,
         };
       }
-      netR.push((gross+commission+swap)/risk);
+      netR.push((gross + commission + swap) / risk);
     }
     return {
       sampleCount: netR.length,
-      netWins: netR.filter(v=>v>0).length,
-      averageNetR: netR.length
-        ? netR.reduce((sum,v)=>sum+v,0)/netR.length : null,
-      recentNetR: netR.length >= 3
-        ? netR.slice(0,3).reduce((sum,v)=>sum+v,0) : null,
+      netWins: netR.filter((v) => v > 0).length,
+      averageNetR: netR.length ? netR.reduce((sum, v) => sum + v, 0) / netR.length : null,
+      recentNetR: netR.length >= 3 ? netR.slice(0, 3).reduce((sum, v) => sum + v, 0) : null,
       complete: netR.length >= 7,
     };
   }
@@ -2136,9 +2183,12 @@ export class M1TacticalEvidenceService {
         ) AS exists
       `,
       [
-        input.userId, input.brokerConnectionId,
-        input.instrument.trim().toUpperCase(), input.direction,
-        input.evaluatedAt.toISOString(), input.cooldownMinutes,
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument.trim().toUpperCase(),
+        input.direction,
+        input.evaluatedAt.toISOString(),
+        input.cooldownMinutes,
       ],
     )) as Array<{ exists: boolean }>;
     return rows[0]?.exists === true;
@@ -2195,9 +2245,11 @@ export class M1TacticalEvidenceService {
   }): Promise<number> {
     const start = input.startsAt ?? '2026-11-16T20:00:00.000Z';
     const end = input.endsAt ?? '2026-11-16T21:00:00.000Z';
-    if (!Number.isFinite(Date.parse(start)) ||
-        !Number.isFinite(Date.parse(end)) ||
-        Date.parse(end) <= Date.parse(start)) {
+    if (
+      !Number.isFinite(Date.parse(start)) ||
+      !Number.isFinite(Date.parse(end)) ||
+      Date.parse(end) <= Date.parse(start)
+    ) {
       throw new Error('DEMO_TRIAL_INVALID_COUNT_WINDOW');
     }
     const rows = (await this.dataSource.query(

@@ -34,7 +34,8 @@ export function ownerPepperstoneDemoNoonLotTrial(input: {
   noLiveAuthority: true;
 } {
   const time = input.now instanceof Date ? input.now.getTime() : NaN;
-  const allowed = input.enabled === true &&
+  const allowed =
+    input.enabled === true &&
     !!input.userId &&
     !!input.brokerConnectionId &&
     !!input.configuredOwnerId &&
@@ -51,8 +52,9 @@ export function ownerPepperstoneDemoNoonLotTrial(input: {
     eligible: allowed,
     endsAt: OWNER_DEMO_NOON_LOT_TRIAL_END,
     maxRequestedLots: allowed ? OWNER_DEMO_NOON_LOT_TRIAL_REQUESTED_MAX_LOTS : 4,
-    maximumPrescreenRiskPercent:
-      allowed ? OWNER_DEMO_NOON_LOT_TRIAL_STOP_RISK_SCREEN_PERCENT : 0.25,
+    maximumPrescreenRiskPercent: allowed
+      ? OWNER_DEMO_NOON_LOT_TRIAL_STOP_RISK_SCREEN_PERCENT
+      : 0.25,
     requiresActualBrokerRiskApproval: true,
     noLiveAuthority: true,
   };

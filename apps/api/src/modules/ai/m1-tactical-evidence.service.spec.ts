@@ -51,8 +51,12 @@ describe('M1 loss recovery canary single-flight query', () => {
     expect(String(sql)).toContain("governance ->> 'recoveryCanary'");
     expect(String(sql)).toContain('evaluated_at < $5::timestamptz');
     expect(params).toEqual([
-      queryInput.userId, queryInput.brokerConnectionId, 'EURUSD', 'BUY',
-      '2026-11-12T16:00:00.000Z', 240,
+      queryInput.userId,
+      queryInput.brokerConnectionId,
+      'EURUSD',
+      'BUY',
+      '2026-11-12T16:00:00.000Z',
+      240,
     ]);
   });
 
@@ -69,32 +73,44 @@ describe('owner-verified DEMO continuation canary evidence', () => {
     brokerConnectionId: '22222222-2222-4222-8222-222222222222',
   };
   it('requires a connected owner-bound active FULL_AUTO Pepperstone DEMO, not a rollout label', async () => {
-    const query=jest.fn().mockResolvedValue([{exists:true}]);
-    const evidence=new M1TacticalEvidenceService({query} as unknown as DataSource);
+    const query = jest.fn().mockResolvedValue([{ exists: true }]);
+    const evidence = new M1TacticalEvidenceService({ query } as unknown as DataSource);
     expect(await evidence.isActiveConnectedOwnerDemoBroker(broker)).toBe(true);
-    const [sql,args]=query.mock.calls[0];
-    for(const piece of [
-      's.user_id = $1', 's.broker_connection_id = $2',
-      "s.status = 'ACTIVE'", "s.execution_mode = 'FULL_AUTO'",
-      "b.account_type = 'DEMO'", "b.status = 'CONNECTED'",
-      "b.broker_id = 'pepperstone-ctrader'", 'b.deleted_at IS NULL',
-    ]) expect(sql).toContain(piece);
-    expect(args).toEqual([broker.userId,broker.brokerConnectionId]);
+    const [sql, args] = query.mock.calls[0];
+    for (const piece of [
+      's.user_id = $1',
+      's.broker_connection_id = $2',
+      "s.status = 'ACTIVE'",
+      "s.execution_mode = 'FULL_AUTO'",
+      "b.account_type = 'DEMO'",
+      "b.status = 'CONNECTED'",
+      "b.broker_id = 'pepperstone-ctrader'",
+      'b.deleted_at IS NULL',
+    ])
+      expect(sql).toContain(piece);
+    expect(args).toEqual([broker.userId, broker.brokerConnectionId]);
   });
   it('does not grant a canary when broker scope is absent', async () => {
-    const query=jest.fn().mockResolvedValue([{exists:false}]);
-    const evidence=new M1TacticalEvidenceService({query} as unknown as DataSource);
+    const query = jest.fn().mockResolvedValue([{ exists: false }]);
+    const evidence = new M1TacticalEvidenceService({ query } as unknown as DataSource);
     expect(await evidence.isActiveConnectedOwnerDemoBroker(broker)).toBe(false);
   });
   it('limits prior broker-authenticated canaries to exact pair+side within 90min', async () => {
-    const query=jest.fn().mockResolvedValue([{exists:true}]);
-    const evidence=new M1TacticalEvidenceService({query} as unknown as DataSource);
-    const input={...broker,instrument:'audusd',direction:'SELL' as const,
-      evaluatedAt:new Date('2026-11-12T19:05:00Z'),cooldownMinutes:90};
+    const query = jest.fn().mockResolvedValue([{ exists: true }]);
+    const evidence = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const input = {
+      ...broker,
+      instrument: 'audusd',
+      direction: 'SELL' as const,
+      evaluatedAt: new Date('2026-11-12T19:05:00Z'),
+      cooldownMinutes: 90,
+    };
     expect(await evidence.hasRecentM1QualifiedContinuationCanary(input)).toBe(true);
-    const [sql,args]=query.mock.calls[0];
+    const [sql, args] = query.mock.calls[0];
     expect(sql).toContain("execution_authority = 'BROKER_NATIVE'");
-    expect(sql).toContain("governance #>> '{demoPrimaryOnlyProbation,qualifiedContinuationCanary}' = 'true'");
+    expect(sql).toContain(
+      "governance #>> '{demoPrimaryOnlyProbation,qualifiedContinuationCanary}' = 'true'",
+    );
     // A sizing/allocation failure with a definitively rejected, unfilled
     // intent must NOT lock out the next qualified minute for 90 minutes.
     // Pending/unreconciled orders still retain the cooldown.
@@ -108,65 +124,81 @@ describe('owner-verified DEMO continuation canary evidence', () => {
     expect(sql).toContain('ti.id = d.trade_intent_id');
     expect(sql).toContain('evaluated_at < $5::timestamptz');
     expect(args).toEqual([
-      broker.userId,broker.brokerConnectionId,'AUDUSD','SELL',
-      '2026-11-12T19:05:00.000Z',90,
+      broker.userId,
+      broker.brokerConnectionId,
+      'AUDUSD',
+      'SELL',
+      '2026-11-12T19:05:00.000Z',
+      90,
     ]);
   });
 });
 
 describe('exact real after-commission M1 continuation qualification', () => {
   const input = {
-    userId:'11111111-1111-4111-8111-111111111111',
-    brokerConnectionId:'22222222-2222-4222-8222-222222222222',
-    instrument:'audusd',
-    direction:'SELL' as const,
+    userId: '11111111-1111-4111-8111-111111111111',
+    brokerConnectionId: '22222222-2222-4222-8222-222222222222',
+    instrument: 'audusd',
+    direction: 'SELL' as const,
     evaluatedAt: new Date('2026-11-12T19:05:00Z'),
-    policyVersion:'m1-tactical-v2-m5-lifecycle',
+    policyVersion: 'm1-tactical-v2-m5-lifecycle',
   };
-  const gross = [-100,22,156,32,-116,52,396];
-  const commissions = [-12,-12,-12,-12,-24,-24,-24];
-  const risk = [100,100,100,100,200,200,200];
-  const rows = gross.map((value,i)=>({
-    realised_pnl:String(value),
-    commission:String(commissions[i]),
-    swap:'0',
-    risk_at_stop:String(risk[i]),
-    closed_at:new Date(Date.UTC(2026,10,12,10,16-i)),
+  const gross = [-100, 22, 156, 32, -116, 52, 396];
+  const commissions = [-12, -12, -12, -12, -24, -24, -24];
+  const risk = [100, 100, 100, 100, 200, 200, 200];
+  const rows = gross.map((value, i) => ({
+    realised_pnl: String(value),
+    commission: String(commissions[i]),
+    swap: '0',
+    risk_at_stop: String(risk[i]),
+    closed_at: new Date(Date.UTC(2026, 10, 12, 10, 16 - i)),
   }));
   it('qualifies five NET winners among seven owner-bound exact trades and accounts for all fees', async () => {
-    const query=jest.fn().mockResolvedValue(rows);
-    const e=new M1TacticalEvidenceService({query} as unknown as DataSource);
-    const result=await e.loadQualifiedM1ContinuationAfterFeeEvidence(input);
+    const query = jest.fn().mockResolvedValue(rows);
+    const e = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const result = await e.loadQualifiedM1ContinuationAfterFeeEvidence(input);
     expect(result.complete).toBe(true);
     expect(result.sampleCount).toBe(7);
     expect(result.netWins).toBe(5);
-    expect(result.averageNetR).toBeCloseTo(1.92/7,8);
-    expect(result.recentNetR).toBeCloseTo(0.42,8);
-    const [sql,args]=query.mock.calls[0];
-    for(const bit of [
-      'SELECT DISTINCT ON (t.id)', 't.commission', 't.swap',
-      'finalRiskAtStop', "d.route='M1_TREND_CONTINUATION'",
-      'd.broker_connection_id=$2', 'd.instrument=$3',
-      'd.direction=$4', 'd.policy_version=$5',
+    expect(result.averageNetR).toBeCloseTo(1.92 / 7, 8);
+    expect(result.recentNetR).toBeCloseTo(0.42, 8);
+    const [sql, args] = query.mock.calls[0];
+    for (const bit of [
+      'SELECT DISTINCT ON (t.id)',
+      't.commission',
+      't.swap',
+      'finalRiskAtStop',
+      "d.route='M1_TREND_CONTINUATION'",
+      'd.broker_connection_id=$2',
+      'd.instrument=$3',
+      'd.direction=$4',
+      'd.policy_version=$5',
       // The 7 earlier AUDUSD SELL wins/losses came from PRIMARY_PLAN_B.
       // They CANNOT qualify an independent M1 fallback. The actual
       // source strategy/authority is mandatory, not just M1 timing label.
       "ti.metadata->>'multimodel_execution_authority_path'='QUALIFIED_CONTINUATION'",
-      "t.status='CLOSED'",'t.closed_at <= $6::timestamptz',
-    ]) expect(String(sql)).toContain(bit);
+      "t.status='CLOSED'",
+      't.closed_at <= $6::timestamptz',
+    ])
+      expect(String(sql)).toContain(bit);
     expect(args).toEqual([
-      input.userId,input.brokerConnectionId,'AUDUSD','SELL',
-      input.policyVersion,input.evaluatedAt.toISOString(),
+      input.userId,
+      input.brokerConnectionId,
+      'AUDUSD',
+      'SELL',
+      input.policyVersion,
+      input.evaluatedAt.toISOString(),
     ]);
   });
   it('fails closed on missing commission, insufficient trades or zero initial risk', async () => {
-    const query=jest.fn()
-      .mockResolvedValueOnce(rows.slice(0,6))
-      .mockResolvedValueOnce(rows.map((r,i)=>i===0?{...r,commission:null}:r))
-      .mockResolvedValueOnce(rows.map((r,i)=>i===0?{...r,risk_at_stop:'0'}:r));
-    const e=new M1TacticalEvidenceService({query} as unknown as DataSource);
-    for(let i=0;i<3;i++){
-      const r=await e.loadQualifiedM1ContinuationAfterFeeEvidence(input);
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(rows.slice(0, 6))
+      .mockResolvedValueOnce(rows.map((r, i) => (i === 0 ? { ...r, commission: null } : r)))
+      .mockResolvedValueOnce(rows.map((r, i) => (i === 0 ? { ...r, risk_at_stop: '0' } : r)));
+    const e = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    for (let i = 0; i < 3; i++) {
+      const r = await e.loadQualifiedM1ContinuationAfterFeeEvidence(input);
       expect(r.complete).toBe(false);
     }
   });
@@ -652,21 +684,23 @@ describe('M1TacticalEvidenceService', () => {
   });
 
   it('fails closed rather than converting missing settled commission to zero profit', async () => {
-    const query=jest.fn().mockResolvedValue([
-      { realised_pnl:null, closed_at:'2026-11-12T10:19:00Z' },
-      { realised_pnl:'6.00', closed_at:'2026-11-12T09:00:00Z' },
+    const query = jest.fn().mockResolvedValue([
+      { realised_pnl: null, closed_at: '2026-11-12T10:19:00Z' },
+      { realised_pnl: '6.00', closed_at: '2026-11-12T09:00:00Z' },
     ]);
-    const service=new M1TacticalEvidenceService({query} as unknown as DataSource);
-    const result=await service.loadMultimodelLossStreakBrake({
-      userId:input().userId,brokerConnectionId:input().brokerConnectionId,
-      instrument:'EURUSD',direction:'SELL',
-      strategyRoute:'CONFIRMED_REVERSAL',
-      evaluatedAt:new Date('2026-11-12T12:00:00Z'),
+    const service = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const result = await service.loadMultimodelLossStreakBrake({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      strategyRoute: 'CONFIRMED_REVERSAL',
+      evaluatedAt: new Date('2026-11-12T12:00:00Z'),
     });
     expect(result).toMatchObject({
-      active:true,
-      reason:'BROKER_COST_EVIDENCE_INCOMPLETE',
-      strategyRoute:'CONFIRMED_REVERSAL',
+      active: true,
+      reason: 'BROKER_COST_EVIDENCE_INCOMPLETE',
+      strategyRoute: 'CONFIRMED_REVERSAL',
     });
     expect(result.cooldownRemainingSeconds).toBe(0);
   });
@@ -1000,22 +1034,43 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
 
   it('keeps actual open ensemble exposure visible even when separate M1 advisor ABSTAINS', async () => {
     const query = jest.fn().mockResolvedValue([
-      { trade_id:'old-buy',trade_intent_id:'old-intent',instrument:'EURUSD',
-        direction:'BUY',opened_at:'2026-11-20T00:24:26Z',
-        decision_id:'old-m1',route:'ABSTAIN',
-        policy_version:'m1-tactical-v2-m5-lifecycle',original_net_expected_r:'0.156' },
-      { trade_id:'other-open',trade_intent_id:'second-intent',instrument:'EURUSD',
-        direction:'SELL',opened_at:'2026-11-20T01:07:36Z',
-        decision_id:null,route:null,policy_version:null,original_net_expected_r:null },
+      {
+        trade_id: 'old-buy',
+        trade_intent_id: 'old-intent',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        opened_at: '2026-11-20T00:24:26Z',
+        decision_id: 'old-m1',
+        route: 'ABSTAIN',
+        policy_version: 'm1-tactical-v2-m5-lifecycle',
+        original_net_expected_r: '0.156',
+      },
+      {
+        trade_id: 'other-open',
+        trade_intent_id: 'second-intent',
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        opened_at: '2026-11-20T01:07:36Z',
+        decision_id: null,
+        route: null,
+        policy_version: null,
+        original_net_expected_r: null,
+      },
     ]);
-    const svc = new M1TacticalEvidenceService({query} as unknown as DataSource);
+    const svc = new M1TacticalEvidenceService({ query } as unknown as DataSource);
     const positions = await svc.loadOpenPaperPositions({
-      userId:input().userId,brokerConnectionId:input().brokerConnectionId,instrument:'eurusd',
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'eurusd',
     });
     expect(positions).toHaveLength(2);
-    expect(positions[0]).toMatchObject({tradeId:'old-buy',direction:'BUY',route:'ABSTAIN'});
-    expect(positions[1]).toMatchObject({tradeId:'other-open',direction:'SELL',route:'UNVERIFIED'});
-    expect(positions.filter(p=>p.direction==='BUY')).toHaveLength(1);
+    expect(positions[0]).toMatchObject({ tradeId: 'old-buy', direction: 'BUY', route: 'ABSTAIN' });
+    expect(positions[1]).toMatchObject({
+      tradeId: 'other-open',
+      direction: 'SELL',
+      route: 'UNVERIFIED',
+    });
+    expect(positions.filter((p) => p.direction === 'BUY')).toHaveLength(1);
   });
 
   it('loads all open iRexPro PAPER entry exposure across M1 and M5 with durable USD stop-risk evidence', async () => {
@@ -1155,27 +1210,37 @@ describe('M1TacticalEvidenceService rescue evidence', () => {
   });
 
   it('keeps USDCAD SELL on hold 91 seconds after verified DEMO drawdown-guard exit', async () => {
-    const query=jest.fn().mockResolvedValue([{
-      last_protected_close:'2026-11-20T01:04:49.561Z',
-    }]);
-    const svc=new M1TacticalEvidenceService({query} as unknown as DataSource);
-    const result=await svc.loadRecentlyProtectedSameSideReentry({
-      userId:input().userId,brokerConnectionId:input().brokerConnectionId,
-      instrument:'usdcad',direction:'SELL',
-      evaluatedAt:new Date('2026-11-20T01:06:24.676Z'),
+    const query = jest.fn().mockResolvedValue([
+      {
+        last_protected_close: '2026-11-20T01:04:49.561Z',
+      },
+    ]);
+    const svc = new M1TacticalEvidenceService({ query } as unknown as DataSource);
+    const result = await svc.loadRecentlyProtectedSameSideReentry({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'usdcad',
+      direction: 'SELL',
+      evaluatedAt: new Date('2026-11-20T01:06:24.676Z'),
     });
-    expect(result).toEqual({active:true,cooldownRemainingSeconds:85});
+    expect(result).toEqual({ active: true, cooldownRemainingSeconds: 85 });
     expect(String(query.mock.calls[0]![0])).toContain(
-      "a.metadata->'aiCloseTrigger'->>'source'='DEMO_DRAWDOWN_GUARD'");
+      "a.metadata->'aiCloseTrigger'->>'source'='DEMO_DRAWDOWN_GUARD'",
+    );
     expect(query.mock.calls[0]![1]).toEqual([
-      input().userId,input().brokerConnectionId,'USDCAD','SELL',
+      input().userId,
+      input().brokerConnectionId,
+      'USDCAD',
+      'SELL',
       '2026-11-20T01:06:24.676Z',
     ]);
-    query.mockResolvedValueOnce([{last_protected_close:null}]);
-    const otherSide=await svc.loadRecentlyProtectedSameSideReentry({
-      userId:input().userId,brokerConnectionId:input().brokerConnectionId,
-      instrument:'USDCAD',direction:'BUY',
-      evaluatedAt:new Date('2026-11-20T01:06:24.676Z'),
+    query.mockResolvedValueOnce([{ last_protected_close: null }]);
+    const otherSide = await svc.loadRecentlyProtectedSameSideReentry({
+      userId: input().userId,
+      brokerConnectionId: input().brokerConnectionId,
+      instrument: 'USDCAD',
+      direction: 'BUY',
+      evaluatedAt: new Date('2026-11-20T01:06:24.676Z'),
     });
     expect(otherSide.active).toBe(false);
   });

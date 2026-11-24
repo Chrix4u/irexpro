@@ -345,11 +345,14 @@ export class AllocationService {
         // open positions. Existing orders in uncertain states also block.
         // The account advisory lock serializes competing simultaneous intents.
         // This is a safety condition, NOT production-LIVE verification.
-        if (sized.inputs.liveMicroPilotEnvelope?.artifact ===
-            'pepperstone-usd-live-micro-pilot-v1') {
+        if (
+          sized.inputs.liveMicroPilotEnvelope?.artifact === 'pepperstone-usd-live-micro-pilot-v1'
+        ) {
           if (committed.isPositive()) {
-            throw new AllocationError('ALLOCATION_LIVE_MICRO_ONE_POSITION',
-              'Pepperstone LIVE micro account allows only one open/pending/in-flight position');
+            throw new AllocationError(
+              'ALLOCATION_LIVE_MICRO_ONE_POSITION',
+              'Pepperstone LIVE micro account allows only one open/pending/in-flight position',
+            );
           }
           const stateRows = await manager.query(
             `SELECT open_positions_count, synced_at
@@ -358,13 +361,21 @@ export class AllocationService {
             [intent.brokerConnectionId],
           );
           const observed = stateRows[0];
-          const ageMs = observed?.synced_at != null
-            ? Date.now() - new Date(String(observed.synced_at)).getTime() : NaN;
-          if (observed?.open_positions_count == null ||
-              Number(observed.open_positions_count) !== 0 ||
-              !Number.isFinite(ageMs) || ageMs < -5_000 || ageMs > 45_000) {
-            throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
-              'LIVE micro account requires a recent provider snapshot of zero open positions');
+          const ageMs =
+            observed?.synced_at != null
+              ? Date.now() - new Date(String(observed.synced_at)).getTime()
+              : NaN;
+          if (
+            observed?.open_positions_count == null ||
+            Number(observed.open_positions_count) !== 0 ||
+            !Number.isFinite(ageMs) ||
+            ageMs < -5_000 ||
+            ageMs > 45_000
+          ) {
+            throw new AllocationError(
+              'ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
+              'LIVE micro account requires a recent provider snapshot of zero open positions',
+            );
           }
           const unresolved = await manager.query(
             `SELECT 1 FROM trading.orders o
@@ -377,8 +388,10 @@ export class AllocationService {
             [intent.brokerConnectionId],
           );
           if (unresolved.length > 0) {
-            throw new AllocationError('ALLOCATION_LIVE_MICRO_ONE_POSITION',
-              'LIVE micro account has an unfinished broker order; no second order');
+            throw new AllocationError(
+              'ALLOCATION_LIVE_MICRO_ONE_POSITION',
+              'LIVE micro account has an unfinished broker order; no second order',
+            );
           }
           const losses = await manager.query(
             `SELECT COALESCE(SUM(GREATEST(0, -(
@@ -392,13 +405,17 @@ export class AllocationService {
           const dailyLoss = ExactDecimal.tryParse(String(losses[0]?.daily_loss ?? ''));
           const cap = currentEquity.mul(ExactDecimal.parse('0.04'));
           if (!dailyLoss || dailyLoss.lt(ExactDecimal.ZERO)) {
-            throw new AllocationError('ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
-              'LIVE micro daily realised loss cannot be verified');
+            throw new AllocationError(
+              'ALLOCATION_LIVE_MICRO_PROVIDER_STATE_UNPROVABLE',
+              'LIVE micro daily realised loss cannot be verified',
+            );
           }
           if (dailyLoss.gte(cap)) {
-            throw new AllocationError('ALLOCATION_LIVE_MICRO_DAILY_LOSS',
+            throw new AllocationError(
+              'ALLOCATION_LIVE_MICRO_DAILY_LOSS',
               `LIVE micro daily realised losses ${dailyLoss.toString()} USD ` +
-              `reached safe stop threshold ${cap.toString()} USD`);
+                `reached safe stop threshold ${cap.toString()} USD`,
+            );
           }
         }
 
