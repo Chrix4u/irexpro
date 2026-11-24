@@ -149,8 +149,12 @@ a40bfe4   style(api): normalize reconciliation correction formatting with Pretti
 4f8c0511  fix(reconciliation): separate closing and opening native identifier attribution
 2b0aa4af  test(execution): align the real-PG orders fixture with migration 1795220000000
 d14a39f5  style(fixtures): normalize statement CSV fixture to LF line endings
-<final>   docs(runbooks): validated release & rollback runbook (this file)
+efa08ee0  docs(runbooks): validated release and rollback runbook
+77405911  test(migrations): assert the duplicate-deal index in the identifier migration spec
+b5cf9152  style(api): normalize duplicate-deal and identifier attribution code with Prettier
 ```
 
-`git revert --no-commit b2631183..<final candidate>` reverts exactly this
-series, newest first, conflict-free (validated in a scratch worktree).
+`git revert --no-commit b2631183..HEAD` (run at any later candidate that still
+carries exactly this series on top of b2631183) reverts the series newest
+first, conflict-free; validation on this candidate confirmed the reverted
+working tree is content-identical to b2631183.
