@@ -198,3 +198,20 @@ test('scientific notation from the statement is expanded exactly, with bounded e
   const statement = parseFingerprints(fs.readFileSync(FIXTURE, 'utf-8'));
   assert.equal(statement.filter((row) => row.net === null).length, 0);
 });
+
+test('UTC date window does not depend on database timezone', async () => {
+  const { utcDayBoundary, inspect } = require('./verify-closed-demo-statement-match.cjs');
+  assert.equal(utcDayBoundary('2026-11-10'), '2026-11-10T00:00:00.000Z');
+  assert.equal(utcDayBoundary(null), null);
+  assert.throws(() => utcDayBoundary('2026-02-30'), /INVALID_UTC_DAY/);
+  assert.throws(() => utcDayBoundary('2026-11-10T05:00:00'), /INVALID_UTC_DAY/);
+  const calls = [];
+  const db = { query: async (sql, params) => { calls.push({ sql, params }); return { rows: [] }; } };
+  await inspect(db, { broker: 'pepperstone-ctrader', from: '2026-11-10', to: '2026-11-24', fingerprints: FIXTURE });
+  assert.equal(calls[0].sql, 'BEGIN READ ONLY');
+  assert.deepEqual(calls[2].params, ['pepperstone-ctrader', '2026-11-10T00:00:00.000Z', '2026-11-24T00:00:00.000Z']);
+  assert.match(calls[2].sql, /t\.closed_at >= \$2::timestamptz/);
+  assert.match(calls[2].sql, /t\.closed_at < \$3::timestamptz/);
+  assert.equal(calls.at(-1).sql, 'ROLLBACK');
+  await assert.rejects(inspect(db, { from: '2026-11-24', to: '2026-11-10' }), /INVALID_UTC_WINDOW/);
+});

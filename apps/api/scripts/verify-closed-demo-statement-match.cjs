@@ -230,7 +230,20 @@ function summarize(input) {
 }
 
 // ─── database access (read-only) ─────────────────────────────────────────────
+// Date-only flags describe UTC calendar days, not the database session timezone.
+function utcDayBoundary(value) {
+  if (value == null) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('INVALID_UTC_DAY');
+  const iso = `${value}T00:00:00.000Z`;
+  const parsed = new Date(iso);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== iso) throw new Error('INVALID_UTC_DAY');
+  return iso;
+}
+
 async function inspect(db, options) {
+  const from = utcDayBoundary(options.from);
+  const to = utcDayBoundary(options.to);
+  if (from && to && from >= to) throw new Error('INVALID_UTC_WINDOW');
   await db.query('BEGIN READ ONLY');
   try {
     const brokerFilter = options.broker ? "AND b.broker_id = $1" : '';
@@ -255,9 +268,12 @@ async function inspect(db, options) {
     ).rows;
 
     const closedParams = [];
-    if (options.broker) closedParams.push(options.broker);
-    if (options.from) closedParams.push(options.from);
-    if (options.to) closedParams.push(options.to);
+    const bind = (value) => `$${closedParams.push(value)}`;
+    const filters = [
+      options.broker ? `AND b.broker_id = ${bind(options.broker)}` : '',
+      from ? `AND t.closed_at >= ${bind(from)}::timestamptz` : '',
+      to ? `AND t.closed_at < ${bind(to)}::timestamptz` : '',
+    ].join(' ');
     const closed = (
       await db.query(
         `SELECT t.id, t.instrument, t.direction, t.lot_size, t.fill_price, t.exit_price,
@@ -265,9 +281,7 @@ async function inspect(db, options) {
          FROM trading.trades t
          JOIN broker.broker_connections b ON b.id = t.broker_connection_id AND b.user_id = t.user_id
          WHERE t.status = 'CLOSED' AND UPPER(b.account_type) = 'DEMO'
-           ${options.broker ? 'AND b.broker_id = $' + (closedParams.indexOf(options.broker) + 1) : ''}
-           ${options.from ? "AND t.closed_at >= $".concat(String(closedParams.indexOf(options.from) + 1)) : ''}
-           ${options.to ? "AND t.closed_at < $".concat(String(closedParams.indexOf(options.to) + 1)) : ''}
+           ${filters}
          ORDER BY t.closed_at ASC`,
         closedParams,
       )
@@ -399,4 +413,4 @@ async function main() {
 if (require.main === module) {
   main().catch(() => { console.error('Statement match verification failed'); process.exitCode = 1; });
 }
-module.exports = { parseFingerprints, matchStranded, matchClosedTrades, checkPnlComposition, summarize, compareDecimal, normalizeDecimals, economicKey };
+module.exports = { parseFingerprints, matchStranded, matchClosedTrades, checkPnlComposition, summarize, compareDecimal, normalizeDecimals, economicKey, utcDayBoundary, inspect };
