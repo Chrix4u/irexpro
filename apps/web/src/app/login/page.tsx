@@ -13,6 +13,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [mfaCode, setMfaCode] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
+  const [expiredNotice, setExpiredNotice] = useState(false);
+  useEffect(() => {
+    setExpiredNotice(new URLSearchParams(window.location.search).get('reason') === 'session-expired');
+  }, []);
 
   useEffect(() => {
     if (!restoring && user && accessToken) {
@@ -40,6 +44,7 @@ export default function LoginPage() {
     <AuthLayout title="Welcome back" subtitle="Log in to your iRexPro account">
       <form onSubmit={handleSubmit}>
         {error && <Alert variant="error">{error}</Alert>}
+        {!error && expiredNotice && <Alert variant="warning">Your session has expired. Please sign in again.</Alert>}
         <Input
           label="Email or international phone number"
           type="text"

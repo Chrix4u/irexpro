@@ -3,7 +3,7 @@
 import { createContext, useContext, useCallback, useMemo, useState, useEffect, ReactNode } from 'react';
 import type { AuthUser } from '@irexpro/types';
 import type { BrowserAuthTokens } from '@irexpro/api-client/browser-auth';
-import { setAccessToken, api, browserAuth, refreshBrowserSession } from '@/lib/api';
+import { setAccessToken, api, browserAuth, refreshBrowserSession, subscribeBrowserSession, verifyBrowserSession } from '@/lib/api';
 
 /**
  * Web auth context — Sprint 25 hybrid strategy.
@@ -71,6 +71,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw err;
     }
   }, []);
+
+  useEffect(() => subscribeBrowserSession(event => {
+    if (event.type === 'refreshed') {
+      setAccessTokenState(event.accessToken);
+      return;
+    }
+    setAccessTokenState(null);
+    setUser(null);
+    setError('Your session has expired. Please sign in again.');
+    // Full navigation removes protected page state and stops background requests.
+    if (window.location.pathname !== '/login') {
+      window.location.replace('/login?reason=session-expired');
+    }
+  }), []);
+
+  useEffect(() => {
+    if (!user) return;
+    const check = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        void verifyBrowserSession();
+      }
+    };
+    window.addEventListener('online', check);
+    window.addEventListener('focus', check);
+    document.addEventListener('visibilitychange', check);
+    const timer = window.setInterval(check, 60_000);
+    return () => {
+      window.removeEventListener('online', check);
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', check);
+      window.clearInterval(timer);
+    };
+  }, [user]);
 
   useEffect(() => {
     let cancelled = false;

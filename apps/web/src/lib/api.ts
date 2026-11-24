@@ -25,8 +25,27 @@ if (!baseUrl) {
 }
 
 let cachedAccessToken: string | null = null;
+let tokenGeneration = 0;
+type SessionEvent = { type: 'refreshed'; accessToken: string } | { type: 'expired' };
+const sessionListeners = new Set<(event: SessionEvent) => void>();
+
+export function subscribeBrowserSession(listener: (event: SessionEvent) => void): () => void {
+  sessionListeners.add(listener);
+  return () => { sessionListeners.delete(listener); };
+}
+
+function publishSession(event: SessionEvent): void {
+  for (const listener of sessionListeners) listener(event);
+}
+
+function expireBrowserSession(): void {
+  if (!cachedAccessToken) return;
+  setAccessToken(null);
+  publishSession({ type: 'expired' });
+}
 
 export function setAccessToken(token: string | null): void {
+  if (cachedAccessToken !== token) tokenGeneration++;
   cachedAccessToken = token;
 }
 
@@ -43,6 +62,7 @@ let browserSessionRefreshInFlight: Promise<BrowserAuthTokens | null> | null = nu
 export function refreshBrowserSession(): Promise<BrowserAuthTokens | null> {
   if (browserSessionRefreshInFlight) return browserSessionRefreshInFlight;
 
+  const generation = tokenGeneration;
   browserSessionRefreshInFlight = (async () => {
     try {
       const response = await fetch(`${baseUrl}/auth/refresh`, {
@@ -65,16 +85,20 @@ export function refreshBrowserSession(): Promise<BrowserAuthTokens | null> {
         } catch {
           // The error body may be HTML or empty; reading it is what matters.
         }
-        setAccessToken(null);
+        if (generation === tokenGeneration && [401, 403].includes(response.status)) {
+          expireBrowserSession();
+        }
         return null;
       }
       const payload = (await response.json()) as { accessToken?: unknown };
       if (typeof payload.accessToken !== 'string' || payload.accessToken.length === 0) {
-        setAccessToken(null);
         return null;
       }
       const tokens: BrowserAuthTokens = { accessToken: payload.accessToken };
+      if (generation !== tokenGeneration) return null;
+      const wasSignedIn = cachedAccessToken !== null;
       setAccessToken(tokens.accessToken);
+      if (wasSignedIn) publishSession({ type: 'refreshed', accessToken: tokens.accessToken });
       return tokens;
     } catch {
       return null;
@@ -98,3 +122,22 @@ export const api: ApiClient = createApiClient({
 });
 
 export const browserAuth = createBrowserAuthClient(api);
+
+/** Verify visible/reconnected sessions without treating an outage as revocation. */
+export async function verifyBrowserSession(): Promise<void> {
+  const token = cachedAccessToken;
+  if (!token) return;
+  const generation = tokenGeneration;
+  try {
+    const response = await fetch(`${baseUrl}/auth/me`, {
+      credentials: 'include', cache: 'no-store',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+    // Consume the response; never use a stale request to invalidate a new login.
+    await response.text();
+    if (generation !== tokenGeneration) return;
+    if (response.status === 401) await refreshBrowserSession();
+  } catch {
+    // Offline or transient API error: do not confuse network failure with expiry.
+  }
+}
