@@ -422,18 +422,18 @@ test.describe("AI Trader market schedule", () => {
   });
 });
 
-test.describe("focused EURUSD/AUDUSD trader charts", () => {
-  test("does not show paused pairs even when the legacy automation runtime still supplies all six", async ({ page }) => {
+test.describe("focused four-pair trader charts", () => {
+  test("shows the current four-pair fallback and excludes paused pairs even when the legacy automation runtime supplies all six", async ({ page }) => {
     await gotoAiTrader(page);
     const chartPairs = page.getByLabel("Active trading chart instruments");
-    await expect(chartPairs.getByRole("button")).toHaveText(["EURUSD", "AUDUSD"]);
+    await expect(chartPairs.getByRole("button")).toHaveText(["EURUSD", "AUDUSD", "USDCAD", "USDJPY"]);
     await expect(chartPairs.getByRole("button", { name: "EURUSD" })).toHaveClass(/is-active/);
 
     await chartPairs.getByRole("button", { name: "AUDUSD" }).click();
     await expect(chartPairs.getByRole("button", { name: "AUDUSD" })).toHaveClass(/is-active/);
-    await expect(chartPairs.getByRole("button", { name: "USDJPY" })).toHaveCount(0);
+    await expect(chartPairs.getByRole("button", { name: "USDJPY" })).toBeVisible();
     await expect(chartPairs.getByRole("button", { name: "GBPUSD" })).toHaveCount(0);
-    await expect(chartPairs.getByRole("button", { name: "USDCAD" })).toHaveCount(0);
+    await expect(chartPairs.getByRole("button", { name: "USDCAD" })).toBeVisible();
     await expect(chartPairs.getByRole("button", { name: "USDCHF" })).toHaveCount(0);
   });
 });
@@ -454,7 +454,7 @@ test.describe("AI Trader novice workflow", () => {
     await expect(page.getByText("24h Net P&L", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Open P&L", { exact: true }).first()).toBeVisible();
 
-    const readiness = page.getByRole("meter", { name: "Trade readiness" });
+    const readiness = page.getByRole("meter", { name: "Current model entry score, not trade formation progress" });
     await expect(readiness).toBeVisible();
     await expect(page.getByRole("heading", { name: "Trade Readiness" })).toBeVisible();
     await expect(page.getByText(/Setup forming|Waiting for a stronger setup|Final checks in progress/).first()).toBeVisible();
@@ -617,7 +617,7 @@ test.describe("AI Trader novice workflow", () => {
       "Worst excursion",
       "Stop loss",
       "Take profit",
-      "Commission",
+      "Commission charged so far",
       "Swap",
     ];
     for (const label of metricLabels) {
