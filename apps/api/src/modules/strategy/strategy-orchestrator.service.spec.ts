@@ -669,14 +669,20 @@ describe('StrategyOrchestratorService', () => {
       'blocks dormant %s at central DEMO execution boundary even if external signal is replayed',
       async (instrument) => {
         (executionService.getActiveSession as jest.Mock).mockResolvedValue({
-          ...activeSession(), executionMode: ExecutionMode.FULL_AUTO,
+          ...activeSession(),
+          executionMode: ExecutionMode.FULL_AUTO,
         });
-        const result = await service.processSignal(validCandidate({
-          instrument, confidenceScore: 0.74, timeframe: 'M1',
-          strategyCode: 'external-irexpro-multimodel-ensemble',
-          modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
-          suggestedVolume: 0.2, metadata: {},
-        }));
+        const result = await service.processSignal(
+          validCandidate({
+            instrument,
+            confidenceScore: 0.74,
+            timeframe: 'M1',
+            strategyCode: 'external-irexpro-multimodel-ensemble',
+            modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+            suggestedVolume: 0.2,
+            metadata: {},
+          }),
+        );
         expect(result.outcome).toBe('SIGNAL_INVALID');
         expect(result.reason).toContain('DEMO_INSTRUMENT_RESEARCH_ONLY');
         expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
@@ -688,24 +694,32 @@ describe('StrategyOrchestratorService', () => {
       'permits approved four-pair %s to reach the separate primary broker-risk gates',
       async (instrument) => {
         (executionService.getActiveSession as jest.Mock).mockResolvedValue({
-          ...activeSession(), executionMode: ExecutionMode.FULL_AUTO,
+          ...activeSession(),
+          executionMode: ExecutionMode.FULL_AUTO,
         });
         (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
-          id: 'conn-1', userId: 'user-1',
-          brokerId: 'pepperstone-ctrader', accountType: BrokerMode.DEMO,
-          authorizationStatus: 'ACTIVE', demoValidated: true,
+          id: 'conn-1',
+          userId: 'user-1',
+          brokerId: 'pepperstone-ctrader',
+          accountType: BrokerMode.DEMO,
+          authorizationStatus: 'ACTIVE',
+          demoValidated: true,
           liveTradingEnabled: false,
           logicalAccountKey: 'pepperstone-ctrader::demo::acct-1',
         });
-        const result = await service.processSignal(validCandidate({
-          instrument, direction: 'BUY', confidenceScore: 0.72,
-          timeframe: 'M1',
-          strategyCode: 'external-irexpro-multimodel-ensemble',
-          modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
-          suggestedVolume: 0.2,
-          metadata: {},
-        }));
-        expect(result.reason||'').not.toContain('DEMO_INSTRUMENT_RESEARCH_ONLY');
+        const result = await service.processSignal(
+          validCandidate({
+            instrument,
+            direction: 'BUY',
+            confidenceScore: 0.72,
+            timeframe: 'M1',
+            strategyCode: 'external-irexpro-multimodel-ensemble',
+            modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+            suggestedVolume: 0.2,
+            metadata: {},
+          }),
+        );
+        expect(result.reason || '').not.toContain('DEMO_INSTRUMENT_RESEARCH_ONLY');
         expect(riskService.validateProposedTrade).toHaveBeenCalled();
       },
     );
@@ -914,73 +928,97 @@ describe('StrategyOrchestratorService', () => {
         executionMode: ExecutionMode.FULL_AUTO,
       });
       (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
-        id:'conn-1',userId:'user-1',brokerId:'pepperstone-ctrader',
-        accountType:BrokerMode.LIVE,providerBrokerIdentity:'pepperstone',
-        status:'CONNECTED',authorizationStatus:'ACTIVE',liveTradingEnabled:true,
-        logicalAccountKey:'pepperstone-ctrader::live::acct-1',
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'pepperstone-ctrader',
+        accountType: BrokerMode.LIVE,
+        providerBrokerIdentity: 'pepperstone',
+        status: 'CONNECTED',
+        authorizationStatus: 'ACTIVE',
+        liveTradingEnabled: true,
+        logicalAccountKey: 'pepperstone-ctrader::live::acct-1',
       });
       (brokerService.isProductionLiveEligible as jest.Mock).mockReturnValue(true);
-      const candidate=brandServerM1Signal(validCandidate({
-        confidenceScore:0.74,timeframe:'M1',strategyCode:'external-irexpro-multimodel-ensemble',
-        modelVersion:'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
-        suggestedVolume:0.01,
-        metadata:{
-          signal_source:'EXTERNAL_PROVIDER',external_provider_paper_only:true,
-          multimodel_plan_b_route:'CONFIRMED_REVERSAL',
-          multimodel_plan_b_paper_admitted:true,
-          multimodel_execution_authority_path:'PRIMARY_PLAN_B',
-          m1_tactical_route:'M1_CONFIRMED_REVERSAL',
-          m1_professional_fallback:false,m5_early_transition_handoff:false,
-          m1_pepperstone_demo_alternative_trial:false,
-          extension_exhaustion_demo_scout:false,
-          production_eligible:false,
-        },
-      }));
-      const result=await service.processSignal(candidate);
+      const candidate = brandServerM1Signal(
+        validCandidate({
+          confidenceScore: 0.74,
+          timeframe: 'M1',
+          strategyCode: 'external-irexpro-multimodel-ensemble',
+          modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+          suggestedVolume: 0.01,
+          metadata: {
+            signal_source: 'EXTERNAL_PROVIDER',
+            external_provider_paper_only: true,
+            multimodel_plan_b_route: 'CONFIRMED_REVERSAL',
+            multimodel_plan_b_paper_admitted: true,
+            multimodel_execution_authority_path: 'PRIMARY_PLAN_B',
+            m1_tactical_route: 'M1_CONFIRMED_REVERSAL',
+            m1_professional_fallback: false,
+            m5_early_transition_handoff: false,
+            m1_pepperstone_demo_alternative_trial: false,
+            extension_exhaustion_demo_scout: false,
+            production_eligible: false,
+          },
+        }),
+      );
+      const result = await service.processSignal(candidate);
       expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
       expect(snapshotMock.resolveFreshSnapshotForNewExposure).toHaveBeenCalled();
       expect(sizingMock.sizePosition).toHaveBeenCalled();
       expect(allocationMock.resolveOrAllocate).toHaveBeenCalledWith(
-        expect.objectContaining({executionMode:ExecutionMode.FULL_AUTO}),
+        expect.objectContaining({ executionMode: ExecutionMode.FULL_AUTO }),
       );
       expect(riskService.validateProposedTrade).toHaveBeenCalled();
       expect(executionService.executeTrade).toHaveBeenCalled();
     });
 
-    it('never accepts a branded M1 signal if LIVE certification or authorization is absent', async()=>{
+    it('never accepts a branded M1 signal if LIVE certification or authorization is absent', async () => {
       (executionService.getActiveSession as jest.Mock).mockResolvedValue({
-        ...activeSession(),executionMode:ExecutionMode.FULL_AUTO,
+        ...activeSession(),
+        executionMode: ExecutionMode.FULL_AUTO,
       });
-      const base={
-        id:'conn-1',userId:'user-1',brokerId:'pepperstone-ctrader',
-        accountType:BrokerMode.LIVE,providerBrokerIdentity:'pepperstone',
-        status:'CONNECTED',authorizationStatus:'ACTIVE',liveTradingEnabled:true,
+      const base = {
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'pepperstone-ctrader',
+        accountType: BrokerMode.LIVE,
+        providerBrokerIdentity: 'pepperstone',
+        status: 'CONNECTED',
+        authorizationStatus: 'ACTIVE',
+        liveTradingEnabled: true,
       };
-      const makeCandidate=()=>brandServerM1Signal(validCandidate({
-        confidenceScore:0.8,timeframe:'M1',strategyCode:'external-irexpro-multimodel-ensemble',
-        modelVersion:'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
-        metadata:{
-          signal_source:'EXTERNAL_PROVIDER',external_provider_paper_only:true,
-          multimodel_plan_b_route:'TREND_CONTINUATION',
-          multimodel_plan_b_paper_admitted:true,
-          multimodel_execution_authority_path:'PRIMARY_PLAN_B',
-          m1_tactical_route:'M1_TREND_CONTINUATION',
-          m1_professional_fallback:false,m5_early_transition_handoff:false,
-          m1_pepperstone_demo_alternative_trial:false,
-          extension_exhaustion_demo_scout:false,
-        },
-      }));
-      for(const scenario of [
-        {connection:base,verified:false},
-        {connection:{...base,authorizationStatus:'CONNECTED'},verified:true},
-        {connection:{...base,liveTradingEnabled:false},verified:true},
-        {connection:{...base,providerBrokerIdentity:'icmarkets'},verified:true},
-        {connection:{...base,brokerId:'icmarkets-ctrader'},verified:true},
-        {connection:{...base,status:'DISCONNECTED'},verified:true},
-      ]){
+      const makeCandidate = () =>
+        brandServerM1Signal(
+          validCandidate({
+            confidenceScore: 0.8,
+            timeframe: 'M1',
+            strategyCode: 'external-irexpro-multimodel-ensemble',
+            modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+            metadata: {
+              signal_source: 'EXTERNAL_PROVIDER',
+              external_provider_paper_only: true,
+              multimodel_plan_b_route: 'TREND_CONTINUATION',
+              multimodel_plan_b_paper_admitted: true,
+              multimodel_execution_authority_path: 'PRIMARY_PLAN_B',
+              m1_tactical_route: 'M1_TREND_CONTINUATION',
+              m1_professional_fallback: false,
+              m5_early_transition_handoff: false,
+              m1_pepperstone_demo_alternative_trial: false,
+              extension_exhaustion_demo_scout: false,
+            },
+          }),
+        );
+      for (const scenario of [
+        { connection: base, verified: false },
+        { connection: { ...base, authorizationStatus: 'CONNECTED' }, verified: true },
+        { connection: { ...base, liveTradingEnabled: false }, verified: true },
+        { connection: { ...base, providerBrokerIdentity: 'icmarkets' }, verified: true },
+        { connection: { ...base, brokerId: 'icmarkets-ctrader' }, verified: true },
+        { connection: { ...base, status: 'DISCONNECTED' }, verified: true },
+      ]) {
         (brokerService.findConnectionById as jest.Mock).mockResolvedValue(scenario.connection);
         (brokerService.isProductionLiveEligible as jest.Mock).mockReturnValue(scenario.verified);
-        const result=await service.processSignal(makeCandidate());
+        const result = await service.processSignal(makeCandidate());
         expect(result.outcome).toBe('SIGNAL_INVALID');
       }
       expect(riskService.validateProposedTrade).not.toHaveBeenCalled();

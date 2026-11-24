@@ -50,7 +50,7 @@ It does not invent strategy admission. The current LIVE M1 decisions
 had zero exact matching model/M1 primary-route authority. A small
 retrospective of seven mismatches yielded 2 positive and 5 negative
 hypothetical after-estimated-cost outcomes; it cannot justify promoting
-DEM0 pilot exceptions to real money. No trade is promised.
+DEMO pilot exceptions to real money. No trade is promised.
 
 ## Safe release checklist
 

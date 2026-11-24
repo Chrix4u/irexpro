@@ -23,9 +23,9 @@ export function brandServerM1Signal<T extends AiSignalCandidate>(candidate: T): 
 }
 
 export function hasServerM1Origin(candidate: AiSignalCandidate): boolean {
-  return (candidate as AiSignalCandidate & { [SERVER_M1_ORIGIN]?: boolean })[
-    SERVER_M1_ORIGIN
-  ] === true;
+  return (
+    (candidate as AiSignalCandidate & { [SERVER_M1_ORIGIN]?: boolean })[SERVER_M1_ORIGIN] === true
+  );
 }
 
 /** Only exact primary routes qualify, not similarly named demo pilot paths. */
@@ -54,6 +54,5 @@ export function isStrictLiveM1PrimarySignal(candidate: AiSignalCandidate): boole
     EARLY_TRANSITION: 'M1_EARLY_TRANSITION',
   };
   const modelRoute = String(m.multimodel_plan_b_route ?? '');
-  return strictRoutes[modelRoute] !== undefined &&
-    strictRoutes[modelRoute] === m.m1_tactical_route;
+  return strictRoutes[modelRoute] !== undefined && strictRoutes[modelRoute] === m.m1_tactical_route;
 }
