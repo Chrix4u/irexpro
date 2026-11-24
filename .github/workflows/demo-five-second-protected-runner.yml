@@ -10,14 +10,14 @@ permissions:
   contents: read
 jobs:
   five-second-protected-runner:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
         with:
           version: 10.34.5
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: '22'
           cache: pnpm
@@ -38,7 +38,7 @@ jobs:
           sha256sum release-outputs/irexpro-api-five-second-protected-runner.tar.gz > release-outputs/SHA256SUMS
           printf '%s\n' "$GITHUB_SHA" > release-outputs/SOURCE_SHA
       - name: Retain exact SHA artifact for guarded VPS rollout
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: irexpro-api-five-second-protected-runner-${{ github.sha }}
           path: release-outputs/
