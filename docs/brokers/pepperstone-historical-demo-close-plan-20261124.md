@@ -23,3 +23,22 @@ This is deliberately separate from the regular 6-hour runtime reconciliation rul
 ## LIVE release separation
 
 The real Pepperstone LIVE operator certification run `4ec633e4-a443-47e3-8bca-1f8f214982f5` is a persisted PASS. That does not waive the DEMO historical hold or mean automated LIVE is enabled. The Pepperstone-specific catalog promotion remains in GitHub draft PR #791 pending independent authorization and controlled deployment. Keep `DEPLOY-HOLD-ACTIVE-BROKER-20261122.txt` in place until maintenance release checks and operator approval are complete.
+
+## Saved private evidence manifest (2026-11-24)
+
+A subsequent authorized **read-only** broker/DB audit produced a root-only
+per-record proof manifest on the VPS:
+
+`/root/irexpro-safe-release-backup-20261124/pepperstone-demo-historical-close-proof-e46d3f702dad4c243b4ea3c23a7255bca52171406d452af66fa914894d5d5896.json`
+
+SHA-256: `e46d3f702dad4c243b4ea3c23a7255bca52171406d452af66fa914894d5d5896`.
+File permissions: `0600` (root only).
+
+The manifest contains 248 unique candidate order IDs, broker-native closing
+order and deal IDs, position IDs, exact lot size, close price, gross P&L and
+close timestamp, plus one withheld exception. These are **evidence for a
+future independently reviewed maintenance procedure**, not permission to
+perform a database bulk status update. The source read and evidence-file
+creation performed zero broker orders, zero DB writes and zero LIVE
+permission changes. A post-audit count confirmed all 249 historical pending
+DEMO orders are still pending.
