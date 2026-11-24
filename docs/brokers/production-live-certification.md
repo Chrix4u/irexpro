@@ -17,9 +17,10 @@
 > **Round 7 status of this document.** The operator tooling described here
 > now EXISTS in the repository
 > (`apps/api/src/modules/broker/verification/provider-live-certification-harness.ts`).
-> No LIVE certification run has yet been executed with it — **every
-> non-MetaApi route remains UNVERIFIED** until an operator run produces
-> evidence. The MetaApi/MetaTrader route retains its pre-existing
+> The Pepperstone cTrader broker identity produced a persisted genuine LIVE
+> certification PASS on 2026-11-24. A single-identity catalog promotion is
+> proposed under operator release review and is NOT deployed. Generic cTrader,
+> IC Markets and other non-MetaApi routes remain UNVERIFIED. The MetaApi/MetaTrader route retains its pre-existing
 > production-operation attestation (see its record below).
 
 ---
