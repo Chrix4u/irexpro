@@ -316,6 +316,10 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       opened_at TIMESTAMPTZ, closed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
     // trading.orders — mirrors migration 1753600000000 (CreateNormalizedOrderDomain)
+    // + 1795220000000 (AddOrderProviderNativeIdentifiers: provider_position_id,
+    // provider_deal_id, empty-string CHECK and the duplicate-deal partial
+    // unique index). Keeping this fixture aligned with the entity columns is
+    // mandatory — order.schema-reconciliation.spec.ts enforces the contract.
     await dataSource.query(`CREATE TABLE trading.orders (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id UUID NOT NULL,
@@ -324,6 +328,8 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       signal_id UUID NULL,
       client_order_id VARCHAR(100) NOT NULL,
       provider_order_id VARCHAR(255) NULL,
+      provider_position_id VARCHAR(255) NULL,
+      provider_deal_id VARCHAR(255) NULL,
       idempotency_key VARCHAR(255) NOT NULL,
       order_kind VARCHAR(20) NOT NULL,
       time_in_force VARCHAR(10) NOT NULL,
@@ -361,6 +367,16 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     await dataSource.query(
       `CREATE UNIQUE INDEX uq_orders_idempotency_key ON trading.orders (idempotency_key)`,
     );
+    await dataSource.query(`
+      ALTER TABLE trading.orders
+        ADD CONSTRAINT ck_orders_native_identifier_shape CHECK (
+          (provider_position_id IS NULL OR provider_position_id <> '')
+          AND (provider_deal_id IS NULL OR provider_deal_id <> '')
+        )`);
+    await dataSource.query(`
+      CREATE UNIQUE INDEX uq_orders_provider_deal_id
+        ON trading.orders (broker_connection_id, provider_deal_id)
+        WHERE provider_deal_id IS NOT NULL AND provider_deal_id <> ''`);
   });
 
   afterAll(async () => {
