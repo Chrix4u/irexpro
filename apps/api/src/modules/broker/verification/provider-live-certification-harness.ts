@@ -981,6 +981,35 @@ export async function runLiveCertificationChecklist(
             '— LIVE certification requires a LIVE-classified account (immediate FAIL)',
         };
       }
+      if (classification.accountId !== options.target.accountId) {
+        return {
+          status: 'FAIL',
+          detail: 'independent credential test did not confirm the exact LIVE account (no order)',
+        };
+      }
+
+      // cTrader's testConnection() deliberately tears down its *own* leased
+      // session (even when called on a connected adapter). The certification
+      // checklist must not treat an independent credential test as proof that
+      // its operational adapter is still connected. Restore that session
+      // before the instrument, quote, margin or baseline-exposure stages.
+      // Never submit a canary after an unverified reconnect.
+      if (!adapter.isConnected()) {
+        const restored = await adapter.connect(options.credentials);
+        if (
+          !restored.success ||
+          restored.accountType !== BrokerMode.LIVE ||
+          restored.accountId !== options.target.accountId ||
+          !adapter.isConnected()
+        ) {
+          return {
+            status: 'FAIL',
+            detail:
+              'operational adapter session was not restored to the exact LIVE account ' +
+              'after credential verification (no broker order)',
+          };
+        }
+      }
       ctx.accountCurrency = info.currency;
       ctx.freeMargin = info.freeMargin;
       ctx.equity = info.equity;
@@ -1190,15 +1219,24 @@ export async function runLiveCertificationChecklist(
       if (options.target.brokerId === 'pepperstone-ctrader') {
         const points = options.protectedCanaryRelativeStopLoss;
         const explicitRiskCap = options.maxCanaryRiskUsd;
-        if (!points || !/^[1-9]\d*$/.test(points) ||
-            !Number.isSafeInteger(Number(points)) ||
-            !explicitRiskCap || ctx.accountCurrency !== 'USD' ||
-            !ctx.instrument!.symbol.endsWith('USD') ||
-            !ctx.equity || !ctx.canary ||
-            !passed('baseline-exposure-snapshot') ||
-            ctx.baselinePositionIds.size !== 0 ||
-            ctx.baselineOrderIds.size !== 0) {
-          return { status:'FAIL', detail:'Pepperstone LIVE atomic stop, USD pair, flat exposure or risk cap unverified — no canary order' };
+        if (
+          !points ||
+          !/^[1-9]\d*$/.test(points) ||
+          !Number.isSafeInteger(Number(points)) ||
+          !explicitRiskCap ||
+          ctx.accountCurrency !== 'USD' ||
+          !ctx.instrument!.symbol.endsWith('USD') ||
+          !ctx.equity ||
+          !ctx.canary ||
+          !passed('baseline-exposure-snapshot') ||
+          ctx.baselinePositionIds.size !== 0 ||
+          ctx.baselineOrderIds.size !== 0
+        ) {
+          return {
+            status: 'FAIL',
+            detail:
+              'Pepperstone LIVE atomic stop, USD pair, flat exposure or risk cap unverified — no canary order',
+          };
         }
         try {
           const stopDistance = ExactDecimal.parse(points).divByPowerOfTen(5);
@@ -1214,15 +1252,23 @@ export async function runLiveCertificationChecklist(
           const freshAsk = ExactDecimal.tryParse(freshPrice.ask);
           const freshSpread = ExactDecimal.tryParse(freshPrice.spread);
           const quoteAgeMs = Date.now() - new Date(freshPrice.timestamp).getTime();
-          if (!freshBid?.isPositive() || !freshAsk?.isPositive() ||
-              !freshSpread || freshSpread.lt(ExactDecimal.ZERO) ||
-              freshAsk.lt(freshBid) ||
-              !freshAsk.sub(freshBid).eq(freshSpread) ||
-              !Number.isFinite(quoteAgeMs) || quoteAgeMs < -5_000 ||
-              quoteAgeMs > 15_000 ||
-              freshSpread.mul(ExactDecimal.parse('4')).gt(stopDistance)) {
-            return { status:'FAIL', detail:
-              'Pepperstone LIVE spread or quote freshness exceeds protected-canary threshold (maximum 25% of stop) — zero broker orders' };
+          if (
+            !freshBid?.isPositive() ||
+            !freshAsk?.isPositive() ||
+            !freshSpread ||
+            freshSpread.lt(ExactDecimal.ZERO) ||
+            freshAsk.lt(freshBid) ||
+            !freshAsk.sub(freshBid).eq(freshSpread) ||
+            !Number.isFinite(quoteAgeMs) ||
+            quoteAgeMs < -5_000 ||
+            quoteAgeMs > 15_000 ||
+            freshSpread.mul(ExactDecimal.parse('4')).gt(stopDistance)
+          ) {
+            return {
+              status: 'FAIL',
+              detail:
+                'Pepperstone LIVE spread or quote freshness exceeds protected-canary threshold (maximum 25% of stop) — zero broker orders',
+            };
           }
           const grossRisk = stopDistance
             .mul(ExactDecimal.parse(ctx.instrument!.contractSize))
@@ -1233,15 +1279,25 @@ export async function runLiveCertificationChecklist(
             brokerMinimumLots: ctx.instrument!.minLot,
             grossRiskAtStopUsd: grossRisk.toString(),
           });
-          if (!risk.allowed ||
-              ExactDecimal.parse(risk.projectedCostInclusiveRiskUsd)
-                .gt(ExactDecimal.parse(explicitRiskCap)) ||
-              ExactDecimal.parse(explicitRiskCap)
-                .gt(ExactDecimal.parse(ctx.equity).mul(ExactDecimal.parse('0.02')))) {
-            return { status:'FAIL', detail:`Pepperstone cost-inclusive protected canary exceeds micro risk envelope (${risk.code || 'operator cap'}) — zero orders` };
+          if (
+            !risk.allowed ||
+            ExactDecimal.parse(risk.projectedCostInclusiveRiskUsd).gt(
+              ExactDecimal.parse(explicitRiskCap),
+            ) ||
+            ExactDecimal.parse(explicitRiskCap).gt(
+              ExactDecimal.parse(ctx.equity).mul(ExactDecimal.parse('0.02')),
+            )
+          ) {
+            return {
+              status: 'FAIL',
+              detail: `Pepperstone cost-inclusive protected canary exceeds micro risk envelope (${risk.code || 'operator cap'}) — zero orders`,
+            };
           }
         } catch {
-          return { status:'FAIL', detail:'Pepperstone LIVE protected canary numeric or risk proof failed — zero orders' };
+          return {
+            status: 'FAIL',
+            detail: 'Pepperstone LIVE protected canary numeric or risk proof failed — zero orders',
+          };
         }
       }
       const request: BrokerOrderRequest = {
@@ -1288,9 +1344,15 @@ export async function runLiveCertificationChecklist(
           detail: 'place-minimum-safe-order did not pass — no provider ack to verify',
         };
       }
-      const orderRef = options.target.brokerId === 'pepperstone-ctrader'
-        ? ctx.canaryBrokerOrderId : ctx.canaryOrderId;
-      if (!orderRef) return {status:'FAIL',detail:'Provider native market ORDER ID is absent (position ID cannot substitute)'};
+      const orderRef =
+        options.target.brokerId === 'pepperstone-ctrader'
+          ? ctx.canaryBrokerOrderId
+          : ctx.canaryOrderId;
+      if (!orderRef)
+        return {
+          status: 'FAIL',
+          detail: 'Provider native market ORDER ID is absent (position ID cannot substitute)',
+        };
       const result = await adapter.getOrderById(orderRef);
       if (!result) {
         return {
@@ -1329,9 +1391,15 @@ export async function runLiveCertificationChecklist(
           detail: 'no canary order to query (place-minimum-safe-order did not pass)',
         };
       }
-      const orderRef = options.target.brokerId === 'pepperstone-ctrader'
-        ? ctx.canaryBrokerOrderId : ctx.canaryOrderId;
-      if (!orderRef) return {status:'FAIL',detail:'Provider native ORDER ID unavailable, refusing certification order lookup'};
+      const orderRef =
+        options.target.brokerId === 'pepperstone-ctrader'
+          ? ctx.canaryBrokerOrderId
+          : ctx.canaryOrderId;
+      if (!orderRef)
+        return {
+          status: 'FAIL',
+          detail: 'Provider native ORDER ID unavailable, refusing certification order lookup',
+        };
       const state = await adapter.getOrderById(orderRef);
       if (!state) {
         return {
@@ -1396,17 +1464,25 @@ export async function runLiveCertificationChecklist(
       // claiming the minimum-size real-money canary was protected at entry.
       // The subsequent close step still runs even if this check fails.
       if (options.target.brokerId === 'pepperstone-ctrader') {
-        const actual=parseUnsignedDecimalString(position.stopLoss);
-        const entry=parseUnsignedDecimalString(position.openPrice);
-        const distance=options.protectedCanaryRelativeStopLoss
+        const actual = parseUnsignedDecimalString(position.stopLoss);
+        const entry = parseUnsignedDecimalString(position.openPrice);
+        const distance = options.protectedCanaryRelativeStopLoss
           ? ExactDecimal.parse(options.protectedCanaryRelativeStopLoss).divByPowerOfTen(5)
           : null;
-        if(!actual||!entry||actual.digits<=0n||
-           compareDecimals(actual,entry)>=0||!distance||
-           ExactDecimal.parse(position.openPrice)
-             .sub(ExactDecimal.parse(position.stopLoss))
-             .gt(distance.add(ExactDecimal.parse('0.00001')))) {
-          return {status:'FAIL',detail:'Pepperstone LIVE opened canary does not have verified atomic protective stop'};
+        if (
+          !actual ||
+          !entry ||
+          actual.digits <= 0n ||
+          compareDecimals(actual, entry) >= 0 ||
+          !distance ||
+          ExactDecimal.parse(position.openPrice)
+            .sub(ExactDecimal.parse(position.stopLoss))
+            .gt(distance.add(ExactDecimal.parse('0.00001')))
+        ) {
+          return {
+            status: 'FAIL',
+            detail: 'Pepperstone LIVE opened canary does not have verified atomic protective stop',
+          };
         }
       }
       return {
@@ -1470,13 +1546,19 @@ export async function runLiveCertificationChecklist(
       // that, even when the quote moved adversely after the fill.
       const currentPosition = await adapter.getPositionById(ctx.canaryOrderId);
       const currentProtectedStop = currentPosition?.stopLoss
-        ? parseUnsignedDecimalString(currentPosition.stopLoss) : null;
+        ? parseUnsignedDecimalString(currentPosition.stopLoss)
+        : null;
       const proposedProtectedStop = parseUnsignedDecimalString(protectiveStop);
-      if (!currentPosition || !currentProtectedStop || !proposedProtectedStop ||
-          compareDecimals(proposedProtectedStop, currentProtectedStop) <= 0) {
+      if (
+        !currentPosition ||
+        !currentProtectedStop ||
+        !proposedProtectedStop ||
+        compareDecimals(proposedProtectedStop, currentProtectedStop) <= 0
+      ) {
         return {
           status: 'FAIL',
-          detail: 'Existing LIVE canary stop is missing or a candidate amendment would widen protection — no amendment sent',
+          detail:
+            'Existing LIVE canary stop is missing or a candidate amendment would widen protection — no amendment sent',
         };
       }
       let result: BrokerOrderResult;
@@ -1764,11 +1846,14 @@ export function verifyLiveCertificationArtifact(
     // Durability state is excluded from the canonical content hash, so
     // compare it explicitly. Otherwise a file incorrectly persisted as
     // EVIDENCE_PERSISTENCE_FAILED can masquerade as an in-memory PASS.
-    if (parsed.evidenceSha256 !== evidence.evidenceSha256 ||
-        parsed.evidenceState !== evidence.evidenceState ||
-        parsed.certificationResult !== evidence.certificationResult ||
-        parsed.artifactPath !== evidence.artifactPath ||
-        parsed.artifactPath !== path) return false;
+    if (
+      parsed.evidenceSha256 !== evidence.evidenceSha256 ||
+      parsed.evidenceState !== evidence.evidenceState ||
+      parsed.certificationResult !== evidence.certificationResult ||
+      parsed.artifactPath !== evidence.artifactPath ||
+      parsed.artifactPath !== path
+    )
+      return false;
     return computeLiveCertificationEvidenceSha256(parsed) === evidence.evidenceSha256;
   } catch {
     return false;
