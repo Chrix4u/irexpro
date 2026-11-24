@@ -44,8 +44,21 @@ The temporary November 22 Pepperstone DEMO release hold remains in effect
 for 249 historical RECONCILIATION_PENDING close-order records linked to 249
 closed trades. Read-only audit on 2026-11-24 found no active AI sessions,
 no open positions, and no working orders; the old records are beyond the
-six-hour guarded auto-recovery window. One record has close-before-submission
-timestamp ordering, so bulk status rewriting is particularly unsafe. Do
+six-hour guarded auto-recovery window. A DEMO-only authenticated read-only follow-up then retrieved complete
+broker DealList pages for 2026-11-10 through 2026-11-20 with bounded
+half-day splits where the provider's 200-row limit was reached. It proved
+unique position/close-time matches for **249 of 249** pending records.
+Independent normalized broker close economics also matched **249 of 249**
+on direction, size, close price and realized P&L, with zero mismatches
+or ambiguous broker deals. Weekend responses were explicitly empty.
+
+One USDJPY record has close-before-submission timestamp ordering by
+**5.209 seconds** despite matching the broker's close economics.
+The one-off audit made **zero broker orders and zero DB writes**.
+This remains a read-only proof; a separate guarded, account-scoped
+OrderService.applyFill / domain-CAS procedure and human maintenance
+sign-off are still needed to change pending order statuses. Do not infer
+that historical order reconciliation is complete from this evidence alone. Do
 not dismiss the hold, delete those records, or restart the trading service
 under that hold. Approve a controlled maintenance release only after
 independent authenticated close-deal reconciliation, resolving the
