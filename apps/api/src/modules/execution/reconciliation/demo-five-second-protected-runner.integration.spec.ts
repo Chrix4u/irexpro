@@ -144,23 +144,21 @@ function harness(
     sameSideContinuationAt: new Date(at.getTime() - 20000),
     oppositeExecutableReversal: false,
   });
-  target.loadLatestAiThesis = jest
-    .fn()
-    .mockResolvedValue({
+  target.loadLatestAiThesis = jest.fn().mockResolvedValue({
+    direction: 'SELL',
+    evaluatedAt: new Date(at.getTime() - 20000),
+    executionAuthority: 'BROKER_NATIVE',
+    authorityExecutable: true,
+    blockers: [],
+    trainedExpert: {
+      allBrokerNative: true,
       direction: 'SELL',
-      evaluatedAt: new Date(at.getTime() - 20000),
-      executionAuthority: 'BROKER_NATIVE',
-      authorityExecutable: true,
-      blockers: [],
-      trainedExpert: {
-        allBrokerNative: true,
-        direction: 'SELL',
-        longVotes: 0,
-        shortVotes: 3,
-        ensembleConfidence: 0.82,
-        freshnessSeconds: 20,
-      },
-    });
+      longVotes: 0,
+      shortVotes: 3,
+      ensembleConfidence: 0.82,
+      freshnessSeconds: 20,
+    },
+  });
   target.loadCausalM1Evidence = jest.fn().mockResolvedValue({
     completedBars: 2,
     liveQuoteBars: 2,

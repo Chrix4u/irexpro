@@ -718,14 +718,12 @@ describe('2026-11-12 Pepperstone DEMO cost-aware sizing pilot', () => {
     const db = { query: jest.fn().mockResolvedValue(fees) };
     const module = { get: jest.fn((key: unknown) => (key === DataSource ? db : null)) };
     const broker = {
-      getBrokerAccountState: jest
-        .fn()
-        .mockResolvedValue({
-          equity: '40000',
-          freeMargin: '38000',
-          balance: '40000',
-          currency: 'USD',
-        }),
+      getBrokerAccountState: jest.fn().mockResolvedValue({
+        equity: '40000',
+        freeMargin: '38000',
+        balance: '40000',
+        currency: 'USD',
+      }),
       findConnectionById: jest.fn().mockResolvedValue({ brokerId, accountType: 'DEMO' }),
       getRequiredMargin: jest.fn().mockResolvedValue('2000'),
       getCurrentPriceForConnection: jest.fn().mockResolvedValue(null),

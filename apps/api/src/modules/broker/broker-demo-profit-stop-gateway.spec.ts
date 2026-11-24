@@ -99,31 +99,27 @@ function fixture(
     setMode: jest.fn(),
     connect: jest.fn().mockResolvedValue({ success: true }),
     getOpenPositions,
-    getInstrumentList: jest
-      .fn()
-      .mockResolvedValue([
-        {
-          symbol: 'USDJPY',
-          digits: 3,
-          minLot: '0.01',
-          maxLot: '100',
-          lotStep: '0.01',
-          contractSize: '100000',
-          minStopLossDistance: '0',
-          minStopLossDistanceUnit: 'POINTS',
-          ...overrides.spec,
-        },
-      ]),
-    getCurrentPrice: jest
-      .fn()
-      .mockResolvedValue({
-        instrument: 'USDJPY',
-        bid: '159.041',
-        ask: '159.043',
-        spread: '0.002',
-        timestamp: new Date(),
-        ...overrides.quote,
-      }),
+    getInstrumentList: jest.fn().mockResolvedValue([
+      {
+        symbol: 'USDJPY',
+        digits: 3,
+        minLot: '0.01',
+        maxLot: '100',
+        lotStep: '0.01',
+        contractSize: '100000',
+        minStopLossDistance: '0',
+        minStopLossDistanceUnit: 'POINTS',
+        ...overrides.spec,
+      },
+    ]),
+    getCurrentPrice: jest.fn().mockResolvedValue({
+      instrument: 'USDJPY',
+      bid: '159.041',
+      ask: '159.043',
+      spread: '0.002',
+      timestamp: new Date(),
+      ...overrides.quote,
+    }),
     modifyOrder,
   };
   const decrypt = jest.fn().mockReturnValue({ apiKey: 'secret-only-in-memory', accountId: '123' });

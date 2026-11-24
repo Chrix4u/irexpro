@@ -94,13 +94,11 @@ const mk = ({
       ? jest.fn(async () => {
           throw new Error('provider unknown');
         })
-      : jest
-          .fn()
-          .mockResolvedValue({
-            brokerReadbackStop: '159.060',
-            brokerReadbackTakeProfit: '158.989',
-            executionAuthorityGranted: false,
-          }),
+      : jest.fn().mockResolvedValue({
+          brokerReadbackStop: '159.060',
+          brokerReadbackTakeProfit: '158.989',
+          executionAuthorityGranted: false,
+        }),
   };
   const authoritySync = {
     commitVerifiedStop: jest.fn().mockResolvedValue({
