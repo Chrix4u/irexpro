@@ -1038,7 +1038,7 @@ describe('LiveDemoProfitProtectionService', () => {
     expect(h.executionService.closeTrade).not.toHaveBeenCalled();
   });
 
-  it('never observes or closes a Pepperstone LIVE position through the DEMO collector', async () => {
+  it('observes Pepperstone LIVE positions using shared telemetry without exit authority', async () => {
     const h = harness(
       [candidate()],
       '7.00',
@@ -1057,9 +1057,38 @@ describe('LiveDemoProfitProtectionService', () => {
       h.query.mock.calls.some((call: unknown[]) =>
         String(call[0]).includes('UPDATE trading.trades'),
       ),
-    ).toBe(false);
+    ).toBe(true);
+    expect(h.query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE trading.trades'),
+      expect.arrayContaining(['trade-1', '10.00000000', '-2.00000000', '3.00000000', 6]),
+    );
     expect(h.executionService.closeTrade).not.toHaveBeenCalled();
   });
+
+  it.each(['DEMO', 'LIVE'])('uses the same path arithmetic on %s', async (mode) => {
+    const h = harness([candidate()], '7.00', mode);
+    await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+    expect(h.query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE trading.trades'),
+      expect.arrayContaining(['trade-1', '10.00000000', '-2.00000000', '3.00000000', 6]),
+    );
+  });
+
+  it.each(['stale', 'wrong-side', 'wrong-symbol', 'wrong-account'])(
+    'ignores %s LIVE provider evidence',
+    async (caseName) => {
+      const h = harness([candidate()], '7.00', 'LIVE');
+      const snapshot = await h.brokerService.getOpenPositionsForConnection('conn-1', 'user-1');
+      if (caseName === 'stale') snapshot.positions[0].markIsStale = true;
+      if (caseName === 'wrong-side') snapshot.positions[0].direction = 'SELL';
+      if (caseName === 'wrong-symbol') snapshot.positions[0].instrument = 'GBPUSD';
+      if (caseName === 'wrong-account') snapshot.connection.id = 'other-connection';
+      h.brokerService.getOpenPositionsForConnection.mockResolvedValue(snapshot);
+      await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
+      expect(h.query).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE trading.trades'), expect.anything());
+      expect(h.executionService.closeTrade).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not accept unrelated DEMO brokers into cTrader profit-path telemetry', async () => {
     const h = harness(
@@ -1816,7 +1845,7 @@ describe('LiveDemoProfitProtectionService', () => {
     await h.service.runOnce(new Date('2026-10-28T09:05:00.000Z'));
 
     expect(h.executionService.closeTrade).not.toHaveBeenCalled();
-    expect(h.query).not.toHaveBeenCalledWith(
+    expect(h.query).toHaveBeenCalledWith(
       expect.stringContaining('UPDATE trading.trades'),
       expect.anything(),
     );
