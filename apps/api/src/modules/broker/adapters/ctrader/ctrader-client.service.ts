@@ -119,6 +119,7 @@ interface PendingRequest {
   reject: (error: BrokerAdapterError) => void;
   timer: NodeJS.Timeout;
   requestPayloadType: number;
+  accountId?: number;
 }
 
 interface EventWaiter {
@@ -803,7 +804,12 @@ export class CTraderClientService implements OnModuleDestroy {
           ),
         );
       }, REQUEST_TIMEOUT_MS);
-      conn.pending.set(clientMsgId, { resolve, reject, timer, requestPayloadType: payloadType });
+      const accountId = payload.ctidTraderAccountId;
+      conn.pending.set(clientMsgId, {
+        resolve, reject, timer, requestPayloadType: payloadType,
+        accountId: typeof accountId === 'number' && Number.isSafeInteger(accountId) && accountId > 0
+          ? accountId : undefined,
+      });
       try {
         conn.transport.send({ clientMsgId, payloadType, payload });
       } catch (error) {
@@ -868,6 +874,14 @@ export class CTraderClientService implements OnModuleDestroy {
         ) {
           pending.resolve(envelope);
           return;
+        }
+        // Provider authorization can expire without a transport disconnect.
+        // Invalidate only the account actually named by this request, not an
+        // unrelated DEMO/LIVE connection. Never retry the rejected operation.
+        if (pending.accountId !== undefined &&
+            (name === 'ACCOUNT_NOT_AUTHORIZED' || name === 'OA_AUTH_TOKEN_EXPIRED' ||
+             name === 'CH_ACCESS_TOKEN_INVALID')) {
+          conn.authorizedAccounts.delete(pending.accountId);
         }
         pending.reject(
           mapCtraderError(
