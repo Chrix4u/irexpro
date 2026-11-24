@@ -143,8 +143,14 @@ describe('BrokerProviderRegistryService', () => {
         expect(entry?.status).toBe(BrokerAvailabilityStatus.BETA);
         expect(entry?.adapterAvailable).toBe(true);
         expect(service.isConnectable(id)).toBe(true);
-        expect(entry?.productionLiveVerification.status).toBe('UNVERIFIED');
-        expect(service.isProductionLiveEligible(id)).toBe(false);
+        if (id === 'pepperstone-ctrader') {
+          expect(entry?.productionLiveVerification.status).toBe('VERIFIED');
+          expect(entry?.certificationState).toBe('CERTIFIED');
+          expect(service.isProductionLiveEligible(id)).toBe(true);
+        } else {
+          expect(entry?.productionLiveVerification.status).toBe('UNVERIFIED');
+          expect(service.isProductionLiveEligible(id)).toBe(false);
+        }
       }
     });
 
@@ -353,14 +359,14 @@ describe('BrokerProviderRegistryService', () => {
       }
     });
 
-    it('metatrader5 is the ONLY legacy VERIFIED entry — no test or catalog fixture fabricates OANDA LIVE evidence', async () => {
+    it('only legacy MetaTrader and operator-certified Pepperstone carry VERIFIED catalog evidence', async () => {
       const service = await buildService(['metatrader5', 'paper-broker', 'oanda']);
       const verified = service
         .getCatalog()
         .filter((e) => e.productionLiveVerification.status === 'VERIFIED')
         .map((e) => e.id);
 
-      expect(verified).toEqual(['metatrader5']);
+      expect(verified).toEqual(['metatrader5', 'pepperstone-ctrader']);
       expect(service.isProductionLiveEligible('metatrader5')).toBe(false);
       expect(service.isProductionLiveEligible('oanda')).toBe(false);
     });
@@ -378,13 +384,7 @@ describe('BrokerProviderRegistryService', () => {
 
       it('UNVERIFIED entries carry NOT_CERTIFIED with null provenance (never a guessed certification)', async () => {
         const service = await buildService(['metatrader5', 'paper-broker', 'oanda']);
-        for (const id of [
-          'oanda',
-          'paper-broker',
-          'ctrader',
-          'pepperstone-ctrader',
-          'icmarkets-ctrader',
-        ]) {
+        for (const id of ['oanda', 'paper-broker', 'ctrader', 'icmarkets-ctrader']) {
           const entry = service.getEntry(id)!;
           expect(entry.productionLiveVerification.status).toBe('UNVERIFIED');
           expect(entry.productionLiveVerification.certifiedVia).toBeNull();
@@ -392,6 +392,21 @@ describe('BrokerProviderRegistryService', () => {
           expect(entry.certificationState).toBe('NOT_CERTIFIED');
           expect(entry.productionLiveVerification.certificationState).toBe('NOT_CERTIFIED');
         }
+      });
+
+      it('Pepperstone attestation is current and never authorizes the generic cTrader or IC Markets aliases', async () => {
+        const service = await buildService(['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader']);
+        const pepperstone = service.getEntry('pepperstone-ctrader')!;
+        expect(pepperstone.certificationState).toBe('CERTIFIED');
+        expect(pepperstone.productionLiveVerification.certifiedVia).toBe('HARNESS_CERTIFIED');
+        expect(pepperstone.productionLiveVerification.certificationRunRef).toMatch(
+          /^4ec633e4-a443-47e3-8bca-1f8f214982f5@sha256:[0-9a-f]{64}$/,
+        );
+        expect(service.isProductionLiveEligible('pepperstone-ctrader')).toBe(true);
+        expect(service.isProductionLiveEligible('ctrader')).toBe(false);
+        expect(service.isProductionLiveEligible('icmarkets-ctrader')).toBe(false);
+        const unavailable = await buildService(['metatrader5']);
+        expect(unavailable.isProductionLiveEligible('pepperstone-ctrader')).toBe(false);
       });
 
       it('LEGACY_VERIFIED remains production-LIVE ineligible until current protocol certification evidence exists', async () => {

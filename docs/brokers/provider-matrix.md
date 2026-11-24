@@ -66,7 +66,7 @@ follows (nothing was lost, only re-expressed):
 | iRexPro Paper Broker | PAPER | `paper-broker.adapter.ts` | ✅ | ❌ (by design) | Session (internal) | **SUPPORTED** | Paper adapter + contract suite + always-on verification harness |
 | OANDA (v20 REST) | NATIVE_API | `oanda/oanda.adapter.ts` (Sprint 51 PR-7) | ✅ | ❌ fail-closed | Personal access token (encrypted at rest) | **BETA** — production-LIVE **UNVERIFIED** | Shared contract suite + 107 unit/contract tests; live verification pending (see `oanda-v20-adapter.md`) |
 | cTrader Open API (universal engine) | CTRADER | `adapters/ctrader/` (Sprint 56) | ✅ | ❌ fail-closed | OAuth 2.0 (operator app + user token) | **BETA** — production-LIVE **UNVERIFIED**, **partner-approval-blocked** for real accounts | cTrader suite: message-types, client protocol, adapter mapping, fake-transport + shared contract suite (150 tests at Sprint 56 implementation) |
-| Pepperstone (via cTrader) | CTRADER | shared cTrader engine (alias) | ✅ | ❌ fail-closed | OAuth 2.0 (broker-side approval) | **BETA** — UNVERIFIED, partner approval per broker | Inherits the cTrader engine suite |
+| Pepperstone (via cTrader) | CTRADER | shared cTrader engine (alias) | ✅ | ✅ pending reviewed release | OAuth 2.0 (broker-side approval) | **BETA** — genuine LIVE certification PASS 2026-11-24, single-alias catalog promotion proposed for review (not deployed) | 15 PASS / 0 FAIL / 1 skipped, independently verified broker order; see attestation review |
 | IC Markets (via cTrader) | CTRADER | shared cTrader engine (alias) | ✅ | ❌ fail-closed | OAuth 2.0 (broker-side approval) | **BETA** — UNVERIFIED, partner approval per broker | Inherits the cTrader engine suite |
 | IG | NATIVE_API | — | ⚠️ | ⚠️ | API key + session | RESEARCH_REQUIRED | None |
 | Saxo Bank | NATIVE_API (OpenAPI) | — | ⚠️ | ⚠️ | OAuth 2.0 | RESEARCH_REQUIRED | None |
@@ -148,6 +148,8 @@ when the entry is in the catalog, has a registered adapter, and carries
 `isConnectable` is unchanged (adapter presence): a BETA provider remains
 connectable for **DEMO** use — the two facts are rendered distinctly by UI
 consumers.
+
+**2026-11-24 release review:** Pepperstone alone has a persisted operator LIVE certification PASS (run 4ec633e4-a443-47e3-8bca-1f8f214982f5). Its single-alias catalog promotion is DRAFT and NOT deployed. Generic cTrader and IC Markets remain UNVERIFIED. The DEMO historical-order operational hold remains active. See [Pepperstone attestation review](./pepperstone-live-certification-attestation-review-20261124.md).
 
 ### Certification-state model (Round 7.1 — truthful provenance)
 
