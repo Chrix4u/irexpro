@@ -194,7 +194,7 @@ describe('CTraderQuoteCollectorService', () => {
     expect(sourceSql).toContain("b.provider_broker_identity = 'pepperstone'");
     expect(sourceSql).toContain("b.authorization_status = 'ACTIVE'");
     expect(sourceSql).toContain('b.live_trading_enabled = TRUE');
-    expect(sourceSql).toContain("s.status = 'ACTIVE'");
+    expect(sourceSql).toContain("s.status IN ('ACTIVE', 'ENDED')");
     expect(sourceSql).toContain("ORDER BY (s.status = 'ACTIVE') DESC");
     expect(h.findConnectionById).toHaveBeenCalledWith(
       'pepperstone-live-exact-connection',
@@ -211,6 +211,34 @@ describe('CTraderQuoteCollectorService', () => {
     for (const call of h.upsertHistoricalCandles.mock.calls) {
       expect(call[0]).toBe('pepperstone-live-exact-connection');
     }
+  });
+
+  it('retains owner-selected ENDED LIVE chart source after Stop without reactivating AI', async () => {
+    const h = harness({
+      recentDemoConnectionId: 'pepperstone-live-ended-connection',
+      liveAccount: true,
+    });
+    await h.service.collectOnce(OPEN_NOW);
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+
+    const sourceSql = h.query.mock.calls[0]?.[0] as string;
+    expect(sourceSql).toContain("s.status IN ('ACTIVE', 'ENDED')");
+    expect(sourceSql).toContain('b.live_trading_enabled = TRUE');
+    expect(sourceSql).toContain("s.execution_mode = 'FULL_AUTO'");
+    expect(h.findConnectionById).toHaveBeenCalledWith(
+      'pepperstone-live-ended-connection',
+      'user-1',
+    );
+    expect(h.upsertM1Sample).toHaveBeenCalledTimes(12);
+    for (const call of h.upsertM1Sample.mock.calls) {
+      expect(call[0]).toBe('pepperstone-live-ended-connection');
+    }
+    for (const call of h.upsertHistoricalCandles.mock.calls) {
+      expect(call[0]).toBe('pepperstone-live-ended-connection');
+    }
+    // The collector has no startTrading/enableLiveTrading/submitOrder method.
+    expect(Object.keys(h.service)).not.toContain('startTrading');
+    expect(Object.keys(h.service)).not.toContain('submitOrder');
   });
 
   it.each([

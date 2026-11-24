@@ -289,11 +289,14 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
   /**
    * Resolve the exact cTrader connection used by the owner-selected FULL_AUTO
    * session. An ACTIVE, authorized Pepperstone LIVE session takes precedence
-   * over recently ended DEMO sessions; otherwise preserve the established
-   * DEMO-history fallback. Never borrow DEMO candles/spreads for LIVE.
+   * over recently ended DEMO sessions; when its owner stops AI trading the
+   * recently ENDED LIVE session can still supply read-only chart data.
+   * Otherwise preserve the established DEMO-history fallback. Never borrow
+   * DEMO candles/spreads for LIVE.
    *
-   * LIVE is read-only in this collector: broker requests are quote/OHLCV only;
-   * no LIVE order permission is granted by market-data source selection.
+   * LIVE is read-only in this collector: broker requests are quote/OHLCV only.
+   * An ENDED session remains ENDED and cannot dispatch an order; no LIVE
+   * execution permission is granted by market-data source selection.
    */
   private async resolveCollectionConnectionId(userId: string): Promise<string> {
     const configuredSource = this.sourceConnectionId();
@@ -326,7 +329,7 @@ export class CTraderQuoteCollectorService implements OnModuleInit, OnModuleDestr
                AND b.provider_broker_identity = 'pepperstone'
                AND b.authorization_status = 'ACTIVE'
                AND b.live_trading_enabled = TRUE
-               AND s.status = 'ACTIVE'
+               AND s.status IN ('ACTIVE', 'ENDED')
              )
            )
          ORDER BY (s.status = 'ACTIVE') DESC, s.started_at DESC
