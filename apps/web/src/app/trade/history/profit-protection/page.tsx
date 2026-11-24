@@ -192,7 +192,7 @@ export default function ProfitProtectionExitQualityPage() {
             </p>
           </div>
           <div className="trade-history__hero-actions">
-            <Link className="button button--secondary" href="/trade/history">
+            <Link className="button button--secondary" href="/trade/history" prefetch={false}>
               Closed Trade History
             </Link>
             <Button type="button" onClick={() => void load()} disabled={loading}>

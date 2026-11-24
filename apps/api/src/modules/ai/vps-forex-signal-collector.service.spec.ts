@@ -5657,13 +5657,25 @@ describe('scheduled scan recovery', () => {
   });
 
   it('cancels the pending initial scan when the scanner is destroyed', async () => {
-    jest.spyOn(global, 'fetch').mockImplementation(async () => goodFeed());
+    // Keep the startup provider batch genuinely in flight across destroy by
+    // deferring the fetch response. An immediately-resolving fetch mock lets
+    // the startup prime finish inside the status snapshot's microtask window,
+    // so the snapshot races a prime that already completed before destroy and
+    // the assertion no longer observes a post-destroy cancellation at all.
+    let releaseFeed!: (response: Response) => void;
+    const gatedFeed = new Promise<Response>((resolve) => {
+      releaseFeed = resolve;
+    });
+    jest.spyOn(global, 'fetch').mockImplementation(async () => gatedFeed);
     const collector = scanner();
     await collector.onModuleInit();
     const primedAt = (await collector.getStatus('user-1')).lastEvaluatedAt;
+    const maybeCollectSpy = jest.spyOn(collector, 'maybeCollect');
     collector.onModuleDestroy();
+    releaseFeed(goodFeed());
     await jest.advanceTimersByTimeAsync(2_000);
     expect((await collector.getStatus('user-1')).lastEvaluatedAt).toBe(primedAt);
+    expect(maybeCollectSpy).not.toHaveBeenCalled();
   });
   it('keeps recovery paused during the weekend', async () => {
     jest.setSystemTime(new Date('2026-10-10T10:03:00.000Z'));

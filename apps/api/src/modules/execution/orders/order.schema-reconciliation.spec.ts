@@ -60,11 +60,24 @@ describe('Order domain schema reconciliation', () => {
     return columns;
   }
 
-  it('every Order entity column exists in the CREATE TABLE block', () => {
+  it('every Order entity column exists in the CREATE TABLE block or a later ADD COLUMN migration', () => {
     const entityColumns = extractOrderColumnNames();
     expect(entityColumns.length).toBeGreaterThanOrEqual(23);
 
     const migrationColumns = extractOrdersTableColumns(migrationSource);
+    // Columns introduced after the original CREATE TABLE arrive as ADD COLUMN
+    // statements in later migrations (e.g. native identifier separation
+    // 1795220000000: provider_position_id, provider_deal_id). The entity
+    // must never gain a column that NO migration provisions.
+    const migrationsDir = path.resolve(__dirname, '../../..', 'database/migrations');
+    for (const file of fs.readdirSync(migrationsDir).sort()) {
+      if (!file.endsWith('.ts')) continue;
+      const source = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
+      if (!source.includes('ALTER TABLE trading.orders')) continue;
+      for (const m of source.matchAll(/ADD COLUMN IF NOT EXISTS ([a-z_0-9]+)/g)) {
+        migrationColumns.add(m[1]);
+      }
+    }
 
     const missing = entityColumns.filter((c) => !migrationColumns.has(c));
     if (missing.length > 0) {

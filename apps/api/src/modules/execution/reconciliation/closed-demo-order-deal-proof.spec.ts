@@ -79,6 +79,30 @@ describe('Pepperstone DEMO CLOSED trade with unsettled closing order', () => {
       positionRef: '8422910',
     });
   });
+  it('surfaces the native closing ORDER id and DEAL id when the provider deal carries them', () => {
+    expect(
+      prove({
+        providerClosedDeals: [
+          { ...deal, providerDealId: '6860122', providerNativeOrderId: '7695022' },
+        ],
+      }),
+    ).toEqual({
+      matched: true,
+      quantity: '2.8000',
+      price: '1.43767',
+      positionRef: '8422910',
+      dealId: '6860122',
+      orderId: '7695022',
+    });
+    // Without native ids the proof stays honest — absent identifiers are
+    // never synthesized from the position or order id.
+    expect(prove()).toEqual({
+      matched: true,
+      quantity: '2.8000',
+      price: '1.43767',
+      positionRef: '8422910',
+    });
+  });
   it('never works for LIVE, other broker, another owner or account', () => {
     expect(prove({ accountType: 'LIVE' }).matched).toBe(false);
     expect(prove({ brokerId: 'ctrader' }).matched).toBe(false);

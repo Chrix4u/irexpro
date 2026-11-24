@@ -266,7 +266,7 @@ function OnboardingCard({ status }: { status: OnboardingStatus }) {
       </div>
 
       {status.canStartTrading && (
-        <Link href="/trade" className="btn btn--primary btn--lg btn--block readiness-card__cta">
+        <Link href="/trade" prefetch={false} className="btn btn--primary btn--lg btn--block readiness-card__cta">
           Open AI Trading
         </Link>
       )}

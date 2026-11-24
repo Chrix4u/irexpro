@@ -3525,7 +3525,7 @@ export default function AiTradingPage() {
                     <Badge variant={netPnlTone === "negative" ? "error" : netPnlTone === "positive" ? "success" : "info"}>
                       {realised24hClosedCount} closed · 24h
                     </Badge>
-                    <Link href={closedTradeHistoryHref} className="ai-performance-panel__header-link">
+                    <Link href={closedTradeHistoryHref} prefetch={false} className="ai-performance-panel__header-link">
                       View all
                     </Link>
                   </div>
@@ -6054,7 +6054,7 @@ export default function AiTradingPage() {
                     >
                       {recentClosedTrades.length} recent
                     </Badge>
-                    <Link href={closedTradeHistoryHref} className="ai-text-link">
+                    <Link href={closedTradeHistoryHref} prefetch={false} className="ai-text-link">
                       View all
                     </Link>
                   </div>

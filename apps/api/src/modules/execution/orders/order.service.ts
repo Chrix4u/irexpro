@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import * as crypto from 'crypto';
 import { Order } from './order.entity';
 import {
@@ -18,6 +18,16 @@ import {
 } from './order.enums';
 import { OrderStateMachine } from './order-state-machine';
 import { compareDecimal } from '../reconciliation/reconciliation-comparator';
+
+/** Non-terminal order statuses the reconciliation cycle may still converge. */
+const RECONCILABLE_ORDER_STATUSES: OrderStatus[] = [
+  OrderStatus.CREATED,
+  OrderStatus.SUBMITTED,
+  OrderStatus.DISPATCH_COMMITTED,
+  OrderStatus.ACKNOWLEDGED,
+  OrderStatus.PARTIALLY_FILLED,
+  OrderStatus.RECONCILIATION_PENDING,
+];
 
 /** Input contract for idempotent order submission. */
 export interface SubmitOrderInput {
@@ -49,6 +59,10 @@ export interface ApplyFillInput {
   /** Fill price (decimal string, > 0, scale ≤ 8). */
   price: string;
   providerOrderId?: string | null;
+  /** Native broker POSITION id for MARKET fills (cTrader positionId). */
+  providerPositionId?: string | null;
+  /** Native broker DEAL id that proved this fill (cTrader dealId) — provider evidence only. */
+  providerDealId?: string | null;
 }
 
 const QUANTITY_PATTERN = /^\d+(\.\d{1,4})?$/;
@@ -184,11 +198,21 @@ export class OrderService {
   }
 
   /** SUBMITTED → ACKNOWLEDGED. Records the broker-side order identifier. */
-  async markAcknowledged(orderId: string, providerOrderId: string): Promise<Order> {
+  async markAcknowledged(
+    orderId: string,
+    providerOrderId: string,
+    extras: { providerPositionId?: string | null } = {},
+  ): Promise<Order> {
     if (!providerOrderId || providerOrderId.trim().length === 0) {
       throw new BadRequestException('providerOrderId is required to acknowledge an order');
     }
-    return this.applyTransition(orderId, OrderStatus.ACKNOWLEDGED, { providerOrderId });
+    const order = await this.applyTransition(orderId, OrderStatus.ACKNOWLEDGED, {
+      providerOrderId,
+      ...(extras.providerPositionId != null
+        ? { providerPositionId: extras.providerPositionId }
+        : {}),
+    });
+    return order;
   }
 
   /** Any non-terminal state → REJECTED (terminal). Reason is required. */
@@ -320,31 +344,81 @@ export class OrderService {
       throw new ConflictException(`Order ${orderId} is not fillable (status: ${current.status})`);
     }
 
-    const result = await this.dataSource.query(
-      `UPDATE trading.orders
-       SET
-         filled_quantity = filled_quantity + $2::numeric,
-         avg_fill_price = CASE
-           WHEN filled_quantity = 0 THEN $3::numeric
-           ELSE (avg_fill_price * filled_quantity + $3::numeric * $2::numeric)
-                / (filled_quantity + $2::numeric)
-         END,
-         status = CASE
-           WHEN filled_quantity + $2::numeric = requested_quantity THEN 'FILLED'
-           ELSE 'PARTIALLY_FILLED'
-         END,
-         provider_order_id = COALESCE($4, provider_order_id),
-         finalized_at = CASE
-           WHEN filled_quantity + $2::numeric = requested_quantity THEN NOW()
-           ELSE finalized_at
-         END,
-         updated_at = NOW()
-       WHERE id = $1
-         AND status = $5
-         AND filled_quantity + $2::numeric <= requested_quantity
-       RETURNING *`,
-      [orderId, fill.quantity, fill.price, fill.providerOrderId ?? null, current.status],
-    );
+    // Native-deal idempotency: the same broker deal can be delivered more
+    // than once (duplicate provider events, repeated or concurrent
+    // reconciliation). A fill already booked from that exact deal id must
+    // never be booked a second time — return the persisted row unchanged.
+    if (fill.providerDealId != null && current.providerDealId === fill.providerDealId) {
+      this.logger.log(
+        `Fill for order ${orderId} already booked from provider deal ${fill.providerDealId} — duplicate deal fill ignored`,
+      );
+      return current;
+    }
+
+    // Deal ownership: one native broker deal may be credited to at most ONE
+    // internal order row. Refuse to book a fill whose deal id is already
+    // recorded on a different order of the same broker connection; the
+    // partial unique index (migration 1795220000000) backs this against
+    // concurrent writers at the database level.
+    if (fill.providerDealId != null && current.providerDealId !== fill.providerDealId) {
+      const owner = await this.findDealOwner(current.brokerConnectionId, fill.providerDealId);
+      if (owner && owner !== orderId) {
+        throw new ConflictException(
+          `Provider deal ${fill.providerDealId} is already attributed to order ${owner} — ` +
+            'a single broker deal cannot be credited to multiple internal orders',
+        );
+      }
+    }
+
+    let result: unknown;
+    try {
+      result = await this.dataSource.query(
+        `UPDATE trading.orders
+         SET
+           filled_quantity = filled_quantity + $2::numeric,
+           avg_fill_price = CASE
+             WHEN filled_quantity = 0 THEN $3::numeric
+             ELSE (avg_fill_price * filled_quantity + $3::numeric * $2::numeric)
+                  / (filled_quantity + $2::numeric)
+           END,
+           status = CASE
+             WHEN filled_quantity + $2::numeric = requested_quantity THEN 'FILLED'
+             ELSE 'PARTIALLY_FILLED'
+           END,
+           provider_order_id = COALESCE($4, provider_order_id),
+           provider_position_id = COALESCE($6, provider_position_id),
+           provider_deal_id = COALESCE($7, provider_deal_id),
+           finalized_at = CASE
+             WHEN filled_quantity + $2::numeric = requested_quantity THEN NOW()
+             ELSE finalized_at
+           END,
+           updated_at = NOW()
+         WHERE id = $1
+           AND status = $5
+           AND filled_quantity + $2::numeric <= requested_quantity
+         RETURNING *`,
+        [
+          orderId,
+          fill.quantity,
+          fill.price,
+          fill.providerOrderId ?? null,
+          current.status,
+          fill.providerPositionId ?? null,
+          fill.providerDealId ?? null,
+        ],
+      );
+    } catch (err) {
+      // A concurrent writer booked the same native deal onto another order
+      // row between the ownership pre-check and this UPDATE — the partial
+      // unique index on (broker_connection_id, provider_deal_id) refuses it.
+      if (fill.providerDealId != null && this.isUniqueConstraintViolation(err)) {
+        throw new ConflictException(
+          `Provider deal ${fill.providerDealId} was concurrently attributed to another order — ` +
+            'a single broker deal cannot be credited to multiple internal orders',
+        );
+      }
+      throw err;
+    }
 
     // TypeORM's Postgres driver returns [rows, rowCount] for UPDATE queries
     // (even with RETURNING *) — unwrap the nested rows array before use.
@@ -392,6 +466,39 @@ export class OrderService {
     return this.orderRepo.findOne({ where: { tradeId } });
   }
 
+  /**
+   * ALL still-reconcilable orders linked to a trade. A trade can carry an
+   * ENTRY order and a CLOSE order simultaneously (both linked via trade_id);
+   * the singular findByTradeId is ambiguous between them. Callers that must
+   * act on a specific leg (entry vs close) classify by direction/kind and
+   * MUST use this plural read — never the ambiguous single row.
+   */
+  async findReconcilableByTradeId(tradeId: string): Promise<Order[]> {
+    return this.orderRepo.find({
+      where: {
+        tradeId,
+        status: In([...RECONCILABLE_ORDER_STATUSES] as OrderStatus[]),
+      },
+      order: { createdAt: 'ASC' },
+    });
+  }
+
+  /**
+   * The id of the order row that already recorded the given native provider
+   * deal for a broker connection, when any. One native deal belongs to at
+   * most one internal order — callers use this to refuse crediting the same
+   * deal to a second row (duplicate-deal attribution guard).
+   */
+  async findDealOwner(brokerConnectionId: string, providerDealId: string): Promise<string | null> {
+    const rows: Record<string, unknown>[] = await this.dataSource.query(
+      `SELECT id FROM trading.orders
+       WHERE broker_connection_id = $1 AND provider_deal_id = $2
+       LIMIT 1`,
+      [brokerConnectionId, providerDealId],
+    );
+    return rows.length > 0 ? (rows[0]!.id as string) : null;
+  }
+
   async listOrdersByUser(userId: string, limit = 50): Promise<Order[]> {
     return this.orderRepo.find({
       where: { userId },
@@ -411,6 +518,7 @@ export class OrderService {
     to: OrderStatus,
     extras: {
       providerOrderId?: string | null;
+      providerPositionId?: string | null;
       rejectReason?: string | null;
       setSubmittedAt?: boolean;
     },
@@ -422,6 +530,7 @@ export class OrderService {
 
     const patch: Partial<Order> = { status: to };
     if (extras.providerOrderId != null) patch.providerOrderId = extras.providerOrderId;
+    if (extras.providerPositionId != null) patch.providerPositionId = extras.providerPositionId;
     if (extras.rejectReason != null) patch.rejectReason = extras.rejectReason;
     if (extras.setSubmittedAt) patch.submittedAt = new Date();
     if (OrderStateMachine.isTerminal(to)) patch.finalizedAt = new Date();
@@ -555,6 +664,8 @@ export class OrderService {
       clientOrderId: row.client_order_id as string,
       idempotencyKey: row.idempotency_key as string,
       providerOrderId: (row.provider_order_id as string | null) ?? null,
+      providerPositionId: (row.provider_position_id as string | null) ?? null,
+      providerDealId: (row.provider_deal_id as string | null) ?? null,
       orderKind: row.order_kind as OrderKind,
       timeInForce: row.time_in_force as OrderTimeInForce,
       instrument: row.instrument as string,

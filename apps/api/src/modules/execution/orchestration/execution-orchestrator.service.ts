@@ -566,13 +566,23 @@ export class ExecutionOrchestrator {
       switch (action.action) {
         case 'ACKNOWLEDGE_AND_FILL': {
           if (action.providerOrderId) {
-            order = await this.orderService.markAcknowledged(order.id, action.providerOrderId);
+            // Keep the legacy two-argument contract when no native position id
+            // surfaced; extend it only when the identity separation applies.
+            order =
+              action.providerPositionId != null
+                ? await this.orderService.markAcknowledged(order.id, action.providerOrderId, {
+                    providerPositionId: action.providerPositionId,
+                  })
+                : await this.orderService.markAcknowledged(order.id, action.providerOrderId);
             await this.emitAcknowledged(intent, order, action.providerOrderId);
           }
           const filled = await this.orderService.applyFill(order.id, {
             quantity: action.fillQuantity ?? intent.requestedQuantity,
             price: action.fillPrice,
             providerOrderId: action.providerOrderId ?? null,
+            ...(action.providerPositionId != null
+              ? { providerPositionId: action.providerPositionId }
+              : {}),
           });
           await this.emitOrderEvent(DomainEventType.ORDER_FILLED, intent, filled, {
             status: filled.status,

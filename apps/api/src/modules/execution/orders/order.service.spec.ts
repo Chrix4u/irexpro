@@ -457,6 +457,46 @@ describe('OrderService', () => {
       );
     });
 
+    it('persists native position and deal identifiers alongside the fill (identity separation)', async () => {
+      orderRepo.findOne.mockResolvedValueOnce(entity({ status: OrderStatus.ACKNOWLEDGED }));
+      const query = jest.fn(async (_sql: string, _params?: unknown[]) => [
+        rawRow({
+          status: OrderStatus.FILLED,
+          filled_quantity: '0.5000',
+          avg_fill_price: '1.08500000',
+          provider_position_id: 'pos-77',
+          provider_deal_id: 'deal-951',
+        }),
+      ]);
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      const updated = await service.applyFill('order-1', {
+        quantity: '0.5000',
+        price: '1.08500000',
+        providerOrderId: 'order-951',
+        providerPositionId: 'pos-77',
+        providerDealId: 'deal-951',
+      });
+      // The deal-attribution pre-check (SELECT) runs first; the UPDATE is the
+      // second query call.
+      const [sql, params] = query.mock.calls[1];
+      expect(sql).toContain('provider_position_id = COALESCE($6, provider_position_id)');
+      expect(sql).toContain('provider_deal_id = COALESCE($7, provider_deal_id)');
+      expect(params).toEqual(
+        expect.arrayContaining([
+          'order-1',
+          '0.5000',
+          '1.08500000',
+          'order-951',
+          'ACKNOWLEDGED',
+          'pos-77',
+          'deal-951',
+        ]),
+      );
+      expect(updated.providerPositionId).toBe('pos-77');
+      expect(updated.providerDealId).toBe('deal-951');
+    });
+
     it("unwraps TypeORM's [rows, rowCount] UPDATE shape (real-PG driver contract)", async () => {
       // TypeORM's Postgres driver returns [rows, rowCount] for UPDATE queries
       // even with RETURNING * — the hydrated result must still be the row.
@@ -514,6 +554,99 @@ describe('OrderService', () => {
       await expect(service.applyFill('order-1', { quantity: '0.1', price: '1.1' })).rejects.toThrow(
         /state changed concurrently/,
       );
+    });
+  });
+
+  // ─── applyFill — native deal attribution guards (duplicate-deal prevention) ──
+
+  describe('applyFill — native deal attribution guards', () => {
+    it('ignores a duplicate fill for a provider deal already booked on THIS order (idempotent no-op)', async () => {
+      orderRepo.findOne.mockResolvedValueOnce(
+        entity({
+          status: OrderStatus.PARTIALLY_FILLED,
+          providerDealId: 'deal-951',
+          filledQuantity: '0.2500',
+          avgFillPrice: '1.10000000',
+        }),
+      );
+      const query = jest.fn(async () => [rawRow({})]);
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      // The SAME broker deal event delivered a second time (duplicate
+      // provider event / repeated reconciliation) must never book twice.
+      const unchanged = await service.applyFill('order-1', {
+        quantity: '0.2500',
+        price: '1.10000000',
+        providerDealId: 'deal-951',
+      });
+      expect(query).not.toHaveBeenCalled(); // no second UPDATE — no double fill
+      expect(unchanged.providerDealId).toBe('deal-951');
+      expect(unchanged.filledQuantity).toBe('0.2500');
+    });
+
+    it('refuses to book a provider deal already attributed to a DIFFERENT order row', async () => {
+      orderRepo.findOne.mockResolvedValueOnce(entity({ status: OrderStatus.ACKNOWLEDGED }));
+      const query = jest.fn();
+      query.mockResolvedValueOnce([{ id: 'order-other' }]); // findDealOwner hit
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      await expect(
+        service.applyFill('order-1', {
+          quantity: '0.5000',
+          price: '1.10000000',
+          providerDealId: 'deal-951',
+        }),
+      ).rejects.toThrow(/already attributed to order order-other/);
+      expect(query).toHaveBeenCalledTimes(1);
+      const [sql, params] = query.mock.calls[0] as unknown as [string, unknown[]];
+      expect(sql).toContain('SELECT id FROM trading.orders');
+      expect(sql).toContain('provider_deal_id = $2');
+      expect(params).toEqual(expect.arrayContaining([baseInput.brokerConnectionId, 'deal-951']));
+    });
+
+    it('translates a concurrent unique-index violation into a duplicate-attribution Conflict', async () => {
+      orderRepo.findOne.mockResolvedValueOnce(entity({ status: OrderStatus.ACKNOWLEDGED }));
+      const query = jest.fn();
+      query.mockResolvedValueOnce([]); // ownership pre-check: no current owner
+      query.mockRejectedValueOnce(
+        Object.assign(new Error('duplicate key value violates unique constraint'), {
+          code: '23505',
+        }),
+      );
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      // A concurrent worker booked the same deal onto another row between the
+      // pre-check and the UPDATE — the partial unique index refuses it and
+      // the failure surfaces as an explicit duplicate-attribution conflict.
+      const promise = service.applyFill('order-1', {
+        quantity: '0.5000',
+        price: '1.10000000',
+        providerDealId: 'deal-951',
+      });
+      await expect(promise).rejects.toThrow(ConflictException);
+      await expect(promise).rejects.toThrow(/concurrently attributed/);
+    });
+
+    it('findDealOwner resolves the owning order row for a native deal id', async () => {
+      const query = jest.fn().mockResolvedValue([{ id: 'order-owner' }]);
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      await expect(service.findDealOwner(baseInput.brokerConnectionId, 'deal-9')).resolves.toBe(
+        'order-owner',
+      );
+      expect(query).toHaveBeenCalledWith(expect.stringContaining('provider_deal_id = $2'), [
+        baseInput.brokerConnectionId,
+        'deal-9',
+      ]);
+    });
+
+    it('findDealOwner returns null when no row owns the deal', async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      await expect(
+        service.findDealOwner(baseInput.brokerConnectionId, 'deal-9'),
+      ).resolves.toBeNull();
     });
   });
 

@@ -4,9 +4,10 @@ import type { Trade } from '../entities/trade.entity';
 import { OrderStatus, OrderKind } from '../orders/order.enums';
 import { TradeStatus } from '../entities/trade.entity';
 import { compareDecimal } from './reconciliation-comparator';
+import { CTRADER_FAMILY_BROKER_IDS } from '../../broker/registry/broker-catalog';
 
 /**
- * Pepperstone DEMO: a closed POSITION in the broker's authenticated DealList
+ * Pepperstone USD DEMO: a closed POSITION in the broker's authenticated DealList
  * may prove the previously uncertain CLOSE ORDER economically filled, but
  * only after cross-checking the durable position, the unique closing deal,
  * and the exact same account/side/volume/exit/P&L/timestamp. A missing broker
@@ -16,10 +17,38 @@ import { compareDecimal } from './reconciliation-comparator';
  * close-order row. It cannot mutate the closed trade or send broker orders.
  */
 export type ClosedDemoOrderFillProof =
-  | { matched: true; quantity: string; price: string; positionRef: string }
+  | {
+      matched: true;
+      quantity: string;
+      price: string;
+      positionRef: string;
+      /** Native closing-DEAL id when the provider surfaced one. */
+      dealId?: string;
+      /**
+       * Native closing ORDER id (cTrader deal.orderId) when the provider
+       * surfaced one — the closing order's OWN id, never the position id and
+       * never the entry order's id. Absent when the broker does not expose
+       * it; callers must not synthesize a substitute.
+       */
+      orderId?: string;
+    }
   | { matched: false; reason: string };
 
-export function provePepperstoneDemoClosedOrderFill(input: {
+/** Scope + freshness policy for the shared DEMO closed-order proof core. */
+type ProofScope = {
+  /** Broker ids whose DEMO accounts this proof path may authorize. */
+  allowedBrokerIds: readonly string[];
+  /**
+   * Maximum age of the closing evidence (now − trade.closedAt) in ms, or
+   * null when aged historical evidence is admissible. The exact-decimal
+   * field matching itself does not degrade with age; the freshness cap is
+   * a live-recovery fence only, so aged sweeps pass null.
+   */
+  maxCloseAgeMs: number | null;
+};
+
+/** Shared proof input shape (order/trade/provider-deal evidence). */
+type ClosedDemoOrderFillProofInput = {
   brokerId: string;
   accountType: string;
   accountUserId: string;
@@ -58,7 +87,12 @@ export function provePepperstoneDemoClosedOrderFill(input: {
   >;
   providerClosedDeals: readonly BrokerClosedTrade[];
   observedAt: Date;
-}): ClosedDemoOrderFillProof {
+};
+
+function proveDemoClosedOrderFillCore(
+  input: ClosedDemoOrderFillProofInput,
+  scope: ProofScope,
+): ClosedDemoOrderFillProof {
   const no = (reason: string): ClosedDemoOrderFillProof => ({ matched: false, reason });
   const {
     brokerId,
@@ -71,7 +105,7 @@ export function provePepperstoneDemoClosedOrderFill(input: {
     observedAt,
   } = input;
   if (
-    brokerId !== 'pepperstone-ctrader' ||
+    !scope.allowedBrokerIds.includes(brokerId) ||
     accountType !== 'DEMO' ||
     !accountUserId ||
     !accountConnectionId ||
@@ -109,8 +143,8 @@ export function provePepperstoneDemoClosedOrderFill(input: {
     sent > closed ||
     closed > now ||
     closed - sent > 120_000 ||
-    now - closed > 6 * 3600_000 ||
-    sent - created > 120_000
+    sent - created > 120_000 ||
+    (scope.maxCloseAgeMs !== null && now - closed > scope.maxCloseAgeMs)
   )
     return no('CLOSE_DISPATCH_TIME_UNPROVEN');
   const ref = trade.externalPositionId || trade.externalOrderId;
@@ -158,7 +192,43 @@ export function provePepperstoneDemoClosedOrderFill(input: {
   ) {
     return no('EXACT_BROKER_CLOSE_DEAL_ECONOMICS_MISMATCH');
   }
-  return { matched: true, quantity: qty, price: deal.closePrice, positionRef: ref };
+  return {
+    matched: true,
+    quantity: qty,
+    price: deal.closePrice,
+    positionRef: ref,
+    ...(deal.providerDealId != null ? { dealId: deal.providerDealId } : {}),
+    ...(deal.providerNativeOrderId != null ? { orderId: deal.providerNativeOrderId } : {}),
+  };
+}
+
+/** Live-recovery scope: single Pepperstone DEMO account, six-hour freshness. */
+export function provePepperstoneDemoClosedOrderFill(
+  input: ClosedDemoOrderFillProofInput,
+): ClosedDemoOrderFillProof {
+  return proveDemoClosedOrderFillCore(input, {
+    allowedBrokerIds: ['pepperstone-ctrader'],
+    maxCloseAgeMs: 6 * 3600_000,
+  });
+}
+
+/**
+ * Aged historical scope: any cTrader-family DEMO account (pepperstone,
+ * generic, icmarkets) with NO freshness cap on the closing evidence.
+ *
+ * Rationale: the stranded population (375 records) is historical; the
+ * exact-decimal account/side/volume/exit/P&L/timestamp matching does not
+ * degrade with age, and the broker DealList remains the authoritative
+ * record. All other fail-closed guarantees are identical to the live path.
+ * LIVE accounts remain out of scope for automated order-row recovery.
+ */
+export function proveAgedCtraderDemoClosedOrderFill(
+  input: ClosedDemoOrderFillProofInput,
+): ClosedDemoOrderFillProof {
+  return proveDemoClosedOrderFillCore(input, {
+    allowedBrokerIds: CTRADER_FAMILY_BROKER_IDS,
+    maxCloseAgeMs: null,
+  });
 }
 
 /** Fair, bounded selection for the existing DEMO ledger recovery only.

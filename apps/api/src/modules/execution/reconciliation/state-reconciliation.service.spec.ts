@@ -455,6 +455,8 @@ describe('StateReconciliationService', () => {
         commission: '-8.40',
         swap: '0',
         closeReason: 'UNKNOWN',
+        providerDealId: '6860122',
+        providerNativeOrderId: '7695022',
       };
       orderRepo.find.mockResolvedValue([orphan]);
       tradeRepo.findOne.mockResolvedValue(terminal);
@@ -478,9 +480,162 @@ describe('StateReconciliationService', () => {
       expect(orderService.applyFill).toHaveBeenCalledWith('close-order-1', {
         quantity: '2.8000',
         price: '1.43767',
+        // Closing-order identity, three separate native ids from the proof:
+        // the native ORDER id (deal.orderId), the POSITION id and the DEAL id.
+        providerOrderId: '7695022',
+        providerPositionId: '8422910',
+        providerDealId: '6860122',
       });
       expect(adapter.modifyOrder).not.toHaveBeenCalled();
       expect(persistence.resolveDiscrepanciesByRef).toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID = previous;
+    }
+  });
+
+  it('aged cTrader DEMO close-order recovery converges a two-week-old stranded order', async () => {
+    const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
+    delete process.env.VPS_FOREX_SCANNER_USER_ID; // aged sweep must not need it
+    try {
+      const now = Date.now();
+      const opened = new Date(now - 14 * 86400_000 - 3600_000);
+      const sent = new Date(now - 14 * 86400_000);
+      const closed = new Date(now - 14 * 86400_000 + 1000);
+      const terminal = {
+        ...openTrade(),
+        id: 'aged-trade-1',
+        status: TradeStatus.CLOSED,
+        instrument: 'EURUSD',
+        direction: TradeDirection.SELL,
+        openedAt: opened,
+        closedAt: closed,
+        externalOrderId: '8422910',
+        lotSize: '2.8000',
+        exitPrice: '1.43767000',
+        realisedPnl: '60.38000000',
+      };
+      const orphan = {
+        ...pendingOrder(),
+        id: 'aged-close-order-1',
+        tradeId: 'aged-trade-1',
+        providerOrderId: null,
+        orderKind: 'MARKET',
+        instrument: 'EURUSD',
+        direction: TradeDirection.BUY,
+        requestedQuantity: '2.8000',
+        filledQuantity: '0.0000',
+        avgFillPrice: null,
+        createdAt: new Date(sent.getTime() - 75),
+        submittedAt: sent,
+      };
+      const deal = {
+        externalOrderId: '8422910',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '2.8',
+        openPrice: '1.43798',
+        closePrice: '1.43767',
+        stopLoss: '0',
+        takeProfit: '0',
+        realisedPnl: '60.38',
+        openedAt: closed,
+        closedAt: closed,
+        commission: '-8.40',
+        swap: '0',
+        closeReason: 'UNKNOWN',
+        providerDealId: '6860122',
+        providerNativeOrderId: '7695022',
+      };
+      orderRepo.find.mockResolvedValue([orphan]);
+      tradeRepo.find.mockResolvedValue([]);
+      tradeRepo.findOne.mockResolvedValue(terminal);
+      adapter.getClosedTrades.mockResolvedValue([deal]);
+      orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
+      await service.runForConnection({
+        ...connection(),
+        brokerId: 'ctrader',
+      } as BrokerConnection);
+      expect(adapter.getClosedTrades).toHaveBeenCalledWith(
+        new Date(opened.getTime() - 60_000),
+        expect.any(Date),
+      );
+      expect(orderService.applyFill).toHaveBeenCalledTimes(1);
+      expect(orderService.applyFill).toHaveBeenCalledWith('aged-close-order-1', {
+        quantity: '2.8000',
+        price: '1.43767',
+        // Closing-order identity, three separate native ids from the proof.
+        providerOrderId: '7695022',
+        providerPositionId: '8422910',
+        providerDealId: '6860122',
+      });
+      expect(adapter.modifyOrder).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID = previous;
+    }
+  });
+
+  it('aged cTrader DEMO recovery leaves the order pending when the deal evidence mismatches', async () => {
+    const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
+    delete process.env.VPS_FOREX_SCANNER_USER_ID;
+    try {
+      const now = Date.now();
+      const opened = new Date(now - 14 * 86400_000 - 3600_000);
+      const sent = new Date(now - 14 * 86400_000);
+      const closed = new Date(now - 14 * 86400_000 + 1000);
+      const terminal = {
+        ...openTrade(),
+        id: 'aged-trade-2',
+        status: TradeStatus.CLOSED,
+        instrument: 'EURUSD',
+        direction: TradeDirection.SELL,
+        openedAt: opened,
+        closedAt: closed,
+        externalOrderId: '8422911',
+        lotSize: '2.8000',
+        exitPrice: '1.43767000',
+        realisedPnl: '60.38000000',
+      };
+      const orphan = {
+        ...pendingOrder(),
+        id: 'aged-close-order-2',
+        tradeId: 'aged-trade-2',
+        providerOrderId: null,
+        orderKind: 'MARKET',
+        instrument: 'EURUSD',
+        direction: TradeDirection.BUY,
+        requestedQuantity: '2.8000',
+        filledQuantity: '0.0000',
+        avgFillPrice: null,
+        createdAt: new Date(sent.getTime() - 75),
+        submittedAt: sent,
+      };
+      const deal = {
+        externalOrderId: '8422911',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '2.8',
+        openPrice: '1.43798',
+        closePrice: '1.43768', // one pip off the trade's recorded exit
+        stopLoss: '0',
+        takeProfit: '0',
+        realisedPnl: '60.38',
+        openedAt: closed,
+        closedAt: closed,
+        commission: '-8.40',
+        swap: '0',
+        closeReason: 'UNKNOWN',
+      };
+      orderRepo.find.mockResolvedValue([orphan]);
+      tradeRepo.find.mockResolvedValue([]);
+      tradeRepo.findOne.mockResolvedValue(terminal);
+      adapter.getClosedTrades.mockResolvedValue([deal]);
+      await service.runForConnection({
+        ...connection(),
+        brokerId: 'ctrader',
+      } as BrokerConnection);
+      expect(orderService.applyFill).not.toHaveBeenCalled();
     } finally {
       if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
       else process.env.VPS_FOREX_SCANNER_USER_ID = previous;
