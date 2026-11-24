@@ -1,8 +1,8 @@
 # iRexPro — Three-strategy evidence scorecard
 
-**Research artifact:** `irexpro-owner-demo-strategy-comparison-v1`  
-**Scope:** only the configured owner's Pepperstone cTrader **USD DEMO** historical evidence.  
-**Created:** 17 November 2026.  
+**Research artifact:** `irexpro-owner-demo-strategy-comparison-v1`\
+**Scope:** only the configured owner's Pepperstone cTrader **USD DEMO** historical evidence.\
+**Created:** 17 November 2026.\
 **Execution status:** research-only. No changes to M1 entry permission, Early Transition, Confirmed Reversal, Trend Continuation, risk-at-stop, broker stops, lot sizes, profit protection, or LIVE.
 
 ## What has been implemented

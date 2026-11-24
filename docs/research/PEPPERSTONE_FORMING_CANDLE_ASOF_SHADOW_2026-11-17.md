@@ -1,8 +1,8 @@
 # iRexPro — Live Forming-Candle Expert / As-of Research Deployment
 
-**Date:** 17 November 2026 (UTC)  
-**Account:** owner-scoped Pepperstone cTrader USD **DEMO**  
-**Deployed component:** research-only candle formation archive; does **not** participate in execution, modify risk gates, or change LIVE  
+**Date:** 17 November 2026 (UTC)\
+**Account:** owner-scoped Pepperstone cTrader USD **DEMO**\
+**Deployed component:** research-only candle formation archive; does **not** participate in execution, modify risk gates, or change LIVE\
 **Source branch:** `fix/planb-clock-neutral-telemetry-20261111`
 
 ## What changed and why

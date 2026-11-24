@@ -1,7 +1,7 @@
 # iRexPro | Why the winning trades still lose money after costs
 
-**Audit:** 17 November 2026, 20:39:56 UTC  
-**Scope:** Active owner-owned Pepperstone cTrader **USD DEMO**, last seven days, closed broker trades with complete entry capital allocation and final fee/swap evidence.  
+**Audit:** 17 November 2026, 20:39:56 UTC\
+**Scope:** Active owner-owned Pepperstone cTrader **USD DEMO**, last seven days, closed broker trades with complete entry capital allocation and final fee/swap evidence.\
 **Mode:** **Research only. No change to DEMO/LIVE execution or risk gates.**
 
 ## Verified economics
