@@ -491,11 +491,11 @@ function money(value: number): string {
 }
 
 /**
- * Fast post-entry manager for promoted cTrader DEMO positions.
+ * Shared cTrader position observer for DEMO and LIVE accounts.
  *
- * It intentionally has NO authority over real-money LIVE accounts. Broker SL/TP
- * remain the hard backstop; this layer restores the already-validated PAPER
- * MFE/MAE/giveback profit-lock policy to the promoted DEMO execution path.
+ * Path telemetry uses the same broker-backed calculation in both modes.
+ * Existing experimental DEMO exit authority remains separately fenced;
+ * collecting LIVE observations never authorizes a close or amendment.
  */
 @Injectable()
 export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDestroy {
@@ -604,9 +604,11 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
             first.broker_connection_id,
             first.user_id,
           );
+          const accountMode = String(snapshot.connection.accountType).toUpperCase();
           if (
             !CTRADER_FAMILY_BROKER_IDS.includes(snapshot.connection.brokerId) ||
-            String(snapshot.connection.accountType).toUpperCase() !== 'DEMO'
+            snapshot.connection.id !== first.broker_connection_id ||
+            !['DEMO', 'LIVE'].includes(accountMode)
           ) {
             continue;
           }
@@ -619,6 +621,13 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
             if (!providerPositionId) continue;
             const position = positions.get(providerPositionId);
             if (!position) continue;
+            // LIVE observations require a fresh, matching provider position.
+            // This cannot confer exit authority or change provider orders.
+            if (accountMode === 'LIVE' && (
+              position.markIsStale === true ||
+              position.instrument.toUpperCase() !== trade.instrument.toUpperCase() ||
+              position.direction !== trade.direction
+            )) continue;
             const currentPnl = finite(position.unrealisedPnl);
             // Broker-native price-path evidence has value even if the capital
             // allocation's R-at-stop proof is absent. Risk-less observations
@@ -647,6 +656,9 @@ export class LiveDemoProfitProtectionService implements OnModuleInit, OnModuleDe
               peakObservedAt,
               observedAt,
             });
+
+            // Observation is shared; existing DEMO-only execution pilots stay fenced.
+            if (accountMode !== 'DEMO') continue;
 
             // Owner Pepperstone USD DEMO: analyze ongoing profitable positions
             // independently of whether a NEW order has broker authority.
