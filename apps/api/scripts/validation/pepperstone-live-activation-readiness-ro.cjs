@@ -7,6 +7,7 @@
  */
 const fs=require('node:fs');const path=require('node:path');
 const {Client}=require('pg');const dotenv=require('dotenv');
+const {evidenceReadOnlyStatus}=require('./pepperstone-live-certification-evidence-ro.cjs');
 const root=path.resolve(__dirname,'../..');
 const env=dotenv.parse(fs.readFileSync(process.env.IREXPRO_LIVE_READINESS_DOTENV_PATH||path.join(root,'.env')));
 const db=new Client({host:env.DB_HOST,port:Number(env.DB_PORT||5432),
@@ -27,6 +28,7 @@ const output={artifact:'pepperstone-live-account-readiness-diagnostic-v1',
   platformOAuthCredentialsConfigured:false,
   savedOAuthTradingScope:'NOT_INDEPENDENTLY_ATTESTED',
   canaryPlaceStopCloseReconcileEvidence:'NOT_FOUND',
+  certifiedProviderReleasePending:false,certificationEvidenceRunId:null,
   blockers:[],recommendation:'NO_LIVE_EXECUTION_UNTIL_CERTIFIED'};
 (async()=>{
   output.platformOAuthCredentialsConfigured=Boolean(env.CTRADER_CLIENT_ID&&env.CTRADER_CLIENT_SECRET);
@@ -83,10 +85,20 @@ const output={artifact:'pepperstone-live-account-readiness-diagnostic-v1',
     if(output.activeLiveSessions>0 && !output.automatedLiveEnabled)
       output.blockers.push('UNAUTHORIZED_ACTIVE_LIVE_SESSION_REQUIRES_RECONCILIATION');
   }finally{await db.query('ROLLBACK').catch(()=>{});await db.end();}
-  // This is not optional: OAuth linking and account readback never prove a
-  // real-money order can be stopped, closed and reconciled. Even a clean
-  // broker snapshot MUST still report this explicit certification blocker.
-  output.blockers.push('REAL_LIVE_CANARY_ORDER_STOP_EXIT_RECONCILIATION_NOT_CERTIFIED');
+  // Certification evidence and deployment eligibility are distinct.
+  // Independently verify the on-disk operator PASS plus broker readback,
+  // but NEVER turn the report into an activation grant. Registry promotion,
+  // review and a separate LIVE account authorization remain mandatory.
+  const proof=evidenceReadOnlyStatus();
+  output.canaryPlaceStopCloseReconcileEvidence=proof.status;
+  if(proof.status==='ATTESTED_PASS_PENDING_RELEASE'){
+    output.certifiedProviderReleasePending=true;
+    output.certificationEvidenceRunId=proof.runId;
+    output.blockers.push('CERTIFICATION_PASS_AWAITING_REVIEWED_PROVIDER_RELEASE');
+  }else{
+    if(proof.status==='INVALID')output.warnings.push('CERTIFICATION_EVIDENCE_INTEGRITY_REVIEW_REQUIRED');
+    output.blockers.push('REAL_LIVE_CANARY_ORDER_STOP_EXIT_RECONCILIATION_NOT_CERTIFIED');
+  }
   console.log(JSON.stringify(output,null,2));
 })().catch(err=>{
   output.blockers.push('READ_ONLY_DIAGNOSTIC_FAILED');
