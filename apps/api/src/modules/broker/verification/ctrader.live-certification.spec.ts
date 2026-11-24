@@ -5,6 +5,9 @@ import {
   runLiveProviderCertification,
 } from './provider-live-certification-harness';
 import { existsSync } from 'fs';
+import { config as loadEnvironmentFile } from 'dotenv';
+import { resolve } from 'path';
+import { loadStoredCTraderCertCredential } from './ctrader-stored-cert-credentials';
 
 /**
  * cTrader PRODUCTION-LIVE certification harness — OPERATOR-ONLY, ENV-GATED
@@ -29,6 +32,14 @@ import { existsSync } from 'fs';
  *   [IREXPRO_LIVE_CERT_EVIDENCE_DIR=<directory for the evidence artifact>] \
  *   pnpm --filter @irexpro/api exec jest \
  *     src/modules/broker/verification/ctrader.live-certification.spec.ts
+ *
+ * ALTERNATIVE (no token copied to SSH): operator explicitly sets
+ *   CTRADER_LIVE_CERT_CREDENTIAL_SOURCE=stored
+ *   CTRADER_LIVE_CERT_OWNER_USER_ID=<owner UUID>
+ *   CTRADER_LIVE_CERT_CONNECTION_ID=<exact broker connection UUID>
+ *   plus the ordinary operator, LIVE gate, account ID, risk and cap settings.
+ *   The API .env file is read only in this explicit, gate-open mode. The
+ *   stored credential is owner/connection/account scoped and never printed.
  *
  * CI NEVER sets these variables → this suite reports as SKIPPED on every CI
  * run (the describe.skip branch): CI is credential-free AND gate-closed, so a
@@ -58,9 +69,17 @@ import { existsSync } from 'fs';
  * flip it).
  */
 const gate = resolveLiveCertificationGateFromEnv();
+// Never load production env or stored credentials from a gate-closed test.
+// This opt-in is entirely operator-shell driven; it is not an HTTP route.
+const storedCredentialSource = process.env.CTRADER_LIVE_CERT_CREDENTIAL_SOURCE === 'stored';
+if (gate.allowLiveCertification && storedCredentialSource) {
+  loadEnvironmentFile({ path: resolve(process.cwd(), '.env'), override: false, quiet: true });
+}
 const operatorId = process.env.IREXPRO_LIVE_CERT_OPERATOR_ID;
 const accessToken = process.env.CTRADER_LIVE_CERT_ACCESS_TOKEN;
 const ctidAccountId = process.env.CTRADER_LIVE_CERT_CTRID_ACCOUNT_ID;
+const ownerUserId = process.env.CTRADER_LIVE_CERT_OWNER_USER_ID;
+const connectionId = process.env.CTRADER_LIVE_CERT_CONNECTION_ID;
 const maxCanaryExposure = process.env.CTRADER_LIVE_CERT_MAX_CANARY_EXPOSURE;
 const maxCanaryRiskUsd = process.env.CTRADER_LIVE_CERT_MAX_CANARY_RISK_USD;
 const protectedCanaryRelativeStopLoss = process.env.CTRADER_LIVE_CERT_RELATIVE_STOP_LOSS;
@@ -74,7 +93,7 @@ const configured =
   gate.allowLiveCertification &&
   Boolean(
     operatorId &&
-    accessToken &&
+    (storedCredentialSource ? ownerUserId && connectionId : accessToken) &&
     ctidAccountId &&
     maxCanaryExposure &&
     platformClientId &&
@@ -87,48 +106,64 @@ describeCtraderLiveCertification(
   'cTrader LIVE certification harness (operator-run, env-gated, REAL money)',
   () => {
     it('certifies the real live.ctraderapi.com account end-to-end and writes the evidence artifact', async () => {
-      const evidence = await runLiveProviderCertification({
-        gate,
-        target: {
-          brokerId: requestedBrokerId,
-          accountId: ctidAccountId!,
-          credentialSource:
-            'env:CTRADER_LIVE_CERT_ACCESS_TOKEN (operator-supplied cTrader OAuth access token)',
-        },
-        operator: { operatorId: operatorId!, evidenceDir },
-        maxCanaryExposure: maxCanaryExposure!,
-        ...(maxCanaryRiskUsd ? { maxCanaryRiskUsd } : {}),
-        ...(protectedCanaryRelativeStopLoss ? { protectedCanaryRelativeStopLoss } : {}),
-        credentials: { apiKey: accessToken!, accountId: ctidAccountId! },
-        ...(instrument ? { instrument } : {}),
-      });
+      // The stored mode is human-operator opt-in, fully gated and scoped to
+      // the exact user, connection and provider account. No token reaches
+      // process.env, stdout, evidence metadata, or a browser.
+      const stored = storedCredentialSource
+        ? await loadStoredCTraderCertCredential({
+            ownerUserId: ownerUserId!,
+            connectionId: connectionId!,
+            brokerId: requestedBrokerId,
+            ctidTraderAccountId: ctidAccountId!,
+          })
+        : null;
+      const certificationToken = stored?.apiKey ?? accessToken!;
+      try {
+        const evidence = await runLiveProviderCertification({
+          gate,
+          target: {
+            brokerId: requestedBrokerId,
+            accountId: ctidAccountId!,
+            credentialSource: storedCredentialSource
+              ? 'stored:exact-owner-cTrader-connection (server-side encrypted OAuth, operator-only)'
+              : 'env:CTRADER_LIVE_CERT_ACCESS_TOKEN (operator-supplied cTrader OAuth access token)',
+          },
+          operator: { operatorId: operatorId!, evidenceDir },
+          maxCanaryExposure: maxCanaryExposure!,
+          ...(maxCanaryRiskUsd ? { maxCanaryRiskUsd } : {}),
+          ...(protectedCanaryRelativeStopLoss ? { protectedCanaryRelativeStopLoss } : {}),
+          credentials: { apiKey: certificationToken, accountId: ctidAccountId! },
+          ...(instrument ? { instrument } : {}),
+        });
 
-      // Round 7.1 (CodeQL CWE-532 hygiene): the console is NOT an evidence
-      // surface — no env-derived values are printed. The durable, read-back
-      // verified artifact is the authority; the assertions below pin the
-      // certifiable contract (mode, broker, result, PERSISTED state, hash).
-      console.log(
-        'cTrader LIVE certification run captured — full sanitized evidence is in ' +
-          'the operator evidence artifact; the assertions below pin the durable contract.',
-      );
+        // Round 7.1 (CodeQL CWE-532 hygiene): the console is NOT an evidence
+        // surface — no env-derived values are printed. The durable, read-back
+        // verified artifact is the authority; the assertions below pin the
+        // certifiable contract (mode, broker, result, PERSISTED state, hash).
+        console.log(
+          'cTrader LIVE certification run captured — full sanitized evidence is in ' +
+            'the operator evidence artifact; the assertions below pin the durable contract.',
+        );
 
-      expect(evidence.mode).toBe('LIVE');
-      expect(evidence.brokerId).toBe(requestedBrokerId);
-      expect(evidence.overall).toBe('PASS');
-      // Round 7.1 (P0-2): a certification PASS requires DURABLE, read-back
-      // verified evidence — an ephemeral console PASS certifies nothing.
-      expect(evidence.certificationResult).toBe('PASS');
-      expect(evidence.evidenceState).toBe('PERSISTED');
-      expect(isCertifiablePass(evidence)).toBe(true);
-      expect(evidence.artifactPath).toBeDefined();
-      expect(existsSync(evidence.artifactPath!)).toBe(true);
-      expect(JSON.stringify(evidence)).not.toContain(accessToken!);
-      // A certification PASS means zero failures AND the complete canary
-      // lifecycle (place → close → verify-closed → zero unexpected exposure).
-      expect(evidence.summary.failed).toBe(0);
-      expect(evidence.summary.passed).toBeGreaterThan(0);
+        expect(evidence.mode).toBe('LIVE');
+        expect(evidence.brokerId).toBe(requestedBrokerId);
+        expect(evidence.overall).toBe('PASS');
+        // Round 7.1 (P0-2): a certification PASS requires DURABLE, read-back
+        // verified evidence — an ephemeral console PASS certifies nothing.
+        expect(evidence.certificationResult).toBe('PASS');
+        expect(evidence.evidenceState).toBe('PERSISTED');
+        expect(isCertifiablePass(evidence)).toBe(true);
+        expect(evidence.artifactPath).toBeDefined();
+        expect(existsSync(evidence.artifactPath!)).toBe(true);
+        expect(JSON.stringify(evidence)).not.toContain(certificationToken);
+        // A certification PASS means zero failures AND the complete canary
+        // lifecycle (place → close → verify-closed → zero unexpected exposure).
+        expect(evidence.summary.failed).toBe(0);
+        expect(evidence.summary.passed).toBeGreaterThan(0);
+      } finally {
+        stored?.clear();
+      }
     }, 300_000);
-
   },
 );
 
