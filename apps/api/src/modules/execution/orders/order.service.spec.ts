@@ -457,6 +457,44 @@ describe('OrderService', () => {
       );
     });
 
+    it('persists native position and deal identifiers alongside the fill (identity separation)', async () => {
+      orderRepo.findOne.mockResolvedValueOnce(entity({ status: OrderStatus.ACKNOWLEDGED }));
+      const query = jest.fn(async (_sql: string, _params?: unknown[]) => [
+        rawRow({
+          status: OrderStatus.FILLED,
+          filled_quantity: '0.5000',
+          avg_fill_price: '1.08500000',
+          provider_position_id: 'pos-77',
+          provider_deal_id: 'deal-951',
+        }),
+      ]);
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      const updated = await service.applyFill('order-1', {
+        quantity: '0.5000',
+        price: '1.08500000',
+        providerOrderId: 'order-951',
+        providerPositionId: 'pos-77',
+        providerDealId: 'deal-951',
+      });
+      const [sql, params] = query.mock.calls[0];
+      expect(sql).toContain('provider_position_id = COALESCE($6, provider_position_id)');
+      expect(sql).toContain('provider_deal_id = COALESCE($7, provider_deal_id)');
+      expect(params).toEqual(
+        expect.arrayContaining([
+          'order-1',
+          '0.5000',
+          '1.08500000',
+          'order-951',
+          'ACKNOWLEDGED',
+          'pos-77',
+          'deal-951',
+        ]),
+      );
+      expect(updated.providerPositionId).toBe('pos-77');
+      expect(updated.providerDealId).toBe('deal-951');
+    });
+
     it("unwraps TypeORM's [rows, rowCount] UPDATE shape (real-PG driver contract)", async () => {
       // TypeORM's Postgres driver returns [rows, rowCount] for UPDATE queries
       // even with RETURNING * — the hydrated result must still be the row.

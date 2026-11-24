@@ -589,6 +589,12 @@ export class ReconciliationResolutionService {
         const completed = await this.orderService.applyFill(order.id, {
           quantity: proof.quantity,
           price: proof.price,
+          ...(closedDeal?.externalOrderId != null
+            ? { providerPositionId: closedDeal.externalOrderId }
+            : {}),
+          ...(closedDeal?.providerDealId != null
+            ? { providerDealId: closedDeal.providerDealId }
+            : {}),
         });
         if (completed.status !== OrderStatus.FILLED) {
           // Partial deal coverage — recorded, not terminal; surfaced, retried.

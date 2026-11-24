@@ -17,7 +17,14 @@ import { CTRADER_FAMILY_BROKER_IDS } from '../../broker/registry/broker-catalog'
  * close-order row. It cannot mutate the closed trade or send broker orders.
  */
 export type ClosedDemoOrderFillProof =
-  | { matched: true; quantity: string; price: string; positionRef: string }
+  | {
+      matched: true;
+      quantity: string;
+      price: string;
+      positionRef: string;
+      /** Native closing-deal id when the provider surfaced one. */
+      dealId?: string;
+    }
   | { matched: false; reason: string };
 
 /** Scope + freshness policy for the shared DEMO closed-order proof core. */
@@ -178,7 +185,13 @@ function proveDemoClosedOrderFillCore(
   ) {
     return no('EXACT_BROKER_CLOSE_DEAL_ECONOMICS_MISMATCH');
   }
-  return { matched: true, quantity: qty, price: deal.closePrice, positionRef: ref };
+  return {
+    matched: true,
+    quantity: qty,
+    price: deal.closePrice,
+    positionRef: ref,
+    ...(deal.providerDealId != null ? { dealId: deal.providerDealId } : {}),
+  };
 }
 
 /** Live-recovery scope: single Pepperstone DEMO account, six-hour freshness. */

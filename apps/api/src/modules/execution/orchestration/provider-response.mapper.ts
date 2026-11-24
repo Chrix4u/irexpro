@@ -25,7 +25,10 @@ import { BrokerOrderResult } from '../../broker/interfaces/broker-adapter.interf
 export type ProviderResponseAction =
   | {
       action: 'ACKNOWLEDGE_AND_FILL';
+      /** Native ORDER id when the provider surfaced one (cTrader brokerNativeOrderId); legacy adapters fall back to externalOrderId. */
       providerOrderId?: string;
+      /** Native POSITION id a filled MARKET order executed against (cTrader externalOrderId when a native order id exists). */
+      providerPositionId?: string;
       fillQuantity?: string;
       fillPrice: string;
       realisedPnl?: string;
@@ -70,7 +73,14 @@ export function mapProviderOrderResponse(result: BrokerOrderResult): ProviderRes
     }
     return {
       action: 'ACKNOWLEDGE_AND_FILL',
-      providerOrderId: result.externalOrderId,
+      // Identity separation (migration 1795220000000): for a FILLED MARKET
+      // order, externalOrderId is the cTrader POSITION id and
+      // brokerNativeOrderId is the ORDER id. Persist the native order id in
+      // provider_order_id (stable-identifier reconciliation queries it) and
+      // the position id separately. Legacy adapters without a native id keep
+      // the historic single-identifier behaviour.
+      providerOrderId: result.brokerNativeOrderId ?? result.externalOrderId,
+      ...(result.brokerNativeOrderId ? { providerPositionId: result.externalOrderId } : {}),
       fillQuantity: result.filledQuantity,
       fillPrice: result.filledPrice,
       ...(result.realisedPnl !== undefined ? { realisedPnl: result.realisedPnl } : {}),
@@ -94,7 +104,7 @@ export function mapProviderOrderResponse(result: BrokerOrderResult): ProviderRes
     }
     return {
       action: 'ACKNOWLEDGE',
-      providerOrderId: result.externalOrderId,
+      providerOrderId: result.brokerNativeOrderId ?? result.externalOrderId,
     };
   }
 

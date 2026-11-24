@@ -75,6 +75,23 @@ export class Order {
   @Column({ name: 'provider_order_id', type: 'varchar', length: 255, nullable: true })
   providerOrderId: string | null;
 
+  /**
+   * Broker-native POSITION id for MARKET order fills (cTrader positionId;
+   * the legacy conflation stored it in providerOrderId). Separated by
+   * migration 1795220000000 — never substitute for the native order id or
+   * the deal id.
+   */
+  @Column({ name: 'provider_position_id', type: 'varchar', length: 255, nullable: true })
+  providerPositionId: string | null;
+
+  /**
+   * Broker-native DEAL id that proved a reconciliation-booked fill
+   * (cTrader dealId). Populated only from provider evidence — never
+   * fabricated, never inferred from a position or order id.
+   */
+  @Column({ name: 'provider_deal_id', type: 'varchar', length: 255, nullable: true })
+  providerDealId: string | null;
+
   // ─── Order terms ──────────────────────────────────────────────────────────
 
   @Column({ name: 'order_kind', type: 'varchar', length: 20, enum: OrderKind })

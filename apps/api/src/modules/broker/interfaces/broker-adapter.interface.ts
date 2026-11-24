@@ -430,6 +430,18 @@ export interface BrokerClosedTrade {
   swap: string;
   closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM' | 'PROFIT_LOCK' | 'TIME_TO_WORK' | 'UNKNOWN';
   pathDiagnostics?: BrokerTradePathDiagnostics;
+  /**
+   * Native closing-DEAL id when the broker surfaces one (cTrader dealId).
+   * Optional: adapters without native deal identifiers leave it unset, and
+   * callers must NEVER synthesize it from the position or order id.
+   */
+  providerDealId?: string;
+  /**
+   * Native ORDER id that produced the deal when the broker surfaces it
+   * (cTrader deal.orderId). Optional and distinct from externalOrderId
+   * (the POSITION id) — never substitute either for the other.
+   */
+  providerNativeOrderId?: string;
 }
 
 // ─── Market data types ────────────────────────────────────────────────────────

@@ -488,6 +488,7 @@ describe('ReconciliationResolutionService', () => {
       expect(orderService.applyFill).toHaveBeenCalledWith('close-order-1', {
         quantity: '1.0000',
         price: '1.12000',
+        providerPositionId: 'pos-1',
       });
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({

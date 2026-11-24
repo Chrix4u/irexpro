@@ -59,6 +59,10 @@ export interface ApplyFillInput {
   /** Fill price (decimal string, > 0, scale ≤ 8). */
   price: string;
   providerOrderId?: string | null;
+  /** Native broker POSITION id for MARKET fills (cTrader positionId). */
+  providerPositionId?: string | null;
+  /** Native broker DEAL id that proved this fill (cTrader dealId) — provider evidence only. */
+  providerDealId?: string | null;
 }
 
 const QUANTITY_PATTERN = /^\d+(\.\d{1,4})?$/;
@@ -194,11 +198,19 @@ export class OrderService {
   }
 
   /** SUBMITTED → ACKNOWLEDGED. Records the broker-side order identifier. */
-  async markAcknowledged(orderId: string, providerOrderId: string): Promise<Order> {
+  async markAcknowledged(
+    orderId: string,
+    providerOrderId: string,
+    extras: { providerPositionId?: string | null } = {},
+  ): Promise<Order> {
     if (!providerOrderId || providerOrderId.trim().length === 0) {
       throw new BadRequestException('providerOrderId is required to acknowledge an order');
     }
-    return this.applyTransition(orderId, OrderStatus.ACKNOWLEDGED, { providerOrderId });
+    const order = await this.applyTransition(orderId, OrderStatus.ACKNOWLEDGED, {
+      providerOrderId,
+      ...(extras.providerPositionId != null ? { providerPositionId: extras.providerPositionId } : {}),
+    });
+    return order;
   }
 
   /** Any non-terminal state → REJECTED (terminal). Reason is required. */
@@ -344,6 +356,8 @@ export class OrderService {
            ELSE 'PARTIALLY_FILLED'
          END,
          provider_order_id = COALESCE($4, provider_order_id),
+         provider_position_id = COALESCE($6, provider_position_id),
+         provider_deal_id = COALESCE($7, provider_deal_id),
          finalized_at = CASE
            WHEN filled_quantity + $2::numeric = requested_quantity THEN NOW()
            ELSE finalized_at
@@ -353,7 +367,15 @@ export class OrderService {
          AND status = $5
          AND filled_quantity + $2::numeric <= requested_quantity
        RETURNING *`,
-      [orderId, fill.quantity, fill.price, fill.providerOrderId ?? null, current.status],
+      [
+        orderId,
+        fill.quantity,
+        fill.price,
+        fill.providerOrderId ?? null,
+        current.status,
+        fill.providerPositionId ?? null,
+        fill.providerDealId ?? null,
+      ],
     );
 
     // TypeORM's Postgres driver returns [rows, rowCount] for UPDATE queries
@@ -438,6 +460,7 @@ export class OrderService {
     to: OrderStatus,
     extras: {
       providerOrderId?: string | null;
+      providerPositionId?: string | null;
       rejectReason?: string | null;
       setSubmittedAt?: boolean;
     },
@@ -449,6 +472,7 @@ export class OrderService {
 
     const patch: Partial<Order> = { status: to };
     if (extras.providerOrderId != null) patch.providerOrderId = extras.providerOrderId;
+    if (extras.providerPositionId != null) patch.providerPositionId = extras.providerPositionId;
     if (extras.rejectReason != null) patch.rejectReason = extras.rejectReason;
     if (extras.setSubmittedAt) patch.submittedAt = new Date();
     if (OrderStateMachine.isTerminal(to)) patch.finalizedAt = new Date();
@@ -582,6 +606,8 @@ export class OrderService {
       clientOrderId: row.client_order_id as string,
       idempotencyKey: row.idempotency_key as string,
       providerOrderId: (row.provider_order_id as string | null) ?? null,
+      providerPositionId: (row.provider_position_id as string | null) ?? null,
+      providerDealId: (row.provider_deal_id as string | null) ?? null,
       orderKind: row.order_kind as OrderKind,
       timeInForce: row.time_in_force as OrderTimeInForce,
       instrument: row.instrument as string,

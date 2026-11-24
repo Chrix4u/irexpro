@@ -2289,6 +2289,12 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       commission: moneyToDecimalString(close.commission, close.moneyDigits ?? 2),
       swap: moneyToDecimalString(close.swap, close.moneyDigits ?? 2),
       closeReason: 'UNKNOWN',
+      // Native identifiers — separated from externalOrderId (the POSITION
+      // id). Never substitute one for the other; absent brokers omit them.
+      ...(Number.isSafeInteger(deal.dealId) ? { providerDealId: String(deal.dealId) } : {}),
+      ...(Number.isSafeInteger(deal.orderId)
+        ? { providerNativeOrderId: String(deal.orderId) }
+        : {}),
     };
   }
 

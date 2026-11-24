@@ -825,6 +825,8 @@ export class StateReconciliationService {
             const completed = await this.orderService.applyFill(order.id, {
               quantity: proof.quantity,
               price: proof.price,
+              providerPositionId: proof.positionRef,
+              ...(proof.dealId != null ? { providerDealId: proof.dealId } : {}),
             });
             if (completed.status !== OrderStatus.FILLED)
               throw new Error('Broker-deal-proven close order was not terminally reconciled');
@@ -939,6 +941,8 @@ export class StateReconciliationService {
             const completed = await this.orderService.applyFill(order.id, {
               quantity: proof.quantity,
               price: proof.price,
+              providerPositionId: proof.positionRef,
+              ...(proof.dealId != null ? { providerDealId: proof.dealId } : {}),
             });
             if (completed.status !== OrderStatus.FILLED)
               throw new Error('Aged DEMO close order was not terminally reconciled');

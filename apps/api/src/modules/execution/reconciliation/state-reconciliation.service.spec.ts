@@ -478,6 +478,7 @@ describe('StateReconciliationService', () => {
       expect(orderService.applyFill).toHaveBeenCalledWith('close-order-1', {
         quantity: '2.8000',
         price: '1.43767',
+        providerPositionId: '8422910',
       });
       expect(adapter.modifyOrder).not.toHaveBeenCalled();
       expect(persistence.resolveDiscrepanciesByRef).toHaveBeenCalled();
@@ -555,6 +556,7 @@ describe('StateReconciliationService', () => {
       expect(orderService.applyFill).toHaveBeenCalledWith('aged-close-order-1', {
         quantity: '2.8000',
         price: '1.43767',
+        providerPositionId: '8422910',
       });
       expect(adapter.modifyOrder).not.toHaveBeenCalled();
     } finally {
