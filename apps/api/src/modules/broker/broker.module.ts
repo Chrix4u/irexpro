@@ -235,7 +235,15 @@ export class BrokerModule implements OnModuleInit {
     // brokerTitleShort) can fail closed on brand mismatch.
     this.registry.register(
       this.cTraderAdapter,
-      (requestedBrokerId: string) => new CTraderAdapter(this.cTraderClient, requestedBrokerId),
+      (requestedBrokerId: string, connectionId?: string) =>
+        new CTraderAdapter(
+          // Credential validation must authenticate on a fresh transport. A
+          // cached 2102 authorization from an existing account lease does not
+          // prove the newly supplied OAuth token can authorize that account.
+          // Persisted connection adapters retain the shared transport pool.
+          connectionId ? this.cTraderClient : new CTraderClientService(this.configService),
+          requestedBrokerId,
+        ),
     );
     this.registry.registerBrokerAlias('pepperstone-ctrader', this.cTraderAdapter);
     this.registry.registerBrokerAlias('icmarkets-ctrader', this.cTraderAdapter);

@@ -117,6 +117,40 @@ describe('CTraderClientService', () => {
     expect(client.hasAccountSession('DEMO', ACCOUNT_ID)).toBe(true);
   });
 
+  it.each(['ACCOUNT_NOT_AUTHORIZED', 'OA_AUTH_TOKEN_EXPIRED', 'CH_ACCESS_TOKEN_INVALID'])(
+    'invalidates only the refused account and requires a fresh auth on next validation (%s)',
+    async (errorCode) => {
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
+      await client.ensureAccountSession('DEMO', '7654321', ACCESS_TOKEN, 'other');
+      await client.ensureAccountSession('LIVE', ACCOUNT_ID, ACCESS_TOKEN, 'live');
+      server.on(CTRADER_PAYLOAD_TYPE.TRADER_REQ, (_payload, envelope) => ({
+        clientMsgId: envelope.clientMsgId,
+        payloadType: CTRADER_PAYLOAD_TYPE.OA_ERROR_RES,
+        payload: { errorCode, description: 'Trading account is not authorized' },
+      }));
+      await expect(
+        client.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, {
+          ctidTraderAccountId: 1234567,
+        }),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.AUTHENTICATION_FAILED });
+      expect(client.hasAccountSession('DEMO', ACCOUNT_ID)).toBe(false);
+      expect(client.hasAccountSession('DEMO', '7654321')).toBe(true);
+      expect(client.hasAccountSession('LIVE', ACCOUNT_ID)).toBe(true);
+      expect(
+        server.requests.filter((r) => r.payloadType === CTRADER_PAYLOAD_TYPE.TRADER_REQ),
+      ).toHaveLength(1);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, 'new-token', 'validation');
+      expect(client.hasAccountSession('DEMO', ACCOUNT_ID)).toBe(true);
+      expect(
+        server.requests.filter(
+          (r) =>
+            r.payloadType === CTRADER_PAYLOAD_TYPE.ACCOUNT_AUTH_REQ &&
+            r.payload?.accessToken === 'new-token',
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
   it('fails closed with AUTHENTICATION_FAILED when the platform cTrader app credentials are unconfigured', async () => {
     const unconfigured = new TestableCtraderClient(server, fakeConfigService());
     await expect(
