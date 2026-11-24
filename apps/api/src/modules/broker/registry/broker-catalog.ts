@@ -29,16 +29,16 @@ import {
  *   CTRADER_CLIENT_ID/CTRADER_CLIENT_SECRET; without them connections fail
  *   closed. Production-LIVE UNVERIFIED.)
  * - pepperstone-ctrader / icmarkets-ctrader → BETA aliases of the same
- *   universal cTrader engine (Task 48-B): they run through the shared
- *   'ctrader' adapter; each broker additionally requires its own broker-side
- *   cTrader Open API approval for real accounts. UNVERIFIED.
+ *   universal cTrader engine (Task 48-B), with independent identity-scoped
+ *   LIVE verification. Pepperstone has an operator-run PASS proposed for
+ *   review; IC Markets remains UNVERIFIED.
  *
  * PRODUCTION-LIVE VERIFICATION (architect Phase H): `status` describes
  * implementation evidence only — it is NOT production-LIVE approval. The
  * separate `productionLiveVerification` field records operator-attested
  * LIVE evidence; absent/UNVERIFIED fails closed (LIVE connections and
- * enable-live are rejected — BETA is DEMO-only). Only metatrader5 carries
- * VERIFIED evidence today.
+ * enable-live are rejected — BETA is DEMO-only). Pepperstone has a current
+ * operator certification PASS; catalog promotion remains subject to review.
  */
 
 /**
@@ -244,15 +244,25 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
     id: 'pepperstone-ctrader',
     name: 'Pepperstone (via cTrader Open API — BETA)',
     description:
-      'Pepperstone cTrader accounts reached through the shared universal ' +
-      'cTrader Open API engine (adapterId ctrader — JSON over WebSocket). ' +
-      'BETA: the adapter is implemented and contract-tested, but reaching ' +
-      'real Pepperstone accounts additionally requires Pepperstone-side ' +
-      'cTrader Open API approval for the platform application on top of the ' +
-      'Spotware partner approval; production-LIVE is UNVERIFIED.',
+      'Pepperstone cTrader accounts via the shared Open API engine. ' +
+      'BETA capabilities; production-LIVE verification is scoped to the ' +
+      'Pepperstone broker identity and an operator-certified protected ' +
+      'minimum-size market-order lifecycle. This is not a performance ' +
+      'guarantee or blanket certification of other brokers.',
     adapterId: 'ctrader',
     status: BrokerAvailabilityStatus.BETA,
-    productionLiveVerification: { status: 'UNVERIFIED' },
+    // Pepperstone-only certified LIVE execution. This is the exact
+    // owner-run durable certification PASS, not generic cTrader permission;
+    // each user must still explicitly enable their LIVE account, and
+    // all final-dispatch risk/reconciliation gates remain active.
+    productionLiveVerification: {
+      status: 'VERIFIED',
+      verifiedAt: '2026-11-24T01:32:06.437Z',
+      evidenceRef: 'pepperstone-operator-live-canary-4ec633e4-a443-47e3-8bca-1f8f214982f5',
+      certifiedVia: 'HARNESS_CERTIFIED',
+      certificationRunRef:
+        '4ec633e4-a443-47e3-8bca-1f8f214982f5@sha256:f9d9b0cdb19b5f97629e2608fe93f52f5258237c719d0ca55fdfe0e42ac84643',
+    },
     connectionRoutes: [BrokerConnectionRoute.CTRADER],
     capabilities: [
       BrokerCapability.ACCOUNT_READ,
