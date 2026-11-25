@@ -155,7 +155,6 @@ describe('classifyHighConvictionOverlay', () => {
     expect(result.state).toBe('STALE');
     expect(result.expertResearchEvidence).toBeUndefined();
   });
-
 });
 
 describe('summarizeHighConvictionOverlayCohort', () => {
