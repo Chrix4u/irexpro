@@ -111,16 +111,27 @@ function archiveRows(text){
   return quotes;
 }
 function latestTail(file,maxBytes=220*1024){
-  if(!fs.existsSync(file))return '';
-  const stat=fs.statSync(file);
-  if(!stat.isFile()||stat.size===0)return '';
-  const length=Math.min(stat.size,maxBytes),buffer=Buffer.alloc(length);
-  const handle=fs.openSync(file,'r');
-  try{fs.readSync(handle,buffer,0,length,stat.size-length);}
-  finally{fs.closeSync(handle);}
-  let text=buffer.toString('utf8');
-  if(length<stat.size){const i=text.indexOf('\n');text=i<0?'':text.slice(i+1);}
-  return text;
+  let handle;
+  try{
+    handle=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
+  }catch(err){
+    if(err.code==='ENOENT')return '';
+    throw err;
+  }
+  try{
+    const stat=fs.fstatSync(handle);
+    if(!stat.isFile()||stat.size===0)return '';
+    const length=Math.min(stat.size,maxBytes),buffer=Buffer.alloc(length);
+    let offset=0;
+    while(offset<length){
+      const n=fs.readSync(handle,buffer,offset,length-offset,stat.size-length+offset);
+      if(n===0)break;
+      offset+=n;
+    }
+    let text=buffer.toString('utf8',0,offset);
+    if(length<stat.size){const i=text.indexOf('\n');text=i<0?'':text.slice(i+1);}
+    return text;
+  }finally{fs.closeSync(handle);}
 }
 function sourceQuotesForSlot(slot,dir=SOURCE){
   const days=[new Date(slot).toISOString().slice(0,10)];
