@@ -1,0 +1,35 @@
+name: iRexPro DEMO protected runner PostgreSQL contract
+on:
+  push:
+    branches: ['fix/demo-runner-real-pg-types-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/src/modules/execution/reconciliation/demo-protected-profit-runner-orchestrator.service.ts'
+      - 'apps/api/src/modules/execution/reconciliation/demo-protected-profit-runner-orchestrator.service.spec.ts'
+      - 'apps/api/scripts/validation/verify-demo-protected-runner-sql-readonly.cjs'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  postgres-contract-unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install scoped API tree
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Validate DB-verifier syntax (no DB secret in CI)
+        run: node --check apps/api/scripts/validation/verify-demo-protected-runner-sql-readonly.cjs
+      - name: Compile entire API
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - name: PostgreSQL parameter type and broker stop reconciliation tests
+        run: pnpm --filter @irexpro/api exec jest src/modules/execution/reconciliation/demo-protected-profit-runner-orchestrator.service.spec.ts src/modules/execution/reconciliation/demo-profit-stop-authority-sync.service.spec.ts src/modules/execution/reconciliation/verified-profit-stop-runner-policy.spec.ts src/modules/execution/reconciliation/demo-five-second-protected-runner.integration.spec.ts src/modules/broker/broker-demo-profit-stop-gateway.spec.ts --runInBand --silent --no-coverage

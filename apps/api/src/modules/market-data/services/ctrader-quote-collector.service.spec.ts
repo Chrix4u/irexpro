@@ -2,7 +2,11 @@ import { Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { DataSource } from 'typeorm';
 import type { BrokerService } from '../../broker/broker.service';
-import { BrokerConnectionStatus } from '../../broker/interfaces/broker-adapter.interface';
+import {
+  BrokerConnectionStatus,
+  BrokerMode,
+} from '../../broker/interfaces/broker-adapter.interface';
+import { BrokerAuthorizationStatus } from '../../broker/authorization/broker-authorization-status';
 import type { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.service';
 import { CTraderQuoteCollectorService } from './ctrader-quote-collector.service';
 
@@ -30,13 +34,26 @@ function harness(
     quoteTimestamp?: Date;
     collectionInstruments?: string;
     recentDemoConnectionId?: string | null;
+    liveAccount?: boolean;
+    liveTradingEnabled?: boolean;
+    liveAuthorizationStatus?: BrokerAuthorizationStatus;
+    providerBrokerIdentity?: string;
   } = {},
 ) {
   const findConnectionById = jest.fn().mockResolvedValue({
     id: 'ctrader-1',
     userId: 'user-1',
-    brokerId: options.brokerId ?? 'ctrader',
+    brokerId: options.brokerId ?? (options.liveAccount ? 'pepperstone-ctrader' : 'ctrader'),
     status: options.status ?? BrokerConnectionStatus.CONNECTED,
+    accountType: options.liveAccount ? BrokerMode.LIVE : BrokerMode.DEMO,
+    providerBrokerIdentity:
+      options.providerBrokerIdentity ?? (options.liveAccount ? 'pepperstone' : null),
+    authorizationStatus:
+      options.liveAuthorizationStatus ??
+      (options.liveAccount
+        ? BrokerAuthorizationStatus.ACTIVE
+        : BrokerAuthorizationStatus.CONNECTED),
+    liveTradingEnabled: options.liveTradingEnabled ?? Boolean(options.liveAccount),
   });
   const getOhlcvForConnection = jest.fn().mockResolvedValue([
     {
@@ -160,6 +177,88 @@ describe('CTraderQuoteCollectorService', () => {
     for (const call of h.upsertM1Sample.mock.calls) {
       expect(call[0]).toBe('pepperstone-ctrader-connection');
     }
+  });
+
+  it('selects the exact ACTIVE authorized Pepperstone LIVE session over ended DEMO accounts without copying DEMO quotes', async () => {
+    const h = harness({
+      recentDemoConnectionId: 'pepperstone-live-exact-connection',
+      liveAccount: true,
+    });
+    await h.service.collectOnce(OPEN_NOW);
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+
+    expect(h.query).toHaveBeenCalledTimes(1);
+    const sourceSql = h.query.mock.calls[0]?.[0] as string;
+    expect(sourceSql).toContain("b.account_type = 'LIVE'");
+    expect(sourceSql).toContain("b.broker_id = 'pepperstone-ctrader'");
+    expect(sourceSql).toContain("b.provider_broker_identity = 'pepperstone'");
+    expect(sourceSql).toContain("b.authorization_status = 'ACTIVE'");
+    expect(sourceSql).toContain('b.live_trading_enabled = TRUE');
+    expect(sourceSql).toContain("s.status IN ('ACTIVE', 'ENDED')");
+    expect(sourceSql).toContain("ORDER BY (s.status = 'ACTIVE') DESC");
+    expect(h.findConnectionById).toHaveBeenCalledWith(
+      'pepperstone-live-exact-connection',
+      'user-1',
+    );
+    expect(h.getOhlcvForConnection).toHaveBeenCalledTimes(4);
+    expect(h.getCurrentPriceForConnection).toHaveBeenCalledTimes(12);
+    expect(h.upsertM1Sample).toHaveBeenCalledTimes(12);
+    expect(h.upsertHistoricalCandles).toHaveBeenCalledTimes(4);
+    for (const call of h.upsertM1Sample.mock.calls) {
+      expect(call[0]).toBe('pepperstone-live-exact-connection');
+      expect(call[3]).toBe('ctrader-broker-native');
+    }
+    for (const call of h.upsertHistoricalCandles.mock.calls) {
+      expect(call[0]).toBe('pepperstone-live-exact-connection');
+    }
+  });
+
+  it('retains owner-selected ENDED LIVE chart source after Stop without reactivating AI', async () => {
+    const h = harness({
+      recentDemoConnectionId: 'pepperstone-live-ended-connection',
+      liveAccount: true,
+    });
+    await h.service.collectOnce(OPEN_NOW);
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+
+    const sourceSql = h.query.mock.calls[0]?.[0] as string;
+    expect(sourceSql).toContain("s.status IN ('ACTIVE', 'ENDED')");
+    expect(sourceSql).toContain('b.live_trading_enabled = TRUE');
+    expect(sourceSql).toContain("s.execution_mode = 'FULL_AUTO'");
+    expect(h.findConnectionById).toHaveBeenCalledWith(
+      'pepperstone-live-ended-connection',
+      'user-1',
+    );
+    expect(h.upsertM1Sample).toHaveBeenCalledTimes(12);
+    for (const call of h.upsertM1Sample.mock.calls) {
+      expect(call[0]).toBe('pepperstone-live-ended-connection');
+    }
+    for (const call of h.upsertHistoricalCandles.mock.calls) {
+      expect(call[0]).toBe('pepperstone-live-ended-connection');
+    }
+    // The collector has no startTrading/enableLiveTrading/submitOrder method.
+    expect(Object.keys(h.service)).not.toContain('startTrading');
+    expect(Object.keys(h.service)).not.toContain('submitOrder');
+  });
+
+  it.each([
+    ['revoked LIVE permission', { liveTradingEnabled: false }],
+    [
+      'LIVE authorization inactive',
+      { liveAuthorizationStatus: BrokerAuthorizationStatus.CONNECTED },
+    ],
+    ['wrong cTrader broker identity', { providerBrokerIdentity: 'icmarkets' }],
+  ])('does not sample %s even if a stale session query selects it', async (_label, change) => {
+    const h = harness({
+      recentDemoConnectionId: 'pepperstone-live-exact-connection',
+      liveAccount: true,
+      ...change,
+    });
+    await h.service.collectOnce(OPEN_NOW);
+    await h.service.collectLiveQuotesOnce(OPEN_NOW);
+    expect(h.getCurrentPriceForConnection).not.toHaveBeenCalled();
+    expect(h.getOhlcvForConnection).not.toHaveBeenCalled();
+    expect(h.upsertM1Sample).not.toHaveBeenCalled();
   });
 
   it('warms all four contexts for the switched USDJPY DEMO source before ordinary rotation', async () => {

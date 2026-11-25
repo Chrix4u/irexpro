@@ -75,6 +75,7 @@
  *   getOrderById (ProtoOAOrderDetailsReq).
  */
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { ExactDecimal } from '../../../../common/utils/exact-decimal';
 import { randomUUID } from 'node:crypto';
 import {
   AdapterMetadata,
@@ -680,6 +681,21 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           maxLot: volumeCentsToLotString(symbol.maxVolume ?? 0, symbol.lotSize),
           lotStep: volumeCentsToLotString(symbol.stepVolume ?? 0, symbol.lotSize),
           contractSize: moneyToDecimalString(symbol.lotSize, 2),
+          // An explicitly published 0 is a legitimate zero minimum, not
+          // missing metadata. Keep absent slDistance UNKNOWN/fail-closed.
+          ...(Number.isInteger(symbol.slDistance) &&
+          symbol.slDistance !== undefined &&
+          symbol.slDistance >= 0 &&
+          (symbol.distanceSetIn === undefined ||
+            symbol.distanceSetIn === 1 ||
+            symbol.distanceSetIn === 2)
+            ? {
+                minStopLossDistance: String(symbol.slDistance),
+                minStopLossDistanceUnit: (symbol.distanceSetIn === 2 ? 'PERCENTAGE' : 'POINTS') as
+                  | 'POINTS'
+                  | 'PERCENTAGE',
+              }
+            : {}),
         });
       }
       return instruments;
@@ -866,6 +882,18 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     const session = this.resolveSession(order.connectionReference);
     if (!session) throw this.notConnected();
     try {
+      // Order-direction invariant: a malformed runtime direction must NEVER
+      // fall through the BUY/SELL protobuf ternary and become a SELL order.
+      // This is a local, pre-send rejection (no provider request made).
+      if (order.direction !== 'BUY' && order.direction !== 'SELL') {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.INVALID_REQUEST,
+          'cTrader order direction must be exactly BUY or SELL',
+          undefined,
+          false,
+          ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+        );
+      }
       // Fail-closed order-kind dispatch (Sprint 50 PR-3): never silently
       // downgrade a non-market kind. All four normalized kinds are supported
       // by the ProtoOANewOrderReq surface.
@@ -923,6 +951,100 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
             ? CtraderTimeInForce.IMMEDIATE_OR_CANCEL
             : CtraderTimeInForce.GOOD_TILL_CANCEL;
 
+      // Spotware ProtoOANewOrderReq supports an atomic relativeStopLoss for
+      // MARKET orders (1/100000 of quote-price units). Unlike an absolute
+      // stopLoss, this is included in the ORIGINAL 2106 request, before any
+      // position can exist. No broker order is submitted on malformed or
+      // ambiguous dual-protection input.
+      let marketRelativeStopLoss: number | null = null;
+      let marketRelativeTakeProfit: number | null = null;
+      let liveFullProtectionAtomic = false;
+      if (order.relativeStopLoss !== undefined) {
+        const raw = order.relativeStopLoss;
+        if (
+          kind !== 'MARKET' ||
+          !/^[1-9]\d*$/.test(raw) ||
+          !Number.isSafeInteger(Number(raw)) ||
+          this.isNonZeroPrice(order.stopLoss) ||
+          this.isNonZeroPrice(order.takeProfit)
+        ) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_REQUEST,
+            'MARKET relativeStopLoss must be a safe positive integer and exclusive of absolute SL/TP',
+            undefined,
+            false,
+            ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          );
+        }
+        marketRelativeStopLoss = Number(raw);
+      } else if (session.env === 'LIVE' && kind === 'MARKET') {
+        // Production cTrader MARKET entries require BOTH SL and TP in the
+        // ORIGINAL 2106 order. Waiting for a position and then sending 2110
+        // left a real-money exposure interval with no broker stop. Use a
+        // fresh, account+symbol scoped provider quote and the model's ABSOLUTE
+        // stop/target to compute the provider's atomic RELATIVE distances.
+        // fetchSpotQuote enforces broker timestamp freshness; no cache,
+        // midpoint, hypothetical quote or guessed distance is permitted.
+        const sl = ExactDecimal.tryParse(order.stopLoss);
+        const tp = ExactDecimal.tryParse(order.takeProfit);
+        if (!sl?.isPositive() || !tp?.isPositive()) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_REQUEST,
+            'LIVE cTrader MARKET requires positive model SL and TP before broker dispatch',
+            undefined,
+            false,
+            ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          );
+        }
+        const spot = await this.fetchSpotQuote(session, symbolId);
+        const bid = ExactDecimal.tryParse(spotToPrice(spot.bid ?? 0));
+        const ask = ExactDecimal.tryParse(spotToPrice(spot.ask ?? 0));
+        if (!bid?.isPositive() || !ask?.isPositive() || ask.lt(bid)) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_PRICE,
+            'LIVE broker bid/ask quote invalid; refusing unprotected MARKET order',
+            undefined,
+            false,
+            ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          );
+        }
+        const reference = order.direction === 'BUY' ? ask : bid;
+        if (
+          order.direction === 'BUY'
+            ? !sl.lt(reference) || !tp.gt(reference)
+            : !sl.gt(reference) || !tp.lt(reference)
+        ) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_PRICE,
+            'LIVE broker quote has crossed model SL or TP; refusing MARKET order',
+            undefined,
+            false,
+            ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          );
+        }
+        const stopPoints = reference.sub(sl).abs().mulByPowerOfTen(5).toString();
+        const targetPoints = tp.sub(reference).abs().mulByPowerOfTen(5).toString();
+        // Open API requires int64 point distances; JS transports safely encode
+        // only positive safe integers. Never round up the model's risk or
+        // fabricate a missing stop. The risk gate already checked lot size,
+        // stop-cost envelope, spread and margin.
+        if (
+          ![stopPoints, targetPoints].every(
+            (n) => /^[1-9]\d*$/.test(n) && Number.isSafeInteger(Number(n)),
+          )
+        ) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_REQUEST,
+            'LIVE relative SL/TP cannot be represented exactly in broker points',
+            undefined,
+            false,
+            ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          );
+        }
+        marketRelativeStopLoss = Number(stopPoints);
+        marketRelativeTakeProfit = Number(targetPoints);
+        liveFullProtectionAtomic = true;
+      }
       const payload: Record<string, unknown> = {
         ctidTraderAccountId: ctid,
         symbolId,
@@ -934,6 +1056,12 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         label: idem.label,
         comment: idem.comment,
       };
+      if (marketRelativeStopLoss !== null) {
+        payload.relativeStopLoss = marketRelativeStopLoss;
+      }
+      if (marketRelativeTakeProfit !== null) {
+        payload.relativeTakeProfit = marketRelativeTakeProfit;
+      }
       // DAY time-in-force → GOOD_TILL_DATE needs an expiration timestamp:
       // the end of the current UTC trading day (proto field 6, Unix ms).
       if (protoTif === CtraderTimeInForce.GOOD_TILL_DATE) {
@@ -994,7 +1122,21 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           idem.comment,
           symbol.lotSize,
         );
-        if (reconciledFill) result = reconciledFill;
+        if (reconciledFill) {
+          // The execution ACK may contain an order ID even when its position
+          // fill is only confirmed later through ReconcileRes. Preserve that
+          // *native order* ID rather than discarding it when replacing the
+          // PENDING order result with the independently observed position.
+          // Reconciled position IDs must never stand in for an order ID.
+          result = {
+            ...reconciledFill,
+            brokerNativeOrderId:
+              result.brokerNativeOrderId ??
+              (result.externalOrderId && /^[1-9]\d*$/.test(result.externalOrderId)
+                ? result.externalOrderId
+                : undefined),
+          };
+        }
       }
 
       // MARKET + SL/TP: attach the protection to the FILLED position (2110).
@@ -1002,8 +1144,12 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         protoOrderType === CtraderOrderType.MARKET &&
         result.status === 'FILLED' &&
         result.externalOrderId &&
-        this.hasProtection(order)
+        this.hasProtection(order) &&
+        !liveFullProtectionAtomic
       ) {
+        // LIVE full protection was included atomically in 2106. Never
+        // overwrite its fill-relative stops with stale absolute pre-fill
+        // prices, which could silently widen live risk after slippage.
         await this.amendPositionProtection(
           session,
           result.externalOrderId,
@@ -1541,6 +1687,55 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       // as an error fallback (Directive §AN #7).
       if (mapped.code === BrokerErrorCode.POSITION_NOT_FOUND) return null;
       throw mapped;
+    }
+  }
+
+  /**
+   * Strictly read-only native ORDER identity evidence for a just-opened
+   * certification canary. The cTrader ReconcileRes position snapshot only
+   * carries positionId; DealListRes carries the originating DEAL.orderId.
+   *
+   * Never fabricate an order ID, infer it from a position ID, paginate with
+   * unproven timestamp ordering, or accept ambiguous deals (e.g. scale-ins).
+   * If history is stale/incomplete, return null so certification fails closed.
+   * Not part of IBrokerAdapter, not used for execution or risk authority.
+   */
+  async findOpeningOrderIdForPosition(positionId: string): Promise<string | null> {
+    const session = this.requireCurrentSession();
+    const normalizedPositionId = String(parseCtraderId(positionId, 'positionId'));
+    const now = Date.now();
+    const from = now - 15 * 60_000;
+    const to = now + 15_000;
+    try {
+      const response = await this.client.request(session.env, CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ, {
+        ctidTraderAccountId: parseCtraderId(session.accountId, 'ctidTraderAccountId'),
+        fromTimestamp: from,
+        toTimestamp: to,
+        maxRows: DEAL_LIST_MAX_ROWS,
+      });
+      const payload = expectCtraderPayload<{ deal?: CtraderDeal[]; hasMore?: boolean }>(
+        response,
+        CTRADER_PAYLOAD_TYPE.DEAL_LIST_RES,
+      );
+      // At the 200-row cap, an incomplete or unmarked page could conceal
+      // another opening deal, making a native order identity ambiguous.
+      if (payload.hasMore !== false || !Array.isArray(payload.deal)) return null;
+      const openDeals = payload.deal.filter(
+        (deal) =>
+          String(deal.positionId) === normalizedPositionId &&
+          deal.closePositionDetail == null &&
+          Number.isSafeInteger(Number(deal.executionTimestamp)) &&
+          Number(deal.executionTimestamp) >= from &&
+          Number(deal.executionTimestamp) <= to &&
+          Number.isSafeInteger(Number(deal.orderId)) &&
+          Number(deal.orderId) > 0,
+      );
+      const uniqueOrderIds = [...new Set(openDeals.map((deal) => String(deal.orderId)))];
+      return uniqueOrderIds.length === 1 && openDeals.length === 1 ? uniqueOrderIds[0] : null;
+    } catch {
+      // It is safer to leave the order uncertified than to obscure a native
+      // provider-read failure with a guessed order/position mapping.
+      return null;
     }
   }
 
@@ -2094,6 +2289,12 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       commission: moneyToDecimalString(close.commission, close.moneyDigits ?? 2),
       swap: moneyToDecimalString(close.swap, close.moneyDigits ?? 2),
       closeReason: 'UNKNOWN',
+      // Native identifiers — separated from externalOrderId (the POSITION
+      // id). Never substitute one for the other; absent brokers omit them.
+      ...(Number.isSafeInteger(deal.dealId) ? { providerDealId: String(deal.dealId) } : {}),
+      ...(Number.isSafeInteger(deal.orderId)
+        ? { providerNativeOrderId: String(deal.orderId) }
+        : {}),
     };
   }
 
@@ -2449,6 +2650,12 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         return {
           success: true,
           externalOrderId: externalId !== '' ? externalId : undefined,
+          brokerNativeOrderId:
+            protoOrder?.orderId !== undefined
+              ? String(protoOrder.orderId)
+              : deal?.orderId !== undefined
+                ? String(deal.orderId)
+                : undefined,
           filledPrice:
             deal?.executionPrice !== undefined
               ? wirePriceToDecimalString(deal.executionPrice)

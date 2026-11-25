@@ -15,6 +15,7 @@ from app.domain.market_data.redis_cache import OHLCVRedisCache
 from app.domain.models.high_conviction_challenger import PlanBV4HighConvictionChallenger
 from app.domain.models.multitimeframe_features import (
     RUNTIME_TIMEFRAMES,
+    MissingBrokerSpreadMetadata,
     build_multitimeframe_runtime_features,
 )
 from app.domain.models.post_entry_protection_challenger import (
@@ -417,11 +418,31 @@ async def score_plan_b_v85_broker_checkpoint(
             "checkpoint_at": checkpoint_at.isoformat(),
             "score": None,
         }
-    except (KeyError, ValueError, RuntimeError):
+    except MissingBrokerSpreadMetadata:
+        # Historic Pepperstone backfill can contain native OHLC but no
+        # broker-observed bid/ask spread. Current spread would be look-ahead
+        # leakage: record an explicit UNOBSERVABLE evidence gap instead.
+        unobservable = checkpoint_at < datetime.now(UTC) - timedelta(minutes=10)
+        return {
+            "state": "WAITING_FOR_BROKER_DATA",
+            "reason": (
+                "HISTORICAL_SPREAD_UNOBSERVABLE"
+                if unobservable else "AWAITING_BROKER_SPREAD_EVIDENCE"
+            ),
+            "status": status,
+            "checkpoint_at": checkpoint_at.isoformat(),
+            "score": None,
+        }
+    except (KeyError, ValueError, RuntimeError) as error:
+        # Research diagnostics only: reveal the failing feature or model
+        # invariant in server logs without exposing broker IDs or credentials
+        # to an HTTP caller. The endpoint stays shadow-only and fail-closed.
         logger.exception(
             "plan_b_v85_broker_scoring_failed",
             instrument=instrument,
             checkpoint_minutes=request.checkpoint_minutes,
+            error_type=type(error).__name__,
+            error_detail=str(error)[:240],
         )
         return {
             "state": "ERROR",

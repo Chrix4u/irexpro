@@ -259,6 +259,14 @@ export interface BrokerOrderRequest {
   lotSize: string;
   stopLoss: string;
   takeProfit: string;
+  /**
+   * Optional MARKET-only, cTrader-native atomic entry protection. Positive
+   * integer distance in 1/100000 of a price unit from the provider fill.
+   * NOT a guaranteed fill and NOT a substitute for stop/fee risk limits.
+   * Mutually exclusive with absolute stopLoss and with absolute takeProfit.
+   * The adapter must reject unsupported usage BEFORE broker dispatch.
+   */
+  relativeStopLoss?: string;
   comment?: string;
   /** Opaque provider account reference; memory-only and never audited. */
   connectionReference?: string;
@@ -294,6 +302,11 @@ export interface BrokerOrderModification {
 export interface BrokerOrderResult {
   success: boolean;
   externalOrderId?: string;
+  /** Native cTrader ORDER id for OrderDetailsReq; externalOrderId is the
+   * POSITION id for filled MARKET orders. Never substitute either for the
+   * other, particularly in real-money certification/reconciliation.
+   */
+  brokerNativeOrderId?: string;
   filledPrice?: string;
   /** Sprint 50 PR-3: filled quantity when the provider reports partial fills
    * (decimal string). When omitted on a FILLED result, orchestrators may
@@ -417,6 +430,18 @@ export interface BrokerClosedTrade {
   swap: string;
   closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM' | 'PROFIT_LOCK' | 'TIME_TO_WORK' | 'UNKNOWN';
   pathDiagnostics?: BrokerTradePathDiagnostics;
+  /**
+   * Native closing-DEAL id when the broker surfaces one (cTrader dealId).
+   * Optional: adapters without native deal identifiers leave it unset, and
+   * callers must NEVER synthesize it from the position or order id.
+   */
+  providerDealId?: string;
+  /**
+   * Native ORDER id that produced the deal when the broker surfaces it
+   * (cTrader deal.orderId). Optional and distinct from externalOrderId
+   * (the POSITION id) — never substitute either for the other.
+   */
+  providerNativeOrderId?: string;
 }
 
 // ─── Market data types ────────────────────────────────────────────────────────
@@ -429,6 +454,10 @@ export interface BrokerInstrument {
   maxLot: string;
   lotStep: string;
   contractSize: string;
+  /** Broker-native minimum stop loss distance; do not infer when absent. */
+  minStopLossDistance?: string;
+  /** Points vs percentage as explicitly declared by the broker symbol. */
+  minStopLossDistanceUnit?: 'POINTS' | 'PERCENTAGE';
 }
 
 export interface BrokerPrice {

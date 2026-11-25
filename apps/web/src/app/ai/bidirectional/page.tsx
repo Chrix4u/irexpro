@@ -43,6 +43,25 @@ function sideVariant(side: BidirectionalSideView): 'success' | 'warning' | 'erro
   return 'info';
 }
 
+function readableDriftDiagnostic(value: string): string {
+  const [feature, level] = value.split(':');
+  const labels: Record<string, string> = {
+    confidence: 'Model confidence',
+    extensionAtr: 'Price extension / ATR',
+    volatilityScore: 'Volatility score',
+    emaSeparation: 'Directional EMA separation',
+    mtfStrength: 'Higher-timeframe trend strength',
+    rsi14: 'RSI',
+    directionalMomentumAtr: 'Directional momentum / ATR',
+  };
+  const magnitude = level === 'HARD_LOW' || level === 'STRESSED_LOW'
+    ? 'below the historical range'
+    : level === 'HARD_HIGH' || level === 'STRESSED_HIGH'
+      ? 'above the historical range'
+      : 'missing or invalid';
+  return `${labels[feature] ?? feature}: ${magnitude}`;
+}
+
 function DirectionCard({ side, label }: { side: BidirectionalSideView | null; label: 'BUY' | 'SELL' }) {
   if (!side) {
     return (
@@ -78,6 +97,28 @@ function DirectionCard({ side, label }: { side: BidirectionalSideView | null; la
         <div><span className="text-sm muted">Regime</span><div>{formatEnumLabel(side.regime)}</div></div>
         <div><span className="text-sm muted">Drift</span><div>{side.driftState ? formatEnumLabel(side.driftState) : 'Not available'}</div></div>
       </div>
+      {side.driftState === 'OUT_OF_DISTRIBUTION' && (
+        <div className="mt-3" aria-label="Exact out-of-distribution diagnostics">
+          <strong className="text-sm">What is outside the trained model range?</strong>
+          {side.driftDiagnostics?.length ? (
+            <ul className="text-sm muted mt-1" style={{ paddingLeft: '1.3rem', marginBottom: 0 }}>
+              {side.driftDiagnostics.map((detail) => (
+                <li key={detail}>{readableDriftDiagnostic(detail)}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm muted mt-1">
+              Detailed model-range measurements were not included with this decision.
+            </p>
+          )}
+          <p className="text-sm muted mt-1" style={{ marginBottom: 0 }}>
+            This describes the model&apos;s historical feature range, not a broker outage.
+            {!side.paperAdmitted && ' This direction also failed model admission separately.'}
+            {side.netExpectedR != null && side.netExpectedR < 0 &&
+              ' Estimated net return after costs is negative.'}
+          </p>
+        </div>
+      )}
       <div className="mt-3">
         <span className="text-sm muted">Why this side {side.paperExecutionEligible ? 'passed' : 'stopped'}</span>
         {side.blockers.length === 0 ? (
@@ -163,6 +204,7 @@ export default function BidirectionalDecisionPage() {
           </div>
           <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', alignItems: 'center' }}>
             <Link href="/ai" className="btn btn--secondary">Decision Explorer</Link>
+            <Link href="/ai/counter" className="btn btn--secondary">MAIN vs COUNTER</Link>
             <Button type="button" variant="secondary" size="sm" loading={loading} disabled={loading} onClick={() => void refresh()}>
               {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
@@ -188,6 +230,13 @@ export default function BidirectionalDecisionPage() {
               <Card title="Both blocked"><strong style={{ fontSize: '1.7rem' }}>{summary.none}</strong></Card>
             </section>
 
+            <p className="text-sm muted mt-3">
+              These are paired BUY and SELL PAPER research decisions for closed M5 bars,
+              not broker orders. The separate M1 reversal/early-transition DEMO trial
+              can have different entry decisions. An out-of-distribution label means
+              one or more features fell outside the model&apos;s historical training range;
+              it is not a diagnosis of a failed price feed.
+            </p>
             <section className="mt-4">
               <Card title="Latest paired decisions" subtitle={`Snapshot generated ${formatTimestamp(snapshot.generatedAt)} · refreshes every 30 seconds`}>
                 {snapshot.comparisons.length === 0 ? (

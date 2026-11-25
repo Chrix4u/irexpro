@@ -20,6 +20,7 @@ import { RiskGrant } from './entities/risk-grant.entity';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
 import { AiSignalIdentity } from './entities/ai-signal-identity.entity';
 import { Order } from './orders/order.entity';
+import { OrderFillEvidence } from './orders/order-fill-evidence.entity';
 import { OrderService } from './orders/order.service';
 import { RiskProfile } from '../risk/entities/risk-profile.entity';
 import {
@@ -59,6 +60,8 @@ import { ProtectiveOrderReconciliationService } from './reconciliation/protectiv
 import { LiveDemoProfitProtectionService } from './reconciliation/live-demo-profit-protection.service';
 import { DemoPartialCloseLedgerService } from './reconciliation/demo-partial-close-ledger.service';
 import { DemoPartialCloseReconciliationService } from './reconciliation/demo-partial-close-reconciliation.service';
+import { DemoProfitStopAuthoritySyncService } from './reconciliation/demo-profit-stop-authority-sync.service';
+import { DemoProtectedProfitRunnerOrchestrator } from './reconciliation/demo-protected-profit-runner-orchestrator.service';
 
 /**
  * ExecutionModule — Live trade execution, lifecycle management, and
@@ -95,6 +98,10 @@ import { DemoPartialCloseReconciliationService } from './reconciliation/demo-par
       ExecutionConfirmation,
       AiSignalIdentity,
       Order,
+      // Immutable per-fill accounting evidence ledger (migration
+      // 1795564800000) — read via raw SQL in OrderService; registered so
+      // the entity metadata is part of the connection schema.
+      OrderFillEvidence,
       BrokerAccount,
       ReconciliationRun,
       ReconciliationDiscrepancy,
@@ -174,6 +181,13 @@ import { DemoPartialCloseReconciliationService } from './reconciliation/demo-par
     DemoPartialCloseLedgerService,
     // Internal-only provider evidence persistence; broker dispatch stays disabled.
     DemoPartialCloseReconciliationService,
+    // Internal-only, default-disabled and no controller or broker amendment
+    // dispatch; synchronizes pre-verified broker stop proof + trade authority
+    // atomically when a separately authorized workflow is eventually active.
+    DemoProfitStopAuthoritySyncService,
+    // Internal, triple-flag-disabled broker-verified DEMO protection setup.
+    // Does not subscribe to the profit loop or grant an executable HOLD.
+    DemoProtectedProfitRunnerOrchestrator,
     TradeReconciliationJob,
     TradeReconciliationProducer,
     // Round 7 (P1): the expiry-hygiene sweeper (stale intents/confirmations

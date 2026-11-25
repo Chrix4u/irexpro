@@ -56,6 +56,7 @@ import {
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
+import { evaluateCtraderStopDistanceProof } from '../execution/reconciliation/ctrader-native-min-stop-distance-shadow';
 import { ConnectBrokerDto } from './dto/connect-broker.dto';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
@@ -154,6 +155,16 @@ export class BrokerService {
   ) {}
 
   // ─── Read operations ──────────────────────────────────────────────────────
+
+  /**
+   * Read-only proof required by every multi-model LIVE session admission.
+   * The registry considers only current, durable HARNESS_CERTIFIED evidence;
+   * it deliberately refuses legacy attestations and BETA/UNVERIFIED brokers.
+   * No caller can promote a broker by setting a connection flag.
+   */
+  isProductionLiveEligible(brokerId: string): boolean {
+    return this.providerRegistry.isProductionLiveEligible(brokerId);
+  }
 
   /**
    * Sprint 50 PR-4 — load connections by id for the reconciliation worker
@@ -1366,6 +1377,11 @@ export class BrokerService {
     if ((dto.accountType as BrokerMode) !== connection.accountType) {
       throw new BadRequestException('Credential rotation must use the same account type');
     }
+    if (dto.accountId !== connection.accountId) {
+      throw new BadRequestException(
+        'Credential rotation must use the same broker trading account ID',
+      );
+    }
 
     // #291 / correction round 3 (finding 5 reconciliation): the NEW
     // credential set is validated on an EPHEMERAL adapter context — the
@@ -1393,6 +1409,11 @@ export class BrokerService {
       testError = testResult.errorMessage;
     } catch (err) {
       testError = err instanceof BrokerAdapterError ? err.message : 'Rotation test failed';
+    }
+
+    if (testOk && testResult?.accountId && testResult.accountId !== connection.accountId) {
+      testOk = false;
+      testError = 'Provider validated credentials for a different trading account';
     }
 
     if (!testOk) {
@@ -1923,6 +1944,300 @@ export class BrokerService {
     } finally {
       Object.keys(credentials).forEach((key) => {
         (credentials as unknown as Record<string, unknown>)[key] = null;
+      });
+    }
+  }
+
+  /**
+   * INTERNAL, opt-in owner Pepperstone USD DEMO stop-only operation.
+   * This is NOT a controller and NOT a permission to delay an exit.
+   * A durable DISPATCHING intent and fresh provider proof are mandatory;
+   * any uncertain provider outcome is propagated for ledger quarantine.
+   * The return becomes usable only after an independent DB authority sync.
+   */
+  async amendVerifiedOwnerDemoProfitStop(input: {
+    userId: string;
+    connectionId: string;
+    ledgerId: string;
+  }): Promise<{
+    brokerAcceptedAt: Date;
+    brokerVerifiedAt: Date;
+    brokerPositionId: string;
+    brokerReadbackStop: string;
+    brokerReadbackTakeProfit: string;
+    executionAuthorityGranted: false;
+    liveTradingEnabled: false;
+  }> {
+    if (
+      process.env.IREXPRO_PEPPERSTONE_DEMO_PROTECTED_RUNNER_AMEND !== 'enabled' ||
+      !process.env.VPS_FOREX_SCANNER_USER_ID ||
+      input.userId !== process.env.VPS_FOREX_SCANNER_USER_ID
+    ) {
+      throw new ForbiddenException('Pepperstone DEMO protected-runner amendment is disabled.');
+    }
+    const connection = await this.findConnectionById(input.connectionId, input.userId);
+    if (
+      connection.userId !== input.userId ||
+      connection.brokerId !== 'pepperstone-ctrader' ||
+      connection.accountType !== BrokerMode.DEMO ||
+      connection.accountCurrency !== 'USD' ||
+      connection.status !== BrokerConnectionStatus.CONNECTED ||
+      !connection.encryptedCredentials ||
+      !connection.credentialIv ||
+      !connection.credentialTag
+    ) {
+      throw new ForbiddenException('Exact connected owner Pepperstone USD DEMO account required.');
+    }
+    this.assertCredentialsUsable(connection, 'amendVerifiedOwnerDemoProfitStop');
+    const records: Array<{
+      id: string;
+      user_id: string;
+      broker_connection_id: string;
+      broker_position_id: string;
+      broker_id: string;
+      account_type: string;
+      account_currency: string;
+      state: string;
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      trade_lots: string;
+      original_stop: string;
+      proposed_positive_stop: string;
+      entry_price: string;
+      original_take_profit: string;
+      estimated_net_floor_after_reserve: string;
+      broker_quote_at: Date;
+      expires_at: Date;
+      trade_status: string;
+      trade_stop: string;
+      trade_tp: string;
+      trade_lots_current: string;
+      trade_position: string;
+      active_session: boolean;
+      trade_route: string | null;
+      strategy_route: string;
+    }> = await this.connectionRepo.manager.query(
+      `SELECT l.id,l.user_id,l.broker_connection_id,l.broker_position_id,
+              l.broker_id,l.account_type,l.account_currency,l.state,
+              l.instrument,l.direction,l.trade_lots::text,l.original_stop::text,
+              l.proposed_positive_stop::text,l.entry_price::text,
+              l.original_take_profit::text,
+              l.estimated_net_floor_after_reserve::text,l.broker_quote_at,
+              l.expires_at,l.strategy_route,t.status AS trade_status,
+              t.stop_loss::text AS trade_stop,t.take_profit::text AS trade_tp,
+              t.lot_size::text AS trade_lots_current,
+              COALESCE(t.external_position_id,t.external_order_id) AS trade_position,
+              EXISTS (SELECT 1 FROM trading.trading_sessions s
+                      WHERE s.id=t.trading_session_id AND s.status='ACTIVE')
+                AS active_session,
+              ti.metadata->>'multimodel_plan_b_route' AS trade_route
+       FROM trading.demo_profit_stop_amendment_intents l
+       JOIN trading.trades t ON t.id=l.trade_id
+          AND t.user_id=l.user_id AND t.broker_connection_id=l.broker_connection_id
+       LEFT JOIN trading.trade_intents ti ON ti.id=t.trade_intent_id
+          AND ti.user_id=t.user_id
+       WHERE l.id=$1 AND l.user_id=$2 AND l.broker_connection_id=$3`,
+      [input.ledgerId, input.userId, input.connectionId],
+    );
+    const l = records[0];
+    const price = (x: string) => Number(x);
+    const equal = (x: string | number, y: string | number) =>
+      Number.isFinite(Number(x)) &&
+      Number.isFinite(Number(y)) &&
+      Math.abs(Number(x) - Number(y)) < 1e-8;
+    if (
+      records.length !== 1 ||
+      !l ||
+      l.user_id !== input.userId ||
+      l.broker_connection_id !== input.connectionId ||
+      l.broker_id !== 'pepperstone-ctrader' ||
+      l.account_type !== 'DEMO' ||
+      l.account_currency !== 'USD' ||
+      l.state !== 'DISPATCHING' ||
+      l.trade_status !== 'OPEN' ||
+      !l.active_session ||
+      l.trade_position !== l.broker_position_id ||
+      l.trade_route !== l.strategy_route ||
+      !['EARLY_TRANSITION', 'CONFIRMED_REVERSAL'].includes(l.strategy_route) ||
+      !equal(l.trade_stop, l.original_stop) ||
+      !equal(l.trade_tp, l.original_take_profit) ||
+      !equal(l.trade_lots_current, l.trade_lots) ||
+      !Number.isFinite(price(l.estimated_net_floor_after_reserve)) ||
+      price(l.estimated_net_floor_after_reserve) <= 0 ||
+      !Number.isFinite(new Date(l.broker_quote_at).getTime()) ||
+      Date.now() - new Date(l.broker_quote_at).getTime() > 5000 ||
+      new Date(l.broker_quote_at).getTime() > Date.now() ||
+      !Number.isFinite(new Date(l.expires_at).getTime()) ||
+      new Date(l.expires_at).getTime() <= Date.now()
+    ) {
+      throw new ConflictException(
+        'Durable DEMO stop intent or trade authority is not dispatchable.',
+      );
+    }
+    const credentials = this.encryptionService.decrypt({
+      ciphertext: connection.encryptedCredentials,
+      iv: connection.credentialIv,
+      tag: connection.credentialTag,
+      keyId: connection.encryptionKeyId ?? 'env-key-v1',
+    });
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
+    adapter.setMode(BrokerMode.DEMO);
+    try {
+      await adapter.connect(credentials);
+      const before = await adapter.getOpenPositions();
+      const matches = before.filter((p) => p.externalOrderId === l.broker_position_id);
+      if (matches.length !== 1)
+        throw new ConflictException('Provider position cannot be uniquely verified.');
+      const p = matches[0];
+      if (
+        p.instrument !== l.instrument ||
+        p.direction !== l.direction ||
+        !equal(p.lotSize, l.trade_lots) ||
+        !equal(p.openPrice, l.entry_price) ||
+        !equal(p.stopLoss, l.original_stop) ||
+        !equal(p.takeProfit, l.original_take_profit)
+      ) {
+        throw new ConflictException(
+          'Provider position or original protection differs from reserved intent.',
+        );
+      }
+      const [instruments, quote] = await Promise.all([
+        adapter.getInstrumentList(),
+        adapter.getCurrentPrice(l.instrument),
+      ]);
+      const spec = instruments.find((x) => x.symbol === l.instrument) ?? null;
+      const now = new Date();
+      const native = evaluateCtraderStopDistanceProof({
+        ownerDemoVerified: true,
+        brokerId: connection.brokerId,
+        accountType: connection.accountType,
+        currency: connection.accountCurrency,
+        instrument: l.instrument,
+        direction: l.direction,
+        entryPrice: price(l.entry_price),
+        originalStop: price(l.original_stop),
+        originalTakeProfit: price(l.original_take_profit),
+        proposedStop: price(l.proposed_positive_stop),
+        lastBid: quote ? price(quote.bid) : null,
+        lastAsk: quote ? price(quote.ask) : null,
+        quoteObservedAt: quote?.timestamp ?? null,
+        observedAt: now,
+        symbol: spec,
+      });
+      if (
+        !native.candidateMeetsAdvertisedMinDistance ||
+        !spec ||
+        !Number.isInteger(spec.digits) ||
+        !equal(
+          price(l.proposed_positive_stop),
+          Number(price(l.proposed_positive_stop).toFixed(spec.digits)),
+        ) ||
+        new Date(l.expires_at).getTime() <= Date.now()
+      ) {
+        throw new ConflictException('Broker-native tick/min-stop/quote preflight is unproved.');
+      }
+      // Commit a one-shot durable broker-dispatch fence before sending 2110.
+      // A process crash or timeout cannot retry an uncertain stop amendment.
+      const dispatch: Array<{ id: string }> = await this.connectionRepo.manager.query(
+        `UPDATE trading.demo_profit_stop_amendment_intents l
+           SET last_error_code='STOP_AMEND_IO_COMMITTED',updated_at=clock_timestamp()
+         WHERE l.id=$1 AND l.user_id=$2 AND l.broker_connection_id=$3
+           AND l.state='DISPATCHING' AND l.last_error_code IS NULL
+           AND l.expires_at>clock_timestamp()
+           AND EXISTS (SELECT 1 FROM trading.trades t
+                       JOIN trading.trading_sessions s ON s.id=t.trading_session_id
+                       WHERE t.id=l.trade_id AND t.status='OPEN' AND s.status='ACTIVE')
+         RETURNING l.id`,
+        [input.ledgerId, input.userId, input.connectionId],
+      );
+      if (dispatch.length !== 1)
+        throw new ConflictException(
+          'Durable stop-amendment dispatch fence is unavailable or already claimed.',
+        );
+      try {
+        // The ONLY provider WRITE. Preserve the original TP exactly.
+        // The adapter's generic execution event is NOT sufficient without
+        // the provider readback and durable ACK CAS below.
+        const ack = await adapter.modifyOrder(l.broker_position_id, {
+          newStopLoss: price(l.proposed_positive_stop).toFixed(spec.digits),
+          newTakeProfit: price(l.original_take_profit).toFixed(spec.digits),
+        });
+        const brokerAcceptedAt = new Date();
+        if (
+          !ack.success ||
+          ack.status !== 'FILLED' ||
+          ack.externalOrderId !== l.broker_position_id
+        ) {
+          throw new ConflictException('Provider amendment was not acknowledged.');
+        }
+        const after = await adapter.getOpenPositions();
+        const final = after.filter((x) => x.externalOrderId === l.broker_position_id);
+        const brokerVerifiedAt = new Date();
+        if (
+          final.length !== 1 ||
+          final[0].instrument !== l.instrument ||
+          final[0].direction !== l.direction ||
+          !equal(final[0].lotSize, l.trade_lots) ||
+          !equal(final[0].stopLoss, l.proposed_positive_stop) ||
+          !equal(final[0].takeProfit, l.original_take_profit) ||
+          !equal(final[0].openPrice, l.entry_price)
+        ) {
+          throw new ConflictException('Provider ACK received, but stop readback is not proven.');
+        }
+        const updated: Array<{ id: string }> = await this.connectionRepo.manager.query(
+          `UPDATE trading.demo_profit_stop_amendment_intents
+              SET state='ACKNOWLEDGED',broker_ack_at=$4::timestamptz,
+                  broker_readback_stop=$5::numeric,
+                  broker_verified_at=$6::timestamptz,
+                  last_error_code=NULL,updated_at=clock_timestamp()
+            WHERE id=$1 AND user_id=$2 AND broker_connection_id=$3
+              AND state='DISPATCHING' AND last_error_code='STOP_AMEND_IO_COMMITTED'
+              AND expires_at>$6::timestamptz RETURNING id`,
+          [
+            input.ledgerId,
+            input.userId,
+            input.connectionId,
+            brokerAcceptedAt.toISOString(),
+            final[0].stopLoss,
+            brokerVerifiedAt.toISOString(),
+          ],
+        );
+        if (updated.length !== 1)
+          throw new ConflictException(
+            'Broker amendment verified, but durable ACK CAS failed; manual recovery required.',
+          );
+        return {
+          brokerAcceptedAt,
+          brokerVerifiedAt,
+          brokerPositionId: l.broker_position_id,
+          brokerReadbackStop: final[0].stopLoss,
+          brokerReadbackTakeProfit: final[0].takeProfit,
+          executionAuthorityGranted: false,
+          liveTradingEnabled: false,
+        };
+      } catch (err) {
+        // An UNKNOWN after broker I/O cannot be retried automatically.
+        // Quarantine only this exact claimed intent. Never roll back a
+        // potentially stronger broker SL or invent an ACK.
+        await this.connectionRepo.manager
+          .query(
+            `UPDATE trading.demo_profit_stop_amendment_intents
+              SET state='NEEDS_MANUAL_RECONCILIATION',
+                  last_error_code='PROVIDER_STOP_AMEND_UNCERTAIN',
+                  updated_at=clock_timestamp()
+            WHERE id=$1 AND user_id=$2 AND broker_connection_id=$3
+              AND state='DISPATCHING' AND last_error_code='STOP_AMEND_IO_COMMITTED'`,
+            [input.ledgerId, input.userId, input.connectionId],
+          )
+          .catch(() => {});
+        throw err;
+      }
+    } finally {
+      Object.keys(credentials).forEach((k) => {
+        (credentials as unknown as Record<string, unknown>)[k] = null;
       });
     }
   }

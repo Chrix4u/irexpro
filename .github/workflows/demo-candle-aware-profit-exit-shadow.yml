@@ -1,0 +1,47 @@
+name: iRexPro DEMO candle-aware exit shadow
+on:
+  push:
+    branches: ['feat/profit-protection-candle-aware-shadow-20261123', 'release/candle-profit-shadow-on-active-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/src/modules/execution/reconciliation/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  profit-exit-shadow-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install only API dependency tree
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Full API TypeScript compile-check (no broker calls)
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - name: Profit-protection plus candle as-of shadow regression
+        run: pnpm --filter @irexpro/api exec jest src/modules/execution/reconciliation/candle-aware-profit-patience-shadow.spec.ts src/modules/execution/reconciliation/live-demo-profit-protection.service.spec.ts src/modules/execution/reconciliation/profit-lock-patience-shadow.spec.ts src/modules/execution/reconciliation/pepperstone-demo-net-profit-lock.spec.ts --runInBand --silent --no-coverage
+      - name: Build exact-SHA API bundle (no VPS build)
+        run: pnpm --filter @irexpro/api build
+      - name: Package immutable API dist with SHA manifest
+        run: |
+          mkdir -p release-outputs
+          test -s apps/api/dist/main.js
+          tar -C apps/api -czf release-outputs/irexpro-api-candle-shadow-dist.tar.gz dist
+          sha256sum release-outputs/irexpro-api-candle-shadow-dist.tar.gz > release-outputs/SHA256SUMS
+          printf '%s\n' "$GITHUB_SHA" > release-outputs/SOURCE_SHA
+      - name: Publish artifact for guarded deployment only
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: irexpro-api-candle-shadow-${{ github.sha }}
+          path: release-outputs/
+          retention-days: 3
+          if-no-files-found: error

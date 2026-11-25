@@ -13,6 +13,7 @@
  */
 const {brokerMarkNetUSD,finiteNumber,timestamp}=require('./audit-short-horizon-broker-marks.cjs');
 const HORIZONS=[1,3,5,10];
+const EXTENDED_RESEARCH_HORIZONS=Object.freeze([1,3,5,10,20,30,60]);
 function validQuote(q) {
   const bid=finiteNumber(q.bid_close),ask=finiteNumber(q.ask_close);
   return q.source==='ctrader-broker-native'
@@ -83,7 +84,11 @@ function comparePairedDirections(cases) {
   }
   return report;
 }
-function studyEpisode(decision,quotes,closes) {
+function studyEpisode(decision,quotes,closes,horizons=HORIZONS) {
+  // Extended marks are explicitly research-only; legacy callers remain 1/3/5/10.
+  if(!Array.isArray(horizons)||!horizons.length||
+     horizons.some(h=>!EXTENDED_RESEARCH_HORIZONS.includes(h)))
+    throw new Error('UNSUPPORTED_RESEARCH_MARK_HORIZON');
   const decided=timestamp(decision.created_at);
   if(decided===null||!['BUY','SELL'].includes(decision.direction)||!Array.isArray(quotes))return null;
   const entryQuote=firstCausalQuote(quotes,decided,90000);
@@ -95,7 +100,7 @@ function studyEpisode(decision,quotes,closes) {
   const hypotTrade={instrument:decision.instrument,direction:decision.direction,
     fill_price:entryPrice,lot_size:1,commission:-feePerLot,swap:0};
   const outcomes={};
-  for(const h of HORIZONS) {
+  for(const h of horizons) {
     const exitQuote=firstCausalQuote(quotes,entryAt+h*60000,90000);
     if(!exitQuote){outcomes[h]=null;continue}
     const price=Number(decision.direction==='BUY'?exitQuote.bid_close:exitQuote.ask_close);
@@ -105,7 +110,7 @@ function studyEpisode(decision,quotes,closes) {
       signedPips:pnl.pips,positiveAfterCosts:pnl.netUSD>0,
       markLagSec:(timestamp(exitQuote.last_quote_sample_at)-(entryAt+h*60000))/1000};
   }
-  return {reason:'MARKED',feePerLot,entryAt:new Date(entryAt).toISOString(),outcomes};
+  return {reason:'MARKED',feePerLot,entryAt:new Date(entryAt).toISOString(),entryPrice,outcomes};
 }
 const ASOF_NUMERIC_FEATURES = Object.freeze([
   'atr','score','confidence','directionQuality','grossExpectedR',

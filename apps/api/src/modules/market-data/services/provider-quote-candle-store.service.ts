@@ -8,6 +8,8 @@ export interface ProviderQuoteCandle extends OHLCV {
   source: string;
   sampleCount: number;
   spreadClose: string | null;
+  /** Last strictly positive broker-observed spread in this exact M1 minute. */
+  lastPositiveSpread?: string | null;
   firstSampleAt: Date;
   lastSampleAt: Date;
 }
@@ -34,7 +36,7 @@ export class ProviderQuoteCandleStoreService {
   ): Promise<void> {
     const bid = Number(quote.bid);
     const ask = Number(quote.ask);
-    if (!Number.isFinite(bid) || !Number.isFinite(ask) || ask < bid) return;
+    if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask < bid) return;
 
     const midpoint = (bid + ask) / 2;
     const spread = ask - bid;
@@ -49,10 +51,16 @@ export class ProviderQuoteCandleStoreService {
         connection_id, instrument, timeframe, bucket_time,
         open, high, low, close, bid_close, ask_close, spread_close,
         sample_count, positive_quote_sample_count, source,
-        first_sample_at, last_sample_at, last_quote_sample_at
+        first_sample_at, last_sample_at, last_quote_sample_at,
+        last_positive_bid, last_positive_ask, last_positive_spread,
+        last_positive_sample_at
       ) VALUES (
         $1, $2, 'M1', $3, $4, $4, $4, $4, $5, $6, $7, 1,
-        CASE WHEN $7::numeric > 0 THEN 1 ELSE 0 END, $9, $8, $8, $8
+        CASE WHEN $7::numeric > 0 THEN 1 ELSE 0 END, $9, $8, $8, $8,
+        CASE WHEN $7::numeric > 0 THEN $5::numeric ELSE NULL END,
+        CASE WHEN $7::numeric > 0 THEN $6::numeric ELSE NULL END,
+        CASE WHEN $7::numeric > 0 THEN $7::numeric ELSE NULL END,
+        CASE WHEN $7::numeric > 0 THEN $8::timestamptz ELSE NULL END
       )
       ON CONFLICT (connection_id, instrument, timeframe, bucket_time)
       DO UPDATE SET
@@ -66,6 +74,25 @@ export class ProviderQuoteCandleStoreService {
           THEN EXCLUDED.ask_close ELSE market_data.provider_quote_candles.ask_close END,
         spread_close = CASE WHEN EXCLUDED.last_quote_sample_at > COALESCE(market_data.provider_quote_candles.last_quote_sample_at, '-infinity'::timestamptz)
           THEN EXCLUDED.spread_close ELSE market_data.provider_quote_candles.spread_close END,
+        -- A later zero-spread quote must not erase a REAL earlier positive
+        -- broker bid/ask observation within this same minute. This does not
+        -- change bid_close/ask_close or fabricate any historic missing quote.
+        last_positive_bid = CASE
+          WHEN EXCLUDED.last_positive_sample_at > COALESCE(market_data.provider_quote_candles.last_positive_sample_at, '-infinity'::timestamptz)
+          THEN EXCLUDED.last_positive_bid
+          ELSE market_data.provider_quote_candles.last_positive_bid END,
+        last_positive_ask = CASE
+          WHEN EXCLUDED.last_positive_sample_at > COALESCE(market_data.provider_quote_candles.last_positive_sample_at, '-infinity'::timestamptz)
+          THEN EXCLUDED.last_positive_ask
+          ELSE market_data.provider_quote_candles.last_positive_ask END,
+        last_positive_spread = CASE
+          WHEN EXCLUDED.last_positive_sample_at > COALESCE(market_data.provider_quote_candles.last_positive_sample_at, '-infinity'::timestamptz)
+          THEN EXCLUDED.last_positive_spread
+          ELSE market_data.provider_quote_candles.last_positive_spread END,
+        last_positive_sample_at = GREATEST(
+          market_data.provider_quote_candles.last_positive_sample_at,
+          EXCLUDED.last_positive_sample_at
+        ),
         sample_count = market_data.provider_quote_candles.sample_count +
           CASE WHEN EXCLUDED.last_quote_sample_at > COALESCE(market_data.provider_quote_candles.last_quote_sample_at, '-infinity'::timestamptz) THEN 1 ELSE 0 END,
         positive_quote_sample_count = market_data.provider_quote_candles.positive_quote_sample_count +
@@ -360,7 +387,7 @@ export class ProviderQuoteCandleStoreService {
     const rows = await this.dataSource.query(
       `
       SELECT bucket_time, open, high, low, close, sample_count, spread_close,
-             source, first_sample_at, last_sample_at
+             last_positive_spread, source, first_sample_at, last_sample_at
       FROM market_data.provider_quote_candles
       WHERE connection_id = $1
         AND instrument = $2
@@ -390,6 +417,8 @@ export class ProviderQuoteCandleStoreService {
       source: String(row.source ?? ''),
       sampleCount: Number(row.sample_count),
       spreadClose: row.spread_close == null ? null : String(row.spread_close),
+      lastPositiveSpread:
+        row.last_positive_spread == null ? null : String(row.last_positive_spread),
       firstSampleAt: new Date(row.first_sample_at),
       lastSampleAt: new Date(row.last_sample_at),
     }));

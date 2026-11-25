@@ -299,11 +299,17 @@ describe('Uncertain-write reconciliation convergence (Sprint 56 correction round
 
       // The internal order converged onto the provider-observed FILLED state:
       // the missed fill delta is applied through the exact-decimal path...
-      expect(orderService.applyFill).toHaveBeenCalledWith('order-1', {
-        quantity: '1',
-        price: '1.10000',
-        providerOrderId: 'ticket-1',
-      });
+      // (fenced on the state premise observed when the delta was derived —
+      // concurrent sweeps cannot double-book the same unidentified delta)
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'order-1',
+        {
+          quantity: '1',
+          price: '1.10000',
+          providerOrderId: 'ticket-1',
+        },
+        { expectedFilledQuantity: '0.0000' },
+      );
       // CORRECTION ROUND 4 (finding 7): applyFill is the FILL-BEARING
       // authority — the atomic delta application itself transitions
       // RECONCILIATION_PENDING → FILLED with its economic facts. The old

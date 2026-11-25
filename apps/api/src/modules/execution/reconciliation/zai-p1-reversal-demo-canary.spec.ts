@@ -36,6 +36,33 @@ describe('z.ai P1 cTrader DEMO preflight with zero provider authority', () => {
       modifiesExecution: false,
     });
   });
+  it.each(['pepperstone-ctrader', 'icmarkets-ctrader', 'ctrader'])(
+    'recognizes %s as cTrader DEMO for research-only candidate preflight',
+    (brokerId) => {
+      const result = evaluateZaiP1ReversalDemoPreflight({ ...input, brokerId });
+      expect(result).toMatchObject({
+        researchEligible: true,
+        reason: 'PARTIAL_EXECUTION_LIFECYCLE_UNCERTIFIED',
+        canSendPartialClose: false,
+        canModifyOrder: false,
+        modifiesExecution: false,
+      });
+      expect(
+        evaluateZaiP1ReversalDemoPreflight({
+          ...input,
+          brokerId,
+          accountType: 'LIVE',
+        }).reason,
+      ).toBe('NOT_CTRADER_DEMO');
+      expect(
+        evaluateZaiP1ReversalDemoPreflight({
+          ...input,
+          brokerId,
+          confirmedFreshTrend: false,
+        }).reason,
+      ).toBe('TREND_RECHECK_FAILED');
+    },
+  );
   it('rejects LIVE, unsupported brokers and unrelated strategy routes', () => {
     expect(evaluateZaiP1ReversalDemoPreflight({ ...input, accountType: 'LIVE' }).reason).toBe(
       'NOT_CTRADER_DEMO',

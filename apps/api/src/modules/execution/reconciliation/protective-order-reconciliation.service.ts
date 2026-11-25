@@ -11,6 +11,7 @@ import { BrokerCredentialLifecycle } from '../../broker/authorization/broker-cre
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
+import { evaluateBrokerTighterProfitStopPreservation } from './broker-tighter-profit-stop-preservation';
 
 /**
  * Round 6 live-execution completion (§8) — per-trade protective-order
@@ -30,7 +31,10 @@ export type ProtectiveOutcome =
   | 'POSITION_MISSING'
   /** The INTERNAL protective levels are unprovable — repair would invent a
    *  value, so the loop fails closed and escalates. */
-  | 'INTERNAL_UNPROVABLE';
+  | 'INTERNAL_UNPROVABLE'
+  /** Verified more-protective broker stop preserved; authoritative state must
+   * be independently synchronized before the new stop can permit any hold. */
+  | 'PROFIT_STOP_PRESERVED_REQUIRES_SYNC';
 
 /**
  * Provider-side protective-level tolerance: a provider SL/TP within 0.05%
@@ -53,6 +57,8 @@ export interface ProtectiveReconciliationOutcome {
   repairedCount: number;
   repairFailedCount: number;
   skippedCount: number;
+  /** Broker reports a strictly tighter profitable SL than internal authority. */
+  preservedTighterProfitStopCount?: number;
   /** True when the connection itself could not be reconciled (typed reason
    *  in `reason`) — never a silent skip. */
   status: 'OK' | 'SKIPPED' | 'FAILED';
@@ -170,7 +176,9 @@ export class ProtectiveOrderReconciliationService {
     let repairedCount = 0;
     let repairFailedCount = 0;
     let skippedCount = 0;
+    let preservedTighterProfitStopCount = 0;
     const failures: ProtectiveReconciliationResult[] = [];
+    const pendingAuthority: ProtectiveReconciliationResult[] = [];
 
     for (const trade of candidates) {
       const result = await this.verifyAndRepairOne(
@@ -178,6 +186,7 @@ export class ProtectiveOrderReconciliationService {
         adapter,
         providerByExternalId.get((trade.externalPositionId ?? trade.externalOrderId) as string) ??
           null,
+        connection,
       );
       switch (result.outcome) {
         case 'PROTECTED':
@@ -190,6 +199,11 @@ export class ProtectiveOrderReconciliationService {
           repairFailedCount++;
           failures.push(result);
           break;
+        case 'PROFIT_STOP_PRESERVED_REQUIRES_SYNC':
+          preservedTighterProfitStopCount++;
+          pendingAuthority.push(result);
+          skippedCount++;
+          break;
         default:
           skippedCount++;
           break;
@@ -201,9 +215,20 @@ export class ProtectiveOrderReconciliationService {
       action: AuditAction.PROTECTIVE_ORDER_RECONCILED,
       resourceType: 'BrokerConnection',
       resourceId: connection.id,
-      severity: repairFailedCount > 0 ? AuditSeverity.CRITICAL : AuditSeverity.INFO,
+      severity:
+        repairFailedCount > 0
+          ? AuditSeverity.CRITICAL
+          : preservedTighterProfitStopCount > 0
+            ? AuditSeverity.WARNING
+            : AuditSeverity.INFO,
       metadata: {
         checked: candidates.length,
+        preservedTighterProfitStopCount,
+        pendingAuthority: pendingAuthority.map((r) => ({
+          tradeId: r.tradeId,
+          outcome: r.outcome,
+          detail: r.detail ?? null,
+        })),
         protectedCount,
         repairedCount,
         repairFailedCount,
@@ -222,6 +247,7 @@ export class ProtectiveOrderReconciliationService {
       repairedCount,
       repairFailedCount,
       skippedCount,
+      preservedTighterProfitStopCount,
       status: repairFailedCount > 0 ? 'FAILED' : 'OK',
     };
   }
@@ -232,6 +258,7 @@ export class ProtectiveOrderReconciliationService {
     trade: Trade,
     adapter: IBrokerAdapter,
     position: BrokerPosition | null,
+    connection: BrokerConnection,
   ): Promise<ProtectiveReconciliationResult> {
     const externalOrderId = (trade.externalPositionId ?? trade.externalOrderId) as string;
 
@@ -257,6 +284,47 @@ export class ProtectiveOrderReconciliationService {
 
     if (slOk && tpOk) {
       return { tradeId: trade.id, externalOrderId, outcome: 'PROTECTED' };
+    }
+
+    // A provider-installed positive stop that is STRICTLY stronger than the
+    // original stop must not be overwritten with the weaker DB authority.
+    // This is NOT an authorization to adopt it for HOLD decisions: the
+    // authoritative DB still needs durable verified reconciliation. Run
+    // before the existing modifyOrder repair path and only for exact owner
+    // Pepperstone USD DEMO with matching TP and validated BUY/SELL geometry.
+    if (!slOk && tpOk) {
+      const stronger = evaluateBrokerTighterProfitStopPreservation({
+        guardEnabled:
+          process.env.IREXPRO_PEPPERSTONE_DEMO_PRESERVE_TIGHTER_BROKER_STOP === 'enabled',
+        ownerUserId: process.env.VPS_FOREX_SCANNER_USER_ID ?? null,
+        userId: trade.userId,
+        brokerId: connection.brokerId,
+        accountType: connection.accountType,
+        accountCurrency: connection.accountCurrency,
+        tradeCurrency: trade.accountCurrency,
+        direction: trade.direction,
+        brokerDirection: position.direction,
+        instrument: trade.instrument,
+        brokerInstrument: position.instrument,
+        tradeLots: trade.lotSize,
+        brokerLots: position.lotSize,
+        entry: position.openPrice,
+        mark: position.currentPrice,
+        databaseStop: trade.stopLoss,
+        databaseTakeProfit: trade.takeProfit,
+        brokerStop: position.stopLoss,
+        brokerTakeProfit: position.takeProfit,
+      });
+      if (stronger.preserveMoreProtectiveBrokerStop) {
+        return {
+          tradeId: trade.id,
+          externalOrderId,
+          outcome: 'PROFIT_STOP_PRESERVED_REQUIRES_SYNC',
+          detail:
+            'broker profit stop stronger than DB SL; no relaxing amendment; ' +
+            'manual/durable authority reconciliation required before extra hold',
+        };
+      }
     }
 
     // MISSING or DEVIATED at the provider → ONE repair attempt this cycle:

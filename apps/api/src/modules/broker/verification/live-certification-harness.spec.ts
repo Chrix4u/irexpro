@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { ExactDecimal } from '../../../common/utils/exact-decimal';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -418,6 +419,36 @@ describe('LIVE certification harness — LIVE classification enforcement (gate 4
     expect(adapter.openPositionCount()).toBe(0);
   });
 
+  it('restores the operational cTrader session after its ephemeral credential check', async () => {
+    const adapter = new FakeLiveCertificationAdapter();
+    adapter.testConnectionDropsSession = true;
+    const evidence = await runLiveProviderCertification(liveGateOptions(adapter));
+    expect(evidence.overall).toBe('PASS');
+    expect(evidence.steps.find((step) => step.name === 'symbol-metadata')?.status).toBe('PASS');
+    expect(evidence.steps.find((step) => step.name === 'baseline-exposure-snapshot')?.status).toBe(
+      'PASS',
+    );
+    expect(adapter.calls.filter((call) => call === 'connect')).toHaveLength(2);
+    expect(adapter.calls.indexOf('testConnection')).toBeLessThan(
+      adapter.calls.lastIndexOf('connect'),
+    );
+    expect(adapter.openPositionCount()).toBe(0);
+  });
+
+  it('fails closed without placing a canary if the operational session cannot be restored', async () => {
+    const adapter = new FakeLiveCertificationAdapter();
+    adapter.testConnectionDropsSession = true;
+    adapter.refuseSessionRestoration = true;
+    const evidence = await runLiveProviderCertification(liveGateOptions(adapter));
+    expect(evidence.overall).toBe('FAIL');
+    expect(evidence.steps.find((step) => step.name === 'account-state')?.status).toBe('FAIL');
+    expect(evidence.steps.find((step) => step.name === 'place-minimum-safe-order')?.status).toBe(
+      'SKIPPED',
+    );
+    expect(adapter.calls).not.toContain('placeOrder');
+    expect(adapter.openPositionCount()).toBe(0);
+  });
+
   it('FAILS immediately when the account-state classification re-check observes DEMO (testConnection surface)', async () => {
     const adapter = new FakeLiveCertificationAdapter();
     adapter.classification = BrokerMode.LIVE;
@@ -465,6 +496,74 @@ describe('LIVE certification harness — full machinery (fake LIVE adapter, alwa
       ...(overrides.instrument ? { instrument: overrides.instrument } : {}),
     };
   }
+
+  it('refuses a Pepperstone LIVE canary without atomic stop proof (zero broker orders)', async () => {
+    const adapter = new FakeLiveCertificationAdapter();
+    const o = liveGateOptions(adapter);
+    const evidence = await runLiveProviderCertification({
+      ...o,
+      target: { ...o.target, brokerId: 'pepperstone-ctrader' },
+      instrument: 'EURUSD',
+      maxCanaryRiskUsd: '1',
+    });
+    expect(evidence.overall).toBe('FAIL');
+    expect(evidence.steps.find((x) => x.name === 'place-minimum-safe-order')?.status).toBe('FAIL');
+    expect(adapter.calls).not.toContain('placeOrder');
+  });
+
+  it('refuses Pepperstone when stop+cost projected risk exceeds $1 (zero broker orders)', async () => {
+    const adapter = new FakeLiveCertificationAdapter();
+    const o = liveGateOptions(adapter);
+    const evidence = await runLiveProviderCertification({
+      ...o,
+      target: { ...o.target, brokerId: 'pepperstone-ctrader' },
+      instrument: 'EURUSD',
+      maxCanaryRiskUsd: '1',
+      protectedCanaryRelativeStopLoss: '100',
+    });
+    expect(evidence.overall).toBe('FAIL');
+    expect(evidence.steps.find((x) => x.name === 'place-minimum-safe-order')?.status).toBe('FAIL');
+    expect(adapter.calls).not.toContain('placeOrder');
+  });
+
+  it('refuses a Pepperstone atomic canary with rollover-wide spread and places no order', async () => {
+    const adapter = new FakeLiveCertificationAdapter();
+    adapter.quoteSpread = '0.00049';
+    const o = liveGateOptions(adapter);
+    const evidence = await runLiveProviderCertification({
+      ...o,
+      target: { ...o.target, brokerId: 'pepperstone-ctrader' },
+      instrument: 'EURUSD',
+      maxCanaryRiskUsd: '1',
+      protectedCanaryRelativeStopLoss: '50',
+    });
+    expect(evidence.certificationResult).toBe('FAIL');
+    expect(evidence.steps.find((x) => x.name === 'place-minimum-safe-order')).toMatchObject({
+      status: 'FAIL',
+      detail: expect.stringContaining('spread or quote freshness'),
+    });
+    expect(adapter.calls).not.toContain('placeOrder');
+  });
+
+  it('places exactly one protected 5-pip fake canary below the $1 cost-inclusive envelope', async () => {
+    const adapter = new FakeLiveCertificationAdapter();
+    adapter.quoteSpread = '0.00010';
+    adapter.separateProviderOrderIds = true;
+    const o = liveGateOptions(adapter);
+    const evidence = await runLiveProviderCertification({
+      ...o,
+      target: { ...o.target, brokerId: 'pepperstone-ctrader' },
+      instrument: 'EURUSD',
+      maxCanaryRiskUsd: '1',
+      protectedCanaryRelativeStopLoss: '50',
+    });
+    expect(evidence.overall).toBe('PASS');
+    expect(adapter.calls.filter((x) => x === 'placeOrder')).toHaveLength(1);
+    expect(adapter.calls.filter((x) => x === 'closeOrder')).toHaveLength(1);
+    expect(evidence.steps.find((x) => x.name === 'query-position')?.status).toBe('PASS');
+    expect(evidence.certificationResult).toBe('PASS');
+    expect(adapter.lastOrderLookupId).toMatch(/^fake-native-order-/);
+  });
 
   it('drives the full certification sequence against a fake LIVE adapter and passes deterministically', async () => {
     const adapter = new FakeLiveCertificationAdapter();
@@ -537,6 +636,11 @@ describe('LIVE certification harness — full machinery (fake LIVE adapter, alwa
     expect(JSON.stringify(written)).not.toContain(CREDENTIAL_MARKER);
     expect(JSON.stringify(written)).not.toContain(FAKE_ACCOUNT_ID);
     expect((written as { mode?: string }).mode).toBe('LIVE');
+    expect(written).toMatchObject({
+      certificationResult: 'PASS',
+      evidenceState: 'PERSISTED',
+      artifactPath: evidence.artifactPath,
+    });
     // The evidence hash is a sha256 hex digest and read-back verification
     // passes against the artifact on disk.
     expect(evidence.evidenceSha256).toMatch(/^[0-9a-f]{64}$/);
@@ -811,6 +915,21 @@ describe('LIVE certification harness — Round 7.1 P0-2: durable-evidence finali
     expect(evidence.evidenceSha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('rejects artifact metadata tampering even when the canonical SHA is unchanged', async () => {
+    const evidence = await runLiveProviderCertification(
+      liveGateOptions(new FakeLiveCertificationAdapter()),
+    );
+    const original = JSON.parse(readFileSync(evidence.artifactPath!, 'utf8'));
+    for (const tampered of [
+      { ...original, evidenceState: 'PERSISTENCE_FAILED' },
+      { ...original, certificationResult: 'EVIDENCE_PERSISTENCE_FAILED' },
+      { ...original, artifactPath: '/some/other/evidence.json' },
+    ]) {
+      writeFileSync(evidence.artifactPath!, JSON.stringify(tampered, null, 2), 'utf8');
+      expect(verifyLiveCertificationArtifact(evidence.artifactPath!, evidence)).toBe(false);
+    }
+  });
+
   it('the canonical evidence hash is stable across serialization round-trips (record → artifact → re-parse)', async () => {
     const evidence = await runLiveProviderCertification(
       liveGateOptions(new FakeLiveCertificationAdapter()),
@@ -898,6 +1017,11 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
   classification: BrokerMode.LIVE | BrokerMode.DEMO = BrokerMode.LIVE;
   /** Overrides the classification observed by testConnection() (account-state re-check). */
   testConnectionClassification?: BrokerMode.LIVE | BrokerMode.DEMO;
+  /** cTrader deliberately closes its adapter session in testConnection(). */
+  testConnectionDropsSession = false;
+  /** Test-only refusal to restore a dropped account session. */
+  refuseSessionRestoration = false;
+  private connected = false;
   minLot = '0.01';
   lotStep = '0.01';
   contractSize = '100000';
@@ -913,11 +1037,15 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
   leakFloatMoney = false;
   /** When set, getRequiredMargin() returns null (unprovable margin). */
   marginNull = false;
+  /** Simulated provider spread; normal 1 pip or rollover 4.9 pip. */
+  quoteSpread = '0.00020';
 
   private readonly positions = new Map<string, BrokerPosition>();
   private readonly orderStates = new Map<string, BrokerOrderState>();
   private readonly closedTrades: BrokerClosedTrade[] = [];
   private nextId = 1;
+  separateProviderOrderIds = false;
+  lastOrderLookupId: string | null = null;
   private canaryClosedOnce = false;
 
   openPositionCount(): number {
@@ -987,6 +1115,19 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
 
   async connect(): Promise<BrokerConnectionResult> {
     this.calls.push('connect');
+    if (
+      this.refuseSessionRestoration &&
+      this.calls.filter((call) => call === 'connect').length > 1
+    ) {
+      return {
+        success: false,
+        accountId: FAKE_ACCOUNT_ID,
+        accountType: this.classification,
+        currency: 'USD',
+        serverTime: new Date(),
+      };
+    }
+    this.connected = true;
     return {
       success: true,
       accountId: FAKE_ACCOUNT_ID,
@@ -998,10 +1139,12 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
 
   async disconnect(): Promise<void> {
     this.calls.push('disconnect');
+    this.connected = false;
   }
 
   async testConnection(): Promise<BrokerConnectionTestResult> {
     this.calls.push('testConnection');
+    if (this.testConnectionDropsSession) this.connected = false;
     return {
       success: true,
       accountId: FAKE_ACCOUNT_ID,
@@ -1011,7 +1154,7 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
   }
 
   isConnected(): boolean {
-    return true;
+    return this.connected;
   }
 
   async getAccountInfo(): Promise<BrokerAccountInfo> {
@@ -1092,9 +1235,9 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
     this.calls.push('getCurrentPrice');
     return {
       instrument,
-      bid: '1.08400',
+      bid: ExactDecimal.parse('1.08420').sub(ExactDecimal.parse(this.quoteSpread)).toString(),
       ask: '1.08420',
-      spread: '0.00020',
+      spread: this.quoteSpread,
       timestamp: new Date(),
     };
   }
@@ -1116,6 +1259,9 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
       );
     }
     const externalOrderId = `fake-live-order-${this.nextId++}`;
+    const brokerNativeOrderId = this.separateProviderOrderIds
+      ? `fake-native-order-${this.nextId}`
+      : externalOrderId;
     const filledPrice = '1.08420';
     this.positions.set(externalOrderId, {
       externalOrderId,
@@ -1124,15 +1270,15 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
       lotSize: order.lotSize,
       openPrice: filledPrice,
       currentPrice: '1.08410',
-      stopLoss: '0',
+      stopLoss: order.relativeStopLoss === '50' ? '1.08370' : '0',
       takeProfit: '0',
       unrealisedPnl: '-0.10',
       openedAt: new Date(),
       commission: '0.00',
       swap: '0.00',
     });
-    this.orderStates.set(externalOrderId, {
-      providerOrderId: externalOrderId,
+    this.orderStates.set(brokerNativeOrderId, {
+      providerOrderId: brokerNativeOrderId,
       clientOrderId: order.clientOrderId ?? null,
       status: 'FILLED',
       instrument: order.instrument,
@@ -1147,6 +1293,7 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
     return {
       success: true,
       externalOrderId,
+      brokerNativeOrderId,
       filledPrice,
       filledQuantity: order.lotSize,
       filledAt: new Date(),
@@ -1224,6 +1371,7 @@ class FakeLiveCertificationAdapter implements IBrokerAdapter {
   }
 
   async getOrderById(providerOrderId: string): Promise<BrokerOrderState | null> {
+    this.lastOrderLookupId = providerOrderId;
     this.calls.push('getOrderById');
     return this.orderStates.get(providerOrderId) ?? null;
   }

@@ -8,7 +8,7 @@ import { CredentialEncryptionService } from '../../broker/services/credential-en
 import { AuditService } from '../../audit/audit.service';
 import { DomainEventBus } from '../../events/event-bus.service';
 import { DomainEventType } from '../../events/enums/domain-event-type.enum';
-import { Trade, TradeStatus } from '../entities/trade.entity';
+import { Trade, TradeDirection, TradeStatus } from '../entities/trade.entity';
 import { TradeIntent } from '../entities/trade-intent.entity';
 import { RiskGrant } from '../entities/risk-grant.entity';
 import { AllocationService } from '../services/allocation.service';
@@ -193,7 +193,7 @@ describe('StateReconciliationService — Phase E: credential lifecycle + securit
 
 describe('StateReconciliationService', () => {
   let service: StateReconciliationService;
-  let tradeRepo: { find: jest.Mock; createQueryBuilder: jest.Mock };
+  let tradeRepo: { find: jest.Mock; findOne: jest.Mock; createQueryBuilder: jest.Mock };
   let orderRepo: { find: jest.Mock; createQueryBuilder: jest.Mock };
   let accountRepo: { findOne: jest.Mock; createQueryBuilder: jest.Mock };
   let brokerService: {
@@ -216,10 +216,12 @@ describe('StateReconciliationService', () => {
     closeTradeFromProvider: jest.Mock;
     recoverTradeToOpen: jest.Mock;
     resolveOrderFromProviderState: jest.Mock;
+    backfillClosedDemoSettlement: jest.Mock;
   };
   let auditService: { log: jest.Mock };
   let eventBus: { publish: jest.Mock };
   let allocationService: { releaseAllocationForIntent: jest.Mock };
+  let orderService: { applyFill: jest.Mock };
   let adapter: {
     brokerId?: string;
     setMode: jest.Mock;
@@ -257,6 +259,7 @@ describe('StateReconciliationService', () => {
 
     tradeRepo = {
       find: jest.fn().mockResolvedValue([]),
+      findOne: jest.fn().mockResolvedValue(null),
       createQueryBuilder: jest.fn().mockReturnValue({
         select: jest.fn().mockReturnThis(),
         where: jest.fn().mockReturnThis(),
@@ -300,10 +303,12 @@ describe('StateReconciliationService', () => {
       closeTradeFromProvider: jest.fn().mockResolvedValue(true),
       recoverTradeToOpen: jest.fn().mockResolvedValue(true),
       resolveOrderFromProviderState: jest.fn().mockResolvedValue(false),
+      backfillClosedDemoSettlement: jest.fn().mockResolvedValue(true),
     };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
     eventBus = { publish: jest.fn() };
     allocationService = { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) };
+    orderService = { applyFill: jest.fn().mockResolvedValue(null) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -316,7 +321,7 @@ describe('StateReconciliationService', () => {
         { provide: CredentialEncryptionService, useValue: encryptionService },
         { provide: ReconciliationPersistenceService, useValue: persistence },
         { provide: ReconciliationResolutionService, useValue: resolution },
-        { provide: OrderService, useValue: {} },
+        { provide: OrderService, useValue: orderService },
         // Round 7.1 (P0-5): pre-commitment recovery deps.
         {
           provide: getRepositoryToken(TradeIntent),
@@ -398,6 +403,255 @@ describe('StateReconciliationService', () => {
         }),
       }),
     );
+  });
+
+  it('Pepperstone DEMO closed-order recovery uses authentic DealList + domain fill only', async () => {
+    const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
+    process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
+    try {
+      const now = Date.now();
+      const opened = new Date(now - 10 * 60_000);
+      const sent = new Date(now - 2 * 60_000 - 1000);
+      const closed = new Date(now - 2 * 60_000);
+      const terminal = {
+        ...openTrade(),
+        id: 'closed-trade-1',
+        status: TradeStatus.CLOSED,
+        instrument: 'USDCAD',
+        direction: TradeDirection.SELL,
+        openedAt: opened,
+        closedAt: closed,
+        externalOrderId: '8422910',
+        lotSize: '2.8000',
+        exitPrice: '1.43767000',
+        realisedPnl: '60.38000000',
+      };
+      const orphan = {
+        ...pendingOrder(),
+        id: 'close-order-1',
+        tradeId: 'closed-trade-1',
+        providerOrderId: null,
+        orderKind: 'MARKET',
+        instrument: 'USDCAD',
+        direction: TradeDirection.BUY,
+        requestedQuantity: '2.8000',
+        filledQuantity: '0.0000',
+        avgFillPrice: null,
+        createdAt: new Date(sent.getTime() - 75),
+        submittedAt: sent,
+      };
+      const deal = {
+        externalOrderId: '8422910',
+        instrument: 'USDCAD',
+        direction: 'BUY',
+        lotSize: '2.8',
+        openPrice: '1.43798',
+        closePrice: '1.43767',
+        stopLoss: '0',
+        takeProfit: '0',
+        realisedPnl: '60.38',
+        openedAt: closed,
+        closedAt: closed,
+        commission: '-8.40',
+        swap: '0',
+        closeReason: 'UNKNOWN',
+        providerDealId: '6860122',
+        providerNativeOrderId: '7695022',
+      };
+      orderRepo.find.mockResolvedValue([orphan]);
+      tradeRepo.findOne.mockResolvedValue(terminal);
+      adapter.getClosedTrades.mockResolvedValue([deal]);
+      orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
+      await service.runForConnection({
+        ...connection(),
+        brokerId: 'pepperstone-ctrader',
+      } as BrokerConnection);
+      expect(tradeRepo.findOne).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          id: 'closed-trade-1',
+          status: TradeStatus.CLOSED,
+        }),
+      });
+      expect(adapter.getClosedTrades).toHaveBeenCalledWith(
+        new Date(opened.getTime() - 60_000),
+        expect.any(Date),
+      );
+      expect(orderService.applyFill).toHaveBeenCalledTimes(1);
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'close-order-1',
+        {
+          quantity: '2.8000',
+          price: '1.43767',
+          // Closing-order identity, three separate native ids from the proof:
+          // the native ORDER id (deal.orderId), the POSITION id and the DEAL id.
+          providerOrderId: '7695022',
+          providerPositionId: '8422910',
+          providerDealId: '6860122',
+        },
+        // Deal-grade delivery (native deal id present): deduplicated by the
+        // ledger, never fenced.
+        {},
+      );
+      expect(adapter.modifyOrder).not.toHaveBeenCalled();
+      expect(persistence.resolveDiscrepanciesByRef).toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID = previous;
+    }
+  });
+
+  it('aged cTrader DEMO close-order recovery converges a two-week-old stranded order', async () => {
+    const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
+    delete process.env.VPS_FOREX_SCANNER_USER_ID; // aged sweep must not need it
+    try {
+      const now = Date.now();
+      const opened = new Date(now - 14 * 86400_000 - 3600_000);
+      const sent = new Date(now - 14 * 86400_000);
+      const closed = new Date(now - 14 * 86400_000 + 1000);
+      const terminal = {
+        ...openTrade(),
+        id: 'aged-trade-1',
+        status: TradeStatus.CLOSED,
+        instrument: 'EURUSD',
+        direction: TradeDirection.SELL,
+        openedAt: opened,
+        closedAt: closed,
+        externalOrderId: '8422910',
+        lotSize: '2.8000',
+        exitPrice: '1.43767000',
+        realisedPnl: '60.38000000',
+      };
+      const orphan = {
+        ...pendingOrder(),
+        id: 'aged-close-order-1',
+        tradeId: 'aged-trade-1',
+        providerOrderId: null,
+        orderKind: 'MARKET',
+        instrument: 'EURUSD',
+        direction: TradeDirection.BUY,
+        requestedQuantity: '2.8000',
+        filledQuantity: '0.0000',
+        avgFillPrice: null,
+        createdAt: new Date(sent.getTime() - 75),
+        submittedAt: sent,
+      };
+      const deal = {
+        externalOrderId: '8422910',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '2.8',
+        openPrice: '1.43798',
+        closePrice: '1.43767',
+        stopLoss: '0',
+        takeProfit: '0',
+        realisedPnl: '60.38',
+        openedAt: closed,
+        closedAt: closed,
+        commission: '-8.40',
+        swap: '0',
+        closeReason: 'UNKNOWN',
+        providerDealId: '6860122',
+        providerNativeOrderId: '7695022',
+      };
+      orderRepo.find.mockResolvedValue([orphan]);
+      tradeRepo.find.mockResolvedValue([]);
+      tradeRepo.findOne.mockResolvedValue(terminal);
+      adapter.getClosedTrades.mockResolvedValue([deal]);
+      orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
+      await service.runForConnection({
+        ...connection(),
+        brokerId: 'ctrader',
+      } as BrokerConnection);
+      expect(adapter.getClosedTrades).toHaveBeenCalledWith(
+        new Date(opened.getTime() - 60_000),
+        expect.any(Date),
+      );
+      expect(orderService.applyFill).toHaveBeenCalledTimes(1);
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'aged-close-order-1',
+        {
+          quantity: '2.8000',
+          price: '1.43767',
+          // Closing-order identity, three separate native ids from the proof.
+          providerOrderId: '7695022',
+          providerPositionId: '8422910',
+          providerDealId: '6860122',
+        },
+        // Deal-grade delivery (native deal id present): deduplicated by the
+        // ledger, never fenced.
+        {},
+      );
+      expect(adapter.modifyOrder).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID = previous;
+    }
+  });
+
+  it('aged cTrader DEMO recovery leaves the order pending when the deal evidence mismatches', async () => {
+    const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
+    delete process.env.VPS_FOREX_SCANNER_USER_ID;
+    try {
+      const now = Date.now();
+      const opened = new Date(now - 14 * 86400_000 - 3600_000);
+      const sent = new Date(now - 14 * 86400_000);
+      const closed = new Date(now - 14 * 86400_000 + 1000);
+      const terminal = {
+        ...openTrade(),
+        id: 'aged-trade-2',
+        status: TradeStatus.CLOSED,
+        instrument: 'EURUSD',
+        direction: TradeDirection.SELL,
+        openedAt: opened,
+        closedAt: closed,
+        externalOrderId: '8422911',
+        lotSize: '2.8000',
+        exitPrice: '1.43767000',
+        realisedPnl: '60.38000000',
+      };
+      const orphan = {
+        ...pendingOrder(),
+        id: 'aged-close-order-2',
+        tradeId: 'aged-trade-2',
+        providerOrderId: null,
+        orderKind: 'MARKET',
+        instrument: 'EURUSD',
+        direction: TradeDirection.BUY,
+        requestedQuantity: '2.8000',
+        filledQuantity: '0.0000',
+        avgFillPrice: null,
+        createdAt: new Date(sent.getTime() - 75),
+        submittedAt: sent,
+      };
+      const deal = {
+        externalOrderId: '8422911',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '2.8',
+        openPrice: '1.43798',
+        closePrice: '1.43768', // one pip off the trade's recorded exit
+        stopLoss: '0',
+        takeProfit: '0',
+        realisedPnl: '60.38',
+        openedAt: closed,
+        closedAt: closed,
+        commission: '-8.40',
+        swap: '0',
+        closeReason: 'UNKNOWN',
+      };
+      orderRepo.find.mockResolvedValue([orphan]);
+      tradeRepo.find.mockResolvedValue([]);
+      tradeRepo.findOne.mockResolvedValue(terminal);
+      adapter.getClosedTrades.mockResolvedValue([deal]);
+      await service.runForConnection({
+        ...connection(),
+        brokerId: 'ctrader',
+      } as BrokerConnection);
+      expect(orderService.applyFill).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+      else process.env.VPS_FOREX_SCANNER_USER_ID = previous;
+    }
   });
 
   describe('runForConnection — clean state', () => {
@@ -535,6 +789,141 @@ describe('StateReconciliationService', () => {
         expect.objectContaining({ balance: '10000.00', marginLevel: '0.00' }),
         0,
       );
+    });
+  });
+
+  describe('late closed-DEMO settlement recovery', () => {
+    it('fetches closed provider deals even with no OPEN trades, and invokes a uniquely proof-gated repair', async () => {
+      const lateClosed = {
+        ...openTrade(),
+        id: 'closed-usdchf-1',
+        status: TradeStatus.CLOSED,
+        instrument: 'USDCHF',
+        lotSize: '0.2000',
+        fillPrice: '0.83310000',
+        externalOrderId: '261975747',
+        openedAt: new Date('2026-11-12T05:07:33Z'),
+        closedAt: new Date('2026-11-12T05:37:02Z'),
+        realisedPnl: null,
+        commission: null,
+        exitPrice: null,
+      } as Trade;
+      const provider = {
+        externalOrderId: '261975747',
+        instrument: 'USD/CHF',
+        direction: 'SELL',
+        lotSize: '0.2',
+        openPrice: '0.8331',
+        closePrice: '0.83298',
+        realisedPnl: '-2.88',
+        commission: '-1.20',
+        swap: '0.00',
+        closedAt: new Date('2026-11-12T05:37:03Z'),
+      };
+      tradeRepo.find
+        .mockResolvedValueOnce([]) // currently open/unresolved
+        .mockResolvedValueOnce([lateClosed]) // CLOSED but unsettled
+        .mockResolvedValueOnce([]); // next sweep, no open trades
+      adapter.getClosedTrades.mockResolvedValue([provider]);
+      const conn = {
+        ...connection(),
+        brokerId: 'pepperstone-ctrader',
+        encryptedCredentials: 'encrypted-test',
+        credentialIv: 'iv-test',
+        credentialTag: 'tag-test',
+      } as BrokerConnection;
+      encryptionService.decrypt.mockReturnValue({ accountId: 'demo-2026' });
+      await service.runForConnection(conn);
+      expect(adapter.getClosedTrades).toHaveBeenCalledWith(lateClosed.openedAt, expect.any(Date));
+      expect(resolution.backfillClosedDemoSettlement).toHaveBeenCalledWith(
+        expect.objectContaining({
+          trade: expect.objectContaining({ id: 'closed-usdchf-1' }),
+          brokerId: 'pepperstone-ctrader',
+          accountType: 'DEMO',
+          providerDeals: [provider],
+        }),
+      );
+      adapter.getClosedTrades.mockClear();
+      await service.runForConnection(conn);
+      expect(adapter.getClosedTrades).not.toHaveBeenCalled();
+    });
+
+    it('uses authenticated filled order to prove a different closing position id', async () => {
+      const lateClosed = {
+        ...openTrade(),
+        id: 'settlement-only-order-ref',
+        status: TradeStatus.CLOSED,
+        instrument: 'USDCHF',
+        direction: 'BUY',
+        externalOrderId: '261975747',
+        externalPositionId: null,
+        fillPrice: '0.8331',
+        lotSize: '0.2000',
+        openedAt: new Date('2026-11-12T05:07:33Z'),
+        closedAt: new Date('2026-11-12T05:37:02Z'),
+        realisedPnl: null,
+        commission: null,
+        exitPrice: null,
+      } as Trade;
+      tradeRepo.find.mockResolvedValueOnce([]).mockResolvedValueOnce([lateClosed]);
+      const deal = {
+        externalOrderId: '28202855',
+        instrument: 'USDCHF',
+        direction: 'SELL',
+        lotSize: '0.2',
+        openPrice: '0.8331',
+        closePrice: '0.8329',
+        realisedPnl: '-2.88',
+        commission: '-1.20',
+        swap: '0',
+        closedAt: new Date('2026-11-12T05:37:03Z'),
+      };
+      adapter.getClosedTrades.mockResolvedValue([deal]);
+      adapter.getOrderById.mockResolvedValue({
+        providerOrderId: '261975747',
+        providerPositionId: '28202855',
+        status: 'FILLED',
+        instrument: 'USDCHF',
+        direction: 'BUY',
+        filledQuantity: '0.2',
+        avgFillPrice: '0.8331',
+      });
+      const conn = {
+        ...connection(),
+        brokerId: 'pepperstone-ctrader',
+        encryptedCredentials: 'encrypted',
+        credentialIv: 'iv',
+        credentialTag: 'tag',
+      } as BrokerConnection;
+      encryptionService.decrypt.mockReturnValue({ accountId: 'demo-id' });
+      await service.runForConnection(conn);
+      expect(adapter.getOrderById).toHaveBeenCalledWith('261975747');
+      expect(resolution.backfillClosedDemoSettlement).toHaveBeenCalledWith(
+        expect.objectContaining({
+          trade: expect.objectContaining({
+            id: 'settlement-only-order-ref',
+            externalOrderId: '261975747',
+            externalPositionId: '28202855',
+          }),
+          providerDeals: [deal],
+        }),
+      );
+    });
+
+    it('never probes late economics for a LIVE cTrader connection', async () => {
+      const conn = {
+        ...connection(),
+        brokerId: 'pepperstone-ctrader',
+        accountType: 'LIVE',
+        encryptedCredentials: 'encrypted-test',
+        credentialIv: 'iv-test',
+        credentialTag: 'tag-test',
+      } as BrokerConnection;
+      encryptionService.decrypt.mockReturnValue({ accountId: 'live-2026' });
+      adapter.connect.mockResolvedValue({ success: true, accountType: 'LIVE' });
+      await service.runForConnection(conn);
+      expect(tradeRepo.find).toHaveBeenCalledTimes(1);
+      expect(resolution.backfillClosedDemoSettlement).not.toHaveBeenCalled();
     });
   });
 

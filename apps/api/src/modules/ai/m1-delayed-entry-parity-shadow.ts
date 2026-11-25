@@ -4,7 +4,8 @@
  * M1 quote open. Evaluation takes place only after the entire horizon.
  * No execution authority; quote OHLC does not simulate broker fills.
  */
-export const DELAY_ENTRY_PARITY_SHADOW_ARTIFACT = 'm1-confirmed-delay-stop-parity-shadow-v1';
+export const DELAY_ENTRY_PARITY_SHADOW_ARTIFACT =
+  'm1-confirmed-delay-stop-parity-shadow-v3-verified-risk';
 export const DELAY_ENTRY_PARITY_HORIZONS = [60, 240] as const;
 export type DelayEntryParityHorizon = (typeof DELAY_ENTRY_PARITY_HORIZONS)[number];
 export const DELAY_ENTRY_CONFIRMATION_WINDOW_MINUTES = 5;
@@ -63,7 +64,7 @@ export interface DelayedEntryParityResult {
 
 const round = (n: number, digits = 5): number => Number(n.toFixed(digits));
 
-function isVerified(
+export function isVerifiedNativeMinute(
   row: VerifiedNativeMinute | undefined,
   timeMs: number,
 ): row is VerifiedNativeMinute {
@@ -157,7 +158,7 @@ export function evaluateDelayedEntryParity(input: {
   for (let i = 0; i < DELAY_ENTRY_CONFIRMATION_WINDOW_MINUTES; i++) {
     const time = startMs + i * 60000;
     const row = lookup.get(time);
-    if (!isVerified(row, time)) return empty('DATA_GAP', new Date(time).toISOString());
+    if (!isVerifiedNativeMinute(row, time)) return empty('DATA_GAP', new Date(time).toISOString());
     alignedCloses.push(Number(row.close));
     if (
       i >= 2 &&
@@ -177,7 +178,8 @@ export function evaluateDelayedEntryParity(input: {
   }
   const entryMs = startMs + (signalIndex + 1) * 60000;
   const entryBar = lookup.get(entryMs);
-  if (!isVerified(entryBar, entryMs)) return empty('DATA_GAP', new Date(entryMs).toISOString());
+  if (!isVerifiedNativeMinute(entryBar, entryMs))
+    return empty('DATA_GAP', new Date(entryMs).toISOString());
   const quoteEntry = Number(entryBar.open);
   const result = empty('CONFIRMED');
   result.simulatedEntryAt = new Date(entryMs).toISOString();
@@ -227,7 +229,7 @@ export function evaluateDelayedEntryParity(input: {
     for (let i = 0; i < input.horizonMinutes; i++) {
       const time = entryMs + i * 60000;
       const row = lookup.get(time);
-      if (!isVerified(row, time)) {
+      if (!isVerifiedNativeMinute(row, time)) {
         outcome = 'DATA_GAP';
         missing = new Date(time).toISOString();
         break;

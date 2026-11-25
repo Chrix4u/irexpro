@@ -115,8 +115,14 @@ export function evaluateM1TacticalGovernance(
     confidence: input.candidate.confidence,
     extensionAtr: input.features.extensionAtr,
     volatilityScore: input.features.volatilityScore,
-    emaSeparation: Math.max(0, input.candidate.alignedEmaSeparationAtr),
-    mtfStrength: Math.max(0, input.candidate.alignedM15),
+    // The shared 4,599-event drift envelope is calibrated on the Plan B
+    // input scale, not raw M1 ATR-normalized EMA separation. Previously this
+    // fed raw alignedEmaSeparationAtr while Plan B divided it by TWO and
+    // clamped to [0,1], creating false HARD_HIGH drift vetoes for stronger
+    // M1 continuation structures. Match the independently validated Plan B
+    // feature transformation; do not change the original drift envelope.
+    emaSeparation: Math.max(0, Math.min(1, input.candidate.alignedEmaSeparationAtr / 2)),
+    mtfStrength: Math.max(0, Math.min(1, input.candidate.alignedM15)),
     rsi14: input.features.rsi14,
     shortHorizonMomentumAtr: input.features.momentum3Atr,
     eventRisk: input.eventRisk,

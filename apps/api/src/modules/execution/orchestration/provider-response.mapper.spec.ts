@@ -28,6 +28,23 @@ describe('mapProviderOrderResponse', () => {
       });
     });
 
+    it('native cTrader ids are separated: order id in providerOrderId, position id alongside', () => {
+      const action = mapProviderOrderResponse({
+        ...base,
+        externalOrderId: 'pos-77', // POSITION id for a filled MARKET order
+        brokerNativeOrderId: 'order-951', // native ORDER id
+        filledPrice: '1.08500',
+        filledQuantity: '0.05',
+      });
+      expect(action).toEqual({
+        action: 'ACKNOWLEDGE_AND_FILL',
+        providerOrderId: 'order-951',
+        providerPositionId: 'pos-77',
+        fillQuantity: '0.05',
+        fillPrice: '1.08500',
+      });
+    });
+
     it('passes through synchronous close economics when the provider reports them', () => {
       const action = mapProviderOrderResponse({
         ...base,

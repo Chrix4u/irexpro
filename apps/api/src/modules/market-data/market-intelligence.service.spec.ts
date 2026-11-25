@@ -502,6 +502,86 @@ describe('MarketIntelligenceService', () => {
     expect(result.candles).toHaveLength(1);
   });
 
+  it('serves exact Pepperstone LIVE cached quote and candles with no DEMO or provider fallback', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-11-24T06:25:30.000Z').getTime());
+    const liveConnection = {
+      ...connection,
+      id: '00000000-0000-0000-0000-000000000088',
+      brokerId: 'pepperstone-ctrader',
+      accountType: 'LIVE',
+      status: 'CONNECTED',
+    };
+    brokerService.findConnectionById.mockResolvedValue(liveConnection);
+    providerQuoteStore.getLatestQuote.mockResolvedValue({
+      instrument: 'AUDUSD',
+      bid: '0.66120',
+      ask: '0.66123',
+      spread: '0.00003',
+      timestamp: new Date('2026-11-24T06:25:25.000Z'),
+    });
+    providerQuoteStore.getCandles.mockResolvedValue([
+      {
+        timestamp: new Date('2026-11-24T06:24:00.000Z'),
+        open: '0.66110',
+        high: '0.66130',
+        low: '0.66100',
+        close: '0.66120',
+        volume: '37',
+      },
+    ]);
+    const result = await createService().getSnapshot(userId, {
+      instrument: 'AUDUSD',
+      timeframe: 'M1',
+      limit: 90,
+      brokerConnectionId: liveConnection.id,
+    });
+
+    expect(result).toMatchObject({
+      source: 'BROKER',
+      status: 'FRESH',
+      instrument: 'AUDUSD',
+      quote: { bid: '0.66120', ask: '0.66123', freshness: 'FRESH' },
+    });
+    expect(result.candles).toHaveLength(1);
+    expect(providerQuoteStore.getLatestQuote).toHaveBeenCalledWith(liveConnection.id, 'AUDUSD');
+    expect(providerQuoteStore.getCandles).toHaveBeenCalledWith(
+      liveConnection.id,
+      'AUDUSD',
+      'M1',
+      90,
+    );
+    expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
+    expect(brokerService.getOhlcvForConnection).not.toHaveBeenCalled();
+    expect(encryptionService.decrypt).not.toHaveBeenCalled();
+    expect(marketDataReader.getCurrentPrice).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for LIVE if its own store is empty, even when DEMO may have prices', async () => {
+    const liveConnection = {
+      ...connection,
+      id: '00000000-0000-0000-0000-000000000088',
+      brokerId: 'pepperstone-ctrader',
+      accountType: 'LIVE',
+      status: 'CONNECTED',
+    };
+    brokerService.findConnectionById.mockResolvedValue(liveConnection);
+    providerQuoteStore.getLatestQuote.mockResolvedValue(null);
+    providerQuoteStore.getCandles.mockResolvedValue([]);
+    await expect(
+      createService().getSnapshot(userId, {
+        instrument: 'USDJPY',
+        timeframe: 'M1',
+        limit: 90,
+        brokerConnectionId: liveConnection.id,
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'MARKET_DATA_UNAVAILABLE' }),
+    });
+    expect(providerQuoteStore.getLatestQuote).toHaveBeenCalledWith(liveConnection.id, 'USDJPY');
+    expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
+    expect(encryptionService.decrypt).not.toHaveBeenCalled();
+  });
+
   it('keeps cTrader workspace reads fail-closed when the persisted broker-native store is unavailable instead of bursting the provider', async () => {
     const ctraderConnection = {
       ...connection,

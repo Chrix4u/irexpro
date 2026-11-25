@@ -1,0 +1,50 @@
+name: iRexPro owner DEMO entry outcome shadow
+
+on:
+  push:
+    branches:
+      - fix/planb-clock-neutral-telemetry-20261111
+    paths:
+      - apps/api/src/modules/ai/owner-demo-entry-outcome*
+      - apps/api/src/modules/ai/m1-tactical-scheduler.service.ts
+      - apps/api/scripts/train-owner-demo-entry-outcome-shadow*
+      - apps/api/scripts/audit-owner-demo-entry-discriminator-prospective*
+      - .github/workflows/irexpro-owner-demo-entry-outcome-shadow.yml
+  pull_request:
+    paths:
+      - apps/api/src/modules/ai/owner-demo-entry-outcome*
+      - apps/api/src/modules/ai/m1-tactical-scheduler.service.ts
+      - apps/api/scripts/train-owner-demo-entry-outcome-shadow*
+      - apps/api/scripts/audit-owner-demo-entry-discriminator-prospective*
+      - .github/workflows/irexpro-owner-demo-entry-outcome-shadow.yml
+
+permissions:
+  contents: read
+
+jobs:
+  model-and-runtime-shadow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 17
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install only API workspace dependencies
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Verify read-only model training and prospective audit
+        run: |
+          cd apps/api
+          node --check scripts/train-owner-demo-entry-outcome-shadow.cjs
+          node --check scripts/audit-owner-demo-entry-discriminator-prospective.cjs
+          node --test scripts/train-owner-demo-entry-outcome-shadow.test.cjs scripts/audit-owner-demo-entry-discriminator-prospective.test.cjs
+      - name: Test live shadow scorer
+        run: pnpm --filter @irexpro/api exec jest src/modules/ai/owner-demo-entry-outcome-shadow.spec.ts --runInBand --silent
+      - name: Type-check API with new shadow
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json

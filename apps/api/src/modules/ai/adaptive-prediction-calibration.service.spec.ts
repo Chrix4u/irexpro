@@ -159,6 +159,75 @@ describe('adaptive prediction calibration', () => {
     ]);
   });
 
+  it('single-flights historical rows across candidate routes and directions at the exact same as-of', async () => {
+    let release!: (rows: AdaptivePredictionOutcomeRow[]) => void;
+    const pending = new Promise<AdaptivePredictionOutcomeRow[]>((resolve) => {
+      release = resolve;
+    });
+    const query = jest.fn().mockReturnValue(pending);
+    const service = new AdaptivePredictionCalibrationService({ query } as unknown as DataSource);
+    const alternative = {
+      ...request,
+      instrument: 'USDJPY',
+      direction: 'SELL' as const,
+      strategyRoute: 'CONFIRMED_REVERSAL',
+      rawConfidence: 0.81,
+      rawNetExpectedR: 0.25,
+      decisionPolicyVersions: [...request.decisionPolicyVersions].reverse(),
+    };
+    const first = service.getCalibration(request);
+    const second = service.getCalibration(alternative);
+    expect(query).toHaveBeenCalledTimes(1);
+    release([]);
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.rawConfidence).toBe(0.67);
+    expect(b.rawConfidence).toBe(0.81);
+    expect(b.rawNetExpectedR).toBe(0.25);
+    expect(a.authoritative).toBe(false);
+    expect(b.authoritative).toBe(false);
+
+    await service.getCalibration({
+      ...alternative,
+      direction: 'BUY',
+      rawConfidence: 0.52,
+    });
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('never shares history across broker accounts, policy sets, or decision-time cutoffs', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new AdaptivePredictionCalibrationService({ query } as unknown as DataSource);
+    await service.getCalibration(request);
+    await service.getCalibration({ ...request, brokerConnectionId: 'another-demo' });
+    await service.getCalibration({ ...request, userId: 'another-owner' });
+    await service.getCalibration({
+      ...request,
+      decisionPolicyVersions: ['different-training-policy'],
+    });
+    await service.getCalibration({
+      ...request,
+      evaluatedAt: new Date(request.evaluatedAt.getTime() + 1),
+    });
+    expect(query).toHaveBeenCalledTimes(5);
+  });
+
+  it('evicts failed historical reads, retaining unavailable rather than fabricated evidence', async () => {
+    const query = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('historical database request failed'))
+      .mockResolvedValueOnce([]);
+    const service = new AdaptivePredictionCalibrationService({ query } as unknown as DataSource);
+    const [a, b] = await Promise.all([
+      service.getCalibration(request),
+      service.getCalibration({ ...request, instrument: 'AUDUSD' }),
+    ]);
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(a.available).toBe(false);
+    expect(b.available).toBe(false);
+    await service.getCalibration({ ...request, instrument: 'GBPUSD' });
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
   it('adds a calibration veto when mature resolved evidence contradicts the raw prediction', () => {
     const calibration = buildAdaptivePredictionCalibration(
       [

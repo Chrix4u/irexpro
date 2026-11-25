@@ -559,6 +559,15 @@ export class ExecutionOrchestrator {
     }
 
     // ── Provider dispatch (retry/timeout-wrapped) ─────────────────────────
+    // Premise for the dispatch-response fill below: the internal filled
+    // quantity as observed immediately BEFORE the provider call. The
+    // BrokerOrderResult surface carries no native deal id, so the response
+    // fill is UNIDENTIFIED evidence — it is fenced on this premise: if a
+    // concurrent writer (a reconciliation sweep converging the same order)
+    // moves the accounting while the dispatch is in flight, the response
+    // fill is treated as a duplicate of state and no-ops instead of
+    // double-booking. No identifier is fabricated to dedup on.
+    const filledQuantityPremise = order.filledQuantity ?? '0';
     try {
       const result = await this.dispatchToProvider(intent, connection);
       const action = mapProviderOrderResponse(result);
@@ -566,14 +575,28 @@ export class ExecutionOrchestrator {
       switch (action.action) {
         case 'ACKNOWLEDGE_AND_FILL': {
           if (action.providerOrderId) {
-            order = await this.orderService.markAcknowledged(order.id, action.providerOrderId);
+            // Keep the legacy two-argument contract when no native position id
+            // surfaced; extend it only when the identity separation applies.
+            order =
+              action.providerPositionId != null
+                ? await this.orderService.markAcknowledged(order.id, action.providerOrderId, {
+                    providerPositionId: action.providerPositionId,
+                  })
+                : await this.orderService.markAcknowledged(order.id, action.providerOrderId);
             await this.emitAcknowledged(intent, order, action.providerOrderId);
           }
-          const filled = await this.orderService.applyFill(order.id, {
-            quantity: action.fillQuantity ?? intent.requestedQuantity,
-            price: action.fillPrice,
-            providerOrderId: action.providerOrderId ?? null,
-          });
+          const filled = await this.orderService.applyFill(
+            order.id,
+            {
+              quantity: action.fillQuantity ?? intent.requestedQuantity,
+              price: action.fillPrice,
+              providerOrderId: action.providerOrderId ?? null,
+              ...(action.providerPositionId != null
+                ? { providerPositionId: action.providerPositionId }
+                : {}),
+            },
+            { expectedFilledQuantity: filledQuantityPremise },
+          );
           await this.emitOrderEvent(DomainEventType.ORDER_FILLED, intent, filled, {
             status: filled.status,
             filledQuantity: filled.filledQuantity,

@@ -5,6 +5,7 @@ import { CtraderTransport } from './ctrader-transport';
 import { FakeCtraderTransport, ScriptedCtraderServer } from './ctrader.fake-transport';
 import { BrokerMode, BrokerConnectionResult } from '../../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../../interfaces/broker-adapter.errors';
+import { ProviderDispatchCertainty } from '../../interfaces/provider-dispatch-certainty';
 import {
   CTRADER_ENVIRONMENT_URLS,
   CTRADER_PAYLOAD_TYPE,
@@ -218,6 +219,75 @@ describe('CTraderAdapter', () => {
     });
   });
 
+  // ─── certification-only native ORDER ID read from DealList ────────────────
+
+  describe('findOpeningOrderIdForPosition — read-only identity proof', () => {
+    function openingDeal(positionId: number, orderId: number): Record<string, unknown> {
+      return {
+        dealId: 7001,
+        orderId,
+        positionId,
+        volume: 100_000,
+        filledVolume: 100_000,
+        symbolId: 101,
+        createTimestamp: Date.now() - 1_000,
+        executionTimestamp: Date.now() - 500,
+        executionPrice: 1.0865,
+        tradeSide: 1,
+        dealStatus: 2,
+      };
+    }
+
+    function scriptDeals(deals: Record<string, unknown>[], hasMore: boolean | undefined) {
+      server.on(CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.DEAL_LIST_RES,
+          {
+            ctidTraderAccountId: payload.ctidTraderAccountId,
+            deal: deals,
+            ...(hasMore === undefined ? {} : { hasMore }),
+          },
+          envelope,
+        ),
+      );
+    }
+
+    it('resolves exactly one native opening ORDER ID without sending any broker order', async () => {
+      scriptDeals([openingDeal(669256554, 669256548)], false);
+      await connectDemo();
+      const native = await adapter.findOpeningOrderIdForPosition('669256554');
+      expect(native).toBe('669256548');
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ)).toBeDefined();
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.CLOSE_POSITION_REQ)).toBeUndefined();
+    });
+
+    it.each([
+      ['wrong position', [openingDeal(669256553, 669256548)], false],
+      [
+        'multiple opening orders',
+        [openingDeal(669256554, 669256548), openingDeal(669256554, 669256549)],
+        false,
+      ],
+      ['incomplete history', [openingDeal(669256554, 669256548)], true],
+      ['unmarked history completeness', [openingDeal(669256554, 669256548)], undefined],
+      [
+        'closing-only deal',
+        [{ ...openingDeal(669256554, 669256548), closePositionDetail: { entryPrice: 1.08 } }],
+        false,
+      ],
+      ['invalid order id', [openingDeal(669256554, 0)], false],
+    ] as const)(
+      'refuses %s rather than inferring or fabricating an ORDER ID',
+      async (_name, deals, hasMore) => {
+        scriptDeals([...deals], hasMore);
+        await connectDemo();
+        expect(await adapter.findOpeningOrderIdForPosition('669256554')).toBeNull();
+        expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+      },
+    );
+  });
+
   // ─── placeOrder: 2106 wire building ─────────────────────────────────────────
 
   describe('placeOrder — MARKET order building', () => {
@@ -253,11 +323,125 @@ describe('CTraderAdapter', () => {
 
       expect(result.success).toBe(true);
       expect(result.status).toBe('FILLED');
-      expect(result.externalOrderId).toBe('7654321');
+      expect(result.externalOrderId).toBe('7654321'); // actual POSITION identity
+      expect(result.brokerNativeOrderId).toBe('7654322'); // separate ORDER identity
       expect(result.filledPrice).toBe('1.08651');
       expect(result.filledQuantity).toBe('0.1'); // deal.filledVolume as lots
       expect(result.filledAt).toEqual(new Date(1757000000123));
     });
+
+    it('puts Spotware relativeStopLoss in the ORIGINAL MARKET order request (atomic protection)', async () => {
+      await connectDemo();
+      await adapter.placeOrder({
+        idempotencyKey: 'atomic-sl-001',
+        instrument: 'EUR/USD',
+        direction: 'BUY',
+        lotSize: '0.01',
+        stopLoss: '0',
+        takeProfit: '0',
+        relativeStopLoss: '50',
+        orderKind: 'MARKET',
+      });
+      const request = findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)!;
+      expect(request.payload?.relativeStopLoss).toBe(50);
+      expect(request.payload).not.toHaveProperty('stopLoss');
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.AMEND_POSITION_SLTP_REQ)).toBeUndefined();
+    });
+
+    it('places LIVE MARKET SL and TP atomically from fresh broker-native pricing', async () => {
+      adapter.setMode(BrokerMode.LIVE);
+      await connectDemo();
+      await adapter.placeOrder({
+        idempotencyKey: 'live-atomic-1',
+        instrument: 'EUR/USD',
+        direction: 'BUY',
+        lotSize: '0.01',
+        stopLoss: '1.08650',
+        takeProfit: '1.08800',
+        orderKind: 'MARKET',
+      });
+      const request = findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)!;
+      expect(request.payload).toMatchObject({
+        relativeStopLoss: 50,
+        relativeTakeProfit: 100,
+      });
+      expect(request.payload).not.toHaveProperty('stopLoss');
+      expect(request.payload).not.toHaveProperty('takeProfit');
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ)).toBeDefined();
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.AMEND_POSITION_SLTP_REQ)).toBeUndefined();
+    });
+
+    it('places LIVE SELL with correctly directed atomic relative SL and TP', async () => {
+      adapter.setMode(BrokerMode.LIVE);
+      await connectDemo();
+      await adapter.placeOrder({
+        idempotencyKey: 'live-atomic-sell-1',
+        instrument: 'EUR/USD',
+        direction: 'SELL',
+        lotSize: '0.01',
+        stopLoss: '1.08700',
+        takeProfit: '1.08550',
+        orderKind: 'MARKET',
+      });
+      const request = findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)!;
+      expect(request.payload).toMatchObject({
+        relativeStopLoss: 50,
+        relativeTakeProfit: 100,
+      });
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.AMEND_POSITION_SLTP_REQ)).toBeUndefined();
+    });
+
+    it.each([
+      { stopLoss: '0', takeProfit: '1.08800' },
+      { stopLoss: '1.08650', takeProfit: '0' },
+      { stopLoss: '1.08800', takeProfit: '1.08900' },
+      { stopLoss: '1.08650', takeProfit: '1.08600' },
+    ])(
+      'refuses unprotected or invalid LIVE BUY MARKET before NEW_ORDER_REQ (%p)',
+      async (fields) => {
+        adapter.setMode(BrokerMode.LIVE);
+        await connectDemo();
+        await expect(
+          adapter.placeOrder({
+            idempotencyKey: 'live-atomic-invalid',
+            instrument: 'EUR/USD',
+            direction: 'BUY',
+            lotSize: '0.01',
+            orderKind: 'MARKET',
+            ...fields,
+          }),
+        ).rejects.toMatchObject({
+          code: expect.stringMatching(/INVALID_REQUEST|INVALID_PRICE/),
+          dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+        });
+        expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+      },
+    );
+
+    it.each([
+      { relativeStopLoss: '0', stopLoss: '0', takeProfit: '0' },
+      { relativeStopLoss: '-50', stopLoss: '0', takeProfit: '0' },
+      { relativeStopLoss: '5.5', stopLoss: '0', takeProfit: '0' },
+      { relativeStopLoss: '9007199254740993', stopLoss: '0', takeProfit: '0' },
+      { relativeStopLoss: '50', stopLoss: '1.085', takeProfit: '0' },
+      { relativeStopLoss: '50', stopLoss: '0', takeProfit: '1.1' },
+    ])(
+      'refuses malformed or ambiguous MARKET relative stop before 2106 dispatch (%p)',
+      async (fields) => {
+        await connectDemo();
+        await expect(
+          adapter.placeOrder({
+            idempotencyKey: 'atomic-sl-invalid',
+            instrument: 'EUR/USD',
+            direction: 'BUY',
+            lotSize: '0.01',
+            orderKind: 'MARKET',
+            ...fields,
+          }),
+        ).rejects.toMatchObject({ code: BrokerErrorCode.INVALID_REQUEST });
+        expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+      },
+    );
 
     it('maps timeInForce FOK to FILL_OR_KILL (4) on the wire', async () => {
       await connectDemo();
@@ -317,6 +501,27 @@ describe('CTraderAdapter', () => {
         comment: 'idem-key-002',
       });
     });
+
+    it.each(['LONG', 'SHORT', 'buy', '', undefined, null])(
+      'rejects malformed direction %s before sending a broker request',
+      async (badDirection) => {
+        await connectDemo();
+        await expect(
+          adapter.placeOrder({
+            idempotencyKey: 'direction-fail-closed',
+            instrument: 'EUR/USD',
+            direction: badDirection as 'BUY',
+            lotSize: '0.01',
+            stopLoss: '0',
+            takeProfit: '0',
+          }),
+        ).rejects.toMatchObject({
+          code: BrokerErrorCode.INVALID_REQUEST,
+          dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+        });
+        expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+      },
+    );
 
     it('maps SELL direction to tradeSide 2', async () => {
       await connectDemo();
@@ -627,6 +832,7 @@ describe('CTraderAdapter', () => {
         status: 'FILLED',
         success: true,
         externalOrderId: '999',
+        brokerNativeOrderId: '888',
         filledPrice: '1.0865',
       });
       expect(findRequest(server, CTRADER_PAYLOAD_TYPE.RECONCILE_REQ)).toBeDefined();
@@ -1752,6 +1958,75 @@ describe('CTraderAdapter', () => {
       // ONE batched SymbolById request for both symbols.
       const symbolById = findRequest(server, CTRADER_PAYLOAD_TYPE.SYMBOL_BY_ID_REQ)!;
       expect(symbolById.payload?.symbolId).toEqual([101, 102]);
+    });
+  });
+
+  describe('getInstrumentList minimum stop metadata', () => {
+    it('passes through cTrader native slDistance and its declared point/percentage units', async () => {
+      server.on(CTRADER_PAYLOAD_TYPE.SYMBOL_BY_ID_REQ, (payload, envelope) => {
+        const ids = Array.isArray(payload.symbolId) ? (payload.symbolId as number[]) : [];
+        return {
+          clientMsgId: envelope.clientMsgId,
+          payloadType: CTRADER_PAYLOAD_TYPE.SYMBOL_BY_ID_RES,
+          payload: {
+            symbol: ids.map((symbolId) => ({
+              symbolId,
+              digits: 5,
+              pipPosition: 4,
+              minVolume: 1000,
+              maxVolume: 100000000,
+              stepVolume: 1000,
+              lotSize: 10000000,
+              slDistance: symbolId === 101 ? 25 : 2,
+              distanceSetIn: symbolId === 101 ? 1 : 2,
+            })),
+          },
+        };
+      });
+      await connectDemo();
+      const items = await adapter.getInstrumentList();
+      const major = items.find((i) => i.symbol === 'EUR/USD');
+      expect(major).toMatchObject({
+        minStopLossDistance: '25',
+        minStopLossDistanceUnit: 'POINTS',
+      });
+      const other = items.find((i) => i.symbol !== 'EUR/USD');
+      expect(other).toMatchObject({
+        minStopLossDistance: '2',
+        minStopLossDistanceUnit: 'PERCENTAGE',
+      });
+    });
+
+    it('distinguishes explicit zero SL distance from missing optional provider distance', async () => {
+      server.on(CTRADER_PAYLOAD_TYPE.SYMBOL_BY_ID_REQ, (payload, envelope) => {
+        const ids = Array.isArray(payload.symbolId) ? (payload.symbolId as number[]) : [];
+        return {
+          clientMsgId: envelope.clientMsgId,
+          payloadType: CTRADER_PAYLOAD_TYPE.SYMBOL_BY_ID_RES,
+          payload: {
+            symbol: ids.map((symbolId, index) => ({
+              symbolId,
+              digits: 5,
+              pipPosition: 4,
+              minVolume: 1000,
+              maxVolume: 100000000,
+              stepVolume: 1000,
+              lotSize: 10000000,
+              ...(index === 0 ? { slDistance: 0, distanceSetIn: 1 } : { distanceSetIn: 1 }),
+            })),
+          },
+        };
+      });
+      await connectDemo();
+      const specs = await adapter.getInstrumentList();
+      const first = specs.find((i) => i.symbol === 'EUR/USD');
+      expect(first).toMatchObject({
+        minStopLossDistance: '0',
+        minStopLossDistanceUnit: 'POINTS',
+      });
+      const second = specs.find((i) => i.symbol !== 'EUR/USD');
+      expect(second?.minStopLossDistance).toBeUndefined();
+      expect(second?.minStopLossDistanceUnit).toBeUndefined();
     });
   });
 

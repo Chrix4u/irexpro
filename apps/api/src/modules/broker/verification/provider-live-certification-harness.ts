@@ -94,6 +94,8 @@
  * Tests never flip it." The durable JSON artifact this harness writes is the
  * evidenceRef material for that process.
  */
+import { ExactDecimal } from '../../../common/utils/exact-decimal';
+import { evaluatePepperstoneLiveMicroRisk } from '../../execution/services/pepperstone-live-micro-risk';
 import { createHash, randomUUID } from 'crypto';
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -620,6 +622,13 @@ export interface LiveCertificationOptions {
    * account currency for USD-denominated accounts).
    */
   maxCanaryExposure: string;
+  /** Pepperstone LIVE micro-canary: require a provider-atomic relative stop,
+   * positive integer units of 1/100000 of quote price. The corresponding
+   * pessimistic after-fee estimated risk must fit maxCanaryRiskUsd. No value
+   * means NO real-money Pepperstone canary may be submitted.
+   */
+  protectedCanaryRelativeStopLoss?: string;
+  maxCanaryRiskUsd?: string;
   /**
    * Credentials for the harness's own connect calls — memory-only, NEVER
    * recorded in evidence.
@@ -731,9 +740,11 @@ interface LiveChecklistContext {
   digits: number;
   askPrice?: string;
   canary?: LiveCanarySizing;
-  canaryOrderId?: string;
+  canaryOrderId?: string; // Position id for cTrader MARKET fills.
+  canaryBrokerOrderId?: string; // Provider's native OrderId for order history.
   canaryEntryPrice?: string;
   freeMargin?: string;
+  equity?: string;
   accountCurrency?: string | null;
   baselinePositionIds: Set<string>;
   baselineOrderIds: Set<string>;
@@ -970,8 +981,38 @@ export async function runLiveCertificationChecklist(
             '— LIVE certification requires a LIVE-classified account (immediate FAIL)',
         };
       }
+      if (classification.accountId !== options.target.accountId) {
+        return {
+          status: 'FAIL',
+          detail: 'independent credential test did not confirm the exact LIVE account (no order)',
+        };
+      }
+
+      // cTrader's testConnection() deliberately tears down its *own* leased
+      // session (even when called on a connected adapter). The certification
+      // checklist must not treat an independent credential test as proof that
+      // its operational adapter is still connected. Restore that session
+      // before the instrument, quote, margin or baseline-exposure stages.
+      // Never submit a canary after an unverified reconnect.
+      if (!adapter.isConnected()) {
+        const restored = await adapter.connect(options.credentials);
+        if (
+          !restored.success ||
+          restored.accountType !== BrokerMode.LIVE ||
+          restored.accountId !== options.target.accountId ||
+          !adapter.isConnected()
+        ) {
+          return {
+            status: 'FAIL',
+            detail:
+              'operational adapter session was not restored to the exact LIVE account ' +
+              'after credential verification (no broker order)',
+          };
+        }
+      }
       ctx.accountCurrency = info.currency;
       ctx.freeMargin = info.freeMargin;
+      ctx.equity = info.equity;
       return {
         status: 'PASS',
         detail:
@@ -1170,6 +1211,95 @@ export async function runLiveCertificationChecklist(
           detail: `prerequisite stage(s) did not pass (${missing.join(', ')}) — no canary order`,
         };
       }
+      // Pepperstone LIVE $50 canary is forbidden unless an atomic relative
+      // stop can be attached at NEW_ORDER_REQ time. An after-fill 2110 amend
+      // leaves an unprotected window and is not a safe certification canary.
+      // USD account + USD quote pair are mandatory for direct quote-currency
+      // economics, so a cross-pair currency conversion cannot be guessed.
+      if (options.target.brokerId === 'pepperstone-ctrader') {
+        const points = options.protectedCanaryRelativeStopLoss;
+        const explicitRiskCap = options.maxCanaryRiskUsd;
+        if (
+          !points ||
+          !/^[1-9]\d*$/.test(points) ||
+          !Number.isSafeInteger(Number(points)) ||
+          !explicitRiskCap ||
+          ctx.accountCurrency !== 'USD' ||
+          !ctx.instrument!.symbol.endsWith('USD') ||
+          !ctx.equity ||
+          !ctx.canary ||
+          !passed('baseline-exposure-snapshot') ||
+          ctx.baselinePositionIds.size !== 0 ||
+          ctx.baselineOrderIds.size !== 0
+        ) {
+          return {
+            status: 'FAIL',
+            detail:
+              'Pepperstone LIVE atomic stop, USD pair, flat exposure or risk cap unverified — no canary order',
+          };
+        }
+        try {
+          const stopDistance = ExactDecimal.parse(points).divByPowerOfTen(5);
+          // Real-time rollover spreads can approach or exceed the entire
+          // five-pip protective stop. Independently re-fetch the broker quote
+          // IMMEDIATELY before this real-money order (the earlier price
+          // stage is not a per-dispatch quote). For a minimum-size protected
+          // certification canary, the spread must not consume more than 25%
+          // of its total stop distance; otherwise fail with ZERO provider
+          // order calls. On a five-pip EURUSD stop this is <=1.25 pips.
+          const freshPrice = await adapter.getCurrentPrice(ctx.instrument!.symbol);
+          const freshBid = ExactDecimal.tryParse(freshPrice.bid);
+          const freshAsk = ExactDecimal.tryParse(freshPrice.ask);
+          const freshSpread = ExactDecimal.tryParse(freshPrice.spread);
+          const quoteAgeMs = Date.now() - new Date(freshPrice.timestamp).getTime();
+          if (
+            !freshBid?.isPositive() ||
+            !freshAsk?.isPositive() ||
+            !freshSpread ||
+            freshSpread.lt(ExactDecimal.ZERO) ||
+            freshAsk.lt(freshBid) ||
+            !freshAsk.sub(freshBid).eq(freshSpread) ||
+            !Number.isFinite(quoteAgeMs) ||
+            quoteAgeMs < -5_000 ||
+            quoteAgeMs > 15_000 ||
+            freshSpread.mul(ExactDecimal.parse('4')).gt(stopDistance)
+          ) {
+            return {
+              status: 'FAIL',
+              detail:
+                'Pepperstone LIVE spread or quote freshness exceeds protected-canary threshold (maximum 25% of stop) — zero broker orders',
+            };
+          }
+          const grossRisk = stopDistance
+            .mul(ExactDecimal.parse(ctx.instrument!.contractSize))
+            .mul(ExactDecimal.parse(ctx.canary.actualSize));
+          const risk = evaluatePepperstoneLiveMicroRisk({
+            equityUsd: ctx.equity,
+            lots: ctx.canary.actualSize,
+            brokerMinimumLots: ctx.instrument!.minLot,
+            grossRiskAtStopUsd: grossRisk.toString(),
+          });
+          if (
+            !risk.allowed ||
+            ExactDecimal.parse(risk.projectedCostInclusiveRiskUsd).gt(
+              ExactDecimal.parse(explicitRiskCap),
+            ) ||
+            ExactDecimal.parse(explicitRiskCap).gt(
+              ExactDecimal.parse(ctx.equity).mul(ExactDecimal.parse('0.02')),
+            )
+          ) {
+            return {
+              status: 'FAIL',
+              detail: `Pepperstone cost-inclusive protected canary exceeds micro risk envelope (${risk.code || 'operator cap'}) — zero orders`,
+            };
+          }
+        } catch {
+          return {
+            status: 'FAIL',
+            detail: 'Pepperstone LIVE protected canary numeric or risk proof failed — zero orders',
+          };
+        }
+      }
       const request: BrokerOrderRequest = {
         idempotencyKey: `live-cert-${randomUUID()}`,
         clientOrderId: `livecert-${randomUUID()}`,
@@ -1178,15 +1308,42 @@ export async function runLiveCertificationChecklist(
         lotSize: ctx.canary!.actualSize,
         stopLoss: '0',
         takeProfit: '0',
+        ...(options.target.brokerId === 'pepperstone-ctrader'
+          ? { relativeStopLoss: options.protectedCanaryRelativeStopLoss }
+          : {}),
         orderKind: 'MARKET',
         timeInForce: 'GTC',
         comment: 'live-certification-canary',
         connectionReference: ctx.connectionReference,
       };
       const result = await adapter.placeOrder(request);
+      // Capture provider identity BEFORE verifying the fill fields so a
+      // PENDING/partial/malformed acknowledgement still triggers the later
+      // emergency close stage. Never retry the entry after uncertainty.
+      if (result.externalOrderId) ctx.canaryOrderId = result.externalOrderId;
+      if (result.brokerNativeOrderId) ctx.canaryBrokerOrderId = result.brokerNativeOrderId;
       const violations = assertCanaryOrderResult('canaryOrder', result, 'FILLED', true);
       if (violations.length > 0) return { status: 'FAIL', detail: violations.join('; ') };
-      ctx.canaryOrderId = result.externalOrderId;
+      // Pepperstone may omit the native order id in the fill ACK even when
+      // position reconciliation proves the fill. An optional cTrader-only
+      // read-only DealList lookup can independently attest the originating
+      // order ID; it NEVER substitutes the position ID and never sends an
+      // additional entry. If the read is incomplete or ambiguous the later
+      // ack/query stages still FAIL, not SKIP to a fabricated PASS.
+      if (
+        options.target.brokerId === 'pepperstone-ctrader' &&
+        !ctx.canaryBrokerOrderId &&
+        ctx.canaryOrderId
+      ) {
+        const nativeIdentityReader = adapter as IBrokerAdapter & {
+          findOpeningOrderIdForPosition?: (positionId: string) => Promise<string | null>;
+        };
+        if (typeof nativeIdentityReader.findOpeningOrderIdForPosition === 'function') {
+          ctx.canaryBrokerOrderId =
+            (await nativeIdentityReader.findOpeningOrderIdForPosition(ctx.canaryOrderId)) ??
+            undefined;
+        }
+      }
       return {
         status: 'PASS',
         detail:
@@ -1207,7 +1364,16 @@ export async function runLiveCertificationChecklist(
           detail: 'place-minimum-safe-order did not pass — no provider ack to verify',
         };
       }
-      const result = await adapter.getOrderById(ctx.canaryOrderId);
+      const orderRef =
+        options.target.brokerId === 'pepperstone-ctrader'
+          ? ctx.canaryBrokerOrderId
+          : ctx.canaryOrderId;
+      if (!orderRef)
+        return {
+          status: 'FAIL',
+          detail: 'Provider native market ORDER ID is absent (position ID cannot substitute)',
+        };
+      const result = await adapter.getOrderById(orderRef);
       if (!result) {
         return {
           status: 'FAIL',
@@ -1245,7 +1411,16 @@ export async function runLiveCertificationChecklist(
           detail: 'no canary order to query (place-minimum-safe-order did not pass)',
         };
       }
-      const state = await adapter.getOrderById(ctx.canaryOrderId);
+      const orderRef =
+        options.target.brokerId === 'pepperstone-ctrader'
+          ? ctx.canaryBrokerOrderId
+          : ctx.canaryOrderId;
+      if (!orderRef)
+        return {
+          status: 'FAIL',
+          detail: 'Provider native ORDER ID unavailable, refusing certification order lookup',
+        };
+      const state = await adapter.getOrderById(orderRef);
       if (!state) {
         return {
           status: 'FAIL',
@@ -1265,7 +1440,7 @@ export async function runLiveCertificationChecklist(
       // The working-order listing (the reconciliation read surface) must not
       // carry the FILLED market canary as a working order.
       const working = await adapter.listOrders();
-      if (working.some((o) => o.providerOrderId === ctx.canaryOrderId)) {
+      if (working.some((o) => o.providerOrderId === orderRef)) {
         return {
           status: 'FAIL',
           detail: `filled canary order ${ctx.canaryOrderId} still listed among ${working.length} working order(s)`,
@@ -1305,6 +1480,31 @@ export async function runLiveCertificationChecklist(
       );
       if (violations.length > 0) return { status: 'FAIL', detail: violations.join('; ') };
       ctx.canaryEntryPrice = position.openPrice;
+      // Require broker READBACK of the atomic 2106 position stop before
+      // claiming the minimum-size real-money canary was protected at entry.
+      // The subsequent close step still runs even if this check fails.
+      if (options.target.brokerId === 'pepperstone-ctrader') {
+        const actual = parseUnsignedDecimalString(position.stopLoss);
+        const entry = parseUnsignedDecimalString(position.openPrice);
+        const distance = options.protectedCanaryRelativeStopLoss
+          ? ExactDecimal.parse(options.protectedCanaryRelativeStopLoss).divByPowerOfTen(5)
+          : null;
+        if (
+          !actual ||
+          !entry ||
+          actual.digits <= 0n ||
+          compareDecimals(actual, entry) >= 0 ||
+          !distance ||
+          ExactDecimal.parse(position.openPrice)
+            .sub(ExactDecimal.parse(position.stopLoss))
+            .gt(distance.add(ExactDecimal.parse('0.00001')))
+        ) {
+          return {
+            status: 'FAIL',
+            detail: 'Pepperstone LIVE opened canary does not have verified atomic protective stop',
+          };
+        }
+      }
       return {
         status: 'PASS',
         detail:
@@ -1359,6 +1559,28 @@ export async function runLiveCertificationChecklist(
         rescaleDecimal({ digits: stopDigits, scale: anchorScale }, ctx.digits).digits,
         ctx.digits,
       );
+      // The candidate stop must be strictly MORE protective than the
+      // broker-acknowledged atomic stop already on the real-money position.
+      // A smaller numeric BUY stop would WIDEN the loss allowance, despite
+      // being below entry/bid. Never allow a certification amendment to do
+      // that, even when the quote moved adversely after the fill.
+      const currentPosition = await adapter.getPositionById(ctx.canaryOrderId);
+      const currentProtectedStop = currentPosition?.stopLoss
+        ? parseUnsignedDecimalString(currentPosition.stopLoss)
+        : null;
+      const proposedProtectedStop = parseUnsignedDecimalString(protectiveStop);
+      if (
+        !currentPosition ||
+        !currentProtectedStop ||
+        !proposedProtectedStop ||
+        compareDecimals(proposedProtectedStop, currentProtectedStop) <= 0
+      ) {
+        return {
+          status: 'FAIL',
+          detail:
+            'Existing LIVE canary stop is missing or a candidate amendment would widen protection — no amendment sent',
+        };
+      }
       let result: BrokerOrderResult;
       try {
         result = await adapter.modifyOrder(ctx.canaryOrderId, { newStopLoss: protectiveStop });
@@ -1641,6 +1863,17 @@ export function verifyLiveCertificationArtifact(
     const raw = readFileSync(path, 'utf8');
     const parsed = JSON.parse(raw) as LiveCertificationEvidence;
     if (parsed.runId !== evidence.runId) return false;
+    // Durability state is excluded from the canonical content hash, so
+    // compare it explicitly. Otherwise a file incorrectly persisted as
+    // EVIDENCE_PERSISTENCE_FAILED can masquerade as an in-memory PASS.
+    if (
+      parsed.evidenceSha256 !== evidence.evidenceSha256 ||
+      parsed.evidenceState !== evidence.evidenceState ||
+      parsed.certificationResult !== evidence.certificationResult ||
+      parsed.artifactPath !== evidence.artifactPath ||
+      parsed.artifactPath !== path
+    )
+      return false;
     return computeLiveCertificationEvidenceSha256(parsed) === evidence.evidenceSha256;
   } catch {
     return false;
@@ -1679,15 +1912,21 @@ function finalizeLiveCertificationEvidence(
         new Date(record.finishedAt),
       ),
     );
-    writeFileSync(path, JSON.stringify(evidence, null, 2), { encoding: 'utf8' });
-    if (!verifyLiveCertificationArtifact(path, evidence)) {
+    // Persist the FINAL result before read-back verification. The previous
+    // flow wrote the initial PERSISTENCE_FAILED object and changed only the
+    // in-memory return value to PASS, leaving the actual artifact invalid.
+    const persistedEvidence: LiveCertificationEvidence = {
+      ...evidence,
+      evidenceState: 'PERSISTED',
+      certificationResult: record.overall,
+      artifactPath: path,
+    };
+    writeFileSync(path, JSON.stringify(persistedEvidence, null, 2), { encoding: 'utf8' });
+    if (!verifyLiveCertificationArtifact(path, persistedEvidence)) {
       throw new Error(
-        'read-back verification failed (artifact missing, unparsable, or hash mismatch)',
+        'read-back verification failed (artifact missing, unparsable, hash or result mismatch)',
       );
     }
-    evidence.evidenceState = 'PERSISTED';
-    evidence.certificationResult = record.overall;
-    evidence.artifactPath = path;
     // Round 7.1 (CodeQL CWE-532 hygiene): no env-derived values in console
     // output — the artifact directory and the sha256 (computed over a record
     // that legitimately contains operator-supplied identifiers) live in the
@@ -1699,7 +1938,7 @@ function finalizeLiveCertificationEvidence(
         `certificationResult=${record.overall} ` +
         `(sha256 + artifact path are recorded inside the evidence artifact)`,
     );
-    return evidence;
+    return persistedEvidence;
   } catch (err) {
     console.error(
       '[live-certification] EVIDENCE PERSISTENCE FAILED — this run is NOT certifiable: ' +

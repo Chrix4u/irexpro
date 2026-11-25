@@ -60,11 +60,60 @@ describe('AI Trader production UI regression contract', () => {
     ).toContain(".ai-control-card__diagnosis");
   });
 
+  it('displays the actually activated advisory reversal and early-transition DEMO pilot', () => {
+    expect(pageSource).toContain('Reversal and early-transition DEMO trading trial');
+    expect(pageSource).toContain('advisoryAlternatePilot.activeNow');
+    expect(pageSource).toContain('advisoryAlternatePilot.allowedRoutes');
+    expect(pageSource).toContain('advisoryAlternatePilot.startsAt');
+    expect(pageSource).toContain('advisoryAlternatePilot.endsAt');
+    expect(pageSource).toContain('advisoryAlternatePilot.maxEntries');
+    expect(pageSource).toContain('advisoryAlternatePilot.maxLot.toFixed(2)');
+    expect(pageSource).toContain('ENTRY WINDOW OPEN');
+    expect(pageSource).toContain('An open entry window does not mean a trade has qualified');
+  });
+
+  it('displays the counter DEMO trial ceiling and cutoff without a trading control', () => {
+    expect(pageSource).toContain('Independent COUNTER DEMO pilot status');
+    expect(pageSource).toContain('counterDemoPilot.activeNow');
+    expect(pageSource).toContain('counterDemoPilot.maxLot.toFixed(2)');
+    expect(pageSource).toContain('counterDemoPilot.maxEntries');
+    expect(pageSource).toContain('timeZone: "Africa/Accra"');
+    expect(pageSource).toContain('planBRegime === "ROLLOVER_RISK"');
+    expect(pageSource).toContain('never a forced minimum');
+  });
+
   it('keeps the live scanning market cockpit visible in the trade surface', () => {
     expect(pageSource).toContain('SCANNING');
     expect(pageSource).toContain('Last move');
     expect(pageSource).toContain('Current AI view');
-    expect(pageSource).toContain('Watched instruments');
+    expect(pageSource).toContain('m1TacticalStatus.demoEntryInstruments.join(" · ")');
+  });
+
+  it('displays the continuous DEMO pilot without an imaginary expiry or entry limit', () => {
+    expect(pageSource).toContain('Continuous trial — no scheduled expiry');
+    expect(pageSource).toContain('No cumulative trade-count limit for this DEMO evidence trial');
+  });
+
+  it('shows an explicit research-only tag for GBPUSD/other out-of-scope model focus', () => {
+    expect(pageSource).toContain('isResearchOnlyAiFocus');
+    expect(pageSource).toContain('Research-only focus');
+    expect(pageSource).toContain('not one of the four enabled DEMO instruments');
+  });
+
+  it('distinguishes open accrued commission from completed broker round-trip fees', () => {
+    expect(pageSource).toContain('estimatePepperstoneDemoRoundTripCommission(position)');
+    expect(pageSource).toContain('Commission charged so far');
+    expect(pageSource).toContain('Est. entry + exit total:');
+    expect(pageSource).toContain('Closing fee is an estimate; broker settlement is final.');
+    expect(pageSource).toContain('Total commission (entry + exit)');
+  });
+
+  it('labels broker-closed unsettled trades honestly, never displaying peak as realized', () => {
+    expect(pageSource).toContain('hasPendingClosedTradeSettlement(trade)');
+    expect(pageSource).toContain('Broker settlement pending');
+    expect(pageSource).toContain('Awaiting broker');
+    expect(pageSource).toContain('peak');
+    expect(pageSource).toContain('missing amounts are not zero');
   });
 
   it('keeps the enriched 24h realized-results cards and history entry point', () => {
@@ -117,8 +166,11 @@ describe('AI Trader production UI regression contract', () => {
   });
 
   it('fetches independent AI status feeds without serially blocking the four-second refresh', () => {
-    expect(pageSource).toContain('Fetch them concurrently to avoid a serial HTTP waterfall');
-    expect(pageSource).toContain('await Promise.allSettled([');
+    expect(pageSource).toContain('Broker financials and executions must NOT wait for M1 status');
+    expect(pageSource).toContain('void Promise.allSettled([');
+    expect(pageSource).toContain('researchTelemetryInFlight.current');
+    expect(pageSource).toContain('loadLatestEndedTradingSession().then((endedSession) =>');
+    expect(pageSource).toContain('runtimeStatusInFlight.current');
     expect(pageSource).toContain('providerResult.status === "fulfilled"');
     expect(pageSource).toContain('scannerResult.status === "fulfilled"');
     expect(pageSource).toContain('tacticalResult.status === "fulfilled"');

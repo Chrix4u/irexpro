@@ -711,3 +711,60 @@
     gap: 0.75rem;
   }
 }
+
+/* OAuth callback: the entire account chooser card is the scroll owner.
+   Do not nest a bounded account list inside a clipped workspace card. */
+.broker-oauth-heading {
+  margin-bottom: var(--space-4);
+  flex: 0 0 auto;
+}
+.terminal-content > .broker-oauth-chooser {
+  min-width: 0;
+  min-height: 0;
+  max-height: max(10rem, calc(100vh - 13rem));
+  max-height: max(10rem, calc(100dvh - 13rem));
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: auto;
+  touch-action: pan-y;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-muted) transparent;
+  -webkit-overflow-scrolling: touch;
+}
+.broker-oauth-chooser:focus-visible {
+  outline: 2px solid var(--border);
+  outline-offset: 2px;
+}
+.broker-oauth-account-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.broker-oauth-account-row {
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.broker-oauth-chooser::-webkit-scrollbar { width: 7px; }
+.broker-oauth-chooser::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: var(--radius-full);
+}
+@media (min-width: 701px) {
+  .dashboard-main.terminal-main > .dashboard-content.terminal-content:has(> .broker-oauth-chooser) {
+    display: flex;
+    flex-direction: column;
+  }
+  .terminal-content > .broker-oauth-chooser {
+    flex: 0 1 auto;
+    min-height: min(10rem, 100%);
+  }
+}
+@media (max-width: 700px) {
+  .terminal-content > .broker-oauth-chooser {
+    max-height: max(10rem, calc(100dvh - 15rem));
+  }
+  .broker-oauth-account-row > .btn { max-width: 100%; white-space: normal; }
+}

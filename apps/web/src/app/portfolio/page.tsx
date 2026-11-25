@@ -211,7 +211,7 @@ export default function PortfolioRiskPage() {
                   </div>
                 </dl>
                 <Link
-                  href="/trade/portfolio"
+                  href="/trade/portfolio" prefetch={false}
                   className="btn btn--secondary mt-4"
                 >
                   Open Portfolio Truth

@@ -71,7 +71,11 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
   let flowRepo: Repository<BrokerOAuthFlow>;
   let encryption: CredentialEncryptionService;
   let dataSource: DataSource;
-  let brokerService: { createConnection: jest.Mock; findLiveConnectionByLogicalKey: jest.Mock };
+  let brokerService: {
+    createConnection: jest.Mock;
+    findLiveConnectionByLogicalKey: jest.Mock;
+    rotateCredentials: jest.Mock;
+  };
   let linkOutbox: { enqueue: jest.Mock; enqueueWithinTransaction: jest.Mock; sweep: jest.Mock };
   let ctraderClient: {
     isAvailable: jest.Mock;
@@ -104,6 +108,7 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
             // Sprint 56 correction round 5 (#332): the durable-idempotency
             // adoption pre-check (no existing live connection by default).
             findLiveConnectionByLogicalKey: jest.fn().mockResolvedValue(null),
+            rotateCredentials: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -785,6 +790,7 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
         id: 'existing-conn-9',
         brokerId: 'ctrader',
         accountType: BrokerMode.DEMO,
+        accountId: '1234567',
       } as unknown as BrokerConnection;
       brokerService.findLiveConnectionByLogicalKey.mockResolvedValue(existing);
       const flowId = await authorizedFlowId();
@@ -794,6 +800,18 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       // No second durable row is ever attempted.
       expect(brokerService.createConnection).not.toHaveBeenCalled();
       expect(result).toBe(existing);
+      expect(brokerService.rotateCredentials).toHaveBeenCalledWith(
+        existing.id,
+        expect.objectContaining({
+          brokerId: 'ctrader',
+          accountId: '1234567',
+          accountType: BrokerMode.DEMO,
+          apiKey: ACCESS_TOKEN,
+          additionalParams: expect.objectContaining({ refreshToken: REFRESH_TOKEN }),
+        }),
+        USER,
+        undefined,
+      );
       // The flow CONVERGED to CONSUMED with zeroed tokens (exactly once).
       const stored = await row(flowId);
       expect(stored!.state).toBe('CONSUMED');
@@ -816,6 +834,7 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
         id: 'existing-conn-raced',
         brokerId: 'ctrader',
         accountType: BrokerMode.DEMO,
+        accountId: '1234567',
       } as unknown as BrokerConnection;
       brokerService.createConnection.mockRejectedValueOnce(
         new BrokerLogicalAccountConflictError('ctrader|spotware|1234567', existing),
@@ -835,6 +854,8 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       const existing = {
         id: 'existing-conn-adopt',
         brokerId: 'ctrader',
+        accountType: BrokerMode.DEMO,
+        accountId: '1234567',
       } as unknown as BrokerConnection;
       brokerService.createConnection.mockRejectedValueOnce(
         new BrokerLogicalAccountConflictError('ctrader|spotware|1234567', existing),
@@ -848,6 +869,42 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       // best-effort audit failure.
       expect(result).toBe(existing);
       expect((await row(flowId))!.state).toBe('CONSUMED');
+    });
+
+    it('refuses reauthorization if the provider-validated credential rotation fails, without consuming tokens or linking duplicates', async () => {
+      const existing = {
+        id: 'conn-refresh',
+        brokerId: 'ctrader',
+        accountId: '1234567',
+        accountType: BrokerMode.DEMO,
+      } as unknown as BrokerConnection;
+      brokerService.findLiveConnectionByLogicalKey.mockResolvedValue(existing);
+      brokerService.rotateCredentials.mockRejectedValueOnce(
+        new BadRequestException('Credential validation failed'),
+      );
+      const flowId = await authorizedFlowId();
+      await expect(service.linkAccount(USER, flowId, '1234567')).rejects.toThrow(
+        'Credential validation failed',
+      );
+      expect(brokerService.createConnection).not.toHaveBeenCalled();
+      // Fail closed: no unusable authorization reported as successful.
+      const saved = await row(flowId);
+      expect(saved?.state).toBe('LINKING');
+      expect(saved?.tokenCiphertext).toBeTruthy();
+      expect(linkOutbox.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('refuses same-account adoption with a conflicting broker account ID', async () => {
+      brokerService.findLiveConnectionByLogicalKey.mockResolvedValue({
+        id: 'wrong-account',
+        brokerId: 'ctrader',
+        accountId: 'not-the-same-account',
+        accountType: BrokerMode.DEMO,
+      } as unknown as BrokerConnection);
+      const flowId = await authorizedFlowId();
+      await expect(service.linkAccount(USER, flowId, '1234567')).rejects.toThrow(ConflictException);
+      expect(brokerService.rotateCredentials).not.toHaveBeenCalled();
+      expect(brokerService.createConnection).not.toHaveBeenCalled();
     });
 
     it('rejects an account that was not part of the discovery', async () => {

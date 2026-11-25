@@ -28,7 +28,8 @@ import {
   SnapshotNotFreshError,
 } from '../broker/services/broker-account-snapshot.service';
 import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
-import { isRestoredDemoEntryInstrument } from '../ai/demo-focused-instruments';
+import { isCurrentFocusedDemoEntryInstrument } from '../ai/demo-focused-instruments';
+import { isStrictLiveM1PrimarySignal } from './server-m1-signal-origin';
 
 /**
  * Server-side DEMO promotion allowlist. Transport metadata can never grant
@@ -313,10 +314,26 @@ export class StrategyOrchestratorService {
         paperConnection?.authorizationStatus === 'ACTIVE' &&
         paperConnection?.demoValidated === true &&
         paperConnection?.liveTradingEnabled !== true;
+      // Distinct and deliberately narrower than DEMO alternative pilots:
+      // LIVE requires locally branded M1 primary strategy, matching M1
+      // confirmation, a unique exact Pepperstone LIVE session, activated
+      // account and currently certified provider. No DEMO alternative,
+      // rescue/fallback, or caller-provided metadata can grant this path.
+      const exactPromotedLiveBoundary =
+        isStrictLiveM1PrimarySignal(candidate) &&
+        session.executionMode === ExecutionMode.FULL_AUTO &&
+        candidate.brokerConnectionId === session.brokerConnectionId &&
+        paperConnection?.brokerId === 'pepperstone-ctrader' &&
+        paperConnection?.accountType === BrokerMode.LIVE &&
+        paperConnection?.providerBrokerIdentity === 'pepperstone' &&
+        paperConnection?.status === 'CONNECTED' &&
+        paperConnection?.authorizationStatus === 'ACTIVE' &&
+        paperConnection?.liveTradingEnabled === true &&
+        this.brokerService.isProductionLiveEligible?.('pepperstone-ctrader') === true;
       externalProviderDemoPromoted = Boolean(exactPromotedDemoBoundary);
-      if (!exactPaperBoundary && !exactPromotedDemoBoundary) {
+      if (!exactPaperBoundary && !exactPromotedDemoBoundary && !exactPromotedLiveBoundary) {
         const reason =
-          'External provider signal rejected: requires the exact PAPER_ONLY internal paper-broker DEMO session or a server-promoted, validated real-provider DEMO model/session';
+          'External provider signal rejected: requires the exact PAPER_ONLY internal paper-broker DEMO session, a server-promoted validated real-provider DEMO model/session, or a locally generated certified Pepperstone LIVE primary model with matching M1 confirmation';
         this.logger.warn(`Signal ${signalId} rejected: ${reason}`);
         await this.recordIgnored(
           candidate,
@@ -328,7 +345,7 @@ export class StrategyOrchestratorService {
       }
     }
 
-    // ── Gate 3.6: Reversible six-pair DEMO entry scope ─────────────────────
+    // ── Gate 3.6: Current four-pair DEMO entry scope ─────────────────────
     // The scheduler also applies this rule, but the central orchestrator must
     // independently refuse delayed/replayed/externally injected promoted DEMO
     // signals for research-only symbols. Test the exact promoted model tuple,
@@ -337,10 +354,10 @@ export class StrategyOrchestratorService {
     if (
       session.executionMode === ExecutionMode.FULL_AUTO &&
       serverPromotedExternalDemoModel &&
-      !isRestoredDemoEntryInstrument(candidate.instrument)
+      !isCurrentFocusedDemoEntryInstrument(candidate.instrument)
     ) {
       const reason =
-        'DEMO_INSTRUMENT_RESEARCH_ONLY: this symbol is outside the six approved DEMO instruments (exact-symbol match required)';
+        'DEMO_INSTRUMENT_RESEARCH_ONLY: this symbol is outside the four approved DEMO instruments (exact-symbol match required)';
       this.logger.warn(`Signal ${signalId} rejected: ${reason}`);
       await this.recordIgnored(
         candidate,

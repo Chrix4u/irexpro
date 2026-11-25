@@ -59,3 +59,42 @@ describe('z.ai P1 DEMO partial-close broker proof (read-only)', () => {
     });
   });
 });
+
+describe('broker family read-only partial proof', () => {
+  it.each(['pepperstone-ctrader', 'icmarkets-ctrader', 'ctrader'])(
+    'accepts exact DEMO family %s without granting partial execution',
+    (brokerId) => {
+      const result = evaluatePartialCloseProof({
+        brokerId,
+        accountType: 'DEMO',
+        accountCurrency: 'USD',
+        providerDealId: null,
+        originalLots: '0.20',
+        requestedCloseLots: '0.10',
+        brokerLotsBefore: '0.20',
+        brokerFilledLots: '0.10',
+        brokerLotsAfter: '0.10',
+        grossRealisedPnl: '4',
+        commission: '-0.60',
+        swap: '0',
+      });
+      expect(result.reason).toBe('MISSING_PROVIDER_DEAL');
+      expect(result.canDispatchOrder).toBe(false);
+      const live = evaluatePartialCloseProof({
+        brokerId,
+        accountType: 'LIVE',
+        accountCurrency: 'USD',
+        providerDealId: null,
+        originalLots: '0.20',
+        requestedCloseLots: '0.10',
+        brokerLotsBefore: '0.20',
+        brokerFilledLots: '0.10',
+        brokerLotsAfter: '0.10',
+        grossRealisedPnl: '4',
+        commission: '-0.60',
+        swap: '0',
+      });
+      expect(live.reason).toBe('NOT_CTRADER_DEMO');
+    },
+  );
+});

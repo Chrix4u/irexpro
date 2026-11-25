@@ -107,6 +107,17 @@ const MAX_BLOCKED_READINESS_SCORE = 69;
 
 export type TradeReadinessBand = "WAITING" | "FORMING" | "READY";
 
+/** The 0–100 needle is a point-in-time model score, NEVER a progress bar.
+ * Repeated scans can leave it unchanged or decrease it without a stalled job. */
+export function explainTradeReadinessScore(score: number, tradeExpected: boolean): string {
+  const safeScore = Number.isFinite(score)
+    ? Math.round(Math.max(0, Math.min(100, score)))
+    : 0;
+  return tradeExpected
+    ? `${safeScore}/100 is the current model score, not a guaranteed broker fill.`
+    : `${safeScore}/100 is a model score, not ${safeScore}% of a trade completed. Scanning continues; a new order requires separate model admission, timing, and risk approval.`;
+}
+
 export interface TradeReadinessUiState {
   score: number;
   band: TradeReadinessBand;
@@ -292,6 +303,28 @@ export interface M1TacticalStatusView {
   demoEntryInstruments?: string[];
   /** Watched pairs that only generate research decisions, never new entries. */
   researchOnlyInstruments?: string[];
+  /** Server-authoritative current reversal/early-transition DEMO experiment. */
+  advisoryAlternatePilot?: {
+    enabled: boolean;
+    activeNow: boolean;
+    startsAt: string;
+    /** Null means the authorized continuous DEMO trial has no quota. */
+    endsAt: string | null;
+    maxEntries: number | null;
+    maxLot: number;
+    exactBroker: string;
+    allowedRoutes: string[];
+  };
+  /** Owner-scoped broker DEMO-only authorization window; display, not an execution control. */
+  counterDemoPilot?: {
+    enabled: boolean;
+    activeNow: boolean;
+    startsAt: string;
+    endsAt: string;
+    maxEntries: number;
+    maxLot: number;
+    exactBroker: string;
+  };
   lastRunAt: string | null;
   lastError: string | null;
   marketReadiness?: Record<
@@ -370,6 +403,45 @@ export function hasM1TacticalStatusUiShape(
     (value.researchOnlyInstruments !== undefined &&
       !isStringArray(value.researchOnlyInstruments))
   ) return false;
+  if (value.advisoryAlternatePilot !== undefined) {
+    const pilot = value.advisoryAlternatePilot;
+    if (!isRecord(pilot) ||
+        typeof pilot.enabled !== "boolean" ||
+        typeof pilot.activeNow !== "boolean" ||
+        typeof pilot.startsAt !== "string" ||
+        !isNullableTimestamp(pilot.startsAt) ||
+        !isNullableTimestamp(pilot.endsAt) ||
+        !(
+          pilot.continuousEvidence === true
+            ? pilot.endsAt === null && pilot.maxEntries === null
+            : typeof pilot.endsAt === "string" &&
+              Number.isSafeInteger(pilot.maxEntries) &&
+              (pilot.maxEntries as number) >= 1
+        ) ||
+        typeof pilot.maxLot !== "number" ||
+        !Number.isFinite(pilot.maxLot) ||
+        pilot.maxLot <= 0 ||
+        typeof pilot.exactBroker !== "string" ||
+        pilot.exactBroker.length > 80 ||
+        !isStringArray(pilot.allowedRoutes)) return false;
+  }
+  if (value.counterDemoPilot !== undefined) {
+    const pilot = value.counterDemoPilot;
+    if (!isRecord(pilot) ||
+        typeof pilot.enabled !== "boolean" ||
+        typeof pilot.activeNow !== "boolean" ||
+        typeof pilot.startsAt !== "string" ||
+        !isNullableTimestamp(pilot.startsAt) ||
+        typeof pilot.endsAt !== "string" ||
+        !isNullableTimestamp(pilot.endsAt) ||
+        !Number.isSafeInteger(pilot.maxEntries) ||
+        (pilot.maxEntries as number) < 1 ||
+        typeof pilot.maxLot !== "number" ||
+        !Number.isFinite(pilot.maxLot) ||
+        pilot.maxLot <= 0 ||
+        typeof pilot.exactBroker !== "string" ||
+        pilot.exactBroker.length > 80) return false;
+  }
   if (value.latestDecision === null) return true;
   if (!isRecord(value.latestDecision)) return false;
   const decision = value.latestDecision;
@@ -538,11 +610,14 @@ export function deriveActiveModelUiState(value: unknown): ActiveModelUiState {
     : reversalMismatch
       ? "M1 timing · Trend continuation (reversal not confirmed)"
       : `M1 timing · ${routeLabel(m1Route)}`;
-  const executable =
-    decision?.multimodelExecutable === true ||
-    (decision?.multimodelExecutable == null &&
-      decision?.executionAuthority !== "NONE" &&
-      (decision?.blockers?.length ?? 0) === 0);
+  // Missing or invalid decision is never executable. A failed dispatch
+  // cannot be called quorum-ready, even if the model had once admitted it.
+  const executable = Boolean(decision) &&
+    (decision?.multimodelExecutable === true ||
+      (decision?.multimodelExecutable == null &&
+        decision?.executionAuthority !== "NONE")) &&
+    decision?.blockers?.length === 0 &&
+    (decision.outcomeState == null || decision.outcomeState === "EXECUTION_SUCCEEDED");
 
   return {
     label: multimodel
@@ -634,6 +709,16 @@ export function deriveTradeReadinessUiState(
       `Your DEMO broker authorization is ${input.brokerAuthorizationStatus}, not ACTIVE. The AI session can be running while the broker refuses new orders. Use Enable DEMO automation to request activation through the existing validated broker endpoint; model and risk gates remain enforced.`,
       m1Decision?.instrument ?? null,
       m1Decision?.direction ?? null,
+    );
+  }
+  // A broad scanner's 90–100% confidence cannot authorize Pepperstone DEMO
+  // execution if its independent Plan B/M1 decision is missing or malformed.
+  if (input.brokerAccountType === "DEMO" &&
+      input.brokerId !== "paper-broker" && !m1Decision) {
+    return waiting(
+      49,
+      "Awaiting verified Plan-B decision — no trade authorized",
+      "DEMO is connected, but its current Plan B/M1 execution decision is unavailable or not qualified. Scanner confidence and green animations cannot authorize a broker order.",
     );
   }
   if (m1Decision) {

@@ -26,17 +26,25 @@ import { useAuth } from "@/context/auth-context";
 import { useNotification } from "@/hooks/useNotification";
 import { MotionStatusOrb } from "@/components/ui/motion-status-orb";
 import { MarketClosedState } from "./MarketClosedState";
+import type { PortfolioLossPauseStatus } from "@/components/trading/PortfolioLossPauseNotice";
+import type { StrategyLossBrakeOwnerStatus } from "@/components/trading/StrategyLossBrakeNotice";
+import { OwnerDemoLossClusterNotice } from "@/components/trading/OwnerDemoLossClusterNotice";
+import { AiTraderLoading } from "./ai-trader-loading";
 import { api } from "@/lib/api";
 import { formatAgeSeconds } from "@/lib/duration";
 import { mapApiError } from "@/lib/error-mapping";
 import { loadLiveAccountPositions } from "@/lib/live-account";
 import { resolveAiOpenPositionRows } from "@/lib/ai-open-positions";
+import { estimatePepperstoneDemoRoundTripCommission } from "@/lib/open-commission-presentation";
 import { executionPathDiagnostics } from "@/lib/trade-path-diagnostics";
+import { hasPendingClosedTradeSettlement } from "@/lib/closed-trade-settlement";
+import { detectOwnerDemoLossCluster } from "@/lib/owner-demo-loss-cluster";
 import {
   loadLiveMarketQuote,
   loadMarketIntelligence,
 } from "@/lib/market-intelligence";
 import { describeMacroEventBlock } from "@/lib/paper-trade-blocker";
+import { resolveDemoChartInstruments, nextAiFocusedChartInstrument, isResearchOnlyAiFocus } from "@/lib/trading-chart-focus";
 import {
   LIVE_SCAN_STAGES,
   deriveLiveScanFrame,
@@ -51,6 +59,7 @@ import {
   deriveActiveModelUiState,
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
+  explainTradeReadinessScore,
   summarizeDemoEntryEvidence,
   hasExternalProviderPerformanceUiShape,
   hasM1TacticalStatusUiShape,
@@ -68,6 +77,7 @@ import {
 } from "@/lib/trader-execution";
 import {
   loadTraderTerminalStatus,
+  loadLatestEndedTradingSession,
   type TraderTerminalStatus,
   type TerminalBrokerView,
 } from "@/lib/trader-terminal-status";
@@ -939,6 +949,8 @@ function executionReasonLabel(code: string | null | undefined): string | null {
       "Trade skipped because the market moved too far before the order could open.",
     DISPATCH_BOUNDARY_BLOCKED:
       "Trade skipped because conditions changed before the order could be sent.",
+    EXECUTION_NOT_SUBMITTED:
+      "Order was not sent to the broker. No position was opened.",
     EXECUTION_UNRESOLVED:
       "Order confirmation is still pending.",
     EXECUTION_CANCELLED:
@@ -1085,8 +1097,21 @@ function PositionCard({
           <dd>{position.takeProfit}</dd>
         </div>
         <div>
-          <dt>Commission</dt>
-          <dd>{money(position.commission, position.accountCurrency)}</dd>
+          <dt>Commission charged so far</dt>
+          <dd>
+            {money(position.commission, position.accountCurrency)}
+            {estimatePepperstoneDemoRoundTripCommission(position) ? (
+              <small>
+                Est. entry + exit total:{" "}
+                {money(
+                  estimatePepperstoneDemoRoundTripCommission(position)!.estimatedTotalCommission,
+                  position.accountCurrency,
+                )}. Closing fee is an estimate; broker settlement is final.
+              </small>
+            ) : (
+              <small>Open-position charge only; the broker may add exit fees when the trade closes.</small>
+            )}
+          </dd>
         </div>
         <div>
           <dt>Swap</dt>
@@ -1140,7 +1165,7 @@ function PositionTable({
             <th>Give-back</th>
             <th>SL</th>
             <th>TP</th>
-            <th>Commission</th>
+            <th>Commission charged so far</th>
             <th>Swap</th>
             <th>Status</th>
             <th>Opened</th>
@@ -1207,7 +1232,21 @@ function PositionTable({
               </td>
               <td>{position.stopLoss}</td>
               <td>{position.takeProfit}</td>
-              <td>{money(position.commission, position.accountCurrency)}</td>
+              <td>
+                {money(position.commission, position.accountCurrency)}
+                {estimatePepperstoneDemoRoundTripCommission(position) ? (
+                  <small>
+                    Est. final:{" "}
+                    {money(
+                      estimatePepperstoneDemoRoundTripCommission(position)!.estimatedTotalCommission,
+                      position.accountCurrency,
+                    )}{" "}
+                    (includes estimated exit leg)
+                  </small>
+                ) : (
+                  <small>Closing fee may be added</small>
+                )}
+              </td>
               <td>{money(position.swap, position.accountCurrency)}</td>
               <td>{position.status.replaceAll("_", " ")}</td>
               <td>
@@ -1234,6 +1273,8 @@ function PositionTable({
 }
 
 function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
+  const notSubmitted = trade.executionReasonCode === "EXECUTION_NOT_SUBMITTED";
+  const settlementPending = hasPendingClosedTradeSettlement(trade);
   const realized = trade.status === "CLOSED" ? trade.realisedPnl : null;
   const executionReason = executionReasonLabel(trade.executionReasonCode);
   const pathDiagnostics = executionPathDiagnostics(trade);
@@ -1250,13 +1291,16 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           variant={
             trade.status === "CLOSED" || trade.status === "OPEN"
               ? "success"
-              : trade.status === "REJECTED" || trade.status === "CANCELLED"
+              : notSubmitted || trade.status === "REJECTED" || trade.status === "CANCELLED"
                 ? "error"
                 : "warning"
           }
         >
-          {trade.status.replaceAll("_", " ")}
+          {notSubmitted ? "NOT SUBMITTED" : trade.status.replaceAll("_", " ")}
         </Badge>
+        {settlementPending && (
+          <Badge variant="warning">Broker settlement pending</Badge>
+        )}
         {realized !== null && (
           <Badge variant={pnlBadge(realized)}>
             {realized.startsWith("-") ? "" : "+"}
@@ -1277,7 +1321,7 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           <span>Realized P&amp;L</span>
           <strong>
             {trade.realisedPnl === null
-              ? "—"
+              ? settlementPending ? "Awaiting broker" : "—"
               : money(trade.realisedPnl, trade.accountCurrency)}
           </strong>
         </div>
@@ -1310,7 +1354,7 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           </>
         ) : null}
         <div>
-          <span>Commission</span>
+          <span>Total commission (entry + exit)</span>
           <strong>{money(trade.commission, trade.accountCurrency)}</strong>
         </div>
         <div>
@@ -1332,6 +1376,13 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           </strong>
         </div>
       </div>
+      {settlementPending && (
+        <p className="ai-activity-row__settlement-note" role="status">
+          The broker has reported this position closed, but its final exit price,
+          realized profit or loss, and/or charges are not yet verified. Its peak
+          floating P&amp;L is not realized profit; missing amounts are not zero.
+        </p>
+      )}
       {executionReason && (
         <div className="ai-activity-row__reason">{executionReason}</div>
       )}
@@ -1361,17 +1412,29 @@ function FinancialKpi({
   value,
   hint,
   tone = "neutral",
+  loading = false,
 }: {
   label: string;
   value: string;
   hint: string;
   tone?: "positive" | "negative" | "neutral";
+  loading?: boolean;
 }) {
   return (
-    <article className={`ai-kpi-card ai-kpi-card--${tone}`}>
+    <article className={`ai-kpi-card ai-kpi-card--${tone}`} aria-busy={loading}>
       <span className="ai-kpi-card__label">{label}</span>
-      <strong className="ai-kpi-card__value">{value}</strong>
-      <span className="ai-kpi-card__hint">{hint}</span>
+      {loading ? (
+        <>
+          <span className="ai-loading-shimmer ai-kpi-card__value--loading" aria-hidden="true" />
+          <span className="ai-loading-shimmer ai-loading-shimmer--hint" aria-hidden="true" />
+          <span className="sr-only">Loading {label.toLowerCase()} from the broker</span>
+        </>
+      ) : (
+        <>
+          <strong className="ai-kpi-card__value">{value}</strong>
+          <span className="ai-kpi-card__hint">{hint}</span>
+        </>
+      )}
     </article>
   );
 }
@@ -1416,17 +1479,17 @@ function TradeReadinessGauge({
           <h2 id="trade-readiness-title">Trade Readiness</h2>
         </div>
         <Badge variant={band === "READY" ? "success" : band === "FORMING" ? "warning" : "info"}>
-          {band === "READY" ? "TRADE READY" : band === "FORMING" ? "FORMING" : "WAITING"}
+          {band === "READY" ? "TRADE READY" : band === "FORMING" ? "ENTRY NOT QUALIFIED" : "WAITING"}
         </Badge>
       </div>
       <div
         className="ai-readiness__meter"
         role="meter"
-        aria-label="Trade readiness"
+        aria-label="Current model entry score, not trade formation progress"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={score}
-        aria-valuetext={`${headline}, ${score} percent`}
+        aria-valuetext={`${headline}. ${explainTradeReadinessScore(score, tradeExpected)}`}
       >
         <div className="ai-readiness__arc" aria-hidden="true">
           <span className="ai-readiness__scan-needle" style={{ transform: `rotate(${scanAngle}deg)` }} />
@@ -1436,6 +1499,9 @@ function TradeReadinessGauge({
         <strong className="ai-readiness__score">{score}</strong>
         <span className="ai-readiness__score-label">/ 100</span>
       </div>
+      <p className="ai-readiness__score-caption">
+        {explainTradeReadinessScore(score, tradeExpected)}
+      </p>
       <div className={`ai-readiness__scan-live${evidenceDelayed ? " ai-readiness__scan-live--delayed" : ""}`}>
         <span className="ai-readiness__scan-pulse" aria-hidden="true" />
         <div>
@@ -1771,13 +1837,17 @@ export default function AiTradingPage() {
   const [execution, setExecution] = useState<TraderExecutionSnapshot | null>(
     null,
   );
+  const [executionScopedBrokerId, setExecutionScopedBrokerId] =
+    useState<string | null>(null);
   const [realised24hReport, setRealised24hReport] = useState<{
     brokerConnectionId: string;
     summary: ClosedTradeReportSummaryView;
   } | null>(null);
   const [livePositions, setLivePositions] = useState<LivePositionRowView[]>([]);
+  const [positionsLoaded, setPositionsLoaded] = useState(false);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
-  const [chartInstrument, setChartInstrument] = useState("USDJPY");
+  const [chartInstrument, setChartInstrument] = useState("EURUSD");
+  const previousAiFocusRef = useRef<string | null>(null);
   const [chartTimeframe, setChartTimeframe] = useState<
     "M1" | "M5" | "M15" | "H1" | "H4"
   >("M1");
@@ -1815,6 +1885,15 @@ export default function AiTradingPage() {
     useState<M1TacticalStatusView | null>(null);
   const [demoEntryDiagnostic, setDemoEntryDiagnostic] =
     useState<DemoFocusedEntryDiagnosticView | null>(null);
+  const [portfolioLossPause, setPortfolioLossPause] =
+    useState<PortfolioLossPauseStatus | null>(null);
+  const [, setPortfolioLossPauseError] =
+    useState<string | null>(null);
+  const [strategyLossAlerts, setStrategyLossAlerts] =
+    useState<StrategyLossBrakeOwnerStatus | null>(null);
+  const [, setStrategyLossAlertsError] =
+    useState<string | null>(null);
+
   const [brokerParityRuntime, setBrokerParityRuntime] =
     useState<BrokerParityRuntimeStatusView | null>(null);
   const [v8DedicatedPaperStatus, setV8DedicatedPaperStatus] =
@@ -1830,6 +1909,12 @@ export default function AiTradingPage() {
   const seenPositionIds = useRef<Set<string>>(new Set());
   const seenExecutionStates = useRef<Map<string, string>>(new Map());
   const tradingRefreshInFlight = useRef(false);
+  // Slow research/cockpit telemetry cannot delay broker balances, closed
+  // trades or Start/Stop controls. Prevent overlapping 4s HTTP batches.
+  const researchTelemetryInFlight = useRef(false);
+  const latestEndedInFlight = useRef(false);
+  const latestEndedFetchedAt = useRef(0);
+  const runtimeStatusInFlight = useRef(false);
   const positionsRefreshInFlight = useRef(false);
   const tacticalRefreshInFlight = useRef(false);
 
@@ -1928,13 +2013,21 @@ export default function AiTradingPage() {
         : confidencePercent >= 45
           ? "building"
           : "weak";
-  const watchedInstruments = automationRuntime?.instruments?.length
-    ? automationRuntime.instruments
-    : [chartInstrument];
-  const latestChartCandle = market?.candles?.at(-1) ?? null;
+  // The legacy automation runtime still reports a broad six-pair universe.
+  // The authenticated DEMO M1 policy is authoritative for chart tabs;
+  // before it arrives the fallback is the approved four-pair DEMO focus.
+  const watchedInstruments = useMemo(
+    () => resolveDemoChartInstruments(m1TacticalStatus),
+    [m1TacticalStatus],
+  );
+  const visibleChartMarket =
+    market?.instrument === chartInstrument && market?.timeframe === chartTimeframe
+      ? market
+      : null;
+  const latestChartCandle = visibleChartMarket?.candles?.at(-1) ?? null;
   const previousChartCandle =
-    market?.candles && market.candles.length > 1
-      ? (market.candles.at(-2) ?? null)
+    visibleChartMarket?.candles && visibleChartMarket.candles.length > 1
+      ? (visibleChartMarket.candles.at(-2) ?? null)
       : null;
   const chartMove =
     latestChartCandle && previousChartCandle
@@ -2088,93 +2181,43 @@ export default function AiTradingPage() {
         // the Start/Stop workspace unavailable when one of those secondary
         // endpoints has a transient server-side failure.
         const status = await loadTraderTerminalStatus();
-        setTerminal(status);
+        // Preserve already-verified ended-session details while the fast
+        // control poll refreshes; never carry them across broker accounts.
+        setTerminal((previous) => ({
+          ...status,
+          lastEndedSession:
+            previous?.primaryBroker?.id === status.primaryBroker?.id
+              ? previous?.lastEndedSession ?? null
+              : null,
+        }));
 
-        // Secondary status feeds are independent of trading controls and of
-        // one another. Fetch them concurrently to avoid a serial HTTP waterfall
-        // extending the intended four-second workspace refresh interval.
-        const [
-          providerResult,
-          scannerResult,
-          tacticalResult,
-          brokerParityResult,
-        ] = await Promise.allSettled([
-          (async () => {
-            const evidence = await api.request<unknown>(
-              "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v7",
+        // Optional ended-session history is intentionally decoupled from
+        // verified broker equity and Start/Stop. Throttle to avoid hammering
+        // the database on the four-second poll.
+        if (!latestEndedInFlight.current &&
+            (Date.now() - latestEndedFetchedAt.current > 60_000)) {
+          latestEndedInFlight.current = true;
+          latestEndedFetchedAt.current = Date.now();
+          void loadLatestEndedTradingSession().then((endedSession) => {
+            setTerminal((current) =>
+              current !== null &&
+              current.primaryBroker?.id === status.primaryBroker?.id &&
+              current.session?.id === status.session?.id
+                ? { ...current, lastEndedSession: endedSession }
+                : current,
             );
-            if (!hasExternalProviderPerformanceUiShape(evidence)) {
-              throw new Error("Provider performance contract mismatch");
-            }
-            return evidence as ExternalProviderPerformanceView;
-          })(),
-          (async () => {
-            const scannerStatus = await api.request<unknown>(
-              "/ai/external/vps-forex/status",
-            );
-            if (!hasVpsScannerUiShape(scannerStatus)) {
-              throw new Error("VPS scanner status contract mismatch");
-            }
-            return scannerStatus as VpsForexScannerStatusView;
-          })(),
-          (async () => {
-            const tacticalStatus = await api.request<unknown>(
-              "/ai/external/vps-forex/m1-tactical/status",
-            );
-            if (!hasM1TacticalStatusUiShape(tacticalStatus)) {
-              throw new Error("M1 tactical status contract mismatch");
-            }
-            return tacticalStatus;
-          })(),
-          Promise.all([
-            api.request<BrokerParityRuntimeStatusView>(
-              "/ai/external/vps-forex/broker-parity/status",
-            ),
-            api.request<V8DedicatedPaperStatusView>(
-              "/ai/external/vps-forex/v8-dedicated-paper/status",
-            ),
-          ]),
-        ]);
-
-        setProviderEvidence(providerResult.status === "fulfilled" ? providerResult.value : null);
-        setVpsScannerStatus(scannerResult.status === "fulfilled" ? scannerResult.value : null);
-        setM1TacticalStatus(tacticalResult.status === "fulfilled" ? tacticalResult.value : null);
-        if (brokerParityResult.status === "fulfilled") {
-          const [parityStatus, v8Status] = brokerParityResult.value;
-          setBrokerParityRuntime(parityStatus);
-          setV8DedicatedPaperStatus(v8Status);
-        } else {
-          setBrokerParityRuntime(null);
-          setV8DedicatedPaperStatus(null);
+          }).catch(() => {
+            // Optional risk history never overrides verified active-session
+            // risk gates. A later poll can retry without dropping controls.
+          }).finally(() => {
+            latestEndedInFlight.current = false;
+          });
         }
 
-        // Keep secondary market-intelligence context aligned with the actual
-        // scheduler universe. Falling back to EURUSD preserves the ordinary
-        // non-research workspace before a runtime is registered.
-        let marketInstrument = "EURUSD";
-
-        if (status.session) {
-          try {
-            const runtime = await api.request<AiAutomationRuntimeStatus>(
-              `/trading/sessions/${encodeURIComponent(status.session.id)}/automation-status`,
-            );
-            setAutomationRuntime(runtime);
-            setAutomationRuntimeWarning(null);
-            const runtimeInstrument = runtime.instruments.find((value) =>
-              /^[A-Z0-9._-]{3,24}$/.test(value),
-            );
-            if (runtimeInstrument) marketInstrument = runtimeInstrument;
-          } catch {
-            setAutomationRuntime(null);
-            setAutomationRuntimeWarning(
-              "AI Trading is running, but the AI engine runtime status could not be verified yet.",
-            );
-          }
-        } else {
-          setAutomationRuntime(null);
-          setAutomationRuntimeWarning(null);
-        }
-
+        // The capital card is a CORE read, not a dependency of research
+        // telemetry, model status, historical reports, or live charts.
+        // Start it immediately after the broker is known and independently
+        // release the skeleton when that verified response settles.
         const brokerId =
           status.sessionBroker?.id ||
           selectedBrokerIdRef.current ||
@@ -2184,6 +2227,114 @@ export default function AiTradingPage() {
           selectedBrokerIdRef.current = status.sessionBroker.id;
         } else if (!selectedBrokerIdRef.current) {
           selectedBrokerIdRef.current = brokerId;
+        }
+        if (brokerId) {
+          setSelectedBrokerId(selectedBrokerIdRef.current);
+          void api.getCapitalAllocation(brokerId)
+            .then((nextAllocation) => {
+              if (selectedBrokerIdRef.current === brokerId) {
+                setAllocation(nextAllocation);
+                setAllocationWarning(null);
+                setAllocationAmount(nextAllocation.allocatedCapital ?? "");
+              }
+            })
+            .catch(() => {
+              if (selectedBrokerIdRef.current === brokerId) {
+                setAllocation(null);
+                setAllocationWarning(
+                  "Your broker account is connected, but its AI capital allocation could not be loaded. Trading controls remain disabled until this data is available.",
+                );
+              }
+            })
+            .finally(() => {
+              if (showSpinner) setLoading(false);
+            });
+        } else if (!selectedBrokerIdRef.current) {
+          setAllocation(null);
+          if (showSpinner) setLoading(false);
+        }
+
+        // Broker financials and executions must NOT wait for M1 status,
+        // parity or archived provider performance, any of which can stall.
+        // Keep observational status asynchronous and rate-limit its own
+        // polling; it has no authority to enable Start/Stop.
+        if (!researchTelemetryInFlight.current) {
+          researchTelemetryInFlight.current = true;
+          void Promise.allSettled([
+            (async () => {
+              const evidence = await api.request<unknown>(
+                "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v7",
+              );
+              if (!hasExternalProviderPerformanceUiShape(evidence)) {
+                throw new Error("Provider performance contract mismatch");
+              }
+              return evidence as ExternalProviderPerformanceView;
+            })(),
+            (async () => {
+              const scannerStatus = await api.request<unknown>(
+                "/ai/external/vps-forex/status",
+              );
+              if (!hasVpsScannerUiShape(scannerStatus)) {
+                throw new Error("VPS scanner status contract mismatch");
+              }
+              return scannerStatus as VpsForexScannerStatusView;
+            })(),
+            (async () => {
+              const tacticalStatus = await api.request<unknown>(
+                "/ai/external/vps-forex/m1-tactical/status",
+              );
+              if (!hasM1TacticalStatusUiShape(tacticalStatus)) {
+                throw new Error("M1 tactical status contract mismatch");
+              }
+              return tacticalStatus;
+            })(),
+            Promise.all([
+              api.request<BrokerParityRuntimeStatusView>(
+                "/ai/external/vps-forex/broker-parity/status",
+              ),
+              api.request<V8DedicatedPaperStatusView>(
+                "/ai/external/vps-forex/v8-dedicated-paper/status",
+              ),
+            ]),
+          ]).then(([
+            providerResult, scannerResult, tacticalResult, brokerParityResult,
+          ]) => {
+            // On a transient polling error retain last valid evidence instead
+            // of replacing it with null/dashes.
+            if (providerResult.status === "fulfilled") setProviderEvidence(providerResult.value);
+            if (scannerResult.status === "fulfilled") setVpsScannerStatus(scannerResult.value);
+            if (tacticalResult.status === "fulfilled") setM1TacticalStatus(tacticalResult.value);
+            if (brokerParityResult.status === "fulfilled") {
+              const [parityStatus, v8Status] = brokerParityResult.value;
+              setBrokerParityRuntime(parityStatus);
+              setV8DedicatedPaperStatus(v8Status);
+            }
+          }).finally(() => {
+            researchTelemetryInFlight.current = false;
+          });
+        }
+
+        // Engine status is independent of account financials and may be
+        // delayed or unavailable when the broker session is healthy.
+        if (status.session) {
+          if (!runtimeStatusInFlight.current) {
+            runtimeStatusInFlight.current = true;
+            void api.request<AiAutomationRuntimeStatus>(
+              `/trading/sessions/${encodeURIComponent(status.session.id)}/automation-status`,
+            ).then((runtime) => {
+              setAutomationRuntime(runtime);
+              setAutomationRuntimeWarning(null);
+            }).catch(() => {
+              setAutomationRuntimeWarning(
+                "AI Trading is running, but the AI engine runtime status could not be verified yet.",
+              );
+            }).finally(() => {
+              runtimeStatusInFlight.current = false;
+            });
+          }
+        } else {
+          setAutomationRuntime(null);
+          setAutomationRuntimeWarning(null);
         }
 
         const realisedWindowEnd = new Date();
@@ -2220,8 +2371,14 @@ export default function AiTradingPage() {
         // Secondary read failures must never erase the last authoritative UI
         // snapshot. Keep the previous data on screen and let the existing
         // polling loops retry automatically.
-        if (snapshot) setExecution(snapshot);
-        if (positions) setLivePositions(positions);
+        if (snapshot) {
+          setExecution(snapshot);
+          setExecutionScopedBrokerId(brokerId || null);
+        }
+        if (positions) {
+          setLivePositions(positions);
+          setPositionsLoaded(true);
+        }
         if (brokerId && realisedReport) {
           setRealised24hReport({
             brokerConnectionId: brokerId,
@@ -2256,26 +2413,6 @@ export default function AiTradingPage() {
           setActivityWarning(null);
         }
 
-        if (brokerId) {
-          setSelectedBrokerId(selectedBrokerIdRef.current);
-          try {
-            const nextAllocation = await api.getCapitalAllocation(brokerId);
-            if (selectedBrokerIdRef.current === brokerId) {
-              setAllocation(nextAllocation);
-              setAllocationWarning(null);
-              setAllocationAmount(nextAllocation.allocatedCapital ?? "");
-            }
-          } catch {
-            if (selectedBrokerIdRef.current === brokerId) {
-              setAllocation(null);
-              setAllocationWarning(
-                "Your broker account is connected, but its AI capital allocation could not be loaded. Trading controls remain disabled until this data is available.",
-              );
-            }
-          }
-        } else if (!selectedBrokerIdRef.current) {
-          setAllocation(null);
-        }
       } catch (requestError) {
         setError(mapApiError(requestError).message);
       } finally {
@@ -2283,7 +2420,7 @@ export default function AiTradingPage() {
         if (showSpinner) setLoading(false);
       }
     },
-    [user, selectedBrokerId, emitActivityToasts],
+    [user, emitActivityToasts],
   );
 
   useEffect(() => {
@@ -2339,6 +2476,83 @@ export default function AiTradingPage() {
     };
   }, [user, automationOn]);
 
+  // Informational DEMO loss-pattern warnings. The owner uses Start/Stop to
+  // control the AI session; this polling path never grants trading authority.
+  useEffect(() => {
+    if (!user || !automationOn || terminal?.session?.executionMode !== "FULL_AUTO" ||
+        selectedBroker?.accountType !== "DEMO" ||
+        selectedBroker?.brokerId !== "pepperstone-ctrader") {
+      setPortfolioLossPause(null);
+      setPortfolioLossPauseError(null);
+      return;
+    }
+    let disposed = false;
+    let busy = false;
+    const check = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const current = await api.request<PortfolioLossPauseStatus>(
+          "/ai/external/vps-forex/m1-tactical/portfolio-loss-pause",
+        );
+        if (!disposed) {
+          setPortfolioLossPause(current);
+          setPortfolioLossPauseError(null);
+        }
+      } catch {
+        if (!disposed) setPortfolioLossPauseError(
+          "The risk alert could not be refreshed. Server-side entry protections remain active.",
+        );
+      } finally {
+        busy = false;
+      }
+    };
+    void check();
+    // Near-real-time account risk notification without changing the trading engine.
+    const timer = window.setInterval(() => void check(), 4000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [user, automationOn, terminal?.session?.id,
+      terminal?.session?.executionMode, selectedBroker?.id,
+      selectedBroker?.accountType, selectedBroker?.brokerId]);
+
+  // Strategy-specific after-fee loss diagnostics are read only and do not
+  // interrupt trading or ask the owner for permission.
+  useEffect(() => {
+    if (!user || !automationOn || terminal?.session?.executionMode !== "FULL_AUTO" ||
+        selectedBroker?.accountType !== "DEMO" ||
+        selectedBroker?.brokerId !== "pepperstone-ctrader") {
+      setStrategyLossAlerts(null);
+      setStrategyLossAlertsError(null);
+      return;
+    }
+    let disposed = false;
+    let pending = false;
+    const refresh = async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const result = await api.request<StrategyLossBrakeOwnerStatus>(
+          "/ai/external/vps-forex/m1-tactical/strategy-loss-alerts",
+        );
+        if (!disposed) {
+          setStrategyLossAlerts(result);
+          setStrategyLossAlertsError(null);
+        }
+      } catch {
+        if (!disposed) setStrategyLossAlertsError(
+          "Strategy restriction alerts could not be refreshed. Trading safety controls remain active.",
+        );
+      } finally {
+        pending = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 4000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [user, automationOn, terminal?.session?.id, terminal?.session?.executionMode,
+      selectedBroker?.id, selectedBroker?.accountType, selectedBroker?.brokerId]);
+
+
   // This user/account-scoped investigation is separate from core Start/Stop
   // and the fast 4-second status feed. Refresh every 30s; its failure must
   // neither disable trading controls nor retain stale "last hour" evidence.
@@ -2392,11 +2606,11 @@ export default function AiTradingPage() {
   }, [user, refreshTradingData]);
 
   useEffect(() => {
-    const watched = automationRuntime?.instruments ?? [];
-    if (watched.length && !watched.includes(chartInstrument)) {
-      setChartInstrument(watched[0]);
+    // A stale automation poll must not switch the chart back to a paused pair.
+    if (!watchedInstruments.includes(chartInstrument)) {
+      setChartInstrument(watchedInstruments[0]);
     }
-  }, [automationRuntime?.instruments, chartInstrument]);
+  }, [watchedInstruments, chartInstrument]);
 
   useEffect(() => {
     if (!user || !marketBrokerConnectionId) return;
@@ -2427,7 +2641,10 @@ export default function AiTradingPage() {
           setMarket((previous) => ({
             ...snapshot,
             candles: reconcileLiveCandles(
-              previous?.candles ?? [],
+              previous?.instrument === snapshot.instrument &&
+                previous?.timeframe === snapshot.timeframe
+                ? previous.candles
+                : [],
               snapshot.candles,
               snapshot.quote,
               chartTimeframe,
@@ -2912,6 +3129,16 @@ export default function AiTradingPage() {
 
   const recentClosedTrades = execution?.closedExecutions.slice(0, 10) ?? [];
   const latestClosedTrade = recentClosedTrades[0] ?? null;
+  // Broker-scoped, broker-settled loss cluster advisory only. No model or
+  // risk gate reads this result. Stop still requires the existing confirmation.
+  const ownerDemoLossCluster =
+    automationOn && terminal?.session?.executionMode === "FULL_AUTO" &&
+    selectedBroker?.accountType === "DEMO" &&
+    selectedBroker?.brokerId === "pepperstone-ctrader" &&
+    selectedBroker?.id === executionScopedBrokerId &&
+    execution?.degradedFeeds.includes("CLOSED_EXECUTIONS") !== true
+      ? detectOwnerDemoLossCluster(execution?.closedExecutions ?? [])
+      : null;
   const recentExecutionActivity = summarizeRecentExecutionActivity(
     execution?.recentExecutions ?? [],
   );
@@ -3007,6 +3234,29 @@ export default function AiTradingPage() {
     fallbackConfidence: displayedConfidence,
     fallbackThreshold: displayedConfidenceThreshold,
   });
+  // Follow the AI focus when it changes, without flickering on every
+  // one-second status refresh or hijacking manual inspection of another chart.
+  // This is an UI-only change; focus cannot grant broker execution authority.
+  useEffect(() => {
+    if (!automationOn) {
+      previousAiFocusRef.current = null;
+      return;
+    }
+    const next = nextAiFocusedChartInstrument({
+      aiFocus: tradeReadiness.instrument,
+      previousAiFocus: previousAiFocusRef.current,
+      watchedInstruments,
+    });
+    if (next) {
+      previousAiFocusRef.current = next;
+      setChartInstrument(next);
+    }
+  }, [automationOn, tradeReadiness.instrument, watchedInstruments]);
+
+  const researchOnlyAiFocus = isResearchOnlyAiFocus({
+    aiFocus: tradeReadiness.instrument,
+    watchedInstruments,
+  });
   const activeModelUi = deriveActiveModelUiState(m1TacticalStatus);
   const openPnlTone = totalUnrealisedPnlUnavailable || totalUnrealisedPnl == null
     ? "neutral"
@@ -3025,11 +3275,7 @@ export default function AiTradingPage() {
   const showDeveloperDiagnostics = false;
 
   if (restoring) {
-    return (
-      <div style={{ padding: "3rem" }}>
-        <LoadingSpinner text="Restoring trading workspace…" />
-      </div>
-    );
+    return <AiTraderLoading />;
   }
 
   if (!user) {
@@ -3042,6 +3288,19 @@ export default function AiTradingPage() {
           </Link>
         </Card>
       </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <DashboardShell
+        user={user}
+        onLogout={logout}
+        activeRoute="/trade"
+        title="AI Trading"
+      >
+        <AiTraderLoading />
+      </DashboardShell>
     );
   }
 
@@ -3058,6 +3317,12 @@ export default function AiTradingPage() {
         title="AI Trading"
       >
         <main className="ai-trader" data-testid="ai-trader-workspace">
+          {automationOn && (portfolioLossPause?.active || strategyLossAlerts?.active) && (
+            <div role="status" className="portfolio-brake-alert">
+              <strong>Loss-pattern warning</strong>
+              <p>Recent trading losses were detected. AI Trader remains under your Start/Stop control; no extra loss-streak approval is required.</p>
+            </div>
+          )}
           <MarketClosedState
             nextEligibleScanAt={vpsScannerStatus.marketSchedule.nextEligibleScanAt}
           />
@@ -3074,6 +3339,19 @@ export default function AiTradingPage() {
       title="AI Trading"
     >
       <main className="ai-trader" data-testid="ai-trader-workspace">
+        {automationOn && (portfolioLossPause?.active || strategyLossAlerts?.active) && (
+          <div role="status" className="portfolio-brake-alert">
+            <strong>Loss-pattern warning</strong>
+            <p>Recent losses were detected. Trading continues when a valid opportunity qualifies. Use Stop Trading if you want the AI to stop.</p>
+          </div>
+        )}
+        <OwnerDemoLossClusterNotice
+          incident={ownerDemoLossCluster}
+          brokerConnectionId={selectedBroker?.id ?? null}
+          active={automationOn}
+          deferAutoOpen={pendingAutomationAction !== null}
+          onReviewStop={() => setPendingAutomationAction("STOP")}
+        />
         <section className="ai-trader__hero">
           <div>
             <p className="workspace-hero__eyebrow">Autonomous trading control</p>
@@ -3083,6 +3361,9 @@ export default function AiTradingPage() {
               iRexPro opens only qualified opportunities and manages each AI position
               within your allocation and protection rules.
             </p>
+            <Link href="/ai/counter" className="btn btn--secondary">
+              MAIN vs COUNTER · Research
+            </Link>
           </div>
           <div className="ai-trader__hero-state" data-ai-state={aiVisualState}>
             <span>AI Trading</span>
@@ -3178,22 +3459,26 @@ export default function AiTradingPage() {
             >
               <FinancialKpi
                 label="Equity"
+                loading={!allocation && !allocationWarning}
                 value={money(allocation?.brokerEquity, allocation?.accountCurrency)}
                 hint="Current broker account equity"
               />
               <FinancialKpi
                 label="AI Allocation"
+                loading={!allocation && !allocationWarning}
                 value={money(allocation?.allocatedCapital, allocation?.accountCurrency)}
                 hint={`${money(allocation?.availableCapital, allocation?.accountCurrency)} available`}
               />
               <FinancialKpi
                 label="24h Net P&L"
+                loading={!realised24hReport && !execution && !activityWarning}
                 value={signedMoney(realised24hNetPnl, realisedCurrency)}
                 hint={`${realised24hWins} wins · ${realised24hLosses} losses`}
                 tone={netPnlTone}
               />
               <FinancialKpi
                 label="Open P&L"
+                loading={!positionsLoaded && !activityWarning}
                 value={
                   aiOpenPositions.length === 0
                     ? money("0", allocation?.accountCurrency)
@@ -3240,7 +3525,7 @@ export default function AiTradingPage() {
                     <Badge variant={netPnlTone === "negative" ? "error" : netPnlTone === "positive" ? "success" : "info"}>
                       {realised24hClosedCount} closed · 24h
                     </Badge>
-                    <Link href={closedTradeHistoryHref} className="ai-performance-panel__header-link">
+                    <Link href={closedTradeHistoryHref} prefetch={false} className="ai-performance-panel__header-link">
                       View all
                     </Link>
                   </div>
@@ -3466,6 +3751,17 @@ export default function AiTradingPage() {
                       ? " · You may adjust this allocation while stopped; restarting still requires an explicit risk reset."
                       : ""}
                 </span>
+                {selectedBroker?.brokerId === "pepperstone-ctrader" &&
+                  selectedBroker.accountType === "LIVE" ? (
+                    <span className="ai-control-card__hint">
+                      LIVE lot sizing: preferred 0.10–1.00 lots; broker-supported
+                      micro sizes such as 0.01 or 0.04 remain available when
+                      the account, stop-loss, margin and estimated trading costs
+                      permit them. The AI never forces 0.10 lots. With $50
+                      equity, its current estimated risk budget is at most
+                      2% ($1) per trade; actual slippage can exceed estimates.
+                    </span>
+                  ) : null}
                 </div>
               </Card>
 
@@ -3577,6 +3873,83 @@ export default function AiTradingPage() {
                     ) : null}
                   </div>
                 ) : null}
+                {m1TacticalStatus?.advisoryAlternatePilot?.enabled && (
+                  <div className="ai-control-card__focus" aria-label="Reversal and early-transition DEMO trading trial" role="status">
+                    <strong>
+                      Reversal + early-transition DEMO trial ·{" "}
+                      {m1TacticalStatus.advisoryAlternatePilot.activeNow
+                        ? "ENTRY WINDOW OPEN"
+                        : "OUTSIDE ENTRY WINDOW"}
+                    </strong>
+                    <small>
+                      {m1TacticalStatus.advisoryAlternatePilot.exactBroker} ·{" "}
+                      Routes: {m1TacticalStatus.advisoryAlternatePilot.allowedRoutes
+                        .map((route) => route.replaceAll("_", " ").toLowerCase())
+                        .join(" · ")}.
+                    </small>
+                    <small>
+                      Trial begins{" "}
+                      {new Date(m1TacticalStatus.advisoryAlternatePilot.startsAt).toLocaleString(
+                        "en-GH", {
+                          timeZone: "Africa/Accra", weekday: "short", day: "numeric",
+                          month: "short", hour: "numeric", minute: "2-digit",
+                        },
+                      )}{" "}
+                      {m1TacticalStatus.advisoryAlternatePilot.endsAt === null
+                        ? "Ghana time. Continuous trial — no scheduled expiry."
+                        : "Ghana time; closes " + new Date(
+                            m1TacticalStatus.advisoryAlternatePilot.endsAt,
+                          ).toLocaleString("en-GH", {
+                            timeZone: "Africa/Accra", weekday: "short", day: "numeric",
+                            month: "short", hour: "numeric", minute: "2-digit",
+                          }) + " Ghana time."}
+                    </small>
+                    <small>
+                      {m1TacticalStatus.advisoryAlternatePilot.maxEntries === null
+                        ? "No cumulative trade-count limit for this DEMO evidence trial;"
+                        : "At most " + m1TacticalStatus.advisoryAlternatePilot.maxEntries +
+                          " new trial entries across the window;"}{" "}
+                      up to{" "}
+                      {m1TacticalStatus.advisoryAlternatePilot.maxLot.toFixed(2)} lots
+                      per qualified entry, not a guaranteed or minimum size.
+                      Normal account margin, stop-loss risk and broker admission still apply.
+                    </small>
+                    <small>
+                      An open entry window does not mean a trade has qualified or been placed.
+                      Check “Why no new trades?” for recent scanner and broker decisions.
+                    </small>
+                  </div>
+                )}
+                {automationOn && m1TacticalStatus?.counterDemoPilot?.enabled && (
+                  <div className="ai-control-card__focus" aria-label="Independent COUNTER DEMO pilot status">
+                    <strong>
+                      COUNTER demo pilot ·{" "}
+                      {m1TacticalStatus.counterDemoPilot.activeNow ? "ACTIVE" : "OUTSIDE ENTRY WINDOW"}
+                    </strong>
+                    <small>
+                      {m1TacticalStatus.counterDemoPilot.exactBroker} · Up to{" "}
+                      {m1TacticalStatus.counterDemoPilot.maxLot.toFixed(2)} lots
+                      per qualifying entry, never a forced minimum ·{" "}
+                      {m1TacticalStatus.counterDemoPilot.maxEntries} entry limit ·
+                      New entries stop at{" "}
+                      {new Date(m1TacticalStatus.counterDemoPilot.endsAt).toLocaleTimeString(
+                        "en-GH", { timeZone: "Africa/Accra", hour: "numeric", minute: "2-digit" },
+                      )}{" "}
+                      Ghana time.
+                    </small>
+                    <small>
+                      Actual lot size remains limited by the demo allocation,
+                      stop-loss risk, spread, available margin and broker execution checks.
+                    </small>
+                    {m1TacticalStatus.counterDemoPilot.activeNow &&
+                      m1TacticalStatus.latestDecision?.planBRegime === "ROLLOVER_RISK" && (
+                        <small>
+                          Latest model decision: rollover risk. Trading may be held
+                          while spreads and after-cost expectancy are unfavorable.
+                        </small>
+                      )}
+                  </div>
+                )}
                 {automationOn && demoEntryDiagnostic?.scope === "ACTIVE_CTRADER_DEMO" && (
                   <div className="ai-control-card__diagnosis" aria-label="Why no new DEMO trades">
                     <strong>Why no new trades? · Last 60 minutes</strong>
@@ -5269,7 +5642,7 @@ export default function AiTradingPage() {
 
                 <div
                   className="ai-cockpit__instruments"
-                  aria-label="Watched instruments"
+                  aria-label="Active trading chart instruments"
                 >
                   {watchedInstruments.map((instrument) => (
                     <button
@@ -5292,13 +5665,7 @@ export default function AiTradingPage() {
                         <span className="ai-cockpit__label">
                           {chartInstrument}
                         </span>
-                        <strong>
-                          {automationRuntime?.research_uat
-                            ? (automationRuntime.last_market_data_close ??
-                              market?.quote.bid ??
-                              "—")
-                            : (market?.quote.bid ?? "—")}
-                        </strong>
+                        <strong>{visibleChartMarket?.quote.bid ?? "—"}</strong>
                         <small>
                           {chartLoading
                             ? "Updating chart…"
@@ -5335,7 +5702,7 @@ export default function AiTradingPage() {
                       </div>
                       <div>
                         <span>Spread</span>
-                        <strong>{market?.quote.spread ?? "—"}</strong>
+                        <strong>{visibleChartMarket?.quote.spread ?? "—"}</strong>
                       </div>
                       <div
                         className={
@@ -5354,7 +5721,7 @@ export default function AiTradingPage() {
                     </div>
                     <MarketPriceChart
                       key={`${chartInstrument}-${chartTimeframe}`}
-                      candles={market?.candles ?? []}
+                      candles={visibleChartMarket?.candles ?? []}
                     />
                   </div>
 
@@ -5392,8 +5759,17 @@ export default function AiTradingPage() {
                     </div>
                     {tradeReadiness.instrument ? (
                       <div className="ai-market-readiness__focus">
-                        <span>Focus</span>
+                        <span>
+                          {researchOnlyAiFocus
+                            ? "Research-only focus"
+                            : tradeReadiness.tradeExpected
+                              ? "Qualified entry candidate"
+                              : "Setup under evaluation"}
+                        </span>
                         <b>{tradeReadiness.instrument}{tradeReadiness.direction ? ` · ${tradeReadiness.direction}` : ""}</b>
+                        {researchOnlyAiFocus ? (
+                          <small>This pair is not one of the four enabled DEMO instruments. Scanning it does not permit an entry; the chart stays on an enabled pair.</small>
+                        ) : null}
                       </div>
                     ) : null}
                   </aside>
@@ -5678,7 +6054,7 @@ export default function AiTradingPage() {
                     >
                       {recentClosedTrades.length} recent
                     </Badge>
-                    <Link href={closedTradeHistoryHref} className="ai-text-link">
+                    <Link href={closedTradeHistoryHref} prefetch={false} className="ai-text-link">
                       View all
                     </Link>
                   </div>
@@ -5949,10 +6325,24 @@ export default function AiTradingPage() {
                   it is closed.
                 </Alert>
               ) : (
-                <Alert variant="info">
-                  Once started, the AI may open, manage and close positions
-                  automatically within your allocation and server-enforced
-                  protections until you stop AI Trading.
+                <Alert variant={selectedBroker?.accountType === "LIVE" ? "warning" : "info"}>
+                  {selectedBroker?.accountType === "LIVE" ? (
+                    <>
+                      <strong>You selected a real-money LIVE account.</strong>{" "}
+                      Confirming requests this account&apos;s LIVE authorization
+                      from the server and starts the AI only if the provider is
+                      production-verified and all trading gates pass. The AI
+                      may then open and close real-money positions; losses can
+                      exceed the amount expected at a stop in volatile markets.
+                      If certification is incomplete, no session is started.
+                    </>
+                  ) : (
+                    <>
+                      Once started, the AI may open, manage and close positions
+                      automatically within your allocation and server-enforced
+                      protections until you stop AI Trading.
+                    </>
+                  )}
                 </Alert>
               )}
 

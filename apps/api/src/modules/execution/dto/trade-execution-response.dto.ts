@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from '../entities/trade.entity';
+import { isProvenUnsentEntry } from '../trade-read-truth';
 
 /**
  * Frontend-safe execution read model.
@@ -33,7 +34,7 @@ const KNOWN_EXECUTION_REASON_CODES = [
 
 function toExecutionReasonCode(trade: Trade): string | null {
   if (trade.status === TradeStatus.RECONCILIATION_PENDING) {
-    return 'EXECUTION_UNRESOLVED';
+    return isProvenUnsentEntry(trade) ? 'EXECUTION_NOT_SUBMITTED' : 'EXECUTION_UNRESOLVED';
   }
   if (trade.status === TradeStatus.CANCELLED) {
     return 'EXECUTION_CANCELLED';

@@ -8,10 +8,12 @@ import {
 } from './m1-demo-entry-diagnostics';
 
 import { DataSource } from 'typeorm';
+import type { PepperstonePairSideAsOfRow } from './pepperstone-pair-side-asof-shadow';
 import type { M1ReliabilityRoute, M1RoutePairSideEvidenceRow } from './m1-tactical-reliability';
 import type { M1FailedMoveRescueDecision } from './m1-failed-move-rescue';
 import type { M1DriftCounterfactualResult } from './m1-drift-counterfactual';
 import type { M1ShadowPairSideOutcome } from './m1-shadow-pair-side-reliability';
+import type { SettledPatternExample } from './pepperstone-demo-pattern-memory';
 import { m1UsdRiskAtStop } from './m1-tactical-currency-exposure';
 import type { M5EarlyTransitionEvidence } from './m5-early-transition-handoff';
 import { EXTENSION_EXHAUSTION_SHADOW_ARTIFACT } from './extension-exhaustion-shadow';
@@ -200,7 +202,8 @@ export interface M1MultimodelLossStreakBrakeDecision {
     | 'CLEAR'
     | 'RECENT_MULTIMODEL_LOSS_STREAK'
     | 'RECENT_NEGATIVE_PAYOFF'
-    | 'PERSISTENT_NEGATIVE_PAYOFF';
+    | 'PERSISTENT_NEGATIVE_PAYOFF'
+    | 'BROKER_COST_EVIDENCE_INCOMPLETE';
   strategyRoute: M1MultimodelStrategyRoute;
   recentClosedTrades: number;
   payoffClosedTrades: number;
@@ -279,9 +282,11 @@ export interface M1OpenPaperPositionSnapshot {
   direction: 'BUY' | 'SELL';
   openedAt: Date;
   decisionId: string;
-  route: M1ReliabilityRoute;
+  // A real OPEN broker position is still exposure when its tactical route
+  // abstained; never discard it from the opposite-position safeguard.
+  route: M1ReliabilityRoute | 'ABSTAIN' | 'UNVERIFIED';
   policyVersion: string;
-  originalNetExpectedR: number;
+  originalNetExpectedR: number | null;
 }
 
 export interface M1RescueObservationInput {
@@ -867,13 +872,23 @@ export class M1TacticalEvidenceService {
   ): Promise<M1TacticalLatestDecisionState | null> {
     const rows = (await this.dataSource.query(
       `
+        -- Narrow to the user's latest minute BEFORE JSON-based same-bar ranking.
+        -- Sorting the entire tactical history made the cockpit status stall for
+        -- tens of seconds and compete with the entry-critical M1 scanner.
+        WITH latest_bar AS (
+          SELECT bar_time
+          FROM trading.m1_tactical_decisions
+          WHERE user_id = $1
+          ORDER BY bar_time DESC
+          LIMIT 1
+        )
         SELECT
-          instrument, direction, route, bar_time, candidate, governance, blockers,
-          execution_authority, outcome_state
-        FROM trading.m1_tactical_decisions
-        WHERE user_id = $1
+          d.instrument, d.direction, d.route, d.bar_time, d.candidate, d.governance, d.blockers,
+          d.execution_authority, d.outcome_state
+        FROM trading.m1_tactical_decisions d
+        INNER JOIN latest_bar lb ON lb.bar_time = d.bar_time
+        WHERE d.user_id = $1
         ORDER BY
-          bar_time DESC,
           -- Always show real authorization first. Among same-bar
           -- nonexecuted decisions, prefer entry-eligible DEMO pairs.
           -- Research-only USDJPY/USDCAD/USDCHF must not displace an
@@ -1047,6 +1062,159 @@ export class M1TacticalEvidenceService {
     return this.toRecord(row);
   }
 
+  /** Historical original decision features + after-fee broker evidence.
+   * Strict as-of read; no open, unconfirmed, unsettled, other-user, other
+   * broker or other-side outcomes are eligible analogues. */
+  async loadOwnerPepperstoneDemoPatternHistory(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    strategyRoute: 'CONFIRMED_REVERSAL' | 'EARLY_TRANSITION' | 'TREND_CONTINUATION';
+    asOf: Date;
+  }): Promise<SettledPatternExample[]> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT t.closed_at, t.realised_pnl,t.commission,t.swap,
+          t.max_favorable_pnl,t.max_adverse_pnl,
+          ti.metadata->>'feature_candidate_score' score,
+          ti.metadata->>'feature_extension_atr' extension_atr,
+          ti.metadata->>'feature_volatility_score' volatility,
+          ti.metadata->>'feature_ema_separation' ema_separation,
+          ti.metadata->>'feature_mtf_strength' mtf_strength,
+          ti.metadata->>'feature_rsi14' rsi14,
+          NULLIF(ca.sizing_inputs->>'finalRiskAtStop','') risk_at_stop
+        FROM trading.trades t
+        JOIN broker.broker_connections b
+          ON b.id=t.broker_connection_id AND b.user_id=t.user_id
+        JOIN trading.trade_intents ti
+          ON ti.id=t.trade_intent_id AND ti.user_id=t.user_id
+        LEFT JOIN LATERAL (
+          SELECT z.sizing_inputs FROM trading.capital_allocations z
+          WHERE z.trade_intent_id=t.trade_intent_id
+          ORDER BY z.created_at DESC LIMIT 1
+        ) ca ON TRUE
+        WHERE t.user_id=$1 AND t.broker_connection_id=$2
+          AND b.broker_id='pepperstone-ctrader'
+          AND b.account_type='DEMO' AND b.deleted_at IS NULL
+          AND t.instrument=$3 AND t.direction=$4
+          AND ti.metadata->>'multimodel_plan_b_route'=$5
+          AND t.status='CLOSED' AND t.closed_at < $6::timestamptz
+          AND t.closed_at >= $6::timestamptz - interval '90 days'
+          AND t.realised_pnl IS NOT NULL AND t.commission IS NOT NULL
+          AND t.swap IS NOT NULL
+        ORDER BY t.closed_at DESC LIMIT 100
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument,
+        input.direction,
+        input.strategyRoute,
+        input.asOf,
+      ],
+    )) as Array<Record<string, string | null>>;
+    const valid: SettledPatternExample[] = [];
+    for (const row of rows) {
+      const names = [
+        'score',
+        'extension_atr',
+        'volatility',
+        'ema_separation',
+        'mtf_strength',
+        'rsi14',
+        'risk_at_stop',
+        'realised_pnl',
+        'commission',
+        'swap',
+      ] as const;
+      if (names.some((key) => row[key] == null || row[key] === '')) continue;
+      const n = Object.fromEntries(names.map((key) => [key, Number(row[key])])) as Record<
+        (typeof names)[number],
+        number
+      >;
+      if (Object.values(n).some((v) => !Number.isFinite(v)) || n.risk_at_stop <= 0) continue;
+      const favorable = row.max_favorable_pnl != null ? Number(row.max_favorable_pnl) : NaN;
+      const adverse = row.max_adverse_pnl != null ? Number(row.max_adverse_pnl) : NaN;
+      valid.push({
+        closedAt: row.closed_at!,
+        features: {
+          score: n.score,
+          extensionAtr: n.extension_atr,
+          volatilityScore: n.volatility,
+          emaSeparation: n.ema_separation,
+          mtfStrength: n.mtf_strength,
+          rsi14: n.rsi14,
+        },
+        netR: (n.realised_pnl + n.commission + n.swap) / n.risk_at_stop,
+        maxFavorableR: Number.isFinite(favorable) ? favorable / n.risk_at_stop : null,
+        maxAdverseR: Number.isFinite(adverse) ? adverse / n.risk_at_stop : null,
+      });
+    }
+    return valid;
+  }
+
+  /** Historical settled after-fee outcomes for DEMO advisory lot sizing.
+   * Never includes future, unsettled, other-owner or other-broker positions.
+   */
+  async loadOwnerPepperstoneDemoAdvisoryRecentNet(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    strategyRoute: 'EARLY_TRANSITION' | 'CONFIRMED_REVERSAL';
+    asOf: Date;
+  }): Promise<{ samples: number; losing: number; winning: number; averageNetR: number | null }> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT t.realised_pnl,t.commission,t.swap,
+          NULLIF(ca.sizing_inputs->>'finalRiskAtStop','') AS risk
+        FROM trading.trades t
+        JOIN broker.broker_connections b
+          ON b.id=t.broker_connection_id AND b.user_id=t.user_id
+        JOIN trading.trade_intents ti
+          ON ti.id=t.trade_intent_id AND ti.user_id=t.user_id
+        LEFT JOIN LATERAL (
+          SELECT z.sizing_inputs
+          FROM trading.capital_allocations z
+          WHERE z.trade_intent_id=t.trade_intent_id
+          ORDER BY z.created_at DESC LIMIT 1
+        ) ca ON TRUE
+        WHERE t.user_id=$1 AND t.broker_connection_id=$2
+          AND b.broker_id='pepperstone-ctrader'
+          AND b.account_type='DEMO' AND b.deleted_at IS NULL
+          AND t.instrument=$3 AND t.direction=$4
+          AND ti.metadata->>'multimodel_plan_b_route'=$5
+          AND t.status='CLOSED' AND t.closed_at < $6::timestamptz
+          AND t.closed_at >= $6::timestamptz - interval '24 hours'
+          AND t.realised_pnl IS NOT NULL AND t.commission IS NOT NULL
+          AND t.swap IS NOT NULL
+        ORDER BY t.closed_at DESC LIMIT 8
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument,
+        input.direction,
+        input.strategyRoute,
+        input.asOf,
+      ],
+    )) as Array<{ realised_pnl: string; commission: string; swap: string; risk: string | null }>;
+    const valid = rows
+      .map((row) => {
+        const pnl = Number(row.realised_pnl) + Number(row.commission) + Number(row.swap);
+        const risk = Number(row.risk);
+        return Number.isFinite(pnl) && Number.isFinite(risk) && risk > 0 ? pnl / risk : null;
+      })
+      .filter((v): v is number => v !== null);
+    return {
+      samples: valid.length,
+      losing: valid.filter((v) => v < 0).length,
+      winning: valid.filter((v) => v > 0).length,
+      averageNetR: valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null,
+    };
+  }
+
   async loadRoutePairSideEvidence(
     input: M1RoutePairSideEvidenceQuery,
   ): Promise<M1RoutePairSideEvidenceRow[]> {
@@ -1061,7 +1229,10 @@ export class M1TacticalEvidenceService {
           d.instrument,
           d.direction,
           d.policy_version,
-          t.realised_pnl,
+          -- Reliability must use ACCOUNT-CURRENCY NET broker results.
+          -- A +$5 gross exit with -$6 paid commission is a LOSS,
+          -- not a model win. Missing fees must not masquerade as zero.
+          (t.realised_pnl + t.commission + t.swap) AS realised_pnl,
           t.lot_size,
           t.fill_price,
           t.stop_loss,
@@ -1102,7 +1273,9 @@ export class M1TacticalEvidenceService {
           AND d.policy_version = ANY($6::text[])
           AND t.status = 'CLOSED'
           AND t.realised_pnl IS NOT NULL
-          AND t.realised_pnl <> 0
+          AND t.commission IS NOT NULL
+          AND t.swap IS NOT NULL
+          AND (t.realised_pnl + t.commission + t.swap) <> 0
           AND t.closed_at IS NOT NULL
           AND t.closed_at <= $7::timestamptz
           AND t.closed_at > ($7::timestamptz - interval '7 days')
@@ -1229,13 +1402,76 @@ export class M1TacticalEvidenceService {
     });
   }
 
+  /**
+   * Prospective, broker-native DEMO research reader. Exact owner and connection,
+   * same pair + direction, 14-day completed settlement window, bounded to 40.
+   * Never used by an execution gate or broker-order service.
+   */
+  async loadPepperstonePairSideAsOfRows(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    asOf: Date;
+  }): Promise<PepperstonePairSideAsOfRow[]> {
+    const instrument = input.instrument.trim().toUpperCase();
+    if (!/^[A-Z]{6}$/.test(instrument) || !Number.isFinite(input.asOf.getTime()))
+      throw new Error('INVALID_PAIR_SIDE_ASOF_SCOPE');
+    const rows = (await this.dataSource.query(
+      `
+        SELECT t.closed_at, (t.realised_pnl + t.commission + t.swap) AS net_pnl,
+          COALESCE(
+            NULLIF(ca.sizing_inputs->>'finalRiskAtStop', '')::numeric,
+            NULLIF(ca.sizing_inputs->>'riskAmount', '')::numeric
+          ) AS risk_at_stop
+        FROM trading.trades t
+        JOIN broker.broker_connections b
+          ON b.id = t.broker_connection_id AND b.user_id = t.user_id
+        LEFT JOIN LATERAL (
+          SELECT c0.sizing_inputs
+          FROM trading.capital_allocations c0
+          WHERE c0.trade_intent_id = t.trade_intent_id
+            AND c0.created_at <= t.opened_at
+          ORDER BY c0.created_at DESC LIMIT 1
+        ) ca ON true
+        WHERE t.user_id = $1 AND t.broker_connection_id = $2
+          AND b.broker_id = 'pepperstone-ctrader'
+          AND b.account_type = 'DEMO'
+          AND t.account_currency = 'USD'
+          AND t.instrument = $3 AND t.direction = $4
+          AND t.status = 'CLOSED'
+          AND t.closed_at < $5::timestamptz
+          AND t.closed_at >= ($5::timestamptz - interval '14 days')
+        ORDER BY t.closed_at DESC, t.id DESC
+        LIMIT 40
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        instrument,
+        input.direction,
+        input.asOf.toISOString(),
+      ],
+    )) as Array<{
+      closed_at: Date | string;
+      net_pnl: string | number | null;
+      risk_at_stop: string | number | null;
+    }>;
+    return rows.map((row) => ({
+      closedAt: row.closed_at,
+      netPnl: row.net_pnl,
+      riskAtStop: row.risk_at_stop,
+    }));
+  }
+
   async loadMultimodelLossStreakBrake(
     input: M1MultimodelLossStreakBrakeQuery,
   ): Promise<M1MultimodelLossStreakBrakeDecision> {
     const instrument = input.instrument.trim().toUpperCase();
     const rows = (await this.dataSource.query(
       `
-        SELECT t.realised_pnl, t.closed_at
+        SELECT (t.realised_pnl + t.commission + t.swap) AS realised_pnl,
+               t.closed_at
         FROM trading.trades t
         JOIN trading.trade_intents ti
           ON ti.id = t.trade_intent_id
@@ -1255,6 +1491,9 @@ export class M1TacticalEvidenceService {
           AND ti.metadata ->> 'external_provider_paper_only' = 'true'
           AND t.status = 'CLOSED'
           AND t.realised_pnl IS NOT NULL
+          -- Do not discard unpriced historical fills: a missing fee MUST
+          -- remain visible in the first 8 latest closes and fail closed
+          -- rather than allowing a falsely profitable Plan B sleeve.
           AND t.closed_at IS NOT NULL
           AND t.closed_at <= $6::timestamptz
           AND t.closed_at > ($6::timestamptz - interval '14 days')
@@ -1271,6 +1510,37 @@ export class M1TacticalEvidenceService {
       ],
     )) as Array<{ realised_pnl: string | number; closed_at: string | Date }>;
 
+    // Financial evidence cannot label a gross win as a net win.
+    // PostgreSQL's signed sums turn NULL when either settled broker cost
+    // is unavailable. Do not silently treat that as a zero-P&L observation
+    // or drop it from the loss window: both could lift the brake wrongly.
+    if (
+      rows.some(
+        (row) =>
+          row.realised_pnl === null ||
+          row.realised_pnl === undefined ||
+          row.realised_pnl === '' ||
+          !Number.isFinite(Number(row.realised_pnl)),
+      )
+    ) {
+      return {
+        artifact: M1_MULTIMODEL_LOSS_STREAK_BRAKE_ARTIFACT,
+        active: true,
+        reason: 'BROKER_COST_EVIDENCE_INCOMPLETE',
+        strategyRoute: input.strategyRoute,
+        recentClosedTrades: rows.length,
+        payoffClosedTrades: rows.length,
+        recentLosses: 0,
+        recentWins: 0,
+        cumulativeRealisedPnl: 0,
+        profitFactor: null,
+        negativePayoff: false,
+        persistentNegativePayoff: false,
+        latestClosedAt: rows[0]?.closed_at ? date(rows[0].closed_at) : null,
+        cooldownHours: M1_MULTIMODEL_LOSS_STREAK_COOLDOWN_HOURS,
+        cooldownRemainingSeconds: 0,
+      };
+    }
     const payoffRows = rows.map((row) => ({
       pnl: number(row.realised_pnl),
       closedAt: date(row.closed_at),
@@ -1450,6 +1720,60 @@ export class M1TacticalEvidenceService {
    * cTrader DEMO risk pilot. Never inferred from a scanner or generic cTrader
    * connection; missing/retired credentials do not grant the pilot.
    */
+  /**
+   * A causal prior overextension must PRECEDE the current recovered entry.
+   * This is a bounded read of previously persisted native M1 decisions,
+   * and cannot infer a pullback from the currently stretched candle.
+   */
+  async loadPriorExtendedTrendForPullback(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    asOf: Date;
+  }): Promise<Date | null> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT MAX(d.evaluated_at) AS last_extended
+        FROM trading.m1_tactical_decisions d
+        WHERE d.user_id=$1 AND d.broker_connection_id=$2
+          AND d.instrument=$3 AND d.direction=$4
+          AND d.evaluated_at >= $5::timestamptz - interval '25 minutes'
+          AND d.evaluated_at <= $5::timestamptz - interval '2 minutes'
+          AND d.governance->'multimodelEnsemble'->>'regime'='TREND_EXTENDED'
+          AND (d.governance->'oodResearchFeatures'->>'extensionAtr')::numeric >= 1.5
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument,
+        input.direction,
+        input.asOf.toISOString(),
+      ],
+    )) as Array<{ last_extended: Date | string | null }>;
+    const value = rows[0]?.last_extended;
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date : null;
+  }
+
+  /** Exact owner, nondeleted Pepperstone USD DEMO identity for manual
+   * Start/Stop policy. Never infer account currency from app defaults. */
+  async isPepperstoneUsdDemoBrokerConnection(input: {
+    userId: string;
+    brokerConnectionId: string;
+  }): Promise<boolean> {
+    const rows = (await this.dataSource.query(
+      `SELECT b.id FROM broker.broker_connections b
+       WHERE b.user_id=$1 AND b.id=$2 AND b.deleted_at IS NULL
+         AND b.broker_id='pepperstone-ctrader'
+         AND b.account_type='DEMO' AND b.account_currency='USD'
+       LIMIT 1`,
+      [input.userId, input.brokerConnectionId],
+    )) as Array<{ id: string }>;
+    return rows.length === 1;
+  }
+
   async isPepperstoneDemoBrokerConnection(input: {
     userId: string;
     brokerConnectionId: string;
@@ -1468,15 +1792,13 @@ export class M1TacticalEvidenceService {
   }
 
   /**
-   * The previous GBPUSD SELL protected at 08:01:20 and the next SELL opened
-   * at 08:01:35, then hit SL. Enforce only a 3-minute same-pair, same-side
-   * cooldown AFTER a successful broker-reconciled PROFIT_PROTECTION close.
-   * An audited close REQUEST also holds the same side while reconciliation
-   * finishes; the real GBPUSD close request preceded the next opening by only
-   * 17 seconds and its final TRADE_CLOSED audit was written later.
-   *
-   * No whole-market ban, no opposing-side ban, no reliance on predicted P&L.
-   * Decision-time as-of predicate prevents historical replay look-ahead.
+   * Scope a short 3-minute reentry hold to the SAME pair and SAME direction
+   * after (a) broker-reconciled PROFIT_PROTECTION or (b) an audited
+   * DEMO_DRAWDOWN_GUARD AI close request. On Nov 20 USDCAD SELL closed
+   * at a loss through the 5m guard and another route reopened SELL 91s later.
+   * The source must be verified, not guessed from the generic AI_CLOSE_SIGNAL.
+   * Risk-reducing exits are never delayed. Other directions and pairs remain
+   * eligible, and late/hindsight close events are excluded at decision time.
    */
   async loadRecentlyProtectedSameSideReentry(input: {
     userId: string;
@@ -1514,7 +1836,13 @@ export class M1TacticalEvidenceService {
             ON a.resource_type='Trade' AND a.resource_id=t.id::text
            AND a.actor_user_id=$1
           WHERE a.action='TRADE_CLOSE_REQUESTED'
-            AND a.metadata->>'closeReason'='PROFIT_PROTECTION'
+            AND (
+              a.metadata->>'closeReason'='PROFIT_PROTECTION'
+              OR (
+                a.metadata->>'closeReason'='AI_CLOSE_SIGNAL'
+                AND a.metadata->'aiCloseTrigger'->>'source'='DEMO_DRAWDOWN_GUARD'
+              )
+            )
             AND a.created_at <= $5::timestamptz
             AND a.created_at > $5::timestamptz - interval '3 minutes'
         )
@@ -1606,8 +1934,8 @@ export class M1TacticalEvidenceService {
           AND t.broker_connection_id = $2
           AND t.instrument = $3
           AND t.status = 'OPEN'
-          AND ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')
-          AND ti.timeframe = 'M1'
+          AND ti.strategy_code LIKE 'external-irexpro-%'
+          AND ti.timeframe IN ('M1', 'M5')
           AND ti.metadata ->> 'external_provider_paper_only' = 'true'
         ORDER BY t.opened_at ASC
       `,
@@ -1619,7 +1947,17 @@ export class M1TacticalEvidenceService {
       'M1_EARLY_TRANSITION',
     ]);
     return rows.flatMap((row) => {
-      const route = String(row.route ?? '') as M1ReliabilityRoute;
+      const rawRoute = String(row.route ?? '');
+      // The main multi-model ensemble may open an actual position while its
+      // separate M1 tactical advisor says ABSTAIN. Its route/provenance must
+      // not make the open BUY/SELL invisible to opposite-exposure checks.
+      const route: M1OpenPaperPositionSnapshot['route'] = validRoutes.has(
+        rawRoute as M1ReliabilityRoute,
+      )
+        ? (rawRoute as M1ReliabilityRoute)
+        : rawRoute === 'ABSTAIN'
+          ? 'ABSTAIN'
+          : 'UNVERIFIED';
       const direction = String(row.direction ?? '') as 'BUY' | 'SELL';
       const openedAt = date(row.opened_at as string | Date);
       const originalNetExpectedR = number(row.original_net_expected_r);
@@ -1630,12 +1968,8 @@ export class M1TacticalEvidenceService {
       if (
         !tradeId ||
         !tradeIntentId ||
-        !decisionId ||
-        !policyVersion ||
-        !validRoutes.has(route) ||
         !['BUY', 'SELL'].includes(direction) ||
-        !Number.isFinite(openedAt.getTime()) ||
-        !Number.isFinite(originalNetExpectedR)
+        !Number.isFinite(openedAt.getTime())
       ) {
         return [];
       }
@@ -1653,6 +1987,287 @@ export class M1TacticalEvidenceService {
         },
       ];
     });
+  }
+
+  /**
+   * Hard DEMO recovery-canary repeat suppression. A recovery canary is
+   * an actual BROKER_NATIVE authorized decision, not a paper hypothesis.
+   * Read-only, exact owner/broker/pair/side and as-of bounded; if this
+   * query fails the scheduler refuses the trial.
+   */
+  /**
+   * DEMO probation exception requires an owner-verified, connected, active
+   * FULL_AUTO broker account. The rollout phase string alone is NOT proof
+   * of broker DEMO status. If this read fails, callers must deny exception.
+   */
+  async isActiveConnectedOwnerDemoBroker(input: {
+    userId: string;
+    brokerConnectionId: string;
+  }): Promise<boolean> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT EXISTS (
+          SELECT 1
+          FROM trading.trading_sessions s
+          JOIN broker.broker_connections b
+            ON b.id = s.broker_connection_id AND b.user_id = s.user_id
+          WHERE s.user_id = $1
+            AND s.broker_connection_id = $2
+            AND s.status = 'ACTIVE'
+            AND s.execution_mode = 'FULL_AUTO'
+            AND b.account_type = 'DEMO'
+            AND b.status = 'CONNECTED'
+            AND b.broker_id = 'pepperstone-ctrader'
+            AND b.deleted_at IS NULL
+        ) AS exists
+      `,
+      [input.userId, input.brokerConnectionId],
+    )) as Array<{ exists: boolean }>;
+    return rows[0]?.exists === true;
+  }
+
+  /**
+   * Exact owner/broker/pair/side/policy realised NET-R evidence.
+   * A gross-positive route may have lost AFTER real broker commissions.
+   * Seven distinct closed trades are required. No generic cross-pair
+   * fallback, no guessed fees, no research-shadow substitutions.
+   */
+  async loadQualifiedM1ContinuationAfterFeeEvidence(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    evaluatedAt: Date;
+    policyVersion: string;
+  }): Promise<{
+    sampleCount: number;
+    netWins: number;
+    averageNetR: number | null;
+    recentNetR: number | null;
+    complete: boolean;
+  }> {
+    const rows = (await this.dataSource.query(
+      `
+        WITH matched AS MATERIALIZED (
+          SELECT DISTINCT ON (t.id)
+            t.id, t.closed_at, t.realised_pnl, t.commission, t.swap,
+            NULLIF(a.sizing_inputs->>'finalRiskAtStop','') AS risk_at_stop
+          FROM trading.m1_tactical_decisions d
+          JOIN trading.trade_intents ti
+            ON ti.user_id=d.user_id
+           AND ti.broker_connection_id=d.broker_connection_id
+           AND (
+             ti.id=d.trade_intent_id
+             OR (d.trade_intent_id IS NULL AND d.signal_id IS NOT NULL
+               AND ti.signal_id=d.signal_id)
+           )
+          JOIN trading.trades t
+            ON t.trade_intent_id=ti.id AND t.user_id=d.user_id
+           AND t.broker_connection_id=d.broker_connection_id
+          LEFT JOIN LATERAL (
+            SELECT ca.sizing_inputs FROM trading.capital_allocations ca
+            WHERE ca.trade_intent_id=t.trade_intent_id
+            ORDER BY ca.created_at DESC LIMIT 1
+          ) a ON TRUE
+          WHERE d.user_id=$1 AND d.broker_connection_id=$2
+            AND d.instrument=$3 AND d.direction=$4
+            AND d.route='M1_TREND_CONTINUATION'
+            AND d.policy_version=$5
+            -- A 2/4-lot PRIMARY_PLAN_B fill is not evidence that the
+            -- independent M1 QUALIFIED_CONTINUATION path has positive
+            -- after-fee expectancy. Previously all seven "qualified"
+            -- AUDUSD SELL examples belonged to PRIMARY_PLAN_B, so the
+            -- supposed M1 canary had NEVER been independently validated.
+            -- Fail closed until there are seven actual closed, paid-fee
+            -- fills from the SAME independent execution authority.
+            AND ti.metadata->>'multimodel_execution_authority_path'='QUALIFIED_CONTINUATION'
+            AND t.status='CLOSED'
+            AND t.closed_at <= $6::timestamptz
+            AND t.closed_at > $6::timestamptz - interval '7 days'
+          ORDER BY t.id,t.closed_at DESC
+        )
+        SELECT realised_pnl,commission,swap,risk_at_stop,closed_at
+        FROM matched ORDER BY closed_at DESC LIMIT 7
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument.trim().toUpperCase(),
+        input.direction,
+        input.policyVersion,
+        input.evaluatedAt.toISOString(),
+      ],
+    )) as Array<{
+      realised_pnl: string | number | null;
+      commission: string | number | null;
+      swap: string | number | null;
+      risk_at_stop: string | number | null;
+      closed_at: string | Date;
+    }>;
+    const netR: number[] = [];
+    for (const row of rows) {
+      if (
+        row.realised_pnl == null ||
+        row.commission == null ||
+        row.swap == null ||
+        row.risk_at_stop == null
+      ) {
+        return {
+          sampleCount: rows.length,
+          netWins: 0,
+          averageNetR: null,
+          recentNetR: null,
+          complete: false,
+        };
+      }
+      const gross = Number(row.realised_pnl);
+      const commission = Number(row.commission);
+      const swap = Number(row.swap);
+      const risk = Number(row.risk_at_stop);
+      if (![gross, commission, swap, risk].every(Number.isFinite) || risk <= 0 || commission > 0) {
+        return {
+          sampleCount: rows.length,
+          netWins: 0,
+          averageNetR: null,
+          recentNetR: null,
+          complete: false,
+        };
+      }
+      netR.push((gross + commission + swap) / risk);
+    }
+    return {
+      sampleCount: netR.length,
+      netWins: netR.filter((v) => v > 0).length,
+      averageNetR: netR.length ? netR.reduce((sum, v) => sum + v, 0) / netR.length : null,
+      recentNetR: netR.length >= 3 ? netR.slice(0, 3).reduce((sum, v) => sum + v, 0) : null,
+      complete: netR.length >= 7,
+    };
+  }
+
+  /** Fail-closed exact-owner DEMO same-side 90m canary repeat limit. */
+  async hasRecentM1QualifiedContinuationCanary(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    evaluatedAt: Date;
+    cooldownMinutes: number;
+  }): Promise<boolean> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT EXISTS (
+          SELECT 1 FROM trading.m1_tactical_decisions d
+          WHERE d.user_id = $1
+            AND d.broker_connection_id = $2
+            AND d.instrument = $3
+            AND d.direction = $4
+            AND d.evaluated_at < $5::timestamptz
+            AND d.evaluated_at >= $5::timestamptz - ($6::int * interval '1 minute')
+            AND d.execution_authority = 'BROKER_NATIVE'
+            AND d.governance #>> '{demoPrimaryOnlyProbation,qualifiedContinuationCanary}' = 'true'
+            -- An approval is not a broker fill. Only a definitively
+            -- REJECTED intent, with no broker trade, may be retried.
+            -- Unknown/pending outcome or failed-with-unreconciled-intent
+            -- remains reserved: never risk a duplicate broker position.
+            AND NOT (
+              d.outcome_state IS NOT DISTINCT FROM 'EXECUTION_FAILED'
+              AND EXISTS (
+                SELECT 1 FROM trading.trade_intents ti
+                WHERE ti.id = d.trade_intent_id
+                  AND ti.user_id = d.user_id
+                  AND ti.broker_connection_id = d.broker_connection_id
+                  AND ti.status = 'REJECTED'
+                  AND ti.trade_id IS NULL
+              )
+            )
+        ) AS exists
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument.trim().toUpperCase(),
+        input.direction,
+        input.evaluatedAt.toISOString(),
+        input.cooldownMinutes,
+      ],
+    )) as Array<{ exists: boolean }>;
+    return rows[0]?.exists === true;
+  }
+
+  async hasRecentM1RecoveryCanary(input: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+    direction: 'BUY' | 'SELL';
+    evaluatedAt: Date;
+    cooldownMinutes: number;
+  }): Promise<boolean> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT EXISTS (
+          SELECT 1 FROM trading.m1_tactical_decisions
+          WHERE user_id = $1
+            AND broker_connection_id = $2
+            AND instrument = $3
+            AND direction = $4
+            AND evaluated_at < $5::timestamptz
+            AND evaluated_at >= $5::timestamptz - ($6::int * interval '1 minute')
+            AND execution_authority = 'BROKER_NATIVE'
+            AND (
+              governance -> 'reliability' ->> 'reason' IN (
+                'EARLY_LOSS_STREAK_RECOVERY_CANARY',
+                'INSUFFICIENT_EVIDENCE'
+              )
+              OR COALESCE((governance ->> 'crossSleeveReversalCanary')::boolean, false) = true
+            )
+            AND COALESCE((governance ->> 'recoveryCanary')::boolean, false) = true
+        ) AS exists
+      `,
+      [
+        input.userId,
+        input.brokerConnectionId,
+        input.instrument.trim().toUpperCase(),
+        input.direction,
+        input.evaluatedAt.toISOString(),
+        input.cooldownMinutes,
+      ],
+    )) as Array<{ exists: boolean }>;
+    return rows[0]?.exists === true;
+  }
+
+  /** Count only actual newly submitted trial trade intents; rejected scans do
+   * not consume the six-entry budget. Exact owner/connection/UTC timebox. */
+  async loadDemoAlternativeTrialEntryCount(input: {
+    userId: string;
+    brokerConnectionId: string;
+    startsAt?: string;
+    endsAt?: string;
+  }): Promise<number> {
+    const start = input.startsAt ?? '2026-11-16T20:00:00.000Z';
+    const end = input.endsAt ?? '2026-11-16T21:00:00.000Z';
+    if (
+      !Number.isFinite(Date.parse(start)) ||
+      !Number.isFinite(Date.parse(end)) ||
+      Date.parse(end) <= Date.parse(start)
+    ) {
+      throw new Error('DEMO_TRIAL_INVALID_COUNT_WINDOW');
+    }
+    const rows = (await this.dataSource.query(
+      `
+        SELECT COUNT(*)::int AS entry_count
+        FROM trading.trade_intents ti
+        WHERE ti.user_id=$1
+          AND ti.broker_connection_id=$2
+          AND ti.created_at >= $3::timestamptz
+          AND ti.created_at < $4::timestamptz
+          AND ti.metadata ->> 'm1_pepperstone_demo_alternative_trial' = 'true'
+      `,
+      [input.userId, input.brokerConnectionId, start, end],
+    )) as Array<{ entry_count: number | string }>;
+    const count = Number(rows[0]?.entry_count);
+    if (!Number.isSafeInteger(count) || count < 0)
+      throw new Error('ALTERNATIVE_TRIAL_COUNT_UNVERIFIED');
+    return count;
   }
 
   async hasActiveM1Intent(input: M1ActiveIntentQuery): Promise<boolean> {
@@ -2312,11 +2927,13 @@ export class M1TacticalEvidenceService {
       `
         SELECT
           COUNT(*)::int AS closed_trades,
-          COUNT(*) FILTER (WHERE t.realised_pnl > 0)::int AS wins,
-          COUNT(*) FILTER (WHERE t.realised_pnl < 0)::int AS losses,
-          COALESCE(SUM(t.realised_pnl), 0) AS realised_pnl,
-          COALESCE(SUM(t.realised_pnl) FILTER (WHERE t.realised_pnl > 0), 0) AS gross_profit,
-          COALESCE(ABS(SUM(t.realised_pnl) FILTER (WHERE t.realised_pnl < 0)), 0) AS gross_loss
+          COUNT(*) FILTER (WHERE (t.realised_pnl+t.commission+t.swap) > 0)::int AS wins,
+          COUNT(*) FILTER (WHERE (t.realised_pnl+t.commission+t.swap) < 0)::int AS losses,
+          COALESCE(SUM(t.realised_pnl+t.commission+t.swap), 0) AS realised_pnl,
+          COALESCE(SUM(t.realised_pnl+t.commission+t.swap)
+            FILTER (WHERE (t.realised_pnl+t.commission+t.swap) > 0), 0) AS gross_profit,
+          COALESCE(ABS(SUM(t.realised_pnl+t.commission+t.swap)
+            FILTER (WHERE (t.realised_pnl+t.commission+t.swap) < 0)), 0) AS gross_loss
         FROM trading.m1_tactical_decisions d
         JOIN trading.trade_intents ti
           ON ti.user_id = d.user_id
@@ -2337,6 +2954,8 @@ export class M1TacticalEvidenceService {
           AND ($6::text IS NULL OR d.policy_version = $6)
           AND t.status = 'CLOSED'
           AND t.realised_pnl IS NOT NULL
+          AND t.commission IS NOT NULL
+          AND t.swap IS NOT NULL
           AND t.closed_at >= $7::timestamptz
           AND t.closed_at <= $8::timestamptz
       `,

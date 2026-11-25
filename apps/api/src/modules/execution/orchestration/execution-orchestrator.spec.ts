@@ -716,11 +716,17 @@ describe('ExecutionOrchestrator', () => {
       });
       expect(orderService.markSubmitted).toHaveBeenCalledWith('order-1');
       expect(orderService.markAcknowledged).toHaveBeenCalledWith('order-1', 'pos-1');
-      expect(orderService.applyFill).toHaveBeenCalledWith('order-1', {
-        quantity: '0.05',
-        price: '1.08500',
-        providerOrderId: 'pos-1',
-      });
+      // The dispatch-response fill is unidentified evidence — fenced on the
+      // filled-quantity premise observed before the provider call.
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'order-1',
+        {
+          quantity: '0.05',
+          price: '1.08500',
+          providerOrderId: 'pos-1',
+        },
+        { expectedFilledQuantity: '0' },
+      );
 
       // Full order.* event stream
       const emittedTypes = eventBus.publish.mock.calls.map((c) => c[0]);
@@ -765,11 +771,15 @@ describe('ExecutionOrchestrator', () => {
 
       expect(outcome.outcome).toBe('FILLED');
       expect(orderService.markAcknowledged).not.toHaveBeenCalled();
-      expect(orderService.applyFill).toHaveBeenCalledWith('order-1', {
-        quantity: '0.05',
-        price: '1.08500',
-        providerOrderId: null,
-      });
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'order-1',
+        {
+          quantity: '0.05',
+          price: '1.08500',
+          providerOrderId: null,
+        },
+        { expectedFilledQuantity: '0' },
+      );
     });
 
     it('FILLED result with partial fill quantity → applyFill uses the provider quantity', async () => {
@@ -782,11 +792,15 @@ describe('ExecutionOrchestrator', () => {
       });
       await orchestrator.dispatchOrder(intent, connection);
 
-      expect(orderService.applyFill).toHaveBeenCalledWith('order-1', {
-        quantity: '0.02',
-        price: '1.08500',
-        providerOrderId: 'pos-1',
-      });
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'order-1',
+        {
+          quantity: '0.02',
+          price: '1.08500',
+          providerOrderId: 'pos-1',
+        },
+        { expectedFilledQuantity: '0' },
+      );
     });
 
     it('PENDING result → markAcknowledged only → WORKING outcome', async () => {
@@ -901,11 +915,15 @@ describe('ExecutionOrchestrator', () => {
       expect(adapter.closeOrder).toHaveBeenCalledWith('ext-pos-9', '0.05');
       expect(adapter.placeOrder).not.toHaveBeenCalled();
       // The close-order fill price flows into the order's fill accounting...
-      expect(orderService.applyFill).toHaveBeenCalledWith('order-1', {
-        quantity: '0.05',
-        price: '1.09000',
-        providerOrderId: 'pos-1',
-      });
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'order-1',
+        {
+          quantity: '0.05',
+          price: '1.09000',
+          providerOrderId: 'pos-1',
+        },
+        { expectedFilledQuantity: '0' },
+      );
       // ...and the outcome mirrors the recorded (VWAP) avg fill price.
       expect(outcome).toMatchObject({ outcome: 'FILLED', avgFillPrice: '1.08500' });
     });

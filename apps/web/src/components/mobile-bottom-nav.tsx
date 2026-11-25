@@ -139,6 +139,7 @@ export default function MobileBottomNav({ onLogout }: MobileBottomNavProps) {
             <Link
               key={dest.href}
               href={dest.href}
+              prefetch={dest.href.startsWith('/trade') ? false : undefined}
               className={`mobile-bottom-nav__item${active ? ' mobile-bottom-nav__item--active' : ''}`}
               aria-current={active ? 'page' : undefined}
               aria-label={dest.label}
@@ -208,6 +209,7 @@ export default function MobileBottomNav({ onLogout }: MobileBottomNavProps) {
                   <li key={dest.href}>
                     <Link
                       href={dest.href}
+                      prefetch={dest.href.startsWith('/trade') ? false : undefined}
                       className="mobile-sheet__item"
                       aria-current={active ? 'page' : undefined}
                       onClick={closeSheet}

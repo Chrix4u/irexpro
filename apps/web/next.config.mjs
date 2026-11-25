@@ -11,6 +11,9 @@ const browserSecurityHeaders = [
 ];
 
 const nextConfig = {
+  // Build validated UI releases in an isolated output directory while the
+  // current Next server continues to read .next. Unset in production runtime.
+  distDir: process.env.IREXPRO_WEB_RELEASE_BUILD_DIR || '.next',
   reactStrictMode: true,
   poweredByHeader: false,
   // Transpile the shared workspace packages so they ship as raw TypeScript
@@ -26,6 +29,17 @@ const nextConfig = {
       {
         source: '/:path*',
         headers: browserSecurityHeaders,
+      },
+      {
+        // The AI trader route previously shipped a one-year cache directive
+        // because the client-only app shell was statically prerendered.
+        // A force-dynamic layout plus explicit response policy prevents stale
+        // six-pair UI from persisting in browsers and intermediary caches.
+        source: '/trade',
+        headers: [{
+          key: 'Cache-Control',
+          value: 'private, no-store, max-age=0, must-revalidate',
+        }],
       },
     ];
   },

@@ -1,0 +1,38 @@
+name: iRexPro owner DEMO prospective entry-quality observation
+on:
+  push:
+    branches: ['feat/owner-demo-prospective-entry-quality-shadow-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/src/modules/ai/owner-demo-prospective-entry-quality*'
+      - 'apps/api/src/modules/ai/m1-tactical-scheduler.service.ts'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  prospective-readonly-shadow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install API dependencies
+        run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - name: Full API TypeScript
+        run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      # Existing M1 scheduler legacy suite includes a fixed-expiry counter-pilot
+      # test whose Nov20 execution window has passed. That unrelated test can
+      # only be exercised with an explicit historical fake clock; do not
+      # silently alter expired trading permissions just to make it pass.
+      - name: Prospective scoring scope and no-trade-authority regression
+        run: pnpm --filter @irexpro/api exec jest src/modules/ai/owner-demo-prospective-entry-quality.spec.ts --runInBand --silent --no-coverage
+      - name: Exact-source API build
+        run: pnpm --filter @irexpro/api build

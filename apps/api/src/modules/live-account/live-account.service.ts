@@ -8,6 +8,7 @@ import { BrokerMode, BrokerConnectionStatus } from '../broker/interfaces/broker-
 import { BrokerAuthorizationStatus } from '../broker/authorization/broker-authorization-status';
 import { BrokerCredentialStatus } from '../broker/authorization/broker-credential-status';
 import { Trade, TradeStatus } from '../execution/entities/trade.entity';
+import { isProvenUnsentEntry } from '../execution/trade-read-truth';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { Order } from '../execution/orders/order.entity';
 import { OrderStatus } from '../execution/orders/order.enums';
@@ -336,14 +337,17 @@ export class LiveAccountService {
       status: In([TradeStatus.OPEN, TradeStatus.RECONCILIATION_PENDING]),
     };
 
-    const [trades, total, connectionContext] = await Promise.all([
+    const [candidateTrades, connectionContext] = await Promise.all([
       this.tradeRepo.find({
         where,
         order: { openedAt: 'DESC', createdAt: 'DESC' },
       }),
-      this.tradeRepo.count({ where }),
       this.loadConnectionContext(userId),
     ]);
+
+    // A proven unsent entry is not a broker position. Keep ambiguous entries
+    // and previously filled positions visible, including failed close attempts.
+    const trades = candidateTrades.filter((trade) => !isProvenUnsentEntry(trade));
 
     // Provider marks are best-effort read enrichment. Each connection is
     // isolated: one unavailable provider must not erase the durable open
@@ -386,7 +390,7 @@ export class LiveAccountService {
       );
     });
 
-    return { positions, total };
+    return { positions, total: positions.length };
   }
 
   // ─── GET /live-account/activity ───────────────────────────────────────────

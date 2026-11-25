@@ -132,6 +132,7 @@ export default function WorkspaceSidebar({
                 <Link
                   key={item.href}
                   href={item.href}
+                  prefetch={item.href.startsWith('/trade') ? false : undefined}
                   className={active ? 'active' : ''}
                   aria-current={active ? 'page' : undefined}
                   aria-label={collapsed ? item.label : undefined}

@@ -9,6 +9,10 @@ import {
   type DelayedEntryParityResult,
   type VerifiedNativeMinute,
 } from './m1-delayed-entry-parity-shadow';
+import {
+  compareDelayedEntryAtActualExit,
+  type SameExitTimingResult,
+} from './m1-same-exit-entry-timing';
 
 const INTERVAL_MS = 120_000;
 const MAX_CANDIDATES = 25;
@@ -33,6 +37,7 @@ interface ShadowTradeRow {
   swap: string | null;
   lot_size: string;
   close_reason: string;
+  original_risk_account_currency: string | null;
   timeframe: string | null;
   route: string | null;
   pretrade_features: Record<string, unknown> | null;
@@ -93,7 +98,25 @@ export class M1DelayedEntryParityService implements OnModuleInit, OnModuleDestro
               horizonMinutes: horizon,
               candles,
             });
-            await this.persist(row, horizon, evaluated, new Date(until));
+            const sameExit = compareDelayedEntryAtActualExit({
+              instrument: row.instrument,
+              direction: row.direction,
+              originalFill: Number(row.fill_price),
+              originalStop: Number(row.stop_loss),
+              originalTarget: Number(row.take_profit),
+              originalExit: row.exit_price == null ? null : Number(row.exit_price),
+              originalClosedAt: new Date(row.closed_at),
+              actualGrossPnl: row.realised_pnl == null ? null : Number(row.realised_pnl),
+              actualCommission: row.commission == null ? null : Number(row.commission),
+              actualSwap: row.swap == null ? null : Number(row.swap),
+              verifiedOriginalRiskAccountCurrency:
+                row.original_risk_account_currency == null
+                  ? null
+                  : Number(row.original_risk_account_currency),
+              delayed: evaluated,
+              candles,
+            });
+            await this.persist(row, horizon, evaluated, new Date(until), sameExit);
           } catch (error) {
             this.logger.warn(
               'Delayed-entry research observation deferred: ' + (error as Error).message,
@@ -119,6 +142,7 @@ export class M1DelayedEntryParityService implements OnModuleInit, OnModuleDestro
           t.opened_at, t.closed_at, t.fill_price, t.stop_loss, t.take_profit,
           t.exit_price, t.realised_pnl, t.commission, t.swap, t.lot_size,
           t.close_reason, ti.timeframe,
+          ca.sizing_inputs->>'finalRiskAtStop' AS original_risk_account_currency,
           ti.metadata->>'multimodel_plan_b_route' AS route,
           jsonb_build_object(
             'source', ti.metadata->'signal_source',
@@ -134,6 +158,11 @@ export class M1DelayedEntryParityService implements OnModuleInit, OnModuleDestro
         JOIN trading.trade_intents ti
           ON ti.id = t.trade_intent_id AND ti.user_id = t.user_id
           AND ti.broker_connection_id = t.broker_connection_id
+        LEFT JOIN LATERAL (
+          SELECT z.sizing_inputs FROM trading.capital_allocations z
+          WHERE z.trade_intent_id=t.trade_intent_id
+          ORDER BY z.created_at DESC LIMIT 1
+        ) ca ON TRUE
         WHERE t.status='CLOSED'
           AND bc.account_type='DEMO'
           AND bc.broker_id IN ('ctrader','pepperstone-ctrader','icmarkets-ctrader')
@@ -188,15 +217,18 @@ export class M1DelayedEntryParityService implements OnModuleInit, OnModuleDestro
     horizon: DelayEntryParityHorizon,
     evaluated: DelayedEntryParityResult,
     checkpointAt: Date,
+    sameExit: SameExitTimingResult,
   ): Promise<void> {
     const response = {
       ...evaluated,
+      sameExitComparison: sameExit,
       brokerId: row.broker_id,
       instrument: row.instrument,
       originalOpenedAt: new Date(row.opened_at).toISOString(),
       actualClosedAt: new Date(row.closed_at).toISOString(),
       originalTimeframe: row.timeframe,
       originalRoute: row.route,
+      verifiedOriginalRiskAccountCurrency: row.original_risk_account_currency,
       pretradeFeatures: row.pretrade_features,
       originalFill: row.fill_price,
       originalStop: row.stop_loss,
@@ -210,7 +242,7 @@ export class M1DelayedEntryParityService implements OnModuleInit, OnModuleDestro
       originalCloseReason: row.close_reason,
       methodology: 'CAUSAL_COMPLETED_M1_CONFIRMATION_THEN_NEXT_BAR_OPEN_INDICATIVE_QUOTE_REPLAY',
       limitation:
-        'Not executable P&L: M1 OHLC high/low is unordered; quote opens are not broker fills. Excludes spread at actual entry, slippage, swaps and opportunity costs. Commission is extrapolated from actual fill/exit geometry; counterfactual hold period differs from actual.',
+        'Not executable P&L: quote opens are not broker fills and completed M1 OHLC is unordered. The same-exit estimate uses authoritative capital-allocation stop risk and actual broker gross-per-price-move, which can change with hypothetical prices, slippage and currency conversion. A delayed entry does not guarantee the same exit, fees or unchanged risk. Early hypothetical quote barrier touches and partial exit minute exclude the paired estimate.',
       stopVariationAuthority: 'NONE',
       execution_authority: 'NONE',
       modifies_execution: false,

@@ -59,3 +59,6 @@ services/ai-engine/models/*.json
 
 # MetaApi SDK runtime cache (never source-controlled)
 .metaapi/
+
+# Local private research audit outputs
+var/shadow-audits/

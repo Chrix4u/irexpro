@@ -139,7 +139,10 @@ describe('PostEntryDemoDrawdownGuardService', () => {
       candidate.trade_id,
       candidate.user_id,
       TradeCloseReason.AI_CLOSE_SIGNAL,
-      { source: 'DEMO_DRAWDOWN_GUARD' },
+      {
+        source: 'DEMO_DRAWDOWN_GUARD',
+        reasonCode: 'plan-b-v89-demo-5m-drawdown-guard-v1',
+      },
     );
     const persist = query.mock.calls.find((call: unknown[]) =>
       String(call[0]).includes('INSERT INTO trading.post_entry_shadow_observations'),
@@ -148,6 +151,31 @@ describe('PostEntryDemoDrawdownGuardService', () => {
       expect.arrayContaining(['CLOSED', 'DRAWDOWN_GUARD_CLOSED', -0.4, 'CLOSE_DEMO', true]),
     );
     expect(String(persist?.[0])).toContain("'DEMO_ONLY'");
+  });
+
+  it('freezes pre-close evidence time instead of overwriting it with post-dispatch SQL now()', async () => {
+    const { service, query, execution } = harness(readyScore(-0.52));
+    let closeStartedAt = Number.NaN;
+    execution.closeTrade.mockImplementation(async () => {
+      closeStartedAt = Date.now();
+      return { status: TradeStatus.CLOSED };
+    });
+    await service.runOnce(now);
+    const persist = query.mock.calls.find((call: unknown[]) =>
+      String(call[0]).includes('INSERT INTO trading.post_entry_shadow_observations'),
+    );
+    expect(persist).toBeDefined();
+    const sql = String(persist![0]);
+    const params = persist![1] as unknown[];
+    expect(sql).toContain('$17::timestamptz');
+    expect(sql).toContain('evaluated_at = EXCLUDED.evaluated_at');
+    expect(params).toHaveLength(17);
+    const asOf = String(params[16]);
+    expect(Date.parse(asOf)).toBeLessThanOrEqual(closeStartedAt);
+    const evidence = JSON.parse(String(params[14]));
+    expect(evidence.evidence_evaluated_at).toBe(asOf);
+    expect(evidence.current_r).toBe(-0.52);
+    expect(execution.closeTrade).toHaveBeenCalledTimes(1);
   });
 
   it('never closes when the 5-minute checkpoint is not explicitly broker-sourced shadow evidence', async () => {

@@ -2,6 +2,7 @@ import {
   deriveActiveModelUiState,
   deriveFastMarkFeedUiState,
   deriveTradeReadinessUiState,
+  explainTradeReadinessScore,
   summarizeDemoEntryEvidence,
   type DemoFocusedEntryDiagnosticView,
   hasExternalProviderPerformanceUiShape,
@@ -9,6 +10,25 @@ import {
   hasM1TacticalStatusUiShape,
   hasVpsScannerUiShape,
 } from "./vps-scanner-status";
+
+describe("entry gauge is a model score, never trade-formation progress", () => {
+  it("explains that a steady 52 means scanning without an approved order", () => {
+    const detail = explainTradeReadinessScore(52, false);
+    expect(detail).toContain("52/100 is a model score");
+    expect(detail).toContain("not 52% of a trade completed");
+    expect(detail).toContain("a new order requires separate model admission");
+  });
+  it("does not imply that a ready signal guarantees a broker fill", () => {
+    expect(explainTradeReadinessScore(82, true)).toBe(
+      "82/100 is the current model score, not a guaranteed broker fill.",
+    );
+  });
+  it("bounds corrupt or unusual display scores without authorizing orders", () => {
+    expect(explainTradeReadinessScore(-30, false)).toContain("0/100");
+    expect(explainTradeReadinessScore(150, false)).toContain("100/100");
+    expect(explainTradeReadinessScore(Number.NaN, false)).toContain("0/100");
+  });
+});
 
 describe("user-scoped recent DEMO entry decision evidence", () => {
   const evidence: DemoFocusedEntryDiagnosticView = {
@@ -203,6 +223,49 @@ describe('server-authoritative DEMO focused-pair status contract', () => {
       demoEntryInstruments: ['AUDUSD', 'GBPUSD', 'EURUSD'],
       researchOnlyInstruments: ['USDJPY', 'USDCAD', 'USDCHF'],
     })).toBe(true);
+  });
+
+  it('shows only verified server pilot limits and rejects malformed status data', () => {
+    const pilot = {
+      enabled: true,
+      activeNow: true,
+      startsAt: "2026-11-16T21:00:00.000Z",
+      endsAt: "2026-11-17T00:00:00.000Z",
+      maxEntries: 4,
+      maxLot: 4,
+      exactBroker: "Pepperstone cTrader DEMO",
+    };
+    expect(hasM1TacticalStatusUiShape({ ...base, counterDemoPilot: pilot })).toBe(true);
+    expect(hasM1TacticalStatusUiShape({
+      ...base,
+      counterDemoPilot: { ...pilot, maxLot: "4 lots" },
+    })).toBe(false);
+    expect(hasM1TacticalStatusUiShape({
+      ...base,
+      counterDemoPilot: { ...pilot, endsAt: null },
+    })).toBe(false);
+  });
+
+  it('validates the separate active reversal and early-transition DEMO trial status', () => {
+    const trial = {
+      enabled: true, activeNow: true,
+      startsAt: "2026-11-16T23:36:00.000Z",
+      endsAt: "2026-11-17T20:00:00.000Z",
+      maxEntries: 4, maxLot: 4,
+      exactBroker: "Pepperstone cTrader DEMO",
+      allowedRoutes: ["CONFIRMED_REVERSAL", "EARLY_TRANSITION"],
+    };
+    expect(hasM1TacticalStatusUiShape({...base, advisoryAlternatePilot: trial}))
+      .toBe(true);
+    expect(hasM1TacticalStatusUiShape({
+      ...base, advisoryAlternatePilot: {...trial, maxLot: "4"},
+    })).toBe(false);
+    expect(hasM1TacticalStatusUiShape({
+      ...base, advisoryAlternatePilot: {...trial, allowedRoutes: [true]},
+    })).toBe(false);
+    expect(hasM1TacticalStatusUiShape({
+      ...base, advisoryAlternatePilot: {...trial, endsAt: null},
+    })).toBe(false);
   });
 
   it('rejects an invalid server pair list instead of displaying invented authority', () => {
@@ -1097,6 +1160,47 @@ describe("active multi-model execution presentation", () => {
     expect(deriveActiveModelUiState(status).planBLabel).toBe(
       "Trend continuation · 70%",
     );
+  });
+
+  it("accepts continuous DEMO status with no pilot expiry or entry cap", () => {
+    const continuous={
+      ...status,
+      advisoryAlternatePilot:{
+        enabled:true,activeNow:true,continuousEvidence:true,
+        startsAt:"2026-11-16T23:36:00.000Z",endsAt:null,maxEntries:null,
+        maxLot:4,exactBroker:"Pepperstone cTrader DEMO",
+        allowedRoutes:["CONFIRMED_REVERSAL","EARLY_TRANSITION"],
+      },
+      latestDecision:{...status.latestDecision,
+        planBPaperAdmitted:false,multimodelExecutable:false,
+        executionAuthority:"NONE" as const,
+        blockers:["MULTIMODEL_PLAN_B_NOT_ADMITTED"]},
+    };
+    expect(hasM1TacticalStatusUiShape(continuous)).toBe(true);
+    expect(deriveActiveModelUiState(continuous).executable).toBe(false);
+    const readiness=deriveTradeReadinessUiState({
+      automationOn:true,brokerAccountType:"DEMO",brokerId:"pepperstone-ctrader",
+      scannerStatus:VALID_STATUS,m1TacticalStatus:continuous,
+      fastMarkState:"LIVE",
+    });
+    expect(readiness.tradeExpected).toBe(false);
+    expect(readiness.band).not.toBe("READY");
+    expect(readiness.score).toBeLessThan(70);
+  });
+
+  it("never shows quorum or trade readiness with no DEMO tactical decision", () => {
+    const noDecision={...status,latestDecision:null};
+    expect(hasM1TacticalStatusUiShape(noDecision)).toBe(true);
+    expect(deriveActiveModelUiState(noDecision).executable).toBe(false);
+    expect(deriveActiveModelUiState(null).executable).toBe(false);
+    const readiness=deriveTradeReadinessUiState({
+      automationOn:true,brokerAccountType:"DEMO",brokerId:"pepperstone-ctrader",
+      scannerStatus:VALID_STATUS,m1TacticalStatus:noDecision,
+      fastMarkState:"LIVE",
+    });
+    expect(readiness.tradeExpected).toBe(false);
+    expect(readiness.score).toBeLessThan(70);
+    expect(readiness.headline).toContain("no trade authorized");
   });
 
   it("labels research-only USDJPY before a model expectancy or shadow commission warning", () => {

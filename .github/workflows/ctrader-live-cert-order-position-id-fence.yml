@@ -1,0 +1,32 @@
+name: iRexPro cTrader LIVE native order and position ID correctness
+on:
+  push:
+    branches: ['fix/ctrader-live-cert-order-position-identity-20261123']
+  pull_request:
+    paths:
+      - 'apps/api/src/modules/broker/adapters/ctrader/ctrader.adapter.ts'
+      - 'apps/api/src/modules/broker/adapters/ctrader/ctrader.adapter.spec.ts'
+      - 'apps/api/src/modules/broker/interfaces/broker-adapter.interface.ts'
+      - 'apps/api/src/modules/broker/verification/provider-live-certification-harness.ts'
+      - 'apps/api/src/modules/broker/verification/live-certification-harness.spec.ts'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  provider-native-order-id-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter '@irexpro/api...'
+      - run: pnpm --filter @irexpro/api exec tsc --noEmit --incremental false -p tsconfig.build.json
+      - run: pnpm --filter @irexpro/api exec jest src/modules/broker/adapters/ctrader/ctrader.adapter.spec.ts src/modules/broker/verification/live-certification-harness.spec.ts src/modules/broker/verification/ctrader.live-certification.spec.ts --runInBand --silent --no-coverage

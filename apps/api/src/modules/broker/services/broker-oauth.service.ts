@@ -597,6 +597,8 @@ export class BrokerOAuthService {
           accountType,
           providerBrokerIdentity,
           logicalAccountKey,
+          tokenBundle,
+          accessTokenExpiresAt: flow.accessTokenExpiresAt!,
         });
       }
     }
@@ -682,6 +684,8 @@ export class BrokerOAuthService {
           accountType,
           providerBrokerIdentity,
           logicalAccountKey: err.logicalAccountKey,
+          tokenBundle,
+          accessTokenExpiresAt: flow.accessTokenExpiresAt!,
         });
       }
       // ── PROOF-BASED RESTORE (issue #332): createConnection's audit/event
@@ -749,8 +753,38 @@ export class BrokerOAuthService {
       accountType: BrokerMode;
       providerBrokerIdentity: string | null;
       logicalAccountKey: string | null;
+      tokenBundle: { accessToken: string; refreshToken: string };
+      accessTokenExpiresAt: Date;
     },
   ): Promise<BrokerConnection> {
+    // A fresh OAuth consent for an already-linked account is a credential
+    // REAUTHORIZATION, not merely a no-op adoption. The old implementation
+    // consumed the single-use flow (and erased its new tokens) while leaving
+    // the existing connection on stale ciphertext. Use the canonical
+    // provider-validated credential rotation to atomically replace both
+    // OAuth tokens on the SAME linked broker account. It does not activate
+    // LIVE trading; it invalidates old new-exposure authority instead.
+    if (
+      existing.accountId !== context.account.ctidTraderAccountId ||
+      existing.accountType !== context.accountType ||
+      (existing.providerBrokerIdentity &&
+        existing.providerBrokerIdentity !== context.providerBrokerIdentity)
+    ) {
+      throw new ConflictException(
+        'Existing cTrader connection identity does not match the freshly authorized account; no credentials changed.',
+      );
+    }
+    const dto = new ConnectBrokerDto();
+    dto.brokerId = existing.brokerId; // Preserve the original broker alias.
+    dto.accountType = existing.accountType;
+    dto.accountId = existing.accountId;
+    dto.apiKey = context.tokenBundle.accessToken;
+    dto.additionalParams = {
+      refreshToken: context.tokenBundle.refreshToken,
+      accessTokenExpiresAt: context.accessTokenExpiresAt.toISOString(),
+    };
+    await this.brokerService.rotateCredentials(existing.id, dto, context.userId, context.ipAddress);
+
     const consumed = await this.convergeFlowAfterLink(flow.id);
     if (consumed !== 1) {
       this.logger.warn(
@@ -786,7 +820,7 @@ export class BrokerOAuthService {
       );
     }
     this.logger.log(
-      `cTrader OAuth link ADOPTED existing connection=${existing.id} ` +
+      `cTrader OAuth reauthorization rotated existing connection=${existing.id} ` +
         `broker=${flow.brokerId} account=${context.account.ctidTraderAccountId} ` +
         `user=${context.userId} logical=${context.logicalAccountKey}`,
     );
