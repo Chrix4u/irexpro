@@ -98,6 +98,64 @@ describe('classifyHighConvictionOverlay', () => {
     expect(result.state).toBe('UNAVAILABLE');
     expect(result.reason).toBe('BROKER_NATIVE_REQUIRED');
   });
+  const exampleExperts = () =>
+    [
+      'event_barrier_two_stage',
+      'event_barrier_pair_experts',
+      'event_barrier_pair_regime_experts',
+    ].map((name) => ({
+      name,
+      predicted_long: true,
+      direction_probability_long: 0.7,
+      direction_confidence: 0.7,
+      opportunity_probability: 0.6,
+    }));
+
+  it('preserves all three individual predictions without altering the original assessment', () => {
+    const response = ready();
+    const baseline = classifyHighConvictionOverlay(response, 'BUY', closeTime);
+    response.score!.experts = exampleExperts();
+    const { expertResearchEvidence, ...rest } = classifyHighConvictionOverlay(
+      response,
+      'BUY',
+      closeTime,
+    );
+    expect(rest).toEqual(baseline);
+    expect(expertResearchEvidence?.experts).toHaveLength(3);
+    expect(expertResearchEvidence?.experts[0]).toEqual({
+      name: 'event_barrier_two_stage',
+      predictedLong: true,
+      directionProbabilityLong: 0.7,
+      directionConfidence: 0.7,
+      opportunityProbability: 0.6,
+    });
+    expect(expertResearchEvidence?.modifiesExecution).toBe(false);
+  });
+
+  it('omits malformed, duplicate, or inconsistent expert observations', () => {
+    const baseline = classifyHighConvictionOverlay(ready(), 'BUY', closeTime);
+    const invalid = [
+      exampleExperts().slice(0, 2),
+      exampleExperts().map((x) => ({ ...x, name: 'event_barrier_two_stage' })),
+      exampleExperts().map((x) => ({ ...x, opportunity_probability: 2 })),
+      exampleExperts().map((x) => ({ ...x, predicted_long: false })),
+      'invalid',
+    ];
+    for (const experts of invalid) {
+      const response = ready();
+      response.score!.experts = experts;
+      expect(classifyHighConvictionOverlay(response, 'BUY', closeTime)).toEqual(baseline);
+    }
+  });
+
+  it('does not attach individual research observations to stale scores', () => {
+    const response = ready({ decision_time: '2026-10-05T09:40:00Z' });
+    response.score!.experts = exampleExperts();
+    const result = classifyHighConvictionOverlay(response, 'BUY', closeTime);
+    expect(result.state).toBe('STALE');
+    expect(result.expertResearchEvidence).toBeUndefined();
+  });
+
 });
 
 describe('summarizeHighConvictionOverlayCohort', () => {

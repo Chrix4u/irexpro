@@ -40,6 +40,8 @@ export interface PlanBV4ChallengerStatus {
 }
 
 export interface PlanBV4BrokerScore {
+  /** Optional raw observational evidence, validated separately from admission. */
+  experts?: unknown;
   artifact: string;
   mode: 'PROSPECTIVE_SHADOW_ONLY';
   modifies_execution: false;

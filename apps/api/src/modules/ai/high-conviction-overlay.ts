@@ -1,5 +1,9 @@
 import type { PlanBV4BrokerScoreResponse } from '../ai-engine-client/ai-engine-client.service';
 import { EnsembleShadowOutcome, summarizeEnsembleSleeveOutcomes } from './ensemble-shadow-outcome';
+import {
+  captureExpertResearchEvidence,
+  type ExpertResearchEvidence,
+} from './expert-research-evidence';
 
 export type HighConvictionOverlayState =
   | 'CONFIRM'
@@ -9,6 +13,8 @@ export type HighConvictionOverlayState =
   | 'UNAVAILABLE';
 
 export interface HighConvictionOverlay {
+  /** Observational only. Not used by strategy or execution authority. */
+  expertResearchEvidence?: ExpertResearchEvidence;
   state: HighConvictionOverlayState;
   reason: string | null;
   decisionTime: string | null;
@@ -84,7 +90,9 @@ export function classifyHighConvictionOverlay(
       ? 'CONFIRM'
       : 'CONFLICT';
 
+  const expertResearchEvidence = captureExpertResearchEvidence(response.score);
   return {
+    ...(expertResearchEvidence ? { expertResearchEvidence } : {}),
     state,
     reason: null,
     decisionTime: decisionTime!.toISOString(),
