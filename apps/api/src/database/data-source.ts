@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { DataSource } from 'typeorm';
 import * as dotenv from 'dotenv';
 import { join } from 'path';
+import { discoverMigrationFiles } from './migration-files';
 
 dotenv.config({ path: join(__dirname, '../../.env') });
 
@@ -20,6 +21,6 @@ export const AppDataSource = new DataSource({
   synchronize: false,
   logging: process.env.DB_LOGGING === 'true',
   entities: [join(__dirname, '../modules/**/*.entity{.ts,.js}')],
-  migrations: [join(__dirname, './migrations/*{.ts,.js}')],
+  migrations: discoverMigrationFiles(join(__dirname, 'migrations')),
   subscribers: [join(__dirname, './subscribers/*{.ts,.js}')],
 });
