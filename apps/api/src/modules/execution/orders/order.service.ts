@@ -69,6 +69,27 @@ export interface ApplyFillInput {
   providerDealId?: string | null;
 }
 
+export interface ApplyFillOptions {
+  /**
+   * STATE-PREMISE FENCE — concurrent unidentified-evidence defence
+   * (2026-11-25 continuation): the internal filled_quantity the caller
+   * OBSERVED when it derived this fill from provider STATE — a
+   * provider-order-state delta, a stranded-order convergence, or a
+   * dispatch response that surfaced NO native deal id. Under the row
+   * lock, applyFill refuses to book when the premise is stale: a
+   * concurrent writer already changed this order's accounting, so the
+   * derived delivery is a duplicate OF STATE, not new evidence — it
+   * no-ops idempotently and the next reconciliation sweep re-evaluates
+   * with a fresh premise. No identifier is fabricated to dedup on.
+   *
+   * Deal-grade deliveries (providerDealId present) must NOT carry the
+   * fence: a genuinely NEW native deal must book regardless of
+   * interleaving, and its duplicates are deduplicated by the ledger
+   * instead — passing both fails closed (BadRequestException).
+   */
+  expectedFilledQuantity?: string;
+}
+
 /** Where a deal-ownership answer came from (findDealOwner). */
 export type DealOwnershipSource = 'LEDGER_EVIDENCE' | 'ORDER_ROW_POINTER';
 
@@ -402,13 +423,37 @@ export class OrderService {
    *   stamps finalized_at on FILLED.
    * - FAIL-CLOSED on overfill: WHERE filled_quantity + $qty <= requested_quantity.
    * - Only fillable states (per OrderStateMachine.isFillable) may receive fills.
+   * - TERMINAL-STATE REDELIVERY CLASSIFICATION (2026-11-25 continuation):
+   *   the dedup classification (ledger + legacy pointer) runs BEFORE the
+   *   fillable gate, so a redelivered already-booked deal is an idempotent
+   *   no-op EVEN AFTER the order reached FILLED/CANCELLED/EXPIRED/REJECTED
+   *   — a duplicate delivery of booked evidence must never surface as a
+   *   fake "not fillable" conflict (broker event redelivery on reconnect,
+   *   repeated or concurrent reconciliation). A genuinely NEW deal on a
+   *   non-fillable state still fails closed with a typed Conflict.
+   * - STATE-PREMISE FENCE (2026-11-25 continuation): state-derived
+   *   unidentified deliveries may pass the filled_quantity premise they
+   *   were derived from (ApplyFillOptions.expectedFilledQuantity); a stale
+   *   premise (a concurrent writer already moved the accounting) makes the
+   *   delivery a duplicate OF STATE — an idempotent no-op, never a second
+   *   booking, and never a fabricated identifier.
    */
-  async applyFill(orderId: string, fill: ApplyFillInput): Promise<Order> {
+  async applyFill(
+    orderId: string,
+    fill: ApplyFillInput,
+    options: ApplyFillOptions = {},
+  ): Promise<Order> {
     this.validateFill(fill);
+    this.validateFillOptions(fill, options);
 
     const current = await this.findOrderById(orderId);
     if (!current) throw new NotFoundException(`Order ${orderId} not found`);
-    if (!OrderStateMachine.isFillable(current.status)) {
+    const identifiedDelivery = fill.providerDealId != null && fill.providerDealId !== '';
+    // Fail fast ONLY for deliveries that cannot be a recognized duplicate:
+    // an identified delivery must reach the locked classification below —
+    // a redelivered already-booked deal is an idempotent no-op even after
+    // the order reached a terminal state (duplicate delivery after FILLED).
+    if (!identifiedDelivery && !OrderStateMachine.isFillable(current.status)) {
       throw new ConflictException(`Order ${orderId} is not fillable (status: ${current.status})`);
     }
 
@@ -421,8 +466,26 @@ export class OrderService {
       );
       if (lockedRows.length === 0) throw new NotFoundException(`Order ${orderId} not found`);
       const locked = this.hydrateOrderRow(lockedRows[0]!);
-      if (!OrderStateMachine.isFillable(locked.status)) {
-        throw new ConflictException(`Order ${orderId} is not fillable (status: ${locked.status})`);
+
+      // 0. STATE-PREMISE FENCE (concurrent unidentified-evidence defence):
+      //    the caller derived this fill from provider state observed when the
+      //    order's filled_quantity was `options.expectedFilledQuantity`. If a
+      //    concurrent writer changed the accounting since, this delivery is a
+      //    duplicate OF STATE — an idempotent no-op; the next sweep
+      //    re-evaluates. Only valid for unidentified deliveries (validated
+      //    up front: a deal-grade delivery never carries the fence — the
+      //    ledger owns its dedup, and a genuinely new native deal must book
+      //    regardless of interleaving).
+      if (options.expectedFilledQuantity != null) {
+        if (compareDecimal(locked.filledQuantity ?? '0', options.expectedFilledQuantity) !== 0) {
+          this.logger.log(
+            `Fill for order ${orderId} skipped — the state premise ${options.expectedFilledQuantity} ` +
+              `is stale (locked filled_quantity ${locked.filledQuantity ?? '0'}): a concurrent ` +
+              'writer already changed the accounting, so the derived delivery is a duplicate of ' +
+              'state; the next reconciliation sweep re-evaluates',
+          );
+          return locked;
+        }
       }
 
       // 2. Ledger dedup — deal-grade replay detection WITH
@@ -521,7 +584,26 @@ export class OrderService {
         return locked;
       }
 
-      // 2c. LEGACY BASELINE CAPTURE (review finding 1) — one-time, in this
+      // 2c. Fillable gate AFTER the dedup classification (terminal-state
+      //     redelivery, 2026-11-25 continuation): a delivery the ledger or
+      //     the legacy pointer recognized as an already-booked duplicate has
+      //     returned above REGARDLESS of the order's status — a redelivered
+      //     booked deal is a no-op even after FILLED. Anything reaching this
+      //     gate is NEW evidence, so a non-fillable (terminal) state fails
+      //     closed: a late/unattributed new fill must never silently mutate a
+      //     terminal order's accounting.
+      if (!OrderStateMachine.isFillable(locked.status)) {
+        throw new ConflictException(
+          `Order ${orderId} is not fillable (status: ${locked.status}) — the delivered ` +
+            `${
+              identifiedDelivery
+                ? `deal ${fill.providerDealId} is not booked evidence for this order`
+                : 'fill is unidentified and not booked evidence for this order'
+            }; new fills cannot be booked on this state`,
+        );
+      }
+
+      // 2d. LEGACY BASELINE CAPTURE (review finding 1) — one-time, in this
       //     transaction: when a MIXED-ERA order (quantity booked BEFORE the
       //     ledger existed) books its first ledger-era fill, transcribe the
       //     pre-ledger cumulative accounting state into ONE LEGACY_BASELINE
@@ -957,6 +1039,28 @@ export class OrderService {
     }
     if (!PRICE_PATTERN.test(fill.price ?? '') || parseFloat(fill.price) <= 0) {
       throw new BadRequestException('fill price must be a positive decimal string (scale ≤ 8)');
+    }
+  }
+
+  /**
+   * State-premise fence validation (ApplyFillOptions): the premise must be a
+   * well-formed non-negative decimal, and it applies to UNIDENTIFIED
+   * state-derived deliveries only — a deal-grade delivery is deduplicated
+   * by the immutable ledger and must book regardless of interleaving, so
+   * combining both is a programming contract violation that fails closed.
+   */
+  private validateFillOptions(fill: ApplyFillInput, options: ApplyFillOptions): void {
+    if (options.expectedFilledQuantity == null) return;
+    if (!QUANTITY_PATTERN.test(options.expectedFilledQuantity)) {
+      throw new BadRequestException(
+        'expectedFilledQuantity must be a non-negative decimal string (scale ≤ 4)',
+      );
+    }
+    if (fill.providerDealId != null && fill.providerDealId !== '') {
+      throw new BadRequestException(
+        'Deal-grade deliveries (providerDealId present) are deduplicated by the immutable ' +
+          'ledger; the state-premise fence applies to unidentified state-derived fills only',
+      );
     }
   }
 

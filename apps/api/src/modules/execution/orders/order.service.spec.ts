@@ -893,6 +893,375 @@ describe('OrderService', () => {
     });
   });
 
+  // ─── applyFill — duplicate deal delivery after FILLED ────────────────────
+
+  describe('applyFill — duplicate deal delivery after a terminal state (FILLED)', () => {
+    it('redelivery of the FINAL fill deal after FILLED is an idempotent no-op (not a fake conflict)', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        entity({
+          status: OrderStatus.FILLED,
+          providerDealId: 'deal-final',
+          filledQuantity: '0.5000',
+          avgFillPrice: '1.08500000',
+        }),
+      );
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [
+            rawRow({
+              status: OrderStatus.FILLED,
+              provider_deal_id: 'deal-final',
+              filled_quantity: '0.5000',
+              avg_fill_price: '1.08500000',
+            }),
+          ];
+        }
+        if (sql.includes('SELECT order_id') && sql.includes('provider_deal_id = $2')) {
+          // The ledger retains the final fill's deal — with its economics
+          return [
+            {
+              order_id: 'order-1',
+              quantity: '0.5000',
+              price: '1.08500000',
+              provider_order_id: null,
+              provider_position_id: null,
+              evidence_class: 'PROVIDER_DEAL',
+            },
+          ];
+        }
+        return [rawRow({})];
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      // The broker redelivered the final fill's deal event AFTER the order
+      // had already reached FILLED (reconnect replay / repeated
+      // reconciliation) — identical economics, must book NOTHING.
+      const unchanged = await service.applyFill('order-1', {
+        quantity: '0.5000',
+        price: '1.08500000',
+        providerDealId: 'deal-final',
+      });
+      expect(query).toHaveBeenCalledTimes(2); // row lock + ledger read only
+      expect(callsMatching(query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(0);
+      expect(callsMatching(query, 'UPDATE trading.orders')).toHaveLength(0);
+      expect(unchanged.status).toBe(OrderStatus.FILLED);
+      expect(unchanged.filledQuantity).toBe('0.5000');
+    });
+
+    it('redelivery of an EARLIER partial fill deal after FILLED (ledger-retained identifier) is a no-op', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        entity({
+          status: OrderStatus.FILLED,
+          providerDealId: 'deal-B',
+          filledQuantity: '0.5000',
+          avgFillPrice: '1.10000000',
+        }),
+      );
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [
+            rawRow({
+              status: OrderStatus.FILLED,
+              provider_deal_id: 'deal-B',
+              filled_quantity: '0.5000',
+              avg_fill_price: '1.10000000',
+            }),
+          ];
+        }
+        if (sql.includes('SELECT order_id') && sql.includes('provider_deal_id = $2')) {
+          // A: the earlier partial fill, retained by the immutable ledger
+          return [
+            {
+              order_id: 'order-1',
+              quantity: '0.2000',
+              price: '1.10000000',
+              provider_order_id: null,
+              provider_position_id: null,
+              evidence_class: 'PROVIDER_DEAL',
+            },
+          ];
+        }
+        return [rawRow({})];
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      const unchanged = await service.applyFill('order-1', {
+        quantity: '0.2000',
+        price: '1.10000000',
+        providerDealId: 'deal-A',
+      });
+      expect(callsMatching(query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(0);
+      expect(callsMatching(query, 'UPDATE trading.orders')).toHaveLength(0);
+      expect(unchanged.status).toBe(OrderStatus.FILLED);
+      expect(unchanged.filledQuantity).toBe('0.5000');
+    });
+
+    it('redelivery via the LEGACY order-row pointer after FILLED (pre-ledger population) is a no-op', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        entity({
+          status: OrderStatus.FILLED,
+          providerDealId: 'deal-legacy',
+          filledQuantity: '0.5000',
+          avgFillPrice: '1.10000000',
+        }),
+      );
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [
+            rawRow({
+              status: OrderStatus.FILLED,
+              provider_deal_id: 'deal-legacy',
+              filled_quantity: '0.5000',
+              avg_fill_price: '1.10000000',
+            }),
+          ];
+        }
+        if (sql.includes('SELECT order_id') && sql.includes('provider_deal_id = $2')) {
+          return []; // booked before the ledger existed — never fabricated
+        }
+        return [rawRow({})];
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      const unchanged = await service.applyFill('order-1', {
+        quantity: '0.5000',
+        price: '1.10000000',
+        providerDealId: 'deal-legacy',
+      });
+      expect(callsMatching(query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(0);
+      expect(callsMatching(query, 'UPDATE trading.orders')).toHaveLength(0);
+      expect(unchanged.status).toBe(OrderStatus.FILLED);
+    });
+
+    it('contradictory redelivery of a booked deal AFTER FILLED is refused (both facts stated)', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        entity({
+          status: OrderStatus.FILLED,
+          providerDealId: 'deal-final',
+          filledQuantity: '0.5000',
+          avgFillPrice: '1.08500000',
+        }),
+      );
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [
+            rawRow({
+              status: OrderStatus.FILLED,
+              provider_deal_id: 'deal-final',
+              filled_quantity: '0.5000',
+              avg_fill_price: '1.08500000',
+            }),
+          ];
+        }
+        if (sql.includes('SELECT order_id') && sql.includes('provider_deal_id = $2')) {
+          return [
+            {
+              order_id: 'order-1',
+              quantity: '0.5000',
+              price: '1.08500000',
+              provider_order_id: null,
+              provider_position_id: null,
+              evidence_class: 'PROVIDER_DEAL',
+            },
+          ];
+        }
+        return [];
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      // The same native deal id redelivered with a DIFFERENT quantity after
+      // FILLED — inconsistent financial data is never silently accepted,
+      // not even on a terminal order.
+      await expect(
+        service.applyFill('order-1', {
+          quantity: '0.6000',
+          price: '1.08500000',
+          providerDealId: 'deal-final',
+        }),
+      ).rejects.toThrow(/Contradictory accounting evidence/);
+      expect(callsMatching(query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(0);
+      expect(callsMatching(query, 'UPDATE trading.orders')).toHaveLength(0);
+    });
+
+    it('a genuinely NEW deal delivered after FILLED fails closed (not booked evidence)', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        entity({
+          status: OrderStatus.FILLED,
+          providerDealId: 'deal-final',
+          filledQuantity: '0.5000',
+          avgFillPrice: '1.08500000',
+        }),
+      );
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [
+            rawRow({
+              status: OrderStatus.FILLED,
+              provider_deal_id: 'deal-final',
+              filled_quantity: '0.5000',
+              avg_fill_price: '1.08500000',
+            }),
+          ];
+        }
+        if (sql.includes('SELECT order_id') && sql.includes('provider_deal_id = $2')) {
+          return []; // the delivered deal was never booked anywhere
+        }
+        return [];
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      await expect(
+        service.applyFill('order-1', {
+          quantity: '0.1000',
+          price: '1.08500000',
+          providerDealId: 'deal-unknown',
+        }),
+      ).rejects.toThrow(/not fillable .* not booked evidence for this order/);
+      expect(callsMatching(query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(0);
+      expect(callsMatching(query, 'UPDATE trading.orders')).toHaveLength(0);
+    });
+  });
+
+  // ─── applyFill — state-premise fence ─────────────────────────────────────
+
+  describe('applyFill — state-premise fence (concurrent unidentified evidence)', () => {
+    it('a STALE premise (concurrent writer moved the accounting) makes the derived delivery an idempotent no-op', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        entity({ status: OrderStatus.RECONCILIATION_PENDING, filledQuantity: '0' }),
+      );
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          // A concurrent sweep already booked its 0.3000 delta before this
+          // worker's premise (0) was fenced under the lock.
+          return [
+            rawRow({
+              status: OrderStatus.PARTIALLY_FILLED,
+              filled_quantity: '0.3000',
+              avg_fill_price: '1.10000000',
+            }),
+          ];
+        }
+        return [];
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      // This worker derived the SAME state delta from a stale read — without
+      // the fence it would have double-booked 0.3000.
+      const unchanged = await service.applyFill(
+        'order-1',
+        { quantity: '0.3000', price: '1.10000000', providerOrderId: 'prov-1' },
+        { expectedFilledQuantity: '0' },
+      );
+      expect(query).toHaveBeenCalledTimes(1); // row lock only — no writes at all
+      expect(callsMatching(query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(0);
+      expect(callsMatching(query, 'UPDATE trading.orders')).toHaveLength(0);
+      expect(unchanged.filledQuantity).toBe('0.3000');
+      expect(unchanged.status).toBe(OrderStatus.PARTIALLY_FILLED);
+    });
+
+    it('a MATCHING premise books the state-derived fill normally (fence passes)', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        entity({ status: OrderStatus.RECONCILIATION_PENDING, filledQuantity: '0' }),
+      );
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [rawRow({ status: OrderStatus.RECONCILIATION_PENDING, filled_quantity: '0' })];
+        }
+        if (sql.startsWith('INSERT INTO trading.order_fill_evidence')) {
+          return [];
+        }
+        return [rawRow({ status: OrderStatus.PARTIALLY_FILLED, filled_quantity: '0.3000' })];
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      const booked = await service.applyFill(
+        'order-1',
+        { quantity: '0.3000', price: '1.10000000', providerOrderId: 'prov-1' },
+        { expectedFilledQuantity: '0' },
+      );
+      expect(callsMatching(query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(1);
+      expect(callsMatching(query, 'UPDATE trading.orders')).toHaveLength(1);
+      expect(booked.filledQuantity).toBe('0.3000');
+    });
+
+    it('the fence no-op also covers a concurrent writer that already FILLED the order', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        entity({ status: OrderStatus.RECONCILIATION_PENDING, filledQuantity: '0' }),
+      );
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [
+            rawRow({
+              status: OrderStatus.FILLED,
+              filled_quantity: '0.5000',
+              avg_fill_price: '1.08500000',
+            }),
+          ];
+        }
+        return [];
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      const unchanged = await service.applyFill(
+        'order-1',
+        { quantity: '0.5000', price: '1.08500000', providerOrderId: 'prov-1' },
+        { expectedFilledQuantity: '0' },
+      );
+      expect(callsMatching(query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(0);
+      expect(callsMatching(query, 'UPDATE trading.orders')).toHaveLength(0);
+      expect(unchanged.status).toBe(OrderStatus.FILLED);
+      expect(unchanged.filledQuantity).toBe('0.5000');
+    });
+
+    it('a fenced delivery on a terminal state with a FRESH premise still fails closed (new fill, not booked evidence)', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        entity({ status: OrderStatus.CANCELLED, filledQuantity: '0' }),
+      );
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [rawRow({ status: OrderStatus.CANCELLED, filled_quantity: '0' })];
+        }
+        return [];
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      await expect(
+        service.applyFill(
+          'order-1',
+          { quantity: '0.3000', price: '1.10000000' },
+          { expectedFilledQuantity: '0' },
+        ),
+      ).rejects.toThrow(/not fillable/);
+      expect(callsMatching(query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(0);
+    });
+
+    it('combining the fence with a deal-grade delivery fails closed (contract violation)', async () => {
+      orderRepo.findOne.mockResolvedValue(entity({ status: OrderStatus.ACKNOWLEDGED }));
+      await expect(
+        service.applyFill(
+          'order-1',
+          { quantity: '0.1', price: '1.1', providerDealId: 'deal-951' },
+          { expectedFilledQuantity: '0' },
+        ),
+      ).rejects.toThrow(BadRequestException);
+      (dataSource as unknown as { transaction: jest.Mock }).transaction.mockClear();
+      expect(
+        (dataSource as unknown as { transaction: jest.Mock }).transaction,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('a malformed premise fails closed (validation)', async () => {
+      orderRepo.findOne.mockResolvedValue(entity({ status: OrderStatus.ACKNOWLEDGED }));
+      await expect(
+        service.applyFill(
+          'order-1',
+          { quantity: '0.1', price: '1.1' },
+          { expectedFilledQuantity: 'not-a-number' },
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
   // ─── applyFill — immutable per-fill evidence ledger ──────────────────────
 
   describe('applyFill — immutable per-fill evidence ledger (partial-fill replay defence)', () => {

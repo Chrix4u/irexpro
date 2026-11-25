@@ -49,6 +49,16 @@ import { HardenOrderFillEvidenceLedger1795628400000 } from '../../../database/mi
  *      rollback procedure preserves the accounting facts.
  *  12. Migration down()/up() rollback rehearsal for BOTH ledger migrations
  *      on the live isolated DB.
+ *  13. Terminal-state redelivery (2026-11-25 continuation): a duplicate
+ *      delivery of an already-booked deal AFTER the order reached FILLED
+ *      is an idempotent no-op (final AND earlier partials, via the
+ *      ledger), contradictory redelivery is refused, and a genuinely new
+ *      deal on a terminal order fails closed.
+ *  14. State-premise fence (2026-11-25 continuation): concurrent
+ *      reconciliation deliveries of the same UNIDENTIFIED state-derived
+ *      fill book exactly once (no fabricated identifier); sequential
+ *      stale-premise redelivery no-ops; fresh-premise delivery books;
+ *      fence + deal id is a contract violation.
  */
 describe('OrderService.applyFill — real PostgreSQL ledger proof', () => {
   let dataSource: DataSource;
@@ -773,5 +783,136 @@ describe('OrderService.applyFill — real PostgreSQL ledger proof', () => {
     });
     expect(after.filledQuantity).toBe('0.1000');
     expect(await ledgerCount(orderId)).toBe(1);
+  });
+
+  // ─── 2026-11-25 continuation: terminal-state redelivery + state fence ────
+
+  it('duplicate deal delivery AFTER the order reached FILLED books nothing (idempotent no-op, never a fake conflict)', async () => {
+    const orderId = await seedOrder({ requested_quantity: '0.5000' });
+
+    // Two identified partial fills reach the requested quantity → FILLED.
+    const afterA = await service.applyFill(orderId, {
+      quantity: '0.2000',
+      price: '1.10000000',
+      providerDealId: 'deal-F-A',
+    });
+    expect(afterA.status).toBe(OrderStatus.PARTIALLY_FILLED);
+    const afterB = await service.applyFill(orderId, {
+      quantity: '0.3000',
+      price: '1.20000000',
+      providerDealId: 'deal-F-B',
+    });
+    expect(afterB.status).toBe(OrderStatus.FILLED);
+
+    // Redelivery of the FINAL deal AFTER FILLED (broker event redelivery on
+    // reconnect / repeated reconciliation): an idempotent no-op returning
+    // the FILLED row — NOT a "not fillable" conflict on booked evidence.
+    const replayFinal = await service.applyFill(orderId, {
+      quantity: '0.3000',
+      price: '1.20000000',
+      providerDealId: 'deal-F-B',
+    });
+    expect(replayFinal.status).toBe(OrderStatus.FILLED);
+    expect(replayFinal.filledQuantity).toBe('0.5000');
+
+    // Redelivery of the EARLIER partial AFTER FILLED — the order-row pointer
+    // moved to deal-F-B; only the immutable ledger still knows deal-F-A.
+    const replayA = await service.applyFill(orderId, {
+      quantity: '0.2000',
+      price: '1.10000000',
+      providerDealId: 'deal-F-A',
+    });
+    expect(replayA.status).toBe(OrderStatus.FILLED);
+    expect(replayA.filledQuantity).toBe('0.5000');
+
+    // Contradictory redelivery AFTER FILLED — refused with both facts
+    // stated; inconsistent financial data is never silently accepted.
+    await expect(
+      service.applyFill(orderId, {
+        quantity: '0.3000',
+        price: '1.99999999',
+        providerDealId: 'deal-F-B',
+      }),
+    ).rejects.toThrow(/Contradictory accounting evidence/);
+
+    // A genuinely NEW deal delivered after FILLED fails closed.
+    await expect(
+      service.applyFill(orderId, {
+        quantity: '0.1000',
+        price: '1.20000000',
+        providerDealId: 'deal-F-unknown',
+      }),
+    ).rejects.toThrow(/not fillable/);
+
+    // Accounting untouched by every redelivery: exact totals, two rows.
+    const row = await orderRow(orderId);
+    expect(String(row.filled_quantity)).toBe('0.5000');
+    expect(String(row.status)).toBe('FILLED');
+    const rows = await ledgerRows(orderId);
+    expect(rows.map((r) => r.provider_deal_id)).toEqual(['deal-F-A', 'deal-F-B']);
+    expect(String(row.avg_fill_price)).toBe('1.16000000'); // VWAP(0.2@1.10, 0.3@1.20)
+  });
+
+  it('concurrent reconciliation deliveries of the same UNIDENTIFIED state fill book exactly once (state-premise fence)', async () => {
+    const orderId = await seedOrder({ requested_quantity: '0.5000' });
+
+    // Two overlapping reconciliation sweeps read the SAME stale order state
+    // (filled_quantity 0) and derive the SAME provider-state delta — both
+    // deliver the same UNIDENTIFIED fill concurrently. No native deal id
+    // exists to dedup on (and none may be fabricated); without the
+    // state-premise fence the second delivery would double-book 0.3000.
+    const results = await Promise.allSettled([
+      service.applyFill(
+        orderId,
+        { quantity: '0.3000', price: '1.10000000', providerOrderId: 'prov-1' },
+        { expectedFilledQuantity: '0' },
+      ),
+      service.applyFill(
+        orderId,
+        { quantity: '0.3000', price: '1.10000000', providerOrderId: 'prov-1' },
+        { expectedFilledQuantity: '0' },
+      ),
+    ]);
+
+    // Both resolve (one books, one no-ops idempotently under the row lock).
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
+    const row = await orderRow(orderId);
+    expect(String(row.filled_quantity)).toBe('0.3000');
+    expect(String(row.status)).toBe('PARTIALLY_FILLED');
+    expect(await ledgerCount(orderId)).toBe(1);
+    const booked = await ledgerRows(orderId);
+    expect(booked[0]!.evidence_class).toBe('PROVIDER_RESPONSE');
+
+    // A SEQUENTIAL redelivery carrying the same stale premise (a sweep that
+    // read the order BEFORE the first booking) also no-ops — the fence
+    // compares the premise against the locked row, and the row has moved.
+    const replay = await service.applyFill(
+      orderId,
+      { quantity: '0.3000', price: '1.10000000', providerOrderId: 'prov-1' },
+      { expectedFilledQuantity: '0' },
+    );
+    expect(replay.filledQuantity).toBe('0.3000');
+    expect(await ledgerCount(orderId)).toBe(1);
+
+    // A delivery from a CURRENT premise books normally — the fence never
+    // blocks genuine convergence derived from fresh state.
+    const fresh = await service.applyFill(
+      orderId,
+      { quantity: '0.2000', price: '1.10000000', providerOrderId: 'prov-1' },
+      { expectedFilledQuantity: '0.3000' },
+    );
+    expect(fresh.status).toBe(OrderStatus.FILLED);
+    expect(fresh.filledQuantity).toBe('0.5000');
+    expect(await ledgerCount(orderId)).toBe(2);
+
+    // Contract: a deal-grade delivery must never carry the fence.
+    const order2 = await seedOrder({ requested_quantity: '0.5000' });
+    await expect(
+      service.applyFill(
+        order2,
+        { quantity: '0.1000', price: '1.10000000', providerDealId: 'deal-fence' },
+        { expectedFilledQuantity: '0' },
+      ),
+    ).rejects.toThrow(/state-premise fence applies to unidentified state-derived fills only/);
   });
 });
