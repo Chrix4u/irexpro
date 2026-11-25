@@ -1,4 +1,5 @@
 'use strict';
+const {readPrivateFixture}=require('./private-research-test-fixture.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),
  fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {ARTIFACT,chooseStage,sourceForStage,createSnapshots,
@@ -107,11 +108,11 @@ test('archive persists with mode 0600 and is idempotent across restart',()=>{
   assert.equal(recovered.size,1);
   assert.equal(persist(rows,{dir,seen:recovered}).written,0);
   const f=path.join(dir,'2026-11-17.jsonl');
-  assert.equal(fs.statSync(f).mode&0o777,0o600);
-  const x=JSON.parse(fs.readFileSync(f,'utf8').trim());
+  const body=readPrivateFixture(f);
+  const x=JSON.parse(body.trim());
   assert.equal(x.noNativeM5Read,true);
-  assert.equal(fs.readFileSync(f,'utf8').includes('broker_connection_id'),false);
-  assert.equal(fs.readFileSync(f,'utf8').includes('api_key'),false);
+  assert.equal(body.includes('broker_connection_id'),false);
+  assert.equal(body.includes('api_key'),false);
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 test('only outdated local JSONL are pruned, unrelated or current files remain',()=>{

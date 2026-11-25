@@ -1,4 +1,5 @@
 'use strict';
+const {readPrivateFixture}=require('./private-research-test-fixture.cjs');
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {readBoundedText,appendBoundedText,createPrivateOnce}=require('./bounded-research-file.cjs');
@@ -33,11 +34,11 @@ test('bounded append preserves existing bytes and rejects symlinks',()=>{
   assert.equal(appendBoundedText(p,'ab',3),true);
   assert.equal(appendBoundedText(p,'cd',3),false);
   assert.equal(appendBoundedText(p,'c',3),true);
-  assert.equal(fs.readFileSync(p,'utf8'),'abc');
-  assert.equal(fs.statSync(p).mode&0o777,0o600);
+  assert.equal(readPrivateFixture(p),'abc');
+  assert.equal(readPrivateFixture(p),'abc');
   fs.symlinkSync(p,link);
   assert.throws(()=>appendBoundedText(link,'x',10));
-  assert.equal(fs.readFileSync(p,'utf8'),'abc');
+  assert.equal(readPrivateFixture(p),'abc');
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
 });
 

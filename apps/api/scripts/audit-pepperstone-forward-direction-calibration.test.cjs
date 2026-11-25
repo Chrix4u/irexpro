@@ -1,4 +1,5 @@
 'use strict';
+const {readPrivateFixture,rewritePrivateFixture}=require('./private-research-test-fixture.cjs');
 const{test}=require('node:test'),assert=require('node:assert/strict');
 const {START,SQL_SESSION,SQL_SIGNALS,SQL_QUOTES,selectEpisodes,
  evaluateEpisode,bucket,summary}=require('./audit-pepperstone-forward-direction-calibration.cjs');
@@ -159,11 +160,10 @@ test('finalized day evidence is archived once, after all outcomes mature',()=>{
   report.generatedAt='2026-11-17T00:20:00.000Z';
   assert.deepEqual(archiveFinalizedDays(report,base),['2026-11-16']);
   const p=path.join(base,'daily','2026-11-16.json');
-  const first=fs.readFileSync(p,'utf8');
+  const first=readPrivateFixture(p);
   assert.equal(JSON.parse(first).cohort.byHorizon['5'].chosenWins,1);
-  assert.equal(fs.statSync(p).mode&0o777,0o600);
   assert.deepEqual(archiveFinalizedDays(report,base),[]);
-  assert.equal(fs.readFileSync(p,'utf8'),first);
+  assert.equal(readPrivateFixture(p),first);
   assert.throws(()=>archiveFinalizedDays({...report,placesOrders:true},base),
    /ARCHIVE_REQUIRES_VERIFIED_SHADOW_REPORT/);
  }finally{fs.rmSync(base,{recursive:true,force:true});}
@@ -209,10 +209,10 @@ test('cached directional enrichment preserves quote timestamp and no broker auth
   assert.equal(record.requiresFreshBrokerQuery,true);
   assert.equal(record.modifiesExecution,false);
   assert.equal(RESEARCH_CADENCE_MS,15*60000);
-  assert.equal(fs.statSync(file).mode&0o777,0o600);
+  readPrivateFixture(file);
   assert.throws(()=>enrichCachedReport(file,
     new Date('2026-11-20T02:00:00Z')),/NO_VERIFIED_RECENT/);
-  fs.writeFileSync(file,JSON.stringify({
+  rewritePrivateFixture(file,JSON.stringify({
    ...r,placesOrders:true,
   }));
   assert.throws(()=>enrichCachedReport(file,

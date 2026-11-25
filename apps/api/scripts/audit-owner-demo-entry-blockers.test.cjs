@@ -1,4 +1,5 @@
 'use strict';
+const {readPrivateFixture}=require('./private-research-test-fixture.cjs');
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {
@@ -170,7 +171,6 @@ test('private atomic report is owner-only and does not write trading DB',()=>{
    new Date(AT));
   const filename=path.join(root,'reports','snapshot.json');
   persist(r,filename);
-  assert.equal(fs.statSync(filename).mode&0o777,0o600);
-  assert.equal(JSON.parse(fs.readFileSync(filename)).modes.modifiesOrders,false);
+  assert.equal(JSON.parse(readPrivateFixture(filename)).modes.modifiesOrders,false);
  }finally{fs.rmSync(root,{recursive:true,force:true})}
 });
