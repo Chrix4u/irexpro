@@ -47,10 +47,22 @@ function evidenceReadOnlyStatus(dir = '/root/irexpro-live-cert-evidence', option
   try {
     const read = fileName => {
       const filePath=path.join(dir,fileName);
-      const stat=fs.lstatSync(filePath);
-      if (!stat.isFile() || stat.size>1024*1024 || stat.size===0) throw Error('INVALID_EVIDENCE_FILE');
-      const raw=fs.readFileSync(filePath);
-      return {filePath, raw, value:JSON.parse(raw.toString('utf8'))};
+      const maxBytes=1024*1024;
+      const fd=fs.openSync(filePath,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
+      try {
+        const stat=fs.fstatSync(fd);
+        if (!stat.isFile() || stat.size>maxBytes || stat.size===0) throw Error('INVALID_EVIDENCE_FILE');
+        const buffer=Buffer.alloc(maxBytes+1);
+        let size=0;
+        while(size<buffer.length){
+          const n=fs.readSync(fd,buffer,size,buffer.length-size,null);
+          if(n===0)break;
+          size+=n;
+        }
+        if(size===0 || size>maxBytes)throw Error('INVALID_EVIDENCE_FILE');
+        const raw=buffer.subarray(0,size);
+        return {filePath, raw, value:JSON.parse(raw.toString('utf8'))};
+      }finally{fs.closeSync(fd);}
     };
     const original=read(originalFiles[0]);
     const audit=read(auditFiles[0]);
