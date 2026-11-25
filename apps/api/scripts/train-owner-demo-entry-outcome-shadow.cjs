@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const {publishTextArtifact}=require('./publish-text-artifact.cjs');
 /**
  * Owner Pepperstone USD DEMO AFTER-FEE route classifier.
  * Training Nov 17-18; later-day Nov 19 evaluation only.
@@ -179,11 +180,10 @@ async function main(){
  const built=buildTrainingResult(records,fingerprintOwnerDemoEntryBroker(verifiedBrokerConnectionId));
  if(built.population.training.count<40||built.population.later.count<20)
   throw Error('LACKS_TRAIN_AND_LATER_DAY_COVERAGE');
- const oldExists=fs.existsSync(GENERATED);
  const content=generatedSource(built.artifact);
  fs.mkdirSync(path.dirname(RESEARCH),{recursive:true,mode:0o700});
  fs.writeFileSync(RESEARCH,JSON.stringify(built,null,2),{mode:0o600});
- fs.writeFileSync(GENERATED,content,{encoding:'utf8'});
+ const oldExists=publishTextArtifact(GENERATED,content);
  console.log('ENTRY_OUTCOME_TRAINING',JSON.stringify({
   summary:built.population,trainValidation:built.report,
   fittedRoutes:Object.keys(built.artifact.routes),
