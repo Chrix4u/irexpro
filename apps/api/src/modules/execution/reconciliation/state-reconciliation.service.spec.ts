@@ -477,15 +477,21 @@ describe('StateReconciliationService', () => {
         expect.any(Date),
       );
       expect(orderService.applyFill).toHaveBeenCalledTimes(1);
-      expect(orderService.applyFill).toHaveBeenCalledWith('close-order-1', {
-        quantity: '2.8000',
-        price: '1.43767',
-        // Closing-order identity, three separate native ids from the proof:
-        // the native ORDER id (deal.orderId), the POSITION id and the DEAL id.
-        providerOrderId: '7695022',
-        providerPositionId: '8422910',
-        providerDealId: '6860122',
-      });
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'close-order-1',
+        {
+          quantity: '2.8000',
+          price: '1.43767',
+          // Closing-order identity, three separate native ids from the proof:
+          // the native ORDER id (deal.orderId), the POSITION id and the DEAL id.
+          providerOrderId: '7695022',
+          providerPositionId: '8422910',
+          providerDealId: '6860122',
+        },
+        // Deal-grade delivery (native deal id present): deduplicated by the
+        // ledger, never fenced.
+        {},
+      );
       expect(adapter.modifyOrder).not.toHaveBeenCalled();
       expect(persistence.resolveDiscrepanciesByRef).toHaveBeenCalled();
     } finally {
@@ -561,14 +567,20 @@ describe('StateReconciliationService', () => {
         expect.any(Date),
       );
       expect(orderService.applyFill).toHaveBeenCalledTimes(1);
-      expect(orderService.applyFill).toHaveBeenCalledWith('aged-close-order-1', {
-        quantity: '2.8000',
-        price: '1.43767',
-        // Closing-order identity, three separate native ids from the proof.
-        providerOrderId: '7695022',
-        providerPositionId: '8422910',
-        providerDealId: '6860122',
-      });
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'aged-close-order-1',
+        {
+          quantity: '2.8000',
+          price: '1.43767',
+          // Closing-order identity, three separate native ids from the proof.
+          providerOrderId: '7695022',
+          providerPositionId: '8422910',
+          providerDealId: '6860122',
+        },
+        // Deal-grade delivery (native deal id present): deduplicated by the
+        // ledger, never fenced.
+        {},
+      );
       expect(adapter.modifyOrder).not.toHaveBeenCalled();
     } finally {
       if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;

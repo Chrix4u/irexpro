@@ -454,6 +454,9 @@ describe('ReconciliationResolutionService', () => {
       expect(orderService.applyFill).toHaveBeenCalledWith(
         'order-1',
         expect.objectContaining({ quantity: '1.0000', price: '1.10000' }),
+        // Entry convergence is unidentified evidence — fenced on the
+        // observed state premise (no fabricated identifier to dedup on).
+        { expectedFilledQuantity: '0.0000' },
       );
       expect(orderService.resolveReconciliation).not.toHaveBeenCalled();
     });
@@ -485,15 +488,20 @@ describe('ReconciliationResolutionService', () => {
         swap: '0.00',
         closeReason: 'UNKNOWN',
       });
-      expect(orderService.applyFill).toHaveBeenCalledWith('close-order-1', {
-        quantity: '1.0000',
-        price: '1.12000',
-        // Closing-order identity: native order id and deal id stay explicitly
-        // unknown (this provider deal surfaced neither) — never synthesized.
-        providerOrderId: null,
-        providerPositionId: 'pos-1',
-        providerDealId: null,
-      });
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'close-order-1',
+        {
+          quantity: '1.0000',
+          price: '1.12000',
+          // Closing-order identity: native order id and deal id stay explicitly
+          // unknown (this provider deal surfaced neither) — never synthesized.
+          providerOrderId: null,
+          providerPositionId: 'pos-1',
+          providerDealId: null,
+        },
+        // Unidentified close convergence: fenced on the state premise.
+        { expectedFilledQuantity: '0.0000' },
+      );
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: AuditAction.ORDER_RECONCILED,
@@ -626,15 +634,20 @@ describe('ReconciliationResolutionService', () => {
         providerDealId: 'deal-951',
         providerNativeOrderId: 'order-951',
       });
-      expect(orderService.applyFill).toHaveBeenCalledWith('close-order-1', {
-        quantity: '1.0000',
-        price: '1.12000',
-        // Three SEPARATE native identifiers, each from the provider's own
-        // deal record: the closing ORDER id, the POSITION id, the DEAL id.
-        providerOrderId: 'order-951',
-        providerPositionId: 'pos-1',
-        providerDealId: 'deal-951',
-      });
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'close-order-1',
+        {
+          quantity: '1.0000',
+          price: '1.12000',
+          // Three SEPARATE native identifiers, each from the provider's own
+          // deal record: the closing ORDER id, the POSITION id, the DEAL id.
+          providerOrderId: 'order-951',
+          providerPositionId: 'pos-1',
+          providerDealId: 'deal-951',
+        },
+        // Deal-grade delivery: deduplicated by the ledger, never fenced.
+        {},
+      );
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: AuditAction.ORDER_RECONCILED,
@@ -678,16 +691,20 @@ describe('ReconciliationResolutionService', () => {
         providerDealId: 'deal-951',
         providerNativeOrderId: 'order-951',
       });
-      expect(orderService.applyFill).toHaveBeenCalledWith('entry-order-1', {
-        quantity: '1.0000',
-        price: '1.10000',
-        // ENTRY identity: only the position this entry opened. The native
-        // entry ORDER id and the OPENING deal id stay explicitly unknown;
-        // the CLOSING deal/order ids are never assigned to the entry order.
-        providerOrderId: null,
-        providerPositionId: 'pos-1',
-        providerDealId: null,
-      });
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'entry-order-1',
+        {
+          quantity: '1.0000',
+          price: '1.10000',
+          // ENTRY identity: only the position this entry opened. The native
+          // entry ORDER id and the OPENING deal id stay explicitly unknown;
+          // the CLOSING deal/order ids are never assigned to the entry order.
+          providerOrderId: null,
+          providerPositionId: 'pos-1',
+          providerDealId: null,
+        },
+        { expectedFilledQuantity: '0.0000' },
+      );
     });
 
     it('converges BOTH stranded legs, each with its own identity set', async () => {
@@ -728,20 +745,28 @@ describe('ReconciliationResolutionService', () => {
         providerNativeOrderId: 'order-951',
       });
       expect(orderService.applyFill).toHaveBeenCalledTimes(2);
-      expect(orderService.applyFill).toHaveBeenCalledWith('entry-order-1', {
-        quantity: '1.0000',
-        price: '1.10000',
-        providerOrderId: null,
-        providerPositionId: 'pos-1',
-        providerDealId: null,
-      });
-      expect(orderService.applyFill).toHaveBeenCalledWith('close-order-1', {
-        quantity: '1.0000',
-        price: '1.12000',
-        providerOrderId: 'order-951',
-        providerPositionId: 'pos-1',
-        providerDealId: 'deal-951',
-      });
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'entry-order-1',
+        {
+          quantity: '1.0000',
+          price: '1.10000',
+          providerOrderId: null,
+          providerPositionId: 'pos-1',
+          providerDealId: null,
+        },
+        { expectedFilledQuantity: '0.0000' },
+      );
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'close-order-1',
+        {
+          quantity: '1.0000',
+          price: '1.12000',
+          providerOrderId: 'order-951',
+          providerPositionId: 'pos-1',
+          providerDealId: 'deal-951',
+        },
+        {},
+      );
     });
 
     // ─── duplicate attribution guards (one deal / one open fill → one order) ──
@@ -1011,11 +1036,16 @@ describe('ReconciliationResolutionService', () => {
       // resolveReconciliation(FILLED) call threw by design in production and
       // is REMOVED — exactly one fill-bearing convergence, no status-only
       // write that could invent a fill.
-      expect(orderService.applyFill).toHaveBeenCalledWith('order-1', {
-        quantity: '1',
-        price: '1.10000',
-        providerOrderId: 'ticket-1',
-      });
+      expect(orderService.applyFill).toHaveBeenCalledWith(
+        'order-1',
+        {
+          quantity: '1',
+          price: '1.10000',
+          providerOrderId: 'ticket-1',
+        },
+        // The state delta is unidentified evidence: fenced on the premise.
+        { expectedFilledQuantity: '0.0000' },
+      );
       expect(orderService.resolveReconciliation).not.toHaveBeenCalledWith(
         'order-1',
         OrderStatus.FILLED,
@@ -1055,6 +1085,7 @@ describe('ReconciliationResolutionService', () => {
       expect(orderService.applyFill).toHaveBeenCalledWith(
         'order-1',
         expect.objectContaining({ quantity: '0.5' }),
+        { expectedFilledQuantity: '0.2500' },
       );
     });
 

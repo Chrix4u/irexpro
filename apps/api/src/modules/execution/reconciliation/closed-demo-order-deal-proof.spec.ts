@@ -162,7 +162,7 @@ describe('Pepperstone DEMO CLOSED trade with unsettled closing order', () => {
       'utf8',
     );
     expect(source).toContain('provePepperstoneDemoClosedOrderFill({');
-    expect(source).toMatch(/this\.orderService\.applyFill\(order\.id,\s*\{/);
+    expect(source).toMatch(/this\.orderService\.applyFill\(\s*order\.id,\s*\{/);
     expect(source).toContain("connection.brokerId === 'pepperstone-ctrader'");
     expect(source).toMatch(/connection\.userId\s*===\s*process\.env\.VPS_FOREX_SCANNER_USER_ID/);
     expect(source).toMatch(/this\.tradeRepo\.findOne\(\{\s*where:\s*\{/);
