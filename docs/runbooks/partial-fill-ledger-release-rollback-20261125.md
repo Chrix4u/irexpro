@@ -215,7 +215,19 @@ impossible." That unconditional claim was WRONG and is withdrawn:
   caller-side guard applies state-based deltas only when the provider is
   AHEAD). Repeated ambiguous deliveries CAN double-book, and are surfaced
   by the ledger rows themselves (each row records the fact of its own
-  booking).
+  booking). **2026-11-25 continuation — the CONCURRENT duplicate case is
+  now fenced:** every state-derived unidentified delivery (provider-order
+  deltas, stranded-order convergence, dispatch responses) carries the
+  `expectedFilledQuantity` premise it was derived from; under the row lock
+  a stale premise (a concurrent writer already moved the accounting)
+  no-ops idempotently instead of booking twice. The honest limit stands
+  unchanged: an unidentified redelivery with a STILL-FRESH premise books.
+- Terminal-state redelivery (2026-11-25 continuation): the dedup
+  classification runs BEFORE the fillable gate, so a redelivered
+  already-booked deal is an idempotent no-op even after FILLED — it can
+  no longer surface as a fake "not fillable" conflict. Genuinely new
+  deals on terminal orders still fail closed; contradictory redeliveries
+  are still refused.
 - Pre-ledger history: only the RETAINED latest-deal pointer is preserved
   (LEGACY_BASELINE); the per-fill identifiers destroyed by the old
   pointer-overwrite defect are NOT recoverable — replays of those cannot

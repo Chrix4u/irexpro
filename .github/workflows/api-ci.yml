@@ -206,6 +206,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify unmatched-deal historical reconciliation over the genuine statement corpus
+        run: node --test apps/api/scripts/audit-unmatched-deal-historical-reconciliation.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04

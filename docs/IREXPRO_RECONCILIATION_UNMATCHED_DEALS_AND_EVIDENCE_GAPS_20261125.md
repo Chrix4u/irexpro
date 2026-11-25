@@ -149,7 +149,16 @@ identifier is invented to close them:
    provider is AHEAD) bounds it, but the ledger cannot deduplicate evidence
    that carries no identifier. Contradictory unidentified evidence is
    equally undetectable — two NULL-deal deliveries with different
-   quantities both book.
+   quantities both book. **2026-11-25 continuation — the CONCURRENT case is
+   now closed:** state-derived unidentified deliveries (provider-order-state
+   deltas, stranded-order convergence, dispatch responses without a native
+   deal id) are fenced on the `expectedFilledQuantity` premise the caller
+   observed when deriving the fill (`ApplyFillOptions` in
+   `order.service.ts`): under the row lock a stale premise no-ops
+   idempotently instead of double-booking, with NO identifier fabricated.
+   The remaining honest limit: an unidentified redelivery whose premise is
+   still fresh (nothing else moved the accounting) still books — only a
+   native deal id can distinguish a genuine repeat from a duplicate.
 2. **Pre-ledger per-fill identifiers are unrecoverable.** The identifiers
    destroyed by the historical pointer-overwrite defect cannot be
    reconstructed; only the one RETAINED pointer survives (transcribed as
@@ -167,3 +176,75 @@ identifier is invented to close them:
 5. **The two unmatched EURUSD deals (§2) and the 126 generic orders (§3)**
    remain outside every one of these mechanisms: attribution unknown until
    the enumerated broker-native evidence arrives.
+
+## 6. Terminal-state redelivery classification (2026-11-25 continuation)
+
+A duplicate delivery of an ALREADY-BOOKED deal arriving after the order
+reached a TERMINAL state (FILLED included) was previously refused as a
+fake "not fillable" conflict before the dedup classification could run.
+Corrected in `order.service.ts`: the ledger/pointer dedup classification
+now runs BEFORE the fillable gate, so a redelivered booked deal is an
+idempotent no-op on ANY order status (broker event redelivery on
+reconnect, repeated or concurrent reconciliation), while a genuinely NEW
+deal on a terminal state still fails closed with a typed Conflict, and a
+contradictory redelivery (same deal id, different economics) is refused
+stating both facts. Proven by mock specs (`applyFill — duplicate deal
+delivery after a terminal state`) and the real-PG suite (tests 13).
+
+## 7. Historical reconciliation completion (2026-11-25, repository evidence)
+
+The attribution investigation of §2/§3 was completed against the genuine
+broker evidence available IN THIS REPOSITORY
+(`apps/api/scripts/fixtures/pepperstone-demo-deal-fingerprints.csv`, the
+424 verified Pepperstone DEMO statement deals). Every number below is
+recomputed exactly from those rows by
+`apps/api/scripts/audit-unmatched-deal-historical-reconciliation.cjs`
+(pinned by its companion `.test.cjs`); nothing was fabricated:
+
+1. **The pair is the corpus's ONLY duplicate fingerprint.** 424 deals →
+   423 distinct fingerprints; the single duplicated fingerprint is exactly
+   the two unmatched EURUSD rows (2026-11-10T00:24:41.249Z / .950Z,
+   701 ms apart, identical economics).
+2. **The pair's economics are closed, not open.** The balance chain is
+   exact through all 424 rows (opening balance 50,000 derived from row 1;
+   closing 42,954.79; net −7,045.21; zero chain errors) — the pair's
+   −$0.14 is fully reflected in the broker-side balance. What remains open
+   is ATTRIBUTION, not money.
+3. **Corpus-derived context (facts, not attribution):** the pair is the
+   statement's FIRST two transactions; the next corpus deal is 7 minutes 30
+   seconds later; their −6 USD/lot residual matches the corpus commission
+   family exactly. Micro-lot (0.01) size is NOT distinguishing evidence —
+   11 other 0.01-lot deals exist in the corpus and all were matched to
+   internal records by the independent audit (422/424).
+4. **The labelled inference (explicitly not a positive finding):** a
+   same-second repeated micro scratch pair as the account's first-ever
+   transactions, with no internal order/trade/signal lineage (per the VPS
+   audit's database searches), is MOST CONSISTENT with a non-platform
+   origin (manual terminal or a third-party application on the same DEMO
+   credentials) — but attribution remains formally UNKNOWN until the
+   §2.2 native evidence (cTrader deal records with deal/order/position
+   IDs) arrives. The standing decision of §4 is unchanged: no internal
+   records are created for the pair.
+5. **The 126 generic cTrader records — documented negative.** The
+   repository holds NO broker-native deal evidence for the generic
+   cTrader DEMO accounts: the verified corpus is Pepperstone-account
+   scoped and cannot speak for them. Their convergence still requires the
+   §3 evidence list (account-scoped cTrader deal lists); until it arrives
+   they stay RECONCILIATION_PENDING. No records were created for them,
+   none may be.
+
+## 8. pgcrypto exception closed in a properly configured disposable environment (2026-11-25)
+
+The real-PostgreSQL suite's single historical local failure
+(`performance-fee-policy.pg-integration.spec.ts` — `CREATE EXTENSION IF
+NOT EXISTS pgcrypto`) was an environment artifact, not a product defect:
+the embedded disposable PostgreSQL (pip `pgserver`, PostgreSQL 16.2)
+ships NO contrib extension files, while GitHub CI runners use the
+official postgres images that do. `gen_random_uuid()` itself is CORE in
+PostgreSQL 13+, so only that one CREATE EXTENSION statement failed.
+Re-provisioned disposable environment: pgcrypto compiled from the
+OFFICIAL PostgreSQL 16.2 source against the same bundled engine (PGXS),
+relinked against system OpenSSL, installed into the embedded pginstall —
+after which the FULL real-PG suite passes locally: **11/11 suites,
+97/97 tests** (the same result CI produces), closing independent-review
+finding 7's pgcrypto question.
