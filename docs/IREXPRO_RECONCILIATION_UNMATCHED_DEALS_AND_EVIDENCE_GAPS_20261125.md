@@ -125,10 +125,45 @@ Required evidence (same read-only discipline):
 - **Do not create internal records** for the two EURUSD deals or the 126
   generic orders. Attribution requires broker-native deal evidence as
   listed above.
-- The immutable per-fill accounting evidence ledger (migration
-  1795564800000) records evidence per booked fill going forward; it does
-  not backfill history — pre-ledger fills stay protected by the
-  order-row pointer check, and unknown attribution stays unknown.
+- The immutable per-fill accounting evidence ledger (migrations
+  1795564800000 + hardening 1795628400000) records evidence per booked fill
+  going forward; it does not backfill history — a mixed-era order's
+  pre-ledger cumulative state is transcribed ONCE as an honest
+  `LEGACY_BASELINE` row (retained pointer + cumulative quantity + average
+  price — a baseline summary, never reconstructed per-fill evidence) at
+  its first ledger-era fill, and unknown attribution stays unknown.
 - If/when the evidence in §2.2/§3 arrives, convergence decisions go through
   the reviewed reconciliation paths (`applyFill` with deal-grade
   identifiers), never through manual record insertion.
+
+## 5. Evidence-grade limitations that cannot be resolved conclusively (independent-review finding 4)
+
+Documented honestly — synthetic fixtures demonstrate each case in
+`order.service.spec.ts` and the real-PG suite; no guard is weakened and no
+identifier is invented to close them:
+
+1. **Unidentified fills (NULL deal id) are not replay-detectable.** Each
+   delivery of the same unidentified event books as a new accounting event
+   (its ledger row records that fact). Repeated ambiguous deliveries CAN
+   accumulate; the caller-side discipline (state-based deltas only when the
+   provider is AHEAD) bounds it, but the ledger cannot deduplicate evidence
+   that carries no identifier. Contradictory unidentified evidence is
+   equally undetectable — two NULL-deal deliveries with different
+   quantities both book.
+2. **Pre-ledger per-fill identifiers are unrecoverable.** The identifiers
+   destroyed by the historical pointer-overwrite defect cannot be
+   reconstructed; only the one RETAINED pointer survives (transcribed as
+   LEGACY_BASELINE at the first ledger-era fill). Replays of any OTHER
+   pre-ledger deal cannot be deduplicated.
+3. **LEGACY_BASELINE economics are cumulative, not per-deal.** A replay of
+   the retained legacy deal is deduplicated on IDENTITY only — its
+   original per-deal quantity/price were never recorded, so a redelivery's
+   economics cannot be verified against the baseline (the documented
+   insufficiency of pre-ledger evidence).
+4. **Contradictory evidence detection requires an identifier.** The
+   contradiction defence compares a redelivery against the BOOKED
+   PROVIDER_DEAL row — without a deal id there is nothing to compare
+   against.
+5. **The two unmatched EURUSD deals (§2) and the 126 generic orders (§3)**
+   remain outside every one of these mechanisms: attribution unknown until
+   the enumerated broker-native evidence arrives.

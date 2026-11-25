@@ -86,7 +86,14 @@ Properties that bound any remediation:
 - Re-running the sweeps after a rollback re-derives the same fills or fails
   closed; the duplicate-deal guards (idempotent `applyFill`, ownership
   pre-check, partial unique index `uq_orders_provider_deal_id`) make
-  double-booking impossible.
+  double-booking impossible **for deal-grade evidence — the pointer-visible
+  deal id — only** (correction 2026-11-25, per the independent review of the
+  follow-up ledger series: guards that watch only the LATEST pointer value
+  cannot deduplicate replays of EARLIER partial-fill identifiers, and
+  unidentified/null-deal fills carry no dedup surface at all. See the
+  qualified guarantee in §6 of
+  `partial-fill-ledger-release-rollback-20261125.md`; the unconditional
+  earlier wording is withdrawn).
 - The convergence paths never mutate trades, balances, realised P&L,
   commissions or swaps of already-closed trades; the only trade-side write is
   the pre-existing NULL-only settlement backfill (guarded CAS on
