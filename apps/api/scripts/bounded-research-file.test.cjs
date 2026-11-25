@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-const {readBoundedText,appendBoundedText}=require('./bounded-research-file.cjs');
+const {readBoundedText,appendBoundedText,createPrivateOnce}=require('./bounded-research-file.cjs');
 test('reads exact limit and empty file; preserves UTF-8',()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bounded-research-'));
  try{
@@ -38,5 +38,19 @@ test('bounded append preserves existing bytes and rejects symlinks',()=>{
   fs.symlinkSync(p,link);
   assert.throws(()=>appendBoundedText(link,'x',10));
   assert.equal(fs.readFileSync(p,'utf8'),'abc');
+ }finally{fs.rmSync(dir,{recursive:true,force:true})}
+});
+
+test('exclusive create preserves existing marker and never overwrites a symlink target',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'private-once-'));
+ try{
+  const p=path.join(dir,'marker'),link=path.join(dir,'link');
+  assert.equal(createPrivateOnce(p,'first'),true);
+  assert.equal(createPrivateOnce(p,'second'),false);
+  assert.equal(fs.readFileSync(p,'utf8'),'first');
+  fs.symlinkSync(p,link);
+  assert.equal(createPrivateOnce(link,'third'),false);
+  assert.throws(()=>readBoundedText(link,100,'LIMIT'));
+  assert.equal(fs.readFileSync(p,'utf8'),'first');
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
 });

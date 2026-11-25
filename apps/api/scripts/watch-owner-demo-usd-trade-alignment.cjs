@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const {createPrivateOnce,readBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Independent prospective USD-factor vs ACTUAL broker trade outcomes.
  * No order, model, broker, allocation or Start/Stop mutations.
@@ -35,13 +36,12 @@ function freeze(root,owner,conn,now){
   throw Error('INVALID_OWNER_BROKER_OR_TIME');
  fs.mkdirSync(root,{recursive:true,mode:0o700});
  const markerFile=path.join(root,'activation.json'),binding=fingerprint(owner+'/'+conn);
- if(!fs.existsSync(markerFile))
-  fs.writeFileSync(markerFile,JSON.stringify({
+ createPrivateOnce(markerFile,JSON.stringify({
    artifact:ARTIFACT,activatedAt:new Date(now).toISOString(),ownerBrokerBinding:binding,
    researchOnly:true,brokerOrderAuthority:'NONE',modifiesExecution:false,
    changesStartStop:false,automaticPromotion:false,
-  },null,2),{flag:'wx',mode:0o600});
- const marker=JSON.parse(fs.readFileSync(markerFile,'utf8'));
+  },null,2));
+ const marker=JSON.parse(readBoundedText(markerFile,1024*1024,'INVALID_ACTIVATION_FILE'));
  if(marker.artifact!==ARTIFACT||marker.ownerBrokerBinding!==binding||
   marker.brokerOrderAuthority!=='NONE'||marker.researchOnly!==true||
   dateMs(marker.activatedAt)==null||dateMs(marker.activatedAt)>now)

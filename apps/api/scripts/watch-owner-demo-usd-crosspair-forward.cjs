@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const {createPrivateOnce,readBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Owner Pepperstone USD DEMO. Prospective, read-only USD common factor.
  * A target never contributes to its own factor. No model/trading authority.
@@ -25,15 +26,15 @@ function freeze(root,owner,connectionId,now){
  fs.mkdirSync(root,{recursive:true,mode:0o700});
  const file=path.join(root,'activation.json'),
   binding=fingerprint(owner+'/'+connectionId);
- if(!fs.existsSync(file)){
-  fs.writeFileSync(file,JSON.stringify({
+ {
+  createPrivateOnce(file,JSON.stringify({
    artifact:ARTIFACT,activatedAt:new Date(now).toISOString(),
    ownerBrokerBinding:binding,brokerOrderAuthority:'NONE',
    researchOnly:true,modifiesExecution:false,
    changesRiskGates:false,autoPromotionAllowed:false,
-  },null,2),{mode:0o600,flag:'wx'});
+  },null,2));
  }
- const marker=JSON.parse(fs.readFileSync(file,'utf8'));
+ const marker=JSON.parse(readBoundedText(file,1024*1024,'INVALID_ACTIVATION_FILE'));
  if(marker.artifact!==ARTIFACT||marker.ownerBrokerBinding!==binding||
     marker.brokerOrderAuthority!=='NONE'||marker.researchOnly!==true||
     ms(marker.activatedAt)==null||ms(marker.activatedAt)>now)

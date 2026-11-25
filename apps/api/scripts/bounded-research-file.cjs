@@ -42,4 +42,14 @@ function appendBoundedText(file,text,maxBytes){
     return true;
   }finally{fs.closeSync(fd);}
 }
-module.exports={readBoundedText,appendBoundedText};
+// Exclusive creation is the check. Never truncate or follow an existing file.
+function createPrivateOnce(file,text){
+  try{
+    fs.writeFileSync(file,text,{mode:0o600,flag:'wx'});
+    return true;
+  }catch(err){
+    if(err.code==='EEXIST')return false;
+    throw err;
+  }
+}
+module.exports={readBoundedText,appendBoundedText,createPrivateOnce};
