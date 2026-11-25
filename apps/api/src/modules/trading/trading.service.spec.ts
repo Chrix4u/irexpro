@@ -15,7 +15,10 @@ import { TradingSession, TradingSessionStatus } from '../execution/entities/trad
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { BrokerConnectionRequiredException } from '../execution/execution-session.resolution';
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
-import { BrokerAccountSnapshotService, SnapshotNotFreshError } from '../broker/services/broker-account-snapshot.service';
+import {
+  BrokerAccountSnapshotService,
+  SnapshotNotFreshError,
+} from '../broker/services/broker-account-snapshot.service';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { BrokerAuthorizationStatus } from '../broker/authorization/broker-authorization-status';
 import { TradeCloseReason, TradeStatus } from '../execution/entities/trade.entity';
@@ -912,41 +915,73 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
     it.each([
       { code: 'SNAPSHOT_STALE' as const, ageMs: 42581, maxAgeMs: 30000 },
       { code: 'SNAPSHOT_MISSING' as const },
-    ])('LIVE opening refreshes $code exactly once and binds the newly accepted state', async (failure) => {
+    ])(
+      'LIVE opening refreshes $code exactly once and binds the newly accepted state',
+      async (failure) => {
+        brokerService.findConnectionById.mockResolvedValue(
+          buildHealthyConnection({ accountType: 'LIVE' }),
+        );
+        brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure
+          .mockRejectedValueOnce(new SnapshotNotFreshError(failure, 'conn-1'))
+          .mockResolvedValueOnce(
+            buildAcceptedSnapshot({
+              id: 'snap-2',
+              generation: 8,
+              currency: 'USD',
+              balance: '49.93',
+              equity: '49.93',
+            }),
+          );
+        await service.startTradingSession('user-1', 'conn-1');
+        expect(brokerService.observeAccountSnapshotNow).toHaveBeenCalledTimes(1);
+        expect(brokerService.observeAccountSnapshotNow).toHaveBeenCalledWith('user-1', 'conn-1');
+        expect(
+          brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure,
+        ).toHaveBeenCalledTimes(2);
+        expect(executionService.startSession).toHaveBeenCalledWith(
+          'user-1',
+          'conn-1',
+          '49.93',
+          expect.anything(),
+          ExecutionMode.PAPER_ONLY,
+          expect.objectContaining({ openingSnapshotId: 'snap-2', openingSnapshotGeneration: 8 }),
+        );
+      },
+    );
+
+    it.each(['refresh failed', 'still stale'])(
+      'LIVE opening fails closed when %s',
+      async (scenario) => {
+        brokerService.findConnectionById.mockResolvedValue(
+          buildHealthyConnection({ accountType: 'LIVE' }),
+        );
+        const stale = new SnapshotNotFreshError(
+          { code: 'SNAPSHOT_STALE', ageMs: 42581, maxAgeMs: 30000 },
+          'conn-1',
+        );
+        brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure.mockRejectedValue(stale);
+        if (scenario === 'refresh failed')
+          brokerService.observeAccountSnapshotNow.mockRejectedValueOnce(
+            new Error('provider unavailable'),
+          );
+        await expect(service.startTradingSession('user-1', 'conn-1')).rejects.toThrow(
+          ForbiddenException,
+        );
+        expect(brokerService.observeAccountSnapshotNow).toHaveBeenCalledTimes(1);
+        expect(executionService.startSession).not.toHaveBeenCalled();
+      },
+    );
+
+    it('LIVE malformed snapshot is rejected without refresh or fallback', async () => {
       brokerService.findConnectionById.mockResolvedValue(
         buildHealthyConnection({ accountType: 'LIVE' }),
       );
-      brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure
-        .mockRejectedValueOnce(new SnapshotNotFreshError(failure, 'conn-1'))
-        .mockResolvedValueOnce(buildAcceptedSnapshot({
-          id: 'snap-2', generation: 8, currency: 'USD', balance: '49.93', equity: '49.93',
-        }));
-      await service.startTradingSession('user-1', 'conn-1');
-      expect(brokerService.observeAccountSnapshotNow).toHaveBeenCalledTimes(1);
-      expect(brokerService.observeAccountSnapshotNow).toHaveBeenCalledWith('user-1', 'conn-1');
-      expect(brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure).toHaveBeenCalledTimes(2);
-      expect(executionService.startSession).toHaveBeenCalledWith(
-        'user-1', 'conn-1', '49.93', expect.anything(), ExecutionMode.PAPER_ONLY,
-        expect.objectContaining({ openingSnapshotId: 'snap-2', openingSnapshotGeneration: 8 }),
-      );
-    });
-
-    it.each(['refresh failed', 'still stale'])('LIVE opening fails closed when %s', async (scenario) => {
-      brokerService.findConnectionById.mockResolvedValue(buildHealthyConnection({ accountType: 'LIVE' }));
-      const stale = new SnapshotNotFreshError({ code: 'SNAPSHOT_STALE', ageMs: 42581, maxAgeMs: 30000 }, 'conn-1');
-      brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure.mockRejectedValue(stale);
-      if (scenario === 'refresh failed') brokerService.observeAccountSnapshotNow.mockRejectedValueOnce(new Error('provider unavailable'));
-      await expect(service.startTradingSession('user-1', 'conn-1')).rejects.toThrow(ForbiddenException);
-      expect(brokerService.observeAccountSnapshotNow).toHaveBeenCalledTimes(1);
-      expect(executionService.startSession).not.toHaveBeenCalled();
-    });
-
-    it('LIVE malformed snapshot is rejected without refresh or fallback', async () => {
-      brokerService.findConnectionById.mockResolvedValue(buildHealthyConnection({ accountType: 'LIVE' }));
       brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure.mockRejectedValue(
         new SnapshotNotFreshError({ code: 'SNAPSHOT_MALFORMED', field: 'equity' }, 'conn-1'),
       );
-      await expect(service.startTradingSession('user-1', 'conn-1')).rejects.toThrow(ForbiddenException);
+      await expect(service.startTradingSession('user-1', 'conn-1')).rejects.toThrow(
+        ForbiddenException,
+      );
       expect(brokerService.observeAccountSnapshotNow).not.toHaveBeenCalled();
       expect(executionService.startSession).not.toHaveBeenCalled();
     });

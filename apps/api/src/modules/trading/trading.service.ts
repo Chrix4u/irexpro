@@ -29,7 +29,10 @@ import { TradingNotReadyException } from '../../common/exceptions/trading-not-re
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { BrokerAuthorizationStatus } from '../broker/authorization/broker-authorization-status';
-import { BrokerAccountSnapshotService, SnapshotNotFreshError } from '../broker/services/broker-account-snapshot.service';
+import {
+  BrokerAccountSnapshotService,
+  SnapshotNotFreshError,
+} from '../broker/services/broker-account-snapshot.service';
 import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
 import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { TradeCloseReason } from '../execution/entities/trade.entity';
