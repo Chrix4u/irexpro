@@ -29,6 +29,7 @@ import { BrokerMode, IBrokerAdapter } from '../broker/interfaces/broker-adapter.
 import { RiskDecision } from '../risk/interfaces/risk.interface';
 import { RiskGrantService } from '../risk/risk-grant.service';
 import { OrderKind, OrderTimeInForce } from './orders/order.enums';
+import { CreateOrderFillEvidenceLedger1795564800000 } from '../../database/migrations/1795564800000-CreateOrderFillEvidenceLedger';
 
 /**
  * Sprint 50 PR-3 — real-PostgreSQL concurrency proof for the execution
@@ -173,6 +174,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     });
     await dataSource.initialize();
     await dataSource.query('CREATE SCHEMA IF NOT EXISTS trading');
+    await dataSource.query('DROP TABLE IF EXISTS trading.order_fill_evidence');
     await dataSource.query('DROP TABLE IF EXISTS trading.trades');
     await dataSource.query('DROP TABLE IF EXISTS trading.orders');
     await dataSource.query('DROP TABLE IF EXISTS trading.execution_confirmations');
@@ -377,6 +379,13 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       CREATE UNIQUE INDEX uq_orders_provider_deal_id
         ON trading.orders (broker_connection_id, provider_deal_id)
         WHERE provider_deal_id IS NOT NULL AND provider_deal_id <> ''`);
+    // trading.order_fill_evidence — the immutable per-fill accounting ledger
+    // (applyFill books one row per fill). Applied by running the REAL
+    // migration class against this fixture schema, so the fixture can never
+    // drift from migration 1795564800000.
+    await new CreateOrderFillEvidenceLedger1795564800000().up({
+      query: (sql: string) => dataSource.query(sql),
+    } as never);
   });
 
   afterAll(async () => {
@@ -384,8 +393,11 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
   });
 
   beforeEach(async () => {
+    // The ledger FK-references orders (ON DELETE RESTRICT), so both tables
+    // must be truncated in ONE statement — PostgreSQL refuses to truncate
+    // a table referenced by a foreign key otherwise.
+    await dataSource.query('TRUNCATE TABLE trading.order_fill_evidence, trading.orders');
     await dataSource.query('TRUNCATE TABLE trading.trades');
-    await dataSource.query('TRUNCATE TABLE trading.orders');
     await dataSource.query('TRUNCATE TABLE trading.execution_confirmations');
     await dataSource.query('TRUNCATE TABLE trading.risk_grants');
     await dataSource.query('TRUNCATE TABLE trading.trading_sessions');
