@@ -483,19 +483,55 @@ export class StateReconciliationService {
       for (const settled of closedUnsettledTrades) {
         try {
           let tradeForProof = settled;
-          // cTrader may have stored the ENTRY order ID but not the created
-          // position ID. A CLOSE deal is keyed by POSITION ID. Recover the
-          // relationship only from the same authenticated broker account's
-          // FILLED entry-order response; do not try time/price-only matching.
-          if (
-            !settled.externalPositionId &&
-            settled.externalOrderId &&
-            !closedTrades.some((deal) => deal.externalOrderId === settled.externalOrderId)
-          ) {
-            const providerEntryOrder = await adapter.getOrderById(settled.externalOrderId);
-            const positionRef = proveCtraderEntryOrderPositionRef(settled, providerEntryOrder);
-            if (positionRef) {
-              tradeForProof = { ...settled, externalPositionId: positionRef };
+          // The durable FILLED market-order row may already contain the native
+          // position ID even when the trade row only retained its entry order ID.
+          // Use an exact, unique, ownership-bound order link for settlement proof
+          // only; never copy an unverified position ID into the trade record.
+          if (!settled.externalPositionId && settled.externalOrderId) {
+            const linkedOrders = await this.orderRepo.find({
+              where: {
+                tradeId: settled.id,
+                userId: settled.userId,
+                brokerConnectionId: settled.brokerConnectionId,
+                providerOrderId: settled.externalOrderId,
+                orderKind: OrderKind.MARKET,
+                status: OrderStatus.FILLED,
+              },
+              take: 2,
+            });
+            const linked = linkedOrders.length === 1 ? linkedOrders[0] : null;
+            const decimal = /^\d+(?:\.\d+)?$/;
+            const storedPositionRef =
+              linked &&
+              linked.tradeId === settled.id &&
+              linked.userId === settled.userId &&
+              linked.brokerConnectionId === settled.brokerConnectionId &&
+              linked.providerOrderId === settled.externalOrderId &&
+              linked.orderKind === OrderKind.MARKET &&
+              linked.status === OrderStatus.FILLED &&
+              /^\d+$/.test(linked.providerOrderId ?? '') &&
+              /^\d+$/.test(linked.providerPositionId ?? '') &&
+              linked.providerPositionId !== '0' &&
+              linked.instrument === settled.instrument &&
+              linked.direction === settled.direction &&
+              [linked.filledQuantity, linked.avgFillPrice, settled.lotSize, settled.fillPrice].every(
+                (value) => typeof value === 'string' && decimal.test(value),
+              ) &&
+              compareDecimal(linked.filledQuantity, settled.lotSize) === 0 &&
+              compareDecimal(linked.avgFillPrice!, settled.fillPrice!) === 0
+                ? linked.providerPositionId
+                : null;
+            if (storedPositionRef) {
+              tradeForProof = { ...settled, externalPositionId: storedPositionRef };
+            } else if (
+              !closedTrades.some((deal) => deal.externalOrderId === settled.externalOrderId)
+            ) {
+              // Otherwise obtain the relationship from the authenticated broker.
+              const providerEntryOrder = await adapter.getOrderById(settled.externalOrderId);
+              const positionRef = proveCtraderEntryOrderPositionRef(settled, providerEntryOrder);
+              if (positionRef) {
+                tradeForProof = { ...settled, externalPositionId: positionRef };
+              }
             }
           }
           await this.resolution.backfillClosedDemoSettlement({
