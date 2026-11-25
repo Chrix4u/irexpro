@@ -22,7 +22,9 @@ import { OrderFillEvidenceClass } from './order.enums';
  * - provider_deal_id is retained PER FILL and never overwritten: replays
  *   of ANY historical fill (not just the latest) are detected through the
  *   partial unique index uq_order_fill_evidence_deal and are idempotent
- *   no-ops.
+ *   no-ops — for PROVIDER_DEAL rows a redelivery must MATCH the booked
+ *   quantity/price exactly, otherwise it is contradictory evidence and
+ *   fails closed (review finding 3).
  * - One native broker deal may be credited to at most ONE internal order:
  *   the same partial unique index is connection-scoped, so cross-order
  *   attribution fails closed (ConflictException), including under
@@ -35,17 +37,36 @@ import { OrderFillEvidenceClass } from './order.enums';
  *   evidence is never fabricated into an identifier. Such rows are NOT
  *   replay-detectable: that is the honest limit of unidentified evidence
  *   (callers apply state-based deltas only when the provider is AHEAD).
- * - Append-only is enforced at the DATABASE level by trigger
- *   trg_order_fill_evidence_append_only (UPDATE/DELETE raise) — history
- *   cannot be rewritten even by privileged application paths.
- * - orders.filled_quantity = SUM(order_fill_evidence.quantity) per order
- *   is an auditable invariant; discrepancies are surfaced by diagnostics,
- *   never "corrected" by editing the ledger.
+ * - Append-only is enforced at the DATABASE level: row trigger
+ *   trg_order_fill_evidence_append_only refuses UPDATE/DELETE, and the
+ *   statement trigger trg_order_fill_evidence_no_truncate (migration
+ *   1795628400000) refuses TRUNCATE outside the operator escape — history
+ *   cannot be rewritten or bulk-discarded even by privileged paths.
+ * - Referential consistency (migration 1795628400000): each row references
+ *   its order AND the exact broker connection of that order (pair FK on
+ *   (order_id, broker_connection_id) → trading.orders(id,
+ *   broker_connection_id)), and broker_connection_id must reference a real
+ *   broker.broker_connections row (ON DELETE RESTRICT).
  *
- * NO BACKFILL: fills booked before this ledger existed cannot be
- * reconstructed (only the latest deal pointer survived); historical rows
- * are NOT fabricated — legacy replays stay protected by the order-row
- * pointer check in OrderService.applyFill.
+ * ACCOUNTING INVARIANT (review finding 5 — scoped honestly): for
+ * LEDGER-MANAGED orders,
+ *
+ *   orders.filled_quantity = (the single LEGACY_BASELINE row transcribed
+ *   once at the first ledger-era fill for mixed-era orders, if any)
+ *   + SUM(quantity of the per-fill rows).
+ *
+ * Orders whose quantity was booked BEFORE the ledger existed and never
+ * booked a ledger-era fill have NO ledger rows — the ledger alone does
+ * NOT establish their historical total (no backfill, ever). Discrepancies
+ * are surfaced by diagnostics, never "corrected" by editing the ledger.
+ *
+ * NO BACKFILL: historical per-fill identifiers destroyed by the old
+ * pointer-overwrite defect are NOT recoverable and are NOT invented. The
+ * ONE identifier the order row still retained (the latest-deal pointer) is
+ * preserved AS what it is — the retained pointer on a LEGACY_BASELINE row
+ * — at the first ledger-era fill, keeping it in the dedup surface forever
+ * (review finding 1); a baseline is a summary of already-booked state,
+ * never presented as reconstructed per-fill deal evidence.
  */
 @Entity({ name: 'order_fill_evidence', schema: 'trading' })
 export class OrderFillEvidence {

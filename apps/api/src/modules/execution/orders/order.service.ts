@@ -69,6 +69,26 @@ export interface ApplyFillInput {
   providerDealId?: string | null;
 }
 
+/** Where a deal-ownership answer came from (findDealOwner). */
+export type DealOwnershipSource = 'LEDGER_EVIDENCE' | 'ORDER_ROW_POINTER';
+
+/**
+ * Result of findDealOwner (review finding 2): the accounting-ownership
+ * assessment of a native deal id against ALL available historical evidence
+ * — the immutable ledger (complete history) and the order-row latest-deal
+ * pointers (legacy population). `orderId` is the resolved owner ONLY when
+ * unambiguous; `ambiguous` marks disagreeing evidence (e.g. the ledger
+ * attributes the deal to one order while a legacy order-row pointer on the
+ * same connection carries it too) — ambiguous cases expose every candidate
+ * for accounting review instead of silently picking a winner.
+ */
+export interface DealOwnershipLookup {
+  orderId: string | null;
+  ambiguous: boolean;
+  sources: DealOwnershipSource[];
+  candidateOrderIds: string[];
+}
+
 const QUANTITY_PATTERN = /^\d+(\.\d{1,4})?$/;
 const PRICE_PATTERN = /^\d+(\.\d{1,8})?$/;
 const CLIENT_ORDER_ID_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
@@ -330,32 +350,52 @@ export class OrderService {
   /**
    * Atomic fill application with EXACT decimal arithmetic (computed in
    * PostgreSQL, never in JS floats) — booked against the IMMUTABLE per-fill
-   * accounting evidence ledger (trading.order_fill_evidence, migration
-   * 1795564800000).
+   * accounting evidence ledger (trading.order_fill_evidence, migrations
+   * 1795564800000 + hardening 1795628400000).
    *
-   * - ONE transaction, all-or-nothing: the append-only ledger row and the
+   * - ONE transaction, all-or-nothing: the append-only ledger row(s) and the
    *   order-row update commit together or not at all (a refused fill leaves
    *   no accounting event behind).
    * - SELECT ... FOR UPDATE serializes concurrent fill accounting for the
    *   same order; the ledger dedup read happens under that lock.
    * - DEAL-GRADE REPLAY DETECTION: the fill's provider deal id is looked up
-   *   in the ledger — EVERY historical fill identifier is retained forever,
-   *   so a replayed delivery of an EARLIER partial fill (whose identifier
-   *   the order-row pointer has since overwritten) is an idempotent no-op,
-   *   never a second booking. This closes the confirmed partial-fill
-   *   accounting defect (0.10 + 0.10 + replayed 0.10 = 0.30).
+   *   in the ledger — EVERY historical fill identifier is retained forever
+   *   (the per-fill rows, plus the retained legacy pointer via the
+   *   LEGACY_BASELINE row), so a replayed delivery of an EARLIER partial
+   *   fill (whose identifier the order-row pointer has since overwritten)
+   *   is an idempotent no-op, never a second booking. This closes the
+   *   confirmed partial-fill accounting defect (0.10 + 0.10 + replayed
+   *   0.10 = 0.30).
+   * - CONTRADICTORY-EVIDENCE DEFENCE (review finding 3): a redelivery of an
+   *   already-booked native deal whose quantity/price (or associated native
+   *   order/position ids, when both sides carry them) DIFFER from the booked
+   *   evidence row is NOT an identical replay — it is refused with a typed
+   *   Conflict stating both facts. Inconsistent financial information is
+   *   never silently accepted; the booked evidence row stands immutable.
+   * - LEGACY BASELINE CAPTURE (review finding 1): when a MIXED-ERA order
+   *   (quantity booked before the ledger existed) books its FIRST
+   *   ledger-era fill, the pre-ledger cumulative accounting state is
+   *   transcribed into one LEGACY_BASELINE row in the same transaction — a
+   *   baseline summary (retained legacy pointer, cumulative quantity,
+   *   cumulative average price), NOT a reconstructed per-fill deal. The
+   *   retained identifier stays in the dedup surface FOREVER, so replays of
+   *   the pre-ledger latest deal remain detected even after the order-row
+   *   pointer moves to newer fills. The per-fill identifiers destroyed by
+   *   the old overwrite defect are NOT recoverable and are NOT invented.
    * - LEGACY-COMPAT pointer check: fills booked before the ledger existed
    *   (no ledger row — history was never fabricated) remain
-   *   replay-protected by comparing against the order-row provider_deal_id.
+   *   replay-protected by comparing against the order-row provider_deal_id
+   *   until the baseline row takes over that duty.
    * - One native broker deal may be credited to at most ONE internal order:
    *   a ledger row attributed to a different order fails closed
    *   (ConflictException); the concurrent cross-order case is refused by the
    *   partial unique index uq_order_fill_evidence_deal (23505 → typed
    *   Conflict, transaction rolled back).
-   * - INCOMPLETE EVIDENCE: fills with no native deal id are recorded with
-   *   provider_deal_id NULL and their derived evidence_class — identifiers
-   *   are never fabricated; such rows carry no replay protection (the
-   *   honest limit of unidentified evidence).
+   * - INCOMPLETE EVIDENCE (review finding 4): fills with no native deal id
+   *   are recorded with provider_deal_id NULL and their derived
+   *   evidence_class — identifiers are never fabricated; such rows carry no
+   *   replay protection (the honest limit of unidentified evidence: each
+   *   delivery books as a new accounting event).
    * - Atomically increments filled_quantity; recomputes avg_fill_price as
    *   the volume-weighted average; moves status to PARTIALLY_FILLED or
    *   FILLED (terminal) exactly when the requested quantity is reached, and
@@ -385,41 +425,90 @@ export class OrderService {
         throw new ConflictException(`Order ${orderId} is not fillable (status: ${locked.status})`);
       }
 
-      // 2. Ledger dedup — deal-grade replay detection. The immutable ledger
-      //    retains EVERY historical fill identifier, so this catches replays
-      //    of earlier partial fills whose identifier the order-row pointer
-      //    has since overwritten. A deal already booked on THIS order is an
-      //    idempotent no-op (duplicate provider event / repeated or
-      //    concurrent reconciliation); a deal attributed to a DIFFERENT
-      //    order of the same broker connection fails closed.
+      // 2. Ledger dedup — deal-grade replay detection WITH
+      //    contradictory-evidence defence (review finding 3). The immutable
+      //    ledger retains EVERY historical fill identifier (per-fill rows +
+      //    the retained legacy pointer via LEGACY_BASELINE), so this catches
+      //    replays of earlier partial fills whose identifier the order-row
+      //    pointer has since overwritten. A deal already booked on THIS
+      //    order is an idempotent no-op — for PROVIDER_DEAL evidence the
+      //    delivered economics must MATCH the booked evidence row exactly,
+      //    otherwise the redelivery is contradictory evidence and fails
+      //    closed; a deal attributed to a DIFFERENT order of the same broker
+      //    connection fails closed.
       if (fill.providerDealId != null && fill.providerDealId !== '') {
-        const evidenceOwner: Record<string, unknown>[] = await manager.query(
-          `SELECT order_id FROM trading.order_fill_evidence
+        const booked: Record<string, unknown>[] = await manager.query(
+          `SELECT order_id, quantity, price, provider_order_id, provider_position_id, evidence_class
+           FROM trading.order_fill_evidence
            WHERE broker_connection_id = $1 AND provider_deal_id = $2
            LIMIT 1`,
           [locked.brokerConnectionId, fill.providerDealId],
         );
-        if (evidenceOwner.length > 0) {
-          const ownerOrderId = evidenceOwner[0]!.order_id as string;
-          if (ownerOrderId === orderId) {
-            this.logger.log(
-              `Fill for order ${orderId} already booked from provider deal ` +
-                `${fill.providerDealId} (ledger replay) — duplicate deal fill ignored`,
+        if (booked.length > 0) {
+          const bookedRow = booked[0]!;
+          const ownerOrderId = bookedRow.order_id as string;
+          if (ownerOrderId !== orderId) {
+            throw new ConflictException(
+              `Provider deal ${fill.providerDealId} is already attributed to order ` +
+                `${ownerOrderId} — a single broker deal cannot be credited to multiple ` +
+                'internal orders',
             );
-            return locked;
           }
-          throw new ConflictException(
-            `Provider deal ${fill.providerDealId} is already attributed to order ` +
-              `${ownerOrderId} — a single broker deal cannot be credited to multiple ` +
-              'internal orders',
+          if (String(bookedRow.evidence_class) === 'PROVIDER_DEAL') {
+            // Genuine duplicate ⟺ identical economics. The same native deal
+            // redelivered with a DIFFERENT quantity/price — or with different
+            // associated native identifiers when both deliveries carry them —
+            // is NOT an identical replay: it is contradictory accounting
+            // evidence. Refused stating both facts; the booked row is
+            // immutable and stands.
+            const bookedQuantity = String(bookedRow.quantity ?? '');
+            const bookedPrice = String(bookedRow.price ?? '');
+            const bookedOrderId = (bookedRow.provider_order_id as string | null) ?? null;
+            const bookedPositionId = (bookedRow.provider_position_id as string | null) ?? null;
+            const quantityMatches = compareDecimal(fill.quantity, bookedQuantity) === 0;
+            const priceMatches = compareDecimal(fill.price, bookedPrice) === 0;
+            const orderIdsAgree =
+              bookedOrderId == null ||
+              fill.providerOrderId == null ||
+              bookedOrderId === fill.providerOrderId;
+            const positionIdsAgree =
+              bookedPositionId == null ||
+              fill.providerPositionId == null ||
+              bookedPositionId === fill.providerPositionId;
+            if (!quantityMatches || !priceMatches || !orderIdsAgree || !positionIdsAgree) {
+              throw new ConflictException(
+                `Contradictory accounting evidence for provider deal ${fill.providerDealId}: ` +
+                  `booked quantity ${bookedQuantity} at price ${bookedPrice}` +
+                  `${bookedOrderId ? ` (provider order ${bookedOrderId})` : ''}` +
+                  `${bookedPositionId ? ` (provider position ${bookedPositionId})` : ''} ` +
+                  `vs delivered quantity ${fill.quantity} at price ${fill.price}` +
+                  `${fill.providerOrderId ? ` (provider order ${fill.providerOrderId})` : ''}` +
+                  `${fill.providerPositionId ? ` (provider position ${fill.providerPositionId})` : ''} — ` +
+                  'the same native deal cannot carry two different economic facts; the ' +
+                  'inconsistent delivery is refused (the booked evidence row stands immutable)',
+              );
+            }
+          }
+          // LEGACY_BASELINE (or any weaker class): identity-level replay
+          // only — the per-deal economics of pre-ledger history are NOT
+          // recorded (only the cumulative baseline is), so quantities cannot
+          // be re-verified against it. The identifier is deduped; the
+          // economics are not — the documented insufficiency of pre-ledger
+          // evidence (review findings 1 and 4).
+          this.logger.log(
+            `Fill for order ${orderId} already booked from provider deal ` +
+              `${fill.providerDealId} (${String(bookedRow.evidence_class)} ledger replay) — ` +
+              'duplicate deal fill ignored',
           );
+          return locked;
         }
       }
 
-      // 2b. Legacy row-pointer dedup — protects fills booked BEFORE the
-      //     ledger existed (the pre-migration population: the only durable
-      //     record of a booked deal is the order row's latest-deal pointer;
-      //     the ledger was never backfilled — no fabricated rows).
+      // 2b. Legacy row-pointer dedup — the pre-ledger population that has
+      //     not yet booked a ledger-era fill (and so has no baseline row).
+      //     Once the first ledger-era fill books, the LEGACY_BASELINE row
+      //     retains this pointer inside the ledger and step 2 owns the
+      //     check — the pointer move no longer orphans the identifier.
       if (
         fill.providerDealId != null &&
         fill.providerDealId !== '' &&
@@ -432,18 +521,80 @@ export class OrderService {
         return locked;
       }
 
+      // 2c. LEGACY BASELINE CAPTURE (review finding 1) — one-time, in this
+      //     transaction: when a MIXED-ERA order (quantity booked BEFORE the
+      //     ledger existed) books its first ledger-era fill, transcribe the
+      //     pre-ledger cumulative accounting state into ONE LEGACY_BASELINE
+      //     row. A baseline summary — NOT a reconstructed per-fill deal: the
+      //     retained legacy pointer (when any) is preserved AS the pointer,
+      //     keeping its identifier in the dedup surface FOREVER (step 2
+      //     catches later replays even after the order-row pointer moves to
+      //     newer fills), and the accounting invariant
+      //     SUM(ledger.quantity) == orders.filled_quantity holds from the
+      //     first ledger-era fill onward (review finding 5).
+      if (compareDecimal(locked.filledQuantity ?? '0', '0') > 0) {
+        const existing: Array<{ present: boolean }> = await manager.query(
+          `SELECT EXISTS (
+             SELECT 1 FROM trading.order_fill_evidence WHERE order_id = $1
+           ) AS present`,
+          [orderId],
+        );
+        if (!existing[0]?.present) {
+          if (locked.avgFillPrice == null) {
+            // Pathological legacy row: quantity booked but no average price
+            // (the invariant "avg_fill_price present iff filled_quantity > 0"
+            // is already broken on the order row). No baseline is written —
+            // a price would have to be invented — and the insufficiency is
+            // surfaced, never silently repaired. For such rows the ledger
+            // sum will NOT equal filled_quantity; diagnostics must flag them.
+            this.logger.error(
+              `Order ${orderId} carries filled_quantity ${locked.filledQuantity} ` +
+                'without avg_fill_price — its pre-ledger baseline cannot be transcribed ' +
+                'honestly; the ledger-sum invariant does not hold for this row (diagnose ' +
+                'the order row before relying on the invariant)',
+            );
+          } else {
+            await manager.query(
+              `INSERT INTO trading.order_fill_evidence
+                 (id, order_id, broker_connection_id, provider_deal_id,
+                  provider_order_id, provider_position_id, quantity, price,
+                  evidence_class, recorded_at)
+               VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, 'LEGACY_BASELINE', clock_timestamp())`,
+              [
+                orderId,
+                locked.brokerConnectionId,
+                locked.providerDealId ?? null,
+                locked.providerOrderId ?? null,
+                locked.providerPositionId ?? null,
+                locked.filledQuantity,
+                locked.avgFillPrice,
+              ],
+            );
+            this.logger.log(
+              `Legacy baseline transcribed for order ${orderId}: pre-ledger cumulative ` +
+                `${locked.filledQuantity} @ ${locked.avgFillPrice}` +
+                `${locked.providerDealId ? ` (retained pointer ${locked.providerDealId})` : ' (no retained pointer)'}` +
+                ' — a baseline summary, never reconstructed per-fill evidence',
+            );
+          }
+        }
+      }
+
       // 3. Append the immutable per-fill accounting evidence row — in the
       //    SAME transaction as the quantity update (all-or-nothing). Fills
       //    whose provider evidence carried no native deal id are recorded
       //    with a NULL provider_deal_id and their derived evidence_class;
-      //    missing identifiers are never fabricated.
+      //    missing identifiers are never fabricated. recorded_at uses
+      //    clock_timestamp() (statement time, monotonically increasing
+      //    within the transaction) so the baseline row always precedes the
+      //    fill row of the same transaction in the ordered ledger view.
       try {
         await manager.query(
           `INSERT INTO trading.order_fill_evidence
              (id, order_id, broker_connection_id, provider_deal_id,
               provider_order_id, provider_position_id, quantity, price,
               evidence_class, recorded_at)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, clock_timestamp())`,
           [
             orderId,
             locked.brokerConnectionId,
@@ -589,19 +740,45 @@ export class OrderService {
   }
 
   /**
-   * The id of the order row that already recorded the given native provider
-   * deal for a broker connection, when any. One native deal belongs to at
-   * most one internal order — callers use this to refuse crediting the same
-   * deal to a second row (duplicate-deal attribution guard).
+   * Ownership lookup for a native provider deal id on a broker connection
+   * (review finding 2): consults the COMPLETE historical accounting evidence
+   * — first the immutable ledger (every retained identifier, including the
+   * legacy pointers preserved by LEGACY_BASELINE rows), then the order-row
+   * latest-deal pointers (the pre-ledger population).
+   *
+   * Reports ambiguity explicitly instead of silently picking one owner: if
+   * the ledger and a legacy order-row pointer attribute the deal to
+   * DIFFERENT internal orders (or multiple rows disagree), the lookup is
+   * flagged ambiguous with every candidate exposed for accounting review.
+   * `orderId` is non-null ONLY when the evidence is unambiguous.
    */
-  async findDealOwner(brokerConnectionId: string, providerDealId: string): Promise<string | null> {
-    const rows: Record<string, unknown>[] = await this.dataSource.query(
-      `SELECT id FROM trading.orders
-       WHERE broker_connection_id = $1 AND provider_deal_id = $2
-       LIMIT 1`,
+  async findDealOwner(
+    brokerConnectionId: string,
+    providerDealId: string,
+  ): Promise<DealOwnershipLookup> {
+    const ledgerRows: Record<string, unknown>[] = await this.dataSource.query(
+      `SELECT DISTINCT order_id FROM trading.order_fill_evidence
+       WHERE broker_connection_id = $1 AND provider_deal_id = $2`,
       [brokerConnectionId, providerDealId],
     );
-    return rows.length > 0 ? (rows[0]!.id as string) : null;
+    const pointerRows: Record<string, unknown>[] = await this.dataSource.query(
+      `SELECT id FROM trading.orders
+       WHERE broker_connection_id = $1 AND provider_deal_id = $2`,
+      [brokerConnectionId, providerDealId],
+    );
+    const ledgerOwners = [...new Set(ledgerRows.map((r) => r.order_id as string))];
+    const pointerOwners = [...new Set(pointerRows.map((r) => r.id as string))];
+    const sources: DealOwnershipSource[] = [];
+    if (ledgerOwners.length > 0) sources.push('LEDGER_EVIDENCE');
+    if (pointerOwners.length > 0) sources.push('ORDER_ROW_POINTER');
+    const candidateOrderIds = [...new Set([...ledgerOwners, ...pointerOwners])];
+    const ambiguous = candidateOrderIds.length > 1;
+    return {
+      orderId: ambiguous ? null : (candidateOrderIds[0] ?? null),
+      ambiguous,
+      sources,
+      candidateOrderIds,
+    };
   }
 
   async listOrdersByUser(userId: string, limit = 50): Promise<Order[]> {
@@ -615,10 +792,21 @@ export class OrderService {
   /**
    * Read-only view of the immutable per-fill accounting evidence ledger for
    * an order, oldest first. Diagnostics and audit use this to re-derive the
-   * accounting invariant: orders.filled_quantity must equal
-   * SUM(order_fill_evidence.quantity) over the order's rows. The ledger is
+   * accounting invariant — WHICH HOLDS FOR LEDGER-MANAGED ORDERS ONLY
+   * (review finding 5):
+   *
+   *   orders.filled_quantity = (pre-ledger cumulative quantity, transcribed
+   *   as the single LEGACY_BASELINE row at the first ledger-era fill, when
+   *   applicable) + SUM(quantity of the PROVIDER_DEAL/POSITION_FACTS/
+   *   PROVIDER_RESPONSE/PROVIDER_ORDER_STATE rows).
+   *
+   * Orders whose quantity was booked BEFORE the ledger existed and never
+   * booked a ledger-era fill have NO ledger rows at all — the ledger alone
+   * does NOT establish their historical total (migration deliberately does
+   * not backfill); their quantity lives only on the order row. The ledger is
    * append-only — no service path may edit or delete these rows (the
-   * database trigger enforces it).
+   * database trigger enforces UPDATE/DELETE; TRUNCATE is refused by the
+   * statement trigger of migration 1795628400000).
    */
   async findFillEvidenceByOrderId(orderId: string): Promise<
     Array<{

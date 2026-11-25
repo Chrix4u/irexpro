@@ -515,7 +515,7 @@ describe('OrderService', () => {
         if (sql.includes('FOR UPDATE')) {
           return [rawRow({ status: OrderStatus.ACKNOWLEDGED })];
         }
-        if (sql.includes('SELECT order_id FROM trading.order_fill_evidence')) {
+        if (sql.includes('SELECT order_id') && sql.includes('provider_deal_id = $2')) {
           return []; // no ledger row owns deal-951 yet
         }
         if (sql.startsWith('INSERT INTO trading.order_fill_evidence')) {
@@ -542,7 +542,7 @@ describe('OrderService', () => {
       });
       // The ledger dedup read runs after the row lock; the order-row UPDATE
       // is the final statement of the transaction.
-      const ledgerRead = callsMatching(query, 'SELECT order_id FROM trading.order_fill_evidence');
+      const ledgerRead = callsMatching(query, 'provider_deal_id = $2');
       expect(ledgerRead).toHaveLength(1);
       expect(ledgerRead[0]![0]).toContain('provider_deal_id = $2');
 
@@ -690,16 +690,27 @@ describe('OrderService', () => {
             }),
           ];
         }
-        if (sql.includes('SELECT order_id FROM trading.order_fill_evidence')) {
-          return [{ order_id: 'order-1' }]; // the ledger remembers the booked deal
+        if (sql.includes('SELECT order_id') && sql.includes('provider_deal_id = $2')) {
+          // the ledger remembers the booked deal — with its full economics
+          // (contradiction detection compares against this row)
+          return [
+            {
+              order_id: 'order-1',
+              quantity: '0.2500',
+              price: '1.10000000',
+              provider_order_id: null,
+              provider_position_id: null,
+              evidence_class: 'PROVIDER_DEAL',
+            },
+          ];
         }
         return [rawRow({})];
       });
       (dataSource as unknown as { query: jest.Mock }).query = query;
 
       // The SAME broker deal event delivered a second time (duplicate
-      // provider event / repeated or concurrent reconciliation) must never
-      // book twice.
+      // provider event / repeated or concurrent reconciliation) — identical
+      // economics — must never book twice.
       const unchanged = await service.applyFill('order-1', {
         quantity: '0.2500',
         price: '1.10000000',
@@ -733,7 +744,7 @@ describe('OrderService', () => {
             }),
           ];
         }
-        if (sql.includes('SELECT order_id FROM trading.order_fill_evidence')) {
+        if (sql.includes('SELECT order_id') && sql.includes('provider_deal_id = $2')) {
           return []; // booked BEFORE the ledger existed — no row (never fabricated)
         }
         return [rawRow({})];
@@ -757,7 +768,7 @@ describe('OrderService', () => {
         if (sql.includes('FOR UPDATE')) {
           return [rawRow({ status: OrderStatus.ACKNOWLEDGED })];
         }
-        if (sql.includes('SELECT order_id FROM trading.order_fill_evidence')) {
+        if (sql.includes('SELECT order_id') && sql.includes('provider_deal_id = $2')) {
           return [{ order_id: 'order-other' }]; // ledger row on ANOTHER order
         }
         return [];
@@ -784,7 +795,7 @@ describe('OrderService', () => {
         if (sql.includes('FOR UPDATE')) {
           return [rawRow({ status: OrderStatus.ACKNOWLEDGED })];
         }
-        if (sql.includes('SELECT order_id FROM trading.order_fill_evidence')) {
+        if (sql.includes('SELECT order_id') && sql.includes('provider_deal_id = $2')) {
           return []; // ledger read: no committed owner YET
         }
         if (sql.startsWith('INSERT INTO trading.order_fill_evidence')) {
@@ -808,26 +819,77 @@ describe('OrderService', () => {
       await expect(promise).rejects.toThrow(/concurrently attributed/);
     });
 
-    it('findDealOwner resolves the owning order row for a native deal id', async () => {
-      const query = jest.fn().mockResolvedValue([{ id: 'order-owner' }]);
+    it('findDealOwner resolves ownership from LEDGER evidence (complete historical evidence, finding 2)', async () => {
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FROM trading.order_fill_evidence')) {
+          return [{ order_id: 'order-owner' }]; // the immutable ledger owns it
+        }
+        if (sql.includes('FROM trading.orders')) {
+          return []; // no order-row pointer carries the deal
+        }
+        return [];
+      });
       (dataSource as unknown as { query: jest.Mock }).query = query;
 
-      await expect(service.findDealOwner(baseInput.brokerConnectionId, 'deal-9')).resolves.toBe(
-        'order-owner',
+      const lookup = await service.findDealOwner(baseInput.brokerConnectionId, 'deal-9');
+      expect(lookup.orderId).toBe('order-owner');
+      expect(lookup.ambiguous).toBe(false);
+      expect(lookup.sources).toEqual(['LEDGER_EVIDENCE']);
+      expect(lookup.candidateOrderIds).toEqual(['order-owner']);
+      expect(query).toHaveBeenCalledWith(
+        expect.stringContaining('FROM trading.order_fill_evidence'),
+        [baseInput.brokerConnectionId, 'deal-9'],
       );
-      expect(query).toHaveBeenCalledWith(expect.stringContaining('provider_deal_id = $2'), [
-        baseInput.brokerConnectionId,
-        'deal-9',
-      ]);
     });
 
-    it('findDealOwner returns null when no row owns the deal', async () => {
-      const query = jest.fn().mockResolvedValue([]);
+    it('findDealOwner resolves the LEGACY population from the order-row pointer', async () => {
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FROM trading.order_fill_evidence')) {
+          return []; // pre-ledger history — no ledger row
+        }
+        if (sql.includes('FROM trading.orders')) {
+          return [{ id: 'order-legacy' }]; // ...but the latest-deal pointer does
+        }
+        return [];
+      });
       (dataSource as unknown as { query: jest.Mock }).query = query;
 
-      await expect(
-        service.findDealOwner(baseInput.brokerConnectionId, 'deal-9'),
-      ).resolves.toBeNull();
+      const lookup = await service.findDealOwner(baseInput.brokerConnectionId, 'deal-9');
+      expect(lookup.orderId).toBe('order-legacy');
+      expect(lookup.ambiguous).toBe(false);
+      expect(lookup.sources).toEqual(['ORDER_ROW_POINTER']);
+    });
+
+    it('findDealOwner reports AMBIGUITY when ledger evidence and a legacy pointer disagree (finding 2)', async () => {
+      // The accounting-ownership assessment must reflect ALL available
+      // historical evidence and report disagreement — never silently pick.
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FROM trading.order_fill_evidence')) {
+          return [{ order_id: 'order-A' }];
+        }
+        if (sql.includes('FROM trading.orders')) {
+          return [{ id: 'order-B' }];
+        }
+        return [];
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      const lookup = await service.findDealOwner(baseInput.brokerConnectionId, 'deal-9');
+      expect(lookup.ambiguous).toBe(true);
+      expect(lookup.orderId).toBeNull();
+      expect(lookup.sources).toEqual(['LEDGER_EVIDENCE', 'ORDER_ROW_POINTER']);
+      expect(lookup.candidateOrderIds).toEqual(['order-A', 'order-B']);
+    });
+
+    it('findDealOwner returns an explicit empty lookup when no evidence knows the deal', async () => {
+      const query = jest.fn(async () => []);
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      const lookup = await service.findDealOwner(baseInput.brokerConnectionId, 'deal-9');
+      expect(lookup.orderId).toBeNull();
+      expect(lookup.ambiguous).toBe(false);
+      expect(lookup.sources).toEqual([]);
+      expect(lookup.candidateOrderIds).toEqual([]);
     });
   });
 
@@ -838,19 +900,34 @@ describe('OrderService', () => {
      * Stateful in-memory model of the two tables applyFill touches —
      * trading.order_fill_evidence (append-only rows keyed by deal id) and
      * the trading.orders row (latest-deal pointer + filled_quantity). The
-     * model mirrors the real statements' semantics so the confirmed
-     * partial-fill replay defect is reproduced honestly at the mock level.
+     * model mirrors the real statements' semantics (including the
+     * LEGACY_BASELINE capture of finding 1) so the confirmed partial-fill
+     * replay defect — and the mixed-era variants of it — are reproduced
+     * honestly at the mock level.
      */
     function statefulLedgerModel(options?: {
       requestedQuantity?: string;
-      ledgerSeed?: Array<{ dealId: string; orderId: string }>;
+      ledgerSeed?: Array<{
+        dealId: string;
+        orderId: string;
+        quantity?: string;
+        price?: string;
+        evidenceClass?: string;
+        providerOrderId?: string | null;
+        providerPositionId?: string | null;
+      }>;
+      preLedger?: {
+        filledQuantity: string;
+        avgFillPrice: string | null;
+        providerDealId?: string | null;
+      };
     }) {
       let orderRow = rawRow({
         status: OrderStatus.ACKNOWLEDGED,
         requested_quantity: options?.requestedQuantity ?? '0.5000',
-        filled_quantity: '0',
-        provider_deal_id: null,
-        avg_fill_price: null,
+        filled_quantity: options?.preLedger?.filledQuantity ?? '0',
+        avg_fill_price: options?.preLedger?.avgFillPrice ?? null,
+        provider_deal_id: options?.preLedger?.providerDealId ?? null,
       });
       const ledger: Array<{
         dealId: string | null;
@@ -858,18 +935,23 @@ describe('OrderService', () => {
         quantity: string;
         price: string;
         evidenceClass: string;
+        providerOrderId: string | null;
+        providerPositionId: string | null;
       }> = (options?.ledgerSeed ?? []).map((seed) => ({
         dealId: seed.dealId,
         orderId: seed.orderId,
-        quantity: '0.0000',
-        price: '0.00000000',
-        evidenceClass: 'PROVIDER_DEAL',
+        quantity: seed.quantity ?? '0.1000',
+        price: seed.price ?? '1.10000000',
+        evidenceClass: seed.evidenceClass ?? 'PROVIDER_DEAL',
+        providerOrderId: seed.providerOrderId ?? null,
+        providerPositionId: seed.providerPositionId ?? null,
       }));
 
       orderRepo.findOne.mockResolvedValue(
         entity({
           status: OrderStatus.ACKNOWLEDGED,
           requestedQuantity: orderRow.requested_quantity as string,
+          filledQuantity: orderRow.filled_quantity as string,
         }),
       );
 
@@ -877,19 +959,60 @@ describe('OrderService', () => {
         if (sql.includes('FOR UPDATE')) {
           return [orderRow];
         }
-        if (sql.includes('SELECT order_id FROM trading.order_fill_evidence')) {
+        if (sql.includes('SELECT EXISTS')) {
+          // order-scoped existence probe (the baseline-capture guard)
+          return [{ present: ledger.some((r) => r.orderId === (params![0] as string)) }];
+        }
+        if (sql.includes('SELECT order_id') && sql.includes('provider_deal_id = $2')) {
+          // deal-grade dedup read — full economics row (finding 3 compares)
           const dealId = params![1] as string;
           const hit = ledger.find((r) => r.dealId === dealId);
-          return hit ? [{ order_id: hit.orderId }] : [];
+          return hit
+            ? [
+                {
+                  order_id: hit.orderId,
+                  quantity: hit.quantity,
+                  price: hit.price,
+                  provider_order_id: hit.providerOrderId,
+                  provider_position_id: hit.providerPositionId,
+                  evidence_class: hit.evidenceClass,
+                },
+              ]
+            : [];
         }
         if (sql.startsWith('INSERT INTO trading.order_fill_evidence')) {
-          const [orderId, , dealId, , , quantity, price, evidenceClass] = params as unknown[];
+          if (sql.includes("'LEGACY_BASELINE'")) {
+            const [orderId, , dealId, providerOrderId, providerPositionId, quantity, price] =
+              params as unknown[];
+            ledger.push({
+              dealId: (dealId as string | null) ?? null,
+              orderId: orderId as string,
+              quantity: quantity as string,
+              price: price as string,
+              evidenceClass: 'LEGACY_BASELINE',
+              providerOrderId: (providerOrderId as string | null) ?? null,
+              providerPositionId: (providerPositionId as string | null) ?? null,
+            });
+            return [];
+          }
+          const [
+            orderId,
+            ,
+            dealId,
+            providerOrderId,
+            providerPositionId,
+            quantity,
+            price,
+            evidenceClass,
+          ] = params as unknown[];
           ledger.push({
             dealId: (dealId as string | null) ?? null,
             orderId: orderId as string,
             quantity: quantity as string,
             price: price as string,
             evidenceClass: evidenceClass as string,
+            providerOrderId: (providerOrderId as string | null) ?? null,
+            providerPositionId: (providerPositionId as string | null) ?? null,
           });
           return [];
         }
@@ -966,6 +1089,204 @@ describe('OrderService', () => {
       });
       expect(replayed.filledQuantity).toBe('0.2000');
       expect(callsMatching(model.query, 'UPDATE trading.orders')).toHaveLength(2);
+    });
+
+    it('mixed-era (finding 1): the pre-ledger state is transcribed ONCE and the retained pointer stays replay-protected after newer fills overwrite it', async () => {
+      const model = statefulLedgerModel({
+        requestedQuantity: '0.5000',
+        preLedger: {
+          filledQuantity: '0.2500',
+          avgFillPrice: '1.10000000',
+          providerDealId: 'deal-legacy',
+        },
+      });
+
+      // A NEW ledger-era fill books → the pre-ledger cumulative accounting
+      // state is transcribed into ONE LEGACY_BASELINE row first (same
+      // transaction). The baseline is a SUMMARY of what the order row
+      // already asserted — never a reconstructed per-fill deal.
+      const after = await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.20000000',
+        providerDealId: 'deal-N',
+      });
+      expect(after.filledQuantity).toBe('0.3500');
+      expect(after.providerDealId).toBe('deal-N'); // the pointer MOVED — the hole finding 1 identified
+
+      expect(model.ledger.map((r) => [r.evidenceClass, r.dealId, r.quantity, r.price])).toEqual([
+        ['LEGACY_BASELINE', 'deal-legacy', '0.2500', '1.10000000'],
+        ['PROVIDER_DEAL', 'deal-N', '0.1000', '1.20000000'],
+      ]);
+
+      // REPLAY of the pre-ledger latest deal AFTER the pointer moved to a
+      // newer fill: the retained identifier lives on in the ledger (the
+      // baseline row) → identity-level no-op. This is the exact sequence the
+      // review found unprotected (replay after a subsequent fill).
+      const replayed = await service.applyFill('order-1', {
+        quantity: '0.2500',
+        price: '1.10000000',
+        providerDealId: 'deal-legacy',
+      });
+      expect(replayed.filledQuantity).toBe('0.3500');
+      expect(callsMatching(model.query, 'UPDATE trading.orders')).toHaveLength(1);
+
+      // Invariant (finding 5) for a mixed-era order: SUM(ledger.quantity)
+      // == filled_quantity (baseline + ledger-era fills).
+      expect(addQuantity('0.2500', '0.1000')).toBe('0.3500');
+      expect(replayed.filledQuantity).toBe('0.3500');
+    });
+
+    it('mixed-era: the baseline is transcribed AT MOST ONCE — later fills never re-transcribe it', async () => {
+      const model = statefulLedgerModel({
+        requestedQuantity: '0.5000',
+        preLedger: {
+          filledQuantity: '0.2000',
+          avgFillPrice: '1.10000000',
+          providerDealId: 'deal-legacy',
+        },
+      });
+      await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.20000000',
+        providerDealId: 'deal-N1',
+      });
+      await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.30000000',
+        providerDealId: 'deal-N2',
+      });
+      const baselineRows = model.ledger.filter((r) => r.evidenceClass === 'LEGACY_BASELINE');
+      expect(baselineRows).toHaveLength(1);
+      expect(model.ledger.map((r) => r.dealId)).toEqual(['deal-legacy', 'deal-N1', 'deal-N2']);
+      expect(model.orderRowRef().filled_quantity).toBe('0.4000');
+    });
+
+    it('untouched legacy order (finding 5): an immediate pointer replay books nothing and the ledger claims NO history', async () => {
+      const model = statefulLedgerModel({
+        preLedger: {
+          filledQuantity: '0.2500',
+          avgFillPrice: '1.10000000',
+          providerDealId: 'deal-legacy',
+        },
+      });
+      const replayed = await service.applyFill('order-1', {
+        quantity: '0.2500',
+        price: '1.10000000',
+        providerDealId: 'deal-legacy',
+      });
+      expect(replayed.filledQuantity).toBe('0.2500');
+      expect(model.ledger).toHaveLength(0); // the ledger does not fabricate pre-ledger history
+      expect(callsMatching(model.query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(0);
+    });
+
+    it('mixed-era pathological row (finding 1): quantity without avg price → the baseline is NOT invented, the insufficiency is surfaced', async () => {
+      const model = statefulLedgerModel({
+        requestedQuantity: '0.5000',
+        preLedger: { filledQuantity: '0.2500', avgFillPrice: null, providerDealId: 'deal-legacy' },
+      });
+      const after = await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.20000000',
+        providerDealId: 'deal-N',
+      });
+      // The fill still books; no baseline row is written (a price would
+      // have had to be invented) — the documented insufficient-evidence
+      // case: the ledger sum will NOT equal filled_quantity for this row.
+      expect(after.filledQuantity).toBe('0.3500');
+      expect(model.ledger.map((r) => r.evidenceClass)).toEqual(['PROVIDER_DEAL']);
+    });
+
+    it('contradictory redelivery (finding 3): same deal id, DIFFERENT quantity — refused, both facts stated', async () => {
+      const model = statefulLedgerModel();
+      await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.10000000',
+        providerDealId: 'deal-X',
+      });
+      await expect(
+        service.applyFill('order-1', {
+          quantity: '0.2000',
+          price: '1.10000000',
+          providerDealId: 'deal-X',
+        }),
+      ).rejects.toThrow(/Contradictory accounting evidence for provider deal deal-X/);
+      // Nothing changed: one evidence row, quantity still 0.1000.
+      expect(model.ledger).toHaveLength(1);
+      expect(model.orderRowRef().filled_quantity).toBe('0.1000');
+      expect(callsMatching(model.query, 'UPDATE trading.orders')).toHaveLength(1);
+    });
+
+    it('contradictory redelivery (finding 3): same deal id, DIFFERENT price — refused', async () => {
+      const model = statefulLedgerModel();
+      await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.10000000',
+        providerDealId: 'deal-X',
+      });
+      await expect(
+        service.applyFill('order-1', {
+          quantity: '0.1000',
+          price: '1.20000000',
+          providerDealId: 'deal-X',
+        }),
+      ).rejects.toThrow(/Contradictory accounting evidence/);
+      expect(model.ledger).toHaveLength(1);
+    });
+
+    it('contradictory redelivery (finding 3): same deal id, conflicting associated native order id — refused; weaker redelivery without ids stays idempotent', async () => {
+      const model = statefulLedgerModel({
+        preLedger: { filledQuantity: '0.1000', avgFillPrice: '1.10000000' },
+        ledgerSeed: [
+          {
+            dealId: 'deal-X',
+            orderId: 'order-1',
+            quantity: '0.1000',
+            price: '1.10000000',
+            providerOrderId: 'po-1',
+          },
+        ],
+      });
+      // Both sides carry a provider order id and they disagree.
+      await expect(
+        service.applyFill('order-1', {
+          quantity: '0.1000',
+          price: '1.10000000',
+          providerDealId: 'deal-X',
+          providerOrderId: 'po-2',
+        }),
+      ).rejects.toThrow(
+        /Contradictory accounting evidence.*provider order po-1.*provider order po-2/,
+      );
+
+      // A redelivery of the same deal carrying NO order id is weaker
+      // evidence of the SAME fact (not a contradiction) → idempotent no-op.
+      const unchanged = await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.10000000',
+        providerDealId: 'deal-X',
+      });
+      expect(unchanged.filledQuantity).toBe('0.1000');
+      expect(model.ledger).toHaveLength(1);
+    });
+
+    it('repeated identical NULL-deal deliveries each book (finding 4 honest limit — no identifier exists to dedup on)', async () => {
+      const model = statefulLedgerModel({ requestedQuantity: '0.5000' });
+      const first = await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.10000000',
+        providerPositionId: 'pos-77',
+      });
+      const second = await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.10000000',
+        providerPositionId: 'pos-77',
+      });
+      expect(first.filledQuantity).toBe('0.1000');
+      expect(second.filledQuantity).toBe('0.2000'); // both booked — ambiguous evidence cannot be deduplicated
+      expect(
+        model.ledger.every((r) => r.dealId === null && r.evidenceClass === 'POSITION_FACTS'),
+      ).toBe(true);
+      expect(model.ledger).toHaveLength(2);
     });
 
     it('records fills without a native deal id honestly (NULL identifier, real evidence class, no replay defence)', async () => {
