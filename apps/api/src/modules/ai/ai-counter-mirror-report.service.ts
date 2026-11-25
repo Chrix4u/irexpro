@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { readFile, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
 
 const REPORT_PATH =
   '/home/lightworld/webapps/irexpro-research/counter-direction/latest-report.json';
@@ -184,6 +185,35 @@ export function projectCounterMirrorReport(
   };
 }
 
+/** Validate and read the same open descriptor; never follow a final symlink.
+ * The bounded read also rejects a file that grows after the descriptor stat.
+ */
+export async function readBoundedCounterReport(filename: string): Promise<string> {
+  const file = await open(
+    filename,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const info = await file.stat();
+    if (!info.isFile() || info.size <= 0 || info.size > MAX_REPORT_BYTES) {
+      throw new Error('COUNTER_REPORT_UNAVAILABLE_OR_TOO_LARGE');
+    }
+    const buffer = Buffer.alloc(MAX_REPORT_BYTES + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, null);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    if (offset === 0 || offset > MAX_REPORT_BYTES) {
+      throw new Error('COUNTER_REPORT_UNAVAILABLE_OR_TOO_LARGE');
+    }
+    return buffer.toString('utf8', 0, offset);
+  } finally {
+    await file.close();
+  }
+}
+
 @Injectable()
 export class AiCounterMirrorReportService {
   constructor(private readonly config: ConfigService) {}
@@ -194,11 +224,7 @@ export class AiCounterMirrorReportService {
       throw new ForbiddenException('Counter experiment not available for this user');
     }
     try {
-      const info = await stat(REPORT_PATH);
-      if (!info.isFile() || info.size <= 0 || info.size > MAX_REPORT_BYTES) {
-        throw new Error('COUNTER_REPORT_UNAVAILABLE_OR_TOO_LARGE');
-      }
-      const text = await readFile(REPORT_PATH, 'utf8');
+      const text = await readBoundedCounterReport(REPORT_PATH);
       return projectCounterMirrorReport(JSON.parse(text) as unknown);
     } catch {
       throw new ServiceUnavailableException('Counter experiment report is not ready');
