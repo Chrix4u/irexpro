@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-const {readBoundedText}=require('./bounded-research-file.cjs');
+const {readBoundedText,appendBoundedText}=require('./bounded-research-file.cjs');
 test('reads exact limit and empty file; preserves UTF-8',()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bounded-research-'));
  try{
@@ -23,5 +23,20 @@ test('only optional missing files return null; rejects symlinks and directories'
   fs.symlinkSync(p,link);
   assert.throws(()=>readBoundedText(link,20,'LIMIT',true));
   assert.throws(()=>readBoundedText(dir,20,'LIMIT'),/LIMIT/);
+ }finally{fs.rmSync(dir,{recursive:true,force:true})}
+});
+
+test('bounded append preserves existing bytes and rejects symlinks',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bounded-append-'));
+ try{
+  const p=path.join(dir,'journal'),link=path.join(dir,'link');
+  assert.equal(appendBoundedText(p,'ab',3),true);
+  assert.equal(appendBoundedText(p,'cd',3),false);
+  assert.equal(appendBoundedText(p,'c',3),true);
+  assert.equal(fs.readFileSync(p,'utf8'),'abc');
+  assert.equal(fs.statSync(p).mode&0o777,0o600);
+  fs.symlinkSync(p,link);
+  assert.throws(()=>appendBoundedText(link,'x',10));
+  assert.equal(fs.readFileSync(p,'utf8'),'abc');
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
 });

@@ -1,4 +1,5 @@
 'use strict';
+const {readBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Owner Pepperstone USD DEMO only. Forward-enrolls OPEN positions <=90s from
  * broker opening, freezes pre-entry features, and later joins settled outcomes.
@@ -410,9 +411,9 @@ function readJournal(root,at=Date.now()){
  const from=at-20*86400000;
  for(const name of fs.readdirSync(root).filter(x=>/^\d{4}-\d{2}-\d{2}\.jsonl$/.test(x)).sort()){
   if(date(name.slice(0,10)+'T00:00:00Z')<from)continue;
-  const file=path.join(root,name),st=fs.statSync(file);
-  if(!st.isFile()||st.size>8*1024*1024)throw Error('OVERSIZED_SHADOW_JOURNAL');
-  for(const line of fs.readFileSync(file,'utf8').split('\n')){
+  const file=path.join(root,name);
+  const body=readBoundedText(file,8*1024*1024,'OVERSIZED_SHADOW_JOURNAL');
+  for(const line of body.split('\n')){
    if(!line)continue;
    const e=JSON.parse(line);events.push(e);
    if(events.length>20000)throw Error('TOO_MANY_SHADOW_EVENTS');

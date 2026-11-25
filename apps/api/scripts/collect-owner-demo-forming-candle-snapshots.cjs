@@ -1,4 +1,5 @@
 'use strict';
+const {appendBoundedText}=require('./bounded-research-file.cjs');
 
 /**
  * Replays as-of broker-native POSITIVE bid/ask observations, already
@@ -154,9 +155,7 @@ function persist(snapshots,opts={}){
     const day=x.decisionAt.slice(0,10);
     const file=path.join(dir,day+'.jsonl');
     const line=JSON.stringify(x)+'\n';
-    if((fs.existsSync(file)?fs.statSync(file).size:0)+Buffer.byteLength(line)>
-       MAX_DAY_BYTES){capped++;continue;}
-    fs.appendFileSync(file,line,{mode:0o600});
+    if(!appendBoundedText(file,line,MAX_DAY_BYTES)){capped++;continue;}
     seen.add(key);written++;
   }
   return {written,duplicates,capped};

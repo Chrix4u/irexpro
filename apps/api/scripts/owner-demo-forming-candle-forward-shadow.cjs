@@ -1,4 +1,5 @@
 'use strict';
+const {appendBoundedText}=require('./bounded-research-file.cjs');
 /* Read-only exact-owner Pepperstone USD DEMO forward forming-candle shadow.
  * Runs at fixed as-of 15s/45s M1 and +15s/+285s M5 only.
  * No broker API, no order authority, no DB changes, no model promotion.
@@ -67,10 +68,10 @@ function appendPredictions(rows,{dir=ROOT,seen=new Set()}={}){
     if(seen.has(key)){duplicates++;continue;}
     const f=path.join(dir,x.decisionAt.slice(0,10)+'.jsonl');
     const line=JSON.stringify(x)+'\n';
-    if((fs.existsSync(f)?fs.statSync(f).size:0)+Buffer.byteLength(line)>MAX_DAILY_BYTES){
+    if(!appendBoundedText(f,line,MAX_DAILY_BYTES)){
       capExceeded++;continue;
     }
-    fs.appendFileSync(f,line,{mode:0o600});seen.add(key);written++;
+    seen.add(key);written++;
   }
   return {written,duplicates,capExceeded};
 }

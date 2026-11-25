@@ -27,4 +27,19 @@ function readBoundedText(file,maxBytes,invalidCode,allowMissing=false){
     return Buffer.concat(chunks,total).toString('utf8');
   }finally{fs.closeSync(fd);}
 }
-module.exports={readBoundedText};
+// Single-writer journal size check and append on the same descriptor.
+// This does not claim cross-process locking or atomic size quotas.
+function appendBoundedText(file,text,maxBytes){
+  if(!Number.isSafeInteger(maxBytes)||maxBytes<1)throw Error('INVALID_WRITE_LIMIT');
+  const data=Buffer.from(text,'utf8');
+  if(data.length>maxBytes)return false;
+  const fd=fs.openSync(file,fs.constants.O_WRONLY|fs.constants.O_APPEND|fs.constants.O_CREAT|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK,0o600);
+  try{
+    const stat=fs.fstatSync(fd);
+    if(!stat.isFile())throw Error('INVALID_JOURNAL_FILE');
+    if(stat.size+data.length>maxBytes)return false;
+    fs.appendFileSync(fd,data);
+    return true;
+  }finally{fs.closeSync(fd);}
+}
+module.exports={readBoundedText,appendBoundedText};

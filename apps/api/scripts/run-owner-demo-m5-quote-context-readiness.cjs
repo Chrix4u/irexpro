@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const {readBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Research-only, private, exact-owner Pepperstone USD DEMO M5 dataset audit.
  * Reads preserved prospective v2 +15s bid/ask context records then matches
@@ -65,12 +66,14 @@ function readCaptures(now=new Date(),dir=SOURCE){
    if(!/^\d{4}-\d{2}-\d{2}\.jsonl$/.test(file))continue;
    const day=Date.parse(file.slice(0,10)+'T00:00:00.000Z');
    if(day+86400000<earliest||day>now.getTime())continue;
-   const full=path.join(dir,file),info=fs.statSync(full);
-   if(!info.isFile()||info.size>MAX_DAY_BYTES){
+   const full=path.join(dir,file);
+   let body;
+   try{body=readBoundedText(full,MAX_DAY_BYTES,'FILE_NOT_READABLE_OR_OVER_SIZE');}
+   catch{
      exclusions.FILE_NOT_READABLE_OR_OVER_SIZE=(exclusions.FILE_NOT_READABLE_OR_OVER_SIZE||0)+1;
      continue;
    }
-   for(const line of fs.readFileSync(full,'utf8').split('\n')){
+   for(const line of body.split('\n')){
      if(!line)continue;
      try{
        const v=JSON.parse(line);

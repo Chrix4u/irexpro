@@ -1,4 +1,5 @@
 'use strict';
+const {readBoundedText,appendBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Append-only, research-only prospective Pepperstone USD DEMO entry tracker.
  *
@@ -231,13 +232,11 @@ function recover(root,now){
  for(const offset of [1,0]){
   const day=name(now-offset*86400000);
   const file=path.join(root,day+'.jsonl');
-  if(!fs.existsSync(file))continue;
-  const stat=fs.statSync(file);
-  if(!stat.isFile()||stat.size>12*1024*1024)
-   throw Error('INVALID_RESTART_RECOVERY_JOURNAL');
+  const body=readBoundedText(file,12*1024*1024,'INVALID_RESTART_RECOVERY_JOURNAL',true);
+  if(body===null)continue;
   // Restart dedup must scan the WHOLE bounded day: tail-only scanning
   // could silently forget stages earlier in a busy trading session.
-  for(const line of fs.readFileSync(file,'utf8').split('\n')){
+  for(const line of body.split('\n')){
    if(!line.trim())continue;
    let r;try{r=JSON.parse(line)}catch{continue}
    if(r.artifact===ARTIFACT&&SCOPE.test(String(r.tradeKey))&&
@@ -250,9 +249,8 @@ function append(root,e,seen){
  const key=stageKey(e.tradeKey,e.stage);
  if(seen.has(key))return false;
  const file=path.join(root,name(e.capturedAt)+'.jsonl');
- if(fs.existsSync(file)&&fs.statSync(file).size>12*1024*1024)
+ if(!appendBoundedText(file,JSON.stringify(e)+'\n',12*1024*1024))
   throw Error('PROSPECTIVE_DAILY_LOG_SIZE_CAP');
- fs.appendFileSync(file,JSON.stringify(e)+'\n',{encoding:'utf8',mode:0o600,flag:'a'});
  seen.add(key);
  return true;
 }
