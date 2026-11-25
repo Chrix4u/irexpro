@@ -1,13 +1,25 @@
 import type { AiSignalCandidate } from './interfaces/strategy.interface';
 
 /**
+ * Frozen strategy-code identities shared by the signal pipeline, evidence
+ * queries and guards. Single source of truth: runtime admission, evidence
+ * SQL and drawdown guards must reference these constants instead of
+ * repeating string literals, so a future model rollout cannot silently
+ * split DEMO and LIVE onto divergent identities.
+ */
+export const EXTERNAL_IREXPRO_STRATEGY_CODES = Object.freeze({
+  legacyM1Tactical: 'external-irexpro-m1-tactical',
+  primaryEnsemble: 'external-irexpro-multimodel-ensemble',
+} as const);
+
+/**
  * Frozen identities shared by the signal pipeline. Recognizing an identity
  * is not an execution grant; each account's existing certification boundary
  * still applies. Historical DEMO-only model versions remain recognized for
  * DEMO compatibility, not automatically production-qualified.
  */
 export const PRIMARY_M1_MODEL_IDENTITY = Object.freeze({
-  strategyCode: 'external-irexpro-multimodel-ensemble',
+  strategyCode: EXTERNAL_IREXPRO_STRATEGY_CODES.primaryEnsemble,
   modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
   timeframe: 'M1',
 } as const);
@@ -21,8 +33,8 @@ function modelIdentity(
 const PRIMARY_M1_MODEL_KEY = modelIdentity(PRIMARY_M1_MODEL_IDENTITY);
 
 const PROMOTED_EXTERNAL_DEMO_MODELS = new Set([
-  'external-irexpro-m1-tactical|external-provider/irexpro-m1-tactical/m1-tactical-v1|M1',
-  'external-irexpro-m1-tactical|external-provider/irexpro-m1-tactical/m1-tactical-v2-m5-lifecycle|M1',
+  `${EXTERNAL_IREXPRO_STRATEGY_CODES.legacyM1Tactical}|external-provider/irexpro-m1-tactical/m1-tactical-v1|M1`,
+  `${EXTERNAL_IREXPRO_STRATEGY_CODES.legacyM1Tactical}|external-provider/irexpro-m1-tactical/m1-tactical-v2-m5-lifecycle|M1`,
   PRIMARY_M1_MODEL_KEY,
 ]);
 

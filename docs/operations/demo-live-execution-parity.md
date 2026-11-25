@@ -48,3 +48,53 @@ unrecorded quotes or replay an old signal into the broker. Account-specific
 sizing must not be conflated with strategy qualification. Preserve live
 certification, provider identity, fresh quotes, stop validation and all other
 execution controls throughout the offline comparison.
+
+## Shared identity registry (centralization record)
+
+The frozen primary identity and the historical DEMO strategy codes now live in
+one registry, `apps/api/src/modules/strategy/server-m1-signal-origin.ts`
+(`PRIMARY_M1_MODEL_IDENTITY`, `EXTERNAL_IREXPRO_STRATEGY_CODES`). Runtime
+signal production, orchestrator admission, evidence SQL and the post-entry
+DEMO drawdown guard all read these constants. No string is duplicated between
+DEMO and LIVE admission logic; a future model rollout changes the registry
+once, in one commit, and cannot silently split the accounts onto divergent
+identities.
+
+## LIVE stop-distance rejection diagnosis (absolute geometry)
+
+Three LIVE scan signals were rejected with measured stop distances of 4.4,
+3.6 and 4.1 pips against the configured five-pip minimum. Root cause: LIVE
+validates absolute geometry — the model's stop was anchored to a closed-bar
+reference, and adverse quote movement between signal generation and the fresh
+executable quote shortened the measured distance. This is the risk gate
+working as designed (fail-closed, exact-decimal `INVALID_SL_DISTANCE` with the
+measured and minimum pips in the rejection message). DEMO rebases model
+geometry onto the fresh executable quote before the same check, preserving
+the model's intended risk distance. Migrating LIVE to rebased geometry is a
+runtime behavior change: it stays subject to the acceptance criteria above
+(offline replay, quiescent session, rollback, separate approval) and is
+intentionally NOT included in the characterization PR. Orchestration refusals
+now also record per-leg `liveBoundaryChecks` diagnostics so a continuously
+scanning, never-executing LIVE account can be diagnosed from the audit log
+alone (which leg of the certification boundary failed, and the
+account-independent `primaryModelDecision`).
+
+## Verified historical DEMO statement evidence (offline snapshot)
+
+Broker-disconnected analysis of the balance-chain-verified Pepperstone DEMO
+statement export (424 closed deals, 2026-11-10 → 2026-11-23, deposit
+50,000.00 USD):
+
+- Realized net −7,045.21 USD; gross price P&L −693.88 USD; cost wedge
+  −6,351.33 USD ≈ 90% of the net loss at a stable −6.00 USD/lot.
+- Win rate 53.5% with average win 53.94 USD vs average loss −97.91 USD
+  (payoff ratio 0.55); expectancy −16.62 USD/deal; net −6.66 USD/lot.
+- Maximum drawdown −7,221.03 USD (14.44% of peak equity).
+- Walk-forward split: week 2 scaled deal count 76 → 348 while gross stayed
+  negative (−337.59 → −356.29 USD); volume scaling amplified cost losses
+  without improving price results.
+- Strategy-route attribution (e.g. the continuous-reversal evidence route's
+  221 of 251 recorded execution decisions) lives in the application database
+  and must be certified from `trade_intents` / `m1_tactical_decisions`
+  records; it is deliberately not inferred or fabricated offline.
+

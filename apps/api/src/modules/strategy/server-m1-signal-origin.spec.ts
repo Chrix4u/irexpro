@@ -1,6 +1,7 @@
 import {
   brandServerM1Signal,
   evaluateM1PrimaryModelDecision,
+  EXTERNAL_IREXPRO_STRATEGY_CODES,
   hasServerM1Origin,
   isServerPromotedExternalDemoModel,
   PRIMARY_M1_MODEL_IDENTITY,
@@ -217,6 +218,20 @@ describe('account-independent primary-model decision classification', () => {
 });
 
 describe('shared frozen model identity registry', () => {
+  it('pins the single-source strategy-code registry consumed by evidence SQL and guards', () => {
+    // Any change here is a deliberate model rollout affecting DEMO and LIVE
+    // evidence/guard queries simultaneously — it must never happen silently.
+    expect(EXTERNAL_IREXPRO_STRATEGY_CODES).toEqual({
+      legacyM1Tactical: 'external-irexpro-m1-tactical',
+      primaryEnsemble: 'external-irexpro-multimodel-ensemble',
+    });
+    expect(PRIMARY_M1_MODEL_IDENTITY.strategyCode).toBe(
+      EXTERNAL_IREXPRO_STRATEGY_CODES.primaryEnsemble,
+    );
+    expect(Object.isFrozen(EXTERNAL_IREXPRO_STRATEGY_CODES)).toBe(true);
+    expect(Object.isFrozen(PRIMARY_M1_MODEL_IDENTITY)).toBe(true);
+  });
+
   it('recognizes the same primary identity without granting execution authority', () => {
     const candidate = signal({ ...PRIMARY_M1_MODEL_IDENTITY });
     expect(isServerPromotedExternalDemoModel(candidate)).toBe(true);

@@ -338,6 +338,19 @@ export class StrategyOrchestratorService {
               connectionBindingMatches: candidate.brokerConnectionId === session.brokerConnectionId,
               accountAuthorizationActive: paperConnection?.authorizationStatus === 'ACTIVE',
               liveTradingEnabled: paperConnection?.liveTradingEnabled === true,
+              // Per-leg LIVE certification boundary probes (diagnostics only):
+              // lets an operator see exactly which leg of the narrow LIVE
+              // admission boundary failed when the model decision itself was
+              // QUALIFIED — e.g. continuous scanning without executions.
+              liveBoundaryChecks: {
+                sessionFullAuto: session.executionMode === ExecutionMode.FULL_AUTO,
+                brokerIdMatches: paperConnection?.brokerId === 'pepperstone-ctrader',
+                accountTypeIsLive: paperConnection?.accountType === BrokerMode.LIVE,
+                providerIdentityMatches: paperConnection?.providerBrokerIdentity === 'pepperstone',
+                statusConnected: paperConnection?.status === 'CONNECTED',
+                productionLiveEligible:
+                  this.brokerService.isProductionLiveEligible?.('pepperstone-ctrader') === true,
+              },
             },
           },
         );

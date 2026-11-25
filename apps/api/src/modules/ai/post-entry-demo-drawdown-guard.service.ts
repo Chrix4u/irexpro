@@ -6,6 +6,7 @@ import {
 } from '../ai-engine-client/ai-engine-client.service';
 import { ExecutionService } from '../execution/execution.service';
 import { TradeCloseReason, TradeStatus } from '../execution/entities/trade.entity';
+import { EXTERNAL_IREXPRO_STRATEGY_CODES } from '../strategy/server-m1-signal-origin';
 import { parseV85EntryFeatures, PLAN_B_V85_ARTIFACT } from './post-entry-protection-shadow.service';
 
 export const PLAN_B_V89_DEMO_DRAWDOWN_GUARD_ARTIFACT = 'plan-b-v89-demo-5m-drawdown-guard-v1';
@@ -169,7 +170,7 @@ export class PostEntryDemoDrawdownGuardService implements OnModuleInit, OnModule
           AND t.stop_loss IS NOT NULL
           AND t.opened_at <= $1::timestamptz - interval '5 minutes'
           AND t.opened_at >= $1::timestamptz - interval '7 minutes'
-          AND ti.strategy_code = 'external-irexpro-multimodel-ensemble'
+          AND ti.strategy_code = '${EXTERNAL_IREXPRO_STRATEGY_CODES.primaryEnsemble}'
           AND ti.metadata->>'external_provider_code' = 'irexpro-multimodel-ensemble-v1'
           AND NOT EXISTS (
             SELECT 1
