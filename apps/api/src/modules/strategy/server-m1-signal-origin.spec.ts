@@ -1,5 +1,6 @@
 import {
   brandServerM1Signal,
+  evaluateM1PrimaryModelDecision,
   hasServerM1Origin,
   isStrictLiveM1PrimarySignal,
 } from './server-m1-signal-origin';
@@ -178,5 +179,37 @@ describe('SERVER-owned Pepperstone LIVE M1 primary provenance', () => {
       const candidate = brandServerM1Signal(signal(fields));
       expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
     }
+  });
+});
+
+describe('account-independent primary-model decision classification', () => {
+  it('classifies the same model evidence identically for different account bindings', () => {
+    const demo = signal({
+      brokerConnectionId: 'demo-account',
+      tradingSessionId: 'demo-session',
+      suggestedVolume: 7,
+    });
+    const live = signal({
+      brokerConnectionId: 'live-account',
+      tradingSessionId: 'live-session',
+      suggestedVolume: 0.01,
+    });
+    expect(evaluateM1PrimaryModelDecision(demo)).toBe('QUALIFIED');
+    expect(evaluateM1PrimaryModelDecision(live)).toBe('QUALIFIED');
+    expect(isStrictLiveM1PrimarySignal(demo)).toBe(false);
+    expect(isStrictLiveM1PrimarySignal(live)).toBe(false);
+  });
+
+  it.each([
+    [{ multimodel_plan_b_paper_admitted: false }, 'PRIMARY_MODEL_NOT_ADMITTED'],
+    [{ m1_professional_fallback: true }, 'EXPERIMENTAL_OR_UNKNOWN_ROUTE'],
+    [{ m1_tactical_route: 'ABSTAIN' }, 'M1_TIMING_MISMATCH'],
+    [{ m1_tactical_route: 'M1_EARLY_TRANSITION' }, 'NATIVE_EXPERT_PROOF_MISSING'],
+  ])('classifies rejected primary evidence without granting authority', (metadata, reason) => {
+    const candidate = brandServerM1Signal(
+      signal({ metadata: { ...signal().metadata, ...metadata } }),
+    );
+    expect(evaluateM1PrimaryModelDecision(candidate)).toBe(reason);
+    expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
   });
 });
